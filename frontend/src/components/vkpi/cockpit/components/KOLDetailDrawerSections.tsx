@@ -10,7 +10,7 @@ import { GeoTierChip } from "./GeoTierChip";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatPercent } from "../lib/format";
 import { kolHumanDisplayName, kolHumanProfileLinkLabel, kolHumanPublicHandle } from "../lib/kolIdentity";
-import { kolContactChannels } from "../lib/kolContacts";
+import type { ContactState } from "../lib/kolContacts";
 import { COUNTRY_INFO } from "../data/countryInfo";
 import { PlatformPill } from "./PlatformPill";
 import { CopyEmailButton, KOLDetailAvatar, RepresentativeVideoCard } from "./KOLDetailDrawer";
@@ -435,31 +435,53 @@ export function KOLDrawerMemorySection({ kolMemory }: any) {
 }
 
 // ── 联系方式 & 代表视频 ──
-export function KOLDrawerContactAndVideos({ item, representativeVideos, onOpenVideo, detailLoading = false, detailError = "" }: any) {
-  const contacts = item.contact_masked === false ? kolContactChannels(item) : [];
-  const contactsPending = item.contact_masked !== false && detailLoading;
-  const contactsRestricted = item.contact_masked !== false && !detailLoading && Boolean(item.email || detailError);
+export function KOLDrawerContactAndVideos({ item, representativeVideos, onOpenVideo, contactState, onRetryContact }: any) {
+  const resolvedContactState: ContactState = contactState || { status: "loading", contacts: [] };
+  const contacts = resolvedContactState.status === "full" ? resolvedContactState.contacts : [];
   const profileLinkLabel = kolHumanProfileLinkLabel(item);
   return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
     e("div", { className: "flex items-center gap-1.5 mb-2" },
       e(Send, { size: 11, className: "text-cyan-400" }),
       e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "联系方式 & 代表作")
     ),
-    // 单条 detail 投影为 full 后才展示/复制。Bulk masked seed 不当真值。
+    // 联系人真值只来自独立、审计的 reveal 请求。detail/item 是内容投影，永不作为明文来源。
     e("div", { className: "space-y-1 mb-3" },
-      contactsPending
-        ? e("div", { className: "text-[11px] text-slate-400" }, "正在读取完整联系方式…")
-        : contactsRestricted
-          ? e("div", { className: "text-[11px] text-amber-300" }, detailError ? "联系方式读取受限 · 请重试" : "当前仅有脱敏摘要 · 打开邀请可重试")
-          : contacts.length > 0
-            ? contacts.map((contact) => e("div", { key: `${contact.type}:${contact.value}`, className: "flex items-center gap-2 text-[11px]" },
-                e("span", { className: "text-slate-500 w-[58px] shrink-0" }, contact.label),
-                contact.href
-                  ? e("a", { href: contact.href, target: contact.href.startsWith("http") ? "_blank" : undefined, rel: "noreferrer", className: "min-w-0 flex-1 truncate text-cyan-300 hover:text-cyan-200" }, contact.value)
-                  : e("span", { className: "min-w-0 flex-1 truncate text-cyan-300" }, contact.value),
-                !contact.masked && e(CopyEmailButton, { email: contact.value, label: contact.label })
-              ))
-            : e("div", { className: "text-[11px] text-slate-500 italic" }, "未收集 · 邀请时需先添加"),
+      resolvedContactState.status === "loading"
+        ? e("div", { className: "inline-flex items-center gap-1.5 text-[11px] text-slate-400" },
+            e(RefreshCw, { size: 10, className: "animate-spin" }),
+            "正在读取完整联系方式…",
+          )
+        : resolvedContactState.status === "restricted"
+          ? e("div", { role: "status", className: "text-[11px] text-amber-300" }, "联系方式已受保护 · 当前账号不可读取明文")
+          : resolvedContactState.status === "error"
+            ? e("div", { role: "alert", className: "flex items-center gap-2 text-[11px] text-amber-300" },
+                e("span", null, resolvedContactState.message || "联系方式读取失败"),
+                e("button", {
+                  type: "button",
+                  onClick: onRetryContact,
+                  className: "underline underline-offset-2 hover:text-amber-100",
+                }, "重试"),
+              )
+            : resolvedContactState.status === "empty"
+              ? e("div", { className: "text-[11px] text-slate-500 italic" }, "暂无已验证联系方式 · 可在邀请中添加")
+              : contacts.map((contact) => e("div", { key: `${contact.type}:${contact.value}`, className: "rounded-md bg-white/[0.02] px-2 py-1.5 text-[11px]" },
+                  e("div", { className: "flex min-w-0 items-center gap-2" },
+                    e("span", { className: "w-[58px] shrink-0 text-slate-500" }, contact.label),
+                    e("span", { className: "min-w-0 flex-1 truncate text-cyan-300" }, contact.value),
+                    e(CopyEmailButton, { email: contact.value, label: contact.label }),
+                  ),
+                  e("div", { className: "mt-1 flex items-center gap-1.5 pl-[66px] text-[9px] text-slate-500" },
+                    contact.href && e("a", {
+                      href: contact.href,
+                      target: contact.href.startsWith("http") ? "_blank" : undefined,
+                      rel: "noreferrer",
+                      className: "text-cyan-400 hover:text-cyan-300",
+                    }, contact.actionLabel),
+                    contact.source && e("span", { className: "rounded border border-white/[0.08] px-1 py-0.5" }, contact.source),
+                    contact.verificationStatus && e("span", { className: "rounded border border-emerald-400/20 px-1 py-0.5 text-emerald-300" }, contact.verificationStatus),
+                    contact.lastVerifiedAt && e("span", null, `核验 ${contact.lastVerifiedAt}`),
+                  ),
+                )),
       e("div", { className: "flex items-center gap-2 text-[11px]" },
         e("span", { className: "text-slate-500 w-[40px]" }, "主页"),
         item.profile_url
@@ -651,8 +673,21 @@ export function KOLDrawerTextSections({ item, recommendedProductLines, potential
 // 抽屉本体是 flex-col(footer 在滚动区之外)天然不滚走,这里再加 sticky bottom-0 + 不透明背景
 // + z 提层做双保险 —— 未来若有人把 footer 挪进滚动区,主操作行也不会被内容顶走。
 // 次级行(AI深度分析/打开主页)仍在本组件内原位跟随,不单独提层。
-export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onPromote, promoteMsg, canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState, onEnqueueVideoAnalysis, buildFullState = "idle", onBuildFullProfile }: any) {
+export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, contactState, onPromote, promoteMsg, canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState, onEnqueueVideoAnalysis, buildFullState = "idle", onBuildFullProfile }: any) {
   const profileLinkLabel = kolHumanProfileLinkLabel(item);
+  const typedContactState = contactState as ContactState | undefined;
+  const contactLoading = typedContactState?.status === "loading";
+  const hasEmail = typedContactState?.status === "full" && typedContactState.contacts.some((contact) => contact.type === "email");
+  const hasOtherContact = typedContactState?.status === "full" && typedContactState.contacts.length > 0;
+  const contactButtonLabel = contactLoading
+    ? "读取联系方式…"
+    : hasEmail
+      ? "发起合作邀请"
+      : hasOtherContact
+        ? "查看联系渠道"
+        : typedContactState?.status === "empty"
+          ? "添加联系方式"
+          : "查看联系状态";
   return e("div", { className: "sticky bottom-0 z-20 bg-[#0a1020] px-5 py-3 border-t border-white/[0.06]" },
     // 主操作 3 按钮
     e("div", { className: "flex items-center gap-2 mb-2" },
@@ -665,11 +700,12 @@ export function KOLDrawerFooter({ item, inMyList, onToggleMyList, onContact, onP
           : { background: "rgba(255,255,255,0.04)", color: "#e2e8f0", border: "1px solid rgba(255,255,255,0.1)" }
       }, e(Star, { size: 11, style: inMyList ? { fill: "#fbbf24" } : {} }), inMyList ? "已收藏" : "加入收藏"),
       e("button", {
+        disabled: contactLoading,
         onClick: () => onContact?.(item),
         title: "打开本地联系模板: 不发送邮件、不调用 provider",
-        className: "flex-1 flex items-center justify-center gap-1.5 rounded-md bg-purple-600 hover:bg-purple-500 px-3 py-2 text-[11px] font-medium text-white"
+        className: "flex-1 flex items-center justify-center gap-1.5 rounded-md bg-purple-600 hover:bg-purple-500 px-3 py-2 text-[11px] font-medium text-white disabled:cursor-wait disabled:opacity-55"
       }, e(Send, { size: 11 }),
-        item.email ? "发起合作邀请" : "添加联系方式"
+        contactButtonLabel,
       ),
       !item.linked_main_kol_id && e("button", {
         onClick: () => onPromote?.(item),

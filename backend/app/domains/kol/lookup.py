@@ -26,11 +26,7 @@ async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) ->
 
     tracker = LookupTracker(body=body or {}, staff=staff)
     tracker.open()
-    reveal_contacts = False
-
     def _project(payload: dict[str, Any]) -> dict[str, Any]:
-        if reveal_contacts:
-            return dict(payload or {})
         from app.domains.kol.contact_access import mask_contact_payload
 
         return mask_contact_payload(payload or {})
@@ -60,16 +56,6 @@ async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) ->
             summary={"matched": False, "stage": STAGE_SEARCH},
         )
         return _with_session(result)
-
-    from app.domains.kol.contact_access import authorize_plaintext_contacts
-
-    reveal_contacts = authorize_plaintext_contacts(
-        staff,
-        resource_type="kol",
-        resource_id=kol_id,
-        page_path="/kols/lookup",
-        metadata={"surface": "lookup"},
-    )
 
     try:
         claims_domain.assert_kol_access(kol_id, staff, allow_unclaimed=True)

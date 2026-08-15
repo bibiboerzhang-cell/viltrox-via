@@ -135,12 +135,35 @@ def _row_to_session(row: Any) -> dict[str, Any]:
 
 def _row_to_item(row: Any) -> dict[str, Any]:
     item = dict(row)
+    item_type = item.get("item_type")
+    source_url = item.get("source_url")
+    payload = _loads(item.get("payload_json"), {})
+    if item_type in {"existing_kol", "new_creator", "recall_candidate"}:
+        # These item types use source/profile/channel URLs as creator identity
+        # locators.  Historical rows may predate the write-side guard, so the
+        # read mapper must defensively remove DM/contact routes too.  Video URL
+        # item types are deliberately excluded.
+        from app.domains.kol.contact_system import project_public_profile_url
+
+        source_url = project_public_profile_url(source_url)
+        if isinstance(payload, dict):
+            payload = dict(payload)
+            for key in (
+                "source_url",
+                "sourceUrl",
+                "profile_url",
+                "profileUrl",
+                "channel_url",
+                "channelUrl",
+            ):
+                if key in payload:
+                    payload[key] = project_public_profile_url(payload.get(key))
     return _jsonable(
         {
             "id": item.get("id"),
             "session_id": item.get("session_id"),
             "dedupe_key": item.get("dedupe_key"),
-            "item_type": item.get("item_type"),
+            "item_type": item_type,
             "status": item.get("status"),
             "stage": item.get("stage"),
             "rank": item.get("rank"),
@@ -148,8 +171,8 @@ def _row_to_item(row: Any) -> dict[str, Any]:
             "kol_pool_id": item.get("kol_pool_id"),
             "evidence_id": item.get("evidence_id"),
             "job_id": item.get("job_id"),
-            "source_url": item.get("source_url"),
-            "payload": _loads(item.get("payload_json"), {}),
+            "source_url": source_url,
+            "payload": payload,
             "created_at": item.get("created_at"),
             "updated_at": item.get("updated_at"),
         }

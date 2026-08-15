@@ -84,14 +84,13 @@ def test_pool_favorites_team_shape_and_bool_coercion():
     assert row["is_shared"] is False  # int 0 → bool False(读回陷阱防线)
     assert row["projects"] == [{"project_id": 7, "stage": "shipped"}]  # 字符串 jsonb 防御性解析
     assert row["contacts"] == [{
-        "contact_type": "email",
-        "contact_value": "s***@e***",
-        "contact_source": "bio",
         "consent_basis": "public",
         "contact_masked": True,
     }]
     assert row["contact_masked"] is True
     assert "secret@example.com" not in str(row)
+    assert "s***@e***" not in str(row)
+    assert "contact_value" not in str(row["contacts"])
     # SQL 红线:团队查询零参数(无 ? 占位)、SQL 字符串内零注释
     team_sql = next(sql for sql in conn.calls if "GROUP BY kp.id" in sql)
     assert "?" not in team_sql
@@ -121,8 +120,13 @@ def test_staff_favorite_projection_uses_project_scope_and_masks_contacts():
     assert "p.is_public" in sql
     assert params == (84, 84, 84, 84, 84)
     assert rows[0]["projects"] == [{"project_id": 11, "project_name": "Mine", "stage": "discovered"}]
-    assert rows[0]["contacts"][0]["contact_value"] == "s***@e***"
+    assert rows[0]["contacts"] == [{
+        "consent_basis": "public",
+        "contact_masked": True,
+    }]
     assert "secret@example.com" not in str(rows[0])
+    assert "s***@e***" not in str(rows[0])
+    assert "contact_value" not in str(rows[0]["contacts"])
 
 
 def test_team_scope_is_denied_in_domain_for_non_manager(monkeypatch):

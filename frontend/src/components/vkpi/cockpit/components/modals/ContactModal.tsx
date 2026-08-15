@@ -6,9 +6,9 @@ import { AlertTriangle, Check, Copy, ExternalLink, Loader2, Sparkles, Wand2, X }
 import { KPAvatar } from "../KPAvatar";
 import { genEmailBody, genEmailSubject } from "../../lib/email";
 import { kolHumanDisplayName, kolHumanIdentitySubtitle, kolHumanProfileLinkLabel } from "../../lib/kolIdentity";
-import { kolContactChannels, type KolContactChannel } from "../../lib/kolContacts";
+import type { ContactState } from "../../lib/kolContacts";
+import { useKolContactState } from "../../lib/useKolContactState";
 import { apiFetch } from "../../../../../services/http";
-import { revealKolPoolContact } from "../../../../../services/vkpi/kolPool-api";
 
 const e = React.createElement;
 
@@ -38,18 +38,22 @@ function writeContactDraft(key: string, value: Record<string, unknown>) {
   }
 }
 
-export function ContactModal({ item, onClose, apiToken, currentUser, sessionGeneration = 0 }: any) {
+export function ContactModal({ item, onClose, apiToken, currentUser, sessionGeneration = 0, initialContactState = null }: any) {
   if (!item) return null;
-  const sourceEmail = String(item.email || "").trim();
-  const hasEmail = Boolean(sourceEmail);
-  // A single detail projection returns plaintext to active employees that can
-  // access KOL/VKPI. Only legacy/rolling-upgrade masked rows need the audited
-  // compatibility endpoint; never re-request a contact that is already full.
-  const sourceContactIsMasked = item.contact_masked === true || sourceEmail.includes("*");
-  const sourcePlainEmail = hasEmail && !sourceContactIsMasked ? sourceEmail : "";
-  const maskedSourceEmail = sourceContactIsMasked ? sourceEmail : "联系方式已收集";
-  const needsContactReveal = Boolean(item.id && sourceContactIsMasked && (hasEmail || item.contact_masked === true));
-  const sourceContactChannels = item.contact_masked === false ? kolContactChannels(item) : [];
+  const {
+    state: contactState,
+    retry: retryContact,
+    clear: clearContact,
+  } = useKolContactState({
+    apiToken,
+    kolPoolId: item.id,
+    purpose: "compose_outreach",
+    initialState: initialContactState as ContactState | null,
+  });
+  const contactChannels = contactState.status === "full" ? contactState.contacts : [];
+  const contactEmail = contactChannels.find((contact) => contact.type === "email")?.value || "";
+  const hasEmail = Boolean(contactEmail);
+  const hasAnyContact = contactChannels.length > 0;
   const outreachName = kolHumanDisplayName(item);
   const outreachSubtitle = kolHumanIdentitySubtitle(item);
   const profileLinkLabel = kolHumanProfileLinkLabel(item);
@@ -63,7 +67,16 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
   const recommended = item.recommended_product_lines || [];
   const defaultProduct = recommended[0] || "Viltrox 镜头";
   const draftKey = `${sessionGeneration}:${currentUser?.id || sender.email || "anonymous"}:${item.id}`;
-  const draft: any = readContactDraft(draftKey);
+  // Freeze the pre-existing draft for this mounted modal. Writes below must
+  // not turn an initial automatic "add" state into an explicit user choice.
+  const initialDraftRef = React.useRef<{ key: string; value: any }>({
+    key: draftKey,
+    value: readContactDraft(draftKey),
+  });
+  if (initialDraftRef.current.key !== draftKey) {
+    initialDraftRef.current = { key: draftKey, value: readContactDraft(draftKey) };
+  }
+  const draft: any = initialDraftRef.current.value;
   const [tab, setTab] = useState(draft?.tab ?? (hasEmail ? "email" : "add"));
   const [selectedProduct, setSelectedProduct] = useState(draft?.selectedProduct ?? defaultProduct);
   const [customProduct, setCustomProduct] = useState(draft?.customProduct ?? "");
@@ -79,15 +92,7 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
   const [newEmail, setNewEmail] = useState(draft?.newEmail ?? "");
   const [newPlatform, setNewPlatform] = useState(draft?.newPlatform ?? "ig_dm");
   const [newHandle, setNewHandle] = useState(draft?.newHandle ?? "");
-  // PII boundary: revealed plaintext lives only in this mounted modal. It is
-  // deliberately excluded from CONTACT_DRAFTS, item merging and every cache.
-  const [contactEmail, setContactEmail] = useState(sourcePlainEmail);
-  const [contactChannels, setContactChannels] = useState<KolContactChannel[]>(sourceContactChannels);
-  const [contactRevealState, setContactRevealState] = useState<"idle" | "loading" | "revealed" | "masked" | "error">(
-    needsContactReveal ? "loading" : sourcePlainEmail ? "revealed" : "idle",
-  );
-  const [contactRevealError, setContactRevealError] = useState("");
-  const [revealAttempt, setRevealAttempt] = useState(0);
+  const initializedEmailRef = React.useRef("");
   React.useEffect(() => {
     // Contact entry fields (newEmail/newHandle) are never retained. Composition
     // text gets a short, bounded in-memory recovery window only.
@@ -95,92 +100,87 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
   }, [draftKey, tab, selectedProduct, customProduct, showCustom, subject, body, newPlatform]);
 
   React.useEffect(() => {
-    let current = true;
-    const controller = new AbortController();
-    if (!needsContactReveal) {
-      setContactEmail(sourcePlainEmail);
-      setContactChannels(sourceContactChannels);
-      setContactRevealState(sourcePlainEmail ? "revealed" : "idle");
-      setContactRevealError("");
-      return () => {
-        current = false;
-        controller.abort();
-      };
-    }
-    setContactEmail("");
-    if (!apiToken) {
-      setContactRevealState("error");
-      setContactRevealError("登录状态无效，无法读取完整联系方式");
-      return () => {
-        current = false;
-        controller.abort();
-      };
-    }
-    setContactRevealState("loading");
-    setContactRevealError("");
-    void revealKolPoolContact(apiToken, item.id, { signal: controller.signal })
-      .then((result) => {
-        if (!current) return;
-        const revealedEmail = String(result?.email || "").trim();
-        const revealedChannels = kolContactChannels({ email: revealedEmail, other_contacts: result?.other_contacts });
-        if (
-          result?.status === "revealed"
-          && result?.contact_masked === false
-          && !revealedEmail.includes("*")
-        ) {
-          setContactEmail(revealedEmail);
-          setContactChannels(revealedChannels);
-          setContactRevealState("revealed");
-          setContactRevealError("");
-          return;
-        }
-        setContactEmail("");
-        setContactChannels([]);
-        setContactRevealState("masked");
-        setContactRevealError("当前账号没有查看完整联系方式的权限，或访问审计未成功");
-      })
-      .catch((error: any) => {
-        if (!current || controller.signal.aborted) return;
-        setContactEmail("");
-        setContactChannels([]);
-        setContactRevealState("error");
-        setContactRevealError(
-          Number(error?.status) === 403
-            ? "当前账号没有查看完整联系方式的权限"
-            : Number(error?.status) === 429
-              ? "完整联系方式读取过于频繁，请稍后再试"
-              : "完整联系方式读取失败，请稍后重试",
-        );
-      });
-    return () => {
-      current = false;
-      controller.abort();
-    };
-  }, [apiToken, item.id, needsContactReveal, revealAttempt, sourcePlainEmail]);
+    if (!contactEmail || initializedEmailRef.current === contactEmail) return;
+    initializedEmailRef.current = contactEmail;
+    if (!draft?.tab) setTab("email");
+    setSubject((current: string) => current || genEmailSubject(defaultProduct, item));
+    setBody((current: string) => current || genEmailBody(defaultProduct, item, sender));
+  // `draft` and `sender` are stable inputs for this mounted KOL modal; contactEmail is the transition trigger.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contactEmail]);
 
   const closeModal = React.useCallback(() => {
-    // Explicitly drop plaintext before asking the parent to unmount the modal.
-    setContactEmail("");
-    setContactChannels([]);
-    setContactRevealError("");
+    // Explicitly abort/drop plaintext before asking the parent to unmount.
+    clearContact();
     onClose && onClose();
-  }, [onClose]);
+  }, [clearContact, onClose]);
 
-  const otherContactChannels = contactChannels.filter((contact) => contact.value !== contactEmail);
+  const otherContactChannels = contactChannels.filter((contact) => contact.type !== "email");
   const renderOtherContacts = () => otherContactChannels.length > 0 && e("div", {
     className: "rounded-md border border-white/[0.06] bg-white/[0.02] px-2.5 py-2",
   },
     e("div", { className: "mb-1 text-[10px] text-slate-500" }, "其他已收集联系方式"),
     otherContactChannels.map((contact) => e("div", {
       key: `${contact.type}:${contact.value}`,
-      className: "flex items-center gap-2 py-0.5 text-[10.5px]",
+      className: "border-b border-white/[0.04] py-1.5 text-[10.5px] last:border-b-0",
     },
-      e("span", { className: "w-[58px] shrink-0 text-slate-500" }, contact.label),
-      contact.href
-        ? e("a", { href: contact.href, target: contact.href.startsWith("http") ? "_blank" : undefined, rel: "noreferrer", className: "min-w-0 flex-1 truncate text-cyan-300" }, contact.value)
-        : e("span", { className: "min-w-0 flex-1 truncate text-slate-300" }, contact.value),
+      e("div", { className: "flex min-w-0 items-center gap-2" },
+        e("span", { className: "w-[72px] shrink-0 text-slate-500" }, contact.label),
+        e("span", { className: "min-w-0 flex-1 truncate text-slate-300" }, contact.value),
+        contact.href && e("a", {
+          href: contact.href,
+          target: contact.href.startsWith("http") ? "_blank" : undefined,
+          rel: "noreferrer",
+          className: "shrink-0 text-cyan-300 hover:text-cyan-200",
+        }, contact.actionLabel),
+      ),
+      (contact.source || contact.verificationStatus || contact.lastVerifiedAt) && e("div", {
+        className: "mt-1 flex items-center gap-1.5 pl-20 text-[9px] text-slate-500",
+      },
+        contact.source && e("span", { className: "rounded border border-white/[0.08] px-1 py-0.5" }, contact.source),
+        contact.verificationStatus && e("span", { className: "rounded border border-emerald-400/20 px-1 py-0.5 text-emerald-300" }, contact.verificationStatus),
+        contact.lastVerifiedAt && e("span", null, `核验 ${contact.lastVerifiedAt}`),
+      ),
     )),
   );
+
+  const renderContactStatus = () => {
+    if (contactState.status === "loading") {
+      return e("div", { role: "status", className: "inline-flex items-center gap-1.5 text-[10.5px] text-slate-400" },
+        e(Loader2, { size: 10, className: "animate-spin" }),
+        "正在授权读取联系方式…",
+      );
+    }
+    if (contactState.status === "restricted") {
+      return e("div", {
+        role: "alert",
+        className: "rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-[10.5px] text-amber-200",
+      }, contactState.message || "联系方式已受保护，当前账号无法读取明文");
+    }
+    if (contactState.status === "error") {
+      return e("div", {
+        role: "alert",
+        className: "rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-[10.5px] text-amber-200",
+      },
+        e("span", null, contactState.message || "完整联系方式读取失败，请稍后重试"),
+        e("button", {
+          type: "button",
+          onClick: retryContact,
+          className: "ml-2 underline underline-offset-2 hover:text-amber-100",
+        }, "重试"),
+      );
+    }
+    if (contactState.status === "empty") {
+      return e("div", { className: "rounded-md border border-amber-500/30 bg-amber-500/[0.06] p-2.5 text-[11px] text-amber-200 flex items-start gap-2" },
+        e(AlertTriangle, { size: 12, className: "shrink-0 mt-0.5" }),
+        e("div", null,
+          e("div", { className: "font-medium mb-0.5" }, "此 KOL 暂无已验证联系方式"),
+          e("div", { className: "text-amber-300/80" }, "可前往官方主页联系，或在下方录入有来源的渠道。"),
+        ),
+      );
+    }
+    return null;
+  };
   
   // 切换产品时,主题立即同步;正文需要用户主动点本地模板重写才覆盖。
   const onPickProduct = (p: any) => {
@@ -260,7 +260,7 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
       e("div", { className: "px-5 py-3 border-b border-white/[0.06] flex items-center gap-3" },
         e(KPAvatar, { name: outreachName, color: item.avatar_color, size: 36 }),
         e("div", { className: "flex-1 min-w-0" },
-          e("h3", { className: "text-[13px] font-semibold text-white" }, hasEmail ? "发起合作邀请" : "添加联系方式"),
+          e("h3", { className: "text-[13px] font-semibold text-white" }, hasEmail ? "发起合作邀请" : hasAnyContact ? "联系 KOL" : "联系人与合作邀请"),
           e("p", { className: "text-[10px] text-slate-500" }, outreachSubtitle)
         ),
         e("button", { onClick: closeModal, "aria-label": "关闭合作邀请", className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white" },
@@ -283,21 +283,8 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
         e("div", { className: "flex items-center gap-2 text-[11px]" },
           e("span", { className: "text-slate-500 w-[40px]" }, "To"),
           e("span", { className: "text-cyan-300 flex-1 px-2 py-1 rounded bg-cyan-500/[0.05] border border-cyan-500/20" },
-            contactRevealState === "loading"
-              ? e("span", { className: "inline-flex items-center gap-1.5" }, e(Loader2, { size: 10, className: "animate-spin" }), "正在授权读取联系方式…")
-              : contactEmail || maskedSourceEmail,
+            contactEmail,
           ),
-        ),
-        contactRevealError && e("div", {
-          role: "alert",
-          className: "rounded-md border border-amber-500/30 bg-amber-500/[0.06] px-2.5 py-1.5 text-[10.5px] text-amber-200",
-        },
-          e("span", null, contactRevealError),
-          contactRevealState === "error" && e("button", {
-            type: "button",
-            onClick: () => setRevealAttempt((attempt) => attempt + 1),
-            className: "ml-2 underline underline-offset-2 hover:text-amber-100",
-          }, "重试"),
         ),
         renderOtherContacts(),
         e("div", { className: "flex items-center gap-2 text-[11px]" },
@@ -395,14 +382,8 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
       ),
       // Add contact tab(没邮箱时默认显示)
       (tab === "add" || !hasEmail) && e("div", { className: "px-5 py-4 space-y-3" },
+        renderContactStatus(),
         renderOtherContacts(),
-        !hasEmail && e("div", { className: "rounded-md border border-amber-500/30 bg-amber-500/[0.06] p-2.5 text-[11px] text-amber-200 flex items-start gap-2" },
-          e(AlertTriangle, { size: 12, className: "shrink-0 mt-0.5" }),
-          e("div", null,
-            e("div", { className: "font-medium mb-0.5" }, "此 KOL 尚未收集联系方式"),
-            e("div", { className: "text-amber-300/80" }, "建议先去主页 DM,或填入下方任一渠道后再发起邀请。")
-          )
-        ),
         e("div", { className: "flex items-center gap-2 text-[11px]" },
           e("span", { className: "text-slate-500 w-[60px]" }, "邮箱"),
           e("input", {

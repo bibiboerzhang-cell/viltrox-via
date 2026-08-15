@@ -1,8 +1,8 @@
 """B1 联系方式 L0 · 可联系性打分(纯规则、零 LLM、零网络、零成本)。
 
 数据源(全是已落库真数据,不发任何外部请求):
-  - vkpi_kol_pool_contacts 审计表(contact_type/contact_source/confidence/first·last_seen)——canonical;
-  - vkpi_kol_pool.email 兜底(历史行可能只有主表 email、无审计行)。
+  - vkpi_kol_pool_contacts canonical 审计表;
+  - legacy vkpi_kol_pool.email 不作为 verified/contactable 真值。
 
 打分口径 scoring_method = "channels_recency_source_v1":
   - 渠道分:每个去重渠道贡献 weight x strength;strength = 该渠道最高置信度
@@ -11,23 +11,25 @@
   - 总分 0-100;无任何渠道诚实 0 分(reason="no_contact_channels")。
 
 合规红线:
-  - 返回值只带脱敏联系方式(pool_common._mask_contact_value 同口径),明文绝不出本模块;
-    真值仍走既有 contact_reveal.view_kol_contact 二次确认 + 审计门控。
+  - 返回值只带渠道/计数/置信度等 value-free 元数据,明文或星号掩码绝不出本模块;
+    真值只走 contact_reveal.view_kol_contact 二次确认 + 审计门控。
   - contactability_score 是触达运营分,不是契合分:绝不读写 viltrox_fit_score、不碰 rule_v0。
   - refresh_contactability 只写 214 迁移的 4 列 + updated_at,列缺失诚实降级不炸。
 """
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 
 logger = get_logger(__name__)
 
-SCORING_METHOD = "channels_recency_source_v1"
+SCORING_METHOD = "contact_clue_channels_verified_recency_v2"
 
 # 渠道权重(总权重刻意 email 独大:邮箱是唯一可直接发商务合作邀约的渠道)。
 CHANNEL_WEIGHTS: dict[str, float] = {
@@ -69,6 +71,541 @@ DEFAULT_SOURCE_TRUST = 0.5
 # 新鲜度加成(天数上限, 加分),按 contact_last_verified_at 距今天数取第一档命中。
 RECENCY_BONUS: tuple[tuple[int, float], ...] = ((30, 15.0), (90, 10.0), (365, 5.0))
 RECENCY_BONUS_STALE = 2.0  # 有时间但超过一年:聊胜于无
+
+_VALUE_FREE_EMAIL_RE = re.compile(
+    r"(?<![\w.+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"
+)
+_VALUE_FREE_PHONE_RE = re.compile(r"(?<!\w)(?:\+?\d[\d\s().-]{6,}\d)(?!\w)")
+_VALUE_FREE_MASKED_EMAIL_RE = re.compile(r"(?<!\w)[^\s@]*\*{2,}[^\s@]*@[^\s]+")
+_VALUE_FREE_MASKED_PHONE_RE = re.compile(
+    r"(?<!\w)(?:\+|\d)\*{2,}[A-Za-z0-9]?(?!\w)"
+)
+_VALUE_FREE_TEXT_FIELDS = frozenset(
+    {
+        "bio",
+        "biography",
+        "about",
+        "description",
+        "caption",
+        "title",
+        "summary",
+        "reason",
+        "text",
+        "content",
+        "body",
+        "narrative",
+        "transcript",
+        "comment",
+        "comments",
+    }
+)
+_VALUE_FREE_DROP_KEYS = frozenset(
+    {
+        "email",
+        "emails",
+        "phone",
+        "phones",
+        "phone_number",
+        "mobile",
+        "whatsapp",
+        "telegram",
+        "other_contacts",
+        "other_contacts_json",
+        "contacts",
+        "contact_links_json",
+        "contact_raw_json",
+        "contact_channels",
+        "contact_sources",
+        "website",
+        "website_url",
+        "link_hub",
+        "normalized_value",
+        "evidence_text",
+        "raw_platform_data",
+    }
+)
+_VALUE_FREE_SAFE_CONTACT_KEYS = frozenset(
+    {"contact_summary", "contact_masked", "contact_projection_reason"}
+)
+_EXTERNAL_CONTACT_URI_RE = re.compile(
+    r"(?i)(?:mailto:|tel:|whatsapp:)[^\s<>'\"]+|"
+    r"https?://(?:www\.)?"
+    r"(?:wa\.me|api\.whatsapp\.com|t\.me|telegram\.me|m\.me|discord\.gg|discord\.com/invite)"
+    r"/[^\s<>'\"]*"
+)
+_EXTERNAL_HTTP_URL_RE = re.compile(r"(?i)https?://[^\s<>'\"]+")
+_EXTERNAL_WHATSAPP_LABEL_RE = re.compile(
+    r"(?i)\b(?:whatsapp|wa)\s*[:：]\s*[^\s,;]+"
+)
+_EXTERNAL_DM_HANDLE_RE = re.compile(
+    r"(?i)\b(?:"
+    r"(?:instagram|tiktok|x|twitter)\s+(?:dm|contact)|"
+    r"(?:telegram|messenger|discord)(?:\s+(?:dm|contact))?|"
+    r"(?:dm|contact(?:\s+me)?)"
+    r")\s*[:：]?\s*@[-\w.]+"
+)
+_EXTERNAL_LABELED_CONTACT_RE = re.compile(
+    r"(?i)\b(?:telegram|messenger|discord)\s*[:：]\s*[^\s,;]+"
+)
+_EXTERNAL_CONTACT_MARKER = "[contact removed]"
+_SUMMARY_COUNT_KEYS = frozenset(
+    {
+        "known_contact_count",
+        "verified_contact_count",
+        "channel_count",
+        "verified_channel_count",
+    }
+)
+_SUMMARY_BOOL_KEYS = frozenset(
+    {"has_contact", "contact_masked", "reveal_required"}
+)
+_SUMMARY_TOKEN_KEYS = frozenset({"status", "actionability", "reason"})
+_SUMMARY_CHANNEL_KEYS = frozenset({"channel_types", "verified_channel_types"})
+_SUMMARY_ALLOWED_CHANNELS = frozenset(CHANNEL_WEIGHTS) | frozenset(
+    {
+        "phone",
+        "whatsapp",
+        "instagram_dm",
+        "tiktok_dm",
+        "x_dm",
+        "facebook_dm",
+        "telegram_dm",
+    }
+)
+_SAFE_SUMMARY_TOKEN_RE = re.compile(r"^[a-z][a-z0-9_.:-]{0,79}$")
+_SAFE_SUMMARY_TIME_RE = re.compile(r"^[0-9T:Z+.-]{10,40}$")
+
+_CONTACT_ROUTE_HOSTS = frozenset(
+    {
+        "wa.me",
+        "api.whatsapp.com",
+        "chat.whatsapp.com",
+        "whatsapp.com",
+        "t.me",
+        "telegram.me",
+        "telegram.dog",
+        "m.me",
+        "messenger.com",
+        "discord.gg",
+    }
+)
+_CONTACT_ROUTE_SEGMENT_RE = re.compile(
+    r"(?i)^(?:contact(?:[-_](?:us|me))?|call|chat|dm|direct|"
+    r"message(?:s)?|compose|invite|send|users)$"
+)
+_PLATFORM_HOST_SUFFIXES = frozenset(
+    {
+        "youtube.com",
+        "instagram.com",
+        "tiktok.com",
+        "x.com",
+        "twitter.com",
+        "facebook.com",
+        "linkedin.com",
+        "twitch.tv",
+        "pinterest.com",
+        "threads.net",
+    }
+)
+
+
+def _host_matches(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def _contains_contact_phone(value: str) -> bool:
+    # URL paths/queries are identity locators, not prose.  Treat every
+    # standalone 8-15 digit candidate as contact data here, including local
+    # 8/9-digit phone formats that the prose sanitizer deliberately leaves
+    # alone to avoid erasing ordinary metrics.
+    for match in _VALUE_FREE_PHONE_RE.finditer(value):
+        digits = re.sub(r"\D", "", match.group(0))
+        if 8 <= len(digits) <= 15:
+            return True
+    return False
+
+
+def _bounded_unquote(value: str) -> str:
+    """Decode nested URL escapes without allowing unbounded expansion."""
+
+    current = str(value or "")
+    for _ in range(3):
+        decoded = unquote(current)
+        if decoded == current:
+            break
+        current = decoded
+    return current
+
+
+def is_contact_route_url(value: Any) -> bool:
+    """Return true when a URL is a contact/DM route rather than identity page.
+
+    This predicate intentionally checks the original path *and query* before
+    URL normalization can discard them.  It is shared by legacy profile DTOs
+    and provider-prompt sanitization so a contact URL cannot move between the
+    two boundaries under a generic ``website`` label.
+    """
+
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlsplit(raw)
+        scheme = parsed.scheme.casefold()
+        host = (parsed.hostname or "").rstrip(".").casefold()
+    except (TypeError, ValueError):
+        return True
+    if scheme in {"mailto", "tel", "whatsapp"}:
+        return True
+    if scheme not in {"http", "https"} or not host:
+        return True
+    if any(_host_matches(host, domain) for domain in _CONTACT_ROUTE_HOSTS):
+        return True
+
+    decoded_path = _bounded_unquote(parsed.path or "")
+    decoded_query = _bounded_unquote(parsed.query or "")
+    decoded_fragment = _bounded_unquote(parsed.fragment or "")
+    route_text = f"{decoded_path}?{decoded_query}#{decoded_fragment}"
+    if _VALUE_FREE_EMAIL_RE.search(route_text) or _contains_contact_phone(route_text):
+        return True
+    route_tokens = [
+        token
+        for token in re.split(r"[/&=?#;]+", route_text)
+        if token
+    ]
+    if _host_matches(host, "discord.com") and any(
+        token.casefold() in {"channels", "invite", "users"} for token in route_tokens
+    ):
+        return True
+    return any(_CONTACT_ROUTE_SEGMENT_RE.fullmatch(token) for token in route_tokens)
+
+
+def _is_platform_identity_page(normalized_url: str) -> bool:
+    parsed = urlsplit(normalized_url)
+    host = (parsed.hostname or "").rstrip(".").casefold()
+    segments = [_bounded_unquote(part) for part in (parsed.path or "").split("/") if part]
+    matched = next(
+        (domain for domain in _PLATFORM_HOST_SUFFIXES if _host_matches(host, domain)),
+        "",
+    )
+    if not matched:
+        # A creator-owned/public website remains useful identity evidence once
+        # contact routes and inline values have been rejected above.
+        return True
+    if matched == "youtube.com":
+        return bool(
+            (segments and segments[0].startswith("@") and len(segments[0]) > 1)
+            or (len(segments) >= 2 and segments[0].casefold() in {"channel", "c", "user"})
+        )
+    if matched == "instagram.com":
+        return len(segments) == 1 and segments[0].casefold() not in {
+            "accounts",
+            "direct",
+            "explore",
+            "p",
+            "reel",
+            "reels",
+            "stories",
+        }
+    if matched == "tiktok.com":
+        return len(segments) == 1 and segments[0].startswith("@") and len(segments[0]) > 1
+    if matched in {"x.com", "twitter.com"}:
+        return len(segments) == 1 and segments[0].casefold() not in {
+            "compose",
+            "home",
+            "i",
+            "intent",
+            "messages",
+            "search",
+            "share",
+        }
+    if matched == "facebook.com":
+        return len(segments) == 1 and segments[0].casefold() not in {
+            "dialog",
+            "groups",
+            "login",
+            "messages",
+            "profile.php",
+            "share",
+        }
+    if matched == "linkedin.com":
+        return len(segments) >= 2 and segments[0].casefold() in {
+            "company",
+            "in",
+            "school",
+            "showcase",
+        }
+    if matched == "threads.net":
+        return len(segments) == 1 and segments[0].startswith("@") and len(segments[0]) > 1
+    return len(segments) == 1
+
+
+def project_public_profile_url(value: Any) -> str:
+    """Normalize a public creator identity page or fail closed to empty."""
+
+    if is_contact_route_url(value):
+        return ""
+    try:
+        from app.domains.kol.contact_ingest import normalize_contact
+
+        normalized = normalize_contact("website", value).normalized_value
+    except Exception:
+        return ""
+    if is_contact_route_url(normalized) or not _is_platform_identity_page(normalized):
+        return ""
+    return normalized
+
+
+def _redact_phone_candidates(text: str, *, marker: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        compact = token.strip()
+        # Do not turn common ISO dates into contact claims.  A phone candidate
+        # otherwise needs 8-15 digits and either an international prefix,
+        # punctuation/spacing, or at least ten contiguous digits.
+        if re.fullmatch(r"\d{4}[-/.]\d{1,2}[-/.]\d{1,2}", compact):
+            return token
+        digits = re.sub(r"\D", "", compact)
+        if not 8 <= len(digits) <= 15:
+            return token
+        if compact.startswith("+") or re.search(r"[\s().-]", compact) or len(digits) >= 10:
+            return marker
+        return token
+
+    return _VALUE_FREE_PHONE_RE.sub(replace, text)
+
+
+def _neutralize_inline_contacts(value: Any, *, redact_phone: bool) -> Any:
+    if not isinstance(value, str) or not value:
+        return value
+    text = _VALUE_FREE_EMAIL_RE.sub("[contact hidden]", value)
+    text = _VALUE_FREE_MASKED_EMAIL_RE.sub("[contact hidden]", text)
+    text = _VALUE_FREE_MASKED_PHONE_RE.sub("[contact hidden]", text)
+    if redact_phone:
+        text = _redact_phone_candidates(text, marker="[contact hidden]")
+    return text
+
+
+def _is_contact_value_key(key: Any) -> bool:
+    normalized = str(key or "").strip().lower()
+    if normalized in _VALUE_FREE_SAFE_CONTACT_KEYS:
+        return False
+    compact = re.sub(r"[^a-z0-9]", "", normalized)
+    if normalized in _VALUE_FREE_DROP_KEYS:
+        return True
+    if compact in {
+        "email",
+        "emails",
+        "phone",
+        "phones",
+        "phonenumber",
+        "mobile",
+        "whatsapp",
+        "telegram",
+        "othercontacts",
+        "contacts",
+        "contactlinks",
+        "contactraw",
+        "contactchannels",
+        "contactsources",
+        "website",
+        "websiteurl",
+        "linkhub",
+        "rawplatformdata",
+    }:
+        return True
+    if normalized.startswith("contact_"):
+        return True
+    # Legacy/import schemas use both snake_case and camelCase.  All contact*
+    # aliases are value-bearing unless they are one of the explicit safe DTO
+    # keys above; publicEmail/businessEmail/managerPhone are covered too.
+    if compact.startswith("contact"):
+        return True
+    if "email" in compact or "phone" in compact or "whatsapp" in compact:
+        return True
+    return normalized.endswith(("_contact", "_contacts"))
+
+
+def _value_free_contact_summary(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    summary: dict[str, Any] = {}
+    for key in _SUMMARY_COUNT_KEYS:
+        candidate = raw.get(key)
+        if isinstance(candidate, int) and not isinstance(candidate, bool) and candidate >= 0:
+            summary[key] = candidate
+    for key in _SUMMARY_BOOL_KEYS:
+        if isinstance(raw.get(key), bool):
+            summary[key] = raw[key]
+    for key in _SUMMARY_TOKEN_KEYS:
+        candidate = str(raw.get(key) or "").strip().lower()
+        if candidate and _SAFE_SUMMARY_TOKEN_RE.fullmatch(candidate):
+            summary[key] = candidate
+    for key in _SUMMARY_CHANNEL_KEYS:
+        candidate = raw.get(key)
+        if isinstance(candidate, list):
+            summary[key] = sorted(
+                {
+                    token
+                    for item in candidate
+                    if (token := str(item or "").strip().lower())
+                    and token in _SUMMARY_ALLOWED_CHANNELS
+                }
+            )
+    timestamp = raw.get("last_verified_at")
+    if timestamp is None:
+        summary["last_verified_at"] = None
+    elif isinstance(timestamp, str) and _SAFE_SUMMARY_TIME_RE.fullmatch(timestamp.strip()):
+        summary["last_verified_at"] = timestamp.strip()
+    purposes = raw.get("allowed_reveal_purposes")
+    if isinstance(purposes, list):
+        summary["allowed_reveal_purposes"] = [
+            purpose
+            for purpose in (str(item or "").strip() for item in purposes)
+            if purpose in {"kol_detail_view", "compose_outreach"}
+        ]
+    return summary
+
+
+def value_free_contact_projection(payload: Any) -> Any:
+    """Recursively remove contact values from ordinary pool/detail payloads.
+
+    ``contact_summary`` is the sole preserved contact subtree and contains only
+    counts, channel names and lifecycle timestamps.  Contact records with
+    generic ``value`` fields, legacy aliases, raw metadata and inline masked
+    fragments are removed or replaced by a neutral marker.
+    """
+
+    if isinstance(payload, list):
+        return [value_free_contact_projection(item) for item in payload]
+    if not isinstance(payload, dict):
+        return _neutralize_inline_contacts(payload, redact_phone=False)
+
+    compact_keys = {
+        re.sub(r"[^a-z0-9]", "", str(key).strip().lower()) for key in payload
+    }
+    record_kind = str(
+        payload.get("contact_type")
+        or payload.get("contactType")
+        or payload.get("type")
+        or payload.get("kind")
+        or ""
+    ).casefold()
+    contact_record = bool(
+        {"contacttype", "channel", "contactvalue", "normalizedvalue"}.intersection(
+            compact_keys
+        )
+        or any(token in record_kind for token in ("email", "phone", "whatsapp", "contact"))
+    )
+    projected: dict[str, Any] = {}
+    for raw_key, raw_value in payload.items():
+        key = str(raw_key)
+        normalized = key.strip().lower()
+        if normalized == "contact_summary":
+            projected[key] = _value_free_contact_summary(raw_value)
+            continue
+        if re.sub(r"[^a-z0-9]", "", normalized) in {"profileurl", "channelurl"}:
+            projected[key] = project_public_profile_url(raw_value)
+            continue
+        if _is_contact_value_key(normalized):
+            continue
+        if contact_record and normalized in {
+            "value",
+            "display_value",
+            "source_url",
+            "evidence",
+            "raw_value",
+        }:
+            continue
+        nested = value_free_contact_projection(raw_value)
+        if isinstance(nested, str):
+            nested = _neutralize_inline_contacts(
+                nested,
+                redact_phone=normalized in _VALUE_FREE_TEXT_FIELDS,
+            )
+        projected[key] = nested
+    return projected
+
+
+def _sanitize_external_contact_text(value: Any) -> Any:
+    if not isinstance(value, str) or not value:
+        return value
+
+    def replace_url(match: re.Match[str]) -> str:
+        token = match.group(0)
+        core = token.rstrip(".,;:!?)]}")
+        suffix = token[len(core) :]
+        if is_contact_route_url(core):
+            return _EXTERNAL_CONTACT_MARKER + suffix
+        return token
+
+    text = _EXTERNAL_HTTP_URL_RE.sub(replace_url, value)
+    text = _EXTERNAL_CONTACT_URI_RE.sub(_EXTERNAL_CONTACT_MARKER, text)
+    text = _EXTERNAL_WHATSAPP_LABEL_RE.sub(_EXTERNAL_CONTACT_MARKER, text)
+    text = _EXTERNAL_DM_HANDLE_RE.sub(_EXTERNAL_CONTACT_MARKER, text)
+    text = _EXTERNAL_LABELED_CONTACT_RE.sub(_EXTERNAL_CONTACT_MARKER, text)
+    text = _VALUE_FREE_EMAIL_RE.sub(_EXTERNAL_CONTACT_MARKER, text)
+    text = _VALUE_FREE_MASKED_EMAIL_RE.sub(_EXTERNAL_CONTACT_MARKER, text)
+    text = _VALUE_FREE_MASKED_PHONE_RE.sub(_EXTERNAL_CONTACT_MARKER, text)
+    return _redact_phone_candidates(text, marker=_EXTERNAL_CONTACT_MARKER)
+
+
+def sanitize_contact_values_for_external_processing(payload: Any) -> Any:
+    """Remove contact values before any LLM/provider prompt boundary.
+
+    Unlike the ordinary GET projection, this keeps non-contact raw profile
+    context and ordinary public URLs so relevance/outreach features retain
+    useful evidence.  Email/phone/WhatsApp/mailto/tel values, legacy aliases,
+    nested contact records and masked fragments are removed.  The returned
+    structure is safe to serialize into a provider request; the input is not
+    mutated.
+    """
+
+    if isinstance(payload, list):
+        return [sanitize_contact_values_for_external_processing(item) for item in payload]
+    if not isinstance(payload, dict):
+        return _sanitize_external_contact_text(payload)
+
+    compact_keys = {
+        re.sub(r"[^a-z0-9]", "", str(key).strip().lower()) for key in payload
+    }
+    record_kind = str(
+        payload.get("contact_type")
+        or payload.get("contactType")
+        or payload.get("type")
+        or payload.get("kind")
+        or ""
+    ).casefold()
+    contact_record = bool(
+        {"contacttype", "channel", "contactvalue", "normalizedvalue"}.intersection(
+            compact_keys
+        )
+        or any(token in record_kind for token in ("email", "phone", "whatsapp", "contact"))
+    )
+    projected: dict[str, Any] = {}
+    for raw_key, raw_value in payload.items():
+        key = str(raw_key)
+        normalized = key.strip().lower()
+        # Provider prompts may retain sanitized raw text and ordinary profile/
+        # website URLs.  These are removed only from user-facing GET DTOs.
+        keep_container = normalized in {
+            "raw_platform_data",
+            "website",
+            "website_url",
+            "profile_url",
+            "link_hub",
+        }
+        if _is_contact_value_key(normalized) and not keep_container:
+            continue
+        if contact_record and normalized in {
+            "value",
+            "display_value",
+            "source_url",
+            "evidence",
+            "raw_value",
+        }:
+            continue
+        projected[key] = sanitize_contact_values_for_external_processing(raw_value)
+    return projected
 
 
 def _utcnow() -> str:
@@ -119,17 +656,33 @@ def _contact_rows(conn: Any, kol_pool_id: int) -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT contact_type, contact_value, contact_source, confidence,
-                   first_seen_at, last_seen_at, created_at
+                   first_seen_at, last_seen_at, created_at,
+                   verification_status, verified_at, invalidated_at, revoked_at
             FROM vkpi_kol_pool_contacts
             WHERE kol_pool_id = ?
             ORDER BY id
             """,
             (int(kol_pool_id),),
         ).fetchall()
-    except Exception as exc:  # 表缺失等:诚实降级为「无审计行」,主表 email 兜底仍生效
-        logger.warning("vkpi_kol_pool_contacts read failed kol=%s: %s", kol_pool_id, exc)
-        return []
-    return [dict(r) for r in rows]
+        return [dict(r) for r in rows]
+    except Exception:
+        # Rolling migration: legacy canonical rows remain observations only.
+        # They may contribute to a clue score but can never become verified.
+        try:
+            rows = conn.execute(
+                """
+                SELECT contact_type, contact_value, contact_source, confidence,
+                       first_seen_at, last_seen_at, created_at
+                FROM vkpi_kol_pool_contacts
+                WHERE kol_pool_id = ?
+                ORDER BY id
+                """,
+                (int(kol_pool_id),),
+            ).fetchall()
+        except Exception as exc:
+            logger.warning("vkpi_kol_pool_contacts read failed kol=%s: %s", kol_pool_id, type(exc).__name__)
+            return []
+        return [{**dict(r), "verification_status": "observed"} for r in rows]
 
 
 def contactability(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, Any]:
@@ -137,59 +690,53 @@ def contactability(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, An
 
     KOL 不存在抛 LookupError(路由层转 404)。返回值中的联系方式全部脱敏。
     """
-    from app.domains.kol.pool_common import _mask_contact_value
-
     db = conn or get_conn()
     row = db.execute(
-        "SELECT id, email, contact_source, contact_first_seen_at FROM vkpi_kol_pool WHERE id = ?",
+        "SELECT id FROM vkpi_kol_pool WHERE id = ?",
         (int(kol_pool_id),),
     ).fetchone()
     if not row:
         raise LookupError("kol pool item not found")
-    pool = dict(row)
-
     rows = _contact_rows(db, int(kol_pool_id))
-    # 主表 email 兜底:历史行可能只有 email 列、无审计行(来源按主表 contact_source 记,缺省 pool_email)。
-    pool_email = str(pool.get("email") or "").strip()
-    if pool_email and not any(_normalize_channel(r.get("contact_type")) == "email" for r in rows):
-        rows.append({
-            "contact_type": "email",
-            "contact_value": pool_email,
-            "contact_source": str(pool.get("contact_source") or "").strip() or "pool_email",
-            "confidence": None,
-            "first_seen_at": pool.get("contact_first_seen_at"),
-            "last_seen_at": pool.get("contact_first_seen_at"),
-            "created_at": None,
-        })
 
     channels: dict[str, dict[str, Any]] = {}
     sources: dict[str, dict[str, Any]] = {}
     last_verified: datetime | None = None
+    known_contact_count = 0
+    verified_contact_count = 0
     for r in rows:
+        status = str(r.get("verification_status") or "observed").strip().lower()
+        if status in {"invalid", "revoked"} or r.get("invalidated_at") or r.get("revoked_at"):
+            continue
         channel = _normalize_channel(r.get("contact_type"))
         if not channel:
             continue
+        known_contact_count += 1
+        is_verified = status == "verified_public_business" and bool(r.get("verified_at"))
+        if is_verified:
+            verified_contact_count += 1
         source = str(r.get("contact_source") or "").strip().lower() or "unknown"
         strength = _row_strength(r.get("confidence"), source)
         seen = _parse_ts(r.get("last_seen_at")) or _parse_ts(r.get("first_seen_at")) or _parse_ts(r.get("created_at"))
-        if seen and (last_verified is None or seen > last_verified):
-            last_verified = seen
+        verified_at = _parse_ts(r.get("verified_at")) if is_verified else None
+        if verified_at and (last_verified is None or verified_at > last_verified):
+            last_verified = verified_at
 
         entry = channels.get(channel)
         if entry is None:
             channels[channel] = {
-                "masked_value": _mask_contact_value(r.get("contact_type"), r.get("contact_value")),
                 "confidence": round(strength, 2),
                 "source": source,
                 "count": 1,
+                "verified_count": 1 if is_verified else 0,
                 "last_seen_at": seen.strftime("%Y-%m-%dT%H:%M:%SZ") if seen else None,
             }
         else:
             entry["count"] = int(entry.get("count") or 0) + 1
+            entry["verified_count"] = int(entry.get("verified_count") or 0) + (1 if is_verified else 0)
             if strength > float(entry.get("confidence") or 0.0):  # 保留该渠道最强一条作为代表
                 entry["confidence"] = round(strength, 2)
                 entry["source"] = source
-                entry["masked_value"] = _mask_contact_value(r.get("contact_type"), r.get("contact_value"))
             if seen:
                 prev = _parse_ts(entry.get("last_seen_at"))
                 if prev is None or seen > prev:
@@ -208,7 +755,6 @@ def contactability(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, An
         channel_points += priority
         ranked.append({
             "channel": channel,
-            "masked_value": entry.get("masked_value"),
             "priority": priority,
             "reason": f"weight {weight:g} x confidence {strength:g} (source={entry.get('source')})",
         })
@@ -229,11 +775,15 @@ def contactability(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, An
         "status": "ready",
         "kol_pool_id": int(kol_pool_id),
         "score": score,
+        "score_kind": "contact_clue_score",
         "scoring_method": SCORING_METHOD,
         "channels": channels,
         "recommended_channels": ranked,
         "sources": sorted(sources.values(), key=lambda s: (-float(s["max_confidence"]), -int(s["count"]))),
         "last_verified_at": last_verified.strftime("%Y-%m-%dT%H:%M:%SZ") if last_verified else None,
+        "known_contact_count": known_contact_count,
+        "verified_contact_count": verified_contact_count,
+        "actionability": "requires_reveal" if verified_contact_count else "not_verified",
         "breakdown": {
             "channel_points": round(channel_points, 2),
             "recency_bonus": recency_bonus,
@@ -244,6 +794,114 @@ def contactability(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, An
     if not channels:
         result["reason"] = "no_contact_channels"
     return result
+
+
+def contact_summary(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, Any]:
+    """Return a value-free contact projection for ordinary KOL reads.
+
+    This summary deliberately does not reuse :func:`contactability`: that legacy
+    score includes observed/legacy rows and ``last_seen_at`` and therefore
+    cannot prove that a contact is verified or usable.  Ordinary item/detail
+    reads expose counts and channel names only.  Even a verified row remains
+    ``requires_reveal`` because organization-scoped suppression is evaluated
+    only inside the explicit POST reveal boundary.
+    """
+    db = conn or get_conn()
+    schema_current = True
+    try:
+        rows = db.execute(
+            """
+            SELECT id, COALESCE(NULLIF(channel, ''), contact_type) AS channel,
+                   verification_status, verified_at, invalidated_at, revoked_at
+            FROM vkpi_kol_pool_contacts
+            WHERE kol_pool_id=? AND COALESCE(contact_value, '') <> ''
+            ORDER BY id
+            """,
+            (int(kol_pool_id),),
+        ).fetchall()
+    except Exception:
+        # Rolling-migration compatibility: legacy rows are known observations,
+        # never verified facts.  The selected projection is still value-free.
+        schema_current = False
+        try:
+            rows = db.execute(
+                """
+                SELECT id, contact_type AS channel
+                FROM vkpi_kol_pool_contacts
+                WHERE kol_pool_id=? AND COALESCE(contact_value, '') <> ''
+                ORDER BY id
+                """,
+                (int(kol_pool_id),),
+            ).fetchall()
+        except Exception:
+            return {
+                "status": "unknown",
+                "has_contact": False,
+                "contact_masked": True,
+                "known_contact_count": 0,
+                "verified_contact_count": 0,
+                "channel_count": 0,
+                "channel_types": [],
+                "verified_channel_count": 0,
+                "verified_channel_types": [],
+                "last_verified_at": None,
+                "actionability": "unavailable",
+                "reveal_required": False,
+                "allowed_reveal_purposes": ["kol_detail_view", "compose_outreach"],
+                "reason": "contact_store_unavailable",
+            }
+
+    known_rows: list[dict[str, Any]] = []
+    verified_rows: list[dict[str, Any]] = []
+    for raw_row in rows:
+        row = dict(raw_row)
+        status = str(row.get("verification_status") or "observed").strip().lower()
+        if status in {"invalid", "revoked"} or row.get("invalidated_at") or row.get("revoked_at"):
+            continue
+        known_rows.append(row)
+        if schema_current and status == "verified_public_business" and row.get("verified_at"):
+            verified_rows.append(row)
+
+    channel_types = sorted(
+        {
+            str(row.get("channel") or "").strip().lower()
+            for row in known_rows
+            if str(row.get("channel") or "").strip()
+        }
+    )
+    verified_channel_types = sorted(
+        {
+            str(row.get("channel") or "").strip().lower()
+            for row in verified_rows
+            if str(row.get("channel") or "").strip()
+        }
+    )
+    verified_times = [row.get("verified_at") for row in verified_rows if row.get("verified_at")]
+    last_verified = max(verified_times, key=lambda value: str(value)) if verified_times else None
+    if isinstance(last_verified, datetime):
+        if last_verified.tzinfo is None:
+            last_verified = last_verified.replace(tzinfo=timezone.utc)
+        last_verified = last_verified.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    elif last_verified is not None:
+        last_verified = str(last_verified)
+
+    has_contact = bool(known_rows)
+    return {
+        "status": "known" if has_contact else "empty",
+        "has_contact": has_contact,
+        "contact_masked": True,
+        "known_contact_count": len(known_rows),
+        "verified_contact_count": len(verified_rows),
+        "channel_count": len(channel_types),
+        "channel_types": channel_types,
+        "verified_channel_count": len(verified_channel_types),
+        "verified_channel_types": verified_channel_types,
+        "last_verified_at": last_verified,
+        "actionability": "requires_reveal" if verified_rows else "not_verified",
+        "reveal_required": has_contact,
+        "allowed_reveal_purposes": ["kol_detail_view", "compose_outreach"],
+        "reason": "suppression_checked_on_reveal" if verified_rows else ("verification_required" if has_contact else "no_contacts"),
+    }
 
 
 REFRESH_COLUMNS = ("contact_channels", "contact_last_verified_at", "contactability_score", "contact_sources")

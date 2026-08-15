@@ -5,6 +5,7 @@ import { EditableDashboardBoard, type DashboardModuleDefinition } from "../compo
 import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
 import { ContactModal } from "../components/modals/ContactModal";
 import { KolPoolAllModal } from "../components/modals/KolPoolAllModal";
+import type { ContactState } from "../lib/kolContacts";
 import { ErrorCard, ModuleCard, PendingCard } from "./MarketVoicePage.modules";
 import { MODULE_SOURCES, NeedsBody, PoolKpiBand, QuickProjectModal } from "./KolPoolBoardPage.modules";
 import { DiscoveryFunnelBody, PoolFitDistBody, PoolPlatformBody } from "./KolPoolBoardPage.charts";
@@ -140,7 +141,11 @@ export function KolPoolBoardPage({
     };
   }
   const contactSessionGeneration = contactSessionRef.current.generation;
-  const [contactState, setContactState] = React.useState<{ generation: number; item: Row } | null>(null);
+  const [contactState, setContactState] = React.useState<{
+    generation: number;
+    item: Row;
+    contactState: ContactState;
+  } | null>(null);
   const contactItem = contactState?.generation === contactSessionGeneration ? contactState.item : null;
   const contactGenerationRef = React.useRef(contactSessionGeneration);
   React.useEffect(() => {
@@ -473,7 +478,11 @@ export function KolPoolBoardPage({
               onClose={closeDrawer}
               inMyList={myList.has(selectedItem.id)}
               onToggleMyList={toggleMyList}
-              onContact={(it: Row) => setContactState({ generation: contactSessionGeneration, item: it })}
+              onContact={(it: Row, revealedContactState: ContactState) => setContactState({
+                generation: contactSessionGeneration,
+                item: it,
+                contactState: revealedContactState,
+              })}
               staff={staff}
               onReloadDetail={reloadDetail}
             />
@@ -486,6 +495,7 @@ export function KolPoolBoardPage({
             apiToken={apiToken}
             currentUser={currentUser}
             sessionGeneration={contactSessionGeneration}
+            initialContactState={contactState?.contactState}
             onClose={() => setContactState(null)}
           />
         )}

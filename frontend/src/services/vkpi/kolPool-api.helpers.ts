@@ -55,11 +55,31 @@ export interface VkpiKolPoolItem {
 }
 
 export interface VkpiKolPoolContactRevealResponse {
-  status: "revealed";
+  /** `revealed` is retained for rolling backend compatibility. */
+  status: "full" | "restricted" | "empty" | "revealed" | "masked";
   kol_pool_id: number;
   email?: string;
   other_contacts?: Array<Record<string, unknown>> | Record<string, unknown>;
-  contact_masked: false;
+  contacts?: Array<{
+    id?: number | string;
+    type?: string;
+    kind?: string;
+    channel?: string;
+    platform?: string;
+    contact_type?: string;
+    value?: string;
+    display_value?: string;
+    contact_value?: string;
+    label?: string;
+    source?: string;
+    source_kind?: string;
+    source_label?: string;
+    verification_status?: string;
+    verified_at?: string;
+    last_verified_at?: string;
+  }>;
+  contact_masked: boolean;
+  reason?: string;
 }
 
 export interface VkpiKolAnalysisReadiness extends Row {

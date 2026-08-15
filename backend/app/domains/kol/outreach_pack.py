@@ -294,6 +294,20 @@ def _build_email_prompt(
     personalization: dict[str, Any] | None = None,
     critic: dict[str, Any] | None = None,
 ) -> str:
+    from app.domains.kol.contact_system import sanitize_contact_values_for_external_processing
+
+    sanitized = sanitize_contact_values_for_external_processing(
+        {
+            "kol": kol,
+            "brief": brief,
+            "personalization": personalization or {},
+            "critic": critic or {},
+        }
+    )
+    kol = dict(sanitized.get("kol") or {})
+    brief = dict(sanitized.get("brief") or {})
+    personalization = dict(sanitized.get("personalization") or {})
+    critic = dict(sanitized.get("critic") or {})
     name = _kol_label(kol)
     highlight_lines = []
     if brief.get("content_highlights"):
@@ -534,21 +548,31 @@ def _email_status(conn: Any, kol_pool_id: int, *, reveal: bool = False) -> dict[
 
 
 def _try_enrich_email(kol_pool_id: int, *, staff: dict[str, Any] | None) -> dict[str, Any]:
-    """邮箱缺失时复用既有富化管线(flag/预算/白名单/合规留痕全在其内建);失败不阻断外联包。"""
+    """Queue provider-free L0 only; outreach generation never scrapes contacts."""
+    del staff
     try:
-        from app.domains.kol.business_contact_extract import enrich_business_contacts
+        from app.domains.kol.contact_acquisition_queue import enqueue_contact_acquisition
 
-        result = enrich_business_contacts(int(kol_pool_id), staff=staff)
+        result = enqueue_contact_acquisition(
+            int(kol_pool_id), trigger_source="reconcile"
+        )
         return {
             "attempted": True,
-            "status": _text((result or {}).get("status")) or "unknown",
+            "status": "queued_l0",
             "reason": _text((result or {}).get("reason"), 300),
+            "queue_status": _text((result or {}).get("status")) or "pending_l0",
+            "provider_calls": False,
         }
     except LookupError:
-        return {"attempted": True, "status": "kol_not_found", "reason": ""}
+        return {"attempted": True, "status": "kol_not_found", "reason": "", "provider_calls": False}
     except Exception as exc:
         logger.warning("outreach_pack.email_enrich_failed (non-fatal) | kol_pool_id=%s", kol_pool_id, exc_info=True)
-        return {"attempted": True, "status": "error", "reason": "email_enrichment_failed"}
+        return {
+            "attempted": True,
+            "status": "error",
+            "reason": "email_enrichment_failed",
+            "provider_calls": False,
+        }
 
 
 # ── 缓存读写(vkpi_analysis_cache,同 outreach_draft 模式) ──────────
@@ -657,7 +681,8 @@ def generate_outreach_pack(kol_pool_id: int, *, force: bool = False, staff: dict
                     "cached": True,
                 }
 
-    # ③ 邮箱缺失 → 先走既有富化管线(可能从已抓 raw 零成本提到,草稿即刻可用)。
+    # ③ 邮箱缺失 → 仅进入 durable provider-free L0 队列。草稿生成不抓取
+    # 联系方式、不执行网站/provider任务，也不把 legacy pool.email 当可用真值。
     enrich: dict[str, Any] = {"attempted": False, "status": "", "reason": ""}
     if not _text(kol.get("email")):
         enrich = _try_enrich_email(kid, staff=staff)

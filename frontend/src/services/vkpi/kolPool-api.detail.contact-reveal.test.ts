@@ -15,7 +15,7 @@ beforeEach(() => {
 });
 
 describe("revealKolPoolContact", () => {
-  it("uses the audited single-KOL endpoint with explicit confirmation and no-store", async () => {
+  it("uses the audited single-KOL endpoint for an automatic drawer view", async () => {
     const controller = new AbortController();
     await revealKolPoolContact("token", 42, { signal: controller.signal });
 
@@ -24,11 +24,19 @@ describe("revealKolPoolContact", () => {
     expect(path).toBe("/api/admin/vkpi/kol-pool/42/contacts/reveal");
     expect(init).toMatchObject({
       method: "POST",
-      body: JSON.stringify({ confirm: true, purpose: "compose_outreach" }),
+      body: JSON.stringify({ confirm: true, purpose: "kol_detail_view" }),
       cache: "no-store",
       signal: controller.signal,
     });
-    expect(JSON.parse(init.body)).toEqual({ confirm: true, purpose: "compose_outreach" });
+    expect(JSON.parse(init.body)).toEqual({ confirm: true, purpose: "kol_detail_view" });
     expect(token).toBe("token");
+  });
+
+  it("keeps compose_outreach for a standalone invite compatibility flow", async () => {
+    await revealKolPoolContact("token", 43, { purpose: "compose_outreach" });
+
+    const [path, init] = apiFetch.mock.calls[0];
+    expect(path).toBe("/api/admin/vkpi/kol-pool/43/contacts/reveal");
+    expect(JSON.parse(init.body)).toEqual({ confirm: true, purpose: "compose_outreach" });
   });
 });

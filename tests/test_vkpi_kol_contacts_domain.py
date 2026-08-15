@@ -24,7 +24,15 @@ def test_kol_contacts_domain_adds_new_contact(monkeypatch):
     )
 
     kol_id, payload, staff = calls["update"]
-    assert result == {"kol_id": 7, "include_wrong": True}
+    assert result == {
+        "kol_id": 7,
+        "include_wrong": True,
+        "contacts": [],
+        "contact_masked": True,
+        "contact_projection_reason": "summary_only",
+    }
+    assert "new@example.com" not in str(result)
+    assert "old@example.com" not in str(result)
     assert kol_id == 7
     assert staff == {"id": 1}
     assert payload["contact_email"] == "new@example.com"
@@ -45,6 +53,9 @@ def test_kol_contacts_domain_contact_rows_request_checks_access(monkeypatch):
     assert contacts_domain.contact_rows_for_request(9, include_wrong=True, staff={"id": 1}) == {
         "kol_id": 9,
         "include_wrong": True,
+        "contacts": [],
+        "contact_masked": True,
+        "contact_projection_reason": "summary_only",
     }
     assert calls["access"] == (9, {"id": 1}, True)
 

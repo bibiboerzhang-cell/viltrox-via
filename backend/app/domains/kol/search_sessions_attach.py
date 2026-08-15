@@ -15,6 +15,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
+from app.domains.kol.contact_system import project_public_profile_url
 from app.domains.tasks.search_session_lineage import with_search_session_lineage
 
 from app.domains.kol.search_sessions_serde import (
@@ -183,6 +184,8 @@ def _recall_session_payload(
     replay_source: str,
 ) -> dict[str, Any]:
     payload = {key: raw.get(key) for key in _RECALL_SESSION_PAYLOAD_FIELDS if key in raw}
+    if "profile_url" in payload:
+        payload["profile_url"] = project_public_profile_url(payload.get("profile_url"))
     source_fields = _dict(raw.get("source_fields"))
     safe_source_fields = {
         key: source_fields.get(key)
@@ -247,7 +250,7 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
     for rank, raw in enumerate(source_items, start=1):
         bucket_name = _text(raw.get("bucket")) or "unknown"
         kol_pool_id = _int_or_none(raw.get("kol_pool_id") if raw.get("kol_pool_id") is not None else raw.get("id"))
-        source_url = _text(raw.get("profile_url") or raw.get("url"))
+        source_url = project_public_profile_url(raw.get("profile_url") or raw.get("url"))
         items.append(
             {
                 "dedupe_key": f"recall:{kol_pool_id or source_url or rank}",
@@ -311,7 +314,7 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
         if not isinstance(raw, dict):
             continue
         kol_pool_id = _int_or_none(raw.get("history_kol_pool_id") or _dict(raw.get("historical_match")).get("kol_pool_id"))
-        source_url = _text(raw.get("channel_url") or raw.get("source_url"))
+        source_url = project_public_profile_url(raw.get("channel_url") or raw.get("source_url"))
         batch_key = f"existing:{kol_pool_id or source_url.lower() or rank}"
         if batch_key in seen_batch_keys:
             continue
@@ -332,8 +335,8 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
                     "handle": raw.get("handle"),
                     "channel_name": raw.get("channel_name"),
                     "sample_title": raw.get("sample_title"),
-                    "source_url": raw.get("source_url"),
-                    "channel_url": raw.get("channel_url"),
+                    "source_url": source_url,
+                    "channel_url": source_url,
                     "avatar_url": raw.get("avatar_url"),
                     "historical_match": raw.get("historical_match"),
                 },
@@ -343,7 +346,7 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
     for raw in _list(result.get("new_creators")):
         if not isinstance(raw, dict):
             continue
-        source_url = _text(raw.get("channel_url") or raw.get("source_url"))
+        source_url = project_public_profile_url(raw.get("channel_url") or raw.get("source_url"))
         handle = _text(raw.get("handle") or raw.get("channel_name"))
         platform = _text(raw.get("platform") or (result.get("platforms") or [""])[0])
         batch_key = f"new:{platform.lower()}:{handle.lstrip('@').lower() or source_url.lower() or rank}"
@@ -365,8 +368,8 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
                     "handle": raw.get("handle"),
                     "channel_name": raw.get("channel_name"),
                     "sample_title": raw.get("sample_title"),
-                    "source_url": raw.get("source_url"),
-                    "channel_url": raw.get("channel_url"),
+                    "source_url": source_url,
+                    "channel_url": source_url,
                     "avatar_url": raw.get("avatar_url"),
                     "thumbnail_url": raw.get("thumbnail_url"),
                     "views": raw.get("views"),

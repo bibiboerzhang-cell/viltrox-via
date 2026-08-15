@@ -470,13 +470,41 @@ def _metrics_report(context: dict[str, Any], product_sku: str = "") -> dict[str,
 
 def _claude_report(context: dict[str, Any], product_sku: str = "") -> dict[str, Any]:
     fallback = _metrics_report(context, product_sku)
+    # Strict outbound allowlist: account rows contain legacy contact aliases,
+    # contact_raw_json/contact_links and provider blobs that must never enter a
+    # model request.  Keep only analysis facts required by this dossier.
+    def pick(source: Any, fields: tuple[str, ...]) -> dict[str, Any]:
+        row = source if isinstance(source, dict) else {}
+        return {field: row.get(field) for field in fields if field in row}
+
+    kol_fields = (
+        "id", "platform", "handle", "display_name", "bio", "followers",
+        "avg_views", "engagement_rate", "country", "language",
+        "primary_topic", "content_style", "account_type",
+    )
+    snapshot_fields = (
+        "id", "scanned_at", "follower_count", "following_count", "post_count",
+        "avg_views", "avg_likes", "avg_comments", "comment_count",
+        "engagement_rate", "brand_mentions_json", "competitor_mentions_json",
+        "audience_json", "content_topics_json",
+    )
+    post_fields = (
+        "id", "platform", "post_id", "title", "description", "caption",
+        "post_url", "views", "likes", "comments_count", "published_at", "created_at",
+    )
+    comment_fields = (
+        "id", "post_id", "text", "comment_text", "like_count", "created_at",
+    )
     compact = {
-        "kol": context.get("kol"),
-        "snapshot": context.get("snapshot"),
-        "top_posts": (context.get("posts") or [])[:15],
-        "top_comments": (context.get("comments") or [])[:30],
+        "kol": pick(context.get("kol"), kol_fields),
+        "snapshot": pick(context.get("snapshot"), snapshot_fields),
+        "top_posts": [pick(row, post_fields) for row in (context.get("posts") or [])[:15]],
+        "top_comments": [pick(row, comment_fields) for row in (context.get("comments") or [])[:30]],
         "target_product": product_sku,
     }
+    from app.domains.kol.contact_system import sanitize_contact_values_for_external_processing
+
+    compact = sanitize_contact_values_for_external_processing(compact)
     prompt = f"""
 You are building a KOL account dossier for Viltrox marketing operations.
 Return ONLY JSON with these fields:

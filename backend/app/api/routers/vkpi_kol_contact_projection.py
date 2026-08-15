@@ -4,9 +4,7 @@ from __future__ import annotations
 from fastapi import HTTPException, Request
 
 from app.core.permissions import check_kol_pool_employee_contact_permission
-from app.core.release_validation import release_validation_active
-from app.domains.kol.contact_access import authorize_plaintext_contacts
-from app.domains.kol.pool_common import CONTACT_VISIBILITY_FULL, CONTACT_VISIBILITY_MASKED
+from app.domains.kol.pool_common import CONTACT_VISIBILITY_MASKED
 from app.services.security.rate_limiter import check_rate_limit, get_client_ip
 
 
@@ -56,29 +54,21 @@ def single_contact_projection(
     page_path: str,
     surface: str,
 ) -> tuple[str, str]:
-    """Resolve one audited projection before any pool/contact lookup occurs."""
+    """Compatibility helper for value-free legacy GET projections.
+
+    Plaintext is available only from the typed pool POST reveal boundary after
+    verification and suppression checks.  This helper deliberately performs
+    no rate-limit consumption or sensitive-access audit because it never
+    returns a contact value.
+    """
     if not check_kol_pool_employee_contact_permission(staff):
         raise HTTPException(
             status_code=403,
             detail={"code": "kol_contact_access_not_authorized"},
             headers=PRIVATE_CONTACT_HEADERS,
         )
-    if release_validation_active():
-        return CONTACT_VISIBILITY_MASKED, "release_validation_fenced"
-    enforce_contact_read_rate_limit(request, staff)
-    revealed = authorize_plaintext_contacts(
-        staff,
-        resource_type="kol_pool",
-        resource_id=int(kol_pool_id),
-        page_path=page_path,
-        ip=get_client_ip(request),
-        user_agent=str(request.headers.get("user-agent") or "")[:500],
-        metadata={"surface": surface, "bulk": False},
-        permission_check=check_kol_pool_employee_contact_permission,
-    )
-    if revealed:
-        return CONTACT_VISIBILITY_FULL, "audited_internal_staff"
-    return CONTACT_VISIBILITY_MASKED, "sensitive_access_audit_unavailable"
+    del request, kol_pool_id, page_path, surface
+    return CONTACT_VISIBILITY_MASKED, "summary_only"
 
 
 __all__ = [

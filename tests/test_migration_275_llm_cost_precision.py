@@ -14,10 +14,12 @@ UP = ROOT / "migrations/275_vkpi_llm_cost_precision.sql"
 DOWN = ROOT / "migrations/275_vkpi_llm_cost_precision_down.sql"
 
 
-def test_migration_275_is_latest_and_runner_owned() -> None:
+def test_migration_275_is_discovered_before_the_contact_safety_slice_and_runner_owned() -> None:
     sequence = connection._discover_postgres_migrations()
     assert UP.name in sequence
+    assert "282_vkpi_kol_contact_acquisition_safety.sql" in sequence
     assert sequence.index(UP.name) < sequence.index("276_vkpi_prediction_runs_immutable.sql")
+    assert sequence.index(UP.name) < sequence.index("282_vkpi_kol_contact_acquisition_safety.sql")
     up = UP.read_text(encoding="utf-8")
     assert connection._FORWARD_TRANSACTION_CONTROL_RE.search(up) is None
     assert "NUMERIC(18, 6)" in up

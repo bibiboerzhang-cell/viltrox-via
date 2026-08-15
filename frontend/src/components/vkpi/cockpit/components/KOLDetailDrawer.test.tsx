@@ -48,6 +48,7 @@ const enqueueKolProfileCrawl = vi.fn();
 const refreshAudienceStats = vi.fn();
 const getKolVideoAnalysisCache = vi.fn();
 const getKolVideoAnalysisBatch = vi.fn();
+const revealKolPoolContact = vi.fn();
 vi.mock("../../../../services/vkpi/kolPool-api", () => ({
   getKolPoolDimensions11: (...a: unknown[]) => getKolPoolDimensions11(...a),
   getKolPoolLlmDeepAnalysis: (...a: unknown[]) => getKolPoolLlmDeepAnalysis(...a),
@@ -62,6 +63,7 @@ vi.mock("../../../../services/vkpi/kolPool-api", () => ({
   refreshAudienceStats: (...a: unknown[]) => refreshAudienceStats(...a),
   getKolVideoAnalysisCache: (...a: unknown[]) => getKolVideoAnalysisCache(...a),
   getKolVideoAnalysisBatch: (...a: unknown[]) => getKolVideoAnalysisBatch(...a),
+  revealKolPoolContact: (...a: unknown[]) => revealKolPoolContact(...a),
 }));
 
 const getKolMemory = vi.fn();
@@ -86,6 +88,12 @@ beforeEach(() => {
   refreshAudienceStats.mockReset().mockResolvedValue({ status: "ok" });
   getKolVideoAnalysisCache.mockReset().mockResolvedValue({ state: "missing" });
   getKolVideoAnalysisBatch.mockReset().mockResolvedValue({ count: 0, items: [] });
+  revealKolPoolContact.mockReset().mockResolvedValue({
+    status: "empty",
+    kol_pool_id: 42,
+    contact_masked: false,
+    contacts: [],
+  });
   getKolMemory.mockReset().mockResolvedValue(null);
   // C1 tab 记忆落 localStorage:清掉,让每条用例都从默认「概览」出发(需要合作 tab 的用例自行点击)。
   window.localStorage.clear();
@@ -549,27 +557,40 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
     expect(await screen.findByText("暂无聚合数据")).toBeInTheDocument();
   });
 
-  it("详情投影为 full 时直接展示完整邮箱", async () => {
+  it("独立联系人投影为 full 时展示完整邮箱，不依赖 detail item 明文", async () => {
+    revealKolPoolContact.mockResolvedValueOnce({
+      status: "full",
+      kol_pool_id: 42,
+      contact_masked: false,
+      contacts: [
+        { type: "email", value: "manager@example.com" },
+        { type: "dm", channel: "instagram", value: "@futurestudio", source_label: "manual", verification_status: "verified" },
+      ],
+    });
     renderDrawer({
       item: {
         ...baseItem,
-        email: "manager@example.com",
+        email: "wrong-detail@example.com",
         contact_masked: false,
-        other_contacts_json: JSON.stringify([
-          { contact_type: "link", platform: "ig_dm", contact_value: "@futurestudio", contact_source: "manual", confidence: 0.9 },
-        ]),
       },
     });
 
     expect(await screen.findByText("manager@example.com")).toBeInTheDocument();
     expect(screen.getByText("Instagram")).toBeInTheDocument();
     expect(screen.getByText("@futurestudio")).toBeInTheDocument();
-    expect(screen.queryByText("manual")).toBeNull();
-    expect(screen.queryByText("0.9")).toBeNull();
+    expect(screen.getByText("manual")).toBeInTheDocument();
+    expect(screen.getByText("verified")).toBeInTheDocument();
+    expect(screen.queryByText("wrong-detail@example.com")).toBeNull();
     expect(screen.queryByText("m***@e***")).toBeNull();
+    expect(revealKolPoolContact).toHaveBeenCalledTimes(1);
+    expect(revealKolPoolContact).toHaveBeenCalledWith("tok", 42, {
+      signal: expect.any(AbortSignal),
+      purpose: "kol_detail_view",
+    });
   });
 
   it("masked seed 在单条详情读取期间不显示或复制星号地址", async () => {
+    revealKolPoolContact.mockImplementationOnce(() => new Promise(() => undefined));
     renderDrawer({
       item: { ...baseItem, email: "m***@e***", contact_masked: true },
       detailLoading: true,
@@ -578,6 +599,87 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
     expect(await screen.findByText("正在读取完整联系方式…")).toBeInTheDocument();
     expect(screen.queryByText("m***@e***")).toBeNull();
     expect(screen.queryByRole("button", { name: /复制邮箱/ })).toBeNull();
+  });
+
+  it("detail 内容重渲染不会重复读取联系人，也不会采用 item 内的明文", async () => {
+    revealKolPoolContact.mockResolvedValueOnce({
+      status: "full",
+      kol_pool_id: 42,
+      contact_masked: false,
+      contacts: [{ type: "email", value: "audited@example.com" }],
+    });
+    const view = renderDrawer({ item: { ...baseItem, email: "detail-one@example.com", contact_masked: false } });
+    expect(await screen.findByText("audited@example.com")).toBeInTheDocument();
+
+    view.rerender(
+      <KOLDetailDrawer
+        item={{ ...baseItem, bio: "detail poll update", email: "detail-two@example.com", contact_masked: false }}
+        apiToken="tok"
+        onClose={() => {}}
+        inMyList={false}
+        onToggleMyList={() => {}}
+        onContact={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("audited@example.com")).toBeInTheDocument();
+    expect(screen.queryByText("detail-one@example.com")).toBeNull();
+    expect(screen.queryByText("detail-two@example.com")).toBeNull();
+    expect(revealKolPoolContact).toHaveBeenCalledTimes(1);
+  });
+
+  it("切换 KOL 或 token 会 abort 旧读取，迟到明文不能串到新抽屉", async () => {
+    const first = deferred<any>();
+    revealKolPoolContact
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce({
+        status: "full",
+        kol_pool_id: 43,
+        contact_masked: false,
+        contacts: [{ type: "email", value: "current@example.com" }],
+      });
+    const view = renderDrawer({ item: { ...baseItem, id: 42 }, apiToken: "token-a" });
+    await waitFor(() => expect(revealKolPoolContact).toHaveBeenCalledTimes(1));
+    const firstSignal = revealKolPoolContact.mock.calls[0][2].signal as AbortSignal;
+
+    view.rerender(
+      <KOLDetailDrawer
+        item={{ ...baseItem, id: 43 }}
+        apiToken="token-b"
+        onClose={() => {}}
+        inMyList={false}
+        onToggleMyList={() => {}}
+        onContact={() => {}}
+      />,
+    );
+    expect(await screen.findByText("current@example.com")).toBeInTheDocument();
+    expect(firstSignal.aborted).toBe(true);
+
+    await act(async () => {
+      first.resolve({
+        status: "full",
+        kol_pool_id: 42,
+        contact_masked: false,
+        contacts: [{ type: "email", value: "stale-secret@example.com" }],
+      });
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("stale-secret@example.com")).toBeNull();
+    expect(screen.getByText("current@example.com")).toBeInTheDocument();
+  });
+
+  it("masked + 空邮箱的 restricted 状态不显示未收集", async () => {
+    revealKolPoolContact.mockResolvedValueOnce({
+      status: "restricted",
+      kol_pool_id: 42,
+      contact_masked: true,
+      contacts: [],
+      reason: "audit_unavailable",
+    });
+    renderDrawer({ item: { ...baseItem, email: "", contact_masked: true } });
+
+    expect(await screen.findByText("联系方式已受保护 · 当前账号不可读取明文")).toBeInTheDocument();
+    expect(screen.queryByText(/未收集|暂无已验证/)).toBeNull();
   });
 
   it("item=null → 组件返回 null(container 空)", () => {

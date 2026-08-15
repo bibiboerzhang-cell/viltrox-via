@@ -99,10 +99,12 @@ def _valid_email(m: str) -> bool:
     return tld in _VALID_MULTICHAR_TLDS
 
 
-def _author_nested_blobs(container: dict[str, Any]) -> list[str]:
+def _author_nested_blobs(
+    container: dict[str, Any], *, prefix: str
+) -> list[tuple[str, str]]:
     """TT/IG raw 的 bio 常嵌在 authorMeta/author/owner/user 里(TT=authorMeta.signature)。
     C6 零新抓提列:结构化提出来走正常置信度分级,不再只靠低置信 full_raw 兜底扫。"""
-    found: list[str] = []
+    found: list[tuple[str, str]] = []
     for ak in ("authorMeta", "author", "owner", "user"):
         av = container.get(ak)
         if not isinstance(av, dict):
@@ -110,30 +112,32 @@ def _author_nested_blobs(container: dict[str, Any]) -> list[str]:
         for fk in ("signature", "bio", "biography", "description"):
             fv = av.get(fk)
             if isinstance(fv, str) and fv:
-                found.append(fv)
+                found.append((f"{prefix}.{ak}.{fk}", fv))
     return found
 
 
-def _text_blobs(profile: dict[str, Any]) -> list[str]:
-    """汇总 raw 里可能含联系方式的公开文本字段(bio/about/描述/文案/签名)。"""
-    blobs: list[str] = []
+def _text_blobs(
+    profile: dict[str, Any], *, prefix: str
+) -> list[tuple[str, str]]:
+    """Return public text together with its exact field-level locator."""
+    blobs: list[tuple[str, str]] = []
     for k in ("biography", "bio", "description", "about", "channel_description", "signature", "title", "caption", "desc"):
         v = profile.get(k)
         if isinstance(v, str):
-            blobs.append(v)
+            blobs.append((f"{prefix}.{k}", v))
         elif isinstance(v, dict) and isinstance(v.get("description"), str):
-            blobs.append(v["description"])
+            blobs.append((f"{prefix}.{k}.description", v["description"]))
     snip = profile.get("snippet")
     if isinstance(snip, dict) and isinstance(snip.get("description"), str):
-        blobs.append(snip["description"])
-    blobs.extend(_author_nested_blobs(profile))
+        blobs.append((f"{prefix}.snippet.description", snip["description"]))
+    blobs.extend(_author_nested_blobs(profile, prefix=prefix))
     items = profile.get("items")
     if isinstance(items, list) and items and isinstance(items[0], dict):
         sn = items[0].get("snippet") or {}
         if isinstance(sn, dict) and isinstance(sn.get("description"), str):
-            blobs.append(sn["description"])
-        blobs.extend(_author_nested_blobs(items[0]))
-    return [b for b in blobs if b]
+            blobs.append((f"{prefix}.items.0.snippet.description", sn["description"]))
+        blobs.extend(_author_nested_blobs(items[0], prefix=f"{prefix}.items.0"))
+    return [(field, blob) for field, blob in blobs if blob]
 
 
 def _email_confidence(email: str, blob: str) -> tuple[float, str]:
@@ -155,14 +159,27 @@ def extract_contacts_multi_source(
     每条带 source_type + confidence + evidence_text。不做全网爬;比既有白名单版更全,用置信度分级替代硬白名单。
     红线:纯读文本抽联系方式,绝不触 viltrox_fit_score。
     """
-    del platform, source_url  # 预留签名(L1 独立站抓取会用 source_url)
-    profile = (raw_platform_data or {}).get("profile") or raw_platform_data or {}
+    platform_key = str(platform or "").strip().casefold()
+    del source_url  # 预留签名(L1 独立站抓取会用 source_url)
+    raw = raw_platform_data or {}
+    nested_profile = raw.get("profile") if isinstance(raw, dict) else None
+    has_profile_container = isinstance(nested_profile, dict) and bool(nested_profile)
+    profile = nested_profile if has_profile_container else raw
+    field_prefix = "profile" if has_profile_container else "raw_platform_data"
     if not isinstance(profile, dict):
         return []
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
-    def _add(ctype: str, value: str, source_type: str, confidence: float, evidence: str) -> None:
+    def _add(
+        ctype: str,
+        value: str,
+        source_type: str,
+        confidence: float,
+        evidence: str,
+        *,
+        source_field: str,
+    ) -> None:
         value = (value or "").strip().rstrip(".,​")
         if not value:
             return
@@ -173,52 +190,97 @@ def extract_contacts_multi_source(
         out.append({
             "contact_type": ctype, "contact_value": value, "source_type": source_type,
             "confidence": round(float(confidence), 2), "evidence_text": (evidence or "")[:280],
+            "source_field": source_field,
         })
 
-    blobs = _text_blobs(profile)
-    full = "\n".join(blobs)
-    for blob in blobs:
+    blobs = _text_blobs(profile, prefix=field_prefix)
+    # A structured Instagram business field is the only L0 platform-native
+    # field that can carry the IG verification source.  Generic ``email`` and
+    # the same field names on YouTube/TikTok remain observations; their raw
+    # payload shape does not prove a public business declaration.
+    trusted_ig_fields = ("public_email", "publicEmail", "business_email", "businessEmail")
+    if has_profile_container and platform_key in {"instagram", "ig"}:
+        for key in trusted_ig_fields:
+            value = str(profile.get(key) or "").strip()
+            if value and _valid_email(value):
+                _add(
+                    "email",
+                    value,
+                    SOURCE_IG_BUSINESS,
+                    0.92,
+                    f"{key}={value}",
+                    source_field=f"{field_prefix}.{key}",
+                )
+
+    for source_field, blob in blobs:
         for m in _EMAIL_RE.findall(blob):
             if _valid_email(m):
                 conf, ev = _email_confidence(m, blob)
-                _add("email", m.strip().rstrip("."), SOURCE_RAW_BIO, conf, ev)
+                _add(
+                    "email",
+                    m.strip().rstrip("."),
+                    SOURCE_RAW_BIO,
+                    conf,
+                    ev,
+                    source_field=source_field,
+                )
+        for match in _URL_RE.findall(blob):
+            url = match.strip().rstrip(".,)​")
+            low = url.lower()
+            if any(junk in low for junk in _CDN_JUNK):
+                continue
+            host = low.split("//", 1)[-1].split("/", 1)[0]
+            # 精确 host 匹配(== 或子域后缀),不能用 substring:jurjax.com 含 "x.com" 会误判 twitter
+            social = next((tag for h, tag in _SOCIAL_HOSTS.items() if host == h or host.endswith("." + h)), "")
+            if social:
+                _add(f"{social}_link", url, SOURCE_RAW_BIO, 0.6, url, source_field=source_field)
+            elif any(h in low for h in _LINK_HUBS):
+                _add("link_hub", url, SOURCE_RAW_BIO, 0.5, url, source_field=source_field)
+            else:
+                _add("website", url, SOURCE_RAW_BIO, 0.45, url, source_field=source_field)
+
+    # Untrusted structured fields are useful discovery clues but never become
+    # platform verification evidence at this layer.
     for k in ("public_email", "publicEmail", "business_email", "businessEmail", "email"):
         v = str(profile.get(k) or "").strip()
         if v and _valid_email(v):
-            _add("email", v, SOURCE_IG_BUSINESS, 0.92, f"{k}={v}")
-    for m in _URL_RE.findall(full):
-        u = m.strip().rstrip(".,)​")
-        low = u.lower()
-        if any(j in low for j in _CDN_JUNK):
-            continue
-        host = low.split("//", 1)[-1].split("/", 1)[0]
-        # 精确 host 匹配(== 或子域后缀),不能用 substring:jurjax.com 含 "x.com" 会误判 twitter
-        social = next((tag for h, tag in _SOCIAL_HOSTS.items() if host == h or host.endswith("." + h)), "")
-        if social:
-            _add(f"{social}_link", u, SOURCE_RAW_BIO, 0.6, u)
-        elif any(h in low for h in _LINK_HUBS):
-            _add("link_hub", u, SOURCE_RAW_BIO, 0.5, u)
-        else:
-            _add("website", u, SOURCE_RAW_BIO, 0.45, u)
+            _add(
+                "email",
+                v,
+                SOURCE_RAW_BIO,
+                0.65,
+                f"{k}={v}",
+                source_field=f"{field_prefix}.{k}",
+            )
     # 全 raw 兜底扫描:邮箱常在帖文案/嵌套字段里,结构化字段扫不到。创作者档案 raw 绝大多数是
     # 其自有内容,故兜底扫到的邮箱多为本人。低置信(0.45)+ 独立来源标签,与结构化高置信条目区分;
     # 已见的不重复(结构化先跑,高置信保留)。仍只吃已抓回的公开 raw,不做全网爬。
     try:
         full_raw = json.dumps(raw_platform_data, ensure_ascii=False)
     except Exception:
-        full_raw = full
+        full_raw = "\n".join(blob for _field, blob in blobs)
     for m in _EMAIL_RE.findall(full_raw):
         if _valid_email(m):
-            _add("email", m.strip().rstrip("."), "raw_full_scan", 0.45, "")
+            _add(
+                "email",
+                m.strip().rstrip("."),
+                "raw_full_scan",
+                0.45,
+                "",
+                source_field="raw_platform_data",
+            )
     return out
 
 
 def enrich_contacts_l0(
     kol_pool_id: int, *, conn: Any | None = None, staff: dict[str, Any] | None = None, dry_run: bool = False
 ) -> dict[str, Any]:
-    """L0 免费富化:读该 KOL 已抓回的 raw -> extract_contacts_multi_source -> 落 vkpi_kol_pool_contacts
-    (带 confidence/evidence/首末见)+ 回填 vkpi_kol_pool.email(择最高置信 email,仅当主表空)/other_contacts_json。
-    纯读已有公开 raw、零外调、零成本。dry_run=True 只返回将写内容、不落库。红线:不触 viltrox_fit_score。"""
+    """Compatibility entry that queues the durable provider-free L0 cycle.
+
+    Canonical writes are owned by ``contact_acquisition_queue`` and
+    ``contact_ingest``.  This legacy helper no longer writes pool snapshots or
+    canonical rows directly and never invokes a provider.
+    """
     db = conn or get_conn()
     row = db.execute(
         "SELECT id, platform, email, other_contacts_json, raw_platform_data FROM vkpi_kol_pool WHERE id=?",
@@ -234,75 +296,31 @@ def enrich_contacts_l0(
     if not isinstance(raw, dict) or not raw:
         return {"status": "no_raw", "kol_pool_id": int(kol_pool_id)}
     contacts = extract_contacts_multi_source(raw, platform=str(d.get("platform") or ""))
-    emails = sorted([c for c in contacts if c["contact_type"] == "email"], key=lambda c: -float(c.get("confidence") or 0))
-    best_email = emails[0]["contact_value"] if emails else ""
     by_type: dict[str, int] = {}
     for c in contacts:
         by_type[c["contact_type"]] = by_type.get(c["contact_type"], 0) + 1
     if dry_run:
         return {
             "status": "dry_run", "kol_pool_id": int(kol_pool_id), "found": len(contacts),
-            "best_email": best_email, "email_would_backfill": bool(best_email and not str(d.get("email") or "").strip()),
-            "by_type": by_type, "contacts": contacts[:20],
+            "by_type": by_type, "provider_calls": False, "write_db": False,
         }
     if not contacts:
         return {"status": "no_contacts", "kol_pool_id": int(kol_pool_id)}
-    actor = (staff or {}).get("staff_id") or (staff or {}).get("id") or (staff or {}).get("user_id")
-    _merge_contacts_into_pool(db, int(kol_pool_id), d, contacts, best_email=best_email, actor=actor)
-    return {"status": "ok", "kol_pool_id": int(kol_pool_id), "found": len(contacts), "email": best_email, "by_type": by_type}
+    from app.domains.kol.contact_acquisition_queue import enqueue_contact_acquisition
 
-
-def _merge_contacts_into_pool(
-    db: Any, kol_pool_id: int, d: dict[str, Any], contacts: list[dict[str, Any]], *,
-    best_email: str, actor: Any = None, consent_basis: str = "public_scan",
-    pool_source_label: str = "raw_scan", source_url: str = "",
-) -> None:
-    """L0/L1 共享写库合并:vkpi_kol_pool_contacts 审计行(冲突不覆盖)+ other_contacts_json 并集
-    + 主表 email/contact_source 只填空不覆盖。d 需含 email/other_contacts_json 现值。commit 在内。"""
-    now = _utcnow()
-    for cc in contacts:
-        conf = round(float(cc.get("confidence") or 0.0), 2)
-        db.execute(
-            """
-            INSERT INTO vkpi_kol_pool_contacts
-                (kol_pool_id, contact_type, contact_value, contact_source, source_url,
-                 consent_basis, is_public_declared, extracted_by_staff_id,
-                 confidence, evidence_text, first_seen_at, last_seen_at, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(kol_pool_id, contact_type, contact_value) DO NOTHING
-            """,
-            (int(kol_pool_id), cc["contact_type"], cc["contact_value"],
-             cc.get("source_type") or "raw_bio_scan", source_url, consent_basis, conf >= 0.85, actor,
-             conf, (cc.get("evidence_text") or "")[:280], now, now, now),
-        )
-    try:
-        existing = json.loads(d.get("other_contacts_json") or "[]")
-        if not isinstance(existing, list):
-            existing = []
-    except Exception:
-        existing = []
-    seen = {str((e or {}).get("contact_value") or "").strip().lower() for e in existing if isinstance(e, dict)}
-    for cc in contacts:
-        k = cc["contact_value"].strip().lower()
-        if k and k not in seen:
-            existing.append({
-                "contact_type": cc["contact_type"], "contact_value": cc["contact_value"],
-                "contact_source": cc.get("source_type"), "confidence": cc.get("confidence"),
-            })
-            seen.add(k)
-    db.execute(
-        """
-        UPDATE vkpi_kol_pool
-        SET email=CASE WHEN COALESCE(email,'')='' THEN ? ELSE email END,
-            other_contacts_json=?,
-            contact_source=CASE WHEN COALESCE(contact_source,'')='' THEN ? ELSE contact_source END,
-            contact_first_seen_at=COALESCE(contact_first_seen_at, ?),
-            updated_at=?
-        WHERE id=?
-        """,
-        (best_email, json.dumps(existing, ensure_ascii=False), pool_source_label, now, now, int(kol_pool_id)),
+    queued = enqueue_contact_acquisition(
+        int(kol_pool_id), trigger_source="reconcile", conn=db
     )
-    db.commit()
+    return {
+        "status": "queued_l0",
+        "kol_pool_id": int(kol_pool_id),
+        "found": len(contacts),
+        "by_type": by_type,
+        "queue_status": queued.get("status"),
+        "provider_calls": False,
+        "website_crawls": False,
+        "messages_sent": False,
+    }
 
 
 def backfill_contacts_l0(*, limit: int | None = None, only_missing_email: bool = False) -> dict[str, Any]:
@@ -439,68 +457,27 @@ def extract_public_business_contacts(raw_platform_data: dict[str, Any], *, platf
 
 
 def enrich_business_contacts(kol_pool_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    """单条富化入口(禁群抓)。门禁:flag OFF / 预算不足 → 不写不调,返回原因。
-
-    红线:本函数只写 email/other_contacts_json/contact_* 与 vkpi_kol_pool_contacts;不触 viltrox_fit_score。
-    """
-    if not _flag_enabled():
-        return {"status": "disabled", "reason": "feature_flag business_email_enrichment OFF"}
-    # 第一道预检:纯读已抓 raw 走零成本路径(est_cost=0),仅查 budget_guard 未硬停。
-    if not _budget_ok(est_cost=0.0):
-        return {"status": "budget_blocked", "reason": "apify budget gate (provider:apify hard-stopped)"}
+    """Queue the zero-provider L0 reconciler; never scrape from a read flow."""
+    del staff
     conn = get_conn()
-    row = conn.execute("SELECT raw_platform_data, platform, email, other_contacts_json FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
+    row = conn.execute(
+        "SELECT id FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)
+    ).fetchone()
     if not row:
         raise LookupError("kol pool item not found")
-    try:
-        raw = json.loads(row["raw_platform_data"] or "{}")
-    except Exception:
-        raw = {}
-    contacts = extract_public_business_contacts(raw, platform=str(row["platform"] or ""))
-    apify_run_ref = ""
-    # raw 内无白名单联系 → Apify 专抓 about 页兜底(Jianbo 已授权;est_cost>0 触发双闸硬预检)。
-    if not contacts:
-        platform = str(row["platform"] or "")
-        if _budget_ok(est_cost=APIFY_ABOUT_EST_COST_USD):
-            scraped_raw, apify_run_ref = _apify_scrape_about(
-                platform=platform,
-                handle=str((raw.get("profile") or {}).get("handle") or ""),
-                profile_url=str((raw.get("profile") or {}).get("profile_url") or (raw.get("profile") or {}).get("url") or ""),
-                kol_pool_id=int(kol_pool_id),
-                staff=staff,
-            )
-            if scraped_raw:
-                contacts = extract_public_business_contacts(scraped_raw, platform=platform)
-    if not contacts:
-        return {"status": "no_public_contact", "kol_pool_id": int(kol_pool_id), "apify_run_ref": apify_run_ref}
-    now = _utcnow()
-    actor = (staff or {}).get("staff_id") or (staff or {}).get("user_id")
-    primary = contacts[0]["contact_value"]
-    for c in contacts:
-        conn.execute(
-            """
-            INSERT INTO vkpi_kol_pool_contacts
-                (kol_pool_id, contact_type, contact_value, contact_source, consent_basis, extracted_by_staff_id, created_at)
-            VALUES (?,?,?,?,?,?,?)
-            ON CONFLICT(kol_pool_id, contact_type, contact_value) DO NOTHING
-            """,
-            (int(kol_pool_id), c["contact_type"], c["contact_value"], c["contact_source"], "legitimate_interest_public_business", actor, now),
-        )
-    # 写展示快照 + 来源元数据(只写联系列,绝不写 fit_score)
-    conn.execute(
-        """
-        UPDATE vkpi_kol_pool
-        SET email=CASE WHEN COALESCE(email,'')='' THEN ? ELSE email END,
-            other_contacts_json=?,
-            contact_source=?,
-            contact_first_seen_at=COALESCE(contact_first_seen_at, ?),
-            updated_at=?
-        WHERE id=?
-        """,
-        (primary, json.dumps(contacts, ensure_ascii=False), contacts[0]["contact_source"], now, now, int(kol_pool_id)),
+    from app.domains.kol.contact_acquisition_queue import enqueue_contact_acquisition
+
+    queued = enqueue_contact_acquisition(
+        int(kol_pool_id), trigger_source="reconcile", conn=conn
     )
-    conn.commit()
-    return {"status": "enriched", "kol_pool_id": int(kol_pool_id), "contacts": len(contacts), "source": contacts[0]["contact_source"], "apify_run_ref": apify_run_ref}
+    return {
+        "status": "queued_l0",
+        "kol_pool_id": int(kol_pool_id),
+        "queue_status": queued.get("status"),
+        "provider_calls": False,
+        "website_crawls": False,
+        "messages_sent": False,
+    }
 
 
 def add_manual_contact(
@@ -511,74 +488,73 @@ def add_manual_contact(
     handle: str = "",
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """人工保存联系方式(ContactModal「保存联系方式」)。合规留痕:contact_source='manual'、
-    consent_basis='manual_entry'、is_public_declared=FALSE(员工录入,不主张公开声明)、
-    extracted_by_staff_id=操作人;写 vkpi_kol_pool_contacts 审计表 + other_contacts_json 展示快照
-    (并集去重)。无富化预算闸(纯人工录入、零外调)。红线:只写联系列,绝不触 viltrox_fit_score。"""
+    """Store manual observations through the canonical ingest lifecycle."""
     email = (email or "").strip()
     handle = (handle or "").strip()
     platform = (platform or "").strip()
     if not email and not handle:
         return {"status": "empty", "reason": "need email or handle"}
     conn = get_conn()
-    row = conn.execute(
-        "SELECT id, email, other_contacts_json FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)
-    ).fetchone()
+    row = conn.execute("SELECT id FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     if not row:
         raise LookupError("kol pool item not found")
-    now = _utcnow()
     actor = (staff or {}).get("staff_id") or (staff or {}).get("id") or (staff or {}).get("user_id")
+    from app.domains.kol.contact_ingest import ContactValidationError, ingest_contact
 
-    new_entries: list[dict[str, Any]] = []
+    new_entries: list[tuple[str, str, str]] = []
     if email:
-        new_entries.append({"contact_type": "email", "contact_value": email, "contact_source": "manual", "label": "email"})
+        new_entries.append(("email", email, "operator.email"))
     if handle:
-        new_entries.append({
-            "contact_type": "link", "contact_value": handle, "contact_source": "manual",
-            "platform": platform or "other", "label": platform or "link",
-        })
+        platform_key = platform.casefold()
+        dm_types = {
+            "instagram": "instagram_dm",
+            "ig": "instagram_dm",
+            "tiktok": "tiktok_dm",
+            "x": "x_dm",
+            "twitter": "x_dm",
+            "facebook": "facebook_dm",
+            "telegram": "telegram_dm",
+        }
+        if handle.startswith(("http://", "https://")):
+            new_entries.append(("website", handle, "operator.link"))
+        elif platform_key in dm_types:
+            new_entries.append((dm_types[platform_key], handle, f"operator.{platform_key}"))
+        elif platform_key in {"youtube", "yt"} and handle.startswith("@"):
+            new_entries.append(("youtube_link", f"https://youtube.com/{handle}", "operator.youtube"))
 
-    for c in new_entries:
-        conn.execute(
-            """
-            INSERT INTO vkpi_kol_pool_contacts
-                (kol_pool_id, contact_type, contact_value, contact_source, source_url,
-                 consent_basis, is_public_declared, extracted_by_staff_id, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(kol_pool_id, contact_type, contact_value) DO NOTHING
-            """,
-            (int(kol_pool_id), c["contact_type"], c["contact_value"], "manual", "",
-             "manual_entry", False, actor, now),
-        )
+    requested = int(bool(email)) + int(bool(handle))
+    saved = rejected = 0
+    for contact_type, contact_value, source_field in new_entries:
+        try:
+            ingest_contact(
+                kol_pool_id=int(kol_pool_id),
+                contact_type=contact_type,
+                contact_value=contact_value,
+                source_type="manual",
+                source_field=source_field,
+                confidence=1.0,
+                is_public_declared=False,
+                verification_status="observed",
+                staff_id=actor,
+                consent_basis="manual_entry",
+                conn=conn,
+            )
+            saved += 1
+        except (ContactValidationError, TypeError, ValueError):
+            rejected += 1
+    from app.domains.kol.contact_system import refresh_contactability
 
-    # 展示快照:并集去重(by contact_value 小写),保留既有抓取来源条目
-    try:
-        existing = json.loads(row["other_contacts_json"] or "[]")
-        if not isinstance(existing, list):
-            existing = []
-    except Exception:
-        existing = []
-    seen = {str((e or {}).get("contact_value") or "").strip().lower() for e in existing if isinstance(e, dict)}
-    for c in new_entries:
-        key = c["contact_value"].strip().lower()
-        if key and key not in seen:
-            existing.append(c)
-            seen.add(key)
-
-    conn.execute(
-        """
-        UPDATE vkpi_kol_pool
-        SET email=CASE WHEN COALESCE(email,'')='' THEN ? ELSE email END,
-            other_contacts_json=?,
-            contact_source=CASE WHEN COALESCE(contact_source,'')='' THEN 'manual' ELSE contact_source END,
-            contact_first_seen_at=COALESCE(contact_first_seen_at, ?),
-            updated_at=?
-        WHERE id=?
-        """,
-        (email or "", json.dumps(existing, ensure_ascii=False), now, now, int(kol_pool_id)),
-    )
-    conn.commit()
-    return {"status": "saved", "kol_pool_id": int(kol_pool_id), "saved": len(new_entries), "contacts": existing}
+    refresh_contactability(int(kol_pool_id), conn=conn)
+    return {
+        "status": "saved" if saved else "invalid",
+        "kol_pool_id": int(kol_pool_id),
+        "saved": saved,
+        "rejected": rejected + max(0, requested - len(new_entries)),
+        "contacts": [],
+        "contact_masked": True,
+        "verification_status": "observed",
+        "provider_calls": False,
+    }
 
 
 def _about_claim_task_id(kol_pool_id: int) -> str:
@@ -700,13 +676,11 @@ def _about_backlog_rows(db: Any, limit: int) -> tuple[int, list[dict[str, Any]]]
 
 
 def fetch_about_and_enrich(batch_size: int = 50, *, dry_run: bool = True, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    """L1 批量:Apify 专抓 YouTube about/频道描述补邮箱(Jianbo 已授权;2026-07-19 用户放行花费)。
+    """Read-only L1 backlog preview; execution is fail-closed in this slice.
 
-    每条:双闸预检(_budget_ok)→ durable claim + call_apify_actor(_apify_scrape_about 内)→
-    extract_contacts_multi_source 抽联系方式(about 页 email 重标 youtube_about_declared=公开声明白名单源)→
-    _merge_contacts_into_pool 只填空不覆盖。单条失败隔离;单 run 硬上限 batch_size(≤50)。
-    dry_run=True 只报 backlog/本批人数/预估成本,零外调零写库。
-    红线:只写联系列;绝不触 viltrox_fit_score / rule_v0。
+    ``dry_run=True`` reports counts/cost only.  ``dry_run=False`` remains
+    disabled and performs zero provider calls and zero writes until a separate
+    authorized acquisition/export workflow exists.
     """
     batch = max(1, min(50, int(batch_size or 1)))
     db = get_conn()
@@ -719,60 +693,16 @@ def fetch_about_and_enrich(batch_size: int = 50, *, dry_run: bool = True, staff:
             "budget_ok": _budget_ok(est_cost=APIFY_ABOUT_EST_COST_USD),
             "sample": [{"id": r["id"], "handle": r.get("handle")} for r in rows[:10]],
         }
-    if not _flag_enabled():
-        return {"status": "disabled", "reason": "feature_flag business_email_enrichment OFF", "target_backlog": total}
-    actor = (staff or {}).get("staff_id") or (staff or {}).get("id") or (staff or {}).get("user_id")
-    attempted = emails_found = rows_updated = no_about = failed = 0
-    items: list[dict[str, Any]] = []
-    status = "done"
-    for r in rows:
-        kid = int(r["id"])
-        if not _budget_ok(est_cost=APIFY_ABOUT_EST_COST_USD):
-            status = "budget_blocked"
-            items.append({"id": kid, "status": "budget_blocked"})
-            break
-        attempted += 1
-        try:
-            scraped_raw, run_ref = _apify_scrape_about(
-                platform="youtube", handle=str(r.get("handle") or ""),
-                profile_url=str(r.get("profile_url") or ""), kol_pool_id=kid, staff=staff,
-            )
-            if not scraped_raw:
-                no_about += 1
-                items.append({"id": kid, "status": "no_about", "run_ref": run_ref})
-                continue
-            contacts = extract_contacts_multi_source(scraped_raw, platform="youtube")
-            for cc in contacts:
-                if cc.get("contact_type") == "email":
-                    cc["source_type"] = SOURCE_YOUTUBE_ABOUT  # about 页描述=创作者公开声明(白名单源)
-            emails = sorted(
-                [c for c in contacts if c["contact_type"] == "email"],
-                key=lambda c: -float(c.get("confidence") or 0),
-            )
-            best_email = emails[0]["contact_value"] if emails else ""
-            if emails:
-                emails_found += 1
-            if contacts:
-                _merge_contacts_into_pool(
-                    db, kid, r, contacts, best_email=best_email, actor=actor,
-                    consent_basis="legitimate_interest_public_business",
-                    pool_source_label=SOURCE_YOUTUBE_ABOUT,
-                    source_url=str(r.get("profile_url") or ""),
-                )
-            if best_email:
-                rows_updated += 1
-            items.append({"id": kid, "status": "ok" if best_email else "no_email",
-                          "email": best_email, "contacts": len(contacts), "run_ref": run_ref})
-        except Exception:
-            failed += 1
-            logger.warning("fetch_about_and_enrich item failed kol=%s", kid, exc_info=True)
-            items.append({"id": kid, "status": "error"})
-            try:
-                db.rollback()
-            except Exception:
-                logger.debug("回滚失败(best-effort)", exc_info=True)
+    del staff
+    # Provider-backed contact acquisition needs a separately authorized export
+    # workflow.  This compatibility entry remains observable but executable
+    # only as a zero-write dry run; it cannot call Apify or write canonical
+    # contact rows in the L0 contactability slice.
     return {
-        "status": status, "target_backlog": total, "attempted": attempted,
-        "emails_found": emails_found, "rows_updated": rows_updated, "no_about": no_about,
-        "failed": failed, "est_cost_usd": round(attempted * APIFY_ABOUT_EST_COST_USD, 2), "items": items,
+        "status": "disabled",
+        "reason": "external_contact_acquisition_not_authorized",
+        "target_backlog": total,
+        "batch": len(rows),
+        "provider_calls": False,
+        "write_db": False,
     }

@@ -41,6 +41,7 @@ import { KOLAnalysisTrustPanel } from "./KOLAnalysisTrustPanel";
 import { videoAnalysisGateMessage } from "./KOLDetailDrawer.gates";
 import { DRAWER_TABS, KOLDrawerBriefSkill, KOLDrawerCoopActions, KOLDrawerViewerContextBar, readStoredDrawerTab, storeDrawerTab } from "./KOLDetailDrawer.Subsections";
 import { useKOLDrawerViewerContext } from "./useKOLDrawerViewerContext";
+import { useKolDrawerContactState } from "../lib/useKolContactState";
 import {
   KOLDrawerContactAndVideos,
   KOLDrawerContentFit,
@@ -69,6 +70,7 @@ const e = React.createElement;
 // 头部身份卡与底部粘性行动条在 tab 结构之外,全 tab 常驻。tab 选择记忆到 localStorage(跨 KOL/会话)。
 export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact, staff = [], onReloadDetail }: any) {
   const contentFitProductSku = String(item?.product_sku || item?.productSku || "").trim();
+  const { state: contactState, retry: retryContact } = useKolDrawerContactState(apiToken, item?.id);
   // P-GROUP-7 共享 KOL 池:把这条 My KOL(item.id = kol_pool_id)显式共享给成员(只读授予)。
   const [shareOpen, setShareOpen] = React.useState(false);
   // 【M3/M5】观看者上下文:共享来源(来自谁的共享)+ active 认领(本人/管理层可释放)。
@@ -869,7 +871,10 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         // ── Trend hits(真实命中列表,非 B6 摘除的恒空评分卡)──
         trendHits.length > 0 && e(KOLDrawerTrendHits, { trendHits }),
         // ── 联系方式 & 代表视频(身份速览的一部分:是谁 + 内容长啥样)──
-        e(KOLDrawerContactAndVideos, { item, representativeVideos, onOpenVideo: setActiveRepresentativeVideo, detailLoading, detailError }),
+        e(KOLDrawerContactAndVideos, {
+          item, representativeVideos, contactState,
+          onOpenVideo: setActiveRepresentativeVideo, onRetryContact: retryContact,
+        }),
         // ── 推荐动作/文本区块: Viltrox 适配判断 / 推荐产品线 / 风险点 / 品牌合作历史 ──
         e(KOLDrawerTextSections, { item, recommendedProductLines, potentialConcerns, brandCollaborations, competitorCollabs, foldDefaultOpen }),
       ),
@@ -966,10 +971,12 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         e(KOLDrawerCoopActions, { apiToken, item, onOpenShare: () => setShareOpen(true) }),
       ),
     ),
-    
     // ─── Footer actions ───
     e(KOLDrawerFooter, {
-      item, inMyList, onToggleMyList, onContact, onPromote, promoteMsg,
+      item, inMyList, onToggleMyList,
+      onContact: (selected: any) => onContact?.(selected, contactState), contactState,
+      onPromote,
+      promoteMsg,
       canEnqueueVideoAnalysis, videoEnqueueLabel, videoEnqueueTitle, videoEnqueueState,
       onEnqueueVideoAnalysis: handleVideoAnalysisEnqueue,
       buildFullState, onBuildFullProfile,

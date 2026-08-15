@@ -324,6 +324,10 @@ def mask_pool_item(
     if not isinstance(item, dict):
         return item
     masked = project_pool_item_truth(item)
+    from app.domains.kol.contact_system import project_public_profile_url
+    for profile_key in ("profile_url", "profileUrl", "channel_url", "channelUrl"):
+        if profile_key in masked:
+            masked[profile_key] = project_public_profile_url(masked.get(profile_key))
     # Raw provider/import blobs can contain nested email/phone copies.  They
     # are not part of the public DTO and are removed for both masked and full
     # single-item projections after metric-truth extraction.

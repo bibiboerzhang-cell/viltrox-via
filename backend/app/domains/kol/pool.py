@@ -10,7 +10,6 @@ from app.services.cache import cache_get
 from app.platform.industry_crawlers import get_crawler
 from app.domains.industry.snapshot_kpis import calculate_kpis
 from app.domains.kol.pool_common import (
-    CONTACT_VISIBILITY_FULL,
     CONTACT_VISIBILITY_MASKED,
     ENRICHABLE_PLATFORMS,
     KOL_POOL_LIST_COLUMNS,
@@ -45,7 +44,6 @@ from app.domains.kol.pool_common import (
     _table_columns,
     _thumb_url,
     _utcnow,
-    normalize_contact_visibility,
 )
 from app.domains.kol.pool_main_linking import main_candidates, promote_to_main
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
@@ -193,6 +191,26 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
             rows.append(dict(row))
     conn.commit()
     _clear_kol_pool_read_cache()
+    # Materialization only enters the durable provider-free L0 queue.  The
+    # import request never runs extraction, a provider, a website crawl or a
+    # message send inline.
+    imported_ids = [int(row["id"]) for row in rows if row.get("id")]
+    if imported_ids:
+        try:
+            from app.domains.kol.contact_acquisition_queue import enqueue_contact_acquisitions
+
+            enqueue_contact_acquisitions(
+                imported_ids,
+                trigger_source="import",
+                conn=conn,
+            )
+        except Exception:
+            # The primary import is already committed; a rolling migration must
+            # not roll it back.  Only identifiers are logged.
+            logger.warning(
+                "contact acquisition enqueue unavailable after import ids=%s",
+                imported_ids,
+            )
     return {"imported": imported, "skipped": skipped, "items": rows}
 
 
@@ -565,21 +583,32 @@ def get_item(
     include_raw_for_derivation: bool = False,
 ) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
-    row = get_conn().execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
+    conn = get_conn()
+    row = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     if not row:
         raise LookupError("kol pool item not found")
     raw_item = dict(row)
-    visibility = normalize_contact_visibility(contact_visibility)
-    item = mask_pool_item(
-        raw_item,
-        contact_visibility=visibility,
+    # Ordinary item/detail reads are always value-free.  Plaintext can only be
+    # returned by the explicit POST reveal boundary after purpose validation,
+    # authorization, suppression/eligibility checks, audit and rate limiting.
+    del contact_visibility
+    visibility = CONTACT_VISIBILITY_MASKED
+    item = mask_pool_item(raw_item, contact_visibility=visibility)
+    from app.domains.kol.contact_system import (
+        contact_summary,
+        value_free_contact_projection,
     )
-    if visibility == CONTACT_VISIBILITY_FULL:
-        from app.domains.kol.pool_contacts import merge_canonical_contacts
 
-        item = merge_canonical_contacts(item, conn=get_conn(), kol_pool_id=int(kol_pool_id))
+    # ``mask_pool_item`` remains useful for metric-truth derivation, but a
+    # masked address/phone is still a contact value.  Ordinary GETs expose the
+    # value-free summary only, so recursively remove legacy aliases, nested
+    # contact records/raw metadata and inline masked fragments afterwards.
+    item = value_free_contact_projection(item)
+
+    item["contact_summary"] = contact_summary(int(kol_pool_id), conn=conn)
     item["v6_breakdown"] = _v6_breakdown_for_item(item)
     item["video_evidence"] = _video_evidence_for_kol(int(kol_pool_id), limit=3)
+    item = value_free_contact_projection(item)
     payload: dict[str, Any] = {"item": item}
     if include_raw_for_derivation:
         # Internal-only handoff for detail computations.  The detail bundle
@@ -770,7 +799,7 @@ def detail_bundle(
             )
         },
     }
-    return {
+    bundle = {
         "status": "ready",
         "method": "kol_pool_detail_bundle_v1",
         "claim_status": "descriptive_only",
@@ -795,3 +824,10 @@ def detail_bundle(
             "viltrox_fit_score_write": False,
         },
     }
+    # LLM/cache/video prose can carry an address copied from a creator bio.
+    # Apply the same recursive DTO boundary to the complete nested bundle;
+    # ``contact_summary`` itself is intentionally preserved as value-free
+    # counts/channel types/lifecycle timestamps.
+    from app.domains.kol.contact_system import value_free_contact_projection
+
+    return value_free_contact_projection(bundle)

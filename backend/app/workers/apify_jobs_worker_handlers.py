@@ -280,10 +280,8 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
                     int(job["id"]),
                 ),
             )
-    # 账号深爬完成后先跑 L0:只读刚抓回的 raw/bio/公开链接,零外调、零成本、不受付费富化
-    # 开关影响。此前只调用 enrich_business_contacts,开关/白名单不命中时会安静返回 disabled/
-    # no_public_contact,导致“深爬完成但联系方式全空”。L0 完成后再尝试受预算和合规闸控制的
-    #商务邮箱富化。两层均为增强项,失败不阻断主任务。
+    # 账号深爬完成后只进入新 durable L0 编排。该编排读取已经落库的 raw/bio，绝不在
+    # 此处追加 provider、网站抓取或发送；需要外部动作的状态交给后续人工授权流程。
     kol_pool_id = _int_or_none(
         payload.get("kol_pool_id")
         or ((result or {}).get("profile_flow") or {}).get("kol_pool_id")
@@ -298,14 +296,32 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
             logger.warning("profile refresh freshness ledger failed kol_pool_id=%s", kol_pool_id, exc_info=True)
     if ok and kol_pool_id:
         try:
-            from app.domains.kol.business_contact_extract import enrich_business_contacts, enrich_contacts_l0
+            from app.domains.kol.contact_acquisition_queue import (
+                enqueue_contact_acquisition,
+                reconcile_contact_acquisition,
+            )
 
             with db_connection_sync_scope():
-                enrich_contacts_l0(int(kol_pool_id), staff=staff)
-            with db_connection_sync_scope():
-                enrich_business_contacts(int(kol_pool_id), staff=staff)
+                enqueue_contact_acquisition(
+                    int(kol_pool_id),
+                    trigger_source="deep_crawl",
+                )
+            try:
+                organization_id = int((staff or {}).get("organization_id") or 0)
+            except (TypeError, ValueError):
+                organization_id = 0
+            if organization_id > 0:
+                with db_connection_sync_scope():
+                    reconcile_contact_acquisition(
+                        int(kol_pool_id),
+                        brand_scope=f"organization:{organization_id}",
+                    )
         except Exception as exc:
-            logger.warning("lazy email enrich after deep_crawl failed (non-fatal) | kol_pool_id=%s error=%s", kol_pool_id, exc)
+            logger.warning(
+                "provider-free contact L0 after deep_crawl failed (non-fatal) | kol_pool_id=%s error_type=%s",
+                kol_pool_id,
+                type(exc).__name__,
+            )
 
 
 def _process_logistics_track_sync(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:

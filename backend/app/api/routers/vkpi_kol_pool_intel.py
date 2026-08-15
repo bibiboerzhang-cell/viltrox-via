@@ -168,16 +168,16 @@ def reveal_kol_contact(
 ) -> dict:
     """Reveal one KOL contact through the explicit audited PII boundary.
 
-    Bulk pool payloads remain masked; eligible employee detail reads disclose
-    through the same audit boundary automatically.  This endpoint is retained
-    as a rolling-client fallback for an invite flow that still has masked data.
+    Ordinary GET item/detail payloads remain value-free.  This explicit POST is
+    the only reveal boundary and requires one supported purpose per request.
     """
     response.headers.update(_CONTACT_REVEAL_HEADERS)
+    allowed_purposes = {"kol_detail_view", "compose_outreach"}
     if not (
         isinstance(body, dict)
         and set(body) == {"confirm", "purpose"}
         and body.get("confirm") is True
-        and body.get("purpose") == "compose_outreach"
+        and body.get("purpose") in allowed_purposes
     ):
         raise HTTPException(
             status_code=400,
@@ -196,27 +196,29 @@ def reveal_kol_contact(
             headers=_CONTACT_REVEAL_HEADERS,
         )
 
-    # Authorize before touching the KOL row so an unauthorized caller cannot
-    # use 403/404 differences to enumerate which pool ids exist.
-    if not check_kol_pool_employee_contact_permission(staff if isinstance(staff, dict) else None):
-        raise HTTPException(
-            status_code=403,
-            detail={"code": "contact_reveal_not_authorized"},
-            headers=_CONTACT_REVEAL_HEADERS,
-        )
-
     # Keep this compatibility route aligned with the GET detail boundary even
     # when called directly (outside ReleaseValidationFenceMiddleware).  The
     # fenced response performs no DB read, audit write, or limiter mutation.
     if release_validation_active():
         return {
-            "status": "masked",
+            "status": "restricted",
             "kol_pool_id": int(kol_pool_id),
-            "email": "",
-            "other_contacts": [],
+            "contacts": [],
             "contact_masked": True,
             "reason": "release_validation_fenced",
         }
+
+    # The tab dependency and legacy scope guard are not the contact-specific
+    # permission predicate.  Deny before consuming the sensitive-read bucket;
+    # the domain repeats this check as defense in depth before any DB lookup.
+    if not check_kol_pool_employee_contact_permission(
+        staff if isinstance(staff, dict) else None
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "kol_contact_access_not_authorized"},
+            headers=_CONTACT_REVEAL_HEADERS,
+        )
 
     enforce_contact_read_rate_limit(
         request,
@@ -233,7 +235,7 @@ def reveal_kol_contact(
             page_path=f"/kol-pool/{int(kol_pool_id)}/contacts/reveal",
             ip=get_client_ip(request),
             user_agent=str(request.headers.get("user-agent") or "")[:500],
-            purpose="compose_outreach",
+            purpose=str(body.get("purpose") or ""),
         )
     except LookupError as exc:
         raise HTTPException(
@@ -242,20 +244,17 @@ def reveal_kol_contact(
             headers=_CONTACT_REVEAL_HEADERS,
         ) from exc
 
-    if (
-        isinstance(result, dict)
-        and result.get("status") == "revealed"
-        and result.get("contact_masked") is False
-    ):
+    if isinstance(result, dict) and result.get("status") in {"full", "restricted", "empty"}:
         return result
 
-    # An audit-write failure is an authorization failure.  Return no contact
-    # values at all, even masked ones, and keep the reason generic.
-    raise HTTPException(
-        status_code=403,
-        detail={"code": "contact_reveal_not_authorized"},
-        headers=_CONTACT_REVEAL_HEADERS,
-    )
+    # A malformed domain payload never crosses the PII boundary.
+    return {
+        "status": "restricted",
+        "kol_pool_id": int(kol_pool_id),
+        "contacts": [],
+        "contact_masked": True,
+        "reason": "contact_reveal_unavailable",
+    }
 
 
 @router.post("/kol-pool/{kol_pool_id}/audience-stats/refresh")
@@ -720,6 +719,11 @@ def translate_bio(body: dict = Body(default_factory=dict), staff=Depends(require
         return {"status": "skipped", "reason": "empty_input", "translated": "", "lang": "zh", "cached": False}
     if len(text) > 1200:
         text = text[:1200]
+    from app.domains.kol.contact_system import sanitize_contact_values_for_external_processing
+
+    text = str(sanitize_contact_values_for_external_processing(text) or "").strip()
+    if not text:
+        return {"status": "skipped", "reason": "empty_after_contact_sanitization", "translated": "", "lang": "zh", "cached": False}
     if text in _BIO_ZH_CACHE:
         return {"status": "ready", "translated": _BIO_ZH_CACHE[text], "lang": "zh", "cached": True}
     try:

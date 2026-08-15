@@ -143,6 +143,18 @@ def _build_prompt(
     project: dict[str, Any],
     personalization_lines: list[str] | None = None,
 ) -> str:
+    from app.domains.kol.contact_system import sanitize_contact_values_for_external_processing
+
+    sanitized = sanitize_contact_values_for_external_processing(
+        {
+            "kol": kol,
+            "project": project,
+            "personalization_lines": personalization_lines or [],
+        }
+    )
+    kol = dict(sanitized.get("kol") or {})
+    project = dict(sanitized.get("project") or {})
+    personalization_lines = list(sanitized.get("personalization_lines") or [])
     kol_lines = [
         f"- 平台/Platform: {kol.get('platform') or '-'}",
         f"- Handle: {kol.get('handle') or '-'}",

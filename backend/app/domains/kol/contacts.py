@@ -19,18 +19,11 @@ def contact_rows_for_request(
     staff: dict[str, Any],
 ) -> dict[str, Any]:
     claims_domain.assert_kol_access(int(kol_id), staff, allow_unclaimed=True)
-    from app.domains.kol.contact_access import authorize_plaintext_contacts, project_contact_rows
+    from app.domains.kol.contact_access import project_contact_rows
 
-    reveal = authorize_plaintext_contacts(
-        staff,
-        resource_type="kol",
-        resource_id=int(kol_id),
-        page_path=f"/kols/{int(kol_id)}/contacts",
-        metadata={"include_wrong": bool(include_wrong)},
-    )
     return project_contact_rows(
         contact_rows(int(kol_id), include_wrong=include_wrong),
-        reveal=reveal,
+        reveal=False,
     )
 
 
@@ -75,16 +68,9 @@ def add_contact(kol_id: int, body: dict[str, Any], *, staff: dict[str, Any]) -> 
             },
         ]
     claims_domain.update_kol_manual(int(kol_id), payload, staff=staff)
-    from app.domains.kol.contact_access import authorize_plaintext_contacts, project_contact_rows
+    from app.domains.kol.contact_access import project_contact_rows
 
-    reveal = authorize_plaintext_contacts(
-        staff,
-        resource_type="kol",
-        resource_id=int(kol_id),
-        page_path=f"/kols/{int(kol_id)}/contacts",
-        metadata={"operation": "write_response"},
-    )
     return project_contact_rows(
         _contact_rows(int(kol_id), include_wrong=True),
-        reveal=reveal,
+        reveal=False,
     )

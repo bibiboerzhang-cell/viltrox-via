@@ -1,15 +1,17 @@
-"""P0-1 二期:KOL 池联系方式真值展开(二次确认 + 访问审计 hook)。
+"""Explicit KOL contact reveal boundary.
 
 读端默认脱敏(pool_common.mask_pool_item 在 list_pool/get_item 出口套用,掩码 e***@d***)。
 真值仅经本模块 view_kol_contact 展开:必须 confirm=True 二次确认,且每次展开写
 vkpi_sensitive_access_logs(audit/service.log_sensitive_access)+ 更新 vkpi_kol_pool 审计计数列
 (118 迁移:contact_reveal_count / contact_last_revealed_at / contact_last_revealed_by_staff_id)。
 
-红线:只读真值 email/other_contacts_json + 写审计列;绝不触 viltrox_fit_score 或任何业务/排序列。
+Ordinary GET item/detail DTOs never call this module.  One confirmed POST does
+one permission+audit decision, then evaluates every canonical contact through
+the verification/suppression gate.  Errors and restricted results never carry
+contact values.  No provider, website crawl or message send is performed here.
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,6 +20,29 @@ from app.db.connection import get_conn, is_postgres_runtime
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+ALLOWED_REVEAL_PURPOSES = frozenset({"kol_detail_view", "compose_outreach"})
+_SAFE_VERIFICATION_SOURCES = frozenset(
+    {
+        "youtube_about_declared",
+        "ig_business_profile",
+        "bio_explicit_contact",
+        "website_declared",
+        "manual",
+        "manual_verified_public_business",
+    }
+)
+_GUARD_UNAVAILABLE_REASONS = frozenset(
+    {
+        "fingerprint_key_unavailable",
+        "suppression_check_unavailable",
+        "verification_evidence_missing",
+        "verification_state_incomplete",
+        "contact_identity_mismatch",
+        "invalid_brand_scope",
+        "contact_not_found",
+    }
+)
 
 
 def _utcnow() -> str:
@@ -47,13 +72,42 @@ def _ensure_contact_audit_schema() -> None:
         pass
 
 
-def _loads(value: Any) -> Any:
-    if isinstance(value, (list, dict)):
-        return value
+def _restricted(kol_pool_id: int, reason: str) -> dict[str, Any]:
+    return {
+        "status": "restricted",
+        "kol_pool_id": int(kol_pool_id),
+        "contacts": [],
+        "contact_masked": True,
+        "reason": str(reason or "contact_access_restricted"),
+    }
+
+
+def _brand_scope(staff: dict[str, Any] | None) -> str:
+    context = staff if isinstance(staff, dict) else {}
     try:
-        return json.loads(str(value or ""))
+        organization_id = int(context.get("organization_id") or 0)
+    except (TypeError, ValueError):
+        return ""
+    return f"organization:{organization_id}" if organization_id > 0 else ""
+
+
+def _canonical_contact_rows(conn: Any, kol_pool_id: int) -> list[dict[str, Any]] | None:
+    """Load canonical rows only; legacy pool snapshots are never reveal truth."""
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, contact_type, contact_value, contact_source, verified_at
+            FROM vkpi_kol_pool_contacts
+            WHERE kol_pool_id = ? AND COALESCE(contact_value, '') <> ''
+            ORDER BY id
+            """,
+            (int(kol_pool_id),),
+        ).fetchall()
     except Exception:
-        return []
+        logger.warning("canonical KOL contact lookup unavailable; reveal fails closed", exc_info=True)
+        return None
+    return [dict(row) for row in rows]
 
 
 def view_kol_contact(
@@ -66,36 +120,109 @@ def view_kol_contact(
     user_agent: str = "",
     purpose: str = "",
 ) -> dict[str, Any]:
-    """展开单个 KOL 池条目的真值联系方式。
-
-    confirm 必须显式为 True(前端二次确认弹窗回传)否则返回脱敏值 + need_confirm,不写审计。
-    confirm=True:写 sensitive access 审计 + 更新展开计数,返回真值 email/other_contacts。
-    """
-    from app.domains.kol.pool_common import _mask_email, _mask_contacts_json
-
-    conn = get_conn()
-    row = conn.execute(
-        "SELECT id, email, other_contacts_json FROM vkpi_kol_pool WHERE id=?",
-        (int(kol_pool_id),),
-    ).fetchone()
-    if not row:
-        raise LookupError("kol pool item not found")
-    real_email = str(row["email"] or "")
-    real_contacts = _loads(row["other_contacts_json"])
-
+    """Return ``full``/``restricted``/``empty`` without leaking on failures."""
     if not confirm:
-        return {
-            "status": "need_confirm",
-            "kol_pool_id": int(kol_pool_id),
-            "email": _mask_email(real_email),
-            "other_contacts": _loads(_mask_contacts_json(row["other_contacts_json"])),
-            "contact_masked": True,
-        }
+        return _restricted(int(kol_pool_id), "confirmation_required")
+    normalized_purpose = str(purpose or "").strip()
+    if normalized_purpose not in ALLOWED_REVEAL_PURPOSES:
+        return _restricted(int(kol_pool_id), "purpose_not_allowed")
 
-    from app.domains.kol.contact_access import authorize_plaintext_contacts
     from app.core.permissions import check_kol_pool_employee_contact_permission
 
-    authorized = authorize_plaintext_contacts(
+    try:
+        staff_id = int((staff or {}).get("staff_id") or (staff or {}).get("id") or 0)
+    except (TypeError, ValueError):
+        staff_id = 0
+    # Pure authorization comes first, but a plaintext audit is truthful only
+    # after at least one canonical contact has passed verification and
+    # organization-scoped suppression.  Empty/restricted/404 reads therefore
+    # generate no ``contact_plaintext=true`` record.
+    if not check_kol_pool_employee_contact_permission(staff) or staff_id <= 0:
+        return _restricted(int(kol_pool_id), "contact_reveal_not_authorized")
+
+    try:
+        conn = get_conn()
+        pool_row = conn.execute(
+            "SELECT id FROM vkpi_kol_pool WHERE id=?",
+            (int(kol_pool_id),),
+        ).fetchone()
+    except Exception:
+        logger.warning("KOL contact store unavailable; reveal fails closed")
+        return _restricted(int(kol_pool_id), "contact_store_unavailable")
+    if not pool_row:
+        raise LookupError("kol pool item not found")
+
+    canonical_rows = _canonical_contact_rows(conn, int(kol_pool_id))
+    if canonical_rows is None:
+        return _restricted(int(kol_pool_id), "contact_store_unavailable")
+    if not canonical_rows:
+        return {
+            "status": "empty",
+            "kol_pool_id": int(kol_pool_id),
+            "contacts": [],
+            "contact_masked": False,
+            "reason": "no_verified_contacts",
+        }
+
+    from app.domains.kol.contact_suppression import contact_eligibility
+
+    brand_scope = _brand_scope(staff)
+    eligible_contacts: list[dict[str, Any]] = []
+    restricted_reasons: set[str] = set()
+    for contact in canonical_rows:
+        contact_id = int(contact.get("id") or 0)
+        if not contact_id:
+            restricted_reasons.add("contact_not_found")
+            continue
+        try:
+            verdict = contact_eligibility(
+                contact_id=contact_id,
+                kol_pool_id=int(kol_pool_id),
+                brand_scope=brand_scope,
+                conn=conn,
+            )
+        except Exception:
+            verdict = {
+                "status": "restricted",
+                "eligible": False,
+                "reason": "suppression_check_unavailable",
+            }
+        if not (isinstance(verdict, dict) and verdict.get("eligible") is True and verdict.get("status") == "eligible"):
+            restricted_reasons.add(str((verdict or {}).get("reason") or "verification_not_eligible"))
+            continue
+        value = str(contact.get("contact_value") or "").strip()
+        if not value:
+            restricted_reasons.add("contact_not_found")
+            continue
+        channel = str(verdict.get("channel") or contact.get("contact_type") or "contact").strip().lower()
+        item = {
+            "id": contact_id,
+            "channel": channel,
+            "contact_type": channel,
+            "value": value,
+            "verification_status": str(verdict.get("verification_status") or "verified_public_business"),
+        }
+        source = str(contact.get("contact_source") or "").strip().lower()
+        if source in _SAFE_VERIFICATION_SOURCES:
+            item["source_type"] = source
+        if contact.get("verified_at"):
+            item["verified_at"] = str(contact.get("verified_at"))
+        eligible_contacts.append(item)
+
+    if not eligible_contacts:
+        if restricted_reasons == {"suppressed"}:
+            reason = "suppressed"
+        elif restricted_reasons.intersection(_GUARD_UNAVAILABLE_REASONS):
+            reason = "contact_guard_unavailable"
+        elif "verification_not_eligible" in restricted_reasons:
+            reason = "verification_required"
+        else:
+            reason = "contact_guard_unavailable"
+        return _restricted(int(kol_pool_id), reason)
+
+    from app.domains.kol.contact_access import authorize_plaintext_contacts
+
+    audited = authorize_plaintext_contacts(
         staff,
         resource_type="kol_pool",
         resource_id=int(kol_pool_id),
@@ -103,35 +230,14 @@ def view_kol_contact(
         ip=ip,
         user_agent=user_agent,
         metadata={
-            "revealed": ["email", "other_contacts_json"],
-            "purpose": str(purpose or ""),
-            "has_email": bool(real_email),
+            "purpose": normalized_purpose,
             "ip_present": bool(ip),
             "user_agent_present": bool(user_agent),
         },
         permission_check=check_kol_pool_employee_contact_permission,
     )
-    if not authorized:
-        return {
-            "status": "masked",
-            "reason": "contacts_reveal_not_authorized_or_audit_failed",
-            "kol_pool_id": int(kol_pool_id),
-            "email": _mask_email(real_email),
-            "other_contacts": _loads(_mask_contacts_json(row["other_contacts_json"])),
-            "contact_masked": True,
-        }
-
-    from app.domains.kol.pool_contacts import merge_canonical_contacts
-
-    merged = merge_canonical_contacts(
-        {"email": real_email, "other_contacts_json": real_contacts},
-        conn=conn,
-        kol_pool_id=int(kol_pool_id),
-    )
-    real_email = str(merged.get("email") or "")
-    real_contacts = _loads(merged.get("other_contacts_json"))
-
-    staff_id = int((staff or {}).get("staff_id") or (staff or {}).get("id") or 0)
+    if not audited:
+        return _restricted(int(kol_pool_id), "contact_audit_unavailable")
 
     # 更新展开计数留痕(118 列;SQLite 幂等建)。明文审计已成功，此处是辅助计数。
     try:
@@ -152,9 +258,9 @@ def view_kol_contact(
         pass
 
     return {
-        "status": "revealed",
+        "status": "full",
         "kol_pool_id": int(kol_pool_id),
-        "email": real_email,
-        "other_contacts": real_contacts,
+        "contacts": eligible_contacts,
         "contact_masked": False,
+        "reason": "eligible_contacts_available",
     }

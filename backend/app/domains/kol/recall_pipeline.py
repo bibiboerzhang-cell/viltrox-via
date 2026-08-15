@@ -537,6 +537,13 @@ def _invoke_rerank_llm(query_text: str, top_items: list[dict[str, Any]]) -> tupl
         from app.platform import llm_gateway
     except Exception:
         return {}, "gateway_unavailable"
+    from app.domains.kol.contact_system import sanitize_contact_values_for_external_processing
+
+    safe_context = sanitize_contact_values_for_external_processing(
+        {"query_text": query_text, "top_items": top_items}
+    )
+    query_text = str(safe_context.get("query_text") or "")
+    top_items = list(safe_context.get("top_items") or [])
     lines: list[str] = []
     for i, item in enumerate(top_items):
         # blurb 压到 150 字符/人:thinking 模型思考 token 吃输出预算是常态(final_v1

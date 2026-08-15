@@ -28,7 +28,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
-from app.api.routers.vkpi_kol_contact_projection import PRIVATE_CONTACT_HEADERS, single_contact_projection
+from app.api.routers.vkpi_kol_contact_projection import PRIVATE_CONTACT_HEADERS
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.kol import account_dossier as kol_account_dossier
 from app.domains.kol import account_dossier_extract as kol_account_dossier_extract
@@ -553,17 +553,10 @@ async def get_item(
 ) -> dict:
     """获取单个 KOL Pool 项"""
     response.headers.update(PRIVATE_CONTACT_HEADERS)
-    contact_visibility, projection_reason = single_contact_projection(
-        request,
-        staff if isinstance(staff, dict) else {},
-        kol_pool_id=int(kol_pool_id),
-        page_path=f"/kol-pool/{int(kol_pool_id)}",
-        surface="kol_pool_item",
-    )
     try:
         result = kol_pool.get_item(
             int(kol_pool_id),
-            contact_visibility=contact_visibility,
+            contact_visibility=CONTACT_VISIBILITY_MASKED,
         )
         refresh_state = await _maybe_enqueue_refresh(
             request,
@@ -574,7 +567,7 @@ async def get_item(
         )
         result["freshness"] = refresh_state.get("freshness")
         result["refresh"] = refresh_state
-        result["contact_projection_reason"] = projection_reason
+        result["contact_projection_reason"] = "summary_only"
         return result
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="kol pool item not found", headers=PRIVATE_CONTACT_HEADERS) from exc
@@ -594,21 +587,14 @@ def get_item_detail_bundle(
 ) -> dict:
     """Read-only detail drawer bundle; does not refresh providers or touch V6 Fit."""
     response.headers.update(PRIVATE_CONTACT_HEADERS)
-    contact_visibility, projection_reason = single_contact_projection(
-        request,
-        staff if isinstance(staff, dict) else {},
-        kol_pool_id=int(kol_pool_id),
-        page_path=f"/kol-pool/{int(kol_pool_id)}/detail-bundle",
-        surface="kol_pool_detail_bundle",
-    )
     try:
         result = kol_pool.detail_bundle(
             int(kol_pool_id),
             video_limit=video_limit,
             llm_limit=llm_limit,
-            contact_visibility=contact_visibility,
+            contact_visibility=CONTACT_VISIBILITY_MASKED,
         )
-        result["contact_projection_reason"] = projection_reason
+        result["contact_projection_reason"] = "summary_only"
         return result
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="kol pool item not found", headers=PRIVATE_CONTACT_HEADERS) from exc

@@ -80,7 +80,9 @@ def test_tiktok_long_planner_query_is_split_without_expanding_result_budget() ->
     assert per_query * len(queries) == 20
 
 
-def test_profile_advance_runs_free_contact_extract_before_session_update(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_profile_advance_enqueues_provider_free_contact_reconcile_before_session_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     call_order: list[str] = []
     monkeypatch.setattr(
         profile_discovery,
@@ -93,12 +95,15 @@ def test_profile_advance_runs_free_contact_extract_before_session_update(monkeyp
         lambda _body: {"status": "ready", "profile_flow": {"status": "ready", "kol_pool_id": 42}},
     )
 
-    from app.domains.kol import business_contact_extract
+    from app.domains.kol import contact_acquisition_queue
 
     monkeypatch.setattr(
-        business_contact_extract,
-        "enrich_contacts_l0",
-        lambda kol_pool_id: call_order.append(f"contact:{kol_pool_id}") or {"status": "ok", "email": "public@example.com"},
+        contact_acquisition_queue,
+        "enqueue_contact_acquisition",
+        lambda kol_pool_id, **_kwargs: call_order.append(f"enqueue:{kol_pool_id}") or {
+            "status": "pending_l0",
+            "kol_pool_id": kol_pool_id,
+        },
     )
     monkeypatch.setattr(
         profile_discovery,
@@ -108,7 +113,12 @@ def test_profile_advance_runs_free_contact_extract_before_session_update(monkeyp
 
     def _update(_session_id: int, _item_id: int, *, profile_result: dict[str, Any]) -> dict[str, Any]:
         call_order.append("session_update")
-        assert profile_result["contact_enrichment"]["email"] == "public@example.com"
+        contact = profile_result["contact_enrichment"]
+        assert contact["status"] == "pending_l0"
+        assert contact["provider_calls"] is False
+        assert contact["website_crawls"] is False
+        assert contact["messages_sent"] is False
+        assert "email" not in contact
         assert profile_result["audience_enrichment"]["status"] == "pending"
         return {"id": _item_id}
 
@@ -120,9 +130,11 @@ def test_profile_advance_runs_free_contact_extract_before_session_update(monkeyp
         body={"execute": True, "mode": "account_deep", "max_posts": 3},
     )
 
-    assert call_order == ["contact:42", "session_update"]
+    assert call_order == ["enqueue:42", "session_update"]
     assert result["status"] == "partial"
-    assert result["contact_enrichment"]["email"] == "public@example.com"
+    assert result["contact_enrichment"]["status"] == "pending_l0"
+    assert result["contact_enrichment"]["provider_calls"] is False
+    assert "email" not in result["contact_enrichment"]
     assert result["audience_enrichment"]["status"] == "pending"
 
 

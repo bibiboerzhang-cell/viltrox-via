@@ -13,13 +13,6 @@ def profile_with_dossier(kol_id: int, *, staff: dict[str, Any]) -> dict[str, Any
         result["dossier"] = account_domain.get_dossier(int(kol_id))
     except Exception:
         result["dossier"] = {}
-    from app.domains.kol.contact_access import authorize_plaintext_contacts, project_profile_contacts
+    from app.domains.kol.contact_access import project_profile_contacts
 
-    reveal = authorize_plaintext_contacts(
-        staff,
-        resource_type="kol",
-        resource_id=int(kol_id),
-        page_path=f"/kols/{int(kol_id)}/profile",
-        metadata={"surface": "profile"},
-    )
-    return project_profile_contacts(result, reveal=reveal)
+    return project_profile_contacts(result, reveal=False)

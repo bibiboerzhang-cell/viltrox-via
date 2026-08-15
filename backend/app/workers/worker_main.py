@@ -40,6 +40,9 @@ from app.workers.redis_worker_runtime import (
     stale_backlog_preflight,
     upsert_redis_worker_heartbeat,
 )
+from app.workers.contact_acquisition_worker import (
+    periodic_cycle_loop as contact_acquisition_periodic_cycle_loop,
+)
 
 
 logger = get_logger(__name__)
@@ -278,6 +281,10 @@ async def _worker_loop() -> None:
             lambda: queue.worker_readiness(consumer_names),
         )
     )
+    contact_acquisition_stop = asyncio.Event()
+    contact_acquisition_task = asyncio.create_task(
+        contact_acquisition_periodic_cycle_loop(contact_acquisition_stop)
+    )
     if ENABLE_BROWSER:
         await _start_browser()
 
@@ -294,7 +301,7 @@ async def _worker_loop() -> None:
     )
     try:
         done, _ = await asyncio.wait(
-            [heartbeat_task, *consumers],
+            [heartbeat_task, contact_acquisition_task, *consumers],
             return_when=asyncio.FIRST_COMPLETED,
         )
         # Every runtime task is expected to be long-lived.  A readiness probe
@@ -305,13 +312,17 @@ async def _worker_loop() -> None:
         raise RuntimeError("redis worker runtime task exited unexpectedly")
     finally:
         heartbeat_stop.set()
+        contact_acquisition_stop.set()
         heartbeat_task.cancel()
+        contact_acquisition_task.cancel()
         for task in consumers:
             task.cancel()
         with suppress(Exception):
             await asyncio.gather(*consumers, return_exceptions=True)
         with suppress(asyncio.CancelledError, Exception):
             await heartbeat_task
+        with suppress(asyncio.CancelledError, Exception):
+            await contact_acquisition_task
         await queue.close()
         if ENABLE_BROWSER:
             await _stop_browser()

@@ -16,7 +16,6 @@
 """
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -133,13 +132,10 @@ def sync_goaffpro(
 
 
 def _load_kol_identity(conn, kol_pool_id: int) -> dict | None:
-    """读 KOL 名/handle/email:主读 vkpi_kol_pool,email 为空时退到 vkpi_kol_pool_contacts。
-
-    返回 {kol_pool_id, name, email}。KOL 不存在 → None。
-    """
+    """只读 KOL 名/handle；affiliate 查询边界内不读取任何联系人值。"""
     row = conn.execute(
         """
-        SELECT id, display_name, handle, email
+        SELECT id, display_name, handle
         FROM vkpi_kol_pool
         WHERE id = ?
         """,
@@ -149,41 +145,7 @@ def _load_kol_identity(conn, kol_pool_id: int) -> dict | None:
         return None
     d = dict(row)
     name = str(d.get("display_name") or "").strip() or str(d.get("handle") or "").strip()
-    email = str(d.get("email") or "").strip()
-    if not email:
-        # email 可能在联系方式留痕表(115);取最早的一条 email/business_email。
-        try:
-            crow = conn.execute(
-                """
-                SELECT contact_value
-                FROM vkpi_kol_pool_contacts
-                WHERE kol_pool_id = ?
-                  AND contact_type IN ('email', 'business_email')
-                ORDER BY created_at ASC
-                LIMIT 1
-                """,
-                (kol_pool_id,),
-            ).fetchone()
-            if crow:
-                email = str(dict(crow).get("contact_value") or "").strip()
-        except Exception:  # noqa: BLE001 — contacts 表缺失/无权时静默退回无 email
-            email = ""
-    return {"kol_pool_id": kol_pool_id, "name": name, "email": email}
-
-
-def _effective_kol_email(identity: dict | None, kol_pool_id: int) -> tuple[str, bool]:
-    """KOL 有真 email 用真的;没有 → 合成**确定性**占位邮箱。
-
-    为什么:实测 GOAFFPRO 建 affiliate 缺 email 会软失败(HTTP 200 + {error})。确定性
-    (基于 name + kol_pool_id)保证 POST 建 / GET 搜命中同一个邮箱 → 幂等不重复建号。
-    返回 (email, is_synthetic)。占位邮箱用 viltroxvia.com 域,用户拿到 KOL 真邮箱后可在
-    GOAFFPRO 后台改。
-    """
-    real = str((identity or {}).get("email") or "").strip()
-    if real:
-        return real, False
-    base = re.sub(r"[^a-z0-9]+", "", str((identity or {}).get("name") or "").lower())[:30] or f"kol{kol_pool_id}"
-    return f"{base}.kol{kol_pool_id}@viltroxvia.com", True
+    return {"kol_pool_id": kol_pool_id, "name": name}
 
 
 def _load_link(conn, kol_pool_id: int) -> dict | None:
@@ -295,9 +257,9 @@ def link_kol_affiliate(
 ):
     """一键给 KOL 出追踪链 + 优惠码(KOL 零注册),幂等可重生。
 
-    流程(2026-06-17 根因重构):已存映射且 ref_code 非空 → 直接返回。否则取 KOL 名/email →
-    resolve_affiliate(search-first:先搜已存在的,找不到再建+审批)→ ?id= 回查 ref_code →
-    存 vkpi_goaffpro_kol_links。search-first 修掉了「早期建失败留空映射 + 不能重生」的坑。
+    已存映射且 ref_code 非空 → 直接返回；否则只按 KOL 名查已有 affiliate。
+    当前 GOAFFPRO 建号需要 email，路由不得把联系人明文或合成邮箱发给 provider；
+    查无已有账号时稳定返回 409，由员工在 GOAFFPRO 授权流程中完成建号。
     """
     goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
@@ -324,21 +286,19 @@ def link_kol_affiliate(
     if not identity.get("name"):
         raise HTTPException(status_code=400, detail="kol has no display_name/handle to name the affiliate")
 
-    # 缺真 email → 合成确定性占位邮箱(GOAFFPRO 缺 email 软失败的修法)。
-    email, email_synth = _effective_kol_email(identity, kol_pool_id)
-    # search-first + create-if-absent + ?id= 回查 ref_code(一站式确保 affiliate 真存在)。
-    res = goaffpro_connect.resolve_affiliate(name=identity["name"], email=email, create=True)
+    # Provider 边界只允许 name-only lookup；禁止真实/合成联系人值和隐式建号。
+    res = goaffpro_connect.resolve_affiliate(name=identity["name"], create=False)
     if not res.get("ok"):
-        return {
-            "ok": False,
-            "error": res.get("error") or res.get("reason") or "resolve_affiliate failed",
-            "reason": res.get("reason"),
-            "status_code": res.get("status_code"),
-            "raw": res.get("raw"),
-        }
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "goaffpro_affiliate_creation_requires_contact",
+                "message": "GOAFFPRO affiliate creation requires an authorized contact workflow",
+                "retryable": False,
+            },
+        )
     out = _store_kol_link(conn, kol_pool_id, res)
-    out["created"] = res.get("created", False)
-    out["email_synthetic"] = email_synth
+    out["created"] = False
     out.update(_product_link_fields(out.get("ref_code"), product))
     return out
 
@@ -365,10 +325,8 @@ def get_kol_affiliate_link(
     # 失效=空 或 ref_code 等于 affiliate_id(数字编号误当 ref 码)→ 搜回真码自愈。
     if _ref_is_bad(ex_ref, link.get("affiliate_id")):
         identity = _load_kol_identity(conn, kol_pool_id)
-        email = _effective_kol_email(identity, kol_pool_id)[0] if identity else None
         res = goaffpro_connect.resolve_affiliate(
             name=(identity or {}).get("name") or "",
-            email=email,  # 同 POST 的确定性占位邮箱 → 搜得到 POST 建的那个
             create=False,  # GET 只搜不建
         )
         if res.get("ok") and res.get("ref_code") and not _ref_is_bad(res.get("ref_code"), res.get("affiliate_id")):

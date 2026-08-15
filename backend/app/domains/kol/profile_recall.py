@@ -178,6 +178,9 @@ def _create_embedding_with_failover(query_text: str, *, client_factory: Any = No
     全部出口失败抛最后一个异常 → 上层 recall_degraded 降级路径原样保持诚实。
     client_factory 仅供测试打桩;生产恒走 _openai_client。
     """
+    from app.domains.kol.contact_system import sanitize_contact_values_for_external_processing
+
+    query_text = str(sanitize_contact_values_for_external_processing(query_text) or "")
     factory = client_factory or (lambda spec: _openai_client(
         proxy_override=spec["proxy_override"], direct=spec["direct"], timeout=spec["timeout"]
     ))

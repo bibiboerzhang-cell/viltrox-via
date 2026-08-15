@@ -166,6 +166,23 @@ def write_kol_profile_basics(
                 reapply_reach_floor(int(target_id), conn=db)
             except Exception:
                 logger.warning("reach floor regate skipped kol=%s", target_id, exc_info=True)
+        # Both URL materialization and deep-crawl writes converge here.  Queue
+        # the persisted profile for a later provider-free L0 pass only; never
+        # extract, crawl or send inside the profile write transaction.
+        if target_id:
+            try:
+                from app.domains.kol.contact_acquisition_queue import enqueue_contact_acquisition
+
+                enqueue_contact_acquisition(
+                    int(target_id),
+                    trigger_source="profile_materialization",
+                    conn=db,
+                )
+            except Exception:
+                logger.warning(
+                    "contact acquisition enqueue unavailable after profile materialization kol=%s",
+                    target_id,
+                )
         return {
             "ok": True,
             "dry_run": False,

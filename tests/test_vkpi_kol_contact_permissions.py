@@ -6,13 +6,15 @@ import json
 from typing import Any
 
 import pytest
-from fastapi import HTTPException, Response
+from fastapi import Response
 from starlette.requests import Request
 
 from app.api.routers import vkpi_kol_contact_projection as contact_projection
 from app.api.routers import vkpi_kol_pool as kol_pool_router
 from app.core.permissions import check_tab_permission, normalize_permissions
 from app.domains.audit import service as audit_service
+from app.domains.kol import contact_access
+from app.domains.kol import contact_system
 from app.domains.kol import pool as kol_pool
 from app.domains.kol import contacts as contacts_domain
 from app.domains.kol.pool_common import (
@@ -135,9 +137,15 @@ class _SingleItemConn:
             return _Result(
                 rows=[
                     {
+                        "id": 101,
                         "contact_type": "email",
+                        "channel": "email",
                         "contact_value": "canonical@example.com",
                         "contact_source": "website_declared",
+                        "verification_status": "verified_public_business",
+                        "verified_at": "2026-08-02T00:00:00Z",
+                        "invalidated_at": None,
+                        "revoked_at": None,
                         "consent_basis": "public_scan",
                         "is_public_declared": True,
                         "confidence": 0.9,
@@ -146,19 +154,37 @@ class _SingleItemConn:
                         "created_at": "2026-08-01T00:00:00Z",
                     },
                     {
+                        "id": 102,
                         "contact_type": "phone",
+                        "channel": "phone",
                         "contact_value": SECRET_PHONE,
                         "contact_source": "manual",
+                        "verification_status": "observed",
+                        "verified_at": None,
+                        "invalidated_at": None,
+                        "revoked_at": None,
                     },
                     {
+                        "id": 103,
                         "contact_type": "whatsapp",
+                        "channel": "whatsapp",
                         "contact_value": "+12025550188",
                         "contact_source": "manual",
+                        "verification_status": "verified_public_business",
+                        "verified_at": "2026-08-03T00:00:00Z",
+                        "invalidated_at": None,
+                        "revoked_at": None,
                     },
                     {
+                        "id": 104,
                         "contact_type": "website",
+                        "channel": "website",
                         "contact_value": "https://creator.example/contact",
                         "contact_source": "website_declared",
+                        "verification_status": "revoked",
+                        "verified_at": "2026-08-04T00:00:00Z",
+                        "invalidated_at": None,
+                        "revoked_at": "2026-08-05T00:00:00Z",
                     },
                 ]
             )
@@ -192,8 +218,63 @@ def _install_hermetic_pool(monkeypatch) -> dict[str, dict[str, Any]]:
 
 def _assert_no_contact_truth(payload: Any) -> None:
     serialized = json.dumps(payload, ensure_ascii=False)
-    for secret in (SECRET_EMAIL, SECRET_PHONE, "manager@example.com", "channel@example.com"):
+    for secret in (
+        SECRET_EMAIL,
+        SECRET_PHONE,
+        "manager@example.com",
+        "channel@example.com",
+        "canonical@example.com",
+        "+12025550188",
+        "https://creator.example/contact",
+    ):
         assert secret not in serialized
+
+
+def _value_free_summary_item(kol_pool_id: int = 7) -> dict[str, Any]:
+    return {
+        "id": int(kol_pool_id),
+        "handle": "contact-p0",
+        "contact_masked": True,
+        "contact_summary": {
+            "status": "known",
+            "has_contact": True,
+            "known_contact_count": 3,
+            "verified_contact_count": 2,
+            "channel_count": 3,
+            "channel_types": ["email", "phone", "whatsapp"],
+            "verified_channel_count": 2,
+            "verified_channel_types": ["email", "whatsapp"],
+            "last_verified_at": "2026-08-03T00:00:00Z",
+            "actionability": "requires_reveal",
+            "reveal_required": True,
+        },
+    }
+
+
+def test_malicious_contact_summary_cannot_smuggle_values_or_masked_copies() -> None:
+    payload = _value_free_summary_item()
+    payload["contact_summary"].update(
+        {
+            "email": SECRET_EMAIL,
+            "phone": SECRET_PHONE,
+            "masked_value": "c***@e***",
+            "contacts": [{"contact_type": "email", "contact_value": SECRET_EMAIL}],
+            "nested": {"business_email": "manager@example.com"},
+            "notes": f"Reach us at {SECRET_PHONE}",
+        }
+    )
+
+    projected = contact_system.value_free_contact_projection(payload)
+
+    _assert_no_contact_truth(projected)
+    summary = projected["contact_summary"]
+    assert summary["status"] == "known"
+    assert summary["known_contact_count"] == 3
+    assert summary["verified_contact_count"] == 2
+    assert summary["channel_types"] == ["email", "phone", "whatsapp"]
+    for forbidden in ("email", "phone", "masked_value", "contacts", "nested", "notes"):
+        assert forbidden not in summary
+    assert "***" not in json.dumps(summary, ensure_ascii=False)
 
 
 def test_inline_bio_contact_redactor_preserves_non_contact_metrics() -> None:
@@ -331,7 +412,7 @@ def test_list_and_workspace_force_masked_and_never_cache_bulk_plaintext(
     assert len([key for key in cache if ":workspace:" in key]) == 1
 
 
-def test_domain_full_item_merges_canonical_only_channels_but_masked_never_loads_them(monkeypatch) -> None:
+def test_domain_item_is_value_free_for_both_legacy_visibility_inputs(monkeypatch) -> None:
     conn = _SingleItemConn()
     monkeypatch.setattr(kol_pool, "ensure_vkpi_product_industry_schema", lambda: None)
     monkeypatch.setattr(kol_pool, "get_conn", lambda: conn)
@@ -339,28 +420,27 @@ def test_domain_full_item_merges_canonical_only_channels_but_masked_never_loads_
     monkeypatch.setattr(kol_pool, "_video_evidence_for_kol", lambda *_args, **_kwargs: [])
 
     masked = kol_pool.get_item(7, contact_visibility=CONTACT_VISIBILITY_MASKED)
-    assert conn.canonical_reads == 0
     full = kol_pool.get_item(7, contact_visibility=CONTACT_VISIBILITY_FULL)
-    assert conn.canonical_reads == 1
-    contacts = json.loads(full["item"]["other_contacts_json"])
 
-    _assert_no_contact_truth(masked)
-    assert {row["contact_type"] for row in contacts} >= {
-        "email", "phone", "telegram", "whatsapp", "website",
-    }
-    assert any(row["contact_value"] == "canonical@example.com" for row in contacts)
-    assert any(row["contact_value"] == SECRET_PHONE for row in contacts)
-    assert any(
-        row["contact_type"] == "whatsapp" and row["contact_value"] == "+12025550188"
-        for row in contacts
-    )
-    assert any(
-        row["contact_type"] == "telegram" and row["contact_value"] == "creator_handle"
-        for row in contacts
-    )
-    assert "contact_channels" not in full["item"]
-    assert "masked_value" not in str(full)
-    assert all("evidence_text" not in row and "source_url" not in row for row in contacts)
+    assert conn.canonical_reads == 2
+    assert masked == full
+    item = full["item"]
+    summary = item["contact_summary"]
+    assert summary["status"] == "known"
+    assert summary["known_contact_count"] == 3
+    assert summary["verified_contact_count"] == 2
+    assert summary["channel_types"] == ["email", "phone", "whatsapp"]
+    assert summary["verified_channel_types"] == ["email", "whatsapp"]
+    assert summary["last_verified_at"] == "2026-08-03T00:00:00Z"
+    assert summary["actionability"] == "requires_reveal"
+    for key in (
+        "email", "contact_email", "business_email", "public_email",
+        "phone", "contact_phone", "phone_number", "mobile", "whatsapp",
+        "other_contacts_json", "contact_channels", "contact_links_json", "contact_raw_json",
+    ):
+        assert key not in item
+    _assert_no_contact_truth(full)
+    assert "masked_value" not in json.dumps(full)
 
 
 def test_bulk_router_surfaces_always_use_masked_contact_projection(monkeypatch) -> None:
@@ -409,53 +489,64 @@ def test_bulk_router_surfaces_always_use_masked_contact_projection(monkeypatch) 
     assert seen == [CONTACT_VISIBILITY_MASKED, CONTACT_VISIBILITY_MASKED]
 
 
-def test_single_item_route_auto_reveals_for_audited_active_employee(monkeypatch) -> None:
-    seen: list[str] = []
-    audit_calls: list[dict[str, Any]] = []
-
-    def item_stub(kol_pool_id: int, *, contact_visibility: str) -> dict[str, Any]:
-        assert kol_pool_id == 7
-        seen.append(contact_visibility)
-        return {"item": mask_pool_item(_row(), contact_visibility=contact_visibility)}
+def test_get_and_detail_200_polls_are_summary_only_without_audit_or_limiter(monkeypatch) -> None:
+    pool_reads: list[tuple[str, int, str]] = []
 
     async def refresh_stub(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {"freshness": {"status": "fresh"}}
 
-    monkeypatch.setattr(contact_projection, "release_validation_active", lambda: False)
-    monkeypatch.setattr(
-        contact_projection,
-        "authorize_plaintext_contacts",
-        lambda *args, **kwargs: audit_calls.append(kwargs) or True,
-    )
-    monkeypatch.setattr(kol_pool_router.kol_pool, "get_item", item_stub)
-    monkeypatch.setattr(kol_pool_router, "_maybe_enqueue_refresh", refresh_stub)
-    response = Response()
+    def item_stub(kol_pool_id: int, *, contact_visibility: str) -> dict[str, Any]:
+        pool_reads.append(("item", int(kol_pool_id), contact_visibility))
+        return {"item": _value_free_summary_item(kol_pool_id)}
 
-    result = asyncio.run(
-        kol_pool_router.get_item(
-            request=_request("/api/admin/vkpi/kol-pool/7"),
-            response=response,
+    def detail_stub(kol_pool_id: int, **kwargs: Any) -> dict[str, Any]:
+        pool_reads.append(("detail", int(kol_pool_id), str(kwargs["contact_visibility"])))
+        return {"status": "ready", "item": _value_free_summary_item(kol_pool_id)}
+
+    def unexpected_sensitive_boundary(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("ordinary GET must not rate-limit, authorize, or audit contact reads")
+
+    monkeypatch.setattr(contact_projection, "check_rate_limit", unexpected_sensitive_boundary)
+    monkeypatch.setattr(contact_access, "authorize_plaintext_contacts", unexpected_sensitive_boundary)
+    monkeypatch.setattr(audit_service, "log_sensitive_access", unexpected_sensitive_boundary)
+    monkeypatch.setattr(kol_pool_router.kol_pool, "get_item", item_stub)
+    monkeypatch.setattr(kol_pool_router.kol_pool, "detail_bundle", detail_stub)
+    monkeypatch.setattr(kol_pool_router, "_maybe_enqueue_refresh", refresh_stub)
+
+    item_response = Response()
+    detail_response = Response()
+    for _ in range(100):
+        item_result = asyncio.run(
+            kol_pool_router.get_item(
+                request=_request("/api/admin/vkpi/kol-pool/7"),
+                response=item_response,
+                kol_pool_id=7,
+                refresh_if_stale=False,
+                staff=ACTIVE_STAFF,
+            )
+        )
+        detail_result = kol_pool_router.get_item_detail_bundle(
+            request=_request("/api/admin/vkpi/kol-pool/7/detail-bundle"),
+            response=detail_response,
             kol_pool_id=7,
-            refresh_if_stale=False,
+            video_limit=24,
+            llm_limit=20,
             staff=ACTIVE_STAFF,
         )
-    )
+        for result in (item_result, detail_result):
+            assert result["contact_projection_reason"] == "summary_only"
+            assert result["item"]["contact_summary"]["actionability"] == "requires_reveal"
+            _assert_no_contact_truth(result)
 
-    assert seen == [CONTACT_VISIBILITY_FULL]
-    assert result["item"]["email"] == SECRET_EMAIL
-    assert "manager@example.com" in result["item"]["other_contacts_json"]
-    assert "contact_channels" not in result["item"]
-    assert "masked_value" not in str(result["item"])
-    assert result["item"]["contact_masked"] is False
-    assert "raw_platform_data" not in result["item"]
-    assert result["contact_projection_reason"] == "audited_internal_staff"
-    assert audit_calls[0]["metadata"] == {"surface": "kol_pool_item", "bulk": False}
-    assert response.headers["cache-control"] == "private, no-store"
-    assert response.headers["pragma"] == "no-cache"
-    assert response.headers["vary"] == "Authorization, Cookie"
+    assert len(pool_reads) == 200
+    assert all(visibility == CONTACT_VISIBILITY_MASKED for _, _, visibility in pool_reads)
+    for response in (item_response, detail_response):
+        assert response.headers["cache-control"] == "private, no-store"
+        assert response.headers["pragma"] == "no-cache"
+        assert response.headers["vary"] == "Authorization, Cookie"
 
 
-def test_detail_bundle_route_auto_reveals_one_item_without_bulk_cache(monkeypatch) -> None:
+def test_detail_bundle_route_is_summary_only_without_contact_authorization(monkeypatch) -> None:
     seen: list[str] = []
 
     def detail_stub(kol_pool_id: int, **kwargs: Any) -> dict[str, Any]:
@@ -463,11 +554,14 @@ def test_detail_bundle_route_auto_reveals_one_item_without_bulk_cache(monkeypatc
         seen.append(str(kwargs["contact_visibility"]))
         return {
             "status": "ready",
-            "item": mask_pool_item(_row(), contact_visibility=kwargs["contact_visibility"]),
+            "item": _value_free_summary_item(kol_pool_id),
         }
 
-    monkeypatch.setattr(contact_projection, "release_validation_active", lambda: False)
-    monkeypatch.setattr(contact_projection, "authorize_plaintext_contacts", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        contact_access,
+        "authorize_plaintext_contacts",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("GET must not authorize plaintext")),
+    )
     monkeypatch.setattr(kol_pool_router.kol_pool, "detail_bundle", detail_stub)
     response = Response()
 
@@ -480,33 +574,30 @@ def test_detail_bundle_route_auto_reveals_one_item_without_bulk_cache(monkeypatc
         staff=ACTIVE_STAFF,
     )
 
-    assert seen == [CONTACT_VISIBILITY_FULL]
-    assert result["item"]["email"] == SECRET_EMAIL
-    assert SECRET_PHONE in result["item"]["other_contacts_json"]
-    assert result["item"]["contact_masked"] is False
-    assert "raw_platform_data" not in result["item"]
-    assert result["contact_projection_reason"] == "audited_internal_staff"
+    assert seen == [CONTACT_VISIBILITY_MASKED]
+    _assert_no_contact_truth(result)
+    assert result["item"]["contact_summary"]["status"] == "known"
+    assert result["contact_projection_reason"] == "summary_only"
     assert response.headers["cache-control"] == "private, no-store"
 
 
-def test_release_fence_downgrades_single_item_to_masked_without_audit(monkeypatch) -> None:
+def test_release_fence_does_not_change_summary_only_get_contract(monkeypatch) -> None:
     seen: list[str] = []
 
     def item_stub(kol_pool_id: int, *, contact_visibility: str) -> dict[str, Any]:
         seen.append(contact_visibility)
-        return {"item": mask_pool_item(_row(), contact_visibility=contact_visibility)}
+        return {"item": _value_free_summary_item(kol_pool_id)}
 
     async def refresh_stub(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {"freshness": {}}
 
-    monkeypatch.setattr(contact_projection, "release_validation_active", lambda: True)
     monkeypatch.setattr(
         contact_projection,
         "check_rate_limit",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("rate limit must remain fenced")),
     )
     monkeypatch.setattr(
-        contact_projection,
+        contact_access,
         "authorize_plaintext_contacts",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("audit must remain fenced")),
     )
@@ -526,20 +617,23 @@ def test_release_fence_downgrades_single_item_to_masked_without_audit(monkeypatc
     assert seen == [CONTACT_VISIBILITY_MASKED]
     _assert_no_contact_truth(result)
     assert result["item"]["contact_masked"] is True
-    assert result["contact_projection_reason"] == "release_validation_fenced"
+    assert result["contact_projection_reason"] == "summary_only"
 
 
-def test_audit_failure_downgrades_single_item_to_masked(monkeypatch) -> None:
+def test_single_item_get_never_consults_contact_audit(monkeypatch) -> None:
     async def refresh_stub(*args: Any, **kwargs: Any) -> dict[str, Any]:
         return {"freshness": {}}
 
-    monkeypatch.setattr(contact_projection, "release_validation_active", lambda: False)
-    monkeypatch.setattr(contact_projection, "authorize_plaintext_contacts", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        contact_access,
+        "authorize_plaintext_contacts",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("GET must not audit contact access")),
+    )
     monkeypatch.setattr(
         kol_pool_router.kol_pool,
         "get_item",
         lambda kol_pool_id, *, contact_visibility: {
-            "item": mask_pool_item(_row(), contact_visibility=contact_visibility)
+            "item": _value_free_summary_item(kol_pool_id)
         },
     )
     monkeypatch.setattr(kol_pool_router, "_maybe_enqueue_refresh", refresh_stub)
@@ -556,10 +650,10 @@ def test_audit_failure_downgrades_single_item_to_masked(monkeypatch) -> None:
 
     _assert_no_contact_truth(result)
     assert result["item"]["contact_masked"] is True
-    assert result["contact_projection_reason"] == "sensitive_access_audit_unavailable"
+    assert result["contact_projection_reason"] == "summary_only"
 
 
-def test_get_and_detail_share_contact_read_limit_and_block_enumeration(monkeypatch) -> None:
+def test_get_and_detail_do_not_consume_contact_reveal_bucket(monkeypatch) -> None:
     checks: list[tuple[str, str, int, int]] = []
     pool_reads: list[str] = []
 
@@ -572,15 +666,13 @@ def test_get_and_detail_share_contact_read_limit_and_block_enumeration(monkeypat
 
     def item_stub(kol_pool_id: int, **kwargs: Any) -> dict[str, Any]:
         pool_reads.append(f"item:{kol_pool_id}")
-        return {"item": mask_pool_item(_row(), contact_visibility=kwargs["contact_visibility"])}
+        return {"item": _value_free_summary_item(kol_pool_id)}
 
     def detail_stub(kol_pool_id: int, **kwargs: Any) -> dict[str, Any]:
         pool_reads.append(f"detail:{kol_pool_id}")
-        return {"item": mask_pool_item(_row(), contact_visibility=kwargs["contact_visibility"])}
+        return {"item": _value_free_summary_item(kol_pool_id)}
 
-    monkeypatch.setattr(contact_projection, "release_validation_active", lambda: False)
     monkeypatch.setattr(contact_projection, "check_rate_limit", limited)
-    monkeypatch.setattr(contact_projection, "authorize_plaintext_contacts", lambda *args, **kwargs: True)
     monkeypatch.setattr(kol_pool_router.kol_pool, "get_item", item_stub)
     monkeypatch.setattr(kol_pool_router.kol_pool, "detail_bundle", detail_stub)
     monkeypatch.setattr(kol_pool_router, "_maybe_enqueue_refresh", refresh_stub)
@@ -602,27 +694,18 @@ def test_get_and_detail_share_contact_read_limit_and_block_enumeration(monkeypat
         llm_limit=20,
         staff=ACTIVE_STAFF,
     )
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(
-            kol_pool_router.get_item(
-                request=_request("/api/admin/vkpi/kol-pool/9"),
-                response=Response(),
-                kol_pool_id=9,
-                refresh_if_stale=False,
-                staff=ACTIVE_STAFF,
-            )
+    asyncio.run(
+        kol_pool_router.get_item(
+            request=_request("/api/admin/vkpi/kol-pool/9"),
+            response=Response(),
+            kol_pool_id=9,
+            refresh_if_stale=False,
+            staff=ACTIVE_STAFF,
         )
+    )
 
-    assert pool_reads == ["item:7", "detail:8"]
-    assert checks == [
-        ("contact_reveal", "user:170", 30, 300),
-        ("contact_reveal", "user:170", 30, 300),
-        ("contact_reveal", "user:170", 30, 300),
-    ]
-    assert exc_info.value.status_code == 429
-    assert exc_info.value.headers["Cache-Control"] == "private, no-store"
-    assert exc_info.value.headers["Vary"] == "Authorization, Cookie"
-    assert exc_info.value.headers["X-RateLimit-Bucket"] == "contact_reveal"
+    assert pool_reads == ["item:7", "detail:8", "item:9"]
+    assert checks == []
 
 
 @pytest.mark.parametrize(
@@ -636,28 +719,31 @@ def test_get_and_detail_share_contact_read_limit_and_block_enumeration(monkeypat
         {**ACTIVE_STAFF, "permissions": {"vkpi": "read", "board.kol-pool": "none"}},
     ],
 )
-def test_single_item_rejects_ineligible_scope_before_contact_lookup(monkeypatch, staff) -> None:
+def test_direct_get_never_discloses_contacts_for_any_staff_shape(monkeypatch, staff) -> None:
+    async def refresh_stub(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return {"freshness": {}}
+
     monkeypatch.setattr(
         kol_pool_router.kol_pool,
         "get_item",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("pool read must not run")),
+        lambda kol_pool_id, **kwargs: {"item": _value_free_summary_item(kol_pool_id)},
     )
+    monkeypatch.setattr(kol_pool_router, "_maybe_enqueue_refresh", refresh_stub)
     monkeypatch.setattr(
-        contact_projection,
+        contact_access,
         "authorize_plaintext_contacts",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("audit must not run")),
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(
-            kol_pool_router.get_item(
-                request=_request("/api/admin/vkpi/kol-pool/7"),
-                response=Response(),
-                kol_pool_id=7,
-                refresh_if_stale=False,
-                staff=staff,
-            )
+    result = asyncio.run(
+        kol_pool_router.get_item(
+            request=_request("/api/admin/vkpi/kol-pool/7"),
+            response=Response(),
+            kol_pool_id=7,
+            refresh_if_stale=False,
+            staff=staff,
         )
+    )
 
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == {"code": "kol_contact_access_not_authorized"}
+    _assert_no_contact_truth(result)
+    assert result["contact_projection_reason"] == "summary_only"

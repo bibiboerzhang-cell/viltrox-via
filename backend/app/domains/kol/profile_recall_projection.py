@@ -90,6 +90,20 @@ def _llm_rerank_buckets(buckets: dict[str, list], query_text: str, persona_text:
         cands.extend((buckets.get(bucket) or [])[:12])
     if len(cands) < 4:
         return "too_few_candidates"
+    from app.domains.kol.contact_system import sanitize_contact_values_for_external_processing
+
+    safe_context = sanitize_contact_values_for_external_processing(
+        {
+            "candidates": cands,
+            "query_text": query_text,
+            "persona_text": persona_text,
+            "product_label": product_label,
+        }
+    )
+    cands = list(safe_context.get("candidates") or [])
+    query_text = str(safe_context.get("query_text") or "")
+    persona_text = str(safe_context.get("persona_text") or "")
+    product_label = str(safe_context.get("product_label") or "")
     lines = []
     for i, it in enumerate(cands):
         blurb = " ".join(

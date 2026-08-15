@@ -48,13 +48,16 @@ export async function getKolPoolDetailBundle(
 export async function revealKolPoolContact(
   token: string,
   kolPoolId: string | number,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal;
+    purpose?: "kol_detail_view" | "compose_outreach";
+  } = {},
 ) {
   return apiFetch<VkpiKolPoolContactRevealResponse>(
     `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/contacts/reveal`,
     {
       method: "POST",
-      body: jsonBody({ confirm: true, purpose: "compose_outreach" }),
+      body: jsonBody({ confirm: true, purpose: options.purpose || "kol_detail_view" }),
       cache: "no-store",
       signal: options.signal,
     },

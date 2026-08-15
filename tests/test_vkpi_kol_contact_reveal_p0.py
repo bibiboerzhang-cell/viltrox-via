@@ -10,6 +10,7 @@ from starlette.requests import Request
 
 from app.api.routers import vkpi_kol_contact_projection as contact_projection
 from app.api.routers import vkpi_kol_pool_intel
+from app.core import permissions as permissions_domain
 from app.core.permissions import (
     check_contact_reveal_permission,
     check_kol_pool_employee_contact_permission,
@@ -17,6 +18,7 @@ from app.core.permissions import (
 from app.domains.audit import service as audit_service
 from app.domains.kol import contacts as contacts_domain
 from app.domains.kol import contact_reveal
+from app.domains.kol import contact_suppression
 from app.domains.kol import profile as profile_domain
 from app.domains.kol import business_contact_extract
 from app.domains.kol import contact_access
@@ -313,29 +315,27 @@ def test_plaintext_authorization_requires_successful_audit(monkeypatch) -> None:
     ) is False
 
 
-def test_contacts_endpoint_masks_denied_staff_and_audits_eligible_employee(monkeypatch) -> None:
+def test_legacy_contacts_endpoint_masks_every_staff_without_sensitive_audit(monkeypatch) -> None:
+    audit_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(contacts_domain.claims_domain, "assert_kol_access", lambda *args, **kwargs: None)
     monkeypatch.setattr(contacts_domain, "contact_rows", lambda *args, **kwargs: _contact_payload())
     monkeypatch.setattr(
         audit_service,
         "log_sensitive_access",
-        lambda **kwargs: {"id": 92, "status": "logged"},
+        lambda **kwargs: audit_calls.append(kwargs) or {"id": 92, "status": "logged"},
     )
 
     reader = {**ORG1_EMPLOYEE, "permissions": {"vkpi": "read", "board.kol-pool": "none"}}
-    revealed_staff = ORG1_ADMIN
-
-    masked = contacts_domain.contact_rows_for_request(7, staff=reader)
-    revealed = contacts_domain.contact_rows_for_request(7, staff=revealed_staff)
-
-    assert EMAIL not in str(masked)
-    assert PHONE not in str(masked)
-    assert masked["contact_masked"] is True
-    assert revealed["contacts"][0]["contact_value"] == EMAIL
-    assert revealed["contact_masked"] is False
+    for staff in (reader, ORG1_ADMIN):
+        result = contacts_domain.contact_rows_for_request(7, staff=staff)
+        assert EMAIL not in str(result)
+        assert PHONE not in str(result)
+        assert result["contact_masked"] is True
+    assert audit_calls == []
 
 
 def test_profile_masks_all_embedded_contact_copies(monkeypatch) -> None:
+    audit_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
         profile_domain.claims_domain,
         "profile",
@@ -359,16 +359,22 @@ def test_profile_masks_all_embedded_contact_copies(monkeypatch) -> None:
         "get_dossier",
         lambda *_: {"contact_email": EMAIL, "contact_emails": [EMAIL]},
     )
+    monkeypatch.setattr(
+        audit_service,
+        "log_sensitive_access",
+        lambda **kwargs: audit_calls.append(kwargs) or {"id": 93, "status": "logged"},
+    )
 
     payload = profile_domain.profile_with_dossier(
         7,
-        staff={"id": 4, "role": "viewer", "permissions": {"vkpi": "read"}},
+        staff=ORG1_ADMIN,
     )
 
     assert EMAIL not in str(payload)
     assert PHONE not in str(payload)
     assert payload["contacts"]["profile_url"] == "https://example.com/creator"
     assert payload["contacts"]["contact_masked"] is True
+    assert audit_calls == []
 
 
 class _EmailConn:
@@ -383,52 +389,45 @@ class _EmailConn:
         return _Result()
 
 
-def test_outreach_email_status_is_masked_by_default() -> None:
+def test_outreach_email_status_cannot_bypass_pool_reveal_boundary() -> None:
     masked = _email_status(_EmailConn(), 7)
-    revealed = _email_status(_EmailConn(), 7, reveal=True)
+    legacy_reveal_flag = _email_status(_EmailConn(), 7, reveal=True)
 
     assert EMAIL not in str(masked)
     assert masked["contact_masked"] is True
-    assert revealed["email"] == EMAIL
-    assert revealed["contact_masked"] is False
+    assert EMAIL not in str(legacy_reveal_flag)
+    assert legacy_reveal_flag["contact_masked"] is True
 
 
 class _RevealConn:
-    def __init__(self) -> None:
+    def __init__(self, canonical_rows: list[dict[str, Any]] | None = None) -> None:
         self.commits = 0
+        self.canonical_rows = canonical_rows if canonical_rows is not None else [
+            {
+                "id": 41,
+                "contact_type": "whatsapp",
+                "contact_value": "+12025550188",
+                "contact_source": "website_declared",
+                "verified_at": "2026-08-02T00:00:00Z",
+            }
+        ]
 
     def execute(self, sql: str, params: tuple[Any, ...]) -> Any:
         del params
-        if "SELECT id, email" in sql:
+        if "SELECT id FROM vkpi_kol_pool" in sql:
             class _Result:
                 @staticmethod
                 def fetchone() -> dict[str, Any]:
-                    return {
-                        "id": 7,
-                        "email": EMAIL,
-                        "other_contacts_json": json.dumps(
-                            [{"contact_type": "phone", "contact_value": PHONE}]
-                        ),
-                    }
+                    return {"id": 7}
 
             return _Result()
         if "FROM vkpi_kol_pool_contacts" in sql:
+            rows = self.canonical_rows
+
             class _CanonicalResult:
                 @staticmethod
                 def fetchall() -> list[dict[str, Any]]:
-                    return [
-                        {
-                            "contact_type": "whatsapp",
-                            "contact_value": "+12025550188",
-                            "contact_source": "website_declared",
-                            "consent_basis": "legitimate_interest_public_business",
-                            "is_public_declared": True,
-                            "confidence": 0.9,
-                            "first_seen_at": "2026-08-01T00:00:00Z",
-                            "last_seen_at": "2026-08-02T00:00:00Z",
-                            "created_at": "2026-08-01T00:00:00Z",
-                        }
-                    ]
+                    return rows
 
             return _CanonicalResult()
         if "UPDATE vkpi_kol_pool" in sql:
@@ -450,6 +449,16 @@ def test_contact_reveal_forwards_request_metadata_to_audit_boundary(monkeypatch)
     monkeypatch.setattr(contact_reveal, "get_conn", lambda: conn)
     monkeypatch.setattr(contact_reveal, "_ensure_contact_audit_schema", lambda: None)
     monkeypatch.setattr(contact_access, "authorize_plaintext_contacts", authorized)
+    monkeypatch.setattr(
+        contact_suppression,
+        "contact_eligibility",
+        lambda **_kwargs: {
+            "status": "eligible",
+            "eligible": True,
+            "channel": "whatsapp",
+            "verification_status": "verified_public_business",
+        },
+    )
 
     result = contact_reveal.view_kol_contact(
         7,
@@ -460,10 +469,20 @@ def test_contact_reveal_forwards_request_metadata_to_audit_boundary(monkeypatch)
         purpose="compose_outreach",
     )
 
-    assert result["status"] == "revealed"
-    assert result["email"] == EMAIL
-    assert any(row["contact_type"] == "whatsapp" for row in result["other_contacts"])
-    assert "website_declared" not in str(result)
+    assert result["status"] == "full"
+    assert result["contacts"] == [
+        {
+            "id": 41,
+            "channel": "whatsapp",
+            "contact_type": "whatsapp",
+            "value": "+12025550188",
+            "verification_status": "verified_public_business",
+            "source_type": "website_declared",
+            "verified_at": "2026-08-02T00:00:00Z",
+        }
+    ]
+    assert conn.commits == 1
+    assert len(calls) == 1
     assert calls[0]["ip"] == "203.0.113.10"
     assert calls[0]["user_agent"] == "contact-test-agent"
     assert calls[0]["metadata"]["purpose"] == "compose_outreach"
@@ -472,17 +491,20 @@ def test_contact_reveal_forwards_request_metadata_to_audit_boundary(monkeypatch)
 def test_legacy_contact_reveal_confirm_cannot_bypass_permission(monkeypatch) -> None:
     conn = _RevealConn()
     monkeypatch.setattr(contact_reveal, "get_conn", lambda: conn)
-    monkeypatch.setattr(contact_access, "authorize_plaintext_contacts", lambda *args, **kwargs: False)
+    monkeypatch.setattr(permissions_domain, "check_kol_pool_employee_contact_permission", lambda *_a, **_kw: False)
 
     result = contact_reveal.view_kol_contact(
         7,
         confirm=True,
         staff=ORG1_EMPLOYEE,
+        purpose="kol_detail_view",
     )
 
     assert EMAIL not in str(result)
     assert PHONE not in str(result)
-    assert result["status"] == "masked"
+    assert result["status"] == "restricted"
+    assert result["contacts"] == []
+    assert result["reason"] == "contact_reveal_not_authorized"
     assert conn.commits == 0
 
 
@@ -531,84 +553,91 @@ def test_reveal_route_requires_exact_confirmation_and_purpose(monkeypatch, body)
     assert called is False
 
 
-def test_reveal_route_returns_plaintext_only_for_audited_authorization(monkeypatch) -> None:
-    calls: list[dict[str, Any]] = []
+@pytest.mark.parametrize(
+    ("expected_status", "canonical_rows", "eligibility", "expected_reason"),
+    [
+        (
+            "full",
+            None,
+            {
+                "status": "eligible",
+                "eligible": True,
+                "channel": "whatsapp",
+                "verification_status": "verified_public_business",
+            },
+            "eligible_contacts_available",
+        ),
+        (
+            "restricted",
+            None,
+            {"status": "restricted", "eligible": False, "reason": "verification_not_eligible"},
+            "verification_required",
+        ),
+        ("empty", [], None, "no_verified_contacts"),
+    ],
+)
+def test_reveal_route_limits_every_post_and_audits_only_full_plaintext(
+    monkeypatch,
+    expected_status,
+    canonical_rows,
+    eligibility,
+    expected_reason,
+) -> None:
+    conn = _RevealConn(canonical_rows=canonical_rows)
+    audit_calls: list[dict[str, Any]] = []
+    rate_calls: list[tuple[Any, ...]] = []
+    eligibility_calls: list[dict[str, Any]] = []
 
-    def revealed(kol_pool_id: int, **kwargs: Any) -> dict[str, Any]:
-        calls.append({"kol_pool_id": kol_pool_id, **kwargs})
-        return {
-            "status": "revealed",
-            "kol_pool_id": kol_pool_id,
-            "email": EMAIL,
-            "other_contacts": [],
-            "contact_masked": False,
-        }
+    def eligible(**kwargs: Any) -> dict[str, Any]:
+        eligibility_calls.append(kwargs)
+        if eligibility is None:
+            raise AssertionError("empty canonical set must not run eligibility")
+        return dict(eligibility)
 
-    monkeypatch.setattr(contact_reveal, "view_kol_contact", revealed)
-    staff = ORG1_ADMIN
+    monkeypatch.setattr(contact_reveal, "get_conn", lambda: conn)
+    monkeypatch.setattr(contact_reveal, "_ensure_contact_audit_schema", lambda: None)
+    monkeypatch.setattr(
+        audit_service,
+        "log_sensitive_access",
+        lambda **kwargs: audit_calls.append(kwargs) or {"id": 91, "status": "logged"},
+    )
+    monkeypatch.setattr(contact_suppression, "contact_eligibility", eligible)
+    monkeypatch.setattr(
+        contact_projection,
+        "check_rate_limit",
+        lambda *args, **kwargs: rate_calls.append(args) or (True, 29),
+    )
+
     result = vkpi_kol_pool_intel.reveal_kol_contact(
         _RevealRequest(),
         response := _response(),
         7,
         body=REVEAL_BODY,
-        staff=staff,
+        staff=ORG1_ADMIN,
     )
 
-    assert result["email"] == EMAIL
-    assert result["contact_masked"] is False
+    assert result["status"] == expected_status
+    assert result["reason"] == expected_reason
+    assert len(audit_calls) == (1 if expected_status == "full" else 0)
+    if expected_status == "full":
+        assert audit_calls[0]["action_type"] == "view_kol_contact"
+        assert audit_calls[0]["metadata"]["purpose"] == "compose_outreach"
+    assert rate_calls == [("contact_reveal", "user:5", 30, 300)]
+    assert len(eligibility_calls) == (0 if expected_status == "empty" else 1)
+    assert conn.commits == (1 if expected_status == "full" else 0)
+    if expected_status == "full":
+        assert result["contacts"][0]["value"] == "+12025550188"
+        assert result["contacts"][0]["source_type"] == "website_declared"
+        assert result["contact_masked"] is False
+    else:
+        assert result["contacts"] == []
+        assert "+12025550188" not in str(result)
     assert response.headers["cache-control"] == "private, no-store"
     assert response.headers["pragma"] == "no-cache"
     assert response.headers["vary"] == "Authorization, Cookie"
-    assert calls == [
-        {
-            "kol_pool_id": 7,
-            "confirm": True,
-            "staff": staff,
-            "page_path": "/kol-pool/7/contacts/reveal",
-            "ip": "127.0.0.1",
-            "user_agent": "kol-contact-test",
-            "purpose": "compose_outreach",
-        }
-    ]
 
 
-def test_reveal_route_rejects_unauthorized_before_contact_lookup(monkeypatch) -> None:
-    called = False
-
-    def unexpected(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        nonlocal called
-        called = True
-        return {}
-
-    monkeypatch.setattr(contact_reveal, "view_kol_contact", unexpected)
-
-    with pytest.raises(HTTPException) as exc_info:
-        vkpi_kol_pool_intel.reveal_kol_contact(
-            _RevealRequest(),
-            _response(),
-            7,
-            body=REVEAL_BODY,
-            staff={
-                "id": 4,
-                "active": 1,
-                "role": "viewer",
-                "permissions": {"vkpi": "read", "board.kol-pool": "none"},
-                "organization_id": 1,
-                "organization_scope_status": "resolved",
-            },
-        )
-
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == {"code": "contact_reveal_not_authorized"}
-    assert exc_info.value.headers == {
-        "Cache-Control": "private, no-store",
-        "Pragma": "no-cache",
-        "Vary": "Authorization, Cookie",
-    }
-    assert called is False
-
-
-def test_reveal_route_returns_no_contacts_when_audit_fails(monkeypatch) -> None:
+def test_reveal_route_rejects_malformed_domain_payload_without_pii(monkeypatch) -> None:
     monkeypatch.setattr(
         contact_reveal,
         "view_kol_contact",
@@ -622,19 +651,23 @@ def test_reveal_route_returns_no_contacts_when_audit_fails(monkeypatch) -> None:
         },
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        vkpi_kol_pool_intel.reveal_kol_contact(
-            _RevealRequest(),
-            _response(),
-            7,
-            body=REVEAL_BODY,
-            staff=ORG1_ADMIN,
-        )
+    result = vkpi_kol_pool_intel.reveal_kol_contact(
+        _RevealRequest(),
+        _response(),
+        7,
+        body=REVEAL_BODY,
+        staff=ORG1_ADMIN,
+    )
 
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == {"code": "contact_reveal_not_authorized"}
-    assert EMAIL not in str(exc_info.value.detail)
-    assert PHONE not in str(exc_info.value.detail)
+    assert result == {
+        "status": "restricted",
+        "kol_pool_id": 7,
+        "contacts": [],
+        "contact_masked": True,
+        "reason": "contact_reveal_unavailable",
+    }
+    assert EMAIL not in str(result)
+    assert PHONE not in str(result)
 
 
 def test_reveal_route_maps_missing_kol_without_leaking_lookup_details(monkeypatch) -> None:
@@ -700,8 +733,8 @@ def test_reveal_route_release_fence_returns_safe_mask_without_rate_audit_or_db(m
         nonlocal domain_called
         domain_called = True
         return {
-            "status": "revealed",
-            "email": EMAIL,
+            "status": "full",
+            "contacts": [{"value": EMAIL}],
             "contact_masked": False,
         }
 
@@ -722,10 +755,9 @@ def test_reveal_route_release_fence_returns_safe_mask_without_rate_audit_or_db(m
     )
 
     assert result == {
-        "status": "masked",
+        "status": "restricted",
         "kol_pool_id": 7,
-        "email": "",
-        "other_contacts": [],
+        "contacts": [],
         "contact_masked": True,
         "reason": "release_validation_fenced",
     }

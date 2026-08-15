@@ -216,15 +216,21 @@ def execute_profile_crawl_for_session_item(
     )
     if materialized_kol_pool_id > 0:
         try:
-            from app.domains.kol.business_contact_extract import enrich_contacts_l0
+            from app.domains.kol.contact_acquisition_queue import enqueue_contact_acquisition
 
-            contact_enrichment = enrich_contacts_l0(materialized_kol_pool_id)
-            if isinstance(contact_enrichment, dict):
-                contact_enrichment = {
-                    **contact_enrichment,
-                    "async": bool(body.get("_async_enrichment")),
-                }
-            profile_result["contact_enrichment"] = contact_enrichment
+            queued = enqueue_contact_acquisition(
+                materialized_kol_pool_id,
+                trigger_source="deep_crawl",
+            )
+            profile_result["contact_enrichment"] = {
+                "status": str(queued.get("status") or "pending_l0"),
+                "async": True,
+                "kol_pool_id": materialized_kol_pool_id,
+                "reason": "provider_free_l0_queued",
+                "provider_calls": False,
+                "website_crawls": False,
+                "messages_sent": False,
+            }
         except Exception:
             profile_result["contact_enrichment"] = {
                 "status": "error",

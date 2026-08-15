@@ -93,13 +93,6 @@ def recover_session(session_id: int, *, staff: dict[str, Any] | None = None) -> 
         "summary": result_summary,
         "ledger": _ledger_for_session(session),
     }
-    from app.domains.kol.contact_access import authorize_plaintext_contacts, mask_contact_payload
+    from app.domains.kol.contact_access import mask_contact_payload
 
-    reveal = authorize_plaintext_contacts(
-        staff,
-        resource_type="kol_lookup",
-        resource_id=int(session_id),
-        page_path=f"/kols/lookup/sessions/{int(session_id)}",
-        metadata={"surface": "lookup_recovery"},
-    )
-    return payload if reveal else mask_contact_payload(payload)
+    return mask_contact_payload(payload)
