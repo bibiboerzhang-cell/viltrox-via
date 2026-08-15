@@ -72,6 +72,9 @@ export async function smartKolSearch(
     sessionId?: number;
     createSession?: boolean;
     excludeChinese?: boolean;
+    market?: string;
+    platforms?: string[];
+    localQualificationSpec?: Row;
     timeoutMs?: number;
   } = {},
 ): Promise<VkpiKolSmartSearchResponse> {
@@ -97,6 +100,9 @@ export async function smartKolSearch(
   if (params.productSku) body.product_sku = params.productSku;
   if (typeof params.sessionId === "number") body.session_id = params.sessionId;
   if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
+  if (params.market) body.market = params.market;
+  if (params.platforms?.length) body.platforms = params.platforms;
+  if (params.localQualificationSpec) body.local_qualification_spec = params.localQualificationSpec;
   return apiFetch<VkpiKolSmartSearchResponse>(
     "/api/admin/vkpi/kol-smart-search",
     {
@@ -138,6 +144,7 @@ export async function smartKolSearchProfileAdvanceJob(
     newDiscoveryPlatforms?: string[];
     excludeChinese?: boolean;
     market?: string;
+    localQualificationSpec?: Row;
     timeoutMs?: number;
   } = {},
 ): Promise<VkpiKolSmartSearchProfileAdvanceResponse> {
@@ -149,6 +156,7 @@ export async function smartKolSearchProfileAdvanceJob(
   if (params.newDiscoveryPlatforms?.length) body.new_discovery_platforms = params.newDiscoveryPlatforms;
   // 区域语言本地化:目标市场码(JP/KR/DE/...)→ 后端按该区语言搜平台;空=全球英文。
   if (params.market) body.market = params.market;
+  if (params.localQualificationSpec) body.local_qualification_spec = params.localQualificationSpec;
   if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
   if (typeof params.candidateLimit === "number") body.candidate_limit = params.candidateLimit;
   if (typeof params.limit === "number") body.limit = params.limit;

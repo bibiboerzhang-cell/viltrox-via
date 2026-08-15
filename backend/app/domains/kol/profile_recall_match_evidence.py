@@ -87,10 +87,10 @@ def _normal_dimension(name: str, value: Any) -> str:
 
 def query_evidence_terms(value: Any, *, limit: int = 16) -> list[str]:
     """Return bounded, de-duplicated intent terms suitable for lexical proof."""
+    raw_terms = [raw.strip("-_.+") for raw in _TOKEN_RE.findall(str(value or "").lower())]
     terms: list[str] = []
     seen: set[str] = set()
-    for raw in _TOKEN_RE.findall(str(value or "").lower()):
-        term = raw.strip("-_.+")
+    for term in raw_terms:
         for generic in _GENERIC_CJK_TERMS:
             term = term.replace(generic, "")
         if not term or term in _GENERIC_TERMS or term in seen:
@@ -101,6 +101,17 @@ def query_evidence_terms(value: Any, *, limit: int = 16) -> list[str]:
         terms.append(term)
         if len(terms) >= max(1, int(limit)):
             break
+    # A single generic role/category word cannot prove relevance, but the
+    # controlled pair "lens + review" is a concrete content lane.  Preserve
+    # both tokens so retrieval and field-level evidence use the same anchors.
+    raw_set = set(raw_terms)
+    has_lens = bool(raw_set.intersection({"lens", "lenses"}))
+    has_review = bool(raw_set.intersection({"review", "reviews", "reviewer", "reviewers"}))
+    if not terms and has_lens and has_review:
+        for anchor in ("lens", "review"):
+            if anchor not in seen and len(terms) < max(1, int(limit)):
+                seen.add(anchor)
+                terms.append(anchor)
     return terms
 
 
@@ -196,8 +207,14 @@ def pool_text_fallback_ids(
                 (like, like, like, like, like, limit),
             ).fetchall()
         )
-    if ids:
-        return ids
+    # Legacy recall historically treats an exact phrase hit as the complete
+    # answer and returns immediately.  Do not append unrelated follower-head
+    # rows merely because the requested display limit is larger.  Smart local
+    # sets allow_backfill=False and deliberately continues into anchor top-up.
+    if ids and allow_backfill:
+        return ids[:limit]
+    if len(ids) >= limit:
+        return ids[:limit]
     if not allow_backfill:
         terms = query_evidence_terms(text)
         if not terms:
@@ -224,7 +241,7 @@ def pool_text_fallback_ids(
                 (*params, limit),
             ).fetchall()
         )
-        return ids
+        return ids[:limit]
     collect(
         conn.execute(
             """
@@ -237,7 +254,7 @@ def pool_text_fallback_ids(
             (limit,),
         ).fetchall()
     )
-    return ids
+    return ids[:limit]
 
 
 def pool_rows_for_recall(
@@ -256,6 +273,7 @@ def pool_rows_for_recall(
                p.avatar_url, p.followers, p.avg_views, p.avg_comments, p.engagement_rate,
                p.bio, p.country, p.primary_topic, p.content_style, p.language,
                p.secondary_topics_json, p.brand_collaborations_json,
+               p.raw_platform_data,
                CASE
                    WHEN LENGTH(TRIM(COALESCE(p.email, ''))) > 0 THEN 1
                    WHEN LOWER(TRIM(COALESCE(p.other_contacts_json, ''))) NOT IN ('', '[]', '{{}}', 'null') THEN 1

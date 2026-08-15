@@ -1,0 +1,40 @@
+{
+  "schema_version": "vkpi_kol_search_60_golden_queries_v1",
+  "queries": [
+    {
+      "id": "us_youtube_lens_review",
+      "query": "美国 YouTube 镜头评测创作者",
+      "platforms": ["youtube"],
+      "market": "US",
+      "evidence_terms": ["lens", "review", "镜头", "评测"]
+    },
+    {
+      "id": "gb_instagram_portrait",
+      "query": "英国 Instagram 人像摄影创作者",
+      "platforms": ["instagram"],
+      "market": "GB",
+      "evidence_terms": ["portrait", "bokeh", "fashion", "人像"]
+    },
+    {
+      "id": "us_tiktok_video_creator",
+      "query": "美国 TikTok 视频创作与电影感创作者",
+      "platforms": ["tiktok"],
+      "market": "US",
+      "evidence_terms": ["videography", "filmmaker", "cinematic", "视频", "电影感"]
+    },
+    {
+      "id": "ca_youtube_travel_landscape",
+      "query": "加拿大 YouTube 旅行和风光摄影创作者",
+      "platforms": ["youtube"],
+      "market": "CA",
+      "evidence_terms": ["travel", "landscape", "旅行", "风光"]
+    },
+    {
+      "id": "us_cross_platform_macro_product",
+      "query": "美国全平台微距与产品摄影创作者",
+      "platforms": ["youtube", "instagram", "tiktok"],
+      "market": "US",
+      "evidence_terms": ["macro", "product photography", "微距", "产品摄影"]
+    }
+  ]
+}

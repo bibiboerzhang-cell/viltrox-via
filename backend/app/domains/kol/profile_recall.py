@@ -4,6 +4,7 @@ from __future__ import annotations
 from decimal import Decimal
 import os
 import re
+from time import perf_counter
 from typing import Any
 
 from app.core.logging import get_logger
@@ -45,6 +46,12 @@ from app.domains.kol.profile_recall_match_evidence import (
     candidate_set_distribution,
     product_evidence_terms,
     why_fit_from_match_evidence,
+)
+from app.domains.kol.profile_recall_qualification import (
+    SMART_LOCAL_CANDIDATE_LIMIT,
+    SMART_LOCAL_TARGET,
+    project_smart_local_result,
+    qualify_local_candidates,
 )
 from app.domains.kol.profile_recall_precision import (
     HYBRID_METHOD,
@@ -483,11 +490,35 @@ from app.domains.kol.profile_recall_relevance import (  # noqa: E402
 )
 
 
+def _recall_table_columns(conn: Any, table_name: str) -> set[str]:
+    """Inspect PostgreSQL through read-only SQL before the legacy SQLite probe."""
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = ?
+            """,
+            (table_name,),
+        ).fetchall()
+        columns = {
+            str(dict(row).get("column_name") or "")
+            for row in rows
+            if str(dict(row).get("column_name") or "")
+        }
+        if columns:
+            return columns
+    except Exception:
+        pass
+    return _table_columns(conn, table_name)
+
+
 def _entry_rows(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
     return _storage._entry_rows(
         kol_pool_ids,
         get_connection=get_conn,
-        table_columns=_table_columns,
+        table_columns=_recall_table_columns,
     )
 
 
@@ -495,7 +526,7 @@ def _pool_rows_fallback(kol_pool_ids: list[int]) -> dict[int, dict]:
     return _storage._pool_rows_fallback(
         kol_pool_ids,
         get_connection=get_conn,
-        table_columns=_table_columns,
+        table_columns=_recall_table_columns,
     )
 
 
@@ -532,6 +563,196 @@ def _evidence_summaries(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
     return _projection._evidence_summaries(kol_pool_ids, get_connection=get_conn)
 
 
+def _smart_local_evidence_summaries(
+    kol_pool_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Load the minimal factual evidence used by the strict local gate.
+
+    This projection deliberately avoids optional engagement columns.  It keeps
+    the local30 contract usable on older/fixture schemas while still requiring
+    a persisted video timestamp and server-side title/content analysis.
+    """
+
+    if not kol_pool_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(kol_pool_ids))
+    rows = get_conn().execute(
+        f"""
+        SELECT e.kol_pool_id,
+               COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), NULLIF(e.content_url, '')) AS title,
+               e.content_url,
+               e.thumbnail_url,
+               e.view_count,
+               e.like_count,
+               e.posted_at,
+               COALESCE(NULLIF(e.evidence_type, ''), 'video') AS evidence_type,
+               c.result #>> '{{layer1_visual_content,content_summary}}' AS content_summary,
+               c.result #>> '{{layer1_visual_content,product_presence}}' AS product_presence,
+               c.result #>> '{{layer1_visual_content,brand_exposure}}' AS brand_exposure
+        FROM vkpi_kol_video_evidence e
+        LEFT JOIN vkpi_analysis_cache c
+          ON c.target_type = 'video'
+         AND c.target_id = e.id::text
+         AND c.derive_method = 'video_analysis_final_v1'
+         AND c.status = 'ready'
+        WHERE e.kol_pool_id IN ({placeholders})
+          AND e.is_active IS NOT FALSE
+        ORDER BY e.kol_pool_id, e.posted_at DESC NULLS LAST, e.id DESC
+        """,
+        tuple(kol_pool_ids),
+    ).fetchall()
+    by_id: dict[int, list[dict[str, Any]]] = {}
+    for raw in rows:
+        row = dict(raw)
+        by_id.setdefault(int(row["kol_pool_id"]), []).append(row)
+
+    summaries: dict[int, dict[str, Any]] = {}
+    for kol_id, evidence_rows in by_id.items():
+        ranked = sorted(evidence_rows, key=_evidence_score, reverse=True)
+        representative: list[dict[str, Any]] = []
+        for row in ranked:
+            title = _clean_text(row.get("title"), 220)
+            url = _clean_text(row.get("content_url"), 500)
+            if not title and not url:
+                continue
+            representative.append(
+                {
+                    "title": title or url,
+                    "content_url": url,
+                    "thumbnail_url": _clean_text(row.get("thumbnail_url"), 500),
+                    "view_count": row.get("view_count"),
+                    "like_count": row.get("like_count"),
+                }
+            )
+            if len(representative) >= 3:
+                break
+        texts: list[str] = []
+        for row in ranked[:6]:
+            texts.extend(
+                [
+                    _clean_text(row.get("title"), 500),
+                    _clean_text(row.get("product_presence"), 500),
+                    _clean_text(row.get("brand_exposure"), 500),
+                ]
+            )
+        latest = next(
+            (
+                row
+                for row in evidence_rows
+                if str(row.get("evidence_type") or "video").strip().lower() == "video"
+                and row.get("posted_at")
+            ),
+            {},
+        )
+        summaries[kol_id] = {
+            "representative_evidence": representative,
+            "used_lenses": _extract_lenses(*texts),
+            "reason_labels": _reason_labels(
+                *(texts + [_clean_text(row.get("content_summary"), 500) for row in ranked[:3]])
+            ),
+            "video_evidence_count": len(evidence_rows),
+            "latest_real_video": (
+                {
+                    "posted_at": latest.get("posted_at"),
+                    "evidence_type": latest.get("evidence_type") or "video",
+                    "source": "vkpi_kol_video_evidence.posted_at",
+                }
+                if latest
+                else {}
+            ),
+        }
+    return summaries
+
+
+def _smart_local_qualification_context(
+    kol_pool_ids: list[int],
+    *,
+    rows_by_id: dict[int, dict[str, Any]],
+    evidence_by_id: dict[int, dict[str, Any]],
+) -> tuple[dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
+    """Load only the extra server-side facts required by the strict local gate.
+
+    The refactored legacy projection intentionally does not expose raw platform
+    annotations or video timestamps.  Keep those values in this internal
+    qualification context so they cannot become part of ordinary recall DTOs.
+    Missing columns/query failures stay fail-closed in the qualification gate.
+    """
+
+    row_context = {kol_id: dict(row) for kol_id, row in rows_by_id.items()}
+    evidence_context = {
+        kol_id: dict(evidence)
+        for kol_id, evidence in evidence_by_id.items()
+    }
+    if not kol_pool_ids:
+        return row_context, evidence_context
+
+    placeholders = ",".join(["?"] * len(kol_pool_ids))
+    try:
+        conn = get_conn()
+        pool_columns = _recall_table_columns(conn, "vkpi_kol_pool")
+        if "raw_platform_data" in pool_columns:
+            rows = conn.execute(
+                f"""
+                SELECT id AS kol_pool_id, raw_platform_data
+                FROM vkpi_kol_pool
+                WHERE duplicate_of_id IS NULL
+                  AND id IN ({placeholders})
+                """,
+                tuple(kol_pool_ids),
+            ).fetchall()
+            for raw in rows:
+                row = dict(raw)
+                kol_id = int(row.get("kol_pool_id") or 0)
+                if kol_id in row_context:
+                    row_context[kol_id]["raw_platform_data"] = row.get("raw_platform_data")
+    except Exception:
+        logger.warning("smart_local market annotation context unavailable", exc_info=True)
+
+    try:
+        conn = get_conn()
+        evidence_columns = _recall_table_columns(conn, "vkpi_kol_video_evidence")
+        if "posted_at" not in evidence_columns:
+            return row_context, evidence_context
+        evidence_type_select = (
+            "COALESCE(NULLIF(evidence_type, ''), 'video') AS evidence_type"
+            if "evidence_type" in evidence_columns
+            else "'video' AS evidence_type"
+        )
+        active_clause = "AND is_active IS NOT FALSE" if "is_active" in evidence_columns else ""
+        type_clause = (
+            "AND (evidence_type IS NULL OR LOWER(TRIM(evidence_type)) = 'video')"
+            if "evidence_type" in evidence_columns
+            else ""
+        )
+        rows = conn.execute(
+            f"""
+            SELECT kol_pool_id, posted_at, {evidence_type_select}
+            FROM vkpi_kol_video_evidence
+            WHERE kol_pool_id IN ({placeholders})
+              AND posted_at IS NOT NULL
+              {active_clause}
+              {type_clause}
+            ORDER BY kol_pool_id, posted_at DESC NULLS LAST, id DESC
+            """,
+            tuple(kol_pool_ids),
+        ).fetchall()
+        seen: set[int] = set()
+        for raw in rows:
+            row = dict(raw)
+            kol_id = int(row.get("kol_pool_id") or 0)
+            if kol_id <= 0 or kol_id in seen:
+                continue
+            seen.add(kol_id)
+            evidence_context.setdefault(kol_id, {})["latest_real_video"] = {
+                "posted_at": row.get("posted_at"),
+                "evidence_type": row.get("evidence_type") or "video",
+                "source": "vkpi_kol_video_evidence.posted_at",
+            }
+    except Exception:
+        logger.warning("smart_local latest-video context unavailable", exc_info=True)
+    return row_context, evidence_context
+
+
 
 def recall_kol_profiles(
     *,
@@ -557,15 +778,31 @@ def recall_kol_profiles(
     allow_backfill: bool = True,
     operator_query_text: str = "",
     required_product_evidence_terms: Any = None,
+    local_qualification_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    recall_started = perf_counter()
     if ratio_policy != "soft":
         raise ValueError("only ratio_policy=soft is supported")
     if mixed_policy != "dominant":
         raise ValueError("only mixed_policy=dominant is supported")
 
+    smart_local_enabled = isinstance(local_qualification_policy, dict)
+    if smart_local_enabled:
+        # This contract is server-owned: old request flags cannot weaken its
+        # evidence gate or re-introduce duplicate/popularity-filled rows.
+        allow_backfill = False
+        dedupe = True
     requested_candidate_limit = max(1, min(MAX_CANDIDATE_LIMIT, int(candidate_limit or 50)))
-    safe_candidate_limit = requested_candidate_limit
-    safe_limit = max(1, min(50, int(limit or 10)))
+    safe_candidate_limit = (
+        SMART_LOCAL_CANDIDATE_LIMIT
+        if smart_local_enabled
+        else requested_candidate_limit
+    )
+    safe_limit = (
+        SMART_LOCAL_TARGET
+        if smart_local_enabled
+        else max(1, min(50, int(limit or 10)))
+    )
     safe_candidate_limit = max(safe_limit, safe_candidate_limit)
     safe_creator_quota = max(0, min(50, int(creator_quota or 0)))
     safe_reviewer_quota = max(0, min(50, int(reviewer_quota or 0)))
@@ -612,6 +849,7 @@ def recall_kol_profiles(
     )
 
     resolved_text, query_meta = resolve_query_text(query_text=query_text, product_sku=product_sku)
+    resolved_at = perf_counter()
     if isinstance(required_product_evidence_terms, dict):
         safe_product_evidence_terms = product_evidence_terms(required_product_evidence_terms)
     else:
@@ -713,6 +951,7 @@ def recall_kol_profiles(
             local_backfill = []
         hits.extend(hit for hit in local_backfill if hit.kol_pool_id not in known_ids)
         hits = hits[:safe_candidate_limit]
+    retrieved_at = perf_counter()
 
     ordered_hits: list[RecallHit] = []
     seen: set[int] = set()
@@ -725,9 +964,27 @@ def recall_kol_profiles(
         ordered_hits.append(hit)
 
     rows_by_id = _entry_rows([hit.kol_pool_id for hit in ordered_hits])
-    evidence_by_id = _evidence_summaries([hit.kol_pool_id for hit in ordered_hits])
+    evidence_ids = [hit.kol_pool_id for hit in ordered_hits]
+    try:
+        evidence_by_id = _evidence_summaries(evidence_ids)
+    except Exception:
+        if not smart_local_enabled:
+            raise
+        # Older read-only snapshots may lack optional engagement columns used
+        # by the richer legacy projection.  Strict local still has a minimal,
+        # factual video/title projection and never relaxes qualification.
+        logger.warning("smart_local rich evidence projection unavailable", exc_info=True)
+        evidence_by_id = _smart_local_evidence_summaries(evidence_ids)
     buckets: dict[str, list[dict[str, Any]]] = {"creator": [], "reviewer": [], "unknown": []}
     fallback_rows = _pool_rows_fallback([h.kol_pool_id for h in ordered_hits if h.kol_pool_id not in rows_by_id])
+    qualification_rows = {**fallback_rows, **rows_by_id}
+    if smart_local_enabled:
+        qualification_rows, evidence_by_id = _smart_local_qualification_context(
+            [hit.kol_pool_id for hit in ordered_hits],
+            rows_by_id=qualification_rows,
+            evidence_by_id=evidence_by_id,
+        )
+    evidence_loaded_at = perf_counter()
     fallback_used_count = 0
     missing_type_count = 0
     excluded_chinese_count = 0
@@ -754,14 +1011,14 @@ def recall_kol_profiles(
         # 也不展示(「分析后再 po」),独立计数诚实透出。Pool 行保留不删,只挡本出口。
         # 零触 viltrox_fit_score。
         _reach_state = _reach_display_state(row)
-        if _reach_state == "low_reach":
+        if not smart_local_enabled and _reach_state == "low_reach":
             filtered_low_reach_count += 1
             logger.debug(
                 "recall_reach_floor_filtered handle=%r kol_pool_id=%s reason=%s",
                 row.get("handle"), hit.kol_pool_id, _reach_floor_reason(row) or "low_reach_flag",
             )
             continue
-        if _reach_state == "unknown":
+        if not smart_local_enabled and _reach_state == "unknown":
             filtered_unknown_reach_count += 1
             logger.debug(
                 "recall_reach_unknown_hidden handle=%r kol_pool_id=%s",
@@ -869,21 +1126,47 @@ def recall_kol_profiles(
         reason = "rerank_timeout" if "timeout" in failure_text or "deadline" in failure_text else "rerank_unavailable"
         logger.warning("profile_recall rerank skipped reason=%s", reason, exc_info=True)
         _rerank_note = f"stage_skipped:{reason}"
+    gated_at = perf_counter()
 
     # Business lanes are now an actual selection contract.  Creator/reviewer
     # remains a soft secondary balance; explicit hard filters were already
     # applied and are never relaxed by lane or count refill.
-    items, lane_selection = select_with_business_lane_quotas(
-        all_ranked_candidates,
-        limit=safe_limit,
-        bucket_policy=normalized_bucket_policy,
-        creator_quota=safe_creator_quota,
-        reviewer_quota=safe_reviewer_quota,
-        allow_backfill=bool(allow_backfill),
-    )
-    selected_creator = [item for item in items if item.get("bucket") == "creator"]
-    selected_reviewer = [item for item in items if item.get("bucket") == "reviewer"]
-    selected_unknown = [item for item in items if item.get("bucket") == "unknown"]
+    local_qualification: dict[str, Any] | None = None
+    if smart_local_enabled:
+        items, selected_buckets, local_qualification = qualify_local_candidates(
+            buckets={
+                "creator": buckets["creator"],
+                "reviewer": buckets["reviewer"],
+            },
+            rows_by_id=qualification_rows,
+            evidence_by_id=evidence_by_id,
+            policy=dict(local_qualification_policy or {}),
+            creator_quota=safe_creator_quota,
+            reviewer_quota=safe_reviewer_quota,
+        )
+        selected_creator = selected_buckets["creator"]
+        selected_reviewer = selected_buckets["reviewer"]
+        selected_unknown: list[dict[str, Any]] = []
+        lane_selection = {
+            "selection_method": "smart_local_qualification_before_limit",
+            "selected_count": len(items),
+            "selected_by_lane": {
+                lane: sum(1 for item in items if item.get("candidate_bucket") == lane)
+                for lane in ("core_vertical", "expansion", "exploration")
+            },
+        }
+    else:
+        items, lane_selection = select_with_business_lane_quotas(
+            all_ranked_candidates,
+            limit=safe_limit,
+            bucket_policy=normalized_bucket_policy,
+            creator_quota=safe_creator_quota,
+            reviewer_quota=safe_reviewer_quota,
+            allow_backfill=bool(allow_backfill),
+        )
+        selected_creator = [item for item in items if item.get("bucket") == "creator"]
+        selected_reviewer = [item for item in items if item.get("bucket") == "reviewer"]
+        selected_unknown = [item for item in items if item.get("bucket") == "unknown"]
     business_buckets = {
         lane: [item for item in items if item.get("candidate_bucket") == lane]
         for lane in ("core_vertical", "expansion", "exploration")
@@ -918,7 +1201,7 @@ def recall_kol_profiles(
         evidence_shortfall_reason = empty_reason
     distribution_rows = {**fallback_rows, **rows_by_id}
 
-    return {
+    response = {
         "method": METHOD,
         "match_status": "matched" if items else "empty",
         "candidate_set_distribution": candidate_set_distribution(
@@ -1031,3 +1314,45 @@ def recall_kol_profiles(
             **embedding_meta,
         },
     }
+    if local_qualification is not None:
+        completed_at = perf_counter()
+        total_ms = round((completed_at - recall_started) * 1000.0, 3)
+        stage_timing = local_qualification["stage_timing"]
+        stage_timing.update(
+            {
+                "resolve_query_ms": round((resolved_at - recall_started) * 1000.0, 3),
+                "retrieve_ms": round((retrieved_at - resolved_at) * 1000.0, 3),
+                "load_evidence_ms": round((evidence_loaded_at - retrieved_at) * 1000.0, 3),
+                "evidence_gate_ms": round((gated_at - evidence_loaded_at) * 1000.0, 3),
+                "rank_and_select_ms": round((completed_at - gated_at) * 1000.0, 3),
+                "total_ms": total_ms,
+            }
+        )
+        local_qualification["total_ms"] = total_ms
+        response["local_qualification"] = local_qualification
+        response["match_status"] = "matched" if items else "empty"
+        response["diagnostics"].update(
+            {
+                "returned_count": len(items),
+                "creator_returned": len(selected_creator),
+                "reviewer_returned": len(selected_reviewer),
+                "shortfall": local_qualification["shortfall"],
+                "shortfall_reason": local_qualification["shortfall_reason"],
+                "empty_reason": "" if items else "no_qualified_candidates",
+                "result_contract_satisfied": local_qualification["shortfall"] == 0,
+                "smart_local_qualification": True,
+            }
+        )
+        response = project_smart_local_result(response)
+        # business_buckets is a secondary view of the same selected rows.
+        # Rebuild it from the already-projected canonical items so profile text
+        # or contact-bearing bio values cannot survive through an alias view.
+        response["business_buckets"] = {
+            lane: [
+                item
+                for item in response.get("items") or []
+                if item.get("candidate_bucket") == lane
+            ]
+            for lane in ("core_vertical", "expansion", "exploration")
+        }
+    return response

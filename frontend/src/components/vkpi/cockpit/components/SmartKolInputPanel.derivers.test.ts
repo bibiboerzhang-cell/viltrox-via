@@ -93,6 +93,55 @@ describe("SmartKolInputPanel explainable recall history", () => {
       claim_status: "descriptive_only", denominator: 1,
     });
   });
+
+  it("restores the Smart-local proof and global server order across bucket types", () => {
+    const proof = {
+      schema: "smart_local_gate_evidence_v1",
+      passed: true,
+      activity: { posted_at: "2026-08-10T00:00:00+00:00", passed: true },
+      market: { value: "us", target: "us", passed: true },
+    };
+    const result = recallResultFromSession({
+      id: 32,
+      query_text: "US YouTube 35mm",
+      result_summary: {
+        local_qualification: {
+          schema: "smart_local_qualified_v1",
+          status: "shortfall",
+          returned_count: 2,
+          qualified_count: 2,
+          shortfall: 28,
+        },
+      },
+      items: [
+        {
+          item_type: "recall_candidate",
+          rank: 2,
+          kol_pool_id: 1,
+          payload: {
+            bucket: "creator", handle: "creator-second", platform: "youtube", profile_type: "creator",
+            server_rank: 2, global_rank: 2, qualification_evidence: proof,
+            candidate_facets: { contact_available: "no", platform: "youtube" },
+          },
+        },
+        {
+          item_type: "recall_candidate",
+          rank: 1,
+          kol_pool_id: 2,
+          payload: {
+            bucket: "reviewer", handle: "review-first", platform: "youtube", profile_type: "reviewer",
+            server_rank: 1, global_rank: 1, qualification_evidence: proof,
+            candidate_facets: { contact_available: "yes", platform: "youtube" },
+          },
+        },
+      ],
+    } as unknown as VkpiKolSearchHistoryItem);
+
+    expect(result.items.map((item) => item.handle)).toEqual(["review-first", "creator-second"]);
+    expect((result.items[0] as any).qualification_evidence.activity.posted_at).toBe("2026-08-10T00:00:00+00:00");
+    expect(result.items[0].candidate_facets?.contact_available).toBe("yes");
+    expect((result as any).local_qualification).toMatchObject({ returned_count: 2, shortfall: 28 });
+  });
 });
 
 describe("SmartKolInputPanel progressive search snapshots", () => {

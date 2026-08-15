@@ -76,9 +76,9 @@ import {
   type KolSearchFilterState,
   type KolSearchStrategy,
 } from "./SmartKolInputPanel.SearchPolicy";
+import { LOCAL_QUALIFICATION_SPEC } from "./SmartKolInputPanel.LocalQualified";
 
 type State = "idle" | "loading" | "ready" | "executing" | "error";
-
 export function SmartKolInputPanel({
   apiToken = "",
   searchMode = "balanced",
@@ -583,7 +583,7 @@ export function SmartKolInputPanel({
         maxPosts: 3,
         // 30 是「筛选后目标」而非抓取前上限：先过采样，再由后端执行硬筛选、业务分桶与诚实补位。
         // 同时保留 limit/creator/reviewer 兼容旧服务；新服务以 result_limit/filters/bucket_policy 为准。
-        candidateLimit: 150,
+        candidateLimit: 500,
         limit: KOL_SEARCH_RESULT_LIMIT,
         resultLimit: KOL_SEARCH_RESULT_LIMIT,
         creatorQuota: searchPolicy.creatorQuota,
@@ -591,6 +591,9 @@ export function SmartKolInputPanel({
         searchStrategy,
         filters: apiFilters,
         bucketPolicy: searchPolicy.bucketPolicy,
+        market: discoveryRegion,
+        platforms: discoveryPlatforms,
+        localQualificationSpec: LOCAL_QUALIFICATION_SPEC,
         // createSession:true 回滚——false 会让前端 activeSearchSession 拿不到 advance 会话的全网发现项,
         // 整组「全网新发现」消失(550pro2 监视器搜出 15 个却 0 显示的真因)。宁可历史多一条空会话,也要保显示。
         createSession: true,
@@ -769,7 +772,7 @@ export function SmartKolInputPanel({
       // 新合同把「筛选后 30 人」与底层 creator/reviewer 兼容配额分开；显式硬筛选不得为凑数放松。
       const apiFilters = toKolSearchApiFilters(searchFilters, discoveryPlatforms);
       const response = await smartKolSearchProfileAdvanceJob(apiToken, query, {
-        candidateLimit: 150,
+        candidateLimit: 500,
         limit: KOL_SEARCH_RESULT_LIMIT,
         resultLimit: KOL_SEARCH_RESULT_LIMIT,
         creatorQuota: searchPolicy.creatorQuota,
@@ -786,6 +789,7 @@ export function SmartKolInputPanel({
         newDiscoveryPlatforms: discoveryPlatforms,
         excludeChinese,
         market: discoveryRegion,
+        localQualificationSpec: LOCAL_QUALIFICATION_SPEC,
         timeoutMs: 300000,
       });
       setAdvanceResult(response);
@@ -940,7 +944,6 @@ export function SmartKolInputPanel({
         <TextResultSection
           recallResult={recallResult}
           llmPlan={llmPlan}
-          recallItems={recallItems}
           discoveryItems={discoveryItems}
           discoveryTotal={discoveryTotal}
           discoveryAutoEnrolled={discoveryAutoEnrolled} discoveryBrandExcluded={discoveryBrandExcludedFromSession(activeSearchSession)}

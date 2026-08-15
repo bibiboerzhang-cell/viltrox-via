@@ -12,8 +12,15 @@ import {
   type Row,
 } from "./SmartKolInputPanel.helpers";
 import { searchProgressContractFromSession } from "./SmartKolInputPanel.progress-derivers";
+import { sanitizeSearchDisplayForCache } from "./SmartKolInputPanel.cachePrivacy";
+import {
+  recallCandidateDistribution,
+  recallCandidateFacets,
+  recallMatchEvidence,
+} from "./SmartKolInputPanel.evidence";
 
 export * from "./SmartKolInputPanel.progress-derivers";
+export { sanitizeSearchDisplayForCache } from "./SmartKolInputPanel.cachePrivacy";
 
 export const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
 // 刀2·流2 路A:贴账号 URL 自动分析的代表视频条数(dossier 据此出 LLM 账号分)。2 = 信号与成本/排队的折中;
@@ -40,13 +47,17 @@ export function readPersistedSearchDisplay(): PersistedSearchDisplay | null {
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PersistedSearchDisplay;
     if (!parsed || typeof parsed !== "object") return null;
-    // A terminal historical search may never poll again after page reload. Sanitize the cached
-    // card payload at the read boundary so an old pre-truth-contract snapshot cannot live forever
-    // in sessionStorage and keep rendering unreceipted metrics.
-    return {
-      ...parsed,
-      recallResult: parsed.recallResult ? sanitizeKolRecallSnapshot(parsed.recallResult) : null,
+    const sanitized = sanitizeSearchDisplayForCache(parsed);
+    // A terminal historical search may never poll again after page reload. Apply both the
+    // contact-value cache projection and the field-level metric truth contract before render.
+    const safeDisplay = {
+      ...sanitized,
+      recallResult: sanitized.recallResult
+        ? sanitizeKolRecallSnapshot(sanitized.recallResult)
+        : null,
     };
+    window.sessionStorage.setItem(ACTIVE_SEARCH_DISPLAY_KEY, JSON.stringify(safeDisplay));
+    return safeDisplay;
   } catch {
     return null;
   }
@@ -59,7 +70,10 @@ export function writePersistedSearchDisplay(value: PersistedSearchDisplay | null
       window.sessionStorage.removeItem(ACTIVE_SEARCH_DISPLAY_KEY);
       return;
     }
-    window.sessionStorage.setItem(ACTIVE_SEARCH_DISPLAY_KEY, JSON.stringify(value));
+    window.sessionStorage.setItem(
+      ACTIVE_SEARCH_DISPLAY_KEY,
+      JSON.stringify(sanitizeSearchDisplayForCache(value)),
+    );
   } catch {
     // 配额/隐私模式失败时静默:持久化只是兜底,失败不影响实时搜索。
   }
@@ -113,7 +127,7 @@ function replayMetricValue(payload: Row, field: string, replayComplete: boolean)
 }
 
 function bucketRecallItems(items: VkpiKolRecallItem[]): VkpiKolRecallResponse["buckets"] {
-  const buckets: Record<string, VkpiKolRecallItem[]> = { creator: [], reviewer: [], unknown: [] };
+  const buckets: Record<string, VkpiKolRecallItem[]> = { creator: [], reviewer: [] };
   items.forEach((item) => {
     const bucket = recallBucket(item.bucket);
     (buckets[bucket] ||= []).push(item);
@@ -164,8 +178,12 @@ export function sanitizeKolRecallSnapshot(response: VkpiKolRecallResponse): Vkpi
     const next: Row = { ...row };
     const sourceFields: Row = { ...asRecord(row.source_fields) };
     RECALL_NUMERIC_TRUTH_FIELDS.forEach((field) => {
-      if (!truthDisplayable(row.data_truth, field)) next[field] = null;
-      sourceFields[field] = next[field] ?? null;
+      const fieldWasPresent = Object.prototype.hasOwnProperty.call(row, field)
+        || Object.prototype.hasOwnProperty.call(sourceFields, field);
+      if (!truthDisplayable(row.data_truth, field) && Object.prototype.hasOwnProperty.call(row, field)) {
+        next[field] = null;
+      }
+      if (fieldWasPresent) sourceFields[field] = next[field] ?? null;
     });
     if (!truthDisplayable(row.data_truth, "real_er")) {
       next.real_er_sample_n = null;
@@ -176,7 +194,10 @@ export function sanitizeKolRecallSnapshot(response: VkpiKolRecallResponse): Vkpi
     next.representative_evidence = sanitizeRepresentativeEvidence(row.representative_evidence);
 
     const audienceReceipt = asRecord(asRecord(row.data_truth).fields).audience_estimated;
-    if (asRecord(audienceReceipt).displayable !== true) sourceFields.audience_preview = null;
+    if (
+      asRecord(audienceReceipt).displayable !== true
+      && Object.prototype.hasOwnProperty.call(sourceFields, "audience_preview")
+    ) sourceFields.audience_preview = null;
     next.source_fields = sourceFields;
     return next as unknown as VkpiKolRecallItem;
   });
@@ -534,7 +555,7 @@ export function reachFloorDisplayFromSession(session: VkpiKolSearchHistoryItem |
 }
 
 export function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolRecallResponse {
-  const items: VkpiKolRecallItem[] = [];
+  const ranked: Array<{ rank: number; item: VkpiKolRecallItem }> = [];
   const legacyMissingFields = [
     "match_tier",
     "candidate_bucket",
@@ -559,6 +580,7 @@ export function recallResultFromSession(session: VkpiKolSearchHistoryItem): Vkpi
       : legacyMissingFields.filter((field) => !(field in payload));
     const persistedScore = optionalSessionNumber(item.score);
     const payloadSource = asRecord(payload.source_fields);
+    const matchEvidence = recallMatchEvidence(payload.match_evidence);
     const replayMetrics = {
       followers: replayMetricValue(payload, "followers", replayComplete),
       avg_views: replayMetricValue(payload, "avg_views", replayComplete),
@@ -601,11 +623,18 @@ export function recallResultFromSession(session: VkpiKolSearchHistoryItem): Vkpi
       type_rank_score: optionalSessionNumber(payload.type_rank_score ?? payload.type_score),
       relevance_flags: Array.isArray(payload.relevance_flags) ? (payload.relevance_flags as unknown[]).map(cleanText).filter(Boolean) : [],
       relevance_tier_hint: cleanText(payload.relevance_tier_hint),
+      match_evidence: matchEvidence,
+      candidate_facets: recallCandidateFacets(payload.candidate_facets),
+      qualification_evidence: asRecord(payload.qualification_evidence),
+      server_rank: Number(payload.server_rank ?? payload.global_rank ?? item.rank ?? 0) || undefined,
+      global_rank: Number(payload.global_rank ?? payload.server_rank ?? item.rank ?? 0) || undefined,
       type_label: cleanText(payload.type_label) || (bucket === "reviewer" ? "测评号" : bucket === "creator" ? "创作者" : "未分类"),
       creator_type_score: optionalSessionNumber(payload.creator_type_score),
       reviewer_type_score: optionalSessionNumber(payload.reviewer_type_score),
-      recall_reason: cleanText(payload.recall_reason || payload.evidence || payload.sample_title),
-      why_fit: cleanText(payload.why_fit || payload.evidence),
+      recall_reason: (matchEvidence.length || replayComplete)
+        ? cleanText(payload.recall_reason || payload.evidence || payload.sample_title)
+        : "",
+      why_fit: (matchEvidence.length || replayComplete) ? cleanText(payload.why_fit || payload.evidence) : "",
       // 三引擎展示信号透传(纯只读;后端在会话项 payload 写入则亮起,否则静默不渲染)。
       fit_verdict: cleanText(payload.fit_verdict),
       creator_type: cleanText(payload.creator_type),
@@ -615,12 +644,18 @@ export function recallResultFromSession(session: VkpiKolSearchHistoryItem): Vkpi
       session_replay_missing_fields: missingReplayFields,
       source_fields: replaySourceFields,
     } as VkpiKolRecallItem;
-    items.push(row);
+    ranked.push({
+      rank: Number(payload.server_rank ?? payload.global_rank ?? item.rank ?? 0) || Number.MAX_SAFE_INTEGER,
+      item: row,
+    });
   });
+  ranked.sort((a, b) => a.rank - b.rank);
+  const items = ranked.map((entry) => entry.item);
   const summary = asRecord(session.result_summary);
   const querySummary = asRecord(summary.query);
   const diagnostics = asRecord(summary.diagnostics);
   const replayContract = asRecord(summary.replay_contract);
+  const llmQueryPlan = asRecord(summary.llm_query_plan);
   const buckets = bucketRecallItems(items);
   const creator = buckets.creator || [];
   const reviewer = buckets.reviewer || [];
@@ -641,7 +676,11 @@ export function recallResultFromSession(session: VkpiKolSearchHistoryItem): Vkpi
       dedupe: asRecord(summary.ratio).dedupe !== false,
     },
     items,
-    buckets,
+    buckets: {
+      creator,
+      reviewer,
+      ...(unknown.length ? { unknown } : {}),
+    },
     diagnostics: {
       ...diagnostics,
       candidate_count: Number(diagnostics.candidate_count ?? items.length),
@@ -656,6 +695,16 @@ export function recallResultFromSession(session: VkpiKolSearchHistoryItem): Vkpi
       session_replay_persisted_count: Number(replayContract.persisted_count ?? items.length),
     },
     evaluation_status: asRecord(summary.evaluation_status),
+    match_status: cleanText(summary.match_status),
+    candidate_set_distribution: recallCandidateDistribution(summary.candidate_set_distribution),
+    ...(Object.keys(asRecord(summary.local_qualification)).length
+      ? { local_qualification: asRecord(summary.local_qualification) }
+      : {}),
+    ...(Object.keys(llmQueryPlan).length ? { llm_query_plan: llmQueryPlan } : {}),
+    snapshot_complete: Boolean(
+      (session as unknown as Row).recall_snapshot_complete === true
+      || summary.recall_snapshot_complete === true,
+    ),
   } satisfies VkpiKolRecallResponse;
 }
 
@@ -697,7 +746,8 @@ function discoveryItemsFromSessionRaw(session: VkpiKolSearchHistoryItem | null):
   if (!session) return [];
   const out: VkpiKolRecallItem[] = [];
   sessionItems(session).forEach((item) => {
-    if (cleanText(item.item_type) !== "new_creator") return;
+    const itemType = cleanText(item.item_type);
+    if (itemType !== "new_creator" && itemType !== "existing_kol") return;
     const payload = asRecord(item.payload);
     out.push({
       bucket: "creator",
@@ -713,7 +763,7 @@ function discoveryItemsFromSessionRaw(session: VkpiKolSearchHistoryItem | null):
       profile_url: cleanText(item.source_url || payload.profile_url || payload.source_url || payload.channel_url),
       recall_rank_score: Number(item.score ?? payload.score ?? 0),
       vector_score: Number(payload.vector_score ?? item.score ?? 0),
-      type_label: "全网发现",
+      type_label: itemType === "existing_kol" ? "库内已有" : "全网发现",
       creator_type_score: 1,
       reviewer_type_score: 0,
       recall_reason: cleanText(payload.sample_title || payload.evidence),

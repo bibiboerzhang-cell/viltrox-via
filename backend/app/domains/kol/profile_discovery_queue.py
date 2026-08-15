@@ -22,6 +22,16 @@ def _pending_enrichment() -> dict[str, Any]:
     }
 
 
+def _requests_smart_local_30(body: dict[str, Any]) -> bool:
+    """Recognize only the named UI contract; never trust client-supplied limits as policy."""
+    spec = body.get("local_qualification_spec")
+    return bool(
+        isinstance(spec, dict)
+        and _text(spec.get("version")) == "local_30_v1"
+        and _int(spec.get("target_count")) == 30
+    )
+
+
 def enqueue_search_session_advance(
     *,
     session_id: int,
@@ -320,6 +330,7 @@ def enqueue_smart_search_profile_advance(
     query = _text(query_text)
     if not query:
         raise ValueError("query_text is required")
+    smart_local_30 = _requests_smart_local_30(body)
     session = search_sessions.ensure_session_for_result(
         session_id=None,
         create=True,
@@ -402,7 +413,14 @@ def enqueue_smart_search_profile_advance(
         "new_discovery_platforms": body.get("new_discovery_platforms") or body.get("discovery_platforms"),
         "platform": _text(body.get("platform")),
         "market": _text(body.get("market") or body.get("country")),
-        "advance_limit": max(1, min(_int(body.get("advance_limit") or body.get("profile_advance_limit"), 15), 15)),
+        "advance_limit": max(
+            1,
+            min(
+                _int(body.get("advance_limit") or body.get("profile_advance_limit"), 30 if smart_local_30 else 15),
+                30 if smart_local_30 else 15,
+            ),
+        ),
+        "_smart_local_30_contract": smart_local_30,
         "max_posts": max(1, min(_int(body.get("max_posts"), 12), 12)),
         "advance_mode": _text(body.get("advance_mode") or body.get("mode") or "account_deep"),
         "representative_video_limit": body.get("representative_video_limit"),

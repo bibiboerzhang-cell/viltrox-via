@@ -348,13 +348,14 @@ def _canonical_visible_recall(items: list[dict[str, Any]]) -> list[dict[str, Any
 def _refresh_visible_recall_summary(session: dict[str, Any], items: list[dict[str, Any]]) -> None:
     """Make a full session snapshot describe only recall cards still visible."""
     summary = _dict(session.get("result_summary"))
-    is_recall = (
-        _text(session.get("query_type")) == "text_recall"
+    recall_snapshot_complete = (
+        summary.get("recall_snapshot_attached") is True
         or _text(summary.get("kind")) == "kol_recall"
         or any(_text(item.get("item_type")) == "recall_candidate" for item in items)
     )
     summary["items_snapshot_complete"] = True
-    if is_recall:
+    summary["recall_snapshot_complete"] = recall_snapshot_complete
+    if recall_snapshot_complete:
         canonical = _canonical_visible_recall(items)
         creator_count = sum(1 for item in canonical if item["bucket"] == "creator")
         reviewer_count = len(canonical) - creator_count
@@ -371,6 +372,7 @@ def _refresh_visible_recall_summary(session: dict[str, Any], items: list[dict[st
         summary["candidate_set_distribution"] = candidate_set_distribution_from_items(canonical)
     session["result_summary"] = summary
     session["items_snapshot_complete"] = True
+    session["recall_snapshot_complete"] = recall_snapshot_complete
 
 
 def create_session(

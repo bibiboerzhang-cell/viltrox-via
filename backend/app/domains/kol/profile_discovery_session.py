@@ -414,6 +414,7 @@ def advance_search_session_items(
     *,
     session_id: int,
     body: dict[str, Any] | None = None,
+    smart_local_contract: bool = False,
 ) -> dict[str, Any]:
     """Plan or execute ordered profile crawl for discovery items in a session.
 
@@ -425,7 +426,8 @@ def advance_search_session_items(
     body = body or {}
     execute = bool(body.get("execute"))
     pipeline_running = bool(body.get("_pipeline_running"))
-    limit = max(1, min(_int(body.get("limit"), 5), 15))
+    limit_cap = 30 if smart_local_contract else 15
+    limit = max(1, min(_int(body.get("limit"), 5), limit_cap))
     max_posts = max(1, min(_int(body.get("max_posts"), 12), 12))
     mode = _text(body.get("mode") or "profile_only")
     if mode not in {"profile_only", "auto", "profile_with_video", "account_deep"}:
@@ -458,6 +460,14 @@ def advance_search_session_items(
             continue
         if item_type not in {"new_creator", "existing_kol", "recall_candidate"}:
             skipped.append({"item_id": item_id, "status": "skipped", "reason": "unsupported_item_type", "item_type": item_type})
+            continue
+        if smart_local_contract and item_type != "recall_candidate":
+            skipped.append({
+                "item_id": item_id,
+                "status": "skipped",
+                "reason": "reserved_for_online_lane",
+                "item_type": item_type,
+            })
             continue
         if not include_completed and item_status in terminal_statuses:
             skipped.append({"item_id": item_id, "status": "skipped", "reason": "already_terminal", "item_status": item_status})

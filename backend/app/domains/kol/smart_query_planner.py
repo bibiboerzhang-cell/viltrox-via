@@ -95,7 +95,7 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
         keywords.extend(["300W", "EVO", "portable lighting"])
     if any(term in lowered for term in ("人像", "portrait")):
         keywords.extend(["portrait", "portrait photographer"])
-    if any(term in lowered for term in ("测评", "review", "gear")):
+    if any(term in lowered for term in ("测评", "评测", "review", "gear")):
         keywords.extend(["gear reviewer", "camera gear review"])
     if any(term in lowered for term in ("monitor", "监视器", "550pro", "550 pro", "550por", "外接屏", "screen", "屏")):
         # 泛人群:监视器买家=各行业视频拍摄者,不止「监视器评测」。撒宽到创作者类型+代表垂类。
@@ -104,7 +104,17 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
             "content creator", "automotive videographer", "food videographer", "wedding filmmaker", "commercial video",
         ])
     if any(term in lowered for term in ("镜头", "lens", "lab", "mm")):
-        keywords.extend(["videographer", "photographer", "camera gear"])
+        keywords.extend(["lens review", "videographer", "photographer", "camera gear"])
+    if any(term in lowered for term in ("电影感", "cinematic", "cinematography")):
+        keywords.extend(["cinematic", "cinematography"])
+    if any(term in lowered for term in ("旅行", "travel")):
+        keywords.append("travel")
+    if any(term in lowered for term in ("风光", "landscape")):
+        keywords.append("landscape")
+    if any(term in lowered for term in ("微距", "macro")):
+        keywords.append("macro")
+    if any(term in lowered for term in ("产品摄影", "product photography")):
+        keywords.append("product photography")
 
     # 规避问题A:中文 query 直接塞进 search_query 会让平台搜出中文号。
     # 有英文关键词→只用英文关键词;纯中文无匹配→给英文影视器材兜底;ASCII 原串才保留。
@@ -157,6 +167,30 @@ def _clarification_plan(query: str, clarification: dict[str, Any]) -> dict[str, 
         "fallback_used": False,
         "provider_calls_performed": False,
         "clarification": clarification,
+    }
+
+
+def _require_evidence_anchor(plan: dict[str, Any]) -> dict[str, Any]:
+    """Fail closed when a preview plan cannot prove any lexical intent."""
+    if _text(plan.get("status")) == "needs_clarification":
+        return plan
+    from app.domains.kol.profile_recall_match_evidence import query_evidence_terms
+
+    if query_evidence_terms(plan.get("search_query")):
+        return plan
+    return {
+        **plan,
+        "status": "needs_clarification",
+        "search_query": "",
+        "creator_quota": 0,
+        "reviewer_quota": 0,
+        "include_new_discovery": False,
+        "new_discovery_limit": 0,
+        "reason": "no_evidence_anchor",
+        "clarification": {
+            "reason": "no_evidence_anchor",
+            "message": "请补充具体内容场景、职业或产品型号后再搜索",
+        },
     }
 
 
@@ -395,21 +429,21 @@ def plan_text_query_provider_free(
     body = body or {}
     query_text = _text(query)
     if not query_text:
-        return _fallback_plan(query_text, reason="empty_query")
+        return _require_evidence_anchor(_fallback_plan(query_text, reason="empty_query"))
 
     resolved_product, clarification = _resolve_requested_product(query_text, body)
     if clarification:
         return _clarification_plan(query_text, clarification)
     if not resolved_product:
-        return _fallback_plan(query_text, reason="provider_free_initial")
+        return _require_evidence_anchor(_fallback_plan(query_text, reason="provider_free_initial"))
 
     persona_plan = _plan_from_product_persona(query_text, resolved_product, body)
     if persona_plan is not None:
-        return {
+        return _require_evidence_anchor({
             **persona_plan,
             "plan_stage": "initial_provider_free",
             "provider_calls_performed": False,
-        }
+        })
 
     # No materialized persona yet: retain the existing category-aware English
     # fallback, but never fall through to llm_gateway.invoke on the request.
@@ -419,7 +453,7 @@ def plan_text_query_provider_free(
         {"provider": "rule_v0", "model": "rule_v0", "status": "fallback"},
         resolved_product,
     )
-    return {
+    return _require_evidence_anchor({
         **plan,
         "market": _text(plan.get("market")) or "US",
         "reason": "provider_free_product_fallback",
@@ -428,7 +462,7 @@ def plan_text_query_provider_free(
         "fallback_used": True,
         "provider_calls_performed": False,
         "plan_stage": "initial_provider_free",
-    }
+    })
 
 
 def _plan_text_query_impl(

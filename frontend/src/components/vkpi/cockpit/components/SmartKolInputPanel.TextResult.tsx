@@ -8,8 +8,9 @@ import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domai
 
 import { asRecord, cleanText, display, type Row } from "./SmartKolInputPanel.helpers";
 import { recallDistributionView } from "./SmartKolInputPanel.evidence";
+import { LocalQualifiedList } from "./SmartKolInputPanel.LocalQualifiedList";
 import { PlanPills, RecallMiniItem } from "./SmartKolInputPanel.Sections";
-import type { SearchSessionProgress } from "./SmartKolInputPanel.derivers";
+import { recallTopItems, type SearchSessionProgress } from "./SmartKolInputPanel.derivers";
 import { ProgressiveSearchStageCard } from "./SmartKolInputPanel.Progress";
 import { kolHumanDisplayName } from "../lib/kolIdentity";
 
@@ -286,7 +287,6 @@ export function recallReturnedCount(result: VkpiKolRecallResponse, items: VkpiKo
 export function TextResultSection({
   recallResult,
   llmPlan,
-  recallItems,
   discoveryItems,
   discoveryTotal = 0,
   discoveryAutoEnrolled = null,
@@ -336,7 +336,6 @@ export function TextResultSection({
 }: {
   recallResult: VkpiKolRecallResponse;
   llmPlan: Row;
-  recallItems: VkpiKolRecallItem[];
   discoveryItems: any[];
   discoveryTotal?: number;
   discoveryAutoEnrolled?: number | null;
@@ -396,6 +395,7 @@ export function TextResultSection({
     ? (reachFloorDisplay.discovery.analyzing || 0) + (reachFloorDisplay.discovery.lowReach || 0)
     : 0;
   const discoveryGrandTotal = discoveryTotal + hiddenDiscovery;
+  const recallItems = recallTopItems(recallResult);
   const distribution = recallDistributionView(recallResult.candidate_set_distribution);
   const resolvedProductSku = resolvedProductSkuFromPlan(llmPlan);
   const recallCounts = recallDisplayCounts(recallItems, (recallResult.diagnostics || {}) as Row);
@@ -453,7 +453,7 @@ export function TextResultSection({
       {/* 框2 · 库内账号匹配 */}
       <div className="rounded-lg border border-violet-300/15 bg-violet-950/[0.10] p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[11px] font-medium text-violet-100">② 库内有证据匹配 · {recallReturnedCount(recallResult, recallItems)} 个</div>
+          <div className="text-[11px] font-medium text-violet-100">② 本地合格名单 · 首批先显示</div>
           <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-500">
             <span className="rounded-md border border-white/[0.07] px-2 py-1">创作者 {recallCounts.creator}</span>
             <span className="rounded-md border border-white/[0.07] px-2 py-1">测评号 {recallCounts.reviewer}</span>
@@ -461,16 +461,7 @@ export function TextResultSection({
         </div>
         <SearchFilterDiagnostics diagnostics={(recallResult.diagnostics || {}) as Row} />
         <SearchEvaluationStatus evaluation={asRecord(recallResult.evaluation_status)} />
-        {recallItems.length ? (
-          <CandidateLaneGroups
-            items={recallItems}
-            renderItem={(item, index) => (
-              <RecallMiniItem key={`r-${item.bucket}-${item.kol_pool_id || item.handle || index}`} item={item} index={index + 1} onOpen={openProductScopedItem} />
-            )}
-          />
-        ) : (
-          <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-4 text-center text-[11px] text-slate-500">暂无库内匹配</div>
-        )}
+        <LocalQualifiedList result={recallResult} onOpen={openProductScopedItem} />
         {distribution ? (
           <div className="mt-2 rounded-md border border-cyan-300/15 bg-cyan-400/[0.04] px-2.5 py-2">
             <div className="flex flex-wrap items-center justify-between gap-1.5 text-[9.5px] text-slate-400">

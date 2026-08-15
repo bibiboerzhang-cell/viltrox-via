@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from app.domains.kol import product_resolver, search_sessions, smart_query_planner
+from app.domains.kol import product_resolver, search_sessions, search_sessions_attach, smart_query_planner
 from app.domains.kol.search_sessions_serde import _row_to_item
 
 
@@ -219,6 +219,107 @@ def test_recall_attachment_persists_explainability_without_contact_values(
     for secret in ("sensitive.person@example.test", "+1-202-555-0199", "private-whatsapp-handle"):
         assert secret not in persisted_blob
     assert not ({"email", "phone", "contact", "contact_value", "other_contacts_json"} & set(payload))
+
+
+def test_smart_local_session_persists_global_rank_and_safe_qualification_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def record_items(
+        session_id: int,
+        items: list[dict[str, Any]],
+        *,
+        status: str,
+        summary: dict[str, Any],
+    ) -> dict[str, Any]:
+        captured.update(session_id=session_id, items=items, status=status, summary=summary)
+        return {"id": session_id, "items": items, "status": status, "result_summary": summary}
+
+    monkeypatch.setattr(search_sessions, "record_items", record_items)
+    proof = {
+        "schema": "smart_local_gate_evidence_v1",
+        "passed": True,
+        "rejection_reasons": [],
+        "followers": {"value": 12_000, "minimum": 3_000, "known": True, "passed": True, "source": "vkpi_kol_pool.followers"},
+        "activity": {"posted_at": "2026-08-10T00:00:00+00:00", "age_days": 5, "fresh_priority": True, "maximum_age_days": 45, "passed": True, "source": "vkpi_kol_video_evidence.posted_at"},
+        "market": {"value": "us", "target": "us", "method": "explicit_country", "confidence": 1, "source": "vkpi_kol_pool.country", "passed": True},
+        "platform": {"value": "youtube", "targets": ["youtube"], "passed": True, "source": "vkpi_kol_pool.platform"},
+        "relevance": {"passed": True, "evidence": [{"field": "bio", "term": "35mm", "source": "server_profile_evidence"}], "source": "field_level_match_evidence"},
+        "email": "private@example.test",
+    }
+    reviewer = {
+        "kol_pool_id": 2, "bucket": "reviewer", "handle": "review-first", "platform": "youtube",
+        "followers": 12_000, "recall_rank_score": 0.9,
+        "match_evidence": [{"field": "bio", "term": "35mm", "source": "server_profile_evidence"}],
+        "candidate_facets": {"platform": "youtube", "country": "us", "contact_available": "yes"},
+        "qualification_evidence": proof,
+    }
+    creator = {
+        **reviewer,
+        "kol_pool_id": 1,
+        "bucket": "creator",
+        "handle": "creator-second",
+        "recall_rank_score": 0.8,
+    }
+    local_contract = {
+        "schema": "smart_local_qualified_v1",
+        "status": "shortfall",
+        "policy": {"target_count": 30, "candidate_limit": 500, "min_followers": 3000, "server_owned": True, "platforms": ["youtube"], "market": "us"},
+        "qualified_count": 2,
+        "returned_count": 2,
+        "shortfall": 28,
+        "shortfall_reason": "qualified_candidates_exhausted",
+        "funnel": {"qualified": 2, "returned": 2},
+        "rejected_by_reason": {"latest_video_stale": 3},
+        "stage_timing": {"qualification_ms": 1.25, "total_ms": 4.5},
+        "ratio_policy": {"policy": "soft", "creator_target": 15, "reviewer_target": 15, "unused_quota_backfilled": 0},
+        "gate_evidence": [{**proof, "email": "private@example.test"}],
+    }
+
+    search_sessions_attach.attach_recall_result(
+        77,
+        {
+            "query": {"query_text": "US YouTube 35mm"},
+            "items": [reviewer, creator],
+            "buckets": {"creator": [creator], "reviewer": [reviewer]},
+            "local_qualification": local_contract,
+        },
+    )
+
+    assert [item["payload"]["bucket"] for item in captured["items"]] == ["reviewer", "creator"]
+    assert [item["rank"] for item in captured["items"]] == [1, 2]
+    assert captured["items"][0]["payload"]["server_rank"] == 1
+    assert captured["items"][0]["payload"]["candidate_facets"]["contact_available"] == "yes"
+    assert captured["items"][0]["payload"]["qualification_evidence"]["activity"]["posted_at"] == "2026-08-10T00:00:00+00:00"
+    assert captured["summary"]["local_qualification"]["shortfall"] == 28
+    assert captured["summary"]["recall_snapshot_attached"] is True
+    assert captured["summary"]["recall_snapshot_complete"] is True
+    assert "gate_evidence" not in captured["summary"]["local_qualification"]
+    assert "private@example.test" not in json.dumps(captured, ensure_ascii=False)
+
+
+def test_recall_snapshot_becomes_authoritative_only_after_worker_attach() -> None:
+    queued = {
+        "query_type": "text_recall",
+        "result_summary": {"smart_search_profile_advance_job": {"status": "queued"}},
+    }
+    search_sessions._refresh_visible_recall_summary(queued, [])
+
+    assert queued["items_snapshot_complete"] is True
+    assert queued["recall_snapshot_complete"] is False
+    assert queued["result_summary"]["recall_snapshot_complete"] is False
+    assert "match_status" not in queued["result_summary"]
+
+    worker_attached_then_reach_gated_empty = {
+        "query_type": "text_recall",
+        "result_summary": {"kind": "kol_recall", "recall_snapshot_attached": True},
+    }
+    search_sessions._refresh_visible_recall_summary(worker_attached_then_reach_gated_empty, [])
+
+    assert worker_attached_then_reach_gated_empty["recall_snapshot_complete"] is True
+    assert worker_attached_then_reach_gated_empty["result_summary"]["match_status"] == "empty"
+    assert worker_attached_then_reach_gated_empty["result_summary"]["diagnostics"]["returned_count"] == 0
 
 
 @pytest.mark.parametrize(

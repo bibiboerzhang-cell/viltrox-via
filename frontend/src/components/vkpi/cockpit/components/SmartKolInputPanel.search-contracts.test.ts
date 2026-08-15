@@ -9,6 +9,25 @@ import {
   recallResultFromSession,
 } from "./SmartKolInputPanel.derivers";
 
+const recallItem = (kolPoolId: number, handle: string) => ({
+  bucket: "creator" as const,
+  kol_pool_id: kolPoolId,
+  handle,
+  display_name: handle,
+  platform: "youtube",
+  profile_type: "creator",
+  followers: 40_000,
+  profile_url: `https://www.youtube.com/@${handle}`,
+  recall_rank_score: 0.9,
+  vector_score: 0.9,
+  type_label: "创作者",
+  creator_type_score: 1,
+  reviewer_type_score: 0,
+  recall_reason: "portrait",
+  why_fit: "bio 命中 portrait",
+  source_fields: {},
+});
+
 
 describe("SmartKolInputPanel three-frame session projection", () => {
   it("puts only recall candidates in frame 2 and discovery/existing matches in frame 3", () => {
@@ -138,24 +157,6 @@ describe("SmartKolInputPanel authoritative polling snapshots", () => {
   });
 
   it("removes old recall cards when the incoming recall snapshot is complete", () => {
-    const recallItem = (kolPoolId: number, handle: string) => ({
-      bucket: "creator" as const,
-      kol_pool_id: kolPoolId,
-      handle,
-      display_name: handle,
-      platform: "youtube",
-      profile_type: "creator",
-      followers: 40_000,
-      profile_url: `https://www.youtube.com/@${handle}`,
-      recall_rank_score: 0.9,
-      vector_score: 0.9,
-      type_label: "创作者",
-      creator_type_score: 1,
-      reviewer_type_score: 0,
-      recall_reason: "portrait",
-      why_fit: "bio 命中 portrait",
-      source_fields: {},
-    });
     const keep = recallItem(401, "still-visible");
     const remove = recallItem(402, "now-hidden");
     const previous = {
@@ -179,6 +180,69 @@ describe("SmartKolInputPanel authoritative polling snapshots", () => {
 
     expect(merged.items.map((item) => item.kol_pool_id)).toEqual([401]);
     expect(merged.buckets.creator.map((item) => item.kol_pool_id)).toEqual([401]);
+  });
+
+  it("keeps initial preview rows while an unowned queued recall session is empty", () => {
+    const previewItems = [1, 2, 3, 4].map((id) => recallItem(500 + id, `preview-${id}`));
+    const previous = {
+      method: "vector+structured+relation",
+      query: { query_text: "portrait" },
+      ratio: { creator_quota: 4, reviewer_quota: 0, policy: "smart", mixed_policy: "smart", dedupe: true },
+      items: previewItems,
+      buckets: { creator: previewItems, reviewer: [] },
+      diagnostics: { returned_count: 4 },
+      local_qualification: { schema: "smart_local_qualified_v1", qualified_count: 4, returned_count: 4 },
+    };
+    const queued = recallResultFromSession({
+      id: 786,
+      query_type: "text_recall",
+      status: "running",
+      items_snapshot_complete: true,
+      items: [],
+      result_summary: { smart_search_profile_advance_job: { status: "queued" } },
+    } as unknown as VkpiKolSearchHistoryItem);
+
+    expect(queued.snapshot_complete).toBe(false);
+    const merged = mergeKolRecallSnapshots(previous, queued);
+    expect(merged.items.map((item) => item.kol_pool_id)).toEqual([501, 502, 503, 504]);
+    expect(merged.local_qualification).toMatchObject({ qualified_count: 4, returned_count: 4 });
+  });
+
+  it("deletes preview rows after the worker owns an explicitly complete empty recall", () => {
+    const previewItems = [1, 2, 3, 4].map((id) => recallItem(600 + id, `preview-${id}`));
+    const previous = {
+      method: "vector+structured+relation",
+      query: { query_text: "portrait" },
+      ratio: { creator_quota: 4, reviewer_quota: 0, policy: "smart", mixed_policy: "smart", dedupe: true },
+      items: previewItems,
+      buckets: { creator: previewItems, reviewer: [] },
+      diagnostics: { returned_count: 4 },
+    };
+    const completedEmpty = recallResultFromSession({
+      id: 787,
+      query_type: "text_recall",
+      status: "partial",
+      items_snapshot_complete: true,
+      recall_snapshot_complete: true,
+      items: [],
+      result_summary: {
+        kind: "kol_recall",
+        recall_snapshot_attached: true,
+        recall_snapshot_complete: true,
+        match_status: "empty",
+        local_qualification: {
+          schema: "smart_local_qualified_v1",
+          qualified_count: 0,
+          returned_count: 0,
+        },
+      },
+    } as unknown as VkpiKolSearchHistoryItem);
+
+    expect(completedEmpty.snapshot_complete).toBe(true);
+    const merged = mergeKolRecallSnapshots(previous, completedEmpty);
+    expect(merged.items).toEqual([]);
+    expect(merged.buckets).toEqual({ creator: [], reviewer: [] });
+    expect(merged.local_qualification).toMatchObject({ qualified_count: 0, returned_count: 0 });
   });
 });
 

@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from app.domains.kol import discovery_filters, product_resolver, profile_discovery, smart_query_planner
+from app.domains.kol import discovery_filters, product_resolver, profile_discovery, profile_discovery_session, smart_query_planner
 from app.services.intelligence import account_scan_service
 
 
@@ -213,6 +213,51 @@ def test_empty_profile_advance_is_partial_and_updates_session_honestly(monkeypat
     assert result["selected"] == 0
     assert result["status"] == "partial"
     assert updates[0]["status"] == "partial"
+
+
+def test_profile_advance_30_cap_is_internal_to_smart_local_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    session_items: list[dict[str, Any]] = []
+    for rank in range(1, 31):
+        session_items.extend([
+            {
+                "id": rank,
+                "item_type": "recall_candidate",
+                "status": "pending",
+                "rank": rank,
+                "payload": {"profile_url": f"https://www.youtube.com/@local-{rank}"},
+            },
+            {
+                "id": 100 + rank,
+                "item_type": "new_creator",
+                "status": "pending",
+                "rank": rank,
+                "payload": {"profile_url": f"https://www.youtube.com/@online-{rank}"},
+            },
+        ])
+    monkeypatch.setattr(profile_discovery_session.search_sessions, "get_session", lambda _session_id: {"items": session_items})
+    monkeypatch.setattr(
+        profile_discovery_session,
+        "profile_crawl_plan_for_session_item",
+        lambda **kwargs: {"item_id": kwargs["item_id"]},
+    )
+
+    legacy = profile_discovery_session.advance_search_session_items(
+        session_id=99,
+        body={"execute": False, "limit": 30},
+    )
+    smart_local = profile_discovery_session.advance_search_session_items(
+        session_id=99,
+        body={"execute": False, "limit": 30},
+        smart_local_contract=True,
+    )
+
+    assert legacy["selected"] == 15
+    assert legacy["limit"] == 15
+    assert smart_local["selected"] == 30
+    assert smart_local["limit"] == 30
+    assert [item["item_id"] for item in smart_local["items"]] == list(range(1, 31))
+    assert smart_local["counts"]["skipped"] == 30
+    assert {item.get("reason") for item in smart_local["skipped"]} == {"reserved_for_online_lane"}
 
 
 def test_profile_advance_persists_each_item_before_batch_finishes(monkeypatch: pytest.MonkeyPatch) -> None:

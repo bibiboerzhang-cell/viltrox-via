@@ -399,6 +399,18 @@ def filter_recall_result_market(result: dict[str, Any], value: Any) -> dict[str,
     def keep(item: Any) -> bool:
         if not isinstance(item, dict):
             return False
+        qualification = (
+            item.get("qualification_evidence")
+            if isinstance(item.get("qualification_evidence"), dict)
+            else {}
+        )
+        qualified_market = (
+            qualification.get("market")
+            if isinstance(qualification.get("market"), dict)
+            else {}
+        )
+        if qualified_market.get("passed") and _text(qualified_market.get("value")).lower() == requested:
+            return True
         facets = item.get("candidate_facets") if isinstance(item.get("candidate_facets"), dict) else {}
         raw_country = str(facets.get("country") or "").strip().lower()
         country = _MARKET_ALIASES.get(raw_country, raw_country if re.fullmatch(r"[a-z]{2}", raw_country) else "")

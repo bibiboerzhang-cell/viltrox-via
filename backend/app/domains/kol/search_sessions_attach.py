@@ -88,6 +88,169 @@ def _safe_candidate_facets(value: Any) -> dict[str, str]:
     return output
 
 
+def _safe_non_negative_int(value: Any, *, maximum: int = 1_000_000) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if 0 <= parsed <= maximum else None
+
+
+def _safe_non_negative_float(value: Any, *, maximum: float = 1_000_000.0) -> float | None:
+    parsed = _float_or_none(value)
+    return parsed if parsed is not None and 0 <= parsed <= maximum else None
+
+
+def _safe_public_code(value: Any, *, limit: int = 160) -> str:
+    text = _text(value).strip()[:limit]
+    if not text or _looks_like_contact_value(text):
+        return ""
+    return text if _PLAN_CODE_RE.fullmatch(text) else ""
+
+
+def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any]:
+    """Persist the Smart-local proof, never arbitrary/contact-bearing payload fields."""
+    raw = _dict(value)
+    if _text(raw.get("schema")) != "smart_local_gate_evidence_v1":
+        return {}
+    output: dict[str, Any] = {
+        "schema": "smart_local_gate_evidence_v1",
+        "passed": raw.get("passed") is True,
+        "rejection_reasons": [
+            reason
+            for entry in _list(raw.get("rejection_reasons"))[:12]
+            if (reason := _safe_public_code(entry, limit=80))
+        ],
+    }
+    kol_pool_id = _int_or_none(raw.get("kol_pool_id"))
+    if kol_pool_id:
+        output["kol_pool_id"] = kol_pool_id
+
+    followers = _dict(raw.get("followers"))
+    follower_value = _safe_non_negative_int(followers.get("value"), maximum=5_000_000_000)
+    follower_minimum = _safe_non_negative_int(followers.get("minimum"), maximum=5_000_000_000)
+    output["followers"] = {
+        "value": follower_value,
+        "minimum": follower_minimum,
+        "known": followers.get("known") is True,
+        "passed": followers.get("passed") is True,
+        "source": _safe_public_code(followers.get("source")),
+    }
+
+    activity = _dict(raw.get("activity"))
+    posted_at = _text(activity.get("posted_at")).strip()[:40]
+    if posted_at and not re.fullmatch(r"[0-9T:+.Z-]{8,40}", posted_at):
+        posted_at = ""
+    output["activity"] = {
+        "posted_at": posted_at or None,
+        "age_days": _safe_non_negative_float(activity.get("age_days"), maximum=10_000),
+        "fresh_priority": activity.get("fresh_priority") is True,
+        "maximum_age_days": _safe_non_negative_int(activity.get("maximum_age_days"), maximum=3650),
+        "passed": activity.get("passed") is True,
+        "source": _safe_public_code(activity.get("source")),
+    }
+
+    market = _dict(raw.get("market"))
+    output["market"] = {
+        "value": _safe_public_code(market.get("value"), limit=40) or None,
+        "target": _safe_public_code(market.get("target"), limit=40) or None,
+        "method": _safe_public_code(market.get("method"), limit=80),
+        "confidence": _safe_non_negative_float(market.get("confidence"), maximum=1.0),
+        "source": _safe_public_code(market.get("source"), limit=120) or None,
+        "passed": market.get("passed") is True,
+    }
+
+    platform = _dict(raw.get("platform"))
+    output["platform"] = {
+        "value": _safe_public_code(platform.get("value"), limit=40) or None,
+        "targets": [
+            target
+            for entry in _list(platform.get("targets"))[:8]
+            if (target := _safe_public_code(entry, limit=40))
+        ],
+        "passed": platform.get("passed") is True,
+        "source": _safe_public_code(platform.get("source"), limit=120),
+    }
+
+    relevance = _dict(raw.get("relevance"))
+    output["relevance"] = {
+        "passed": relevance.get("passed") is True,
+        "evidence": _safe_match_evidence(relevance.get("evidence"), allowed_terms=allowed_terms),
+        "source": _safe_public_code(relevance.get("source"), limit=120),
+    }
+    return output
+
+
+def _safe_local_qualification(value: Any) -> dict[str, Any]:
+    """Compact aggregate Smart-local contract for polling/history replay."""
+    raw = _dict(value)
+    if _text(raw.get("schema")) != "smart_local_qualified_v1":
+        return {}
+    output: dict[str, Any] = {"schema": "smart_local_qualified_v1"}
+    status = _text(raw.get("status")).lower()
+    if status in {"ready", "shortfall"}:
+        output["status"] = status
+    for key in ("qualified_count", "returned_count", "shortfall", "evaluated_count"):
+        number = _safe_non_negative_int(raw.get(key), maximum=100_000)
+        if number is not None:
+            output[key] = number
+    reason = _safe_public_code(raw.get("shortfall_reason"), limit=120)
+    if reason:
+        output["shortfall_reason"] = reason
+
+    policy = _dict(raw.get("policy"))
+    safe_policy: dict[str, Any] = {}
+    for key in ("target_count", "candidate_limit", "min_followers", "fresh_priority_days", "max_video_age_days"):
+        number = _safe_non_negative_int(policy.get(key), maximum=5_000_000_000)
+        if number is not None:
+            safe_policy[key] = number
+    for key in ("server_owned", "allow_unknown_followers", "allow_unknown_or_stale_video", "allow_unknown_market", "allow_low_quality_backfill", "canonical_dedupe"):
+        if isinstance(policy.get(key), bool):
+            safe_policy[key] = policy[key]
+    safe_policy["market"] = _safe_public_code(policy.get("market"), limit=40)
+    safe_policy["platforms"] = [
+        platform
+        for entry in _list(policy.get("platforms"))[:8]
+        if (platform := _safe_public_code(entry, limit=40))
+    ]
+    output["policy"] = safe_policy
+
+    for source_key in ("funnel", "rejected_by_reason"):
+        safe_counts: dict[str, int] = {}
+        for key, value in list(_dict(raw.get(source_key)).items())[:32]:
+            safe_key = _safe_public_code(key, limit=80)
+            number = _safe_non_negative_int(value, maximum=100_000)
+            if safe_key and number is not None:
+                safe_counts[safe_key] = number
+        output[source_key] = safe_counts
+
+    stage_timing = _dict(raw.get("stage_timing"))
+    safe_timing: dict[str, float] = {}
+    for key, value in list(stage_timing.items())[:16]:
+        safe_key = _safe_public_code(key, limit=80)
+        number = _safe_non_negative_float(value, maximum=86_400_000)
+        if safe_key and number is not None:
+            safe_timing[safe_key] = number
+    if safe_timing:
+        output["stage_timing"] = safe_timing
+
+    ratio = _dict(raw.get("ratio_policy"))
+    safe_ratio: dict[str, Any] = {}
+    policy_name = _safe_public_code(ratio.get("policy"), limit=40)
+    if policy_name:
+        safe_ratio["policy"] = policy_name
+    for key in ("creator_target", "reviewer_target", "unused_quota_backfilled"):
+        number = _safe_non_negative_int(ratio.get(key), maximum=100_000)
+        if number is not None:
+            safe_ratio[key] = number
+    if safe_ratio:
+        output["ratio_policy"] = safe_ratio
+    scope = _safe_public_code(raw.get("gate_evidence_scope"), limit=80)
+    if scope:
+        output["gate_evidence_scope"] = scope
+    return output
+
+
 def _safe_candidate_distribution(value: Any) -> dict[str, Any]:
     raw = _dict(value)
     if raw.get("claim_status") != "descriptive_only":
@@ -438,6 +601,16 @@ def attach_url_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]
 def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
     from app.domains.kol.search_sessions import record_items
 
+    # Smart-local results may be attached by internal callers as well as the
+    # HTTP/worker orchestration.  Re-apply its boundary projection here so raw
+    # profile/contact values cannot enter durable session history.
+    local_contract = _dict(result.get("local_qualification"))
+    if _text(local_contract.get("schema")) == "smart_local_qualified_v1":
+        from app.domains.kol.profile_recall_qualification import project_smart_local_result
+
+        result = project_smart_local_result(result)
+        local_contract = _dict(result.get("local_qualification"))
+
     items: list[dict[str, Any]] = []
     query = _dict(result.get("query"))
     query_text = _text(query.get("query_text") or result.get("query"))
@@ -446,9 +619,11 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
     allowed_terms.update(query_evidence_terms(" ".join(_text(term) for term in required_product_terms)))
     source_items, replay_source, source_count = _recall_source_items(result)
     replay_complete = replay_source == "canonical_items" and len(source_items) == source_count
-    for rank, raw in enumerate(source_items, start=1):
+    for server_rank, raw in enumerate(source_items, start=1):
         bucket_name = _text(raw.get("bucket")) or "unknown"
-        kol_pool_id = _int_or_none(raw.get("kol_pool_id") if raw.get("kol_pool_id") is not None else raw.get("id"))
+        kol_pool_id = _int_or_none(
+            raw.get("kol_pool_id") if raw.get("kol_pool_id") is not None else raw.get("id")
+        )
         source_url = project_public_profile_url(raw.get("profile_url") or raw.get("url"))
         payload = _recall_session_payload(
             raw,
@@ -460,22 +635,33 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
         # evidence stored beside it; never persist a free-form upstream reason.
         legacy_why_fit = payload.pop("why_fit", None)
         payload.pop("evidence", None)
-        match_evidence = _safe_match_evidence(raw.get("match_evidence"), allowed_terms=allowed_terms)
+        match_evidence = _safe_match_evidence(
+            raw.get("match_evidence"),
+            allowed_terms=allowed_terms,
+        )
         candidate_facets = _safe_candidate_facets(raw.get("candidate_facets"))
+        qualification_evidence = _safe_gate_evidence(
+            raw.get("qualification_evidence"),
+            allowed_terms=allowed_terms,
+        )
+        payload["server_rank"] = server_rank
+        payload["global_rank"] = server_rank
         if match_evidence:
             payload["match_evidence"] = match_evidence
             payload["why_fit"] = why_fit_from_match_evidence(match_evidence)
         elif safe_why_fit := _safe_plan_text(legacy_why_fit, limit=1000):
             payload["why_fit"] = safe_why_fit
-        if len(candidate_facets) == len(_FACET_NAMES):
+        if candidate_facets:
             payload["candidate_facets"] = candidate_facets
+        if qualification_evidence:
+            payload["qualification_evidence"] = qualification_evidence
         items.append(
             {
-                "dedupe_key": f"recall:{kol_pool_id or source_url or rank}",
+                "dedupe_key": f"recall:{kol_pool_id or source_url or server_rank}",
                 "item_type": "recall_candidate",
                 "status": "matched",
                 "stage": "identified",
-                "rank": rank,
+                "rank": server_rank,
                 "score": _first_recall_score(raw),
                 "kol_pool_id": kol_pool_id,
                 "source_url": source_url,
@@ -487,6 +673,8 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
     summary = {
         "kind": "kol_recall",
         "method": result.get("method"),
+        "recall_snapshot_attached": True,
+        "recall_snapshot_complete": True,
         "items_written": len(items),
         "diagnostics": result.get("diagnostics"),
         "query": result.get("query"),
@@ -507,12 +695,15 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
     match_status = _text(result.get("match_status")).lower()
     distribution = _safe_candidate_distribution(result.get("candidate_set_distribution"))
     llm_query_plan = _safe_llm_query_plan(result.get("llm_query_plan"))
+    local_qualification = _safe_local_qualification(local_contract)
     if match_status in {"matched", "empty"}:
         summary["match_status"] = match_status
     if distribution:
         summary["candidate_set_distribution"] = distribution
     if llm_query_plan:
         summary["llm_query_plan"] = llm_query_plan
+    if local_qualification:
+        summary["local_qualification"] = local_qualification
     if pipeline_running:
         summary.update({"phase": "base", "progress": pipeline_progress})
     return record_items(
@@ -521,8 +712,6 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
         status="running" if pipeline_running else "ready",
         summary=summary,
     )
-
-
 def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
     """Attach platform-discovery candidates to an existing smart-search session."""
     from app.domains.kol.search_sessions import get_session, record_items

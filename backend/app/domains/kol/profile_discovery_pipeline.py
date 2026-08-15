@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.domains.kol import profile_recall, search_sessions
+from app.domains.kol import profile_recall, profile_recall_qualification, search_sessions
 from app.domains.kol.discovery_filters import _annotate_new_priority, _int, _text
 from app.domains.kol.profile_discovery_candidates import (
     explicit_platforms_from_query,
@@ -12,6 +12,7 @@ from app.domains.kol.profile_discovery_candidates import (
     resolve_market_constraint,
 )
 from app.domains.kol.profile_discovery_provider import discover_new_creators
+from app.domains.kol.profile_recall_match_evidence import query_evidence_terms
 from app.domains.kol.profile_discovery_session import (
     _profile_advance_pipeline_status,
     advance_search_session_items,
@@ -70,6 +71,23 @@ async def execute_smart_search_profile_advance_pipeline(
             _plan_source = "provider_free_guard_fallback"
         if _text(_guard_plan.get("status")) == "needs_clarification":
             _plan = _guard_plan
+        else:
+            guard_query = _text(_guard_plan.get("search_query"))
+            guard_terms = set(query_evidence_terms(guard_query))
+            rich_terms = set(query_evidence_terms(_plan.get("search_query")))
+            # A fluent but wrong-specific rich plan is more dangerous than a
+            # generic plan: even partial overlap (for example lens/fashion)
+            # must not drop a catalog-required anchor such as review.  The
+            # rich plan is usable only when it preserves every guard term.
+            if guard_terms and not guard_terms.issubset(rich_terms):
+                _plan = {
+                    **_plan,
+                    "search_query": guard_query,
+                    "evidence_anchor_source": "provider_free_guard",
+                }
+                _plan_source = f"{_plan_source}_with_guard_anchors"
+            elif not rich_terms:
+                _plan = _sqp._require_evidence_anchor(_guard_plan)
         if _text(_plan.get("status")) == "needs_clarification":
             clarification_contract = completion_contract(
                 base_count=0,
@@ -149,14 +167,8 @@ async def execute_smart_search_profile_advance_pipeline(
     recall_result = profile_recall.recall_kol_profiles(
         query_text=query,
         product_sku=_text(payload.get("product_sku")),
-        candidate_limit=max(1, min(_int(payload.get("candidate_limit"), 100), 500)),
-        limit=max(
-            1,
-            min(
-                _int(payload.get("result_limit") or payload.get("candidate_count") or payload.get("limit"), 30),
-                50,
-            ),
-        ),
+        candidate_limit=profile_recall_qualification.SMART_LOCAL_CANDIDATE_LIMIT,
+        limit=profile_recall_qualification.SMART_LOCAL_TARGET,
         creator_quota=max(0, min(_int(payload.get("creator_quota"), 15), 50)),
         reviewer_quota=max(0, min(_int(payload.get("reviewer_quota"), 15), 50)),
         ratio_policy=_text(payload.get("ratio_policy") or "soft"),
@@ -176,6 +188,10 @@ async def execute_smart_search_profile_advance_pipeline(
         allow_backfill=False,
         operator_query_text=operator_query,
         required_product_evidence_terms=payload.get("resolved_product"),
+        local_qualification_policy=profile_recall_qualification.smart_local_policy(
+            market=normalized_market,
+            platforms=resolved_platforms,
+        ),
     )
     recall_result = filter_recall_result_platforms(
         recall_result,
@@ -185,6 +201,7 @@ async def execute_smart_search_profile_advance_pipeline(
         recall_result,
         normalized_market,
     )
+    recall_result = profile_recall_qualification.project_smart_local_result(recall_result)
     if isinstance(payload.get("llm_query_plan"), dict):
         recall_result["llm_query_plan"] = payload["llm_query_plan"]
     recall_items = recall_result.get("items") if isinstance(recall_result.get("items"), list) else []
@@ -192,7 +209,16 @@ async def execute_smart_search_profile_advance_pipeline(
     recall_count = len(recall_items) or sum(
         len(items) for items in recall_buckets.values() if isinstance(items, list)
     )
-    advance_limit = max(1, min(_int(payload.get("advance_limit") or payload.get("profile_advance_limit"), 15), 15))
+    smart_local_30 = payload.get("_smart_local_30_contract") is True
+    advance_cap = profile_recall_qualification.SMART_LOCAL_TARGET if smart_local_30 else 15
+    advance_default = profile_recall_qualification.SMART_LOCAL_TARGET if smart_local_30 else 15
+    advance_limit = max(
+        1,
+        min(
+            _int(payload.get("advance_limit") or payload.get("profile_advance_limit"), advance_default),
+            advance_cap,
+        ),
+    )
     recall_total = min(recall_count, advance_limit)
     recall_contract = completion_contract(
         base_count=recall_count,
@@ -280,6 +306,7 @@ async def execute_smart_search_profile_advance_pipeline(
 
     advance_result = advance_search_session_items(
         session_id=int(session_id),
+        smart_local_contract=smart_local_30,
         body={
             **payload,
             "execute": True,
@@ -407,6 +434,7 @@ async def execute_smart_search_profile_advance_pipeline(
             "method": recall_result.get("method"),
             "returned_count": len(recall_result.get("items") or []),
             "diagnostics": recall_result.get("diagnostics"),
+            "local_qualification": recall_result.get("local_qualification"),
             "search_session": recall_session,
         },
         "new_discovery": new_discovery,

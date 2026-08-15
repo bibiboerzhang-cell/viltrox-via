@@ -45,7 +45,19 @@ class _FakeCursor:
         return self.row
 
 
-def test_enqueue_smart_search_profile_advance_records_session_job_without_provider_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("body", "expected_advance_limit", "expected_smart_local"),
+    [
+        ({}, 15, False),
+        ({"advance_limit": 30, "local_qualification_spec": {"version": "local_30_v1", "target_count": 30}}, 30, True),
+    ],
+)
+def test_enqueue_smart_search_profile_advance_records_session_job_without_provider_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    body: dict[str, Any],
+    expected_advance_limit: int,
+    expected_smart_local: bool,
+) -> None:
     conn = _FakeConn()
     summary_updates: list[dict[str, Any]] = []
 
@@ -69,7 +81,7 @@ def test_enqueue_smart_search_profile_advance_records_session_job_without_provid
 
     result = profile_discovery.enqueue_smart_search_profile_advance(
         query_text="找适合闪光灯的 KOL",
-        body={},
+        body=body,
         staff={"id": 42},
     )
 
@@ -90,7 +102,8 @@ def test_enqueue_smart_search_profile_advance_records_session_job_without_provid
     assert payload["reviewer_quota"] == 15
     assert payload["include_new_discovery"] is True
     assert payload["new_discovery_limit"] == 15
-    assert payload["advance_limit"] == 15
+    assert payload["advance_limit"] == expected_advance_limit
+    assert payload["_smart_local_30_contract"] is expected_smart_local
     assert payload["max_posts"] == 12
     assert payload["advance_mode"] == "account_deep"
     assert payload["item_types"] == ["new_creator", "existing_kol", "recall_candidate"]
@@ -99,7 +112,7 @@ def test_enqueue_smart_search_profile_advance_records_session_job_without_provid
     assert summary_updates[0]["session_id"] == 123
     job_summary = summary_updates[0]["summary_patch"]["smart_search_profile_advance_job"]
     assert job_summary["status"] == "queued"
-    assert job_summary["advance_limit"] == 15
+    assert job_summary["advance_limit"] == expected_advance_limit
     assert job_summary["advance_mode"] == "account_deep"
     assert job_summary["viltrox_fit_score_untouched"] is True
 

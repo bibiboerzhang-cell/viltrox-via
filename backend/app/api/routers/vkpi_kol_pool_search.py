@@ -15,6 +15,7 @@ from app.core.logging import get_logger
 from app.api.dependencies.perms import require_tab
 from app.domains.audit.decorator import audit_action
 import app.domains.kol.profile_recall as kol_profile_recall
+import app.domains.kol.profile_recall_qualification as kol_profile_recall_qualification
 import app.domains.kol.search_sessions as kol_search_sessions
 import app.domains.kol.smart_query_planner as kol_smart_query_planner
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
@@ -737,12 +738,6 @@ async def smart_kol_search(
         ):
             if body.get(filter_key) not in (None, "") and filter_key not in recall_filters:
                 recall_filters[filter_key] = body.get(filter_key)
-        result_limit = int(
-            body.get("result_limit")
-            or body.get("candidate_count")
-            or body.get("limit")
-            or kol_profile_recall.DEFAULT_RESULT_LIMIT
-        )
         resolved_product = (
             llm_query_plan.get("resolved_product")
             if isinstance(llm_query_plan.get("resolved_product"), dict)
@@ -752,8 +747,8 @@ async def smart_kol_search(
             kol_profile_recall.recall_kol_profiles,
             query_text=effective_query,
             product_sku=str(body.get("product_sku") or ""),
-            candidate_limit=int(body.get("candidate_limit") or 100),
-            limit=result_limit,
+            candidate_limit=kol_profile_recall_qualification.SMART_LOCAL_CANDIDATE_LIMIT,
+            limit=kol_profile_recall_qualification.SMART_LOCAL_TARGET,
             creator_quota=int(body.get("creator_quota") or llm_query_plan.get("creator_quota") or 15),
             reviewer_quota=int(body.get("reviewer_quota") or llm_query_plan.get("reviewer_quota") or 15),
             ratio_policy=str(body.get("ratio_policy") or "soft"),
@@ -782,6 +777,10 @@ async def smart_kol_search(
             allow_backfill=False,
             operator_query_text=recall_query,
             required_product_evidence_terms=resolved_product,
+            local_qualification_policy=kol_profile_recall_qualification.smart_local_policy(
+                market=explicit_market,
+                platforms=explicit_platforms,
+            ),
         )
         result = kol_profile_discovery.filter_recall_result_platforms(
             result,
@@ -792,6 +791,7 @@ async def smart_kol_search(
             explicit_market,
         )
         result.setdefault("query", {})["explicit_operator_platforms"] = explicit_query_platforms
+        result = kol_profile_recall_qualification.project_smart_local_result(result)
         result["llm_query_plan"] = llm_query_plan
         result["original_query_text"] = recall_query
         result["effective_query_text"] = effective_query

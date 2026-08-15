@@ -23,11 +23,11 @@ export function sessionItems(session: VkpiKolSearchHistoryItem): Row[] {
 }
 
 export function recallResultFromSession(session: VkpiKolSearchHistoryItem): VkpiKolRecallResponse {
-  const creator: VkpiKolRecallItem[] = [];
-  const reviewer: VkpiKolRecallItem[] = [];
+  const ranked: Array<{ rank: number; item: VkpiKolRecallItem }> = [];
   sessionItems(session).forEach((item) => {
     if (cleanText(item.item_type) !== "recall_candidate") return;
     const payload = asRecord(item.payload);
+    const gateFollowers = asRecord(asRecord(payload.qualification_evidence).followers);
     const bucket: "creator" | "reviewer" = cleanText(payload.bucket) === "reviewer" ? "reviewer" : "creator";
     const matchEvidence = recallMatchEvidence(payload.match_evidence);
     const row = {
@@ -37,7 +37,7 @@ export function recallResultFromSession(session: VkpiKolSearchHistoryItem): Vkpi
       display_name: cleanText(payload.display_name || payload.channel_name || payload.handle),
       platform: cleanText(payload.platform),
       profile_type: display(payload.profile_type || item.item_type, "creator"),
-      followers: Number(payload.followers || 0) || null,
+      followers: Number(payload.followers ?? gateFollowers.value ?? 0) || null,
       avatar_url: cleanText(payload.avatar_url),
       profile_url: cleanText(item.source_url || payload.profile_url || payload.source_url || payload.channel_url),
       recall_rank_score: Number(item.score ?? payload.recall_rank_score ?? payload.vector_score ?? 0),
@@ -50,6 +50,9 @@ export function recallResultFromSession(session: VkpiKolSearchHistoryItem): Vkpi
       relevance_tier_hint: cleanText(payload.relevance_tier_hint),
       match_evidence: matchEvidence,
       candidate_facets: recallCandidateFacets(payload.candidate_facets),
+      qualification_evidence: asRecord(payload.qualification_evidence),
+      server_rank: Number(payload.server_rank ?? payload.global_rank ?? item.rank ?? 0) || undefined,
+      global_rank: Number(payload.global_rank ?? payload.server_rank ?? item.rank ?? 0) || undefined,
       type_label: bucket === "reviewer" ? "测评号" : "创作者",
       creator_type_score: bucket === "creator" ? 1 : 0,
       reviewer_type_score: bucket === "reviewer" ? 1 : 0,
@@ -60,9 +63,12 @@ export function recallResultFromSession(session: VkpiKolSearchHistoryItem): Vkpi
       exposure_potential: Number(payload.exposure_potential ?? payload.avg_views ?? 0) || null,
       source_fields: payload,
     } as VkpiKolRecallItem;
-    if (bucket === "reviewer") reviewer.push(row);
-    else creator.push(row);
+    ranked.push({ rank: Number(payload.server_rank ?? payload.global_rank ?? item.rank ?? 0) || Number.MAX_SAFE_INTEGER, item: row });
   });
+  ranked.sort((a, b) => a.rank - b.rank);
+  const ordered = ranked.map((entry) => entry.item);
+  const creator = ordered.filter((item) => item.bucket !== "reviewer");
+  const reviewer = ordered.filter((item) => item.bucket === "reviewer");
   const summary = asRecord(session.result_summary);
   const querySummary = asRecord(summary.query);
   const diagnostics = asRecord(summary.diagnostics);
@@ -77,7 +83,7 @@ export function recallResultFromSession(session: VkpiKolSearchHistoryItem): Vkpi
       mixed_policy: "history",
       dedupe: true,
     },
-    items: [...creator, ...reviewer],
+    items: ordered,
     buckets: { creator, reviewer },
     diagnostics: {
       ...diagnostics,
@@ -88,8 +94,13 @@ export function recallResultFromSession(session: VkpiKolSearchHistoryItem): Vkpi
     },
     match_status: cleanText(summary.match_status),
     candidate_set_distribution: recallCandidateDistribution(summary.candidate_set_distribution),
+    ...(Object.keys(asRecord(summary.local_qualification)).length
+      ? { local_qualification: asRecord(summary.local_qualification) }
+      : {}),
     ...(Object.keys(llmQueryPlan).length ? { llm_query_plan: llmQueryPlan } : {}),
-    snapshot_complete: session.items_snapshot_complete === true || summary.items_snapshot_complete === true,
+    snapshot_complete:
+      (session as unknown as Row).recall_snapshot_complete === true
+      || summary.recall_snapshot_complete === true,
   } satisfies VkpiKolRecallResponse;
 }
 
