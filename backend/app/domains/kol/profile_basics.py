@@ -70,6 +70,7 @@ def write_kol_profile_basics(
     dry_run: bool = True,
     conn: Any | None = None,
     method: str = PROFILE_BASICS_METHOD,
+    commit_write: bool = True,
 ) -> dict[str, Any]:
     """Insert/update profile basics without touching V6 Fit fields.
 
@@ -123,9 +124,11 @@ def write_kol_profile_basics(
             "viltrox_fit_score_changed_ids": [],
             "viltrox_fit_score_untouched": True,
             "method": method,
+            "matched_existing": bool(row),
         }
 
     changed_ids: list[int] = []
+    matched_existing = bool(row)
     try:
         if operation == "update":
             if not planned_values:
@@ -143,6 +146,7 @@ def write_kol_profile_basics(
             # 改法:INSERT 前按 (platform,handle) 快照既有 score;若冲突落到同一既有 id,
             # 用 before==after 比对(仅 score 真变才回滚);若是真新行,保留旧守卫。
             pre_id = _preexisting_pool_id(db, planned_values.get("platform"), planned_values.get("handle"))
+            matched_existing = pre_id is not None
             insert_before_scores = _score_snapshot(db, [pre_id]) if pre_id else {}
             target_id = _execute_insert(db, planned_values)
             after_scores = _score_snapshot(db, [target_id])
@@ -155,11 +159,12 @@ def write_kol_profile_basics(
             _rollback(db)
             raise RuntimeError(f"viltrox_fit_score changed unexpectedly: {changed_ids}")
 
-        _commit(db)
+        if commit_write:
+            _commit(db)
         # 第二道闸(2026-07-12 两粉号案):本次写入含 followers(深爬回填/发现入库都走此口)
         # → 立即重过触达门槛,命中打 low_reach 标(只写 raw_platform_data;推荐面据此不展示)。
         # best-effort 绝不阻断写主流程;懒 import 防循环;零触 viltrox_fit_score。
-        if "followers" in planned_values and target_id:
+        if commit_write and "followers" in planned_values and target_id:
             try:
                 from app.domains.kol.reach_floor_regate import reapply_reach_floor
 
@@ -196,6 +201,7 @@ def write_kol_profile_basics(
             "viltrox_fit_score_changed_ids": [],
             "viltrox_fit_score_untouched": True,
             "method": method,
+            "matched_existing": matched_existing,
         }
     except Exception:
         _rollback(db)

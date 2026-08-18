@@ -1,22 +1,15 @@
-"""backend/app/api/routers/vkpi_kol_pool_search.py
-
-行为不变抽取:vkpi_kol_pool.py 的「智能搜索 / 搜索会话 / 召回 / URL 深爬」端点簇。
-本模块自带一个无 prefix 的 APIRouter;主 router(prefix=/api/admin/vkpi)include 它,
-路径逐字不变。函数体逐字搬运,与原文件行为一致。
-
-红线:零触 viltrox_fit_score;此簇只做编排 / 会话 / 召回。
-"""
+"""KOL smart search, search-session, recall, and URL-crawl routes."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
-
 from app.core.logging import get_logger
 from app.api.dependencies.perms import require_tab
 from app.domains.audit.decorator import audit_action
 import app.domains.kol.profile_recall as kol_profile_recall
 import app.domains.kol.profile_recall_qualification as kol_profile_recall_qualification
 import app.domains.kol.search_sessions as kol_search_sessions
+import app.domains.kol.search_sessions_online as kol_search_sessions_online
 import app.domains.kol.smart_query_planner as kol_smart_query_planner
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
 from app.domains.kol import profile_discovery as kol_profile_discovery
@@ -44,7 +37,6 @@ from app.api.routers.vkpi_kol_pool_search_scope import (
 router = APIRouter(tags=["vkpi-kol-pool"])
 logger = get_logger(__name__)
 
-
 def _service_unavailable(reason: str, operation: str) -> HTTPException:
     return HTTPException(
         status_code=503,
@@ -55,7 +47,6 @@ def _service_unavailable(reason: str, operation: str) -> HTTPException:
             "retryable": True,
         },
     )
-
 
 def _run_url_deep_crawl(
     body: dict,
@@ -372,8 +363,7 @@ def create_project_draft_from_kol_search_session(
 ) -> dict:
     """R2:从已批准的搜索会话一键建项目草案(discovery)+ 挂选中 KOL。
 
-    选人缺省取会话 approved_kol_ids(R1);body 可带 product_positioning/target_persona/
-    project_name/product_sku/product_name/platform/kol_pool_ids 覆盖。占用冲突降级为 warning。
+    选人只取会话 approved_kol_ids(R1);body 只提供项目/产品 brief。占用冲突降级为 warning。
     """
     try:
         kol_search_sessions.require_session_owner(int(session_id), staff=staff)
@@ -419,15 +409,14 @@ def generate_kol_search_session_outreach(
     body: dict = Body(default_factory=dict),
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
-    """R4:为该会话候选(缺省 approved_kol_ids)生成合作话术 + SOW 草案。
+    """R4:只为该会话服务端 approved_kol_ids 生成合作话术 + SOW 草案。
 
     走 llm_gateway(预算闸 + 代理);仅草案——绝不外发、不承诺价格、零触 viltrox_fit_score。
     """
     session = _owned_search_session_or_http(int(session_id), staff)
-    raw_ids = _approved_session_kol_ids(
-        session,
-        body.get("kol_pool_ids") if isinstance(body, dict) else None,
-    )
+    # The server-owned approval snapshot is the only outreach audience.  A
+    # request body must not silently narrow or replace the reviewed set.
+    raw_ids = _approved_session_kol_ids(session, None)
     # brief:body 优先 → 会话内可得 plan → query_text 兜底(与 R2 草案同口径)。
     brief_in = body.get("brief") if isinstance(body.get("brief"), dict) else {}
     input_payload = session.get("input_payload") if isinstance(session.get("input_payload"), dict) else {}
@@ -756,8 +745,8 @@ async def smart_kol_search(
             # User-visible evidence results are canonical units. A request
             # flag must not duplicate one KOL or corrupt the distribution.
             dedupe=True,
-            vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else 0.85),
-            type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else 0.15),
+            vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else kol_profile_recall_qualification.SMART_LOCAL_VECTOR_WEIGHT),
+            type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else kol_profile_recall_qualification.SMART_LOCAL_TYPE_WEIGHT),
             type_boost_enabled=bool(body.get("type_boost_enabled", True)),
             exclude_chinese=bool(body.get("exclude_chinese", True)),
             product_focus=llm_query_plan.get("product_focus"),
@@ -780,6 +769,8 @@ async def smart_kol_search(
             local_qualification_policy=kol_profile_recall_qualification.smart_local_policy(
                 market=explicit_market,
                 platforms=explicit_platforms,
+                languages=body.get("languages") or body.get("content_languages"),
+                profile_types=body.get("profile_types") or body.get("kol_types"),
             ),
         )
         result = kol_profile_discovery.filter_recall_result_platforms(
@@ -805,6 +796,12 @@ async def smart_kol_search(
         include_new_discovery = bool(body.get("include_new_discovery") or body.get("include_discovery"))
         execute_new_discovery = bool(body.get("execute_new_discovery"))
         if include_new_discovery:
+            online_spec = body.get("online_qualification_spec")
+            strict_online_30 = bool(
+                isinstance(online_spec, dict)
+                and str(online_spec.get("version") or "") == "online_net_new_30_v1"
+                and str(online_spec.get("target_count") or "") == "30"
+            )
             discovery_limit = int(body.get("new_discovery_limit") or body.get("discovery_limit") or 15)
             discovery_platforms = (
                 body.get("new_discovery_platforms")
@@ -832,6 +829,11 @@ async def smart_kol_search(
                     "job_id": queued.get("job_id") or (queued.get("job") or {}).get("id"),
                     "progressive": True,
                     "provider_calls_performed": False,
+                    **({
+                        "online_qualification": kol_search_sessions_online.queued_online_qualification(
+                            queued.get("status") or "queued"
+                        )
+                    } if strict_online_30 else {}),
                 }
             else:
                 discovery_payload = kol_profile_discovery.discovery_plan(

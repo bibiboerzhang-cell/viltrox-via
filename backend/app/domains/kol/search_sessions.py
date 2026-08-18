@@ -15,7 +15,6 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.domains.kol.pool_common import _mask_email
 from app.domains.kol.contact_access import mask_contact_payload
 from app.domains.kol.profile_recall_match_evidence import candidate_set_distribution_from_items
 
@@ -26,6 +25,8 @@ from app.domains.kol.search_sessions_serde import (
     ITEM_STATUSES,
     SESSION_QUERY_TYPES,
     SESSION_STATUSES,
+    _compact_audience_preview,
+    _compact_contact_preview,
     _compact_flow,
     _compact_video_batch_flow,
     _dict,
@@ -40,6 +41,9 @@ from app.domains.kol.search_sessions_serde import (
     _normalize_status,
     _row_to_item,
     _row_to_session,
+    _sanitize_session_input_payload,
+    _sanitize_session_payload,
+    _sanitize_session_value,
     _staff_user_id,
     _text,
 )
@@ -57,6 +61,10 @@ from app.domains.kol.search_sessions_history import (
     archive_history_sessions as _archive_history_sessions,
     list_history as _list_history,
     restore_history_session as _restore_history_session,
+)
+from app.domains.kol.search_sessions_approval import approve_session as _approve_session
+from app.domains.kol.search_sessions_online import (
+    attach_online_qualified_result as _attach_online_qualified_result,
 )
 from app.domains.kol.search_sessions_items import (
     _update_session as _update_session_impl,
@@ -370,9 +378,37 @@ def _refresh_visible_recall_summary(session: dict[str, Any], items: list[dict[st
         summary["diagnostics"] = diagnostics
         summary["match_status"] = "matched" if canonical else "empty"
         summary["candidate_set_distribution"] = candidate_set_distribution_from_items(canonical)
+        local_qualification = _dict(summary.get("local_qualification"))
+        if _text(local_qualification.get("schema")) == "smart_local_qualified_v2":
+            visible_count = len(canonical)
+            policy = _dict(local_qualification.get("policy"))
+            target = _int_or_none(policy.get("target_count")) or 30
+            local_qualification.update(
+                {
+                    "status": "ready" if visible_count >= target else "shortfall",
+                    "qualified_count": visible_count,
+                    "returned_count": visible_count,
+                    "shortfall": max(0, target - visible_count),
+                    "shortfall_reason": (
+                        "" if visible_count >= target else "visible_qualified_candidates_exhausted"
+                    ),
+                }
+            )
+            funnel = _dict(local_qualification.get("funnel"))
+            funnel["qualified"] = visible_count
+            funnel["returned"] = visible_count
+            local_qualification["funnel"] = funnel
+            summary["local_qualification"] = local_qualification
     session["result_summary"] = summary
     session["items_snapshot_complete"] = True
     session["recall_snapshot_complete"] = recall_snapshot_complete
+    online = _dict(summary.get("online_qualification"))
+    online_snapshot_complete = bool(
+        _text(online.get("schema")) == "smart_online_net_new_qualified_v1"
+        and online.get("server_owned") is True
+        and online.get("snapshot_complete") is True
+    )
+    session["online_snapshot_complete"] = online_snapshot_complete
 
 
 def create_session(
@@ -385,6 +421,8 @@ def create_session(
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     conn = get_conn()
+    safe_query = _sanitize_session_value(_text(query_text)[:500])
+    safe_source = _sanitize_session_value(_text(source)[:160])
     row = conn.execute(
         """
         INSERT INTO vkpi_kol_search_sessions
@@ -393,12 +431,12 @@ def create_session(
         RETURNING *
         """,
         (
-            _text(query_text),
+            safe_query if isinstance(safe_query, str) else "",
             _normalize_query_type(query_type),
-            _text(source) or "smart_kol_input",
+            safe_source if isinstance(safe_source, str) and safe_source else "smart_kol_input",
             _normalize_status(status),
             _staff_user_id(staff),
-            _json_dumps(input_payload or {}),
+            _json_dumps(_sanitize_session_input_payload(input_payload or {})),
         ),
     ).fetchone()
     conn.commit()
@@ -591,20 +629,19 @@ def get_session(
                     if isinstance(_channels, (dict, list)):
                         _contact_count += len(_channels)
                     _contact_ready = bool(_email or _contact_count)
-                    it["payload"]["contact_preview"] = {
-                        "status": _enrichment_preview_status(
-                            it,
-                            "contact_enrichment",
-                            ready=_contact_ready,
-                        ),
-                        "email": _mask_email(_email),
-                        "channel_count": _contact_count,
-                        "contact_masked": True,
-                        "async": not _contact_ready,
-                    }
+                    it["payload"]["contact_preview"] = _compact_contact_preview(
+                        {
+                            "status": _enrichment_preview_status(
+                                it,
+                                "contact_enrichment",
+                                ready=_contact_ready,
+                            ),
+                            "channel_count": _contact_count,
+                        }
+                    )
                     _audience = _loads(_profile.get("audience_estimated_json"), {})
                     _audience_ready = isinstance(_audience, dict) and bool(_audience)
-                    it["payload"]["audience_preview"] = {
+                    it["payload"]["audience_preview"] = _compact_audience_preview({
                         "status": _enrichment_preview_status(
                             it,
                             "audience_enrichment",
@@ -614,29 +651,32 @@ def get_session(
                         "confidence": _audience.get("confidence") if isinstance(_audience, dict) else None,
                         "sample_size": _audience.get("sample_size") if isinstance(_audience, dict) else None,
                         "async": not _audience_ready,
-                    }
+                    })
         except Exception:
             logger.warning("search_sessions.profile_preview_backfill_failed", exc_info=True)
     for item in items:
         payload = item.get("payload") if isinstance(item.get("payload"), dict) else None
         if payload is None:
             continue
-        if not isinstance(payload.get("contact_preview"), dict):
-            payload["contact_preview"] = {
-                "status": _enrichment_preview_status(item, "contact_enrichment", ready=False),
-                "email": "",
-                "channel_count": 0,
-                "contact_masked": True,
-                "async": True,
-            }
+        if not isinstance(payload.get("contact_preview"), dict) or not payload["contact_preview"]:
+            payload["contact_preview"] = _compact_contact_preview(
+                {
+                    "status": _enrichment_preview_status(
+                        item,
+                        "contact_enrichment",
+                        ready=False,
+                    ),
+                    "channel_count": 0,
+                }
+            )
         if not isinstance(payload.get("audience_preview"), dict):
-            payload["audience_preview"] = {
+            payload["audience_preview"] = _compact_audience_preview({
                 "status": _enrichment_preview_status(item, "audience_enrichment", ready=False),
                 "method": "",
                 "confidence": None,
                 "sample_size": None,
                 "async": True,
-            }
+            })
     _attach_progress_contract(
         session,
         items,
@@ -657,7 +697,9 @@ def get_session(
         session["result_summary"] = summary
     for item in items:
         if isinstance(item.get("payload"), dict):
-            item["payload"] = mask_contact_payload(item["payload"])
+            item["payload"] = mask_contact_payload(
+                _sanitize_session_payload(item["payload"])
+            )
     session["items"] = items
     session["count"] = len(items)
     session["item_count"] = len(items)
@@ -709,126 +751,13 @@ def approve_session(
     kol_pool_ids: list[Any],
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """R1:人审锁定当前员工会话里的候选 KOL → 写 approved_kol_ids。
-
-    只接受属于本会话候选集合且真实存在的 kol_pool_id;去重保序;replace 语义。全网新发现
-    会话项虽然按设计保持 kol_pool_id=NULL,但可按 payload 的 platform/handle 反查本次自动入池行,
-    因而无需放宽到整个 KOL Pool。
-    审计落 result_summary_json.approval(谁/何时/接受几个/跳过几个)。绝不写 vkpi_kol_pool /
-    viltrox_fit_score / rule_v0,只读池做存在性校验 + 写本会话 approved_kol_ids + summary 两处。
-    """
-    conn = get_conn()
-    actor_id = _staff_user_id(staff)
-    if not actor_id:
-        raise LookupError(f"search session not found: {session_id}")
-    row = conn.execute(
-        "SELECT * FROM vkpi_kol_search_sessions WHERE id=? AND created_by=?",
-        (int(session_id), actor_id),
-    ).fetchone()
-    if not row:
-        raise LookupError(f"search session not found: {session_id}")
-
-    requested: list[int] = []
-    seen: set[int] = set()
-    for raw in _list(kol_pool_ids):
-        parsed = _int_or_none(raw)
-        if parsed and parsed not in seen:
-            seen.add(parsed)
-            requested.append(parsed)
-
-    candidate_rows = conn.execute(
-        """
-        SELECT kol_pool_id, payload_json
-        FROM vkpi_kol_search_session_items
-        WHERE session_id=?
-        """,
-        (int(session_id),),
-    ).fetchall()
-    direct_ids: set[int] = set()
-    candidate_pairs: set[tuple[str, str]] = set()
-    for candidate_row in candidate_rows:
-        data = dict(candidate_row)
-        direct = _int_or_none(data.get("kol_pool_id"))
-        if direct:
-            direct_ids.add(direct)
-        payload = _loads(data.get("payload_json"), {})
-        if not isinstance(payload, dict):
-            continue
-        profile_execute = _dict(payload.get("profile_execute"))
-        for value in (
-            payload.get("kol_pool_id"),
-            payload.get("matched_kol_pool_id"),
-            profile_execute.get("kol_pool_id"),
-        ):
-            parsed = _int_or_none(value)
-            if parsed:
-                direct_ids.add(parsed)
-        platform = _text(payload.get("platform")).lower()
-        handle = _text(payload.get("handle") or payload.get("channel_name")).lstrip("@").lower()
-        if platform and handle:
-            candidate_pairs.add((platform, handle))
-
-    valid_ids: set[int] = set()
-    if direct_ids:
-        placeholders = ",".join("?" for _ in direct_ids)
-        pool_rows = conn.execute(
-            f"SELECT id FROM vkpi_kol_pool WHERE id IN ({placeholders})",
-            tuple(sorted(direct_ids)),
-        ).fetchall()
-        valid_ids.update(int(dict(item)["id"]) for item in pool_rows if dict(item).get("id"))
-    if candidate_pairs:
-        pair_clauses = " OR ".join(
-            ["(LOWER(platform)=? AND LOWER(LTRIM(handle, '@'))=?)"] * len(candidate_pairs)
-        )
-        pair_params: list[Any] = []
-        for platform, handle in sorted(candidate_pairs):
-            pair_params.extend([platform, handle])
-        pair_rows = conn.execute(
-            f"SELECT id FROM vkpi_kol_pool WHERE {pair_clauses}",
-            tuple(pair_params),
-        ).fetchall()
-        valid_ids.update(int(dict(item)["id"]) for item in pair_rows if dict(item).get("id"))
-
-    rejected = [kid for kid in requested if kid not in valid_ids]
-    if rejected:
-        raise ValueError(
-            "kol_pool_ids must belong to this search session's candidates: "
-            + ",".join(str(kid) for kid in rejected)
-        )
-    accepted = list(requested)
-
-    # 审计合并进 result_summary_json.approval(沿用既有 jsonb 合并;不另加列)。
-    summary = _loads(dict(row).get("result_summary_json"), {})
-    if not isinstance(summary, dict):
-        summary = {}
-    approved_at = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-    summary["approval"] = {
-        "approved_kol_ids": accepted,
-        "approved_count": len(accepted),
-        "skipped_not_in_session": [],
-        "approved_by": _staff_user_id(staff),
-        "approved_at": approved_at,
-        "viltrox_fit_score_untouched": True,
-    }
-
-    updated = conn.execute(
-        """
-        UPDATE vkpi_kol_search_sessions
-        SET approved_kol_ids=?::jsonb,
-            result_summary_json=?::jsonb,
-            updated_at=NOW()
-        WHERE id=? AND created_by=?
-        RETURNING *
-        """,
-        (_json_dumps(accepted), _json_dumps(summary), int(session_id), actor_id),
-    ).fetchone()
-    if not updated:
-        raise LookupError(f"search session not found: {session_id}")
-    conn.commit()
-    session = _row_to_session(updated)
-    session["approved_count"] = len(accepted)
-    session["skipped_not_in_session"] = []
-    return session
+    """Replace this owned session's approvals with eligible recall candidates only."""
+    return _approve_session(
+        int(session_id),
+        kol_pool_ids=kol_pool_ids,
+        staff=staff,
+        get_conn_fn=get_conn,
+    )
 
 
 def update_session_result_summary(
@@ -864,6 +793,7 @@ def update_session_result_summary(
             summary["llm_query_plan"] = safe_plan
         else:
             summary.pop("llm_query_plan", None)
+    summary = _sanitize_session_payload(summary)
     updated = conn.execute(
         """
         UPDATE vkpi_kol_search_sessions
@@ -957,6 +887,18 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
         recorded["status"] = updated.get("status") or "running"
         return recorded
     return _persist_attached_status(int(session_id), recorded, status=desired, result_state=state)
+
+
+def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
+    recorded = _attach_online_qualified_result(int(session_id), result)
+    if bool(result.get("_session_pipeline_running")):
+        updated = update_session_result_summary(
+            int(session_id),
+            status="running",
+            summary_patch={"phase": "base", "online_qualification": recorded.get("online_qualification")},
+        )
+        recorded["status"] = updated.get("status") or "running"
+    return recorded
 
 
 def attach_url_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:

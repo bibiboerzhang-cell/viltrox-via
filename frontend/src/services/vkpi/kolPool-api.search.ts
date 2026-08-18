@@ -74,6 +74,8 @@ export async function smartKolSearch(
     excludeChinese?: boolean;
     market?: string;
     platforms?: string[];
+    languages?: string[];
+    profileTypes?: string[];
     localQualificationSpec?: Row;
     timeoutMs?: number;
   } = {},
@@ -102,6 +104,8 @@ export async function smartKolSearch(
   if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
   if (params.market) body.market = params.market;
   if (params.platforms?.length) body.platforms = params.platforms;
+  if (params.languages?.length) body.languages = params.languages;
+  if (params.profileTypes?.length) body.profile_types = params.profileTypes;
   if (params.localQualificationSpec) body.local_qualification_spec = params.localQualificationSpec;
   return apiFetch<VkpiKolSmartSearchResponse>(
     "/api/admin/vkpi/kol-smart-search",
@@ -144,7 +148,11 @@ export async function smartKolSearchProfileAdvanceJob(
     newDiscoveryPlatforms?: string[];
     excludeChinese?: boolean;
     market?: string;
+    languages?: string[];
+    profileTypes?: string[];
     localQualificationSpec?: Row;
+    onlineQualificationSpec?: Row;
+    sessionId?: number;
     timeoutMs?: number;
   } = {},
 ): Promise<VkpiKolSmartSearchProfileAdvanceResponse> {
@@ -154,9 +162,13 @@ export async function smartKolSearchProfileAdvanceJob(
     include_new_discovery: params.includeNewDiscovery ?? true,
   };
   if (params.newDiscoveryPlatforms?.length) body.new_discovery_platforms = params.newDiscoveryPlatforms;
-  // 区域语言本地化:目标市场码(JP/KR/DE/...)→ 后端按该区语言搜平台;空=全球英文。
+  // 目标市场与内容语言独立传递；未选择语言时不附 languages，不从国家码推断。
   if (params.market) body.market = params.market;
+  if (params.languages?.length) body.languages = params.languages;
+  if (params.profileTypes?.length) body.profile_types = params.profileTypes;
   if (params.localQualificationSpec) body.local_qualification_spec = params.localQualificationSpec;
+  if (params.onlineQualificationSpec) body.online_qualification_spec = params.onlineQualificationSpec;
+  if (typeof params.sessionId === "number" && params.sessionId > 0) body.session_id = params.sessionId;
   if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
   if (typeof params.candidateLimit === "number") body.candidate_limit = params.candidateLimit;
   if (typeof params.limit === "number") body.limit = params.limit;
@@ -304,7 +316,6 @@ export async function createProjectDraftFromSession(
   token: string,
   sessionId: string | number,
   params: {
-    kolPoolIds?: number[];
     projectName?: string;
     productSku?: string;
     productName?: string;
@@ -314,7 +325,6 @@ export async function createProjectDraftFromSession(
   } = {},
 ): Promise<Row> {
   const body: Row = {};
-  if (Array.isArray(params.kolPoolIds) && params.kolPoolIds.length) body.kol_pool_ids = params.kolPoolIds;
   if (params.projectName) body.project_name = params.projectName;
   if (params.productSku) body.product_sku = params.productSku;
   if (params.productName) body.product_name = params.productName;
@@ -331,10 +341,9 @@ export async function createProjectDraftFromSession(
 export async function generateKolSearchSessionOutreach(
   token: string,
   sessionId: string | number,
-  params: { kolPoolIds?: number[]; productPositioning?: string; targetPersona?: string; productName?: string } = {},
+  params: { productPositioning?: string; targetPersona?: string; productName?: string } = {},
 ): Promise<Row> {
   const body: Row = {};
-  if (Array.isArray(params.kolPoolIds) && params.kolPoolIds.length) body.kol_pool_ids = params.kolPoolIds;
   if (params.productPositioning) body.product_positioning = params.productPositioning;
   if (params.targetPersona) body.target_persona = params.targetPersona;
   if (params.productName) body.product_name = params.productName;

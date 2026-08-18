@@ -339,6 +339,19 @@ function mergeAuthoritativeSearchSnapshotItems(previous: Row[], incoming: Row[])
   });
 }
 
+function onlineSnapshotRevision(session: VkpiKolSearchHistoryItem | null): number {
+  const contract = asRecord(asRecord(session?.result_summary).online_qualification);
+  if (cleanText(contract.schema) !== "smart_online_net_new_qualified_v1") return 0;
+  const revision = Number(contract.snapshot_revision);
+  return Number.isInteger(revision) && revision > 0 ? revision : 0;
+}
+
+function preservePreviousOnlineLane(previous: Row[], merged: Row[]): Row[] {
+  const notOnline = merged.filter((item) => cleanText(item.item_type) !== "online_qualified_candidate");
+  const previousOnline = previous.filter((item) => cleanText(item.item_type) === "online_qualified_candidate");
+  return [...notOnline, ...previousOnline];
+}
+
 /** Keep the richest version of every KOL while still accepting fresh phase/count metadata. */
 export function mergeKolSearchSessionSnapshots(
   previous: VkpiKolSearchHistoryItem | null,
@@ -347,19 +360,30 @@ export function mergeKolSearchSessionSnapshots(
   if (!previous) return incoming;
   const merged = mergeSearchSnapshotRecord(previous as Row, incoming as Row) as VkpiKolSearchHistoryItem;
   const authoritative = incoming.items_snapshot_complete === true;
+  const previousOnlineRevision = onlineSnapshotRevision(previous);
+  const incomingOnlineRevision = onlineSnapshotRevision(incoming);
+  const staleOnlineSnapshot = previousOnlineRevision > 0 && incomingOnlineRevision < previousOnlineRevision;
   const mergeCollection = (key: "items" | "active_items" | "items_preview") => {
     const previousItems = Array.isArray(previous[key]) ? previous[key]!.map(asRecord) : [];
     const incomingItems = Array.isArray(incoming[key]) ? incoming[key]!.map(asRecord) : [];
     if (!previousItems.length && !incomingItems.length) return;
-    merged[key] = (
+    const nextItems = (
       authoritative
         ? mergeAuthoritativeSearchSnapshotItems(previousItems, incomingItems)
         : mergeSearchSnapshotItems(previousItems, incomingItems)
-    ) as VkpiKolSearchHistoryItem[typeof key];
+    );
+    merged[key] = (staleOnlineSnapshot
+      ? preservePreviousOnlineLane(previousItems, nextItems)
+      : nextItems) as VkpiKolSearchHistoryItem[typeof key];
   };
   mergeCollection("items");
   mergeCollection("active_items");
   mergeCollection("items_preview");
+  if (staleOnlineSnapshot) {
+    const summary = asRecord(merged.result_summary);
+    summary.online_qualification = asRecord(previous.result_summary).online_qualification;
+    merged.result_summary = summary;
+  }
   const mergedVisible = sessionItems(merged).length;
   merged.item_count = authoritative
     ? mergedVisible

@@ -4,11 +4,14 @@
 // 红线:纯展示,绝不写任何 viltrox_fit_score。
 import { FolderPlus, Info, Loader2, MessageSquare, RefreshCw, Sparkles, UserPlus } from "lucide-react";
 
-import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domains/kol";
+import type { VkpiKolRecallItem, VkpiKolRecallResponse, VkpiKolSearchHistoryItem } from "../../../../domains/kol";
 
 import { asRecord, cleanText, display, type Row } from "./SmartKolInputPanel.helpers";
 import { recallDistributionView } from "./SmartKolInputPanel.evidence";
-import { LocalQualifiedList } from "./SmartKolInputPanel.LocalQualifiedList";
+import { localQualifiedSummary } from "./SmartKolInputPanel.LocalQualified";
+import { LocalQualifiedList, StrictQualifiedList } from "./SmartKolInputPanel.LocalQualifiedList";
+import { onlineQualifiedSummaryFromSession } from "./SmartKolInputPanel.OnlineQualified";
+import { SmartKolQualityFilters } from "./SmartKolInputPanel.QualityFilters";
 import { PlanPills, RecallMiniItem } from "./SmartKolInputPanel.Sections";
 import { recallTopItems, type SearchSessionProgress } from "./SmartKolInputPanel.derivers";
 import { ProgressiveSearchStageCard } from "./SmartKolInputPanel.Progress";
@@ -284,8 +287,14 @@ export function recallReturnedCount(result: VkpiKolRecallResponse, items: VkpiKo
   return Number.isInteger(returned) && returned >= 0 ? returned : items.length;
 }
 
+export function nextRequiredPlatformSelection(current: readonly string[], platform: string): string[] {
+  if (current.includes(platform)) return current.length > 1 ? current.filter((value) => value !== platform) : [...current];
+  return [...current, platform];
+}
+
 export function TextResultSection({
   recallResult,
+  searchSession,
   llmPlan,
   discoveryItems,
   discoveryTotal = 0,
@@ -307,6 +316,10 @@ export function TextResultSection({
   setDiscoveryPlatforms,
   discoveryRegion,
   setDiscoveryRegion,
+  contentLanguages,
+  setContentLanguages,
+  kolProfileTypes,
+  setKolProfileTypes,
   excludeChinese,
   setExcludeChinese,
   queueTextAdvance,
@@ -319,14 +332,14 @@ export function TextResultSection({
   addingFav,
   draftBusy,
   outreachBusy,
-  activeSearchSessionId,
+  displayedSearchSessionId,
+  isSessionPolling,
+  resultsStale,
+  approvalReady,
   addPickedToMyKol,
   approveAndCreateDraft,
   generateOutreachForPicked,
-  resolvedPids,
-  resolvingKeys,
   discoveryKey,
-  pickDiscovery,
   onOpenRecallItem,
   sessionBanner,
   sessionProgress,
@@ -335,6 +348,7 @@ export function TextResultSection({
   retrySearchSession,
 }: {
   recallResult: VkpiKolRecallResponse;
+  searchSession: VkpiKolSearchHistoryItem | null;
   llmPlan: Row;
   discoveryItems: any[];
   discoveryTotal?: number;
@@ -362,6 +376,10 @@ export function TextResultSection({
   setDiscoveryPlatforms: (updater: (cur: string[]) => string[]) => void;
   discoveryRegion: string;
   setDiscoveryRegion: (v: string) => void;
+  contentLanguages: string[];
+  setContentLanguages: (v: string[]) => void;
+  kolProfileTypes: string[];
+  setKolProfileTypes: (v: string[]) => void;
   excludeChinese: boolean;
   setExcludeChinese: (v: boolean) => void;
   queueTextAdvance: (overrideQuery?: string) => void;
@@ -374,14 +392,14 @@ export function TextResultSection({
   addingFav: boolean;
   draftBusy: boolean;
   outreachBusy: boolean;
-  activeSearchSessionId: number | null;
+  displayedSearchSessionId: number | null;
+  isSessionPolling: boolean;
+  resultsStale: boolean;
+  approvalReady: boolean;
   addPickedToMyKol: () => void;
   approveAndCreateDraft: () => void;
   generateOutreachForPicked: () => void;
-  resolvedPids: Map<string, number>;
-  resolvingKeys: Set<string>;
   discoveryKey: (item: any) => string;
-  pickDiscovery: (item: any) => void;
   onOpenRecallItem?: (item: VkpiKolRecallItem) => void;
   sessionBanner: SessionBanner;
   sessionProgress: SearchSessionProgress;
@@ -397,6 +415,17 @@ export function TextResultSection({
   const discoveryGrandTotal = discoveryTotal + hiddenDiscovery;
   const recallItems = recallTopItems(recallResult);
   const distribution = recallDistributionView(recallResult.candidate_set_distribution);
+  const localStrict = localQualifiedSummary(recallResult);
+  const onlineStrict = onlineQualifiedSummaryFromSession(searchSession);
+  const totalStrictUnique = Math.min(60, localStrict.uniqueQualified + onlineStrict.uniqueQualified);
+  const onlineStats = [
+    onlineStrict.contractValid ? `${onlineStrict.selectionReady ? "终态" : "增量中"} r${onlineStrict.snapshotRevision}` : "",
+    onlineStrict.duplicateLocal > 0 ? `与本地重复 ${onlineStrict.duplicateLocal}` : "",
+    onlineStrict.duplicateOnline > 0 ? `联网内重复 ${onlineStrict.duplicateOnline}` : "",
+    onlineStrict.duplicateLocalInventory > 0 ? `池内已有 ${onlineStrict.duplicateLocalInventory}` : "",
+    onlineStrict.evaluated > 0 ? `已核验 ${onlineStrict.evaluated}` : "",
+    onlineStrict.providerRounds > 0 ? `来源轮次 ${onlineStrict.providerRounds}` : "",
+  ].filter(Boolean);
   const resolvedProductSku = resolvedProductSkuFromPlan(llmPlan);
   const recallCounts = recallDisplayCounts(recallItems, (recallResult.diagnostics || {}) as Row);
   const openProductScopedItem = (item: VkpiKolRecallItem) => {
@@ -450,18 +479,60 @@ export function TextResultSection({
         )}
       </div>
 
-      {/* 框2 · 库内账号匹配 */}
+      {/* 框2 · 本地 + 联网两条严格通道，共用选择与审批动作。 */}
       <div className="rounded-lg border border-violet-300/15 bg-violet-950/[0.10] p-3">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-[11px] font-medium text-violet-100">② 本地合格名单 · 首批先显示</div>
+          <div className="text-[11px] font-medium text-violet-100">② 严格合格名单 · 本地先显示，联网按排名追加</div>
           <div className="flex flex-wrap gap-1.5 text-[10px] text-slate-500">
-            <span className="rounded-md border border-white/[0.07] px-2 py-1">创作者 {recallCounts.creator}</span>
-            <span className="rounded-md border border-white/[0.07] px-2 py-1">测评号 {recallCounts.reviewer}</span>
+            <span className="rounded-md border border-white/[0.07] px-2 py-1">本地创作者 {recallCounts.creator}</span>
+            <span className="rounded-md border border-white/[0.07] px-2 py-1">本地测评号 {recallCounts.reviewer}</span>
           </div>
         </div>
+        <div className="mb-2 flex flex-wrap items-center gap-1.5 rounded-lg border border-cyan-300/20 bg-cyan-400/[0.05] px-2.5 py-2 text-[10px]" data-testid="strict-60-counter">
+          <span className="font-semibold text-violet-100">严格 60 名单</span>
+          <span className="rounded border border-violet-300/20 px-2 py-0.5 text-violet-100">本地 {localStrict.uniqueQualified}/30</span>
+          <span className="rounded border border-emerald-300/20 px-2 py-0.5 text-emerald-100">联网净新增 {onlineStrict.uniqueQualified}/30</span>
+          <span className="rounded border border-cyan-300/25 bg-cyan-400/[0.08] px-2 py-0.5 font-medium text-cyan-100">唯一 {totalStrictUnique}/60</span>
+          {!onlineStrict.contractValid ? <span className="text-amber-200/80">联网严格合同待回填，未计入</span> : null}
+        </div>
+        <div className="mb-2">
+          <SmartKolQualityFilters
+            languages={contentLanguages}
+            profileTypes={kolProfileTypes}
+            onLanguagesChange={setContentLanguages}
+            onProfileTypesChange={setKolProfileTypes}
+          />
+          <div className="mt-1 text-[9px] text-slate-600">改选后点下方“重新全网查找”；本地与联网名单都会按新硬闸重算。</div>
+        </div>
+        {resultsStale ? (
+          <div className="mb-2 rounded-md border border-amber-300/25 bg-amber-400/[0.08] px-2.5 py-1.5 text-[10px] text-amber-100">
+            搜索条件已变更：下方是上一轮结果，仅供参考且不可批准。点“重新全网查找”后按新条件重算。
+          </div>
+        ) : isSessionPolling ? (
+          <div className="mb-2 rounded-md border border-cyan-300/20 bg-cyan-400/[0.06] px-2.5 py-1.5 text-[10px] text-cyan-100/90">
+            新一轮仍在补全与验收；可以先勾选已通过行，批准动作会在本轮终态后开放。
+          </div>
+        ) : null}
         <SearchFilterDiagnostics diagnostics={(recallResult.diagnostics || {}) as Row} />
         <SearchEvaluationStatus evaluation={asRecord(recallResult.evaluation_status)} />
-        <LocalQualifiedList result={recallResult} onOpen={openProductScopedItem} />
+        <LocalQualifiedList
+          result={recallResult}
+          onOpen={openProductScopedItem}
+          selectedIds={pickedIds}
+          onSelectionChange={setPickedIds}
+          selectionDisabled={resultsStale}
+        />
+        <div className="my-2 border-t border-emerald-300/10 pt-2 text-[10px] font-medium text-emerald-100">联网严格净新增名单</div>
+        <StrictQualifiedList
+          summary={onlineStrict}
+          lane="online"
+          extraStats={onlineStats}
+          onOpen={openProductScopedItem}
+          selectedIds={pickedIds}
+          onSelectionChange={setPickedIds}
+          selectionDisabled={resultsStale}
+          selectionReady={onlineStrict.selectionReady}
+        />
         {distribution ? (
           <div className="mt-2 rounded-md border border-cyan-300/15 bg-cyan-400/[0.04] px-2.5 py-2">
             <div className="flex flex-wrap items-center justify-between gap-1.5 text-[9.5px] text-slate-400">
@@ -491,14 +562,14 @@ export function TextResultSection({
         ) : null}
       </div>
 
-      {/* 框3 · 全网发现(Apify+平台,带头像)· 优先新人主源,描边更亮 */}
+      {/* 框3 · 普通 provider 候选仅供观察；未进入联网严格合同前不计数、不可选择。 */}
       <div className="rounded-lg border border-emerald-300/30 bg-emerald-950/[0.16] p-3 ring-1 ring-emerald-300/10">
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-1.5">
             <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/30 bg-emerald-400/[0.12] px-1.5 py-0.5 text-[8.5px] font-semibold text-emerald-100">
-              <UserPlus size={9} /> 优先新人
+              <UserPlus size={9} /> 候选池
             </span>
-            <div className="text-[11px] font-semibold text-emerald-100">③ 全网新发现的人{discoveryItems.length ? ` · ${discoveryItems.length} 个` : ""}</div>
+            <div className="text-[11px] font-semibold text-emerald-100">③ 联网待验收候选（不计入严格 30）{discoveryItems.length ? ` · ${discoveryItems.length} 个` : ""}</div>
           </div>
           <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/25 bg-emerald-400/[0.1] px-1.5 py-0.5 text-[9px] font-medium text-emerald-200/90" title="任何文字搜索都自动从所选平台发现新号,无需手点">
             <Sparkles size={9} /> 自动·恒开
@@ -549,53 +620,39 @@ export function TextResultSection({
             { k: "youtube", t: "YouTube" },
             { k: "instagram", t: "Instagram" },
             { k: "tiktok", t: "TikTok" },
-            { k: "facebook", t: "Facebook", tip: "Facebook 发现(可选):勾选后下次查找才参与,不勾选不搜(不进默认平台轮转)" },
-          ] as { k: string; t: string; tip?: string }[]).map((p) => {
+            { k: "facebook", t: "Facebook · 暂不支持严格30", strictDisabled: true, tip: "普通发现仍保留 Facebook；当前严格联网 30 仅支持 YouTube、Instagram、TikTok" },
+          ] as { k: string; t: string; tip?: string; strictDisabled?: boolean }[]).map((p) => {
             const on = discoveryPlatforms.includes(p.k);
+            const disabled = p.strictDisabled || (on && discoveryPlatforms.length === 1);
             return (
               <button
                 key={p.k}
                 type="button"
-                title={p.tip}
-                onClick={() => setDiscoveryPlatforms((cur) => (on ? cur.filter((x) => x !== p.k) : [...cur, p.k]))}
-                className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors ${on ? "border-cyan-300/40 bg-cyan-400/[0.12] text-cyan-100" : "border-white/[0.08] text-slate-500 hover:border-white/[0.16]"}`}
+                disabled={disabled}
+                title={p.strictDisabled ? p.tip : on && discoveryPlatforms.length === 1 ? "至少保留一个发现平台" : p.tip}
+                onClick={() => setDiscoveryPlatforms((cur) => nextRequiredPlatformSelection(cur, p.k))}
+                className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-55 ${on ? "border-cyan-300/40 bg-cyan-400/[0.12] text-cyan-100" : "border-white/[0.08] text-slate-500 hover:border-white/[0.16]"}`}
               >{p.t}</button>
             );
           })}
-          <span className="ml-1 text-[10px] text-slate-500">区域</span>
+          <span className="ml-1 text-[10px] text-slate-500">目标市场</span>
           <select
             value={discoveryRegion}
             onChange={(event) => setDiscoveryRegion(event.target.value)}
-            title="目标市场:选非英语区会按该区语言搜平台、捞本地达人(改区域后点「重新全网查找」重搜生效)"
+            title="只限定目标市场，不会自动推断内容语言；内容语言请在上方独立选择"
             className="rounded-md border border-white/[0.1] bg-black/30 px-1.5 py-0.5 text-[10px] text-slate-200 focus:border-cyan-400/40 focus:outline-none"
           >
             {[
-              { v: "", t: "全球·英文" },
-              { v: "US", t: "美国·英语" },
-              { v: "UK", t: "英国·英语" },
-              { v: "CA", t: "加拿大·英语" },
-              { v: "AU", t: "澳大利亚·英语" },
-              { v: "JP", t: "日本·日语" },
-              { v: "KR", t: "韩国·韩语" },
-              { v: "DE", t: "德国·德语" },
-              { v: "FR", t: "法国·法语" },
-              { v: "ES", t: "西班牙·西语" },
-              { v: "MX", t: "墨西哥·西语" },
-              { v: "IT", t: "意大利·意语" },
-              { v: "BR", t: "巴西·葡语" },
-              { v: "PT", t: "葡萄牙·葡语" },
-              { v: "RU", t: "俄罗斯·俄语" },
-              { v: "TH", t: "泰国·泰语" },
-              { v: "VN", t: "越南·越语" },
-              { v: "ID", t: "印尼·印尼语" },
-              { v: "TR", t: "土耳其·土语" },
-              { v: "PL", t: "波兰·波语" },
-              { v: "NL", t: "荷兰·荷语" },
-              { v: "SA", t: "沙特·阿语" },
-              { v: "AE", t: "阿联酋·阿语" },
-              { v: "IN", t: "印度·英语" },
-              { v: "SG", t: "新加坡·英语" },
-              { v: "NZ", t: "新西兰·英语" },
+              { v: "", t: "全球（不限定市场）" },
+              { v: "US", t: "美国" }, { v: "UK", t: "英国" }, { v: "CA", t: "加拿大" },
+              { v: "AU", t: "澳大利亚" }, { v: "JP", t: "日本" }, { v: "KR", t: "韩国" },
+              { v: "DE", t: "德国" }, { v: "FR", t: "法国" }, { v: "ES", t: "西班牙" },
+              { v: "MX", t: "墨西哥" }, { v: "IT", t: "意大利" }, { v: "BR", t: "巴西" },
+              { v: "PT", t: "葡萄牙" }, { v: "RU", t: "俄罗斯" }, { v: "TH", t: "泰国" },
+              { v: "VN", t: "越南" }, { v: "ID", t: "印度尼西亚" }, { v: "TR", t: "土耳其" },
+              { v: "PL", t: "波兰" }, { v: "NL", t: "荷兰" }, { v: "SA", t: "沙特阿拉伯" },
+              { v: "AE", t: "阿联酋" }, { v: "IN", t: "印度" }, { v: "SG", t: "新加坡" },
+              { v: "NZ", t: "新西兰" },
             ].map((o) => (
               <option key={o.v} value={o.v} className="bg-slate-900 text-slate-100">{o.t}</option>
             ))}
@@ -619,11 +676,11 @@ export function TextResultSection({
             <div className="flex flex-wrap items-center gap-2">
               {pickedIds.size > 0 ? (
                 <>
-                  <span className="text-[10.5px] font-medium text-emerald-100">已选 {pickedIds.size} 人</span>
+                  <span className="text-[10.5px] font-medium text-emerald-100">严格合格已选 {pickedIds.size} 人</span>
                   <button
                     type="button"
                     onClick={() => void addPickedToMyKol()}
-                    disabled={addingFav || !apiToken}
+                    disabled={addingFav || !apiToken || resultsStale}
                     className="inline-flex items-center gap-1 rounded border border-emerald-300/35 bg-emerald-500/[0.2] px-2 py-0.5 text-[10px] font-medium text-emerald-50 transition-colors hover:bg-emerald-500/[0.32] disabled:opacity-50"
                   >
                     {addingFav ? <Loader2 size={11} className="animate-spin" /> : <UserPlus size={11} />} 加入我的 MY KOL
@@ -632,8 +689,8 @@ export function TextResultSection({
                   <button
                     type="button"
                     onClick={() => void approveAndCreateDraft()}
-                    disabled={draftBusy || !apiToken || !activeSearchSessionId}
-                    title={activeSearchSessionId ? "批准选中候选并据此建项目草案(带预算/风险)" : "需先有搜索会话"}
+                    disabled={draftBusy || !apiToken || !approvalReady}
+                    title={approvalReady ? "批准选中候选并据此建项目草案(带预算/风险)" : resultsStale ? "搜索条件已变更，需先重算" : isSessionPolling ? "本轮仍在补全，终态后可批准" : displayedSearchSessionId ? "当前结果尚不可批准" : "需先有搜索会话"}
                     className="inline-flex items-center gap-1 rounded border border-sky-300/35 bg-sky-500/[0.2] px-2 py-0.5 text-[10px] font-medium text-sky-50 transition-colors hover:bg-sky-500/[0.32] disabled:opacity-50"
                   >
                     {draftBusy ? <Loader2 size={11} className="animate-spin" /> : <FolderPlus size={11} />} 批准并建草案
@@ -642,8 +699,8 @@ export function TextResultSection({
                   <button
                     type="button"
                     onClick={() => void generateOutreachForPicked()}
-                    disabled={outreachBusy || !apiToken || !activeSearchSessionId}
-                    title={activeSearchSessionId ? "为选中候选生成合作话术 + SOW 草案(人审后手动外发)" : "需先有搜索会话"}
+                    disabled={outreachBusy || !apiToken || !approvalReady}
+                    title={approvalReady ? "为选中候选生成合作话术 + SOW 草案(人审后手动外发)" : resultsStale ? "搜索条件已变更，需先重算" : isSessionPolling ? "本轮仍在补全，终态后可生成" : displayedSearchSessionId ? "当前结果尚不可生成" : "需先有搜索会话"}
                     className="inline-flex items-center gap-1 rounded border border-violet-300/35 bg-violet-500/[0.2] px-2 py-0.5 text-[10px] font-medium text-violet-50 transition-colors hover:bg-violet-500/[0.32] disabled:opacity-50"
                   >
                     {outreachBusy ? <Loader2 size={11} className="animate-spin" /> : <MessageSquare size={11} />} 生成话术
@@ -689,25 +746,15 @@ export function TextResultSection({
             items={discoveryItems as VkpiKolRecallItem[]}
             renderItem={(item, index) => {
               const key = discoveryKey(item);
-              const effPid = Number(item.kol_pool_id) || resolvedPids.get(key) || 0;
-              const picked = effPid > 0 && pickedIds.has(effPid);
-              const resolving = resolvingKeys.has(key);
               // 重复卡修:渲染 key 用「平台:handle」身份键(pool id 回填不换 key,不再裂成两张卡)。
               return (
-                <div key={`d-${key || item.kol_pool_id || index}`} className="relative h-full">
-                  <RecallMiniItem item={item} index={index + 1} onOpen={openProductScopedItem} className="pr-6" />
-                  <button
-                    type="button"
-                    disabled={resolving}
-                    onClick={(event) => { event.stopPropagation(); void pickDiscovery(item); }}
-                    title={picked ? "已选 · 点击取消" : "勾选 → 一键加入我的 MY KOL"}
-                    className={`absolute right-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded border text-[10px] font-bold leading-none transition-colors ${picked ? "border-emerald-300/60 bg-emerald-500/90 text-white" : "border-white/25 bg-black/55 text-transparent hover:border-emerald-300/45 hover:text-emerald-200/60"}`}
-                  >{resolving ? <Loader2 size={11} className="animate-spin text-emerald-200" /> : "✓"}</button>
+                <div key={`d-${key || item.kol_pool_id || index}`} className="h-full">
+                  <RecallMiniItem item={item} index={index + 1} onOpen={openProductScopedItem} />
                 </div>
               );
             }}
           />
-        ) : activeSearchSessionId ? (
+        ) : isSessionPolling ? (
           <div className="flex items-center gap-1.5 rounded-md border border-emerald-300/15 bg-black/15 px-2.5 py-2 text-[10.5px] text-emerald-100/80">
             <Loader2 size={12} className="animate-spin" /> 正在从所选平台找新号，完成后自动显示
           </div>

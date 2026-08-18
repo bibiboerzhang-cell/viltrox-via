@@ -96,7 +96,7 @@ describe("SmartKolInputPanel explainable recall history", () => {
 
   it("restores the Smart-local proof and global server order across bucket types", () => {
     const proof = {
-      schema: "smart_local_gate_evidence_v1",
+      schema: "smart_local_gate_evidence_v2",
       passed: true,
       activity: { posted_at: "2026-08-10T00:00:00+00:00", passed: true },
       market: { value: "us", target: "us", passed: true },
@@ -106,7 +106,7 @@ describe("SmartKolInputPanel explainable recall history", () => {
       query_text: "US YouTube 35mm",
       result_summary: {
         local_qualification: {
-          schema: "smart_local_qualified_v1",
+          schema: "smart_local_qualified_v2",
           status: "shortfall",
           returned_count: 2,
           qualified_count: 2,
@@ -198,6 +198,35 @@ describe("SmartKolInputPanel progressive search snapshots", () => {
     expect(merged.items?.[0].payload).toMatchObject({ bio: "rich bio" });
     expect(merged.result_summary).toMatchObject({
       smart_search_profile_advance_job: { status: "partial", advance_counts: { ready: 1, partial: 14 } },
+    });
+  });
+
+  it("does not let an older online revision erase accepted rows or local recall", () => {
+    const local = { id: 1, item_type: "recall_candidate", kol_pool_id: 10, payload: { handle: "local" } };
+    const online = { id: 2, item_type: "online_qualified_candidate", kol_pool_id: 20, payload: { handle: "online", snapshot_revision: 4 } };
+    const previous = {
+      id: 7,
+      items_snapshot_complete: true,
+      items: [local, online],
+      result_summary: {
+        online_qualification: { schema: "smart_online_net_new_qualified_v1", snapshot_revision: 4, net_new_accepted_count: 1 },
+      },
+    } as unknown as VkpiKolSearchHistoryItem;
+    const incoming = {
+      id: 7,
+      items_snapshot_complete: true,
+      items: [{ ...local, payload: { handle: "local", followers: 9000 } }],
+      result_summary: {
+        online_qualification: { schema: "smart_online_net_new_qualified_v1", snapshot_revision: 3, net_new_accepted_count: 0 },
+      },
+    } as unknown as VkpiKolSearchHistoryItem;
+
+    const merged = mergeKolSearchSessionSnapshots(previous, incoming);
+    expect(merged.items?.map((item) => item.item_type)).toEqual(["recall_candidate", "online_qualified_candidate"]);
+    expect((merged.items?.[0].payload as any).followers).toBe(9000);
+    expect((merged.result_summary as any).online_qualification).toMatchObject({
+      snapshot_revision: 4,
+      net_new_accepted_count: 1,
     });
   });
 

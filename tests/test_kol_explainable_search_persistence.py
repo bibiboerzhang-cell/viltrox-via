@@ -29,6 +29,15 @@ class _RecallPersistenceConn:
         self.commits = 0
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Cursor:
+        if "DELETE FROM vkpi_kol_search_session_items" in sql:
+            retained = set(params[1:]) if "dedupe_key NOT IN" in sql else set()
+            self.items[:] = [
+                item
+                for item in self.items
+                if item.get("item_type") != "recall_candidate"
+                or item.get("dedupe_key") in retained
+            ]
+            return _Cursor([])
         assert "SELECT id FROM vkpi_kol_search_sessions" in sql
         assert params == (self.session_id,)
         return _Cursor([{"id": self.session_id}])
@@ -238,12 +247,15 @@ def test_smart_local_session_persists_global_rank_and_safe_qualification_roundtr
 
     monkeypatch.setattr(search_sessions, "record_items", record_items)
     proof = {
-        "schema": "smart_local_gate_evidence_v1",
+        "schema": "smart_local_gate_evidence_v2",
         "passed": True,
         "rejection_reasons": [],
+        "account_quality": {"verdict": "eligible_creator_account", "passed": True, "source": "existing_discovery_classifiers"},
         "followers": {"value": 12_000, "minimum": 3_000, "known": True, "passed": True, "source": "vkpi_kol_pool.followers"},
         "activity": {"posted_at": "2026-08-10T00:00:00+00:00", "age_days": 5, "fresh_priority": True, "maximum_age_days": 45, "passed": True, "source": "vkpi_kol_video_evidence.posted_at"},
         "market": {"value": "us", "target": "us", "method": "explicit_country", "confidence": 1, "source": "vkpi_kol_pool.country", "passed": True},
+        "language": {"values": ["en"], "targets": [], "filter_requested": False, "passed": True, "source": "vkpi_kol_profiles.language"},
+        "profile_type": {"values": ["creator"], "targets": [], "filter_requested": False, "passed": True, "source": "vkpi_kol_profile_embeddings.profile_type"},
         "platform": {"value": "youtube", "targets": ["youtube"], "passed": True, "source": "vkpi_kol_pool.platform"},
         "relevance": {"passed": True, "evidence": [{"field": "bio", "term": "35mm", "source": "server_profile_evidence"}], "source": "field_level_match_evidence"},
         "email": "private@example.test",
@@ -263,9 +275,9 @@ def test_smart_local_session_persists_global_rank_and_safe_qualification_roundtr
         "recall_rank_score": 0.8,
     }
     local_contract = {
-        "schema": "smart_local_qualified_v1",
+        "schema": "smart_local_qualified_v2",
         "status": "shortfall",
-        "policy": {"target_count": 30, "candidate_limit": 500, "min_followers": 3000, "server_owned": True, "platforms": ["youtube"], "market": "us"},
+        "policy": {"policy_version": 2, "target_count": 30, "candidate_limit": 500, "min_followers": 3000, "server_owned": True, "platforms": ["youtube"], "market": "us"},
         "qualified_count": 2,
         "returned_count": 2,
         "shortfall": 28,
@@ -320,6 +332,39 @@ def test_recall_snapshot_becomes_authoritative_only_after_worker_attach() -> Non
     assert worker_attached_then_reach_gated_empty["recall_snapshot_complete"] is True
     assert worker_attached_then_reach_gated_empty["result_summary"]["match_status"] == "empty"
     assert worker_attached_then_reach_gated_empty["result_summary"]["diagnostics"]["returned_count"] == 0
+
+
+def test_visible_recall_rows_recompute_strict_v2_counts_after_read_time_gate() -> None:
+    session = {
+        "query_type": "text_recall",
+        "result_summary": {
+            "kind": "kol_recall",
+            "recall_snapshot_attached": True,
+            "local_qualification": {
+                "schema": "smart_local_qualified_v2",
+                "policy": {"policy_version": 2, "server_owned": True, "target_count": 30},
+                "status": "ready",
+                "qualified_count": 30,
+                "returned_count": 30,
+                "shortfall": 0,
+                "funnel": {"qualified": 30, "returned": 30},
+            },
+        },
+    }
+    visible = [{
+        "id": 1,
+        "item_type": "recall_candidate",
+        "kol_pool_id": 7,
+        "payload": {"bucket": "creator", "candidate_facets": {"platform": "youtube"}},
+    }]
+    search_sessions._refresh_visible_recall_summary(session, visible)
+    contract = session["result_summary"]["local_qualification"]
+    assert contract["qualified_count"] == 1
+    assert contract["returned_count"] == 1
+    assert contract["shortfall"] == 29
+    assert contract["status"] == "shortfall"
+    assert contract["funnel"]["qualified"] == 1
+    assert contract["funnel"]["returned"] == 1
 
 
 @pytest.mark.parametrize(

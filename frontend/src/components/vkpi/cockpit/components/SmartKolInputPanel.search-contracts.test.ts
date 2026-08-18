@@ -191,7 +191,7 @@ describe("SmartKolInputPanel authoritative polling snapshots", () => {
       items: previewItems,
       buckets: { creator: previewItems, reviewer: [] },
       diagnostics: { returned_count: 4 },
-      local_qualification: { schema: "smart_local_qualified_v1", qualified_count: 4, returned_count: 4 },
+      local_qualification: { schema: "smart_local_qualified_v2", qualified_count: 4, returned_count: 4 },
     };
     const queued = recallResultFromSession({
       id: 786,
@@ -231,7 +231,7 @@ describe("SmartKolInputPanel authoritative polling snapshots", () => {
         recall_snapshot_complete: true,
         match_status: "empty",
         local_qualification: {
-          schema: "smart_local_qualified_v1",
+          schema: "smart_local_qualified_v2",
           qualified_count: 0,
           returned_count: 0,
         },

@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.domains.kol import profile_recall, profile_recall_qualification, search_sessions
+from app.domains.kol import (
+    profile_online_qualification,
+    profile_recall,
+    profile_recall_qualification,
+    search_sessions,
+)
 from app.domains.kol.discovery_filters import _annotate_new_priority, _int, _text
 from app.domains.kol.profile_discovery_candidates import (
     explicit_platforms_from_query,
@@ -174,8 +179,8 @@ async def execute_smart_search_profile_advance_pipeline(
         ratio_policy=_text(payload.get("ratio_policy") or "soft"),
         mixed_policy=_text(payload.get("mixed_policy") or "dominant"),
         dedupe=True,
-        vector_weight=float(payload.get("vector_weight") if payload.get("vector_weight") is not None else 0.7),
-        type_weight=float(payload.get("type_weight") if payload.get("type_weight") is not None else 0.3),
+        vector_weight=float(payload.get("vector_weight") if payload.get("vector_weight") is not None else profile_recall_qualification.SMART_LOCAL_VECTOR_WEIGHT),
+        type_weight=float(payload.get("type_weight") if payload.get("type_weight") is not None else profile_recall_qualification.SMART_LOCAL_TYPE_WEIGHT),
         type_boost_enabled=bool(payload.get("type_boost_enabled", True)),
         exclude_chinese=bool(payload.get("exclude_chinese", True)),
         product_focus=payload.get("product_focus"),
@@ -191,6 +196,8 @@ async def execute_smart_search_profile_advance_pipeline(
         local_qualification_policy=profile_recall_qualification.smart_local_policy(
             market=normalized_market,
             platforms=resolved_platforms,
+            languages=payload.get("languages") or payload.get("content_languages"),
+            profile_types=payload.get("profile_types") or payload.get("kol_types"),
         ),
     )
     recall_result = filter_recall_result_platforms(
@@ -257,23 +264,83 @@ async def execute_smart_search_profile_advance_pipeline(
                 _persona_kb = _product_persona_kb.get_product_persona(_sku) or {}
             except Exception:
                 _persona_kb = {}
-        new_discovery = await discover_new_creators(
-            query_text=query,
-            platforms=resolved_platforms,
-            platform_hint=_text(payload.get("platform")),
-            market=normalized_market,
-            limit=max(1, min(_int(payload.get("new_discovery_limit"), 15), 50)),
-            per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 15), 50)),
-            search_query_en=query,  # pipeline 入参 query 已是 effective_query(planner 英文 search_query;失效退 rule_v0 英文兜底)
-            product_focus=payload.get("product_focus"),
-            ideal_creator_types=_persona_kb.get("ideal_creator_types_json"),
-            verticals=_persona_kb.get("verticals_json"),
-            avoid_types=_persona_kb.get("avoid_types_json"),
-            target_persona=_text(payload.get("target_persona")),
-        )
-        # 收口路①-4:新人优先展示信号(新发现/低合作/成长期加权,饱和大号降位)。纯展示透出,
-        # 绝不写 viltrox_fit_score / 不改 rule_v0;注解后再 attach(库内召回的 display_rank_score 已在 recall 侧产出)。
-        new_discovery = _annotate_new_priority(new_discovery)
+        strict_online_30 = payload.get("_smart_online_30_contract") is True
+        discovery_kwargs = {
+            "query_text": query,
+            "platforms": resolved_platforms,
+            "platform_hint": _text(payload.get("platform")),
+            "market": normalized_market,
+            "exclude_chinese": bool(payload.get("exclude_chinese", True)),
+            "search_query_en": query,
+            "product_focus": payload.get("product_focus"),
+            "ideal_creator_types": _persona_kb.get("ideal_creator_types_json"),
+            "verticals": _persona_kb.get("verticals_json"),
+            "avoid_types": _persona_kb.get("avoid_types_json"),
+            "target_persona": _text(payload.get("target_persona")),
+        }
+        if strict_online_30:
+            async def _fetch_online_batch(*, round_no: int, limit: int, cursor: Any) -> dict[str, Any]:
+                del cursor
+                if round_no > 1:
+                    return {"status": "empty", "new_creators": [], "provider_calls": False}
+                return await discover_new_creators(
+                    **discovery_kwargs,
+                    limit=max(1, min(limit, 150)),
+                    per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 50), 50)),
+                    auto_enroll=False,
+                )
+
+            online_result = await profile_online_qualification.collect_strict_online_for_session(
+                session_id=int(session_id),
+                query_text=query,
+                policy=profile_online_qualification.online_policy(
+                    market=normalized_market,
+                    platforms=resolved_platforms,
+                    languages=payload.get("languages") or payload.get("content_languages"),
+                    profile_types=payload.get("profile_types") or payload.get("kol_types"),
+                    exclude_chinese=bool(payload.get("exclude_chinese", True)),
+                ),
+                fetch_batch=_fetch_online_batch,
+                candidate_budget=150,
+                max_provider_rounds=1,
+                exhaustion_reason="bounded_provider_batch_exhausted",
+            )
+            # Base strict discovery is intentionally bounded to qualification and
+            # materialization.  It must never fan out into crawler/LLM/contact jobs;
+            # those require a separate, explicit post-approval action and budget.
+            online_result["enrichment_queue"] = {
+                "status": "not_enriched",
+                "async": False,
+                "queued": 0,
+                "already_queued": 0,
+                "failed": 0,
+            }
+            online_result["_session_pipeline_running"] = True
+            search_sessions.attach_online_qualified_result(int(session_id), online_result)
+            online_contract = {key: value for key, value in online_result.items() if key != "items"}
+            new_discovery = {
+                "status": online_result.get("status"),
+                "query": query,
+                "platforms": (
+                    list(resolved_platforms)
+                    if isinstance(resolved_platforms, (list, tuple, set))
+                    else [resolved_platforms] if resolved_platforms else []
+                ),
+                "items": list(online_result.get("items") or []),
+                "new_creators": list(online_result.get("items") or []),
+                "existing_matches": [],
+                "provider_calls": online_result.get("provider_calls_performed"),
+                "online_qualification": online_contract,
+            }
+        else:
+            new_discovery = await discover_new_creators(
+                **discovery_kwargs,
+                limit=max(1, min(_int(payload.get("new_discovery_limit"), 15), 50)),
+                per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 15), 50)),
+            )
+            # 收口路①-4:新人优先展示信号(新发现/低合作/成长期加权,饱和大号降位)。纯展示透出,
+            # 绝不写 viltrox_fit_score / 不改 rule_v0;注解后再 attach(库内召回的 display_rank_score 已在 recall 侧产出)。
+            new_discovery = _annotate_new_priority(new_discovery)
         discovery_count = len(new_discovery.get("existing_matches") or []) + len(new_discovery.get("new_creators") or [])
         if discovery_count <= 0:
             discovery_count = len(new_discovery.get("items") or [])
@@ -287,22 +354,23 @@ async def execute_smart_search_profile_advance_pipeline(
             active_tasks=discovery_total,
             requested_tasks_terminal=False,
         )
-        search_sessions.attach_new_discovery_result(
-            int(session_id),
-            {
-                **new_discovery,
-                "_session_pipeline_running": True,
-                "_session_progress": {
-                    "base": base_count,
-                    "total": discovery_total,
-                    "profile_ready": 0,
-                    "profile_failed": 0,
-                    "complete_ready": 0,
-                    "complete_partial": 0,
-                    **discovery_contract,
+        if not strict_online_30:
+            search_sessions.attach_new_discovery_result(
+                int(session_id),
+                {
+                    **new_discovery,
+                    "_session_pipeline_running": True,
+                    "_session_progress": {
+                        "base": base_count,
+                        "total": discovery_total,
+                        "profile_ready": 0,
+                        "profile_failed": 0,
+                        "complete_ready": 0,
+                        "complete_partial": 0,
+                        **discovery_contract,
+                    },
                 },
-            },
-        )
+            )
 
     advance_result = advance_search_session_items(
         session_id=int(session_id),

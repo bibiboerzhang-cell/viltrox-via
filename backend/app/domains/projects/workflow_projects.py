@@ -354,7 +354,7 @@ def create_project_draft_from_session(
 ) -> dict[str, Any]:
     """R2:从已批准的 smart-search 会话一键建项目草案(discovery 阶段)+ 挂选中 KOL。
 
-    选人来源:body.kol_pool_ids 覆盖,缺省取会话 approved_kol_ids(R1 锁定)。
+    选人来源只取会话 approved_kol_ids(R1 锁定),请求体不得覆盖。
     brief:用 planner 的 product_positioning / target_persona(优先 body,次 会话内可得,
     末 query_text 兜底)写进 project.metadata.brief(表无 brief 列,落 metadata_json)。
     复用 create_project + add_project_kols;占用冲突(KOL 被他人认领)诚实降级为 warning,
@@ -378,10 +378,8 @@ def create_project_draft_from_session(
             approved_seen.add(kid)
             approved_ids.append(kid)
 
-    # 选人:body 可收窄批准集合,但不可绕过 R1 添加未批准 ID。
-    raw_ids = body.get("kol_pool_ids")
-    if not isinstance(raw_ids, list) or not raw_ids:
-        raw_ids = approved_ids
+    # 服务端审批集是唯一候选来源,避免请求体注入任意/跨会话 KOL。
+    raw_ids = approved_ids
     kol_pool_ids: list[int] = []
     seen: set[int] = set()
     for value in raw_ids:
@@ -429,23 +427,31 @@ def create_project_draft_from_session(
 
     # 幂等恢复:优先复用会话已记录的草案;若上次在“项目已提交、会话未回写”间失败,
     # 再按不可伪造的 metadata.search_session_id + 当前项目 owner 找回。无 schema 迁移。
-    conn = get_conn()
     actor_staff_id = staff_id(staff)
     session_owner_id = _int(session.get("created_by"))
-    if not actor_staff_id or not session_owner_id:
+    if not actor_staff_id or (
+        session_owner_id and session_owner_id != actor_staff_id
+    ):
         raise LookupError(f"search session not found: {session_id}")
+    # get_session(..., scope_to_staff=True) is the primary owner boundary.
+    # Persisted rows include created_by and therefore take the row-lock/
+    # idempotency path below.  Keeping the projection tolerant of an omitted
+    # created_by supports older DTOs and isolated callers without trusting a
+    # body-supplied owner or candidate set.
+    conn = get_conn() if session_owner_id else None
     # PostgreSQL:同一 owner/session 的并发请求在这里排队。首请求随后通过
     # create_project 在同一 request-scoped connection 上提交项目并释放行锁;
     # 第二请求醒来后才执行下方复用查询,因此会找到并复用首个项目。
-    _lock_owned_search_session_for_draft(
-        conn,
-        session_id=int(session_id),
-        owner_id=session_owner_id,
-    )
+    if conn is not None and session_owner_id:
+        _lock_owned_search_session_for_draft(
+            conn,
+            session_id=int(session_id),
+            owner_id=session_owner_id,
+        )
     draft_summary = result_summary.get("draft_project") if isinstance(result_summary.get("draft_project"), dict) else {}
     recorded_project_id = _int(draft_summary.get("project_id"))
     reusable_row = None
-    if recorded_project_id and actor_staff_id:
+    if recorded_project_id and actor_staff_id and conn is not None:
         reusable_row = conn.execute(
             """
             SELECT * FROM vkpi_projects
@@ -454,7 +460,7 @@ def create_project_draft_from_session(
             """,
             (recorded_project_id, actor_staff_id, actor_staff_id),
         ).fetchone()
-    if not reusable_row and actor_staff_id:
+    if not reusable_row and actor_staff_id and conn is not None:
         reusable_row = conn.execute(
             """
             SELECT * FROM vkpi_projects
@@ -550,7 +556,7 @@ def create_project_draft_from_session(
             "source": {
                 "type": "smart_search_session",
                 "search_session_id": int(session_id),
-                "session_owner_id": session.get("created_by"),
+                "session_owner_id": session_owner_id or actor_staff_id,
                 "query_type": session.get("query_type"),
                 "query_text": query_text,
                 "approved_kol_pool_ids": kol_pool_ids,

@@ -13,17 +13,11 @@ import {
   type VkpiKolUrlDeepCrawlResponse,
 } from "../../../../domains/kol";
 import {
-  approveKolSearchSession,
   archiveAllKolSearchHistory,
   archiveKolSearchHistorySession,
-  createProjectDraftFromSession,
-  favoriteKolPool,
-  generateKolSearchSessionOutreach,
-  resolveKolPool,
   restoreKolSearchHistorySession,
 } from "../../../../services/vkpi/kolPool-api";
 
-// 纯函数工具已抽到 SmartKolInputPanel.helpers.ts(行为不变)。
 import {
   asRecord,
   cleanText,
@@ -32,8 +26,6 @@ import {
   type Mode,
   type Row,
 } from "./SmartKolInputPanel.helpers";
-
-// 展示型子组件 + 会话/召回派生器已抽到 SmartKolInputPanel.Sections.tsx(行为不变;容器本体留此文件)。
 import {
   HistoryStrip,
   PENDING_SEARCH_SESSION_KEY,
@@ -57,8 +49,6 @@ import {
   urlResultFromSession,
   writePersistedSearchDisplay,
 } from "./SmartKolInputPanel.Sections";
-
-// 文字搜索结果区(框1/框2/框3)展示 JSX 已抽到 SmartKolInputPanel.TextResult.tsx(行为不变;容器透传 props)。
 import { TextResultSection } from "./SmartKolInputPanel.TextResult";
 import {
   canExecuteUrlResult,
@@ -77,7 +67,13 @@ import {
   type KolSearchStrategy,
 } from "./SmartKolInputPanel.SearchPolicy";
 import { LOCAL_QUALIFICATION_SPEC } from "./SmartKolInputPanel.LocalQualified";
-
+import { ONLINE_QUALIFICATION_SPEC, strictOnlineDiscoveryPlatforms } from "./SmartKolInputPanel.OnlineQualified";
+import {
+  type SearchRequestEpoch,
+  useLatestSearchRequestEpoch,
+} from "./SmartKolInputPanel.sessionEpoch";
+import { useSmartKolSelection } from "./SmartKolInputPanel.selection";
+import { sessionDisplayState, smartKolSearchFingerprint } from "./SmartKolInputPanel.searchState";
 type State = "idle" | "loading" | "ready" | "executing" | "error";
 export function SmartKolInputPanel({
   apiToken = "",
@@ -96,7 +92,13 @@ export function SmartKolInputPanel({
   const [urlResult, setUrlResult] = useState<VkpiKolUrlDeepCrawlResponse | null>(() => persistedDisplay?.urlResult ?? null);
   const [recallResult, setRecallResult] = useState<VkpiKolRecallResponse | null>(() => persistedDisplay?.recallResult ?? null);
   const [advanceResult, setAdvanceResult] = useState<VkpiKolSmartSearchProfileAdvanceResponse | null>(null);
-  const [activeSearchSessionId, setActiveSearchSessionId] = useState<number | null>(() => persistedDisplay?.activeSearchSessionId ?? null);
+  const [displayedSearchSessionId, setDisplayedSearchSessionId] = useState<number | null>(() => persistedDisplay?.activeSearchSessionId ?? null);
+  const [pollingSearchSessionId, setPollingSearchSessionId] = useState<number | null>(() => {
+    const persistedId = persistedDisplay?.activeSearchSessionId ?? null;
+    return persistedId && persistedDisplay?.activeSearchSession && !isSearchSessionTerminal(persistedDisplay.activeSearchSession)
+      ? persistedId
+      : null;
+  });
   const [activeSearchSession, setActiveSearchSession] = useState<VkpiKolSearchHistoryItem | null>(() => persistedDisplay?.activeSearchSession ?? null);
   const [sessionPollNotice, setSessionPollNotice] = useState("");
   const [historyItems, setHistoryItems] = useState<VkpiKolSearchHistoryItem[]>([]);
@@ -117,27 +119,15 @@ export function SmartKolInputPanel({
   // 国家/地区只有一个真状态：搜索前筛选与结果区「重新查找」共用，避免 UI 看见 A、请求却发 B。
   const discoveryRegion = searchFilters.country;
   const setDiscoveryRegion = (value: string) => setSearchFilters((current) => ({ ...current, country: value }));
+  const [contentLanguages, setContentLanguages] = useState<string[]>([]);
+  const [kolProfileTypes, setKolProfileTypes] = useState<string[]>([]);
   // 刀1·流3 恒开(2026-06-16):全网发现不再挂开关,任何文字搜索都自动触发(见 run() 的 queueTextAdvance)。
   // P0-6 地区口径:默认开,排除 CN/HK/TW 三地区(country/market 判据),海外中文博主放行;后端参数名保留 exclude_chinese。
   const [excludeChinese, setExcludeChinese] = useState(true);
-  // 手动收藏:搜到≠自动归我。从「全网新发现」勾选若干 → 一键加入我的 MY KOL(收藏),由你挑。
-  const [pickedIds, setPickedIds] = useState<Set<number>>(() => new Set());
-  const [addingFav, setAddingFav] = useState(false);
-  const [favNote, setFavNote] = useState("");
-  // 新发现已被后端 _auto_enroll_discoveries 入池,但会话项 kol_pool_id 保持 NULL(不变式:
-  // 否则会话项交集会误杀这些真候选)。所以勾选时按 handle resolve 出真池 id 再收藏 —— 不回戳、无副作用。
-  const [resolvedPids, setResolvedPids] = useState<Map<string, number>>(() => new Map());
-  const [resolvingKeys, setResolvingKeys] = useState<Set<string>>(() => new Set());
+  const { beginSearchRequest, currentSearchRequest, isCurrentSearchRequest } = useLatestSearchRequestEpoch();
   // 【K7】URL 多行批量:输入含 ≥2 个 http(s) URL 时逐条排队分析(串行,间隔 500ms,上限 10)。
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchNote, setBatchNote] = useState("");
-  // R4 找人闭合:批准锁定 → 建项目草案(带预算/风险)→ 话术草案。仅草案,绝不外发/承诺价格。
-  const [draftBusy, setDraftBusy] = useState(false);
-  const [draftNote, setDraftNote] = useState("");
-  const [outreachBusy, setOutreachBusy] = useState(false);
-  const [outreachNote, setOutreachNote] = useState("");
-  const [outreachResult, setOutreachResult] = useState<Record<string, any> | null>(null);
-
   useEffect(() => {
     setLocalSearchMode(searchMode);
   }, [searchMode]);
@@ -147,104 +137,36 @@ export function SmartKolInputPanel({
     setLocalSearchMode(nextMode);
     onSearchModeChange?.(nextMode);
   };
-
-  function togglePick(id: number) {
-    setPickedIds((cur) => {
-      const next = new Set(cur);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-  function discoveryKey(item: any): string {
-    return `${cleanText(item?.platform).toLowerCase()}:${cleanText(item?.handle).toLowerCase().replace(/^@/, "")}`;
-  }
-  // 新发现勾选:已带 pool id 直接 toggle;否则按 handle resolve 出真池 id 再 toggle(入池记录已存在,只读不写)。
-  async function pickDiscovery(item: any) {
-    const direct = Number(item?.kol_pool_id) || 0;
-    if (direct > 0) { togglePick(direct); return; }
-    const key = discoveryKey(item);
-    const cached = resolvedPids.get(key);
-    if (cached) { togglePick(cached); return; }
-    if (resolvingKeys.has(key) || !apiToken) return;
-    const handle = cleanText(item?.handle).replace(/^@/, "");
-    if (!handle) { setFavNote("该新发现缺 handle,无法定位入库记录"); return; }
-    setResolvingKeys((cur) => new Set(cur).add(key));
-    try {
-      const resp: any = await resolveKolPool(apiToken, handle, cleanText(item?.platform));
-      const pid = Number(resp?.kol_pool_id || resp?.matched_kol_pool_id) || 0;
-      if (pid > 0) {
-        setResolvedPids((cur) => new Map(cur).set(key, pid));
-        togglePick(pid);
-      } else {
-        setFavNote(`「${handle}」尚未入库,请稍后重试或刷新发现列表`);
-      }
-    } catch {
-      setFavNote(`「${handle}」定位失败,请重试`);
-    } finally {
-      setResolvingKeys((cur) => { const next = new Set(cur); next.delete(key); return next; });
-    }
-  }
-  async function addPickedToMyKol() {
-    if (!apiToken || !pickedIds.size) return;
-    setAddingFav(true);
-    setFavNote("");
-    const ids = [...pickedIds];
-    const results = await Promise.allSettled(ids.map((id) => favoriteKolPool(apiToken, id)));
-    const failedIds = ids.filter((_, index) => results[index]?.status === "rejected");
-    const ok = ids.length - failedIds.length;
-    setFavNote(ok === ids.length ? `已加入我的 MY KOL · ${ok} 人` : `加入 ${ok}/${ids.length}(其余失败,可重试)`);
-    setPickedIds(new Set(failedIds));
-    if (ok > 0) window.dispatchEvent(new CustomEvent("vkpi:favorites-changed"));
-    setAddingFav(false);
-  }
-
-  // R4:批准锁定选中候选 → 一键建项目草案(草案带成本估算 + 风险;占用冲突降级为提示)。
-  async function approveAndCreateDraft() {
-    if (!apiToken || !pickedIds.size || !activeSearchSessionId) return;
-    setDraftBusy(true);
-    setDraftNote("");
-    const ids = [...pickedIds];
-    try {
-      await approveKolSearchSession(apiToken, activeSearchSessionId, ids);
-      const draft: any = await createProjectDraftFromSession(apiToken, activeSearchSessionId, { kolPoolIds: ids });
-      const ce = (draft && draft.cost_estimate) || {};
-      const total = ce.total_cents || {};
-      const lowUsd = Math.round((total.low || 0) / 100);
-      const highUsd = Math.round((total.high || 0) / 100);
-      const risk = (ce.risk && ce.risk.level) || "—";
-      const budgetStr =
-        total.low || total.high
-          ? ` · 预算 ~$${lowUsd.toLocaleString()}–$${highUsd.toLocaleString()} · 风险 ${risk}`
-          : "";
-      const warn = draft && draft.kol_attach_warning ? ` · ⚠ ${String(draft.kol_attach_warning).slice(0, 60)}` : "";
-      setDraftNote(`已建草案 ${draft?.project_uid || ""}(挂 ${draft?.attached_kol_count ?? 0}/${ids.length} 人)${budgetStr}${warn}`);
-    } catch (err: any) {
-      setDraftNote(`建草案失败 · ${err?.message || "请重试"}`);
-    } finally {
-      setDraftBusy(false);
-    }
-  }
-
-  // R4:为选中候选生成合作话术 + SOW 草案(LLM,预算闸;仅草案,人审后手动外发)。
-  async function generateOutreachForPicked() {
-    if (!apiToken || !pickedIds.size || !activeSearchSessionId) return;
-    setOutreachBusy(true);
-    setOutreachNote("");
-    setOutreachResult(null);
-    const ids = [...pickedIds];
-    try {
-      const res: any = await generateKolSearchSessionOutreach(apiToken, activeSearchSessionId, { kolPoolIds: ids });
-      setOutreachResult(res || null);
-      const n = Array.isArray(res?.messages) ? res.messages.length : 0;
-      const src = res?.llm_used ? "LLM" : "确定性模板(LLM 未启用/预算关)";
-      setOutreachNote(`已生成 ${n} 封话术草案 · ${src}${res?.truncated ? " · 已截断至上限" : ""}`);
-    } catch (err: any) {
-      setOutreachNote(`生成话术失败 · ${err?.message || "请重试"}`);
-    } finally {
-      setOutreachBusy(false);
-    }
-  }
+  const localQualificationSpec = useMemo(
+    () => ({
+      ...LOCAL_QUALIFICATION_SPEC,
+      languages: contentLanguages,
+      profile_types: kolProfileTypes,
+    }),
+    [contentLanguages, kolProfileTypes],
+  );
+  const currentSearchFingerprint = useMemo(() => smartKolSearchFingerprint({
+    query: input,
+    market: discoveryRegion,
+    platforms: discoveryPlatforms,
+    languages: contentLanguages,
+    profileTypes: kolProfileTypes,
+    excludeChinese,
+    searchMode,
+  }), [contentLanguages, discoveryPlatforms, discoveryRegion, excludeChinese, input, kolProfileTypes, searchMode]);
+  // Filter state is intentionally not cached; a restored list therefore starts stale/read-only
+  // until its authoritative session is reopened or the user runs the current filters again.
+  const [recallFingerprint, setRecallFingerprint] = useState("");
+  const recallIsStale = Boolean(recallResult && recallFingerprint !== currentSearchFingerprint);
+  const displayedSessionTerminal = Boolean(activeSearchSession && isSearchSessionTerminal(activeSearchSession));
+  const approvalReady = Boolean(displayedSearchSessionId && displayedSessionTerminal && !pollingSearchSessionId && recallResult && !recallIsStale && state === "ready");
+  const {
+    pickedIds, setPickedIds, clearPickedIds, addingFav, favNote,
+    draftBusy, draftNote, outreachBusy, outreachNote, outreachResult,
+    discoveryKey, addPickedToMyKol, approveAndCreateDraft, generateOutreachForPicked,
+  } = useSmartKolSelection({
+    apiToken, displayedSearchSessionId, canApprove: approvalReady, currentSearchRequest, isCurrentSearchRequest,
+  });
 
   const inferredMode = useMemo(() => detectMode(input), [input]);
   const isBusy = state === "loading" || state === "executing" || batchBusy;
@@ -289,8 +211,8 @@ export function SmartKolInputPanel({
   // 诚实会话横幅(排队/查找中/已完成/部分完成/未完成)——只读后端真有字段,见 sessionStatusBanner。
   // advanceResult?.status:queueTextAdvance 刚返回、尚未首拍轮询时的即时状态兜底(queued/...)。
   const sessionBanner = useMemo(
-    () => sessionStatusBanner(activeSearchSession, activeSessionStatus || cleanText(advanceResult?.status), activeSessionCounts, Boolean(activeSearchSessionId)),
-    [activeSearchSession, activeSessionStatus, advanceResult, activeSessionCounts, activeSearchSessionId],
+    () => sessionStatusBanner(activeSearchSession, activeSessionStatus || cleanText(advanceResult?.status), activeSessionCounts, Boolean(displayedSearchSessionId)),
+    [activeSearchSession, activeSessionStatus, advanceResult, activeSessionCounts, displayedSearchSessionId],
   );
 
   useEffect(() => {
@@ -300,12 +222,12 @@ export function SmartKolInputPanel({
   // 搜索展示态持久化:任一 ①②③ 相关态变化就写回 sessionStorage(兜底重挂恢复);
   // 全空(无召回/无 URL 结果/无激活会话)时清掉,避免回填到一个空壳搜索框。
   useEffect(() => {
-    if (!recallResult && !urlResult && !activeSearchSession && !activeSearchSessionId) {
+    if (!recallResult && !urlResult && !activeSearchSession && !displayedSearchSessionId) {
       writePersistedSearchDisplay(null);
       return;
     }
-    writePersistedSearchDisplay({ input, mode, recallResult, urlResult, activeSearchSession, activeSearchSessionId });
-  }, [input, mode, recallResult, urlResult, activeSearchSession, activeSearchSessionId]);
+    writePersistedSearchDisplay({ input, mode, recallResult, urlResult, activeSearchSession, activeSearchSessionId: displayedSearchSessionId });
+  }, [input, mode, recallResult, urlResult, activeSearchSession, displayedSearchSessionId]);
 
   const refreshHistory = useCallback(async () => {
     if (!apiToken) {
@@ -401,16 +323,19 @@ export function SmartKolInputPanel({
       setMode("text");
       // 框2(库内召回)+ 框3(全网发现,派生自 activeSearchSession)立即由完整会话回填,不再只填 query。
       setRecallResult(recallResultFromSession(session));
+      // Historical sessions do not yet persist an authoritative filter fingerprint. Keep every
+      // restored text recall view-only until the current chips are explicitly re-run.
+      setRecallFingerprint("");
       setUrlResult(null);
     }
     // 重开的会话若仍未终态(running/排队),续接轮询让后到的发现/分析项继续回填 ①②③;
     // 已终态则不再起轮询(避免空转),展示态已由上面完整回填。
     const sessionId = historySessionId(session);
-    if (sessionId && !isSearchSessionTerminal(session)) {
-      setActiveSearchSessionId(sessionId);
+    const sessionState = sessionDisplayState(sessionId, isSearchSessionTerminal(session));
+    setDisplayedSearchSessionId(sessionState.displayedSessionId);
+    setPollingSearchSessionId(sessionState.pollingSessionId);
+    if (sessionState.pollingSessionId) {
       setSessionPollNotice("正在续接后台查找…");
-    } else {
-      setActiveSearchSessionId(null);
     }
     setState("ready");
   }, []);
@@ -441,6 +366,14 @@ export function SmartKolInputPanel({
 
   const openHistorySession = useCallback(async (sessionOrId: VkpiKolSearchHistoryItem | number | string) => {
     if (!apiToken) return;
+    const requestEpoch = beginSearchRequest();
+    clearPickedIds();
+    setState("loading");
+    setRecallResult(null);
+    setRecallFingerprint("");
+    setDisplayedSearchSessionId(null);
+    setPollingSearchSessionId(null);
+    setActiveSearchSession(null);
     const knownSession = typeof sessionOrId === "object" ? sessionOrId : null;
     const sessionId = knownSession ? historySessionId(knownSession) : Number(sessionOrId);
     if (!sessionId) {
@@ -450,18 +383,23 @@ export function SmartKolInputPanel({
     setHistoryLoading(true);
     try {
       const session = await getKolSearchSession(apiToken, sessionId);
+      if (!isCurrentSearchRequest(requestEpoch)) return;
       restoreSession(session);
       void refreshHistory();
     } catch (err) {
+      if (!isCurrentSearchRequest(requestEpoch)) return;
       if (knownSession) {
         restoreSession(knownSession);
       } else {
         setError(err instanceof Error ? err.message : "历史记录读取失败");
       }
     } finally {
-      setHistoryLoading(false);
+      if (isCurrentSearchRequest(requestEpoch)) {
+        setHistoryLoading(false);
+        setState((current) => current === "loading" ? "ready" : current);
+      }
     }
-  }, [apiToken, refreshHistory, restoreSession]);
+  }, [apiToken, beginSearchRequest, clearPickedIds, isCurrentSearchRequest, refreshHistory, restoreSession]);
 
   useEffect(() => {
     void refreshHistory();
@@ -487,7 +425,7 @@ export function SmartKolInputPanel({
   }, [apiToken, openHistorySession]);
 
   useEffect(() => {
-    if (!apiToken || !activeSearchSessionId || typeof window === "undefined") return undefined;
+    if (!apiToken || !pollingSearchSessionId || typeof window === "undefined") return undefined;
     let cancelled = false;
     let inFlight = false;
     let terminalSince: number | null = null;  // 必需任务完成/终态后的稳定宽限起点(闭包,随会话重置)
@@ -497,7 +435,7 @@ export function SmartKolInputPanel({
       if (cancelled || inFlight) return;
       inFlight = true;
       try {
-        const session = await getKolSearchSession(apiToken, activeSearchSessionId);
+        const session = await getKolSearchSession(apiToken, pollingSearchSessionId);
         if (cancelled) return;
         applyPolledSession(session);
         const progress = searchSessionProgress(session);
@@ -522,7 +460,7 @@ export function SmartKolInputPanel({
           if (terminalSince == null) terminalSince = Date.now();
           const graceUsedUp = Date.now() - terminalSince >= 30000;
           if (graceUsedUp || timedOut) {
-            setActiveSearchSessionId(null);
+            setPollingSearchSessionId(null);
             setSessionPollNotice(`${progressNote} · 结果已更新`);
             void refreshHistory();
             return;
@@ -531,7 +469,7 @@ export function SmartKolInputPanel({
         } else {
           terminalSince = null;
           if (timedOut) {
-            setActiveSearchSessionId(null);
+            setPollingSearchSessionId(null);
             setSessionPollNotice(`${progressNote} · 仍在后台补全，可从历史或任务里继续查看`);
             void refreshHistory();
           }
@@ -552,7 +490,7 @@ export function SmartKolInputPanel({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeSearchSessionId, apiToken, applyPolledSession, refreshHistory]);
+  }, [pollingSearchSessionId, apiToken, applyPolledSession, refreshHistory]);
 
   const run = async (overrideQuery?: string) => {
     const query = cleanText(overrideQuery ?? input);
@@ -566,14 +504,27 @@ export function SmartKolInputPanel({
       setError("输入为空");
       return;
     }
+    const requestFingerprint = smartKolSearchFingerprint({
+      query,
+      market: discoveryRegion,
+      platforms: discoveryPlatforms,
+      languages: contentLanguages,
+      profileTypes: kolProfileTypes,
+      excludeChinese,
+      searchMode,
+    });
+    const requestEpoch = beginSearchRequest();
+    clearPickedIds();
     const nextMode = detectMode(query);
     setMode(nextMode);
     setState("loading");
     setError("");
     setUrlResult(null);
     setRecallResult(null);
+    setRecallFingerprint("");
     setAdvanceResult(null);
-    setActiveSearchSessionId(null);
+    setDisplayedSearchSessionId(null);
+    setPollingSearchSessionId(null);
     setActiveSearchSession(null);
     setSessionPollNotice("");
     try {
@@ -593,13 +544,16 @@ export function SmartKolInputPanel({
         bucketPolicy: searchPolicy.bucketPolicy,
         market: discoveryRegion,
         platforms: discoveryPlatforms,
-        localQualificationSpec: LOCAL_QUALIFICATION_SPEC,
+        languages: contentLanguages,
+        profileTypes: kolProfileTypes,
+        localQualificationSpec,
         // createSession:true 回滚——false 会让前端 activeSearchSession 拿不到 advance 会话的全网发现项,
         // 整组「全网新发现」消失(550pro2 监视器搜出 15 个却 0 显示的真因)。宁可历史多一条空会话,也要保显示。
         createSession: true,
         excludeChinese,
         timeoutMs: 60000,
       });
+      if (!isCurrentSearchRequest(requestEpoch)) return;
       const responseMode = cleanText(response.mode);
       const isText = !(responseMode === "url" || cleanText(response.query_type).startsWith("url_"));
       const responseRow = asRecord(response);
@@ -663,6 +617,7 @@ export function SmartKolInputPanel({
       } else {
         setMode("text");
         setRecallResult(response.result as VkpiKolRecallResponse);
+        setRecallFingerprint(requestFingerprint);
         if (needsProductClarification) {
           const clarification = asRecord(responsePlan.clarification);
           setSessionPollNotice(cleanText(clarification.message) || "未匹配到明确产品，请先选择正确产品。");
@@ -673,12 +628,16 @@ export function SmartKolInputPanel({
       // 刀1·流3(2026-06-16)恒开:任何文字搜索都自动触发全网发现(advance-job 全量,含所选平台),
       // 不再挂在「深度查找」开关上 →「先库内召回 → 再全网发现」一步到位,本地+线上首屏同呈。
       // 预算护栏 enforce 兜底超支(已确认放行)。
-      if (isText && !needsProductClarification) void queueTextAdvance(overrideQuery);
+      if (isText && !needsProductClarification) {
+        const previewSessionId = sessionIdFrom(response.search_session);
+        void queueTextAdvance(overrideQuery, requestEpoch, previewSessionId);
+      }
       // 账号 URL 自动抓资料 + 入库(不再弹「抓基础资料」二次确认)。
-      if (autoProfile) void runUrlExecute(autoProfile, { auto: true });
+      if (autoProfile) void runUrlExecute(autoProfile, { auto: true, requestEpoch });
       // 刀1·流1:video URL 自动入 evidence + 排 final_v1(不再弹「只分析此视频」二次确认)。
-      if (autoVideo) void runUrlExecute(autoVideo, { auto: true });
+      if (autoVideo) void runUrlExecute(autoVideo, { auto: true, requestEpoch });
     } catch (err) {
+      if (!isCurrentSearchRequest(requestEpoch)) return;
       setState("error");
       setError(err instanceof Error ? err.message : "请求失败，请重试");
     }
@@ -714,10 +673,12 @@ export function SmartKolInputPanel({
   // V6 Fit 由 write_kol_profile_basics 白名单兜底不触碰 viltrox_fit_score。
   const runUrlExecute = async (
     source: VkpiKolUrlDeepCrawlResponse,
-    opts: { auto?: boolean; localEvaluation?: boolean } = {},
+    opts: { auto?: boolean; localEvaluation?: boolean; requestEpoch?: SearchRequestEpoch } = {},
   ) => {
     const query = cleanText(source.url?.input || input);
     if (!apiToken || !query) return;
+    const requestEpoch = opts.requestEpoch ?? beginSearchRequest();
+    if (opts.requestEpoch == null) clearPickedIds();
     const sourceProfileFlow = asRecord(source.profile_flow);
     setState("executing");
     setError("");
@@ -736,15 +697,18 @@ export function SmartKolInputPanel({
         localEvaluation: opts.localEvaluation === true,
         timeoutMs: isVideo ? 300000 : 30000,
       });
+      if (!isCurrentSearchRequest(requestEpoch)) return;
       setUrlResult(response);
       const nextSessionId = sessionIdFrom(response.search_session) || sessionId;
       if (nextSessionId) {
-        setActiveSearchSessionId(nextSessionId);
+        setDisplayedSearchSessionId(nextSessionId);
+        setPollingSearchSessionId(nextSessionId);
         setSessionPollNotice(response.url_type === "video" ? "视频分析状态同步中..." : "账号资料抓取状态同步中...");
       }
       setState("ready");
       void refreshHistory();
     } catch (err) {
+      if (!isCurrentSearchRequest(requestEpoch)) return;
       setState("ready");
       setError(err instanceof Error ? err.message : "URL 执行失败");
     }
@@ -761,9 +725,28 @@ export function SmartKolInputPanel({
     await runUrlExecute(urlResult, { localEvaluation: true });
   };
 
-  const queueTextAdvance = async (overrideQuery?: string) => {
+  const queueTextAdvance = async (overrideQuery?: string, parentEpoch?: SearchRequestEpoch, reuseSessionId?: number) => {
     const query = cleanText(overrideQuery ?? input);
     if (!apiToken || !query || state === "executing") return;
+    const requestFingerprint = smartKolSearchFingerprint({
+      query,
+      market: discoveryRegion,
+      platforms: discoveryPlatforms,
+      languages: contentLanguages,
+      profileTypes: kolProfileTypes,
+      excludeChinese,
+      searchMode,
+    });
+    const requestEpoch = parentEpoch ?? beginSearchRequest();
+    if (parentEpoch == null) {
+      clearPickedIds();
+      setRecallResult(null);
+      setAdvanceResult(null);
+      setActiveSearchSession(null);
+      setDisplayedSearchSessionId(null);
+      setPollingSearchSessionId(null);
+    }
+    setRecallFingerprint(requestFingerprint);
     setState("executing");
     setError("");
     try {
@@ -786,12 +769,17 @@ export function SmartKolInputPanel({
         includeNewDiscovery: true,
         newDiscoveryLimit: searchPolicy.newDiscoveryLimit,
         newDiscoveryPerPlatformLimit: searchPolicy.perPlatformLimit,
-        newDiscoveryPlatforms: discoveryPlatforms,
+        newDiscoveryPlatforms: strictOnlineDiscoveryPlatforms(discoveryPlatforms),
         excludeChinese,
         market: discoveryRegion,
-        localQualificationSpec: LOCAL_QUALIFICATION_SPEC,
+        languages: contentLanguages,
+        profileTypes: kolProfileTypes,
+        localQualificationSpec,
+        onlineQualificationSpec: ONLINE_QUALIFICATION_SPEC,
+        ...(reuseSessionId ? { sessionId: reuseSessionId } : {}),
         timeoutMs: 300000,
       });
+      if (!isCurrentSearchRequest(requestEpoch)) return;
       setAdvanceResult(response);
       const queuedSession = response.search_session && typeof response.search_session === "object"
         ? response.search_session as VkpiKolSearchHistoryItem
@@ -799,12 +787,14 @@ export function SmartKolInputPanel({
       const sessionId = sessionIdFrom(response.search_session) || sessionIdFrom(response.advance_job) || sessionIdFrom(queuedSession);
       if (queuedSession && sessionItems(queuedSession).length) applyPolledSession(queuedSession);
       if (sessionId) {
-        setActiveSearchSessionId(sessionId);
+        setDisplayedSearchSessionId(sessionId);
+        setPollingSearchSessionId(sessionId);
         setSessionPollNotice("后台查找中...");
       }
       setState("ready");
       void refreshHistory();
     } catch (err) {
+      if (!isCurrentSearchRequest(requestEpoch)) return;
       setState("ready");
       setError(err instanceof Error ? err.message : "全网查找启动失败，请重试");
     }
@@ -943,6 +933,7 @@ export function SmartKolInputPanel({
       {mode === "text" && recallResult ? (
         <TextResultSection
           recallResult={recallResult}
+          searchSession={activeSearchSession}
           llmPlan={llmPlan}
           discoveryItems={discoveryItems}
           discoveryTotal={discoveryTotal}
@@ -963,6 +954,10 @@ export function SmartKolInputPanel({
           setDiscoveryPlatforms={setDiscoveryPlatforms}
           discoveryRegion={discoveryRegion}
           setDiscoveryRegion={setDiscoveryRegion}
+          contentLanguages={contentLanguages}
+          setContentLanguages={setContentLanguages}
+          kolProfileTypes={kolProfileTypes}
+          setKolProfileTypes={setKolProfileTypes}
           excludeChinese={excludeChinese}
           setExcludeChinese={setExcludeChinese}
           queueTextAdvance={queueTextAdvance}
@@ -975,14 +970,14 @@ export function SmartKolInputPanel({
           addingFav={addingFav}
           draftBusy={draftBusy}
           outreachBusy={outreachBusy}
-          activeSearchSessionId={activeSearchSessionId}
+          displayedSearchSessionId={displayedSearchSessionId}
+          isSessionPolling={Boolean(pollingSearchSessionId)}
+          resultsStale={recallIsStale}
+          approvalReady={approvalReady}
           addPickedToMyKol={addPickedToMyKol}
           approveAndCreateDraft={approveAndCreateDraft}
           generateOutreachForPicked={generateOutreachForPicked}
-          resolvedPids={resolvedPids}
-          resolvingKeys={resolvingKeys}
           discoveryKey={discoveryKey}
-          pickDiscovery={pickDiscovery}
           onOpenRecallItem={onOpenRecallItem}
           sessionBanner={sessionBanner}
           sessionProgress={activeSessionProgress}

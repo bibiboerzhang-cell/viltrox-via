@@ -6,7 +6,13 @@ vi.mock("../http", () => ({
 }));
 
 import { apiFetch } from "../http";
-import { smartKolSearch, smartKolSearchProfileAdvanceJob } from "./kolPool-api.search";
+import {
+  approveKolSearchSession,
+  createProjectDraftFromSession,
+  generateKolSearchSessionOutreach,
+  smartKolSearch,
+  smartKolSearchProfileAdvanceJob,
+} from "./kolPool-api.search";
 
 const mockedFetch = vi.mocked(apiFetch);
 
@@ -25,6 +31,8 @@ describe("KOL local qualification request contract", () => {
       reviewerQuota: 15,
       market: "US",
       platforms: ["youtube"],
+      languages: ["en"],
+      profileTypes: ["reviewer"],
       localQualificationSpec: spec,
     });
 
@@ -36,19 +44,26 @@ describe("KOL local qualification request contract", () => {
       reviewer_quota: 15,
       market: "US",
       platforms: ["youtube"],
+      languages: ["en"],
+      profile_types: ["reviewer"],
       local_qualification_spec: spec,
     });
   });
 
   it("keeps the same hard-filter spec on the queued continuation", async () => {
     const spec = { target_count: 30, unknown_policy: "pending_not_counted" };
+    const onlineSpec = { version: "online_net_new_30_v1", target_count: 30 };
     await smartKolSearchProfileAdvanceJob("token", "portrait creators", {
       candidateLimit: 500,
       limit: 30,
       creatorQuota: 16,
       reviewerQuota: 14,
       advanceLimit: 30,
+      languages: ["de", "en"],
+      profileTypes: ["creator", "mixed"],
       localQualificationSpec: spec,
+      onlineQualificationSpec: onlineSpec,
+      sessionId: 701,
     });
 
     const body = JSON.parse(String(mockedFetch.mock.calls[0][1]?.body));
@@ -58,7 +73,36 @@ describe("KOL local qualification request contract", () => {
       creator_quota: 16,
       reviewer_quota: 14,
       advance_limit: 30,
+      languages: ["de", "en"],
+      profile_types: ["creator", "mixed"],
       local_qualification_spec: spec,
+      online_qualification_spec: onlineSpec,
+      session_id: 701,
     });
+  });
+});
+
+describe("KOL search session approval boundary", () => {
+  beforeEach(() => {
+    mockedFetch.mockReset();
+    mockedFetch.mockResolvedValue({} as never);
+  });
+
+  it("sends candidate ids only to the explicit approval endpoint", async () => {
+    await approveKolSearchSession("token", 51, [11, 12]);
+    const body = JSON.parse(String(mockedFetch.mock.calls[0][1]?.body));
+    expect(body).toEqual({ kol_pool_ids: [11, 12] });
+  });
+
+  it("does not let project draft or outreach bodies override server approvals", async () => {
+    await createProjectDraftFromSession("token", 51, { projectName: "Draft" });
+    await generateKolSearchSessionOutreach("token", 51, { productName: "Lens" });
+
+    const projectBody = JSON.parse(String(mockedFetch.mock.calls[0][1]?.body));
+    const outreachBody = JSON.parse(String(mockedFetch.mock.calls[1][1]?.body));
+    expect(projectBody).toEqual({ project_name: "Draft" });
+    expect(outreachBody).toEqual({ product_name: "Lens" });
+    expect(projectBody).not.toHaveProperty("kol_pool_ids");
+    expect(outreachBody).not.toHaveProperty("kol_pool_ids");
   });
 });

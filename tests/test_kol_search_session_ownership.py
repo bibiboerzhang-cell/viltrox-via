@@ -36,20 +36,25 @@ def _session_row(*, session_id: int = 51, created_by: int = 7) -> dict[str, Any]
 
 
 def test_list_sessions_is_scoped_to_current_staff(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, Any] = {}
+    captured: list[tuple[str, tuple[Any, ...]]] = []
 
     class Conn:
         def execute(self, sql: str, params: tuple[Any, ...]) -> _Cursor:
-            captured.update(sql=" ".join(sql.split()), params=params)
+            captured.append((" ".join(sql.split()), tuple(params)))
             return _Cursor([_session_row()])
 
     monkeypatch.setattr(search_sessions, "get_conn", lambda: Conn())
     result = search_sessions.list_sessions(limit=12, status="ready", staff={"id": 7})
 
     assert result["count"] == 1
-    assert "status=?" in captured["sql"]
-    assert "created_by=?" in captured["sql"]
-    assert captured["params"] == ("ready", 7, 12)
+    session_query = next(
+        (sql, params)
+        for sql, params in captured
+        if "FROM vkpi_kol_search_sessions" in sql
+    )
+    assert "status=?" in session_query[0]
+    assert "created_by=?" in session_query[0]
+    assert session_query[1] == ("ready", 7, 12)
 
 
 def test_list_sessions_unresolved_actor_fails_closed_without_database_read(
@@ -67,7 +72,7 @@ def test_list_sessions_unresolved_actor_fails_closed_without_database_read(
     }
 
 
-def test_ensure_existing_session_scopes_user_calls_but_preserves_system_worker_calls(
+def test_ensure_existing_session_always_fails_closed_without_an_explicit_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -104,7 +109,7 @@ def test_ensure_existing_session_scopes_user_calls_but_preserves_system_worker_c
 
     assert calls == [
         {"session_id": 70, "staff": {"id": 7}, "scope_to_staff": True},
-        {"session_id": 71, "staff": None, "scope_to_staff": False},
+        {"session_id": 71, "staff": None, "scope_to_staff": True},
         {"session_id": 72, "staff": {}, "scope_to_staff": True},
     ]
 

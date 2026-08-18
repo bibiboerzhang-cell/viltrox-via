@@ -25,11 +25,15 @@ export type LocalQualifiedRow = {
   followers: number | null;
   latestVideoAt: string;
   marketEvidence: string;
+  languageEvidence: string;
+  profileType: string;
+  accountQuality: string;
   whyFit: string;
   contactStatus: string;
   analysisStatus: string;
   qualification: LocalQualificationState;
   qualificationLabel: string;
+  strictQualified: boolean;
 };
 
 export type LocalQualifiedSummary = {
@@ -45,8 +49,9 @@ export type LocalQualifiedSummary = {
   rows: LocalQualifiedRow[];
 };
 
-const QUALIFIED_STATES = new Set(["accepted", "eligible", "pass", "passed", "qualified", "ready"]);
-const REJECTED_STATES = new Set(["blocked", "disqualified", "failed", "ineligible", "reject", "rejected"]);
+export const STRICT_V2_GATES = [
+  "account_quality", "followers", "activity", "market", "language", "profile_type", "platform", "relevance",
+] as const;
 
 function firstValue(records: Row[], keys: string[]): unknown {
   for (const record of records) {
@@ -87,6 +92,15 @@ function itemRecords(item: VkpiKolRecallItem): Row[] {
   return [qualification, evidence, latestVideo, market, contact, analysis, root, source];
 }
 
+export function strictV2QualificationState(qualification: Row): LocalQualificationState | null {
+  if (cleanText(qualification.schema) !== "smart_local_gate_evidence_v2") return null;
+  if (qualification.passed === false) return "rejected";
+  const gatePassed = STRICT_V2_GATES.map((key) => asRecord(qualification[key]).passed);
+  if (gatePassed.some((passed) => passed === false)) return "rejected";
+  if (qualification.passed === true && gatePassed.every((passed) => passed === true)) return "qualified";
+  return "pending";
+}
+
 function identityFor(item: VkpiKolRecallItem): string {
   const records = itemRecords(item);
   const canonical = cleanText(firstValue(records, ["canonical_creator_id", "canonical_identity", "creator_uid"]));
@@ -100,29 +114,20 @@ function identityFor(item: VkpiKolRecallItem): string {
   return `unresolved:${platform}:${handle}`;
 }
 
-function qualificationFor(qualification: Row, root: Row, source: Row): Pick<LocalQualifiedRow, "qualification" | "qualificationLabel"> {
-  const records = [qualification, root, source];
-  const explicitBoolean = firstValue(records, [
-    "hard_gate_pass",
-    "is_qualified",
-    "qualified",
-    "accepted",
-    "passed",
-  ]);
-  if (explicitBoolean === true) return { qualification: "qualified", qualificationLabel: "合格" };
-  if (explicitBoolean === false) return { qualification: "rejected", qualificationLabel: "未通过" };
-  const namedStatus = firstValue([root, source], [
-    "qualification_status",
-    "qualification_state",
-    "hard_gate_status",
-    "eligibility_status",
-  ]);
-  const status = cleanText(namedStatus ?? qualification.status ?? qualification.verdict).toLowerCase();
-  if (QUALIFIED_STATES.has(status)) return { qualification: "qualified", qualificationLabel: "合格" };
-  if (REJECTED_STATES.has(status)) return { qualification: "rejected", qualificationLabel: "未通过" };
-  // Older backends do not own the 3,000-follower / 45-day / market hard gate. Even when a row
-  // looks promising, the browser must not promote it to qualified by inference.
-  return { qualification: "pending", qualificationLabel: "待服务端验收" };
+function qualificationFor(qualification: Row): Pick<LocalQualifiedRow, "qualification" | "qualificationLabel"> {
+  const proofSchema = cleanText(qualification.schema);
+  const strictState = strictV2QualificationState(qualification);
+  if (proofSchema === "smart_local_gate_evidence_v2") {
+    if (strictState === "qualified") return { qualification: "qualified", qualificationLabel: "合格" };
+    if (strictState === "rejected") return { qualification: "rejected", qualificationLabel: "未通过" };
+    return { qualification: "pending", qualificationLabel: "待服务端验收" };
+  }
+  // v1 did not carry the full server-owned proof set. It remains readable as legacy evidence,
+  // but must never light up the strict-v2 qualified/approval path.
+  if (proofSchema === "smart_local_gate_evidence_v1") {
+    return { qualification: "pending", qualificationLabel: "待服务端 v2 验收" };
+  }
+  return { qualification: "pending", qualificationLabel: "待服务端 v2 验收" };
 }
 
 function rankFor(records: Row[], fallback: number): number {
@@ -153,6 +158,34 @@ function marketEvidenceFor(marketEvidence: Row, root: Row, sourceFields: Row): s
   return parts.join(" · ");
 }
 
+function codeList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(cleanText).filter(Boolean);
+  const text = cleanText(value);
+  return text ? [text] : [];
+}
+
+const PROFILE_TYPE_LABELS: Record<string, string> = {
+  creator: "创作者",
+  reviewer: "评测号",
+  mixed: "创作+评测",
+};
+
+function languageEvidenceFor(qualification: Row, candidateFacets: Row, root: Row, source: Row): string {
+  const gate = asRecord(qualification.language);
+  const values = codeList(gate.values);
+  const fallback = cleanText(firstValue([candidateFacets, root, source], ["language", "content_language"]));
+  return (values.length ? values : fallback ? [fallback] : []).join("/");
+}
+
+function profileTypeFor(qualification: Row, candidateFacets: Row, root: Row, source: Row): string {
+  const gate = asRecord(qualification.profile_type);
+  const values = codeList(gate.values);
+  const fallback = cleanText(firstValue([candidateFacets, root, source], ["profile_type", "kol_type"]));
+  return (values.length ? values : fallback ? [fallback] : [])
+    .map((value) => PROFILE_TYPE_LABELS[value] || value)
+    .join("/");
+}
+
 function statusLabel(value: unknown, kind: "contact" | "analysis"): string {
   const status = cleanText(value).toLowerCase();
   if (!status) return kind === "contact" ? "待核验" : "待分析";
@@ -177,6 +210,7 @@ function rowFromItem(item: VkpiKolRecallItem, fallbackRank: number): LocalQualif
   const contact = firstRecord([root, source], ["contact_preview", "contactability", "contact"]);
   const candidateFacets = firstRecord([root, source], ["candidate_facets"]);
   const analysis = firstRecord([root, source], ["analysis", "analysis_preview", "profile_execute"]);
+  const accountQuality = asRecord(qualification.account_quality);
   const records = itemRecords(item);
   const contactStatus = firstValue([contact], ["status", "state", "contact_available"])
     ?? firstValue([root, source], ["contact_status", "contactability_status"])
@@ -202,10 +236,14 @@ function rowFromItem(item: VkpiKolRecallItem, fallbackRank: number): LocalQualif
     followers: Number.isFinite(followersValue) && followersValue >= 0 ? followersValue : null,
     latestVideoAt: latestVideoFor(records),
     marketEvidence: marketEvidenceFor(marketEvidence, root, source),
+    languageEvidence: languageEvidenceFor(qualification, candidateFacets, root, source),
+    profileType: profileTypeFor(qualification, candidateFacets, root, source),
+    accountQuality: cleanText(accountQuality.verdict),
     whyFit,
     contactStatus: statusLabel(contactStatus, "contact"),
     analysisStatus: statusLabel(analysisStatus, "analysis"),
-    ...qualificationFor(qualification, root, source),
+    strictQualified: strictV2QualificationState(qualification) === "qualified",
+    ...qualificationFor(qualification),
   };
 }
 
@@ -215,6 +253,16 @@ function resultItems(result: VkpiKolRecallResponse): VkpiKolRecallItem[] {
     ...(Array.isArray(result.buckets?.creator) ? result.buckets.creator : []),
     ...(Array.isArray(result.buckets?.reviewer) ? result.buckets.reviewer : []),
   ];
+}
+
+export function localQualifiedRowsFromItems(items: VkpiKolRecallItem[]): LocalQualifiedRow[] {
+  const deduped = new Map<string, LocalQualifiedRow>();
+  items.forEach((item, index) => {
+    const row = rowFromItem(item, index + 1);
+    const existing = deduped.get(row.identity);
+    if (!existing || row.rank < existing.rank) deduped.set(row.identity, row);
+  });
+  return Array.from(deduped.values()).sort((a, b) => a.rank - b.rank);
 }
 
 function explicitCount(records: Row[], keys: string[]): number | null {
@@ -231,9 +279,23 @@ const SHORTFALL_LABELS: Record<string, string> = {
   latest_video_unknown: "最新视频日期待核验",
   stale: "最近 45 天未更新",
   latest_video_stale: "最近 45 天未更新",
+  latest_video_identity_missing: "最新视频缺少可审计链接或视频 ID",
+  latest_video_not_active_video: "最近内容不是有效视频证据",
+  latest_video_in_future: "最新视频时间异常",
   market_unknown: "市场证据待核验",
   market_unverified: "市场证据待核验",
+  market_untrusted_source: "市场仅有模型推断，未计入",
   market_mismatch: "不符合目标市场",
+  language_unknown: "内容语言待核验",
+  language_mismatch: "不符合所选内容语言",
+  language_filter_invalid: "语言筛选值无效",
+  profile_type_unknown: "KOL 类型待核验",
+  profile_type_mismatch: "不符合所选 KOL 类型",
+  profile_type_filter_invalid: "KOL 类型筛选值无效",
+  account_own_brand: "Viltrox 自有账号已排除",
+  account_brand_official: "品牌官方账号已排除",
+  account_retailer: "零售/经销账号已排除",
+  account_garbage: "无效账号已排除",
   low_relevance: "市场/产品相关性不足",
   duplicate: "跨来源重复",
   duplicate_canonical_identity: "跨来源重复",
@@ -268,13 +330,7 @@ function shortfallReasons(records: Row[], pending: number, shortfall: number): s
 }
 
 export function localQualifiedSummary(result: VkpiKolRecallResponse): LocalQualifiedSummary {
-  const deduped = new Map<string, LocalQualifiedRow>();
-  resultItems(result).forEach((item, index) => {
-    const row = rowFromItem(item, index + 1);
-    const existing = deduped.get(row.identity);
-    if (!existing || row.rank < existing.rank) deduped.set(row.identity, row);
-  });
-  const rows = Array.from(deduped.values()).sort((a, b) => a.rank - b.rank);
+  const rows = localQualifiedRowsFromItems(resultItems(result));
   const diagnostics = asRecord(result.diagnostics);
   const query = asRecord(result.query);
   const resultRoot = result as unknown as Row;
@@ -285,23 +341,30 @@ export function localQualifiedSummary(result: VkpiKolRecallResponse): LocalQuali
     asRecord(query.local_qualification),
     asRecord(resultRoot.local_lane),
     asRecord(resultRoot.local_qualification),
-  ].find((lane) => cleanText(lane.schema) === "smart_local_qualified_v1") ?? {};
-  const hasSmartLocalContract = cleanText(localLane.schema) === "smart_local_qualified_v1";
+  ].find((lane) => cleanText(lane.schema) === "smart_local_qualified_v2") ?? {};
+  const hasSmartLocalContract = cleanText(localLane.schema) === "smart_local_qualified_v2";
   const contractRecords = hasSmartLocalContract ? [localLane] : [];
   const observedRecords = [diagnostics, resultRoot];
   const parsedQualified = rows.filter((row) => row.qualification === "qualified").length;
-  const serverReturned = (hasSmartLocalContract
+  const strictParsedQualified = rows.filter((row) => row.strictQualified).length;
+  const claimedReturned = (hasSmartLocalContract
     ? explicitCount(contractRecords, ["returned_count"])
     : explicitCount(observedRecords, ["local_returned_count", "returned_count", "visible_count"])) ?? rows.length;
-  const serverQualified = (hasSmartLocalContract
+  const claimedQualified = (hasSmartLocalContract
     ? explicitCount(contractRecords, ["qualified_count"])
     : null) ?? parsedQualified;
-  const qualified = (hasSmartLocalContract
+  const claimedAccepted = (hasSmartLocalContract
     ? explicitCount(contractRecords, ["accepted_count", "returned_count"])
     : null) ?? parsedQualified;
-  const uniqueQualified = (hasSmartLocalContract
+  const claimedUnique = (hasSmartLocalContract
     ? explicitCount(contractRecords, ["unique_qualified_count", "accepted_unique_count"])
     : null) ?? parsedQualified;
+  // A strict aggregate is useful context, but the actionable list cannot claim or approve rows
+  // that are absent from the current sanitized snapshot.
+  const serverReturned = hasSmartLocalContract ? Math.min(claimedReturned, rows.length) : claimedReturned;
+  const serverQualified = hasSmartLocalContract ? Math.min(claimedQualified, strictParsedQualified) : claimedQualified;
+  const qualified = hasSmartLocalContract ? Math.min(claimedAccepted, strictParsedQualified) : claimedAccepted;
+  const uniqueQualified = hasSmartLocalContract ? Math.min(claimedUnique, strictParsedQualified) : claimedUnique;
   const target = (hasSmartLocalContract
     ? explicitCount([localLane, asRecord(localLane.policy)], ["target_count", "target"])
     : null) ?? LOCAL_QUALIFIED_TARGET;

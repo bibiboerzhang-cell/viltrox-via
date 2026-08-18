@@ -111,10 +111,10 @@ def _safe_public_code(value: Any, *, limit: int = 160) -> str:
 def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any]:
     """Persist the Smart-local proof, never arbitrary/contact-bearing payload fields."""
     raw = _dict(value)
-    if _text(raw.get("schema")) != "smart_local_gate_evidence_v1":
+    if _text(raw.get("schema")) != "smart_local_gate_evidence_v2":
         return {}
     output: dict[str, Any] = {
-        "schema": "smart_local_gate_evidence_v1",
+        "schema": "smart_local_gate_evidence_v2",
         "passed": raw.get("passed") is True,
         "rejection_reasons": [
             reason
@@ -125,6 +125,32 @@ def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any
     kol_pool_id = _int_or_none(raw.get("kol_pool_id"))
     if kol_pool_id:
         output["kol_pool_id"] = kol_pool_id
+    fingerprint = _safe_public_code(raw.get("canonical_fingerprint"), limit=64)
+    if re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+        output["canonical_fingerprint"] = fingerprint
+    snapshot_id = _safe_public_code(raw.get("snapshot_id"), limit=64)
+    if snapshot_id:
+        output["snapshot_id"] = snapshot_id
+    for binding_key, maximum in (
+        ("snapshot_revision", 1_000_000),
+        ("server_rank", 30),
+        ("global_unique_rank", 60),
+    ):
+        binding_value = _safe_non_negative_int(raw.get(binding_key), maximum=maximum)
+        if binding_value is not None:
+            output[binding_key] = binding_value
+
+    account_quality = _dict(raw.get("account_quality"))
+    output["account_quality"] = {
+        "verdict": _safe_public_code(account_quality.get("verdict"), limit=80),
+        "excluded_types": [
+            item
+            for entry in _list(account_quality.get("excluded_types"))[:12]
+            if (item := _safe_public_code(entry, limit=80))
+        ],
+        "passed": account_quality.get("passed") is True,
+        "source": _safe_public_code(account_quality.get("source"), limit=120),
+    }
 
     followers = _dict(raw.get("followers"))
     follower_value = _safe_non_negative_int(followers.get("value"), maximum=5_000_000_000)
@@ -146,6 +172,8 @@ def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any
         "age_days": _safe_non_negative_float(activity.get("age_days"), maximum=10_000),
         "fresh_priority": activity.get("fresh_priority") is True,
         "maximum_age_days": _safe_non_negative_int(activity.get("maximum_age_days"), maximum=3650),
+        "identity_kind": _safe_public_code(activity.get("identity_kind"), limit=40) or None,
+        "identity_present": bool(_text(activity.get("identity"))),
         "passed": activity.get("passed") is True,
         "source": _safe_public_code(activity.get("source")),
     }
@@ -157,8 +185,32 @@ def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any
         "method": _safe_public_code(market.get("method"), limit=80),
         "confidence": _safe_non_negative_float(market.get("confidence"), maximum=1.0),
         "source": _safe_public_code(market.get("source"), limit=120) or None,
+        "rejected_source": _safe_public_code(market.get("rejected_source"), limit=120) or None,
         "passed": market.get("passed") is True,
     }
+
+    for field_name in ("language", "profile_type"):
+        facet = _dict(raw.get(field_name))
+        output[field_name] = {
+            "values": [
+                item
+                for entry in _list(facet.get("values"))[:12]
+                if (item := _safe_public_code(entry, limit=40))
+            ],
+            "targets": [
+                item
+                for entry in _list(facet.get("targets"))[:12]
+                if (item := _safe_public_code(entry, limit=40))
+            ],
+            "filter_requested": facet.get("filter_requested") is True,
+            "invalid_targets": [
+                item
+                for entry in _list(facet.get("invalid_targets"))[:12]
+                if (item := _safe_public_code(entry, limit=80))
+            ],
+            "passed": facet.get("passed") is True,
+            "source": _safe_public_code(facet.get("source"), limit=120),
+        }
 
     platform = _dict(raw.get("platform"))
     output["platform"] = {
@@ -173,20 +225,38 @@ def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any
     }
 
     relevance = _dict(raw.get("relevance"))
+    safe_relevance_evidence = _safe_match_evidence(
+        relevance.get("evidence"), allowed_terms=allowed_terms
+    )
+    relevance_passed = relevance.get("passed") is True and bool(safe_relevance_evidence)
     output["relevance"] = {
-        "passed": relevance.get("passed") is True,
-        "evidence": _safe_match_evidence(relevance.get("evidence"), allowed_terms=allowed_terms),
+        "passed": relevance_passed,
+        "evidence": safe_relevance_evidence,
         "source": _safe_public_code(relevance.get("source"), limit=120),
     }
+    if relevance.get("passed") is True and not safe_relevance_evidence:
+        if "low_relevance" not in output["rejection_reasons"]:
+            output["rejection_reasons"].append("low_relevance")
+    output["passed"] = bool(
+        raw.get("passed") is True
+        and not output["rejection_reasons"]
+        and all(
+            _dict(output.get(field)).get("passed") is True
+            for field in (
+                "account_quality", "followers", "activity", "market",
+                "language", "profile_type", "platform", "relevance",
+            )
+        )
+    )
     return output
 
 
 def _safe_local_qualification(value: Any) -> dict[str, Any]:
     """Compact aggregate Smart-local contract for polling/history replay."""
     raw = _dict(value)
-    if _text(raw.get("schema")) != "smart_local_qualified_v1":
+    if _text(raw.get("schema")) != "smart_local_qualified_v2":
         return {}
-    output: dict[str, Any] = {"schema": "smart_local_qualified_v1"}
+    output: dict[str, Any] = {"schema": "smart_local_qualified_v2"}
     status = _text(raw.get("status")).lower()
     if status in {"ready", "shortfall"}:
         output["status"] = status
@@ -200,11 +270,11 @@ def _safe_local_qualification(value: Any) -> dict[str, Any]:
 
     policy = _dict(raw.get("policy"))
     safe_policy: dict[str, Any] = {}
-    for key in ("target_count", "candidate_limit", "min_followers", "fresh_priority_days", "max_video_age_days"):
+    for key in ("policy_version", "target_count", "candidate_limit", "min_followers", "fresh_priority_days", "max_video_age_days"):
         number = _safe_non_negative_int(policy.get(key), maximum=5_000_000_000)
         if number is not None:
             safe_policy[key] = number
-    for key in ("server_owned", "allow_unknown_followers", "allow_unknown_or_stale_video", "allow_unknown_market", "allow_low_quality_backfill", "canonical_dedupe"):
+    for key in ("server_owned", "allow_unknown_followers", "allow_unknown_or_stale_video", "allow_unknown_market", "allow_unknown_language", "allow_unknown_profile_type", "allow_low_quality_backfill", "canonical_dedupe"):
         if isinstance(policy.get(key), bool):
             safe_policy[key] = policy[key]
     safe_policy["market"] = _safe_public_code(policy.get("market"), limit=40)
@@ -213,6 +283,12 @@ def _safe_local_qualification(value: Any) -> dict[str, Any]:
         for entry in _list(policy.get("platforms"))[:8]
         if (platform := _safe_public_code(entry, limit=40))
     ]
+    for key in ("languages", "profile_types", "excluded_account_types"):
+        safe_policy[key] = [
+            item
+            for entry in _list(policy.get(key))[:16]
+            if (item := _safe_public_code(entry, limit=80))
+        ]
     output["policy"] = safe_policy
 
     for source_key in ("funnel", "rejected_by_reason"):
@@ -671,6 +747,7 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
     pipeline_running = bool(result.get("_session_pipeline_running"))
     pipeline_progress = _dict(result.get("_session_progress"))
     summary = {
+        "_authoritative_snapshot_lane": "recall",
         "kind": "kol_recall",
         "method": result.get("method"),
         "recall_snapshot_attached": True,

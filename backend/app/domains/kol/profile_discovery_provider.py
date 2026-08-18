@@ -296,6 +296,8 @@ async def discover_new_creators(
     verticals: Any = None,
     avoid_types: Any = None,
     target_persona: str = "",
+    auto_enroll: bool = True,
+    exclude_chinese: bool = True,
 ) -> dict[str, Any]:
     """Search platforms for creator candidates and mark existing KOL matches.
 
@@ -318,7 +320,11 @@ async def discover_new_creators(
         ]
         if _en_fallback:
             search_term = " ".join(_en_fallback[:8])
-    safe_limit = max(1, min(_int(limit, 15), 50))
+    # Strict online mode is provider-internal and never auto-enrolls raw rows.
+    # It may retain the concurrent 3×50 platform supply for downstream hard
+    # qualification; legacy callers keep the historical 50 cap.
+    safe_limit_cap = 150 if not auto_enroll else 50
+    safe_limit = max(1, min(_int(limit, 15), safe_limit_cap))
     safe_per_platform = max(1, min(_int(per_platform_limit, 15), 50))
     resolved_platforms = _strict_discovery_platforms(platforms, fallback=platform_hint)
     if not query:
@@ -373,6 +379,7 @@ async def discover_new_creators(
                 market=_text(market).upper(),
                 max_results=safe_per_platform,
                 relevance_language=_relevance_language,
+                strict_evidence=not auto_enroll,
             )
         except Exception as exc:
             logger.warning("profile discovery provider failed platform=%s", platform, exc_info=True)
@@ -455,7 +462,7 @@ async def discover_new_creators(
             # P0-6 修:地区排除判据改扫**真正带地区信号的文本字段**(sample_title/channel_name/handle);
             # 发现 item 无 per-item country、market 恒=搜索市场 US,旧判据三参全空 → 形同虚设。
             # 口径保留海外华人(马六甲=马来西亚/新加坡/海外华人摄影师不排,只排 CN大陆/HK/TW 强信号)。
-            _region = _detect_excluded_region(item)
+            _region = _detect_excluded_region(item) if exclude_chinese else ""
             if _is_discovery_garbage(item) or _region:
                 continue
             # 品牌自有账号闸(用户硬要求:Viltrox 官方号不进发现结果)——handle 归一后以 viltrox 打头
@@ -563,7 +570,14 @@ async def discover_new_creators(
 
     # 「库内已有」同口径分诊(12297 两粉号正是从这条免检通道回流):low_reach 丢 + 计数;
     # followers 未知折叠为分析中并补点火 enrichment;达标保留。
-    existing_matches, _existing_reach = _triage_existing_matches_reach(existing_matches)
+    if auto_enroll:
+        existing_matches, _existing_reach = _triage_existing_matches_reach(existing_matches)
+    else:
+        # Strict online net-new mode is qualification-only until an accepted
+        # row is materialized. Existing inventory cannot take quota and must
+        # not ignite reach/profile buildout as a side effect of read-only
+        # discovery.
+        _existing_reach = {"low_reach": 0, "analyzing": 0}
     _gate_dropped["low_reach"] += _existing_reach["low_reach"]
     _analyzing_total = _analyzing_new + _existing_reach["analyzing"]
 
@@ -573,17 +587,19 @@ async def discover_new_creators(
     # attach_new_discovery_result 会把 counts 原样透传进会话 result_summary → 前端显示真实入库数。
     # 注意:reach_status=analyzing 的项也照样入库+buildout 点火(「发现→自动入库→补全→过闸→再 po」)。
     auto_enrolled_count = 0
-    try:
-        auto_enrolled_count = _auto_enroll_discoveries(new_creators)
-    except Exception as exc:
-        logger.info("auto_enroll_discovery batch skipped: %s", str(exc)[:200])
+    if auto_enroll:
+        try:
+            auto_enrolled_count = _auto_enroll_discoveries(new_creators)
+        except Exception as exc:
+            logger.info("auto_enroll_discovery batch skipped: %s", str(exc)[:200])
 
     # 新面孔头像预热(后台线程 best-effort):让首屏卡片命中 image-proxy 磁盘缓存,
     # 与库内卡同一条成功通路;失败静默,绝不阻断发现。
-    try:
-        _warm_discovery_avatar_cache(new_creators)
-    except Exception:
-        logger.debug("discovery avatar warmup call skipped", exc_info=True)
+    if auto_enroll:
+        try:
+            _warm_discovery_avatar_cache(new_creators)
+        except Exception:
+            logger.debug("discovery avatar warmup call skipped", exc_info=True)
 
     status = "ready" if new_creators or existing_matches else "empty"
     if errors and (new_creators or existing_matches):

@@ -58,6 +58,7 @@ def _evidence(age_days: int) -> dict[str, Any]:
         "latest_real_video": {
             "posted_at": posted_at.isoformat(),
             "evidence_type": "video",
+            "content_url": f"https://example.test/video/latest-{age_days}",
             "source": "vkpi_kol_video_evidence.posted_at",
         },
     }
@@ -79,7 +80,7 @@ def _leaking_smart_item() -> dict[str, Any]:
         "source": "server_profile_evidence",
     }
     gate = {
-        "schema": "smart_local_gate_evidence_v1",
+        "schema": "smart_local_gate_evidence_v2",
         "passed": True,
         "market": {"value": "us", "passed": True},
         "platform": {"value": "youtube", "passed": True},
@@ -122,7 +123,7 @@ def _leaking_smart_result() -> dict[str, Any]:
         "buckets": {"creator": [item], "reviewer": []},
         "diagnostics": {"returned_count": 1, "evidence_gate_enabled": True},
         "local_qualification": {
-            "schema": "smart_local_qualified_v1",
+            "schema": "smart_local_qualified_v2",
             "returned_count": 1,
             "shortfall": 29,
             "gate_evidence": [gate],
@@ -213,7 +214,7 @@ def test_smart_local_gates_are_before_limit_and_shortfall_is_honest(
             "value": "US",
             "confidence": 0.94,
             "strength": "strong",
-            "source": "profile_annotation",
+            "source": "audience_profile_distribution",
         }
     }
     weak_us = {
@@ -221,7 +222,7 @@ def test_smart_local_gates_are_before_limit_and_shortfall_is_honest(
             "value": "US",
             "confidence": 0.79,
             "strength": "strong",
-            "source": "profile_annotation",
+            "source": "audience_profile_distribution",
         }
     }
     rows = {
@@ -274,17 +275,21 @@ def test_smart_local_gates_are_before_limit_and_shortfall_is_honest(
     assert inferred == {
         "value": "us",
         "target": "us",
-        "method": "strong_annotated_inference",
+        "method": "strong_audience_inference",
         "confidence": 0.94,
-        "source": "profile_annotation",
+        "source": "audience_profile_distribution",
         "passed": True,
     }
     assert contract["funnel"] == {
+        "candidates_evaluated": 11,
         "evidence_relevant": 11,
         "canonical_unique": 10,
+        "account_quality_pass": 10,
         "followers_pass": 8,
         "fresh_video_pass": 6,
         "market_pass": 3,
+        "language_pass": 3,
+        "profile_type_pass": 3,
         "platform_pass": 2,
         "qualified": 2,
         "returned": 2,
@@ -336,7 +341,7 @@ def test_smart_local_engine_projection_removes_private_marker(
 
     serialized = json.dumps(result, ensure_ascii=False)
     assert _PRIVATE_MARKER not in serialized
-    assert result["local_qualification"]["schema"] == "smart_local_qualified_v1"
+    assert result["local_qualification"]["schema"] == "smart_local_qualified_v2"
     assert result["items"][0]["match_evidence"]
     assert result["items"][0]["why_fit"]
     assert result["items"][0]["candidate_facets"]["contact_available"] == "yes"
@@ -457,6 +462,8 @@ def test_smart_preview_owns_30_target_and_filter_policy(
                 "input": "US YouTube lens review",
                 "limit": 1,
                 "candidate_limit": 2,
+                "languages": ["English"],
+                "profile_types": ["gear reviewer"],
                 "create_session": False,
             },
             staff={"id": 42},
@@ -470,6 +477,8 @@ def test_smart_preview_owns_30_target_and_filter_policy(
     assert captured["local_qualification_policy"] == profile_recall_qualification.smart_local_policy(
         market="us",
         platforms=["youtube"],
+        languages=["English"],
+        profile_types=["gear reviewer"],
     )
 
 
@@ -543,6 +552,8 @@ def test_smart_worker_owns_same_local_contract(monkeypatch: pytest.MonkeyPatch) 
                 "include_new_discovery": False,
                 "include_content_fit": False,
                 "include_lazy_video_backfill": False,
+                "languages": ["en", "Japanese"],
+                "profile_types": ["creator", "mixed"],
             },
         )
     )
@@ -554,6 +565,8 @@ def test_smart_worker_owns_same_local_contract(monkeypatch: pytest.MonkeyPatch) 
     assert captured["local_qualification_policy"] == profile_recall_qualification.smart_local_policy(
         market="us",
         platforms=["youtube"],
+        languages=["en", "Japanese"],
+        profile_types=["creator", "mixed"],
     )
     assert advance_call["smart_local_contract"] is True
     assert advance_call["body"]["limit"] == 30

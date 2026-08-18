@@ -84,8 +84,17 @@ def profile_crawl_plan_for_session_item(
 ) -> dict[str, Any]:
     item = search_sessions.get_session_item(int(session_id), int(item_id))
     item_type = _text(item.get("item_type"))
-    if item_type not in {"new_creator", "existing_kol", "recall_candidate"}:
-        raise ValueError("profile crawl can only run for new_creator, existing_kol, or recall_candidate items")
+    if item_type not in {"new_creator", "existing_kol", "recall_candidate", "online_qualified_candidate"}:
+        raise ValueError("profile crawl requires a discovery, recall, or strict-online candidate item")
+    if item_type == "online_qualified_candidate":
+        session = search_sessions.get_session(int(session_id))
+        approved_ids = {
+            _int(value)
+            for value in (session.get("approved_kol_ids") or [])
+            if _int(value) > 0
+        }
+        if _int(item.get("kol_pool_id")) not in approved_ids:
+            raise ValueError("strict-online profile crawl requires an approved pool candidate")
     profile_url = _profile_url_from_item(item)
     if not profile_url:
         raise ValueError("discovery item does not contain a usable profile URL")
@@ -444,9 +453,14 @@ def advance_search_session_items(
         _text(value)
         for value in (allowed_types_raw if isinstance(allowed_types_raw, list) else [])
         if _text(value)
-    } or {"new_creator", "existing_kol", "recall_candidate"}
+    } or {"new_creator", "existing_kol", "recall_candidate", "online_qualified_candidate"}
 
     session = search_sessions.get_session(int(session_id))
+    approved_pool_ids = {
+        _int(value)
+        for value in (session.get("approved_kol_ids") or [])
+        if _int(value) > 0
+    }
     candidates: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     terminal_statuses = {"ready", "queued", "running", "already_queued", "already_analyzed"}
@@ -458,8 +472,16 @@ def advance_search_session_items(
             continue
         if item_type not in allowed_types:
             continue
-        if item_type not in {"new_creator", "existing_kol", "recall_candidate"}:
+        if item_type not in {"new_creator", "existing_kol", "recall_candidate", "online_qualified_candidate"}:
             skipped.append({"item_id": item_id, "status": "skipped", "reason": "unsupported_item_type", "item_type": item_type})
+            continue
+        if item_type == "online_qualified_candidate" and _int(item.get("kol_pool_id")) not in approved_pool_ids:
+            skipped.append({
+                "item_id": item_id,
+                "status": "skipped",
+                "reason": "approval_required",
+                "item_type": item_type,
+            })
             continue
         if smart_local_contract and item_type != "recall_candidate":
             skipped.append({

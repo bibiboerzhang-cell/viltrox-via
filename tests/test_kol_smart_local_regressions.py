@@ -38,6 +38,7 @@ def _evidence(posted_at: datetime) -> dict:
         "latest_real_video": {
             "posted_at": posted_at.isoformat(),
             "evidence_type": "video",
+            "content_url": "https://example.test/video/latest",
             "source": "vkpi_kol_video_evidence.posted_at",
         }
     }

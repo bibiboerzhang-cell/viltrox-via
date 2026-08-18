@@ -49,7 +49,12 @@ class _FakeCursor:
     ("body", "expected_advance_limit", "expected_smart_local"),
     [
         ({}, 15, False),
-        ({"advance_limit": 30, "local_qualification_spec": {"version": "local_30_v1", "target_count": 30}}, 30, True),
+        ({
+            "advance_limit": 30,
+            "local_qualification_spec": {"version": "local_30_v1", "target_count": 30},
+            "languages": ["ja"],
+            "profile_types": ["reviewer"],
+        }, 30, True),
     ],
 )
 def test_enqueue_smart_search_profile_advance_records_session_job_without_provider_calls(
@@ -100,10 +105,14 @@ def test_enqueue_smart_search_profile_advance_records_session_job_without_provid
     assert payload["query_text"] == "找适合闪光灯的 KOL"
     assert payload["creator_quota"] == 15
     assert payload["reviewer_quota"] == 15
+    assert payload["vector_weight"] == 0.85
+    assert payload["type_weight"] == 0.15
     assert payload["include_new_discovery"] is True
     assert payload["new_discovery_limit"] == 15
     assert payload["advance_limit"] == expected_advance_limit
     assert payload["_smart_local_30_contract"] is expected_smart_local
+    assert payload["languages"] == body.get("languages")
+    assert payload["profile_types"] == body.get("profile_types")
     assert payload["max_posts"] == 12
     assert payload["advance_mode"] == "account_deep"
     assert payload["item_types"] == ["new_creator", "existing_kol", "recall_candidate"]
@@ -115,6 +124,66 @@ def test_enqueue_smart_search_profile_advance_records_session_job_without_provid
     assert job_summary["advance_limit"] == expected_advance_limit
     assert job_summary["advance_mode"] == "account_deep"
     assert job_summary["viltrox_fit_score_untouched"] is True
+
+
+def test_profile_advance_reuses_owned_preview_session_and_same_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _FakeConn()
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(profile_discovery_queue, "get_conn", lambda: conn)
+
+    def ensure(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {
+            "id": 321,
+            "status": "ready",
+            "query_text": "camera reviewer",
+            "query_type": "text_recall",
+        }
+
+    monkeypatch.setattr(profile_discovery_queue.search_sessions, "ensure_session_for_result", ensure)
+    monkeypatch.setattr(
+        profile_discovery_queue.search_sessions,
+        "update_session_result_summary",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        profile_discovery_queue.search_sessions,
+        "get_session",
+        lambda session_id: {"id": session_id, "status": "running", "items": []},
+    )
+    result = profile_discovery.enqueue_smart_search_profile_advance(
+        query_text="camera reviewer",
+        body={"session_id": 321},
+        staff={"id": 42},
+    )
+    assert captured["session_id"] == 321
+    assert captured["create"] is False
+    assert result["session_id"] == 321
+    payload = json.loads(conn.executed[0][1][0])
+    assert payload["search_session_id"] == 321
+
+
+def test_profile_advance_rejects_cross_query_preview_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        profile_discovery_queue.search_sessions,
+        "ensure_session_for_result",
+        lambda **_kwargs: {
+            "id": 321,
+            "status": "ready",
+            "query_text": "portrait creator",
+            "query_type": "text_recall",
+        },
+    )
+    with pytest.raises(ValueError, match="session query does not match"):
+        profile_discovery.enqueue_smart_search_profile_advance(
+            query_text="camera reviewer",
+            body={"session_id": 321},
+            staff={"id": 42},
+        )
 
 
 def test_smart_search_profile_advance_job_queues_pipeline_instead_of_calling_recall(monkeypatch: pytest.MonkeyPatch) -> None:

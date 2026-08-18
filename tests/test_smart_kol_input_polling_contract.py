@@ -36,7 +36,10 @@ class SmartKolInputPollingContractTests(unittest.TestCase):
         self.assertIn("if (progress.requiredTasksComplete)", self.source)
         self.assertIn("Date.now() - terminalSince >= 30000", self.source)
         self.assertNotIn("haveDiscovery || graceUsedUp", self.source)
-        self.assertIn("setActiveSearchSessionId(null);", self.source)
+        # Polling completion must stop only the transport loop.  The displayed
+        # session remains bound so terminal results can still be approved.
+        self.assertIn("setPollingSearchSessionId(null);", self.source)
+        self.assertNotIn("setActiveSearchSessionId(null);", self.source)
         self.assertIn("结果已更新", self.source)
         self.assertIn("void refreshHistory();", self.source)
 

@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
-import { LocalQualifiedList } from "./SmartKolInputPanel.LocalQualifiedList";
+import { LocalQualifiedList, StrictQualifiedList } from "./SmartKolInputPanel.LocalQualifiedList";
 import { localQualifiedSummary } from "./SmartKolInputPanel.LocalQualified";
 import { readPersistedSearchDisplay, sanitizeSearchDisplayForCache } from "./SmartKolInputPanel.derivers";
 
@@ -16,6 +16,17 @@ function result(items: any[], diagnostics: Record<string, unknown> = {}): any {
   };
 }
 
+function strictProof(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schema: "smart_local_gate_evidence_v2",
+    passed: true,
+    account_quality: { passed: true }, followers: { passed: true }, activity: { passed: true },
+    market: { passed: true }, language: { passed: true }, profile_type: { passed: true },
+    platform: { passed: true }, relevance: { passed: true },
+    ...overrides,
+  };
+}
+
 describe("local qualified first-list contract", () => {
   it("counts only explicit server-qualified unique identities and preserves server rank", () => {
     const summary = localQualifiedSummary(result([
@@ -24,6 +35,7 @@ describe("local qualified first-list contract", () => {
         handle: "second",
         platform: "youtube",
         followers: 9800,
+        qualification_evidence: strictProof(),
         source_fields: { server_rank: 2, qualification_status: "qualified" },
       },
       {
@@ -31,6 +43,7 @@ describe("local qualified first-list contract", () => {
         handle: "first",
         platform: "youtube",
         followers: 12000,
+        qualification_evidence: strictProof(),
         source_fields: { server_rank: 1, qualification: { status: "accepted" } },
       },
       {
@@ -38,6 +51,7 @@ describe("local qualified first-list contract", () => {
         handle: "FIRST",
         platform: "youtube",
         followers: 12000,
+        qualification_evidence: strictProof(),
         source_fields: { server_rank: 4, qualification_status: "qualified" },
       },
       {
@@ -61,12 +75,12 @@ describe("local qualified first-list contract", () => {
     expect(summary.shortfallReasons[0]).toContain("待服务端硬闸验收");
   });
 
-  it("uses explicit backend quota counts and shortfall reasons without promoting pending rows", () => {
+  it("clamps a strict-v2 aggregate to visible qualified rows and keeps shortfall reasons", () => {
     const summary = localQualifiedSummary(result([
       { kol_pool_id: 1, handle: "pending", platform: "youtube", followers: 5000 },
     ], {
       local_lane: {
-        schema: "smart_local_qualified_v1",
+        schema: "smart_local_qualified_v2",
         target_count: 30,
         qualified_count: 18,
         returned_count: 18,
@@ -75,9 +89,9 @@ describe("local qualified first-list contract", () => {
       },
     }));
 
-    expect(summary.qualified).toBe(18);
-    expect(summary.serverReturned).toBe(18);
-    expect(summary.uniqueQualified).toBe(18);
+    expect(summary.qualified).toBe(0);
+    expect(summary.serverReturned).toBe(1);
+    expect(summary.uniqueQualified).toBe(0);
     expect(summary.pending).toBe(1);
     expect(summary.shortfallReasons).toEqual(["最新视频日期待核验 7", "市场证据待核验 5"]);
   });
@@ -95,19 +109,81 @@ describe("local qualified first-list contract", () => {
     expect(summary.shortfall).toBe(30);
   });
 
+  it("keeps a v1 proof in legacy pending state instead of treating it as strict v2", () => {
+    const summary = localQualifiedSummary(result([{
+      kol_pool_id: 7,
+      handle: "legacy-v1",
+      platform: "youtube",
+      qualification_evidence: { schema: "smart_local_gate_evidence_v1", passed: true },
+    }], {
+      local_lane: { schema: "smart_local_qualified_v1", qualified_count: 30, returned_count: 30 },
+    }));
+
+    expect(summary.qualified).toBe(0);
+    expect(summary.rows[0].qualification).toBe("pending");
+    expect(summary.serverReturned).toBe(1);
+  });
+
+  it("selects only strict server-qualified recall rows and supports select all", () => {
+    const onSelectionChange = vi.fn();
+    render(<LocalQualifiedList
+      result={result([
+        { kol_pool_id: 1, handle: "qualified-one", platform: "youtube", qualification_evidence: strictProof() },
+        { kol_pool_id: 2, handle: "qualified-two", platform: "instagram", qualification_evidence: strictProof() },
+        { kol_pool_id: 3, handle: "legacy-pending", platform: "youtube", qualification_evidence: { schema: "smart_local_gate_evidence_v1", passed: true } },
+        { kol_pool_id: 4, handle: "rejected", platform: "youtube", qualification_evidence: { schema: "smart_local_gate_evidence_v2", passed: false } },
+      ])}
+      selectedIds={new Set()}
+      onSelectionChange={onSelectionChange}
+    />);
+
+    expect((screen.getByRole("checkbox", { name: "选择本地 KOL legacy-pending" }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole("checkbox", { name: "选择本地 KOL rejected" }) as HTMLInputElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("checkbox", { name: "全选本地合格 KOL" }));
+    expect([...onSelectionChange.mock.calls[0][0]]).toEqual([1, 2]);
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择本地 KOL qualified-one" }));
+    expect([...onSelectionChange.mock.calls[1][0]]).toEqual([1]);
+  });
+
+  it("keeps an accepted online row unselectable until its server snapshot is terminal", () => {
+    const summary = localQualifiedSummary(result([
+      { kol_pool_id: 31, handle: "online-one", platform: "youtube", qualification_evidence: strictProof() },
+    ]));
+    render(<StrictQualifiedList
+      summary={summary}
+      lane="online"
+      selectionReady={false}
+      selectedIds={new Set()}
+      onSelectionChange={vi.fn()}
+    />);
+
+    expect(screen.getByText("联网净新增 1/30")).toBeTruthy();
+    expect((screen.getByRole("checkbox", { name: "选择联网 KOL online-one" }) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole("checkbox", { name: "全选联网净新增 KOL" }) as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it("does not qualify an incomplete or internally failed v2 proof", () => {
+    const summary = localQualifiedSummary(result([
+      { kol_pool_id: 20, handle: "top-only", platform: "youtube", qualification_evidence: { schema: "smart_local_gate_evidence_v2", passed: true } },
+      { kol_pool_id: 21, handle: "failed-market", platform: "youtube", qualification_evidence: strictProof({ market: { passed: false } }) },
+    ]));
+    expect(summary.rows.map((row) => row.qualification)).toEqual(["pending", "rejected"]);
+    expect(summary.qualified).toBe(0);
+  });
+
   it("prefers an authoritative polled contact preview over the static facet", () => {
     const summary = localQualifiedSummary(result([{
       kol_pool_id: 9,
       handle: "contact-updated",
       platform: "youtube",
-      qualification_evidence: { schema: "smart_local_gate_evidence_v1", passed: true },
+      qualification_evidence: strictProof(),
       candidate_facets: { contact_available: "no" },
       source_fields: { contact_preview: { status: "ready" } },
     }, {
       kol_pool_id: 10,
       handle: "contact-empty",
       platform: "youtube",
-      qualification_evidence: { schema: "smart_local_gate_evidence_v1", passed: true },
+      qualification_evidence: strictProof(),
       candidate_facets: { contact_available: "yes" },
       source_fields: { contactability: { status: "empty" } },
     }]));
@@ -124,13 +200,14 @@ describe("local qualified first-list contract", () => {
       platform: "youtube",
       followers: 18800,
       why_fit: "面向美国市场的摄影器材测评",
-      qualification_evidence: {
-        schema: "smart_local_gate_evidence_v1",
-        passed: true,
+      qualification_evidence: strictProof({
         followers: { value: 18800, minimum: 3000, known: true, passed: true },
         activity: { posted_at: "2026-08-03T00:00:00Z", passed: true },
         market: { value: "US", passed: true, source: "channel_profile" },
-      },
+        language: { values: ["en"], targets: ["en"], passed: true },
+        profile_type: { values: ["reviewer"], targets: ["reviewer"], passed: true },
+        account_quality: { verdict: "eligible_creator_account", passed: true },
+      }),
       candidate_facets: { contact_available: "yes" },
       source_fields: {
         server_rank: 1,
@@ -142,6 +219,8 @@ describe("local qualified first-list contract", () => {
     expect(screen.getByText("Creator Eight")).toBeTruthy();
     expect(screen.getByText(/1\.9万|18\.8K|1\.88万/)).toBeTruthy();
     expect(screen.getByText(/2026.*08.*03/)).toBeTruthy();
+    expect(screen.getByText("en")).toBeTruthy();
+    expect(screen.getByText("评测号")).toBeTruthy();
     expect(screen.getByText("可联系")).toBeTruthy();
     expect(screen.getByText("分析中")).toBeTruthy();
     expect(screen.queryByText("private@example.com")).toBeNull();
@@ -152,11 +231,9 @@ describe("local qualified first-list contract", () => {
       kol_pool_id: 9,
       handle: "proof-only",
       platform: "youtube",
-      qualification_evidence: {
-        schema: "smart_local_gate_evidence_v1",
-        passed: true,
+      qualification_evidence: strictProof({
         followers: { value: 9600, minimum: 3000, known: true, passed: true },
-      },
+      }),
     }]));
 
     expect(summary.rows[0].followers).toBe(9600);
@@ -246,7 +323,7 @@ describe("search display cache privacy", () => {
     expect(safe.bio).toContain("Camera creator.");
     expect(safe.bio).not.toContain("private@example.com");
     expect(safe.bio).not.toContain("555");
-    expect(safe.messenger).not.toContain("private_handle");
+    expect(safe.messenger).toBeUndefined();
     expect(safe.mail_route).toBe("");
     expect(safe.tel_route).toBe("");
     expect(safe.social_route_a).toBe("");
@@ -255,6 +332,35 @@ describe("search display cache privacy", () => {
     expect(safe.publicBio).toBe("Camera reviews, portrait tutorials, and weekly field tests.");
     expect(safe.profile_url).toBe("https://www.youtube.com/@public_creator");
     expect(safe.handle).toBe("@public_creator");
+  });
+
+  it("redacts nested social DM routes and contact URLs without erasing safe platform copy", () => {
+    const safe = sanitizeSearchDisplayForCache({
+      profile_flow: {
+        profile_data: {
+          bio: [
+            "Camera creator.", "Messenger: private_handle", "DM me on Instagram @igprivate",
+            "message me on TikTok @tikprivate", "Facebook DM @fbprivate",
+            "Twitter @xprivate message me", "@reverseprivate on X DM me",
+          ].join(" "),
+          safe_copy: "Messenger app review. Follow @creator on Instagram for reviews.",
+          instagram_profile: "https://www.instagram.com/public_creator/",
+        },
+      },
+      routes: [
+        "https://m.me/private", "https://line.me/R/ti/p/~private", "https://signal.me/#p/+15550100",
+        "https://discord.gg/private", "https://discord.com/invite/private", "https://discord.com/users/123",
+        "https://discord.com/channels/@me/123", "https://instagram.com/direct/t/123",
+        "https://x.com/messages/compose?recipient_id=1", "https://twitter.com/messages/123",
+        "https://facebook.com/messages/t/123", "sms:+15550100",
+      ],
+    }) as any;
+
+    const profile = safe.profile_flow.profile_data;
+    expect(profile.bio).toBe("Camera creator.");
+    expect(profile.safe_copy).toBe("Messenger app review. Follow @creator on Instagram for reviews.");
+    expect(profile.instagram_profile).toBe("https://www.instagram.com/public_creator/");
+    expect(safe.routes).toEqual(Array(12).fill(""));
   });
 
   it("keeps only bounded enum, boolean, and numeric values in contact status containers", () => {

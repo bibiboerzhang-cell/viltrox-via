@@ -8,13 +8,18 @@ from typing import Any
 from app.db.connection import get_conn
 from app.domains.kol.search_sessions_schema import PENDING_ENRICHMENT_STATUSES
 from app.domains.kol.search_sessions_serde import (
+    _compact_enrichment_state,
+    _compact_public_profile_data,
     _dict,
     _float_or_none,
     _int_or_none,
     _json_dumps,
     _loads,
     _normalize_status,
+    _public_session_item_source_url,
     _row_to_item,
+    _sanitize_session_payload,
+    _sanitize_session_value,
     _text,
 )
 
@@ -101,10 +106,10 @@ def update_item_profile_execution(
         "kol_pool_id": kol_pool_id,
         "operation": profile_flow.get("operation"),
         "run_id": profile_flow.get("run_id"),
-        "profile_data": profile_flow.get("profile_data"),
-        "write_result": profile_flow.get("write_result"),
-        "contact_enrichment": contact_enrichment,
-        "audience_enrichment": audience_enrichment,
+        "profile_data": _compact_public_profile_data(profile_flow.get("profile_data")),
+        "write_result": _compact_enrichment_state(profile_flow.get("write_result")),
+        "contact_enrichment": _compact_enrichment_state(contact_enrichment),
+        "audience_enrichment": _compact_enrichment_state(audience_enrichment),
         "representative_video_analysis": profile_flow.get("representative_video_analysis"),
         "viltrox_fit_score_changed_ids": profile_flow.get("viltrox_fit_score_changed_ids")
         or profile_result.get("viltrox_fit_score_changed_ids")
@@ -113,6 +118,9 @@ def update_item_profile_execution(
         if "viltrox_fit_score_untouched" in profile_flow
         else profile_result.get("viltrox_fit_score_untouched"),
     }
+    # Clean the entire item at the persistence boundary. This also removes
+    # legacy raw/contact fields already present in the row being advanced.
+    payload = _sanitize_session_payload(payload)
     updated = conn.execute(
         """
         UPDATE vkpi_kol_search_session_items
@@ -447,14 +455,22 @@ def _update_session(
             updated_at=NOW()
         WHERE id=?
         """,
-        (_normalize_status(status), _json_dumps(summary), int(session_id)),
+        (
+            _normalize_status(status),
+            _json_dumps(_sanitize_session_payload(summary)),
+            int(session_id),
+        ),
     )
 
 
 def _upsert_item(conn: Any, session_id: int, item: dict[str, Any]) -> dict[str, Any]:
-    dedupe_key = _text(item.get("dedupe_key")) or (
-        f"item:{_text(item.get('item_type'))}:{_text(item.get('source_url'))}:"
-        f"{_text(item.get('kol_pool_id'))}"
+    raw_dedupe = _sanitize_session_value(_text(item.get("dedupe_key"))[:500])
+    dedupe_key = raw_dedupe if isinstance(raw_dedupe, str) and raw_dedupe else (
+        f"item:{_text(item.get('item_type'))}:pool:{_text(item.get('kol_pool_id')) or 'unknown'}:"
+        f"rank:{_text(item.get('rank')) or '0'}"
+    )
+    source_url = _public_session_item_source_url(
+        item.get("source_url"), item_type=item.get("item_type")
     )
     row = conn.execute(
         """
@@ -486,11 +502,103 @@ def _upsert_item(conn: Any, session_id: int, item: dict[str, Any]) -> dict[str, 
             _int_or_none(item.get("kol_pool_id")),
             _int_or_none(item.get("evidence_id")),
             _int_or_none(item.get("job_id")),
-            _text(item.get("source_url")),
-            _json_dumps(item.get("payload") or {}),
+            source_url,
+            _json_dumps(_sanitize_session_payload(item.get("payload") or {})),
         ),
     ).fetchone()
     return _row_to_item(row)
+
+
+def _prune_authoritative_recall_snapshot(
+    conn: Any,
+    session_id: int,
+    written: list[dict[str, Any]],
+    *,
+    summary: dict[str, Any],
+) -> None:
+    """Remove recall rows absent from a complete server-owned snapshot.
+
+    The upserts, this prune, and the session-summary update share the caller's
+    transaction.  Retained candidates keep their row ids, while an explicitly
+    empty snapshot clears every prior recall candidate without touching
+    discovery, URL, or other session item types.
+    """
+    if (
+        _text(summary.get("_authoritative_snapshot_lane")) != "recall"
+        or
+        _text(summary.get("kind")) != "kol_recall"
+        or summary.get("recall_snapshot_attached") is not True
+        or summary.get("recall_snapshot_complete") is not True
+    ):
+        return
+    retained_keys = sorted({
+        _text(item.get("dedupe_key"))
+        for item in written
+        if _text(item.get("item_type")) == "recall_candidate"
+        and _text(item.get("dedupe_key"))
+    })
+    if not retained_keys:
+        conn.execute(
+            """
+            DELETE FROM vkpi_kol_search_session_items
+            WHERE session_id=? AND item_type='recall_candidate'
+            """,
+            (int(session_id),),
+        )
+        return
+    placeholders = ", ".join(["?"] * len(retained_keys))
+    conn.execute(
+        f"""
+        DELETE FROM vkpi_kol_search_session_items
+        WHERE session_id=?
+          AND item_type='recall_candidate'
+          AND dedupe_key NOT IN ({placeholders})
+        """,
+        (int(session_id), *retained_keys),
+    )
+
+
+def _prune_authoritative_online_snapshot(
+    conn: Any,
+    session_id: int,
+    written: list[dict[str, Any]],
+    *,
+    summary: dict[str, Any],
+) -> None:
+    """Prune only online strict cards absent from a complete online snapshot."""
+    qualification = _dict(summary.get("online_qualification"))
+    if (
+        _text(summary.get("_authoritative_snapshot_lane")) != "online"
+        or _text(qualification.get("schema")) != "smart_online_net_new_qualified_v1"
+        or qualification.get("server_owned") is not True
+        or qualification.get("snapshot_complete") is not True
+    ):
+        return
+    retained_keys = sorted({
+        _text(item.get("dedupe_key"))
+        for item in written
+        if _text(item.get("item_type")) == "online_qualified_candidate"
+        and _text(item.get("dedupe_key"))
+    })
+    if not retained_keys:
+        conn.execute(
+            """
+            DELETE FROM vkpi_kol_search_session_items
+            WHERE session_id=? AND item_type='online_qualified_candidate'
+            """,
+            (int(session_id),),
+        )
+        return
+    placeholders = ", ".join(["?"] * len(retained_keys))
+    conn.execute(
+        f"""
+        DELETE FROM vkpi_kol_search_session_items
+        WHERE session_id=?
+          AND item_type='online_qualified_candidate'
+          AND dedupe_key NOT IN ({placeholders})
+        """,
+        (int(session_id), *retained_keys),
+    )
 
 
 def record_items(
@@ -512,11 +620,26 @@ def record_items(
         raise LookupError(f"search session not found: {session_id}")
     upsert = upsert_item_fn or _upsert_item
     written = [upsert(conn, int(session_id), item) for item in items]
+    resolved_summary = dict(summary or {"items_written": len(written)})
+    _prune_authoritative_recall_snapshot(
+        conn,
+        int(session_id),
+        written,
+        summary=resolved_summary,
+    )
+    _prune_authoritative_online_snapshot(
+        conn,
+        int(session_id),
+        written,
+        summary=resolved_summary,
+    )
+    persisted_summary = dict(resolved_summary)
+    persisted_summary.pop("_authoritative_snapshot_lane", None)
     (update_session_fn or _update_session)(
         conn,
         int(session_id),
         status=status,
-        summary=summary or {"items_written": len(written)},
+        summary=persisted_summary,
     )
     conn.commit()
     return {

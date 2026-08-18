@@ -9,7 +9,12 @@ from __future__ import annotations
 from typing import Any
 
 from app.db.connection import get_conn
-from app.domains.kol import profile_recall, search_sessions
+from app.domains.kol import (
+    profile_recall,
+    profile_recall_qualification,
+    search_sessions,
+    search_sessions_online,
+)
 from app.domains.kol.discovery_filters import _int, _staff_user_id, _text
 from app.domains.kol.search_progress_contract import completion_contract
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
@@ -28,6 +33,16 @@ def _requests_smart_local_30(body: dict[str, Any]) -> bool:
     return bool(
         isinstance(spec, dict)
         and _text(spec.get("version")) == "local_30_v1"
+        and _int(spec.get("target_count")) == 30
+    )
+
+
+def _requests_smart_online_30(body: dict[str, Any]) -> bool:
+    """Recognize only the named online net-new contract."""
+    spec = body.get("online_qualification_spec")
+    return bool(
+        isinstance(spec, dict)
+        and _text(spec.get("version")) == "online_net_new_30_v1"
         and _int(spec.get("target_count")) == 30
     )
 
@@ -331,9 +346,32 @@ def enqueue_smart_search_profile_advance(
     if not query:
         raise ValueError("query_text is required")
     smart_local_30 = _requests_smart_local_30(body)
+    smart_online_30 = _requests_smart_online_30(body)
+    if smart_online_30:
+        # Reject unsupported strict platforms before creating a session/job or
+        # spending provider budget. Legacy discovery keeps its wider surface.
+        from app.domains.kol import profile_online_qualification
+
+        profile_online_qualification.online_policy(
+            market=body.get("market") or body.get("country"),
+            platforms=(
+                body.get("new_discovery_platforms")
+                or body.get("discovery_platforms")
+                or body.get("platforms")
+                or body.get("platform")
+            ),
+            languages=body.get("languages") or body.get("content_languages"),
+            profile_types=body.get("profile_types") or body.get("kol_types"),
+            exclude_chinese=bool(body.get("exclude_chinese", True)),
+        )
+    raw_session_id = body.get("session_id") or body.get("search_session_id")
+    try:
+        requested_session_id = int(raw_session_id) if raw_session_id not in (None, "") else None
+    except (TypeError, ValueError):
+        raise ValueError("session_id must be an integer") from None
     session = search_sessions.ensure_session_for_result(
-        session_id=None,
-        create=True,
+        session_id=requested_session_id,
+        create=requested_session_id is None,
         query_text=query,
         query_type="text_recall",
         source=_text(body.get("source") or "kol_smart_search_profile_pipeline"),
@@ -342,6 +380,10 @@ def enqueue_smart_search_profile_advance(
     )
     if not session:
         raise RuntimeError("smart search session was not created")
+    if requested_session_id and _text(session.get("query_text")) != query:
+        raise ValueError("session query does not match profile-advance query")
+    if requested_session_id and _text(session.get("query_type")) != "text_recall":
+        raise ValueError("session is not a text-recall session")
     session_id = int(session["id"])
     triggered_by_user_id = _staff_user_id(staff)
     if body.get("filters") not in (None, "") and not isinstance(body.get("filters"), dict):
@@ -387,8 +429,8 @@ def enqueue_smart_search_profile_advance(
         "ratio_policy": _text(body.get("ratio_policy") or "soft"),
         "mixed_policy": _text(body.get("mixed_policy") or "dominant"),
         "dedupe": bool(body.get("dedupe", True)),
-        "vector_weight": body.get("vector_weight") if body.get("vector_weight") is not None else 0.7,
-        "type_weight": body.get("type_weight") if body.get("type_weight") is not None else 0.3,
+        "vector_weight": body.get("vector_weight") if body.get("vector_weight") is not None else profile_recall_qualification.SMART_LOCAL_VECTOR_WEIGHT,
+        "type_weight": body.get("type_weight") if body.get("type_weight") is not None else profile_recall_qualification.SMART_LOCAL_TYPE_WEIGHT,
         "type_boost_enabled": bool(body.get("type_boost_enabled", True)),
         # 接线补漏(2026-07-02 验收):前端「排除 中国/港/台 地区」开关一直随 body 传到这里,但此前
         # payload 漏透传 → worker 的 execute_smart_search_profile_advance_pipeline 只能吃默认 True,
@@ -408,11 +450,16 @@ def enqueue_smart_search_profile_advance(
         # 收口路①-2:内容契合入队控量旋钮(默认开,top N=6);worker→pipeline 透传。
         "include_content_fit": bool(body.get("include_content_fit", True)),
         "content_fit_top_n": max(1, min(_int(body.get("content_fit_top_n"), 6), 12)),
-        "new_discovery_limit": max(1, min(_int(body.get("new_discovery_limit") or body.get("discovery_limit"), 15), 50)),
-        "new_discovery_per_platform_limit": max(1, min(_int(body.get("new_discovery_per_platform_limit") or body.get("new_discovery_limit") or body.get("discovery_limit"), 15), 50)),
+        "new_discovery_limit": max(1, min(_int(body.get("new_discovery_limit") or body.get("discovery_limit"), 50 if smart_online_30 else 15), 50)),
+        "new_discovery_per_platform_limit": max(1, min(_int(body.get("new_discovery_per_platform_limit") or body.get("new_discovery_limit") or body.get("discovery_limit"), 50 if smart_online_30 else 15), 50)),
         "new_discovery_platforms": body.get("new_discovery_platforms") or body.get("discovery_platforms"),
         "platform": _text(body.get("platform")),
         "market": _text(body.get("market") or body.get("country")),
+        # Explicit operator filters are re-normalized by the worker's
+        # server-owned qualification policy. Keep raw bounded request values;
+        # an invalid value must fail closed instead of silently widening.
+        "languages": body.get("languages") or body.get("content_languages"),
+        "profile_types": body.get("profile_types") or body.get("kol_types"),
         "advance_limit": max(
             1,
             min(
@@ -421,6 +468,7 @@ def enqueue_smart_search_profile_advance(
             ),
         ),
         "_smart_local_30_contract": smart_local_30,
+        "_smart_online_30_contract": smart_online_30,
         "max_posts": max(1, min(_int(body.get("max_posts"), 12), 12)),
         "advance_mode": _text(body.get("advance_mode") or body.get("mode") or "account_deep"),
         "representative_video_limit": body.get("representative_video_limit"),
@@ -480,6 +528,9 @@ def enqueue_smart_search_profile_advance(
                 **queued_contract,
             },
             **queued_contract,
+            **({
+                "online_qualification": search_sessions_online.queued_online_qualification()
+            } if smart_online_30 else {}),
             "smart_search_profile_advance_job": {
                 "status": "queued" if inserted else "already_queued",
                 "job_id": job.get("id"),

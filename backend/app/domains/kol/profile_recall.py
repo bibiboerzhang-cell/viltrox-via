@@ -560,7 +560,55 @@ def _adoption_profile() -> dict:
 
 
 def _evidence_summaries(kol_pool_ids: list[int]) -> dict[int, dict[str, Any]]:
-    return _projection._evidence_summaries(kol_pool_ids, get_connection=get_conn)
+    summaries = _projection._evidence_summaries(
+        kol_pool_ids,
+        get_connection=get_conn,
+    )
+    if not kol_pool_ids:
+        return summaries
+    # The explainable projection intentionally keeps its existing coverage and
+    # truth metadata.  Strict qualification additionally needs the identity of
+    # the newest persisted video, so merge that small factual projection rather
+    # than replacing the richer 472 response shape.
+    placeholders = ",".join(["?"] * len(kol_pool_ids))
+    try:
+        rows = get_conn().execute(
+            f"""
+            SELECT e.kol_pool_id,
+                   e.posted_at,
+                   COALESCE(NULLIF(e.evidence_type, ''), 'video') AS evidence_type,
+                   e.content_url,
+                   COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), NULLIF(e.content_url, '')) AS title
+            FROM vkpi_kol_video_evidence e
+            WHERE e.kol_pool_id IN ({placeholders})
+              AND e.posted_at IS NOT NULL
+              AND e.is_active IS NOT FALSE
+              AND (e.evidence_type IS NULL OR LOWER(TRIM(e.evidence_type)) = 'video')
+            ORDER BY e.kol_pool_id, e.posted_at DESC NULLS LAST, e.id DESC
+            """,
+            tuple(kol_pool_ids),
+        ).fetchall()
+        seen: set[int] = set()
+        for raw in rows:
+            row = dict(raw)
+            kol_id = int(row.get("kol_pool_id") or 0)
+            if kol_id <= 0 or kol_id in seen:
+                continue
+            seen.add(kol_id)
+            summaries.setdefault(kol_id, {})["latest_real_video"] = {
+                "posted_at": row.get("posted_at"),
+                "evidence_type": row.get("evidence_type") or "video",
+                "content_url": _clean_text(row.get("content_url"), 500),
+                "title": _clean_text(row.get("title"), 220),
+                "is_active": True,
+                "source": "vkpi_kol_video_evidence.posted_at",
+            }
+    except Exception:
+        # Legacy snapshots may not expose the new identity fields.  Normal
+        # recall stays available; strict qualification remains fail-closed
+        # because its activity gate requires a persisted URL/video id.
+        logger.warning("latest real-video identity projection unavailable", exc_info=True)
+    return summaries
 
 
 def _smart_local_evidence_summaries(
@@ -655,6 +703,9 @@ def _smart_local_evidence_summaries(
                 {
                     "posted_at": latest.get("posted_at"),
                     "evidence_type": latest.get("evidence_type") or "video",
+                    "content_url": _clean_text(latest.get("content_url"), 500),
+                    "title": _clean_text(latest.get("title"), 220),
+                    "is_active": True,
                     "source": "vkpi_kol_video_evidence.posted_at",
                 }
                 if latest
@@ -718,6 +769,25 @@ def _smart_local_qualification_context(
             if "evidence_type" in evidence_columns
             else "'video' AS evidence_type"
         )
+        if "title" in evidence_columns and "video_title" in evidence_columns:
+            title_select = (
+                "COALESCE(NULLIF(title, ''), NULLIF(video_title, ''), "
+                "NULLIF(content_url, '')) AS title"
+                if "content_url" in evidence_columns
+                else "COALESCE(NULLIF(title, ''), NULLIF(video_title, '')) AS title"
+            )
+        elif "title" in evidence_columns:
+            title_select = "NULLIF(title, '') AS title"
+        elif "video_title" in evidence_columns:
+            title_select = "NULLIF(video_title, '') AS title"
+        else:
+            title_select = "'' AS title"
+        content_url_select = (
+            "content_url" if "content_url" in evidence_columns else "'' AS content_url"
+        )
+        active_select = (
+            "is_active" if "is_active" in evidence_columns else "TRUE AS is_active"
+        )
         active_clause = "AND is_active IS NOT FALSE" if "is_active" in evidence_columns else ""
         type_clause = (
             "AND (evidence_type IS NULL OR LOWER(TRIM(evidence_type)) = 'video')"
@@ -726,7 +796,8 @@ def _smart_local_qualification_context(
         )
         rows = conn.execute(
             f"""
-            SELECT kol_pool_id, posted_at, {evidence_type_select}
+            SELECT kol_pool_id, posted_at, {evidence_type_select},
+                   {content_url_select}, {title_select}, {active_select}
             FROM vkpi_kol_video_evidence
             WHERE kol_pool_id IN ({placeholders})
               AND posted_at IS NOT NULL
@@ -746,6 +817,9 @@ def _smart_local_qualification_context(
             evidence_context.setdefault(kol_id, {})["latest_real_video"] = {
                 "posted_at": row.get("posted_at"),
                 "evidence_type": row.get("evidence_type") or "video",
+                "content_url": _clean_text(row.get("content_url"), 500),
+                "title": _clean_text(row.get("title"), 220),
+                "is_active": row.get("is_active") is not False,
                 "source": "vkpi_kol_video_evidence.posted_at",
             }
     except Exception:

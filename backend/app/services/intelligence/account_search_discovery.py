@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from app.core.logging import get_logger
@@ -157,6 +157,7 @@ def _youtube_channel_statistics(crawler: Any, channel_ids: List[str]) -> Dict[st
                 "custom_url": str(snippet.get("customUrl") or "").strip(),
                 "country": str(snippet.get("country") or "").strip(),
                 "description": str(snippet.get("description") or "").strip(),
+                "default_language": str(snippet.get("defaultLanguage") or "").strip(),
             }
     return out
 
@@ -217,7 +218,7 @@ def _youtube_data_api_normalize(
                 "fast_path": True,
                 # followers 仅真有值才透出(隐藏/未知不带键 → 读端诚实归「分析中」)。
                 **({"followers": followers} if followers > 0 else {}),
-                **({"country": country} if country else {}),
+                **({"country": country, "country_source": "platform_profile"} if country else {}),
                 **({"bio": bio[:500]} if bio else {}),
             }
         )
@@ -327,6 +328,132 @@ async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_
     }
 
 
+async def _youtube_data_api_strict_video_search(
+    search_query: str,
+    *,
+    market: str = "",
+    safe_limit: int = 25,
+    relevance_language: str = "en",
+) -> Dict[str, Any] | None:
+    """Fetch real <=45-day videos, then batch-enrich their declared channels."""
+    from app.platform.industry_crawlers.youtube_crawler import YouTubeCrawler
+
+    crawler = YouTubeCrawler()
+    if not crawler.api_key:
+        return None
+    variants = _youtube_search_query_variants(search_query)
+    if not variants:
+        return None
+    result_limit = max(1, min(50, int(safe_limit or 25)))
+    published_after = (
+        datetime.now(timezone.utc) - timedelta(days=45)
+    ).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+    def go() -> tuple[List[Dict[str, Any]], List[str], bool]:
+        merged: List[Dict[str, Any]] = []
+        seen_channels: set[str] = set()
+        used_queries: List[str] = []
+        any_ok = False
+        for query_variant in variants:
+            payload = crawler._request(
+                "search",
+                {
+                    "part": "snippet",
+                    "type": "video",
+                    "q": query_variant,
+                    "publishedAfter": published_after,
+                    "maxResults": result_limit,
+                    "relevanceLanguage": (relevance_language or "en").strip().lower() or "en",
+                    "safeSearch": "none",
+                },
+            )
+            if crawler._should_use_apify_fallback(payload) or str(payload.get("provider_status") or "") == "error":
+                continue
+            any_ok = True
+            used_queries.append(query_variant)
+            for raw in payload.get("items") or []:
+                if not isinstance(raw, dict):
+                    continue
+                snippet = raw.get("snippet") if isinstance(raw.get("snippet"), dict) else {}
+                channel_id = str(snippet.get("channelId") or "").strip()
+                video_id = str(((raw.get("id") or {}).get("videoId")) or "").strip()
+                if not channel_id or not video_id or channel_id in seen_channels:
+                    continue
+                seen_channels.add(channel_id)
+                merged.append(raw)
+                if len(merged) >= result_limit:
+                    break
+            if len(merged) >= result_limit:
+                break
+        return merged, used_queries, any_ok
+
+    try:
+        raw_items, used_queries, any_ok = await asyncio.to_thread(go)
+    except Exception as exc:  # pragma: no cover - network only
+        logger.warning("scanner.youtube_strict_video_search_failed", extra={"error": str(exc)})
+        return None
+    if not any_ok:
+        return None
+    channel_ids = [
+        str(((raw.get("snippet") or {}).get("channelId")) or "").strip()
+        for raw in raw_items
+    ]
+    try:
+        stats_by_id = await asyncio.to_thread(_youtube_channel_statistics, crawler, channel_ids)
+    except Exception as exc:  # pragma: no cover - network only
+        logger.warning("scanner.youtube_strict_channel_stats_failed", extra={"error": str(exc)})
+        stats_by_id = {}
+
+    items: List[Dict[str, Any]] = []
+    for raw in raw_items:
+        snippet = raw.get("snippet") if isinstance(raw.get("snippet"), dict) else {}
+        channel_id = str(snippet.get("channelId") or "").strip()
+        video_id = str(((raw.get("id") or {}).get("videoId")) or "").strip()
+        stats = stats_by_id.get(channel_id) or {}
+        custom_handle = str(stats.get("custom_url") or "").lstrip("@").strip()
+        handle = custom_handle or channel_id
+        followers = _normalize_int(stats.get("subscribers"))
+        country = str(stats.get("country") or "").strip()
+        language = str(stats.get("default_language") or snippet.get("defaultAudioLanguage") or "").strip()
+        thumbnail = (((snippet.get("thumbnails") or {}).get("high") or (snippet.get("thumbnails") or {}).get("default") or {}).get("url") or "")
+        items.append({
+            "platform": "youtube",
+            "channel_id": channel_id,
+            "channel_name": str(snippet.get("channelTitle") or "Unknown creator").strip(),
+            "handle": handle,
+            "channel_url": f"https://www.youtube.com/channel/{channel_id}",
+            "source_url": f"https://www.youtube.com/watch?v={video_id}",
+            "content_url": f"https://www.youtube.com/watch?v={video_id}",
+            "video_id": video_id,
+            "sample_title": str(snippet.get("title") or "")[:300],
+            "published": str(snippet.get("publishedAt") or "").strip(),
+            "avatar_url": str(thumbnail).strip(),
+            "bio": str(stats.get("description") or "")[:500],
+            "provider_actor": "youtube-data-api/search.list:video",
+            **({"followers": followers} if followers > 0 else {}),
+            **({"country": country, "country_source": "platform_profile"} if country else {}),
+            **({"language": language, "language_source": "platform_profile"} if language else {}),
+        })
+    return {
+        "status": "done",
+        "platform": "youtube",
+        "query": (search_query or "").strip(),
+        "market": (market or "").strip().upper(),
+        "items": items,
+        "metadata": {
+            "actor_id": "youtube-data-api/search.list:video",
+            "provider": "youtube_data_api",
+            "strict_video_evidence": True,
+            "requested": result_limit,
+            "returned": len(items),
+            "provider_queries": used_queries,
+            "published_after": published_after,
+            "quota_units": 100 * max(1, len(used_queries)) + (1 if stats_by_id else 0),
+            "channels_enriched": sum(1 for item in items if item.get("followers")),
+        },
+    }
+
+
 def _tiktok_collapse_author_videos(raw_items: List[Dict[str, Any]], safe_limit: int) -> List[Dict[str, Any]]:
     """重复卡修(2026-07-21 sky_vanya 案)·TT 号主收敛:关键词搜出的视频流按 authorMeta.name
     收敛成「每号主一条」(保 actor 相关度序首条)。多路短词变体 + 同号主多视频会让同一人
@@ -417,6 +544,7 @@ async def search_platform_content(
     market: str = "",
     max_results: int = 25,
     relevance_language: str = "en",
+    strict_evidence: bool = False,
 ) -> Dict[str, Any]:
     """Search public platform content and normalize it into KOL candidates.
 
@@ -429,9 +557,6 @@ async def search_platform_content(
     safe_limit = max(1, min(int(max_results or 25), 100))
     if not normalized_query:
         return {"status": "invalid_query", "items": [], "message": "query is required"}
-    if not _scan_service().provider_ready():
-        return {"status": "provider_unavailable", "items": [], "message": "APIFY_TOKEN is not configured"}
-
     search_query = _market_query(normalized_query, market)
     provider_queries = [search_query]
 
@@ -441,9 +566,28 @@ async def search_platform_content(
     # K2 修:≥1 条即短路会让 1-2 条的贫瘠结果饿死 YT 新发现(997 案 requested 20 → 1),
     # 快路径多路合并后仍 <3 条 → 一样落回 Apify 视频搜索补深。
     if normalized_platform == "youtube":
-        fast = await _youtube_data_api_search(search_query, market=market, safe_limit=safe_limit, relevance_language=relevance_language)
-        if fast is not None and len(fast.get("items") or []) >= min(3, safe_limit):
+        fast = await (
+            _youtube_data_api_strict_video_search(
+                search_query,
+                market=market,
+                safe_limit=safe_limit,
+                relevance_language=relevance_language,
+            )
+            if strict_evidence
+            else _youtube_data_api_search(
+                search_query,
+                market=market,
+                safe_limit=safe_limit,
+                relevance_language=relevance_language,
+            )
+        )
+        if fast is not None and (
+            strict_evidence or len(fast.get("items") or []) >= min(3, safe_limit)
+        ):
             return fast
+
+    if not _scan_service().provider_ready():
+        return {"status": "provider_unavailable", "items": [], "message": "APIFY_TOKEN is not configured"}
 
     actor_id = ""
     payload: Dict[str, Any] = {}
@@ -542,10 +686,17 @@ async def search_platform_content(
         thumbnail_url = ""
         bio = ""  # instagram(档案富化)/其余平台留空;有值才随 item 透出
         followers = 0  # facebook/tiktok/instagram(富化后)可能填上;>0 才随 item 透出,其余输出不变
+        channel_id = ""
+        content_language = ""
         if normalized_platform == "youtube":
             channel_name = _source_key(item, "channelName", "channelTitle", "author")
             channel_url = _source_key(item, "channelUrl", "channelURL")
-            handle = _source_key(item, "channelHandle", "channelUsername", "handle", "author")
+            channel_id = _source_key(item, "channelId", "channel.id")
+            if not channel_id:
+                match = re.search(r"(?:youtube\.com)/(?:channel)/([^/?#]+)", channel_url, re.IGNORECASE)
+                channel_id = str(match.group(1) if match else "").strip()
+            # Never use display-name/author text as a strict account handle.
+            handle = _source_key(item, "channelHandle", "channelUsername", "handle") or channel_id
             avatar_url = _clean_url(_source_key(item, "channelAvatar", "channelThumbnail", "channelImage", "avatarUrl", "authorThumbnail"))
             thumbnail_url = _clean_url(_source_key(item, "thumbnailUrl", "thumbnail", "image", "cover"))
             source_url = _source_key(item, "url", "link")
@@ -553,6 +704,13 @@ async def search_platform_content(
             views = _normalize_int(item.get("viewCount") or item.get("views"))
             likes = _normalize_int(item.get("likes"))
             comments = _normalize_int(item.get("commentsCount") or item.get("comments"))
+            followers = _normalize_int(
+                item.get("numberOfSubscribers")
+                or item.get("subscriberCount")
+                or item.get("subscribers")
+                or 0
+            )
+            content_language = _source_key(item, "videoLanguage", "defaultAudioLanguage", "language")
         elif normalized_platform == "tiktok":
             author = item.get("authorMeta") if isinstance(item.get("authorMeta"), dict) else {}
             channel_name = _source_key(author, "nickName", "name") or _source_key(item, "authorName", "author")
@@ -648,6 +806,11 @@ async def search_platform_content(
                 # followers/bio 仅在真有值时透出(facebook/tiktok/instagram 富化),其余平台 item 结构不变。
                 **({"followers": followers} if followers > 0 else {}),
                 **({"bio": bio} if bio else {}),
+                **({"channel_id": channel_id} if channel_id else {}),
+                **({
+                    "language": content_language,
+                    "language_source": "platform_content_metadata",
+                } if content_language else {}),
             }
         # 重复卡修·聚合层兜底去重:同平台同 handle(小写去 @)只出一条(多路检索变体/
         # 同号主多帖会产重复候选);键为空放行(不误杀)。首条保留=保 actor 相关度序。
@@ -678,5 +841,3 @@ async def search_platform_content(
             } if normalized_platform == "instagram" else {}),
         },
     }
-
-

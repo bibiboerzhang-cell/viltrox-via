@@ -84,20 +84,17 @@ class _ApproveConn:
             if tuple(params) != (44, self.owner_id):
                 return _Result(row=None)
             return _Result(row=_session_row(created_by=self.owner_id))
-        if compact.startswith("SELECT kol_pool_id, payload_json"):
+        if "FROM vkpi_kol_search_session_items i" in compact:
             return _Result(
                 rows=[
-                    {"kol_pool_id": 101, "payload_json": {}},
                     {
-                        "kol_pool_id": None,
-                        "payload_json": {"platform": "youtube", "handle": "@candidate-two"},
+                        "kol_pool_id": 101,
+                        "item_type": "recall_candidate",
+                        "status": "matched",
+                        "payload_json": {},
                     },
                 ]
             )
-        if compact.startswith("SELECT id FROM vkpi_kol_pool WHERE id IN"):
-            return _Result(rows=[{"id": 101}])
-        if "LOWER(LTRIM(handle, '@'))" in compact:
-            return _Result(rows=[{"id": 202}])
         if compact.startswith("UPDATE vkpi_kol_search_sessions"):
             assert params[-2:] == (44, self.owner_id)
             approved = json.loads(str(params[0]))
@@ -108,7 +105,7 @@ class _ApproveConn:
         self.commits += 1
 
 
-def test_approve_rejects_cross_user_and_non_candidate_without_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_approve_rejects_cross_user_and_skips_non_candidate_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = _ApproveConn(owner_id=9)
     monkeypatch.setattr(search_sessions, "get_conn", lambda: conn)
 
@@ -118,20 +115,26 @@ def test_approve_rejects_cross_user_and_non_candidate_without_writes(monkeypatch
 
     own_conn = _ApproveConn(owner_id=7)
     monkeypatch.setattr(search_sessions, "get_conn", lambda: own_conn)
-    with pytest.raises(ValueError, match="belong to this search session"):
-        search_sessions.approve_session(44, kol_pool_ids=[101, 999], staff={"id": 7})
-    assert own_conn.commits == 0
-    assert not any(sql.startswith("UPDATE vkpi_kol_search_sessions") for sql, _ in own_conn.calls)
+    result = search_sessions.approve_session(
+        44,
+        kol_pool_ids=[101, 999],
+        staff={"id": 7},
+    )
+    assert result["approved_kol_ids"] == [101]
+    assert result["skipped_not_in_session"] == [999]
+    assert own_conn.commits == 1
+    assert any(sql.startswith("UPDATE vkpi_kol_search_sessions") for sql, _ in own_conn.calls)
 
 
-def test_approve_accepts_direct_and_auto_enrolled_session_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_approve_accepts_pool_backed_recall_and_skips_non_recall_candidates(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = _ApproveConn(owner_id=7)
     monkeypatch.setattr(search_sessions, "get_conn", lambda: conn)
 
     result = search_sessions.approve_session(44, kol_pool_ids=[101, 202, 101], staff={"id": 7})
 
-    assert result["approved_kol_ids"] == [101, 202]
-    assert result["approved_count"] == 2
+    assert result["approved_kol_ids"] == [101]
+    assert result["approved_count"] == 1
+    assert result["skipped_not_in_session"] == [202]
     assert conn.commits == 1
 
 
@@ -173,7 +176,7 @@ def test_profile_actions_resolve_owned_session_before_execution(monkeypatch: pyt
     assert observed == {"session_id": 44, "staff": {"id": 7}, "scope_to_staff": True}
 
 
-def test_project_draft_rejects_cross_user_and_unapproved_body_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_project_draft_rejects_cross_user_and_ignores_body_candidate_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     def _deny(_session_id: int, *, staff: dict[str, Any], scope_to_staff: bool) -> dict[str, Any]:
         assert staff == {"id": 7}
         assert scope_to_staff is True
@@ -184,12 +187,36 @@ def test_project_draft_rejects_cross_user_and_unapproved_body_ids(monkeypatch: p
         workflow_projects.create_project_draft_from_session(44, {}, staff={"id": 7})
 
     monkeypatch.setattr(search_sessions, "get_session", lambda *_a, **_k: _owned_session())
-    with pytest.raises(ValueError, match="subset of approved"):
-        workflow_projects.create_project_draft_from_session(
-            44,
-            {"kol_pool_ids": [101, 999]},
-            staff={"id": 7},
-        )
+    class _Conn:
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Result:
+            if "FROM vkpi_kol_search_sessions" in " ".join(sql.split()):
+                assert tuple(params) == (44, 7)
+                return _Result(row={"id": 44})
+            return _Result(row=None)
+
+    monkeypatch.setattr(workflow_projects, "get_conn", lambda: _Conn())
+    monkeypatch.setattr(cost_estimate, "estimate_cost_for_kols", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        workflow_projects,
+        "create_project",
+        lambda *_a, **_k: {"id": 9004, "project_uid": "VKPI-SAFE", "stage": "discovery"},
+    )
+    attached: dict[str, Any] = {}
+    monkeypatch.setattr(
+        workflow_projects,
+        "add_project_kols",
+        lambda _project_id, body, **_kwargs: attached.update(body) or {"inserted": 2},
+    )
+    monkeypatch.setattr(search_sessions, "update_session_result_summary", lambda *_a, **_k: {})
+
+    result = workflow_projects.create_project_draft_from_session(
+        44,
+        {"kol_pool_ids": [101, 999]},
+        staff={"id": 7},
+    )
+
+    assert attached["kol_pool_ids"] == [101, 202]
+    assert result["requested_kol_count"] == 2
 
 
 def test_repeated_project_draft_submission_reuses_existing_project(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -329,7 +356,7 @@ def test_new_smart_draft_forces_truthful_source_metadata(monkeypatch: pytest.Mon
         "session_owner_id": 7,
         "query_type": "text_recall",
         "query_text": "26mm lens reviewer",
-        "approved_kol_pool_ids": [202],
+        "approved_kol_pool_ids": [101, 202],
     }
 
 
