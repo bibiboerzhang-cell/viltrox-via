@@ -16,6 +16,7 @@ from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 from app.domains.access import policy, scope
 from app.domains.events import campus_universities, event_members, service
+from app.domains.projects import ai_job_access
 
 
 logger = get_logger(__name__)
@@ -357,6 +358,8 @@ def enqueue_event_invoice_extract(event_id: str, body: dict = Body(default_facto
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ai_job_access.ProjectAiAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except RuntimeError as exc:
         # budget_guard_blocked 等前置失败按 400 如实返回(与项目侧口径一致)。
         raise HTTPException(status_code=400, detail=str(exc)) from exc

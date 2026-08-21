@@ -819,6 +819,7 @@ def _enqueue_due_retrospectives(max_projects: int = 50) -> dict:
     且自带活动作业去重 → 幂等。绝不改 project.stage/closed_at、cost、fit_score。
     """
     from app.db.connection import get_conn
+    from app.domains.projects import ai_job_access
     from app.domains.projects import retrospective_aggregate as retro
 
     conn = get_conn()
@@ -841,7 +842,9 @@ def _enqueue_due_retrospectives(max_projects: int = 50) -> dict:
         if pid <= 0:
             continue
         try:
-            res = retro.enqueue_project_retrospective(pid, staff=_scheduler_system_staff())
+            capability = ai_job_access.issue_server_project_ai_capability(
+                action=ai_job_access.PROJECT_RETROSPECTIVE, project_id=pid)
+            res = retro.enqueue_project_retrospective(pid, server_capability=capability)
         except Exception:
             logger.debug("scheduler.retrospective_enqueue_one_failed", exc_info=True)
             continue

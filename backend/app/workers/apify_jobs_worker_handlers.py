@@ -497,7 +497,8 @@ def _process_contract_invoice_extract(conn: psycopg.Connection[Any], job: dict[s
 
     staff = _resolve_job_staff(conn, payload)
     with db_connection_sync_scope():
-        result = contract_assist.run_invoice_extract_for_job(payload, staff=staff)
+        result = contract_assist.run_invoice_extract_for_job(
+            payload, staff=staff, enforce_access_fence=True)
     status = str((result or {}).get("status") or "")
     ok = status == "ready"
     with conn.transaction():
@@ -519,7 +520,8 @@ def _process_contract_polish(conn: psycopg.Connection[Any], job: dict[str, Any],
 
     staff = _resolve_job_staff(conn, payload)
     with db_connection_sync_scope():
-        result = contract_assist.run_contract_polish_for_job(payload, staff=staff)
+        result = contract_assist.run_contract_polish_for_job(
+            payload, staff=staff, enforce_access_fence=True)
     status = str((result or {}).get("status") or "")
     ok = status == "ready"
     with conn.transaction():
@@ -795,10 +797,11 @@ def _process_project_retrospective(conn: psycopg.Connection[Any], job: dict[str,
     # writes nothing to cache and we mark the job blocked (not done) so the UI/读端能区分。
     # Never touches vkpi_kol_pool / fit_score.
     with db_connection_sync_scope():
-        result = project_retrospective.run_project_retrospective(int(project_id), staff=staff)
+        result = project_retrospective.run_project_retrospective(
+            int(project_id), staff=staff, access_payload=payload)
     status = str(result.get("status") or "")
     job_status = "done" if status == "ready" else "blocked"
-    last_error = "" if job_status == "done" else (status or "project_retrospective_not_ready")
+    last_error = "" if job_status == "done" else str(result.get("reason") or status or "project_retrospective_not_ready")
     payload["project_retrospective_result"] = {k: v for k, v in result.items() if k != "result"}
     with conn.transaction():
         with conn.cursor() as cur:

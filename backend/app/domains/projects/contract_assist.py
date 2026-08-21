@@ -34,6 +34,7 @@ from app.db.connection import get_conn
 from app.domains import audit
 from app.domains.access import scope
 from app.domains.costs import budget_guard
+from app.domains.projects import ai_job_access
 from app.domains.projects import contracts as contracts_domain
 from app.domains.projects.workflow_common import _int, staff_id, utcnow
 from app.platform import llm_gateway, llm_production
@@ -313,6 +314,12 @@ def enqueue_invoice_extract_job(
         "triggered_by_user_id": contracts_domain._triggered_by_user_id(staff),
         "staff_id": contracts_domain._ledger_staff_id(staff),
     }
+    payload[ai_job_access.FILE_IDENTITY_KEY] = ai_job_access.capture_file_identity(
+        path, root=EVIDENCE_UPLOAD_DIR
+    )
+    payload[ai_job_access.FENCE_KEY] = ai_job_access.build_job_fence(
+        payload, action=ai_job_access.INVOICE_EXTRACT, staff=staff
+    )
     job = conn.execute(
         """
         INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
@@ -353,7 +360,7 @@ def enqueue_event_invoice_extract_job(
     复用同一 job_type(contract_invoice_extract)与 cache 形状 → worker 零改动;
     幂等口径与项目版一致(同 file_url 的 ready 产物直接复用、活跃任务返回其 extract_key)。
     读端复用 GET /projects/invoice-extract/{extract_key}(event 产物 result 无 project_id,
-    不触发项目 scope 检查)。红线:与评分域无关,绝不写 viltrox_fit_score。"""
+    但必须按 event_id 做活动 read scope)。红线:与评分域无关,绝不写 viltrox_fit_score。"""
     event_key = str(event_id or "").strip()
     if not event_key:
         raise ValueError("event_id required")
@@ -419,6 +426,12 @@ def enqueue_event_invoice_extract_job(
         "triggered_by_user_id": contracts_domain._triggered_by_user_id(staff),
         "staff_id": contracts_domain._ledger_staff_id(staff),
     }
+    payload[ai_job_access.FILE_IDENTITY_KEY] = ai_job_access.capture_file_identity(
+        path, root=EVIDENCE_UPLOAD_DIR
+    )
+    payload[ai_job_access.FENCE_KEY] = ai_job_access.build_job_fence(
+        payload, action=ai_job_access.INVOICE_EXTRACT, staff=staff
+    )
     job = conn.execute(
         """
         INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
@@ -447,12 +460,17 @@ def enqueue_event_invoice_extract_job(
     }
 
 
-def run_invoice_extract_for_job(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def run_invoice_extract_for_job(
+    payload: dict[str, Any],
+    *,
+    staff: dict[str, Any] | None = None,
+    enforce_access_fence: bool = False,
+) -> dict[str, Any]:
     """worker 入口:读本地文件 → Claude 提取 → 成功写 cache;失败不写(状态回 apify_jobs)。
 
     E2(2026-07-03):同时支持项目发票(payload 带 project_id)与活动报销发票(payload 带
     event_id,无 project_id)。两者共用 job_type/cache 形状;event 产物 result 不写 project_id,
-    读端 GET /projects/invoice-extract/{key} 因此不会触发项目 scope 误判。"""
+    读端 GET /projects/invoice-extract/{key} 按 event_id 执行活动 read scope。"""
     extract_key = str(payload.get("extract_key") or "").strip()
     event_id = str(payload.get("event_id") or "").strip()
     # event payload 绝不从 target_id 反推 project_id(防御:万一 event id 是纯数字串也不会误挂项目)。
@@ -466,6 +484,16 @@ def run_invoice_extract_for_job(payload: dict[str, Any], *, staff: dict[str, Any
         return {"status": "failed", "reason": str(exc)[:300]}
     if not path.exists() or path.stat().st_size <= 0:
         return {"status": "failed", "reason": "invoice_file_missing"}
+    if enforce_access_fence:
+        try:
+            ai_job_access.revalidate_job_fence(
+                payload,
+                action=ai_job_access.INVOICE_EXTRACT,
+                file_path=path,
+                file_root=EVIDENCE_UPLOAD_DIR,
+            )
+        except ai_job_access.ProjectAiAccessError as exc:
+            return ai_job_access.blocked_result(exc)
     try:
         extraction = _extract_invoice_with_timeout(
             str(path),
@@ -475,6 +503,16 @@ def run_invoice_extract_for_job(payload: dict[str, Any], *, staff: dict[str, Any
     except Exception as exc:
         logger.warning("invoice_extract.failed extract_key=%s error=%s", extract_key, str(exc)[:300])
         return {"status": "failed", "reason": str(exc)[:300]}
+    if enforce_access_fence:
+        try:
+            ai_job_access.revalidate_job_fence(
+                payload,
+                action=ai_job_access.INVOICE_EXTRACT,
+                file_path=path,
+                file_root=EVIDENCE_UPLOAD_DIR,
+            )
+        except ai_job_access.ProjectAiAccessError as exc:
+            return ai_job_access.blocked_result(exc, provider_called=True)
     data = extraction.get("extracted") if isinstance(extraction.get("extracted"), dict) else {}
     extracted: dict[str, Any] = {}
     for field in INVOICE_FIELDS:
@@ -686,6 +724,9 @@ def enqueue_contract_polish_job(
         "triggered_by_user_id": contracts_domain._triggered_by_user_id(staff),
         "staff_id": contracts_domain._ledger_staff_id(staff),
     }
+    payload[ai_job_access.FENCE_KEY] = ai_job_access.build_job_fence(
+        payload, action=ai_job_access.CONTRACT_POLISH, staff=staff
+    )
     conn = get_conn()
     job = conn.execute(
         """
@@ -708,13 +749,23 @@ def enqueue_contract_polish_job(
     return {"status": "queued", "job_id": job_id, "polish_key": polish_key, "fields": sorted(clean)}
 
 
-def run_contract_polish_for_job(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def run_contract_polish_for_job(
+    payload: dict[str, Any],
+    *,
+    staff: dict[str, Any] | None = None,
+    enforce_access_fence: bool = False,
+) -> dict[str, Any]:
     """worker 入口:LLM 润色并写 cache(失败不写,状态回 apify_jobs)。"""
     polish_key = str(payload.get("polish_key") or payload.get("target_id") or "").strip()
     clean = _filter_polish_fields(payload.get("fields"))
     if not polish_key or not clean:
         return {"status": "failed", "reason": "payload_missing_fields"}
     template_key = str(payload.get("template_key") or "").strip()
+    if enforce_access_fence:
+        try:
+            ai_job_access.revalidate_job_fence(payload, action=ai_job_access.CONTRACT_POLISH)
+        except ai_job_access.ProjectAiAccessError as exc:
+            return ai_job_access.blocked_result(exc)
     try:
         resp = llm_production.generate_json(
             _polish_prompt(template_key, clean),
@@ -742,6 +793,11 @@ def run_contract_polish_for_job(payload: dict[str, Any], *, staff: dict[str, Any
     except Exception as exc:  # AI-off/readiness/provider failure: never write cache
         logger.warning("contract polish strict LLM unavailable", exc_info=True)
         resp = {"status": "failed", "reason": str(exc)[:120] or type(exc).__name__}
+    if enforce_access_fence:
+        try:
+            ai_job_access.revalidate_job_fence(payload, action=ai_job_access.CONTRACT_POLISH)
+        except ai_job_access.ProjectAiAccessError as exc:
+            return ai_job_access.blocked_result(exc, provider_called=True)
     parsed = resp.get("json") if isinstance(resp, dict) else None
     if not (
         resp.get("status") == "success"

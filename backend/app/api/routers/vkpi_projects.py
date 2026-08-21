@@ -19,6 +19,7 @@ from app.domains.analysis.cache_repo import (
     list_project_video_analysis_cache,
 )
 from app.domains.projects import automation_audit
+from app.domains.projects import ai_job_access
 from app.domains.projects import contract_assist
 from app.domains.projects import contracts
 from app.domains.projects import retrospective_aggregate
@@ -110,17 +111,23 @@ def get_contract_templates(staff=Depends(require_tab("vkpi", "read"))) -> dict:
 @router.get("/projects/invoice-extract/{extract_key}")
 def project_invoice_extract(extract_key: str, staff=Depends(require_tab("vkpi", "read"))):
     """发票提取读端(批E)。静态段 invoice-extract 须定义在 /projects/{project_id} 之前。
-    产物含收款敏感字段:能映射回项目时按项目级 scope 把关。"""
+    产物含收款敏感字段:必须按 project_id/event_id 的真实归属做 read scope。"""
     try:
         entry = contract_assist.get_invoice_extract(extract_key)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    result_project_id = ((entry.get("result") or {}) if isinstance(entry.get("result"), dict) else {}).get("project_id")
-    if result_project_id:
-        try:
+    result = (entry.get("result") or {}) if isinstance(entry.get("result"), dict) else {}
+    result_project_id = result.get("project_id")
+    result_event_id = str(result.get("event_id") or "").strip()
+    try:
+        if result_project_id:
             policy.require_project_read(int(result_project_id), staff)
-        except policy.ScopeDenied as exc:
-            raise _scope_403(exc) from exc
+        if result_event_id:
+            policy.require_event_read(result_event_id, staff)
+    except (policy.ScopeDenied, TypeError, ValueError) as exc:
+        raise _scope_403(exc) from exc
+    if entry.get("state") == "ready" and not result_project_id and not result_event_id:
+        raise HTTPException(status_code=403, detail="invoice result scope unavailable")
     return entry
 
 
@@ -135,8 +142,10 @@ def project_contract_polish(polish_key: str, staff=Depends(require_tab("vkpi", "
     if result_project_id:
         try:
             policy.require_project_read(int(result_project_id), staff)
-        except policy.ScopeDenied as exc:
+        except (policy.ScopeDenied, TypeError, ValueError) as exc:
             raise _scope_403(exc) from exc
+    elif entry.get("state") == "ready":
+        raise HTTPException(status_code=403, detail="contract polish result scope unavailable")
     return entry
 
 
@@ -158,6 +167,8 @@ def enqueue_project_invoice_extract(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ai_job_access.ProjectAiAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -182,6 +193,8 @@ def enqueue_project_contract_polish(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ai_job_access.ProjectAiAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
 
@@ -286,7 +299,7 @@ def project_video_analysis_cache(
 def generate_project_retrospective(project_id: int, staff=Depends(_require_manager_tab("vkpi", "write"))):
     # 权限收口(2026-07-08):此前只挂 require_tab(vkpi,write) → permissions.py 给全员默认
     # vkpi=write,故任意员工都能对任意项目手动触发复盘 LLM 聚合作业(enqueue apify_jobs
-    # job_type=project_retrospective_aggregate,烧预算)。enqueue 本身不做项目级 scope,
+    # job_type=project_retrospective_aggregate,烧预算)。路由与 enqueue 域均做项目级 scope,
     # 故双闸收口:①require_manager_tab(owner+管理岗,与周报/官号 generate 同口径)非管理层 403;
     # ②require_project_write 项目级 scope,员工不能对别人项目触发(与 GET retrospective 同口径的写模式)。
     try:
@@ -294,6 +307,8 @@ def generate_project_retrospective(project_id: int, staff=Depends(_require_manag
         return retrospective_aggregate.enqueue_project_retrospective(project_id, staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ai_job_access.ProjectAiAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:

@@ -22,6 +22,8 @@ from app.core.config import OPENAI_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.analysis import cache_repo
+from app.domains.projects import ai_job_access
+from app.domains.projects import contracts as contracts_domain
 from app.domains.projects.retrospective_content import (
     project_retrospective_items_for_llm,
     reconcile_retrospective_content,
@@ -221,13 +223,38 @@ def latest_retrospective_job(project_id: int) -> dict[str, Any]:
     return {"active": active, "last": dict(last) if last else None}
 
 
-def enqueue_project_retrospective(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def enqueue_project_retrospective(
+    project_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+    server_capability: ai_job_access.ServerProjectAiCapability | None = None,
+) -> dict[str, Any]:
     """Queue one project retrospective aggregation job. Does NOT run the LLM here.
 
     Dedups against an active job for the same project. Budget preflight is record-only
     (闸A telemetry; does not block a user-triggered generation). payload omits
     search_session_id so the KOL session sync no-ops.
     """
+    # 真正预算判断必须在 worker 执行时与精确模型调用原子预留;入队端只诚实记录延后。
+    preflight = {"note": "deferred_to_worker_atomic_reservation"}
+    server_owned = server_capability is not None
+    payload = {
+        "target_type": "project",
+        "target_id": str(int(project_id)),
+        "project_id": int(project_id),
+        "derive_method": DERIVE_METHOD,
+        "analysis_kind": "project_llm",
+        "query_text": f"项目复盘 · project:{int(project_id)}",
+        "summary": "项目复盘聚合",
+        "triggered_by_user_id": None if server_owned else contracts_domain._triggered_by_user_id(staff),
+        "staff_id": None if server_owned else contracts_domain._ledger_staff_id(staff),
+    }
+    payload[ai_job_access.FENCE_KEY] = ai_job_access.build_job_fence(
+        payload,
+        action=ai_job_access.PROJECT_RETROSPECTIVE,
+        staff=staff,
+        server_capability=server_capability,
+    )
     conn = get_conn()
     active = _active_job(conn, int(project_id))
     if active:
@@ -237,19 +264,6 @@ def enqueue_project_retrospective(project_id: int, *, staff: dict[str, Any] | No
             "job": active,
             "diagnostics": {"llm_calls": False, "worker_touched": False, "write_viltrox_fit_score": False},
         }
-    # 真正预算判断必须在 worker 执行时与精确模型调用原子预留;入队端只诚实记录延后。
-    preflight = {"note": "deferred_to_worker_atomic_reservation"}
-    staff = staff or {}
-    payload = {
-        "target_type": "project",
-        "target_id": str(int(project_id)),
-        "project_id": int(project_id),
-        "derive_method": DERIVE_METHOD,
-        "analysis_kind": "project_llm",
-        "query_text": f"项目复盘 · project:{int(project_id)}",
-        "summary": "项目复盘聚合",
-        "triggered_by_user_id": _triggered_by_user_id(staff),
-    }
     job = conn.execute(
         """
         INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)
@@ -268,7 +282,12 @@ def enqueue_project_retrospective(project_id: int, *, staff: dict[str, Any] | No
     }
 
 
-def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def run_project_retrospective(
+    project_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+    access_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Worker entry: aggregate ready final_v1 analyses into a project retrospective.
 
     Uses this module's own get_conn() (sqlite-compat '?'); the worker wraps the call in
@@ -276,6 +295,17 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
     ONLY on LLM success. Failure/empty returns a status dict and writes nothing to cache
     (status CHECK red line). Never touches vkpi_kol_pool / fit_score.
     """
+    if access_payload is not None:
+        if _int(access_payload.get("project_id") or access_payload.get("target_id")) != int(project_id):
+            return ai_job_access.blocked_result(
+                ai_job_access.ProjectAiAccessError("project_ai_target_drifted", 409)
+            )
+        try:
+            ai_job_access.revalidate_job_fence(
+                access_payload, action=ai_job_access.PROJECT_RETROSPECTIVE
+            )
+        except ai_job_access.ProjectAiAccessError as exc:
+            return ai_job_access.blocked_result(exc)
     conn = get_conn()
     data = cache_repo.list_project_video_analysis_cache(project_id, derive_method=SOURCE_DERIVE_METHOD, conn=conn)
     ready = [it for it in (data.get("items") or []) if it.get("state") == "ready" and it.get("entry")]
@@ -332,6 +362,13 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
 
     prompt_items, redacted_count = project_retrospective_items_for_llm(selected)
     prompt = _build_prompt(int(project_id), prompt_items, diagnostics)
+    if access_payload is not None:
+        try:
+            ai_job_access.revalidate_job_fence(
+                access_payload, action=ai_job_access.PROJECT_RETROSPECTIVE
+            )
+        except ai_job_access.ProjectAiAccessError as exc:
+            return ai_job_access.blocked_result(exc)
     try:
         resp = llm_production.generate_json(
             prompt,
@@ -361,6 +398,13 @@ def run_project_retrospective(project_id: int, *, staff: dict[str, Any] | None =
     except Exception as exc:  # AI-off/readiness/provider failure: never write cache
         logger.warning("project retrospective strict LLM unavailable", exc_info=True)
         resp = {"status": "failed", "reason": str(exc)[:120] or type(exc).__name__}
+    if access_payload is not None:
+        try:
+            ai_job_access.revalidate_job_fence(
+                access_payload, action=ai_job_access.PROJECT_RETROSPECTIVE
+            )
+        except ai_job_access.ProjectAiAccessError as exc:
+            return ai_job_access.blocked_result(exc, provider_called=True)
     parsed = resp.get("json") if isinstance(resp, dict) else None
     if not (
         resp.get("status") == "success"
