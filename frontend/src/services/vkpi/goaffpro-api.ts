@@ -165,7 +165,8 @@ export interface GoaffproKolLink {
   status?: string;
   tracks_now?: boolean;
   commission_rate?: string; // 佣金比例人话(如 "10%")
-  // 早期废映射(GOAFFPRO 里搜不到该 affiliate)→ 前端显「重新生成」触发 POST 真建号。
+  commission_snapshot_at?: string | null; // 最近一次本地同步时间；GET 不实时访问 provider。
+  // 早期废映射(ref 为空或误等于 affiliate_id)→ 前端显「重新生成」触发显式 POST。
   needs_regenerate?: boolean;
   created?: boolean;
   // 按产品出链:传 product 时后端解析 handle 后附带(解析不到则为 null,退首页链)。
@@ -179,7 +180,7 @@ export interface GoaffproKolLink {
   raw?: unknown;
 }
 
-// product 可选:传产品名/SKU → 后端解析 handle → 响应附带 product_url(按产品出链)。
+// product 可选:显式 POST 解析 handle 并回 product_url；纯读 GET 只回本地持久态。
 function withProduct(path: string, product?: string): string {
   const p = String(product || "").trim();
   return p ? `${path}?product=${encodeURIComponent(p)}` : path;

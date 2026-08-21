@@ -143,12 +143,20 @@ export function evidenceStatText(stats: KolEvidenceStats | undefined): string {
 // 共享件自带 px-5 py-2.5 + 底边线(抽屉语境的壳)——分区卡内压平,内容零改动。
 const GOAFFPRO_TRIM = "[&>div]:!border-0 [&>div]:!px-0 [&>div]:!py-0";
 
-export function GoaffproTrackSection({ apiToken, kolPoolId }: { apiToken: string; kolPoolId: number }) {
+export function GoaffproTrackSection({
+  apiToken,
+  kolPoolId,
+  readOnly = false,
+}: {
+  apiToken: string;
+  kolPoolId: number;
+  readOnly?: boolean;
+}) {
   return (
     <div className="mb-[22px]">
       <SectionLabel>追踪链 · GOAFFPRO</SectionLabel>
       <div className={`rounded-[11px] border border-line bg-panel px-3.5 py-3 ${GOAFFPRO_TRIM}`}>
-        <GoaffproLinkSection apiToken={apiToken} kolPoolId={kolPoolId} />
+        <GoaffproLinkSection apiToken={apiToken} kolPoolId={kolPoolId} readOnly={readOnly} />
       </div>
     </div>
   );

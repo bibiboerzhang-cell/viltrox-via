@@ -52,7 +52,7 @@ function LinkRow({ label, url }: { label: string; url: string }) {
   );
 }
 
-function GoaffproLinkCard({ link, onRegenerate, regenerating, apiToken, kolPoolId }: any) {
+function GoaffproLinkCard({ link, onRegenerate, regenerating, apiToken, kolPoolId, readOnly = false }: any) {
   const trackingUrl = String(link.tracking_url || "");
   const productUrl = String(link.product_url || "");
   const productName = String(link.product_name || "");
@@ -63,7 +63,7 @@ function GoaffproLinkCard({ link, onRegenerate, regenerating, apiToken, kolPoolI
   const [saving, setSaving] = React.useState(false);
   const [saveErr, setSaveErr] = React.useState("");
   React.useEffect(() => { setCommissionRate(String((link as any).commission_rate || "")); }, [(link as any).commission_rate]);
-  const canEdit = !!(apiToken && kolPoolId);
+  const canEdit = !readOnly && !!(apiToken && kolPoolId);
   const saveCommission = () => {
     const n = parseFloat(editVal);
     if (!canEdit || isNaN(n) || n < 0) { setSaveErr("请输入有效数字(≥0)"); return; }
@@ -193,7 +193,7 @@ function statusBadge(status: any): { text: string; cls: string } | null {
 // D2:KOL 详情「生成追踪链(GOAFFPRO)」区块。
 // 开抽屉先 GET 已有映射(有则直接显示卡,不重复生成);否则给生成按钮,点击 POST 建链。
 // 出错(ok:false)显示 error + 「联系管理员校准」,raw 折叠可见便于调试。
-export function GoaffproLinkSection({ apiToken, kolPoolId, product }: any) {
+export function GoaffproLinkSection({ apiToken, kolPoolId, product, readOnly = false }: any) {
   const [link, setLink] = React.useState<GoaffproKolLink | null>(null);
   const [loading, setLoading] = React.useState(false); // GET 已有映射
   const [generating, setGenerating] = React.useState(false); // POST 建链
@@ -225,7 +225,7 @@ export function GoaffproLinkSection({ apiToken, kolPoolId, product }: any) {
   }, [apiToken, kolPoolId, product]);
 
   const handleGenerate = () => {
-    if (!apiToken || !kolPoolId || generating) return;
+    if (readOnly || !apiToken || !kolPoolId || generating) return;
     setGenerating(true);
     setError("");
     setErrorRaw(null);
@@ -255,9 +255,14 @@ export function GoaffproLinkSection({ apiToken, kolPoolId, product }: any) {
   const hasRef = hasRefParam(trackingUrl);
   const needsRegen = !!(link && (!hasRef || (link as any).needs_regenerate));
   const showCard = !!(link && hasRef);
-  const showButton = !link || needsRegen;
+  const showButton = !readOnly && (!link || needsRegen);
 
   return e("div", { className: "px-5 py-2.5 border-b border-white/[0.06]" },
+    readOnly && e("div", {
+      className: "rounded-md border border-sky-400/15 bg-sky-400/[0.04] px-2.5 py-2 text-[10px] leading-relaxed text-sky-100/70",
+    }, needsRegen
+      ? "共享 KOL 为只读；当前映射需由所有者重新生成。"
+      : "共享 KOL 为只读；生成追踪链、改码和佣金调整不可用。"),
     showButton && e("button", {
       type: "button",
       disabled: loading || generating,
@@ -267,7 +272,14 @@ export function GoaffproLinkSection({ apiToken, kolPoolId, product }: any) {
       e(Link2, { size: 12 }),
       loading ? "读取追踪链…" : generating ? "生成中…" : (needsRegen ? "🔗 重新生成追踪链(当前未带追踪码)" : "🔗 生成追踪链(GOAFFPRO)")
     ),
-    showCard && e(GoaffproLinkCard, { link: link as GoaffproKolLink, onRegenerate: handleGenerate, regenerating: generating, apiToken, kolPoolId }),
+    showCard && e(GoaffproLinkCard, {
+      link: link as GoaffproKolLink,
+      onRegenerate: readOnly ? undefined : handleGenerate,
+      regenerating: generating,
+      apiToken,
+      kolPoolId,
+      readOnly,
+    }),
     error && e("div", { className: "mt-2 rounded-md border border-rose-400/20 bg-rose-400/[0.05] p-2.5" },
       e("div", { className: "flex items-start gap-1.5" },
         e(AlertTriangle, { size: 11, className: "mt-0.5 shrink-0 text-rose-300" }),
@@ -286,7 +298,7 @@ export function GoaffproLinkSection({ apiToken, kolPoolId, product }: any) {
           className: "mt-1 max-h-40 overflow-auto rounded border border-white/[0.06] bg-black/30 p-2 text-[9px] leading-relaxed text-slate-400 whitespace-pre-wrap break-all",
         }, (() => { try { return JSON.stringify(errorRaw, null, 2); } catch { return String(errorRaw); } })())
       ),
-      e("button", {
+      !readOnly && e("button", {
         type: "button",
         disabled: generating,
         onClick: handleGenerate,

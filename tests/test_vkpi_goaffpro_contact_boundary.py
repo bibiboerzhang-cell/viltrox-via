@@ -80,6 +80,9 @@ def _assert_name_only_lookup(calls: list[dict], secrets: tuple[str, ...]) -> Non
 def _patch_route_db(monkeypatch, conn) -> None:
     monkeypatch.setattr(vkpi_goaffpro.goaffpro_connect, "ensure_goaffpro_links_schema", lambda: None)
     monkeypatch.setattr(vkpi_goaffpro, "get_conn", lambda: conn)
+    monkeypatch.setattr(vkpi_goaffpro, "_assert_goaffpro_target_writable", lambda *_args: 73)
+    monkeypatch.setattr(vkpi_goaffpro, "_assert_goaffpro_target_readable", lambda *_args: 73)
+    monkeypatch.setattr(vkpi_goaffpro, "_assert_goaffpro_provider_write_allowed", lambda: None)
 
 
 def test_identity_loader_reads_name_only_and_never_queries_contact_sources():
@@ -162,13 +165,11 @@ def test_post_missing_affiliate_fails_closed_without_provider_create(monkeypatch
     _assert_name_only_lookup(provider_calls, secrets)
 
 
-@pytest.mark.parametrize("contact_state", _CONTACT_STATES)
-def test_get_self_heal_is_name_only_and_never_creates(monkeypatch, contact_state):
+def test_get_bad_ref_is_pure_read_and_requests_explicit_regeneration(monkeypatch):
     conn = _UpdateConn()
-    identity, secrets = _identity_with_contact_state(contact_state)
-    provider_calls: list[dict] = []
 
     _patch_route_db(monkeypatch, conn)
+    monkeypatch.setattr(vkpi_goaffpro, "table_exists", lambda _name: True)
     monkeypatch.setattr(
         vkpi_goaffpro,
         "_load_link",
@@ -181,30 +182,51 @@ def test_get_self_heal_is_name_only_and_never_creates(monkeypatch, contact_state
             "created_at": "2026-08-15T00:00:00Z",
         },
     )
-    monkeypatch.setattr(vkpi_goaffpro, "_load_kol_identity", lambda *_args: identity)
-
-    def resolve_affiliate(**kwargs):
-        provider_calls.append(dict(kwargs))
-        return {
-            "ok": True,
-            "affiliate_id": "aff-73",
-            "ref_code": "BOUNDARY73",
-            "coupon": "",
-            "status": "approved",
-            "affiliate": {"id": "aff-73", "ref_code": "BOUNDARY73"},
-        }
-
-    monkeypatch.setattr(vkpi_goaffpro.goaffpro_connect, "resolve_affiliate", resolve_affiliate)
+    monkeypatch.setattr(vkpi_goaffpro, "_load_cached_affiliate_state", lambda *_args: {})
     monkeypatch.setattr(
         vkpi_goaffpro.goaffpro_connect,
-        "referral_link",
-        lambda _affiliate, ref_code: f"https://store.test/?ref={ref_code}",
+        "resolve_affiliate",
+        lambda **_kwargs: pytest.fail("GET must not resolve an affiliate"),
     )
-    monkeypatch.setattr(vkpi_goaffpro, "_commission_for", lambda _affiliate_id: "10%")
+    monkeypatch.setattr(
+        vkpi_goaffpro.goaffpro_connect,
+        "get_affiliate",
+        lambda *_args: pytest.fail("GET must not fetch commission from the provider"),
+    )
+    monkeypatch.setattr(
+        vkpi_goaffpro.goaffpro_connect,
+        "find_product_handle",
+        lambda *_args: pytest.fail("GET must not resolve products through the provider"),
+    )
+    monkeypatch.setattr(
+        vkpi_goaffpro.goaffpro_connect,
+        "ensure_goaffpro_links_schema",
+        lambda: pytest.fail("GET must not create or migrate schema"),
+    )
 
-    result = vkpi_goaffpro.get_kol_affiliate_link(73, product=None, staff={})
+    result = vkpi_goaffpro.get_kol_affiliate_link(73, product="AF 35mm", staff={})
 
-    assert result["ref_code"] == "BOUNDARY73"
-    assert result["needs_regenerate"] is False
-    assert conn.commits == 1
-    _assert_name_only_lookup(provider_calls, secrets)
+    assert result["ref_code"] == "aff-73"
+    assert result["tracking_url"] == ""
+    assert result["needs_regenerate"] is True
+    assert result["tracks_now"] is False
+    assert result["product_url"] is None
+    assert conn.commits == 0
+    assert conn.updates == []
+
+
+def test_get_absent_link_table_does_not_bootstrap_schema(monkeypatch):
+    conn = object()
+    monkeypatch.setattr(vkpi_goaffpro, "get_conn", lambda: conn)
+    monkeypatch.setattr(vkpi_goaffpro, "_assert_goaffpro_target_readable", lambda *_args: 73)
+    monkeypatch.setattr(vkpi_goaffpro, "table_exists", lambda _name: False)
+    monkeypatch.setattr(
+        vkpi_goaffpro.goaffpro_connect,
+        "ensure_goaffpro_links_schema",
+        lambda: pytest.fail("GET must not bootstrap schema"),
+    )
+    assert vkpi_goaffpro.get_kol_affiliate_link(73, product=None, staff={}) == {
+        "linked": False,
+        "kol_pool_id": 73,
+        "needs_regenerate": False,
+    }

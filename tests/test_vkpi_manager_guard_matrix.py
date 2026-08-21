@@ -144,6 +144,8 @@ def domain_calls(monkeypatch) -> list:
     monkeypatch.setattr(goaffpro_connect, "update_affiliate_commission", _update_commission)
     monkeypatch.setattr(goaffpro_connect, "update_affiliate_coupon", _update_coupon)
     monkeypatch.setattr(gp_router, "get_conn", lambda: _NoopConn())
+    monkeypatch.setattr(gp_router, "_assert_goaffpro_target_writable", lambda *_args: 990601)
+    monkeypatch.setattr(gp_router, "_assert_goaffpro_provider_write_allowed", lambda: None)
     monkeypatch.setattr(gp_router, "_load_link", lambda conn, kol_pool_id: {"affiliate_id": "aff-test"})
     return calls
 

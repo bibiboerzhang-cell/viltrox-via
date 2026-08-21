@@ -24,6 +24,8 @@ from app.api.dependencies.manager_guard import require_manager_staff
 from app.api.dependencies.perms import require_tab
 from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, table_exists
+from app.domains.access import scope
+from app.domains.audit.decorator import audit_action
 from app.domains.integrations import goaffpro_connect
 
 
@@ -160,6 +162,99 @@ def _load_link(conn, kol_pool_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+def _load_cached_affiliate_state(conn, affiliate_id: object) -> dict:
+    """Read the last persisted provider snapshot without contacting GOAFFPRO."""
+    aid = str(affiliate_id or "").strip()
+    if not aid or not table_exists("vkpi_goaffpro_kol_metrics"):
+        return {}
+    row = conn.execute(
+        """
+        SELECT commission_rate, status, synced_at
+        FROM vkpi_goaffpro_kol_metrics
+        WHERE affiliate_id = ?
+        """,
+        (aid,),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def _assert_goaffpro_target_writable(conn, kol_pool_id: int, staff: dict | None) -> int:
+    """Require a real actor and a target that is writable in MY KOL.
+
+    Shared membership is deliberately read-only. Managers retain their existing
+    all-KOL write scope; regular staff must own a favorite row for this target.
+    """
+    actor_id = scope.actor_staff_id(staff)
+    if actor_id <= 0:
+        raise HTTPException(status_code=403, detail="staff_identity_required")
+    row = conn.execute(
+        "SELECT id, duplicate_of_id FROM vkpi_kol_pool WHERE id=?",
+        (int(kol_pool_id),),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="kol_pool_not_found")
+    if int(dict(row).get("duplicate_of_id") or 0):
+        raise HTTPException(status_code=409, detail="kol_pool_duplicate_not_writable")
+    if scope.can_view_all(staff):
+        return int(actor_id)
+    favorite = conn.execute(
+        """
+        SELECT id
+        FROM vkpi_kol_pool_favorites
+        WHERE kol_pool_id=? AND staff_id=?
+        LIMIT 1
+        """,
+        (int(kol_pool_id), int(actor_id)),
+    ).fetchone()
+    if not favorite:
+        raise HTTPException(status_code=403, detail="my_kol_goaffpro_write_forbidden")
+    return int(actor_id)
+
+
+def _assert_goaffpro_target_readable(conn, kol_pool_id: int, staff: dict | None) -> int:
+    """Allow direct-ID reads only for managers, owners, or shared members."""
+    actor_id = scope.actor_staff_id(staff)
+    if actor_id <= 0:
+        raise HTTPException(status_code=403, detail="staff_identity_required")
+    row = conn.execute(
+        "SELECT id FROM vkpi_kol_pool WHERE id=?",
+        (int(kol_pool_id),),
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="kol_pool_not_found")
+    if scope.can_view_all(staff):
+        return int(actor_id)
+    favorite = conn.execute(
+        """
+        SELECT id
+        FROM vkpi_kol_pool_favorites
+        WHERE kol_pool_id=? AND staff_id=?
+        LIMIT 1
+        """,
+        (int(kol_pool_id), int(actor_id)),
+    ).fetchone()
+    if favorite:
+        return int(actor_id)
+    shared = conn.execute(
+        """
+        SELECT id
+        FROM vkpi_kol_pool_members
+        WHERE kol_pool_id=? AND staff_id=?
+        LIMIT 1
+        """,
+        (int(kol_pool_id), int(actor_id)),
+    ).fetchone()
+    if not shared:
+        raise HTTPException(status_code=403, detail="my_kol_goaffpro_read_forbidden")
+    return int(actor_id)
+
+
+def _assert_goaffpro_provider_write_allowed() -> None:
+    """Fail closed before synchronous provider work during release validation."""
+    if release_validation_active():
+        raise HTTPException(status_code=503, detail="release_validation_fenced")
+
+
 def _effective_tracking_url(link: dict) -> str:
     """已存映射的追踪链自愈:旧映射可能存了「光店铺首页(无 ?ref=)」——若如此,按存的
     ref_code 用修好的 referral_link 现拼 {store}/?ref={ref_code},让历史映射也自动修正,
@@ -250,6 +345,15 @@ def _product_link_fields(ref_code: str | None, product: str | None) -> dict:
 
 
 @router.post("/kol/{kol_pool_id}/link")
+@audit_action(
+    action_type="goaffpro_kol_link_generate",
+    target_type="kol_pool",
+    metadata_extractor=lambda result, kwargs: {
+        "provider": "goaffpro",
+        "linked": bool(result.get("linked")) if isinstance(result, dict) else False,
+        "already_linked": bool(result.get("already_linked")) if isinstance(result, dict) else False,
+    },
+)
 def link_kol_affiliate(
     kol_pool_id: int,
     product: str | None = Query(default=None),
@@ -261,8 +365,10 @@ def link_kol_affiliate(
     当前 GOAFFPRO 建号需要 email，路由不得把联系人明文或合成邮箱发给 provider；
     查无已有账号时稳定返回 409，由员工在 GOAFFPRO 授权流程中完成建号。
     """
-    goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
+    _assert_goaffpro_target_writable(conn, kol_pool_id, staff)
+    _assert_goaffpro_provider_write_allowed()
+    goaffpro_connect.ensure_goaffpro_links_schema()
     existing = _load_link(conn, kol_pool_id)
     if existing and not _ref_is_bad(existing.get("ref_code"), existing.get("affiliate_id")):
         # 已有**有效** ref_code → 幂等返回(用 _effective_tracking_url 修正历史光链 tracking_url)。
@@ -309,51 +415,48 @@ def get_kol_affiliate_link(
     product: str | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    """读 KOL↔affiliate 映射。无映射 → {linked:false}。
+    """Pure local read of the persisted KOL↔affiliate mapping.
 
-    自愈(只读不建号):旧映射 ref_code 为空(早期建失败/端点错留下的废映射)→ 用
-    resolve_affiliate(create=False) **搜**已存在的 affiliate 补码,搜不到则标 needs_regenerate
-    (让前端显「重新生成」按钮);GET 不创建 affiliate(建号是 POST 的副作用)。
+    GET never creates schema, calls GOAFFPRO, resolves products, or repairs a
+    mapping. Invalid/legacy refs are reported as ``needs_regenerate`` so an
+    authorized user may explicitly repair them with POST.
     """
-    goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
+    _assert_goaffpro_target_readable(conn, kol_pool_id, staff)
+    if not table_exists("vkpi_goaffpro_kol_links"):
+        return {
+            "linked": False,
+            "kol_pool_id": kol_pool_id,
+            "needs_regenerate": False,
+        }
     link = _load_link(conn, kol_pool_id)
     if not link:
-        return {"linked": False, "kol_pool_id": kol_pool_id}
+        return {
+            "linked": False,
+            "kol_pool_id": kol_pool_id,
+            "needs_regenerate": False,
+        }
     ex_ref = str(link.get("ref_code") or "").strip()
-    needs_regenerate = False
-    # 失效=空 或 ref_code 等于 affiliate_id(数字编号误当 ref 码)→ 搜回真码自愈。
-    if _ref_is_bad(ex_ref, link.get("affiliate_id")):
-        identity = _load_kol_identity(conn, kol_pool_id)
-        res = goaffpro_connect.resolve_affiliate(
-            name=(identity or {}).get("name") or "",
-            create=False,  # GET 只搜不建
-        )
-        if res.get("ok") and res.get("ref_code") and not _ref_is_bad(res.get("ref_code"), res.get("affiliate_id")):
-            new_url = goaffpro_connect.referral_link(res.get("affiliate"), res["ref_code"])
-            new_coupon = str(link.get("coupon") or "") or str(res.get("coupon") or "")
-            conn.execute(
-                "UPDATE vkpi_goaffpro_kol_links SET affiliate_id=?, ref_code=?, tracking_url=?, coupon=? WHERE kol_pool_id=?",
-                (str(res.get("affiliate_id") or ""), str(res["ref_code"]), new_url, new_coupon, kol_pool_id),
-            )
-            conn.commit()
-            link = dict(link, affiliate_id=res.get("affiliate_id"), ref_code=res["ref_code"], tracking_url=new_url, coupon=new_coupon)
-            ex_ref = str(res["ref_code"])
-        else:
-            # 搜不到 affiliate(早期废映射)→ 让前端给「重新生成」按钮触发 POST 真建号。
-            needs_regenerate = True
+    needs_regenerate = _ref_is_bad(ex_ref, link.get("affiliate_id"))
+    cached = _load_cached_affiliate_state(conn, link.get("affiliate_id"))
+    status = str(cached.get("status") or "")
     return {
         "linked": True,
         "kol_pool_id": kol_pool_id,
         "affiliate_id": link.get("affiliate_id"),
         "ref_code": link.get("ref_code"),
-        "tracking_url": _effective_tracking_url(link),
+        "tracking_url": "" if needs_regenerate else _effective_tracking_url(link),
         "coupon": link.get("coupon"),
         "created_at": link.get("created_at"),
-        "commission_rate": _commission_for(link.get("affiliate_id")) if not needs_regenerate else "",
+        "commission_rate": str(cached.get("commission_rate") or ""),
+        "commission_snapshot_at": cached.get("synced_at"),
+        "status": status,
         "needs_regenerate": needs_regenerate,
-        "tracks_now": _tracks_now(ex_ref, ""),
-        **_product_link_fields(link.get("ref_code"), product),
+        "tracks_now": (not needs_regenerate) and _tracks_now(ex_ref, status),
+        # Product resolution is provider-backed and therefore POST-only.
+        "product_url": None,
+        "product_handle": None,
+        "product_name": None,
     }
 
 
@@ -370,6 +473,14 @@ def sync_goaffpro_metrics(
 
 
 @router.post("/kol/{kol_pool_id}/commission")
+@audit_action(
+    action_type="goaffpro_kol_commission_update",
+    target_type="kol_pool",
+    metadata_extractor=lambda result, kwargs: {
+        "provider": "goaffpro",
+        "ok": bool(result.get("ok")) if isinstance(result, dict) else False,
+    },
+)
 def update_kol_commission(
     kol_pool_id: int,
     body: dict = Body(default={}),
@@ -382,8 +493,10 @@ def update_kol_commission(
     分档闸(读裁决 2026-07-07):percentage 且 0-15% → 员工基础可改;
     >15% 或 fixed_amount(固定金额)→ 升级 owner+manager,员工得 403。
     """
-    goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
+    _assert_goaffpro_target_writable(conn, kol_pool_id, staff)
+    _assert_goaffpro_provider_write_allowed()
+    goaffpro_connect.ensure_goaffpro_links_schema()
     link = _load_link(conn, kol_pool_id)
     affiliate_id = str((link or {}).get("affiliate_id") or "").strip()
     if not affiliate_id:
@@ -409,6 +522,14 @@ def update_kol_commission(
 
 
 @router.post("/kol/{kol_pool_id}/coupon")
+@audit_action(
+    action_type="goaffpro_kol_coupon_update",
+    target_type="kol_pool",
+    metadata_extractor=lambda result, kwargs: {
+        "provider": "goaffpro",
+        "ok": bool(result.get("ok")) if isinstance(result, dict) else False,
+    },
+)
 def update_kol_coupon(
     kol_pool_id: int,
     body: dict = Body(default={}),
@@ -420,8 +541,10 @@ def update_kol_coupon(
     分档闸(读裁决 2026-07-07):percentage 折扣且 0-15% → 员工基础可设;
     >15% 或 fixed_amount(固定金额折扣)→ 升级 owner+manager,员工得 403。
     """
-    goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
+    _assert_goaffpro_target_writable(conn, kol_pool_id, staff)
+    _assert_goaffpro_provider_write_allowed()
+    goaffpro_connect.ensure_goaffpro_links_schema()
     link = _load_link(conn, kol_pool_id)
     affiliate_id = str((link or {}).get("affiliate_id") or "").strip()
     if not affiliate_id:

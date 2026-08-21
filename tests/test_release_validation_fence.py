@@ -115,7 +115,6 @@ def test_only_reviewed_ask_post_is_available() -> None:
     [
         ("/go/campaign-1", None),
         ("/api/admin/vkpi/goaffpro", None),
-        ("/api/admin/vkpi/goaffpro/kol/7/link", None),
         ("/api/admin/vkpi/kol-pool/7/content-fit", {"analyze": "true"}),
         ("/api/admin/vkpi/kol-pool/7/content-fit", b"force=1"),
     ],
@@ -232,11 +231,19 @@ def test_event_refresh_preview_is_post_only_while_fenced() -> None:
     (
         "/api/admin/vkpi/goaffpro/affiliates",
         "/api/admin/vkpi/goaffpro/orders",
-        "/api/admin/vkpi/goaffpro/kol/7/link",
     ),
 )
 def test_goaffpro_external_gets_remain_blocked(path: str) -> None:
     assert not release_validation.release_validation_request_allowed("GET", path)
+
+
+def test_goaffpro_persisted_link_read_is_available_while_fenced() -> None:
+    path = "/api/admin/vkpi/goaffpro/kol/7/link"
+    assert release_validation.release_validation_request_allowed("GET", path)
+    assert release_validation.release_validation_request_allowed(
+        "GET", path, {"product": "AF 35mm"}
+    )
+    assert not release_validation.release_validation_request_allowed("POST", path)
 
 
 def test_unknown_get_receives_503_while_fenced(monkeypatch) -> None:

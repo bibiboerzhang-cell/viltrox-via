@@ -192,6 +192,9 @@ _READ_ONLY_GET_PATTERNS = (
     re.compile(r"^/api/admin/vkpi/kol-pool/[1-9][0-9]*/content-fit$"),
     re.compile(r"^/api/admin/vkpi/kol-pool/[1-9][0-9]*/detail-bundle$"),
     re.compile(r"^/api/admin/vkpi/kol-pool/[1-9][0-9]*/(?:signature|videos)$"),
+    # Persisted GOAFFPRO mapping + cached commission snapshot only. Provider
+    # resolution and mutation live exclusively behind the neighbouring POSTs.
+    re.compile(r"^/api/admin/vkpi/goaffpro/kol/[1-9][0-9]*/link$"),
     re.compile(r"^/api/admin/vkpi/kol-search-sessions/[1-9][0-9]*$"),
     re.compile(r"^/api/(?:admin/vkpi/media|vkpi-media)/image-cache/[0-9a-f]{64}$"),
     # Persisted Advisor history is a bounded owner-scoped SELECT.  Keep the
