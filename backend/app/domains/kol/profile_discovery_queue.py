@@ -16,6 +16,13 @@ from app.domains.kol import (
     search_sessions_online,
 )
 from app.domains.kol.discovery_filters import _int, _staff_user_id, _text
+from app.domains.kol.provider_job_access import (
+    FENCE_KEY as PROVIDER_JOB_FENCE_KEY,
+    SESSION_ADVANCE,
+    SMART_SEARCH_PROFILE_ADVANCE,
+    ServerOwnedProviderCapability,
+    build_search_session_provider_fence,
+)
 from app.domains.kol.search_progress_contract import completion_contract
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 
@@ -52,6 +59,7 @@ def enqueue_search_session_advance(
     session_id: int,
     body: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
+    server_owned_capability: ServerOwnedProviderCapability | None = None,
 ) -> dict[str, Any]:
     """Queue ordered session advancement on apify_jobs for provider-safe pacing."""
 
@@ -126,6 +134,11 @@ def enqueue_search_session_advance(
             "viltrox_fit_score_untouched": True,
         }
 
+    session = search_sessions.get_session(
+        session_id,
+        staff=staff,
+        scope_to_staff=server_owned_capability is None,
+    )
     triggered_by_user_id = _staff_user_id(staff)
     payload = {
         "queue_lane": "interactive",
@@ -144,8 +157,16 @@ def enqueue_search_session_advance(
         "prompt": f"profile crawl advance session:{session_id}",
         "summary": f"profile crawl advance · session {session_id}",
         "triggered_by_user_id": triggered_by_user_id,
+        "staff_id": (staff or {}).get("staff_id") or (staff or {}).get("id"),
         "viltrox_fit_score_untouched": True,
     }
+    payload[PROVIDER_JOB_FENCE_KEY] = build_search_session_provider_fence(
+        action=SESSION_ADVANCE,
+        session=session,
+        payload=payload,
+        staff=staff,
+        server_owned_capability=server_owned_capability,
+    )
     job, inserted = enqueue_active_apify_job(
         conn,
         job_type="session_advance",
@@ -338,6 +359,7 @@ def enqueue_smart_search_profile_advance(
     query_text: str,
     body: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
+    server_owned_capability: ServerOwnedProviderCapability | None = None,
 ) -> dict[str, Any]:
     """Queue the full text-search -> discovery -> profile-advance pipeline."""
 
@@ -478,8 +500,21 @@ def enqueue_smart_search_profile_advance(
         "prompt": f"smart profile advance · {query[:120]}",
         "summary": f"smart profile advance · {query[:80]}",
         "triggered_by_user_id": triggered_by_user_id,
+        "staff_id": (staff or {}).get("staff_id") or (staff or {}).get("id"),
         "viltrox_fit_score_untouched": True,
     }
+    payload[PROVIDER_JOB_FENCE_KEY] = build_search_session_provider_fence(
+        action=SMART_SEARCH_PROFILE_ADVANCE,
+        session=session,
+        payload=payload,
+        staff=staff,
+        fallback_query_text=query,
+        fallback_query_type="text_recall",
+        fallback_input_payload={
+            key: value for key, value in body.items() if key != "api_token"
+        },
+        server_owned_capability=server_owned_capability,
+    )
     conn = get_conn()
     idempotency_key = active_job_idempotency_key("search_session_profile_advance", session_id)
     row = conn.execute(

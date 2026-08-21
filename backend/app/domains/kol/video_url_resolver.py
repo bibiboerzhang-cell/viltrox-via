@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from app.db.connection import get_conn
+from app.domains.kol.provider_job_access import (
+    FENCE_KEY as PROVIDER_JOB_FENCE_KEY,
+    ServerOwnedProviderCapability,
+    build_video_url_provider_fence,
+)
 from app.domains.tasks.apify_idempotency import (
     active_job_idempotency_key,
     enqueue_active_apify_job,
@@ -130,6 +135,7 @@ def enqueue_video_url_resolve_job(
     queue_lane: str = "interactive",
     max_posts: int = 3,
     local_evaluation: bool = False,
+    server_owned_capability: ServerOwnedProviderCapability | None = None,
 ) -> dict[str, Any]:
     """Queue one native video identity; never enqueue a profile-crawl job."""
 
@@ -167,6 +173,19 @@ def enqueue_video_url_resolve_job(
         "local_evaluation": bool(local_evaluation),
         "video_url_resolution": progress,
     }
+    payload[PROVIDER_JOB_FENCE_KEY] = build_video_url_provider_fence(
+        payload=payload,
+        staff=staff,
+        server_owned_capability=server_owned_capability,
+    )
+    actor_claim = payload[PROVIDER_JOB_FENCE_KEY].get("actor")
+    actor_claim = actor_claim if isinstance(actor_claim, dict) else {}
+    idempotency_scope = (
+        f"user:{_int_or_none(actor_claim.get('user_id')) or 0}"
+        if payload[PROVIDER_JOB_FENCE_KEY].get("mode") == "user"
+        else "server-owned"
+    )
+    session_scope = _int_or_none(search_session_id) or 0
     conn = get_conn()
     job, inserted = enqueue_active_apify_job(
         conn,
@@ -174,7 +193,7 @@ def enqueue_video_url_resolve_job(
         payload=payload,
         idempotency_key=active_job_idempotency_key(
             VIDEO_URL_RESOLVE_JOB_TYPE,
-            native_identity,
+            f"{native_identity}:{idempotency_scope}:session:{session_scope}",
         ),
     )
     conn.commit()
@@ -270,6 +289,7 @@ def run_video_url_resolve_for_job(
     *,
     staff: dict[str, Any] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    authorization_checkpoint: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Resolve metadata/creator/evidence, then use the gated final_v1 enqueue."""
 
@@ -284,6 +304,9 @@ def run_video_url_resolve_for_job(
         classify_url,
     )
 
+    if authorization_checkpoint:
+        # Last authorization boundary before metadata/creator provider calls.
+        authorization_checkpoint()
     pre_classified = classify_url(_text(payload.get("url") or payload.get("source_url")))
     if pre_classified.url_type == "video" and pre_classified.platform in CN_VIDEO_ANALYSIS_PLATFORMS:
         # 中国平台「仅视频分析」通道:不匹配池、不建档,整链在 cn_platform_video 内完成。
@@ -405,6 +428,11 @@ def run_video_url_resolve_for_job(
         # separate account workflow and must not multiply jobs or spend here.
         "skip_profile_video_followups": True,
     }
+    if authorization_checkpoint:
+        # Metadata resolution is intentionally separated from enrollment and
+        # final_v1.  Recheck once more before any pool/evidence write or
+        # downstream analysis enqueue in the execute flows below.
+        authorization_checkpoint()
     current = _emit(progress_callback, _progress(current, "cache_media", "running"))
     flow = (
         _execute_existing_creator_video_flow(classified, matches, video_flow, body)

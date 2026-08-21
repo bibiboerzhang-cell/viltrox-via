@@ -6,6 +6,13 @@ from typing import Any
 import psycopg
 
 from app.db.connection import db_connection_sync_scope
+from app.domains.kol.provider_job_access import (
+    ProviderJobAccessError,
+    VIDEO_URL_RESOLVE,
+    guard_provider_job_before_execution,
+    revalidate_provider_job_checkpoint,
+    terminal_block_provider_job,
+)
 from app.domains.kol.video_url_resolver import (
     failed_video_url_resolution_progress,
     run_video_url_resolve_for_job,
@@ -44,6 +51,13 @@ def _process_video_url_resolve(
     from app.workers.apify_jobs_worker_handlers import _resolve_job_staff
 
     job_id = int(job["id"])
+    if not guard_provider_job_before_execution(
+        conn,
+        job,
+        payload,
+        expected_action=VIDEO_URL_RESOLVE,
+    ):
+        return
     staff = _resolve_job_staff(conn, payload)
     payload["job_id"] = job_id
 
@@ -56,7 +70,30 @@ def _process_video_url_resolve(
                 payload,
                 staff=staff,
                 progress_callback=publish,
+                authorization_checkpoint=lambda: revalidate_provider_job_checkpoint(
+                    payload,
+                    expected_action=VIDEO_URL_RESOLVE,
+                ),
             )
+    except ProviderJobAccessError as exc:
+        failure = failed_video_url_resolution_progress(
+            payload.get("video_url_resolution")
+            if isinstance(payload.get("video_url_resolution"), dict)
+            else None,
+            exc.code,
+        )
+        publish(failure)
+        # This is the post-provider/pre-write checkpoint.  A provider read may
+        # already have completed, so preserve truthful unknown attribution
+        # instead of falsely reporting zero calls.
+        terminal_block_provider_job(
+            conn,
+            job_id=job_id,
+            payload=payload,
+            error=exc,
+            provider_calls_performed=None,
+        )
+        return
     except Exception as exc:
         failure = failed_video_url_resolution_progress(
             payload.get("video_url_resolution")

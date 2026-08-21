@@ -19,6 +19,7 @@ from app.domains.projects import contracts as project_contracts
 from app.domains.projects import retrospective_aggregate as project_retrospective
 from app.domains.kol import profile_discovery as kol_profile_discovery
 from app.domains.kol import search_sessions as kol_search_sessions
+from app.domains.kol.provider_job_access import SESSION_ADVANCE, SMART_SEARCH_PROFILE_ADVANCE, guard_provider_job_before_execution
 from app.workers.apify_jobs_worker_helpers import (
     _int_or_none,
     _json,
@@ -29,6 +30,8 @@ logger = get_logger(__name__)
 
 
 def _process_session_advance(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    if not guard_provider_job_before_execution(conn, job, payload, expected_action=SESSION_ADVANCE):
+        return
     session_id = _int_or_none(payload.get("search_session_id") or payload.get("target_id"))
     if not session_id:
         raise ValueError("session_advance payload must include search_session_id")
@@ -100,6 +103,8 @@ def _process_session_advance(conn: psycopg.Connection[Any], job: dict[str, Any],
 
 
 def _process_smart_search_profile_advance(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+    if not guard_provider_job_before_execution(conn, job, payload, expected_action=SMART_SEARCH_PROFILE_ADVANCE):
+        return
     session_id = _int_or_none(payload.get("search_session_id") or payload.get("target_id"))
     if not session_id:
         raise ValueError("smart_search_profile_advance payload must include search_session_id")
