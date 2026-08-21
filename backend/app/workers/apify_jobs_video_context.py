@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.workers.apify_jobs_worker_helpers import (
@@ -51,15 +52,69 @@ def _video_performance_context(evidence: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _candidate_product_context(evidence: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return bounded operator/project candidates; associations are never visual proof."""
+    raw_links = evidence.get("linked_products")
+    if isinstance(raw_links, str):
+        try:
+            raw_links = json.loads(raw_links)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            raw_links = []
+    links = raw_links if isinstance(raw_links, list) else []
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def append_candidate(*, sku: Any, name: Any, source: str, relation_type: Any = None, confidence: Any = None) -> None:
+        safe_sku = str(sku or "").strip()[:100]
+        safe_name = str(name or "").strip()[:180]
+        identity = ("sku", safe_sku.casefold()) if safe_sku else ("name", safe_name.casefold())
+        if not identity[1] or identity in seen or len(candidates) >= 10:
+            return
+        seen.add(identity)
+        candidates.append(
+            {
+                "sku": safe_sku or None,
+                "name": safe_name or None,
+                "source": source,
+                "relation_type": str(relation_type or "").strip()[:40] or None,
+                "confidence": _float_or_none(confidence),
+                "association_is_evidence": False,
+            }
+        )
+
+    append_candidate(
+        sku=evidence.get("product_sku"),
+        name=evidence.get("product_name"),
+        source="project_assignment",
+    )
+    for raw in links[:20]:
+        if not isinstance(raw, dict):
+            continue
+        name = raw.get("marketing_name") or raw.get("model_name")
+        append_candidate(
+            sku=raw.get("sku"),
+            name=name,
+            source="video_product_link",
+            relation_type=raw.get("relation_type"),
+            confidence=raw.get("confidence"),
+        )
+    return candidates
+
+
 def _video_final_context(evidence: dict[str, Any]) -> dict[str, Any]:
     context = _video_performance_context(evidence)
+    candidates = _candidate_product_context(evidence)
     context["product_context"] = {
         "product_name": evidence.get("product_name"),
+        "product_sku": evidence.get("product_sku"),
         "project_name": evidence.get("project_name"),
         "project_id": evidence.get("project_id"),
         "creator_handle": evidence.get("creator_handle"),
         "creator_name": evidence.get("creator_name"),
         "kol_pool_id": evidence.get("kol_pool_id"),
+        "candidate_products": candidates,
+        "candidate_products_are_context_only": True,
+        "candidate_products_require_timed_video_evidence": True,
         "campaign_goal": "sell Viltrox lenses and validate lens proof; not to grow the KOL account",
     }
     return context

@@ -125,6 +125,7 @@ I. 守不造假：所有评分必须带 confidence 和 evidence；证据不足�
 - absent 只能在 inspection_complete=true 且 checked_modalities 同时含 visual 与 audio 时输出；未完整检查、画面不清、口播不可辨或证据冲突均输出 unknown。
 - viltrox_products 中每个产品必须自带 evidence；产品名称或自由文本猜测不是证据。不能确定 SKU 时 sku=null，不得补全。
 - evidence.modality 只能是 visual / subtitle / audio / metadata；visual/subtitle/audio 证据必须带真实 MM:SS 时间戳和具体 detail。竞品也用同一证据结构。
+- 播放表现数据里的 product_context.candidate_products 仅是员工手工关联或项目候选，不是视频出现证据。必须在画面/字幕/口播中独立核实后才能输出 present 或具体型号；未核实就保持 unknown/sku=null，并明确上下文与画面是否一致。
 
 【Viltrox 产品背景】
 Viltrox 是摄影/视频镜头品牌，核心产品线包括 Pro 系列自动对焦定焦、LAB 高端镜头、Air 轻量镜头、电影镜头等。判断 product_fit 时要考虑：产品定位、价格档、是否适合该 KOL 受众、是否和 Sony/Sigma/Tamron/Canon/Nikon 等竞品形成清晰购买理由。
@@ -263,6 +264,7 @@ layer6 必须给 risk_flags、content_quality_score、viewer_heart_score、chann
 固定输出 schema 细则：
 layer1_visual_content = content_summary / scene_timeline[{timestamp, what, why_it_matters}] / product_presence / brand_exposure / competitor_presence / production_observations / evidence{timestamps, subtitle_used}。
 其中 brand_product_evidence 是必填的受控真值块：viltrox_status=present|absent|unknown / inspection_complete / checked_modalities / viltrox_evidence / viltrox_products[{name,sku,confidence,evidence}] / competitors[{brand,products,confidence,evidence}]。present 必须有 visual/subtitle/audio 结构化证据，metadata 单独不算；absent 必须完整检查 visual+audio；其余一律 unknown。不得从自由文本或产品名猜品牌。
+performance_context.product_context.candidate_products 仅作员工/项目候选上下文，association_is_evidence=false；必须用带时间戳的画面/字幕/口播独立核实，不能把 SKU 关联本身当作产品出现。
 layer2_viewer_emotion = first_three_seconds_feeling / viewer_heart_score / dislike_or_resistance / memorable_points / purchase_or_interest_trigger / one_sentence_viewer_reaction / data_alignment。必须说明真实观众是否会想继续看、收藏、点赞、下单或反感。
 layer3_three_values = channel_value / asset_value / product_proof_value。channel_value 只评渠道投放值；asset_value 只评素材买断/复用；product_proof_value 只评是否证明 Viltrox 产品能力。
 layer4_attribution = attribution_breakdown[{source, share_pct_estimate, confidence, evidence}] / product_contribution / kol_craft_contribution / attribution_risk / what_to_request_to_verify_product。必须拆产品、灯光、LUT、后期、布景、模特、剪辑、平台压缩。
@@ -415,4 +417,3 @@ final_v1 六层结果：
 
 请严格按这个 JSON schema 返回：
 {schema}"""
-
