@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.permissions import check_tab_permission
+from app.core.security import user_status_allows_auth
 from app.db.connection import get_conn
 from app.domains import content_metric_snapshots
 from app.domains.kol.video_url_identity import (
@@ -57,6 +59,7 @@ def enqueue_video_metric_refresh(
     kol_pool_id: int,
     staff: dict[str, Any] | None,
     source: str = "my_kol_video_tracking",
+    queue_lane: str = "interactive",
 ) -> dict[str, Any]:
     """Insert or reuse one active refresh job without making provider calls."""
 
@@ -71,10 +74,13 @@ def enqueue_video_metric_refresh(
     identity = _video_identity(content_url)
     if not identity or identity[0] != platform:
         raise ValueError("video_evidence_identity_invalid")
+    normalized_lane = _text(queue_lane).lower() or "interactive"
+    if normalized_lane not in {"interactive", "batch"}:
+        raise ValueError("video_metric_queue_lane_invalid")
 
     actor_id = _int((staff or {}).get("id") or (staff or {}).get("staff_id"))
     payload = {
-        "queue_lane": "interactive",
+        "queue_lane": normalized_lane,
         "target_type": "kol_video_evidence",
         "target_id": str(evidence_id),
         "evidence_id": evidence_id,
@@ -115,6 +121,53 @@ def _load_evidence(conn: Any, evidence_id: int) -> dict[str, Any] | None:
         (int(evidence_id),),
     ).fetchone()
     return dict(row) if row else None
+
+
+def authorize_video_metric_refresh_actor(
+    conn: Any,
+    *,
+    staff_id: int,
+    kol_pool_id: int,
+) -> tuple[dict[str, Any] | None, str]:
+    """Revalidate the durable job actor immediately before paid work."""
+
+    if int(staff_id) <= 0:
+        return None, "video_refresh_actor_missing"
+    row = conn.execute(
+        """
+        SELECT s.*, u.status AS user_status, u.email AS email
+        FROM staff s
+        JOIN users u ON u.id=s.user_id
+        WHERE s.id=?
+        LIMIT 1
+        """,
+        (int(staff_id),),
+    ).fetchone()
+    if not row:
+        return None, "video_refresh_actor_inactive"
+    actor = dict(row)
+    active = actor.get("active")
+    if active not in (True, 1, "1") or _text(actor.get("suspended_at")):
+        return None, "video_refresh_actor_inactive"
+    if not user_status_allows_auth(actor.get("user_status"), production=True):
+        return None, "video_refresh_actor_inactive"
+    if not check_tab_permission(actor, "vkpi", "write"):
+        return None, "video_refresh_actor_permission_revoked"
+    try:
+        # Local import avoids the module-level enqueue dependency cycle.
+        from app.domains.kol.video_tracking import (
+            VideoTrackingError,
+            _assert_target_writable,
+        )
+
+        _assert_target_writable(
+            conn,
+            kol_pool_id=int(kol_pool_id),
+            staff=actor,
+        )
+    except VideoTrackingError:
+        return None, "video_refresh_target_permission_revoked"
+    return actor, ""
 
 
 def _failure(
@@ -200,6 +253,24 @@ def run_video_metric_refresh_for_job(
         return _identity_rejection(
             evidence_id=evidence_id,
             error_code="video_evidence_identity_changed_after_enqueue",
+            provider_calls_performed=False,
+        )
+    actor, actor_error = authorize_video_metric_refresh_actor(
+        db,
+        staff_id=_int(payload.get("staff_id")),
+        kol_pool_id=expected_kol_id,
+    )
+    queued_user_id = _int(payload.get("triggered_by_user_id"))
+    if actor is None or (
+        queued_user_id > 0 and queued_user_id != _int(actor.get("user_id"))
+    ):
+        return _identity_rejection(
+            evidence_id=evidence_id,
+            error_code=(
+                "video_refresh_actor_identity_changed"
+                if actor is not None
+                else actor_error
+            ),
             provider_calls_performed=False,
         )
 

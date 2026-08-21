@@ -20,6 +20,9 @@ from app.domains.kol.video_url_identity import (
 
 
 MAX_PRODUCT_SKUS = 5
+TRACKING_SOURCE = "my_kol_video_tracking"
+
+
 class VideoTrackingError(RuntimeError):
     """Stable public error code with an HTTP-safe status."""
 
@@ -227,6 +230,56 @@ def _link_products(
     return inserted, [_text(dict(row).get("product_sku")) for row in rows]
 
 
+def _activate_metric_tracking(
+    conn: Any,
+    *,
+    evidence_id: int,
+    actor_id: int,
+    source: str = TRACKING_SOURCE,
+) -> bool:
+    """Create or reactivate the explicit durable auto-refresh subscription."""
+
+    row = conn.execute(
+        """
+        INSERT INTO vkpi_kol_video_metric_tracking (
+            evidence_id, tracked_by_staff_id, status, source,
+            pause_reason, created_at, updated_at
+        ) VALUES (?, ?, 'active', ?, '', NOW(), NOW())
+        ON CONFLICT (evidence_id) DO UPDATE SET
+            tracked_by_staff_id=excluded.tracked_by_staff_id,
+            status='active',
+            source=excluded.source,
+            pause_reason='',
+            updated_at=NOW()
+        RETURNING evidence_id
+        """,
+        (int(evidence_id), int(actor_id), _text(source)[:80] or TRACKING_SOURCE),
+    ).fetchone()
+    return bool(row)
+
+
+def _mark_tracking_enqueued(
+    conn: Any,
+    *,
+    evidence_id: int,
+    job_id: int,
+    enqueue_status: str,
+) -> None:
+    conn.execute(
+        """
+        UPDATE vkpi_kol_video_metric_tracking
+        SET last_enqueued_at=NOW(), last_job_id=?, last_enqueue_status=?,
+            updated_at=NOW()
+        WHERE evidence_id=? AND status='active'
+        """,
+        (
+            int(job_id),
+            _text(enqueue_status)[:32],
+            int(evidence_id),
+        ),
+    )
+
+
 def product_links_for_evidence(
     conn: Any,
     evidence_ids: list[int] | tuple[int, ...] | set[int],
@@ -265,6 +318,9 @@ def _queue_for_evidence(
     product_skus: list[str],
     actor_id: int,
     staff: dict[str, Any] | None,
+    register_tracking: bool = True,
+    refresh_source: str = TRACKING_SOURCE,
+    queue_lane: str = "interactive",
 ) -> dict[str, Any]:
     _validate_skus_exist(conn, product_skus)
     links_created, all_product_skus = _link_products(
@@ -273,12 +329,29 @@ def _queue_for_evidence(
         product_skus=product_skus,
         actor_id=actor_id,
     )
+    tracking_active = False
+    if register_tracking:
+        tracking_active = _activate_metric_tracking(
+            conn,
+            evidence_id=_int(evidence.get("id")),
+            actor_id=actor_id,
+            source=refresh_source,
+        )
     queued = enqueue_video_metric_refresh(
         conn,
         evidence=evidence,
         kol_pool_id=int(kol_pool_id),
         staff=staff,
+        source=refresh_source,
+        queue_lane=queue_lane,
     )
+    if register_tracking:
+        _mark_tracking_enqueued(
+            conn,
+            evidence_id=_int(evidence.get("id")),
+            job_id=_int(queued.get("job_id")),
+            enqueue_status=_text(queued.get("status")),
+        )
     return {
         **queued,
         "kol_pool_id": int(kol_pool_id),
@@ -286,6 +359,7 @@ def _queue_for_evidence(
         "product_links_created": links_created,
         "existing_evidence": True,
         "new_url_resolution_supported": False,
+        "metric_tracking_status": "active" if tracking_active else "not_registered",
     }
 
 
@@ -337,6 +411,9 @@ def queue_evidence_refresh(
     kol_pool_id: int,
     evidence_id: int,
     staff: dict[str, Any] | None,
+    register_tracking: bool = True,
+    refresh_source: str = TRACKING_SOURCE,
+    queue_lane: str = "interactive",
 ) -> dict[str, Any]:
     """Queue a refresh for one existing evidence row with the same access gate."""
 
@@ -359,4 +436,7 @@ def queue_evidence_refresh(
         product_skus=[],
         actor_id=actor_id,
         staff=staff,
+        register_tracking=bool(register_tracking),
+        refresh_source=refresh_source,
+        queue_lane=queue_lane,
     )

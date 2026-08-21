@@ -37,6 +37,8 @@ def _refresh_payload(**overrides):
         "kol_pool_id": 1,
         "platform": "youtube",
         "content_url": VIDEO_URL,
+        "staff_id": 10,
+        "triggered_by_user_id": 110,
         **overrides,
     }
 
@@ -48,6 +50,21 @@ def _tracking_conn() -> sqlite3.Connection:
     conn.create_function("NOW", 0, lambda: "2026-08-21T12:00:00+00:00")
     conn.executescript(
         """
+        CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL,
+            email TEXT NOT NULL
+        );
+        CREATE TABLE staff (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            permissions_json TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            suspended_at TEXT,
+            is_owner INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
         CREATE TABLE vkpi_kol_pool (
             id INTEGER PRIMARY KEY,
             duplicate_of_id INTEGER,
@@ -84,6 +101,10 @@ def _tracking_conn() -> sqlite3.Connection:
             share_count INTEGER,
             metrics_scraped_at TEXT,
             metrics_source TEXT,
+            published_at_norm TEXT,
+            publish_date TEXT,
+            posted_at TEXT,
+            created_at TEXT,
             updated_at TEXT,
             FOREIGN KEY(kol_pool_id) REFERENCES vkpi_kol_pool(id)
         );
@@ -108,7 +129,36 @@ def _tracking_conn() -> sqlite3.Connection:
             idempotency_key TEXT NOT NULL,
             status TEXT NOT NULL
         );
+        CREATE TABLE vkpi_kol_video_metric_tracking (
+            evidence_id INTEGER PRIMARY KEY,
+            tracked_by_staff_id INTEGER,
+            status TEXT NOT NULL DEFAULT 'active',
+            source TEXT NOT NULL,
+            last_enqueued_at TEXT,
+            last_job_id INTEGER,
+            last_enqueue_status TEXT NOT NULL DEFAULT '',
+            pause_reason TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY(evidence_id) REFERENCES vkpi_kol_video_evidence(id),
+            FOREIGN KEY(tracked_by_staff_id) REFERENCES staff(id)
+        );
         """
+    )
+    conn.executemany(
+        "INSERT INTO users (id, status, email) VALUES (?, 'active', ?)",
+        [(110, "member@example.test"), (120, "shared@example.test"), (130, "manager@example.test")],
+    )
+    conn.executemany(
+        """
+        INSERT INTO staff (id, user_id, role, permissions_json, active)
+        VALUES (?, ?, ?, ?, 1)
+        """,
+        [
+            (10, 110, "member", '{"vkpi":"write"}'),
+            (20, 120, "member", '{"vkpi":"write"}'),
+            (30, 130, "manager", '{}'),
+        ],
     )
     conn.executemany(
         "INSERT INTO vkpi_kol_pool (id, viltrox_fit_score, viltrox_fit_reason) VALUES (?, ?, ?)",
@@ -129,19 +179,22 @@ def _tracking_conn() -> sqlite3.Connection:
         INSERT INTO vkpi_kol_video_evidence (
             id, kol_pool_id, content_url, platform, evidence_type, is_active,
             channel_id, view_count, like_count, comment_count, share_count,
-            metrics_scraped_at, metrics_source, updated_at
+            metrics_scraped_at, metrics_source, published_at_norm, posted_at,
+            created_at, updated_at
         ) VALUES (101, 1, 'https://www.youtube.com/watch?v=abcDEF12345',
                   'youtube', 'video', 1, 'UC-owner', 100, 10, 2, NULL,
-                  '2026-08-20T00:00:00+00:00', 'legacy', '2026-08-20T00:00:00+00:00')
+                  '2026-08-20T00:00:00+00:00', 'legacy',
+                  '2026-08-19T00:00:00+00:00', '2026-08-19T00:00:00+00:00',
+                  '2026-08-19T00:00:00+00:00', '2026-08-20T00:00:00+00:00')
         """
     )
     conn.execute(
         """
         INSERT INTO vkpi_kol_video_evidence (
             id, kol_pool_id, content_url, platform, evidence_type, is_active,
-            channel_id
+            channel_id, created_at
         ) VALUES (202, 2, 'https://www.youtube.com/watch?v=other123456',
-                  'youtube', 'video', 1, 'UC-other')
+                  'youtube', 'video', 1, 'UC-other', '2026-07-01T00:00:00+00:00')
         """
     )
     conn.commit()
@@ -229,6 +282,9 @@ def test_existing_video_links_skus_and_refresh_enqueue_are_idempotent(
     assert first["product_skus"] == ["SKU-A", "SKU-B"]
     assert _job_count(tracking_conn) == 1
     assert _link_count(tracking_conn) == 2
+    assert tracking_conn.execute(
+        "SELECT COUNT(*) FROM vkpi_kol_video_metric_tracking WHERE status='active'"
+    ).fetchone()[0] == 1
     payload = json.loads(
         tracking_conn.execute("SELECT payload FROM apify_jobs").fetchone()[0]
     )
@@ -421,6 +477,9 @@ def test_router_enqueue_failure_rolls_back_product_links(tracking_conn, monkeypa
         )
     assert _link_count(tracking_conn) == 0
     assert _job_count(tracking_conn) == 0
+    assert tracking_conn.execute(
+        "SELECT COUNT(*) FROM vkpi_kol_video_metric_tracking"
+    ).fetchone()[0] == 0
 
 
 def test_product_link_read_projection_is_batched_and_migration_safe(tracking_conn):

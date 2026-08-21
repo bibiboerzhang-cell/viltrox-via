@@ -61,6 +61,7 @@ from app.services.scheduler.jobs import (
     job_vkpi_gtm_windows_refresh,
     job_vkpi_health_sentinel,
     job_vkpi_kpi_rollup,
+    job_vkpi_kol_video_metric_refresh,
     job_vkpi_lineage_snapshot,
     job_vkpi_market_intelligence_refresh,
     job_vkpi_market_signal_refresh,
@@ -281,6 +282,17 @@ def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
         name="followed-KOL auto poll (light metadata refresh)",
         max_instances=1,
         coalesce=True,
+    )
+    # Explicit tracked-video subscriptions only; callback is queue-only and
+    # config-gated OFF by migration 285. Provider work remains worker-fenced.
+    _scheduler.add_job(
+        job_vkpi_kol_video_metric_refresh,
+        trigger=IntervalTrigger(hours=1),
+        id="vkpi_kol_video_metric_refresh",
+        name="Queue due tracked KOL video metric refreshes",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     _scheduler.add_job(
         job_vkpi_weekly_report,

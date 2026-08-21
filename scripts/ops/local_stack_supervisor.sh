@@ -24,7 +24,8 @@ log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 
 # kol_auto_poll:每日轻量刷新入队(评论/受众原料),2026-07-16 用户令「保证每日抓取」点火;
 # 费用受 provider:apify 月帽($40)+ 各 cron 帽约束。
-SCHEDULER_ALLOWLIST="kol_auto_poll,vkpi_market_listening_daily,vkpi_ai_today_hot,vkpi_fit_snapshot,vkpi_comment_sentiment_refresh,daily_action_inbox_generate,fulfillment_due_scan,fulfillment_content_scan,vkpi_market_signal_refresh,vkpi_market_intelligence_refresh,vkpi_official_catalog_sync,vkpi_competitor_radar,vkpi_forecast_outcomes_refresh,vkpi_prediction_weekly_rollup,vkpi_official_daily_report_asia,vkpi_official_daily_report_americas,vkpi_market_mention_sentiment,scheduler_fire_stale_recovery"
+# tracked-video refresh 仅加入注册白名单；migration 285 的任务开关仍默认 OFF。
+SCHEDULER_ALLOWLIST="kol_auto_poll,vkpi_kol_video_metric_refresh,vkpi_market_listening_daily,vkpi_ai_today_hot,vkpi_fit_snapshot,vkpi_comment_sentiment_refresh,daily_action_inbox_generate,fulfillment_due_scan,fulfillment_content_scan,vkpi_market_signal_refresh,vkpi_market_intelligence_refresh,vkpi_official_catalog_sync,vkpi_competitor_radar,vkpi_forecast_outcomes_refresh,vkpi_prediction_weekly_rollup,vkpi_official_daily_report_asia,vkpi_official_daily_report_americas,vkpi_market_mention_sentiment,scheduler_fire_stale_recovery"
 
 ensure_admin_web() {
   if ! curl -sf -m 5 http://127.0.0.1:8102/health > /dev/null 2>&1; then
