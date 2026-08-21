@@ -239,17 +239,22 @@ def cached_video_redirect_url(digest: str) -> str:
     return _cached_asset_url_by_digest("video", digest.lower())
 
 
-def cached_video_url_for_item(platform: str, video_id: str) -> str | None:
+def cached_video_url_for_item(
+    platform: str,
+    video_id: str,
+    *,
+    allow_db_fallback: bool = True,
+) -> str | None:
     platform_key = str(platform or "").strip().lower()
     video_key = str(video_id or "").strip()
     if platform_key not in ITEM_VIDEO_CACHE_PLATFORMS or not video_key or len(video_key) > 240:
         return None
     sidecar_path = _video_item_sidecar_path(platform_key, video_key)
     if not sidecar_path.exists():
-        return _cached_asset_url_for_item(platform_key, video_key) or None
+        return (_cached_asset_url_for_item(platform_key, video_key) or None) if allow_db_fallback else None
     sidecar = _read_json_file(sidecar_path)
     if not sidecar:
-        return _cached_asset_url_for_item(platform_key, video_key) or None
+        return (_cached_asset_url_for_item(platform_key, video_key) or None) if allow_db_fallback else None
     digest = _text(sidecar.get("digest")).lower()
     valid_digest = len(digest) == 64 and not any(ch not in "0123456789abcdef" for ch in digest)
     if valid_digest and (VIDEO_CACHE_DIR / digest).is_file():
@@ -260,7 +265,7 @@ def cached_video_url_for_item(platform: str, video_id: str) -> str | None:
         sidecar_url = _safe_public_asset_url(sidecar.get("cached_url") or sidecar.get("cache_url"))
         if sidecar_url and not sidecar_url.startswith("/"):
             return sidecar_url
-        if valid_digest:
+        if valid_digest and allow_db_fallback:
             r2_url = _cached_asset_url_by_digest("video", digest)
             if r2_url:
                 return r2_url
@@ -273,7 +278,7 @@ def cached_video_url_for_item(platform: str, video_id: str) -> str | None:
         )
         if fresh_url:
             return fresh_url
-    return _cached_asset_url_for_item(platform_key, video_key) or None
+    return (_cached_asset_url_for_item(platform_key, video_key) or None) if allow_db_fallback else None
 
 
 def cache_video_for_item(

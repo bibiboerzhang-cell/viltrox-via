@@ -72,6 +72,34 @@ def test_detail_bundle_honors_route_video_limit_contract(
     assert len(result["item"]["video_evidence"]) == expected
 
 
+def test_detail_bundle_skips_get_item_legacy_three_video_projection(monkeypatch):
+    item_kwargs: dict[str, object] = {}
+
+    def fake_get_item(_kol_pool_id: int, **kwargs):
+        item_kwargs.update(kwargs)
+        return {"item": {"id": _kol_pool_id}}
+
+    monkeypatch.setattr(kol_pool, "get_item", fake_get_item)
+    monkeypatch.setattr(kol_pool, "_video_evidence_for_kol", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(eleven_dimensions, "load_persisted_dimensions_11", lambda _kol_pool_id: None)
+    monkeypatch.setattr(
+        llm_deep_analysis,
+        "get_kol_llm_deep_analysis",
+        lambda _kol_pool_id, *, limit: {"status": "empty", "count": 0, "limit": limit},
+    )
+    monkeypatch.setattr(cache_repo, "get_analysis_cache_entries_for_targets", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        audience_language,
+        "audience_language_for_kol",
+        lambda _kol_pool_id: {"sample_size": 0, "languages": []},
+    )
+
+    kol_pool.detail_bundle(13053, video_limit=24, llm_limit=20)
+
+    assert item_kwargs["include_raw_for_derivation"] is True
+    assert item_kwargs["include_video_evidence"] is False
+
+
 def test_detail_bundle_batches_analysis_cache_reads(monkeypatch):
     calls: list[tuple[list[str], tuple[str, ...]]] = []
 

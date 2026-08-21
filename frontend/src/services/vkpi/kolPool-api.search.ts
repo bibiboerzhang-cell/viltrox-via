@@ -84,6 +84,7 @@ export async function smartKolSearch(
     input,
     mode: params.mode || "auto",
     create_session: params.createSession ?? true,
+    response_projection: "smart_local_compact_v1",
   };
   if (params.execute) body.execute = true;
   if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;

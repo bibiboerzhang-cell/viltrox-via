@@ -47,6 +47,7 @@ describe("KOL local qualification request contract", () => {
       languages: ["en"],
       profile_types: ["reviewer"],
       local_qualification_spec: spec,
+      response_projection: "smart_local_compact_v1",
     });
   });
 

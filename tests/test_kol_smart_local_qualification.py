@@ -428,6 +428,95 @@ def test_smart_preview_response_strips_raw_contact_values_and_explanation_marker
     assert item["candidate_facets"]["contact_available"] == "yes"
 
 
+@pytest.mark.parametrize(
+    ("response_projection", "expect_compact"),
+    [(None, False), ("smart_local_compact_v1", True)],
+)
+def test_smart_preview_projection_is_explicit_and_preserves_bucket_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    response_projection: str | None,
+    expect_compact: bool,
+) -> None:
+    rich_items: list[dict[str, Any]] = []
+    for item_id in range(1, 31):
+        item = json.loads(json.dumps(_leaking_smart_item()))
+        item["kol_pool_id"] = item_id
+        item["id"] = item_id
+        item["handle"] = f"safe-handle-{item_id}"
+        item["candidate_bucket"] = "core_vertical" if item_id <= 20 else "expansion"
+        item["server_rank"] = item_id
+        item["global_rank"] = item_id
+        rich_items.append(item)
+    full_result = {
+        "method": "test",
+        "items": rich_items,
+        "buckets": {"creator": rich_items[:15], "reviewer": rich_items[15:]},
+        "business_buckets": {
+            "core_vertical": rich_items[:20],
+            "expansion": rich_items[20:],
+            "exploration": [],
+        },
+        "diagnostics": {"returned_count": 30},
+        "local_qualification": {
+            "schema": "smart_local_qualified_v2",
+            "returned_count": 30,
+            "qualified_count": 30,
+            "shortfall": 0,
+            "gate_evidence": [item["qualification_evidence"] for item in rich_items],
+            "rejected_evidence_sample": [],
+        },
+    }
+    monkeypatch.setattr(
+        vkpi_kol_pool_search.kol_smart_query_planner,
+        "plan_text_query_provider_free",
+        lambda *_args, **_kwargs: {"status": "ready", "search_query": "lens review", "resolved_product": {}},
+    )
+    monkeypatch.setattr(
+        vkpi_kol_pool_search.kol_profile_recall,
+        "recall_kol_profiles",
+        lambda **_kwargs: full_result,
+    )
+    attached: dict[str, Any] = {}
+
+    def attach(**kwargs):
+        attached["result"] = kwargs["result"]
+        return kwargs["result"]
+
+    monkeypatch.setattr(vkpi_kol_pool_search, "_attach_smart_recall_session", attach)
+
+    request_body = {"input": "US YouTube lens review", "create_session": False}
+    if response_projection:
+        request_body["response_projection"] = response_projection
+    response = asyncio.run(vkpi_kol_pool_search.smart_kol_search(request_body, staff={"id": 42}))
+
+    result = response["result"]
+    assert attached["result"]["buckets"]["creator"][0]["qualification_evidence"]
+    assert result["items"][0]["qualification_evidence"]
+    if not expect_compact:
+        assert result["buckets"]["creator"][0]["qualification_evidence"]
+        assert len(result["local_qualification"]["gate_evidence"]) == 30
+        assert "response_projection" not in result
+        return
+    assert result["buckets"]["creator"][0] == {
+        "kol_pool_id": 1,
+        "id": 1,
+        "platform": "youtube",
+        "handle": "safe-handle-1",
+        "bucket": "creator",
+        "candidate_bucket": "core_vertical",
+        "server_rank": 1,
+        "global_rank": 1,
+    }
+    assert [item["kol_pool_id"] for item in result["business_buckets"]["core_vertical"]] == list(range(1, 21))
+    assert [item["server_rank"] for item in result["buckets"]["reviewer"]] == list(range(16, 31))
+    assert result["local_qualification"]["gate_evidence_count"] == 30
+    assert "gate_evidence" not in result["local_qualification"]
+    assert result["response_projection"]["schema"] == "smart_local_compact_v1"
+    full_bytes = len(json.dumps(attached["result"], ensure_ascii=False).encode())
+    compact_bytes = len(json.dumps(result, ensure_ascii=False).encode())
+    assert compact_bytes < full_bytes * 0.5
+
+
 def test_smart_preview_owns_30_target_and_filter_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

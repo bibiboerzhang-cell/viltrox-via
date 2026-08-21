@@ -581,6 +581,7 @@ def get_item(
     *,
     contact_visibility: str = CONTACT_VISIBILITY_MASKED,
     include_raw_for_derivation: bool = False,
+    include_video_evidence: bool = True,
 ) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     conn = get_conn()
@@ -607,7 +608,11 @@ def get_item(
 
     item["contact_summary"] = contact_summary(int(kol_pool_id), conn=conn)
     item["v6_breakdown"] = _v6_breakdown_for_item(item)
-    item["video_evidence"] = _video_evidence_for_kol(int(kol_pool_id), limit=3)
+    item["video_evidence"] = (
+        _video_evidence_for_kol(int(kol_pool_id), limit=3)
+        if include_video_evidence
+        else []
+    )
     item = value_free_contact_projection(item)
     payload: dict[str, Any] = {"item": item}
     if include_raw_for_derivation:
@@ -644,6 +649,10 @@ def detail_bundle(
         int(kol_pool_id),
         contact_visibility=contact_visibility,
         include_raw_for_derivation=True,
+        # detail_bundle immediately replaces this field with the caller's
+        # requested video_limit; skip the legacy three-row read and its media
+        # projections instead of doing the same work twice.
+        include_video_evidence=False,
     )
     raw_platform_data_for_derivation = item_payload.pop("_raw_platform_data_for_derivation", None)
     item = dict(item_payload.get("item") or {})

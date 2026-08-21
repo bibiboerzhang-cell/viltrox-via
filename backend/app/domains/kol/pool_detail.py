@@ -129,6 +129,136 @@ def _validated_cached_video_url(item: dict[str, Any], platform: str) -> str:
     return ""
 
 
+def _batch_cached_video_urls(
+    conn: Any,
+    rows: list[Any],
+) -> dict[int, str] | None:
+    """Resolve non-YouTube cache identities with one DB read.
+
+    ``None`` means the batch read was unavailable (rolling schema/test double),
+    in which case the caller preserves the legacy per-item resolver.  A dict,
+    including an empty one, is authoritative and prevents per-video DB
+    fallback.  Local sidecars/files remain provider-free and are still checked.
+    """
+
+    if not is_postgres_runtime():
+        return None
+    from app.domains.kol.url_deep_crawl_queue import _content_url_video_id
+    from app.domains.media import cache
+    from app.domains.media.cache_core import _resolved_cached_asset_row
+
+    items = [dict(row) for row in rows]
+    candidates: dict[int, list[tuple[str, str]]] = {}
+    pairs: list[tuple[str, str]] = []
+    digests: list[str] = []
+    seen_pairs: set[tuple[str, str]] = set()
+    seen_digests: set[str] = set()
+    for item in items:
+        evidence_id = int(item.get("evidence_id") or item.get("id") or 0)
+        platform = _platform(item.get("platform") or "")
+        if not evidence_id or platform not in {"instagram", "tiktok"}:
+            continue
+        values = [
+            _content_url_video_id(platform, item.get("content_url")),
+            str(evidence_id),
+        ]
+        item_pairs: list[tuple[str, str]] = []
+        for external_id in values:
+            pair = (platform, str(external_id or "").strip())
+            if not pair[1] or pair in item_pairs:
+                continue
+            item_pairs.append(pair)
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                pairs.append(pair)
+        candidates[evidence_id] = item_pairs
+        digest = str(item.get("cached_video_digest") or "").strip().lower()
+        if len(digest) == 64 and not any(ch not in "0123456789abcdef" for ch in digest):
+            if digest not in seen_digests:
+                seen_digests.add(digest)
+                digests.append(digest)
+
+    conditions: list[str] = []
+    params: list[Any] = []
+    for platform, external_id in pairs:
+        conditions.append("(platform=? AND external_id=?)")
+        params.extend([platform, external_id])
+    if digests:
+        conditions.append(f"digest IN ({','.join(['?'] * len(digests))})")
+        params.extend(digests)
+    asset_rows: list[Any] = []
+    if conditions:
+        try:
+            asset_rows = conn.execute(
+                f"""
+                SELECT digest, cache_url, storage_backend, r2_key, platform, external_id
+                FROM vkpi_media_cache_assets
+                WHERE media_kind='video' AND status='cached'
+                  AND ({' OR '.join(conditions)})
+                ORDER BY updated_at DESC, id DESC
+                """,
+                tuple(params),
+            ).fetchall()
+        except Exception:
+            return None
+
+    by_pair: dict[tuple[str, str], dict[str, Any]] = {}
+    by_digest: dict[str, dict[str, Any]] = {}
+    for raw in asset_rows:
+        asset = dict(raw)
+        pair = (_platform(asset.get("platform") or ""), str(asset.get("external_id") or "").strip())
+        digest = str(asset.get("digest") or "").strip().lower()
+        if pair[0] and pair[1]:
+            by_pair.setdefault(pair, asset)
+        if digest:
+            by_digest.setdefault(digest, asset)
+
+    def resolve_asset(asset: dict[str, Any] | None) -> str:
+        if not asset:
+            return ""
+        digest = str(asset.get("digest") or "").strip().lower()
+        if digest and cache.cached_video_file(digest):
+            return f"/api/vkpi-media/video-cache/{digest}"
+        return str(_resolved_cached_asset_row(asset) or "").strip()
+
+    resolved: dict[int, str] = {}
+    for item in items:
+        evidence_id = int(item.get("evidence_id") or item.get("id") or 0)
+        if evidence_id not in candidates:
+            continue
+        raw_url = str(item.get("cached_video_url") or "").strip()
+        raw_digest = str(item.get("cached_video_digest") or "").strip().lower()
+        digest = raw_digest if len(raw_digest) == 64 and not any(ch not in "0123456789abcdef" for ch in raw_digest) else ""
+        value = ""
+        if digest:
+            if cache.cached_video_file(digest):
+                value = f"/api/vkpi-media/video-cache/{digest}"
+            if not value:
+                projected_asset = {
+                    "digest": digest,
+                    "cache_url": item.get("cached_video_url"),
+                    "storage_backend": item.get("cached_video_storage_backend"),
+                    "r2_key": item.get("cached_video_r2_key"),
+                }
+                value = resolve_asset(projected_asset) or resolve_asset(by_digest.get(digest))
+        elif raw_url and not _video_cache_digest(raw_url):
+            value = raw_url
+        for pair in candidates[evidence_id]:
+            if value:
+                break
+            try:
+                value = str(cache.cached_video_url_for_item(*pair, allow_db_fallback=False) or "").strip()
+            except TypeError:
+                # A rolling test double may expose the older two-argument
+                # signature; the batched DB projection below remains valid.
+                value = ""
+            if not value:
+                value = resolve_asset(by_pair.get(pair))
+        if value:
+            resolved[evidence_id] = value
+    return resolved
+
+
 def _v6_breakdown_for_item(item: dict[str, Any]) -> dict[str, Any] | None:
     """Project persisted V6 Fit into the drawer's read-only breakdown shape.
 
@@ -219,6 +349,8 @@ def _video_evidence_for_kol(
             COALESCE(NULLIF(mimg.cache_url, ''), CASE WHEN COALESCE(mimg.digest, '') != '' THEN '/api/vkpi-media/image-cache/' || mimg.digest ELSE NULL END) AS cached_thumbnail_url,
             COALESCE(NULLIF(m.cache_url, ''), CASE WHEN COALESCE(m.digest, '') != '' THEN '/api/vkpi-media/video-cache/' || m.digest ELSE NULL END) AS cached_video_url,
             m.digest AS cached_video_digest,
+            m.storage_backend AS cached_video_storage_backend,
+            m.r2_key AS cached_video_r2_key,
             e.view_count,
             e.like_count,
             e.comment_count,
@@ -274,7 +406,7 @@ def _video_evidence_for_kol(
             LIMIT 1
         ) mimg ON TRUE
         LEFT JOIN LATERAL (
-            SELECT cache_url, digest, r2_key
+            SELECT cache_url, digest, r2_key, storage_backend
             FROM vkpi_media_cache_assets asset
             WHERE asset.media_kind='video'
               AND asset.status='cached'
@@ -386,6 +518,8 @@ def _video_evidence_for_kol(
     # (platform, evidence_id) 键存 sidecar,join 的 source_url 匹配也兜不全。读端直查文件缓存补齐。
     from app.domains.media.cache import cached_image_url
 
+    prefetched_video_urls = _batch_cached_video_urls(conn, list(rows))
+
     items: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
@@ -442,11 +576,17 @@ def _video_evidence_for_kol(
                 pass
         if platform and platform != "youtube":
             try:
-                item["cached_video_url"] = _validated_cached_video_url(item, platform) or None
+                item["cached_video_url"] = (
+                    (prefetched_video_urls or {}).get(evidence_id)
+                    if prefetched_video_urls is not None
+                    else _validated_cached_video_url(item, platform)
+                ) or None
             except Exception:
                 logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
                 item["cached_video_url"] = None
         item.pop("cached_video_digest", None)
+        item.pop("cached_video_storage_backend", None)
+        item.pop("cached_video_r2_key", None)
         youtube_id = _youtube_video_id(item.get("content_url")) if platform == "youtube" else ""
         youtube_thumb = _youtube_thumbnail_url(youtube_id)
         item["youtube_video_id"] = youtube_id

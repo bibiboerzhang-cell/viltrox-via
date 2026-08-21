@@ -8,6 +8,7 @@ from app.api.dependencies.perms import require_tab
 from app.domains.audit.decorator import audit_action
 import app.domains.kol.profile_recall as kol_profile_recall
 import app.domains.kol.profile_recall_qualification as kol_profile_recall_qualification
+import app.domains.kol.profile_recall_response as kol_profile_recall_response
 import app.domains.kol.search_sessions as kol_search_sessions
 import app.domains.kol.search_sessions_online as kol_search_sessions_online
 import app.domains.kol.smart_query_planner as kol_smart_query_planner
@@ -796,6 +797,11 @@ async def smart_kol_search(
             query_text=recall_query,
             staff=staff,
         )
+        # Session attachment above receives the complete rich bucket result so
+        # durable replay and the legacy /kol-recall contract do not change.
+        # Only version-negotiated Smart clients receive the compact wire shape.
+        if str(body.get("response_projection") or "").strip() == "smart_local_compact_v1":
+            result = kol_profile_recall_response.compact_smart_local_api_result(result)
         discovery_payload: dict | None = None
         include_new_discovery = bool(body.get("include_new_discovery") or body.get("include_discovery"))
         execute_new_discovery = bool(body.get("execute_new_discovery"))

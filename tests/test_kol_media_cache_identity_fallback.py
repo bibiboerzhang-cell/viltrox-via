@@ -407,6 +407,70 @@ def test_pool_detail_drops_four_stale_local_ledger_routes_and_uses_original_post
     assert all("cached_video_digest" not in item for item in projected)
 
 
+def test_pool_detail_batches_exact_media_cache_identity_reads(monkeypatch) -> None:
+    from app.domains.kol import pool_detail
+    from app.domains.media import cache, cache_core
+
+    rows = [
+        _detail_video_row(
+            evidence_id=700 + index,
+            digest=str(index) * 64,
+            native_id=f"BatchVideo{index}",
+        )
+        for index in range(1, 5)
+    ]
+    assets = [
+        {
+            "digest": chr(96 + index) * 64,
+            "cache_url": f"https://public-media.example/batch-{index}.mp4",
+            "storage_backend": "r2",
+            "r2_key": f"private/batch-{index}.mp4",
+            "platform": "instagram",
+            "external_id": f"BatchVideo{index}",
+        }
+        for index in range(1, 5)
+    ]
+
+    class BatchConn:
+        def __init__(self) -> None:
+            self.asset_reads = 0
+
+        def execute(self, sql: str, _params=()):
+            compact = " ".join(str(sql).split())
+            if "FROM vkpi_media_cache_assets" in compact:
+                self.asset_reads += 1
+                return _Rows(many=assets)
+            raise AssertionError(compact)
+
+    conn = BatchConn()
+    monkeypatch.setattr(pool_detail, "is_postgres_runtime", lambda: True)
+    monkeypatch.setattr(cache, "cached_video_file", lambda _digest: None)
+    monkeypatch.setattr(
+        cache,
+        "cached_video_url_for_item",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cache_core,
+        "_resolved_cached_asset_row",
+        lambda row: (
+            str(dict(row).get("cache_url") or "")
+            if str(dict(row).get("cache_url") or "").startswith("https://")
+            else ""
+        ),
+    )
+
+    resolved = pool_detail._batch_cached_video_urls(conn, rows)
+
+    assert conn.asset_reads == 1
+    assert resolved == {
+        701: "https://public-media.example/batch-1.mp4",
+        702: "https://public-media.example/batch-2.mp4",
+        703: "https://public-media.example/batch-3.mp4",
+        704: "https://public-media.example/batch-4.mp4",
+    }
+
+
 def test_pool_detail_keeps_verified_local_range_cache_route(monkeypatch, tmp_path: Path) -> None:
     from app.domains.kol import pool_detail
     from app.domains.media import cache
