@@ -553,6 +553,7 @@ def test_post_reveal_route_consumes_one_limit_and_forwards_purpose(
     limiter_calls: list[int] = []
     domain_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(routes, "release_validation_active", lambda: False)
+    monkeypatch.setattr(routes, "_assert_private_kol_target", lambda *_a, **_kw: None)
     monkeypatch.setattr(routes, "legacy_system_admin_scope_guard", lambda *_a, **_kw: None)
     monkeypatch.setattr(routes, "check_kol_pool_employee_contact_permission", lambda _staff: True)
     monkeypatch.setattr(
@@ -592,6 +593,7 @@ def test_post_reveal_denies_contact_permission_before_limiter_or_domain(
     import app.api.routers.vkpi_kol_pool_intel as routes
 
     monkeypatch.setattr(routes, "release_validation_active", lambda: False)
+    monkeypatch.setattr(routes, "_assert_private_kol_target", lambda *_a, **_kw: None)
     monkeypatch.setattr(routes, "legacy_system_admin_scope_guard", lambda *_a, **_kw: None)
     monkeypatch.setattr(routes, "check_kol_pool_employee_contact_permission", lambda _staff: False)
     monkeypatch.setattr(

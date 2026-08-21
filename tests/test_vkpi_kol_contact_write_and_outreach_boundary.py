@@ -68,6 +68,11 @@ def test_manual_contact_post_uses_canonical_observed_ingest_and_returns_no_value
         }
 
     monkeypatch.setattr(business_contact_extract, "get_conn", lambda: _ExistingKolConn())
+    monkeypatch.setattr(
+        vkpi_kol_pool_intel,
+        "_assert_private_kol_target",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(contact_ingest, "ingest_contact", canonical_ingest)
     monkeypatch.setattr(
         contact_system,

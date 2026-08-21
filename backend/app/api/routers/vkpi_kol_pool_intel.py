@@ -75,6 +75,23 @@ def _write_service_error(
     return HTTPException(status_code=status_code, detail=detail)
 
 
+def _assert_private_kol_target(kol_pool_id: int, staff: dict | None, *, write: bool) -> None:
+    """Apply the canonical own/shared/manager policy before private KOL I/O."""
+
+    from app.db.connection import get_conn
+    from app.domains.kol.my_kol_paid_action_access import (
+        MyKolPaidActionError,
+        assert_target_readable,
+        assert_target_writable,
+    )
+
+    try:
+        gate = assert_target_writable if write else assert_target_readable
+        gate(get_conn(), kol_pool_id=int(kol_pool_id), staff=staff)
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+
+
 def _audience_refresh_contract(result: object, kol_pool_id: int) -> dict:
     if not isinstance(result, dict):
         raise _write_service_error(
@@ -122,6 +139,7 @@ def add_kol_manual_contact(
             status_code=403,
             detail={"code": "kol_contact_write_not_authorized"},
         )
+    _assert_private_kol_target(int(kol_pool_id), context, write=True)
 
     from app.domains.kol import business_contact_extract
     from app.domains.kol.contact_access import project_pool_contact_write
@@ -220,6 +238,12 @@ def reveal_kol_contact(
             headers=_CONTACT_REVEAL_HEADERS,
         )
 
+    # The contact permission above is organization/board-wide.  Apply the
+    # canonical row boundary before limiter, audit, or contact lookup effects.
+    _assert_private_kol_target(
+        int(kol_pool_id), staff if isinstance(staff, dict) else None, write=False
+    )
+
     enforce_contact_read_rate_limit(
         request,
         staff if isinstance(staff, dict) else {},
@@ -307,7 +331,9 @@ def get_kol_cooperation(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """读 KOL 当前合作状态 + 时间线(平台为基准)。"""
-    del staff
+    _assert_private_kol_target(
+        int(kol_pool_id), staff if isinstance(staff, dict) else None, write=False
+    )
     from app.domains.kol import cooperation
 
     return cooperation.get_cooperation(int(kol_pool_id))
@@ -354,6 +380,9 @@ def record_kol_cooperation(
 ) -> dict:
     """KOL 合作动作(续约/加大投入/退出合作/评估/备注)→ 平台为基准的状态时间线。
     action ∈ renew|scale_up|exit|evaluate|note。零触 viltrox_fit_score。"""
+    _assert_private_kol_target(
+        int(kol_pool_id), staff if isinstance(staff, dict) else None, write=True
+    )
     _assert_not_others_claim(staff if isinstance(staff, dict) else {}, kol_pool_id)
     from app.domains.kol import cooperation
 
@@ -376,7 +405,9 @@ def get_kol_outreach_draft(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """读最新联系草稿(cache,kol_outreach_draft_v1);无则 state=missing。"""
-    del staff
+    _assert_private_kol_target(
+        int(kol_pool_id), staff if isinstance(staff, dict) else None, write=False
+    )
     from app.domains.kol import outreach_draft as kol_outreach_draft
 
     return kol_outreach_draft.get_outreach_draft(int(kol_pool_id))
@@ -389,6 +420,9 @@ def get_kol_outreach_pack(
 ) -> dict:
     """C4:读最新外联包(brief + 双语邮件草稿,cache kol_outreach_pack_v1)+ 实时邮箱状态;
     无则 state=missing。零 LLM/零外调,零触 viltrox_fit_score。"""
+    _assert_private_kol_target(
+        int(kol_pool_id), staff if isinstance(staff, dict) else None, write=False
+    )
     from app.domains.kol import outreach_pack as kol_outreach_pack
 
     try:
@@ -416,6 +450,17 @@ async def generate_kol_outreach_pack(
     llm_gateway(预算闸+兜底链内置,失败回落双语模板),邮箱缺失复用既有富化管线补抓。
     同 KOL 当日幂等(body.force=true 才重生成)。LLM/富化可达数十秒 → threadpool 不阻塞事件循环。
     红线:零写 viltrox_fit_score、不动 rule_v0、不碰归属判定。"""
+    _assert_private_kol_target(
+        int(kol_pool_id), staff if isinstance(staff, dict) else None, write=True
+    )
+    if release_validation_active():
+        raise _write_service_error(
+            status_code=503,
+            status="unavailable",
+            reason="release_validation_fenced",
+            operation="outreach_pack_generate",
+            kol_pool_id=kol_pool_id,
+        )
     _assert_not_others_claim(staff if isinstance(staff, dict) else {}, kol_pool_id)
     from app.domains.kol import outreach_pack as kol_outreach_pack
 

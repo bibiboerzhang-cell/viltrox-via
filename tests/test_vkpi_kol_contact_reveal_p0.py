@@ -50,6 +50,13 @@ ORG1_ADMIN = {
 @pytest.fixture(autouse=True)
 def _contact_boundary_defaults(monkeypatch) -> None:
     monkeypatch.setattr(vkpi_kol_pool_intel, "release_validation_active", lambda: False)
+    # Row-scope ordering has dedicated direct-ID tests; these projection tests
+    # isolate confirmation, limiter, audit and DTO behavior.
+    monkeypatch.setattr(
+        vkpi_kol_pool_intel,
+        "_assert_private_kol_target",
+        lambda *_args, **_kwargs: None,
+    )
     monkeypatch.setattr(
         contact_projection,
         "check_rate_limit",

@@ -9,6 +9,11 @@ from app.domains.kol import business_contact_extract
 
 def test_contact_save_does_not_expose_internal_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
+        vkpi_kol_pool_intel,
+        "_assert_private_kol_target",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         business_contact_extract,
         "add_manual_contact",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("postgres secret")),

@@ -26,6 +26,23 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-rates"])
 
 
+def _assert_rate_target(kol_pool_id: int, staff: dict[str, Any] | None, *, write: bool) -> None:
+    """Fence private commercial rates by the canonical My KOL boundary."""
+
+    from app.db.connection import get_conn
+    from app.domains.kol.my_kol_paid_action_access import (
+        MyKolPaidActionError,
+        assert_target_readable,
+        assert_target_writable,
+    )
+
+    try:
+        gate = assert_target_writable if write else assert_target_readable
+        gate(get_conn(), kol_pool_id=int(kol_pool_id), staff=staff)
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+
+
 @router.get("/kol-pool/{kol_pool_id}/rates")
 def list_kol_rates(
     kol_pool_id: int,
@@ -33,7 +50,7 @@ def list_kol_rates(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict[str, Any]:
     """该 KOL 已录报价列表(新在前);表未建/无报价诚实 empty。"""
-    del staff
+    _assert_rate_target(int(kol_pool_id), staff, write=False)
     from app.domains.kol import rate_card
 
     try:
@@ -52,6 +69,7 @@ def add_kol_rate(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict[str, Any]:
     """手动录一条报价(amount_usd 必填;source 缺省 negotiation;confidence 缺省按来源推)。"""
+    _assert_rate_target(int(kol_pool_id), staff, write=True)
     from app.domains.kol import rate_card
 
     staff_id = None
@@ -77,7 +95,7 @@ def get_kol_rate_estimate(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict[str, Any]:
     """估价区间:真报价中位数优先,无报价 CPM 基准兜底;KOL 不存在 404。"""
-    del staff
+    _assert_rate_target(int(kol_pool_id), staff, write=False)
     from app.domains.kol import rate_card
 
     result = rate_card.estimate_rate(int(kol_pool_id))
