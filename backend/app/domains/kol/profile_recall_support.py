@@ -305,8 +305,12 @@ def recall_table_columns(
         }
         if columns:
             return columns
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(
+            "information_schema_column_probe_failed table=%s error_type=%s",
+            table_name,
+            type(exc).__name__,
+        )
     return fallback_table_columns(conn, table_name)
 
 

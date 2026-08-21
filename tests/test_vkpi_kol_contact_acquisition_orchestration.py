@@ -762,6 +762,103 @@ def test_l0_reconcile_promotes_explicit_bio_proof_and_returns_counts_only(
     assert "new-secret@example.com" not in serialized
 
 
+def test_l0_reconcile_rollback_failure_is_value_free_and_not_durable(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    db = _queue_db()
+    contact_acquisition_queue.enqueue_contact_acquisition(1, conn=db)
+    secret = "dummy-contact@example.invalid"
+
+    class RollbackFailingConnection:
+        def execute(self, *args: Any, **kwargs: Any) -> Any:
+            return db.execute(*args, **kwargs)
+
+        def commit(self) -> None:
+            db.commit()
+
+        def rollback(self) -> None:
+            raise RuntimeError(secret)
+
+    import app.domains.kol.business_contact_extract as extractor
+
+    monkeypatch.setattr(
+        extractor,
+        "extract_contacts_multi_source",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+    queue_updates: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        contact_acquisition_queue,
+        "_queue_update",
+        lambda *_a, **kwargs: queue_updates.append(kwargs),
+    )
+
+    result = contact_acquisition_queue.reconcile_contact_acquisition(
+        1,
+        brand_scope="organization:9",
+        conn=RollbackFailingConnection(),
+    )
+
+    assert result["status"] == "error"
+    assert result["durable_state_written"] is False
+    assert queue_updates == []
+    assert secret not in caplog.text
+
+
+def test_pending_cycle_aborts_when_error_state_was_not_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _queue_db()
+    contact_acquisition_queue.enqueue_contact_acquisition(1, conn=db)
+    monkeypatch.setattr(
+        contact_acquisition_queue,
+        "reconcile_contact_acquisition",
+        lambda *_a, **_kw: {
+            "status": "error",
+            "durable_state_written": False,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="durable state unavailable"):
+        contact_acquisition_queue.reconcile_pending_contact_acquisition(
+            brand_scope="organization:9",
+            limit=5,
+            conn=db,
+        )
+
+
+def test_l0_error_state_failure_logs_only_exception_type(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    db = _queue_db()
+    contact_acquisition_queue.enqueue_contact_acquisition(1, conn=db)
+    secret = "dummy-contact@example.invalid"
+    import app.domains.kol.business_contact_extract as extractor
+
+    monkeypatch.setattr(
+        extractor,
+        "extract_contacts_multi_source",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError(secret)),
+    )
+    monkeypatch.setattr(
+        contact_acquisition_queue,
+        "_queue_update",
+        lambda *_a, **_kw: (_ for _ in ()).throw(ValueError(secret)),
+    )
+
+    result = contact_acquisition_queue.reconcile_contact_acquisition(
+        1,
+        brand_scope="organization:9",
+        conn=db,
+    )
+
+    assert result["status"] == "error"
+    assert result["durable_state_written"] is False
+    assert secret not in caplog.text
+
+
 def test_raw_bio_confidence_without_bounded_identity_anchor_stays_observed() -> None:
     source, public, source_field = contact_acquisition_queue._candidate_source(  # noqa: SLF001
         {

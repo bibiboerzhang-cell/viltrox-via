@@ -42,6 +42,7 @@ from app.db.connection import PostgresCompatConnection  # noqa: E402
 from app.domains.costs import product_catalog  # noqa: E402
 from app.domains.kol import profile_recall, search_sessions  # noqa: E402
 from app.platform import llm_gateway  # noqa: E402
+from scripts.stdout_utils import out_json  # noqa: E402
 
 
 SCHEMA_VERSION = "vkpi_kol_smart_local_runtime_v1"
@@ -599,14 +600,14 @@ def main() -> int:
         rounds=validate_rounds(args.rounds),
     )
     write_report(output_path, report)
-    print(json.dumps({
+    out_json({
         "status": "ok",
         "output": str(output_path),
         "query_count": report["aggregate"]["query_count"],
         "total_route_calls": report["configuration"]["total_route_calls"],
         "hard_gate_pass_query_count": report["aggregate"]["hard_gate_pass_query_count"],
         "zero_shortfall_query_count": report["aggregate"]["zero_shortfall_query_count"],
-    }, ensure_ascii=False))
+    }, ensure_ascii=False)
     return 0
 
 

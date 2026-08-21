@@ -52,8 +52,11 @@ def _schema_available(conn: Any) -> bool:
     except Exception:
         try:
             conn.rollback()
-        except Exception:
-            pass
+        except Exception as rollback_exc:
+            logger.debug(
+                "contact acquisition schema probe rollback failed error_type=%s",
+                type(rollback_exc).__name__,
+            )
         return False
 
 

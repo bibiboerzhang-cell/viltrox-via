@@ -34,6 +34,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import psycopg
 from psycopg.rows import dict_row
+from stdout_utils import out_json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -763,14 +764,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     _write_private_text(args.json_out, json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
     _write_private_text(args.csv_out, _csv_text(report))
-    print(json.dumps({
+    out_json({
         "status": report.get("summary", {}).get("status"),
         "contract_pass": report.get("summary", {}).get("contract_pass"),
         "json_out": str(args.json_out),
         "csv_out": str(args.csv_out),
         "provider_calls_performed": False,
         "business_writes_performed": False,
-    }, ensure_ascii=False, sort_keys=True))
+    }, ensure_ascii=False, sort_keys=True)
     return 0 if report.get("summary", {}).get("status") == "complete" else 2
 
 

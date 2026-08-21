@@ -25,6 +25,8 @@ import tempfile
 import time
 from typing import Any, Mapping, NamedTuple, Sequence
 
+from stdout_utils import out_json
+
 
 SCHEMA_VERSION = "vkpi_kol_online_mock_benchmark_v1"
 DEFAULT_OUTPUT = Path("/private/tmp/vkpi-kol-online-v2-synthetic-20260818.json")
@@ -781,7 +783,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     output = _validate_output_path(args.output)
     report = run_benchmark(runs_per_scenario=args.runs)
     write_report(output, report)
-    print(json.dumps({
+    out_json({
         "status": "ok" if report["aggregate"]["scenario_pass_count"] == report["aggregate"]["scenario_count"] else "failed",
         "output": str(output),
         "claim_status": report["claim_status"],
@@ -789,7 +791,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "scenario_count": report["aggregate"]["scenario_count"],
         "real_provider_calls": 0,
         "business_database_writes": 0,
-    }, ensure_ascii=False, sort_keys=True))
+    }, ensure_ascii=False, sort_keys=True)
     return 0 if report["aggregate"]["scenario_pass_count"] == report["aggregate"]["scenario_count"] else 2
 
 

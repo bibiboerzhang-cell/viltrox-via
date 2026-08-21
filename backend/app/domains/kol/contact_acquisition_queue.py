@@ -519,6 +519,7 @@ def reconcile_contact_acquisition(
     eligible_count = 0
     final_status = "error"
     reason_code = "reconcile_failed"
+    durable_state_written = True
     contactability_score: float | None = None
     priority_tier = _pool_priority_tier(db, pool_id)
     try:
@@ -664,25 +665,38 @@ def reconcile_contact_acquisition(
             contactability_score=contactability_score,
         )
     except Exception as exc:
+        rollback_ok = True
         try:
             db.rollback()
-        except Exception:
-            pass
+        except Exception as rollback_exc:
+            rollback_ok = False
+            logger.warning(
+                "contact acquisition rollback failed kol=%s error_type=%s",
+                pool_id,
+                type(rollback_exc).__name__,
+            )
         logger.warning(
             "contact acquisition L0 failed kol=%s error_type=%s",
             pool_id,
             type(exc).__name__,
         )
-        try:
-            _queue_update(
-                db,
-                kol_pool_id=pool_id,
-                status="error",
-                reason_code="reconcile_failed",
-                contactability_score=contactability_score,
-            )
-        except Exception:
-            pass
+        durable_state_written = False
+        if rollback_ok:
+            try:
+                _queue_update(
+                    db,
+                    kol_pool_id=pool_id,
+                    status="error",
+                    reason_code="reconcile_failed",
+                    contactability_score=contactability_score,
+                )
+                durable_state_written = True
+            except Exception as update_exc:
+                logger.warning(
+                    "contact acquisition error-state update failed kol=%s error_type=%s",
+                    pool_id,
+                    type(update_exc).__name__,
+                )
         final_status, reason_code = "error", "reconcile_failed"
 
     return _reconcile_result(
@@ -695,6 +709,7 @@ def reconcile_contact_acquisition(
         eligible=eligible_count,
         contactability_score=contactability_score,
         priority_tier=priority_tier,
+        durable_state_written=durable_state_written,
     )
 
 
@@ -709,6 +724,7 @@ def _reconcile_result(
     eligible: int,
     contactability_score: float | None,
     priority_tier: str,
+    durable_state_written: bool = True,
 ) -> dict[str, Any]:
     """Build a count-only result; never include contact or evidence values."""
 
@@ -723,6 +739,7 @@ def _reconcile_result(
         "eligible_contact_count": int(eligible),
         "contactability_score": contactability_score,
         "contactability_score_kind": "contact_clue_score" if contactability_score is not None else None,
+        "durable_state_written": bool(durable_state_written),
         "provider_calls": False,
         "website_crawls": False,
         "messages_sent": False,
@@ -770,6 +787,8 @@ def reconcile_pending_contact_acquisition(
             brand_scope=scope,
             conn=db,
         )
+        if result.get("durable_state_written") is False:
+            raise RuntimeError("contact acquisition durable state unavailable")
         state = str(result.get("status") or "error")
         totals[state if state in totals else "error"] += 1
     return {

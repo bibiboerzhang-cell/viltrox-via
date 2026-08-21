@@ -171,6 +171,9 @@ export default defineConfig(({ command }) => {
               id.includes("/src/components/vkpi/cockpit/components/KOLVideoAnalysisPanel.tsx") ||
               id.includes("/src/components/vkpi/cockpit/components/KOLDetailDrawer.helpers.ts") ||
               id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.helpers.ts") ||
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.cachePrivacy.ts") ||
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.evidence.ts") ||
+              id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.presentation.ts") ||
               id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.derivers.ts") ||
               id.includes("/src/components/vkpi/cockpit/components/SmartKolInputPanel.progress-derivers.ts")
             ) {
