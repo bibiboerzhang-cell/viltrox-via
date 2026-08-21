@@ -10,6 +10,7 @@ from .jobs_tasks import _record_scheduler_run, _scheduler_task_enabled
 
 logger = get_logger(__name__)
 TASK_KEY = "vkpi_kol_video_metric_refresh"
+CONTENT_MONITOR_TASK_KEY = "vkpi_kol_content_monitoring"
 
 
 async def job_vkpi_kol_video_metric_refresh() -> dict | None:
@@ -58,4 +59,57 @@ async def job_vkpi_kol_video_metric_refresh() -> dict | None:
         }
 
 
-__all__ = ["TASK_KEY", "job_vkpi_kol_video_metric_refresh"]
+async def job_vkpi_kol_content_monitoring() -> dict | None:
+    """Queue explicit recent-content subscriptions; never call a provider here."""
+
+    if not _scheduler_task_enabled(CONTENT_MONITOR_TASK_KEY):
+        logger.info("scheduler.vkpi_kol_content_monitoring_skipped", extra={"reason": "disabled"})
+        return None
+    from app.core.release_validation import release_validation_active
+
+    if release_validation_active():
+        return {
+            "status": "blocked",
+            "reason": "release_validation_fenced",
+            "provider_calls_performed": False,
+        }
+    try:
+        from app.domains.kol import content_monitoring
+
+        result = await asyncio.to_thread(content_monitoring.enqueue_due_content_monitoring)
+        ok = str(result.get("status") or "") in {"ok", "empty"}
+        error = "" if ok else f"candidate_failures={int(result.get('failed') or 0)}"
+        _record_scheduler_run(CONTENT_MONITOR_TASK_KEY, ok=ok, error=error)
+        logger.info(
+            "scheduler.vkpi_kol_content_monitoring",
+            extra={
+                key: result.get(key)
+                for key in (
+                    "status",
+                    "candidates_scanned",
+                    "due_selected",
+                    "queued",
+                    "already_queued",
+                    "paused",
+                    "failed",
+                    "scan_truncated",
+                )
+            },
+        )
+        return result
+    except Exception as exc:
+        error_code = type(exc).__name__.lower()[:80] or "scheduler_error"
+        _record_scheduler_run(CONTENT_MONITOR_TASK_KEY, ok=False, error=error_code)
+        return {
+            "status": "failed",
+            "error_code": error_code,
+            "provider_calls_performed": False,
+        }
+
+
+__all__ = [
+    "CONTENT_MONITOR_TASK_KEY",
+    "TASK_KEY",
+    "job_vkpi_kol_content_monitoring",
+    "job_vkpi_kol_video_metric_refresh",
+]

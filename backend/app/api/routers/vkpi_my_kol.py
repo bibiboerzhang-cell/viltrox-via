@@ -19,15 +19,18 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
+from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn
 from app.domains import business_truth
 from app.domains.access import scope
+from app.domains.audit.decorator import audit_action
 from app.domains.kol import (
     my_kol_aggregate,
     my_kol_board_ext,
     risk_index,
     video_tracking,
 )
+from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-my-kol"])
 logger = get_logger(__name__)
@@ -56,6 +59,84 @@ def _rollback_quietly(conn: Any) -> None:
 def _raise_video_tracking_error(conn: Any, exc: video_tracking.VideoTrackingError) -> None:
     _rollback_quietly(conn)
     raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+
+
+def _content_monitoring_error(exc: Exception) -> HTTPException:
+    status_code = int(getattr(exc, "status_code", 400) or 400)
+    code = str(getattr(exc, "code", "content_monitoring_failed") or "content_monitoring_failed")
+    return HTTPException(status_code=status_code, detail=code)
+
+
+@router.get("/my-kol/{kol_pool_id}/content-monitoring")
+def my_kol_content_monitoring_endpoint(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Pure read of explicit recent-content monitoring state; never enqueues."""
+
+    from app.domains.kol import content_monitoring
+
+    try:
+        return content_monitoring.get_content_monitoring(
+            int(kol_pool_id),
+            staff=staff,
+        )
+    except (content_monitoring.ContentMonitoringError, MyKolPaidActionError) as exc:
+        raise _content_monitoring_error(exc) from exc
+
+
+@router.post("/my-kol/{kol_pool_id}/content-monitoring", status_code=202)
+@audit_action(
+    action_type="kol_content_monitoring_enable",
+    target_type="kol_pool",
+    target_id_extractor=lambda result, kwargs: str(kwargs.get("kol_pool_id") or ""),
+    detail_extractor=lambda result, kwargs: f"content monitoring status={(result or {}).get('status')}",
+)
+def my_kol_content_monitoring_enable_endpoint(
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Explicitly enable/resume one caller-owned subscription; queue remains separate."""
+
+    if release_validation_active():
+        raise HTTPException(status_code=503, detail="release_validation_fenced")
+    from app.domains.kol import content_monitoring
+
+    try:
+        return content_monitoring.enable_content_monitoring(
+            int(kol_pool_id),
+            cadence_hours=body.get("cadence_hours"),
+            staff=staff,
+        )
+    except (content_monitoring.ContentMonitoringError, MyKolPaidActionError) as exc:
+        raise _content_monitoring_error(exc) from exc
+
+
+@router.delete("/my-kol/{kol_pool_id}/content-monitoring")
+@audit_action(
+    action_type="kol_content_monitoring_pause",
+    target_type="kol_pool",
+    target_id_extractor=lambda result, kwargs: str(kwargs.get("kol_pool_id") or ""),
+    detail_extractor=lambda result, kwargs: f"content monitoring status={(result or {}).get('status')}",
+)
+def my_kol_content_monitoring_pause_endpoint(
+    kol_pool_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Pause the caller's subscription and invalidate any queued generation."""
+
+    if release_validation_active():
+        raise HTTPException(status_code=503, detail="release_validation_fenced")
+    from app.domains.kol import content_monitoring
+
+    try:
+        return content_monitoring.pause_content_monitoring(
+            int(kol_pool_id),
+            staff=staff,
+        )
+    except (content_monitoring.ContentMonitoringError, MyKolPaidActionError) as exc:
+        raise _content_monitoring_error(exc) from exc
 
 
 @router.post("/my-kol/{kol_pool_id}/videos", status_code=202)

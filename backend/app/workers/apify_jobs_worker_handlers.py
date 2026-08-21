@@ -291,6 +291,17 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
                         """,
                         (str(exc.code)[:300], _json(payload), int(job["id"])),
                     )
+            try:
+                with db_connection_sync_scope():
+                    from app.domains.kol import content_monitoring
+
+                    content_monitoring.record_monitor_job_terminal(
+                        payload,
+                        job_id=int(job["id"]),
+                        status="blocked",
+                    )
+            except Exception:
+                logger.warning("content monitor blocked receipt update failed job_id=%s", job.get("id"))
             return
         raise
     status = str((result or {}).get("status") or "")
@@ -321,6 +332,17 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
                     int(job["id"]),
                 ),
             )
+    try:
+        with db_connection_sync_scope():
+            from app.domains.kol import content_monitoring
+
+            content_monitoring.record_monitor_job_terminal(
+                payload,
+                job_id=int(job["id"]),
+                status="done" if ok else "blocked",
+            )
+    except Exception:
+        logger.warning("content monitor terminal receipt update failed job_id=%s", job.get("id"))
     # 账号深爬完成后只进入新 durable L0 编排。该编排读取已经落库的 raw/bio，绝不在
     # 此处追加 provider、网站抓取或发送；需要外部动作的状态交给后续人工授权流程。
     kol_pool_id = _int_or_none(
@@ -335,7 +357,7 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
             refresh_tier.mark_kol_refreshed(int(kol_pool_id), status="ready")
         except Exception:
             logger.warning("profile refresh freshness ledger failed kol_pool_id=%s", kol_pool_id, exc_info=True)
-    if ok and kol_pool_id:
+    if ok and kol_pool_id and payload.get("suppress_contact_followup") is not True:
         try:
             from app.domains.kol.contact_acquisition_queue import (
                 enqueue_contact_acquisition,

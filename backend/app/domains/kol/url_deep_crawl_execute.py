@@ -151,7 +151,7 @@ def _execute_profile_flow(
     )
     worker_touched = bool(representative_video_analysis.get("worker_touched"))
     account_dossier_extract_job = None
-    if written_kol_pool_id and not worker_touched:
+    if written_kol_pool_id and not worker_touched and body.get("suppress_profile_followups") is not True:
         account_dossier_extract_job = _enqueue_account_dossier_extract_followup(
             conn,
             kol_pool_id=written_kol_pool_id,

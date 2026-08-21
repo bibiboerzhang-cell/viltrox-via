@@ -61,6 +61,7 @@ from app.services.scheduler.jobs import (
     job_vkpi_gtm_windows_refresh,
     job_vkpi_health_sentinel,
     job_vkpi_kpi_rollup,
+    job_vkpi_kol_content_monitoring,
     job_vkpi_kol_video_metric_refresh,
     job_vkpi_lineage_snapshot,
     job_vkpi_market_intelligence_refresh,
@@ -290,6 +291,16 @@ def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
         trigger=IntervalTrigger(hours=1),
         id="vkpi_kol_video_metric_refresh",
         name="Queue due tracked KOL video metric refreshes",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    # Explicit per-staff subscriptions only; migration 286 registers this OFF.
+    _scheduler.add_job(
+        job_vkpi_kol_content_monitoring,
+        trigger=IntervalTrigger(hours=1),
+        id="vkpi_kol_content_monitoring",
+        name="Queue explicit KOL recent-content monitoring",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,

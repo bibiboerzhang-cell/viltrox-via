@@ -39,6 +39,9 @@ TARGET_WRITE_FENCE_TERMINAL_CODES = frozenset(
         "kol_profile_actor_revoked",
         "kol_profile_actor_changed",
         "kol_profile_write_permission_revoked",
+        "kol_content_monitor_fence_invalid",
+        "kol_content_monitor_cancelled",
+        "kol_content_monitor_target_drifted",
     }
 )
 _PLATFORM_VIDEO_ID_PATTERNS = {
@@ -281,6 +284,12 @@ def _revalidate_target_write_fence(payload: dict[str, Any]) -> dict[str, Any] | 
     # always receives the latest database canonical URL after the identity and
     # TOCTOU checks above have passed.
     payload["url"] = current_identity["canonical_profile_url"]
+    # Subscription cancellation/generation is checked last, immediately before
+    # the provider-facing profile flow. A paused or replaced subscription is a
+    # terminal authorization decision and must never retry into spend.
+    from app.domains.kol import content_monitoring
+
+    content_monitoring.revalidate_monitor_fence(payload, conn=conn)
     return current_staff
 
 
@@ -296,6 +305,10 @@ def enqueue_profile_deep_crawl_job(
     source: str = "kol_profile_deep_crawl",
     queue_lane: str = "interactive",
     enforce_target_write: bool = False,
+    content_monitor_fence: dict[str, Any] | None = None,
+    suppress_final_v1: bool = False,
+    suppress_contact_followup: bool = False,
+    suppress_profile_followups: bool = False,
 ) -> dict[str, Any]:
     """把账号深爬 execute 入 apify_jobs 队列(泳道可见),替代同步 HTTP 内爬。
 
@@ -322,6 +335,18 @@ def enqueue_profile_deep_crawl_job(
         # Provider input is always the database-backed canonical locator, not
         # a request-supplied spelling/query variant.
         clean_url = str(target_write_fence["canonical_profile_url"])
+    if content_monitor_fence is not None:
+        if target_write_fence is None:
+            from app.domains.kol.video_tracking import VideoTrackingError
+
+            raise VideoTrackingError("kol_content_monitor_fence_invalid", 403)
+        from app.domains.kol import content_monitoring
+
+        content_monitor_fence = content_monitoring.validate_monitor_fence_for_enqueue(
+            conn,
+            content_monitor_fence,
+            target_write_fence=target_write_fence,
+        )
     normalized_mode = _profile_deep_crawl_mode(mode)
     normalized_representative_limit = _representative_video_limit(representative_video_limit)
     normalized_queue_lane = str(queue_lane or "interactive").strip().lower()
@@ -357,6 +382,15 @@ def enqueue_profile_deep_crawl_job(
     }
     if target_write_fence is not None:
         payload["target_write_fence"] = target_write_fence
+    if content_monitor_fence is not None:
+        payload["content_monitor_fence"] = content_monitor_fence
+        payload["monitoring_window"] = {"kind": "recent_posts", "max_posts": 12, "full_history": False}
+    if suppress_final_v1:
+        payload["suppress_final_v1"] = True
+    if suppress_contact_followup:
+        payload["suppress_contact_followup"] = True
+    if suppress_profile_followups:
+        payload["suppress_profile_followups"] = True
     job, inserted = enqueue_active_apify_job(
         conn,
         job_type=DEEP_CRAWL_JOB_TYPE,
@@ -417,6 +451,7 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
     revalidated_staff = _revalidate_target_write_fence(payload)
     if revalidated_staff is not None:
         staff = revalidated_staff
+    is_content_monitoring = isinstance(payload.get("content_monitor_fence"), dict)
 
     body = {
         "url": str(payload.get("url") or ""),
@@ -428,6 +463,8 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
             legacy_default=True,
         ),
         "source": str(payload.get("source") or "queue:kol_profile_deep_crawl"),
+        "suppress_final_v1": payload.get("suppress_final_v1") is True,
+        "suppress_profile_followups": payload.get("suppress_profile_followups") is True,
     }
     if revalidated_staff is not None:
         body["paid_action_staff"] = {
@@ -448,34 +485,35 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
     result = dry_run_url_deep_crawl(body)
     # 队列路径不经 HTTP 路由的 _attach_smart_url_session——session 必须在此自建,
     # 否则任务完成后 payload 无 search_session_id,泳道「最近完成」按规则将其滤掉(一闪而过案)。
-    try:
-        from app.domains.kol import search_sessions as kol_search_sessions
+    if not is_content_monitoring:
+        try:
+            from app.domains.kol import search_sessions as kol_search_sessions
 
-        raw_session_id = payload.get("search_session_id")
-        session_id = int(raw_session_id) if raw_session_id not in (None, "") else None
-        session = kol_search_sessions.ensure_session_for_result(
-            session_id=session_id,
-            create=session_id is None,
-            query_text=f"账号分析 · {body['url'][:80]}",
-            query_type="url_profile",
-            source=str(payload.get("source") or "queue:kol_profile_deep_crawl"),
-            input_payload={
-                key: value
-                for key, value in body.items()
-                if key not in {"api_token", "paid_action_staff", "enforce_target_write"}
-            },
-            staff=staff,
-        )
-        if session:
-            result["search_session"] = kol_search_sessions.attach_url_result(int(session["id"]), result)
-            result["search_session_id"] = int(session["id"])
-    except Exception:
-        logger.warning("deep_crawl session attach failed url=%s", body.get("url"))
+            raw_session_id = payload.get("search_session_id")
+            session_id = int(raw_session_id) if raw_session_id not in (None, "") else None
+            session = kol_search_sessions.ensure_session_for_result(
+                session_id=session_id,
+                create=session_id is None,
+                query_text=f"账号分析 · {body['url'][:80]}",
+                query_type="url_profile",
+                source=str(payload.get("source") or "queue:kol_profile_deep_crawl"),
+                input_payload={
+                    key: value
+                    for key, value in body.items()
+                    if key not in {"api_token", "paid_action_staff", "enforce_target_write"}
+                },
+                staff=staff,
+            )
+            if session:
+                result["search_session"] = kol_search_sessions.attach_url_result(int(session["id"]), result)
+                result["search_session_id"] = int(session["id"])
+        except Exception:
+            logger.warning("deep_crawl session attach failed url=%s", body.get("url"))
     # 媒体进 R2(2026-06-12 裁令:"理论都是在 R2 然后回传"):深爬产出的 evidence
     # 缩略图(cache_image)与非 YT 平台视频(cache_video_for_item,YT 走 embed 不缓存)
     # 就地喂缓存——失败不毁任务(媒体缓存属增强,非主链)。
     kol_pool_id = payload.get("kol_pool_id")
-    if kol_pool_id:
+    if kol_pool_id and not is_content_monitoring:
         try:
             from app.domains.media.cache import cache_image, cache_video_for_item
 

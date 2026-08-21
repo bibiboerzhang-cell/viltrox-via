@@ -149,6 +149,8 @@ def _video_execute_mode(body: dict[str, Any]) -> str:
 
 
 def _profile_should_enqueue_representative_videos(body: dict[str, Any]) -> bool:
+    if body.get("suppress_final_v1") is True:
+        return False
     mode = str(body.get("mode") or "").strip()
     return mode in {"auto", "profile_with_video", "account_deep"}
 

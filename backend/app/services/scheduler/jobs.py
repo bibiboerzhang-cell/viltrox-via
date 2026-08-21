@@ -238,7 +238,10 @@ from app.services.scheduler.jobs_workflow_recovery import (  # noqa: F401
 )
 from app.services.scheduler.jobs_pool_dedupe import job_kol_pool_dedupe_reconcile  # noqa: F401
 from app.services.scheduler.jobs_tasks_events import job_vkpi_dealer_activity_candidate_sync  # noqa: F401
-from app.services.scheduler.jobs_tasks_kol import job_vkpi_kol_video_metric_refresh  # noqa: F401
+from app.services.scheduler.jobs_tasks_kol import (  # noqa: F401
+    job_vkpi_kol_content_monitoring,
+    job_vkpi_kol_video_metric_refresh,
+)
 from app.services.scheduler.jobs_tasks_products import job_vkpi_official_catalog_sync  # noqa: F401
 from app.services.monitoring.runtime import job_runtime_metrics_snapshot  # noqa: F401
 
