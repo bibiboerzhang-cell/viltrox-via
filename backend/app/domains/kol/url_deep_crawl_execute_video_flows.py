@@ -14,7 +14,7 @@ _profile_classified_from_video_flow / _enqueue_account_dossier_extract_followup)
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
@@ -32,6 +32,7 @@ from app.domains.kol.url_deep_crawl_helpers import (
     _video_execute_mode,
 )
 from app.domains.kol.profile_basics import write_kol_profile_basics
+from app.domains.kol.provider_job_access import ProviderJobAccessError
 from app.domains.kol.video_analysis_enqueue import _enqueue_final_v1_video_analysis
 from app.domains.kol.video_evidence import ensure_video_evidence_from_url
 
@@ -107,6 +108,8 @@ def _execute_existing_creator_video_flow(
     matches: list[dict[str, Any]],
     video_flow: dict[str, Any],
     body: dict[str, Any],
+    *,
+    authorization_checkpoint: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
     from app.domains.kol.url_deep_crawl_execute import (
         _enqueue_account_dossier_extract_followup,
@@ -130,6 +133,8 @@ def _execute_existing_creator_video_flow(
     video_provider_called = False
 
     try:
+        if authorization_checkpoint:
+            authorization_checkpoint()
         evidence_result = ensure_video_evidence_from_url(
             kol_pool_id,
             classified.normalized_url,
@@ -145,6 +150,8 @@ def _execute_existing_creator_video_flow(
             if not evidence_id:
                 status = "evidence_missing_id"
             else:
+                if authorization_checkpoint:
+                    authorization_checkpoint()
                 enqueue_result = _enqueue_final_v1_video_analysis(
                     conn,
                     kol_pool_id=kol_pool_id,
@@ -165,6 +172,12 @@ def _execute_existing_creator_video_flow(
                 )
                 changed_ids.extend(_fit_changed_ids(enqueue_result))
                 status = str(enqueue_result.get("status") or "enqueue_unknown")
+    except ProviderJobAccessError:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.warning("authorization rollback failed", exc_info=True)
+        raise
     except Exception as exc:
         try:
             conn.rollback()
@@ -174,10 +187,14 @@ def _execute_existing_creator_video_flow(
         error = "video_analysis_enqueue_failed"
         status = "failed"
 
+    if authorization_checkpoint:
+        authorization_checkpoint()
     cached_video_url, video_provider_called = _cache_video_flow_url(classified, metadata, evidence_id)
 
     account_dossier_extract_job = None
     if status == "already_analyzed" and body.get("skip_profile_video_followups") is not True:
+        if authorization_checkpoint:
+            authorization_checkpoint()
         account_dossier_extract_job = _enqueue_account_dossier_extract_followup(
             conn,
             kol_pool_id=kol_pool_id,
@@ -189,6 +206,8 @@ def _execute_existing_creator_video_flow(
         changed_ids.extend(_fit_changed_ids(account_dossier_extract_job or {}))
 
     run_status = "ready" if status in _VIDEO_BASE_COMPLETE_STATUSES else "failed"
+    if authorization_checkpoint:
+        authorization_checkpoint()
     run_id = _record_deep_crawl_run(
         conn,
         kol_pool_id=kol_pool_id,
@@ -243,6 +262,8 @@ def _execute_new_creator_video_flow(
     classified: ClassifiedUrl,
     video_flow: dict[str, Any],
     body: dict[str, Any],
+    *,
+    authorization_checkpoint: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
     from app.domains.kol.url_deep_crawl_execute import (
         _crawl_profile_basics,
@@ -274,6 +295,8 @@ def _execute_new_creator_video_flow(
     video_provider_called = False
 
     if not profile_classified:
+        if authorization_checkpoint:
+            authorization_checkpoint()
         run_id = _record_deep_crawl_run(
             conn,
             kol_pool_id=None,
@@ -313,6 +336,8 @@ def _execute_new_creator_video_flow(
         video_flow.get("creator_identity") if isinstance(video_flow.get("creator_identity"), dict) else {}
     )
     if official:
+        if authorization_checkpoint:
+            authorization_checkpoint()
         run_id = _record_deep_crawl_run(
             conn,
             kol_pool_id=None,
@@ -352,6 +377,8 @@ def _execute_new_creator_video_flow(
         }
 
     try:
+        if authorization_checkpoint:
+            authorization_checkpoint()
         crawl = _crawl_profile_basics(profile_classified, target=_profile_target(profile_classified), max_posts=max_posts)
         if str(crawl.get("status") or "").lower() not in {"ok", "synced"}:
             status = "profile_crawl_failed"
@@ -363,6 +390,8 @@ def _execute_new_creator_video_flow(
                 video_flow,
                 max_posts=max_posts,
             )
+            if authorization_checkpoint:
+                authorization_checkpoint()
             write_result = write_kol_profile_basics(None, profile_data, dry_run=False, conn=conn)
             changed_ids.extend(_fit_changed_ids(write_result))
             kol_pool_id = int(write_result.get("kol_pool_id") or 0) or None
@@ -372,6 +401,8 @@ def _execute_new_creator_video_flow(
                 metadata = video_flow.get("video_metadata")
                 if not isinstance(metadata, dict):
                     metadata = None
+                if authorization_checkpoint:
+                    authorization_checkpoint()
                 evidence_result = ensure_video_evidence_from_url(
                     kol_pool_id,
                     classified.normalized_url,
@@ -387,6 +418,8 @@ def _execute_new_creator_video_flow(
                     if not evidence_id:
                         status = "evidence_missing_id"
                     else:
+                        if authorization_checkpoint:
+                            authorization_checkpoint()
                         enqueue_result = _enqueue_final_v1_video_analysis(
                             conn,
                             kol_pool_id=kol_pool_id,
@@ -408,6 +441,8 @@ def _execute_new_creator_video_flow(
                         changed_ids.extend(_fit_changed_ids(enqueue_result))
                         status = str(enqueue_result.get("status") or "enqueue_unknown")
                 if kol_pool_id and body.get("skip_profile_video_followups") is not True:
+                    if authorization_checkpoint:
+                        authorization_checkpoint()
                     onboarding_body = {
                         **body,
                         "mode": "account_deep",
@@ -435,6 +470,12 @@ def _execute_new_creator_video_flow(
                     )
                     changed_ids.extend(_fit_changed_ids(representative_video_analysis))
                     changed_ids.extend(_fit_changed_ids(history_video_evidence))
+    except ProviderJobAccessError:
+        try:
+            conn.rollback()
+        except Exception:
+            logger.warning("authorization rollback failed", exc_info=True)
+        raise
     except Exception as exc:
         try:
             conn.rollback()
@@ -444,6 +485,8 @@ def _execute_new_creator_video_flow(
         error = "video_creator_flow_failed"
         status = "failed"
 
+    if authorization_checkpoint:
+        authorization_checkpoint()
     cached_video_url, video_provider_called = _cache_video_flow_url(
         classified, video_flow.get("video_metadata") if isinstance(video_flow.get("video_metadata"), dict) else None, evidence_id
     )
@@ -454,6 +497,8 @@ def _execute_new_creator_video_flow(
         and kol_pool_id
         and body.get("skip_profile_video_followups") is not True
     ):
+        if authorization_checkpoint:
+            authorization_checkpoint()
         account_dossier_extract_job = _enqueue_account_dossier_extract_followup(
             conn,
             kol_pool_id=kol_pool_id,
@@ -466,6 +511,8 @@ def _execute_new_creator_video_flow(
 
     representative_worker_touched = bool(representative_video_analysis.get("worker_touched"))
     run_status = "ready" if status in _VIDEO_BASE_COMPLETE_STATUSES or representative_worker_touched else "failed"
+    if authorization_checkpoint:
+        authorization_checkpoint()
     run_id = _record_deep_crawl_run(
         conn,
         kol_pool_id=kol_pool_id,

@@ -19,12 +19,12 @@ def revalidate_paid_job_scope(
     job_type: str,
     *,
     connection_scope: Callable[[], AbstractContextManager[Any]],
-) -> tuple[str, str]:
-    """Return ``(paid_action, block_reason)`` without calling a provider."""
+) -> tuple[str, str, dict[str, Any] | None]:
+    """Return action, block reason, and the live actor without provider I/O."""
 
     paid_action = PAID_JOB_ACTIONS.get(str(job_type or "").strip().lower(), "")
     if not paid_action:
-        return "", ""
+        return "", "", None
 
     from app.db import connection
     from app.domains.access import scope as access_scope
@@ -37,11 +37,11 @@ def revalidate_paid_job_scope(
     if job_type == "kol_outreach_draft" and not isinstance(payload.get(FENCE_KEY), dict):
         # Fail without even opening a database connection: old direct jobs do
         # not have durable actor/target evidence and cannot safely be replayed.
-        return paid_action, "my_kol_paid_action_fence_required"
+        return paid_action, "my_kol_paid_action_fence_required", None
 
+    actor: dict[str, Any] | None = None
     try:
         with connection_scope():
-            actor = None
             if isinstance(payload.get(FENCE_KEY), dict):
                 actor = revalidate_target_fence(
                     connection.get_conn(),
@@ -57,12 +57,12 @@ def revalidate_paid_job_scope(
                     )
                 access_scope.assert_project_access(project_id, actor, write=False)
     except (TypeError, ValueError):
-        return paid_action, "project_identity_invalid"
+        return paid_action, "project_identity_invalid", None
     except MyKolPaidActionError as exc:
-        return paid_action, exc.code
+        return paid_action, exc.code, None
     except access_scope.ScopeDenied:
-        return paid_action, "project_scope_denied"
-    return paid_action, ""
+        return paid_action, "project_scope_denied", None
+    return paid_action, "", actor
 
 
 __all__ = ["PAID_JOB_ACTIONS", "revalidate_paid_job_scope"]

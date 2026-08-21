@@ -289,7 +289,7 @@ def run_video_url_resolve_for_job(
     *,
     staff: dict[str, Any] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
-    authorization_checkpoint: Callable[[], None] | None = None,
+    authorization_checkpoint: Callable[[], dict[str, Any] | None] | None = None,
 ) -> dict[str, Any]:
     """Resolve metadata/creator/evidence, then use the gated final_v1 enqueue."""
 
@@ -313,7 +313,10 @@ def run_video_url_resolve_for_job(
         from app.domains.kol.cn_platform_video import run_cn_platform_video_for_job
 
         return run_cn_platform_video_for_job(
-            payload, staff=staff, progress_callback=progress_callback
+            payload,
+            staff=staff,
+            progress_callback=progress_callback,
+            authorization_checkpoint=authorization_checkpoint,
         )
     del staff  # final_v1 uses durable actor/session lineage, not an HTTP credential
 
@@ -324,7 +327,11 @@ def run_video_url_resolve_for_job(
     if classified.url_type != "video" or classified.platform not in SUPPORTED_PLATFORMS:
         raise ValueError("unsupported_video_url")
 
-    video_flow, matches = _video_flow_plan(classified, _match_pool(classified))
+    video_flow, matches = _video_flow_plan(
+        classified,
+        _match_pool(classified),
+        authorization_checkpoint=authorization_checkpoint,
+    )
     scrape_status = _text((video_flow.get("video_metadata") or {}).get("scrape_status")).lower()
     if scrape_status == "pending" or _text(video_flow.get("status")) == "provider_refresh_pending":
         raise RuntimeError("media_resolve_failed:provider_refresh_deferred_in_worker")
@@ -435,9 +442,20 @@ def run_video_url_resolve_for_job(
         authorization_checkpoint()
     current = _emit(progress_callback, _progress(current, "cache_media", "running"))
     flow = (
-        _execute_existing_creator_video_flow(classified, matches, video_flow, body)
+        _execute_existing_creator_video_flow(
+            classified,
+            matches,
+            video_flow,
+            body,
+            authorization_checkpoint=authorization_checkpoint,
+        )
         if len(matches) == 1
-        else _execute_new_creator_video_flow(classified, video_flow, body)
+        else _execute_new_creator_video_flow(
+            classified,
+            video_flow,
+            body,
+            authorization_checkpoint=authorization_checkpoint,
+        )
     )
     flow_status = _text(flow.get("status")).lower()
     if flow_status not in _BASE_COMPLETE_STATUSES:

@@ -25,6 +25,7 @@ from typing import Any, Callable
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.kol.provider_job_access import ProviderJobAccessError
 from app.domains.kol.url_deep_crawl_helpers import (
     CN_SHORT_LINK_HOSTS,
     CN_VIDEO_ANALYSIS_PLATFORMS,
@@ -386,6 +387,7 @@ def run_cn_platform_video_for_job(
     *,
     staff: dict[str, Any] | None = None,
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    authorization_checkpoint: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
     """CN 平台视频的 durable worker 主链:取数 → 缓存 → 就地 final_v1。
 
@@ -413,10 +415,16 @@ def run_cn_platform_video_for_job(
     current = payload.get("video_url_resolution")
     current = current if isinstance(current, dict) else initial_video_url_resolution_progress()
 
+    def checkpoint() -> None:
+        if authorization_checkpoint:
+            authorization_checkpoint()
+
     # ① 解析视频:短链先展开(小红书要活 xsec_token);已分析过的视频直接吃
     # 缓存回放(零 provider 零 LLM 花费),元数据/创作者用缓存里的存档。
     current = _emit(progress_callback, _progress(current, "resolve_video", "running"))
+    checkpoint()
     source_url = _expand_cn_short_link(classified.normalized_url)
+    checkpoint()
     canonical_id = classified.video_id
     if source_url != classified.normalized_url:
         expanded = classify_url(source_url)
@@ -441,6 +449,7 @@ def run_cn_platform_video_for_job(
         _emit(progress_callback, current)
         current = _progress(current, "ai_analysis", "ready", overall="ready", base_status="ready", reason="cached_analysis")
         _emit(progress_callback, current)
+        checkpoint()
         return _terminal_result(
             platform=platform,
             video_id=canonical_id,
@@ -454,7 +463,11 @@ def run_cn_platform_video_for_job(
             llm_calls_performed=False,
             analysis_cache_id=_int_or_none(replay.get("cache_id")),
         )
+    checkpoint()
     scraped = scrape_cn_platform_video(platform, source_url)
+    # A revoke while Apify was in flight must stop every later download, LLM,
+    # cache write, and successful terminal projection.
+    checkpoint()
     if not scraped.get("ok"):
         raise RuntimeError(
             f"cn_video_resolve_failed:{_text(scraped.get('provider_status'))}:{_text(scraped.get('error'))[:160]}"
@@ -477,6 +490,7 @@ def run_cn_platform_video_for_job(
             overall="ready", base_status="ready", reason="official_channel_video",
         )
         _emit(progress_callback, current)
+        checkpoint()
         return {
             "status": "official_channel_video",
             "operation": "cn_platform_video_analysis",
@@ -523,6 +537,7 @@ def run_cn_platform_video_for_job(
             overall="ready", base_status="ready", reason="cached_analysis",
         )
         _emit(progress_callback, current)
+        checkpoint()
         return _terminal_result(
             platform=platform,
             video_id=video_id,
@@ -576,15 +591,19 @@ def run_cn_platform_video_for_job(
     cn_socket = int(os.getenv("VKPI_CN_MEDIA_SOCKET_TIMEOUT_SEC", "60"))
     cn_total = int(os.getenv("VKPI_CN_MEDIA_TOTAL_TIMEOUT_SEC", "300"))
     with tempfile.TemporaryDirectory(prefix="vkpi-cn-video-") as tmpdir:
+        checkpoint()
         download = download_direct_video_url(
             direct_video_url, tmpdir, referer=content_url,
             socket_timeout_sec=cn_socket, total_timeout_sec=cn_total, proxy_url=cn_proxy,
         )
+        checkpoint()
         if (not download.get("success")) and cn_proxy:
+            checkpoint()
             download = download_direct_video_url(
                 direct_video_url, tmpdir, referer=content_url,
                 socket_timeout_sec=cn_socket, total_timeout_sec=cn_total,
             )
+            checkpoint()
         if not download.get("success") or not download.get("path"):
             reason = _text(download.get("error")) or f"direct_video_download_failed:{platform}"
             current = _progress(current, "cache_media", "failed", reason=reason[:200])
@@ -611,9 +630,13 @@ def run_cn_platform_video_for_job(
         try:
             from app.domains.media.cache import cache_local_video_file, cached_video_url_for_item
 
+            checkpoint()
             warm = cache_local_video_file(platform, video_id, str(download["path"]), source_url=content_url)
+            checkpoint()
             if warm.get("cached") or warm.get("status") == "cached":
                 cached_video_url = _text(cached_video_url_for_item(platform, video_id)) or _text(warm.get("cached_url")) or None
+        except ProviderJobAccessError:
+            raise
         except Exception:
             logger.warning("cn video r2 warm failed platform=%s id=%s", platform, video_id, exc_info=True)
         current = _emit(
@@ -624,6 +647,7 @@ def run_cn_platform_video_for_job(
 
         # ④ AI 分析:预算闸 → Gemini final_v1 就地深析(official_visual 同款 inline)。
         current = _emit(progress_callback, _progress(current, "ai_analysis", "running"))
+        checkpoint()
         budget = _cn_budget_gate(platform, video_id)
         if not budget.get("allowed"):
             gate_reason = _text(budget.get("reason")) or "provider_calls_blocked"
@@ -645,6 +669,7 @@ def run_cn_platform_video_for_job(
                 llm_calls_performed=False,
             )
         llm_called = True
+        checkpoint()
         raw = _run_cn_gemini_final_v1(
             video_path=str(download["path"]),
             title=_text(metadata.get("title")),
@@ -653,6 +678,7 @@ def run_cn_platform_video_for_job(
             video_id=video_id,
             triggered_by=triggered_by,
         )
+        checkpoint()
 
     if not isinstance(raw, dict) or not raw.get("analyzed"):
         reason = _text((raw or {}).get("error")) or "gemini_not_analyzed"
@@ -682,6 +708,7 @@ def run_cn_platform_video_for_job(
         metadata=metadata,
         creator=creator,
     )
+    checkpoint()
     cache_id = _store_cn_analysis(
         platform=platform,
         video_id=video_id,

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, nullcontext
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -374,3 +375,165 @@ def test_normal_mock_worker_path_revalidates_then_runs_once(
     assert "UPDATE apify_jobs" in sql
     assert params[0] == "done"
     assert params[1] == ""
+
+
+def test_video_handler_revocation_after_first_provider_is_terminal_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_conn = _AccessConn()
+    monkeypatch.setattr(access, "get_conn", lambda: app_conn)
+    monkeypatch.setattr(access, "db_connection_sync_scope", nullcontext)
+    monkeypatch.setattr(video_handler, "db_connection_sync_scope", nullcontext)
+    monkeypatch.setattr(video_handler, "_persist_progress", lambda *_args, **_kwargs: None)
+    calls = {"provider": 0}
+
+    def provider_then_revoke(
+        _payload: dict[str, Any],
+        *,
+        authorization_checkpoint,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        calls["provider"] += 1
+        app_conn.actor = _actor(active=False)
+        authorization_checkpoint()
+        raise AssertionError("revoked checkpoint must raise")
+
+    monkeypatch.setattr(video_handler, "run_video_url_resolve_for_job", provider_then_revoke)
+    worker_conn = _WorkerConn()
+
+    video_handler._process_video_url_resolve(
+        worker_conn,
+        {"id": 905, "job_type": access.VIDEO_URL_RESOLVE},
+        _video_payload(),
+    )
+
+    assert calls["provider"] == 1
+    assert len(worker_conn.calls) == 1
+    sql, params = worker_conn.calls[0]
+    assert "status='blocked'" in sql
+    assert "next_retry_at=NULL" in sql
+    assert '"provider_calls_performed":null' in str(params[0])
+    assert '"retry_allowed":false' in str(params[0])
+
+
+def test_new_creator_flow_rechecks_after_profile_provider_before_pool_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.domains.kol import url_deep_crawl_execute as execute
+    from app.domains.kol import url_deep_crawl_execute_video_flows as flows
+    from app.domains.kol import video_url_resolver
+
+    class _Conn:
+        rollbacks = 0
+
+        def rollback(self) -> None:
+            self.rollbacks += 1
+
+    conn = _Conn()
+    state = {"revoked": False, "provider": 0, "write": 0}
+    classified = SimpleNamespace(
+        normalized_url="https://www.youtube.com/watch?v=abcdefghijk",
+        platform="youtube",
+        video_id="abcdefghijk",
+    )
+    profile_classified = SimpleNamespace(
+        normalized_url="https://www.youtube.com/@creator",
+        platform="youtube",
+    )
+
+    def checkpoint() -> None:
+        if state["revoked"]:
+            raise access.ProviderJobAccessError("provider_job_actor_inactive", 403)
+
+    def crawl(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        state["provider"] += 1
+        state["revoked"] = True
+        return {"status": "ok"}
+
+    def write_bomb(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        state["write"] += 1
+        raise AssertionError("pool write must not run after revocation")
+
+    monkeypatch.setattr(flows, "get_conn", lambda: conn)
+    monkeypatch.setattr(
+        execute,
+        "_profile_classified_from_video_flow",
+        lambda *_args, **_kwargs: profile_classified,
+    )
+    monkeypatch.setattr(execute, "_profile_target", lambda *_args, **_kwargs: "creator")
+    monkeypatch.setattr(execute, "_crawl_profile_basics", crawl)
+    monkeypatch.setattr(video_url_resolver, "find_official_channel_match", lambda *_args: None)
+    monkeypatch.setattr(flows, "write_kol_profile_basics", write_bomb)
+
+    with pytest.raises(access.ProviderJobAccessError) as raised:
+        flows._execute_new_creator_video_flow(
+            classified,
+            {"creator_identity": {"handle": "creator"}},
+            {"max_posts": 1, "skip_profile_video_followups": True},
+            authorization_checkpoint=checkpoint,
+        )
+
+    assert raised.value.code == "provider_job_actor_inactive"
+    assert state == {"revoked": True, "provider": 1, "write": 0}
+    assert conn.rollbacks == 1
+
+
+def test_cn_flow_rechecks_after_apify_before_download_llm_or_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.domains.kol import cn_platform_video as cn
+    from app.domains.kol import url_deep_crawl
+    from app.platform import apify_budget
+    from app.services.scraping import apify_cn
+
+    state = {"revoked": False, "provider": 0, "later": 0}
+
+    def checkpoint() -> None:
+        if state["revoked"]:
+            raise access.ProviderJobAccessError("provider_job_permission_revoked", 403)
+
+    def scrape(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        state["provider"] += 1
+        state["revoked"] = True
+        return {
+            "ok": True,
+            "native_video_id": "7123456789012345678",
+            "direct_video_url": "https://cdn.example/video.mp4",
+            "metadata": {"title": "demo", "content_url": "https://www.douyin.com/video/7123456789012345678"},
+            "creator": {"display_name": "creator"},
+        }
+
+    def later_bomb(*_args: Any, **_kwargs: Any) -> Any:
+        state["later"] += 1
+        raise AssertionError("download/LLM/cache must not run after revocation")
+
+    monkeypatch.setattr(
+        url_deep_crawl,
+        "classify_url",
+        lambda _url: SimpleNamespace(
+            url_type="video",
+            platform="douyin",
+            normalized_url="https://www.douyin.com/video/7123456789012345678",
+            video_id="7123456789012345678",
+        ),
+    )
+    monkeypatch.setattr(apify_budget, "current_apify_execution_context", lambda: object())
+    monkeypatch.setattr(apify_cn, "scrape_cn_platform_video", scrape)
+    monkeypatch.setattr(cn, "_expand_cn_short_link", lambda value: value)
+    monkeypatch.setattr(cn, "_load_ready_cn_analysis", lambda *_args: None)
+    monkeypatch.setattr(cn, "_run_cn_gemini_final_v1", later_bomb)
+    monkeypatch.setattr(cn, "_store_cn_analysis", later_bomb)
+
+    with pytest.raises(access.ProviderJobAccessError) as raised:
+        cn.run_cn_platform_video_for_job(
+            {
+                "url": "https://www.douyin.com/video/7123456789012345678",
+                "source_url": "https://www.douyin.com/video/7123456789012345678",
+                "video_url_resolution": initial_video_url_resolution_progress(),
+            },
+            staff={"user_id": USER_ID},
+            authorization_checkpoint=checkpoint,
+        )
+
+    assert raised.value.code == "provider_job_permission_revoked"
+    assert state == {"revoked": True, "provider": 1, "later": 0}

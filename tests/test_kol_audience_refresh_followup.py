@@ -118,6 +118,69 @@ def test_successful_comments_job_enqueues_visible_followup(monkeypatch) -> None:
     assert "results" not in payload["comments_collect_result"]
 
 
+def test_fenced_comments_followup_reuses_live_actor_without_persisting_it(monkeypatch) -> None:
+    from app.domains.comments import collector
+    from app.workers import apify_jobs_worker as worker
+    from app.workers import apify_jobs_worker_handlers as handlers
+    from app.workers import apify_jobs_worker_paid_scope as paid_scope
+
+    actor = {
+        "id": 84,
+        "staff_id": 84,
+        "user_id": 91,
+        "role": "employee",
+        "permissions_json": {"vkpi": "write"},
+        "active": 1,
+        "user_status": "active",
+    }
+    captured: dict = {}
+    monkeypatch.setattr(worker, "db_connection_sync_scope", lambda: nullcontext())
+    monkeypatch.setattr(handlers, "db_connection_sync_scope", lambda: nullcontext())
+    monkeypatch.setattr(
+        paid_scope,
+        "revalidate_paid_job_scope",
+        lambda *_args, **_kwargs: ("comments_collect", "", actor),
+    )
+    monkeypatch.setattr(
+        collector,
+        "run_kol_pool_comments_for_job",
+        lambda _payload, staff=None: {
+            "status": "ready",
+            "kol_pool_id": 3450,
+            "posts": 1,
+            "ok": 1,
+            "new_comments": 2,
+            "results": [],
+        },
+    )
+
+    def capture_followup(kol_pool_id, **kwargs):
+        captured.update({"kol_pool_id": kol_pool_id, **kwargs})
+        return {"status": "queued", "job_id": 8802, "queue_lane": "batch"}
+
+    monkeypatch.setattr(collector, "enqueue_kol_audience_stats_refresh_job", capture_followup)
+    conn = _FakePGConn()
+    payload = {
+        "kol_pool_id": 3450,
+        "staff_id": 84,
+        "triggered_by_user_id": 91,
+        "my_kol_paid_action_fence": {"version": 1},
+    }
+
+    worker._process_job(
+        conn,
+        {"id": 3315, "job_type": "kol_pool_comments_collect", "payload": payload},
+    )
+
+    assert captured["staff"] is actor
+    assert captured["enforce_target_write"] is True
+    assert captured["source_comments_job_id"] == 3315
+    assert "role" not in payload
+    assert "permissions_json" not in payload
+    assert payload["my_kol_paid_action_fence"] == {"version": 1}
+    assert payload["comments_collect_result"]["audience_refresh_job"]["status"] == "queued"
+
+
 def test_followup_enqueue_failure_does_not_reverse_comments_success(monkeypatch) -> None:
     from app.domains.comments import collector
     from app.workers import apify_jobs_worker_handlers as handlers

@@ -79,12 +79,12 @@ def test_worker_runner_resolves_base_then_leaves_ai_to_gated_final_job(monkeypat
     emitted: list[dict[str, Any]] = []
     execute_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(url_deep_crawl, "_match_pool", lambda _classified: [])
-    monkeypatch.setattr(url_deep_crawl, "_video_flow_plan", lambda *_args: _plan())
+    monkeypatch.setattr(url_deep_crawl, "_video_flow_plan", lambda *_args, **_kwargs: _plan())
     monkeypatch.setattr(url_deep_crawl, "_video_creator_resolved", lambda _flow: True)
     monkeypatch.setattr(
         url_deep_crawl,
         "_execute_existing_creator_video_flow",
-        lambda _classified, _matches, flow, body: execute_calls.append(dict(body)) or {
+        lambda _classified, _matches, flow, body, **_kwargs: execute_calls.append(dict(body)) or {
             **flow,
             "status": "queued",
             "operation": "existing_creator_video_analysis",
@@ -128,12 +128,12 @@ def test_worker_runner_resolves_base_then_leaves_ai_to_gated_final_job(monkeypat
 
 def test_ai_off_keeps_base_evidence_ready_and_creates_no_fake_llm_state(monkeypatch) -> None:
     monkeypatch.setattr(url_deep_crawl, "_match_pool", lambda _classified: [])
-    monkeypatch.setattr(url_deep_crawl, "_video_flow_plan", lambda *_args: _plan())
+    monkeypatch.setattr(url_deep_crawl, "_video_flow_plan", lambda *_args, **_kwargs: _plan())
     monkeypatch.setattr(url_deep_crawl, "_video_creator_resolved", lambda _flow: True)
     monkeypatch.setattr(
         url_deep_crawl,
         "_execute_existing_creator_video_flow",
-        lambda _classified, _matches, flow, _body: {
+        lambda _classified, _matches, flow, _body, **_kwargs: {
             **flow,
             "status": "ai_disabled",
             "operation": "existing_creator_video_analysis",
@@ -164,7 +164,11 @@ def test_official_channel_video_skips_enrollment_and_analysis(monkeypatch) -> No
     """官方自有账号的视频:不建档、不深析,诚实终态而非失败/假排队。"""
 
     monkeypatch.setattr(url_deep_crawl, "_match_pool", lambda _classified: [])
-    monkeypatch.setattr(url_deep_crawl, "_video_flow_plan", lambda *_args: (_plan()[0], []))
+    monkeypatch.setattr(
+        url_deep_crawl,
+        "_video_flow_plan",
+        lambda *_args, **_kwargs: (_plan()[0], []),
+    )
     monkeypatch.setattr(url_deep_crawl, "_video_creator_resolved", lambda _flow: True)
     monkeypatch.setattr(
         resolver,
@@ -217,12 +221,12 @@ def test_profile_provider_failure_uses_existing_retryable_media_category(monkeyp
     import pytest
 
     monkeypatch.setattr(url_deep_crawl, "_match_pool", lambda _classified: [])
-    monkeypatch.setattr(url_deep_crawl, "_video_flow_plan", lambda *_args: _plan())
+    monkeypatch.setattr(url_deep_crawl, "_video_flow_plan", lambda *_args, **_kwargs: _plan())
     monkeypatch.setattr(url_deep_crawl, "_video_creator_resolved", lambda _flow: True)
     monkeypatch.setattr(
         url_deep_crawl,
         "_execute_existing_creator_video_flow",
-        lambda *_args: {"status": "profile_crawl_failed"},
+        lambda *_args, **_kwargs: {"status": "profile_crawl_failed"},
     )
 
     with pytest.raises(RuntimeError, match="media_resolve_failed:profile_crawl_failed"):

@@ -608,7 +608,7 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
     job_type = str(job.get("job_type") or "").strip().lower()
     from app.workers.apify_jobs_worker_paid_scope import revalidate_paid_job_scope
 
-    paid_action, block_reason = revalidate_paid_job_scope(
+    paid_action, block_reason, paid_action_actor = revalidate_paid_job_scope(
         payload,
         job_type,
         connection_scope=db_connection_sync_scope,
@@ -648,7 +648,12 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
         _process_kol_profile_deep_crawl(conn, job, payload)
         return
     if job_type == "kol_pool_comments_collect":
-        _process_kol_pool_comments_collect(conn, job, payload)
+        _process_kol_pool_comments_collect(
+            conn,
+            job,
+            payload,
+            paid_action_actor=paid_action_actor,
+        )
         return
     if job_type == "kol_audience_stats_refresh":
         _process_kol_audience_stats_refresh(conn, job, payload)

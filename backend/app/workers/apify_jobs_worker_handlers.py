@@ -579,11 +579,20 @@ def _comments_failed_errors_retryable(results: list[dict[str, Any]] | None) -> t
     return retryable, sample
 
 
-def _process_kol_pool_comments_collect(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
+def _process_kol_pool_comments_collect(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    paid_action_actor: dict[str, Any] | None = None,
+) -> None:
     """KOL Pool 收藏行评论采集(2026-06-12 裁令):逐帖走 collect_post_comments,泳道可见。"""
     from app.domains.comments import collector as comments_collector
 
-    staff = _resolve_job_staff(conn, payload)
+    # A fenced job receives the complete, freshly revalidated actor from the
+    # dispatcher.  Keep it in memory for the audience follow-up; never widen
+    # the durable payload beyond the existing actor identifiers.
+    staff = paid_action_actor or _resolve_job_staff(conn, payload)
     with db_connection_sync_scope():
         result = dict(comments_collector.run_kol_pool_comments_for_job(payload, staff=staff) or {})
     status = str(result.get("status") or "")

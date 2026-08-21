@@ -15,7 +15,7 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from app.db.connection import get_conn
@@ -404,6 +404,8 @@ def _match_pool(classified: ClassifiedUrl) -> list[dict[str, Any]]:
 def _video_flow_plan(
     classified: ClassifiedUrl,
     initial_matches: list[dict[str, Any]],
+    *,
+    authorization_checkpoint: Callable[[], Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     provider_source = ""
     metadata: dict[str, Any] = {}
@@ -425,6 +427,8 @@ def _video_flow_plan(
             metadata = _video_metadata_from_stored_evidence(stored_evidence)
             provider_source = "stored_video_evidence"
         else:
+            if authorization_checkpoint:
+                authorization_checkpoint()
             metadata = _fetch_video_metadata(classified.normalized_url)
             provider_source = str(metadata.get("scrape_source") or "").strip()
             provider_called = str(metadata.get("scrape_status") or "").lower() != "pending"
@@ -439,6 +443,12 @@ def _video_flow_plan(
             if evidence_match:
                 matches = [evidence_match]
     except Exception as exc:
+        # A durable authorization denial is a terminal worker boundary, not a
+        # metadata degradation that may continue into pool/evidence writes.
+        from app.domains.kol.provider_job_access import ProviderJobAccessError
+
+        if isinstance(exc, ProviderJobAccessError):
+            raise
         logger.warning("url deep crawl video metadata failed", exc_info=True)
         error = "video_metadata_unavailable"
 
