@@ -36,6 +36,7 @@ vi.mock("framer-motion", () => {
 const getKolPoolDimensions11 = vi.fn();
 const getKolPoolLlmDeepAnalysis = vi.fn();
 const getKolPoolContentFit = vi.fn();
+const analyzeKolPoolContentFit = vi.fn();
 const enqueueVideoAnalysis = vi.fn();
 const getKolPoolAccountDossier = vi.fn();
 const enqueueAllKolVideos = vi.fn();
@@ -52,6 +53,7 @@ vi.mock("../../../../services/vkpi/kolPool-api", () => ({
   getKolPoolDimensions11: (...a: unknown[]) => getKolPoolDimensions11(...a),
   getKolPoolLlmDeepAnalysis: (...a: unknown[]) => getKolPoolLlmDeepAnalysis(...a),
   getKolPoolContentFit: (...a: unknown[]) => getKolPoolContentFit(...a),
+  analyzeKolPoolContentFit: (...a: unknown[]) => analyzeKolPoolContentFit(...a),
   enqueueVideoAnalysis: (...a: unknown[]) => enqueueVideoAnalysis(...a),
   getKolPoolAccountDossier: (...a: unknown[]) => getKolPoolAccountDossier(...a),
   enqueueAllKolVideos: (...a: unknown[]) => enqueueAllKolVideos(...a),
@@ -63,6 +65,13 @@ vi.mock("../../../../services/vkpi/kolPool-api", () => ({
   getKolVideoAnalysisCache: (...a: unknown[]) => getKolVideoAnalysisCache(...a),
   getKolVideoAnalysisBatch: (...a: unknown[]) => getKolVideoAnalysisBatch(...a),
   revealKolPoolContact: (...a: unknown[]) => revealKolPoolContact(...a),
+}));
+
+const getMyKolViewerContext = vi.fn();
+const releaseKolClaim = vi.fn();
+vi.mock("../../../../services/vkpi/kol-api", () => ({
+  getMyKolViewerContext: (...a: unknown[]) => getMyKolViewerContext(...a),
+  releaseKolClaim: (...a: unknown[]) => releaseKolClaim(...a),
 }));
 
 const getKolMemory = vi.fn();
@@ -77,6 +86,11 @@ beforeEach(() => {
   getKolPoolDimensions11.mockReset().mockResolvedValue({ status: "missing" });
   getKolPoolLlmDeepAnalysis.mockReset().mockResolvedValue({ status: "missing" });
   getKolPoolContentFit.mockReset().mockResolvedValue({ status: "missing" });
+  analyzeKolPoolContentFit.mockReset().mockResolvedValue({ status: "queued" });
+  getMyKolViewerContext.mockReset().mockResolvedValue({
+    paid_actions: { can_run_paid_actions: true, reason: "owned_favorite" },
+  });
+  releaseKolClaim.mockReset().mockResolvedValue({ status: "released" });
   enqueueVideoAnalysis.mockReset().mockResolvedValue({ status: "queued" });
   getKolPoolAccountDossier.mockReset().mockResolvedValue({ status: "missing" });
   enqueueAllKolVideos.mockReset().mockResolvedValue({ status: "queued" });
@@ -213,15 +227,30 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
       { productSku: "AF-35MM-F18-PRO-FE" },
     ));
 
-    getKolPoolContentFit.mockClear();
+    analyzeKolPoolContentFit.mockClear();
     fireEvent.click(screen.getByText("深度分析"));
     fireEvent.click(await screen.findByRole("button", { name: "开始深析" }));
 
-    await waitFor(() => expect(getKolPoolContentFit).toHaveBeenCalledWith(
+    await waitFor(() => expect(analyzeKolPoolContentFit).toHaveBeenCalledWith(
       "tok",
       42,
-      { analyze: true, force: false, productSku: "AF-35MM-F18-PRO-FE" },
+      { force: false, productSku: "AF-35MM-F18-PRO-FE" },
     ));
+  });
+
+  it("共享或未关注 KOL 只读展示且不允许发起内容深析", async () => {
+    getMyKolViewerContext.mockResolvedValueOnce({
+      share_origin: { shared_by: 10, shared_by_name: "Owner" },
+      paid_actions: { can_run_paid_actions: false, reason: "my_kol_paid_action_write_forbidden" },
+    });
+    renderDrawer();
+
+    fireEvent.click(screen.getByText("深度分析"));
+    const button = await screen.findByRole("button", { name: "关注后可深析" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(analyzeKolPoolContentFit).not.toHaveBeenCalled();
+    expect(screen.getByText(/共享条目仅可查看已有结果/)).toBeInTheDocument();
   });
 
   it("单视频入队后轮询真实终态并自动回填详情", async () => {

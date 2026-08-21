@@ -97,21 +97,37 @@ export async function getKolPoolLlmDeepAnalysis(token: string, kolPoolId: string
   );
 }
 
-// 地基B 内容契合深析(content_fit_v1):默认只读缓存;analyze=true 才按需触发深析(读已有
-// 视频分析+评论 → 非 flash LLM → 落 cache)。红线:零触 viltrox_fit_score,不新跑 Gemini。
+// 地基B 内容契合深析(content_fit_v1):GET 永远只读缓存。生成必须走下方显式 POST。
 export async function getKolPoolContentFit(
   token: string,
   kolPoolId: string | number,
-  options: { analyze?: boolean; force?: boolean; productSku?: string } = {},
+  options: { productSku?: string } = {},
 ) {
   const params = new URLSearchParams();
-  if (options.analyze) params.set("analyze", "true");
-  if (options.force) params.set("force", "true");
   if (options.productSku) params.set("product_sku", options.productSku);
   const query = params.toString();
   return apiFetch<Row>(
     `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/content-fit${query ? `?${query}` : ""}`,
     { cache: "no-store" },
+    token,
+  );
+}
+
+export async function analyzeKolPoolContentFit(
+  token: string,
+  kolPoolId: string | number,
+  options: { force?: boolean; productSku?: string } = {},
+) {
+  return apiFetch<Row>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/content-fit/analyze`,
+    {
+      method: "POST",
+      body: jsonBody({
+        force: options.force === true,
+        ...(options.productSku ? { product_sku: options.productSku } : {}),
+      }),
+      cache: "no-store",
+    },
     token,
   );
 }

@@ -77,9 +77,11 @@ class _AccessConn:
         *,
         actor: dict[str, Any] | None = None,
         session: dict[str, Any] | None = None,
+        session_item: dict[str, Any] | None = None,
     ) -> None:
         self.actor = actor if actor is not None else _actor()
         self.session = session if session is not None else _session_row()
+        self.session_item = session_item if session_item is not None else {"id": 7}
 
     def execute(self, sql: str, _params: tuple[Any, ...] = ()) -> _Rows:
         compact = " ".join(str(sql).split())
@@ -87,6 +89,8 @@ class _AccessConn:
             return _Rows(self.actor)
         if "FROM vkpi_kol_search_sessions" in compact:
             return _Rows(self.session)
+        if "FROM vkpi_kol_search_session_items" in compact:
+            return _Rows(self.session_item)
         raise AssertionError(compact)
 
 
@@ -184,6 +188,271 @@ def _video_payload() -> dict[str, Any]:
         staff=_staff(),
     )
     return payload
+
+
+def _content_fit_payload() -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "target_type": "kol",
+        "target_id": "88",
+        "kol_pool_id": 88,
+        "search_session_id": SESSION_ID,
+        "search_session_item_id": 7,
+        "product_sku": "AF-35-PRO",
+        "staff_id": STAFF_ID,
+        "triggered_by_user_id": USER_ID,
+    }
+    payload[access.FENCE_KEY] = access.build_content_fit_provider_fence(
+        payload=payload,
+        session=_session(),
+        staff=_staff(),
+    )
+    return payload
+
+
+def test_content_fit_user_child_revalidates_actor_and_session_item_target() -> None:
+    actor = access.revalidate_provider_job_fence(
+        _AccessConn(),
+        _content_fit_payload(),
+        expected_action=access.CONTENT_FIT_ANALYSIS,
+    )
+    assert actor["id"] == STAFF_ID
+
+
+@pytest.mark.parametrize(
+    ("conn", "expected"),
+    [
+        (
+            _AccessConn(actor=_actor(active=False)),
+            "provider_job_actor_inactive",
+        ),
+        (
+            _AccessConn(session_item=None),
+            "content_fit_session_target_mismatch",
+        ),
+        (
+            _AccessConn(session=_session_row(owner=99)),
+            "search_session_owner_drifted",
+        ),
+        (
+            _AccessConn(session={**_session_row(), "archived_at": "2026-08-21"}),
+            "search_session_archived",
+        ),
+        (
+            _AccessConn(session={**_session_row(), "status": "cancelled"}),
+            "search_session_cancelled",
+        ),
+    ],
+)
+def test_content_fit_child_blocks_revoked_actor_or_target_drift(
+    conn: _AccessConn,
+    expected: str,
+) -> None:
+    if expected == "content_fit_session_target_mismatch":
+        conn.session_item = None
+    with pytest.raises(access.ProviderJobAccessError) as raised:
+        access.revalidate_provider_job_fence(
+            conn,
+            _content_fit_payload(),
+            expected_action=access.CONTENT_FIT_ANALYSIS,
+        )
+    assert raised.value.code == expected
+
+
+def test_content_fit_worker_blocks_revoked_user_before_llm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db import connection
+    from app.workers import apify_jobs_worker as pg_worker
+
+    blocked: list[tuple[Any, ...]] = []
+    llm: list[str] = []
+    monkeypatch.setattr(
+        connection,
+        "get_conn",
+        lambda: _AccessConn(actor=_actor(active=False)),
+    )
+    monkeypatch.setattr(pg_worker, "db_connection_sync_scope", lambda: nullcontext())
+    monkeypatch.setattr(pg_worker, "_block_job", lambda *_args: blocked.append(_args))
+    monkeypatch.setattr(
+        pg_worker,
+        "_process_kol_content_fit_analysis",
+        lambda *_args: llm.append("llm"),
+    )
+
+    pg_worker._process_job(
+        None,
+        {
+            "id": 750,
+            "job_type": "kol_content_fit_analysis",
+            "payload": _content_fit_payload(),
+        },
+    )
+
+    assert llm == []
+    assert blocked[0][2] == "provider_job_actor_inactive"
+    assert blocked[0][3]["provider_calls_performed"] is False
+
+
+def test_content_fit_server_capability_rejects_user_session_and_http_dict() -> None:
+    payload = _content_fit_payload()
+    payload.pop(access.FENCE_KEY)
+    capability = access.issue_server_owned_provider_capability(
+        action=access.CONTENT_FIT_ANALYSIS,
+        target_id="88",
+        search_session_id=SESSION_ID,
+    )
+    with pytest.raises(access.ProviderJobAccessError) as user_session:
+        access.build_content_fit_provider_fence(
+            payload=payload,
+            session=_session(),
+            server_owned_capability=capability,
+        )
+    assert user_session.value.code == "server_owned_session_has_user_owner"
+
+    with pytest.raises(access.ProviderJobAccessError) as forged:
+        access.build_content_fit_provider_fence(
+            payload=payload,
+            session=_session(owner=None),
+            server_owned_capability={"signature": "forged"},  # type: ignore[arg-type]
+        )
+    assert forged.value.code == "provider_job_actor_required"
+
+
+def test_content_fit_true_system_session_requires_explicit_capability() -> None:
+    payload = _content_fit_payload()
+    payload.pop(access.FENCE_KEY)
+    payload.pop("staff_id")
+    payload.pop("triggered_by_user_id")
+    capability = access.issue_server_owned_provider_capability(
+        action=access.CONTENT_FIT_ANALYSIS,
+        target_id="88",
+        search_session_id=SESSION_ID,
+    )
+    payload[access.FENCE_KEY] = access.build_content_fit_provider_fence(
+        payload=payload,
+        session=_session(owner=None),
+        server_owned_capability=capability,
+    )
+    actor = access.revalidate_provider_job_fence(
+        _AccessConn(session=_session_row(owner=None)),
+        payload,
+        expected_action=access.CONTENT_FIT_ANALYSIS,
+    )
+    assert actor == {"server_owned": True, "staff_id": None, "user_id": None}
+
+
+def test_content_fit_followup_rejects_swapped_session_kol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db import connection
+    from app.domains.kol import content_fit_job_access
+
+    source = _smart_payload()
+    source["search_session_item_id"] = 7
+    conn = _AccessConn()
+    conn.session_item = None
+    monkeypatch.setattr(connection, "get_conn", lambda: conn)
+    monkeypatch.setattr(connection, "db_connection_sync_scope", lambda: nullcontext())
+
+    with pytest.raises(access.ProviderJobAccessError) as raised:
+        content_fit_job_access.authorize_content_fit_followup(
+            {"target_type": "kol", "target_id": "99", "kol_pool_id": 99},
+            source_payload=source,
+        )
+    assert raised.value.code == "content_fit_parent_target_mismatch"
+
+
+def test_content_fit_followup_rejects_swapped_my_kol_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db import connection
+    from app.domains.kol import content_fit_job_access
+    from app.domains.kol.my_kol_paid_action_access import (
+        FENCE_KEY as MY_KOL_FENCE_KEY,
+        MyKolPaidActionError,
+    )
+
+    monkeypatch.setattr(connection, "db_connection_sync_scope", lambda: nullcontext())
+    with pytest.raises(MyKolPaidActionError) as raised:
+        content_fit_job_access.authorize_content_fit_followup(
+            {"target_type": "kol", "target_id": "99", "kol_pool_id": 99},
+            source_payload={
+                "kol_pool_id": 88,
+                MY_KOL_FENCE_KEY: {"kol_pool_id": 88},
+            },
+        )
+    assert raised.value.code == "content_fit_parent_target_drifted"
+
+
+def test_content_fit_followup_derives_user_fence_from_verified_session_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db import connection
+    from app.domains.kol import content_fit_job_access, search_sessions
+
+    source = _smart_payload()
+    source["search_session_item_id"] = 7
+    conn = _AccessConn(session_item={"id": 7})
+    monkeypatch.setattr(connection, "get_conn", lambda: conn)
+    monkeypatch.setattr(connection, "db_connection_sync_scope", lambda: nullcontext())
+    monkeypatch.setattr(search_sessions, "get_session", lambda _sid: _session())
+
+    child = content_fit_job_access.authorize_content_fit_followup(
+        {"target_type": "kol", "target_id": "88", "kol_pool_id": 88},
+        source_payload=source,
+    )
+    assert child["search_session_id"] == SESSION_ID
+    assert child["search_session_item_id"] == 7
+    actor = access.revalidate_provider_job_fence(
+        _AccessConn(session_item={"id": 7}),
+        child,
+        expected_action=access.CONTENT_FIT_ANALYSIS,
+    )
+    assert actor["user_id"] == USER_ID
+
+
+def test_content_fit_followup_requires_allowed_parent_and_sessionless_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.db import connection
+    from app.domains.kol import content_fit_job_access
+
+    with pytest.raises(access.ProviderJobAccessError) as missing:
+        content_fit_job_access.authorize_content_fit_followup(
+            {"target_type": "kol", "target_id": "88", "kol_pool_id": 88},
+            source_payload=None,
+        )
+    assert missing.value.code == "content_fit_parent_authorization_required"
+
+    source = _smart_payload()
+    source[access.FENCE_KEY] = {
+        **source[access.FENCE_KEY],
+        "action": access.CONTENT_FIT_ANALYSIS,
+    }
+    with pytest.raises(access.ProviderJobAccessError) as unsupported:
+        content_fit_job_access.authorize_content_fit_followup(
+            {"target_type": "kol", "target_id": "88", "kol_pool_id": 88},
+            source_payload=source,
+        )
+    assert unsupported.value.code == "content_fit_parent_action_unsupported"
+
+    sessionless = _video_payload()
+    sessionless.pop(access.FENCE_KEY)
+    sessionless["search_session_id"] = 0
+    sessionless["kol_pool_id"] = 77
+    sessionless[access.FENCE_KEY] = access.build_video_url_provider_fence(
+        payload=sessionless,
+        staff=_staff(),
+    )
+    conn = _AccessConn()
+    monkeypatch.setattr(connection, "get_conn", lambda: conn)
+    monkeypatch.setattr(connection, "db_connection_sync_scope", lambda: nullcontext())
+    with pytest.raises(access.ProviderJobAccessError) as swapped:
+        content_fit_job_access.authorize_content_fit_followup(
+            {"target_type": "kol", "target_id": "88", "kol_pool_id": 88},
+            source_payload=sessionless,
+        )
+    assert swapped.value.code == "content_fit_parent_target_mismatch"
 
 
 def test_normal_search_fence_revalidates_active_actor_owner_and_query() -> None:
@@ -345,10 +614,11 @@ def test_normal_mock_worker_path_revalidates_then_runs_once(
         "update_session_result_summary",
         lambda *_args, **_kwargs: {},
     )
-    calls = {"provider": 0}
+    calls: dict[str, Any] = {"provider": 0, "actor": None}
 
     async def normal_mock(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         calls["provider"] += 1
+        calls["actor"] = _kwargs.get("provider_actor")
         return {
             "status": "ready",
             "session_id": SESSION_ID,
@@ -370,6 +640,8 @@ def test_normal_mock_worker_path_revalidates_then_runs_once(
     )
 
     assert calls["provider"] == 1
+    assert calls["actor"]["id"] == STAFF_ID
+    assert calls["actor"]["user_id"] == USER_ID
     assert len(worker_conn.calls) == 1
     sql, params = worker_conn.calls[0]
     assert "UPDATE apify_jobs" in sql

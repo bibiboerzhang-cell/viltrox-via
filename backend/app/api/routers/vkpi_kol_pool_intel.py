@@ -4,7 +4,7 @@
 AI Brief / Gemini preflight / bio 翻译」端点簇。本模块自带无 prefix 的 APIRouter,
 主 router(prefix=/api/admin/vkpi)include 它,路径逐字不变。
 
-红线:零触 viltrox_fit_score;此簇全只读展示信号,绝不写 fit。
+红线:零触 viltrox_fit_score;内容契合生成仅由显式 POST 入队,绝不写 fit。
 """
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.api.dependencies.legacy_scope import legacy_system_admin_scope_guard
 from app.api.dependencies.perms import require_tab
+from app.api.routers.vkpi_kol_paid_scope import assert_paid_target_writable
 from app.api.routers.vkpi_kol_contact_projection import (
     PRIVATE_CONTACT_HEADERS as _CONTACT_REVEAL_HEADERS,
     enforce_contact_read_rate_limit,
@@ -24,6 +25,7 @@ from app.api.routers.vkpi_kol_contact_projection import (
 from app.core.logging import get_logger
 from app.core.permissions import check_kol_pool_employee_contact_permission, check_tab_permission
 from app.core.release_validation import release_validation_active
+from app.domains.audit.decorator import audit_action
 from app.domains.kol import eleven_dimensions
 from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
@@ -550,13 +552,19 @@ def get_pool_item_llm_deep_analysis(
 
 
 def _enqueue_content_fit_on_demand(kol_pool_id: int, product_sku, *, force: bool, staff) -> dict:
-    """L1:内容契合按需入队逻辑已迁 domains/kol/content_fit_enqueue;此处薄委托(端点调用不变,行为一致)。"""
+    """Queue one explicitly authorized content-fit analysis."""
     from app.core.release_validation import release_validation_active
     from app.domains.kol import content_fit_enqueue
 
     if release_validation_active():
         raise RuntimeError("release validation fence blocks content-fit enqueue")
-    return content_fit_enqueue.enqueue_content_fit_on_demand(kol_pool_id, product_sku, force=force, staff=staff)
+    return content_fit_enqueue.enqueue_content_fit_on_demand(
+        kol_pool_id,
+        product_sku,
+        force=force,
+        staff=staff,
+        enforce_target_write=True,
+    )
 
 
 @router.get("/kol-pool/{kol_pool_id}/content-fit")
@@ -567,26 +575,16 @@ async def get_pool_item_content_fit(
     product_sku: str | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """地基B 内容契合深析(content_fit_v1):读该 KOL 视频画面/故事 + 评论的契合判断。
-
-    默认只读已缓存结果(不烧 LLM)。analyze=true / force=true 不再在请求内同步烧 LLM
-    (那是 60s 超时的根源):若已有 ready cache 直接返回;否则把深析**入队**(worker 端
-    跑 LLM)并立即返回 {status:'queued', job_id}。红线:零触 viltrox_fit_score,不新跑
-    Gemini 视频分析;无视频证据由 worker 落 status='insufficient_evidence'(诚实不杜撰)。
-    """
+    """Pure cache read; legacy GET mutation flags are explicitly rejected."""
     from app.domains.kol import content_fit_analysis as kol_content_fit
 
-    staff_dict = staff if isinstance(staff, dict) else None
+    del staff
+    if analyze or force:
+        raise HTTPException(
+            status_code=405,
+            detail="content_fit_analysis_requires_post",
+        )
     try:
-        if analyze or force:
-            # 重活移出请求路径:仅入队 + 立即返回(DB 路径走 threadpool,不阻塞事件循环)。
-            return await run_in_threadpool(
-                _enqueue_content_fit_on_demand,
-                int(kol_pool_id),
-                product_sku,
-                force=bool(force),
-                staff=staff_dict,
-            )
         return await run_in_threadpool(
             kol_content_fit.get_content_fit,
             int(kol_pool_id),
@@ -596,14 +594,6 @@ async def get_pool_item_content_fit(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         logger.warning("vkpi.content_fit_endpoint_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
-        if analyze or force:
-            raise _write_service_error(
-                status_code=503,
-                status="unavailable",
-                reason="content_fit_enqueue_failed",
-                operation="content_fit_generate",
-                kol_pool_id=kol_pool_id,
-            ) from exc
         return {
             "status": "unavailable",
             "reason": "content_fit_read_failed",
@@ -611,6 +601,63 @@ async def get_pool_item_content_fit(
             "kol_pool_id": int(kol_pool_id),
             "result": None,
         }
+
+
+@router.post("/kol-pool/{kol_pool_id}/content-fit/analyze")
+@audit_action(
+    action_type="kol_content_fit_analyze",
+    target_type="kol_pool",
+    target_id_extractor=lambda result, kwargs: str(kwargs.get("kol_pool_id") or ""),
+    detail_extractor=lambda result, kwargs: (
+        f"content fit analyze status={(result or {}).get('status') or (result or {}).get('state') or 'unknown'}"
+    ),
+)
+async def analyze_pool_item_content_fit(
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Explicit paid analysis boundary; the worker repeats target checks."""
+
+    if release_validation_active():
+        raise _write_service_error(
+            status_code=503,
+            status="unavailable",
+            reason="release_validation_fenced",
+            operation="content_fit_generate",
+            kol_pool_id=kol_pool_id,
+        )
+    if "force" in body and not isinstance(body.get("force"), bool):
+        raise HTTPException(status_code=400, detail="force must be a boolean")
+    staff_dict = staff if isinstance(staff, dict) else None
+    assert_paid_target_writable(int(kol_pool_id), staff_dict)
+    try:
+        return await run_in_threadpool(
+            _enqueue_content_fit_on_demand,
+            int(kol_pool_id),
+            str(body.get("product_sku") or "") or None,
+            force=body.get("force") is True,
+            staff=staff_dict,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 - queue failures are stable/retryable
+        from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
+
+        if isinstance(exc, MyKolPaidActionError):
+            raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+        logger.warning(
+            "vkpi.content_fit_enqueue_failed | kol_pool_id=%s exception_type=%s",
+            kol_pool_id,
+            type(exc).__name__,
+        )
+        raise _write_service_error(
+            status_code=503,
+            status="unavailable",
+            reason="content_fit_enqueue_failed",
+            operation="content_fit_generate",
+            kol_pool_id=kol_pool_id,
+        ) from exc
 
 
 @router.get("/kol-pool/{kol_pool_id}/intelligence-card")

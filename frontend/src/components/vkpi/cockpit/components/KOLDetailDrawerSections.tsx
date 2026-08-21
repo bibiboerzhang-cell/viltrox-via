@@ -521,7 +521,7 @@ export function KOLDrawerContactAndVideos({ item, representativeVideos, onOpenVi
 }
 
 // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
-export function KOLDrawerContentFit({ apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze }: any) {
+export function KOLDrawerContentFit({ apiToken, item, contentFit, contentFitBusy, contentFitError, canAnalyze, onAnalyze }: any) {
   if (!(apiToken && item.id)) return null;
   return e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
     e("div", { className: "flex items-center gap-1.5 mb-2" },
@@ -530,14 +530,18 @@ export function KOLDrawerContentFit({ apiToken, item, contentFit, contentFitBusy
       e("span", { className: "text-[9px] text-slate-600" }, "基于视频画面/故事 + 评论 · 胜过粉丝数"),
       e("button", {
         className: "ml-auto rounded-md border border-cyan-300/25 bg-cyan-300/[0.08] px-2 py-1 text-[10px] font-medium text-cyan-100 hover:bg-cyan-300/[0.16] disabled:opacity-50",
-        disabled: contentFitBusy,
+        disabled: contentFitBusy || !canAnalyze,
         onClick: () => onAnalyze(Boolean(contentFit)),
-        title: contentFit ? "重新深析(force,重算 LLM)" : "按需触发深析(读已有视频分析+评论,经 LLM 综合)",
-      }, contentFitBusy ? "深析中…" : contentFit ? "重新深析" : "开始深析")
+        title: !canAnalyze
+          ? "请先关注该 KOL；共享条目为只读"
+          : contentFit ? "重新深析(force,重算 LLM)" : "按需触发深析(读已有视频分析+评论,经 LLM 综合)",
+      }, contentFitBusy ? "深析中…" : !canAnalyze ? "关注后可深析" : contentFit ? "重新深析" : "开始深析")
     ),
     contentFitError && e("div", { className: "text-[10px] text-amber-300/90 mb-2" }, contentFitError),
     !contentFit && !contentFitError && !contentFitBusy && e("div", { className: "text-[11px] text-slate-500" },
-      "尚无内容契合深析结果。点击「开始深析」基于该 KOL 过往视频的画面/故事与粉丝评论生成适配判断。"
+      canAnalyze
+        ? "尚无内容契合深析结果。点击「开始深析」基于该 KOL 过往视频的画面/故事与粉丝评论生成适配判断。"
+        : "尚无内容契合深析结果。请先关注该 KOL；共享条目仅可查看已有结果。"
     ),
     contentFit && (() => {
       const r = recordOr(contentFit.result);

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import nullcontext
 from typing import Any
+from unittest.mock import patch
 
 from app.domains.kol import content_fit_analysis
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key
@@ -40,11 +41,17 @@ class _Conn:
 
 def _run(rows: list[Any]) -> tuple[dict[str, Any] | None, _Cursor]:
     conn = _Conn(rows)
-    result = _enqueue_content_fit_after_final_v1(
-        conn,  # type: ignore[arg-type]
-        job_id=91,
-        deep_result={"status": "ready", "kol_pool_id": 42},
-    )
+    # Authorization lineage has its own security contract tests; this file
+    # isolates product namespace/dedupe behavior with an already-authorized child.
+    with patch(
+        "app.domains.kol.content_fit_job_access.authorize_content_fit_followup",
+        side_effect=lambda payload, **_kwargs: payload,
+    ):
+        result = _enqueue_content_fit_after_final_v1(
+            conn,  # type: ignore[arg-type]
+            job_id=91,
+            deep_result={"status": "ready", "kol_pool_id": 42},
+        )
     return result, conn.cursor_obj
 
 

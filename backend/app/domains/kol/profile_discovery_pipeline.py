@@ -29,6 +29,7 @@ async def execute_smart_search_profile_advance_pipeline(
     *,
     session_id: int,
     payload: dict[str, Any],
+    provider_actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Execute a queued text recall/new-discovery/profile-advance pipeline."""
 
@@ -404,8 +405,9 @@ async def execute_smart_search_profile_advance_pipeline(
                 product_sku=_text(payload.get("product_sku")),
                 top_n=max(1, min(_int(payload.get("content_fit_top_n"), content_fit_enqueue.DEFAULT_TOP_N), content_fit_enqueue.MAX_TOP_N)),
                 triggered_by_user_id=_int(payload.get("triggered_by_user_id")) or None,
+                provider_actor=provider_actor,
             )
-        except Exception as exc:
+        except Exception:
             content_fit = {"status": "error", "reason": "content_fit_enqueue_failed"}
     # Lane D(用户裁令「搜索时顺带懒抓」):对搜索召回的、**缺视频**的库内候选,顺带抓少数 account_deep,
     # 成本摊到未来、按需、自动优先真被搜到的人(不一次性全量烧 $660)。入队失败不阻断 pipeline。
@@ -419,7 +421,7 @@ async def execute_smart_search_profile_advance_pipeline(
                 top_n=max(1, min(_int(payload.get("lazy_video_backfill_top_n"), video_backfill_enqueue.DEFAULT_TOP_N), video_backfill_enqueue.MAX_TOP_N)),
                 staff=None,
             )
-        except Exception as exc:
+        except Exception:
             video_backfill = {"status": "error", "reason": "video_backfill_enqueue_failed"}
     pipeline_status = _profile_advance_pipeline_status(recall_result, new_discovery, advance_result)
     final_status = "partial" if changed_ids else pipeline_status

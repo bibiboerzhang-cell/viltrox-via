@@ -414,6 +414,7 @@ def _enqueue_content_fit_after_final_v1(
     *,
     job_id: int,
     deep_result: dict[str, Any] | None,
+    source_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """L2(用户令「最重档」):final_v1 视频深析就绪后,链式入队**内容契合深析**——读该 KOL 视频
     Gemini 分析 + 评论,LLM 出 creator_type/fit_verdict(发现的新人经 account_deep 抓取入库 +
@@ -492,6 +493,8 @@ def _enqueue_content_fit_after_final_v1(
                 }
             payload = {
                 "queue_lane": "batch",
+                "target_type": "kol",
+                "target_id": str(kol_pool_id),
                 "kol_pool_id": int(kol_pool_id),
                 "product_sku": normalized_product_sku or None,
                 "derive_method": derive_method,
@@ -501,6 +504,12 @@ def _enqueue_content_fit_after_final_v1(
                 "viltrox_fit_score_untouched": True,
                 "query_text": f"content fit - kol_pool #{kol_pool_id}",
             }
+            from app.domains.kol.content_fit_job_access import authorize_content_fit_followup
+
+            payload = authorize_content_fit_followup(
+                payload,
+                source_payload=source_payload,
+            )
             idempotency_key = active_job_idempotency_key(
                 "kol_content_fit_analysis",
                 kol_pool_id,

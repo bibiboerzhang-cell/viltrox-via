@@ -339,6 +339,11 @@ async def execute_smart_search_profile_advance_pipeline(
     *,
     session_id: int,
     payload: dict[str, Any],
+    provider_actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _sync_pipeline_compat()
-    return await _PIPELINE_IMPLEMENTATION(session_id=session_id, payload=payload)
+    return await _PIPELINE_IMPLEMENTATION(
+        session_id=session_id,
+        payload=payload,
+        provider_actor=provider_actor,
+    )

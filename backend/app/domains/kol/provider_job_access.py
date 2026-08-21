@@ -32,8 +32,14 @@ FENCE_RESULT_KEY = "kol_provider_job_fence_result"
 SESSION_ADVANCE = "session_advance"
 SMART_SEARCH_PROFILE_ADVANCE = "smart_search_profile_advance"
 VIDEO_URL_RESOLVE = "video_url_resolve"
+CONTENT_FIT_ANALYSIS = "content_fit_analysis"
 SUPPORTED_ACTIONS = frozenset(
-    {SESSION_ADVANCE, SMART_SEARCH_PROFILE_ADVANCE, VIDEO_URL_RESOLVE}
+    {
+        CONTENT_FIT_ANALYSIS,
+        SESSION_ADVANCE,
+        SMART_SEARCH_PROFILE_ADVANCE,
+        VIDEO_URL_RESOLVE,
+    }
 )
 
 # Search-session linkage/progress is appended after enqueue and result fields
@@ -405,6 +411,73 @@ def build_video_url_provider_fence(
     return _signed_claim(claim)
 
 
+def build_content_fit_provider_fence(
+    *,
+    payload: dict[str, Any],
+    session: dict[str, Any] | None,
+    staff: dict[str, Any] | None = None,
+    server_owned_capability: ServerOwnedProviderCapability | None = None,
+) -> dict[str, Any]:
+    """Seal one internally delegated content-fit job.
+
+    A user-owned search inherits the freshly revalidated live actor.  A true
+    system session instead presents an opaque in-process capability; a JSON
+    ``server_owned`` flag is never sufficient.
+    """
+
+    target_id = _text(payload.get("target_id") or payload.get("kol_pool_id"))
+    session_id = _int(payload.get("search_session_id")) or None
+    if not target_id:
+        raise ProviderJobAccessError("content_fit_target_invalid", 409)
+    server_owned = _valid_server_capability(
+        server_owned_capability,
+        action=CONTENT_FIT_ANALYSIS,
+        target_id=target_id,
+        search_session_id=session_id,
+    )
+    staff_id, user_id = _actor_ids(staff)
+    if not server_owned and (staff_id <= 0 or user_id <= 0):
+        raise ProviderJobAccessError("provider_job_actor_required", 403)
+    if not server_owned and not check_tab_permission(staff or {}, "vkpi", "write"):
+        raise ProviderJobAccessError("vkpi_write_permission_required", 403)
+    source_session = dict(session or {})
+    if session_id and _int(source_session.get("id")) != session_id:
+        raise ProviderJobAccessError("search_session_target_invalid", 409)
+    current_owner = _int(source_session.get("created_by"))
+    if session_id:
+        if server_owned and (
+            "created_by" not in source_session
+            or source_session.get("created_by") is not None
+        ):
+            raise ProviderJobAccessError("server_owned_session_has_user_owner", 403)
+        if not server_owned and current_owner != user_id:
+            raise ProviderJobAccessError("search_session_owner_mismatch", 403)
+    session_binding = _session_binding(
+        source_session,
+        fallback_owner_user_id=0 if server_owned else user_id,
+        bind_query=False,
+    ) if session_id else {
+        "search_session_id": 0,
+        "owner_user_id": 0,
+        "bind_query": False,
+    }
+    claim = {
+        "version": FENCE_VERSION,
+        "mode": "server_owned" if server_owned else "user",
+        "action": CONTENT_FIT_ANALYSIS,
+        "target_id": target_id,
+        "actor": {
+            "staff_id": None if server_owned else staff_id,
+            "user_id": None if server_owned else user_id,
+        },
+        "session": session_binding,
+        "execution_fingerprint": _digest(
+            _execution_contract(payload, action=CONTENT_FIT_ANALYSIS)
+        ),
+    }
+    return _signed_claim(claim)
+
+
 def _load_session(conn: Any, session_id: int) -> dict[str, Any]:
     row = conn.execute(
         """
@@ -422,6 +495,36 @@ def _load_session(conn: Any, session_id: int) -> dict[str, Any]:
     from app.domains.kol.search_sessions_serde import _row_to_session
 
     return _row_to_session(row)
+
+
+def _assert_content_fit_session_target(
+    conn: Any,
+    payload: dict[str, Any],
+    *,
+    session_id: int,
+) -> None:
+    """Prove the child KOL is a pool-backed item of the fenced session."""
+
+    kol_pool_id = _int(payload.get("kol_pool_id") or payload.get("target_id"))
+    item_id = _int(payload.get("search_session_item_id"))
+    if kol_pool_id <= 0:
+        raise ProviderJobAccessError("content_fit_target_invalid", 409)
+    params: list[int] = [int(session_id), int(kol_pool_id)]
+    item_clause = ""
+    if item_id > 0:
+        item_clause = " AND id=?"
+        params.append(item_id)
+    row = conn.execute(
+        f"""
+        SELECT id
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=? AND kol_pool_id=?{item_clause}
+        LIMIT 1
+        """,
+        tuple(params),
+    ).fetchone()
+    if not row:
+        raise ProviderJobAccessError("content_fit_session_target_mismatch", 409)
 
 
 def _active_actor(conn: Any, *, staff_id: int, user_id: int) -> dict[str, Any]:
@@ -473,7 +576,11 @@ def revalidate_provider_job_fence(
         _text(fence.get("execution_fingerprint")), current_fingerprint
     ):
         raise ProviderJobAccessError("provider_job_payload_drifted", 409)
-    if _text(fence.get("target_id")) != _text(payload.get("target_id")):
+    payload_target_id = _text(
+        payload.get("target_id")
+        or (payload.get("kol_pool_id") if action == CONTENT_FIT_ANALYSIS else "")
+    )
+    if _text(fence.get("target_id")) != payload_target_id:
         raise ProviderJobAccessError("provider_job_target_drifted", 409)
 
     mode = _text(fence.get("mode")).lower()
@@ -511,8 +618,20 @@ def revalidate_provider_job_fence(
             ):
                 if current_binding.get(key) != session_claim.get(key):
                     raise ProviderJobAccessError("search_session_query_drifted", 409)
+        if action == CONTENT_FIT_ANALYSIS:
+            _assert_content_fit_session_target(
+                conn,
+                payload,
+                session_id=session_id,
+            )
 
     if mode == "server_owned":
+        if (
+            action == CONTENT_FIT_ANALYSIS
+            and session is not None
+            and session.get("created_by") is not None
+        ):
+            raise ProviderJobAccessError("server_owned_session_has_user_owner", 403)
         if session is not None and _int(session.get("created_by")) > 0:
             raise ProviderJobAccessError("server_owned_session_has_user_owner", 403)
         return {"server_owned": True, "staff_id": None, "user_id": None}
@@ -567,18 +686,18 @@ def terminal_block_provider_job(
             )
 
 
-def guard_provider_job_before_execution(
+def authorize_provider_job_before_execution(
     worker_conn: Any,
     job: dict[str, Any],
     payload: dict[str, Any],
     *,
     expected_action: str,
-) -> bool:
-    """Authorize or terminally block; ``False`` means provider code must return."""
+) -> dict[str, Any] | None:
+    """Return the live actor/capability or terminally block before provider I/O."""
 
     try:
         with db_connection_sync_scope():
-            revalidate_provider_job_fence(
+            return revalidate_provider_job_fence(
                 get_conn(),
                 payload,
                 expected_action=expected_action,
@@ -591,8 +710,24 @@ def guard_provider_job_before_execution(
             error=exc,
             provider_calls_performed=False,
         )
-        return False
-    return True
+        return None
+
+
+def guard_provider_job_before_execution(
+    worker_conn: Any,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    expected_action: str,
+) -> bool:
+    """Compatibility boolean wrapper around the actor-returning guard."""
+
+    return authorize_provider_job_before_execution(
+        worker_conn,
+        job,
+        payload,
+        expected_action=expected_action,
+    ) is not None
 
 
 def revalidate_provider_job_checkpoint(
@@ -611,6 +746,7 @@ def revalidate_provider_job_checkpoint(
 
 
 __all__ = [
+    "CONTENT_FIT_ANALYSIS",
     "FENCE_KEY",
     "FENCE_RESULT_KEY",
     "ProviderJobAccessError",
@@ -618,8 +754,10 @@ __all__ = [
     "SMART_SEARCH_PROFILE_ADVANCE",
     "ServerOwnedProviderCapability",
     "VIDEO_URL_RESOLVE",
+    "build_content_fit_provider_fence",
     "build_search_session_provider_fence",
     "build_video_url_provider_fence",
+    "authorize_provider_job_before_execution",
     "guard_provider_job_before_execution",
     "issue_server_owned_provider_capability",
     "revalidate_provider_job_checkpoint",

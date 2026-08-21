@@ -567,9 +567,14 @@ def _write_gemini_cache(
             conn,
             job_id=int(job["id"]),
             deep_result=deep_result,
+            source_payload=payload,
         )
     except Exception as exc:
-        logger.warning("final_v1 followup enqueue failed (non-fatal) | job_id=%s error=%s", job.get("id"), exc)
+        logger.warning(
+            "final_v1 followup enqueue failed (non-fatal) | job_id=%s exception_type=%s",
+            job.get("id"),
+            type(exc).__name__,
+        )
     analysis_summary = _search_session_analysis_summary_from_result(
         cache_id=cache_id,
         derive_method=derive_method,
@@ -928,9 +933,14 @@ def _process_gemini_video(
             conn,
             job_id=int(job["id"]),
             deep_result=deep_result,
+            source_payload=payload,
         )
     except Exception as exc:
-        logger.warning("final_v1 followup enqueue failed (non-fatal) | job_id=%s error=%s", job.get("id"), exc)
+        logger.warning(
+            "final_v1 followup enqueue failed (non-fatal) | job_id=%s exception_type=%s",
+            job.get("id"),
+            type(exc).__name__,
+        )
     analysis_summary = _search_session_analysis_summary_from_result(
         cache_id=cache_id,
         derive_method=derive_method,

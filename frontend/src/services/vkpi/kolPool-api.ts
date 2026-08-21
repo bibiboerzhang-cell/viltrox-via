@@ -237,6 +237,7 @@ export {
   getKolPoolDimensions11,
   getKolPoolLlmDeepAnalysis,
   getKolPoolContentFit,
+  analyzeKolPoolContentFit,
   getKolPoolAccountDossier,
   getKolCooperation,
   recordKolCooperation,

@@ -204,7 +204,7 @@ def test_deep_analysis_read_failure_returns_stable_unavailable_shape(monkeypatch
     assert result["count"] == 0
 
 
-def test_content_fit_generate_failure_is_diagnostic_503(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_content_fit_get_mutation_flags_are_405_and_never_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:
     async def direct_call(func: Any, *args: Any, **kwargs: Any) -> Any:
         return func(*args, **kwargs)
 
@@ -225,6 +225,27 @@ def test_content_fit_generate_failure_is_diagnostic_503(monkeypatch: pytest.Monk
                 staff={"id": 2},
             )
         )
+
+    assert raised.value.status_code == 405
+    assert raised.value.detail == "content_fit_analysis_requires_post"
+
+
+def test_content_fit_post_queue_failure_is_diagnostic_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def direct_call(func: Any, *args: Any, **kwargs: Any) -> Any:
+        return func(*args, **kwargs)
+
+    monkeypatch.setattr(vkpi_kol_pool_intel, "run_in_threadpool", direct_call)
+    monkeypatch.setattr(vkpi_kol_pool_intel, "release_validation_active", lambda: False)
+    monkeypatch.setattr(vkpi_kol_pool_intel, "assert_paid_target_writable", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        vkpi_kol_pool_intel,
+        "_enqueue_content_fit_on_demand",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("queue unavailable")),
+    )
+
+    handler = getattr(vkpi_kol_pool_intel.analyze_pool_item_content_fit, "__wrapped__", vkpi_kol_pool_intel.analyze_pool_item_content_fit)
+    with pytest.raises(HTTPException) as raised:
+        asyncio.run(handler(23, {"force": True}, staff={"id": 2}))
 
     assert raised.value.status_code == 503
     assert raised.value.detail["reason"] == "content_fit_enqueue_failed"

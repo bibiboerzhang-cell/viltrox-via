@@ -3,7 +3,7 @@ import { m } from "framer-motion";
 import { Sparkles } from "lucide-react";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
-import { enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, getKolVideoAnalysisBatch, getKolVideoAnalysisCache, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
+import { analyzeKolPoolContentFit, enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, getKolVideoAnalysisBatch, getKolVideoAnalysisCache, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { KOLDrawerOutreachSection } from "./KOLDrawerOutreachSection";
 import { runSkill, type SkillRunResult } from "../../../../services/vkpi/skills-api";
@@ -561,11 +561,15 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   }, [apiToken, item?.id]);
 
   const handleContentFitAnalyze = (force = false) => {
-    if (!apiToken || !item?.id || contentFitBusy) return;
+    if (
+      !apiToken
+      || !item?.id
+      || contentFitBusy
+      || viewerCtx?.paid_actions?.can_run_paid_actions !== true
+    ) return;
     setContentFitBusy(true);
     setContentFitError("");
-    void getKolPoolContentFit(apiToken, item.id, {
-      analyze: true,
+    void analyzeKolPoolContentFit(apiToken, item.id, {
       force,
       ...(contentFitProductSku ? { productSku: contentFitProductSku } : {}),
     })
@@ -581,7 +585,11 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           );
         }
       })
-      .catch(() => setContentFitError("深析请求失败,请稍后重试。"))
+      .catch((error: any) => setContentFitError(
+        Number(error?.status || 0) === 403
+          ? "请先关注该 KOL；共享条目仅可查看，不能发起付费深析。"
+          : "深析请求失败,请稍后重试。",
+      ))
       .finally(() => setContentFitBusy(false));
   };
 
@@ -921,7 +929,12 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         e(ForecastPanel, { apiToken, kolPoolId: item?.id }),
         e(RateCardPanel, { apiToken, kolPoolId: item?.id }),
         // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
-        e(KOLDrawerContentFit, { apiToken, item, contentFit, contentFitBusy, contentFitError, onAnalyze: handleContentFitAnalyze }),
+        e(KOLDrawerContentFit, { apiToken, item, contentFit,
+          contentFitBusy,
+          contentFitError,
+          canAnalyze: viewerCtx?.paid_actions?.can_run_paid_actions === true,
+          onAnalyze: handleContentFitAnalyze,
+        }),
       ),
 
       // ══ Tab「受众」:粉丝画像 + 设备 ══

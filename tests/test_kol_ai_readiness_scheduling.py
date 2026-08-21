@@ -4,6 +4,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 
 class _Rows:
     def __init__(self, row: Any) -> None:
@@ -312,6 +314,7 @@ def test_text_search_skips_content_fit_job_when_ai_is_disabled(monkeypatch) -> N
 
     session = {
         "id": 1089,
+        "created_by": None,
         "items": [
             {
                 "id": 2201,
@@ -382,6 +385,7 @@ def test_text_search_still_queues_content_fit_when_model_is_ready(monkeypatch) -
     conn = _Conn()
     session = {
         "id": 1089,
+        "created_by": 34,
         "items": [
             {
                 "id": 2201,
@@ -417,16 +421,24 @@ def test_text_search_still_queues_content_fit_when_model_is_ready(monkeypatch) -
             },
         },
     )
-    monkeypatch.setattr(
-        content_fit_enqueue,
-        "enqueue_active_apify_job",
-        lambda *_args, **kwargs: (
-            {"id": 8001, "status": "queued", "payload": kwargs["payload"]},
-            True,
-        ),
-    )
+    captured: dict[str, Any] = {}
 
-    result = content_fit_enqueue.enqueue_content_fit_for_session(session_id=1089)
+    def enqueue(*_args: Any, **kwargs: Any) -> tuple[dict[str, Any], bool]:
+        captured.update(kwargs)
+        return {"id": 8001, "status": "queued", "payload": kwargs["payload"]}, True
+
+    monkeypatch.setattr(content_fit_enqueue, "enqueue_active_apify_job", enqueue)
+
+    result = content_fit_enqueue.enqueue_content_fit_for_session(
+        session_id=1089,
+        provider_actor={
+            "id": 12,
+            "staff_id": 12,
+            "user_id": 34,
+            "role": "employee",
+            "permissions_json": {"vkpi": "write"},
+        },
+    )
 
     assert result["status"] == "queued"
     assert result["enqueued"] == [{"kol_pool_id": 88, "job_id": 8001}]
@@ -434,3 +446,31 @@ def test_text_search_still_queues_content_fit_when_model_is_ready(monkeypatch) -
     assert result["ai_analysis"]["provider_calls_allowed"] is True
     assert result["write_db"] is True
     assert conn.commits == 1
+    assert captured["payload"]["kol_provider_job_fence"]["mode"] == "user"
+    assert captured["idempotency_key"] == content_fit_enqueue.active_job_idempotency_key(
+        "kol_content_fit_analysis",
+        "session",
+        1089,
+        88,
+        "",
+    )
+
+
+def test_user_search_content_fit_never_self_asserts_server_owned(monkeypatch) -> None:
+    from app.domains.kol import content_fit_enqueue
+    from app.domains.kol.provider_job_access import ProviderJobAccessError
+
+    monkeypatch.setattr(
+        content_fit_enqueue.search_sessions,
+        "get_session",
+        lambda _sid: {"id": 1089, "created_by": 34, "items": []},
+    )
+    monkeypatch.setattr(
+        content_fit_enqueue,
+        "get_conn",
+        lambda: (_ for _ in ()).throw(AssertionError("must fail before queue/database")),
+    )
+
+    with pytest.raises(ProviderJobAccessError) as raised:
+        content_fit_enqueue.enqueue_content_fit_for_session(session_id=1089)
+    assert raised.value.code == "content_fit_parent_actor_required"

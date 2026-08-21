@@ -403,6 +403,7 @@ def _finish_skipped(
                 conn,
                 job_id=int(job_id),
                 deep_result=deep_result,
+                source_payload=payload if isinstance(payload, dict) else None,
             )
             if analysis_summary and content_fit_job:
                 analysis_summary["content_fit_job"] = content_fit_job
@@ -419,7 +420,11 @@ def _finish_skipped(
             if analysis_summary and account_extract_job:
                 analysis_summary["account_dossier_extract_job"] = account_extract_job
         except Exception as exc:
-            logger.warning("skipped cache deep/account sync failed | job_id=%s error=%s", job_id, exc)
+            logger.warning(
+                "skipped cache deep/account sync failed | job_id=%s exception_type=%s",
+                job_id,
+                type(exc).__name__,
+            )
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(

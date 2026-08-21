@@ -31,6 +31,12 @@ from app.domains.tasks.search_session_lineage import (
     attach_search_session_lineage_to_job,
     with_search_session_lineage,
 )
+from app.domains.kol.provider_job_access import (
+    CONTENT_FIT_ANALYSIS as CONTENT_FIT_PROVIDER_ACTION,
+    FENCE_KEY as PROVIDER_FENCE_KEY,
+    build_content_fit_provider_fence,
+    issue_server_owned_provider_capability,
+)
 from app.platform import llm_gateway
 
 logger = get_logger("viltrox.domains.kol.content_fit_enqueue")
@@ -277,6 +283,7 @@ def enqueue_content_fit_for_session(
     product_sku: str = "",
     top_n: int = DEFAULT_TOP_N,
     triggered_by_user_id: int | None = None,
+    provider_actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """对 session 头部库内候选异步入队内容契合深析(「思考中」),并算 exposure_potential 展示。
 
@@ -288,6 +295,20 @@ def enqueue_content_fit_for_session(
     derive_method = content_fit_analysis.content_fit_derive_method(normalized_product_sku)
     safe_top_n = max(1, min(_int(top_n, DEFAULT_TOP_N), MAX_TOP_N))
     session = search_sessions.get_session(sid)
+    session_owner_user_id = _int(session.get("created_by"))
+    is_system_session = "created_by" in session and session.get("created_by") is None
+    if session_owner_user_id <= 0 and not is_system_session:
+        from app.domains.kol.provider_job_access import ProviderJobAccessError
+
+        raise ProviderJobAccessError("content_fit_session_owner_invalid", 403)
+    if session_owner_user_id > 0 and (
+        not isinstance(provider_actor, dict)
+        or provider_actor.get("server_owned") is True
+        or _int(provider_actor.get("user_id")) != session_owner_user_id
+    ):
+        from app.domains.kol.provider_job_access import ProviderJobAccessError
+
+        raise ProviderJobAccessError("content_fit_parent_actor_required", 403)
     candidates = _top_pool_candidates(session, safe_top_n)
     pool_ids = [_int(c.get("kol_pool_id")) for c in candidates]
 
@@ -356,12 +377,29 @@ def enqueue_content_fit_for_session(
             "platform": (cand.get("payload") or {}).get("platform") if isinstance(cand.get("payload"), dict) else None,
             "prompt": f"content fit analysis · kol:{kid}",
             "summary": f"内容契合深析 · KOL {kid}",
-            "triggered_by_user_id": triggered_by_user_id,
+            "triggered_by_user_id": (
+                _int((provider_actor or {}).get("user_id"))
+                or triggered_by_user_id
+            ),
+            "staff_id": _int((provider_actor or {}).get("staff_id") or (provider_actor or {}).get("id")) or None,
             "viltrox_fit_score_untouched": True,
         },
             search_session_id=sid,
             search_session_item_id=_int(cand.get("id")) or None,
             role="content_fit",
+        )
+        capability = None
+        if is_system_session:
+            capability = issue_server_owned_provider_capability(
+                action=CONTENT_FIT_PROVIDER_ACTION,
+                target_id=str(kid),
+                search_session_id=sid,
+            )
+        payload[PROVIDER_FENCE_KEY] = build_content_fit_provider_fence(
+            payload=payload,
+            session=session,
+            staff=provider_actor if session_owner_user_id > 0 else None,
+            server_owned_capability=capability,
         )
         try:
             row, inserted = enqueue_active_apify_job(
@@ -370,6 +408,8 @@ def enqueue_content_fit_for_session(
                 payload=payload,
                 idempotency_key=active_job_idempotency_key(
                     CONTENT_FIT_JOB_TYPE,
+                    "session",
+                    sid,
                     kid,
                     normalized_product_sku,
                 ),
@@ -383,8 +423,12 @@ def enqueue_content_fit_for_session(
                     conn.commit()
                 skipped.append({"kol_pool_id": kid, "job_id": row.get("id"), "reason": "already_queued_race"})
         except Exception as exc:
-            logger.warning("vkpi.content_fit_enqueue.insert_failed kid=%s err=%s", kid, exc, exc_info=True)
-            skipped.append({"kol_pool_id": kid, "reason": "enqueue_failed", "error": str(exc)[:300]})
+            logger.warning(
+                "vkpi.content_fit_enqueue.insert_failed kid=%s exception_type=%s",
+                kid,
+                type(exc).__name__,
+            )
+            skipped.append({"kol_pool_id": kid, "reason": "enqueue_failed"})
 
     status = "queued" if enqueued else "ai_disabled" if ai_disabled_count else "nothing_to_queue"
     ai_analysis = dict(readiness["ai_analysis"])
@@ -423,6 +467,7 @@ def enqueue_content_fit_on_demand(
     *,
     force: bool,
     staff: dict[str, Any] | None,
+    enforce_target_write: bool = False,
 ) -> dict[str, Any]:
     """T4 · 单 KOL 内容契合深析按需入队(L1:从 vkpi_kol_pool router 抽出)。
 
@@ -434,6 +479,16 @@ def enqueue_content_fit_on_demand(
 
     kid = int(kol_pool_id)
     conn = get_conn()
+    target_fence: dict[str, Any] | None = None
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import build_target_fence
+
+        target_fence = build_target_fence(
+            conn,
+            action="content_fit_analysis",
+            kol_pool_id=kid,
+            staff=staff,
+        )
     normalized_product_sku = kol_content_fit.normalize_product_sku(product_sku)
     derive_method = kol_content_fit.content_fit_derive_method(normalized_product_sku)
 
@@ -509,6 +564,10 @@ def enqueue_content_fit_on_demand(
         "viltrox_fit_score_untouched": True,
         "query_text": f"content fit - kol_pool #{kid}",
     }
+    if target_fence is not None:
+        from app.domains.kol.my_kol_paid_action_access import FENCE_KEY
+
+        payload[FENCE_KEY] = target_fence
     job, inserted = enqueue_active_apify_job(
         conn,
         job_type=CONTENT_FIT_JOB_TYPE,
