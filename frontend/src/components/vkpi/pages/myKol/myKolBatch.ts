@@ -35,9 +35,18 @@ export function pickEmailFromContacts(contacts: unknown): string {
   return '';
 }
 
-// CSV 单元格转义:含逗号/引号/换行才加引号,引号翻倍(RFC 4180)。
+// 外部文本进电子表格前先消除公式前缀。名字/handle 等来自公开平台，攻击者可把
+// 首个非空白字符伪装成 =/+/-/@；RFC 4180 引号本身不会阻止 Excel 执行公式。
+// 单引号是电子表格的文本标记，普通文本和真正的 number 值保持原样。
+function spreadsheetSafeText(value: string): string {
+  const text = String(value);
+  return /^[=+\-@]/.test(text.trim()) ? `'${text}` : text;
+}
+
+// CSV 单元格转义:外部字符串先做公式防护；含逗号/引号/换行再加引号并翻倍
+// (RFC 4180)。number 字段不经过文本防护。
 function csvCell(value: string | number | null | undefined): string {
-  const text = value == null ? '' : String(value);
+  const text = value == null ? '' : typeof value === 'string' ? spreadsheetSafeText(value) : String(value);
   return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
