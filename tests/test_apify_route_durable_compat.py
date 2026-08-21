@@ -352,6 +352,17 @@ def test_remaining_p0_user_routes_enqueue_only(monkeypatch):
     )
     monkeypatch.setattr(vkpi_industry_automation.industry_domain, "get_account", lambda *_args, **_kwargs: {"account": {"id": 9}})
     monkeypatch.setattr(
+        vkpi_industry_automation.industry_access,
+        "build_refresh_payload",
+        lambda account_id, **_kwargs: {
+            "account_id": int(account_id),
+            "project_id": 3,
+            "staff_id": 1,
+            "user_id": 10,
+            "industry_account_refresh_fence": {"signature": "test-only"},
+        },
+    )
+    monkeypatch.setattr(
         vkpi_industry_automation.industry_domain,
         "refresh_account",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("sync industry refresh must not run")),
@@ -399,6 +410,10 @@ def test_remaining_p0_user_routes_enqueue_only(monkeypatch):
         "industry_account_refresh",
         "vkpi_official_channel_sync",
     ]
+    industry_payload = queue.jobs[1][1]
+    assert "staff" not in industry_payload
+    assert industry_payload["staff_id"] == 1
+    assert "industry_account_refresh_fence" in industry_payload
 
 
 def test_batch_enrich_and_comment_routes_enqueue_only(monkeypatch):

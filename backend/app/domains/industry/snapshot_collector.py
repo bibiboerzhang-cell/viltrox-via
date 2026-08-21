@@ -11,7 +11,7 @@ import json
 import re
 import secrets
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from app.db.connection import get_conn, is_postgres_runtime
 import importlib
@@ -372,6 +372,9 @@ def collect_account_snapshot(
     raw_data: dict[str, Any] | None = None,
     force_local: bool = False,
     staff: dict[str, Any] | None = None,
+    authorization_checkpoint: Callable[[], Any] | None = None,
+    authorization_scope_checkpoint: Callable[[], Any] | None = None,
+    provider_call_started: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     conn = get_conn()
@@ -380,6 +383,21 @@ def collect_account_snapshot(
         raise LookupError("industry account not found")
     account = dict(row)
     platform = str(account.get("platform") or "other").strip().lower()
+
+    def checkpoint() -> None:
+        if authorization_checkpoint is not None:
+            authorization_checkpoint()
+
+    def start_provider_call() -> None:
+        checkpoint()
+        if provider_call_started is not None:
+            provider_call_started()
+
+    def scope_checkpoint() -> None:
+        if authorization_scope_checkpoint is not None:
+            authorization_scope_checkpoint()
+        else:
+            checkpoint()
 
     if raw_data is None:
         gate = provider_gate(account, force=force_local)
@@ -390,11 +408,13 @@ def collect_account_snapshot(
                 token in message
                 for token in ("API", "TOKEN", "crawler", "适配器", "未配置")
             ):
+                checkpoint()
                 _record_platform_test_status(
                     platform,
                     "not_configured",
                     {"last_gate_message": message, "account_id": int(account_id)},
                 )
+            checkpoint()
             conn.execute(
                 "UPDATE vkpi_industry_accounts SET sync_status=?, last_crawled_at=?, crawl_error_count=crawl_error_count+1 WHERE id=?",
                 (gate.get("sync_status") or "not_configured", _utcnow(), int(account_id)),
@@ -411,9 +431,24 @@ def collect_account_snapshot(
             platform_user_id = str(account.get("platform_user_id") or "")
             max_posts = max(1, int(_platform_config(platform).get("posts_per_account") or 25))
             if platform == "youtube":
-                profile_payload = crawler.crawl_channel_profile(handle_or_url, channel_id=platform_user_id) if hasattr(crawler, "crawl_channel_profile") else {}
+                if hasattr(crawler, "crawl_channel_profile"):
+                    start_provider_call()
+                    profile_payload = crawler.crawl_channel_profile(
+                        handle_or_url,
+                        channel_id=platform_user_id,
+                    )
+                else:
+                    profile_payload = {}
             else:
-                profile_payload = crawler.crawl_channel_profile(handle_or_url, channel_id=platform_user_id, max_posts=max_posts) if hasattr(crawler, "crawl_channel_profile") else {}
+                if hasattr(crawler, "crawl_channel_profile"):
+                    start_provider_call()
+                    profile_payload = crawler.crawl_channel_profile(
+                        handle_or_url,
+                        channel_id=platform_user_id,
+                        max_posts=max_posts,
+                    )
+                else:
+                    profile_payload = {}
             profile_items = profile_payload.get("items") or []
             channel_id = ""
             if platform == "youtube":
@@ -422,6 +457,7 @@ def collect_account_snapshot(
                 channel_id = platform_user_id or (str(profile_items[0].get("username", "")) if profile_items else "")
             videos_items = []
             if platform == "youtube" and channel_id:
+                start_provider_call()
                 videos_payload = crawler.crawl_channel_videos(channel_id, max_results=max_posts)
                 videos_items = videos_payload.get("items") or []
                 if not videos_items and isinstance(profile_payload.get("videos"), list):
@@ -454,6 +490,7 @@ def collect_account_snapshot(
         or ""
     ).strip().lower()
     if raw_status in {"ok", "configured", "synced", "success"}:
+        checkpoint()
         _record_platform_test_status(
             platform,
             "synced",
@@ -462,9 +499,16 @@ def collect_account_snapshot(
 
     kpis = calculate_kpis(raw_data or {})
     kpis["snapshot_date"] = str((raw_data or {}).get("snapshot_date") or _today())
+    checkpoint()
     snapshot = _insert_snapshot(int(account_id), kpis)
+    checkpoint()
     posts_written = _insert_posts(account, raw_data or {}, limit=int(_platform_config(platform).get("posts_per_account") or 100))
+    checkpoint()
     account = _sync_account_profile_fields(account, raw_data or {})
+    # The authorized refresh may itself normalize profile_url/avatar/display
+    # fields.  Recheck live actor/project/account membership here without
+    # treating that expected self-write as an external provider-target drift.
+    scope_checkpoint()
     conn.execute(
         "UPDATE vkpi_industry_accounts SET sync_status=?, last_crawled_at=?, last_successful_at=?, crawl_error_count=0, raw_platform_data=? WHERE id=?",
         ("synced", _utcnow(), _utcnow(), _json(raw_data), int(account_id)),

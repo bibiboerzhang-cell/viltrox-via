@@ -11,6 +11,8 @@ from urllib.parse import urlparse
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
+from app.domains.access import scope
+from app.domains.industry import access as industry_access
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
@@ -42,6 +44,14 @@ def _platform(value: Any) -> str:
     return str(value or "other").strip().lower() or "other"
 
 
+def _int_or_none(value: Any) -> int | None:
+    try:
+        parsed = int(value or 0)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
 def create_project(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
     name = str(payload.get("name") or "").strip()
@@ -50,6 +60,11 @@ def create_project(payload: dict[str, Any], *, staff: dict[str, Any] | None = No
     uid = f"industry-{secrets.token_hex(8)}"
     now = _utcnow()
     conn = get_conn()
+    owner_staff_id = (
+        industry_access.resolve_create_owner(payload, staff, conn=conn)
+        if staff is not None
+        else _int_or_none(payload.get("owner_staff_id"))
+    )
     conn.execute(
         """
         INSERT INTO vkpi_industry_projects
@@ -68,7 +83,7 @@ def create_project(payload: dict[str, Any], *, staff: dict[str, Any] | None = No
             str(payload.get("monitoring_frequency") or "daily"),
             payload.get("auto_archive_days") or None,
             _json(payload.get("report_subscriptions") or {}),
-            int(payload.get("owner_staff_id") or resolve_staff_id(staff) or 0) or None,
+            owner_staff_id or None,
             _bool(True),
             _json(payload.get("metadata") or {}),
             now,
@@ -82,26 +97,48 @@ def create_project(payload: dict[str, Any], *, staff: dict[str, Any] | None = No
     return {"project": dict(row) if row else {"project_uid": uid}}
 
 
-def list_projects(limit: int = 100, active_only: bool = True) -> dict[str, Any]:
+def list_projects(
+    limit: int = 100,
+    active_only: bool = True,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
-    where = f"WHERE {_active_sql()}" if active_only else ""
+    clauses: list[str] = []
+    params: list[Any] = []
+    if active_only:
+        clauses.append(_active_sql())
+    if staff is not None and not scope.can_view_all(staff):
+        actor_id = scope.actor_staff_id(staff)
+        if actor_id <= 0:
+            raise industry_access.IndustryAccessError("industry_staff_identity_required")
+        clauses.append("owner_staff_id=?")
+        params.append(actor_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = get_conn().execute(
         f"SELECT * FROM vkpi_industry_projects {where} ORDER BY updated_at DESC, id DESC LIMIT ?",
-        (max(1, min(300, int(limit or 100))),),
+        (*params, max(1, min(300, int(limit or 100)))),
     ).fetchall()
     return {"projects": [dict(row) for row in rows]}
 
 
-def get_project(project_id: int) -> dict[str, Any]:
+def get_project(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
+    if staff is not None:
+        industry_access.assert_project_access(project_id, staff, conn=get_conn())
     row = get_conn().execute("SELECT * FROM vkpi_industry_projects WHERE id=?", (int(project_id),)).fetchone()
     if not row:
         raise LookupError("industry project not found")
-    return {"project": dict(row), "accounts": list_accounts(int(project_id)).get("accounts")}
+    return {
+        "project": dict(row),
+        "accounts": list_accounts(int(project_id), staff=staff).get("accounts"),
+    }
 
 
 def delete_project(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
+    if staff is not None:
+        industry_access.assert_project_access(project_id, staff, write=True, conn=get_conn())
     get_conn().execute("UPDATE vkpi_industry_projects SET is_active=?, archived_at=?, updated_at=? WHERE id=?", (_bool(False), _utcnow(), _utcnow(), int(project_id)))
     get_conn().commit()
     audit.log_business_event(staff_id=resolve_staff_id(staff), action_type="industry_project_archive", target_type="industry_project", target_id=project_id)
@@ -110,6 +147,8 @@ def delete_project(project_id: int, *, staff: dict[str, Any] | None = None) -> d
 
 def add_account(project_id: int, payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
+    if staff is not None:
+        industry_access.assert_project_access(project_id, staff, write=True, conn=get_conn())
     raw_handle = str(payload.get("handle") or payload.get("username") or "").strip()
     raw_profile_url = str(payload.get("profile_url") or payload.get("url") or "").strip()
     if not raw_profile_url and raw_handle.lower().startswith(("http://", "https://")):
@@ -178,6 +217,8 @@ def add_account(project_id: int, payload: dict[str, Any], *, staff: dict[str, An
 
 def update_account(account_id: int, payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
+    if staff is not None:
+        industry_access.assert_account_access(account_id, staff, write=True, conn=get_conn())
     row = get_conn().execute("SELECT * FROM vkpi_industry_accounts WHERE id=?", (int(account_id),)).fetchone()
     if not row:
         raise LookupError("industry account not found")
@@ -195,7 +236,7 @@ def update_account(account_id: int, payload: dict[str, Any], *, staff: dict[str,
         updates.append("notes=?")
         params.append(str(payload.get("notes") or ""))
     if not updates:
-        return get_account(account_id)
+        return get_account(account_id, staff=staff)
     params.append(int(account_id))
     get_conn().execute(f"UPDATE vkpi_industry_accounts SET {', '.join(updates)} WHERE id=?", tuple(params))
     get_conn().commit()
@@ -206,10 +247,12 @@ def update_account(account_id: int, payload: dict[str, Any], *, staff: dict[str,
         target_id=account_id,
         metadata={"fields": sorted([str(key) for key in payload.keys()])},
     )
-    return get_account(account_id)
+    return get_account(account_id, staff=staff)
 
 
 def import_accounts(project_id: int, items: list[dict[str, Any]], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    if staff is not None:
+        industry_access.assert_project_access(project_id, staff, write=True, conn=get_conn())
     imported = []
     skipped = 0
     for item in items:
@@ -456,6 +499,8 @@ def import_historical_dataset(
     """
 
     ensure_vkpi_product_industry_schema()
+    if staff is not None:
+        industry_access.assert_project_access(project_id, staff, write=True, conn=get_conn())
     imported_accounts: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     snapshots_written = 0
@@ -537,13 +582,26 @@ def importlib_collect_account_snapshot(account_id: int, *, raw_data: dict[str, A
     return snapshot_collector.collect_account_snapshot(account_id, raw_data=raw_data, force_local=True, staff=staff)
 
 
-def list_accounts(project_id: int | None = None, limit: int = 300) -> dict[str, Any]:
+def list_accounts(
+    project_id: int | None = None,
+    limit: int = 300,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
-    where = f"WHERE {_active_sql('a')}"
+    where = f"WHERE {_active_sql('a')} AND {_active_sql('ip')}"
     params: list[Any] = []
     if project_id:
+        if staff is not None:
+            industry_access.assert_project_access(project_id, staff, conn=get_conn())
         where += " AND a.project_id=?"
         params.append(int(project_id))
+    if staff is not None and not scope.can_view_all(staff):
+        actor_id = scope.actor_staff_id(staff)
+        if actor_id <= 0:
+            raise industry_access.IndustryAccessError("industry_staff_identity_required")
+        where += " AND ip.owner_staff_id=?"
+        params.append(actor_id)
     rows = get_conn().execute(
         f"""
         SELECT
@@ -572,6 +630,7 @@ def list_accounts(project_id: int | None = None, limit: int = 300) -> dict[str, 
             s.reels_views_30d AS reels_views_30d,
             s.estimated_organic_value_cents AS estimated_organic_value_cents
         FROM vkpi_industry_accounts a
+        JOIN vkpi_industry_projects ip ON ip.id=a.project_id
         LEFT JOIN vkpi_industry_account_snapshots s
           ON s.id = (
             SELECT s2.id
@@ -589,8 +648,15 @@ def list_accounts(project_id: int | None = None, limit: int = 300) -> dict[str, 
     return {"accounts": [dict(row) for row in rows]}
 
 
-def get_account(account_id: int, *, post_limit: int = 500) -> dict[str, Any]:
+def get_account(
+    account_id: int,
+    *,
+    post_limit: int = 500,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
+    if staff is not None:
+        industry_access.assert_account_access(account_id, staff, conn=get_conn())
     row = get_conn().execute("SELECT * FROM vkpi_industry_accounts WHERE id=?", (int(account_id),)).fetchone()
     if not row:
         raise LookupError("industry account not found")
@@ -606,6 +672,8 @@ def get_account(account_id: int, *, post_limit: int = 500) -> dict[str, Any]:
 def refresh_account(account_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     from app.domains.industry import snapshot_collector
 
+    if staff is not None:
+        industry_access.assert_account_access(account_id, staff, write=True, conn=get_conn())
     return snapshot_collector.collect_account_snapshot(account_id, staff=staff)
 
 
@@ -645,8 +713,10 @@ def add_snapshot(account_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     return {"snapshot": dict(row) if row else {}}
 
 
-def cross_platform(project_id: int) -> dict[str, Any]:
+def cross_platform(project_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
+    if staff is not None:
+        industry_access.assert_project_access(project_id, staff, conn=get_conn())
     rows = get_conn().execute(
         f"""
         SELECT a.platform, COUNT(*) AS account_count,
@@ -665,8 +735,15 @@ def cross_platform(project_id: int) -> dict[str, Any]:
     return {"platforms": [dict(row) for row in rows], "provider_status": "local_snapshots_only"}
 
 
-def posts(project_id: int, limit: int = 100) -> dict[str, Any]:
+def posts(
+    project_id: int,
+    limit: int = 100,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     ensure_vkpi_product_industry_schema()
+    if staff is not None:
+        industry_access.assert_project_access(project_id, staff, conn=get_conn())
     rows = get_conn().execute(
         """
         SELECT p.* FROM vkpi_industry_posts p

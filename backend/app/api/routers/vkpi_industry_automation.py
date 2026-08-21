@@ -8,6 +8,7 @@ from app.api.dependencies.perms import require_tab
 from app.domains import audience as audience_domain
 from app.domains import experiments as experiments_domain
 from app.domains import industry as industry_domain
+from app.domains.industry import access as industry_access
 from app.domains import intelligence as intelligence_domain
 from app.domains import launch as launch_domain
 from app.domains import predictions as predictions_domain
@@ -34,19 +35,33 @@ def _require_manager_staff(staff: dict) -> None:
         raise HTTPException(status_code=403, detail="management permission required")
 
 
+def _scoped(callable_obj, *args, **kwargs):
+    try:
+        return callable_obj(*args, **kwargs)
+    except industry_access.IndustryAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+
+
 @router.get("/industry-data/projects")
 def industry_projects(
     limit: int = Query(default=100, ge=1, le=300),
     active_only: bool = True,
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    return industry_domain.list_projects(limit=limit, active_only=active_only)
+    return _scoped(
+        industry_domain.list_projects,
+        limit=limit,
+        active_only=active_only,
+        staff=staff,
+    )
 
 
 @router.post("/industry-data/projects")
 def industry_create_project(body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
         return industry_domain.create_project(body, staff=staff)
+    except industry_access.IndustryAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -54,7 +69,9 @@ def industry_create_project(body: dict, staff=Depends(require_tab("vkpi", "write
 @router.get("/industry-data/projects/{project_id}")
 def industry_get_project(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        return industry_domain.get_project(project_id)
+        return industry_domain.get_project(project_id, staff=staff)
+    except industry_access.IndustryAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -62,18 +79,25 @@ def industry_get_project(project_id: int, staff=Depends(require_tab("vkpi", "rea
 @router.delete("/industry-data/projects/{project_id}")
 def industry_delete_project(project_id: int, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
-    return industry_domain.delete_project(project_id, staff=staff)
+    return _scoped(industry_domain.delete_project, project_id, staff=staff)
 
 
 @router.get("/industry-data/projects/{project_id}/accounts")
 def industry_accounts(project_id: int, limit: int = Query(default=300, ge=1, le=1000), staff=Depends(require_tab("vkpi", "read"))):
-    return industry_domain.list_accounts(project_id=project_id, limit=limit)
+    return _scoped(
+        industry_domain.list_accounts,
+        project_id=project_id,
+        limit=limit,
+        staff=staff,
+    )
 
 
 @router.post("/industry-data/projects/{project_id}/accounts")
 def industry_add_account(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
         return industry_domain.add_account(project_id, body, staff=staff)
+    except industry_access.IndustryAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -81,13 +105,19 @@ def industry_add_account(project_id: int, body: dict, staff=Depends(require_tab(
 @router.post("/industry-data/projects/{project_id}/accounts/import")
 def industry_import_accounts(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     items = body.get("items") if isinstance(body.get("items"), list) else []
-    return industry_domain.import_accounts(project_id, items, staff=staff)
+    return _scoped(
+        industry_domain.import_accounts,
+        project_id,
+        items,
+        staff=staff,
+    )
 
 
 @router.post("/industry-data/projects/{project_id}/apify/import")
 def industry_import_apify_history(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     items = body.get("items") if isinstance(body.get("items"), list) else []
-    return industry_domain.import_historical_dataset(
+    return _scoped(
+        industry_domain.import_historical_dataset,
         project_id,
         items,
         source_type=str(body.get("source_type") or "apify_json"),
@@ -103,7 +133,9 @@ def industry_get_account(
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
-        return industry_domain.get_account(account_id, post_limit=limit)
+        return industry_domain.get_account(account_id, post_limit=limit, staff=staff)
+    except industry_access.IndustryAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -112,6 +144,8 @@ def industry_get_account(
 def industry_update_account(account_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
         return industry_domain.update_account(account_id, body, staff=staff)
+    except industry_access.IndustryAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -123,15 +157,15 @@ async def industry_refresh_account(
     staff=Depends(require_tab("vkpi", "write")),
 ):
     try:
-        # Validate tenancy/existence using the provider-free read path before
-        # enqueueing.  The live crawler is worker-only.
-        industry_domain.get_account(account_id, post_limit=1)
+        # Persist ids plus a signed owner/project/account binding.  The worker
+        # resolves the live actor again immediately before every provider call.
+        payload = industry_access.build_refresh_payload(account_id, staff=staff)
         queue = getattr(request.app.state, "job_queue", None)
         if queue is None:
             raise RuntimeError("durable job queue unavailable")
         task_id = await queue.enqueue(
             "industry_account_refresh",
-            {"account_id": int(account_id), "staff": dict(staff or {})},
+            payload,
             lock_key=f"industry_account_refresh:{int(account_id)}",
             timeout_seconds=1200,
         )
@@ -142,6 +176,8 @@ async def industry_refresh_account(
             "progressive": True,
             "initial_stage": "queued",
         }
+    except industry_access.IndustryAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
@@ -150,12 +186,12 @@ async def industry_refresh_account(
 
 @router.get("/industry-data/projects/{project_id}/cross-platform")
 def industry_cross_platform(project_id: int, staff=Depends(require_tab("vkpi", "read"))):
-    return industry_domain.cross_platform(project_id)
+    return _scoped(industry_domain.cross_platform, project_id, staff=staff)
 
 
 @router.get("/industry-data/projects/{project_id}/posts")
 def industry_posts(project_id: int, limit: int = Query(default=100, ge=1, le=500), staff=Depends(require_tab("vkpi", "read"))):
-    return industry_domain.posts(project_id, limit=limit)
+    return _scoped(industry_domain.posts, project_id, limit=limit, staff=staff)
 
 
 @router.get("/industry-data/content-brain/status")

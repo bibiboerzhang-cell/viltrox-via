@@ -281,23 +281,73 @@ async def process_official_visual_scan_job(queue: Any, raw_job: dict[str, Any]) 
 
 
 async def process_industry_account_refresh_job(queue: Any, raw_job: dict[str, Any]) -> None:
-    async def operation(payload: dict[str, Any]) -> dict[str, Any]:
-        from app.domains.industry import snapshot_collector
+    from app.domains.industry import access as industry_access
+    from app.domains.industry import snapshot_collector
 
-        account_id = int(payload.get("account_id") or 0)
-        if account_id <= 0:
-            raise ValueError("account_id required")
-        return await asyncio.to_thread(
-            snapshot_collector.collect_account_snapshot,
-            account_id,
-            staff=payload.get("staff") if isinstance(payload.get("staff"), dict) else {},
+    task_id = str(raw_job.get("task_id") or "")
+    job_type = str(raw_job.get("job_type") or "industry_account_refresh")
+    payload = raw_job.get("payload") if isinstance(raw_job.get("payload"), dict) else {}
+    await queue.set_status(task_id, "processing", job_type=job_type)
+    provider_state = {"started": False}
+
+    def execute() -> dict[str, Any]:
+        from app.db.connection import db_connection_sync_reusing_scope
+
+        with db_connection_sync_reusing_scope():
+            actor = industry_access.revalidate_refresh_payload(payload)
+
+            def checkpoint() -> dict[str, Any]:
+                return industry_access.revalidate_refresh_payload(payload)
+
+            def scope_checkpoint() -> dict[str, Any]:
+                return industry_access.revalidate_refresh_payload(
+                    payload,
+                    require_account_identity=False,
+                )
+
+            def provider_started() -> None:
+                provider_state["started"] = True
+
+            account_id = int(payload.get("account_id") or 0)
+            return snapshot_collector.collect_account_snapshot(
+                account_id,
+                staff=None if actor.get("server_owned") is True else actor,
+                authorization_checkpoint=checkpoint,
+                authorization_scope_checkpoint=scope_checkpoint,
+                provider_call_started=provider_started,
+            )
+
+    try:
+        result = await asyncio.to_thread(execute)
+    except industry_access.IndustryAccessError as exc:
+        blocked = industry_access.blocked_result(
+            exc,
+            provider_calls_performed=provider_state["started"],
         )
-
-    await _run(
-        queue,
-        raw_job,
-        operation,
-        summary=lambda r: f"account={int(((r.get('account') or {}).get('id')) or 0)} status={r.get('sync_status', 'unknown')}",
+        await queue.set_status(
+            task_id,
+            "failed",
+            job_type=job_type,
+            stage="authorization_blocked",
+            error_message=exc.code,
+            result_json=json.dumps(blocked, ensure_ascii=False),
+            summary=f"blocked:{exc.code}",
+        )
+        return
+    result_path = await asyncio.to_thread(persist_job_result, task_id, result)
+    await queue.set_status(
+        task_id,
+        "done",
+        job_type=job_type,
+        result_path=result_path,
+        result_json=json.dumps(
+            {"status": result.get("status") or "done", "result_path": result_path},
+            ensure_ascii=False,
+        ),
+        summary=(
+            f"account={int(((result.get('account') or {}).get('id')) or 0)} "
+            f"status={result.get('sync_status', 'unknown')}"
+        )[:300],
     )
 
 

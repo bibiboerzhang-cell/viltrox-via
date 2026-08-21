@@ -619,6 +619,7 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
         from app.domains import analytics
         from app.domains import channels
         from app.domains import industry as industry_domain
+        from app.domains.industry import access as industry_access
 
         channel_rows = channels.list_channels(staff={}, limit=300).get("channels") or []
         channel_enqueue: dict[str, Any] = {}
@@ -638,16 +639,27 @@ async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue
             or []
             if bool(row.get("crawl_enabled"))
         ]
-        industry_jobs = [
-            {
-                "job_type": "industry_account_refresh",
-                "payload": {"account_id": int(row["id"]), "staff": dict(payload.get("staff") or {})},
-                "lock_key": f"industry_account_refresh:{int(row['id'])}",
-                "timeout_seconds": 1200,
-            }
-            for row in industry_rows
-            if row.get("id")
-        ]
+        industry_jobs: list[dict[str, Any]] = []
+        for row in industry_rows:
+            account_id = int(row.get("id") or 0)
+            project_id = int(row.get("project_id") or 0)
+            if account_id <= 0 or project_id <= 0:
+                continue
+            capability = industry_access.issue_server_refresh_capability(
+                account_id=account_id,
+                project_id=project_id,
+            )
+            industry_jobs.append(
+                {
+                    "job_type": "industry_account_refresh",
+                    "payload": industry_access.build_refresh_payload(
+                        account_id,
+                        server_capability=capability,
+                    ),
+                    "lock_key": f"industry_account_refresh:{account_id}",
+                    "timeout_seconds": 1200,
+                }
+            )
         industry_sync = await _queue_provider_jobs(industry_jobs, queue=queue)
 
         products = analytics.list_monitored_products(limit=100).get("products") or []
