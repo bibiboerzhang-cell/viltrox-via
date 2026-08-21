@@ -471,6 +471,56 @@ def test_pool_detail_batches_exact_media_cache_identity_reads(monkeypatch) -> No
     }
 
 
+def test_pool_detail_keeps_legacy_cache_resolution_for_unbatched_platforms(monkeypatch) -> None:
+    from app.domains.kol import pool_detail, video_tracking
+    from app.domains.media import cache
+
+    platforms = ("bilibili", "douyin", "xiaohongshu")
+    rows: list[dict[str, Any]] = []
+    for index, platform in enumerate(platforms, start=1):
+        row = _detail_video_row(
+            evidence_id=800 + index,
+            digest=str(index) * 64,
+            native_id=f"LegacyPlatform{index}",
+        )
+        row.update(
+            {
+                "platform": platform,
+                "content_url": f"https://{platform}.example/video/{index}",
+                "cached_video_url": None,
+                "cached_video_digest": None,
+            }
+        )
+        rows.append(row)
+
+    monkeypatch.setattr(pool_detail, "get_conn", lambda: _EvidenceConn(rows))
+    monkeypatch.setattr(pool_detail, "is_postgres_runtime", lambda: True)
+    monkeypatch.setattr(
+        pool_detail.content_metric_snapshots,
+        "metric_trends_for_evidence",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(video_tracking, "product_links_for_evidence", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cache, "cached_image_url", lambda _url: "")
+    monkeypatch.setattr(pool_detail, "_batch_cached_video_urls", lambda *_args, **_kwargs: {})
+    legacy_calls: list[str] = []
+    monkeypatch.setattr(
+        pool_detail,
+        "_validated_cached_video_url",
+        lambda item, platform: legacy_calls.append(platform)
+        or f"https://public-media.example/{platform}-{item['evidence_id']}.mp4",
+    )
+
+    projected = pool_detail._video_evidence_for_kol(3648, limit=3)
+
+    assert legacy_calls == list(platforms)
+    assert [item["cached_video_url"] for item in projected] == [
+        "https://public-media.example/bilibili-801.mp4",
+        "https://public-media.example/douyin-802.mp4",
+        "https://public-media.example/xiaohongshu-803.mp4",
+    ]
+
+
 def test_pool_detail_keeps_verified_local_range_cache_route(monkeypatch, tmp_path: Path) -> None:
     from app.domains.kol import pool_detail
     from app.domains.media import cache

@@ -29,6 +29,7 @@ _YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _VIDEO_CACHE_ROUTE_RE = re.compile(
     r"^/api/(?:vkpi-media|admin/vkpi/media)/video-cache/([0-9a-fA-F]{64})/?$"
 )
+_BATCH_VIDEO_CACHE_PLATFORMS = frozenset({"instagram", "tiktok"})
 
 
 def _youtube_video_id(url: Any) -> str:
@@ -133,7 +134,7 @@ def _batch_cached_video_urls(
     conn: Any,
     rows: list[Any],
 ) -> dict[int, str] | None:
-    """Resolve non-YouTube cache identities with one DB read.
+    """Resolve Instagram/TikTok cache identities with one DB read.
 
     ``None`` means the batch read was unavailable (rolling schema/test double),
     in which case the caller preserves the legacy per-item resolver.  A dict,
@@ -156,7 +157,7 @@ def _batch_cached_video_urls(
     for item in items:
         evidence_id = int(item.get("evidence_id") or item.get("id") or 0)
         platform = _platform(item.get("platform") or "")
-        if not evidence_id or platform not in {"instagram", "tiktok"}:
+        if not evidence_id or platform not in _BATCH_VIDEO_CACHE_PLATFORMS:
             continue
         values = [
             _content_url_video_id(platform, item.get("content_url")),
@@ -579,6 +580,7 @@ def _video_evidence_for_kol(
                 item["cached_video_url"] = (
                     (prefetched_video_urls or {}).get(evidence_id)
                     if prefetched_video_urls is not None
+                    and platform in _BATCH_VIDEO_CACHE_PLATFORMS
                     else _validated_cached_video_url(item, platform)
                 ) or None
             except Exception:
