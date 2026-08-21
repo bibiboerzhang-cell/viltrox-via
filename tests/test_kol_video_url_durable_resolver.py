@@ -98,14 +98,16 @@ def test_worker_runner_resolves_base_then_leaves_ai_to_gated_final_job(monkeypat
         },
     )
 
+    parent_payload = {
+        "url": "https://www.youtube.com/watch?v=abcdefghijk",
+        "job_id": 9911,
+        "search_session_id": 55,
+        "search_session_item_id": 66,
+        "kol_provider_job_fence": {"action": "video_url_resolve"},
+        "video_url_resolution": resolver.initial_video_url_resolution_progress(),
+    }
     result = resolver.run_video_url_resolve_for_job(
-        {
-            "url": "https://www.youtube.com/watch?v=abcdefghijk",
-            "job_id": 9911,
-            "search_session_id": 55,
-            "search_session_item_id": 66,
-            "video_url_resolution": resolver.initial_video_url_resolution_progress(),
-        },
+        parent_payload,
         progress_callback=lambda value: emitted.append(value),
     )
 
@@ -117,6 +119,7 @@ def test_worker_runner_resolves_base_then_leaves_ai_to_gated_final_job(monkeypat
     assert result["resolution_progress"]["steps"][-1]["status"] == "queued"
     assert execute_calls[0]["parent_job_id"] == 9911
     assert execute_calls[0]["search_session_item_id"] == 66
+    assert execute_calls[0]["provider_parent_payload"] is parent_payload
     assert execute_calls[0]["skip_profile_video_followups"] is True
     assert {value["current_step"] for value in emitted} == {
         "resolve_video",

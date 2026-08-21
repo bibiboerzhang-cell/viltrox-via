@@ -32,12 +32,14 @@ FENCE_RESULT_KEY = "kol_provider_job_fence_result"
 SESSION_ADVANCE = "session_advance"
 SMART_SEARCH_PROFILE_ADVANCE = "smart_search_profile_advance"
 VIDEO_URL_RESOLVE = "video_url_resolve"
+VIDEO_ANALYSIS = "video_analysis"
 CONTENT_FIT_ANALYSIS = "content_fit_analysis"
 SUPPORTED_ACTIONS = frozenset(
     {
         CONTENT_FIT_ANALYSIS,
         SESSION_ADVANCE,
         SMART_SEARCH_PROFILE_ADVANCE,
+        VIDEO_ANALYSIS,
         VIDEO_URL_RESOLVE,
     }
 )
@@ -50,6 +52,7 @@ _MUTABLE_RUNTIME_KEYS = frozenset(
         FENCE_KEY,
         FENCE_RESULT_KEY,
         "job_id",
+        "_llm_execution",
         "search_session_lineage",
         "search_session_item_id",
         "search_session_item_status",
@@ -231,6 +234,31 @@ def _strict_video_identity(payload: dict[str, Any]) -> dict[str, str]:
         "platform": first.platform,
         "video_id": first.video_id,
         "target_id": target_id,
+    }
+
+
+def _video_evidence_binding(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Return the canonical durable identity for one pool-owned video row."""
+
+    from app.domains.kol.video_url_identity import (
+        VideoUrlIdentityError,
+        parse_supported_video_url,
+    )
+
+    evidence_id = _int(evidence.get("evidence_id") or evidence.get("id"))
+    kol_pool_id = _int(evidence.get("kol_pool_id"))
+    if evidence_id <= 0 or kol_pool_id <= 0:
+        raise ProviderJobAccessError("video_analysis_target_invalid", 409)
+    try:
+        identity = parse_supported_video_url(_text(evidence.get("content_url")))
+    except VideoUrlIdentityError as exc:
+        raise ProviderJobAccessError("video_analysis_evidence_identity_invalid", 409) from exc
+    return {
+        "evidence_id": evidence_id,
+        "kol_pool_id": kol_pool_id,
+        "platform": identity.platform,
+        "video_id": identity.video_id,
+        "normalized_url": identity.normalized_url,
     }
 
 
@@ -435,6 +463,8 @@ def build_content_fit_provider_fence(
         target_id=target_id,
         search_session_id=session_id,
     )
+    if server_owned and session_id:
+        raise ProviderJobAccessError("server_owned_session_must_be_root", 403)
     staff_id, user_id = _actor_ids(staff)
     if not server_owned and (staff_id <= 0 or user_id <= 0):
         raise ProviderJobAccessError("provider_job_actor_required", 403)
@@ -455,7 +485,7 @@ def build_content_fit_provider_fence(
     session_binding = _session_binding(
         source_session,
         fallback_owner_user_id=0 if server_owned else user_id,
-        bind_query=False,
+        bind_query=True,
     ) if session_id else {
         "search_session_id": 0,
         "owner_user_id": 0,
@@ -473,6 +503,91 @@ def build_content_fit_provider_fence(
         "session": session_binding,
         "execution_fingerprint": _digest(
             _execution_contract(payload, action=CONTENT_FIT_ANALYSIS)
+        ),
+    }
+    return _signed_claim(claim)
+
+
+def build_video_analysis_provider_fence(
+    *,
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    session: dict[str, Any] | None,
+    staff: dict[str, Any] | None = None,
+    server_owned_capability: ServerOwnedProviderCapability | None = None,
+) -> dict[str, Any]:
+    """Seal a final-v1 child to its live actor, session, KOL and evidence."""
+
+    binding = _video_evidence_binding(evidence)
+    target_id = _text(payload.get("target_id"))
+    session_id = _int(payload.get("search_session_id")) or None
+    if (
+        _text(payload.get("target_type")).lower() != "video"
+        or target_id != str(binding["evidence_id"])
+        or _int(payload.get("kol_pool_id")) != binding["kol_pool_id"]
+    ):
+        raise ProviderJobAccessError("video_analysis_target_invalid", 409)
+    try:
+        payload_identity = _video_evidence_binding(
+            {
+                "evidence_id": binding["evidence_id"],
+                "kol_pool_id": binding["kol_pool_id"],
+                "content_url": payload.get("source_url"),
+            }
+        )
+    except ProviderJobAccessError as exc:
+        raise ProviderJobAccessError("video_analysis_evidence_identity_drifted", 409) from exc
+    if payload_identity != binding:
+        raise ProviderJobAccessError("video_analysis_evidence_identity_drifted", 409)
+
+    server_owned = _valid_server_capability(
+        server_owned_capability,
+        action=VIDEO_ANALYSIS,
+        target_id=target_id,
+        search_session_id=session_id,
+    )
+    if server_owned and session_id:
+        raise ProviderJobAccessError("server_owned_session_must_be_root", 403)
+    staff_id, user_id = _actor_ids(staff)
+    if not server_owned and (staff_id <= 0 or user_id <= 0):
+        raise ProviderJobAccessError("provider_job_actor_required", 403)
+    if not server_owned and not check_tab_permission(staff or {}, "vkpi", "write"):
+        raise ProviderJobAccessError("vkpi_write_permission_required", 403)
+
+    source_session = dict(session or {})
+    if session_id and _int(source_session.get("id")) != session_id:
+        raise ProviderJobAccessError("search_session_target_invalid", 409)
+    if session_id and _int(source_session.get("created_by")) != user_id:
+        raise ProviderJobAccessError("search_session_owner_mismatch", 403)
+    session_binding = (
+        _session_binding(
+            source_session,
+            fallback_owner_user_id=user_id,
+            bind_query=True,
+        )
+        if session_id
+        else {
+            "search_session_id": 0,
+            "owner_user_id": 0 if server_owned else user_id,
+            "bind_query": False,
+        }
+    )
+    claim = {
+        "version": FENCE_VERSION,
+        "mode": "server_owned" if server_owned else "user",
+        "action": VIDEO_ANALYSIS,
+        "target_id": target_id,
+        "actor": {
+            "staff_id": None if server_owned else staff_id,
+            "user_id": None if server_owned else user_id,
+        },
+        "session": session_binding,
+        "target": {
+            **binding,
+            "search_session_item_id": _int(payload.get("search_session_item_id")),
+        },
+        "execution_fingerprint": _digest(
+            _execution_contract(payload, action=VIDEO_ANALYSIS)
         ),
     }
     return _signed_claim(claim)
@@ -525,6 +640,78 @@ def _assert_content_fit_session_target(
     ).fetchone()
     if not row:
         raise ProviderJobAccessError("content_fit_session_target_mismatch", 409)
+
+
+def _assert_video_analysis_target(
+    conn: Any,
+    payload: dict[str, Any],
+    *,
+    session_id: int,
+    target_claim: dict[str, Any],
+) -> None:
+    evidence_id = _int(payload.get("target_id"))
+    kol_pool_id = _int(payload.get("kol_pool_id"))
+    row = conn.execute(
+        """
+        SELECT id AS evidence_id, kol_pool_id, content_url, platform, is_active
+        FROM vkpi_kol_video_evidence
+        WHERE id=?
+        LIMIT 1
+        """,
+        (evidence_id,),
+    ).fetchone()
+    if not row or dict(row).get("is_active") in (False, 0, "0"):
+        raise ProviderJobAccessError("video_analysis_evidence_unavailable", 409)
+    current = _video_evidence_binding(dict(row))
+    expected = {
+        key: target_claim.get(key)
+        for key in ("evidence_id", "kol_pool_id", "platform", "video_id", "normalized_url")
+    }
+    if current != expected or current["kol_pool_id"] != kol_pool_id:
+        raise ProviderJobAccessError("video_analysis_evidence_drifted", 409)
+
+    item_id = _int(payload.get("search_session_item_id"))
+    claimed_item_id = _int(target_claim.get("search_session_item_id"))
+    if claimed_item_id > 0 and item_id != claimed_item_id:
+        raise ProviderJobAccessError("video_analysis_session_item_drifted", 409)
+    if session_id <= 0:
+        if item_id > 0:
+            raise ProviderJobAccessError("video_analysis_session_item_drifted", 409)
+        return
+    if item_id <= 0:
+        raise ProviderJobAccessError("video_analysis_session_item_required", 409)
+    item = conn.execute(
+        """
+        SELECT id, session_id, kol_pool_id, evidence_id, source_url
+        FROM vkpi_kol_search_session_items
+        WHERE id=? AND session_id=?
+        LIMIT 1
+        """,
+        (item_id, int(session_id)),
+    ).fetchone()
+    if not item:
+        raise ProviderJobAccessError("video_analysis_session_item_drifted", 409)
+    item_data = dict(item)
+    item_kol = _int(item_data.get("kol_pool_id"))
+    item_evidence = _int(item_data.get("evidence_id"))
+    if (item_kol and item_kol != kol_pool_id) or (
+        item_evidence and item_evidence != evidence_id
+    ):
+        raise ProviderJobAccessError("video_analysis_session_item_drifted", 409)
+    source_url = _text(item_data.get("source_url"))
+    if not item_kol and not item_evidence:
+        try:
+            item_binding = _video_evidence_binding(
+                {
+                    "evidence_id": evidence_id,
+                    "kol_pool_id": kol_pool_id,
+                    "content_url": source_url,
+                }
+            )
+        except ProviderJobAccessError as exc:
+            raise ProviderJobAccessError("video_analysis_session_item_drifted", 409) from exc
+        if item_binding != current:
+            raise ProviderJobAccessError("video_analysis_session_item_drifted", 409)
 
 
 def _active_actor(conn: Any, *, staff_id: int, user_id: int) -> dict[str, Any]:
@@ -624,8 +811,30 @@ def revalidate_provider_job_fence(
                 payload,
                 session_id=session_id,
             )
+        elif action == VIDEO_ANALYSIS:
+            target_claim = fence.get("target")
+            if not isinstance(target_claim, dict):
+                raise ProviderJobAccessError("provider_job_fence_invalid", 403)
+            _assert_video_analysis_target(
+                conn,
+                payload,
+                session_id=session_id,
+                target_claim=target_claim,
+            )
+    elif action == VIDEO_ANALYSIS:
+        target_claim = fence.get("target")
+        if not isinstance(target_claim, dict):
+            raise ProviderJobAccessError("provider_job_fence_invalid", 403)
+        _assert_video_analysis_target(
+            conn,
+            payload,
+            session_id=0,
+            target_claim=target_claim,
+        )
 
     if mode == "server_owned":
+        if action in {CONTENT_FIT_ANALYSIS, VIDEO_ANALYSIS} and session_id > 0:
+            raise ProviderJobAccessError("server_owned_session_must_be_root", 403)
         if (
             action == CONTENT_FIT_ANALYSIS
             and session is not None
@@ -754,7 +963,9 @@ __all__ = [
     "SMART_SEARCH_PROFILE_ADVANCE",
     "ServerOwnedProviderCapability",
     "VIDEO_URL_RESOLVE",
+    "VIDEO_ANALYSIS",
     "build_content_fit_provider_fence",
+    "build_video_analysis_provider_fence",
     "build_search_session_provider_fence",
     "build_video_url_provider_fence",
     "authorize_provider_job_before_execution",

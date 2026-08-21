@@ -234,6 +234,7 @@ def test_worker_cache_guard_stops_before_ready_transaction():
 
 def test_worker_rejects_forged_analyzed_result_without_downstream(monkeypatch):
     from app.workers import apify_jobs_worker
+    from app.workers import apify_jobs_worker_paid_scope
 
     gemini_worker = sys.modules[apify_jobs_worker._process_gemini_video.__module__]
     raw = {
@@ -259,6 +260,11 @@ def test_worker_rejects_forged_analyzed_result_without_downstream(monkeypatch):
     )
     monkeypatch.setattr(gemini_worker, "_run_gemini_analyzer_with_timeout", lambda *_args, **_kwargs: raw)
     monkeypatch.setattr(gemini_worker, "_gemini_cost", lambda *_args: (0.01, "test", 10, 10))
+    monkeypatch.setattr(
+        apify_jobs_worker_paid_scope,
+        "revalidate_paid_job_scope",
+        lambda *_args, **_kwargs: ("video_analysis", "", {"id": 1}),
+    )
 
     def record_cost(**kwargs):
         ledger_inputs.append(kwargs["raw"].copy())

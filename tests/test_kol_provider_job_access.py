@@ -27,7 +27,7 @@ def _session(*, owner: int | None = USER_ID, query: str = "camera reviewer") -> 
         "created_by": owner,
         # Search-session persistence allowlists operator inputs; the queued
         # execution payload below separately seals the richer filter object.
-        "input_payload": {},
+        "input_payload": {"product_sku": "AF-35-PRO"},
         "archived_at": None,
     }
 
@@ -40,7 +40,7 @@ def _session_row(*, owner: int | None = USER_ID, query: str = "camera reviewer")
         "source": "test",
         "status": "running",
         "created_by": owner,
-        "input_payload_json": {"filters": {"languages": ["en"]}},
+        "input_payload_json": {"product_sku": "AF-35-PRO"},
         "result_summary_json": {},
         "archived_at": None,
         "archived_by": None,
@@ -78,10 +78,24 @@ class _AccessConn:
         actor: dict[str, Any] | None = None,
         session: dict[str, Any] | None = None,
         session_item: dict[str, Any] | None = None,
+        evidence: dict[str, Any] | None = None,
     ) -> None:
         self.actor = actor if actor is not None else _actor()
         self.session = session if session is not None else _session_row()
-        self.session_item = session_item if session_item is not None else {"id": 7}
+        self.session_item = session_item if session_item is not None else {
+            "id": 7,
+            "session_id": SESSION_ID,
+            "kol_pool_id": 88,
+            "evidence_id": 701,
+            "source_url": "https://www.youtube.com/watch?v=abcdefghijk",
+        }
+        self.evidence = evidence if evidence is not None else {
+            "evidence_id": 701,
+            "kol_pool_id": 88,
+            "content_url": "https://www.youtube.com/watch?v=abcdefghijk",
+            "platform": "youtube",
+            "is_active": True,
+        }
 
     def execute(self, sql: str, _params: tuple[Any, ...] = ()) -> _Rows:
         compact = " ".join(str(sql).split())
@@ -89,7 +103,15 @@ class _AccessConn:
             return _Rows(self.actor)
         if "FROM vkpi_kol_search_sessions" in compact:
             return _Rows(self.session)
+        if "FROM vkpi_kol_video_evidence" in compact:
+            return _Rows(self.evidence)
         if "FROM vkpi_kol_search_session_items" in compact:
+            if "session_id=? AND kol_pool_id=?" in compact and self.session_item:
+                params = tuple(_params)
+                if int(self.session_item.get("session_id") or 0) != int(params[0]):
+                    return _Rows(None)
+                if int(self.session_item.get("kol_pool_id") or 0) != int(params[1]):
+                    return _Rows(None)
             return _Rows(self.session_item)
         raise AssertionError(compact)
 
@@ -209,6 +231,33 @@ def _content_fit_payload() -> dict[str, Any]:
     return payload
 
 
+def _video_analysis_payload() -> dict[str, Any]:
+    evidence = {
+        "evidence_id": 701,
+        "kol_pool_id": 88,
+        "content_url": "https://www.youtube.com/watch?v=abcdefghijk",
+    }
+    payload: dict[str, Any] = {
+        "target_type": "video",
+        "target_id": "701",
+        "kol_pool_id": 88,
+        "source_url": evidence["content_url"],
+        "derive_method": "video_analysis_final_v1",
+        "search_session_id": SESSION_ID,
+        "search_session_item_id": 7,
+        "product_sku": "AF-35-PRO",
+        "staff_id": STAFF_ID,
+        "triggered_by_user_id": USER_ID,
+    }
+    payload[access.FENCE_KEY] = access.build_video_analysis_provider_fence(
+        payload=payload,
+        evidence=evidence,
+        session=_session(),
+        staff=_staff(),
+    )
+    return payload
+
+
 def test_content_fit_user_child_revalidates_actor_and_session_item_target() -> None:
     actor = access.revalidate_provider_job_fence(
         _AccessConn(),
@@ -307,7 +356,7 @@ def test_content_fit_server_capability_rejects_user_session_and_http_dict() -> N
             session=_session(),
             server_owned_capability=capability,
         )
-    assert user_session.value.code == "server_owned_session_has_user_owner"
+    assert user_session.value.code == "server_owned_session_must_be_root"
 
     with pytest.raises(access.ProviderJobAccessError) as forged:
         access.build_content_fit_provider_fence(
@@ -318,23 +367,25 @@ def test_content_fit_server_capability_rejects_user_session_and_http_dict() -> N
     assert forged.value.code == "provider_job_actor_required"
 
 
-def test_content_fit_true_system_session_requires_explicit_capability() -> None:
+def test_content_fit_true_system_root_requires_explicit_capability() -> None:
     payload = _content_fit_payload()
     payload.pop(access.FENCE_KEY)
     payload.pop("staff_id")
     payload.pop("triggered_by_user_id")
+    payload["search_session_id"] = 0
+    payload.pop("search_session_item_id")
     capability = access.issue_server_owned_provider_capability(
         action=access.CONTENT_FIT_ANALYSIS,
         target_id="88",
-        search_session_id=SESSION_ID,
+        search_session_id=None,
     )
     payload[access.FENCE_KEY] = access.build_content_fit_provider_fence(
         payload=payload,
-        session=_session(owner=None),
+        session=None,
         server_owned_capability=capability,
     )
     actor = access.revalidate_provider_job_fence(
-        _AccessConn(session=_session_row(owner=None)),
+        _AccessConn(),
         payload,
         expected_action=access.CONTENT_FIT_ANALYSIS,
     )
@@ -347,16 +398,17 @@ def test_content_fit_followup_rejects_swapped_session_kol(
     from app.db import connection
     from app.domains.kol import content_fit_job_access
 
-    source = _smart_payload()
-    source["search_session_item_id"] = 7
+    source = _video_analysis_payload()
     conn = _AccessConn()
-    conn.session_item = None
     monkeypatch.setattr(connection, "get_conn", lambda: conn)
     monkeypatch.setattr(connection, "db_connection_sync_scope", lambda: nullcontext())
 
     with pytest.raises(access.ProviderJobAccessError) as raised:
-        content_fit_job_access.authorize_content_fit_followup(
-            {"target_type": "kol", "target_id": "99", "kol_pool_id": 99},
+            content_fit_job_access.authorize_content_fit_followup(
+                {
+                    "target_type": "kol", "target_id": "99", "kol_pool_id": 99,
+                    "product_sku": "AF-35-PRO",
+                },
             source_payload=source,
         )
     assert raised.value.code == "content_fit_parent_target_mismatch"
@@ -390,21 +442,23 @@ def test_content_fit_followup_derives_user_fence_from_verified_session_item(
     from app.db import connection
     from app.domains.kol import content_fit_job_access, search_sessions
 
-    source = _smart_payload()
-    source["search_session_item_id"] = 7
-    conn = _AccessConn(session_item={"id": 7})
+    source = _video_analysis_payload()
+    conn = _AccessConn()
     monkeypatch.setattr(connection, "get_conn", lambda: conn)
     monkeypatch.setattr(connection, "db_connection_sync_scope", lambda: nullcontext())
     monkeypatch.setattr(search_sessions, "get_session", lambda _sid: _session())
 
     child = content_fit_job_access.authorize_content_fit_followup(
-        {"target_type": "kol", "target_id": "88", "kol_pool_id": 88},
+        {
+            "target_type": "kol", "target_id": "88", "kol_pool_id": 88,
+            "product_sku": "AF-35-PRO",
+        },
         source_payload=source,
     )
     assert child["search_session_id"] == SESSION_ID
     assert child["search_session_item_id"] == 7
     actor = access.revalidate_provider_job_fence(
-        _AccessConn(session_item={"id": 7}),
+        _AccessConn(),
         child,
         expected_action=access.CONTENT_FIT_ANALYSIS,
     )
@@ -436,14 +490,8 @@ def test_content_fit_followup_requires_allowed_parent_and_sessionless_target(
         )
     assert unsupported.value.code == "content_fit_parent_action_unsupported"
 
-    sessionless = _video_payload()
-    sessionless.pop(access.FENCE_KEY)
-    sessionless["search_session_id"] = 0
+    sessionless = _video_analysis_payload()
     sessionless["kol_pool_id"] = 77
-    sessionless[access.FENCE_KEY] = access.build_video_url_provider_fence(
-        payload=sessionless,
-        staff=_staff(),
-    )
     conn = _AccessConn()
     monkeypatch.setattr(connection, "get_conn", lambda: conn)
     monkeypatch.setattr(connection, "db_connection_sync_scope", lambda: nullcontext())
@@ -452,7 +500,7 @@ def test_content_fit_followup_requires_allowed_parent_and_sessionless_target(
             {"target_type": "kol", "target_id": "88", "kol_pool_id": 88},
             source_payload=sessionless,
         )
-    assert swapped.value.code == "content_fit_parent_target_mismatch"
+    assert swapped.value.code == "provider_job_payload_drifted"
 
 
 def test_normal_search_fence_revalidates_active_actor_owner_and_query() -> None:

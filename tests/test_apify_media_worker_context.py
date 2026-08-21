@@ -190,6 +190,7 @@ def test_invalid_cached_bytes_fall_back_to_existing_provider_resolver(monkeypatc
 
 def test_gemini_worker_consumes_cache_path_without_redownload_or_reupload(monkeypatch, tmp_path: Path):
     from app.workers import apify_jobs_worker_gemini as gemini
+    from app.workers import apify_jobs_worker_paid_scope
 
     cached_path = tmp_path / "cached.mp4"
     cached_path.write_bytes(b"validated-cache-input")
@@ -252,6 +253,11 @@ def test_gemini_worker_consumes_cache_path_without_redownload_or_reupload(monkey
         lambda *_args, **_kwargs: (0.0, "test", 0, 0),
     )
     monkeypatch.setattr(gemini, "_record_gemini_cost", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        apify_jobs_worker_paid_scope,
+        "revalidate_paid_job_scope",
+        lambda *_args, **_kwargs: ("video_analysis", "", {"id": 1}),
+    )
 
     with pytest.raises(RuntimeError, match="expected_stop"):
         gemini._process_gemini_video(

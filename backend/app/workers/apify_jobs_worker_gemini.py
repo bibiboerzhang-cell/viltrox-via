@@ -787,6 +787,16 @@ def _process_gemini_video(
             "model_binding_mismatch:"
             f"expected=google/{WORKER_GEMINI_MODEL}:reported={reported_model or 'missing'}"
         )
+    if derive_method == "video_analysis_final_v1" and payload.get("local_evaluation") is not True:
+        from app.workers.apify_jobs_worker_paid_scope import revalidate_paid_job_scope
+        paid_action, block_reason, _actor = revalidate_paid_job_scope(
+            payload, "video", connection_scope=db_connection_sync_scope
+        )
+        if block_reason:
+            _block_job(conn, int(job["id"]), block_reason, {
+                "provider_calls_performed": None, "paid_action": paid_action,
+            })
+            return
     raw["llm_execution"] = {
         **authorization,
         "binding": f"google/{WORKER_GEMINI_MODEL}",

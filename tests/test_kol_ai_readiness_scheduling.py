@@ -314,7 +314,7 @@ def test_text_search_skips_content_fit_job_when_ai_is_disabled(monkeypatch) -> N
 
     session = {
         "id": 1089,
-        "created_by": None,
+        "created_by": 34,
         "items": [
             {
                 "id": 2201,
@@ -356,7 +356,10 @@ def test_text_search_skips_content_fit_job_when_ai_is_disabled(monkeypatch) -> N
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("content-fit job must not be inserted")),
     )
 
-    result = content_fit_enqueue.enqueue_content_fit_for_session(session_id=1089)
+    result = content_fit_enqueue.enqueue_content_fit_for_session(
+        session_id=1089,
+        provider_actor={"id": 12, "staff_id": 12, "user_id": 34},
+    )
 
     assert result["status"] == "ai_disabled"
     assert result["state"] == "not_requested"
@@ -474,3 +477,22 @@ def test_user_search_content_fit_never_self_asserts_server_owned(monkeypatch) ->
     with pytest.raises(ProviderJobAccessError) as raised:
         content_fit_enqueue.enqueue_content_fit_for_session(session_id=1089)
     assert raised.value.code == "content_fit_parent_actor_required"
+
+
+def test_null_owner_session_cannot_self_mint_server_content_fit(monkeypatch) -> None:
+    from app.domains.kol import content_fit_enqueue
+    from app.domains.kol.provider_job_access import ProviderJobAccessError
+
+    monkeypatch.setattr(
+        content_fit_enqueue.search_sessions,
+        "get_session",
+        lambda _sid: {"id": 1089, "created_by": None, "items": []},
+    )
+    monkeypatch.setattr(
+        content_fit_enqueue,
+        "get_conn",
+        lambda: (_ for _ in ()).throw(AssertionError("must fail before database")),
+    )
+    with pytest.raises(ProviderJobAccessError) as raised:
+        content_fit_enqueue.enqueue_content_fit_for_session(session_id=1089)
+    assert raised.value.code == "content_fit_session_owner_invalid"

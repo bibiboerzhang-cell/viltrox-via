@@ -190,25 +190,18 @@ def _ready_cache(
 def _active_job(
     conn: Any,
     *,
-    evidence_id: int,
-    local_evaluation: bool = False,
+    idempotency_key: str,
 ) -> dict[str, Any] | None:
-    execution_class = (
-        LOCAL_EVALUATION_EXECUTION_CLASS if local_evaluation else "production"
-    )
     row = conn.execute(
         """
         SELECT id, job_type, status, created_at, updated_at
         FROM apify_jobs
-        WHERE payload->>'target_type'='video'
-          AND payload->>'target_id'=?
-          AND payload->>'derive_method'=?
-          AND COALESCE(payload->>'execution_class', 'production')=?
+        WHERE idempotency_key=?
           AND status IN ('queued', 'running', 'retrying', 'processing')
         ORDER BY updated_at DESC, id DESC
         LIMIT 1
         """,
-        (str(evidence_id), FINAL_V1_DERIVE_METHOD, execution_class),
+        (str(idempotency_key),),
     ).fetchone()
     return dict(row) if row else None
 
@@ -227,6 +220,7 @@ def _enqueue_final_v1_video_analysis(
     parent_job_id: int | None = None,
     local_evaluation: bool = False,
     enforce_target_write: bool = False,
+    provider_parent_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Enqueue one final_v1 job after ownership and duplicate checks.
 
@@ -389,37 +383,6 @@ def _enqueue_final_v1_video_analysis(
             "writes": [],
         }
 
-    existing_job = _active_job(
-        conn,
-        evidence_id=evidence_id,
-        local_evaluation=bool(local_evaluation),
-    )
-    if existing_job:
-        linked_payload = attach_search_session_lineage_to_job(
-            conn,
-            existing_job.get("id"),
-            lineage_payload,
-        )
-        if linked_payload and commit:
-            conn.commit()
-        return {
-            "status": "already_queued",
-            "kol_pool_id": kol_pool_id,
-            "evidence_id": evidence_id,
-            "derive_method": FINAL_V1_DERIVE_METHOD,
-            "job": redact_local_evaluation_capability(existing_job),
-            "provider_calls": False,
-            "write_db": bool(linked_payload),
-            "lineage_linked": bool(linked_payload),
-            "ai_analysis": _ai_analysis_state(
-                "queued",
-                reason="already_queued",
-                gate_reason=str(budget.get("reason") or "provider_calls_allowed"),
-                model_readiness_status=str(budget.get("model_readiness_status") or "production_ready"),
-                provider_calls_allowed=True,
-            ),
-        }
-
     before_fit = _fit_snapshot(conn, kol_pool_id)
     triggered_by_user_id = _triggered_user_id(staff)
     payload = with_search_session_lineage(
@@ -457,6 +420,19 @@ def _enqueue_final_v1_video_analysis(
         snapshots = target_fence.get("evidence")
         if isinstance(snapshots, list) and len(snapshots) == 1:
             payload["source_url"] = snapshots[0].get("normalized_url")
+    elif not local_evaluation and (
+        isinstance(provider_parent_payload, dict)
+        or (search_session_id and isinstance(staff, dict))
+    ):
+        from app.domains.kol.video_analysis_job_access import authorize_video_analysis_job
+
+        payload = authorize_video_analysis_job(
+            conn,
+            payload,
+            evidence=evidence,
+            source_payload=provider_parent_payload,
+            staff=staff,
+        )
     if local_evaluation:
         payload = {
             **payload,
@@ -464,16 +440,45 @@ def _enqueue_final_v1_video_analysis(
             "execution_class": LOCAL_EVALUATION_EXECUTION_CLASS,
             "model_binding": LOCAL_EVALUATION_BINDING,
         }
+    from app.domains.kol.video_analysis_job_access import video_analysis_authorization_scope
+
+    idempotency_key = active_job_idempotency_key(
+        "video-final-v1-local-evaluation" if local_evaluation else "video-final-v1",
+        evidence_id,
+        video_analysis_authorization_scope(payload),
+    )
+    existing_job = _active_job(conn, idempotency_key=idempotency_key)
+    if existing_job:
+        linked_payload = attach_search_session_lineage_to_job(
+            conn,
+            existing_job.get("id"),
+            lineage_payload,
+        )
+        if linked_payload and commit:
+            conn.commit()
+        return {
+            "status": "already_queued",
+            "kol_pool_id": kol_pool_id,
+            "evidence_id": evidence_id,
+            "derive_method": FINAL_V1_DERIVE_METHOD,
+            "job": redact_local_evaluation_capability(existing_job),
+            "provider_calls": False,
+            "write_db": bool(linked_payload),
+            "lineage_linked": bool(linked_payload),
+            "ai_analysis": _ai_analysis_state(
+                "queued",
+                reason="already_queued",
+                gate_reason=str(budget.get("reason") or "provider_calls_allowed"),
+                model_readiness_status=str(budget.get("model_readiness_status") or "production_ready"),
+                provider_calls_allowed=True,
+            ),
+        }
+
     row, inserted = enqueue_active_apify_job(
         conn,
         job_type="video",
         payload=payload,
-        idempotency_key=active_job_idempotency_key(
-            "video-final-v1-local-evaluation"
-            if local_evaluation
-            else "video-final-v1",
-            evidence_id,
-        ),
+        idempotency_key=idempotency_key,
     )
     if local_evaluation and inserted:
         # Sign only after PostgreSQL assigned the durable job id.  The update is

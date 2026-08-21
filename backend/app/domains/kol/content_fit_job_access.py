@@ -63,9 +63,7 @@ def authorize_content_fit_followup(
         CONTENT_FIT_ANALYSIS,
         FENCE_KEY as PROVIDER_FENCE_KEY,
         ProviderJobAccessError,
-        SESSION_ADVANCE,
-        SMART_SEARCH_PROFILE_ADVANCE,
-        VIDEO_URL_RESOLVE,
+        VIDEO_ANALYSIS,
         build_content_fit_provider_fence,
         issue_server_owned_provider_capability,
         revalidate_provider_job_fence,
@@ -75,11 +73,7 @@ def authorize_content_fit_followup(
     if not isinstance(source_provider_fence, dict):
         raise ProviderJobAccessError("content_fit_parent_authorization_required", 403)
     source_action = str(source_provider_fence.get("action") or "").strip().lower()
-    if source_action not in {
-        SESSION_ADVANCE,
-        SMART_SEARCH_PROFILE_ADVANCE,
-        VIDEO_URL_RESOLVE,
-    }:
+    if source_action != VIDEO_ANALYSIS:
         raise ProviderJobAccessError("content_fit_parent_action_unsupported", 403)
     from app.db.connection import db_connection_sync_scope, get_conn
 
@@ -91,6 +85,12 @@ def authorize_content_fit_followup(
             source,
             expected_action=source_action,
         )
+        from app.domains.kol.content_fit_analysis import normalize_product_sku
+
+        if normalize_product_sku(source.get("product_sku")) != normalize_product_sku(
+            child.get("product_sku")
+        ):
+            raise ProviderJobAccessError("content_fit_parent_product_drifted", 409)
         if session_id > 0:
             item_id = int(source.get("search_session_item_id") or 0)
             params: list[int] = [session_id, kol_pool_id]

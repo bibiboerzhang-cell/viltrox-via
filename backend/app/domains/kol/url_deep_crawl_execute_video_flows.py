@@ -163,6 +163,11 @@ def _execute_existing_creator_video_flow(
                     search_session_item_id=body.get("search_session_item_id"),
                     parent_job_id=body.get("parent_job_id"),
                     local_evaluation=body.get("local_evaluation") is True,
+                    provider_parent_payload=(
+                        body.get("provider_parent_payload")
+                        if isinstance(body.get("provider_parent_payload"), dict)
+                        else None
+                    ),
                     staff=(
                         body.get("paid_action_staff")
                         if isinstance(body.get("paid_action_staff"), dict)
@@ -431,6 +436,11 @@ def _execute_new_creator_video_flow(
                             search_session_item_id=body.get("search_session_item_id"),
                             parent_job_id=body.get("parent_job_id"),
                             local_evaluation=body.get("local_evaluation") is True,
+                            provider_parent_payload=(
+                                body.get("provider_parent_payload")
+                                if isinstance(body.get("provider_parent_payload"), dict)
+                                else None
+                            ),
                             staff=(
                                 body.get("paid_action_staff")
                                 if isinstance(body.get("paid_action_staff"), dict)

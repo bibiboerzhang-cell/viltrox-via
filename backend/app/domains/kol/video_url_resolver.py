@@ -430,6 +430,10 @@ def run_video_url_resolve_for_job(
         "search_session_item_id": _int_or_none(payload.get("search_session_item_id")),
         "parent_job_id": _int_or_none(payload.get("job_id") or payload.get("parent_job_id")),
         "local_evaluation": payload.get("local_evaluation") is True,
+        # In-memory only: the final-v1 child derives a new signed fence from
+        # this already revalidated resolver parent.  The full parent payload is
+        # never copied into the child queue row.
+        "provider_parent_payload": payload,
         # One pasted video should resolve that video only.  New-creator profile
         # basics are required, but representative/history/dossier fan-out is a
         # separate account workflow and must not multiply jobs or spend here.

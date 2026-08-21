@@ -35,7 +35,6 @@ from app.domains.kol.provider_job_access import (
     CONTENT_FIT_ANALYSIS as CONTENT_FIT_PROVIDER_ACTION,
     FENCE_KEY as PROVIDER_FENCE_KEY,
     build_content_fit_provider_fence,
-    issue_server_owned_provider_capability,
 )
 from app.platform import llm_gateway
 
@@ -296,8 +295,7 @@ def enqueue_content_fit_for_session(
     safe_top_n = max(1, min(_int(top_n, DEFAULT_TOP_N), MAX_TOP_N))
     session = search_sessions.get_session(sid)
     session_owner_user_id = _int(session.get("created_by"))
-    is_system_session = "created_by" in session and session.get("created_by") is None
-    if session_owner_user_id <= 0 and not is_system_session:
+    if session_owner_user_id <= 0:
         from app.domains.kol.provider_job_access import ProviderJobAccessError
 
         raise ProviderJobAccessError("content_fit_session_owner_invalid", 403)
@@ -388,18 +386,10 @@ def enqueue_content_fit_for_session(
             search_session_item_id=_int(cand.get("id")) or None,
             role="content_fit",
         )
-        capability = None
-        if is_system_session:
-            capability = issue_server_owned_provider_capability(
-                action=CONTENT_FIT_PROVIDER_ACTION,
-                target_id=str(kid),
-                search_session_id=sid,
-            )
         payload[PROVIDER_FENCE_KEY] = build_content_fit_provider_fence(
             payload=payload,
             session=session,
-            staff=provider_actor if session_owner_user_id > 0 else None,
-            server_owned_capability=capability,
+            staff=provider_actor,
         )
         try:
             row, inserted = enqueue_active_apify_job(
