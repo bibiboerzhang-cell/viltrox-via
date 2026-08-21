@@ -1,0 +1,141 @@
+{
+  "schema_version": "gemini_final_v1_quality_predictions_v1",
+  "dataset_id": "gemini-final-v1-synthetic-smoke-v1",
+  "execution": {
+    "mode": "synthetic_fixture",
+    "model_invoked": false,
+    "provider_calls": false
+  },
+  "predictions": [
+    {
+      "case_id": "synthetic-present-001",
+      "media_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "model": "synthetic-fixture-no-provider",
+      "prompt_version": "video-analysis-final-v1-gold-v1",
+      "output": {
+        "schema_version": "video_analysis_final_v1",
+        "layer1_visual_content": {
+          "content_summary": "A structured synthetic lens review.",
+          "scene_timeline": [],
+          "product_presence": [],
+          "brand_exposure": [],
+          "competitor_presence": [],
+          "production_observations": {},
+          "evidence": {"timestamps": [], "subtitle_used": true},
+          "brand_product_evidence": {
+            "viltrox_status": "present",
+            "inspection_complete": true,
+            "checked_modalities": ["visual", "subtitle", "audio"],
+            "viltrox_evidence": [
+              {
+                "modality": "visual",
+                "timestamp": "00:08",
+                "observation": "Viltrox logo is legible on the lens barrel."
+              },
+              {
+                "modality": "audio",
+                "timestamp": "00:44",
+                "observation": "Speaker names Viltrox while discussing autofocus."
+              }
+            ],
+            "viltrox_products": [
+              {
+                "name": "Viltrox AF 35mm F1.2 LAB FE",
+                "sku": "AF 35mm F1.2 LAB FE",
+                "confidence": 0.98,
+                "evidence": [
+                  {
+                    "modality": "visual",
+                    "timestamp": "00:18",
+                    "observation": "35mm F1.2 LAB marking is legible."
+                  }
+                ]
+              }
+            ],
+            "competitors": [
+              {
+                "brand": "Sigma",
+                "products": [],
+                "confidence": 0.91,
+                "evidence": [
+                  {
+                    "modality": "subtitle",
+                    "timestamp": "00:32",
+                    "observation": "Subtitle explicitly compares Sigma."
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "layer2_viewer_emotion": {},
+        "layer3_three_values": {},
+        "layer4_attribution": {},
+        "layer5_recommendations": {},
+        "layer6_flags_and_scores": {}
+      }
+    },
+    {
+      "case_id": "synthetic-absent-001",
+      "media_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "model": "synthetic-fixture-no-provider",
+      "prompt_version": "video-analysis-final-v1-gold-v1",
+      "output": {
+        "schema_version": "video_analysis_final_v1",
+        "layer1_visual_content": {
+          "content_summary": "A structured synthetic camera rig tour.",
+          "scene_timeline": [],
+          "product_presence": [],
+          "brand_exposure": [],
+          "competitor_presence": [],
+          "production_observations": {},
+          "evidence": {"timestamps": [], "subtitle_used": false},
+          "brand_product_evidence": {
+            "viltrox_status": "absent",
+            "inspection_complete": true,
+            "checked_modalities": ["visual", "audio"],
+            "viltrox_evidence": [],
+            "viltrox_products": [],
+            "competitors": []
+          }
+        },
+        "layer2_viewer_emotion": {},
+        "layer3_three_values": {},
+        "layer4_attribution": {},
+        "layer5_recommendations": {},
+        "layer6_flags_and_scores": {}
+      }
+    },
+    {
+      "case_id": "synthetic-unknown-001",
+      "media_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model": "synthetic-fixture-no-provider",
+      "prompt_version": "video-analysis-final-v1-gold-v1",
+      "output": {
+        "schema_version": "video_analysis_final_v1",
+        "layer1_visual_content": {
+          "content_summary": "Only a partial visual sample was available.",
+          "scene_timeline": [],
+          "product_presence": [],
+          "brand_exposure": [],
+          "competitor_presence": [],
+          "production_observations": {},
+          "evidence": {"timestamps": [], "subtitle_used": false},
+          "brand_product_evidence": {
+            "viltrox_status": "unknown",
+            "inspection_complete": false,
+            "checked_modalities": ["visual"],
+            "viltrox_evidence": [],
+            "viltrox_products": [],
+            "competitors": []
+          }
+        },
+        "layer2_viewer_emotion": {},
+        "layer3_three_values": {},
+        "layer4_attribution": {},
+        "layer5_recommendations": {},
+        "layer6_flags_and_scores": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,116 @@
+{
+  "schema_version": "gemini_final_v1_quality_gold_v1",
+  "dataset_id": "gemini-final-v1-synthetic-smoke-v1",
+  "dataset_kind": "synthetic",
+  "claim_status": "descriptive_only",
+  "timestamp_tolerance_seconds": 2.0,
+  "metric_thresholds": {
+    "brand_accuracy_min": 1.0,
+    "unknown_as_absent_max": 0,
+    "non_title_evidence_recall_min": 1.0,
+    "product_precision_min": 1.0,
+    "product_recall_min": 1.0,
+    "competitor_f1_min": 1.0,
+    "evidence_modality_support_min": 1.0,
+    "evidence_timestamp_support_min": 1.0,
+    "unsupported_absent_max": 0,
+    "schema_coverage_min": 1.0
+  },
+  "cases": [
+    {
+      "case_id": "synthetic-present-001",
+      "media_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "model": "synthetic-fixture-no-provider",
+      "prompt_version": "video-analysis-final-v1-gold-v1",
+      "title_context_only": "Night street portrait test",
+      "expected": {
+        "brand_status": "present",
+        "inspection_complete": true,
+        "checked_modalities": ["visual", "subtitle", "audio"],
+        "products": [
+          {
+            "key": "viltrox-af-35mm-f1-2-lab-fe",
+            "name": "Viltrox AF 35mm F1.2 LAB FE",
+            "sku": "AF 35mm F1.2 LAB FE",
+            "aliases": ["Viltrox 35 LAB", "AF 35mm F1.2 LAB FE"]
+          }
+        ],
+        "competitors": [
+          {
+            "key": "sigma",
+            "brand": "Sigma",
+            "aliases": ["Sigma Corporation"]
+          }
+        ],
+        "evidence": [
+          {
+            "claim_id": "present-brand-visual",
+            "entity_type": "brand",
+            "entity_key": "viltrox",
+            "modality": "visual",
+            "timestamp_seconds": 8,
+            "in_title": false,
+            "observation": "Viltrox logo is legible on the lens barrel."
+          },
+          {
+            "claim_id": "present-product-visual",
+            "entity_type": "product",
+            "entity_key": "viltrox-af-35mm-f1-2-lab-fe",
+            "modality": "visual",
+            "timestamp_seconds": 18,
+            "in_title": false,
+            "observation": "35mm F1.2 LAB marking is legible in a close-up."
+          },
+          {
+            "claim_id": "present-competitor-subtitle",
+            "entity_type": "competitor",
+            "entity_key": "sigma",
+            "modality": "subtitle",
+            "timestamp_seconds": 32,
+            "in_title": false,
+            "observation": "Subtitle explicitly compares the result with Sigma."
+          },
+          {
+            "claim_id": "present-brand-audio",
+            "entity_type": "brand",
+            "entity_key": "viltrox",
+            "modality": "audio",
+            "timestamp_seconds": 44,
+            "in_title": false,
+            "observation": "Speaker says Viltrox while discussing autofocus."
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "synthetic-absent-001",
+      "media_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "model": "synthetic-fixture-no-provider",
+      "prompt_version": "video-analysis-final-v1-gold-v1",
+      "title_context_only": "Viltrox lens? Full camera rig tour",
+      "expected": {
+        "brand_status": "absent",
+        "inspection_complete": true,
+        "checked_modalities": ["visual", "audio"],
+        "products": [],
+        "competitors": [],
+        "evidence": []
+      }
+    },
+    {
+      "case_id": "synthetic-unknown-001",
+      "media_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "model": "synthetic-fixture-no-provider",
+      "prompt_version": "video-analysis-final-v1-gold-v1",
+      "title_context_only": "Viltrox 75mm review",
+      "expected": {
+        "brand_status": "unknown",
+        "inspection_complete": false,
+        "checked_modalities": ["visual"],
+        "products": [],
+        "competitors": [],
+        "evidence": []
+      }
+    }
+  ]
+}
