@@ -148,7 +148,7 @@ export function ContentWallModule({
     <div>
       <div className="mb-2 rounded-[9px] border border-line bg-card px-2.5 py-2 text-[11px] text-muted">
         已采集 {summary.classified.length}｜品牌相关 {summary.vRelatedCount}｜未判定 {summary.undeterminedCount}｜播放已实测 {summary.measuredCount}/{summary.classified.length}
-        <span className="ml-2">当前为系统已采集窗口，不代表平台频道全量。</span>
+        <span className="ml-2">当前为系统已采集窗口，不代表平台频道全量；播放趋势请在 KOL 详情查看。</span>
       </div>
       <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
         <select

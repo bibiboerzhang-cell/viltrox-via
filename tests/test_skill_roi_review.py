@@ -23,6 +23,7 @@ from app.domains.marketing_brain.skills import roi_review  # noqa: E402
 # OUTPUT_SCHEMA 顶层键集合 + roi 子键集合,做形状自检。
 _TOP_KEYS = {"scope", "subject_id", "roi", "outcome_labels", "next_action", "confidence", "missing_data", "status"}
 _ROI_KEYS = {"spend_cents", "attributed_gmv_cents", "roi_ratio"}
+_STAFF = {"id": 10, "role": "manager"}
 
 
 def _assert_shape(out: dict) -> None:
@@ -32,7 +33,7 @@ def _assert_shape(out: dict) -> None:
     assert isinstance(out["outcome_labels"], list) and out["outcome_labels"]
     assert isinstance(out["confidence"], (int, float)) and 0.0 <= out["confidence"] <= 1.0
     assert isinstance(out["missing_data"], bool)
-    assert out["status"] in {"ready", "missing_data", "not_found", "invalid_input"}
+    assert out["status"] in {"ready", "missing_data", "not_found", "invalid_input", "unavailable"}
 
 
 def _capture_record(monkeypatch):
@@ -68,11 +69,11 @@ def test_project_with_revenue_ready(monkeypatch):
 
     monkeypatch.setattr(
         aggregation, "aggregate_project_metrics",
-        lambda pid, window_days=30: {
+        lambda pid, window_days=30, staff=None: {
             "status": "ready", "cost_cents": 10000, "revenue_cents": 30000, "roi": 2.0, "project_id": pid,
         },
     )
-    out = roi_review.run({"project_id": 42, "window": 14})
+    out = roi_review.run({"project_id": 42, "window": 14}, staff=_STAFF)
     _assert_shape(out)
     assert out["scope"] == "project"
     assert out["subject_id"] == 42
@@ -97,11 +98,11 @@ def test_project_missing_data_awaiting_m5(monkeypatch):
 
     monkeypatch.setattr(
         aggregation, "aggregate_project_metrics",
-        lambda pid, window_days=30: {
+        lambda pid, window_days=30, staff=None: {
             "status": "awaiting_m5", "cost_cents": 5000, "revenue_cents": None, "roi": None, "project_id": pid,
         },
     )
-    out = roi_review.run({"project_id": 7})
+    out = roi_review.run({"project_id": 7}, staff=_STAFF)
     _assert_shape(out)
     assert out["status"] == "missing_data"
     assert out["missing_data"] is True
@@ -118,10 +119,10 @@ def test_kol_path_with_weight(monkeypatch):
 
     monkeypatch.setattr(
         roi_aggregate, "get_kol_roi_summary",
-        lambda kid: {"status": "ready", "cost_cents": 2000, "revenue_cents": 8000, "roi": 3.0, "kol_pool_id": kid},
+        lambda kid, staff=None: {"status": "ready", "cost_cents": 2000, "revenue_cents": 8000, "roi": 3.0, "kol_pool_id": kid},
     )
     monkeypatch.setattr(roi_aggregate, "compute_next_recommendation_weight", lambda kid: 0.7)
-    out = roi_review.run({"kol_pool_id": 88})
+    out = roi_review.run({"kol_pool_id": 88}, staff=_STAFF)
     _assert_shape(out)
     assert out["scope"] == "kol"
     assert out["subject_id"] == 88
@@ -136,14 +137,32 @@ def test_not_found_path(monkeypatch):
 
     monkeypatch.setattr(
         aggregation, "aggregate_project_metrics",
-        lambda pid, window_days=30: {"status": "not_found", "scope": "project", "project_id": pid},
+        lambda pid, window_days=30, staff=None: {"status": "not_found", "scope": "project", "project_id": pid},
     )
-    out = roi_review.run({"project_id": 99})
+    out = roi_review.run({"project_id": 99}, staff=_STAFF)
     _assert_shape(out)
     assert out["status"] == "not_found"
     assert out["missing_data"] is True
     assert out["next_action"] == "verify_subject_exists"
     assert len(calls) == 1
+
+
+def test_regular_staff_invisible_project_is_not_found_with_staff_scoped_aggregate(monkeypatch):
+    from app.domains.metrics import aggregation
+
+    actor = {"id": 10, "role": "staff"}
+    seen = []
+
+    def _aggregate(pid, *, window_days=30, staff=None):
+        seen.append((pid, window_days, staff))
+        return {"status": "not_found", "scope": "project", "project_id": pid}
+
+    monkeypatch.setattr(aggregation, "aggregate_project_metrics", _aggregate)
+
+    out = roi_review.run({"project_id": 99}, staff=actor, record=False)
+
+    assert out["status"] == "not_found"
+    assert seen == [(99, 30, actor)]
 
 
 def test_model_fn_injection_overrides(monkeypatch):
@@ -153,14 +172,14 @@ def test_model_fn_injection_overrides(monkeypatch):
 
     monkeypatch.setattr(
         aggregation, "aggregate_project_metrics",
-        lambda pid, window_days=30: {"status": "ready", "cost_cents": 1000, "revenue_cents": 5000, "roi": 4.0},
+        lambda pid, window_days=30, staff=None: {"status": "ready", "cost_cents": 1000, "revenue_cents": 5000, "roi": 4.0},
     )
 
     def fake_model(ctx):
         assert "roi" in ctx and "scope" in ctx  # 喂给 model_fn 的上下文形状
         return {"next_action": "double_down", "confidence": 0.95, "outcome_labels": ["llm_label"], "model": "fake-llm"}
 
-    out = roi_review.run({"project_id": 3}, model_fn=fake_model)
+    out = roi_review.run({"project_id": 3}, model_fn=fake_model, staff=_STAFF)
     _assert_shape(out)
     assert out["next_action"] == "double_down"
     assert out["confidence"] == 0.95
@@ -172,6 +191,46 @@ def test_record_skipped_when_record_false(monkeypatch):
     calls = _capture_record(monkeypatch)
     roi_review.run({}, record=False)
     assert calls == []
+
+
+def test_missing_staff_context_is_unavailable_without_aggregate_read(monkeypatch):
+    from app.domains.kol import roi_aggregate
+
+    monkeypatch.setattr(
+        roi_aggregate,
+        "get_kol_roi_summary",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("ROI read without staff")),
+    )
+
+    out = roi_review.run({"kol_pool_id": 88}, record=False)
+
+    _assert_shape(out)
+    assert out["status"] == "unavailable"
+    assert out["outcome_labels"] == ["authorization_context_unavailable"]
+    assert out["next_action"] == "retry_with_staff_context"
+
+
+def test_registry_forwards_staff_to_roi_skill(monkeypatch):
+    from app.domains.kol import roi_aggregate
+    from app.domains.marketing_brain import skill_registry
+
+    seen = []
+
+    def _roi(kid, *, staff=None):
+        seen.append(staff)
+        return {"status": "ready", "cost_cents": 100, "revenue_cents": 300, "roi": 2.0, "kol_pool_id": kid}
+
+    monkeypatch.setattr(roi_aggregate, "get_kol_roi_summary", _roi)
+    monkeypatch.setattr(roi_aggregate, "compute_next_recommendation_weight", lambda _kid: None)
+    monkeypatch.setattr(skill_registry, "_DISPATCH_CACHE", {"roi_review": roi_review.run})
+
+    dispatched = skill_registry.dispatch_skill(
+        "roi_review", {"kol_pool_id": 88}, record=False, staff=_STAFF
+    )
+
+    assert dispatched["status"] == "ok"
+    assert dispatched["output"]["status"] == "ready"
+    assert seen == [_STAFF]
 
 
 def test_eval_runs_green():

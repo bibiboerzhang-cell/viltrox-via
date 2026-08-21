@@ -8,6 +8,7 @@ import {
   filterClassifiedVideos,
   isImageKindVideo,
   summarizeKolVideos,
+  videoTrendText,
   V_TIER_LABEL,
   videoRecordRows,
   type ClassifiedVideo,
@@ -45,6 +46,21 @@ export const CHIP = "rounded-full border px-2.5 py-1 text-[10.5px] transition-co
 export const CHIP_ON = "border-accent bg-accent-soft text-accent";
 export const CHIP_OFF = "border-line text-muted hover:text-ink";
 export const MINI_BADGE = "flex-none rounded-[5px] border px-1.5 py-0.5 text-[9.5px] font-bold";
+
+export function VideoTrendLine({ video }: { video: VkpiKolPoolVideoRow }) {
+  const text = videoTrendText(video);
+  if (!text) return null;
+  const warning = video.tracking_status === "failed" || video.tracking_status === "stale";
+  return (
+    <div
+      className={`mt-1 font-mono text-[9px] ${warning ? "text-warn" : "text-muted"}`}
+      title={`播放指标来自点时快照，不是实时数据。成功样本 ${Number(video.sample_count || 0)}，抓取尝试 ${Number(video.attempt_count || 0)}。`}
+      data-testid={`video-trend-${Number(video.evidence_id ?? video.id) || 0}`}
+    >
+      {text}
+    </div>
+  );
+}
 
 /* ============ Viltrox 五档证据徽(正向三档 / 深析未识别 / 未判定) ============ */
 export const V_TIER_META: Record<VContentTier, { label: string; cls: string }> = {
@@ -360,6 +376,7 @@ export function KolVideoSection({
                     <span title={video.comment_count == null ? "评论未采集" : "评论(点时实测)"}>💬 {video.comment_count != null ? Number(video.comment_count).toLocaleString() : "未采集"}</span>
                     <span title={video.share_count == null ? "分享未采集" : "分享(点时实测)"}>⤴ {video.share_count != null ? Number(video.share_count).toLocaleString() : "未采集"}</span>
                   </div>
+                  <VideoTrendLine video={video} />
                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
                     <span className={`rounded-[5px] border px-1 py-px text-[8px] font-bold ${meta.cls}`}>{meta.label}</span>
                     {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}

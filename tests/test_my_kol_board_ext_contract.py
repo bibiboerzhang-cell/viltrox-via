@@ -118,11 +118,29 @@ def test_sql_constants_parameterized_with_limit_pushdown():
     )
     for sql in limited:
         assert "LIMIT ?" in sql
-    # 全池点时两条(KOL_VIEWS_CURRENT)外,其余全参数化
+    # 所有查询均参数化；MY KOL 点时播放也必须携带 collection scope。
     for sql in ALL_SQL_CONSTANTS:
-        if sql is ext.KOL_VIEWS_CURRENT_SQL:
-            continue
         assert "?" in sql
+
+
+def test_my_kol_content_queries_use_favorite_or_authorized_share_scope():
+    """MY KOL 内容指标必须同时接受本人收藏和授权共享，不能扫全 evidence。"""
+    scoped_sqls = (
+        ext.KOL_VIEWS_CURRENT_SQL,
+        ext.CONTACT_TYPES_SQL,
+        ext.VIEWS_TOP_SQL,
+        ext.V_CONTENT_SQL,
+        ext.V_KOL_COUNT_SQL,
+        ext.V_KOL_IDS_SQL,
+        ext.V_KOL_TIERS_SQL,
+    )
+    for sql in scoped_sqls:
+        assert "vkpi_kol_pool_favorites" in sql
+        assert "vkpi_kol_pool_members" in sql
+        assert "kp.duplicate_of_id IS NULL" in sql
+    # scope 只裁行，不改变合作项目证据的五档语义。
+    assert "project_linked" in ext.V_CONTENT_CLASSIFIED_CTE
+    assert "WHEN s.project_linked THEN 'cooperation'" in ext.V_CONTENT_CLASSIFIED_CTE
 
 
 def test_sql_compat_redlines_no_percent_no_like():
@@ -151,6 +169,7 @@ def test_v_content_queries_share_latest_ready_five_tier_cte():
         assert "{raw_gemini_video,viltrox_detected}" in sql
         assert "{raw_gemini_video,viltrox_products_all}" in sql
         assert "analysis_confirmed" in sql and "not_related" in sql
+        assert "e.is_active IS NOT FALSE" in sql
     assert ext.VILTROX_TITLE_TOKENS == ("viltrox", "唯卓仕", "唯卓")
     assert ext.V_CONTENT_CLASSIFIED_CTE.count("final_v1_competitor_mentions") == 1
     assert "c.result AS" not in ext.RECENT_VIDEOS_SQL
@@ -295,6 +314,7 @@ def test_kol_views_point_in_time_no_series_no_delta(monkeypatch):
     assert kv["fill_rate"] == round(2134 / 2769, 4)   # 77.07%
     assert "series" not in kv and "delta_pct" not in kv   # 无时序无环比,诚实缺席
     assert "点时实测" in kv["basis"]
+    assert kv["scope"]["membership"] == "favorite_or_authorized_share"
 
 
 def test_kol_views_fill_rate_null_when_no_evidence(monkeypatch):
@@ -447,11 +467,11 @@ def test_limits_pushed_down_and_python_side_capped(monkeypatch):
     assert len(body["platform_dist"]["items"]) == ext.PLATFORM_MAX_ITEMS
     # SQL 层 LIMIT 参数 = 模块常量
     by_sql = {sql: params for sql, params in conn.calls}
-    assert by_sql[ext.VIEWS_TOP_SQL] == (ext.VIEWS_TOP_LIMIT,)
+    assert by_sql[ext.VIEWS_TOP_SQL] == (0, 0, 0, 0, ext.VIEWS_TOP_LIMIT)
     assert by_sql[ext.PLATFORM_DIST_SQL][-1] == ext.PLATFORM_ROWS_LIMIT
     assert by_sql[ext.FUNNEL_SQL][-1] == ext.FUNNEL_ROWS_LIMIT
     assert by_sql[ext.FIT_DIST_SQL] == (ext.FIT_BUCKET_ROWS_LIMIT,)
-    assert by_sql[ext.CONTACT_TYPES_SQL] == (ext.CONTACT_TYPE_ROWS_LIMIT,)
+    assert by_sql[ext.CONTACT_TYPES_SQL] == (0, 0, 0, 0, ext.CONTACT_TYPE_ROWS_LIMIT)
 
 
 # ── 8.5 recent_videos 内容墙(收藏集最近采集 + 缩略图自愈链)────────────────
@@ -549,11 +569,12 @@ def test_v_content_tiers_math(monkeypatch):
         "not_related_kols": 240,
         "undetermined_kols": 330,
     }
-    # 四条聚合/名单 SQL 都以相同 3 个标题词参数驱动共享 CTE。
+    # 四条聚合/名单 SQL 都以相同标题词 + team collection scope 驱动共享 CTE。
     by_sql = {sql: params for sql, params in conn.calls}
-    assert by_sql[ext.V_CONTENT_SQL] == ext.VILTROX_TITLE_TOKENS
-    assert by_sql[ext.V_KOL_COUNT_SQL] == ext.VILTROX_TITLE_TOKENS
-    assert by_sql[ext.V_KOL_TIERS_SQL] == ext.VILTROX_TITLE_TOKENS
+    scoped = (*ext.VILTROX_TITLE_TOKENS, 0, 0, 0, 0)
+    assert by_sql[ext.V_CONTENT_SQL] == scoped
+    assert by_sql[ext.V_KOL_COUNT_SQL] == scoped
+    assert by_sql[ext.V_KOL_TIERS_SQL] == scoped
 
 
 def test_v_kol_ids_dedup_sorted_and_consistent_with_count(monkeypatch):
@@ -578,7 +599,9 @@ def test_v_kol_ids_dedup_sorted_and_consistent_with_count(monkeypatch):
     assert len(vc["v_kol_ids"]) == vc["v_kol_count"]    # 名单与 KOL 级计数一致
     # LIMIT 下推=封顶+1(多取 1 行如实检测截断),词元参数化
     by_sql = {sql: params for sql, params in conn.calls}
-    assert by_sql[ext.V_KOL_IDS_SQL] == (*ext.VILTROX_TITLE_TOKENS, ext.V_KOL_IDS_ROWS_LIMIT)
+    assert by_sql[ext.V_KOL_IDS_SQL] == (
+        *ext.VILTROX_TITLE_TOKENS, 0, 0, 0, 0, ext.V_KOL_IDS_ROWS_LIMIT,
+    )
     assert ext.V_KOL_IDS_ROWS_LIMIT == ext.V_KOL_IDS_MAX + 1
 
 
@@ -661,7 +684,14 @@ def test_staff_scope_params_pushed_down(monkeypatch):
     _frozen(monkeypatch)
     conn = _FakeConn()
     _build(conn, sid=7684)
-    scoped_sqls = (ext.FUNNEL_SQL, ext.PLATFORM_DIST_SQL, ext.CONTACT_COVERAGE_SQL)
+    scoped_sqls = (
+        ext.KOL_VIEWS_CURRENT_SQL,
+        ext.FUNNEL_SQL,
+        ext.PLATFORM_DIST_SQL,
+        ext.CONTACT_TYPES_SQL,
+        ext.CONTACT_COVERAGE_SQL,
+        ext.VIEWS_TOP_SQL,
+    )
     for sql in scoped_sqls:
         params = next(p for s, p in conn.calls if s == sql)
         assert params[:4] == (7684, 7684, 7684, 7684), sql
@@ -670,6 +700,10 @@ def test_staff_scope_params_pushed_down(monkeypatch):
     assert recent[3:7] == (7684, 7684, 7684, 7684)
     official = next(p for s, p in conn.calls if s == ext.OFFICIAL_DAY_SQL)
     assert official[:2] == (7684, 7684)
+    for sql in (ext.V_CONTENT_SQL, ext.V_KOL_COUNT_SQL, ext.V_KOL_IDS_SQL, ext.V_KOL_TIERS_SQL):
+        params = next(p for s, p in conn.calls if s == sql)
+        assert params[:3] == ext.VILTROX_TITLE_TOKENS
+        assert params[3:7] == (7684, 7684, 7684, 7684)
 
     conn_all = _FakeConn()
     _build(conn_all, sid=None)
@@ -678,6 +712,88 @@ def test_staff_scope_params_pushed_down(monkeypatch):
         assert params[:4] == (0, 0, 0, 0), sql
     recent_all = next(p for s, p in conn_all.calls if s == ext.RECENT_VIDEOS_SQL)
     assert recent_all[3:7] == (0, 0, 0, 0)
+
+
+def test_staff_a_b_content_metrics_are_isolated_while_global_fit_is_preserved(monkeypatch):
+    """A/B 各只看收藏或被授权共享的 KOL；明确全池的 fit_dist 不随 staff 改变。"""
+    _frozen(monkeypatch)
+
+    def staff_id(params: tuple, offset: int = 0) -> int:
+        scope = params[offset:offset + 4]
+        assert len(scope) == 4 and len(set(scope)) == 1
+        return int(scope[0])
+
+    def current_views(params: tuple):
+        sid = staff_id(params)
+        return [{"total_evidence": 2, "measured": 2, "views_total": 1100 if sid == 101 else 2200}]
+
+    def views_top(params: tuple):
+        sid = staff_id(params)
+        return [{
+            "kol_pool_id": 1001 if sid == 101 else 2002,
+            "display_name": "A shared creator" if sid == 101 else "B creator",
+            "handle": "a_shared" if sid == 101 else "b_only",
+            "platform": "youtube",
+            "total_views": 1100 if sid == 101 else 2200,
+            "video_count": 2,
+        }]
+
+    def contact_types(params: tuple):
+        sid = staff_id(params)
+        return [{"contact_type": "email" if sid == 101 else "website", "n": 1}]
+
+    def coverage(params: tuple):
+        sid = staff_id(params)
+        return [{"total": 2 if sid == 101 else 1, "covered": 1}]
+
+    def v_rollup(params: tuple):
+        sid = staff_id(params, 3)
+        return [{
+            "total_evidence": 2 if sid == 101 else 1,
+            "cooperation": 1,
+            "analysis_confirmed": 0,
+            "title_mention": 0,
+            "not_related": 0,
+            "undetermined": 1 if sid == 101 else 0,
+        }]
+
+    def v_count(params: tuple):
+        return [{"n": 1 if staff_id(params, 3) in {101, 202} else 0}]
+
+    def v_ids(params: tuple):
+        return [{"kol_pool_id": 1001 if staff_id(params, 3) == 101 else 2002}]
+
+    def v_tiers(params: tuple):
+        staff_id(params, 3)
+        return [{"cooperation_kols": 1, "analysis_confirmed_kols": 0,
+                 "title_mention_kols": 0, "not_related_kols": 0,
+                 "undetermined_kols": 0}]
+
+    routes = {
+        ext.KOL_VIEWS_CURRENT_SQL: current_views,
+        ext.VIEWS_TOP_SQL: views_top,
+        ext.CONTACT_TYPES_SQL: contact_types,
+        ext.CONTACT_COVERAGE_SQL: coverage,
+        ext.V_CONTENT_SQL: v_rollup,
+        ext.V_KOL_COUNT_SQL: v_count,
+        ext.V_KOL_IDS_SQL: v_ids,
+        ext.V_KOL_TIERS_SQL: v_tiers,
+        ext.FIT_DIST_SQL: [{"bucket": 7, "n": 9}],
+    }
+    a = _build(_FakeConn(routes), sid=101)
+    b = _build(_FakeConn(routes), sid=202)
+
+    assert a["kpi_series"]["kol_views"]["views_total"] == 1100
+    assert b["kpi_series"]["kol_views"]["views_total"] == 2200
+    assert a["views_top"]["items"][0]["handle"] == "a_shared"
+    assert b["views_top"]["items"][0]["handle"] == "b_only"
+    assert a["contact_coverage"]["types"] == [{"contact_type": "email", "count": 1}]
+    assert b["contact_coverage"]["types"] == [{"contact_type": "website", "count": 1}]
+    assert a["v_content"]["v_kol_ids"] == [1001]
+    assert b["v_content"]["v_kol_ids"] == [2002]
+    assert a["v_content"]["scope"]["staff_scope_id"] == 101
+    assert b["v_content"]["scope"]["staff_scope_id"] == 202
+    assert a["fit_dist"] == b["fit_dist"]
 
 
 def test_all_sql_readonly(monkeypatch):

@@ -28,7 +28,6 @@ def _rows(sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
 
 def get_kol_provenance(kol_pool_id: int, *, staff: dict[str, Any] | None = None, video_limit: int = 5) -> dict[str, Any]:
     """组装一个 KOL 的记忆来源 + citations + "为什么记住他"一句话。只读。"""
-    del staff
     kid = int(kol_pool_id or 0)
     if kid <= 0:
         return {"status": "not_found"}
@@ -76,7 +75,7 @@ def get_kol_provenance(kol_pool_id: int, *, staff: dict[str, Any] | None = None,
     try:
         from app.domains.kol import roi_aggregate
 
-        roi = roi_aggregate.get_kol_roi_summary(kid)
+        roi = roi_aggregate.get_kol_roi_summary(kid, staff=staff)
     except Exception:
         logger.debug("provenance.roi_failed", exc_info=True)
 

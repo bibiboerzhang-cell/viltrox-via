@@ -5,6 +5,7 @@ import {
   filterClassifiedVideos,
   sortClassifiedVideos,
   summarizeKolVideos,
+  videoTrendText,
   type VkpiKolPoolVideoRow,
 } from "./myKolBoard-api";
 
@@ -49,5 +50,33 @@ describe("Viltrox video evidence classification", () => {
     const videos = [row(1, { view_count: null }), row(2, { view_count: 0 }), row(3, { view_count: 12 })];
     const classified = summarizeKolVideos(videos).classified;
     expect(sortClassifiedVideos(classified, "all", "views").map(({ video }) => video.evidence_id)).toEqual([3, 2, 1]);
+  });
+
+  it("renders actual snapshot fields without claiming real-time data", () => {
+    expect(videoTrendText(row(1, {
+      tracking_status: "tracked",
+      freshness: "fresh",
+      views_delta_24h: 1200,
+      views_delta_7d: -50,
+      delta_24h_status: "ready",
+      delta_7d_status: "ready",
+      last_success: { fetched_at: "2026-08-21T12:30:00+00:00", status: "success" },
+    }))).toBe("24h +1,200 · 7d -50 · 最后刷新 2026-08-21 12:30");
+    expect(videoTrendText(row(2, {
+      tracking_status: "failed",
+      last_success: { fetched_at: "2026-08-20T08:00:00Z", status: "success" },
+    }))).toBe("刷新失败 · 上次成功 2026-08-20 08:00");
+    expect(videoTrendText(row(3, {
+      tracking_status: "insufficient_history",
+      last_success: { fetched_at: "2026-08-21T09:00:00Z", status: "legacy_current_only" },
+    }))).toBe("趋势待积累");
+    expect(videoTrendText(row(4, {
+      tracking_status: "stale",
+      freshness: "stale",
+      views_delta_24h: 5,
+      delta_24h_status: "ready",
+      delta_7d_status: "insufficient_history",
+      last_success: { fetched_at: "2026-08-18T09:00:00Z", status: "success" },
+    }))).toBe("数据已陈旧 · 24h +5 · 7d 待积累 · 最后刷新 2026-08-18 09:00");
   });
 });

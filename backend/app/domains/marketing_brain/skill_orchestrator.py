@@ -261,7 +261,6 @@ def orchestrate_skills(
       - 返回 {status, goal, dry_run, results:[{skill_name, status, output, recommendations?}], note}。
     红线:零触 viltrox_fit_score。
     """
-    del staff  # 编排选择与 skill 运行不按 staff 过滤(skill 内部各自只读取既有数据);保留参数对齐调用方。
     if not _gate_enabled():
         return {"status": "disabled", "goal": _text(goal),
                 "note": "VKPI_SKILL_ORCHESTRATION 已关;编排器侧 skill 自动选择被 gate 关闭(人工 HTTP 不受影响)。"}
@@ -298,7 +297,7 @@ def orchestrate_skills(
         name = _text(node.get("skill_name"))
         skill_input = node.get("input") if isinstance(node.get("input"), dict) else {}
         dispatched = skill_registry.dispatch_skill(
-            name, skill_input, model_fn=effective_model_fn, record=record
+            name, skill_input, model_fn=effective_model_fn, record=record, staff=staff
         )
         out = dispatched.get("output") if isinstance(dispatched, dict) else {}
         item: dict[str, Any] = {

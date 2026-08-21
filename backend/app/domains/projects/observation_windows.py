@@ -575,7 +575,10 @@ def matched_content_posts_for_retrospective(
     视频证据,与 matched content_posts 解耦(会在 0 帖 0 窗口的项目上产出,高估履约成熟度)。
     本函数把人工确认的真实履约内容也喂进复盘,二者都计入。
 
-    纯只读:只 SELECT vkpi_project_content_posts,绝不写任何表、绝不碰 viltrox_fit_score。
+    纯只读:SELECT content post 并 LEFT JOIN 其关联 evidence。content_posts 的三项指标是
+    legacy NOT NULL DEFAULT 0,不能区分“真 0”与“未采”;因此只在 evidence 有抓取时间/
+    metrics source/非 content_post 来源时投影为 observed_evidence,否则对复盘返回 NULL。
+    绝不写任何表、绝不碰 viltrox_fit_score。
     无 RBAC 收口(调用方 retrospective 已按 project_id 定向,worker 侧无 staff 上下文);
     口径与按曝光降序选取一致,供聚合侧 Top-N 截断。
     """
@@ -587,12 +590,46 @@ def matched_content_posts_for_retrospective(
         return []
     rows = own_conn.execute(
         """
-        SELECT id, project_id, assignment_id, kol_pool_id, evidence_id, platform,
-               content_url, title, caption, published_at, view_count, like_count,
-               comment_count, match_reason, status
-        FROM vkpi_project_content_posts
-        WHERE project_id = ? AND status IN ('matched', 'retrospective_ready')
-        ORDER BY view_count DESC, id ASC
+        WITH matched AS (
+            SELECT c.id, c.project_id, c.assignment_id, c.kol_pool_id, c.evidence_id,
+                   c.platform, c.content_url, c.title, c.caption, c.published_at,
+                   c.view_count AS legacy_view_count,
+                   c.like_count AS legacy_like_count,
+                   c.comment_count AS legacy_comment_count,
+                   e.view_count AS evidence_view_count,
+                   e.like_count AS evidence_like_count,
+                   e.comment_count AS evidence_comment_count,
+                   c.match_reason, c.status,
+                   CASE
+                       WHEN e.id IS NOT NULL AND (
+                           e.metrics_scraped_at IS NOT NULL
+                           OR NULLIF(BTRIM(COALESCE(e.metrics_source, '')), '') IS NOT NULL
+                           OR e.scraped_at IS NOT NULL
+                           OR NULLIF(BTRIM(COALESCE(e.scrape_source, '')), '') IS NOT NULL
+                           OR LOWER(COALESCE(e.source, '')) <> 'content_post'
+                       ) THEN 'observed_evidence'
+                       WHEN e.id IS NOT NULL THEN 'linked_unobserved'
+                       ELSE 'legacy_unobserved'
+                   END AS metric_observation_status,
+                   COALESCE(
+                       NULLIF(BTRIM(COALESCE(e.metrics_source, '')), ''),
+                       NULLIF(BTRIM(COALESCE(e.scrape_source, '')), ''),
+                       NULLIF(BTRIM(COALESCE(e.source, '')), '')
+                   ) AS metric_observation_source
+            FROM vkpi_project_content_posts c
+            LEFT JOIN vkpi_kol_video_evidence e
+              ON e.id = c.evidence_id AND e.is_active IS NOT FALSE
+            WHERE c.project_id = ? AND c.status IN ('matched', 'retrospective_ready')
+        )
+        SELECT *,
+               CASE WHEN metric_observation_status = 'observed_evidence'
+                    THEN evidence_view_count ELSE NULL END AS view_count,
+               CASE WHEN metric_observation_status = 'observed_evidence'
+                    THEN evidence_like_count ELSE NULL END AS like_count,
+               CASE WHEN metric_observation_status = 'observed_evidence'
+                    THEN evidence_comment_count ELSE NULL END AS comment_count
+        FROM matched
+        ORDER BY view_count DESC NULLS LAST, id ASC
         """,
         (pid,),
     ).fetchall()

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
-from app.domains import audit
+from app.domains import audit, content_metric_snapshots
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects import stage_canonical
@@ -706,44 +706,107 @@ def refresh_project_video_evidence_metadata(
     content_url = _text(evidence.get("content_url"))
     if not content_url:
         raise ValueError("video evidence content_url missing")
-    metadata = _fetch_video_metadata(content_url)
+    platform_hint = _detect_video_platform(content_url)
+    provider_hint = "youtube_api_or_apify" if platform_hint == "youtube" else "apify"
+    try:
+        metadata = _fetch_video_metadata(content_url)
+    except Exception as exc:
+        # A failed provider attempt is useful truth, but must never erase the
+        # last known counters on evidence.  Snapshot persistence is best effort
+        # here so a missing migration cannot hide the original provider error.
+        failed_at = datetime.now(timezone.utc).isoformat()
+        try:
+            content_metric_snapshots.ensure_sqlite_schema(conn)
+            content_metric_snapshots.record_failed_refresh(
+                conn,
+                evidence_id=int(evidence_id),
+                provider=provider_hint,
+                fetched_at=failed_at,
+                error_code=content_metric_snapshots.error_code_from_exception(exc),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+        raise
     status = _text(metadata.get("scrape_status")) or "pending"
     now = datetime.now(timezone.utc).isoformat()
-    conn.execute(
-        """
-        UPDATE vkpi_kol_video_evidence
-        SET platform=?, video_title=?, title=?, posted_at=?, publish_date=?,
-            view_count=?, like_count=?, comment_count=?, share_count=?,
-            duration_seconds=?, thumbnail_url=?, channel_id=?, channel_name=?,
-            scrape_status=?, scrape_source=?, scrape_error=?, scraped_at=?,
-            metrics_scraped_at=?, metrics_source=?, updated_at=?
-        WHERE id=?
-        """,
-        (
-            _text(metadata.get("platform")),
-            _text(metadata.get("title")) or _text(evidence.get("video_title")),
-            _text(metadata.get("title")) or _text(evidence.get("title")),
-            metadata.get("posted_at"),
-            metadata.get("publish_date"),
-            metadata.get("view_count"),
-            metadata.get("like_count"),
-            metadata.get("comment_count"),
-            metadata.get("share_count"),
-            metadata.get("duration_seconds"),
-            _text(metadata.get("thumbnail_url")),
-            _text(metadata.get("channel_id")),
-            _text(metadata.get("channel_name")),
-            status,
-            _text(metadata.get("scrape_source")),
-            _text(metadata.get("scrape_error")),
-            now,
-            now,
-            _text(metadata.get("scrape_source")),
-            now,
-            int(evidence_id),
-        ),
-    )
-    conn.commit()
+    provider = _text(metadata.get("scrape_source")) or provider_hint
+    run_id = _text(metadata.get("apify_run_id")) or None
+    source_observed_at = _text(metadata.get("source_observed_at")) or now
+    snapshot_result: dict[str, Any] | None = None
+    try:
+        content_metric_snapshots.ensure_sqlite_schema(conn)
+        # Metadata state may advance for pending/failed attempts, but the
+        # latest metric read model is only written by a successful observation.
+        conn.execute(
+            """
+            UPDATE vkpi_kol_video_evidence
+            SET platform=?, video_title=?, title=?, posted_at=?, publish_date=?,
+                duration_seconds=?, thumbnail_url=?, channel_id=?, channel_name=?,
+                scrape_status=?, scrape_source=?, scrape_error=?, scraped_at=?,
+                updated_at=?
+            WHERE id=?
+            """,
+            (
+                _text(metadata.get("platform")),
+                _text(metadata.get("title")) or _text(evidence.get("video_title")),
+                _text(metadata.get("title")) or _text(evidence.get("title")),
+                metadata.get("posted_at"),
+                metadata.get("publish_date"),
+                metadata.get("duration_seconds"),
+                _text(metadata.get("thumbnail_url")),
+                _text(metadata.get("channel_id")),
+                _text(metadata.get("channel_name")),
+                status,
+                provider,
+                _text(metadata.get("scrape_error")),
+                now,
+                now,
+                int(evidence_id),
+            ),
+        )
+        if status == "success":
+            metric_values = {
+                "views": metadata.get("view_count"),
+                "likes": metadata.get("like_count"),
+                "comments": metadata.get("comment_count"),
+                "shares": metadata.get("share_count"),
+            }
+            if content_metric_snapshots.has_any_metric(**metric_values):
+                snapshot_result = content_metric_snapshots.record_successful_refresh(
+                    conn,
+                    evidence_id=int(evidence_id),
+                    provider=provider,
+                    fetched_at=now,
+                    source_observed_at=source_observed_at,
+                    run_id=run_id,
+                    **metric_values,
+                )
+            else:
+                snapshot_result = content_metric_snapshots.record_failed_refresh(
+                    conn,
+                    evidence_id=int(evidence_id),
+                    provider=provider,
+                    fetched_at=now,
+                    source_observed_at=source_observed_at,
+                    error_code="all_metrics_missing",
+                    run_id=run_id,
+                    quality_flags=("provider_response_success",),
+                )
+        elif status == "failed":
+            snapshot_result = content_metric_snapshots.record_failed_refresh(
+                conn,
+                evidence_id=int(evidence_id),
+                provider=provider,
+                fetched_at=now,
+                source_observed_at=source_observed_at,
+                error_code="provider_status_failed",
+                run_id=run_id,
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     updated = conn.execute(
         "SELECT * FROM vkpi_kol_video_evidence WHERE id=?",
         (int(evidence_id),),
@@ -752,6 +815,7 @@ def refresh_project_video_evidence_metadata(
         "status": status,
         "evidence_id": int(evidence_id),
         "project_id": project_id,
+        "metric_snapshot": snapshot_result or {},
         "evidence": dict(updated) if updated else {},
     }
 

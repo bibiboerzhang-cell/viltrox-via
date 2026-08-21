@@ -20,11 +20,11 @@ GET /api/admin/vkpi/my-kol/board-ext?days=30(与 aggregate 同前缀、同 requi
   fit_dist          全池 fit 分桶直方(十分位 10 桶 + 「未评分」诚实桶);只 SELECT
                     分桶表达式,绝不返回单 KOL 分数,绝不写 viltrox_fit_score /
                     不碰 rule_v0。
-  contact_coverage  vkpi_kol_pool_contacts 类型×计数(全池)+ 收藏集覆盖率;
+  contact_coverage  收藏集 vkpi_kol_pool_contacts 类型×计数 + 收藏集覆盖率;
                     卡面只出类型计数,绝不返回明文联系方式(contact_value 一列
                     不进 SELECT;明文披露是 contact_reveal 门控端点的事)。
-  views_top         evidence view_count Top12 KOL 榜(NULL 剔除,is_active IS NOT
-                    FALSE 与百家饭同口径;basis=点时实测,非时序)。
+  views_top         收藏集 evidence view_count Top12 KOL 榜(NULL 剔除,is_active
+                    IS NOT FALSE;basis=点时实测,非时序)。
   recent_videos     收藏集最近采集视频墙(内容墙,2026-07-12 增量):evidence 最近
                     N 条(封顶 RECENT_VIDEOS_LIMIT,双层封顶)按发布时间降序,
                     带缩略图三件套(创意库同一条毒缓存自愈链 cached → raw →
@@ -45,8 +45,9 @@ scope 口径(与 aggregate/viewer-context 同族):staff_scope_id 为已解析的
 effective_staff_id —— 员工恒被 scope.effective_staff_id 压回本人;管理层缺省
 None=全团队收藏集(收藏 ∪ 共享 vkpi_kol_pool_members,去重 duplicate_of_id IS
 NULL,与 my_kol_aggregate._pool_favorites 同两张表),显式 ?staff_id= 看指定成员。
-fit_dist / views_top / v_content / contact_coverage.types 四处为全池/全 evidence
-只读计数口径(设计单定稿,零个人字段零明文联系方式,不随 scope 收窄)。
+fit_dist 保留明确的全池只读分桶口径;官号指标仍按成员/管理层团队账号语义聚合。
+其余标为 MY KOL/收藏集的内容、播放、榜单、V 名单与联系方式类型都严格使用
+收藏 ∪ 授权共享的同一 scope,避免把其他员工收藏混入当前员工页面。
 
 窗口口径:days 天 UTC 日粒度窗 [today-(days-1), today](含今天,右沿钳 now,
 绝不产未来日);环比上窗 = 紧前等长 days 天;流量型(新视频)环比两侧同取
@@ -175,6 +176,17 @@ def _scope_params(staff_scope_id: int) -> tuple[int, int, int, int]:
     """_COLLECTION_COND 的 4 个占位参;0=管理层全团队收藏集,否则按该 staff 过滤。"""
     sid = _int0(staff_scope_id)
     return (sid, sid, sid, sid)
+
+
+def _collection_scope_diagnostics(staff_scope_id: int) -> dict[str, Any]:
+    """Expose the exact MY KOL row-scope used by a response block."""
+
+    sid = _int0(staff_scope_id)
+    return {
+        "mode": "staff_collection" if sid else "team_collection",
+        "staff_scope_id": sid or None,
+        "membership": "favorite_or_authorized_share",
+    }
 
 
 def _windows(days: int) -> dict[str, Any]:
@@ -332,7 +344,7 @@ def _kpi_series(conn: Any, sid: int, win: dict[str, Any]) -> dict[str, Any]:
                 "delta_pct": _delta_pct(current, previous), "table": table}
 
     # KOL 内容播放:点时实测无时序 → 不给 series 不给 delta,只给合计 + 填充率
-    kv = dict(conn.execute(KOL_VIEWS_CURRENT_SQL, ()).fetchone() or {})
+    kv = dict(conn.execute(KOL_VIEWS_CURRENT_SQL, scope4).fetchone() or {})
     kv_total, kv_measured = _int0(kv.get("total_evidence")), _int0(kv.get("measured"))
     kol_views = {
         "status": "point_in_time",
@@ -340,9 +352,11 @@ def _kpi_series(conn: Any, sid: int, win: dict[str, Any]) -> dict[str, Any]:
         "measured": kv_measured,
         "evidence_total": kv_total,
         "fill_rate": _share(kv_measured, kv_total),
+        "scope": _collection_scope_diagnostics(sid),
         "basis": (
-            "vkpi_kol_video_evidence.view_count 点时实测(抓取时刻读数),无历史快照 "
-            "→ 无时序无环比(诚实缺席,绝不编 series);填充率=view_count 非空行/全 evidence 行"
+            "vkpi_kol_video_evidence × 收藏集(收藏 ∪ 授权共享,去重)的 view_count 点时实测"
+            "(抓取时刻读数),仅计 is_active IS NOT FALSE;无历史快照 → 无时序无环比"
+            "(诚实缺席,绝不编 series);填充率=view_count 非空行/收藏集有效 evidence 行"
         ),
     }
 
@@ -480,8 +494,9 @@ def _fit_dist(conn: Any) -> dict[str, Any]:
 
 
 def _contact_coverage(conn: Any, sid: int) -> dict[str, Any]:
-    """5. contact_coverage:类型×计数(全池)+ 收藏集覆盖率;绝不返回明文联系方式。"""
-    rows = conn.execute(CONTACT_TYPES_SQL, (CONTACT_TYPE_ROWS_LIMIT,)).fetchall()
+    """5. contact_coverage:收藏集类型计数 + 覆盖率;绝不返回明文联系方式。"""
+    scope4 = _scope_params(sid)
+    rows = conn.execute(CONTACT_TYPES_SQL, (*scope4, CONTACT_TYPE_ROWS_LIMIT)).fetchall()
     types = [
         {"contact_type": str(dict(r).get("contact_type") or "") or "unknown",
          "count": _int0(dict(r).get("n"))}
@@ -495,17 +510,19 @@ def _contact_coverage(conn: Any, sid: int) -> dict[str, Any]:
         "covered": covered,
         "total": total,
         "coverage": _share(covered, total),
+        "scope": _collection_scope_diagnostics(sid),
         "basis": (
-            "类型计数=vkpi_kol_pool_contacts 全池 GROUP BY contact_type(明文值一列"
-            "不进 SELECT,明文披露走 contact_reveal 门控端点);覆盖率=收藏集内"
+            "类型计数=vkpi_kol_pool_contacts × 收藏集(收藏 ∪ 授权共享,去重)"
+            "GROUP BY contact_type(明文值一列不进 SELECT,明文披露走 contact_reveal 门控端点);"
+            "覆盖率=同一收藏集内"
             "至少有一条联系方式的 KOL 数/收藏集 KOL 数,分母 0 → null"
         ),
     }
 
 
-def _views_top(conn: Any) -> dict[str, Any]:
-    """6. views_top:evidence 实测播放 Top12 KOL 榜(NULL 剔除;点时实测非时序)。"""
-    rows = conn.execute(VIEWS_TOP_SQL, (VIEWS_TOP_LIMIT,)).fetchall()
+def _views_top(conn: Any, sid: int) -> dict[str, Any]:
+    """6. views_top:收藏集 evidence 实测播放 Top12(NULL 剔除;点时非时序)。"""
+    rows = conn.execute(VIEWS_TOP_SQL, (*_scope_params(sid), VIEWS_TOP_LIMIT)).fetchall()
     items = []
     for r in list(rows)[:VIEWS_TOP_LIMIT]:
         rec = dict(r)
@@ -520,8 +537,10 @@ def _views_top(conn: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
         "status": "ready" if items else "empty",
         "items": items,
+        "scope": _collection_scope_diagnostics(sid),
         "basis": (
-            "vkpi_kol_video_evidence view_count 点时实测(抓取时刻读数,非时序)按 KOL "
+            "vkpi_kol_video_evidence × 收藏集(收藏 ∪ 授权共享,去重)的 view_count "
+            "点时实测(抓取时刻读数,非时序)按 KOL "
             "SUM;view_count IS NULL 剔除(未实测不等于 0 播放);is_active IS NOT FALSE"
             "(归属纠错下线的 evidence 不计入,与百家饭同口径)"
         ),
@@ -612,9 +631,10 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
     return body
 
 
-def _v_content(conn: Any) -> dict[str, Any]:
-    """7. v_content:五档互斥证据 + 相关 KOL 汇总/名单(同一 CTE)。"""
-    row = dict(conn.execute(V_CONTENT_SQL, VILTROX_TITLE_TOKENS).fetchone() or {})
+def _v_content(conn: Any, sid: int) -> dict[str, Any]:
+    """7. v_content:收藏集五档证据 + 相关 KOL 汇总/名单(同一 CTE)。"""
+    scoped_tokens = (*VILTROX_TITLE_TOKENS, *_scope_params(sid))
+    row = dict(conn.execute(V_CONTENT_SQL, scoped_tokens).fetchone() or {})
     total = _int0(row.get("total_evidence"))
     cooperation = _int0(row.get("cooperation"))
     analysis_confirmed = _int0(row.get("analysis_confirmed"))
@@ -622,14 +642,14 @@ def _v_content(conn: Any) -> dict[str, Any]:
     not_related = _int0(row.get("not_related"))
     undetermined = _int0(row.get("undetermined"))
     v_related_evidence = cooperation + analysis_confirmed + title_mention
-    kol_row = dict(conn.execute(V_KOL_COUNT_SQL, VILTROX_TITLE_TOKENS).fetchone() or {})
-    tier_row = dict(conn.execute(V_KOL_TIERS_SQL, VILTROX_TITLE_TOKENS).fetchone() or {})
+    kol_row = dict(conn.execute(V_KOL_COUNT_SQL, scoped_tokens).fetchone() or {})
+    tier_row = dict(conn.execute(V_KOL_TIERS_SQL, scoped_tokens).fetchone() or {})
 
     # 行级名单:SQL DISTINCT+升序+LIMIT 多取 1 行,Python 去重二保险 + 切片封顶;
     # 是否截断以「真取回超上限」如实判定,绝不拿 v_kol_count 反推。
     id_rows = conn.execute(
         V_KOL_IDS_SQL,
-        (*VILTROX_TITLE_TOKENS, V_KOL_IDS_ROWS_LIMIT),
+        (*scoped_tokens, V_KOL_IDS_ROWS_LIMIT),
     ).fetchall()
     seen: set[int] = set()
     v_kol_ids: list[int] = []
@@ -648,6 +668,7 @@ def _v_content(conn: Any) -> dict[str, Any]:
         "v_kol_count": _int0(kol_row.get("n")),
         "v_kol_ids": v_kol_ids,
         "v_kol_ids_truncated": ids_truncated,
+        "scope": _collection_scope_diagnostics(sid),
         "tiers": {
             "cooperation": cooperation,
             "analysis_confirmed": analysis_confirmed,
@@ -663,7 +684,8 @@ def _v_content(conn: Any) -> dict[str, Any]:
             "undetermined_kols": _int0(tier_row.get("undetermined_kols")),
         },
         "basis": (
-            "五档互斥优先级:cooperation=evidence.project_id 字符串化后非空且非0;"
+            "范围=收藏集(收藏 ∪ 授权共享,duplicate_of_id IS NULL);五档互斥优先级:"
+            "cooperation=evidence.project_id 字符串化后非空且非0;"
             "analysis_confirmed=latest ready video_analysis_final_v1(id DESC) 的 "
             "raw_gemini_video.viltrox_detected=true 或 viltrox_products_all 非空数组;"
             "title_mention=标题(video_title/title)含 viltrox/唯卓仕/唯卓(参数化,中等证据);"
@@ -714,9 +736,9 @@ def build_board_ext(
         ("platform_dist", lambda: _platform_dist(db, sid)),
         ("fit_dist", lambda: _fit_dist(db)),
         ("contact_coverage", lambda: _contact_coverage(db, sid)),
-        ("views_top", lambda: _views_top(db)),
+        ("views_top", lambda: _views_top(db, sid)),
         ("recent_videos", lambda: _recent_videos(db, sid)),
-        ("v_content", lambda: _v_content(db)),
+        ("v_content", lambda: _v_content(db, sid)),
     )
     out: dict[str, Any] = {}
     for name, build in builders:

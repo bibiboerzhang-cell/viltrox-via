@@ -34,9 +34,9 @@ def capture_dispatch(monkeypatch):
     """monkeypatch skill_registry.dispatch_skill,捕获被编排器真调用的 skill + 入参。"""
     calls = []
 
-    def fake_dispatch(skill_name, skill_input, *, model_fn=None, record=True):
+    def fake_dispatch(skill_name, skill_input, *, model_fn=None, record=True, staff=None):
         calls.append({"skill_name": skill_name, "input": skill_input,
-                      "model_fn": model_fn, "record": record})
+                      "model_fn": model_fn, "record": record, "staff": staff})
         return {"status": "ok", "skill_name": skill_name,
                 "output": {"recommendations": [{"handle": "x"}], "rationale": "stub"}}
 
@@ -120,3 +120,19 @@ def test_dry_run_false_passes_model_fn(capture_dispatch):
     assert out["status"] == "ok"
     # 非 dry_run 且显式传 model_fn → 透传给 skill(由更高层决定真烧)。
     assert capture_dispatch[0]["model_fn"] is sentinel
+
+
+def test_orchestrator_forwards_authenticated_staff_to_roi_skill(capture_dispatch):
+    actor = {"id": 10, "role": "staff"}
+
+    out = so.orchestrate_skills(
+        "给这个项目做复盘 roi",
+        context={"project_id": 7},
+        dry_run=True,
+        record=False,
+        staff=actor,
+    )
+
+    assert out["status"] == "ok"
+    roi_call = next(call for call in capture_dispatch if call["skill_name"] == "roi_review")
+    assert roi_call["staff"] == actor

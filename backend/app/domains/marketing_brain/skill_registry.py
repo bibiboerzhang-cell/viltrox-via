@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
 from typing import Any
@@ -126,14 +127,31 @@ def available_skills() -> list[str]:
     return sorted(_load_dispatch().keys())
 
 
+def run_accepts_staff_context(run_fn: Any) -> bool:
+    """Whether a skill callable explicitly supports the authenticated staff context.
+
+    Only an explicit ``staff`` parameter is considered safe.  This keeps legacy
+    skills source-compatible and prevents HTTP/orchestrator callers from blindly
+    injecting a keyword that the callable cannot accept.  Uninspectable callables
+    fail closed to the legacy signature.
+    """
+
+    try:
+        return "staff" in inspect.signature(run_fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
 def dispatch_skill(skill_name: str, skill_input: dict[str, Any] | None, *,
-                   model_fn: Any = None, record: bool = True) -> dict[str, Any]:
+                   model_fn: Any = None, record: bool = True,
+                   staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """编排器侧统一分发:按 canonical SKILL_NAME 调对应 skill.run(input, model_fn=, record=)。
 
     这是「经 registry 调用 skill」的真入口(供 skill_orchestrator 用),区别于 register_skill(只声明)。
     - 未知 skill → {status:'error', error:'unknown_skill', available:[...]},绝不抛;
     - skill.run 抛错 → 兜成 {status:'error', error:...},绝不向上炸编排循环;
-    - model_fn 默认 None(走规则,不真烧 LLM);record 透传给 skill(由它 best-effort 落账本)。
+    - model_fn 默认 None(走规则,不真烧 LLM);record 透传给 skill(由它 best-effort 落账本);
+    - 认证 staff 只传给显式声明该参数的 skill,不混入/落入业务 input payload。
     红线:不触 viltrox_fit_score;skill 内部只读 fit 作展示信号。
     """
     name = str(skill_name or "").strip()
@@ -144,7 +162,10 @@ def dispatch_skill(skill_name: str, skill_input: dict[str, Any] | None, *,
                 "available": sorted(table.keys())}
     payload = skill_input if isinstance(skill_input, dict) else {}
     try:
-        out = run_fn(payload, model_fn=model_fn, record=record)
+        run_kwargs: dict[str, Any] = {"model_fn": model_fn, "record": record}
+        if run_accepts_staff_context(run_fn):
+            run_kwargs["staff"] = staff
+        out = run_fn(payload, **run_kwargs)
     except Exception as exc:  # 编排循环里单个 skill 跑挂不应炸整批
         logger.warning("skill_registry.dispatch_skill failed: %s", name, exc_info=True)
         return {"status": "error", "error": f"skill_run_failed: {str(exc)[:160]}", "skill_name": name}

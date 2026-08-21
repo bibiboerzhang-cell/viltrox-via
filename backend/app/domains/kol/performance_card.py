@@ -4,7 +4,7 @@
 四块(全部纯聚合已有数据,零新采集、零 LLM、零写库):
   🎬 content   带品内容:Viltrox 相关视频数 / 总播放 / 总互动(evidence)+ 已深析条数(final_v1);
   🛒 commerce  商业转化:goaffpro 短链点击/订单/GMV + Shopify 归因订单 + 自建短链点击/订单
-               (三源分列、守卫读,表空诚实 0,绝不编数);
+               (三源分列;没有跨源 canonical key 时不生成伪总数);
   🗓 timeline  合作时间线:项目派单(vkpi_project_kol_assignments×vkpi_projects)+ 首条/最新带品视频;
   💌 share_text 可直接发给 KOL 的中英双语感谢短文(模板法零 LLM,数字全真)。
 
@@ -66,6 +66,19 @@ def _fmt_int(n: int) -> str:
     return f"{int(n):,}"
 
 
+def _known_metric_sum(rows: list[dict[str, Any]], key: str) -> tuple[int | None, int]:
+    values: list[int] = []
+    for row in rows:
+        value = row.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            values.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    return (sum(values), len(values)) if values else (None, 0)
+
+
 # ── 数据装载(全只读、守卫读)────────────────────────────────────────
 
 
@@ -81,9 +94,22 @@ def _load_pool_row(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
-def _load_evidence_rows(conn: Any, kol_pool_id: int, limit: int = 500) -> list[dict[str, Any]]:
+def _load_evidence_rows(
+    conn: Any,
+    kol_pool_id: int,
+    limit: int = 500,
+    *,
+    project_ids: list[int] | None = None,
+) -> list[dict[str, Any]]:
+    project_clause = ""
+    project_params: list[int] = []
+    if project_ids is not None:
+        if not project_ids:
+            return []
+        project_clause = f"AND project_id IN ({','.join('?' for _ in project_ids)})"
+        project_params = [int(pid) for pid in project_ids]
     rows = conn.execute(
-        """
+        f"""
         SELECT
           id AS evidence_id,
           COALESCE(video_title, title, '') AS title,
@@ -96,16 +122,29 @@ def _load_evidence_rows(conn: Any, kol_pool_id: int, limit: int = 500) -> list[d
           is_active
         FROM vkpi_kol_video_evidence
         WHERE kol_pool_id = ?
+          {project_clause}
         ORDER BY COALESCE(view_count, 0) DESC, id DESC
         LIMIT ?
         """,
-        (int(kol_pool_id), int(limit)),
+        (int(kol_pool_id), *project_params, int(limit)),
     ).fetchall()
     return [dict(r) for r in rows if _truthy(dict(r).get("is_active"))]
 
 
-def _deep_analyzed_count(conn: Any, kol_pool_id: int) -> int:
+def _deep_analyzed_count(
+    conn: Any,
+    kol_pool_id: int,
+    *,
+    project_ids: list[int] | None = None,
+) -> int:
     try:
+        project_clause = ""
+        project_params: list[int] = []
+        if project_ids is not None:
+            if not project_ids:
+                return 0
+            project_clause = f"AND e.project_id IN ({','.join('?' for _ in project_ids)})"
+            project_params = [int(pid) for pid in project_ids]
         row = conn.execute(
             f"""
             SELECT COUNT(*) AS n
@@ -115,8 +154,9 @@ def _deep_analyzed_count(conn: Any, kol_pool_id: int) -> int:
               AND ac.derive_method = ?
               AND ac.status = 'ready'
               AND e.kol_pool_id = ?
+              {project_clause}
             """,
-            (FINAL_V1_DERIVE_METHOD, int(kol_pool_id)),
+            (FINAL_V1_DERIVE_METHOD, int(kol_pool_id), *project_params),
         ).fetchone()
         return _int0(dict(row).get("n")) if row else 0
     except Exception:
@@ -127,8 +167,13 @@ def _deep_analyzed_count(conn: Any, kol_pool_id: int) -> int:
 # ── 🎬 块一:带品内容 ────────────────────────────────────────────────
 
 
-def _content_block(conn: Any, kol_pool_id: int) -> dict[str, Any]:
-    rows = _load_evidence_rows(conn, kol_pool_id)
+def _content_block(
+    conn: Any,
+    kol_pool_id: int,
+    *,
+    project_ids: list[int] | None = None,
+) -> dict[str, Any]:
+    rows = _load_evidence_rows(conn, kol_pool_id, project_ids=project_ids)
     if not rows:
         return {
             "status": "empty",
@@ -137,23 +182,35 @@ def _content_block(conn: Any, kol_pool_id: int) -> dict[str, Any]:
             "total_views": 0,
             "total_likes": 0,
             "total_comments": 0,
-            "deep_analyzed_count": _deep_analyzed_count(conn, kol_pool_id),
+            "deep_analyzed_count": _deep_analyzed_count(conn, kol_pool_id, project_ids=project_ids),
         }
-    total_views = sum(_int0(r.get("view_count")) for r in rows)
-    total_likes = sum(_int0(r.get("like_count")) for r in rows)
-    total_comments = sum(_int0(r.get("comment_count")) for r in rows)
+    total_views, views_known = _known_metric_sum(rows, "view_count")
+    total_likes, likes_known = _known_metric_sum(rows, "like_count")
+    total_comments, comments_known = _known_metric_sum(rows, "comment_count")
+    metric_coverage = {
+        "views": {"observed": views_known, "total": len(rows)},
+        "likes": {"observed": likes_known, "total": len(rows)},
+        "comments": {"observed": comments_known, "total": len(rows)},
+    }
+    complete = all(item["observed"] == item["total"] for item in metric_coverage.values())
     published = sorted(d for d in (_day(r.get("published_at")) for r in rows) if d)
     top = rows[0]  # 已按 view_count DESC 排好
     top_views = _int0(top.get("view_count"))
     return {
-        "status": "ready",
+        "status": "ready" if complete else "partial",
+        "reason": None if complete else "部分视频播放/互动指标缺失;仅展示已观测值,全缺字段保持 null。",
         "branded_videos": len(rows),
         "total_views": total_views,
         "total_likes": total_likes,
         "total_comments": total_comments,
-        "engagement_total": total_likes + total_comments,
+        "engagement_total": (
+            total_likes + total_comments
+            if total_likes is not None and total_comments is not None
+            else None
+        ),
         "views_sample": sum(1 for r in rows if _int0(r.get("view_count")) > 0),
-        "deep_analyzed_count": _deep_analyzed_count(conn, kol_pool_id),
+        "metric_coverage": metric_coverage,
+        "deep_analyzed_count": _deep_analyzed_count(conn, kol_pool_id, project_ids=project_ids),
         "first_video_at": published[0] if published else None,
         "last_video_at": published[-1] if published else None,
         "top_video": {
@@ -205,29 +262,85 @@ def _goaffpro_block(conn: Any, kol_pool_id: int) -> dict[str, Any]:
         return {"available": False, "clicks": 0, "orders": 0, "gmv_cents": 0, "reason": "goaffpro 读取失败"}
 
 
-def _shopify_block(conn: Any, kol_pool_id: int) -> dict[str, Any]:
+def _shopify_block(
+    conn: Any,
+    linked_main_kol_id: Any,
+    *,
+    project_ids: list[int] | None = None,
+) -> dict[str, Any]:
+    """Verified Shopify attribution only; raw normalized orders are not business truth."""
+
     from app.db.connection import table_exists
 
-    if not table_exists("vkpi_shopify_orders"):
-        return {"available": False, "orders": 0, "gmv_cents": 0, "reason": "shopify 订单表未建"}
+    main_id = _int0(linked_main_kol_id)
+    if main_id <= 0:
+        return {
+            "available": False,
+            "orders": None,
+            "gmv_cents": None,
+            "reason": "该 KOL 未桥接主档(linked_main_kol_id 空),无法读取 verified Shopify 归因",
+        }
+    if not table_exists("vkpi_sales_attributions") or not table_exists("vkpi_shopify_order_snapshots"):
+        return {
+            "available": False,
+            "orders": None,
+            "gmv_cents": None,
+            "reason": "verified Shopify 归因表/签名快照表未建",
+        }
     try:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS orders, COALESCE(SUM(total_price_cents), 0) AS gmv_cents
-            FROM vkpi_shopify_orders
-            WHERE attributed_kol_pool_id = ?
-              AND LOWER(COALESCE(financial_status,'')) IN ('paid','partially_paid','partially_refunded')
+        project_clause = ""
+        project_params: list[int] = []
+        if project_ids is not None:
+            if not project_ids:
+                return {"available": False, "orders": None, "gmv_cents": None, "reason": "无可见项目商业归因"}
+            project_clause = f"AND s.project_id IN ({','.join('?' for _ in project_ids)})"
+            project_params = [int(pid) for pid in project_ids]
+        rows = conn.execute(
+            f"""
+            SELECT COALESCE(NULLIF(s.currency, ''), 'USD') AS currency,
+                   COUNT(DISTINCT s.shopify_order_snapshot_id) AS orders,
+                   COALESCE(SUM(s.revenue_cents), 0) AS gmv_cents
+            FROM vkpi_sales_attributions s
+            WHERE s.kol_id = ?
+              {project_clause}
+              AND {business_truth.verified_shopify_attribution_sql('s')}
+            GROUP BY COALESCE(NULLIF(s.currency, ''), 'USD')
             """,
-            (int(kol_pool_id),),
-        ).fetchone()
-        data = dict(row) if row else {}
-        return {"available": True, "orders": _int0(data.get("orders")), "gmv_cents": _int0(data.get("gmv_cents"))}
+            (main_id, *project_params),
+        ).fetchall()
+        by_currency = [
+            {
+                "currency": _text(dict(row).get("currency"), 12) or "USD",
+                "orders": _int0(dict(row).get("orders")),
+                "gmv_cents": _int0(dict(row).get("gmv_cents")),
+            }
+            for row in rows
+        ]
+        primary = (
+            max(by_currency, key=lambda item: (item["gmv_cents"], item["orders"]))
+            if by_currency
+            else {"currency": "USD", "orders": 0, "gmv_cents": 0}
+        )
+        return {
+            "available": True,
+            "orders": primary["orders"],
+            "gmv_cents": primary["gmv_cents"],
+            "currency": primary["currency"],
+            "by_currency": by_currency,
+            "mixed_currency": len(by_currency) > 1,
+            "truth_status": "provider_verified_shopify",
+        }
     except Exception:
         logger.debug("performance_card.shopify_failed", exc_info=True)
-        return {"available": False, "orders": 0, "gmv_cents": 0, "reason": "shopify 读取失败"}
+        return {"available": False, "orders": None, "gmv_cents": None, "reason": "verified Shopify 归因读取失败"}
 
 
-def _short_links_block(conn: Any, linked_main_kol_id: Any) -> dict[str, Any]:
+def _short_links_block(
+    conn: Any,
+    linked_main_kol_id: Any,
+    *,
+    project_ids: list[int] | None = None,
+) -> dict[str, Any]:
     """自建短链(vkpi_links.kol_id 桥 kols 主档):点击(排 bot)/订单/收入。未桥接诚实说明。"""
     from app.db.connection import table_exists
 
@@ -237,19 +350,32 @@ def _short_links_block(conn: Any, linked_main_kol_id: Any) -> dict[str, Any]:
     if not table_exists("vkpi_links"):
         return {"available": False, "links": 0, "clicks": 0, "orders": 0, "reason": "短链表未建"}
     try:
+        scoped = project_ids is not None
+        if scoped and not project_ids:
+            return {"available": False, "links": 0, "clicks": 0, "orders": 0, "reason": "无可见项目短链"}
+        placeholders = ",".join("?" for _ in (project_ids or []))
+        l_scope = f" AND l.project_id IN ({placeholders})" if scoped else ""
+        l2_scope = f" AND l2.project_id IN ({placeholders})" if scoped else ""
+        l3_scope = f" AND l3.project_id IN ({placeholders})" if scoped else ""
+        scoped_ids = [int(pid) for pid in (project_ids or [])]
         row = conn.execute(
             f"""
             SELECT
-              (SELECT COUNT(*) FROM vkpi_links l WHERE l.kol_id = ?) AS links,
+              (SELECT COUNT(*) FROM vkpi_links l WHERE l.kol_id = ?{l_scope}) AS links,
               (SELECT COUNT(*) FROM vkpi_link_clicks ck
                  JOIN vkpi_links l2 ON l2.id = ck.link_id
-                 WHERE l2.kol_id = ? AND COALESCE(ck.is_bot, 0) = 0) AS clicks,
+                 WHERE l2.kol_id = ?{l2_scope} AND COALESCE(ck.is_bot, 0) = 0) AS clicks,
               (SELECT COUNT(*) FROM vkpi_sales_attributions s
                  JOIN vkpi_links l3 ON l3.id = s.link_id
                  WHERE l3.kol_id = ?
+                   {l3_scope}
                    AND {business_truth.verified_shopify_attribution_sql('s')}) AS orders
             """,
-            (main_id, main_id, main_id),
+            (
+                main_id, *scoped_ids,
+                main_id, *scoped_ids,
+                main_id, *scoped_ids,
+            ),
         ).fetchone()
         data = dict(row) if row else {}
         return {
@@ -263,44 +389,93 @@ def _short_links_block(conn: Any, linked_main_kol_id: Any) -> dict[str, Any]:
         return {"available": False, "links": 0, "clicks": 0, "orders": 0, "reason": "短链读取失败"}
 
 
-def _commerce_block(conn: Any, kol_pool_id: int, linked_main_kol_id: Any) -> dict[str, Any]:
-    goaffpro = _goaffpro_block(conn, kol_pool_id)
-    shopify = _shopify_block(conn, kol_pool_id)
-    short_links = _short_links_block(conn, linked_main_kol_id)
-    clicks = _int0(goaffpro.get("clicks")) + _int0(short_links.get("clicks"))
-    orders = _int0(goaffpro.get("orders")) + _int0(shopify.get("orders")) + _int0(short_links.get("orders"))
+def _commerce_block(
+    conn: Any,
+    kol_pool_id: int,
+    linked_main_kol_id: Any,
+    *,
+    project_ids: list[int] | None = None,
+) -> dict[str, Any]:
+    goaffpro = (
+        _goaffpro_block(conn, kol_pool_id)
+        if project_ids is None
+        else {
+            "available": False,
+            "clicks": None,
+            "orders": None,
+            "gmv_cents": None,
+            "reason": "GoAffPro 聚合无 project_id,普通员工项目 scope 下不可安全分摊。",
+        }
+    )
+    shopify = _shopify_block(conn, linked_main_kol_id, project_ids=project_ids)
+    short_links = _short_links_block(conn, linked_main_kol_id, project_ids=project_ids)
+    sources = {"goaffpro": goaffpro, "shopify": shopify, "short_links": short_links}
+    available_sources = [name for name, block in sources.items() if block.get("available")]
+    has_signal = any(
+        _int0(block.get(metric)) > 0
+        for block in sources.values()
+        for metric in ("clicks", "orders", "gmv_cents")
+    )
     return {
-        "status": "ready" if (clicks > 0 or orders > 0) else "empty",
-        "reason": None if (clicks > 0 or orders > 0) else "三源(goaffpro/Shopify/自建短链)均无该 KOL 转化数据 — 诚实 0,非估算。",
+        "status": "partial" if available_sources else "empty",
+        "reason": (
+            "各商业源缺少可跨源对齐的 canonical order/click key;仅分源展示,不生成总数。"
+            if available_sources
+            else "三源(goaffpro/verified Shopify/自建短链)均不可用。"
+        ),
         "goaffpro": goaffpro,
         "shopify": shopify,
         "short_links": short_links,
-        "total_clicks": clicks,
-        "total_orders": orders,
-        "note": "三源独立计数直加,未做跨源去重;仅展示,不参与任何评分。",
+        # Compatibility keys remain, but fail closed instead of pretending that
+        # addition is deduplication.  Consumers must use the source blocks.
+        "total_clicks": None,
+        "total_orders": None,
+        "partial": bool(available_sources),
+        "has_signal": has_signal,
+        "available_sources": available_sources,
+        "dedupe_status": "unavailable_no_canonical_cross_source_key",
+        "aggregate_usable_for_share": False,
+        "note": (
+            "三源可能描述同一订单/点击;无 canonical cross-source key 时禁止直加,"
+            "仅分源展示且不参与评分。"
+        ),
     }
 
 
 # ── 🗓 块三:合作时间线 ──────────────────────────────────────────────
 
 
-def _timeline_block(conn: Any, kol_pool_id: int, content: dict[str, Any]) -> dict[str, Any]:
+def _timeline_block(
+    conn: Any,
+    kol_pool_id: int,
+    content: dict[str, Any],
+    *,
+    project_ids: list[int] | None = None,
+) -> dict[str, Any]:
     from app.db.connection import table_exists
 
     projects: list[dict[str, Any]] = []
     if table_exists("vkpi_project_kol_assignments"):
         try:
+            project_clause = ""
+            project_params: list[int] = []
+            if project_ids is not None:
+                if not project_ids:
+                    return {"status": "empty", "reason": "无可见关联项目。", "projects": [], "events": []}
+                project_clause = f"AND a.project_id IN ({','.join('?' for _ in project_ids)})"
+                project_params = [int(pid) for pid in project_ids]
             rows = conn.execute(
-                """
+                f"""
                 SELECT a.id AS assignment_id, a.project_id, a.stage, a.created_at, a.updated_at,
                        p.project_name, p.product_name
                 FROM vkpi_project_kol_assignments a
                 JOIN vkpi_projects p ON p.id = a.project_id
                 WHERE a.kol_pool_id = ?
+                  {project_clause}
                 ORDER BY a.created_at ASC
                 LIMIT 100
                 """,
-                (int(kol_pool_id),),
+                (int(kol_pool_id), *project_params),
             ).fetchall()
             for r in rows:
                 row = dict(r)
@@ -342,8 +517,9 @@ def _share_text(kol: dict[str, Any], content: dict[str, Any], commerce: dict[str
     top = content.get("top_video") if isinstance(content.get("top_video"), dict) else {}
     top_title = _text((top or {}).get("title"), 90)
     top_views = _int0((top or {}).get("view_count"))
-    clicks = _int0(commerce.get("total_clicks"))
-    orders = _int0(commerce.get("total_orders"))
+    aggregate_usable = commerce.get("aggregate_usable_for_share") is True
+    clicks = _int0(commerce.get("total_clicks")) if aggregate_usable else 0
+    orders = _int0(commerce.get("total_orders")) if aggregate_usable else 0
     first_at = str(content.get("first_video_at") or "")[:7]  # YYYY-MM,足够表达「同行自」
     project_count = _int0(timeline.get("project_count"))
 
@@ -388,11 +564,51 @@ def _share_text(kol: dict[str, Any], content: dict[str, Any], commerce: dict[str
 # ── 主入口 ──────────────────────────────────────────────────────────
 
 
-def performance_card(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
+def _financial_project_ids(
+    conn: Any,
+    kol_pool_id: int,
+    staff: dict[str, Any] | None,
+) -> tuple[bool, bool, list[int]]:
+    """Return (scope_available, company_scope, visible associated project ids)."""
+
+    from app.domains.kol import roi_aggregate
+
+    allowed, project_scope_sql, project_scope_params = roi_aggregate._financial_project_scope(staff)
+    if not allowed:
+        return False, False, []
+    company_scope = not bool(project_scope_sql)
+    project_scope_clause = f"AND {project_scope_sql}" if project_scope_sql else ""
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT a.project_id
+            FROM vkpi_project_kol_assignments a
+            JOIN vkpi_projects p ON p.id = a.project_id
+            WHERE a.kol_pool_id = ?
+              {project_scope_clause}
+            ORDER BY a.project_id
+            """,
+            (int(kol_pool_id), *project_scope_params),
+        ).fetchall()
+    except Exception:
+        logger.debug("performance_card.project_scope_failed", exc_info=True)
+        return False, company_scope, []
+    return True, company_scope, [int(dict(row)["project_id"]) for row in rows]
+
+
+def performance_card(
+    kol_pool_id: int,
+    *,
+    conn: Any = None,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """KOL 战绩卡:结构化 JSON + 双语 share_text;KOL 不存在抛 LookupError(路由转 404)。"""
     from app.db.connection import get_conn
 
     db = conn or get_conn()
+    scope_available, company_scope, project_ids = _financial_project_ids(db, int(kol_pool_id), staff)
+    if not scope_available or (not company_scope and not project_ids):
+        raise LookupError(f"kol_pool {kol_pool_id} not found")
     pool = _load_pool_row(db, int(kol_pool_id))
     if not pool:
         raise LookupError(f"kol_pool {kol_pool_id} not found")
@@ -403,9 +619,20 @@ def performance_card(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
         "platform": _text(pool.get("platform"), 30),
         "country": _text(pool.get("country"), 60),
     }
-    content = _content_block(db, int(kol_pool_id))
-    commerce = _commerce_block(db, int(kol_pool_id), pool.get("linked_main_kol_id"))
-    timeline = _timeline_block(db, int(kol_pool_id), content)
+    scoped_project_ids = None if company_scope else project_ids
+    content = _content_block(db, int(kol_pool_id), project_ids=scoped_project_ids)
+    commerce = _commerce_block(
+        db,
+        int(kol_pool_id),
+        pool.get("linked_main_kol_id"),
+        project_ids=scoped_project_ids,
+    )
+    timeline = _timeline_block(
+        db,
+        int(kol_pool_id),
+        content,
+        project_ids=scoped_project_ids,
+    )
     share = _share_text(kol, content, commerce, timeline)
 
     return {
@@ -415,8 +642,12 @@ def performance_card(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
         "content": content,
         "commerce": commerce,
         "timeline": timeline,
+        "financial_scope": "company" if company_scope else "visible_projects",
         "share_text": share,
         "share_text_policy": "only-their-own-numbers; template_v1 zero-LLM; 绝不含内部评分/内部字段(见 INTERNAL_LEAK_TERMS)",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "note": "纯聚合已有数据(evidence + final_v1 计数 + goaffpro/Shopify/短链守卫读);无数据诚实 0;独立展示信号,不参与 V6 Fit 评分。",
+        "note": (
+            "纯聚合已有数据(evidence + final_v1 计数 + goaffpro/verified Shopify/短链守卫读);"
+            "商业源无跨源 canonical key 时仅分源展示;独立信号不参与 V6 Fit 评分。"
+        ),
     }

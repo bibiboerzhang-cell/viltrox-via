@@ -103,11 +103,15 @@ OFFICIAL_DAY_SQL = """
     LIMIT ?
 """
 
-KOL_VIEWS_CURRENT_SQL = """
+KOL_VIEWS_CURRENT_SQL = f"""
     SELECT COUNT(*) AS total_evidence,
-           COUNT(view_count) AS measured,
-           COALESCE(SUM(view_count), 0) AS views_total
-    FROM vkpi_kol_video_evidence
+           COUNT(e.view_count) AS measured,
+           COALESCE(SUM(e.view_count), 0) AS views_total
+    FROM vkpi_kol_video_evidence e
+    JOIN vkpi_kol_pool kp ON kp.id = e.kol_pool_id
+    WHERE kp.duplicate_of_id IS NULL
+      AND e.is_active IS NOT FALSE
+      AND {_COLLECTION_COND}
 """
 
 FUNNEL_SQL = f"""
@@ -143,9 +147,12 @@ FIT_DIST_SQL = """
     LIMIT ?
 """
 
-CONTACT_TYPES_SQL = """
+CONTACT_TYPES_SQL = f"""
     SELECT ct.contact_type AS contact_type, COUNT(*) AS n
     FROM vkpi_kol_pool_contacts ct
+    JOIN vkpi_kol_pool kp ON kp.id = ct.kol_pool_id
+    WHERE kp.duplicate_of_id IS NULL
+      AND {_COLLECTION_COND}
     GROUP BY 1
     ORDER BY 2 DESC
     LIMIT ?
@@ -161,7 +168,7 @@ CONTACT_COVERAGE_SQL = f"""
       AND {_COLLECTION_COND}
 """
 
-VIEWS_TOP_SQL = """
+VIEWS_TOP_SQL = f"""
     SELECT e.kol_pool_id AS kol_pool_id,
            COALESCE(NULLIF(kp.display_name, ''), kp.handle, '') AS display_name,
            COALESCE(kp.handle, '') AS handle,
@@ -172,6 +179,8 @@ VIEWS_TOP_SQL = """
     JOIN vkpi_kol_pool kp ON kp.id = e.kol_pool_id
     WHERE e.view_count IS NOT NULL
       AND e.is_active IS NOT FALSE
+      AND kp.duplicate_of_id IS NULL
+      AND {_COLLECTION_COND}
     GROUP BY 1, 2, 3, 4
     ORDER BY 5 DESC, 1 ASC
     LIMIT ?
@@ -210,6 +219,7 @@ WITH v_content_signals AS (
         ORDER BY c.id DESC
         LIMIT 1
     ) fv ON TRUE
+    WHERE e.is_active IS NOT FALSE
 ),
 v_content_classified AS (
     SELECT s.*,
@@ -257,36 +267,48 @@ RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
     LIMIT ?
 """
 
-V_CONTENT_SQL = V_CONTENT_CLASSIFIED_CTE + """
+V_CONTENT_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
     SELECT COUNT(*) AS total_evidence,
            SUM(CASE WHEN v_tier = 'cooperation' THEN 1 ELSE 0 END) AS cooperation,
            SUM(CASE WHEN v_tier = 'analysis_confirmed' THEN 1 ELSE 0 END) AS analysis_confirmed,
            SUM(CASE WHEN v_tier = 'title_mention' THEN 1 ELSE 0 END) AS title_mention,
            SUM(CASE WHEN v_tier = 'not_related' THEN 1 ELSE 0 END) AS not_related,
            SUM(CASE WHEN v_tier = 'undetermined' THEN 1 ELSE 0 END) AS undetermined
-    FROM v_content_classified
+    FROM v_content_classified vc
+    JOIN vkpi_kol_pool kp ON kp.id = vc.kol_pool_id
+    WHERE kp.duplicate_of_id IS NULL
+      AND {_COLLECTION_COND}
 """
 
-V_KOL_COUNT_SQL = V_CONTENT_CLASSIFIED_CTE + """
-    SELECT COUNT(DISTINCT kol_pool_id) AS n
-    FROM v_content_classified
-    WHERE v_tier IN ('cooperation', 'analysis_confirmed', 'title_mention')
+V_KOL_COUNT_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
+    SELECT COUNT(DISTINCT vc.kol_pool_id) AS n
+    FROM v_content_classified vc
+    JOIN vkpi_kol_pool kp ON kp.id = vc.kol_pool_id
+    WHERE kp.duplicate_of_id IS NULL
+      AND {_COLLECTION_COND}
+      AND vc.v_tier IN ('cooperation', 'analysis_confirmed', 'title_mention')
 """
 
-V_KOL_IDS_SQL = V_CONTENT_CLASSIFIED_CTE + """
-    SELECT DISTINCT kol_pool_id AS kol_pool_id
-    FROM v_content_classified
-    WHERE kol_pool_id IS NOT NULL
-      AND v_tier IN ('cooperation', 'analysis_confirmed', 'title_mention')
+V_KOL_IDS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
+    SELECT DISTINCT vc.kol_pool_id AS kol_pool_id
+    FROM v_content_classified vc
+    JOIN vkpi_kol_pool kp ON kp.id = vc.kol_pool_id
+    WHERE kp.duplicate_of_id IS NULL
+      AND {_COLLECTION_COND}
+      AND vc.kol_pool_id IS NOT NULL
+      AND vc.v_tier IN ('cooperation', 'analysis_confirmed', 'title_mention')
     ORDER BY 1
     LIMIT ?
 """
 
-V_KOL_TIERS_SQL = V_CONTENT_CLASSIFIED_CTE + """
-    SELECT COUNT(DISTINCT CASE WHEN v_tier = 'cooperation' THEN kol_pool_id END) AS cooperation_kols,
-           COUNT(DISTINCT CASE WHEN v_tier = 'analysis_confirmed' THEN kol_pool_id END) AS analysis_confirmed_kols,
-           COUNT(DISTINCT CASE WHEN v_tier = 'title_mention' THEN kol_pool_id END) AS title_mention_kols,
-           COUNT(DISTINCT CASE WHEN v_tier = 'not_related' THEN kol_pool_id END) AS not_related_kols,
-           COUNT(DISTINCT CASE WHEN v_tier = 'undetermined' THEN kol_pool_id END) AS undetermined_kols
-    FROM v_content_classified
+V_KOL_TIERS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
+    SELECT COUNT(DISTINCT CASE WHEN vc.v_tier = 'cooperation' THEN vc.kol_pool_id END) AS cooperation_kols,
+           COUNT(DISTINCT CASE WHEN vc.v_tier = 'analysis_confirmed' THEN vc.kol_pool_id END) AS analysis_confirmed_kols,
+           COUNT(DISTINCT CASE WHEN vc.v_tier = 'title_mention' THEN vc.kol_pool_id END) AS title_mention_kols,
+           COUNT(DISTINCT CASE WHEN vc.v_tier = 'not_related' THEN vc.kol_pool_id END) AS not_related_kols,
+           COUNT(DISTINCT CASE WHEN vc.v_tier = 'undetermined' THEN vc.kol_pool_id END) AS undetermined_kols
+    FROM v_content_classified vc
+    JOIN vkpi_kol_pool kp ON kp.id = vc.kol_pool_id
+    WHERE kp.duplicate_of_id IS NULL
+      AND {_COLLECTION_COND}
 """

@@ -22,6 +22,7 @@ import time
 from typing import Any, Callable, Optional
 
 from app.core.logging import get_logger
+from app.domains.access import scope as access_scope
 
 logger = get_logger(__name__)
 
@@ -49,7 +50,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
     "next_action": "str — 建议下一步(规则或注入 model_fn 产出)",
     "confidence": "float — 0..1 置信度",
     "missing_data": "bool — True 表示无真实商业数据,字段诚实留空未臆造",
-    "status": "str — 'ready' | 'missing_data' | 'not_found' | 'invalid_input'",
+    "status": "str — 'ready' | 'missing_data' | 'not_found' | 'invalid_input' | 'unavailable'",
 }
 
 
@@ -76,8 +77,10 @@ def _roi_block(spend: int | None, gmv: int | None, ratio: Any) -> dict[str, Any]
     return {"spend_cents": spend_c, "attributed_gmv_cents": gmv_c, "roi_ratio": roi_ratio}
 
 
-def _kol_weight(kol_pool_id: int) -> float | None:
+def _kol_weight(kol_pool_id: int, staff: dict[str, Any] | None) -> float | None:
     """复用 roi_aggregate 的推荐漏斗权重做 KOL 维度信号(独立展示信号,绝不并入 fit)。"""
+    if not access_scope.can_view_all(staff, domain="finance"):
+        return None
     try:
         from app.domains.kol import roi_aggregate
 
@@ -117,7 +120,13 @@ def _rule_next_action(*, roi_ratio: float | None, missing: bool, weight: float |
     return ("pause_and_review", 0.7)
 
 
-def run(input: dict[str, Any], *, model_fn: Optional[ModelFn] = None, record: bool = True) -> dict[str, Any]:
+def run(
+    input: dict[str, Any],
+    *,
+    model_fn: Optional[ModelFn] = None,
+    record: bool = True,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """执行 roi_review_v1。返回符合 OUTPUT_SCHEMA 的 dict。best-effort 落账。"""
     started = time.monotonic()
     data = dict(input or {})
@@ -140,6 +149,22 @@ def run(input: dict[str, Any], *, model_fn: Optional[ModelFn] = None, record: bo
         _maybe_record(out, data, model_fn, started, record)
         return out
 
+    if access_scope.actor_staff_id(staff) <= 0:
+        requested_scope = "project" if project_id else "kol"
+        subject_id = int(project_id or kol_pool_id or 0)
+        out = {
+            "scope": requested_scope,
+            "subject_id": subject_id,
+            "roi": _roi_block(None, None, None),
+            "outcome_labels": ["authorization_context_unavailable"],
+            "next_action": "retry_with_staff_context",
+            "confidence": 0.0,
+            "missing_data": True,
+            "status": "unavailable",
+        }
+        _maybe_record(out, data, model_fn, started, record)
+        return out
+
     # ── ② 调现有服务产出 ROI ────────────────────────────────────────────────
     weight: float | None = None
     if project_id:
@@ -148,7 +173,7 @@ def run(input: dict[str, Any], *, model_fn: Optional[ModelFn] = None, record: bo
         try:
             from app.domains.metrics import aggregation
 
-            agg = aggregation.aggregate_project_metrics(project_id, window_days=window)
+            agg = aggregation.aggregate_project_metrics(project_id, window_days=window, staff=staff)
         except Exception:
             logger.debug("roi_review.project_agg_failed", exc_info=True)
             agg = {"status": "missing_data"}
@@ -163,7 +188,7 @@ def run(input: dict[str, Any], *, model_fn: Optional[ModelFn] = None, record: bo
         try:
             from app.domains.kol import roi_aggregate
 
-            agg = roi_aggregate.get_kol_roi_summary(kol_pool_id)
+            agg = roi_aggregate.get_kol_roi_summary(kol_pool_id, staff=staff)
         except Exception:
             logger.debug("roi_review.kol_agg_failed", exc_info=True)
             agg = {"status": "missing_data"}
@@ -172,7 +197,7 @@ def run(input: dict[str, Any], *, model_fn: Optional[ModelFn] = None, record: bo
         gmv = agg.get("revenue_cents")
         ratio = agg.get("roi")
         not_found = status_raw == "not_found"
-        weight = _kol_weight(kol_pool_id)
+        weight = _kol_weight(kol_pool_id, staff)
 
     if not_found:
         out = {

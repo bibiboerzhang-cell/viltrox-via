@@ -144,8 +144,11 @@ def kol_roi_metrics(
     """R16 · 单 KOL 的 ROI 汇总 + 下次推荐权重(只读展示信号,绝不并入 viltrox_fit_score)。"""
     from app.domains.kol import roi_aggregate
 
+    summary = roi_aggregate.get_kol_roi_summary(kol_pool_id, staff=staff)
+    if summary.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail="KOL not found")
     return {
         "kol_pool_id": int(kol_pool_id),
-        "roi_summary": roi_aggregate.get_kol_roi_summary(kol_pool_id, staff=staff),
+        "roi_summary": summary,
         "next_recommendation_weight": roi_aggregate.compute_next_recommendation_weight(kol_pool_id),
     }

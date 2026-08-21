@@ -205,6 +205,18 @@ export async function getMyKolBoardExt(token: string, params: { days?: number; s
 
 /* ============ ② 单 KOL 全部 evidence 视频(/kol-pool/{id}/videos 类型化) ============ */
 
+export type ContentTrackingStatus = "tracked" | "failed" | "stale" | "insufficient_history" | "unavailable";
+export type ContentFreshness = "fresh" | "stale" | "never" | "unavailable";
+
+export interface VkpiContentMetricAttempt {
+  status?: "success" | "failed" | "legacy_current_only" | string;
+  fetched_at?: string | null;
+  views?: number | null;
+  likes?: number | null;
+  comments?: number | null;
+  shares?: number | null;
+}
+
 export interface VkpiKolPoolVideoRow {
   evidence_id?: number;
   id?: number;
@@ -235,6 +247,18 @@ export interface VkpiKolPoolVideoRow {
   llm_competitor_mentions?: string[] | null;
   /** board-ext recent_videos 由共享 SQL CTE 直接下发；逐 KOL 端点可缺席并由纯函数同构派生。 */
   v_tier?: VContentTier;
+  /** 指标快照读模型；缺迁移旧库返回 unavailable，绝不触发刷新。 */
+  last_attempt?: VkpiContentMetricAttempt | null;
+  last_success?: VkpiContentMetricAttempt | null;
+  sample_count?: number;
+  attempt_count?: number;
+  views_delta_24h?: number | null;
+  views_delta_7d?: number | null;
+  delta_24h_status?: "ready" | "insufficient_history" | string;
+  delta_7d_status?: "ready" | "insufficient_history" | string;
+  freshness?: ContentFreshness;
+  tracking_status?: ContentTrackingStatus;
+  history_capped?: boolean;
 }
 
 export async function getMyKolPoolVideos(token: string, kolPoolId: number | string, limit = 200) {
@@ -243,6 +267,36 @@ export async function getMyKolPoolVideos(token: string, kolPoolId: number | stri
     {},
     token,
   );
+}
+
+function signedDelta(value: number): string {
+  const normalized = Number(value);
+  if (!Number.isFinite(normalized)) return "待积累";
+  return `${normalized > 0 ? "+" : ""}${normalized.toLocaleString()}`;
+}
+
+function refreshStamp(video: VkpiKolPoolVideoRow): string {
+  if (video.last_success?.status === "legacy_current_only") return "";
+  const raw = String(video.last_success?.fetched_at || "").trim();
+  return raw ? raw.replace("T", " ").slice(0, 16) : "";
+}
+
+/** 快照趋势文案；明确是最后一次抓取，不使用“实时”表述。空串表示来源未下发趋势字段。 */
+export function videoTrendText(video: VkpiKolPoolVideoRow): string {
+  const status = video.tracking_status;
+  if (!status) return "";
+  const stamp = refreshStamp(video);
+  if (status === "unavailable") return "趋势追踪不可用";
+  if (status === "failed") return `刷新失败${stamp ? ` · 上次成功 ${stamp}` : ""}`;
+  if (status === "insufficient_history") return `趋势待积累${stamp ? ` · 最后刷新 ${stamp}` : ""}`;
+  const delta24 = video.delta_24h_status === "ready" && video.views_delta_24h != null
+    ? signedDelta(video.views_delta_24h)
+    : "待积累";
+  const delta7 = video.delta_7d_status === "ready" && video.views_delta_7d != null
+    ? signedDelta(video.views_delta_7d)
+    : "待积累";
+  const prefix = status === "stale" || video.freshness === "stale" ? "数据已陈旧 · " : "";
+  return `${prefix}24h ${delta24} · 7d ${delta7}${stamp ? ` · 最后刷新 ${stamp}` : ""}`;
 }
 
 /* ============ ③ Viltrox 内容证据分级(项目 / final_v1 / 标题 / 未识别 / 未判定) ============ */

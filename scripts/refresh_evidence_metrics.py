@@ -15,6 +15,7 @@ import datetime as dt
 import json
 import os
 import re
+import sys
 import time
 import urllib.parse
 from collections import Counter, defaultdict
@@ -24,6 +25,14 @@ from typing import Any
 import psycopg2
 from apify_client import ApifyClient
 from psycopg2.extras import RealDictCursor
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BACKEND = ROOT / "backend"
+if str(BACKEND) not in sys.path:
+    sys.path.insert(0, str(BACKEND))
+
+from app.domains import content_metric_snapshots  # noqa: E402
 
 
 YOUTUBE_ACTOR = os.getenv("APIFY_YOUTUBE_ACTOR_ID") or "streamers/youtube-scraper"
@@ -205,6 +214,13 @@ def build_status(row: dict[str, Any], mapped: dict[str, Any] | None) -> str:
         return "bad_url"
     if not mapped:
         return "failed_no_return"
+    if not content_metric_snapshots.has_any_metric(
+        views=mapped.get("view_count"),
+        likes=mapped.get("like_count"),
+        comments=mapped.get("comment_count"),
+        shares=mapped.get("share_count"),
+    ):
+        return "failed_all_metrics_missing"
     if row["view_count"] is None and mapped["view_count"] is not None:
         return "补齐"
     changed = []
@@ -216,47 +232,64 @@ def build_status(row: dict[str, Any], mapped: dict[str, Any] | None) -> str:
     return "数字变化:" + ",".join(changed) if changed else "对齐"
 
 
-def maybe_update(conn, rows: list[dict[str, Any]]) -> int:
-    columns = existing_columns(conn)
-    optional = {
-        "metrics_scraped_at": "NOW()",
-        "metrics_source": "%s",
-        "share_count": "%s",
-    }
+def maybe_update(conn, rows: list[dict[str, Any]]) -> dict[str, int]:
+    """Persist latest values and append-only observations in one transaction."""
+
     updated = 0
-    with conn.cursor() as cur:
-        for row in rows:
-            if not row.get("new_view_count") and row.get("new_view_count") != 0:
-                continue
-            set_parts = ["view_count = %s", "like_count = %s", "comment_count = %s"]
-            params: list[Any] = [row["new_view_count"], row["new_like_count"], row["new_comment_count"]]
-            if "share_count" in columns:
-                set_parts.append("share_count = %s")
-                params.append(row["new_share_count"])
-            if "metrics_source" in columns:
-                set_parts.append("metrics_source = %s")
-                params.append("apify")
-            if "metrics_scraped_at" in columns:
-                set_parts.append("metrics_scraped_at = NOW()")
-            params.append(row["id"])
-            cur.execute(
-                f"UPDATE vkpi_kol_video_evidence SET {', '.join(set_parts)} WHERE id = %s",
-                params,
+    snapshots = 0
+    for row in rows:
+        fetched_at = str(row.get("fetched_at") or dt.datetime.now(dt.timezone.utc).isoformat())
+        run_id = str(row.get("provider_run_id") or "") or None
+        if row.get("status") in {"bad_url", "failed_no_return", "failed_all_metrics_missing"}:
+            error_code = str(row.get("status"))
+            result = content_metric_snapshots.record_failed_refresh(
+                conn,
+                evidence_id=int(row["id"]),
+                provider="validation" if row.get("status") == "bad_url" else "apify",
+                fetched_at=fetched_at,
+                source_observed_at=fetched_at if row.get("status") != "bad_url" else None,
+                error_code=error_code,
+                run_id=run_id,
+                quality_flags=("url_unusable",)
+                if row.get("status") == "bad_url"
+                else (
+                    ("provider_item_missing",)
+                    if row.get("status") == "failed_no_return"
+                    else ("provider_response_returned",)
+                ),
             )
-            updated += cur.rowcount
-    return updated
-
-
-def existing_columns(conn) -> set[str]:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_name = 'vkpi_kol_video_evidence'
-            """
-        )
-        return {row[0] for row in cur.fetchall()}
+        elif content_metric_snapshots.has_any_metric(
+            views=row.get("new_view_count"),
+            likes=row.get("new_like_count"),
+            comments=row.get("new_comment_count"),
+            shares=row.get("new_share_count"),
+        ):
+            result = content_metric_snapshots.record_successful_refresh(
+                conn,
+                evidence_id=int(row["id"]),
+                provider="apify",
+                fetched_at=fetched_at,
+                source_observed_at=fetched_at,
+                views=row.get("new_view_count"),
+                likes=row.get("new_like_count"),
+                comments=row.get("new_comment_count"),
+                shares=row.get("new_share_count"),
+                run_id=run_id,
+            )
+            updated += 1 if result.get("latest_updated") else 0
+        else:
+            result = content_metric_snapshots.record_failed_refresh(
+                conn,
+                evidence_id=int(row["id"]),
+                provider="apify",
+                fetched_at=fetched_at,
+                source_observed_at=fetched_at,
+                error_code="all_metrics_missing",
+                run_id=run_id,
+                quality_flags=("provider_response_returned",),
+            )
+        snapshots += 1 if result.get("inserted") else 0
+    return {"updated": updated, "snapshots_inserted": snapshots}
 
 
 def global_metrics(conn) -> tuple[int, int]:
@@ -298,6 +331,8 @@ def write_outputs(
         "status",
         "match_key",
         "returned_url",
+        "provider_run_id",
+        "fetched_at",
     ]
     with csv_path.open("w", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=fields)
@@ -309,11 +344,21 @@ def write_outputs(
     for row in comparison:
         by_platform[row["platform"]][row["status"].split(":")[0]] += 1
     old_with_view = sum(1 for row in comparison if row["old_view_count"] is not None)
-    new_with_view = sum(1 for row in comparison if row["new_view_count"] is not None)
-    new_sum = sum(int(row["new_view_count"] or row["old_view_count"] or 0) for row in comparison)
+    effective_views = [
+        row["old_view_count"]
+        if str(row.get("status") or "").startswith(("bad_url", "failed_"))
+        else row["new_view_count"]
+        for row in comparison
+    ]
+    new_with_view = sum(1 for value in effective_views if value is not None)
+    new_sum = sum(int(value or 0) for value in effective_views)
     predicted_global_with_view = global_with_view - old_with_view + new_with_view
     predicted_global_exposure = global_exposure - before_sum + new_sum
-    failures = [row for row in comparison if row["status"] in {"bad_url", "failed_no_return"}]
+    failures = [
+        row
+        for row in comparison
+        if row["status"] == "bad_url" or str(row["status"]).startswith("failed_")
+    ]
     match_failures = sum(1 for row in comparison if row["status"] == "failed_no_return")
     total_cost = sum(float(run.get("usageTotalUsd") or 0) for run in runs)
     total_duration = sum(float(run.get("duration_sec") or 0) for run in runs)
@@ -383,6 +428,13 @@ def main() -> None:
         platform_rows = [row for row in runnable if row["platform"] == platform]
         for batch in chunked(platform_rows, args.batch_size):
             mapped, run_info = call_actor(client, platform, [row["content_url"] for row in batch])
+            fetched_at = dt.datetime.now(dt.timezone.utc).isoformat()
+            for item in mapped:
+                item["provider_run_id"] = run_info.get("run_id")
+                item["fetched_at"] = fetched_at
+            for row in batch:
+                row["provider_run_id"] = run_info.get("run_id")
+                row["fetched_at"] = fetched_at
             runs.append(run_info)
             mapped_by_key.update({item["key"]: item for item in mapped if item.get("key")})
 
@@ -405,15 +457,23 @@ def main() -> None:
                 "status": "bad_url" if row in bad else build_status(row, mapped),
                 "match_key": key,
                 "returned_url": mapped.get("returned_url") if mapped else None,
+                "provider_run_id": (mapped.get("provider_run_id") if mapped else row.get("provider_run_id")),
+                "fetched_at": (mapped.get("fetched_at") if mapped else row.get("fetched_at"))
+                or dt.datetime.now(dt.timezone.utc).isoformat(),
             }
         )
 
     stamp = now_stamp()
     csv_path, md_path = write_outputs(comparison, runs, before_sum, global_with_view, global_exposure, stamp)
     if commit:
-        updated = maybe_update(conn, comparison)
-        conn.commit()
-        out(f"UPDATED_ROWS={updated}")
+        try:
+            persisted = maybe_update(conn, comparison)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        out(f"UPDATED_ROWS={persisted['updated']}")
+        out(f"SNAPSHOTS_INSERTED={persisted['snapshots_inserted']}")
     else:
         conn.rollback()
     out(f"CSV={csv_path}")

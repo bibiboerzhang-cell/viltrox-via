@@ -141,7 +141,10 @@ def run_skill(
 
     try:
         # model_fn 默认 None(skill 自身默认参数),record=True 落账本。
-        output = run_fn(skill_input, record=True)
+        run_kwargs: dict[str, Any] = {"record": True}
+        if skill_registry.run_accepts_staff_context(run_fn):
+            run_kwargs["staff"] = _staff
+        output = run_fn(skill_input, **run_kwargs)
     except Exception as exc:  # skill 内部异常不应 500 裸抛
         raise HTTPException(status_code=500, detail=f"skill '{name}' failed: {exc}") from exc
 

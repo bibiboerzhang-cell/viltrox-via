@@ -27,11 +27,10 @@ def get_kol_performance_card(
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """KOL 战绩卡:结构化 JSON + 可回传 KOL 的双语感谢短文(全只读,不写库)。"""
-    del staff
     from app.domains.kol import performance_card
 
     try:
-        return performance_card.performance_card(int(kol_pool_id))
+        return performance_card.performance_card(int(kol_pool_id), staff=staff)
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — 增益块失败不炸接口,诚实回原因

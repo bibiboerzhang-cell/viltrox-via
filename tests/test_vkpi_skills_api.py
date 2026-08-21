@@ -80,6 +80,45 @@ def test_run_dispatches_and_shapes_response(monkeypatch):
     assert captured["model_fn"] is None
 
 
+def test_direct_roi_review_route_forwards_authenticated_staff(monkeypatch):
+    """Direct HTTP dispatch must not drop staff before scoped project aggregation."""
+    from app.domains.metrics import aggregation
+
+    authenticated_staff = {**_EMPLOYEE, "id": 17}
+    captured = {}
+
+    def fake_aggregate(project_id, *, window_days=30, staff=None):
+        captured.update(
+            {"project_id": project_id, "window_days": window_days, "staff": staff}
+        )
+        return {
+            "status": "ready",
+            "cost_cents": 100,
+            "revenue_cents": 300,
+            "roi": 2.0,
+        }
+
+    monkeypatch.setattr(aggregation, "aggregate_project_metrics", fake_aggregate)
+    monkeypatch.setattr(
+        vkpi_skills.skill_registry,
+        "record_skill_run",
+        lambda **_kwargs: {"status": "ok"},
+    )
+    response = vkpi_skills.run_skill(
+        "roi_review",
+        {"input": {"project_id": 9, "window": 14}},
+        _staff=authenticated_staff,
+    )
+
+    assert response["status"] == "ready"
+    assert response["output"]["status"] == "ready"
+    assert captured == {
+        "project_id": 9,
+        "window_days": 14,
+        "staff": authenticated_staff,
+    }
+
+
 def test_run_tolerates_flat_body(monkeypatch):
     """body 无 input 包裹时,平铺字段也能透传(input 兜底)。"""
     captured = {}

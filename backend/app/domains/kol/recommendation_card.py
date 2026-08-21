@@ -26,7 +26,6 @@ def _int(v: Any) -> int | None:
 
 def get_recommendation_card(kol_pool_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """组装一张 KOL 推荐卡(只读)。不存在 → status='not_found'。"""
-    del staff
     kid = int(kol_pool_id or 0)
     if kid <= 0 or not table_exists("vkpi_kol_pool"):
         return {"status": "not_found"}
@@ -50,7 +49,7 @@ def get_recommendation_card(kol_pool_id: int, *, staff: dict[str, Any] | None = 
     try:
         from app.domains.memory import provenance
 
-        prov = provenance.get_kol_provenance(kid)
+        prov = provenance.get_kol_provenance(kid, staff=staff)
     except Exception:
         logger.debug("rec_card.provenance_failed", exc_info=True)
     p = prov.get("provenance", {}) if isinstance(prov, dict) else {}

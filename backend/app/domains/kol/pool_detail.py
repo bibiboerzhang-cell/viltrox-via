@@ -10,6 +10,7 @@ import urllib.parse
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
+from app.domains import content_metric_snapshots
 from app.domains.kol.metric_truth import project_evidence_item_truth
 from app.domains.kol.pool_common import (
     _bio,  # noqa: F401  (kept available for sibling read-side parity)
@@ -358,7 +359,8 @@ def _video_evidence_for_kol(
             e.id DESC
         LIMIT ?
     """
-    rows = get_conn().execute(
+    conn = get_conn()
+    rows = conn.execute(
         postgres_query if is_postgres_runtime() else sqlite_query,
         # 上限 10→200(2026-06-12「全部视频」裁令:账号分析现采 12 条/E5 全量更多,硬顶 10 把列表掐断)
         # 绑定顺序须与 WHERE 占位符一致:kol_pool_id, include_inactive, only_with_cache, LIMIT。
@@ -369,6 +371,10 @@ def _video_evidence_for_kol(
             max(1, min(200, int(limit or 3))),
         ),
     ).fetchall()
+    trend_by_evidence = content_metric_snapshots.metric_trends_for_evidence(
+        conn,
+        (int(dict(row).get("evidence_id") or dict(row).get("id") or 0) for row in rows),
+    )
     # cache_image 只落本地文件缓存、不写 vkpi_media_cache_assets 行(asset 行历史上仅 prewarm
     # 脚本批量写入)——上面的 image LATERAL join 对深爬暖出的缩略图永远扑空;视频按
     # (platform, evidence_id) 键存 sidecar,join 的 source_url 匹配也兜不全。读端直查文件缓存补齐。
@@ -377,6 +383,13 @@ def _video_evidence_for_kol(
     items: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
+        evidence_id = int(item.get("evidence_id") or item.get("id") or 0)
+        item.update(
+            trend_by_evidence.get(
+                evidence_id,
+                content_metric_snapshots.unavailable_tracking(),
+            )
+        )
         platform = _platform(item.get("platform") or "")
         # 【K4】媒体种类点亮:evidence_type(迁移 087)+ image_urls(迁移 200,TEXT 存 JSON 数组串)
         # 回传前端;这里解析出 media_kind(video / image / carousel≥2 张)供徽章直读。
