@@ -32,9 +32,20 @@ def enqueue_outreach_draft_job(
     *,
     project_id: int | None = None,
     staff: dict[str, Any] | None = None,
+    enforce_target_write: bool = False,
 ) -> dict[str, Any]:
     """联系草稿入 apify_jobs(幂等:同 KOL 已有活跃任务返回 already_queued)。"""
     conn = get_conn()
+    target_fence: dict[str, Any] | None = None
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import build_target_fence
+
+        target_fence = build_target_fence(
+            conn,
+            action="outreach_draft",
+            kol_pool_id=int(kol_pool_id),
+            staff=staff,
+        )
     kol = conn.execute(
         "SELECT id, handle, display_name FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)
     ).fetchone()
@@ -60,6 +71,10 @@ def enqueue_outreach_draft_job(
         "triggered_by_user_id": (staff or {}).get("user_id"),
         "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
     }
+    if target_fence is not None:
+        from app.domains.kol.my_kol_paid_action_access import FENCE_KEY
+
+        payload[FENCE_KEY] = target_fence
     job = conn.execute(
         """
         INSERT INTO apify_jobs (job_type, payload, status, created_at, updated_at)

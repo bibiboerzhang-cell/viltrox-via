@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.manager_guard import require_manager_staff
 from app.api.dependencies.perms import require_tab
+from app.api.routers.vkpi_kol_paid_scope import assert_paid_target_writable
 from app.core.release_validation import release_validation_active
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.audit.decorator import audit_action
@@ -244,14 +245,34 @@ def enqueue_kol_outreach_draft(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """联系草稿入队(2026-06-12 裁令:点联系给优化后的聊天方式;泳道「联系草稿」可见)。"""
+    if release_validation_active():
+        raise HTTPException(status_code=503, detail="release_validation_fenced")
+    try:
+        kol_pool_id = int(body.get("kol_pool_id") or 0)
+        project_id = int(body.get("project_id") or 0) or None
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid kol_pool_id or project_id") from exc
+    if kol_pool_id <= 0:
+        raise HTTPException(status_code=400, detail="kol_pool_id required")
+    if project_id is not None:
+        from app.domains.access import scope
+
+        try:
+            scope.assert_project_access(project_id, staff, write=False)
+        except scope.ScopeDenied as exc:
+            raise HTTPException(status_code=403, detail="project scope denied") from exc
     from app.domains.kol import outreach_draft as kol_outreach_draft
+    from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
 
     try:
         return kol_outreach_draft.enqueue_outreach_draft_job(
-            int(body.get("kol_pool_id") or 0),
-            project_id=body.get("project_id"),
+            kol_pool_id,
+            project_id=project_id,
             staff=staff,
+            enforce_target_write=True,
         )
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (TypeError, ValueError) as exc:
@@ -269,7 +290,17 @@ def optimize_kol_outreach(
     import json as _json
     import re as _re
 
+    if release_validation_active():
+        raise HTTPException(status_code=503, detail="release_validation_fenced")
+    try:
+        kol_pool_id = int(body.get("kol_pool_id") or 0)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid kol_pool_id") from exc
+    if kol_pool_id <= 0:
+        raise HTTPException(status_code=400, detail="kol_pool_id required")
+    assert_paid_target_writable(kol_pool_id, staff if isinstance(staff, dict) else None)
     from app.platform import llm_gateway
+    from app.domains.kol.contact_system import sanitize_contact_values_for_external_processing
 
     subject = str(body.get("subject") or "").strip()
     draft = str(body.get("body") or "").strip()
@@ -278,12 +309,23 @@ def optimize_kol_outreach(
     if not draft and not subject:
         return {"ok": False, "reason": "empty_draft", "subject": subject, "body": draft}
 
+    safe = sanitize_contact_values_for_external_processing({
+        "subject": subject,
+        "body": draft,
+        "product": product,
+        "kol_name": kol_name,
+    })
+    prompt_subject = str(safe.get("subject") or "").strip()
+    prompt_draft = str(safe.get("body") or "").strip()
+    prompt_product = str(safe.get("product") or "").strip()
+    prompt_kol_name = str(safe.get("kol_name") or "").strip()
+
     prompt = (
         "你是 Viltrox(唯卓仕,海外相机镜头品牌)的 KOL 外联文案专家。把下面这封给【海外/英文圈创作者】的\n"
         "合作邀约润色成更自然、更口语、更高回复率的**英文**(别中式生硬英文)。要求:真诚、简短、具体\n"
         "(点出一个具体的合作点),不套路营销腔、不夸大、不编造数据。\n"
-        f"对象 KOL:{kol_name or '(未提供)'};主推产品:{product or 'Viltrox 镜头'}。\n"
-        f"当前主题:{subject or '(空)'}\n当前正文:\n{draft or '(空)'}\n\n"
+        f"对象 KOL:{prompt_kol_name or '(未提供)'};主推产品:{prompt_product or 'Viltrox 镜头'}。\n"
+        f"当前主题:{prompt_subject or '(空)'}\n当前正文:\n{prompt_draft or '(空)'}\n\n"
         '只输出 JSON(不要多余文字):{"subject": "优化后主题", "body": "优化后正文(英文,保留换行)"}'
     )
     try:
@@ -293,10 +335,15 @@ def optimize_kol_outreach(
             max_output_tokens=1200,
             cost_tag="vkpi_kol_outreach_optimize",
             staff=staff or {},
-            metadata={"kol_pool_id": int(body.get("kol_pool_id") or 0)},
+            metadata={"kol_pool_id": kol_pool_id},
         )
-    except Exception:  # noqa: BLE001 - return original copy with a stable retryable state
-        logger.warning("kol outreach optimize provider failed", exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - return original copy with a stable retryable state
+        # Provider exceptions may embed request fragments.  Record only the
+        # exception class so raw contact details never reach application logs.
+        logger.warning(
+            "kol outreach optimize provider failed | exception_type=%s",
+            type(exc).__name__,
+        )
         return {
             "ok": False,
             "reason": "outreach_provider_unavailable",

@@ -11,7 +11,8 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.routers import kol_ops, vkpi_kol_pool_intel, vkpi_kol_pool_jobs, vkpi_kol_pool_search, vkpi_recall
-from app.domains.kol import audience_stats, outreach_pack, profile_discovery_provider, recall_pipeline, url_deep_crawl
+from app.domains.comments import collector as comments_collector
+from app.domains.kol import outreach_pack, profile_discovery_provider, recall_pipeline, url_deep_crawl
 from app.domains.market import ai_today
 from app.domains.projects import outreach as project_outreach
 from app.services.kol import content_analyzer
@@ -144,35 +145,19 @@ def test_semantic_embedding_and_rerank_timeouts_degrade_deterministically(
     _assert_redacted({"reason": reason})
 
 
-def test_audience_timeout_and_upstream_reason_are_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def direct_call(func: Any, *args: Any, **kwargs: Any) -> Any:
-        return func(*args, **kwargs)
-
-    monkeypatch.setattr(vkpi_kol_pool_intel, "run_in_threadpool", direct_call)
+def test_audience_enqueue_failure_reason_is_redacted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(vkpi_kol_pool_intel, "release_validation_active", lambda: False)
     monkeypatch.setattr(
-        audience_stats,
-        "refresh_audience_stats",
-        lambda _kol_id: (_ for _ in ()).throw(TimeoutError(SECRET)),
+        comments_collector,
+        "enqueue_kol_audience_stats_refresh_job",
+        lambda *_a, **_k: (_ for _ in ()).throw(TimeoutError(SECRET)),
     )
     with pytest.raises(HTTPException) as timeout_error:
         asyncio.run(vkpi_kol_pool_intel.refresh_kol_audience_stats(7, staff={"id": 3}))
 
     assert timeout_error.value.status_code == 503
-    assert timeout_error.value.detail["reason"] == "audience_refresh_timeout"
+    assert timeout_error.value.detail["reason"] == "audience_refresh_enqueue_failed"
     _assert_redacted(timeout_error.value.detail)
-
-    monkeypatch.setattr(
-        audience_stats,
-        "refresh_audience_stats",
-        lambda _kol_id: {"status": "network_error", "reason": SECRET},
-    )
-    with pytest.raises(HTTPException) as upstream_error:
-        asyncio.run(vkpi_kol_pool_intel.refresh_kol_audience_stats(7, staff={"id": 3}))
-
-    assert upstream_error.value.status_code == 502
-    assert upstream_error.value.detail["reason"] == "audience_provider_unavailable"
-    assert "message" not in upstream_error.value.detail
-    _assert_redacted(upstream_error.value.detail)
 
 
 def test_deep_analysis_read_failure_never_claims_analysis_or_leaks_type(
@@ -251,9 +236,12 @@ def test_project_outreach_never_marks_invalid_or_failed_output_as_llm_used(
 
 def test_outreach_optimize_provider_exception_returns_original_non_ready_copy(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     from app.platform import llm_gateway
 
+    monkeypatch.setattr(vkpi_kol_pool_jobs, "release_validation_active", lambda: False)
+    monkeypatch.setattr(vkpi_kol_pool_jobs, "assert_paid_target_writable", lambda *_a, **_k: None)
     monkeypatch.setattr(
         llm_gateway,
         "invoke",
@@ -273,6 +261,7 @@ def test_outreach_optimize_provider_exception_returns_original_non_ready_copy(
         "model": "",
     }
     _assert_redacted(result)
+    assert SECRET not in caplog.text
 
 
 def test_smart_search_and_url_routes_map_runtime_errors_to_stable_503(

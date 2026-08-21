@@ -606,39 +606,21 @@ def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
 def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
     payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
     job_type = str(job.get("job_type") or "").strip().lower()
-    paid_action = {
-        "video": "video_analysis",
-        "kol_pool_comments_collect": "comments_collect",
-        "kol_audience_stats_refresh": "audience_refresh",
-    }.get(job_type)
-    if paid_action:
-        from app.domains.kol.my_kol_paid_action_access import (
-            FENCE_KEY,
-            MyKolPaidActionError,
-            revalidate_target_fence,
+    from app.workers.apify_jobs_worker_paid_scope import revalidate_paid_job_scope
+
+    paid_action, block_reason = revalidate_paid_job_scope(
+        payload,
+        job_type,
+        connection_scope=db_connection_sync_scope,
+    )
+    if block_reason:
+        _block_job(
+            conn,
+            int(job["id"]),
+            block_reason,
+            {"provider_calls_performed": False, "paid_action": paid_action},
         )
-
-        if isinstance(payload.get(FENCE_KEY), dict):
-            try:
-                from app.db.connection import get_conn
-
-                with db_connection_sync_scope():
-                    revalidate_target_fence(
-                        get_conn(),
-                        payload,
-                        expected_action=paid_action,
-                    )
-            except MyKolPaidActionError as exc:
-                _block_job(
-                    conn,
-                    int(job["id"]),
-                    exc.code,
-                    {
-                        "provider_calls_performed": False,
-                        "paid_action": paid_action,
-                    },
-                )
-                return
+        return
     if job_type == "session_advance":
         _process_session_advance(conn, job, payload)
         return
