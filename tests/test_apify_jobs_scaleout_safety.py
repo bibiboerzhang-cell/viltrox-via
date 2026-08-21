@@ -298,6 +298,10 @@ class _FollowupCursor:
         return []
 
     def fetchone(self):
+        if "SELECT payload FROM apify_jobs" in self._mode:
+            # The paid-action fence propagation added a provider-free source
+            # payload read before the existing active/recent idempotency checks.
+            return {"payload": {}}
         if "status IN ('queued', 'running')" in self._mode:
             return None
         if "status='done'" in self._mode:
