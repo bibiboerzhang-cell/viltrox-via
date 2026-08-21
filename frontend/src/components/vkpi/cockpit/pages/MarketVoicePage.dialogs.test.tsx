@@ -31,7 +31,10 @@ describe("ModalShell body portal and keyboard contract", () => {
     expect(document.querySelectorAll('[data-vkpi-modal-scroll="content"]')).toHaveLength(1);
     expect(document.querySelector('[data-vkpi-modal-scroll="content"]')).toHaveClass("overflow-y-auto");
 
-    await waitFor(() => expect(screen.getByRole("button", { name: "关闭" })).toHaveFocus());
+    const close = screen.getByRole("button", { name: "关闭" });
+    await waitFor(() => expect(close).toHaveFocus());
+    expect(close).toHaveClass("h-10", "w-10");
+    expect(document.querySelector('[data-vkpi-density="readable-modal-body"]')).toHaveClass("text-[12.5px]", "leading-[1.55]");
     view.unmount();
     expect(document.body.style.overflow).toBe("");
     host.remove();

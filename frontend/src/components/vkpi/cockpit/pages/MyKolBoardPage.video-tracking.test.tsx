@@ -53,7 +53,10 @@ function video(evidenceId: number, poolId = 101): VkpiKolPoolVideoRow {
   };
 }
 
-function installDialogRoutes(trackResult?: () => Promise<unknown>) {
+function installDialogRoutes(
+  trackResult?: () => Promise<unknown>,
+  videoRows?: (poolId: number) => VkpiKolPoolVideoRow[],
+) {
   apiFetchMock.mockImplementation(async (path: unknown, init: RequestInit = {}) => {
     const value = String(path);
     if (/\/api\/admin\/vkpi\/my-kol\/\d+\/videos\/\d+\/refresh/.test(value) && init.method === "POST") {
@@ -66,10 +69,14 @@ function installDialogRoutes(trackResult?: () => Promise<unknown>) {
     if (value === "/api/admin/vkpi/my-kol/102/videos" && init.method === "POST") {
       return { status: "queued", evidence_id: 902, job_id: 72, product_skus: [] };
     }
+    if (value === "/api/admin/vkpi/kol-pool/profile-deep-crawl/enqueue" && init.method === "POST") {
+      return { status: "queued", job_id: 88 };
+    }
     const videosMatch = value.match(/\/api\/admin\/vkpi\/kol-pool\/(\d+)\/videos/);
     if (videosMatch) {
       const poolId = Number(videosMatch[1]);
-      return { items: [video(poolId === 101 ? 901 : 902, poolId)], total: 1, kol_pool_id: poolId };
+      const items = videoRows ? videoRows(poolId) : [video(poolId === 101 ? 901 : 902, poolId)];
+      return { items, total: items.length, kol_pool_id: poolId };
     }
     if (/\/api\/admin\/vkpi\/goaffpro\/kol\/\d+\/link/.test(value)) return { linked: false };
     if (/\/api\/admin\/vkpi\/my-kol\/\d+\/viewer-context/.test(value)) return { claim: null };
@@ -77,8 +84,7 @@ function installDialogRoutes(trackResult?: () => Promise<unknown>) {
   });
 }
 
-function renderDetail(index = 0) {
-  const rows = [row(101, "Alpha"), row(102, "Beta", true)];
+function renderDetail(index = 0, rows = [row(101, "Alpha"), row(102, "Beta", true)]) {
   return render(
     <KolDetailModal
       apiToken="token"
@@ -93,6 +99,7 @@ function renderDetail(index = 0) {
 
 beforeEach(() => {
   apiFetchMock.mockReset();
+  window.sessionStorage.clear();
 });
 
 describe("MY KOL video tracking service contract", () => {
@@ -150,6 +157,59 @@ describe("KolVideoSection product and refresh controls", () => {
 });
 
 describe("KolDetailModal existing-video tracking", () => {
+  it("keeps the submit target disabled until a URL exists and exposes a direct account-crawl recovery path", async () => {
+    installDialogRoutes();
+    renderDetail();
+    await screen.findByText("Video 901");
+
+    const picker = screen.getByLabelText("从已采集内容选择视频");
+    const submit = screen.getByRole("button", { name: "追踪并排队刷新" });
+    expect(picker).toHaveClass("min-h-9", "text-[11.5px]");
+    expect(submit).toBeDisabled();
+    expect(submit).toHaveClass("min-h-9");
+    fireEvent.change(picker, { target: { value: "https://www.youtube.com/watch?v=video901" } });
+    expect(screen.getByLabelText("已有视频 URL")).toHaveValue("https://www.youtube.com/watch?v=video901");
+    expect(submit).toBeEnabled();
+    expect(screen.getByText(/找不到目标视频？先补采账号内容/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "账号补采 / 深爬" }));
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith(
+        "/api/admin/vkpi/kol-pool/profile-deep-crawl/enqueue",
+        expect.objectContaining({ method: "POST" }),
+        "token",
+      );
+    });
+    expect(await screen.findByText(/已入队深爬/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开 KOL 档案" })).toHaveClass("min-h-9");
+  });
+
+  it("shows the account recovery entry when collected evidence has no stored URL", async () => {
+    installDialogRoutes(undefined, (poolId) => [{ ...video(901, poolId), content_url: "" }]);
+    renderDetail();
+    await screen.findByText("Video 901");
+
+    expect(screen.queryByLabelText("从已采集内容选择视频")).toBeNull();
+    expect(screen.getByText(/当前没有带 URL 的已采集视频/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "账号补采 / 深爬" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "打开 KOL 档案" })).toBeEnabled();
+  });
+
+  it("keeps deep crawl unavailable without a profile URL but leaves the profile repair route reachable", async () => {
+    installDialogRoutes(undefined, (poolId) => [{ ...video(901, poolId), content_url: "" }]);
+    const openProfile = vi.fn();
+    window.addEventListener("vkpi:open-kol-profile", openProfile);
+    renderDetail(0, [{ ...row(101, "Alpha"), profileUrl: "" }]);
+    await screen.findByText("Video 901");
+
+    expect(screen.getByText(/缺少主页链接，请先打开 KOL 档案/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "账号补采 / 深爬" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "打开 KOL 档案" }));
+    expect(openProfile).toHaveBeenCalledTimes(1);
+    expect(window.sessionStorage.getItem("vkpi:kol-profile-id")).toBe("101");
+    window.removeEventListener("vkpi:open-kol-profile", openProfile);
+  });
+
   it("queues a card-level metric refresh and labels only the queued state", async () => {
     installDialogRoutes();
     renderDetail();

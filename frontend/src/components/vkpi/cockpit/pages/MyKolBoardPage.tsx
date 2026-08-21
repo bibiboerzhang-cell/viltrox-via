@@ -291,7 +291,7 @@ export function MyKolBoardPage({
   const srcOf = (key: string) => MODULE_SOURCES[key] || { label: key, rows: [] };
   const cardProps = (key: string, title: string, cnt?: React.ReactNode, extraRows?: Array<[string, string]>) => {
     const rows = extraRows && extraRows.length > 0 ? [...srcOf(key).rows, ...extraRows] : srcOf(key).rows;
-    return { title, cnt, srcLabel: srcOf(key).label, srcRows: rows };
+    return { title, cnt, srcLabel: srcOf(key).label, srcRows: rows, readableBody: true };
   };
 
   const noTokenCard = (

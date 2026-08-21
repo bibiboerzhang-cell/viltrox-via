@@ -46,12 +46,12 @@ import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 // 红线:颜色全 token 类零写死色;禁 opacity 修饰类;纯展示绝不写 fit 分 / 不触 rule_v0。
 
 const NAV_BTN =
-  "rounded-lg border border-line px-2.5 py-1 text-[11px] text-ink-2 transition-colors hover:border-line-strong hover:text-ink disabled:cursor-default disabled:text-muted";
+  "inline-flex min-h-9 items-center rounded-lg border border-line px-3 py-1.5 text-[11.5px] text-ink-2 transition-colors hover:border-line-strong hover:text-ink disabled:cursor-default disabled:text-muted";
 const ACT_BTN =
-  "rounded-lg border border-line px-2.5 py-1.5 text-[11px] text-ink-2 transition-colors hover:border-accent hover:bg-accent-soft hover:text-accent disabled:cursor-default disabled:text-muted disabled:hover:border-line disabled:hover:bg-transparent";
+  "inline-flex min-h-9 items-center justify-center rounded-lg border border-line px-3 py-1.5 text-[11.5px] font-medium text-ink-2 transition-colors hover:border-accent hover:bg-accent-soft hover:text-accent disabled:cursor-default disabled:text-muted disabled:hover:border-line disabled:hover:bg-transparent";
 const MORE_BTN =
-  "mt-2.5 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft";
-const FIELD = "rounded-lg border border-line bg-card px-2 py-1.5 text-[10.5px] text-ink-2 outline-none focus:border-accent";
+  "mt-2.5 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft";
+const FIELD = "min-h-9 rounded-lg border border-line bg-card px-3 py-1.5 text-[11.5px] text-ink-2 outline-none focus:border-accent";
 
 function toneCls(tone: FlowReceipt["tone"]): string {
   if (tone === "error") return "border-crit bg-crit-soft text-crit";
@@ -62,7 +62,7 @@ function toneCls(tone: FlowReceipt["tone"]): string {
 export function ReceiptLine({ msg }: { msg: FlowReceipt | null }) {
   if (!msg) return null;
   return (
-    <div role={msg.tone === "error" ? "alert" : "status"} className={`mt-2 rounded-lg border px-3 py-1.5 text-[11px] ${toneCls(msg.tone)}`}>
+    <div role={msg.tone === "error" ? "alert" : "status"} className={`mt-2 rounded-lg border px-3 py-2 text-[12px] leading-5 ${toneCls(msg.tone)}`}>
       {msg.text}
     </div>
   );
@@ -161,13 +161,13 @@ export function KolRowLine({
     }
   };
   return (
-    <div className="group flex min-w-0 cursor-pointer items-center gap-2 border-b border-line py-2 last:border-0" role="button" tabIndex={0} onClick={() => onOpen(index)} onKeyDown={onKey}>
+    <div className="group flex min-h-10 min-w-0 cursor-pointer items-center gap-2 border-b border-line py-2 last:border-0" role="button" tabIndex={0} onClick={() => onOpen(index)} onKeyDown={onKey}>
       {selectable ? (
         <input type="checkbox" aria-label={`勾选 ${humanName}`} checked={selected} onChange={() => onToggleSelect?.(row.poolId)} onClick={(ev) => ev.stopPropagation()} className="h-3.5 w-3.5 flex-none accent-[var(--ds-accent)]" />
       ) : null}
       <KolAvatar row={row} />
       <span className="min-w-[42px] flex-none rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-center text-[8.5px] font-semibold text-ink-2">{platformBadge(row.platform)}</span>
-      <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2 transition-colors group-hover:text-accent">
+      <span className="min-w-0 flex-1 truncate text-[12.5px] leading-5 text-ink-2 transition-colors group-hover:text-accent">
         {humanName}
         {publicHandle ? <span className="ml-1.5 text-[10px] text-muted">{publicHandle}</span> : null}
       </span>
@@ -242,7 +242,7 @@ export function LibraryChips({
         ) : null}
       </div>
       {filter.vOnly ? (
-        <div className="mt-1.5 text-[9.5px] text-muted">
+        <div className="mt-1.5 text-[11px] leading-4 text-muted">
           按全库 V 信号名单精确过滤(合作 / 标题提及 · 派生判据非采集字段){vKolCount != null ? `;名单 ${vKolCount.toLocaleString()} 人` : ""} · 单条视频三档判定见详情
         </div>
       ) : null}
@@ -538,6 +538,15 @@ export function KolDetailModal({
     setBusyKeys((prev) => { const next = new Set(prev); if (on) next.add(key); else next.delete(key); return next; });
 
   const loaded = videos || [];
+  const collectedUrlVideos = React.useMemo(() => {
+    const unique = new Map<string, VkpiKolPoolVideoRow>();
+    (videos || []).forEach((video) => {
+      const url = String(video.content_url || "").trim();
+      if (url && !unique.has(url)) unique.set(url, video);
+    });
+    return [...unique.entries()].map(([url, video]) => ({ url, video }));
+  }, [videos]);
+  const selectedCollectedUrl = collectedUrlVideos.some((choice) => choice.url === trackUrl) ? trackUrl : "";
   // 汇总口径与视频网格住 libdetail(KolVideoSection);这里只留动作排要用的未析清单。
   const { unanalyzed } = React.useMemo(() => summarizeKolVideos(loaded), [loaded]);
 
@@ -837,9 +846,24 @@ export function KolDetailModal({
         <SectionLabel>已采集内容 · Viltrox 筛查</SectionLabel>
         <div className="mb-3 rounded-[11px] border border-line bg-panel px-3 py-2.5">
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <span className="text-[11px] font-semibold text-ink-2">追踪已有视频</span>
-            <span className="text-[9.5px] text-muted">只排队刷新快照，不表示实时完成</span>
+            <span className="text-[12.5px] font-semibold text-ink-2">追踪已有视频</span>
+            <span className="text-[11px] text-muted">只排队刷新快照，不表示实时完成</span>
           </div>
+          {collectedUrlVideos.length > 0 ? (
+            <select
+              aria-label="从已采集内容选择视频"
+              value={selectedCollectedUrl}
+              onChange={(event) => setTrackUrl(event.target.value)}
+              className={`mb-2 w-full ${FIELD}`}
+            >
+              <option value="">从当前已采集内容选择视频…</option>
+              {collectedUrlVideos.map(({ url, video }) => {
+                const evidenceId = Number(video.evidence_id ?? video.id) || 0;
+                const label = String(video.title || video.video_title || `视频 #${evidenceId}`);
+                return <option key={`${evidenceId}:${url}`} value={url}>{label}{evidenceId ? ` · #${evidenceId}` : ""}</option>;
+              })}
+            </select>
+          ) : null}
           <div className="grid gap-2 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_auto]">
             <input
               aria-label="已有视频 URL"
@@ -857,14 +881,47 @@ export function KolDetailModal({
               placeholder="产品 SKU，逗号分隔（最多 5 个）"
               className={FIELD}
             />
-            <button type="button" className={ACT_BTN} disabled={trackBusy} onClick={runTrackVideo}>
+            <button
+              type="button"
+              className={ACT_BTN}
+              disabled={trackBusy || !trackUrl.trim()}
+              title={trackUrl.trim() ? "提交已采集视频追踪并排队刷新指标" : "请先从已采集内容选择或粘贴视频 URL"}
+              onClick={runTrackVideo}
+            >
               {trackBusy ? "提交中…" : "追踪并排队刷新"}
             </button>
           </div>
-          <div className="mt-1.5 text-[9.5px] text-muted">
+          <div className="mt-1.5 text-[11px] leading-4 text-muted">
             新 URL 请先通过“账号分析 · 补采”或深爬建立归属证据；是否可写由服务端权限判定，共享只读不会冒充成功。
           </div>
           <ReceiptLine msg={msgs.tracking || null} />
+          <div
+            data-vkpi-tracking-recovery="account-crawl"
+            className="mt-2.5 rounded-lg border border-dashed border-line-strong bg-card px-3 py-2.5"
+          >
+            <div className="text-[12px] leading-5 text-ink-2">
+              {collectedUrlVideos.length > 0
+                ? "找不到目标视频？先补采账号内容；完成后回到这里从已采集列表选择。"
+                : "当前没有带 URL 的已采集视频。先补采账号内容，再回来建立单视频 / SKU 追踪。"}
+            </div>
+            {!item.profileUrl ? (
+              <div className="mt-1 text-[11px] leading-4 text-warn">该 KOL 缺少主页链接，请先打开 KOL 档案补充或核验主页。</div>
+            ) : null}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className={ACT_BTN}
+                disabled={!item.profileUrl || busyKeys.has("crawl")}
+                title={item.profileUrl ? "入队账号补采 / 深爬；服务端仍会校验当前写权限" : "缺少主页链接，无法发起账号深爬"}
+                onClick={runDeepCrawl}
+              >
+                {busyKeys.has("crawl") ? "入队中…" : "账号补采 / 深爬"}
+              </button>
+              <button type="button" className={ACT_BTN} onClick={openKolProfile}>打开 KOL 档案</button>
+              <span className="text-[10.5px] leading-4 text-muted">入口不改变权限；共享只读等写入边界仍以后端判定为准。</span>
+            </div>
+            <ReceiptLine msg={msgs.crawl || null} />
+          </div>
         </div>
         {videos == null ? (
           <div className="py-5 text-center text-[12px] text-muted">视频读取中…</div>
@@ -874,14 +931,8 @@ export function KolDetailModal({
             <div className="mt-0.5 text-[11px]">{videosError}</div>
           </div>
         ) : loaded.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-line-strong px-3.5 py-4 text-center text-[12px] text-muted">
-            暂无已采集内容——可发起补采。
-            <div className="mt-2">
-              <button type="button" className={ACT_BTN} disabled={!item.profileUrl || busyKeys.has("crawl")} title={item.profileUrl ? "入队账号深爬(泳道可见进度)" : "该 KOL 无主页链接,无法深爬"} onClick={runDeepCrawl}>
-                {busyKeys.has("crawl") ? "入队中…" : "发起深爬"}
-              </button>
-            </div>
-            <ReceiptLine msg={msgs.crawl || null} />
+          <div className="rounded-xl border border-dashed border-line-strong px-3.5 py-4 text-center text-[12.5px] leading-5 text-muted">
+            暂无已采集内容——可发起补采。请使用上方“账号补采 / 深爬”入口；缺少主页时先打开 KOL 档案。
           </div>
         ) : (
           <KolVideoSection
@@ -921,9 +972,9 @@ export function KolDetailModal({
             {busyKeys.has("claim") ? "释放中…" : "释放认领"}
           </button>
         </div>
-        {/* crawl 回执:空态区已就近展示,仅在有视频(空态区缺席)时在动作排补位,防双写 */}
-        {(["project", "audience", "deep", "comments", "crawl", "claim"] as const).map((key) => (
-          <ReceiptLine key={key} msg={key === "crawl" && loaded.length === 0 ? null : msgs[key] || null} />
+        {/* crawl 回执固定住在追踪恢复入口，其他动作仍在本排就近展示。 */}
+        {(["project", "audience", "deep", "comments", "claim"] as const).map((key) => (
+          <ReceiptLine key={key} msg={msgs[key] || null} />
         ))}
         <div className="mt-1.5 text-right text-[9.5px] text-muted">动作回执以端点真实返回为准 · 后台任务超出轮询窗只报「仍在后台」,绝不冒充完成</div>
       </div>

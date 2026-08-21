@@ -80,8 +80,8 @@ export function BarRow({
   const barBg = color || "linear-gradient(90deg, var(--ds-accent), var(--ds-accent-2))";
   return (
     <div
-      className={`grid grid-cols-[minmax(64px,84px)_1fr_minmax(66px,auto)] items-center gap-2.5 py-[4.5px] text-[11.5px]${
-        onClick ? " -mx-1.5 cursor-pointer rounded-[7px] border border-transparent px-1.5 transition-colors hover:border-accent hover:bg-accent-soft" : ""
+      className={`grid grid-cols-[minmax(64px,84px)_1fr_minmax(66px,auto)] items-center gap-2.5 py-1.5 text-[12.5px]${
+        onClick ? " -mx-1.5 min-h-9 cursor-pointer rounded-[7px] border border-transparent px-1.5 transition-colors hover:border-accent hover:bg-accent-soft" : ""
       }`}
       title={title}
       role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined} onClick={onClick} onKeyDown={onClick ? keyActivate(onClick) : undefined}
@@ -97,7 +97,7 @@ export function BarRow({
           }}
         />
       </span>
-      <span className="text-right font-mono text-[10.5px] text-muted">{value}</span>
+      <span className="text-right font-mono text-[11.5px] text-muted">{value}</span>
     </div>
   );
 }
@@ -167,8 +167,8 @@ export function CatDonutBody({
         {segs.map((s, i) => (
           <div
             key={i}
-            className={`flex items-center gap-2 text-[11.5px] text-ink-2${
-              onSelect ? " -mx-1 cursor-pointer rounded-[7px] border border-transparent px-1 py-px transition-colors hover:border-accent hover:bg-accent-soft" : ""
+            className={`flex min-h-8 items-center gap-2 text-[12px] text-ink-2${
+              onSelect ? " -mx-1 cursor-pointer rounded-[7px] border border-transparent px-1.5 py-1 transition-colors hover:border-accent hover:bg-accent-soft" : ""
             }`}
             role={onSelect ? "button" : undefined} tabIndex={onSelect ? 0 : undefined} title={onSelect ? DRILL_HINT : undefined}
             onClick={onSelect ? () => onSelect(s.key, s.label, s.count) : undefined}
@@ -275,18 +275,18 @@ export function SentiTrendBody({ senti, onPointClick }: { senti: Row; onPointCli
             {posShare != null ? pctText(posShare) : "—"}
             <span className="text-[13px]">%</span>
           </span>
-          <span className="mt-[5px] text-[10px] text-muted">正面占比</span>
+          <span className="mt-[5px] text-[11px] text-muted">正面占比</span>
         </div>
         <div className="flex flex-col">
           <span className="font-mono text-[21px] font-bold leading-none tracking-[-0.02em] text-crit">
             {negShare != null ? pctText(negShare) : "—"}
             <span className="text-[13px]">%</span>
           </span>
-          <span className="mt-[5px] text-[10px] text-muted">负面占比</span>
+          <span className="mt-[5px] text-[11px] text-muted">负面占比</span>
         </div>
         <div className="flex flex-col">
           <span className="font-mono text-[21px] font-bold leading-none tracking-[-0.02em] text-ink">{doneTotal.toLocaleString()}</span>
-          <span className="mt-[5px] text-[10px] text-muted">已批注样本</span>
+          <span className="mt-[5px] text-[11px] text-muted">已批注样本</span>
         </div>
       </div>
       {!drawable ? (
@@ -358,8 +358,8 @@ function AlertRowView({ hot, dot, text, ax, axTone, onClick }: {
       onClick={onClick} onKeyDown={onClick ? keyActivate(onClick) : undefined}
     >
       <span className={dot === "hot" ? "ds-adot" : "ds-adot ds-adot--ok"} />
-      <div className="min-w-0 flex-1 text-[11.5px] leading-[1.5] text-ink-2 [&_b]:text-ink">{text}</div>
-      <span className={`flex-none text-[10px] font-bold ${axTone || (hot ? "text-crit" : "font-medium text-muted")}`}>{ax}</span>
+      <div className="min-w-0 flex-1 text-[12.5px] leading-[1.55] text-ink-2 [&_b]:text-ink">{text}</div>
+      <span className={`flex-none text-[11px] font-bold ${axTone || (hot ? "text-crit" : "font-medium text-muted")}`}>{ax}</span>
     </div>
   );
 }
@@ -513,7 +513,7 @@ export function TopicsBody({ topics, onSelect }: { topics: Row; onSelect?: (key:
           return (
             <span
               key={String(t.key)}
-              className={`inline-flex items-center gap-[7px] rounded-[18px] border border-line bg-[var(--ds-card-2,var(--ds-card))] px-3 py-[5px] text-[11.5px] text-ink-2 transition-colors hover:border-accent hover:text-ink${
+              className={`inline-flex min-h-9 items-center gap-[7px] rounded-[18px] border border-line bg-[var(--ds-card-2,var(--ds-card))] px-3 py-1.5 text-[12px] text-ink-2 transition-colors hover:border-accent hover:text-ink${
                 pick ? " cursor-pointer" : ""
               }`}
               role={pick ? "button" : undefined} tabIndex={pick ? 0 : undefined} onClick={pick} onKeyDown={pick ? keyActivate(pick) : undefined}

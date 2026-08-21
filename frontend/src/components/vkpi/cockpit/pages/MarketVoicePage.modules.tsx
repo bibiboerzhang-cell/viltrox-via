@@ -250,7 +250,7 @@ export function QuoteFold({ quotes, title }: { quotes: Row[]; title: string }) {
           ev.stopPropagation();
           setOpen(true);
         }}
-        className="mt-1.5 block text-[10px] text-accent transition-colors hover:text-accent-hover"
+        className="mt-1.5 inline-flex min-h-8 items-center rounded-lg px-2 text-[11.5px] font-medium text-accent transition-colors hover:bg-accent-soft hover:text-accent-hover"
       >
         ▸ 原声 ×{quotes.length}(点开)
       </button>
@@ -266,6 +266,7 @@ export function ModuleCard({
   srcLabel,
   srcRows,
   onOpenSrc,
+  readableBody = false,
   children,
 }: {
   title: string;
@@ -274,6 +275,8 @@ export function ModuleCard({
   srcLabel: string;
   srcRows: Array<[string, string]>;
   onOpenSrc?: () => void;
+  /** Page-scoped density lift for feedback-heavy boards; other board families keep their current density. */
+  readableBody?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -291,7 +294,12 @@ export function ModuleCard({
           <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-muted">实时</span>
         </span>
       </header>
-      <div className="min-h-0 flex-1 overflow-auto px-4 pb-4">{children}</div>
+      <div
+        data-vkpi-density={readableBody ? "readable-module-body" : undefined}
+        className={`min-h-0 flex-1 overflow-auto px-4 pb-4${readableBody ? " text-[12.5px] leading-[1.55]" : ""}`}
+      >
+        {children}
+      </div>
     </section>
   );
 }
@@ -400,7 +408,7 @@ export function FeedRowLine({
   const idn = IDENTITY_META[item.identity] || IDENTITY_META.user;
   return (
     <div
-      className="group flex min-w-0 cursor-pointer items-center gap-2 border-b border-line py-2 last:border-0"
+      className="group flex min-h-10 min-w-0 cursor-pointer items-center gap-2 border-b border-line py-2 last:border-0"
       role="button"
       tabIndex={0}
       onClick={() => onOpen(index)}
@@ -420,7 +428,7 @@ export function FeedRowLine({
       >
         {idn.label}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-2 transition-colors group-hover:text-accent">{item.text || "—"}</span>
+      <span className="min-w-0 flex-1 truncate text-[12.5px] leading-5 text-ink-2 transition-colors group-hover:text-accent">{item.text || "—"}</span>
       {queued && (
         <span
           className="flex-none rounded-[5px] border border-good bg-good-soft px-1 py-px text-[8px] font-bold text-good"
@@ -429,13 +437,13 @@ export function FeedRowLine({
           💬 已入队
         </span>
       )}
-      {Number(item.likes) > 0 && <span className="flex-none font-mono text-[9.5px] text-muted">♥ {item.likes}</span>}
-      <span className="flex-none font-mono text-[9.5px] text-muted" title={item.created_at ? `${item.created_at}(UTC 存 · 按浏览器时区显示)` : "无时间戳"}>
+      {Number(item.likes) > 0 && <span className="flex-none font-mono text-[10.5px] text-muted">♥ {item.likes}</span>}
+      <span className="flex-none font-mono text-[10.5px] text-muted" title={item.created_at ? `${item.created_at}(UTC 存 · 按浏览器时区显示)` : "无时间戳"}>
         {formatLocal(item.created_at)}
       </span>
       {item.post_url ? (
         <a
-          className="vkpi-prov-pchip vkpi-prov-pchip--ext vkpi-prov-pchip--mini flex-none"
+          className="vkpi-prov-pchip vkpi-prov-pchip--ext inline-flex h-8 w-8 flex-none items-center justify-center rounded-lg"
           href={item.post_url}
           target="_blank"
           rel="noopener noreferrer"
@@ -617,7 +625,7 @@ export function RecsBody({ suggestions, prd }: { suggestions: Row; prd?: RecsPrd
                     ? "该建议已转产品部(vkpi_market_prd_referrals),不重复转交"
                     : "把这条建议转交产品部(POST /market/prd-referrals,幂等)"
                 }
-                className={`flex-none rounded-md border px-1.5 py-0.5 text-[9.5px] transition-colors disabled:cursor-default ${
+                className={`inline-flex min-h-8 flex-none items-center rounded-md border px-2.5 py-1 text-[10.5px] transition-colors disabled:cursor-default ${
                   referred
                     ? "border-good bg-good-soft text-good"
                     : "border-line text-muted hover:border-accent hover:bg-accent-soft hover:text-accent disabled:opacity-50"
@@ -676,7 +684,7 @@ export function PrdStatusBody({
   onSetStatus?: (id: number, status: "accepted" | "rejected") => void;
 }) {
   if (items.length === 0) return <EmptyLine text="暂无转交 —— 反馈详情里点『转产品部』。" />;
-  const actBtn = "flex-none rounded-md border border-line px-1.5 py-0.5 text-[9.5px] text-muted transition-colors disabled:cursor-default disabled:opacity-50";
+  const actBtn = "inline-flex min-h-8 flex-none items-center rounded-md border border-line px-2.5 py-1 text-[10.5px] text-muted transition-colors disabled:cursor-default disabled:opacity-50";
   return (
     <div>
       {items.map((it) => {
@@ -741,7 +749,7 @@ export function BucketsBody({ data }: { data: Row | null }) {
         <span
           key={String(b.key)}
           title={(Array.isArray(b.example) && b.example[0]?.text) || ""}
-          className={`rounded-full border px-2.5 py-1 text-[11px] transition-colors hover:border-accent ${
+          className={`inline-flex min-h-8 items-center rounded-full border px-3 py-1 text-[11.5px] transition-colors hover:border-accent ${
             Number(b.count) > 0 ? "border-line bg-card text-ink" : "border-line text-muted opacity-60"
           }`}
         >

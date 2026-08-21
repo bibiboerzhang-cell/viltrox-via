@@ -125,19 +125,25 @@ export function ModalShell({
         <div className="flex flex-none items-start justify-between gap-3 border-b border-line px-[22px] pb-3.5 pt-[18px]">
           <div className="min-w-0">
             <div id={titleId} className="text-[17px] font-[680] tracking-[-0.02em] text-ink">{title}</div>
-            {sub ? <div id={subId} className="mt-[3px] text-[11px] text-muted">{sub}</div> : null}
+            {sub ? <div id={subId} className="mt-[3px] text-[12px] leading-5 text-muted">{sub}</div> : null}
           </div>
           <button
             data-modal-initial-focus
             type="button"
             onClick={onClose}
             aria-label="关闭"
-            className="grid h-[30px] w-[30px] flex-none place-items-center rounded-[9px] border border-line text-[15px] text-ink-2 transition-colors hover:border-line-strong hover:text-ink"
+            className="grid h-10 w-10 flex-none place-items-center rounded-xl border border-line text-[17px] text-ink-2 transition-colors hover:border-line-strong hover:bg-panel hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             ✕
           </button>
         </div>
-        <div data-vkpi-modal-scroll="content" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-[22px] pb-10 pt-[18px]">{children}</div>
+        <div
+          data-vkpi-modal-scroll="content"
+          data-vkpi-density="readable-modal-body"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-[22px] pb-10 pt-[18px] text-[12.5px] leading-[1.55]"
+        >
+          {children}
+        </div>
       </div>
     </div>
   );

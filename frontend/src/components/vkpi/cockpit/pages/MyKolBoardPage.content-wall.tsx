@@ -146,7 +146,7 @@ export function ContentWallModule({
 
   return (
     <div>
-      <div className="mb-2 rounded-[9px] border border-line bg-card px-2.5 py-2 text-[11px] text-muted">
+      <div className="mb-2 rounded-[9px] border border-line bg-card px-3 py-2.5 text-[12px] leading-5 text-muted">
         已采集 {summary.classified.length}｜品牌相关 {summary.vRelatedCount}｜未判定 {summary.undeterminedCount}｜播放已实测 {summary.measuredCount}/{summary.classified.length}
         <span className="ml-2">当前为系统已采集窗口，不代表平台频道全量；播放趋势请在 KOL 详情查看。</span>
       </div>
@@ -155,7 +155,7 @@ export function ContentWallModule({
           aria-label="按 KOL 筛选"
           value={String(kolId)}
           onChange={(event) => setKolId(Number(event.target.value) || 0)}
-          className="max-w-[190px] rounded-xl border border-line bg-card px-2.5 py-1.5 text-[12px] text-ink outline-none focus:border-accent [&>option]:bg-[var(--ds-card)]"
+          className="min-h-9 max-w-[210px] rounded-xl border border-line bg-card px-3 py-1.5 text-[12px] text-ink outline-none focus:border-accent [&>option]:bg-[var(--ds-card)]"
           title="选择单个收藏KOL，查看该账号当前已采集内容"
         >
           <option value="0">全部收藏 KOL</option>
@@ -180,7 +180,7 @@ export function ContentWallModule({
               {shown.slice(0, visible).map(({ video, tier }) => <WallVideoCard key={Number(video.evidence_id ?? video.id) || 0} video={video} tier={tier} fallbackKolName={kolId ? kolName : undefined} />)}
             </div>
             {shown.length > visible ? (
-              <button type="button" onClick={() => setVisible((value) => value + WALL_PAGE)} className="mt-2 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11px] text-accent transition-colors hover:border-accent hover:bg-accent-soft">
+              <button type="button" onClick={() => setVisible((value) => value + WALL_PAGE)} className="mt-2 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft">
                 ≡ 查看更多（已显 {Math.min(visible, shown.length)} / 当前已采集 {shown.length}）
               </button>
             ) : null}

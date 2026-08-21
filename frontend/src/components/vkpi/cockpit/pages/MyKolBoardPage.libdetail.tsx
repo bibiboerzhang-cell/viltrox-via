@@ -42,7 +42,7 @@ import { proxiedImageUrl } from "../../shared/mediaProxy";
 //   零 opacity 修饰类;诚实空态(0 采集=—,读取中=…,失败不缓存下次重试,绝不编数)。
 
 /* ============ 共用小件样式(dialogs 同款,单一来源住这里供两侧引) ============ */
-export const CHIP = "rounded-full border px-2.5 py-1 text-[10.5px] transition-colors";
+export const CHIP = "inline-flex min-h-9 items-center rounded-full border px-3 py-1.5 text-[11.5px] font-medium transition-colors";
 export const CHIP_ON = "border-accent bg-accent-soft text-accent";
 export const CHIP_OFF = "border-line text-muted hover:text-ink";
 export const MINI_BADGE = "flex-none rounded-[5px] border px-1.5 py-0.5 text-[9.5px] font-bold";
@@ -53,7 +53,7 @@ export function VideoTrendLine({ video }: { video: VkpiKolPoolVideoRow }) {
   const warning = video.tracking_status === "failed" || video.tracking_status === "stale";
   return (
     <div
-      className={`mt-1 font-mono text-[9px] ${warning ? "text-warn" : "text-muted"}`}
+      className={`mt-1 font-mono text-[10.5px] leading-4 ${warning ? "text-warn" : "text-muted"}`}
       title={`播放指标来自点时快照，不是实时数据。成功样本 ${Number(video.sample_count || 0)}，抓取尝试 ${Number(video.attempt_count || 0)}。`}
       data-testid={`video-trend-${Number(video.evidence_id ?? video.id) || 0}`}
     >
@@ -309,7 +309,7 @@ export function KolVideoSection({
   return (
     <div>
       {/* 汇总条:全部真实算;NULL 只计覆盖率,绝不转成 0。 */}
-      <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted">
+      <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11.5px] leading-5 text-muted">
         <span>
           已采集 {classified.length} 条 · 品牌相关 {vRelatedCount} · 未判定 {undeterminedCount} · 深析未识别 {unrelatedCount} · 播放已实测 {measuredCount}/{classified.length}（合计 {viewsTotal.toLocaleString()}） · 点赞已实测 {likeMeasured}/{classified.length}（合计 {likeTotal.toLocaleString()}） · 评论已实测 {commentMeasured}/{classified.length}（合计 {commentTotal.toLocaleString()}） · 分享已实测 {shareMeasured}/{classified.length}（合计 {shareTotal.toLocaleString()}） · 已深析 {analyzedCount}
         </span>
@@ -360,7 +360,7 @@ export function KolVideoSection({
         </span>
       </div>
       {shown.length === 0 ? (
-        <div className="px-3 py-4 text-center text-[12px] text-muted">该筛选下没有已采集内容。可切回“全部已采集”或发起补采。</div>
+        <div className="px-3 py-4 text-center text-[12.5px] leading-5 text-muted">该筛选下没有已采集内容。可切回“全部已采集”或发起补采。</div>
       ) : (
         <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
           {shown.map(({ video, tier }) => {
@@ -375,8 +375,8 @@ export function KolVideoSection({
                   <KolVideoThumbnail rawUrl={thumb} title={title} />
                 </div>
                 <div className="px-2.5 py-2">
-                  <div className="truncate text-[11px] text-ink" title={title}>{title}</div>
-                  <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[9.5px] text-muted">
+                  <div className="truncate text-[12.5px] font-medium leading-5 text-ink" title={title}>{title}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[10.5px] leading-4 text-muted">
                     <span title={video.view_count == null ? "未实测(≠ 0 播放)" : "播放(点时实测)"}>
                       ▶ {video.view_count != null ? Number(video.view_count).toLocaleString() : "未实测"}
                     </span>
@@ -411,7 +411,7 @@ export function KolVideoSection({
                     ) : null}
                     <button
                       type="button"
-                      className="rounded-[5px] border border-line px-1 py-px font-mono text-[8px] text-muted transition-colors hover:border-accent hover:text-accent"
+                      className="inline-flex min-h-8 items-center rounded-lg border border-line px-2 py-1 font-mono text-[10.5px] text-muted transition-colors hover:border-accent hover:text-accent"
                       title="库记录预览"
                       onClick={() => setRecEvidence((prev) => ((prev?.evidence_id ?? prev?.id) === eid ? null : video))}
                     >
@@ -420,7 +420,7 @@ export function KolVideoSection({
                     {tier === "undetermined" && !video.has_final_v1_cache && !isImageKindVideo(video) ? (
                       <button
                         type="button"
-                        className="rounded-[5px] border border-line px-1 py-px text-[8px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default"
+                        className="inline-flex min-h-8 items-center rounded-lg border border-line px-2 py-1 text-[10.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default"
                         disabled={queuedEvidence.has(eid) || busyKeys.has(`deep:${eid}`)}
                         title="未判定视频一键入队深析(端点真实返回才标已入队)"
                         onClick={() => onEnqueueOne(video)}
@@ -431,7 +431,7 @@ export function KolVideoSection({
                     {onRefreshMetrics && eid > 0 && !isImageKindVideo(video) ? (
                       <button
                         type="button"
-                        className="rounded-[5px] border border-line px-1 py-px text-[8px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default"
+                        className="inline-flex min-h-8 items-center rounded-lg border border-line px-2 py-1 text-[10.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default"
                         disabled={refreshingEvidence.has(eid) || queuedRefreshEvidence.has(eid)}
                         title="把该条播放指标刷新加入后台队列；页面不会把排队状态称为实时结果"
                         onClick={() => onRefreshMetrics(video)}

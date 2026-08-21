@@ -102,8 +102,8 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
     // 卡头短计数 = 后端条数真值;工具行三件套在场
     expect(screen.getAllByText("近 14 条").length).toBeGreaterThan(0);
-    expect(screen.getByLabelText("按 KOL 筛选")).toBeTruthy();
-    expect(screen.getByText("品牌相关")).toBeTruthy();
+    expect(screen.getByLabelText("按 KOL 筛选")).toHaveClass("min-h-9", "text-[12px]");
+    expect(screen.getByRole("button", { name: "品牌相关" })).toHaveClass("min-h-9", "text-[11.5px]");
     // 默认按最新排序:第 1 张=07-11 合作片,第 2 张=07-10 标题提及;默认恰 12 张
     expect(wallTitles().slice(0, 2)).toEqual(["Wall Coop Film", "VILTROX wall mention"]);
     expect(wallCards().length).toBe(12);

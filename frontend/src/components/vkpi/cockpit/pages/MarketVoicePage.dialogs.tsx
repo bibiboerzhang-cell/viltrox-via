@@ -8,7 +8,7 @@ export { ModalShell } from "./MarketVoicePage.modal-shell";
 
 // 市场之声 · 弹窗族(V0h-c 自 MarketVoicePage.modules 拆出,行数纪律 ≤750/文件)。
 //   ModalShell 对齐 demo .scrim/.drawer:body portal 脱离 react-grid transform/overflow、
-//   遮罩 var(--ds-scrim)+blur(3px)、容器 18px 圆角/86dvh/标题 17px/680/关闭钮 30×30,
+//   遮罩 var(--ds-scrim)+blur(3px)、容器 18px 圆角/86dvh/标题 17px/680/关闭钮 40×40,
 //   入场 scale(.97)→1 两态过渡(ds-viz.css,自带 reduced-motion 降级);正文单滚动区。
 //   color-scheme:本壳表面全 token 跟主题 → 挂 cockpit-modal--themed 修饰类
 //   (global.css:基类 .cockpit-modal 钉死 dark 供写死暗表面的遗留弹窗保真)。
@@ -50,7 +50,7 @@ export function platformBadge(platform: string) {
 
 /* ============ 弹窗内分区件:demo .dsec .dl / .drow 密度 ============ */
 export function SectionLabel({ children }: { children: React.ReactNode }) {
-  return <div className="mb-2.5 text-[9.5px] font-semibold uppercase tracking-[0.14em] text-muted">{children}</div>;
+  return <div className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted">{children}</div>;
 }
 
 export function Drow({ k, v, tone }: { k: string; v: React.ReactNode; tone?: string }) {
@@ -103,7 +103,7 @@ export function QuoteDialog({
             {quotes.map((q, i) => (
               <div key={i} className="rounded-[11px] border border-line bg-panel px-3.5 py-2.5">
                 <div className="text-[12.5px] leading-relaxed text-ink-2">“{q.text}”</div>
-                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[10px] text-muted">
+                <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
                   <span>{q.author || "匿名"}</span>
                   {q.platform ? <span>{q.platform}</span> : null}
                   {q.at ? <span>{String(q.at).slice(0, 10)}</span> : null}
@@ -149,7 +149,7 @@ export function FeedListModal({
           type="button"
           onClick={onLoadMore}
           disabled={loading}
-          className="mt-2.5 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft disabled:opacity-50"
+          className="mt-2.5 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft disabled:opacity-50"
         >
           {loading ? "加载中…" : `≡ 载入更多(已加载 ${loadedCount}/${total})`}
         </button>
@@ -161,7 +161,7 @@ export function FeedListModal({
 
 /* ============ 反馈详情弹窗:‹ #n/N › + ↑↓ 连续翻 + 溯源链 + 库记录预览 ============ */
 const NAV_BTN =
-  "rounded-lg border border-line px-2.5 py-1 text-[11px] text-ink-2 transition-colors hover:border-line-strong hover:text-ink disabled:cursor-default disabled:opacity-40";
+  "inline-flex min-h-9 items-center rounded-lg border border-line px-3 py-1.5 text-[11.5px] text-ink-2 transition-colors hover:border-line-strong hover:text-ink disabled:cursor-default disabled:opacity-40";
 
 function feedRecordRows(item: VoiceFeedItem, rec: string): Array<[string, string]> {
   const prov = item.prov || ({} as VoiceFeedItem["prov"]);
@@ -342,7 +342,7 @@ export function FeedDetailModal({
               ? "该评论已在回复队列(vkpi_reply_queue),不重复入队"
               : "手动把这条评论转入回复队列(POST /reply-queue/enqueue-comment,幂等)"
           }
-          className={`flex-1 rounded-lg border px-3 py-2 text-center text-[11.5px] transition-colors disabled:cursor-default ${
+          className={`min-h-10 flex-1 rounded-lg border px-3 py-2 text-center text-[12px] transition-colors disabled:cursor-default ${
             queued
               ? "border-good bg-good-soft text-good"
               : "border-line text-ink-2 hover:border-accent hover:bg-accent-soft hover:text-accent disabled:opacity-50"
@@ -359,7 +359,7 @@ export function FeedDetailModal({
               ? "该条已转产品部(vkpi_market_prd_referrals),不重复转交"
               : "把这条声音转交产品部(POST /market/prd-referrals → vkpi_market_prd_referrals,幂等)"
           }
-          className={`flex-1 rounded-lg border px-3 py-2 text-center text-[11.5px] transition-colors disabled:cursor-default ${
+          className={`min-h-10 flex-1 rounded-lg border px-3 py-2 text-center text-[12px] transition-colors disabled:cursor-default ${
             referred
               ? "border-good bg-good-soft text-good"
               : "border-line text-ink-2 hover:border-accent hover:bg-accent-soft hover:text-accent disabled:opacity-50"
@@ -543,7 +543,7 @@ export function DrillFeedModal({
             type="button"
             onClick={() => load(loaded.length)}
             disabled={loading}
-            className="mt-2.5 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft disabled:opacity-50"
+            className="mt-2.5 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft disabled:opacity-50"
           >
             {loading ? "加载中…" : `≡ 载入更多(已加载 ${loaded.length}/${total})`}
           </button>
@@ -635,7 +635,7 @@ export function ModuleProvModal({
           <button
             type="button"
             onClick={onOpenSamples}
-            className="w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft"
+            className="min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft"
           >
             ≡ 查看底层样本 · 反馈流全量
           </button>

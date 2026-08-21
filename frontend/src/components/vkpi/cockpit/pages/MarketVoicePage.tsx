@@ -377,6 +377,7 @@ export function MarketVoicePage({ apiToken = "", onNavigate, embeddedModuleKey }
       srcLabel: srcOf(key).label,
       srcRows: rows,
       onOpenSrc: () => setProvKey(key),
+      readableBody: true,
     };
   };
 
