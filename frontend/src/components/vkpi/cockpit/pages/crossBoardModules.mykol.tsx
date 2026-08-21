@@ -9,7 +9,8 @@ import {
   type VkpiRecentVideosGroup,
 } from "../../../../services/vkpi/myKolBoard-api";
 import { EmptyLine } from "./MarketVoicePage.modules";
-import { AnalysisActivityModule, ContentWallModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
+import { AnalysisActivityModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
+import { ContentWallModule } from "./MyKolBoardPage.content-wall";
 import { FunnelBody } from "./MyKolBoardPage.charts";
 import { XbCard, useXbFetch, xbGroupGate, xbNoToken, type Row } from "./crossBoardModules.shell";
 

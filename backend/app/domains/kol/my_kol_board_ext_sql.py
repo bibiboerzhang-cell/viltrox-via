@@ -10,7 +10,9 @@ SQL 红线(契约测试静态审查):全参数化 ? 占位;零字面 percent、�
 from __future__ import annotations
 
 BOARD_METHOD = "my_kol_board_ext_v1"
-VILTROX_TOKEN = "viltrox"          # 标题命中词(strpos 参数,小写包含匹配)
+# 标题只是中等强度证据；英文与两个中文品牌词统一参数化匹配。
+VILTROX_TOKEN = "viltrox"          # 保留单词常量供旧调用方引用
+VILTROX_TITLE_TOKENS: tuple[str, ...] = ("viltrox", "唯卓仕", "唯卓")
 
 # ── 护栏常量(测试直接断言;全部 SQL LIMIT ? + Python 层二次封顶双保险)──
 SERIES_ROWS_LIMIT = 400            # 日聚合 GROUP BY 行封顶(days≤365 + 余量)
@@ -175,7 +177,54 @@ VIEWS_TOP_SQL = """
     LIMIT ?
 """
 
-RECENT_VIDEOS_SQL = f"""
+# 五档 Viltrox 证据的单一 SQL 真值源。所有聚合、KOL 名单与
+# recent_videos 都以这个 CTE 为起点，避免卡片与统计口径分叉。
+# latest ready final_v1 严格按 cache id DESC 取一条；只投影
+# detected/products/competitor_mentions 结构化字段，不返回原始深析全文。
+V_CONTENT_CLASSIFIED_CTE = """
+WITH v_content_signals AS (
+    SELECT e.id AS evidence_id,
+           e.kol_pool_id AS kol_pool_id,
+           e.project_id AS project_id,
+           (BTRIM(COALESCE(CAST(e.project_id AS TEXT), '')) NOT IN ('', '0')) AS project_linked,
+           (fv.result IS NOT NULL) AS has_final_v1_cache,
+           lower(COALESCE(fv.result #>> '{raw_gemini_video,viltrox_detected}', '')) AS final_v1_detected,
+           fv.result #> '{raw_gemini_video,viltrox_products_all}' AS final_v1_products,
+           fv.result #> '{raw_gemini_video,competitor_mentions}' AS final_v1_competitor_mentions,
+           CASE
+               WHEN jsonb_typeof(fv.result #> '{raw_gemini_video,viltrox_products_all}') = 'array'
+               THEN jsonb_array_length(fv.result #> '{raw_gemini_video,viltrox_products_all}')
+               ELSE 0
+           END AS final_v1_products_count,
+           (strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0
+            OR strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0
+            OR strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0) AS title_token_match
+    FROM vkpi_kol_video_evidence e
+    LEFT JOIN LATERAL (
+        SELECT c.result
+        FROM vkpi_analysis_cache c
+        WHERE c.target_type = 'video'
+          AND c.target_id = e.id::text
+          AND c.derive_method = 'video_analysis_final_v1'
+          AND c.status = 'ready'
+        ORDER BY c.id DESC
+        LIMIT 1
+    ) fv ON TRUE
+),
+v_content_classified AS (
+    SELECT s.*,
+           CASE
+               WHEN s.project_linked THEN 'cooperation'
+               WHEN s.final_v1_detected = 'true' OR s.final_v1_products_count > 0 THEN 'analysis_confirmed'
+               WHEN s.title_token_match THEN 'title_mention'
+               WHEN s.final_v1_detected = 'false' THEN 'not_related'
+               ELSE 'undetermined'
+           END AS v_tier
+    FROM v_content_signals s
+)
+"""
+
+RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
     SELECT e.id AS evidence_id,
            e.kol_pool_id AS kol_pool_id,
            e.project_id AS project_id,
@@ -192,12 +241,13 @@ RECENT_VIDEOS_SQL = f"""
            COALESCE(e.evidence_type, 'video') AS evidence_type,
            COALESCE(NULLIF(kp.display_name, ''), kp.handle, '') AS kol_name,
            COALESCE(kp.handle, '') AS kol_handle,
-           EXISTS (SELECT 1 FROM vkpi_analysis_cache c
-                   WHERE c.target_type = 'video'
-                     AND c.target_id = e.id::text
-                     AND c.derive_method = 'video_analysis_final_v1'
-                     AND c.status = 'ready') AS has_final_v1_cache
+           vc.has_final_v1_cache AS has_final_v1_cache,
+           vc.final_v1_detected AS llm_viltrox_detected_text,
+           vc.final_v1_products AS llm_viltrox_products,
+           vc.final_v1_competitor_mentions AS llm_competitor_mentions,
+           vc.v_tier AS v_tier
     FROM vkpi_kol_video_evidence e
+    JOIN v_content_classified vc ON vc.evidence_id = e.id
     JOIN vkpi_kol_pool kp ON kp.id = e.kol_pool_id
     WHERE kp.duplicate_of_id IS NULL
       AND e.is_active IS NOT FALSE
@@ -207,38 +257,36 @@ RECENT_VIDEOS_SQL = f"""
     LIMIT ?
 """
 
-V_CONTENT_SQL = """
+V_CONTENT_SQL = V_CONTENT_CLASSIFIED_CTE + """
     SELECT COUNT(*) AS total_evidence,
-           SUM(CASE WHEN e.project_id IS NOT NULL THEN 1 ELSE 0 END) AS cooperation,
-           SUM(CASE WHEN strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0
-                    THEN 1 ELSE 0 END) AS title_mention,
-           SUM(CASE WHEN e.project_id IS NOT NULL
-                     AND strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0
-                    THEN 1 ELSE 0 END) AS overlap_both
-    FROM vkpi_kol_video_evidence e
+           SUM(CASE WHEN v_tier = 'cooperation' THEN 1 ELSE 0 END) AS cooperation,
+           SUM(CASE WHEN v_tier = 'analysis_confirmed' THEN 1 ELSE 0 END) AS analysis_confirmed,
+           SUM(CASE WHEN v_tier = 'title_mention' THEN 1 ELSE 0 END) AS title_mention,
+           SUM(CASE WHEN v_tier = 'not_related' THEN 1 ELSE 0 END) AS not_related,
+           SUM(CASE WHEN v_tier = 'undetermined' THEN 1 ELSE 0 END) AS undetermined
+    FROM v_content_classified
 """
 
-V_KOL_COUNT_SQL = """
-    SELECT COUNT(DISTINCT e.kol_pool_id) AS n
-    FROM vkpi_kol_video_evidence e
-    WHERE e.project_id IS NOT NULL
-       OR strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0
+V_KOL_COUNT_SQL = V_CONTENT_CLASSIFIED_CTE + """
+    SELECT COUNT(DISTINCT kol_pool_id) AS n
+    FROM v_content_classified
+    WHERE v_tier IN ('cooperation', 'analysis_confirmed', 'title_mention')
 """
 
-V_KOL_IDS_SQL = """
-    SELECT DISTINCT e.kol_pool_id AS kol_pool_id
-    FROM vkpi_kol_video_evidence e
-    WHERE e.kol_pool_id IS NOT NULL
-      AND (e.project_id IS NOT NULL
-           OR strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0)
+V_KOL_IDS_SQL = V_CONTENT_CLASSIFIED_CTE + """
+    SELECT DISTINCT kol_pool_id AS kol_pool_id
+    FROM v_content_classified
+    WHERE kol_pool_id IS NOT NULL
+      AND v_tier IN ('cooperation', 'analysis_confirmed', 'title_mention')
     ORDER BY 1
     LIMIT ?
 """
 
-V_KOL_TIERS_SQL = """
-    SELECT COUNT(DISTINCT CASE WHEN e.project_id IS NOT NULL
-                               THEN e.kol_pool_id END) AS cooperation_kols,
-           COUNT(DISTINCT CASE WHEN strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?) > 0
-                               THEN e.kol_pool_id END) AS title_mention_kols
-    FROM vkpi_kol_video_evidence e
+V_KOL_TIERS_SQL = V_CONTENT_CLASSIFIED_CTE + """
+    SELECT COUNT(DISTINCT CASE WHEN v_tier = 'cooperation' THEN kol_pool_id END) AS cooperation_kols,
+           COUNT(DISTINCT CASE WHEN v_tier = 'analysis_confirmed' THEN kol_pool_id END) AS analysis_confirmed_kols,
+           COUNT(DISTINCT CASE WHEN v_tier = 'title_mention' THEN kol_pool_id END) AS title_mention_kols,
+           COUNT(DISTINCT CASE WHEN v_tier = 'not_related' THEN kol_pool_id END) AS not_related_kols,
+           COUNT(DISTINCT CASE WHEN v_tier = 'undetermined' THEN kol_pool_id END) AS undetermined_kols
+    FROM v_content_classified
 """

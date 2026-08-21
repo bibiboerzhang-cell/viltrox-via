@@ -6,7 +6,8 @@ import { getMyKolAggregate, type VkpiMyKolAggregateResponse } from "../../../../
 import { useOfficialChannelMatrix } from "../../pages/channels/useOfficialChannelMatrix";
 import type { VkpiDashboardData, VkpiPageKey } from "../../vkpiTypes";
 import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
-import { AnalysisActivityModule, ContentWallModule, KolLibraryModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
+import { AnalysisActivityModule, KolLibraryModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
+import { ContentWallModule } from "./MyKolBoardPage.content-wall";
 import { DigestEmbed, LibClassicEmbed, OfficialEmbed, RiskEmbed, RollupEmbed, TeamEmbed } from "./MyKolBoardPage.embeds";
 import {
   ClaimsBody,
@@ -493,7 +494,7 @@ export function MyKolBoardPage({
     return (
       <ModuleCard {...cardProps("contentWall", "内容墙", n != null ? `近 ${n} 条` : undefined, basisRows(g))}>
         {String(g?.status || "") === "empty" ? (
-          <EmptyLine text="暂无采集视频——在库行发起采集。" />
+          <EmptyLine text="暂无已采集内容——可在KOL详情发起补采。" />
         ) : (
           extGate(g) ?? <ContentWallModule apiToken={apiToken} group={g!} kolOptions={wallKolOptions} />
         )}
@@ -557,7 +558,7 @@ export function MyKolBoardPage({
     { key: "team", label: "团队矩阵", description: "负责人卡 + 分管 KOL · TeamMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 6, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderTeam },
     { key: "activity", label: "分析动态", description: "进行中的账号分析/深析/评论采集 · 点行直达 KOL Pool", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 20, render: renderActivity },
     { key: "library", label: "KOL 库", description: "收藏/共享全量 + 行级采集数据 · V 名单精确筛选 + 分区详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26, render: renderLibrary },
-    { key: "contentWall", label: "内容墙", description: "收藏集最近采集视频网格 · KOL/仅V/排序筛选 · 点卡直跳原帖", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 5, maxHeight: 30, render: renderContentWall },
+    { key: "contentWall", label: "内容墙", description: "收藏集已采集内容 · KOL/Viltrox证据/排序筛选 · 点卡直跳原帖", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 5, maxHeight: 30, render: renderContentWall },
     { key: "fitdist", label: "Fit 分布", description: "全池十分位直方 + 未评分诚实桶(只读)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFitdist },
     { key: "official", label: "官方账号矩阵", description: "当前官号平台总览 · OfficialMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderOfficial },
     { key: "platdist", label: "平台分布", description: "收藏集按平台条形 · 点行过滤 KOL 库", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 16, render: renderPlatdist },

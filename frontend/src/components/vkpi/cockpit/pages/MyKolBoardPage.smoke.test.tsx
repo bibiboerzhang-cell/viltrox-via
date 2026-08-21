@@ -422,7 +422,7 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(screen.getAllByText("KOL 库").length).toBeGreaterThan(0);
     // 【内容墙】library 下一行(本文件 mock 恒 empty → 板面空态文案)+ viewsTop 上默认作旁柱
     expect(screen.getAllByText("内容墙").length).toBeGreaterThan(0);
-    expect(await screen.findByText("暂无采集视频——在库行发起采集。")).toBeTruthy();
+    expect(await screen.findByText("暂无已采集内容——可在KOL详情发起补采。")).toBeTruthy();
     expect(screen.getAllByText("播放 Top 视频").length).toBeGreaterThan(0);
     expect(await screen.findByText("Alpha Views")).toBeTruthy();
     // palette 备选不进默认布局
@@ -673,23 +673,22 @@ describe("MyKolBoardPage M3/M4(KOL 库:V 名单精确过滤 + 弹窗族)", () =>
     expect(screen.queryByText("Alpha Cam")).toBeNull();
   });
 
-  it("详情弹窗:视频三档徽 + 诚实小结(NULL 剔除注明)+ 仅V开关 + 记录预览", async () => {
+  it("详情弹窗:视频证据徽 + 诚实覆盖小结 + 品牌筛选 + 记录预览", async () => {
     renderBoard();
     fireEvent.click(await screen.findByText("Alpha Cam"));
     expect(await screen.findByText("合作产出")).toBeTruthy();
-    expect(screen.getByText("标题提及V")).toBeTruthy();
-    expect(screen.getByText("未判定")).toBeTruthy();
-    expect(screen.getByText(/3 条视频/)).toBeTruthy();
-    expect(screen.getByText(new RegExp(`实测播放合计 ${(1500).toLocaleString()}`))).toBeTruthy();
-    expect(screen.getByText(/1 条未实测已剔除/)).toBeTruthy();
-    expect(screen.getByText(/V 相关 2 条 · 已深析 1 条/)).toBeTruthy();
+    expect(screen.getByText("标题品牌提及")).toBeTruthy();
+    expect(screen.getAllByText("未判定").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/已采集 3 条/)).toBeTruthy();
+    expect(screen.getByText(new RegExp(`播放已实测 2/3（合计 ${(1500).toLocaleString()}）`))).toBeTruthy();
+    expect(screen.getByText(/品牌相关 2 · 未判定 1/)).toBeTruthy();
     expect(screen.getAllByText("已深析").length).toBeGreaterThan(0);
     expect(screen.getByText("深析")).toBeTruthy();
-    fireEvent.click(screen.getByText("仅 V 相关"));
-    expect(screen.queryByText("未判定")).toBeNull();
+    fireEvent.click(screen.getByText("品牌相关"));
+    expect(screen.getAllByText("未判定")).toHaveLength(1); // 筛选按钮仍在，未判定视频已隐藏
     expect(screen.getByText("合作产出")).toBeTruthy();
-    fireEvent.click(screen.getByText("仅 V 相关"));
-    expect(await screen.findByText("未判定")).toBeTruthy();
+    fireEvent.click(screen.getByText("全部已采集"));
+    expect((await screen.findAllByText("未判定")).length).toBeGreaterThanOrEqual(2);
     fireEvent.click(screen.getByText("#9002"));
     expect(await screen.findByText("NULL(未实测 ≠ 0 播放)")).toBeTruthy();
   });
@@ -700,7 +699,7 @@ describe("MyKolBoardPage M3/M4(KOL 库:V 名单精确过滤 + 弹窗族)", () =>
     expect(await screen.findByText("#1 / 3")).toBeTruthy();
     fireEvent.click(screen.getByText("下一条 ›"));
     expect(await screen.findByText("#2 / 3")).toBeTruthy();
-    expect(await screen.findByText(/暂无采集视频——可发起深爬/)).toBeTruthy();
+    expect(await screen.findByText(/暂无已采集内容——可发起补采/)).toBeTruthy();
     fireEvent.keyDown(window, { key: "ArrowDown" });
     expect(await screen.findByText("#3 / 3")).toBeTruthy();
     fireEvent.keyDown(window, { key: "ArrowUp" });
@@ -834,8 +833,8 @@ describe("MyKolBoardPage 库详情分区(档案→追踪链→合作结果→V �
     expect(screen.getByText("AF 85mm 铺量")).toBeTruthy();
     expect(screen.getByText(/阶段 shipped · 曝光 — · 证据 —/)).toBeTruthy();
     // ④ V 相关内容分区标题 + 汇总条(点赞/评论合计)
-    expect(screen.getByText("V 相关内容 · 过往视频全量")).toBeTruthy();
-    expect(screen.getByText(/♥ 18 · 💬 3/)).toBeTruthy();
+    expect(screen.getByText("已采集内容 · Viltrox 筛查")).toBeTruthy();
+    expect(screen.getByText(/点赞已实测 3\/3（合计 18） · 评论已实测 3\/3（合计 3）/)).toBeTruthy();
     // ⑤ 动作排零丢失:旧库右栏「账号分析 · 采集视频」入口在动作排补位
     expect(screen.getByText("账号分析 · 补采")).toBeTruthy();
   });
@@ -843,7 +842,7 @@ describe("MyKolBoardPage 库详情分区(档案→追踪链→合作结果→V �
   it("视频五 tabs:最新/播放/点赞/评论/分享;按播放排序未实测(NULL)排最后", async () => {
     renderBoard();
     fireEvent.click(await screen.findByText("Alpha Cam"));
-    expect(await screen.findByText(/3 条视频/)).toBeTruthy();
+    expect(await screen.findByText(/已采集 3 条/)).toBeTruthy();
     // 官号内容层也有同名五 tabs(卡在弹窗背后)——查询收敛到 dialog 内,防串台
     const dialog = within(screen.getByRole("dialog"));
     for (const label of ["最新", "播放", "点赞", "评论", "分享"]) {
@@ -862,8 +861,8 @@ describe("MyKolBoardPage 库详情分区(档案→追踪链→合作结果→V �
   it("零采集 KOL 详情:空态 + 深爬入口保留(分区标题仍在场)", async () => {
     renderBoard();
     fireEvent.click(await screen.findByText("Beta Vlog"));
-    expect(await screen.findByText(/暂无采集视频——可发起深爬/)).toBeTruthy();
-    expect(screen.getByText("V 相关内容 · 过往视频全量")).toBeTruthy();
+    expect(await screen.findByText(/暂无已采集内容——可发起补采/)).toBeTruthy();
+    expect(screen.getByText("已采集内容 · Viltrox 筛查")).toBeTruthy();
     expect(screen.getByText("合作项目结果 ×0")).toBeTruthy();
     expect(screen.getByText(/暂无合作项目/)).toBeTruthy();
   });

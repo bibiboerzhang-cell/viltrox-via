@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock3, ShieldAlert } from "lucide-react";
+import { CheckCircle2, Clock3, Heart, Loader2, ShieldAlert } from "lucide-react";
 
 import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domains/kol";
 
@@ -51,6 +51,12 @@ export function StrictQualifiedList({
   onSelectionChange,
   selectionDisabled = false,
   selectionReady = true,
+  favoriteIds = EMPTY_SELECTION,
+  favoriteBusyIds = EMPTY_SELECTION,
+  favoriteResults = new Map<number, string>(),
+  favoriteErrors = new Map<number, string>(),
+  favoritesSyncing = false,
+  onFavorite,
   lane = "local",
   extraStats = [],
 }: {
@@ -60,6 +66,12 @@ export function StrictQualifiedList({
   onSelectionChange?: (ids: Set<number>) => void;
   selectionDisabled?: boolean;
   selectionReady?: boolean;
+  favoriteIds?: ReadonlySet<number>;
+  favoriteBusyIds?: ReadonlySet<number>;
+  favoriteResults?: ReadonlyMap<number, string>;
+  favoriteErrors?: ReadonlyMap<number, string>;
+  favoritesSyncing?: boolean;
+  onFavorite?: (kolPoolId: number) => void;
   lane?: "local" | "online";
   extraStats?: string[];
 }) {
@@ -136,7 +148,7 @@ export function StrictQualifiedList({
 
       {summary.rows.length ? (
         <div className="overflow-x-auto rounded-lg border border-white/[0.07]">
-          <table className="min-w-[1260px] w-full border-collapse text-left text-[10px]">
+          <table className="min-w-[1380px] w-full border-collapse text-left text-[10px]">
             <thead className="bg-white/[0.035] text-slate-500">
               <tr>
                 <th className="w-14 px-2 py-2 font-medium">
@@ -154,6 +166,7 @@ export function StrictQualifiedList({
                 </th>
                 <th className="w-10 px-2 py-2 font-medium">排名</th>
                 <th className="min-w-36 px-2 py-2 font-medium">KOL</th>
+                <th className="w-32 px-2 py-2 font-medium">关注 / MY KOL</th>
                 <th className="w-24 px-2 py-2 font-medium">平台</th>
                 <th className="w-24 px-2 py-2 font-medium">粉丝</th>
                 <th className="w-28 px-2 py-2 font-medium">最新视频</th>
@@ -170,6 +183,11 @@ export function StrictQualifiedList({
               {summary.rows.map((row) => {
                 const poolId = Number(row.item.kol_pool_id) || 0;
                 const selectable = row.strictQualified && poolId > 0;
+                const favorited = favoriteIds.has(poolId);
+                const favoriteBusy = favoriteBusyIds.has(poolId);
+                const favoriteResult = favoriteResults.get(poolId) || "";
+                const favoriteError = favoriteErrors.get(poolId) || "";
+                const favoriteAllowed = selectable && selectionReady && !selectionDisabled && Boolean(onFavorite);
                 return (
                   <tr
                     key={row.identity}
@@ -196,6 +214,32 @@ export function StrictQualifiedList({
                     >
                       {row.name}
                     </button>
+                  </td>
+                  <td className="px-2 py-2">
+                    {!row.strictQualified ? (
+                      <span className="text-[9.5px] text-slate-500">过闸后可关注</span>
+                    ) : poolId <= 0 ? (
+                      <span className="text-[9.5px] text-amber-200/80">待入库</span>
+                    ) : favorited ? (
+                      <span className="inline-flex items-center gap-1 rounded border border-emerald-300/25 bg-emerald-400/[0.08] px-1.5 py-0.5 text-[9.5px] text-emerald-100">
+                        <CheckCircle2 size={9} /> 已关注
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label={`关注${online ? "联网" : "本地"} KOL ${row.name}`}
+                        disabled={!favoriteAllowed || favoriteBusy}
+                        onClick={() => onFavorite?.(poolId)}
+                        title={favoriteAllowed ? "关注后进入本人 MY KOL；不会批准项目或自动外联" : selectionDisabled ? "当前结果已过期，重新搜索后可关注" : !selectionReady ? "联网严格名单终态后可关注" : "当前行暂不可关注"}
+                        className="inline-flex items-center gap-1 rounded border border-emerald-300/25 bg-emerald-500/[0.10] px-1.5 py-0.5 text-[9.5px] text-emerald-100 transition-colors hover:bg-emerald-500/[0.18] disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        {favoriteBusy ? <Loader2 size={9} className="animate-spin" /> : <Heart size={9} />}
+                        {favoriteBusy ? "关注中" : favoriteError ? "重试" : "关注"}
+                      </button>
+                    )}
+                    {favoriteError ? <div className="mt-0.5 text-[8.5px] text-rose-200">{favoriteError}</div> : null}
+                    {!favoriteError && favoriteResult && !favorited ? <div className="mt-0.5 text-[8.5px] text-emerald-200">{favoriteResult}</div> : null}
+                    {!favoriteError && !favoriteResult && favoritesSyncing && !favorited ? <div className="mt-0.5 text-[8.5px] text-slate-500">状态同步中</div> : null}
                   </td>
                   <td className="px-2 py-2 uppercase text-slate-400">{row.platform}</td>
                   <td className="px-2 py-2 tabular-nums">{compactNumber(row.followers)}</td>
@@ -239,6 +283,12 @@ export function LocalQualifiedList({
   selectedIds?: ReadonlySet<number>;
   onSelectionChange?: (ids: Set<number>) => void;
   selectionDisabled?: boolean;
+  favoriteIds?: ReadonlySet<number>;
+  favoriteBusyIds?: ReadonlySet<number>;
+  favoriteResults?: ReadonlyMap<number, string>;
+  favoriteErrors?: ReadonlyMap<number, string>;
+  favoritesSyncing?: boolean;
+  onFavorite?: (kolPoolId: number) => void;
 }) {
   return <StrictQualifiedList summary={localQualifiedSummary(result)} {...props} />;
 }

@@ -9,7 +9,7 @@ const serviceMocks = vi.hoisted(() => ({
   archiveAllKolSearchHistory: vi.fn(), archiveKolSearchHistorySession: vi.fn(),
   restoreKolSearchHistorySession: vi.fn(), approveKolSearchSession: vi.fn(),
   createProjectDraftFromSession: vi.fn(), favoriteKolPool: vi.fn(),
-  generateKolSearchSessionOutreach: vi.fn(), resolveKolPool: vi.fn(),
+  generateKolSearchSessionOutreach: vi.fn(), listKolPoolFavorites: vi.fn(), resolveKolPool: vi.fn(),
 }));
 
 vi.mock("../../../../domains/kol", () => domainMocks);
@@ -32,6 +32,7 @@ describe("Smart KOL preview session reuse", () => {
     Object.values(domainMocks).forEach((mock) => mock.mockReset());
     Object.values(serviceMocks).forEach((mock) => mock.mockReset());
     domainMocks.listKolSearchHistory.mockResolvedValue({ items: [] });
+    serviceMocks.listKolPoolFavorites.mockResolvedValue({ items: [], total: 0 });
     domainMocks.smartKolSearch.mockResolvedValue({
       status: "ready", mode: "text", query_type: "text_recall",
       search_session: { id: 701 }, result: emptyRecall(),

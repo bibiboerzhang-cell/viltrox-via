@@ -1,7 +1,7 @@
 """MY KOL 看板聚合(my_kol_board_ext · M2)——八组看板读数,一次调用全给齐。
 
 用途:给前端 MY KOL 改版看板(M3/M4)补 KPI 序列 / 履约漏斗 / 平台分布 / fit 直方 /
-联系方式覆盖 / 播放榜 / V 相关内容三档 所需的聚合真数据。挂独立端点
+联系方式覆盖 / 播放榜 / V 相关内容五档 所需的聚合真数据。挂独立端点
 GET /api/admin/vkpi/my-kol/board-ext?days=30(与 aggregate 同前缀、同 require_tab
 读权限、同 viewer/own-only scope 口径),对现有 aggregate 响应零改动——全部字段
 增量新增,绝不破坏既有契约。仿 market/voice_report_ext.py 成熟模式。
@@ -29,15 +29,17 @@ GET /api/admin/vkpi/my-kol/board-ext?days=30(与 aggregate 同前缀、同 requi
                     N 条(封顶 RECENT_VIDEOS_LIMIT,双层封顶)按发布时间降序,
                     带缩略图三件套(创意库同一条毒缓存自愈链 cached → raw →
                     youtube 派生);view_count NULL 原样透出(未实测 ≠ 0 播放)。
-  v_content         V 相关内容三档派生:cooperation(project_id IS NOT NULL)/
-                    title_mention(标题含 viltrox,strpos 参数化不区分大小写)/
-                    undetermined(其余)+ KOL 级汇总 v_kol_count + 行级名单
+  v_content         V 相关内容五档互斥证据:cooperation(project_id 有效关联)/
+                    analysis_confirmed(latest ready final_v1 的 detected=true 或
+                    products 非空)/title_mention(标题含 viltrox/唯卓仕/唯卓)/
+                    not_related(latest ready final_v1 explicit false)/undetermined(无强证据)
+                    + KOL 级汇总 v_kol_count + 行级名单
                     v_kol_ids(有确定 V 信号的去重 kol_pool_id 升序数组,封顶
                     V_KOL_IDS_MAX=2000,超出如实标注 truncated,前端库列表
                     「有 V 视频」精确过滤用)+ tiers_by_kol(KOL 级去重计数,
-                    与条数级 tiers 区分)。判定函数 classify_v_content 独立
-                    可导出(M3 详情弹窗 / /kol-pool/{id}/videos 增强复用)。
-                    派生判据非采集字段;深析品牌命中判据后续接入。
+                    与条数级 tiers 区分)。v_content/recent_videos/名单共用
+                    同一 SQL CTE；只投影 final_v1 的 detected/products 等
+                    结构化证据，不下发原始正文/口播/字幕/描述。
 
 scope 口径(与 aggregate/viewer-context 同族):staff_scope_id 为已解析的
 effective_staff_id —— 员工恒被 scope.effective_staff_id 压回本人;管理层缺省
@@ -65,6 +67,7 @@ viltrox_fit_score 原值 / avatar / raw_platform_data 等明文联系方式与�
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -99,6 +102,7 @@ from app.domains.kol.my_kol_board_ext_sql import (  # noqa: F401 — 契约测�
     RECENT_VIDEOS_SQL,
     SERIES_MAX_DAYS,
     SERIES_ROWS_LIMIT,
+    V_CONTENT_CLASSIFIED_CTE,
     V_CONTENT_SQL,
     V_KOL_COUNT_SQL,
     V_KOL_IDS_MAX,
@@ -108,6 +112,7 @@ from app.domains.kol.my_kol_board_ext_sql import (  # noqa: F401 — 契约测�
     VIEWS_TOP_LIMIT,
     VIEWS_TOP_SQL,
     VILTROX_TOKEN,
+    VILTROX_TITLE_TOKENS,
 )
 
 
@@ -229,21 +234,48 @@ def _latest_value(day_map: dict[str, int]) -> int | None:
     return day_map[max(day_map.keys())]
 
 
-# ── V 相关内容三档判定(独立可导出;M3 详情弹窗 / videos 增强复用)──────────
+# ── V 相关内容五档判定(与 SQL CTE 优先级对齐)────────────────────────
 
 
-def classify_v_content(project_id: Any, title_text: Any) -> str:
-    """单条 evidence 的 V 相关三档判定:cooperation / title_mention / undetermined。
+def _explicit_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text == "true":
+        return True
+    if text == "false":
+        return False
+    return None
 
-    口径与 V_CONTENT_SQL 完全一致:cooperation=挂了项目(project_id 非空,判据最强,
-    优先);title_mention=标题(video_title/title 任一)小写包含 viltrox;其余
-    undetermined。派生判据非采集字段;深析品牌命中判据后续接入。纯函数零 SQL。
+
+def _positive_products(value: Any) -> bool:
+    return isinstance(value, (list, tuple, set)) and len(value) > 0
+
+
+def classify_v_content(
+    project_id: Any,
+    title_text: Any,
+    *,
+    final_v1_detected: Any = None,
+    final_v1_products: Any = None,
+) -> str:
+    """单条 evidence 五档互斥判定；优先级与 V_CONTENT_CLASSIFIED_CTE 相同。
+
+    final_v1 参数代表 latest ready cache 的结构化 detected/products；标题只做
+    中等证据，explicit false 只在前三档均未命中时归为非相关。纯函数零 SQL，
+    不接收也不返回原始深析全文。
     """
     pid = str(project_id).strip() if project_id is not None else ""
     if pid and pid != "0":
         return "cooperation"
-    if VILTROX_TOKEN in str(title_text or "").lower():
+    detected = _explicit_bool(final_v1_detected)
+    if detected is True or _positive_products(final_v1_products):
+        return "analysis_confirmed"
+    title = str(title_text or "").lower()
+    if any(token in title for token in VILTROX_TITLE_TOKENS):
         return "title_mention"
+    if detected is False:
+        return "not_related"
     return "undetermined"
 
 
@@ -500,7 +532,7 @@ def _views_top(conn: Any) -> dict[str, Any]:
 
 
 def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
-    """8. recent_videos:收藏集最近采集视频墙(内容墙数据源,照 views_top 先例)。
+    """8. recent_videos:收藏集最近采集视频墙 + 五档 Viltrox 证据。
 
     收藏集(收藏 ∪ 共享,scope 同族)evidence 最近 N 条,按发布时间(缺则回退
     posted_at/采集时间)降序;LIMIT 双层封顶。缩略图三件套复用创意库同一条
@@ -510,13 +542,35 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
     """
     from app.domains.content.creative_segments import _thumbnail_fields
 
-    rows = conn.execute(RECENT_VIDEOS_SQL, (*_scope_params(sid), RECENT_VIDEOS_LIMIT)).fetchall()
+    rows = conn.execute(
+        RECENT_VIDEOS_SQL,
+        (*VILTROX_TITLE_TOKENS, *_scope_params(sid), RECENT_VIDEOS_LIMIT),
+    ).fetchall()
     items: list[dict[str, Any]] = []
     for r in list(rows)[:RECENT_VIDEOS_LIMIT]:
         rec = dict(r)
         view_count = rec.get("view_count")
         like_count = rec.get("like_count")
         project_id = rec.get("project_id")
+        detected_text = str(rec.get("llm_viltrox_detected_text") or "").strip().lower()
+        detected = (detected_text == "true") if detected_text in {"true", "false"} else None
+        analysis_lists: dict[str, list[str] | None] = {}
+        for key in ("llm_viltrox_products", "llm_competitor_mentions"):
+            value = rec.get(key)
+            if isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (TypeError, ValueError):
+                    value = None
+            analysis_lists[key] = [str(item) for item in value if item] if isinstance(value, list) else None
+        tier = str(rec.get("v_tier") or "").strip()
+        if tier not in {"cooperation", "analysis_confirmed", "title_mention", "not_related", "undetermined"}:
+            tier = classify_v_content(
+                project_id,
+                f"{rec.get('video_title') or ''} {rec.get('title') or ''}",
+                final_v1_detected=detected,
+                final_v1_products=analysis_lists["llm_viltrox_products"],
+            )
         items.append({
             "evidence_id": _int0(rec.get("evidence_id")),
             "kol_pool_id": _int0(rec.get("kol_pool_id")),
@@ -534,6 +588,9 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
             "kol_name": str(rec.get("kol_name") or ""),
             "kol_handle": str(rec.get("kol_handle") or ""),
             "has_final_v1_cache": _truthy_db(rec.get("has_final_v1_cache")),
+            "llm_viltrox_detected": detected,
+            "v_tier": tier,
+            **analysis_lists,
             **_thumbnail_fields(rec),
         })
     body: dict[str, Any] = {
@@ -545,7 +602,9 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
             "video/image 两类)按 COALESCE(publish_date, posted_at, created_at) 降序取最近 "
             f"{RECENT_VIDEOS_LIMIT} 条;view_count 点时实测 NULL 原样透出(未实测 ≠ 0 播放);"
             "缩略图三件套=创意库同一条毒缓存自愈链(cached → raw → youtube 派生,"
-            "失败占位不算真图);V 三档判定由前端 classify_v_content 同口径派生"
+            "失败占位不算真图);V 五档与v_content共用同一 CTE:有效 project_id 关联 > "
+            "latest ready final_v1 detected/products > 中英文标题词(viltrox/唯卓仕/唯卓) > "
+            "explicit false 非相关 > 未判定;只下发结构化证据，不下发深析原文"
         ),
     }
     if not items:
@@ -554,20 +613,24 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
 
 
 def _v_content(conn: Any) -> dict[str, Any]:
-    """7. v_content:V 相关内容三档派生 + KOL 级汇总/名单(classify_v_content 同口径)。"""
-    row = dict(conn.execute(V_CONTENT_SQL, (VILTROX_TOKEN, VILTROX_TOKEN)).fetchone() or {})
+    """7. v_content:五档互斥证据 + 相关 KOL 汇总/名单(同一 CTE)。"""
+    row = dict(conn.execute(V_CONTENT_SQL, VILTROX_TITLE_TOKENS).fetchone() or {})
     total = _int0(row.get("total_evidence"))
     cooperation = _int0(row.get("cooperation"))
-    title_any = _int0(row.get("title_mention"))
-    overlap = _int0(row.get("overlap_both"))
-    title_only = max(title_any - overlap, 0)
-    undetermined = max(total - cooperation - title_only, 0)
-    kol_row = dict(conn.execute(V_KOL_COUNT_SQL, (VILTROX_TOKEN,)).fetchone() or {})
-    tier_row = dict(conn.execute(V_KOL_TIERS_SQL, (VILTROX_TOKEN,)).fetchone() or {})
+    analysis_confirmed = _int0(row.get("analysis_confirmed"))
+    title_mention = _int0(row.get("title_mention"))
+    not_related = _int0(row.get("not_related"))
+    undetermined = _int0(row.get("undetermined"))
+    v_related_evidence = cooperation + analysis_confirmed + title_mention
+    kol_row = dict(conn.execute(V_KOL_COUNT_SQL, VILTROX_TITLE_TOKENS).fetchone() or {})
+    tier_row = dict(conn.execute(V_KOL_TIERS_SQL, VILTROX_TITLE_TOKENS).fetchone() or {})
 
     # 行级名单:SQL DISTINCT+升序+LIMIT 多取 1 行,Python 去重二保险 + 切片封顶;
     # 是否截断以「真取回超上限」如实判定,绝不拿 v_kol_count 反推。
-    id_rows = conn.execute(V_KOL_IDS_SQL, (VILTROX_TOKEN, V_KOL_IDS_ROWS_LIMIT)).fetchall()
+    id_rows = conn.execute(
+        V_KOL_IDS_SQL,
+        (*VILTROX_TITLE_TOKENS, V_KOL_IDS_ROWS_LIMIT),
+    ).fetchall()
     seen: set[int] = set()
     v_kol_ids: list[int] = []
     for r in list(id_rows)[:V_KOL_IDS_ROWS_LIMIT]:
@@ -581,36 +644,42 @@ def _v_content(conn: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
         "status": "ready" if total else "empty",
         "total_evidence": total,
+        "v_related_evidence": v_related_evidence,
         "v_kol_count": _int0(kol_row.get("n")),
         "v_kol_ids": v_kol_ids,
         "v_kol_ids_truncated": ids_truncated,
         "tiers": {
             "cooperation": cooperation,
-            "title_mention": title_any,
-            "title_mention_only": title_only,
-            "overlap_both": overlap,
+            "analysis_confirmed": analysis_confirmed,
+            "title_mention": title_mention,
+            "not_related": not_related,
             "undetermined": undetermined,
         },
         "tiers_by_kol": {
             "cooperation_kols": _int0(tier_row.get("cooperation_kols")),
+            "analysis_confirmed_kols": _int0(tier_row.get("analysis_confirmed_kols")),
             "title_mention_kols": _int0(tier_row.get("title_mention_kols")),
+            "not_related_kols": _int0(tier_row.get("not_related_kols")),
+            "undetermined_kols": _int0(tier_row.get("undetermined_kols")),
         },
         "basis": (
-            "三档派生判据非采集字段:cooperation=project_id IS NOT NULL(判据最强,单条"
-            "归档时优先);title_mention=标题(video_title/title)小写含 viltrox(strpos "
-            "参数化,含与 cooperation 重叠 overlap_both);单条互斥归档=cooperation → "
-            "title_mention_only → undetermined(classify_v_content 同口径,M3 复用);"
-            "v_kol_count=至少一条 cooperation 或 title_mention 的去重 KOL 数;"
+            "五档互斥优先级:cooperation=evidence.project_id 字符串化后非空且非0;"
+            "analysis_confirmed=latest ready video_analysis_final_v1(id DESC) 的 "
+            "raw_gemini_video.viltrox_detected=true 或 viltrox_products_all 非空数组;"
+            "title_mention=标题(video_title/title)含 viltrox/唯卓仕/唯卓(参数化,中等证据);"
+            "not_related=latest ready final_v1 explicit detected=false 且前三档均未命中;"
+            "undetermined=结构化证据未知;v_kol_count=至少一条前三档的去重 KOL 数;"
             "v_kol_ids=同判据去重 kol_pool_id 升序名单(封顶 2000,超出 truncated 如实"
             "标注,前端库列表「有 V 视频」精确过滤用);tiers_by_kol=KOL 级去重计数"
-            "(cooperation_kols/title_mention_kols,同一 KOL 两档可重复计,与条数级 "
-            "tiers 口径区分);深析品牌命中判据后续接入"
+            "(同一 KOL 在不同 evidence 档可重复计,与条数级 tiers 区分);"
+            "v_content/recent_videos/v_kol_ids/v_kol_count/v_tiers 共用同一 CTE;"
+            "只下发结构化 detected/products/competitor_mentions，不返回原始正文/口播/字幕/描述"
         ),
     }
     if ids_truncated:
         body["v_kol_ids_note"] = (
             f"V 信号 KOL 超过名单封顶 {V_KOL_IDS_MAX},v_kol_ids 只含 id 升序前 "
-            f"{V_KOL_IDS_MAX} 个;全量以 v_kol_count 为准。"
+            f"{V_KOL_IDS_MAX} 个;完整去重总数见 v_kol_count，请勿将返回名单当作全部记录。"
         )
     if not total:
         body["reason"] = "evidence 表零行——V 相关内容诚实空。"

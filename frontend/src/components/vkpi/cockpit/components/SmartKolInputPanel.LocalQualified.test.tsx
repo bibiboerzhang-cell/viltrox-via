@@ -162,6 +162,32 @@ describe("local qualified first-list contract", () => {
     expect((screen.getByRole("checkbox", { name: "全选联网净新增 KOL" }) as HTMLInputElement).disabled).toBe(true);
   });
 
+  it("shows existing, in-progress, retry, and direct follow states on strict rows", () => {
+    const onFavorite = vi.fn();
+    const summary = localQualifiedSummary(result([
+      { kol_pool_id: 31, handle: "already", platform: "youtube", qualification_evidence: strictProof() },
+      { kol_pool_id: 32, handle: "busy", platform: "instagram", qualification_evidence: strictProof() },
+      { kol_pool_id: 33, handle: "retry", platform: "tiktok", qualification_evidence: strictProof() },
+    ]));
+    render(<StrictQualifiedList
+      summary={summary}
+      lane="online"
+      selectedIds={new Set()}
+      onSelectionChange={vi.fn()}
+      favoriteIds={new Set([31])}
+      favoriteBusyIds={new Set([32])}
+      favoriteErrors={new Map([[33, "关注失败，请重试"]])}
+      onFavorite={onFavorite}
+    />);
+
+    expect(screen.getByText("已关注")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "关注联网 KOL busy" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "关注联网 KOL busy" })).toHaveTextContent("关注中");
+    expect(screen.getByRole("button", { name: "关注联网 KOL retry" })).toHaveTextContent("重试");
+    fireEvent.click(screen.getByRole("button", { name: "关注联网 KOL retry" }));
+    expect(onFavorite).toHaveBeenCalledWith(33);
+  });
+
   it("does not qualify an incomplete or internally failed v2 proof", () => {
     const summary = localQualifiedSummary(result([
       { kol_pool_id: 20, handle: "top-only", platform: "youtube", qualification_evidence: { schema: "smart_local_gate_evidence_v2", passed: true } },

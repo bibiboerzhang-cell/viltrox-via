@@ -343,9 +343,9 @@ export function EmployeeKolContentLayer({
     <div className="mykol-employee-content">
       <header className="mykol-employee-content__head">
         <div>
-          <span>VILTROX 相关内容</span>
+          <span>KOL 已采集内容</span>
           <h3>{kol.name}</h3>
-          <p>{subtitle || (viltroxOnly ? '全平台 Viltrox 内容' : '全平台全部内容')} · {filteredPosts.length} / {postState.total || postState.items.length} 条</p>
+          <p>{subtitle || (viltroxOnly ? '已采集 Viltrox 相关内容' : '全部已采集内容')} · {filteredPosts.length} / {postState.total || postState.items.length} 条</p>
         </div>
         {kol.profileUrl ? (
           <a href={kol.profileUrl} target="_blank" rel="noreferrer" aria-label="打开主页"><ExternalLink size={17} /></a>
@@ -429,8 +429,8 @@ export function EmployeeKolContentLayer({
         <div className="mykol-employee-content-empty">
           {viltroxOnly
             ? `无 Viltrox 内容（共 ${postState.total || postState.items.length} 条已采集${typeof analyzedCount === 'number' ? ` / ${analyzedCount} 条已分析` : ''}）。`
-            : '该 KOL 暂无已缓存内容。'}
-          {viltroxOnly ? <small>关掉「Viltrox 相关」可查看该 KOL 全部内容；不自动回退,避免误导。</small> : null}
+            : '该 KOL 暂无已采集内容。'}
+          {viltroxOnly ? <small>关掉「仅看 Viltrox 相关」可查看该 KOL 当前全部已采集内容；不自动回退，避免误导。</small> : null}
           {selectedProject ? <small>项目线索：{selectedProject.campaign || selectedProject.productName || selectedProject.stage}</small> : null}
         </div>
       ) : null}

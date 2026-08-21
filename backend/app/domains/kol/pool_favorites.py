@@ -30,7 +30,7 @@ def _staff_id(staff: dict[str, Any] | None) -> int:
 
 
 def add_favorite(kol_pool_id: int, *, staff: dict[str, Any] | None = None, note: str = "") -> dict[str, Any]:
-    """收藏一个 pool KOL。幂等:重复收藏返回 already_favorited 而非 500。"""
+    """收藏一个 pool KOL。唯一键竞争安全，重复收藏返回 already_favorited。"""
     sid = _staff_id(staff)
     if not sid:
         raise PermissionError("favorite requires a staff identity")
@@ -62,10 +62,15 @@ def add_favorite(kol_pool_id: int, *, staff: dict[str, Any] | None = None, note:
         "SELECT id FROM vkpi_kol_pool_favorites WHERE kol_pool_id=? AND staff_id=?",
         (int(kol_pool_id), sid),
     ).fetchone()
+    if not existing:
+        # A conflict necessarily means the unique row existed.  If it vanished
+        # before this read (for example, a concurrent unfavorite), do not claim
+        # a favorite that is no longer persisted.
+        raise RuntimeError("favorite conflict row not found")
     return {
         "status": "already_favorited",
         "kol_pool_id": int(kol_pool_id),
-        "favorite_id": int(dict(existing)["id"]) if existing else None,
+        "favorite_id": int(dict(existing)["id"]),
     }
 
 

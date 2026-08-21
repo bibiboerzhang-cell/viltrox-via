@@ -103,7 +103,7 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     // 卡头短计数 = 后端条数真值;工具行三件套在场
     expect(screen.getAllByText("近 14 条").length).toBeGreaterThan(0);
     expect(screen.getByLabelText("按 KOL 筛选")).toBeTruthy();
-    expect(screen.getByText("仅 V 相关")).toBeTruthy();
+    expect(screen.getByText("品牌相关")).toBeTruthy();
     // 默认按最新排序:第 1 张=07-11 合作片,第 2 张=07-10 标题提及;默认恰 12 张
     expect(wallTitles().slice(0, 2)).toEqual(["Wall Coop Film", "VILTROX wall mention"]);
     expect(wallCards().length).toBe(12);
@@ -118,12 +118,12 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(wallCards()[1].textContent).toContain("▶ 未实测");
     expect(wallCards()[0].textContent).toContain("▶ 8,000");
     expect(screen.getByText("合作产出")).toBeTruthy();
-    expect(screen.getByText("标题提及V")).toBeTruthy();
-    expect(screen.getAllByText("未判定").length).toBe(10);
+    expect(screen.getByText("标题品牌提及")).toBeTruthy();
+    expect(screen.getAllByText("未判定").length).toBeGreaterThanOrEqual(10);
     expect(screen.getAllByText("已深析").length).toBe(1);
     // 增页:已显 12 / 14 → 点后全量 14,按钮消失
     const more = screen.getByText(/查看更多/);
-    expect(more.textContent).toContain("已显 12 / 14");
+    expect(more.textContent).toContain("已显 12 / 当前已采集 14");
     fireEvent.click(more);
     await waitFor(() => {
       expect(wallCards().length).toBe(14);
@@ -143,24 +143,43 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(wallCards()[0].querySelector("[title='缩略图加载失败(不摆假图)']")).toBeTruthy();
   });
 
-  it("仅 V 相关 + 播放排序:未判定隐藏;实测播放降序、未实测排最后(不当 0 混序)", async () => {
+  it("品牌相关 + 播放排序:未判定隐藏;实测播放降序、未实测排最后(不当 0 混序)", async () => {
     renderWall();
     expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
-    fireEvent.click(screen.getByText("仅 V 相关"));
+    fireEvent.click(screen.getByText("品牌相关"));
     expect(wallTitles()).toEqual(["Wall Coop Film", "VILTROX wall mention"]);
     expect(screen.queryByText("Filler clip 1")).toBeNull();
-    expect(screen.queryByText("未判定")).toBeNull();
+    expect(screen.getAllByText("未判定")).toHaveLength(1); // 筛选按钮仍在，未判定卡已隐藏
     // 排序切「播放」(仍仅 V):8000 实测在前,NULL 未实测排最后
     fireEvent.click(screen.getByRole("button", { name: "播放" }));
     expect(wallTitles()).toEqual(["Wall Coop Film", "VILTROX wall mention"]);
     // 关掉仅 V + 播放排序:填充片(100+i)按实测降序,未实测仍最后一张
-    fireEvent.click(screen.getByText("仅 V 相关"));
+    fireEvent.click(screen.getByText("全部已采集"));
     fireEvent.click(screen.getByText(/查看更多/));
     await waitFor(() => expect(wallCards().length).toBe(14));
     const titles = wallTitles();
     expect(titles[0]).toBe("Wall Coop Film");
     expect(titles[1]).toBe("Filler clip 12");
     expect(titles[titles.length - 1]).toBe("VILTROX wall mention");
+  });
+
+  it("final_v1 品牌结论进入内容墙，并可把深析未识别与未判定分开筛查", async () => {
+    const analyzedItems = [
+      { ...filler(31), evidence_id: 9301, title: "portrait setup", llm_viltrox_detected: true, llm_viltrox_products: ["AF 85mm F1.4 Pro"], has_final_v1_cache: true },
+      { ...filler(32), evidence_id: 9302, title: "street diary", llm_viltrox_detected: false, has_final_v1_cache: true },
+      { ...filler(33), evidence_id: 9303, title: "camera walk", llm_viltrox_detected: null, has_final_v1_cache: false },
+    ];
+    routeApi({ boardExt: { ...EXT, recent_videos: { status: "ready", limit: 60, items: analyzedItems } } });
+    renderWall();
+
+    expect(await screen.findByText("深析确认Viltrox")).toBeTruthy();
+    expect(screen.getByText("深析未识别Viltrox")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "深析未识别" }));
+    expect(wallTitles()).toEqual(["street diary"]);
+    fireEvent.click(screen.getByRole("button", { name: "未判定" }));
+    expect(wallTitles()).toEqual(["camera walk"]);
+    fireEvent.click(screen.getByRole("button", { name: "全部已采集" }));
+    expect(wallCards()).toHaveLength(3);
   });
 
   it("单 KOL 视图:选中收藏 KOL 改走 /kol-pool/{id}/videos(库详情同源);零采集 KOL 诚实空;切回全部零重取", async () => {
@@ -174,7 +193,7 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(calls().some((p) => p.includes("/kol-pool/101/videos"))).toBe(true);
     // 零采集 KOL → 板面空态口径(带 KOL 名,不透传后端字段)
     fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "102" } });
-    expect(await screen.findByText(/Beta Vlog 暂无采集视频——在库行发起采集。/)).toBeTruthy();
+    expect(await screen.findByText(/Beta Vlog 暂无已采集内容——可在KOL详情发起补采。/)).toBeTruthy();
     // 切回全部:回 board-ext 聚合(已在手,不再发请求)
     const before = calls().length;
     fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "0" } });
@@ -190,6 +209,6 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     window.localStorage.clear();
     routeApi({ boardExt: { ...EXT, recent_videos: { status: "empty", reason: "收藏集内零 evidence——内容墙诚实空,不摆假卡。" } } });
     renderWall();
-    expect(await screen.findByText("暂无采集视频——在库行发起采集。")).toBeTruthy();
+    expect(await screen.findByText("暂无已采集内容——可在KOL详情发起补采。")).toBeTruthy();
   });
 });

@@ -4,14 +4,14 @@ import { apiFetch } from "../http";
 //   ① GET /api/admin/vkpi/my-kol/board-ext?days=30 —— 八组聚合(kpi_series/funnel/
 //      platform_dist/fit_dist/contact_coverage/views_top/recent_videos/v_content)
 //      类型化 fetch;M4 把各组契约逐组类型化(形状 1:1 对齐 backend
-//      my_kol_board_ext.py 构建器,禁编字段);v_content 增量三键 v_kol_ids /
+//      my_kol_board_ext.py 构建器,禁编字段);v_content 五档互斥证据 + v_kol_ids /
 //      v_kol_ids_truncated / tiers_by_kol(库「有 V 视频」名单精确过滤 + KOL 级
-//      去重计数);recent_videos(内容墙 2026-07-12 增量)= 收藏集最近采集视频
+//      去重计数);recent_videos(内容墙)= 收藏集最近采集视频
 //      带缩略图三件套(创意库同一条毒缓存自愈链,best_thumbnail 语义)。
 //   ② GET /api/admin/vkpi/kol-pool/{id}/videos —— 单 KOL 全部 evidence 视频(类型化);
-//   ③ classifyVContent —— 后端 my_kol_board_ext.classify_v_content 的前端同构复现
-//      (口径逐字对齐:cooperation=project_id 非空且非 '0' / title_mention=标题小写含
-//      viltrox / 其余 undetermined;派生规则非采集字段);
+//   ③ classifyVContent —— 后端 my_kol_board_ext.classify_v_content 的前端同构复现:
+//      项目关联 > latest ready final_v1 positive/products > 中英文标题品牌词 >
+//      final_v1 explicit false > 未判定；只消费结构化证据，不暴露深析原文;
 //   ④ mapLibraryRows / filterLibraryRows —— aggregate.pool_favorites 行 → 库行模型
 //      (收藏/共享/认领桥/进行中)+ 纯函数过滤(V 名单精确/平台/搜索/漏斗阶段)。
 // 红线:纯读封装,零写库;绝不触 viltrox_fit_score 写点 / rule_v0;fit 分只作只读透传。
@@ -153,9 +153,11 @@ export interface VkpiRecentVideosGroup extends VkpiBoardExtGroup {
 
 export interface VkpiVContentGroup extends VkpiBoardExtGroup {
   total_evidence?: number;
-  /** 至少一条 cooperation / title_mention evidence 的去重 KOL 数(全 evidence 口径) */
+  /** 五档中前三档正向证据的 evidence 条数。 */
+  v_related_evidence?: number;
+  /** 至少一条 cooperation / analysis_confirmed / title_mention evidence 的去重 KOL 数。 */
   v_kol_count?: number;
-  /** 同判据去重 kol_pool_id 升序名单(封顶 2000;库「有 V 视频」精确过滤用) */
+  /** 同一正向判据去重 kol_pool_id 升序名单(封顶 2000;库「有 V 视频」精确过滤用) */
   v_kol_ids?: number[];
   /** 名单超封顶被截断 —— 前端过滤必须如实降级提示,绝不装全量 */
   v_kol_ids_truncated?: boolean;
@@ -163,15 +165,18 @@ export interface VkpiVContentGroup extends VkpiBoardExtGroup {
   v_kol_ids_note?: string;
   tiers?: {
     cooperation?: number;
+    analysis_confirmed?: number;
     title_mention?: number;
-    title_mention_only?: number;
-    overlap_both?: number;
+    not_related?: number;
     undetermined?: number;
   };
-  /** KOL 级去重计数(同一 KOL 两档可重复计,与条数级 tiers 口径区分) */
+  /** KOL 级去重计数(同一 KOL 跨 evidence 可落多档,与条数级 tiers 口径区分) */
   tiers_by_kol?: {
     cooperation_kols?: number;
+    analysis_confirmed_kols?: number;
     title_mention_kols?: number;
+    not_related_kols?: number;
+    undetermined_kols?: number;
   };
 }
 
@@ -224,6 +229,12 @@ export interface VkpiKolPoolVideoRow {
   image_urls?: string[] | null;
   has_final_v1_cache?: boolean;
   has_keyframe_qa_cache?: boolean;
+  /** final_v1 bounded brand verdict; null means the video has not produced this proof. */
+  llm_viltrox_detected?: boolean | null;
+  llm_viltrox_products?: string[] | null;
+  llm_competitor_mentions?: string[] | null;
+  /** board-ext recent_videos 由共享 SQL CTE 直接下发；逐 KOL 端点可缺席并由纯函数同构派生。 */
+  v_tier?: VContentTier;
 }
 
 export async function getMyKolPoolVideos(token: string, kolPoolId: number | string, limit = 200) {
@@ -234,29 +245,66 @@ export async function getMyKolPoolVideos(token: string, kolPoolId: number | stri
   );
 }
 
-/* ============ ③ V 相关三档判定(后端 classify_v_content 前端同构;口径逐字对齐) ============ */
+/* ============ ③ Viltrox 内容证据分级(项目 / final_v1 / 标题 / 未识别 / 未判定) ============ */
 
-export type VContentTier = "cooperation" | "title_mention" | "undetermined";
+export type VContentTier = "cooperation" | "analysis_confirmed" | "title_mention" | "not_related" | "undetermined";
+export type VideoRelationFilter = "all" | "viltrox" | "undetermined" | "not_related";
 
-const VILTROX_TOKEN = "viltrox";
+const VILTROX_TITLE_TOKENS = ["viltrox", "唯卓仕", "唯卓"] as const;
 
-export function classifyVContent(projectId: unknown, titleText: unknown): VContentTier {
+export function classifyVContent(
+  projectId: unknown,
+  titleText: unknown,
+  analysis: { detected?: boolean | null; products?: unknown } = {},
+): VContentTier {
   const pid = projectId == null ? "" : String(projectId).trim();
   if (pid && pid !== "0") return "cooperation";
-  if (String(titleText ?? "").toLowerCase().includes(VILTROX_TOKEN)) return "title_mention";
+  if (analysis.detected === true || (Array.isArray(analysis.products) && analysis.products.length > 0)) {
+    return "analysis_confirmed";
+  }
+  const title = String(titleText ?? "").toLowerCase();
+  if (VILTROX_TITLE_TOKENS.some((token) => title.includes(token))) return "title_mention";
+  if (analysis.detected === false) return "not_related";
   return "undetermined";
 }
 
-/** 视频行的判定输入:后端 SQL 同口径 = video_title 与 title 拼接后小写匹配。 */
+/** Strongest available bounded proof wins: project > final_v1 positive > title brand token > final_v1 negative > unknown. */
 export function classifyVideoRow(video: VkpiKolPoolVideoRow): VContentTier {
-  return classifyVContent(video.project_id, `${video.video_title || ""} ${video.title || ""}`);
+  if (["cooperation", "analysis_confirmed", "title_mention", "not_related", "undetermined"].includes(String(video.v_tier || ""))) {
+    return video.v_tier as VContentTier;
+  }
+  return classifyVContent(video.project_id, `${video.video_title || ""} ${video.title || ""}`, {
+    detected: video.llm_viltrox_detected,
+    products: video.llm_viltrox_products,
+  });
 }
 
 export const V_TIER_LABEL: Record<VContentTier, string> = {
   cooperation: "合作产出",
-  title_mention: "标题提及V",
+  analysis_confirmed: "深析确认Viltrox",
+  title_mention: "标题品牌提及",
+  not_related: "深析未识别Viltrox",
   undetermined: "未判定",
 };
+
+export function isVRelatedTier(tier: VContentTier): boolean {
+  return tier === "cooperation" || tier === "analysis_confirmed" || tier === "title_mention";
+}
+
+function normalizeRelationFilter(filter: boolean | VideoRelationFilter): VideoRelationFilter {
+  return typeof filter === "boolean" ? (filter ? "viltrox" : "all") : filter;
+}
+
+export function filterClassifiedVideos<T extends VkpiKolPoolVideoRow>(
+  classified: Array<{ video: T; tier: VContentTier }>,
+  filter: boolean | VideoRelationFilter,
+): Array<{ video: T; tier: VContentTier }> {
+  const normalized = normalizeRelationFilter(filter);
+  if (normalized === "viltrox") return classified.filter(({ tier }) => isVRelatedTier(tier));
+  if (normalized === "undetermined") return classified.filter(({ tier }) => tier === "undetermined");
+  if (normalized === "not_related") return classified.filter(({ tier }) => tier === "not_related");
+  return [...classified];
+}
 
 /** image/carousel 类 evidence(IG 图文/轮播):展示照常,深析批次必须剔除(无视频可下)。 */
 export function isImageKindVideo(video: VkpiKolPoolVideoRow): boolean {
@@ -269,7 +317,7 @@ export interface ClassifiedVideo {
   tier: VContentTier;
 }
 
-/** 详情弹窗小结口径:播放合计只算实测(NULL 剔除并计条数);V 相关=非 undetermined。 */
+/** 详情弹窗小结口径:播放合计只算实测(NULL 剔除并计条数);品牌相关只算三类正向证据。 */
 export function summarizeKolVideos(videos: VkpiKolPoolVideoRow[]) {
   const classified: ClassifiedVideo[] = videos.map((video) => ({ video, tier: classifyVideoRow(video) }));
   const measuredCount = classified.filter(({ video }) => video.view_count != null).length;
@@ -279,21 +327,28 @@ export function summarizeKolVideos(videos: VkpiKolPoolVideoRow[]) {
     measuredCount,
     unmeasuredCount: classified.length - measuredCount,
     viewsTotal,
-    vRelatedCount: classified.filter(({ tier }) => tier !== "undetermined").length,
+    vRelatedCount: classified.filter(({ tier }) => isVRelatedTier(tier)).length,
+    unrelatedCount: classified.filter(({ tier }) => tier === "not_related").length,
+    undeterminedCount: classified.filter(({ tier }) => tier === "undetermined").length,
     analyzedCount: classified.filter(({ video }) => Boolean(video.has_final_v1_cache)).length,
     unanalyzed: classified.filter(({ video }) => !video.has_final_v1_cache && !isImageKindVideo(video)).map(({ video }) => video),
   };
 }
 
-/** 二级筛选(仅 V 相关)+ 排序(时间/播放;未实测排最后)。纯函数,不改入参。
+/** 二级关系筛选 + 排序(时间/播放;未实测排最后)。纯函数,不改入参。
     泛型:内容墙条目(VkpiRecentVideoItem)与弹窗行共用,不丢子类型字段。 */
 export function sortClassifiedVideos<T extends VkpiKolPoolVideoRow>(
   classified: Array<{ video: T; tier: VContentTier }>,
-  vOnly: boolean,
+  filter: boolean | VideoRelationFilter,
   sortBy: "time" | "views",
 ): Array<{ video: T; tier: VContentTier }> {
-  const base = vOnly ? classified.filter(({ tier }) => tier !== "undetermined") : [...classified];
-  if (sortBy === "views") base.sort((a, b) => (Number(b.video.view_count ?? -1) || -1) - (Number(a.video.view_count ?? -1) || -1));
+  const base = filterClassifiedVideos(classified, filter);
+  if (sortBy === "views") base.sort((a, b) => {
+    const aViews = a.video.view_count == null ? Number.NEGATIVE_INFINITY : Number(a.video.view_count);
+    const bViews = b.video.view_count == null ? Number.NEGATIVE_INFINITY : Number(b.video.view_count);
+    return (Number.isFinite(bViews) ? bViews : Number.NEGATIVE_INFINITY)
+      - (Number.isFinite(aViews) ? aViews : Number.NEGATIVE_INFINITY);
+  });
   else base.sort((a, b) => String(b.video.publish_date || b.video.posted_at || "").localeCompare(String(a.video.publish_date || a.video.posted_at || "")));
   return base;
 }
@@ -304,7 +359,7 @@ export function videoRecordRows(video: VkpiKolPoolVideoRow): Array<[string, stri
     ["表", "vkpi_kol_video_evidence"],
     ["id", `#${video.evidence_id ?? video.id ?? "—"}`],
     ["project_id", video.project_id != null ? `#${video.project_id}` : "—"],
-    ["V 判定", `${V_TIER_LABEL[classifyVideoRow(video)]} · 派生规则(合作=挂项目 / 标题提及=标题含 viltrox 不分大小写 / 其余未判定)`],
+    ["Viltrox 判定", `${V_TIER_LABEL[classifyVideoRow(video)]} · 五档顺序(项目关联 / final_v1 正向 / 标题品牌词 / final_v1 明确非相关 / 未判定)`],
     ["view_count", video.view_count != null ? String(video.view_count) : "NULL(未实测 ≠ 0 播放)"],
     ["发布时间", String(video.publish_date || video.posted_at || "—")],
     ["深析缓存", video.has_final_v1_cache ? "final_v1 ready" : "无(可入队深析)"],

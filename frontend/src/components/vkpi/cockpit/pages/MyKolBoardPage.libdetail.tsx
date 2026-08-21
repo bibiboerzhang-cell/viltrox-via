@@ -5,6 +5,7 @@ import { GoaffproLinkSection } from "../../shared/GoaffproLinkSection";
 import { fmtZhCompact } from "./MyKolBoardPage.charts";
 import {
   getMyKolPoolVideos,
+  filterClassifiedVideos,
   isImageKindVideo,
   summarizeKolVideos,
   V_TIER_LABEL,
@@ -12,6 +13,7 @@ import {
   type ClassifiedVideo,
   type KolLibraryRowProject,
   type VContentTier,
+  type VideoRelationFilter,
   type VkpiKolPoolVideoRow,
 } from "../../../../services/vkpi/myKolBoard-api";
 import type { VkpiProjectRow } from "../../vkpiTypes";
@@ -30,9 +32,9 @@ import { proxiedImageUrl } from "../../shared/mediaProxy";
 //      (生成/复制/优惠码/佣金调整,功能零改动,与 KOL Pool 抽屉同一组件)。
 //   ③ CoopResultsSection:合作项目结果 —— assignments 真阶段 × Projects 板块
 //      同一份映射(曝光 views / 证据计数),未挂载读数诚实显 —。
-//   ④ KolVideoSection:V 相关内容 —— 全量视频网格 + 筛选 tabs(最新/播放/点赞/
-//      评论/分享)+ 汇总条(条数/实测播放/未实测剔除/V 相关/已深析/点赞/评论)+
-//      三档徽 + 记录预览 + 未判定一键深析(回执逻辑住 dialogs,本件只发回调)。
+//   ④ KolVideoSection:当前已采集内容 —— Viltrox证据筛选 + tabs(最新/播放/点赞/
+//      评论/分享)+ 汇总条(覆盖率/实测合计/品牌关系/已深析)+
+//      五档证据徽 + 记录预览 + 未判定一键深析(回执逻辑住 dialogs,本件只发回调)。
 //   依赖单向:modules/dialogs → 本文件(反向禁止,防环);金样板件(SectionLabel/
 //   RecordPreview)复用零重写。
 // 红线:纯展示 + 只读取数;绝不写 fit 分 / 不触 rule_v0;颜色全 token 类零写死色;
@@ -42,12 +44,14 @@ import { proxiedImageUrl } from "../../shared/mediaProxy";
 export const CHIP = "rounded-full border px-2.5 py-1 text-[10.5px] transition-colors";
 export const CHIP_ON = "border-accent bg-accent-soft text-accent";
 export const CHIP_OFF = "border-line text-muted hover:text-ink";
-export const MINI_BADGE = "flex-none rounded-[5px] border px-1 py-px text-[8px] font-bold";
+export const MINI_BADGE = "flex-none rounded-[5px] border px-1.5 py-0.5 text-[9.5px] font-bold";
 
-/* ============ V 相关三档徽(cooperation=accent / title_mention=good / undetermined=muted) ============ */
+/* ============ Viltrox 五档证据徽(正向三档 / 深析未识别 / 未判定) ============ */
 export const V_TIER_META: Record<VContentTier, { label: string; cls: string }> = {
   cooperation: { label: V_TIER_LABEL.cooperation, cls: "border-accent bg-accent-soft text-accent" },
+  analysis_confirmed: { label: V_TIER_LABEL.analysis_confirmed, cls: "border-good bg-good-soft text-good" },
   title_mention: { label: V_TIER_LABEL.title_mention, cls: "border-good bg-good-soft text-good" },
+  not_related: { label: V_TIER_LABEL.not_related, cls: "border-line text-muted" },
   undetermined: { label: V_TIER_LABEL.undetermined, cls: "border-line text-muted" },
 };
 
@@ -195,7 +199,7 @@ export function CoopResultsSection({
   );
 }
 
-/* ============ ④ V 相关内容(全量视频网格:五 tabs + 汇总条 + 三档徽 + 记录预览) ============ */
+/* ============ ④ 已采集内容(Viltrox证据筛选 + 五 tabs + 覆盖汇总 + 记录预览) ============ */
 
 export type VideoSortKey = "latest" | "views" | "likes" | "comments" | "shares";
 
@@ -214,8 +218,12 @@ function videoMetric(video: VkpiKolPoolVideoRow, key: VideoSortKey): number {
   return raw != null && Number.isFinite(Number(raw)) ? Number(raw) : -1;
 }
 
-export function sortVideosByTab(classified: ClassifiedVideo[], vOnly: boolean, tab: VideoSortKey): ClassifiedVideo[] {
-  const base = vOnly ? classified.filter(({ tier }) => tier !== "undetermined") : [...classified];
+export function sortVideosByTab(
+  classified: ClassifiedVideo[],
+  relationFilter: boolean | VideoRelationFilter,
+  tab: VideoSortKey,
+): ClassifiedVideo[] {
+  const base = filterClassifiedVideos(classified, relationFilter);
   if (tab === "latest") {
     base.sort((a, b) =>
       String(b.video.publish_date || b.video.posted_at || "").localeCompare(String(a.video.publish_date || a.video.posted_at || "")),
@@ -264,30 +272,56 @@ export function KolVideoSection({
   onEnqueueOne: (video: VkpiKolPoolVideoRow) => void;
 }) {
   const [tab, setTab] = React.useState<VideoSortKey>("latest");
-  const [vOnly, setVOnly] = React.useState(false);
+  const [relationFilter, setRelationFilter] = React.useState<VideoRelationFilter>("all");
   const [recEvidence, setRecEvidence] = React.useState<VkpiKolPoolVideoRow | null>(null);
   const summary = React.useMemo(() => summarizeKolVideos(videos), [videos]);
-  const { classified, unmeasuredCount, viewsTotal, vRelatedCount, analyzedCount } = summary;
-  const likesTotal = React.useMemo(() => videos.reduce((sum, v) => sum + (Number(v.like_count) || 0), 0), [videos]);
-  const commentsTotal = React.useMemo(() => videos.reduce((sum, v) => sum + (Number(v.comment_count) || 0), 0), [videos]);
-  const shown = React.useMemo(() => sortVideosByTab(classified, vOnly, tab), [classified, vOnly, tab]);
+  const { classified, measuredCount, viewsTotal, vRelatedCount, unrelatedCount, undeterminedCount, analyzedCount } = summary;
+  const likeMeasured = React.useMemo(() => videos.filter((video) => video.like_count != null).length, [videos]);
+  const commentMeasured = React.useMemo(() => videos.filter((video) => video.comment_count != null).length, [videos]);
+  const shareMeasured = React.useMemo(() => videos.filter((video) => video.share_count != null).length, [videos]);
+  const likeTotal = React.useMemo(() => videos.reduce((sum, video) => sum + (video.like_count == null ? 0 : Number(video.like_count) || 0), 0), [videos]);
+  const commentTotal = React.useMemo(() => videos.reduce((sum, video) => sum + (video.comment_count == null ? 0 : Number(video.comment_count) || 0), 0), [videos]);
+  const shareTotal = React.useMemo(() => videos.reduce((sum, video) => sum + (video.share_count == null ? 0 : Number(video.share_count) || 0), 0), [videos]);
+  const shown = React.useMemo(() => sortVideosByTab(classified, relationFilter, tab), [classified, relationFilter, tab]);
   return (
     <div>
-      {/* 汇总条:全部真实算(播放合计只算实测,NULL 条数如实注明) */}
+      {/* 汇总条:全部真实算;NULL 只计覆盖率,绝不转成 0。 */}
       <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted">
         <span>
-          {classified.length} 条视频 · 实测播放合计 {viewsTotal.toLocaleString()}
-          {unmeasuredCount > 0 ? `(${unmeasuredCount} 条未实测已剔除)` : ""} · V 相关 {vRelatedCount} 条 · 已深析 {analyzedCount} 条 · ♥{" "}
-          {likesTotal.toLocaleString()} · 💬 {commentsTotal.toLocaleString()}
+          已采集 {classified.length} 条 · 品牌相关 {vRelatedCount} · 未判定 {undeterminedCount} · 深析未识别 {unrelatedCount} · 播放已实测 {measuredCount}/{classified.length}（合计 {viewsTotal.toLocaleString()}） · 点赞已实测 {likeMeasured}/{classified.length}（合计 {likeTotal.toLocaleString()}） · 评论已实测 {commentMeasured}/{classified.length}（合计 {commentTotal.toLocaleString()}） · 分享已实测 {shareMeasured}/{classified.length}（合计 {shareTotal.toLocaleString()}） · 已深析 {analyzedCount}
         </span>
         <span className="ml-auto flex flex-wrap items-center gap-1.5">
           <button
             type="button"
-            className={`${CHIP} ${vOnly ? CHIP_ON : CHIP_OFF}`}
-            onClick={() => setVOnly((v) => !v)}
-            title="只看合作产出与标题提及V(未判定隐藏)"
+            className={`${CHIP} ${relationFilter === "all" ? CHIP_ON : CHIP_OFF}`}
+            onClick={() => setRelationFilter("all")}
+            title="清除品牌筛选，显示全部已采集内容"
           >
-            仅 V 相关
+            全部已采集
+          </button>
+          <button
+            type="button"
+            className={`${CHIP} ${relationFilter === "viltrox" ? CHIP_ON : CHIP_OFF}`}
+            onClick={() => setRelationFilter("viltrox")}
+            title="只看项目关联、深析确认或标题明确提及Viltrox的内容"
+          >
+            品牌相关
+          </button>
+          <button
+            type="button"
+            className={`${CHIP} ${relationFilter === "undetermined" ? CHIP_ON : CHIP_OFF}`}
+            onClick={() => setRelationFilter("undetermined")}
+            title="只看证据不足、尚不能判断是否与Viltrox相关的内容"
+          >
+            未判定
+          </button>
+          <button
+            type="button"
+            className={`${CHIP} ${relationFilter === "not_related" ? CHIP_ON : CHIP_OFF}`}
+            onClick={() => setRelationFilter("not_related")}
+            title="只看已有深析且未识别到Viltrox的内容"
+          >
+            深析未识别
           </button>
           {VIDEO_TABS.map((option) => (
             <button
@@ -303,7 +337,7 @@ export function KolVideoSection({
         </span>
       </div>
       {shown.length === 0 ? (
-        <div className="px-3 py-4 text-center text-[12px] text-muted">该筛选下 0 条(仅 V 相关开启)——诚实空。</div>
+        <div className="px-3 py-4 text-center text-[12px] text-muted">该筛选下没有已采集内容。可切回“全部已采集”或发起补采。</div>
       ) : (
         <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
           {shown.map(({ video, tier }) => {
@@ -322,9 +356,9 @@ export function KolVideoSection({
                     <span title={video.view_count == null ? "未实测(≠ 0 播放)" : "播放(点时实测)"}>
                       ▶ {video.view_count != null ? Number(video.view_count).toLocaleString() : "未实测"}
                     </span>
-                    <span>♥ {Number(video.like_count ?? 0).toLocaleString()}</span>
-                    <span>💬 {Number(video.comment_count ?? 0).toLocaleString()}</span>
-                    <span title="分享(点时实测;来源未回传按 0 计)">⤴ {Number(video.share_count ?? 0).toLocaleString()}</span>
+                    <span title={video.like_count == null ? "点赞未采集" : "点赞(点时实测)"}>♥ {video.like_count != null ? Number(video.like_count).toLocaleString() : "未采集"}</span>
+                    <span title={video.comment_count == null ? "评论未采集" : "评论(点时实测)"}>💬 {video.comment_count != null ? Number(video.comment_count).toLocaleString() : "未采集"}</span>
+                    <span title={video.share_count == null ? "分享未采集" : "分享(点时实测)"}>⤴ {video.share_count != null ? Number(video.share_count).toLocaleString() : "未采集"}</span>
                   </div>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
                     <span className={`rounded-[5px] border px-1 py-px text-[8px] font-bold ${meta.cls}`}>{meta.label}</span>

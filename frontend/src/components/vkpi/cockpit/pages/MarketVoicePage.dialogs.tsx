@@ -2,11 +2,14 @@ import React from "react";
 import { ProvChain, RecordPreview, type ProvStep } from "../components/provenance";
 import { formatLocal } from "../../lib/timeLocal";
 import type { VoiceFeedItem } from "../../../../services/vkpi/marketVoice-api";
+import { ModalShell } from "./MarketVoicePage.modal-shell";
+
+export { ModalShell } from "./MarketVoicePage.modal-shell";
 
 // 市场之声 · 弹窗族(V0h-c 自 MarketVoicePage.modules 拆出,行数纪律 ≤750/文件)。
-//   ModalShell 对齐 demo .scrim/.drawer:遮罩 var(--ds-scrim)+blur(3px)、容器 18px 圆角
-//   /86vh/标题 17px/680/关闭钮 30×30,入场 scale(.97)→1 两态过渡(ds-viz.css,自带
-//   reduced-motion 降级);弹窗内分区密度 = demo .dsec/.dl/.drow(22px/9.5px/12.5px)。
+//   ModalShell 对齐 demo .scrim/.drawer:body portal 脱离 react-grid transform/overflow、
+//   遮罩 var(--ds-scrim)+blur(3px)、容器 18px 圆角/86dvh/标题 17px/680/关闭钮 30×30,
+//   入场 scale(.97)→1 两态过渡(ds-viz.css,自带 reduced-motion 降级);正文单滚动区。
 //   color-scheme:本壳表面全 token 跟主题 → 挂 cockpit-modal--themed 修饰类
 //   (global.css:基类 .cockpit-modal 钉死 dark 供写死暗表面的遗留弹窗保真)。
 //   依赖单向:本文件不 import MarketVoicePage.modules(feed 行由调用方以 children/
@@ -43,80 +46,6 @@ const PLATFORM_SHORT: Record<string, string> = {
 export function platformBadge(platform: string) {
   const key = String(platform || "").trim().toLowerCase();
   return PLATFORM_SHORT[key] || (key ? key.toUpperCase().slice(0, 6) : "—");
-}
-
-/* ============ 弹窗骨架:demo .scrim/.drawer 1:1(遮罩/圆角/标题/关闭钮/入场过渡) ============ */
-// 弹窗栈:叠层时(全量列表下再开单条详情)Escape 只关最上层。
-const MODAL_STACK: symbol[] = [];
-
-export function ModalShell({
-  title,
-  sub,
-  onClose,
-  children,
-  maxWidth = "max-w-[700px]",
-}: {
-  title: React.ReactNode;
-  sub?: React.ReactNode;
-  onClose: () => void;
-  children: React.ReactNode;
-  maxWidth?: string;
-}) {
-  const idRef = React.useRef<symbol | null>(null);
-  if (!idRef.current) idRef.current = Symbol("vkpi-modal");
-  // 入场两态:挂载后下一帧置 on(demo .scrim/.drawer .on;reduced-motion 由 CSS 降级)
-  const [on, setOn] = React.useState(false);
-  React.useEffect(() => {
-    const raf = requestAnimationFrame(() => setOn(true));
-    return () => cancelAnimationFrame(raf);
-  }, []);
-  React.useEffect(() => {
-    const id = idRef.current as symbol;
-    MODAL_STACK.push(id);
-    return () => {
-      const at = MODAL_STACK.indexOf(id);
-      if (at >= 0) MODAL_STACK.splice(at, 1);
-    };
-  }, []);
-  React.useEffect(() => {
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape" && MODAL_STACK[MODAL_STACK.length - 1] === idRef.current) onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-  return (
-    <div
-      className={`cockpit-modal cockpit-modal--themed ds-modal-fade ${on ? "is-on" : ""} fixed inset-0 flex items-center justify-center bg-[var(--ds-scrim)] p-4 backdrop-blur-[3px]`}
-      style={{ zIndex: 999 }}
-      role="presentation"
-      onMouseDown={(ev) => {
-        if (ev.target === ev.currentTarget) onClose();
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal="true"
-        className={`ds-dialog-pop ${on ? "is-on" : ""} relative flex max-h-[86vh] w-full ${maxWidth} flex-col overflow-hidden rounded-[18px] border border-line bg-[var(--ds-overlay-surface)] shadow-ds`}
-      >
-        <div className="flex flex-none items-start justify-between gap-3 border-b border-line px-[22px] pb-3.5 pt-[18px]">
-          <div className="min-w-0">
-            <div className="text-[17px] font-[680] tracking-[-0.02em] text-ink">{title}</div>
-            {sub ? <div className="mt-[3px] text-[11px] text-muted">{sub}</div> : null}
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="关闭"
-            className="grid h-[30px] w-[30px] flex-none place-items-center rounded-[9px] border border-line text-[15px] text-ink-2 transition-colors hover:border-line-strong hover:text-ink"
-          >
-            ✕
-          </button>
-        </div>
-        <div className="min-h-0 flex-1 overflow-y-auto px-[22px] pb-10 pt-[18px]">{children}</div>
-      </div>
-    </div>
-  );
 }
 
 /* ============ 弹窗内分区件:demo .dsec .dl / .drow 密度 ============ */

@@ -13,7 +13,9 @@
   6. fit_dist:十分位桶 + 未评分诚实桶;响应只有桶计数,零单 KOL 分数;
   7. contact_coverage / 私字段:contact_value、email 混进行里也绝不进响应;
   8. LIMIT 双层封顶:SQL 参数=模块常量,Python 层切片二次封顶;
-  9. v_content 三档判定:SQL 汇总口径 + classify_v_content 纯函数单测;行级名单
+  9. v_content 五档判定:latest ready final_v1 detected/products + project_id +
+     中英文标题词 + explicit false / unknown；SQL 汇总、recent_videos、
+     classify_v_content 纯函数同口径;行级名单
      v_kol_ids 去重升序/封顶 2000 truncated 如实标注/与 v_kol_count 一致;
      tiers_by_kol KOL 级去重计数与条数级 tiers 区分;
  10. 信封契约键 + 单组失败降级 {status:'error'} 不拖全响应 + scope 参数下推。
@@ -129,6 +131,29 @@ def test_sql_compat_redlines_no_percent_no_like():
     assert " LIKE " not in f" {ALL_SQL.upper()} ".replace("\n", " ")
     assert "strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?)" in ext.V_CONTENT_SQL
     assert "strpos" in ext.V_KOL_COUNT_SQL
+
+
+def test_v_content_queries_share_latest_ready_five_tier_cte():
+    """聚合、名单与 recent 共用同一 CTE，只消费 final_v1 结构化证据。"""
+    queries = (
+        ext.RECENT_VIDEOS_SQL,
+        ext.V_CONTENT_SQL,
+        ext.V_KOL_COUNT_SQL,
+        ext.V_KOL_IDS_SQL,
+        ext.V_KOL_TIERS_SQL,
+    )
+    for sql in queries:
+        assert sql.startswith(ext.V_CONTENT_CLASSIFIED_CTE)
+        assert "c.target_type = 'video'" in sql
+        assert "c.derive_method = 'video_analysis_final_v1'" in sql
+        assert "c.status = 'ready'" in sql
+        assert "ORDER BY c.id DESC" in sql and "LIMIT 1" in sql
+        assert "{raw_gemini_video,viltrox_detected}" in sql
+        assert "{raw_gemini_video,viltrox_products_all}" in sql
+        assert "analysis_confirmed" in sql and "not_related" in sql
+    assert ext.VILTROX_TITLE_TOKENS == ("viltrox", "唯卓仕", "唯卓")
+    assert ext.V_CONTENT_CLASSIFIED_CTE.count("final_v1_competitor_mentions") == 1
+    assert "c.result AS" not in ext.RECENT_VIDEOS_SQL
 
 
 def test_sql_never_selects_private_columns():
@@ -444,7 +469,10 @@ def test_recent_videos_honest_nulls_bool_and_thumbnail_chain(monkeypatch):
              "thumbnail_url": "", "view_count": None, "like_count": 5,
              "publish_date": "2026-07-10", "posted_at": None,
              "created_at": "2026-07-10T08:00:00", "evidence_type": "video",
-             "kol_name": "Alpha", "kol_handle": "@alpha", "has_final_v1_cache": 1},
+             "kol_name": "Alpha", "kol_handle": "@alpha", "has_final_v1_cache": 1,
+             "llm_viltrox_detected_text": "true",
+             "llm_viltrox_products": '["AF 85mm F1.4 Pro"]',
+             "llm_competitor_mentions": ["Sigma"], "v_tier": "analysis_confirmed"},
         ],
     })
     rv = _build(conn)["recent_videos"]
@@ -453,6 +481,10 @@ def test_recent_videos_honest_nulls_bool_and_thumbnail_chain(monkeypatch):
     assert item["view_count"] is None                    # 未实测保持 null,绝不 0 填
     assert item["like_count"] == 5
     assert item["has_final_v1_cache"] is True            # BOOLEAN 读回 int 1 → 真布尔
+    assert item["llm_viltrox_detected"] is True
+    assert item["llm_viltrox_products"] == ["AF 85mm F1.4 Pro"]
+    assert item["llm_competitor_mentions"] == ["Sigma"]
+    assert item["v_tier"] == "analysis_confirmed"
     assert item["project_id"] == 7 and item["kol_name"] == "Alpha"
     assert item["publish_date"] == "2026-07-10"
     # 三件套:raw 空、无本地缓存 → youtube 派生;best 链序 cached → raw → youtube
@@ -476,13 +508,13 @@ def test_recent_videos_limit_double_capped_scope_pushed_and_empty_reason(monkeyp
     # Python 层二次封顶(哪怕 SQL 层被 mock 放水)+ scope 4 参与 LIMIT 常量下推
     assert len(body["recent_videos"]["items"]) == ext.RECENT_VIDEOS_LIMIT
     params = next(p for s, p in conn.calls if s == ext.RECENT_VIDEOS_SQL)
-    assert params == (7684, 7684, 7684, 7684, ext.RECENT_VIDEOS_LIMIT)
+    assert params == (*ext.VILTROX_TITLE_TOKENS, 7684, 7684, 7684, 7684, ext.RECENT_VIDEOS_LIMIT)
     # 空收藏集 → 诚实 empty + reason(不摆假卡)
     empty = _build(_FakeConn())["recent_videos"]
     assert empty["status"] == "empty" and "诚实空" in empty["reason"]
 
 
-# ── 9. v_content 三档判定 ───────────────────────────────────────────────
+# ── 9. v_content 五档互斥判定 ───────────────────────────────────────────
 
 
 def test_v_content_tiers_math(monkeypatch):
@@ -490,29 +522,38 @@ def test_v_content_tiers_math(monkeypatch):
     conn = _FakeConn(routes={
         ext.V_CONTENT_SQL: [
             {"total_evidence": 2769, "cooperation": 806,
-             "title_mention": 376, "overlap_both": 103},
+             "analysis_confirmed": 400, "title_mention": 273,
+             "not_related": 500, "undetermined": 790},
         ],
         ext.V_KOL_COUNT_SQL: [{"n": 387}],
-        ext.V_KOL_TIERS_SQL: [{"cooperation_kols": 210, "title_mention_kols": 260}],
+        ext.V_KOL_TIERS_SQL: [{"cooperation_kols": 210, "analysis_confirmed_kols": 140,
+                               "title_mention_kols": 120, "not_related_kols": 240,
+                               "undetermined_kols": 330}],
     })
     vc = _build(conn)["v_content"]
     assert vc["status"] == "ready"
     assert vc["total_evidence"] == 2769
     assert vc["v_kol_count"] == 387
+    assert vc["v_related_evidence"] == 1479
     assert vc["tiers"] == {
         "cooperation": 806,
-        "title_mention": 376,          # 任意标题命中(含与 cooperation 重叠)
-        "title_mention_only": 273,     # 376 - 103
-        "overlap_both": 103,
-        "undetermined": 1690,          # 2769 - 806 - 273
+        "analysis_confirmed": 400,
+        "title_mention": 273,
+        "not_related": 500,
+        "undetermined": 790,
     }
-    # KOL 级去重计数(同一 KOL 两档可重复计,与条数级 tiers 口径区分)
-    assert vc["tiers_by_kol"] == {"cooperation_kols": 210, "title_mention_kols": 260}
-    # SQL 参数=词元常量(strpos 参数化,不区分大小写靠 lower)
+    assert vc["tiers_by_kol"] == {
+        "cooperation_kols": 210,
+        "analysis_confirmed_kols": 140,
+        "title_mention_kols": 120,
+        "not_related_kols": 240,
+        "undetermined_kols": 330,
+    }
+    # 四条聚合/名单 SQL 都以相同 3 个标题词参数驱动共享 CTE。
     by_sql = {sql: params for sql, params in conn.calls}
-    assert by_sql[ext.V_CONTENT_SQL] == (ext.VILTROX_TOKEN, ext.VILTROX_TOKEN)
-    assert by_sql[ext.V_KOL_COUNT_SQL] == (ext.VILTROX_TOKEN,)
-    assert by_sql[ext.V_KOL_TIERS_SQL] == (ext.VILTROX_TOKEN,)
+    assert by_sql[ext.V_CONTENT_SQL] == ext.VILTROX_TITLE_TOKENS
+    assert by_sql[ext.V_KOL_COUNT_SQL] == ext.VILTROX_TITLE_TOKENS
+    assert by_sql[ext.V_KOL_TIERS_SQL] == ext.VILTROX_TITLE_TOKENS
 
 
 def test_v_kol_ids_dedup_sorted_and_consistent_with_count(monkeypatch):
@@ -520,7 +561,8 @@ def test_v_kol_ids_dedup_sorted_and_consistent_with_count(monkeypatch):
     _frozen(monkeypatch)
     conn = _FakeConn(routes={
         ext.V_CONTENT_SQL: [
-            {"total_evidence": 10, "cooperation": 4, "title_mention": 3, "overlap_both": 1},
+            {"total_evidence": 10, "cooperation": 4, "analysis_confirmed": 1,
+             "title_mention": 2, "not_related": 1, "undetermined": 2},
         ],
         ext.V_KOL_COUNT_SQL: [{"n": 4}],
         ext.V_KOL_IDS_SQL: [   # SQL 层被 mock 放水:乱序 + 重复 + 非法 0/None
@@ -536,7 +578,7 @@ def test_v_kol_ids_dedup_sorted_and_consistent_with_count(monkeypatch):
     assert len(vc["v_kol_ids"]) == vc["v_kol_count"]    # 名单与 KOL 级计数一致
     # LIMIT 下推=封顶+1(多取 1 行如实检测截断),词元参数化
     by_sql = {sql: params for sql, params in conn.calls}
-    assert by_sql[ext.V_KOL_IDS_SQL] == (ext.VILTROX_TOKEN, ext.V_KOL_IDS_ROWS_LIMIT)
+    assert by_sql[ext.V_KOL_IDS_SQL] == (*ext.VILTROX_TITLE_TOKENS, ext.V_KOL_IDS_ROWS_LIMIT)
     assert ext.V_KOL_IDS_ROWS_LIMIT == ext.V_KOL_IDS_MAX + 1
 
 
@@ -546,7 +588,8 @@ def test_v_kol_ids_capped_at_2000_with_truncated_note(monkeypatch):
     over = [{"kol_pool_id": i} for i in range(1, ext.V_KOL_IDS_ROWS_LIMIT + 50)]
     conn = _FakeConn(routes={
         ext.V_CONTENT_SQL: [
-            {"total_evidence": 5000, "cooperation": 2500, "title_mention": 0, "overlap_both": 0},
+            {"total_evidence": 5000, "cooperation": 2500, "analysis_confirmed": 0,
+             "title_mention": 0, "not_related": 1000, "undetermined": 1500},
         ],
         ext.V_KOL_COUNT_SQL: [{"n": 2050}],
         ext.V_KOL_IDS_SQL: over,
@@ -556,16 +599,20 @@ def test_v_kol_ids_capped_at_2000_with_truncated_note(monkeypatch):
     assert len(vc["v_kol_ids"]) == ext.V_KOL_IDS_MAX    # Python 层切片封顶
     assert vc["v_kol_ids"] == list(range(1, ext.V_KOL_IDS_MAX + 1))   # id 升序前 2000
     assert vc["v_kol_ids_truncated"] is True
-    assert "2000" in vc["v_kol_ids_note"] and "v_kol_count" in vc["v_kol_ids_note"]
-    assert vc["v_kol_count"] == 2050                    # 全量以 KOL 级计数为准
+    assert "2000" in vc["v_kol_ids_note"] and "完整去重总数" in vc["v_kol_ids_note"]
+    assert vc["v_kol_count"] == 2050                    # 完整去重总数仍单独给出
 
 
 def test_classify_v_content_pure_function():
-    """三档判定纯函数(M3 详情弹窗 / videos 增强复用):合作优先 > 标题命中 > 待定。"""
-    assert ext.classify_v_content(123, "random title") == "cooperation"
-    assert ext.classify_v_content(123, "VILTROX AF 85") == "cooperation"   # 合作优先
+    """五档优先级:项目 > 深析正向 > 标题 > 深析明确非相关 > 未判定。"""
+    assert ext.classify_v_content(123, "random", final_v1_detected=False) == "cooperation"
+    assert ext.classify_v_content(None, "random", final_v1_detected=True) == "analysis_confirmed"
+    assert ext.classify_v_content(None, "random", final_v1_detected=False,
+                                  final_v1_products=["AF 85mm"]) == "analysis_confirmed"
     assert ext.classify_v_content(None, "My VILTROX 85mm review") == "title_mention"
-    assert ext.classify_v_content(None, "viltrox in lowercase") == "title_mention"
+    assert ext.classify_v_content(None, "唯卓仕 35mm 实拍", final_v1_detected=False) == "title_mention"
+    assert ext.classify_v_content(None, "唯卓新品", final_v1_detected=False) == "title_mention"
+    assert ext.classify_v_content(None, "Sony FE 50mm review", final_v1_detected=False) == "not_related"
     assert ext.classify_v_content(None, "Sony FE 50mm review") == "undetermined"
     assert ext.classify_v_content(None, None) == "undetermined"
     assert ext.classify_v_content("", "") == "undetermined"
@@ -614,10 +661,13 @@ def test_staff_scope_params_pushed_down(monkeypatch):
     _frozen(monkeypatch)
     conn = _FakeConn()
     _build(conn, sid=7684)
-    scoped_sqls = (ext.FUNNEL_SQL, ext.PLATFORM_DIST_SQL, ext.CONTACT_COVERAGE_SQL, ext.RECENT_VIDEOS_SQL)
+    scoped_sqls = (ext.FUNNEL_SQL, ext.PLATFORM_DIST_SQL, ext.CONTACT_COVERAGE_SQL)
     for sql in scoped_sqls:
         params = next(p for s, p in conn.calls if s == sql)
         assert params[:4] == (7684, 7684, 7684, 7684), sql
+    recent = next(p for s, p in conn.calls if s == ext.RECENT_VIDEOS_SQL)
+    assert recent[:3] == ext.VILTROX_TITLE_TOKENS
+    assert recent[3:7] == (7684, 7684, 7684, 7684)
     official = next(p for s, p in conn.calls if s == ext.OFFICIAL_DAY_SQL)
     assert official[:2] == (7684, 7684)
 
@@ -626,6 +676,8 @@ def test_staff_scope_params_pushed_down(monkeypatch):
     for sql in scoped_sqls:
         params = next(p for s, p in conn_all.calls if s == sql)
         assert params[:4] == (0, 0, 0, 0), sql
+    recent_all = next(p for s, p in conn_all.calls if s == ext.RECENT_VIDEOS_SQL)
+    assert recent_all[3:7] == (0, 0, 0, 0)
 
 
 def test_all_sql_readonly(monkeypatch):
@@ -636,6 +688,6 @@ def test_all_sql_readonly(monkeypatch):
     assert conn.calls, "必须真的查询"
     for sql, _params in conn.calls:
         head = sql.strip().upper()
-        assert head.startswith("SELECT")
+        assert head.startswith(("SELECT", "WITH"))
         for verb in ("INSERT ", "UPDATE ", "DELETE "):
             assert verb not in head

@@ -107,10 +107,10 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["在库行", "vkpi_kol_pool_favorites + 共享 vkpi_kol_pool_members(aggregate.pool_favorites 全量下发)"],
       ["范围", "员工=own-only(服务端硬闸);管理层缺省 scope=team 全团队收藏集(收藏 ∪ 共享去重,与 board-ext 同两表同判据)"],
       ["状态徽", "收藏/共享=行本体;进行中=挂 assignments;已认领=vkpi_kol_claims 平台+名称桥(真值在详情 viewer-context)"],
-      ["V 视频 KOL", "board-ext v_content.v_kol_count —— 至少 1 条合作/标题提及视频的去重 KOL(全库口径)"],
-      ["V 三档判据", "合作=挂项目(project_id 非空)/ 标题提及=标题含 viltrox(不分大小写)/ 其余=未判定 —— 派生规则非采集字段(classify_v_content 同口径)"],
-      ["列表 V 筛选", "board-ext v_content.v_kol_ids 名单精确过滤(去重升序,封顶 2000;超封顶 truncated 如实降级提示;名单缺席时降级为已挂项目近似并标注)"],
-      ["KOL 级三档", "tiers_by_kol=cooperation_kols/title_mention_kols(KOL 级去重,同一 KOL 两档可重复计,与条数级 tiers 区分)"],
+      ["V 视频 KOL", "board-ext v_content.v_kol_count —— 至少 1 条五档中前三档正向证据视频的去重 KOL(全 evidence 聚合口径)"],
+      ["V 五档判据", "项目关联 > latest ready final_v1 深析正向(detected/products，覆盖正文/口播/字幕/描述分析结论) > 标题中英文品牌词 > final_v1 明确非相关 > 未判定；五档互斥"],
+      ["列表 V 筛选", "board-ext v_content.v_kol_ids 名单精确过滤(去重升序,封顶 2000;超封顶 truncated 如实降级提示；完整去重总数见 v_kol_count，返回名单不是全部记录)"],
+      ["KOL 级五档", "tiers_by_kol 按同一五档 CTE 去重计数(同一 KOL 在不同 evidence 档可重复计,与条数级 tiers 区分)"],
       ["单 KOL 视频", "GET /kol-pool/{id}/videos(view_count 点时实测 · NULL 剔除注明)"],
       ["采集数据列", "行尾 视频 N · 播放合计 · 深析 n/N = 同一 /kol-pool/{id}/videos 逐行实算(与详情弹窗同源同口径);只取当前可见行 + 会话级缓存,读取中=… / 零采集=—"],
       ["我的收藏", "kol-pool/favorites 本人收藏名单(现有端点一次拉取);chip 计数=名单∩当前库行,管理层全团队视图一键切回自己的"],
@@ -191,7 +191,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["口径", "收藏集(收藏 ∪ 共享,去重)最近采集 evidence(封顶 60 条)按发布时间降序;is_active=FALSE(归属纠错下线)剔除"],
       ["缩略图", "best_thumbnail 三链:本地缓存(毒缓存自愈,失败占位不作真图)→ 原始 URL → youtube 派生;三路皆无/加载失败 = 诚实 ▶ 占位"],
       ["播放/点赞", "view_count/like_count 点时实测(抓取时刻读数)· 未实测显「未实测」≠ 0 播放"],
-      ["V 三档徽", "合作=挂项目(project_id 非空)/ 标题提及=标题含 viltrox(不分大小写)/ 其余=未判定 —— classify_v_content 同口径派生"],
+      ["V 五档徽", "项目关联 > latest ready final_v1 深析正向(detected/products) > 标题中英文品牌词 > final_v1 明确非相关 > 未判定；与全局 V 名单同一证据顺序"],
       ["已深析标", "vkpi_analysis_cache final_v1 ready 才点亮(绝不猜)"],
       ["按 KOL 筛选", "选中单个收藏 KOL 时改走 GET /kol-pool/{id}/videos(与库详情弹窗同源同端点),不受最近 60 条窗限制"],
       ["排序", "最新=发布时间降序 / 播放=实测播放降序(未实测排最后,不当 0 混序)"],
@@ -749,7 +749,7 @@ export function KolLibraryModule({
    选中单 KOL = GET /kol-pool/{id}/videos(与库详情弹窗同端点同算法,模块级缓存)。
    缩略图 = 创意库同款毒缓存自愈链(best_thumbnail:cached → raw → youtube 派生)→
    proxiedImageUrl 兜受墙 CDN;onError / 三路皆无 → 诚实 ▶ 占位,绝不编图。
-   卡 = 缩略图 + 标题截断 + KOL 名 + 播放/点赞 mono(未实测如实标)+ V 三档徽 +
+   卡 = 缩略图 + 标题截断 + KOL 名 + 播放/点赞 mono(未实测如实标)+ V 五档徽 +
    已深析标 + 发布日期(绝对日期);点卡直跳原帖(无原链行如实不加链)。
    工具行 = KOL 下拉(收藏名单)+ 仅 V 相关 + 排序(最新/播放);默认 12 张,
    「≡ 查看更多」逐页 +12。V 判定/排序复用 classifyVideoRow / sortClassifiedVideos

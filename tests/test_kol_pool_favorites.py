@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -69,6 +71,70 @@ def test_favorite_unfavorite_idempotent(favorites_conn):
     assert removed["status"] == "unfavorited"
     removed_again = pool_favorites.remove_favorite(1, staff=staff)
     assert removed_again["status"] == "not_favorited"
+
+
+def test_concurrent_favorite_is_unique_and_returns_created_plus_already(monkeypatch, tmp_path):
+    """Two real connections crossing at INSERT must not leak a unique conflict as 500."""
+    db_path = tmp_path / "favorite-race.sqlite3"
+    setup = sqlite3.connect(db_path)
+    setup.execute("CREATE TABLE vkpi_kol_pool (id INTEGER PRIMARY KEY)")
+    setup.execute(
+        """
+        CREATE TABLE vkpi_kol_pool_favorites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kol_pool_id INTEGER NOT NULL REFERENCES vkpi_kol_pool(id),
+            staff_id INTEGER NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (kol_pool_id, staff_id)
+        )
+        """
+    )
+    setup.execute("INSERT INTO vkpi_kol_pool (id) VALUES (1)")
+    setup.commit()
+    setup.close()
+
+    from app.domains.kol import pool_favorites
+
+    insert_barrier = threading.Barrier(2)
+    local = threading.local()
+    opened: list[sqlite3.Connection] = []
+    opened_lock = threading.Lock()
+
+    class BarrierConnection:
+        def __init__(self, inner: sqlite3.Connection):
+            self.inner = inner
+
+        def execute(self, sql, params=()):
+            if "INSERT INTO vkpi_kol_pool_favorites" in " ".join(str(sql).split()):
+                insert_barrier.wait(timeout=5)
+            return self.inner.execute(sql, params)
+
+        def commit(self):
+            self.inner.commit()
+
+    def get_thread_conn():
+        if not hasattr(local, "conn"):
+            raw = sqlite3.connect(db_path, timeout=10, isolation_level=None, check_same_thread=False)
+            raw.row_factory = sqlite3.Row
+            local.conn = BarrierConnection(raw)
+            with opened_lock:
+                opened.append(raw)
+        return local.conn
+
+    monkeypatch.setattr(pool_favorites, "get_conn", get_thread_conn)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: pool_favorites.add_favorite(1, staff={"id": 84}), range(2)))
+
+    assert sorted(result["status"] for result in results) == ["already_favorited", "favorited"]
+    assert len({result["favorite_id"] for result in results}) == 1
+    check = sqlite3.connect(db_path)
+    assert check.execute(
+        "SELECT COUNT(*) FROM vkpi_kol_pool_favorites WHERE kol_pool_id=1 AND staff_id=84"
+    ).fetchone()[0] == 1
+    check.close()
+    for connection in opened:
+        connection.close()
 
 
 def test_list_is_staff_isolated(favorites_conn):

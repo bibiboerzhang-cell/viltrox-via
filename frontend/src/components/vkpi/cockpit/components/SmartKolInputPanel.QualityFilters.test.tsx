@@ -22,6 +22,7 @@ describe("SmartKolQualityFilters", () => {
 
     expect(onLanguagesChange).toHaveBeenCalledWith(["ja"]);
     expect(onProfileTypesChange).toHaveBeenCalledWith(["reviewer"]);
+    expect(screen.getByRole("button", { name: "日语" })).toHaveClass("min-h-7", "text-[10.5px]");
     expect(screen.getByText("未知证据不计入 30")).toBeTruthy();
   });
 

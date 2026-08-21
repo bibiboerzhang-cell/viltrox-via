@@ -82,6 +82,7 @@ describe("SmartKolInputPanel progressive stage card", () => {
     render(<ProgressiveSearchStageCard progress={progress()} />);
 
     expect(screen.getByTestId("kol-progress-stage-video")).toHaveTextContent("完成 2 · 进行中 2 · 未请求 11");
+    expect(screen.getByTestId("kol-progress-stage-video")).toHaveClass("text-[10.5px]", "leading-5");
     expect(screen.getByTestId("kol-progress-stage-comments")).toHaveTextContent("完成 1 · 进行中 3 · 失败 1 · 未请求 10");
     expect(screen.getByTestId("kol-progress-stage-audience")).toHaveTextContent("进行中 4 · 未请求 11");
   });

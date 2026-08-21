@@ -278,17 +278,17 @@ export function ModuleCard({
 }) {
   return (
     <section className="ds-mod ds-rise flex h-full min-h-0 flex-col">
-      <header className="flex flex-none items-center justify-between gap-2.5 px-4 pb-2 pt-[13px]">
+      <header data-vkpi-density="readable-module-header" className="flex min-h-11 flex-none items-center justify-between gap-2.5 px-4 pb-2 pt-[13px]">
         <div className="flex min-w-0 items-center gap-2">
-          <h3 className="truncate text-[13.5px] font-semibold tracking-[-0.01em] text-ink">{title}</h3>
+          <h3 className="truncate text-[14.5px] font-semibold leading-5 tracking-[-0.01em] text-ink">{title}</h3>
           {cnt != null && (
-            <span className="flex-none rounded-md bg-accent-soft px-[6px] py-px text-[9.5px] font-semibold text-accent">{cnt}</span>
+            <span className="flex-none rounded-md bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold text-accent">{cnt}</span>
           )}
         </div>
         <span className="flex flex-none items-center gap-2">
           <SrcChip label={srcLabel} rows={srcRows} onOpen={onOpenSrc} />
           {/* 数据为请求时实算 → 诚实「实时」eyebrow(demo 卡头右侧固定件) */}
-          <span className="text-[9.5px] font-semibold uppercase tracking-[0.16em] text-muted">实时</span>
+          <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-muted">实时</span>
         </span>
       </header>
       <div className="min-h-0 flex-1 overflow-auto px-4 pb-4">{children}</div>

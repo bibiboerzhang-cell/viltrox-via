@@ -48,7 +48,7 @@ export function EmployeeKolLibrary({
   const [selectedKolId, setSelectedKolId] = useState('');
   const [activeView, setActiveView] = useState<'watchlist' | 'funnel'>('watchlist');
   const [activeFunnelStage, setActiveFunnelStage] = useState<FunnelStageKey>('claimed');
-  const [viltroxOnly, setViltroxOnly] = useState(true);
+  const [viltroxOnly, setViltroxOnly] = useState(false);
   const [funnelCollapsed, setFunnelCollapsed] = useState(true);
   const projectByKol = useMemo(() => {
     const grouped = new Map<string, VkpiProjectRow[]>();
@@ -503,7 +503,7 @@ export function EmployeeKolLibrary({
           type="button"
           onClick={() => setViltroxOnly((value) => !value)}
         >
-          <span /> Viltrox 相关
+          <span /> 仅看 Viltrox 相关
         </button>
         <button
           className="mykol-toggle"

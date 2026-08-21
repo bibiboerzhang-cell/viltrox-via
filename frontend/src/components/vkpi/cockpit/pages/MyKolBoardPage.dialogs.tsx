@@ -453,7 +453,7 @@ export function KolDetailModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [index, onNav]);
 
-  // 视频区取数:GET /kol-pool/{id}/videos(全部 evidence,limit 200 与详情抽屉同口径)。
+  // 视频区取数:GET /kol-pool/{id}/videos(当前已采集 evidence 窗口,limit 200)。
   const [videos, setVideos] = React.useState<VkpiKolPoolVideoRow[] | null>(null);
   const [videosError, setVideosError] = React.useState("");
   const [videosTick, setVideosTick] = React.useState(0);
@@ -667,8 +667,8 @@ export function KolDetailModal({
     ["库记录", `vkpi_kol_pool #${item.poolId}(收藏行 vkpi_kol_pool_favorites / 共享行 vkpi_kol_pool_members)`],
     ["追踪链", "GOAFFPRO kol/{id}/link(读/建同端点;优惠码与佣金 PATCH 实时推回总台,销售经链/码归因该 KOL)"],
     ["合作结果", "行内 assignments 真阶段 × Projects 板块同一份映射(曝光 views / 证据计数);未回填读数如实显 —"],
-    ["V 三档判据", "cooperation=evidence.project_id 非空 / title_mention=标题含 viltrox(不分大小写)/ 其余=未判定 —— 派生规则非采集字段(classify_v_content 后端同口径)"],
-    ["视频", "GET /kol-pool/{id}/videos · vkpi_kol_video_evidence 全量(limit 200)"],
+    ["Viltrox 判据", "项目关联优先 / final_v1 品牌结论 / 标题明确品牌词 / 其余未判定；无证据不硬贴"],
+    ["视频", "GET /kol-pool/{id}/videos · vkpi_kol_video_evidence 当前已采集窗口(limit 200,不等于平台频道全量)"],
     ["播放口径", "view_count 点时实测(抓取时刻读数,非时序);NULL=未实测 ≠ 0 播放,合计已剔除并注明条数"],
     ["Fit 分", "viltrox_fit_score 只读展示(评分公式永不进前端,零回写)"],
     ["认领真值", "viewer-context 端点(vkpi_kol_claims)——行级「已认领」徽为平台+名称桥接提示"],
@@ -723,9 +723,9 @@ export function KolDetailModal({
       {/* 分区③:合作项目结果(assignments 真阶段 × Projects 板块同一份映射的曝光/证据) */}
       <CoopResultsSection assignments={item.projects} projects={projects} />
 
-      {/* 分区④:V 相关内容 —— 全量视频网格(五 tabs + 汇总条 + 三档徽,住 libdetail) */}
+      {/* 分区④:已采集内容——品牌关系筛选、五种排序与覆盖率住 libdetail。 */}
       <div className="mb-[22px]">
-        <SectionLabel>V 相关内容 · 过往视频全量</SectionLabel>
+        <SectionLabel>已采集内容 · Viltrox 筛查</SectionLabel>
         {videos == null ? (
           <div className="py-5 text-center text-[12px] text-muted">视频读取中…</div>
         ) : videosError ? (
@@ -735,7 +735,7 @@ export function KolDetailModal({
           </div>
         ) : loaded.length === 0 ? (
           <div className="rounded-xl border border-dashed border-line-strong px-3.5 py-4 text-center text-[12px] text-muted">
-            暂无采集视频——可发起深爬。
+            暂无已采集内容——可发起补采。
             <div className="mt-2">
               <button type="button" className={ACT_BTN} disabled={!item.profileUrl || busyKeys.has("crawl")} title={item.profileUrl ? "入队账号深爬(泳道可见进度)" : "该 KOL 无主页链接,无法深爬"} onClick={runDeepCrawl}>
                 {busyKeys.has("crawl") ? "入队中…" : "发起深爬"}

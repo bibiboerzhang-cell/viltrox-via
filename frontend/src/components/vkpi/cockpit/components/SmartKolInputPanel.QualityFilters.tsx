@@ -49,7 +49,7 @@ function FilterChips({
 }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-[10px] text-slate-500">{label}</span>
+      <span className="text-[10.5px] leading-5 text-slate-500">{label}</span>
       {options.map((option) => {
         const active = selected.includes(option.value);
         const limitReached = !active && typeof maxSelected === "number" && selected.length >= maxSelected;
@@ -61,7 +61,7 @@ function FilterChips({
             disabled={limitReached}
             title={limitReached ? `最多选择 ${maxSelected} 种内容语言` : undefined}
             onClick={() => onChange(toggleValue(selected, option.value))}
-            className={`rounded-full border px-2 py-0.5 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
+            className={`min-h-7 rounded-full border px-2.5 py-1 text-[10.5px] transition-colors disabled:cursor-not-allowed disabled:opacity-35 ${
               active
                 ? "border-violet-300/40 bg-violet-400/[0.12] text-violet-100"
                 : "border-white/[0.08] text-slate-500 hover:border-white/[0.16]"
@@ -75,12 +75,12 @@ function FilterChips({
         <button
           type="button"
           onClick={() => onChange([])}
-          className="px-1 text-[9px] text-slate-500 hover:text-slate-300"
+          className="min-h-7 px-1.5 text-[10px] text-slate-500 hover:text-slate-300"
         >
           清除
         </button>
       ) : (
-        <span className="text-[9px] text-slate-600">不限</span>
+        <span className="text-[10px] text-slate-600">不限</span>
       )}
     </div>
   );
@@ -102,7 +102,7 @@ export function SmartKolQualityFilters({
       className="flex flex-col gap-1.5 rounded-md border border-white/[0.07] bg-black/15 px-2.5 py-2"
       data-testid="smart-kol-quality-filters"
     >
-      <div className="flex flex-wrap items-center justify-between gap-1 text-[9px] text-slate-500">
+      <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] leading-5 text-slate-500">
         <span>内容语言与 KOL 类型 · 显式选择后由服务端硬筛</span>
         <span>未知证据不计入 30</span>
       </div>

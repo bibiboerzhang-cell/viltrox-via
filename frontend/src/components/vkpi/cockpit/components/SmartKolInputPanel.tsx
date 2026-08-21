@@ -154,20 +154,17 @@ export function SmartKolInputPanel({
     excludeChinese,
     searchMode,
   }), [contentLanguages, discoveryPlatforms, discoveryRegion, excludeChinese, input, kolProfileTypes, searchMode]);
-  // Filter state is intentionally not cached; a restored list therefore starts stale/read-only
-  // until its authoritative session is reopened or the user runs the current filters again.
+  // Filter state is not cached: restored lists stay read-only until reopened or rerun.
   const [recallFingerprint, setRecallFingerprint] = useState("");
   const recallIsStale = Boolean(recallResult && recallFingerprint !== currentSearchFingerprint);
   const displayedSessionTerminal = Boolean(activeSearchSession && isSearchSessionTerminal(activeSearchSession));
   const approvalReady = Boolean(displayedSearchSessionId && displayedSessionTerminal && !pollingSearchSessionId && recallResult && !recallIsStale && state === "ready");
   const {
     pickedIds, setPickedIds, clearPickedIds, addingFav, favNote,
+    favoriteIds, favoriteBusyIds, favoriteResults, favoriteErrors, favoritesSyncing, favoritesLoadError,
     draftBusy, draftNote, outreachBusy, outreachNote, outreachResult,
-    discoveryKey, addPickedToMyKol, approveAndCreateDraft, generateOutreachForPicked,
-  } = useSmartKolSelection({
-    apiToken, displayedSearchSessionId, canApprove: approvalReady, currentSearchRequest, isCurrentSearchRequest,
-  });
-
+    discoveryKey, favoriteOne, addPickedToMyKol, approveAndCreateDraft, generateOutreachForPicked,
+  } = useSmartKolSelection({ apiToken, displayedSearchSessionId, canApprove: approvalReady, canFavorite: !recallIsStale, currentSearchRequest, isCurrentSearchRequest });
   const inferredMode = useMemo(() => detectMode(input), [input]);
   const isBusy = state === "loading" || state === "executing" || batchBusy;
   const urlCanExecute = canExecuteUrlResult(apiToken, urlResult, isBusy);
@@ -964,6 +961,12 @@ export function SmartKolInputPanel({
           pickedIds={pickedIds}
           setPickedIds={setPickedIds}
           favNote={favNote}
+          favoriteIds={favoriteIds}
+          favoriteBusyIds={favoriteBusyIds}
+          favoriteResults={favoriteResults}
+          favoriteErrors={favoriteErrors}
+          favoritesSyncing={favoritesSyncing}
+          favoritesLoadError={favoritesLoadError}
           draftNote={draftNote}
           outreachNote={outreachNote}
           outreachResult={outreachResult}
@@ -974,6 +977,7 @@ export function SmartKolInputPanel({
           isSessionPolling={Boolean(pollingSearchSessionId)}
           resultsStale={recallIsStale}
           approvalReady={approvalReady}
+          favoriteOne={favoriteOne}
           addPickedToMyKol={addPickedToMyKol}
           approveAndCreateDraft={approveAndCreateDraft}
           generateOutreachForPicked={generateOutreachForPicked}
