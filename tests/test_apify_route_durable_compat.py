@@ -220,6 +220,13 @@ def test_user_provider_routes_enqueue_instead_of_calling_services(monkeypatch):
         "search_platform_content",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("route must not call provider")),
     )
+    from app.domains.kol import my_kol_paid_action_access as paid_access
+
+    monkeypatch.setattr(
+        paid_access,
+        "build_target_fence",
+        lambda *_args, **_kwargs: {"version": 1, "action": "kol_apify_enrich"},
+    )
 
     async def run():
         results = []
@@ -406,8 +413,10 @@ def test_batch_enrich_and_comment_routes_enqueue_only(monkeypatch):
         return {"status": "queued", "task_id": task_id}
 
     import app.domains.tasks.enqueue as task_enqueue
+    from app.domains.kol import my_kol_paid_action_access as paid_access
 
     monkeypatch.setattr(task_enqueue, "enqueue_kol_pool_on_demand_refresh", fake_kol_refresh)
+    monkeypatch.setattr(paid_access, "assert_target_writable", lambda *_a, **_kw: 1)
 
     async def run():
         batch = await vkpi_kol_pool_jobs.batch_enrich_pool_items.__wrapped__(

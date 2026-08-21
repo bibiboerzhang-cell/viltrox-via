@@ -103,6 +103,7 @@ def test_on_demand_refresh_endpoint_enqueues_when_operator_enabled(monkeypatch) 
         assert _queue is queue
         assert kol_pool_id == 456
         assert kwargs["max_posts"] == 1
+        assert kwargs["enforce_target_write"] is True
         return {"task_id": "task-enabled", "task_type": task_enqueue.VKPI_KOL_POOL_ON_DEMAND_REFRESH, "lock_key": "lock"}
 
     monkeypatch.setattr(task_enqueue, "enqueue_kol_pool_on_demand_refresh", enqueue)

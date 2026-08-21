@@ -26,9 +26,11 @@ from app.core.logging import get_logger
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 
-from app.api.dependencies.manager_guard import require_manager_tab
+from app.api.dependencies.manager_guard import require_manager_staff, require_manager_tab
 from app.api.dependencies.perms import require_tab
 from app.api.routers.vkpi_kol_contact_projection import PRIVATE_CONTACT_HEADERS
+from app.api.routers.vkpi_kol_paid_scope import assert_paid_target_writable, build_paid_target_fence
+from app.core.release_validation import release_validation_active
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.kol import account_dossier as kol_account_dossier
 from app.domains.kol import account_dossier_extract as kol_account_dossier_extract
@@ -411,12 +413,17 @@ async def kol_pool_enrich_via_apify(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """把 Apify 用透:抓该 KOL 公开数据 → 存富集证据(env 门控防意外计费)。"""
+    if release_validation_active():
+        raise HTTPException(status_code=503, detail="release_validation_fenced")
+    fence_key, target_fence = build_paid_target_fence(
+        int(kol_pool_id), staff, action="kol_apify_enrich"
+    )
     queue = getattr(request.app.state, "job_queue", None)
     if queue is None:
         raise HTTPException(status_code=503, detail="durable job queue unavailable")
     task_id = await queue.enqueue(
         "kol_apify_enrich",
-        {"kol_pool_id": int(kol_pool_id), "force": True, "staff": dict(staff or {})},
+        {"kol_pool_id": int(kol_pool_id), "force": True, fence_key: target_fence},
         lock_key=f"kol_apify_enrich:{int(kol_pool_id)}",
         timeout_seconds=1200,
     )
@@ -630,6 +637,7 @@ async def refresh_pool_item(
 ) -> dict:
     """Queue a stale-while-revalidate KOL Pool refresh; does not block on providers."""
     try:
+        assert_paid_target_writable(int(kol_pool_id), staff)
         kol_pool.get_item(int(kol_pool_id))
         return await _maybe_enqueue_refresh(
             request,
@@ -771,9 +779,10 @@ router.include_router(_kol_pool_intel_router)
 def promote_to_main_kol(
     kol_pool_id: int,
     body: dict = Body(default_factory=dict),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict:
     """自动匹配或创建 kols 主表记录并链接，替代前端手动输入 ID。"""
+    require_manager_staff(staff if isinstance(staff, dict) else {})
     mode = str(body.get("mode") or "match_or_create")
     if mode not in {"match_or_create", "match_only"}:
         raise _kol_operation_error("kol_promote", ValueError("invalid promote mode"))
@@ -803,6 +812,10 @@ async def enrich_pool_item(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """持久队列补齐单条候选的真实平台资料。"""
+    if release_validation_active():
+        raise HTTPException(status_code=503, detail="release_validation_fenced")
+    from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
+
     try:
         queue = getattr(request.app.state, "job_queue", None)
         return await task_enqueue.enqueue_kol_pool_on_demand_refresh(
@@ -811,7 +824,10 @@ async def enrich_pool_item(
             reason="manual_api_enrich",
             max_posts=max(1, min(int(body.get("max_posts") or 3), 3)),
             staff=staff,
+            enforce_target_write=True,
         )
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:

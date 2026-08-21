@@ -9,7 +9,9 @@ from __future__ import annotations
 from app.core.logging import get_logger
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
+from app.api.dependencies.manager_guard import require_manager_staff
 from app.api.dependencies.perms import require_tab
+from app.core.release_validation import release_validation_active
 from app.domains.kol import competitor_detector as kol_competitor_detector
 from app.domains.audit.decorator import audit_action
 
@@ -78,14 +80,27 @@ async def batch_enrich_pool_items(
 ) -> dict:
     """小批量持久排队补齐候选池数据；请求线程不运行 crawler。"""
     from app.domains.kol import pool as kol_pool
+    from app.domains.kol.my_kol_paid_action_access import (
+        MyKolPaidActionError,
+        assert_target_writable,
+    )
     import app.domains.tasks.enqueue as task_enqueue
 
+    if release_validation_active():
+        raise HTTPException(status_code=503, detail="release_validation_fenced")
     ids = body.get("ids") or []
     if ids and not isinstance(ids, list):
         raise HTTPException(status_code=400, detail="ids must be a list")
     safe_limit = max(1, min(int(body.get("limit") or 3), 5))
-    selected_ids = [int(value) for value in ids[:safe_limit] if str(value).strip().isdigit()]
+    selected_ids = list(dict.fromkeys(
+        int(value)
+        for value in ids[:safe_limit]
+        if str(value).strip().isdigit() and int(value) > 0
+    ))
+    if ids and not selected_ids:
+        raise HTTPException(status_code=400, detail="ids must contain a positive KOL id")
     if not selected_ids:
+        require_manager_staff(staff if isinstance(staff, dict) else {})
         selected = kol_pool.list_pool(
             limit=safe_limit,
             platform=str(body.get("platform") or ""),
@@ -95,6 +110,18 @@ async def batch_enrich_pool_items(
             enrichable=True,
         )
         selected_ids = [int(row["id"]) for row in selected.get("items") or [] if row.get("id")]
+    try:
+        from app.db.connection import get_conn
+
+        conn = get_conn()
+        for kol_pool_id in selected_ids:
+            assert_target_writable(
+                conn,
+                kol_pool_id=int(kol_pool_id),
+                staff=staff if isinstance(staff, dict) else None,
+            )
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     queue = getattr(request.app.state, "job_queue", None)
     if queue is None:
         raise HTTPException(status_code=503, detail="durable job queue unavailable")
@@ -107,8 +134,11 @@ async def batch_enrich_pool_items(
                 reason="manual_batch_enrich",
                 max_posts=max(1, min(int(body.get("max_posts") or 3), 3)),
                 staff=staff,
+                enforce_target_write=True,
             )
             jobs.append({"kol_pool_id": kol_pool_id, **queued})
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {

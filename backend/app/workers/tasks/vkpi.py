@@ -65,6 +65,25 @@ async def _is_terminal(queue, task_id: str) -> bool:
     return str((current or {}).get("status") or "").lower() in TERMINAL_STATUSES
 
 
+def _revalidate_kol_refresh_target(payload: dict[str, Any]) -> dict[str, Any] | None:
+    from app.db.connection import get_conn
+    from app.domains.kol.my_kol_paid_action_access import (
+        FENCE_KEY,
+        MyKolPaidActionError,
+        revalidate_target_fence,
+    )
+
+    has_fence = isinstance(payload.get(FENCE_KEY), dict)
+    reason = str(payload.get("reason") or "").strip().lower()
+    if not has_fence:
+        if reason.startswith("manual_"):
+            raise MyKolPaidActionError("my_kol_paid_action_fence_required", 403)
+        return None
+    return revalidate_target_fence(
+        get_conn(), payload, expected_action="kol_pool_refresh"
+    )
+
+
 async def process_vkpi_official_channel_sync_job(queue, raw_job: dict) -> None:
     task_id = str(raw_job.get("task_id") or "")
     payload = raw_job.get("payload") or {}
@@ -221,6 +240,28 @@ async def process_vkpi_kol_pool_on_demand_refresh_job(queue, raw_job: dict) -> N
         task_enqueue.upsert_task_item(task_id, item_key, status="cancelled")
         await queue.set_status(task_id, "cancelled", summary="任务已取消", stage="cancelled")
         return
+
+    from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
+
+    try:
+        actor = await asyncio.to_thread(_revalidate_kol_refresh_target, payload)
+    except MyKolPaidActionError as exc:
+        await queue.set_status(
+            task_id,
+            "failed",
+            error_message=exc.code,
+            stage="authorization_blocked",
+            result_json={
+                "status": "blocked",
+                "reason": exc.code,
+                "provider_calls_performed": False,
+            },
+            progress_pct=100,
+            progress_text="KOL 刷新授权已失效",
+        )
+        return
+    if actor is not None:
+        staff = actor
 
     task_enqueue.upsert_task_item(task_id, item_key, status="pending")
     task_enqueue.upsert_task_item(task_id, item_key, status="running")

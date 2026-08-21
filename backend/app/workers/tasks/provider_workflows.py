@@ -13,6 +13,18 @@ from typing import Any, Awaitable, Callable
 from app.services.jobs.results import persist_job_result
 
 
+def _require_paid_target_fence(payload: dict[str, Any], *, action: str) -> None:
+    from app.db.connection import get_conn
+    from app.domains.kol.my_kol_paid_action_access import (
+        MyKolPaidActionError,
+        revalidate_target_fence,
+    )
+
+    actor = revalidate_target_fence(get_conn(), payload, expected_action=action)
+    if actor is None:
+        raise MyKolPaidActionError("my_kol_paid_action_fence_required", 403)
+
+
 async def _run(
     queue: Any,
     raw_job: dict[str, Any],
@@ -193,6 +205,31 @@ async def process_kol_platform_search_job(queue: Any, raw_job: dict[str, Any]) -
 
 
 async def process_kol_apify_enrich_job(queue: Any, raw_job: dict[str, Any]) -> None:
+    from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
+
+    task_id = str(raw_job.get("task_id") or "")
+    payload = raw_job.get("payload") if isinstance(raw_job.get("payload"), dict) else {}
+    try:
+        await asyncio.to_thread(
+            _require_paid_target_fence,
+            payload,
+            action="kol_apify_enrich",
+        )
+    except MyKolPaidActionError as exc:
+        await queue.set_status(
+            task_id,
+            "failed",
+            job_type="kol_apify_enrich",
+            stage="authorization_blocked",
+            error_message=exc.code,
+            result_json=json.dumps({
+                "status": "blocked",
+                "reason": exc.code,
+                "provider_calls_performed": False,
+            }),
+        )
+        return
+
     async def operation(payload: dict[str, Any]) -> dict[str, Any]:
         from app.domains.discovery import apify_enrich
 

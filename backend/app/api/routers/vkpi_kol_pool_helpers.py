@@ -190,6 +190,7 @@ async def _maybe_enqueue_refresh(
             reason=reason,
             max_posts=1,
             staff=staff,
+            enforce_target_write=True,
         )
     except ValueError as exc:
         return {

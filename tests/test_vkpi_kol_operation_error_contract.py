@@ -72,6 +72,9 @@ def test_video_enqueue_conflict_and_unknown_errors_do_not_leak(monkeypatch):
 
 
 def test_batch_errors_are_sanitized_and_promote_validates_mode(monkeypatch):
+    from app.domains.kol import my_kol_paid_action_access as paid_access
+
+    monkeypatch.setattr(paid_access, "assert_target_writable", lambda *_a, **_kw: 1)
     monkeypatch.setattr(
         vkpi_kol_pool.kol_video_analysis_enqueue,
         "enqueue_final_v1_video_analysis_batch",
@@ -93,11 +96,14 @@ def test_batch_errors_are_sanitized_and_promote_validates_mode(monkeypatch):
     assert result["items"][1]["code"] == "video_evidence_not_found"
 
     with pytest.raises(HTTPException) as invalid_mode:
-        vkpi_kol_pool.promote_to_main_kol(10, {"mode": "force"}, staff={})
+        vkpi_kol_pool.promote_to_main_kol(10, {"mode": "force"}, staff={"id": 1, "role": "manager"})
     _assert_error(invalid_mode.value, status=422, code="kol_promote_invalid_request", retryable=False)
 
 
 def test_batch_and_all_video_endpoint_failures_use_expected_statuses(monkeypatch):
+    from app.domains.kol import my_kol_paid_action_access as paid_access
+
+    monkeypatch.setattr(paid_access, "assert_target_writable", lambda *_a, **_kw: 1)
     monkeypatch.setattr(
         vkpi_kol_pool.kol_video_analysis_enqueue,
         "enqueue_final_v1_video_analysis_batch",
@@ -137,5 +143,5 @@ def test_promote_runtime_failure_is_service_unavailable(monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("kols table is not available")),
     )
     with pytest.raises(HTTPException) as unavailable:
-        vkpi_kol_pool.promote_to_main_kol(10, {}, staff={})
+        vkpi_kol_pool.promote_to_main_kol(10, {}, staff={"id": 1, "role": "manager"})
     _assert_error(unavailable.value, status=503, code="kol_promote_queue_unavailable", retryable=True)

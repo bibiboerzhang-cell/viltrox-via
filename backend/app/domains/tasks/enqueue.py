@@ -320,11 +320,26 @@ async def enqueue_kol_pool_on_demand_refresh(
     max_posts: int = 1,
     staff: dict[str, Any] | None = None,
     priority: int | None = None,
+    enforce_target_write: bool = False,
 ) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "kol_pool_id": int(kol_pool_id),
+        "reason": reason,
+        "max_posts": max_posts,
+    }
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import FENCE_KEY, build_target_fence
+
+        params[FENCE_KEY] = build_target_fence(
+            get_conn(),
+            action="kol_pool_refresh",
+            kol_pool_id=int(kol_pool_id),
+            staff=staff,
+        )
     return await enqueue_vkpi_task(
         queue,
         VKPI_KOL_POOL_ON_DEMAND_REFRESH,
-        {"kol_pool_id": int(kol_pool_id), "reason": reason, "max_posts": max_posts},
+        params,
         staff=staff,
         priority=priority if priority is not None else 4,
         timeout_seconds=300,
@@ -538,6 +553,9 @@ async def retry_task(queue: Any, task_id: str, *, staff: dict[str, Any] | None =
             reason=str(payload.get("reason") or "retry"),
             max_posts=_int(payload.get("max_posts"), 1),
             staff=staff,
+            enforce_target_write=isinstance(
+                payload.get("my_kol_paid_action_fence"), dict
+            ),
         )
     raise ValueError(f"unsupported retry task type: {task_type}")
 
