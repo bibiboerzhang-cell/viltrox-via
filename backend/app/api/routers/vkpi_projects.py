@@ -89,10 +89,13 @@ def enqueue_logistics_sync(
     """17track 物流同步入队(2026-06-12;无 token 诚实返回 blocked)。"""
     from app.domains.logistics import seventeen_track
 
-    return seventeen_track.enqueue_logistics_sync_job(
-        project_id=body.get("project_id"),
-        staff=staff,
-    )
+    try:
+        return seventeen_track.enqueue_logistics_sync_job(
+            project_id=body.get("project_id"),
+            staff=staff,
+        )
+    except seventeen_track.LogisticsAccessError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
 
 
 @router.get("/projects/contract-templates")

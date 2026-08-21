@@ -15,13 +15,28 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.core.permissions import check_tab_permission
+from app.core.security import user_status_allows_auth
 from app.db.connection import get_conn
+from app.domains.access import scope
 from app.domains.projects.workflow_evidence import record_delivered_signal
+from app.domains.staff import is_manager_staff
 
 logger = get_logger("viltrox.domains.logistics.seventeen_track")
 
 JOB_TYPE = "logistics_track_sync"
 API_BASE = "https://api.17track.net/track/v2.2"
+FENCE_KEY = "logistics_access_fence"
+FENCE_VERSION = 1
+
+
+class LogisticsAccessError(RuntimeError):
+    """Stable, provider-free authorization failure for enqueue/worker paths."""
+
+    def __init__(self, code: str, status_code: int = 403):
+        super().__init__(code)
+        self.code = str(code)
+        self.status_code = int(status_code)
 
 # 17track 主状态 → 中文(写入 shipping.status,UI 直显)
 STATUS_CN = {
@@ -64,6 +79,54 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _normalize_project_id(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    project_id = _int(value)
+    if project_id <= 0:
+        raise LogisticsAccessError("logistics_project_id_invalid", 400)
+    return project_id
+
+
+def _system_actor(staff: dict[str, Any] | None) -> bool:
+    actor = staff or {}
+    return (
+        scope.actor_staff_id(actor) <= 0
+        and _int(actor.get("is_owner")) == 1
+        and str(actor.get("role") or "").strip().lower() == "admin"
+    )
+
+
+def _authorize_enqueue_scope(
+    project_id: Any,
+    staff: dict[str, Any] | None,
+) -> tuple[int | None, int, bool]:
+    normalized = _normalize_project_id(project_id)
+    actor = staff or {}
+    if normalized is None:
+        if not is_manager_staff(actor):
+            raise LogisticsAccessError("logistics_global_manager_required")
+    else:
+        try:
+            scope.assert_project_access(normalized, actor, write=True)
+        except scope.ScopeDenied as exc:
+            raise LogisticsAccessError("logistics_project_write_forbidden") from exc
+    if not check_tab_permission(actor, "vkpi", "write"):
+        raise LogisticsAccessError("logistics_write_permission_required")
+    staff_id = scope.actor_staff_id(actor)
+    is_system = _system_actor(actor)
+    if staff_id <= 0 and not is_system:
+        raise LogisticsAccessError("logistics_actor_identity_required")
+    return normalized, staff_id, is_system
+
+
 _QUOTA_ERROR_CODES = {-18019908, -18019909}  # 配额不足/超限(17track 文档码,命中即换 token)
 
 
@@ -98,6 +161,7 @@ def enqueue_logistics_sync_job(
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """物流同步入队(幂等:同范围活跃任务返回 already_queued;无 token 直接 blocked 诚实报)。"""
+    project_id, actor_id, is_system = _authorize_enqueue_scope(project_id, staff)
     if not _token():
         return {
             "status": "blocked",
@@ -116,13 +180,30 @@ def enqueue_logistics_sync_job(
     ).fetchone()
     if active:
         return {"status": "already_queued", "job_id": int(dict(active)["id"])}
+    if project_id is not None:
+        project = conn.execute(
+            "SELECT id FROM vkpi_projects WHERE id=? LIMIT 1",
+            (project_id,),
+        ).fetchone()
+        if not project:
+            raise LogisticsAccessError("logistics_project_not_found", 404)
+    assignment_ids = sorted(int(row["id"]) for row in _candidates(conn, project_id))
+    actor_user_id = _int((staff or {}).get("user_id"))
     payload = {
-        "project_id": int(project_id) if project_id else None,
+        "project_id": project_id,
         "scope_key": scope_key,
         "query_text": f"物流同步 · {'项目 ' + scope_key if project_id else '全部在途'}",
         "target_type": "logistics",
-        "triggered_by_user_id": (staff or {}).get("user_id"),
-        "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
+        "triggered_by_user_id": actor_user_id or None,
+        "staff_id": actor_id or None,
+        FENCE_KEY: {
+            "version": FENCE_VERSION,
+            "actor_kind": "system" if is_system else "staff",
+            "staff_id": actor_id,
+            "user_id": actor_user_id,
+            "project_id": project_id,
+            "assignment_ids": assignment_ids,
+        },
     }
     job = conn.execute(
         """
@@ -161,19 +242,131 @@ def _candidates(conn: Any, project_id: int | None) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def _active_fenced_actor(conn: Any, fence: dict[str, Any]) -> dict[str, Any]:
+    if str(fence.get("actor_kind") or "") == "system":
+        if _int(fence.get("staff_id")) or _int(fence.get("user_id")):
+            raise LogisticsAccessError("logistics_actor_fence_invalid")
+        return {"id": 0, "user_id": 0, "role": "admin", "is_owner": 1}
+    staff_id = _int(fence.get("staff_id"))
+    if staff_id <= 0:
+        raise LogisticsAccessError("logistics_actor_fence_invalid")
+    row = conn.execute(
+        """
+        SELECT s.*, u.status AS user_status
+        FROM staff s JOIN users u ON u.id=s.user_id
+        WHERE s.id=? LIMIT 1
+        """,
+        (staff_id,),
+    ).fetchone()
+    if not row:
+        raise LogisticsAccessError("logistics_actor_inactive")
+    actor = dict(row)
+    if actor.get("active") not in (True, 1, "1") or str(actor.get("suspended_at") or "").strip():
+        raise LogisticsAccessError("logistics_actor_inactive")
+    if not user_status_allows_auth(actor.get("user_status"), production=True):
+        raise LogisticsAccessError("logistics_actor_inactive")
+    if not check_tab_permission(actor, "vkpi", "write"):
+        raise LogisticsAccessError("logistics_actor_permission_revoked")
+    fenced_user_id = _int(fence.get("user_id"))
+    if fenced_user_id and fenced_user_id != _int(actor.get("user_id")):
+        raise LogisticsAccessError("logistics_actor_changed")
+    return actor
+
+
+def _revalidate_access_fence(conn: Any, payload: dict[str, Any]) -> set[int]:
+    fence = payload.get(FENCE_KEY)
+    if not isinstance(fence, dict) or _int(fence.get("version")) != FENCE_VERSION:
+        raise LogisticsAccessError("logistics_access_fence_required")
+    project_id = _normalize_project_id(payload.get("project_id"))
+    if project_id != _normalize_project_id(fence.get("project_id")):
+        raise LogisticsAccessError("logistics_project_fence_drifted")
+    expected_scope_key = str(project_id) if project_id is not None else "all"
+    if str(payload.get("scope_key") or "") != expected_scope_key:
+        raise LogisticsAccessError("logistics_project_fence_drifted")
+    if _int(payload.get("staff_id")) != _int(fence.get("staff_id")):
+        raise LogisticsAccessError("logistics_actor_fence_drifted")
+    if _int(payload.get("triggered_by_user_id")) != _int(fence.get("user_id")):
+        raise LogisticsAccessError("logistics_actor_fence_drifted")
+    actor = _active_fenced_actor(conn, fence)
+    if project_id is None:
+        if not is_manager_staff(actor):
+            raise LogisticsAccessError("logistics_global_permission_revoked")
+    else:
+        try:
+            scope.assert_project_access(project_id, actor, write=True)
+        except scope.ScopeDenied as exc:
+            raise LogisticsAccessError("logistics_project_permission_revoked") from exc
+        project = conn.execute(
+            "SELECT id FROM vkpi_projects WHERE id=? LIMIT 1",
+            (project_id,),
+        ).fetchone()
+        if not project:
+            raise LogisticsAccessError("logistics_project_removed")
+    raw_assignment_ids = fence.get("assignment_ids")
+    if not isinstance(raw_assignment_ids, list) or len(raw_assignment_ids) > 80:
+        raise LogisticsAccessError("logistics_assignment_fence_invalid")
+    assignment_ids = [_int(value) for value in raw_assignment_ids]
+    if any(value <= 0 for value in assignment_ids) or len(set(assignment_ids)) != len(assignment_ids):
+        raise LogisticsAccessError("logistics_assignment_fence_invalid")
+    if not assignment_ids:
+        return set()
+    placeholders = ",".join("?" for _ in assignment_ids)
+    rows = conn.execute(
+        f"SELECT id, project_id FROM vkpi_project_kol_assignments WHERE id IN ({placeholders})",
+        tuple(assignment_ids),
+    ).fetchall()
+    assignments = {int(dict(row)["id"]): _int(dict(row).get("project_id")) for row in rows}
+    if set(assignments) != set(assignment_ids) or any(value <= 0 for value in assignments.values()):
+        raise LogisticsAccessError("logistics_assignment_scope_drifted")
+    if project_id is not None and any(value != project_id for value in assignments.values()):
+        raise LogisticsAccessError("logistics_assignment_scope_drifted")
+    return set(assignment_ids)
+
+
+def _access_blocked(exc: LogisticsAccessError, *, provider_called: bool) -> dict[str, Any]:
+    return {
+        "status": f"blocked:{exc.code}",
+        "reason": exc.code,
+        "provider_calls_performed": provider_called,
+    }
+
+
+def _revalidate_before_provider(
+    conn: Any,
+    payload: dict[str, Any],
+    expected_assignment_ids: set[int],
+) -> None:
+    current = _revalidate_access_fence(conn, payload)
+    if current != expected_assignment_ids:
+        raise LogisticsAccessError("logistics_assignment_scope_drifted")
+
+
 def run_logistics_sync_for_job(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """worker 入口:注册(幂等)+ 拉取轨迹 → 写回 shipping 元数据。"""
     del staff
-    if not _token():
-        return {"status": "blocked:missing_token"}
     conn = get_conn()
-    rows = _candidates(conn, payload.get("project_id"))
+    try:
+        assignment_ids = _revalidate_access_fence(conn, payload)
+    except LogisticsAccessError as exc:
+        return _access_blocked(exc, provider_called=False)
+    if not _token():
+        return {"status": "blocked:missing_token", "provider_calls_performed": False}
+    rows = [
+        row for row in _candidates(conn, payload.get("project_id"))
+        if int(row["id"]) in assignment_ids
+    ]
     if not rows:
-        return {"status": "ready", "synced": 0, "note": "no_active_tracking_numbers"}
+        return {
+            "status": "ready",
+            "synced": 0,
+            "note": "no_active_tracking_numbers",
+            "provider_calls_performed": False,
+        }
     numbers = [{"number": str(row["tracking_number"]).strip()} for row in rows]
     # 注册(已注册会进 rejected,code -18019901,属幂等正常)
     rejected_invalid: dict[str, str] = {}
     try:
+        _revalidate_before_provider(conn, payload, assignment_ids)
         reg = _api("register", numbers)
         for item in (reg.get("data") or {}).get("rejected") or []:
             error = item.get("error") or {}
@@ -185,12 +378,17 @@ def run_logistics_sync_for_job(payload: dict[str, Any], *, staff: dict[str, Any]
                     len((reg.get("data") or {}).get("accepted") or []),
                     len((reg.get("data") or {}).get("rejected") or []),
                     len(rejected_invalid))
+    except LogisticsAccessError as exc:
+        return _access_blocked(exc, provider_called=False)
     except Exception as exc:
-        return {"status": f"failed:register_{exc.__class__.__name__}"}
+        return {"status": f"failed:register_{exc.__class__.__name__}", "provider_calls_performed": True}
     try:
+        _revalidate_before_provider(conn, payload, assignment_ids)
         info = _api("gettrackinfo", numbers)
+    except LogisticsAccessError as exc:
+        return _access_blocked(exc, provider_called=True)
     except Exception as exc:
-        return {"status": f"failed:gettrackinfo_{exc.__class__.__name__}"}
+        return {"status": f"failed:gettrackinfo_{exc.__class__.__name__}", "provider_calls_performed": True}
     accepted = {str(item.get("number") or ""): item for item in (info.get("data") or {}).get("accepted") or []}
     synced = 0
     results = []
@@ -288,4 +486,10 @@ def run_logistics_sync_for_job(payload: dict[str, Any], *, staff: dict[str, Any]
                 logger.warning("delivered signal write failed assignment=%s: %s", row["id"], exc)
                 results[-1]["delivered_signal"] = {"error": exc.__class__.__name__}
     conn.commit()
-    return {"status": "ready", "synced": synced, "total": len(rows), "results": results[:20]}
+    return {
+        "status": "ready",
+        "synced": synced,
+        "total": len(rows),
+        "results": results[:20],
+        "provider_calls_performed": True,
+    }
