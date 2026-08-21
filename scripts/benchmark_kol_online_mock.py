@@ -25,7 +25,12 @@ import tempfile
 import time
 from typing import Any, Mapping, NamedTuple, Sequence
 
-from stdout_utils import out_json
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.stdout_utils import out_json  # noqa: E402
 
 
 SCHEMA_VERSION = "vkpi_kol_online_mock_benchmark_v1"

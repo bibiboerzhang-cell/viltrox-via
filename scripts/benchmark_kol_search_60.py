@@ -34,10 +34,15 @@ from typing import Any, Iterable, Mapping, Sequence
 
 import psycopg
 from psycopg.rows import dict_row
-from stdout_utils import out_json
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.stdout_utils import out_json  # noqa: E402
+
+
 DEFAULT_QUERIES = ROOT / "scripts" / "kol_search_60_golden_queries.json"
 SCHEMA_VERSION = "vkpi_kol_search_60_local_benchmark_v1"
 REQUIRED_TABLES = {"vkpi_kol_pool", "vkpi_kol_video_evidence"}
