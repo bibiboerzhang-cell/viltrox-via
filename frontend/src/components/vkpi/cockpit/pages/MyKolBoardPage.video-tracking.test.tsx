@@ -79,7 +79,17 @@ function installDialogRoutes(
       return { items, total: items.length, kol_pool_id: poolId };
     }
     if (/\/api\/admin\/vkpi\/goaffpro\/kol\/\d+\/link/.test(value)) return { linked: false };
-    if (/\/api\/admin\/vkpi\/my-kol\/\d+\/viewer-context/.test(value)) return { claim: null };
+    const viewerMatch = value.match(/\/api\/admin\/vkpi\/my-kol\/(\d+)\/viewer-context/);
+    if (viewerMatch) {
+      const canWrite = Number(viewerMatch[1]) !== 102;
+      return {
+        claim: null,
+        paid_actions: {
+          can_run_paid_actions: canWrite,
+          reason: canWrite ? "owned_favorite" : "my_kol_paid_action_write_forbidden",
+        },
+      };
+    }
     throw new Error(`unexpected apiFetch: ${value}`);
   });
 }
@@ -283,26 +293,22 @@ describe("KolDetailModal existing-video tracking", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("当前仅支持已采集视频，请先账号补采/深爬后重试");
   });
 
-  it("shows a server permission rejection for a shared read-only KOL", async () => {
+  it("disables shared paid actions before any write request", async () => {
     installDialogRoutes();
-    apiFetchMock.mockImplementation(async (path: unknown, init: RequestInit = {}) => {
-      const value = String(path);
-      if (value === "/api/admin/vkpi/my-kol/102/videos" && init.method === "POST") {
-        throw Object.assign(new Error("kol_pool_not_writable"), { detail: "kol_pool_not_writable", status: 403 });
-      }
-      const videosMatch = value.match(/\/api\/admin\/vkpi\/kol-pool\/(\d+)\/videos/);
-      if (videosMatch) return { items: [video(902, 102)], total: 1, kol_pool_id: 102 };
-      if (/\/api\/admin\/vkpi\/goaffpro\/kol\/\d+\/link/.test(value)) return { linked: false };
-      if (/\/api\/admin\/vkpi\/my-kol\/\d+\/viewer-context/.test(value)) return { claim: null };
-      throw new Error(`unexpected apiFetch: ${value}`);
-    });
     renderDetail(1);
     await screen.findByText("Video 902");
-    fireEvent.change(screen.getByLabelText("已有视频 URL"), { target: { value: "https://www.youtube.com/watch?v=video902" } });
-    fireEvent.click(screen.getByRole("button", { name: "追踪并排队刷新" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("服务端拒绝写入");
-    expect(screen.queryByText(/指标刷新已排队（evidence/)).toBeNull();
+    expect(screen.getByLabelText("已有视频 URL")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "追踪并排队刷新" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "刷新指标" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /视频深析入队/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "采集评论" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "受众画像" })).toBeDisabled();
+    expect(screen.getByRole("note")).toHaveTextContent("共享 KOL 仅可查看");
+    expect(
+      apiFetchMock.mock.calls.some(
+        ([path, init]) => String(path).includes("/my-kol/102/") && (init as RequestInit)?.method === "POST",
+      ),
+    ).toBe(false);
   });
 
   it("drops a late Alpha response after navigation to Beta", async () => {

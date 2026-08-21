@@ -290,6 +290,8 @@ export function KolVideoSection({
   refreshingEvidence = new Set<number>(),
   queuedRefreshEvidence = new Set<number>(),
   onRefreshMetrics,
+  paidActionsReadOnly = false,
+  paidActionsReadOnlyHint = "共享 KOL 仅可查看，请由收藏负责人或管理层发起。",
 }: {
   videos: VkpiKolPoolVideoRow[];
   /** 已入队深析的 evidence id(dialogs 持有,回执逻辑不搬家) */
@@ -301,6 +303,8 @@ export function KolVideoSection({
   refreshingEvidence?: ReadonlySet<number>;
   queuedRefreshEvidence?: ReadonlySet<number>;
   onRefreshMetrics?: (video: VkpiKolPoolVideoRow) => void;
+  paidActionsReadOnly?: boolean;
+  paidActionsReadOnlyHint?: string;
 }) {
   const [tab, setTab] = React.useState<VideoSortKey>("latest");
   const [relationFilter, setRelationFilter] = React.useState<VideoRelationFilter>("all");
@@ -429,8 +433,8 @@ export function KolVideoSection({
                       <button
                         type="button"
                         className="inline-flex min-h-8 items-center rounded-lg border border-line px-2 py-1 text-[10.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default"
-                        disabled={queuedEvidence.has(eid) || busyKeys.has(`deep:${eid}`)}
-                        title="未判定视频一键入队深析(端点真实返回才标已入队)"
+                        disabled={paidActionsReadOnly || queuedEvidence.has(eid) || busyKeys.has(`deep:${eid}`)}
+                        title={paidActionsReadOnly ? paidActionsReadOnlyHint : "未判定视频一键入队深析(端点真实返回才标已入队)"}
                         onClick={() => onEnqueueOne(video)}
                       >
                         {queuedEvidence.has(eid) ? "已入队" : busyKeys.has(`deep:${eid}`) ? "入队中…" : "深析"}
@@ -440,8 +444,8 @@ export function KolVideoSection({
                       <button
                         type="button"
                         className="inline-flex min-h-8 items-center rounded-lg border border-line px-2 py-1 text-[10.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default"
-                        disabled={refreshingEvidence.has(eid) || queuedRefreshEvidence.has(eid)}
-                        title="把该条播放指标刷新加入后台队列；页面不会把排队状态称为实时结果"
+                        disabled={paidActionsReadOnly || refreshingEvidence.has(eid) || queuedRefreshEvidence.has(eid)}
+                        title={paidActionsReadOnly ? paidActionsReadOnlyHint : "把该条播放指标刷新加入后台队列；页面不会把排队状态称为实时结果"}
                         onClick={() => onRefreshMetrics(video)}
                       >
                         {queuedRefreshEvidence.has(eid) ? "指标刷新已排队" : refreshingEvidence.has(eid) ? "排队中…" : "刷新指标"}

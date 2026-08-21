@@ -58,13 +58,16 @@ from app.domains.access.firewall import firewall_check
 
 logger = get_logger(__name__)
 
-
 def _kol_operation_error(operation: str, exc: Exception) -> HTTPException:
     """Map KOL writes to stable client errors without exposing internals."""
     correlation_id = uuid.uuid4().hex
     class_name = type(exc).__name__.lower()
     message = str(exc).lower()
 
+    explicit_status = getattr(exc, "status_code", None)
+    explicit_code = str(getattr(exc, "code", "") or "")
+    if explicit_code and isinstance(explicit_status, int):
+        return HTTPException(status_code=explicit_status, detail=explicit_code)
     if isinstance(exc, LookupError):
         status_code, code, retryable = 404, f"{operation}_not_found", False
         public_message = "请求的 KOL 或视频证据不存在。"
@@ -683,6 +686,7 @@ def enqueue_pool_item_video_analysis(
             # separately-labelled local evaluation lane.  Ordinary retries,
             # old clients and truthy strings remain production jobs.
             local_evaluation=body.get("local_evaluation") is True,
+            enforce_target_write=True,
         )
     except Exception as exc:
         raise _kol_operation_error("video_analysis_enqueue", exc) from exc
@@ -698,9 +702,21 @@ def enqueue_pool_video_analysis_batch(
     if not isinstance(raw_items, list) or not raw_items:
         raise _kol_operation_error("video_analysis_batch_enqueue", ValueError("invalid items"))
     try:
+        from app.db.connection import get_conn
+        from app.domains.kol.my_kol_paid_action_access import assert_target_writable
+
+        conn = get_conn()
+        pool_ids = {
+            int(item.get("kol_pool_id") or 0)
+            for item in raw_items
+            if isinstance(item, dict) and str(item.get("kol_pool_id") or "").isdigit()
+        }
+        for pool_id in sorted(pool_ids):
+            assert_target_writable(conn, kol_pool_id=pool_id, staff=staff)
         result = kol_video_analysis_enqueue.enqueue_final_v1_video_analysis_batch(
             items=raw_items,
             staff=staff,
+            enforce_target_write=True,
         )
         return _sanitize_batch_enqueue_result(result)
     except Exception as exc:
@@ -717,6 +733,7 @@ def enqueue_pool_all_videos(
         return kol_video_analysis_enqueue.enqueue_all_kol_videos(
             kol_pool_id=int(kol_pool_id),
             staff=staff,
+            enforce_target_write=True,
         )
     except Exception as exc:
         raise _kol_operation_error("video_analysis_all_enqueue", exc) from exc

@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 import os
 from typing import Any
-from urllib.parse import urlparse
 
 from app.db.connection import get_conn
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
@@ -23,6 +22,10 @@ from app.platform.llm_local_evaluation import (
     LOCAL_EVALUATION_MODEL,
     issue_local_evaluation_capability,
     redact_local_evaluation_capability,
+)
+from app.domains.kol.video_url_identity import (
+    VideoUrlIdentityError,
+    parse_supported_video_url,
 )
 
 
@@ -46,14 +49,10 @@ from app.core.coerce import _text
 
 
 def _platform_from_url(url: str) -> str:
-    host = (urlparse(str(url or "")).netloc or "").lower()
-    if "youtube.com" in host or "youtu.be" in host:
-        return "youtube"
-    if "instagram.com" in host:
-        return "instagram"
-    if "tiktok.com" in host:
-        return "tiktok"
-    return "unsupported"
+    try:
+        return parse_supported_video_url(url).platform
+    except VideoUrlIdentityError:
+        return "unsupported"
 
 
 def _triggered_user_id(staff: dict[str, Any] | None) -> int | None:
@@ -227,6 +226,7 @@ def _enqueue_final_v1_video_analysis(
     search_session_item_id: int | None = None,
     parent_job_id: int | None = None,
     local_evaluation: bool = False,
+    enforce_target_write: bool = False,
 ) -> dict[str, Any]:
     """Enqueue one final_v1 job after ownership and duplicate checks.
 
@@ -236,9 +236,28 @@ def _enqueue_final_v1_video_analysis(
 
     kol_pool_id = int(kol_pool_id)
     evidence_id = int(evidence_id)
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import assert_target_writable
+
+        assert_target_writable(
+            conn,
+            kol_pool_id=kol_pool_id,
+            staff=staff,
+        )
     evidence = _load_owned_evidence(conn, kol_pool_id=kol_pool_id, evidence_id=evidence_id)
     if not evidence:
         raise LookupError("video evidence not found for this KOL")
+    target_fence: dict[str, Any] | None = None
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import build_target_fence
+
+        target_fence = build_target_fence(
+            conn,
+            action="video_analysis",
+            kol_pool_id=kol_pool_id,
+            staff=staff,
+            evidence_ids=[evidence_id],
+        )
 
     # 识别闸:图文/轮播帖没视频可下,排了必 media_resolve_failed。
     # 这里统一拦下(批量/URL/手动所有入队路径都过这条),不入队、不当失败。缺省/video 放行。
@@ -403,30 +422,41 @@ def _enqueue_final_v1_video_analysis(
 
     before_fit = _fit_snapshot(conn, kol_pool_id)
     triggered_by_user_id = _triggered_user_id(staff)
-    payload = with_search_session_lineage({
-        "queue_lane": _video_analysis_queue_lane(
-            batch=batch,
-            local_evaluation=bool(local_evaluation),
-        ),
-        "target_type": "video",
-        "target_id": str(evidence_id),
-        "derive_method": FINAL_V1_DERIVE_METHOD,
-        "platform": platform,
-        "platform_by_host": platform,
-        "kol_pool_id": kol_pool_id,
-        "source": source,
-        "batch": batch,
-        "triggered_by_user_id": triggered_by_user_id,
-        "prompt": prompt,
-        "source_url": evidence.get("content_url"),
-        "title": evidence.get("title"),
-        "creator_handle": evidence.get("kol_handle"),
-    },
+    payload = with_search_session_lineage(
+        {
+            "queue_lane": _video_analysis_queue_lane(
+                batch=batch,
+                local_evaluation=bool(local_evaluation),
+            ),
+            "target_type": "video",
+            "target_id": str(evidence_id),
+            "derive_method": FINAL_V1_DERIVE_METHOD,
+            "platform": platform,
+            "platform_by_host": platform,
+            "kol_pool_id": kol_pool_id,
+            "source": source,
+            "batch": batch,
+            "triggered_by_user_id": triggered_by_user_id,
+            "prompt": prompt,
+            "source_url": evidence.get("content_url"),
+            "title": evidence.get("title"),
+            "creator_handle": evidence.get("kol_handle"),
+            "staff_id": _int_or_none(
+                (staff or {}).get("id") or (staff or {}).get("staff_id")
+            ),
+        },
         search_session_id=search_session_id,
         search_session_item_id=search_session_item_id,
         role="video",
         parent_job_id=parent_job_id,
     )
+    if target_fence is not None:
+        from app.domains.kol.my_kol_paid_action_access import FENCE_KEY
+
+        payload[FENCE_KEY] = target_fence
+        snapshots = target_fence.get("evidence")
+        if isinstance(snapshots, list) and len(snapshots) == 1:
+            payload["source_url"] = snapshots[0].get("normalized_url")
     if local_evaluation:
         payload = {
             **payload,
@@ -520,6 +550,7 @@ def enqueue_final_v1_video_analysis(
     evidence_id: int,
     staff: dict[str, Any] | None = None,
     local_evaluation: bool = False,
+    enforce_target_write: bool = False,
 ) -> dict[str, Any]:
     conn = get_conn()
     return _enqueue_final_v1_video_analysis(
@@ -528,6 +559,7 @@ def enqueue_final_v1_video_analysis(
         evidence_id=int(evidence_id),
         staff=staff,
         local_evaluation=bool(local_evaluation),
+        enforce_target_write=bool(enforce_target_write),
     )
 
 
@@ -561,6 +593,7 @@ def enqueue_final_v1_video_analysis_batch(
     *,
     items: list[dict[str, Any]],
     staff: dict[str, Any] | None = None,
+    enforce_target_write: bool = False,
 ) -> dict[str, Any]:
     """Enqueue multiple final_v1 jobs, one evidence per item, without touching V6 Fit."""
 
@@ -597,6 +630,7 @@ def enqueue_final_v1_video_analysis_batch(
                 source="kol_pool_detail_batch_on_demand",
                 batch="on_demand_batch",
                 commit=True,
+                enforce_target_write=bool(enforce_target_write),
             )
             results.append(result)
             if result.get("status") == "queued":
@@ -662,6 +696,7 @@ def enqueue_all_kol_videos(
     kol_pool_id: int,
     staff: dict[str, Any] | None = None,
     limit: int = KOL_DEEP_ANALYSIS_VIDEO_LIMIT,
+    enforce_target_write: bool = False,
 ) -> dict[str, Any]:
     """「KOL深度分析理解」:该 KOL 最近 N 条(默认20)视频证据各入队一条 final_v1,
     供发完后综合评估(账号档案 worker 链路会聚合已分析视频)。已 ready / 在队的自动跳过。
@@ -670,6 +705,10 @@ def enqueue_all_kol_videos(
     if not pool_id:
         raise ValueError("kol_pool_id required")
     conn = get_conn()
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import assert_target_writable
+
+        assert_target_writable(conn, kol_pool_id=pool_id, staff=staff)
     # 取证按 e.id DESC,切最近 N 条(用户裁令:全视频→最近20条)。
     cap = max(1, int(limit or KOL_DEEP_ANALYSIS_VIDEO_LIMIT))
     evidence_ids = list_kol_all_evidence_ids(conn, pool_id)[:cap]
@@ -688,7 +727,11 @@ def enqueue_all_kol_videos(
             "writes": [],
         }
     items = [{"kol_pool_id": pool_id, "evidence_id": eid} for eid in evidence_ids]
-    result = enqueue_final_v1_video_analysis_batch(items=items, staff=staff)
+    result = enqueue_final_v1_video_analysis_batch(
+        items=items,
+        staff=staff,
+        enforce_target_write=bool(enforce_target_write),
+    )
     result["kol_pool_id"] = pool_id
     result["mode"] = "all_videos"
     result["evidence_total"] = len(evidence_ids)

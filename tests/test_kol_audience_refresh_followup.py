@@ -158,10 +158,10 @@ def test_audience_refresh_handler_is_non_recursive_and_keeps_summary_only(monkey
     from app.domains.kol import audience_stats
     from app.workers import apify_jobs_worker_handlers as handlers
 
-    calls: list[tuple[int, bool]] = []
+    calls: list[tuple[int, bool, bool]] = []
 
-    def fake_refresh(kol_pool_id: int, *, enqueue_if_missing: bool):
-        calls.append((kol_pool_id, enqueue_if_missing))
+    def fake_refresh(kol_pool_id: int, *, enqueue_if_missing: bool, allow_avatar_provider: bool):
+        calls.append((kol_pool_id, enqueue_if_missing, allow_avatar_provider))
         return {
             "status": "ok",
             "kol_pool_id": kol_pool_id,
@@ -176,7 +176,7 @@ def test_audience_refresh_handler_is_non_recursive_and_keeps_summary_only(monkey
 
     handlers._process_kol_audience_stats_refresh(conn, {"id": 8801}, payload)
 
-    assert calls == [(3450, False)]
+    assert calls == [(3450, False, False)]
     assert conn.calls[0][1][0] == "done"
     assert payload["audience_refresh_result"] == {
         "status": "ok",

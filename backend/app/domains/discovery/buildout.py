@@ -35,10 +35,26 @@ def _profile_url(kol_pool_id: int) -> str:
     return str(((dict(row).get("profile_url")) if row else "") or "").strip()
 
 
-def _enqueue_comments_collect(kol_pool_id: int, *, source: str) -> dict[str, Any]:
+def _enqueue_comments_collect(
+    kol_pool_id: int,
+    *,
+    source: str,
+    staff: dict[str, Any] | None = None,
+    enforce_target_write: bool = False,
+) -> dict[str, Any]:
     """评论采集入队(幂等:同 KOL 已有 queued/running 即复用)。payload 契约与 worker
     run_kol_pool_comments_for_job 一致;batch=on_demand_batch 走批量档不插队交互。"""
     conn = get_conn()
+    target_fence: dict[str, Any] | None = None
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import build_target_fence
+
+        target_fence = build_target_fence(
+            conn,
+            action="comments_collect",
+            kol_pool_id=int(kol_pool_id),
+            staff=staff,
+        )
     existing = conn.execute(
         """
         SELECT id, status FROM apify_jobs
@@ -54,14 +70,27 @@ def _enqueue_comments_collect(kol_pool_id: int, *, source: str) -> dict[str, Any
         return {"status": "already_queued", "job_id": int(d["id"])}
     # 90s 延迟:评论必须等深爬把 evidence 落地(掐表实测 race——同时入队时评论 job 早 1-7 秒
     # 空转 done,0 评论 → refresh_audience_stats 永不触发,受众页签永不亮)。深爬实测 5-17s,90s 稳。
+    payload: dict[str, Any] = {
+        "kol_pool_id": int(kol_pool_id),
+        "batch": "on_demand_batch",
+        "source": source,
+        "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
+    }
+    if target_fence is not None:
+        # Evidence is created by the preceding profile crawl.  Bind the exact
+        # set once, inside the worker's provider fence, after the 90s delay.
+        payload.update(
+            {
+                "evidence_ids": None,
+                "bind_evidence_at_worker": True,
+                "my_kol_paid_action_fence": target_fence,
+            }
+        )
     conn.execute(
         "INSERT INTO apify_jobs (job_type, payload, next_retry_at) VALUES (?, ?, NOW() + make_interval(secs => 90))",
         (
             "kol_pool_comments_collect",
-            json.dumps(
-                {"kol_pool_id": int(kol_pool_id), "batch": "on_demand_batch", "source": source},
-                ensure_ascii=False,
-            ),
+            json.dumps(payload, ensure_ascii=False),
         ),
     )
     conn.commit()
@@ -75,9 +104,19 @@ def ignite_profile_buildout(
     demoted: bool = False,
     force_full: bool = False,
     source: str = "discovery",
+    staff: dict[str, Any] | None = None,
+    enforce_target_write: bool = False,
 ) -> dict[str, Any]:
     """按档点火。返回 {"tier": "full"|"light"|"skipped", ...};best-effort,任何失败不抛。"""
     result: dict[str, Any] = {"kol_pool_id": int(kol_pool_id), "tier": "skipped"}
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import assert_target_writable
+
+        assert_target_writable(
+            get_conn(),
+            kol_pool_id=int(kol_pool_id),
+            staff=staff,
+        )
     if not _enabled():
         result["reason"] = "env_off"
         return result
@@ -93,23 +132,41 @@ def ignite_profile_buildout(
             url,
             kol_pool_id=int(kol_pool_id),
             max_posts=3 if full else 1,
-            staff=None,
+            staff=staff,
             queue_lane="interactive" if source == "manual_build_full" else "batch",
+            enforce_target_write=bool(enforce_target_write),
         )
         result["deep_crawl"] = {"status": str((crawl or {}).get("status") or "queued")}
         if full:
-            result["comments"] = _enqueue_comments_collect(int(kol_pool_id), source=source)
+            result["comments"] = _enqueue_comments_collect(
+                int(kol_pool_id),
+                source=source,
+                staff=staff,
+                enforce_target_write=bool(enforce_target_write),
+            )
         result["tier"] = "full" if full else "light"
         logger.info(
             "discovery buildout ignited | kol=%s tier=%s score=%.3f source=%s",
             kol_pool_id, result["tier"], float(score or 0), source,
         )
-    except Exception:
+    except Exception as exc:
+        if enforce_target_write and getattr(exc, "status_code", None):
+            raise
         logger.warning("discovery buildout ignite failed kol=%s(不阻断主流程)", kol_pool_id, exc_info=True)
         result["reason"] = "error"
     return result
 
 
-def build_full_profile(kol_pool_id: int) -> dict[str, Any]:
+def build_full_profile(
+    kol_pool_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """手动一键补全:强制 full 档(抽屉按钮/API 用)。"""
-    return ignite_profile_buildout(int(kol_pool_id), force_full=True, source="manual_build_full")
+    return ignite_profile_buildout(
+        int(kol_pool_id),
+        force_full=True,
+        source="manual_build_full",
+        staff=staff,
+        enforce_target_write=True,
+    )

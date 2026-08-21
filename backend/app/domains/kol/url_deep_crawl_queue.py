@@ -429,6 +429,22 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
         ),
         "source": str(payload.get("source") or "queue:kol_profile_deep_crawl"),
     }
+    if revalidated_staff is not None:
+        body["paid_action_staff"] = {
+            key: revalidated_staff.get(key)
+            for key in (
+                "id",
+                "user_id",
+                "role",
+                "is_owner",
+                "permissions",
+                "permissions_json",
+                "active",
+                "suspended_at",
+            )
+            if key in revalidated_staff
+        }
+        body["enforce_target_write"] = True
     result = dry_run_url_deep_crawl(body)
     # 队列路径不经 HTTP 路由的 _attach_smart_url_session——session 必须在此自建,
     # 否则任务完成后 payload 无 search_session_id,泳道「最近完成」按规则将其滤掉(一闪而过案)。
@@ -443,7 +459,11 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
             query_text=f"账号分析 · {body['url'][:80]}",
             query_type="url_profile",
             source=str(payload.get("source") or "queue:kol_profile_deep_crawl"),
-            input_payload={key: value for key, value in body.items() if key != "api_token"},
+            input_payload={
+                key: value
+                for key, value in body.items()
+                if key not in {"api_token", "paid_action_staff", "enforce_target_write"}
+            },
             staff=staff,
         )
         if session:

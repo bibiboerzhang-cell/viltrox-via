@@ -664,6 +664,19 @@ def my_kol_viewer_context_endpoint(
         raise HTTPException(status_code=400, detail="kol_pool_id required")
     conn = get_conn()
     actor = scope.actor_staff_id(staff)
+    from app.domains.kol.my_kol_paid_action_access import (
+        MyKolPaidActionError,
+        assert_target_readable,
+        target_write_context,
+    )
+
+    try:
+        assert_target_readable(conn, kol_pool_id=pid, staff=staff)
+    except MyKolPaidActionError as exc:
+        # Do not leak claim/staff identity for arbitrary pool ids.  Explicit
+        # team membership remains a read-only grant.
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    paid_action = target_write_context(conn, kol_pool_id=pid, staff=staff)
 
     share_origin: dict[str, Any] | None = None
     if actor:
@@ -725,4 +738,9 @@ def my_kol_viewer_context_endpoint(
             "can_release": bool(is_mine or scope.can_view_all(staff)),
         }
 
-    return {"kol_pool_id": pid, "share_origin": share_origin, "claim": claim}
+    return {
+        "kol_pool_id": pid,
+        "share_origin": share_origin,
+        "claim": claim,
+        "paid_actions": paid_action,
+    }

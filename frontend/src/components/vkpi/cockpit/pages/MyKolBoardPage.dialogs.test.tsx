@@ -1,7 +1,12 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { KolLibraryRow } from "../../../../services/vkpi/myKolBoard-api";
-import { KolRowLine } from "./MyKolBoardPage.dialogs";
+import { KolLibraryListModal, KolRowLine } from "./MyKolBoardPage.dialogs";
+
+const refreshAudienceStatsMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../../services/vkpi/kolPool-api", () => ({
+  refreshAudienceStats: (...args: unknown[]) => refreshAudienceStatsMock(...args),
+}));
 
 function libraryRow(overrides: Partial<KolLibraryRow> = {}): KolLibraryRow {
   return {
@@ -78,5 +83,37 @@ describe("KolRowLine avatar request safety", () => {
 
     expect(container.querySelector("img")).toBeNull();
     expect(screen.getByLabelText("Matthew 头像暂不可用")).toHaveTextContent("M");
+  });
+});
+
+describe("KolLibraryListModal shared paid-action scope", () => {
+  it("skips shared rows in batch audience refresh while keeping owned rows", async () => {
+    refreshAudienceStatsMock.mockReset();
+    refreshAudienceStatsMock.mockResolvedValue({ status: "queued", job_id: 91 });
+    render(
+      <KolLibraryListModal
+        apiToken="token"
+        rows={[
+          libraryRow({ poolId: 7, name: "Owned", isShared: false }),
+          libraryRow({ poolId: 8, name: "Shared", isShared: true, sharedByName: "Owner" }),
+        ]}
+        totalAll={2}
+        filter={{ query: "", platform: "", vOnly: false }}
+        onFilter={vi.fn()}
+        platformOptions={[]}
+        vKolCount={null}
+        projects={[]}
+        onOpenDetail={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText("勾选 Owned"));
+    fireEvent.click(screen.getByLabelText("勾选 Shared"));
+    fireEvent.click(screen.getByRole("button", { name: "批量受众画像" }));
+
+    await waitFor(() => expect(refreshAudienceStatsMock).toHaveBeenCalledTimes(1));
+    expect(refreshAudienceStatsMock).toHaveBeenCalledWith("token", 7);
+    expect(screen.getByRole("status")).toHaveTextContent("跳过共享只读 1 个");
   });
 });

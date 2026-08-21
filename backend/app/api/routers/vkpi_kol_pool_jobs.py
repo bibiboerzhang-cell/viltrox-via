@@ -164,6 +164,7 @@ def enqueue_kol_pool_comments_collect(
 ) -> dict:
     """评论采集入 apify_jobs(2026-06-12 裁令"评论的展示也要有";泳道「评论采集」可见)。"""
     from app.domains.comments import collector as comments_collector
+    from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
 
     try:
         return comments_collector.enqueue_kol_pool_comments_job(
@@ -172,7 +173,10 @@ def enqueue_kol_pool_comments_collect(
             max_comments=body.get("max_comments"),
             staff=staff,
             force_refresh=bool(body.get("force_refresh")),
+            enforce_target_write=True,
         )
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except (TypeError, ValueError) as exc:

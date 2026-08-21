@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.domains.access import scope
 from app.domains.kol.pool_common import _table_columns
 from app.domains.kol.url_deep_crawl import classify_url
 from app.domains.kol.video_metric_refresh import enqueue_video_metric_refresh
@@ -80,33 +79,26 @@ def _assert_target_writable(
     kol_pool_id: int,
     staff: dict[str, Any] | None,
 ) -> int:
-    actor_id = scope.actor_staff_id(staff)
-    if actor_id <= 0:
-        raise VideoTrackingError("staff_identity_required", 403)
-    row = conn.execute(
-        "SELECT id, duplicate_of_id FROM vkpi_kol_pool WHERE id=?",
-        (int(kol_pool_id),),
-    ).fetchone()
-    if not row:
-        raise VideoTrackingError("kol_pool_not_found", 404)
-    if _int(dict(row).get("duplicate_of_id")):
-        raise VideoTrackingError("kol_pool_duplicate_not_writable", 409)
-    if scope.can_view_all(staff):
-        return int(actor_id)
-    favorite = conn.execute(
-        """
-        SELECT id
-        FROM vkpi_kol_pool_favorites
-        WHERE kol_pool_id=? AND staff_id=?
-        LIMIT 1
-        """,
-        (int(kol_pool_id), int(actor_id)),
-    ).fetchone()
-    if not favorite:
-        # vkpi_kol_pool_members is a read-only grant and is deliberately not
-        # accepted here.  Visibility must never silently become mutation.
-        raise VideoTrackingError("my_kol_video_write_forbidden", 403)
-    return int(actor_id)
+    from app.domains.kol.my_kol_paid_action_access import (
+        MyKolPaidActionError,
+        assert_target_writable,
+    )
+
+    try:
+        return assert_target_writable(
+            conn,
+            kol_pool_id=int(kol_pool_id),
+            staff=staff,
+        )
+    except MyKolPaidActionError as exc:
+        # Preserve the existing public video-tracking code while sharing one
+        # row-level policy with deep analysis/comments/audience actions.
+        code = (
+            "my_kol_video_write_forbidden"
+            if exc.code == "my_kol_paid_action_write_forbidden"
+            else exc.code
+        )
+        raise VideoTrackingError(code, exc.status_code) from exc
 
 
 def _validate_skus_exist(conn: Any, product_skus: list[str]) -> None:

@@ -369,15 +369,21 @@ export function KolLibraryListModal({
   // 【批量受众画像】audience-stats/refresh 逐个入队(status:error 如实计失败,不冒充成功)。
   const runBatchAudience = async () => {
     if (!apiToken || busy || !selectedRows.length) return;
-    if (selectedRows.length > 10 && !window.confirm(`选中 ${selectedRows.length} 个 KOL,受众画像逐个刷新可能耗时较久,确认继续?`)) return;
+    const writableRows = selectedRows.filter((row) => !row.isShared);
+    const sharedSkipped = selectedRows.length - writableRows.length;
+    if (!writableRows.length) {
+      setNote({ text: "所选 KOL 均为共享只读，不能批量发起受众画像；请由收藏负责人执行。", tone: "info" });
+      return;
+    }
+    if (writableRows.length > 10 && !window.confirm(`选中 ${writableRows.length} 个可写 KOL,受众画像逐个刷新可能耗时较久,确认继续?`)) return;
     setBusy(true);
     let ok = 0, fail = 0, firstReason = "";
     try {
       const { refreshAudienceStats } = await import("../../../../services/vkpi/kolPool-api");
-      for (let i = 0; i < selectedRows.length; i += 1) {
-        setNote({ text: `受众画像入队中… ${i + 1}/${selectedRows.length}`, tone: "info" });
+      for (let i = 0; i < writableRows.length; i += 1) {
+        setNote({ text: `受众画像入队中… ${i + 1}/${writableRows.length}`, tone: "info" });
         try {
-          const resp = await refreshAudienceStats(apiToken, selectedRows[i].poolId);
+          const resp = await refreshAudienceStats(apiToken, writableRows[i].poolId);
           if (String(resp?.status || "") === "error") {
             fail += 1;
             if (!firstReason) firstReason = String(resp?.reason || "").slice(0, 60);
@@ -392,7 +398,7 @@ export function KolLibraryListModal({
       return setNote({ text: `受众画像入队失败:${errText(err, "请重试")}`, tone: "error" });
     }
     setBusy(false);
-    setNote({ text: `受众画像已受理 ${ok} 个${fail ? ` · 失败 ${fail} 个${firstReason ? `(首个原因:${firstReason})` : ""}` : ""}——结果以后端计算为准`, tone: fail ? "error" : "ok" });
+    setNote({ text: `受众画像已受理 ${ok} 个${fail ? ` · 失败 ${fail} 个${firstReason ? `(首个原因:${firstReason})` : ""}` : ""}${sharedSkipped ? ` · 跳过共享只读 ${sharedSkipped} 个` : ""}——结果以后端计算为准`, tone: fail ? "error" : "ok" });
   };
 
   const projectOptions = projects.filter((project) => Number.isFinite(Number(project.id)));
@@ -414,7 +420,7 @@ export function KolLibraryListModal({
         </select>
         <button type="button" className={ACT_BTN} disabled={busy || !selectedRows.length} onClick={runBatchAddToProject}>批量入项目</button>
         <button type="button" className={ACT_BTN} disabled={busy || !selectedRows.length} onClick={runExportCsv}>导出 CSV</button>
-        <button type="button" className={ACT_BTN} disabled={busy || !selectedRows.length} onClick={runBatchAudience}>批量受众画像</button>
+        <button type="button" className={ACT_BTN} disabled={busy || !selectedRows.some((row) => !row.isShared)} title={selectedRows.some((row) => !row.isShared) ? "仅对本人收藏的可写 KOL 入队；共享行自动跳过" : "所选行均为共享只读"} onClick={runBatchAudience}>批量受众画像</button>
       </div>
       <ReceiptLine msg={note} />
       <SectionLabel>库内 KOL</SectionLabel>
@@ -501,7 +507,7 @@ export function KolDetailModal({
 
   // 观看者上下文(认领真值):GET /my-kol/{id}/viewer-context —— 释放按钮据 can_release;
   // 读取失败 → 释放按钮保持不可用(诚实降级,不猜)。
-  const [viewer, setViewer] = React.useState<{ claimId: string; staffName: string; expiresAt: string; canRelease: boolean } | null>(null);
+  const [viewer, setViewer] = React.useState<{ claimId: string; staffName: string; expiresAt: string; canRelease: boolean; canPaidActions: boolean; paidActionReason: string } | null>(null);
   const [viewerTick, setViewerTick] = React.useState(0);
   React.useEffect(() => {
     if (!apiToken || !item?.poolId) return;
@@ -512,7 +518,7 @@ export function KolDetailModal({
       .then((resp) => {
         if (!alive) return;
         const claim = resp?.claim;
-        setViewer(claim && claim.id != null ? { claimId: String(claim.id), staffName: String(claim.staff_name || ""), expiresAt: String(claim.expires_at || ""), canRelease: Boolean(claim.can_release) } : null);
+        setViewer({ claimId: claim?.id != null ? String(claim.id) : "", staffName: String(claim?.staff_name || ""), expiresAt: String(claim?.expires_at || ""), canRelease: Boolean(claim?.can_release), canPaidActions: Boolean(resp?.paid_actions?.can_run_paid_actions), paidActionReason: String(resp?.paid_actions?.reason || "") });
       })
       .catch(() => undefined);
     return () => { alive = false; };
@@ -549,9 +555,11 @@ export function KolDetailModal({
   const selectedCollectedUrl = collectedUrlVideos.some((choice) => choice.url === trackUrl) ? trackUrl : "";
   // 汇总口径与视频网格住 libdetail(KolVideoSection);这里只留动作排要用的未析清单。
   const { unanalyzed } = React.useMemo(() => summarizeKolVideos(loaded), [loaded]);
+  const paidActionsReadOnly = Boolean(item.isShared || (viewer && !viewer.canPaidActions));
+  const paidActionsReadOnlyHint = "共享 KOL 仅可查看；视频追踪、指标刷新、深析、评论采集和受众画像请由收藏负责人或管理层发起。";
 
   const runTrackVideo = async () => {
-    if (!apiToken || !poolId || trackBusy) return;
+    if (!apiToken || !poolId || trackBusy || paidActionsReadOnly) return;
     const contentUrl = trackUrl.trim();
     if (!contentUrl) {
       setMsg("tracking", { text: "请先填写已采集视频 URL。", tone: "error" });
@@ -591,7 +599,7 @@ export function KolDetailModal({
 
   const runMetricRefresh = async (video: VkpiKolPoolVideoRow) => {
     const evidenceId = Number(video.evidence_id ?? video.id) || 0;
-    if (!apiToken || !poolId || !evidenceId || refreshingEvidence.has(evidenceId) || queuedRefreshEvidence.has(evidenceId)) return;
+    if (!apiToken || !poolId || !evidenceId || paidActionsReadOnly || refreshingEvidence.has(evidenceId) || queuedRefreshEvidence.has(evidenceId)) return;
     const target = { ...targetRef.current };
     setRefreshingEvidence((prev) => new Set(prev).add(evidenceId));
     setMsg("metrics", null);
@@ -624,7 +632,7 @@ export function KolDetailModal({
   // 单条深析入队(「未判定」一键深析同用):端点真实返回才标「已入队」。
   const enqueueOne = async (video: VkpiKolPoolVideoRow) => {
     const eid = Number(video.evidence_id ?? video.id);
-    if (!apiToken || !eid || busyKeys.has(`deep:${eid}`)) return;
+    if (!apiToken || !eid || paidActionsReadOnly || busyKeys.has(`deep:${eid}`)) return;
     setBusy(`deep:${eid}`, true);
     try {
       const { enqueueVideoAnalysis } = await import("../../../../services/vkpi/kolPool-api");
@@ -645,7 +653,7 @@ export function KolDetailModal({
 
   // 批量深析:未析真视频前 5 条(配额保护,PoolEvidenceContent 同款限批)。
   const runDeepBatch = async () => {
-    if (!apiToken || !unanalyzed.length || busyKeys.has("deepBatch")) return;
+    if (!apiToken || !unanalyzed.length || paidActionsReadOnly || busyKeys.has("deepBatch")) return;
     setBusy("deepBatch", true);
     const batch = unanalyzed.slice(0, 5);
     let queued = 0;
@@ -675,7 +683,7 @@ export function KolDetailModal({
 
   // 评论采集:job 终态轮询回执(gone ≠ done 绝不写 ✓ —— PoolEvidenceContent.helpers 同套)。
   const runCommentsCollect = async () => {
-    if (!apiToken || busyKeys.has("comments")) return;
+    if (!apiToken || paidActionsReadOnly || busyKeys.has("comments")) return;
     setBusy("comments", true);
     try {
       const { enqueueKolPoolCommentsCollect } = await import("../../../../services/vkpi/kolPool-api");
@@ -730,7 +738,7 @@ export function KolDetailModal({
 
   // 受众画像:audience-stats/refresh(status:error 如实红;其余只报「已受理」)。
   const runAudience = async () => {
-    if (!apiToken || busyKeys.has("audience")) return;
+    if (!apiToken || paidActionsReadOnly || busyKeys.has("audience")) return;
     setBusy("audience", true);
     try {
       const { refreshAudienceStats } = await import("../../../../services/vkpi/kolPool-api");
@@ -816,7 +824,7 @@ export function KolDetailModal({
               {publicHandle ? <span className="text-[11px] text-muted">{publicHandle}</span> : null}
               <span className="rounded-[5px] bg-accent-soft px-1.5 py-0.5 text-[8.5px] font-semibold text-ink-2">{platformBadge(item.platform)}</span>
               {item.isShared ? <span className={`${MINI_BADGE} border-accent-2 text-accent-2`}>共享</span> : <span className={`${MINI_BADGE} border-line text-muted`}>收藏</span>}
-              {viewer ? (
+              {viewer?.claimId ? (
                 <span className={`${MINI_BADGE} border-good bg-good-soft text-good`} title={viewer.expiresAt ? `认领至 ${formatLocal(viewer.expiresAt)}` : "已认领"}>已认领{viewer.staffName ? ` · ${viewer.staffName}` : ""}</span>
               ) : null}
               {item.projects.length > 0 ? <span className={`${MINI_BADGE} border-accent bg-accent-soft text-accent`}>进行中 ×{item.projects.length}</span> : null}
@@ -853,6 +861,7 @@ export function KolDetailModal({
             <select
               aria-label="从已采集内容选择视频"
               value={selectedCollectedUrl}
+              disabled={paidActionsReadOnly}
               onChange={(event) => setTrackUrl(event.target.value)}
               className={`mb-2 w-full ${FIELD}`}
             >
@@ -869,6 +878,7 @@ export function KolDetailModal({
               aria-label="已有视频 URL"
               type="url"
               value={trackUrl}
+              disabled={paidActionsReadOnly}
               onChange={(event) => setTrackUrl(event.target.value)}
               placeholder="粘贴当前 KOL 已采集的视频 URL"
               className={FIELD}
@@ -877,6 +887,7 @@ export function KolDetailModal({
               aria-label="关联产品 SKU"
               type="text"
               value={trackSkuInput}
+              disabled={paidActionsReadOnly}
               onChange={(event) => setTrackSkuInput(event.target.value)}
               placeholder="产品 SKU，逗号分隔（最多 5 个）"
               className={FIELD}
@@ -884,8 +895,8 @@ export function KolDetailModal({
             <button
               type="button"
               className={ACT_BTN}
-              disabled={trackBusy || !trackUrl.trim()}
-              title={trackUrl.trim() ? "提交已采集视频追踪并排队刷新指标" : "请先从已采集内容选择或粘贴视频 URL"}
+              disabled={paidActionsReadOnly || trackBusy || !trackUrl.trim()}
+              title={paidActionsReadOnly ? paidActionsReadOnlyHint : trackUrl.trim() ? "提交已采集视频追踪并排队刷新指标" : "请先从已采集内容选择或粘贴视频 URL"}
               onClick={runTrackVideo}
             >
               {trackBusy ? "提交中…" : "追踪并排队刷新"}
@@ -894,6 +905,7 @@ export function KolDetailModal({
           <div className="mt-1.5 text-[11px] leading-4 text-muted">
             新 URL 请先通过“账号分析 · 补采”或深爬建立归属证据；是否可写由服务端权限判定，共享只读不会冒充成功。
           </div>
+          {paidActionsReadOnly ? <div role="note" className="mt-1 text-[11px] leading-4 text-warn">{paidActionsReadOnlyHint}</div> : null}
           <ReceiptLine msg={msgs.tracking || null} />
           <div
             data-vkpi-tracking-recovery="account-crawl"
@@ -946,6 +958,8 @@ export function KolDetailModal({
             refreshingEvidence={refreshingEvidence}
             queuedRefreshEvidence={queuedRefreshEvidence}
             onRefreshMetrics={runMetricRefresh}
+            paidActionsReadOnly={paidActionsReadOnly}
+            paidActionsReadOnlyHint={paidActionsReadOnlyHint}
           />
         )}
         <ReceiptLine msg={msgs.metrics || null} />
@@ -961,11 +975,11 @@ export function KolDetailModal({
             ))}
           </select>
           <button type="button" className={ACT_BTN} disabled={busyKeys.has("project")} onClick={runAddToProject}>{busyKeys.has("project") ? "入项目中…" : "入项目"}</button>
-          <button type="button" className={ACT_BTN} disabled={busyKeys.has("audience")} onClick={runAudience}>{busyKeys.has("audience") ? "受理中…" : "受众画像"}</button>
-          <button type="button" className={ACT_BTN} disabled={!unanalyzed.length || busyKeys.has("deepBatch")} title={unanalyzed.length ? `未析真视频 ${unanalyzed.length} 条,本批前 5(配额保护)` : "无可深析视频"} onClick={runDeepBatch}>
+          <button type="button" className={ACT_BTN} disabled={paidActionsReadOnly || busyKeys.has("audience")} title={paidActionsReadOnly ? paidActionsReadOnlyHint : "入队受众画像刷新"} onClick={runAudience}>{busyKeys.has("audience") ? "受理中…" : "受众画像"}</button>
+          <button type="button" className={ACT_BTN} disabled={paidActionsReadOnly || !unanalyzed.length || busyKeys.has("deepBatch")} title={paidActionsReadOnly ? paidActionsReadOnlyHint : unanalyzed.length ? `未析真视频 ${unanalyzed.length} 条,本批前 5(配额保护)` : "无可深析视频"} onClick={runDeepBatch}>
             {busyKeys.has("deepBatch") ? "入队中…" : `视频深析入队${unanalyzed.length ? ` ×${Math.min(5, unanalyzed.length)}` : ""}`}
           </button>
-          <button type="button" className={ACT_BTN} disabled={!loaded.length || busyKeys.has("comments")} title="入队评论采集(job 终态轮询回执;超出轮询窗只报仍在后台)" onClick={runCommentsCollect}>
+          <button type="button" className={ACT_BTN} disabled={paidActionsReadOnly || !loaded.length || busyKeys.has("comments")} title={paidActionsReadOnly ? paidActionsReadOnlyHint : "入队评论采集(job 终态轮询回执;超出轮询窗只报仍在后台)"} onClick={runCommentsCollect}>
             {busyKeys.has("comments") ? "采集跟踪中…" : "采集评论"}
           </button>
           <button type="button" className={ACT_BTN} disabled={item.isShared || !item.profileUrl || busyKeys.has("crawl")} title={item.isShared ? "共享 KOL 仅可查看，不能发起账号补采" : item.profileUrl ? "重跑账号分析补采最新视频(旧库右栏同款入口;只报入队,泳道可见进度)" : "该 KOL 无主页链接,无法账号分析"} onClick={runDeepCrawl}>

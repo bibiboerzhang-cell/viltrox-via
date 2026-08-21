@@ -88,6 +88,10 @@ export interface VkpiMyKolViewerContext {
     is_mine?: boolean;
     can_release?: boolean;
   } | null;
+  paid_actions?: {
+    can_run_paid_actions?: boolean;
+    reason?: string;
+  } | null;
 }
 
 export async function getMyKolViewerContext(token: string, kolPoolId: string | number) {

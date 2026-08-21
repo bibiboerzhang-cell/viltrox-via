@@ -713,6 +713,7 @@ def enqueue_kol_pool_comments_job(
     search_session_id: int | None = None,
     search_session_item_id: int | None = None,
     parent_job_id: int | None = None,
+    enforce_target_write: bool = False,
 ) -> dict:
     """Queue one evidence-versioned job with DB-serialized active duplicates.
     A successful job for the same exact evidence set is reused within the freshness window unless ``force_refresh``
@@ -723,6 +724,14 @@ def enqueue_kol_pool_comments_job(
     if normalized_queue_lane not in {"interactive", "batch"}:
         raise ValueError("queue_lane must be interactive or batch")
     conn = _get_conn()
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import assert_target_writable
+
+        assert_target_writable(
+            conn,
+            kol_pool_id=int(kol_pool_id),
+            staff=staff,
+        )
     kol = conn.execute(
         "SELECT id, handle, display_name FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)
     ).fetchone()
@@ -740,6 +749,17 @@ def enqueue_kol_pool_comments_job(
             (int(kol_pool_id),),
         ).fetchall()
         resolved_evidence_ids = normalize_evidence_ids(dict(row).get("id") for row in rows)
+    target_fence: dict[str, Any] | None = None
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import build_target_fence
+
+        target_fence = build_target_fence(
+            conn,
+            action="comments_collect",
+            kol_pool_id=int(kol_pool_id),
+            staff=staff,
+            evidence_ids=resolved_evidence_ids,
+        )
     idempotency_key, data_version = comments_job_identity(int(kol_pool_id), resolved_evidence_ids)
     lineage_payload = with_search_session_lineage(
         {},
@@ -809,6 +829,10 @@ def enqueue_kol_pool_comments_job(
         role="comments",
         parent_job_id=parent_job_id,
     )
+    if target_fence is not None:
+        from app.domains.kol.my_kol_paid_action_access import FENCE_KEY
+
+        payload[FENCE_KEY] = target_fence
     job, inserted = enqueue_active_apify_job(
         conn,
         job_type=POOL_COMMENTS_JOB_TYPE,
@@ -830,6 +854,7 @@ def enqueue_kol_audience_stats_refresh_job(
     source_comments_job_id: int | None = None,
     staff: dict | None = None,
     lineage_payload: dict[str, Any] | None = None,
+    enforce_target_write: bool = False,
 ) -> dict:
     """Queue one durable audience refresh without widening provider concurrency.
 
@@ -847,6 +872,17 @@ def enqueue_kol_audience_stats_refresh_job(
         role="audience",
         parent_job_id=source_comments_job_id,
     )
+    conn = _get_conn()
+    target_fence: dict[str, Any] | None = None
+    if enforce_target_write:
+        from app.domains.kol.my_kol_paid_action_access import build_target_fence
+
+        target_fence = build_target_fence(
+            conn,
+            action="audience_refresh",
+            kol_pool_id=normalized_kol_pool_id,
+            staff=staff,
+        )
     payload = merge_search_session_lineages({
         "queue_lane": "batch",
         "kol_pool_id": normalized_kol_pool_id,
@@ -859,7 +895,10 @@ def enqueue_kol_audience_stats_refresh_job(
         "triggered_by_user_id": (staff or {}).get("user_id"),
         "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
     }, [inherited_lineage])
-    conn = _get_conn()
+    if target_fence is not None:
+        from app.domains.kol.my_kol_paid_action_access import FENCE_KEY
+
+        payload[FENCE_KEY] = target_fence
     job, inserted = enqueue_active_apify_job(
         conn,
         job_type=POOL_AUDIENCE_REFRESH_JOB_TYPE,

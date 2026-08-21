@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-from app.domains.kol.url_deep_crawl import classify_url
+from app.domains.kol.url_deep_crawl_helpers import _video_id
 
 
 MAX_VIDEO_URL_LENGTH = 2048
@@ -80,10 +80,34 @@ def parse_supported_video_url(value: Any) -> VideoUrlIdentity:
     )
     if not platform:
         raise VideoUrlIdentityError("video_platform_unsupported")
-    classified = classify_url(raw)
-    if classified.url_type != "video" or classified.platform != platform:
+    video_id = _text(
+        _video_id(
+            platform,
+            host.removeprefix("www."),
+            parsed.path.strip("/"),
+            parsed.query,
+        )
+    )
+    if not video_id:
         raise VideoUrlIdentityError("explicit_video_url_required")
-    video_id = _text(classified.video_id)
     if not VIDEO_ID_PATTERNS[platform].fullmatch(video_id):
         raise VideoUrlIdentityError("video_id_invalid")
-    return VideoUrlIdentity(classified.normalized_url, platform, video_id)
+    if platform == "youtube":
+        normalized_url = f"https://www.youtube.com/watch?v={video_id}"
+    elif platform == "instagram":
+        parts = [part for part in parsed.path.split("/") if part]
+        route = next(
+            (part.lower() for part in parts if part.lower() in {"p", "reel", "tv"}),
+            "p",
+        )
+        normalized_url = f"https://www.instagram.com/{route}/{video_id}/"
+    else:
+        parts = [part for part in parsed.path.split("/") if part]
+        video_index = next(
+            (index for index, part in enumerate(parts) if part.lower() == "video"),
+            -1,
+        )
+        handle = parts[video_index - 1] if video_index > 0 else ""
+        prefix = f"/{handle}" if handle.startswith("@") else ""
+        normalized_url = f"https://www.tiktok.com{prefix}/video/{video_id}/"
+    return VideoUrlIdentity(normalized_url, platform, video_id)

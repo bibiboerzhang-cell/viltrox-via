@@ -597,6 +597,10 @@ def _process_kol_pool_comments_collect(conn: psycopg.Connection[Any], job: dict[
                     source_comments_job_id=int(job["id"]),
                     staff=staff,
                     lineage_payload=payload,
+                    enforce_target_write=isinstance(
+                        payload.get("my_kol_paid_action_fence"),
+                        dict,
+                    ),
                 )
         except Exception:
             # 评论已成功;受众 follow-up 入队故障只做可见降级,
@@ -695,6 +699,7 @@ def _process_kol_audience_stats_refresh(
             audience_stats.refresh_audience_stats(
                 int(kol_pool_id),
                 enqueue_if_missing=False,
+                allow_avatar_provider=False,
             )
             or {}
         )

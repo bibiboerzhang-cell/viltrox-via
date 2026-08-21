@@ -1148,6 +1148,7 @@ def _age_ensemble(
     profiles: list[dict[str, Any]],
     *,
     llm_max_batches: int = AGE_LLM_MAX_BATCHES,
+    allow_avatar_provider: bool = True,
 ) -> dict[str, Any]:
     """ABC 三路年龄融合,就地更新 profiles 的 age_bucket/age_conf(必要时 gender),写回缓存。
 
@@ -1165,7 +1166,18 @@ def _age_ensemble(
     # E 路:A/B 跑完仍无年龄的人再看头像(视觉最贵放最后,只补漏)。
     still_need = [p for p in need if not llm_pred.get(str(p.get("author_key") or ""), {}).get("age_bucket")
                   and not m3_pred.get(str(p.get("author_key") or ""), {}).get("age_bucket")]
-    avatar_pred, avatar_stats = _age_avatar_batch(still_need)
+    # The legacy avatar path calls the Gemini SDK directly and therefore lacks
+    # the shared budget ledger used by generate_json.  Keep it disabled for
+    # provider-fenced MY KOL jobs until a multimodal gateway is available.
+    if allow_avatar_provider:
+        avatar_pred, avatar_stats = _age_avatar_batch(still_need)
+    else:
+        avatar_pred, avatar_stats = {}, {
+            "status": "disabled_unbudgeted_provider_path",
+            "calls": 0,
+            "people_in": len(still_need),
+            "people_out": 0,
+        }
     counts = {"cached": 0, "llm": 0, "m3": 0, "channel": 0, "handle_year": 0, "avatar": 0, "fused": 0}
     updates: list[dict[str, Any]] = []
     for p in profiles:
@@ -1566,6 +1578,7 @@ def refresh_audience_stats(
     max_comments: int = 400,
     enqueue_if_missing: bool = True,
     llm_max_batches: int = AGE_LLM_MAX_BATCHES,
+    allow_avatar_provider: bool = True,
 ) -> dict[str, Any]:
     """入口:抽样 -> 推断(含 ABC 年龄融合)-> 聚合归一 -> comment_intel/overlap -> 一次写库。
 
@@ -1661,7 +1674,13 @@ def refresh_audience_stats(
     # v2:年龄 ABC 三路融合(失败不阻断主流程,coverage 里诚实标注)。
     age_stats: dict[str, Any] = {"llm": {"status": "skipped", "calls": 0}, "m3": "unavailable", "counts": {}}
     try:
-        age_stats = _age_ensemble(conn, platform, inferred, llm_max_batches=llm_max_batches)
+        age_stats = _age_ensemble(
+            conn,
+            platform,
+            inferred,
+            llm_max_batches=llm_max_batches,
+            allow_avatar_provider=bool(allow_avatar_provider),
+        )
     except Exception as exc:
         logger.warning("audience_stats age ensemble failed kol=%s: %s", kol_pool_id, exc)
         age_stats["error"] = str(exc)[:200]

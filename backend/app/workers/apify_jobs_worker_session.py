@@ -676,6 +676,42 @@ def _enqueue_comments_collect_after_final_v1(
                 (int(kol_pool_id),),
             )
             evidence_ids = normalize_evidence_ids((row or {}).get("id") for row in (cur.fetchall() or []))
+            cur.execute("SELECT payload FROM apify_jobs WHERE id=%s LIMIT 1", (int(job_id),))
+            source_row = cur.fetchone() or {}
+            source_payload = (
+                source_row.get("payload")
+                if isinstance(source_row.get("payload"), dict)
+                else _loads(source_row.get("payload"), {})
+            )
+            target_fence = None
+            if isinstance(source_payload, dict):
+                from app.domains.kol.my_kol_paid_action_access import FENCE_KEY
+
+                source_fence = source_payload.get(FENCE_KEY)
+                if isinstance(source_fence, dict):
+                    # A final_v1 cache hit can immediately schedule comments.
+                    # Carry a fresh evidence-set snapshot so revocation or row
+                    # drift still blocks the later comments worker.
+                    from app.db.connection import db_connection_sync_scope, get_conn
+                    from app.domains.kol.my_kol_paid_action_access import (
+                        build_target_fence,
+                        revalidate_target_fence,
+                    )
+
+                    with db_connection_sync_scope():
+                        actor = revalidate_target_fence(
+                            get_conn(),
+                            source_payload,
+                            expected_action="video_analysis",
+                        )
+                        if actor is not None:
+                            target_fence = build_target_fence(
+                                get_conn(),
+                                action="comments_collect",
+                                kol_pool_id=int(kol_pool_id),
+                                staff=actor,
+                                evidence_ids=evidence_ids,
+                            )
             idempotency_key, data_version = comments_job_identity(int(kol_pool_id), evidence_ids)
             cur.execute(
                 """
@@ -732,6 +768,8 @@ def _enqueue_comments_collect_after_final_v1(
                 "trigger": "final_v1_done",
                 "source_job_id": int(job_id),
             }
+            if target_fence is not None:
+                payload["my_kol_paid_action_fence"] = target_fence
             cur.execute(
                 """
                 INSERT INTO apify_jobs (job_type, payload, idempotency_key, status, created_at, updated_at)

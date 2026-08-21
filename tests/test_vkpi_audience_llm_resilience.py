@@ -152,57 +152,41 @@ def test_youtube_profile_timeout_preserves_partial_comment_sample(
     assert len(result["commenters"]) == 1
 
 
-@pytest.mark.parametrize(
-    ("service_result", "expected_status", "expected_reason"),
-    [
-        (
-            {"status": "network_error", "reason": "upstream timed out"},
-            502,
-            "audience_provider_unavailable",
-        ),
-        (
-            {"status": "not_configured", "reason": "missing key"},
-            503,
-            "audience_provider_not_configured",
-        ),
-    ],
-)
-def test_audience_refresh_maps_provider_failures_to_diagnostic_http(
+def test_audience_refresh_http_only_queues_durable_provider_work(
     monkeypatch: pytest.MonkeyPatch,
-    service_result: dict[str, Any],
-    expected_status: int,
-    expected_reason: str,
 ) -> None:
-    async def direct_call(func: Any, *args: Any, **kwargs: Any) -> Any:
-        return func(*args, **kwargs)
+    from app.domains.comments import collector
 
-    monkeypatch.setattr(vkpi_kol_pool_intel, "run_in_threadpool", direct_call)
-    monkeypatch.setattr(audience_stats, "refresh_audience_stats", lambda _kol_id: service_result)
+    captured: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        collector,
+        "enqueue_kol_audience_stats_refresh_job",
+        lambda kol_pool_id, **kwargs: captured.append(
+            {"kol_pool_id": kol_pool_id, **kwargs}
+        )
+        or {"status": "queued", "job_id": 77, "queue_lane": "batch"},
+    )
+    monkeypatch.setattr(
+        audience_stats,
+        "refresh_audience_stats",
+        lambda *_args, **_kwargs: pytest.fail("HTTP request must not call provider path"),
+    )
 
-    with pytest.raises(HTTPException) as raised:
-        asyncio.run(vkpi_kol_pool_intel.refresh_kol_audience_stats(7, staff={"id": 3}))
+    result = asyncio.run(
+        vkpi_kol_pool_intel.refresh_kol_audience_stats(
+            7,
+            staff={"id": 3, "permissions_json": '{"vkpi":"write"}'},
+        )
+    )
 
-    assert raised.value.status_code == expected_status
-    assert raised.value.detail["reason"] == expected_reason
-    assert raised.value.detail["retryable"] is True
-
-
-def test_audience_refresh_preserves_honest_empty_and_partial_results(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def direct_call(func: Any, *args: Any, **kwargs: Any) -> Any:
-        return func(*args, **kwargs)
-
-    partial = {
-        "status": "partial",
-        "reason": "invalid_json",
-        "sample_size": 42,
-        "partial_components": ["age_llm"],
-    }
-    monkeypatch.setattr(vkpi_kol_pool_intel, "run_in_threadpool", direct_call)
-    monkeypatch.setattr(audience_stats, "refresh_audience_stats", lambda _kol_id: partial)
-
-    result = asyncio.run(vkpi_kol_pool_intel.refresh_kol_audience_stats(7, staff={"id": 3}))
-
-    assert result == partial
+    assert result == {"status": "queued", "job_id": 77, "queue_lane": "batch"}
+    assert captured == [
+        {
+            "kol_pool_id": 7,
+            "staff": {"id": 3, "permissions_json": '{"vkpi":"write"}'},
+            "enforce_target_write": True,
+        }
+    ]
 
 
 def test_deep_analysis_read_failure_returns_stable_unavailable_shape(monkeypatch: pytest.MonkeyPatch) -> None:

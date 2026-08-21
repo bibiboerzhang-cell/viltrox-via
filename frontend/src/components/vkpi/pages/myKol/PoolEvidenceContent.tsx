@@ -50,7 +50,7 @@ function FlowMessage({ msg }: { msg: FlowReceipt | null }) {
   );
 }
 
-export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projects = [] }: { apiToken?: string; kol?: VkpiKolOption; poolId: number; viltroxOnly?: boolean; projects?: VkpiProjectRow[] }) {
+export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projects = [], readOnly = false }: { apiToken?: string; kol?: VkpiKolOption; poolId: number; viltroxOnly?: boolean; projects?: VkpiProjectRow[]; readOnly?: boolean }) {
   const cancelledRef = useRef(false);
   useEffect(() => {
     cancelledRef.current = false;
@@ -85,7 +85,7 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
   const [analyzeState, setAnalyzeState] = useState<'idle' | 'busy' | 'queued' | 'error'>('idle');
   const [analyzeMsg, setAnalyzeMsg] = useState<FlowReceipt | null>(null);
   const startAccountAnalysis = () => {
-    if (!apiToken || !kol?.profileUrl || analyzeState === 'busy') return;
+    if (!apiToken || !kol?.profileUrl || readOnly || analyzeState === 'busy') return;
     setAnalyzeState('busy');
     import('../../../../domains/kol').then(({ enqueueKolProfileDeepCrawl }) =>
       enqueueKolProfileDeepCrawl(apiToken, String(kol.profileUrl), poolId).then((resp) => {
@@ -164,7 +164,7 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
   const [deepState, setDeepState] = useState<'idle' | 'busy' | 'queued'>('idle');
   const [deepMsg, setDeepMsg] = useState<FlowReceipt | null>(null);
   const startDeepAnalysis = () => {
-    if (!apiToken || !unanalyzed.length || deepState === 'busy') return;
+    if (!apiToken || !unanalyzed.length || readOnly || deepState === 'busy') return;
     setDeepState('busy');
     const batch = unanalyzed.slice(0, DEEP_BATCH);
     import('../../../../services/vkpi/kolPool-api').then(async ({ enqueueVideoAnalysis }) => {
@@ -213,7 +213,7 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
     );
   }, [apiToken, poolId]);
   const startCommentsCollect = () => {
-    if (!apiToken || commentsState === 'busy') return;
+    if (!apiToken || readOnly || commentsState === 'busy') return;
     setCommentsState('busy');
     import('../../../../services/vkpi/kolPool-api').then(({ enqueueKolPoolCommentsCollect }) =>
       enqueueKolPoolCommentsCollect(apiToken, poolId).then((resp) => {
@@ -247,7 +247,7 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
         <div style={{ fontSize: 10, color: '#8b94a3' }}>Pool 收藏 · 已采集 {videos.length} 条 · 合计播放 {totalViews.toLocaleString()}</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {kol?.profileUrl && /^https?:\/\/[^ ]*(youtube\.com|instagram\.com|tiktok\.com)/i.test(String(kol.profileUrl)) ? (
-            <button type="button" onClick={startAccountAnalysis} disabled={analyzeState === 'busy' || analyzeState === 'queued'}
+            <button type="button" onClick={startAccountAnalysis} disabled={readOnly || analyzeState === 'busy' || analyzeState === 'queued'} title={readOnly ? '共享 KOL 仅可查看，账号分析请由收藏负责人或管理层发起' : undefined}
               style={{ fontSize: 10, color: analyzeState === 'queued' ? '#86efac' : '#c4b5fd', background: 'rgba(168,85,247,0.12)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
               {analyzeState === 'busy' ? '发起中…' : analyzeState === 'queued' ? '分析中…' : '账号分析 · 采集视频'}
             </button>
@@ -255,7 +255,7 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
             <span style={{ fontSize: 10, color: '#5b6472' }} title={String(kol.profileUrl)}>主页 URL 非 YT/IG/TT,无法账号分析</span>
           ) : null}
           {unanalyzed.length ? (
-            <button type="button" onClick={startDeepAnalysis} disabled={deepState !== 'idle'}
+            <button type="button" onClick={startDeepAnalysis} disabled={readOnly || deepState !== 'idle'} title={readOnly ? '共享 KOL 仅可查看，视频深析请由收藏负责人或管理层发起' : undefined}
               style={{ fontSize: 10, color: deepState === 'queued' ? '#86efac' : '#fbcfe8', background: 'rgba(236,72,153,0.10)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
               {deepState === 'busy' ? '入队中…' : deepState === 'queued' ? `深析中 ${analyzedCount}/${videos.length}` : `视频深析 · 前 ${Math.min(DEEP_BATCH, unanalyzed.length)}/${unanalyzed.length} 条`}
             </button>
@@ -263,7 +263,7 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
             <span style={{ fontSize: 10, color: '#86efac' }}>✓ 可析视频已全深析</span>
           ) : null}
           {videos.length ? (
-            <button type="button" onClick={startCommentsCollect} disabled={commentsState !== 'idle'}
+            <button type="button" onClick={startCommentsCollect} disabled={readOnly || commentsState !== 'idle'} title={readOnly ? '共享 KOL 仅可查看，评论采集请由收藏负责人或管理层发起' : undefined}
               style={{ fontSize: 10, color: commentsState === 'queued' ? '#86efac' : '#93c5fd', background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
               {commentsState === 'busy' ? '入队中…' : commentsState === 'queued' ? '采集中…' : '采集评论'}
             </button>
@@ -271,8 +271,9 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
           {kol?.profileUrl ? <a href={kol.profileUrl} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: '#67e8f9' }}>打开主页</a> : null}
         </div>
       </div>
+      {readOnly ? <div role="note" style={{ marginBottom: 8, fontSize: 10.5, color: 'var(--ds-warn)' }}>共享 KOL 为只读：账号分析、视频深析、评论采集和受众画像须由收藏负责人或管理层发起。</div> : null}
       {/* 生成追踪链(GOAFFPRO)——与图2 同款操作排同区,复用 KOL 详情共享区块。poolId 即真 kol_pool_id。 */}
-      <GoaffproLinkSection apiToken={apiToken} kolPoolId={poolId} />
+      <GoaffproLinkSection apiToken={apiToken} kolPoolId={poolId} readOnly={readOnly} />
       {/* 三个流各持独立消息槽:失败回执不被后续操作覆盖,tone 随消息本体走。 */}
       <FlowMessage msg={analyzeMsg} />
       <FlowMessage msg={deepMsg} />

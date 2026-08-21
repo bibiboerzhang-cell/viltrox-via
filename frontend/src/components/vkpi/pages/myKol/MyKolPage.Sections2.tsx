@@ -369,9 +369,13 @@ export function EmployeeKolLibrary({
   // (YouTube 可能同步算完,IG/TT 评论不足时后端自动入队抓评论,非 error 均按「已入队」计)。
   const runBatchAudience = async () => {
     if (!apiToken || batchBusy) return;
-    const poolTargets = batchSelectedItems.filter((item) => item.poolId);
-    const skipped = batchSelectedItems.length - poolTargets.length;
-    if (!poolTargets.length) { setBatchNote('选中行均未落 Pool(受众画像按 kol_pool_id 寻址),无可入队'); return; }
+    const poolTargets = batchSelectedItems.filter((item) => item.poolId && !item.isShared);
+    const skippedShared = batchSelectedItems.filter((item) => item.poolId && item.isShared).length;
+    const skipped = batchSelectedItems.length - poolTargets.length - skippedShared;
+    if (!poolTargets.length) {
+      setBatchNote(skippedShared ? '所选 Pool KOL 均为共享只读，受众画像请由收藏负责人或管理层发起' : '选中行均未落 Pool(受众画像按 kol_pool_id 寻址),无可入队');
+      return;
+    }
     if (poolTargets.length > 10 && !window.confirm(`选中 ${poolTargets.length} 个 KOL,受众画像逐个刷新可能耗时较久,确认继续?`)) return;
     setBatchBusy(true);
     let ok = 0; let fail = 0; let firstReason = '';
@@ -398,7 +402,7 @@ export function EmployeeKolLibrary({
       return;
     }
     setBatchBusy(false);
-    setBatchNote(`已入队 ${ok} 个${fail ? ` · 失败 ${fail} 个${firstReason ? `(首个原因:${firstReason})` : ''}` : ''}${skipped ? ` · 跳过 ${skipped} 个未落 Pool 的行` : ''}`);
+    setBatchNote(`已入队 ${ok} 个${fail ? ` · 失败 ${fail} 个${firstReason ? `(首个原因:${firstReason})` : ''}` : ''}${skippedShared ? ` · 跳过共享只读 ${skippedShared} 个` : ''}${skipped ? ` · 跳过 ${skipped} 个未落 Pool 的行` : ''}`);
   };
 
   // 波5 R2(2026-06-12 体检):泳道回跳的 pool 定位曾被本重置效应吃掉(收藏未并入列表时
@@ -581,7 +585,7 @@ export function EmployeeKolLibrary({
           <button type="button" style={batchBtnStyle} disabled={batchBusy || !batchSelectedItems.length} onClick={() => void runBatchExportCsv()}>
             导出 CSV
           </button>
-          <button type="button" style={batchBtnStyle} disabled={batchBusy || !batchSelectedItems.length} onClick={() => void runBatchAudience()}>
+          <button type="button" style={batchBtnStyle} disabled={batchBusy || !batchSelectedItems.some((item) => item.poolId && !item.isShared)} title={batchSelectedItems.some((item) => item.poolId && !item.isShared) ? '仅处理本人收藏的可写 KOL；共享行自动跳过' : '所选行均无可写 Pool KOL'} onClick={() => void runBatchAudience()}>
             批量生成受众画像
           </button>
           {batchNote ? <em style={{ fontStyle: 'normal', color: 'var(--ds-accent)' }}>{batchNote}</em> : null}
@@ -712,6 +716,7 @@ export function EmployeeKolLibrary({
               poolId={Number((selectedItem as { poolId?: number | null }).poolId)}
               viltroxOnly={viltroxOnly}
               projects={selectedItem.projects}
+              readOnly={Boolean(selectedItem.isShared)}
             />
           ) : (
             <EmployeeKolContentLayer

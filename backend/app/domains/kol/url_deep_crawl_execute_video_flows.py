@@ -156,6 +156,12 @@ def _execute_existing_creator_video_flow(
                     search_session_item_id=body.get("search_session_item_id"),
                     parent_job_id=body.get("parent_job_id"),
                     local_evaluation=body.get("local_evaluation") is True,
+                    staff=(
+                        body.get("paid_action_staff")
+                        if isinstance(body.get("paid_action_staff"), dict)
+                        else None
+                    ),
+                    enforce_target_write=body.get("enforce_target_write") is True,
                 )
                 changed_ids.extend(_fit_changed_ids(enqueue_result))
                 status = str(enqueue_result.get("status") or "enqueue_unknown")
@@ -392,6 +398,12 @@ def _execute_new_creator_video_flow(
                             search_session_item_id=body.get("search_session_item_id"),
                             parent_job_id=body.get("parent_job_id"),
                             local_evaluation=body.get("local_evaluation") is True,
+                            staff=(
+                                body.get("paid_action_staff")
+                                if isinstance(body.get("paid_action_staff"), dict)
+                                else None
+                            ),
+                            enforce_target_write=body.get("enforce_target_write") is True,
                         )
                         changed_ids.extend(_fit_changed_ids(enqueue_result))
                         status = str(enqueue_result.get("status") or "enqueue_unknown")

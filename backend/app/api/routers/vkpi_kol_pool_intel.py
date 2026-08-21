@@ -262,36 +262,40 @@ async def refresh_kol_audience_stats(
     kol_pool_id: int,
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
-    """受众画像 ensemble_v1(P0):评论者抽样 -> 三层推断 -> 聚合收缩 -> 写 audience_estimated_json。
+    """Queue audience refresh behind the durable provider execution fence.
 
-    YouTube 走免费 Data API;IG/TT 复用已抓评论(不足则入队抓评论,返回 pending_comments)。
-    网络/配置异常诚实返回 {status, reason},不 500。红线:零触 viltrox_fit_score、不碰 rule_v0。
+    The previous synchronous path could spend YouTube/Gemini quota in the HTTP
+    request and accepted any pool id.  This boundary now requires manager/own
+    favorite write access; shared members remain read-only.  The worker repeats
+    actor/target checks before external work.
     """
-    del staff
-    from app.domains.kol import audience_stats
+    from app.domains.comments import collector as comments_collector
+    from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
 
-    try:
-        # 网络抽样最长可到几十秒,走 threadpool 不阻塞事件循环。
-        result = await run_in_threadpool(audience_stats.refresh_audience_stats, int(kol_pool_id))
-        return _audience_refresh_contract(result, int(kol_pool_id))
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except HTTPException:
-        raise
-    except TimeoutError as exc:
+    if release_validation_active():
         raise _write_service_error(
             status_code=503,
             status="unavailable",
-            reason="audience_refresh_timeout",
+            reason="release_validation_fenced",
             operation="audience_refresh",
             kol_pool_id=kol_pool_id,
-        ) from exc
-    except Exception as exc:  # noqa: BLE001 — 估算功能失败不该炸接口,诚实回原因
-        logger.warning("vkpi.audience_refresh_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
+        )
+    try:
+        return comments_collector.enqueue_kol_audience_stats_refresh_job(
+            int(kol_pool_id),
+            staff=staff if isinstance(staff, dict) else None,
+            enforce_target_write=True,
+        )
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - queue failures are retryable, never fake success
+        logger.warning("vkpi.audience_refresh_enqueue_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
         raise _write_service_error(
             status_code=503,
             status="unavailable",
-            reason="audience_refresh_failed",
+            reason="audience_refresh_enqueue_failed",
             operation="audience_refresh",
             kol_pool_id=kol_pool_id,
         ) from exc
@@ -777,11 +781,17 @@ def build_full_profile_endpoint(
 ):
     """一键补全档案:强制 full 档点火(深爬 3 帖 + 评论采集;深析/受众/契合链自动跟进)。
     幂等(下游入队各自去重),约 3-5 分钟数据陆续点亮,抽屉既有轮询自动接住。零触 fit。"""
-    del staff
     from app.domains.discovery.buildout import build_full_profile
+    from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
+    from app.domains.kol.video_tracking import VideoTrackingError
 
     try:
-        result = build_full_profile(int(kol_pool_id))
+        result = build_full_profile(
+            int(kol_pool_id),
+            staff=staff if isinstance(staff, dict) else None,
+        )
+    except (MyKolPaidActionError, VideoTrackingError) as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:  # noqa: BLE001

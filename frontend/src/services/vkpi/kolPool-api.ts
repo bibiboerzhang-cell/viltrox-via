@@ -399,12 +399,24 @@ export async function translateBio(token: string, text: string) {
   );
 }
 
-// 新发现 KOL 档案瘦 → 抽屉打开自动补:入队 kol_profile_deep_crawl(后端幂等:
-// 已有 evidence/活跃 job 时跳过,不重复烧 Apify)。worker 级联补档案/评论/受众。
-export async function enqueueKolProfileCrawl(token: string, kolPoolId: number | string) {
+// 用户显式点击后入队 profile 深爬；服务端把提交 URL 与该 KOL 已存规范身份比对，
+// 并把目标可写 fence 带到 worker 再校验，禁止 IDOR/身份漂移后的 provider 调用。
+export async function enqueueKolProfileCrawl(
+  token: string,
+  kolPoolId: number | string,
+  profileUrl: string,
+) {
   return apiFetch<{ status?: string; job_id?: number }>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/enqueue-profile-crawl`,
-    { method: "POST", timeoutMs: 8000 },
+    "/api/admin/vkpi/kol-pool/profile-deep-crawl/enqueue",
+    {
+      method: "POST",
+      body: jsonBody({
+        url: profileUrl,
+        kol_pool_id: Number(kolPoolId),
+        max_posts: 12,
+      }),
+      timeoutMs: 8000,
+    },
     token,
   );
 }
@@ -414,6 +426,8 @@ export async function enqueueKolProfileCrawl(token: string, kolPoolId: number | 
 export async function refreshAudienceStats(token: string, kolPoolId: number | string) {
   return apiFetch<{
     status?: string;
+    job_id?: number;
+    queue_lane?: string;
     reason?: string;
     platform?: string;
     sample_size?: number;
