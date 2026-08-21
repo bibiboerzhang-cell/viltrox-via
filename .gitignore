@@ -97,3 +97,11 @@ BUILD_TIME
 
 # 本地运行资产(大二进制,不进 git)
 frontend/public/assets/
+
+# 非 V-KPI 杂项禁入仓库(2026-08-21):短剧/charlotte 报告/Codex skill 缓存
+charlotte_*
+.charlotte_*
+build_charlotte_report*.py
+render_text_pages.py
+_skill_docs/
+docs/AI短剧*
