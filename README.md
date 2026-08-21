@@ -14,7 +14,20 @@ Parallel rebuild of the Viltrox platform.
 - `backend/app`: copied service and router baseline, now safe to evolve separately.
 - `frontend/src`: new route-first app shell with `/`, `/admin`, `/account`, `/redeem`.
 - `migrations/*.sql`: Postgres baseline + 2.0 runtime migrations, including the new job ledger.
-- `scripts/package_share.sh`: builds a lightweight share archive.
+- `scripts/package_share.sh`: builds a Git-tracked, source-only handoff archive
+  and writes adjacent SHA256 and file-list sidecars. It refuses to overwrite an
+  existing package and excludes environment files, credentials, databases,
+  backups, dependency trees, caches, runtime data, and generated reports.
+
+Package preview and build:
+
+```bash
+# Path-only validation; no archive or sidecar is written.
+bash scripts/package_share.sh --dry-run --list
+
+# Build only when viltrox-2.0-share.tar.gz and both sidecars do not yet exist.
+bash scripts/package_share.sh
+```
 - `scripts/make_debug_zip.sh`: builds a safer debug archive with env files, databases, secrets, caches, and build artifacts excluded by default.
 - `scripts/start_public.sh`, `scripts/start_admin.sh`, `scripts/start_worker.sh`: production-style launch helpers for `public-web`, `admin-web`, and `worker`.
 
