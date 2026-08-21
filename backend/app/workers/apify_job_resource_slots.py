@@ -30,6 +30,7 @@ RESOURCE_ENV_NAMES: Mapping[str, str] = {
 _JOB_RESOURCE_GROUPS: Mapping[str, str] = {
     "kol_profile_deep_crawl": "profile_media",
     "video_url_resolve": "profile_media",
+    "kol_video_metric_refresh": "profile_media",
     "kol_pool_comments_collect": "comments_pipeline",
     "official_channel_comments_collect": "comments_pipeline",
     # Audience refresh can issue Gemini age-inference calls.  Sharing the

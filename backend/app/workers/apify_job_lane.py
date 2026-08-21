@@ -30,7 +30,9 @@ LEGACY_BATCH_SOURCES = (
 # runtime class.  Unknown/new work stays in the middle band until measured.
 VERY_SHORT_JOB_TYPES = frozenset({"account_dossier_extract", "logistics_track_sync"})
 SHORT_JOB_TYPES = frozenset({"kol_content_fit_analysis"})
-MEDIUM_JOB_TYPES = frozenset({"video", "kol_profile_deep_crawl"})
+MEDIUM_JOB_TYPES = frozenset(
+    {"video", "kol_profile_deep_crawl", "kol_video_metric_refresh"}
+)
 LONG_JOB_TYPES = frozenset({"kol_audience_stats_refresh"})
 VERY_LONG_JOB_TYPES = frozenset({"smart_search_profile_advance", "kol_pool_comments_collect"})
 QUEUE_SPT_AGING_MINUTES = 15

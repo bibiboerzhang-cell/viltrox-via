@@ -615,6 +615,44 @@ _AUDIENCE_REFRESH_DONE_STATUSES = frozenset(
 )
 
 
+def _process_kol_video_metric_refresh(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+) -> None:
+    """Refresh one existing evidence row under the worker's provider fence."""
+
+    from app.domains.kol import video_metric_refresh
+
+    with db_connection_sync_scope():
+        result = video_metric_refresh.run_video_metric_refresh_for_job(payload)
+    ok = str(result.get("status") or "") == "success"
+    # Keep provider responses out of the durable queue payload.  The domain
+    # returns only bounded observation identifiers and status fields.
+    payload["video_metric_refresh_result"] = result
+    last_error = "" if ok else str(
+        result.get("error_code") or "video_metric_refresh_failed"
+    )
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status=%s,
+                    last_error=NULLIF(%s, ''),
+                    payload=%s::jsonb,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (
+                    "done" if ok else "failed",
+                    last_error[:300],
+                    _json(payload),
+                    int(job["id"]),
+                ),
+            )
+
+
 def _process_kol_audience_stats_refresh(
     conn: psycopg.Connection[Any],
     job: dict[str, Any],

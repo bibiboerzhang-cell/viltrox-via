@@ -39,6 +39,7 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
     _process_kol_content_fit_analysis = namespace['_process_kol_content_fit_analysis']
     _process_kol_outreach_draft = namespace['_process_kol_outreach_draft']
     _process_kol_pool_comments_collect = namespace['_process_kol_pool_comments_collect']
+    _process_kol_video_metric_refresh = namespace['_process_kol_video_metric_refresh']
     _process_kol_profile_deep_crawl = namespace['_process_kol_profile_deep_crawl']
     _process_logistics_track_sync = namespace['_process_logistics_track_sync']
     _process_official_channel_comments_collect = namespace['_process_official_channel_comments_collect']
@@ -83,6 +84,9 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
         return
     if str(job.get("job_type") or "").strip().lower() == "kol_pool_comments_collect":
         _process_kol_pool_comments_collect(conn, job, payload)
+        return
+    if str(job.get("job_type") or "").strip().lower() == "kol_video_metric_refresh":
+        _process_kol_video_metric_refresh(conn, job, payload)
         return
     if str(job.get("job_type") or "").strip().lower() == "kol_audience_stats_refresh":
         _process_kol_audience_stats_refresh(conn, job, payload)

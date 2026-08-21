@@ -47,6 +47,7 @@ ACTIVE_JOB_TYPES = {
     # 2026-07-11 接入 worker handler(此前无 handler → 带缺省 derive_method='mock'
     # 滑进 mock 假成功路径写 mock cache + done);入队器早已存在于 channel.py。
     "official_channel_comments_collect",
+    "kol_video_metric_refresh",
 }
 
 
@@ -81,6 +82,13 @@ PAYLOAD_CONTRACT: dict[str, set[str]] = {
     "kol_pool_comments_collect": {"kol_pool_id", "target_type", "target_id"},
     # _enqueue_official_channel_comments_job:handler 内核 raise 若缺 channel_id。
     "official_channel_comments_collect": {"channel_id", "target_type", "target_id"},
+    "kol_video_metric_refresh": {
+        "evidence_id",
+        "kol_pool_id",
+        "target_type",
+        "target_id",
+        "queue_lane",
+    },
 }
 
 
@@ -99,6 +107,10 @@ ENQUEUER_REF: dict[str, tuple[str, str]] = {
     "kol_outreach_draft": ("app.domains.kol.outreach_draft", "enqueue_outreach_draft_job"),
     "kol_pool_comments_collect": ("app.domains.comments.collector", "enqueue_kol_pool_comments_job"),
     "official_channel_comments_collect": ("app.domains.comments.channel", "_enqueue_official_channel_comments_job"),
+    "kol_video_metric_refresh": (
+        "app.domains.kol.video_metric_refresh",
+        "enqueue_video_metric_refresh",
+    ),
 }
 
 
@@ -118,6 +130,7 @@ WORKER_ROUTED_JOB_TYPES = {
     "logistics_track_sync",
     "kol_auto_poll",  # 2026-06-28 补 worker handler 后移入(治 50 条 ValueError 失败)
     "official_channel_comments_collect",  # 2026-07-11 补 worker handler 后移入(治 mock 假成功)
+    "kol_video_metric_refresh",
 }
 
 

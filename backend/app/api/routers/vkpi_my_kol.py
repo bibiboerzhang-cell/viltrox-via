@@ -18,12 +18,19 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from app.api.dependencies.perms import require_tab
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains import business_truth
 from app.domains.access import scope
-from app.domains.kol import my_kol_aggregate, my_kol_board_ext, risk_index
+from app.domains.kol import (
+    my_kol_aggregate,
+    my_kol_board_ext,
+    risk_index,
+    video_tracking,
+)
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-my-kol"])
+logger = get_logger(__name__)
 
 
 def _int(value: Any, default: int = 0) -> int:
@@ -31,6 +38,77 @@ def _int(value: Any, default: int = 0) -> int:
         return int(value or default)
     except (TypeError, ValueError):
         return default
+
+
+def _rollback_quietly(conn: Any) -> None:
+    try:
+        conn.rollback()
+    except Exception as exc:
+        logger.warning("MY KOL video tracking rollback failed: %s", type(exc).__name__)
+
+
+def _raise_video_tracking_error(conn: Any, exc: video_tracking.VideoTrackingError) -> None:
+    _rollback_quietly(conn)
+    raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+
+
+@router.post("/my-kol/{kol_pool_id}/videos", status_code=202)
+def my_kol_track_video_endpoint(
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Link SKUs and queue metrics for an existing MY KOL video evidence row.
+
+    The HTTP request is queue-only: it never resolves media or calls a
+    provider.  Unseen URLs return an explicit next-slice error until a targeted
+    resolver can prove that the remote author is this path's ``kol_pool_id``.
+    """
+
+    conn = get_conn()
+    try:
+        result = video_tracking.queue_tracked_video(
+            conn,
+            kol_pool_id=int(kol_pool_id),
+            content_url=body.get("content_url") or body.get("url"),
+            product_skus=body.get("product_skus"),
+            staff=staff,
+        )
+        conn.commit()
+    except video_tracking.VideoTrackingError as exc:
+        _raise_video_tracking_error(conn, exc)
+    except Exception:
+        _rollback_quietly(conn)
+        raise
+    return result
+
+
+@router.post(
+    "/my-kol/{kol_pool_id}/videos/{evidence_id}/refresh",
+    status_code=202,
+)
+def my_kol_refresh_video_endpoint(
+    kol_pool_id: int,
+    evidence_id: int,
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Queue one existing evidence metric refresh; provider work stays in worker."""
+
+    conn = get_conn()
+    try:
+        result = video_tracking.queue_evidence_refresh(
+            conn,
+            kol_pool_id=int(kol_pool_id),
+            evidence_id=int(evidence_id),
+            staff=staff,
+        )
+        conn.commit()
+    except video_tracking.VideoTrackingError as exc:
+        _raise_video_tracking_error(conn, exc)
+    except Exception:
+        _rollback_quietly(conn)
+        raise
+    return result
 
 
 @router.get("/my-kol/aggregate")

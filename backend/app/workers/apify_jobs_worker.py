@@ -90,7 +90,6 @@ from .apify_jobs_worker_helpers import (
     _url_host,
 )
 
-
 logger = get_logger(__name__)
 POLL_SECONDS = float(os.environ.get("APIFY_WORKER_POLL_SECONDS", "2"))
 MEDIA_RESOLVE_TIMEOUT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_MEDIA_RESOLVE_TIMEOUT_SEC", "90")))
@@ -489,6 +488,7 @@ from app.workers.apify_jobs_worker_handlers import (  # noqa: E402
     _process_kol_content_fit_analysis,
     _process_kol_outreach_draft,
     _process_kol_pool_comments_collect,
+    _process_kol_video_metric_refresh,
     _process_kol_profile_deep_crawl,
     _process_logistics_track_sync,
     _process_official_channel_comments_collect,
@@ -499,7 +499,6 @@ from app.workers.apify_jobs_worker_handlers import (  # noqa: E402
     _resolve_job_staff,
 )
 from app.workers.apify_jobs_worker_video_url import _process_video_url_resolve  # noqa: E402
-
 # 2026-07-11 未知 job_type 防线:_process_job 显式分支簇之外,只有 'video' 一种 job_type
 # 合法落 _target 兜底分支(video_analysis_enqueue.py 唯一以裸 target/derive_method 入队)。
 # 此前任何不认识的 job_type(如 official_channel_comments_collect 落地前)会带着
@@ -565,7 +564,6 @@ from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
 from app.workers.apify_jobs_worker_execution import execute_claimed_job_impl  # noqa: E402
 
 
-
 def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
     # The release fence is checked at the last boundary before SELECT ... FOR
     # UPDATE so a validation-started worker can prove liveness without taking
@@ -629,6 +627,8 @@ def _process_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> None:
     if job_type == "video_url_resolve":
         _process_video_url_resolve(conn, job, payload)
         return
+    if job_type == "kol_video_metric_refresh":
+        return _process_kol_video_metric_refresh(conn, job, payload)
     if job_type == "kol_profile_deep_crawl":
         _process_kol_profile_deep_crawl(conn, job, payload)
         return

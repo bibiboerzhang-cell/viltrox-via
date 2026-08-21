@@ -375,6 +375,12 @@ def _video_evidence_for_kol(
         conn,
         (int(dict(row).get("evidence_id") or dict(row).get("id") or 0) for row in rows),
     )
+    from app.domains.kol.video_tracking import product_links_for_evidence
+
+    product_links_by_evidence = product_links_for_evidence(
+        conn,
+        [int(dict(row).get("evidence_id") or dict(row).get("id") or 0) for row in rows],
+    )
     # cache_image 只落本地文件缓存、不写 vkpi_media_cache_assets 行(asset 行历史上仅 prewarm
     # 脚本批量写入)——上面的 image LATERAL join 对深爬暖出的缩略图永远扑空;视频按
     # (platform, evidence_id) 键存 sidecar,join 的 source_url 匹配也兜不全。读端直查文件缓存补齐。
@@ -390,6 +396,12 @@ def _video_evidence_for_kol(
                 content_metric_snapshots.unavailable_tracking(),
             )
         )
+        item["product_links"] = product_links_by_evidence.get(evidence_id, [])
+        item["product_skus"] = [
+            str(link.get("product_sku") or "")
+            for link in item["product_links"]
+            if str(link.get("product_sku") or "")
+        ]
         platform = _platform(item.get("platform") or "")
         # 【K4】媒体种类点亮:evidence_type(迁移 087)+ image_urls(迁移 200,TEXT 存 JSON 数组串)
         # 回传前端;这里解析出 media_kind(video / image / carousel≥2 张)供徽章直读。
