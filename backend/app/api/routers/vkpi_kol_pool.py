@@ -658,6 +658,8 @@ def enqueue_pool_item_video_analysis(
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
     """Queue one final_v1 video analysis job; independent from V6 Fit."""
+    if body.get("local_evaluation") is True:
+        raise HTTPException(status_code=403, detail="local_evaluation_http_forbidden")
     evidence_id = body.get("evidence_id")
     try:
         evidence_id_int = int(evidence_id)
@@ -668,10 +670,7 @@ def enqueue_pool_item_video_analysis(
             kol_pool_id=int(kol_pool_id),
             evidence_id=evidence_id_int,
             staff=staff,
-            # Deliberately strict: only a JSON boolean true requests the
-            # separately-labelled local evaluation lane.  Ordinary retries,
-            # old clients and truthy strings remain production jobs.
-            local_evaluation=body.get("local_evaluation") is True,
+            local_evaluation=False,
             enforce_target_write=True,
         )
     except Exception as exc:

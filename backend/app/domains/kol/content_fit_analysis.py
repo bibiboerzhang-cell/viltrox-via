@@ -26,7 +26,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from app.core.logging import get_logger
 from app.core.model_registry import current_task_model_binding, split_binding
@@ -35,7 +35,6 @@ from app.platform import llm_production
 from app.platform.llm_runtime_errors import normalise_job_error
 
 logger = get_logger("viltrox.domains.kol.content_fit_analysis")
-
 # 独立命名空间(红线:不与 viltrox_fit / outreach_draft / video 分析重叠)
 TARGET_TYPE = "kol"
 DERIVE_METHOD = "content_fit_v1"
@@ -55,7 +54,6 @@ MAX_MODEL_ATTEMPTS = 3
 CONTENT_FIT_JOB_TYPE = "kol_content_fit_analysis"
 ACTIVE_JOB_STATES = frozenset({"queued", "running", "retrying", "processing"})
 FAILED_JOB_STATES = frozenset({"failed", "triage", "cancelled", "canceled", "void", "timeout"})
-
 
 def normalize_product_sku(product_sku: str | None) -> str:
     """Canonical product identity used by cache and active-job idempotency.
@@ -767,8 +765,6 @@ def _parse_llm_json(text: str) -> dict[str, Any] | None:
 
 
 # ── 公共入口 ───────────────────────────────────────────────────────
-
-
 def get_content_fit(
     kol_pool_id: int,
     product_sku: str | None = None,
@@ -826,6 +822,7 @@ def analyze_content_fit(
     product_persona: str | None = None,
     force: bool = False,
     staff: dict[str, Any] | None = None,
+    authorization_checkpoint: Callable[[bool], None] | None = None,
 ) -> dict[str, Any]:
     """内容契合深析主入口。
 
@@ -872,6 +869,8 @@ def analyze_content_fit(
     resp: dict[str, Any] = {}
     parsed: dict[str, Any] | None = None
     for attempt_index in range(1, MAX_MODEL_ATTEMPTS + 1):
+        if authorization_checkpoint:
+            authorization_checkpoint(attempt_index > 1)
         try:
             resp = llm_production.generate_json(
                 prompt,
@@ -964,6 +963,8 @@ def analyze_content_fit(
         },
     }
 
+    if authorization_checkpoint:
+        authorization_checkpoint(True)
     _write_cache(
         conn,
         kid,

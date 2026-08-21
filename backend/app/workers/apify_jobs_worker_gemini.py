@@ -17,7 +17,6 @@ from typing import Any
 import psycopg
 
 from app.core.logging import get_logger
-from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.db.connection import db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.services.media.video_download import download_direct_video_url
@@ -45,6 +44,10 @@ from app.workers.apify_jobs_video_context import (
     _low_scores,
     _video_final_context,
     _video_performance_context,
+)
+from app.workers.apify_jobs_worker_gemini_cost import (  # noqa: F401
+    _record_anthropic_cost,
+    _record_openai_cost,
 )
 from app.workers.apify_jobs_worker_session import (
     _enqueue_account_dossier_extract_after_final_v1,
@@ -378,80 +381,6 @@ def _record_gemini_cost(
         )
 
 
-def _record_openai_cost(
-    *,
-    job: dict[str, Any],
-    payload: dict[str, Any],
-    raw: dict[str, Any],
-    cost: float,
-    cost_basis: str,
-    tokens_in: int,
-    tokens_out: int,
-    latency_ms: int,
-    preflight_cost: float,
-) -> dict[str, Any]:
-    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
-    with db_connection_sync_scope():
-        return budget_guard.record_cost(
-            scope=LLM_BUDGET_SCOPE,
-            cron_task="vkpi_analysis_worker",
-            ai_provider="openai",
-            model_name=str(raw.get("model") or raw.get("method") or "gpt-5.5"),
-            cost_usd=cost,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            metadata={
-                "status": "success" if raw.get("analyzed") else "provider_error",
-                "job_id": job.get("id"),
-                "target_type": payload.get("target_type"),
-                "target_id": str(payload.get("target_id") or ""),
-                "cost_basis": cost_basis,
-                "preflight_estimated_cost_usd": preflight_cost,
-                "latency_ms": latency_ms,
-                "triggered_by_user_id": triggered_by,
-                "error": _redact_sensitive_text(raw.get("error") or ""),
-            },
-            extra_scopes=["monthly_total", "single_call", "provider:openai"],
-        )
-
-
-def _record_anthropic_cost(
-    *,
-    job: dict[str, Any],
-    payload: dict[str, Any],
-    raw: dict[str, Any],
-    cost: float,
-    cost_basis: str,
-    tokens_in: int,
-    tokens_out: int,
-    latency_ms: int,
-    preflight_cost: float,
-) -> dict[str, Any]:
-    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
-    with db_connection_sync_scope():
-        return budget_guard.record_cost(
-            scope=LLM_BUDGET_SCOPE,
-            cron_task="vkpi_analysis_worker",
-            ai_provider="anthropic",
-            model_name=str(raw.get("model") or raw.get("method") or CLAUDE_OPUS_EXACT_MODEL),
-            cost_usd=cost,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            metadata={
-                "status": "success" if raw.get("analyzed") else "provider_error",
-                "job_id": job.get("id"),
-                "target_type": payload.get("target_type"),
-                "target_id": str(payload.get("target_id") or ""),
-                "cost_basis": cost_basis,
-                "preflight_estimated_cost_usd": preflight_cost,
-                "latency_ms": latency_ms,
-                "triggered_by_user_id": triggered_by,
-                "error": _redact_sensitive_text(raw.get("error") or ""),
-            },
-            extra_scopes=["monthly_total", "single_call", "provider:anthropic"],
-        )
-
-
 def _write_gemini_cache(
     conn: psycopg.Connection[Any],
     *,
@@ -608,6 +537,35 @@ from app.workers.apify_jobs_worker_gemini_judges import (  # noqa: E402
 )
 
 
+def _final_v1_scope_checkpoint(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    derive_method: str,
+    *,
+    provider_calls_performed: bool | None,
+    raw: dict[str, Any] | None = None,
+) -> bool:
+    """Revalidate the signed child between paid/external execution phases.
+
+    Thin binding over ``apify_jobs_worker_paid_scope.final_v1_scope_checkpoint``
+    so the worker's ``_block_job`` and connection scope stay the injectable
+    seams used by the provider-chain tests.
+    """
+    from app.workers.apify_jobs_worker_paid_scope import final_v1_scope_checkpoint
+
+    return final_v1_scope_checkpoint(
+        conn,
+        job,
+        payload,
+        derive_method,
+        provider_calls_performed=provider_calls_performed,
+        block_job=_block_job,
+        connection_scope=db_connection_sync_scope,
+        raw=raw,
+    )
+
+
 def _process_gemini_video(
     conn: psycopg.Connection[Any],
     job: dict[str, Any],
@@ -719,6 +677,11 @@ def _process_gemini_video(
                 if download.get("precheck_terminal"):
                     raise RuntimeError(str(download.get("error") or f"content unavailable: {platform}"))
                 raise RuntimeError(f"direct_video_download_failed: {download.get('error') or platform}")
+            media_provider_called = bool(resolved.get("provider_calls_performed"))
+            if not _final_v1_scope_checkpoint(
+                conn, job, payload, derive_method, provider_calls_performed=media_provider_called
+            ):
+                return
             local_schema = "final_v1" if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else "v2"
             analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
             raw = _run_gemini_analyzer_with_timeout(
@@ -735,6 +698,12 @@ def _process_gemini_video(
                 target_id=target_id,
                 platform=platform,
             )
+            # File API upload / per-model retries inside the child carry their own
+            # stage gates; a child-reported revocation terminalizes here too.
+            if not _final_v1_scope_checkpoint(
+                conn, job, payload, derive_method, provider_calls_performed=True, raw=raw
+            ):
+                return
             raw["media_resolution"] = {
                 "platform": platform,
                 "source_url_host": _url_host(str(evidence.get("content_url") or "")),
@@ -787,16 +756,12 @@ def _process_gemini_video(
             "model_binding_mismatch:"
             f"expected=google/{WORKER_GEMINI_MODEL}:reported={reported_model or 'missing'}"
         )
-    if derive_method == "video_analysis_final_v1" and payload.get("local_evaluation") is not True:
-        from app.workers.apify_jobs_worker_paid_scope import revalidate_paid_job_scope
-        paid_action, block_reason, _actor = revalidate_paid_job_scope(
-            payload, "video", connection_scope=db_connection_sync_scope
-        )
-        if block_reason:
-            _block_job(conn, int(job["id"]), block_reason, {
-                "provider_calls_performed": None, "paid_action": paid_action,
-            })
-            return
+    # YouTube children gate subtitles / direct attempts / download / File API
+    # themselves and report ``scope_revoked``; the parent re-checks before writes.
+    if not _final_v1_scope_checkpoint(
+        conn, job, payload, derive_method, provider_calls_performed=True, raw=raw
+    ):
+        return
     raw["llm_execution"] = {
         **authorization,
         "binding": f"google/{WORKER_GEMINI_MODEL}",

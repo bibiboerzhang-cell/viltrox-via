@@ -153,6 +153,66 @@ def test_content_fit_retries_nested_transient_errors_with_exact_attempt_metadata
     assert writes == []
 
 
+def test_content_fit_rechecks_before_retry_and_stops_after_revocation(monkeypatch) -> None:
+    writes = _stub_content_fit_evidence(monkeypatch)
+    llm_calls: list[str] = []
+    checkpoints: list[bool] = []
+
+    def checkpoint(provider_calls_performed: bool) -> None:
+        checkpoints.append(provider_calls_performed)
+        if provider_calls_performed:
+            raise PermissionError("provider_job_permission_revoked")
+
+    def rate_limited(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        llm_calls.append("llm")
+        return {
+            "status": "degraded",
+            "failure": {"code": "rate_limit_exceeded"},
+        }
+
+    monkeypatch.setattr(content_fit_analysis.llm_production, "generate_json", rate_limited)
+    with pytest.raises(PermissionError, match="provider_job_permission_revoked"):
+        content_fit_analysis.analyze_content_fit(
+            42,
+            force=True,
+            authorization_checkpoint=checkpoint,
+        )
+
+    assert checkpoints == [False, True]
+    assert llm_calls == ["llm"]
+    assert writes == []
+
+
+def test_content_fit_rechecks_after_valid_llm_before_cache_write(monkeypatch) -> None:
+    writes = _stub_content_fit_evidence(monkeypatch)
+    checkpoints: list[bool] = []
+
+    def checkpoint(provider_calls_performed: bool) -> None:
+        checkpoints.append(provider_calls_performed)
+        if provider_calls_performed:
+            raise PermissionError("provider_job_actor_inactive")
+
+    monkeypatch.setattr(
+        content_fit_analysis.llm_production,
+        "generate_json",
+        lambda *_args, **_kwargs: {
+            "status": "success",
+            "provider": "openai",
+            "model": "gpt-5.4-mini",
+            "json": _content_payload(),
+        },
+    )
+    with pytest.raises(PermissionError, match="provider_job_actor_inactive"):
+        content_fit_analysis.analyze_content_fit(
+            42,
+            force=True,
+            authorization_checkpoint=checkpoint,
+        )
+
+    assert checkpoints == [False, True]
+    assert writes == []
+
+
 def test_content_fit_classifies_nested_transport_errors_as_retryable() -> None:
     cases = (
         ({"error": {"type": "TimeoutError"}}, "TimeoutError"),

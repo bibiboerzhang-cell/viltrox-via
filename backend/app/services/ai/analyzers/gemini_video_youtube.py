@@ -12,7 +12,7 @@ import asyncio
 import os
 import re
 import subprocess
-from typing import Any
+from typing import Any, Callable
 
 from app.core.logging import get_logger
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
@@ -57,6 +57,7 @@ async def analyze_youtube_with_gemini(
     final_v1_models: list[str] | str | None = None,
     models: list[str] | str | None = None,
     llm_context: dict[str, Any] | None = None,
+    authorization_checkpoint: Callable[[str], None] | None = None,
 ) -> dict:
     """
     Gemini YouTube analysis via File API:
@@ -64,12 +65,18 @@ async def analyze_youtube_with_gemini(
     2. Upload to Gemini File API
     3. Analyze with gemini-2.5-flash / gemini-2.5-pro (frame by frame)
     4. Delete file from Gemini
+
+    ``authorization_checkpoint(stage)`` runs before subtitles, before every
+    direct-URL attempt, before the slow download, before the File API upload
+    and before every File API attempt.  ``AnalysisScopeRevoked`` stops the
+    chain: the result carries ``scope_revoked`` and no later stage runs.
     """
     # lazy import 避免循环依赖（gemini_video.py 加载时 re-export 本函数）
     from app.services.ai.analyzers.gemini_video import (
         ProviderPressureExhausted,
         _final_v1_cache_config,
         _is_provider_pressure_error,
+        _scope_guard,
         _strict_generate_content,
         _video_generate_config,
         final_v1_gemini_models,
@@ -101,8 +108,11 @@ async def analyze_youtube_with_gemini(
         if profile.get("viltrox_lenses"):
             profile_ctx = f"\n创作者历史使用过: {', '.join(profile['viltrox_lenses'][:3])}"
 
+    scope_passes = _scope_guard(result, authorization_checkpoint)
     # ── Fetch subtitles for precise timestamp anchoring ──
     subtitle_ctx = ""
+    if not scope_passes("youtube_subtitles"):
+        return result
     subtitle_raw = fetch_youtube_subtitles(url)
     if subtitle_raw:
         subtitle_ctx = (
@@ -191,6 +201,8 @@ async def analyze_youtube_with_gemini(
 
             # Try analyzing with Gemini 3 models directly (no upload, no polling)
             for attempt_index, model_name in enumerate(GEMINI_MODELS, start=1):
+                if not scope_passes("youtube_direct_attempt"):
+                    return result
                 try:
                     cache_config = None
                     cache_info: dict[str, Any] = {}
@@ -367,6 +379,8 @@ async def analyze_youtube_with_gemini(
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp_path = os.path.join(tmpdir, "gemini_video.mp4")
+            if not scope_passes("youtube_download"):
+                return result
             logger.info("gemini_fileapi_download_start", extra={"url": url})
 
             dl_cmd = [
@@ -398,6 +412,8 @@ async def analyze_youtube_with_gemini(
             # Step 2: Upload to Gemini File API
             # BUG FIX: capture upload errors explicitly — a failed upload returns
             # an object whose .name may be None, causing files.get() to 404.
+            if not scope_passes("file_api_upload"):
+                return result
             try:
                 def _upload():
                     return gemini_client.files.upload(
@@ -473,6 +489,8 @@ async def analyze_youtube_with_gemini(
             MODELS = GEMINI_MODELS
             last_err = ""
             for model_offset, model_name in enumerate(MODELS, start=1):
+                if not scope_passes("file_api_attempt"):
+                    return result
                 try:
                     cache_config = None
                     cache_info: dict[str, Any] = {}

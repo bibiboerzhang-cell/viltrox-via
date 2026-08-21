@@ -253,6 +253,7 @@ def _materialize_cached_video_media(
             "content_type": str(validation.get("content_type") or "video/mp4"),
             "checksum": str(validation.get("checksum") or ""),
             "scraped_ok": False,
+            "provider_calls_performed": False,
         }
     return {
         "ok": False,
@@ -277,6 +278,7 @@ def _resolve_cached_or_provider_video(
         return cached
     resolved = _resolve_video_media(evidence)
     resolved["cache_hit"] = False
+    resolved["provider_calls_performed"] = True
     resolved["cache_lookup_reason"] = str(cached.get("reason") or "media_cache_miss")
     resolved["cache_candidate_count"] = int(cached.get("cache_candidate_count") or 0)
     if cached.get("cache_failure_reasons"):
@@ -420,8 +422,32 @@ def _apply_worker_overrides(payload):
     return stack, model_override
 
 
+def _scope_checkpoint_for(payload):
+    # Signed final_v1 children re-read the durable actor/target fence between
+    # every paid or external stage (subtitles, direct URL attempts, download,
+    # File API upload, each model attempt).  Local-evaluation jobs carry no
+    # durable actor and are validated by capability in the parent instead.
+    if str(payload.get("derive_method") or "").strip().lower() != "video_analysis_final_v1":
+        return None
+    if payload.get("local_evaluation") is True:
+        return None
+
+    def _checkpoint(stage):
+        from app.db.connection import db_connection_sync_scope
+        from app.workers.apify_jobs_worker_paid_scope import revalidate_paid_job_scope
+
+        _action, reason, _actor = revalidate_paid_job_scope(
+            payload, "video", connection_scope=db_connection_sync_scope
+        )
+        if reason:
+            raise gemini_video_analyzer.AnalysisScopeRevoked(reason, stage=stage)
+
+    return _checkpoint
+
+
 async def _run(payload):
     mode = str(payload.get("mode") or "").strip()
+    checkpoint = _scope_checkpoint_for(payload)
     if mode == "local":
         return await gemini_video_analyzer.analyze_local_video_with_gemini(
             str(payload.get("video_path") or ""),
@@ -432,6 +458,7 @@ async def _run(payload):
             final_v1_models=payload.get("gemini_final_v1_models"),
             models=payload.get("gemini_models"),
             llm_context=payload.get("llm_context"),
+            authorization_checkpoint=checkpoint,
         )
     if mode == "youtube":
         return await gemini_video_analyzer.analyze_youtube_with_gemini(
@@ -443,6 +470,7 @@ async def _run(payload):
             final_v1_models=payload.get("gemini_final_v1_models"),
             models=payload.get("gemini_models"),
             llm_context=payload.get("llm_context"),
+            authorization_checkpoint=checkpoint,
         )
     return {"analyzed": False, "method": "gemini_worker_child", "error": f"unsupported_gemini_child_mode:{mode}"}
 

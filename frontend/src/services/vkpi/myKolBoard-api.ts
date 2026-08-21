@@ -207,6 +207,14 @@ export async function getMyKolBoardExt(token: string, params: { days?: number; s
 
 export type ContentTrackingStatus = "tracked" | "failed" | "stale" | "insufficient_history" | "unavailable";
 export type ContentFreshness = "fresh" | "stale" | "never" | "unavailable";
+export type RecoverableJobStatus = "queued" | "running" | "retrying" | "blocked" | "failed" | "done" | "not_requested";
+
+export interface VkpiRecoverableJob {
+  job_id?: number | null;
+  status: RecoverableJobStatus;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
 
 export interface VkpiContentMetricAttempt {
   status?: "success" | "failed" | "legacy_current_only" | string;
@@ -271,11 +279,43 @@ export interface VkpiKolPoolVideoRow {
   /** 由服务端 evidence-product 关联表返回；只用于展示，不在前端推断产品。 */
   product_links?: VkpiKolVideoProductLink[];
   product_skus?: string[];
+  /** Durable refresh state and persisted snapshot truth are intentionally separate. */
+  metric_refresh?: {
+    latest_job?: VkpiRecoverableJob | null;
+    snapshot?: {
+      status?: ContentTrackingStatus;
+      freshness?: ContentFreshness;
+      last_attempt_at?: string | null;
+      last_success_at?: string | null;
+      sample_count?: number;
+      attempt_count?: number;
+    };
+  };
+  final_v1?: {
+    state: "ready" | "stale" | "active" | "blocked" | "failed" | "not_requested";
+    cache?: { status?: "ready" | "stale"; updated_at?: string | null } | null;
+    latest_job?: VkpiRecoverableJob | null;
+  };
 }
 
-export async function getMyKolPoolVideos(token: string, kolPoolId: number | string, limit = 200) {
-  return apiFetch<{ items?: VkpiKolPoolVideoRow[]; total?: number; kol_pool_id?: number }>(
-    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/videos?limit=${encodeURIComponent(String(limit))}`,
+export interface VkpiMyKolVideoPage {
+  items?: VkpiKolPoolVideoRow[];
+  kol_pool_id?: number;
+  profile_crawl?: VkpiRecoverableJob;
+  summary?: { total?: number; views_total?: number; views_measured?: number; final_v1_ready?: number };
+  total?: number;
+  returned?: number;
+  has_more?: boolean;
+  next_cursor?: string | null;
+  page_limit?: number;
+  read_only?: boolean;
+}
+
+export async function getMyKolPoolVideos(token: string, kolPoolId: number | string, limit = 60, cursor?: string | null) {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (cursor) query.set("cursor", cursor);
+  return apiFetch<VkpiMyKolVideoPage>(
+    `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/videos?${query.toString()}`,
     {},
     token,
   );

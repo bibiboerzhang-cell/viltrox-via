@@ -407,6 +407,7 @@ def enqueue_stored_video_analysis_job(
     evidence_id: int,
     staff: dict[str, Any] | None = None,
     search_session_id: int | None = None,
+    search_session_item_id: int | None = None,
     source: str = "kol_url_video_existing_evidence",
     local_evaluation: bool = False,
 ) -> dict[str, Any]:
@@ -428,6 +429,9 @@ def enqueue_stored_video_analysis_job(
         batch="on_demand",
         commit=True,
         search_session_id=int(search_session_id) if search_session_id else None,
+        search_session_item_id=(
+            int(search_session_item_id) if search_session_item_id else None
+        ),
         local_evaluation=bool(local_evaluation),
     )
     job = result.get("job") if isinstance(result.get("job"), dict) else {}

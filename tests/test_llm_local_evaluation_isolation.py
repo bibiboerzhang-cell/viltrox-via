@@ -289,8 +289,9 @@ def test_eval_cache_write_uses_separate_method_and_skips_production_followups(mo
     assert summaries[0]["claim_status"] == "descriptive_only"
 
 
-def test_single_video_api_requires_literal_boolean_for_local_eval(monkeypatch) -> None:
+def test_single_video_api_rejects_user_local_eval(monkeypatch) -> None:
     from app.api.routers import vkpi_kol_pool
+    from fastapi import HTTPException
 
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(
@@ -302,9 +303,12 @@ def test_single_video_api_requires_literal_boolean_for_local_eval(monkeypatch) -
     vkpi_kol_pool.enqueue_pool_item_video_analysis(
         10, {"evidence_id": 20, "local_evaluation": "true"}, staff={"id": 1}
     )
-    vkpi_kol_pool.enqueue_pool_item_video_analysis(
-        10, {"evidence_id": 20, "local_evaluation": True}, staff={"id": 1}
-    )
+    with pytest.raises(HTTPException) as raised:
+        vkpi_kol_pool.enqueue_pool_item_video_analysis(
+            10, {"evidence_id": 20, "local_evaluation": True}, staff={"id": 1}
+        )
 
+    assert raised.value.status_code == 403
+    assert raised.value.detail == "local_evaluation_http_forbidden"
+    assert len(calls) == 1
     assert calls[0]["local_evaluation"] is False
-    assert calls[1]["local_evaluation"] is True

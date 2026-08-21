@@ -104,4 +104,94 @@ def revalidate_paid_job_scope(
     return paid_action, "", actor
 
 
-__all__ = ["PAID_JOB_ACTIONS", "revalidate_paid_job_scope"]
+def final_v1_scope_checkpoint(
+    conn: Any,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    derive_method: str,
+    *,
+    provider_calls_performed: bool | None,
+    block_job: Callable[..., Any],
+    connection_scope: Callable[[], AbstractContextManager[Any]],
+    raw: dict[str, Any] | None = None,
+) -> bool:
+    """Revalidate a signed final_v1 child between paid/external phases.
+
+    Returns True when the job may continue.  Returns False after terminalizing
+    the job through ``block_job`` when the actor, target fence, or local
+    evaluation capability is no longer valid, or when the analyzer child
+    already reported ``raw["scope_revoked"]`` from one of its own stage gates.
+    Other derive methods are not paid MY KOL actions and always pass.
+    """
+
+    if derive_method != "video_analysis_final_v1":
+        return True
+    paid_action = PAID_JOB_ACTIONS["video"]
+    child_revoked = str((raw or {}).get("scope_revoked") or "").strip()
+    if child_revoked:
+        block_job(
+            conn,
+            int(job["id"]),
+            child_revoked,
+            {
+                "provider_calls_performed": provider_calls_performed,
+                "paid_action": paid_action,
+                "stage": str((raw or {}).get("scope_revoked_stage") or ""),
+            },
+        )
+        return False
+    if payload.get("local_evaluation") is True:
+        from app.platform.llm_local_evaluation import verify_job_local_evaluation_capability
+
+        authorization = verify_job_local_evaluation_capability(
+            payload,
+            job_id=int(job["id"]),
+        )
+        forbidden_lineage = any(
+            payload.get(key) not in (None, "", 0, "0")
+            for key in (
+                "staff_id",
+                "triggered_by_user_id",
+                "user_id",
+                "search_session_id",
+                "search_session_item_id",
+            )
+        )
+        if authorization.get("valid") and not forbidden_lineage:
+            return True
+        reason = (
+            "local_evaluation_server_scope_required"
+            if forbidden_lineage
+            else str(authorization.get("reason") or "local_evaluation_capability_blocked")
+        )
+        block_job(
+            conn,
+            int(job["id"]),
+            reason,
+            {"provider_calls_performed": provider_calls_performed, "paid_action": paid_action},
+        )
+        return False
+    paid_action, block_reason, _actor = revalidate_paid_job_scope(
+        payload,
+        "video",
+        connection_scope=connection_scope,
+    )
+    if not block_reason:
+        return True
+    block_job(
+        conn,
+        int(job["id"]),
+        block_reason,
+        {
+            "provider_calls_performed": provider_calls_performed,
+            "paid_action": paid_action,
+        },
+    )
+    return False
+
+
+__all__ = [
+    "PAID_JOB_ACTIONS",
+    "final_v1_scope_checkpoint",
+    "revalidate_paid_job_scope",
+]

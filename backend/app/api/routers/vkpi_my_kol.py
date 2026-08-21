@@ -139,6 +139,61 @@ def my_kol_content_monitoring_pause_endpoint(
         raise _content_monitoring_error(exc) from exc
 
 
+@router.get("/my-kol/{kol_pool_id}/videos")
+def my_kol_videos_recovery_endpoint(
+    kol_pool_id: int,
+    limit: int = Query(default=60, ge=1, le=200),
+    cursor: str | None = Query(default=None),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Return one scoped, paginated video page plus recoverable job truth.
+
+    This GET is SELECT-only.  Profile crawl, metric refresh and final_v1 job
+    states come from the durable job ledger; snapshot/cache freshness remains a
+    separate field.  The response never includes provider payloads or raw
+    worker errors and never treats old evidence as completion of a newer job.
+    """
+
+    from app.domains.kol import my_kol_video_recovery
+    from app.domains.kol.my_kol_paid_action_access import (
+        MyKolPaidActionError,
+        assert_target_readable,
+    )
+    from app.domains.kol.pool import _video_evidence_for_kol
+
+    pid = _int(kol_pool_id)
+    if pid <= 0:
+        raise HTTPException(status_code=400, detail="kol_pool_id required")
+    try:
+        offset, requested_boundary = my_kol_video_recovery.decode_cursor(cursor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid videos cursor") from exc
+    conn = get_conn()
+    try:
+        assert_target_readable(conn, kol_pool_id=pid, staff=staff)
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    snapshot_boundary = my_kol_video_recovery.resolve_snapshot_boundary(
+        conn,
+        pid,
+        requested_boundary,
+    )
+    videos = _video_evidence_for_kol(
+        pid,
+        limit=int(limit),
+        offset=int(offset),
+        max_evidence_id=int(snapshot_boundary),
+    )
+    return my_kol_video_recovery.build_video_recovery_page(
+        conn,
+        kol_pool_id=pid,
+        videos=videos,
+        offset=int(offset),
+        limit=int(limit),
+        snapshot_boundary_id=int(snapshot_boundary),
+    )
+
+
 @router.post("/my-kol/{kol_pool_id}/videos", status_code=202)
 def my_kol_track_video_endpoint(
     kol_pool_id: int,

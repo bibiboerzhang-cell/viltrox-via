@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from fastapi import HTTPException
+
 
 _FAILED_FLOW_STATUSES = {
     "failed",
@@ -100,3 +102,15 @@ def _pending_enrichment_state() -> dict:
             "message": "受众统计依赖评论样本，将在后台队列继续补充。",
         },
     }
+
+
+def _service_unavailable(reason: str, operation: str) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "status": "unavailable",
+            "reason": reason,
+            "operation": operation,
+            "retryable": True,
+        },
+    )

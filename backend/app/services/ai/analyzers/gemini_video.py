@@ -10,7 +10,7 @@ import re
 import time
 import subprocess
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Callable, Dict
 
 from app.core.logging import get_logger
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
@@ -63,6 +63,47 @@ class ProviderPressureExhausted(RuntimeError):
     so the download would be pure waste. Time-based retry is owned by the
     worker's backoff machinery.
     """
+
+
+class AnalysisScopeRevoked(RuntimeError):
+    """The caller's authorization disappeared between two paid/external stages.
+
+    Raised by an ``authorization_checkpoint`` callable handed to the analyzers.
+    The analyzers never swallow it inside their per-model retry loops: the
+    result is marked ``scope_revoked`` and returned immediately so the worker
+    can terminalize the job before any result, cache, or follow-up write.
+    """
+
+    def __init__(self, reason: str, *, stage: str = "") -> None:
+        super().__init__(str(reason or "scope_revoked"))
+        self.reason = str(reason or "scope_revoked")
+        self.stage = str(stage or "")
+
+
+def _scope_guard(
+    result: dict[str, Any],
+    authorization_checkpoint: Callable[[str], None] | None,
+) -> Callable[[str], bool]:
+    """Build a stage gate that marks ``result`` and reports False on revocation."""
+
+    def _passes(stage: str) -> bool:
+        if authorization_checkpoint is None:
+            return True
+        try:
+            authorization_checkpoint(stage)
+        except AnalysisScopeRevoked as exc:
+            result["analyzed"] = False
+            result["error"] = f"scope_revoked:{exc.reason}"
+            result["scope_revoked"] = exc.reason
+            result["scope_revoked_stage"] = stage
+            logger.warning(
+                "gemini_analysis_scope_revoked",
+                extra={"stage": stage, "reason": exc.reason},
+            )
+            return False
+        return True
+
+    return _passes
 
 
 _PROVIDER_PRESSURE_MARKERS = (
@@ -282,8 +323,14 @@ async def analyze_local_video_with_gemini(
     final_v1_models: list[str] | str | None = None,
     models: list[str] | str | None = None,
     llm_context: dict[str, Any] | None = None,
+    authorization_checkpoint: Callable[[str], None] | None = None,
 ) -> dict:
-    """Analyze an already-downloaded local MP4 with Gemini File API."""
+    """Analyze an already-downloaded local MP4 with Gemini File API.
+
+    ``authorization_checkpoint(stage)`` is consulted before the File API upload
+    and before every model attempt; raising ``AnalysisScopeRevoked`` stops the
+    chain with ``result["scope_revoked"]`` set and no further provider calls.
+    """
     result = {
         "analyzed": False,
         "method": "gemini_local_fileapi",
@@ -363,6 +410,9 @@ async def analyze_local_video_with_gemini(
         return result
     gemini_file = None
     uploaded_file_name = ""
+    scope_passes = _scope_guard(result, authorization_checkpoint)
+    if not scope_passes("file_api_upload"):
+        return result
     try:
         file_size_mb = local_path.stat().st_size / 1024 / 1024
         logger.info("gemini_local_fileapi_upload_start", extra={"size_mb": round(file_size_mb, 1)})
@@ -419,6 +469,8 @@ async def analyze_local_video_with_gemini(
         )
         attempt_total = len(model_names)
         for attempt_index, model_name in enumerate(model_names, start=1):
+            if not scope_passes("file_api_attempt"):
+                return result
             try:
                 cache_config = None
                 cache_info: dict[str, Any] = {}

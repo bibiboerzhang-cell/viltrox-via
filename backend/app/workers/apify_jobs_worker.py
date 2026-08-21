@@ -555,6 +555,7 @@ from app.workers.apify_jobs_video_context import (  # noqa: F401,E402
 # (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。本 import 必须放在
 # 上面所有被 gemini 模块依赖的常量/小工具定义之后(它们在 gemini 模块底部被 import)。
 from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
+    _final_v1_scope_checkpoint,
     _process_gemini_video,
     _process_gemini_video_final_v1_keyframe_qa,
     _process_gemini_video_flash_claude_judge,

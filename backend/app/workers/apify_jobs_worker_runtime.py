@@ -24,6 +24,7 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
     _block_job = namespace['_block_job']
     _derive_method = namespace['_derive_method']
     _finish_skipped = namespace['_finish_skipped']
+    _final_v1_scope_checkpoint = namespace['_final_v1_scope_checkpoint']
     _google_allowed = namespace['_google_allowed']
     _google_execution_authorization = namespace['_google_execution_authorization']
     _json = namespace['_json']
@@ -168,6 +169,14 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
                 target_id,
                 cache_derive_method,
             ):
+                if not _final_v1_scope_checkpoint(
+                    conn,
+                    job,
+                    payload,
+                    derive_method,
+                    provider_calls_performed=False,
+                ):
+                    return
                 _finish_skipped(
                     conn,
                     int(job["id"]),

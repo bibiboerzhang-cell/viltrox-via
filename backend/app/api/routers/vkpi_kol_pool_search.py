@@ -27,12 +27,14 @@ from app.api.routers.vkpi_kol_pool_helpers import (
 from app.api.routers.vkpi_kol_pool_search_responses import (
     _body_bool,
     _pending_enrichment_state,
+    _service_unavailable,
     _text_response_status,
     _url_response_status,
 )
 from app.api.routers.vkpi_kol_pool_search_scope import (
     _approved_session_kol_ids,
     _owned_search_session_or_http,
+    _reused_video_session_lineage,
 )
 from app.api.routers.vkpi_kol_pool_recall_route import (
     recall_kol_profiles,
@@ -42,17 +44,6 @@ from app.api.routers.vkpi_kol_pool_recall_route import (
 router = APIRouter(tags=["vkpi-kol-pool"])
 logger = get_logger(__name__)
 
-def _service_unavailable(reason: str, operation: str) -> HTTPException:
-    return HTTPException(
-        status_code=503,
-        detail={
-            "status": "unavailable",
-            "reason": reason,
-            "operation": operation,
-            "retryable": True,
-        },
-    )
-
 def _run_url_deep_crawl(
     body: dict,
     *,
@@ -61,6 +52,8 @@ def _run_url_deep_crawl(
     default_create_session: bool,
     default_source: str,
 ) -> dict:
+    if body.get("local_evaluation") is True:
+        raise ValueError("local_evaluation_http_forbidden")
     session_id = body.get("session_id")
     try:
         session_id_int = int(session_id) if session_id else None
@@ -109,13 +102,23 @@ def _run_url_deep_crawl(
         stored_evidence_id = _int_or_none(video_flow.get("evidence_id"))
         reused_stored_video = bool(not is_profile and matched_kol_pool_id and stored_evidence_id)
         if reused_stored_video:
+            session, search_session_item_id = _reused_video_session_lineage(
+                session,
+                result,
+                body=body,
+                staff=staff,
+                default_source=default_source,
+                kol_pool_id=int(matched_kol_pool_id),
+                evidence_id=int(stored_evidence_id),
+            )
             queued = kol_url_deep_crawl.enqueue_stored_video_analysis_job(
                 kol_pool_id=int(matched_kol_pool_id),
                 evidence_id=int(stored_evidence_id),
                 staff=staff,
-                search_session_id=_int_or_none((session or {}).get("id")),
+                search_session_id=_int_or_none(session.get("id")),
+                search_session_item_id=search_session_item_id,
                 source=str(body.get("source") or f"{default_source}_existing_video"),
-                local_evaluation=body.get("local_evaluation") is True,
+                local_evaluation=False,
             )
         elif is_profile and kol_url_deep_crawl.profile_deep_crawl_is_fresh(matched_kol_pool_id):
             queued = {"status": "already_fresh", "job_id": None}
@@ -129,7 +132,7 @@ def _run_url_deep_crawl(
                 search_session_id=_int_or_none((session or {}).get("id")),
                 source=str(body.get("source") or f"{default_source}_video_resolve"),
                 max_posts=int(body.get("max_posts") or 3),
-                local_evaluation=body.get("local_evaluation") is True,
+                local_evaluation=False,
             )
         else:
             queued = kol_url_deep_crawl.enqueue_profile_deep_crawl_job(

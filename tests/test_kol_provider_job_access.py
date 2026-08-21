@@ -342,6 +342,47 @@ def test_content_fit_worker_blocks_revoked_user_before_llm(
     assert blocked[0][3]["provider_calls_performed"] is False
 
 
+def test_content_fit_runtime_revocation_terminalizes_with_honest_provider_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.domains.kol import content_fit_analysis
+    from app.workers import apify_jobs_worker as pg_worker
+    from app.workers import apify_jobs_worker_handlers as handlers
+    from app.workers import apify_jobs_worker_paid_scope as paid_scope
+
+    blocked: list[tuple[Any, ...]] = []
+
+    def analyze(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        kwargs["authorization_checkpoint"](True)
+        raise AssertionError("revoked checkpoint must stop content-fit")
+
+    monkeypatch.setattr(handlers, "_resolve_job_staff", lambda *_args: _actor())
+    monkeypatch.setattr(handlers, "db_connection_sync_scope", lambda: nullcontext())
+    monkeypatch.setattr(content_fit_analysis, "analyze_content_fit", analyze)
+    monkeypatch.setattr(
+        paid_scope,
+        "revalidate_paid_job_scope",
+        lambda *_args, **_kwargs: (
+            "content_fit_analysis",
+            "provider_job_permission_revoked",
+            None,
+        ),
+    )
+    monkeypatch.setattr(pg_worker, "_block_job", lambda *_args: blocked.append(_args))
+
+    handlers._process_kol_content_fit_analysis(
+        object(),  # type: ignore[arg-type]
+        {"id": 751},
+        _content_fit_payload(),
+    )
+
+    assert blocked[0][2] == "provider_job_permission_revoked"
+    assert blocked[0][3] == {
+        "provider_calls_performed": True,
+        "paid_action": "content_fit_analysis",
+    }
+
+
 def test_content_fit_server_capability_rejects_user_session_and_http_dict() -> None:
     payload = _content_fit_payload()
     payload.pop(access.FENCE_KEY)

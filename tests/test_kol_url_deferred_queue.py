@@ -204,6 +204,8 @@ def test_recent_profile_is_reused_without_provider_or_new_job(monkeypatch):
 
 def test_video_execute_with_defer_flag_is_durable_and_request_stays_provider_free(monkeypatch):
     seen: list[dict] = []
+    order: list[str] = []
+    queued_payload: dict = {}
     monkeypatch.setattr(
         router_module.kol_url_deep_crawl,
         "classify_url",
@@ -231,14 +233,39 @@ def test_video_execute_with_defer_flag_is_durable_and_request_stays_provider_fre
     monkeypatch.setattr(
         router_module.kol_url_deep_crawl,
         "enqueue_stored_video_analysis_job",
-        lambda **_kwargs: {
-            "status": "queued",
-            "job_id": 901,
-            "write_db": True,
-            "ai_analysis": {"state": "queued", "provider_calls_allowed": True},
-        },
+        lambda **kwargs: (
+            order.append("enqueue"),
+            queued_payload.update(kwargs),
+            {
+                "status": "queued",
+                "job_id": 901,
+                "write_db": True,
+                "ai_analysis": {"state": "queued", "provider_calls_allowed": True},
+            },
+        )[-1],
     )
-    monkeypatch.setattr(router_module.kol_search_sessions, "ensure_session_for_result", lambda **_kwargs: None)
+    ensure_calls: list[dict] = []
+
+    def fake_ensure(**kwargs):
+        ensure_calls.append(dict(kwargs))
+        return None if len(ensure_calls) == 1 else {"id": 42}
+
+    def fake_attach(session_id, result):
+        order.append("attach")
+        return {
+            "id": session_id,
+            "items": [
+                {
+                    "id": 77,
+                    "item_type": "url_video",
+                    "kol_pool_id": 88,
+                    "evidence_id": 7,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(router_module.kol_search_sessions, "ensure_session_for_result", fake_ensure)
+    monkeypatch.setattr(router_module.kol_search_sessions, "attach_url_result", fake_attach)
 
     result = router_module.dry_run_kol_url_deep_crawl(
         {
@@ -257,6 +284,11 @@ def test_video_execute_with_defer_flag_is_durable_and_request_stays_provider_fre
     assert result["video_flow"]["operation"] == "existing_creator_video_analysis"
     assert result["video_flow"]["enqueue_result"]["job_id"] == 901
     assert result["provider_calls_performed"] is False
+    assert ensure_calls[0]["create"] is False
+    assert ensure_calls[1]["create"] is True
+    assert order[:2] == ["attach", "enqueue"]
+    assert queued_payload["search_session_id"] == 42
+    assert queued_payload["search_session_item_id"] == 77
 
 
 def test_unresolved_video_never_enters_profile_deep_crawl_queue(monkeypatch):

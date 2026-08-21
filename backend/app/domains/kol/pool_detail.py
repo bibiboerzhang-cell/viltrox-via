@@ -326,7 +326,13 @@ def _v6_breakdown_for_item(item: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _video_evidence_for_kol(
-    kol_pool_id: int, *, limit: int = 3, only_with_cache: bool = False, include_inactive: bool = False
+    kol_pool_id: int,
+    *,
+    limit: int = 3,
+    offset: int = 0,
+    max_evidence_id: int = 0,
+    only_with_cache: bool = False,
+    include_inactive: bool = False,
 ) -> list[dict[str, Any]]:
     # only_with_cache: 仅回带有 final_v1 / keyframe_qa cache 的 evidence(detail_bundle 视频分析
     #   与展示用 videos 限 3 解耦,修「已找到 N 条 evidence 但 video_analysis 未命中」)。
@@ -427,6 +433,7 @@ def _video_evidence_for_kol(
             LIMIT 1
         ) m ON TRUE
         WHERE e.kol_pool_id=?
+          AND (? <= 0 OR e.id <= ?)
           AND (? OR e.is_active IS NOT FALSE)
           AND COALESCE(e.evidence_type, 'video') IN ('video', 'image')
           AND (
@@ -445,7 +452,7 @@ def _video_evidence_for_kol(
             COALESCE(e.publish_date, e.posted_at, e.updated_at, e.created_at) DESC NULLS LAST,
             COALESCE(e.view_count, 0) DESC,
             e.id DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
         """
     )
     sqlite_query = """
@@ -483,6 +490,7 @@ def _video_evidence_for_kol(
             0 AS has_keyframe_qa_cache
         FROM vkpi_kol_video_evidence e
         WHERE e.kol_pool_id=?
+          AND (? <= 0 OR e.id <= ?)
           AND (? OR COALESCE(e.is_active, 1) != 0)
           AND COALESCE(e.evidence_type, 'video') IN ('video', 'image')
           AND NOT ?
@@ -490,18 +498,23 @@ def _video_evidence_for_kol(
             COALESCE(e.publish_date, e.posted_at, e.updated_at, e.created_at) DESC,
             COALESCE(e.view_count, 0) DESC,
             e.id DESC
-        LIMIT ?
+        LIMIT ? OFFSET ?
     """
     conn = get_conn()
     rows = conn.execute(
         postgres_query if is_postgres_runtime() else sqlite_query,
         # 上限 10→200(2026-06-12「全部视频」裁令:账号分析现采 12 条/E5 全量更多,硬顶 10 把列表掐断)
-        # 绑定顺序须与 WHERE 占位符一致:kol_pool_id, include_inactive, only_with_cache, LIMIT。
+        # 绑定顺序须与 WHERE 占位符一致:kol_pool_id, max_evidence_id×2,
+        # include_inactive, only_with_cache, LIMIT, OFFSET。max_evidence_id 由
+        # scoped MY KOL 游标首屏固定，后页不会因新 evidence 插入而漂移。
         (
             int(kol_pool_id),
+            max(0, int(max_evidence_id or 0)),
+            max(0, int(max_evidence_id or 0)),
             bool(include_inactive),
             bool(only_with_cache),
             max(1, min(200, int(limit or 3))),
+            max(0, min(100_000, int(offset or 0))),
         ),
     ).fetchall()
     trend_by_evidence = content_metric_snapshots.metric_trends_for_evidence(

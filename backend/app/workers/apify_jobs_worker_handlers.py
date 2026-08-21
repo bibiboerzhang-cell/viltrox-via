@@ -481,12 +481,44 @@ def _process_kol_content_fit_analysis(conn: psycopg.Connection[Any], job: dict[s
     if not kol_pool_id:
         raise ValueError("kol_content_fit_analysis payload must include kol_pool_id")
     staff = _resolve_job_staff(conn, payload)
-    with db_connection_sync_scope():
-        result = kol_content_fit.analyze_content_fit(
-            int(kol_pool_id),
-            str(payload.get("product_sku") or "") or None,
-            staff=staff if isinstance(staff, dict) else None,
+    class _RuntimeScopeRevoked(RuntimeError):
+        def __init__(self, reason: str, provider_calls_performed: bool) -> None:
+            super().__init__(reason)
+            self.reason = reason
+            self.provider_calls_performed = provider_calls_performed
+
+    def authorization_checkpoint(provider_calls_performed: bool) -> None:
+        from app.workers.apify_jobs_worker_paid_scope import revalidate_paid_job_scope
+
+        _action, reason, _actor = revalidate_paid_job_scope(
+            payload,
+            "kol_content_fit_analysis",
+            connection_scope=db_connection_sync_scope,
         )
+        if reason:
+            raise _RuntimeScopeRevoked(reason, provider_calls_performed)
+
+    try:
+        with db_connection_sync_scope():
+            result = kol_content_fit.analyze_content_fit(
+                int(kol_pool_id),
+                str(payload.get("product_sku") or "") or None,
+                staff=staff if isinstance(staff, dict) else None,
+                authorization_checkpoint=authorization_checkpoint,
+            )
+    except _RuntimeScopeRevoked as exc:
+        from app.workers.apify_jobs_worker import _block_job
+
+        _block_job(
+            conn,
+            int(job["id"]),
+            exc.reason,
+            {
+                "provider_calls_performed": exc.provider_calls_performed,
+                "paid_action": "content_fit_analysis",
+            },
+        )
+        return
     state = str((result or {}).get("state") or (result or {}).get("status") or "")
     ok = state == "ready"
     # insufficient_evidence / llm_failed 不是错误态,但也无 cache 产出 → blocked(可见、不重试雪崩)。

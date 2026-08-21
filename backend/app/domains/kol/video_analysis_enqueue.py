@@ -230,6 +230,17 @@ def _enqueue_final_v1_video_analysis(
 
     kol_pool_id = int(kol_pool_id)
     evidence_id = int(evidence_id)
+    if local_evaluation and (
+        isinstance(staff, dict)
+        or enforce_target_write
+        or search_session_id
+        or search_session_item_id
+        or parent_job_id
+        or isinstance(provider_parent_payload, dict)
+    ):
+        from app.platform.llm_local_evaluation import LocalEvaluationCapabilityError
+
+        raise LocalEvaluationCapabilityError("local_evaluation_server_scope_required")
     if enforce_target_write:
         from app.domains.kol.my_kol_paid_action_access import assert_target_writable
 

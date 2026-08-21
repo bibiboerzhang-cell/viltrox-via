@@ -370,7 +370,160 @@ def test_post_provider_revocation_blocks_before_cost_cache_or_followup(
     assert provider == ["gemini"]
     assert writes == []
     assert blocked[0][2] == "provider_job_actor_inactive"
-    assert blocked[0][3]["provider_calls_performed"] is None
+    assert blocked[0][3]["provider_calls_performed"] is True
+
+
+@pytest.mark.parametrize(
+    ("platform", "url"),
+    [
+        ("instagram", "https://www.instagram.com/reel/ABC123xyz/"),
+        ("tiktok", "https://www.tiktok.com/@creator/video/7501797229913459999"),
+    ],
+)
+def test_ig_tt_revocation_after_media_blocks_gemini_r2_and_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    url: str,
+) -> None:
+    from app.workers import apify_jobs_worker_gemini as gemini
+    from app.workers import apify_jobs_worker_paid_scope as paid_scope
+
+    blocked: list[tuple[Any, ...]] = []
+    calls: list[str] = []
+    monkeypatch.setattr(
+        gemini,
+        "_load_video_evidence",
+        lambda *_args: {"id": 701, "kol_pool_id": 88, "content_url": url, "title": "demo"},
+    )
+    monkeypatch.setattr(
+        gemini,
+        "_resolve_cached_or_provider_video",
+        lambda *_args: {
+            "ok": True,
+            "status": "ready",
+            "platform": platform,
+            "cache_hit": False,
+            "provider_calls_performed": True,
+            "direct_video_url": "https://cdn.example/video.mp4",
+        },
+    )
+    monkeypatch.setattr(
+        gemini,
+        "download_direct_video_url",
+        lambda *_args, **_kwargs: {"success": True, "path": "/tmp/video.mp4", "bytes": 4},
+    )
+    monkeypatch.setattr(
+        paid_scope,
+        "revalidate_paid_job_scope",
+        lambda *_args, **_kwargs: ("video_analysis", "provider_job_actor_inactive", None),
+    )
+    monkeypatch.setattr(gemini, "_block_job", lambda *_args: blocked.append(_args))
+    monkeypatch.setattr(
+        gemini,
+        "_run_gemini_analyzer_with_timeout",
+        lambda *_args, **_kwargs: calls.append("gemini") or {},
+    )
+    monkeypatch.setattr(
+        gemini,
+        "_warm_video_to_r2_from_local",
+        lambda **_kwargs: calls.append("r2"),
+    )
+    monkeypatch.setattr(gemini, "_record_gemini_cost", lambda **_kwargs: calls.append("cache"))
+
+    gemini._process_gemini_video(
+        object(),  # type: ignore[arg-type]
+        {"id": 904},
+        {
+            "target_type": "video",
+            "target_id": "701",
+            "derive_method": "video_analysis_final_v1",
+        },
+        0.01,
+    )
+
+    assert calls == []
+    assert blocked[0][2] == "provider_job_actor_inactive"
+    assert blocked[0][3]["provider_calls_performed"] is True
+
+
+@pytest.mark.parametrize(
+    ("platform", "url"),
+    [
+        ("instagram", "https://www.instagram.com/reel/ABC123xyz/"),
+        ("tiktok", "https://www.tiktok.com/@creator/video/7501797229913459999"),
+    ],
+)
+def test_ig_tt_revocation_after_gemini_blocks_r2_and_business_writes(
+    monkeypatch: pytest.MonkeyPatch,
+    platform: str,
+    url: str,
+) -> None:
+    from app.workers import apify_jobs_worker_gemini as gemini
+    from app.workers import apify_jobs_worker_paid_scope as paid_scope
+
+    blocked: list[tuple[Any, ...]] = []
+    calls: list[str] = []
+    validations = iter(
+        [
+            ("video_analysis", "", {"id": 1}),
+            ("video_analysis", "provider_job_permission_revoked", None),
+        ]
+    )
+    monkeypatch.setattr(
+        gemini,
+        "_load_video_evidence",
+        lambda *_args: {"id": 701, "kol_pool_id": 88, "content_url": url, "title": "demo"},
+    )
+    monkeypatch.setattr(
+        gemini,
+        "_resolve_cached_or_provider_video",
+        lambda *_args: {
+            "ok": True,
+            "status": "ready",
+            "platform": platform,
+            "cache_hit": False,
+            "provider_calls_performed": True,
+            "direct_video_url": "https://cdn.example/video.mp4",
+        },
+    )
+    monkeypatch.setattr(
+        gemini,
+        "download_direct_video_url",
+        lambda *_args, **_kwargs: {"success": True, "path": "/tmp/video.mp4", "bytes": 4},
+    )
+    monkeypatch.setattr(
+        paid_scope,
+        "revalidate_paid_job_scope",
+        lambda *_args, **_kwargs: next(validations),
+    )
+    monkeypatch.setattr(gemini, "_block_job", lambda *_args: blocked.append(_args))
+    monkeypatch.setattr(
+        gemini,
+        "_run_gemini_analyzer_with_timeout",
+        lambda *_args, **_kwargs: calls.append("gemini")
+        or {"analyzed": True, "model": gemini.WORKER_GEMINI_MODEL},
+    )
+    monkeypatch.setattr(
+        gemini,
+        "_warm_video_to_r2_from_local",
+        lambda **_kwargs: calls.append("r2"),
+    )
+    monkeypatch.setattr(gemini, "_record_gemini_cost", lambda **_kwargs: calls.append("cache"))
+
+    gemini._process_gemini_video(
+        object(),  # type: ignore[arg-type]
+        {"id": 905},
+        {
+            "target_type": "video",
+            "target_id": "701",
+            "derive_method": "video_analysis_final_v1",
+        },
+        0.01,
+    )
+
+    assert calls == ["gemini"]
+    assert blocked[0][2] == "provider_job_permission_revoked"
+    assert blocked[0][3]["provider_calls_performed"] is True
 
 
 def test_server_owned_video_and_content_fit_require_explicit_session_zero(
