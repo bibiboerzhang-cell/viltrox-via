@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const revealKolPoolContact = vi.fn();
@@ -16,20 +16,29 @@ function Probe({
   kolPoolId = 42,
   purpose = "kol_detail_view",
   initialState = null,
+  autoReveal = true,
 }: {
   apiToken?: string;
   kolPoolId?: number;
   purpose?: ContactPurpose;
   initialState?: ContactState | null;
+  autoReveal?: boolean;
 }) {
-  const { state, clear } = useKolContactState({ apiToken, kolPoolId, purpose, initialState });
+  const { state, reveal, clear } = useKolContactState({ apiToken, kolPoolId, purpose, initialState, autoReveal });
   return (
     <div>
       <span>{state.status}</span>
       {state.contacts.map((contact) => <span key={`${contact.type}:${contact.value}`}>{contact.value}</span>)}
+      <button type="button" onClick={reveal}>reveal</button>
       <button type="button" onClick={clear}>clear</button>
     </div>
   );
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
 }
 
 function auditedState(value: string, purpose: ContactPurpose): ContactState {
@@ -105,5 +114,54 @@ describe("useKolContactState", () => {
     await waitFor(() => expect(screen.queryByText("manager@example.com")).toBeNull());
     expect(screen.getByText("restricted")).toBeInTheDocument();
     expect(signal.aborted).toBe(true);
+  });
+
+  it("keeps drawer contact value-free until an explicit reveal click", async () => {
+    render(<Probe autoReveal={false} />);
+
+    expect(screen.getByText("restricted")).toBeInTheDocument();
+    expect(screen.queryByText("manager@example.com")).toBeNull();
+    expect(revealKolPoolContact).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "reveal" }));
+
+    expect(await screen.findByText("manager@example.com")).toBeInTheDocument();
+    expect(revealKolPoolContact).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires a new click after identity switch and drops the late prior response", async () => {
+    const first = deferred<Record<string, unknown>>();
+    revealKolPoolContact
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce({
+        status: "full",
+        kol_pool_id: 43,
+        contact_masked: false,
+        contacts: [{ type: "email", value: "current@example.com" }],
+      });
+    const view = render(<Probe autoReveal={false} apiToken="token-a" kolPoolId={42} />);
+    fireEvent.click(screen.getByRole("button", { name: "reveal" }));
+    await waitFor(() => expect(revealKolPoolContact).toHaveBeenCalledTimes(1));
+    const firstSignal = revealKolPoolContact.mock.calls[0][2].signal as AbortSignal;
+
+    view.rerender(<Probe autoReveal={false} apiToken="token-b" kolPoolId={43} />);
+
+    expect(screen.getByText("restricted")).toBeInTheDocument();
+    expect(revealKolPoolContact).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(firstSignal.aborted).toBe(true));
+    await act(async () => {
+      first.resolve({
+        status: "full",
+        kol_pool_id: 42,
+        contact_masked: false,
+        contacts: [{ type: "email", value: "stale-secret@example.com" }],
+      });
+      await Promise.resolve();
+    });
+    expect(screen.queryByText("stale-secret@example.com")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "reveal" }));
+    expect(await screen.findByText("current@example.com")).toBeInTheDocument();
+    expect(revealKolPoolContact).toHaveBeenCalledTimes(2);
   });
 });

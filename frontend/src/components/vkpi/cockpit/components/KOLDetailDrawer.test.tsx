@@ -42,8 +42,7 @@ const enqueueAllKolVideos = vi.fn();
 const getKolCooperation = vi.fn();
 const recordKolCooperation = vi.fn();
 const promoteKolPoolToMain = vi.fn();
-// A1 自动补档:baseItem 档案瘦(无帖数/均播)→ 抽屉挂载即入队 profile 深爬,mock 必须供齐,
-// 否则 effect 内调用 undefined 直接炸整组用例(此前缺此 mock 是本文件 4/5 红的真因)。
+// Profile 深爬只允许显式按钮触发；mock 用于验证挂载零 provider、点击后走安全队列。
 const enqueueKolProfileCrawl = vi.fn();
 const refreshAudienceStats = vi.fn();
 const getKolVideoAnalysisCache = vi.fn();
@@ -147,6 +146,34 @@ function renderDrawer(props: Record<string, unknown> = {}) {
 }
 
 describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
+  it("档案瘦且无证据时挂载不自动入队，显式点击才提交规范主页", async () => {
+    renderDrawer({
+      item: {
+        ...baseItem,
+        profile_url: "https://www.youtube.com/@frank",
+        posts_count: 0,
+        avg_views: 0,
+      },
+      detailBundle: {
+        status: "ready",
+        item: { video_evidence: [] },
+        video_analysis: { items: [], summary: { ready_count: 0 } },
+      },
+    });
+
+    await act(async () => { await Promise.resolve(); });
+    expect(enqueueKolProfileCrawl).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("深度分析"));
+    fireEvent.click(screen.getByRole("button", { name: "KOL深度分析理解(最近20条)" }));
+
+    await waitFor(() => expect(enqueueKolProfileCrawl).toHaveBeenCalledWith(
+      "tok",
+      42,
+      "https://www.youtube.com/@frank",
+    ));
+  });
+
   it("深度分析页先展示可信度、证据覆盖和阻断声明", async () => {
     renderDrawer({
       item: { ...baseItem, posts_count: 4, avg_views: 1000 },
@@ -575,6 +602,9 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
       },
     });
 
+    expect(screen.getByRole("button", { name: "查看联系方式" })).toBeInTheDocument();
+    expect(revealKolPoolContact).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "查看联系方式" }));
     expect(await screen.findByText("manager@example.com")).toBeInTheDocument();
     expect(screen.getByText("Instagram")).toBeInTheDocument();
     expect(screen.getByText("@futurestudio")).toBeInTheDocument();
@@ -596,6 +626,9 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
       detailLoading: true,
     });
 
+    expect(screen.getByText("联系方式默认隐藏 · 点击后按当前权限审计读取")).toBeInTheDocument();
+    expect(revealKolPoolContact).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "查看联系方式" }));
     expect(await screen.findByText("正在读取完整联系方式…")).toBeInTheDocument();
     expect(screen.queryByText("m***@e***")).toBeNull();
     expect(screen.queryByRole("button", { name: /复制邮箱/ })).toBeNull();
@@ -609,6 +642,8 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
       contacts: [{ type: "email", value: "audited@example.com" }],
     });
     const view = renderDrawer({ item: { ...baseItem, email: "detail-one@example.com", contact_masked: false } });
+    expect(revealKolPoolContact).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "查看联系方式" }));
     expect(await screen.findByText("audited@example.com")).toBeInTheDocument();
 
     view.rerender(
@@ -639,6 +674,7 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
         contacts: [{ type: "email", value: "current@example.com" }],
       });
     const view = renderDrawer({ item: { ...baseItem, id: 42 }, apiToken: "token-a" });
+    fireEvent.click(screen.getByRole("button", { name: "查看联系方式" }));
     await waitFor(() => expect(revealKolPoolContact).toHaveBeenCalledTimes(1));
     const firstSignal = revealKolPoolContact.mock.calls[0][2].signal as AbortSignal;
 
@@ -652,6 +688,9 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
         onContact={() => {}}
       />,
     );
+    expect(screen.getByRole("button", { name: "查看联系方式" })).toBeInTheDocument();
+    expect(revealKolPoolContact).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "查看联系方式" }));
     expect(await screen.findByText("current@example.com")).toBeInTheDocument();
     expect(firstSignal.aborted).toBe(true);
 
@@ -678,8 +717,30 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
     });
     renderDrawer({ item: { ...baseItem, email: "", contact_masked: true } });
 
+    expect(revealKolPoolContact).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "查看联系方式" }));
     expect(await screen.findByText("联系方式已受保护 · 当前账号不可读取明文")).toBeInTheDocument();
     expect(screen.queryByText(/未收集|暂无已验证/)).toBeNull();
+  });
+
+  it("关闭详情会清除并 abort 已读取的联系人明文", async () => {
+    const onClose = vi.fn();
+    revealKolPoolContact.mockResolvedValueOnce({
+      status: "full",
+      kol_pool_id: 42,
+      contact_masked: false,
+      contacts: [{ type: "email", value: "close-me@example.com" }],
+    });
+    renderDrawer({ onClose });
+    fireEvent.click(screen.getByRole("button", { name: "查看联系方式" }));
+    expect(await screen.findByText("close-me@example.com")).toBeInTheDocument();
+    const signal = revealKolPoolContact.mock.calls[0][2].signal as AbortSignal;
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭详情" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("close-me@example.com")).toBeNull();
+    expect(signal.aborted).toBe(true);
   });
 
   it("item=null → 组件返回 null(container 空)", () => {

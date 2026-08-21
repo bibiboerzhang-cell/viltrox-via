@@ -10,11 +10,40 @@ from fastapi import HTTPException
 
 from app.api.routers import vkpi_kol_pool_jobs as router_mod
 from app.api.routers import vkpi_my_kol as my_kol_router
+from app.api.routers import vkpi_projects as projects_router
 from app.domains.kol import url_deep_crawl, url_deep_crawl_queue, video_tracking
 from app.workers import apify_jobs_worker_handlers as worker_handlers
 
 
 PROFILE_URL = "https://www.youtube.com/@Creator"
+
+
+def test_legacy_id_only_profile_crawl_route_is_terminal_and_provider_free(monkeypatch):
+    calls = {"db": 0, "provider": 0}
+
+    def db_bomb():
+        calls["db"] += 1
+        raise AssertionError("retired route must not access business DB")
+
+    def provider_bomb(*_args, **_kwargs):
+        calls["provider"] += 1
+        raise AssertionError("retired route must not enqueue a provider job")
+
+    monkeypatch.setattr("app.db.connection.get_conn", db_bomb)
+    monkeypatch.setattr(url_deep_crawl, "enqueue_profile_deep_crawl_job", provider_bomb)
+
+    with pytest.raises(HTTPException) as caught:
+        projects_router.enqueue_kol_profile_crawl(
+            999999,
+            staff={"id": 10, "user_id": 110, "role": "member"},
+        )
+
+    assert caught.value.status_code == 410
+    assert caught.value.detail == {
+        "code": "kol_profile_crawl_route_retired",
+        "replacement": "/api/admin/vkpi/kol-pool/profile-deep-crawl/enqueue",
+    }
+    assert calls == {"db": 0, "provider": 0}
 
 
 def _conn() -> sqlite3.Connection:

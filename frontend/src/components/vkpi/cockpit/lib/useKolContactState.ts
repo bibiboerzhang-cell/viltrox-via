@@ -13,6 +13,7 @@ type UseKolContactStateOptions = {
   kolPoolId: string | number | null | undefined;
   purpose?: ContactPurpose;
   initialState?: ContactState | null;
+  autoReveal?: boolean;
 };
 
 type StateEnvelope = {
@@ -28,20 +29,26 @@ type ActiveRequest = {
 };
 
 const LOADING_STATE: ContactState = { status: "loading", contacts: [] };
+const EXPLICIT_REVEAL_STATE: ContactState = {
+  status: "restricted",
+  contacts: [],
+  reason: "explicit_reveal_required",
+};
 
 /**
  * Ephemeral audited contact read for one mounted surface.
  *
  * The hook intentionally has no module cache. A response can only live in the
- * mounted component state; changing token/KOL identity returns `loading`
- * immediately, aborts the old request, and prevents a late response from
- * crossing the identity boundary.
+ * mounted component state; changing token/KOL identity returns a value-free
+ * state immediately, aborts the old request, and prevents a late response
+ * from crossing the identity boundary.
  */
 export function useKolContactState({
   apiToken,
   kolPoolId,
   purpose = "kol_detail_view",
   initialState = null,
+  autoReveal = true,
 }: UseKolContactStateOptions) {
   const tokenGenerationRef = React.useRef({ token: apiToken, generation: 0 });
   if (tokenGenerationRef.current.token !== apiToken) {
@@ -58,10 +65,13 @@ export function useKolContactState({
     && initialState.auditedKolPoolId === normalizedId
     ? initialState
     : null;
-  const [retryGeneration, setRetryGeneration] = React.useState(0);
+  const [requestEpoch, setRequestEpoch] = React.useState({ identity, generation: 0 });
+  const requestGeneration = requestEpoch.identity === identity ? requestEpoch.generation : 0;
+  const waitingForExplicitReveal = !autoReveal && requestGeneration === 0;
+  const safeIdentityState = waitingForExplicitReveal ? EXPLICIT_REVEAL_STATE : LOADING_STATE;
   const [envelope, setEnvelope] = React.useState<StateEnvelope>(() => ({
     identity,
-    value: reusableInitialState || LOADING_STATE,
+    value: waitingForExplicitReveal ? EXPLICIT_REVEAL_STATE : reusableInitialState || LOADING_STATE,
   }));
   const activeRequestRef = React.useRef<ActiveRequest | null>(null);
 
@@ -83,7 +93,12 @@ export function useKolContactState({
       }, 0);
     };
 
-    if (reusableInitialState && retryGeneration === 0) {
+    if (waitingForExplicitReveal) {
+      abortActiveRequest();
+      setEnvelope({ identity, value: EXPLICIT_REVEAL_STATE });
+      return undefined;
+    }
+    if (reusableInitialState && requestGeneration === 0) {
       abortActiveRequest();
       setEnvelope({ identity, value: reusableInitialState });
       return undefined;
@@ -103,7 +118,7 @@ export function useKolContactState({
     }
 
     const existing = activeRequestRef.current;
-    if (existing?.identity === identity && existing.retry === retryGeneration) {
+    if (existing?.identity === identity && existing.retry === requestGeneration) {
       if (existing.abortTimer) clearTimeout(existing.abortTimer);
       existing.abortTimer = null;
       return () => scheduleAbort(existing);
@@ -111,7 +126,7 @@ export function useKolContactState({
     abortActiveRequest();
     const active: ActiveRequest = {
       identity,
-      retry: retryGeneration,
+      retry: requestGeneration,
       controller: new AbortController(),
       abortTimer: null,
     };
@@ -135,11 +150,14 @@ export function useKolContactState({
       });
 
     return () => scheduleAbort(active);
-  }, [apiToken, identity, normalizedId, purpose, retryGeneration, reusableInitialState]);
+  }, [apiToken, identity, normalizedId, purpose, requestGeneration, reusableInitialState, waitingForExplicitReveal]);
 
   const retry = React.useCallback(() => {
-    setRetryGeneration((value) => value + 1);
-  }, []);
+    setRequestEpoch((current) => ({
+      identity,
+      generation: current.identity === identity ? current.generation + 1 : 1,
+    }));
+  }, [identity]);
 
   const clear = React.useCallback(() => {
     const active = activeRequestRef.current;
@@ -148,16 +166,23 @@ export function useKolContactState({
     activeRequestRef.current = null;
     setEnvelope({
       identity,
-      value: { status: "restricted", contacts: [], reason: "contact_state_cleared" },
+      value: autoReveal
+        ? { status: "restricted", contacts: [], reason: "contact_state_cleared" }
+        : EXPLICIT_REVEAL_STATE,
     });
-  }, [identity]);
+  }, [autoReveal, identity]);
 
   // Do not render the previous identity's plaintext during the render before
   // the new effect runs.
-  const state = envelope.identity === identity ? envelope.value : LOADING_STATE;
-  return { state, retry, clear };
+  const state = envelope.identity === identity ? envelope.value : safeIdentityState;
+  return { state, retry, reveal: retry, clear };
 }
 
 export function useKolDrawerContactState(apiToken: string, kolPoolId: string | number | null | undefined) {
-  return useKolContactState({ apiToken, kolPoolId, purpose: "kol_detail_view" });
+  return useKolContactState({
+    apiToken,
+    kolPoolId,
+    purpose: "kol_detail_view",
+    autoReveal: false,
+  });
 }

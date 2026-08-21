@@ -418,18 +418,6 @@
       "coverage": "family"
     },
     {
-      "id": "discovery.profile_crawl_enqueue",
-      "family": "url_profile_discovery",
-      "method": "POST",
-      "route": "/api/admin/vkpi/kol-pool/{kol_pool_id}/enqueue-profile-crawl",
-      "frontend_source": "frontend/src/services/vkpi/kolPool-api.ts",
-      "frontend_marker": "/enqueue-profile-crawl`",
-      "backend_owner": "backend/app/api/routers/vkpi_projects.py",
-      "provider_mode": "queue_only",
-      "contracts": ["stable_non_500", "no_false_ready", "no_raw_exception"],
-      "coverage": "family"
-    },
-    {
       "id": "discovery.profile_deep_crawl_enqueue",
       "family": "url_profile_discovery",
       "method": "POST",

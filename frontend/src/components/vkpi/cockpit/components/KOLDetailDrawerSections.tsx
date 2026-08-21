@@ -42,7 +42,7 @@ export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onC
           style: { color: item.v6_fit >= 85 ? "#10b981" : item.v6_fit >= 70 ? "#fbbf24" : "#fb923c" }
         }, item.v6_fit)
       ),
-      e("button", { onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white shrink-0" },
+      e("button", { type: "button", "aria-label": "关闭详情", onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white shrink-0" },
         e(X, { size: 13 })
       )
     ),
@@ -452,7 +452,16 @@ export function KOLDrawerContactAndVideos({ item, representativeVideos, onOpenVi
             "正在读取完整联系方式…",
           )
         : resolvedContactState.status === "restricted"
-          ? e("div", { role: "status", className: "text-[11px] text-amber-300" }, "联系方式已受保护 · 当前账号不可读取明文")
+          ? resolvedContactState.reason === "explicit_reveal_required"
+            ? e("div", { role: "status", className: "flex items-center gap-2 text-[11px] text-slate-400" },
+                e("span", null, "联系方式默认隐藏 · 点击后按当前权限审计读取"),
+                e("button", {
+                  type: "button",
+                  onClick: onRetryContact,
+                  className: "shrink-0 rounded-md border border-cyan-400/25 bg-cyan-400/[0.08] px-2 py-1 text-cyan-200 hover:bg-cyan-400/[0.14]",
+                }, "查看联系方式"),
+              )
+            : e("div", { role: "status", className: "text-[11px] text-amber-300" }, "联系方式已受保护 · 当前账号不可读取明文")
           : resolvedContactState.status === "error"
             ? e("div", { role: "alert", className: "flex items-center gap-2 text-[11px] text-amber-300" },
                 e("span", null, resolvedContactState.message || "联系方式读取失败"),

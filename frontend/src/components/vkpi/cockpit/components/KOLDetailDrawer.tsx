@@ -70,7 +70,11 @@ const e = React.createElement;
 // 头部身份卡与底部粘性行动条在 tab 结构之外,全 tab 常驻。tab 选择记忆到 localStorage(跨 KOL/会话)。
 export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", detailLoading = false, detailError = "", onClose, inMyList, onToggleMyList, onContact, staff = [], onReloadDetail }: any) {
   const contentFitProductSku = String(item?.product_sku || item?.productSku || "").trim();
-  const { state: contactState, retry: retryContact } = useKolDrawerContactState(apiToken, item?.id);
+  const { state: contactState, retry: retryContact, clear: clearContact } = useKolDrawerContactState(apiToken, item?.id);
+  const handleClose = React.useCallback(() => {
+    clearContact();
+    onClose?.();
+  }, [clearContact, onClose]);
   // P-GROUP-7 共享 KOL 池:把这条 My KOL(item.id = kol_pool_id)显式共享给成员(只读授予)。
   const [shareOpen, setShareOpen] = React.useState(false);
   // 【M3/M5】观看者上下文:共享来源(来自谁的共享)+ active 认领(本人/管理层可释放)。
@@ -330,10 +334,9 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   React.useEffect(() => {
     return () => clearAudiencePoll();
   }, [item?.id, clearAudiencePoll]);
-  // 新发现 KOL 档案瘦/无视频证据 → 打开抽屉自动补:入队 profile 深爬(后端幂等,
-  // 已有 evidence/活跃 job 不重复烧 Apify),入队成功后 30s×10 静默重拉 detail_bundle 等档案落地。
-  const profileCrawlRef = React.useRef<any>({ firedId: null, timer: null });
-  // 【A2/A3】抓取态(手动按钮 + 自动入队共用):idle/loading(入队请求中)/crawling(已入队,轮询等落地)/done/error。
+  // Profile 深爬只能由显式按钮触发；入队成功后 30s×10 静默重拉 detail_bundle 等档案落地。
+  const profileCrawlRef = React.useRef<any>({ timer: null });
+  // 【A2/A3】抓取态:idle/loading(入队请求中)/crawling(已入队,轮询等落地)/done/error。
   const [profileCrawlState, setProfileCrawlState] = React.useState<any>({ status: "idle", message: "" });
   // 30s×10 轮询 onReloadDetail 等抓取落地;已有表在跑就不叠表。返回是否真的起了轮询(无 onReloadDetail 时 false)。
   const startCrawlPolling = React.useCallback(() => {
@@ -355,13 +358,18 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     }, 30000);
     return true;
   }, [onReloadDetail]);
-  // 【A1/A2 共用】入队 profile 深爬。auto=true 为抽屉自动补档路径(失败静默,不打扰);
-  // 手动路径把 already_queued/already_has_evidence/no_profile_url 等全部翻成人话反馈。
-  const startProfileCrawl = React.useCallback((auto: boolean = false) => {
+  // 【A1/A2】显式入队 profile 深爬；提交 KOL 已存主页，由安全 endpoint 校验目标可写、
+  // 规范 URL 与 worker fence 后才允许进入 provider 队列。
+  const startProfileCrawl = React.useCallback(() => {
     const id = item?.id;
+    const profileUrl = String(item?.profile_url || "").trim();
     if (!apiToken || !id) return;
+    if (!profileUrl) {
+      setProfileCrawlState({ status: "error", message: "该 KOL 缺主页链接(profile_url),无法抓取" });
+      return;
+    }
     setProfileCrawlState({ status: "loading", message: "" });
-    void enqueueKolProfileCrawl(apiToken, id)
+    void enqueueKolProfileCrawl(apiToken, id, profileUrl)
       .then((res: any) => {
         const status = String(res?.status || "");
         if (status === "queued" || status === "already_queued") {
@@ -374,9 +382,6 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         } else if (status === "already_has_evidence") {
           setProfileCrawlState({ status: "done", message: "该 KOL 已有视频证据 — 正在刷新详情" });
           if (typeof onReloadDetail === "function") void onReloadDetail();
-        } else if (auto) {
-          // 自动补档路径:not_found/no_profile_url 等静默归位,原有手动按钮仍可用。
-          setProfileCrawlState({ status: "idle", message: "" });
         } else {
           setProfileCrawlState({
             status: "error",
@@ -387,28 +392,9 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         }
       })
       .catch((error: any) => {
-        if (auto) {
-          setProfileCrawlState({ status: "idle", message: "" });
-          return;
-        }
         setProfileCrawlState({ status: "error", message: error?.message ? String(error.message) : "抓取入队失败" });
       });
-  }, [apiToken, item?.id, onReloadDetail, startCrawlPolling]);
-  // 【A1 触发扩围】自动补档触发条件从「档案瘦(帖数/均播全空)」扩成:档案瘦 或
-  // 「detail_bundle 已到且该 KOL 没有任何视频证据」(item.video_evidence 空 + video_analysis.items 空)。
-  // detailBundle 异步到达,故必须进依赖;firedId 防重不变;enqueueKolProfileCrawl 后端幂等,多触发安全。
-  React.useEffect(() => {
-    const id = item?.id;
-    if (!apiToken || !id || profileCrawlRef.current.firedId === id) return;
-    const thin = !Number(item?.posts_count || 0) && !Number(item?.avg_views || 0);
-    const bundle = recordOr(detailBundle);
-    const bundleNoEvidence = bundle.status === "ready"
-      && asArray(recordOr(bundle.item).video_evidence).length === 0
-      && detailBundleAnalysisItems(bundle).length === 0;
-    if (!thin && !bundleNoEvidence) return;
-    profileCrawlRef.current.firedId = id;
-    startProfileCrawl(true);
-  }, [apiToken, item?.id, item?.posts_count, item?.avg_views, detailBundle, startProfileCrawl]);
+  }, [apiToken, item?.id, item?.profile_url, onReloadDetail, startCrawlPolling]);
   // 抓取轮询清表独立成 effect(仅按 item.id 键控):触发 effect 依赖里有 detailBundle,
   // 若把清表挂它的 cleanup,轮询每次重拉 bundle 都会误杀自己的 30s 计时器。
   React.useEffect(() => {
@@ -732,7 +718,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
         if (status === "no_evidence") {
           // 【A2】后端确认无证据 → 自动转为抓取(account_deep),不让用户对着死路按钮干瞪眼。
           setAllVideosState({ status: "no_evidence", message: "该 KOL 暂无视频证据 — 已自动转为抓取(account_deep 模式)" });
-          startProfileCrawl(false);
+          startProfileCrawl();
           return;
         }
         const queued = Number(payload?.queued || 0);
@@ -825,7 +811,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     className: "vkpi-kol-detail-drawer fixed top-0 right-0 h-full w-[520px] bg-[#0a1020] border-l border-white/[0.08] shadow-2xl z-50 flex flex-col"
   },
     // ─── Header ───
-    e(KOLDrawerHeader, { item, devices, detailLoading, detailError, onClose }),
+    e(KOLDrawerHeader, { item, devices, detailLoading, detailError, onClose: handleClose }),
 
     // ── 【M3/M5】观看者上下文条:来自谁的共享 + 认领状态/释放(有数据才渲染,全 tab 常驻)──
     e(KOLDrawerViewerContextBar, {
@@ -904,7 +890,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           e("button", {
             type: "button",
             disabled: allVideosBusy || (noEvidenceKnown && crawlBusy),
-            onClick: noEvidenceKnown ? () => startProfileCrawl(false) : handleEnqueueAllVideos,
+            onClick: noEvidenceKnown ? startProfileCrawl : handleEnqueueAllVideos,
             className: "flex w-full items-center justify-center gap-1.5 rounded-md border border-cyan-400/25 bg-cyan-400/[0.06] px-3 py-2 text-[11px] font-medium text-cyan-200 transition-colors hover:bg-cyan-400/[0.12] disabled:opacity-50",
           },
             e(Sparkles, { size: 12 }),
