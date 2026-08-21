@@ -248,10 +248,34 @@ def _process_project_contract_extract(conn: psycopg.Connection[Any], job: dict[s
 def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     """队列铁律(2026-06-12):账号深爬 execute 走队列,泳道可见;内核与 HTTP execute 同一条。"""
     from app.domains.kol import url_deep_crawl as kol_url_deep_crawl
+    from app.domains.kol import url_deep_crawl_queue
+    from app.domains.kol.video_tracking import VideoTrackingError
 
     staff = _resolve_job_staff(conn, payload)
-    with db_connection_sync_scope():
-        result = kol_url_deep_crawl.run_profile_deep_crawl_for_job(payload, staff=staff)
+    try:
+        with db_connection_sync_scope():
+            result = kol_url_deep_crawl.run_profile_deep_crawl_for_job(payload, staff=staff)
+    except VideoTrackingError as exc:
+        # A durable My-KOL actor/target fence is an authorization decision, not
+        # a transient provider failure.  Terminalize it as blocked so the
+        # global worker retry path cannot spend later after permission or URL
+        # state has already been revoked/drifted.
+        if (
+            isinstance(payload.get("target_write_fence"), dict)
+            and exc.code in url_deep_crawl_queue.TARGET_WRITE_FENCE_TERMINAL_CODES
+        ):
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        UPDATE apify_jobs
+                        SET status='blocked', last_error=%s, payload=%s::jsonb, updated_at=NOW()
+                        WHERE id=%s
+                        """,
+                        (str(exc.code)[:300], _json(payload), int(job["id"])),
+                    )
+            return
+        raise
     status = str((result or {}).get("status") or "")
     ok = status in ("", "ok", "ready", "done", "executed") or bool((result or {}).get("execution"))
     # 诚实闸(job 926 案:35mmc.com 搜索页 URL 标 done 但什么都没干):

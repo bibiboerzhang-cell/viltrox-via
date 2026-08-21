@@ -101,6 +101,9 @@ def my_kol_refresh_video_endpoint(
             kol_pool_id=int(kol_pool_id),
             evidence_id=int(evidence_id),
             staff=staff,
+            # Card-level "刷新指标" is one-shot.  Only the explicit
+            # "追踪已有视频" flow creates/reactivates a durable subscription.
+            register_tracking=False,
         )
         conn.commit()
     except video_tracking.VideoTrackingError as exc:

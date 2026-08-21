@@ -210,6 +210,23 @@ describe("KolDetailModal existing-video tracking", () => {
     window.removeEventListener("vkpi:open-kol-profile", openProfile);
   });
 
+  it("disables both paid account-crawl entries for a shared read-only KOL", async () => {
+    installDialogRoutes();
+    renderDetail(1);
+    await screen.findByText("Video 902");
+
+    expect(screen.getByText(/共享 KOL 为只读，不能发起会产生外部采集成本/)).toBeInTheDocument();
+    const recovery = screen.getByRole("button", { name: "账号补采 / 深爬" });
+    const footer = screen.getByRole("button", { name: "账号分析 · 补采" });
+    expect(recovery).toBeDisabled();
+    expect(footer).toBeDisabled();
+    fireEvent.click(recovery);
+    fireEvent.click(footer);
+    expect(
+      apiFetchMock.mock.calls.some(([path]) => String(path) === "/api/admin/vkpi/kol-pool/profile-deep-crawl/enqueue"),
+    ).toBe(false);
+  });
+
   it("queues a card-level metric refresh and labels only the queued state", async () => {
     installDialogRoutes();
     renderDetail();

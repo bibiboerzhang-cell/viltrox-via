@@ -765,7 +765,7 @@ export function KolDetailModal({
 
   // 空态深爬:enqueue-profile-deep-crawl(只报入队,不冒充完成)。
   const runDeepCrawl = async () => {
-    if (!apiToken || !item.profileUrl || busyKeys.has("crawl")) return;
+    if (!apiToken || item.isShared || !item.profileUrl || busyKeys.has("crawl")) return;
     setBusy("crawl", true);
     try {
       const { enqueueKolProfileDeepCrawl } = await import("../../../../services/vkpi/kolPool-api");
@@ -836,7 +836,7 @@ export function KolDetailModal({
       </div>
 
       {/* 分区②:追踪链(GOAFFPRO 共享件原样内嵌 —— 生成/复制/优惠码/佣金调整功能零改动) */}
-      <GoaffproTrackSection apiToken={apiToken} kolPoolId={item.poolId} />
+      <GoaffproTrackSection apiToken={apiToken} kolPoolId={item.poolId} readOnly={item.isShared} />
 
       {/* 分区③:合作项目结果(assignments 真阶段 × Projects 板块同一份映射的曝光/证据) */}
       <CoopResultsSection assignments={item.projects} projects={projects} />
@@ -907,12 +907,15 @@ export function KolDetailModal({
             {!item.profileUrl ? (
               <div className="mt-1 text-[11px] leading-4 text-warn">该 KOL 缺少主页链接，请先打开 KOL 档案补充或核验主页。</div>
             ) : null}
+            {item.isShared ? (
+              <div className="mt-1 text-[11px] leading-4 text-warn">共享 KOL 为只读，不能发起会产生外部采集成本的账号补采 / 深爬；请由收藏负责人执行。</div>
+            ) : null}
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 className={ACT_BTN}
-                disabled={!item.profileUrl || busyKeys.has("crawl")}
-                title={item.profileUrl ? "入队账号补采 / 深爬；服务端仍会校验当前写权限" : "缺少主页链接，无法发起账号深爬"}
+                disabled={item.isShared || !item.profileUrl || busyKeys.has("crawl")}
+                title={item.isShared ? "共享 KOL 仅可查看，账号补采 / 深爬须由收藏负责人发起" : item.profileUrl ? "入队账号补采 / 深爬；服务端仍会校验当前写权限" : "缺少主页链接，无法发起账号深爬"}
                 onClick={runDeepCrawl}
               >
                 {busyKeys.has("crawl") ? "入队中…" : "账号补采 / 深爬"}
@@ -965,7 +968,7 @@ export function KolDetailModal({
           <button type="button" className={ACT_BTN} disabled={!loaded.length || busyKeys.has("comments")} title="入队评论采集(job 终态轮询回执;超出轮询窗只报仍在后台)" onClick={runCommentsCollect}>
             {busyKeys.has("comments") ? "采集跟踪中…" : "采集评论"}
           </button>
-          <button type="button" className={ACT_BTN} disabled={!item.profileUrl || busyKeys.has("crawl")} title={item.profileUrl ? "重跑账号分析补采最新视频(旧库右栏同款入口;只报入队,泳道可见进度)" : "该 KOL 无主页链接,无法账号分析"} onClick={runDeepCrawl}>
+          <button type="button" className={ACT_BTN} disabled={item.isShared || !item.profileUrl || busyKeys.has("crawl")} title={item.isShared ? "共享 KOL 仅可查看，不能发起账号补采" : item.profileUrl ? "重跑账号分析补采最新视频(旧库右栏同款入口;只报入队,泳道可见进度)" : "该 KOL 无主页链接,无法账号分析"} onClick={runDeepCrawl}>
             {busyKeys.has("crawl") ? "入队中…" : "账号分析 · 补采"}
           </button>
           <button type="button" className={ACT_BTN} disabled={!viewer?.canRelease || busyKeys.has("claim")} title={viewer?.canRelease ? "释放本人 active 认领" : "无本人可释放的认领(以认领真值端点为准)"} onClick={runReleaseClaim}>

@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.domains.kol.url_deep_crawl_helpers import _video_id
+from app.domains.kol.url_deep_crawl_helpers import _canonical_url, _video_id
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 
 logger = get_logger("viltrox.domains.kol.url_deep_crawl")
@@ -24,6 +24,23 @@ logger = get_logger("viltrox.domains.kol.url_deep_crawl")
 # ── 队列铁律(2026-06-12 裁令:所有 LLM 搜索都要进左侧队列)──
 DEEP_CRAWL_JOB_TYPE = "kol_profile_deep_crawl"
 PROFILE_DEEP_CRAWL_MODES = {"auto", "profile_with_video", "account_deep"}
+TARGET_WRITE_FENCE_TERMINAL_CODES = frozenset(
+    {
+        "staff_identity_required",
+        "kol_pool_not_found",
+        "kol_pool_duplicate_not_writable",
+        "my_kol_video_write_forbidden",
+        "kol_profile_url_missing",
+        "kol_profile_url_mismatch",
+        "kol_profile_identity_invalid",
+        "kol_profile_identity_mismatch",
+        "kol_profile_write_fence_invalid",
+        "kol_profile_target_drifted",
+        "kol_profile_actor_revoked",
+        "kol_profile_actor_changed",
+        "kol_profile_write_permission_revoked",
+    }
+)
 _PLATFORM_VIDEO_ID_PATTERNS = {
     "instagram": re.compile(r"^[A-Za-z0-9_-]{3,96}$"),
     "tiktok": re.compile(r"^[0-9]{5,32}$"),
@@ -107,6 +124,166 @@ def profile_deep_crawl_is_fresh(kol_pool_id: int | None, *, max_age_hours: int =
         return False
 
 
+def _profile_target_row(conn: Any, kol_pool_id: int) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT id, duplicate_of_id, platform, handle, profile_url
+        FROM vkpi_kol_pool
+        WHERE id=?
+        LIMIT 1
+        """,
+        (int(kol_pool_id),),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def _validated_profile_identity(row: dict[str, Any], submitted_url: str) -> dict[str, str]:
+    """Bind a paid profile crawl to the pool row's stored public identity.
+
+    The submitted URL may use an equivalent platform spelling, but its stable
+    native-id/handle identity must match ``profile_url`` already stored for the
+    selected KOL.  A caller cannot substitute another account on the same
+    platform, and a malformed/unsupported stored locator cannot be promoted
+    into a provider call merely because it lives in the database.
+    """
+
+    from app.domains.kol.profile_online_identity import stable_creator_identity
+    from app.domains.kol.profile_recall_qualification import canonical_creator_aliases
+    from app.domains.kol.video_tracking import VideoTrackingError
+    from app.services.verification.viltrox_official import (
+        detect_platform_from_profile_url,
+        extract_handle_from_profile_url,
+    )
+
+    platform = str(row.get("platform") or "").strip().lower()
+    stored_url = str(row.get("profile_url") or "").strip()
+    canonical_stored = _canonical_url(stored_url)
+    canonical_submitted = _canonical_url(str(submitted_url or "").strip())
+    if not canonical_stored:
+        raise VideoTrackingError("kol_profile_url_missing", 409)
+    if not canonical_submitted:
+        raise VideoTrackingError("kol_profile_url_mismatch", 409)
+
+    stored_platform = str(detect_platform_from_profile_url(canonical_stored) or "").lower()
+    submitted_platform = str(detect_platform_from_profile_url(canonical_submitted) or "").lower()
+    if platform not in {"youtube", "instagram", "tiktok"}:
+        raise VideoTrackingError("kol_profile_identity_invalid", 422)
+    if stored_platform != platform or submitted_platform != platform:
+        raise VideoTrackingError("kol_profile_identity_mismatch", 409)
+
+    stored_handle = extract_handle_from_profile_url(canonical_stored, platform)
+    submitted_handle = extract_handle_from_profile_url(canonical_submitted, platform)
+
+    stored_identity = stable_creator_identity(
+        {"platform": platform, "handle": stored_handle, "profile_url": canonical_stored}
+    )
+    submitted_identity = stable_creator_identity(
+        {"platform": platform, "handle": submitted_handle, "profile_url": canonical_submitted}
+    )
+    if not stored_identity.get("passed") or not submitted_identity.get("passed"):
+        raise VideoTrackingError("kol_profile_identity_invalid", 422)
+
+    def aliases(identity: dict[str, Any]) -> set[str]:
+        native_ids = identity.get("native_ids") if isinstance(identity.get("native_ids"), dict) else {}
+        return canonical_creator_aliases({**identity, **native_ids})
+
+    shared_aliases = aliases(stored_identity).intersection(aliases(submitted_identity))
+    stable_shared = sorted(
+        alias for alias in shared_aliases if ":id:" in alias or ":handle:" in alias
+    )
+    if not stable_shared:
+        raise VideoTrackingError("kol_profile_identity_mismatch", 409)
+    return {
+        "canonical_profile_url": canonical_stored,
+        "platform": platform,
+        "stable_identity_key": stable_shared[0],
+    }
+
+
+def _build_target_write_fence(
+    conn: Any,
+    *,
+    kol_pool_id: int,
+    submitted_url: str,
+    staff: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate My-KOL row ownership before a paid job can be inserted."""
+
+    from app.domains.kol import video_tracking
+
+    actor_id = video_tracking._assert_target_writable(  # noqa: SLF001 - shared row-write boundary
+        conn,
+        kol_pool_id=int(kol_pool_id),
+        staff=staff,
+    )
+    row = _profile_target_row(conn, int(kol_pool_id))
+    identity = _validated_profile_identity(row, submitted_url)
+    return {
+        "version": 1,
+        "kol_pool_id": int(kol_pool_id),
+        "staff_id": int(actor_id),
+        "user_id": int((staff or {}).get("user_id") or 0) or None,
+        **identity,
+    }
+
+
+def _revalidate_target_write_fence(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Fail closed immediately before provider execution for fenced UI jobs."""
+
+    fence = payload.get("target_write_fence")
+    if not isinstance(fence, dict):
+        # Legacy/background jobs use their existing scheduler authorization.
+        # Only the My-KOL paid action opts into this durable actor/target fence.
+        return None
+
+    from app.domains.kol import video_tracking
+    from app.domains.kol.video_metric_refresh import authorize_video_metric_refresh_actor
+
+    try:
+        kol_pool_id = int(payload.get("kol_pool_id") or 0)
+        fenced_kol_pool_id = int(fence.get("kol_pool_id") or 0)
+        staff_id = int(fence.get("staff_id") or 0)
+        fenced_user_id = int(fence.get("user_id") or 0)
+    except (TypeError, ValueError):
+        raise video_tracking.VideoTrackingError("kol_profile_write_fence_invalid", 403) from None
+    if kol_pool_id <= 0 or kol_pool_id != fenced_kol_pool_id or staff_id <= 0:
+        raise video_tracking.VideoTrackingError("kol_profile_target_drifted", 409)
+
+    conn = get_conn()
+    current_staff, actor_error = authorize_video_metric_refresh_actor(
+        conn,
+        staff_id=staff_id,
+        kol_pool_id=kol_pool_id,
+    )
+    if current_staff is None:
+        error_code = {
+            "video_refresh_actor_permission_revoked": "kol_profile_write_permission_revoked",
+            "video_refresh_target_permission_revoked": "my_kol_video_write_forbidden",
+        }.get(actor_error, "kol_profile_actor_revoked")
+        raise video_tracking.VideoTrackingError(error_code, 403)
+    current_user_id = int(current_staff.get("user_id") or 0)
+    if fenced_user_id and current_user_id != fenced_user_id:
+        raise video_tracking.VideoTrackingError("kol_profile_actor_changed", 403)
+    # ``authorize_video_metric_refresh_actor`` has already re-run the same
+    # active-user, vkpi:write and row-level ownership gate used by durable
+    # video refreshes, including suspended staff and a removed favorite.
+    row = _profile_target_row(conn, kol_pool_id)
+    current_identity = _validated_profile_identity(row, str(payload.get("url") or ""))
+    if (
+        current_identity["canonical_profile_url"]
+        != str(fence.get("canonical_profile_url") or "")
+        or current_identity["platform"] != str(fence.get("platform") or "")
+        or current_identity["stable_identity_key"]
+        != str(fence.get("stable_identity_key") or "")
+    ):
+        raise video_tracking.VideoTrackingError("kol_profile_target_drifted", 409)
+    # Even an equivalent alternate spelling is not forwarded.  The provider
+    # always receives the latest database canonical URL after the identity and
+    # TOCTOU checks above have passed.
+    payload["url"] = current_identity["canonical_profile_url"]
+    return current_staff
+
+
 def enqueue_profile_deep_crawl_job(
     url: str,
     *,
@@ -118,6 +295,7 @@ def enqueue_profile_deep_crawl_job(
     search_session_id: int | None = None,
     source: str = "kol_profile_deep_crawl",
     queue_lane: str = "interactive",
+    enforce_target_write: bool = False,
 ) -> dict[str, Any]:
     """把账号深爬 execute 入 apify_jobs 队列(泳道可见),替代同步 HTTP 内爬。
 
@@ -127,6 +305,23 @@ def enqueue_profile_deep_crawl_job(
     clean_url = str(url or "").strip()
     if not clean_url:
         raise ValueError("url required")
+    target_write_fence: dict[str, Any] | None = None
+    if enforce_target_write:
+        try:
+            target_id = int(kol_pool_id or 0)
+        except (TypeError, ValueError):
+            target_id = 0
+        if target_id <= 0:
+            raise ValueError("kol_pool_id required")
+        target_write_fence = _build_target_write_fence(
+            conn,
+            kol_pool_id=target_id,
+            submitted_url=clean_url,
+            staff=staff,
+        )
+        # Provider input is always the database-backed canonical locator, not
+        # a request-supplied spelling/query variant.
+        clean_url = str(target_write_fence["canonical_profile_url"])
     normalized_mode = _profile_deep_crawl_mode(mode)
     normalized_representative_limit = _representative_video_limit(representative_video_limit)
     normalized_queue_lane = str(queue_lane or "interactive").strip().lower()
@@ -160,6 +355,8 @@ def enqueue_profile_deep_crawl_job(
         "search_session_id": int(search_session_id) if search_session_id else None,
         "source": str(source or "kol_profile_deep_crawl")[:80],
     }
+    if target_write_fence is not None:
+        payload["target_write_fence"] = target_write_fence
     job, inserted = enqueue_active_apify_job(
         conn,
         job_type=DEEP_CRAWL_JOB_TYPE,
@@ -213,6 +410,13 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
     account_deep + 1，避免历史队列升级后改变行为。
     """
     from app.domains.kol.url_deep_crawl import dry_run_url_deep_crawl
+
+    # This is intentionally the first durable-worker action.  If the actor,
+    # permission, ownership, target or canonical profile URL changed while the
+    # job waited, no provider-facing crawl function is reached.
+    revalidated_staff = _revalidate_target_write_fence(payload)
+    if revalidated_staff is not None:
+        staff = revalidated_staff
 
     body = {
         "url": str(payload.get("url") or ""),

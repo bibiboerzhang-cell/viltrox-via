@@ -135,6 +135,7 @@ def enqueue_kol_profile_deep_crawl(
 ) -> dict:
     """队列铁律:账号深爬入 apify_jobs(泳道可见),替代同步内爬。"""
     from app.domains.kol import url_deep_crawl as kol_url_deep_crawl
+    from app.domains.kol.video_tracking import VideoTrackingError
 
     try:
         return kol_url_deep_crawl.enqueue_profile_deep_crawl_job(
@@ -142,8 +143,11 @@ def enqueue_kol_profile_deep_crawl(
             kol_pool_id=body.get("kol_pool_id"),
             max_posts=int(body.get("max_posts") or 3),
             staff=staff,
+            enforce_target_write=True,
         )
-    except ValueError as exc:
+    except VideoTrackingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
