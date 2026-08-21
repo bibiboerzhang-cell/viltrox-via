@@ -279,6 +279,9 @@ export function KolVideoSection({
   queuedEvidence,
   busyKeys,
   onEnqueueOne,
+  refreshingEvidence = new Set<number>(),
+  queuedRefreshEvidence = new Set<number>(),
+  onRefreshMetrics,
 }: {
   videos: VkpiKolPoolVideoRow[];
   /** 已入队深析的 evidence id(dialogs 持有,回执逻辑不搬家) */
@@ -286,6 +289,10 @@ export function KolVideoSection({
   /** 忙碌键(`deep:{eid}`),按钮禁用与 dialogs 同一份 */
   busyKeys: ReadonlySet<string>;
   onEnqueueOne: (video: VkpiKolPoolVideoRow) => void;
+  /** 指标刷新只表示 HTTP 已排队，不代表 provider 已完成。 */
+  refreshingEvidence?: ReadonlySet<number>;
+  queuedRefreshEvidence?: ReadonlySet<number>;
+  onRefreshMetrics?: (video: VkpiKolPoolVideoRow) => void;
 }) {
   const [tab, setTab] = React.useState<VideoSortKey>("latest");
   const [relationFilter, setRelationFilter] = React.useState<VideoRelationFilter>("all");
@@ -361,6 +368,7 @@ export function KolVideoSection({
             const thumb = String(video.cached_thumbnail_url || video.thumbnail_url || "");
             const title = String(video.title || video.video_title || "未命名视频");
             const meta = V_TIER_META[tier];
+            const productSkus = [...new Set((video.product_skus || []).map((value) => String(value || "").trim()).filter(Boolean))];
             return (
               <div key={eid} className="overflow-hidden rounded-[11px] border border-line bg-panel">
                 <div className="grid h-[84px] w-full place-items-center overflow-hidden bg-card">
@@ -377,6 +385,15 @@ export function KolVideoSection({
                     <span title={video.share_count == null ? "分享未采集" : "分享(点时实测)"}>⤴ {video.share_count != null ? Number(video.share_count).toLocaleString() : "未采集"}</span>
                   </div>
                   <VideoTrendLine video={video} />
+                  {productSkus.length ? (
+                    <div className="mt-1 flex flex-wrap items-center gap-1" aria-label="该视频关联产品 SKU">
+                      {productSkus.map((sku) => (
+                        <span key={sku} className="rounded-[5px] border border-accent bg-accent-soft px-1 py-px font-mono text-[8px] text-accent" title={`关联产品 SKU · ${sku}`}>
+                          {sku}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
                     <span className={`rounded-[5px] border px-1 py-px text-[8px] font-bold ${meta.cls}`}>{meta.label}</span>
                     {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
@@ -409,6 +426,17 @@ export function KolVideoSection({
                         onClick={() => onEnqueueOne(video)}
                       >
                         {queuedEvidence.has(eid) ? "已入队" : busyKeys.has(`deep:${eid}`) ? "入队中…" : "深析"}
+                      </button>
+                    ) : null}
+                    {onRefreshMetrics && eid > 0 && !isImageKindVideo(video) ? (
+                      <button
+                        type="button"
+                        className="rounded-[5px] border border-line px-1 py-px text-[8px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default"
+                        disabled={refreshingEvidence.has(eid) || queuedRefreshEvidence.has(eid)}
+                        title="把该条播放指标刷新加入后台队列；页面不会把排队状态称为实时结果"
+                        onClick={() => onRefreshMetrics(video)}
+                      >
+                        {queuedRefreshEvidence.has(eid) ? "指标刷新已排队" : refreshingEvidence.has(eid) ? "排队中…" : "刷新指标"}
                       </button>
                     ) : null}
                   </div>

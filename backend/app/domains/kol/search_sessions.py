@@ -66,6 +66,7 @@ from app.domains.kol.search_sessions_approval import approve_session as _approve
 from app.domains.kol.search_sessions_online import (
     attach_online_qualified_result as _attach_online_qualified_result,
 )
+from app.domains.kol.search_sessions_previews import hydrate_session_item_previews
 from app.domains.kol.search_sessions_items import (
     _update_session as _update_session_impl,
     _upsert_item as _upsert_item_impl,
@@ -595,88 +596,12 @@ def get_session(
     session = _row_to_session(row)
     items = [_row_to_item(item) for item in item_rows]
     _refresh_enrichment_queue_states(conn, items)
-    # 名字全局一致(2026-07-03 用户点名):部分物化路径的 item payload 不带 display_name,
-    # 前端只好显示 handle(YT 时是一串频道 ID)。读端统一回填:凡带 kol_pool_id 且 payload
-    # 缺名字的,批量查池表补 display_name —— 一处修好,校验中/已有库/新发现全部受益。
-    _profile_ids = sorted({
-        int(it["kol_pool_id"]) for it in items
-        if it.get("kol_pool_id") and isinstance(it.get("payload"), dict)
-    })
-    if _profile_ids:
-        try:
-            _ph = ",".join(["?"] * len(_profile_ids))
-            _profile_rows = conn.execute(
-                f"""
-                SELECT id, display_name, email, contact_channels, other_contacts_json,
-                       audience_estimated_json
-                FROM vkpi_kol_pool
-                WHERE id IN ({_ph})
-                """,
-                tuple(_profile_ids),
-            ).fetchall()
-            _profiles = {int(dict(row)["id"]): dict(row) for row in _profile_rows}
-            for it in items:
-                _kid = it.get("kol_pool_id")
-                if _kid and isinstance(it.get("payload"), dict):
-                    _profile = _profiles.get(int(_kid), {})
-                    _nm = str(_profile.get("display_name") or "").strip()
-                    if _nm and not str(it["payload"].get("display_name") or "").strip():
-                        it["payload"]["display_name"] = _nm
-                    _email = str(_profile.get("email") or "").strip()
-                    _channels = _loads(_profile.get("contact_channels"), {})
-                    _other_contacts = _loads(_profile.get("other_contacts_json"), [])
-                    _contact_count = len(_other_contacts) if isinstance(_other_contacts, list) else 0
-                    if isinstance(_channels, (dict, list)):
-                        _contact_count += len(_channels)
-                    _contact_ready = bool(_email or _contact_count)
-                    it["payload"]["contact_preview"] = _compact_contact_preview(
-                        {
-                            "status": _enrichment_preview_status(
-                                it,
-                                "contact_enrichment",
-                                ready=_contact_ready,
-                            ),
-                            "channel_count": _contact_count,
-                        }
-                    )
-                    _audience = _loads(_profile.get("audience_estimated_json"), {})
-                    _audience_ready = isinstance(_audience, dict) and bool(_audience)
-                    it["payload"]["audience_preview"] = _compact_audience_preview({
-                        "status": _enrichment_preview_status(
-                            it,
-                            "audience_enrichment",
-                            ready=_audience_ready,
-                        ),
-                        "method": _text(_audience.get("method")) if isinstance(_audience, dict) else "",
-                        "confidence": _audience.get("confidence") if isinstance(_audience, dict) else None,
-                        "sample_size": _audience.get("sample_size") if isinstance(_audience, dict) else None,
-                        "async": not _audience_ready,
-                    })
-        except Exception:
-            logger.warning("search_sessions.profile_preview_backfill_failed", exc_info=True)
-    for item in items:
-        payload = item.get("payload") if isinstance(item.get("payload"), dict) else None
-        if payload is None:
-            continue
-        if not isinstance(payload.get("contact_preview"), dict) or not payload["contact_preview"]:
-            payload["contact_preview"] = _compact_contact_preview(
-                {
-                    "status": _enrichment_preview_status(
-                        item,
-                        "contact_enrichment",
-                        ready=False,
-                    ),
-                    "channel_count": 0,
-                }
-            )
-        if not isinstance(payload.get("audience_preview"), dict):
-            payload["audience_preview"] = _compact_audience_preview({
-                "status": _enrichment_preview_status(item, "audience_enrichment", ready=False),
-                "method": "",
-                "confidence": None,
-                "sample_size": None,
-                "async": True,
-            })
+    hydrate_session_item_previews(
+        conn,
+        items,
+        enrichment_status_fn=_enrichment_preview_status,
+        logger=logger,
+    )
     _attach_progress_contract(
         session,
         items,

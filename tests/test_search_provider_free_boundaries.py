@@ -140,7 +140,7 @@ def test_unified_get_cost_gate_does_not_claim_deferred_provider_cost(monkeypatch
     monkeypatch.setattr(
         unified_search,
         "_history_match",
-        lambda _query: {
+        lambda _query, *, staff=None: {
             "available": True,
             "prior_sessions": 0,
             "searched_before": False,

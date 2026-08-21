@@ -14,12 +14,13 @@ def _install_recall_fixture(
     *,
     rows: dict[int, dict[str, Any]],
     hits: list[profile_recall.RecallHit],
+    resolved_text: str = "camera reviewer",
 ) -> None:
     monkeypatch.setenv("RECALL_LLM_RERANK_ENABLED", "0")
     monkeypatch.setattr(
         profile_recall,
         "resolve_query_text",
-        lambda **_kwargs: ("camera reviewer", {"query_profile": ""}),
+        lambda **_kwargs: (resolved_text, {"query_profile": ""}),
     )
     monkeypatch.setattr(profile_recall, "_embed_query", lambda _text: ([0.1], {}))
     monkeypatch.setattr(profile_recall, "_search_qdrant", lambda _vector, _limit: hits)
@@ -219,7 +220,10 @@ def test_smart_search_forwards_result_limit_filters_and_bucket_policy(
     assert captured["filters"] == {"platforms": ["youtube"], "followers_min": 5_000}
     assert captured["search_strategy"] == "balanced"
     assert captured["bucket_policy"] == {"core_vertical": 18, "expansion": 9, "exploration": 3}
-    assert captured["allow_backfill"] is True
+    assert captured["candidate_limit"] == 500
+    assert captured["allow_backfill"] is False
+    assert captured["dedupe"] is True
+    assert captured["local_qualification_policy"]["policy_version"] == 2
 
 
 def test_ui_vertical_filter_id_matches_human_readable_profile_terms(
@@ -241,10 +245,15 @@ def test_ui_vertical_filter_id_matches_human_readable_profile_terms(
         profile_recall.RecallHit(1, 0.9, "q-1"),
         profile_recall.RecallHit(2, 0.8, "q-2"),
     ]
-    _install_recall_fixture(monkeypatch, rows=rows, hits=hits)
+    _install_recall_fixture(
+        monkeypatch,
+        rows=rows,
+        hits=hits,
+        resolved_text="lens review",
+    )
 
     result = profile_recall.recall_kol_profiles(
-        query_text="camera reviewer",
+        query_text="lens review",
         candidate_limit=2,
         limit=2,
         creator_quota=2,

@@ -375,7 +375,9 @@ export function usePoolFavorites(
       const generation = ++syncGenerationRef.current;
       setSyncState("loading");
       setSyncError("");
-      void listKolPoolFavorites(apiToken)
+      // 与同页 SmartKolInputPanel 使用同一完整上限，让服务层合并同身份的
+      // 并发 GET；两个消费方仍各自保留 identity/generation 落地保护。
+      void listKolPoolFavorites(apiToken, 5000)
         .then((resp) => {
           if (cancelled || generation !== syncGenerationRef.current) return;
           const ids = (resp.items || []).map((it: any) => it.kol_pool_id).filter(Boolean);

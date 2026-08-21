@@ -1,4 +1,4 @@
-import { apiFetch } from "../http";
+import { apiFetch, jsonBody } from "../http";
 
 // MY KOL 板块页 · 看板扩展数据层(M3/M4):
 //   ① GET /api/admin/vkpi/my-kol/board-ext?days=30 —— 八组聚合(kpi_series/funnel/
@@ -217,6 +217,15 @@ export interface VkpiContentMetricAttempt {
   shares?: number | null;
 }
 
+export interface VkpiKolVideoProductLink {
+  product_sku?: string;
+  relation_type?: string;
+  source?: string;
+  confidence?: number | null;
+  model_name?: string | null;
+  marketing_name?: string | null;
+}
+
 export interface VkpiKolPoolVideoRow {
   evidence_id?: number;
   id?: number;
@@ -259,12 +268,61 @@ export interface VkpiKolPoolVideoRow {
   freshness?: ContentFreshness;
   tracking_status?: ContentTrackingStatus;
   history_capped?: boolean;
+  /** 由服务端 evidence-product 关联表返回；只用于展示，不在前端推断产品。 */
+  product_links?: VkpiKolVideoProductLink[];
+  product_skus?: string[];
 }
 
 export async function getMyKolPoolVideos(token: string, kolPoolId: number | string, limit = 200) {
   return apiFetch<{ items?: VkpiKolPoolVideoRow[]; total?: number; kol_pool_id?: number }>(
     `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/videos?limit=${encodeURIComponent(String(limit))}`,
     {},
+    token,
+  );
+}
+
+export interface VkpiMyKolVideoQueueResponse {
+  status?: "queued" | "already_queued" | string;
+  job_id?: number;
+  job_type?: string;
+  evidence_id?: number;
+  kol_pool_id?: number;
+  product_skus?: string[];
+  product_links_created?: number;
+  existing_evidence?: boolean;
+  new_url_resolution_supported?: boolean;
+  /** HTTP 边界只排队，服务端应始终返回 false。 */
+  provider_calls_performed?: boolean;
+}
+
+/** 关联一条已归属当前 KOL 的 evidence URL 与产品，并排队刷新指标。 */
+export async function trackMyKolExistingVideo(
+  token: string,
+  kolPoolId: number | string,
+  payload: { contentUrl: string; productSkus?: string[] },
+) {
+  return apiFetch<VkpiMyKolVideoQueueResponse>(
+    `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/videos`,
+    {
+      method: "POST",
+      body: jsonBody({
+        content_url: payload.contentUrl,
+        product_skus: payload.productSkus ?? [],
+      }),
+    },
+    token,
+  );
+}
+
+/** 为一条已存在且归属当前 KOL 的 evidence 排队指标刷新；浏览器不直连 provider。 */
+export async function refreshMyKolVideoMetrics(
+  token: string,
+  kolPoolId: number | string,
+  evidenceId: number | string,
+) {
+  return apiFetch<VkpiMyKolVideoQueueResponse>(
+    `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/videos/${encodeURIComponent(String(evidenceId))}/refresh`,
+    { method: "POST" },
     token,
   );
 }

@@ -4,7 +4,9 @@ import { formatLocal } from "../../lib/timeLocal";
 import { ModalShell, SectionLabel, platformBadge } from "./MarketVoicePage.dialogs";
 import {
   getMyKolPoolVideos,
+  refreshMyKolVideoMetrics,
   summarizeKolVideos,
+  trackMyKolExistingVideo,
   type KolLibraryRow,
   type LibraryFilter,
   type VkpiKolPoolVideoRow,
@@ -68,6 +70,22 @@ export function ReceiptLine({ msg }: { msg: FlowReceipt | null }) {
 
 const errText = (err: unknown, fallback: string) =>
   String((err as { detail?: unknown; message?: unknown })?.detail || (err as Error)?.message || fallback).slice(0, 100);
+
+function videoWriteError(err: unknown, action: string): string {
+  const code = errText(err, "请重试");
+  if (code === "new_video_target_resolution_required") {
+    return "当前仅支持已采集视频，请先账号补采/深爬后重试";
+  }
+  const status = Number((err as { status?: unknown })?.status || 0);
+  if (status === 401 || status === 403 || /not_writable|not_owned|forbidden|permission/i.test(code)) {
+    return `${action}失败：服务端拒绝写入，当前账号对该 KOL 可能只有共享只读权限。`;
+  }
+  return `${action}失败：${code}`;
+}
+
+function parseProductSkus(value: string): string[] {
+  return [...new Set(value.split(/[,，\n]/).map((part) => part.trim()).filter(Boolean))];
+}
 
 const humanLibraryName = (row: KolLibraryRow | null | undefined) => (
   kolHumanDisplayName(row as unknown as Record<string, unknown> | undefined)
@@ -437,6 +455,19 @@ export function KolDetailModal({
   const humanName = humanLibraryName(item);
   const publicHandle = humanLibraryHandle(item);
   const total = rows.length;
+  const poolId = Number(item?.poolId) || 0;
+  const targetRef = React.useRef({ poolId: 0, epoch: 0 });
+  if (targetRef.current.poolId !== poolId) {
+    targetRef.current = { poolId, epoch: targetRef.current.epoch + 1 };
+  }
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+  const targetIsCurrent = (target: { poolId: number; epoch: number }) => (
+    mountedRef.current && targetRef.current.poolId === target.poolId && targetRef.current.epoch === target.epoch
+  );
   const cancelledRef = React.useRef(false);
   React.useEffect(() => {
     cancelledRef.current = false;
@@ -492,8 +523,15 @@ export function KolDetailModal({
   const [busyKeys, setBusyKeys] = React.useState<Set<string>>(new Set());
   const [queuedEvidence, setQueuedEvidence] = React.useState<Set<number>>(new Set());
   const [projId, setProjId] = React.useState("");
+  const [trackUrl, setTrackUrl] = React.useState("");
+  const [trackSkuInput, setTrackSkuInput] = React.useState("");
+  const [trackBusy, setTrackBusy] = React.useState(false);
+  const [refreshingEvidence, setRefreshingEvidence] = React.useState<Set<number>>(new Set());
+  const [queuedRefreshEvidence, setQueuedRefreshEvidence] = React.useState<Set<number>>(new Set());
   React.useEffect(() => {
     setMsgs({}); setQueuedEvidence(new Set()); setProjId("");
+    setTrackUrl(""); setTrackSkuInput(""); setTrackBusy(false);
+    setRefreshingEvidence(new Set()); setQueuedRefreshEvidence(new Set());
   }, [item?.poolId]);
   const setMsg = (key: string, msg: FlowReceipt | null) => setMsgs((prev) => ({ ...prev, [key]: msg }));
   const setBusy = (key: string, on: boolean) =>
@@ -502,6 +540,77 @@ export function KolDetailModal({
   const loaded = videos || [];
   // 汇总口径与视频网格住 libdetail(KolVideoSection);这里只留动作排要用的未析清单。
   const { unanalyzed } = React.useMemo(() => summarizeKolVideos(loaded), [loaded]);
+
+  const runTrackVideo = async () => {
+    if (!apiToken || !poolId || trackBusy) return;
+    const contentUrl = trackUrl.trim();
+    if (!contentUrl) {
+      setMsg("tracking", { text: "请先填写已采集视频 URL。", tone: "error" });
+      return;
+    }
+    const productSkus = parseProductSkus(trackSkuInput);
+    if (productSkus.length > 5) {
+      setMsg("tracking", { text: "一次最多关联 5 个产品 SKU。", tone: "error" });
+      return;
+    }
+    const target = { ...targetRef.current };
+    setTrackBusy(true);
+    setMsg("tracking", null);
+    try {
+      const resp = await trackMyKolExistingVideo(apiToken, target.poolId, { contentUrl, productSkus });
+      if (!targetIsCurrent(target)) return;
+      const status = String(resp?.status || "");
+      if (status !== "queued" && status !== "already_queued") {
+        setMsg("tracking", { text: `追踪请求未获服务端确认：${status || "未知状态"}`, tone: "error" });
+        return;
+      }
+      const eid = Number(resp?.evidence_id) || 0;
+      if (eid > 0) setQueuedRefreshEvidence((prev) => new Set(prev).add(eid));
+      setMsg("tracking", {
+        text: `${status === "already_queued" ? "该视频的指标刷新已在队列中" : "指标刷新已排队"}${eid ? `（evidence #${eid}）` : ""}${productSkus.length ? ` · 已提交 ${productSkus.length} 个 SKU 关联` : ""}。`,
+        tone: "info",
+      });
+      setTrackUrl("");
+      setTrackSkuInput("");
+      setVideosTick((tick) => tick + 1);
+    } catch (err) {
+      if (targetIsCurrent(target)) setMsg("tracking", { text: videoWriteError(err, "追踪"), tone: "error" });
+    } finally {
+      if (targetIsCurrent(target)) setTrackBusy(false);
+    }
+  };
+
+  const runMetricRefresh = async (video: VkpiKolPoolVideoRow) => {
+    const evidenceId = Number(video.evidence_id ?? video.id) || 0;
+    if (!apiToken || !poolId || !evidenceId || refreshingEvidence.has(evidenceId) || queuedRefreshEvidence.has(evidenceId)) return;
+    const target = { ...targetRef.current };
+    setRefreshingEvidence((prev) => new Set(prev).add(evidenceId));
+    setMsg("metrics", null);
+    try {
+      const resp = await refreshMyKolVideoMetrics(apiToken, target.poolId, evidenceId);
+      if (!targetIsCurrent(target)) return;
+      const status = String(resp?.status || "");
+      if (status !== "queued" && status !== "already_queued") {
+        setMsg("metrics", { text: `指标刷新未获服务端确认（#${evidenceId}）：${status || "未知状态"}`, tone: "error" });
+        return;
+      }
+      setQueuedRefreshEvidence((prev) => new Set(prev).add(evidenceId));
+      setMsg("metrics", {
+        text: `${status === "already_queued" ? "指标刷新已在队列中" : "指标刷新已排队"}（#${evidenceId}）；完成后再次打开详情可查看最新快照趋势。`,
+        tone: "info",
+      });
+    } catch (err) {
+      if (targetIsCurrent(target)) setMsg("metrics", { text: videoWriteError(err, `指标刷新（#${evidenceId}）`), tone: "error" });
+    } finally {
+      if (targetIsCurrent(target)) {
+        setRefreshingEvidence((prev) => {
+          const next = new Set(prev);
+          next.delete(evidenceId);
+          return next;
+        });
+      }
+    }
+  };
 
   // 单条深析入队(「未判定」一键深析同用):端点真实返回才标「已入队」。
   const enqueueOne = async (video: VkpiKolPoolVideoRow) => {
@@ -726,6 +835,37 @@ export function KolDetailModal({
       {/* 分区④:已采集内容——品牌关系筛选、五种排序与覆盖率住 libdetail。 */}
       <div className="mb-[22px]">
         <SectionLabel>已采集内容 · Viltrox 筛查</SectionLabel>
+        <div className="mb-3 rounded-[11px] border border-line bg-panel px-3 py-2.5">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-[11px] font-semibold text-ink-2">追踪已有视频</span>
+            <span className="text-[9.5px] text-muted">只排队刷新快照，不表示实时完成</span>
+          </div>
+          <div className="grid gap-2 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_auto]">
+            <input
+              aria-label="已有视频 URL"
+              type="url"
+              value={trackUrl}
+              onChange={(event) => setTrackUrl(event.target.value)}
+              placeholder="粘贴当前 KOL 已采集的视频 URL"
+              className={FIELD}
+            />
+            <input
+              aria-label="关联产品 SKU"
+              type="text"
+              value={trackSkuInput}
+              onChange={(event) => setTrackSkuInput(event.target.value)}
+              placeholder="产品 SKU，逗号分隔（最多 5 个）"
+              className={FIELD}
+            />
+            <button type="button" className={ACT_BTN} disabled={trackBusy} onClick={runTrackVideo}>
+              {trackBusy ? "提交中…" : "追踪并排队刷新"}
+            </button>
+          </div>
+          <div className="mt-1.5 text-[9.5px] text-muted">
+            新 URL 请先通过“账号分析 · 补采”或深爬建立归属证据；是否可写由服务端权限判定，共享只读不会冒充成功。
+          </div>
+          <ReceiptLine msg={msgs.tracking || null} />
+        </div>
         {videos == null ? (
           <div className="py-5 text-center text-[12px] text-muted">视频读取中…</div>
         ) : videosError ? (
@@ -744,8 +884,17 @@ export function KolDetailModal({
             <ReceiptLine msg={msgs.crawl || null} />
           </div>
         ) : (
-          <KolVideoSection videos={loaded} queuedEvidence={queuedEvidence} busyKeys={busyKeys} onEnqueueOne={enqueueOne} />
+          <KolVideoSection
+            videos={loaded}
+            queuedEvidence={queuedEvidence}
+            busyKeys={busyKeys}
+            onEnqueueOne={enqueueOne}
+            refreshingEvidence={refreshingEvidence}
+            queuedRefreshEvidence={queuedRefreshEvidence}
+            onRefreshMetrics={runMetricRefresh}
+          />
         )}
+        <ReceiptLine msg={msgs.metrics || null} />
       </div>
 
       {/* 闭环动作排:入项目 / 受众画像 / 深析入队 / 采集评论 / 释放认领(全真端点回执) */}

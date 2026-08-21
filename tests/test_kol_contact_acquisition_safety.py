@@ -130,11 +130,10 @@ def _verified_email(db: sqlite3.Connection, *, value: str = "Business@Example.co
 
 def test_migration_is_additive_runner_owned_and_contains_safety_contract() -> None:
     sequence = connection._discover_postgres_migrations()
-    # This worktree is a bounded local slice: 276-281 are not present here, so
-    # being the discovered latest proves repository ordering only.  It is not a
-    # deployment-readiness claim; the missing production migration history must
-    # be reconciled before this slice can be deployed.
-    assert sequence[-1] == FORWARD_MIGRATION.name
+    # The contact safety migration remains ordered after the LLM precision
+    # migration. Later additive migrations are allowed and must not make this
+    # contract test stale merely because the repository advanced.
+    assert FORWARD_MIGRATION.name in sequence
     assert sequence.index("275_vkpi_llm_cost_precision.sql") < sequence.index(FORWARD_MIGRATION.name)
     sql = FORWARD_MIGRATION.read_text(encoding="utf-8")
     upper = sql.upper()

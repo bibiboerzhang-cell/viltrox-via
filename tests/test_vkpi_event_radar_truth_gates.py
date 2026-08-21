@@ -312,7 +312,8 @@ def _install_importable_reviewed_catalog(monkeypatch) -> dict[str, Any]:
     their hermetic fixture must satisfy the same contract explicitly.
     """
     catalog = deepcopy(radar.load_reviewed_catalog())
-    checked_at = datetime.fromisoformat(str(catalog["checked_at"]).replace("Z", "+00:00"))
+    checked_at = datetime.now(timezone.utc)
+    catalog["checked_at"] = checked_at.isoformat().replace("+00:00", "Z")
     for index, source in enumerate(catalog["sources"]):
         source["source_checked_at"] = (
             checked_at - timedelta(minutes=index + 1)

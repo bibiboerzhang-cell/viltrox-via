@@ -471,12 +471,37 @@ export async function unfavoriteKolPool(token: string, kolPoolId: number | strin
   );
 }
 
-export async function listKolPoolFavorites(token: string, limit = 2000) {
-  return apiFetch<{ items?: Row[]; total?: number }>(
-    `/api/admin/vkpi/kol-pool/favorites?limit=${encodeURIComponent(String(limit))}`,
+type KolPoolFavoritesResponse = { items?: Row[]; total?: number };
+
+// KOL 池页同时挂载池卡星标与「找达人」关注状态。两者在同一 render/effect
+// 批次读取同一身份、同一上限时，共享这一笔仍在途的 GET，避免初次挂载和身份
+// 切换各打两遍端点。这里只合并 in-flight：请求落地后立即清除，收藏变更事件
+// 仍会拿到服务端新快照；token 参与隔离，旧身份的 Promise 不会被新身份复用。
+const favoritesReadsInFlight = new Map<string, Map<number, Promise<KolPoolFavoritesResponse>>>();
+
+export async function listKolPoolFavorites(token: string, limit = 2000): Promise<KolPoolFavoritesResponse> {
+  const normalizedLimit = Math.max(1, Math.trunc(Number(limit) || 2000));
+  const readsForToken = favoritesReadsInFlight.get(token);
+  const existing = readsForToken?.get(normalizedLimit);
+  if (existing) return existing;
+
+  const request = apiFetch<KolPoolFavoritesResponse>(
+    `/api/admin/vkpi/kol-pool/favorites?limit=${encodeURIComponent(String(normalizedLimit))}`,
     {},
     token,
   );
+  const tokenReads = readsForToken || new Map<number, Promise<KolPoolFavoritesResponse>>();
+  tokenReads.set(normalizedLimit, request);
+  favoritesReadsInFlight.set(token, tokenReads);
+
+  const clearRequest = () => {
+    const current = favoritesReadsInFlight.get(token);
+    if (current?.get(normalizedLimit) !== request) return;
+    current.delete(normalizedLimit);
+    if (!current.size) favoritesReadsInFlight.delete(token);
+  };
+  request.then(clearRequest, clearRequest);
+  return request;
 }
 
 export async function listKolPoolVideos(token: string, kolPoolId: number | string, limit = 50) {
