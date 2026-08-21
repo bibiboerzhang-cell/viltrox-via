@@ -14,6 +14,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from app.api.dependencies.perms import require_tab
+from app.domains.access import scope
 from app.domains.projects.launch_project import generate_launch_plan
 
 router = APIRouter(prefix="/api/admin/vkpi/launch", tags=["vkpi-launch"])
@@ -29,7 +30,10 @@ def post_launch_plan(
 
     body 可选:``{"candidate_limit": <int 1..100>}``;缺省走 generate_launch_plan 的默认 20。
     """
-    del staff  # 权限已由 require_tab 校验;本端点无 scope 二次过滤需求。
+    try:
+        scope.assert_project_access(int(project_id), staff, write=False)
+    except scope.ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="launch_project_read_forbidden") from exc
     payload = body if isinstance(body, dict) else {}
     raw_limit = payload.get("candidate_limit")
     candidate_limit = 20
