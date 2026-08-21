@@ -430,7 +430,13 @@ def test_new_creator_flow_rechecks_after_profile_provider_before_pool_write(
             self.rollbacks += 1
 
     conn = _Conn()
-    state = {"revoked": False, "provider": 0, "write": 0}
+    state = {
+        "revoked": False,
+        "provider": 0,
+        "pool_write": 0,
+        "evidence_write": 0,
+        "final_v1": 0,
+    }
     classified = SimpleNamespace(
         normalized_url="https://www.youtube.com/watch?v=abcdefghijk",
         platform="youtube",
@@ -450,9 +456,17 @@ def test_new_creator_flow_rechecks_after_profile_provider_before_pool_write(
         state["revoked"] = True
         return {"status": "ok"}
 
-    def write_bomb(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
-        state["write"] += 1
+    def pool_write_bomb(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        state["pool_write"] += 1
         raise AssertionError("pool write must not run after revocation")
+
+    def evidence_write_bomb(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        state["evidence_write"] += 1
+        raise AssertionError("evidence write must not run after revocation")
+
+    def final_v1_bomb(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        state["final_v1"] += 1
+        raise AssertionError("final_v1 must not enqueue after revocation")
 
     monkeypatch.setattr(flows, "get_conn", lambda: conn)
     monkeypatch.setattr(
@@ -463,7 +477,9 @@ def test_new_creator_flow_rechecks_after_profile_provider_before_pool_write(
     monkeypatch.setattr(execute, "_profile_target", lambda *_args, **_kwargs: "creator")
     monkeypatch.setattr(execute, "_crawl_profile_basics", crawl)
     monkeypatch.setattr(video_url_resolver, "find_official_channel_match", lambda *_args: None)
-    monkeypatch.setattr(flows, "write_kol_profile_basics", write_bomb)
+    monkeypatch.setattr(flows, "write_kol_profile_basics", pool_write_bomb)
+    monkeypatch.setattr(flows, "ensure_video_evidence_from_url", evidence_write_bomb)
+    monkeypatch.setattr(flows, "_enqueue_final_v1_video_analysis", final_v1_bomb)
 
     with pytest.raises(access.ProviderJobAccessError) as raised:
         flows._execute_new_creator_video_flow(
@@ -474,7 +490,13 @@ def test_new_creator_flow_rechecks_after_profile_provider_before_pool_write(
         )
 
     assert raised.value.code == "provider_job_actor_inactive"
-    assert state == {"revoked": True, "provider": 1, "write": 0}
+    assert state == {
+        "revoked": True,
+        "provider": 1,
+        "pool_write": 0,
+        "evidence_write": 0,
+        "final_v1": 0,
+    }
     assert conn.rollbacks == 1
 
 
@@ -483,10 +505,19 @@ def test_cn_flow_rechecks_after_apify_before_download_llm_or_cache(
 ) -> None:
     from app.domains.kol import cn_platform_video as cn
     from app.domains.kol import url_deep_crawl
+    from app.domains.media import cache as media_cache
     from app.platform import apify_budget
+    from app.services.media import video_download
     from app.services.scraping import apify_cn
 
-    state = {"revoked": False, "provider": 0, "later": 0}
+    state = {
+        "revoked": False,
+        "provider": 0,
+        "download": 0,
+        "gemini": 0,
+        "media_cache": 0,
+        "analysis_cache": 0,
+    }
 
     def checkpoint() -> None:
         if state["revoked"]:
@@ -503,9 +534,12 @@ def test_cn_flow_rechecks_after_apify_before_download_llm_or_cache(
             "creator": {"display_name": "creator"},
         }
 
-    def later_bomb(*_args: Any, **_kwargs: Any) -> Any:
-        state["later"] += 1
-        raise AssertionError("download/LLM/cache must not run after revocation")
+    def bomb(kind: str):
+        def fail(*_args: Any, **_kwargs: Any) -> Any:
+            state[kind] += 1
+            raise AssertionError(f"{kind} must not run after revocation")
+
+        return fail
 
     monkeypatch.setattr(
         url_deep_crawl,
@@ -521,8 +555,10 @@ def test_cn_flow_rechecks_after_apify_before_download_llm_or_cache(
     monkeypatch.setattr(apify_cn, "scrape_cn_platform_video", scrape)
     monkeypatch.setattr(cn, "_expand_cn_short_link", lambda value: value)
     monkeypatch.setattr(cn, "_load_ready_cn_analysis", lambda *_args: None)
-    monkeypatch.setattr(cn, "_run_cn_gemini_final_v1", later_bomb)
-    monkeypatch.setattr(cn, "_store_cn_analysis", later_bomb)
+    monkeypatch.setattr(video_download, "download_direct_video_url", bomb("download"))
+    monkeypatch.setattr(cn, "_run_cn_gemini_final_v1", bomb("gemini"))
+    monkeypatch.setattr(media_cache, "cache_local_video_file", bomb("media_cache"))
+    monkeypatch.setattr(cn, "_store_cn_analysis", bomb("analysis_cache"))
 
     with pytest.raises(access.ProviderJobAccessError) as raised:
         cn.run_cn_platform_video_for_job(
@@ -536,4 +572,11 @@ def test_cn_flow_rechecks_after_apify_before_download_llm_or_cache(
         )
 
     assert raised.value.code == "provider_job_permission_revoked"
-    assert state == {"revoked": True, "provider": 1, "later": 0}
+    assert state == {
+        "revoked": True,
+        "provider": 1,
+        "download": 0,
+        "gemini": 0,
+        "media_cache": 0,
+        "analysis_cache": 0,
+    }
