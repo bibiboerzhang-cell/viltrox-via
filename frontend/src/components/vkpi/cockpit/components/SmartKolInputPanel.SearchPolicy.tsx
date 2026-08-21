@@ -1,6 +1,10 @@
 import { ChevronDown, SlidersHorizontal } from "lucide-react";
 
 import { COUNTRY_INFO } from "../data/countryInfo";
+import {
+  SMART_KOL_LANGUAGE_OPTIONS,
+  SMART_KOL_MAX_LANGUAGES,
+} from "./SmartKolInputPanel.QualityFilters";
 
 export const KOL_SEARCH_RESULT_LIMIT = 30;
 
@@ -9,7 +13,6 @@ export type GearContentFilter = "any" | "yes" | "no";
 
 export interface KolSearchFilterState {
   country: string;
-  language: string;
   followersMin: string;
   followersMax: string;
   vertical: string;
@@ -86,7 +89,6 @@ export const KOL_SEARCH_STRATEGIES: Record<KolSearchStrategy, KolSearchStrategyP
 
 export const EMPTY_KOL_SEARCH_FILTERS: KolSearchFilterState = {
   country: "",
-  language: "",
   followersMin: "",
   followersMax: "",
   vertical: "",
@@ -105,16 +107,28 @@ function positiveNumber(raw: string): number | undefined {
   return Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
 }
 
+const SMART_KOL_LANGUAGE_CODES = new Set(SMART_KOL_LANGUAGE_OPTIONS.map((option) => option.value));
+
+export function normalizeKolSearchLanguages(values: readonly string[]): string[] {
+  return Array.from(new Set(
+    values
+      .map((value) => String(value || "").trim().toLowerCase())
+      .filter((value) => SMART_KOL_LANGUAGE_CODES.has(value)),
+  )).sort().slice(0, SMART_KOL_MAX_LANGUAGES);
+}
+
 export function toKolSearchApiFilters(
   state: KolSearchFilterState,
   platforms: string[],
+  languages: readonly string[] = [],
 ): KolSearchApiFilters {
   const followersMin = positiveNumber(state.followersMin);
   const followersMax = positiveNumber(state.followersMax);
+  const canonicalLanguages = normalizeKolSearchLanguages(languages);
   return {
     ...(platforms.length ? { platforms } : {}),
     ...(state.country ? { countries: [state.country] } : {}),
-    ...(state.language ? { languages: [state.language] } : {}),
+    ...(canonicalLanguages.length ? { languages: canonicalLanguages } : {}),
     ...(followersMin != null ? { followers_min: followersMin } : {}),
     ...(followersMax != null ? { followers_max: followersMax } : {}),
     ...(state.vertical ? { verticals: [state.vertical] } : {}),
@@ -122,10 +136,14 @@ export function toKolSearchApiFilters(
   };
 }
 
-export function activeKolSearchFilterCount(state: KolSearchFilterState, platforms: string[]): number {
+export function activeKolSearchFilterCount(
+  state: KolSearchFilterState,
+  platforms: string[],
+  languages: readonly string[] = [],
+): number {
   return Number(platforms.length > 0)
     + Number(Boolean(state.country))
-    + Number(Boolean(state.language))
+    + Number(normalizeKolSearchLanguages(languages).length > 0)
     + Number(Boolean(state.followersMin || state.followersMax))
     + Number(Boolean(state.vertical))
     + Number(state.gearContent !== "any");
@@ -136,19 +154,6 @@ const PLATFORM_OPTIONS = [
   { key: "instagram", label: "Instagram" },
   { key: "tiktok", label: "TikTok" },
   { key: "facebook", label: "Facebook" },
-];
-
-const LANGUAGE_OPTIONS = [
-  ["", "全部语言"],
-  ["en", "英语"],
-  ["ja", "日语"],
-  ["ko", "韩语"],
-  ["de", "德语"],
-  ["fr", "法语"],
-  ["es", "西班牙语"],
-  ["pt", "葡萄牙语"],
-  ["it", "意大利语"],
-  ["zh", "中文"],
 ];
 
 const VERTICAL_OPTIONS = [
@@ -171,6 +176,8 @@ export function KolSearchPolicyPanel({
   onStrategyChange,
   platforms,
   onPlatformsChange,
+  languages,
+  onLanguagesChange,
   filters,
   onFiltersChange,
 }: {
@@ -180,11 +187,15 @@ export function KolSearchPolicyPanel({
   onStrategyChange: (strategy: KolSearchStrategy) => void;
   platforms: string[];
   onPlatformsChange: (platforms: string[]) => void;
+  languages: readonly string[];
+  onLanguagesChange: (languages: string[]) => void;
   filters: KolSearchFilterState;
   onFiltersChange: (filters: KolSearchFilterState) => void;
 }) {
   const policy = KOL_SEARCH_STRATEGIES[strategy];
-  const activeCount = activeKolSearchFilterCount(filters, platforms);
+  const canonicalLanguages = normalizeKolSearchLanguages(languages);
+  const languageSelectValue = canonicalLanguages.length > 1 ? "__multiple__" : canonicalLanguages[0] || "";
+  const activeCount = activeKolSearchFilterCount(filters, platforms, canonicalLanguages);
   const update = <K extends keyof KolSearchFilterState>(key: K, value: KolSearchFilterState[K]) => {
     onFiltersChange({ ...filters, [key]: value });
   };
@@ -266,14 +277,23 @@ export function KolSearchPolicyPanel({
               </select>
             </label>
             <label className="space-y-1 text-[9.5px] text-slate-500">
-              <span>内容语言</span>
+              <span>内容语言 · 同严格硬筛</span>
               <select
                 aria-label="内容语言"
-                value={filters.language}
-                onChange={(event) => update("language", event.target.value)}
+                value={languageSelectValue}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value !== "__multiple__") onLanguagesChange(value ? [value] : []);
+                }}
                 className="w-full rounded-md border border-white/[0.08] bg-black/30 px-2 py-1.5 text-[10px] text-slate-200 outline-none focus:border-cyan-300/35"
               >
-                {LANGUAGE_OPTIONS.map(([value, label]) => <option key={value || "all"} value={value}>{label}</option>)}
+                <option value="">全部语言</option>
+                {canonicalLanguages.length > 1 ? (
+                  <option value="__multiple__" disabled>已选 {canonicalLanguages.length} 种语言 · 在严格筛选中管理</option>
+                ) : null}
+                {SMART_KOL_LANGUAGE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
               </select>
             </label>
             <label className="space-y-1 text-[9.5px] text-slate-500">

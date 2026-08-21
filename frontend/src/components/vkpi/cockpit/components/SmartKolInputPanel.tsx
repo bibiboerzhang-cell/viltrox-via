@@ -61,6 +61,7 @@ import {
   KOL_SEARCH_RESULT_LIMIT,
   KOL_SEARCH_STRATEGIES,
   KolSearchPolicyPanel,
+  normalizeKolSearchLanguages,
   strategyFromLegacyMode,
   toKolSearchApiFilters,
   type KolSearchFilterState,
@@ -119,7 +120,10 @@ export function SmartKolInputPanel({
   // 国家/地区只有一个真状态：搜索前筛选与结果区「重新查找」共用，避免 UI 看见 A、请求却发 B。
   const discoveryRegion = searchFilters.country;
   const setDiscoveryRegion = (value: string) => setSearchFilters((current) => ({ ...current, country: value }));
-  const [contentLanguages, setContentLanguages] = useState<string[]>([]);
+  const [contentLanguages, setContentLanguagesState] = useState<string[]>([]);
+  const setContentLanguages = useCallback((values: string[]) => {
+    setContentLanguagesState(normalizeKolSearchLanguages(values));
+  }, []);
   const [kolProfileTypes, setKolProfileTypes] = useState<string[]>([]);
   // 刀1·流3 恒开(2026-06-16):全网发现不再挂开关,任何文字搜索都自动触发(见 run() 的 queueTextAdvance)。
   // P0-6 地区口径:默认开,排除 CN/HK/TW 三地区(country/market 判据),海外中文博主放行;后端参数名保留 exclude_chinese。
@@ -525,7 +529,7 @@ export function SmartKolInputPanel({
     setActiveSearchSession(null);
     setSessionPollNotice("");
     try {
-      const apiFilters = toKolSearchApiFilters(searchFilters, discoveryPlatforms);
+      const apiFilters = toKolSearchApiFilters(searchFilters, discoveryPlatforms, contentLanguages);
       const response = await smartKolSearch(apiToken, query, {
         mode: "auto",
         maxPosts: 3,
@@ -750,7 +754,7 @@ export function SmartKolInputPanel({
       // 库内推荐与全网候选分开控量。全网先放宽候选,后端再按相关性/触达/账号类型过滤,
       // 避免原始 25 个里补全后只剩 4 个可展示。地区由 discoveryRegion 控制。
       // 新合同把「筛选后 30 人」与底层 creator/reviewer 兼容配额分开；显式硬筛选不得为凑数放松。
-      const apiFilters = toKolSearchApiFilters(searchFilters, discoveryPlatforms);
+      const apiFilters = toKolSearchApiFilters(searchFilters, discoveryPlatforms, contentLanguages);
       const response = await smartKolSearchProfileAdvanceJob(apiToken, query, {
         candidateLimit: 500,
         limit: KOL_SEARCH_RESULT_LIMIT,
@@ -875,6 +879,8 @@ export function SmartKolInputPanel({
         onStrategyChange={setSearchStrategy}
         platforms={discoveryPlatforms}
         onPlatformsChange={setDiscoveryPlatforms}
+        languages={contentLanguages}
+        onLanguagesChange={setContentLanguages}
         filters={searchFilters}
         onFiltersChange={setSearchFilters}
       />
