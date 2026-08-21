@@ -19,6 +19,10 @@ TREND_STATUS = "success"
 MAX_TREND_EVIDENCE = 200
 MAX_SNAPSHOTS_PER_EVIDENCE = 80
 FRESH_FOR_HOURS = 24
+TREND_BASELINE_MAX_AGE_HOURS = {
+    24: 36,
+    24 * 7: 24 * 7 + 24 * 3.5,
+}
 
 
 def metric_or_none(value: Any) -> int | None:
@@ -586,12 +590,22 @@ def _baseline_for(
     hours: int,
 ) -> dict[str, Any] | None:
     target = latest_at - timedelta(hours=hours)
-    candidates = [
-        row
-        for row in successful
-        if metric_or_none(row.get("views")) is not None
-        and (_parse_timestamp(row.get("fetched_at")) or datetime.max.replace(tzinfo=timezone.utc)) <= target
-    ]
+    # A baseline must be old enough to cover the named window, but not so old
+    # that a weekly/monthly observation is mislabeled as a 24h delta.  The
+    # bounded tolerance absorbs normal scheduler jitter while failing closed
+    # after a missed cadence.  Callers then expose ``insufficient_history``
+    # instead of a numerically real but semantically false fixed-window trend.
+    max_age_hours = TREND_BASELINE_MAX_AGE_HOURS.get(hours, hours * 1.5)
+    oldest = latest_at - timedelta(hours=max_age_hours)
+    candidates: list[dict[str, Any]] = []
+    for row in successful:
+        fetched_at = _parse_timestamp(row.get("fetched_at"))
+        if (
+            metric_or_none(row.get("views")) is not None
+            and fetched_at is not None
+            and oldest <= fetched_at <= target
+        ):
+            candidates.append(row)
     if not candidates:
         return None
     return max(

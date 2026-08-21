@@ -451,6 +451,62 @@ def test_batch_trends_cap_history_and_mark_insufficient_7d_baseline() -> None:
     assert trend["delta_7d_status"] == "insufficient_history"
 
 
+def test_weekly_cold_baseline_cannot_masquerade_as_24h_delta() -> None:
+    conn = _conn()
+    latest = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+    for run_id, fetched_at, views in (
+        ("weekly-baseline", latest - timedelta(days=7), 100),
+        ("weekly-latest", latest, 800),
+    ):
+        snapshots.append_snapshot(
+            conn,
+            evidence_id=7,
+            provider="fixture",
+            fetched_at=fetched_at.isoformat(),
+            source_observed_at=fetched_at.isoformat(),
+            views=views,
+            status="success",
+            run_id=run_id,
+        )
+    conn.commit()
+
+    trend = snapshots.metric_trends_for_evidence(conn, [7], now=latest)[7]
+
+    assert trend["views_delta_24h"] is None
+    assert trend["delta_24h_status"] == "insufficient_history"
+    assert trend["views_delta_7d"] == 700
+    assert trend["delta_7d_status"] == "ready"
+    assert trend["tracking_status"] == "tracked"
+
+
+def test_baseline_older_than_window_tolerance_is_not_labeled_fixed_window() -> None:
+    conn = _conn()
+    latest = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+    for run_id, fetched_at, views in (
+        ("too-old", latest - timedelta(days=11), 100),
+        ("latest", latest, 900),
+    ):
+        snapshots.append_snapshot(
+            conn,
+            evidence_id=7,
+            provider="fixture",
+            fetched_at=fetched_at.isoformat(),
+            source_observed_at=fetched_at.isoformat(),
+            views=views,
+            status="success",
+            run_id=run_id,
+        )
+    conn.commit()
+
+    trend = snapshots.metric_trends_for_evidence(conn, [7], now=latest)[7]
+
+    assert trend["views_delta_24h"] is None
+    assert trend["views_delta_7d"] is None
+    assert trend["delta_24h_status"] == "insufficient_history"
+    assert trend["delta_7d_status"] == "insufficient_history"
+    assert trend["tracking_status"] == "insufficient_history"
+
+
 def test_batch_trends_return_unavailable_when_snapshot_table_is_missing() -> None:
     conn = sqlite3.connect(":memory:")
     result = snapshots.metric_trends_for_evidence(conn, [1, 2])
