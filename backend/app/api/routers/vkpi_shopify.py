@@ -15,13 +15,22 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
+from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
+from app.api.dependencies.provider_mutation import manager_provider_mutation
+from app.core.release_validation import release_validation_active
+from app.db.connection import get_conn
 from app.domains import business_truth
+from app.domains.access import scope
 from app.domains.commerce import (
     shopify_client_credentials,
     shopify_connect,
     shopify_discounts,
     shopify_orders,
+)
+from app.domains.kol.my_kol_paid_action_access import (
+    MyKolPaidActionError,
+    assert_target_writable,
 )
 
 
@@ -162,10 +171,56 @@ def register_shopify_webhooks(
 
 # --- creds-ready: KOL discount codes + promo links ----------------------------
 
+
+def _discount_scope(body: dict, staff: dict) -> tuple[int, int | None]:
+    try:
+        kol_id = int(body.get("kol_id") or 0)
+    except (TypeError, ValueError):
+        kol_id = 0
+    if kol_id <= 0:
+        raise HTTPException(status_code=400, detail="kol_id required")
+    raw_project_id = body.get("project_id")
+    project_id: int | None = None
+    if raw_project_id not in (None, ""):
+        try:
+            project_id = int(raw_project_id)
+        except (TypeError, ValueError):
+            project_id = 0
+        if project_id <= 0:
+            raise HTTPException(status_code=400, detail="project_id must be a positive integer")
+        try:
+            scope.assert_project_access(project_id, staff, write=True)
+        except scope.ScopeDenied as exc:
+            raise HTTPException(status_code=403, detail="shopify_project_write_forbidden") from exc
+    conn = get_conn()
+    try:
+        assert_target_writable(conn, kol_pool_id=kol_id, staff=staff)
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    if project_id is not None:
+        assignment = conn.execute(
+            "SELECT 1 FROM vkpi_project_kol_assignments WHERE project_id=? AND kol_pool_id=? LIMIT 1",
+            (project_id, kol_id),
+        ).fetchone()
+        if not assignment:
+            raise HTTPException(status_code=409, detail="shopify_project_kol_assignment_required")
+    return kol_id, project_id
+
 @router.post("/discounts")
+@manager_provider_mutation(
+    action_type="shopify_discount_create",
+    target_type="kol_pool",
+    release_check=lambda: release_validation_active(),
+    target_id_extractor=lambda result, kwargs: str((kwargs.get("body") or {}).get("kol_id") or ""),
+    metadata_extractor=lambda result, kwargs: {
+        "provider": "shopify",
+        "ok": bool(result.get("ok")) if isinstance(result, dict) else False,
+        "project_id": (kwargs.get("body") or {}).get("project_id"),
+    },
+)
 def create_shopify_discount(
     body=Body(default_factory=dict),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ):
     """Create a KOL discount code + build its promo link.
 
@@ -180,6 +235,7 @@ def create_shopify_discount(
         raise HTTPException(status_code=400, detail="code is required")
     if body.get("value") in (None, ""):
         raise HTTPException(status_code=400, detail="value is required")
+    kol_id, project_id = _discount_scope(body, staff)
     return _guard(
         shopify_discounts.create_kol_discount,
         code=code,
@@ -192,8 +248,8 @@ def create_shopify_discount(
         starts_at=body.get("starts_at"),
         ends_at=body.get("ends_at"),
         utm_campaign=str(body.get("utm_campaign") or ""),
-        kol_id=body.get("kol_id"),
-        project_id=body.get("project_id"),
+        kol_id=kol_id,
+        project_id=project_id,
         store_domain=body.get("store_domain"),
     )
 

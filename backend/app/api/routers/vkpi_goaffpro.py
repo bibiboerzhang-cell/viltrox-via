@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
-from app.api.dependencies.manager_guard import require_manager_staff
+from app.api.dependencies.manager_guard import require_manager_staff, require_manager_tab
+from app.api.dependencies.provider_mutation import manager_provider_mutation
 from app.api.dependencies.perms import require_tab
 from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, table_exists
@@ -480,9 +481,10 @@ def get_kol_affiliate_link(
 
 
 @router.post("/sync-metrics")
+@manager_provider_mutation(action_type="goaffpro_metrics_sync", target_type="integration", release_check=lambda: release_validation_active())
 def sync_goaffpro_metrics(
     limit: int | None = Query(default=None, ge=1, le=500),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ):
     """手动刷新 GOAFFPRO 指标缓存(点击/订单/GMV/佣金)→ vkpi_goaffpro_kol_metrics。
 
@@ -594,9 +596,10 @@ def update_kol_coupon(
 
 
 @router.post("/sync-sales")
+@manager_provider_mutation(action_type="goaffpro_sales_sync", target_type="integration", release_check=lambda: release_validation_active())
 def sync_goaffpro_sales(
     limit: int | None = Query(default=None, ge=1, le=500),
-    staff=Depends(require_tab("vkpi", "write")),
+    staff=Depends(require_manager_tab("vkpi", "write")),
 ):
     """拉 GOAFFPRO 销售 → 按 affiliate_id 回找 kol_pool_id → upsert vkpi_goaffpro_sales。
 
