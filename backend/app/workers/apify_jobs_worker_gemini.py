@@ -41,6 +41,7 @@ from app.workers.apify_jobs_cost import (
     _openai_cost,
 )
 from app.workers.apify_jobs_video_context import (
+    FINAL_V1_PROMPT_CONTRACT,
     _low_scores,
     _video_final_context,
     _video_performance_context,
@@ -170,6 +171,7 @@ def _shape_gemini_result(
                 "model_readiness_status": execution["model_readiness_status"],
                 "base_derive_method": execution["base_derive_method"],
                 "cache_derive_method": execution["cache_derive_method"],
+                "prompt_contract": FINAL_V1_PROMPT_CONTRACT,
             },
             "llm_execution": execution,
             "evaluation_only": execution["evaluation_only"],

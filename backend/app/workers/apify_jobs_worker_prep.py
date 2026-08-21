@@ -170,23 +170,7 @@ def _load_video_evidence(conn: psycopg.Connection[Any], target_id: str) -> dict[
               e.project_id,
               e.kol_pool_id,
               p.project_name,
-              p.product_sku,
               p.product_name,
-              COALESCE((
-                SELECT jsonb_agg(
-                  jsonb_build_object(
-                    'sku', l.product_sku,
-                    'model_name', vp.model_name,
-                    'marketing_name', vp.marketing_name,
-                    'relation_type', l.relation_type,
-                    'confidence', l.confidence
-                  )
-                  ORDER BY l.relation_type, l.product_sku
-                )
-                FROM vkpi_kol_video_product_links l
-                LEFT JOIN vkpi_products vp ON vp.sku = l.product_sku
-                WHERE l.evidence_id = e.id
-              ), '[]'::jsonb) AS linked_products,
               COALESCE(kp.handle, '') AS creator_handle,
               COALESCE(kp.display_name, '') AS creator_name,
               kp.followers,

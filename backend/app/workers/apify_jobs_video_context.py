@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from app.workers.apify_jobs_worker_helpers import (
@@ -14,6 +13,40 @@ from app.workers.apify_jobs_worker_helpers import (
     _iso_or_none,
     _rate,
     _truthy,
+)
+
+# Identity of the project-free final_v1 prompt contract.  Stored under
+# ``provenance.prompt_contract`` of every final_v1 cache row so a later audit
+# (scripts/ops/mark_stale_final_v1_sku_context_cache.py) can separate rows
+# produced by this contract from rows produced while project SKU context was
+# being injected into the prompt.
+FINAL_V1_PROMPT_CONTRACT = "final_v1_pure_video_evidence_v2"
+
+# Keys that must never reach the final_v1 prompt (project / employee scope).
+FINAL_V1_PROJECT_SCOPED_KEYS = frozenset(
+    {
+        "project_id",
+        "project_name",
+        "product_sku",
+        "product_name",
+        "linked_products",
+        "candidate_products",
+        "assignment_id",
+    }
+)
+
+# Project-agnostic brand / product-line recognition vocabulary.  It helps the
+# model *name* what it sees; it is never presence evidence and carries no SKU
+# that belongs to a specific project.
+FINAL_V1_BRAND_LEXICON = (
+    "Viltrox",
+    "唯卓仕",
+    "Viltrox AF (autofocus prime)",
+    "Viltrox Pro series",
+    "Viltrox LAB series",
+    "Viltrox Air series",
+    "Viltrox EPIC / cine lens",
+    "Viltrox lens adapter / speed booster",
 )
 
 
@@ -52,72 +85,49 @@ def _video_performance_context(evidence: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _candidate_product_context(evidence: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return bounded operator/project candidates; associations are never visual proof."""
-    raw_links = evidence.get("linked_products")
-    if isinstance(raw_links, str):
-        try:
-            raw_links = json.loads(raw_links)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            raw_links = []
-    links = raw_links if isinstance(raw_links, list) else []
-    candidates: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-
-    def append_candidate(*, sku: Any, name: Any, source: str, relation_type: Any = None, confidence: Any = None) -> None:
-        safe_sku = str(sku or "").strip()[:100]
-        safe_name = str(name or "").strip()[:180]
-        identity = ("sku", safe_sku.casefold()) if safe_sku else ("name", safe_name.casefold())
-        if not identity[1] or identity in seen or len(candidates) >= 10:
-            return
-        seen.add(identity)
-        candidates.append(
-            {
-                "sku": safe_sku or None,
-                "name": safe_name or None,
-                "source": source,
-                "relation_type": str(relation_type or "").strip()[:40] or None,
-                "confidence": _float_or_none(confidence),
-                "association_is_evidence": False,
-            }
-        )
-
-    append_candidate(
-        sku=evidence.get("product_sku"),
-        name=evidence.get("product_name"),
-        source="project_assignment",
-    )
-    for raw in links[:20]:
-        if not isinstance(raw, dict):
-            continue
-        name = raw.get("marketing_name") or raw.get("model_name")
-        append_candidate(
-            sku=raw.get("sku"),
-            name=name,
-            source="video_product_link",
-            relation_type=raw.get("relation_type"),
-            confidence=raw.get("confidence"),
-        )
-    return candidates
-
-
 def _video_final_context(evidence: dict[str, Any]) -> dict[str, Any]:
+    """final_v1 prompt context: pure video evidence, never project scope.
+
+    Project SKU / project name / other employees' manual product links are
+    deliberately absent: they vary per project, so putting them in the prompt
+    would leak one project's commercial context into the *global* final_v1
+    cache row shared by every project.  SKU association lives only in the
+    independent tracking layer and in the project-isolated content-fit layer.
+    """
     context = _video_performance_context(evidence)
-    candidates = _candidate_product_context(evidence)
     context["product_context"] = {
-        "product_name": evidence.get("product_name"),
-        "product_sku": evidence.get("product_sku"),
-        "project_name": evidence.get("project_name"),
-        "project_id": evidence.get("project_id"),
         "creator_handle": evidence.get("creator_handle"),
         "creator_name": evidence.get("creator_name"),
         "kol_pool_id": evidence.get("kol_pool_id"),
-        "candidate_products": candidates,
-        "candidate_products_are_context_only": True,
-        "candidate_products_require_timed_video_evidence": True,
+        "brand_lexicon": list(FINAL_V1_BRAND_LEXICON),
+        "brand_lexicon_is_evidence": False,
+        "project_scope": "none",
         "campaign_goal": "sell Viltrox lenses and validate lens proof; not to grow the KOL account",
     }
+    context["prompt_contract"] = FINAL_V1_PROMPT_CONTRACT
+    leaked = sorted(_project_scoped_keys(context))
+    if leaked:
+        raise ValueError(f"final_v1 context must stay project-free, leaked={leaked}")
     return context
+
+
+def _project_scoped_keys(value: Any, _path: str = "") -> set[str]:
+    """Return dotted paths of any project-scoped key found anywhere in ``value``."""
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            path = f"{_path}.{key}" if _path else str(key)
+            if str(key) in FINAL_V1_PROJECT_SCOPED_KEYS:
+                found.add(path)
+            found |= _project_scoped_keys(inner, path)
+    elif isinstance(value, list):
+        for index, inner in enumerate(value):
+            found |= _project_scoped_keys(inner, f"{_path}[{index}]")
+    return found
+
+
+def final_v1_context_is_project_free(context: dict[str, Any]) -> bool:
+    return not _project_scoped_keys(context)
 
 
 def _select_keyframe_requests(layer1: dict[str, Any], limit: int = 6) -> list[dict[str, str]]:
