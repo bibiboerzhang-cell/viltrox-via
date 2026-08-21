@@ -177,8 +177,7 @@ export function ShareKolModal({ kolPoolId, kolName, staff = [], apiToken, onClos
                           style: { background: "linear-gradient(135deg, #a855f7, #06b6d4)" },
                         }, String(name || "?").slice(0, 1).toUpperCase()),
                         e("div", { className: "flex-1 min-w-0" },
-                          e("div", { className: "text-[12px] text-white truncate" }, name),
-                          m.email && e("div", { className: "text-[10px] text-slate-500 truncate" }, m.email)
+                          e("div", { className: "text-[12px] text-white truncate" }, name)
                         ),
                         e("span", {
                           className: "text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0",

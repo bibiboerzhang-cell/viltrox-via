@@ -11,10 +11,8 @@ export interface VkpiTeamKolShare {
   kol_pool_id: number | null;
   to_staff_id: number | null;
   to_name: string;
-  to_email: string;
   from_staff_id: number | null;
   from_name: string; // shared_by 可空容旧:空串=未知分享人
-  from_email: string;
   kol_name: string;
   platform: string;
   handle: string;

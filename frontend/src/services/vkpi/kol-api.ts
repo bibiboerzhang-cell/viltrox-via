@@ -207,7 +207,6 @@ export interface VkpiKolShareMember {
   shared_by?: number | null;
   created_at?: string | null;
   name?: string | null;
-  email?: string | null;
 }
 
 export interface VkpiKolShareMembersResponse {

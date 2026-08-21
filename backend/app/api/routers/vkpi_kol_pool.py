@@ -195,8 +195,9 @@ async def list_pool(
     refresh_if_stale: bool = Query(default=False),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """列出 KOL Pool"""
-    result = kol_pool.list_pool(
+    """列出 KOL Pool；GET 始终纯读，refresh_if_stale 仅为旧客户端兼容参数。"""
+    del request, refresh_if_stale, staff
+    return kol_pool.list_pool(
         limit=limit,
         offset=offset,
         platform=platform,
@@ -209,21 +210,6 @@ async def list_pool(
         # the single-KOL audited contact boundary instead.
         contact_visibility=CONTACT_VISIBILITY_MASKED,
     )
-    refresh_state = None
-    items = result.get("items") if isinstance(result, dict) else []
-    if refresh_if_stale and query and isinstance(items, list) and items:
-        first_id = int(items[0].get("id") or 0)
-        if first_id:
-            refresh_state = await _maybe_enqueue_refresh(
-                request,
-                first_id,
-                staff=staff,
-                enabled=True,
-                reason="search_stale_while_revalidate",
-            )
-    if refresh_state:
-        result["refresh"] = refresh_state
-    return result
 
 
 @router.get("/kol-pool/summary")
@@ -554,22 +540,14 @@ async def get_item(
     refresh_if_stale: bool = Query(default=True),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """获取单个 KOL Pool 项"""
+    """获取单个 KOL Pool 项；GET 不写搜索标记、不排队，刷新仅走显式 POST。"""
+    del request, refresh_if_stale, staff
     response.headers.update(PRIVATE_CONTACT_HEADERS)
     try:
         result = kol_pool.get_item(
             int(kol_pool_id),
             contact_visibility=CONTACT_VISIBILITY_MASKED,
         )
-        refresh_state = await _maybe_enqueue_refresh(
-            request,
-            int(kol_pool_id),
-            staff=staff,
-            enabled=bool(refresh_if_stale),
-            reason="detail_stale_while_revalidate",
-        )
-        result["freshness"] = refresh_state.get("freshness")
-        result["refresh"] = refresh_state
         result["contact_projection_reason"] = "summary_only"
         return result
     except LookupError as exc:

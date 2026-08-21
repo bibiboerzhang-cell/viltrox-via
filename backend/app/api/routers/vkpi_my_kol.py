@@ -40,6 +40,12 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _staff_name_without_email(value: Any, *, default: str = "Staff") -> str:
+    """Return a display label without using an email-shaped fallback."""
+    name = str(value or "").strip()
+    return default if not name or "@" in name else name
+
+
 def _rollback_quietly(conn: Any) -> None:
     try:
         conn.rollback()
@@ -457,7 +463,7 @@ def my_kol_shares_list_endpoint(
     """团队 KOL 共享关系总列表(集中管控)。
 
     - 管理层(can_view_all)看全部;普通成员只看「自己发出 + 自己收到」的行。
-    - JOIN staff→users 两次取 分享人/接收人 展示名(与 share/members 同口径);
+    - JOIN staff→users 两次只取分享人/接收人展示名，不返回邮箱;
       JOIN vkpi_kol_pool 取 KOL 展示名/平台/handle(display_name 空串回落 handle)。
     - 协作设置:LEFT JOIN vkpi_collab_settings(kind='kol',target_id=kol_pool_id 文本),
       未设过诚实回空串(不伪造)。
@@ -479,10 +485,9 @@ def my_kol_shares_list_endpoint(
                m.shared_by AS from_staff_id,
                m.shared_via_group_id,
                m.created_at,
-               COALESCE(ut.name, ut.email, 'Staff') AS to_name,
-               COALESCE(ut.email, '') AS to_email,
-               COALESCE(uf.name, uf.email, '') AS from_name,
-               COALESCE(uf.email, '') AS from_email,
+               COALESCE(NULLIF(ut.name, ''), 'Staff') AS to_name,
+               CASE WHEN m.shared_by IS NULL THEN ''
+                    ELSE COALESCE(NULLIF(uf.name, ''), 'Staff') END AS from_name,
                COALESCE(NULLIF(p.display_name, ''), p.handle, '') AS kol_name,
                COALESCE(p.platform, '') AS platform,
                COALESCE(p.handle, '') AS handle,
@@ -522,12 +527,13 @@ def my_kol_shares_list_endpoint(
                 "id": _int(item.get("id")) or None,
                 "kol_pool_id": _int(item.get("kol_pool_id")) or None,
                 "to_staff_id": _int(item.get("to_staff_id")) or None,
-                "to_name": item.get("to_name") or "",
-                "to_email": item.get("to_email") or "",
+                "to_name": _staff_name_without_email(item.get("to_name")),
                 "from_staff_id": from_staff_id,
                 # shared_by 可空容旧(159 注释):空时诚实回空串,前端显「未知」。
-                "from_name": item.get("from_name") or "",
-                "from_email": item.get("from_email") or "",
+                "from_name": _staff_name_without_email(
+                    item.get("from_name"),
+                    default="" if from_staff_id is None else "Staff",
+                ),
                 "kol_name": item.get("kol_name") or "",
                 "platform": item.get("platform") or "",
                 "handle": item.get("handle") or "",
@@ -596,15 +602,16 @@ def my_kol_share_members_endpoint(
     kol_pool_id: int,
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """列「该 kol_pool_id 已共享给的成员」(JOIN staff→users 取展示名/邮箱),供弹窗回显。
+    """列「该 kol_pool_id 已共享给的成员」，仅负责人或管理层可读。
 
-    纯 SELECT,无副作用。staff_name/email 走 staff→users(与 list_members / claim_listing 同口径)。
+    纯 SELECT,无副作用；响应只含展示名，不读取或返回邮箱。
     """
     pid = _int(kol_pool_id)
     if pid <= 0:
         raise HTTPException(status_code=400, detail="kol_pool_id required")
 
     conn = get_conn()
+    _assert_can_share_kol(conn, staff, pid)
     rows = conn.execute(
         """
         SELECT m.id,
@@ -612,8 +619,7 @@ def my_kol_share_members_endpoint(
                m.staff_id,
                m.shared_by,
                m.created_at,
-               COALESCE(u.name, u.email, 'Staff') AS staff_name,
-               COALESCE(u.email, '') AS email
+               COALESCE(NULLIF(u.name, ''), 'Staff') AS staff_name
         FROM vkpi_kol_pool_members m
         LEFT JOIN staff st ON st.id = m.staff_id
         LEFT JOIN users u ON u.id = st.user_id
@@ -636,8 +642,7 @@ def my_kol_share_members_endpoint(
                 "staff_id": _int(item.get("staff_id")) or None,
                 "shared_by": _int(item.get("shared_by")) or None,
                 "created_at": created_at,
-                "name": item.get("staff_name") or None,
-                "email": item.get("email") or None,
+                "name": _staff_name_without_email(item.get("staff_name")),
             }
         )
 
