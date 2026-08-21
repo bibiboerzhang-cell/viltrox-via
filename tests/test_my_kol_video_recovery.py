@@ -1,14 +1,16 @@
+"""Contract tests for ``my_kol_video_recovery_v1`` (unified task state + keyset paging)."""
 from __future__ import annotations
 
 import base64
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
 
 from app.api.routers import vkpi_my_kol as router_mod
-from app.domains.kol import my_kol_paid_action_access, my_kol_video_recovery, pool
+from app.domains.kol import my_kol_paid_action_access, my_kol_video_recovery, pool, pool_detail
 
 
 def _conn() -> sqlite3.Connection:
@@ -19,9 +21,17 @@ def _conn() -> sqlite3.Connection:
         CREATE TABLE vkpi_kol_video_evidence (
             id INTEGER PRIMARY KEY,
             kol_pool_id INTEGER NOT NULL,
+            project_id INTEGER,
+            content_url TEXT NOT NULL DEFAULT 'https://www.youtube.com/watch?v=x',
+            platform TEXT DEFAULT 'youtube',
+            title TEXT, video_title TEXT, thumbnail_url TEXT,
+            view_count INTEGER, like_count INTEGER, comment_count INTEGER, share_count INTEGER,
+            duration_seconds INTEGER,
+            publish_date TEXT, posted_at TEXT,
             evidence_type TEXT NOT NULL DEFAULT 'video',
+            image_urls TEXT, source TEXT,
             is_active INTEGER NOT NULL DEFAULT 1,
-            view_count INTEGER
+            updated_at TEXT, created_at TEXT
         );
         CREATE TABLE vkpi_analysis_cache (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,15 +52,31 @@ def _conn() -> sqlite3.Connection:
             created_at TEXT,
             updated_at TEXT
         );
+        CREATE TABLE vkpi_kol_url_deep_crawl_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kol_pool_id INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT
+        );
         """
     )
+    # publish_date deliberately NOT monotonic with id and view_count drifts: the
+    # keyset order must follow (published_at DESC, id DESC) only.
     conn.executemany(
         """
         INSERT INTO vkpi_kol_video_evidence
-            (id, kol_pool_id, evidence_type, is_active, view_count)
-        VALUES (?, 101, 'video', 1, ?)
+            (id, kol_pool_id, view_count, publish_date, created_at, updated_at)
+        VALUES (?, 101, ?, ?, '2026-01-01T00:00:00Z', '2026-08-21T00:00:00Z')
         """,
-        [(1, 100), (2, None), (3, 300), (4, 400), (5, 500), (6, 600), (7, 700)],
+        [
+            (1, 100, "2026-08-05T10:00:00Z"),
+            (2, None, "2026-08-07T10:00:00Z"),
+            (3, 300, "2026-08-07T10:00:00Z"),  # ties with id 2 on published_at
+            (4, 9_000, "2026-08-01T10:00:00Z"),
+            (5, 500, "2026-08-03T10:00:00Z"),
+            (6, 600, None),  # falls back to created_at, sorts last
+            (7, 700, "2026-08-09T10:00:00Z"),
+        ],
     )
     conn.executemany(
         """
@@ -60,7 +86,7 @@ def _conn() -> sqlite3.Connection:
         """,
         [
             ("1", "ready", "2026-08-20T10:00:00Z"),
-            ("2", "stale", "2026-08-10T10:00:00Z"),
+            ("2", "ready", "2026-08-10T10:00:00Z"),
             ("7", "stale", "2026-08-09T10:00:00Z"),
         ],
     )
@@ -76,6 +102,7 @@ def _job(
     attempts: int = 0,
     next_retry_at: str | None = None,
     derive_method: str | None = None,
+    created_at: str = "2026-08-21T10:00:00Z",
 ) -> int:
     payload = {"target_id": target_id, "kol_pool_id": 101}
     if derive_method:
@@ -85,19 +112,19 @@ def _job(
         INSERT INTO apify_jobs (
             job_type, payload, status, attempts, next_retry_at, last_error,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'provider_secret_prompt=do-not-leak',
-                  '2026-08-21T10:00:00Z', '2026-08-21T10:01:00Z')
+        ) VALUES (?, ?, ?, ?, ?, 'provider_secret_prompt=do-not-leak', ?, '2026-08-21T10:01:00Z')
         """,
-        (job_type, json.dumps(payload), status, attempts, next_retry_at),
+        (job_type, json.dumps(payload), status, attempts, next_retry_at, created_at),
     )
     return int(cursor.lastrowid)
 
 
-def _video(evidence_id: int, *, freshness: str = "never") -> dict:
+def _video(evidence_id: int, *, freshness: str = "never", published_at: str | None = None) -> dict:
     return {
         "id": evidence_id,
         "evidence_id": evidence_id,
         "kol_pool_id": 101,
+        "published_at": published_at,
         "freshness": freshness,
         "tracking_status": "tracked" if freshness == "fresh" else "insufficient_history",
         "last_attempt": {"fetched_at": "2026-08-21T09:00:00Z"},
@@ -107,34 +134,29 @@ def _video(evidence_id: int, *, freshness: str = "never") -> dict:
     }
 
 
-def test_recovery_page_projects_exact_latest_jobs_and_separate_freshness() -> None:
+def _evidence_env(monkeypatch, conn: sqlite3.Connection) -> None:
+    monkeypatch.setattr(pool_detail, "get_conn", lambda: conn)
+    monkeypatch.setattr(pool_detail, "is_postgres_runtime", lambda: False)
+
+
+# ── unified TaskState across the three job classes ───────────────────────
+
+
+def test_page_unifies_profile_metric_and_final_v1_task_states_and_keeps_freshness_separate() -> None:
     conn = _conn()
     try:
+        final = "video_analysis_final_v1"
         _job(conn, job_type="kol_profile_deep_crawl", target_id=101, status="done")
         profile_job = _job(
-            conn,
-            job_type="kol_profile_deep_crawl",
-            target_id=101,
-            status="queued",
-            attempts=2,
+            conn, job_type="kol_profile_deep_crawl", target_id=101, status="queued", attempts=2,
             next_retry_at="2026-08-21T10:05:00Z",
         )
         _job(conn, job_type="kol_profile_deep_crawl", target_id=999, status="running")
-
-        final_method = "video_analysis_final_v1"
-        _job(conn, job_type="video", target_id=1, status="failed", derive_method=final_method)
-        _job(
-            conn,
-            job_type="video",
-            target_id=2,
-            status="queued",
-            attempts=1,
-            next_retry_at="2026-08-21T10:06:00Z",
-            derive_method=final_method,
-        )
-        _job(conn, job_type="video", target_id=3, status="blocked", derive_method=final_method)
-        _job(conn, job_type="video", target_id=4, status="failed", derive_method=final_method)
-        _job(conn, job_type="video", target_id=5, status="done", derive_method=final_method)
+        _job(conn, job_type="video", target_id=1, status="failed", derive_method=final)
+        _job(conn, job_type="video", target_id=2, status="running", derive_method=final)  # newer than cache
+        _job(conn, job_type="video", target_id=3, status="blocked", derive_method=final)
+        _job(conn, job_type="video", target_id=4, status="triage", derive_method=final)
+        _job(conn, job_type="video", target_id=5, status="done", derive_method=final)  # done, no cache
         _job(conn, job_type="kol_video_metric_refresh", target_id=1, status="queued")
         _job(conn, job_type="kol_video_metric_refresh", target_id=2, status="done")
         conn.commit()
@@ -145,127 +167,128 @@ def test_recovery_page_projects_exact_latest_jobs_and_separate_freshness() -> No
             conn,
             kol_pool_id=101,
             videos=[_video(index, freshness="fresh" if index == 1 else "stale") for index in range(1, 8)],
-            offset=0,
             limit=20,
-            snapshot_boundary_id=7,
         )
         conn.set_trace_callback(None)
 
-        assert page["profile_crawl"] == {
-            "job_id": profile_job,
-            "status": "retrying",
-            "created_at": "2026-08-21T10:00:00Z",
-            "updated_at": "2026-08-21T10:01:00Z",
+        assert page["contract"] == "my_kol_video_recovery_v1"
+        assert page["read_only"] is True
+        profile = page["profile_crawl"]
+        assert (profile["status"], profile["job_id"]) == ("retrying", profile_job)
+        assert profile["requested_at"] == "2026-08-21T10:00:00Z"
+        assert profile["data"] == {
+            "status": "none", "freshness": "never", "updated_at": None, "superseded_by_job": True,
         }
+
         rows = {row["evidence_id"]: row for row in page["items"]}
-        assert {key: rows[key]["final_v1"]["state"] for key in rows} == {
-            1: "ready",
-            2: "active",
+        final_states = {key: rows[key]["tasks"]["final_v1"]["status"] for key in rows}
+        assert final_states == {
+            1: "failed",        # failed job; cache still shown as data
+            2: "running",       # newer re-analysis must not be hidden by the ready cache
             3: "blocked",
-            4: "failed",
-            5: "failed",
+            4: "failed",        # triage collapses to failed
+            5: "failed",        # "done" without a ready cache is a broken promise
             6: "not_requested",
-            7: "stale",
+            7: "not_requested", # stale cache, no job
         }
-        assert rows[1]["metric_refresh"]["latest_job"]["status"] == "queued"
-        assert rows[2]["metric_refresh"]["latest_job"]["status"] == "done"
-        assert rows[1]["metric_refresh"]["snapshot"] == {
-            "status": "tracked",
-            "freshness": "fresh",
-            "last_attempt_at": "2026-08-21T09:00:00Z",
-            "last_success_at": "2026-08-21T09:00:00Z",
-            "sample_count": 2,
-            "attempt_count": 3,
+        assert rows[1]["tasks"]["final_v1"]["data"] == {
+            "status": "ready", "freshness": "fresh", "updated_at": "2026-08-20T10:00:00Z", "superseded_by_job": False,
         }
-        assert page["summary"] == {
-            "total": 7,
-            "views_total": 2600,
-            "views_measured": 6,
-            "final_v1_ready": 1,
+        assert rows[2]["tasks"]["final_v1"]["data"]["status"] == "ready"
+        assert rows[2]["tasks"]["final_v1"]["data"]["superseded_by_job"] is True
+        assert rows[7]["tasks"]["final_v1"]["data"]["status"] == "stale"
+        assert rows[6]["tasks"]["final_v1"]["data"] == {
+            "status": "none", "freshness": "never", "updated_at": None, "superseded_by_job": False,
         }
-        assert page["returned"] == 7
-        assert page["has_more"] is False
+
+        metric_1 = rows[1]["tasks"]["metric_refresh"]
+        assert metric_1["status"] == "queued"
+        assert metric_1["data"]["status"] == "ready" and metric_1["data"]["freshness"] == "fresh"
+        assert metric_1["data"]["superseded_by_job"] is True  # job requested after the snapshot
+        assert metric_1["data"]["tracking_status"] == "tracked"
+        assert metric_1["data"]["sample_count"] == 2
+        metric_2 = rows[2]["tasks"]["metric_refresh"]
+        assert metric_2["status"] == "ready" and metric_2["data"]["status"] == "stale"
+        assert rows[6]["tasks"]["metric_refresh"]["status"] == "not_requested"
+
+        for row in page["items"]:
+            for task in row["tasks"].values():
+                assert task["status"] in my_kol_video_recovery.TASK_STATUSES
+                assert set(task) == {"status", "job_id", "requested_at", "updated_at", "data"}
+
+        assert page["summary"] == {"total": 7, "views_total": 11_200, "views_measured": 6, "final_v1_ready": 2}
+        assert page["page"] == {
+            "limit": 20, "returned": 7, "has_more": False, "next_cursor": None,
+            "cursor_kind": "published_at_id", "order": "published_at_desc_id_desc",
+        }
         assert "provider_secret" not in json.dumps(page, ensure_ascii=False)
         assert all(statement.lstrip().upper().startswith(("SELECT", "WITH")) for statement in statements)
     finally:
         conn.close()
 
 
-def test_recovery_page_has_truthful_cursor_and_only_projects_loaded_evidence() -> None:
-    conn = _conn()
-    try:
-        _job(conn, job_type="video", target_id=7, status="running", derive_method="video_analysis_final_v1")
-        first = my_kol_video_recovery.build_video_recovery_page(
-            conn,
-            kol_pool_id=101,
-            videos=[_video(1), _video(2)],
-            offset=0,
-            limit=2,
-            snapshot_boundary_id=7,
-        )
-        assert first["total"] == 7
-        assert first["returned"] == 2
-        assert first["has_more"] is True
-        assert my_kol_video_recovery.decode_cursor(first["next_cursor"]) == (2, 7)
-        assert all(row["evidence_id"] != 7 for row in first["items"])
-
-        second = my_kol_video_recovery.build_video_recovery_page(
-            conn,
-            kol_pool_id=101,
-            videos=[_video(3), _video(4)],
-            offset=my_kol_video_recovery.decode_cursor(first["next_cursor"])[0],
-            limit=2,
-            snapshot_boundary_id=7,
-        )
-        assert second["returned"] == 2
-        assert my_kol_video_recovery.decode_cursor(second["next_cursor"]) == (4, 7)
-    finally:
-        conn.close()
-
-
-def test_ready_cache_yields_to_only_a_newer_active_reanalysis() -> None:
+def test_ready_cache_yields_only_to_a_newer_active_reanalysis() -> None:
     cache = {"status": "ready", "updated_at": "2026-08-21T10:00:00Z"}
-    newer = {
-        "job_id": 11,
-        "status": "running",
-        "created_at": "2026-08-21T11:00:00Z",
-        "updated_at": "2026-08-21T11:01:00Z",
-    }
-    older = {
-        "job_id": 10,
-        "status": "queued",
-        "created_at": "2026-08-21T09:00:00Z",
-        "updated_at": "2026-08-21T09:01:00Z",
-    }
-    refreshing = my_kol_video_recovery._final_v1_projection(cache, newer)
-    settled = my_kol_video_recovery._final_v1_projection(cache, older)
-    assert refreshing["state"] == "active"
-    assert refreshing["cache"] == cache
-    assert settled["state"] == "ready"
+    newer = {"job_id": 11, "status": "running", "requested_at": "2026-08-21T11:00:00Z", "updated_at": None}
+    older = {"job_id": 10, "status": "queued", "requested_at": "2026-08-21T09:00:00Z", "updated_at": None}
+    finished = {"job_id": 12, "status": "ready", "requested_at": "2026-08-21T09:30:00Z", "updated_at": None}
+
+    refreshing = my_kol_video_recovery.final_v1_task_state(cache, newer)
+    assert refreshing["status"] == "running" and refreshing["job_id"] == 11
+    assert refreshing["data"]["status"] == "ready" and refreshing["data"]["superseded_by_job"] is True
+
+    stale_request = my_kol_video_recovery.final_v1_task_state(cache, older)
+    assert stale_request["status"] == "queued" and stale_request["data"]["superseded_by_job"] is False
+
+    settled = my_kol_video_recovery.final_v1_task_state(cache, finished)
+    assert settled["status"] == "ready" and settled["data"]["superseded_by_job"] is False
+
+    legacy = my_kol_video_recovery.final_v1_task_state(cache, None)
+    assert legacy["status"] == "ready" and legacy["job_id"] is None
+
+    broken = my_kol_video_recovery.final_v1_task_state(None, finished)
+    assert broken["status"] == "failed" and broken["data"]["status"] == "none"
 
 
-def test_cursor_boundary_freezes_total_against_new_evidence() -> None:
+def test_profile_crawl_state_uses_ready_runs_for_freshness() -> None:
     conn = _conn()
     try:
-        boundary = my_kol_video_recovery.resolve_snapshot_boundary(conn, 101)
-        assert boundary == 7
+        assert my_kol_video_recovery.profile_crawl_task_state(conn, 101) == {
+            "status": "not_requested", "job_id": None, "requested_at": None, "updated_at": None,
+            "data": {"status": "none", "freshness": "never", "updated_at": None, "superseded_by_job": False},
+        }
+        fresh_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
         conn.execute(
-            "INSERT INTO vkpi_kol_video_evidence (id, kol_pool_id, evidence_type, is_active, view_count) VALUES (8, 101, 'video', 1, 800)"
+            "INSERT INTO vkpi_kol_url_deep_crawl_runs (kol_pool_id, status, created_at) VALUES (101, 'ready', ?)",
+            (fresh_at,),
         )
-        page = my_kol_video_recovery.build_video_recovery_page(
-            conn,
-            kol_pool_id=101,
-            videos=[_video(1), _video(2)],
-            offset=0,
-            limit=2,
-            snapshot_boundary_id=boundary,
+        job_id = _job(conn, job_type="kol_profile_deep_crawl", target_id=101, status="done")
+        state = my_kol_video_recovery.profile_crawl_task_state(conn, 101)
+        assert state["status"] == "ready" and state["job_id"] == job_id
+        assert state["data"]["status"] == "ready" and state["data"]["freshness"] == "fresh"
+
+        conn.execute("UPDATE vkpi_kol_url_deep_crawl_runs SET created_at='2026-01-01T00:00:00Z'")
+        running = _job(
+            conn, job_type="kol_profile_deep_crawl", target_id=101, status="running",
+            created_at=datetime.now(timezone.utc).isoformat(),
         )
-        assert page["total"] == 7
-        assert page["snapshot_boundary_id"] == 7
-        assert page["cursor_stable"] is True
-        assert my_kol_video_recovery.decode_cursor(page["next_cursor"]) == (2, 7)
+        state = my_kol_video_recovery.profile_crawl_task_state(conn, 101)
+        assert state["status"] == "running" and state["job_id"] == running
+        assert state["data"]["status"] == "stale" and state["data"]["superseded_by_job"] is True
     finally:
         conn.close()
+
+
+# ── keyset cursor ─────────────────────────────────────────────────────────
+
+
+def test_cursor_round_trips_published_at_and_id() -> None:
+    token = my_kol_video_recovery.encode_cursor("2026-08-07T10:00:00Z", 3)
+    assert my_kol_video_recovery.decode_cursor(token) == ("2026-08-07T10:00:00Z", 3)
+    null_token = my_kol_video_recovery.encode_cursor(None, 6)
+    assert my_kol_video_recovery.decode_cursor(null_token) == (None, 6)
+    assert my_kol_video_recovery.decode_cursor(None) is None
+    assert my_kol_video_recovery.decode_cursor("") is None
 
 
 @pytest.mark.parametrize(
@@ -273,12 +296,12 @@ def test_cursor_boundary_freezes_total_against_new_evidence() -> None:
     [
         "garbage",
         "MQ",
-        # wrong version prefix
-        base64.urlsafe_b64encode(b"v1:0:7").decode("ascii").rstrip("="),
-        # boundary 0 never freezes a snapshot
-        base64.urlsafe_b64encode(b"v2:0:0").decode("ascii").rstrip("="),
-        # non-canonical encoding (kept padding) of an otherwise valid pair
-        my_kol_video_recovery.encode_cursor(2, 7) + "=",
+        base64.urlsafe_b64encode(b"v2:0:7").decode("ascii").rstrip("="),  # offset-era cursor
+        base64.urlsafe_b64encode(json.dumps({"k": "offset", "p": None, "i": 3}).encode()).decode().rstrip("="),
+        base64.urlsafe_b64encode(json.dumps({"k": "published_at_id", "p": None, "i": 0}).encode()).decode().rstrip("="),
+        base64.urlsafe_b64encode(json.dumps({"k": "published_at_id", "p": None, "i": True}).encode()).decode().rstrip("="),
+        base64.urlsafe_b64encode(json.dumps({"k": "published_at_id", "p": 5, "i": 3}).encode()).decode().rstrip("="),
+        my_kol_video_recovery.encode_cursor("2026-08-07T10:00:00Z", 3) + "=",  # non-canonical
     ],
 )
 def test_invalid_cursor_fails_closed(value: str) -> None:
@@ -286,15 +309,80 @@ def test_invalid_cursor_fails_closed(value: str) -> None:
         my_kol_video_recovery.decode_cursor(value)
 
 
+def test_keyset_pages_follow_published_at_then_id_and_survive_metric_drift(monkeypatch) -> None:
+    conn = _conn()
+    try:
+        _evidence_env(monkeypatch, conn)
+        seen: list[int] = []
+        before = None
+        for _ in range(10):
+            rows = pool_detail._video_evidence_for_kol(101, limit=3, stable_order=True, before=before)
+            page = my_kol_video_recovery.build_video_recovery_page(conn, kol_pool_id=101, videos=rows, limit=2)
+            seen.extend(row["evidence_id"] for row in page["items"])
+            # view counts drift between pages; ordering must not.
+            conn.execute("UPDATE vkpi_kol_video_evidence SET view_count = COALESCE(view_count, 0) * 7 + id")
+            if not page["has_more"]:
+                assert page["next_cursor"] is None
+                break
+            before = my_kol_video_recovery.decode_cursor(page["next_cursor"])
+        # 7 (08-09), 3 then 2 (08-07 tie -> id DESC), 1 (08-05), 5 (08-03), 4 (08-01), 6 (NULL publish -> created_at)
+        assert seen == [7, 3, 2, 1, 5, 4, 6]
+        assert len(seen) == len(set(seen))
+    finally:
+        conn.close()
+
+
+def test_keyset_page_is_stable_when_new_evidence_is_inserted_mid_walk(monkeypatch) -> None:
+    conn = _conn()
+    try:
+        _evidence_env(monkeypatch, conn)
+        first_rows = pool_detail._video_evidence_for_kol(101, limit=4, stable_order=True, before=None)
+        first = my_kol_video_recovery.build_video_recovery_page(conn, kol_pool_id=101, videos=first_rows, limit=3)
+        assert [row["evidence_id"] for row in first["items"]] == [7, 3, 2]
+        assert first["has_more"] is True
+        # A newly crawled video with a *newer* publish date sorts before the
+        # cursor and must not shift or duplicate the remaining pages.
+        conn.execute(
+            "INSERT INTO vkpi_kol_video_evidence (id, kol_pool_id, view_count, publish_date, created_at) "
+            "VALUES (8, 101, 1, '2026-08-30T10:00:00Z', '2026-08-30T10:00:00Z')"
+        )
+        before = my_kol_video_recovery.decode_cursor(first["next_cursor"])
+        second_rows = pool_detail._video_evidence_for_kol(101, limit=4, stable_order=True, before=before)
+        second = my_kol_video_recovery.build_video_recovery_page(conn, kol_pool_id=101, videos=second_rows, limit=3)
+        assert [row["evidence_id"] for row in second["items"]] == [1, 5, 4]
+        assert second["total"] == 8  # summary is live truth, page walk stays stable
+        before = my_kol_video_recovery.decode_cursor(second["next_cursor"])
+        third_rows = pool_detail._video_evidence_for_kol(101, limit=4, stable_order=True, before=before)
+        third = my_kol_video_recovery.build_video_recovery_page(conn, kol_pool_id=101, videos=third_rows, limit=3)
+        assert [row["evidence_id"] for row in third["items"]] == [6]
+        assert third["has_more"] is False
+    finally:
+        conn.close()
+
+
+def test_default_order_is_unchanged_for_legacy_callers(monkeypatch) -> None:
+    conn = _conn()
+    try:
+        _evidence_env(monkeypatch, conn)
+        rows = pool_detail._video_evidence_for_kol(101, limit=200)
+        # legacy: publish/posted/updated/created DESC, then view_count DESC, id DESC —
+        # row 6 (NULL publish_date) floats to the top on updated_at, which is
+        # exactly the drift the keyset order refuses to depend on.
+        assert [row["evidence_id"] for row in rows][:3] == [6, 7, 3]
+        assert all("published_at" in row for row in rows)
+    finally:
+        conn.close()
+
+
+# ── route ────────────────────────────────────────────────────────────────
+
+
 def test_route_checks_target_read_scope_before_loading_evidence(monkeypatch) -> None:
-    calls = {"load": 0, "build": 0}
+    calls = {"load": 0}
     conn = object()
 
     def denied(*_args, **_kwargs):
-        raise my_kol_paid_action_access.MyKolPaidActionError(
-            "my_kol_paid_action_read_forbidden",
-            403,
-        )
+        raise my_kol_paid_action_access.MyKolPaidActionError("my_kol_paid_action_read_forbidden", 403)
 
     def load_bomb(*_args, **_kwargs):
         calls["load"] += 1
@@ -306,17 +394,14 @@ def test_route_checks_target_read_scope_before_loading_evidence(monkeypatch) -> 
 
     with pytest.raises(HTTPException) as caught:
         router_mod.my_kol_videos_recovery_endpoint(
-            kol_pool_id=999,
-            limit=60,
-            cursor=None,
-            staff={"id": 20, "user_id": 120, "role": "member"},
+            kol_pool_id=999, limit=60, cursor=None, staff={"id": 20, "user_id": 120, "role": "member"},
         )
     assert caught.value.status_code == 403
     assert caught.value.detail == "my_kol_paid_action_read_forbidden"
-    assert calls == {"load": 0, "build": 0}
+    assert calls == {"load": 0}
 
 
-def test_route_decodes_cursor_and_passes_only_bounded_page(monkeypatch) -> None:
+def test_route_rejects_offset_cursor_and_passes_keyset_to_loader(monkeypatch) -> None:
     conn = object()
     calls: dict[str, object] = {}
 
@@ -324,9 +409,9 @@ def test_route_decodes_cursor_and_passes_only_bounded_page(monkeypatch) -> None:
         calls["scope"] = (db, kol_pool_id, staff["id"])
         return staff["id"]
 
-    def load(kol_pool_id, *, limit, offset, max_evidence_id):
-        calls["load"] = (kol_pool_id, limit, offset, max_evidence_id)
-        return [{"evidence_id": 8, "kol_pool_id": kol_pool_id}]
+    def load(kol_pool_id, *, limit, stable_order, before):
+        calls["load"] = (kol_pool_id, limit, stable_order, before)
+        return [{"evidence_id": 8, "kol_pool_id": kol_pool_id, "published_at": "2026-08-01T00:00:00Z"}]
 
     def build(db, **kwargs):
         calls["build"] = (db, kwargs)
@@ -336,16 +421,20 @@ def test_route_decodes_cursor_and_passes_only_bounded_page(monkeypatch) -> None:
     monkeypatch.setattr(my_kol_paid_action_access, "assert_target_readable", allowed)
     monkeypatch.setattr(pool, "_video_evidence_for_kol", load)
     monkeypatch.setattr(my_kol_video_recovery, "build_video_recovery_page", build)
-    monkeypatch.setattr(my_kol_video_recovery, "resolve_snapshot_boundary", lambda *_args: 120)
 
+    with pytest.raises(HTTPException) as bad:
+        router_mod.my_kol_videos_recovery_endpoint(
+            kol_pool_id=88, limit=60, cursor=base64.urlsafe_b64encode(b"v2:40:7").decode().rstrip("="),
+            staff={"id": 20, "user_id": 120, "role": "member"},
+        )
+    assert bad.value.status_code == 400
+    assert "load" not in calls
+
+    token = my_kol_video_recovery.encode_cursor("2026-08-07T10:00:00Z", 3)
     result = router_mod.my_kol_videos_recovery_endpoint(
-        kol_pool_id=101,
-        limit=40,
-        cursor=my_kol_video_recovery.encode_cursor(80, 120),
-        staff={"id": 10, "user_id": 110, "role": "member"},
+        kol_pool_id=88, limit=50, cursor=token, staff={"id": 20, "user_id": 120, "role": "member"},
     )
-    assert result["items"] == [{"evidence_id": 8, "kol_pool_id": 101}]
-    assert calls["scope"] == (conn, 101, 10)
-    assert calls["load"] == (101, 40, 80, 120)
-    assert calls["build"][1]["offset"] == 80
-    assert calls["build"][1]["snapshot_boundary_id"] == 120
+    assert calls["scope"] == (conn, 88, 20)
+    assert calls["load"] == (88, 51, True, ("2026-08-07T10:00:00Z", 3))
+    assert calls["build"][1]["limit"] == 50
+    assert result["items"][0]["evidence_id"] == 8

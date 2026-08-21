@@ -146,12 +146,24 @@ def my_kol_videos_recovery_endpoint(
     cursor: str | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """Return one scoped, paginated video page plus recoverable job truth.
+    """One scoped, keyset-paged video page plus unified recoverable task state.
 
-    This GET is SELECT-only.  Profile crawl, metric refresh and final_v1 job
-    states come from the durable job ledger; snapshot/cache freshness remains a
-    separate field.  The response never includes provider payloads or raw
-    worker errors and never treats old evidence as completion of a newer job.
+    Contract ``my_kol_video_recovery_v1`` — full shape documented in
+    ``app.domains.kol.my_kol_video_recovery``.  Summary::
+
+        {contract, kol_pool_id, read_only,
+         profile_crawl: TaskState,
+         items: [ {...video, evidence_id, published_at,
+                   tasks: {metric_refresh: TaskState, final_v1: TaskState}} ],
+         summary: {total, views_total, views_measured, final_v1_ready},
+         page: {limit, returned, has_more, next_cursor, cursor_kind, order}}
+        TaskState = {status: queued|running|retrying|blocked|failed|ready|not_requested,
+                     job_id, requested_at, updated_at,
+                     data: {status: ready|stale|none, freshness, updated_at, superseded_by_job}}
+
+    SELECT-only.  Ordering is ``published_at DESC, id DESC`` and ``cursor`` is
+    the opaque keyset token from ``page.next_cursor``; offset cursors are
+    rejected with 400.  Provider payloads and raw worker errors never appear.
     """
 
     from app.domains.kol import my_kol_video_recovery
@@ -165,7 +177,7 @@ def my_kol_videos_recovery_endpoint(
     if pid <= 0:
         raise HTTPException(status_code=400, detail="kol_pool_id required")
     try:
-        offset, requested_boundary = my_kol_video_recovery.decode_cursor(cursor)
+        before = my_kol_video_recovery.decode_cursor(cursor)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="invalid videos cursor") from exc
     conn = get_conn()
@@ -173,24 +185,18 @@ def my_kol_videos_recovery_endpoint(
         assert_target_readable(conn, kol_pool_id=pid, staff=staff)
     except MyKolPaidActionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
-    snapshot_boundary = my_kol_video_recovery.resolve_snapshot_boundary(
-        conn,
-        pid,
-        requested_boundary,
-    )
+    page_limit = max(1, min(my_kol_video_recovery.MAX_PAGE_SIZE, int(limit)))
     videos = _video_evidence_for_kol(
         pid,
-        limit=int(limit),
-        offset=int(offset),
-        max_evidence_id=int(snapshot_boundary),
+        limit=page_limit + 1,
+        stable_order=True,
+        before=before,
     )
     return my_kol_video_recovery.build_video_recovery_page(
         conn,
         kol_pool_id=pid,
         videos=videos,
-        offset=int(offset),
-        limit=int(limit),
-        snapshot_boundary_id=int(snapshot_boundary),
+        limit=page_limit,
     )
 
 

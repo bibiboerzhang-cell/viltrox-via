@@ -1,25 +1,93 @@
-"""Bounded, read-only recovery state for one scoped MY KOL video library.
+"""Unified, read-only task-state recovery for one scoped MY KOL video library.
 
-This module deliberately keeps durable job state separate from persisted data
-freshness.  It never infers that a newly requested crawl/refresh/analysis is
-complete from older evidence or cache rows, and it never exposes job payloads,
-provider names, prompts, or raw worker errors.
+Contract ``my_kol_video_recovery_v1`` (served by
+``GET /api/admin/vkpi/my-kol/{kol_pool_id}/videos``)::
+
+    {
+      "contract": "my_kol_video_recovery_v1",
+      "kol_pool_id": 88,
+      "read_only": true,
+      "profile_crawl": TaskState,                # account crawl (kol_profile_deep_crawl)
+      "items": [
+        { ...video row from _video_evidence_for_kol...,
+          "evidence_id": 701,
+          "published_at": "2026-08-01T10:00:00+00:00" | null,
+          "tasks": {
+            "metric_refresh": TaskState,        # kol_video_metric_refresh + metric snapshot
+            "final_v1": TaskState               # Gemini final_v1 job + analysis cache
+          }
+        }
+      ],
+      "summary": {"total", "views_total", "views_measured", "final_v1_ready"},
+      "page": {
+        "limit": 60, "returned": 60, "has_more": true,
+        "next_cursor": "<opaque>" | null,
+        "cursor_kind": "published_at_id",       # keyset: (published_at DESC, id DESC)
+        "order": "published_at_desc_id_desc"
+      },
+      "total": <summary.total>, "returned": <page.returned>,
+      "has_more": <page.has_more>, "next_cursor": <page.next_cursor>
+    }
+
+    TaskState = {
+      "status": "queued" | "running" | "retrying" | "blocked" | "failed"
+                | "ready" | "not_requested",     # durable job truth (apify_jobs)
+      "job_id": int | null,
+      "requested_at": iso | null,                # job created_at
+      "updated_at": iso | null,                  # job updated_at
+      "data": {                                  # persisted output, independent of the job
+        "status": "ready" | "stale" | "none",
+        "freshness": "fresh" | "stale" | "never" | "unavailable",
+        "updated_at": iso | null,
+        "superseded_by_job": bool                # an active job is newer than this data
+      }
+    }
+
+Rules the contract guarantees:
+
+* **Task state != data freshness.**  ``status`` is the latest durable job for
+  that target; ``data`` describes what is persisted right now.  A page reopen
+  therefore restores queued / running / retrying work exactly as the worker
+  ledger sees it, and a ``ready`` job whose promised output is missing reports
+  ``failed`` rather than pretending.
+* **Old results never mask a newer request.**  When an active job was created
+  after the persisted data, ``data.superseded_by_job`` is true and ``status``
+  is the active job state; the previous ``data`` stays visible as history.
+* **Stable keyset paging.**  Ordering is ``published_at DESC, id DESC`` where
+  ``published_at = COALESCE(publish_date, posted_at, created_at)`` (never
+  ``updated_at`` / ``view_count``, which drift with every metric refresh).  The
+  cursor encodes the last row's ``(published_at, id)``; offsets are gone.
+* The response never includes provider payloads, prompts, or raw worker errors.
 """
 from __future__ import annotations
 
 import base64
-from datetime import datetime, timezone
+import json
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
+from app.core.logging import get_logger
 
+logger = get_logger("viltrox.domains.kol.my_kol_video_recovery")
+
+CONTRACT = "my_kol_video_recovery_v1"
+CURSOR_KIND = "published_at_id"
+ORDER = "published_at_desc_id_desc"
 MAX_PAGE_SIZE = 200
-MAX_CURSOR_OFFSET = 100_000
+DEFAULT_PAGE_SIZE = 60
 FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 PROFILE_JOB_TYPE = "kol_profile_deep_crawl"
 METRIC_JOB_TYPE = "kol_video_metric_refresh"
 VIDEO_JOB_TYPE = "video"
+PROFILE_FRESH_HOURS = 24
 
-_ACTIVE_JOB_STATES = frozenset({"queued", "running", "retrying"})
+TASK_STATUSES = frozenset({"queued", "running", "retrying", "blocked", "failed", "ready", "not_requested"})
+ACTIVE_TASK_STATUSES = frozenset({"queued", "running", "retrying"})
+DATA_STATUSES = frozenset({"ready", "stale", "none"})
+FRESHNESS_VALUES = frozenset({"fresh", "stale", "never", "unavailable"})
+
+
+# ── small helpers ───────────────────────────────────────────────────────
 
 
 def _int(value: Any) -> int:
@@ -78,58 +146,51 @@ def _table_available(conn: Any, table_name: str) -> bool:
     except Exception:
         # Pre-migration local mirrors degrade to an honest empty state.  No
         # fallback creates tables or performs any other write.
+        logger.debug("table availability probe failed table=%s", table_name, exc_info=True)
         return False
 
 
-def encode_cursor(offset: int, snapshot_boundary_id: int) -> str:
-    normalized = max(0, min(MAX_CURSOR_OFFSET, int(offset or 0)))
-    boundary = max(0, int(snapshot_boundary_id or 0))
-    raw = f"v2:{normalized}:{boundary}".encode("ascii")
+# ── cursor: keyset (published_at, id) ───────────────────────────────────
+
+
+def encode_cursor(published_at: Any, evidence_id: int) -> str:
+    """Opaque keyset cursor for the row *after* ``(published_at, evidence_id)``."""
+    payload = {"k": CURSOR_KIND, "p": _stamp(published_at), "i": int(evidence_id)}
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("ascii")
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
-def decode_cursor(value: Any) -> tuple[int, int]:
+def decode_cursor(value: Any) -> tuple[str | None, int] | None:
+    """Return ``(published_at, evidence_id)`` or None for an empty cursor.
+
+    Raises ``ValueError`` for anything that is not the canonical encoding of a
+    ``published_at_id`` cursor (wrong kind, offset-era cursors, tampered text).
+    """
     raw = str(value or "").strip()
     if not raw:
-        return 0, 0
+        return None
     try:
         padded = raw + "=" * (-len(raw) % 4)
-        decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii")
-        version, offset_text, boundary_text = decoded.split(":", 2)
-        offset = int(offset_text)
-        boundary = int(boundary_text)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("ascii"))
     except (TypeError, ValueError, UnicodeError) as exc:
         raise ValueError("invalid videos cursor") from exc
-    if version != "v2" or offset < 0 or offset > MAX_CURSOR_OFFSET or boundary <= 0:
+    if not isinstance(payload, dict) or payload.get("k") != CURSOR_KIND:
         raise ValueError("invalid videos cursor")
-    if encode_cursor(offset, boundary) != raw:
-        # base64 silently absorbs trailing garbage bits; only the canonical
-        # encoding of the decoded pair is accepted.
+    published_at = payload.get("p")
+    evidence_id = payload.get("i")
+    if published_at is not None and not isinstance(published_at, str):
         raise ValueError("invalid videos cursor")
-    return offset, boundary
+    if not isinstance(evidence_id, int) or isinstance(evidence_id, bool) or evidence_id <= 0:
+        raise ValueError("invalid videos cursor")
+    if encode_cursor(published_at, evidence_id) != raw:
+        raise ValueError("invalid videos cursor")
+    return published_at, int(evidence_id)
 
 
-def resolve_snapshot_boundary(conn: Any, kol_pool_id: int, requested: int = 0) -> int:
-    """Freeze one evidence-id boundary for all pages in this cursor chain."""
-
-    if int(requested or 0) > 0:
-        return int(requested)
-    if not _table_available(conn, "vkpi_kol_video_evidence"):
-        return 0
-    row = conn.execute(
-        """
-        SELECT COALESCE(MAX(id), 0) AS max_id
-        FROM vkpi_kol_video_evidence
-        WHERE kol_pool_id=?
-          AND COALESCE(is_active, TRUE) != FALSE
-          AND COALESCE(evidence_type, 'video') IN ('video', 'image')
-        """,
-        (int(kol_pool_id),),
-    ).fetchone()
-    return max(0, _int(dict(row).get("max_id") if row else 0))
+# ── durable job projection ──────────────────────────────────────────────
 
 
-def _job_state(row: dict[str, Any]) -> str:
+def _job_status(row: dict[str, Any]) -> str:
     raw = str(row.get("status") or "").strip().lower()
     if raw == "queued":
         if _int(row.get("attempts")) > 0 and row.get("next_retry_at") not in (None, ""):
@@ -140,11 +201,11 @@ def _job_state(row: dict[str, Any]) -> str:
     if raw in {"running", "processing", "in_progress", "started"}:
         return "running"
     if raw in {"done", "success", "completed", "complete"}:
-        return "done"
+        return "ready"
     if raw == "blocked":
         return "blocked"
-    # triage/cancelled/timeout and unknown terminal values are intentionally
-    # collapsed to one safe display state; raw worker text is never returned.
+    # triage / cancelled / timeout and unknown terminal values collapse to one
+    # safe display state; raw worker text is never returned.
     return "failed"
 
 
@@ -157,8 +218,8 @@ def _project_job(row: Any) -> dict[str, Any] | None:
         return None
     return {
         "job_id": job_id,
-        "status": _job_state(item),
-        "created_at": _stamp(item.get("created_at")),
+        "status": _job_status(item),
+        "requested_at": _stamp(item.get("created_at")),
         "updated_at": _stamp(item.get("updated_at")),
     }
 
@@ -216,18 +277,44 @@ def _latest_jobs_for_targets(
     return result
 
 
-def _latest_profile_job(conn: Any, kol_pool_id: int) -> dict[str, Any]:
-    job = _latest_jobs_for_targets(
-        conn,
-        job_type=PROFILE_JOB_TYPE,
-        target_ids=(int(kol_pool_id),),
-    ).get(int(kol_pool_id))
-    return job or {
-        "job_id": None,
-        "status": "not_requested",
-        "created_at": None,
-        "updated_at": None,
+# ── TaskState assembly ──────────────────────────────────────────────────
+
+
+def _data_block(
+    *,
+    status: str,
+    freshness: str,
+    updated_at: Any,
+    superseded_by_job: bool,
+) -> dict[str, Any]:
+    return {
+        "status": status if status in DATA_STATUSES else "none",
+        "freshness": freshness if freshness in FRESHNESS_VALUES else "unavailable",
+        "updated_at": _stamp(updated_at),
+        "superseded_by_job": bool(superseded_by_job),
     }
+
+
+def _task_state(job: dict[str, Any] | None, data: dict[str, Any]) -> dict[str, Any]:
+    """Merge the latest durable job with persisted-data truth into one TaskState."""
+    status = str((job or {}).get("status") or "not_requested")
+    if status not in TASK_STATUSES:
+        status = "failed"
+    return {
+        "status": status,
+        "job_id": (job or {}).get("job_id"),
+        "requested_at": (job or {}).get("requested_at"),
+        "updated_at": (job or {}).get("updated_at"),
+        "data": data,
+    }
+
+
+def _job_is_newer(job: dict[str, Any] | None, data_updated_at: Any) -> bool:
+    if not job or job.get("status") not in ACTIVE_TASK_STATUSES:
+        return False
+    job_at = _moment(job.get("requested_at") or job.get("updated_at"))
+    data_at = _moment(data_updated_at)
+    return data_at is None or job_at is None or job_at > data_at
 
 
 def _final_v1_caches(conn: Any, evidence_ids: list[int]) -> dict[int, dict[str, Any]]:
@@ -251,67 +338,100 @@ def _final_v1_caches(conn: Any, evidence_ids: list[int]) -> dict[int, dict[str, 
         status = str(item.get("status") or "").strip().lower()
         if evidence_id <= 0 or status not in {"ready", "stale"}:
             continue
-        result[evidence_id] = {
-            "status": status,
-            "updated_at": _stamp(item.get("updated_at")),
-        }
+        result[evidence_id] = {"status": status, "updated_at": _stamp(item.get("updated_at"))}
     return result
 
 
-def _snapshot_projection(video: dict[str, Any]) -> dict[str, Any]:
-    last_attempt = video.get("last_attempt") if isinstance(video.get("last_attempt"), dict) else {}
+def final_v1_task_state(cache: dict[str, Any] | None, job: dict[str, Any] | None) -> dict[str, Any]:
+    """Gemini final_v1: job ledger vs. analysis cache row.
+
+    * active job newer than the cache  -> status = job state, data.superseded_by_job = true
+    * finished job but no ready cache  -> status = failed (the promise was not kept)
+    * ready cache without any job row  -> status = ready (legacy / pruned ledger)
+    """
+    cache_status = str((cache or {}).get("status") or "").strip().lower()
+    cache_at = (cache or {}).get("updated_at")
+    if cache_status == "ready":
+        data_status, freshness = "ready", "fresh"
+    elif cache_status == "stale":
+        data_status, freshness = "stale", "stale"
+    else:
+        data_status, freshness = "none", "never"
+    data = _data_block(
+        status=data_status,
+        freshness=freshness,
+        updated_at=cache_at,
+        superseded_by_job=_job_is_newer(job, cache_at),
+    )
+    state = _task_state(job, data)
+    if state["status"] == "ready" and data["status"] != "ready":
+        state["status"] = "failed"
+    elif state["status"] == "not_requested" and data["status"] == "ready":
+        state["status"] = "ready"
+    return state
+
+
+def metric_refresh_task_state(video: dict[str, Any], job: dict[str, Any] | None) -> dict[str, Any]:
+    """Metric refresh: job ledger vs. persisted metric snapshot (tracking layer)."""
     last_success = video.get("last_success") if isinstance(video.get("last_success"), dict) else {}
     freshness = str(video.get("freshness") or "unavailable").strip().lower()
-    if freshness not in {"fresh", "stale", "never", "unavailable"}:
+    if freshness not in FRESHNESS_VALUES:
         freshness = "unavailable"
-    status = str(video.get("tracking_status") or "unavailable").strip().lower()
-    if status not in {"tracked", "failed", "stale", "insufficient_history", "unavailable"}:
-        status = "unavailable"
-    return {
-        "status": status,
-        "freshness": freshness,
-        "last_attempt_at": _stamp(last_attempt.get("fetched_at")),
-        "last_success_at": _stamp(last_success.get("fetched_at")),
-        "sample_count": max(0, _int(video.get("sample_count"))),
-        "attempt_count": max(0, _int(video.get("attempt_count"))),
-    }
-
-
-def _final_v1_projection(
-    cache: dict[str, Any] | None,
-    latest_job: dict[str, Any] | None,
-) -> dict[str, Any]:
-    cache_status = str((cache or {}).get("status") or "").strip().lower()
-    job_status = str((latest_job or {}).get("status") or "").strip().lower()
-    cache_at = _moment((cache or {}).get("updated_at"))
-    job_at = _moment((latest_job or {}).get("created_at") or (latest_job or {}).get("updated_at"))
-    active_is_newer = job_status in _ACTIVE_JOB_STATES and (
-        cache_status != "ready"
-        or cache_at is None
-        or job_at is None
-        or job_at > cache_at
+    snapshot_at = last_success.get("fetched_at") or video.get("metrics_scraped_at")
+    data_status = "ready" if freshness == "fresh" else "stale" if freshness == "stale" else "none"
+    data = _data_block(
+        status=data_status,
+        freshness=freshness,
+        updated_at=snapshot_at,
+        superseded_by_job=_job_is_newer(job, snapshot_at),
     )
-    if active_is_newer:
-        state = "active"
-    elif cache_status == "ready":
-        state = "ready"
-    elif job_status == "blocked":
-        state = "blocked"
-    elif job_status in {"failed", "done"}:
-        # A done job without a ready cache did not produce the promised result.
-        state = "failed"
-    elif cache_status == "stale":
-        state = "stale"
-    else:
-        state = "not_requested"
-    return {
-        "state": state,
-        "cache": cache,
-        "latest_job": latest_job,
-    }
+    data["tracking_status"] = str(video.get("tracking_status") or "unavailable")
+    data["sample_count"] = max(0, _int(video.get("sample_count")))
+    data["attempt_count"] = max(0, _int(video.get("attempt_count")))
+    return _task_state(job, data)
 
 
-def _library_summary(conn: Any, kol_pool_id: int, snapshot_boundary_id: int) -> dict[str, int]:
+def _profile_crawl_data(conn: Any, kol_pool_id: int) -> dict[str, Any]:
+    if not _table_available(conn, "vkpi_kol_url_deep_crawl_runs"):
+        return _data_block(status="none", freshness="unavailable", updated_at=None, superseded_by_job=False)
+    row = conn.execute(
+        """
+        SELECT created_at
+        FROM vkpi_kol_url_deep_crawl_runs
+        WHERE kol_pool_id=? AND status='ready'
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (int(kol_pool_id),),
+    ).fetchone()
+    crawled_at = dict(row).get("created_at") if row else None
+    if not crawled_at:
+        return _data_block(status="none", freshness="never", updated_at=None, superseded_by_job=False)
+    fresh_cutoff = datetime.now(timezone.utc) - timedelta(hours=PROFILE_FRESH_HOURS)
+    at = _moment(crawled_at)
+    freshness = "fresh" if at is not None and at >= fresh_cutoff else "stale"
+    return _data_block(
+        status="ready" if freshness == "fresh" else "stale",
+        freshness=freshness,
+        updated_at=crawled_at,
+        superseded_by_job=False,
+    )
+
+
+def profile_crawl_task_state(conn: Any, kol_pool_id: int) -> dict[str, Any]:
+    """Account crawl: job ledger vs. latest ready deep-crawl run (24h freshness)."""
+    job = _latest_jobs_for_targets(conn, job_type=PROFILE_JOB_TYPE, target_ids=(int(kol_pool_id),)).get(
+        int(kol_pool_id)
+    )
+    data = _profile_crawl_data(conn, int(kol_pool_id))
+    data["superseded_by_job"] = _job_is_newer(job, data.get("updated_at"))
+    return _task_state(job, data)
+
+
+# ── summary + page ──────────────────────────────────────────────────────
+
+
+def _library_summary(conn: Any, kol_pool_id: int) -> dict[str, int]:
     if not _table_available(conn, "vkpi_kol_video_evidence"):
         return {"total": 0, "views_total": 0, "views_measured": 0, "final_v1_ready": 0}
     cache_available = _table_available(conn, "vkpi_analysis_cache")
@@ -334,11 +454,10 @@ def _library_summary(conn: Any, kol_pool_id: int, snapshot_boundary_id: int) -> 
                COALESCE({analyzed_sql}, 0) AS final_v1_ready
         FROM vkpi_kol_video_evidence e
         WHERE e.kol_pool_id=?
-          AND (? <= 0 OR e.id <= ?)
           AND COALESCE(e.is_active, TRUE) != FALSE
           AND COALESCE(e.evidence_type, 'video') IN ('video', 'image')
         """,
-        (int(kol_pool_id), int(snapshot_boundary_id), int(snapshot_boundary_id)),
+        (int(kol_pool_id),),
     ).fetchone()
     item = dict(row) if row else {}
     return {
@@ -354,72 +473,77 @@ def build_video_recovery_page(
     *,
     kol_pool_id: int,
     videos: list[dict[str, Any]],
-    offset: int,
     limit: int,
-    snapshot_boundary_id: int,
 ) -> dict[str, Any]:
-    """Attach bounded job/cache truth to one already-scoped evidence page."""
+    """Attach unified TaskState truth to one keyset page of evidence rows.
 
+    ``videos`` must already be ordered ``published_at DESC, id DESC`` and may
+    contain up to ``limit + 1`` rows; the extra row only signals ``has_more``.
+    """
     page_limit = max(1, min(MAX_PAGE_SIZE, int(limit or 1)))
-    page_offset = max(0, min(MAX_CURSOR_OFFSET, int(offset or 0)))
+    rows = [dict(video) for video in videos[: page_limit + 1]]
+    has_more = len(rows) > page_limit
+    rows = rows[:page_limit]
     evidence_ids = list(
         dict.fromkeys(
             _int(video.get("evidence_id") or video.get("id"))
-            for video in videos
+            for video in rows
             if _int(video.get("evidence_id") or video.get("id")) > 0
         )
-    )[:page_limit]
+    )
     caches = _final_v1_caches(conn, evidence_ids)
     final_jobs = _latest_jobs_for_targets(
-        conn,
-        job_type=VIDEO_JOB_TYPE,
-        target_ids=evidence_ids,
-        derive_method=FINAL_V1_DERIVE_METHOD,
+        conn, job_type=VIDEO_JOB_TYPE, target_ids=evidence_ids, derive_method=FINAL_V1_DERIVE_METHOD
     )
-    metric_jobs = _latest_jobs_for_targets(
-        conn,
-        job_type=METRIC_JOB_TYPE,
-        target_ids=evidence_ids,
-    )
-    projected_videos: list[dict[str, Any]] = []
-    for raw in videos[:page_limit]:
-        video = dict(raw)
+    metric_jobs = _latest_jobs_for_targets(conn, job_type=METRIC_JOB_TYPE, target_ids=evidence_ids)
+    items: list[dict[str, Any]] = []
+    for video in rows:
         evidence_id = _int(video.get("evidence_id") or video.get("id"))
-        latest_metric_job = metric_jobs.get(evidence_id)
-        video["metric_refresh"] = {
-            "latest_job": latest_metric_job,
-            "snapshot": _snapshot_projection(video),
+        video["evidence_id"] = evidence_id
+        video["published_at"] = _stamp(video.get("published_at"))
+        video["tasks"] = {
+            "metric_refresh": metric_refresh_task_state(video, metric_jobs.get(evidence_id)),
+            "final_v1": final_v1_task_state(caches.get(evidence_id), final_jobs.get(evidence_id)),
         }
-        video["final_v1"] = _final_v1_projection(
-            caches.get(evidence_id),
-            final_jobs.get(evidence_id),
-        )
-        projected_videos.append(video)
+        items.append(video)
 
-    boundary = max(0, int(snapshot_boundary_id or 0))
-    summary = _library_summary(conn, int(kol_pool_id), boundary)
-    returned = len(projected_videos)
-    has_more = page_offset + returned < summary["total"]
+    summary = _library_summary(conn, int(kol_pool_id))
+    last = items[-1] if items else None
+    next_cursor = encode_cursor(last.get("published_at"), last["evidence_id"]) if has_more and last else None
+    page = {
+        "limit": page_limit,
+        "returned": len(items),
+        "has_more": bool(has_more),
+        "next_cursor": next_cursor,
+        "cursor_kind": CURSOR_KIND,
+        "order": ORDER,
+    }
     return {
+        "contract": CONTRACT,
         "kol_pool_id": int(kol_pool_id),
-        "items": projected_videos,
-        "profile_crawl": _latest_profile_job(conn, int(kol_pool_id)),
-        "summary": summary,
-        "total": summary["total"],
-        "returned": returned,
-        "has_more": has_more,
-        "next_cursor": encode_cursor(page_offset + returned, boundary) if has_more and returned else None,
-        "snapshot_boundary_id": boundary,
-        "cursor_stable": True,
-        "page_limit": page_limit,
         "read_only": True,
+        "profile_crawl": profile_crawl_task_state(conn, int(kol_pool_id)),
+        "items": items,
+        "summary": summary,
+        "page": page,
+        "total": summary["total"],
+        "returned": page["returned"],
+        "has_more": page["has_more"],
+        "next_cursor": page["next_cursor"],
     }
 
 
 __all__ = [
+    "ACTIVE_TASK_STATUSES",
+    "CONTRACT",
+    "CURSOR_KIND",
+    "DEFAULT_PAGE_SIZE",
     "MAX_PAGE_SIZE",
+    "TASK_STATUSES",
     "build_video_recovery_page",
     "decode_cursor",
     "encode_cursor",
-    "resolve_snapshot_boundary",
+    "final_v1_task_state",
+    "metric_refresh_task_state",
+    "profile_crawl_task_state",
 ]
