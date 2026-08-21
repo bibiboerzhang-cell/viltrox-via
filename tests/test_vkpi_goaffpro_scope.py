@@ -16,6 +16,14 @@ class _Cursor:
         return self._row
 
 
+class _RowsCursor:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
 class _SharedOnlyConn:
     """The target exists but has no favorite row for this staff actor."""
 
@@ -163,4 +171,195 @@ def test_shared_member_can_read_local_goaffpro_mapping_state(monkeypatch):
         "linked": False,
         "kol_pool_id": 991,
         "needs_regenerate": False,
+    }
+
+
+def test_arbitrary_pool_id_cannot_read_goaffpro_attribution(monkeypatch):
+    staff = {"id": 73, "role": "employee", "permissions": {"vkpi": "read"}}
+    monkeypatch.setattr(vkpi_goaffpro, "get_conn", lambda: _ReadScopeConn(shared=False))
+    monkeypatch.setattr(
+        vkpi_goaffpro.goaffpro_connect,
+        "ensure_goaffpro_links_schema",
+        lambda: pytest.fail("scope denial must happen before schema access"),
+    )
+    monkeypatch.setattr(
+        vkpi_goaffpro,
+        "_aggregate_confirmed_sales",
+        lambda *_args, **_kwargs: pytest.fail("scope denial must happen before commerce reads"),
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        vkpi_goaffpro.goaffpro_attribution(kol_pool_id=991, project_id=None, staff=staff)
+
+    assert raised.value.status_code == 403
+    assert raised.value.detail == "my_kol_goaffpro_read_forbidden"
+
+
+@pytest.mark.parametrize("endpoint", ("attribution", "summary"))
+def test_out_of_scope_project_cannot_read_goaffpro_commerce(monkeypatch, endpoint):
+    staff = {"id": 73, "role": "employee", "permissions": {"vkpi": "read"}}
+
+    def deny_project(project_id, seen_staff, *, write=False):
+        assert project_id == 41
+        assert seen_staff is staff
+        assert write is False
+        raise vkpi_goaffpro.scope.ScopeDenied("project scope denied")
+
+    monkeypatch.setattr(vkpi_goaffpro.scope, "assert_project_access", deny_project)
+    monkeypatch.setattr(vkpi_goaffpro, "release_validation_active", lambda: False)
+    monkeypatch.setattr(
+        vkpi_goaffpro.goaffpro_connect,
+        "ensure_goaffpro_links_schema",
+        lambda: pytest.fail("project denial must happen before schema access"),
+    )
+    monkeypatch.setattr(
+        vkpi_goaffpro,
+        "get_conn",
+        lambda: pytest.fail("project denial must happen before commerce reads"),
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        if endpoint == "attribution":
+            vkpi_goaffpro.goaffpro_attribution(kol_pool_id=None, project_id=41, staff=staff)
+        else:
+            vkpi_goaffpro.goaffpro_summary(limit=200, project_id=41, search=None, staff=staff)
+
+    assert raised.value.status_code == 403
+    assert raised.value.detail == "goaffpro_project_read_forbidden"
+
+
+class _SummaryConn:
+    def __init__(self, project_rows=None):
+        self.project_rows = project_rows or []
+        self.summary_sql = ""
+        self.summary_params = ()
+
+    def execute(self, sql, params=()):
+        normalized = " ".join(str(sql).lower().split())
+        if "from vkpi_project_kol_assignments" in normalized:
+            return _RowsCursor(self.project_rows)
+        if "from vkpi_goaffpro_kol_links l" in normalized:
+            self.summary_sql = normalized
+            self.summary_params = tuple(params)
+            return _RowsCursor([])
+        raise AssertionError(f"unexpected summary query: {normalized}")
+
+
+def _run_summary(monkeypatch, conn, staff, *, project_id=None):
+    monkeypatch.setattr(vkpi_goaffpro, "release_validation_active", lambda: False)
+    monkeypatch.setattr(vkpi_goaffpro.goaffpro_connect, "ensure_goaffpro_links_schema", lambda: None)
+    monkeypatch.setattr(vkpi_goaffpro, "get_conn", lambda: conn)
+    return vkpi_goaffpro.goaffpro_summary(
+        limit=200,
+        project_id=project_id,
+        search=None,
+        staff=staff,
+    )
+
+
+def test_employee_summary_is_limited_to_owned_or_shared_kols(monkeypatch):
+    conn = _SummaryConn()
+    staff = {"id": 73, "role": "employee", "permissions": {"vkpi": "read"}}
+
+    result = _run_summary(monkeypatch, conn, staff)
+
+    assert result["items"] == []
+    assert "vkpi_kol_pool_favorites own_favorite" in conn.summary_sql
+    assert "vkpi_kol_pool_members shared_member" in conn.summary_sql
+    assert conn.summary_params == (73, 73, 200)
+
+
+def test_employee_project_summary_intersects_project_and_my_kol_scope(monkeypatch):
+    conn = _SummaryConn(project_rows=[{"kol_pool_id": 991}, {"kol_pool_id": 992}])
+    staff = {"id": 73, "role": "employee", "permissions": {"vkpi": "read"}}
+    project_checks = []
+    monkeypatch.setattr(
+        vkpi_goaffpro.scope,
+        "assert_project_access",
+        lambda project_id, seen_staff, *, write=False: project_checks.append(
+            (project_id, seen_staff, write)
+        ),
+    )
+
+    result = _run_summary(monkeypatch, conn, staff, project_id=41)
+
+    assert result["items"] == []
+    assert project_checks == [(41, staff, False)]
+    assert "vkpi_kol_pool_favorites own_favorite" in conn.summary_sql
+    assert "vkpi_kol_pool_members shared_member" in conn.summary_sql
+    assert "l.kol_pool_id in (?,?)" in conn.summary_sql
+    assert conn.summary_params == (73, 73, 991, 992, 200)
+
+
+def test_manager_summary_retains_full_cached_commerce_view(monkeypatch):
+    conn = _SummaryConn()
+    staff = {"id": 7, "role": "manager", "permissions": {"vkpi": "read"}}
+
+    result = _run_summary(monkeypatch, conn, staff)
+
+    assert result["items"] == []
+    assert "vkpi_kol_pool_favorites own_favorite" not in conn.summary_sql
+    assert "vkpi_kol_pool_members shared_member" not in conn.summary_sql
+    assert conn.summary_params == (200,)
+
+
+@pytest.mark.parametrize(
+    "invoke,provider_name",
+    (
+        (lambda staff: vkpi_goaffpro.list_goaffpro_affiliates(limit=5, offset=None, staff=staff), "list_affiliates"),
+        (lambda staff: vkpi_goaffpro.list_goaffpro_orders(limit=5, offset=None, staff=staff), "list_orders"),
+        (lambda staff: vkpi_goaffpro.goaffpro_products(keyword=None, limit=5, staff=staff), "list_products"),
+        (lambda staff: vkpi_goaffpro.goaffpro_resolve_product(query="AF 35mm", staff=staff), "find_product_handle"),
+    ),
+)
+def test_employee_cannot_trigger_goaffpro_provider_reads(monkeypatch, invoke, provider_name):
+    staff = {"id": 73, "role": "employee", "permissions": {"vkpi": "read"}}
+    monkeypatch.setattr(
+        vkpi_goaffpro.goaffpro_connect,
+        provider_name,
+        lambda *_args, **_kwargs: pytest.fail("employee must not reach GOAFFPRO provider"),
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        invoke(staff)
+
+    assert raised.value.status_code == 403
+    assert raised.value.detail == "management permission required"
+
+
+@pytest.mark.parametrize(
+    "invoke,provider_name",
+    (
+        (lambda staff: vkpi_goaffpro.list_goaffpro_affiliates(limit=5, offset=None, staff=staff), "list_affiliates"),
+        (lambda staff: vkpi_goaffpro.list_goaffpro_orders(limit=5, offset=None, staff=staff), "list_orders"),
+        (lambda staff: vkpi_goaffpro.goaffpro_products(keyword=None, limit=5, staff=staff), "list_products"),
+        (lambda staff: vkpi_goaffpro.goaffpro_resolve_product(query="AF 35mm", staff=staff), "find_product_handle"),
+    ),
+)
+def test_release_validation_blocks_goaffpro_provider_reads(monkeypatch, invoke, provider_name):
+    staff = {"id": 7, "role": "manager", "permissions": {"vkpi": "write"}}
+    monkeypatch.setattr(vkpi_goaffpro, "release_validation_active", lambda: True)
+    monkeypatch.setattr(
+        vkpi_goaffpro.goaffpro_connect,
+        provider_name,
+        lambda *_args, **_kwargs: pytest.fail("release fence must precede provider access"),
+    )
+
+    with pytest.raises(HTTPException) as raised:
+        invoke(staff)
+
+    assert raised.value.status_code == 503
+    assert raised.value.detail == "release_validation_fenced"
+
+
+def test_product_provider_routes_are_explicit_post_only():
+    methods_by_path = {
+        route.path: set(route.methods or set())
+        for route in vkpi_goaffpro.router.routes
+        if route.path.endswith(("/products", "/resolve-product"))
+    }
+
+    assert methods_by_path == {
+        "/api/admin/vkpi/goaffpro/products": {"POST"},
+        "/api/admin/vkpi/goaffpro/resolve-product": {"POST"},
     }

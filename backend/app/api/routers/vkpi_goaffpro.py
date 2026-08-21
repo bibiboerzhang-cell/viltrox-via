@@ -5,7 +5,8 @@
 - 写 creds POST /creds:require_tab("vkpi","admin")(公司级 token 仅 admin/owner 可改,
   与 api_key_pool / shopify creds 同档)。
 - 手动 sync stub POST /sync:require_tab("vkpi","admin"),探活拉一页,不落库不归因。
-- 只读 GET /affiliates、GET /orders:require_tab("vkpi","read"),薄透传 REST client。
+- 管理层 GET /affiliates、GET /orders:显式预览 REST client,release validation 下禁用。
+- 产品目录/解析会访问 provider,仅保留管理层 POST,避免 GET 被预取或重放触发外调。
 
 无真 GOAFFPRO key 时,connection_status -> not_configured,各 list 端点 ->
 {ok:false, reason:'not_configured'},Dashboard 继续诚实显示「待接入」。绝不编数。
@@ -95,7 +96,15 @@ def get_goaffpro_creds(
     return _guard(goaffpro_connect.connection_status)
 
 
-# --- read-only: thin REST passthrough (creds-ready) ---------------------------
+# --- explicit provider previews (creds-ready, manager-only) ------------------
+
+
+def _assert_goaffpro_provider_read_allowed(staff: dict | None) -> None:
+    """Provider-backed reads expose commerce data and consume remote capacity."""
+    require_manager_staff(staff or {})
+    if release_validation_active():
+        raise HTTPException(status_code=503, detail="release_validation_fenced")
+
 
 @router.get("/affiliates")
 def list_goaffpro_affiliates(
@@ -103,7 +112,8 @@ def list_goaffpro_affiliates(
     offset: int | None = Query(default=None, ge=0),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    """List affiliates. no creds -> {ok:false, reason:'not_configured'}. 字段映射待 key 校准。"""
+    """Manager-triggered affiliate preview; may include contact fields."""
+    _assert_goaffpro_provider_read_allowed(staff)
     return _guard(goaffpro_connect.list_affiliates, limit=limit, offset=offset)
 
 
@@ -113,7 +123,8 @@ def list_goaffpro_orders(
     offset: int | None = Query(default=None, ge=0),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    """List affiliate orders. no creds -> {ok:false, reason:'not_configured'}. 字段映射待 key 校准。"""
+    """Manager-triggered commerce order preview."""
+    _assert_goaffpro_provider_read_allowed(staff)
     return _guard(goaffpro_connect.list_orders, limit=limit, offset=offset)
 
 
@@ -247,6 +258,14 @@ def _assert_goaffpro_target_readable(conn, kol_pool_id: int, staff: dict | None)
     if not shared:
         raise HTTPException(status_code=403, detail="my_kol_goaffpro_read_forbidden")
     return int(actor_id)
+
+
+def _assert_goaffpro_project_readable(project_id: int, staff: dict | None) -> None:
+    """Apply the shared project scope before reading project commerce data."""
+    try:
+        scope.assert_project_access(int(project_id), staff, write=False)
+    except scope.ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="goaffpro_project_read_forbidden") from exc
 
 
 def _assert_goaffpro_provider_write_allowed() -> None:
@@ -715,10 +734,10 @@ def goaffpro_attribution(
     - ?kol_pool_id= :单 KOL 聚合。
     - ?project_id=  :经 vkpi_project_kol_assignments 找该项目下所有 kol_pool_id 再聚合。
     """
-    goaffpro_connect.ensure_goaffpro_links_schema()
-    conn = get_conn()
-
     if kol_pool_id is not None:
+        conn = get_conn()
+        _assert_goaffpro_target_readable(conn, int(kol_pool_id), staff)
+        goaffpro_connect.ensure_goaffpro_links_schema()
         agg = _aggregate_confirmed_sales(conn, "kol_pool_id = ?", (kol_pool_id,))
         count = int(agg.get("sales_count") or 0)
         if not agg.get("by_currency"):
@@ -740,6 +759,9 @@ def goaffpro_attribution(
         }
 
     if project_id is not None:
+        _assert_goaffpro_project_readable(int(project_id), staff)
+        goaffpro_connect.ensure_goaffpro_links_schema()
+        conn = get_conn()
         kol_rows = conn.execute(
             """
             SELECT kol_pool_id
@@ -800,7 +822,8 @@ def goaffpro_summary(
     供数据追踪表 + 项目卡复用。?project_id= 限定项目;?search= 按 KOL名/handle/ref码/优惠码 过滤。
     单次 JOIN(links+kol_pool+metrics),按 GMV 降序(头部 KOL 在前),上千 KOL 不卡。
     """
-    if release_validation_active():
+    release_fenced = release_validation_active()
+    if release_fenced:
         required_tables = (
             "vkpi_goaffpro_kol_links",
             "vkpi_goaffpro_kol_metrics",
@@ -813,7 +836,9 @@ def goaffpro_summary(
                 "totals": _empty_totals(),
                 "note": "release validation: cached GOAFFPRO tables unavailable",
             }
-    else:
+    if project_id is not None:
+        _assert_goaffpro_project_readable(int(project_id), staff)
+    if not release_fenced:
         goaffpro_connect.ensure_goaffpro_links_schema()
     conn = get_conn()
     project_kol_ids: set[int] | None = None
@@ -827,6 +852,25 @@ def goaffpro_summary(
             return {"ok": True, "items": [], "count": 0, "totals": _empty_totals(), "note": "该项目暂无派单 KOL"}
     where = "COALESCE(l.affiliate_id, '') <> '' AND COALESCE(l.ref_code, '') <> ''"
     sql_params: list = []
+    if not scope.can_view_all(staff):
+        actor_id = scope.actor_staff_id(staff)
+        if actor_id <= 0:
+            raise HTTPException(status_code=403, detail="staff_identity_required")
+        where += """
+            AND (
+                EXISTS (
+                    SELECT 1 FROM vkpi_kol_pool_favorites own_favorite
+                    WHERE own_favorite.kol_pool_id = l.kol_pool_id
+                      AND own_favorite.staff_id = ?
+                )
+                OR EXISTS (
+                    SELECT 1 FROM vkpi_kol_pool_members shared_member
+                    WHERE shared_member.kol_pool_id = l.kol_pool_id
+                      AND shared_member.staff_id = ?
+                )
+            )
+        """
+        sql_params.extend([int(actor_id), int(actor_id)])
     if project_kol_ids is not None:
         where += " AND l.kol_pool_id IN (" + ",".join(["?"] * len(project_kol_ids)) + ")"
         sql_params.extend(sorted(project_kol_ids))
@@ -931,20 +975,22 @@ def goaffpro_summary(
     }
 
 
-@router.get("/products")
+@router.post("/products")
 def goaffpro_products(
     keyword: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=250),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    """列店铺真实产品(带 handle),供按产品出链的产品选择器。可 keyword 搜。"""
+    """管理层显式请求店铺产品；POST 防止导航预取触发 provider 网络调用。"""
+    _assert_goaffpro_provider_read_allowed(staff)
     return goaffpro_connect.list_products(keyword=keyword, limit=limit)
 
 
-@router.get("/resolve-product")
+@router.post("/resolve-product")
 def goaffpro_resolve_product(
     query: str = Query(..., min_length=1),
     staff=Depends(require_tab("vkpi", "read")),
 ):
-    """把产品名/SKU 解析成 Shopify handle(项目/活动绑产品出链用)。无信心匹配 → ok:false。"""
+    """管理层显式解析产品 handle；可能翻页访问 provider,因此不暴露为 GET。"""
+    _assert_goaffpro_provider_read_allowed(staff)
     return goaffpro_connect.find_product_handle(query)
