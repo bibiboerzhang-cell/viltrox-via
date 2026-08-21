@@ -13,11 +13,11 @@ beforeEach(() => {
 });
 
 describe("content-fit read and paid analysis boundary", () => {
-  it("keeps GET cache-only with product scope", async () => {
-    await getKolPoolContentFit("token", 42, { productSku: "AF-35-PRO" });
+  it("keeps GET pure-read with product and job scope", async () => {
+    await getKolPoolContentFit("token", 42, { productSku: "AF-35-PRO", jobId: 91 });
 
     expect(apiFetch).toHaveBeenCalledWith(
-      "/api/admin/vkpi/kol-pool/42/content-fit?product_sku=AF-35-PRO",
+      "/api/admin/vkpi/kol-pool/42/content-fit?product_sku=AF-35-PRO&job_id=91",
       { cache: "no-store" },
       "token",
     );

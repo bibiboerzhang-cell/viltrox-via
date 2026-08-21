@@ -573,9 +573,10 @@ async def get_pool_item_content_fit(
     analyze: bool = Query(default=False),
     force: bool = Query(default=False),
     product_sku: str | None = Query(default=None),
+    job_id: int | None = Query(default=None, ge=1),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """Pure cache read; legacy GET mutation flags are explicitly rejected."""
+    """Pure cache/job-status read; legacy GET mutation flags are rejected."""
     from app.domains.kol import content_fit_analysis as kol_content_fit
 
     del staff
@@ -589,6 +590,7 @@ async def get_pool_item_content_fit(
             kol_content_fit.get_content_fit,
             int(kol_pool_id),
             product_sku,
+            job_id=job_id if isinstance(job_id, int) else None,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

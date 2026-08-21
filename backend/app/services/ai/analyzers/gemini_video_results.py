@@ -34,6 +34,9 @@ VIDEO_FINAL_LAYERS = (
 )
 
 FINAL_V1_COMPLETED_STATUSES = frozenset({"complete", "completed", "ready", "success", "succeeded"})
+BRAND_PRODUCT_STATUSES = frozenset({"present", "absent", "unknown"})
+BRAND_EVIDENCE_MODALITIES = frozenset({"visual", "subtitle", "audio", "metadata"})
+TIMED_BRAND_EVIDENCE_MODALITIES = frozenset({"visual", "subtitle", "audio"})
 
 
 class InvalidFinalV1ResultError(RuntimeError):
@@ -120,7 +123,7 @@ def _final_v1_has_evidence(value: Any) -> bool:
     if not isinstance(value, dict):
         return False
     for key, item in value.items():
-        if key == "evidence" and _meaningful_evidence_value(item):
+        if key in {"evidence", "viltrox_evidence"} and _meaningful_evidence_value(item):
             return True
         if key == "scene_timeline" and isinstance(item, list):
             if any(
@@ -309,6 +312,128 @@ def _parse_json_response_text(text: str) -> dict[str, Any]:
     raise ValueError("Gemini response JSON root must be an object")
 
 
+def _normalise_brand_evidence(value: Any) -> list[dict[str, Any]]:
+    """Keep only typed, attributable evidence; never infer a brand from prose."""
+    if not isinstance(value, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for item in value[:30]:
+        if not isinstance(item, dict):
+            continue
+        modality = str(item.get("modality") or "").strip().lower()
+        detail = " ".join(str(item.get("detail") or "").split())[:500]
+        timestamp = str(item.get("timestamp") or "").strip()[:20] or None
+        if modality not in BRAND_EVIDENCE_MODALITIES or not detail:
+            continue
+        if modality in TIMED_BRAND_EVIDENCE_MODALITIES and not (
+            timestamp and re.fullmatch(r"\d{1,3}:\d{2}", timestamp)
+        ):
+            continue
+        output.append(
+            {
+                "modality": modality,
+                "timestamp": timestamp,
+                "detail": detail,
+                "confidence": _clamped_confidence(item.get("confidence")),
+            }
+        )
+    return output
+
+
+def _normalise_brand_products(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for item in value[:20]:
+        if not isinstance(item, dict):
+            continue
+        name = " ".join(str(item.get("name") or "").split())[:180]
+        evidence = _normalise_brand_evidence(item.get("evidence"))
+        if not name or not evidence:
+            continue
+        sku = " ".join(str(item.get("sku") or "").split())[:100] or None
+        output.append(
+            {
+                "name": name,
+                "sku": sku,
+                "confidence": _clamped_confidence(item.get("confidence")),
+                "evidence": evidence,
+            }
+        )
+    return output
+
+
+def _normalise_competitor_evidence(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    output: list[dict[str, Any]] = []
+    for item in value[:20]:
+        if not isinstance(item, dict):
+            continue
+        brand = " ".join(str(item.get("brand") or "").split())[:120]
+        evidence = _normalise_brand_evidence(item.get("evidence"))
+        if not brand or not evidence:
+            continue
+        raw_products = item.get("products") if isinstance(item.get("products"), list) else []
+        products = [" ".join(str(product).split())[:180] for product in raw_products[:20] if str(product).strip()]
+        output.append(
+            {
+                "brand": brand,
+                "products": products,
+                "confidence": _clamped_confidence(item.get("confidence")),
+                "evidence": evidence,
+            }
+        )
+    return output
+
+
+def _normalise_brand_product_evidence(value: Any) -> dict[str, Any]:
+    """Return tri-state brand truth from the dedicated structured provider block.
+
+    Missing/legacy/malformed output is unknown. ``present`` requires timed visual,
+    subtitle, or audio evidence. ``absent`` requires an explicit complete visual
+    and audio inspection and cannot coexist with positive evidence.
+    """
+    raw = value if isinstance(value, dict) else {}
+    requested_status = str(raw.get("viltrox_status") or "").strip().lower()
+    if requested_status not in BRAND_PRODUCT_STATUSES:
+        requested_status = "unknown"
+    checked_modalities = list(
+        dict.fromkeys(
+            str(item or "").strip().lower()
+            for item in (raw.get("checked_modalities") if isinstance(raw.get("checked_modalities"), list) else [])
+            if str(item or "").strip().lower() in BRAND_EVIDENCE_MODALITIES
+        )
+    )
+    viltrox_evidence = _normalise_brand_evidence(raw.get("viltrox_evidence"))
+    products = _normalise_brand_products(raw.get("viltrox_products"))
+    competitors = _normalise_competitor_evidence(raw.get("competitors"))
+    positive_evidence = [
+        *viltrox_evidence,
+        *(evidence for product in products for evidence in product.get("evidence", [])),
+    ]
+    has_timed_positive = any(
+        item.get("modality") in TIMED_BRAND_EVIDENCE_MODALITIES
+        for item in positive_evidence
+    )
+    inspection_complete = raw.get("inspection_complete") is True
+    complete_absence_check = inspection_complete and {"visual", "audio"}.issubset(checked_modalities)
+    if requested_status == "present" and has_timed_positive:
+        status = "present"
+    elif requested_status == "absent" and complete_absence_check and not positive_evidence:
+        status = "absent"
+    else:
+        status = "unknown"
+    return {
+        "viltrox_status": status,
+        "inspection_complete": inspection_complete,
+        "checked_modalities": checked_modalities,
+        "viltrox_evidence": viltrox_evidence,
+        "viltrox_products": products,
+        "competitors": competitors,
+    }
+
+
 def _normalise_final_v1_result(parsed: dict[str, Any], *, subtitle_used: bool) -> dict[str, Any]:
     errors = _final_v1_payload_validation_errors(parsed)
     if errors:
@@ -322,6 +447,9 @@ def _normalise_final_v1_result(parsed: dict[str, Any], *, subtitle_used: bool) -
     evidence = layer1.get("evidence") if isinstance(layer1.get("evidence"), dict) else {}
     evidence["subtitle_used"] = bool(subtitle_used)
     layer1["evidence"] = evidence
+    layer1["brand_product_evidence"] = _normalise_brand_product_evidence(
+        layer1.get("brand_product_evidence")
+    )
     return payload
 
 
@@ -468,6 +596,14 @@ def _apply_final_v1_result(
     payload = _normalise_final_v1_result(parsed, subtitle_used=subtitle_used)
     layer1 = payload["layer1_visual_content"]
     layer6 = payload["layer6_flags_and_scores"]
+    brand_product = layer1["brand_product_evidence"]
+    brand_status = str(brand_product.get("viltrox_status") or "unknown")
+    viltrox_products = [
+        str(item.get("name") or "").strip()
+        for item in brand_product.get("viltrox_products", [])
+        if isinstance(item, dict) and str(item.get("name") or "").strip()
+    ] if brand_status == "present" else []
+    structured_competitors = brand_product.get("competitors")
     scores = layer6.get("scores") if isinstance(layer6.get("scores"), dict) else {}
     content_quality = scores.get("content_quality_score") if isinstance(scores.get("content_quality_score"), dict) else {}
     evidence = layer1.get("evidence") if isinstance(layer1.get("evidence"), dict) else {}
@@ -494,7 +630,14 @@ def _apply_final_v1_result(
             if isinstance(layer1.get("production_observations"), dict)
             else "",
             "timestamps": evidence.get("timestamps") if isinstance(evidence.get("timestamps"), list) else timeline,
-            "competitor_mentions": layer1.get("competitor_presence") if isinstance(layer1.get("competitor_presence"), list) else [],
+            "brand_product_evidence": brand_product,
+            "viltrox_detected": True if brand_status == "present" else False if brand_status == "absent" else None,
+            "viltrox_products_all": viltrox_products,
+            "competitor_mentions": structured_competitors
+            if isinstance(structured_competitors, list) and structured_competitors
+            else layer1.get("competitor_presence")
+            if isinstance(layer1.get("competitor_presence"), list)
+            else [],
             "quality_scores": {
                 key: _score_value(value)
                 for key, value in scores.items()

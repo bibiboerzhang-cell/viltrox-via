@@ -268,24 +268,34 @@ def classify_v_content(
     project_id: Any,
     title_text: Any,
     *,
+    final_v1_brand_status: Any = None,
     final_v1_detected: Any = None,
     final_v1_products: Any = None,
 ) -> str:
     """单条 evidence 五档互斥判定；优先级与 V_CONTENT_CLASSIFIED_CTE 相同。
 
-    final_v1 参数代表 latest ready cache 的结构化 detected/products；标题只做
-    中等证据，explicit false 只在前三档均未命中时归为非相关。纯函数零 SQL，
-    不接收也不返回原始深析全文。
+    brand_status 是新 final_v1 的受控 tri-state 真值，优先于 legacy
+    detected/products。unknown 不得因 legacy false 落入 not_related；标题仍只做
+    中等证据。纯函数零 SQL，不接收也不返回原始深析全文。
     """
     pid = str(project_id).strip() if project_id is not None else ""
     if pid and pid != "0":
         return "cooperation"
+    brand_status = str(final_v1_brand_status or "").strip().lower()
+    if brand_status not in {"present", "absent", "unknown"}:
+        brand_status = ""
     detected = _explicit_bool(final_v1_detected)
-    if detected is True or _positive_products(final_v1_products):
+    if brand_status == "present":
+        return "analysis_confirmed"
+    if not brand_status and (detected is True or _positive_products(final_v1_products)):
         return "analysis_confirmed"
     title = str(title_text or "").lower()
     if any(token in title for token in VILTROX_TITLE_TOKENS):
         return "title_mention"
+    if brand_status == "absent":
+        return "not_related"
+    if brand_status == "unknown":
+        return "undetermined"
     if detected is False:
         return "not_related"
     return "undetermined"
@@ -571,6 +581,9 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
         view_count = rec.get("view_count")
         like_count = rec.get("like_count")
         project_id = rec.get("project_id")
+        brand_status = str(rec.get("llm_viltrox_status") or "").strip().lower()
+        if brand_status not in {"present", "absent", "unknown"}:
+            brand_status = ""
         detected_text = str(rec.get("llm_viltrox_detected_text") or "").strip().lower()
         detected = (detected_text == "true") if detected_text in {"true", "false"} else None
         analysis_lists: dict[str, list[str] | None] = {}
@@ -587,6 +600,7 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
             tier = classify_v_content(
                 project_id,
                 f"{rec.get('video_title') or ''} {rec.get('title') or ''}",
+                final_v1_brand_status=brand_status,
                 final_v1_detected=detected,
                 final_v1_products=analysis_lists["llm_viltrox_products"],
             )
@@ -607,6 +621,7 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
             "kol_name": str(rec.get("kol_name") or ""),
             "kol_handle": str(rec.get("kol_handle") or ""),
             "has_final_v1_cache": _truthy_db(rec.get("has_final_v1_cache")),
+            "llm_viltrox_status": brand_status or None,
             "llm_viltrox_detected": detected,
             "v_tier": tier,
             **analysis_lists,

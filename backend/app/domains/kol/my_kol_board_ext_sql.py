@@ -197,6 +197,7 @@ WITH v_content_signals AS (
            e.project_id AS project_id,
            (BTRIM(COALESCE(CAST(e.project_id AS TEXT), '')) NOT IN ('', '0')) AS project_linked,
            (fv.result IS NOT NULL) AS has_final_v1_cache,
+           lower(COALESCE(fv.result #>> '{raw_gemini_video,brand_product_evidence,viltrox_status}', '')) AS final_v1_brand_status,
            lower(COALESCE(fv.result #>> '{raw_gemini_video,viltrox_detected}', '')) AS final_v1_detected,
            fv.result #> '{raw_gemini_video,viltrox_products_all}' AS final_v1_products,
            fv.result #> '{raw_gemini_video,competitor_mentions}' AS final_v1_competitor_mentions,
@@ -225,9 +226,13 @@ v_content_classified AS (
     SELECT s.*,
            CASE
                WHEN s.project_linked THEN 'cooperation'
-               WHEN s.final_v1_detected = 'true' OR s.final_v1_products_count > 0 THEN 'analysis_confirmed'
+               WHEN s.final_v1_brand_status = 'present' THEN 'analysis_confirmed'
+               WHEN s.final_v1_brand_status = ''
+                    AND (s.final_v1_detected = 'true' OR s.final_v1_products_count > 0)
+                 THEN 'analysis_confirmed'
                WHEN s.title_token_match THEN 'title_mention'
-               WHEN s.final_v1_detected = 'false' THEN 'not_related'
+               WHEN s.final_v1_brand_status = 'absent' THEN 'not_related'
+               WHEN s.final_v1_brand_status = '' AND s.final_v1_detected = 'false' THEN 'not_related'
                ELSE 'undetermined'
            END AS v_tier
     FROM v_content_signals s
@@ -252,6 +257,7 @@ RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
            COALESCE(NULLIF(kp.display_name, ''), kp.handle, '') AS kol_name,
            COALESCE(kp.handle, '') AS kol_handle,
            vc.has_final_v1_cache AS has_final_v1_cache,
+           vc.final_v1_brand_status AS llm_viltrox_status,
            vc.final_v1_detected AS llm_viltrox_detected_text,
            vc.final_v1_products AS llm_viltrox_products,
            vc.final_v1_competitor_mentions AS llm_competitor_mentions,

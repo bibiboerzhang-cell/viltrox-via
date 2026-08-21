@@ -24,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,6 +32,7 @@ from app.core.logging import get_logger
 from app.core.model_registry import current_task_model_binding, split_binding
 from app.db.connection import get_conn
 from app.platform import llm_production
+from app.platform.llm_runtime_errors import normalise_job_error
 
 logger = get_logger("viltrox.domains.kol.content_fit_analysis")
 
@@ -50,6 +52,9 @@ LLM_PURPOSE = "vkpi_kol_content_fit"
 LLM_COST_TAG = "vkpi_kol_content_fit"
 MODEL_TASK = "kol_content_fit_analysis"
 MAX_MODEL_ATTEMPTS = 3
+CONTENT_FIT_JOB_TYPE = "kol_content_fit_analysis"
+ACTIVE_JOB_STATES = frozenset({"queued", "running", "retrying", "processing"})
+FAILED_JOB_STATES = frozenset({"failed", "triage", "cancelled", "canceled", "void", "timeout"})
 
 
 def normalize_product_sku(product_sku: str | None) -> str:
@@ -569,13 +574,16 @@ def _read_cache(
     conn: Any,
     kol_pool_id: int,
     product_sku: str | None = None,
+    *,
+    include_stale: bool = False,
 ) -> dict[str, Any] | None:
     derive_method = content_fit_derive_method(product_sku)
+    status_clause = "status IN ('ready', 'stale')" if include_stale else "status = 'ready'"
     row = conn.execute(
-        """
-        SELECT result, model, cost, updated_at
+        f"""
+        SELECT result, model, cost, status, updated_at
         FROM vkpi_analysis_cache
-        WHERE target_type = ? AND target_id = ? AND derive_method = ? AND status = 'ready'
+        WHERE target_type = ? AND target_id = ? AND derive_method = ? AND {status_clause}
         ORDER BY updated_at DESC, id DESC
         LIMIT 1
         """,
@@ -584,9 +592,13 @@ def _read_cache(
     if not row:
         return None
     data = dict(row)
+    state = str(data.get("status") or "ready").strip().lower()
+    if state not in {"ready", "stale"}:
+        state = "stale"
     result = _loads(data.get("result")) or {}
     return {
-        "state": "ready",
+        "status": state,
+        "state": state,
         "kol_pool_id": int(kol_pool_id),
         "product_sku": normalize_product_sku(product_sku) or None,
         "derive_method": derive_method,
@@ -596,6 +608,110 @@ def _read_cache(
         "updated_at": str(data.get("updated_at") or ""),
         "cached": True,
     }
+
+
+def _content_fit_job_snapshot(
+    conn: Any,
+    kol_pool_id: int,
+    product_sku: str | None = None,
+    *,
+    job_id: int | None = None,
+) -> dict[str, Any] | None:
+    requested_job_id = int(job_id or 0)
+    derive_method = content_fit_derive_method(product_sku)
+    job_clause = " AND id = ?" if requested_job_id > 0 else ""
+    params: tuple[Any, ...] = (
+        CONTENT_FIT_JOB_TYPE,
+        TARGET_TYPE,
+        str(int(kol_pool_id)),
+        derive_method,
+        *((requested_job_id,) if requested_job_id > 0 else ()),
+    )
+    row = conn.execute(
+        f"""
+        SELECT id, status, last_error, last_error_category, next_retry_at,
+               created_at, started_at, updated_at
+        FROM apify_jobs
+        WHERE job_type = ?
+          AND payload->>'target_type' = ?
+          AND payload->>'target_id' = ?
+          AND payload->>'derive_method' = ?
+          {job_clause}
+        ORDER BY
+          (status IN ('queued', 'running', 'retrying', 'processing')) DESC,
+          updated_at DESC,
+          id DESC
+        LIMIT 1
+        """,
+        params,
+    ).fetchone()
+    if not row:
+        return None
+    data = dict(row)
+    status = str(data.get("status") or "").strip().lower()
+    if status in ACTIVE_JOB_STATES:
+        state = status
+    elif status == "blocked":
+        state = "blocked"
+    elif status in FAILED_JOB_STATES or status == "done":
+        state = "failed"
+    else:
+        state = "pending"
+    raw_error = _loads(data.get("last_error"))
+    if raw_error in (None, "", b""):
+        normalized_error: dict[str, Any] = {}
+        raw_stage = ""
+    elif isinstance(raw_error, dict):
+        normalized_error = normalise_job_error(
+            raw_error.get("reason") or raw_error.get("error"),
+            raw_error.get("reason_detail"),
+        )
+        raw_stage = str(raw_error.get("stage") or "").strip().lower().replace(" ", "_")
+    else:
+        normalized_error = normalise_job_error(raw_error)
+        raw_stage = ""
+    reason = _text(normalized_error.get("reason"), 120) or None
+    reason_detail = _text(normalized_error.get("reason_detail"), 120) or None
+    stage = raw_stage if re.fullmatch(r"[a-z][a-z0-9_.:-]{0,99}", raw_stage) else None
+    raw_category = str(data.get("last_error_category") or "").strip().lower().replace(" ", "_")
+    error_category = raw_category if re.fullmatch(r"[a-z][a-z0-9_.:-]{0,79}", raw_category) else None
+    return {
+        "id": int(data["id"]),
+        "status": status or None,
+        "state": state,
+        "terminal": state in {"ready", "blocked", "failed"},
+        "reason": reason,
+        "reason_detail": reason_detail,
+        "error_category": error_category,
+        "stage": stage,
+        "next_retry_at": data.get("next_retry_at") or None,
+        "created_at": data.get("created_at") or None,
+        "started_at": data.get("started_at") or None,
+        "updated_at": data.get("updated_at") or None,
+    }
+
+
+def _as_utc_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=value.tzinfo or timezone.utc).astimezone(timezone.utc)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=parsed.tzinfo or timezone.utc).astimezone(timezone.utc)
+
+
+def _job_supersedes_cache(job: dict[str, Any] | None, cached: dict[str, Any] | None) -> bool:
+    if not job:
+        return False
+    if not cached:
+        return True
+    created_at = _as_utc_datetime(job.get("created_at"))
+    cache_updated_at = _as_utc_datetime(cached.get("updated_at"))
+    return bool(created_at and cache_updated_at and created_at > cache_updated_at)
 
 
 def _write_cache(
@@ -656,14 +772,46 @@ def _parse_llm_json(text: str) -> dict[str, Any] | None:
 def get_content_fit(
     kol_pool_id: int,
     product_sku: str | None = None,
+    *,
+    job_id: int | None = None,
 ) -> dict[str, Any]:
-    """纯只读:返回已缓存的 content_fit_v1;无则 state=missing。端点默认用它(不烧 LLM)。"""
+    """纯只读:返回 ready cache 或最新有界任务态，绝不入队/不烧 LLM。"""
     conn = get_conn()
-    cached = _read_cache(conn, int(kol_pool_id), product_sku)
-    if cached:
-        return cached
+    cached = _read_cache(conn, int(kol_pool_id), product_sku, include_stale=True)
     normalized_sku = normalize_product_sku(product_sku)
+    job = _content_fit_job_snapshot(
+        conn,
+        int(kol_pool_id),
+        normalized_sku,
+        job_id=job_id,
+    )
+    if _job_supersedes_cache(job, cached):
+        return {
+            "status": job.get("status"),
+            "state": job.get("state") or "pending",
+            "terminal": bool(job.get("terminal")),
+            "kol_pool_id": int(kol_pool_id),
+            "product_sku": normalized_sku or None,
+            "derive_method": content_fit_derive_method(normalized_sku),
+            "job_id": job.get("id"),
+            "analysis_job": job,
+            "previous_cache_updated_at": cached.get("updated_at") if cached else None,
+        }
+    if cached:
+        return {**cached, "job_id": job.get("id") if job else None, "analysis_job": job}
+    if job:
+        return {
+            "status": job.get("status"),
+            "state": job.get("state") or "pending",
+            "terminal": bool(job.get("terminal")),
+            "kol_pool_id": int(kol_pool_id),
+            "product_sku": normalized_sku or None,
+            "derive_method": content_fit_derive_method(normalized_sku),
+            "job_id": job.get("id"),
+            "analysis_job": job,
+        }
     return {
+        "status": "not_requested",
         "state": "missing",
         "kol_pool_id": int(kol_pool_id),
         "product_sku": normalized_sku or None,

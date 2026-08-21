@@ -490,6 +490,7 @@ def test_recent_videos_honest_nulls_bool_and_thumbnail_chain(monkeypatch):
              "publish_date": "2026-07-10", "posted_at": None,
              "created_at": "2026-07-10T08:00:00", "evidence_type": "video",
              "kol_name": "Alpha", "kol_handle": "@alpha", "has_final_v1_cache": 1,
+             "llm_viltrox_status": "present",
              "llm_viltrox_detected_text": "true",
              "llm_viltrox_products": '["AF 85mm F1.4 Pro"]',
              "llm_competitor_mentions": ["Sigma"], "v_tier": "analysis_confirmed"},
@@ -501,6 +502,7 @@ def test_recent_videos_honest_nulls_bool_and_thumbnail_chain(monkeypatch):
     assert item["view_count"] is None                    # 未实测保持 null,绝不 0 填
     assert item["like_count"] == 5
     assert item["has_final_v1_cache"] is True            # BOOLEAN 读回 int 1 → 真布尔
+    assert item["llm_viltrox_status"] == "present"
     assert item["llm_viltrox_detected"] is True
     assert item["llm_viltrox_products"] == ["AF 85mm F1.4 Pro"]
     assert item["llm_competitor_mentions"] == ["Sigma"]
@@ -627,8 +629,16 @@ def test_v_kol_ids_capped_at_2000_with_truncated_note(monkeypatch):
 
 
 def test_classify_v_content_pure_function():
-    """五档优先级:项目 > 深析正向 > 标题 > 深析明确非相关 > 未判定。"""
+    """五档优先级:项目 > 受控tri-state > legacy > 标题 > 明确非相关 > 未判定。"""
     assert ext.classify_v_content(123, "random", final_v1_detected=False) == "cooperation"
+    assert ext.classify_v_content(None, "random", final_v1_brand_status="present") == "analysis_confirmed"
+    assert ext.classify_v_content(None, "random", final_v1_brand_status="absent") == "not_related"
+    assert ext.classify_v_content(
+        None,
+        "Sony FE 50mm review",
+        final_v1_brand_status="unknown",
+        final_v1_detected=False,
+    ) == "undetermined"
     assert ext.classify_v_content(None, "random", final_v1_detected=True) == "analysis_confirmed"
     assert ext.classify_v_content(None, "random", final_v1_detected=False,
                                   final_v1_products=["AF 85mm"]) == "analysis_confirmed"
@@ -640,6 +650,20 @@ def test_classify_v_content_pure_function():
     assert ext.classify_v_content(None, None) == "undetermined"
     assert ext.classify_v_content("", "") == "undetermined"
     assert ext.classify_v_content(0, "no project zero id") == "undetermined"
+
+
+def test_sql_and_pure_classifier_prioritise_new_tri_state_over_legacy_false():
+    sql = ext.V_CONTENT_CLASSIFIED_CTE
+    assert "brand_product_evidence,viltrox_status" in sql
+    assert "s.final_v1_brand_status = 'present'" in sql
+    assert "s.final_v1_brand_status = 'absent'" in sql
+    assert "s.final_v1_brand_status = '' AND s.final_v1_detected = 'false'" in sql
+    assert ext.classify_v_content(
+        None,
+        "Autofocus comparison",
+        final_v1_brand_status="unknown",
+        final_v1_detected=False,
+    ) == "undetermined"
 
 
 # ── 10. 信封契约 + 单组降级 + scope 参数 ─────────────────────────────────

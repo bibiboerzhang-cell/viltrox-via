@@ -3,7 +3,7 @@ import { m } from "framer-motion";
 import { Sparkles } from "lucide-react";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
-import { analyzeKolPoolContentFit, enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolContentFit, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, getKolVideoAnalysisBatch, getKolVideoAnalysisCache, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
+import { enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, getKolVideoAnalysisBatch, getKolVideoAnalysisCache, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { KOLDrawerOutreachSection } from "./KOLDrawerOutreachSection";
 import { runSkill, type SkillRunResult } from "../../../../services/vkpi/skills-api";
@@ -41,6 +41,7 @@ import { KOLAnalysisTrustPanel } from "./KOLAnalysisTrustPanel";
 import { videoAnalysisGateMessage } from "./KOLDetailDrawer.gates";
 import { DRAWER_TABS, KOLDrawerBriefSkill, KOLDrawerCoopActions, KOLDrawerViewerContextBar, readStoredDrawerTab, storeDrawerTab } from "./KOLDetailDrawer.Subsections";
 import { useKOLDrawerViewerContext } from "./useKOLDrawerViewerContext";
+import { useKolContentFitState } from "./useKolContentFitState";
 import { useKolDrawerContactState } from "../lib/useKolContactState";
 import {
   KOLDrawerContactAndVideos,
@@ -253,10 +254,13 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     return true;
   }, [apiToken, onReloadDetail, clearVideoAnalysisPoll, reloadDetailSafely]);
   const [activeRepresentativeVideo, setActiveRepresentativeVideo] = React.useState<any>(null);
-  // 地基B 内容契合深析(content_fit_v1):默认只读缓存;点击才按需触发深析(不烧 LLM 直到点击)。
-  const [contentFit, setContentFit] = React.useState<any>(null);
-  const [contentFitBusy, setContentFitBusy] = React.useState(false);
-  const [contentFitError, setContentFitError] = React.useState("");
+  // 地基B 内容契合深析:挂载只读缓存/任务态，仅显式点击 POST；轮询与 epoch 护栏收口到 hook。
+  const { contentFit, contentFitBusy, contentFitError, handleContentFitAnalyze } = useKolContentFitState({
+    apiToken,
+    kolPoolId: item?.id,
+    productSku: contentFitProductSku,
+    canAnalyze: viewerCtx?.paid_actions?.can_run_paid_actions === true,
+  });
   // W3 长期记忆(纯聚合,显式独立于 V6 Fit · 不影响排序;snapshot 不含任何 fit/score 字段)。
   const [kolMemory, setKolMemory] = React.useState<any>(null);
   // N2 Skill 触发:跑 brief_generate skill 为该 KOL 生成合作 brief 草案(默认走规则模板,不烧 LLM)。
@@ -518,30 +522,6 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     setProfileCrawlState({ status: "idle", message: "" });
   }, [item?.id]);
 
-  // 内容契合深析:开抽屉先只读已有缓存(不烧 LLM);无缓存则留待用户点击触发。
-  React.useEffect(() => {
-    setContentFit(null);
-    setContentFitError("");
-    setContentFitBusy(false);
-    if (!apiToken || !item?.id) return;
-    let cancelled = false;
-    void getKolPoolContentFit(
-      apiToken,
-      item.id,
-      contentFitProductSku ? { productSku: contentFitProductSku } : {},
-    )
-      .then((payload) => {
-        if (cancelled) return;
-        setContentFit(payload && payload.state === "ready" ? payload : null);
-      })
-      .catch(() => {
-        if (!cancelled) setContentFit(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [apiToken, item?.id, contentFitProductSku]);
-
   // W3 长期记忆:开抽屉纯读聚合快照(不烧 LLM、零触评分)。失败静默(记忆是增益,非阻塞)。
   React.useEffect(() => {
     setKolMemory(null);
@@ -559,39 +539,6 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       cancelled = true;
     };
   }, [apiToken, item?.id]);
-
-  const handleContentFitAnalyze = (force = false) => {
-    if (
-      !apiToken
-      || !item?.id
-      || contentFitBusy
-      || viewerCtx?.paid_actions?.can_run_paid_actions !== true
-    ) return;
-    setContentFitBusy(true);
-    setContentFitError("");
-    void analyzeKolPoolContentFit(apiToken, item.id, {
-      force,
-      ...(contentFitProductSku ? { productSku: contentFitProductSku } : {}),
-    })
-      .then((payload) => {
-        if (payload && payload.state === "ready") {
-          setContentFit(payload);
-        } else {
-          setContentFit(null);
-          setContentFitError(
-            payload?.status === "insufficient_evidence"
-              ? "该 KOL 暂无可用视频分析证据,无法做内容契合深析(不杜撰)。"
-              : "深析未产出(可能 LLM 暂不可达),请稍后重试。",
-          );
-        }
-      })
-      .catch((error: any) => setContentFitError(
-        Number(error?.status || 0) === 403
-          ? "请先关注该 KOL；共享条目仅可查看，不能发起付费深析。"
-          : "深析请求失败,请稍后重试。",
-      ))
-      .finally(() => setContentFitBusy(false));
-  };
 
   // N2 跑 Skill:brief_generate 需要 kol_pool_id + product;product 取该 KOL 首个推荐产品线,缺则回落通用产品名。
   const handleRunBriefSkill = () => {

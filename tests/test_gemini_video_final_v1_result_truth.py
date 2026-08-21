@@ -12,6 +12,10 @@ from app.services.ai.analyzers.gemini_video_results import (
     ensure_final_v1_result_cacheable,
     validate_final_v1_result,
 )
+from app.services.ai.analyzers.gemini_video_prompts import (
+    _video_final_v1_prompt,
+    _video_final_v1_static_prompt,
+)
 from app.workers.apify_jobs_worker_helpers import _error_category, _failure_disposition
 
 
@@ -30,7 +34,7 @@ def _valid_legacy_payload() -> dict:
     }
 
 
-def _apply(parsed: dict, *, model: str = "gemini-test") -> dict:
+def _apply(parsed: dict, *, model: str = "gemini-test", subtitle_used: bool = False) -> dict:
     result = {"analyzed": False, "error": None}
     _apply_final_v1_result(
         result,
@@ -38,7 +42,7 @@ def _apply(parsed: dict, *, model: str = "gemini-test") -> dict:
         method="gemini_fileapi_gemini-test",
         model=model,
         usage_metadata={"total_token_count": 123},
-        subtitle_used=False,
+        subtitle_used=subtitle_used,
     )
     return result
 
@@ -56,6 +60,9 @@ def test_valid_legacy_fixture_remains_compatible_and_gains_truth_metadata():
     }
     assert set(VIDEO_FINAL_LAYERS).issubset(result["video_analysis_final_v1"])
     assert result["video_analysis_final_v1"]["layer1_visual_content"]["evidence"]["subtitle_used"] is False
+    assert result["brand_product_evidence"]["viltrox_status"] == "unknown"
+    assert result["viltrox_detected"] is None
+    assert result["viltrox_products_all"] == []
     assert validate_final_v1_result(result, allow_legacy_status=False) == []
 
 
@@ -71,6 +78,158 @@ def test_product_identification_plus_timestamp_evidence_is_a_valid_minimum():
 
     assert result["analyzed"] is True
     assert result["status"] == "completed"
+
+
+def _brand_fixture(brand_product_evidence: dict) -> dict:
+    return {
+        "layer1_visual_content": {
+            "content_summary": "A non-title lens demonstration with attributable brand evidence.",
+            "scene_timeline": [{"timestamp": "00:08", "what": "Lens demonstration."}],
+            "brand_product_evidence": brand_product_evidence,
+            "evidence": {"timestamps": ["00:08 lens demonstration"]},
+        },
+        "layer6_flags_and_scores": {"final_verdict": "Evidence-bounded brand review."},
+    }
+
+
+def _evidence(modality: str, detail: str, timestamp: str = "00:08") -> dict:
+    return {
+        "modality": modality,
+        "timestamp": timestamp,
+        "detail": detail,
+        "confidence": 0.96,
+    }
+
+
+def test_non_title_visual_evidence_projects_present_truth_and_compat_aliases():
+    result = _apply(
+        _brand_fixture(
+            {
+                "viltrox_status": "present",
+                "inspection_complete": True,
+                "checked_modalities": ["visual", "audio"],
+                "viltrox_evidence": [_evidence("visual", "Viltrox logo visible on the lens barrel")],
+                "viltrox_products": [],
+                "competitors": [],
+            }
+        )
+    )
+
+    assert result["brand_product_evidence"]["viltrox_status"] == "present"
+    assert result["viltrox_detected"] is True
+    assert result["viltrox_products_all"] == []
+
+
+def test_non_title_subtitle_evidence_projects_product_without_prose_scan():
+    subtitle_evidence = _evidence("subtitle", "Subtitle explicitly names Viltrox AF 27mm F1.2 Pro", "00:23")
+    result = _apply(
+        _brand_fixture(
+            {
+                "viltrox_status": "present",
+                "inspection_complete": True,
+                "checked_modalities": ["visual", "audio", "subtitle"],
+                "viltrox_evidence": [subtitle_evidence],
+                "viltrox_products": [
+                    {
+                        "name": "Viltrox AF 27mm F1.2 Pro",
+                        "sku": None,
+                        "confidence": 0.94,
+                        "evidence": [subtitle_evidence],
+                    }
+                ],
+                "competitors": [],
+            }
+        ),
+        subtitle_used=True,
+    )
+
+    assert result["viltrox_detected"] is True
+    assert result["viltrox_products_all"] == ["Viltrox AF 27mm F1.2 Pro"]
+    assert result["video_analysis_final_v1"]["layer1_visual_content"]["evidence"]["subtitle_used"] is True
+
+
+def test_sigma_only_complete_inspection_is_explicit_absent_and_keeps_competitor_evidence():
+    sigma_evidence = _evidence("visual", "Sigma name and logo visible on comparison lens", "00:31")
+    result = _apply(
+        _brand_fixture(
+            {
+                "viltrox_status": "absent",
+                "inspection_complete": True,
+                "checked_modalities": ["visual", "audio", "metadata"],
+                "viltrox_evidence": [],
+                "viltrox_products": [],
+                "competitors": [
+                    {
+                        "brand": "Sigma",
+                        "products": ["Sigma 30mm F1.4"],
+                        "confidence": 0.97,
+                        "evidence": [sigma_evidence],
+                    }
+                ],
+            }
+        )
+    )
+
+    assert result["brand_product_evidence"]["viltrox_status"] == "absent"
+    assert result["viltrox_detected"] is False
+    assert result["viltrox_products_all"] == []
+    assert result["competitor_mentions"][0]["brand"] == "Sigma"
+
+
+def test_incomplete_absence_check_downgrades_to_unknown_not_false():
+    result = _apply(
+        _brand_fixture(
+            {
+                "viltrox_status": "absent",
+                "inspection_complete": True,
+                "checked_modalities": ["visual"],
+                "viltrox_evidence": [],
+                "viltrox_products": [],
+                "competitors": [],
+            }
+        )
+    )
+
+    assert result["brand_product_evidence"]["viltrox_status"] == "unknown"
+    assert result["viltrox_detected"] is None
+
+
+def test_product_name_without_structured_evidence_cannot_create_present_truth():
+    result = _apply(
+        _brand_fixture(
+            {
+                "viltrox_status": "present",
+                "inspection_complete": True,
+                "checked_modalities": ["visual", "audio"],
+                "viltrox_evidence": [],
+                "viltrox_products": [
+                    {"name": "Viltrox AF 85mm F1.4 Pro", "sku": "AF-85-PRO", "evidence": []}
+                ],
+                "competitors": [],
+            }
+        )
+    )
+
+    assert result["brand_product_evidence"]["viltrox_status"] == "unknown"
+    assert result["brand_product_evidence"]["viltrox_products"] == []
+    assert result["viltrox_detected"] is None
+    assert result["viltrox_products_all"] == []
+
+
+def test_brand_truth_prompt_requires_tri_state_and_timed_non_metadata_evidence():
+    dynamic = _video_final_v1_prompt(
+        title="Autofocus comparison",
+        profile_ctx="",
+        subtitle_ctx="",
+        subtitle_used=False,
+        performance_context={},
+    )
+    static = _video_final_v1_static_prompt()
+
+    for prompt in (dynamic, static):
+        assert "brand_product_evidence" in prompt
+        assert "present" in prompt and "absent" in prompt and "unknown" in prompt
+        assert "metadata" in prompt and "visual" in prompt and "audio" in prompt
 
 
 @pytest.mark.parametrize(

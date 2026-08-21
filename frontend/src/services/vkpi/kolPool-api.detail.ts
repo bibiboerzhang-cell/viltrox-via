@@ -101,10 +101,11 @@ export async function getKolPoolLlmDeepAnalysis(token: string, kolPoolId: string
 export async function getKolPoolContentFit(
   token: string,
   kolPoolId: string | number,
-  options: { productSku?: string } = {},
+  options: { productSku?: string; jobId?: number } = {},
 ) {
   const params = new URLSearchParams();
   if (options.productSku) params.set("product_sku", options.productSku);
+  if (Number(options.jobId) > 0) params.set("job_id", String(Number(options.jobId)));
   const query = params.toString();
   return apiFetch<Row>(
     `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/content-fit${query ? `?${query}` : ""}`,
