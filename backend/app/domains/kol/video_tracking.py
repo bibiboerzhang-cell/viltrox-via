@@ -6,30 +6,20 @@ the selected KOL, which the generic resolver does not currently guarantee.
 """
 from __future__ import annotations
 
-import re
 from typing import Any
-from urllib.parse import urlparse
 
 from app.domains.access import scope
 from app.domains.kol.pool_common import _table_columns
 from app.domains.kol.url_deep_crawl import classify_url
 from app.domains.kol.video_metric_refresh import enqueue_video_metric_refresh
+from app.domains.kol.video_url_identity import (
+    SUPPORTED_VIDEO_HOSTS,
+    VideoUrlIdentityError,
+    parse_supported_video_url,
+)
 
 
 MAX_PRODUCT_SKUS = 5
-MAX_VIDEO_URL_LENGTH = 2048
-SUPPORTED_VIDEO_HOSTS = {
-    "youtube": ("youtube.com", "youtu.be"),
-    "instagram": ("instagram.com",),
-    "tiktok": ("tiktok.com",),
-}
-VIDEO_ID_PATTERNS = {
-    "youtube": re.compile(r"^[A-Za-z0-9_-]{6,32}$"),
-    "instagram": re.compile(r"^[A-Za-z0-9_-]{3,80}$"),
-    "tiktok": re.compile(r"^[0-9]{8,32}$"),
-}
-
-
 class VideoTrackingError(RuntimeError):
     """Stable public error code with an HTTP-safe status."""
 
@@ -50,46 +40,14 @@ def _int(value: Any) -> int:
         return 0
 
 
-def _host_matches(host: str, domains: tuple[str, ...]) -> bool:
-    return any(host == domain or host.endswith("." + domain) for domain in domains)
-
-
 def validate_supported_video_url(value: Any) -> tuple[str, str]:
     """Return ``(normalized_url, platform)`` for an explicit public video URL."""
 
-    raw = _text(value)
-    if not raw or len(raw) > MAX_VIDEO_URL_LENGTH:
-        raise VideoTrackingError("video_url_invalid")
-    parsed = urlparse(raw)
-    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-        raise VideoTrackingError("video_url_invalid")
-    if parsed.username or parsed.password:
-        raise VideoTrackingError("video_url_credentials_forbidden")
     try:
-        port = parsed.port
-    except ValueError as exc:
-        raise VideoTrackingError("video_url_invalid_port") from exc
-    if port not in (None, 80, 443):
-        raise VideoTrackingError("video_url_port_forbidden")
-
-    host = parsed.hostname.lower().rstrip(".")
-    platform = next(
-        (
-            name
-            for name, domains in SUPPORTED_VIDEO_HOSTS.items()
-            if _host_matches(host, domains)
-        ),
-        "",
-    )
-    if not platform:
-        raise VideoTrackingError("video_platform_unsupported")
-    classified = classify_url(raw)
-    if classified.url_type != "video" or classified.platform != platform:
-        raise VideoTrackingError("explicit_video_url_required")
-    pattern = VIDEO_ID_PATTERNS[platform]
-    if not pattern.fullmatch(_text(classified.video_id)):
-        raise VideoTrackingError("video_id_invalid")
-    return classified.normalized_url, platform
+        identity = parse_supported_video_url(value)
+    except VideoUrlIdentityError as exc:
+        raise VideoTrackingError(exc.code) from exc
+    return identity.normalized_url, identity.platform
 
 
 def normalize_product_skus(values: Any) -> list[str]:
@@ -180,6 +138,12 @@ def _validate_evidence(
         raise VideoTrackingError("video_evidence_platform_mismatch", 409)
     if platform not in SUPPORTED_VIDEO_HOSTS:
         raise VideoTrackingError("video_metric_platform_unsupported")
+    try:
+        identity = parse_supported_video_url(evidence.get("content_url"))
+    except VideoUrlIdentityError as exc:
+        raise VideoTrackingError("video_evidence_identity_invalid", 409) from exc
+    if identity.platform != platform:
+        raise VideoTrackingError("video_evidence_platform_mismatch", 409)
     return evidence
 
 
@@ -219,10 +183,10 @@ def _find_existing_evidence(
     for row in rows:
         candidate = dict(row)
         try:
-            classified = classify_url(_text(candidate.get("content_url")))
-        except Exception:
+            identity = parse_supported_video_url(candidate.get("content_url"))
+        except VideoUrlIdentityError:
             continue
-        if classified.platform == platform and classified.video_id == video_id:
+        if identity.platform == platform and identity.video_id == video_id:
             matches.append(candidate)
     for candidate in matches:
         if _int(candidate.get("kol_pool_id")) == int(kol_pool_id):

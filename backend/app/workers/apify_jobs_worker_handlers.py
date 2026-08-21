@@ -626,7 +626,9 @@ def _process_kol_video_metric_refresh(
 
     with db_connection_sync_scope():
         result = video_metric_refresh.run_video_metric_refresh_for_job(payload)
-    ok = str(result.get("status") or "") == "success"
+    result_status = str(result.get("status") or "")
+    ok = result_status == "success"
+    job_status = "done" if ok else ("blocked" if result_status == "blocked" else "failed")
     # Keep provider responses out of the durable queue payload.  The domain
     # returns only bounded observation identifiers and status fields.
     payload["video_metric_refresh_result"] = result
@@ -645,7 +647,7 @@ def _process_kol_video_metric_refresh(
                 WHERE id=%s
                 """,
                 (
-                    "done" if ok else "failed",
+                    job_status,
                     last_error[:300],
                     _json(payload),
                     int(job["id"]),

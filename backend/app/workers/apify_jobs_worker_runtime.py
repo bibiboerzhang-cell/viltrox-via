@@ -307,16 +307,26 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
     )
 
 def fail_job_impl(conn: psycopg.Connection[Any], job_id: int, exc: Exception, namespace: Mapping[str, Any]) -> None:
+    ApifyBudgetBlocked = namespace['ApifyBudgetBlocked']
+    ApifyProviderReplayBlocked = namespace['ApifyProviderReplayBlocked']
     MAX_JOB_ATTEMPTS = namespace['MAX_JOB_ATTEMPTS']
     PROVIDER_RETRY_MAX_ATTEMPTS = namespace['PROVIDER_RETRY_MAX_ATTEMPTS']
     _error_category = namespace['_error_category']
     _failure_disposition = namespace['_failure_disposition']
+    _block_job = namespace['_block_job']
     _provider_retry_delay_seconds = namespace['_provider_retry_delay_seconds']
     _provider_retry_reason = namespace['_provider_retry_reason']
     _redact_sensitive_text = namespace['_redact_sensitive_text']
     _sync_search_session_job = namespace['_sync_search_session_job']
     dict_row = namespace['dict_row']
     logger = namespace['logger']
+
+    if isinstance(exc, ApifyBudgetBlocked):
+        _block_job(conn, job_id, exc.code, {"provider": "apify"})
+        return
+    if isinstance(exc, ApifyProviderReplayBlocked):
+        _block_job(conn, job_id, exc.code, {"provider": "apify"})
+        return
 
     if str(exc).strip() == "gemini_call_timeout":
         message = "gemini_call_timeout"

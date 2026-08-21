@@ -19,7 +19,26 @@ from app.domains import content_metric_snapshots  # noqa: E402
 from app.domains.kol import video_metric_refresh, video_tracking  # noqa: E402
 from app.workers.apify_job_lane import queue_service_priority  # noqa: E402
 from app.workers.apify_job_resource_slots import resource_group_for_job  # noqa: E402
+from app.workers import apify_jobs_worker as pg_worker  # noqa: E402
 from app.workers import apify_jobs_worker_handlers as worker_handlers  # noqa: E402
+from app.platform.apify_budget import (  # noqa: E402
+    ApifyBudgetBlocked,
+    ApifyBudgetDecision,
+    ApifyProviderReplayBlocked,
+)
+
+
+VIDEO_URL = "https://www.youtube.com/watch?v=abcDEF12345"
+
+
+def _refresh_payload(**overrides):
+    return {
+        "evidence_id": 101,
+        "kol_pool_id": 1,
+        "platform": "youtube",
+        "content_url": VIDEO_URL,
+        **overrides,
+    }
 
 
 def _tracking_conn() -> sqlite3.Connection:
@@ -259,7 +278,11 @@ def test_manager_can_write_but_shared_only_member_cannot(tracking_conn):
     "url",
     [
         "youtube.com/watch?v=abcDEF12345",
+        "ftp://www.youtube.com/watch?v=abcDEF12345",
         "https://www.youtube.com/@creator",
+        "https://user:pass@www.youtube.com/watch?v=abcDEF12345",
+        "https://www.youtube.com:444/watch?v=abcDEF12345",
+        "https://www.youtube.com/watch?v=abcDEF12345 bad",
         "https://youtube.com.evil.test/watch?v=abcDEF12345",
         "https://localhost/watch?v=abcDEF12345",
         "https://vimeo.com/123456",
@@ -275,6 +298,28 @@ def test_invalid_or_non_video_urls_enqueue_nothing(tracking_conn, url):
             product_skus=[],
             staff={"id": 10, "role": "member"},
         )
+    assert _job_count(tracking_conn) == 0
+    assert _link_count(tracking_conn) == 0
+
+
+def test_valid_url_cannot_match_a_stored_evil_host_identity(tracking_conn):
+    tracking_conn.execute(
+        """
+        INSERT INTO vkpi_kol_video_evidence (
+            id, kol_pool_id, content_url, platform, evidence_type, is_active
+        ) VALUES (303, 1, 'https://instagram.com.evil.test/p/ABC123/',
+                  'instagram', 'video', 1)
+        """
+    )
+    with pytest.raises(video_tracking.VideoTrackingError) as error:
+        video_tracking.queue_tracked_video(
+            tracking_conn,
+            kol_pool_id=1,
+            content_url="https://www.instagram.com/p/ABC123/",
+            product_skus=[],
+            staff={"id": 10, "role": "member"},
+        )
+    assert error.value.code == "new_video_target_resolution_required"
     assert _job_count(tracking_conn) == 0
     assert _link_count(tracking_conn) == 0
 
@@ -406,6 +451,7 @@ def test_worker_refresh_success_appends_snapshot_without_touching_score(
         "_fetch_video_metadata",
         lambda _url: {
             "platform": "youtube",
+            "content_url": "https://youtu.be/abcDEF12345?feature=share",
             "scrape_source": "youtube_api",
             "scrape_status": "success",
             "channel_id": "UC-owner",
@@ -416,7 +462,7 @@ def test_worker_refresh_success_appends_snapshot_without_touching_score(
         },
     )
     result = video_metric_refresh.run_video_metric_refresh_for_job(
-        {"evidence_id": 101, "kol_pool_id": 1},
+        _refresh_payload(),
         conn=tracking_conn,
     )
     assert result["status"] == "success"
@@ -459,6 +505,7 @@ def test_worker_all_metrics_missing_records_failure_and_preserves_latest(
         "_fetch_video_metadata",
         lambda _url: {
             "platform": "youtube",
+            "content_url": "https://www.youtube.com/watch?v=abcDEF12345",
             "scrape_source": "apify",
             "scrape_status": "success",
             "channel_id": "UC-owner",
@@ -470,7 +517,7 @@ def test_worker_all_metrics_missing_records_failure_and_preserves_latest(
         },
     )
     result = video_metric_refresh.run_video_metric_refresh_for_job(
-        {"evidence_id": 101, "kol_pool_id": 1},
+        _refresh_payload(),
         conn=tracking_conn,
     )
     assert result["status"] == "failed"
@@ -502,7 +549,7 @@ def test_worker_provider_exception_is_reduced_to_bounded_error_code(
 
     monkeypatch.setattr(video_metric_refresh, "_fetch_video_metadata", provider_failure)
     result = video_metric_refresh.run_video_metric_refresh_for_job(
-        {"evidence_id": 101, "kol_pool_id": 1},
+        _refresh_payload(),
         conn=tracking_conn,
     )
     assert result["status"] == "failed"
@@ -512,6 +559,269 @@ def test_worker_provider_exception_is_reduced_to_bounded_error_code(
         "SELECT status, error_code FROM vkpi_content_metric_snapshots"
     ).fetchone()
     assert tuple(snapshot) == ("failed", "runtimeerror")
+
+
+@pytest.mark.parametrize(
+    "guard_error",
+    [
+        ApifyBudgetBlocked(
+            ApifyBudgetDecision(
+                allowed=False,
+                scope="provider:apify",
+                estimated_cost_usd=1,
+                reason="hard_stop_or_projected_cap",
+                operation="evidence_video_metadata",
+                actor_id="streamers/youtube-scraper",
+                platform="youtube",
+                source="test",
+            )
+        ),
+        ApifyProviderReplayBlocked("ambiguous_provider_start"),
+    ],
+    ids=["budget_blocked", "provider_replay_blocked"],
+)
+def test_worker_provider_guards_propagate_without_snapshot_or_latest_write(
+    tracking_conn, monkeypatch, guard_error
+):
+    content_metric_snapshots.ensure_sqlite_schema(tracking_conn)
+
+    def guarded(_url):
+        raise guard_error
+
+    monkeypatch.setattr(video_metric_refresh, "_fetch_video_metadata", guarded)
+    with pytest.raises(type(guard_error)):
+        video_metric_refresh.run_video_metric_refresh_for_job(
+            _refresh_payload(),
+            conn=tracking_conn,
+        )
+    assert tracking_conn.execute(
+        "SELECT COUNT(*) FROM vkpi_content_metric_snapshots"
+    ).fetchone()[0] == 0
+    latest = tracking_conn.execute(
+        "SELECT view_count, like_count, comment_count, metrics_source FROM vkpi_kol_video_evidence WHERE id=101"
+    ).fetchone()
+    assert tuple(latest) == (100, 10, 2, "legacy")
+
+
+@pytest.mark.parametrize(
+    ("guard_error", "claim_state"),
+    [
+        (
+            ApifyBudgetBlocked(
+                ApifyBudgetDecision(
+                    allowed=False,
+                    scope="provider:apify",
+                    estimated_cost_usd=1,
+                    reason="hard_stop_or_projected_cap",
+                    operation="evidence_video_metadata",
+                    actor_id="streamers/youtube-scraper",
+                    platform="youtube",
+                    source="test",
+                )
+            ),
+            "blocked",
+        ),
+        (ApifyProviderReplayBlocked("ambiguous_provider_start"), "unknown"),
+    ],
+    ids=["budget_blocked", "provider_replay_unknown"],
+)
+def test_pg_worker_preserves_guard_claim_and_blocks_durable_job(
+    monkeypatch, guard_error, claim_state
+):
+    finalized: list[tuple[str, int, str]] = []
+
+    monkeypatch.setattr(pg_worker, "db_connection_sync_scope", nullcontext)
+    monkeypatch.setattr(
+        pg_worker,
+        "_running_job_heartbeat",
+        lambda *_args: nullcontext(),
+    )
+    monkeypatch.setattr(
+        pg_worker,
+        "acquire_provider_execution_claim",
+        lambda *_args, **_kwargs: 7,
+    )
+
+    def guarded_process(_conn, _job):
+        raise guard_error
+
+    monkeypatch.setattr(pg_worker, "_process_claimed_job", guarded_process)
+    monkeypatch.setattr(
+        pg_worker,
+        "finalize_provider_execution_claim",
+        lambda task_id, fence, state: finalized.append((task_id, fence, state)) or True,
+    )
+    with pytest.raises(type(guard_error)):
+        pg_worker._execute_claimed_job(
+            object(),
+            {"id": 77, "job_type": "kol_video_metric_refresh", "lease_owner": "worker-test"},
+        )
+    assert finalized == [("apify-job:77", 7, claim_state)]
+
+    writes: list[tuple[str, object]] = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params):
+            writes.append((str(sql), params))
+
+    class Conn:
+        def transaction(self):
+            return nullcontext()
+
+        def cursor(self):
+            return Cursor()
+
+    monkeypatch.setattr(pg_worker, "_sync_search_session_job", lambda *_args, **_kwargs: None)
+    pg_worker._fail_job(Conn(), 77, guard_error)
+    assert len(writes) == 1
+    assert "status='blocked'" in writes[0][0]
+    assert guard_error.code in str(writes[0][1])
+
+
+def test_worker_blocks_if_evidence_identity_changes_after_enqueue(
+    tracking_conn, monkeypatch
+):
+    content_metric_snapshots.ensure_sqlite_schema(tracking_conn)
+    tracking_conn.execute(
+        "UPDATE vkpi_kol_video_evidence SET content_url=? WHERE id=101",
+        ("https://www.youtube.com/watch?v=changedVideo9",),
+    )
+
+    def provider_bomb(_url):
+        raise AssertionError("provider must not run after evidence identity changes")
+
+    monkeypatch.setattr(video_metric_refresh, "_fetch_video_metadata", provider_bomb)
+    result = video_metric_refresh.run_video_metric_refresh_for_job(
+        _refresh_payload(),
+        conn=tracking_conn,
+    )
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "video_evidence_identity_changed_after_enqueue"
+    assert result["provider_calls_performed"] is False
+    assert tracking_conn.execute(
+        "SELECT COUNT(*) FROM vkpi_content_metric_snapshots"
+    ).fetchone()[0] == 0
+    latest = tracking_conn.execute(
+        "SELECT view_count, like_count, comment_count, metrics_source FROM vkpi_kol_video_evidence WHERE id=101"
+    ).fetchone()
+    assert tuple(latest) == (100, 10, 2, "legacy")
+
+
+def test_worker_blocks_stored_evil_host_before_provider_or_snapshot(
+    tracking_conn, monkeypatch
+):
+    content_metric_snapshots.ensure_sqlite_schema(tracking_conn)
+    evil_url = "https://instagram.com.evil.test/p/ABC123/"
+    tracking_conn.execute(
+        "UPDATE vkpi_kol_video_evidence SET content_url=?, platform='instagram' WHERE id=101",
+        (evil_url,),
+    )
+
+    def provider_bomb(_url):
+        raise AssertionError("evil host must never reach provider")
+
+    monkeypatch.setattr(video_metric_refresh, "_fetch_video_metadata", provider_bomb)
+    result = video_metric_refresh.run_video_metric_refresh_for_job(
+        _refresh_payload(platform="instagram", content_url=evil_url),
+        conn=tracking_conn,
+    )
+    assert result["status"] == "blocked"
+    assert result["error_code"] == "video_evidence_identity_invalid"
+    assert result["provider_calls_performed"] is False
+    assert tracking_conn.execute(
+        "SELECT COUNT(*) FROM vkpi_content_metric_snapshots"
+    ).fetchone()[0] == 0
+    latest = tracking_conn.execute(
+        "SELECT view_count, like_count, comment_count, metrics_source FROM vkpi_kol_video_evidence WHERE id=101"
+    ).fetchone()
+    assert tuple(latest) == (100, 10, 2, "legacy")
+
+
+def test_worker_rejects_same_channel_different_video_without_any_snapshot(
+    tracking_conn, monkeypatch
+):
+    content_metric_snapshots.ensure_sqlite_schema(tracking_conn)
+    monkeypatch.setattr(
+        video_metric_refresh,
+        "_fetch_video_metadata",
+        lambda _url: {
+            "platform": "youtube",
+            "content_url": "https://www.youtube.com/watch?v=different99",
+            "scrape_source": "youtube_api",
+            "scrape_status": "success",
+            "channel_id": "UC-owner",
+            "view_count": 999999,
+            "like_count": 9999,
+            "comment_count": 999,
+            "share_count": 99,
+        },
+    )
+    result = video_metric_refresh.run_video_metric_refresh_for_job(
+        _refresh_payload(),
+        conn=tracking_conn,
+    )
+    assert result == {
+        "status": "blocked",
+        "evidence_id": 101,
+        "error_code": "provider_video_mismatch",
+        "snapshot_id": None,
+        "provider_calls_performed": True,
+    }
+    assert tracking_conn.execute(
+        "SELECT COUNT(*) FROM vkpi_content_metric_snapshots"
+    ).fetchone()[0] == 0
+    latest = tracking_conn.execute(
+        "SELECT view_count, like_count, comment_count, share_count, metrics_source FROM vkpi_kol_video_evidence WHERE id=101"
+    ).fetchone()
+    assert tuple(latest) == (100, 10, 2, None, "legacy")
+
+
+@pytest.mark.parametrize("media_kind", ["image", "carousel", "post"])
+def test_worker_rejects_explicit_non_video_provider_media_kind(
+    tracking_conn, monkeypatch, media_kind
+):
+    content_metric_snapshots.ensure_sqlite_schema(tracking_conn)
+    monkeypatch.setattr(
+        video_metric_refresh,
+        "_fetch_video_metadata",
+        lambda _url: {
+            "platform": "youtube",
+            "content_url": VIDEO_URL,
+            "scrape_source": "apify",
+            "scrape_status": "success",
+            "media_kind": media_kind,
+            "channel_id": "UC-owner",
+            "view_count": 500,
+            "like_count": 50,
+            "comment_count": 5,
+        },
+    )
+    result = video_metric_refresh.run_video_metric_refresh_for_job(
+        _refresh_payload(),
+        conn=tracking_conn,
+    )
+    assert result["status"] == "failed"
+    assert result["error_code"] == "provider_media_kind_mismatch"
+    snapshot = tracking_conn.execute(
+        "SELECT status, views, likes, comments, error_code FROM vkpi_content_metric_snapshots"
+    ).fetchone()
+    assert tuple(snapshot) == (
+        "failed",
+        None,
+        None,
+        None,
+        "provider_media_kind_mismatch",
+    )
+    latest = tracking_conn.execute(
+        "SELECT view_count, like_count, comment_count, metrics_source FROM vkpi_kol_video_evidence WHERE id=101"
+    ).fetchone()
+    assert tuple(latest) == (100, 10, 2, "legacy")
 
 
 def test_refresh_job_is_in_reviewed_lane_and_resource_group():
@@ -566,6 +876,24 @@ def test_worker_handler_persists_only_bounded_refresh_summary(monkeypatch):
     assert persisted["video_metric_refresh_result"]["snapshot_id"] == 501
     assert "raw_provider_response" not in persisted
 
+    monkeypatch.setattr(
+        video_metric_refresh,
+        "run_video_metric_refresh_for_job",
+        lambda _payload: {
+            "status": "blocked",
+            "evidence_id": 101,
+            "snapshot_id": None,
+            "error_code": "provider_video_mismatch",
+            "provider_calls_performed": True,
+        },
+    )
+    worker_handlers._process_kol_video_metric_refresh(
+        QueueConn(),
+        {"id": 100},
+        {"evidence_id": 101, "kol_pool_id": 1},
+    )
+    assert captured["params"][0] == "blocked"
+
 
 def test_migration_284_contract_is_narrow_and_reversible():
     root = Path(__file__).resolve().parents[1]
@@ -581,3 +909,4 @@ def test_migration_284_contract_is_narrow_and_reversible():
     assert "relation_type IN ('manual', 'detected', 'confirmed')" in up
     assert "DROP TABLE IF EXISTS vkpi_kol_video_product_links" in down
     assert "284_vkpi_kol_video_product_links.sql" in down
+    assert "mainline migration 283" in up

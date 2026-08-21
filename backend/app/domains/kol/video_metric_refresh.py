@@ -11,11 +11,16 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains import content_metric_snapshots
+from app.domains.kol.video_url_identity import (
+    VideoUrlIdentityError,
+    parse_supported_video_url,
+)
 from app.domains.projects.workflow_evidence import _fetch_video_metadata
 from app.domains.tasks.apify_idempotency import (
     active_job_idempotency_key,
     enqueue_active_apify_job,
 )
+from app.platform.apify_budget import ApifyBudgetBlocked, ApifyProviderReplayBlocked
 
 
 VIDEO_METRIC_REFRESH_JOB_TYPE = "kol_video_metric_refresh"
@@ -37,6 +42,14 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+def _video_identity(value: Any) -> tuple[str, str] | None:
+    try:
+        identity = parse_supported_video_url(value)
+    except VideoUrlIdentityError:
+        return None
+    return identity.platform, identity.video_id
+
+
 def enqueue_video_metric_refresh(
     conn: Any,
     *,
@@ -55,8 +68,9 @@ def enqueue_video_metric_refresh(
         raise ValueError("video_evidence_target_mismatch")
     if platform not in SUPPORTED_METRIC_PLATFORMS:
         raise ValueError("video_metric_platform_unsupported")
-    if not content_url:
-        raise ValueError("video_evidence_url_missing")
+    identity = _video_identity(content_url)
+    if not identity or identity[0] != platform:
+        raise ValueError("video_evidence_identity_invalid")
 
     actor_id = _int((staff or {}).get("id") or (staff or {}).get("staff_id"))
     payload = {
@@ -132,6 +146,23 @@ def _failure(
     }
 
 
+def _identity_rejection(
+    *,
+    evidence_id: int,
+    error_code: str,
+    provider_calls_performed: bool = True,
+) -> dict[str, Any]:
+    """Reject provider data that cannot be bound to this evidence, without writes."""
+
+    return {
+        "status": "blocked",
+        "evidence_id": evidence_id,
+        "error_code": error_code[:80],
+        "snapshot_id": None,
+        "provider_calls_performed": bool(provider_calls_performed),
+    }
+
+
 def run_video_metric_refresh_for_job(
     payload: dict[str, Any],
     *,
@@ -156,10 +187,30 @@ def run_video_metric_refresh_for_job(
     platform = _text(evidence.get("platform")).lower()
     if platform not in SUPPORTED_METRIC_PLATFORMS:
         raise ValueError("video_metric_platform_unsupported")
+    stored_identity = _video_identity(evidence.get("content_url"))
+    if not stored_identity or stored_identity[0] != platform:
+        return _identity_rejection(
+            evidence_id=evidence_id,
+            error_code="video_evidence_identity_invalid",
+            provider_calls_performed=False,
+        )
+    queued_identity = _video_identity(payload.get("content_url"))
+    queued_platform = _text(payload.get("platform")).lower()
+    if queued_identity != stored_identity or queued_platform != platform:
+        return _identity_rejection(
+            evidence_id=evidence_id,
+            error_code="video_evidence_identity_changed_after_enqueue",
+            provider_calls_performed=False,
+        )
 
     fetched_at = _utcnow()
     try:
         metadata = dict(_fetch_video_metadata(_text(evidence.get("content_url"))) or {})
+    except (ApifyBudgetBlocked, ApifyProviderReplayBlocked):
+        # Preserve the worker's typed hard-stop/replay-fence handling.  These
+        # exceptions do not prove that a provider observation exists and must
+        # never be flattened into a normal failed snapshot.
+        raise
     except Exception as exc:
         return _failure(
             db,
@@ -183,27 +234,29 @@ def run_video_metric_refresh_for_job(
             quality_flags=("provider_response_not_success",),
         )
     returned_platform = _text(metadata.get("platform")).lower()
-    if returned_platform and returned_platform != platform:
-        return _failure(
-            db,
+    returned_identity = _video_identity(metadata.get("content_url"))
+    if returned_platform != platform or returned_identity != stored_identity:
+        return _identity_rejection(
             evidence_id=evidence_id,
-            fetched_at=fetched_at,
-            error_code="provider_platform_mismatch",
-            provider=provider,
-            run_id=run_id,
-            quality_flags=("identity_mismatch",),
+            error_code="provider_video_mismatch",
         )
     stored_channel_id = _text(evidence.get("channel_id"))
     returned_channel_id = _text(metadata.get("channel_id"))
     if stored_channel_id and returned_channel_id and stored_channel_id != returned_channel_id:
+        return _identity_rejection(
+            evidence_id=evidence_id,
+            error_code="provider_creator_mismatch",
+        )
+    media_kind = _text(metadata.get("media_kind")).lower()
+    if media_kind and media_kind != "video":
         return _failure(
             db,
             evidence_id=evidence_id,
             fetched_at=fetched_at,
-            error_code="provider_creator_mismatch",
+            error_code="provider_media_kind_mismatch",
             provider=provider,
             run_id=run_id,
-            quality_flags=("identity_mismatch",),
+            quality_flags=("provider_non_video_response",),
         )
 
     metrics = {

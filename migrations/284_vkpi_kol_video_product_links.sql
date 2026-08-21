@@ -2,6 +2,9 @@
 --
 -- One video may cover more than one product, so project_id on the evidence
 -- row is deliberately not reused as product truth.
+-- Integration prerequisite: mainline migration 283 owns the content-metric
+-- snapshot ledger consumed by the refresh worker.  This DDL has no snapshot
+-- FK, but release ordering must still apply 283 before this slice.
 
 CREATE TABLE IF NOT EXISTS vkpi_kol_video_product_links (
     id BIGSERIAL PRIMARY KEY,
