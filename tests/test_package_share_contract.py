@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+
+import pytest
 import tarfile
 
 
@@ -32,6 +34,10 @@ def _write(path: Path, value: str) -> None:
 def test_package_share_uses_tracked_allowlist_and_writes_verified_sidecars(
     tmp_path: Path,
 ) -> None:
+    if os.environ.get("VKPI_FREEZE_GIT_BRIDGE"):
+        # freeze 快照验证装了只读 git 垫片(非快照读操作一律 126),本测试需 git init 临时仓库,
+        # 在该沙箱下无法成立;普通 verify.sh / CI 照常执行,这里诚实跳过而非假绿。
+        pytest.skip("freeze 只读 git 垫片下无法 git init 临时仓库")
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     subprocess.run(["git", "init", "-q", str(checkout)], check=True)
