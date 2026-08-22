@@ -759,3 +759,32 @@ def test_ancestor_guard_behaviour_against_a_stubbed_remote(tmp_path: Path) -> No
     conflict = run(descendant, f"/opt/viltrox-2.0/releases/x-{diverged[:12]}", served)
     assert conflict.returncode == 1
     assert "category=release_identity_conflict" in conflict.stderr
+
+
+def test_train_script_orders_the_shuttle_steps_and_passes_bash_n() -> None:
+    train_path = ROOT / "scripts" / "ops" / "train.sh"
+    train = train_path.read_text(encoding="utf-8")
+    assert subprocess.run(["bash", "-n", str(train_path)], check=False).returncode == 0
+    assert os.access(train_path, os.X_OK)
+
+    first_clean = train.index('assert_clean_tree "出发前"')
+    freeze_at = train.index("freeze --repo")
+    second_clean = train.index('assert_clean_tree "freeze 后"')
+    dist_copy = train.index('rsync -a --delete "${CANDIDATE_DIR}/frontend/dist/" "${ROOT}/frontend/dist/"')
+    restart_at = train.index("\nwait_for_alignment\n")
+    deploy_at = train.index('bash "${ROOT}/scripts/ops/deploy_local_to_cloud.sh"')
+    assert first_clean < freeze_at < second_clean < dist_copy < restart_at < deploy_at
+
+    # kill 本地栈:纯数字 pid 逐个点名(带噪声令牌整条失效),supervisor 不在清单里。
+    assert "grep -E '^[0-9]+$'" in train
+    assert "xargs -n1 kill -TERM" in train and "xargs -n1 kill -KILL" in train
+    assert "local_stack_supervisor" not in train.split("LOCAL_STACK_PATTERNS=(", 1)[1].split(")", 1)[0]
+    # 对齐四件:server sha / client sha / apify workers≥N / redis worker 单代。
+    alignment = train.split("health_alignment() {", 1)[1].split("wait_for_alignment() {", 1)[0]
+    for required in ('"server": server == expected', '"client": client == expected', "workers >= min_workers", "redis_count == 1"):
+        assert required in alignment
+    # 令牌只走 --env-file;部署段日志落 runtime/ops/deploy-<sha>.log;SHA 缺省 HEAD 且显式值必须等于 HEAD。
+    assert '--env-file "${HEALTH_ENV_FILE}"' in train
+    assert 'DEPLOY_LOG="${OPS_DIR}/deploy-${SHORT9}.log"' in train
+    assert 'HEAD_SHA="$(git rev-parse --verify HEAD)"' in train
+    assert 'VKPI_STAGING_DB_CLONE=0' in train
