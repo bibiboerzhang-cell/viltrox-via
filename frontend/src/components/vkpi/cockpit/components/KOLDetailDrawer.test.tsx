@@ -620,7 +620,7 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
       contact_masked: false,
       contacts: [
         { type: "email", value: "manager@example.com" },
-        { type: "dm", channel: "instagram", value: "@futurestudio", source_label: "manual", verification_status: "verified" },
+        { type: "dm", channel: "instagram", value: "@futurestudio", source_label: "manual", tier: "verified", verification_status: "verified_public_business" },
       ],
     });
     renderDrawer({
@@ -637,8 +637,10 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
     expect(await screen.findByText("manager@example.com")).toBeInTheDocument();
     expect(screen.getByText("Instagram")).toBeInTheDocument();
     expect(screen.getByText("@futurestudio")).toBeInTheDocument();
-    expect(screen.getByText("manual")).toBeInTheDocument();
-    expect(screen.getByText("verified")).toBeInTheDocument();
+    // U10:门面只出两档揭示徽标,source_label / verification_status 原文不再露出
+    expect(screen.getByText("已核验")).toHaveAttribute("data-contact-tier", "verified");
+    expect(screen.queryByText("manual")).toBeNull();
+    expect(screen.queryByText("verified_public_business")).toBeNull();
     expect(screen.queryByText("wrong-detail@example.com")).toBeNull();
     expect(screen.queryByText("m***@e***")).toBeNull();
     expect(revealKolPoolContact).toHaveBeenCalledTimes(1);

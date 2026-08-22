@@ -6,6 +6,7 @@ import React from "react";
 import { Activity, AlertTriangle, BadgeCheck, Check, ExternalLink, Flame, Heart, Layers, Link2, MapPin, RefreshCw, Send, Shield, ShoppingBag, Sparkles, Star, Target, Video, Zap, X } from "lucide-react";
 import { AudienceTypeChip } from "./AudienceTypeChip";
 import { CandidateKindChip } from "./CandidateKindChip";
+import { ContactTierBadge } from "./ContactTierBadge";
 import { GeoTierChip } from "./GeoTierChip";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatPercent } from "../lib/format";
@@ -486,9 +487,9 @@ export function KOLDrawerContactAndVideos({ item, representativeVideos, onOpenVi
                       rel: "noreferrer",
                       className: "text-cyan-400 hover:text-cyan-300",
                     }, contact.actionLabel),
-                    contact.source && e("span", { className: "rounded border border-white/[0.08] px-1 py-0.5" }, contact.source),
-                    contact.verificationStatus && e("span", { className: "rounded border border-emerald-400/20 px-1 py-0.5 text-emerald-300" }, contact.verificationStatus),
-                    contact.lastVerifiedAt && e("span", null, `核验 ${contact.lastVerifiedAt}`),
+                    // U10:两档徽标与 ContactModal 同款;不再把 source / verificationStatus 内部码露到门面。
+                    e(ContactTierBadge, { tier: contact.tier }),
+                    contact.tier === "verified" && contact.lastVerifiedAt && e("span", null, `核验 ${contact.lastVerifiedAt}`),
                   ),
                 )),
       e("div", { className: "flex items-center gap-2 text-[11px]" },
