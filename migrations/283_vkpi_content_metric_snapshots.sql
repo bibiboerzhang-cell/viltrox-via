@@ -59,10 +59,11 @@ SELECT
         e.metrics_scraped_at,
         CAST('1970-01-01T00:00:00+00:00' AS TIMESTAMPTZ)
     ),
-    e.view_count,
-    e.like_count,
-    e.comment_count,
-    e.share_count,
+    -- 旧列里的负数是抓取失败哨兵(如 -1),不是真计数:回填为 NULL(未实测),否则撞 CHECK >= 0。
+    CASE WHEN e.view_count    IS NOT NULL AND e.view_count    >= 0 THEN e.view_count    END,
+    CASE WHEN e.like_count    IS NOT NULL AND e.like_count    >= 0 THEN e.like_count    END,
+    CASE WHEN e.comment_count IS NOT NULL AND e.comment_count >= 0 THEN e.comment_count END,
+    CASE WHEN e.share_count   IS NOT NULL AND e.share_count   >= 0 THEN e.share_count   END,
     'legacy_current_only',
     NULL,
     NULL,
