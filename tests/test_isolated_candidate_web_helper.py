@@ -5,8 +5,11 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,12 +34,22 @@ def test_isolated_candidate_web_scrubs_providers_and_uses_private_cwd(
     runtime = runtime_parent / "runtime"
     try:
         reviewed_env = tmp_path / "reviewed-local.env"
-        _write(reviewed_env, "ANTHROPIC_API_KEY=fallback-must-not-load\n")
+        _write(
+            reviewed_env,
+            "\n".join(
+                (
+                    "LOCAL_DATABASE_URL=postgresql://127.0.0.1:54329/vkpi_test",
+                    "REDIS_URL=redis://127.0.0.1:6380/0",
+                    "ANTHROPIC_API_KEY=fallback-must-not-load",
+                    "",
+                )
+            ),
+        )
         project.mkdir(parents=True)
         (project / ".env").symlink_to(reviewed_env)
         _write(
             project / ".venv" / "bin" / "python",
-            """#!/usr/bin/env python3
+            f"#!{sys.executable}\n" + """
 import json
 import os
 import sys
@@ -72,8 +85,10 @@ Path(os.environ["CAPTURE_REPORT"]).write_text(json.dumps({
         _write(
             candidate / "scripts" / "runtime_env.sh",
             """#!/usr/bin/env bash
-export DATABASE_URL='postgresql://127.0.0.1/vkpi_test'
-export REDIS_URL='redis://127.0.0.1:6379/0'
+LOCAL_DATABASE_URL="${LOCAL_DATABASE_URL:-postgresql://127.0.0.1:54329/wrong_default}"
+LOCAL_REDIS_URL="${LOCAL_REDIS_URL:-redis://127.0.0.1:6380/9}"
+export DATABASE_URL="$LOCAL_DATABASE_URL"
+export REDIS_URL="$LOCAL_REDIS_URL"
 export JWT_SECRET='local-test-jwt'
 export ANTHROPIC_API_KEY='anthropic-secret'
 export APIFY_API_TOKEN='apify-api-secret'
@@ -124,7 +139,7 @@ export all_proxy="$ALL_PROXY"
 
         captured = json.loads(report.read_text(encoding="utf-8"))
         assert Path(captured["cwd"]).resolve() == runtime.resolve()
-        assert captured["database_url"] == "postgresql://127.0.0.1/vkpi_test"
+        assert captured["database_url"] == "postgresql://127.0.0.1:54329/vkpi_test"
         assert captured["jwt_secret"] == "local-test-jwt"
         assert set(captured["provider_values"].values()) == {None}
         assert captured["no_proxy"] == "127.0.0.1,localhost,::1"
@@ -141,5 +156,207 @@ export all_proxy="$ALL_PROXY"
         assert fence.read_text(encoding="utf-8") == "vkpi-release-validation/v1\n"
         assert stat.S_IMODE(fence.stat().st_mode) == 0o444
         assert not (runtime / ".env").exists()
+    finally:
+        shutil.rmtree(runtime_parent, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    "unsafe_database_url",
+    (
+        "postgresql://127.0.0.1:54329/vkpi_test?host=example.com",
+        "postgresql://127.0.0.1:54329/vkpi_test?host=/tmp/other&port=6543",
+        "postgresql://127.0.0.1:54329/vkpi_test?dbname=wrong",
+        "postgresql://u@198.51.100.9,\t@127.0.0.1:54329/vkpi_test",
+        "postgresql://u@198.51.100.9,@127.0.0.1:54329/vkpi_test",
+    ),
+)
+def test_isolated_candidate_web_rejects_query_identity_overrides(
+    tmp_path: Path,
+    unsafe_database_url: str,
+) -> None:
+    project = tmp_path / "source"
+    candidate = tmp_path / "candidate"
+    runtime_parent = Path(
+        tempfile.mkdtemp(prefix="vkpi-candidate-browser-runtime.", dir="/tmp")
+    )
+    runtime = runtime_parent / "runtime"
+    try:
+        reviewed_env = tmp_path / "reviewed-local.env"
+        _write(
+            reviewed_env,
+            f"LOCAL_DATABASE_URL={unsafe_database_url}\n"
+            "REDIS_URL=redis://127.0.0.1:6380/0\n",
+        )
+        project.mkdir(parents=True)
+        (project / ".env").symlink_to(reviewed_env)
+        _write(
+            project / ".venv" / "bin" / "python",
+            f"#!/bin/sh\nexec {shutil.which('python') or sys.executable!s} \"$@\"\n",
+            mode=0o700,
+        )
+        _write(candidate / "scripts" / "runtime_env.sh", "exit 99\n", mode=0o700)
+        _write(candidate / "deploy" / "gunicorn_config.py", "workers = 1\n")
+
+        completed = subprocess.run(
+            ["/bin/bash", str(HELPER)],
+            cwd=project,
+            env={
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "HOME": str(runtime_parent / "home"),
+                "XDG_CACHE_HOME": str(runtime_parent / "cache"),
+                "TMPDIR": str(runtime_parent / "tmp"),
+                "PROJECT_ROOT": str(project),
+                "CANDIDATE_ROOT": str(candidate),
+                "CANDIDATE_RUNTIME": str(runtime),
+                "CANDIDATE_LOCAL_ENV_FILE": str(project / ".env"),
+                "CANDIDATE_PORT": "18129",
+                "APP_GIT_SHA": "a" * 40,
+                "APP_GIT_BRANCH": "codex/test",
+                "APP_BUILD_TIME": "2026-08-04T00:00:00Z",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode != 0
+        assert (
+            "candidate local database identity is unsafe" in completed.stderr
+            or "candidate local environment has invalid connection identity"
+            in completed.stderr
+            or "candidate local database identity disagrees with libpq"
+            in completed.stderr
+        )
+        assert unsafe_database_url not in completed.stderr
+        assert not (runtime / "local.env").exists()
+        assert not (runtime / "local-identity.env").exists()
+    finally:
+        shutil.rmtree(runtime_parent, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    "forbidden_line",
+    (
+        "ENV_FILE=/tmp/override.env",
+        "PGHOSTADDR=198.51.100.10",
+        "PGSERVICE=unreviewed",
+    ),
+)
+def test_isolated_candidate_web_rejects_ambient_connection_controls(
+    tmp_path: Path,
+    forbidden_line: str,
+) -> None:
+    project = tmp_path / "source"
+    candidate = tmp_path / "candidate"
+    runtime_parent = Path(
+        tempfile.mkdtemp(prefix="vkpi-candidate-browser-runtime.", dir="/tmp")
+    )
+    runtime = runtime_parent / "runtime"
+    try:
+        reviewed_env = tmp_path / "reviewed-local.env"
+        _write(
+            reviewed_env,
+            "LOCAL_DATABASE_URL=postgresql://127.0.0.1:54329/vkpi_test\n"
+            "REDIS_URL=redis://127.0.0.1:6380/0\n"
+            f"{forbidden_line}\n",
+        )
+        project.mkdir(parents=True)
+        (project / ".env").symlink_to(reviewed_env)
+        _write(
+            project / ".venv" / "bin" / "python",
+            f"#!/bin/sh\nexec {shutil.which('python') or sys.executable!s} \"$@\"\n",
+            mode=0o700,
+        )
+        _write(candidate / "scripts" / "runtime_env.sh", "exit 99\n", mode=0o700)
+        _write(candidate / "deploy" / "gunicorn_config.py", "workers = 1\n")
+        completed = subprocess.run(
+            ["/bin/bash", str(HELPER)],
+            cwd=project,
+            env={
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "HOME": str(runtime_parent / "home"),
+                "XDG_CACHE_HOME": str(runtime_parent / "cache"),
+                "TMPDIR": str(runtime_parent / "tmp"),
+                "PROJECT_ROOT": str(project),
+                "CANDIDATE_ROOT": str(candidate),
+                "CANDIDATE_RUNTIME": str(runtime),
+                "CANDIDATE_LOCAL_ENV_FILE": str(project / ".env"),
+                "CANDIDATE_PORT": "18129",
+                "APP_GIT_SHA": "a" * 40,
+                "APP_GIT_BRANCH": "codex/test",
+                "APP_BUILD_TIME": "2026-08-04T00:00:00Z",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode != 0
+        assert "forbidden connection controls" in completed.stderr
+        assert forbidden_line not in completed.stderr
+        assert not (runtime / "local.env").exists()
+        assert not (runtime / "local-identity.env").exists()
+    finally:
+        shutil.rmtree(runtime_parent, ignore_errors=True)
+
+
+@pytest.mark.parametrize(
+    "override_path",
+    (Path(".env.local"), Path("runtime/local_operator_env.sh")),
+)
+def test_isolated_candidate_web_rejects_candidate_side_environment_overrides(
+    tmp_path: Path,
+    override_path: Path,
+) -> None:
+    project = tmp_path / "source"
+    candidate = tmp_path / "candidate"
+    runtime_parent = Path(
+        tempfile.mkdtemp(prefix="vkpi-candidate-browser-runtime.", dir="/tmp")
+    )
+    runtime = runtime_parent / "runtime"
+    try:
+        reviewed_env = tmp_path / "reviewed-local.env"
+        _write(
+            reviewed_env,
+            "LOCAL_DATABASE_URL=postgresql://127.0.0.1:54329/vkpi_test\n"
+            "REDIS_URL=redis://127.0.0.1:6380/0\n",
+        )
+        project.mkdir(parents=True)
+        (project / ".env").symlink_to(reviewed_env)
+        _write(
+            project / ".venv" / "bin" / "python",
+            f"#!/bin/sh\nexec {shutil.which('python') or sys.executable!s} \"$@\"\n",
+            mode=0o700,
+        )
+        _write(
+            candidate / "scripts" / "runtime_env.sh",
+            "exit 99\n",
+            mode=0o700,
+        )
+        _write(candidate / "deploy" / "gunicorn_config.py", "workers = 1\n")
+        _write(candidate / override_path, "export PGHOST=example.com\n")
+        completed = subprocess.run(
+            ["/bin/bash", str(HELPER)],
+            cwd=project,
+            env={
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "HOME": str(runtime_parent / "home"),
+                "XDG_CACHE_HOME": str(runtime_parent / "cache"),
+                "TMPDIR": str(runtime_parent / "tmp"),
+                "PROJECT_ROOT": str(project),
+                "CANDIDATE_ROOT": str(candidate),
+                "CANDIDATE_RUNTIME": str(runtime),
+                "CANDIDATE_LOCAL_ENV_FILE": str(project / ".env"),
+                "CANDIDATE_PORT": "18129",
+                "APP_GIT_SHA": "a" * 40,
+                "APP_GIT_BRANCH": "codex/test",
+                "APP_BUILD_TIME": "2026-08-04T00:00:00Z",
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert completed.returncode != 0
+        assert "unreviewed runtime environment override" in completed.stderr
+        assert not (runtime / "local.env").exists()
+        assert not (runtime / "local-identity.env").exists()
     finally:
         shutil.rmtree(runtime_parent, ignore_errors=True)
