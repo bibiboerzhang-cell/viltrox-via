@@ -382,6 +382,20 @@ def set_network(
             "status": 200,
             "resource_type": "Fetch",
         },
+        {
+            "channel": "Network.responseReceived",
+            "page_family": "kol-pool",
+            "url": f"{APP_ORIGIN}/api/admin/vkpi/catalog/suggest",
+            "status": 200,
+            "resource_type": "Fetch",
+        },
+        {
+            "channel": "Network.responseReceived",
+            "page_family": "kol-pool",
+            "url": f"{APP_ORIGIN}/api/admin/vkpi/catalog/suggest",
+            "status": 200,
+            "resource_type": "Fetch",
+        },
     ]
     response_paths: dict[tuple[str, str], int] = {}
     for row in responses:
