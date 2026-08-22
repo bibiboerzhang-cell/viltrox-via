@@ -764,6 +764,8 @@ def advance_matched_posts_to_retrospective_ready(
 def scan_delivered_into_windows(
     staff: dict[str, Any] | None = None,
     days_overdue: int = 7,
+    *,
+    project_id: int | None = None,
 ) -> dict[str, Any]:
     """唯一的「自动」入口:扫已签收派单(vkpi_shipments.delivered_at NOT NULL)→ 为其开观察窗口。
 
@@ -773,8 +775,14 @@ def scan_delivered_into_windows(
     派单关联(2026-07-18 migrations/272 后):shipment.assignment_id 实列非空时
     逐票只为该派单开窗;legacy 无关联行按 project fan-out 但过滤到发货后阶段的
     派单,零命中退化为项目级单窗 assignment_id=NULL。
+
+    project_id 给定时只扫该项目(Action 执行器按已批准实体收窄边界,不得顺带给
+    全租户其它项目开窗);非法值诚实返回 error,绝不静默退化成全量扫描。
     """
     days = max(0, min(int(days_overdue or 7), 90))
+    target_project_id = _nullable_int(project_id)
+    if project_id is not None and (target_project_id is None or target_project_id <= 0):
+        return {"status": "error", "error": "project_id must be a positive integer"}
     cutoff = datetime.utcnow() - timedelta(days=days)
     conn = get_conn()
 
@@ -789,6 +797,8 @@ def scan_delivered_into_windows(
 
     scope_sql, scope_params = scope.project_filter("p", staff)
     scope_clause = f"AND {scope_sql}" if scope_sql else ""
+    target_clause = "AND s.project_id = ?" if target_project_id is not None else ""
+    target_params: tuple[Any, ...] = (target_project_id,) if target_project_id is not None else ()
     assignment_select = "s.assignment_id AS assignment_id," if has_assignment_col else "NULL AS assignment_id,"
     rows = conn.execute(
         f"""
@@ -798,11 +808,12 @@ def scan_delivered_into_windows(
         JOIN vkpi_projects p ON p.id = s.project_id
         WHERE s.delivered_at IS NOT NULL
           AND s.delivered_at < ?
+          {target_clause}
           {scope_clause}
         ORDER BY s.delivered_at ASC
         LIMIT 500
         """,
-        (cutoff, *scope_params),
+        (cutoff, *target_params, *scope_params),
     ).fetchall()
 
     # 签收后仍算「在途/待内容」的派单阶段;legacy fan-out 只对这些开窗,
@@ -865,6 +876,7 @@ def scan_delivered_into_windows(
     return {
         "status": "ok",
         "days_overdue": days,
+        "project_id": target_project_id,
         "scanned_projects": scanned_projects,
         "created": created,
         "skipped_existing": skipped_existing,

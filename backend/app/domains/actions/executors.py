@@ -428,17 +428,17 @@ def _exec_project_observation(action: dict[str, Any], staff: dict[str, Any] | No
         return project_observation_step.execute(transaction_conn, action, staff)
     from app.domains.projects import observation_windows
 
-    res = observation_windows.scan_delivered_into_windows(staff=staff, days_overdue=7)
-    created = res.get("created") or []
+    # 遗留非事务路径同样按已批准的 project_id 收窄;缺实体 → skipped,绝不全租户扫窗。
     project_id = _entity_id_int(action)
-    if project_id:
-        for wid in created:
-            automation_audit.record_audit(
-                project_id=project_id,
-                action="window_open",
-                window_id=int(wid) if wid is not None else None,
-                reason="action_execute:project_observation",
-            )
+    if not project_id:
+        return {"outcome": "skipped", "reason": "project_observation_no_project_id", "detail": {}}
+    res = observation_windows.scan_delivered_into_windows(staff=staff, days_overdue=7, project_id=project_id)
+    created = res.get("created") or []
+    for wid in created:
+        automation_audit.record_audit(
+            project_id=project_id, action="window_open",
+            window_id=int(wid) if wid is not None else None, reason="action_execute:project_observation",
+        )
     return {"outcome": "success", "reason": "", "detail": {"created_windows": created, "scan": res}}
 
 
