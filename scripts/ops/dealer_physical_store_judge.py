@@ -202,7 +202,11 @@ def _judge_one(row_payload: dict[str, Any], model: str) -> dict[str, Any]:
     # NOTE: no response_mime_type here.  On gemini-2.5-flash the combination of
     # tools + JSON mime is a hard 400; on gemini-3.5-flash it is accepted but
     # silently disables the google_search tool (verified 2026-07-16), so the
-    # judge asks for JSON in the prompt and parses fenced output instead.
+    # judge asks for JSON in the prompt and parses fenced output instead
+    # (model agnostic).  2026-08-22 模型升级刀:默认模型改 gemini-3.6-flash;
+    # 3.x 家族 thinking_level=minimal 由 llm_production 的 google helper 按家族
+    # 注入(带 tools 的请求不注入),本脚本不自行构造 thinking_budget / temperature。
+    # 3.6-flash 上 google_search + JSON-mime 组合未在本刀实弹复验,路线不变即安全。
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
         http_options=types.HttpOptions(
@@ -241,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--organization-id", type=int, default=1)
     parser.add_argument("--source-registry-id", default=SOURCE_REGISTRY_ID)
-    parser.add_argument("--model", default="gemini-3.5-flash")
+    parser.add_argument("--model", default="gemini-3.6-flash")
     parser.add_argument("--limit", type=int, default=0, help="0 = all pending")
     parser.add_argument("--qps", type=float, default=1.0)
     parser.add_argument(

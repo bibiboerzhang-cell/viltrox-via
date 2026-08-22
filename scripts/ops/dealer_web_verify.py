@@ -253,7 +253,12 @@ def _verify_one(dealer: dict[str, Any], *, model: str, website: str) -> dict[str
     # NOTE: no response_mime_type — tools + JSON mime is a hard 400 on
     # gemini-2.5-flash and silently disables google_search on gemini-3.5-flash
     # (verified 2026-07-16 in dealer_physical_store_judge).  JSON is requested
-    # in the prompt and parsed from fenced output instead.
+    # in the prompt and parsed from fenced output instead, which is model
+    # agnostic.  2026-08-22 模型升级刀:默认模型改 gemini-3.6-flash(促销价
+    # $0.75/$3.75 至 2026-12-31);3.x 家族的 thinking_level=minimal 由
+    # llm_production 的 google helper 按家族注入,带 tools 的请求不注入——本脚本
+    # 自己绝不构造 thinking_budget / temperature。3.6-flash 上 google_search +
+    # JSON-mime 的组合未在本刀实弹复验,维持「prompt 要 JSON + 解析围栏」路线即安全。
     config = types.GenerateContentConfig(
         tools=[types.Tool(google_search=types.GoogleSearch())],
         http_options=types.HttpOptions(
@@ -318,7 +323,7 @@ def _insert_receipt(conn: Any, dealer_id: int, verdict: dict[str, Any]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default="gemini-3.5-flash")
+    parser.add_argument("--model", default="gemini-3.6-flash")
     parser.add_argument("--limit", type=int, default=0, help="0 = all pending")
     parser.add_argument("--qps", type=float, default=1.0)
     parser.add_argument("--dealer-id", type=int, default=0, help="verify one dealer only")

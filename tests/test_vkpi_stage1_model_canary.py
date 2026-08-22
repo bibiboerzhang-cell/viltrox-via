@@ -147,8 +147,8 @@ def test_default_is_repeatable_zero_call_dry_run() -> None:
     assert first["claim_status"] == "descriptive_only"
     assert first["production_authorized"] is False
     assert first["attestation_status"] == "unsigned_not_readiness_evidence"
-    assert first["safety_limits"]["unique_task_bindings"] == 8
-    assert len(first["results"]) == 8
+    assert first["safety_limits"]["unique_task_bindings"] == canary.EXPECTED_UNIQUE_BINDINGS == 6
+    assert len(first["results"]) == 6
     assert {row["status"] for row in first["results"]} == {"dry_run"}
     expected_row_keys = {
         "binding",
@@ -294,22 +294,22 @@ def test_authorized_live_run_calls_each_exact_binding_once_and_redacts_content()
     )
 
     assert calls == [row.binding for row in plan.selected]
-    assert len(calls) == 8
-    assert report["provider_calls_performed"] == 8
+    assert len(calls) == 6
+    assert report["provider_calls_performed"] == 6
     assert report["all_selected_bindings_succeeded"] is True
     assert {row["status"] for row in report["results"]} == {"success"}
     assert all(len(row["response_sha256"]) == 64 for row in report["results"])
-    assert len(reservations.reserved) == 8
-    assert len(reservations.started) == 8
-    assert len(reservations.settled) == 8
+    assert len(reservations.reserved) == 6
+    assert len(reservations.started) == 6
+    assert len(reservations.settled) == 6
     assert reservations.unknown == []
     assert reservations.released == []
-    assert len(ledger) == 8
+    assert len(ledger) == 6
     assert report["accounting"] == {
         "precision": "micro_usd",
         "required_for_live_success": True,
-        "verified_calls": 8,
-        "observed_cost_micro_usd": 800,
+        "verified_calls": 6,
+        "observed_cost_micro_usd": 600,
     }
     assert all(item["prompt"] == "" for item in ledger)
     assert all(item["update_budget_scopes"] is False for item in ledger)
@@ -624,5 +624,5 @@ def test_four_ledger_mismatch_stops_before_second_model() -> None:
 def test_cli_defaults_to_dry_run() -> None:
     args = canary.parse_args([])
     assert args.live is False
-    assert args.max_calls == 8
+    assert args.max_calls == canary.EXPECTED_UNIQUE_BINDINGS == 6
     assert args.max_output_tokens <= 128

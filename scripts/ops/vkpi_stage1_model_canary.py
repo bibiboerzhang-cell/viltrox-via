@@ -54,13 +54,18 @@ from app.platform.models.runtime import (  # noqa: E402
 )
 
 
-EXPECTED_UNIQUE_BINDINGS = 8
+# 2026-08-22 模型升级刀:TASK_MODEL_BINDING 去重后恰好 6 个精确绑定
+# (anthropic/claude-sonnet-5、anthropic/claude-opus-5、google/gemini-3.6-flash、
+# google/gemini-2.5-pro、openai/gpt-5.6-luna、openai/gpt-5.5)。A 车道改绑定表时这里
+# 必须同步(tests/test_vkpi_stage1_model_canary.py 与 test_vkpi_model_evidence_plan_contract
+# 的 unique_binding_count 同源);A 未合入前本不变量为红属预期。
+EXPECTED_UNIQUE_BINDINGS = 6
 MAX_CALLS_HARD_LIMIT = 8
 MAX_OUTPUT_TOKENS_HARD_LIMIT = 128
 MAX_PER_CALL_TIMEOUT_SECONDS = 30
 MAX_TOTAL_TIMEOUT_SECONDS = 240
 MAX_COST_USD_HARD_LIMIT = Decimal("0.10")
-DEFAULT_MAX_CALLS = 8
+DEFAULT_MAX_CALLS = EXPECTED_UNIQUE_BINDINGS
 DEFAULT_MAX_OUTPUT_TOKENS = 32
 DEFAULT_PER_CALL_TIMEOUT_SECONDS = 20
 DEFAULT_TOTAL_TIMEOUT_SECONDS = 180
@@ -225,7 +230,7 @@ def build_plan(
     max_cost_usd: Decimal | float | str = DEFAULT_MAX_COST_USD,
     only_bindings: tuple[str, ...] | None = None,
 ) -> CanaryPlan:
-    """Build a deterministic zero-I/O plan for the current eight bindings."""
+    """Build a deterministic zero-I/O plan for the current six bindings."""
 
     cost_ceiling = _decimal(max_cost_usd)
     _validate_limits(
