@@ -674,7 +674,7 @@ def _allowed_provider_plan() -> dict:
         "providers": [
             {
                 "provider": "openai",
-                "binding": "openai/gpt-5.4-mini",
+                "binding": "openai/gpt-5.6-luna",
                 "binding_gate_reason": "ready",
                 "budget_allowed": True,
                 "estimated_cost_usd": 0.001,
@@ -690,7 +690,7 @@ def _blocked_provider_plan() -> dict:
         "providers": [
             {
                 "provider": "openai",
-                "binding": "openai/gpt-5.4-mini",
+                "binding": "openai/gpt-5.6-luna",
                 "binding_gate_reason": "readiness_not_production_ready",
                 "budget_allowed": True,
                 "estimated_cost_usd": 0.001,
@@ -714,7 +714,7 @@ def test_provider_path_is_exact_budgeted_opt_in_and_idempotent(
         return {
             "status": "success",
             "provider": "openai",
-            "model": "gpt-5.4-mini",
+            "model": "gpt-5.6-luna",
             "json": {"answer": "Scoped answer", "evidence_ids": [], "confidence": 0.8},
             "latency_ms": 123,
             "cost_micro_usd": 321,
@@ -745,7 +745,7 @@ def test_provider_path_is_exact_budgeted_opt_in_and_idempotent(
     assert replay["idempotent_replay"] is True
     assert replay["messages"][1]["content_text"] == "Scoped answer"
     assert len(calls) == 1
-    assert calls[0]["kwargs"]["model_override"] == "gpt-5.4-mini"
+    assert calls[0]["kwargs"]["model_override"] == "gpt-5.6-luna"
     assert calls[0]["kwargs"]["model_fallbacks"] == ()
     assert calls[0]["kwargs"]["cost_tag"] == "cron:marketing_advisor"
     assert calls[0]["kwargs"]["require_configured_budget"] is True
