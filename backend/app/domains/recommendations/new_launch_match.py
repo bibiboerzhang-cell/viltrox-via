@@ -19,6 +19,7 @@ from app.db.connection import get_conn
 from app.domains import memory
 from app.platform import llm_production
 from app.domains.costs.budget_guard import check_budget, get_budget_status
+from app.domains.costs.budget_readonly import get_budget_status_readonly
 from app.domains.recommendations.new_launch_match_format import format_preview_summary, render_markdown
 
 
@@ -441,8 +442,13 @@ def build_new_launch_match_preview(
     if bool(readiness.get("provider_calls_allowed")):
         raise RuntimeError("P4-1 requires provider_calls_allowed=false")
 
-    cost_ok = check_budget(BUDGET_SCOPE, 0.0)
-    budget_status = get_budget_status(BUDGET_SCOPE, estimated_cost=0.0)
+    if with_llm_reasons:
+        cost_ok = check_budget(BUDGET_SCOPE, 0.0)
+        budget_status = get_budget_status(BUDGET_SCOPE, estimated_cost=0.0)
+    else:
+        # P4 dry-run 预览是只读面:只投影预算窗口,不建表/不滚窗/不 commit。
+        budget_status = get_budget_status_readonly(BUDGET_SCOPE, estimated_cost=0.0)
+        cost_ok = bool(budget_status.get("allowed"))
     if not cost_ok:
         raise RuntimeError("budget_guard_blocked")
 

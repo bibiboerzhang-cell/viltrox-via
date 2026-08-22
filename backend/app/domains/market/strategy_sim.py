@@ -306,7 +306,8 @@ def _build_candidates(
         fc: dict[str, Any] = {"status": "unavailable", "reason": "performance_forecast 模块缺席"}
         if forecast_mod is not None:
             try:
-                fc = forecast_mod.forecast_for_kol(int(kid), sku=sku, conn=db)
+                # 模拟是只读预览:dry_run=True 不落 vkpi_forecast_log 预测流水
+                fc = forecast_mod.forecast_for_kol(int(kid), sku=sku, conn=db, dry_run=True)
             except Exception as exc:  # noqa: BLE001
                 fc = {"status": "error", "reason": _text(str(exc), 200)}
         fc_ready = fc.get("status") == "ready" and _float_or_none(fc.get("expected_views_p50")) is not None

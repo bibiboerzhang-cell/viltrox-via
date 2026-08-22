@@ -90,7 +90,8 @@ class _FakeRateCard:
 
 class _FakeForecast:
     @staticmethod
-    def forecast_for_kol(kid, sku=None, conn=None):
+    def forecast_for_kol(kid, sku=None, conn=None, dry_run=False):
+        assert dry_run is True
         views = VIEWS[kid]
         return {
             "status": "ready",

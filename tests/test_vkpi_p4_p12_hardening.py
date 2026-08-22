@@ -640,6 +640,63 @@ def test_memory_readiness_keeps_p4_gate_closed_to_provider_calls(seeded_memory_r
         assert gates[key]["status"] == "pass"
 
 
+def test_p4_dry_run_uses_non_mutating_budget_preflight(monkeypatch):
+    class StopAfterBudget(RuntimeError):
+        pass
+
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        new_launch_match.memory,
+        "readiness",
+        lambda: {
+            "status": "ready_for_p4_dry_run",
+            "provider_calls_allowed": False,
+        },
+    )
+    monkeypatch.setattr(
+        new_launch_match,
+        "check_budget",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("dry-run must not use the mutating budget guard")
+        ),
+    )
+    monkeypatch.setattr(
+        new_launch_match,
+        "get_budget_status",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("dry-run must not roll the budget window")
+        ),
+    )
+
+    def readonly_budget(scope: str, *, estimated_cost: float = 0.0):
+        observed["scope"] = scope
+        observed["estimated_cost"] = estimated_cost
+        return {"configured": True, "allowed": True, "read_only": True}
+
+    monkeypatch.setattr(
+        new_launch_match,
+        "get_budget_status_readonly",
+        readonly_budget,
+    )
+    monkeypatch.setattr(
+        new_launch_match,
+        "_select_target_family",
+        lambda _query: (_ for _ in ()).throw(StopAfterBudget()),
+    )
+
+    with pytest.raises(StopAfterBudget):
+        new_launch_match.build_new_launch_match_preview(
+            product_query="AF 35mm",
+            with_llm_reasons=False,
+        )
+
+    assert observed == {
+        "scope": new_launch_match.BUDGET_SCOPE,
+        "estimated_cost": 0.0,
+    }
+
+
 def test_p4_new_launch_match_dry_run_is_explainable_and_zero_ai_cost(seeded_memory_readiness):
     before = _ai_cost_ledger_count()
 

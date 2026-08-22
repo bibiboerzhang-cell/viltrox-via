@@ -10,6 +10,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
+from app.domains.costs.budget_windows import project_budget_window
 from app.domains.costs.budget_guard_persistence import (
     clean_value as _persistence_clean_value,
     cost_decimal as _cost_decimal,
@@ -145,18 +146,6 @@ def _budget_payload(row: dict[str, Any], *, estimated_cost: float = 0.0) -> dict
     }
 
 
-# 设计为日窗(而非终身池)的非 cron scope:report_analysis 是 $3/日 的按需闸。
-_DAILY_WINDOW_SCOPES = ("dashboard:report_analysis",)
-
-
-def _is_daily_window_scope(scope_key: str) -> bool:
-    return scope_key.startswith("cron:") or scope_key in _DAILY_WINDOW_SCOPES
-
-
-def _is_monthly_window_scope(scope_key: str) -> bool:
-    return scope_key == "monthly_total" or scope_key.startswith("provider:")
-
-
 def _maybe_roll_budget_window(conn: Any, row: dict[str, Any]) -> dict[str, Any]:
     """窗口池惰性滚动(不依赖调度器;非窗口 scope 原样返回)。
 
@@ -164,31 +153,17 @@ def _maybe_roll_budget_window(conn: Any, row: dict[str, Any]) -> dict[str, Any]:
     下一个 UTC 零点。修复官号日报『$4/日』被实现成『$4/终身』后的永久 hard stop。
 
     月窗(monthly_total、provider:*):reset_at 过期即清零并推进到下月 1 日(UTC);
-    从未设置时只补窗口锚点、不清零，保留既有累计与台账读回口径。"""
-    scope_key = str(row.get("scope") or "")
-    daily = _is_daily_window_scope(scope_key)
-    monthly = _is_monthly_window_scope(scope_key)
-    if not daily and not monthly:
+    从未设置时只补窗口锚点、不清零，保留既有累计与台账读回口径。
+
+    投影口径(该不该滚/滚到哪/清不清零)统一出自 budget_windows.project_budget_window
+    纯函数;只读路径(budget_readonly)复用同一投影但绝不落 UPDATE/commit。"""
+    projected, roll_required, zero_spend = project_budget_window(row)
+    if not roll_required:
         return row
-    now = datetime.now(timezone.utc)
-    reset_raw = str(row.get("reset_at") or "").strip()
-    due = True
-    if reset_raw:
-        try:
-            due = now >= datetime.fromisoformat(reset_raw.replace("Z", "+00:00"))
-        except (TypeError, ValueError):
-            due = True
-    if not due:
-        return row
-    if daily:
-        next_reset = (now + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
-    elif now.month == 12:
-        next_reset = f"{now.year + 1:04d}-01-01T00:00:00Z"
-    else:
-        next_reset = f"{now.year:04d}-{now.month + 1:02d}-01T00:00:00Z"
-    zero_spend = daily or bool(reset_raw)
     if release_validation_active():  # Preserve persisted hard-stop; live traffic rolls after activation.
         return row
+    scope_key = str(row.get("scope") or "")
+    next_reset = str(projected.get("reset_at") or "")
     try:
         if zero_spend:
             conn.execute(
@@ -201,10 +176,7 @@ def _maybe_roll_budget_window(conn: Any, row: dict[str, Any]) -> dict[str, Any]:
                 (next_reset, scope_key),
             )
         conn.commit()
-        row = dict(row)
-        if zero_spend:
-            row["current_spend"] = 0
-        row["reset_at"] = next_reset
+        row = projected
     except Exception:
         logger.warning("budget window roll failed scope=%s", scope_key, exc_info=True)
     return row
