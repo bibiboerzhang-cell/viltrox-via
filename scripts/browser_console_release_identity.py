@@ -20,6 +20,7 @@ def evaluate_pages(
     application_origin: str,
     required_page_families: Mapping[str, tuple[str, str]],
     normalized_origin: Callable[[Any], str | None],
+    heading_aliases: Mapping[str, tuple[str, ...]] | None = None,
     redact_text: Callable[..., str],
     sanitize_url: Callable[[Any], str],
     failures: list[str],
@@ -96,7 +97,8 @@ def evaluate_pages(
             "known_family": expected is not None,
             "nav_key_matches": expected is not None and nav_key == expected[0],
             "expected_heading_matches": expected is not None and expected_heading == expected[1],
-            "observed_heading_matches": expected is not None and observed_heading == expected[1],
+            "observed_heading_matches": expected is not None
+            and observed_heading in {expected[1], *((heading_aliases or {}).get(family, ()))},
             "navigation_completed": raw.get("navigation_completed") is True,
             "page_settled": raw.get("page_settled") is True,
             "stage_present": raw.get("stage_present") is True,

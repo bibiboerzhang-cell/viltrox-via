@@ -158,6 +158,10 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
         "/api/admin/vkpi/my-kol/contribution-rollup",
         "/api/admin/vkpi/my-kol/daily-digest",
         "/api/admin/vkpi/my-kol/risk-index",
+        # 2026-08-22 MY KOL 数值跟进 / 聚合视频墙 / 镜头出镜:纯 SELECT 只读投影,零 provider。
+        "/api/admin/vkpi/my-kol/metrics/tracking-overview",
+        "/api/admin/vkpi/my-kol/board-ext/recent-videos",
+        "/api/admin/vkpi/lens-insights/summary",
         "/api/admin/vkpi/official-matrix",
         "/api/admin/vkpi/ops/cost-ledger",
         "/api/admin/vkpi/prediction-ledger/summary",
@@ -192,6 +196,11 @@ _READ_ONLY_GET_PATTERNS = (
     re.compile(r"^/api/admin/vkpi/kol-pool/[1-9][0-9]*/content-fit$"),
     re.compile(r"^/api/admin/vkpi/kol-pool/[1-9][0-9]*/detail-bundle$"),
     re.compile(r"^/api/admin/vkpi/kol-pool/[1-9][0-9]*/(?:signature|videos)$"),
+    # 2026-08-22 MY KOL 视频任务态恢复(my_kol_video_recovery_v1)/ 数值跟进趋势 / 镜头出镜:
+    # 行级 assert_target_readable 只读投影,零写入零 provider。
+    re.compile(r"^/api/admin/vkpi/my-kol/[1-9][0-9]*/videos$"),
+    re.compile(r"^/api/admin/vkpi/my-kol/[1-9][0-9]*/metrics/trends$"),
+    re.compile(r"^/api/admin/vkpi/lens-insights/kol/[1-9][0-9]*$"),
     # Persisted GOAFFPRO mapping + cached commission snapshot only. Provider
     # resolution and mutation live exclusively behind the neighbouring POSTs.
     re.compile(r"^/api/admin/vkpi/goaffpro/kol/[1-9][0-9]*/link$"),

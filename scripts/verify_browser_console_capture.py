@@ -101,6 +101,20 @@ REQUIRED_PAGE_FAMILIES: dict[str, tuple[str, str]] = {
     "strategyBoard": ("strategyBoard", "战略台"),
     "gtmCommand": ("gtmCommand", "GTM Command"),
 }
+# i18n 双语门面(2026-08-22):中文默认模式把英文源标题译成中文,复核以「英文标题或其中文译文」
+# 任一命中为准;译文真源 frontend/src/components/vkpi/cockpit/data/i18nZh.ts。
+REQUIRED_PAGE_HEADING_ALIASES: dict[str, tuple[str, ...]] = {
+    "dashboard": ("仪表盘",),
+    "kol-pool": ("KOL 人才库",),
+    "my-kol": ("我的 KOL",),
+    "projects": ("项目",),
+    "events": ("活动",),
+    "dealers": ("经销商",),
+    "triage": ("运维分诊",),
+    "skillStudio": ("技能工作室",),
+    "intelligent": ("智能问答",),
+    "gtmCommand": ("GTM 指挥台",),
+}
 _BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")
 _QUERY_SECRET = re.compile(r"(?i)(access_token|api[_-]?key|token|authorization)=([^&\s]+)")
@@ -612,6 +626,7 @@ def evaluate_capture(
         payload,
         application_origin=application_origin,
         required_page_families=REQUIRED_PAGE_FAMILIES,
+        heading_aliases=REQUIRED_PAGE_HEADING_ALIASES,
         normalized_origin=normalized_origin,
         redact_text=redact_text,
         sanitize_url=sanitize_url,
