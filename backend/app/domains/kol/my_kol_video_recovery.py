@@ -12,6 +12,7 @@ Contract ``my_kol_video_recovery_v1`` (served by
         { ...video row from _video_evidence_for_kol...,
           "evidence_id": 701,
           "published_at": "2026-08-01T10:00:00+00:00" | null,
+          "viltrox_modalities": ["visual", "subtitle", "audio"],  # subset, fixed order; [] when unknown
           "tasks": {
             "metric_refresh": TaskState,        # kol_video_metric_refresh + metric snapshot
             "final_v1": TaskState               # Gemini final_v1 job + analysis cache
@@ -58,6 +59,13 @@ Rules the contract guarantees:
   ``updated_at`` / ``view_count``, which drift with every metric refresh).  The
   cursor encodes the last row's ``(published_at, id)``; offsets are gone.
 * The response never includes provider payloads, prompts, or raw worker errors.
+* **viltrox_modalities** is the ordered subset of ``visual`` / ``subtitle`` /
+  ``audio`` found in the latest ready final_v1
+  ``brand_product_evidence.viltrox_evidence[].modality`` (``metadata`` hits and
+  pre-evidence results give ``[]``); zero LLM calls.
+
+Versioning: the contract name stays ``my_kol_video_recovery_v1``; every
+addition above is optional / additive and old readers keep working.
 """
 from __future__ import annotations
 
@@ -67,6 +75,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from app.core.logging import get_logger
+from app.domains.kol.video_evidence_projection import final_v1_modalities_for_evidence
 
 logger = get_logger("viltrox.domains.kol.my_kol_video_recovery")
 
@@ -496,11 +505,13 @@ def build_video_recovery_page(
         conn, job_type=VIDEO_JOB_TYPE, target_ids=evidence_ids, derive_method=FINAL_V1_DERIVE_METHOD
     )
     metric_jobs = _latest_jobs_for_targets(conn, job_type=METRIC_JOB_TYPE, target_ids=evidence_ids)
+    modalities = final_v1_modalities_for_evidence(conn, evidence_ids)
     items: list[dict[str, Any]] = []
     for video in rows:
         evidence_id = _int(video.get("evidence_id") or video.get("id"))
         video["evidence_id"] = evidence_id
         video["published_at"] = _stamp(video.get("published_at"))
+        video["viltrox_modalities"] = list(modalities.get(evidence_id) or [])
         video["tasks"] = {
             "metric_refresh": metric_refresh_task_state(video, metric_jobs.get(evidence_id)),
             "final_v1": final_v1_task_state(caches.get(evidence_id), final_jobs.get(evidence_id)),

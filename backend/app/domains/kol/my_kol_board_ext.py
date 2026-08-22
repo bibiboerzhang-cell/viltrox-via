@@ -29,6 +29,10 @@ GET /api/admin/vkpi/my-kol/board-ext?days=30(与 aggregate 同前缀、同 requi
                     N 条(封顶 RECENT_VIDEOS_LIMIT,双层封顶)按发布时间降序,
                     带缩略图三件套(创意库同一条毒缓存自愈链 cached → raw →
                     youtube 派生);view_count NULL 原样透出(未实测 ≠ 0 播放)。
+                    2026-08 闭环增量(U2,可选新增、旧读者不受影响):行级
+                    viltrox_modalities(final_v1 品牌证据 visual/subtitle/audio
+                    子集,固定序去重,metadata 不算,缺则 [];CTE 内只投影
+                    modality 字符串,证据 detail 原文不出库)。
   v_content         V 相关内容五档互斥证据:cooperation(project_id 有效关联)/
                     analysis_confirmed(latest ready final_v1 的 detected=true 或
                     products 非空)/title_mention(标题含 viltrox/唯卓仕/唯卓)/
@@ -73,6 +77,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.kol.video_evidence_projection import viltrox_modalities
 from app.domains.projects import stage_canonical
 
 logger = get_logger(__name__)
@@ -623,6 +628,7 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
             "has_final_v1_cache": _truthy_db(rec.get("has_final_v1_cache")),
             "llm_viltrox_status": brand_status or None,
             "llm_viltrox_detected": detected,
+            "viltrox_modalities": viltrox_modalities(rec.get("llm_viltrox_modalities")),
             "v_tier": tier,
             **analysis_lists,
             **_thumbnail_fields(rec),
@@ -638,7 +644,9 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
             "缩略图三件套=创意库同一条毒缓存自愈链(cached → raw → youtube 派生,"
             "失败占位不算真图);V 五档与v_content共用同一 CTE:有效 project_id 关联 > "
             "latest ready final_v1 detected/products > 中英文标题词(viltrox/唯卓仕/唯卓) > "
-            "explicit false 非相关 > 未判定;只下发结构化证据，不下发深析原文"
+            "explicit false 非相关 > 未判定;只下发结构化证据，不下发深析原文;"
+            "viltrox_modalities=final_v1 brand_product_evidence.viltrox_evidence[].modality 的 "
+            "visual/subtitle/audio 固定序子集(metadata 不算,缺则 [])"
         ),
     }
     if not items:

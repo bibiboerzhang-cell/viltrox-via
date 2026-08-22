@@ -39,6 +39,7 @@ def _conn() -> sqlite3.Connection:
             target_id TEXT NOT NULL,
             derive_method TEXT NOT NULL,
             status TEXT NOT NULL,
+            result TEXT,
             updated_at TEXT
         );
         CREATE TABLE apify_jobs (
@@ -212,6 +213,7 @@ def test_page_unifies_profile_metric_and_final_v1_task_states_and_keeps_freshnes
         assert rows[6]["tasks"]["metric_refresh"]["status"] == "not_requested"
 
         for row in page["items"]:
+            assert row["viltrox_modalities"] == []          # fixture caches carry no evidence block
             for task in row["tasks"].values():
                 assert task["status"] in my_kol_video_recovery.TASK_STATUSES
                 assert set(task) == {"status", "job_id", "requested_at", "updated_at", "data"}
@@ -438,3 +440,93 @@ def test_route_rejects_offset_cursor_and_passes_keyset_to_loader(monkeypatch) ->
     assert calls["load"] == (88, 51, True, ("2026-08-07T10:00:00Z", 3))
     assert calls["build"][1]["limit"] == 50
     assert result["items"][0]["evidence_id"] == 8
+
+
+# ── U2: viltrox_modalities projection (final_v1 brand_product_evidence) ───
+
+
+def _final_v1_result(modalities: list[str], *, layer1_only: bool = False) -> str:
+    evidence = [
+        {"modality": modality, "timestamp": "00:1%d" % index, "detail": "secret-detail-%d" % index, "confidence": 0.9}
+        for index, modality in enumerate(modalities)
+    ]
+    block = {"viltrox_status": "present" if evidence else "unknown", "viltrox_evidence": evidence}
+    raw: dict = {"viltrox_detected": bool(evidence), "viltrox_products_all": []}
+    if layer1_only:
+        raw["video_analysis_final_v1"] = {"layer1_visual_content": {"brand_product_evidence": block}}
+    else:
+        raw["brand_product_evidence"] = block
+    return json.dumps({"raw_gemini_video": raw})
+
+
+def _cache(conn: sqlite3.Connection, target_id: int, result: str | None, *, status: str = "ready") -> None:
+    conn.execute(
+        "INSERT INTO vkpi_analysis_cache (target_type, target_id, derive_method, status, result, updated_at) "
+        "VALUES ('video', ?, 'video_analysis_final_v1', ?, ?, '2026-08-20T10:00:00Z')",
+        (str(target_id), status, result),
+    )
+
+
+def test_viltrox_modalities_projects_three_combinations_without_leaking_detail() -> None:
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM vkpi_analysis_cache")
+        _cache(conn, 1, _final_v1_result(["visual"]))                                   # visual only
+        _cache(conn, 2, _final_v1_result(["audio", "subtitle", "audio"]))               # two kinds, dup + unordered
+        _cache(conn, 3, _final_v1_result(["metadata", "audio", "visual", "subtitle"]))  # all three, metadata dropped
+        _cache(conn, 4, _final_v1_result(["subtitle"], layer1_only=True))              # layer1 copy only
+        _cache(conn, 5, json.dumps({"raw_gemini_video": {"viltrox_detected": True}}))  # legacy result, no block
+        _cache(conn, 6, "{not json")                                                    # malformed
+        _cache(conn, 7, _final_v1_result(["visual"]), status="stale")                  # not ready -> ignored
+        # a newer ready cache row wins over an older one for the same evidence
+        _cache(conn, 1, _final_v1_result(["audio"]))
+        conn.commit()
+
+        page = my_kol_video_recovery.build_video_recovery_page(
+            conn, kol_pool_id=101, videos=[_video(index) for index in range(1, 8)], limit=20,
+        )
+        rows = {row["evidence_id"]: row["viltrox_modalities"] for row in page["items"]}
+        assert rows == {
+            1: ["audio"],
+            2: ["subtitle", "audio"],
+            3: ["visual", "subtitle", "audio"],
+            4: ["subtitle"],
+            5: [],
+            6: [],
+            7: [],
+        }
+        assert "secret-detail" not in json.dumps(page, ensure_ascii=False)
+    finally:
+        conn.close()
+
+
+def test_viltrox_modalities_normaliser_is_order_stable_and_fail_closed() -> None:
+    from app.domains.kol import video_evidence_projection as projection
+
+    assert projection.viltrox_modalities(None) == []
+    assert projection.viltrox_modalities("") == []
+    assert projection.viltrox_modalities("not-json") == []
+    assert projection.viltrox_modalities({"modality": "visual"}) == []
+    assert projection.viltrox_modalities(["AUDIO", " visual ", "metadata", "audio"]) == ["visual", "audio"]
+    assert projection.viltrox_modalities('[{"modality": "subtitle"}, {"modality": "visual"}]') == ["visual", "subtitle"]
+    assert projection.merge_modalities('["audio"]', [{"modality": "visual"}], None) == ["visual", "audio"]
+    # the Postgres projection only ever reads modality strings (detail never leaves the DB)
+    assert "[*].modality" in projection.FINAL_V1_MODALITIES_PG_EXPR
+    assert "detail" not in projection.FINAL_V1_MODALITIES_PG_EXPR
+    assert "%" not in projection.FINAL_V1_MODALITIES_PG_EXPR
+
+
+def test_viltrox_modalities_degrade_to_empty_when_cache_schema_is_narrow() -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.executescript(
+            "CREATE TABLE vkpi_analysis_cache (id INTEGER PRIMARY KEY, target_type TEXT, target_id TEXT, "
+            "derive_method TEXT, status TEXT, updated_at TEXT);"
+        )
+        from app.domains.kol import video_evidence_projection as projection
+
+        assert projection.final_v1_modalities_for_evidence(conn, [1, 2]) == {}
+        assert projection.final_v1_modalities_for_evidence(conn, []) == {}
+    finally:
+        conn.close()

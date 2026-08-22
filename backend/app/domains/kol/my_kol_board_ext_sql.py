@@ -9,6 +9,8 @@ SQL 红线(契约测试静态审查):全参数化 ? 占位;零字面 percent、�
 """
 from __future__ import annotations
 
+from app.domains.kol.video_evidence_projection import FINAL_V1_MODALITIES_PG_EXPR
+
 BOARD_METHOD = "my_kol_board_ext_v1"
 # 标题只是中等强度证据；英文与两个中文品牌词统一参数化匹配。
 VILTROX_TOKEN = "viltrox"          # 保留单词常量供旧调用方引用
@@ -190,6 +192,9 @@ VIEWS_TOP_SQL = f"""
 # recent_videos 都以这个 CTE 为起点，避免卡片与统计口径分叉。
 # latest ready final_v1 严格按 cache id DESC 取一条；只投影
 # detected/products/competitor_mentions 结构化字段，不返回原始深析全文。
+# final_v1_viltrox_modalities(U2):brand_product_evidence.viltrox_evidence[].modality
+# 只投影 modality 字符串数组(video_evidence_projection 表达式,证据 detail 不出库),
+# Python 侧归一成 visual/subtitle/audio 固定序子集;旧结果无该块 → 空数组。
 V_CONTENT_CLASSIFIED_CTE = """
 WITH v_content_signals AS (
     SELECT e.id AS evidence_id,
@@ -201,6 +206,7 @@ WITH v_content_signals AS (
            lower(COALESCE(fv.result #>> '{raw_gemini_video,viltrox_detected}', '')) AS final_v1_detected,
            fv.result #> '{raw_gemini_video,viltrox_products_all}' AS final_v1_products,
            fv.result #> '{raw_gemini_video,competitor_mentions}' AS final_v1_competitor_mentions,
+           __FINAL_V1_MODALITIES_EXPR__ AS final_v1_viltrox_modalities,
            CASE
                WHEN jsonb_typeof(fv.result #> '{raw_gemini_video,viltrox_products_all}') = 'array'
                THEN jsonb_array_length(fv.result #> '{raw_gemini_video,viltrox_products_all}')
@@ -237,7 +243,7 @@ v_content_classified AS (
            END AS v_tier
     FROM v_content_signals s
 )
-"""
+""".replace("__FINAL_V1_MODALITIES_EXPR__", FINAL_V1_MODALITIES_PG_EXPR)
 
 RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
     SELECT e.id AS evidence_id,
@@ -261,6 +267,7 @@ RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
            vc.final_v1_detected AS llm_viltrox_detected_text,
            vc.final_v1_products AS llm_viltrox_products,
            vc.final_v1_competitor_mentions AS llm_competitor_mentions,
+           vc.final_v1_viltrox_modalities AS llm_viltrox_modalities,
            vc.v_tier AS v_tier
     FROM vkpi_kol_video_evidence e
     JOIN v_content_classified vc ON vc.evidence_id = e.id
