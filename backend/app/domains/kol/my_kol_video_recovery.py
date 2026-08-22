@@ -59,10 +59,13 @@ Rules the contract guarantees:
   ``updated_at`` / ``view_count``, which drift with every metric refresh).  The
   cursor encodes the last row's ``(published_at, id)``; offsets are gone.
 * The response never includes provider payloads, prompts, or raw worker errors.
-* **viltrox_modalities** is the ordered subset of ``visual`` / ``subtitle`` /
-  ``audio`` found in the latest ready final_v1
-  ``brand_product_evidence.viltrox_evidence[].modality`` (``metadata`` hits and
-  pre-evidence results give ``[]``); zero LLM calls.
+* **Shared projection.**  ``attach_task_states`` is the single implementation
+  behind this endpoint and the MY KOL board-ext ``recent_videos`` wall, so
+  the same evidence id yields byte-identical ``tasks`` / ``viltrox_modalities``
+  on both surfaces.  ``viltrox_modalities`` is the ordered subset of
+  ``visual`` / ``subtitle`` / ``audio`` found in the latest ready final_v1
+  ``brand_product_evidence.viltrox_evidence[].modality`` (``metadata`` hits
+  and pre-evidence results give ``[]``); zero LLM calls.
 
 Versioning: the contract name stays ``my_kol_video_recovery_v1``; every
 addition above is optional / additive and old readers keep working.
@@ -75,7 +78,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from app.core.logging import get_logger
-from app.domains.kol.video_evidence_projection import final_v1_modalities_for_evidence
+from app.domains.kol.video_evidence_projection import (
+    final_v1_modalities_for_evidence,
+    viltrox_modalities,
+)
 
 logger = get_logger("viltrox.domains.kol.my_kol_video_recovery")
 
@@ -477,6 +483,72 @@ def _library_summary(conn: Any, kol_pool_id: int) -> dict[str, int]:
     }
 
 
+def _metric_trends_for_rows(conn: Any, evidence_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Tracking-layer truth for rows that did not come through pool_detail."""
+    if not evidence_ids:
+        return {}
+    try:
+        from app.domains import content_metric_snapshots
+
+        return content_metric_snapshots.metric_trends_for_evidence(conn, evidence_ids) or {}
+    except Exception:
+        # Tracking layer missing/renamed on a narrow mirror: metric_refresh data
+        # degrades to "unavailable" honestly instead of failing the page.
+        logger.warning("metric trends unavailable for task-state projection", exc_info=True)
+        return {}
+
+
+def attach_task_states(
+    conn: Any,
+    rows: list[dict[str, Any]],
+    *,
+    fetch_metric_trends: bool = False,
+    fetch_modalities: bool = True,
+) -> list[dict[str, Any]]:
+    """Attach ``tasks`` + ``viltrox_modalities`` to evidence rows (shared projection).
+
+    Single implementation behind ``/my-kol/{id}/videos`` and the board-ext
+    ``recent_videos`` wall: the same evidence id yields identical TaskStates on
+    both surfaces.  ``rows`` are mutated in place and returned; each gains
+    ``evidence_id`` (int), ``published_at`` (iso | null), ``viltrox_modalities``
+    and ``tasks``.  ``fetch_metric_trends=True`` pulls the tracking snapshot
+    summary (freshness / last_success / counts) for rows that do not already
+    carry it (pool_detail rows do); it is read only for the TaskState and never
+    copied onto the public row.  ``fetch_modalities=False`` keeps a caller's
+    own ``viltrox_modalities`` projection (board-ext reads it inside its CTE)
+    instead of batch-reading the analysis cache again; both paths normalise
+    through ``video_evidence_projection.viltrox_modalities``.
+    """
+    evidence_ids = list(
+        dict.fromkeys(
+            _int(video.get("evidence_id") or video.get("id"))
+            for video in rows
+            if _int(video.get("evidence_id") or video.get("id")) > 0
+        )
+    )
+    caches = _final_v1_caches(conn, evidence_ids)
+    final_jobs = _latest_jobs_for_targets(
+        conn, job_type=VIDEO_JOB_TYPE, target_ids=evidence_ids, derive_method=FINAL_V1_DERIVE_METHOD
+    )
+    metric_jobs = _latest_jobs_for_targets(conn, job_type=METRIC_JOB_TYPE, target_ids=evidence_ids)
+    modalities = final_v1_modalities_for_evidence(conn, evidence_ids) if fetch_modalities else {}
+    trends = _metric_trends_for_rows(conn, evidence_ids) if fetch_metric_trends else {}
+    for video in rows:
+        evidence_id = _int(video.get("evidence_id") or video.get("id"))
+        video["evidence_id"] = evidence_id
+        video["published_at"] = _stamp(video.get("published_at"))
+        if fetch_modalities:
+            video["viltrox_modalities"] = list(modalities.get(evidence_id) or [])
+        else:
+            video["viltrox_modalities"] = viltrox_modalities(video.get("viltrox_modalities"))
+        tracking = {**video, **(trends.get(evidence_id) or {})} if fetch_metric_trends else video
+        video["tasks"] = {
+            "metric_refresh": metric_refresh_task_state(tracking, metric_jobs.get(evidence_id)),
+            "final_v1": final_v1_task_state(caches.get(evidence_id), final_jobs.get(evidence_id)),
+        }
+    return rows
+
+
 def build_video_recovery_page(
     conn: Any,
     *,
@@ -492,31 +564,7 @@ def build_video_recovery_page(
     page_limit = max(1, min(MAX_PAGE_SIZE, int(limit or 1)))
     rows = [dict(video) for video in videos[: page_limit + 1]]
     has_more = len(rows) > page_limit
-    rows = rows[:page_limit]
-    evidence_ids = list(
-        dict.fromkeys(
-            _int(video.get("evidence_id") or video.get("id"))
-            for video in rows
-            if _int(video.get("evidence_id") or video.get("id")) > 0
-        )
-    )
-    caches = _final_v1_caches(conn, evidence_ids)
-    final_jobs = _latest_jobs_for_targets(
-        conn, job_type=VIDEO_JOB_TYPE, target_ids=evidence_ids, derive_method=FINAL_V1_DERIVE_METHOD
-    )
-    metric_jobs = _latest_jobs_for_targets(conn, job_type=METRIC_JOB_TYPE, target_ids=evidence_ids)
-    modalities = final_v1_modalities_for_evidence(conn, evidence_ids)
-    items: list[dict[str, Any]] = []
-    for video in rows:
-        evidence_id = _int(video.get("evidence_id") or video.get("id"))
-        video["evidence_id"] = evidence_id
-        video["published_at"] = _stamp(video.get("published_at"))
-        video["viltrox_modalities"] = list(modalities.get(evidence_id) or [])
-        video["tasks"] = {
-            "metric_refresh": metric_refresh_task_state(video, metric_jobs.get(evidence_id)),
-            "final_v1": final_v1_task_state(caches.get(evidence_id), final_jobs.get(evidence_id)),
-        }
-        items.append(video)
+    items = attach_task_states(conn, rows[:page_limit])
 
     summary = _library_summary(conn, int(kol_pool_id))
     last = items[-1] if items else None
@@ -551,6 +599,7 @@ __all__ = [
     "DEFAULT_PAGE_SIZE",
     "MAX_PAGE_SIZE",
     "TASK_STATUSES",
+    "attach_task_states",
     "build_video_recovery_page",
     "decode_cursor",
     "encode_cursor",

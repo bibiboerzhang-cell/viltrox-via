@@ -245,6 +245,32 @@ v_content_classified AS (
 )
 """.replace("__FINAL_V1_MODALITIES_EXPR__", FINAL_V1_MODALITIES_PG_EXPR)
 
+# recent_videos keyset 游标条件(与 my-kol videos / pool_detail 同一口径:published_at =
+# COALESCE(publish_date, posted_at, created_at),序 published_at DESC NULLS LAST, id DESC;
+# 游标 (p, id) 之后 = p 更早 / p 相同且 id 更小 / p 为 NULL 尾段按 id 递减)。
+# 占位 7 个,_recent_keyset_params 供参:use_keyset, p, p, p, id, p, id。首参 FALSE =
+# 旧调用无游标,整段短路为真,行为与无游标时完全一致。
+_RECENT_KEYSET_COND = """(
+        NOT ?
+        OR (
+            CAST(? AS TIMESTAMPTZ) IS NOT NULL
+            AND (
+                COALESCE(e.publish_date, e.posted_at, e.created_at) IS NULL
+                OR COALESCE(e.publish_date, e.posted_at, e.created_at) < CAST(? AS TIMESTAMPTZ)
+                OR (
+                    COALESCE(e.publish_date, e.posted_at, e.created_at) = CAST(? AS TIMESTAMPTZ)
+                    AND e.id < ?
+                )
+            )
+        )
+        OR (
+            CAST(? AS TIMESTAMPTZ) IS NULL
+            AND COALESCE(e.publish_date, e.posted_at, e.created_at) IS NULL
+            AND e.id < ?
+        )
+      )"""
+RECENT_KEYSET_PARAM_COUNT = 7
+
 RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
     SELECT e.id AS evidence_id,
            e.kol_pool_id AS kol_pool_id,
@@ -259,6 +285,8 @@ RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
            e.publish_date AS publish_date,
            e.posted_at AS posted_at,
            e.created_at AS created_at,
+           e.metrics_scraped_at AS metrics_scraped_at,
+           COALESCE(e.publish_date, e.posted_at, e.created_at) AS published_at,
            COALESCE(e.evidence_type, 'video') AS evidence_type,
            COALESCE(NULLIF(kp.display_name, ''), kp.handle, '') AS kol_name,
            COALESCE(kp.handle, '') AS kol_handle,
@@ -276,6 +304,7 @@ RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
       AND e.is_active IS NOT FALSE
       AND COALESCE(e.evidence_type, 'video') IN ('video', 'image')
       AND {_COLLECTION_COND}
+      AND {_RECENT_KEYSET_COND}
     ORDER BY COALESCE(e.publish_date, e.posted_at, e.created_at) DESC NULLS LAST, e.id DESC
     LIMIT ?
 """

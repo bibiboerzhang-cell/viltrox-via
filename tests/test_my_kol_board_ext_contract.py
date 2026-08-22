@@ -528,9 +528,15 @@ def test_recent_videos_limit_double_capped_scope_pushed_and_empty_reason(monkeyp
     conn = _FakeConn(routes={ext.RECENT_VIDEOS_SQL: over})
     body = _build(conn, sid=7684)
     # Python 层二次封顶(哪怕 SQL 层被 mock 放水)+ scope 4 参与 LIMIT 常量下推
+    # (SQL 多取 1 行只用于 has_more 判定;无游标时 keyset 段 7 参短路为假 = 旧行为)
     assert len(body["recent_videos"]["items"]) == ext.RECENT_VIDEOS_LIMIT
+    assert body["recent_videos"]["page"]["has_more"] is True
     params = next(p for s, p in conn.calls if s == ext.RECENT_VIDEOS_SQL)
-    assert params == (*ext.VILTROX_TITLE_TOKENS, 7684, 7684, 7684, 7684, ext.RECENT_VIDEOS_LIMIT)
+    assert params == (
+        *ext.VILTROX_TITLE_TOKENS, 7684, 7684, 7684, 7684,
+        False, None, None, None, 0, None, 0,
+        ext.RECENT_VIDEOS_LIMIT + 1,
+    )
     # 空收藏集 → 诚实 empty + reason(不摆假卡)
     empty = _build(_FakeConn())["recent_videos"]
     assert empty["status"] == "empty" and "诚实空" in empty["reason"]

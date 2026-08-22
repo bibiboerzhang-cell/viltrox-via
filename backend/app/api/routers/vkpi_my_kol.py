@@ -308,10 +308,21 @@ def my_kol_aggregate_endpoint(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _decode_recent_videos_cursor(cursor: str | None) -> tuple[str | None, int] | None:
+    """board-ext recent_videos 游标与 my-kol videos 同一 keyset 编码;坏游标 400 fail-closed。"""
+    from app.domains.kol import my_kol_video_recovery
+
+    try:
+        return my_kol_video_recovery.decode_cursor(cursor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid videos cursor") from exc
+
+
 @router.get("/my-kol/board-ext")
 def my_kol_board_ext_endpoint(
     days: int = Query(default=30, ge=1, le=365),
     staff_id: int | None = Query(default=None, ge=1),
+    cursor: str | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """【M2】MY KOL 改版看板聚合(七组读数,一次调用全给齐;纯 SELECT 零副作用)。
@@ -320,6 +331,9 @@ def my_kol_board_ext_endpoint(
     funnel(13 真阶段归并 8 段)、platform_dist、fit_dist(只出桶计数)、
     contact_coverage(只出类型计数,绝不出明文联系方式)、views_top、v_content
     (三档派生)。口径细节全在 kol/my_kol_board_ext.py 各组 basis。
+    ``cursor``(可选)= recent_videos.page.next_cursor 的 keyset 游标,只翻
+    recent_videos 一组(其余七组不受影响);无游标=旧行为;坏游标 400。
+    只翻视频墙请用 /my-kol/board-ext/recent-videos,不重算其余七组。
 
     scope 与本路由家族同款 viewer/own-only 口径:员工经 scope.effective_staff_id
     恒被压回本人(own-only);管理层缺省 None=全团队收藏集看板,显式 ?staff_id=
@@ -328,11 +342,35 @@ def my_kol_board_ext_endpoint(
     无 staff 身份的非管理层拒 403(防 scope 漏成全量)。
     红线:纯读;零写 viltrox_fit_score / 不碰 rule_v0;零 LLM;全程 ? 占位。
     """
+    before = _decode_recent_videos_cursor(cursor)
     target = scope.effective_staff_id(staff, staff_id)
     if target is None and not scope.can_view_all(staff):
         raise HTTPException(status_code=403, detail="no staff identity in scope")
     body = my_kol_board_ext.build_board_ext(
-        get_conn(), staff_scope_id=target, days=int(days)
+        get_conn(), staff_scope_id=target, days=int(days), recent_videos_before=before
+    )
+    body["scope"] = scope.scope_context(staff, staff_id)
+    return body
+
+
+@router.get("/my-kol/board-ext/recent-videos")
+def my_kol_board_ext_recent_videos_endpoint(
+    staff_id: int | None = Query(default=None, ge=1),
+    cursor: str | None = Query(default=None),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """board-ext recent_videos 单组翻页(「加载更多」;纯 SELECT 零副作用)。
+
+    返回体 = board-ext.recent_videos 同一结构(items 行含 tasks / viltrox_modalities /
+    published_at,page{has_more, next_cursor} keyset 游标)+ 信封字段;scope /
+    权限口径与 board-ext 完全一致(员工 own-only、管理层 ?staff_id=)。
+    """
+    before = _decode_recent_videos_cursor(cursor)
+    target = scope.effective_staff_id(staff, staff_id)
+    if target is None and not scope.can_view_all(staff):
+        raise HTTPException(status_code=403, detail="no staff identity in scope")
+    body = my_kol_board_ext.build_recent_videos_page(
+        get_conn(), staff_scope_id=target, before=before
     )
     body["scope"] = scope.scope_context(staff, staff_id)
     return body

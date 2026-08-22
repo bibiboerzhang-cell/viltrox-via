@@ -29,10 +29,14 @@ GET /api/admin/vkpi/my-kol/board-ext?days=30(与 aggregate 同前缀、同 requi
                     N 条(封顶 RECENT_VIDEOS_LIMIT,双层封顶)按发布时间降序,
                     带缩略图三件套(创意库同一条毒缓存自愈链 cached → raw →
                     youtube 派生);view_count NULL 原样透出(未实测 ≠ 0 播放)。
-                    2026-08 闭环增量(U2,可选新增、旧读者不受影响):行级
-                    viltrox_modalities(final_v1 品牌证据 visual/subtitle/audio
-                    子集,固定序去重,metadata 不算,缺则 [];CTE 内只投影
-                    modality 字符串,证据 detail 原文不出库)。
+                    2026-08 闭环增量(U2/U3,全部可选新增、旧读者不受影响):
+                    行级 viltrox_modalities(final_v1 品牌证据 visual/subtitle/audio
+                    子集,缺则 [])、tasks{metric_refresh, final_v1} TaskState(复用
+                    my_kol_video_recovery.attach_task_states,与 my-kol videos 端点
+                    同一实现、同一 evidence 字节一致)、published_at
+                    + keyset 游标 page{limit, returned, has_more, next_cursor,
+                    cursor_kind, order}(序 published_at DESC, id DESC;?cursor=
+                    只作用于本组,其余七组不受游标影响;无游标=首页,行为不变)。
   v_content         V 相关内容五档互斥证据:cooperation(project_id 有效关联)/
                     analysis_confirmed(latest ready final_v1 的 detected=true 或
                     products 非空)/title_mention(标题含 viltrox/唯卓仕/唯卓)/
@@ -77,6 +81,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.kol import my_kol_video_recovery as recovery
 from app.domains.kol.video_evidence_projection import viltrox_modalities
 from app.domains.projects import stage_canonical
 
@@ -104,6 +109,7 @@ from app.domains.kol.my_kol_board_ext_sql import (  # noqa: F401 — 契约测�
     PLATFORM_MAX_ITEMS,
     PLATFORM_ROWS_LIMIT,
     POOL_FOLLOWERS_DAY_SQL,
+    RECENT_KEYSET_PARAM_COUNT,
     RECENT_VIDEOS_LIMIT,
     RECENT_VIDEOS_SQL,
     SERIES_MAX_DAYS,
@@ -565,23 +571,52 @@ def _views_top(conn: Any, sid: int) -> dict[str, Any]:
     return body
 
 
-def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
-    """8. recent_videos:收藏集最近采集视频墙 + 五档 Viltrox 证据。
+def _recent_keyset_params(before: tuple[str | None, int] | None) -> tuple[Any, ...]:
+    """RECENT_VIDEOS_SQL 游标段 7 参:use_keyset, p, p, p, id, p, id(无游标全空短路)。"""
+    if not before or _int0(before[1]) <= 0:
+        params: tuple[Any, ...] = (False, None, None, None, 0, None, 0)
+    else:
+        published_at, evidence_id = before
+        key = str(published_at) if published_at not in (None, "") else None
+        params = (True, key, key, key, int(evidence_id), key, int(evidence_id))
+    assert len(params) == RECENT_KEYSET_PARAM_COUNT
+    return params
+
+
+def _recent_videos(
+    conn: Any,
+    sid: int,
+    *,
+    before: tuple[str | None, int] | None = None,
+) -> dict[str, Any]:
+    """8. recent_videos:收藏集最近采集视频墙 + 五档 Viltrox 证据 + 任务态 + 游标。
 
     收藏集(收藏 ∪ 共享,scope 同族)evidence 最近 N 条,按发布时间(缺则回退
-    posted_at/采集时间)降序;LIMIT 双层封顶。缩略图三件套复用创意库同一条
-    毒缓存自愈链(creative_segments._thumbnail_fields:cached → raw → youtube
-    派生,失败占位 SVG 不算真图,三路皆无 = null 前端诚实占位)。view_count
-    保持 NULL 原样透出(未实测 ≠ 0 播放);列白名单,零明文联系方式零 fit 分。
+    posted_at/采集时间)降序;LIMIT 双层封顶(SQL 多取 1 行只用于 has_more 判定)。
+    缩略图三件套复用创意库同一条毒缓存自愈链(creative_segments._thumbnail_fields:
+    cached → raw → youtube 派生,失败占位 SVG 不算真图,三路皆无 = null 前端诚实
+    占位)。view_count 保持 NULL 原样透出(未实测 ≠ 0 播放);列白名单,零明文联系
+    方式零 fit 分。
+
+    ``before``=(published_at, evidence_id) keyset 游标(my_kol_video_recovery.decode_cursor
+    产物):只取严格排在该键之后的行;None=首页,SQL 游标段短路为真,与旧调用同行。
+    行级 tasks / viltrox_modalities 由 recovery.attach_task_states 统一投影(零 LLM)。
     """
     from app.domains.content.creative_segments import _thumbnail_fields
 
     rows = conn.execute(
         RECENT_VIDEOS_SQL,
-        (*VILTROX_TITLE_TOKENS, *_scope_params(sid), RECENT_VIDEOS_LIMIT),
+        (
+            *VILTROX_TITLE_TOKENS,
+            *_scope_params(sid),
+            *_recent_keyset_params(before),
+            RECENT_VIDEOS_LIMIT + 1,
+        ),
     ).fetchall()
+    rows = list(rows)
+    has_more = len(rows) > RECENT_VIDEOS_LIMIT
     items: list[dict[str, Any]] = []
-    for r in list(rows)[:RECENT_VIDEOS_LIMIT]:
+    for r in rows[:RECENT_VIDEOS_LIMIT]:
         rec = dict(r)
         view_count = rec.get("view_count")
         like_count = rec.get("like_count")
@@ -609,6 +644,9 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
                 final_v1_detected=detected,
                 final_v1_products=analysis_lists["llm_viltrox_products"],
             )
+        published_at = rec.get("published_at")
+        if published_at in (None, ""):
+            published_at = rec.get("publish_date") or rec.get("posted_at") or rec.get("created_at")
         items.append({
             "evidence_id": _int0(rec.get("evidence_id")),
             "kol_pool_id": _int0(rec.get("kol_pool_id")),
@@ -622,6 +660,8 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
             "publish_date": _day_str(rec.get("publish_date")) or None,
             "posted_at": _ts_str(rec.get("posted_at")) or None,
             "collected_at": _ts_str(rec.get("created_at")) or None,
+            "published_at": _ts_str(published_at) or None,
+            "metrics_scraped_at": _ts_str(rec.get("metrics_scraped_at")) or None,
             "evidence_type": str(rec.get("evidence_type") or "video"),
             "kol_name": str(rec.get("kol_name") or ""),
             "kol_handle": str(rec.get("kol_handle") or ""),
@@ -633,10 +673,27 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
             **analysis_lists,
             **_thumbnail_fields(rec),
         })
+    # 任务态统一投影(与 my-kol videos 端点同一实现);modality 以本组 CTE 投影为准,
+    # attach 不再二次批查 analysis cache,只补 tasks / 规整 published_at。
+    recovery.attach_task_states(conn, items, fetch_metric_trends=True, fetch_modalities=False)
+    last = items[-1] if items else None
+    next_cursor = (
+        recovery.encode_cursor(last.get("published_at"), last["evidence_id"])
+        if has_more and last and last["evidence_id"] > 0
+        else None
+    )
     body: dict[str, Any] = {
         "status": "ready" if items else "empty",
         "items": items,
         "limit": RECENT_VIDEOS_LIMIT,
+        "page": {
+            "limit": RECENT_VIDEOS_LIMIT,
+            "returned": len(items),
+            "has_more": bool(has_more),
+            "next_cursor": next_cursor,
+            "cursor_kind": recovery.CURSOR_KIND,
+            "order": recovery.ORDER,
+        },
         "basis": (
             "vkpi_kol_video_evidence × 收藏集(收藏 ∪ 共享,去重;is_active IS NOT FALSE,"
             "video/image 两类)按 COALESCE(publish_date, posted_at, created_at) 降序取最近 "
@@ -646,11 +703,17 @@ def _recent_videos(conn: Any, sid: int) -> dict[str, Any]:
             "latest ready final_v1 detected/products > 中英文标题词(viltrox/唯卓仕/唯卓) > "
             "explicit false 非相关 > 未判定;只下发结构化证据，不下发深析原文;"
             "viltrox_modalities=final_v1 brand_product_evidence.viltrox_evidence[].modality 的 "
-            "visual/subtitle/audio 固定序子集(metadata 不算,缺则 [])"
+            "visual/subtitle/audio 固定序子集(metadata 不算,缺则 []);tasks=apify_jobs 最新"
+            "一条 × 持久化产物(与 my-kol videos 端点同一投影函数);"
+            "page=keyset 游标 (published_at DESC, id DESC),?cursor= 只翻本组"
         ),
     }
     if not items:
-        body["reason"] = "收藏集内零 evidence——内容墙诚实空,不摆假卡。"
+        body["reason"] = (
+            "收藏集内零 evidence——内容墙诚实空,不摆假卡。"
+            if before is None
+            else "游标之后再无 evidence——已到末页。"
+        )
     return body
 
 
@@ -734,17 +797,47 @@ def _v_content(conn: Any, sid: int) -> dict[str, Any]:
 # ── 主入口 ──────────────────────────────────────────────────────────────
 
 
+def build_recent_videos_page(
+    conn: Any = None,
+    *,
+    staff_scope_id: int | None = None,
+    before: tuple[str | None, int] | None = None,
+) -> dict[str, Any]:
+    """只翻 recent_videos 一组(前端「加载更多」用,不重算其余七组)。
+
+    返回体 = recent_videos 组 + 同款信封字段(status/staff_scope_id/method/
+    generated_at);失败诚实 {status:'error'} 不抛。
+    """
+    from app.db.connection import get_conn
+
+    db = conn if conn is not None else get_conn()
+    sid = _int0(staff_scope_id)
+    try:
+        body = _recent_videos(db, sid, before=before)
+    except Exception as exc:  # noqa: BLE001 — 单组失败诚实降级,同 build_board_ext 口径
+        logger.warning("my_kol_board_ext recent_videos page failed: %s", exc)
+        body = {"status": "error", "reason": str(exc)[:200], "items": []}
+    return {
+        **body,
+        "staff_scope_id": sid or None,
+        "method": BOARD_METHOD,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def build_board_ext(
     conn: Any = None,
     *,
     staff_scope_id: int | None = None,
     days: int = 30,
+    recent_videos_before: tuple[str | None, int] | None = None,
 ) -> dict[str, Any]:
     """八组看板字段 + 窗口信封;单组失败降级 {status:'error'} 不拖全响应。
 
     staff_scope_id=已解析 scope(路由 scope.effective_staff_id 产物):None=管理层
     全团队收藏集口径,>0=该成员收藏集(员工恒被压回本人)。纯读;conn 可注入
     (测试),缺省懒取 get_conn(get_conn 非上下文管理器,直接调用)。
+    recent_videos_before=已解码 keyset 游标,只作用于 recent_videos 组(None=首页)。
     """
     from app.db.connection import get_conn
 
@@ -760,7 +853,7 @@ def build_board_ext(
         ("fit_dist", lambda: _fit_dist(db)),
         ("contact_coverage", lambda: _contact_coverage(db, sid)),
         ("views_top", lambda: _views_top(db, sid)),
-        ("recent_videos", lambda: _recent_videos(db, sid)),
+        ("recent_videos", lambda: _recent_videos(db, sid, before=recent_videos_before)),
         ("v_content", lambda: _v_content(db, sid)),
     )
     out: dict[str, Any] = {}
