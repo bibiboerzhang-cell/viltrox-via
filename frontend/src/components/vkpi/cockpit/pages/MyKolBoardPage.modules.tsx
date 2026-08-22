@@ -11,24 +11,17 @@ import {
   KolRowLine,
 } from "./MyKolBoardPage.dialogs";
 import { KolLibraryFilterControls, KolLibraryPageActions } from "./MyKolBoardPage.library-controls";
-import { CHIP, CHIP_OFF, CHIP_ON, MINI_BADGE, useKolEvidenceStats, V_TIER_META } from "./MyKolBoardPage.libdetail";
+import { useKolEvidenceStats } from "./MyKolBoardPage.libdetail";
 import { useWorkflowRunsStream } from "../useWorkflowRunsStream";
 import { formatLocal } from "../../lib/timeLocal";
-import { proxiedImageUrl } from "../../shared/mediaProxy";
 import { kolHumanDisplayName } from "../lib/kolIdentity";
 import type { TaskQueueItem } from "../../../../services/vkpi/tasks-api";
 import {
-  classifyVideoRow,
   filterLibraryRows,
-  getMyKolPoolVideos,
   libraryPlatformOptions,
   mapLibraryRows,
-  sortClassifiedVideos,
   type KolLibraryRow,
   type LibraryFilter,
-  type VContentTier,
-  type VkpiRecentVideoItem,
-  type VkpiRecentVideosGroup,
 } from "../../../../services/vkpi/myKolBoard-api";
 import { OfficialMatrix, TeamMatrix } from "../../pages/myKol/MyKolPage.Sections";
 import {
@@ -108,7 +101,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["范围", "员工=own-only(服务端硬闸);管理层缺省 scope=team 全团队收藏集(收藏 ∪ 共享去重,与 board-ext 同两表同判据)"],
       ["状态徽", "收藏/共享=行本体;进行中=挂 assignments;已认领=vkpi_kol_claims 平台+名称桥(真值在详情 viewer-context)"],
       ["V 视频 KOL", "board-ext v_content.v_kol_count —— 至少 1 条五档中前三档正向证据视频的去重 KOL(全 evidence 聚合口径)"],
-      ["V 五档判据", "项目关联 > latest ready final_v1 深析正向(detected/products，覆盖正文/口播/字幕/描述分析结论) > 标题中英文品牌词 > final_v1 明确非相关 > 未判定；五档互斥"],
+      ["V 五档判据", "项目关联 > 深析结构化证据 present(画面/字幕/口播带时间戳;标题单独不算) > 标题中英文品牌词 > 证据 absent(完整查过画面+音频) > 待深析(未深析或 unknown,不当不相关)；五档互斥"],
       ["列表 V 筛选", "board-ext v_content.v_kol_ids 名单精确过滤(去重升序,封顶 2000;超封顶 truncated 如实降级提示；完整去重总数见 v_kol_count，返回名单不是全部记录)"],
       ["KOL 级五档", "tiers_by_kol 按同一五档 CTE 去重计数(同一 KOL 在不同 evidence 档可重复计,与条数级 tiers 区分)"],
       ["单 KOL 视频", "GET /kol-pool/{id}/videos(view_count 点时实测 · NULL 剔除注明)"],
@@ -191,7 +184,7 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["口径", "收藏集(收藏 ∪ 共享,去重)最近采集 evidence(封顶 60 条)按发布时间降序;is_active=FALSE(归属纠错下线)剔除"],
       ["缩略图", "best_thumbnail 三链:本地缓存(毒缓存自愈,失败占位不作真图)→ 原始 URL → youtube 派生;三路皆无/加载失败 = 诚实 ▶ 占位"],
       ["播放/点赞", "view_count/like_count 点时实测(抓取时刻读数)· 未实测显「未实测」≠ 0 播放"],
-      ["V 五档徽", "项目关联 > latest ready final_v1 深析正向(detected/products) > 标题中英文品牌词 > final_v1 明确非相关 > 未判定；与全局 V 名单同一证据顺序"],
+      ["V 五档徽", "项目关联 > 深析结构化证据 present(画面/字幕/口播) > 标题中英文品牌词 > 证据 absent > 待深析；与全局 V 名单同一证据顺序"],
       ["已深析标", "vkpi_analysis_cache final_v1 ready 才点亮(绝不猜)"],
       ["按 KOL 筛选", "选中单个收藏 KOL 时改走 GET /kol-pool/{id}/videos(与库详情弹窗同源同端点),不受最近 60 条窗限制"],
       ["排序", "最新=发布时间降序 / 播放=实测播放降序(未实测排最后,不当 0 混序)"],
@@ -744,243 +737,8 @@ export function KolLibraryModule({
   );
 }
 
-/* ============ 内容墙模块(span8,2026-07-12 补刀):板面直刷收藏 KOL 采集视频 ============
-   数据两路同源真端点:全部 KOL = board-ext recent_videos(收藏集最近采集,封顶 60);
-   选中单 KOL = GET /kol-pool/{id}/videos(与库详情弹窗同端点同算法,模块级缓存)。
-   缩略图 = 创意库同款毒缓存自愈链(best_thumbnail:cached → raw → youtube 派生)→
-   proxiedImageUrl 兜受墙 CDN;onError / 三路皆无 → 诚实 ▶ 占位,绝不编图。
-   卡 = 缩略图 + 标题截断 + KOL 名 + 播放/点赞 mono(未实测如实标)+ V 五档徽 +
-   已深析标 + 发布日期(绝对日期);点卡直跳原帖(无原链行如实不加链)。
-   工具行 = KOL 下拉(收藏名单)+ 仅 V 相关 + 排序(最新/播放);默认 12 张,
-   「≡ 查看更多」逐页 +12。V 判定/排序复用 classifyVideoRow / sortClassifiedVideos
-   (与详情弹窗同口径)。红线:纯读展示;颜色全 token;零 opacity 修饰类。 ============ */
-
-const WALL_PAGE = 12;
-const WALL_KOL_VIDEOS_LIMIT = 200;
-// 逐 KOL 视频模块级缓存(会话级;与 useKolEvidenceStats 同思路,失败不缓存下次重试)
-const WALL_KOL_CACHE = new Map<number, VkpiRecentVideoItem[]>();
-
-/** 墙缩略图:自愈链读端(SegmentThumb 同构);加载失败/三路皆无 → 诚实 ▶ 占位。 */
-function WallThumb({ video }: { video: VkpiRecentVideoItem }) {
-  const src = proxiedImageUrl(
-    String(video.best_thumbnail || video.cached_thumbnail_url || video.thumbnail_url || video.youtube_thumbnail_url || ""),
-  );
-  const [failed, setFailed] = React.useState(false);
-  React.useEffect(() => setFailed(false), [src]);
-  if (!src || failed) {
-    return (
-      <span
-        className="grid h-full w-full place-items-center bg-card text-[16px] text-muted"
-        title={failed ? "缩略图加载失败(不摆假图)" : "该视频无可用缩略图(未存 · 缓存无 · 非 youtube)"}
-        aria-hidden="true"
-      >
-        ▶
-      </span>
-    );
-  }
-  const handleLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
-    const image = event.currentTarget;
-    if (image.naturalWidth > 0 && image.naturalHeight > 0 && image.naturalWidth <= 2 && image.naturalHeight <= 2) setFailed(true);
-  };
-  return <img src={src} alt="" loading="lazy" className="h-full w-full object-cover" onError={() => setFailed(true)} onLoad={handleLoad} />;
-}
-
-function WallVideoCard({ video, tier, fallbackKolName }: { video: VkpiRecentVideoItem; tier: VContentTier; fallbackKolName?: string }) {
-  const eid = Number(video.evidence_id ?? video.id) || 0;
-  const title = String(video.title || video.video_title || "未命名视频");
-  const kolName = kolHumanDisplayName({ display_name: video.kol_name || fallbackKolName, handle: video.kol_handle }, "Creator");
-  const day = String(video.publish_date || video.posted_at || "").slice(0, 10);
-  const meta = V_TIER_META[tier];
-  const href = String(video.content_url || "");
-  const body = (
-    <>
-      <div className="h-[92px] w-full overflow-hidden bg-card">
-        <WallThumb video={video} />
-      </div>
-      <div className="px-2.5 py-2">
-        <div className="truncate text-[11px] text-ink" title={title}>{title}</div>
-        <div className="mt-0.5 truncate text-[9.5px] text-muted" title="所属收藏 KOL">{kolName}</div>
-        <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[9.5px] text-muted">
-          <span title={video.view_count == null ? "未实测(≠ 0 播放)" : "播放(点时实测)"}>
-            ▶ {video.view_count != null ? Number(video.view_count).toLocaleString() : "未实测"}
-          </span>
-          <span title="点赞(点时实测)">♥ {Number(video.like_count ?? 0).toLocaleString()}</span>
-          {day ? <span title="发布日期(平台原发布日,非采集日)">{day}</span> : null}
-        </div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          <span className={`rounded-[5px] border px-1 py-px text-[8px] font-bold ${meta.cls}`}>{meta.label}</span>
-          {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
-          {href ? (
-            <span className="ml-auto flex-none font-mono text-[9px] text-muted transition-colors group-hover:text-accent" aria-hidden="true">
-              原帖 ↗
-            </span>
-          ) : null}
-        </div>
-      </div>
-    </>
-  );
-  const cardCls = "block overflow-hidden rounded-[11px] border border-line bg-panel";
-  return href ? (
-    <a
-      key={eid}
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      title="点卡直跳原帖"
-      className={`group ${cardCls} transition-colors hover:border-accent`}
-    >
-      {body}
-    </a>
-  ) : (
-    <div key={eid} className={cardCls} title="该条无原帖链接(采集未存 URL)">
-      {body}
-    </div>
-  );
-}
-
-export function ContentWallModule({
-  apiToken,
-  group,
-  kolOptions,
-}: {
-  apiToken: string;
-  /** board-ext recent_videos(页层已 gate:到这里必然 ready) */
-  group: VkpiRecentVideosGroup;
-  /** 收藏名单(library 行同源;下拉筛选用) */
-  kolOptions: Array<{ poolId: number; name: string }>;
-}) {
-  const [kolId, setKolId] = React.useState(0);
-  const [vOnly, setVOnly] = React.useState(false);
-  const [sortBy, setSortBy] = React.useState<"time" | "views">("time");
-  const [visible, setVisible] = React.useState(WALL_PAGE);
-  const [kolRows, setKolRows] = React.useState<VkpiRecentVideoItem[] | null>(null);
-  const [kolBusy, setKolBusy] = React.useState(false);
-  const [kolError, setKolError] = React.useState("");
-  const chooseSort = (next: "time" | "views") => {
-    if (next === sortBy) return;
-    setSortBy(next);
-    setVisible(WALL_PAGE);
-  };
-  // 单 KOL 视图:与库详情弹窗同端点(会话级缓存;失败不缓存,重选自动重试)
-  React.useEffect(() => {
-    if (!apiToken || !kolId) {
-      setKolRows(null);
-      setKolError("");
-      return;
-    }
-    const cached = WALL_KOL_CACHE.get(kolId);
-    if (cached) {
-      setKolRows(cached);
-      setKolError("");
-      return;
-    }
-    let alive = true;
-    setKolBusy(true);
-    setKolError("");
-    setKolRows(null);
-    getMyKolPoolVideos(apiToken, kolId, WALL_KOL_VIDEOS_LIMIT)
-      .then((resp) => {
-        if (!alive) return;
-        const items = (Array.isArray(resp.items) ? resp.items : []) as VkpiRecentVideoItem[];
-        WALL_KOL_CACHE.set(kolId, items);
-        setKolRows(items);
-      })
-      .catch((err: unknown) => {
-        if (alive) setKolError(String((err as { detail?: unknown; message?: unknown })?.detail || (err as Error)?.message || "读取失败").slice(0, 120));
-      })
-      .finally(() => {
-        if (alive) setKolBusy(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [apiToken, kolId]);
-
-  const kolName = React.useMemo(() => kolOptions.find((o) => o.poolId === kolId)?.name || "", [kolOptions, kolId]);
-  const baseItems: VkpiRecentVideoItem[] = kolId ? kolRows || [] : Array.isArray(group.items) ? group.items : [];
-  const shown = React.useMemo(
-    () => sortClassifiedVideos(baseItems.map((video) => ({ video, tier: classifyVideoRow(video) })), vOnly, sortBy),
-    [baseItems, vOnly, sortBy],
-  );
-
-  return (
-    <div>
-      {/* 工具行:KOL 下拉(收藏名单)+ 仅 V 相关 + 排序 chips */}
-      <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted">
-        <select
-          aria-label="按 KOL 筛选"
-          value={String(kolId)}
-          onChange={(ev) => {
-            const nextKolId = Number(ev.target.value) || 0;
-            if (nextKolId === kolId) return;
-            setKolId(nextKolId);
-            setVisible(WALL_PAGE);
-          }}
-          className="max-w-[190px] rounded-xl border border-line bg-card px-2.5 py-1.5 text-[11px] text-ink outline-none focus:border-accent [&>option]:bg-[var(--ds-card)]"
-          title="选单个收藏 KOL = 改走该 KOL 全量采集(与库详情同源)"
-        >
-          <option value="0">全部收藏 KOL</option>
-          {kolOptions.map((option) => (
-            <option key={option.poolId} value={String(option.poolId)}>
-              {option.name}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className={`${CHIP} ${vOnly ? CHIP_ON : CHIP_OFF}`}
-          onClick={() => { setVOnly((value) => !value); setVisible(WALL_PAGE); }}
-          title="只看合作产出与标题提及V(未判定隐藏)"
-        >
-          仅 V 相关
-        </button>
-        <span className="ml-auto flex items-center gap-1.5">
-          <button
-            type="button"
-            className={`${CHIP} ${sortBy === "time" ? CHIP_ON : CHIP_OFF}`}
-            onClick={() => chooseSort("time")}
-            title="按发布时间排序"
-          >
-            最新
-          </button>
-          <button
-            type="button"
-            className={`${CHIP} ${sortBy === "views" ? CHIP_ON : CHIP_OFF}`}
-            onClick={() => chooseSort("views")}
-            title="按实测播放排序(未实测排最后)"
-          >
-            播放
-          </button>
-        </span>
-      </div>
-      {kolError ? (
-        <ErrorCard title="按 KOL 读取失败" text={kolError} />
-      ) : kolId && kolBusy && !kolRows ? (
-        <LoadingLine text={`${kolName || "该 KOL"} 采集视频读取中…`} />
-      ) : baseItems.length === 0 ? (
-        <EmptyLine text={kolId ? `${kolName || "该 KOL"} 暂无采集视频——在库行发起采集。` : "暂无采集视频——在库行发起采集。"} />
-      ) : shown.length === 0 ? (
-        <EmptyLine text="该筛选下 0 条(仅 V 相关开启)——诚实空。" />
-      ) : (
-        <div>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-4">
-            {shown.slice(0, visible).map(({ video, tier }) => (
-              <WallVideoCard key={Number(video.evidence_id ?? video.id) || 0} video={video} tier={tier} fallbackKolName={kolId ? kolName : undefined} />
-            ))}
-          </div>
-          {shown.length > visible ? (
-            <button
-              type="button"
-              onClick={() => setVisible((value) => value + WALL_PAGE)}
-              className="mt-2 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[10.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft"
-            >
-              ≡ 查看更多(已显 {Math.min(visible, shown.length)} / {shown.length})
-            </button>
-          ) : null}
-        </div>
-      )}
-    </div>
-  );
-}
+// 内容墙模块真身住 MyKolBoardPage.content-wall.tsx(四档筛选:全部/品牌相关/待深析/深析未见 V,
+// 按结构化证据分级)。本文件此前留有一份只带「仅 V 相关」布尔开关的旧墙,已无人挂载 —— 
+// 员工反馈 #4(「仅 V 相关」只抓标题)即该旧口径;2026-08-21 删除,避免再被误接回。
 
 export type { Row };

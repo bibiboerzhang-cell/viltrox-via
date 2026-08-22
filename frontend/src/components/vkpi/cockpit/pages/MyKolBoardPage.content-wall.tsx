@@ -73,7 +73,7 @@ function WallVideoCard({ video, tier, fallbackKolName }: { video: VkpiRecentVide
           {day ? <span title="发布日期(平台原发布日,非采集日)">{day}</span> : null}
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          <span className={`rounded-[5px] border px-1.5 py-0.5 text-[10.5px] font-bold ${meta.cls}`}>{meta.label}</span>
+          <span className={`rounded-[5px] border px-1.5 py-0.5 text-[10.5px] font-bold ${meta.cls}`} title={meta.title}>{meta.label}</span>
           {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
           {href ? <span className="ml-auto flex-none font-mono text-[10px] text-muted transition-colors group-hover:text-accent" aria-hidden="true">原帖 ↗</span> : null}
         </div>
@@ -147,7 +147,7 @@ export function ContentWallModule({
   return (
     <div>
       <div className="mb-2 rounded-[9px] border border-line bg-card px-3 py-2.5 text-[12px] leading-5 text-muted">
-        已采集 {summary.classified.length}｜品牌相关 {summary.vRelatedCount}｜未判定 {summary.undeterminedCount}｜播放已实测 {summary.measuredCount}/{summary.classified.length}
+        已采集 {summary.classified.length}｜品牌相关 {summary.vRelatedCount}｜待深析 {summary.undeterminedCount}｜深析未见 V {summary.unrelatedCount}｜播放已实测 {summary.measuredCount}/{summary.classified.length}
         <span className="ml-2">当前为系统已采集窗口，不代表平台频道全量；播放趋势请在 KOL 详情查看。</span>
       </div>
       <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
@@ -162,9 +162,9 @@ export function ContentWallModule({
           {kolOptions.map((option) => <option key={option.poolId} value={String(option.poolId)}>{option.name}</option>)}
         </select>
         <button type="button" className={`${CHIP} ${relationFilter === "all" ? CHIP_ON : CHIP_OFF}`} onClick={() => setRelationFilter("all")}>全部已采集</button>
-        <button type="button" className={`${CHIP} ${relationFilter === "viltrox" ? CHIP_ON : CHIP_OFF}`} onClick={() => setRelationFilter("viltrox")}>品牌相关</button>
-        <button type="button" className={`${CHIP} ${relationFilter === "undetermined" ? CHIP_ON : CHIP_OFF}`} onClick={() => setRelationFilter("undetermined")}>未判定</button>
-        <button type="button" className={`${CHIP} ${relationFilter === "not_related" ? CHIP_ON : CHIP_OFF}`} onClick={() => setRelationFilter("not_related")}>深析未识别</button>
+        <button type="button" className={`${CHIP} ${relationFilter === "viltrox" ? CHIP_ON : CHIP_OFF}`} onClick={() => setRelationFilter("viltrox")} title="项目关联 / 画面·口播识别 V / 标题提及 V(按结构化证据,不只看标题)">品牌相关</button>
+        <button type="button" className={`${CHIP} ${relationFilter === "undetermined" ? CHIP_ON : CHIP_OFF}`} onClick={() => setRelationFilter("undetermined")} title="还没深析或证据不足的内容——不等于不相关">待深析</button>
+        <button type="button" className={`${CHIP} ${relationFilter === "not_related" ? CHIP_ON : CHIP_OFF}`} onClick={() => setRelationFilter("not_related")} title="深析完整检查过画面与音频,没有见到 Viltrox">深析未见 V</button>
         <span className="ml-auto flex items-center gap-1.5">
           <button type="button" className={`${CHIP} ${sortBy === "time" ? CHIP_ON : CHIP_OFF}`} onClick={() => setSortBy("time")}>最新</button>
           <button type="button" className={`${CHIP} ${sortBy === "views" ? CHIP_ON : CHIP_OFF}`} onClick={() => setSortBy("views")}>播放</button>

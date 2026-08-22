@@ -72,7 +72,7 @@ function installDialogRoutes(
     if (value === "/api/admin/vkpi/kol-pool/profile-deep-crawl/enqueue" && init.method === "POST") {
       return { status: "queued", job_id: 88 };
     }
-    const videosMatch = value.match(/\/api\/admin\/vkpi\/kol-pool\/(\d+)\/videos/);
+    const videosMatch = value.match(/\/api\/admin\/vkpi\/(?:kol-pool|my-kol)\/(\d+)\/videos(?:\?|$)/);
     if (videosMatch) {
       const poolId = Number(videosMatch[1]);
       const items = videoRows ? videoRows(poolId) : [video(poolId === 101 ? 901 : 902, poolId)];
@@ -258,7 +258,7 @@ describe("KolDetailModal existing-video tracking", () => {
     installDialogRoutes();
     renderDetail();
     await screen.findByText("Video 901");
-    const readsBefore = apiFetchMock.mock.calls.filter(([path]) => String(path).includes("/kol-pool/101/videos")).length;
+    const readsBefore = apiFetchMock.mock.calls.filter(([path]) => String(path).includes("/my-kol/101/videos?")).length;
 
     fireEvent.change(screen.getByLabelText("已有视频 URL"), { target: { value: "https://www.youtube.com/watch?v=video901" } });
     fireEvent.change(screen.getByLabelText("关联产品 SKU"), { target: { value: "AF-85-F14， AF-35-F18,AF-85-F14" } });
@@ -273,7 +273,7 @@ describe("KolDetailModal existing-video tracking", () => {
     });
     expect((await screen.findAllByText(/指标刷新已排队/)).length).toBeGreaterThan(0);
     await waitFor(() => {
-      const readsAfter = apiFetchMock.mock.calls.filter(([path]) => String(path).includes("/kol-pool/101/videos")).length;
+      const readsAfter = apiFetchMock.mock.calls.filter(([path]) => String(path).includes("/my-kol/101/videos?")).length;
       expect(readsAfter).toBeGreaterThan(readsBefore);
     });
   });

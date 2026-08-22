@@ -73,7 +73,7 @@ function routeApi(overrides: { boardExt?: unknown } = {}) {
       return value;
     }
     if (p.startsWith("/api/marketing/channels/official-matrix")) return MATRIX;
-    const videosMatch = p.match(/\/api\/admin\/vkpi\/kol-pool\/(\d+)\/videos/);
+    const videosMatch = p.match(/\/api\/admin\/vkpi\/(?:kol-pool|my-kol)\/(\d+)\/videos(?:\?|$)/);
     if (videosMatch) {
       const items = KOL_VIDEOS[videosMatch[1]] || [];
       return { items, total: items.length, kol_pool_id: Number(videosMatch[1]) };
@@ -118,8 +118,8 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(wallCards()[1].textContent).toContain("▶ 未实测");
     expect(wallCards()[0].textContent).toContain("▶ 8,000");
     expect(screen.getByText("合作产出")).toBeTruthy();
-    expect(screen.getByText("标题品牌提及")).toBeTruthy();
-    expect(screen.getAllByText("未判定").length).toBeGreaterThanOrEqual(10);
+    expect(screen.getByText("标题提及 V")).toBeTruthy();
+    expect(screen.getAllByText("待深析").length).toBeGreaterThanOrEqual(10);
     expect(screen.getAllByText("已深析").length).toBe(1);
     // 增页:已显 12 / 14 → 点后全量 14,按钮消失
     const more = screen.getByText(/查看更多/);
@@ -149,7 +149,7 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     fireEvent.click(screen.getByText("品牌相关"));
     expect(wallTitles()).toEqual(["Wall Coop Film", "VILTROX wall mention"]);
     expect(screen.queryByText("Filler clip 1")).toBeNull();
-    expect(screen.getAllByText("未判定")).toHaveLength(1); // 筛选按钮仍在，未判定卡已隐藏
+    expect(screen.getAllByText("待深析")).toHaveLength(1); // 筛选按钮仍在，未判定卡已隐藏
     // 排序切「播放」(仍仅 V):8000 实测在前,NULL 未实测排最后
     fireEvent.click(screen.getByRole("button", { name: "播放" }));
     expect(wallTitles()).toEqual(["Wall Coop Film", "VILTROX wall mention"]);
@@ -163,23 +163,30 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(titles[titles.length - 1]).toBe("VILTROX wall mention");
   });
 
-  it("final_v1 品牌结论进入内容墙，并可把深析未识别与未判定分开筛查", async () => {
+  it("深析结构化品牌证据三态进入内容墙:present/absent/unknown 分别落画面口播识别 V / 深析未见 V / 待深析,并可分开筛查", async () => {
     const analyzedItems = [
-      { ...filler(31), evidence_id: 9301, title: "portrait setup", llm_viltrox_detected: true, llm_viltrox_products: ["AF 85mm F1.4 Pro"], has_final_v1_cache: true },
-      { ...filler(32), evidence_id: 9302, title: "street diary", llm_viltrox_detected: false, has_final_v1_cache: true },
+      { ...filler(31), evidence_id: 9301, title: "portrait setup", llm_viltrox_status: "present", llm_viltrox_detected: true, llm_viltrox_products: ["AF 85mm F1.4 Pro"], has_final_v1_cache: true },
+      { ...filler(32), evidence_id: 9302, title: "street diary", llm_viltrox_status: "absent", llm_viltrox_detected: false, has_final_v1_cache: true },
       { ...filler(33), evidence_id: 9303, title: "camera walk", llm_viltrox_detected: null, has_final_v1_cache: false },
+      // 深析过但未完整检查(unknown):旧布尔 false 也不能当「不相关」,必须落待深析(员工反馈 #4)
+      { ...filler(34), evidence_id: 9304, title: "night market", llm_viltrox_status: "unknown", llm_viltrox_detected: false, has_final_v1_cache: true },
     ];
     routeApi({ boardExt: { ...EXT, recent_videos: { status: "ready", limit: 60, items: analyzedItems } } });
     renderWall();
 
-    expect(await screen.findByText("深析确认Viltrox")).toBeTruthy();
-    expect(screen.getByText("深析未识别Viltrox")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "深析未识别" }));
+    expect(await screen.findByText("画面/口播识别 V")).toBeTruthy();
+    // 角标与筛选 chip 同名(「深析未见 V」各一),卡片角标带口径 tooltip
+    const unseenBadge = screen.getAllByText("深析未见 V").find((node) => node.tagName === "SPAN");
+    expect(unseenBadge).toHaveAttribute("title", expect.stringContaining("没有见到 Viltrox"));
+    const pendingBadges = screen.getAllByText("待深析").filter((node) => node.tagName === "SPAN");
+    expect(pendingBadges).toHaveLength(2);
+    expect(pendingBadges[0]).toHaveAttribute("title", expect.stringContaining("不等于不相关"));
+    fireEvent.click(screen.getByRole("button", { name: "深析未见 V" }));
     expect(wallTitles()).toEqual(["street diary"]);
-    fireEvent.click(screen.getByRole("button", { name: "未判定" }));
-    expect(wallTitles()).toEqual(["camera walk"]);
+    fireEvent.click(screen.getByRole("button", { name: "待深析" }));
+    expect(wallTitles()).toEqual(["night market", "camera walk"]);
     fireEvent.click(screen.getByRole("button", { name: "全部已采集" }));
-    expect(wallCards()).toHaveLength(3);
+    expect(wallCards()).toHaveLength(4);
   });
 
   it("单 KOL 视图:选中收藏 KOL 改走 /kol-pool/{id}/videos(库详情同源);零采集 KOL 诚实空;切回全部零重取", async () => {
@@ -190,7 +197,7 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(screen.getByText("daily vlog")).toBeTruthy();
     expect(screen.queryByText("Wall Coop Film")).toBeNull();
     const calls = () => apiFetchMock.mock.calls.map((call) => String(call[0]));
-    expect(calls().some((p) => p.includes("/kol-pool/101/videos"))).toBe(true);
+    expect(calls().some((p) => p.includes("/my-kol/101/videos?"))).toBe(true);
     // 零采集 KOL → 板面空态口径(带 KOL 名,不透传后端字段)
     fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "102" } });
     expect(await screen.findByText(/Beta Vlog 暂无已采集内容——可在KOL详情发起补采。/)).toBeTruthy();

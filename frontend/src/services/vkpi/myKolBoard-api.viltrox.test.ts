@@ -26,6 +26,21 @@ describe("Viltrox video evidence classification", () => {
     expect(classifyVideoRow(row(6))).toBe("undetermined");
   });
 
+  it("reads the structured brand-evidence tri-state before the legacy boolean (staff feedback #4)", () => {
+    // present(画面/字幕/口播带时间戳证据)→ 画面/口播识别 V,哪怕旧布尔为 false
+    expect(classifyVideoRow(row(11, { llm_viltrox_status: "present", llm_viltrox_detected: false }))).toBe("analysis_confirmed");
+    // unknown(未完整检查 / 画面不清 / 口播不可辨)→ 待深析,绝不因旧布尔 false 当成不相关
+    expect(classifyVideoRow(row(12, { llm_viltrox_status: "unknown", llm_viltrox_detected: false }))).toBe("undetermined");
+    expect(classifyVideoRow(row(13, { llm_viltrox_status: "unknown", llm_viltrox_detected: true }))).toBe("undetermined");
+    // absent(完整查过画面+音频)→ 深析未见 V;但标题品牌词仍优先于 absent(与后端 CTE 同序)
+    expect(classifyVideoRow(row(14, { llm_viltrox_status: "absent" }))).toBe("not_related");
+    expect(classifyVideoRow(row(15, { llm_viltrox_status: "absent", title: "Viltrox AF 75mm review" }))).toBe("title_mention");
+    // 服务端已下发 v_tier 时原样采信,不在前端二次推断
+    expect(classifyVideoRow(row(16, { v_tier: "not_related", llm_viltrox_status: "present" }))).toBe("not_related");
+    // 结构化块缺席(旧行)才回退旧布尔
+    expect(classifyVideoRow(row(17, { llm_viltrox_status: null, llm_viltrox_detected: false }))).toBe("not_related");
+  });
+
   it("never counts analyzed-negative or unknown rows as Viltrox related", () => {
     const videos = [
       row(1, { project_id: 4, view_count: 100 }),

@@ -316,7 +316,7 @@ function routeApi(overrides: { aggregate?: unknown; boardExt?: unknown; matrix?:
     }
     if (p.startsWith("/api/admin/vkpi/kol-pool/favorites")) return MY_FAVORITES;
     if (/\/api\/admin\/vkpi\/goaffpro\/kol\/\d+\/link/.test(p)) return { linked: false };
-    const videosMatch = p.match(/\/api\/admin\/vkpi\/kol-pool\/(\d+)\/videos/);
+    const videosMatch = p.match(/\/api\/admin\/vkpi\/(?:kol-pool|my-kol)\/(\d+)\/videos(?:\?|$)/);
     if (videosMatch) {
       const items = VIDEOS[videosMatch[1]] || [];
       return { items, total: items.length, kol_pool_id: Number(videosMatch[1]) };
@@ -677,18 +677,18 @@ describe("MyKolBoardPage M3/M4(KOL 库:V 名单精确过滤 + 弹窗族)", () =>
     renderBoard();
     fireEvent.click(await screen.findByText("Alpha Cam"));
     expect(await screen.findByText("合作产出")).toBeTruthy();
-    expect(screen.getByText("标题品牌提及")).toBeTruthy();
-    expect(screen.getAllByText("未判定").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("标题提及 V")).toBeTruthy();
+    expect(screen.getAllByText("待深析").length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText(/已采集 3 条/)).toBeTruthy();
     expect(screen.getByText(new RegExp(`播放已实测 2/3（合计 ${(1500).toLocaleString()}）`))).toBeTruthy();
-    expect(screen.getByText(/品牌相关 2 · 未判定 1/)).toBeTruthy();
+    expect(screen.getByText(/品牌相关 2 · 待深析 1/)).toBeTruthy();
     expect(screen.getAllByText("已深析").length).toBeGreaterThan(0);
     expect(screen.getByText("深析")).toBeTruthy();
     fireEvent.click(screen.getByText("品牌相关"));
-    expect(screen.getAllByText("未判定")).toHaveLength(1); // 筛选按钮仍在，未判定视频已隐藏
+    expect(screen.getAllByText("待深析")).toHaveLength(1); // 筛选按钮仍在，未判定视频已隐藏
     expect(screen.getByText("合作产出")).toBeTruthy();
     fireEvent.click(screen.getByText("全部已采集"));
-    expect((await screen.findAllByText("未判定")).length).toBeGreaterThanOrEqual(2);
+    expect((await screen.findAllByText("待深析")).length).toBeGreaterThanOrEqual(2);
     fireEvent.click(screen.getByText("#9002"));
     expect(await screen.findByText("NULL(未实测 ≠ 0 播放)")).toBeTruthy();
   });

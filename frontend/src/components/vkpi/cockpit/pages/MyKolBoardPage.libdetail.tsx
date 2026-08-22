@@ -62,13 +62,15 @@ export function VideoTrendLine({ video }: { video: VkpiKolPoolVideoRow }) {
   );
 }
 
-/* ============ Viltrox 五档证据徽(正向三档 / 深析未识别 / 未判定) ============ */
-export const V_TIER_META: Record<VContentTier, { label: string; cls: string }> = {
-  cooperation: { label: V_TIER_LABEL.cooperation, cls: "border-accent bg-accent-soft text-accent" },
-  analysis_confirmed: { label: V_TIER_LABEL.analysis_confirmed, cls: "border-good bg-good-soft text-good" },
-  title_mention: { label: V_TIER_LABEL.title_mention, cls: "border-good bg-good-soft text-good" },
-  not_related: { label: V_TIER_LABEL.not_related, cls: "border-line text-muted" },
-  undetermined: { label: V_TIER_LABEL.undetermined, cls: "border-line text-muted" },
+/* ============ Viltrox 五档证据徽(正向三档 / 深析未见 V / 待深析) ============ */
+// 待深析走 warn 系(pending 口径,与 KPI pending 药丸同色),与「深析未见 V」(muted)肉眼分得开:
+// 前者是「还不知道」,后者是「查过了没有」—— 员工反馈 #4 的核心区分。
+export const V_TIER_META: Record<VContentTier, { label: string; cls: string; title: string }> = {
+  cooperation: { label: V_TIER_LABEL.cooperation, cls: "border-accent bg-accent-soft text-accent", title: "已关联项目的合作产出" },
+  analysis_confirmed: { label: V_TIER_LABEL.analysis_confirmed, cls: "border-good bg-good-soft text-good", title: "深析在画面、字幕或口播里拿到带时间戳的 Viltrox 证据(标题单独不算)" },
+  title_mention: { label: V_TIER_LABEL.title_mention, cls: "border-good bg-good-soft text-good", title: "标题含 Viltrox / 唯卓仕 品牌词;画面/口播尚未深析确认" },
+  not_related: { label: V_TIER_LABEL.not_related, cls: "border-line text-muted", title: "深析完整检查过画面与音频,没有见到 Viltrox" },
+  undetermined: { label: V_TIER_LABEL.undetermined, cls: "border-warn bg-warn-soft text-warn", title: "还没深析,或深析未完整检查/证据不足 —— 不等于不相关,可在 KOL 详情发起深析" },
 };
 
 /* ============ ① 库行采集数据(同源 /kol-pool/{id}/videos;可见行懒取 + 模块级缓存) ============ */
@@ -323,7 +325,7 @@ export function KolVideoSection({
       {/* 汇总条:全部真实算;NULL 只计覆盖率,绝不转成 0。 */}
       <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11.5px] leading-5 text-muted">
         <span>
-          已采集 {classified.length} 条 · 品牌相关 {vRelatedCount} · 未判定 {undeterminedCount} · 深析未识别 {unrelatedCount} · 播放已实测 {measuredCount}/{classified.length}（合计 {viewsTotal.toLocaleString()}） · 点赞已实测 {likeMeasured}/{classified.length}（合计 {likeTotal.toLocaleString()}） · 评论已实测 {commentMeasured}/{classified.length}（合计 {commentTotal.toLocaleString()}） · 分享已实测 {shareMeasured}/{classified.length}（合计 {shareTotal.toLocaleString()}） · 已深析 {analyzedCount}
+          已采集 {classified.length} 条 · 品牌相关 {vRelatedCount} · 待深析 {undeterminedCount} · 深析未见 V {unrelatedCount} · 播放已实测 {measuredCount}/{classified.length}（合计 {viewsTotal.toLocaleString()}） · 点赞已实测 {likeMeasured}/{classified.length}（合计 {likeTotal.toLocaleString()}） · 评论已实测 {commentMeasured}/{classified.length}（合计 {commentTotal.toLocaleString()}） · 分享已实测 {shareMeasured}/{classified.length}（合计 {shareTotal.toLocaleString()}） · 已深析 {analyzedCount}
         </span>
         <span className="ml-auto flex flex-wrap items-center gap-1.5">
           <button
@@ -338,7 +340,7 @@ export function KolVideoSection({
             type="button"
             className={`${CHIP} ${relationFilter === "viltrox" ? CHIP_ON : CHIP_OFF}`}
             onClick={() => setRelationFilter("viltrox")}
-            title="只看项目关联、深析确认或标题明确提及Viltrox的内容"
+            title="只看项目关联、画面/口播识别 V 或标题提及 V 的内容(按结构化证据,不只看标题)"
           >
             品牌相关
           </button>
@@ -346,17 +348,17 @@ export function KolVideoSection({
             type="button"
             className={`${CHIP} ${relationFilter === "undetermined" ? CHIP_ON : CHIP_OFF}`}
             onClick={() => setRelationFilter("undetermined")}
-            title="只看证据不足、尚不能判断是否与Viltrox相关的内容"
+            title="只看还没深析或证据不足的内容——不等于不相关,可发起深析"
           >
-            未判定
+            待深析
           </button>
           <button
             type="button"
             className={`${CHIP} ${relationFilter === "not_related" ? CHIP_ON : CHIP_OFF}`}
             onClick={() => setRelationFilter("not_related")}
-            title="只看已有深析且未识别到Viltrox的内容"
+            title="只看深析完整检查过画面与音频、没有见到 Viltrox 的内容"
           >
-            深析未识别
+            深析未见 V
           </button>
           {VIDEO_TABS.map((option) => (
             <button
@@ -407,7 +409,7 @@ export function KolVideoSection({
                     </div>
                   ) : null}
                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
-                    <span className={`rounded-[5px] border px-1 py-px text-[8px] font-bold ${meta.cls}`}>{meta.label}</span>
+                    <span className={`rounded-[5px] border px-1 py-px text-[8px] font-bold ${meta.cls}`} title={meta.title}>{meta.label}</span>
                     {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
                     {video.content_url ? (
                       <a

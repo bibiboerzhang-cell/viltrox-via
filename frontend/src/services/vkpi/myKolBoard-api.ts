@@ -258,7 +258,10 @@ export interface VkpiKolPoolVideoRow {
   image_urls?: string[] | null;
   has_final_v1_cache?: boolean;
   has_keyframe_qa_cache?: boolean;
-  /** final_v1 bounded brand verdict; null means the video has not produced this proof. */
+  /** 深析结构化品牌证据三态(画面/字幕/口播必须有带时间戳证据才 present;absent 须完整查过
+   *  画面+音频;其余 unknown)。board-ext recent_videos 下发;逐 KOL 端点可缺席(null)。 */
+  llm_viltrox_status?: VBrandEvidenceStatus | null;
+  /** 旧版布尔结论;只在结构化三态缺席时作回退。null = 未深析。 */
   llm_viltrox_detected?: boolean | null;
   llm_viltrox_products?: string[] | null;
   llm_competitor_mentions?: string[] | null;
@@ -401,42 +404,60 @@ export function videoTrendText(video: VkpiKolPoolVideoRow): string {
 
 export type VContentTier = "cooperation" | "analysis_confirmed" | "title_mention" | "not_related" | "undetermined";
 export type VideoRelationFilter = "all" | "viltrox" | "undetermined" | "not_related";
+/** 深析结构化品牌证据三态(与后端 v_content CTE 同口径)。 */
+export type VBrandEvidenceStatus = "present" | "absent" | "unknown";
 
 const VILTROX_TITLE_TOKENS = ["viltrox", "唯卓仕", "唯卓"] as const;
 
+function normalizeBrandStatus(value: unknown): VBrandEvidenceStatus | "" {
+  const text = String(value ?? "").trim().toLowerCase();
+  return text === "present" || text === "absent" || text === "unknown" ? text : "";
+}
+
+/**
+ * 五档分级,与后端 my_kol_board_ext_sql.V_CONTENT_CLASSIFIED_CTE 逐条同构(前端只在服务端未下发 v_tier 时派生):
+ *   项目关联 > 结构化证据 present(画面/字幕/口播) > [无结构化块时]旧布尔 true/产品非空 >
+ *   标题品牌词 > 结构化证据 absent > [无结构化块时]旧布尔 false > 待深析(含 unknown)。
+ * 员工反馈 #4 要点:unknown(未完整检查/画面不清/口播不可辨)绝不当「不相关」,落「待深析」单独一档;
+ * 只有 absent(完整查过画面+音频仍没见 V)才是「深析未见 V」。
+ */
 export function classifyVContent(
   projectId: unknown,
   titleText: unknown,
-  analysis: { detected?: boolean | null; products?: unknown } = {},
+  analysis: { status?: VBrandEvidenceStatus | string | null; detected?: boolean | null; products?: unknown } = {},
 ): VContentTier {
   const pid = projectId == null ? "" : String(projectId).trim();
   if (pid && pid !== "0") return "cooperation";
-  if (analysis.detected === true || (Array.isArray(analysis.products) && analysis.products.length > 0)) {
-    return "analysis_confirmed";
-  }
+  const status = normalizeBrandStatus(analysis.status);
+  const legacyPositive = analysis.detected === true || (Array.isArray(analysis.products) && analysis.products.length > 0);
+  if (status === "present" || (status === "" && legacyPositive)) return "analysis_confirmed";
   const title = String(titleText ?? "").toLowerCase();
   if (VILTROX_TITLE_TOKENS.some((token) => title.includes(token))) return "title_mention";
-  if (analysis.detected === false) return "not_related";
+  if (status === "absent" || (status === "" && analysis.detected === false)) return "not_related";
   return "undetermined";
 }
 
-/** Strongest available bounded proof wins: project > final_v1 positive > title brand token > final_v1 negative > unknown. */
+/** Strongest available bounded proof wins: project > structured present > title brand token > structured absent > pending. */
 export function classifyVideoRow(video: VkpiKolPoolVideoRow): VContentTier {
   if (["cooperation", "analysis_confirmed", "title_mention", "not_related", "undetermined"].includes(String(video.v_tier || ""))) {
     return video.v_tier as VContentTier;
   }
   return classifyVContent(video.project_id, `${video.video_title || ""} ${video.title || ""}`, {
+    status: video.llm_viltrox_status,
     detected: video.llm_viltrox_detected,
     products: video.llm_viltrox_products,
   });
 }
 
+// 门面文案(卡片角标 / 筛选 chip):只说业务口径,不露内部术语。
+//   「画面/口播识别 V」= 深析在画面、字幕或口播里拿到带时间戳的 Viltrox 证据(标题单独不算);
+//   「待深析」= 还没深析,或深析未完整检查/证据不足 —— 不是「不相关」。
 export const V_TIER_LABEL: Record<VContentTier, string> = {
   cooperation: "合作产出",
-  analysis_confirmed: "深析确认Viltrox",
-  title_mention: "标题品牌提及",
-  not_related: "深析未识别Viltrox",
-  undetermined: "未判定",
+  analysis_confirmed: "画面/口播识别 V",
+  title_mention: "标题提及 V",
+  not_related: "深析未见 V",
+  undetermined: "待深析",
 };
 
 export function isVRelatedTier(tier: VContentTier): boolean {
@@ -511,7 +532,8 @@ export function videoRecordRows(video: VkpiKolPoolVideoRow): Array<[string, stri
     ["表", "vkpi_kol_video_evidence"],
     ["id", `#${video.evidence_id ?? video.id ?? "—"}`],
     ["project_id", video.project_id != null ? `#${video.project_id}` : "—"],
-    ["Viltrox 判定", `${V_TIER_LABEL[classifyVideoRow(video)]} · 五档顺序(项目关联 / final_v1 正向 / 标题品牌词 / final_v1 明确非相关 / 未判定)`],
+    ["Viltrox 判定", `${V_TIER_LABEL[classifyVideoRow(video)]} · 五档顺序(项目关联 / 画面·字幕·口播证据 present / 标题品牌词 / 证据 absent / 待深析=未深析或 unknown)`],
+    ["证据三态", video.llm_viltrox_status ? video.llm_viltrox_status : video.llm_viltrox_detected == null ? "未深析" : `旧布尔 ${video.llm_viltrox_detected ? "true" : "false"}(无结构化证据块)`],
     ["view_count", video.view_count != null ? String(video.view_count) : "NULL(未实测 ≠ 0 播放)"],
     ["发布时间", String(video.publish_date || video.posted_at || "—")],
     ["深析缓存", video.has_final_v1_cache ? "final_v1 ready" : "无(可入队深析)"],

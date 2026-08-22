@@ -793,7 +793,7 @@ export function KolDetailModal({
     ["库记录", `vkpi_kol_pool #${item.poolId}(收藏行 vkpi_kol_pool_favorites / 共享行 vkpi_kol_pool_members)`],
     ["追踪链", "GOAFFPRO kol/{id}/link(读/建同端点;优惠码与佣金 PATCH 实时推回总台,销售经链/码归因该 KOL)"],
     ["合作结果", "行内 assignments 真阶段 × Projects 板块同一份映射(曝光 views / 证据计数);未回填读数如实显 —"],
-    ["Viltrox 判据", "项目关联优先 / final_v1 品牌结论 / 标题明确品牌词 / 其余未判定；无证据不硬贴"],
+    ["Viltrox 判据", "项目关联优先 / 深析结构化证据 present(画面·字幕·口播) / 标题明确品牌词 / 证据 absent / 其余待深析；无证据不硬贴"],
     ["视频", "GET /kol-pool/{id}/videos · vkpi_kol_video_evidence 当前已采集窗口(limit 200,不等于平台频道全量)"],
     ["播放口径", "view_count 点时实测(抓取时刻读数,非时序);NULL=未实测 ≠ 0 播放,合计已剔除并注明条数"],
     ["Fit 分", "viltrox_fit_score 只读展示(评分公式永不进前端,零回写)"],
