@@ -12,10 +12,12 @@ import React from "react";
 import { ArrowRight, Loader2, Sunrise, Target } from "lucide-react";
 import { listActionInbox } from "../../../../services/vkpi/actionInbox-api";
 import { apiFetch } from "../../../../services/http";
+import { useT } from "../lib/i18n";
 
 const e = React.createElement;
 
-// 类别 → 中文短标签(口径与 ActionInboxPanel 的 CATEGORY_META 一致;横条只取 label 保持轻量)。
+// 类别 → 短标签源键(口径与 ActionInboxPanel 的 CATEGORY_META 一致;横条只取 label 保持轻量;
+// 渲染处过 t(),英文词条在 i18nEn「Action Inbox categories」段)。
 const CATEGORY_LABEL: Record<string, string> = {
   kol_profile: "补全资料",
   deep_missing: "深析待跑",
@@ -155,6 +157,7 @@ export function TodayFocusStrip({
   onJumpToInbox?: () => void;
   onJumpToBrief?: () => void;
 }) {
+  const { t } = useT();
   const [topItems, setTopItems] = React.useState<any[]>([]);
   const [pendingCount, setPendingCount] = React.useState<PendingCountMeta>(EMPTY_PENDING_COUNT);
   // 分层口径(2026-07-17 demo 定稿):待审=suggested / 待执行=approved / 待对账=executing,
@@ -197,7 +200,7 @@ export function TodayFocusStrip({
         setInboxError("");
       })
       .catch((error: any) => {
-        if (!cancelled) setInboxError(error?.message || "加载失败");
+        if (!cancelled) setInboxError(error?.message || "加载失败"); // 渲染处 t()
       })
       .finally(() => {
         if (!cancelled) setInboxLoading(false);
@@ -249,15 +252,15 @@ export function TodayFocusStrip({
     inboxSeg = e(
       "span",
       { className: "text-[10px] text-crit" },
-      inboxAvailable ? `建议源异常 · ${inboxError}` : "建议系统待启用",
+      inboxAvailable ? `${t("建议源异常")} · ${t(inboxError)}` : t("建议系统待启用"),
     );
   } else if (inboxLoading && topItems.length === 0) {
     inboxSeg = e("span", { className: "flex items-center gap-1.5 text-[10px] text-muted" },
       e(Loader2, { size: 12, className: "animate-spin" }),
-      "读取待办",
+      t("读取待办"),
     );
   } else if (topItems.length === 0) {
-    inboxSeg = e("span", { className: "text-[10px] text-muted" }, "暂无待办 · 一切已跟进");
+    inboxSeg = e("span", { className: "text-[10px] text-muted" }, t("暂无待办 · 一切已跟进"));
   } else {
     inboxSeg = e(
       "div",
@@ -271,10 +274,10 @@ export function TodayFocusStrip({
             key: it.id ?? `${it.category || "action"}-${index}`,
             "data-action": onJumpToInbox ? "jump-inbox" : "summary-only",
             "data-next": isNext ? "1" : undefined,
-            "aria-label": onJumpToInbox ? `查看待办:${it.title || "未命名待办"}` : undefined,
+            "aria-label": onJumpToInbox ? t("查看待办:{title}", { title: it.title || t("未命名待办") }) : undefined,
             title: onJumpToInbox
-              ? `${it.title || ""} · 点击直达「今日该做什么」`
-              : `${it.title || ""} · 展示摘要`,
+              ? `${it.title || ""} · ${t("点击直达「今日该做什么」")}`
+              : `${it.title || ""} · ${t("展示摘要")}`,
             className:
               `flex max-w-[240px] items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] ${
                 isNext
@@ -288,11 +291,11 @@ export function TodayFocusStrip({
           e(
             "span",
             { className: "shrink-0 text-[9px] text-muted" },
-            CATEGORY_LABEL[it.category] || "待处理",
+            t(CATEGORY_LABEL[it.category] || "待处理"),
           ),
           e("span", { className: "min-w-0 truncate" }, it.title),
           isNext && onJumpToInbox
-            ? e("span", { className: "shrink-0 text-[9px] font-bold tracking-wide text-good" }, "先做这条 →")
+            ? e("span", { className: "shrink-0 text-[9px] font-bold tracking-wide text-good" }, t("先做这条 →"))
             : null,
         );
       }),
@@ -301,14 +304,14 @@ export function TodayFocusStrip({
 
   // ── 晨报段:headline 一句话(点击直达右栏晨报卡)/ 失败如实 ──
   const briefSeg = briefFailed
-    ? e("span", { className: "text-[10px] text-muted" }, "-- 晨报读取失败")
+    ? e("span", { className: "text-[10px] text-muted" }, `-- ${t("晨报读取失败")}`)
     : headline
       ? jumpElement(
           onJumpToBrief,
           {
             "data-action": onJumpToBrief ? "jump-brief" : "summary-only",
-            "aria-label": onJumpToBrief ? "查看夜班晨报" : undefined,
-            title: onJumpToBrief ? "点击直达夜班晨报" : "夜班晨报摘要",
+            "aria-label": onJumpToBrief ? t("查看夜班晨报") : undefined,
+            title: onJumpToBrief ? t("点击直达夜班晨报") : t("夜班晨报摘要"),
             className:
               `group flex min-w-0 items-center gap-1.5 text-left text-[10px] text-ink-2 ${onJumpToBrief ? "transition-colors hover:text-ink" : ""}`,
           },
@@ -319,15 +322,17 @@ export function TodayFocusStrip({
       : briefLoading
         ? e("span", { className: "flex items-center gap-1.5 text-[10px] text-muted" },
             e(Loader2, { size: 11, className: "animate-spin" }),
-            "读取晨报",
+            t("读取晨报"),
           )
-        : e("span", { className: "text-[10px] text-muted" }, "晨报暂无 headline");
+        : e("span", { className: "text-[10px] text-muted" }, t("晨报暂无 headline"));
+
+  const tierSummary = `${t("待审")} ${pendingCount.label} · ${t("待执行")} ${approvedCount.label} · ${t("待对账")} ${executingCount.label}`;
 
   return e(
     "section",
     {
       "data-state": inboxError || briefFailed ? "degraded" : inboxLoading || briefLoading ? "loading" : "ready",
-      "aria-label": "今日焦点",
+      "aria-label": t("今日焦点"),
       className:
         "grid gap-2 rounded-xl border border-emerald-500/15 bg-good-soft px-3 py-2 backdrop-blur-xl lg:grid-cols-[auto_minmax(0,1fr)_minmax(220px,0.8fr)] lg:items-center",
     },
@@ -336,14 +341,12 @@ export function TodayFocusStrip({
       onJumpToInbox,
       {
         "data-action": onJumpToInbox ? "jump-inbox" : "summary-only",
-        "aria-label": onJumpToInbox
-          ? `待审 ${pendingCount.label} · 待执行 ${approvedCount.label} · 待对账 ${executingCount.label},点击查看全部`
-          : undefined,
-        title: `待审 ${pendingCount.label} · 待执行 ${approvedCount.label} · 待对账 ${executingCount.label}${onJumpToInbox ? "，点击直达面板" : ""}`,
+        "aria-label": onJumpToInbox ? `${tierSummary},${t("点击查看全部")}` : undefined,
+        title: `${tierSummary}${onJumpToInbox ? `，${t("点击直达面板")}` : ""}`,
         className: `flex shrink-0 items-center gap-1.5 ${onJumpToInbox ? "transition-opacity hover:opacity-80" : ""}`,
       },
       e(Target, { size: 13, className: "text-good" }),
-      e("span", { className: "text-[11px] font-semibold text-ink" }, "今日焦点"),
+      e("span", { className: "text-[11px] font-semibold text-ink" }, t("今日焦点")),
       e(
         "span",
         {
@@ -351,26 +354,26 @@ export function TodayFocusStrip({
             "rounded-full border border-emerald-500/25 bg-good-soft px-1.5 py-px text-[9px] tabular-nums text-good",
           "data-count-kind": pendingCount.kind,
         },
-        `待审 ${pendingCount.label}`,
+        `${t("待审")} ${pendingCount.label}`,
       ),
       e(
         "span",
         { className: "rounded-full border border-line px-1.5 py-px text-[9px] tabular-nums text-ink-2", "data-count-kind": approvedCount.kind },
-        `待执行 ${approvedCount.label}`,
+        `${t("待执行")} ${approvedCount.label}`,
       ),
       e(
         "span",
         { className: "rounded-full border border-line px-1.5 py-px text-[9px] tabular-nums text-ink-2", "data-count-kind": executingCount.kind },
-        `待对账 ${executingCount.label}`,
+        `${t("待对账")} ${executingCount.label}`,
       ),
       inboxLoading ? e(Loader2, { size: 10, className: "animate-spin text-muted" }) : null,
     ),
-    e("div", { className: "min-w-0 border-t border-white/[0.06] pt-2 lg:border-l lg:border-t-0 lg:pl-3 lg:pt-0", "aria-label": "优先待办摘要" },
-      e("div", { className: "mb-1 text-[9px] uppercase tracking-[0.12em] text-muted" }, `优先待办${topItems.length ? ` · 展示 ${topItems.length}` : ""}`),
+    e("div", { className: "min-w-0 border-t border-white/[0.06] pt-2 lg:border-l lg:border-t-0 lg:pl-3 lg:pt-0", "aria-label": t("优先待办摘要") },
+      e("div", { className: "mb-1 text-[9px] uppercase tracking-[0.12em] text-muted" }, `${t("优先待办")}${topItems.length ? ` · ${t("展示")} ${topItems.length}` : ""}`),
       inboxSeg,
     ),
-    e("div", { className: "min-w-0 border-t border-white/[0.06] pt-2 lg:border-l lg:border-t-0 lg:pl-3 lg:pt-0", "aria-label": "夜班晨报摘要" },
-      e("div", { className: "mb-1 text-[9px] uppercase tracking-[0.12em] text-muted" }, "夜班晨报"),
+    e("div", { className: "min-w-0 border-t border-white/[0.06] pt-2 lg:border-l lg:border-t-0 lg:pl-3 lg:pt-0", "aria-label": t("夜班晨报摘要") },
+      e("div", { className: "mb-1 text-[9px] uppercase tracking-[0.12em] text-muted" }, t("夜班晨报")),
       briefSeg,
     ),
   );

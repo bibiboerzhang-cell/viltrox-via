@@ -11,6 +11,7 @@ import React, { useEffect, useState } from "react";
 import { m, useReducedMotion } from "framer-motion";
 import { Target } from "lucide-react";
 import { apiFetch } from "../../../../services/http";
+import { useT } from "../lib/i18n";
 
 const e = React.createElement;
 
@@ -60,7 +61,8 @@ export function normalizeNorthstar(raw: unknown): { metrics: GaugeMetric[]; gene
       unit: asStr(m.unit) || def.unit,
       status: asStr(m.status),
       note: asStr(m.note),
-      detail: def.key === "verdict_rate" && decided !== null && total !== null ? `${decided}/${total} 已裁决` : "",
+      // 渲染处过 t():detail 只存计数,文案「已裁决」在 Gauge 里拼。
+      detail: def.key === "verdict_rate" && decided !== null && total !== null ? `${decided}/${total}` : "",
     };
   });
   return { metrics, generatedAt: asStr(data.generated_at) };
@@ -68,6 +70,7 @@ export function normalizeNorthstar(raw: unknown): { metrics: GaugeMetric[]; gene
 
 // 单表盘:SVG 进度环(入场扫描一次)+ 中心大数字(直显,不动画 —— 信息优先)。
 function Gauge({ metric, color, dim, reduced, delay }: { metric: GaugeMetric; color: string; dim: string; reduced: boolean; delay: number }) {
+  const { t } = useT();
   const R = 26;
   const C = 2 * Math.PI * R;
   const pct = metric.target > 0 ? Math.max(0, Math.min(1, metric.value / metric.target)) : 0;
@@ -86,7 +89,7 @@ function Gauge({ metric, color, dim, reduced, delay }: { metric: GaugeMetric; co
     { className: "flex min-w-0 flex-1 items-center gap-3", "data-testid": `northstar-gauge-${metric.key}` },
     e(
       "svg",
-      { viewBox: "0 0 64 64", className: "h-16 w-16 shrink-0", role: "img", "aria-label": `${metric.label} ${valueText} / ${targetText}` },
+      { viewBox: "0 0 64 64", className: "h-16 w-16 shrink-0", role: "img", "aria-label": `${t(metric.label)} ${valueText} / ${targetText}` },
       e("circle", { cx: 32, cy: 32, r: R, fill: "none", stroke: "var(--ds-line)", strokeWidth: 5 }),
       reduced
         ? e("circle", { ...ringProps, strokeDashoffset: dashTarget })
@@ -108,7 +111,7 @@ function Gauge({ metric, color, dim, reduced, delay }: { metric: GaugeMetric; co
       e(
         "div",
         { className: "flex items-center gap-1.5" },
-        e("span", { className: `text-[11px] font-semibold ${dim}` }, metric.label),
+        e("span", { className: `text-[11px] font-semibold ${dim}` }, t(metric.label)),
         missing
           ? e(
               "span",
@@ -116,19 +119,19 @@ function Gauge({ metric, color, dim, reduced, delay }: { metric: GaugeMetric; co
                 className: "rounded border border-warn-soft bg-warn-soft px-1 py-0.5 text-[8.5px] text-warn",
                 title: metric.note || metric.status,
               },
-              metric.status === "table_missing" ? "表缺" : "指标异常",
+              metric.status === "table_missing" ? t("表缺") : t("指标异常"),
             )
           : null,
       ),
-      e("div", { className: "text-[10px] tabular-nums text-muted" }, `${valueText} / ${targetText}${metric.unit !== "%" ? ` ${metric.unit}` : ""}`),
-      metric.detail ? e("div", { className: "text-[9px] text-muted" }, metric.detail) : null,
+      e("div", { className: "text-[10px] tabular-nums text-muted" }, `${valueText} / ${targetText}${metric.unit !== "%" ? ` ${t(metric.unit)}` : ""}`),
+      metric.detail ? e("div", { className: "text-[9px] text-muted" }, `${metric.detail} ${t("已裁决")}`) : null,
     ),
   );
 }
 
-function metricValueText(metric: GaugeMetric): string {
+function metricValueText(metric: GaugeMetric, unitLabel: (unit: string) => string = (unit) => unit): string {
   if (metric.unit === "%") return `${Number.isInteger(metric.value) ? metric.value : metric.value.toFixed(1)}%`;
-  return `${Math.round(metric.value)}${metric.unit ? ` ${metric.unit}` : ""}`;
+  return `${Math.round(metric.value)}${metric.unit ? ` ${unitLabel(metric.unit)}` : ""}`;
 }
 
 function metricWavePath(metrics: GaugeMetric[], phase: number, secondary = false): string {
@@ -161,6 +164,7 @@ function DashboardNorthStar({
   failed: boolean;
   reduced: boolean;
 }) {
+  const { t } = useT();
   const R = 52;
   const C = 2 * Math.PI * R;
   const metrics = data?.metrics || [];
@@ -171,7 +175,7 @@ function DashboardNorthStar({
       }, 0) / metrics.length * 100)
     : null;
   const dashTarget = C * (1 - (completion || 0) / 100);
-  const status = completion === null ? "等待真实数据" : completion >= 80 ? "接近目标" : completion >= 50 ? "推进中" : "需加速";
+  const status = t(completion === null ? "等待真实数据" : completion >= 80 ? "接近目标" : completion >= 50 ? "推进中" : "需加速");
   const waveGradientId = `vkpi-northstar-wave-${React.useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const wavePrimary = metricWavePath(metrics, 0);
   const waveSecondary = metricWavePath(metrics, 1.7, true);
@@ -182,10 +186,10 @@ function DashboardNorthStar({
   },
     e("header", { className: "vkpi-northstar-dashboard__head" },
       e("div", null,
-        e("h3", null, "增长健康度"),
-        e("span", null, "90 天 North Star")
+        e("h3", null, t("增长健康度")),
+        e("span", null, t("90 天 North Star"))
       ),
-      e("span", { className: "vkpi-northstar-dashboard__live" }, data ? "真实" : loading ? "读取中" : "无信号")
+      e("span", { className: "vkpi-northstar-dashboard__live" }, data ? t("真实") : loading ? t("读取中") : t("无信号"))
     ),
     e("div", { className: "vkpi-northstar-dashboard__body" },
       metrics.length > 0 && e("svg", {
@@ -206,7 +210,7 @@ function DashboardNorthStar({
         e("path", { className: "is-secondary", d: waveSecondary, stroke: "var(--ds-flow-violet)", pathLength: 1, vectorEffect: "non-scaling-stroke" })
       ),
       e("div", { className: "vkpi-northstar-dashboard__ring" },
-        e("svg", { viewBox: "0 0 120 120", role: "img", "aria-label": completion === null ? "北极星数据暂不可用" : `90 天目标完成度 ${completion}%` },
+        e("svg", { viewBox: "0 0 120 120", role: "img", "aria-label": completion === null ? t("北极星数据暂不可用") : t("90 天目标完成度 {completion}%", { completion }) },
           e("defs", null,
               e("linearGradient", { id: "vkpi-dashboard-northstar-gradient", x1: "0", y1: "0", x2: "1", y2: "1" },
                 e("stop", { offset: "0%", stopColor: "var(--ds-flow-cyan)" }),
@@ -238,27 +242,28 @@ function DashboardNorthStar({
         ),
         e("div", { className: "vkpi-northstar-dashboard__center" },
           e("strong", null, completion === null ? "--" : completion),
-          e("span", null, "完成度"),
+          e("span", null, t("完成度")),
           e("small", null, status)
         )
       ),
       failed || (!loading && !data)
-        ? e("div", { className: "vkpi-northstar-dashboard__empty" }, "北极星端点暂不可用,未使用样板数字。")
+        ? e("div", { className: "vkpi-northstar-dashboard__empty" }, t("北极星端点暂不可用,未使用样板数字。"))
         : e("div", { className: "vkpi-northstar-dashboard__metrics" },
             metrics.map((metric) => e("div", { key: metric.key, title: metric.note || `${metric.value}/${metric.target}` },
-              e("strong", { className: metric.status && metric.status !== "ok" ? "is-missing" : "" }, metricValueText(metric)),
-              e("span", null, metric.label),
-              e("small", null, `目标 ${metric.target}${metric.unit}`)
+              e("strong", { className: metric.status && metric.status !== "ok" ? "is-missing" : "" }, metricValueText(metric, t)),
+              e("span", null, t(metric.label)),
+              e("small", null, `${t("目标")} ${metric.target}${metric.unit === "%" ? "%" : ` ${t(metric.unit)}`}`)
             ))
           )
     ),
     e("footer", { className: "vkpi-northstar-dashboard__foot" },
-      data?.generatedAt ? `真实 northstar · ${data.generatedAt} UTC` : loading ? "正在读取真实 northstar" : "真实 northstar 暂无结果"
+      data?.generatedAt ? `${t("真实 northstar")} · ${data.generatedAt} UTC` : loading ? t("正在读取真实 northstar") : t("真实 northstar 暂无结果")
     )
   );
 }
 
 export function NorthStarGauges({ apiToken = "", variant = "strip" }: { apiToken?: string; variant?: "strip" | "dashboard" }) {
+  const { t } = useT();
   const reduced = !!useReducedMotion();
   const [data, setData] = useState<{ metrics: GaugeMetric[]; generatedAt: string } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -296,17 +301,17 @@ export function NorthStarGauges({ apiToken = "", variant = "strip" }: { apiToken
         "div",
         { className: "flex items-center gap-2" },
         e(Target, { size: 14, className: "text-info" }),
-        e("div", { className: "text-[13px] font-semibold text-ink" }, "90 天北极星"),
+        e("div", { className: "text-[13px] font-semibold text-ink" }, t("90 天北极星")),
       ),
-      e("div", { className: "text-[10px] text-muted" }, "真库现查 · 表缺诚实 0"),
+      e("div", { className: "text-[10px] text-muted" }, t("真库现查 · 表缺诚实 0")),
     ),
     loading && !data
-      ? e("div", { className: "py-3 text-center text-[11px] text-muted" }, "北极星指标加载中…")
+      ? e("div", { className: "py-3 text-center text-[11px] text-muted" }, t("北极星指标加载中…"))
       : failed || !data
         ? e(
             "div",
             { className: "rounded-lg border border-dashed border-line px-3 py-2 text-center text-[11px] text-muted" },
-            "北极星端点暂不可用(诚实降级,不编数)。",
+            t("北极星端点暂不可用(诚实降级,不编数)。"),
           )
         : e(
             "div",
@@ -317,7 +322,7 @@ export function NorthStarGauges({ apiToken = "", variant = "strip" }: { apiToken
             }),
           ),
     data?.generatedAt
-      ? e("div", { className: "mt-2 text-right text-[9px] text-muted" }, `生成于 ${data.generatedAt}(UTC)· 纯读`)
+      ? e("div", { className: "mt-2 text-right text-[9px] text-muted" }, `${t("生成于")} ${data.generatedAt}(UTC)· ${t("纯读")}`)
       : null,
   );
 }
