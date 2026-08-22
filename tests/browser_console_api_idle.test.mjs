@@ -273,3 +273,74 @@ test("terminal grace is 12s after DOM deadline and bounded by overall deadline",
   assert.equal(terminalApiIdleDeadline(30_000, 60_000), 42_000);
   assert.equal(terminalApiIdleDeadline(30_000, 35_000), 35_000);
 });
+
+// ── Ask P1 命令面板旅程契约(browser_console_capture_runtime.mjs)────────────────
+import {
+  emptyFunctionalProof,
+  functionalProofPassed,
+} from "../scripts/browser_console_capture_runtime.mjs";
+
+function passingProof() {
+  const proof = emptyFunctionalProof();
+  for (const key of Object.keys(proof.ask_find)) {
+    if (typeof proof.ask_find[key] === "boolean") proof.ask_find[key] = true;
+  }
+  for (const key of Object.keys(proof.global_search)) {
+    if (typeof proof.global_search[key] === "boolean") proof.global_search[key] = true;
+  }
+  Object.assign(proof.ask_find, {
+    answer_char_count: 12,
+    fact_count: 0,
+    evidence_count: 0,
+    intelligent_api_2xx_count: 1,
+    ui_global_search_api_2xx_count: 1,
+    ui_catalog_suggest_api_2xx_count: 1,
+  });
+  Object.assign(proof.global_search, {
+    ui_results_rendered: true,
+    ui_trustworthy_empty: false,
+    ui_result_count: 3,
+    required_source_count: 3,
+    ready_source_count: 3,
+    optional_source_count: 1,
+    result_count_total: 3,
+    result_item_total: 3,
+  });
+  return proof;
+}
+
+test("P1 journey proof carries the three-zone home, optional catalog source and clarification-tolerant answer", () => {
+  const empty = emptyFunctionalProof();
+  assert.equal(empty.ask_find.home_zones_present, false);
+  assert.equal(empty.ask_find.catalog_suggest_api_error_absent, false);
+  assert.equal(empty.ask_find.ui_catalog_suggest_api_2xx_count, 0);
+  assert.deepEqual(
+    ["optional_sources_valid", "catalog_probe_completed", "catalog_http_2xx", "catalog_items_valid", "optional_source_count"]
+      .map((key) => key in empty.global_search),
+    [true, true, true, true, true],
+  );
+  assert.equal(functionalProofPassed(empty), false);
+  assert.equal(functionalProofPassed(passingProof()), true);
+});
+
+test("facts/evidence may be zero but answer text, home zones and catalog health are mandatory", () => {
+  const proof = passingProof();
+  proof.ask_find.fact_count = 0;
+  proof.ask_find.evidence_count = 0;
+  assert.equal(functionalProofPassed(proof), true);
+  for (const [section, field, value] of [
+    ["ask_find", "answer_char_count", 0],
+    ["ask_find", "home_zones_present", false],
+    ["ask_find", "catalog_suggest_api_error_absent", false],
+    ["global_search", "catalog_probe_completed", false],
+    ["global_search", "catalog_http_2xx", false],
+    ["global_search", "catalog_items_valid", false],
+    ["global_search", "optional_sources_valid", false],
+    ["global_search", "required_source_count", 4],
+    ["global_search", "ready_source_count", 2],
+  ]) {
+    const broken = passingProof();
+    broken[section][field] = value;
+    assert.equal(functionalProofPassed(broken), false, `${section}.${field}=${value} must fail`);
+  }
+});

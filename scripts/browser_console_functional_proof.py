@@ -1,8 +1,23 @@
-"""Hermetic validation for the browser gate's boolean/count function proof."""
+"""Hermetic validation for the browser gate's boolean/count function proof.
+
+Ask P1 contract (2026-08-22): the command palette opens on a three-zone home
+(jobs / recent / suggestions), a prefix-free query fans out to global-search
+plus the optional fourth source ``/catalog/suggest``; the answer card may be a
+clarification or an empty result (facts/evidence may be zero) as long as the
+answer text is non-empty and no failure state rendered.
+"""
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
+from urllib.parse import urlsplit
+
+
+INTELLIGENT_QUERY_PATH = "/api/admin/vkpi/intelligent/query"
+GLOBAL_SEARCH_PATH = "/api/admin/vkpi/global-search"
+CATALOG_SUGGEST_PATH = "/api/admin/vkpi/catalog/suggest"
+FUNCTIONAL_JOURNEY_FAMILY = "kol-pool"
+REQUIRED_GLOBAL_SEARCH_SOURCE_COUNT = 3
 
 
 FUNCTIONAL_ASK_BOOL_FIELDS = (
@@ -16,6 +31,8 @@ FUNCTIONAL_ASK_BOOL_FIELDS = (
     "completed",
     "failure_absent",
     "answer_present",
+    "home_zones_present",
+    "catalog_suggest_api_error_absent",
     "same_origin_api_idle",
 )
 FUNCTIONAL_ASK_COUNT_FIELDS = (
@@ -24,6 +41,7 @@ FUNCTIONAL_ASK_COUNT_FIELDS = (
     "evidence_count",
     "intelligent_api_2xx_count",
     "ui_global_search_api_2xx_count",
+    "ui_catalog_suggest_api_2xx_count",
 )
 FUNCTIONAL_SEARCH_BOOL_FIELDS = (
     "ui_search_completed",
@@ -41,11 +59,16 @@ FUNCTIONAL_SEARCH_BOOL_FIELDS = (
     "all_sources_ready",
     "result_counts_valid",
     "result_counts_match_arrays",
+    "optional_sources_valid",
+    "catalog_probe_completed",
+    "catalog_http_2xx",
+    "catalog_items_valid",
 )
 FUNCTIONAL_SEARCH_COUNT_FIELDS = (
     "ui_result_count",
     "required_source_count",
     "ready_source_count",
+    "optional_source_count",
     "result_count_total",
     "result_item_total",
 )
@@ -156,11 +179,11 @@ def evaluate_functional_proof(
         FUNCTIONAL_SEARCH_COUNT_FIELDS,
     )
 
+    # facts / evidence are diagnostic counts only: a clarification or an honest
+    # empty answer is a completed journey as long as the answer text is present.
     ask_checks = {
         **{field: ask[field] is True for field in FUNCTIONAL_ASK_BOOL_FIELDS},
         "answer_char_count_positive": ask["answer_char_count"] > 0,
-        "fact_count_positive": ask["fact_count"] > 0,
-        "evidence_count_positive": ask["evidence_count"] > 0,
         "intelligent_api_2xx_observed": ask["intelligent_api_2xx_count"] >= 1,
         "ui_global_search_api_2xx_observed": ask["ui_global_search_api_2xx_count"] >= 1,
     }
@@ -178,8 +201,14 @@ def evaluate_functional_proof(
             if search["ui_results_rendered"]
             else search["ui_result_count"] == 0
         ),
-        "required_source_count_exact": search["required_source_count"] == 3,
-        "ready_source_count_exact": search["ready_source_count"] == 3,
+        # Required sources stay an exact subset {kols, projects, events}; any
+        # optional source (e.g. the catalog) only has to report a valid status.
+        "required_source_count_exact": (
+            search["required_source_count"] == REQUIRED_GLOBAL_SEARCH_SOURCE_COUNT
+        ),
+        "ready_source_count_exact": (
+            search["ready_source_count"] == REQUIRED_GLOBAL_SEARCH_SOURCE_COUNT
+        ),
         "result_totals_equal": search["result_count_total"] == search["result_item_total"],
     }
     ask_pass = all(ask_checks.values())
@@ -202,3 +231,57 @@ def evaluate_functional_proof(
         "global_search_pass": search_pass,
         "pass": ask_pass and search_pass,
     }
+
+
+def _same_origin_family_counts(
+    network_responses: Sequence[Mapping[str, Any]],
+    path: str,
+) -> tuple[int, int]:
+    """Return (2xx, non-2xx) counts for one API path inside the journey family."""
+    ok = 0
+    bad = 0
+    for row in network_responses:
+        if row.get("page_family") != FUNCTIONAL_JOURNEY_FAMILY:
+            continue
+        if urlsplit(str(row.get("url") or "")).path != path:
+            continue
+        try:
+            status = int(row.get("status") or 0)
+        except (TypeError, ValueError):
+            status = 0
+        if 200 <= status < 300:
+            ok += 1
+        else:
+            bad += 1
+    return ok, bad
+
+
+def evaluate_functional_network_evidence(
+    network_responses: Sequence[Mapping[str, Any]],
+    functional_proof: Mapping[str, Any],
+) -> tuple[dict[str, int], bool]:
+    """Cross-check DOM-side counts against retained same-origin network rows.
+
+    The in-page source-truth probe adds exactly one extra global-search and one
+    extra catalog/suggest response on top of what the UI itself issued, so the
+    retained evidence must cover ``ui_count + 1`` for both.  The catalog is an
+    optional hit source but a mandatory healthy endpoint: any non-2xx catalog
+    response inside the journey family fails the proof.
+    """
+    ask = functional_proof.get("ask_find") or {}
+    intelligent_2xx, _ = _same_origin_family_counts(network_responses, INTELLIGENT_QUERY_PATH)
+    search_2xx, _ = _same_origin_family_counts(network_responses, GLOBAL_SEARCH_PATH)
+    catalog_2xx, catalog_bad = _same_origin_family_counts(network_responses, CATALOG_SUGGEST_PATH)
+    counts = {
+        "intelligent_api_2xx": intelligent_2xx,
+        "global_search_api_2xx": search_2xx,
+        "catalog_suggest_api_2xx": catalog_2xx,
+        "catalog_suggest_api_non_2xx": catalog_bad,
+    }
+    passed = bool(
+        intelligent_2xx >= int(ask.get("intelligent_api_2xx_count") or 0) >= 1
+        and search_2xx >= int(ask.get("ui_global_search_api_2xx_count") or 0) + 1 >= 2
+        and catalog_2xx >= int(ask.get("ui_catalog_suggest_api_2xx_count") or 0) + 1 >= 2
+        and catalog_bad == 0
+    )
+    return counts, passed

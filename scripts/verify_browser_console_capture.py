@@ -23,6 +23,7 @@ from urllib.parse import urlsplit, urlunsplit
 try:
     from browser_console_functional_proof import (
         evaluate_deadline_proof,
+        evaluate_functional_network_evidence,
         evaluate_functional_proof,
     )
 except ModuleNotFoundError:  # Imported by a test from the repository root.
@@ -30,6 +31,7 @@ except ModuleNotFoundError:  # Imported by a test from the repository root.
 
     _proof_helpers = run_path(Path(__file__).with_name("browser_console_functional_proof.py"))
     evaluate_deadline_proof = _proof_helpers["evaluate_deadline_proof"]
+    evaluate_functional_network_evidence = _proof_helpers["evaluate_functional_network_evidence"]
     evaluate_functional_proof = _proof_helpers["evaluate_functional_proof"]
 try:
     from browser_console_release_identity import (
@@ -708,33 +710,14 @@ def evaluate_capture(
         redact_text=redact_text,
         failures=failures,
     )
-    functional_network_counts = {
-        "intelligent_api_2xx": sum(
-            1
-            for row in network_responses
-            if row.get("page_family") == "kol-pool"
-            and 200 <= int(row.get("status") or 0) < 300
-            and urlsplit(str(row.get("url") or "")).path
-            == "/api/admin/vkpi/intelligent/query"
-        ),
-        "global_search_api_2xx": sum(
-            1
-            for row in network_responses
-            if row.get("page_family") == "kol-pool"
-            and 200 <= int(row.get("status") or 0) < 300
-            and urlsplit(str(row.get("url") or "")).path
-            == "/api/admin/vkpi/global-search"
-        ),
-    }
-    functional_network_pass = (
-        functional_network_counts["intelligent_api_2xx"]
-        >= functional_proof["ask_find"]["intelligent_api_2xx_count"]
-        >= 1
-        and functional_network_counts["global_search_api_2xx"]
-        >= functional_proof["ask_find"]["ui_global_search_api_2xx_count"] + 1
-        >= 2
+    # Ask P1: global-search + optional catalog/suggest + intelligent/query are
+    # cross-checked against retained network rows in browser_console_functional_proof.
+    functional_network_counts, functional_network_pass = evaluate_functional_network_evidence(
+        network_responses,
+        functional_proof,
     )
     functional_metrics["network_evidence_pass"] = functional_network_pass
+    functional_metrics["network_counts"] = functional_network_counts
     functional_metrics["pass"] = functional_metrics["pass"] and functional_network_pass
     if not functional_network_pass:
         failures.append("functional journey network evidence is missing or inconsistent")
