@@ -110,6 +110,7 @@ release_candidate_worktree() {
   if [ -n "$status" ]; then
     count="$(printf '%s\n' "$status" | awk 'NF {count += 1} END {print count + 0}')"
     echo "[verify] release candidate is not immutable: ${count} dirty paths." >&2
+    printf '%s\n' "$status" | head -20 | sed 's/^/[verify]   drift: /' >&2
     echo "[verify] strict deploy refuses tracked, staged, or untracked drift." >&2
     return 1
   fi
