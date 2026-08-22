@@ -6,8 +6,10 @@
 
 本模块把浮动别名在网关入口一次性映射成精确名:
 
-- google ``*flash*-latest`` → ``VKPI_GEMINI_MODEL_EXACT``(默认 ``gemini-2.5-flash``)
-- google ``*pro*-latest``   → ``VKPI_GEMINI_PRO_MODEL_EXACT``(默认 ``gemini-2.5-pro``)
+- google ``*flash*-latest`` → ``VKPI_GEMINI_MODEL_EXACT``(默认 ``gemini-3.6-flash``;
+  2026-08-22 模型升级刀:``gemini-flash-latest`` 本身已漂到 3.7(无 thinking minimal
+  档,禁用),所以别名绝不能原样放行,必须映射成精确 id)
+- google ``*pro*-latest``   → ``VKPI_GEMINI_PRO_MODEL_EXACT``(默认 ``gemini-2.5-pro``,Pro 档本刀不动)
 - 其它 provider 的 ``*-latest`` → ``VKPI_<PROVIDER>_MODEL_EXACT``,未配则原样保留
   (没有可靠默认值,宁可让就绪闸按原名拦下,也不凭空猜一个精确名)。
 
@@ -26,7 +28,7 @@ logger = get_logger(__name__)
 _PROVIDER_ALIASES = {"gemini": "google", "claude": "anthropic"}
 _GOOGLE_FLASH_EXACT_ENV = "VKPI_GEMINI_MODEL_EXACT"
 _GOOGLE_PRO_EXACT_ENV = "VKPI_GEMINI_PRO_MODEL_EXACT"
-_GOOGLE_FLASH_EXACT_DEFAULT = "gemini-2.5-flash"
+_GOOGLE_FLASH_EXACT_DEFAULT = "gemini-3.6-flash"
 _GOOGLE_PRO_EXACT_DEFAULT = "gemini-2.5-pro"
 _LATEST_SUFFIX = "-latest"
 

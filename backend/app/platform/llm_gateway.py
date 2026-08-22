@@ -21,6 +21,7 @@ from app.core.model_registry import assert_production_task_bindings_are_pinned
 from app.db.connection import get_conn, is_postgres_runtime
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.platform.llm_gateway_model_alias import resolve_model_alias as _resolve_model_alias
+from app.platform.llm_local_evaluation import LOCAL_EVALUATION_BINDING
 from app.platform.llm_runtime_errors import (
     build_runtime_error as _build_runtime_error,
     normalise_attempt_error as _normalise_runtime_error,
@@ -126,31 +127,39 @@ _EXECUTION_CLASSES = {
 _LOCAL_EVALUATION_ENABLED_ENV = "VKPI_LLM_LOCAL_EVALUATION_ENABLED"
 _LOCAL_EVALUATION_MODELS_ENV = "VKPI_LLM_LOCAL_EVALUATION_MODELS"
 _READINESS_OPERATOR_ACK_ENV = "VKPI_LLM_READINESS_OPERATOR_ACK"
+# 2026-08-22 模型升级刀:provider 默认模型与分/百万价必须与
+# platform/models/registry.py ModelSpec 和 platform/models/runtime._EXACT_CATALOG 一致
+# (tests/test_model_registry_defaults.py 比对)。env 覆盖优先于代码默认——prod .env
+# 不随部署 rsync,切换需 E 车道手改。
 PROVIDER_CONFIG: dict[str, dict[str, Any]] = {
     "openai": {
-        "model": os.getenv("VKPI_OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-5.4-mini")),
+        # gpt-5.6-luna $0.20/$1.20;调用须 reasoning.effort='none'。
+        "model": os.getenv("VKPI_OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-5.6-luna")),
         "endpoint": "https://api.openai.com/v1/responses",
-        "input_cents_per_million": 75,
-        "output_cents_per_million": 450,
+        "input_cents_per_million": 20,
+        "output_cents_per_million": 120,
         "timeout": int(os.getenv("VKPI_LLM_HTTP_TIMEOUT", "90") or 90),
     },
     "google": {
-        # W-L1 止血:prod env 配的是浮动别名 gemini-flash-latest(worker 实跑 gemini-2.5-flash),
+        # W-L1 止血:prod env 曾配浮动别名 gemini-flash-latest(现已漂到 3.7,禁用),
         # 默认路由在入口就映射成精确名(VKPI_GEMINI_MODEL_EXACT 可覆盖),台账只记精确名。
+        # gemini-3.6-flash $0.75/$3.75 促销价至 2026-12-31。
         "model": _resolve_model_alias(
             "google",
-            os.getenv("VKPI_GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.5-flash")),
+            os.getenv("VKPI_GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.6-flash")),
         ),
         "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        "input_cents_per_million": 150,
-        "output_cents_per_million": 900,
+        "input_cents_per_million": 75,
+        "output_cents_per_million": 375,
         "timeout": int(os.getenv("VKPI_LLM_HTTP_TIMEOUT", "90") or 90),
     },
     "anthropic": {
+        # 模型继承 config.CLAUDE_MODEL(默认 claude-sonnet-5 $2/$10);
+        # env 优先级 VKPI_CLAUDE_MODEL > VKPI_WEEKLY_SUMMARY_MODEL > CLAUDE_MODEL 不变。
         "model": os.getenv("VKPI_CLAUDE_MODEL", os.getenv("VKPI_WEEKLY_SUMMARY_MODEL", CLAUDE_MODEL)),
         "endpoint": "https://api.anthropic.com/v1/messages",
-        "input_cents_per_million": 300,
-        "output_cents_per_million": 1500,
+        "input_cents_per_million": 200,
+        "output_cents_per_million": 1000,
         # 2026-07-18 事故修:官号日报长文生成 >30s 全超时→熔断锁死 LLM 面板。
         "timeout": int(os.getenv("VKPI_LLM_HTTP_TIMEOUT", "90") or 90),
     },
@@ -222,7 +231,9 @@ def _local_evaluation_bindings() -> set[str]:
             bindings.add(f"{provider}/{model_id}")
     # P0 scope is intentionally fixed to the one video-analysis binding.  The
     # env is an operator acknowledgement, not an extensible model registry.
-    return bindings & {"google/gemini-2.5-flash"}
+    # 唯一真源 = llm_local_evaluation.LOCAL_EVALUATION_BINDING(import-safe 叶模块),
+    # 这里不再复制字面,避免两处漂移。
+    return bindings & {LOCAL_EVALUATION_BINDING}
 
 
 def _readiness_operator_ack_bindings() -> set[str]:

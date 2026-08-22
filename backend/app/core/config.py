@@ -133,11 +133,16 @@ JWT_EXPIRES_DAYS = max(1, _env_int("JWT_EXPIRES_DAYS", "7"))
 USER_CACHE_TTL_SEC = max(5, _env_int("USER_CACHE_TTL_SEC", "30"))
 
 # ── AI 模型配置（改 .env 就能换模型，不用动代码）──
-CLAUDE_MODEL       = os.environ.get("CLAUDE_MODEL",       "claude-sonnet-4-6")
-CLAUDE_HAIKU_MODEL = os.environ.get("CLAUDE_HAIKU_MODEL", "claude-haiku-4-5-20251001")
-GEMINI_MODEL       = os.environ.get("GEMINI_MODEL",       "gemini-3.5-flash")
-OPENAI_MODEL       = os.environ.get("OPENAI_MODEL",       "gpt-5.4-mini")
-DEFAULT_VIA_DIALOGUE_MODEL = "gpt-5.4-mini"
+# 2026-08-22 模型升级刀:默认值整体升到 Sonnet 5 / Gemini 3.6 Flash / GPT-5.6 luna。
+# 旧 id(claude-sonnet-4-6 / gemini-3.5-flash / gpt-5.4-mini)仍在 model_registry
+# 注册+定价,prod 可用同名 env 钉回。
+CLAUDE_MODEL       = os.environ.get("CLAUDE_MODEL",       "claude-sonnet-5")
+# Haiku 4.5 于 2026-10-15 退役且无 Haiku 5 继任;env 名保留兼容旧 pin,
+# 默认改走 Sonnet 5(调用方按需关思考 + 低 effort 即是最便宜的 Claude 车道)。
+CLAUDE_HAIKU_MODEL = os.environ.get("CLAUDE_HAIKU_MODEL", "claude-sonnet-5")
+GEMINI_MODEL       = os.environ.get("GEMINI_MODEL",       "gemini-3.6-flash")
+OPENAI_MODEL       = os.environ.get("OPENAI_MODEL",       "gpt-5.6-luna")
+DEFAULT_VIA_DIALOGUE_MODEL = "gpt-5.6-luna"
 
 # ── API Keys ──
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")

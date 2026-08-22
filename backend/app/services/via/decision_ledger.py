@@ -6,14 +6,18 @@ from __future__ import annotations
 from typing import Any
 
 
+# USD / token(= core/model_pricing USD/1M ÷ 1e6)。2026-08-22 模型升级刀补新默认行;
+# 未知 id → 0 成本,所以 Via 每换默认模型都要在这里补行。
 _MODEL_COST_RATES: dict[str, tuple[float, float]] = {
-    "gpt-5-nano": (0.00000005, 0.0000004),
-    "gpt-5.4-nano": (0.0000002, 0.00000125),
-    "gpt-5-mini": (0.00000025, 0.000002),
+    "gpt-5.6-luna": (0.0000002, 0.0000012),
+    "gpt-5.4-mini": (0.00000075, 0.0000045),
     "gpt-4o-mini": (0.00000015, 0.0000006),
+    "gemini-3.6-flash": (0.00000075, 0.00000375),  # 促销价至 2026-12-31
+    "gemini-3.5-flash-lite": (0.0000003, 0.0000025),
     "gemini-2.5-flash-lite": (0.0000001, 0.0000004),
     "gemini-2.5-flash": (0.0000003, 0.0000025),
-    "claude-haiku-4-5-20251001": (0.000001, 0.000005),
+    "claude-sonnet-5": (0.000002, 0.00001),
+    "claude-haiku-4-5-20251001": (0.000001, 0.000005),  # retire 2026-10-15
 }
 
 

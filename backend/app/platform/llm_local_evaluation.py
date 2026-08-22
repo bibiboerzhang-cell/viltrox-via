@@ -27,7 +27,10 @@ LOCAL_EVALUATION_REQUEST_FIELD = "local_evaluation"
 LOCAL_EVALUATION_DERIVE_METHOD = "video_analysis_final_v1"
 LOCAL_EVALUATION_CACHE_DERIVE_METHOD = "video_analysis_final_v1__local_eval"
 LOCAL_EVALUATION_PROVIDER = "google"
-LOCAL_EVALUATION_MODEL = "gemini-2.5-flash"
+# 字面契约(2026-08-22 模型升级刀):必须与 core/model_registry.TASK_MODEL_BINDING
+# ['audit_video_analysis'] 和 core/gemini_models.DEFAULT_VIDEO_GEMINI_MODEL 一字不差;
+# llm_gateway._local_evaluation_bindings 的白名单从本常量派生。
+LOCAL_EVALUATION_MODEL = "gemini-3.6-flash"
 LOCAL_EVALUATION_BINDING = f"{LOCAL_EVALUATION_PROVIDER}/{LOCAL_EVALUATION_MODEL}"
 LOCAL_EVALUATION_CLAIM_STATUS = "descriptive_only"
 LOCAL_EVALUATION_MODEL_READINESS_STATUS = "evaluation_only_not_production_ready"

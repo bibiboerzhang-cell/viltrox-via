@@ -23,9 +23,9 @@ logger = get_logger(__name__)
 CATEGORY_ORDER = ["ai", "commerce", "data", "email"]
 
 DEFAULT_INTEGRATIONS = (
-    ("anthropic", "ai", "Claude Opus/Sonnet/Haiku", "ANTHROPIC_", "ok"),
-    ("openai", "ai", "GPT-4o-mini pre-filter", "OPENAI_", "ok"),
-    ("google", "ai", "Gemini 2.5 Flash", "GOOGLE_", "ok"),
+    ("anthropic", "ai", "Claude Opus 5/Sonnet 5", "ANTHROPIC_", "ok"),
+    ("openai", "ai", "OpenAI pre-filter", "OPENAI_", "ok"),
+    ("google", "ai", "Gemini Flash", "GOOGLE_", "ok"),
     ("shopify", "commerce", "Order webhooks", "SHOPIFY_", "ok"),
     ("paypal", "commerce", "Creator payouts", "PAYPAL_", "not_configured"),
     ("stripe", "commerce", "Bank transfers", "STRIPE_", "not_configured"),

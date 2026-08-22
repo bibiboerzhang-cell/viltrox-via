@@ -8,61 +8,72 @@ from __future__ import annotations
 
 import os
 
-CLAUDE_OPUS_EXACT_MODEL = "claude-opus-4-7"
+# 2026-08-22 模型升级刀:Opus 4.7 → Opus 5。旧 id 仍注册(prod 可 env 钉回)。
+CLAUDE_OPUS_EXACT_MODEL = "claude-opus-5"
 
+# 新旧 id 同时注册:默认绑定走新模型,旧 id 保留给 prod env pin / 历史台账对账。
+# 只删零调用方的死 id(gemini-3.1-flash-lite / gpt-5.4-nano / gpt-4o,2026-08-22 grep 确认)。
+# 绝不登记 gemini-3.7-flash / gemini-flash-latest 漂到的 3.7(无 thinking minimal 档,
+# 每次烧 ~60 思考 token 且吃掉 max_output_tokens)。
 AVAILABLE_MODELS = {
     "anthropic": [
         "claude-fable-5",
         CLAUDE_OPUS_EXACT_MODEL,
+        "claude-sonnet-5",
         "claude-sonnet-4-6",
-        "claude-haiku-4-5",
-        "claude-haiku-4-5-20251001",
+        "claude-opus-4-7",
+        "claude-haiku-4-5",  # retire 2026-10-15
+        "claude-haiku-4-5-20251001",  # retire 2026-10-15
     ],
     "openai": [
         "gpt-5.6",
+        "gpt-5.6-luna",
         "gpt-5.5",
         "gpt-5.4",
         "gpt-5.4-mini",
-        "gpt-5.4-nano",
-        "gpt-4o",
         "gpt-4o-mini",
     ],
     "google": [
+        "gemini-3.6-flash",
         "gemini-3.5-flash",
+        "gemini-3.5-flash-lite",
         "gemini-flash-latest",
         "gemini-pro-latest",
-        "gemini-3.1-flash-lite",
         "gemini-2.5-flash",
         "gemini-2.5-pro",
     ],
 }
 
 TASK_MODEL_BINDING = {
-    "audit_pre_filter": "openai/gpt-5.4-mini",
+    "audit_pre_filter": "openai/gpt-5.6-luna",
     # The paid video worker and enqueue preflight both execute the exact
-    # APIFY_WORKER_GEMINI_MODEL binding.  Keep the control-plane task binding on
-    # that same authoritative default so readiness evidence for a newer
-    # candidate (for example gemini-3.5-flash) can never authorize the worker's
-    # actual gemini-2.5-flash request.
-    "audit_video_analysis": "google/gemini-2.5-flash",
-    "audit_vision_fallback": "anthropic/claude-sonnet-4-6",
-    "audit_deep_score": "anthropic/claude-sonnet-4-6",
+    # DEFAULT_VIDEO_GEMINI_MODEL binding (core/gemini_models.py).  Keep the
+    # control-plane task binding on that same authoritative default so
+    # readiness evidence for a newer candidate can never authorize the
+    # worker's actual request.  字面契约:'gemini-3.6-flash' 必须与
+    # core/gemini_models.DEFAULT_VIDEO_GEMINI_MODEL 和
+    # platform/llm_local_evaluation.LOCAL_EVALUATION_MODEL 一字不差。
+    "audit_video_analysis": "google/gemini-3.6-flash",
+    "audit_vision_fallback": "anthropic/claude-sonnet-5",
+    "audit_deep_score": "anthropic/claude-sonnet-5",
     "deepsight_strategy": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
     "deepsight_market_empath": "openai/gpt-5.5",
     "deepsight_opportunity": "google/gemini-2.5-pro",
-    "via_chat": "openai/gpt-5.4-mini",
-    "via_persona_summary": "anthropic/claude-haiku-4-5-20251001",
-    "kol_audience_analysis": "google/gemini-3.5-flash",
-    "kol_content_fit_analysis": "openai/gpt-5.4-mini",
-    "kol_product_fit_reason": "openai/gpt-5.4-mini",
-    "kol_outreach_pack": "anthropic/claude-sonnet-4-6",
+    "via_chat": "openai/gpt-5.6-luna",
+    # Haiku 4.5 退役(2026-10-15)替代:Via 人设摘要改走 gpt-5.6-luna
+    # (与 config.VIA_SUMMARY_PROVIDER 默认 openai 终于对齐)。
+    "via_persona_summary": "openai/gpt-5.6-luna",
+    "kol_audience_analysis": "google/gemini-3.6-flash",
+    "kol_content_fit_analysis": "openai/gpt-5.6-luna",
+    "kol_product_fit_reason": "openai/gpt-5.6-luna",
+    "kol_outreach_pack": "anthropic/claude-sonnet-5",
     "ai_today_grounded_discovery": "google/gemini-2.5-pro",
     "ai_today_evidence_strategy": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
     "contract_pdf_extract": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
     "invoice_extract": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
     # 情绪批注(sentiment_annotate.py 申报 task_binding 但此前漏登记,
     # 严格边界下恒 task_binding_model_mismatch —— 2026-07-16 回补实弹坐实)。
-    "vkpi_sentiment_annotate": "google/gemini-3.5-flash",
+    "vkpi_sentiment_annotate": "google/gemini-3.6-flash",
 }
 
 TASK_MODEL_ENV_KEYS = {

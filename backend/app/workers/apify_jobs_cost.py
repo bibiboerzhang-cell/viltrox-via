@@ -35,11 +35,23 @@ def _gemini_input_cost_usd(model: str, metadata: dict[str, Any], tokens_in: int)
             continue
         modality = str(item.get("modality") or "").upper()
         modality_counts[modality] = modality_counts.get(modality, 0) + (_int_or_none(item.get("token_count")) or 0)
+    # 2026-08-22 模型升级刀:精确 id 分支先于子串梯('gemini-3.5-flash-lite' 含
+    # 'gemini-3.5-flash';'gemini-3-flash' 不匹配 'gemini-3.6-flash')。价格表见
+    # core/model_pricing.py(促销/缓存/音频备注同步在那里)。
+    if "gemini-3.6-flash" in model_key:
+        # 0.75 文本/音频同价;缓存输入 0.075;促销至 2026-12-31。
+        return ((uncached_tokens * 0.75) + (cached_tokens * 0.075)) / 1_000_000
+    if "gemini-3.5-flash-lite" in model_key:
+        # 文本/图/视频/音频同价,无缓存折扣。
+        return tokens_in * 0.30 / 1_000_000
+    if "gemini-3.5-flash" in model_key:
+        # 旧默认(prod env 可钉回):1.50 输入、缓存 0.15;网关默认已换 3.6,不能再靠兜底。
+        return ((uncached_tokens * 1.50) + (cached_tokens * 0.15)) / 1_000_000
     if "gemini-3.1-pro" in model_key:
         rate = 4.0 if tokens_in > 200_000 else 2.0
         cached_rate = 0.40 if tokens_in > 200_000 else 0.20
         return ((uncached_tokens * rate) + (cached_tokens * cached_rate)) / 1_000_000
-    if "gemini-3-flash" in model_key:
+    if "gemini-3-flash" in model_key:  # 历史台账行(3-flash-preview)
         audio = modality_counts.get("AUDIO", 0)
         return ((tokens_in - audio) * 0.50 + audio * 1.00) / 1_000_000
     if "gemini-2.5-flash" in model_key:
@@ -51,9 +63,15 @@ def _gemini_input_cost_usd(model: str, metadata: dict[str, Any], tokens_in: int)
 
 def _gemini_output_rate_usd_per_mtok(model: str, tokens_in: int) -> float:
     model_key = str(model or "").lower()
+    if "gemini-3.6-flash" in model_key:
+        return 3.75
+    if "gemini-3.5-flash-lite" in model_key:
+        return 2.50
+    if "gemini-3.5-flash" in model_key:
+        return 9.0
     if "gemini-3.1-pro" in model_key:
         return 18.0 if tokens_in > 200_000 else 12.0
-    if "gemini-3-flash" in model_key:
+    if "gemini-3-flash" in model_key:  # 历史台账行(3-flash-preview)
         return 3.0
     if "gemini-2.5-flash" in model_key:
         return 2.50
@@ -105,7 +123,10 @@ def _openai_cost(result: dict[str, Any], fallback_cost: float) -> tuple[float, s
     tokens_out = _usage_count(metadata, "output_tokens", "completion_tokens")
     if tokens_in or tokens_out:
         model = str(result.get("model") or result.get("method") or "").lower()
-        if "gpt-5.5" in model:
+        # 精确 id 先于子串('gpt-5.6-luna' 含 'gpt-5.6')。
+        if "gpt-5.6-luna" in model:
+            cost = (tokens_in * 0.20 + tokens_out * 1.20) / 1_000_000
+        elif "gpt-5.6" in model or "gpt-5.5" in model:
             cost = (tokens_in * 5.0 + tokens_out * 30.0) / 1_000_000
         else:
             config = llm_gateway.PROVIDER_CONFIG.get("openai") or {}

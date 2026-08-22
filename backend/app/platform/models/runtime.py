@@ -45,6 +45,9 @@ MODEL_RESPONSE_ALIASES: Mapping[str, frozenset[str]] = MappingProxyType(
         # a known snapshot never admits another family or future revision.
         "gpt-5.4-mini": frozenset({"gpt-5.4-mini-2026-03-17"}),
         "gpt-5.5": frozenset({"gpt-5.5-2026-04-23"}),
+        # 2026-08-22 模型升级刀:gpt-5.6-luna / claude-sonnet-5 / claude-opus-5 /
+        # gemini-3.6-flash 的回显快照 id 待 E 车道活探针(stage1 canary)报告后
+        # 再经代码评审补入;在此之前严格路由要求回显与请求 id 完全一致。
     }
 )
 
@@ -163,6 +166,52 @@ _EXACT_CATALOG: dict[tuple[str, str], _CatalogEntry] = {
         output_cents_per_million=5000,
         endpoint_family="anthropic_messages",
         pricing_version="anthropic_models_2026-07-13",
+    ),
+    # ── 2026-08-22 模型升级刀(价格表冻结于官方页当日核实;与
+    # core/model_pricing.PRICING_USD_PER_1M_TOKENS 数值一致,单位为分)──
+    # gemini-3.6-flash:促销价至 2026-12-31(之后 150/750);缓存 7.5;音频同价。
+    ("google", "gemini-3.6-flash"): _CatalogEntry(
+        provider="google",
+        model_id="gemini-3.6-flash",
+        input_cents_per_million=75,
+        output_cents_per_million=375,
+        endpoint_family="google_generate_content",
+        pricing_version="model_upgrade_2026-08-22",
+    ),
+    # gemini-3.5-flash-lite:文本/图/视频/音频同价,无缓存折扣(关键帧裁判候选)。
+    ("google", "gemini-3.5-flash-lite"): _CatalogEntry(
+        provider="google",
+        model_id="gemini-3.5-flash-lite",
+        input_cents_per_million=30,
+        output_cents_per_million=250,
+        endpoint_family="google_generate_content",
+        pricing_version="model_upgrade_2026-08-22",
+    ),
+    # claude-sonnet-5:$2/$10 正式价;上下文 1M。
+    ("anthropic", "claude-sonnet-5"): _CatalogEntry(
+        provider="anthropic",
+        model_id="claude-sonnet-5",
+        input_cents_per_million=200,
+        output_cents_per_million=1000,
+        endpoint_family="anthropic_messages",
+        pricing_version="model_upgrade_2026-08-22",
+    ),
+    ("anthropic", "claude-opus-5"): _CatalogEntry(
+        provider="anthropic",
+        model_id="claude-opus-5",
+        input_cents_per_million=500,
+        output_cents_per_million=2500,
+        endpoint_family="anthropic_messages",
+        pricing_version="model_upgrade_2026-08-22",
+    ),
+    # gpt-5.6-luna:缓存输入 2 分;调用须 reasoning.effort='none'。
+    ("openai", "gpt-5.6-luna"): _CatalogEntry(
+        provider="openai",
+        model_id="gpt-5.6-luna",
+        input_cents_per_million=20,
+        output_cents_per_million=120,
+        endpoint_family="openai_responses",
+        pricing_version="model_upgrade_2026-08-22",
     ),
 }
 
