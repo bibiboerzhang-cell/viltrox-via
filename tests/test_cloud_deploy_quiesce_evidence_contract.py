@@ -619,3 +619,143 @@ def test_lane_override_is_nonsecret_allowlisted_and_atomically_installed() -> No
     assert rollback.index("atomic_release_layout.py' restore") < rollback.index(
         "sudo systemctl restart '${SERVICE_NAME}'"
     )
+
+
+def _ancestor_guard_function(deploy: str) -> str:
+    start = deploy.index("\nassert_remote_release_is_ancestor() {\n") + 1
+    end = deploy.index("\n}\n", start) + 3
+    return deploy[start:end]
+
+
+def test_deploy_refuses_candidates_that_do_not_descend_from_the_served_release() -> None:
+    deploy = _deploy()
+
+    main = deploy[deploy.index("\nrun_predeploy_embedded_browser_gate\n") :]
+    transport_at = main.index("\nsetup_deploy_ssh_transport\n")
+    prelock_guard_at = main.index("\nassert_remote_release_is_ancestor prelock\n", transport_at)
+    mutex_at = main.index("\nacquire_remote_deploy_lock\n", prelock_guard_at)
+    locked_guard_at = main.index("\nassert_remote_release_is_ancestor locked\n", mutex_at)
+    first_state_read_at = main.index("\ncapture_remote_sync_unit_state\n", locked_guard_at)
+    release_upload_at = main.index(
+        "sudo install -d -o root -g root -m 0755 '${REMOTE_RELEASES_DIR}'", locked_guard_at
+    )
+    assert (
+        transport_at
+        < prelock_guard_at
+        < mutex_at
+        < locked_guard_at
+        < first_state_read_at
+        < release_upload_at
+    )
+
+    guard = _ancestor_guard_function(deploy)
+    assert "readlink -- '${REMOTE_CURRENT_DIR}'" in guard
+    assert "'${REMOTE_CURRENT_DIR}/BUILD_GIT_SHA'" in guard
+    assert 'git merge-base --is-ancestor "${remote_sha}" "${candidate_sha}"' in guard
+    assert 'git log --oneline "${candidate_sha}..${remote_sha}"' in guard
+    assert 'DEPLOY_ALLOW_NON_ANCESTOR="${VKPI_DEPLOY_ALLOW_NON_ANCESTOR:-0}"' in deploy
+    assert 'if [ "${DEPLOY_ALLOW_NON_ANCESTOR}" = "1" ]; then' in guard
+    assert "category=candidate_not_descendant" in guard
+    assert "category=current_pointer_missing" in guard
+    assert "category=transport_failed" in guard
+    assert "category=remote_commit_unknown_locally" in guard
+    # The override path must stay loud: it is an operator decision, not a default.
+    assert "!!! VKPI_DEPLOY_ALLOW_NON_ANCESTOR=1" in guard
+
+
+def test_ancestor_guard_behaviour_against_a_stubbed_remote(tmp_path: Path) -> None:
+    deploy = _deploy()
+    guard = _ancestor_guard_function(deploy)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "HOME": str(tmp_path),
+    }
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=repo, env=env, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    def commit(name: str) -> str:
+        (repo / name).write_text(name, encoding="utf-8")
+        git("add", name)
+        git("commit", "-q", "-m", name)
+        return git("rev-parse", "HEAD")
+
+    git("init", "-q", "-b", "main")
+    base = commit("base")
+    served = commit("hotfix")
+    git("checkout", "-q", "-b", "diverged", base)
+    diverged = commit("local-only")
+    git("checkout", "-q", "-b", "descendant", served)
+    descendant = commit("on-top-of-hotfix")
+
+    (tmp_path / "guard.sh").write_text(guard, encoding="utf-8")
+    harness = tmp_path / "harness.sh"
+    harness.write_text(
+        "set -u\n"
+        "SSH_TARGET=viltrox\n"
+        "REMOTE_CURRENT_DIR=/opt/viltrox-2.0/current\n"
+        'FIRST_ATOMIC_BOOTSTRAP_MODE="${FIRST_ATOMIC_BOOTSTRAP_MODE:-0}"\n'
+        'DEPLOY_ALLOW_NON_ANCESTOR="${VKPI_DEPLOY_ALLOW_NON_ANCESTOR:-0}"\n'
+        'ssh() { printf "%s\\n" "${FAKE_LINK}"; printf "%s\\n" "${FAKE_BUILD}"; '
+        'return "${FAKE_RC:-0}"; }\n'
+        f'source "{tmp_path / "guard.sh"}"\n'
+        "assert_remote_release_is_ancestor prelock\n",
+        encoding="utf-8",
+    )
+
+    def run(candidate: str, link: str, build: str, **extra: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(harness)],
+            cwd=repo,
+            env={**env, "LOCAL_GIT_SHA": candidate, "FAKE_LINK": link, "FAKE_BUILD": build, **extra},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    served_link = f"/opt/viltrox-2.0/releases/20260821T000000Z-{served[:12]}"
+
+    accepted = run(descendant, served_link, served)
+    assert accepted.returncode == 0, accepted.stderr
+    assert "is an ancestor of candidate" in accepted.stdout
+
+    # Pointer suffix alone (legacy release without BUILD_GIT_SHA) still resolves.
+    assert run(descendant, served_link, "").returncode == 0
+
+    refused = run(diverged, served_link, served)
+    assert refused.returncode == 1
+    assert "category=candidate_not_descendant" in refused.stderr
+    assert served in refused.stderr and diverged in refused.stderr
+    assert "hotfix" in refused.stderr
+    assert "VKPI_DEPLOY_ALLOW_NON_ANCESTOR=1" in refused.stderr
+
+    overridden = run(diverged, served_link, served, VKPI_DEPLOY_ALLOW_NON_ANCESTOR="1")
+    assert overridden.returncode == 0
+    assert "!!! VKPI_DEPLOY_ALLOW_NON_ANCESTOR=1" in overridden.stderr
+
+    unknown = run(descendant, "/opt/viltrox-2.0/releases/x-abcdefabcdef", "")
+    assert unknown.returncode == 1
+    assert "category=remote_commit_unknown_locally" in unknown.stderr
+
+    missing = run(descendant, "", "")
+    assert missing.returncode == 1
+    assert "category=current_pointer_missing" in missing.stderr
+
+    bootstrap = run(descendant, "", "", FIRST_ATOMIC_BOOTSTRAP_MODE="1")
+    assert bootstrap.returncode == 0
+
+    transport = run(descendant, "", "", FAKE_RC="255")
+    assert transport.returncode == 1
+    assert "category=transport_failed" in transport.stderr
+
+    conflict = run(descendant, f"/opt/viltrox-2.0/releases/x-{diverged[:12]}", served)
+    assert conflict.returncode == 1
+    assert "category=release_identity_conflict" in conflict.stderr

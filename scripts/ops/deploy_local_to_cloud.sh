@@ -3400,6 +3400,93 @@ fetch_predeploy_runtime_health() {
     < "${DEPLOY_CANDIDATE_DIR}/scripts/ops/fetch_runtime_health.py"
 }
 
+# Ancestor guard: the candidate must descend from the release production is
+# currently serving.  A deploy whose HEAD does not contain the live commit
+# would silently roll back every commit that landed on the server since the
+# operator's branch diverged (e.g. a prod hotfix that was never merged back).
+# Read ``readlink /opt/viltrox-2.0/current`` over the already-open transport
+# before the deployment mutex (read-only, like the prelock auth preflight)
+# and again after the mutex to close the inter-deploy race.  The only bypass
+# is the explicit VKPI_DEPLOY_ALLOW_NON_ANCESTOR=1 operator override.
+DEPLOY_ALLOW_NON_ANCESTOR="${VKPI_DEPLOY_ALLOW_NON_ANCESTOR:-0}"
+REMOTE_CURRENT_RELEASE_SHA=""
+assert_remote_release_is_ancestor() {
+  local phase="${1:-}" remote_listing="" remote_link="" remote_build_sha=""
+  local remote_release_id="" remote_short="" remote_sha="" candidate_sha=""
+  case "${phase}" in
+    prelock|locked) ;;
+    *)
+      echo "Remote release ancestor guard failed (category=invalid_phase)." >&2
+      return 1
+      ;;
+  esac
+
+  # One read-only round trip: the current pointer target plus the build stamp
+  # the accepted release carried (the pointer suffix is only a 12-hex prefix).
+  if ! remote_listing="$(
+    ssh "${SSH_TARGET}" \
+      "readlink -- '${REMOTE_CURRENT_DIR}' 2>/dev/null || echo ''; cat -- '${REMOTE_CURRENT_DIR}/BUILD_GIT_SHA' 2>/dev/null || true" \
+      2>/dev/null
+  )"; then
+    echo "Remote release ancestor guard failed: could not read the current release pointer (category=transport_failed)." >&2
+    return 1
+  fi
+  remote_link="$(printf '%s\n' "${remote_listing}" | sed -n '1p')"
+  remote_build_sha="$(printf '%s\n' "${remote_listing}" | sed -n '2p' | tr -d '[:space:]')"
+  remote_listing=""
+
+  if [ -z "${remote_link}" ]; then
+    if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
+      echo "[deploy] ancestor guard (${phase}): remote current pointer absent; first atomic bootstrap has no served release to compare."
+      return 0
+    fi
+    echo "Remote release ancestor guard failed: ${REMOTE_CURRENT_DIR} is not a release pointer (category=current_pointer_missing)." >&2
+    return 1
+  fi
+  remote_release_id="${remote_link##*/}"
+  remote_short="${remote_release_id##*-}"
+  if [[ "${remote_build_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+    remote_sha="${remote_build_sha}"
+    if [[ "${remote_short}" =~ ^[0-9a-f]{12}$ ]] \
+      && [ "${remote_sha:0:12}" != "${remote_short}" ]; then
+      echo "Remote release ancestor guard failed: pointer suffix ${remote_short} disagrees with BUILD_GIT_SHA ${remote_sha} (category=release_identity_conflict)." >&2
+      return 1
+    fi
+  elif [[ "${remote_short}" =~ ^[0-9a-f]{12}$ ]]; then
+    remote_sha="${remote_short}"
+  else
+    echo "Remote release ancestor guard failed: cannot derive a commit from release '${remote_release_id}' (category=release_identity_unparseable)." >&2
+    return 1
+  fi
+
+  if ! remote_sha="$(git rev-parse --verify --quiet "${remote_sha}^{commit}")"; then
+    echo "Remote release ancestor guard failed: production serves ${remote_short} which this clone does not contain; run 'git fetch' and merge it before deploying (category=remote_commit_unknown_locally)." >&2
+    if [ "${DEPLOY_ALLOW_NON_ANCESTOR}" = "1" ]; then
+      echo "!!! VKPI_DEPLOY_ALLOW_NON_ANCESTOR=1: continuing past an unknown remote commit; the live release history may be discarded. !!!" >&2
+      return 0
+    fi
+    return 1
+  fi
+  candidate_sha="${LOCAL_GIT_SHA}"
+  REMOTE_CURRENT_RELEASE_SHA="${remote_sha}"
+  if git merge-base --is-ancestor "${remote_sha}" "${candidate_sha}"; then
+    echo "[deploy] ancestor guard (${phase}): remote ${remote_sha:0:12} is an ancestor of candidate ${candidate_sha:0:12}."
+    return 0
+  fi
+
+  echo "Remote release ancestor guard failed (category=candidate_not_descendant)." >&2
+  echo "  remote (currently served): ${remote_sha}  release=${remote_release_id}" >&2
+  echo "  candidate (local HEAD):    ${candidate_sha}" >&2
+  echo "  commits on remote missing from candidate (git log --oneline ${candidate_sha:0:12}..${remote_sha:0:12}):" >&2
+  git log --oneline "${candidate_sha}..${remote_sha}" 2>/dev/null | sed 's/^/    /' >&2 || true
+  if [ "${DEPLOY_ALLOW_NON_ANCESTOR}" = "1" ]; then
+    echo "!!! VKPI_DEPLOY_ALLOW_NON_ANCESTOR=1: deploying a candidate that does NOT contain the live release; the commits above will disappear from production. !!!" >&2
+    return 0
+  fi
+  echo "Refusing deploy: merge the served release into the candidate, or set VKPI_DEPLOY_ALLOW_NON_ANCESTOR=1 for a deliberate override." >&2
+  return 1
+}
+
 verify_remote_candidate_production_auth_contract() {
   local phase="${1:-}" category="" preflight_rc=0
   case "${phase}" in
@@ -3508,8 +3595,10 @@ setup_deploy_ssh_transport
 # after acquiring the mutex to close the inter-deploy race, still before any
 # timer/service mask, stop, quiesce, upload, or current-pointer activation.
 verify_remote_candidate_production_auth_contract prelock
+assert_remote_release_is_ancestor prelock
 acquire_remote_deploy_lock
 verify_remote_candidate_production_auth_contract locked
+assert_remote_release_is_ancestor locked
 capture_remote_sync_unit_state
 if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   capture_remote_pgbouncer_unit_state
