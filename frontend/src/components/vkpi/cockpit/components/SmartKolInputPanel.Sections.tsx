@@ -368,6 +368,10 @@ export function RecallMiniItem({
   const language = candidateText(itemRow.language ?? fitSrc.language);
   const profileType = candidateText(item.type_label || item.profile_type);
   const identityMeta = [platform, country, language, profileType].filter(Boolean);
+  // 粉丝数待核(2026-08-22):发现面 followers 未知照常上墙,诚实标注、不藏、不假排队。
+  // 判据=后端读端标 reach_status=analyzing,或发现项(platform_discovery)快照缺粉丝数。
+  const followersPending = !numberLabel(item.followers)
+    && (cleanText(fitSrc.reach_status) === "analyzing" || cleanText(fitSrc.source) === "platform_discovery");
   const observedMetrics = [
     { key: "followers", label: "粉丝", value: numberLabel(item.followers) },
     { key: "views", label: "均播", value: numberLabel(itemRow.avg_views ?? fitSrc.avg_views) },
@@ -480,8 +484,11 @@ export function RecallMiniItem({
               {identityMeta.join(" · ")}
             </span>
           ) : null}
-          {observedMetrics.length ? (
+          {observedMetrics.length || followersPending ? (
             <span data-testid="candidate-observed-metrics" className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] text-slate-300" title="仅展示后端已返回的正值；缺失指标不占位">
+              {followersPending ? (
+                <span data-testid="candidate-followers-pending" className="rounded border border-amber-300/25 bg-amber-400/[0.08] px-1 text-amber-200/90" title="粉丝数尚未核实:已自动入库并排队补全,核实后自动更新">粉丝数待核</span>
+              ) : null}
               {observedMetrics.map((metric) => (
                 <span key={metric.key}><span className="text-slate-600">{metric.label}</span> {metric.value}</span>
               ))}

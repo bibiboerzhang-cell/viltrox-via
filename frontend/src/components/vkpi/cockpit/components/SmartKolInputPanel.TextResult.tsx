@@ -365,8 +365,8 @@ export function TextResultSection({
   /** 触达展示闸折叠计数(2026-07-12「分析后再 po」):lowReach=低触达不展示(已入库仅不推荐)、
    *  analyzing=档案补全中,达标后自动放出;旧后端/无隐藏 → null 不渲染。 */
   reachFloorDisplay?: {
-    discovery: { lowReach: number; analyzing: number };
-    recall: { lowReach: number; analyzing: number };
+    discovery: { lowReach: number; analyzing: number; pendingFollowers: number };
+    recall: { lowReach: number; analyzing: number; pendingFollowers: number };
   } | null;
   input: string;
   apiToken: string;
@@ -700,13 +700,15 @@ export function TextResultSection({
         ) : null}
         {/* 触达展示闸折叠行(2026-07-12「分析后再 po」):粉丝数未知的发现项已入库并自动补全,
             补全达标后自动出现在下方;低触达项不摆行,只报诚实计数。 */}
-        {reachFloorDisplay && (reachFloorDisplay.discovery.analyzing > 0 || reachFloorDisplay.discovery.lowReach > 0) ? (
+        {reachFloorDisplay && (reachFloorDisplay.discovery.analyzing > 0 || reachFloorDisplay.discovery.lowReach > 0 || reachFloorDisplay.discovery.pendingFollowers > 0) ? (
           <div
+            data-testid="discovery-reach-floor-row"
             className="mb-2 flex items-center gap-1.5 rounded-md border border-white/[0.08] bg-black/20 px-2.5 py-1.5 text-[10px] text-slate-400"
-            title="分析中=粉丝数待档案补全(已自动入库并排队补全),达标后自动出现在列表;低触达=粉丝数低于门槛,已入库仅不推荐"
+            title="粉丝数待核=已上墙、已自动入库并排队补全,核实后卡片自动更新;分析中=旧口径折叠项;低触达=粉丝数低于门槛,已入库仅不推荐"
           >
             {reachFloorDisplay.discovery.analyzing > 0 ? <Loader2 size={10} className="animate-spin text-emerald-200/70" /> : null}
             {[
+              reachFloorDisplay.discovery.pendingFollowers > 0 ? `粉丝数待核 ×${reachFloorDisplay.discovery.pendingFollowers}(已上墙,核实后自动更新)` : "",
               reachFloorDisplay.discovery.analyzing > 0 ? `分析中 ×${reachFloorDisplay.discovery.analyzing}(档案补全后达标自动放出)` : "",
               reachFloorDisplay.discovery.lowReach > 0 ? `低触达不展示 ×${reachFloorDisplay.discovery.lowReach}` : "",
             ].filter(Boolean).join(" · ")}

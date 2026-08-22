@@ -210,8 +210,8 @@ export function SmartKolInputPanel({
   // 诚实会话横幅(排队/查找中/已完成/部分完成/未完成)——只读后端真有字段,见 sessionStatusBanner。
   // advanceResult?.status:queueTextAdvance 刚返回、尚未首拍轮询时的即时状态兜底(queued/...)。
   const sessionBanner = useMemo(
-    () => sessionStatusBanner(activeSearchSession, activeSessionStatus || cleanText(advanceResult?.status), activeSessionCounts, Boolean(displayedSearchSessionId)),
-    [activeSearchSession, activeSessionStatus, advanceResult, activeSessionCounts, displayedSearchSessionId],
+    () => sessionStatusBanner(activeSearchSession, activeSessionStatus || cleanText(advanceResult?.status), activeSessionCounts, Boolean(pollingSearchSessionId)),
+    [activeSearchSession, activeSessionStatus, advanceResult, activeSessionCounts, pollingSearchSessionId],
   );
 
   useEffect(() => {

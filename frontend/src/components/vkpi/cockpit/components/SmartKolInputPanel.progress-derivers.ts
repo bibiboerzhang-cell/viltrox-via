@@ -73,6 +73,9 @@ export type SearchProgressContractView = {
   progressPct: number | null;
   terminalPct: number | null;
   blockedByWorker: boolean;
+  // 编排挂起(会话 1106 案):召回项先到、全网发现/档案批次尚未登记的窗口,后端按会话项证据会得到
+  // 30/30 ready;编排器显式声明「后面还有任务」时此标为真 → 不得判终态、不得停轮询。
+  orchestrationPending: boolean;
   fullAnalysisComplete: boolean;
   fullAnalysisExecutionComplete: boolean;
   fullAnalysisObservable: boolean;
@@ -188,6 +191,7 @@ export function searchProgressContractFromSession(session: VkpiKolSearchHistoryI
     progressPct: contractPercent(contract.progress_pct, requestedUnits),
     terminalPct: contractPercent(contract.terminal_pct, requestedUnits),
     blockedByWorker: contract.blocked_by_worker === true,
+    orchestrationPending: contract.orchestration_pending === true,
     fullAnalysisComplete: contract.full_analysis_complete === true,
     fullAnalysisExecutionComplete: contract.full_analysis_execution_complete === true,
     fullAnalysisObservable: contract.full_analysis_observable === true,
@@ -210,6 +214,31 @@ export function searchProgressContractFromSession(session: VkpiKolSearchHistoryI
       shaAligned: typeof worker.sha_aligned === "boolean" ? worker.sha_aligned : null,
     },
   };
+}
+
+// 会话是否终态(轮询停/续接依据)。契约在场时以契约为准:活跃单元/worker 阻塞/编排挂起都不是终态。
+export function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): boolean {
+  const contract = searchProgressContractFromSession(session);
+  if (contract) {
+    const active = (contract.queuedUnits ?? 0) + (contract.runningUnits ?? 0) + (contract.activeUnits ?? 0);
+    if (active > 0 || contract.blockedByWorker || contract.orchestrationPending) return false;
+    if (["queued", "running", "active", "blocked_by_worker"].includes(contract.state)) return false;
+    if (contract.requestedUnits != null && contract.requestedUnits > 0) {
+      return contract.terminalUnits != null && contract.terminalUnits >= contract.requestedUnits;
+    }
+    return ["ready", "partial", "failed", "cancelled", "canceled"].includes(contract.state);
+  }
+  const summary = asRecord(session.result_summary);
+  const progress = asRecord(summary.progress);
+  const requestedTasksTerminal = progress.requested_tasks_terminal
+    ?? summary.requested_tasks_terminal
+    ?? progress.required_tasks_complete
+    ?? summary.required_tasks_complete;
+  if (typeof requestedTasksTerminal === "boolean") return requestedTasksTerminal;
+  if (terminalSessionStatus(session.status)) return true;
+  const batch = asRecord(summary.profile_batch_advance);
+  const smartJob = asRecord(summary.smart_search_profile_advance_job);
+  return terminalSessionStatus(batch.status) || terminalSessionStatus(smartJob.status) || terminalSessionStatus(smartJob.advance_status);
 }
 
 function terminalSearchTaskStatus(value: unknown): boolean {
@@ -396,9 +425,16 @@ export function searchSessionProgress(session: VkpiKolSearchHistoryItem | null):
       && progressContract.requestedUnits > 0
       && progressContract.terminalUnits != null
       && progressContract.terminalUnits >= progressContract.requestedUnits
-      && contractActive === 0;
+      && contractActive === 0
+      && !progressContract.orchestrationPending;
+    // 编排挂起期的阶段按「发现是否已落库」说话:未落 → 全网发现中;已落 → 基础资料补全中。
+    const orchestrationPhase: SearchSessionProgress["phase"] | null = progressContract.orchestrationPending
+      ? (Object.keys(discovery).length ? "profiling" : "discovering")
+      : null;
     const contractPhase: SearchSessionProgress["phase"] = progressContract.blockedByWorker
       ? "blocked"
+      : orchestrationPhase
+        ? orchestrationPhase
       : ["running", "active"].includes(progressContract.state)
         ? "enriching"
         : progressContract.state === "queued" || progressContract.state === "planned"

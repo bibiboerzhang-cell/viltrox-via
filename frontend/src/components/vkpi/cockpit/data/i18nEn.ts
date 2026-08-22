@@ -764,4 +764,10 @@ export const I18N_EN = {
   "生成于": "Generated at", "纯读": "read-only",
   // MY KOL · 数值跟进 / 镜头出镜(车道 L4)
   "数值跟进": "Metric Tracking", "镜头出镜": "Lens Exposure", "用过的镜头": "Lenses Used",
+  // 智能找人 · 发现面粉丝待核 + 会话完成态横幅(2026-08-22 会话 1106 案)
+  "粉丝数待核": "Followers pending check",
+  "粉丝数尚未核实:已自动入库并排队补全,核实后自动更新": "Followers not verified yet: auto-enrolled and queued for profile completion; updates once verified",
+  "已找完": "Search finished", "正在查找": "Searching", "已找到部分结果": "Partial results found",
+  "这次没有新的人选,可换个描述再试。": "No new candidates this time; try a different description.",
+  "全网发现中": "Discovering across platforms",
 };

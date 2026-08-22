@@ -70,15 +70,15 @@ describe("SmartKolInputPanel three-frame session projection", () => {
       reach_floor_display: {
         by_type: {
           recall_candidate: { hidden_low_reach: 2, hidden_analyzing: 1 },
-          existing_kol: { hidden_low_reach: 3, hidden_analyzing: 4 },
-          new_creator: { hidden_low_reach: 5, hidden_analyzing: 6 },
+          existing_kol: { hidden_low_reach: 3, hidden_analyzing: 4, visible_analyzing: 1 },
+          new_creator: { hidden_low_reach: 5, hidden_analyzing: 6, visible_analyzing: 2 },
         },
       },
     });
 
     expect(display).toEqual({
-      recall: { lowReach: 2, analyzing: 1 },
-      discovery: { lowReach: 8, analyzing: 10 },
+      recall: { lowReach: 2, analyzing: 1, pendingFollowers: 0 },
+      discovery: { lowReach: 8, analyzing: 10, pendingFollowers: 3 },
     });
   });
 });

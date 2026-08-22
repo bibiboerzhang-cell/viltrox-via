@@ -9,6 +9,7 @@ import {
   numberLabel,
   type Row,
 } from "./SmartKolInputPanel.helpers";
+import { isSearchSessionTerminal } from "./SmartKolInputPanel.progress-derivers";
 
 // 全网发现状态码 → 人话(面向营销人,不暴露 queued/running 等内部状态码)。
 export function advanceStatusLabel(value: unknown): string {
@@ -27,6 +28,34 @@ export function advanceStatusLabel(value: unknown): string {
 // 失败已退基础检索」原因字段(planner 失败被静默兜底),故只能据真实 status/error 说明,不编造。
 type SessionBanner = { tone: "info" | "ok" | "warn" | "error"; label: string; note: string } | null;
 
+// 会话完成态摘要原料(只读后端真有字段):全网新发现 / 库内已有 / 库内召回三组人数。
+// 优先 result_summary.new_discovery.counts(发现真账),缺则按会话项类型数;都缺 → 0(不编数)。
+export function sessionDiscoveryTally(session: VkpiKolSearchHistoryItem | null): { newFaces: number; existing: number; recall: number } {
+  if (!session) return { newFaces: 0, existing: 0, recall: 0 };
+  const items = (Array.isArray(session.items) && session.items.length
+    ? session.items
+    : Array.isArray(session.active_items) && session.active_items.length
+      ? session.active_items
+      : Array.isArray(session.items_preview) ? session.items_preview : []).map((item) => asRecord(item));
+  const countType = (type: string) => items.filter((item) => cleanText(item.item_type) === type).length;
+  const counts = asRecord(asRecord(asRecord(session.result_summary).new_discovery).counts);
+  const fromCounts = (key: string) => (typeof counts[key] === "number" ? Math.max(0, Number(counts[key])) : null);
+  return {
+    newFaces: fromCounts("new_creators") ?? countType("new_creator"),
+    existing: fromCounts("existing_matches") ?? countType("existing_kol"),
+    recall: countType("recall_candidate"),
+  };
+}
+
+function sessionTallyText(session: VkpiKolSearchHistoryItem | null): string {
+  const tally = sessionDiscoveryTally(session);
+  return [
+    tally.newFaces > 0 ? `本次全网新发现 ${tally.newFaces} 人` : "",
+    tally.existing > 0 ? `库内已有 ${tally.existing} 人` : "",
+    tally.recall > 0 ? `库内召回 ${tally.recall} 人` : "",
+  ].filter(Boolean).join(" · ");
+}
+
 export function sessionStatusBanner(
   session: VkpiKolSearchHistoryItem | null,
   advanceStatus: string,
@@ -40,6 +69,9 @@ export function sessionStatusBanner(
   const jobError = cleanText(job.error);
   const ready = Number(counts.ready ?? 0);
   const failed = Number(counts.failed ?? 0) + Number(counts.errors ?? 0);
+  // 完成态以会话本身为准(会话 1106 案):会话已 ready/complete 而任务状态字段仍是旧的
+  // running、或展示端仍挂着轮询 id,都不得再显示「正在查找」——改成完成态摘要。
+  const terminal = session ? isSearchSessionTerminal(session) : false;
   if (["failed", "blocked"].includes(raw) && ready <= 0) {
     return { tone: "error", label: "这次没找到结果", note: jobError ? `失败原因:${jobError}` : "查找未能完成,可调整描述或换个区域重试。" };
   }
@@ -47,15 +79,16 @@ export function sessionStatusBanner(
     return {
       tone: "warn",
       label: "已找到部分结果",
-      note: failed > 0
-        ? `下方结果可直接查看;另有 ${failed} 个没跑完,可稍后重试补齐。`
-        : "下方结果可直接查看;部分人选还在补全,完成后会自动更新。",
+      note: `${sessionTallyText(session) || "下方结果可直接查看"};${failed > 0
+        ? `另有 ${failed} 个没跑完,可稍后重试补齐。`
+        : "部分人选还在补全,完成后会自动更新。"}`,
     };
   }
-  if (["ready", "done"].includes(raw)) {
-    return { tone: "ok", label: "已找完", note: ready > 0 ? `共找到 ${ready} 个人选,见下方。` : "这次没有新的人选,可换个描述再试。" };
+  if (["ready", "done"].includes(raw) || (terminal && !["queued", "planned"].includes(raw))) {
+    const tally = sessionTallyText(session);
+    return { tone: "ok", label: "已找完", note: tally ? `${tally},见下方。` : "这次没有新的人选,可换个描述再试。" };
   }
-  if (raw === "running" || polling) {
+  if (raw === "running" || (polling && !terminal)) {
     return { tone: "info", label: "正在查找", note: "后台正从所选平台找人,找到的会随时显示,无需等待。" };
   }
   return { tone: "info", label: "已排队", note: "已进入后台查找队列,稍候会自动开始。" };

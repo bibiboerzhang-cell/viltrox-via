@@ -519,37 +519,18 @@ export function discoveryBrandExcludedFromSession(session: VkpiKolSearchHistoryI
   return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
-export function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): boolean {
-  const contract = searchProgressContractFromSession(session);
-  if (contract) {
-    const active = (contract.queuedUnits ?? 0) + (contract.runningUnits ?? 0) + (contract.activeUnits ?? 0);
-    if (active > 0 || contract.blockedByWorker) return false;
-    if (contract.requestedUnits != null && contract.requestedUnits > 0) {
-      return contract.terminalUnits != null && contract.terminalUnits >= contract.requestedUnits;
-    }
-    return ["ready", "partial", "failed", "cancelled", "canceled"].includes(contract.state);
-  }
-  const summary = asRecord(session.result_summary);
-  const progress = asRecord(summary.progress);
-  const requestedTasksTerminal = progress.requested_tasks_terminal
-    ?? summary.requested_tasks_terminal
-    ?? progress.required_tasks_complete
-    ?? summary.required_tasks_complete;
-  if (typeof requestedTasksTerminal === "boolean") return requestedTasksTerminal;
-  if (terminalSessionStatus(session.status)) return true;
-  const batch = asRecord(summary.profile_batch_advance);
-  const smartJob = asRecord(summary.smart_search_profile_advance_job);
-  return terminalSessionStatus(batch.status) || terminalSessionStatus(smartJob.status) || terminalSessionStatus(smartJob.advance_status);
-}
+// isSearchSessionTerminal 已挪到 progress-derivers(横幅/进度共用,避免 presentation↔derivers 循环引用)。
+export { isSearchSessionTerminal } from "./SmartKolInputPanel.progress-derivers";
 
 // 触达展示闸折叠计数(2026-07-12 第二道闸):后端 get_session/list_history 按 pool 现值实时
 // 重判,被隐藏的项不再下发,只给诚实计数——hidden_low_reach=低触达不展示(已入库仅不推荐)、
 // hidden_analyzing=档案补全中(「分析后再 po」,补全回填达标后自动放出)。旧后端无该键 → null,
 // 前端静默不渲染(graceful absence,不编数字)。by_type 与卡片框位一致:
 // new_creator/existing_kol 归框3,recall_candidate 归框2。
+// pendingFollowers=已上墙但粉丝数待核(2026-08-22:发现面 followers 未知不再藏,卡面标「粉丝数待核」)。
 export function reachFloorDisplayFromSession(session: VkpiKolSearchHistoryItem | null): {
-  discovery: { lowReach: number; analyzing: number };
-  recall: { lowReach: number; analyzing: number };
+  discovery: { lowReach: number; analyzing: number; pendingFollowers: number };
+  recall: { lowReach: number; analyzing: number; pendingFollowers: number };
 } | null {
   const raw = session?.reach_floor_display;
   if (!raw || typeof raw !== "object") return null;
@@ -560,6 +541,7 @@ export function reachFloorDisplayFromSession(session: VkpiKolSearchHistoryItem |
     return {
       lowReach: Number(entry.hidden_low_reach) || 0,
       analyzing: Number(entry.hidden_analyzing) || 0,
+      pendingFollowers: Number(entry.visible_analyzing) || 0,
     };
   };
   const newCreator = bucket("new_creator");
@@ -569,10 +551,12 @@ export function reachFloorDisplayFromSession(session: VkpiKolSearchHistoryItem |
     discovery: {
       lowReach: newCreator.lowReach + existing.lowReach,
       analyzing: newCreator.analyzing + existing.analyzing,
+      pendingFollowers: newCreator.pendingFollowers + existing.pendingFollowers,
     },
     recall: {
       lowReach: recall.lowReach,
       analyzing: recall.analyzing,
+      pendingFollowers: recall.pendingFollowers,
     },
   };
 }
