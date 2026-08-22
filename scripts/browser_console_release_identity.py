@@ -14,13 +14,22 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _APP_ASSET = re.compile(r"app-[A-Za-z0-9_-]+\.js")
 
 
+# i18n 双语门面(2026-08-22):中文默认模式把英文源标题译成中文,复核以「英文标题或其中文译文」
+# 任一命中为准;译文真源 frontend/src/components/vkpi/cockpit/data/i18nZh.ts。
+REQUIRED_PAGE_HEADING_ALIASES: dict[str, tuple[str, ...]] = {
+    "dashboard": ("仪表盘",), "kol-pool": ("KOL 人才库",), "my-kol": ("我的 KOL",),
+    "projects": ("项目",), "events": ("活动",), "dealers": ("经销商",), "triage": ("运维分诊",),
+    "skillStudio": ("技能工作室",), "intelligent": ("智能问答",), "gtmCommand": ("GTM 指挥台",),
+}
+
+
 def evaluate_pages(
     payload: Mapping[str, Any],
     *,
     application_origin: str,
     required_page_families: Mapping[str, tuple[str, str]],
     normalized_origin: Callable[[Any], str | None],
-    heading_aliases: Mapping[str, tuple[str, ...]] | None = None,
+    heading_aliases: Mapping[str, tuple[str, ...]] | None = None,  # None → REQUIRED_PAGE_HEADING_ALIASES
     redact_text: Callable[..., str],
     sanitize_url: Callable[[Any], str],
     failures: list[str],
@@ -98,7 +107,7 @@ def evaluate_pages(
             "nav_key_matches": expected is not None and nav_key == expected[0],
             "expected_heading_matches": expected is not None and expected_heading == expected[1],
             "observed_heading_matches": expected is not None
-            and observed_heading in {expected[1], *((heading_aliases or {}).get(family, ()))},
+            and observed_heading in {expected[1], *((heading_aliases if heading_aliases is not None else REQUIRED_PAGE_HEADING_ALIASES).get(family, ()))},
             "navigation_completed": raw.get("navigation_completed") is True,
             "page_settled": raw.get("page_settled") is True,
             "stage_present": raw.get("stage_present") is True,
