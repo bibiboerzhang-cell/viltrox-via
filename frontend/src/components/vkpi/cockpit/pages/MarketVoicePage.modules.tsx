@@ -283,16 +283,16 @@ export function ModuleCard({
   const { t } = useT();
   return (
     <section className="ds-mod ds-rise flex h-full min-h-0 flex-col">
-      {/* 卡头宽度预算(U5):左簇(标题+cnt)与右簇(溯源 chip+实时)都可收缩——标题先省略、
-          chip 文案再省略,cnt 短徽与「实时」eyebrow 保持整字;1280 宽三分栏下不再叠字。 */}
+      {/* 卡头宽度预算(U5):左簇(标题+cnt)与右簇(溯源 chip+实时)都可收缩——chip 文案以 3 倍
+          速率先省略,标题保底 6ch 再省略;cnt 短徽与「实时」eyebrow 保持整字;1280 宽三分栏下不再叠字。 */}
       <header data-vkpi-density="readable-module-header" className="flex min-h-11 flex-none items-center justify-between gap-2.5 px-4 pb-2 pt-[13px]">
         <div className="flex min-w-0 flex-[1_1_auto] items-center gap-2">
-          <h3 className="min-w-[3ch] truncate text-[14.5px] font-semibold leading-5 tracking-[-0.01em] text-ink">{t(title)}</h3>
+          <h3 className="min-w-[6ch] truncate text-[14.5px] font-semibold leading-5 tracking-[-0.01em] text-ink" title={t(title)}>{t(title)}</h3>
           {cnt != null && (
             <span className="flex-none whitespace-nowrap rounded-md bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold text-accent">{cnt}</span>
           )}
         </div>
-        <span className="flex min-w-0 flex-[0_1_auto] items-center gap-2">
+        <span className="flex min-w-0 flex-[0_3_auto] items-center gap-2">
           <SrcChip label={srcLabel} rows={srcRows} onOpen={onOpenSrc} />
           {/* 数据为请求时实算 → 诚实「实时」eyebrow(demo 卡头右侧固定件) */}
           <span className="flex-none whitespace-nowrap text-[10.5px] font-semibold uppercase tracking-[0.14em] text-muted">{t("实时")}</span>
