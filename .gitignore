@@ -105,3 +105,6 @@ build_charlotte_report*.py
 render_text_pages.py
 _skill_docs/
 docs/AI短剧*
+
+# Claude Code 项目本地状态(权限设置/worktree),不进仓库、不进发布快照
+.claude/
