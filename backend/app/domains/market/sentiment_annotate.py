@@ -16,13 +16,13 @@ vkpi_sentiment_results 并回填 vkpi_comments.sentiment_id。
   直接回链 sentiment_id,不再烧 LLM;写入侧 ON CONFLICT (comment_id, prompt_version) 幂等。
 - 红线:零触 viltrox_fit_score / rule_v0;不碰 .env;additive,不改任何既有表结构。
 
-选型:preferred_provider 默认 google(gemini-flash-latest)—— gateway PROVIDER_CONFIG 里
-最便宜(input $0.07/M、output $0.30/M tok;对比 gpt-5.4-mini $0.25/$2.00、claude $0.25/$1.25)。
+选型:模型由 model_registry.TASK_MODEL_BINDING['vkpi_sentiment_annotate'] 绑定
+(注册表绑定,当前 google/gemini-3.6-flash;单价以 model_pricing 目录为准,本文不再抄价)。
 
 成本口径(全量 12,703 条 pending、pack=40 → ceil(12703/40)=318 次调用):
   input ≈ 318 × (~180 头部 + 40×~50 评论) ≈ 0.69M tok;output ≈ 318 × (40×40+60) ≈ 0.53M tok。
-  gemini-flash-latest:0.69×$0.07 + 0.53×$0.30 ≈ **$0.21**(留冗余按 ~$0.3 报)。
-  gpt-5.4-mini ≈ $1.23;claude ≈ $0.83。单 run 硬上限 200 条 = 5 次调用 ≈ $0.0033。
+  按注册表绑定模型现价换算即得全量成本(flash 档约数美元量级);
+  单 run 硬上限 200 条 = 5 次调用,成本可忽略。
 
 注:任务书返回 schema 为 {id, score, label, aspects};表 051 无 score/aspects 专列——
 label 映射进 sentiment 列,|score| 作 sentiment_confidence(极性强度代理),

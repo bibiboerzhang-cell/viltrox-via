@@ -33,6 +33,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.kol.audience_avatar_llm import (
+    avatar_model,
+    classify_avatar_batch,
+    download_avatar,
+    load_avatar_gemini,
+)
 from app.domains.kol.audience_language import LANG_TO_MARKETS, detect_lang
 
 logger = get_logger(__name__)
@@ -981,13 +987,10 @@ def _age_avatar_batch(commenters: list[dict[str, Any]]) -> tuple[dict[str, dict[
     ][:AGE_AVATAR_MAX_IMAGES]
     if not need:
         return {}, {"status": "no_avatars", "calls": 0, "people_in": 0, "people_out": 0, "download_failed": 0}
-    try:
-        from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client, genai_types
-    except Exception as exc:
-        return {}, {"status": f"client_unavailable: {exc}"[:120], "calls": 0, "people_in": 0, "people_out": 0, "download_failed": 0}
-    if not GEMINI_AVAILABLE or gemini_client is None:
-        return {}, {"status": "gemini_unavailable", "calls": 0, "people_in": 0, "people_out": 0, "download_failed": 0}
-    model = os.environ.get("AUDIENCE_AVATAR_MODEL", "gemini-2.5-flash")
+    client, genai_types, status = load_avatar_gemini()
+    if status:
+        return {}, {"status": status, "calls": 0, "people_in": 0, "people_out": 0, "download_failed": 0}
+    model = avatar_model()
     out: dict[str, dict[str, Any]] = {}
     calls = 0
     people_in = 0
@@ -995,55 +998,24 @@ def _age_avatar_batch(commenters: list[dict[str, Any]]) -> tuple[dict[str, dict[
     download_failed = 0
     for start in range(0, len(need), AGE_AVATAR_BATCH):
         batch = need[start : start + AGE_AVATAR_BATCH]
-        contents: list[Any] = []
+        images: list[tuple[bytes, str]] = []
         keys: list[str] = []
         for c in batch:
-            data = b""
-            mime = "image/jpeg"
-            # CDN 偶发抖动占下载失败大头:失败重试一次,第二次超时收紧到 4s。
-            for timeout_s in (6, 4):
-                try:
-                    req = urllib.request.Request(
-                        str(c["avatar_url"]), headers={"User-Agent": "Mozilla/5.0", "Accept": "image/*"}
-                    )
-                    with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # nosec B310 - 平台 CDN 头像缩略图
-                        data = resp.read(300_000)
-                        mime = str(resp.headers.get("Content-Type") or "image/jpeg").split(";")[0]
-                except Exception:
-                    continue
-                if data:
-                    break
+            data, mime = download_avatar(str(c["avatar_url"]))
             if not data:
                 download_failed += 1
                 continue
             if len(data) < 300:
                 continue  # 空图/默认剪影占位常见极小,跳过
-            contents.append(f"Image {len(keys) + 1}:")
-            contents.append(genai_types.Part.from_bytes(data=data, mime_type=mime if mime.startswith("image/") else "image/jpeg"))
+            images.append((data, mime))
             keys.append(str(c.get("author_key") or ""))
             fetched += 1
         if not keys:
             continue
         people_in += len(keys)
-        contents.append(
-            "Task: AGGREGATE audience statistics for a marketing dashboard. The images above are public "
-            "profile avatars of anonymous commenters; results are used ONLY as aggregate percentages "
-            "(age buckets, gender split), never attributed to any individual.\n"
-            "For EACH numbered image output one object: "
-            '{"i": image number, "age": "0-18"|"19-29"|"30-39"|"40+" or "" , '
-            '"gender": "male"|"female" or "", "conf": 0.0-1.0}.\n'
-            "If the avatar is not a human face (logo, pet, cartoon, landscape, default silhouette) use empty "
-            "strings. Estimate from apparent age of the person; be reasonable, not paranoid. "
-            "Output STRICTLY one JSON array, no prose, no markdown fences; reply must start with ["
-        )
         try:
-            resp = gemini_client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=genai_types.GenerateContentConfig(max_output_tokens=4000),
-            )
+            text = classify_avatar_batch(images, client=client, genai_types=genai_types, model=model)
             calls += 1
-            text = str(getattr(resp, "text", "") or "")
         except Exception as exc:
             logger.warning("audience avatar batch failed: %s", str(exc)[:150])
             continue

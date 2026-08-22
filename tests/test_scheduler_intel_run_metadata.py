@@ -69,7 +69,7 @@ def test_intel_job_records_non_ok_result_without_advancing_success(monkeypatch) 
                     },
                     {
                         "provider": "anthropic",
-                        "model": "claude-sonnet-4-5",
+                        "model": "claude-sonnet-5",
                         "status": "transient_error",
                     },
                 ],
@@ -90,7 +90,7 @@ def test_intel_job_records_non_ok_result_without_advancing_success(monkeypatch) 
         "provider": "anthropic",
         "provider_status": "transient_error",
         "generation_status": "all_providers_failed",
-        "model": "claude-sonnet-4-5",
+        "model": "claude-sonnet-5",
         "providers_attempted": ["google", "anthropic"],
         "generated_at": "2026-07-16T12:00:00Z",
     }

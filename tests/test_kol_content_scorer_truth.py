@@ -201,7 +201,7 @@ def test_verified_llm_score_updates_ai_fields_with_same_provenance(monkeypatch) 
             "provenance": {
                 "source_type": "llm",
                 "provider": "anthropic",
-                "model": "claude-sonnet-4-6",
+                "model": "claude-sonnet-5",
                 "method": "claude",
                 "purpose": "kol_content_scorer",
                 "fallback": False,

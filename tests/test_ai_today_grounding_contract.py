@@ -4,6 +4,8 @@ import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from app.core.config import CLAUDE_MODEL
+from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.domains.market import ai_today
 
 
@@ -50,7 +52,7 @@ def test_production_ai_today_uses_strict_pipeline_not_legacy_direct_generator(mo
         "_generate_ai_today_two_stage",
         lambda *_args, **_kwargs: (
             "",
-            "gemini-2.5-pro->claude-opus-4-7",
+            f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}",
             [],
             _pipeline_provenance("discovery_unavailable"),
         ),
@@ -141,7 +143,7 @@ def test_discovery_failure_is_degraded_and_does_not_write_latest(monkeypatch) ->
         "_generate_ai_today_two_stage",
         lambda *_args, **_kwargs: (
             "",
-            "gemini-2.5-pro->claude-opus-4-7",
+            f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}",
             [],
             _pipeline_provenance("discovery_unavailable"),
         ),
@@ -205,7 +207,7 @@ def test_grounded_generation_persists_provenance_metadata(monkeypatch) -> None:
         "_generate_ai_today_two_stage",
         lambda *_args, **_kwargs: (
             json.dumps(_strategy_payload(headline="Grounded")),
-            "gemini-2.5-pro->claude-opus-4-7",
+            f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}",
             [source],
             _pipeline_provenance(),
         ),
@@ -318,7 +320,7 @@ def test_generate_rejects_string_shooting_plans_without_character_coercion(monke
                     shooting_plans="must-not-split",
                 )
             ),
-            "gemini-2.5-pro->claude-opus-4-7",
+            f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}",
             [_grounding_source()],
             _pipeline_provenance(),
         ),
@@ -344,7 +346,7 @@ def test_partial_ai_today_result_is_degraded_and_not_persisted(monkeypatch) -> N
         "_generate_ai_today_two_stage",
         lambda *_args, **_kwargs: (
             json.dumps(_strategy_payload(headline="Partial", hot_topics=None)),
-            "gemini-2.5-pro->claude-opus-4-7",
+            f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}",
             [_grounding_source()],
             _pipeline_provenance(),
         ),
@@ -366,7 +368,7 @@ def test_partial_ai_today_result_is_degraded_and_not_persisted(monkeypatch) -> N
 def test_provider_failures_reject_contract_without_overwriting_latest(monkeypatch) -> None:
     provenance = {
         **_pipeline_provenance("strategy_unavailable"),
-        "model": "gemini-2.5-pro->claude-opus-4-7",
+        "model": f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}",
         "attempts": [
             {
                 "stage": "grounded_discovery",
@@ -377,7 +379,7 @@ def test_provider_failures_reject_contract_without_overwriting_latest(monkeypatc
             {
                 "stage": "evidence_strategy",
                 "provider": "anthropic",
-                "model": "claude-opus-4-7",
+                "model": CLAUDE_OPUS_EXACT_MODEL,
                 "status": "degraded",
                 "reason": "readiness_not_production_ready",
             },
@@ -390,7 +392,7 @@ def test_provider_failures_reject_contract_without_overwriting_latest(monkeypatc
         "_generate_ai_today_two_stage",
         lambda *_args, **_kwargs: (
             "",
-            "gemini-2.5-pro->claude-opus-4-7",
+            f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}",
             [_grounding_source()],
             provenance,
         ),
@@ -485,7 +487,7 @@ def test_two_stage_pipeline_uses_strict_google_then_exact_opus_and_preserves_sou
     def fake_claude(prompt: str, **kwargs: object) -> dict[str, object]:
         calls.append(("anthropic", dict(kwargs)))
         assert kwargs["provider"] == "anthropic"
-        assert kwargs["model"] == "claude-opus-4-7"
+        assert kwargs["model"] == CLAUDE_OPUS_EXACT_MODEL
         assert kwargs["purpose"] == "ai_today.evidence_strategy"
         assert kwargs["cost_tag"] == "cron:ai_today_hot"
         assert kwargs["metadata"]["pipeline_stage"] == "evidence_strategy"  # type: ignore[index]
@@ -496,7 +498,7 @@ def test_two_stage_pipeline_uses_strict_google_then_exact_opus_and_preserves_sou
         return {
             "status": "success",
             "provider": "anthropic",
-            "model": "claude-opus-4-7",
+            "model": CLAUDE_OPUS_EXACT_MODEL,
             "json": _strategy_payload(),
         }
 
@@ -509,7 +511,7 @@ def test_two_stage_pipeline_uses_strict_google_then_exact_opus_and_preserves_sou
     )
 
     assert [provider for provider, _kwargs in calls] == ["google", "anthropic"]
-    assert model == "gemini-2.5-pro->claude-opus-4-7"
+    assert model == f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}"
     assert json.loads(raw) == _strategy_payload()
     assert sources == [
         {
@@ -554,7 +556,7 @@ def test_two_stage_pipeline_never_calls_claude_when_grounded_discovery_is_unavai
     raw, model, sources, provenance = ai_today._generate_ai_today_two_stage("discover")
 
     assert raw == ""
-    assert model == "gemini-2.5-pro->claude-opus-4-7"
+    assert model == f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}"
     assert sources == []
     assert provenance["status"] == "discovery_unavailable"
     assert provenance["stages"]["evidence_strategy"]["status"] == "not_attempted"
@@ -584,7 +586,7 @@ def test_two_stage_pipeline_preserves_grounding_when_opus_is_blocked(monkeypatch
         lambda *_args, **_kwargs: {
             "status": "degraded",
             "reason": "readiness_not_production_ready",
-            "model": "claude-opus-4-7",
+            "model": CLAUDE_OPUS_EXACT_MODEL,
             "content": {},
             "validation_errors": [],
         },
@@ -753,7 +755,7 @@ def test_ready_snapshot_is_preserved_while_latest_failed_attempt_is_exposed(monk
                     "provenance": {"pipeline": "ai_today_evidence_strategy_v1"},
                 }
             ),
-            "model": "gemini-2.5-pro->claude-opus-4-7",
+            "model": f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}",
             "created_at": (now - timedelta(hours=1)).isoformat(),
         }
     ]
@@ -765,7 +767,7 @@ def test_ready_snapshot_is_preserved_while_latest_failed_attempt_is_exposed(monk
             "provider": "anthropic",
             "provider_status": "transient_error",
             "generation_status": "all_providers_failed",
-            "model": "claude-sonnet-4-5",
+            "model": CLAUDE_MODEL,
             "providers_attempted": ["google", "anthropic"],
         },
         separators=(",", ":"),
@@ -792,7 +794,7 @@ def test_ready_snapshot_is_preserved_while_latest_failed_attempt_is_exposed(monk
         "attempted_at": now.isoformat(timespec="seconds").replace("+00:00", "Z"),
         "status": "invalid",
         "provider": "anthropic",
-        "model": "claude-sonnet-4-5",
+        "model": CLAUDE_MODEL,
         "reason": "invalid_result_contract",
         "provider_status": "transient_error",
         "generation_status": "all_providers_failed",
@@ -808,7 +810,7 @@ def test_source_string_is_invalid_not_a_character_list(monkeypatch) -> None:
         "_generate_ai_today_two_stage",
         lambda *_args, **_kwargs: (
             json.dumps(_strategy_payload(headline="Valid content")),
-            "gemini-2.5-pro->claude-opus-4-7",
+            f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}",
             "https://example.com/not-a-list",
             _pipeline_provenance(),
         ),
@@ -891,7 +893,7 @@ def test_pipeline_v1_snapshot_wins_over_newer_legacy_snapshot(monkeypatch) -> No
                     "provenance": {"pipeline": "ai_today_evidence_strategy_v1"},
                 }
             ),
-            "model": "gemini-2.5-pro->claude-opus-4-7",
+            "model": f"gemini-2.5-pro->{CLAUDE_OPUS_EXACT_MODEL}",
             "created_at": (now - timedelta(days=1)).isoformat(),
         },
     ]

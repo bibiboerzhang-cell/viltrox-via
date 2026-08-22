@@ -436,12 +436,11 @@ async def job_sentiment_annotate():
       ON CONFLICT (task_key) DO UPDATE SET enabled = TRUE;
     关闸:UPDATE scheduler_tasks SET enabled = FALSE WHERE task_key = 'vkpi_sentiment_annotate';
 
-    成本口径(按 llm_gateway.PROVIDER_CONFIG 价目;全量 12,703 条 pending、pack=40 →
-    ceil(12703/40)=318 次调用;input ≈ 318×(~180 头部 + 40×~50 评论) ≈ 0.69M tok,
-    output ≈ 318×(40×40+60) ≈ 0.53M tok):
-      - google gemini-flash-latest(默认):0.69M×$0.07/M + 0.53M×$0.30/M ≈ **$0.21 全量**
-      - openai gpt-5.4-mini ≈ $1.23;anthropic claude ≈ $0.83
-    单 run 硬上限 200 条 = 5 次调用 ≈ $0.003;每日一跑清完全量 ≈ 64 天,或临时调高 env 一把梭。
+    成本口径(模型走 model_registry.TASK_MODEL_BINDING['vkpi_sentiment_annotate'] 注册表绑定,
+    单价以 model_pricing 目录为准;全量 12,703 条 pending、pack=40 → ceil(12703/40)=318 次调用;
+    input ≈ 318×(~180 头部 + 40×~50 评论) ≈ 0.69M tok,output ≈ 318×(40×40+60) ≈ 0.53M tok):
+      - 按绑定模型现价换算即得全量成本(flash 档约数美元量级)
+    单 run 硬上限 200 条 = 5 次调用,成本可忽略;每日一跑清完全量 ≈ 64 天,或临时调高 env 一把梭。
     """
     if not _scheduler_task_enabled("vkpi_sentiment_annotate"):
         return

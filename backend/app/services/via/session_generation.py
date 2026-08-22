@@ -187,14 +187,12 @@ async def _generate_via_reply_with_ai(
             "Only bring in representative models if they make the answer clearer. "
             "Never repeat raw field labels like summary, models, or notes."
         )
-    temperature = 0.82 if str(route_info.get("intent") or "").strip().lower() == "quick_chat" else 0.65
     max_tokens = 220 if use_collab else 180
     if use_collab:
         route_result = await generate_json_with_collab(
             purpose="dialogue",
             system_prompt=system_prompt,
             payload=user_prompt,
-            temperature=temperature,
             max_tokens=max_tokens,
             routes_override=dialogue_routes or None,
             allow_text_fallback=True,
@@ -204,7 +202,6 @@ async def _generate_via_reply_with_ai(
             purpose="dialogue",
             system_prompt=system_prompt,
             payload=user_prompt,
-            temperature=temperature,
             max_tokens=max_tokens,
             route_override=dict(dialogue_routes[0] or {}) if dialogue_routes else None,
             allow_text_fallback=True,
@@ -223,7 +220,6 @@ async def _generate_via_reply_with_ai(
                 purpose="dialogue",
                 system_prompt=system_prompt,
                 payload=user_prompt,
-                temperature=temperature,
                 max_tokens=max_tokens,
                 routes_override=fallback_routes or None,
                 allow_text_fallback=True,

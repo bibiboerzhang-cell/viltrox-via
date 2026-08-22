@@ -7,6 +7,7 @@ import re
 from app.core.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.platform import llm_production
+from app.services.ai.analyzers.anthropic_response_text import text_blocks_joined
 from app.services.ai.analyzers.claude_vision_client import _build_anthropic_client
 from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE
 from app.services.ai.retry import call_ai_with_retry
@@ -121,7 +122,7 @@ def _analyze_images_batch(images_b64: list, title: str, platform: str, profile_h
                 },
             ),
         )
-        raw = resp.content[0].text.strip()
+        raw = text_blocks_joined(resp).strip()
         raw = re.sub(r"^```json\s*|```$", "", raw, flags=re.MULTILINE).strip()
         if not raw.endswith('}'): raw = raw[:raw.rfind('}')+1] if '}' in raw else raw+'}'
         parsed = json.loads(raw)

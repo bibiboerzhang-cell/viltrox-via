@@ -12,6 +12,7 @@ from app.core.config import CLAUDE_MODEL
 from app.core.constants import USER_AGENT
 from app.core.logging import get_logger
 from app.platform import llm_production
+from app.services.ai.analyzers.anthropic_response_text import text_blocks_joined
 from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE, get_claude_client
 from app.services.ai.retry import call_ai_with_retry
 from app.services.scoring.core import compute_weighted_scores
@@ -194,7 +195,7 @@ Analyze this content and respond ONLY with valid JSON:
                             },
                         ),
                     )
-                    vraw = vision_resp.content[0].text.strip()
+                    vraw = text_blocks_joined(vision_resp).strip()
                     vraw = re.sub(r"^```json\s*|```$", "", vraw, flags=re.MULTILINE).strip()
                     image_analysis = json.loads(vraw)
                     logger.info(

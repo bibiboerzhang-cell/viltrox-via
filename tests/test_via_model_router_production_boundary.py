@@ -26,7 +26,6 @@ def test_via_structured_generation_uses_atomic_production_boundary(monkeypatch) 
             model="gpt-5.4-mini",
             system_prompt="Return JSON only.",
             prompt='{"message":"hello"}',
-            temperature=0.2,
             max_tokens=180,
         )
     )
@@ -56,7 +55,7 @@ def test_via_dialogue_text_fallback_stays_inside_production_boundary(monkeypatch
         return {
             "status": "success",
             "provider": "anthropic",
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "text": "Next step\nReview the KOL evidence before outreach.",
         }
 
@@ -64,10 +63,9 @@ def test_via_dialogue_text_fallback_stays_inside_production_boundary(monkeypatch
     result = asyncio.run(
         model_router._generate_json_with_provider(
             provider="claude",
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
             system_prompt="Reply for Via.",
             prompt='{"message":"what next"}',
-            temperature=0.5,
             max_tokens=260,
             allow_text_fallback=True,
         )
@@ -102,7 +100,6 @@ def test_via_rejects_provider_mismatch_from_gateway(monkeypatch) -> None:
             model="gpt-5.4-mini",
             system_prompt="Return JSON.",
             prompt="{}",
-            temperature=0,
             max_tokens=120,
         )
     )

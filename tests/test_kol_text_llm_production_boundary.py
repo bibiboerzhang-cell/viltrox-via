@@ -414,7 +414,7 @@ def test_outreach_pack_requires_exact_valid_bilingual_json(monkeypatch) -> None:
     monkeypatch.setattr(
         outreach_pack,
         "_model_binding",
-        lambda: ("anthropic", "claude-sonnet-4-6"),
+        lambda: ("anthropic", "claude-sonnet-5"),
     )
 
     def ready(prompt: str, **kwargs: Any) -> dict[str, Any]:
@@ -422,7 +422,7 @@ def test_outreach_pack_requires_exact_valid_bilingual_json(monkeypatch) -> None:
         return {
             "status": "success",
             "provider": "anthropic",
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "json": {
                 "subject": "VILTROX collaboration",
                 "email_en": "Hello Creator, this is a collaboration proposal.",
@@ -441,7 +441,7 @@ def test_outreach_pack_requires_exact_valid_bilingual_json(monkeypatch) -> None:
     assert draft["personalized"] is True
     assert provenance["llm_used"] is True
     assert provenance["provider"] == "anthropic"
-    assert provenance["model"] == "claude-sonnet-4-6"
+    assert provenance["model"] == "claude-sonnet-5"
     assert captured["required_keys"] == ("subject", "email_en", "email_zh", "talking_points")
     assert captured["metadata"]["phase"] == "kol_outreach"
     assert captured["metadata"]["subphase"] == "bilingual_draft"

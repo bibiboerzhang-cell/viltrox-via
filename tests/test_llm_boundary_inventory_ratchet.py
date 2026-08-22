@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "backend" / "app"
 
 DIRECT_PROVIDER_MAX = {
-    "domains/kol/audience_stats.py": 1,
+    "domains/kol/audience_avatar_llm.py": 1,  # relocated from audience_stats.py (avatar-age Gemini call); debt unchanged
     "domains/kol/profile_recall.py": 1,
     "domains/market/ai_today.py": 2,
     "domains/projects/contract_assist.py": 1,

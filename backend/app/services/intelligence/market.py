@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.db.connection import get_conn
 from app.platform.llm_production import generate_text
 
@@ -314,7 +315,7 @@ async def regenerate_gap_insights() -> dict:
             lambda: generate_text(
                 prompt,
                 provider="anthropic",
-                model="claude-opus-4-7",
+                model=CLAUDE_OPUS_EXACT_MODEL,
                 purpose="intelligence_market",
                 max_output_tokens=2048,
             )
@@ -349,7 +350,7 @@ async def regenerate_gap_insights() -> dict:
                 ins.get("title", "Untitled"),
                 ins.get("body", ""),
                 json.dumps({"benchmarks": len(benchmarks.get("genres") or []), "observations": len(observations.get("observations") or [])}),
-                "claude-opus-4-7",
+                CLAUDE_OPUS_EXACT_MODEL,
                 now,
                 expires,
             ),

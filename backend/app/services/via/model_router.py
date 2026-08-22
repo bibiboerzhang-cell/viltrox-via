@@ -83,28 +83,43 @@ def _unique(items: list[str]) -> list[str]:
     return out
 
 
+_PROVIDER_LANE_ALIASES = {
+    "anthropic": "claude",
+    "google": "gemini",
+}
+
+
+def normalize_provider_lane(provider: Any) -> str:
+    """Map an env/provider spelling onto the Via lane key (claude/openai/gemini).
+
+    Via lanes are keyed ``claude``/``openai``/``gemini`` but .env files routinely
+    spell the provider the gateway way (``anthropic``/``google``).  Without this
+    normalisation ``VIA_SUMMARY_PROVIDER=anthropic`` silently fell into the
+    else-branch and the configured ``VIA_SUMMARY_MODEL`` was never used.
+    """
+    value = str(provider or "").strip().lower()
+    return _PROVIDER_LANE_ALIASES.get(value, value)
+
+
+def _lane_models(configured_provider: Any, configured_model: str, defaults: dict[str, str]) -> dict[str, str]:
+    lane = normalize_provider_lane(configured_provider)
+    return {
+        key: (configured_model if lane == key and str(configured_model or "").strip() else default)
+        for key, default in defaults.items()
+    }
+
+
 def _providers_and_models_for_purpose(purpose: str) -> tuple[list[str], dict[str, str]]:
+    defaults = {"openai": OPENAI_MODEL, "claude": CLAUDE_HAIKU_MODEL, "gemini": GEMINI_MODEL}
     if purpose == "summary":
-        preferred = _unique([VIA_SUMMARY_PROVIDER, "openai", "claude", "gemini"])
-        models = {
-            "openai": VIA_SUMMARY_MODEL if VIA_SUMMARY_PROVIDER == "openai" else OPENAI_MODEL,
-            "claude": VIA_SUMMARY_MODEL if VIA_SUMMARY_PROVIDER == "claude" else CLAUDE_HAIKU_MODEL,
-            "gemini": VIA_SUMMARY_MODEL if VIA_SUMMARY_PROVIDER == "gemini" else GEMINI_MODEL,
-        }
+        preferred = _unique([normalize_provider_lane(VIA_SUMMARY_PROVIDER), "openai", "claude", "gemini"])
+        models = _lane_models(VIA_SUMMARY_PROVIDER, VIA_SUMMARY_MODEL, defaults)
     elif purpose == "vision":
-        preferred = _unique([VIA_VISION_PROVIDER, "gemini", "openai", "claude"])
-        models = {
-            "gemini": VIA_VISION_MODEL if VIA_VISION_PROVIDER == "gemini" else GEMINI_MODEL,
-            "openai": VIA_VISION_MODEL if VIA_VISION_PROVIDER == "openai" else OPENAI_MODEL,
-            "claude": VIA_VISION_MODEL if VIA_VISION_PROVIDER == "claude" else CLAUDE_HAIKU_MODEL,
-        }
+        preferred = _unique([normalize_provider_lane(VIA_VISION_PROVIDER), "gemini", "openai", "claude"])
+        models = _lane_models(VIA_VISION_PROVIDER, VIA_VISION_MODEL, defaults)
     else:
-        preferred = _unique([VIA_DIALOGUE_PROVIDER, "claude", "openai", "gemini"])
-        models = {
-            "claude": VIA_DIALOGUE_MODEL if VIA_DIALOGUE_PROVIDER == "claude" else CLAUDE_HAIKU_MODEL,
-            "openai": VIA_DIALOGUE_MODEL if VIA_DIALOGUE_PROVIDER == "openai" else OPENAI_MODEL,
-            "gemini": VIA_DIALOGUE_MODEL if VIA_DIALOGUE_PROVIDER == "gemini" else GEMINI_MODEL,
-        }
+        preferred = _unique([normalize_provider_lane(VIA_DIALOGUE_PROVIDER), "claude", "openai", "gemini"])
+        models = _lane_models(VIA_DIALOGUE_PROVIDER, VIA_DIALOGUE_MODEL, defaults)
     return preferred, models
 
 
@@ -269,7 +284,6 @@ async def generate_json_with_route(
     purpose: str,
     system_prompt: str,
     payload: dict[str, Any],
-    temperature: float = 0.55,
     max_tokens: int = 260,
     route_override: dict[str, str] | None = None,
     allow_text_fallback: bool = False,
@@ -286,7 +300,6 @@ async def generate_json_with_route(
         task_binding=_task_binding_for_purpose(purpose),
         system_prompt=system_prompt,
         prompt=prompt,
-        temperature=temperature,
         max_tokens=max_tokens,
         allow_text_fallback=allow_text_fallback,
     )
@@ -299,7 +312,6 @@ async def _generate_json_with_provider(
     task_binding: str = "",
     system_prompt: str,
     prompt: str,
-    temperature: float,
     max_tokens: int,
     allow_text_fallback: bool = False,
 ) -> dict[str, Any] | None:
@@ -310,8 +322,10 @@ async def _generate_json_with_provider(
     reservation ledger.  The synchronous production boundary is moved to a worker
     thread so the async session API remains non-blocking; it owns exact-model
     readiness, reservation, settlement/unknown recovery and the gateway trace.
+    No sampling parameters are accepted: the production gateway owns the
+    provider-safe generation config (Sonnet 5 / Opus 5 reject non-default
+    temperature, Gemini 3.x deprecates it).
     """
-    del temperature  # The production gateway owns provider-safe generation config.
     full_prompt = f"{system_prompt}\n\nPayload:\n{prompt}"
     purpose = "via_dialogue" if allow_text_fallback else "via_structured_generation"
     try:
@@ -422,7 +436,6 @@ async def generate_json_with_collab(
     purpose: str,
     system_prompt: str,
     payload: dict[str, Any],
-    temperature: float = 0.55,
     max_tokens: int = 260,
     routes_override: list[dict[str, str]] | None = None,
     allow_text_fallback: bool = False,
@@ -439,7 +452,6 @@ async def generate_json_with_collab(
             task_binding=_task_binding_for_purpose(purpose),
             system_prompt=system_prompt,
             prompt=prompt,
-            temperature=temperature,
             max_tokens=max_tokens,
             allow_text_fallback=allow_text_fallback,
         )
@@ -451,7 +463,6 @@ async def generate_json_with_collab(
                 task_binding=_task_binding_for_purpose(purpose),
                 system_prompt=system_prompt,
                 prompt=prompt,
-                temperature=temperature,
                 max_tokens=max_tokens,
                 allow_text_fallback=allow_text_fallback,
             )
@@ -492,7 +503,6 @@ async def summarize_via_exchange(
         purpose="summary",
         system_prompt=system_prompt,
         payload=payload,
-        temperature=0.25,
         max_tokens=180,
     )
     if not result:

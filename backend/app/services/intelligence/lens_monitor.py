@@ -41,6 +41,7 @@ from app.core.logging import get_logger
 from app.platform.apify_budget import call_apify_actor
 from app.platform.apify_lifecycle import register_apify_client_shutdown
 from app.services.ai.retry import call_ai_with_retry
+from app.services.ai.analyzers.anthropic_response_text import text_blocks_joined
 from app.services.intelligence.account_scan_service import search_platform_content
 
 logger = get_logger(__name__)
@@ -451,12 +452,13 @@ def classify_videos_with_claude(query: str, videos: list[dict]) -> dict:
             lambda: client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=4000,
+                thinking={"type": "disabled"},
                 messages=[{"role": "user", "content": prompt}],
             ),
         )
         elapsed = time.time() - t0
         
-        text = resp.content[0].text if resp.content else ""
+        text = text_blocks_joined(resp)
         logger.info("lens_monitor.claude_complete", extra={"elapsed_sec": round(elapsed, 1), "char_count": len(text)})
         
         # 清理 markdown

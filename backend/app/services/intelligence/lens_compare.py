@@ -26,6 +26,7 @@ from app.core.logging import get_logger
 from app.platform.apify_budget import call_apify_actor
 from app.platform.apify_lifecycle import register_apify_client_shutdown
 from app.services.ai.retry import call_ai_with_retry
+from app.services.ai.analyzers.anthropic_response_text import text_blocks_joined
 from app.services.intelligence.lens_monitor import filter_videos_by_date, search_market_videos
 
 logger = get_logger(__name__)
@@ -271,7 +272,7 @@ Be specific, actionable, and honest. If A has LESS attention than B, say so dire
 
 
 def analyze_with_claude(lens_a: str, lens_b: str, stats_a: dict, stats_b: dict, videos_a: list, videos_b: list) -> dict:
-    """调 Claude Sonnet 4 生成对比洞察"""
+    """调 Claude(CLAUDE_MODEL 注册表绑定)生成对比洞察"""
     if not _claude_available:
         return {"error": "Claude not available"}
     
@@ -289,12 +290,13 @@ def analyze_with_claude(lens_a: str, lens_b: str, stats_a: dict, stats_b: dict, 
             lambda: client.messages.create(
                 model=CLAUDE_MODEL,
                 max_tokens=2000,
+                thinking={"type": "disabled"},
                 messages=[{"role": "user", "content": prompt}],
             ),
         )
         elapsed = time.time() - t0
         
-        text = resp.content[0].text if resp.content else ""
+        text = text_blocks_joined(resp)
         logger.info("lens_compare.claude_complete", extra={"elapsed_sec": round(elapsed, 1), "char_count": len(text)})
         
         # 清理 markdown code fence

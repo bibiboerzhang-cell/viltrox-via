@@ -3,7 +3,7 @@
 安全边界:
 - LLM 调用前过预算闸 `check_budget("cron:ai_today_hot", est)`(硬上限,见 migration 150 seed)。
 - 第一阶段固定由 Gemini 2.5 Pro + Google Search 发现热点、来源和视频候选。
-- 第二阶段固定由 Claude Opus 4.7 只依据第一阶段 Evidence Bundle 生成策略。
+- 第二阶段固定由 Claude Opus(CLAUDE_OPUS_EXACT_MODEL)只依据第一阶段 Evidence Bundle 生成策略。
 - 只写本域表 `vkpi_ai_today_hot`,绝不碰 vkpi_kol_pool / viltrox_fit_score / 指纹。
 - 任一阶段失败、无可回跳来源或模型绑定漂移时只返回 degraded,不覆盖 latest。
 - 不存在 Claude discovery fallback,也不允许第二阶段发明证据包之外的视频或事实。
@@ -85,7 +85,7 @@ _AI_TODAY_STRATEGY_PURPOSE = "ai_today.evidence_strategy"
 _AI_TODAY_DISCOVERY_OUTPUT_TOKENS = 8192
 _AI_TODAY_STRATEGY_OUTPUT_TOKENS = 1800
 # 2026-07-16 实跑校准:gemini-2.5-pro+Google Search 接地经代理常态 >20s(旧 20s 全灭在
-# ReadTimeout);claude-opus 1800 token 输出经代理也常超 38s(scheduler 回执 deadline_exceeded)。
+# ReadTimeout);Claude Opus(思考默认关)1800 token 输出经代理也常超 38s(scheduler 回执 deadline_exceeded)。
 # 每日一次的离线任务,放宽到 pro/opus 的真实完成区间;失败仍如实降级,不影响门面。
 _PROVIDER_TIMEOUT_SECONDS = 75.0
 _STRATEGY_TIMEOUT_SECONDS = 90.0

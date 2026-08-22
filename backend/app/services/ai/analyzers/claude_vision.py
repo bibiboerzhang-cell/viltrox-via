@@ -20,6 +20,7 @@ from app.core.constants import VILTROX_CATALOG_PROMPT
 from app.core.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.platform import llm_production
+from app.services.ai.analyzers.anthropic_response_text import text_blocks_joined
 from app.services.scoring.creator import get_creator_profile
 from app.services.scoring.core import compute_weighted_scores
 from app.services.scraping.ytdlp import download_video_ytdlp, fetch_youtube_subtitles, YTDLP_AVAILABLE
@@ -38,6 +39,8 @@ from app.services.ai.analyzers.claude_vision_merge import _merge_analysis
 
 FRAMES_DIR = Path("uploads")
 logger = get_logger(__name__)
+# Legacy local-file Gemini ladder (layer 2 File API). 3.x family needs thinking_level=minimal.
+LOCAL_FILE_GEMINI_MODEL = "gemini-3.6-flash"
 
 
 def analyze_video_with_claude(video_path: str, filename: str, creator_handle: str = "") -> dict:
@@ -259,7 +262,7 @@ def analyze_video_with_claude(video_path: str, filename: str, creator_handle: st
                     },
                 ),
             )
-            raw = resp.content[0].text.strip()
+            raw = text_blocks_joined(resp).strip()
             raw = re.sub(r"^```json\s*|```$", "", raw, flags=re.MULTILINE).strip()
             # Handle truncated JSON gracefully
             if not raw.endswith('}'):
@@ -600,7 +603,9 @@ async def analyze_url_content_smart(
   ]
 }}"""
 
-                            MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
+                            # 本地文件 File API 梯子:3.x 家族必须 thinking_level="minimal"
+                            # (thinking_budget=0 会 400),不传 temperature;2.0-flash 已退役。
+                            MODELS = [LOCAL_FILE_GEMINI_MODEL]
                             for model_name in MODELS:
                                 try:
                                     def _analyze(m=model_name, f=gfile):
@@ -612,7 +617,10 @@ async def analyze_url_content_smart(
                                                     mime_type="video/mp4"
                                                 ),
                                                 local_prompt
-                                            ]
+                                            ],
+                                            config=genai_types.GenerateContentConfig(
+                                                thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
+                                            ),
                                         )
                                     resp = await asyncio.to_thread(_analyze)
                                     raw = resp.text.strip()

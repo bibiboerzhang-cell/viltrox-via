@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from app.core.logging import get_logger
+from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.db.connection import get_conn
 from app.db.repositories.viltrox_matrix import get_latest_viltrox_scan_bundle
 from app.platform.llm_production import generate_text
@@ -177,7 +178,7 @@ async def regenerate_insights() -> dict:
             lambda: generate_text(
                 prompt,
                 provider="anthropic",
-                model="claude-opus-4-7",
+                model=CLAUDE_OPUS_EXACT_MODEL,
                 purpose="intelligence_brand",
                 max_output_tokens=2048,
             )
@@ -210,7 +211,7 @@ async def regenerate_insights() -> dict:
                 ins.get("type", "analysis"),
                 ins.get("title", "Untitled"),
                 ins.get("body", ""),
-                "claude-opus-4-7",
+                CLAUDE_OPUS_EXACT_MODEL,
                 now,
                 expires,
             ),

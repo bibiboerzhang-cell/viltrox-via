@@ -64,7 +64,7 @@ def test_reservation_is_atomic_against_open_allowance_and_never_stores_prompt() 
     secret_prompt = "private-prompt-never-store"
     first = reserve_llm_budget(
         provider="anthropic",
-        model="claude-opus-4-7",
+        model="claude-opus-5",
         purpose="unit",
         prompt=secret_prompt,
         estimated_cost_usd=0.6,
@@ -85,7 +85,7 @@ def test_reservation_is_atomic_against_open_allowance_and_never_stores_prompt() 
     with pytest.raises(LlmBudgetBlocked) as caught:
         reserve_llm_budget(
             provider="anthropic",
-            model="claude-opus-4-7",
+            model="claude-opus-5",
             purpose="unit-2",
             prompt="another",
             estimated_cost_usd=0.5,
@@ -131,7 +131,7 @@ def test_settlement_updates_cumulative_scopes_once_and_not_single_call() -> None
     _install_fixture()
     reservation = reserve_llm_budget(
         provider="anthropic",
-        model="claude-opus-4-7",
+        model="claude-opus-5",
         purpose="unit",
         prompt="safe",
         estimated_cost_usd=0.4,
@@ -168,7 +168,7 @@ def test_unknown_provider_outcome_keeps_reservation_open() -> None:
     _install_fixture()
     reservation = reserve_llm_budget(
         provider="anthropic",
-        model="claude-opus-4-7",
+        model="claude-opus-5",
         purpose="unit",
         prompt="safe",
         estimated_cost_usd=0.4,
@@ -198,7 +198,7 @@ def test_reserved_call_writes_both_ledgers_without_double_incrementing_caps() ->
 
     recorded = record_call(
         provider="anthropic",
-        model="claude-opus-4-7",
+        model="claude-opus-5",
         purpose="reservation-ledger-unit",
         prompt="private-ledger-prompt",
         input_tokens=100,
@@ -254,7 +254,7 @@ def test_settlement_preserves_micro_usd_and_reads_every_scope_back(
     _install_fixture()
     reservation = reserve_llm_budget(
         provider="anthropic",
-        model="claude-opus-4-7",
+        model="claude-opus-5",
         purpose="micro-unit",
         prompt="safe",
         estimated_cost_usd=0.000600,
@@ -286,7 +286,7 @@ def test_settlement_rejects_invalid_or_submicro_cost(invalid: float) -> None:
     _install_fixture()
     reservation = reserve_llm_budget(
         provider="anthropic",
-        model="claude-opus-4-7",
+        model="claude-opus-5",
         purpose="invalid-cost-unit",
         prompt="safe",
         estimated_cost_usd=0.001,
@@ -327,7 +327,7 @@ def test_forced_cost_mirror_requires_confirmed_exact_receipt(
     with pytest.raises(RuntimeError, match="forced_ai_cost_ledger_write_failed"):
         record_call(
             provider="anthropic",
-            model="claude-opus-4-7",
+            model="claude-opus-5",
             purpose="forced-mirror-receipt-unit",
             cost_micro_usd=33,
             status="success",
@@ -354,7 +354,7 @@ def test_forced_cost_mirror_propagates_sanitized_write_failure(
     ) as caught:
         record_call(
             provider="anthropic",
-            model="claude-opus-4-7",
+            model="claude-opus-5",
             purpose="forced-mirror-failure-unit",
             cost_micro_usd=33,
             status="success",
@@ -375,7 +375,7 @@ def test_forced_cost_mirror_requires_scope_before_call_row() -> None:
     with pytest.raises(RuntimeError, match="forced_ai_cost_ledger_scope_missing"):
         record_call(
             provider="anthropic",
-            model="claude-opus-4-7",
+            model="claude-opus-5",
             purpose="forced-mirror-scope-unit",
             cost_micro_usd=33,
             status="success",

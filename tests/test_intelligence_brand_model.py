@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.services.intelligence import brand
 
 
@@ -60,7 +61,7 @@ def test_regenerate_insights_calls_strict_production_entry(monkeypatch: pytest.M
     assert result == persisted
     assert len(calls) == 1
     assert calls[0]["provider"] == "anthropic"
-    assert calls[0]["model"] == "claude-opus-4-7"
+    assert calls[0]["model"] == CLAUDE_OPUS_EXACT_MODEL
     assert calls[0]["purpose"] == "intelligence_brand"
     assert calls[0]["max_output_tokens"] == 2048
     assert "Strong launch response" in str(conn.executions[1][1])
