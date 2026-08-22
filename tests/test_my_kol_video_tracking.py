@@ -613,12 +613,19 @@ def test_worker_provider_exception_is_reduced_to_bounded_error_code(
         conn=tracking_conn,
     )
     assert result["status"] == "failed"
-    assert result["error_code"] == "runtimeerror"
+    # The ledger keeps a classified reason (+ exception class as a flag), never
+    # the raw provider message.
+    assert result["error_code"] == "provider_error"
+    assert result["failure_reason"] == "provider_error"
     assert "secret-token" not in json.dumps(result)
     snapshot = tracking_conn.execute(
-        "SELECT status, error_code FROM vkpi_content_metric_snapshots"
+        "SELECT status, error_code, quality_flags FROM vkpi_content_metric_snapshots"
     ).fetchone()
-    assert tuple(snapshot) == ("failed", "runtimeerror")
+    assert tuple(snapshot)[:2] == ("failed", "provider_error")
+    flags = set(json.loads(snapshot[2]))
+    assert {"failure_reason:provider_error", "exception:runtimeerror", "provider_exception"} <= flags
+    assert "all_metrics_missing" not in flags
+    assert "secret-token" not in snapshot[2]
 
 
 @pytest.mark.parametrize(

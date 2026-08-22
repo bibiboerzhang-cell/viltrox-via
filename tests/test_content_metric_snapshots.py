@@ -330,7 +330,11 @@ def test_failure_appends_truth_without_overwriting_latest() -> None:
     failed = dict(conn.execute("SELECT * FROM vkpi_content_metric_snapshots").fetchone())
     assert failed["status"] == "failed"
     assert failed["error_code"] == "failed_no_return"
-    assert set(json.loads(failed["quality_flags"])) >= {"refresh_failed", "all_metrics_missing"}
+    flags = set(json.loads(failed["quality_flags"]))
+    # Failed rows carry the failure, not a completeness flag that would be
+    # misread as a parser gap.
+    assert "refresh_failed" in flags
+    assert "all_metrics_missing" not in flags
 
 
 def test_workflow_success_updates_latest_and_snapshot_in_one_commit(monkeypatch: pytest.MonkeyPatch) -> None:

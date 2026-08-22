@@ -101,6 +101,21 @@ def _conn() -> sqlite3.Connection:
             last_enqueue_status TEXT DEFAULT '', pause_reason TEXT DEFAULT '',
             created_at TEXT, updated_at TEXT
         );
+        CREATE TABLE vkpi_provider_budget_caps (
+            scope TEXT PRIMARY KEY, cap_usd REAL, current_spend REAL DEFAULT 0,
+            warning_at REAL DEFAULT 0.8, hard_stop_at REAL DEFAULT 1.0,
+            reset_at TEXT, fallback_action TEXT, metadata_json TEXT DEFAULT '{}'
+        );
+        CREATE TABLE vkpi_ai_cost_ledger (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, cron_task TEXT, ai_provider TEXT,
+            model_name TEXT, cost_usd REAL, metadata_json TEXT, occurred_at TEXT
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO vkpi_provider_budget_caps (scope, cap_usd, fallback_action)
+        VALUES ('metric_tracking', 30, 'pause_tracking_enqueue')
         """
     )
     conn.executemany(
@@ -249,6 +264,82 @@ def test_hot_warm_cold_cadence_and_explicit_tracking_only(
     assert sorted(payload["evidence_id"] for payload in payloads) == [102, 103]
     assert all(payload["source"] == video_metric_schedule.TASK_KEY for payload in payloads)
     assert all(payload["queue_lane"] == "batch" for payload in payloads)
+
+
+def test_budget_cap_blocks_enqueue_and_mirrors_ledger_spend(
+    schedule_conn: sqlite3.Connection,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _add_evidence(schedule_conn, 111, published_at="2026-08-20T12:00:00+00:00")
+    monkeypatch.setattr(
+        video_metric_refresh,
+        "_fetch_video_metadata",
+        lambda _url: pytest.fail("scheduler called provider"),
+    )
+    # Two attributed ledger rows this month reach the $30 cap; an unrelated
+    # Apify row and a last-month row must not count.
+    marker = json.dumps({"operation": "kol_video_metric_refresh"})[1:-1]
+    schedule_conn.executemany(
+        """
+        INSERT INTO vkpi_ai_cost_ledger (ai_provider, cost_usd, metadata_json, occurred_at)
+        VALUES ('apify', ?, ?, ?)
+        """,
+        [
+            (20.0, "{" + marker + "}", "2026-08-02T00:00:00+00:00"),
+            (10.0, "{" + marker + "}", "2026-08-15T00:00:00+00:00"),
+            (99.0, '{"operation": "listening_batch"}', "2026-08-15T00:00:00+00:00"),
+            (99.0, "{" + marker + "}", "2026-07-15T00:00:00+00:00"),
+        ],
+    )
+    schedule_conn.commit()
+
+    result = video_metric_schedule.enqueue_due_tracked_video_refreshes(schedule_conn, now=NOW)
+
+    assert result["status"] == "budget_blocked"
+    assert result["queued"] == 0 and result["due_selected"] == 0
+    assert result["budget"]["allowed"] is False
+    assert result["budget"]["spend_usd"] == 30.0
+    assert result["budget"]["cap_usd"] == 30.0
+    assert schedule_conn.execute("SELECT COUNT(*) FROM apify_jobs").fetchone()[0] == 0
+    mirrored = schedule_conn.execute(
+        "SELECT current_spend FROM vkpi_provider_budget_caps WHERE scope='metric_tracking'"
+    ).fetchone()[0]
+    assert mirrored == 30.0
+    # Subscriptions are untouched: the pass resumes after the monthly reset.
+    assert schedule_conn.execute(
+        "SELECT status FROM vkpi_kol_video_metric_tracking WHERE evidence_id=111"
+    ).fetchone()[0] == "active"
+
+    # Missing scope row is fail-closed too (seed via enroll_metric_tracking.py).
+    schedule_conn.execute("DELETE FROM vkpi_provider_budget_caps")
+    schedule_conn.commit()
+    blocked = video_metric_schedule.enqueue_due_tracked_video_refreshes(schedule_conn, now=NOW)
+    assert blocked["status"] == "budget_blocked"
+    assert blocked["budget"]["reason"] == "budget_scope_not_configured"
+
+
+def test_hot_tier_is_queued_before_cold_when_batch_is_smaller_than_due(
+    schedule_conn: sqlite3.Connection,
+) -> None:
+    # Three cold rows never attempted (lowest evidence ids) and one hot row:
+    # a batch of 2 must take the hot row first, then the oldest cold row.
+    for evidence_id in (301, 302, 303):
+        _add_evidence(schedule_conn, evidence_id, published_at="2026-06-01T12:00:00+00:00")
+    _add_evidence(schedule_conn, 309, published_at="2026-08-21T06:00:00+00:00")
+
+    result = video_metric_schedule.enqueue_due_tracked_video_refreshes(
+        schedule_conn, now=NOW, limit=2,
+    )
+
+    assert result["status"] == "ok"
+    assert result["queued"] == 2
+    assert result["scan_truncated"] is True
+    assert result["tier_due"] == {"hot": 1, "warm": 0, "cold": 1}
+    queued = [
+        json.loads(row[0])["evidence_id"]
+        for row in schedule_conn.execute("SELECT payload FROM apify_jobs ORDER BY id").fetchall()
+    ]
+    assert queued == [309, 301]
 
 
 def test_failed_snapshot_uses_backoff_and_active_job_is_idempotent(

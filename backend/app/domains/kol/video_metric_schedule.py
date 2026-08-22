@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.db.connection import get_conn
-from app.domains.kol import video_metric_refresh, video_tracking
+from app.domains.kol import video_metric_refresh, video_tracking, video_tracking_budget
 
 
 TASK_KEY = "vkpi_kol_video_metric_refresh"
@@ -23,6 +23,7 @@ TIER_CADENCES = {
     "warm": timedelta(hours=24),
     "cold": timedelta(days=7),
 }
+TIER_PRIORITY = {"hot": 0, "warm": 1, "cold": 2}
 
 
 def _int(value: Any) -> int:
@@ -76,6 +77,18 @@ def _tier_for_publish_time(published_at: datetime | None, now: datetime) -> str:
     if age <= timedelta(days=30):
         return "warm"
     return "cold"
+
+
+def tier_for_evidence(row: dict[str, Any], now: datetime | None = None) -> str:
+    """Sampling tier (hot 6h / warm 24h / cold 7d) from the evidence publish age."""
+
+    current = _utc(now) or datetime.now(timezone.utc)
+    published_at = _first_utc(
+        row.get("published_at_norm"),
+        row.get("publish_date"),
+        row.get("posted_at"),
+    )
+    return _tier_for_publish_time(published_at, current)
 
 
 def _batch_limit(value: int | None) -> int:
@@ -186,9 +199,8 @@ def enqueue_due_tracked_video_refreshes(
     current = _utc(now) or datetime.now(timezone.utc)
     batch_limit = _batch_limit(limit)
     scan_limit = min(MAX_SCAN_LIMIT, max(batch_limit, batch_limit * 10))
-    rows = _candidate_rows(db, scan_limit=scan_limit)
     summary: dict[str, Any] = {
-        "status": "empty" if not rows else "ok",
+        "status": "ok",
         "batch_limit": batch_limit,
         "candidates_scanned": 0,
         "due_selected": 0,
@@ -198,20 +210,31 @@ def enqueue_due_tracked_video_refreshes(
         "paused": 0,
         "failed": 0,
         "tier_due": {"hot": 0, "warm": 0, "cold": 0},
-        "scan_truncated": len(rows) == scan_limit,
+        "scan_truncated": False,
         "provider_calls_performed": False,
+        "budget": None,
     }
+    # Monthly ``metric_tracking`` cap: this pass is the only automatic fan-out of
+    # paid refreshes, so it is the enforcement point.  Fail-closed on a missing
+    # scope row; subscriptions are left untouched and simply wait for the reset.
+    budget = video_tracking_budget.budget_gate(db, now=current)
+    db.commit()
+    summary["budget"] = budget
+    if not budget.get("allowed"):
+        summary["status"] = "budget_blocked"
+        return summary
+    rows = _candidate_rows(db, scan_limit=scan_limit)
+    if not rows:
+        summary["status"] = "empty"
+    summary["scan_truncated"] = len(rows) == scan_limit
+
+    # Decide due-ness for the whole scan first, then spend the batch on the
+    # hottest tier: a fresh video's 6h sample must not wait behind hundreds of
+    # cold 7d rows that became due in the same hour.
+    due_rows: list[tuple[int, datetime, int, str, dict[str, Any]]] = []
     for row in rows:
-        if summary["due_selected"] >= batch_limit:
-            summary["scan_truncated"] = True
-            break
         summary["candidates_scanned"] += 1
-        published_at = _first_utc(
-            row.get("published_at_norm"),
-            row.get("publish_date"),
-            row.get("posted_at"),
-        )
-        tier = _tier_for_publish_time(published_at, current)
+        tier = tier_for_evidence(row, current)
         cadence = TIER_CADENCES[tier]
         if _text(row.get("latest_snapshot_status")).lower() == "failed":
             cadence = max(cadence, FAILED_REFRESH_BACKOFF)
@@ -223,7 +246,17 @@ def enqueue_due_tracked_video_refreshes(
         if last_attempt is not None and current < last_attempt + cadence:
             summary["not_due"] += 1
             continue
-
+        due_rows.append((
+            TIER_PRIORITY[tier],
+            last_attempt or datetime.min.replace(tzinfo=timezone.utc),
+            _int(row.get("evidence_id")),
+            tier,
+            row,
+        ))
+    due_rows.sort(key=lambda item: item[:3])
+    if len(due_rows) > batch_limit:
+        summary["scan_truncated"] = True
+    for _priority, _last_attempt, _evidence_id, tier, row in due_rows[:batch_limit]:
         summary["due_selected"] += 1
         summary["tier_due"][tier] += 1
         evidence_id = _int(row.get("evidence_id"))
@@ -287,5 +320,7 @@ def enqueue_due_tracked_video_refreshes(
 __all__ = [
     "TASK_KEY",
     "TIER_CADENCES",
+    "TIER_PRIORITY",
     "enqueue_due_tracked_video_refreshes",
+    "tier_for_evidence",
 ]

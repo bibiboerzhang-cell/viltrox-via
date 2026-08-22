@@ -44,6 +44,88 @@ def error_code_from_exception(exc: BaseException) -> str:
     return (name or "refresh_error")[:80]
 
 
+# Failure reasons persisted on failed snapshots (``error_code`` + the
+# ``failure_reason:<reason>`` quality flag).  The raw provider message is never
+# stored: it can echo credentials, so only the classified reason and the
+# exception class name survive.
+FAILURE_REASON_PROVIDER_ERROR = "provider_error"
+FAILURE_REASON_NOT_CONFIGURED = "provider_not_configured"
+FAILURE_REASON_RATE_LIMITED = "rate_limited"
+FAILURE_REASON_BLOCKED = "provider_blocked"
+FAILURE_REASON_NO_MEDIA = "no_media"
+FAILURE_REASON_NO_METRICS = "no_metrics"
+FAILURE_REASON_TIMEOUT = "provider_timeout"
+FAILURE_REASONS = frozenset(
+    {
+        FAILURE_REASON_PROVIDER_ERROR,
+        FAILURE_REASON_NOT_CONFIGURED,
+        FAILURE_REASON_RATE_LIMITED,
+        FAILURE_REASON_BLOCKED,
+        FAILURE_REASON_NO_MEDIA,
+        FAILURE_REASON_NO_METRICS,
+        FAILURE_REASON_TIMEOUT,
+    }
+)
+_FAILURE_REASON_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        FAILURE_REASON_NOT_CONFIGURED,
+        ("not configured", "not installed", "is not set", "missing api key", "no token"),
+    ),
+    (
+        FAILURE_REASON_RATE_LIMITED,
+        ("429", "rate limit", "ratelimit", "too many requests", "quota exceeded"),
+    ),
+    (
+        FAILURE_REASON_BLOCKED,
+        ("request blocked", "blocked", "checkpoint", "captcha", "login required", "403", "forbidden", "private"),
+    ),
+    (
+        FAILURE_REASON_TIMEOUT,
+        ("timed out", "timeout"),
+    ),
+    (
+        FAILURE_REASON_NO_MEDIA,
+        (
+            "no items", "not found", "no usable item", "scrape_unavailable", "404",
+            "deleted", "unavailable", "removed", "does not exist",
+        ),
+    ),
+)
+
+
+def classify_refresh_failure(exc: BaseException) -> dict[str, str]:
+    """Map a provider exception to a bounded ``{reason, error_code, exception}``.
+
+    ``LookupError`` (provider returned nothing usable) is ``no_media`` unless its
+    message names a more specific cause.  Everything else is matched against a
+    small keyword table and falls back to ``provider_error``; the message itself
+    is discarded.
+    """
+
+    message = str(exc or "").lower()
+    reason = FAILURE_REASON_NO_MEDIA if isinstance(exc, LookupError) else ""
+    for candidate, needles in _FAILURE_REASON_PATTERNS:
+        if any(needle in message for needle in needles):
+            reason = candidate
+            break
+    if not reason:
+        reason = FAILURE_REASON_PROVIDER_ERROR
+    return {
+        "reason": reason,
+        "error_code": reason,
+        "exception": error_code_from_exception(exc),
+    }
+
+
+def failure_reason_flags(reason: str, *extra: str) -> tuple[str, ...]:
+    """Quality flags that carry the classified failure reason onto a snapshot."""
+
+    normalized = str(reason or "").strip().lower()
+    if normalized not in FAILURE_REASONS:
+        normalized = FAILURE_REASON_PROVIDER_ERROR
+    return (f"failure_reason:{normalized}", *extra)
+
+
 def quality_flags_for_metrics(
     *,
     views: Any,
@@ -52,13 +134,18 @@ def quality_flags_for_metrics(
     shares: Any,
     source_observed_at: str | None,
     extra: Iterable[str] = (),
+    failed: bool = False,
 ) -> list[str]:
     metrics = [metric_or_none(value) for value in (views, likes, comments, shares)]
     flags = {str(flag).strip()[:80] for flag in extra if str(flag).strip()}
-    if all(value is None for value in metrics):
-        flags.add("all_metrics_missing")
-    elif any(value is None for value in metrics):
-        flags.add("partial_metrics")
+    # A failed refresh never carries metrics, so completeness flags would only
+    # restate the failure and were misread as a parser gap ("all_metrics_missing"
+    # on every provider error).  Failed rows carry ``failure_reason:*`` instead.
+    if not failed:
+        if all(value is None for value in metrics):
+            flags.add("all_metrics_missing")
+        elif any(value is None for value in metrics):
+            flags.add("partial_metrics")
     if not str(source_observed_at or "").strip():
         flags.add("source_observed_at_missing")
     return sorted(flags)
@@ -283,6 +370,7 @@ def append_snapshot(
         **normalized_metrics,
         source_observed_at=source_observed_at,
         extra=quality_flags,
+        failed=normalized_status == "failed",
     )
     key = str(capture_key or "").strip() or make_capture_key(
         evidence_id=int(evidence_id),
@@ -488,9 +576,19 @@ def record_failed_refresh(
     run_id: str | None = None,
     quality_flags: Iterable[str] = (),
     capture_key: str | None = None,
+    failure_reason: str | None = None,
 ) -> dict[str, Any]:
-    """Append failure truth only; latest evidence metrics are untouched."""
+    """Append failure truth only; latest evidence metrics are untouched.
 
+    ``failure_reason`` (one of :data:`FAILURE_REASONS`) lands as the
+    ``failure_reason:<reason>`` quality flag so the ledger distinguishes a
+    provider outage from a deleted post or a rate limit without exposing the
+    raw provider message.
+    """
+
+    flags: tuple[str, ...] = ("refresh_failed", *tuple(quality_flags))
+    if failure_reason:
+        flags = failure_reason_flags(failure_reason, *flags)
     return append_snapshot(
         conn,
         evidence_id=int(evidence_id),
@@ -500,7 +598,7 @@ def record_failed_refresh(
         status="failed",
         error_code=error_code,
         run_id=run_id,
-        quality_flags=("refresh_failed", *tuple(quality_flags)),
+        quality_flags=flags,
         capture_key=capture_key,
     )
 

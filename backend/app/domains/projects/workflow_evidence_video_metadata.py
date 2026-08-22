@@ -7,18 +7,50 @@ Apify 抓取链路。函数体逐字不变,只依赖标准库与本模块内的�
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import json
 import os
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
+from typing import Any, Iterator
 
 
 from app.core.coerce import _text
 from app.platform.apify_budget import current_apify_execution_context
 from app.platform.apify_lifecycle import managed_apify_client
+
+
+DEFAULT_METADATA_OPERATION = "evidence_video_metadata"
+DEFAULT_METADATA_SOURCE = "workflow_evidence_video_metadata"
+# Cost attribution for the Apify run behind ``_fetch_video_metadata``.  Callers
+# such as the tracked-video metric refresh set this so the cost ledger row names
+# their operation (budget scope ``metric_tracking`` sums by it) without changing
+# the fetch signature that many call sites and tests bind to.
+_METADATA_COST_ATTRIBUTION: contextvars.ContextVar[tuple[str, str] | None] = contextvars.ContextVar(
+    "vkpi_video_metadata_cost_attribution", default=None
+)
+
+
+@contextlib.contextmanager
+def metadata_cost_attribution(*, operation: str, source: str) -> Iterator[None]:
+    """Attribute provider runs made inside the block to ``operation``/``source``."""
+
+    token = _METADATA_COST_ATTRIBUTION.set((
+        _text(operation)[:80] or DEFAULT_METADATA_OPERATION,
+        _text(source)[:80] or DEFAULT_METADATA_SOURCE,
+    ))
+    try:
+        yield
+    finally:
+        _METADATA_COST_ATTRIBUTION.reset(token)
+
+
+def current_metadata_cost_attribution() -> tuple[str, str]:
+    current = _METADATA_COST_ATTRIBUTION.get()
+    return current or (DEFAULT_METADATA_OPERATION, DEFAULT_METADATA_SOURCE)
 
 
 def _compact_int(value: Any) -> int | None:
@@ -298,10 +330,21 @@ def _apify_item_metadata(platform: str, video_url: str, item: dict[str, Any], ru
             "content_url": _text(_first(item, "url")) or video_url,
             "title": caption[:500],
             "description": caption,
-            "view_count": _compact_int(_first(item, "videoViewCount", "videoPlayCount", "viewCount", "viewsCount")),
-            "like_count": _compact_int(_first(item, "likesCount", "likeCount", "likes")),
-            "comment_count": _compact_int(_first(item, "commentsCount", "commentCount", "comments")),
-            "share_count": _compact_int(_first(item, "shareCount", "shares")),
+            # 指标字段按 actor 版本漂移:reels 版回 videoPlayCount/igPlayCount/playCount,
+            # 旧版回 videoViewCount;点赞隐藏时 likesCount=-1(_compact_int → None,不伪造 0)。
+            "view_count": _compact_int(_first(
+                item, "videoViewCount", "videoPlayCount", "igPlayCount", "playCount",
+                "viewCount", "viewsCount", "video_view_count", "video_play_count",
+            )),
+            "like_count": _compact_int(_first(
+                item, "likesCount", "likeCount", "likes", "like_count",
+                "edge_media_preview_like.count", "edge_liked_by.count",
+            )),
+            "comment_count": _compact_int(_first(
+                item, "commentsCount", "commentCount", "comments", "comment_count",
+                "edge_media_to_comment.count",
+            )),
+            "share_count": _compact_int(_first(item, "shareCount", "sharesCount", "reshareCount", "shares")),
             "publish_date": published_at,
             "posted_at": posted_at,
             "duration_seconds": _duration_seconds(_first(item, "videoDuration", "duration")),
@@ -323,10 +366,20 @@ def _apify_item_metadata(platform: str, video_url: str, item: dict[str, Any], ru
             "content_url": _text(_first(item, "webVideoUrl", "submittedVideoUrl")) or video_url,
             "title": title[:500],
             "description": title,
-            "view_count": _compact_int(_first(item, "playCount", "viewCount", "views")),
-            "like_count": _compact_int(_first(item, "diggCount", "likeCount", "likes")),
-            "comment_count": _compact_int(_first(item, "commentCount", "commentsCount", "comments")),
-            "share_count": _compact_int(_first(item, "shareCount", "shares")),
+            # clockworks 顶层 playCount/diggCount;部分版本把计数收进 stats.* / statsV2.*。
+            "view_count": _compact_int(_first(
+                item, "playCount", "viewCount", "views", "stats.playCount", "statsV2.playCount",
+            )),
+            "like_count": _compact_int(_first(
+                item, "diggCount", "likeCount", "likes", "stats.diggCount", "statsV2.diggCount",
+            )),
+            "comment_count": _compact_int(_first(
+                item, "commentCount", "commentsCount", "comments",
+                "stats.commentCount", "statsV2.commentCount",
+            )),
+            "share_count": _compact_int(_first(
+                item, "shareCount", "shares", "stats.shareCount", "statsV2.shareCount",
+            )),
             "publish_date": published_at,
             "posted_at": posted_at,
             "duration_seconds": _duration_seconds(_first(item, "videoMeta.duration", "duration")),
@@ -390,6 +443,7 @@ def _apify_metadata(platform: str, video_url: str) -> dict[str, Any]:
     actor_id = _apify_actor_for(platform)
     run_input = _apify_input(platform, video_url)
     attempts = _apify_scrape_attempts()
+    operation, source = current_metadata_cost_attribution()
     last_reason = "Apify returned no items"
     # 反爬重试:每次 actor.call 都是全新 session,_apify_input 已注入(默认住宅)代理组。
     # 错误哨兵(run SUCCEEDED 但 item 只有 error/errorDescription,平台拦截/私密/已删)或空结果 → 换次重跑;
@@ -402,8 +456,8 @@ def _apify_metadata(platform: str, video_url: str) -> dict[str, Any]:
                 client,
                 actor_id,
                 platform=platform,
-                operation="evidence_video_metadata",
-                source="workflow_evidence_video_metadata",
+                operation=operation,
+                source=source,
                 run_input=run_input,
                 timeout_secs=300,
             )
@@ -417,8 +471,8 @@ def _apify_metadata(platform: str, video_url: str) -> dict[str, Any]:
                     run,
                     actor_id=actor_id,
                     platform=platform,
-                    operation="evidence_video_metadata",
-                    source="workflow_evidence_video_metadata",
+                    operation=operation,
+                    source=source,
                     dataset_item_count=len(items),
                 )
             except Exception:

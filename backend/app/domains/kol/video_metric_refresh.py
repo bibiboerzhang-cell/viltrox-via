@@ -18,6 +18,7 @@ from app.domains.kol.video_url_identity import (
     parse_supported_video_url,
 )
 from app.domains.projects.workflow_evidence import _fetch_video_metadata
+from app.domains.projects.workflow_evidence_video_metadata import metadata_cost_attribution
 from app.domains.tasks.apify_idempotency import (
     active_job_idempotency_key,
     enqueue_active_apify_job,
@@ -27,6 +28,10 @@ from app.platform.apify_budget import ApifyBudgetBlocked, ApifyProviderReplayBlo
 
 VIDEO_METRIC_REFRESH_JOB_TYPE = "kol_video_metric_refresh"
 SUPPORTED_METRIC_PLATFORMS = frozenset({"youtube", "instagram", "tiktok"})
+# Cost-ledger attribution for provider runs made by this job.  The
+# ``metric_tracking`` budget scope sums ledger rows by this operation name.
+METRIC_TRACKING_COST_OPERATION = "kol_video_metric_refresh"
+METRIC_TRACKING_COST_SOURCE = "vkpi_kol_video_metric_refresh"
 
 
 def _text(value: Any) -> str:
@@ -179,6 +184,7 @@ def _failure(
     provider: str,
     run_id: str | None = None,
     quality_flags: tuple[str, ...] = (),
+    failure_reason: str = content_metric_snapshots.FAILURE_REASON_PROVIDER_ERROR,
 ) -> dict[str, Any]:
     result = content_metric_snapshots.record_failed_refresh(
         conn,
@@ -188,12 +194,14 @@ def _failure(
         error_code=error_code[:80],
         run_id=run_id,
         quality_flags=quality_flags,
+        failure_reason=failure_reason,
     )
     conn.commit()
     return {
         "status": "failed",
         "evidence_id": evidence_id,
         "error_code": error_code[:80],
+        "failure_reason": failure_reason,
         "snapshot_id": (result.get("snapshot") or {}).get("id"),
         "provider_calls_performed": True,
     }
@@ -276,25 +284,41 @@ def run_video_metric_refresh_for_job(
 
     fetched_at = _utcnow()
     try:
-        metadata = dict(_fetch_video_metadata(_text(evidence.get("content_url"))) or {})
+        with metadata_cost_attribution(
+            operation=METRIC_TRACKING_COST_OPERATION,
+            source=METRIC_TRACKING_COST_SOURCE,
+        ):
+            metadata = dict(_fetch_video_metadata(_text(evidence.get("content_url"))) or {})
     except (ApifyBudgetBlocked, ApifyProviderReplayBlocked):
         # Preserve the worker's typed hard-stop/replay-fence handling.  These
         # exceptions do not prove that a provider observation exists and must
         # never be flattened into a normal failed snapshot.
         raise
     except Exception as exc:
+        # The ledger keeps the classified reason (provider_not_configured /
+        # rate_limited / no_media / ...) plus the exception class; the raw
+        # message is discarded because it may echo a credential.
+        classified = content_metric_snapshots.classify_refresh_failure(exc)
         return _failure(
             db,
             evidence_id=evidence_id,
             fetched_at=fetched_at,
-            error_code=content_metric_snapshots.error_code_from_exception(exc),
+            error_code=classified["error_code"],
             provider=platform,
-            quality_flags=("provider_exception",),
+            quality_flags=("provider_exception", f"exception:{classified['exception']}"),
+            failure_reason=classified["reason"],
         )
 
     provider = _text(metadata.get("scrape_source") or platform).lower()[:120]
     run_id = _text(metadata.get("apify_run_id")) or None
     if _text(metadata.get("scrape_status")).lower() != "success":
+        # ``deferred``/``pending`` means no provider execution fence was active:
+        # the job ran outside the worker, i.e. the provider was never reachable.
+        not_success_reason = (
+            content_metric_snapshots.FAILURE_REASON_NOT_CONFIGURED
+            if provider == "deferred" or _text(metadata.get("scrape_status")).lower() == "pending"
+            else content_metric_snapshots.FAILURE_REASON_PROVIDER_ERROR
+        )
         return _failure(
             db,
             evidence_id=evidence_id,
@@ -303,6 +327,7 @@ def run_video_metric_refresh_for_job(
             provider=provider,
             run_id=run_id,
             quality_flags=("provider_response_not_success",),
+            failure_reason=not_success_reason,
         )
     returned_platform = _text(metadata.get("platform")).lower()
     returned_identity = _video_identity(metadata.get("content_url"))
@@ -328,6 +353,7 @@ def run_video_metric_refresh_for_job(
             provider=provider,
             run_id=run_id,
             quality_flags=("provider_non_video_response",),
+            failure_reason=content_metric_snapshots.FAILURE_REASON_NO_MEDIA,
         )
 
     metrics = {
@@ -337,6 +363,9 @@ def run_video_metric_refresh_for_job(
         "shares": metadata.get("share_count"),
     }
     if not content_metric_snapshots.has_any_metric(**metrics):
+        # A successful provider response without any counter is a real parser
+        # gap (or a provider payload change) and is the only path that may
+        # legitimately report ``all_metrics_missing``.
         return _failure(
             db,
             evidence_id=evidence_id,
@@ -344,7 +373,8 @@ def run_video_metric_refresh_for_job(
             error_code="all_metrics_missing",
             provider=provider,
             run_id=run_id,
-            quality_flags=("provider_response_returned",),
+            quality_flags=("provider_response_returned", "all_metrics_missing"),
+            failure_reason=content_metric_snapshots.FAILURE_REASON_NO_METRICS,
         )
 
     result = content_metric_snapshots.record_successful_refresh(
