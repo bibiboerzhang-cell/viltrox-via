@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from app.core.logging import get_logger
@@ -24,9 +25,28 @@ NODE_COLUMNS = {
 }
 logger = get_logger(__name__)
 
+# pool→kols 桥回填写开关:默认 0 = 只读影子(内存解析供 join,不回写推荐行);
+# 置 1 才把已确认的 pool.linked_main_kol_id 幂等回填到 vkpi_kol_recommendations。
+PERSIST_LINKED_KOL_ENV = "VKPI_RECO_PERSIST_LINKED_KOL"
+
 
 def _utcnow() -> str:
     return utcnow_iso()
+
+
+def persist_linked_kol_enabled() -> bool:
+    return str(os.environ.get(PERSIST_LINKED_KOL_ENV) or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _truthy(value: Any) -> bool:
+    """compat 读回 BOOLEAN 可能是 int 1/0 或 't':统一判真。"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return value != 0
+    return str(value).strip().lower() in {"1", "t", "true", "yes", "on"}
 
 
 def _json(value: Any) -> str:
@@ -67,9 +87,45 @@ def record(recommendation_id: int, node: str, *, context: dict[str, Any] | None 
         extra += ", content_url=?"
         params.append(str(context.get("content_url") or ""))
     params.append(int(recommendation_id))
-    get_conn().execute(f"UPDATE vkpi_recommendation_outcomes SET {bool_col}=?, {time_col}=?{extra}, first_action_at=COALESCE(first_action_at, ?) WHERE recommendation_id=?", [params[0], params[1], *params[2:-1], now, params[-1]])
+    # 幂等:重复动作不挪首次时间戳(COALESCE),布尔位只会从 false 变 true。
+    get_conn().execute(f"UPDATE vkpi_recommendation_outcomes SET {bool_col}=?, {time_col}=COALESCE({time_col}, ?){extra}, first_action_at=COALESCE(first_action_at, ?) WHERE recommendation_id=?", [params[0], params[1], *params[2:-1], now, params[-1]])
     get_conn().commit()
     return get_outcome(recommendation_id)
+
+
+def record_if_missing(recommendation_id: int, node: str, *, at: str | None = None, context: dict[str, Any] | None = None) -> bool:
+    """同步路径专用的幂等置位:节点已为真 → 零写入返回 False;否则按事件自身时间戳置位返回 True。
+
+    与 record() 的区别:时间取真实业务事件时间(派单 updated_at / 触达 touched_at / 反馈 created_at)
+    而非「现在」,且已置位时不产生任何 UPDATE(批量同步反复跑零噪声)。零触 viltrox_fit_score。
+    """
+    ensure_vkpi_product_industry_schema()
+    if node not in NODE_COLUMNS:
+        raise ValueError(f"unsupported outcome node: {node}")
+    rec_id = int(recommendation_id)
+    bool_col, time_col = NODE_COLUMNS[node]
+    conn = get_conn()
+    row = conn.execute(
+        f"SELECT {bool_col} AS flag FROM vkpi_recommendation_outcomes WHERE recommendation_id=?", (rec_id,)
+    ).fetchone()
+    if row is None:
+        ensure_outcome(rec_id)
+    elif _truthy(_row_get(row, "flag")):
+        return False
+    stamp = str(at or "").strip() or _utcnow()
+    extra = ""
+    params: list[Any] = [True, stamp]
+    if node == "content_published" and context and context.get("content_url"):
+        extra = ", content_url=COALESCE(NULLIF(content_url, ''), ?)"
+        params.append(str(context.get("content_url") or ""))
+    params.extend([stamp, rec_id])
+    conn.execute(
+        f"UPDATE vkpi_recommendation_outcomes SET {bool_col}=?, {time_col}=COALESCE({time_col}, ?){extra}, "
+        f"first_action_at=COALESCE(first_action_at, ?) WHERE recommendation_id=?",
+        params,
+    )
+    conn.commit()
+    return True
 
 
 def get_outcome(recommendation_id: int) -> dict[str, Any]:
@@ -99,7 +155,7 @@ def _row_get(row: Any, key: str, default: Any = None) -> Any:
         return default
 
 
-def _resolve_linked_kol_id(conn: Any, rec_dict: dict[str, Any], *, persist: bool = False) -> int:
+def _resolve_linked_kol_id(conn: Any, rec_dict: dict[str, Any], *, persist: bool = False) -> tuple[int, str]:
     """打通 attribution→outcome 的连接键 linked_main_kol_id(幂等、只读真业务行、零伪造)。
 
     最致命断点:outcome 促升靠 rec.linked_main_kol_id join 销售/项目/消息归因,而该推荐多数
@@ -113,21 +169,22 @@ def _resolve_linked_kol_id(conn: Any, rec_dict: dict[str, Any], *, persist: bool
     persist=True:把解析出的桥幂等回填到推荐行(`linked_main_kol_id IS NULL` 守卫,只写一次)。
         供审核后批量回填或事件触发的写路径显式开启。
 
-    返回最终生效的 linked_main_kol_id(0 表示仍无桥,诚实不促升)。零触 viltrox_fit_score。
+    返回 (linked_main_kol_id, source):0 表示仍无桥,诚实不促升;source 供批量统计
+    (existing / pool_bridge_shadow / pool_bridge_persisted / no_pool / no_bridge)。零触 viltrox_fit_score。
     """
     existing = int(rec_dict.get("linked_main_kol_id") or 0)
     if existing > 0:
-        return existing
+        return existing, "existing"
     pool_id = int(rec_dict.get("kol_pool_id") or 0)
     if pool_id <= 0:
-        return 0
+        return 0, "no_pool"
     pool_row = conn.execute(
         "SELECT linked_main_kol_id FROM vkpi_kol_pool WHERE id=?",
         (pool_id,),
     ).fetchone()
     pool_kol_id = int(_row_get(pool_row, "linked_main_kol_id", 0) or 0)
     if pool_kol_id <= 0:
-        return 0
+        return 0, "no_bridge"
     rec_dict["linked_main_kol_id"] = pool_kol_id  # 内存生效,本次 join 立即用到
     if persist:
         conn.execute(
@@ -139,10 +196,11 @@ def _resolve_linked_kol_id(conn: Any, rec_dict: dict[str, Any], *, persist: bool
             "outcomes.backfill_linked_kol rec_id=%s kol_pool_id=%s -> linked_main_kol_id=%s",
             rec_dict.get("id"), pool_id, pool_kol_id,
         )
-    return pool_kol_id
+        return pool_kol_id, "pool_bridge_persisted"
+    return pool_kol_id, "pool_bridge_shadow"
 
 
-def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool = False) -> dict[str, Any]:
+def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool | None = None) -> dict[str, Any]:
     """Refresh outcome labels from real V-KPI business rows.
 
     This never fabricates platform data. It only promotes labels when matching
@@ -179,8 +237,9 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
         launch_sku = str(_row_get(launch_row, "product_sku", "") or "").strip()
     # 打通 attribution→outcome:缺键时从已确认的 pool 桥解析 linked_main_kol_id,否则下方 join 全断。
     # 默认 persist=False(只内存生效,不改既有推荐行);persist_linked_kol=True 才落库回填(待审批后批量)。
-    _resolve_linked_kol_id(conn, rec_dict, persist=bool(persist_linked_kol))
-    kol_id = int(rec_dict.get("linked_main_kol_id") or 0)
+    if persist_linked_kol is None:
+        persist_linked_kol = persist_linked_kol_enabled()
+    kol_id, linked_kol_source = _resolve_linked_kol_id(conn, rec_dict, persist=bool(persist_linked_kol))
     rec_id = int(recommendation_id)
     projects = conn.execute(
         """
@@ -359,6 +418,7 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
         "status": "ready" if project_ids or first_claim else "no_observed_business_evidence",
         "project_ids": project_ids,
         "kol_id": kol_id,
+        "linked_kol_source": linked_kol_source,
         "project_created": bool(first_project),
         "was_claimed": bool(first_claim),
         "outreach_sent": bool(first_outreach),
@@ -461,31 +521,54 @@ def refresh_business_outcome(recommendation_id: int, *, persist_linked_kol: bool
     return result
 
 
-def refresh_open_outcomes(limit: int = 200, *, persist_linked_kol: bool = False) -> dict[str, Any]:
+def refresh_open_outcomes(limit: int = 200, *, persist_linked_kol: bool | None = None, run_sync: bool = True, run_fit: bool = True) -> dict[str, Any]:
     """批量回填业务标签:遍历近 N 条推荐,从真实业务行刷新 outcome(claimed/published/order/roi)。
 
     持续学习的"actual_result/business_impact"那一半——把"打分→动作→结果"的结果段自动落地,
     供调度器/事件触发周期性跑。红线:只读真实业务行促升标签,绝不伪造平台数据,零触 viltrox_fit_score。
 
-    persist_linked_kol=False(默认):每条推荐的 linked_main_kol_id 缺键时只内存解析(join 立即可用),
-        **不回写**既有推荐行 —— 尊重"批量改既有行先 dry-run 待审"。outcome 表(影子结果)照常落库。
-    persist_linked_kol=True:同时把从 pool 桥解析出的连接键幂等回填到推荐行(审批后/事件路径显式开启)。
+    三段式(W-L2 接通):
+      0) run_sync:先把 pool 动作 / 派单阶段 / 触达记录幂等同步成 outcome 节点(outcome_sync);
+      1) 逐条 refresh_business_outcome:缺键时经 pool→kols 桥解析 linked_main_kol_id;
+         persist_linked_kol=None → 读 VKPI_RECO_PERSIST_LINKED_KOL(默认 0 = 只读影子,不回写推荐行);
+         桥缺失(pool 无 linked_main_kol_id)诚实计数 bridge.missing_skipped,不猜不造;
+      2) run_fit:尾随触发影子重排序周拟合(rerank_fit.maybe_weekly_fit,7 天内已拟合即跳过)。
     """
+    if persist_linked_kol is None:
+        persist_linked_kol = persist_linked_kol_enabled()
+    sync_result: dict[str, Any] = {"status": "skipped"}
+    if run_sync:
+        try:
+            from app.domains.recommendations import outcome_sync
+
+            sync_result = outcome_sync.sync_action_outcomes()
+        except Exception as exc:
+            logger.warning("refresh_open_outcomes.sync_failed: %s", exc, exc_info=True)
+            sync_result = {"status": "failed", "error": str(exc), "changed": 0}
     conn = get_conn()
     rows = conn.execute(
         "SELECT id FROM vkpi_kol_recommendations WHERE kol_pool_id IS NOT NULL ORDER BY id DESC LIMIT ?",
         (int(max(1, min(limit, 2000))),),
     ).fetchall()
     refreshed = 0
+    failed = 0
     linked_backfilled = 0
+    bridge = {"flag": PERSIST_LINKED_KOL_ENV, "persist": bool(persist_linked_kol),
+              "existing": 0, "pool_bridge_shadow": 0, "pool_bridge_persisted": 0, "missing_skipped": 0}
     promoted = {"was_claimed": 0, "content_published": 0, "order_attributed": 0, "computed_roi": 0}
     for r in rows:
         try:
             agg = (refresh_business_outcome(int(dict(r)["id"]), persist_linked_kol=bool(persist_linked_kol)) or {}).get("aggregates") or {}
         except Exception:
+            failed += 1
             logger.debug("refresh_open_outcomes.one_failed", exc_info=True)
             continue
         refreshed += 1
+        source = str(agg.get("linked_kol_source") or "")
+        if source in bridge:
+            bridge[source] += 1
+        elif source in {"no_pool", "no_bridge"}:
+            bridge["missing_skipped"] += 1
         if int(agg.get("kol_id") or 0) > 0:
             linked_backfilled += 1
         if agg.get("was_claimed"):
@@ -496,10 +579,21 @@ def refresh_open_outcomes(limit: int = 200, *, persist_linked_kol: bool = False)
             promoted["order_attributed"] += 1
         if agg.get("computed_roi") is not None:
             promoted["computed_roi"] += 1
-    return {"status": "ok", "scanned": len(rows), "refreshed": refreshed,
-            "linked_kol_present": linked_backfilled, "promoted": promoted,
-            "note": "批量回填业务标签(持续学习结果段):缺键先从 pool 桥幂等回填 linked_main_kol_id 打通"
-                    " attribution→outcome,再从真实业务行(claim/消息/内容/销售净额)促升;退款计入 GMV 净额;"
+    fit_result: dict[str, Any] = {"status": "skipped"}
+    if run_fit:
+        try:
+            from app.domains.recommendations import rerank_fit
+
+            fit_result = rerank_fit.maybe_weekly_fit()
+        except Exception as exc:
+            logger.warning("refresh_open_outcomes.fit_failed: %s", exc, exc_info=True)
+            fit_result = {"status": "failed", "error": str(exc)}
+    return {"status": "ok", "scanned": len(rows), "refreshed": refreshed, "failed": failed,
+            "linked_kol_present": linked_backfilled, "bridge": bridge, "promoted": promoted,
+            "action_sync": sync_result, "rerank_fit": fit_result,
+            "note": "批量回填业务标签(持续学习结果段):先同步动作/阶段/触达为 outcome 节点,缺键再从 pool 桥解析"
+                    " linked_main_kol_id(默认只读影子,VKPI_RECO_PERSIST_LINKED_KOL=1 才回写)打通 attribution→outcome,"
+                    "再从真实业务行(claim/消息/内容/销售净额)促升;退款计入 GMV 净额;尾随周拟合影子重排序;"
                     "只读真实业务行促升,零伪造、零触 viltrox_fit_score。"}
 
 

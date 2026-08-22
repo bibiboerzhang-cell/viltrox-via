@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
@@ -145,3 +145,52 @@ def activate_model(model_version: str, *, staff: dict[str, Any] | None = None) -
         },
     )
     return models()
+
+
+def rerank_arm_summary(days: int = 30) -> dict[str, Any]:
+    """W-L2 A/B arm 只读汇总:开关状态 + 近 N 天各 arm 的快照数 / 已标注正例率(纯读,零写入)。
+
+    这是实验域对「影子重排序 A/B」的唯一读口:arm 由 rerank_shadow.arm_for_staff 按 staff 哈希分流,
+    这里只把分流结果与结果标签按 arm 聚合,供运营判断 treatment 是否真有提升;不暴露权重与公式。
+    """
+    from app.db.connection import table_exists
+    from app.domains.recommendations import rerank_shadow
+
+    summary: dict[str, Any] = {
+        "flag": rerank_shadow.AB_FLAG_ENV,
+        "enabled": rerank_shadow.ab_enabled(),
+        "treatment_pct": rerank_shadow.treatment_pct(),
+        "window_days": int(max(1, min(int(days or 30), 365))),
+        "arms": {},
+        "provider_calls": False,
+        "write_db": False,
+    }
+    if not table_exists(rerank_shadow.SNAPSHOT_TABLE):
+        summary["status"] = "snapshot_table_missing"
+        return summary
+    rows = get_conn().execute(
+        f"""
+        SELECT arm,
+               COUNT(*) AS snapshots,
+               SUM(CASE WHEN rerank_applied THEN 1 ELSE 0 END) AS applied,
+               SUM(CASE WHEN outcome_label IS NOT NULL THEN 1 ELSE 0 END) AS labeled,
+               SUM(CASE WHEN outcome_label = 1 THEN 1 ELSE 0 END) AS positives
+        FROM {rerank_shadow.SNAPSHOT_TABLE}
+        WHERE created_at >= ?
+        GROUP BY arm
+        """,
+        ((datetime.now(timezone.utc) - timedelta(days=summary["window_days"])).strftime("%Y-%m-%dT%H:%M:%SZ"),),
+    ).fetchall()
+    for raw in rows:
+        row = dict(raw)
+        labeled = int(row.get("labeled") or 0)
+        positives = int(row.get("positives") or 0)
+        summary["arms"][str(row.get("arm") or "off")] = {
+            "snapshots": int(row.get("snapshots") or 0),
+            "applied": int(row.get("applied") or 0),
+            "labeled": labeled,
+            "positives": positives,
+            "positive_rate": round(positives / labeled, 4) if labeled else None,
+        }
+    summary["status"] = "ok" if rows else "no_snapshots_in_window"
+    return summary

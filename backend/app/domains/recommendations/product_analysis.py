@@ -14,6 +14,7 @@ from app.domains.recommendations import actions as product_analysis_actions
 from app.domains.recommendations import evidence as product_analysis_evidence
 from app.domains.recommendations import feature_store
 from app.domains.recommendations import outcomes as outcome_collector
+from app.domains.recommendations import rerank_shadow
 from app.domains import audit
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.scoring import ScoringRegistry
@@ -435,6 +436,13 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
         "target_platforms": _loads(launch.get("target_platforms_json"), []),
     }
     scored: list[tuple[float, dict[str, Any], dict[str, Any], Any, dict[str, Any], dict[str, Any]]] = []
+    # W-L2 影子重排序:按 staff 哈希分流 arm;有激活模型才产出调整量。score 列永不改,只在 treatment 动次序。
+    rerank_arm = rerank_shadow.arm_for_staff(staff)
+    try:
+        rerank_model = rerank_shadow.load_active_model()
+    except Exception:
+        logger.warning("run_recommendations.rerank_model_unavailable", exc_info=True)
+        rerank_model = None
     filtered_competitor_avoid = 0
     feedback_candidates = 0
     feedback_positive = 0
@@ -463,10 +471,30 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
         competitor_adjusted_score = _adjust_score_for_competitor(float(result.score), competitor)
         adjusted_score = _adjust_score_for_feedback(competitor_adjusted_score, feedback)
         scored.append((adjusted_score, item, features, result, competitor, feedback))
-    scored.sort(key=lambda row: row[0], reverse=True)
-    for idx, (score, item, features, result, competitor, feedback) in enumerate(scored[:limit], start=1):
+    candidates = [
+        {"score": score, "item": item, "features": features, "result": result, "competitor": competitor, "feedback": feedback}
+        for score, item, features, result, competitor, feedback in scored
+    ]
+    rerank_policy = rerank_shadow.apply_shadow_rerank(
+        candidates,
+        arm=rerank_arm,
+        model=rerank_model,
+        engine="product_analysis",
+        profile_of=lambda cand: cand["features"],
+        breakdown_of=lambda cand: dict((cand["result"].breakdown or {}).items()),
+    )
+    if not rerank_policy["applied"]:
+        candidates.sort(key=lambda cand: float(cand["score"]), reverse=True)
+    rerank_rows: list[dict[str, Any]] = []
+    for idx, cand in enumerate(candidates[:limit], start=1):
+        score, item, features, result, competitor, feedback = (
+            cand["score"], cand["item"], cand["features"], cand["result"], cand["competitor"], cand["feedback"]
+        )
         rec_uid = f"rec-{secrets.token_hex(8)}"
         breakdown = dict(result.breakdown or {})
+        breakdown["rerank_shadow"] = rerank_shadow.breakdown_entry(
+            cand, rerank_arm, rerank_policy["applied"], rerank_policy["model_version"]
+        )
         breakdown["competitor"] = {
             "brand": competitor.get("brand"),
             "risk_tier": competitor.get("risk_tier"),
@@ -549,9 +577,33 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
             display_position=idx,
             display_context={"rank": idx, "score": score, "run_id": run.get("id"), "competitor": breakdown["competitor"], "operator_feedback": breakdown["operator_feedback"]},
         )
+        # 后端内部字段(前端若展示只给 rerank_policy.display_note 一句,不给数字)。
+        rec["rerank_adjustment"] = float(cand.get("rerank_adjustment") or 0.0)
+        rec["rerank_reason_codes"] = list(cand.get("rerank_reason_codes") or [])
+        rerank_rows.append({
+            "recommendation_id": rec.get("id"), "kol_pool_id": item.get("id"), "score": score,
+            "rerank_vector": cand.get("rerank_vector") or {},
+            "rerank_adjustment": cand.get("rerank_adjustment"), "rerank_reason_codes": cand.get("rerank_reason_codes") or [],
+        })
         rows.append(rec)
     conn.execute("UPDATE vkpi_kol_recommendation_runs SET recommendation_count=? WHERE id=?", (len(rows), int(run.get("id") or 0)))
     conn.commit()
+    # 特征快照(学习闭环·冻结推荐时刻特征 + arm + 影子量):整批 commit 之后落,失败只告警。
+    try:
+        rerank_policy["snapshots"] = rerank_shadow.write_snapshots_for_items(
+            rerank_rows,
+            engine="product_analysis",
+            arm=rerank_arm,
+            applied=rerank_policy["applied"],
+            model_version=rerank_policy["model_version"],
+            staff_id=resolve_staff_id(staff) or None,
+            run_id=int(run.get("id") or 0) or None,
+            launch_id=launch_id or None,
+            rec_id_of=lambda row: row.get("recommendation_id"),
+        )
+    except Exception:
+        logger.warning("run_recommendations.feature_snapshot_failed", exc_info=True)
+        rerank_policy["snapshots"] = {"written": 0, "skipped": 0, "failed": len(rerank_rows)}
     run = _last_by_uid("vkpi_kol_recommendation_runs", "run_uid", run_uid)
     audit.log_business_event(staff_id=resolve_staff_id(staff), action_type="recommendation_run", target_type="product_launch", target_id=launch_id, detail=f"{len(rows)} recommendations")
     return {
@@ -570,6 +622,7 @@ def run_recommendations(payload: dict[str, Any], *, staff: dict[str, Any] | None
             "negative_adjusted": feedback_negative,
             "provider_calls": False,
         },
+        "rerank_policy": rerank_policy,
     }
 
 

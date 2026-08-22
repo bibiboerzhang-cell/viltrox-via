@@ -21,6 +21,7 @@ from app.platform import llm_production
 from app.domains.costs.budget_guard import check_budget, get_budget_status
 from app.domains.costs.budget_readonly import get_budget_status_readonly
 from app.domains.recommendations.new_launch_match_format import format_preview_summary, render_markdown
+from app.domains.recommendations import new_launch_match_rerank
 
 
 BUDGET_SCOPE = "cron:p4_recommendations_daily"
@@ -121,7 +122,8 @@ def _persist_preview_run(payload: dict[str, Any]) -> dict[str, Any]:
         run_id = int(run.get("id") or 0)
         recommendation_ids: list[int] = []
         outcome_seeds: list[tuple[int, dict[str, Any], dict[str, Any]]] = []  # (rec_id, feature_snapshot, item) 供整批 commit 后落 outcome 底座
-        for item in items:
+        rec_id_by_index: dict[int, int] = {}
+        for item_index, item in enumerate(items):
             rec_uid = f"p4nlm-rec-{secrets.token_hex(8)}"
             reason = item.get("recommendation_reason") or {}
             feature_snapshot = {
@@ -170,6 +172,7 @@ def _persist_preview_run(payload: dict[str, Any]) -> dict[str, Any]:
             rec = _last_by_uid("vkpi_kol_recommendations", "recommendation_uid", rec_uid)
             rec_id = int(rec.get("id") or 0)
             recommendation_ids.append(rec_id)
+            rec_id_by_index[item_index] = rec_id
             outcome_seeds.append((rec_id, feature_snapshot, item))
             conn.execute(
                 """
@@ -223,12 +226,21 @@ def _persist_preview_run(payload: dict[str, Any]) -> dict[str, Any]:
                     logger.warning("new_launch_match outcome hook failed rec_id=%s", out_rec_id, exc_info=True)
         except Exception:
             logger.warning("new_launch_match outcome hook unavailable", exc_info=True)
+        # W-L2 特征快照(推荐时刻特征 + arm + 影子量),整批 commit 之后落;失败只告警。
+        try:
+            snapshots = new_launch_match_rerank.persist_snapshots(
+                items=items, rec_ids=rec_id_by_index, policy=payload.get("rerank_policy") or {}, run_id=run_id,
+            )
+        except Exception:
+            logger.warning("new_launch_match feature snapshot hook failed", exc_info=True)
+            snapshots = {"written": 0, "skipped": 0, "failed": len(items)}
         return {
             "enabled": True,
             "run_uid": run_uid,
             "run_id": run_id,
             "recommendation_count": len(recommendation_ids),
             "recommendation_ids": recommendation_ids,
+            "feature_snapshots": snapshots,
         }
     except Exception:
         try:
@@ -432,6 +444,7 @@ def build_new_launch_match_preview(
     with_llm_reasons: bool = False,
     reason_limit: int = 20,
     persist_run: bool = False,
+    staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a deterministic P4-1 dry-run preview from raw Memory rows."""
 
@@ -753,6 +766,8 @@ def build_new_launch_match_preview(
         ),
         reverse=True,
     )
+    # W-L2 影子重排序:确定性 score 不变;无 staff(cron)恒 control/off 只记录,treatment 才动次序。
+    rerank_policy = new_launch_match_rerank.apply_to_preview(eligible, pool_map=pool_map, staff=staff)
     for idx, item in enumerate(eligible):
         item["rank"] = idx + 1
         item["percentile_rank"] = _percentile(idx, len(eligible))
@@ -805,6 +820,7 @@ def build_new_launch_match_preview(
         },
         "summary": summary,
         "score_distribution": _distribution(returned),
+        "rerank_policy": rerank_policy,
         "items": returned,
         "markdown_items": markdown_display,
     }
@@ -817,6 +833,7 @@ def build_new_launch_match_preview(
         payload["persistence"] = _persist_preview_run(payload)
     else:
         payload["persistence"] = {"enabled": False}
+    new_launch_match_rerank.strip_internal_vectors(eligible)
     _json_write(json_out, {key: value for key, value in payload.items() if key != "markdown_items"})
     _markdown_write(md_out, payload)
     return payload

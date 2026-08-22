@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol import claims as kol_claims
 from app.domains.kol import pool as kol_pool
@@ -15,6 +16,9 @@ from app.domains.access import scope
 from app.domains.projects import workflow
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.projects.workflow import staff_id as resolve_staff_id
+
+
+logger = get_logger(__name__)
 
 
 def _utcnow() -> str:
@@ -364,6 +368,17 @@ _POOL_ACTION_FEEDBACK = {
     "reject": "reject",
     "snooze": "snooze",
     "unfavorite": "snooze",       # un-starring is a mild negative signal
+    "contact": "contact",         # 联系/触达 = 已外联信号(outreach_sent)
+    "touch": "contact",
+    "outreach": "contact",
+}
+
+# pool 动作 → outcome 节点(W-L2:动作同步写 outcomes;snooze/unfavorite 无对应列不映射)。
+_POOL_ACTION_OUTCOME_NODE = {
+    "shortlist": "shortlisted",
+    "claim": "claimed",
+    "reject": "rejected",
+    "contact": "outreach_sent",
 }
 
 
@@ -417,12 +432,26 @@ def record_pool_action_feedback(
     )
     if inserted:
         get_conn().commit()
+    # 动作 → outcomes 同步(幂等:节点已真则零写入)。失败只告警,绝不阻断看板主动作。
+    outcome_node = _POOL_ACTION_OUTCOME_NODE.get(feedback_type, "")
+    outcome_changed = False
+    if outcome_node:
+        try:
+            outcome_changed = outcome_collector.record_if_missing(
+                recommendation_id,
+                outcome_node,
+                context={"source": "pool_action", "pool_action": clean_action, **(payload or {})},
+            )
+        except Exception:
+            logger.warning("record_pool_action_feedback.outcome_failed rec_id=%s node=%s", recommendation_id, outcome_node, exc_info=True)
     return {
         "linked": True,
         "feedback_inserted": inserted,
         "recommendation_id": recommendation_id,
         "feedback_type": feedback_type,
         "kol_pool_id": int(kol_pool_id or 0),
+        "outcome_node": outcome_node,
+        "outcome_changed": bool(outcome_changed),
     }
 
 
