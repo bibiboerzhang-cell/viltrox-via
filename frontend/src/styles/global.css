@@ -106,6 +106,32 @@
     color: inherit;
     font: inherit;
   }
+
+  /* 第四个 body 级浮层容器:.vkpi-ask-overlay(顶栏 Ask ⌘K 命令面板 createPortal 挂 body)。
+     2026-08-22 Ask P1 实测坐实:候选/建议 <button> 此前一直露 UA 边框 + 居中文字(浅色下黑框)。
+     重置口径与 .vkpi-page-stage--overlay 同款。 */
+  :where(.vkpi-ask-overlay) {
+    color-scheme: light;
+  }
+
+  :where([data-theme="dark"] .vkpi-ask-overlay) {
+    color-scheme: dark;
+  }
+
+  :where(.vkpi-ask-overlay button) {
+    appearance: none;
+    background: transparent;
+    border: 0 solid transparent;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+  }
+
+  :where(.vkpi-ask-overlay input) {
+    appearance: none;
+    color: inherit;
+    font: inherit;
+  }
 }
 
 @tailwind utilities;
