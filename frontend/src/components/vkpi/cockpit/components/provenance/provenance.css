@@ -26,6 +26,17 @@
   border-color: var(--ds-accent);
   color: var(--ds-text);
 }
+/* 卡头宽度预算(U5):chip 在窄卡头里可收缩,文案省略号截断;hover 来源卡仍显示全文 */
+.vkpi-prov-src {
+  max-width: 100%;
+  min-width: 0;
+}
+.vkpi-prov-src__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .vkpi-prov-src::before {
   content: "⛁";
   font-size: 9px;

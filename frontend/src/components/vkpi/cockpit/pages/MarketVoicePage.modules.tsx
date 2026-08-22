@@ -283,17 +283,19 @@ export function ModuleCard({
   const { t } = useT();
   return (
     <section className="ds-mod ds-rise flex h-full min-h-0 flex-col">
+      {/* 卡头宽度预算(U5):左簇(标题+cnt)与右簇(溯源 chip+实时)都可收缩——标题先省略、
+          chip 文案再省略,cnt 短徽与「实时」eyebrow 保持整字;1280 宽三分栏下不再叠字。 */}
       <header data-vkpi-density="readable-module-header" className="flex min-h-11 flex-none items-center justify-between gap-2.5 px-4 pb-2 pt-[13px]">
-        <div className="flex min-w-0 items-center gap-2">
-          <h3 className="truncate text-[14.5px] font-semibold leading-5 tracking-[-0.01em] text-ink">{t(title)}</h3>
+        <div className="flex min-w-0 flex-[1_1_auto] items-center gap-2">
+          <h3 className="min-w-[3ch] truncate text-[14.5px] font-semibold leading-5 tracking-[-0.01em] text-ink">{t(title)}</h3>
           {cnt != null && (
-            <span className="flex-none rounded-md bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold text-accent">{cnt}</span>
+            <span className="flex-none whitespace-nowrap rounded-md bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold text-accent">{cnt}</span>
           )}
         </div>
-        <span className="flex flex-none items-center gap-2">
+        <span className="flex min-w-0 flex-[0_1_auto] items-center gap-2">
           <SrcChip label={srcLabel} rows={srcRows} onOpen={onOpenSrc} />
           {/* 数据为请求时实算 → 诚实「实时」eyebrow(demo 卡头右侧固定件) */}
-          <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-muted">{t("实时")}</span>
+          <span className="flex-none whitespace-nowrap text-[10.5px] font-semibold uppercase tracking-[0.14em] text-muted">{t("实时")}</span>
         </span>
       </header>
       <div

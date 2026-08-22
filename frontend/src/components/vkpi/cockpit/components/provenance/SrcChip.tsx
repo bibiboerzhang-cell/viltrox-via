@@ -37,7 +37,8 @@ export function SrcChip({ label, rows, onOpen }: SrcChipProps): React.ReactEleme
         : undefined,
       title: onOpen ? t("点击查看本模块数据溯源") : undefined,
     },
-    label,
+    // 文案单独成层才能省略号收缩(外层要给 hover 来源卡留 position:relative,不能 overflow:hidden)
+    e("span", { className: "vkpi-prov-src__label", title: onOpen ? undefined : label }, label),
     e(
       "span",
       { className: "vkpi-prov-srctip", role: "tooltip" },

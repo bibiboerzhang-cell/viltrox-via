@@ -38,6 +38,17 @@ describe("SrcChip 来源 chip", () => {
     fireEvent.click(chip as Element);
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
+
+  it("label 单独成层(可省略号收缩),hover 来源卡不随 label 一起被截断", () => {
+    const { container } = render(
+      <SrcChip label="board-ext views_top · vkpi_kol_video_evidence" rows={[["口径", "Top 12"]]} />,
+    );
+    const label = container.querySelector(".vkpi-prov-src > .vkpi-prov-src__label");
+    expect(label?.textContent).toBe("board-ext views_top · vkpi_kol_video_evidence");
+    // 无 onOpen 时 label 层自带 title,截断后仍可悬停读全文
+    expect(label?.getAttribute("title")).toBe("board-ext views_top · vkpi_kol_video_evidence");
+    expect(container.querySelector(".vkpi-prov-src > .vkpi-prov-srctip")).not.toBeNull();
+  });
 });
 
 describe("ProvChain 溯源链", () => {
