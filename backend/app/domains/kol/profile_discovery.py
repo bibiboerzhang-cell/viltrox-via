@@ -183,7 +183,11 @@ async def discover_new_creators(
     verticals: Any = None,
     avoid_types: Any = None,
     target_persona: str = "",
+    auto_enroll: bool = True,
+    exclude_chinese: bool = True,
 ) -> dict[str, Any]:
+    # 与 profile_discovery_provider.discover_new_creators 签名同集(守卫测试
+    # test_profile_discovery_facade_signature);流水线经 _sync_pipeline_compat 拿到的是本壳。
     _sync_provider_compat()
     return await _PROVIDER_IMPLEMENTATIONS["discover_new_creators"](
         query_text=query_text,
@@ -198,6 +202,8 @@ async def discover_new_creators(
         verticals=verticals,
         avoid_types=avoid_types,
         target_persona=target_persona,
+        auto_enroll=auto_enroll,
+        exclude_chinese=exclude_chinese,
     )
 
 
@@ -281,11 +287,16 @@ def advance_search_session_items(
     *,
     session_id: int,
     body: dict[str, Any] | None = None,
+    smart_local_contract: bool = False,
 ) -> dict[str, Any]:
+    # 门面壳会被 _sync_pipeline_compat() 塞回流水线模块,签名必须与
+    # profile_discovery_session 真实现保持同集;漏转发 smart_local_contract 曾让
+    # 严格 30+30 搜索在 prod 直接 TypeError(「分析未完成」)。
     _sync_session_compat()
     return _SESSION_IMPLEMENTATIONS["advance_search_session_items"](
         session_id=session_id,
         body=body,
+        smart_local_contract=bool(smart_local_contract),
     )
 
 
