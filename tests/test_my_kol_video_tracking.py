@@ -44,7 +44,8 @@ def _refresh_payload(**overrides):
 
 
 def _tracking_conn() -> sqlite3.Connection:
-    conn = sqlite3.connect(":memory:")
+    # async 路由经 asyncio.to_thread 跑同步 DB 校验,fixture 连接须允许跨线程复用。
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     conn.create_function("NOW", 0, lambda: "2026-08-21T12:00:00+00:00")

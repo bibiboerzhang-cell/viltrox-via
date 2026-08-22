@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 from app.core.logging import get_logger
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
@@ -60,6 +62,16 @@ def get_competitor_avoid_brands(
     return kol_competitor_detector.list_avoid_brands(limit=limit)
 
 
+def _assert_batch_enrich_targets_writable(selected_ids: list[int], staff: dict | None) -> None:
+    """同步 DB 校验;由 async 路由经 asyncio.to_thread 调用,不阻塞事件循环。"""
+    from app.db.connection import get_conn
+    from app.domains.kol.my_kol_paid_action_access import assert_target_writable
+
+    conn = get_conn()
+    for kol_pool_id in selected_ids:
+        assert_target_writable(conn, kol_pool_id=int(kol_pool_id), staff=staff)
+
+
 @router.post("/kol-pool/batch-enrich")
 @audit_action(
     action_type="kol_pool_batch_enrich",
@@ -81,10 +93,7 @@ async def batch_enrich_pool_items(
 ) -> dict:
     """小批量持久排队补齐候选池数据；请求线程不运行 crawler。"""
     from app.domains.kol import pool as kol_pool
-    from app.domains.kol.my_kol_paid_action_access import (
-        MyKolPaidActionError,
-        assert_target_writable,
-    )
+    from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
     import app.domains.tasks.enqueue as task_enqueue
 
     if release_validation_active():
@@ -112,15 +121,11 @@ async def batch_enrich_pool_items(
         )
         selected_ids = [int(row["id"]) for row in selected.get("items") or [] if row.get("id")]
     try:
-        from app.db.connection import get_conn
-
-        conn = get_conn()
-        for kol_pool_id in selected_ids:
-            assert_target_writable(
-                conn,
-                kol_pool_id=int(kol_pool_id),
-                staff=staff if isinstance(staff, dict) else None,
-            )
+        await asyncio.to_thread(
+            _assert_batch_enrich_targets_writable,
+            selected_ids,
+            staff if isinstance(staff, dict) else None,
+        )
     except MyKolPaidActionError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
     queue = getattr(request.app.state, "job_queue", None)
