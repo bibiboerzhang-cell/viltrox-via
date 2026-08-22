@@ -891,3 +891,60 @@ def my_kol_viewer_context_endpoint(
         "claim": claim,
         "paid_actions": paid_action,
     }
+
+
+# ── 数值跟进(2026-08-22 车道 L4):被追踪视频的快照趋势,纯读追加端点 ──────────
+# 口径全在 kol/video_tracking_trends.py:7d/30d 增量 + 日均增速(零 LLM),
+# 「下次刷新」只按调度层级估算,调度闸 OFF 如实 scheduler_disabled。
+# 路由顺序:/my-kol/metrics/tracking-overview 是两段路径,不会被
+# /my-kol/{kol_pool_id}/metrics/trends(三段,int 校验)吞掉。
+
+
+@router.get("/my-kol/metrics/tracking-overview")
+def my_kol_metric_tracking_overview_endpoint(
+    limit: int = Query(default=60, ge=1, le=100),
+    staff_id: int | None = Query(default=None, ge=1),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """收藏集(收藏 ∪ 授权共享)口径的被追踪视频趋势总览(纯 SELECT)。
+
+    scope 与 board-ext 同款:员工恒被 scope.effective_staff_id 压回本人;
+    管理层缺省全团队收藏集,?staff_id= 看指定成员。无身份的非管理层拒 403。
+    """
+    from app.domains.kol import video_tracking_trends
+
+    target = scope.effective_staff_id(staff, staff_id)
+    if target is None and not scope.can_view_all(staff):
+        raise HTTPException(status_code=403, detail="no staff identity in scope")
+    body = video_tracking_trends.tracked_video_overview(
+        get_conn(),
+        staff_scope_id=target,
+        limit=int(limit),
+    )
+    body["viewer_scope"] = scope.scope_context(staff, staff_id)
+    return body
+
+
+@router.get("/my-kol/{kol_pool_id}/metrics/trends")
+def my_kol_metric_trends_endpoint(
+    kol_pool_id: int,
+    limit: int = Query(default=60, ge=1, le=100),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """单 KOL 被追踪视频的 7d/30d 增量与快照序列(纯 SELECT,零 provider)。
+
+    行级门禁与 /videos 同款(assert_target_readable:管理层 / 本人收藏 / 授权共享)。
+    未追踪 → items 空 + empty_reason=no_tracked_videos(前端引导去「追踪已有视频」)。
+    """
+    from app.domains.kol import video_tracking_trends
+    from app.domains.kol.my_kol_paid_action_access import assert_target_readable
+
+    pid = _int(kol_pool_id)
+    if pid <= 0:
+        raise HTTPException(status_code=400, detail="kol_pool_id required")
+    conn = get_conn()
+    try:
+        assert_target_readable(conn, kol_pool_id=pid, staff=staff)
+    except MyKolPaidActionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
+    return video_tracking_trends.tracked_video_trends(conn, kol_pool_id=pid, limit=int(limit))
