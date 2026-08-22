@@ -10,14 +10,99 @@ jobs_tasks.py 通过 `from .jobs_tasks_intel import (...)` re-export 兜住所�
 """
 from __future__ import annotations
 
+import contextvars
+import functools
+import inspect
 import json
-from typing import Any
+from typing import Any, Callable
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
 _AI_TODAY_ATTEMPT_KIND = "ai_today_attempt_v1"
+
+# ── 运行记录槽位协议(注册层包装 ↔ 任务体)────────────────────────────────────
+# B3:此前只有部分任务在体内显式调 _record_scheduler_run,fit_snapshot 等不记,
+# 验收门读注册表 last_run_at 时把"跑过"误判成"从未跑"。统一做法:注册层
+# (jobs_registry._RunRecordingRegistration)用 with_scheduler_run_record 包住每个
+# add_job 的回调,运行前登记一个槽位,运行后按 ok/error 补记。任务体内既有的显式
+# 回写先落库并在槽位标记 recorded(包装不再重复写,保持幂等);config-gate 拒跑
+# 标记 skipped(没真跑就不伪造 last_run_at)。本模块是 jobs_tasks 的模块级叶子,
+# 槽位放这里可被 jobs_tasks / jobs_registry 两侧无环 import。
+_RUN_RECORD_SLOT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "vkpi_scheduler_run_record_slot", default=None
+)
+
+
+def _note_run_record_slot(task_key: str, flag: str) -> None:
+    """在当前运行槽位上打标(recorded / skipped);键不匹配或无槽位则无事发生。"""
+    slot = _RUN_RECORD_SLOT.get()
+    if slot is not None and slot.get("task_key") == str(task_key or "").strip():
+        slot[flag] = True
+
+
+def _gate_result(task_key: str, enabled: bool) -> bool:
+    """config-gate 结果透传;拒跑时标记槽位 skipped,让包装层不伪造运行记录。"""
+    if not enabled:
+        _note_run_record_slot(task_key, "skipped")
+    return enabled
+
+
+def with_scheduler_run_record(task_key: str, func: Callable[..., Any]) -> Callable[..., Any]:
+    """把一个 APScheduler 回调包成"运行前登记槽位、运行后统一回写注册表"。
+
+    - 正常返回 → record_run(ok=True);抛异常 → record_run(ok=False, error) 后原样 re-raise。
+    - 任务体内已显式回写(槽位 recorded)或 config-gate 拒跑(槽位 skipped)→ 不再写。
+    - 协程/同步函数分别包装,保持 APScheduler 的 iscoroutinefunction 判定不变;幂等(重复包装返回原函数)。
+    """
+    if getattr(func, "__vkpi_scheduler_run_record__", False):
+        return func
+    key = str(task_key or "").strip()
+
+    def _finish(slot: dict[str, Any], *, ok: bool, error: str = "") -> None:
+        if not key or slot.get("recorded") or slot.get("skipped"):
+            return
+        _record_scheduler_run(key, ok=ok, error=error)
+
+    if inspect.iscoroutinefunction(func):
+        @functools.wraps(func)
+        async def _async_recorded(*args: Any, **kwargs: Any) -> Any:
+            slot: dict[str, Any] = {"task_key": key}
+            token = _RUN_RECORD_SLOT.set(slot)
+            try:
+                result = await func(*args, **kwargs)
+            except BaseException as exc:
+                _finish(slot, ok=False, error=f"{type(exc).__name__}: {str(exc)[:200]}")
+                raise
+            else:
+                _finish(slot, ok=True)
+                return result
+            finally:
+                _RUN_RECORD_SLOT.reset(token)
+
+        wrapped: Callable[..., Any] = _async_recorded
+    else:
+        @functools.wraps(func)
+        def _sync_recorded(*args: Any, **kwargs: Any) -> Any:
+            slot: dict[str, Any] = {"task_key": key}
+            token = _RUN_RECORD_SLOT.set(slot)
+            try:
+                result = func(*args, **kwargs)
+            except BaseException as exc:
+                _finish(slot, ok=False, error=f"{type(exc).__name__}: {str(exc)[:200]}")
+                raise
+            else:
+                _finish(slot, ok=True)
+                return result
+            finally:
+                _RUN_RECORD_SLOT.reset(token)
+
+        wrapped = _sync_recorded
+
+    setattr(wrapped, "__vkpi_scheduler_run_record__", True)
+    setattr(wrapped, "__vkpi_scheduler_run_record_key__", key)
+    return wrapped
 
 
 def _attempt_text(value: Any, limit: int) -> str:

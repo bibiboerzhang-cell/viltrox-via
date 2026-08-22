@@ -14,6 +14,7 @@ import asyncio
 import os
 
 from app.core.logging import get_logger
+from .jobs_tasks_intel import _gate_result, _note_run_record_slot  # 运行记录槽位协议(B3)
 
 logger = get_logger(__name__)
 
@@ -34,7 +35,7 @@ def _composite_morning_sync_enabled() -> bool:
         os.environ.get(COMPOSITE_MORNING_SYNC_ENV) or ""
     ).strip().lower()
     if deployment_enabled not in {"1", "true", "yes", "on"}:
-        return False
+        return _gate_result("vkpi_morning_sync", False)
     return _scheduler_task_enabled("vkpi_morning_sync")
 
 
@@ -451,8 +452,6 @@ async def job_vkpi_comment_sentiment_refresh():
         logger.exception("scheduler.comment_sentiment_refresh_failed")
 
 
-
-
 # ──────────────────────────────────────────────
 # LLM Batch 任务簇 → jobs_tasks_batch.py(行为不变搬出)
 # 原文件 re-export 兜住所有调用点。
@@ -513,16 +512,16 @@ def _scheduler_task_enabled(task_key: str, *, default: bool = False) -> bool:
         from app.db.connection import get_conn, table_exists
 
         if not table_exists("scheduler_tasks"):
-            return default
+            return _gate_result(task_key, default)
         row = get_conn().execute(
             "SELECT enabled FROM scheduler_tasks WHERE task_key = ?", (task_key,)
         ).fetchone()
         if row is None:
-            return default
-        return bool(dict(row).get("enabled"))
+            return _gate_result(task_key, default)
+        return _gate_result(task_key, bool(dict(row).get("enabled")))
     except Exception:
         logger.debug("scheduler.registry_enabled_check_failed", exc_info=True)
-        return default
+        return _gate_result(task_key, default)
 
 
 def _record_scheduler_run(task_key: str, *, ok: bool, error: str = "") -> None:
@@ -531,6 +530,7 @@ def _record_scheduler_run(task_key: str, *, ok: bool, error: str = "") -> None:
         from app.domains.ops import scheduler_registry
 
         scheduler_registry.record_run(task_key, ok=ok, error=error)
+        _note_run_record_slot(task_key, "recorded")
     except Exception:
         logger.debug("scheduler.record_run_helper_failed", extra={"task": task_key}, exc_info=True)
 

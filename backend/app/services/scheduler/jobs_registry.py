@@ -76,10 +76,38 @@ from app.services.scheduler.jobs import (
     register_market_listening_job,
     scheduler_fire_recovery_interval_seconds,
 )
+from app.services.scheduler.jobs_tasks_intel import with_scheduler_run_record
+
+
+class _RunRecordingRegistration:
+    """add_job 一层运行记录包装(B3):每个经本模块注册的任务,运行前后统一回写
+    scheduler_tasks.last_run_at / last_success_at / last_error,不再依赖任务体自觉调用
+    _record_scheduler_run(那些自觉调用保留,包装按槽位协议幂等不重写)。
+    其余属性原样透传给真 scheduler(FleetSafeAsyncIOScheduler 的 allowlist / fire guard 照旧生效)。
+    """
+
+    def __init__(self, scheduler: Any) -> None:
+        self._scheduler = scheduler
+
+    def add_job(self, func: Any, trigger: Any = None, *args: Any, **kwargs: Any) -> Any:
+        task_key = str(kwargs.get("id") or getattr(func, "__name__", "scheduled_job"))
+        return self._scheduler.add_job(
+            with_scheduler_run_record(task_key, func), trigger, *args, **kwargs
+        )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._scheduler, name)
+
+
+def _recording(_scheduler: Any) -> Any:
+    if isinstance(_scheduler, _RunRecordingRegistration):
+        return _scheduler
+    return _RunRecordingRegistration(_scheduler)
 
 
 def _register_core_maintenance_jobs(_scheduler: Any) -> None:
     """Jobs 1-6:核心运维(verification/cache/pending-asset/rate-limit/provider/B&H)。"""
+    _scheduler = _recording(_scheduler)
     # ── Job 1: verification scan check ──
     _scheduler.add_job(
         job_verification_scan_check,
@@ -148,6 +176,7 @@ def _register_core_maintenance_jobs(_scheduler: Any) -> None:
 
 def _register_prediction_gtm_jobs(_scheduler: Any) -> None:
     """预测闭环①-④(config-gate)+ Job 7e GTM 裁决闭环。"""
+    _scheduler = _recording(_scheduler)
     # ── 推论点火:预测闭环三件套(config-gate 默认 OFF,迁移 222 种子)──
     # ① 预测流水对答案(每日 04:50 中国,排在推荐 outcome 04:40 后):满窗 pending 行回查实际判带内。
     _scheduler.add_job(
@@ -213,6 +242,7 @@ def _register_prediction_gtm_jobs(_scheduler: Any) -> None:
 
 def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
     """Job 8 三阶段发放 + V-KPI internal marketing 运维(lineage/rollup/alerts/物流/租约/配额/轮询/周报)。"""
+    _scheduler = _recording(_scheduler)
     # ── Job 8: confirm partial awards (三阶段发放) ──
     _scheduler.add_job(
         job_confirm_partial_awards,
@@ -317,6 +347,7 @@ def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
 
 def _register_intel_content_jobs(_scheduler: Any) -> None:
     """VoC/情绪批注/市场情报/Batch/morning-sync/fit 快照/简报/雷达/信号/声量/听市/AI Today/官号日报×2/画质扫描。"""
+    _scheduler = _recording(_scheduler)
     # ── VoC 评论情感每日刷新(config-gate,默认 OFF)──
     _scheduler.add_job(
         job_vkpi_comment_sentiment_refresh,
@@ -473,6 +504,7 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
 
 def _register_fulfillment_autoops_jobs(_scheduler: Any) -> None:
     """Projects 履约自动化(P12)五件 + Auto-Ops Action Inbox(W1)+ Ops 阈值告警(A4)。"""
+    _scheduler = _recording(_scheduler)
     # ── Projects 履约自动化(P12)── 各 job 体内由 scheduler_tasks 注册表 enabled 开关 config-gate。
     # 注册表种子默认全 FALSE → 运营在 Ops 页显式开启才真跑;job 体内已做 enabled 守卫,
     # 所以这里始终注册(轻量、空跑即返回),无需依赖 import-time 配置。
@@ -543,6 +575,7 @@ def _register_fulfillment_autoops_jobs(_scheduler: Any) -> None:
 
 def _register_observability_cost_jobs(_scheduler: Any) -> None:
     """C1 健康哨兵 + C5 成本快照/Apify 对账 + GOAFFPRO + 官方目录/Dealer 候选 + 运行时指标 + fire 恢复。"""
+    _scheduler = _recording(_scheduler)
     # ── C1 数据健康哨兵(每日 09:30 中国,排在 morning_sync 08:00 / 官号日报 08:30 之后)──
     # 10 项黄金链路只读日检 → persistent_cache + fail 汇总进 vkpi_alerts(当天幂等)。常开、纯 SELECT。
     _scheduler.add_job(
