@@ -805,14 +805,22 @@ def contact_summary(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, A
     reads expose counts and channel names only.  Even a verified row remains
     ``requires_reveal`` because organization-scoped suppression is evaluated
     only inside the explicit POST reveal boundary.
+
+    Two reveal tiers are reported, mirroring ``contact_reveal``: ``verified``
+    (public-business verified) and ``observed`` (pipeline scan / declaration,
+    not yet verified).  ``reason`` is one of ``verified_available`` /
+    ``observed_available`` / ``verification_required`` / ``no_contacts``.
     """
+    from app.domains.kol.contact_suppression import observed_source_eligible
+
     db = conn or get_conn()
     schema_current = True
     try:
         rows = db.execute(
             """
             SELECT id, COALESCE(NULLIF(channel, ''), contact_type) AS channel,
-                   verification_status, verified_at, invalidated_at, revoked_at
+                   contact_source, verification_status, verified_at,
+                   invalidated_at, revoked_at
             FROM vkpi_kol_pool_contacts
             WHERE kol_pool_id=? AND COALESCE(contact_value, '') <> ''
             ORDER BY id
@@ -844,6 +852,10 @@ def contact_summary(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, A
                 "channel_types": [],
                 "verified_channel_count": 0,
                 "verified_channel_types": [],
+                "observed_contact_count": 0,
+                "observed_channel_count": 0,
+                "observed_channel_types": [],
+                "reveal_tier": None,
                 "last_verified_at": None,
                 "actionability": "unavailable",
                 "reveal_required": False,
@@ -853,14 +865,19 @@ def contact_summary(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, A
 
     known_rows: list[dict[str, Any]] = []
     verified_rows: list[dict[str, Any]] = []
+    observed_rows: list[dict[str, Any]] = []
     for raw_row in rows:
         row = dict(raw_row)
         status = str(row.get("verification_status") or "observed").strip().lower()
         if status in {"invalid", "revoked"} or row.get("invalidated_at") or row.get("revoked_at"):
             continue
         known_rows.append(row)
-        if schema_current and status == "verified_public_business" and row.get("verified_at"):
+        if not schema_current:
+            continue
+        if status == "verified_public_business" and row.get("verified_at"):
             verified_rows.append(row)
+        elif status == "observed" and observed_source_eligible(row.get("contact_source")):
+            observed_rows.append(row)
 
     channel_types = sorted(
         {
@@ -876,6 +893,13 @@ def contact_summary(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, A
             if str(row.get("channel") or "").strip()
         }
     )
+    observed_channel_types = sorted(
+        {
+            str(row.get("channel") or "").strip().lower()
+            for row in observed_rows
+            if str(row.get("channel") or "").strip()
+        }
+    )
     verified_times = [row.get("verified_at") for row in verified_rows if row.get("verified_at")]
     last_verified = max(verified_times, key=lambda value: str(value)) if verified_times else None
     if isinstance(last_verified, datetime):
@@ -886,6 +910,15 @@ def contact_summary(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, A
         last_verified = str(last_verified)
 
     has_contact = bool(known_rows)
+    if verified_rows:
+        reveal_tier: str | None = "verified"
+        reason = "verified_available"
+    elif observed_rows:
+        reveal_tier = "observed"
+        reason = "observed_available"
+    else:
+        reveal_tier = None
+        reason = "verification_required" if has_contact else "no_contacts"
     return {
         "status": "known" if has_contact else "empty",
         "has_contact": has_contact,
@@ -896,11 +929,15 @@ def contact_summary(kol_pool_id: int, *, conn: Any | None = None) -> dict[str, A
         "channel_types": channel_types,
         "verified_channel_count": len(verified_channel_types),
         "verified_channel_types": verified_channel_types,
+        "observed_contact_count": len(observed_rows),
+        "observed_channel_count": len(observed_channel_types),
+        "observed_channel_types": observed_channel_types,
+        "reveal_tier": reveal_tier,
         "last_verified_at": last_verified,
-        "actionability": "requires_reveal" if verified_rows else "not_verified",
+        "actionability": "requires_reveal" if reveal_tier else "not_verified",
         "reveal_required": has_contact,
         "allowed_reveal_purposes": ["kol_detail_view", "compose_outreach"],
-        "reason": "suppression_checked_on_reveal" if verified_rows else ("verification_required" if has_contact else "no_contacts"),
+        "reason": reason,
     }
 
 

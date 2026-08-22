@@ -358,13 +358,19 @@ def test_consent_evidence_is_recorded_but_not_actionable_without_public_proof() 
     assert result["verification_status"] == "observed"
     assert evidence["consent_basis"] == "platform_messaging_consent"
     assert evidence["consent_at"] == "2026-08-15T09:00:00Z"
-    assert contact_eligibility(
+    # Consent evidence never promotes the row to verified; a manual observation
+    # is disclosable only at the observed tier (B 方案).
+    verdict = contact_eligibility(
         contact_id=result["contact_id"],
         kol_pool_id=1,
         brand_scope="organization:1",
         conn=db,
         secret=TEST_SECRET,
-    )["eligible"] is False
+    )
+    assert verdict["eligible"] is True
+    assert verdict["tier"] == "observed"
+    assert verdict["verification_status"] == "observed"
+    assert verdict["reason"] == "eligible_observed_source"
 
 
 def test_duplicate_discovery_updates_last_seen_and_preserves_multiple_sources() -> None:
@@ -416,7 +422,7 @@ def test_duplicate_discovery_updates_last_seen_and_preserves_multiple_sources() 
     assert website_evidence["confidence"] == pytest.approx(0.9)
 
 
-def test_raw_full_scan_never_becomes_verified_or_eligible() -> None:
+def test_raw_full_scan_never_becomes_verified_but_is_observed_tier_eligible() -> None:
     db = _db()
     result = ingest_contact(
         kol_pool_id=1,
@@ -439,8 +445,12 @@ def test_raw_full_scan_never_becomes_verified_or_eligible() -> None:
         conn=db,
         secret=TEST_SECRET,
     )
-    assert verdict["eligible"] is False
-    assert verdict["reason"] == "verification_not_eligible"
+    # Disclosable at the observed tier only; the verified tier stays closed.
+    assert verdict["eligible"] is True
+    assert verdict["tier"] == "observed"
+    assert verdict["reason"] == "eligible_observed_source"
+    assert verdict["verification_status"] == "observed"
+    assert "raw@example.com" not in repr(verdict)
 
 
 def test_explicit_consent_is_per_evidence_and_requires_timestamp() -> None:
@@ -930,6 +940,7 @@ def test_public_api_results_never_return_contact_plaintext() -> None:
     assert set(verdict) == {
         "status",
         "eligible",
+        "tier",
         "reason",
         "contact_id",
         "kol_pool_id",

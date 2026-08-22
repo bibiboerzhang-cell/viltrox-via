@@ -482,6 +482,16 @@ def _queue_update(
     db.commit()
 
 
+def _verdict_tier(verdict: dict[str, Any]) -> str:
+    """Map an eligibility verdict to ``verified``/``observed``; older verdicts without ``tier`` map by reason."""
+
+    tier = str(verdict.get("tier") or "").strip().lower()
+    if tier in {"verified", "observed"}:
+        return tier
+    reason = str(verdict.get("reason") or "").strip().lower()
+    return "verified" if reason == "eligible_verified_public_business" else "observed"
+
+
 def _next_manual_state(*, has_profile: bool, has_website: bool) -> tuple[str, str]:
     if not has_profile:
         return "needs_public_profile", "profile_url_missing"
@@ -623,6 +633,7 @@ def reconcile_contact_acquisition(
         from app.domains.kol.contact_suppression import contact_eligibility
 
         reasons: list[str] = []
+        verified_eligible_count = 0
         for contact_row in contact_rows:
             contact_id = _positive_id(_row_dict(contact_row).get("id"), field="contact id")
             verdict = contact_eligibility(
@@ -633,11 +644,16 @@ def reconcile_contact_acquisition(
             )
             if verdict.get("eligible") is True and verdict.get("status") == "eligible":
                 eligible_count += 1
+                if _verdict_tier(verdict) == "verified":
+                    verified_eligible_count += 1
             else:
                 reasons.append(str(verdict.get("reason") or "verification_not_eligible"))
 
         if eligible_count:
-            final_status, reason_code = "ready", "verified_contact_ready"
+            # ``ready`` covers both tiers; the reason label names the backing tier so
+            # observed-only (scan/declared, unverified) is never reported as verified.
+            final_status = "ready"
+            reason_code = "verified_contact_ready" if verified_eligible_count else "observed_contact_ready"
         elif contact_rows and reasons and all(reason == "suppressed" for reason in reasons):
             final_status, reason_code = "suppressed", "all_contacts_suppressed"
         elif any(reason in _INFRA_RESTRICTED_REASONS for reason in reasons):

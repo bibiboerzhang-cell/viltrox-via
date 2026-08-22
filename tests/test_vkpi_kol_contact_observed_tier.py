@@ -619,3 +619,183 @@ def test_reveal_route_passes_tier_through_the_typed_boundary(monkeypatch) -> Non
     assert result["contacts"][0]["value"] == OBSERVED_EMAIL
     assert len(audit_calls) == 1
     assert response.headers["cache-control"] == "private, no-store"
+
+
+# ---------------------------------------------------------------------------
+# Value-free contact summary and acquisition-queue labels follow the same tiers
+# ---------------------------------------------------------------------------
+
+from app.domains.kol import contact_acquisition_queue, contact_system  # noqa: E402
+
+
+def _summary_db() -> sqlite3.Connection:
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(
+        """
+        CREATE TABLE vkpi_kol_pool_contacts (
+            id INTEGER PRIMARY KEY,
+            kol_pool_id INTEGER NOT NULL,
+            contact_type TEXT NOT NULL,
+            contact_value TEXT NOT NULL,
+            contact_source TEXT,
+            channel TEXT,
+            verification_status TEXT,
+            verified_at TEXT,
+            invalidated_at TEXT,
+            revoked_at TEXT
+        );
+        INSERT INTO vkpi_kol_pool_contacts VALUES
+          (1, 1, 'email', 'verified-secret@example.com', 'youtube_about_declared', 'email',
+           'verified_public_business', '2026-08-15T01:00:00Z', NULL, NULL),
+          (2, 1, 'instagram_dm', '@observed-secret', 'raw_bio_scan', 'instagram_dm',
+           'observed', NULL, NULL, NULL),
+          (5, 2, 'email', 'observed-only-secret@example.com', 'raw_full_scan', 'email',
+           'observed', NULL, NULL, NULL),
+          (6, 2, 'website', 'https://observed-only.example/', 'raw_bio_scan', 'website',
+           'observed', NULL, NULL, NULL),
+          (7, 3, 'email', 'unknown-source-secret@example.com', 'llm_inferred', 'email',
+           'observed', NULL, NULL, NULL),
+          (8, 5, 'email', 'revoked-observed-secret@example.com', 'raw_bio_scan', 'email',
+           'observed', NULL, NULL, '2026-08-20T00:00:00Z');
+        """
+    )
+    return db
+
+
+def test_contact_summary_reports_observed_only_as_revealable_observed_tier() -> None:
+    db = _summary_db()
+
+    mixed = contact_system.contact_summary(1, conn=db)
+    observed_only = contact_system.contact_summary(2, conn=db)
+    unknown_source = contact_system.contact_summary(3, conn=db)
+    nothing = contact_system.contact_summary(4, conn=db)
+    revoked_only = contact_system.contact_summary(5, conn=db)
+
+    assert (mixed["reveal_tier"], mixed["reason"]) == ("verified", "verified_available")
+    assert mixed["verified_contact_count"] == 1
+    assert mixed["observed_contact_count"] == 1
+    assert mixed["observed_channel_types"] == ["instagram_dm"]
+
+    assert observed_only["status"] == "known"
+    assert observed_only["known_contact_count"] == 2
+    assert observed_only["verified_contact_count"] == 0
+    assert observed_only["observed_contact_count"] == 2
+    assert observed_only["observed_channel_types"] == ["email", "website"]
+    assert observed_only["reveal_tier"] == "observed"
+    assert observed_only["reason"] == "observed_available"
+    assert observed_only["actionability"] == "requires_reveal"
+    assert observed_only["reveal_required"] is True
+    assert observed_only["last_verified_at"] is None
+
+    assert unknown_source["known_contact_count"] == 1
+    assert unknown_source["observed_contact_count"] == 0
+    assert unknown_source["reveal_tier"] is None
+    assert unknown_source["reason"] == "verification_required"
+    assert unknown_source["actionability"] == "not_verified"
+
+    assert (nothing["status"], nothing["reveal_tier"], nothing["reason"]) == ("empty", None, "no_contacts")
+    assert (revoked_only["status"], revoked_only["reveal_tier"], revoked_only["reason"]) == ("empty", None, "no_contacts")
+
+    serialized = repr([mixed, observed_only, unknown_source, nothing, revoked_only])
+    for secret in ("secret", "observed-only.example"):
+        assert secret not in serialized
+
+
+def _queue_db() -> sqlite3.Connection:
+    db = sqlite3.connect(":memory:")
+    db.row_factory = sqlite3.Row
+    db.executescript(
+        """
+        CREATE TABLE vkpi_kol_pool (
+            id INTEGER PRIMARY KEY, platform TEXT, profile_url TEXT, bio TEXT,
+            viltrox_fit_score REAL, raw_platform_data TEXT
+        );
+        INSERT INTO vkpi_kol_pool VALUES (1, 'youtube', 'https://youtube.com/@creator', '', NULL, '{}');
+        CREATE TABLE vkpi_kol_pool_contacts (
+            id INTEGER PRIMARY KEY, kol_pool_id INTEGER NOT NULL, contact_type TEXT, contact_value TEXT,
+            channel TEXT, normalized_value TEXT, verification_status TEXT DEFAULT 'observed',
+            verified_at TEXT, invalidated_at TEXT, revoked_at TEXT
+        );
+        CREATE TABLE vkpi_kol_video_evidence (id INTEGER PRIMARY KEY, kol_pool_id INTEGER NOT NULL, is_active INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE vkpi_kol_contact_evidence (
+            id INTEGER PRIMARY KEY, contact_id INTEGER NOT NULL, kol_pool_id INTEGER NOT NULL,
+            source_type TEXT NOT NULL, confidence REAL, is_public_declared INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE vkpi_kol_contact_suppressions (
+            id INTEGER PRIMARY KEY, brand_scope TEXT NOT NULL, kol_pool_id INTEGER NOT NULL,
+            channel TEXT NOT NULL, contact_fingerprint TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE vkpi_kol_contact_acquisition_queue (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, kol_pool_id INTEGER NOT NULL UNIQUE, status TEXT NOT NULL,
+            trigger_source TEXT NOT NULL DEFAULT 'reconcile', reason_code TEXT NOT NULL DEFAULT '',
+            attempt_count INTEGER NOT NULL DEFAULT 0, contactability_score REAL, last_reconciled_at TEXT,
+            next_attempt_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+    )
+    db.commit()
+    return db
+
+
+@pytest.mark.parametrize(
+    ("verdicts", "expected_reason"),
+    [
+        (
+            [{"status": "eligible", "eligible": True, "tier": "observed", "reason": "eligible_observed_source"}],
+            "observed_contact_ready",
+        ),
+        (
+            [
+                {"status": "eligible", "eligible": True, "tier": "observed", "reason": "eligible_observed_source"},
+                {"status": "eligible", "eligible": True, "tier": "verified", "reason": "eligible_verified_public_business"},
+            ],
+            "verified_contact_ready",
+        ),
+        (
+            [
+                {"status": "eligible", "eligible": True, "tier": "observed", "reason": "eligible_observed_source"},
+                {"status": "restricted", "eligible": False, "reason": "suppressed"},
+            ],
+            "observed_contact_ready",
+        ),
+        (
+            # Older verdict shape without ``tier`` maps by reason (rolling upgrade).
+            [{"status": "eligible", "eligible": True, "reason": "eligible_verified_public_business"}],
+            "verified_contact_ready",
+        ),
+    ],
+)
+def test_acquisition_queue_labels_ready_by_backing_tier(
+    monkeypatch: pytest.MonkeyPatch, verdicts: list[dict[str, Any]], expected_reason: str
+) -> None:
+    """``ready`` backed only by observed (scan/declared) rows is never labelled verified."""
+
+    db = _queue_db()
+    for index, _ in enumerate(verdicts, start=1):
+        db.execute(
+            """
+            INSERT INTO vkpi_kol_pool_contacts
+              (id, kol_pool_id, contact_type, contact_value, channel, normalized_value, verification_status)
+            VALUES (?, 1, 'email', ?, 'email', ?, 'observed')
+            """,
+            (60 + index, f"tier-secret-{index}@example.com", f"tier-secret-{index}@example.com"),
+        )
+    db.commit()
+    import app.domains.kol.business_contact_extract as extractor
+
+    monkeypatch.setattr(extractor, "extract_contacts_multi_source", lambda *_a, **_kw: [])
+    monkeypatch.setattr(contact_system, "refresh_contactability", lambda *_a, **_kw: {"written": True, "score": 40.0})
+    queued = iter(verdicts)
+    monkeypatch.setattr(contact_suppression, "contact_eligibility", lambda **_kw: next(queued))
+    contact_acquisition_queue.enqueue_contact_acquisition(1, conn=db)
+
+    result = contact_acquisition_queue.reconcile_contact_acquisition(1, brand_scope="organization:9", conn=db)
+
+    assert result["status"] == "ready"
+    assert result["reason_code"] == expected_reason
+    assert result["eligible_contact_count"] == sum(1 for verdict in verdicts if verdict["eligible"])
+    stored = db.execute("SELECT status, reason_code FROM vkpi_kol_contact_acquisition_queue WHERE kol_pool_id=1").fetchone()
+    assert (stored["status"], stored["reason_code"]) == ("ready", expected_reason)
+    assert "tier-secret" not in repr(result)

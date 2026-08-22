@@ -33,6 +33,7 @@ def _contact_summary_db() -> sqlite3.Connection:
             kol_pool_id INTEGER NOT NULL,
             contact_type TEXT NOT NULL,
             contact_value TEXT NOT NULL,
+            contact_source TEXT,
             channel TEXT,
             verification_status TEXT,
             verified_at TEXT,
@@ -40,14 +41,20 @@ def _contact_summary_db() -> sqlite3.Connection:
             revoked_at TEXT
         );
         INSERT INTO vkpi_kol_pool_contacts VALUES
-          (1, 1, 'email', 'verified-secret@example.com', 'email',
+          (1, 1, 'email', 'verified-secret@example.com', 'youtube_about_declared', 'email',
            'verified_public_business', '2026-08-15T01:00:00Z', NULL, NULL),
-          (2, 1, 'instagram_dm', '@observed-secret', 'instagram_dm',
+          (2, 1, 'instagram_dm', '@observed-secret', 'raw_bio_scan', 'instagram_dm',
            'observed', NULL, NULL, NULL),
-          (3, 1, 'phone', '+14155550000', 'phone',
+          (3, 1, 'phone', '+14155550000', 'manual', 'phone',
            'invalid', NULL, '2026-08-15T02:00:00Z', NULL),
-          (4, 1, 'email', 'revoked-secret@example.com', 'email',
-           'revoked', '2026-08-15T03:00:00Z', NULL, '2026-08-15T04:00:00Z');
+          (4, 1, 'email', 'revoked-secret@example.com', 'manual', 'email',
+           'revoked', '2026-08-15T03:00:00Z', NULL, '2026-08-15T04:00:00Z'),
+          (5, 2, 'email', 'observed-only-secret@example.com', 'raw_full_scan', 'email',
+           'observed', NULL, NULL, NULL),
+          (6, 2, 'website', 'https://observed-only.example/', 'raw_bio_scan', 'website',
+           'observed', NULL, NULL, NULL),
+          (7, 3, 'email', 'unknown-source-secret@example.com', 'llm_inferred', 'email',
+           'observed', NULL, NULL, NULL);
         """
     )
     return db
@@ -160,6 +167,10 @@ def test_contact_summary_is_value_free_and_does_not_claim_observed_as_actionable
     assert result["verified_channel_types"] == ["email"]
     assert result["last_verified_at"] == "2026-08-15T01:00:00Z"
     assert result["actionability"] == "requires_reveal"
+    assert result["reveal_tier"] == "verified"
+    assert result["reason"] == "verified_available"
+    assert result["observed_contact_count"] == 1
+    assert result["observed_channel_types"] == ["instagram_dm"]
     serialized = json.dumps(result, sort_keys=True)
     for secret in (
         "verified-secret@example.com",
@@ -746,6 +757,7 @@ def test_l0_reconcile_promotes_explicit_bio_proof_and_returns_counts_only(
     )
 
     assert result["status"] == "ready"
+    assert result["reason_code"] == "verified_contact_ready"
     assert result["l0_candidate_count"] == 1
     assert result["ingested_count"] == 1
     assert result["eligible_contact_count"] == 1
