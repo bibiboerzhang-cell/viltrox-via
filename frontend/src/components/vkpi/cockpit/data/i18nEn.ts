@@ -468,6 +468,7 @@ export const I18N_EN = {
   "发布内容证据已保存。": "Published-content evidence saved.",
   "正在保存合作条款...": "Saving collaboration terms...",
   "合作条款已保存。": "Collaboration terms saved.",
+  "样本不足": "Insufficient sample",
   "正在保存物流 / 样品证据...": "Saving logistics / sample evidence...",
   "物流 / 样品证据已保存。": "Logistics / sample evidence saved.",
   "正在创建短链...": "Creating the link...",

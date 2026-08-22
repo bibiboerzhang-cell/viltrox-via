@@ -205,6 +205,21 @@ describe("新增来源 wrapper 诚实空态", () => {
     expect(await screen.findByText("窗口内暂无裁决")).toBeInTheDocument();
   });
 
+  it("自治记分卡已判样本 <20 → 命中率位显示「样本不足(n/20)」而非百分比", async () => {
+    routeApi({
+      "/api/admin/vkpi/learning/weekly-scorecard?weeks=8": {
+        status: "ok",
+        overall: { in_range_judged: 7, in_range_hits: 5, in_range_hit_rate: 0.7143 },
+        pending_backlog: { pending_total: 12 },
+        groups: [],
+      },
+    });
+    render(<AutonomyScorecardXbCard apiToken="t" onOpenBoard={() => {}} />);
+    expect(await screen.findByText("样本不足(7/20)")).toBeInTheDocument();
+    expect(screen.queryByText("71.4%")).not.toBeInTheDocument();
+    cleanup();
+  });
+
   it("战略台窗口无证据 → 不画品牌排名", async () => {
     routeApi({ "/api/admin/vkpi/strategy/industry-benchmark?window_days=90": { status: "no_data_in_window" } });
     render(<StrategySovXbCard apiToken="t" onOpenBoard={() => {}} />);
