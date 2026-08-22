@@ -116,6 +116,7 @@ async def analyze_youtube_with_gemini(
         ProviderPressureExhausted,
         _final_v1_cache_config,
         _is_provider_pressure_error,
+        _retry_after_context_cache_error,
         _scope_guard,
         _stage_add,
         _strict_generate_content,
@@ -260,13 +261,18 @@ async def analyze_youtube_with_gemini(
             _fast_path_err = None
 
             # Try analyzing with Gemini 3 models directly (no upload, no polling)
-            for attempt_index, model_name in enumerate(GEMINI_MODELS, start=1):
+            direct_plan = list(enumerate(GEMINI_MODELS, start=1))
+            direct_cache_retried: set[str] = set()
+            direct_pos = 0
+            while direct_pos < len(direct_plan):
+                attempt_index, model_name = direct_plan[direct_pos]
+                direct_pos += 1
                 if not scope_passes("youtube_direct_attempt"):
                     return result
                 attempt_started = time.monotonic()
+                cache_info: dict[str, Any] = {}
                 try:
                     cache_config = None
-                    cache_info: dict[str, Any] = {}
                     request_prompt = prompt
                     if is_final_v1:
                         cache_setup_started = time.monotonic()
@@ -435,6 +441,8 @@ async def analyze_youtube_with_gemini(
                         "gemini_fast_path_model_failed",
                         extra={"model": model_name, "error": _fast_path_err[:80]},
                     )
+                    if _retry_after_context_cache_error(e, cache_info, model_name, direct_cache_retried):
+                        direct_plan.insert(direct_pos, (attempt_index, model_name))
                     continue
 
             if _fast_path_success:
@@ -606,13 +614,18 @@ async def analyze_youtube_with_gemini(
             _active_file_name = gemini_file.name
             MODELS = GEMINI_MODELS
             last_err = ""
-            for model_offset, model_name in enumerate(MODELS, start=1):
+            file_plan = list(enumerate(MODELS, start=1))
+            file_cache_retried: set[str] = set()
+            file_pos = 0
+            while file_pos < len(file_plan):
+                model_offset, model_name = file_plan[file_pos]
+                file_pos += 1
                 if not scope_passes("file_api_attempt"):
                     return result
                 attempt_started = time.monotonic()
+                cache_info = {}
                 try:
                     cache_config = None
-                    cache_info: dict[str, Any] = {}
                     request_prompt = prompt
                     if is_final_v1:
                         cache_setup_started = time.monotonic()
@@ -768,6 +781,8 @@ async def analyze_youtube_with_gemini(
                             "traceback_tail": traceback.format_exc()[-500:],
                         },
                     )
+                    if _retry_after_context_cache_error(e, cache_info, model_name, file_cache_retried):
+                        file_plan.insert(file_pos, (model_offset, model_name))
                     continue
 
             if not result["analyzed"]:

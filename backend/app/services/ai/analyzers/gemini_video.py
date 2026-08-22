@@ -4,6 +4,7 @@ services/ai/analyzers/gemini_video.py — Gemini 全视频分析（YouTube File 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -191,21 +192,157 @@ from app.services.ai.analyzers.gemini_video_legacy_prompt import (  # noqa: E402
 )
 
 
+# ── 刀②:final_v1 静态提示 context cache 跨进程共享 ───────────────────────────────
+# 剖面坐实(2026-08 隔离库):99 条 final_v1 → 98 个不同 cache_name。worker 每个任务都起一个
+# 全新 python 子进程跑分析器,_FINAL_V1_CONTEXT_CACHES 进程内 memo 永远是空的 → 每条视频都
+# caches.create 一次(多一次 API 往返,且单次使用的 cache 按全价计费 + 按时计存储费,
+# 从未享受 75% 的 cached token 折扣)。现把 cache_name 登记到 persistent_cache(003 baseline 表,
+# _respect_gemini_qps 同款模式,零新表零迁移),全 fleet 55 分钟内复用同一份。
+# 失效防毒:generateContent 报 cache 类错误时驱逐共享条目并对同模型免 cache 重试一次。
+_SHARED_CONTEXT_CACHE_ENABLED = str(
+    os.environ.get("GEMINI_FINAL_V1_SHARED_CONTEXT_CACHE", "1")
+).strip().lower() not in {"0", "false", "off", "no"}
+_SHARED_CONTEXT_CACHE_KEY_PREFIX = "vkpi:gemini-ctx-cache:final_v1:"
+_CONTEXT_CACHE_ERROR_MARKERS = ("cachedcontent", "cached content", "cached_content", "cachedcontents/")
+_shared_cache_store_warned = False
+
+
+def _is_context_cache_error(text: str) -> bool:
+    low = str(text or "").lower()
+    return any(marker in low for marker in _CONTEXT_CACHE_ERROR_MARKERS)
+
+
+def _final_v1_shared_cache_key(model_name: str, static_prompt: str) -> str:
+    digest = hashlib.sha256(str(static_prompt or "").encode("utf-8")).hexdigest()[:16]
+    return f"{_SHARED_CONTEXT_CACHE_KEY_PREFIX}{model_name}:{digest}"
+
+
+def _shared_cache_store_failed(action: str, exc: Exception) -> None:
+    global _shared_cache_store_warned
+    if not _shared_cache_store_warned:
+        _shared_cache_store_warned = True
+        logger.warning(
+            "gemini_final_v1_shared_context_cache_store_unavailable",
+            extra={"action": action, "error": f"{type(exc).__name__}: {str(exc)[:160]}"},
+        )
+
+
+def _shared_context_cache_get(key: str) -> tuple[str, float]:
+    """返回 (cache_name, age_seconds);没有/过期/库不可用 → ("", 0.0),绝不抛。"""
+
+    if not _SHARED_CONTEXT_CACHE_ENABLED:
+        return "", 0.0
+    try:
+        from app.db.connection import db_connection_sync_scope, get_conn
+
+        with db_connection_sync_scope():
+            row = get_conn().execute(
+                "SELECT value_json, EXTRACT(EPOCH FROM (NOW() - created_at)) AS age_seconds "
+                "FROM persistent_cache WHERE cache_key=? AND expires_at > NOW()",
+                (key,),
+            ).fetchone()
+        if not row:
+            return "", 0.0
+        data = dict(row)
+        value = json.loads(str(data.get("value_json") or "{}"))
+        cache_name = str((value or {}).get("cache_name") or "")
+        age = max(0.0, float(data.get("age_seconds") or 0.0))
+        return cache_name, age
+    except Exception as exc:
+        _shared_cache_store_failed("get", exc)
+        return "", 0.0
+
+
+def _shared_context_cache_put(key: str, cache_name: str, *, model_name: str) -> None:
+    if not _SHARED_CONTEXT_CACHE_ENABLED or not cache_name:
+        return
+    try:
+        from app.db.connection import db_connection_sync_scope, get_conn
+
+        value = json.dumps({"cache_name": cache_name, "model": model_name}, ensure_ascii=False)
+        with db_connection_sync_scope():
+            conn = get_conn()
+            conn.execute(
+                "INSERT INTO persistent_cache (cache_key, value_json, expires_at, created_at) "
+                "VALUES (?, ?, NOW() + make_interval(secs => ?), NOW()) "
+                "ON CONFLICT (cache_key) DO UPDATE SET value_json=EXCLUDED.value_json, "
+                "expires_at=EXCLUDED.expires_at, created_at=EXCLUDED.created_at",
+                (key, value, float(_FINAL_V1_CACHE_REUSE_SECONDS)),
+            )
+            conn.commit()
+    except Exception as exc:
+        _shared_cache_store_failed("put", exc)
+
+
+def _shared_context_cache_evict(key: str) -> None:
+    if not _SHARED_CONTEXT_CACHE_ENABLED:
+        return
+    try:
+        from app.db.connection import db_connection_sync_scope, get_conn
+
+        with db_connection_sync_scope():
+            conn = get_conn()
+            conn.execute("DELETE FROM persistent_cache WHERE cache_key=?", (key,))
+            conn.commit()
+    except Exception as exc:
+        _shared_cache_store_failed("evict", exc)
+
+
+def _final_v1_cache_evict(model_name: str, *, reason: str = "") -> None:
+    """generateContent 报 cache 类错误(cachedContent 不存在/过期/无权)→ 进程内 + 共享条目一起驱逐。"""
+
+    static_prompt = _video_final_v1_static_prompt()
+    _FINAL_V1_CONTEXT_CACHES.pop(f"{model_name}:video_analysis_final_v1:{hash(static_prompt)}", None)
+    _shared_context_cache_evict(_final_v1_shared_cache_key(model_name, static_prompt))
+    logger.warning(
+        "gemini_final_v1_context_cache_evicted",
+        extra={"model": model_name, "reason": str(reason or "")[:160]},
+    )
+
+
+def _retry_after_context_cache_error(
+    exc: BaseException,
+    cache_info: dict[str, Any] | None,
+    model_name: str,
+    retried: set[str],
+) -> bool:
+    """共享 cache 被毒(条目已失效)时:驱逐 + 同模型免 cache 重试一次。只在 cache 启用且错误
+    文本指向 cachedContent 时触发;每模型最多一次,绝不放大提供方压力类错误。"""
+
+    if model_name in retried or not isinstance(cache_info, dict) or not cache_info.get("enabled"):
+        return False
+    text = str(exc)
+    if not _is_context_cache_error(text):
+        return False
+    retried.add(model_name)
+    _final_v1_cache_evict(model_name, reason=text[:200])
+    return True
+
+
 def _final_v1_cache_config(model_name: str) -> tuple[Any | None, dict[str, Any]]:
-    info: dict[str, Any] = {"enabled": False, "cache_name": "", "static_only": True, "error": ""}
+    info: dict[str, Any] = {"enabled": False, "cache_name": "", "static_only": True, "error": "", "source": ""}
     if not GEMINI_AVAILABLE or not gemini_client or not genai_types:
         info["error"] = "gemini cache unavailable"
         return None, info
     static_prompt = _video_final_v1_static_prompt()
     cache_key = f"{model_name}:video_analysis_final_v1:{hash(static_prompt)}"
+    shared_key = _final_v1_shared_cache_key(model_name, static_prompt)
     cache_name = ""
     cached_entry = _FINAL_V1_CONTEXT_CACHES.get(cache_key)
     if cached_entry:
         entry_name, created_at = cached_entry
         if (time.monotonic() - created_at) < _FINAL_V1_CACHE_REUSE_SECONDS:
             cache_name = entry_name
+            info["source"] = "process"
         else:
             _FINAL_V1_CONTEXT_CACHES.pop(cache_key, None)
+    if not cache_name:
+        shared_name, shared_age = _shared_context_cache_get(shared_key)
+        if shared_name and shared_age < _FINAL_V1_CACHE_REUSE_SECONDS:
+            cache_name = shared_name
+            info["source"] = "shared"
+            # 进程内 memo 以共享条目的真实创建时刻为基准,不把剩余寿命算长
+            _FINAL_V1_CONTEXT_CACHES[cache_key] = (cache_name, time.monotonic() - shared_age)
     try:
         if not cache_name:
             def _create_cache():
@@ -222,6 +359,8 @@ def _final_v1_cache_config(model_name: str) -> tuple[Any | None, dict[str, Any]]
             cache_name = str(getattr(cache, "name", "") or "")
             if cache_name:
                 _FINAL_V1_CONTEXT_CACHES[cache_key] = (cache_name, time.monotonic())
+                _shared_context_cache_put(shared_key, cache_name, model_name=model_name)
+                info["source"] = "created"
         if not cache_name:
             info["error"] = "empty cache name"
             return None, info
@@ -490,13 +629,18 @@ async def analyze_local_video_with_gemini(
             else ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"]
         )
         attempt_total = len(model_names)
-        for attempt_index, model_name in enumerate(model_names, start=1):
+        attempt_plan = list(enumerate(model_names, start=1))
+        cache_retried: set[str] = set()
+        plan_pos = 0
+        while plan_pos < len(attempt_plan):
+            attempt_index, model_name = attempt_plan[plan_pos]
+            plan_pos += 1
             if not scope_passes("file_api_attempt"):
                 return result
             attempt_started = time.monotonic()
+            cache_info: dict[str, Any] = {}
             try:
                 cache_config = None
-                cache_info: dict[str, Any] = {}
                 request_prompt = prompt
                 if is_final_v1:
                     cache_setup_started = time.monotonic()
@@ -566,6 +710,8 @@ async def analyze_local_video_with_gemini(
                 _stage_add(result, "generation", attempt_started)
                 last_err = str(err)
                 logger.warning("gemini_local_fileapi_model_failed", extra={"model": model_name, "error": last_err[:100]})
+                if _retry_after_context_cache_error(err, cache_info, model_name, cache_retried):
+                    attempt_plan.insert(plan_pos, (attempt_index, model_name))
                 continue
         if not result["analyzed"]:
             result["error"] = last_err or "Gemini local video analysis failed"
