@@ -51,6 +51,31 @@ _YOUTUBE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _YOUTUBE_PATH_ROUTES = frozenset({"shorts", "embed", "live", "v"})
 
 
+def _ytdlp_max_height() -> int:
+    """慢路下载分辨率上限(默认 720 行为不变)。Gemini 视频帧按固定 token/帧降采样,480p 对分析输入
+    几乎无差而下载+File API 上传字节量 ~2-3x 更小;是否降档由运维用 env 决定,代码默认不动。"""
+
+    try:
+        value = int(os.environ.get("GEMINI_VIDEO_YTDLP_MAX_HEIGHT", "720") or "720")
+    except ValueError:
+        value = 720
+    return max(240, min(1080, value))
+
+
+def _ytdlp_download_format(max_height: int) -> str:
+    return f"best[ext=mp4][height<={max_height}]/18/best[height<={max_height}]/best"
+
+
+def _ytdlp_cookies_args() -> list[str]:
+    """YTDLP_COOKIES_FILE 指向存在的 cookies.txt 时透传 --cookies(治「Sign in to confirm you're
+    not a bot」类下载失败);未设/文件不存在 → 空,行为不变。"""
+
+    path = str(os.environ.get("YTDLP_COOKIES_FILE", "") or "").strip()
+    if path and os.path.isfile(path):
+        return ["--cookies", path]
+    return []
+
+
 def canonical_youtube_url(url: str) -> tuple[str, str]:
     """把任意形态的 YouTube 链接规范成 ``https://www.youtube.com/watch?v=<id>``。
 
@@ -480,9 +505,10 @@ async def analyze_youtube_with_gemini(
                 return result
             logger.info("gemini_fileapi_download_start", extra={"url": url})
 
+            download_max_height = _ytdlp_max_height()
             dl_cmd = [
                 YTDLP_BIN,  # 解析好的全路径(.venv/bin/yt-dlp);裸 'yt-dlp' 在 worker PATH 上找不到 → media_resolve_failed
-                "-f", "best[ext=mp4][height<=720]/18/best[height<=720]/best",
+                "-f", _ytdlp_download_format(download_max_height),
                 "--merge-output-format", "mp4",
                 "-o", tmp_path,
                 "--no-playlist",
@@ -490,6 +516,7 @@ async def analyze_youtube_with_gemini(
             ]
             if YTDLP_PROXY:
                 dl_cmd += ["--proxy", YTDLP_PROXY]
+            dl_cmd += _ytdlp_cookies_args()
             dl_cmd.append(url)
             download_started = time.monotonic()
             dl_proc = await asyncio.to_thread(
@@ -514,6 +541,8 @@ async def analyze_youtube_with_gemini(
                 "elapsed_ms": download_ms,
                 "bytes": downloaded_bytes,
                 "proxy": bool(YTDLP_PROXY),
+                "max_height": download_max_height,
+                "cookies": "--cookies" in dl_cmd,
                 "stderr_tail": _stderr_text[-600:],
             }
             if downloaded_bytes < 1000:
