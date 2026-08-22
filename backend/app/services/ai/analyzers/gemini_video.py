@@ -106,6 +106,19 @@ def _scope_guard(
     return _passes
 
 
+def _stage_add(result: dict[str, Any], stage: str, started_monotonic: float) -> int:
+    """零成本阶段计时:把 ``stage`` 自 ``started_monotonic`` 起的毫秒累加进
+    ``result["stage_timings_ms"]``(同名阶段多次调用累加,如多模型重试)。返回本次毫秒。
+    剖面脚本 scripts/ops/profile_video_analysis.py 以此分解 download/upload/gemini_call。"""
+    elapsed_ms = max(0, int((time.monotonic() - started_monotonic) * 1000))
+    timings = result.get("stage_timings_ms")
+    if not isinstance(timings, dict):
+        timings = {}
+        result["stage_timings_ms"] = timings
+    timings[stage] = int(timings.get(stage) or 0) + elapsed_ms
+    return elapsed_ms
+
+
 _PROVIDER_PRESSURE_MARKERS = (
     "429",
     "502",
@@ -416,16 +429,20 @@ async def analyze_local_video_with_gemini(
     try:
         file_size_mb = local_path.stat().st_size / 1024 / 1024
         logger.info("gemini_local_fileapi_upload_start", extra={"size_mb": round(file_size_mb, 1)})
+        result["local_video_bytes"] = int(local_path.stat().st_size)
 
+        upload_started = time.monotonic()
         try:
             def _upload():
                 return gemini_client.files.upload(file=str(local_path), config={"mime_type": "video/mp4"})
 
             gemini_file = await asyncio.to_thread(_upload)
         except Exception as upload_err:
+            _stage_add(result, "upload", upload_started)
             result["error"] = f"Gemini File API upload failed: {upload_err}"
             logger.warning("gemini_local_fileapi_upload_failed", extra={"error": str(upload_err)})
             return result
+        _stage_add(result, "upload", upload_started)
         if not gemini_file or not getattr(gemini_file, "name", None):
             result["error"] = "Gemini upload returned empty file object"
             logger.warning("gemini_local_fileapi_upload_invalid_file", extra={"file": str(gemini_file)})
@@ -434,6 +451,7 @@ async def analyze_local_video_with_gemini(
         logger.info("gemini_local_fileapi_upload_complete", extra={"file_name": uploaded_file_name})
 
         state = ""
+        active_wait_started = time.monotonic()
         for poll_attempt in range(30):
             try:
                 def _check(name=uploaded_file_name):
@@ -441,6 +459,7 @@ async def analyze_local_video_with_gemini(
 
                 gemini_file = await asyncio.to_thread(_check)
             except Exception as poll_err:
+                _stage_add(result, "file_active_wait", active_wait_started)
                 result["error"] = f"files.get() error during polling: {poll_err}"
                 logger.warning("gemini_local_fileapi_poll_error", extra={"attempt": poll_attempt, "error": str(poll_err)})
                 return result
@@ -449,12 +468,15 @@ async def analyze_local_video_with_gemini(
             if state == "ACTIVE":
                 break
             if state == "FAILED":
+                _stage_add(result, "file_active_wait", active_wait_started)
                 result["error"] = f"Gemini file processing FAILED (state={state})"
                 return result
             await asyncio.sleep(3)
         else:
+            _stage_add(result, "file_active_wait", active_wait_started)
             result["error"] = f"Gemini file ACTIVE timeout after 90s (final state={state})"
             return result
+        _stage_add(result, "file_active_wait", active_wait_started)
         if not getattr(gemini_file, "uri", None):
             result["error"] = "Gemini file ACTIVE but uri is empty"
             return result
@@ -471,12 +493,15 @@ async def analyze_local_video_with_gemini(
         for attempt_index, model_name in enumerate(model_names, start=1):
             if not scope_passes("file_api_attempt"):
                 return result
+            attempt_started = time.monotonic()
             try:
                 cache_config = None
                 cache_info: dict[str, Any] = {}
                 request_prompt = prompt
                 if is_final_v1:
+                    cache_setup_started = time.monotonic()
                     cache_config, cache_info = _final_v1_cache_config(model_name)
+                    _stage_add(result, "cache_setup", cache_setup_started)
                     if not cache_config:
                         request_prompt = final_full_prompt
                 request_config = _video_generate_config(model_name, cache_config)
@@ -504,6 +529,7 @@ async def analyze_local_video_with_gemini(
                     )
 
                 resp = await asyncio.to_thread(_analyze)
+                _stage_add(result, "generation", attempt_started)
                 usage_metadata = _response_usage_metadata(resp)
                 raw = resp.text.strip()
                 raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
@@ -537,6 +563,7 @@ async def analyze_local_video_with_gemini(
                 )
                 break
             except Exception as err:
+                _stage_add(result, "generation", attempt_started)
                 last_err = str(err)
                 logger.warning("gemini_local_fileapi_model_failed", extra={"model": model_name, "error": last_err[:100]})
                 continue
@@ -548,6 +575,7 @@ async def analyze_local_video_with_gemini(
     finally:
         if uploaded_file_name:
             result["fileapi_cleanup"]["delete_attempted"] = True
+            cleanup_started = time.monotonic()
             try:
                 def _delete(name=uploaded_file_name):
                     gemini_client.files.delete(name=name)
@@ -557,6 +585,7 @@ async def analyze_local_video_with_gemini(
                 logger.info("gemini_local_fileapi_deleted", extra={"file_name": uploaded_file_name})
             except Exception as del_err:
                 logger.warning("gemini_local_fileapi_delete_skipped", extra={"error": str(del_err)})
+            _stage_add(result, "cleanup", cleanup_started)
     return result
 
 

@@ -50,6 +50,11 @@ from app.workers.apify_jobs_worker_gemini_cost import (  # noqa: F401
     _record_anthropic_cost,
     _record_openai_cost,
 )
+from app.workers.apify_jobs_worker_gemini_stages import (
+    StageClock,
+    merged_stage_timings,
+    record_final_v1_outcome_diagnostics,
+)
 from app.workers.apify_jobs_worker_session import (
     _enqueue_account_dossier_extract_after_final_v1,
     _enqueue_content_fit_after_final_v1,
@@ -214,6 +219,8 @@ def _shape_gemini_result(
                 ],
                 "usage_metadata": raw.get("usage_metadata") if isinstance(raw.get("usage_metadata"), dict) else {},
                 "latency_ms": latency_ms,
+                # 剖面用阶段耗时(分析器子进程 + worker 合并;零 LLM 成本,只追加不改六层)
+                "stage_timings_ms": merged_stage_timings(raw),
             },
             "raw_gemini_video": raw,
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -610,6 +617,7 @@ def _process_gemini_video(
         str(evidence.get("content_url") or "")[:120],
     )
     started = time.monotonic()
+    clock = StageClock()
     # The child process forces every generateContent call to this exact model;
     # final_v1 receives the same one-model chain, so cache setup cannot drift.
     analyzer_payload = _gemini_analyzer_payload(payload, derive_method)
@@ -640,7 +648,8 @@ def _process_gemini_video(
     }
     if platform in {"instagram", "tiktok"}:
         with tempfile.TemporaryDirectory(prefix="vkpi-analysis-video-") as tmpdir:
-            resolved = _resolve_cached_or_provider_video(conn, evidence, tmpdir)
+            with clock.stage("media_resolve"):
+                resolved = _resolve_cached_or_provider_video(conn, evidence, tmpdir)
             if str(resolved.get("status") or "") == "blocked":
                 _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
                 return
@@ -664,11 +673,12 @@ def _process_gemini_video(
                     "cache_hit": True,
                 }
             else:
-                download = download_direct_video_url(
-                    str(resolved.get("direct_video_url") or ""),
-                    tmpdir,
-                    referer=str(evidence.get("content_url") or ""),
-                )
+                with clock.stage("worker_download"):
+                    download = download_direct_video_url(
+                        str(resolved.get("direct_video_url") or ""),
+                        tmpdir,
+                        referer=str(evidence.get("content_url") or ""),
+                    )
             if not download.get("success") or not download.get("path"):
                 # Point 8: a terminal precheck verdict (404/403/410/451) means the
                 # direct URL is confidently unavailable. Re-raise its bare reason —
@@ -686,6 +696,7 @@ def _process_gemini_video(
                 return
             local_schema = "final_v1" if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else "v2"
             analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
+            analyzer_started = time.monotonic()
             raw = _run_gemini_analyzer_with_timeout(
                 {
                     **analyzer_payload,
@@ -700,6 +711,7 @@ def _process_gemini_video(
                 target_id=target_id,
                 platform=platform,
             )
+            clock.add("analyzer_subprocess", analyzer_started)
             # File API upload / per-model retries inside the child carry their own
             # stage gates; a child-reported revocation terminalizes here too.
             if not _final_v1_scope_checkpoint(
@@ -724,15 +736,17 @@ def _process_gemini_video(
             if not resolved.get("cache_hit"):
                 # C3:临时目录删除前,把这份已下载、已被 Gemini 分析的字节登记进视频缓存(传 R2),
                 # 令 KOL 详情页 cached_video_url 有值、视频可播。已命中缓存时不重复上传。
-                _warm_video_to_r2_from_local(
-                    job_id=job.get("id"),
-                    platform=platform,
-                    content_url=str(evidence.get("content_url") or ""),
-                    direct_video_url=str(resolved.get("direct_video_url") or ""),
-                    local_path=str(download.get("path") or ""),
-                )
+                with clock.stage("r2_warm"):
+                    _warm_video_to_r2_from_local(
+                        job_id=job.get("id"),
+                        platform=platform,
+                        content_url=str(evidence.get("content_url") or ""),
+                        direct_video_url=str(resolved.get("direct_video_url") or ""),
+                        local_path=str(download.get("path") or ""),
+                    )
     else:
         analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
+        analyzer_started = time.monotonic()
         raw = _run_gemini_analyzer_with_timeout(
             {
                 **analyzer_payload,
@@ -751,6 +765,7 @@ def _process_gemini_video(
             target_id=target_id,
             platform=platform,
         )
+        clock.add("analyzer_subprocess", analyzer_started)
     latency_ms = int((time.monotonic() - started) * 1000)
     reported_model = str(raw.get("model") or "")
     if raw.get("analyzed") and reported_model != WORKER_GEMINI_MODEL:
@@ -788,21 +803,26 @@ def _process_gemini_video(
         raw,
         preflight_cost,
     )
-    ledger = _record_gemini_cost(
-        job=job,
-        payload=payload,
-        raw=raw,
-        cost=cost,
-        cost_basis=cost_basis,
-        tokens_in=tokens_in,
-        tokens_out=tokens_out,
-        latency_ms=latency_ms,
-        preflight_cost=preflight_cost,
-    )
+    with clock.stage("cost_record"):
+        ledger = _record_gemini_cost(
+            job=job,
+            payload=payload,
+            raw=raw,
+            cost=cost,
+            cost_basis=cost_basis,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=latency_ms,
+            preflight_cost=preflight_cost,
+        )
+    # worker 侧阶段(媒体解析/下载/子进程/R2/记账)并入 raw → 随 raw_gemini_video 与 cost.stage_timings_ms 落库
+    raw["worker_stage_timings_ms"] = dict(clock.timings)
     if validation_error is not None:
         raise validation_error
     if not raw.get("analyzed"):
         raw_error = str(raw.get("error") or "not_analyzed")
+        # 失败也落阶段耗时 + 直链/下载诊断(payload.diagnostics),否则 raw 随异常丢失、失败原因永远查不到
+        record_final_v1_outcome_diagnostics(conn, job_id=int(job["id"]), raw=raw, clock=clock, platform=platform, error=raw_error)
         if raw_error == "gemini_call_timeout":
             raise RuntimeError("gemini_call_timeout")
         raise RuntimeError(f"Gemini video analysis failed: {raw_error}")
@@ -824,6 +844,7 @@ def _process_gemini_video(
         if execution["evaluation_only"]
         else derive_method
     )
+    persist_started = time.monotonic()
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
@@ -867,6 +888,8 @@ def _process_gemini_video(
                 """,
                 (job["id"],),
             )
+    clock.add("persist", persist_started)
+    followups_started = time.monotonic()
     if execution["evaluation_only"]:
         # Local evidence is physically/logically isolated from production
         # final_v1 and never seeds deep-result, dossier, fit, QA or judge
@@ -937,6 +960,8 @@ def _process_gemini_video(
         raw_status="done",
         analysis_summary=analysis_summary,
     )
+    clock.add("followups", followups_started)
+    record_final_v1_outcome_diagnostics(conn, job_id=int(job["id"]), raw=raw, clock=clock, platform=platform)
 
 
 # 原文件留下的常量/小工具:放模块底部 import(避免循环导入;调用点均在函数体内、运行期才解析)。

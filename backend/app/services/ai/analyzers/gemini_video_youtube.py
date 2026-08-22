@@ -12,6 +12,7 @@ import asyncio
 import os
 import re
 import subprocess
+import time
 from typing import Any, Callable
 
 from app.core.logging import get_logger
@@ -77,6 +78,7 @@ async def analyze_youtube_with_gemini(
         _final_v1_cache_config,
         _is_provider_pressure_error,
         _scope_guard,
+        _stage_add,
         _strict_generate_content,
         _video_generate_config,
         final_v1_gemini_models,
@@ -113,7 +115,10 @@ async def analyze_youtube_with_gemini(
     subtitle_ctx = ""
     if not scope_passes("youtube_subtitles"):
         return result
+    subtitles_started = time.monotonic()
     subtitle_raw = fetch_youtube_subtitles(url)
+    _stage_add(result, "subtitles", subtitles_started)
+    result["subtitle_chars"] = len(subtitle_raw or "")
     if subtitle_raw:
         subtitle_ctx = (
             "\n\n=== 字幕时间轴（真实时间戳，优先用这个定位事件）===\n"
@@ -186,6 +191,15 @@ async def analyze_youtube_with_gemini(
     _active_file_name = None  # tracks File API resource for cleanup in finally
 
     if "youtu.be" in url or "youtube.com" in url:
+        # 直链诊断(零成本):每次模型尝试的错误原文落 result,剖面脚本据此统计直链命中率与降级真因。
+        # 旧码只 logger.warning,线上 570 条 final_v1 里没有一条能回答「直链为什么失败」。
+        direct_diag: dict[str, Any] = {
+            "attempted": True,
+            "success": False,
+            "attempts": [],
+            "fallback_reason": "",
+        }
+        result["youtube_direct"] = direct_diag
         try:
             logger.info("gemini_fast_path_start", extra={"url": url})
 
@@ -203,12 +217,15 @@ async def analyze_youtube_with_gemini(
             for attempt_index, model_name in enumerate(GEMINI_MODELS, start=1):
                 if not scope_passes("youtube_direct_attempt"):
                     return result
+                attempt_started = time.monotonic()
                 try:
                     cache_config = None
                     cache_info: dict[str, Any] = {}
                     request_prompt = prompt
                     if is_final_v1:
+                        cache_setup_started = time.monotonic()
                         cache_config, cache_info = _final_v1_cache_config(model_name)
+                        _stage_add(result, "cache_setup", cache_setup_started)
                         if not cache_config:
                             request_prompt = final_full_prompt
                     request_config = _video_generate_config(model_name, cache_config)
@@ -239,6 +256,14 @@ async def analyze_youtube_with_gemini(
                             attempt_log=result["llm_attempts"],
                         )
                     resp = await asyncio.to_thread(_analyze_direct)
+                    direct_diag["attempts"].append(
+                        {
+                            "model": model_name,
+                            "ok": True,
+                            "error": "",
+                            "elapsed_ms": _stage_add(result, "youtube_direct", attempt_started),
+                        }
+                    )
                     usage_metadata = _response_usage_metadata(resp)
                     raw = resp.text.strip()
                     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
@@ -346,6 +371,20 @@ async def analyze_youtube_with_gemini(
                     break
                 except Exception as e:
                     _fast_path_err = str(e)[:200]
+                    last_attempt = direct_diag["attempts"][-1] if direct_diag["attempts"] else None
+                    if last_attempt and last_attempt.get("model") == model_name and last_attempt.get("ok"):
+                        # 响应已回但 JSON/结构校验抛错:沿用已计的耗时,改标失败(不重复累加阶段时间)
+                        last_attempt["ok"] = False
+                        last_attempt["error"] = _fast_path_err
+                    else:
+                        direct_diag["attempts"].append(
+                            {
+                                "model": model_name,
+                                "ok": False,
+                                "error": _fast_path_err,
+                                "elapsed_ms": _stage_add(result, "youtube_direct", attempt_started),
+                            }
+                        )
                     logger.warning(
                         "gemini_fast_path_model_failed",
                         extra={"model": model_name, "error": _fast_path_err[:80]},
@@ -353,8 +392,10 @@ async def analyze_youtube_with_gemini(
                     continue
 
             if _fast_path_success:
+                direct_diag["success"] = True
                 return result  # Done! Skip slow path entirely.
             elif _fast_path_err and _is_provider_pressure_error(_fast_path_err):
+                direct_diag["fallback_reason"] = f"provider_pressure: {_fast_path_err}"
                 logger.warning(
                     "gemini_fast_path_provider_pressure_abort",
                     extra={"error": _fast_path_err[:120]},
@@ -363,11 +404,13 @@ async def analyze_youtube_with_gemini(
                     f"provider_pressure(all models tried): {_fast_path_err}"
                 )
             else:
+                direct_diag["fallback_reason"] = _fast_path_err or "no_model_succeeded"
                 logger.warning("gemini_fast_path_fallback_to_download")
                 # Fall through to slow path below
         except ProviderPressureExhausted:
             raise
         except Exception as fast_err:
+            direct_diag["fallback_reason"] = f"fast_path_exception: {str(fast_err)[:200]}"
             logger.warning("gemini_fast_path_exception", extra={"error": str(fast_err)})
             # Fall through to slow path
 
@@ -394,6 +437,7 @@ async def analyze_youtube_with_gemini(
             if YTDLP_PROXY:
                 dl_cmd += ["--proxy", YTDLP_PROXY]
             dl_cmd.append(url)
+            download_started = time.monotonic()
             dl_proc = await asyncio.to_thread(
                 lambda: subprocess.run(
                     dl_cmd,
@@ -401,12 +445,32 @@ async def analyze_youtube_with_gemini(
                     timeout=GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
                 )
             )
-            if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) < 1000:
+            download_ms = _stage_add(result, "download", download_started)
+            downloaded_bytes = int(os.path.getsize(tmp_path)) if os.path.exists(tmp_path) else 0
+            # 下载诊断(零成本):旧码把 yt-dlp stderr 整个丢掉,线上 167 条「yt-dlp video download failed」
+            # 无一能区分 bot 验证/地区限制/代理断流;现把 returncode + stderr 尾巴落 result。
+            _stderr_raw = getattr(dl_proc, "stderr", b"") if dl_proc is not None else b""
+            if isinstance(_stderr_raw, bytes):
+                _stderr_text = _stderr_raw.decode("utf-8", errors="ignore")
+            else:
+                _stderr_text = str(_stderr_raw or "")
+            result["download_diagnostics"] = {
+                "tool": "yt-dlp",
+                "returncode": getattr(dl_proc, "returncode", None) if dl_proc is not None else None,
+                "elapsed_ms": download_ms,
+                "bytes": downloaded_bytes,
+                "proxy": bool(YTDLP_PROXY),
+                "stderr_tail": _stderr_text[-600:],
+            }
+            if downloaded_bytes < 1000:
                 result["error"] = "yt-dlp video download failed for Gemini analysis"
-                logger.warning("gemini_fileapi_download_failed", extra={"url": url})
+                logger.warning(
+                    "gemini_fileapi_download_failed",
+                    extra={"url": url, "stderr_tail": _stderr_text[-300:]},
+                )
                 return result
 
-            file_size_mb = os.path.getsize(tmp_path) / 1024 / 1024
+            file_size_mb = downloaded_bytes / 1024 / 1024
             logger.info("gemini_fileapi_upload_start", extra={"size_mb": round(file_size_mb, 1)})
 
             # Step 2: Upload to Gemini File API
@@ -414,6 +478,7 @@ async def analyze_youtube_with_gemini(
             # an object whose .name may be None, causing files.get() to 404.
             if not scope_passes("file_api_upload"):
                 return result
+            upload_started = time.monotonic()
             try:
                 def _upload():
                     return gemini_client.files.upload(
@@ -422,9 +487,11 @@ async def analyze_youtube_with_gemini(
                     )
                 gemini_file = await asyncio.to_thread(_upload)
             except Exception as upload_err:
+                _stage_add(result, "upload", upload_started)
                 result["error"] = f"Gemini File API upload failed: {upload_err}"
                 logger.warning("gemini_fileapi_upload_failed", extra={"error": str(upload_err)})
                 return result
+            _stage_add(result, "upload", upload_started)
 
             # Validate upload returned a usable file object
             if not gemini_file or not getattr(gemini_file, "name", None):
@@ -440,6 +507,7 @@ async def analyze_youtube_with_gemini(
             # Step 3: Wait for file to be ACTIVE (usually 5-60 seconds for video)
             # BUG FIX 1: files.get() itself can throw 404 — wrap in try-except.
             # BUG FIX 2: Exit immediately on FAILED state instead of burning 60s.
+            active_wait_started = time.monotonic()
             for poll_attempt in range(30):   # max 90s (30 × 3s)
                 try:
                     def _check(name=gemini_file.name):
@@ -447,6 +515,7 @@ async def analyze_youtube_with_gemini(
                     polled = await asyncio.to_thread(_check)
                     gemini_file = polled
                 except Exception as poll_err:
+                    _stage_add(result, "file_active_wait", active_wait_started)
                     # 404 here means the file disappeared (upload may have silently failed)
                     result["error"] = f"files.get() 404 during polling — upload may have failed: {poll_err}"
                     logger.warning(
@@ -461,6 +530,7 @@ async def analyze_youtube_with_gemini(
                 if state == "ACTIVE":
                     break
                 if state == "FAILED":
+                    _stage_add(result, "file_active_wait", active_wait_started)
                     # File processing failed on Google's side — no point waiting
                     result["error"] = f"Gemini file processing FAILED (state={state}). Try re-uploading."
                     logger.warning(
@@ -470,9 +540,11 @@ async def analyze_youtube_with_gemini(
                     return result
                 await asyncio.sleep(3)
             else:
+                _stage_add(result, "file_active_wait", active_wait_started)
                 result["error"] = f"Gemini file ACTIVE timeout after 90s (final state={state})"
                 logger.warning("gemini_fileapi_poll_timeout", extra={"state": state})
                 return result
+            _stage_add(result, "file_active_wait", active_wait_started)
 
             logger.info("gemini_fileapi_active", extra={"uri": gemini_file.uri})
 
@@ -491,12 +563,15 @@ async def analyze_youtube_with_gemini(
             for model_offset, model_name in enumerate(MODELS, start=1):
                 if not scope_passes("file_api_attempt"):
                     return result
+                attempt_started = time.monotonic()
                 try:
                     cache_config = None
                     cache_info: dict[str, Any] = {}
                     request_prompt = prompt
                     if is_final_v1:
+                        cache_setup_started = time.monotonic()
                         cache_config, cache_info = _final_v1_cache_config(model_name)
+                        _stage_add(result, "cache_setup", cache_setup_started)
                         if not cache_config:
                             request_prompt = final_full_prompt
                     request_config = _video_generate_config(model_name, cache_config)
@@ -526,6 +601,7 @@ async def analyze_youtube_with_gemini(
                             attempt_log=result["llm_attempts"],
                         )
                     resp = await asyncio.to_thread(_analyze)
+                    _stage_add(result, "generation", attempt_started)
                     usage_metadata = _response_usage_metadata(resp)
                     raw = resp.text.strip()
                     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
@@ -636,6 +712,7 @@ async def analyze_youtube_with_gemini(
                     break
                 except Exception as e:
                     import traceback
+                    _stage_add(result, "generation", attempt_started)
                     last_err = str(e)
                     logger.warning(
                         "gemini_fileapi_model_failed",
@@ -660,6 +737,7 @@ async def analyze_youtube_with_gemini(
         # the mutable gemini_file object that polling may have partially updated.
         _file_to_delete = getattr(gemini_file, "name", None) if gemini_file else None
         if _file_to_delete:
+            cleanup_started = time.monotonic()
             try:
                 def _delete(name=_file_to_delete):
                     gemini_client.files.delete(name=name)
@@ -668,5 +746,6 @@ async def analyze_youtube_with_gemini(
             except Exception as del_err:
                 # 404 here is harmless — file was already gone or never fully created
                 logger.warning("gemini_fileapi_delete_skipped", extra={"error": str(del_err)})
+            _stage_add(result, "cleanup", cleanup_started)
 
     return result
