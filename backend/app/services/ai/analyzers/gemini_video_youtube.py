@@ -14,6 +14,7 @@ import re
 import subprocess
 import time
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlparse
 
 from app.core.logging import get_logger
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
@@ -46,6 +47,44 @@ GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS = max(
     60,
     int(os.environ.get("GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SEC", "900")),
 )
+_YOUTUBE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
+_YOUTUBE_PATH_ROUTES = frozenset({"shorts", "embed", "live", "v"})
+
+
+def canonical_youtube_url(url: str) -> tuple[str, str]:
+    """把任意形态的 YouTube 链接规范成 ``https://www.youtube.com/watch?v=<id>``。
+
+    剖面坐实(2026-08,隔离库 vkpi_llm_calls):直链 33 次失败里 18 次是带 ``&t=314s`` /
+    ``&pp=ygU...`` 等附加参数的 watch 链接,Gemini file_uri 约 2.5s 秒拒;成功的 47 次零带参。
+    秒拒后整条任务掉进 yt-dlp 下载 + File API 慢路(p50 98s→269s,或干脆下载失败)。
+    返回 ``(canonical_url, video_id)``;解析不出 11 位 id 时原样返回 ``(url, "")``,不改行为。
+    """
+
+    raw = str(url or "").strip()
+    if not raw:
+        return raw, ""
+    try:
+        parsed = urlparse(raw)
+    except ValueError:
+        return raw, ""
+    host = (parsed.hostname or "").lower().rstrip(".")
+    for prefix in ("www.", "m.", "music."):
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+    parts = [part for part in parsed.path.split("/") if part]
+    lowered = [part.lower() for part in parts]
+    video_id = ""
+    if host == "youtu.be" and parts:
+        video_id = parts[0]
+    elif host == "youtube.com" or host.endswith(".youtube.com"):
+        if lowered[:1] == ["watch"]:
+            video_id = str((parse_qs(parsed.query).get("v") or [""])[0] or "")
+        elif len(parts) >= 2 and lowered[0] in _YOUTUBE_PATH_ROUTES:
+            video_id = parts[1]
+    video_id = video_id.strip()
+    if not _YOUTUBE_VIDEO_ID_RE.fullmatch(video_id):
+        return raw, ""
+    return f"https://www.youtube.com/watch?v={video_id}", video_id
 
 
 async def analyze_youtube_with_gemini(
@@ -193,15 +232,22 @@ async def analyze_youtube_with_gemini(
     if "youtu.be" in url or "youtube.com" in url:
         # 直链诊断(零成本):每次模型尝试的错误原文落 result,剖面脚本据此统计直链命中率与降级真因。
         # 旧码只 logger.warning,线上 570 条 final_v1 里没有一条能回答「直链为什么失败」。
+        # 刀①:直链只喂规范化 watch?v= 链接(带 &t=/&pp=/?si= 的原链是直链秒拒的头号真因)。
+        direct_url, direct_video_id = canonical_youtube_url(url)
         direct_diag: dict[str, Any] = {
             "attempted": True,
             "success": False,
             "attempts": [],
             "fallback_reason": "",
+            "url": direct_url,
+            "url_canonicalized": bool(direct_video_id) and direct_url != url,
         }
         result["youtube_direct"] = direct_diag
         try:
-            logger.info("gemini_fast_path_start", extra={"url": url})
+            logger.info(
+                "gemini_fast_path_start",
+                extra={"url": direct_url, "canonicalized": direct_diag["url_canonicalized"]},
+            )
 
             class _YouTubeDirectFile:
                 """Pseudo file object passing YouTube URL directly to Gemini"""
@@ -209,7 +255,7 @@ async def analyze_youtube_with_gemini(
                     self.uri = youtube_url
                     self.name = None
 
-            gemini_file = _YouTubeDirectFile(url)
+            gemini_file = _YouTubeDirectFile(direct_url)
             _fast_path_success = False
             _fast_path_err = None
 
@@ -229,7 +275,7 @@ async def analyze_youtube_with_gemini(
                         if not cache_config:
                             request_prompt = final_full_prompt
                     request_config = _video_generate_config(model_name, cache_config)
-                    def _analyze_direct(m=model_name, u=url):
+                    def _analyze_direct(m=model_name, u=direct_url):
                         kwargs: dict[str, Any] = {
                             "model": m,
                             "contents": [
