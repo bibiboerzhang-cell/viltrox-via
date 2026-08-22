@@ -21,6 +21,12 @@
 10 recommendation_outcomes  vkpi_recommendation_outcomes 总量 + 近 7 日新增(045)
  11 queue_inflow             自动入队任务启用时 24h 是否有新增
  12 legacy_queue_orphans     第二套 job_execution_ledger 是否有 >24h 活跃孤儿
+13-17 统计异常 5 检(health_sentinel_anomalies.py,千行卫兵拆出):LLM 降级率 / 账本日差 /
+      队列积压 / Apify 日支出突增 / 快照失败率;阈值 env 化,样本不足诚实标 insufficient_data。
+
+出站(alert_outbound.py):fail 汇总除落库外还走 webhook(飞书/Slack/generic,URL 只在 env,
+永不进日志/结果);去重 key 固定 ``health-sentinel``,fingerprint=失败项集合;连续 N 次升级 escalated;
+当天全恢复 → 连续计数归零并补发恢复。未配置出站时结果里诚实记 ``outbound.reason=not_configured``。
 """
 from __future__ import annotations
 
@@ -30,12 +36,15 @@ from typing import Any, Callable
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
+from app.domains.ops import alert_outbound
+from app.domains.ops.health_sentinel_anomalies import ANOMALY_CHECKS, ANOMALY_LABELS
 
 logger = get_logger(__name__)
 
 _LATEST_KEY = "vkpi:health_sentinel:latest"
 _DAY_KEY_PREFIX = "vkpi:health_sentinel:day:"
 _ALERT_KEY_PREFIX = "health-sentinel-"
+_OUTBOUND_KEY = "health-sentinel"
 _RULE_KEY = "ops.health_sentinel"
 _HISTORY_DAYS = 30
 
@@ -611,6 +620,7 @@ _CHECKS: tuple[tuple[str, Callable[[], dict[str, Any]]], ...] = (
     ("apify_spend", _check_apify_spend),
     ("failed_pool", _check_failed_pool),
     ("recommendation_outcomes", _check_recommendation_outcomes),
+    *ANOMALY_CHECKS,
 )
 
 # 检查项中文名(异常兜底行也要有人话 label)。
@@ -627,6 +637,7 @@ _LABELS = {
     "apify_spend": "Apify 当日记账消耗/失败率",
     "failed_pool": "失败池/triage 堆积",
     "recommendation_outcomes": "推荐 outcomes 新数据",
+    **ANOMALY_LABELS,
 }
 
 
@@ -688,7 +699,8 @@ def _notify_failures(result: dict[str, Any]) -> dict[str, Any]:
             cleared = resolve_open_alert(conn, alert_key)
             if cleared:
                 conn.commit()
-            return {"notified": False, "cleared": bool(cleared), "alert_key": alert_key}
+            outbound = _outbound_clear(result, alert_key)
+            return {"notified": False, "cleared": bool(cleared), "alert_key": alert_key, "outbound": outbound}
 
         from app.domains.alerts.service import upsert_alert
 
@@ -707,10 +719,44 @@ def _notify_failures(result: dict[str, Any]) -> dict[str, Any]:
                 ensure_ascii=False,
             ),
         )
-        return {"notified": True, "cleared": False, "alert_key": alert_key, "failed": len(fails)}
+        outbound = _outbound_notify(fails, alert_key, day)
+        return {"notified": True, "cleared": False, "alert_key": alert_key, "failed": len(fails), "outbound": outbound}
     except Exception:
         logger.warning("health_sentinel: notify failed", exc_info=True)
         return {"notified": False, "cleared": False, "alert_key": alert_key, "error": "notify_failed"}
+
+
+def _outbound_notify(fails: list[dict[str, Any]], alert_key: str, day: str) -> dict[str, Any]:
+    """fail 汇总出站:key 固定(跨日连续计数才能升级),fingerprint=失败项集合(集合变了才绕过去重)。
+    出站任何异常只记日志,返回诚实的 reason,绝不影响落库。返回值永不含 URL。"""
+    failed_keys = sorted(str(c.get("key") or "") for c in fails)
+    try:
+        return alert_outbound.notify(
+            key=_OUTBOUND_KEY,
+            alert_key=alert_key,
+            rule_key=_RULE_KEY,
+            severity="danger",
+            title=f"数据健康哨兵:{len(fails)} 项黄金链路检查失败({day})",
+            body="\n".join(f"[{c.get('key')}] {c.get('label')}:{c.get('detail')}" for c in fails)[:2000],
+            fingerprint=",".join(failed_keys),
+        )
+    except Exception:
+        logger.warning("health_sentinel: outbound notify failed", exc_info=True)
+        return {"sent": False, "reason": "outbound_error", "key": _OUTBOUND_KEY}
+
+
+def _outbound_clear(result: dict[str, Any], alert_key: str) -> dict[str, Any]:
+    """全部恢复:连续计数归零;此前出站过则补发恢复通知。"""
+    summary = result.get("summary") or {}
+    try:
+        return alert_outbound.clear(
+            key=_OUTBOUND_KEY,
+            title="数据健康哨兵:黄金链路全部恢复",
+            body=f"ok {summary.get('ok', 0)} / warn {summary.get('warn', 0)} / fail 0(alert {alert_key})",
+        )
+    except Exception:
+        logger.warning("health_sentinel: outbound clear failed", exc_info=True)
+        return {"sent": False, "reason": "outbound_error", "key": _OUTBOUND_KEY}
 
 
 def run_health_sentinel(trigger: str = "manual", staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -732,6 +778,7 @@ def run_health_sentinel(trigger: str = "manual", staff: dict[str, Any] | None = 
     }
     _persist_result(result)
     result["notification"] = _notify_failures(result)
+    result["outbound_status"] = alert_outbound.outbound_status()
     logger.info(
         "health_sentinel run trigger=%s ok=%s warn=%s fail=%s",
         result["trigger"], summary["ok"], summary["warn"], summary["fail"],

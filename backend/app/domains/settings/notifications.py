@@ -1,7 +1,10 @@
 """Per-staff notification settings for V-KPI.
 
-v3 only stores preferences. No outbound email, Slack, WeChat, or in-app push is
-sent from this module.
+v3 only stores per-staff preferences; this module itself never sends email,
+Slack, WeChat, or in-app push.  System-level alert delivery now exists as a
+single webhook (``app.domains.ops.alert_outbound``: feishu / slack / generic,
+URL only in env).  ``delivery_status`` below reports that honestly — whether it
+is configured and which kind — and never exposes the URL.
 """
 from __future__ import annotations
 
@@ -10,11 +13,14 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains import audit
 from app.domains.access import scope
 from app.domains.settings.schema_notifications import ensure_vkpi_notification_settings_schema
 from app.domains.projects.workflow import staff_id as resolve_staff_id
+
+logger = get_logger(__name__)
 
 DEFAULT_NOTIFICATION_SETTINGS: dict[str, Any] = {
     "email_enabled": False,
@@ -162,8 +168,7 @@ def _row_to_payload(row: Any) -> dict[str, Any]:
         "id": int(item.get("id") or 0),
         "staff_id": int(item.get("staff_id") or 0),
         "settings": settings,
-        "delivery_enabled": False,
-        "delivery_note": "v3 only stores notification preferences; delivery is disabled.",
+        **delivery_status(),
         "updated_by_staff_id": item.get("updated_by_staff_id"),
         "created_at": item.get("created_at") or "",
         "updated_at": item.get("updated_at") or "",
@@ -273,23 +278,43 @@ def update_notification_settings(payload: dict[str, Any], *, staff: dict[str, An
     )
     conn.commit()
     updated = _ensure_row(target, actor_staff_id=actor)
+    delivery_enabled = bool(updated.get("delivery_enabled"))
     audit.log_settings_change(
         staff_id=actor,
         change_type="notification_setting",
         setting_key=f"vkpi_notification_settings:{target}",
-        old_value_redacted=_json({"staff_id": target, "delivery_enabled": False}),
+        old_value_redacted=_json({"staff_id": target, "delivery_enabled": delivery_enabled}),
         new_value_redacted=_json({"staff_id": target, "enabled_keys": _enabled_keys(updated.get("settings") or {})}),
         full_value=_json(updated.get("settings") or {}),
-        metadata={"target_staff_id": target, "delivery_enabled": False},
+        metadata={"target_staff_id": target, "delivery_enabled": delivery_enabled},
     )
     audit.log_business_event(
         staff_id=actor,
         action_type="notification_setting_update",
         target_type="staff",
         target_id=target,
-        metadata={"target_staff_id": target, "delivery_enabled": False},
+        metadata={"target_staff_id": target, "delivery_enabled": delivery_enabled},
     )
     return {"notification_settings": updated, "full_scope": scope.can_view_all(staff)}
+
+
+def delivery_status() -> dict[str, Any]:
+    """系统级出站状态(只有 configured/kind/去重窗口,永不带 URL);读不到视为未配置。"""
+    try:
+        from app.domains.ops import alert_outbound
+
+        status = alert_outbound.outbound_status()
+    except Exception:
+        logger.warning("notifications: outbound status unavailable", exc_info=True)
+        status = {"configured": False, "kind": "generic"}
+    configured = bool(status.get("configured"))
+    note = (
+        f"系统级 webhook 出站已配置(kind={status.get('kind')},同 key {status.get('dedupe_hours', 6):g}h 去重);"
+        "按人偏好仍只存储,不按人投递。"
+        if configured
+        else "未配置出站(VKPI_ALERT_WEBHOOK_URL 为空):告警只落库不投递;按人偏好只存储。"
+    )
+    return {"delivery_enabled": configured, "delivery_kind": str(status.get("kind") or "generic"), "delivery_note": note}
 
 
 def _enabled_keys(settings: dict[str, Any]) -> list[str]:
