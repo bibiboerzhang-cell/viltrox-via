@@ -1,28 +1,26 @@
 import React from "react";
 import {
   getMyKolPoolVideos,
-  type RecoverableJobStatus,
   type VkpiKolPoolVideoRow,
   type VkpiMyKolVideoPage,
 } from "../../../../services/vkpi/myKolBoard-api";
+import { isTaskActive } from "../../../../services/vkpi/myKolVideoTasks";
 
+// MY KOL 视频库读模型 hook(契约 my_kol_video_recovery_v1):
+//   · keyset 游标分页(page.next_cursor 不透明串;published_at DESC, id DESC,后台刷新不会让游标漂)
+//   · 在途恢复:页面重开即按服务端 TaskState 渲染排队/进行中/重试中;有活跃任务就按 2s 轮询已加载的
+//     每一页,全部终态即停;轮询窗封顶 90s 后暂停(pollPaused)并可手动 resume —— 绝不冒充完成
+//   · refresh():动作(追踪/刷新/深析)入队后立即重读已加载页,让 chip 以服务端持久任务态为准
 export const MY_KOL_VIDEO_PAGE_SIZE = 60;
 export const MY_KOL_RECOVERY_POLL_MS = 2_000;
 export const MY_KOL_RECOVERY_POLL_MAX_MS = 90_000;
 
-const ACTIVE_JOB_STATUSES = new Set<RecoverableJobStatus>(["queued", "running", "retrying"]);
-
 type LoadedPage = { cursor: string | null; response: VkpiMyKolVideoPage };
 
-export function isRecoverableJobActive(status: unknown): boolean {
-  return ACTIVE_JOB_STATUSES.has(String(status || "") as RecoverableJobStatus);
-}
-
 export function recoveryPageHasActiveWork(page: VkpiMyKolVideoPage | null | undefined): boolean {
-  if (isRecoverableJobActive(page?.profile_crawl?.status)) return true;
+  if (isTaskActive(page?.profile_crawl)) return true;
   return (page?.items || []).some((video) => (
-    video.final_v1?.state === "active"
-    || isRecoverableJobActive(video.metric_refresh?.latest_job?.status)
+    isTaskActive(video.tasks?.metric_refresh) || isTaskActive(video.tasks?.final_v1)
   ));
 }
 
@@ -40,14 +38,20 @@ function mergeVideos(pages: LoadedPage[]): VkpiKolPoolVideoRow[] {
   return rows;
 }
 
+function errorText(reason: unknown, fallback: string): string {
+  return String((reason as { detail?: unknown; message?: unknown })?.detail || (reason as Error)?.message || fallback).slice(0, 120);
+}
+
 export function useMyKolVideoRecovery({
   apiToken,
   kolPoolId,
   enabled = true,
+  pageSize = MY_KOL_VIDEO_PAGE_SIZE,
 }: {
   apiToken: string;
   kolPoolId: number | string | null | undefined;
   enabled?: boolean;
+  pageSize?: number;
 }) {
   const targetKey = `${apiToken}:${String(kolPoolId || "")}`;
   const generationRef = React.useRef(0);
@@ -82,6 +86,28 @@ export function useMyKolVideoRecovery({
     setPollPaused(paused);
   }, [clearTimer]);
 
+  const commitPages = React.useCallback((nextPages: LoadedPage[]) => {
+    pagesRef.current = nextPages;
+    setPages(nextPages);
+  }, []);
+
+  /** 重读已加载的每一页(同游标):动作入队后 / 轮询 tick 用;读失败不替换上一份可信页。 */
+  const rereadLoadedPages = React.useCallback(async (generation: number, key: string): Promise<boolean> => {
+    const previous = pagesRef.current;
+    if (!previous.length) return false;
+    try {
+      const refreshed = await Promise.all(previous.map(async ({ cursor }) => ({
+        cursor,
+        response: await getMyKolPoolVideos(apiToken, String(kolPoolId), pageSize, cursor),
+      })));
+      if (!current(generation, key)) return false;
+      commitPages(refreshed);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [apiToken, commitPages, current, kolPoolId, pageSize]);
+
   const schedulePolling = React.useCallback((generation: number, key: string) => {
     if (!current(generation, key) || timerRef.current || pollPausedRef.current) return;
     if (!pagesRef.current.some(({ response }) => recoveryPageHasActiveWork(response))) {
@@ -97,28 +123,10 @@ export function useMyKolVideoRecovery({
         stopPolling(true);
         return;
       }
-      const previous = pagesRef.current;
-      try {
-        const refreshed = await Promise.all(previous.map(async ({ cursor }) => ({
-          cursor,
-          response: await getMyKolPoolVideos(apiToken, String(kolPoolId), MY_KOL_VIDEO_PAGE_SIZE, cursor),
-        })));
-        if (!current(generation, key)) return;
-        const previousProfileActive = recoveryPageHasActiveWork({ profile_crawl: previous[0]?.response.profile_crawl });
-        const refreshedProfileActive = recoveryPageHasActiveWork({ profile_crawl: refreshed[0]?.response.profile_crawl });
-        // A profile crawl can insert evidence at the head and invalidate later
-        // offset cursors.  Once that exact job settles, keep the freshly read
-        // first page and let the user load subsequent pages from its new cursor.
-        const nextPages = previousProfileActive && !refreshedProfileActive ? refreshed.slice(0, 1) : refreshed;
-        pagesRef.current = nextPages;
-        setPages(nextPages);
-      } catch {
-        // A transient read failure is not a task failure; keep polling inside
-        // the bounded window without replacing the last trustworthy page.
-      }
+      await rereadLoadedPages(generation, key);
       if (current(generation, key)) schedulePollingRef.current(generation, key);
     }, MY_KOL_RECOVERY_POLL_MS);
-  }, [apiToken, current, kolPoolId, stopPolling]);
+  }, [current, rereadLoadedPages, stopPolling]);
   schedulePollingRef.current = schedulePolling;
 
   const loadInitial = React.useCallback(async () => {
@@ -131,8 +139,7 @@ export function useMyKolVideoRecovery({
     pollPausedRef.current = false;
     setPollPaused(false);
     setPolling(false);
-    pagesRef.current = [];
-    setPages([]);
+    commitPages([]);
     setError("");
     if (!enabled || !apiToken || !id) {
       setLoading(false);
@@ -140,19 +147,17 @@ export function useMyKolVideoRecovery({
     }
     setLoading(true);
     try {
-      const response = await getMyKolPoolVideos(apiToken, id, MY_KOL_VIDEO_PAGE_SIZE);
+      const response = await getMyKolPoolVideos(apiToken, id, pageSize);
       if (!current(generation, key)) return;
-      const nextPages = [{ cursor: null, response }];
-      pagesRef.current = nextPages;
-      setPages(nextPages);
+      commitPages([{ cursor: null, response }]);
       schedulePolling(generation, key);
     } catch (reason) {
       if (!current(generation, key)) return;
-      setError(String((reason as Error)?.message || "视频读取失败").slice(0, 120));
+      setError(errorText(reason, "视频读取失败"));
     } finally {
       if (current(generation, key)) setLoading(false);
     }
-  }, [apiToken, clearTimer, current, enabled, kolPoolId, schedulePolling]);
+  }, [apiToken, clearTimer, commitPages, current, enabled, kolPoolId, pageSize, schedulePolling]);
 
   React.useEffect(() => {
     void loadInitial();
@@ -164,24 +169,46 @@ export function useMyKolVideoRecovery({
 
   const loadMore = React.useCallback(async () => {
     const previous = pagesRef.current;
-    const cursor = previous[previous.length - 1]?.response.next_cursor || null;
+    const last = previous[previous.length - 1]?.response;
+    const cursor = (last?.page?.has_more ? last?.page?.next_cursor : null) || null;
     if (!cursor || loadingMore || !apiToken || !kolPoolId) return;
     const generation = generationRef.current;
     const key = targetKeyRef.current;
     setLoadingMore(true);
     try {
-      const response = await getMyKolPoolVideos(apiToken, String(kolPoolId), MY_KOL_VIDEO_PAGE_SIZE, cursor);
+      const response = await getMyKolPoolVideos(apiToken, String(kolPoolId), pageSize, cursor);
       if (!current(generation, key)) return;
-      const nextPages = [...pagesRef.current, { cursor, response }];
-      pagesRef.current = nextPages;
-      setPages(nextPages);
+      commitPages([...pagesRef.current, { cursor, response }]);
       schedulePolling(generation, key);
     } catch (reason) {
-      if (current(generation, key)) setError(String((reason as Error)?.message || "加载更多失败").slice(0, 120));
+      if (current(generation, key)) setError(errorText(reason, "加载更多失败"));
     } finally {
       if (current(generation, key)) setLoadingMore(false);
     }
-  }, [apiToken, current, kolPoolId, loadingMore, schedulePolling]);
+  }, [apiToken, commitPages, current, kolPoolId, loadingMore, pageSize, schedulePolling]);
+
+  /** 动作入队后调用:重读已加载页并按需重新起轮询(暂停态也会被新动作唤醒)。 */
+  const refresh = React.useCallback(async () => {
+    const generation = generationRef.current;
+    const key = targetKeyRef.current;
+    if (!pagesRef.current.length) {
+      await loadInitial();
+      return;
+    }
+    clearTimer();
+    pollPausedRef.current = false;
+    pollStartedAtRef.current = 0;
+    setPollPaused(false);
+    await rereadLoadedPages(generation, key);
+    if (current(generation, key)) schedulePolling(generation, key);
+  }, [clearTimer, current, loadInitial, rereadLoadedPages, schedulePolling]);
+
+  const resumePolling = React.useCallback(() => {
+    pollPausedRef.current = false;
+    pollStartedAtRef.current = 0;
+    setPollPaused(false);
+    schedulePolling(generationRef.current, targetKeyRef.current);
+  }, [schedulePolling]);
 
   const videos = React.useMemo(() => mergeVideos(pages), [pages]);
   const first = pages[0]?.response;
@@ -190,14 +217,17 @@ export function useMyKolVideoRecovery({
     videos,
     profileCrawl: first?.profile_crawl || null,
     summary: first?.summary || null,
-    total: Number(first?.total || 0),
-    hasMore: Boolean(last?.has_more && last?.next_cursor),
+    total: Number(first?.total ?? first?.summary?.total ?? 0) || 0,
+    hasMore: Boolean(last?.page?.has_more && last?.page?.next_cursor),
+    loaded: pages.length > 0,
     loading,
     loadingMore,
     error,
     polling,
     pollPaused,
     reload: loadInitial,
+    refresh,
+    resumePolling,
     loadMore,
   };
 }

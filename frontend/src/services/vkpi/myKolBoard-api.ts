@@ -1,4 +1,12 @@
 import { apiFetch, jsonBody } from "../http";
+import {
+  MY_KOL_VIDEO_RECOVERY_CONTRACT,
+  normalizeTaskState,
+  normalizeVideoTasks,
+  type VkpiTaskState,
+  type VkpiVideoPageInfo,
+  type VkpiVideoTasks,
+} from "./myKolVideoTasks";
 
 // MY KOL 板块页 · 看板扩展数据层(M3/M4):
 //   ① GET /api/admin/vkpi/my-kol/board-ext?days=30 —— 八组聚合(kpi_series/funnel/
@@ -207,14 +215,6 @@ export async function getMyKolBoardExt(token: string, params: { days?: number; s
 
 export type ContentTrackingStatus = "tracked" | "failed" | "stale" | "insufficient_history" | "unavailable";
 export type ContentFreshness = "fresh" | "stale" | "never" | "unavailable";
-export type RecoverableJobStatus = "queued" | "running" | "retrying" | "blocked" | "failed" | "done" | "not_requested";
-
-export interface VkpiRecoverableJob {
-  job_id?: number | null;
-  status: RecoverableJobStatus;
-  created_at?: string | null;
-  updated_at?: string | null;
-}
 
 export interface VkpiContentMetricAttempt {
   status?: "success" | "failed" | "legacy_current_only" | string;
@@ -282,46 +282,69 @@ export interface VkpiKolPoolVideoRow {
   /** 由服务端 evidence-product 关联表返回；只用于展示，不在前端推断产品。 */
   product_links?: VkpiKolVideoProductLink[];
   product_skus?: string[];
-  /** Durable refresh state and persisted snapshot truth are intentionally separate. */
-  metric_refresh?: {
-    latest_job?: VkpiRecoverableJob | null;
-    snapshot?: {
-      status?: ContentTrackingStatus;
-      freshness?: ContentFreshness;
-      last_attempt_at?: string | null;
-      last_success_at?: string | null;
-      sample_count?: number;
-      attempt_count?: number;
-    };
-  };
-  final_v1?: {
-    state: "ready" | "stale" | "active" | "blocked" | "failed" | "not_requested";
-    cache?: { status?: "ready" | "stale"; updated_at?: string | null } | null;
-    latest_job?: VkpiRecoverableJob | null;
-  };
+  /** 契约 my_kol_video_recovery_v1:COALESCE(publish_date, posted_at, created_at),keyset 排序键。 */
+  published_at?: string | null;
+  /** 两条持久任务(播放追踪 / 深析)的统一任务态 + 数据真值;只有 /my-kol/{id}/videos 下发,
+   *  board-ext recent_videos 缺席(null)。形状与门面文案见 services/vkpi/myKolVideoTasks.ts。 */
+  tasks?: VkpiVideoTasks | null;
 }
 
+/** GET /my-kol/{id}/videos 响应(契约 my_kol_video_recovery_v1;顶层 total/returned/has_more/next_cursor 为 page 的镜像)。 */
 export interface VkpiMyKolVideoPage {
-  items?: VkpiKolPoolVideoRow[];
+  contract?: typeof MY_KOL_VIDEO_RECOVERY_CONTRACT | string;
   kol_pool_id?: number;
-  profile_crawl?: VkpiRecoverableJob;
+  read_only?: boolean;
+  profile_crawl?: VkpiTaskState;
+  items?: VkpiKolPoolVideoRow[];
   summary?: { total?: number; views_total?: number; views_measured?: number; final_v1_ready?: number };
+  page?: VkpiVideoPageInfo;
   total?: number;
   returned?: number;
   has_more?: boolean;
   next_cursor?: string | null;
-  page_limit?: number;
-  read_only?: boolean;
 }
 
+/**
+ * 读一页视频库(keyset 游标,published_at DESC, id DESC)。cursor 只能是上一页 page.next_cursor
+ * 的不透明串;旧 offset/v2 游标服务端 400。响应里的 TaskState 已归一(缺席→未发起/不可用)。
+ */
 export async function getMyKolPoolVideos(token: string, kolPoolId: number | string, limit = 60, cursor?: string | null) {
   const query = new URLSearchParams({ limit: String(limit) });
   if (cursor) query.set("cursor", cursor);
-  return apiFetch<VkpiMyKolVideoPage>(
+  const response = await apiFetch<VkpiMyKolVideoPage>(
     `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/videos?${query.toString()}`,
     {},
     token,
   );
+  return normalizeVideoPage(response);
+}
+
+export function normalizeVideoPage(response: VkpiMyKolVideoPage | null | undefined): VkpiMyKolVideoPage {
+  const source = response && typeof response === "object" ? response : {};
+  const items = (Array.isArray(source.items) ? source.items : []).map((video) => ({
+    ...video,
+    tasks: video && typeof video === "object" && "tasks" in video ? normalizeVideoTasks((video as VkpiKolPoolVideoRow).tasks) : null,
+  }));
+  const page = source.page && typeof source.page === "object" ? source.page : null;
+  const hasMore = Boolean(page ? page.has_more : source.has_more);
+  const nextCursor = (page ? page.next_cursor : source.next_cursor) || null;
+  return {
+    ...source,
+    items,
+    profile_crawl: source.profile_crawl ? normalizeTaskState(source.profile_crawl) : undefined,
+    page: {
+      limit: Number(page?.limit ?? items.length) || items.length,
+      returned: Number(page?.returned ?? source.returned ?? items.length) || items.length,
+      has_more: hasMore && Boolean(nextCursor),
+      next_cursor: hasMore ? nextCursor : null,
+      cursor_kind: String(page?.cursor_kind || "published_at_id"),
+      order: String(page?.order || "published_at_desc_id_desc"),
+    },
+    total: Number(source.total ?? source.summary?.total ?? items.length) || 0,
+    returned: Number(source.returned ?? page?.returned ?? items.length) || items.length,
+    has_more: hasMore && Boolean(nextCursor),
+    next_cursor: hasMore ? nextCursor : null,
+  };
 }
 
 export interface VkpiMyKolVideoQueueResponse {

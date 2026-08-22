@@ -1,22 +1,29 @@
 import React from "react";
 
 import {
-  classifyVideoRow,
-  getMyKolPoolVideos,
   sortClassifiedVideos,
   summarizeKolVideos,
+  trackMyKolExistingVideo,
   type VContentTier,
   type VideoRelationFilter,
+  type VkpiKolPoolVideoRow,
   type VkpiRecentVideoItem,
   type VkpiRecentVideosGroup,
 } from "../../../../services/vkpi/myKolBoard-api";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
 import { CHIP, CHIP_OFF, CHIP_ON, MINI_BADGE, V_TIER_META } from "./MyKolBoardPage.libdetail";
 import { EmptyLine, ErrorCard, LoadingLine } from "./MarketVoicePage.modules";
+import { ReceiptLine } from "./MyKolBoardPage.receipt";
+import { RecoveryPollingLine, TrackGuideLine, VideoTaskStatus, VideoTrackActions } from "./MyKolBoardPage.video-tasks";
+import { useMyKolVideoRecovery } from "./useMyKolVideoRecovery";
+import type { FlowReceipt } from "../../pages/myKol/PoolEvidenceContent.helpers";
 
+// 内容墙(MY KOL 板面):两路真端点 —— 全部收藏 = board-ext recent_videos(聚合,封顶 60,无逐条任务态);
+//   选中单 KOL = GET /my-kol/{id}/videos(契约 my_kol_video_recovery_v1:keyset 游标「查看更多」+
+//   逐条任务态/新鲜度 + 在途轮询)。卡片「追踪播放」= POST /my-kol/{kol_pool_id}/videos(登记持久追踪 +
+//   排队抓取),共享只读由服务端判定,失败如实回执。
 const WALL_PAGE = 12;
-const WALL_KOL_VIDEOS_LIMIT = 200;
-const WALL_KOL_CACHE = new Map<number, VkpiRecentVideoItem[]>();
+const WALL_KOL_PAGE_SIZE = 24;
 
 function metricText(value: number | null | undefined): string {
   return value == null ? "未采集" : Number(value).toLocaleString();
@@ -54,17 +61,32 @@ function WallThumb({ video }: { video: VkpiRecentVideoItem }) {
   );
 }
 
-function WallVideoCard({ video, tier, fallbackKolName }: { video: VkpiRecentVideoItem; tier: VContentTier; fallbackKolName?: string }) {
+function WallVideoCard({
+  video,
+  tier,
+  fallbackKolName,
+  showTasks,
+  trackBusy,
+  onTrack,
+}: {
+  video: VkpiRecentVideoItem;
+  tier: VContentTier;
+  fallbackKolName?: string;
+  /** 单 KOL 视图(契约行带 tasks)才渲染两层任务态;聚合视图诚实提示 */
+  showTasks: boolean;
+  trackBusy: boolean;
+  onTrack?: (video: VkpiKolPoolVideoRow) => void;
+}) {
   const eid = Number(video.evidence_id ?? video.id) || 0;
   const title = String(video.title || video.video_title || "未命名视频");
   const kolName = String(video.kol_name || fallbackKolName || video.kol_handle || "—");
   const day = String(video.publish_date || video.posted_at || "").slice(0, 10);
   const meta = V_TIER_META[tier];
   const href = String(video.content_url || "");
-  const body = (
+  const top = (
     <>
       <div className="h-[92px] w-full overflow-hidden bg-card"><WallThumb video={video} /></div>
-      <div className="px-2.5 py-2">
+      <div className="px-2.5 pt-2">
         <div className="truncate text-[13px] font-medium text-ink" title={title}>{title}</div>
         <div className="mt-0.5 truncate text-[11.5px] text-muted" title="所属收藏 KOL">{kolName}</div>
         <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted">
@@ -72,20 +94,29 @@ function WallVideoCard({ video, tier, fallbackKolName }: { video: VkpiRecentVide
           <span title={video.like_count == null ? "点赞未采集" : "点赞(点时实测)"}>♥ {metricText(video.like_count)}</span>
           {day ? <span title="发布日期(平台原发布日,非采集日)">{day}</span> : null}
         </div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1">
-          <span className={`rounded-[5px] border px-1.5 py-0.5 text-[10.5px] font-bold ${meta.cls}`} title={meta.title}>{meta.label}</span>
-          {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
-          {href ? <span className="ml-auto flex-none font-mono text-[10px] text-muted transition-colors group-hover:text-accent" aria-hidden="true">原帖 ↗</span> : null}
-        </div>
       </div>
     </>
   );
-  const cardCls = "block overflow-hidden rounded-[11px] border border-line bg-panel";
-  return href ? (
-    <a key={eid} href={href} target="_blank" rel="noopener noreferrer" title="点卡直跳原帖" className={`group ${cardCls} transition-colors hover:border-accent`}>
-      {body}
-    </a>
-  ) : <div key={eid} className={cardCls} title="该条无原帖链接(采集未存 URL)">{body}</div>;
+  return (
+    <div key={eid} className="group flex flex-col overflow-hidden rounded-[11px] border border-line bg-panel transition-colors hover:border-accent" data-vkpi-wall-card={eid}>
+      {href ? (
+        <a href={href} target="_blank" rel="noopener noreferrer" title="点卡直跳原帖" className="block">{top}</a>
+      ) : <div title="该条无原帖链接(采集未存 URL)">{top}</div>}
+      <div className="px-2.5 pb-2">
+        {showTasks ? <VideoTaskStatus tasks={video.tasks} compact /> : null}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          <span className={`rounded-[5px] border px-1.5 py-0.5 text-[10.5px] font-bold ${meta.cls}`} title={meta.title}>{meta.label}</span>
+          {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
+          {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="ml-auto flex-none font-mono text-[10px] text-muted transition-colors hover:text-accent" title="直跳原帖">原帖 ↗</a> : null}
+        </div>
+        {onTrack ? (
+          <div className="mt-1.5 flex flex-wrap items-center gap-1" data-vkpi-track-actions="">
+            <VideoTrackActions video={video} busy={trackBusy} onTrack={onTrack} />
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 export function ContentWallModule({
@@ -101,48 +132,60 @@ export function ContentWallModule({
   const [relationFilter, setRelationFilter] = React.useState<VideoRelationFilter>("all");
   const [sortBy, setSortBy] = React.useState<"time" | "views">("time");
   const [visible, setVisible] = React.useState(WALL_PAGE);
-  const [kolRows, setKolRows] = React.useState<VkpiRecentVideoItem[] | null>(null);
-  const [kolBusy, setKolBusy] = React.useState(false);
-  const [kolError, setKolError] = React.useState("");
+  // 单 KOL 视图走契约读模型:keyset 游标 + 逐条任务态 + 在途轮询(kolId=0 时 hook 禁用,零请求)
+  const recovery = useMyKolVideoRecovery({ apiToken, kolPoolId: kolId || null, enabled: kolId > 0, pageSize: WALL_KOL_PAGE_SIZE });
+  const [trackBusy, setTrackBusy] = React.useState<Set<number>>(new Set());
+  const [trackReceipt, setTrackReceipt] = React.useState<FlowReceipt | null>(null);
 
   React.useEffect(() => setVisible(WALL_PAGE), [kolId, relationFilter, sortBy]);
-  React.useEffect(() => {
-    if (!apiToken || !kolId) {
-      setKolRows(null);
-      setKolError("");
-      return;
-    }
-    const cached = WALL_KOL_CACHE.get(kolId);
-    if (cached) {
-      setKolRows(cached);
-      setKolError("");
-      return;
-    }
-    let alive = true;
-    setKolBusy(true);
-    setKolError("");
-    setKolRows(null);
-    getMyKolPoolVideos(apiToken, kolId, WALL_KOL_VIDEOS_LIMIT)
-      .then((response) => {
-        if (!alive) return;
-        const items = (Array.isArray(response.items) ? response.items : []) as VkpiRecentVideoItem[];
-        WALL_KOL_CACHE.set(kolId, items);
-        setKolRows(items);
-      })
-      .catch((error: unknown) => {
-        if (alive) setKolError(String((error as { detail?: unknown; message?: unknown })?.detail || (error as Error)?.message || "读取失败").slice(0, 120));
-      })
-      .finally(() => { if (alive) setKolBusy(false); });
-    return () => { alive = false; };
-  }, [apiToken, kolId]);
+  React.useEffect(() => setTrackReceipt(null), [kolId]);
 
   const kolName = React.useMemo(() => kolOptions.find((option) => option.poolId === kolId)?.name || "", [kolOptions, kolId]);
-  const baseItems: VkpiRecentVideoItem[] = kolId ? kolRows || [] : Array.isArray(group.items) ? group.items : [];
+  const kolBusy = kolId > 0 && recovery.loading && !recovery.loaded;
+  const kolError = kolId > 0 ? recovery.error : "";
+  const baseItems: VkpiRecentVideoItem[] = kolId ? (recovery.videos as VkpiRecentVideoItem[]) : Array.isArray(group.items) ? group.items : [];
   const summary = React.useMemo(() => summarizeKolVideos(baseItems), [baseItems]);
   const shown = React.useMemo(
     () => sortClassifiedVideos(summary.classified, relationFilter, sortBy),
     [summary.classified, relationFilter, sortBy],
   );
+  const clientPaged = !kolId;
+  const visibleRows = clientPaged ? shown.slice(0, visible) : shown;
+
+  // 卡片「追踪播放」:POST /my-kol/{kol_pool_id}/videos(登记持久追踪 + 排队抓取);只排队不冒充完成。
+  const trackVideo = async (video: VkpiKolPoolVideoRow) => {
+    const eid = Number(video.evidence_id ?? video.id) || 0;
+    const poolId = Number(video.kol_pool_id) || kolId;
+    const url = String(video.content_url || "").trim();
+    if (!apiToken || !eid || !poolId || !url || trackBusy.has(eid)) return;
+    setTrackBusy((prev) => new Set(prev).add(eid));
+    setTrackReceipt(null);
+    try {
+      const resp = await trackMyKolExistingVideo(apiToken, poolId, { contentUrl: url });
+      const status = String(resp?.status || "");
+      if (status !== "queued" && status !== "already_queued") {
+        setTrackReceipt({ text: `追踪请求未获服务端确认：${status || "未知状态"}`, tone: "error" });
+        return;
+      }
+      setTrackReceipt({
+        text: `${status === "already_queued" ? "该视频已在追踪队列中" : "已登记追踪并排队抓取"}（#${eid}）${kolId ? ";下方状态会自动同步" : ";选中该 KOL 或打开 KOL 详情可看进度"}。`,
+        tone: "info",
+      });
+      if (kolId) void recovery.refresh();
+    } catch (error) {
+      const code = String((error as { detail?: unknown; message?: unknown })?.detail || (error as Error)?.message || "");
+      const text = code === "my_kol_paid_action_write_forbidden"
+        ? "共享 KOL 仅可查看,请由收藏负责人发起追踪。"
+        : code === "new_video_target_resolution_required"
+          ? "当前仅支持已采集视频,请先账号补采/深爬后重试。"
+          : code === "video_metric_platform_unsupported"
+            ? "该平台暂不支持播放追踪。"
+            : `追踪失败：${code.slice(0, 80) || "请重试"}`;
+      setTrackReceipt({ text, tone: "error" });
+    } finally {
+      setTrackBusy((prev) => { const next = new Set(prev); next.delete(eid); return next; });
+    }
+  };
 
   return (
     <div>
@@ -170,20 +213,44 @@ export function ContentWallModule({
           <button type="button" className={`${CHIP} ${sortBy === "views" ? CHIP_ON : CHIP_OFF}`} onClick={() => setSortBy("views")}>播放</button>
         </span>
       </div>
+      <div className="mb-2"><TrackGuideLine compact /></div>
+      <ReceiptLine msg={trackReceipt} />
       {kolError ? <ErrorCard title="按 KOL 读取失败" text={kolError} />
-        : kolId && kolBusy && !kolRows ? <LoadingLine text={`${kolName || "该 KOL"} 已采集内容读取中…`} />
+        : kolBusy ? <LoadingLine text={`${kolName || "该 KOL"} 已采集内容读取中…`} />
         : baseItems.length === 0 ? <EmptyLine text={kolId ? `${kolName || "该 KOL"} 暂无已采集内容——可在KOL详情发起补采。` : "暂无已采集内容——可在KOL详情发起补采。"} />
         : shown.length === 0 ? <EmptyLine text="当前筛选没有内容，可切回“全部已采集”或继续补采。" />
         : (
           <div>
             <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-4">
-              {shown.slice(0, visible).map(({ video, tier }) => <WallVideoCard key={Number(video.evidence_id ?? video.id) || 0} video={video} tier={tier} fallbackKolName={kolId ? kolName : undefined} />)}
+              {visibleRows.map(({ video, tier }) => (
+                <WallVideoCard
+                  key={Number(video.evidence_id ?? video.id) || 0}
+                  video={video}
+                  tier={tier}
+                  fallbackKolName={kolId ? kolName : undefined}
+                  showTasks={kolId > 0}
+                  trackBusy={trackBusy.has(Number(video.evidence_id ?? video.id) || 0)}
+                  onTrack={apiToken ? trackVideo : undefined}
+                />
+              ))}
             </div>
-            {shown.length > visible ? (
+            {clientPaged && shown.length > visible ? (
               <button type="button" onClick={() => setVisible((value) => value + WALL_PAGE)} className="mt-2 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft">
                 ≡ 查看更多（已显 {Math.min(visible, shown.length)} / 当前已采集 {shown.length}）
               </button>
             ) : null}
+            {!clientPaged && recovery.hasMore ? (
+              <button
+                type="button"
+                onClick={() => { void recovery.loadMore(); }}
+                disabled={recovery.loadingMore}
+                className="mt-2 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft disabled:cursor-default disabled:text-muted"
+                title="按发布时间游标读取下一页(后台刷新不会打乱顺序)"
+              >
+                {recovery.loadingMore ? "读取中…" : `≡ 查看更多（已加载 ${baseItems.length}${recovery.total ? ` / 共 ${recovery.total}` : ""}）`}
+              </button>
+            ) : null}
+            {kolId ? <RecoveryPollingLine polling={recovery.polling} paused={recovery.pollPaused} onResume={recovery.resumePolling} /> : null}
           </div>
         )}
     </div>

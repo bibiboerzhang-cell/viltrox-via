@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 // MY KOL 内容墙模块冒烟(contentWall · 2026-07-12)。
 // 主冒烟文件(MyKolBoardPage.smoke.test.tsx)对 recent_videos 恒喂诚实 empty ——
@@ -64,7 +64,7 @@ const KOL_VIDEOS: Record<string, unknown[]> = {
 };
 
 function routeApi(overrides: { boardExt?: unknown } = {}) {
-  apiFetchMock.mockReset().mockImplementation(async (path: unknown) => {
+  apiFetchMock.mockReset().mockImplementation(async (path: unknown, init?: unknown) => {
     const p = String(path);
     if (p.startsWith("/api/admin/vkpi/my-kol/aggregate")) return AGG;
     if (p.startsWith("/api/admin/vkpi/my-kol/board-ext")) {
@@ -73,14 +73,35 @@ function routeApi(overrides: { boardExt?: unknown } = {}) {
       return value;
     }
     if (p.startsWith("/api/marketing/channels/official-matrix")) return MATRIX;
+    const trackMatch = p.match(/\/api\/admin\/vkpi\/my-kol\/(\d+)\/videos$/);
+    if (trackMatch && (init as RequestInit | undefined)?.method === "POST") {
+      TRACK_CALLS.push({ poolId: Number(trackMatch[1]), body: JSON.parse(String((init as RequestInit).body)) });
+      if (Number(trackMatch[1]) === 102) throw Object.assign(new Error("my_kol_paid_action_write_forbidden"), { detail: "my_kol_paid_action_write_forbidden", status: 403 });
+      TRACKED.add(Number(TRACK_CALLS[TRACK_CALLS.length - 1].body.content_url === "https://youtu.be/a1" ? 9001 : 0));
+      return { status: "queued", evidence_id: 9001, job_id: 77 };
+    }
     const videosMatch = p.match(/\/api\/admin\/vkpi\/(?:kol-pool|my-kol)\/(\d+)\/videos(?:\?|$)/);
     if (videosMatch) {
-      const items = KOL_VIDEOS[videosMatch[1]] || [];
-      return { items, total: items.length, kol_pool_id: Number(videosMatch[1]) };
+      const items = (KOL_VIDEOS[videosMatch[1]] || []).map((row) => ({
+        ...row,
+        tasks: {
+          metric_refresh: TRACKED.has(Number(row.evidence_id))
+            ? { status: "queued", job_id: 77, requested_at: "2026-08-21T10:00:00Z", data: { status: "none", freshness: "never", updated_at: null, superseded_by_job: false } }
+            : { status: "not_requested", job_id: null, data: { status: "none", freshness: "never", updated_at: null, superseded_by_job: false } },
+          final_v1: { status: "not_requested", job_id: null, data: { status: "none", freshness: "never", updated_at: null, superseded_by_job: false } },
+        },
+      }));
+      return {
+        contract: "my_kol_video_recovery_v1", kol_pool_id: Number(videosMatch[1]), read_only: true, items,
+        summary: { total: items.length, views_total: 0, views_measured: 0, final_v1_ready: 0 },
+        page: { limit: 24, returned: items.length, has_more: false, next_cursor: null, cursor_kind: "published_at_id", order: "published_at_desc_id_desc" },
+      };
     }
     throw new Error(`unexpected apiFetch: ${p}`);
   });
 }
+const TRACK_CALLS: Array<{ poolId: number; body: { content_url: string; product_skus: string[] } }> = [];
+const TRACKED = new Set<number>();
 
 // 预置布局只挂内容墙(布局键 v2);matrix hook 有按 token 分键的模块级缓存 → 固定独立 token
 const renderWall = () => {
@@ -93,6 +114,8 @@ const wallTitles = () => wallCards().map((el) => (el.querySelector("div.truncate
 
 beforeEach(() => {
   window.localStorage.clear();
+  TRACK_CALLS.length = 0;
+  TRACKED.clear();
   routeApi();
 });
 
@@ -206,6 +229,33 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "0" } });
     expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
     expect(calls().length).toBe(before);
+  });
+
+  it("员工反馈 #5:卡片「追踪播放」入口 + 引导文案;入队后单 KOL 视图按服务端任务态显示「播放追踪排队中」;共享只读如实回执", async () => {
+    renderWall();
+    expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
+    // 引导一句在工具行下方,员工第一眼可见;聚合视图无逐条任务态 → 诚实不摆假「未发起」
+    expect(screen.getByText("想追踪某条视频的播放?")).toBeTruthy();
+    expect(screen.queryByText(/播放追踪未发起/)).toBeNull();
+    // 聚合视图也能追踪(行带 kol_pool_id);入队只报排队,不冒充完成
+    const trackButtons = screen.getAllByRole("button", { name: "追踪播放" });
+    expect(trackButtons.length).toBeGreaterThan(0);
+    fireEvent.click(trackButtons[0]);
+    await waitFor(() => expect(TRACK_CALLS).toHaveLength(1));
+    expect(TRACK_CALLS[0]).toEqual({ poolId: 101, body: { content_url: "https://youtu.be/w1", product_skus: [] } });
+    expect(await screen.findByRole("status")).toHaveTextContent(/已登记追踪并排队抓取/);
+
+    // 切到单 KOL:契约行带 tasks → 两层状态;再点追踪 → refresh 后 chip 读服务端「排队中」并禁用按钮
+    fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "101" } });
+    expect(await screen.findByText("On set with the new lens")).toBeTruthy();
+    expect(screen.getAllByText("播放追踪未发起").length).toBeGreaterThan(0);
+    const card = screen.getByText("On set with the new lens").closest("[data-vkpi-wall-card]") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "追踪播放" }));
+    await waitFor(() => expect(TRACK_CALLS).toHaveLength(2));
+    expect(await within(card).findByText("播放追踪排队中")).toBeTruthy();
+    expect(within(card).getByRole("button", { name: "追踪进行中" })).toBeDisabled();
+    expect(card.querySelector("[data-vkpi-task-status='queued']")).not.toBeNull();
+    expect(screen.getByText(/每 2 秒同步一次状态/)).toBeTruthy();
   });
 
   it("组失败/组空诚实降级:error → 该组聚合失败卡(带 reason);empty → 板面空态文案", async () => {

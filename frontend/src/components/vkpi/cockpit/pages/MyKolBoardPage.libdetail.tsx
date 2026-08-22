@@ -17,6 +17,8 @@ import {
   type VideoRelationFilter,
   type VkpiKolPoolVideoRow,
 } from "../../../../services/vkpi/myKolBoard-api";
+import { isTaskActive } from "../../../../services/vkpi/myKolVideoTasks";
+import { TrackGuideLine, VideoTaskStatus, VideoTrackActions } from "./MyKolBoardPage.video-tasks";
 import type { VkpiProjectRow } from "../../vkpiTypes";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
 
@@ -109,13 +111,16 @@ export function useKolEvidenceStats(apiToken: string, poolIds: number[]): Readon
         const id = queue.shift();
         if (id == null) return;
         try {
+          // 行级统计只读首页(200 条上限);总数/播放合计/实测数/深析数优先吃服务端 summary
+          // (契约 my_kol_video_recovery_v1 全库口径),首页不足以代表全库时不再少报。
           const resp = await getMyKolPoolVideos(apiToken, id, 200);
           const s = summarizeKolVideos(Array.isArray(resp.items) ? resp.items : []);
+          const summary = resp.summary && typeof resp.summary === "object" ? resp.summary : null;
           STATS_CACHE.set(id, {
-            videoCount: s.classified.length,
-            viewsTotal: s.viewsTotal,
-            measuredCount: s.measuredCount,
-            analyzedCount: s.analyzedCount,
+            videoCount: Number(summary?.total ?? s.classified.length) || 0,
+            viewsTotal: Number(summary?.views_total ?? s.viewsTotal) || 0,
+            measuredCount: Number(summary?.views_measured ?? s.measuredCount) || 0,
+            analyzedCount: Number(summary?.final_v1_ready ?? s.analyzedCount) || 0,
           });
         } catch {
           /* 失败不缓存:行保持 …(下次可见重试),绝不编数 */
@@ -292,6 +297,14 @@ export function KolVideoSection({
   refreshingEvidence = new Set<number>(),
   queuedRefreshEvidence = new Set<number>(),
   onRefreshMetrics,
+  trackingEvidence = new Set<number>(),
+  onTrackVideo,
+  onLinkSku,
+  hasMore = false,
+  loadingMore = false,
+  onLoadMore,
+  total,
+  showGuide = true,
   paidActionsReadOnly = false,
   paidActionsReadOnlyHint = "共享 KOL 仅可查看，请由收藏负责人或管理层发起。",
 }: {
@@ -305,6 +318,17 @@ export function KolVideoSection({
   refreshingEvidence?: ReadonlySet<number>;
   queuedRefreshEvidence?: ReadonlySet<number>;
   onRefreshMetrics?: (video: VkpiKolPoolVideoRow) => void;
+  /** 员工反馈 #5:卡片级「追踪播放」/「关联 SKU」入口(提交中的 evidence id 由 dialogs 持有) */
+  trackingEvidence?: ReadonlySet<number>;
+  onTrackVideo?: (video: VkpiKolPoolVideoRow) => void;
+  onLinkSku?: (video: VkpiKolPoolVideoRow) => void;
+  /** keyset 游标「加载更多」(契约 page.next_cursor;服务端 published_at DESC, id DESC) */
+  hasMore?: boolean;
+  loadingMore?: boolean;
+  onLoadMore?: () => void;
+  /** 服务端 summary.total(已加载 N / 共 M 诚实计数) */
+  total?: number;
+  showGuide?: boolean;
   paidActionsReadOnly?: boolean;
   paidActionsReadOnlyHint?: string;
 }) {
@@ -373,6 +397,7 @@ export function KolVideoSection({
           ))}
         </span>
       </div>
+      {showGuide && onTrackVideo ? <div className="mb-2"><TrackGuideLine /></div> : null}
       {shown.length === 0 ? (
         <div className="px-3 py-4 text-center text-[12.5px] leading-5 text-muted">该筛选下没有已采集内容。可切回“全部已采集”或发起补采。</div>
       ) : (
@@ -399,6 +424,7 @@ export function KolVideoSection({
                     <span title={video.share_count == null ? "分享未采集" : "分享(点时实测)"}>⤴ {video.share_count != null ? Number(video.share_count).toLocaleString() : "未采集"}</span>
                   </div>
                   <VideoTrendLine video={video} />
+                  <VideoTaskStatus tasks={video.tasks} />
                   {productSkus.length ? (
                     <div className="mt-1 flex flex-wrap items-center gap-1" aria-label="该视频关联产品 SKU">
                       {productSkus.map((sku) => (
@@ -446,20 +472,43 @@ export function KolVideoSection({
                       <button
                         type="button"
                         className="inline-flex min-h-8 items-center rounded-lg border border-line px-2 py-1 text-[10.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default"
-                        disabled={paidActionsReadOnly || refreshingEvidence.has(eid) || queuedRefreshEvidence.has(eid)}
-                        title={paidActionsReadOnly ? paidActionsReadOnlyHint : "把该条播放指标刷新加入后台队列；页面不会把排队状态称为实时结果"}
+                        disabled={paidActionsReadOnly || refreshingEvidence.has(eid) || queuedRefreshEvidence.has(eid) || isTaskActive(video.tasks?.metric_refresh)}
+                        title={paidActionsReadOnly ? paidActionsReadOnlyHint : isTaskActive(video.tasks?.metric_refresh) ? "后台已有追踪任务在跑;完成后可再刷新" : "把该条播放指标刷新加入后台队列；页面不会把排队状态称为实时结果"}
                         onClick={() => onRefreshMetrics(video)}
                       >
-                        {queuedRefreshEvidence.has(eid) ? "指标刷新已排队" : refreshingEvidence.has(eid) ? "排队中…" : "刷新指标"}
+                        {queuedRefreshEvidence.has(eid) || isTaskActive(video.tasks?.metric_refresh) ? "指标刷新已排队" : refreshingEvidence.has(eid) ? "排队中…" : "刷新指标"}
                       </button>
                     ) : null}
                   </div>
+                  {onTrackVideo || onLinkSku ? (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-1" data-vkpi-track-actions="">
+                      <VideoTrackActions
+                        video={video}
+                        busy={trackingEvidence.has(eid)}
+                        readOnly={paidActionsReadOnly}
+                        readOnlyHint={paidActionsReadOnlyHint}
+                        onTrack={onTrackVideo}
+                        onLinkSku={onLinkSku}
+                      />
+                    </div>
+                  ) : null}
                 </div>
               </div>
             );
           })}
         </div>
       )}
+      {onLoadMore && hasMore ? (
+        <button
+          type="button"
+          onClick={onLoadMore}
+          disabled={loadingMore}
+          className="mt-2 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft disabled:cursor-default disabled:text-muted"
+          title="按发布时间游标继续读取下一页(后台刷新不会打乱顺序)"
+        >
+          {loadingMore ? "读取中…" : `≡ 加载更多（已加载 ${videos.length}${total ? ` / 共 ${total}` : ""}）`}
+        </button>
+      ) : null}
       {recEvidence ? <RecordPreview title="库记录预览 · 点其他 #id 切换" rows={videoRecordRows(recEvidence)} /> : null}
     </div>
   );

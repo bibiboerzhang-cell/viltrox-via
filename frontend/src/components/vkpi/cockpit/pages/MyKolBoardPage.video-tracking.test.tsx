@@ -166,7 +166,72 @@ describe("KolVideoSection product and refresh controls", () => {
   });
 });
 
+describe("KolVideoSection task-state facade (my_kol_video_recovery_v1)", () => {
+  const task = (status: string, data: Record<string, unknown> = {}) => ({
+    status, job_id: status === "not_requested" ? null : 9, requested_at: "2026-08-21T10:00:00Z", updated_at: "2026-08-21T10:01:00Z",
+    data: { status: "none", freshness: "never", updated_at: null, superseded_by_job: false, ...data },
+  });
+  const base = { queuedEvidence: new Set<number>(), busyKeys: new Set<string>(), onEnqueueOne: vi.fn() };
+
+  it("renders two layers per video: task chip + data freshness, and marks superseded old results honestly", () => {
+    const videos = [
+      { ...video(901), tasks: { metric_refresh: task("running", { status: "ready", freshness: "stale", updated_at: "2026-08-01T00:00:00Z", superseded_by_job: true }), final_v1: task("blocked") } },
+      { ...video(902), tasks: { metric_refresh: task("failed", { attempt_count: 2 }), final_v1: task("ready", { status: "ready", freshness: "fresh", updated_at: new Date().toISOString() }) } },
+      { ...video(903), tasks: null },
+    ] as VkpiKolPoolVideoRow[];
+    render(<KolVideoSection {...base} videos={videos} onTrackVideo={vi.fn()} onLinkSku={vi.fn()} />);
+
+    expect(screen.getByText("重测中 · 上次结果可见")).toBeInTheDocument();
+    expect(screen.getByText(/^已过期 · 上次实测/)).toBeInTheDocument();
+    expect(screen.getByText("深析已阻断")).toHaveAttribute("title", expect.stringContaining("需人工处理"));
+    expect(screen.getByText("播放追踪失败")).toHaveAttribute("title", expect.stringContaining("已尝试 2 次"));
+    expect(screen.getByText("深析已完成")).toBeInTheDocument();
+    expect(screen.getByText("分析于 刚刚")).toBeInTheDocument();
+    expect(screen.getByText("任务状态见单 KOL 视图")).toBeInTheDocument();
+    // 进行中的那条:追踪按钮禁用并标「追踪进行中」,刷新指标同样禁用;失败那条可再发起
+    expect(screen.getByRole("button", { name: "追踪进行中" })).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: "追踪播放" }).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("想追踪某条视频的播放?")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/final_v1|apify|job_id/);
+  });
+
+  it("exposes the keyset load-more with honest counts", () => {
+    const onLoadMore = vi.fn();
+    render(<KolVideoSection {...base} videos={[video(901)]} hasMore loadingMore={false} onLoadMore={onLoadMore} total={120} />);
+    const more = screen.getByRole("button", { name: /加载更多（已加载 1 \/ 共 120）/ });
+    fireEvent.click(more);
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("KolDetailModal existing-video tracking", () => {
+  it("card-level 追踪播放 posts the card URL with no SKU, then re-reads the library so chips follow the server", async () => {
+    installDialogRoutes();
+    renderDetail();
+    await screen.findByText("Video 901");
+    const readsBefore = apiFetchMock.mock.calls.filter(([path]) => String(path).includes("/my-kol/101/videos?")).length;
+    fireEvent.click(screen.getByRole("button", { name: "追踪播放" }));
+    await waitFor(() => {
+      const call = apiFetchMock.mock.calls.find(([path, init]) => String(path) === "/api/admin/vkpi/my-kol/101/videos" && (init as RequestInit)?.method === "POST");
+      expect(JSON.parse(String((call?.[1] as RequestInit)?.body))).toEqual({ content_url: "https://www.youtube.com/watch?v=video901", product_skus: [] });
+    });
+    expect((await screen.findAllByText(/指标刷新已排队/)).length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(apiFetchMock.mock.calls.filter(([path]) => String(path).includes("/my-kol/101/videos?")).length).toBeGreaterThan(readsBefore);
+    });
+  });
+
+  it("card-level 关联 SKU prefills the form URL and moves focus to the SKU input", async () => {
+    installDialogRoutes();
+    renderDetail();
+    await screen.findByText("Video 901");
+    fireEvent.click(screen.getByRole("button", { name: "关联 SKU" }));
+    expect(screen.getByLabelText("已有视频 URL")).toHaveValue("https://www.youtube.com/watch?v=video901");
+    expect(screen.getByRole("status")).toHaveTextContent("填入 SKU 后点「追踪并排队刷新」");
+    await waitFor(() => expect(screen.getByLabelText("关联产品 SKU")).toHaveFocus());
+  });
+
+
   it("keeps the submit target disabled until a URL exists and exposes a direct account-crawl recovery path", async () => {
     installDialogRoutes();
     renderDetail();

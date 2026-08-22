@@ -3,7 +3,6 @@ import { SrcChip } from "../components/provenance";
 import { formatLocal } from "../../lib/timeLocal";
 import { ModalShell, SectionLabel, platformBadge } from "./MarketVoicePage.dialogs";
 import {
-  getMyKolPoolVideos,
   refreshMyKolVideoMetrics,
   summarizeKolVideos,
   trackMyKolExistingVideo,
@@ -11,6 +10,10 @@ import {
   type LibraryFilter,
   type VkpiKolPoolVideoRow,
 } from "../../../../services/vkpi/myKolBoard-api";
+import { ReceiptLine } from "./MyKolBoardPage.receipt";
+import { TrackExistingVideoForm } from "./MyKolBoardPage.track-form";
+import { RecoveryPollingLine } from "./MyKolBoardPage.video-tasks";
+import { useMyKolVideoRecovery } from "./useMyKolVideoRecovery";
 import {
   CHIP,
   CHIP_OFF,
@@ -53,20 +56,7 @@ const MORE_BTN =
   "mt-2.5 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft";
 const FIELD = "min-h-9 rounded-lg border border-line bg-card px-3 py-1.5 text-[11.5px] text-ink-2 outline-none focus:border-accent";
 
-function toneCls(tone: FlowReceipt["tone"]): string {
-  if (tone === "error") return "border-crit bg-crit-soft text-crit";
-  if (tone === "ok") return "border-good bg-good-soft text-good";
-  return "border-info bg-info-soft text-info";
-}
-
-export function ReceiptLine({ msg }: { msg: FlowReceipt | null }) {
-  if (!msg) return null;
-  return (
-    <div role={msg.tone === "error" ? "alert" : "status"} className={`mt-2 rounded-lg border px-3 py-2 text-[12px] leading-5 ${toneCls(msg.tone)}`}>
-      {msg.text}
-    </div>
-  );
-}
+export { ReceiptLine } from "./MyKolBoardPage.receipt";
 
 const errText = (err: unknown, fallback: string) =>
   String((err as { detail?: unknown; message?: unknown })?.detail || (err as Error)?.message || fallback).slice(0, 100);
@@ -490,20 +480,11 @@ export function KolDetailModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [index, onNav]);
 
-  // 视频区取数:GET /kol-pool/{id}/videos(当前已采集 evidence 窗口,limit 200)。
-  const [videos, setVideos] = React.useState<VkpiKolPoolVideoRow[] | null>(null);
-  const [videosError, setVideosError] = React.useState("");
-  const [videosTick, setVideosTick] = React.useState(0);
-  React.useEffect(() => {
-    if (!apiToken || !item?.poolId) return;
-    let alive = true;
-    setVideos(null);
-    setVideosError("");
-    getMyKolPoolVideos(apiToken, item.poolId, 200)
-      .then((resp) => { if (alive) setVideos(Array.isArray(resp.items) ? resp.items : []); })
-      .catch((err: unknown) => { if (!alive) return; setVideos([]); setVideosError(errText(err, "视频读取失败")); });
-    return () => { alive = false; };
-  }, [apiToken, item?.poolId, videosTick]);
+  // 视频区取数:GET /my-kol/{id}/videos(契约 my_kol_video_recovery_v1;keyset 游标分页 + 在途任务轮询)。
+  //   动作入队后 recovery.refresh() 重读已加载页,卡面 chip 以服务端持久任务态为准(页面重开同样恢复)。
+  const recovery = useMyKolVideoRecovery({ apiToken, kolPoolId: item?.poolId });
+  const videos: VkpiKolPoolVideoRow[] | null = recovery.loading && !recovery.loaded ? null : recovery.videos;
+  const videosError = recovery.error;
 
   // 观看者上下文(认领真值):GET /my-kol/{id}/viewer-context —— 释放按钮据 can_release;
   // 读取失败 → 释放按钮保持不可用(诚实降级,不猜)。
@@ -534,10 +515,12 @@ export function KolDetailModal({
   const [trackBusy, setTrackBusy] = React.useState(false);
   const [refreshingEvidence, setRefreshingEvidence] = React.useState<Set<number>>(new Set());
   const [queuedRefreshEvidence, setQueuedRefreshEvidence] = React.useState<Set<number>>(new Set());
+  const [trackingEvidence, setTrackingEvidence] = React.useState<Set<number>>(new Set());
+  const skuInputRef = React.useRef<HTMLInputElement | null>(null);
   React.useEffect(() => {
     setMsgs({}); setQueuedEvidence(new Set()); setProjId("");
     setTrackUrl(""); setTrackSkuInput(""); setTrackBusy(false);
-    setRefreshingEvidence(new Set()); setQueuedRefreshEvidence(new Set());
+    setRefreshingEvidence(new Set()); setQueuedRefreshEvidence(new Set()); setTrackingEvidence(new Set());
   }, [item?.poolId]);
   const setMsg = (key: string, msg: FlowReceipt | null) => setMsgs((prev) => ({ ...prev, [key]: msg }));
   const setBusy = (key: string, on: boolean) =>
@@ -552,26 +535,30 @@ export function KolDetailModal({
     });
     return [...unique.entries()].map(([url, video]) => ({ url, video }));
   }, [videos]);
-  const selectedCollectedUrl = collectedUrlVideos.some((choice) => choice.url === trackUrl) ? trackUrl : "";
   // 汇总口径与视频网格住 libdetail(KolVideoSection);这里只留动作排要用的未析清单。
   const { unanalyzed } = React.useMemo(() => summarizeKolVideos(loaded), [loaded]);
   const paidActionsReadOnly = Boolean(item.isShared || (viewer && !viewer.canPaidActions));
   const paidActionsReadOnlyHint = "共享 KOL 仅可查看；视频追踪、指标刷新、深析、评论采集和受众画像请由收藏负责人或管理层发起。";
 
-  const runTrackVideo = async () => {
-    if (!apiToken || !poolId || trackBusy || paidActionsReadOnly) return;
-    const contentUrl = trackUrl.trim();
+  // 追踪已有视频:表单提交(URL + SKU)与卡片「追踪播放」(直接带卡 URL,零 SKU)同一条真端点
+  //   POST /my-kol/{id}/videos —— 登记持久追踪 + 排队抓取;成功后 recovery.refresh() 让卡面 chip
+  //   读服务端任务态(排队中 → 进行中 → 已完成/失败),不靠本地乐观态冒充。
+  const runTrackVideo = async (direct?: { video: VkpiKolPoolVideoRow }) => {
+    if (!apiToken || !poolId || paidActionsReadOnly) return;
+    const cardEid = direct ? Number(direct.video.evidence_id ?? direct.video.id) || 0 : 0;
+    if (direct ? trackingEvidence.has(cardEid) : trackBusy) return;
+    const contentUrl = direct ? String(direct.video.content_url || "").trim() : trackUrl.trim();
     if (!contentUrl) {
-      setMsg("tracking", { text: "请先填写已采集视频 URL。", tone: "error" });
+      setMsg("tracking", { text: direct ? "该条未存原帖 URL,无法追踪;请先补采账号内容。" : "请先填写已采集视频 URL。", tone: "error" });
       return;
     }
-    const productSkus = parseProductSkus(trackSkuInput);
+    const productSkus = direct ? [] : parseProductSkus(trackSkuInput);
     if (productSkus.length > 5) {
       setMsg("tracking", { text: "一次最多关联 5 个产品 SKU。", tone: "error" });
       return;
     }
     const target = { ...targetRef.current };
-    setTrackBusy(true);
+    if (direct) setTrackingEvidence((prev) => new Set(prev).add(cardEid)); else setTrackBusy(true);
     setMsg("tracking", null);
     try {
       const resp = await trackMyKolExistingVideo(apiToken, target.poolId, { contentUrl, productSkus });
@@ -581,20 +568,38 @@ export function KolDetailModal({
         setMsg("tracking", { text: `追踪请求未获服务端确认：${status || "未知状态"}`, tone: "error" });
         return;
       }
-      const eid = Number(resp?.evidence_id) || 0;
+      const eid = Number(resp?.evidence_id) || cardEid || 0;
       if (eid > 0) setQueuedRefreshEvidence((prev) => new Set(prev).add(eid));
       setMsg("tracking", {
         text: `${status === "already_queued" ? "该视频的指标刷新已在队列中" : "指标刷新已排队"}${eid ? `（evidence #${eid}）` : ""}${productSkus.length ? ` · 已提交 ${productSkus.length} 个 SKU 关联` : ""}。`,
         tone: "info",
       });
-      setTrackUrl("");
-      setTrackSkuInput("");
-      setVideosTick((tick) => tick + 1);
+      if (!direct) {
+        setTrackUrl("");
+        setTrackSkuInput("");
+      }
+      void recovery.refresh();
     } catch (err) {
       if (targetIsCurrent(target)) setMsg("tracking", { text: videoWriteError(err, "追踪"), tone: "error" });
     } finally {
-      if (targetIsCurrent(target)) setTrackBusy(false);
+      if (targetIsCurrent(target)) {
+        if (direct) setTrackingEvidence((prev) => { const next = new Set(prev); next.delete(cardEid); return next; });
+        else setTrackBusy(false);
+      }
     }
+  };
+  // 卡片「关联 SKU」:把该卡 URL 填进表单并把焦点送到 SKU 框(员工不必再找 URL)。
+  const linkSkuFromCard = (video: VkpiKolPoolVideoRow) => {
+    const url = String(video.content_url || "").trim();
+    if (!url) return;
+    setTrackUrl(url);
+    setMsg("tracking", { text: `已选中「${String(video.title || video.video_title || `视频 #${Number(video.evidence_id ?? video.id) || 0}`)}」,填入 SKU 后点「追踪并排队刷新」。`, tone: "info" });
+    window.requestAnimationFrame(() => {
+      const input = skuInputRef.current;
+      if (!input) return;
+      input.focus();
+      if (typeof input.scrollIntoView === "function") input.scrollIntoView({ block: "center" });
+    });
   };
 
   const runMetricRefresh = async (video: VkpiKolPoolVideoRow) => {
@@ -616,6 +621,7 @@ export function KolDetailModal({
         text: `${status === "already_queued" ? "指标刷新已在队列中" : "指标刷新已排队"}（#${evidenceId}）；完成后再次打开详情可查看最新快照趋势。`,
         tone: "info",
       });
+      void recovery.refresh();
     } catch (err) {
       if (targetIsCurrent(target)) setMsg("metrics", { text: videoWriteError(err, `指标刷新（#${evidenceId}）`), tone: "error" });
     } finally {
@@ -641,6 +647,7 @@ export function KolDetailModal({
       if (status === "queued" || status === "already_queued" || status === "already_analyzed") {
         setQueuedEvidence((prev) => new Set(prev).add(eid));
         setMsg("deep", { text: status === "already_analyzed" ? `该条已有深析结果(#${eid})。` : `已入队深析(#${eid},思考中泳道)。`, tone: "info" });
+        void recovery.refresh();
       } else {
         setMsg("deep", { text: `深析入队被拒(#${eid}):${String(resp?.reason || resp?.message || status || "原因见泳道").slice(0, 100)}`, tone: "error" });
       }
@@ -699,7 +706,7 @@ export function KolDetailModal({
       setBusy("comments", false);
       if (!terminal || cancelledRef.current) return;
       const receipt = commentsTerminalReceipt(terminal);
-      if (receipt.refresh) setVideosTick((t) => t + 1);
+      if (receipt.refresh) void recovery.reload();
       setMsg("comments", receipt);
     } catch (err) {
       setBusy("comments", false);
@@ -852,92 +859,25 @@ export function KolDetailModal({
       {/* 分区④:已采集内容——品牌关系筛选、五种排序与覆盖率住 libdetail。 */}
       <div className="mb-[22px]">
         <SectionLabel>已采集内容 · Viltrox 筛查</SectionLabel>
-        <div className="mb-3 rounded-[11px] border border-line bg-panel px-3 py-2.5">
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <span className="text-[12.5px] font-semibold text-ink-2">追踪已有视频</span>
-            <span className="text-[11px] text-muted">只排队刷新快照，不表示实时完成</span>
-          </div>
-          {collectedUrlVideos.length > 0 ? (
-            <select
-              aria-label="从已采集内容选择视频"
-              value={selectedCollectedUrl}
-              disabled={paidActionsReadOnly}
-              onChange={(event) => setTrackUrl(event.target.value)}
-              className={`mb-2 w-full ${FIELD}`}
-            >
-              <option value="">从当前已采集内容选择视频…</option>
-              {collectedUrlVideos.map(({ url, video }) => {
-                const evidenceId = Number(video.evidence_id ?? video.id) || 0;
-                const label = String(video.title || video.video_title || `视频 #${evidenceId}`);
-                return <option key={`${evidenceId}:${url}`} value={url}>{label}{evidenceId ? ` · #${evidenceId}` : ""}</option>;
-              })}
-            </select>
-          ) : null}
-          <div className="grid gap-2 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_auto]">
-            <input
-              aria-label="已有视频 URL"
-              type="url"
-              value={trackUrl}
-              disabled={paidActionsReadOnly}
-              onChange={(event) => setTrackUrl(event.target.value)}
-              placeholder="粘贴当前 KOL 已采集的视频 URL"
-              className={FIELD}
-            />
-            <input
-              aria-label="关联产品 SKU"
-              type="text"
-              value={trackSkuInput}
-              disabled={paidActionsReadOnly}
-              onChange={(event) => setTrackSkuInput(event.target.value)}
-              placeholder="产品 SKU，逗号分隔（最多 5 个）"
-              className={FIELD}
-            />
-            <button
-              type="button"
-              className={ACT_BTN}
-              disabled={paidActionsReadOnly || trackBusy || !trackUrl.trim()}
-              title={paidActionsReadOnly ? paidActionsReadOnlyHint : trackUrl.trim() ? "提交已采集视频追踪并排队刷新指标" : "请先从已采集内容选择或粘贴视频 URL"}
-              onClick={runTrackVideo}
-            >
-              {trackBusy ? "提交中…" : "追踪并排队刷新"}
-            </button>
-          </div>
-          <div className="mt-1.5 text-[11px] leading-4 text-muted">
-            新 URL 请先通过“账号分析 · 补采”或深爬建立归属证据；是否可写由服务端权限判定，共享只读不会冒充成功。
-          </div>
-          {paidActionsReadOnly ? <div role="note" className="mt-1 text-[11px] leading-4 text-warn">{paidActionsReadOnlyHint}</div> : null}
-          <ReceiptLine msg={msgs.tracking || null} />
-          <div
-            data-vkpi-tracking-recovery="account-crawl"
-            className="mt-2.5 rounded-lg border border-dashed border-line-strong bg-card px-3 py-2.5"
-          >
-            <div className="text-[12px] leading-5 text-ink-2">
-              {collectedUrlVideos.length > 0
-                ? "找不到目标视频？先补采账号内容；完成后回到这里从已采集列表选择。"
-                : "当前没有带 URL 的已采集视频。先补采账号内容，再回来建立单视频 / SKU 追踪。"}
-            </div>
-            {!item.profileUrl ? (
-              <div className="mt-1 text-[11px] leading-4 text-warn">该 KOL 缺少主页链接，请先打开 KOL 档案补充或核验主页。</div>
-            ) : null}
-            {item.isShared ? (
-              <div className="mt-1 text-[11px] leading-4 text-warn">共享 KOL 为只读，不能发起会产生外部采集成本的账号补采 / 深爬；请由收藏负责人执行。</div>
-            ) : null}
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className={ACT_BTN}
-                disabled={item.isShared || !item.profileUrl || busyKeys.has("crawl")}
-                title={item.isShared ? "共享 KOL 仅可查看，账号补采 / 深爬须由收藏负责人发起" : item.profileUrl ? "入队账号补采 / 深爬；服务端仍会校验当前写权限" : "缺少主页链接，无法发起账号深爬"}
-                onClick={runDeepCrawl}
-              >
-                {busyKeys.has("crawl") ? "入队中…" : "账号补采 / 深爬"}
-              </button>
-              <button type="button" className={ACT_BTN} onClick={openKolProfile}>打开 KOL 档案</button>
-              <span className="text-[10.5px] leading-4 text-muted">入口不改变权限；共享只读等写入边界仍以后端判定为准。</span>
-            </div>
-            <ReceiptLine msg={msgs.crawl || null} />
-          </div>
-        </div>
+        <TrackExistingVideoForm
+          item={item}
+          apiToken={apiToken}
+          collectedUrlVideos={collectedUrlVideos}
+          trackUrl={trackUrl}
+          setTrackUrl={setTrackUrl}
+          trackSkuInput={trackSkuInput}
+          setTrackSkuInput={setTrackSkuInput}
+          trackBusy={trackBusy}
+          paidActionsReadOnly={paidActionsReadOnly}
+          paidActionsReadOnlyHint={paidActionsReadOnlyHint}
+          onSubmit={() => { void runTrackVideo(); }}
+          trackingReceipt={msgs.tracking || null}
+          crawlReceipt={msgs.crawl || null}
+          crawlBusy={busyKeys.has("crawl")}
+          onDeepCrawl={runDeepCrawl}
+          onOpenProfile={openKolProfile}
+          skuInputRef={skuInputRef}
+        />
         {videos == null ? (
           <div className="py-5 text-center text-[12px] text-muted">视频读取中…</div>
         ) : videosError ? (
@@ -958,10 +898,18 @@ export function KolDetailModal({
             refreshingEvidence={refreshingEvidence}
             queuedRefreshEvidence={queuedRefreshEvidence}
             onRefreshMetrics={runMetricRefresh}
+            trackingEvidence={trackingEvidence}
+            onTrackVideo={(video) => { void runTrackVideo({ video }); }}
+            onLinkSku={linkSkuFromCard}
+            hasMore={recovery.hasMore}
+            loadingMore={recovery.loadingMore}
+            onLoadMore={() => { void recovery.loadMore(); }}
+            total={recovery.total}
             paidActionsReadOnly={paidActionsReadOnly}
             paidActionsReadOnlyHint={paidActionsReadOnlyHint}
           />
         )}
+        <RecoveryPollingLine polling={recovery.polling} paused={recovery.pollPaused} onResume={recovery.resumePolling} />
         <ReceiptLine msg={msgs.metrics || null} />
       </div>
 
