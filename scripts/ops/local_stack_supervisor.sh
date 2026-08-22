@@ -22,6 +22,32 @@ fi
 
 log() { echo "$(date '+%F %T') $*" >> "$LOG"; }
 
+# 版本自检(O1):launchd KeepAlive 只在进程退出时重拉,部署/dist 拷回改了本文件后
+# 常驻的老进程仍跑旧逻辑(改白名单/拓扑不生效)。启动时记自身 sha256,每轮巡检
+# 比对,变化即 exec 自身重载(同 PID 语义对 launchd 安全;exec 前 bash -n 防半写文件)。
+SELF_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+self_sha256() {
+  if command -v shasum > /dev/null 2>&1; then
+    shasum -a 256 "$SELF_PATH" 2>/dev/null | awk '{print $1}'
+  else
+    sha256sum "$SELF_PATH" 2>/dev/null | awk '{print $1}'
+  fi
+}
+SELF_SHA="$(self_sha256)"
+reload_if_self_changed() {
+  local now
+  now="$(self_sha256)"
+  if [[ -z "$now" || "$now" == "$SELF_SHA" ]]; then
+    return 0
+  fi
+  if ! bash -n "$SELF_PATH" > /dev/null 2>&1; then
+    log "supervisor 文件已变(${SELF_SHA:0:12}→${now:0:12})但 bash -n 不过,暂不重载"
+    return 0
+  fi
+  log "supervisor 文件已变 ${SELF_SHA:0:12}→${now:0:12},exec 自身重载"
+  exec bash "$SELF_PATH" "$@"
+}
+
 # Per-video refresh and explicit per-staff KOL monitoring are registered here;
 # migrations 285/286 keep both task switches OFF until an operator enables them.
 SCHEDULER_ALLOWLIST="vkpi_kol_video_metric_refresh,vkpi_kol_content_monitoring,vkpi_market_listening_daily,vkpi_ai_today_hot,vkpi_fit_snapshot,vkpi_comment_sentiment_refresh,daily_action_inbox_generate,fulfillment_due_scan,fulfillment_content_scan,vkpi_market_signal_refresh,vkpi_market_intelligence_refresh,vkpi_official_catalog_sync,vkpi_competitor_radar,vkpi_forecast_outcomes_refresh,vkpi_prediction_weekly_rollup,vkpi_official_daily_report_asia,vkpi_official_daily_report_americas,vkpi_market_mention_sentiment,scheduler_fire_stale_recovery"
@@ -71,8 +97,9 @@ ensure_worker_main() {
   fi
 }
 
-log "supervisor 上岗"
+log "supervisor 上岗 self=${SELF_SHA:0:12}"
 while true; do
+  reload_if_self_changed "$@"
   ensure_admin_web
   ensure_apify_pool
   ensure_scheduler
