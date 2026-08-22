@@ -50,6 +50,7 @@ def _conn() -> sqlite3.Connection:
             attempts INTEGER NOT NULL DEFAULT 0,
             next_retry_at TEXT,
             last_error TEXT,
+            last_error_category TEXT,
             created_at TEXT,
             updated_at TEXT
         );
@@ -104,6 +105,8 @@ def _job(
     next_retry_at: str | None = None,
     derive_method: str | None = None,
     created_at: str = "2026-08-21T10:00:00Z",
+    last_error: str = "provider_secret_prompt=do-not-leak",
+    last_error_category: str | None = None,
 ) -> int:
     payload = {"target_id": target_id, "kol_pool_id": 101}
     if derive_method:
@@ -111,11 +114,14 @@ def _job(
     cursor = conn.execute(
         """
         INSERT INTO apify_jobs (
-            job_type, payload, status, attempts, next_retry_at, last_error,
+            job_type, payload, status, attempts, next_retry_at, last_error, last_error_category,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, 'provider_secret_prompt=do-not-leak', ?, '2026-08-21T10:01:00Z')
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2026-08-21T10:01:00Z')
         """,
-        (job_type, json.dumps(payload), status, attempts, next_retry_at, created_at),
+        (
+            job_type, json.dumps(payload), status, attempts, next_retry_at,
+            last_error, last_error_category, created_at,
+        ),
     )
     return int(cursor.lastrowid)
 
@@ -216,7 +222,9 @@ def test_page_unifies_profile_metric_and_final_v1_task_states_and_keeps_freshnes
             assert row["viltrox_modalities"] == []          # fixture caches carry no evidence block
             for task in row["tasks"].values():
                 assert task["status"] in my_kol_video_recovery.TASK_STATUSES
-                assert set(task) == {"status", "job_id", "requested_at", "updated_at", "data"}
+                assert set(task) == {"status", "job_id", "requested_at", "updated_at", "reason_class", "data"}
+                if task["status"] not in {"blocked", "failed"}:
+                    assert task["reason_class"] is None
 
         assert page["summary"] == {"total": 7, "views_total": 11_200, "views_measured": 6, "final_v1_ready": 2}
         assert page["page"] == {
@@ -257,6 +265,7 @@ def test_profile_crawl_state_uses_ready_runs_for_freshness() -> None:
     try:
         assert my_kol_video_recovery.profile_crawl_task_state(conn, 101) == {
             "status": "not_requested", "job_id": None, "requested_at": None, "updated_at": None,
+            "reason_class": None,
             "data": {"status": "none", "freshness": "never", "updated_at": None, "superseded_by_job": False},
         }
         fresh_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
@@ -530,3 +539,107 @@ def test_viltrox_modalities_degrade_to_empty_when_cache_schema_is_narrow() -> No
         assert projection.final_v1_modalities_for_evidence(conn, []) == {}
     finally:
         conn.close()
+
+
+# ── U9: reason_class (closed vocabulary from the durable ledger) ─────────
+
+
+@pytest.mark.parametrize(
+    ("status", "category", "text", "expected"),
+    [
+        # blocked
+        ("blocked", "blocked", '{"reason": "budget_guard_blocked", "reason_detail": "budget_hard_stop"}', "budget"),
+        ("blocked", None, "budget_blocked", "budget"),
+        ("blocked", None, "cancelled_by_scope: A5 retry limited to two runs", "permission"),
+        ("blocked", None, "ScopeDenied: project scope denied", "permission"),
+        ("blocked", None, "kol_not_found", "missing_profile"),
+        ("blocked", None, "missing_profile_url", "missing_profile"),
+        ("blocked", None, "fallback_to_rule", "provider_unavailable"),
+        ("blocked", "blocked", '{"reason": "budget_guard_blocked", "reason_detail": "readiness_not_production_ready"}',
+         "provider_unavailable"),
+        ("blocked", None, "url_unknown_unsupported", "missing_profile"),   # profile crawl: no crawlable URL
+        ("blocked", None, "non_video_post_no_video_signal", None),  # honest: no rule, no guess
+        ("blocked", None, "", None),
+        # failed
+        ("failed", "download", "RuntimeError: Gemini video analysis failed: yt-dlp video download failed", "provider_error"),
+        ("failed", "unknown", "RuntimeError: Gemini File API upload failed: [SSL: BAD_RECORD_MAC]", "provider_error"),
+        ("failed", "media_resolve", "RuntimeError: media_resolve_failed: media_resolve_timeout", "timeout"),
+        ("failed", "stale_running", "stale_running_reclaimed: worker process exited", "timeout"),
+        ("failed", None, "APITimeoutError: Request timed out.", "timeout"),
+        ("failed", "code_error", "NameError: name 'profile_crawl_source' is not defined", "code_error"),
+        ("failed", "unknown", "ValueError: payload must include target_type and target_id", "code_error"),
+        ("failed", "content_unavailable", 'UndefinedColumn: column "campaign_goal" does not exist', "code_error"),
+        ("failed", "unknown", "RuntimeError: Gemini video analysis failed: NameError: name '_truthy' is not defined",
+         "code_error"),
+        ("failed", None, "ScopeDenied: project scope denied", "revoked"),
+        ("failed", None, "superseded by a newer request", "revoked"),
+        ("failed", None, "runtimeerror", None),                    # honest: bare text, no rule
+        # never classifies outside blocked / failed
+        ("ready", "code_error", "NameError: x", None),
+        ("queued", None, "budget_blocked", None),
+        ("not_requested", None, None, None),
+    ],
+)
+def test_classify_reason_rule_table(status, category, text, expected) -> None:
+    assert my_kol_video_recovery.classify_reason(status, error_category=category, error_text=text) == expected
+
+
+def test_classify_reason_uses_raw_ledger_status_for_cancelled_and_timeout() -> None:
+    assert my_kol_video_recovery.classify_reason("failed", raw_status="cancelled", error_text="") == "revoked"
+    assert my_kol_video_recovery.classify_reason("failed", raw_status="timeout", error_text="") == "timeout"
+    assert my_kol_video_recovery.classify_reason("failed", raw_status="triage", error_text="") is None
+
+
+def test_task_state_reason_class_one_example_per_class_and_never_raw_text() -> None:
+    conn = _conn()
+    try:
+        final = "video_analysis_final_v1"
+        cases = {
+            1: ("blocked", None, "budget_blocked: monthly cap reached", "budget"),
+            2: ("blocked", None, "cancelled_by_scope: retry limited", "permission"),
+            3: ("blocked", None, "kol_not_found", "missing_profile"),
+            4: ("blocked", "blocked", '{"reason": "budget_guard_blocked", "reason_detail": "model_binding_blocked"}',
+                "provider_unavailable"),
+            5: ("failed", "download", "RuntimeError: yt-dlp video download failed for Gemini analysis", "provider_error"),
+            6: ("triage", "unknown", "RuntimeError: Gemini file ACTIVE timeout after 90s", "timeout"),
+            7: ("failed", "code_error", "ModuleNotFoundError: No module named 'qdrant_client'", "code_error"),
+        }
+        for target_id, (status, category, text, _expected) in cases.items():
+            _job(conn, job_type="video", target_id=target_id, status=status, derive_method=final,
+                 last_error=text, last_error_category=category)
+        revoked = _job(conn, job_type="kol_video_metric_refresh", target_id=1, status="cancelled",
+                       last_error="cancelled: superseded", last_error_category=None)
+        _job(conn, job_type="kol_video_metric_refresh", target_id=2, status="queued",
+             last_error="budget_blocked", last_error_category=None)
+        conn.commit()
+
+        page = my_kol_video_recovery.build_video_recovery_page(
+            conn, kol_pool_id=101, videos=[_video(index) for index in range(1, 8)], limit=20,
+        )
+        rows = {row["evidence_id"]: row for row in page["items"]}
+        assert {key: rows[key]["tasks"]["final_v1"]["reason_class"] for key in cases} == {
+            key: expected for key, (_s, _c, _t, expected) in cases.items()
+        }
+        assert rows[6]["tasks"]["final_v1"]["status"] == "failed"           # triage collapses to failed
+        metric_1 = rows[1]["tasks"]["metric_refresh"]
+        assert (metric_1["status"], metric_1["reason_class"], metric_1["job_id"]) == ("failed", "revoked", revoked)
+        assert rows[2]["tasks"]["metric_refresh"]["reason_class"] is None   # queued never classifies
+        assert rows[7]["tasks"]["metric_refresh"]["reason_class"] is None   # not_requested
+        for row in page["items"]:
+            for task in row["tasks"].values():
+                assert task["reason_class"] is None or task["reason_class"] in my_kol_video_recovery.REASON_CLASSES
+        blob = json.dumps(page, ensure_ascii=False)
+        for raw in ("qdrant_client", "ACTIVE timeout", "yt-dlp", "monthly cap", "model_binding_blocked", "cancelled: superseded"):
+            assert raw not in blob, raw
+    finally:
+        conn.close()
+
+
+def test_final_v1_broken_promise_keeps_reason_class_null() -> None:
+    finished = {"job_id": 12, "status": "ready", "requested_at": "2026-08-21T09:30:00Z",
+                "updated_at": None, "reason_class": None}
+    broken = my_kol_video_recovery.final_v1_task_state(None, finished)
+    assert broken["status"] == "failed" and broken["reason_class"] is None
+    # a job dict that smuggles an unknown class is normalised away
+    odd = {"job_id": 13, "status": "blocked", "requested_at": None, "updated_at": None, "reason_class": "raw: boom"}
+    assert my_kol_video_recovery.final_v1_task_state(None, odd)["reason_class"] is None

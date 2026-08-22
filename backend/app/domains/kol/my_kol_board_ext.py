@@ -29,11 +29,11 @@ GET /api/admin/vkpi/my-kol/board-ext?days=30(与 aggregate 同前缀、同 requi
                     N 条(封顶 RECENT_VIDEOS_LIMIT,双层封顶)按发布时间降序,
                     带缩略图三件套(创意库同一条毒缓存自愈链 cached → raw →
                     youtube 派生);view_count NULL 原样透出(未实测 ≠ 0 播放)。
-                    2026-08 闭环增量(U2/U3,全部可选新增、旧读者不受影响):
+                    2026-08 闭环增量(U2/U3/U9,全部可选新增、旧读者不受影响):
                     行级 viltrox_modalities(final_v1 品牌证据 visual/subtitle/audio
                     子集,缺则 [])、tasks{metric_refresh, final_v1} TaskState(复用
                     my_kol_video_recovery.attach_task_states,与 my-kol videos 端点
-                    同一实现、同一 evidence 字节一致)、published_at
+                    同一实现、同一 evidence 字节一致,含 reason_class)、published_at
                     + keyset 游标 page{limit, returned, has_more, next_cursor,
                     cursor_kind, order}(序 published_at DESC, id DESC;?cursor=
                     只作用于本组,其余七组不受游标影响;无游标=首页,行为不变)。
@@ -704,7 +704,7 @@ def _recent_videos(
             "explicit false 非相关 > 未判定;只下发结构化证据，不下发深析原文;"
             "viltrox_modalities=final_v1 brand_product_evidence.viltrox_evidence[].modality 的 "
             "visual/subtitle/audio 固定序子集(metadata 不算,缺则 []);tasks=apify_jobs 最新"
-            "一条 × 持久化产物(与 my-kol videos 端点同一投影函数);"
+            "一条 × 持久化产物(与 my-kol videos 端点同一投影函数,含 reason_class 闭集);"
             "page=keyset 游标 (published_at DESC, id DESC),?cursor= 只翻本组"
         ),
     }

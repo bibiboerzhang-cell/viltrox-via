@@ -36,6 +36,7 @@ Contract ``my_kol_video_recovery_v1`` (served by
       "job_id": int | null,
       "requested_at": iso | null,                # job created_at
       "updated_at": iso | null,                  # job updated_at
+      "reason_class": str | null,                # only for blocked / failed, see below
       "data": {                                  # persisted output, independent of the job
         "status": "ready" | "stale" | "none",
         "freshness": "fresh" | "stale" | "never" | "unavailable",
@@ -59,6 +60,15 @@ Rules the contract guarantees:
   ``updated_at`` / ``view_count``, which drift with every metric refresh).  The
   cursor encodes the last row's ``(published_at, id)``; offsets are gone.
 * The response never includes provider payloads, prompts, or raw worker errors.
+* **reason_class is a closed vocabulary, never raw text.**  It is derived by
+  rule from ``apify_jobs.status`` / ``last_error_category`` / ``last_error``
+  (the text is classified, never echoed):
+
+  - blocked → ``permission`` | ``budget`` | ``missing_profile`` | ``provider_unavailable``
+  - failed  → ``provider_error`` | ``timeout`` | ``code_error`` | ``revoked``
+  - any other status, or a blocked/failed job whose ledger text matches no
+    rule → ``null`` (honest "unclassified"; the UI shows the bare status).
+
 * **Shared projection.**  ``attach_task_states`` is the single implementation
   behind this endpoint and the MY KOL board-ext ``recent_videos`` wall, so
   the same evidence id yields byte-identical ``tasks`` / ``viltrox_modalities``
@@ -100,6 +110,65 @@ TASK_STATUSES = frozenset({"queued", "running", "retrying", "blocked", "failed",
 ACTIVE_TASK_STATUSES = frozenset({"queued", "running", "retrying"})
 DATA_STATUSES = frozenset({"ready", "stale", "none"})
 FRESHNESS_VALUES = frozenset({"fresh", "stale", "never", "unavailable"})
+BLOCKED_REASON_CLASSES = frozenset({"permission", "budget", "missing_profile", "provider_unavailable"})
+FAILED_REASON_CLASSES = frozenset({"provider_error", "timeout", "code_error", "revoked"})
+REASON_CLASSES = BLOCKED_REASON_CLASSES | FAILED_REASON_CLASSES
+
+# ── reason_class 规则表(词表规则,零 LLM;只输出类别,绝不回显 last_error 原文)──
+# 顺序即优先级:先命中先归类。blocked 与 failed 各自独立词表,互不串台。
+# 词条来源:workers/apify_jobs_worker_helpers._error_category 细类 + 真库 last_error
+# 形态普查(budget_guard_blocked / cancelled_by_scope / stale_running_reclaimed /
+# NameError / yt-dlp / media_resolve / Gemini File API ... )。
+_BLOCKED_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # 就绪门/模型绑定未放行会被 budget_guard 顺手拦下(reason_detail=readiness_* /
+    # model_binding_blocked):语义是「LLM 不可用」而非「没钱」,故先于 budget 判。
+    ("provider_unavailable", (
+        "readiness", "model_binding", "not_production_ready", "fallback_to_rule", "llm_gateway",
+        "model_not_ready", "not configured", "not_configured", "no api key", "missing_api_key",
+        "api_key_missing", "provider_disabled", "gate closed", "gate_closed",
+    )),
+    ("budget", ("budget", "quota_exhausted", "spend_cap", "cost_cap")),
+    ("permission", (
+        "permission", "forbidden", "unauthorized", "not_authorized", "not authorized",
+        "authorization", "scope_denied", "scopedenied", "scope denied", "cancelled_by_scope",
+        "consent", "403", "evaluation_only", "access_denied", "denied",
+    )),
+    ("missing_profile", (
+        "missing_profile", "profile_missing", "no_profile", "profile not found", "kol_not_found",
+        "kol not found", "missing_kol", "no_kol_pool", "evidence_missing", "missing_evidence",
+        "no_evidence", "target_not_found", "no_ready_video_analysis",
+        # kol_profile_deep_crawl:档案 URL 类型不明/不支持(url_unknown_unsupported)= 没有可爬的档案
+        "url_unknown", "missing_url", "no_url",
+    )),
+    ("provider_unavailable", (
+        "provider_unavailable", "provider_pressure", "unavailable", "disabled", "llm_json_malformed",
+    )),
+)
+_FAILED_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("timeout", (
+        "timeout", "timed out", "timedout", "stale_running", "deadline exceeded", "deadline_exceeded",
+        "time limit", "active timeout",
+    )),
+    ("code_error", (
+        "code_error", "modulenotfounderror", "importerror", "nameerror", "attributeerror", "typeerror",
+        "keyerror", "valueerror", "indexerror", "syntaxerror", "unboundlocalerror", "assertionerror",
+        "zerodivisionerror", "traceback (most recent call last)", "no module named", "cannot import name",
+        "undefinedcolumn", "undefinedtable", "'nonetype' object", "has no attribute", "is not defined",
+    )),
+    ("revoked", (
+        "revoked", "cancelled", "canceled", "cancel_requested", "superseded", "scope denied",
+        "scopedenied", "scope_denied", "withdrawn", "aborted by user", "user_abort",
+    )),
+    ("provider_error", (
+        "provider_error", "provider_pressure", "download", "media_resolve", "content_unavailable",
+        "content_restricted", "content_blocked", "permanent", "gemini", "apify", "yt-dlp", "yt_dlp",
+        "openai", "anthropic", "claude", "vertex", "429", "500", "502", "503", "504", "5xx",
+        "rate limit", "resource_exhausted", "server disconnected", "server error", "ssl",
+        "upload failed", "expecting ',' delimiter", "expecting value", "json", "connection reset",
+        "connection error", "remote end closed", "precheck", "oembed", "unsupported", "invalid_video_url",
+        "not_found", "not found", "404", "unavailable", "http", "proxy", "tunnel",
+    )),
+)
 
 
 # ── small helpers ───────────────────────────────────────────────────────
@@ -224,6 +293,45 @@ def _job_status(row: dict[str, Any]) -> str:
     return "failed"
 
 
+def classify_reason(
+    status: str,
+    *,
+    raw_status: Any = None,
+    error_category: Any = None,
+    error_text: Any = None,
+) -> str | None:
+    """Map one durable job row to the closed ``reason_class`` vocabulary.
+
+    ``status`` is the projected TaskState status; only ``blocked`` / ``failed``
+    ever classify.  The raw ledger status (``cancelled`` / ``timeout`` ...), the
+    structured ``last_error_category`` and the ``last_error`` text are scanned
+    against the rule tables in priority order; nothing from the text is
+    returned.  No rule hit → ``None`` (honest unclassified, never a guess).
+    """
+    if status not in {"blocked", "failed"}:
+        return None
+    category = str(error_category or "").strip().lower()
+    raw = str(raw_status or "").strip().lower()
+    text = " ".join(str(error_text or "").replace("\x00", " ").split()).lower()[:4000]
+    if status == "failed":
+        if raw in {"cancelled", "canceled", "revoked"}:
+            return "revoked"
+        if raw == "timeout":
+            return "timeout"
+        rules = _FAILED_RULES
+    else:
+        rules = _BLOCKED_RULES
+    blob = f"{category} {text}".strip()
+    if not blob:
+        return None
+    for reason_class, markers in rules:
+        if category and category == reason_class:
+            return reason_class
+        if any(marker in blob for marker in markers):
+            return reason_class
+    return None
+
+
 def _project_job(row: Any) -> dict[str, Any] | None:
     if not row:
         return None
@@ -231,11 +339,18 @@ def _project_job(row: Any) -> dict[str, Any] | None:
     job_id = _int(item.get("id"))
     if job_id <= 0:
         return None
+    status = _job_status(item)
     return {
         "job_id": job_id,
-        "status": _job_status(item),
+        "status": status,
         "requested_at": _stamp(item.get("created_at")),
         "updated_at": _stamp(item.get("updated_at")),
+        "reason_class": classify_reason(
+            status,
+            raw_status=item.get("status"),
+            error_category=item.get("last_error_category"),
+            error_text=item.get("last_error"),
+        ),
     }
 
 
@@ -266,6 +381,7 @@ def _latest_jobs_for_targets(
         f"""
         WITH ranked AS (
             SELECT id, status, attempts, next_retry_at, created_at, updated_at,
+                   last_error, last_error_category,
                    {target_expr} AS target_id,
                    ROW_NUMBER() OVER (
                        PARTITION BY {target_expr}
@@ -276,7 +392,8 @@ def _latest_jobs_for_targets(
               AND {target_expr} IN ({placeholders})
               {method_clause}
         )
-        SELECT id, status, attempts, next_retry_at, created_at, updated_at, target_id
+        SELECT id, status, attempts, next_retry_at, created_at, updated_at,
+               last_error, last_error_category, target_id
         FROM ranked
         WHERE row_num=1
         """,
@@ -315,11 +432,15 @@ def _task_state(job: dict[str, Any] | None, data: dict[str, Any]) -> dict[str, A
     status = str((job or {}).get("status") or "not_requested")
     if status not in TASK_STATUSES:
         status = "failed"
+    reason_class = (job or {}).get("reason_class")
+    if status not in {"blocked", "failed"} or reason_class not in REASON_CLASSES:
+        reason_class = None
     return {
         "status": status,
         "job_id": (job or {}).get("job_id"),
         "requested_at": (job or {}).get("requested_at"),
         "updated_at": (job or {}).get("updated_at"),
+        "reason_class": reason_class,
         "data": data,
     }
 
@@ -598,9 +719,13 @@ __all__ = [
     "CURSOR_KIND",
     "DEFAULT_PAGE_SIZE",
     "MAX_PAGE_SIZE",
+    "BLOCKED_REASON_CLASSES",
+    "FAILED_REASON_CLASSES",
+    "REASON_CLASSES",
     "TASK_STATUSES",
     "attach_task_states",
     "build_video_recovery_page",
+    "classify_reason",
     "decode_cursor",
     "encode_cursor",
     "final_v1_task_state",

@@ -1,4 +1,4 @@
-"""board-ext recent_videos 闭环增量(U2 modality / U3 任务态+游标)契约测试。
+"""board-ext recent_videos 闭环增量(U2 modality / U3 任务态+游标 / U9 reason_class)契约测试。
 
 覆盖:
   1. SQL 静态审查:keyset 游标段 7 参 + published_at + modality 投影(只读 modality
@@ -196,7 +196,7 @@ def _sqlite() -> sqlite3.Connection:
         CREATE TABLE apify_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT, job_type TEXT NOT NULL, payload TEXT NOT NULL,
             status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_retry_at TEXT,
-            last_error TEXT, created_at TEXT, updated_at TEXT
+            last_error TEXT, last_error_category TEXT, created_at TEXT, updated_at TEXT
         );
         CREATE TABLE vkpi_kol_url_deep_crawl_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT, kol_pool_id INTEGER NOT NULL, status TEXT NOT NULL, created_at TEXT
@@ -250,9 +250,9 @@ def _seed(conn: sqlite3.Connection) -> None:
         if derive:
             payload["derive_method"] = derive
         conn.execute(
-            "INSERT INTO apify_jobs (job_type, payload, status, attempts, next_retry_at, last_error, "
-            "created_at, updated_at) VALUES (?, ?, ?, 0, NULL, ?, '2026-08-21T10:00:00Z', '2026-08-21T10:01:00Z')",
-            (job_type, json.dumps(payload), status, text),
+            "INSERT INTO apify_jobs (job_type, payload, status, attempts, next_retry_at, last_error, last_error_category, "
+            "created_at, updated_at) VALUES (?, ?, ?, 0, NULL, ?, ?, '2026-08-21T10:00:00Z', '2026-08-21T10:01:00Z')",
+            (job_type, json.dumps(payload), status, text, category),
         )
     # 指标快照:evidence 1 有两次成功采样(metric_refresh data 非空态)
     conn.executemany(
@@ -302,16 +302,21 @@ def test_same_evidence_yields_identical_task_state_and_modalities_on_both_endpoi
     assert by_board[2]["viltrox_modalities"] == ["subtitle"]
     assert by_board[3]["viltrox_modalities"] == []
     assert by_board[7]["viltrox_modalities"] == []
-    # 任务态(两端点同值已在上面逐条比过)
-    final = {key: by_board[key]["tasks"]["final_v1"]["status"] for key in by_board}
+    # 任务态 + reason_class 闭集(两端点同值已在上面逐条比过)
+    final = {key: (by_board[key]["tasks"]["final_v1"]["status"], by_board[key]["tasks"]["final_v1"]["reason_class"]) for key in by_board}
     assert final == {
-        1: "failed", 2: "running", 3: "blocked", 4: "failed",
-        5: "not_requested", 6: "not_requested", 7: "not_requested",
+        1: ("failed", "provider_error"),
+        2: ("running", None),
+        3: ("blocked", "budget"),
+        4: ("failed", "code_error"),
+        5: ("not_requested", None),
+        6: ("not_requested", None),
+        7: ("not_requested", None),
     }
     metric_1 = by_board[1]["tasks"]["metric_refresh"]
     assert metric_1["status"] == "queued"
     assert metric_1["data"]["sample_count"] == 2 and metric_1["data"]["status"] in {"ready", "stale"}
-    assert by_board[5]["tasks"]["metric_refresh"]["status"] == "failed"   # cancelled collapses to failed
+    assert by_board[5]["tasks"]["metric_refresh"]["reason_class"] == "revoked"
     # 行契约:旧字段全在,新字段只增不改;原文/敏感不出
     for key in ("evidence_id", "kol_pool_id", "content_url", "platform", "title", "view_count", "publish_date",
                 "has_final_v1_cache", "llm_viltrox_status", "llm_viltrox_detected", "v_tier", "best_thumbnail",
