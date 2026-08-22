@@ -9,6 +9,14 @@ from __future__ import annotations
 
 from typing import Any, Iterable
 
+from app.platform import llm_gateway_result_cache as _result_cache
+from app.platform.llm_gateway_call_hooks import (
+    cache_model_label,
+    deferred_or_none,
+    serve_cached_result,
+    store_cached_result,
+)
+
 
 def invoke_impl(
     prompt: str,
@@ -245,6 +253,28 @@ def invoke_impl(
         model_override,
         model_fallbacks,
     )
+    # W-L1 结果缓存:同 purpose + 同规范化提示 + 同模型 + 同 UTC 桶 → 直接回放,零成本零 HTTP。
+    cache_plan = _result_cache.build_cache_plan(
+        purpose,
+        safe_prompt,
+        model=cache_model_label(candidates),
+        contract="text",
+        max_output_tokens=max_output_tokens,
+        metadata=metadata,
+    )
+    cached_hit = serve_cached_result(
+        plan=cache_plan,
+        purpose=purpose,
+        prompt=safe_prompt,
+        contract="text",
+        record_call=record_call,
+        triggered_by=triggered_by,
+        metadata=metadata,
+        staff=staff,
+        cost_scope=cost_scope,
+    )
+    if cached_hit is not None:
+        return cached_hit
     for candidate_index, (provider, model_id, explicit_model) in enumerate(candidates):
         binding = _resolve_gateway_binding(provider, model_id)
         binding_blocker = _binding_call_blocker(
@@ -646,7 +676,7 @@ def invoke_impl(
                 errors.append(mismatch_error)
                 continue
             try:
-                record_call(
+                success_audit = record_call(
                     provider=provider,
                     model=actual_model or binding.model_id,
                     purpose=purpose,
@@ -716,6 +746,8 @@ def invoke_impl(
             result["resolved_model_binding"] = binding.to_dict()
             if reservation_key:
                 result["budget_reservation_key"] = reservation_key
+            # 只缓存真实 provider 成功(status=success、正文非空);降级/错误永不入缓存。
+            store_cached_result(cache_plan, result, success_audit)
             return result
 
         if reservation_key:
@@ -806,7 +838,24 @@ def invoke_impl(
             }
         )
 
+    # W-L1:推迟型 purpose 被预算/就绪闸整链拦下 → 诚实 deferred,不落 rule_v0 占位。
+    deferred = deferred_or_none(
+        prompt=safe_prompt,
+        purpose=purpose,
+        errors=errors,
+        normalise_error=namespace["_normalise_runtime_error"],
+        record_call=record_call,
+        cost_scope=cost_scope,
+        triggered_by=triggered_by,
+        metadata=metadata,
+        staff=staff,
+    )
+    if deferred is not None:
+        return deferred
     fallback = _rule_fallback(safe_prompt, purpose=purpose, reason="all_providers_failed", errors=errors)
+    # 其他 purpose 保持降级行为,但台账与结果都必须说清「为什么降级」。
+    fallback_reason = str(fallback.get("failure_code") or fallback.get("reason") or "all_providers_failed")
+    fallback["fallback_reason"] = fallback_reason
     record_call(
         provider="rule_v0",
         model="rule_v0",
@@ -819,6 +868,7 @@ def invoke_impl(
         metadata={
             **(metadata or {}),
             "errors": errors,
+            "fallback_reason": fallback_reason,
             # 如实口径:空的 fallback 链(绑定钉死)= 没有会被尝试的模型级后备胎。
             "model_level_fallback": bool(model_fallbacks),
         },

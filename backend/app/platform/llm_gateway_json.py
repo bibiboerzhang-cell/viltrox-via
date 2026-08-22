@@ -12,6 +12,14 @@ import re
 from collections.abc import Callable, Iterable
 from typing import Any
 
+from app.platform import llm_gateway_result_cache as _result_cache
+from app.platform.llm_gateway_call_hooks import (
+    cache_model_label,
+    deferred_or_none,
+    serve_cached_result,
+    store_cached_result,
+)
+
 
 DEFAULT_DEADLINE_SECONDS = 90.0
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.IGNORECASE | re.DOTALL)
@@ -173,6 +181,7 @@ def _record_json_provider_attempt(
     deadline_seconds: float,
     reservation_key: str = "",
     error: str = "",
+    audit_sink: dict[str, Any] | None = None,
 ) -> int:
     gateway = _gateway_module()
     input_tokens = gateway._safe_int(result.get("input_tokens"))
@@ -189,7 +198,7 @@ def _record_json_provider_attempt(
         )
     )
     actual_model = str(result.get("model") or "").strip()
-    gateway.record_call(
+    audit = gateway.record_call(
         provider=provider,
         model=actual_model or binding.model_id,
         purpose=purpose,
@@ -224,6 +233,8 @@ def _record_json_provider_attempt(
         update_budget_scopes=not bool(reservation_key),
         force_cost_ledger=bool(reservation_key),
     )
+    if audit_sink is not None and isinstance(audit, dict):
+        audit_sink.update(audit)
     return cost_micro_usd
 
 
@@ -334,6 +345,36 @@ def invoke_json(
         model_override,
         model_fallbacks,
     )
+    # W-L1 结果缓存(JSON 契约与文本契约分键):命中直接回放解析好的 json,零成本零 HTTP。
+    cache_plan = _result_cache.build_cache_plan(
+        purpose,
+        safe_prompt,
+        model=cache_model_label(candidates),
+        contract="json",
+        max_output_tokens=max_output_tokens,
+        metadata=metadata,
+    )
+    cached_hit = serve_cached_result(
+        plan=cache_plan,
+        purpose=purpose,
+        prompt=safe_prompt,
+        contract="json",
+        record_call=gateway.record_call,
+        triggered_by=triggered_by,
+        metadata=metadata,
+        staff=staff,
+        cost_scope=cost_scope,
+    )
+    if cached_hit is not None:
+        cached_hit.update(
+            {
+                "deadline_seconds": resolved_deadline,
+                "elapsed_ms": max(0, int((gateway.time.monotonic() - started) * 1000)),
+                "provider_attempts": 0,
+                "budget_reservation_key": None,
+            }
+        )
+        return cached_hit
     for candidate_index, (provider, model_id, explicit_model) in enumerate(candidates):
         if gateway.time.monotonic() >= deadline_at:
             errors.append(
@@ -677,6 +718,7 @@ def invoke_json(
                         attempt_status = "success"
                         attempt_error = ""
 
+        attempt_audit: dict[str, Any] = {}
         try:
             result_micro = gateway._record_json_provider_attempt(
                 provider,
@@ -698,6 +740,7 @@ def invoke_json(
                 deadline_seconds=resolved_deadline,
                 reservation_key=reservation_key,
                 error=attempt_error,
+                audit_sink=attempt_audit,
             )
         except Exception as exc:  # noqa: BLE001 - strict calls fail closed on audit loss
             if not reservation_key:
@@ -820,6 +863,8 @@ def invoke_json(
                     "budget_reservation_key": reservation_key or None,
                 }
             )
+            # 只缓存通过 JSON 契约校验的真实成功;解析/校验失败与降级永不入缓存。
+            store_cached_result(cache_plan, result, attempt_audit)
             return result
 
         errors.append({"provider": provider, "status": attempt_status, "error": attempt_error})
@@ -836,10 +881,32 @@ def invoke_json(
             break
 
     fallback_reason = "deadline_exceeded" if deadline_hit else "all_providers_failed"
+    # W-L1:推迟型 purpose 被预算/就绪闸整链拦下(无 provider 真实请求)→ deferred,不落占位。
+    if not deadline_hit and provider_attempts == 0:
+        deferred = deferred_or_none(
+            prompt=safe_prompt,
+            purpose=purpose,
+            errors=errors,
+            normalise_error=gateway._normalise_runtime_error,
+            record_call=gateway.record_call,
+            cost_scope=cost_scope,
+            triggered_by=triggered_by,
+            metadata={**(metadata or {}), "json_contract": True},
+            staff=staff,
+            extra={
+                "deadline_seconds": resolved_deadline,
+                "elapsed_ms": max(0, int((gateway.time.monotonic() - started) * 1000)),
+                "provider_attempts": 0,
+            },
+        )
+        if deferred is not None:
+            return deferred
     fallback = gateway._rule_fallback(safe_prompt, purpose=purpose, reason=fallback_reason, errors=errors)
+    degrade_reason = str(fallback.get("failure_code") or fallback.get("reason") or fallback_reason)
     fallback.update(
         {
             "json": None,
+            "fallback_reason": degrade_reason,
             "deadline_seconds": resolved_deadline,
             "elapsed_ms": max(0, int((gateway.time.monotonic() - started) * 1000)),
             "provider_attempts": provider_attempts,
@@ -857,6 +924,7 @@ def invoke_json(
         metadata={
             **(metadata or {}),
             "errors": errors,
+            "fallback_reason": degrade_reason,
             "json_contract": True,
             "deadline_seconds": resolved_deadline,
             # 如实口径:空的 fallback 链(绑定钉死)= 没有会被尝试的模型级后备胎。

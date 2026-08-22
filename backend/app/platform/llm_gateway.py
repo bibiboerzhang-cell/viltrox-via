@@ -20,6 +20,7 @@ from app.core.logging import get_logger
 from app.core.model_registry import assert_production_task_bindings_are_pinned
 from app.db.connection import get_conn, is_postgres_runtime
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.platform.llm_gateway_model_alias import resolve_model_alias as _resolve_model_alias
 from app.platform.llm_runtime_errors import (
     build_runtime_error as _build_runtime_error,
     normalise_attempt_error as _normalise_runtime_error,
@@ -134,7 +135,12 @@ PROVIDER_CONFIG: dict[str, dict[str, Any]] = {
         "timeout": int(os.getenv("VKPI_LLM_HTTP_TIMEOUT", "90") or 90),
     },
     "google": {
-        "model": os.getenv("VKPI_GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.5-flash")),
+        # W-L1 止血:prod env 配的是浮动别名 gemini-flash-latest(worker 实跑 gemini-2.5-flash),
+        # 默认路由在入口就映射成精确名(VKPI_GEMINI_MODEL_EXACT 可覆盖),台账只记精确名。
+        "model": _resolve_model_alias(
+            "google",
+            os.getenv("VKPI_GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.5-flash")),
+        ),
         "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
         "input_cents_per_million": 150,
         "output_cents_per_million": 900,
@@ -393,6 +399,9 @@ def _resolve_gateway_binding(provider: str, model_id: str = "") -> ResolvedModel
     """Resolve a model through the shared contract, retaining legacy defaults."""
     config = PROVIDER_CONFIG.get(str(provider or "").strip().lower()) or {}
     resolved_model = str(model_id or config.get("model") or "").strip()
+    # 显式 model_override / model_fallbacks 里的 *-latest 别名同样映射成精确名,
+    # 就绪闸、定价、响应模型比对与台账全部按精确名走。
+    resolved_model = _resolve_model_alias(provider, resolved_model)
     binding = resolve_model_binding(provider, resolved_model, gateway_config=config)
     if binding.pricing_known or resolved_model != str(config.get("model") or "").strip():
         return binding
@@ -884,7 +893,7 @@ def invoke(
 
 # Provider HTTP adapters moved to llm_gateway_providers (behavior-unchanged extraction).
 # Re-export at bottom so the shared helpers above are defined before the sibling imports them.
-from app.platform.llm_gateway_ledger import record_call  # noqa: E402
+from app.platform.llm_gateway_ledger import llm_degrade_rate, record_call  # noqa: E402
 from app.platform.llm_gateway_facade import chat, score, stats  # noqa: E402
 from app.platform.llm_gateway_providers import (  # noqa: E402
     _PROVIDER_CALLERS,
