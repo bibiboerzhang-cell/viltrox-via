@@ -3,6 +3,16 @@
 Suppression keys are scoped HMAC fingerprints.  The key is required at runtime
 and is never persisted.  Every read-side failure (missing key, schema drift, or
 query error) is restrictive so reveal/outreach callers cannot fail open.
+
+Eligibility verdicts carry a ``tier``:
+
+* ``verified`` - ``verified_public_business`` rows backed by qualifying public
+  evidence (the original, strictest path).
+* ``observed`` - ``observed`` rows whose contact source is a scan/declaration
+  the pipeline itself produced (bio/full scans, platform declarations, manual
+  entry).  Such rows are still subject to invalidation/revocation and the
+  organization-scoped suppression ledger; they are never promoted to
+  ``verified`` and the requester must still clear the audited reveal boundary.
 """
 from __future__ import annotations
 
@@ -14,6 +24,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol.contact_ingest import (
     ContactValidationError,
@@ -44,6 +55,26 @@ _VERIFIABLE_PUBLIC_SOURCES = (
     "website_declared",
     "manual_verified_public_business",
 )
+# Sources the pipeline observed or a staff member declared.  An ``observed``
+# row from one of these may be disclosed at the ``observed`` tier after the
+# suppression ledger is consulted.  ``manual*`` variants are matched by prefix.
+OBSERVED_ELIGIBLE_SOURCES = frozenset(
+    {
+        "raw_bio_scan",
+        "raw_full_scan",
+        "youtube_about_declared",
+        "ig_business_profile",
+        "bio_explicit_contact",
+        "website_declared",
+        "manual",
+        "manual_verified_public_business",
+    }
+)
+_MANUAL_SOURCE_PREFIX = "manual"
+TIER_VERIFIED = "verified"
+TIER_OBSERVED = "observed"
+
+logger = get_logger(__name__)
 
 
 class SuppressionConfigurationError(RuntimeError):
@@ -145,6 +176,82 @@ def _fingerprint_and_key_id(
     fingerprint = hmac.new(key, payload, hashlib.sha256).hexdigest()
     key_id = hashlib.sha256(b"vkpi-contact-suppression-key-id\x00" + key).hexdigest()[:16]
     return fingerprint, key_id
+
+
+def observed_source_eligible(source: Any) -> bool:
+    """True when an ``observed`` row's source is a pipeline scan/declaration."""
+
+    normalized = str(source or "").strip().lower()
+    if not normalized:
+        return False
+    return normalized in OBSERVED_ELIGIBLE_SOURCES or normalized.startswith(_MANUAL_SOURCE_PREFIX)
+
+
+def _eligible(
+    *,
+    tier: str,
+    reason: str,
+    contact_id: int,
+    kol_pool_id: int,
+    channel: str,
+    verification_status: str,
+) -> dict[str, Any]:
+    return {
+        "status": "eligible",
+        "eligible": True,
+        "tier": tier,
+        "reason": reason,
+        "contact_id": int(contact_id),
+        "kol_pool_id": int(kol_pool_id),
+        "channel": channel,
+        "verification_status": verification_status,
+    }
+
+
+def _suppression_ledger_reason(
+    db: Any,
+    *,
+    scope: str,
+    pool_id: int,
+    channel: str,
+    normalized_value: str,
+    secret: str | bytes | None,
+) -> str | None:
+    """Return a restrictive reason code, or ``None`` when the ledger is clear."""
+
+    try:
+        fingerprint, key_id = _fingerprint_and_key_id(
+            brand_scope=scope,
+            kol_pool_id=int(pool_id),
+            channel=channel,
+            normalized_value=normalized_value,
+            secret=secret,
+        )
+    except (ContactValidationError, SuppressionConfigurationError):
+        return "fingerprint_key_unavailable"
+    try:
+        suppression_rows = db.execute(
+            """
+            SELECT contact_fingerprint, fingerprint_key_id
+            FROM vkpi_kol_contact_suppressions
+            WHERE brand_scope=? AND kol_pool_id=? AND channel=? AND is_active=TRUE
+            """,
+            (scope, int(pool_id), channel),
+        ).fetchall()
+    except Exception:
+        logger.warning("contact suppression ledger unavailable; eligibility fails closed", exc_info=True)
+        return "suppression_check_unavailable"
+    if any(
+        str(dict(item).get("contact_fingerprint") or "") == fingerprint
+        for item in suppression_rows
+    ):
+        return "suppressed"
+    if any(
+        str(dict(item).get("fingerprint_key_id") or "") != key_id
+        for item in suppression_rows
+    ):
+        return "suppression_check_unavailable"
+    return None
 
 
 def _restricted(
@@ -384,13 +491,15 @@ def contact_eligibility(
         raw_row = db.execute(
             """
             SELECT id, kol_pool_id, normalized_value, channel, verification_status,
-                   verified_at, invalidated_at, revoked_at
+                   verified_at, invalidated_at, revoked_at,
+                   contact_type, contact_value, contact_source
             FROM vkpi_kol_pool_contacts
             WHERE id=?
             """,
             (int(cid),),
         ).fetchone()
     except Exception:
+        logger.warning("contact row lookup unavailable; eligibility fails closed", exc_info=True)
         return _restricted(
             reason="suppression_check_unavailable",
             contact_id=int(cid),
@@ -415,8 +524,46 @@ def contact_eligibility(
         "channel": channel or None,
         "verification_status": status,
     }
-    if status != "verified_public_business":
-        return _restricted(reason="verification_not_eligible", **verdict_context)
+    if status == "verified_public_business":
+        return _verified_tier_verdict(
+            db,
+            row=row,
+            cid=int(cid),
+            pool_id=int(pool_id),
+            scope=scope,
+            channel=channel,
+            status=status,
+            secret=secret,
+            verdict_context=verdict_context,
+        )
+    if status == "observed" and observed_source_eligible(row.get("contact_source")):
+        return _observed_tier_verdict(
+            db,
+            row=row,
+            cid=int(cid),
+            pool_id=int(pool_id),
+            scope=scope,
+            status=status,
+            secret=secret,
+            verdict_context=verdict_context,
+        )
+    return _restricted(reason="verification_not_eligible", **verdict_context)
+
+
+def _verified_tier_verdict(
+    db: Any,
+    *,
+    row: dict[str, Any],
+    cid: int,
+    pool_id: int,
+    scope: str,
+    channel: str,
+    status: str,
+    secret: str | bytes | None,
+    verdict_context: dict[str, Any],
+) -> dict[str, Any]:
+    """Strict path: verified row + qualifying public evidence + clear ledger."""
+
     if not row.get("verified_at") or row.get("invalidated_at") or row.get("revoked_at"):
         return _restricted(reason="verification_state_incomplete", **verdict_context)
     normalized_value = str(row.get("normalized_value") or "")
@@ -452,59 +599,96 @@ def contact_eligibility(
             ),
         ).fetchone()
     except Exception:
+        logger.warning("contact evidence lookup unavailable; eligibility fails closed", exc_info=True)
         return _restricted(reason="verification_evidence_missing", **verdict_context)
     if evidence is None:
         return _restricted(reason="verification_evidence_missing", **verdict_context)
+    ledger_reason = _suppression_ledger_reason(
+        db,
+        scope=scope,
+        pool_id=int(pool_id),
+        channel=channel,
+        normalized_value=normalized_value,
+        secret=secret,
+    )
+    if ledger_reason:
+        return _restricted(reason=ledger_reason, **verdict_context)
+    return _eligible(
+        tier=TIER_VERIFIED,
+        reason="eligible_verified_public_business",
+        contact_id=int(cid),
+        kol_pool_id=int(pool_id),
+        channel=channel,
+        verification_status=status,
+    )
+
+
+def _observed_tier_verdict(
+    db: Any,
+    *,
+    row: dict[str, Any],
+    cid: int,
+    pool_id: int,
+    scope: str,
+    status: str,
+    secret: str | bytes | None,
+    verdict_context: dict[str, Any],
+) -> dict[str, Any]:
+    """Observed path: pipeline-sourced row, not invalidated/revoked, ledger clear.
+
+    Rows written before canonical columns existed carry empty ``channel`` /
+    ``normalized_value``; they are canonicalized in memory from the raw type
+    and value so the suppression fingerprint is still scope-bound and exact.
+    The canonical value is used for fingerprinting only and never returned.
+    """
+
+    if row.get("invalidated_at") or row.get("revoked_at"):
+        return _restricted(reason="verification_state_incomplete", **verdict_context)
+    channel = str(row.get("channel") or "").strip().lower()
+    normalized_value = str(row.get("normalized_value") or "")
     try:
-        fingerprint, key_id = _fingerprint_and_key_id(
-            brand_scope=scope,
-            kol_pool_id=int(pool_id),
-            channel=channel,
-            normalized_value=normalized_value,
-            secret=secret,
-        )
-    except (ContactValidationError, SuppressionConfigurationError):
-        return _restricted(reason="fingerprint_key_unavailable", **verdict_context)
-    try:
-        suppression_rows = db.execute(
-            """
-            SELECT contact_fingerprint, fingerprint_key_id
-            FROM vkpi_kol_contact_suppressions
-            WHERE brand_scope=? AND kol_pool_id=? AND channel=? AND is_active=TRUE
-            """,
-            (scope, int(pool_id), channel),
-        ).fetchall()
-    except Exception:
-        return _restricted(reason="suppression_check_unavailable", **verdict_context)
-    if any(
-        str(dict(item).get("contact_fingerprint") or "") == fingerprint
-        for item in suppression_rows
-    ):
-        return _restricted(reason="suppressed", **verdict_context)
-    if any(
-        str(dict(item).get("fingerprint_key_id") or "") != key_id
-        for item in suppression_rows
-    ):
-        return _restricted(reason="suppression_check_unavailable", **verdict_context)
-    return {
-        "status": "eligible",
-        "eligible": True,
-        "reason": "eligible_verified_public_business",
-        "contact_id": int(cid),
-        "kol_pool_id": int(pool_id),
-        "channel": channel,
-        "verification_status": status,
-    }
+        if channel and normalized_value:
+            canonical = normalize_contact(channel, normalized_value)
+        else:
+            canonical = normalize_contact(row.get("contact_type"), row.get("contact_value"))
+    except ContactValidationError:
+        return _restricted(reason="verification_state_incomplete", **verdict_context)
+    if channel and canonical.channel != channel:
+        return _restricted(reason="verification_state_incomplete", **verdict_context)
+    channel = canonical.channel
+    verdict_context = {**verdict_context, "channel": channel}
+    ledger_reason = _suppression_ledger_reason(
+        db,
+        scope=scope,
+        pool_id=int(pool_id),
+        channel=channel,
+        normalized_value=canonical.normalized_value,
+        secret=secret,
+    )
+    if ledger_reason:
+        return _restricted(reason=ledger_reason, **verdict_context)
+    return _eligible(
+        tier=TIER_OBSERVED,
+        reason="eligible_observed_source",
+        contact_id=int(cid),
+        kol_pool_id=int(pool_id),
+        channel=channel,
+        verification_status=status,
+    )
 
 
 __all__ = [
+    "OBSERVED_ELIGIBLE_SOURCES",
     "SUPPRESSION_HMAC_ENV",
     "SUPPRESSION_REASONS",
     "SUPPRESSION_SOURCES",
+    "TIER_OBSERVED",
+    "TIER_VERIFIED",
     "SuppressionConfigurationError",
     "contact_eligibility",
     "contact_fingerprint",
     "is_contact_suppressed",
+    "observed_source_eligible",
     "record_suppression",
     "release_suppression",
 ]

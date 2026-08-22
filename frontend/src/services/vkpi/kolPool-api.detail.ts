@@ -40,10 +40,25 @@ export async function getKolPoolDetailBundle(
   );
 }
 
+/** Disclosure tier attached to each revealed contact (B 方案两档). */
+export type VkpiKolContactTier = "verified" | "observed";
+
+type VkpiKolPoolContactRevealEntry = NonNullable<VkpiKolPoolContactRevealResponse["contacts"]>[number];
+
 /**
- * Rolling-upgrade compatibility for an older masked list/detail projection.
- * Current employee projections already contain the full contact and must not
- * call this endpoint again.
+ * Reveal response with per-contact `tier`. `verified` rows carry evidence-backed
+ * public-business verification; `observed` rows come from scans/declarations
+ * and are not yet verified. Older backends omit the field (treated as untiered).
+ */
+export interface VkpiKolPoolContactRevealTieredResponse extends Omit<VkpiKolPoolContactRevealResponse, "contacts"> {
+  contacts?: Array<VkpiKolPoolContactRevealEntry & { tier?: VkpiKolContactTier | string }>;
+  verified_count?: number;
+  observed_count?: number;
+}
+
+/**
+ * Explicit audited reveal boundary (POST confirm + purpose).  Ordinary GET
+ * item/detail projections stay value-free; plaintext only arrives here.
  */
 export async function revealKolPoolContact(
   token: string,
@@ -53,7 +68,7 @@ export async function revealKolPoolContact(
     purpose?: "kol_detail_view" | "compose_outreach";
   } = {},
 ) {
-  return apiFetch<VkpiKolPoolContactRevealResponse>(
+  return apiFetch<VkpiKolPoolContactRevealTieredResponse>(
     `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/contacts/reveal`,
     {
       method: "POST",

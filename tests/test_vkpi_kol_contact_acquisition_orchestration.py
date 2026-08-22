@@ -270,6 +270,7 @@ def test_reveal_is_typed_and_uses_one_audit_then_keyword_only_eligibility(
             "channel": "email",
             "contact_type": "email",
             "value": "private-contract-value@example.com",
+            "tier": "verified",
             "verification_status": "verified_public_business",
             "source_type": "youtube_about_declared",
             "verified_at": "2026-08-15T01:00:00Z",

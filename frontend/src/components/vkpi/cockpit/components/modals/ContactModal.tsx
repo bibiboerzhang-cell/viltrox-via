@@ -6,7 +6,8 @@ import { AlertTriangle, Check, Copy, ExternalLink, Loader2, Sparkles, Wand2, X }
 import { KPAvatar } from "../KPAvatar";
 import { genEmailBody, genEmailSubject } from "../../lib/email";
 import { kolHumanDisplayName, kolHumanIdentitySubtitle, kolHumanProfileLinkLabel } from "../../lib/kolIdentity";
-import type { ContactState } from "../../lib/kolContacts";
+import { useT } from "../../lib/i18n";
+import type { ContactState, KolContactChannel, KolContactTier } from "../../lib/kolContacts";
 import { useKolContactState } from "../../lib/useKolContactState";
 import { apiFetch } from "../../../../../services/http";
 import { OverlayPortal } from "./OverlayPortal";
@@ -39,8 +40,29 @@ function writeContactDraft(key: string, value: Record<string, unknown>) {
   }
 }
 
+// 揭示后两档徽标:已核验(公开商务信息+证据) / 观测到·未核验(扫描/声明来源,尚未核验)。
+// 门面只出这两档中文,不出内部来源码。
+function ContactTierBadge({ tier, t }: { tier?: KolContactTier; t: (source: string) => string }) {
+  if (tier === "verified") {
+    return e("span", {
+      "data-contact-tier": "verified",
+      title: t("来源已核验为公开商务联系方式"),
+      className: "inline-flex shrink-0 items-center rounded border border-emerald-400/30 bg-emerald-500/[0.08] px-1 py-0.5 text-[9px] leading-none text-emerald-300",
+    }, t("已核验"));
+  }
+  if (tier === "observed") {
+    return e("span", {
+      "data-contact-tier": "observed",
+      title: t("由公开资料扫描或人工录入获得,尚未核验;联系前请自行确认"),
+      className: "inline-flex shrink-0 items-center rounded border border-amber-400/30 bg-amber-500/[0.08] px-1 py-0.5 text-[9px] leading-none text-amber-200",
+    }, t("观测到 · 未核验"));
+  }
+  return null;
+}
+
 export function ContactModal({ item, onClose, apiToken, currentUser, sessionGeneration = 0, initialContactState = null }: any) {
   if (!item) return null;
+  const { t } = useT();
   const {
     state: contactState,
     retry: retryContact,
@@ -51,8 +73,9 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
     purpose: "compose_outreach",
     initialState: initialContactState as ContactState | null,
   });
-  const contactChannels = contactState.status === "full" ? contactState.contacts : [];
-  const contactEmail = contactChannels.find((contact) => contact.type === "email")?.value || "";
+  const contactChannels: KolContactChannel[] = contactState.status === "full" ? contactState.contacts : [];
+  const emailContact = contactChannels.find((contact) => contact.type === "email");
+  const contactEmail = emailContact?.value || "";
   const hasEmail = Boolean(contactEmail);
   const hasAnyContact = contactChannels.length > 0;
   const outreachName = kolHumanDisplayName(item);
@@ -135,12 +158,11 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
           className: "shrink-0 text-cyan-300 hover:text-cyan-200",
         }, contact.actionLabel),
       ),
-      (contact.source || contact.verificationStatus || contact.lastVerifiedAt) && e("div", {
+      (contact.tier || contact.lastVerifiedAt) && e("div", {
         className: "mt-1 flex items-center gap-1.5 pl-20 text-[9px] text-slate-500",
       },
-        contact.source && e("span", { className: "rounded border border-white/[0.08] px-1 py-0.5" }, contact.source),
-        contact.verificationStatus && e("span", { className: "rounded border border-emerald-400/20 px-1 py-0.5 text-emerald-300" }, contact.verificationStatus),
-        contact.lastVerifiedAt && e("span", null, `核验 ${contact.lastVerifiedAt}`),
+        e(ContactTierBadge, { tier: contact.tier, t }),
+        contact.tier === "verified" && contact.lastVerifiedAt && e("span", null, `${t("核验于")} ${contact.lastVerifiedAt}`),
       ),
     )),
   );
@@ -292,6 +314,7 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
           e("span", { className: "text-cyan-300 flex-1 px-2 py-1 rounded bg-cyan-500/[0.05] border border-cyan-500/20" },
             contactEmail,
           ),
+          e(ContactTierBadge, { tier: emailContact?.tier, t }),
         ),
         renderOtherContacts(),
         e("div", { className: "flex items-center gap-2 text-[11px]" },

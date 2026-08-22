@@ -483,11 +483,14 @@ def test_contact_reveal_forwards_request_metadata_to_audit_boundary(monkeypatch)
             "channel": "whatsapp",
             "contact_type": "whatsapp",
             "value": "+12025550188",
+            "tier": "verified",
             "verification_status": "verified_public_business",
             "source_type": "website_declared",
             "verified_at": "2026-08-02T00:00:00Z",
         }
     ]
+    assert result["verified_count"] == 1
+    assert result["observed_count"] == 0
     assert conn.commits == 1
     assert len(calls) == 1
     assert calls[0]["ip"] == "203.0.113.10"

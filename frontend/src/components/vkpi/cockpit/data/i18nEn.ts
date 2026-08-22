@@ -618,4 +618,10 @@ export const I18N_EN = {
   "已过期": "Expired",
   "实测数据暂不可用": "Measurement data unavailable",
   "分析数据暂不可用": "Analysis data unavailable",
+  // KOL contact disclosure tiers (ContactModal)
+  "已核验": "Verified",
+  "观测到 · 未核验": "Observed · unverified",
+  "来源已核验为公开商务联系方式": "Source verified as a public business contact",
+  "由公开资料扫描或人工录入获得,尚未核验;联系前请自行确认": "Collected from public profile scans or manual entry, not yet verified; please confirm before reaching out",
+  "核验于": "Verified on",
 };

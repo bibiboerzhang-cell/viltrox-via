@@ -282,6 +282,112 @@ describe("ContactModal audited contact reveal", () => {
     expect(revealKolPoolContact).not.toHaveBeenCalled();
   });
 
+  it("labels verified and observed contacts with the two Chinese tier badges only", () => {
+    const initialContactState = auditedState({
+      status: "full",
+      contact_masked: false,
+      verified_count: 2,
+      observed_count: 2,
+      contacts: [
+        {
+          id: 1,
+          channel: "email",
+          contact_type: "email",
+          value: "biz@example.com",
+          tier: "verified",
+          verification_status: "verified_public_business",
+          source_type: "youtube_about_declared",
+          verified_at: "2026-08-15T01:00:00Z",
+        },
+        {
+          id: 2,
+          channel: "whatsapp",
+          contact_type: "whatsapp",
+          value: "+12025550188",
+          tier: "verified",
+          verification_status: "verified_public_business",
+          source_type: "website_declared",
+          verified_at: "2026-08-02T00:00:00Z",
+        },
+        {
+          id: 3,
+          channel: "instagram_dm",
+          contact_type: "instagram_dm",
+          value: "@creator",
+          tier: "observed",
+          verification_status: "observed",
+          source_type: "raw_bio_scan",
+        },
+        {
+          id: 4,
+          channel: "website",
+          contact_type: "website",
+          value: "https://creator.example/",
+          tier: "observed",
+          verification_status: "observed",
+          source_type: "raw_full_scan",
+        },
+      ],
+    });
+
+    render(
+      <ContactModal item={item} apiToken="token" initialContactState={initialContactState} onClose={vi.fn()} />,
+    );
+
+    // The modal mounts through OverlayPortal, so query the document rather than the container.
+    expect(screen.getByText("biz@example.com")).toBeTruthy();
+    expect(document.body.querySelectorAll("[data-contact-tier='verified']")).toHaveLength(2);
+    expect(document.body.querySelectorAll("[data-contact-tier='observed']")).toHaveLength(2);
+    expect(screen.getAllByText("已核验")).toHaveLength(2);
+    expect(screen.getAllByText("观测到 · 未核验")).toHaveLength(2);
+    // Only the verified WhatsApp row carries a verification time; observed rows never do.
+    expect(screen.getAllByText(/核验于 /)).toHaveLength(1);
+    expect(screen.getByText(/核验于 2026-08-02T00:00:00Z/)).toBeTruthy();
+    const bodyText = document.body.textContent || "";
+    expect(bodyText).not.toContain("raw_bio_scan");
+    expect(bodyText).not.toContain("raw_full_scan");
+    expect(bodyText).not.toContain("youtube_about_declared");
+    expect(bodyText).not.toContain("verified_public_business");
+    expect(bodyText).not.toContain("observed");
+    expect(revealKolPoolContact).not.toHaveBeenCalled();
+  });
+
+  it("shows an observed badge on the To line when the only email is unverified", async () => {
+    revealKolPoolContact.mockResolvedValue({
+      status: "full",
+      kol_pool_id: 42,
+      contact_masked: false,
+      contacts: [
+        { id: 9, channel: "email", contact_type: "email", value: "scan@example.com", tier: "observed", verification_status: "observed", source_type: "raw_bio_scan" },
+      ],
+    });
+
+    render(<ContactModal item={item} apiToken="token" onClose={vi.fn()} />);
+
+    expect(await screen.findByText("scan@example.com")).toBeTruthy();
+    expect(document.body.querySelector("[data-contact-tier='observed']")).toHaveTextContent("观测到 · 未核验");
+    expect(document.body.querySelector("[data-contact-tier='verified']")).toBeNull();
+    expect(screen.queryByText(/核验于/)).toBeNull();
+    expect(document.body.textContent).not.toContain("raw_bio_scan");
+  });
+
+  it("shows no tier badge for a legacy reveal without tier metadata", async () => {
+    revealKolPoolContact.mockResolvedValue({
+      status: "revealed",
+      kol_pool_id: 42,
+      email: "manager@example.com",
+      other_contacts: [{ contact_type: "link", platform: "ig_dm", contact_value: "@creator" }],
+      contact_masked: false,
+    });
+
+    render(<ContactModal item={item} apiToken="token" onClose={vi.fn()} />);
+
+    expect(await screen.findByText("manager@example.com")).toBeTruthy();
+    expect(document.body.querySelector("[data-contact-tier]")).toBeNull();
+    expect(screen.queryByText("已核验")).toBeNull();
+    expect(screen.queryByText("观测到 · 未核验")).toBeNull();
+  });
+
   it("renders restricted masked+blank-email as restricted, never uncollected", () => {
     render(
       <ContactModal

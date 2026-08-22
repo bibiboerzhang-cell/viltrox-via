@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { contactStateFromReveal, kolContactChannels } from "./kolContacts";
+import { contactStateFromReveal, contactTier, kolContactChannels } from "./kolContacts";
 
 describe("kolContactChannels", () => {
   it("labels manual social handles without turning them into email links", () => {
@@ -131,5 +131,101 @@ describe("kolContactChannels", () => {
 
     expect(state.status).toBe("full");
     expect(state.contacts.map((contact) => contact.type)).toEqual(["email", "instagram_dm"]);
+    expect(state.contacts.every((contact) => contact.tier === undefined)).toBe(true);
+  });
+});
+
+describe("contact disclosure tiers", () => {
+  it("resolves an explicit tier first and falls back to verification status", () => {
+    expect(contactTier("verified", "observed")).toBe("verified");
+    expect(contactTier("observed", "verified_public_business")).toBe("observed");
+    expect(contactTier("OBSERVED")).toBe("observed");
+    expect(contactTier("", "verified_public_business")).toBe("verified");
+    expect(contactTier(undefined, "observed")).toBe("observed");
+    expect(contactTier("gold", "stale")).toBeUndefined();
+    expect(contactTier(undefined, undefined)).toBeUndefined();
+  });
+
+  it("carries verified/observed tiers through a typed reveal response", () => {
+    const state = contactStateFromReveal({
+      status: "full",
+      contact_masked: false,
+      verified_count: 1,
+      observed_count: 2,
+      contacts: [
+        {
+          id: 1,
+          channel: "email",
+          contact_type: "email",
+          value: "biz@example.com",
+          tier: "verified",
+          verification_status: "verified_public_business",
+          source_type: "youtube_about_declared",
+          verified_at: "2026-08-15T01:00:00Z",
+        },
+        {
+          id: 2,
+          channel: "instagram_dm",
+          contact_type: "instagram_dm",
+          value: "@creator",
+          tier: "observed",
+          verification_status: "observed",
+          source_type: "raw_bio_scan",
+        },
+        {
+          id: 3,
+          channel: "website",
+          contact_type: "website",
+          value: "https://creator.example/",
+          tier: "observed",
+          verification_status: "observed",
+          source_type: "raw_full_scan",
+        },
+      ],
+    });
+
+    expect(state.status).toBe("full");
+    expect(state.contacts.map((contact) => [contact.type, contact.tier])).toEqual([
+      ["email", "verified"],
+      ["instagram_dm", "observed"],
+      ["website", "observed"],
+    ]);
+    expect(state.contacts[0].lastVerifiedAt).toBe("2026-08-15T01:00:00Z");
+    expect(state.contacts[1].lastVerifiedAt).toBeUndefined();
+    expect(state.contacts[1].href).toBe("https://www.instagram.com/creator/");
+  });
+
+  it("keeps the first (verified) copy when the same value is revealed twice", () => {
+    const contacts = kolContactChannels({
+      contacts: [
+        { contact_type: "email", value: "biz@example.com", tier: "verified" },
+        { contact_type: "email", value: "BIZ@example.com", tier: "observed" },
+      ],
+    });
+
+    expect(contacts).toHaveLength(1);
+    expect(contacts[0].tier).toBe("verified");
+  });
+
+  it("never turns the tier field into a contact row", () => {
+    const contacts = kolContactChannels({
+      contacts: [{ contact_type: "email", value: "biz@example.com", tier: "observed", source_type: "raw_bio_scan" }],
+    });
+
+    expect(contacts).toHaveLength(1);
+    expect(contacts[0].value).toBe("biz@example.com");
+    expect(JSON.stringify(contacts)).not.toContain("source_type");
+  });
+
+  it("still drops masked observed-tier values from a rolling response", () => {
+    const state = contactStateFromReveal({
+      status: "full",
+      contact_masked: false,
+      contacts: [{ contact_type: "email", value: "b***@e***", tier: "observed" }],
+    });
+
+    expect(state.status).toBe("restricted");
+    expect(state.contacts).toEqual([]);
+    expect(JSON.stringify(state)).not.toContain("b***@e***");
   });
 });

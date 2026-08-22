@@ -8,6 +8,13 @@ export type KolContactAction =
   | "website"
   | "copy";
 
+/**
+ * Disclosure tier of a revealed contact.
+ * - `verified`: public-business verified with qualifying evidence.
+ * - `observed`: collected by a pipeline scan / platform declaration / manual entry, not yet verified.
+ */
+export type KolContactTier = "verified" | "observed";
+
 export type KolContactChannel = {
   type: string;
   label: string;
@@ -17,6 +24,7 @@ export type KolContactChannel = {
   actionLabel: string;
   masked: boolean;
   source?: string;
+  tier?: KolContactTier;
   verificationStatus?: string;
   lastVerifiedAt?: string;
 };
@@ -62,6 +70,7 @@ const INTERNAL_KEYS = new Set([
   "last_verified_at",
   "verified_at",
   "verification_status",
+  "tier",
   "status",
   "reason",
   "masked_value",
@@ -229,6 +238,20 @@ function contactAction(type: string, value: string): Pick<KolContactChannel, "hr
   return { href: safeHttps(value), action: "copy", actionLabel: "复制联系方式" };
 }
 
+/**
+ * Resolve the disclosure tier. An explicit `tier` wins; otherwise the
+ * verification status decides. Legacy payloads without either stay untiered
+ * so the UI shows no badge rather than a guessed one.
+ */
+export function contactTier(rawTier: unknown, rawVerificationStatus: unknown = ""): KolContactTier | undefined {
+  const tier = text(rawTier).toLowerCase();
+  if (tier === "verified" || tier === "observed") return tier;
+  const status = text(rawVerificationStatus).toLowerCase();
+  if (status === "verified_public_business") return "verified";
+  if (status === "observed") return "observed";
+  return undefined;
+}
+
 function normalizeLabel(type: string, rawLabel = "") {
   const label = rawLabel.trim();
   if (label && !INTERNAL_KEYS.has(label.toLowerCase())) return TYPE_LABELS[TYPE_ALIASES[label.toLowerCase()] || label.toLowerCase()] || label;
@@ -238,6 +261,7 @@ function normalizeLabel(type: string, rawLabel = "") {
 type ContactMetadata = {
   platform?: string;
   source?: string;
+  tier?: KolContactTier;
   verificationStatus?: string;
   lastVerifiedAt?: string;
 };
@@ -266,6 +290,7 @@ function pushContact(
     ...contactAction(type, value),
     masked: false,
     ...(metadata.source ? { source: metadata.source } : {}),
+    ...(metadata.tier ? { tier: metadata.tier } : {}),
     ...(metadata.verificationStatus ? { verificationStatus: metadata.verificationStatus } : {}),
     ...(metadata.lastVerifiedAt ? { lastVerifiedAt: metadata.lastVerifiedAt } : {}),
   });
@@ -299,11 +324,15 @@ function visit(output: KolContactChannel[], seen: Set<string>, raw: unknown, typ
     ?? record.url
     ?? record.handle;
   if (recordValue !== undefined && typeof recordValue !== "object") {
+    const verificationStatus = text(record.verification_status || record.status);
+    const tier = contactTier(record.tier, verificationStatus);
     pushContact(output, seen, recordType, recordValue, text(record.label || platform), {
       platform,
       source: text(record.source_label || record.source_kind || record.contact_source || record.source),
-      verificationStatus: text(record.verification_status || record.status),
-      lastVerifiedAt: text(record.last_verified_at || record.verified_at || record.last_seen_at),
+      tier,
+      verificationStatus,
+      // Only a verified row has a meaningful verification time.
+      lastVerifiedAt: tier === "observed" ? "" : text(record.last_verified_at || record.verified_at || record.last_seen_at),
     });
     return;
   }

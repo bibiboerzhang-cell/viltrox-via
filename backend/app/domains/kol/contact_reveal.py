@@ -9,6 +9,11 @@ Ordinary GET item/detail DTOs never call this module.  One confirmed POST does
 one permission+audit decision, then evaluates every canonical contact through
 the verification/suppression gate.  Errors and restricted results never carry
 contact values.  No provider, website crawl or message send is performed here.
+
+Every disclosed contact carries a ``tier``: ``verified`` (public-business
+verified with evidence) or ``observed`` (pipeline scan / declaration, not yet
+verified).  The response ``status`` contract stays ``full`` / ``restricted`` /
+``empty``; verified rows are listed before observed ones.
 """
 from __future__ import annotations
 
@@ -22,8 +27,15 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 ALLOWED_REVEAL_PURPOSES = frozenset({"kol_detail_view", "compose_outreach"})
-_SAFE_VERIFICATION_SOURCES = frozenset(
+CONTACT_TIER_VERIFIED = "verified"
+CONTACT_TIER_OBSERVED = "observed"
+_TIER_ORDER = {CONTACT_TIER_VERIFIED: 0, CONTACT_TIER_OBSERVED: 1}
+# Source labels that may accompany a disclosed contact.  Anything else stays
+# internal (the row is still disclosed when eligible; only the label is dropped).
+_DISCLOSABLE_SOURCES = frozenset(
     {
+        "raw_bio_scan",
+        "raw_full_scan",
         "youtube_about_declared",
         "ig_business_profile",
         "bio_explicit_contact",
@@ -80,6 +92,16 @@ def _restricted(kol_pool_id: int, reason: str) -> dict[str, Any]:
         "contact_masked": True,
         "reason": str(reason or "contact_access_restricted"),
     }
+
+
+def _contact_tier(verdict: dict[str, Any]) -> str:
+    """Map a verdict to the public two-tier label; unknown tiers degrade to observed."""
+
+    tier = str(verdict.get("tier") or "").strip().lower()
+    if tier in _TIER_ORDER:
+        return tier
+    status = str(verdict.get("verification_status") or "").strip().lower()
+    return CONTACT_TIER_VERIFIED if status == "verified_public_business" else CONTACT_TIER_OBSERVED
 
 
 def _brand_scope(staff: dict[str, Any] | None) -> str:
@@ -195,19 +217,25 @@ def view_kol_contact(
             restricted_reasons.add("contact_not_found")
             continue
         channel = str(verdict.get("channel") or contact.get("contact_type") or "contact").strip().lower()
+        tier = _contact_tier(verdict)
         item = {
             "id": contact_id,
             "channel": channel,
             "contact_type": channel,
             "value": value,
-            "verification_status": str(verdict.get("verification_status") or "verified_public_business"),
+            "tier": tier,
+            "verification_status": str(
+                verdict.get("verification_status")
+                or ("verified_public_business" if tier == CONTACT_TIER_VERIFIED else "observed")
+            ),
         }
         source = str(contact.get("contact_source") or "").strip().lower()
-        if source in _SAFE_VERIFICATION_SOURCES:
+        if source in _DISCLOSABLE_SOURCES:
             item["source_type"] = source
-        if contact.get("verified_at"):
+        if tier == CONTACT_TIER_VERIFIED and contact.get("verified_at"):
             item["verified_at"] = str(contact.get("verified_at"))
         eligible_contacts.append(item)
+    eligible_contacts.sort(key=lambda entry: _TIER_ORDER.get(str(entry.get("tier")), 1))
 
     if not eligible_contacts:
         if restricted_reasons == {"suppressed"}:
@@ -263,4 +291,6 @@ def view_kol_contact(
         "contacts": eligible_contacts,
         "contact_masked": False,
         "reason": "eligible_contacts_available",
+        "verified_count": sum(1 for entry in eligible_contacts if entry.get("tier") == CONTACT_TIER_VERIFIED),
+        "observed_count": sum(1 for entry in eligible_contacts if entry.get("tier") == CONTACT_TIER_OBSERVED),
     }
