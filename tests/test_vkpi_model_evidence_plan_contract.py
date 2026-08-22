@@ -52,23 +52,35 @@ def test_execution_plan_requires_thirty_actuals_per_task_not_per_shared_binding(
     manifest = plan["execution_manifest"]
     rows = {row["binding"]: row for row in manifest["bindings"]}
 
+    # 2026-08-22 模型升级刀:唯一绑定 8 → 6(Haiku 并入 luna;sonnet/opus/flash 换代),
+    # 数值由 scripts/ops/vkpi_model_evidence_plan.build_plan() 实跑得出,非手算。
     assert manifest["task_binding_count"] == 18
-    assert manifest["unique_binding_count"] == 8
+    assert manifest["unique_binding_count"] == 6
     assert manifest["minimum_actual_evaluation_cases_per_task"] == 30
     assert manifest["minimum_possible_generation_calls"] == 540
-    assert manifest["provider_generation_calls_ceiling"] == 548
-    assert manifest["known_text_only_cost_subtotal_usd"] == 6.3513
-    assert rows["openai/gpt-5.4-mini"]["required_calls"] == {
-        "actual_evaluation_cases": 120,
+    assert manifest["provider_generation_calls_ceiling"] == 546
+    assert manifest["unknown_cost_binding_count"] == 0
+    assert manifest["known_text_only_cost_subtotal_usd"] == 5.27352
+    assert set(rows) == {
+        "anthropic/claude-opus-5",
+        "anthropic/claude-sonnet-5",
+        "google/gemini-2.5-pro",
+        "google/gemini-3.6-flash",
+        "openai/gpt-5.5",
+        "openai/gpt-5.6-luna",
+    }
+    assert rows["openai/gpt-5.6-luna"]["required_calls"] == {
+        "actual_evaluation_cases": 150,
         "actual_evaluation_cases_per_task": {
             "audit_pre_filter": 30,
             "kol_content_fit_analysis": 30,
             "kol_product_fit_reason": 30,
             "via_chat": 30,
+            "via_persona_summary": 30,
         },
         "minimum_actual_evaluation_cases_per_task": 30,
         "exact_response_probe": 1,
-        "provider_generation_calls_ceiling": 121,
+        "provider_generation_calls_ceiling": 151,
         "note": (
             "Every bound task requires its own 30 actual evaluation cases. "
             "The probe response must also be included in the signed evaluation "
@@ -76,16 +88,27 @@ def test_execution_plan_requires_thirty_actuals_per_task_not_per_shared_binding(
             "designating one evaluation case as the exact probe."
         ),
     }
-    assert rows["anthropic/claude-sonnet-4-6"]["required_calls"][
+    assert rows["anthropic/claude-sonnet-5"]["required_calls"][
         "actual_evaluation_cases"
     ] == 90
-    assert rows["anthropic/claude-opus-4-7"]["tasks"] == [
+    assert rows["anthropic/claude-sonnet-5"]["tasks"] == [
+        "audit_deep_score",
+        "audit_vision_fallback",
+        "kol_outreach_pack",
+    ]
+    assert rows["anthropic/claude-opus-5"]["tasks"] == [
         "ai_today_evidence_strategy",
         "contract_pdf_extract",
         "deepsight_strategy",
         "invoice_extract",
     ]
+    assert rows["google/gemini-3.6-flash"]["tasks"] == [
+        "audit_video_analysis",
+        "kol_audience_analysis",
+        "vkpi_sentiment_annotate",
+    ]
     assert rows["google/gemini-2.5-pro"]["tasks"] == [
         "ai_today_grounded_discovery",
         "deepsight_opportunity",
     ]
+    assert rows["openai/gpt-5.5"]["tasks"] == ["deepsight_market_empath"]

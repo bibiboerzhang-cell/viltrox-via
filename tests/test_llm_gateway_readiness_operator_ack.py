@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from app.platform import llm_gateway  # noqa: E402
 from app.platform.models.runtime import resolve_model_binding  # noqa: E402
 
-_BINDING = "google/gemini-3.5-flash"
+_BINDING = "google/gemini-3.6-flash"
 _ACK_ENV = "VKPI_LLM_READINESS_OPERATOR_ACK"
 
 
@@ -43,7 +43,7 @@ def test_operator_ack_clears_named_binding(monkeypatch):
 
 def test_operator_ack_does_not_clear_unlisted_binding(monkeypatch):
     monkeypatch.setenv(_ACK_ENV, _BINDING)
-    assert _blocker_for("openai/gpt-5.4-mini") == "readiness_not_production_ready"
+    assert _blocker_for("openai/gpt-5.6-luna") == "readiness_not_production_ready"
 
 
 def test_operator_ack_rejects_wildcard(monkeypatch):
@@ -52,9 +52,9 @@ def test_operator_ack_rejects_wildcard(monkeypatch):
 
 
 def test_operator_ack_normalises_provider_aliases(monkeypatch):
-    monkeypatch.setenv(_ACK_ENV, "gemini/gemini-3.5-flash; claude/claude-sonnet-4-6")
+    monkeypatch.setenv(_ACK_ENV, "gemini/gemini-3.6-flash; claude/claude-sonnet-5")
     assert _blocker_for(_BINDING) == ""
-    assert _blocker_for("anthropic/claude-sonnet-4-6") == ""
+    assert _blocker_for("anthropic/claude-sonnet-5") == ""
 
 
 def test_operator_ack_does_not_touch_readiness_catalog(monkeypatch):

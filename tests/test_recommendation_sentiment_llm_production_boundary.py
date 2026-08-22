@@ -100,7 +100,7 @@ def test_sentiment_uses_exact_json_boundary_and_progress_metadata(monkeypatch) -
             "cost_micro_usd": 100,
         }
 
-    monkeypatch.setattr(sentiment, "_sentiment_binding", lambda: ("google", "gemini-3.5-flash"))
+    monkeypatch.setattr(sentiment, "_sentiment_binding", lambda: ("google", "gemini-3.6-flash"))
     monkeypatch.setattr(sentiment.llm_production, "generate_json", generate_json)
     conn = _SentimentConn()
 
@@ -108,7 +108,7 @@ def test_sentiment_uses_exact_json_boundary_and_progress_metadata(monkeypatch) -
 
     assert result["annotated"] == 1
     assert captured["provider"] == "google"
-    assert captured["model"] == "gemini-3.5-flash"
+    assert captured["model"] == "gemini-3.6-flash"
     assert captured["required_keys"] == ("items",)
     assert captured["metadata"]["phase"] == "analysis"
     assert captured["metadata"]["subphase"] == "sentiment_annotation"

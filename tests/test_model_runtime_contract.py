@@ -12,6 +12,13 @@ from app.platform.models.runtime import resolve_model_binding, response_model_ma
 @pytest.mark.parametrize(
     ("provider", "model_id", "input_rate", "output_rate"),
     [
+        # 2026-08-22 模型升级刀:新默认行(pricing_version model_upgrade_2026-08-22)
+        ("openai", "gpt-5.6-luna", 20, 120),
+        ("google", "gemini-3.6-flash", 75, 375),
+        ("google", "gemini-3.5-flash-lite", 30, 250),
+        ("anthropic", "claude-sonnet-5", 200, 1000),
+        ("anthropic", "claude-opus-5", 500, 2500),
+        # 旧行保留(prod env pin / 历史台账)
         ("openai", "gpt-5.4-mini", 75, 450),
         ("openai", "gpt-5.5", 500, 3000),
         ("google", "gemini-3.5-flash", 150, 900),
@@ -34,6 +41,27 @@ def test_all_task_binding_models_have_exact_transport_and_pricing(
     assert binding.pricing_known is True
     assert binding.input_cents_per_million == input_rate
     assert binding.output_cents_per_million == output_rate
+
+
+def test_model_upgrade_rows_carry_the_frozen_pricing_version() -> None:
+    """新五行在精确目录里统一盖 model_upgrade_2026-08-22 戳(路由注册表命中的
+    三个默认档 resolve 时仍报 router_registry_v1,属既有行为)。"""
+    from app.platform.models.runtime import _EXACT_CATALOG
+
+    for provider, model_id in (
+        ("openai", "gpt-5.6-luna"),
+        ("google", "gemini-3.6-flash"),
+        ("google", "gemini-3.5-flash-lite"),
+        ("anthropic", "claude-sonnet-5"),
+        ("anthropic", "claude-opus-5"),
+    ):
+        entry = _EXACT_CATALOG[(provider, model_id)]
+        assert entry.pricing_version == "model_upgrade_2026-08-22", model_id
+        binding = resolve_model_binding(provider, model_id)
+        assert binding.pricing_known is True, model_id
+        assert binding.registered is True, model_id
+        assert binding.input_cents_per_million == entry.input_cents_per_million
+        assert binding.output_cents_per_million == entry.output_cents_per_million
 
 
 def test_openai_stable_aliases_only_accept_reviewed_snapshots() -> None:
@@ -547,7 +575,7 @@ def _gemini_local_evaluation_preflight(gateway) -> dict[str, Any]:
         "video video:3951",
         purpose="vkpi_analysis_worker",
         preferred_provider="google",
-        model_override="gemini-2.5-flash",
+        model_override="gemini-3.6-flash",
         model_fallbacks=[],
         execution_class="local_evaluation",
         skip_monthly_env_check=True,
@@ -574,14 +602,14 @@ def test_production_preflight_remains_dual_signed_fail_closed_with_local_flags(
     _configure_local_evaluation_preflight(monkeypatch, gateway)
     monkeypatch.setenv("VKPI_LLM_LOCAL_EVALUATION_ENABLED", "1")
     monkeypatch.setenv(
-        "VKPI_LLM_LOCAL_EVALUATION_MODELS", "google/gemini-2.5-flash"
+        "VKPI_LLM_LOCAL_EVALUATION_MODELS", "google/gemini-3.6-flash"
     )
     _authorize_gateway_readiness(monkeypatch, gateway)
 
     result = gateway.budget_preflight(
         "video video:3951",
         preferred_provider="google",
-        model_override="gemini-2.5-flash",
+        model_override="gemini-3.6-flash",
         model_fallbacks=[],
         execution_class="production",
         skip_monthly_env_check=True,
@@ -599,7 +627,7 @@ def test_local_evaluation_is_blocked_by_default(monkeypatch) -> None:
     _configure_local_evaluation_preflight(monkeypatch, gateway)
     monkeypatch.delenv("VKPI_LLM_LOCAL_EVALUATION_ENABLED", raising=False)
     monkeypatch.setenv(
-        "VKPI_LLM_LOCAL_EVALUATION_MODELS", "google/gemini-2.5-flash"
+        "VKPI_LLM_LOCAL_EVALUATION_MODELS", "google/gemini-3.6-flash"
     )
 
     result = _gemini_local_evaluation_preflight(gateway)
@@ -616,7 +644,7 @@ def test_explicit_allowlisted_local_evaluation_can_pass_without_production_claim
     _configure_local_evaluation_preflight(monkeypatch, gateway)
     monkeypatch.setenv("VKPI_LLM_LOCAL_EVALUATION_ENABLED", "1")
     monkeypatch.setenv(
-        "VKPI_LLM_LOCAL_EVALUATION_MODELS", "google/gemini-2.5-flash"
+        "VKPI_LLM_LOCAL_EVALUATION_MODELS", "google/gemini-3.6-flash"
     )
 
     result = _gemini_local_evaluation_preflight(gateway)
@@ -627,7 +655,7 @@ def test_explicit_allowlisted_local_evaluation_can_pass_without_production_claim
     assert result["evaluation_only"] is True
     assert result["production_authorized"] is False
     assert result["claim_status"] == "descriptive_only"
-    assert item["binding"] == "google/gemini-2.5-flash"
+    assert item["binding"] == "google/gemini-3.6-flash"
     assert item["authorization_scope"] == "evaluation_only"
     assert item["production_authorized"] is False
 
@@ -649,7 +677,7 @@ def test_local_evaluation_rejects_unallowlisted_or_production_execution(
     )
 
     monkeypatch.setenv(
-        "VKPI_LLM_LOCAL_EVALUATION_MODELS", "google/gemini-2.5-flash"
+        "VKPI_LLM_LOCAL_EVALUATION_MODELS", "google/gemini-3.6-flash"
     )
     monkeypatch.setattr(gateway, "IS_PRODUCTION", True)
     production = _gemini_local_evaluation_preflight(gateway)
@@ -658,6 +686,20 @@ def test_local_evaluation_rejects_unallowlisted_or_production_execution(
         production["providers"][0]["binding_gate_reason"]
         == "local_evaluation_forbidden_in_production"
     )
+
+
+def test_local_evaluation_allowlist_derives_from_leaf_module(monkeypatch) -> None:
+    """网关白名单唯一真源 = llm_local_evaluation.LOCAL_EVALUATION_BINDING;
+    旧视频模型 gemini-2.5-flash 不再被本地评估类放行。"""
+    from app.platform import llm_gateway as gateway
+    from app.platform import llm_local_evaluation as local_eval
+
+    assert local_eval.LOCAL_EVALUATION_BINDING == "google/gemini-3.6-flash"
+    monkeypatch.setenv(
+        "VKPI_LLM_LOCAL_EVALUATION_MODELS",
+        "google/gemini-2.5-flash, gemini/gemini-3.6-flash, openai/gpt-5.6-luna",
+    )
+    assert gateway._local_evaluation_bindings() == {local_eval.LOCAL_EVALUATION_BINDING}
 
 
 def test_rule_v0_record_reports_model_level_fallback_truthfully(monkeypatch) -> None:

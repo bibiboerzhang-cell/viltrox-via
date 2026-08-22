@@ -15,7 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_confirmed_opus_binding_is_registered_and_unknown_id_is_rejected() -> None:
-    assert model_registry.CLAUDE_OPUS_EXACT_MODEL == "claude-opus-4-7"
+    assert model_registry.CLAUDE_OPUS_EXACT_MODEL == "claude-opus-5"
+    # 旧 Opus 仍注册(prod env 可钉回),但不再是默认
+    assert "claude-opus-4-7" in model_registry.AVAILABLE_MODELS["anthropic"]
     assert claude_contract_extract._registered_anthropic_model(
         model_registry.CLAUDE_OPUS_EXACT_MODEL
     ) == model_registry.CLAUDE_OPUS_EXACT_MODEL

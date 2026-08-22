@@ -55,7 +55,7 @@ def test_generate_json_adds_progress_without_relaxing_strict_gates(monkeypatch):
     result = llm_production.generate_json(
         "prompt",
         provider="anthropic",
-        model="claude-opus-4-7",
+        model="claude-opus-5",
         purpose="deepsight_strategy",
     )
 
@@ -87,7 +87,7 @@ def test_generate_json_rejects_task_binding_model_mismatch_before_gateway(monkey
         llm_production.generate_json(
             "prompt",
             provider="anthropic",
-            model="claude-sonnet-4-6",
+            model="claude-sonnet-5",
             purpose="ai_today.evidence_strategy",
             metadata={"task_binding": "ai_today_evidence_strategy"},
         )
@@ -107,7 +107,7 @@ def test_via_summary_keeps_its_reviewed_task_binding(monkeypatch):
         captured.update(kwargs)
         return {
             "status": "success",
-            "provider": "anthropic",
+            "provider": "openai",
             "model": kwargs["model"],
             "json": {"summary": "bounded", "keywords": []},
         }
@@ -122,9 +122,10 @@ def test_via_summary_keeps_its_reviewed_task_binding(monkeypatch):
             purpose="summary",
             system_prompt="summarize",
             payload={"text": "hello"},
+            # 2026-08-22 模型升级刀:Haiku 4.5 退役,via_persona_summary 改绑 openai/gpt-5.6-luna
             route_override={
-                "provider": "claude",
-                "model": "claude-haiku-4-5-20251001",
+                "provider": "openai",
+                "model": "gpt-5.6-luna",
             },
         )
     )
@@ -139,7 +140,7 @@ def test_deepsight_triad_uses_three_exact_strict_bindings(monkeypatch):
     from app.services.deepsight import triad
 
     bindings = {
-        "deepsight_strategy": "anthropic/claude-opus-4-7",
+        "deepsight_strategy": "anthropic/claude-opus-5",
         "deepsight_market_empath": "openai/gpt-5.5",
         "deepsight_opportunity": "google/gemini-2.5-pro",
     }
@@ -189,7 +190,7 @@ def test_deepsight_triad_uses_three_exact_strict_bindings(monkeypatch):
         (call["provider"], call["model"])
         for call in calls
     } == {
-        ("anthropic", "claude-opus-4-7"),
+        ("anthropic", "claude-opus-5"),
         ("openai", "gpt-5.5"),
         ("google", "gemini-2.5-pro"),
     }
@@ -308,7 +309,7 @@ def test_anthropic_multimodal_boundary_preserves_payload_and_settles(monkeypatch
         def create(**kwargs):
             provider_kwargs.update(kwargs)
             return SimpleNamespace(
-                model="claude-sonnet-4-6",
+                model="claude-sonnet-5",
                 usage=SimpleNamespace(input_tokens=1800, output_tokens=120),
                 content=[SimpleNamespace(type="text", text="{}")],
             )
@@ -344,7 +345,7 @@ def test_anthropic_multimodal_boundary_preserves_payload_and_settles(monkeypatch
             "provider_gate_reason": "provider_calls_allowed",
             "providers": [
                 {
-                    "binding": "anthropic/claude-sonnet-4-6",
+                    "binding": "anthropic/claude-sonnet-5",
                     "provider_calls_allowed": True,
                 }
             ],
@@ -374,7 +375,7 @@ def test_anthropic_multimodal_boundary_preserves_payload_and_settles(monkeypatch
     response = llm_production.generate_anthropic_messages(
         client=SimpleNamespace(messages=Messages()),
         messages=messages,
-        model="claude-sonnet-4-6",
+        model="claude-sonnet-5",
         purpose="audit_vision_fallback",
         max_output_tokens=2000,
         cost_tag="cron:audit_vision_fallback",
@@ -385,13 +386,15 @@ def test_anthropic_multimodal_boundary_preserves_payload_and_settles(monkeypatch
         },
     )
 
-    assert response.model == "claude-sonnet-4-6"
-    assert provider_kwargs == {
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 2000,
-        "messages": messages,
-    }
+    assert response.model == "claude-sonnet-5"
+    # 2026-08-22 模型升级刀:B 车道在 messages.create 上显式带 thinking 策略
+    # (默认 disabled,VKPI_ANTHROPIC_THINKING=adaptive 可开);本测试只锁
+    # 模型/上限/原 messages 对象透传 + 思考默认关,不锁其它传输层键。
+    assert provider_kwargs["model"] == "claude-sonnet-5"
+    assert provider_kwargs["max_tokens"] == 2000
     assert provider_kwargs["messages"] is messages
+    assert provider_kwargs.get("thinking", {"type": "disabled"})["type"] == "disabled"
+    assert set(provider_kwargs) <= {"model", "max_tokens", "messages", "thinking", "output_config"}
     assert reservations.started == ["llmres-unit"]
     assert reservations.settled[0][0] == "llmres-unit"
     assert reservations.settled[0][1] > 0

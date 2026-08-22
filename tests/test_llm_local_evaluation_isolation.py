@@ -25,7 +25,7 @@ def _issued_payload(monkeypatch, *, job_id: int = 41, now: int = 1_000):
         "derive_method": "video_analysis_final_v1",
         "local_evaluation": True,
         "execution_class": "local_evaluation",
-        "model_binding": "google/gemini-2.5-flash",
+        "model_binding": "google/gemini-3.6-flash",
     }
     payload[local_eval.LOCAL_EVALUATION_CAPABILITY_FIELD] = (
         local_eval.issue_local_evaluation_capability(
@@ -174,7 +174,7 @@ def test_cache_isolation_is_opt_in_and_production_always_wins() -> None:
 
     conn = _cache_conn()
     conn.execute(
-        "INSERT INTO vkpi_analysis_cache VALUES (1,'video','3951','video_analysis_final_v1__local_eval','gemini-2.5-flash',0,'ready',NULL,'{\"evaluation_only\":true}','2026-01-02','2026-01-02')"
+        "INSERT INTO vkpi_analysis_cache VALUES (1,'video','3951','video_analysis_final_v1__local_eval','gemini-3.6-flash',0,'ready',NULL,'{\"evaluation_only\":true}','2026-01-02','2026-01-02')"
     )
 
     assert get_analysis_cache_entry(
@@ -265,7 +265,7 @@ def test_eval_cache_write_uses_separate_method_and_skips_production_followups(mo
         payload={"target_type": "video", "target_id": "3951"},
         evidence={"id": 3951},
         raw={
-            "model": "gemini-2.5-flash",
+            "model": "gemini-3.6-flash",
             "llm_execution": {
                 "execution_class": "local_evaluation",
                 "evaluation_only": True,

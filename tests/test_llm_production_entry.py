@@ -65,7 +65,7 @@ def _invoke(gateway):
         "hello",
         purpose="strict-unit",
         preferred_provider="anthropic",
-        model_override="claude-opus-4-7",
+        model_override="claude-opus-5",
         model_fallbacks=(),
         skip_budget_check=True,
         enforce_atomic_reservation=True,
@@ -120,7 +120,7 @@ def test_success_reserves_starts_records_then_settles_without_double_budget(monk
         return {
             "status": "success",
             "provider": "anthropic",
-            "model": "claude-opus-4-7",
+            "model": "claude-opus-5",
             "text": "ok",
             "input_tokens": 100,
             "output_tokens": 20,
@@ -154,7 +154,7 @@ def test_text_atomic_ledger_failure_keeps_reservation_open_and_stops_fallback(
         return {
             "status": "success",
             "provider": "anthropic",
-            "model": "claude-opus-4-7",
+            "model": "claude-opus-5",
             "text": "ok",
             "input_tokens": 100,
             "output_tokens": 20,
@@ -212,13 +212,13 @@ def test_text_atomic_settlement_failure_hard_stops_two_candidate_chain(
         "hello",
         purpose="strict-unit",
         preferred_provider="anthropic",
-        model_override="claude-opus-4-7",
-        model_fallbacks=(("anthropic", "claude-sonnet-4-6"),),
+        model_override="claude-opus-5",
+        model_fallbacks=(("anthropic", "claude-sonnet-5"),),
         skip_budget_check=True,
         enforce_atomic_reservation=True,
     )
 
-    assert provider_models == ["claude-opus-4-7"]
+    assert provider_models == ["claude-opus-5"]
     assert [event[0] for event in reservations.events] == [
         "reserve",
         "started",
@@ -264,7 +264,7 @@ def test_exact_model_mismatch_is_settled_and_rejected(monkeypatch) -> None:
         lambda *_a, **_k: {
             "status": "success",
             "provider": "anthropic",
-            "model": "claude-sonnet-4-6",
+            "model": "claude-sonnet-5",
             "text": "wrong model",
             "input_tokens": 10,
             "output_tokens": 5,
@@ -277,7 +277,7 @@ def test_exact_model_mismatch_is_settled_and_rejected(monkeypatch) -> None:
     assert "settled" in [event[0] for event in reservations.events]
     mismatch = next(row for row in ledgers if row["status"] == "model_mismatch")
     assert mismatch["update_budget_scopes"] is False
-    assert mismatch["metadata"]["requested_model"] == "claude-opus-4-7"
+    assert mismatch["metadata"]["requested_model"] == "claude-opus-5"
 
 
 def test_production_wrapper_forces_exact_authoritative_chain(monkeypatch) -> None:
@@ -290,7 +290,7 @@ def test_production_wrapper_forces_exact_authoritative_chain(monkeypatch) -> Non
         return {
             "status": "success",
             "provider": "anthropic",
-            "model": "claude-opus-4-7",
+            "model": "claude-opus-5",
             "text": "ok",
         }
 
@@ -298,7 +298,7 @@ def test_production_wrapper_forces_exact_authoritative_chain(monkeypatch) -> Non
     assert llm_production.generate_text(
         "hello",
         provider="anthropic",
-        model="claude-opus-4-7",
+        model="claude-opus-5",
         purpose="unit",
         metadata={"phase": "evaluation"},
     )["text"] == "ok"
@@ -319,7 +319,7 @@ def test_production_json_wrapper_forces_exact_atomic_single_attempt(monkeypatch)
         return {
             "status": "success",
             "provider": "openai",
-            "model": "gpt-5.4-mini",
+            "model": "gpt-5.6-luna",
             "json": {"answer": "ok"},
         }
 
@@ -327,7 +327,7 @@ def test_production_json_wrapper_forces_exact_atomic_single_attempt(monkeypatch)
     result = llm_production.generate_json(
         "hello",
         provider="openai",
-        model="gpt-5.4-mini",
+        model="gpt-5.6-luna",
         purpose="unit-json",
         required_keys=("answer",),
         metadata={"surface": "unit"},

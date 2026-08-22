@@ -249,13 +249,16 @@ def test_invoke_json_hit_replays_parsed_json(monkeypatch) -> None:
 def test_latest_alias_maps_to_exact_model_with_one_warning(monkeypatch, caplog) -> None:
     monkeypatch.delenv("VKPI_GEMINI_MODEL_EXACT", raising=False)
     with caplog.at_level(logging.WARNING):
-        assert alias.resolve_model_alias("google", "gemini-flash-latest") == "gemini-2.5-flash"
-        assert alias.resolve_model_alias("gemini", "gemini-flash-latest") == "gemini-2.5-flash"
+        # 2026-08-22 模型升级刀:flash 别名默认精确映射到 gemini-3.6-flash
+        # (gemini-flash-latest 本身已漂到 3.7,禁用,绝不能原样放行)。
+        assert alias.resolve_model_alias("google", "gemini-flash-latest") == "gemini-3.6-flash"
+        assert alias.resolve_model_alias("gemini", "gemini-flash-latest") == "gemini-3.6-flash"
         assert alias.resolve_model_alias("google", "gemini-pro-latest") == "gemini-2.5-pro"
     mapped = [rec for rec in caplog.records if "model_alias_mapped" in rec.getMessage()]
     assert len(mapped) == 2, "one warning per distinct alias→exact mapping"
     assert alias.resolve_model_alias("google", "gemini-2.5-flash") == "gemini-2.5-flash"
-    assert alias.resolve_model_alias("openai", "gpt-5.4-mini") == "gpt-5.4-mini"
+    assert alias.resolve_model_alias("google", "gemini-3.6-flash") == "gemini-3.6-flash"
+    assert alias.resolve_model_alias("openai", "gpt-5.6-luna") == "gpt-5.6-luna"
 
     monkeypatch.setenv("VKPI_GEMINI_MODEL_EXACT", "gemini-3.5-flash")
     assert alias.exact_model_for_alias("google", "gemini-flash-latest") == "gemini-3.5-flash"
@@ -277,7 +280,7 @@ def test_ledger_records_exact_model_for_alias(monkeypatch) -> None:
         fallback_used=False,
     )
     row = audit["call"]
-    assert row["model"] == "gemini-2.5-flash"
+    assert row["model"] == "gemini-3.6-flash"
     assert json.loads(row["metadata_json"])["model_alias"] == "gemini-flash-latest"
 
 

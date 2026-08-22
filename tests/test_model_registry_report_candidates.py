@@ -9,9 +9,13 @@ def test_report_candidates_are_selectable_without_becoming_defaults(monkeypatch)
     assert model_registry.is_selectable_model("openai/gpt-5.6") is True
     assert model_registry.is_selectable_model("anthropic/claude-fable-5") is True
 
+    # 2026-08-22 模型升级刀:luna 是独立 id,可选且是默认;全价 gpt-5.6 仍只做报告候选。
+    assert model_registry.is_selectable_model("openai/gpt-5.6-luna") is True
+
     defaults = set(model_registry.TASK_MODEL_BINDING.values())
     assert "openai/gpt-5.6" not in defaults
     assert "anthropic/claude-fable-5" not in defaults
+    assert "openai/gpt-5.6-luna" in defaults
 
     for model_env, provider_env in model_registry.TASK_MODEL_ENV_KEYS.values():
         monkeypatch.delenv(model_env, raising=False)

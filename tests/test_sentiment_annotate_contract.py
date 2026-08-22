@@ -504,7 +504,7 @@ def test_binding_default_equals_registry(monkeypatch):
     provider, model = sa._sentiment_binding()
     expected = model_registry.current_task_model_binding()[sa.TASK_BINDING]
     assert f"{provider}/{model}" == expected
-    assert (provider, model) == ("google", "gemini-3.5-flash")
+    assert (provider, model) == ("google", "gemini-3.6-flash")
 
 
 def test_binding_partial_env_override_warns_and_uses_registry(monkeypatch, caplog):
@@ -516,21 +516,21 @@ def test_binding_partial_env_override_warns_and_uses_registry(monkeypatch, caplo
     with caplog.at_level("WARNING", logger=sa.logger.name):
         provider, model = sa._sentiment_binding()
     assert f"{provider}/{model}" == model_registry.TASK_MODEL_BINDING[sa.TASK_BINDING]
-    assert (provider, model) == ("google", "gemini-3.5-flash")
+    assert (provider, model) == ("google", "gemini-3.6-flash")
     assert any("partial_env_override_ignored" in rec.message for rec in caplog.records)
 
 
 def test_binding_survives_global_gemini_model_drift(monkeypatch):
-    """GEMINI_MODEL 全局 env 漂移:旧实现会分叉出 google/gemini-2.5-flash 而 registry
-    仍期望 google/gemini-3.5-flash → 恒 task_binding_model_mismatch;新实现恒等 registry。"""
+    """GEMINI_MODEL 全局 env 漂移:旧实现会分叉出 google/gemini-3.5-flash 而 registry
+    仍期望 google/gemini-3.6-flash → 恒 task_binding_model_mismatch;新实现恒等 registry。"""
     from app.core import model_registry
 
     _clear_binding_env(monkeypatch)
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash")
     provider, model = sa._sentiment_binding()
     expected = model_registry.current_task_model_binding()[sa.TASK_BINDING]
     assert f"{provider}/{model}" == expected
-    assert (provider, model) == ("google", "gemini-3.5-flash")
+    assert (provider, model) == ("google", "gemini-3.6-flash")
 
 
 def test_binding_double_env_override_is_effective(monkeypatch):

@@ -160,10 +160,12 @@ def test_transport_disabled_models_are_never_routed():
 
 
 def test_context_floor_requires_long_context():
-    # Require >= 500k tokens -> only gemini (1M) qualifies.
+    # Require >= 500k tokens -> gemini (1M) and claude (Sonnet 5, 1M) qualify;
+    # gpt (128k) never does.  2026-08-22 模型升级刀后 Claude 也是 1M 上下文。
     decision = route(RouteRequest(skill="x", min_context_tokens=500_000))
     candidate_keys = {decision.primary.key} | {m.key for m in decision.fallback_chain}
-    assert candidate_keys == {GEMINI}
+    assert candidate_keys == {GEMINI, CLAUDE}
+    assert GPT not in candidate_keys
     assert not decision.degraded
 
 
@@ -216,7 +218,7 @@ def test_route_and_invoke_delegates_to_gateway(monkeypatch):
     )
     assert captured["prompt"] == "hello"
     assert captured["kwargs"]["preferred_provider"] == "anthropic"  # claude -> anthropic
-    assert captured["kwargs"]["model_override"] == "claude-sonnet-4-6"
+    assert captured["kwargs"]["model_override"] == "claude-sonnet-5"
     assert captured["kwargs"]["model_fallbacks"] == [
         (model.gateway_provider, model.model_id)
         for model in route(

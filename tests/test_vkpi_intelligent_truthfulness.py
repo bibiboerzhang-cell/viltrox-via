@@ -239,7 +239,7 @@ def test_gateway_attempt_limit_prevents_a_second_billable_provider(
     calls: list[str] = []
     monkeypatch.setenv(
         "VKPI_LLM_RUNTIME_VERIFIED_MODELS",
-        "openai/gpt-5.4-mini,google/gemini-3.5-flash",
+        "openai/gpt-5.6-luna,google/gemini-3.6-flash",
     )
     monkeypatch.setattr(
         llm_gateway,
