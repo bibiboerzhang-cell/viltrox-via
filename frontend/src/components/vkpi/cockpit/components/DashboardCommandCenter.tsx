@@ -5,11 +5,13 @@ import { Breadcrumb } from "./Breadcrumb";
 import { FloatingCard } from "./FloatingCard";
 import { HierarchyDropdown } from "./HierarchyDropdown";
 import { UpcomingEventsCard } from "./UpcomingEventsCard";
+import { useT } from "../lib/i18n";
 
 const e = React.createElement;
 const RealMap = React.lazy(() => import("./RealMap").then((module) => ({ default: module.RealMap })));
 
 export function DashboardCommandCenter(props: any) {
+  const { t: contextT } = useT();
   const {
     globeContainerRef, isAvailable, pins, currentMode, venue, item, city, country,
     setPreviewEvent, handleCountryChange, handleCityChange, handleItemChange, setVenue,
@@ -17,7 +19,9 @@ export function DashboardCommandCenter(props: any) {
     venueOptions, breadcrumb, goBack, topListData, setSelectedEvent, focusTarget,
     viewModes, showSettingsModal, upcomingEvents, onOpenEvents, revenueBySource = [],
     mapSelectionLoading = false, mapSelectionError = "",
+    t: translate,
   } = props;
+  const t = typeof translate === "function" ? translate : contextT;
   const showMapLoading = mapSelectionLoading && !isAvailable;
   const showMapChooser = !viewMode && !mapSelectionLoading;
 
@@ -50,31 +54,31 @@ export function DashboardCommandCenter(props: any) {
     ),
 
     !showSettingsModal && e("div", { className: "vkpi-command-map__title pointer-events-none absolute left-6 top-6 z-overlay-high max-w-md px-3 py-2" },
-      e("h2", { className: "text-xl font-semibold text-ink md:text-2xl" }, "Marketing Command Center"),
-      e("p", { className: "mt-1 text-xs text-muted md:text-sm" }, currentMode?.desc || "真实 KOL、Dealer 与 Events 地理分布"),
+      e("h2", { className: "text-xl font-semibold text-ink md:text-2xl" }, t("Marketing Command Center")),
+      e("p", { className: "mt-1 text-xs text-muted md:text-sm" }, t(currentMode?.desc || "真实 KOL、Dealer 与 Events 地理分布")),
     ),
 
     !showSettingsModal && (viewMode || !mapSelectionLoading) && e("div", { className: "absolute left-6 top-24 z-overlay-top flex max-w-[calc(100%-360px)] flex-wrap items-start gap-2" },
       e(HierarchyDropdown, {
-        label: "Viewing",
+        label: t("Viewing"),
         value: viewMode,
-        placeholder: "Select",
+        placeholder: t("Select"),
         accent: !viewMode,
         // 未选模式时的回退色走 token(下游 badge 已用 color-mix,var() 可直接吃)
         color: currentMode?.color || "var(--ds-accent-2)",
         options: Object.entries(viewModes || {}).map(([key, mode]: [string, any]) => ({
           key,
-          label: mode.label,
-          sub: mode.desc,
+          label: t(mode.label),
+          sub: t(mode.desc),
           badge: mode.available
             ? null
             : mode.loading
-              ? "LOADING"
+              ? t("LOADING")
               : mode.error
-                ? "ERROR"
+                ? t("ERROR")
                 : mode.waitingMessage
-                  ? "WAITING"
-                  : "EMPTY",
+                  ? t("WAITING")
+                  : t("EMPTY"),
           disabled: !mode.available,
         })),
         onChange: (value: any) => {
@@ -84,33 +88,33 @@ export function DashboardCommandCenter(props: any) {
         },
       }),
       viewMode && isAvailable && e(HierarchyDropdown, {
-        label: "Country",
+        label: t("Country"),
         value: country,
-        placeholder: "All",
+        placeholder: t("All"),
         color: currentMode.color,
         options: countryOptions,
         onChange: handleCountryChange,
       }),
       viewMode && isAvailable && country && e(HierarchyDropdown, {
-        label: "City",
+        label: t("City"),
         value: city,
-        placeholder: "All",
+        placeholder: t("All"),
         color: currentMode.color,
         options: cityOptions,
         onChange: handleCityChange,
       }),
       viewMode && isAvailable && !currentMode.isEvents && city && itemOptions.length > 1 && e(HierarchyDropdown, {
-        label: viewMode === "kols" ? "KOL" : "Dealer",
+        label: viewMode === "kols" ? "KOL" : t("Dealer"),
         value: item,
-        placeholder: "All",
+        placeholder: t("All"),
         color: currentMode.color,
         options: itemOptions,
         onChange: handleItemChange,
       }),
       viewMode && isAvailable && !currentMode.isEvents && item && venueOptions.length > 1 && e(HierarchyDropdown, {
-        label: "Address",
+        label: t("Address"),
         value: venue,
-        placeholder: "All",
+        placeholder: t("All"),
         color: currentMode.color,
         options: venueOptions,
         onChange: setVenue,
@@ -124,23 +128,23 @@ export function DashboardCommandCenter(props: any) {
     showMapLoading && e("div", { className: "absolute inset-0 flex items-center justify-center" },
       e("div", { className: "max-w-md px-6 text-center" },
         e("div", { className: "mb-6 inline-flex h-20 w-20 items-center justify-center rounded-full border border-line bg-panel" }, e(Loader2, { size: 34, className: "animate-spin text-muted" })),
-        e("h3", { className: "mb-2 text-xl font-semibold text-ink" }, "Loading map data"),
-        e("p", { className: "text-sm text-muted" }, "正在检查 KOL、Dealer 与 Events 的真实地理数据。"),
+        e("h3", { className: "mb-2 text-xl font-semibold text-ink" }, t("Loading map data")),
+        e("p", { className: "text-sm text-muted" }, t("正在检查 KOL、Dealer 与 Events 的真实地理数据。")),
       ),
     ),
 
     showMapChooser && e("div", { className: "absolute inset-0 flex items-center justify-center" },
       e("div", { className: "max-w-md px-6 text-center" },
         e("div", { className: "mb-6 inline-flex h-20 w-20 items-center justify-center rounded-full border border-line bg-panel" }, e(Globe2, { size: 36, className: "text-muted" })),
-        e("h3", { className: "mb-2 text-xl font-semibold text-ink" }, mapSelectionError ? "Map data unavailable" : "Choose what to map"),
+        e("h3", { className: "mb-2 text-xl font-semibold text-ink" }, t(mapSelectionError ? "Map data unavailable" : "Choose what to map")),
         e("p", { className: "mb-6 text-sm text-muted" }, mapSelectionError
-          ? "KOL、Dealer 与 Events 地图源当前均不可用。"
-          : "当前没有可映射的真实位置；有数据后将自动选择。"),
+          ? t("KOL、Dealer 与 Events 地图源当前均不可用。")
+          : t("当前没有可映射的真实位置；有数据后将自动选择。")),
         e("div", { className: "flex flex-wrap justify-center gap-2 text-xs text-muted" },
           ["kols", "dealers", "events"].map((key) => {
             const mode = viewModes?.[key] || {};
             const status = mode.available ? "READY" : mode.error ? "ERROR" : "EMPTY";
-            return e("span", { key, className: "rounded-md border border-line bg-panel px-3 py-1.5" }, `${mode.label || key} · ${status}`);
+            return e("span", { key, className: "rounded-md border border-line bg-panel px-3 py-1.5" }, `${t(mode.label || key)} · ${t(status)}`);
           }),
         ),
       ),
@@ -149,8 +153,8 @@ export function DashboardCommandCenter(props: any) {
     viewMode === "customer" && !isAvailable && e("div", { className: "absolute inset-0 flex items-center justify-center" },
       e("div", { className: "mx-4 max-w-lg rounded-2xl border border-warn-soft bg-warn-soft p-8 text-center backdrop-blur-xl" },
         e("div", { className: "mb-4 inline-flex h-14 w-14 items-center justify-center rounded-full bg-warn-soft" }, e(Loader2, { size: 24, className: "animate-spin text-warn" })),
-        e("h3", { className: "mb-2 text-lg font-semibold text-ink" }, "Awaiting Shopify integration"),
-        e("p", { className: "text-sm text-muted" }, "Customer heatmap 会在 Shopify 订单数据接入后自动启用。"),
+        e("h3", { className: "mb-2 text-lg font-semibold text-ink" }, t("Awaiting Shopify integration")),
+        e("p", { className: "text-sm text-muted" }, t("Customer heatmap 会在 Shopify 订单数据接入后自动启用。")),
       ),
     ),
 
@@ -160,7 +164,7 @@ export function DashboardCommandCenter(props: any) {
 
     !showSettingsModal && isAvailable && viewMode && topListData.items.length > 0 && e("div", { className: "absolute bottom-6 left-6", style: { zIndex: 800 } },
       e(FloatingCard, {
-        title: topListData.title,
+        title: t(topListData.title),
         icon: TrendingUp,
         iconColor: currentMode.color,
         dragConstraintsRef: globeContainerRef,
@@ -168,8 +172,8 @@ export function DashboardCommandCenter(props: any) {
         initialDelay: 0.2,
       },
         e("div", { className: "mb-2 flex items-center gap-1.5 text-[9px] text-muted" },
-          e("span", { className: "rounded border border-good-soft bg-good-soft px-1 py-px text-good" }, "实时"),
-          e("span", null, "KOL Pool 分布"),
+          e("span", { className: "rounded border border-good-soft bg-good-soft px-1 py-px text-good" }, t("实时")),
+          e("span", null, t("KOL Pool 分布")),
         ),
         topListData.items.slice(0, 7).map((row: any, index: number) => e(m.div, {
           key: row.label,
@@ -205,7 +209,7 @@ export function DashboardCommandCenter(props: any) {
 
     !showSettingsModal && revenueBySource.length > 0 && e("div", { className: "absolute bottom-6 right-6", style: { zIndex: 800 } },
       e(FloatingCard, {
-        title: "Revenue by Source",
+        title: t("Revenue by Source"),
         icon: DollarSign,
         iconColor: "var(--ds-accent-2)",
         dragConstraintsRef: globeContainerRef,
@@ -219,6 +223,6 @@ export function DashboardCommandCenter(props: any) {
       ),
     ),
 
-    isAvailable && viewMode && e("div", { className: "globe-hint" }, country ? "street-level map · pan · zoom · click pin" : "drag · scroll · click pin to drill in"),
+    isAvailable && viewMode && e("div", { className: "globe-hint" }, t(country ? "street-level map · pan · zoom · click pin" : "drag · scroll · click pin to drill in")),
   );
 }

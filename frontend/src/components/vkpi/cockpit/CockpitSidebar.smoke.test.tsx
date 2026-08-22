@@ -11,6 +11,8 @@ vi.mock("../../../hooks/usePermissions", () => ({
 vi.mock("./components/TaskProgressBoard", () => ({ TaskProgressBoard: () => null }));
 
 import { CockpitSidebar } from "./CockpitSidebar";
+import { I18nContext, makeT } from "./lib/i18n";
+import { I18N_EN } from "./data/i18nEn";
 
 const baseProps = {
   collapsed: false,
@@ -32,12 +34,12 @@ describe("CockpitSidebar 员工可见区域过滤", () => {
     canViewBoard.mockImplementation((key: string) => key !== "shopify" && key !== "projects");
     render(React.createElement(CockpitSidebar, baseProps));
 
-    expect(screen.getByText("Dashboard")).toBeTruthy();
-    expect(screen.getByText("Dealers")).toBeTruthy();
-    expect(screen.getByText("KOL Pool")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "仪表盘" })).toBeTruthy();
+    expect(screen.getByText("经销商")).toBeTruthy();
+    expect(screen.getByText("KOL 人才库")).toBeTruthy();
     // 被设「无」的两块:不在 DOM
     expect(screen.queryByText("Shopify")).toBeNull();
-    expect(screen.queryByText("Projects")).toBeNull();
+    expect(screen.queryByText("项目")).toBeNull();
   });
 
   it("owner / 全可见 → 所有主导航板块都在", () => {
@@ -45,8 +47,22 @@ describe("CockpitSidebar 员工可见区域过滤", () => {
     render(React.createElement(CockpitSidebar, baseProps));
 
     expect(screen.getByText("Shopify")).toBeTruthy();
-    expect(screen.getByText("Projects")).toBeTruthy();
+    expect(screen.getByText("项目")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "仪表盘" })).toBeTruthy();
+  });
+
+  it("英文模式保留英文导航", () => {
+    canViewBoard.mockReturnValue(true);
+    render(
+      <I18nContext.Provider value={{ t: makeT("en", I18N_EN), lang: "en", setLang: vi.fn() }}>
+        <CockpitSidebar {...baseProps} />
+      </I18nContext.Provider>,
+    );
+
     expect(screen.getByText("Dashboard")).toBeTruthy();
+    expect(screen.getByText("Projects")).toBeTruthy();
+    expect(screen.getByText("Dealers")).toBeTruthy();
+    expect(screen.getByText("KOL Pool")).toBeTruthy();
   });
 
   it("收起控件固定在侧栏边缘且不再重复主题开关", () => {

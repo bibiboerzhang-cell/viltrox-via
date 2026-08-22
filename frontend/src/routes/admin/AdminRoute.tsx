@@ -7,11 +7,13 @@
  *   - Signed-in users enter a role-scoped Marketing view.
  */
 import { useEffect, useState } from "react";
+import { useLocale } from "../../app/providers/LocaleProvider";
 import { VkpiTab } from "../../components/admin/tabs_v2/VkpiTab";
 import { VkpiDashboard } from "../../components/vkpi";
 import { GlassDemoPage } from "../../components/vkpi/pages/GlassDemoPage";
 import { useAuth } from "../../hooks/useAuth";
 import { PUBLIC_SURFACE_NAME } from "../../lib/publicSurface";
+import { ThemeSwitch } from "../../shared/ThemeSwitch";
 import AdminLoginRoute from "./AdminLoginRoute";
 import "../../styles/admin.css";
 
@@ -23,8 +25,12 @@ function getHashPage(): string {
 }
 
 function AdminAuthLoading() {
+  const { t } = useLocale();
   return (
     <div className="admin-auth-viewport">
+      <div style={{ position: "absolute", top: 18, right: 18, zIndex: 2 }}>
+        <ThemeSwitch />
+      </div>
       <div className="admin-auth-card" role="main">
         <div className="admin-auth-card__brand">
           <span className="admin-root__mark">V</span>
@@ -33,15 +39,15 @@ function AdminAuthLoading() {
               {PUBLIC_SURFACE_NAME}
             </div>
             <div style={{ fontSize: 11, color: "var(--ax-text-2)" }}>
-              正在恢复登录会话
+              {t("正在恢复登录会话")}
             </div>
           </div>
         </div>
         <h1 className="admin-auth-card__title">
-          正在进入 {PUBLIC_SURFACE_NAME}
+          {t("正在进入 {surface}", { surface: PUBLIC_SURFACE_NAME })}
         </h1>
         <p className="admin-auth-card__subtitle">
-          请稍等，正在校验本地登录态。
+          {t("请稍等，正在校验本地登录态。")}
         </p>
       </div>
     </div>
@@ -64,6 +70,7 @@ function isGlassDemoRequest(hashPage: string): boolean {
 
 export default function AdminRoute() {
   const { status, token, user, signOut } = useAuth();
+  const { t } = useLocale();
   const [hashPage, setHashPage] = useState(() => getHashPage());
 
   useEffect(() => {
@@ -96,6 +103,9 @@ export default function AdminRoute() {
   if (!hasMarketingPermission(user)) {
     return (
       <div className="admin-auth-viewport">
+        <div style={{ position: "absolute", top: 18, right: 18, zIndex: 2 }}>
+          <ThemeSwitch />
+        </div>
         <div className="admin-auth-card">
           <div className="admin-auth-card__brand">
             <span className="admin-root__mark">V</span>
@@ -104,15 +114,17 @@ export default function AdminRoute() {
                 {PUBLIC_SURFACE_NAME}
               </div>
               <div style={{ fontSize: 11, color: "var(--ax-text-2)" }}>
-                访问被拒绝
+                {t("访问被拒绝")}
               </div>
             </div>
           </div>
           <h1 className="admin-auth-card__title">
-            当前账号没有内部系统权限
+            {t("当前账号没有内部系统权限")}
           </h1>
           <p className="admin-auth-card__subtitle">
-            你已登录，但当前账号没有 {PUBLIC_SURFACE_NAME} 权限。
+            {t("你已登录，但当前账号没有 {surface} 权限。", {
+              surface: PUBLIC_SURFACE_NAME,
+            })}
           </p>
           <button
             type="button"
@@ -121,10 +133,10 @@ export default function AdminRoute() {
               void signOut();
             }}
           >
-            退出当前账号
+            {t("退出当前账号")}
           </button>
           <a href="/" className="admin-auth-card__back">
-            ← 返回登录页
+            {t("← 返回登录页")}
           </a>
         </div>
       </div>

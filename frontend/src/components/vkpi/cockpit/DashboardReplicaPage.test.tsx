@@ -47,6 +47,8 @@ vi.mock("../../../services/vkpi/actionInbox-api", () => ({
 }));
 
 import { DashboardReplicaPage } from "./DashboardReplicaPage";
+import { makeT } from "./lib/i18n";
+import { I18N_EN } from "./data/i18nEn";
 
 beforeEach(() => {
   apiFetch.mockReset().mockResolvedValue({});
@@ -55,7 +57,7 @@ beforeEach(() => {
 
 // 最小但完整的 props bag(避免无默认值字段崩)。
 const baseProps = {
-  t: (s: string) => s,
+  t: makeT("zh"),
   kpiScope: "all",
   setKpiScope: () => {},
   setSelectedKpi: () => {},
@@ -105,7 +107,7 @@ describe("DashboardReplicaPage render smoke", () => {
   it("dashboardError 非空 → 副标题显示无信号", async () => {
     render(<DashboardReplicaPage {...baseProps} dashboardError="boom" />);
     await screen.findByText("增长总览");
-    expect(screen.getByRole("status", { name: "KPI data status" })).toHaveTextContent("无信号");
+    expect(screen.getByRole("status", { name: "KPI 数据状态" })).toHaveTextContent("无信号");
   });
 
   it("展示接口在线数与待接能力，不把空值伪装成全部接入", async () => {
@@ -116,8 +118,15 @@ describe("DashboardReplicaPage render smoke", () => {
       degraded: true,
     }} />);
 
-    const status = await screen.findByRole("status", { name: "KPI data status" });
+    const status = await screen.findByRole("status", { name: "KPI 数据状态" });
     expect(status).toHaveTextContent("9/10 可用 · 2 待接");
     expect(status).toHaveAttribute("title", "异常: 竞品雷达；待接能力: GMV、ROI");
+  });
+
+  it("lang=en 保持 Dashboard 通用 UI 为英文", async () => {
+    render(<DashboardReplicaPage {...baseProps} t={makeT("en", I18N_EN)} dashboardLoading={true} />);
+
+    expect(await screen.findByText("Growth Overview")).toBeInTheDocument();
+    expect(screen.getByRole("status", { name: "KPI data status" })).toHaveTextContent("Loading");
   });
 });

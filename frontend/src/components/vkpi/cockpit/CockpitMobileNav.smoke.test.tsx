@@ -9,6 +9,8 @@ vi.mock("../../../hooks/usePermissions", () => ({
 }));
 
 import { CockpitMobileNav } from "./CockpitMobileNav";
+import { I18nContext, makeT } from "./lib/i18n";
+import { I18N_EN } from "./data/i18nEn";
 
 describe("CockpitMobileNav 移动端导航", () => {
   beforeEach(() => canViewBoard.mockReset());
@@ -21,10 +23,10 @@ describe("CockpitMobileNav 移动端导航", () => {
     // 汉堡入口在(修复「移动端无导航入口」的核心)。
     expect(screen.getByLabelText("打开导航菜单")).toBeTruthy();
     // 抽屉复用侧边栏同一套主导航项。
-    expect(screen.getByText("KOL Pool")).toBeTruthy();
-    expect(screen.getByText("Projects")).toBeTruthy();
+    expect(screen.getByText("KOL 人才库")).toBeTruthy();
+    expect(screen.getByText("项目")).toBeTruthy();
     // 点导航项 → 切页用与侧边栏一致的 board key。
-    fireEvent.click(screen.getByText("KOL Pool"));
+    fireEvent.click(screen.getByText("KOL 人才库"));
     expect(setActiveNav).toHaveBeenCalledWith("kol-pool");
   });
 
@@ -33,8 +35,22 @@ describe("CockpitMobileNav 移动端导航", () => {
     render(
       React.createElement(CockpitMobileNav, { activeNav: "dashboard", setActiveNav: vi.fn() }),
     );
-    expect(screen.getByText("Dashboard")).toBeTruthy();
+    expect(screen.getByText("仪表盘")).toBeTruthy();
     expect(screen.queryByText("Shopify")).toBeNull();
+  });
+
+  it("英文模式保留英文标签和无障碍名称", () => {
+    canViewBoard.mockReturnValue(true);
+    render(
+      <I18nContext.Provider value={{ t: makeT("en", I18N_EN), lang: "en", setLang: vi.fn() }}>
+        <CockpitMobileNav activeNav="dashboard" setActiveNav={vi.fn()} />
+      </I18nContext.Provider>,
+    );
+
+    expect(screen.getByLabelText("Open navigation menu")).toBeTruthy();
+    expect(screen.getByLabelText("Primary navigation")).toBeTruthy();
+    expect(screen.getByText("Dashboard")).toBeTruthy();
+    expect(screen.getByText("Projects")).toBeTruthy();
   });
 
   it("点汉堡切换 aria-expanded(关→开)", () => {

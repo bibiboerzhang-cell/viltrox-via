@@ -4,6 +4,7 @@ import { Sparkline } from "../components/Sparkline";
 import { formatLocal } from "../../lib/timeLocal";
 import type { VoiceFeedItem } from "../../../../services/vkpi/marketVoice-api";
 import { IDENTITY_META, QuoteDialog, platformBadge, type QuoteRow } from "./MarketVoicePage.dialogs";
+import { useT } from "../lib/i18n";
 
 // 市场之声 · 板块页范式辅助件(MarketVoicePage 专用,页内拆件不入公共桶)。
 //   V0h-c chrome 大扫除:卡头 cnt = demo 同款 accent-soft 短徽 + SrcChip 后「实时」eyebrow;
@@ -279,11 +280,12 @@ export function ModuleCard({
   readableBody?: boolean;
   children: React.ReactNode;
 }) {
+  const { t } = useT();
   return (
     <section className="ds-mod ds-rise flex h-full min-h-0 flex-col">
       <header data-vkpi-density="readable-module-header" className="flex min-h-11 flex-none items-center justify-between gap-2.5 px-4 pb-2 pt-[13px]">
         <div className="flex min-w-0 items-center gap-2">
-          <h3 className="truncate text-[14.5px] font-semibold leading-5 tracking-[-0.01em] text-ink">{title}</h3>
+          <h3 className="truncate text-[14.5px] font-semibold leading-5 tracking-[-0.01em] text-ink">{t(title)}</h3>
           {cnt != null && (
             <span className="flex-none rounded-md bg-accent-soft px-2 py-0.5 text-[10.5px] font-semibold text-accent">{cnt}</span>
           )}
@@ -291,7 +293,7 @@ export function ModuleCard({
         <span className="flex flex-none items-center gap-2">
           <SrcChip label={srcLabel} rows={srcRows} onOpen={onOpenSrc} />
           {/* 数据为请求时实算 → 诚实「实时」eyebrow(demo 卡头右侧固定件) */}
-          <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-muted">实时</span>
+          <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-muted">{t("实时")}</span>
         </span>
       </header>
       <div
@@ -333,6 +335,7 @@ export function KpiCard({
   /** 环比百分比(kpi_prev.delta_pct);null/undefined = 上窗无数据,诚实不渲染药丸 */
   delta?: number | null;
 }) {
+  const { t } = useT();
   const dotCls = pending ? "ds-kpi__dot--pend" : tone === "warn" ? "ds-kpi__dot--warn" : "ds-kpi__dot--good";
   const valCls = pending ? " ds-kpi__val--pend" : tone === "warn" ? " ds-kpi__val--warn" : "";
   const nums = (Array.isArray(series) ? series : []).filter(
@@ -346,7 +349,7 @@ export function KpiCard({
     <div className="ds-kpi ds-rise" style={seriesColor ? ({ "--vkpi-kpi-accent": seriesColor } as React.CSSProperties) : undefined}>
       <div className="ds-kpi__k">
         <span className={`ds-kpi__dot ${dotCls}`} />
-        <span className="ds-kpi__label">{label}</span>
+        <span className="ds-kpi__label">{t(label)}</span>
       </div>
       <div className={`ds-kpi__val${valCls}`}>
         {pending ? "—" : value}
@@ -361,7 +364,7 @@ export function KpiCard({
       {pending ? (
         pendingNote ? (
           <div>
-            <span className="ds-kpi__pt">{pendingNote}</span>
+            <span className="ds-kpi__pt">{t(pendingNote)}</span>
           </div>
         ) : null
       ) : nums.length >= 2 ? (

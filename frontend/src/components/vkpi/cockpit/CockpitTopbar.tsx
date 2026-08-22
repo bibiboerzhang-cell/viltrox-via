@@ -10,6 +10,7 @@ import { TopProgressCenter } from "./components/TopProgressCenter";
 import { NAV_ITEMS } from "./data/navItems";
 import { useTheme, type Style, type Theme } from "../../../app/providers/ThemeProvider";
 import { AskCommandOverlay } from "./components/AskCommandOverlay";
+import { useT } from "./lib/i18n";
 
 const e = React.createElement;
 
@@ -169,6 +170,7 @@ function ResponsiveToolsMenu({
   onToggleMessages,
   activeReminders,
   setReportOpen,
+  t,
 }: any) {
   const [open, setOpen] = React.useState(false);
   const wrapRef = React.useRef<HTMLDivElement | null>(null);
@@ -196,23 +198,23 @@ function ResponsiveToolsMenu({
       type: "button",
       className: "vkpi-icon-button",
       onClick: () => setOpen((value) => !value),
-      "aria-label": "More tools",
+      "aria-label": t("More tools"),
       "aria-expanded": open,
-      title: "更多工具",
+      title: t("More tools"),
     }, e(MoreHorizontal, { size: 16 })),
     open && e("div", { className: "vkpi-topbar-overflow__menu", role: "menu" },
       e("div", { className: "vkpi-topbar-overflow__progress" },
-        e("span", null, "任务进度"),
+        e("span", null, t("任务进度")),
         e(TopProgressCenter)
       ),
       e("button", { type: "button", role: "menuitem", onClick: () => openAnchored(helpBtnRef, onToggleHelp) },
-        e(HelpCircle, { size: 14 }), e("span", null, "Help")
+        e(HelpCircle, { size: 14 }), e("span", null, t("Help"))
       ),
       e("button", { type: "button", role: "menuitem", onClick: () => openAnchored(messagesBtnRef, onToggleMessages) },
         e(MessageCircle, { size: 14 }), e("span", null, "工作提醒"), reminderCount > 0 && e("small", null, reminderCount)
       ),
       e("button", { type: "button", role: "menuitem", onClick: () => { setOpen(false); setReportOpen(true); } },
-        e(FileText, { size: 14 }), e("span", null, "生成 Report")
+        e(FileText, { size: 14 }), e("span", null, t("生成 Report"))
       )
     )
   );
@@ -239,6 +241,8 @@ export function CockpitTopbar({
   dashboardEditing,
   setDashboardEditing,
 }: any) {
+  const { t: contextT } = useT();
+  const translate = typeof t === "function" ? t : contextT;
   const label = (NAV_ITEMS.find((n: any) => n.key === activeNav)?.label) || "Dashboard";
   const iconBtn = "vkpi-icon-button rounded-lg p-2 text-muted hover:bg-accent-soft hover:text-ink";
   const [askOpen, setAskOpen] = React.useState(false);
@@ -270,11 +274,11 @@ export function CockpitTopbar({
     // 左:标题 + 副标(时间机制红线:页头禁冒称「实时/Just now」;新鲜度口径由各模块
     // SrcChip/溯源承担 —— dashboard 只留中性描述,其余板块不再挂副标字样)。
     e("div", { className: "vkpi-topbar-title flex flex-none flex-col justify-center" },
-      e("h1", { className: "text-[16px] font-semibold leading-none text-ink" }, label),
+      e("h1", { className: "text-[16px] font-semibold leading-none text-ink" }, translate(label)),
       activeNav === "dashboard"
         ? e("div", { className: "mt-1 flex items-center gap-1.5 text-[10px] text-muted" },
             e("span", { className: "h-1.5 w-1.5 rounded-full bg-good" }),
-            "增长总览"
+            translate("增长总览")
           )
         : null
     ),
@@ -303,7 +307,7 @@ export function CockpitTopbar({
         onClick: () => setDashboardEditing?.(!dashboardEditing),
         className: `vkpi-layout-edit-button hidden items-center gap-1.5 md:flex ${dashboardEditing ? "is-active" : ""}`,
         "aria-pressed": Boolean(dashboardEditing),
-      }, e(PencilLine, { size: 13 }), e("span", null, dashboardEditing ? "完成布局" : "编辑布局")),
+      }, e(PencilLine, { size: 13 }), e("span", null, translate(dashboardEditing ? "完成布局" : "编辑布局"))),
       e(ResponsiveToolsMenu, {
         helpBtnRef,
         messagesBtnRef,
@@ -311,14 +315,15 @@ export function CockpitTopbar({
         onToggleMessages: () => toggleExclusivePopover("messages"),
         activeReminders,
         setReportOpen,
+        t: translate,
       }),
       e(AppearancePopover),
-      e("button", { ref: notifsBtnRef, onClick: () => toggleExclusivePopover("notifications"), "aria-label": "Notifications", className: `relative ${iconBtn}` },
+      e("button", { ref: notifsBtnRef, onClick: () => toggleExclusivePopover("notifications"), "aria-label": translate("Notifications"), className: `relative ${iconBtn}` },
         e(Bell, { size: 16 }),
         runtimeNotifications.filter((n: any) => n.unread).length > 0 && e("span", { className: "absolute right-1 top-1 h-2 w-2 rounded-full bg-crit" })
       ),
       // 账户(唯一身份锚点,侧栏不再重复)
-      e("button", { ref: userMenuBtnRef, onClick: () => toggleExclusivePopover("user"), "aria-label": "User Menu", className: "vkpi-account ml-1 flex items-center gap-2 rounded-lg py-1 pl-2 pr-1 hover:bg-accent-soft" },
+      e("button", { ref: userMenuBtnRef, onClick: () => toggleExclusivePopover("user"), "aria-label": translate("User Menu"), className: "vkpi-account ml-1 flex items-center gap-2 rounded-lg py-1 pl-2 pr-1 hover:bg-accent-soft" },
         e(Avatar, {
           src: viewingAs ? null : currentUser.avatarUrl,
           alt: currentUser.name, size: 32,
@@ -328,9 +333,9 @@ export function CockpitTopbar({
         e("div", { className: "vkpi-account__copy hidden text-left text-xs sm:block" },
           e("div", { className: "flex items-center gap-1 text-ink" },
             viewingAs ? viewingAs.name : currentUser.name,
-            viewingAs && e("span", { className: "rounded bg-accent-soft px-1 py-0.5 text-[8px] text-accent" }, t("正在以"))
+            viewingAs && e("span", { className: "rounded bg-accent-soft px-1 py-0.5 text-[8px] text-accent" }, translate("正在以"))
           ),
-          e("div", { className: "text-muted" }, viewingAs ? viewingAs.title : (currentUser.role === "admin" ? t("Admin") : t("成员")))
+          e("div", { className: "text-muted" }, viewingAs ? viewingAs.title : (currentUser.role === "admin" ? translate("Admin") : translate("成员")))
         ),
         e(ChevronDown, { size: 14, className: "vkpi-account__chevron hidden text-muted sm:block" })
       )

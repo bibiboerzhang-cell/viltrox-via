@@ -1,11 +1,19 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  LocaleProvider,
+  LOCALE_STORAGE_KEY,
+} from "../../../app/providers/LocaleProvider";
 
 const serviceMocks = vi.hoisted(() => ({
   getDealerLocations: vi.fn(async () => ({ pins: [] })),
   listUpcomingEvents: vi.fn(async () => ({ items: [] })),
   listStaffGroups: vi.fn(async () => ({ items: [] })),
+}));
+const storageMocks = vi.hoisted(() => ({
+  state: {} as Record<string, unknown>,
+  saveStoredState: vi.fn(),
 }));
 
 vi.mock("framer-motion", async () => {
@@ -143,8 +151,8 @@ vi.mock("./mapViewSelection", () => ({
 }));
 
 vi.mock("./lib/storage", () => ({
-  loadStoredState: () => ({}),
-  saveStoredState: vi.fn(),
+  loadStoredState: () => storageMocks.state,
+  saveStoredState: storageMocks.saveStoredState,
 }));
 
 vi.mock("./lib/kpiScopeStorage", () => ({
@@ -159,10 +167,18 @@ vi.mock("../../../services/vkpi/staffAdapter", () => ({
 import { CockpitApp } from "./CockpitApp";
 
 describe("CockpitApp mobile navigation integration", () => {
+  const renderCockpit = (props: Record<string, unknown> = {}) => render(
+    <LocaleProvider>
+      <CockpitApp {...props} />
+    </LocaleProvider>,
+  );
+
   beforeEach(() => {
     serviceMocks.getDealerLocations.mockClear();
     serviceMocks.listUpcomingEvents.mockClear();
     serviceMocks.listStaffGroups.mockClear();
+    storageMocks.state = {};
+    storageMocks.saveStoredState.mockReset();
     window.localStorage.clear();
     window.sessionStorage.clear();
     window.history.replaceState({}, "", "/");
@@ -171,7 +187,7 @@ describe("CockpitApp mobile navigation integration", () => {
 
   it("does not let the Cockpit shell duplicate the Dealers page locations request", async () => {
     window.history.replaceState({}, "", "/?cockpit=dealers");
-    render(React.createElement(CockpitApp, { apiToken: "token" }));
+    renderCockpit({ apiToken: "token" });
 
     expect(await screen.findByTestId("dealers-board")).toHaveTextContent("Dealers content");
     await waitFor(() => expect(serviceMocks.listUpcomingEvents).toHaveBeenCalledTimes(1));
@@ -180,23 +196,25 @@ describe("CockpitApp mobile navigation integration", () => {
 
   it("starts only one Dashboard locations read during the production StrictMode effect replay", async () => {
     render(
-      <React.StrictMode>
-        <CockpitApp apiToken="token" />
-      </React.StrictMode>,
+      <LocaleProvider>
+        <React.StrictMode>
+          <CockpitApp apiToken="token" />
+        </React.StrictMode>
+      </LocaleProvider>,
     );
 
     await waitFor(() => expect(serviceMocks.getDealerLocations).toHaveBeenCalledTimes(1));
   });
 
   it("aborts the shell map request when navigation hands locations ownership to Dealers", async () => {
-    render(React.createElement(CockpitApp, { apiToken: "token" }));
+    renderCockpit({ apiToken: "token" });
     await waitFor(() => expect(serviceMocks.getDealerLocations).toHaveBeenCalledTimes(1));
     const signal = serviceMocks.getDealerLocations.mock.calls[0]?.[1]?.signal as AbortSignal;
     expect(signal.aborted).toBe(false);
 
     const burger = screen.getByRole("button", { name: "打开导航菜单" });
     fireEvent.click(burger);
-    fireEvent.click(screen.getByRole("button", { name: "Dealers" }));
+    fireEvent.click(screen.getByRole("button", { name: "经销商" }));
 
     expect(await screen.findByTestId("dealers-board")).toHaveTextContent("Dealers content");
     await waitFor(() => expect(signal.aborted).toBe(true));
@@ -204,7 +222,7 @@ describe("CockpitApp mobile navigation integration", () => {
   });
 
   it("uses CockpitApp state to replace Dashboard with Events and then navigate back", async () => {
-    render(React.createElement(CockpitApp));
+    renderCockpit();
 
     expect(screen.getByTestId("dashboard-board")).toBeTruthy();
     expect(screen.getByTestId("active-nav")).toHaveTextContent("dashboard");
@@ -218,7 +236,7 @@ describe("CockpitApp mobile navigation integration", () => {
     expect(overlay).toHaveAttribute("aria-hidden", "false");
     expect(overlay).not.toHaveClass("pointer-events-none");
 
-    fireEvent.click(screen.getByRole("button", { name: "Events" }));
+    fireEvent.click(screen.getByRole("button", { name: "活动" }));
 
     await waitFor(() => {
       expect(screen.getByTestId("events-board")).toHaveTextContent("活动雷达");
@@ -231,12 +249,26 @@ describe("CockpitApp mobile navigation integration", () => {
     });
 
     fireEvent.click(burger);
-    fireEvent.click(screen.getByRole("button", { name: "Dashboard" }));
+    fireEvent.click(screen.getByRole("button", { name: "仪表盘" }));
 
     await waitFor(() => {
       expect(screen.getByTestId("dashboard-board")).toHaveTextContent("Dashboard content");
       expect(screen.queryByTestId("events-board")).toBeNull();
       expect(screen.getByTestId("active-nav")).toHaveTextContent("dashboard");
     });
+  });
+
+  it("restores and persists the English language preference", async () => {
+    window.localStorage.setItem("vkpi-dashboard-state-v1", JSON.stringify({ lang: "en" }));
+    renderCockpit();
+
+    expect(await screen.findByRole("button", { name: "Open navigation menu" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Primary navigation", hidden: true })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Events", hidden: true })).toBeInTheDocument();
+    expect(window.localStorage.getItem(LOCALE_STORAGE_KEY)).toBe("en");
+    expect(document.documentElement.lang).toBe("en");
+    await waitFor(() => expect(storageMocks.saveStoredState).toHaveBeenCalledWith(
+      expect.objectContaining({ lang: "en" }),
+    ));
   });
 });

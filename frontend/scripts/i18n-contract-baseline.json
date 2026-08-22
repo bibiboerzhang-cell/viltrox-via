@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "scope": "src/components/vkpi/cockpit production .ts/.tsx literal t()/translate() calls",
+  "missingEnglishKeys": [],
+  "allowedEmptyTranslations": {
+    "I18N_ZH": [],
+    "I18N_EN": [
+      "的身份查看"
+    ]
+  },
+  "allowedBoundaryWhitespaceTranslations": {
+    "I18N_ZH": [],
+    "I18N_EN": [
+      "理由:"
+    ]
+  }
+}

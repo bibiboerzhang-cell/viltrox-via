@@ -9,6 +9,7 @@ import { Menu, X } from "lucide-react";
 
 import { NAV_ITEMS } from "./data/navItems";
 import { usePermissions } from "../../../hooks/usePermissions";
+import { useT } from "./lib/i18n";
 import viltroxLogo from "../../../assets/viltrox-logo.png";
 
 interface NavItem {
@@ -28,6 +29,7 @@ interface CockpitMobileNavProps {
 export function CockpitMobileNav({ activeNav, setActiveNav }: CockpitMobileNavProps) {
   const [open, setOpen] = React.useState(false);
   const perms = usePermissions();
+  const { t } = useT();
 
   // 打开时:ESC 关闭 + 锁 body 滚动(抽屉遮罩下背景不应跟着滚)。
   React.useEffect(() => {
@@ -58,7 +60,7 @@ export function CockpitMobileNav({ activeNav, setActiveNav }: CockpitMobileNavPr
     <>
       <button
         type="button"
-        aria-label="打开导航菜单"
+        aria-label={t("打开导航菜单")}
         aria-expanded={open}
         onClick={() => setOpen(true)}
         className="fixed left-3 top-3 z-50 flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-panel text-ink-2 backdrop-blur md:hidden"
@@ -79,7 +81,7 @@ export function CockpitMobileNav({ activeNav, setActiveNav }: CockpitMobileNavPr
         <nav
           role="dialog"
           aria-modal="true"
-          aria-label="主导航"
+          aria-label={t("主导航")}
           className={`absolute left-0 top-0 flex h-full w-[280px] max-w-[85vw] flex-col border-r border-line bg-panel shadow-2xl transition-transform duration-300 motion-reduce:transition-none ${
             open ? "translate-x-0" : "-translate-x-full"
           }`}
@@ -89,7 +91,7 @@ export function CockpitMobileNav({ activeNav, setActiveNav }: CockpitMobileNavPr
             <img src={viltroxLogo} alt="Viltrox" className="h-[22px] w-auto object-contain" />
             <button
               type="button"
-              aria-label="关闭导航菜单"
+              aria-label={t("关闭导航菜单")}
               onClick={() => setOpen(false)}
               className="flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:text-ink"
             >
@@ -111,7 +113,7 @@ export function CockpitMobileNav({ activeNav, setActiveNav }: CockpitMobileNavPr
                   }`}
                 >
                   <Icon size={16} className={active ? "text-accent" : "text-muted"} />
-                  <span className="flex-1 text-left">{label}</span>
+                  <span className="flex-1 text-left">{t(label)}</span>
                   {badge ? (
                     <span className="rounded bg-accent-soft px-1.5 py-0.5 text-[10px] text-accent">
                       {badge}

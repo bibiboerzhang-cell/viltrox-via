@@ -1,6 +1,8 @@
 import React from "react";
 import { ArrowUpRight, type LucideIcon } from "lucide-react";
 
+import { useT } from "../lib/i18n";
+
 export function DashboardBoardLinkCard({
   label,
   summary,
@@ -14,11 +16,12 @@ export function DashboardBoardLinkCard({
   Icon: LucideIcon;
   onOpen?: () => void;
 }) {
+  const { t } = useT();
   return (
     <button type="button" className="vkpi-dashboard-board-link" onClick={onOpen} disabled={!onOpen}>
       <span className="vkpi-dashboard-board-link__icon"><Icon size={17} /></span>
       <span className="vkpi-dashboard-board-link__copy">
-        <strong>{metric ?? "打开"}</strong>
+        <strong>{metric ?? t("打开")}</strong>
         <small>{summary}</small>
       </span>
       <span className="vkpi-dashboard-board-link__name">{label}</span>
@@ -26,4 +29,3 @@ export function DashboardBoardLinkCard({
     </button>
   );
 }
-

@@ -9,6 +9,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
+import { useLocale } from "../../app/providers/LocaleProvider";
 import { useAuth } from "../../hooks/useAuth";
 import { frontendBuildInfo, shortBuildSha } from "../../lib/buildInfo";
 import { PUBLIC_SURFACE_NAME } from "../../lib/publicSurface";
@@ -17,6 +18,7 @@ import "../../styles/admin.css";
 
 export default function AdminLoginRoute() {
   const { status, user, signIn } = useAuth();
+  const { t } = useLocale();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -68,18 +70,18 @@ export default function AdminLoginRoute() {
         </div>
 
         <h1 className="admin-auth-card__title">
-          登录
+          {t("登录")}
         </h1>
 
         {error ? (
           <div id="ax-login-error" className="admin-auth-card__error" role="alert" aria-live="polite">
-            {error}
+            {t(error)}
           </div>
         ) : null}
 
         <form className="admin-auth-card__form" onSubmit={handleSubmit}>
           <label className="admin-auth-card__field" htmlFor="ax-login-email">
-            <span>邮箱</span>
+            <span>{t("邮箱")}</span>
             <input
               id="ax-login-email"
               name="username"
@@ -97,7 +99,7 @@ export default function AdminLoginRoute() {
           </label>
 
           <label className="admin-auth-card__field" htmlFor="ax-login-password">
-            <span>密码</span>
+            <span>{t("密码")}</span>
             <input
               id="ax-login-password"
               name="password"
@@ -117,7 +119,7 @@ export default function AdminLoginRoute() {
             disabled={submitting}
             aria-busy={submitting}
           >
-            {submitting ? "登录中…" : "登录"}
+            {submitting ? t("登录中…") : t("登录")}
           </button>
         </form>
 
@@ -125,7 +127,7 @@ export default function AdminLoginRoute() {
           className="admin-auth-card__version"
           title={`${frontendBuildInfo.gitBranch} · ${frontendBuildInfo.gitSha} · built ${frontendBuildInfo.builtAt}`}
         >
-          前端版本 {shortBuildSha(frontendBuildInfo.gitSha)}
+          {t("前端版本 {version}", { version: shortBuildSha(frontendBuildInfo.gitSha) })}
         </div>
       </div>
     </div>

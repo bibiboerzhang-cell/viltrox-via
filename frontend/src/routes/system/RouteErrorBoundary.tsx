@@ -1,7 +1,9 @@
 import { useEffect } from "react";
 import { isRouteErrorResponse, useRouteError } from "react-router-dom";
 
+import { useLocale } from "../../app/providers/LocaleProvider";
 import { PUBLIC_SURFACE_NAME } from "../../lib/publicSurface";
+import { ThemeSwitch } from "../../shared/ThemeSwitch";
 
 // 部署后旧标签页的懒加载 chunk 已被新包替换(旧 hash 404)→ 动态 import 失败。
 // 这类错误刷新一次即自愈;识别特征串,60 秒守卫防刷新循环(真代码错不会被无限刷)。
@@ -14,7 +16,7 @@ function isStaleChunkError(error: unknown): boolean {
 
 function resolveMessage(error: unknown): { title: string; body: string } {
   if (isRouteErrorResponse(error) && error.status === 404) {
-    return { title: "页面不存在", body: `这个地址不是 ${PUBLIC_SURFACE_NAME} 的有效入口。` };
+    return { title: "页面不存在", body: "这个地址不是 {surface} 的有效入口。" };
   }
   if (isStaleChunkError(error)) {
     return { title: "正在加载新版本…", body: "系统刚更新,页面自动刷新中。" };
@@ -25,6 +27,7 @@ function resolveMessage(error: unknown): { title: string; body: string } {
 const RELOAD_GUARD_KEY = "vkpi:chunk-reload-at";
 
 export default function RouteErrorBoundary() {
+  const { t } = useLocale();
   const error = useRouteError();
   const message = resolveMessage(error);
   const stale = isStaleChunkError(error);
@@ -48,18 +51,23 @@ export default function RouteErrorBoundary() {
 
   return (
     <div className="admin-auth-viewport">
+      <div style={{ position: "absolute", top: 18, right: 18, zIndex: 2 }}>
+        <ThemeSwitch />
+      </div>
       <div className="admin-auth-card" role="main">
         <div className="admin-auth-card__brand">
           <span className="admin-root__mark">V</span>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em" }}>{PUBLIC_SURFACE_NAME}</div>
-            <div style={{ fontSize: 11, color: "#667085" }}>受限测试环境</div>
+            <div style={{ fontSize: 11, color: "#667085" }}>{t("受限测试环境")}</div>
           </div>
         </div>
-        <h1 className="admin-auth-card__title">{message.title}</h1>
-        <p className="admin-auth-card__subtitle">{message.body}</p>
+        <h1 className="admin-auth-card__title">{t(message.title)}</h1>
+        <p className="admin-auth-card__subtitle">
+          {t(message.body, { surface: PUBLIC_SURFACE_NAME })}
+        </p>
         <a className="admin-auth-card__primary" href="/" style={{ display: "inline-block", textAlign: "center" }}>
-          返回首页
+          {t("返回首页")}
         </a>
       </div>
     </div>

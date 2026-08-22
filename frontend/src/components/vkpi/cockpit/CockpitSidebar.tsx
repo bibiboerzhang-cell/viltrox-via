@@ -7,6 +7,7 @@ import { ChevronLeft, ChevronRight, Wrench } from "lucide-react";
 import { DashboardTaskQueueCard } from "./components/DashboardTaskQueueCard";
 import { NAV_ITEMS } from "./data/navItems";
 import { usePermissions } from "../../../hooks/usePermissions";
+import { useT } from "./lib/i18n";
 import viltroxLogo from "../../../assets/viltrox-logo.png";
 import viltroxMark from "../../../assets/viltrox-mark.jpg";
 
@@ -33,6 +34,7 @@ export function CockpitSidebar({
 }: any) {
   // 按板块授权过滤导航:成员设为「无」的板块不渲染(owner 全见)。默认可见。
   const perms = usePermissions();
+  const { t } = useT();
   // V2 组默认折叠;但若当前就停在某个 V2 页,自动展开以免活动项被藏起来。
   const [v2Open, setV2Open] = React.useState(() => NAV_ITEMS.some((i) => (i as NavItem).v2 && i.key === activeNav));
   // 智能运维组默认展开(已建可达页),便于发现 Wave1-4 新能力入口。
@@ -41,19 +43,20 @@ export function CockpitSidebar({
   // 单个导航按钮(主导航 + V2 / 运维 组共用)
   const navButton = ({ icon: Icon, label, badge, key }: NavItem) => {
     const active = activeNav === key;
+    const localizedLabel = t(label);
     return e("button", {
       key,
       onClick: (event: React.MouseEvent<HTMLButtonElement>) => {
         event.currentTarget.blur();
         setActiveNav(key);
       },
-      title: collapsed ? label : undefined,
+      title: collapsed ? localizedLabel : undefined,
       className: `vkpi-rail__item group flex w-full items-center ${collapsed ? "justify-center px-2" : "px-3 gap-3"} rounded-lg py-2 text-sm transition ${
         active ? "bg-accent-soft text-ink" : "text-muted hover:bg-accent-soft hover:text-ink"
       } ${active ? "is-active" : ""}`,
     },
       e(Icon, { size: 16, className: active ? "text-accent" : "text-muted" }),
-      !collapsed && e("span", { className: "flex-1 text-left" }, label),
+      !collapsed && e("span", { className: "flex-1 text-left" }, localizedLabel),
       !collapsed && badge && e("span", {
         className: "rounded px-1.5 py-0.5 text-[10px] bg-line text-ink-2",
       }, badge)
@@ -75,8 +78,8 @@ export function CockpitSidebar({
       type: "button",
       onClick: () => setCollapsed(!collapsed),
       className: "vkpi-rail__toggle",
-      title: collapsed ? "展开侧栏" : "收起侧栏",
-      "aria-label": collapsed ? "展开侧栏" : "收起侧栏",
+      title: collapsed ? t("展开侧栏") : t("收起侧栏"),
+      "aria-label": collapsed ? t("展开侧栏") : t("收起侧栏"),
       "aria-expanded": !collapsed,
     }, e(ChevronLeft, { size: 13 })),
     e("div", null,
@@ -98,7 +101,7 @@ export function CockpitSidebar({
               const firstCap = last === undefined;
               last = g;
               out.push(!collapsed
-                ? e("div", { key: `cap-${g}`, className: `vkpi-rail__cap px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[.14em] text-muted ${firstCap ? "pt-1" : "pt-4"}` }, g)
+                ? e("div", { key: `cap-${g}`, className: `vkpi-rail__cap px-3 pb-1.5 text-[10px] font-semibold uppercase tracking-[.14em] text-muted ${firstCap ? "pt-1" : "pt-4"}` }, t(g))
                 : e("div", { key: `cap-${g}`, className: `mx-2 h-px bg-line ${firstCap ? "mb-2" : "my-2"}` }));
             }
             out.push(navButton(it));
@@ -108,11 +111,11 @@ export function CockpitSidebar({
         // 智能运维:Wave1-4 已建可达页(triage / 问数 / 市场趋势 / Skill Studio),默认展开。
         opsItems.length > 0 && e("div", { key: "opsgroup", className: "mt-2 pt-2 border-t border-line" },
           e("button", {
-            onClick: () => setOpsOpen(!opsOpen), title: collapsed ? "智能运维" : undefined,
+            onClick: () => setOpsOpen(!opsOpen), title: collapsed ? t("智能运维") : undefined,
             className: `group flex w-full items-center ${collapsed ? "justify-center px-2" : "px-3 gap-2"} rounded-lg py-2 text-[11px] font-medium uppercase tracking-wider text-muted hover:bg-accent-soft hover:text-ink-2`,
           },
             e(Wrench, { size: 13, className: "shrink-0" }),
-            !collapsed && e("span", { className: "flex-1 text-left tracking-normal" }, "智能运维"),
+            !collapsed && e("span", { className: "flex-1 text-left tracking-normal" }, t("智能运维")),
             !collapsed && e("span", { className: "rounded bg-accent-soft px-1.5 py-0.5 text-[9px] tracking-normal text-accent" }, String(opsItems.length))
           ),
           opsOpen && e("div", { className: "mt-1 space-y-1" }, opsItems.map(navButton))

@@ -18,6 +18,7 @@ import {
   loadDashboardPreference,
   saveDashboardPreference,
 } from "../dashboardPreferenceStore";
+import { useT } from "../lib/i18n";
 import "./EditableDashboardBoard.css";
 
 const e = React.createElement;
@@ -487,6 +488,7 @@ export function EditableDashboardBoard({
   requiredDefaultModuleKeys = EMPTY_STRING_ARRAY,
   apiToken = "",
 }: EditableDashboardBoardProps) {
+  const { t } = useT();
   const resolvedStorageKey = scopedLocalStorageKey(storageKey, localStorageScope);
   const resolvedLegacyStorageKeys = legacyStorageKeys.map((key) => scopedLocalStorageKey(key, localStorageScope));
   const moduleMap = React.useMemo(() => new Map(modules.map((module) => [module.key, module])), [modules]);
@@ -659,7 +661,7 @@ export function EditableDashboardBoard({
     : boardMetrics.columns === MEDIUM_COLUMNS
       ? "is-medium"
       : "is-desktop";
-  const syncLabel = syncState === "loading"
+  const syncLabel = t(syncState === "loading"
     ? "读取账户布局"
     : syncState === "saving"
       ? "正在保存"
@@ -667,7 +669,7 @@ export function EditableDashboardBoard({
         ? "账户偏好已保存"
         : syncState === "error"
           ? "后端暂不可用，本机已保存"
-          : "本机已保存";
+          : "本机已保存");
 
   const applyGridLayout = React.useCallback((nextGridLayout: Layout, persist: boolean) => {
     if (!canEditGeometry) return;
@@ -691,33 +693,35 @@ export function EditableDashboardBoard({
       disabled: alreadyAdded,
       onClick: () => addModule(module),
       className: alreadyAdded ? "is-added" : "",
-      title: alreadyAdded ? `${module.label} 已在看板` : `添加 ${module.label} 到看板`,
+      title: alreadyAdded
+        ? `${t(module.label)} ${t("已在看板")}`
+        : `${t("添加")} ${t(module.label)} ${t("到看板")}`,
     },
-      e("strong", null, module.label),
-      e("span", null, module.description),
+      e("strong", null, t(module.label)),
+      e("span", null, t(module.description)),
       e("small", null, alreadyAdded
-        ? "已在看板"
-        : `默认 ${module.defaultSpan}/12 · 高 ${module.defaultHeight ?? DEFAULT_CARD_HEIGHT} 格`),
+        ? t("已在看板")
+        : `${t("默认")} ${module.defaultSpan}/12 · ${t("高")} ${module.defaultHeight ?? DEFAULT_CARD_HEIGHT} ${t("格")}`),
     );
   };
 
   return e(React.Fragment, null,
     editing && e("div", { className: "vkpi-board-edit-hint", role: "status" },
       e("span", null,
-        e("strong", null, "编辑模式"),
+        e("strong", null, t("编辑模式")),
         canEditGeometry
-          ? " · 拖动顶部手柄磁吸换位，拖动边缘或四角自由调整宽高"
-          : " · 当前宽度自动紧凑排布；回到宽屏后可拖动和缩放",
+          ? ` · ${t("拖动顶部手柄磁吸换位，拖动边缘或四角自由调整宽高")}`
+          : ` · ${t("当前宽度自动紧凑排布；回到宽屏后可拖动和缩放")}`,
         e("small", { className: `vkpi-board-edit-hint__sync is-${syncState}` }, syncLabel),
       ),
       e("div", { className: "vkpi-board-edit-hint__actions" },
-        e("button", { type: "button", onClick: autoArrange, title: "消除空洞并向上磁吸" },
+        e("button", { type: "button", onClick: autoArrange, title: t("消除空洞并向上磁吸") },
           e(Sparkles, { size: 13 }),
-          "自动排列",
+          t("自动排列"),
         ),
-        e("button", { type: "button", onClick: restoreDefault, title: "恢复 Dashboard 默认模块和位置" },
+        e("button", { type: "button", onClick: restoreDefault, title: t("恢复 Dashboard 默认模块和位置") },
           e(RotateCcw, { size: 13 }),
-          "恢复默认",
+          t("恢复默认"),
         ),
       ),
     ),
@@ -769,15 +773,15 @@ export function EditableDashboardBoard({
           tabIndex: -1,
         },
           FLOW_MODULES.has(definition.key) && e(ModuleFlowField),
-          editing && e("div", { className: "vkpi-board-module__tools", "aria-label": `${definition.label} 布局工具` },
+          editing && e("div", { className: "vkpi-board-module__tools", "aria-label": `${t(definition.label)} ${t("布局工具")}` },
             e("button", {
               type: "button",
               className: "vkpi-board-module__drag-handle",
               disabled: !canEditGeometry,
-              title: canEditGeometry ? "拖动磁吸换位" : "宽屏下可拖动",
-              "aria-label": `拖动 ${definition.label}`,
+              title: canEditGeometry ? t("拖动磁吸换位") : t("宽屏下可拖动"),
+              "aria-label": `${t("拖动")} ${t(definition.label)}`,
             }, e(GripVertical, { size: 14 })),
-            e("button", { type: "button", onClick: () => removeItem(item.instanceId), title: "移除模块", "aria-label": `移除 ${definition.label}` }, e(X, { size: 13 })),
+            e("button", { type: "button", onClick: () => removeItem(item.instanceId), title: t("移除模块"), "aria-label": `${t("移除")} ${t(definition.label)}` }, e(X, { size: 13 })),
           ),
           e("div", { className: "vkpi-board-module__content" }, definition.render()),
         );
@@ -787,10 +791,10 @@ export function EditableDashboardBoard({
       type: "button",
       className: "vkpi-board-add",
       onClick: () => setPaletteOpen(true),
-      title: "打开模块库并添加 Dashboard 模块",
+      title: t("打开模块库并添加 Dashboard 模块"),
     },
       e(Plus, { size: 17 }),
-      e("span", null, "添加模块"),
+      e("span", null, t("添加模块")),
     ),
     paletteOpen && e("div", {
       className: "vkpi-module-palette",
@@ -802,22 +806,22 @@ export function EditableDashboardBoard({
       e("div", { className: "vkpi-module-palette__dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "vkpi-module-palette-title" },
         e("div", { className: "vkpi-module-palette__head" },
           e("div", null,
-            e("div", { className: "vkpi-module-palette__eyebrow" }, e(LayoutGrid, { size: 13 }), "Dashboard Modules"),
-            e("h2", { id: "vkpi-module-palette-title" }, "添加模块"),
-            e("p", null, "所有模块都绑定现有页面、组件或真实接口；无数据时保持诚实空态。"),
+            e("div", { className: "vkpi-module-palette__eyebrow" }, e(LayoutGrid, { size: 13 }), t("Dashboard Modules")),
+            e("h2", { id: "vkpi-module-palette-title" }, t("添加模块")),
+            e("p", null, t("所有模块都绑定现有页面、组件或真实接口；无数据时保持诚实空态。")),
           ),
-          e("button", { type: "button", onClick: () => setPaletteOpen(false), title: "关闭模块库", "aria-label": "关闭添加模块" }, e(X, { size: 16 })),
+          e("button", { type: "button", onClick: () => setPaletteOpen(false), title: t("关闭模块库"), "aria-label": t("关闭添加模块") }, e(X, { size: 16 })),
         ),
         e("label", { className: "vkpi-module-palette__search" },
           e(Search, { size: 14 }),
           e("input", {
             value: paletteQuery,
             onChange: (event: React.ChangeEvent<HTMLInputElement>) => setPaletteQuery(event.target.value),
-            placeholder: "搜索模块或来源页面，如“历史”“Projects”",
-            "aria-label": "搜索 Dashboard 模块",
+            placeholder: t("搜索模块或来源页面，如“历史”“Projects”"),
+            "aria-label": t("搜索 Dashboard 模块"),
             autoFocus: true,
           }),
-          paletteQuery && e("button", { type: "button", onClick: () => setPaletteQuery(""), "aria-label": "清空模块搜索" }, e(X, { size: 13 })),
+          paletteQuery && e("button", { type: "button", onClick: () => setPaletteQuery(""), "aria-label": t("清空模块搜索") }, e(X, { size: 13 })),
         ),
         e("div", { className: "vkpi-module-palette__body" },
           CATEGORY_ORDER.map((category) => {
@@ -825,7 +829,7 @@ export function EditableDashboardBoard({
             if (categoryModules.length === 0) return null;
             const sourceGroups = category === "跨板块模块"
               ? Array.from(categoryModules.reduce((groups, module) => {
-                const label = module.sourceLabel || "其他来源";
+                const label = module.sourceLabel || t("其他来源");
                 const group = groups.get(label) || [];
                 group.push(module);
                 groups.set(label, group);
@@ -833,14 +837,18 @@ export function EditableDashboardBoard({
               }, new Map<string, DashboardModuleDefinition[]>()).entries())
               : [[category, categoryModules] as [string, DashboardModuleDefinition[]]];
             return e("section", { key: category, className: "vkpi-module-palette__section" },
-              e("h3", null, category, e("span", null, categoryModules.length)),
+              e("h3", null, t(category), e("span", null, categoryModules.length)),
               sourceGroups.map(([sourceLabel, sourceModules]) => e("div", { key: sourceLabel, className: "vkpi-module-palette__source" },
-                category === "跨板块模块" && e("h4", null, sourceLabel, e("span", null, sourceModules.length)),
+                category === "跨板块模块" && e("h4", null, t(sourceLabel), e("span", null, sourceModules.length)),
                 e("div", { className: "vkpi-module-palette__grid" }, sourceModules.map(renderPaletteButton)),
               )),
             );
           }),
-          visiblePaletteModules.length === 0 && e("div", { className: "vkpi-module-palette__empty" }, `没有匹配“${paletteQuery.trim()}”的模块`),
+          visiblePaletteModules.length === 0 && e(
+            "div",
+            { className: "vkpi-module-palette__empty" },
+            t("没有匹配“{query}”的模块", { query: paletteQuery.trim() }),
+          ),
         ),
       ),
     ),

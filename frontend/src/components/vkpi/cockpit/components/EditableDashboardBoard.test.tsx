@@ -120,8 +120,8 @@ describe("EditableDashboardBoard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "添加模块" }));
     const palette = screen.getByRole("dialog", { name: "添加模块" });
-    expect(within(palette).getByRole("heading", { name: /Projects/ })).toBeInTheDocument();
-    expect(within(palette).getByRole("heading", { name: /KOL Pool/ })).toBeInTheDocument();
+    expect(within(palette).getByRole("heading", { name: /项目/ })).toBeInTheDocument();
+    expect(within(palette).getByRole("heading", { name: /KOL 人才库/ })).toBeInTheDocument();
 
     fireEvent.change(within(palette).getByRole("textbox", { name: "搜索 Dashboard 模块" }), { target: { value: "历史" } });
     expect(within(palette).getByRole("button", { name: /搜索历史/ })).toBeInTheDocument();

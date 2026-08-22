@@ -1,5 +1,6 @@
 import React from "react";
 import { createPortal } from "react-dom";
+import { useT } from "../lib/i18n";
 
 // Shared cockpit modal layer. It must stay outside react-grid-layout because transformed/overflow
 // grid ancestors otherwise clip position:fixed descendants.
@@ -28,6 +29,7 @@ export function ModalShell({
   children: React.ReactNode;
   maxWidth?: string;
 }) {
+  const { t } = useT();
   const idRef = React.useRef<symbol | null>(null);
   const dialogRef = React.useRef<HTMLDivElement | null>(null);
   const restoreFocusRef = React.useRef<HTMLElement | null>(null);
@@ -124,14 +126,20 @@ export function ModalShell({
       >
         <div className="flex flex-none items-start justify-between gap-3 border-b border-line px-[22px] pb-3.5 pt-[18px]">
           <div className="min-w-0">
-            <div id={titleId} className="text-[17px] font-[680] tracking-[-0.02em] text-ink">{title}</div>
-            {sub ? <div id={subId} className="mt-[3px] text-[12px] leading-5 text-muted">{sub}</div> : null}
+            <div id={titleId} className="text-[17px] font-[680] tracking-[-0.02em] text-ink">
+              {typeof title === "string" ? t(title) : title}
+            </div>
+            {sub ? (
+              <div id={subId} className="mt-[3px] text-[12px] leading-5 text-muted">
+                {typeof sub === "string" ? t(sub) : sub}
+              </div>
+            ) : null}
           </div>
           <button
             data-modal-initial-focus
             type="button"
             onClick={onClose}
-            aria-label="关闭"
+            aria-label={t("关闭")}
             className="grid h-10 w-10 flex-none place-items-center rounded-xl border border-line text-[17px] text-ink-2 transition-colors hover:border-line-strong hover:bg-panel hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             ✕

@@ -53,6 +53,7 @@ import {
 } from "../../../domains/projects";
 import { inviteMarketingStaff, updateStaffMarketingPermission } from "../../../domains/settings";
 import type { VkpiProjectStage } from "../../vkpi";
+import { useT } from "../../vkpi/cockpit/lib/i18n";
 import { uploadMyAvatar } from "../../../services/auth.service";
 import { useAuth } from "../../../hooks/useAuth";
 
@@ -132,6 +133,7 @@ type WeeklyReportStatus = {
 
 export function VkpiTab({ token, user, onSignOut }: Props) {
   const { refreshUser } = useAuth();
+  const { t, lang } = useT();
   const mountedRef = useRef(false);
   const activeLoadKeyRef = useRef("");
   const inFlightLoadRef = useRef<{ key: string; promise: Promise<void> } | null>(null);
@@ -149,8 +151,8 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   const effectiveViewMode = isManager ? viewMode : "employee";
   const scope = effectiveViewMode === "manager" ? "all" : "self";
   const userRoleLabel = isManager
-    ? effectiveViewMode === "manager" ? "管理层" : "成员视角"
-    : "成员";
+    ? t(effectiveViewMode === "manager" ? "管理层" : "成员视角")
+    : t("成员");
   const canRenderWithoutDashboardData = getInitialVkpiPage(effectiveViewMode) === "cockpit";
 
   useEffect(() => {
@@ -240,12 +242,12 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   const currentReportConfig = useCallback((): VkpiReportGenerateConfig => ({
     period: range === "30d" || range === "mtd" || range === "qtd" ? "monthly" : "weekly",
     date: new Date().toISOString().slice(0, 10),
-    language: "zh",
+    language: lang,
     sections: VKPI_REPORT_SECTION_KEYS,
     format: "visual",
     scope: scope === "all" ? "all" : "self",
     staffId: user?.staff_id,
-  }), [range, scope, user?.staff_id]);
+  }), [lang, range, scope, user?.staff_id]);
 
   const handleExportPDF = useCallback(async () => {
     setMessage("正在生成 PDF 导出...");
@@ -288,7 +290,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
     try {
       const result = await generateVkpiReport(token, { ...currentReportConfig(), period: "weekly" });
       if (result.status.toLowerCase() !== "ready") {
-        throw new Error(`报告接口返回状态：${result.status || "unknown"}`);
+        throw new Error(t("报告接口返回状态：{status}", { status: result.status || "unknown" }));
       }
       if (result.downloadUrl) {
         await downloadVkpiFile(token, result.downloadUrl, `vkpi-weekly-${new Date().toISOString().slice(0, 10)}.pdf`);
@@ -304,7 +306,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
       setActionLink(null);
       setWeeklyReportStatus({ state: "error", message: errorMessage });
     }
-  }, [currentReportConfig, load, token]);
+  }, [currentReportConfig, load, t, token]);
 
   const handleUploadAvatar = useCallback(async (file: File) => {
     setMessage("正在上传真人头像...");
@@ -520,15 +522,15 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
   }, [load, token]);
 
   if (loading && !data && !canRenderWithoutDashboardData) {
-    return <div style={{ padding: 24, color: "#667085" }}>正在加载 Viltrox Marketing...</div>;
+    return <div style={{ padding: 24, color: "#667085" }}>{t("正在加载 Viltrox Marketing...")}</div>;
   }
 
   if (!data && !canRenderWithoutDashboardData) {
     return (
       <div style={{ padding: 24, color: "#667085" }}>
-        <strong style={{ display: "block", color: "#101828", marginBottom: 8 }}>Viltrox Marketing 暂不可用</strong>
-        <div style={{ marginBottom: 12 }}>{message || "没有返回看板数据。"}</div>
-        <button type="button" className="ax-btn ax-btn--primary" onClick={() => void load()}>重试</button>
+        <strong style={{ display: "block", color: "#101828", marginBottom: 8 }}>{t("Viltrox Marketing 暂不可用")}</strong>
+        <div style={{ marginBottom: 12 }}>{t(message || "没有返回看板数据。")}</div>
+        <button type="button" className="ax-btn ax-btn--primary" onClick={() => void load()}>{t("重试")}</button>
       </div>
     );
   }
@@ -537,7 +539,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
     <div style={{ position: "relative" }}>
       {message ? (
         <div style={{ position: "sticky", top: 0, zIndex: 20, padding: "10px 16px", background: "#101828", color: "#fff", fontSize: 12 }}>
-          {message}
+          {t(message)}
           {actionLink ? (
             <a
               href={actionLink.href}
@@ -545,7 +547,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
               rel="noreferrer"
               style={{ color: "#fff", marginLeft: 12, fontWeight: 800, textDecoration: "underline" }}
             >
-              {actionLink.label}
+              {t(actionLink.label)}
             </a>
           ) : null}
         </div>
@@ -558,7 +560,7 @@ export function VkpiTab({ token, user, onSignOut }: Props) {
         isRefreshing={loading}
         lastSyncedAt={lastSyncedAt}
         apiToken={token}
-        userName={user?.name || user?.email || "Viltrox 成员"}
+        userName={user?.name || user?.email || t("Viltrox 成员")}
         userRole={userRoleLabel}
         userEmail={user?.email || ""}
         userAuthRole={String(user?.staff_role || user?.role || "")}

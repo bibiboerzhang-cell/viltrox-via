@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { IntelligentQueryAnswer } from "../../../../services/vkpi/intelligent-api";
 import { I18nContext, makeT } from "../lib/i18n";
+import { I18N_EN } from "../data/i18nEn";
 import { AskCommandOverlay } from "./AskCommandOverlay";
 
 const mocks = vi.hoisted(() => ({
@@ -58,7 +59,7 @@ function deferred<T>() {
 }
 
 function renderOverlay({ lang = "zh", onClose = vi.fn(), onNavigate = vi.fn() } = {}) {
-  const t = makeT(lang);
+  const t = makeT(lang, I18N_EN);
   return {
     onClose,
     onNavigate,

@@ -20,6 +20,8 @@ vi.mock("./UpcomingEventsCard", () => ({
 }));
 
 import { DashboardCommandCenter } from "./DashboardCommandCenter";
+import { I18nContext, makeT } from "../lib/i18n";
+import { I18N_EN } from "../data/i18nEn";
 
 const viewModes = {
   kols: { label: "KOLs", desc: "KOL map", color: "#a855f7", available: true },
@@ -69,17 +71,17 @@ describe("DashboardCommandCenter map source states", () => {
     />);
 
     expect(await screen.findByTestId("real-map")).toBeInTheDocument();
-    expect(screen.getByText("KOLs")).toBeInTheDocument();
-    expect(screen.queryByText("Choose what to map")).not.toBeInTheDocument();
-    expect(screen.queryByText("Loading map data")).not.toBeInTheDocument();
+    expect(screen.getByText("KOL")).toBeInTheDocument();
+    expect(screen.queryByText("选择地图内容")).not.toBeInTheDocument();
+    expect(screen.queryByText("正在加载地图数据")).not.toBeInTheDocument();
   });
 
   it("shows a loading state without exposing Viewing Select", () => {
     render(<DashboardCommandCenter {...baseProps} mapSelectionLoading={true} />);
 
-    expect(screen.getByText("Loading map data")).toBeInTheDocument();
-    expect(screen.queryByText("Viewing")).not.toBeInTheDocument();
-    expect(screen.queryByText("Choose what to map")).not.toBeInTheDocument();
+    expect(screen.getByText("正在加载地图数据")).toBeInTheDocument();
+    expect(screen.queryByText("查看维度")).not.toBeInTheDocument();
+    expect(screen.queryByText("选择地图内容")).not.toBeInTheDocument();
   });
 
   it("shows the chooser only after every source settles empty", () => {
@@ -92,10 +94,10 @@ describe("DashboardCommandCenter map source states", () => {
       }}
     />);
 
-    expect(screen.getByText("Choose what to map")).toBeInTheDocument();
-    expect(screen.getByText("Viewing")).toBeInTheDocument();
+    expect(screen.getByText("选择地图内容")).toBeInTheDocument();
+    expect(screen.getByText("查看维度")).toBeInTheDocument();
     expect(screen.getByText(/当前没有可映射的真实位置/)).toBeInTheDocument();
-    expect(screen.getAllByText(/ · EMPTY$/)).toHaveLength(3);
+    expect(screen.getAllByText(/ · 暂无数据$/)).toHaveLength(3);
   });
 
   it("distinguishes a settled error from a genuinely empty map", () => {
@@ -109,10 +111,30 @@ describe("DashboardCommandCenter map source states", () => {
       }}
     />);
 
-    expect(screen.getByText("Map data unavailable")).toBeInTheDocument();
+    expect(screen.getByText("地图数据不可用")).toBeInTheDocument();
     expect(screen.getByText(/地图源当前均不可用/)).toBeInTheDocument();
-    expect(screen.getByText("KOLs · ERROR")).toBeInTheDocument();
-    expect(screen.getByText("Dealers · ERROR")).toBeInTheDocument();
-    expect(screen.queryByText("Loading map data")).not.toBeInTheDocument();
+    expect(screen.getByText("KOL · 异常")).toBeInTheDocument();
+    expect(screen.getByText("经销商 · 异常")).toBeInTheDocument();
+    expect(screen.queryByText("正在加载地图数据")).not.toBeInTheDocument();
+  });
+
+  it("keeps the command center in English when lang=en", () => {
+    render(
+      <I18nContext.Provider value={{ t: makeT("en", I18N_EN), lang: "en", setLang: vi.fn() }}>
+        <DashboardCommandCenter
+          {...baseProps}
+          viewModes={{
+            kols: { ...viewModes.kols, available: false },
+            dealers: viewModes.dealers,
+            events: viewModes.events,
+          }}
+        />
+      </I18nContext.Provider>,
+    );
+
+    expect(screen.getByText("Marketing Command Center")).toBeInTheDocument();
+    expect(screen.getByText("Choose what to map")).toBeInTheDocument();
+    expect(screen.getByText("Viewing")).toBeInTheDocument();
+    expect(screen.getByText("KOLs · EMPTY")).toBeInTheDocument();
   });
 });

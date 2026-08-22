@@ -23,7 +23,7 @@ import { LazyErrorBoundary } from "./components/LazyErrorBoundary";
 import { listUpcomingEvents } from "../../../services/vkpi/events-api";
 import { getDealerLocations } from "../../../services/vkpi/dealers-api";
 import { normalizeEventsHierarchy, normalizeDealersHierarchy } from "./normalizers";
-import { I18nContext, makeT } from "./lib/i18n";
+import { useT } from "./lib/i18n";
 import { loadKpiScopeForStaff, saveKpiScopeForStaff } from "./lib/kpiScopeStorage";
 import { loadStoredState, saveStoredState } from "./lib/storage";
 import { resolveDashboardMapSelection } from "./mapViewSelection";
@@ -170,10 +170,7 @@ export function CockpitApp(props: any = {}) {
   const notifsBtnRef = useRef(null);
   const userMenuBtnRef = useRef(null);
   // V6.14.2: i18n + role
-  const [lang, setLang] = useState("zh");
-  const t = useMemo(() => makeT(lang), [lang]);
-  // I18n Provider value 稳定引用:内联对象每次渲染换新会击穿全部 useT 消费方的 memo;setLang 引用恒定。
-  const i18nValue = useMemo(() => ({ t, lang, setLang }), [t, lang]);
+  const { t, lang, setLang } = useT();
   const [viewingAs, setViewingAs] = useState<any>(null);  // Admin 切换查看身份
   const {
     currentUser,
@@ -343,8 +340,8 @@ export function CockpitApp(props: any = {}) {
 
   // V6.10: 持久化 state(用户偏好)
   useEffect(() => {
-    saveStoredState({ collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope });
-  }, [collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope]);
+    saveStoredState({ collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope, lang });
+  }, [collapsed, activeNav, theme, viewMode, country, city, item, venue, kpiScope, lang]);
 
   // 活动日期的唯一前端口径:UTC YYYY-MM-DD，同一值同时传给
   // upcoming API 与本地 fail-closed 过滤，不让浏览器时区再选一个日期。
@@ -588,7 +585,6 @@ export function CockpitApp(props: any = {}) {
   }, []);
 
   return e(LazyMotion, { features: domMax },
-   e(I18nContext.Provider, { value: i18nValue },
    e("div", { className: "relative min-h-screen bg-bg text-ink-2" },
     e("div", {
       className: "pointer-events-none fixed inset-0",
@@ -993,7 +989,6 @@ export function CockpitApp(props: any = {}) {
             })
           )
     )
-  )
   )
   )
   );

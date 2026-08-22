@@ -1,0 +1,96 @@
+/**
+ * 中文界面的英文源标签集中表。
+ *
+ * 数据、导航注册表和第三方能力名称仍以稳定英文键为源；组件不得各自
+ * hard-code 同一词的中文版本。技术/品牌缩写（KOL、ROI、GMV、Shopify、
+ * GTM 等）保留，周边通用 UI 文案中文化。
+ */
+export const I18N_ZH: Record<string, string> = {
+  // Navigation and board names.
+  Dashboard: "仪表盘",
+  Marketing: "营销",
+  "Dashboard Modules": "仪表盘模块",
+  "MY KOL": "我的 KOL",
+  "KOL Pool": "KOL 人才库",
+  Projects: "项目",
+  Events: "活动",
+  Shopify: "Shopify",
+  Dealers: "经销商",
+  "Intelligent 问答": "智能问答",
+  "GTM Command": "GTM 指挥台",
+  "运维 Triage": "运维分诊",
+  "Skill Studio": "技能工作室",
+  Intelligence: "智能洞察",
+  Campaigns: "营销活动",
+  Attribution: "归因",
+  Analytics: "数据分析",
+  Reports: "报告",
+  Signals: "信号",
+  Agents: "智能体",
+  "P15 Warehouse": "P15 资产库",
+  Help: "帮助",
+  "More tools": "更多工具",
+  Notifications: "通知",
+  "User Menu": "用户菜单",
+  "生成 Report": "生成报告",
+
+  // Dashboard cards and source labels.
+  "Active Campaigns": "进行中项目",
+  "Upcoming Events": "近期活动",
+  "AI Today": "AI 今日决策",
+  "V6 Fit Top": "V6 高拟合候选",
+  "Active Roster": "达人总数",
+  "Active 30D": "近 30 天活跃",
+  "Total Exposure": "总曝光量",
+  Exposure: "曝光量",
+  "Engagement Rate": "互动率",
+  Engagement: "互动",
+  "Attributed GMV": "归因 GMV",
+  "Avg ROI": "平均 ROI",
+  "Marketing Command Center": "营销指挥中心",
+  "Revenue by Source": "按来源统计收入",
+  "Top Profile Countries by KOL Count": "KOL 数量最多的国家/地区",
+  "Top Regions by Revenue": "收入最高的地区",
+  "KOL Pool 分布": "KOL 人才库分布",
+
+  // Map controls and states.
+  Viewing: "查看维度",
+  Select: "请选择",
+  Country: "国家/地区",
+  City: "城市",
+  Dealer: "经销商",
+  Address: "地址",
+  All: "全部",
+  KOLs: "KOL",
+  "Customer Heatmap": "客户热力图",
+  "KOL map": "KOL 地图",
+  "Dealer map": "经销商地图",
+  "Events map": "活动地图",
+  "KOL 分布读取真实 API": "KOL 分布读取真实 API",
+  "Dealer locations endpoint 待接入": "经销商位置接口待接入",
+  "Real-time order density from Shopify & Amazon": "Shopify 与 Amazon 实时订单密度",
+  LOADING: "加载中",
+  ERROR: "异常",
+  WAITING: "等待中",
+  EMPTY: "暂无数据",
+  READY: "就绪",
+  "Loading map data": "正在加载地图数据",
+  "Map data unavailable": "地图数据不可用",
+  "Choose what to map": "选择地图内容",
+  "Awaiting Shopify integration": "等待 Shopify 接入",
+  "street-level map · pan · zoom · click pin": "街道地图 · 平移 · 缩放 · 点击标记",
+  "drag · scroll · click pin to drill in": "拖动 · 滚动 · 点击标记下钻",
+
+  // Dashboard shell accessibility and generic labels.
+  "KPI data status": "KPI 数据状态",
+  "打开导航菜单": "打开导航菜单",
+  "关闭导航菜单": "关闭导航菜单",
+  "主导航": "主导航",
+  "展开侧栏": "展开侧栏",
+  "收起侧栏": "收起侧栏",
+  "指标": "指标",
+
+  // English transport/auth fallbacks that can surface before a route formats them.
+  "Login failed": "登录失败",
+  "Not authenticated": "未登录或登录会话已失效",
+};

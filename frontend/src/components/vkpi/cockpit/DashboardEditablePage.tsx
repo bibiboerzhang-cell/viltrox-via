@@ -40,6 +40,7 @@ import { TrendPulseBar } from "./components/TrendPulseBar";
 import { UpcomingEventsCard } from "./components/UpcomingEventsCard";
 import { KPI_SCOPES } from "./data/kpiScopes";
 import { VIEW_MODES } from "./data/viewModes";
+import { useT } from "./lib/i18n";
 import { buildCrossBoardModules } from "./pages/crossBoardModules";
 
 const e = React.createElement;
@@ -98,11 +99,12 @@ function formatRoster(value: unknown) {
 }
 
 export function DashboardEditablePage(props: any) {
+  const { t: contextT } = useT();
   const {
     dashboardEditing = false,
     kpiScope = "all",
     setKpiScope = () => undefined,
-    t = (value: string) => value,
+    t: translate,
     setSelectedKpi,
     dashboardLoading = false,
     dashboardError = "",
@@ -141,21 +143,23 @@ export function DashboardEditablePage(props: any) {
     // usePermissions().canViewBoard 同源(CockpitApp 下传)。缺少权限上下文时默认不暴露业务页模块。
     canViewBoard = () => false,
   } = props;
+  const t = typeof translate === "function" ? translate : contextT;
 
   const commandCenterProps = {
     ...props,
+    t,
     viewModes: props.viewModes || VIEW_MODES,
   };
   const roster = metrics.find((metric: any) => metric?.id === "kol-count");
   const rosterValue = formatRoster(roster?.data?.[kpiScope]?.value ?? roster?.data?.all?.value);
   const sourceStatusLabel = dashboardLoading
-    ? "读取中"
+    ? t("读取中")
     : dashboardError
-      ? "无信号"
+      ? t("无信号")
       : sourceHealth?.available
-        ? sourceHealth.label
+        ? t(sourceHealth.label)
         // sourceHealth 不可用≠数据实时;诚实口径与 EventRadarCoverage「来源状态未知」对齐,禁伪装成「实时」。
-        : "状态未知";
+        : t("状态未知");
 
   const openBoard = (key: string) => {
     if (onNavigate) onNavigate(key);
@@ -176,17 +180,17 @@ export function DashboardEditablePage(props: any) {
     definition: DashboardModuleDefinition,
   ): DashboardModuleDefinition[] => canViewBoard(board) ? [definition] : [];
 
-  const modules: DashboardModuleDefinition[] = [
+  const sourceModules: DashboardModuleDefinition[] = [
     {
       key: "kpi", label: "增长总览", description: "六指标 × 全部 / KOL / 公司账号", category: "核心模块", defaultSpan: 12, minSpan: 12, defaultHeight: 6, minHeight: 5, maxHeight: 12,
       render: () => e("section", { className: "vkpi-kpi-overview" },
         e("div", { className: "vkpi-kpi-overview__head" },
-          e("div", { className: "flex items-center gap-2" }, e("h2", null, "增长总览"), e("span", { className: "vkpi-kpi-overview__count" }, `${metrics.length || 6} 指标`)),
+          e("div", { className: "flex items-center gap-2" }, e("h2", null, t("增长总览")), e("span", { className: "vkpi-kpi-overview__count" }, `${metrics.length || 6} ${t("指标")}`)),
           e("div", { className: "vkpi-kpi-overview__tools" },
             e("div", { className: "vkpi-kpi-overview__scopes" }, Object.entries(KPI_SCOPES).map(([key, scope]: [string, any]) => e("button", { key, onClick: () => setKpiScope(key), className: kpiScope === key ? "is-active" : "", style: kpiScope === key ? { background: scope.accent, color: scope.color } : undefined }, t(scope.shortLabel)))),
             e("span", {
               role: "status",
-              "aria-label": "KPI data status",
+              "aria-label": t("KPI data status"),
               title: sourceHealth?.detail || undefined,
               className: `vkpi-kpi-overview__status ${dashboardError ? "is-error" : sourceHealth?.degraded ? "is-degraded" : ""}`,
             }, sourceStatusLabel),
@@ -199,7 +203,7 @@ export function DashboardEditablePage(props: any) {
     { key: "north-star", label: "增长健康度", description: "真实 GTM North Star 与流动环", category: "核心模块", defaultSpan: 4, minSpan: 4, defaultHeight: 10, minHeight: 8, maxHeight: 18, render: () => apiToken ? e(NorthStarGauges, { apiToken, variant: "dashboard" }) : null },
     { key: "actions", label: "今日该做什么", description: "Action Inbox 审批与执行建议", category: "核心模块", defaultSpan: 4, minSpan: 4, defaultHeight: 11, minHeight: 8, maxHeight: 20, render: () => apiToken ? e(ActionInboxPanel, { apiToken, heading: "今日该做什么", limit: 3 }) : null },
     { key: "signals", label: "市场信号", description: "真实竞品雷达与证据下钻", category: "核心模块", defaultSpan: 4, minSpan: 4, defaultHeight: 11, minHeight: 8, maxHeight: 20, render: () => dashboardError
-      ? e("article", { className: "vkpi-dashboard-error-card" }, e(AlertTriangle, { size: 16 }), e("strong", null, "信号源异常"), e("span", null, "当前接口暂不可用"))
+      ? e("article", { className: "vkpi-dashboard-error-card" }, e(AlertTriangle, { size: 16 }), e("strong", null, t("信号源异常")), e("span", null, t("当前接口暂不可用")))
       : e(SignalsAlertsCard, { alerts: signals, onAlertClick: setSelectedSignal, onViewAll: () => setShowAllSignals(true) }) },
     { key: "v6-fit", label: "V6 Fit Top", description: "真实 KOL Pool 高拟合候选", category: "核心模块", defaultSpan: 4, minSpan: 4, defaultHeight: 10, minHeight: 7, maxHeight: 18, render: () => e(TopMoversCard, { movers: topMovers, onMoverClick: setSelectedMover, onViewAll: () => setShowAllMovers(true) }) },
     { key: "trend", label: "曝光与互动趋势", description: "真实 KPI 连续窗口趋势", category: "核心模块", defaultSpan: 8, minSpan: 6, defaultHeight: 9, minHeight: 7, maxHeight: 18, render: () => e(DashboardTrendCard, { metrics, scope: kpiScope }) },
@@ -225,27 +229,33 @@ export function DashboardEditablePage(props: any) {
     { key: "content-calendar", label: "内容日历", description: "近 7 天真实发布信号", category: "实时模块", defaultSpan: 8, render: () => e(ContentCalendarCard, { days: calendarDays, latestDate: calendarMeta?.latestDate, onItemClick: setSelectedPublish, onViewAll: () => setShowFullCalendar(true) }) },
     { key: "upcoming-events", label: "Upcoming Events", description: "真实近期活动", category: "实时模块", defaultSpan: 4, render: () => e(UpcomingEventsCard, { events: upcomingEvents, dragConstraintsRef: props.globeContainerRef, onEventClick: setSelectedEvent, onViewAll: onOpenEvents }) },
 
-    ...visibleBoardModule("my-kol", { key: "board-my-kol", label: "MY KOL", description: "合作达人、跟进与推进", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "MY KOL", summary: "合作与跟进工作台", Icon: CircleUserRound, onOpen: () => openBoard("my-kol") }) }),
-    ...visibleBoardModule("kol-pool", { key: "board-kol-pool", label: "KOL Pool", description: "候选发现、评分与档案", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "KOL Pool", summary: "候选与高拟合发现", metric: rosterValue, Icon: Database, onOpen: () => openBoard("kol-pool") }) }),
-    ...visibleBoardModule("kolProfile", { key: "board-kol-profile", label: "KOL 档案", description: "单个达人八层档案", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "KOL 档案", summary: "身份、内容、受众与合作", Icon: IdCard, onOpen: () => openBoard("kolProfile") }) }),
-    ...visibleBoardModule("projects", { key: "board-projects", label: "Projects", description: "项目履约、成本与证据", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "Projects", summary: "项目履约与复盘", metric: campaigns.length || null, Icon: BriefcaseBusiness, onOpen: () => openBoard("projects") }) }),
-    ...visibleBoardModule("events", { key: "board-events", label: "Events", description: "活动、物料与成员分工", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "Events", summary: "近期真实活动", metric: upcomingEvents.length || null, Icon: CalendarDays, onOpen: () => openBoard("events") }) }),
-    ...visibleBoardModule("shopify", { key: "board-shopify", label: "Shopify", description: "联盟链接与订单归因", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "Shopify", summary: "订单归因待接入", Icon: ShoppingBag, onOpen: () => openBoard("shopify") }) }),
-    ...visibleBoardModule("dealers", { key: "board-dealers", label: "Dealers", description: "经销商地理分布", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "Dealers", summary: "经销商地图", Icon: MapPin, onOpen: () => openBoard("dealers") }) }),
-    ...visibleBoardModule("intelligent", { key: "board-intelligent", label: "Intelligent 问答", description: "内部数据问答", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "Intelligent 问答", summary: "问市场、KOL 与项目", Icon: MessageCircleMore, onOpen: () => openBoard("intelligent") }) }),
-    ...visibleBoardModule("marketVoice", { key: "board-market-voice", label: "市场之声", description: "用户反馈与产品信号", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "市场之声", summary: "评论与需求聚类", Icon: RadioTower, onOpen: () => openBoard("marketVoice") }) }),
-    ...visibleBoardModule("sku360", { key: "board-sku360", label: "SKU 360°", description: "产品、内容与达人反查", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "SKU 360°", summary: "产品视角完整档案", Icon: Boxes, onOpen: () => openBoard("sku360") }) }),
-    ...visibleBoardModule("creativeLibrary", { key: "board-creative", label: "创意资产库", description: "段级内容资产检索", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "创意资产库", summary: "开头、画面与产品露出", Icon: LibraryBig, onOpen: () => openBoard("creativeLibrary") }) }),
-    ...visibleBoardModule("replyQueue", { key: "board-reply", label: "回复队列", description: "高意图评论与人工回复", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "回复队列", summary: "AI 草稿，人工放行", Icon: MessagesSquare, onOpen: () => openBoard("replyQueue") }) }),
-    ...visibleBoardModule("launchpad", { key: "board-launchpad", label: "发射台", description: "新品一键六输出", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "发射台", summary: "新品上市一键全案", Icon: Rocket, onOpen: () => openBoard("launchpad") }) }),
-    ...visibleBoardModule("autonomy", { key: "board-autonomy", label: "自治驾照", description: "自动化等级与审批红线", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "自治驾照", summary: "挣来的自治", Icon: ShieldCheck, onOpen: () => openBoard("autonomy") }) }),
-    ...visibleBoardModule("strategyBoard", { key: "board-strategy", label: "战略台", description: "行业对照与策略模拟", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "战略台", summary: "赛道与预算模拟", Icon: Target, onOpen: () => openBoard("strategyBoard") }) }),
-    ...visibleBoardModule("gtmCommand", { key: "board-gtm", label: "GTM Command", description: "产品上市增长指挥图", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: "GTM Command", summary: "P2G 总脑出口", Icon: Compass, onOpen: () => openBoard("gtmCommand") }) }),
+    ...visibleBoardModule("my-kol", { key: "board-my-kol", label: "MY KOL", description: "合作达人、跟进与推进", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("MY KOL"), summary: t("合作与跟进工作台"), Icon: CircleUserRound, onOpen: () => openBoard("my-kol") }) }),
+    ...visibleBoardModule("kol-pool", { key: "board-kol-pool", label: "KOL Pool", description: "候选发现、评分与档案", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("KOL Pool"), summary: t("候选与高拟合发现"), metric: rosterValue, Icon: Database, onOpen: () => openBoard("kol-pool") }) }),
+    ...visibleBoardModule("kolProfile", { key: "board-kol-profile", label: "KOL 档案", description: "单个达人八层档案", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("KOL 档案"), summary: t("身份、内容、受众与合作"), Icon: IdCard, onOpen: () => openBoard("kolProfile") }) }),
+    ...visibleBoardModule("projects", { key: "board-projects", label: "Projects", description: "项目履约、成本与证据", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("Projects"), summary: t("项目履约与复盘"), metric: campaigns.length || null, Icon: BriefcaseBusiness, onOpen: () => openBoard("projects") }) }),
+    ...visibleBoardModule("events", { key: "board-events", label: "Events", description: "活动、物料与成员分工", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("Events"), summary: t("近期真实活动"), metric: upcomingEvents.length || null, Icon: CalendarDays, onOpen: () => openBoard("events") }) }),
+    ...visibleBoardModule("shopify", { key: "board-shopify", label: "Shopify", description: "联盟链接与订单归因", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("Shopify"), summary: t("订单归因待接入"), Icon: ShoppingBag, onOpen: () => openBoard("shopify") }) }),
+    ...visibleBoardModule("dealers", { key: "board-dealers", label: "Dealers", description: "经销商地理分布", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("Dealers"), summary: t("经销商地图"), Icon: MapPin, onOpen: () => openBoard("dealers") }) }),
+    ...visibleBoardModule("intelligent", { key: "board-intelligent", label: "Intelligent 问答", description: "内部数据问答", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("Intelligent 问答"), summary: t("问市场、KOL 与项目"), Icon: MessageCircleMore, onOpen: () => openBoard("intelligent") }) }),
+    ...visibleBoardModule("marketVoice", { key: "board-market-voice", label: "市场之声", description: "用户反馈与产品信号", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("市场之声"), summary: t("评论与需求聚类"), Icon: RadioTower, onOpen: () => openBoard("marketVoice") }) }),
+    ...visibleBoardModule("sku360", { key: "board-sku360", label: "SKU 360°", description: "产品、内容与达人反查", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("SKU 360°"), summary: t("产品视角完整档案"), Icon: Boxes, onOpen: () => openBoard("sku360") }) }),
+    ...visibleBoardModule("creativeLibrary", { key: "board-creative", label: "创意资产库", description: "段级内容资产检索", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("创意资产库"), summary: t("开头、画面与产品露出"), Icon: LibraryBig, onOpen: () => openBoard("creativeLibrary") }) }),
+    ...visibleBoardModule("replyQueue", { key: "board-reply", label: "回复队列", description: "高意图评论与人工回复", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("回复队列"), summary: t("AI 草稿，人工放行"), Icon: MessagesSquare, onOpen: () => openBoard("replyQueue") }) }),
+    ...visibleBoardModule("launchpad", { key: "board-launchpad", label: "发射台", description: "新品一键六输出", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("发射台"), summary: t("新品上市一键全案"), Icon: Rocket, onOpen: () => openBoard("launchpad") }) }),
+    ...visibleBoardModule("autonomy", { key: "board-autonomy", label: "自治驾照", description: "自动化等级与审批红线", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("自治驾照"), summary: t("挣来的自治"), Icon: ShieldCheck, onOpen: () => openBoard("autonomy") }) }),
+    ...visibleBoardModule("strategyBoard", { key: "board-strategy", label: "战略台", description: "行业对照与策略模拟", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("战略台"), summary: t("赛道与预算模拟"), Icon: Target, onOpen: () => openBoard("strategyBoard") }) }),
+    ...visibleBoardModule("gtmCommand", { key: "board-gtm", label: "GTM Command", description: "产品上市增长指挥图", category: "业务板块", defaultSpan: 4, render: () => e(DashboardBoardLinkCard, { label: t("GTM Command"), summary: t("P2G 总脑出口"), Icon: Compass, onOpen: () => openBoard("gtmCommand") }) }),
 
     // 跨板块模块(task #76):子板块注册表模块拉进 Dashboard 直接操作(全部 palette
     // 备选,默认布局不动)。真身 lazy 分板块加载;canViewBoard 过滤 palette 可见性。
     ...buildCrossBoardModules({ apiToken, canViewBoard, onOpenBoard: openBoard, pageProps: crossBoardPageProps }),
   ];
+  const modules = sourceModules.map((definition) => ({
+    ...definition,
+    label: t(definition.label),
+    description: t(definition.description),
+    sourceLabel: definition.sourceLabel ? t(definition.sourceLabel) : definition.sourceLabel,
+  }));
 
   return e("div", { className: "vkpi-dashboard-canvas p-4 md:px-[22px] md:py-[15px]" },
       e(EditableDashboardBoard, {

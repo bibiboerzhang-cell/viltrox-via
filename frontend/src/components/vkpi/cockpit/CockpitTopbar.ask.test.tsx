@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ThemeProvider } from "../../../app/providers/ThemeProvider";
 import { CockpitTopbar } from "./CockpitTopbar";
 import { I18nContext, makeT } from "./lib/i18n";
+import { I18N_EN } from "./data/i18nEn";
 
 vi.mock("./components/TopProgressCenter", () => ({ TopProgressCenter: () => null }));
 vi.mock("../../../services/vkpi/intelligent-api", async (importOriginal) => {
@@ -13,7 +14,7 @@ vi.mock("../../../services/vkpi/intelligent-api", async (importOriginal) => {
 
 describe("CockpitTopbar Ask & Find entry", () => {
   it("keeps both desktop and mobile entry points wired to the same overlay", async () => {
-    const t = makeT("en");
+    const t = makeT("en", I18N_EN);
     render(
       <ThemeProvider>
         <I18nContext.Provider value={{ t, lang: "en", setLang: vi.fn() }}>

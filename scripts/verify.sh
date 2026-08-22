@@ -123,6 +123,15 @@ frontend_contracts() {
 }
 run_step "frontend contracts are checked in and current" frontend_contracts
 
+frontend_i18n_contract() {
+  if [ ! -d "$ROOT/frontend/node_modules/typescript" ]; then
+    echo "[verify] frontend/node_modules/typescript 缺失；i18n 门禁不隐式安装依赖。"
+    return 1
+  fi
+  ( cd "$ROOT/frontend" && npm run check:i18n )
+}
+run_step "frontend i18n dictionary + missing-English ratchet" frontend_i18n_contract
+
 silent_exception_baseline() {
   PYTHONPATH="$ROOT/scripts:$ROOT/backend" "$PYTHON_BIN" \
     "$ROOT/scripts/check_silent_exception_baseline.py" \

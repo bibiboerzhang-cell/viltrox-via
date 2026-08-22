@@ -2,7 +2,8 @@ import React, { StrictMode } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { fetchVkpiDashboardData, writeVkpiHash } = vi.hoisted(() => ({
+const { createVkpiReportExport, fetchVkpiDashboardData, writeVkpiHash } = vi.hoisted(() => ({
+  createVkpiReportExport: vi.fn(),
   fetchVkpiDashboardData: vi.fn(),
   writeVkpiHash: vi.fn(),
 }));
@@ -17,6 +18,14 @@ vi.mock("../../../hooks/useAuth", () => ({
   useAuth: () => ({ refreshUser: vi.fn() }),
 }));
 
+vi.mock("../../../services/vkpi/reports-api", () => ({
+  VKPI_REPORT_SECTION_KEYS: ["summary"],
+  createVkpiReportExport,
+  downloadVkpiFile: vi.fn(),
+  generateVkpiReport: vi.fn(),
+  reportApiErrorMessage: (_error: unknown, fallback: string) => fallback,
+}));
+
 vi.mock("../../vkpi/layout/vkpiDashboardRouting", () => ({
   getInitialVkpiPage: () => "cockpit",
   writeVkpiHash,
@@ -25,18 +34,20 @@ vi.mock("../../vkpi/layout/vkpiDashboardRouting", () => ({
 vi.mock("../../vkpi", async () => {
   const ReactModule = await import("react");
   return {
-    VkpiDashboard: ({ data, isRefreshing, onRefreshData, onToggleView }: any) => ReactModule.createElement(
+    VkpiDashboard: ({ data, isRefreshing, onRefreshData, onToggleView, onExportPDF }: any) => ReactModule.createElement(
       "div",
       null,
       ReactModule.createElement("output", { "data-testid": "dashboard-marker" }, data?.marker || "empty"),
       ReactModule.createElement("output", { "data-testid": "dashboard-loading" }, isRefreshing ? "loading" : "idle"),
       ReactModule.createElement("button", { type: "button", onClick: onRefreshData }, "refresh"),
       ReactModule.createElement("button", { type: "button", onClick: () => onToggleView?.("projects") }, "switch-to-projects"),
+      ReactModule.createElement("button", { type: "button", onClick: onExportPDF }, "export-pdf"),
     ),
   };
 });
 
 import { VkpiTab } from "./VkpiTab";
+import { I18nContext } from "../../vkpi/cockpit/lib/i18n";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -57,6 +68,7 @@ const owner = { staff_id: 7, is_owner: true, role: "owner" };
 describe("VkpiTab dashboard load coalescing", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    createVkpiReportExport.mockReset();
     fetchVkpiDashboardData.mockReset();
     writeVkpiHash.mockReset();
   });
@@ -132,5 +144,30 @@ describe("VkpiTab dashboard load coalescing", () => {
 
     await waitFor(() => expect(writeVkpiHash).toHaveBeenCalledWith("projects"));
     expect(writeVkpiHash).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the active global language for report generation", async () => {
+    fetchVkpiDashboardData.mockResolvedValue(payload("report"));
+    createVkpiReportExport.mockResolvedValue({ downloadUrl: "" });
+
+    render(
+      <I18nContext.Provider value={{
+        lang: "en",
+        setLang: vi.fn(),
+        t: (source) => source,
+      }}>
+        <VkpiTab token="token-a" user={owner} />
+      </I18nContext.Provider>,
+    );
+
+    await waitFor(() => expect(screen.getByTestId("dashboard-marker")).toHaveTextContent("report"));
+    fireEvent.click(screen.getByRole("button", { name: "export-pdf" }));
+
+    await waitFor(() => expect(createVkpiReportExport).toHaveBeenCalledTimes(1));
+    expect(createVkpiReportExport.mock.calls[0]?.[2]).toMatchObject({
+      language: "en",
+      period: "weekly",
+      scope: "all",
+    });
   });
 });

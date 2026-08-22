@@ -24,6 +24,7 @@ import { StaffProfileDrawer } from './drawers/StaffProfileDrawer';
 import { KolProfileDrawer } from './drawers/KolProfileDrawer';
 import { AlertDetailDrawer } from './drawers/AlertDetailDrawer';
 import { FeedbackWidget } from './shared/FeedbackWidget';
+import { useT } from './cockpit/lib/i18n';
 import { useMetricEvidence } from './hooks/useMetricEvidence';
 import { useProjectDetailDrawer } from './hooks/useProjectDetailDrawer';
 import { profileToKolDetail, textValue } from './shared/vkpiDataUtils';
@@ -161,6 +162,7 @@ export function VkpiDashboard({
   canSwitchView = false,
   onToggleView,
 }: VkpiDashboardProps) {
+  const { t } = useT();
   const [query, setQuery] = useState('');
   const [selectedProjectId, setSelectedProjectId] = useState(data.projects[0]?.id);
   const [activePage, setActivePage] = useState<VkpiPageKey>(() => getInitialVkpiPage(viewMode));
@@ -325,27 +327,27 @@ export function VkpiDashboard({
     setKolProfileDrawerProfile(null);
     setKolProfileDrawerError('');
     if (!apiToken) {
-      setKolProfileDrawerError('当前前端没有登录 token，无法读取真实 KOL Profile。');
+      setKolProfileDrawerError(t('当前前端没有登录 token，无法读取真实 KOL Profile。'));
       return;
     }
     if (!project.kolId) {
-      setKolProfileDrawerError('当前项目没有绑定 KOL ID，不能读取完整档案。');
+      setKolProfileDrawerError(t('当前项目没有绑定 KOL ID，不能读取完整档案。'));
       return;
     }
     setKolProfileDrawerLoading(true);
     try {
       setKolProfileDrawerProfile(await getKolProfile(apiToken, project.kolId));
     } catch (error) {
-      setKolProfileDrawerError(error instanceof Error ? error.message : 'KOL Profile 加载失败');
+      setKolProfileDrawerError(error instanceof Error ? error.message : t('KOL Profile 加载失败'));
     } finally {
       setKolProfileDrawerLoading(false);
     }
-  }, [apiToken]);
+  }, [apiToken, t]);
 
   const handleOpenStaffProfile = useCallback(async (staffId: string, fallback?: Partial<VkpiStaffMember>) => {
     const member = data.staffMembers.find((item) => item.id === staffId) || (fallback ? {
       id: staffId,
-      name: fallback.name || `成员 ${staffId}`,
+      name: fallback.name || t('成员 {staffId}', { staffId }),
       email: fallback.email || '',
       role: fallback.role || '',
       active: fallback.active ?? true,
@@ -357,22 +359,22 @@ export function VkpiDashboard({
     setStaffProfileDrawerProfile(null);
     setStaffProfileDrawerError('');
     if (!apiToken) {
-      setStaffProfileDrawerError('当前前端没有登录 token，无法读取成员详情。');
+      setStaffProfileDrawerError(t('当前前端没有登录 token，无法读取成员详情。'));
       return;
     }
     if (!staffId) {
-      setStaffProfileDrawerError('缺少成员 ID。');
+      setStaffProfileDrawerError(t('缺少成员 ID。'));
       return;
     }
     setStaffProfileDrawerLoading(true);
     try {
       setStaffProfileDrawerProfile(await getStaffProfile(apiToken, staffId));
     } catch (error) {
-      setStaffProfileDrawerError(error instanceof Error ? error.message : '成员详情加载失败');
+      setStaffProfileDrawerError(error instanceof Error ? error.message : t('成员详情加载失败'));
     } finally {
       setStaffProfileDrawerLoading(false);
     }
-  }, [apiToken, data.staffMembers]);
+  }, [apiToken, data.staffMembers, t]);
 
   const handleResolveAlert = useCallback(async (alertId: string) => {
     if (!apiToken || !alertId) return;
@@ -390,18 +392,18 @@ export function VkpiDashboard({
     setAlertDetail(null);
     setAlertDetailError('');
     if (!apiToken || !alertId) {
-      setAlertDetailError('当前前端没有登录 token，无法读取告警 source rows。');
+      setAlertDetailError(t('当前前端没有登录 token，无法读取告警 source rows。'));
       return;
     }
     setAlertDetailLoading(true);
     try {
       setAlertDetail(await getMarketingAlertDetail(apiToken, alertId));
     } catch (error) {
-      setAlertDetailError(error instanceof Error ? error.message : '告警详情加载失败');
+      setAlertDetailError(error instanceof Error ? error.message : t('告警详情加载失败'));
     } finally {
       setAlertDetailLoading(false);
     }
-  }, [apiToken]);
+  }, [apiToken, t]);
 
   if (activePage === 'glass-demo') {
     return <GlassDemoPage apiToken={apiToken} userName={userName} userRole={userRole} />;

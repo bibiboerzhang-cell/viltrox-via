@@ -2,6 +2,7 @@ import type { ChangeEvent } from 'react';
 import { Avatar } from '../shared/Avatar';
 import { Icon } from '../shared/Icon';
 import type { VkpiPageKey } from '../vkpiTypes';
+import { useT } from '../cockpit/lib/i18n';
 import type { VkpiNavItem } from './vkpiLayoutConstants';
 
 interface VkpiSidebarProps {
@@ -27,6 +28,7 @@ export function VkpiSidebar({
   onUploadAvatar,
   onSignOut,
 }: VkpiSidebarProps) {
+  const { t } = useT();
   const handleAvatarChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
     if (file) onUploadAvatar?.(file);
@@ -37,10 +39,10 @@ export function VkpiSidebar({
     <aside className="vkpi-sidebar">
       <div className="vkpi-brand">
         <div className="vkpi-brand__wordmark" aria-label="Viltrox">VILTROX</div>
-        <div className="vkpi-brand__product">Marketing</div>
+        <div className="vkpi-brand__product">{t('Marketing')}</div>
       </div>
 
-      <nav className="vkpi-nav" aria-label="Viltrox Marketing 导航">
+      <nav className="vkpi-nav" aria-label={t('Viltrox Marketing 导航')}>
         {navItems.map((item) => (
           <button
             key={item.key}
@@ -49,7 +51,7 @@ export function VkpiSidebar({
             onClick={() => onSelectPage(item.key)}
           >
             <Icon name={item.icon} />
-            <span>{item.label}</span>
+            <span>{t(item.label)}</span>
           </button>
         ))}
       </nav>
@@ -58,12 +60,12 @@ export function VkpiSidebar({
         <Avatar name={userName} src={userAvatar} size="sm" />
         <div>
           <strong>{userName}</strong>
-          <span>{userRole}</span>
-          {avatarRequired ? <em>请上传真人头像</em> : null}
+          <span>{t(userRole)}</span>
+          {avatarRequired ? <em>{t('请上传真人头像')}</em> : null}
         </div>
         {onUploadAvatar ? (
           <label className="vkpi-avatar-upload">
-            上传
+            {t('上传')}
             <input type="file" accept="image/png,image/jpeg,image/webp" onChange={handleAvatarChange} />
           </label>
         ) : null}
@@ -73,7 +75,7 @@ export function VkpiSidebar({
             className="vkpi-user-chip__logout"
             onClick={() => void onSignOut()}
           >
-            退出
+            {t('退出')}
           </button>
         ) : null}
       </div>

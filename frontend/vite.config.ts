@@ -155,6 +155,11 @@ export default defineConfig(({ command }) => {
             ) {
               return "app-data";
             }
+            // 默认界面是中文；完整英文词典只在恢复英文偏好或打开语言入口时按需加载。
+            // 必须先于 cockpit/data 通用规则命中，否则 manual chunk 会把动态词典重新塞回首屏。
+            if (id.includes("/src/components/vkpi/cockpit/data/i18nEn.ts")) {
+              return "vkpi-i18n-en";
+            }
             // ② cockpit 基础件层:被 widgets 与主 chunk 共用的工具/图标映射/api 桥(仅依赖 ①/vendor)。
             if (
               id.includes("/src/components/vkpi/cockpit/lib/") ||

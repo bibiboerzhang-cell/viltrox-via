@@ -1,7 +1,12 @@
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  LOCALE_STORAGE_KEY,
+  LocaleProvider,
+} from "../../app/providers/LocaleProvider";
 
 vi.mock("../../hooks/useAuth", () => ({
   useAuth: () => ({
@@ -22,13 +27,23 @@ vi.mock("../../lib/buildInfo", () => ({
 
 import AdminLoginRoute from "./AdminLoginRoute";
 
-describe("AdminLoginRoute public surface", () => {
-  it("uses the generic test brand and announces validation errors", () => {
-    render(
+function renderLogin() {
+  return render(
+    <LocaleProvider>
       <MemoryRouter>
         <AdminLoginRoute />
-      </MemoryRouter>,
-    );
+      </MemoryRouter>
+    </LocaleProvider>,
+  );
+}
+
+describe("AdminLoginRoute public surface", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("uses the generic test brand and announces validation errors", () => {
+    renderLogin();
 
     expect(screen.getByText("Viltrox Test")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "登录" }));
@@ -38,5 +53,18 @@ describe("AdminLoginRoute public surface", () => {
     expect(screen.getByLabelText("密码")).toHaveAttribute("aria-invalid", "true");
     expect(screen.getByLabelText("邮箱")).toHaveAttribute("aria-describedby", "ax-login-error");
     expect(screen.getByLabelText("密码")).toHaveAttribute("aria-describedby", "ax-login-error");
+  });
+
+  it("restores English before localizing the login form and validation", async () => {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, "en");
+    renderLogin();
+
+    const submit = await screen.findByRole("button", { name: "Sign in" });
+    expect(screen.getByLabelText("Email")).toBeInTheDocument();
+    expect(screen.getByLabelText("Password")).toBeInTheDocument();
+
+    fireEvent.click(submit);
+    expect(screen.getByRole("alert")).toHaveTextContent("Enter your email and password");
+    expect(document.documentElement.lang).toBe("en");
   });
 });

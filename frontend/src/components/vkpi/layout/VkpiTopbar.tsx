@@ -1,6 +1,7 @@
 import { DataStatusBadge } from '../shared/DataStatusBadge';
 import { Icon } from '../shared/Icon';
 import type { VkpiDataStatus, VkpiRangeKey } from '../vkpiTypes';
+import { useT } from '../cockpit/lib/i18n';
 import { rangeOptions } from './vkpiLayoutConstants';
 import { ThemeSwitch } from '../../../shared/ThemeSwitch';
 
@@ -45,6 +46,7 @@ export function VkpiTopbar({
   onGenerateWeeklyReport,
   weeklyReportStatus,
 }: VkpiTopbarProps) {
+  const { t } = useT();
   return (
     <header className="vkpi-topbar">
       <label className="vkpi-search">
@@ -52,22 +54,22 @@ export function VkpiTopbar({
         <input
           value={query}
           onChange={(event) => onQueryChange(event.target.value)}
-          placeholder="搜索红人 / 项目 / 短链 / 消息"
-          aria-label="搜索红人 项目 短链 消息"
+          placeholder={t('搜索红人 / 项目 / 短链 / 消息')}
+          aria-label={t('搜索红人 项目 短链 消息')}
         />
         <kbd>⌘ K</kbd>
       </label>
 
       <label className="vkpi-date-control">
-        <span>数据范围</span>
+        <span>{t('数据范围')}</span>
         <select
           value={range}
           onChange={(event) => onRangeChange?.(event.target.value as VkpiRangeKey)}
-          aria-label="选择数据范围"
+          aria-label={t('选择数据范围')}
           disabled={!onRangeChange}
         >
           {rangeOptions.map((option) => (
-            <option key={option.key} value={option.key}>{option.label}</option>
+            <option key={option.key} value={option.key}>{t(option.label)}</option>
           ))}
         </select>
         <Icon name="calendar" />
@@ -83,7 +85,7 @@ export function VkpiTopbar({
 
       {canSwitchView ? (
         <button className="vkpi-button" type="button" onClick={onToggleView}>
-          {viewMode === 'manager' ? '切换我的视角' : '返回管理主控'}
+          {t(viewMode === 'manager' ? '切换我的视角' : '返回管理主控')}
         </button>
       ) : null}
 
@@ -94,30 +96,30 @@ export function VkpiTopbar({
           type="button"
           onClick={onExportPDF}
           disabled={!onExportPDF}
-          title={onExportPDF ? '导出当前报表 PDF' : '当前页面未接入 PDF 导出'}
+          title={t(onExportPDF ? '导出当前报表 PDF' : '当前页面未接入 PDF 导出')}
         >
           <Icon name="file" />
-          导出 PDF
+          {t('导出 PDF')}
         </button>
         <button
           className="vkpi-button"
           type="button"
           onClick={onExportCSV}
           disabled={!onExportCSV}
-          title={onExportCSV ? '导出当前数据 CSV' : '当前页面未接入 CSV 导出'}
+          title={t(onExportCSV ? '导出当前数据 CSV' : '当前页面未接入 CSV 导出')}
         >
           <Icon name="table" />
-          导出 CSV
+          {t('导出 CSV')}
         </button>
         <button
           className="vkpi-button vkpi-button--primary"
           type="button"
           onClick={onGenerateWeeklyReport}
           disabled={!onGenerateWeeklyReport}
-          title={onGenerateWeeklyReport ? '生成真实周报' : '当前页面未接入周报生成'}
+          title={t(onGenerateWeeklyReport ? '生成真实周报' : '当前页面未接入周报生成')}
         >
           <Icon name="spark" />
-          生成周报
+          {t('生成周报')}
         </button>
         {weeklyReportStatus?.message ? (
           <span
@@ -137,7 +139,7 @@ export function VkpiTopbar({
               whiteSpace: 'nowrap',
             }}
           >
-            {weeklyReportStatus.message}
+            {t(weeklyReportStatus.message)}
             {weeklyReportStatus.href ? (
               <a
                 href={weeklyReportStatus.href}
@@ -145,7 +147,7 @@ export function VkpiTopbar({
                 rel="noreferrer"
                 style={{ color: 'inherit', textDecoration: 'underline' }}
               >
-                打开
+                {t('打开')}
               </a>
             ) : null}
           </span>

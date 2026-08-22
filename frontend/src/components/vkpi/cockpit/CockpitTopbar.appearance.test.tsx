@@ -1,8 +1,14 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ThemeProvider } from "../../../app/providers/ThemeProvider";
-import { AppearancePopover } from "./CockpitTopbar";
+import { AppearancePopover, CockpitTopbar } from "./CockpitTopbar";
+import { I18nContext, makeT } from "./lib/i18n";
+import { I18N_EN } from "./data/i18nEn";
+
+vi.mock("./components/AskCommandOverlay", () => ({
+  AskCommandOverlay: () => null,
+}));
 
 function renderPopover() {
   return render(
@@ -66,5 +72,59 @@ describe("AppearancePopover", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "桌面外观" })).not.toBeInTheDocument());
     expect(trigger).toHaveFocus();
+  });
+});
+
+const topbarProps = {
+  activeNav: "dashboard",
+  helpBtnRef: React.createRef(),
+  setShowHelp: vi.fn(),
+  messagesBtnRef: React.createRef(),
+  setShowMessages: vi.fn(),
+  activeReminders: [],
+  setReportOpen: vi.fn(),
+  notifsBtnRef: React.createRef(),
+  setShowNotifs: vi.fn(),
+  runtimeNotifications: [],
+  userMenuBtnRef: React.createRef(),
+  setShowUserMenu: vi.fn(),
+  viewingAs: null,
+  currentUser: { name: "Admin", role: "admin", avatar: "A", avatarUrl: "", avatarGradient: "" },
+  apiToken: "",
+  onNavigate: vi.fn(),
+  dashboardEditing: false,
+  setDashboardEditing: vi.fn(),
+};
+
+function renderTopbar(lang: "zh" | "en") {
+  const t = makeT(lang, lang === "en" ? I18N_EN : undefined);
+  return render(
+    <ThemeProvider>
+      <I18nContext.Provider value={{ t, lang, setLang: vi.fn() }}>
+        <CockpitTopbar {...topbarProps} t={t} />
+      </I18nContext.Provider>
+    </ThemeProvider>,
+  );
+}
+
+describe("CockpitTopbar i18n", () => {
+  it("默认中文化 Dashboard 标题和通用操作", () => {
+    renderTopbar("zh");
+
+    expect(screen.getByRole("heading", { name: "仪表盘" })).toBeInTheDocument();
+    expect(screen.getByText("增长总览")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更多工具" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "通知" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "用户菜单" })).toBeInTheDocument();
+  });
+
+  it("英文模式保持英文标题和通用操作", () => {
+    renderTopbar("en");
+
+    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeInTheDocument();
+    expect(screen.getByText("Growth Overview")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "More tools" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Notifications" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "User Menu" })).toBeInTheDocument();
   });
 });
