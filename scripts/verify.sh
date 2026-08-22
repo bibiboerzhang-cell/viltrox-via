@@ -164,7 +164,10 @@ backend_pytest() {
     echo "[verify] Python 解释器缺失:$PYTHON_BIN"
     return 1
   fi
-  PYTHONPATH="$ROOT/backend" "$PYTHON_BIN" -m pytest -q
+  # 仓库根 + scripts + backend 三段:tests/test_apify_queue_capacity_model 等以
+  # ``from scripts.ops import ...`` 从仓库根导入(scripts 无 __init__,命名空间包),
+  # 只给 backend 会 ModuleNotFoundError;与手工口诀 PYTHONPATH=.:scripts:backend 对齐。
+  PYTHONPATH="$ROOT:$ROOT/scripts:$ROOT/backend" "$PYTHON_BIN" -m pytest -q
 }
 run_step "backend pytest" backend_pytest
 
