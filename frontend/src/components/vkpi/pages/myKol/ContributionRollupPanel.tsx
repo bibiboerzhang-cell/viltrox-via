@@ -42,7 +42,7 @@ const ACTION_BTN: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
-  fontSize: 12,
+  fontSize: 'var(--ds-fs-12)',
   padding: '4px 10px',
   borderRadius: 8,
   cursor: 'pointer',
@@ -132,17 +132,17 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
           <h2 style={{ margin: 0, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
             <BarChart3 size={16} /> KOL 贡献度聚合
           </h2>
-          <p style={{ margin: '4px 0 0', fontSize: 12, color: MUTED }}>
+          <p style={{ margin: '4px 0 0', fontSize: 'var(--ds-fs-12)', color: MUTED }}>
             管理层视角 · 每位负责人一行 · 各指标分列
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <label style={{ fontSize: 12, color: MUTED }}>窗口</label>
+          <label style={{ fontSize: 'var(--ds-fs-12)', color: MUTED }}>窗口</label>
           <select
             value={windowSel}
             onChange={(e) => setWindowSel(Number(e.target.value))}
             style={{
-              fontSize: 12,
+              fontSize: 'var(--ds-fs-12)',
               padding: '4px 8px',
               borderRadius: 8,
               background: 'var(--ds-panel)',
@@ -163,11 +163,11 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
       </header>
 
       {error ? (
-        <p style={{ fontSize: 13, color: 'var(--ds-crit)', margin: '8px 0' }}>读取失败:{error}</p>
+        <p style={{ fontSize: 'var(--ds-fs-13)', color: 'var(--ds-crit)', margin: '8px 0' }}>读取失败:{error}</p>
       ) : null}
 
       <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--ds-fs-13)' }}>
           <thead>
             <tr style={{ textAlign: 'left', color: MUTED, borderBottom: '1px solid var(--ds-line-strong)' }}>
               <th style={{ padding: '8px 10px' }}>负责人</th>
@@ -199,7 +199,7 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
                 <td style={{ padding: '8px 10px' }}>
                   <div style={{ fontWeight: 600 }}>{it.staff_name || `#${it.staff_id ?? '?'}`}</div>
                   {it.staff_email ? (
-                    <div style={{ fontSize: 11, color: MUTED }}>{it.staff_email}</div>
+                    <div style={{ fontSize: 'var(--ds-fs-11)', color: MUTED }}>{it.staff_email}</div>
                   ) : null}
                 </td>
                 <td style={{ padding: '8px 10px', textAlign: 'right' }}>{it.active_kol_count ?? 0}</td>
@@ -237,7 +237,7 @@ export function ContributionRollupPanel({ apiToken, viewMode, windowDays }: Cont
         </table>
       </div>
 
-      <p style={{ fontSize: 11, color: MUTED, marginTop: 12 }}>
+      <p style={{ fontSize: 'var(--ds-fs-11)', color: MUTED, marginTop: 12 }}>
         已发布数来自内容库(window 内 published_at);归因销售来自销售归因表(按 KOL 关联),无数据源时显示「暂无数据源」。
       </p>
     </section>

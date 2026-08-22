@@ -91,7 +91,7 @@ const ACTION_BTN: CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 4,
-  fontSize: 12,
+  fontSize: 'var(--ds-fs-12)',
   padding: '4px 10px',
   borderRadius: 8,
   cursor: 'pointer',
@@ -104,7 +104,7 @@ function DimensionRow({ dim }: { dim: RiskDimension }) {
   const unavailable = !dim.available || dim.score == null;
   const brands = dim.matched_brands ?? [];
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 'var(--ds-fs-11-5)' }}>
       <span style={{ width: 72, color: MUTED, flexShrink: 0 }}>{dim.label}</span>
       <div style={{ flex: 1, height: 6, borderRadius: 4, background: 'var(--ds-line-strong)', overflow: 'hidden' }}>
         {!unavailable ? (
@@ -125,10 +125,10 @@ function DimensionRow({ dim }: { dim: RiskDimension }) {
         )}
       </span>
       {dim.direction_confirmed === false ? (
-        <span style={{ color: MUTED, fontSize: 10 }} title="该维度语义方向尚未经线上抽样确认">?</span>
+        <span style={{ color: MUTED, fontSize: 'var(--ds-fs-10)' }} title="该维度语义方向尚未经线上抽样确认">?</span>
       ) : null}
       {brands.length > 0 ? (
-        <span style={{ fontSize: 10, color: 'var(--ds-crit)' }} title={`命中竞品:${brands.join(', ')}`}>
+        <span style={{ fontSize: 'var(--ds-fs-10)', color: 'var(--ds-crit)' }} title={`命中竞品:${brands.join(', ')}`}>
           {brands.slice(0, 3).join('/')}
         </span>
       ) : null}
@@ -151,14 +151,14 @@ function KolRiskCard({ item }: { item: RiskIndexItem }) {
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--ds-text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <div style={{ fontWeight: 600, fontSize: 'var(--ds-fs-13)', color: 'var(--ds-text-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {name}
             </div>
-            {item.platform ? <div style={{ fontSize: 10.5, color: MUTED }}>{item.platform}</div> : null}
+            {item.platform ? <div style={{ fontSize: 'var(--ds-fs-10-5)', color: MUTED }}>{item.platform}</div> : null}
           </div>
           <span
             style={{
-              fontSize: 11,
+              fontSize: 'var(--ds-fs-11)',
               padding: '3px 8px',
               borderRadius: 999,
               background: 'var(--ds-line)',
@@ -180,16 +180,16 @@ function KolRiskCard({ item }: { item: RiskIndexItem }) {
     <div style={{ padding: 12, borderRadius: 10, border: BORDER, background: CARD_BG }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13, color: 'var(--ds-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div style={{ fontWeight: 600, fontSize: 'var(--ds-fs-13)', color: 'var(--ds-text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {name}
           </div>
-          <div style={{ fontSize: 10.5, color: MUTED }}>
+          <div style={{ fontSize: 'var(--ds-fs-10-5)', color: MUTED }}>
             {item.platform ? `${item.platform} · ` : ''}
             {item.analyzed_video_count} 条已深析视频
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-          <span style={{ fontSize: 11, color }}>{riskLabel(risk)}</span>
+          <span style={{ fontSize: 'var(--ds-fs-11)', color }}>{riskLabel(risk)}</span>
           <span
             style={{
               fontSize: 18,
@@ -274,12 +274,12 @@ export function RiskIndexPanel({ apiToken, staffId }: RiskIndexPanelProps) {
           <h2 style={{ margin: 0, fontSize: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
             <ShieldAlert size={16} /> KOL 风险指数
           </h2>
-          <p style={{ margin: '4px 0 0', fontSize: 12, color: MUTED }}>
+          <p style={{ margin: '4px 0 0', fontSize: 'var(--ds-fs-12)', color: MUTED }}>
             内容无深度 · 素材复用 · 竞品露出(基于视频深析,实时聚合)
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={{ fontSize: 11.5, color: MUTED }}>
+          <span style={{ fontSize: 'var(--ds-fs-11-5)', color: MUTED }}>
             已分析 {analyzedCount}/{total}（{coverage}%）
             {summary?.high_risk_count ? (
               <span style={{ color: 'var(--ds-crit)', marginLeft: 8 }}>· 高风险 {summary.high_risk_count}</span>
@@ -292,17 +292,17 @@ export function RiskIndexPanel({ apiToken, staffId }: RiskIndexPanelProps) {
       </header>
 
       {error ? (
-        <p style={{ fontSize: 13, color: 'var(--ds-crit)', margin: '8px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <p style={{ fontSize: 'var(--ds-fs-13)', color: 'var(--ds-crit)', margin: '8px 0', display: 'flex', alignItems: 'center', gap: 6 }}>
           <AlertTriangle size={14} /> 读取失败:{error}
         </p>
       ) : null}
 
       {loading && items.length === 0 ? (
-        <p style={{ fontSize: 13, color: MUTED, margin: '8px 0' }}>加载中…</p>
+        <p style={{ fontSize: 'var(--ds-fs-13)', color: MUTED, margin: '8px 0' }}>加载中…</p>
       ) : null}
 
       {!loading && items.length === 0 && !error ? (
-        <p style={{ fontSize: 13, color: MUTED, margin: '8px 0' }}>该负责人名下暂无 KOL(收藏 / 共享均为空)。</p>
+        <p style={{ fontSize: 'var(--ds-fs-13)', color: MUTED, margin: '8px 0' }}>该负责人名下暂无 KOL(收藏 / 共享均为空)。</p>
       ) : null}
 
       {items.length > 0 ? (
@@ -319,7 +319,7 @@ export function RiskIndexPanel({ apiToken, staffId }: RiskIndexPanelProps) {
         </div>
       ) : null}
 
-      <p style={{ fontSize: 11, color: MUTED, marginTop: 14, lineHeight: 1.6 }}>
+      <p style={{ fontSize: 'var(--ds-fs-11)', color: MUTED, marginTop: 14, lineHeight: 1.6 }}>
         风险分 = 加权合成(内容无深度 / 素材复用 / 竞品露出),数据源为视频深析结构化信号(Gemini final_v1）。
         竞品露出用否定感知判定(口径同 dashboard 过滤），「素材复用」语义方向标 ? 表示尚未经线上抽样确认。
         <br />

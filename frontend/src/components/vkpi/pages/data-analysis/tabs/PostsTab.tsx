@@ -81,13 +81,13 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount, onOpenPost }: 
           style={{
             flex: '1 1 200px', maxWidth: 320,
             padding: '8px 12px', border: '1px solid var(--da-border)',
-            borderRadius: 8, fontSize: 13,
+            borderRadius: 8, fontSize: 'var(--ds-fs-13)',
           }}
         />
         <select
           value={filterPlatform}
           onChange={(e) => setFilterPlatform(e.target.value)}
-          style={{ padding: '8px 12px', border: '1px solid var(--da-border)', borderRadius: 8, fontSize: 13 }}
+          style={{ padding: '8px 12px', border: '1px solid var(--da-border)', borderRadius: 8, fontSize: 'var(--ds-fs-13)' }}
         >
           <option value="all">全部平台</option>
           {platforms.map((p) => <option key={p} value={p}>{p}</option>)}
@@ -95,7 +95,7 @@ export function PostsTab({ accounts, posts, onSetSelectedAccount, onOpenPost }: 
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value as SortKey)}
-          style={{ padding: '8px 12px', border: '1px solid var(--da-border)', borderRadius: 8, fontSize: 13 }}
+          style={{ padding: '8px 12px', border: '1px solid var(--da-border)', borderRadius: 8, fontSize: 'var(--ds-fs-13)' }}
         >
           <option value="recent">最新</option>
           <option value="views">播放量</option>

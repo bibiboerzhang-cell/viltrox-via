@@ -91,7 +91,7 @@ const kpiValueStyle: React.CSSProperties = {
 };
 
 const kpiLabelStyle: React.CSSProperties = {
-  fontSize: 13,
+  fontSize: "var(--ds-fs-13)",
   color: "#7b8794",
   textTransform: "uppercase",
   letterSpacing: 0.4,
@@ -228,14 +228,14 @@ export default function KolPortalPage(): JSX.Element {
         <div style={cardStyle}>
           <div style={kpiLabelStyle}>归因 GMV</div>
           <p style={kpiValueStyle}>{formatMoneyCents(gmv.gmv_cents, gmv.currency)}</p>
-          <div style={{ fontSize: 13, color: "#7b8794" }}>
+          <div style={{ fontSize: "var(--ds-fs-13)", color: "#7b8794" }}>
             {formatNumber(gmv.orders_count)} 笔订单
           </div>
         </div>
         <div style={cardStyle}>
           <div style={kpiLabelStyle}>总点击</div>
           <p style={kpiValueStyle}>{formatNumber(clicks.total)}</p>
-          <div style={{ fontSize: 13, color: "#7b8794" }}>
+          <div style={{ fontSize: "var(--ds-fs-13)", color: "#7b8794" }}>
             有效 {formatNumber(clicks.valid)}
           </div>
         </div>
@@ -314,7 +314,7 @@ export default function KolPortalPage(): JSX.Element {
       ) : null}
 
       <footer
-        style={{ marginTop: 32, textAlign: "center", color: "#9aa5b1", fontSize: 12 }}
+        style={{ marginTop: 32, textAlign: "center", color: "#9aa5b1", fontSize: "var(--ds-fs-12)" }}
       >
         这是您的只读专属页面，仅展示您自己的数据。
       </footer>

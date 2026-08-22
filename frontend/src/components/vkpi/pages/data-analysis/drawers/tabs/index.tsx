@@ -161,7 +161,7 @@ export function SummaryTab({ account, snapshots = [], posts = [] }: BaseTabProps
         />
       </div>
       <MiniSnapshotTable snapshots={snapshots} />
-      <div className="da-summary-footer" style={{ marginTop: 16, fontSize: 13, color: 'var(--vkpi-color-text-muted)' }}>
+      <div className="da-summary-footer" style={{ marginTop: 16, fontSize: 'var(--ds-fs-13)', color: 'var(--vkpi-color-text-muted)' }}>
         <p>最近成功同步: {prettyDate(rowString(account, ['last_successful_at']))}</p>
         <p>快照数: {snapshots.length} · 已载入帖子: {posts.length}</p>
       </div>
@@ -379,14 +379,14 @@ export function PostsTab({ posts = [], onOpenPost }: BaseTabProps) {
   return (
     <div className="da-tab-posts">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <span style={{ fontSize: 13, color: 'var(--vkpi-color-text-muted)' }}>显示 {visiblePosts.length} / {sortedPosts.length} 条</span>
+        <span style={{ fontSize: 'var(--ds-fs-13)', color: 'var(--vkpi-color-text-muted)' }}>显示 {visiblePosts.length} / {sortedPosts.length} 条</span>
         {sortedPosts.length > 50 ? (
           <button className="da-text-button" type="button" onClick={() => setShowAll((value) => !value)}>
             {showAll ? '只看前 50' : `显示全部 ${sortedPosts.length} 条`}
           </button>
         ) : null}
       </div>
-      <table className="vkpi-table" style={{ fontSize: 13 }}>
+      <table className="vkpi-table" style={{ fontSize: 'var(--ds-fs-13)' }}>
         <thead>
           <tr>
             <th>Media</th>

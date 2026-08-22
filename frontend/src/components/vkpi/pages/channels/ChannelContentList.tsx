@@ -288,7 +288,7 @@ function deltaTag(n: number | undefined | null) {
   const a = Math.abs(v);
   const fmt = a >= 1000 ? (a / 1000).toFixed(a >= 10000 ? 0 : 1) + 'K' : String(a);
   return (
-    <span style={{ color: up ? '#34d399' : '#fb7185', fontSize: '10.5px', marginLeft: '4px', fontWeight: 600 }}
+    <span style={{ color: up ? '#34d399' : '#fb7185', fontSize: 'var(--ds-fs-10-5)', marginLeft: '4px', fontWeight: 600 }}
       title="较上一日">{up ? '↑' : '↓'}{fmt}</span>
   );
 }
@@ -494,34 +494,34 @@ export function ChannelContentList({ account, apiToken }: { account?: OfficialCh
         return (
           <div style={{ margin: '0 0 12px', border: '1px solid rgba(120,180,255,0.18)', borderRadius: 10, background: 'rgba(30,50,90,0.12)', padding: '10px 12px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-              <strong style={{ fontSize: 12, color: '#bcd4ff' }}>📊 今日账号报告</strong>
-              {avail && (report as any)?.report_date ? <span style={{ fontSize: 10.5, color: '#7f93b5' }}>{String((report as any).report_date)} · {String((report as any).round_key || '')}</span> : null}
-              <button type="button" onClick={() => void runReport()} disabled={reportRunning} style={{ marginLeft: 'auto', fontSize: 10.5, padding: '3px 8px', borderRadius: 6, border: '1px solid rgba(120,180,255,0.3)', background: 'rgba(120,180,255,0.12)', color: '#cfe0ff', cursor: reportRunning ? 'wait' : 'pointer' }}>
+              <strong style={{ fontSize: 'var(--ds-fs-12)', color: '#bcd4ff' }}>📊 今日账号报告</strong>
+              {avail && (report as any)?.report_date ? <span style={{ fontSize: 'var(--ds-fs-10-5)', color: '#7f93b5' }}>{String((report as any).report_date)} · {String((report as any).round_key || '')}</span> : null}
+              <button type="button" onClick={() => void runReport()} disabled={reportRunning} style={{ marginLeft: 'auto', fontSize: 'var(--ds-fs-10-5)', padding: '3px 8px', borderRadius: 6, border: '1px solid rgba(120,180,255,0.3)', background: 'rgba(120,180,255,0.12)', color: '#cfe0ff', cursor: reportRunning ? 'wait' : 'pointer' }}>
                 {reportRunning ? '生成中…' : (avail ? '刷新报告' : '立即生成')}
               </button>
-              {avail ? <button type="button" onClick={() => setReportOpen((v) => !v)} style={{ fontSize: 10.5, padding: '3px 6px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: '#8aa0c4', cursor: 'pointer' }}>{reportOpen ? '收起' : '展开'}</button> : null}
+              {avail ? <button type="button" onClick={() => setReportOpen((v) => !v)} style={{ fontSize: 'var(--ds-fs-10-5)', padding: '3px 6px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: '#8aa0c4', cursor: 'pointer' }}>{reportOpen ? '收起' : '展开'}</button> : null}
             </div>
-            {reportNotice ? <div style={{ marginTop: 6, fontSize: 10.5, color: '#e0b870' }}>{reportNotice}</div> : null}
-            {!avail && !reportNotice ? <div style={{ marginTop: 6, fontSize: 10.5, color: '#7f93b5' }}>暂无今日报告。点「立即生成」用 LLM 据本号播放/评论/趋势出一份分析 + 提升建议（约 30-60 秒）。每天中国早 8:30、美西早 6:30 自动生成。</div> : null}
+            {reportNotice ? <div style={{ marginTop: 6, fontSize: 'var(--ds-fs-10-5)', color: '#e0b870' }}>{reportNotice}</div> : null}
+            {!avail && !reportNotice ? <div style={{ marginTop: 6, fontSize: 'var(--ds-fs-10-5)', color: '#7f93b5' }}>暂无今日报告。点「立即生成」用 LLM 据本号播放/评论/趋势出一份分析 + 提升建议（约 30-60 秒）。每天中国早 8:30、美西早 6:30 自动生成。</div> : null}
             {avail && reportOpen ? (
               <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 7 }}>
-                {a.headline ? <div style={{ fontSize: 12, fontWeight: 600, color: '#eaf2ff', lineHeight: 1.5 }}>{String(a.headline)}</div> : null}
+                {a.headline ? <div style={{ fontSize: 'var(--ds-fs-12)', fontWeight: 600, color: '#eaf2ff', lineHeight: 1.5 }}>{String(a.headline)}</div> : null}
                 {([['▶ 播放表现', a.play_performance], ['💬 评论洞察', a.comment_insights], ['🎬 画面质量', a.visual_quality], ['📈 数据趋势', a.data_trend]] as [string, unknown][])
                   .filter(([, v]) => v)
                   .map(([label, v]) => (
-                    <div key={label} style={{ fontSize: 11, lineHeight: 1.6, color: '#c4d2e8' }}>
+                    <div key={label} style={{ fontSize: 'var(--ds-fs-11)', lineHeight: 1.6, color: '#c4d2e8' }}>
                       <span style={{ color: '#8fb4ff', fontWeight: 600 }}>{label}　</span>{String(v)}
                     </div>
                   ))}
                 {sug.length ? (
                   <div style={{ marginTop: 2 }}>
-                    <div style={{ fontSize: 11, color: '#9fe0b0', fontWeight: 600, marginBottom: 3 }}>💡 提升建议</div>
+                    <div style={{ fontSize: 'var(--ds-fs-11)', color: '#9fe0b0', fontWeight: 600, marginBottom: 3 }}>💡 提升建议</div>
                     <ul style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      {sug.map((s: unknown, i: number) => <li key={i} style={{ fontSize: 11, lineHeight: 1.55, color: '#cfe0d6' }}>{String(s)}</li>)}
+                      {sug.map((s: unknown, i: number) => <li key={i} style={{ fontSize: 'var(--ds-fs-11)', lineHeight: 1.55, color: '#cfe0d6' }}>{String(s)}</li>)}
                     </ul>
                   </div>
                 ) : null}
-                {(report as any)?.model ? <div style={{ fontSize: 9.5, color: '#5f7090', marginTop: 2 }}>by {String((report as any).model)}</div> : null}
+                {(report as any)?.model ? <div style={{ fontSize: 'var(--ds-fs-9-5)', color: '#5f7090', marginTop: 2 }}>by {String((report as any).model)}</div> : null}
               </div>
             ) : null}
           </div>

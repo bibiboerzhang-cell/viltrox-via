@@ -60,7 +60,7 @@ export function LiveLogisticsBanner({ rows, trackingForRow, onSyncTracking }: Li
             type="button"
             onClick={() => void syncNow()}
             disabled={syncState === 'busy'}
-            style={{ fontSize: 10, color: syncState === 'done' ? '#86efac' : '#93c5fd', background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}
+            style={{ fontSize: 'var(--ds-fs-10)', color: syncState === 'done' ? '#86efac' : '#93c5fd', background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}
             title={syncMsg || '经 17track 拉取真实轨迹(队列「物流同步」可见)'}
           >
             <RefreshCw size={10} /> {syncState === 'busy' ? '发起中…' : syncState === 'done' ? '已入队 ✓' : '同步状态(17track)'}

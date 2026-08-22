@@ -540,7 +540,7 @@ export function CrossPlatformPanel({
                       <span className="da-platform-chip" key={key}>
                         <span
                           className={`da-account-card__avatar ${platformClass(key)}`}
-                          style={{ width: 18, height: 18, fontSize: 10 }}
+                          style={{ width: 18, height: 18, fontSize: 'var(--ds-fs-10)' }}
                         >{platformInitial(key)}</span>
                         {platformDisplay(key)} <strong>{count}</strong>
                       </span>
@@ -549,7 +549,7 @@ export function CrossPlatformPanel({
                       <span className="da-platform-chip">尚未添加平台账号</span>
                     ) : null}
                   </div>
-                  <p style={{ fontSize: 12, opacity: 0.85 }}>
+                  <p style={{ fontSize: 'var(--ds-fs-12)', opacity: 0.85 }}>
                     {apiToken ? '真实 API 已接入;未同步数据时保持真实空态。' : '登录后加载真实数据。'}
                   </p>
                   <div className="da-hero__actions">

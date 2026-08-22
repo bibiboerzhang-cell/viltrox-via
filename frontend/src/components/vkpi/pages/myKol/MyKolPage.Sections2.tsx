@@ -25,7 +25,7 @@ import {
 // 色值走 --ds-* token(浅深两主题自适配;此前写死暗色 rgba,浅色下是突兀深灰块)。
 const batchBtnStyle: React.CSSProperties = {
   border: '1px solid var(--ds-line-strong)', borderRadius: 8, background: 'var(--ds-panel)',
-  color: 'var(--ds-text-2)', padding: '4px 9px', fontSize: 10.5, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
+  color: 'var(--ds-text-2)', padding: '4px 9px', fontSize: 'var(--ds-fs-10-5)', fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap',
 };
 
 export function EmployeeKolLibrary({
@@ -551,7 +551,7 @@ export function EmployeeKolLibrary({
           style={{
             display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, margin: '10px 14px 0',
             border: '1px solid color-mix(in srgb, var(--ds-accent) 32%, transparent)', borderRadius: 11, background: 'var(--ds-accent-soft)',
-            padding: '7px 12px', fontSize: 11, color: 'var(--ds-text-2)',
+            padding: '7px 12px', fontSize: 'var(--ds-fs-11)', color: 'var(--ds-text-2)',
           }}
         >
           <b style={{ color: 'var(--ds-accent)' }}>已选 {batchSelectedItems.length} / 可见 {filteredItems.length}</b>
@@ -627,7 +627,7 @@ export function EmployeeKolLibrary({
         ))}
       </div>
       {favPage ? (
-        <div style={{ margin: '8px 14px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, border: '1px solid var(--ds-line)', borderRadius: 9, padding: '7px 10px', fontSize: 10.5, color: 'var(--ds-text-3)' }}>
+        <div style={{ margin: '8px 14px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, border: '1px solid var(--ds-line)', borderRadius: 9, padding: '7px 10px', fontSize: 'var(--ds-fs-10-5)', color: 'var(--ds-text-3)' }}>
           <span>收藏已渐进展示 {poolFavorites.length} / {Number(favPage.total || poolFavorites.length)} 条</span>
           {favPage.has_more && favPage.next_cursor ? (
             <button type="button" disabled={favLoadingMore} onClick={() => void loadMoreFavorites()} style={batchBtnStyle}>
@@ -640,12 +640,12 @@ export function EmployeeKolLibrary({
         <div className="mykol-library-grid">
           <div className="mykol-kol-list">
             {favError ? (
-              <div style={{ border: '1px solid color-mix(in srgb, var(--ds-crit) 30%, transparent)', background: 'var(--ds-crit-soft)', borderRadius: 8, padding: '6px 10px', fontSize: 10.5, color: 'var(--ds-crit)', marginBottom: 6 }}>
+              <div style={{ border: '1px solid color-mix(in srgb, var(--ds-crit) 30%, transparent)', background: 'var(--ds-crit-soft)', borderRadius: 8, padding: '6px 10px', fontSize: 'var(--ds-fs-10-5)', color: 'var(--ds-crit)', marginBottom: 6 }}>
                 收藏读取失败:{favError} —— 列表可能缺收藏项,请刷新或报值班。
               </div>
             ) : null}
             {claimNote ? (
-              <div style={{ border: '1px solid color-mix(in srgb, var(--ds-accent) 30%, transparent)', background: 'var(--ds-accent-soft)', borderRadius: 8, padding: '5px 10px', fontSize: 10.5, color: 'var(--ds-accent)', marginBottom: 6 }}>
+              <div style={{ border: '1px solid color-mix(in srgb, var(--ds-accent) 30%, transparent)', background: 'var(--ds-accent-soft)', borderRadius: 8, padding: '5px 10px', fontSize: 'var(--ds-fs-10-5)', color: 'var(--ds-accent)', marginBottom: 6 }}>
                 {claimNote}
               </div>
             ) : null}
@@ -677,7 +677,7 @@ export function EmployeeKolLibrary({
                         flex: '0 0 auto', width: 14, height: 14, borderRadius: 4, textAlign: 'center',
                         border: `1px solid ${batchChecked ? 'var(--ds-accent)' : 'var(--ds-line-strong)'}`,
                         background: batchChecked ? 'var(--ds-accent-soft)' : 'transparent',
-                        color: 'var(--ds-accent)', fontSize: 10, lineHeight: '12px',
+                        color: 'var(--ds-accent)', fontSize: 'var(--ds-fs-10)', lineHeight: '12px',
                       }}
                     >{batchChecked ? '✓' : ''}</span>
                   ) : null}
@@ -699,7 +699,7 @@ export function EmployeeKolLibrary({
                       onClick={(event) => { event.stopPropagation(); void releaseClaim(claimId, kol.name || kol.handle || 'KOL'); }}
                       onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); void releaseClaim(claimId, kol.name || kol.handle || 'KOL'); } }}
                       style={{
-                        flex: '0 0 auto', marginLeft: 4, padding: '2px 5px', borderRadius: 7, fontSize: 9, whiteSpace: 'nowrap',
+                        flex: '0 0 auto', marginLeft: 4, padding: '2px 5px', borderRadius: 7, fontSize: 'var(--ds-fs-9)', whiteSpace: 'nowrap',
                         border: '1px solid color-mix(in srgb, var(--ds-warn) 40%, transparent)', color: releasingId === claimId ? 'var(--ds-muted)' : 'var(--ds-warn)',
                         cursor: releasingId === claimId ? 'wait' : 'pointer',
                       }}

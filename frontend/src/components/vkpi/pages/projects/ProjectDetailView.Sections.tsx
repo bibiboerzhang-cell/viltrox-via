@@ -163,7 +163,7 @@ function LaunchPlanPanel({ projectId, apiToken }: { projectId: string; apiToken?
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <div>
           <h3 style={{ margin: 0 }}>Launch 计划</h3>
-          <p style={{ margin: '4px 0 0', fontSize: 13, opacity: 0.75 }}>
+          <p style={{ margin: '4px 0 0', fontSize: 'var(--ds-fs-13)', opacity: 0.75 }}>
             为新品 Launch 项目生成 KOL 候选、内容验证任务与观察窗口(只读,不写库)。
           </p>
         </div>
@@ -172,11 +172,11 @@ function LaunchPlanPanel({ projectId, apiToken }: { projectId: string; apiToken?
         </button>
       </div>
 
-      {error ? <p style={{ marginTop: 12, color: 'var(--vkpi-danger, #dc2626)', fontSize: 13 }}>{error}</p> : null}
+      {error ? <p style={{ marginTop: 12, color: 'var(--vkpi-danger, #dc2626)', fontSize: 'var(--ds-fs-13)' }}>{error}</p> : null}
 
       {plan ? (
         <div style={{ marginTop: 16, display: 'grid', gap: 16 }}>
-          <div style={{ fontSize: 13, opacity: 0.75 }}>
+          <div style={{ fontSize: 'var(--ds-fs-13)', opacity: 0.75 }}>
             产品查询:<strong>{plan.product_query || '—'}</strong> · 生成时间 {plan.generated_at}
           </div>
 
@@ -185,9 +185,9 @@ function LaunchPlanPanel({ projectId, apiToken }: { projectId: string; apiToken?
               KOL 候选({plan.summary.candidate_count})
             </h4>
             {candidates && !candidates.available ? (
-              <p style={{ fontSize: 13, opacity: 0.7 }}>候选暂不可用:{candidates.reason || '前置条件未就绪'}</p>
+              <p style={{ fontSize: 'var(--ds-fs-13)', opacity: 0.7 }}>候选暂不可用:{candidates.reason || '前置条件未就绪'}</p>
             ) : candidates && candidates.items.length ? (
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--ds-fs-13)' }}>
                 <thead>
                   <tr style={{ textAlign: 'left', opacity: 0.7 }}>
                     <th style={{ padding: '4px 8px' }}>#</th>
@@ -214,13 +214,13 @@ function LaunchPlanPanel({ projectId, apiToken }: { projectId: string; apiToken?
                 </tbody>
               </table>
             ) : (
-              <p style={{ fontSize: 13, opacity: 0.7 }}>暂无候选。</p>
+              <p style={{ fontSize: 'var(--ds-fs-13)', opacity: 0.7 }}>暂无候选。</p>
             )}
           </div>
 
           <div>
             <h4 style={{ margin: '0 0 8px' }}>内容验证任务({plan.summary.content_task_count})</h4>
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--ds-fs-13)' }}>
               {tasks.map((task) => (
                 <li key={task.sequence} style={{ marginBottom: 4 }}>
                   {task.hypothesis}
@@ -232,7 +232,7 @@ function LaunchPlanPanel({ projectId, apiToken }: { projectId: string; apiToken?
 
           <div>
             <h4 style={{ margin: '0 0 8px' }}>观察窗口({plan.summary.observation_window_count})</h4>
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 'var(--ds-fs-13)' }}>
               {windows.map((win, idx) => (
                 <li key={`${win.market}-${idx}`} style={{ marginBottom: 4 }}>
                   {win.market} · {win.duration_days} 天

@@ -222,7 +222,7 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
       <div className="flex items-center justify-between" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div>
           <strong id="llm-readiness-title" style={{ fontSize: 14 }}>LLM 生产就绪</strong>
-          <span className="text-muted" style={{ marginLeft: 10, fontSize: 12 }}>
+          <span className="text-muted" style={{ marginLeft: 10, fontSize: 'var(--ds-fs-12)' }}>
             {loading
               ? '读取生产证据中…'
               : hasAudit
@@ -246,12 +246,12 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
           <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
             {stats.map((item) => (
               <div key={item.label} style={{ padding: '8px 10px', borderRadius: 8, background: 'color-mix(in srgb, var(--ds-text) 6%, transparent)' }}>
-                <div className="text-muted" style={{ fontSize: 11 }}>{item.label}</div>
+                <div className="text-muted" style={{ fontSize: 'var(--ds-fs-11)' }}>{item.label}</div>
                 <div style={{ fontSize: 16, fontWeight: 600 }}>{item.value}</div>
               </div>
             ))}
           </div>
-          <div className="text-muted" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.6 }}>
+          <div className="text-muted" style={{ marginTop: 10, fontSize: 'var(--ds-fs-11)', lineHeight: 1.6 }}>
             证据来源：{evidenceSource} · {evidenceStatus}
             {evidence?.error ? ` · 证据错误：${evidence.error}` : ''}
           </div>
@@ -259,7 +259,7 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
             <div
               className={`vkpi-inline-message${trustRoots.ready_to_verify_signed_evidence ? '' : ' is-error'}`}
               data-testid="llm-trust-root-status"
-              style={{ marginTop: 8, fontSize: 11, lineHeight: 1.6 }}
+              style={{ marginTop: 8, fontSize: 'var(--ds-fs-11)', lineHeight: 1.6 }}
             >
               独立签名信任根：精确探针 {Number(trustRoots.exact_probe?.valid_key_count ?? 0)} 个 · 真实评测 {Number(trustRoots.evaluation?.valid_key_count ?? 0)} 个。
               {trustRoots.ready_to_verify_signed_evidence
@@ -276,7 +276,7 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
             </div>
           ) : null}
           <details style={{ marginTop: 10 }}>
-            <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 'var(--ds-fs-12)', fontWeight: 600 }}>
               逐任务真实状态（{taskReadyCount}/{taskRows.length} 通过）
             </summary>
             <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
@@ -294,13 +294,13 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
                     style={{ padding: '9px 10px', borderRadius: 8, border: '1px solid color-mix(in srgb, var(--ds-text) 12%, transparent)' }}
                   >
                     <div className="flex items-center justify-between" style={{ gap: 10, flexWrap: 'wrap' }}>
-                      <strong style={{ fontSize: 12 }}>{LLM_TASK_LABELS[task] || task}</strong>
-                      <span style={{ fontSize: 11 }}>{llmTaskState(row)}</span>
+                      <strong style={{ fontSize: 'var(--ds-fs-12)' }}>{LLM_TASK_LABELS[task] || task}</strong>
+                      <span style={{ fontSize: 'var(--ds-fs-11)' }}>{llmTaskState(row)}</span>
                     </div>
-                    <div className="text-muted" style={{ marginTop: 4, fontSize: 10, overflowWrap: 'anywhere' }}>
+                    <div className="text-muted" style={{ marginTop: 4, fontSize: 'var(--ds-fs-10)', overflowWrap: 'anywhere' }}>
                       {task} · {row.binding || '未绑定'}
                     </div>
-                    <div className="text-muted" style={{ marginTop: 5, fontSize: 10, lineHeight: 1.55 }}>
+                    <div className="text-muted" style={{ marginTop: 5, fontSize: 'var(--ds-fs-10)', lineHeight: 1.55 }}>
                       精确探针：{row.probed ? '通过' : '未通过'}（签名 {row.probe?.attestation_verified ? '已核验' : '未核验'}）
                       {' · '}真实评测：{row.evaluated ? '通过' : '未通过'}（{Number(evaluation.sample_count ?? 0)}/{minimumSamples} 条）
                       {' · '}P95：{p95 != null && Number.isFinite(p95) ? `${Math.round(p95)}ms` : '—'} / ≤{Math.round(maximumP95)}ms
@@ -313,7 +313,7 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
                       ].map(llmPercent).join(' / ')}
                     </div>
                     {reasons.length ? (
-                      <ul style={{ margin: '5px 0 0', paddingLeft: 18, fontSize: 10, lineHeight: 1.55 }}>
+                      <ul style={{ margin: '5px 0 0', paddingLeft: 18, fontSize: 'var(--ds-fs-10)', lineHeight: 1.55 }}>
                         {reasons.map((reason) => {
                           const copy = humanizeLlmReason(reason, '该精确模型尚未通过生产证据闸门。');
                           return <li key={reason}>{copy.message} <code>{reason}</code></li>;
@@ -328,7 +328,7 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
         </>
       ) : null}
 
-      <div className="text-muted" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.6 }}>
+      <div className="text-muted" style={{ marginTop: 10, fontSize: 'var(--ds-fs-11)', lineHeight: 1.6 }}>
         已注册 / 已配置不等于可用；仅 production_ready 表示该精确绑定满足当前证据闸门。
         “环境凭据已配置”只表示运行环境检测到对应 provider 凭据，不表示设置页已保存、账号已授权或精确模型可调用。
         本卡片只读，不会调用外部模型；AI 未就绪或关闭时，基础数据流程继续可用。

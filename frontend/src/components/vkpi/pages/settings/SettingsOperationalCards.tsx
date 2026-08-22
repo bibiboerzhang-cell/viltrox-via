@@ -82,7 +82,7 @@ export function HealthSentinelCard({ apiToken }: { apiToken?: string }) {
       <div className="flex items-center justify-between" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div>
           <strong style={{ fontSize: 14 }}>数据健康哨兵</strong>
-          <span className="text-muted" style={{ marginLeft: 10, fontSize: 12 }}>
+          <span className="text-muted" style={{ marginLeft: 10, fontSize: 'var(--ds-fs-12)' }}>
             {hasData
               ? `${totalChecks} 项黄金链路 · 正常 ${summary.ok ?? 0} / 留意 ${summary.warn ?? 0} / 失败 ${summary.fail ?? 0} · 上次运行 ${formatLocal(result?.ran_at)}`
               : loading
@@ -98,7 +98,7 @@ export function HealthSentinelCard({ apiToken }: { apiToken?: string }) {
       {hasData ? (
         <div style={{ marginTop: 10, display: 'grid', gap: 4 }}>
           {checks.map((check) => (
-            <div key={check.key} className="flex items-center" style={{ gap: 8, fontSize: 12, lineHeight: 1.5 }}>
+            <div key={check.key} className="flex items-center" style={{ gap: 8, fontSize: 'var(--ds-fs-12)', lineHeight: 1.5 }}>
               <span
                 aria-label={check.status}
                 style={{
@@ -111,7 +111,7 @@ export function HealthSentinelCard({ apiToken }: { apiToken?: string }) {
               />
               <span style={{ minWidth: 170, fontWeight: 500 }}>{check.label}</span>
               <span className="text-muted" style={{ flex: 1 }}>{check.detail}</span>
-              <span className="text-muted" style={{ flex: '0 0 auto', fontSize: 11 }}>
+              <span className="text-muted" style={{ flex: '0 0 auto', fontSize: 'var(--ds-fs-11)' }}>
                 {formatLocal(check.checked_at)}
               </span>
             </div>
@@ -200,7 +200,7 @@ export function CostLedgerCard({ apiToken }: { apiToken?: string }) {
       <div className="flex items-center justify-between" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div>
           <strong style={{ fontSize: 14 }}>成本记账(内部口径)</strong>
-          <span className="text-muted" style={{ marginLeft: 10, fontSize: 12 }}>
+          <span className="text-muted" style={{ marginLeft: 10, fontSize: 'var(--ds-fs-12)' }}>
             {overview
               ? `本月合计 ${usd(month.total_usd)} · 统计时间 ${formatLocal(overview.generated_at)}`
               : loading
@@ -215,17 +215,17 @@ export function CostLedgerCard({ apiToken }: { apiToken?: string }) {
           <div style={{ marginTop: 10, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8 }}>
             {stats.map((item) => (
               <div key={item.label} style={{ padding: '8px 10px', borderRadius: 8, background: 'color-mix(in srgb, var(--ds-text) 6%, transparent)' }}>
-                <div className="text-muted" style={{ fontSize: 11 }}>{item.label}</div>
+                <div className="text-muted" style={{ fontSize: 'var(--ds-fs-11)' }}>{item.label}</div>
                 <div style={{ fontSize: 16, fontWeight: 600 }}>{item.value}</div>
-                <div className="text-muted" style={{ fontSize: 11 }}>{item.sub}</div>
+                <div className="text-muted" style={{ fontSize: 'var(--ds-fs-11)' }}>{item.sub}</div>
               </div>
             ))}
           </div>
           {topActors.length ? (
             <div style={{ marginTop: 10, display: 'grid', gap: 4 }}>
-              <div className="text-muted" style={{ fontSize: 11, fontWeight: 500 }}>本月 Top Actor</div>
+              <div className="text-muted" style={{ fontSize: 'var(--ds-fs-11)', fontWeight: 500 }}>本月 Top Actor</div>
               {topActors.map((actor) => (
-                <div key={actor.actor_id} className="flex items-center" style={{ gap: 8, fontSize: 12, lineHeight: 1.5 }}>
+                <div key={actor.actor_id} className="flex items-center" style={{ gap: 8, fontSize: 'var(--ds-fs-12)', lineHeight: 1.5 }}>
                   <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {actor.actor_id}
                   </span>
@@ -235,7 +235,7 @@ export function CostLedgerCard({ apiToken }: { apiToken?: string }) {
               ))}
             </div>
           ) : null}
-          <div className="text-muted" style={{ marginTop: 10, fontSize: 11, lineHeight: 1.6 }}>
+          <div className="text-muted" style={{ marginTop: 10, fontSize: 'var(--ds-fs-11)', lineHeight: 1.6 }}>
             记账收口覆盖(本月):{unified}/{apifyRuns} 笔 Apify run 走统一记账口
             {coverage.estimated_entries ? ` · 估算 ${coverage.estimated_entries} 笔` : ''}
             {coverage.zero_cost_entries ? ` · 零成本盲区 ${coverage.zero_cost_entries} 笔` : ''}

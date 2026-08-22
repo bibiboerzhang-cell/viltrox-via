@@ -126,7 +126,7 @@ export function FulfillmentObservationPanel({ projectId, apiToken }: Fulfillment
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <div>
           <h3 style={{ margin: 0 }}>履约观测(观察窗口 + 内容帖)</h3>
-          <p style={{ margin: '4px 0 0', fontSize: 13, opacity: 0.75 }}>
+          <p style={{ margin: '4px 0 0', fontSize: 'var(--ds-fs-13)', opacity: 0.75 }}>
             物流签收后开的「等内容」窗口与扫到/手录的内容帖。候选经人工复核 matched 后回填窗口并可进复盘。
           </p>
         </div>
@@ -146,13 +146,13 @@ export function FulfillmentObservationPanel({ projectId, apiToken }: Fulfillment
         </div>
       </div>
 
-      {error ? <p style={{ marginTop: 12, color: 'var(--vkpi-danger, #dc2626)', fontSize: 13 }}>{error}</p> : null}
-      {notice ? <p style={{ marginTop: 12, color: 'var(--vkpi-success, #16a34a)', fontSize: 13 }}>{notice}</p> : null}
+      {error ? <p style={{ marginTop: 12, color: 'var(--vkpi-danger, #dc2626)', fontSize: 'var(--ds-fs-13)' }}>{error}</p> : null}
+      {notice ? <p style={{ marginTop: 12, color: 'var(--vkpi-success, #16a34a)', fontSize: 'var(--ds-fs-13)' }}>{notice}</p> : null}
 
       <div style={{ marginTop: 16 }}>
         <h4 style={{ margin: '0 0 8px' }}>观察窗口({windows.length})</h4>
         {windows.length ? (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--ds-fs-13)' }}>
             <thead>
               <tr style={HEAD_ROW}>
                 <th style={CELL}>#</th>
@@ -179,14 +179,14 @@ export function FulfillmentObservationPanel({ projectId, apiToken }: Fulfillment
             </tbody>
           </table>
         ) : (
-          <p style={{ fontSize: 13, opacity: 0.7 }}>暂无观察窗口(无 delivered shipment 或未开窗)。</p>
+          <p style={{ fontSize: 'var(--ds-fs-13)', opacity: 0.7 }}>暂无观察窗口(无 delivered shipment 或未开窗)。</p>
         )}
       </div>
 
       <div style={{ marginTop: 20 }}>
         <h4 style={{ margin: '0 0 8px' }}>内容帖({posts.length})</h4>
         {posts.length ? (
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--ds-fs-13)' }}>
             <thead>
               <tr style={HEAD_ROW}>
                 <th style={CELL}>#</th>
@@ -243,7 +243,7 @@ export function FulfillmentObservationPanel({ projectId, apiToken }: Fulfillment
             </tbody>
           </table>
         ) : (
-          <p style={{ fontSize: 13, opacity: 0.7 }}>暂无内容帖(无窗口/无扫到/手录内容)。</p>
+          <p style={{ fontSize: 'var(--ds-fs-13)', opacity: 0.7 }}>暂无内容帖(无窗口/无扫到/手录内容)。</p>
         )}
       </div>
     </section>

@@ -40,7 +40,7 @@ function FlowMessage({ msg }: { msg: FlowReceipt | null }) {
         background: `var(--ds-${tone}-soft)`,
         borderRadius: 8,
         padding: '6px 10px',
-        fontSize: 10,
+        fontSize: 'var(--ds-fs-10)',
         color: `var(--ds-${tone})`,
         marginBottom: 6,
       }}
@@ -244,34 +244,34 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
   return (
     <div className="mykol-content-layer" style={{ minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-        <div style={{ fontSize: 10, color: '#8b94a3' }}>Pool 收藏 · 已采集 {videos.length} 条 · 合计播放 {totalViews.toLocaleString()}</div>
+        <div style={{ fontSize: 'var(--ds-fs-10)', color: '#8b94a3' }}>Pool 收藏 · 已采集 {videos.length} 条 · 合计播放 {totalViews.toLocaleString()}</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {kol?.profileUrl && /^https?:\/\/[^ ]*(youtube\.com|instagram\.com|tiktok\.com)/i.test(String(kol.profileUrl)) ? (
             <button type="button" onClick={startAccountAnalysis} disabled={readOnly || analyzeState === 'busy' || analyzeState === 'queued'} title={readOnly ? '共享 KOL 仅可查看，账号分析请由收藏负责人或管理层发起' : undefined}
-              style={{ fontSize: 10, color: analyzeState === 'queued' ? '#86efac' : '#c4b5fd', background: 'rgba(168,85,247,0.12)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
+              style={{ fontSize: 'var(--ds-fs-10)', color: analyzeState === 'queued' ? '#86efac' : '#c4b5fd', background: 'rgba(168,85,247,0.12)', border: '1px solid rgba(168,85,247,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
               {analyzeState === 'busy' ? '发起中…' : analyzeState === 'queued' ? '分析中…' : '账号分析 · 采集视频'}
             </button>
           ) : kol?.profileUrl ? (
-            <span style={{ fontSize: 10, color: '#5b6472' }} title={String(kol.profileUrl)}>主页 URL 非 YT/IG/TT,无法账号分析</span>
+            <span style={{ fontSize: 'var(--ds-fs-10)', color: '#5b6472' }} title={String(kol.profileUrl)}>主页 URL 非 YT/IG/TT,无法账号分析</span>
           ) : null}
           {unanalyzed.length ? (
             <button type="button" onClick={startDeepAnalysis} disabled={readOnly || deepState !== 'idle'} title={readOnly ? '共享 KOL 仅可查看，视频深析请由收藏负责人或管理层发起' : undefined}
-              style={{ fontSize: 10, color: deepState === 'queued' ? '#86efac' : '#fbcfe8', background: 'rgba(236,72,153,0.10)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
+              style={{ fontSize: 'var(--ds-fs-10)', color: deepState === 'queued' ? '#86efac' : '#fbcfe8', background: 'rgba(236,72,153,0.10)', border: '1px solid rgba(236,72,153,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
               {deepState === 'busy' ? '入队中…' : deepState === 'queued' ? `深析中 ${analyzedCount}/${videos.length}` : `视频深析 · 前 ${Math.min(DEEP_BATCH, unanalyzed.length)}/${unanalyzed.length} 条`}
             </button>
           ) : videos.length && analyzedCount ? (
-            <span style={{ fontSize: 10, color: '#86efac' }}>✓ 可析视频已全深析</span>
+            <span style={{ fontSize: 'var(--ds-fs-10)', color: '#86efac' }}>✓ 可析视频已全深析</span>
           ) : null}
           {videos.length ? (
             <button type="button" onClick={startCommentsCollect} disabled={readOnly || commentsState !== 'idle'} title={readOnly ? '共享 KOL 仅可查看，评论采集请由收藏负责人或管理层发起' : undefined}
-              style={{ fontSize: 10, color: commentsState === 'queued' ? '#86efac' : '#93c5fd', background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
+              style={{ fontSize: 'var(--ds-fs-10)', color: commentsState === 'queued' ? '#86efac' : '#93c5fd', background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, padding: '3px 8px', cursor: 'pointer' }}>
               {commentsState === 'busy' ? '入队中…' : commentsState === 'queued' ? '采集中…' : '采集评论'}
             </button>
           ) : null}
-          {kol?.profileUrl ? <a href={kol.profileUrl} target="_blank" rel="noreferrer" style={{ fontSize: 10, color: '#67e8f9' }}>打开主页</a> : null}
+          {kol?.profileUrl ? <a href={kol.profileUrl} target="_blank" rel="noreferrer" style={{ fontSize: 'var(--ds-fs-10)', color: '#67e8f9' }}>打开主页</a> : null}
         </div>
       </div>
-      {readOnly ? <div role="note" style={{ marginBottom: 8, fontSize: 10.5, color: 'var(--ds-warn)' }}>共享 KOL 为只读：账号分析、视频深析、评论采集和受众画像须由收藏负责人或管理层发起。</div> : null}
+      {readOnly ? <div role="note" style={{ marginBottom: 8, fontSize: 'var(--ds-fs-10-5)', color: 'var(--ds-warn)' }}>共享 KOL 为只读：账号分析、视频深析、评论采集和受众画像须由收藏负责人或管理层发起。</div> : null}
       {/* 生成追踪链(GOAFFPRO)——与图2 同款操作排同区,复用 KOL 详情共享区块。poolId 即真 kol_pool_id。 */}
       <GoaffproLinkSection apiToken={apiToken} kolPoolId={poolId} readOnly={readOnly} />
       {/* 三个流各持独立消息槽:失败回执不被后续操作覆盖,tone 随消息本体走。 */}
@@ -280,24 +280,24 @@ export function PoolEvidenceContent({ apiToken, kol, poolId, viltroxOnly, projec
       <FlowMessage msg={commentsMsg} />
       {projects.length ? (
         <div style={{ border: '1px solid rgba(255,255,255,0.07)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
-          <div style={{ fontSize: 10, color: '#8b94a3', marginBottom: 6 }}>合作项目结果(来自 Projects 映射)</div>
+          <div style={{ fontSize: 'var(--ds-fs-10)', color: '#8b94a3', marginBottom: 6 }}>合作项目结果(来自 Projects 映射)</div>
           {projects.slice(0, 4).map((proj) => (
-            <div key={proj.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 10.5, color: '#cbd5e1', padding: '2px 0' }}>
+            <div key={proj.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 'var(--ds-fs-10-5)', color: '#cbd5e1', padding: '2px 0' }}>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{proj.campaign}</span>
               <span style={{ flexShrink: 0, color: '#8b94a3' }}>阶段 {proj.stage} · 曝光 {compactNumber(proj.views)} · 证据 {proj.evidenceCount ?? proj.stageEventCount ?? 0}</span>
             </div>
           ))}
-          {projects.length > 4 ? <div style={{ fontSize: 9.5, color: '#5b6472' }}>…其余 {projects.length - 4} 个项目在 Projects 查看</div> : null}
+          {projects.length > 4 ? <div style={{ fontSize: 'var(--ds-fs-9-5)', color: '#5b6472' }}>…其余 {projects.length - 4} 个项目在 Projects 查看</div> : null}
         </div>
       ) : null}
       {state === 'error' ? (
-        <div style={{ border: '1px solid rgba(244,63,94,0.3)', background: 'rgba(244,63,94,0.08)', borderRadius: 8, padding: '8px 12px', fontSize: 11, color: '#fca5a5' }}>
+        <div style={{ border: '1px solid rgba(244,63,94,0.3)', background: 'rgba(244,63,94,0.08)', borderRadius: 8, padding: '8px 12px', fontSize: 'var(--ds-fs-11)', color: '#fca5a5' }}>
           视频读取失败:{error} —— 请刷新或报值班。
         </div>
       ) : state === 'loading' ? (
-        <div style={{ fontSize: 11, color: '#5b6472', padding: '12px 0' }}>视频载入中…</div>
+        <div style={{ fontSize: 'var(--ds-fs-11)', color: '#5b6472', padding: '12px 0' }}>视频载入中…</div>
       ) : !videos.length ? (
-        <div style={{ fontSize: 11, color: '#5b6472', padding: '12px 0' }}>该 KOL 暂无已采集视频——点右上「账号分析 · 采集视频」即可补采(泳道可见进度,完成后此处自动回执)。</div>
+        <div style={{ fontSize: 'var(--ds-fs-11)', color: '#5b6472', padding: '12px 0' }}>该 KOL 暂无已采集视频——点右上「账号分析 · 采集视频」即可补采(泳道可见进度,完成后此处自动回执)。</div>
       ) : (
         <EmployeeKolContentLayer
           apiToken={apiToken}

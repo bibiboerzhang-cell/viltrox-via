@@ -180,7 +180,7 @@ export function SettingsBusinessIntegrationsPanel({
                   <small className="text-muted">当前证据：密钥项 {numberText(card.evidence?.required_env_configured)} · 历史缓存 {numberText(card.evidence?.historical_cached_assets)}。历史文件不等于当前连接可用。</small>
                 </div>
               ) : null}
-              <em className="text-muted" style={{ fontSize: 10, lineHeight: 1.45 }}>来源：{card.source}</em>
+              <em className="text-muted" style={{ fontSize: "var(--ds-fs-10)", lineHeight: 1.45 }}>来源：{card.source}</em>
             </article>
           );
         })}

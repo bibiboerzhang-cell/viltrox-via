@@ -65,7 +65,7 @@ export function PillarsTab({ posts }: PillarsTabProps) {
                     <td>{p.label}</td>
                     <td>{p.value}</td>
                     <td>{pct}%</td>
-                    <td style={{ color: 'var(--da-text-muted)', fontSize: 12 }}>
+                    <td style={{ color: 'var(--da-text-muted)', fontSize: "var(--ds-fs-12)" }}>
                       {p.label === '未分类' ? 'Phase 3 LLM 启用后自动归类' : '已归类'}
                     </td>
                   </tr>
