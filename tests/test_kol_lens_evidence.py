@@ -206,14 +206,19 @@ def test_summary_groups_by_lens_with_scope_and_honest_views() -> None:
 
     own = store.lens_summary(conn, staff_scope_id=10)
     assert own["scope"]["mode"] == "staff_collection"
-    assert own["coverage"] == {"analysed_videos": 2, "scanned_videos": 2, "videos_with_products": 1, "unscanned_videos": 0}
+    assert own["coverage"] == {"analysed_videos": 2, "scanned_videos": 2, "videos_with_products": 1, "videos_without_products": 1, "unscanned_videos": 0}
     names = {lens["display_name"]: lens for lens in own["lenses"]}
     assert set(names) == {"AF 75mm F1.8 EVO", "AF 135mm F1.8 LAB", "DC-A1"}
     evo = names["AF 75mm F1.8 EVO"]
     assert evo["videos"] == 1 and evo["kols"] == 1 and evo["views_total"] == 1000 and evo["views_measured_videos"] == 1
     assert evo["modalities"]["visual"] == 1 and evo["modalities"]["text"] == 1
     assert evo["samples"][0]["evidence_id"] == 41 and evo["samples"][0]["kol_name"] == "Creator Nine"
+    assert evo["samples"][0]["cache_id"] == 500 and evo["samples"][0]["v_relevance"] == "confirmed"
+    assert evo["v_relevance"] == "confirmed" and evo["v_relevance_rows"] == {"confirmed": 1, "likely": 0}
     assert own["summary"]["kols_with_products"] == 1
+    # v_relevance 三态投影:41 号视频 confirmed;42 号扫过零提及 = none
+    assert own["summary"]["v_relevance_videos"] == {"confirmed": 1, "likely": 0, "none": 1}
+    assert own["v_relevance_labels"]["confirmed"] == "确认出镜"
 
     team = store.lens_summary(conn, staff_scope_id=None)
     lab = {lens["display_name"]: lens for lens in team["lenses"]}["AF 135mm F1.8 LAB"]
@@ -232,8 +237,15 @@ def test_kol_lenses_and_empty_states() -> None:
 
     nine = store.kol_lenses(conn, kol_pool_id=9)
     assert [lens["display_name"] for lens in nine["lenses"]][:1] == ["AF 75mm F1.8 EVO"] or len(nine["lenses"]) == 3
-    assert nine["coverage"] == {"analysed_videos": 2, "scanned_videos": 2, "videos_with_products": 1, "unscanned_videos": 0}
+    assert nine["coverage"] == {"analysed_videos": 2, "scanned_videos": 2, "videos_with_products": 1, "videos_without_products": 1, "unscanned_videos": 0}
     assert nine["empty_reason"] is None
+    assert [v["evidence_id"] for v in nine["videos"]] == [41]
+    assert nine["videos"][0]["v_relevance"] == "confirmed" and nine["videos"][0]["cache_id"] == 500
+    assert "AF 75mm F1.8 EVO" in nine["videos"][0]["lenses"]
+    assert nine["v_relevance_videos"] == {"confirmed": 1, "likely": 0, "none": 1}
+    relevance = store.evidence_relevance(conn, evidence_ids=[41, 42, 43, 999])
+    assert relevance[41]["v_relevance"] == "confirmed" and relevance[42]["v_relevance"] == "none"
+    assert relevance[43]["v_relevance"] == "confirmed" and 999 not in relevance
 
     conn.execute("DELETE FROM vkpi_kol_lens_evidence WHERE kol_pool_id=10")
     ten = store.kol_lenses(conn, kol_pool_id=10)
@@ -265,6 +277,25 @@ def test_router_scope_gates(monkeypatch) -> None:
     with pytest.raises(HTTPException) as missing:
         router_mod.lens_insights_kol_endpoint(kol_pool_id=9, staff={"id": 10, "role": "member"})
     assert missing.value.status_code == 503
+
+
+def test_explain_and_trace_replay_roundtrip() -> None:
+    conn = _conn()
+    traces = store.explain_cache_rows(conn, cache_ids=[500, 501])
+    by_id = {t["cache_id"]: t for t in traces}
+    assert by_id[500]["video_v_relevance"] == "confirmed" and by_id[501]["video_v_relevance"] == "none"
+    assert by_id[500]["ledger"]["scan_status"] is None
+    assert any(a["body"] == "AF 75mm F1.8 EVO" for a in by_id[500]["anchors"])
+    records = store.export_trace(conn, limit=10)
+    assert len(records) == 4 and all(r["texts"] for r in records)
+    replay = store.replay_trace(records, _index())
+    direct = store.backfill_lens_evidence(conn, apply=False)
+    assert replay["mode"] == "replay" and replay["would_write_rows"] == direct["mention_rows"]
+    assert replay["by_resolution"] == direct["by_resolution"]
+    assert replay["scan_transitions"] == {"unscanned->empty_result": 1, "unscanned->scanned": 3}
+    assert replay["videos_by_v_relevance"] == direct["videos_by_v_relevance"] == {"confirmed": 3, "likely": 0, "none": 1}
+    diff = store.diff_traces(traces, traces)
+    assert diff["same_content"] == 2 and diff["same_rows"] == 2 and diff["differing"] == []
 
 
 def test_migration_287_pair_and_router_registry() -> None:
