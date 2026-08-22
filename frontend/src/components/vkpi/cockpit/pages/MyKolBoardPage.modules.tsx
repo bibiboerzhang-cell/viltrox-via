@@ -221,6 +221,28 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["诚实", "当前行数由 aggregate 返回;空集显示空态,不装 live"],
     ],
   },
+  metricTracking: {
+    label: "my-kol/metrics/tracking-overview · vkpi_content_metric_snapshots",
+    rows: [
+      ["追踪订阅", "vkpi_kol_video_metric_tracking(KOL 详情「追踪已有视频」登记;active/paused 原样)"],
+      ["实测点", "vkpi_content_metric_snapshots 成功快照(抓取时刻读数,非平台实时);失败尝试单独计数不画点"],
+      ["增量", "7d/30d = 最近一次实测 − 窗口基线(窗口起点前最近一次实测);历史不足整窗标 partial 并给实际覆盖天数"],
+      ["日均", "增量 ÷ 实际覆盖天数;覆盖不足 1 天不外推(—)"],
+      ["下次刷新", "按发布时间分档估算(新发布 6h / 30 天内 24h / 更早 7 天 · 失败退避 24h);调度闸未开启则如实标注,不给时间"],
+      ["范围", "收藏 ∪ 授权共享(员工恒本人,管理层全团队);封顶 60 条最近更新的追踪视频"],
+    ],
+  },
+  lensExposure: {
+    label: "lens-insights/summary · vkpi_kol_lens_evidence",
+    rows: [
+      ["来源", "视频深析结果(六层散文)里点名的 Viltrox 产品,按产品目录 vkpi_products 归一;零 LLM 二次推断"],
+      ["归一", "型号已确认 = 唯一 SKU(含卡口);系列已确认 = 同镜头多卡口未点明;对不上目录 = 原文保留,绝不猜"],
+      ["证据来源", "画面 / 字幕·文字 / 口播 按提及所在句子的线索判定;判不出记「未注明」"],
+      ["播放", "出镜视频 view_count 点时实测求和;未实测条数如实注明,全部未实测显「未实测」"],
+      ["覆盖", "已深析 / 已整理 / 有产品出镜 三个计数来自扫描账本;待整理 = 回填脚本尚未跑到"],
+      ["范围", "收藏集(收藏 ∪ 授权共享)缺省;「全部已深析」管理层专属"],
+    ],
+  },
 };
 
 export const PROV_TITLES: Record<string, string> = {
@@ -242,6 +264,8 @@ export const PROV_TITLES: Record<string, string> = {
   shares: "共享池",
   activity: "分析动态",
   libclassic: "经典视图 · KOL 库",
+  metricTracking: "数值跟进",
+  lensExposure: "镜头出镜",
 };
 
 // KPI 带四卡与中文紧凑数(fmtZhCompact)M4 起搬家到 MyKolBoardPage.charts.tsx

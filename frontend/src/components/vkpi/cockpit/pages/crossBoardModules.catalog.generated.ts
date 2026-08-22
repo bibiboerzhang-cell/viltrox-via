@@ -33,6 +33,8 @@ export const FULL_BOARD_MODULE_CATALOG: FullBoardModuleSource[] = [
       { moduleKey: "fitdist", label: "Fit 分布", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16 },
       { moduleKey: "official", label: "官方账号矩阵", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 32 },
       { moduleKey: "platdist", label: "平台分布", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 16 },
+      { moduleKey: "metricTracking", label: "数值跟进", defaultSpan: 8, minSpan: 4, defaultHeight: 14, minHeight: 6, maxHeight: 30 },
+      { moduleKey: "lensExposure", label: "镜头出镜", defaultSpan: 4, minSpan: 3, defaultHeight: 14, minHeight: 5, maxHeight: 30 },
       { moduleKey: "risk", label: "KOL 风险指数", defaultSpan: 8, minSpan: 4, defaultHeight: 11, minHeight: 5, maxHeight: 26 },
       { moduleKey: "rollup", label: "贡献度聚合", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 5, maxHeight: 26 },
       { moduleKey: "viewsTop", label: "播放 Top 视频", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 24 },

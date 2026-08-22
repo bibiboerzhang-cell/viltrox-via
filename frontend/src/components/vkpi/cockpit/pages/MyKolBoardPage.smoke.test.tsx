@@ -13,7 +13,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 //   无实时接口的旧 cover 静态盘点已下线,避免历史快照冒充当前进度;
 // - 【M3→M4】库「有 V 视频」= board-ext v_content.v_kol_ids 名单精确过滤(Set 查找;
 //   truncated / 名单缺席均如实降级标注,绝不悄悄装精确);
-// - 注册表 manager vs employee 差异(裁决②A)+ 布局键 vkpi-my-kol-layout-v2 +
+// - 注册表 manager vs employee 差异(裁决②A)+ 布局键 vkpi-my-kol-layout-v3 +
 //   不传 apiToken → 绝不写账户级 dashboard_layout_v1;
 // - 诚实空态:aggregate 失败 = 错误卡;board-ext 失败 = 图形卡 ErrorCard + KPI 带
 //   时序/药丸缺席不编数;
@@ -322,6 +322,14 @@ function routeApi(overrides: { aggregate?: unknown; boardExt?: unknown; matrix?:
       return { items, total: items.length, kol_pool_id: Number(videosMatch[1]) };
     }
     if (/\/api\/admin\/vkpi\/my-kol\/\d+\/viewer-context/.test(p)) return { kol_pool_id: 0, share_origin: null, claim: null };
+    // 车道 L4:数值跟进 / 镜头出镜(默认布局新行);smoke 只给诚实空态,真身断言住 metric-lens.test
+    if (p.startsWith("/api/admin/vkpi/my-kol/metrics/tracking-overview")) {
+      return { contract: "my_kol_metric_trends_v1", items: [], summary: { tracked_total: 0 }, scheduler: { enabled: false }, empty_reason: "no_tracked_videos" };
+    }
+    if (p.startsWith("/api/admin/vkpi/lens-insights/summary")) {
+      return { contract: "lens_insights_v1", lenses: [], unresolved: [], coverage: { analysed_videos: 0, scanned_videos: 0, videos_with_products: 0, unscanned_videos: 0 }, summary: { lenses: 0 }, empty_reason: "no_lens_evidence" };
+    }
+    if (/\/api\/admin\/vkpi\/lens-insights\/kol\/\d+/.test(p)) return { lenses: [], unresolved: [], coverage: { analysed_videos: 0 }, empty_reason: "no_analysed_videos" };
     throw new Error(`unexpected apiFetch: ${p}`);
   });
 }
@@ -470,8 +478,8 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(palette.queryByText("数据覆盖")).toBeNull();
   });
 
-  it("布局键 vkpi-my-kol-layout-v2 生效;不传 apiToken → 绝不写账户级 dashboard 布局", async () => {
-    window.localStorage.setItem("vkpi-my-kol-layout-v2", JSON.stringify([{ moduleKey: "kpiM", span: 12 }]));
+  it("布局键 vkpi-my-kol-layout-v3 生效;不传 apiToken → 绝不写账户级 dashboard 布局", async () => {
+    window.localStorage.setItem("vkpi-my-kol-layout-v3", JSON.stringify([{ moduleKey: "kpiM", span: 12 }]));
     renderBoard();
     expect((await screen.findAllByText("在库 KOL")).length).toBeGreaterThan(0);
     expect(screen.queryByText("每日学习摘要")).toBeNull();
@@ -565,7 +573,7 @@ describe("MyKolBoardPage M4(图形联动:漏斗点段 / 平台点行 / fitdist �
   });
 
   it("palette 五模块真身(预置布局):播放榜/覆盖/双线/认领/共享全真渲染,静态盘点退役", async () => {
-    window.localStorage.setItem("vkpi-my-kol-layout-v2", JSON.stringify(PALETTE_LAYOUT));
+    window.localStorage.setItem("vkpi-my-kol-layout-v3", JSON.stringify(PALETTE_LAYOUT));
     renderBoard();
     // viewsTop:实测播放条形榜(NULL 剔除口径注在 SrcChip/ProvNote)
     expect(await screen.findByText("播放 Top 视频")).toBeTruthy();

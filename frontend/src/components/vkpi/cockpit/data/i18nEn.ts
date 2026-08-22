@@ -762,4 +762,6 @@ export const I18N_EN = {
   "北极星指标加载中…": "Loading North Star metrics…",
   "北极星端点暂不可用(诚实降级,不编数)。": "North Star endpoint unavailable (honest fallback, no invented numbers).",
   "生成于": "Generated at", "纯读": "read-only",
+  // MY KOL · 数值跟进 / 镜头出镜(车道 L4)
+  "数值跟进": "Metric Tracking", "镜头出镜": "Lens Exposure", "用过的镜头": "Lenses Used",
 };

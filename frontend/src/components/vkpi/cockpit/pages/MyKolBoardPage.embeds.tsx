@@ -7,7 +7,25 @@ import {
   useTeamStaffCards,
   type MatrixState,
 } from "./MyKolBoardPage.modules";
-import { fmtZhCompact } from "./MyKolBoardPage.charts";
+import {
+  LensDetailRow,
+  LensExposureBody,
+  MetricTrendChart,
+  TrackingDeltaTable,
+  fmtZhCompact,
+} from "./MyKolBoardPage.charts";
+import { EmptyLine, ErrorCard, LoadingLine } from "./MarketVoicePage.modules";
+import {
+  getMyKolTrackingOverview,
+  windowDeltaText,
+  type TrendMetricKey,
+  type VkpiMetricTrendsResponse,
+} from "../../../../services/vkpi/myKolBoard-api";
+import {
+  getLensInsightsSummary,
+  type LensExposureItem,
+  type LensInsightsSummary,
+} from "../../../../services/vkpi/lensInsights-api";
 import { DailyDigestCard } from "../../pages/myKol/DailyDigestCard";
 import { RiskIndexPanel } from "../../pages/myKol/RiskIndexPanel";
 import { ContributionRollupPanel } from "../../pages/myKol/ContributionRollupPanel";
@@ -329,6 +347,221 @@ export function LibClassicEmbed({
       ) : (
         <div data-embed="libclassic" className={`${EMBED} ${MATRIX_TRIM}`}>
           <EmployeeKolLibrary apiToken={apiToken} data={data} viewMode={viewMode} onRefreshData={onRefreshData} />
+        </div>
+      )}
+    </ModuleCard>
+  );
+}
+
+/* ============ 数值跟进 · 镜头出镜(车道 L4 · 2026-08-22):两件自取数模块 ============
+   与 digest/risk 同类(模块自取,page 层零改动);取数 = 本文件唯一两条网络口:
+     GET /my-kol/metrics/tracking-overview(收藏 ∪ 授权共享 scope,员工恒本人)
+     GET /lens-insights/summary?scope=collection|all(all 管理层专属)
+   诚实空态:未追踪任何视频 → 引导去 KOL 详情「追踪已有视频」;已深析内容零镜头 → 如实空;
+   自动刷新未开启(调度闸 OFF)→ 卡内明示,不摆假「下次刷新」。 ============ */
+
+function errDetail(err: unknown, fallback: string): string {
+  const detail = (err as { detail?: unknown; message?: unknown }) || {};
+  return String(detail.detail || detail.message || fallback);
+}
+
+const METRIC_TABS: Array<{ key: TrendMetricKey; label: string }> = [
+  { key: "views", label: "播放" },
+  { key: "likes", label: "点赞" },
+  { key: "comments", label: "评论" },
+];
+
+export function MetricTrackingEmbed({ apiToken, noToken, isManager }: { apiToken: string; noToken: React.ReactNode; isManager: boolean }) {
+  const [data, setData] = React.useState<VkpiMetricTrendsResponse | null>(null);
+  const [error, setError] = React.useState("");
+  const [loading, setLoading] = React.useState(false);
+  const [selectedId, setSelectedId] = React.useState<number | null>(null);
+  const [metric, setMetric] = React.useState<TrendMetricKey>("views");
+  const [tick, setTick] = React.useState(0);
+
+  React.useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    setLoading(true);
+    setError("");
+    getMyKolTrackingOverview(apiToken, { limit: 60 })
+      .then((res) => {
+        if (!alive) return;
+        setData(res && typeof res === "object" ? res : null);
+      })
+      .catch((err: unknown) => {
+        if (alive) setError(errDetail(err, "读取失败"));
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [apiToken, tick]);
+
+  const items = React.useMemo(() => (Array.isArray(data?.items) ? data!.items! : []), [data]);
+  const selected = React.useMemo(() => {
+    if (items.length === 0) return null;
+    const hit = items.find((item) => Number(item.evidence_id) === selectedId);
+    if (hit) return hit;
+    // 缺省选第一条有实测曲线的;全部未实测就选第一条(曲线诚实空)。
+    return items.find((item) => (item.series || []).length > 0) || items[0];
+  }, [items, selectedId]);
+  const summary = data?.summary;
+  const schedulerOn = data?.scheduler?.enabled;
+  const weekViews = summary?.windows?.["7d"]?.views;
+  const cnt = summary?.tracked_total != null ? `${summary.tracked_total} 条追踪` : undefined;
+  const extraRows: Array<[string, string]> = data
+    ? [
+        ["范围", data.scope?.mode === "staff_collection" ? `本人收藏集(staff #${String(data.scope?.staff_scope_id ?? "")})` : "全团队收藏集(收藏 ∪ 授权共享)"],
+        ["自动刷新", schedulerOn === true ? "已开启(每小时扫描到期视频)" : schedulerOn === false ? "未开启(scheduler_tasks 闸 OFF)" : "状态未知(注册表不可读)"],
+        ["刷新层级", `新发布 ${data.scheduler?.cadence_hours?.hot ?? 6}h / 30 天内 ${data.scheduler?.cadence_hours?.warm ?? 24}h / 更早 ${Math.round((data.scheduler?.cadence_hours?.cold ?? 168) / 24)} 天 · 失败退避 ${data.scheduler?.failed_backoff_hours ?? 24}h`],
+      ]
+    : [];
+  return (
+    <ModuleCard title="数值跟进" cnt={cnt} srcLabel={src("metricTracking").label} srcRows={[...src("metricTracking").rows, ...extraRows]} readableBody>
+      {!apiToken ? (
+        noToken
+      ) : error ? (
+        <ErrorCard title="数值跟进读取失败" text={error} />
+      ) : !data ? (
+        <LoadingLine text={loading ? "追踪视频读取中…" : "等待读取…"} />
+      ) : items.length === 0 ? (
+        <PendingCard>
+          <b>还没有被追踪的视频</b> —— 打开 KOL 库任一 KOL 的详情,在「已采集内容」里用「追踪已有视频」登记后,这里会出现播放/点赞/评论的实测曲线与 7 天 / 30 天增量。
+          {isManager ? "(当前为全团队收藏集范围)" : ""}
+        </PendingCard>
+      ) : (
+        <div>
+          <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-2">
+            <span>追踪 <b className="font-mono text-ink">{summary?.tracked_total ?? items.length}</b> 条</span>
+            <span>已实测 <b className="font-mono text-ink">{summary?.measured ?? 0}</b></span>
+            <span>最近播放合计 <b className="font-mono text-ink">{summary?.views_latest_total != null ? fmtZhCompact(summary.views_latest_total) : "未实测"}</b></span>
+            <span>7 天播放增量 <b className="font-mono text-ink">{weekViews?.delta != null ? windowDeltaText({ delta: weekViews.delta, status: "ready" }) : "待积累"}</b>{weekViews?.videos ? <span className="text-muted">(含 {weekViews.videos} 条)</span> : null}</span>
+            <button type="button" onClick={() => setTick((t) => t + 1)} className="ml-auto rounded-full border border-line px-2 py-0.5 text-[9.5px] text-muted transition-colors hover:text-ink" title="重新读取快照(不触发抓取)">重读</button>
+          </div>
+          {schedulerOn !== true ? (
+            <div className="mb-2 rounded-[8px] border border-warn bg-warn-soft px-2.5 py-1.5 text-[10.5px] leading-[1.6] text-ink-2">
+              <b className="font-semibold text-warn">{schedulerOn === false ? "自动刷新未开启" : "自动刷新状态未知"}</b> —— 当前只有手动「刷新指标」会产生新的实测点;开启后按新发布 / 30 天内 / 更早三档周期自动补点。
+            </div>
+          ) : null}
+          {selected ? (
+            <div className="mb-2">
+              <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                <span className="min-w-0 flex-1 truncate text-[11.5px] font-semibold text-ink" title={selected.content_url || undefined}>{selected.title || `#${String(selected.evidence_id)}`}</span>
+                {METRIC_TABS.map((tab) => (
+                  <button
+                    key={tab.key}
+                    type="button"
+                    onClick={() => setMetric(tab.key)}
+                    className={`rounded-full border px-2 py-0.5 text-[9.5px] transition-colors ${metric === tab.key ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-ink"}`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <MetricTrendChart series={selected.series || []} metric={metric} />
+            </div>
+          ) : null}
+          <TrackingDeltaTable items={items} selectedId={selected ? Number(selected.evidence_id) || null : null} onSelect={setSelectedId} showKol />
+          {data.truncated ? <div className="mt-1 text-[10px] text-muted">只显示最近更新的 60 条追踪视频(已截断,如实标注)。</div> : null}
+        </div>
+      )}
+    </ModuleCard>
+  );
+}
+
+export function LensExposureEmbed({ apiToken, noToken, isManager }: { apiToken: string; noToken: React.ReactNode; isManager: boolean }) {
+  const [scopeMode, setScopeMode] = React.useState<"collection" | "all">("collection");
+  const [data, setData] = React.useState<LensInsightsSummary | null>(null);
+  const [error, setError] = React.useState("");
+  const [selected, setSelected] = React.useState<LensExposureItem | null>(null);
+
+  React.useEffect(() => {
+    if (!apiToken) return;
+    let alive = true;
+    setError("");
+    setData(null);
+    setSelected(null);
+    getLensInsightsSummary(apiToken, { scope: scopeMode, limit: 40 })
+      .then((res) => {
+        if (alive) setData(res && typeof res === "object" ? res : null);
+      })
+      .catch((err: unknown) => {
+        if (alive) setError(errDetail(err, "读取失败"));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [apiToken, scopeMode]);
+
+  const lenses = Array.isArray(data?.lenses) ? data!.lenses! : [];
+  const coverage = data?.coverage;
+  const cnt = data?.summary?.lenses != null ? `${data.summary.lenses} 款` : undefined;
+  const extraRows: Array<[string, string]> = data
+    ? [
+        ["范围", scopeMode === "all" ? "全部已深析视频(管理层)" : data.scope?.mode === "staff_collection" ? "本人收藏集" : "全团队收藏集(收藏 ∪ 授权共享)"],
+        ["覆盖", `已深析 ${coverage?.analysed_videos ?? 0} 条 · 已整理 ${coverage?.scanned_videos ?? 0} 条 · 有产品出镜 ${coverage?.videos_with_products ?? 0} 条${coverage?.unscanned_videos ? ` · 待整理 ${coverage.unscanned_videos} 条` : ""}`],
+        ["未对上目录", `${data.summary?.unresolved_rows ?? 0} 条提法保留原文,不猜型号`],
+      ]
+    : [];
+  return (
+    <ModuleCard title="镜头出镜" cnt={cnt} srcLabel={src("lensExposure").label} srcRows={[...src("lensExposure").rows, ...extraRows]} readableBody>
+      {!apiToken ? (
+        noToken
+      ) : error ? (
+        <ErrorCard title="镜头出镜读取失败" text={error} />
+      ) : !data ? (
+        <LoadingLine text="镜头出镜整理中…" />
+      ) : (
+        <div>
+          {isManager ? (
+            <div className="mb-1.5 flex flex-wrap items-center justify-end gap-1.5">
+              {(["collection", "all"] as const).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setScopeMode(mode)}
+                  className={`rounded-full border px-2 py-0.5 text-[9.5px] transition-colors ${scopeMode === mode ? "border-accent bg-accent-soft text-accent" : "border-line text-muted hover:text-ink"}`}
+                >
+                  {mode === "all" ? "全部已深析" : "收藏集"}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {coverage ? (
+            <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-ink-2">
+              <span>已深析 <b className="font-mono text-ink">{coverage.analysed_videos ?? 0}</b> 条</span>
+              <span>有产品出镜 <b className="font-mono text-ink">{coverage.videos_with_products ?? 0}</b> 条</span>
+              <span>涉及 KOL <b className="font-mono text-ink">{data.summary?.kols_with_products ?? 0}</b></span>
+              {coverage.unscanned_videos ? <span className="text-warn">待整理 {coverage.unscanned_videos} 条(回填未跑到)</span> : null}
+            </div>
+          ) : null}
+          {lenses.length === 0 ? (
+            (coverage?.analysed_videos ?? 0) === 0 ? (
+              <PendingCard>
+                <b>还没有已深析的视频</b> —— 镜头出镜来自视频深析结果;先在 KOL 详情发起「视频深析入队」,深析完成并整理后这里会按镜头汇总。
+              </PendingCard>
+            ) : (coverage?.unscanned_videos ?? 0) > 0 && (coverage?.scanned_videos ?? 0) === 0 ? (
+              <PendingCard>
+                <b>深析结果尚未整理成镜头清单</b> —— 已深析 {coverage?.analysed_videos ?? 0} 条待整理(后台回填未运行),整理后自动点亮。
+              </PendingCard>
+            ) : (
+              <EmptyLine text="已深析内容里没有对上产品目录的镜头——诚实空。" />
+            )
+          ) : (
+            <>
+              <LensExposureBody lenses={lenses} labels={data.modality_labels} selectedKey={selected ? String(selected.lens_key || selected.display_name || "") : null} onSelect={(lens) => setSelected((cur) => (cur && cur.lens_key === lens.lens_key ? null : lens))} />
+              {selected ? <LensDetailRow lens={selected} labels={data.modality_labels} /> : null}
+              {data.lenses_truncated ? <div className="mt-1 text-[10px] text-muted">只列前 40 款(已截断,如实标注)。</div> : null}
+              {Array.isArray(data.unresolved) && data.unresolved.length > 0 ? (
+                <div className="mt-2 text-[10.5px] text-muted">
+                  未对上目录的提法(原文保留,不猜型号):{data.unresolved.slice(0, 8).map((u) => `${String(u.mention || "")} ×${Number(u.videos) || 0}`).join(" / ")}
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
       )}
     </ModuleCard>

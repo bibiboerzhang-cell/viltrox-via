@@ -8,7 +8,16 @@ import type { VkpiDashboardData, VkpiPageKey } from "../../vkpiTypes";
 import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
 import { AnalysisActivityModule, KolLibraryModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
 import { ContentWallModule } from "./MyKolBoardPage.content-wall";
-import { DigestEmbed, LibClassicEmbed, OfficialEmbed, RiskEmbed, RollupEmbed, TeamEmbed } from "./MyKolBoardPage.embeds";
+import {
+  DigestEmbed,
+  LensExposureEmbed,
+  LibClassicEmbed,
+  MetricTrackingEmbed,
+  OfficialEmbed,
+  RiskEmbed,
+  RollupEmbed,
+  TeamEmbed,
+} from "./MyKolBoardPage.embeds";
 import {
   ClaimsBody,
   ContactsBody,
@@ -76,7 +85,9 @@ import {
 
 // v1→v2(2026-07-12):默认布局插入「内容墙」行(contentWall 8 + viewsTop 4),
 // 旧本机布局不含新模块 → bump 键让全员看到新默认(手动改过布局的本机记忆一并重置)。
-const STORAGE_KEY = "vkpi-my-kol-layout-v2";
+// v2→v3(2026-08-22 车道 L4):默认布局插入「数值跟进」(8)+「镜头出镜」(4)一行
+// (被追踪视频实测曲线与 7d/30d 增量 · 深析内容按镜头汇总),同前例 bump 键让全员看到。
+const STORAGE_KEY = "vkpi-my-kol-layout-v3";
 const MY_KOL_PAGE_SIZE = 50;
 
 // 默认布局(12 列 · 设计单定稿七行;2026-07-12 两刀:team 12→8 腾出 span4 给
@@ -95,6 +106,8 @@ const DEFAULT_LAYOUT = [
   { moduleKey: "fitdist", span: 4 },
   { moduleKey: "contentWall", span: 8 },
   { moduleKey: "viewsTop", span: 4 },
+  { moduleKey: "metricTracking", span: 8 },
+  { moduleKey: "lensExposure", span: 4 },
   { moduleKey: "official", span: 8 },
   { moduleKey: "platdist", span: 4 },
   { moduleKey: "risk", span: 8 },
@@ -375,6 +388,9 @@ export function MyKolBoardPage({
   const renderOfficial = () => <OfficialEmbed apiToken={apiToken} matrix={matrix} noToken={noTokenCard} />;
   const renderRisk = () => <RiskEmbed apiToken={apiToken} noToken={noTokenCard} />;
   const renderRollup = () => <RollupEmbed apiToken={apiToken} viewMode={viewMode} noToken={noTokenCard} />;
+  // 车道 L4:数值跟进(被追踪视频实测曲线 + 7d/30d 增量)/ 镜头出镜(深析内容按镜头汇总),模块自取数。
+  const renderMetricTracking = () => <MetricTrackingEmbed apiToken={apiToken} noToken={noTokenCard} isManager={isManager} />;
+  const renderLensExposure = () => <LensExposureEmbed apiToken={apiToken} noToken={noTokenCard} isManager={isManager} />;
   // 经典视图(palette 备选):旧两栏库整体内嵌保留不删,默认体验统一走新版行式库。
   const renderLibClassic = () => (
     <LibClassicEmbed apiToken={apiToken} data={data} viewMode={viewMode} noToken={noTokenCard} onRefreshData={onRefreshData} />
@@ -562,6 +578,8 @@ export function MyKolBoardPage({
     { key: "fitdist", label: "Fit 分布", description: "全池十分位直方 + 未评分诚实桶(只读)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFitdist },
     { key: "official", label: "官方账号矩阵", description: "当前官号平台总览 · OfficialMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderOfficial },
     { key: "platdist", label: "平台分布", description: "收藏集按平台条形 · 点行过滤 KOL 库", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 16, render: renderPlatdist },
+    { key: "metricTracking", label: "数值跟进", description: "被追踪视频的实测曲线 + 7 天 / 30 天播放·点赞·评论增量与日均", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 14, minHeight: 6, maxHeight: 30, render: renderMetricTracking },
+    { key: "lensExposure", label: "镜头出镜", description: "已深析内容按镜头汇总 · 出镜视频数 / KOL 数 / 播放 / 证据来源", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 14, minHeight: 5, maxHeight: 30, render: renderLensExposure },
     ...(isManager
       ? ([
           { key: "risk", label: "KOL 风险指数", description: "final_v1 深析信号聚合 · 管理层专属(内嵌)", category: "实时模块", defaultSpan: 8, minSpan: 4, defaultHeight: 11, minHeight: 5, maxHeight: 26, render: renderRisk },

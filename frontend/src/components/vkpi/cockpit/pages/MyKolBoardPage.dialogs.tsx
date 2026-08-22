@@ -10,6 +10,8 @@ import {
   type LibraryFilter,
   type VkpiKolPoolVideoRow,
 } from "../../../../services/vkpi/myKolBoard-api";
+import { KolLensUsageList } from "./MyKolBoardPage.charts";
+import { getLensInsightsForKol, type KolLensUsage } from "../../../../services/vkpi/lensInsights-api";
 import { ReceiptLine } from "./MyKolBoardPage.receipt";
 import { TrackExistingVideoForm } from "./MyKolBoardPage.track-form";
 import { RecoveryPollingLine } from "./MyKolBoardPage.video-tasks";
@@ -505,6 +507,16 @@ export function KolDetailModal({
     return () => { alive = false; };
   }, [apiToken, item?.poolId, viewerTick]);
 
+  // 用过的镜头(车道 L4):GET /lens-insights/kol/{id}(深析结果按产品目录归一的派生表;读取失败 = 分区诚实缺席)。
+  const [lensUsage, setLensUsage] = React.useState<KolLensUsage | null>(null);
+  React.useEffect(() => {
+    if (!apiToken || !item?.poolId) return;
+    let alive = true;
+    setLensUsage(null);
+    getLensInsightsForKol(apiToken, item.poolId).then((resp) => { if (alive) setLensUsage(resp && typeof resp === "object" ? resp : null); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [apiToken, item?.poolId]);
+
   // 动作回执槽(每流独立,失败不被后续覆盖)+ 每条切换全部清空。
   const [msgs, setMsgs] = React.useState<Record<string, FlowReceipt | null>>({});
   const [busyKeys, setBusyKeys] = React.useState<Set<string>>(new Set());
@@ -855,6 +867,20 @@ export function KolDetailModal({
 
       {/* 分区③:合作项目结果(assignments 真阶段 × Projects 板块同一份映射的曝光/证据) */}
       <CoopResultsSection assignments={item.projects} projects={projects} />
+
+      {/* 分区③b:用过的镜头(深析内容里点名并对上产品目录的 Viltrox 产品;无深析/无镜头如实说明) */}
+      <div className="mb-[22px]">
+        <SectionLabel>用过的镜头{lensUsage?.coverage?.analysed_videos ? ` · 已深析 ${lensUsage.coverage.analysed_videos} 条` : ""}</SectionLabel>
+        {lensUsage == null ? (
+          <div className="py-2 text-[11.5px] text-muted">镜头整理读取中…</div>
+        ) : (lensUsage.lenses || []).length === 0 && (lensUsage.unresolved || []).length === 0 ? (
+          <div className="text-[11.5px] text-muted">
+            {lensUsage.empty_reason === "no_analysed_videos" ? "该 KOL 还没有已深析的视频——发起「视频深析入队」后,这里会列出深析内容里出镜的镜头。" : lensUsage.coverage?.unscanned_videos ? `已深析 ${lensUsage.coverage.analysed_videos ?? 0} 条,镜头清单尚未整理(后台回填未跑到)。` : "已深析内容里没有点名 Viltrox 镜头——如实空。"}
+          </div>
+        ) : (
+          <KolLensUsageList lenses={lensUsage.lenses || []} unresolved={lensUsage.unresolved || []} labels={lensUsage.modality_labels} />
+        )}
+      </div>
 
       {/* 分区④:已采集内容——品牌关系筛选、五种排序与覆盖率住 libdetail。 */}
       <div className="mb-[22px]">

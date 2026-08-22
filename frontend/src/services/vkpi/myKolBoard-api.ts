@@ -734,3 +734,138 @@ export function libraryPlatformOptions(rows: KolLibraryRow[], top = 6): Array<{ 
     .sort((a, b) => b.count - a.count || a.platform.localeCompare(b.platform))
     .slice(0, top);
 }
+
+/* ============ ⑤ 数值跟进(车道 L4 · 2026-08-22):被追踪视频的快照趋势 ============
+   GET /my-kol/{id}/metrics/trends 与 GET /my-kol/metrics/tracking-overview 同一契约
+   my_kol_metric_trends_v1(形状 1:1 对齐 backend kol/video_tracking_trends.py,禁编字段)。
+   7d/30d 增量 = 最近一次实测 − 窗口基线;partial = 历史不足整窗,按实际覆盖天数如实标注;
+   下次刷新只是按调度层级的估算,调度未开启时 reason=scheduler_disabled(前端不摆假时间)。 */
+
+export type MetricWindowKey = "7d" | "30d";
+export type TrendMetricKey = "views" | "likes" | "comments";
+
+export interface VkpiMetricWindowDelta {
+  delta?: number | null;
+  daily_avg?: number | null;
+  status?: "ready" | "partial" | "insufficient_history" | "metric_missing" | string;
+  covered_days?: number | null;
+  baseline_at?: string | null;
+  baseline_value?: number | null;
+}
+
+export interface VkpiMetricSnapshotPoint {
+  fetched_at?: string | null;
+  status?: string;
+  views?: number | null;
+  likes?: number | null;
+  comments?: number | null;
+  shares?: number | null;
+  error_code?: string | null;
+}
+
+export interface VkpiTrackedVideoTrend {
+  evidence_id?: number;
+  kol_pool_id?: number;
+  kol_name?: string;
+  title?: string;
+  content_url?: string;
+  platform?: string;
+  published_at?: string | null;
+  tracking?: {
+    status?: "active" | "paused" | string;
+    source?: string;
+    pause_reason?: string;
+    last_enqueued_at?: string | null;
+    last_enqueue_status?: string;
+    history?: "ready" | "single_sample" | "never_measured" | string;
+    next_refresh?: { tier?: string; estimated_at?: string | null; reason?: string };
+  };
+  latest?: VkpiMetricSnapshotPoint | null;
+  last_attempt?: VkpiMetricSnapshotPoint | null;
+  sample_count?: number;
+  failed_count?: number;
+  attempt_count?: number;
+  history_capped?: boolean;
+  windows?: Partial<Record<MetricWindowKey, Partial<Record<TrendMetricKey, VkpiMetricWindowDelta>>>>;
+  series?: VkpiMetricSnapshotPoint[];
+}
+
+export interface VkpiMetricTrendsResponse {
+  contract?: string;
+  kol_pool_id?: number;
+  read_only?: boolean;
+  generated_at?: string;
+  scope?: { mode?: string; staff_scope_id?: number | null; membership?: string };
+  scheduler?: {
+    task_key?: string;
+    /** null = 注册表不可读(诚实未知),false = 未开启,true = 已开启 */
+    enabled?: boolean | null;
+    interval_hours?: number;
+    cadence_hours?: Partial<Record<"hot" | "warm" | "cold", number>>;
+    failed_backoff_hours?: number;
+  };
+  summary?: {
+    tracked_total?: number;
+    active?: number;
+    paused?: number;
+    measured?: number;
+    with_history?: number;
+    views_latest_total?: number | null;
+    windows?: Partial<Record<MetricWindowKey, Partial<Record<TrendMetricKey, { delta?: number | null; videos?: number }>>>>;
+  };
+  items?: VkpiTrackedVideoTrend[];
+  truncated?: boolean;
+  empty_reason?: "no_tracked_videos" | string | null;
+}
+
+export async function getMyKolMetricTrends(token: string, kolPoolId: number | string, limit = 60) {
+  const query = new URLSearchParams({ limit: String(limit) });
+  return apiFetch<VkpiMetricTrendsResponse>(
+    `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/metrics/trends?${query.toString()}`,
+    {},
+    token,
+  );
+}
+
+export async function getMyKolTrackingOverview(token: string, params: { limit?: number; staffId?: number } = {}) {
+  const query = new URLSearchParams({ limit: String(params.limit || 60) });
+  if (params.staffId) query.set("staff_id", String(params.staffId));
+  return apiFetch<VkpiMetricTrendsResponse>(`/api/admin/vkpi/my-kol/metrics/tracking-overview?${query.toString()}`, {}, token);
+}
+
+/** 增量文案:ready → 「+1,234」;partial → 「+1,234(仅 3 天)」;其余 → 「待积累」。 */
+export function windowDeltaText(win: VkpiMetricWindowDelta | undefined): string {
+  if (!win || win.delta == null || (win.status !== "ready" && win.status !== "partial")) return "待积累";
+  const value = Number(win.delta);
+  if (!Number.isFinite(value)) return "待积累";
+  const signed = `${value > 0 ? "+" : ""}${value.toLocaleString()}`;
+  if (win.status === "partial" && win.covered_days != null) return `${signed}(仅 ${Math.max(1, Math.round(win.covered_days))} 天)`;
+  return signed;
+}
+
+/** 日均增速文案;覆盖不足 1 天后端给 null → 「—」(不外推)。 */
+export function dailyAvgText(win: VkpiMetricWindowDelta | undefined): string {
+  if (!win || win.daily_avg == null || !Number.isFinite(Number(win.daily_avg))) return "—";
+  const value = Number(win.daily_avg);
+  return `${value > 0 ? "+" : ""}${Math.round(value).toLocaleString()}/天`;
+}
+
+/** 下次刷新文案:未开启自动刷新 / 已暂停 / 估算时间(按浏览器时区由调用方格式化)。 */
+export function nextRefreshText(item: VkpiTrackedVideoTrend, formatStamp: (ts: string) => string): string {
+  const next = item.tracking?.next_refresh;
+  if (item.tracking?.status === "paused") return `已暂停${item.tracking.pause_reason ? ` · ${item.tracking.pause_reason}` : ""}`;
+  if (!next) return "—";
+  if (next.reason === "scheduler_disabled") return "自动刷新未开启";
+  if (next.reason === "scheduler_state_unknown") return "自动刷新状态未知";
+  if (next.estimated_at) return `预计 ${formatStamp(next.estimated_at)} 后`;
+  return "—";
+}
+
+/** 视频当前状态徽:实测历史 / 仅一次实测 / 从未实测 / 最近一次失败。 */
+export function trendStateBadge(item: VkpiTrackedVideoTrend): { label: string; tone: "good" | "warn" | "crit" | "muted" } {
+  if (item.last_attempt?.status === "failed" && !item.latest) return { label: "最近刷新失败", tone: "crit" };
+  if (!item.latest) return { label: "尚未实测", tone: "muted" };
+  if (item.last_attempt?.status === "failed") return { label: "最近一次失败", tone: "warn" };
+  if (item.tracking?.history === "single_sample") return { label: "仅一次实测", tone: "warn" };
+  return { label: "持续实测中", tone: "good" };
+}

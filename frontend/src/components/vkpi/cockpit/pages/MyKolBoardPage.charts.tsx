@@ -12,7 +12,21 @@ import {
   type VkpiPlatformDistGroup,
   type VkpiSeriesPoint,
   type VkpiViewsTopGroup,
+  dailyAvgText,
+  nextRefreshText,
+  trendStateBadge,
+  windowDeltaText,
+  type TrendMetricKey,
+  type VkpiMetricSnapshotPoint,
+  type VkpiTrackedVideoTrend,
 } from "../../../../services/vkpi/myKolBoard-api";
+import {
+  LENS_RESOLUTION_LABEL,
+  lensViewsText,
+  modalityChips,
+  type LensExposureItem,
+  type LensModality,
+} from "../../../../services/vkpi/lensInsights-api";
 import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 // MY KOL · 图表模块族(M4 真身;MyKolBoardPage 专用,页内拆件不入公共桶)。
@@ -657,6 +671,275 @@ export function SharesBody({ rows }: { rows: KolLibraryRow[] }) {
         </div>
       ))}
       <ProvNote>只读可见性授予(谁共享给谁)· 行动权仍在原属人</ProvNote>
+    </div>
+  );
+}
+
+/* ============ metricTracking · 数值跟进(车道 L4):单视频实测曲线 + 增量表 ============
+   曲线 = vkpi_content_metric_snapshots 成功快照按时间排序(点时实测,不是平台实时);
+   横轴按真实时间间隔铺点(不等距,快照稀疏就稀疏);只有 1 个点画孤点不连线。 ============ */
+const TREND_METRIC_LABEL: Record<TrendMetricKey, string> = { views: "播放", likes: "点赞", comments: "评论" };
+const TREND_METRIC_COLOR: Record<TrendMetricKey, string> = { views: "var(--ds-accent)", likes: "var(--ds-info)", comments: "var(--ds-good)" };
+
+function seriesTime(point: VkpiMetricSnapshotPoint): number | null {
+  const ts = Date.parse(String(point.fetched_at || ""));
+  return Number.isFinite(ts) ? ts : null;
+}
+
+export function MetricTrendChart({ series, metric }: { series: VkpiMetricSnapshotPoint[]; metric: TrendMetricKey }) {
+  const points = series
+    .map((p) => ({ t: seriesTime(p), v: typeof p[metric] === "number" && Number.isFinite(p[metric] as number) ? (p[metric] as number) : null }))
+    .filter((p): p is { t: number; v: number } => p.t != null && p.v != null)
+    .sort((a, b) => a.t - b.t);
+  if (points.length === 0) return <EmptyLine text={`该视频尚无${TREND_METRIC_LABEL[metric]}实测快照——曲线诚实空。`} />;
+  const W = 640;
+  const H = 150;
+  const pl = 8;
+  const pr = 10;
+  const pt = 12;
+  const pb = 14;
+  const iW = W - pl - pr;
+  const iH = H - pt - pb;
+  const tMin = points[0].t;
+  const tMax = points[points.length - 1].t;
+  const vals = points.map((p) => p.v);
+  const yMax = Math.max(...vals);
+  const yMin = Math.min(...vals);
+  const pad = (yMax - yMin || Math.max(yMax, 1)) * 0.08;
+  const top = yMax + pad;
+  const bottom = Math.max(0, yMin - pad);
+  const span = top - bottom || 1;
+  const X = (t: number) => pl + (tMax > tMin ? ((t - tMin) / (tMax - tMin)) * iW : iW / 2);
+  const Y = (v: number) => pt + (1 - (v - bottom) / span) * iH;
+  const pts: Pt[] = points.map((p) => [X(p.t), Y(p.v)]);
+  const color = TREND_METRIC_COLOR[metric];
+  const ticks = [top, bottom + span / 2, bottom];
+  const first = points[0];
+  const last = points[points.length - 1];
+  return (
+    <div>
+      <div className="relative pl-[38px]">
+        <div className="absolute bottom-0 left-0 top-0 z-[2] flex flex-col justify-between font-mono text-[8.5px] text-muted">
+          {ticks.map((t, i) => (
+            <span key={i}>{fmtZhCompact(Math.round(t))}</span>
+          ))}
+        </div>
+        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="block h-[150px] w-full" aria-hidden="true">
+          {[1, 2].map((i) => {
+            const y = pt + (i / 3) * iH;
+            return <line key={i} x1={pl} y1={y} x2={W - pr} y2={y} stroke="var(--ds-line)" strokeWidth="1" vectorEffect="non-scaling-stroke" />;
+          })}
+          <TrendSeries segs={[pts]} color={color} fill H={H} gid={`mk-mt-${metric}`} />
+          {pts.map(([x, y], i) => (
+            <circle key={i} cx={x} cy={y} r="2.2" fill={color} vectorEffect="non-scaling-stroke" />
+          ))}
+        </svg>
+      </div>
+      <div className="mt-1.5 flex items-center gap-3 text-[10.5px] text-ink-2">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-[3px] w-[13px] rounded-[2px]" style={{ background: color }} />
+          {TREND_METRIC_LABEL[metric]} · {points.length} 次实测
+        </span>
+        <span className="ml-auto font-mono text-[10px] text-muted">
+          {formatLocal(new Date(first.t))} → {formatLocal(new Date(last.t))}
+        </span>
+      </div>
+      <ProvNote>每个点 = 一次抓取时刻的读数(点时实测,非平台实时)· 横轴按真实间隔铺点,不插值</ProvNote>
+    </div>
+  );
+}
+
+const TREND_TONE_CLASS: Record<"good" | "warn" | "crit" | "muted", string> = {
+  good: "border-good text-good",
+  warn: "border-warn text-warn",
+  crit: "border-crit text-crit",
+  muted: "border-line text-muted",
+};
+
+export function TrackingDeltaTable({
+  items,
+  selectedId,
+  onSelect,
+  showKol = false,
+}: {
+  items: VkpiTrackedVideoTrend[];
+  selectedId: number | null;
+  onSelect: (evidenceId: number) => void;
+  showKol?: boolean;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[560px] border-collapse text-[11.5px]">
+        <thead>
+          <tr className="text-left text-[10px] font-semibold uppercase tracking-[0.08em] text-muted">
+            <th className="py-1.5 pr-2 font-semibold">视频</th>
+            <th className="py-1.5 pr-2 text-right font-semibold">最近播放</th>
+            <th className="py-1.5 pr-2 text-right font-semibold">7 天</th>
+            <th className="py-1.5 pr-2 text-right font-semibold">30 天</th>
+            <th className="py-1.5 pr-2 text-right font-semibold">日均</th>
+            <th className="py-1.5 pr-2 font-semibold">上次实测</th>
+            <th className="py-1.5 font-semibold">下次刷新</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map((item) => {
+            const id = Number(item.evidence_id) || 0;
+            const badge = trendStateBadge(item);
+            const week = item.windows?.["7d"]?.views;
+            const month = item.windows?.["30d"]?.views;
+            const selected = selectedId === id;
+            return (
+              <tr
+                key={id}
+                role="button"
+                tabIndex={0}
+                onClick={() => onSelect(id)}
+                onKeyDown={keyActivate(() => onSelect(id))}
+                className={`cursor-pointer border-t border-line transition-colors hover:bg-accent-soft ${selected ? "bg-accent-soft" : ""}`}
+                title={item.content_url || undefined}
+              >
+                <td className="max-w-[220px] py-1.5 pr-2">
+                  <div className={`truncate ${selected ? "font-semibold text-accent" : "text-ink-2"}`}>{item.title || `#${id}`}</div>
+                  <div className="mt-0.5 flex items-center gap-1.5 font-mono text-[9px] text-muted">
+                    {showKol && item.kol_name ? <span className="truncate">{item.kol_name}</span> : null}
+                    <span className={`rounded-[4px] border px-1 py-px text-[8.5px] font-semibold ${TREND_TONE_CLASS[badge.tone]}`}>{badge.label}</span>
+                  </div>
+                </td>
+                <td className="py-1.5 pr-2 text-right font-mono text-ink">{item.latest?.views != null ? item.latest.views.toLocaleString() : "未实测"}</td>
+                <td className="py-1.5 pr-2 text-right font-mono text-ink-2">{windowDeltaText(week)}</td>
+                <td className="py-1.5 pr-2 text-right font-mono text-ink-2">{windowDeltaText(month)}</td>
+                <td className="py-1.5 pr-2 text-right font-mono text-muted" title="7 天窗口日均增速;不足 1 天不外推">{dailyAvgText(week)}</td>
+                <td className="py-1.5 pr-2 font-mono text-[10px] text-muted">{item.latest?.fetched_at ? formatLocal(item.latest.fetched_at) : "—"}</td>
+                <td className="py-1.5 font-mono text-[10px] text-muted">{nextRefreshText(item, (ts) => formatLocal(ts))}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <ProvNote>增量 = 最近一次实测 − 窗口基线 · 历史不足整窗标「仅 N 天」· 时间按浏览器时区</ProvNote>
+    </div>
+  );
+}
+
+/* ============ lensExposure · 镜头出镜(车道 L4):按镜头条形 + 证据来源 chips ============ */
+const MODALITY_CLASS: Record<LensModality, string> = {
+  visual: "border-accent text-accent",
+  text: "border-info text-info",
+  voice: "border-good text-good",
+  unspecified: "border-line text-muted",
+};
+
+export function ModalityChips({ counts, labels }: { counts: LensExposureItem["modalities"]; labels?: Partial<Record<LensModality, string>> }) {
+  const chips = modalityChips(counts, labels);
+  if (chips.length === 0) return null;
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1">
+      {chips.map((chip) => (
+        <span key={chip.key} className={`rounded-[4px] border px-1 py-px font-mono text-[8.5px] font-semibold ${MODALITY_CLASS[chip.key]}`} title={`${chip.label}证据 ${chip.count} 条`}>
+          {chip.label} {chip.count}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+export function LensExposureBody({
+  lenses,
+  labels,
+  selectedKey,
+  onSelect,
+}: {
+  lenses: LensExposureItem[];
+  labels?: Partial<Record<LensModality, string>>;
+  selectedKey?: string | null;
+  onSelect?: (lens: LensExposureItem) => void;
+}) {
+  if (lenses.length === 0) return <EmptyLine text="已深析内容里没有对上产品目录的镜头——诚实空。" />;
+  const max = lenses.reduce((a, it) => Math.max(a, Number(it.videos) || 0), 0) || 1;
+  return (
+    <div>
+      {lenses.map((lens) => {
+        const videos = Number(lens.videos) || 0;
+        const key = String(lens.lens_key || lens.display_name || "");
+        return (
+          <BarRow
+            key={key}
+            name={String(lens.display_name || "—")}
+            widthPct={(videos / max) * 100}
+            highlight={selectedKey != null && selectedKey === key}
+            dashed={lens.resolution === "family"}
+            value={`${videos} 条 · ${Number(lens.kols) || 0} KOL`}
+            title={`${LENS_RESOLUTION_LABEL[String(lens.resolution || "")] || ""} · ${lensViewsText(lens)}${lens.skus?.length ? ` · ${lens.skus.join(" / ")}` : ""}`}
+            onClick={onSelect ? () => onSelect(lens) : undefined}
+          />
+        );
+      })}
+      <ProvNote>条长 = 出镜视频数(去重)· 系列已确认但未点明卡口的镜头用弱化条 · 播放为点时实测</ProvNote>
+    </div>
+  );
+}
+
+export function LensDetailRow({ lens, labels }: { lens: LensExposureItem; labels?: Partial<Record<LensModality, string>> }) {
+  const samples = Array.isArray(lens.samples) ? lens.samples : [];
+  return (
+    <div className="mt-2 rounded-[9px] border border-line bg-panel px-3 py-2.5 text-[11.5px]">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-semibold text-ink">{lens.display_name}</span>
+        <span className="rounded-[4px] border border-line px-1 py-px font-mono text-[8.5px] text-muted">{LENS_RESOLUTION_LABEL[String(lens.resolution || "")] || "—"}</span>
+        <ModalityChips counts={lens.modalities} labels={labels} />
+        <span className="ml-auto font-mono text-[10px] text-muted">{lensViewsText(lens)}</span>
+      </div>
+      {lens.skus && lens.skus.length > 0 ? <div className="mt-1 font-mono text-[9.5px] text-muted">型号 {lens.skus.join(" · ")}</div> : null}
+      {samples.length > 0 ? (
+        <div className="mt-1.5 space-y-1">
+          {samples.map((video) => (
+            <div key={String(video.evidence_id)} className="flex items-center gap-2 text-[11px]">
+              <span className="h-[5px] w-[5px] flex-none rounded-full bg-accent-2" />
+              {video.content_url ? (
+                <a href={video.content_url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate text-ink-2 transition-colors hover:text-accent" onClick={(ev) => ev.stopPropagation()}>
+                  {video.title || `#${String(video.evidence_id)}`}
+                </a>
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-ink-2">{video.title || `#${String(video.evidence_id)}`}</span>
+              )}
+              <span className="flex-none font-mono text-[9px] text-muted">{video.kol_name || ""}</span>
+              <span className="flex-none font-mono text-[9px] text-muted">{video.view_count != null ? fmtZhCompact(video.view_count) : "未实测"}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** KOL 详情「用过的镜头」:纯列表(取数住弹窗层,本件零网络)。 */
+export function KolLensUsageList({
+  lenses,
+  unresolved,
+  labels,
+}: {
+  lenses: LensExposureItem[];
+  unresolved: Array<{ mention?: string; videos?: number }>;
+  labels?: Partial<Record<LensModality, string>>;
+}) {
+  if (lenses.length === 0 && unresolved.length === 0) return null;
+  return (
+    <div>
+      {lenses.map((lens) => (
+        <div key={String(lens.lens_key || lens.display_name)} className="flex flex-wrap items-center gap-2 border-b border-line py-1.5 text-[11.5px] last:border-0">
+          <span className="h-[7px] w-[7px] flex-none rounded-full bg-accent" />
+          <span className="min-w-0 flex-1 truncate text-ink-2" title={lens.skus?.length ? lens.skus.join(" · ") : undefined}>{lens.display_name}</span>
+          <span className="flex-none font-mono text-[9.5px] text-muted">{Number(lens.videos) || 0} 条</span>
+          <ModalityChips counts={lens.modalities} labels={labels} />
+          <span className="flex-none rounded-[4px] border border-line px-1 py-px font-mono text-[8.5px] text-muted">{LENS_RESOLUTION_LABEL[String(lens.resolution || "")] || "—"}</span>
+        </div>
+      ))}
+      {unresolved.length > 0 ? (
+        <div className="mt-1.5 text-[10.5px] text-muted">
+          还有 {unresolved.length} 个产品提法未对上目录(原文保留):{unresolved.map((u) => String(u.mention || "")).filter(Boolean).join(" / ")}
+        </div>
+      ) : null}
     </div>
   );
 }
