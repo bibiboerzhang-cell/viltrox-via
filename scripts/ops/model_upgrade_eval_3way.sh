@@ -52,6 +52,7 @@ REUSE_DB=0
 DROP_DB=0
 DRY_RUN=0
 STOP_AFTER=""
+ACTOR_STAFF_ID="${ACTOR_STAFF_ID:-auto}"   # owner/manager staff id used to build the paid-action fence (auto = first is_owner=1)
 DATASET_ID="model-upgrade-2026-08"
 
 while [[ $# -gt 0 ]]; do
@@ -73,6 +74,7 @@ while [[ $# -gt 0 ]]; do
     --drop-db) DROP_DB=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     --stop-after) STOP_AFTER="$2"; shift 2 ;;
+    --actor-staff-id) ACTOR_STAFF_ID="$2"; shift 2 ;;
     -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
@@ -186,7 +188,7 @@ run_model() {
   # 4) enqueue through the real production path (readiness/budget preflight included)
   log "$model: enqueue $ID_COUNT evidence ids (APP_ROLE=admin-web ENABLE_SCHEDULER=0)"
   APP_ROLE=admin-web ENABLE_SCHEDULER=0 ENABLE_BROWSER=0 ENABLE_UPLOAD_CLEANUP=0 \
-  "$PY" - "$IDS_FILE" "$OUT_DIR/enqueue_$slug.json" <<'PY'
+  "$PY" - "$IDS_FILE" "$OUT_DIR/enqueue_$slug.json" "$ACTOR_STAFF_ID" <<'PY'
 import json, sys
 from pathlib import Path
 from app.db.connection import get_conn
@@ -194,13 +196,27 @@ from app.domains.kol.video_analysis_enqueue import enqueue_final_v1_video_analys
 
 ids = [int(line.strip()) for line in Path(sys.argv[1]).read_text().splitlines() if line.strip()]
 conn = get_conn()
+# Paid-action fence: the worker blocks final_v1 jobs that carry no durable actor/target fence
+# (video_analysis_authorization_fence_required). Enqueue exactly like the UI does: a real
+# owner/manager staff row + enforce_target_write=True (manager may write any target).
+actor_arg = (sys.argv[3] if len(sys.argv) > 3 else "auto").strip().lower()
+if actor_arg in ("", "auto"):
+    staff_row = conn.execute(
+        "SELECT * FROM staff WHERE is_owner=1 AND active=1 ORDER BY id LIMIT 1"
+    ).fetchone()
+else:
+    staff_row = conn.execute("SELECT * FROM staff WHERE id=?", (int(actor_arg),)).fetchone()
+if not staff_row:
+    print("no owner staff row for the paid-action fence (pass --actor-staff-id)", file=sys.stderr)
+    sys.exit(1)
+staff = dict(staff_row)
 placeholders = ", ".join("?" for _ in ids)
 rows = conn.execute(
     f"SELECT id, kol_pool_id FROM vkpi_kol_video_evidence WHERE id IN ({placeholders})", tuple(ids)
 ).fetchall()
 by_id = {int(dict(r)["id"]): int(dict(r)["kol_pool_id"] or 0) for r in rows}
 items = [{"kol_pool_id": by_id.get(i, 0), "evidence_id": i} for i in ids]
-result = enqueue_final_v1_video_analysis_batch(items=items, staff=None)
+result = enqueue_final_v1_video_analysis_batch(items=items, staff=staff, enforce_target_write=True)
 summary = {
     "requested": result.get("requested"), "queued": result.get("queued"), "skipped": result.get("skipped"),
     "ai_disabled": result.get("ai_disabled"), "errors": result.get("errors"),

@@ -629,9 +629,10 @@ def _process_gemini_video(
     analyzer_payload["llm_context"] = {
         "purpose": "audit_video_analysis",
         "cost_tag": LLM_BUDGET_SCOPE,
-        "triggered_by": payload.get(
-            "triggered_by_user_id", payload.get("user_id")
-        ),
+        # 台账 staff 外键要的是 staff id;triggered_by_user_id 是 user id(owner staff 40 ↔ user 1),
+        # 混传曾让 owner 从 UI 点的深析全部记账外键炸。优先 payload.staff_id,没有才退 user id。
+        "triggered_by": payload.get("staff_id")
+        or payload.get("triggered_by_user_id", payload.get("user_id")),
         "execution_class": str(
             authorization.get("execution_class") or WORKER_LLM_EXECUTION_CLASS
         ),

@@ -86,6 +86,18 @@ def _single_call_ceiling_allowed(cap: float, estimated_cost: float) -> bool:
     return float(cap or 0) <= 0 or float(estimated_cost or 0) <= float(cap or 0)
 
 
+def _existing_staff_id(conn: Any, sid: Any) -> int | None:
+    """staff PK 存在性校验(与 llm_gateway._existing_staff_id 同义;本模块是 leaf 不反向 import)。"""
+    sid = _int(sid)
+    if not sid:
+        return None
+    try:
+        row = conn.execute("SELECT 1 FROM staff WHERE id=?", (int(sid),)).fetchone()
+    except Exception:
+        return None
+    return int(sid) if row else None
+
+
 def _resolve_staff(value: Any) -> int | None:
     if isinstance(value, dict):
         return resolve_staff_id(value) or None
@@ -364,6 +376,13 @@ def record_cost(
         provider = "gemini"
     now = _utcnow()
     conn = get_conn()
+    # staff_id 是 staff 外键;调用方可能把 user id / 过期 staff id 当 staff 传进来(worker 的
+    # triggered_by_user_id=1 曾让 owner 从 UI 点的视频深析全部 forced_ai_cost_ledger_write_failed)。
+    # 不存在的 id 落 NULL 并在 metadata 留痕,绝不让成本台账因 FK 写挂。
+    unresolved_staff_id = _int(actor_staff_id)
+    actor_staff_id = _existing_staff_id(conn, unresolved_staff_id)
+    if unresolved_staff_id and not actor_staff_id:
+        metadata = {**(metadata or {}), "unresolved_staff_id": unresolved_staff_id}
     try:
         inserted = conn.execute(
             """
