@@ -28,11 +28,9 @@ class ApifyJobsProviderRetryTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertEqual(worker._error_category(message), "provider_pressure")
 
-    def test_final_v1_model_chain_has_stable_fallback(self) -> None:
-        self.assertEqual(
-            gemini_video.final_v1_gemini_models(""),
-            ["gemini-3-flash-preview", "gemini-2.5-flash"],
-        )
+    def test_final_v1_model_chain_defaults_to_single_exact_model(self) -> None:
+        # 单精确模型默认链(core/gemini_models 字面契约);链语义只留给 GEMINI_FINAL_V1_MODELS env。
+        self.assertEqual(gemini_video.final_v1_gemini_models(""), ["gemini-3.6-flash"])
 
     def test_permanent_media_errors_do_not_become_provider_pressure(self) -> None:
         cases = {

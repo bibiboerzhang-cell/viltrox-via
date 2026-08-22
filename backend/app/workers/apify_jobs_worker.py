@@ -22,6 +22,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.core.config import DB_RUNTIME_URL
+from app.core.gemini_models import DEFAULT_GEMINI_JUDGE_MODEL, DEFAULT_VIDEO_GEMINI_MODEL
 from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
 from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
@@ -187,7 +188,7 @@ GEMINI_VIDEO_V2_DERIVE_METHODS = {
 FINAL_V1_KEYFRAME_QA_DERIVE_METHOD = "video_analysis_final_v1_keyframe_qa"
 GEMINI_VIDEO_FINAL_DERIVE_METHODS = {"video_analysis_final_v1", FINAL_V1_KEYFRAME_QA_DERIVE_METHOD}
 GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS, *GEMINI_VIDEO_FINAL_DERIVE_METHODS}
-WORKER_GEMINI_MODEL = os.environ.get("APIFY_WORKER_GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+WORKER_GEMINI_MODEL = DEFAULT_VIDEO_GEMINI_MODEL  # env APIFY_WORKER_GEMINI_MODEL(core/gemini_models 唯一默认)
 # Worker processes are always production by default.  A persisted, server-
 # signed job capability is the only mechanism that can authorize the narrow
 # local evaluation branch for one job; an environment flag cannot reinterpret
@@ -196,10 +197,8 @@ WORKER_LLM_EXECUTION_CLASS = llm_gateway.PRODUCTION_EXECUTION_CLASS
 # One exact worker model is both preflighted and executed.  The former default
 # fallback list (3-flash-preview -> 2.5-flash) let a preflight for one binding
 # authorize a different provider request.
-FINAL_V1_GEMINI_MODELS = gemini_video_analyzer.final_v1_gemini_models(
-    [WORKER_GEMINI_MODEL]
-)
-FINAL_V1_KEYFRAME_QA_MODEL = os.environ.get("GEMINI_FINAL_V1_QA_MODEL", "gemini-3.1-pro-preview").strip() or "gemini-3.1-pro-preview"
+FINAL_V1_GEMINI_MODELS = gemini_video_analyzer.final_v1_gemini_models([WORKER_GEMINI_MODEL])
+FINAL_V1_KEYFRAME_QA_MODEL = DEFAULT_GEMINI_JUDGE_MODEL  # env GEMINI_FINAL_V1_QA_MODEL
 _stop_event = threading.Event()
 _gemini_qps_lock = threading.Lock()
 _last_gemini_call_started_at = 0.0

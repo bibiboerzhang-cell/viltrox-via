@@ -94,11 +94,11 @@ def test_direct_path_passes_canonical_uri_to_gemini_and_records_it(monkeypatch: 
     original = "https://www.youtube.com/watch?v=QfcIpjtZ1s4&t=314s"
     result = asyncio.run(
         gemini_video_youtube.analyze_youtube_with_gemini(
-            original, "demo", schema_version="final_v1", models=["gemini-2.5-flash"]
+            original, "demo", schema_version="final_v1", models=["gemini-3.6-flash"]
         )
     )
     assert result["analyzed"] is True
-    assert result["method"] == "gemini_direct_gemini-2.5-flash"
+    assert result["method"] == "gemini_direct_gemini-3.6-flash"
     assert len(seen) == 1
     file_part = seen[0]["contents"][0]
     assert file_part.file_data.file_uri == CANON
@@ -114,7 +114,7 @@ def test_direct_path_keeps_raw_url_when_not_canonicalizable(monkeypatch: pytest.
     odd = "https://www.youtube.com/watch?v=short"
     result = asyncio.run(
         gemini_video_youtube.analyze_youtube_with_gemini(
-            odd, "demo", schema_version="final_v1", models=["gemini-2.5-flash"]
+            odd, "demo", schema_version="final_v1", models=["gemini-3.6-flash"]
         )
     )
     assert result["analyzed"] is True
@@ -154,7 +154,7 @@ def test_slow_path_defaults_keep_720p_and_no_cookies(monkeypatch: pytest.MonkeyP
     commands: list[list[str]] = []
     _slow_path_env(monkeypatch, commands)
     result = asyncio.run(
-        gemini_video_youtube.analyze_youtube_with_gemini(CANON, "demo", schema_version="final_v1", models=["gemini-2.5-flash"])
+        gemini_video_youtube.analyze_youtube_with_gemini(CANON, "demo", schema_version="final_v1", models=["gemini-3.6-flash"])
     )
     assert result["analyzed"] is False
     assert len(commands) == 1
@@ -173,7 +173,7 @@ def test_slow_path_env_levers_lower_resolution_and_pass_cookies(monkeypatch: pyt
     commands: list[list[str]] = []
     _slow_path_env(monkeypatch, commands)
     result = asyncio.run(
-        gemini_video_youtube.analyze_youtube_with_gemini(CANON, "demo", schema_version="final_v1", models=["gemini-2.5-flash"])
+        gemini_video_youtube.analyze_youtube_with_gemini(CANON, "demo", schema_version="final_v1", models=["gemini-3.6-flash"])
     )
     cmd = commands[0]
     assert cmd[cmd.index("-f") + 1] == "best[ext=mp4][height<=480]/18/best[height<=480]/best"

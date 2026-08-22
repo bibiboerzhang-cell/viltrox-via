@@ -17,7 +17,7 @@ def test_worker_preflight_and_analyzer_use_the_same_exact_model(monkeypatch) -> 
         return {"providers": []}
 
     monkeypatch.setattr(prep.llm_gateway, "budget_preflight", fake_preflight)
-    monkeypatch.setattr(prep, "WORKER_GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setattr(prep, "WORKER_GEMINI_MODEL", "gemini-3.6-flash")
     # Process-wide worker configuration cannot reinterpret an old job.
     monkeypatch.setattr(prep, "WORKER_LLM_EXECUTION_CLASS", "local_evaluation")
     prep._llm_budget_preflight(
@@ -27,13 +27,13 @@ def test_worker_preflight_and_analyzer_use_the_same_exact_model(monkeypatch) -> 
     analyzer = gemini_worker._gemini_analyzer_payload(
         {
             "gemini_model": "gemini-3.5-flash",
-            "gemini_final_v1_models": ["gemini-3-flash-preview"],
+            "gemini_final_v1_models": ["gemini-3.5-flash"],
         },
         "video_analysis_final_v1",
     )
 
     assert captured["preferred_provider"] == "google"
-    assert captured["model_override"] == "gemini-2.5-flash"
+    assert captured["model_override"] == "gemini-3.6-flash"
     assert captured["model_fallbacks"] == []
     assert captured["execution_class"] == "production"
     prep._llm_budget_preflight(
@@ -54,13 +54,13 @@ def test_local_evaluation_result_and_cost_ledger_are_descriptive_only(
 
     raw = {
         "analyzed": True,
-        "model": "gemini-2.5-flash",
-        "method": "gemini_local_fileapi_gemini-2.5-flash",
+        "model": "gemini-3.6-flash",
+        "method": "gemini_local_fileapi_gemini-3.6-flash",
         "video_analysis_final_v1": {},
         "llm_execution": {
-            "binding": "google/gemini-2.5-flash",
-            "model": "gemini-2.5-flash",
-            "reported_model": "gemini-2.5-flash",
+            "binding": "google/gemini-3.6-flash",
+            "model": "gemini-3.6-flash",
+            "reported_model": "gemini-3.6-flash",
             "execution_class": "local_evaluation",
             "authorization_scope": "evaluation_only",
             "evaluation_only": True,
@@ -101,7 +101,7 @@ def test_local_evaluation_result_and_cost_ledger_are_descriptive_only(
     assert shaped["evaluation_only"] is True
     assert shaped["production_authorized"] is False
     assert shaped["claim_status"] == "descriptive_only"
-    assert shaped["provenance"]["binding"] == "google/gemini-2.5-flash"
+    assert shaped["provenance"]["binding"] == "google/gemini-3.6-flash"
     assert shaped["llm_execution"]["model_match"] is True
     assert captured["metadata"]["execution_class"] == "local_evaluation"
     assert captured["metadata"]["evaluation_only"] is True
@@ -119,8 +119,8 @@ def test_google_authorization_preserves_evaluation_scope() -> None:
             "providers": [
                 {
                     "provider": "google",
-                    "binding": "google/gemini-2.5-flash",
-                    "model": "gemini-2.5-flash",
+                    "binding": "google/gemini-3.6-flash",
+                    "model": "gemini-3.6-flash",
                     "execution_class": "local_evaluation",
                     "authorization_scope": "evaluation_only",
                     "evaluation_only": True,
@@ -133,8 +133,8 @@ def test_google_authorization_preserves_evaluation_scope() -> None:
     )
 
     assert result == {
-        "binding": "google/gemini-2.5-flash",
-        "model": "gemini-2.5-flash",
+        "binding": "google/gemini-3.6-flash",
+        "model": "gemini-3.6-flash",
         "execution_class": "local_evaluation",
         "authorization_scope": "evaluation_only",
         "evaluation_only": True,

@@ -54,34 +54,34 @@ def _gemini_env(monkeypatch: pytest.MonkeyPatch, caches: _Caches) -> dict[str, A
 def test_shared_entry_is_reused_without_creating_a_new_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     caches = _Caches(fail=True)
     store = _gemini_env(monkeypatch, caches)
-    key = gemini_video._final_v1_shared_cache_key("gemini-2.5-flash", "STATIC PROMPT")
+    key = gemini_video._final_v1_shared_cache_key("gemini-3.6-flash", "STATIC PROMPT")
     store[key] = ("cachedContents/shared-1", 120.0)
-    config, info = gemini_video._final_v1_cache_config("gemini-2.5-flash")
+    config, info = gemini_video._final_v1_cache_config("gemini-3.6-flash")
     assert config.cachedContent == "cachedContents/shared-1"
     assert info["enabled"] is True and info["source"] == "shared"
     assert caches.created == []
     # 进程内 memo 已建立,第二次连共享存取都不用
     monkeypatch.setattr(gemini_video, "_shared_context_cache_get", lambda key: (_ for _ in ()).throw(AssertionError("memo first")))
-    config2, info2 = gemini_video._final_v1_cache_config("gemini-2.5-flash")
+    config2, info2 = gemini_video._final_v1_cache_config("gemini-3.6-flash")
     assert config2.cachedContent == "cachedContents/shared-1" and info2["source"] == "process"
 
 
 def test_created_cache_is_published_to_shared_store(monkeypatch: pytest.MonkeyPatch) -> None:
     caches = _Caches()
     store = _gemini_env(monkeypatch, caches)
-    config, info = gemini_video._final_v1_cache_config("gemini-2.5-flash")
+    config, info = gemini_video._final_v1_cache_config("gemini-3.6-flash")
     assert info["source"] == "created" and config.cachedContent == "cachedContents/created-1"
-    key = gemini_video._final_v1_shared_cache_key("gemini-2.5-flash", "STATIC PROMPT")
+    key = gemini_video._final_v1_shared_cache_key("gemini-3.6-flash", "STATIC PROMPT")
     assert store[key][0] == "cachedContents/created-1"
-    assert caches.created == ["gemini-2.5-flash"]
+    assert caches.created == ["gemini-3.6-flash"]
 
 
 def test_stale_shared_entry_is_ignored_and_recreated(monkeypatch: pytest.MonkeyPatch) -> None:
     caches = _Caches()
     store = _gemini_env(monkeypatch, caches)
-    key = gemini_video._final_v1_shared_cache_key("gemini-2.5-flash", "STATIC PROMPT")
+    key = gemini_video._final_v1_shared_cache_key("gemini-3.6-flash", "STATIC PROMPT")
     store[key] = ("cachedContents/old", gemini_video._FINAL_V1_CACHE_REUSE_SECONDS + 5)
-    config, info = gemini_video._final_v1_cache_config("gemini-2.5-flash")
+    config, info = gemini_video._final_v1_cache_config("gemini-3.6-flash")
     assert info["source"] == "created" and config.cachedContent == "cachedContents/created-1"
 
 
@@ -90,7 +90,7 @@ def test_shared_store_outage_is_fail_soft(monkeypatch: pytest.MonkeyPatch) -> No
     _gemini_env(monkeypatch, caches)
     monkeypatch.setattr(gemini_video, "_shared_context_cache_get", lambda key: ("", 0.0))
     monkeypatch.setattr(gemini_video, "_shared_context_cache_put", lambda *a, **k: None)
-    config, info = gemini_video._final_v1_cache_config("gemini-2.5-flash")
+    config, info = gemini_video._final_v1_cache_config("gemini-3.6-flash")
     assert info["enabled"] is True and info["source"] == "created"
 
 
@@ -106,10 +106,10 @@ def test_real_store_functions_never_raise_without_database(monkeypatch: pytest.M
 
 
 def test_shared_cache_key_is_stable_across_processes() -> None:
-    key_a = gemini_video._final_v1_shared_cache_key("gemini-2.5-flash", "STATIC")
-    key_b = gemini_video._final_v1_shared_cache_key("gemini-2.5-flash", "STATIC")
-    assert key_a == key_b and key_a.startswith("vkpi:gemini-ctx-cache:final_v1:gemini-2.5-flash:")
-    assert gemini_video._final_v1_shared_cache_key("gemini-3-flash-preview", "STATIC") != key_a
+    key_a = gemini_video._final_v1_shared_cache_key("gemini-3.6-flash", "STATIC")
+    key_b = gemini_video._final_v1_shared_cache_key("gemini-3.6-flash", "STATIC")
+    assert key_a == key_b and key_a.startswith("vkpi:gemini-ctx-cache:final_v1:gemini-3.6-flash:")
+    assert gemini_video._final_v1_shared_cache_key("gemini-3.5-flash-lite", "STATIC") != key_a
 
 
 def test_env_switch_disables_shared_store(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -193,12 +193,12 @@ def test_local_analyzer_evicts_poisoned_cache_and_retries_same_model(monkeypatch
     monkeypatch.setattr(gemini_video, "_final_v1_cache_evict", lambda model, *, reason="": evicted.append(model))
     result = asyncio.run(
         gemini_video.analyze_local_video_with_gemini(
-            str(video), "demo", schema_version="final_v1", models=["gemini-2.5-flash"]
+            str(video), "demo", schema_version="final_v1", models=["gemini-3.6-flash"]
         )
     )
     assert result["analyzed"] is True
-    assert generate_calls == ["gemini-2.5-flash", "gemini-2.5-flash"]
-    assert evicted == ["gemini-2.5-flash"]
+    assert generate_calls == ["gemini-3.6-flash", "gemini-3.6-flash"]
+    assert evicted == ["gemini-3.6-flash"]
 
 
 def test_local_analyzer_does_not_retry_non_cache_errors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -234,9 +234,9 @@ def test_local_analyzer_does_not_retry_non_cache_errors(monkeypatch: pytest.Monk
     monkeypatch.setattr(gemini_video, "_final_v1_cache_evict", lambda model, *, reason="": (_ for _ in ()).throw(AssertionError("no evict")))
     result = asyncio.run(
         gemini_video.analyze_local_video_with_gemini(
-            str(video), "demo", schema_version="final_v1", models=["gemini-2.5-flash"]
+            str(video), "demo", schema_version="final_v1", models=["gemini-3.6-flash"]
         )
     )
     assert result["analyzed"] is False
-    assert generate_calls == ["gemini-2.5-flash"]
+    assert generate_calls == ["gemini-3.6-flash"]
     assert "503" in result["error"]

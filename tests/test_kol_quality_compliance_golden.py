@@ -44,6 +44,8 @@ def _deep_row(deep_id, eid, dims, created_at="2026-07-01T00:00:00"):
     }
 
 
+# 历史 provenance fixture:gemini-3.1-pro-preview 是旧裁判(2026-08 模型升级刀前)落库的真实行,
+# 本测试只验 provenance 透传,故意保留旧 id 记录老数据形态,不随裁判换模型改写。
 _DIMS_WITH_TRACE = {
     "schema_version": "kol_llm_deep_analysis_from_final_v1_v1",
     "source": {"final_model": "gemini-3.1-pro-preview"},

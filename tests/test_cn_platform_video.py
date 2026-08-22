@@ -337,7 +337,7 @@ def test_cn_flow_success_stores_analysis_and_never_touches_pool(monkeypatch, tmp
         "_run_cn_gemini_final_v1",
         lambda **kwargs: {
             "analyzed": True,
-            "model": "gemini-2.5-flash",
+            "model": "gemini-3.6-flash",
             "video_analysis_final_v1": {
                 "layer1_visual_content": {"content_summary": "样例摘要", "content_genre": "搞笑"},
                 "layer6_flags_and_scores": {"scores": {"content_quality_score": 92, "viewer_heart_score": 88}},
@@ -377,7 +377,7 @@ def test_cn_flow_replays_cached_analysis_without_provider_or_llm(monkeypatch):
         "_load_ready_cn_analysis",
         lambda platform, video_id: {
             "cache_id": 15187,
-            "model": "gemini-2.5-flash",
+            "model": "gemini-3.6-flash",
             "result": {
                 "video_metadata": {"platform": "bilibili", "title": "缓存标题"},
                 "creator_identity": {"platform": "bilibili", "display_name": "缓存UP主"},

@@ -16,6 +16,7 @@ from typing import Any
 
 import psycopg
 
+from app.core.gemini_models import VISUAL_PASS_MODEL
 from app.core.logging import get_logger
 from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.workers.apify_jobs_worker_helpers import _platform_from_content_url
@@ -212,7 +213,7 @@ def _process_gemini_video_flash_pro_judge(
         raise RuntimeError("gemini_video_v2_flash_pro_judge currently supports YouTube only")
     started = time.monotonic()
     performance = _video_performance_context(evidence)
-    visual_payload = {**payload, "gemini_model": "gemini-3-flash-preview"}
+    visual_payload = {**payload, "gemini_model": VISUAL_PASS_MODEL}
     with _gemini_worker_overrides(visual_payload):
         visual_raw = asyncio.run(
             gemini_video_analyzer.analyze_youtube_with_gemini(
@@ -224,8 +225,8 @@ def _process_gemini_video_flash_pro_judge(
             )
         )
     if visual_raw.get("analyzed"):
-        visual_raw["model"] = "gemini-3-flash-preview"
-        visual_raw["method"] = "gemini_direct_gemini-3-flash-preview"
+        visual_raw["model"] = VISUAL_PASS_MODEL
+        visual_raw["method"] = f"gemini_direct_{VISUAL_PASS_MODEL}"
     visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
     _record_gemini_cost(
         job=job,
@@ -253,7 +254,7 @@ def _process_gemini_video_flash_pro_judge(
                 keyframes=qa_frames["frames"],
                 title=str(evidence.get("title") or ""),
                 performance_context=performance,
-                model_name="gemini-3.1-pro-preview",
+                model_name=FINAL_V1_KEYFRAME_QA_MODEL,
             )
         )
     judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _gemini_cost(judgment_raw, preflight_cost)
@@ -276,13 +277,13 @@ def _process_gemini_video_flash_pro_judge(
     raw = {
         **judgment_raw,
         "method": "gemini_flash_pro_judge",
-        "model": "gemini-3-flash-preview+gemini-3.1-pro-preview",
+        "model": f"{VISUAL_PASS_MODEL}+{FINAL_V1_KEYFRAME_QA_MODEL}",
         "visual_pass": visual_raw,
         "cost_segments": [
             {
                 "stage": "visual_video_pass",
                 "provider": "gemini",
-                "model": "gemini-3-flash-preview",
+                "model": VISUAL_PASS_MODEL,
                 "cost_usd": visual_cost,
                 "cost_basis": visual_basis,
                 "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},
@@ -290,7 +291,7 @@ def _process_gemini_video_flash_pro_judge(
             {
                 "stage": "judgment_pass",
                 "provider": "gemini",
-                "model": "gemini-3.1-pro-preview",
+                "model": FINAL_V1_KEYFRAME_QA_MODEL,
                 "cost_usd": judgment_cost,
                 "cost_basis": judgment_basis,
                 "usage_metadata": judgment_raw.get("usage_metadata") if isinstance(judgment_raw.get("usage_metadata"), dict) else {},
@@ -353,7 +354,7 @@ def _process_gemini_video_flash_gpt55_judge(
 
     started = time.monotonic()
     performance = _video_performance_context(evidence)
-    visual_payload = {**payload, "gemini_model": "gemini-3-flash-preview"}
+    visual_payload = {**payload, "gemini_model": VISUAL_PASS_MODEL}
     with _gemini_worker_overrides(visual_payload):
         visual_raw = asyncio.run(
             gemini_video_analyzer.analyze_youtube_with_gemini(
@@ -365,8 +366,8 @@ def _process_gemini_video_flash_gpt55_judge(
             )
         )
     if visual_raw.get("analyzed"):
-        visual_raw["model"] = "gemini-3-flash-preview"
-        visual_raw["method"] = "gemini_direct_gemini-3-flash-preview"
+        visual_raw["model"] = VISUAL_PASS_MODEL
+        visual_raw["method"] = f"gemini_direct_{VISUAL_PASS_MODEL}"
     visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
     _record_gemini_cost(
         job=job,
@@ -417,13 +418,13 @@ def _process_gemini_video_flash_gpt55_judge(
     raw = {
         **judgment_raw,
         "method": "gemini_flash_gpt55_judge",
-        "model": "gemini-3-flash-preview+gpt-5.5",
+        "model": f"{VISUAL_PASS_MODEL}+gpt-5.5",
         "visual_pass": visual_raw,
         "cost_segments": [
             {
                 "stage": "visual_video_pass",
                 "provider": "gemini",
-                "model": "gemini-3-flash-preview",
+                "model": VISUAL_PASS_MODEL,
                 "cost_usd": visual_cost,
                 "cost_basis": visual_basis,
                 "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},
@@ -494,7 +495,7 @@ def _process_gemini_video_flash_claude_judge(
 
     started = time.monotonic()
     performance = _video_performance_context(evidence)
-    visual_payload = {**payload, "gemini_model": "gemini-3-flash-preview"}
+    visual_payload = {**payload, "gemini_model": VISUAL_PASS_MODEL}
     with _gemini_worker_overrides(visual_payload):
         visual_raw = asyncio.run(
             gemini_video_analyzer.analyze_youtube_with_gemini(
@@ -506,8 +507,8 @@ def _process_gemini_video_flash_claude_judge(
             )
         )
     if visual_raw.get("analyzed"):
-        visual_raw["model"] = "gemini-3-flash-preview"
-        visual_raw["method"] = "gemini_direct_gemini-3-flash-preview"
+        visual_raw["model"] = VISUAL_PASS_MODEL
+        visual_raw["method"] = f"gemini_direct_{VISUAL_PASS_MODEL}"
     visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
     _record_gemini_cost(
         job=job,
@@ -558,13 +559,13 @@ def _process_gemini_video_flash_claude_judge(
     raw = {
         **judgment_raw,
         "method": "gemini_flash_claude_judge",
-        "model": f"gemini-3-flash-preview+{CLAUDE_OPUS_EXACT_MODEL}",
+        "model": f"{VISUAL_PASS_MODEL}+{CLAUDE_OPUS_EXACT_MODEL}",
         "visual_pass": visual_raw,
         "cost_segments": [
             {
                 "stage": "visual_video_pass",
                 "provider": "gemini",
-                "model": "gemini-3-flash-preview",
+                "model": VISUAL_PASS_MODEL,
                 "cost_usd": visual_cost,
                 "cost_basis": visual_basis,
                 "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},

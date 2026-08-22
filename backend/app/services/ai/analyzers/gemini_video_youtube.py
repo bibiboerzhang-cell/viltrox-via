@@ -16,6 +16,7 @@ import time
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
+from app.core.gemini_models import DEFAULT_VIDEO_GEMINI_MODEL
 from app.core.logging import get_logger
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
 try:
@@ -128,7 +129,7 @@ async def analyze_youtube_with_gemini(
     Gemini YouTube analysis via File API:
     1. Download first 2min with yt-dlp
     2. Upload to Gemini File API
-    3. Analyze with gemini-2.5-flash / gemini-2.5-pro (frame by frame)
+    3. Analyze with DEFAULT_VIDEO_GEMINI_MODEL (core/gemini_models; frame by frame)
     4. Delete file from Gemini
 
     ``authorization_checkpoint(stage)`` runs before subtitles, before every
@@ -231,16 +232,13 @@ async def analyze_youtube_with_gemini(
     gemini_file = None
     tmp_path = None
 
-    # ── Model priority list (June 2026) ─────────────────────────────────────
-    # Reality check 2026-06: 3-flash-preview LIVE (primary, cache 271/273 evidence),
-    # 3.1-pro-preview LIVE (accuracy backup), 2.5-flash = stable GA fallback.
-    # Keep comments synchronized with the table; stale model docs caused
-    # provider-pressure recovery confusion during recycle wave N2.
-    GEMINI_MODELS = [
-        "gemini-3-flash-preview",    # PRIMARY — best price/perf, multimodal
-        "gemini-3.1-pro-preview",    # BACKUP — highest accuracy, long videos
-        "gemini-2.5-flash",          # FALLBACK — stable GA tier
-    ]
+    # ── Model list (2026-08 模型升级刀) ─────────────────────────────────────
+    # 默认只有一个精确模型 DEFAULT_VIDEO_GEMINI_MODEL(core/gemini_models,
+    # 随 APIFY_WORKER_GEMINI_MODEL):预检与执行必须是同一 binding,多模型
+    # 兜底链会让一次预检放行另一个提供方请求。需要链时由 models /
+    # final_v1_models 参数或 GEMINI_FINAL_V1_MODELS env 显式给出。
+    # 注释必须与代码同步:过期模型注释曾在 recycle wave N2 误导过压力恢复排查。
+    GEMINI_MODELS = [DEFAULT_VIDEO_GEMINI_MODEL]
     if models is not None:
         GEMINI_MODELS = final_v1_gemini_models(models)
     elif is_final_v1:

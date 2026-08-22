@@ -8,10 +8,12 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 from pathlib import Path
 from typing import Any
 
+from app.core.gemini_models import DEFAULT_GEMINI_JUDGE_MODEL, is_gemini_3_family
 from app.core.logging import get_logger
 from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL, is_selectable_model
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
@@ -37,6 +39,25 @@ from app.services.ai.analyzers.gemini_video_results import (
 )
 
 logger = get_logger(__name__)
+# 关键帧裁判直连 SDK(不走 llm_production 边界):输出上限与思考口径必须自己带上。
+# 4096 与 worker 的 APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS 默认一致;QA/判定 JSON 远小于此。
+KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS = max(
+    256, int(os.environ.get("GEMINI_KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS", "4096"))
+)
+
+
+def _keyframe_judge_generate_config(model_name: str) -> Any:
+    """按模型家族给思考口径:3.x 只认 thinking_level='minimal'(thinking_budget=0 会 400);
+    2.5 系反之只认 thinking_budget(0 关死,思考 token 不再吃 max_output_tokens)。
+    绝不带 temperature/top_p/top_k(3.6-flash 已弃用)。"""
+    if is_gemini_3_family(model_name):
+        thinking = genai_types.ThinkingConfig(thinking_level="minimal")
+    else:
+        thinking = genai_types.ThinkingConfig(thinking_budget=0)
+    return genai_types.GenerateContentConfig(
+        max_output_tokens=KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS,
+        thinking_config=thinking,
+    )
 
 
 async def analyze_v2_judgment_with_keyframes(
@@ -45,7 +66,7 @@ async def analyze_v2_judgment_with_keyframes(
     keyframes: list[dict[str, Any]],
     title: str,
     performance_context: dict[str, Any] | None = None,
-    model_name: str = "gemini-3.1-pro-preview",
+    model_name: str = DEFAULT_GEMINI_JUDGE_MODEL,
 ) -> dict[str, Any]:
     """Judge Layer2+3 from Layer1 text plus keyframe JPGs."""
     result = {
@@ -72,7 +93,11 @@ async def analyze_v2_judgment_with_keyframes(
         contents.append(genai_types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/jpeg"))
     try:
         def _analyze():
-            return gemini_client.models.generate_content(model=model_name, contents=contents)
+            return gemini_client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=_keyframe_judge_generate_config(model_name),
+            )
 
         resp = await asyncio.to_thread(_analyze)
         usage_metadata = _response_usage_metadata(resp)
@@ -102,7 +127,7 @@ async def analyze_final_v1_keyframe_qa(
     keyframes: list[dict[str, Any]],
     title: str,
     performance_context: dict[str, Any] | None = None,
-    model_name: str = "gemini-3.1-pro-preview",
+    model_name: str = DEFAULT_GEMINI_JUDGE_MODEL,
 ) -> dict[str, Any]:
     """QA final_v1 facts from keyframe JPGs without regenerating the six-layer result."""
     result = {
@@ -133,7 +158,11 @@ async def analyze_final_v1_keyframe_qa(
 
     try:
         def _analyze():
-            return gemini_client.models.generate_content(model=model_name, contents=contents)
+            return gemini_client.models.generate_content(
+                model=model_name,
+                contents=contents,
+                config=_keyframe_judge_generate_config(model_name),
+            )
 
         resp = await asyncio.to_thread(_analyze)
         usage_metadata = _response_usage_metadata(resp)
@@ -272,9 +301,11 @@ async def analyze_v2_judgment_with_anthropic_keyframes(
     client = anthropic.Anthropic(api_key=api_key)
     try:
         def _analyze():
+            # 思考默认关死(成本中性,判定 JSON 不需要);max_tokens 4000 全给正文。无 temperature。
             return client.messages.create(
                 model=model_name,
                 max_tokens=4000,
+                thinking={"type": "disabled"},
                 messages=[{"role": "user", "content": content}],
             )
 

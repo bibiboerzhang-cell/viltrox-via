@@ -64,7 +64,7 @@ def _blocked_preflight(*_args, **_kwargs) -> dict[str, Any]:
         "providers": [
             {
                 "provider": "google",
-                "model": "gemini-2.5-flash",
+                "model": "gemini-3.6-flash",
                 "provider_calls_allowed": False,
                 "model_readiness_status": "not_ready",
                 "estimated_cost_usd": 0.01,
@@ -82,7 +82,7 @@ def _allowed_preflight(*_args, **_kwargs) -> dict[str, Any]:
         "providers": [
             {
                 "provider": "google",
-                "model": "gemini-2.5-flash",
+                "model": "gemini-3.6-flash",
                 "provider_calls_allowed": True,
                 "model_readiness_status": "production_ready",
                 "estimated_cost_usd": 0.01,

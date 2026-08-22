@@ -51,7 +51,7 @@ def _youtube_env(monkeypatch: pytest.MonkeyPatch, calls: list[str]) -> None:
     )
     monkeypatch.setattr(gemini_video, "_final_v1_cache_config", lambda _model: (None, {}))
     monkeypatch.setattr(gemini_video, "_video_generate_config", lambda *_args: None)
-    monkeypatch.setattr(gemini_video, "final_v1_gemini_models", lambda *_args: ["gemini-3-flash-preview"])
+    monkeypatch.setattr(gemini_video, "final_v1_gemini_models", lambda *_args: ["gemini-3.6-flash"])
     monkeypatch.setattr(
         gemini_video_youtube.subprocess,
         "run",

@@ -21,6 +21,7 @@ except ImportError:
     genai_types = None
 
 from app.core.constants import VILTROX_CATALOG_PROMPT
+from app.core.gemini_models import DEFAULT_FINAL_V1_CHAIN
 from app.services.scoring.core import compute_weighted_scores, get_vertical
 from app.services.scraping.ytdlp import YTDLP_AVAILABLE, YTDLP_BIN, YTDLP_PROXY, fetch_youtube_subtitles
 from app.services.scoring.creator import get_creator_profile
@@ -33,7 +34,9 @@ logger = get_logger(__name__)
 # 值=(cache_name, created_monotonic);TTL 3600s,55 分钟后主动弃用重建——过期的 cache_name 会让主模型整链报错降级。
 _FINAL_V1_CONTEXT_CACHES: dict[str, tuple[str, float]] = {}
 _FINAL_V1_CACHE_REUSE_SECONDS = 3300.0
-DEFAULT_GEMINI_FINAL_V1_MODELS = ["gemini-3-flash-preview", "gemini-2.5-flash"]
+# 单精确模型默认链(core/gemini_models 唯一默认,随 APIFY_WORKER_GEMINI_MODEL);
+# GEMINI_FINAL_V1_MODELS env 仍解析成逗号链,prod 可钉多模型链。
+DEFAULT_GEMINI_FINAL_V1_MODELS = list(DEFAULT_FINAL_V1_CHAIN)
 GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS = max(
     60,
     int(os.environ.get("GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SEC", "900")),
@@ -626,7 +629,7 @@ async def analyze_local_video_with_gemini(
             if models is not None
             else final_v1_gemini_models(final_v1_models)
             if is_final_v1
-            else ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-flash"]
+            else final_v1_gemini_models()
         )
         attempt_total = len(model_names)
         attempt_plan = list(enumerate(model_names, start=1))

@@ -49,7 +49,7 @@ def _youtube_env(monkeypatch: pytest.MonkeyPatch, generate: Any) -> None:
     monkeypatch.setattr(gemini_video, "_strict_generate_content", generate)
     monkeypatch.setattr(gemini_video, "_final_v1_cache_config", lambda _model: (None, {"enabled": False}))
     monkeypatch.setattr(gemini_video, "_video_generate_config", lambda *_args: None)
-    monkeypatch.setattr(gemini_video, "final_v1_gemini_models", lambda *_args: ["gemini-2.5-flash"])
+    monkeypatch.setattr(gemini_video, "final_v1_gemini_models", lambda *_args: ["gemini-3.6-flash"])
     monkeypatch.setattr(
         gemini_video_youtube.subprocess,
         "run",
@@ -63,7 +63,7 @@ def _run_youtube() -> dict[str, Any]:
             YOUTUBE_URL,
             "demo",
             schema_version="final_v1",
-            models=["gemini-2.5-flash"],
+            models=["gemini-3.6-flash"],
         )
     )
 
@@ -78,7 +78,7 @@ def test_youtube_direct_success_records_stage_timings_and_direct_diag(monkeypatc
     assert result["subtitle_chars"] == len("[00:01] hi")
     direct = result["youtube_direct"]
     assert direct["attempted"] is True and direct["success"] is True
-    assert direct["attempts"][0]["model"] == "gemini-2.5-flash" and direct["attempts"][0]["ok"] is True
+    assert direct["attempts"][0]["model"] == "gemini-3.6-flash" and direct["attempts"][0]["ok"] is True
     assert direct["fallback_reason"] == ""
 
 
@@ -134,7 +134,7 @@ def test_local_analyzer_records_upload_wait_generation_cleanup(monkeypatch: pyte
     monkeypatch.setattr(gemini_video, "_video_generate_config", lambda *_args: None)
     result = asyncio.run(
         gemini_video.analyze_local_video_with_gemini(
-            str(video), "demo", schema_version="final_v1", models=["gemini-2.5-flash"]
+            str(video), "demo", schema_version="final_v1", models=["gemini-3.6-flash"]
         )
     )
     assert result["analyzed"] is True
@@ -317,7 +317,7 @@ def test_profile_build_report_buckets_stages_and_platforms() -> None:
     rows = [
         {
             "platform": "youtube",
-            "method": "gemini_direct_gemini-2.5-flash",
+            "method": "gemini_direct_gemini-3.6-flash",
             "latency_ms": 40000.0,
             "stage_timings": {"subtitles": 1000, "youtube_direct": 30000, "cost_record": 200},
             "youtube_direct": {"attempted": True, "success": True, "attempts": []},
@@ -326,7 +326,7 @@ def test_profile_build_report_buckets_stages_and_platforms() -> None:
         },
         {
             "platform": "youtube",
-            "method": "gemini_fileapi_gemini-2.5-flash",
+            "method": "gemini_fileapi_gemini-3.6-flash",
             "latency_ms": 200000.0,
             "stage_timings": {"youtube_direct": 2000, "download": 120000, "upload": 30000, "generation": 40000},
             "youtube_direct": {"attempted": True, "success": False, "fallback_reason": "400 bad url", "attempts": [{"ok": False, "error": "400 bad url"}]},
@@ -336,7 +336,7 @@ def test_profile_build_report_buckets_stages_and_platforms() -> None:
         {
             # 旧行:无埋点,gemini_call 靠 llm_calls 回填
             "platform": "instagram",
-            "method": "gemini_local_fileapi_gemini-2.5-flash",
+            "method": "gemini_local_fileapi_gemini-3.6-flash",
             "latency_ms": 60000.0,
             "stage_timings": None,
             "youtube_direct": None,
