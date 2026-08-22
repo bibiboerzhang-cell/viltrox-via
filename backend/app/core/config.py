@@ -176,13 +176,18 @@ SITE_URL   = os.environ.get("SITE_URL",   "https://www.viltroxvia.com")
 
 # ── Paths ──
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-UPLOAD_DIR = Path("uploads")
-FRAMES_DIR = Path("frames")
-CREATOR_DIR = Path("creator_profiles")
+# 运行时数据目录(2026-08-22):设 VKPI_RUNTIME_DATA_DIR 时用绝对路径,跨发布持久且不污染
+# 不可变发布树(prod 服务 cwd=release/backend,相对路径会让下一班车的不可变校验失败);
+# 未设则保持旧的 cwd 相对行为(本地开发)。
+_RUNTIME_DATA_DIR = os.environ.get("VKPI_RUNTIME_DATA_DIR", "").strip()
+_DATA_ROOT = Path(_RUNTIME_DATA_DIR).expanduser() if _RUNTIME_DATA_DIR else None
+UPLOAD_DIR = (_DATA_ROOT / "uploads") if _DATA_ROOT else Path("uploads")
+FRAMES_DIR = (_DATA_ROOT / "frames") if _DATA_ROOT else Path("frames")
+CREATOR_DIR = (_DATA_ROOT / "creator_profiles") if _DATA_ROOT else Path("creator_profiles")
 if not (IS_MIGRATION_RUNNER or IS_MIGRATIONS_ONLY_INTENT):
-    UPLOAD_DIR.mkdir(exist_ok=True)
-    FRAMES_DIR.mkdir(exist_ok=True)
-    CREATOR_DIR.mkdir(exist_ok=True)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    FRAMES_DIR.mkdir(parents=True, exist_ok=True)
+    CREATOR_DIR.mkdir(parents=True, exist_ok=True)
 _DB_PATH_VALUE = os.environ.get("DB_PATH", "").strip()
 _DB_PATH_CANDIDATE = Path(_DB_PATH_VALUE).expanduser() if _DB_PATH_VALUE else PROJECT_ROOT / "submissions.db"
 if not _DB_PATH_CANDIDATE.is_absolute():
