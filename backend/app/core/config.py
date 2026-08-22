@@ -4,6 +4,7 @@ core/config.py — 环境变量 & 路径配置
 """
 from __future__ import annotations
 
+import logging
 import os
 import secrets as _secrets_mod
 from datetime import datetime
@@ -185,9 +186,13 @@ UPLOAD_DIR = (_DATA_ROOT / "uploads") if _DATA_ROOT else Path("uploads")
 FRAMES_DIR = (_DATA_ROOT / "frames") if _DATA_ROOT else Path("frames")
 CREATOR_DIR = (_DATA_ROOT / "creator_profiles") if _DATA_ROOT else Path("creator_profiles")
 if not (IS_MIGRATION_RUNNER or IS_MIGRATIONS_ONLY_INTENT):
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    FRAMES_DIR.mkdir(parents=True, exist_ok=True)
-    CREATOR_DIR.mkdir(parents=True, exist_ok=True)
+    for _runtime_dir in (UPLOAD_DIR, FRAMES_DIR, CREATOR_DIR):
+        try:
+            _runtime_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as _mkdir_exc:  # systemd ProtectSystem=strict 等沙箱:目录由运维预建,建不了不炸启动
+            logging.getLogger("viltrox.core.config").warning(
+                "runtime dir not creatable (sandbox?), continuing: %s (%s)", _runtime_dir, _mkdir_exc
+            )
 _DB_PATH_VALUE = os.environ.get("DB_PATH", "").strip()
 _DB_PATH_CANDIDATE = Path(_DB_PATH_VALUE).expanduser() if _DB_PATH_VALUE else PROJECT_ROOT / "submissions.db"
 if not _DB_PATH_CANDIDATE.is_absolute():
