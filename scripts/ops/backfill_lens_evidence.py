@@ -26,7 +26,13 @@ import logging
 import sys
 from pathlib import Path
 
-logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s", stream=sys.stderr)
+# 统计 JSON 走专属 logger 直出 stdout(不碰 root,应用自身日志仍走 stderr 不混进 JSON)。
+LOG = logging.getLogger("viltrox.ops.backfill_lens_evidence")
+LOG.setLevel(logging.INFO)
+LOG.propagate = False
+_STDOUT = logging.StreamHandler(stream=sys.stdout)
+_STDOUT.setFormatter(logging.Formatter("%(message)s"))
+LOG.addHandler(_STDOUT)
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
@@ -45,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     from app.domains.kol import lens_evidence_store
 
     if not table_exists("vkpi_kol_lens_evidence"):
-        print(json.dumps({"status": "blocked", "reason": "migration_287_not_applied"}, ensure_ascii=False))
+        LOG.info(json.dumps({"status": "blocked", "reason": "migration_287_not_applied"}, ensure_ascii=False))
         return 2
     conn = get_conn()
     stats = lens_evidence_store.backfill_lens_evidence(
@@ -55,7 +61,7 @@ def main(argv: list[str] | None = None) -> int:
         force=bool(args.force),
     )
     stats["status"] = "applied" if args.apply else "dry_run"
-    print(json.dumps(stats, ensure_ascii=False, indent=2))
+    LOG.info(json.dumps(stats, ensure_ascii=False, indent=2))
     return 0
 
 
