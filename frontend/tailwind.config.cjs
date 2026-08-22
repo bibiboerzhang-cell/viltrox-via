@@ -48,6 +48,15 @@ module.exports = {
         sans: ['var(--ds-font-sans)'],
         mono: ['var(--ds-font-mono)'],
       },
+      fontSize: {
+        // 字号 token(src/styles/type-scale.css):新代码用 text-ds-* 而非 text-[Npx];
+        // 只定字号,行高沿用 leading-* 由组件自管。
+        'ds-micro': ['var(--ds-fs-micro)', { lineHeight: '1.3' }],
+        'ds-label': ['var(--ds-fs-label)', { lineHeight: '1.35' }],
+        'ds-caption': ['var(--ds-fs-caption)', { lineHeight: '1.45' }],
+        'ds-body': ['var(--ds-fs-body)', { lineHeight: '1.55' }],
+        'ds-body-lg': ['var(--ds-fs-body-lg)', { lineHeight: '1.55' }],
+      },
     },
   },
   plugins: [],

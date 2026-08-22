@@ -5,6 +5,7 @@ import { App } from "./App";
 import { AppProviders } from "./app/providers/AppProviders";
 import "./styles/global.css";
 import "./styles/tokens.css";
+import "./styles/type-scale.css";
 import "./styles/theme-alias.css";
 import "./styles/ds-viz.css";
 

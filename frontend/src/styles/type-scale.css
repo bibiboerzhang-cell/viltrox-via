@@ -1,0 +1,58 @@
+/* =========================================================================
+   V-KPI 字号 token 层(员工反馈 #1:功能模块字体太小 · 2026-08-21)
+   ---------------------------------------------------------------------
+   仓库里正文/次级/标签字号长期以 Tailwind 任意值(text-[10px] / text-[11px] …)
+   散落在上千处;零散改组件不可维护,也守不住 demo 的层级关系。本文件把
+   「设计 px」与「渲染 px」分离:组件继续写 text-[11px](设计稿标称值),
+   渲染尺寸由这里的 token 决定 —— 全站只有这一个旋钮。
+
+   当前档位 = 「舒适」:≤13px 的正文/次级/标签统一上调一档(11→12、12→13、
+   13→14,半档同步),≥14px 的标题/大数字保持原值,层级关系(标题 > 正文 >
+   次级 > 标签)不变。想回到 demo 原始密度,把下面每个 token 改回同名数值即可。
+
+   注意:本文件必须在 global.css(@tailwind utilities)之后引入,同特异性靠
+   出现顺序覆盖;只改 font-size,不碰 line-height(leading-* 由组件自管)。
+   ========================================================================= */
+
+:root {
+  /* 按设计稿标称值索引的渲染尺寸(名字 = 组件里写的 px,值 = 实际渲染 px) */
+  --ds-fs-7: 8px;
+  --ds-fs-7-5: 8.5px;
+  --ds-fs-8: 9px;
+  --ds-fs-8-5: 9.5px;
+  --ds-fs-9: 10px;
+  --ds-fs-9-5: 10.5px;
+  --ds-fs-10: 11px;
+  --ds-fs-10-5: 11.5px;
+  --ds-fs-11: 12px;
+  --ds-fs-11-5: 12.5px;
+  --ds-fs-12: 13px;
+  --ds-fs-12-5: 13.5px;
+  --ds-fs-13: 14px;
+  --ds-fs-13-5: 14px; /* 封顶:不越过 14px 标题层 */
+
+  /* 语义别名(新代码优先用 Tailwind 的 text-ds-* 类,见 tailwind.config.cjs) */
+  --ds-fs-micro: var(--ds-fs-8-5);   /* 角标 / 徽章内最小字 */
+  --ds-fs-label: var(--ds-fs-10);    /* 标签 chip / eyebrow */
+  --ds-fs-caption: var(--ds-fs-11);  /* 次级说明 / 表格辅助列 */
+  --ds-fs-body: var(--ds-fs-12);     /* 卡片正文 */
+  --ds-fs-body-lg: var(--ds-fs-13);  /* 强调正文 / 表单输入 */
+}
+
+/* ---------- 遗留 Tailwind 任意值 → token(只列 ≤13.5px,标题层不动) ---------- */
+.text-\[7px\] { font-size: var(--ds-fs-7); }
+.text-\[7\.5px\] { font-size: var(--ds-fs-7-5); }
+.text-\[8px\] { font-size: var(--ds-fs-8); }
+.text-\[8\.5px\] { font-size: var(--ds-fs-8-5); }
+.text-\[9px\] { font-size: var(--ds-fs-9); }
+.text-\[9\.5px\] { font-size: var(--ds-fs-9-5); }
+.text-\[10px\] { font-size: var(--ds-fs-10); }
+.text-\[10\.5px\] { font-size: var(--ds-fs-10-5); }
+.text-\[11px\] { font-size: var(--ds-fs-11); }
+.text-\[11\.5px\] { font-size: var(--ds-fs-11-5); }
+.text-\[12px\] { font-size: var(--ds-fs-12); }
+.text-\[12\.5px\] { font-size: var(--ds-fs-12-5); }
+.text-\[13px\] { font-size: var(--ds-fs-13); }
+.text-\[13\.5px\] { font-size: var(--ds-fs-13-5); }
+/* Tailwind 预设 text-xs(12px)同属正文档,跟 12→13 一起走;text-sm(14px)及以上不动 */
+.text-xs { font-size: var(--ds-fs-12); }
