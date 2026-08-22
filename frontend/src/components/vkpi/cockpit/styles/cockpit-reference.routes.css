@@ -141,6 +141,13 @@
   -webkit-backdrop-filter: var(--ds-backdrop, blur(18px));
 }
 
+/* Sticky bars inside the drawer (tab strip / footer action bar) sit above the scrolling
+   body, not above the page: the 88% glass surface let scrolled text bleed through them
+   (U6). They take the opaque sibling token; the frosted backdrop stays on the drawer shell. */
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) .vkpi-kol-detail-drawer .sticky[class*="bg-\[#0a1020"] {
+  background-color: var(--ds-drawer-surface-solid, var(--ds-drawer-surface)) !important;
+}
+
 .vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-\[linear-gradient"] {
   background-color: var(--ds-card) !important;
   background-image: none !important;
