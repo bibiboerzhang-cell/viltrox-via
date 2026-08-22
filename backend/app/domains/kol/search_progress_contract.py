@@ -28,6 +28,12 @@ _FAILED_STATES = frozenset({"failed", "error", "blocked", "triage", "crawl_faile
 _PARTIAL_STATES = frozenset({"partial", "empty", "no_data", "no_posts", "no_comments", "not_found"})
 _SKIPPED_STATES = frozenset({"skipped", "cancelled", "canceled"})
 _TERMINAL_BUCKETS = ("ready", "partial", "failed", "skipped")
+# 编排挂起(2026-08-22 会话 1106 案):召回项先到、全网发现/档案批次尚未登记的窗口里,按会话项
+# 证据投影会得到 30/30 ready → 前端判终态停轮询,一分多钟后才落库的发现项再也没被取走
+# (「搜索完成后新发现区不显示」真因)。编排器在 result_summary.progress 里显式写了
+# requested_tasks_terminal=False(「后面还会登记任务」),且会话仍 queued/running —— 这是
+# 管线自己落的持久证据,不是杜撰:契约在此期间必须报 running,而非 ready。
+_ORCHESTRATION_PENDING_SESSION_STATES = frozenset({"queued", "running"})
 _HEARTBEAT_WINDOW_SECONDS = 120
 _EXACT_RELEASE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -465,6 +471,20 @@ def _audience_data_ready(item: Mapping[str, Any], bucket: str) -> bool:
     return _text(_mapping(payload.get("audience_preview")).get("status")) == "ready"
 
 
+def _orchestration_pending(session: Mapping[str, Any], stored_progress: Mapping[str, Any]) -> bool:
+    """编排器是否仍会登记更多任务(会话项证据之外的持久声明)。
+
+    仅当两者同时成立才为 True:① 会话行状态仍是 queued/running(管线在跑);② 编排器在
+    progress 里显式写了 requested_tasks_terminal=False(布尔 False,缺省/None 不算)。
+    终态会话(ready/partial/failed)即便仍带 False 也不挂起——那是「下游任务另行登记」的
+    旧语义,由会话项自身的 queued/running 证据接管。
+    """
+    session_status = _text(session.get("status"))
+    if session_status not in _ORCHESTRATION_PENDING_SESSION_STATES:
+        return False
+    return stored_progress.get("requested_tasks_terminal") is False
+
+
 def project_search_progress(
     session: Mapping[str, Any],
     items: Sequence[Mapping[str, Any]],
@@ -545,15 +565,19 @@ def project_search_progress(
         if isinstance(worker_health, Mapping)
         else unobserved_worker_health(observed_at=observed_at)
     )
+    orchestration_pending = _orchestration_pending(session, stored_progress)
     blocked_by_worker = bool(
         worker.get("observed") is True
         and worker.get("online") is False
-        and (queued_units > 0 or running_units > 0 or active_units > 0)
+        and (queued_units > 0 or running_units > 0 or active_units > 0 or orchestration_pending)
     )
     if blocked_by_worker:
         state = "blocked_by_worker"
     elif running_units:
         state = "running"
+    elif orchestration_pending:
+        # 管线在跑(running)= 编排器本身就是活跃执行体;仍在队列(queued)= 尚未开跑。
+        state = "running" if _text(session.get("status")) == "running" else "queued"
     elif active_units:
         state = "active"
     elif queued_units:
@@ -604,6 +628,10 @@ def project_search_progress(
         "running_units": running_units,
         "active_units": active_units,
         "failed_units": failed_units,
+        "orchestration_pending": orchestration_pending,
+        "orchestration_pending_basis": (
+            "session_running_and_orchestrator_declares_more_tasks" if orchestration_pending else None
+        ),
         "progress_pct": round(successful_units * 100 / requested_units, 1) if requested_units else 0.0,
         "terminal_pct": round(terminal_units * 100 / requested_units, 1) if requested_units else 0.0,
         "progress_pct_basis": "durable_success_only; queued_running_active_failed_not_counted_as_success",

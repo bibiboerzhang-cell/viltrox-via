@@ -284,3 +284,61 @@ def test_worker_sha_alignment_is_unknown_without_safe_release_identity(
     assert result["worker_sha"] == worker_sha
     assert result["sha_aligned"] is None
     assert result["capacity_ready"] is True
+
+
+def test_orchestrator_pending_window_is_not_terminal() -> None:
+    """会话 1106 案(2026-08-22):召回 30 项先到、全网发现/档案批次尚未登记——仅按会话项证据
+    投影得 30/30 ready,前端据此判终态停轮询,一分多钟后落库的发现项再也没被取走。
+    编排器已在 progress 里显式写 requested_tasks_terminal=False 且会话仍 running → 契约必须报
+    running(orchestration_pending),不得报 ready。"""
+    session = {
+        "status": "running",
+        "result_summary": {
+            "phase": "base",
+            "progress": {"base": 30, "total": 30, "requested_tasks_terminal": False, "base_complete": True},
+        },
+    }
+    items = [
+        {"id": i, "item_type": "recall_candidate", "status": "ready", "stage": "identified", "payload": {}}
+        for i in range(1, 31)
+    ]
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["stages"]["search"]["successful"] == 30
+    assert result["orchestration_pending"] is True
+    assert result["state"] == "running"
+    assert result["orchestration_pending_basis"] == "session_running_and_orchestrator_declares_more_tasks"
+
+    # 尚在队列(worker 未接单)→ queued,而非 running
+    queued = project_search_progress({**session, "status": "queued"}, items, worker_health=_worker(online=True))
+    assert queued["state"] == "queued" and queued["orchestration_pending"] is True
+
+    # worker 离线且编排挂起 → 阻塞(诚实暴露,不是 ready)
+    blocked = project_search_progress(session, items, worker_health=_worker(online=False))
+    assert blocked["state"] == "blocked_by_worker" and blocked["blocked_by_worker"] is True
+
+
+def test_orchestrator_pending_flag_ignored_once_session_is_terminal() -> None:
+    """管线收尾也写 requested_tasks_terminal=False(下游任务另行登记的旧语义),但会话已
+    ready/partial → 不挂起,由会话项自身 queued/running 证据接管;无活跃项即 ready。"""
+    session = {
+        "status": "ready",
+        "result_summary": {"phase": "complete", "progress": {"total": 2, "requested_tasks_terminal": False}},
+    }
+    items = [
+        {"id": 1, "status": "ready", "stage": "summary", "kol_pool_id": 101,
+         "payload": {"profile_execute": {"status": "ready", "kol_pool_id": 101}}},
+        {"id": 2, "status": "ready", "stage": "summary", "kol_pool_id": 102,
+         "payload": {"profile_execute": {"status": "ready", "kol_pool_id": 102}}},
+    ]
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["orchestration_pending"] is False
+    assert result["orchestration_pending_basis"] is None
+    assert result["state"] == "ready"
+
+    # 缺省/None(旧会话无该键)也不挂起
+    legacy = {"status": "running", "result_summary": {"progress": {"total": 2}}}
+    assert project_search_progress(legacy, items, worker_health=_worker(online=True))["orchestration_pending"] is False

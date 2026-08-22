@@ -631,3 +631,63 @@ def test_attach_new_discovery_dedupes_same_handle_variants(monkeypatch: pytest.M
 
     new_items = [item for item in captured["items"] if item["item_type"] == "new_creator"]
     assert [item["payload"]["handle"] for item in new_items] == ["sky_vanya", "other_creator"]
+
+
+def test_attach_new_discovery_carries_enrichment_into_session_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """会话 1106 案(2026-08-22):发现侧富化出的 followers/bio/channel_id/fast_path 必须进会话项
+    payload(与 pool 行同口径),否则读端回落快照判「粉丝未知」、YT 项更被填充 0 误判低触达。
+    followers 未知(隐藏订阅数)→ 不带键、不编 0。"""
+    from app.domains.kol import search_sessions_attach
+
+    captured: dict[str, Any] = {}
+
+    def fake_record_items(session_id: int, items: list[dict[str, Any]], *, status: str, summary: dict[str, Any]) -> dict[str, Any]:
+        captured["items"] = items
+        return {"id": session_id, "items": items, "status": status}
+
+    monkeypatch.setattr(search_sessions, "record_items", fake_record_items)
+    monkeypatch.setattr(search_sessions, "get_session", lambda _sid: {"result_summary": {}})
+
+    search_sessions_attach.attach_new_discovery_result(
+        1106,
+        {
+            "status": "ready",
+            "platforms": ["youtube", "tiktok"],
+            "existing_matches": [],
+            "new_creators": [
+                {
+                    "handle": "gcrustypork", "platform": "youtube", "channel_name": "Giancarlo Decastro",
+                    "channel_url": "https://www.youtube.com/channel/UCjYD2Rcj3T4DgDa98k9OU7A",
+                    "channel_id": "UCjYD2Rcj3T4DgDa98k9OU7A", "fast_path": True,
+                    "views": 0, "likes": 0, "comments": 0, "avg_views": 0,
+                    "followers": 7020, "bio": "b" * 900, "reach_status": "ok",
+                },
+                {
+                    "handle": "akshayashok-l6m", "platform": "youtube", "channel_name": "Cineverse",
+                    "channel_url": "https://www.youtube.com/channel/UCDMq9alAmZi0GgJSxKDxkcw",
+                    "channel_id": "UCDMq9alAmZi0GgJSxKDxkcw", "fast_path": True,
+                    "views": 0, "likes": 0, "comments": 0, "avg_views": 0, "reach_status": "analyzing",
+                },
+                {
+                    "handle": "nikitammedia", "platform": "tiktok", "channel_name": "Nikita",
+                    "channel_url": "https://www.tiktok.com/@nikitammedia", "followers": 30000,
+                    "views": 12000, "likes": 800, "comments": 30, "reach_status": "ok",
+                },
+            ],
+            "counts": {"new_creators": 3, "analyzing": 1},
+        },
+    )
+
+    by_handle = {item["payload"]["handle"]: item["payload"] for item in captured["items"] if item["item_type"] == "new_creator"}
+    yt = by_handle["gcrustypork"]
+    assert yt["followers"] == 7020
+    assert yt["channel_id"] == "UCjYD2Rcj3T4DgDa98k9OU7A"
+    assert yt["fast_path"] is True
+    assert len(yt["bio"]) == 500
+    hidden = by_handle["akshayashok-l6m"]
+    assert "followers" not in hidden and "bio" not in hidden  # 未知不编 0
+    assert hidden["fast_path"] is True and hidden["reach_status"] == "analyzing"
+    tt = by_handle["nikitammedia"]
+    assert tt["followers"] == 30000 and "fast_path" not in tt and "channel_id" not in tt
+    # 红线:评分域零触
+    assert all("viltrox_fit_score" not in payload for payload in by_handle.values())

@@ -572,10 +572,19 @@ def test_session_reach_display_gate_hides_backfilled_low_reach_and_analyzing() -
     assert ("new_creator", "bigshot") in visible_keys
     assert ("recall_candidate", "bigshot") in visible_keys
     assert ("url_video", "whatever") in visible_keys
+    # 2026-08-22 裁决:发现面(existing_kol/new_creator)followers 未知照常上墙、标 analyzing,
+    # 不再藏成「分析中 ×N」;计入 visible_analyzing。
+    assert ("existing_kol", "stillnull") in visible_keys
+    stillnull = next(it for it in visible if it["payload"].get("handle") == "stillnull")
+    assert stillnull["payload"]["reach_status"] == "analyzing"
+    bigshot_new = next(it for it in visible if it["item_type"] == "new_creator" and it["payload"].get("handle") == "bigshot")
+    assert bigshot_new["payload"]["reach_status"] == "ok"
+    assert bigshot_new["payload"]["followers"] == 120_000  # pool 现值补进快照(读端投影)
     assert counts["hidden_low_reach"] == 1
-    assert counts["hidden_analyzing"] == 1
+    assert counts["hidden_analyzing"] == 0
+    assert counts["visible_analyzing"] == 1
     assert counts["by_type"]["new_creator"]["hidden_low_reach"] == 1
-    assert counts["by_type"]["existing_kol"]["hidden_analyzing"] == 1
+    assert counts["by_type"]["existing_kol"]["visible_analyzing"] == 1
 
 
 def test_session_reach_display_gate_pool_missing_falls_back_to_payload() -> None:
@@ -588,8 +597,54 @@ def test_session_reach_display_gate_pool_missing_falls_back_to_payload() -> None
         _session_item("new_creator", handle="ghost_unknown", views=8000),
     ]
     visible, counts = _apply_reach_display_gate(_FakeGateConn([]), items)
+    assert [it["payload"]["handle"] for it in visible] == ["ghost_unknown"]
+    assert visible[0]["payload"]["reach_status"] == "analyzing"
+    assert "followers" not in visible[0]["payload"]  # 未知不编数字,前端显示「粉丝数待核」
+    assert counts["hidden_low_reach"] == 1 and counts["hidden_analyzing"] == 0 and counts["visible_analyzing"] == 1
+
+
+def test_session_reach_display_gate_recall_candidate_unknown_still_folds() -> None:
+    """推荐面(框2 库内召回)口径不变:followers 未知仍折叠为「分析中」。"""
+    from app.domains.kol.search_sessions import _apply_reach_display_gate
+
+    items = [_session_item("recall_candidate", kol_pool_id=900, handle="quiet")]
+    pool_rows = [{"id": 900, "platform": "youtube", "handle": "quiet", "followers": None,
+                  "avg_views": None, "avg_comments": None, "engagement_rate": None, "low_reach_flagged": 0}]
+    visible, counts = _apply_reach_display_gate(_FakeGateConn(pool_rows), items)
     assert visible == []
-    assert counts["hidden_low_reach"] == 1 and counts["hidden_analyzing"] == 1
+    assert counts["hidden_analyzing"] == 1 and counts["visible_analyzing"] == 0
+
+
+def test_session_reach_display_gate_youtube_pool_row_found_by_channel_id() -> None:
+    """会话 1106 案:YT 池行 handle=UC 频道 id、会话项 handle=@customUrl → 旧单键查不到,
+    回落 payload(search.list 填充 views/comments=0,且快照没带 fast_path/followers)误判低触达。
+    现按 channel_id / channel_url 里的 UC id 作第二键反查池行现值(7020 粉)→ 正常上墙。"""
+    from app.domains.kol.search_sessions import _apply_reach_display_gate
+
+    pool_rows = [{"id": 5258, "platform": "youtube", "handle": "UCjYD2Rcj3T4DgDa98k9OU7A",
+                  "followers": 7020, "avg_views": None, "avg_comments": None, "engagement_rate": None,
+                  "low_reach_flagged": 0}]
+    items = [
+        _session_item("new_creator", handle="gcrustypork", views=0, likes=0, comments=0, avg_views=0,
+                      channel_url="https://www.youtube.com/channel/UCjYD2Rcj3T4DgDa98k9OU7A"),
+        _session_item("new_creator", handle="gcrustypork2", views=0, likes=0, comments=0, avg_views=0,
+                      channel_id="UCjYD2Rcj3T4DgDa98k9OU7A"),
+    ]
+    visible, counts = _apply_reach_display_gate(_FakeGateConn(pool_rows), items)
+    assert [it["payload"]["handle"] for it in visible] == ["gcrustypork", "gcrustypork2"]
+    assert all(it["payload"]["followers"] == 7020 and it["payload"]["reach_status"] == "ok" for it in visible)
+    assert counts["hidden_low_reach"] == 0
+
+
+def test_session_reach_display_gate_payload_fast_path_exempts_zero_engagement() -> None:
+    """池行缺 + 快照带 fast_path(attach 现透传)→ views/comments=0 是填充非实测,不判低触达;
+    followers 未知 → 上墙标 analyzing(不再被误归低触达藏掉)。"""
+    from app.domains.kol.search_sessions import _apply_reach_display_gate
+
+    items = [_session_item("new_creator", handle="fastpath_only", views=0, comments=0, fast_path=True)]
+    visible, counts = _apply_reach_display_gate(_FakeGateConn([]), items)
+    assert len(visible) == 1 and visible[0]["payload"]["reach_status"] == "analyzing"
+    assert counts["hidden_low_reach"] == 0 and counts["visible_analyzing"] == 1
 
 
 def test_session_reach_display_gate_fail_open_on_db_error() -> None:

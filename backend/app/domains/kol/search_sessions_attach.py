@@ -789,6 +789,30 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
         status="running" if pipeline_running else "ready",
         summary=summary,
     )
+def _discovery_enrichment_payload(raw: dict[str, Any]) -> dict[str, Any]:
+    """发现项富化字段 → 会话项 payload(纯透传,零评分触碰)。
+
+    followers:subscriber_count/follower_count 等族名归一,仅 >0 才带键(隐藏订阅数/未知诚实缺席);
+    bio:≤500 字;channel_id:YT UC id(池行 handle 口径);fast_path:True 时才带键,读端触达判据
+    据此豁免「views/comments 填充 0」的互动全零误判(与发现侧 _reach_floor_reason 同一口径)。
+    """
+    out: dict[str, Any] = {}
+    followers = _int_or_none(
+        raw.get("followers") or raw.get("subscriber_count") or raw.get("follower_count") or raw.get("subscribers")
+    )
+    if followers:
+        out["followers"] = followers
+    bio = _text(raw.get("bio"))
+    if bio:
+        out["bio"] = bio[:500]
+    channel_id = _text(raw.get("channel_id"))
+    if channel_id:
+        out["channel_id"] = channel_id[:120]
+    if raw.get("fast_path"):
+        out["fast_path"] = True
+    return out
+
+
 def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict[str, Any]:
     """Attach platform-discovery candidates to an existing smart-search session."""
     from app.domains.kol.search_sessions import get_session, record_items
@@ -867,6 +891,9 @@ def attach_new_discovery_result(session_id: int, result: dict[str, Any]) -> dict
                     "published": raw.get("published"),
                     "search_query": raw.get("search_query") or result.get("query"),
                     "market": raw.get("market") or result.get("market"),
+                    # 发现富化契约(2026-08-22 会话 1106 案):发现侧补齐的 followers/bio/channel_id/
+                    # fast_path 此前只进 pool 行不进会话项 → 读端回落 payload 误判(详见 helper)。
+                    **_discovery_enrichment_payload(raw),
                     # 独立展示信号(绝不并入 viltrox_fit_score):persona 相关度 + 可解释命中。
                     "relevance_score": raw.get("relevance_score"),
                     "relevance_tier": raw.get("relevance_tier"),

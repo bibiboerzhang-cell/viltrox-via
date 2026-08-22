@@ -89,19 +89,13 @@ from app.domains.kol.search_sessions_attach import (
     attach_recall_result as _attach_recall_result,
     attach_url_result as _attach_url_result,
 )
-
-# 触达门槛读端展示闸(2026-07-12 第二道闸,kol_pool 12297 两粉号案):会话项是搜索时的快照,
-# 档案补全回填 followers 后快照不会自己变——读端按 pool 现值实时重判。判据复用
-# discovery_filters 单一真源;只挡展示,绝不改写会话项/池行。
-from app.domains.kol.discovery_filters import (  # noqa: E402
-    LOW_REACH_FLAG_LIKE_PATTERN,
-    _reach_display_state,
-    _reach_floor_enabled,
-    _reach_floor_min_followers,
+# 触达展示闸实现已拆到 search_sessions_reach_gate(千行卫兵);此处保留同名绑定,
+# get_session 经本模块全局解析 → 既有 monkeypatch(search_sessions._apply_reach_display_gate)照旧生效。
+from app.domains.kol.search_sessions_reach_gate import (  # noqa: E402
+    _apply_reach_display_gate,
+    _item_reach_pair,
+    _reach_gate_pool_rows,
 )
-
-# 展示闸适用的会话项类型:推荐/发现面的候选(用户显式贴 URL 的分析项 url_video/url_profile
-# 不闸——那是用户点名要看的,非推荐)。
 
 
 def _enrichment_preview_status(item: dict[str, Any], key: str, *, ready: bool) -> str:
@@ -165,125 +159,6 @@ def _refresh_enrichment_queue_states(conn: Any, items: list[dict[str, Any]]) -> 
                     enrichment["status"] = "empty"
                 elif queue_status in {"failed", "blocked", "cancelled"}:
                     enrichment["status"] = "partial"
-
-
-def _reach_gate_pool_rows(
-    conn: Any,
-    ids: list[int],
-    pairs: list[tuple[str, str]],
-) -> tuple[dict[int, dict[str, Any]], dict[tuple[str, str], dict[str, Any]]]:
-    """批量取会话项对应的 pool 行现值(id 直查 + new_creator 按 platform/handle 反查)。
-
-    new_creator 会话项 kol_pool_id 恒 NULL(设计不变量,见 approve_session 注释),但发现已
-    自动入库 → 按 (platform, lower(handle)) 反查现值。返回 (by_id, by_pair);查询失败抛给调用方。
-    """
-    by_id: dict[int, dict[str, Any]] = {}
-    by_pair: dict[tuple[str, str], dict[str, Any]] = {}
-    select_cols = (
-        "SELECT id, platform, handle, followers, avg_views, avg_comments, engagement_rate, "
-        "(raw_platform_data LIKE ?) AS low_reach_flagged FROM vkpi_kol_pool"
-    )
-    if ids:
-        placeholders = ",".join(["?"] * len(ids))
-        rows = conn.execute(
-            f"{select_cols} WHERE id IN ({placeholders})",
-            (LOW_REACH_FLAG_LIKE_PATTERN, *ids),
-        ).fetchall()
-        for row in rows:
-            data = dict(row)
-            by_id[int(data["id"])] = data
-    if pairs:
-        clauses = " OR ".join(["(lower(platform)=? AND lower(handle)=?)"] * len(pairs))
-        params: list[Any] = [LOW_REACH_FLAG_LIKE_PATTERN]
-        for platform, handle in pairs:
-            params.extend([platform, handle])
-        rows = conn.execute(f"{select_cols} WHERE {clauses}", tuple(params)).fetchall()
-        for row in rows:
-            data = dict(row)
-            key = (str(data.get("platform") or "").lower(), str(data.get("handle") or "").lower())
-            by_pair[key] = data
-    return by_id, by_pair
-
-
-def _item_reach_pair(item: dict[str, Any]) -> tuple[str, str] | None:
-    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-    platform = str(payload.get("platform") or "").strip().lower()
-    handle = str(payload.get("handle") or "").strip().lstrip("@").lower()
-    if platform and handle:
-        return (platform, handle)
-    return None
-
-
-def _apply_reach_display_gate(
-    conn: Any,
-    items: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """会话读端触达展示闸:按 pool 现值三态过滤推荐/发现面会话项(第二道闸落点①)。
-
-    - low_reach:followers 已知 < 门槛/互动实测全零/补全后 low_reach 标 → 不展示(计数折叠);
-    - unknown:followers 未知(分析中,「分析后再 po」)→ 不展示(计数折叠;补全回填达标后
-      同一会话再读自动放出——快照不变,变的是 pool 现值);
-    - ok:展示。pool 行缺时退回会话项 payload 实时判据(payload 也未知 → 归分析中)。
-    fail-open:池查询异常 → 原样返回全部项(过滤器绝不当故障放大器),计数带 error 标。
-    红线:零写库;落库≠推荐——池行/会话项都保留,只挡本展示出口。
-    """
-    counts: dict[str, Any] = {
-        "enabled": _reach_floor_enabled(),
-        "min_followers": _reach_floor_min_followers(),
-        "hidden_low_reach": 0,
-        "hidden_analyzing": 0,
-        "by_type": {},
-    }
-    if not items or not _reach_floor_enabled():
-        return items, counts
-    gated_idx = {
-        i for i, item in enumerate(items)
-        if str(item.get("item_type") or "") in _REACH_GATED_ITEM_TYPES
-    }
-    if not gated_idx:
-        return items, counts
-    ids = sorted({
-        int(items[i]["kol_pool_id"]) for i in gated_idx
-        if _int_or_none(items[i].get("kol_pool_id"))
-    })
-    pairs = sorted({
-        pair for i in gated_idx
-        if not _int_or_none(items[i].get("kol_pool_id")) and (pair := _item_reach_pair(items[i]))
-    })
-    try:
-        by_id, by_pair = _reach_gate_pool_rows(conn, ids, pairs)
-    except Exception:
-        logger.warning("reach display gate skipped(fail-open 不误杀)", exc_info=True)
-        counts["error"] = "pool_lookup_failed"
-        return items, counts
-
-    visible: list[dict[str, Any]] = []
-    for i, item in enumerate(items):
-        if i not in gated_idx:
-            visible.append(item)
-            continue
-        pool_row: dict[str, Any] | None = None
-        pool_id = _int_or_none(item.get("kol_pool_id"))
-        if pool_id:
-            pool_row = by_id.get(int(pool_id))
-        else:
-            pair = _item_reach_pair(item)
-            if pair:
-                pool_row = by_pair.get(pair)
-        # pool 现值优先(补全回填后的真值);池行缺 → 退回会话项 payload 快照实时判据。
-        candidate = pool_row if pool_row is not None else (
-            item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        )
-        state = _reach_display_state(candidate)
-        if state == "ok":
-            visible.append(item)
-            continue
-        bucket = "hidden_low_reach" if state == "low_reach" else "hidden_analyzing"
-        counts[bucket] += 1
-        type_key = str(item.get("item_type") or "unknown")
-        type_counts = counts["by_type"].setdefault(type_key, {"hidden_low_reach": 0, "hidden_analyzing": 0})
-        type_counts[bucket] += 1
-    return visible, counts
 
 
 def _attach_progress_contract(
