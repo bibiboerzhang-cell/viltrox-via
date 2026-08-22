@@ -350,10 +350,16 @@ def append_snapshot(
         raise RuntimeError("metric snapshot insert/select lost canonical row")
 
     def same_timestamp(left: Any, right: Any) -> bool:
+        # Postgres compat read-back (_normalize_pg_value) renders TIMESTAMPTZ at
+        # whole-second precision while callers such as the metric refresh worker
+        # pass microsecond ISO strings.  The capture_key already pins the exact
+        # fetched_at, so the conflict check compares at second precision; otherwise
+        # every real PG write raised "payload conflict: fetched_at" and the job
+        # was sent to triage as a code_error.
         left_parsed = _parse_timestamp(left)
         right_parsed = _parse_timestamp(right)
         if left_parsed is not None and right_parsed is not None:
-            return left_parsed == right_parsed
+            return left_parsed.replace(microsecond=0) == right_parsed.replace(microsecond=0)
         return str(left or "") == str(right or "")
 
     mismatches: list[str] = []

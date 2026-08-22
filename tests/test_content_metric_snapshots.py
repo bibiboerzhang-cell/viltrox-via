@@ -117,6 +117,90 @@ def test_same_capture_key_with_different_payload_fails_before_latest_diverges() 
     assert [tuple(row) for row in stored] == [(150, 11)]
 
 
+class _PgPrecisionConn:
+    """Mimic app.db.connection._normalize_pg_value: TIMESTAMPTZ reads back at
+    whole-second ``...Z`` precision even though the write carried microseconds."""
+
+    _TS_FIELDS = ("fetched_at", "source_observed_at")
+
+    def __init__(self, inner: sqlite3.Connection) -> None:
+        self._inner = inner
+
+    def _truncate(self, row: Any) -> Any:
+        keys = getattr(row, "keys", None)
+        if row is None or not callable(keys) or not set(self._TS_FIELDS) & set(keys()):
+            return row
+        mapped = dict(row)
+        for field in self._TS_FIELDS:
+            parsed = snapshots._parse_timestamp(mapped.get(field))
+            if parsed is not None:
+                mapped[field] = parsed.replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")
+        return mapped
+
+    def execute(self, sql: str, params: Any = ()) -> Any:
+        outer = self
+        cursor = self._inner.execute(sql, params)
+
+        class _Cursor:
+            rowcount = cursor.rowcount
+            description = cursor.description
+
+            def fetchone(self) -> Any:
+                return outer._truncate(cursor.fetchone())
+
+            def fetchall(self) -> list[Any]:
+                return [outer._truncate(row) for row in cursor.fetchall()]
+
+        return _Cursor()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+
+def test_microsecond_fetched_at_survives_postgres_second_precision_readback() -> None:
+    """Regression: the worker passes ``_utcnow()`` with microseconds; the PG
+    compat layer reads TIMESTAMPTZ back at second precision.  The round-trip
+    conflict check must not flag fetched_at/source_observed_at as a payload
+    conflict (it previously sent every real refresh job to triage)."""
+    conn = _PgPrecisionConn(_conn())
+    fetched_at = "2026-08-22T01:13:11.156411+00:00"
+
+    failed = snapshots.record_failed_refresh(
+        conn,
+        evidence_id=7,
+        provider="tiktok",
+        fetched_at=fetched_at,
+        error_code="provider_exception",
+    )
+    assert failed["inserted"] is True
+    assert failed["snapshot"]["status"] == "failed"
+
+    success = snapshots.record_successful_refresh(
+        conn,
+        evidence_id=7,
+        provider="tiktok",
+        fetched_at=fetched_at,
+        source_observed_at=fetched_at,
+        views=321,
+        likes=5,
+        run_id="run-micro",
+    )
+    assert success["inserted"] is True
+    assert success["latest_updated"] is True
+    # Real payload divergence is still detected at the same precision.
+    with pytest.raises(ValueError, match="capture_key payload conflict: views"):
+        snapshots.record_successful_refresh(
+            conn,
+            evidence_id=7,
+            provider="tiktok",
+            fetched_at=fetched_at,
+            source_observed_at=fetched_at,
+            views=999,
+            likes=5,
+            run_id="run-micro",
+        )
+
+
 def test_out_of_order_capture_appends_history_without_rewinding_latest() -> None:
     conn = _conn()
     newer = snapshots.record_successful_refresh(
