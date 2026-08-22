@@ -248,6 +248,12 @@ export default defineConfig(({ command }) => {
             if (id.includes("/src/components/vkpi/cockpit/components/RealMap.tsx")) {
               return "vkpi-map";
             }
+            // 顶栏 Ask ⌘K 命令面板(2026-08-22 P1):候选列表 / 答案卡由壳 React.lazy 按需加载,
+            // 交给 Rollup 保留真实异步边界;语法/引擎/动作只被壳静态引用,随壳归位即可。
+            // 不归入 widgets,免得每次首屏都背上整套面板。
+            if (id.includes("/src/components/vkpi/cockpit/components/ask/")) {
+              return undefined;
+            }
             // 纯叶子可视化层:仅依赖 React/vendor/services/core,不回引其他 cockpit 组件。
             // 先于 components/ 总规则归组,为 600KB 红线保留稳定增长余量。
             if (

@@ -63,3 +63,81 @@
 .vkpi-ask-dialog__missing strong { color: var(--ds-text-2); font-size: 9px; }
 .vkpi-ask-dialog__missing span { color: var(--ds-muted); font-size: 9px; }
 .vkpi-ask-dialog__missing small { grid-column: 2; color: var(--ds-warn); font-size: 8px; }
+
+/* ── Ask P1 命令面板:前缀提示 / 三区分栏 / 候选分组备注 / 区活跃态 ───────── */
+.vkpi-ask-dialog__prefix-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 16px 0;
+}
+
+.vkpi-ask-dialog__prefix-hints button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px dashed var(--ds-line) !important;
+  border-radius: 7px;
+  color: var(--ds-muted);
+  background: transparent !important;
+  font-size: 9px;
+}
+
+.vkpi-ask-dialog__prefix-hints button:hover { color: var(--ds-accent); border-color: var(--ds-accent) !important; }
+
+.vkpi-ask-dialog__prefix-hints kbd {
+  min-width: 16px;
+  padding: 1px 4px;
+  border: 1px solid var(--ds-line);
+  border-radius: 4px;
+  color: var(--ds-text-2);
+  background: var(--ds-panel);
+  font-family: var(--ds-font-mono);
+  font-size: 9px;
+  text-align: center;
+}
+
+.vkpi-ask-dialog__body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 14px; }
+
+.vkpi-ask-dialog__body.has-answer { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); }
+
+.vkpi-ask-dialog__body.has-answer > .vkpi-ask-dialog__results { padding-right: 0; }
+
+.vkpi-ask-dialog__body.has-answer > .vkpi-ask-dialog__answer { margin-left: 0; }
+
+.vkpi-ask-dialog__loading { padding: 14px 16px; color: var(--ds-muted); font-size: 10px; }
+
+.vkpi-ask-result-group h3 em {
+  margin-left: auto;
+  color: var(--ds-warn);
+  font-size: 8px;
+  font-style: normal;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.vkpi-ask-result-group__empty { margin: 0 0 4px 9px; color: var(--ds-muted); font-size: 10px; }
+
+.vkpi-ask-dialog__results.is-zone-active .vkpi-ask-result-group > button.is-active {
+  box-shadow: inset 0 0 0 1px var(--ds-accent);
+}
+
+.vkpi-ask-dialog__ask.is-zone-active { box-shadow: 0 0 0 2px color-mix(in srgb, var(--ds-accent) 45%, transparent); }
+
+.vkpi-ask-dialog__answer.is-zone-active { border-color: var(--ds-accent); }
+
+.vkpi-ask-dialog__actions button.is-active {
+  color: var(--ds-accent);
+  border-color: var(--ds-accent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--ds-accent) 35%, transparent);
+}
+
+.vkpi-ask-dialog__key-hint span:first-child { color: var(--ds-text-2); }
+
+/* 前缀模式没有「问 AI」按钮:快捷键提示不再负边距上提,免得压住最后一条候选。 */
+.vkpi-ask-dialog__body + .vkpi-ask-dialog__key-hint { margin-top: 10px; }
+
+@media (max-width: 720px) {
+  .vkpi-ask-dialog__body.has-answer { grid-template-columns: 1fr; }
+}

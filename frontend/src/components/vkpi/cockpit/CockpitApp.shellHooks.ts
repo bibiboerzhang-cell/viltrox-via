@@ -68,6 +68,8 @@ export function useCockpitNavigationEvents({
     const openKolPool = () => setActiveNav("kol-pool");
     const openMyKol = () => setActiveNav("my-kol");
     const openKolProfile = () => setActiveNav("kolProfile");
+    // 顶栏 Ask「$SKU」直达:Sku360BoardPage 自己从 sessionStorage 取 sku,这里只负责切板块。
+    const openSku360 = () => setActiveNav("sku360");
     const openProject = (event: Event) => {
       const projectId = String((event as CustomEvent)?.detail?.projectId || "");
       if (projectId) setOpenLegacyProjectId(projectId);
@@ -80,6 +82,7 @@ export function useCockpitNavigationEvents({
       ["vkpi:open-project-task", openProject as EventListener],
       ["vkpi:open-kol-pool-item", openKolPool],
       ["vkpi:open-kol-pool-search", openKolPool],
+      ["vkpi:open-sku360", openSku360],
     ];
     listeners.forEach(([name, listener]) => window.addEventListener(name, listener));
     return () => {
