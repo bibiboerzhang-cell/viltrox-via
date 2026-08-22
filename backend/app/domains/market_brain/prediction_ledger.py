@@ -35,7 +35,10 @@ from app.core.logging import get_logger
 from app.domains.market_brain import prediction_truth
 from app.domains.market_brain.prediction_rollup_truth import (
     MIN_BINARY_CLAIMABLE_EVALS,
+    MIN_MEASURED_CLAIMABLE_EVALS,
     binary_brier_rollup as _binary_brier_rollup,
+    measured_nonbinary_rollup,
+    rollup_forecast_log_truth as weekly_forecast_log_rollup,
     verified_nonbinary_rollup,
 )
 from app.domains.platform import review_contract
@@ -476,15 +479,21 @@ def record_eval(
 
         if existing:
             eval_id = _int_or_none(dict(existing).get("id"))
+            # The weekly rollup re-records forecast-log actuals without an
+            # actual_json; keep the stored payload (e.g. the measured-from-
+            # snapshots binding written by prediction_rollup_truth) instead of
+            # blanking it to "{}".
+            keep_payload = kw.get("actual_json") is None
             conn.execute(
                 f"""
                 UPDATE {EVALS_TABLE} SET
-                    actual_value = ?, actual_json = ?::jsonb,
+                    actual_value = ?,
+                    actual_json = CASE WHEN ? THEN actual_json ELSE CAST(? AS jsonb) END,
                     error_abs = ?, error_pct = ?, interval_hit = ?, direction_hit = ?,
                     calibrated_bucket = ?, evaluated_at = NOW(), notes = ?
                 WHERE id = ?
                 """,
-                (act, actual_json,
+                (act, keep_payload, actual_json,
                  metrics["error_abs"], metrics["error_pct"],
                  metrics["interval_hit"], metrics["direction_hit"],
                  bucket, notes, eval_id),
@@ -883,12 +892,15 @@ def weekly_rollup(
     n = len(rows)
     brier = _binary_brier_rollup(rows, outreach_coverage=outreach_coverage)
     verified = verified_nonbinary_rollup(rows, minimum=MIN_CLAIMABLE_EVALS)
+    # Snapshot-measured KOL view forecasts (forecast_log rollup): instrument
+    # truth with its own 20-sample floor; never mixed into the verified tier.
+    measured = measured_nonbinary_rollup(rows, minimum=MIN_MEASURED_CLAIMABLE_EVALS)
     if n == 0:
         readiness = _rollup_readiness(0)
         return {"n": 0, "wape": None, "interval_coverage": None, "direction_hit_rate": None,
                 "wape_n": 0, "interval_n": 0, "direction_n": 0, "fva": _fva_rollup([]),
                 "binary_probability": brier, "brier_score": None, "brier_n": 0,
-                "verified_nonbinary": verified,
+                "verified_nonbinary": verified, "measured_nonbinary": measured,
                 "claimable": False, "data_readiness": readiness,
                 "claimable_metrics": {"wape": None, "interval_coverage": None,
                                       "direction_hit_rate": None, "brier_score": None}}
@@ -938,6 +950,7 @@ def weekly_rollup(
     result["claimable"] = bool(readiness["claimable"] or brier["claimable"])
     result["data_readiness"] = readiness
     result["verified_nonbinary"] = verified
+    result["measured_nonbinary"] = measured
     result["claimable_metrics"] = {
         "wape": verified["wape"] if readiness["claimable"] else None,
         "interval_coverage": (
@@ -957,6 +970,7 @@ def weekly_rollup(
 
 __all__ = [
     "record_prediction_run", "compute_eval_metrics", "record_eval", "weekly_rollup",
+    "weekly_forecast_log_rollup",
     "RUNS_TABLE", "EVALS_TABLE", "DEFAULT_ORG", "MIN_CLAIMABLE_EVALS",
-    "MIN_BINARY_CLAIMABLE_EVALS",
+    "MIN_BINARY_CLAIMABLE_EVALS", "MIN_MEASURED_CLAIMABLE_EVALS",
 ]
