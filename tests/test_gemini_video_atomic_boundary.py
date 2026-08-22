@@ -52,7 +52,7 @@ def _install_boundary(monkeypatch, *, allowed: bool = True, start_error: bool = 
     monkeypatch.setattr(
         llm_production,
         "current_task_model_binding",
-        lambda: {"audit_video_analysis": "google/gemini-2.5-flash"},
+        lambda: {"audit_video_analysis": "google/gemini-3.6-flash"},
     )
     monkeypatch.setattr(
         llm_production.llm_gateway,
@@ -63,7 +63,7 @@ def _install_boundary(monkeypatch, *, allowed: bool = True, start_error: bool = 
             ),
             "providers": [
                 {
-                    "binding": "google/gemini-2.5-flash",
+                    "binding": "google/gemini-3.6-flash",
                     "provider_calls_allowed": allowed,
                     "binding_gate_reason": (
                         "" if allowed else "readiness_not_production_ready"
@@ -99,7 +99,7 @@ def _call(
         client=client,
         contents=[SimpleNamespace(uri="https://example.invalid/video"), "prompt"],
         config=_Config(media_resolution="LOW"),
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         purpose="audit_video_analysis",
         max_output_tokens=999_999,
         estimated_input_tokens=25_000,
@@ -128,7 +128,7 @@ def test_uri_and_file_attempts_each_reserve_settle_once_without_double_budget(
             reservations.events.append(("provider", kwargs["model"]))
             provider_kwargs.append(kwargs)
             return SimpleNamespace(
-                model_version="gemini-2.5-flash",
+                model_version="gemini-3.6-flash",
                 usage_metadata=SimpleNamespace(
                     prompt_token_count=10_000,
                     candidates_token_count=500,
@@ -202,7 +202,7 @@ def test_google_multimodal_attempt_is_covered_by_fleet_breaker(monkeypatch) -> N
         def generate_content(**kwargs):
             reservations.events.append(("provider", kwargs["model"]))
             return SimpleNamespace(
-                model_version="gemini-2.5-flash",
+                model_version="gemini-3.6-flash",
                 usage_metadata=SimpleNamespace(
                     prompt_token_count=100,
                     candidates_token_count=20,
@@ -318,7 +318,7 @@ def test_worker_outer_cost_path_does_not_write_a_second_ledger(monkeypatch) -> N
     )
     raw = {
         "analyzed": True,
-        "model": "gemini-2.5-flash",
+        "model": "gemini-3.6-flash",
         "cost_authority": "llm_production_google_generate_content_v1",
         "llm_attempts": [
             {

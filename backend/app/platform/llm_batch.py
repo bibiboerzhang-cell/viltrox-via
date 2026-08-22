@@ -2,7 +2,7 @@
 
 同步路径走 `llm_gateway.invoke`;本模块是它的「过夜批量」兄弟:对**没人等**的大批量任务
 (content_fit 刷新等),攒一批 prompt 一次提交 Anthropic Message Batches——同模型
-(claude-sonnet-4-6)、**输出与同步路径一致**,仅以延迟(SLA≤24h,通常分钟级)换 **50% 折扣**。
+(claude-sonnet-5)、**输出与同步路径一致**,仅以延迟(SLA≤24h,通常分钟级)换 **50% 折扣**。
 poller(scheduler.job_llm_batch_poll)轮询回收后,按 consumer 注册表 dispatch 落各自域表。
 
 红线 / 安全:
@@ -21,17 +21,24 @@ from typing import Any, Callable
 
 from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
+from app.core.model_pricing import PRICING_USD_PER_1M_TOKENS
 from app.db.connection import get_conn
+from app.platform.llm_production_anthropic_helpers import anthropic_create_kwargs
 
 logger = get_logger("viltrox.platform.llm_batch")
 
 # consumer 注册表:name -> fn(results_by_custom_id, request_map) -> summary dict
 _CONSUMERS: dict[str, Callable[[dict[str, str], dict[str, Any]], dict[str, Any]]] = {}
 
-# Anthropic Sonnet 估价(美元/百万 token);仅用于台账估算,Batch 实付 = ×0.5。
-_PRICE_IN_PER_M = 3.0
-_PRICE_OUT_PER_M = 15.0
+# 估价(美元/百万 token)从 model_pricing 按 CLAUDE_MODEL 精确查;查不到按
+# claude-sonnet-5 正式价 2/10 兜底。仅用于台账估算,Batch 实付 = ×0.5。
+_FALLBACK_PRICE = {"input": 2.0, "output": 10.0}
 _BATCH_DISCOUNT = 0.5
+
+
+def _model_price() -> tuple[float, float]:
+    row = PRICING_USD_PER_1M_TOKENS.get(str(CLAUDE_MODEL or "").strip().lower(), _FALLBACK_PRICE)
+    return float(row.get("input", _FALLBACK_PRICE["input"])), float(row.get("output", _FALLBACK_PRICE["output"]))
 
 # 安全阈:超过该小时数仍未 ended 的批次判为 expired(防永久挂账)。
 _MAX_AGE_HOURS = 48
@@ -117,14 +124,16 @@ def submit_anthropic_batch(
         logger.warning("llm_batch.submit_skipped_no_client", extra={"consumer": consumer, "n": len(safe_items)})
         return None
 
+    # params 与同步路径(llm_production 严格边界)同一份思考策略(默认 thinking
+    # disabled;env 切 adaptive),保证 batch 输出 == 同步输出的模块契约。
     requests = [
         {
             "custom_id": str(it["custom_id"]),
-            "params": {
-                "model": CLAUDE_MODEL,
-                "max_tokens": max(1, min(4096, int(it.get("max_output_tokens") or 1024))),
-                "messages": [{"role": "user", "content": str(it["prompt"])}],
-            },
+            "params": anthropic_create_kwargs(
+                CLAUDE_MODEL,
+                max(1, min(4096, int(it.get("max_output_tokens") or 1024))),
+                [{"role": "user", "content": str(it["prompt"])}],
+            ),
         }
         for it in safe_items
     ]
@@ -180,7 +189,8 @@ def _extract_text(message: Any) -> str:
 
 
 def _record_cost(cost_scope: str, tokens_in: int, tokens_out: int) -> float:
-    cost_usd = (tokens_in / 1_000_000.0 * _PRICE_IN_PER_M + tokens_out / 1_000_000.0 * _PRICE_OUT_PER_M) * _BATCH_DISCOUNT
+    price_in, price_out = _model_price()
+    cost_usd = (tokens_in / 1_000_000.0 * price_in + tokens_out / 1_000_000.0 * price_out) * _BATCH_DISCOUNT
     if cost_scope and cost_usd > 0:
         try:
             from app.domains.costs import budget_guard

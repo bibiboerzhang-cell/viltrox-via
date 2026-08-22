@@ -20,6 +20,8 @@ from app.platform.llm_production_common import (
     sdk_failure as _sdk_failure,
 )
 from app.platform.llm_production_anthropic_helpers import (
+    anthropic_checked_response as _anthropic_checked_response,
+    anthropic_create_kwargs as _anthropic_create_kwargs,
     anthropic_input_token_estimate as _anthropic_input_token_estimate,
     anthropic_messages_fingerprint as _anthropic_messages_fingerprint,
 )
@@ -220,11 +222,9 @@ def generate_anthropic_messages(
 
     started = time.monotonic()
     try:
-        response = client.messages.create(
-            model=exact_model,
-            max_tokens=max_output_tokens,
-            messages=messages,
-        )
+        response = _anthropic_checked_response(client.messages.create(
+            **_anthropic_create_kwargs(exact_model, max_output_tokens, messages)
+        ))
     except Exception as provider_exc:
         breaker_completion_error: Exception | None = None
         try:

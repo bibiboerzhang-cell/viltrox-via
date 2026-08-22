@@ -70,6 +70,45 @@ def test_openai_gpt5_omits_incompatible_temperature(monkeypatch) -> None:
     assert requests[-1]["temperature"] == 0.2
 
 
+def test_openai_reasoning_effort_is_keyed_by_exact_model_id(monkeypatch) -> None:
+    """gpt-5.6-luna 必须 reasoning.effort='none'(目录实测);gpt-5.6 / gpt-5.5 /
+    gpt-4o 保持 provider 默认(不按前缀泄漏);env JSON 可按精确 id 覆盖。"""
+    import app.platform.llm_gateway  # noqa: F401
+    from app.platform import llm_gateway_providers as providers
+
+    monkeypatch.setattr(providers, "_get_api_key", lambda _provider: "test-key")
+    monkeypatch.delenv("VKPI_OPENAI_REASONING_EFFORT_JSON", raising=False)
+    requests: list[dict[str, Any]] = []
+
+    def fake_request(_url, payload, _headers, _timeout):
+        requests.append(payload)
+        return {"model": payload["model"], "output_text": "ok", "usage": {}}
+
+    monkeypatch.setattr(providers, "_request_json", fake_request)
+
+    assert providers._call_openai("x", 32, model_override="gpt-5.6-luna")["status"] == "success"
+    assert requests[-1]["reasoning"] == {"effort": "none"}
+    assert "temperature" not in requests[-1]
+    for model in ("gpt-5.6", "gpt-5.5", "gpt-4o", "gpt-5.6-luna-preview"):
+        assert providers._call_openai("x", 32, model_override=model)["status"] == "success"
+        assert "reasoning" not in requests[-1], model
+
+    # env 覆盖:加新 id、改已有 id、空值=撤销注入
+    monkeypatch.setenv(
+        "VKPI_OPENAI_REASONING_EFFORT_JSON",
+        '{"gpt-5.6": "low", "gpt-5.6-luna": ""}',
+    )
+    providers._call_openai("x", 32, model_override="gpt-5.6")
+    assert requests[-1]["reasoning"] == {"effort": "low"}
+    providers._call_openai("x", 32, model_override="gpt-5.6-luna")
+    assert "reasoning" not in requests[-1]
+
+    # 坏 JSON 不炸:回落内置表
+    monkeypatch.setenv("VKPI_OPENAI_REASONING_EFFORT_JSON", "{not json")
+    providers._call_openai("x", 32, model_override="gpt-5.6-luna")
+    assert requests[-1]["reasoning"] == {"effort": "none"}
+
+
 def test_invoke_exact_override_without_exact_fallback_never_uses_global_default(monkeypatch) -> None:
     from app.platform import llm_gateway as gateway
 

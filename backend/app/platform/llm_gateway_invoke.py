@@ -797,6 +797,11 @@ def invoke_impl(
                 if settlement_failure is not None:
                     return settlement_failure
             else:
+                # A provider-side failure that still reported usage (e.g. an
+                # Anthropic refusal consumed the input tokens) is billed: keep
+                # the tokens in the ledger row and settle at the known cost
+                # instead of leaving the reservation in the unknown state.
+                usage_known = result_in_tokens > 0 or result_out_tokens > 0
                 try:
                     _record_reserved_provider_attempt(
                         provider=provider,
@@ -807,6 +812,9 @@ def invoke_impl(
                         status=status or "provider_failed",
                         reservation_key=reservation_key,
                         estimated_cost_usd=estimated_cost,
+                        input_tokens=result_in_tokens,
+                        output_tokens=result_out_tokens,
+                        cost_micro_usd=result_micro if usage_known else 0,
                         triggered_by=triggered_by,
                         metadata=metadata,
                         staff=staff,
@@ -828,7 +836,17 @@ def invoke_impl(
                         reason="audit_ledger_unavailable",
                         error_type=type(audit_exc).__name__,
                     )
-                _mark_reserved_attempt_unknown(reservation_key)
+                if usage_known:
+                    settlement_failure = _settle_reserved_attempt(
+                        provider=provider,
+                        model=model_id,
+                        reservation_key=reservation_key,
+                        cost_micro_usd=result_micro,
+                    )
+                    if settlement_failure is not None:
+                        return settlement_failure
+                else:
+                    _mark_reserved_attempt_unknown(reservation_key)
         errors.append(
             {
                 "provider": provider,

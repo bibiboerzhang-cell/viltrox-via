@@ -1,8 +1,11 @@
 """严格 Gemini 边界的思考默认配置契约(SDK 路径 769 事故复发修复,2026-07-16)。
 
-- flash 系默认注入有界思考 budget=0(思考 token 吃 max_output_tokens → 正文截断);
+- 2.5 flash 系默认注入有界思考 budget=0(思考 token 吃 max_output_tokens → 正文截断);
 - gemini-2.5-pro 不允许关思考但可有界:budget=128(对齐 canary 实弹矩阵);
-- 其余 pro 系证据不足不动;
+- gemini-3.x 非 pro(3.6-flash / 3.5-flash / 3.5-flash-lite)→ thinking_level='minimal'
+  (实测 2026-08-22:3.x 家族 thinking_budget=0 会 400);
+- gemini-3.x pro 证据不足不动;gemini-3.7* / *-latest 无 minimal 档 → 不注入;
+- 永不注入 temperature / top_p(Gemini 3.x 已弃用采样参数);
 - 调用方显式设置过 thinking_config 一律不动;
 - 不给 model 时保持旧行为(不注入);
 - 注入优先 google.genai ThinkingConfig 实例(消 pydantic 序列化警告),环境缺库退 dict。
@@ -27,6 +30,15 @@ def _budget_of(value) -> int | None:
     return getattr(value, "thinking_budget", None)
 
 
+def _level_of(value) -> str | None:
+    if value is None:
+        return None
+    raw = value.get("thinking_level") if isinstance(value, dict) else getattr(value, "thinking_level", None)
+    if raw is None:
+        return None
+    return str(getattr(raw, "value", raw)).lower()
+
+
 def test_flash_gets_zero_thinking_budget():
     out = google_config_with_output_limit(None, 4096, model="gemini-2.5-flash")
     assert out["max_output_tokens"] == 4096
@@ -35,11 +47,27 @@ def test_flash_gets_zero_thinking_budget():
 
 def test_dict_config_merges_thinking_and_limit():
     out = google_config_with_output_limit(
-        {"temperature": 0.2}, 1024, model="gemini-3.5-flash"
+        {"response_mime_type": "application/json"}, 1024, model="gemini-2.5-flash"
     )
-    assert out["temperature"] == 0.2
+    assert out["response_mime_type"] == "application/json"
     assert out["max_output_tokens"] == 1024
     assert _budget_of(out["thinking_config"]) == 0
+    assert "temperature" not in out and "top_p" not in out
+
+
+def test_gemini_3_flash_family_gets_minimal_thinking_level():
+    for model in ("gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"):
+        out = google_config_with_output_limit(None, 4096, model=model)
+        assert out["max_output_tokens"] == 4096
+        assert _level_of(out["thinking_config"]) == "minimal", model
+        assert _budget_of(out["thinking_config"]) is None, model
+        assert "temperature" not in out and "top_p" not in out
+
+
+def test_gemini_3_7_and_latest_aliases_are_not_bounded():
+    for model in ("gemini-3.7-flash", "gemini-flash-latest"):
+        out = google_config_with_output_limit(None, 2048, model=model)
+        assert out == {"max_output_tokens": 2048}, model
 
 
 def test_explicit_thinking_config_preserved():

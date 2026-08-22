@@ -103,7 +103,7 @@ def test_transport_timeout_is_structured_and_does_not_escape(
         ),
     )
 
-    result = providers._call_google("hello", 20, model_override="gemini-2.5-flash")
+    result = providers._call_google("hello", 20, model_override="gemini-3.6-flash")
 
     assert result["status"] == "timeout"
     assert result["provider"] == "google"
@@ -130,7 +130,7 @@ def test_google_api_key_is_sent_in_header_not_url(
     monkeypatch.setattr(providers, "_request_json", request)
 
     result = providers._call_google(
-        "hello", 20, model_override="gemini-2.5-flash"
+        "hello", 20, model_override="gemini-3.6-flash"
     )
 
     assert result["status"] == "success"

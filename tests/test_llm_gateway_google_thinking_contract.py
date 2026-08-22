@@ -3,9 +3,10 @@
 真实生产事故回归(769 全灭):gemini-2.5 系默认动态思考,思考 token 计入
 maxOutputTokens——status=success 但正文全是思维链碎片 / 直接截断为空。
 后续精确模型 canary 又证明 2.5 Pro 禁止 thinkingBudget=0,
-Gemini 3 则使用 thinkingLevel。本测试 monkeypatch HTTP 缝捕获真实
-请求体,同时锁住 Flash 2.5 关思考、Pro 2.5 最小预算与 Gemini 3
-minimal 契约。
+Gemini 3 则使用 thinkingLevel(3.x 家族 thinkingBudget=0 会 400;3.7 /
+*-latest 没有 minimal 档,直接拒绝)。本测试 monkeypatch HTTP 缝捕获真实
+请求体,锁住显式映射表,并锁死 generationConfig 永不带
+temperature/topP/topK(Gemini 3.x 已弃用采样参数,2026-08-22 摘除)。
 
 零网络零真 key(_get_api_key 一并 patch);不触真库,不触 viltrox_fit_score / rule_v0。
 """
@@ -56,37 +57,58 @@ def _capture_call(
 
 
 def test_call_google_generation_config_locks_thinking_off(monkeypatch):
-    """回归锁:generationConfig 必须同时含 maxOutputTokens、temperature、
-    thinkingConfig.thinkingBudget==0(缺一即历史事故复活)。"""
+    """回归锁:generationConfig 恰好 {maxOutputTokens, thinkingConfig},
+    thinkingConfig.thinkingBudget==0(缺一即历史事故复活);永不带采样参数。"""
     captured = _capture_call(monkeypatch, max_output_tokens=800)
     gen = captured["payload"]["generationConfig"]
     assert gen["maxOutputTokens"] == 800
-    assert gen["temperature"] == 0.2
     assert gen["thinkingConfig"] == {"thinkingBudget": 0}
-    # 三键齐、无多余漂移键(请求体契约整体锁死)
-    assert set(gen.keys()) == {"maxOutputTokens", "temperature", "thinkingConfig"}
+    # 两键齐、无多余漂移键(请求体契约整体锁死)
+    assert set(gen.keys()) == {"maxOutputTokens", "thinkingConfig"}
+    for forbidden in ("temperature", "topP", "topK", "top_p", "top_k"):
+        assert forbidden not in gen
     # prompt 走 contents/parts 标准形状
     assert captured["payload"]["contents"] == [{"parts": [{"text": "hello world"}]}]
 
 
-def test_call_google_uses_supported_thinking_controls_per_exact_model(monkeypatch):
-    pro = _capture_call(
-        monkeypatch,
-        max_output_tokens=256,
-        model_override="gemini-2.5-pro",
-    )
-    assert pro["payload"]["generationConfig"]["thinkingConfig"] == {
-        "thinkingBudget": 128
-    }
+def _thinking_of(monkeypatch, model: str):
+    captured = _capture_call(monkeypatch, max_output_tokens=128, model_override=model)
+    gen = captured["payload"]["generationConfig"]
+    assert "temperature" not in gen and "topP" not in gen and "topK" not in gen
+    return gen.get("thinkingConfig")
 
-    flash_3 = _capture_call(
-        monkeypatch,
-        max_output_tokens=128,
-        model_override="gemini-3.5-flash",
-    )
-    assert flash_3["payload"]["generationConfig"]["thinkingConfig"] == {
-        "thinkingLevel": "minimal"
-    }
+
+def test_call_google_uses_supported_thinking_controls_per_exact_model(monkeypatch):
+    """显式映射表(实测 2026-08-22):3.x 非 pro → thinkingLevel minimal;
+    3.x pro → 不注入;2.5-pro → budget 128;其余 2.5 → budget 0。"""
+    assert _thinking_of(monkeypatch, "gemini-2.5-pro") == {"thinkingBudget": 128}
+    assert _thinking_of(monkeypatch, "gemini-2.5-flash") == {"thinkingBudget": 0}
+    assert _thinking_of(monkeypatch, "gemini-2.5-flash-lite") == {"thinkingBudget": 0}
+    assert _thinking_of(monkeypatch, "gemini-3.6-flash") == {"thinkingLevel": "minimal"}
+    assert _thinking_of(monkeypatch, "gemini-3.5-flash") == {"thinkingLevel": "minimal"}
+    assert _thinking_of(monkeypatch, "gemini-3.5-flash-lite") == {"thinkingLevel": "minimal"}
+    assert _thinking_of(monkeypatch, "gemini-3.5-pro") is None
+    # 非 gemini-2.5/3 家族(如测试用假 id)不注入任何 thinkingConfig
+    assert _thinking_of(monkeypatch, "gemini-exact") is None
+
+
+def test_call_google_rejects_models_without_minimal_thinking_level(monkeypatch):
+    """gemini-3.7* 与 *-latest 没有 minimal 档(默认每次烧 ~60 思考 token 并吃掉
+    maxOutputTokens):零网络直接 provider_config_unsupported,让 fallback 链接管。"""
+    calls: list[dict] = []
+
+    def fake_request_json(url, payload, headers, timeout):
+        calls.append(payload)
+        return _fake_google_response()
+
+    monkeypatch.setattr(providers, "_request_json", fake_request_json)
+    monkeypatch.setattr(providers, "_get_api_key", lambda provider: "test-key")
+    for model in ("gemini-3.7-flash", "gemini-flash-latest", "gemini-3.7-pro"):
+        result = providers._call_google("hello", 128, model_override=model)
+        assert result["status"] == "provider_config_unsupported", result
+        assert result["provider"] == "google"
+        assert "no_minimal_thinking_level" in result["error"]
+    assert calls == []  # 拒绝发生在任何 HTTP 之前
 
 
 def test_call_google_token_clamp_keeps_thinking_off(monkeypatch):
