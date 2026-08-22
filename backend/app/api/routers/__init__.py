@@ -112,6 +112,7 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_learning",
     "vkpi_memory",
     "vkpi_kol_memory",
+    "vkpi_lens_insights",
     "vkpi_my_kol",
     "vkpi_operating_review",
     "vkpi_operations",
