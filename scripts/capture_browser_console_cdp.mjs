@@ -166,7 +166,14 @@ function loadPageManifest(filename) {
     if (!family || !navKey || !heading || !/^[A-Za-z0-9-]+$/.test(family) || !/^[A-Za-z0-9-]+$/.test(navKey)) {
       throw new Error(`browser page manifest entry ${index} is invalid`);
     }
-    return { family, nav_key: navKey, heading };
+    // i18n 双语门面:中文模式把英文源标题译成中文(Dashboard→仪表盘),清单以 heading_aliases 列出
+    // 合法译文;观测标题命中 heading 或任一别名即匹配。别名必须是非空字符串数组。
+    const rawAliases = raw?.heading_aliases;
+    if (rawAliases !== undefined && (!Array.isArray(rawAliases) || rawAliases.some((a) => typeof a !== "string" || !a.trim()))) {
+      throw new Error(`browser page manifest entry ${index} has invalid heading_aliases`);
+    }
+    const headingAliases = Array.isArray(rawAliases) ? rawAliases.map((a) => a.trim()) : [];
+    return { family, nav_key: navKey, heading, heading_aliases: headingAliases };
   });
   if (!pages.length || new Set(pages.map((item) => item.family)).size !== pages.length) {
     throw new Error("browser page manifest families must be non-empty and unique");
@@ -469,6 +476,7 @@ async function pageDomProof(session, page) {
     expression: `(() => {
       const navKey = ${JSON.stringify(page.nav_key)};
       const expectedHeading = ${JSON.stringify(page.heading)};
+      const acceptedHeadings = ${JSON.stringify([page.heading, ...(page.heading_aliases || [])])};
       const stage = document.querySelector('.vkpi-page-stage--' + navKey);
       const heading = document.querySelector('.cockpit-shell main header h1');
       const observedHeading = String(heading?.textContent || '').replace(/\\s+/g, ' ').trim();
@@ -476,7 +484,7 @@ async function pageDomProof(session, page) {
       return {
         stage_present: Boolean(stage),
         heading_present: Boolean(heading),
-        heading_matches: observedHeading === expectedHeading,
+        heading_matches: acceptedHeadings.includes(observedHeading),
         observed_heading: observedHeading,
         password_form_present: Boolean(document.querySelector('input[type="password"]')),
         lazy_error_present: lazyError,
