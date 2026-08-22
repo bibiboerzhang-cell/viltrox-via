@@ -42,6 +42,7 @@ _READ_ONLY_GET_EXACT_PATHS = frozenset(
         "/api/admin/vkpi/autonomy/licenses",
         "/api/admin/vkpi/board-series",
         "/api/admin/vkpi/canned-queries",
+        "/api/admin/vkpi/catalog/suggest",
         "/api/admin/vkpi/creative-segments/search",
         "/api/admin/vkpi/dashboard",
         "/api/admin/vkpi/data-quality",

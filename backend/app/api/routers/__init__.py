@@ -156,4 +156,6 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_market_voice_feed",
     # 挂账迸发①:板块 KPI 按日时序统一端点 board-series(8 板 sparkline/环比真数据,纯读零 LLM,append-only,2026-07-12)
     "vkpi_board_series",
+    # 顶栏 Ask P1:$SKU/镜头直达候选 catalog/suggest(纯读三列,零 LLM,append-only,2026-08-22)
+    "vkpi_catalog_suggest",
 ]
