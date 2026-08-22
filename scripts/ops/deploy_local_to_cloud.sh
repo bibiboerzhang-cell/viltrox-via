@@ -455,6 +455,41 @@ if (
     or info.st_uid != os.geteuid()
 ):
     raise SystemExit("candidate browser runtime cleanup target is unsafe")
+# O2: a temporary Postgres rooted here (RUNTIME_ROOT=<root>/runtime inherits
+# port 54329) must be stopped before rmtree, or the data dir is ripped from
+# under a live postmaster that then holds the port for hours.
+data_dir = path / "runtime" / "data" / "postgres"
+pid_file = data_dir / "postmaster.pid"
+def _live_pid():
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").splitlines()[0].strip())
+        os.kill(pid, 0)
+        return pid if pid > 1 else None
+    except (OSError, UnicodeDecodeError, IndexError, ValueError):
+        return None
+if _live_pid() is not None:
+    import subprocess
+    candidates = [
+        Path(os.environ.get("POSTGRES_BIN") or "/nonexistent") / "pg_ctl",
+        Path("/opt/homebrew/opt/postgresql@16/bin/pg_ctl"),
+        Path("/opt/homebrew/bin/pg_ctl"),
+        Path("/usr/local/bin/pg_ctl"),
+        Path("/usr/lib/postgresql/16/bin/pg_ctl"),
+    ]
+    found = shutil.which("pg_ctl")
+    if found:
+        candidates.append(Path(found))
+    pg_ctl = next((c for c in candidates if c.is_file() and os.access(c, os.X_OK)), None)
+    if pg_ctl is not None:
+        subprocess.run(
+            [str(pg_ctl), "-D", str(data_dir), "stop", "-m", "fast", "-t", "30"],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=60, check=False,
+        )
+    if _live_pid() is not None:
+        raise SystemExit(
+            f"candidate browser runtime postgres is still live under {data_dir}"
+            f" (pg_ctl={'missing' if pg_ctl is None else pg_ctl}); port 54329 may stay held"
+        )
 shutil.rmtree(path)
 PY
     then

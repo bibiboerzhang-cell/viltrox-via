@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -809,6 +810,64 @@ def verify_deploy_source(args: argparse.Namespace) -> dict[str, object]:
     return result
 
 
+_CANDIDATE_RUNTIME_PARENT, _CANDIDATE_RUNTIME_PREFIX = Path("/tmp"), "vkpi-candidate-browser-runtime."
+_PG_CTL_FALLBACKS = ("/opt/homebrew/opt/postgresql@16/bin/pg_ctl", "/opt/homebrew/bin/pg_ctl", "/usr/local/bin/pg_ctl", "/usr/lib/postgresql/16/bin/pg_ctl")
+_log = logging.getLogger("vkpi.freeze_worktree_candidate")
+
+
+def _live_postmaster(pid_file: Path) -> int | None:
+    try:
+        pid = int(pid_file.read_text(encoding="utf-8").splitlines()[0].strip())
+        os.kill(pid, 0)  # raises when the postmaster is gone
+        return pid if pid > 1 else None
+    except (OSError, UnicodeDecodeError, IndexError, ValueError):
+        return None
+
+
+def stop_candidate_browser_runtime_postgres(runtime_roots: Sequence[Path] | None = None) -> list[dict[str, object]]:
+    """O2: ``pg_ctl stop -m fast`` every live temporary Postgres under /tmp/vkpi-candidate-browser-runtime.*.
+
+    Such a hand-rooted stack inherits port 54329 and outlives the gate (rmtree then rips its data dir from
+    under the postmaster, which holds the port for hours).  Only the reviewed glob owned by this uid is
+    touched, never the worktree database.  Never raises: every outcome is logged and receipted."""
+    receipts: list[dict[str, object]] = []
+    roots = [Path(r) for r in runtime_roots] if runtime_roots is not None else sorted(_CANDIDATE_RUNTIME_PARENT.glob(f"{_CANDIDATE_RUNTIME_PREFIX}*"))
+    names = [Path(os.environ.get("POSTGRES_BIN") or "/nonexistent") / "pg_ctl", *map(Path, _PG_CTL_FALLBACKS), *map(Path, filter(None, [shutil.which("pg_ctl")]))]
+    pg_ctl = next((c for c in names if c.is_file() and os.access(c, os.X_OK)), None)
+    for root in roots:
+        data_dir, pid_file, receipt = root / "runtime" / "data" / "postgres", root / "runtime" / "data" / "postgres" / "postmaster.pid", {"root": str(root)}
+        try:
+            info = root.lstat()
+            safe = root.parent == _CANDIDATE_RUNTIME_PARENT and root.name.startswith(_CANDIDATE_RUNTIME_PREFIX) and stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+        except OSError:
+            continue
+        if not safe:
+            receipts.append({**receipt, "status": "unsafe_root_skipped"})
+            continue
+        pid = _live_postmaster(pid_file) if pid_file.is_file() else None
+        if pid is None:
+            receipts.extend([{**receipt, "status": "stale_pidfile"}] if pid_file.is_file() else [])
+            continue
+        if pg_ctl is None:
+            _log.error("candidate browser runtime postgres pid=%s live under %s but pg_ctl unavailable", pid, data_dir)
+            receipts.append({**receipt, "status": "pg_ctl_missing", "pid": pid})
+            continue
+        try:
+            done = subprocess.run([str(pg_ctl), "-D", str(data_dir), "stop", "-m", "fast", "-t", "30"],
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, check=False)
+            rc, detail = done.returncode, (done.stderr or done.stdout or "").strip()[:240]
+        except (OSError, subprocess.SubprocessError) as exc:
+            rc, detail = -1, f"{type(exc).__name__}: {exc}"[:240]
+        if rc == 0 and _live_postmaster(pid_file) is None:
+            _log.info("candidate browser runtime postgres stopped: pid=%s data=%s", pid, data_dir)
+            receipts.append({**receipt, "status": "stopped", "pid": pid})
+        else:
+            _log.error("candidate browser runtime postgres stop FAILED pid=%s rc=%s data=%s: %s (port 54329 may stay held)",
+                       pid, rc, data_dir, detail)
+            receipts.append({**receipt, "status": "stop_failed", "pid": pid, "returncode": rc, "detail": detail})
+    return receipts
+
+
 def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
     """Run the canonical gate from candidate bytes, then reverify the candidate."""
 
@@ -879,11 +938,14 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
         except (DeployGateRuntimeError, KeyError, TypeError) as exc:
             raise FreezeError(str(exc)) from exc
     finally:
+        # O2: whatever happened above, no temporary Postgres may survive under a candidate browser runtime.
+        candidate_postgres_receipts = stop_candidate_browser_runtime_postgres()
         after = verify_deploy_source(args)
     if completed is None or completed.returncode != 0:
         code = completed.returncode if completed is not None else "unavailable"
         raise FreezeError(f"candidate canonical deploy gate failed: {code}")
     after["canonical_deploy_gate"] = True
+    after["candidate_browser_runtime_postgres"] = candidate_postgres_receipts
     after["frontend_reproducible"] = (
         reproducible_frontend_verified
         if require_reproducible_frontend
