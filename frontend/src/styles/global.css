@@ -71,6 +71,34 @@
     text-align: inherit;
   }
 
+  /* 第三个 body 级浮层容器:.vkpi-page-stage--overlay(OverlayPortal,KOL 详情抽屉 /
+     联系弹窗等页级 overlay 挂 body)。表面全 token → 跟主题;控件重置与 .cockpit-shell 同款,
+     否则 portal 出壳后原生 <button>/<input> 的 UA 边框立刻露出。 */
+  :where(.vkpi-page-stage--overlay) {
+    color-scheme: light;
+  }
+
+  :where([data-theme="dark"] .vkpi-page-stage--overlay) {
+    color-scheme: dark;
+  }
+
+  :where(.vkpi-page-stage--overlay button) {
+    appearance: none;
+    background: transparent;
+    border: 0 solid transparent;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+  }
+
+  :where(.vkpi-page-stage--overlay input),
+  :where(.vkpi-page-stage--overlay textarea),
+  :where(.vkpi-page-stage--overlay select) {
+    appearance: none;
+    color: inherit;
+    font: inherit;
+  }
+
   :where(.cockpit-shell input),
   :where(.cockpit-shell textarea),
   :where(.cockpit-shell select) {

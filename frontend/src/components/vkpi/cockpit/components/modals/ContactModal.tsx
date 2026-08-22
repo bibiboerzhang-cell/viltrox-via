@@ -9,6 +9,7 @@ import { kolHumanDisplayName, kolHumanIdentitySubtitle, kolHumanProfileLinkLabel
 import type { ContactState } from "../../lib/kolContacts";
 import { useKolContactState } from "../../lib/useKolContactState";
 import { apiFetch } from "../../../../../services/http";
+import { OverlayPortal } from "./OverlayPortal";
 
 const e = React.createElement;
 
@@ -247,17 +248,21 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
     } finally { setSaving(false); }
   };
 
-  return e("div", {
+  // 员工反馈 #2:弹层挂 body(OverlayPortal)+ 高度按视口 + 头部/Tab 常驻、表单区单一滚动。
+  return e(OverlayPortal, { stage: "kol-pool" },
+  e("div", {
     className: "cockpit-modal fixed inset-0 z-[60] flex items-center justify-center p-4",
     style: { background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" },
     onClick: closeModal
   },
     e("div", {
-      className: "w-full max-w-[520px] rounded-xl border border-white/[0.08] bg-[#0a1020] shadow-2xl overflow-hidden",
+      role: "dialog",
+      "aria-modal": "true",
+      className: "flex max-h-[calc(100dvh-2rem)] w-full max-w-[520px] flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-[#0a1020] shadow-2xl",
       onClick: (ev: any) => ev.stopPropagation()
     },
       // Header
-      e("div", { className: "px-5 py-3 border-b border-white/[0.06] flex items-center gap-3" },
+      e("div", { className: "flex flex-none items-center gap-3 border-b border-white/[0.06] px-5 py-3" },
         e(KPAvatar, { name: outreachName, color: item.avatar_color, size: 36 }),
         e("div", { className: "flex-1 min-w-0" },
           e("h3", { className: "text-[13px] font-semibold text-white" }, hasEmail ? "发起合作邀请" : hasAnyContact ? "联系 KOL" : "联系人与合作邀请"),
@@ -268,7 +273,7 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
         )
       ),
       // Tab(只有 has email 才显示)
-      hasEmail && e("div", { className: "px-5 pt-3 flex items-center gap-1 border-b border-white/[0.04]" },
+      hasEmail && e("div", { className: "flex flex-none items-center gap-1 border-b border-white/[0.04] px-5 pt-3" },
         ["email", "add"].map(t => e("button", {
           key: t,
           onClick: () => setTab(t),
@@ -278,6 +283,8 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
             : { borderColor: "transparent", color: "#94a3b8" }
         }, t === "email" ? "邮件邀请" : "添加额外渠道"))
       ),
+      // 单一滚动区:两个 tab 的表单体都在这层里滚,头部/Tab 条常驻
+      e("div", { className: "min-h-0 flex-1 overflow-y-auto overscroll-contain", "data-vkpi-modal-scroll": "content" },
       // Email tab
       tab === "email" && hasEmail && e("div", { className: "px-5 py-4 space-y-3" },
         e("div", { className: "flex items-center gap-2 text-[11px]" },
@@ -433,6 +440,7 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
           }, "取消")
         )
       )
+      )
     )
-  );
+  ));
 }

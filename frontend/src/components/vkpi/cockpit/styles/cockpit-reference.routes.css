@@ -17,6 +17,19 @@
   max-width: 100%;
 }
 
+/* Body-portal overlay layer (OverlayPortal.tsx): carries the page-stage classes so
+   every Kit skin rule below still applies after the drawer/modal leaves the stage,
+   but it must not behave like a stage itself (no surface, no clipping, no box). */
+.vkpi-page-stage.vkpi-page-stage--overlay {
+  position: static;
+  overflow: visible;
+  background: transparent;
+}
+
+.vkpi-page-stage.vkpi-page-stage--overlay > :is(div, main, section) {
+  max-width: none;
+}
+
 .vkpi-page-stage:not(.vkpi-page-stage--dashboard) .vkpi-workspace {
   min-width: 0;
   max-width: 100%;
@@ -119,6 +132,13 @@
 .vkpi-page-stage:not(.vkpi-page-stage--dashboard) .vkpi-kol-detail-drawer,
 .vkpi-page-stage:not(.vkpi-page-stage--dashboard) .vkpi-kol-detail-drawer [class*="bg-\[#0a1020"] {
   background-color: var(--ds-drawer-surface) !important;
+}
+
+/* The drawer surface is translucent under glass; frost what shows through so the page
+   behind reads as texture, never as overlapping text (staff feedback #2). */
+.vkpi-page-stage:not(.vkpi-page-stage--dashboard) .vkpi-kol-detail-drawer {
+  backdrop-filter: var(--ds-backdrop, blur(18px));
+  -webkit-backdrop-filter: var(--ds-backdrop, blur(18px));
 }
 
 .vkpi-page-stage:not(.vkpi-page-stage--dashboard) [class*="bg-\[linear-gradient"] {

@@ -3,6 +3,7 @@ import { m } from "framer-motion";
 import { Sparkles } from "lucide-react";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
+import { OverlayPortal } from "./modals/OverlayPortal";
 import { enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, getKolVideoAnalysisBatch, getKolVideoAnalysisCache, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { KOLDrawerOutreachSection } from "./KOLDrawerOutreachSection";
@@ -758,12 +759,16 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       ? item.score_breakdown
       : null;
   
-  return e(React.Fragment, null,
+  // 抽屉挂 body(OverlayPortal):脱离页面舞台/grid 的 transform 裁切;高度按视口(dvh),
+  // 头部/行动条常驻 + 中段单一滚动区;玻璃皮的磨砂(backdrop)在 routes.css 的抽屉规则里。
+  return e(OverlayPortal, { stage: "kol-pool" },
   e(m.div, {
     initial: { x: "100%" }, animate: { x: 0 }, exit: { x: "100%" },
     transition: { type: "spring", damping: 28, stiffness: 240 },
     "aria-label": "KOL Pool 详情",
-    className: "vkpi-kol-detail-drawer fixed top-0 right-0 h-full w-[520px] bg-[#0a1020] border-l border-white/[0.08] shadow-2xl z-50 flex flex-col"
+    role: "dialog",
+    "aria-modal": "true",
+    className: "vkpi-kol-detail-drawer fixed top-0 right-0 h-[100dvh] max-h-[100dvh] w-[520px] max-w-[100vw] bg-[#0a1020] border-l border-white/[0.08] shadow-2xl z-50 flex flex-col"
   },
     // ─── Header ───
     e(KOLDrawerHeader, { item, devices, detailLoading, detailError, onClose: handleClose }),
@@ -779,7 +784,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     // ─── Scroll content ───
     // 【C1 Tab 化】既有 section 一列不变,只按 activeTab 过滤渲染对应集合(不动各 section 内部);
     // tab 条 sticky 钉在滚动区顶部;头部身份卡(上方)与底部行动条(下方)在滚动区之外全 tab 常驻。
-    e("div", { className: "flex-1 overflow-y-auto" },
+    e("div", { className: "min-h-0 flex-1 overflow-y-auto overscroll-contain", "data-vkpi-modal-scroll": "content" },
       // ── Tab 条(sticky,不透明底遮住滚过的内容)──
       e("div", { className: "sticky top-0 z-30 flex items-center gap-1 border-b border-white/[0.08] bg-[#0a1020] px-5 py-2" },
         DRAWER_TABS.map((tab) => e("button", {
