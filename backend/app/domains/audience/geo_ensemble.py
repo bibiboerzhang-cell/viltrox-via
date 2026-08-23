@@ -419,6 +419,10 @@ def _signal_commenter_profile_country(db: Any, rows: list[dict[str, Any]]) -> di
             rec2 = dict(r)
             akey = str(rec2.get("author_key") or "")
             code = _country_code(rec2.get("country"))
+            # 只吃硬信号:country_source=language 是「评论语言→国家」假口径(en→US 把 79% 观众
+            # 算成美国),缓存随刷新逐行自愈前,这里先过滤,不让存量假国家进融合。
+            if str(rec2.get("country_source") or "").strip().lower() not in ("declared", "name"):
+                continue
             if not code or akey in seen:
                 continue
             seen.add(akey)

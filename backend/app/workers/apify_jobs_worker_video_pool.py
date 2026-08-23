@@ -143,6 +143,22 @@ class VideoJobPool:
             claim_blocked_type=claim_blocked_type,
         )
 
+    @classmethod
+    def bind_worker(cls, *, db_url: str, execute, fail_job, requeue_job, claim_blocked_type) -> "VideoJobPool":
+        """worker 主循环一行接线:失败→fail_job;租约冲突→随机 5–10s requeue(与内联路径同口径)。"""
+        import random as _random
+
+        return cls.from_env(
+            db_url=db_url,
+            execute=execute,
+            on_failure=lambda c, j, e: fail_job(c, int(j["id"]), e),
+            on_claim_blocked=lambda c, j, e: requeue_job(
+                c, int(j["id"]), "provider execution lease remains active",
+                retry_delay_seconds=_random.uniform(5.0, 10.0),
+            ),
+            claim_blocked_type=claim_blocked_type,
+        )
+
     @property
     def enabled(self) -> bool:
         return self.max_workers > 1

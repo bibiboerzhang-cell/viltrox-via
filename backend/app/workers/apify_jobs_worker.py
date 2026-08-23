@@ -898,6 +898,9 @@ def run_worker() -> None:
         PROVIDER_RETRY_MAX_DELAY_SECONDS,
         PROVIDER_RETRY_ADOPT_WINDOW_MINUTES,
     )
+    # 视频线程池(APIFY_WORKER_VIDEO_POOL_SIZE>1 才启用;池满/非视频仍内联;认领仍 SKIP LOCKED 不重复)
+    from app.workers.apify_jobs_worker_video_pool import VideoJobPool
+    pool = VideoJobPool.bind_worker(db_url=DB_RUNTIME_URL, execute=_execute_claimed_job, fail_job=_fail_job, requeue_job=_requeue_job, claim_blocked_type=ApifyExecutionClaimBlocked)
     try:
         # 外层重连循环:DB 连接断/丢(6/23 'the connection is lost')→ 不让 worker 永久死,
         # 睡几秒拿新连接重来。内层为原有的单连接 poll 循环。
@@ -943,6 +946,8 @@ def run_worker() -> None:
                         if _stop_event.is_set():
                             _requeue_job(conn, int(job["id"]), "worker stop requested before processing")
                             break
+                        if pool.submit(job):
+                            continue
                         try:
                             final_status = _execute_claimed_job(conn, job)
                             # 执行体内部限流/租约冲突 requeue 后行仍 queued;按终态
@@ -977,6 +982,7 @@ def run_worker() -> None:
                 )
                 _stop_event.wait(WORKER_DB_RECONNECT_SECONDS)
     finally:
+        pool.drain(timeout=GEMINI_CALL_TIMEOUT_SECONDS)
         close_db_runtime_sync()
         logger.info("apify_jobs worker stopped")
 
