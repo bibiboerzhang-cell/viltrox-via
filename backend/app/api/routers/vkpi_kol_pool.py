@@ -961,8 +961,8 @@ def favorite_kol_pool_item(
     body: dict = Body(default_factory=dict),
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
-    """收藏(My KOL 归宿)。幂等:重复收藏返回 already_favorited。"""
-    from app.domains.kol import pool_favorites
+    """收藏(My KOL 归宿)。幂等:重复收藏返回 already_favorited。C5:收藏即登记指标追踪(best-effort,受月闸)。"""
+    from app.domains.kol import favorite_side_effects, pool_favorites
 
     try:
         result = pool_favorites.add_favorite(int(kol_pool_id), staff=staff, note=str(body.get("note") or ""))
@@ -971,7 +971,7 @@ def favorite_kol_pool_item(
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
     _record_pool_feedback_signal(int(kol_pool_id), "favorite", staff=staff, note=str(body.get("note") or ""))
-    return result
+    return {**result, **favorite_side_effects.enroll_tracking_after_favorite(int(kol_pool_id), staff=staff)}
 
 
 @router.delete("/kol-pool/{kol_pool_id}/favorite")

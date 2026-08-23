@@ -164,6 +164,8 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
         # 2026-08-22 MY KOL 数值跟进 / 聚合视频墙 / 镜头出镜:纯 SELECT 只读投影,零 provider。
         "/api/admin/vkpi/my-kol/metrics/tracking-overview",
         "/api/admin/vkpi/my-kol/board-ext/recent-videos",
+        # 2026-08-23 C5 观察清单总览:本人分组汇总,纯 SELECT 零 provider。
+        "/api/admin/vkpi/my-kol/watch-overview",
         "/api/admin/vkpi/lens-insights/summary",
         "/api/admin/vkpi/official-matrix",
         "/api/admin/vkpi/ops/cost-ledger",
@@ -203,6 +205,8 @@ _READ_ONLY_GET_PATTERNS = (
     # 行级 assert_target_readable 只读投影,零写入零 provider。
     re.compile(r"^/api/admin/vkpi/my-kol/[1-9][0-9]*/videos$"),
     re.compile(r"^/api/admin/vkpi/my-kol/[1-9][0-9]*/metrics/trends$"),
+    # 2026-08-23 C5 观察清单:单分组 KOL 进度行,纯 SELECT 零写入(组 id = grp_<ms> 串)。
+    re.compile(r"^/api/admin/vkpi/my-kol/groups/[A-Za-z0-9_-]{1,64}/watch-overview$"),
     re.compile(r"^/api/admin/vkpi/lens-insights/kol/[1-9][0-9]*$"),
     # Persisted GOAFFPRO mapping + cached commission snapshot only. Provider
     # resolution and mutation live exclusively behind the neighbouring POSTs.
