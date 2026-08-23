@@ -62,11 +62,7 @@ _MUTABLE_RUNTIME_KEYS = frozenset(
         "session_advance_result",
         "smart_search_profile_advance_result",
         "search_session_last_job_status",
-        "search_session_last_error",
-        # 运行时诊断/进度(worker 失败路径与阶段汇总会事后写入,不属于授权契约;
-        # 2026-08-23 复盘:diagnostics 落 payload 后重试即 provider_job_payload_drifted,IG/YT URL 深析全灭)
-        "diagnostics",
-        "search_session_item_statuses",
+        "search_session_last_error", "diagnostics", "search_session_item_statuses",
     }
 )
 
