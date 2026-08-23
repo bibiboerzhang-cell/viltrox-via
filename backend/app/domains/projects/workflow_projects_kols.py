@@ -16,6 +16,7 @@ from app.domains.projects.workflow_projects_occupancy import (
     _pool_claim_occupancy,
     _staff_display_names,
 )
+from app.domains.recommendations import pool_action_bridge
 
 logger = logging.getLogger(__name__)
 
@@ -386,6 +387,21 @@ def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, 
                 )
         except Exception:
             logger.debug("add_project_kols.agent_signal_skipped", exc_info=True)
+    # C4 写口插桩(2026-08-23):加入项目=触达、项目自动收藏=收藏,两者即时进推荐反馈
+    # (训练信号),不再等每日 outcome_sync 回填。主写已提交;桥 best-effort,失败只告警。
+    for kol_pool_id in inserted_pool_ids:
+        pool_action_bridge.bridge_pool_action(
+            kol_pool_id, "touch", staff=staff,
+            payload={"project_id": int(project_id), "channel": "project_assignment"},
+            source="project_assignment",
+        )
+    if actor_staff_id:
+        for kid in attached_ids:
+            pool_action_bridge.bridge_pool_action(
+                kid, "favorite", staff=staff,
+                payload={"project_id": int(project_id)},
+                source="project_auto_favorite",
+            )
     if inserted:
         _log_project_audit(
             staff=staff,

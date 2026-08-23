@@ -17,6 +17,7 @@ from app.domains.evidence.common import (
     _rows,
     _utcnow,
 )
+from app.domains.recommendations import pool_action_bridge
 from app.platform.db.schema import ensure_vkpi_schema
 
 def list_messages(
@@ -132,6 +133,16 @@ def create_message(body: dict[str, Any], *, staff: dict[str, Any] | None = None)
             target_id=item.get("id"),
             detail=str(body.get("source") or "manual"),
             metadata={"project_id": project_id or None, "kol_id": kol_id or None},
+        )
+        # C4 写口插桩(2026-08-23):外联消息即时桥——outbound → outreach_sent(L 车道
+        # sync_message_outcomes 同口径),不再等每日同步;主写已提交,桥失败只告警。
+        pool_action_bridge.bridge_message_outreach(
+            message_id=item.get("id"),
+            project_id=project_id,
+            kol_id=kol_id,
+            direction=item.get("direction"),
+            staff=staff,
+            source="evidence_message",
         )
     return item
 

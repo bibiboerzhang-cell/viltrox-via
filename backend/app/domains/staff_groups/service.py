@@ -15,6 +15,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.access import scope
+from app.domains.recommendations import pool_action_bridge
 
 
 _DEFAULT_PERMISSIONS: dict[str, Any] = {
@@ -227,8 +228,9 @@ def _recompute_group_shared_kols(
     group_id: str,
     member_ids: list[Any],
     permissions: dict[str, Any] | None,
-) -> None:
+) -> list[int]:
     """幂等重算:把本组的「组级 shared_kol_pool_ids × 组成员」展开成 vkpi_kol_pool_members 行。
+    返回本次真正展开(有成员承接)的 kol_pool_id 列表,供 commit 后做训练信号插桩;未展开返回 []。
 
     做法(对该 group 的 origin_id,镜像 _recompute_group_shared_projects):
       1) DELETE FROM vkpi_kol_pool_members WHERE shared_via_group_id = <origin_id>
@@ -241,7 +243,7 @@ def _recompute_group_shared_kols(
     origin_id = _group_origin_id(group_id)
     if origin_id is None:
         # 取不到稳定 origin id → 不展开(避免用伪 id 误删/误插);不阻断分组本身保存。
-        return
+        return []
     conn.execute(
         "DELETE FROM vkpi_kol_pool_members WHERE shared_via_group_id = ?",
         (origin_id,),
@@ -259,7 +261,7 @@ def _recompute_group_shared_kols(
         staff_ids = [sid for sid in staff_ids if sid in live_staff]
     if not kol_ids or not staff_ids:
         # 无(存在的)共享 KOL 或成员 → 上面 DELETE 已清空本组行,直接收尾(空集即「无共享」)。
-        return
+        return []
     for kid in kol_ids:
         for sid in staff_ids:
             conn.execute(
@@ -271,6 +273,19 @@ def _recompute_group_shared_kols(
                 """,
                 (kid, sid, origin_id),
             )
+    return list(kol_ids)
+
+
+def _bridge_member_feedback(group_id: str, kol_ids: list[int], staff: dict[str, Any] | None) -> None:
+    """C4 写口插桩(2026-08-23):组共享成员 = 收藏级正信号("favorite",payload.pool_action="member"),
+    即时进推荐反馈(训练信号)。必须在 commit 之后调用;桥 best-effort,失败只告警不阻断分组保存。
+    幂等由 actions 按 (recommendation × feedback_type) 去重——每次重算不会堆重复行。"""
+    for kid in kol_ids:
+        pool_action_bridge.bridge_pool_action(
+            kid, "favorite", staff=staff,
+            payload={"pool_action": "member", "group_id": str(group_id)},
+            source="staff_group_shared_kol",
+        )
 
 
 # ── Staff Groups ────────────────────────────────────────────────────────────
@@ -326,8 +341,9 @@ def create_group(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[
     # 新组保存即展开「组级 shared_projects × 成员」成真访问(P-GROUP-34,幂等)。
     _recompute_group_shared_projects(conn, gid, members, permissions)
     # 同上,展开「组级 shared_kol_pool_ids × 成员」成真 KOL 只读共享(幂等)。
-    _recompute_group_shared_kols(conn, gid, members, permissions)
+    bridged_kols = _recompute_group_shared_kols(conn, gid, members, permissions)
     conn.commit()
+    _bridge_member_feedback(gid, bridged_kols, staff)
     row = conn.execute("SELECT * FROM vkpi_staff_groups WHERE id = ?", (gid,)).fetchone()
     return {"item": _group_row(row) if row else None}
 
@@ -360,15 +376,17 @@ def update_group(group_id: str, payload: dict[str, Any], staff: dict[str, Any] |
     row = conn.execute("SELECT * FROM vkpi_staff_groups WHERE id = ?", (str(group_id),)).fetchone()
     # 改组(成员/shared_projects 任一变)即按「持久化后的真状态」重算共享访问(P-GROUP-34,幂等)。
     # 从回读行取最终 member_ids/permissions,无需分支判断 payload 改了哪个字段。
+    bridged_kols: list[int] = []
     if row is not None:
         parsed = _group_row(row)
         _recompute_group_shared_projects(
             conn, str(group_id), parsed.get("member_ids") or [], parsed.get("permissions") or {}
         )
-        _recompute_group_shared_kols(
+        bridged_kols = _recompute_group_shared_kols(
             conn, str(group_id), parsed.get("member_ids") or [], parsed.get("permissions") or {}
         )
     conn.commit()
+    _bridge_member_feedback(str(group_id), bridged_kols, staff)
     return {"item": _group_row(row) if row else None}
 
 
@@ -383,22 +401,24 @@ def delete_group(group_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
 
 
 # ── Members(成员增删,镜像 events team_ids)────────────────────────────────
-def _set_members(conn: Any, group_id: str, members: list[Any]) -> dict[str, Any]:
+def _set_members(conn: Any, group_id: str, members: list[Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     conn.execute(
         "UPDATE vkpi_staff_groups SET member_ids = ?::jsonb, updated_at = NOW() WHERE id = ?",
         (_dumps(members), str(group_id)),
     )
     row = conn.execute("SELECT * FROM vkpi_staff_groups WHERE id = ?", (str(group_id),)).fetchone()
     # 增/删成员即按真状态重算共享访问(新成员获得组共享项目可见,被移除成员失去)(P-GROUP-34,幂等)。
+    bridged_kols: list[int] = []
     if row is not None:
         parsed = _group_row(row)
         _recompute_group_shared_projects(
             conn, str(group_id), parsed.get("member_ids") or [], parsed.get("permissions") or {}
         )
-        _recompute_group_shared_kols(
+        bridged_kols = _recompute_group_shared_kols(
             conn, str(group_id), parsed.get("member_ids") or [], parsed.get("permissions") or {}
         )
     conn.commit()
+    _bridge_member_feedback(str(group_id), bridged_kols, staff)
     return {"item": _group_row(row) if row else None}
 
 
@@ -408,11 +428,11 @@ def add_member(group_id: str, staff_id: Any, staff: dict[str, Any] | None) -> di
     members = _loads(dict(row).get("member_ids"), []) if row else []
     if staff_id not in members:
         members.append(staff_id)
-    return _set_members(conn, group_id, members)
+    return _set_members(conn, group_id, members, staff=staff)
 
 
 def remove_member(group_id: str, staff_id: Any, staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
     row = conn.execute("SELECT member_ids FROM vkpi_staff_groups WHERE id = ?", (str(group_id),)).fetchone()
     members = [m for m in (_loads(dict(row).get("member_ids"), []) if row else []) if str(m) != str(staff_id)]
-    return _set_members(conn, group_id, members)
+    return _set_members(conn, group_id, members, staff=staff)

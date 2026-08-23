@@ -12,6 +12,7 @@ from typing import Any
 from app.db.connection import get_conn
 from app.domains import audit
 from app.domains.access import scope
+from app.domains.recommendations import pool_action_bridge
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow_common import _amount_cents, _int, _json, staff_id, utcnow
 
@@ -68,6 +69,16 @@ def add_project_message(project_id: int, body: dict[str, Any], *, staff: dict[st
             target_id=item.get("id", ""),
             detail=str(item.get("body") or item.get("snippet") or "")[:240],
             metadata={"project_id": int(project_id), "kol_id": _int(project["kol_id"]) or None},
+        )
+        # C4 写口插桩(2026-08-23):项目级外联消息即时桥——outbound → outreach_sent
+        # (L 车道 sync_message_outcomes 同口径);主写已提交,桥失败只告警。
+        pool_action_bridge.bridge_message_outreach(
+            message_id=item.get("id"),
+            project_id=int(project_id),
+            kol_id=_int(project["kol_id"]),
+            direction=item.get("direction"),
+            staff=staff,
+            source="project_message",
         )
     return item
 
