@@ -173,6 +173,8 @@ def _create_schema(conn: psycopg.Connection[Any]) -> None:
         CREATE TABLE vkpi_kol_video_evidence (
             id BIGINT PRIMARY KEY, kol_pool_id BIGINT, title TEXT, video_title TEXT,
             content_url TEXT, thumbnail_url TEXT, view_count BIGINT, like_count BIGINT,
+            comment_count BIGINT, share_count BIGINT, published_at_norm TIMESTAMPTZ, publish_date DATE,
+            metrics_scraped_at TIMESTAMPTZ, metrics_source TEXT, scrape_source TEXT, scrape_status TEXT, source TEXT,
             posted_at TIMESTAMPTZ, evidence_type TEXT, is_active BOOLEAN
         );
         CREATE TABLE vkpi_analysis_cache (

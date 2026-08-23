@@ -676,8 +676,10 @@ def recall_kol_profiles(
             for field in rejected_fields:
                 hard_filter_rejected_by[field] = hard_filter_rejected_by.get(field, 0) + 1
             continue
-        # 证据意图词=检索词∪人群词(product_focus/target_persona);只用检索词时 LLM 常给泛角色词被剔光→496/500 判无证据(08-23)
-        field_evidence = build_match_evidence(row, evidence, evidence_query_text, required_product_terms=safe_product_evidence_terms)
+        # 先按检索词判(老行为);判空再用 检索词∪人群词 兜底——LLM 常给泛角色词被剔光→496/500 判无证据(08-23)
+        field_evidence = build_match_evidence(row, evidence, resolved_text, required_product_terms=safe_product_evidence_terms) or (
+            build_match_evidence(row, evidence, evidence_query_text, required_product_terms=safe_product_evidence_terms)
+            if evidence_query_text != resolved_text else [])
         if not allow_backfill and not field_evidence:
             filtered_no_match_evidence_count += 1
             continue

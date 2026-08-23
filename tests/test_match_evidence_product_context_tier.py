@@ -38,4 +38,4 @@ def test_recall_evidence_gate_uses_persona_terms():
     from pathlib import Path
     src = Path(__file__).resolve().parents[1].joinpath("backend/app/domains/kol/profile_recall.py").read_text(encoding="utf-8")
     assert 'evidence_query_text = f"{resolved_text} {persona_text}"' in src
-    assert "build_match_evidence(row, evidence, evidence_query_text" in src
+    assert "build_match_evidence(row, evidence, evidence_query_text" in src and "build_match_evidence(row, evidence, resolved_text" in src
