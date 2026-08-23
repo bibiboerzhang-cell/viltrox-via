@@ -10,7 +10,6 @@ import { KOLDrawerOutreachSection } from "./KOLDrawerOutreachSection";
 import { runSkill, type SkillRunResult } from "../../../../services/vkpi/skills-api";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { kolHumanDisplayName } from "../lib/kolIdentity";
-import { GoaffproLinkSection } from "../../shared/GoaffproLinkSection";
 import {
   asArray,
   detailBundleAnalysisItems,
@@ -30,15 +29,14 @@ import {
   RepresentativeVideoPlayerModal,
 } from "./KOLDetailDrawer.Panels";
 import { SignaturePanel } from "./SignaturePanel";
-import { FocalMatrixPanel } from "./FocalMatrixPanel";
 import { QualityCompliancePanel } from "./QualityCompliancePanel";
 import { SimilarVideosPanel } from "./SimilarVideosPanel";
-import { ForecastPanel } from "./ForecastPanel";
 import { RateCardPanel } from "./RateCardPanel";
 import { AudienceGeoPanel } from "./AudienceGeoPanel";
 import { OutreachCriticSignalCard } from "./OutreachCriticSignalCard";
 import { SafetyAuthenticityPanel } from "./SafetyAuthenticityPanel";
 import { KOLAnalysisTrustPanel } from "./KOLAnalysisTrustPanel";
+import { KolVideoAnalysisProgressPanel } from "./KolVideoAnalysisProgressPanel";
 import { videoAnalysisGateMessage } from "./KOLDetailDrawer.gates";
 import { DRAWER_TABS, KOLDrawerBriefSkill, KOLDrawerCoopActions, KOLDrawerViewerContextBar, readStoredDrawerTab, storeDrawerTab } from "./KOLDetailDrawer.Subsections";
 import { useKOLDrawerViewerContext } from "./useKOLDrawerViewerContext";
@@ -66,6 +64,17 @@ export { CopyEmailButton, KOLDetailAvatar, RepresentativeVideoCard } from "./KOL
 export { videoAnalysisGateMessage } from "./KOLDetailDrawer.gates";
 
 const e = React.createElement;
+
+// C8 chunk 余量(优化波 B):镜头(焦段矩阵)/ 趋势(预测战绩)/ 追踪(GOAFFPRO 追踪链)三模块改 React.lazy 分包——
+// 只在对应 tab 真正渲染时才拉代码,KOL 详情主块不再背着它们;vite.config 已把三者从 workbench 具名块放出,
+// 交给 Rollup 按异步边界自动分(绝不塞具名 chunk,免 R3 成环)。失败时 Suspense 兜底为空行,不炸抽屉。
+const FocalMatrixPanel = React.lazy(() => import("./FocalMatrixPanel").then((m) => ({ default: m.FocalMatrixPanel })));
+const ForecastPanel = React.lazy(() => import("./ForecastPanel").then((m) => ({ default: m.ForecastPanel })));
+const GoaffproLinkSection = React.lazy(() => import("../../shared/GoaffproLinkSection").then((m) => ({ default: m.GoaffproLinkSection })));
+const LAZY_PANEL_FALLBACK = e("div", { className: "px-5 py-2 text-[10px] text-slate-600", "data-vkpi-lazy-panel": "loading" }, "模块加载中…");
+function lazyPanel(component: React.ComponentType<any>, props: Record<string, unknown>) {
+  return e(React.Suspense, { fallback: LAZY_PANEL_FALLBACK }, e(component, props));
+}
 
 // 【C1 Tab 化】抽屉内容区四 tab:按「用户看数据的心智」把既有 section 分组渲染(零改各 section 内部)。
 // 概览=这人是谁/分数为何/内容速览;深度分析=LLM/视频深析产物;受众=粉丝画像;合作=推进合作的动作面。
@@ -704,7 +713,8 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
             "failed",
           ].includes(resultStatus)) {
             initialTerminal += 1;
-            terminalReasons.push(String(rawItem?.reason || rawItem?.provider_gate_reason || resultStatus));
+            // F3:入队回执若已带人话原因(failure_reason_human)优先;否则沿用 reason / 门禁原因 / 状态码。
+            terminalReasons.push(String(rawItem?.failure_reason_human || rawItem?.reason || rawItem?.provider_gate_reason || resultStatus));
           }
         });
         if (activeEvidenceIds.length > 0) {
@@ -771,7 +781,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     className: "vkpi-kol-detail-drawer fixed top-0 right-0 h-[100dvh] max-h-[100dvh] w-[520px] max-w-[100vw] bg-[#0a1020] border-l border-white/[0.08] shadow-2xl z-50 flex flex-col"
   },
     // ─── Header ───
-    e(KOLDrawerHeader, { item, devices, detailLoading, detailError, onClose: handleClose }),
+    e(KOLDrawerHeader, { item, devices, detailLoading, detailError, onClose: handleClose, apiToken }),
 
     // ── 【M3/M5】观看者上下文条:来自谁的共享 + 认领状态/释放(有数据才渲染,全 tab 常驻)──
     e(KOLDrawerViewerContextBar, {
@@ -866,19 +876,26 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
             className: "mt-1.5 text-[9.5px] leading-relaxed " + (profileCrawlState.status === "error" ? "text-rose-300" : profileCrawlState.status === "crawling" ? "text-amber-300" : "text-slate-400")
           }, profileCrawlState.message)
         ),
+        // F3/F7(优化波 B):账号级深析进度——完成/进行中/未完成 + 失败可读 + ETA 新口径;旧后端无路由时整块不渲染。
+        apiToken && item?.id && e(KolVideoAnalysisProgressPanel, {
+          apiToken,
+          kolPoolId: item.id,
+          refreshKey: `${allVideosState.status}:${videoEnqueueState.status}:${videoAnalysisSummary?.ready_count ?? ""}`,
+          onReissue: () => window.dispatchEvent(new CustomEvent("vkpi:open-mykol-kol", { detail: { kolPoolId: item.id } })),
+        }),
         e(LlmDeepAnalysisPanel, { payload: llmDeepAnalysis }),
         // ── item4 账号档案(本地聚合,零 LLM):覆盖度/缺口/账号级判断/最近事件 ──
         e(AccountDossierPanel, { apiToken, kolPoolId: item?.id }),
         // ── 第2轮 招牌内容画像(零 LLM 纯聚合):擅长拍法 / 最爆 TOP3 / 最引反馈 ──
         e(SignaturePanel, { apiToken, kolPoolId: item?.id }),
         // ── 第3轮 信号聚合:焦段矩阵(覆盖+空白可切入)/ 质量分+FTC披露 / 以主代表作找相似 ──
-        e(FocalMatrixPanel, { apiToken, kolPoolId: item?.id }),
+        lazyPanel(FocalMatrixPanel, { apiToken, kolPoolId: item?.id }),
         e(QualityCompliancePanel, { apiToken, kolPoolId: item?.id }),
         // G4 品牌安全 v0 + 受众真实性(库内信号,诚实标外网扫描待接)
         e(SafetyAuthenticityPanel, { apiToken, kolPoolId: item?.id }),
         e(SimilarVideosPanel, { apiToken, evidenceId: primaryVideoEvidenceId }),
         // ── 第4轮 商业档案:预测战绩(分位数区间+置信度)/ 报价卡(估价+录入) ──
-        e(ForecastPanel, { apiToken, kolPoolId: item?.id }),
+        lazyPanel(ForecastPanel, { apiToken, kolPoolId: item?.id }),
         e(RateCardPanel, { apiToken, kolPoolId: item?.id }),
         // 地基B:内容契合深析(content_fit_v1)——基于视频画面/故事 + 评论的适配判断(胜过粉丝数)。
         e(KOLDrawerContentFit, { apiToken, item, contentFit,
@@ -917,7 +934,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           result: briefResult, busy: briefBusy, error: briefError, onRun: handleRunBriefSkill,
         }),
         // ── D2 生成追踪链(GOAFFPRO):一键给该 KOL 建 affiliate + 追踪链 + 优惠码(KOL 零注册)──
-        e(GoaffproLinkSection, { apiToken, kolPoolId: item?.id }),
+        lazyPanel(GoaffproLinkSection, { apiToken, kolPoolId: item?.id }),
         // ── P-GROUP-7 共享成员 + 查看完整档案：纯行动区抽出，状态/路由契约不变。──
         e(KOLDrawerCoopActions, { apiToken, item, onOpenShare: () => setShareOpen(true) }),
       ),

@@ -16,6 +16,7 @@ import { PlanPills, RecallMiniItem } from "./SmartKolInputPanel.Sections";
 import { recallTopItems, type SearchSessionProgress } from "./SmartKolInputPanel.derivers";
 import { ProgressiveSearchStageCard } from "./SmartKolInputPanel.Progress";
 import { kolHumanDisplayName } from "../lib/kolIdentity";
+import { useSearchFeedbackLabeledCount } from "../../../../services/vkpi/searchFeedback-api";
 
 type SessionBanner = {
   tone: string;
@@ -220,6 +221,8 @@ function evaluationPercent(value: unknown): string {
 export function SearchEvaluationStatus({ evaluation }: { evaluation: Row }) {
   const state = evaluationState(evaluation.state);
   const target = optionalCount(evaluation.target_count) ?? 180;
+  // F4:本会话 👍/👎 最小标注计数(服务端回 labeled_count 优先,否则本地已保存条数)。
+  const quickLabeled = useSearchFeedbackLabeledCount();
   const labeled = optionalCount(evaluation.labeled_count) ?? 0;
   const dualTarget = optionalCount(evaluation.dual_review_target);
   const dualReviewed = optionalCount(evaluation.dual_reviewed_count);
@@ -231,15 +234,17 @@ export function SearchEvaluationStatus({ evaluation }: { evaluation: Row }) {
       ? `${version ? `${version} · ` : ""}真人 Gold Set 已冻结，评测结果可分享`
       : state === "stale"
         ? "算法或数据版本已变化；历史评测需重跑，当前不发布准确率"
-        : "尚无真人标注；当前只显示检索相关度，不发布准确率";
+        : quickLabeled > 0
+          ? `已标注 ${quickLabeled} 条（卡片 👍/👎）；未达 Gold Set 门槛前只显示检索相关度，不发布准确率`
+          : "尚无真人标注；可在结果卡上用 👍/👎 标注，当前只显示检索相关度，不发布准确率";
   const tone = state === "shareable"
     ? "border-emerald-300/20 bg-emerald-400/[0.055] text-emerald-100"
     : state === "stale"
       ? "border-rose-300/20 bg-rose-400/[0.055] text-rose-100"
       : "border-sky-300/18 bg-sky-400/[0.045] text-sky-100";
   return (
-    <div data-testid="search-evaluation-status" data-evaluation-state={state} className={`mb-2 rounded-md border px-2.5 py-1.5 text-[10px] leading-relaxed ${tone}`}>
-      <div className="font-medium">搜索质量：{state === "shareable" ? "可分享" : state === "labeling" ? "标注中" : state === "stale" ? "需重评" : "未评测"}</div>
+    <div data-testid="search-evaluation-status" data-evaluation-state={state} data-quick-labeled={quickLabeled} className={`mb-2 rounded-md border px-2.5 py-1.5 text-[10px] leading-relaxed ${tone}`}>
+      <div className="font-medium">搜索质量：{state === "shareable" ? "可分享" : state === "labeling" ? "标注中" : state === "stale" ? "需重评" : quickLabeled > 0 ? `已标注 ${quickLabeled}` : "未评测"}</div>
       <div className="opacity-80">{copy}</div>
       {state === "shareable" && Object.keys(metrics).length ? (
         <div data-testid="search-evaluation-metrics" className="mt-0.5 flex flex-wrap gap-x-2 text-[9.5px]">
@@ -732,7 +737,8 @@ export function TextResultSection({
             { k: "youtube", t: "YouTube" },
             { k: "instagram", t: "Instagram" },
             { k: "tiktok", t: "TikTok" },
-            { k: "facebook", t: "Facebook · 暂不支持严格30", strictDisabled: true, tip: "普通发现仍保留 Facebook；当前严格联网 30 仅支持 YouTube、Instagram、TikTok" },
+            // F5 诚实状态:Facebook 只进候选池(③),不进严格 30;标签直说「仅候选池」。
+            { k: "facebook", t: "Facebook · 仅候选池", strictDisabled: true, tip: "Facebook 发现结果只进入候选池观察，不计入严格联网 30；严格 30 当前仅支持 YouTube、Instagram、TikTok" },
           ] as { k: string; t: string; tip?: string; strictDisabled?: boolean }[]).map((p) => {
             const on = discoveryPlatforms.includes(p.k);
             const disabled = p.strictDisabled || (on && discoveryPlatforms.length === 1);
@@ -791,7 +797,7 @@ export function TextResultSection({
               // 重复卡修:渲染 key 用「平台:handle」身份键(pool id 回填不换 key,不再裂成两张卡)。
               return (
                 <div key={`d-${key || item.kol_pool_id || index}`} className="h-full">
-                  <RecallMiniItem item={item} index={index + 1} onOpen={openProductScopedItem} />
+                  <RecallMiniItem item={item} index={index + 1} onOpen={openProductScopedItem} feedbackSource="discovery_wall" feedbackToken={apiToken} />
                 </div>
               );
             }}

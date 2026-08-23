@@ -1,5 +1,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { etaLabel, etaSecondsOf, hasReadableFailure } from "../../../../services/vkpi/failureReason";
+import { FailureGuidance } from "../lib/failureGuidance";
 import { Brain, Clock3, FileText, Search, Zap } from "lucide-react";
 import { buildApiUrl } from "../../../../services/http";
 import { retryTask } from "../../../../services/vkpi/tasks-api";
@@ -63,11 +65,9 @@ function taskLabel(task: any) {
 // 人性化 ETA:<60s 显示秒,≥60s 显示分钟。字段缺失/非法(旧任务、LLM 调用行)返回空串不显示。
 // 诊断 P1-1 根治已落(迁移112 started_at → queue_view 用真处理时长 claim→done):ETA 可信;
 // 无 started_at 样本时 queue_view 回退 300s 默认,不再是墙钟 7.8 天的谎言。
+// F7(优化波 B):ETA 只认 eta_seconds 新口径(活跃车道数 × 队列位置 × p50),缺失不显示;文案走共享 etaLabel。
 function etaHumanText(task: any) {
-  const eta = Number(task?.eta_seconds);
-  if (!Number.isFinite(eta) || eta <= 0) return "";
-  if (eta < 60) return `约 ${Math.max(1, Math.round(eta))} 秒`;
-  return `约 ${Math.round(eta / 60)} 分钟`;
+  return etaLabel(etaSecondsOf(task));
 }
 
 // 排队行元信息:「第 X 位 · 约 Y」。queue_position 缺失退回 ahead_count(前方 N 个),都缺则不显示。
@@ -588,7 +588,7 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
           const st = retrying[task.id];
           return e("div", {
             key: `failed-${task.id}`,
-            className: "flex min-w-0 items-center justify-between gap-2 rounded-md border border-crit-soft bg-crit-soft px-2 py-1"
+            className: "flex min-w-0 flex-wrap items-center justify-between gap-2 rounded-md border border-crit-soft bg-crit-soft px-2 py-1"
           },
             e("div", { className: "flex min-w-0 items-center gap-1.5" },
               e("span", {
@@ -603,7 +603,13 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
               onClick: () => handleRetry(task),
               className: `shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium ${st === "done" ? "border-good-soft text-good cursor-default" : st === "loading" ? "border-line text-muted cursor-wait" : "border-crit-soft text-crit hover:bg-crit-soft"}`,
               title: typeof st === "string" && st !== "loading" && st !== "done" ? st : ""
-            }, st === "loading" ? "重试中…" : st === "done" ? "已重排" : "重试")
+            }, st === "loading" ? "重试中…" : st === "done" ? "已重排" : "重试"),
+            // F3 失败可读:有 failure_category / failure_reason_human 才渲染;authorization 类跳 MY KOL 重发。
+            hasReadableFailure(task) && e(FailureGuidance, {
+              source: task,
+              className: "basis-full",
+              onReissue: () => window.dispatchEvent(new CustomEvent("vkpi:open-mykol-kol", { detail: { kolPoolId: task?.target?.kol_pool_id ?? null, task } })),
+            })
           );
         })
       ) : null

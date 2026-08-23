@@ -231,10 +231,8 @@ export default defineConfig(({ command }) => {
               id.includes("/src/components/vkpi/cockpit/components/SignaturePanel") ||
               id.includes("/src/components/vkpi/cockpit/components/AudienceGeoPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/CommerceSignalsPanel") ||
-              id.includes("/src/components/vkpi/cockpit/components/FocalMatrixPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/QualityCompliancePanel") ||
               id.includes("/src/components/vkpi/cockpit/components/SimilarVideosPanel") ||
-              id.includes("/src/components/vkpi/cockpit/components/ForecastPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/RateCardPanel") ||
               id.includes("/src/components/vkpi/cockpit/components/OutreachCriticSignalCard") ||
               id.includes("/src/components/vkpi/cockpit/components/SafetyAuthenticityPanel")
@@ -307,9 +305,19 @@ export default defineConfig(({ command }) => {
             ) {
               return undefined;
             }
+            // C8(优化波 B):镜头(FocalMatrixPanel)/ 趋势(ForecastPanel)/ 追踪(GoaffproLinkSection)三模块由
+            // KOLDetailDrawer React.lazy 按需加载;不再塞进 workbench / widgets 具名块,交给 Rollup 按真实
+            // 异步边界自动分(同 R3 红线:lazy 目标不进具名 chunk)。GoaffproLinkSection 仍被几个页面静态引用,
+            // Rollup 会把它归到那些页面共享的异步块;widgets 对它零静态引用,不会形成回边。
+            if (
+              id.includes("/src/components/vkpi/cockpit/components/FocalMatrixPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/ForecastPanel") ||
+              id.includes("/src/components/vkpi/shared/GoaffproLinkSection")
+            ) {
+              return undefined;
+            }
             if (
               id.includes("/src/components/vkpi/cockpit/components/") ||
-              id.includes("/src/components/vkpi/shared/GoaffproLinkSection") ||
               id.includes("/src/components/vkpi/shared/ShareModal") ||
               id.includes("/src/components/vkpi/shared/ShareKolModal") ||
               id.includes("/src/components/vkpi/shared/mediaProxy")

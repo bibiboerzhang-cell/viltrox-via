@@ -134,6 +134,8 @@ export function analysisTerminalCopy(item: AnalysisTaskLike): {
   const status = String(item.status || "").toLowerCase();
   const fallbackMode = String(item.fallback_mode || "");
   const rawReason = item.reason_code || item.error_category;
+  // F3 失败可读:后端已给人话原因(failure_reason_human)时直接采用,不再从机器码猜。
+  const humanReason = String(item.failure_reason_human || "").trim();
   if (status === "done" && fallbackMode === "provider_fallback") {
     return { label: "回退模型后完成", detail: "首选模型未形成结果，已由已登记回退模型完成。", tone: "warn" };
   }
@@ -142,7 +144,9 @@ export function analysisTerminalCopy(item: AnalysisTaskLike): {
     return { label: "等待重试", detail: "本轮尚未完成，任务仍在重试队列中。", tone: "warn" };
   }
   if (status === "blocked") {
-    const reason = humanizeLlmReason(rawReason, "任务被就绪、预算或权限闸门阻止，未继续执行。");
+    const reason = humanReason
+      ? { message: humanReason, code: "" }
+      : humanizeLlmReason(rawReason, "任务被就绪、预算或权限闸门阻止，未继续执行。");
     return {
       label: fallbackMode === "rule_v0" ? "已阻塞 · 规则回退" : "已阻塞",
       detail: fallbackMode === "rule_v0"
@@ -174,7 +178,9 @@ export function analysisTerminalCopy(item: AnalysisTaskLike): {
       tone: "failed",
     };
   }
-  const reason = humanizeLlmReason(rawReason, "任务未形成可用结果；可在任务中心查看并按策略重试。");
+  const reason = humanReason
+    ? { message: humanReason, code: "" }
+    : humanizeLlmReason(rawReason, "任务未形成可用结果；可在任务中心查看并按策略重试。");
   return { label: "失败", detail: reason.message, tone: "failed" };
 }
 

@@ -424,7 +424,11 @@ export function KolVideoSection({
                     <span title={video.share_count == null ? "分享未采集" : "分享(点时实测)"}>⤴ {video.share_count != null ? Number(video.share_count).toLocaleString() : "未采集"}</span>
                   </div>
                   <VideoTrendLine video={video} />
-                  <VideoTaskStatus tasks={video.tasks} />
+                  <VideoTaskStatus
+                    tasks={video.tasks}
+                    onRetryAnalysis={!paidActionsReadOnly && !isImageKindVideo(video) ? () => onEnqueueOne(video) : undefined}
+                    retryBusy={queuedEvidence.has(eid) || busyKeys.has(`deep:${eid}`)}
+                  />
                   {productSkus.length ? (
                     <div className="mt-1 flex flex-wrap items-center gap-1" aria-label="该视频关联产品 SKU">
                       {productSkus.map((sku) => (

@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, RefreshCw, ShieldCheck, Video } from "lucide-react";
-import { getKolVideoAnalysisCache, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
+import { getKolVideoAnalysisBatch, type VkpiKolVideoAnalysisCacheEntry } from "../../../../services/vkpi/kolPool-api";
+import { failureReasonHumanOf, hasReadableFailure } from "../../../../services/vkpi/failureReason";
+import { FailureGuidance } from "../lib/failureGuidance";
 // 【K4】媒体种类徽章(图/组图/视频):helpers 只从本文件 import 类型(编译期擦除),无运行时环。
 import { mediaKindBadge } from "./KOLDetailDrawer.helpers";
 
@@ -518,26 +520,36 @@ export function KOLVideoAnalysisPanel({
       };
     }
     setLoading(true);
-    Promise.all(
-      evidenceVideos.map(async (video) => {
-        const evidenceId = videoEvidenceId(video);
-        const [finalResult, qaResult] = await Promise.allSettled([
-          getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1"),
-          getKolVideoAnalysisCache(apiToken, evidenceId, "video_analysis_final_v1_keyframe_qa"),
-        ]);
-        const finalResponse = finalResult.status === "fulfilled" ? finalResult.value : null;
-        const analysisJob = asRecord(finalResponse?.analysis_job);
-        const state = textFrom(analysisJob.state ?? analysisJob.status ?? finalResponse?.state).toLowerCase() || "unknown";
-        return {
-          video,
-          finalEntry: finalResponse?.state === "ready" ? finalResponse.entry || null : null,
-          qaEntry: qaResult.status === "fulfilled" && qaResult.value.state === "ready" ? qaResult.value.entry || null : null,
-          state,
-          reason: firstText(analysisJob.reason_detail, analysisJob.reason, analysisJob.error_category, state),
-          analysisJob: Object.keys(analysisJob).length ? analysisJob : null,
+    // C9(优化波 B):逐卡 2×N 次缓存探针改为 2 次批量矩阵(analysis-cache/batch,同一 entry/analysis_job 形状)。
+    const evidenceIds = evidenceVideos.map((video) => videoEvidenceId(video));
+    Promise.allSettled([
+      getKolVideoAnalysisBatch(apiToken, evidenceIds, "video_analysis_final_v1"),
+      getKolVideoAnalysisBatch(apiToken, evidenceIds, "video_analysis_final_v1_keyframe_qa"),
+    ])
+      .then(([finalBatch, qaBatch]) => {
+        const indexBatch = (result: PromiseSettledResult<{ items?: unknown[] } | null | undefined>) => {
+          const rows = result.status === "fulfilled" && Array.isArray(result.value?.items) ? result.value.items : [];
+          return new Map(rows.map((row) => [textFrom(asRecord(row).target_id), asRecord(row)]));
         };
-      }),
-    )
+        const finalById = indexBatch(finalBatch);
+        const qaById = indexBatch(qaBatch);
+        return evidenceVideos.map((video) => {
+          const evidenceId = textFrom(videoEvidenceId(video));
+          const finalResponse = finalById.get(evidenceId) || null;
+          const qaResponse = qaById.get(evidenceId) || null;
+          const analysisJob = asRecord(finalResponse?.analysis_job);
+          const state = textFrom(analysisJob.state ?? analysisJob.status ?? finalResponse?.state).toLowerCase() || "unknown";
+          return {
+            video,
+            finalEntry: finalResponse?.state === "ready" ? (finalResponse.entry as VkpiKolVideoAnalysisCacheEntry) || null : null,
+            qaEntry: qaResponse?.state === "ready" ? (qaResponse.entry as VkpiKolVideoAnalysisCacheEntry) || null : null,
+            state,
+            // F3 失败可读:后端人话原因优先;旧机器码只在缺席时兜底。
+            reason: failureReasonHumanOf(analysisJob) || firstText(analysisJob.reason_detail, analysisJob.reason, analysisJob.error_category, state),
+            analysisJob: Object.keys(analysisJob).length ? analysisJob : null,
+          };
+        });
+      })
       .then((items) => {
         if (!cancelled) setBundles(items);
       })
@@ -635,6 +647,13 @@ export function KOLVideoAnalysisPanel({
           <div className="mt-1 text-[9.5px] text-slate-600">
             {analysisNotice?.text || `已找到 ${Number.isFinite(summaryEvidenceCount) && summaryEvidenceCount > 0 ? summaryEvidenceCount : evidenceVideos.length} 条 video evidence，但尚无 video_analysis_final_v1 结果。`}
           </div>
+          {/* F3 失败可读:终态项带 failure_category / failure_reason_human 才渲染;authorization 类跳 MY KOL 由负责人重发。 */}
+          {terminalBundle?.analysisJob && hasReadableFailure(terminalBundle.analysisJob) ? (
+            <FailureGuidance
+              source={terminalBundle.analysisJob}
+              onReissue={() => window.dispatchEvent(new CustomEvent("vkpi:open-mykol-kol", { detail: { evidenceId: videoEvidenceId(terminalBundle.video) } }))}
+            />
+          ) : null}
           {error ? <div className="mt-1 text-[9.5px] text-rose-300">{error}</div> : null}
         </div>
       )}

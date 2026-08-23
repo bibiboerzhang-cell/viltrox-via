@@ -454,15 +454,16 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
       skipped: 0,
       items: [{ status: "queued", evidence_id: 99 }],
     });
-    getKolVideoAnalysisBatch
-      .mockResolvedValueOnce({
-        count: 1,
-        items: [{ target_id: "99", state: "running", analysis_job: { state: "running" } }],
-      })
-      .mockResolvedValueOnce({
-        count: 1,
-        items: [{ target_id: "99", state: "ready", entry: { status: "ready" } }],
-      });
+    // C9 后结果面板也走 batch(字符串 id、final_v1 + keyframe_qa 两次);抽屉轮询走数字 id。
+    // 只给抽屉轮询排序列,面板探针一律回空矩阵。
+    const pollResults = [
+      { count: 1, items: [{ target_id: "99", state: "running", analysis_job: { state: "running" } }] },
+      { count: 1, items: [{ target_id: "99", state: "ready", entry: { status: "ready" } }] },
+    ];
+    getKolVideoAnalysisBatch.mockImplementation(async (_token: string, ids: unknown[], method: string) => {
+      if (method === "video_analysis_final_v1" && typeof ids[0] === "number") return pollResults.shift() ?? pollResults[pollResults.length - 1];
+      return { count: 0, items: [] };
+    });
     const onReloadDetail = vi.fn().mockResolvedValue(undefined);
     const video = { evidence_id: 99, evidence_type: "video", content_url: "https://example.com/99.mp4" };
     renderDrawer({
@@ -569,8 +570,13 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
     fireEvent.click(screen.getByRole("button", { name: "KOL深度分析理解(最近20条)" }));
 
     expect(await screen.findByText("全视频深析终态：0 条就绪，1 条未完成（model_binding_blocked）。")).toBeInTheDocument();
-    expect(getKolVideoAnalysisBatch).not.toHaveBeenCalled();
-    expect(getKolVideoAnalysisCache).toHaveBeenCalledTimes(2);
+    // 抽屉轮询不启动(零数字 id 的 final_v1 batch 调用);结果面板自己的 2 次字符串 id 探针不算轮询。
+    const pollCalls = getKolVideoAnalysisBatch.mock.calls.filter((call) => typeof call[1]?.[0] === "number");
+    expect(pollCalls).toHaveLength(0);
+    expect(getKolVideoAnalysisBatch).toHaveBeenCalledTimes(2);
+    expect(getKolVideoAnalysisBatch).toHaveBeenCalledWith("tok", ["99"], "video_analysis_final_v1");
+    expect(getKolVideoAnalysisBatch).toHaveBeenCalledWith("tok", ["99"], "video_analysis_final_v1_keyframe_qa");
+    expect(getKolVideoAnalysisCache).not.toHaveBeenCalled();
   });
 
   it("status=ready → 渲染长期记忆标题/内容风格/产品线/履约/独立徽标", async () => {

@@ -8,6 +8,7 @@ import {
   type VkpiVideoTasks,
 } from "../../../../services/vkpi/myKolVideoTasks";
 import type { VkpiKolPoolVideoRow } from "../../../../services/vkpi/myKolBoard-api";
+import { EtaHint, FailureGuidance } from "../lib/failureGuidance";
 import { useT } from "../lib/i18n";
 
 // MY KOL 视频任务状态 UI(员工反馈 #5:看不到单品播放追踪、不知道怎么加)。
@@ -19,12 +20,23 @@ import { useT } from "../lib/i18n";
 
 const STATUS_CHIP = "inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-px text-[9.5px] font-bold leading-4";
 
-function TaskRow({ kind, tasks }: { kind: "metric" | "analysis"; tasks: VkpiVideoTasks }) {
+function TaskRow({
+  kind,
+  tasks,
+  onRetryAnalysis,
+  retryBusy = false,
+}: {
+  kind: "metric" | "analysis";
+  tasks: VkpiVideoTasks;
+  onRetryAnalysis?: () => void;
+  retryBusy?: boolean;
+}) {
   const { t } = useT();
   const state = kind === "metric" ? tasks.metric_refresh : tasks.final_v1;
   const chip = taskChip(kind, state);
   const fresh = freshnessText(kind, state);
   const active = isTaskActive(state);
+  const failed = state.status === "failed" || state.status === "blocked";
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5" data-vkpi-video-task={kind} data-vkpi-task-status={state.status}>
       <span className={`${STATUS_CHIP} ${TASK_CHIP_TONE_CLASS[chip.tone]}`} title={chip.title} role="status">
@@ -32,12 +44,29 @@ function TaskRow({ kind, tasks }: { kind: "metric" | "analysis"; tasks: VkpiVide
         {t(chip.label)}
       </span>
       <span className="font-mono text-[10px] leading-4 text-muted" title={fresh.title}>{t(fresh.label)}</span>
+      {/* F7 ETA 新口径:只认服务端 eta_seconds;缺失不显示,绝不假排队。 */}
+      {active ? <EtaHint source={state} /> : null}
+      {/* F3 失败可读:failure_reason_human + 按类别动作;authorization 在 MY KOL 内原地重发(收藏负责人)。 */}
+      {failed && kind === "analysis" ? (
+        <FailureGuidance source={state} onReissue={onRetryAnalysis} reissueBusy={retryBusy} className="basis-full" />
+      ) : null}
     </div>
   );
 }
 
 /** 每条视频的两层状态(播放追踪 + 深析)。tasks 缺席(board-ext 聚合行)→ 诚实提示而非假「未发起」。 */
-export function VideoTaskStatus({ tasks, compact = false }: { tasks: VkpiVideoTasks | null | undefined; compact?: boolean }) {
+export function VideoTaskStatus({
+  tasks,
+  compact = false,
+  onRetryAnalysis,
+  retryBusy = false,
+}: {
+  tasks: VkpiVideoTasks | null | undefined;
+  compact?: boolean;
+  /** 深析失败(authorization 类)时「从 MY KOL 重新发起」;只读视图不传 = 不渲染按钮 */
+  onRetryAnalysis?: () => void;
+  retryBusy?: boolean;
+}) {
   const { t } = useT();
   if (!tasks) {
     return compact ? null : (
@@ -49,7 +78,7 @@ export function VideoTaskStatus({ tasks, compact = false }: { tasks: VkpiVideoTa
   return (
     <div className="mt-1 flex flex-col gap-0.5">
       <TaskRow kind="metric" tasks={tasks} />
-      {compact ? null : <TaskRow kind="analysis" tasks={tasks} />}
+      {compact ? null : <TaskRow kind="analysis" tasks={tasks} onRetryAnalysis={onRetryAnalysis} retryBusy={retryBusy} />}
     </div>
   );
 }

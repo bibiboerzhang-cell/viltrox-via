@@ -125,6 +125,50 @@ export async function getKolVideoAnalysisCache(
   );
 }
 
+// 账号级深析进度(优化波 B · O→F 契约):GET /kol-pool/{id}/video-analysis-progress。
+//   completed / in_progress / failed / percent / eta_seconds(新口径)+ items[*].failure_category / failure_reason_human。
+//   旧后端无该路由 → 404,调用方据此静默不渲染(不编进度)。
+export interface VkpiKolVideoAnalysisProgressItem {
+  evidence_id: number;
+  content_url?: string | null;
+  platform?: string | null;
+  title?: string | null;
+  state: string;
+  job_id?: number | null;
+  job_status?: string | null;
+  attempts?: number | null;
+  last_error_category?: string | null;
+  failure_category?: string | null;
+  failure_reason_human?: string | null;
+  failure_code?: string | null;
+}
+
+export interface VkpiKolVideoAnalysisProgress {
+  kol_pool_id: number;
+  state: "no_evidence" | "running" | "done" | "partial_failed" | "idle" | "partial" | string;
+  completed: number;
+  in_progress: number;
+  failed: number;
+  not_requested?: number;
+  percent?: number;
+  scope?: { limit?: number; evidence_total?: number; scope_total?: number };
+  eta_seconds?: number | null;
+  items?: VkpiKolVideoAnalysisProgressItem[];
+}
+
+export async function getKolVideoAnalysisProgress(
+  token: string,
+  kolPoolId: string | number,
+  options: { includeItems?: boolean; signal?: AbortSignal } = {},
+): Promise<VkpiKolVideoAnalysisProgress> {
+  const params = new URLSearchParams({ include_items: options.includeItems === false ? "false" : "true", _ts: String(Date.now()) });
+  return apiFetch<VkpiKolVideoAnalysisProgress>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/video-analysis-progress?${params.toString()}`,
+    { cache: "no-store", signal: options.signal },
+    token,
+  );
+}
+
 export async function getKolVideoAnalysisBatch(
   token: string,
   evidenceIds: Array<string | number>,

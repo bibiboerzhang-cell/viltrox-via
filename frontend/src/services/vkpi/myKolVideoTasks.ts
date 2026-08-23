@@ -31,6 +31,11 @@ export interface VkpiTaskState {
   requested_at: string | null;
   updated_at: string | null;
   data: VkpiTaskData;
+  /** 失败可读(优化波 B · O→F 契约):失败/阻断项才有;缺席 = 旧服务端,门面不编故事。 */
+  failure_category?: string;
+  failure_reason_human?: string;
+  /** ETA 新口径(活跃车道数 × 队列位置 × p50);只在排队/进行中且服务端给了才有。 */
+  eta_seconds?: number | null;
 }
 
 export interface VkpiVideoTasks {
@@ -62,6 +67,11 @@ export function normalizeTaskState(raw: unknown): VkpiTaskState {
   const data = (source.data && typeof source.data === "object" ? source.data : {}) as Record<string, unknown>;
   const dataStatus = String(data.status || "none");
   const freshness = String(data.freshness || "unavailable");
+  // 失败可读 / ETA:任务态顶层优先,data 层兜底;缺席不补默认值(前端按「没有」处理)。
+  const failureCategory = String(source.failure_category ?? data.failure_category ?? "").trim();
+  const failureReasonHuman = String(source.failure_reason_human ?? data.failure_reason_human ?? "").trim();
+  const etaRaw = source.eta_seconds ?? data.eta_seconds;
+  const etaSeconds = etaRaw == null ? null : Number(etaRaw);
   return {
     status: (["queued", "running", "retrying", "blocked", "failed", "ready", "not_requested"].includes(status) ? status : "failed") as VkpiTaskStatus,
     job_id: Number.isFinite(Number(source.job_id)) && source.job_id != null ? Number(source.job_id) : null,
@@ -77,6 +87,9 @@ export function normalizeTaskState(raw: unknown): VkpiTaskState {
       ...(data.sample_count != null ? { sample_count: Math.max(0, Number(data.sample_count) || 0) } : {}),
       ...(data.attempt_count != null ? { attempt_count: Math.max(0, Number(data.attempt_count) || 0) } : {}),
     },
+    ...(failureCategory ? { failure_category: failureCategory } : {}),
+    ...(failureReasonHuman ? { failure_reason_human: failureReasonHuman } : {}),
+    ...(etaRaw != null && Number.isFinite(etaSeconds) ? { eta_seconds: etaSeconds } : {}),
   };
 }
 
@@ -126,6 +139,9 @@ function stamp(value: string | null | undefined): string {
 /** 阻断/失败的诚实原因等级:契约不下发 raw error,只能按可观测事实分级。 */
 function failureLevel(kind: VideoTaskKind, state: VkpiTaskState): string {
   const attempts = Number(state.data.attempt_count || 0);
+  // 新契约有人话原因就直接说(悬浮说明);旧分级文案只在缺席时兜底。
+  const human = String(state.failure_reason_human || "").trim();
+  if (human) return `${TASK_KIND_NOUN[kind]}${state.status === "blocked" ? "已阻断" : "失败"} · ${human}`;
   if (state.status === "blocked") {
     return `${TASK_KIND_NOUN[kind]}已阻断 · 需人工处理(权限、额度或资料缺失之一;不会自动重跑)`;
   }

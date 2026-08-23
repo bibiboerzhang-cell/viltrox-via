@@ -3,9 +3,11 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import {
   type AsyncTask,
@@ -61,7 +63,37 @@ interface ActiveTaskRequest {
   promise: Promise<boolean>;
 }
 
-const TaskCenterContext = createContext<TaskCenterAPI | null>(null);
+// C9(优化波 B):轮询状态下沉到独立 store 切片 + selector。
+//   此前 context value 每次任务快照变化(活跃任务 3s 一拍)都换引用,所有 useTaskCenter 消费方
+//   (含只用 waitForTask 的 ChannelContentList 等)整棵重渲染;waitForTask 又闭包 tasks,导致即便
+//   任务未变也每拍换引用。现在 context 只放一个恒定的 store 句柄,消费方用 useTaskCenterSelector
+//   只订阅自己那片(Object.is 比较),快照未变/所选切片未变 = 零重渲染。
+interface TaskCenterStore {
+  getSnapshot: () => TaskCenterAPI;
+  subscribe: (listener: () => void) => () => void;
+}
+
+function createTaskCenterStore(initial: TaskCenterAPI): TaskCenterStore & { set: (next: TaskCenterAPI) => void; notify: () => void } {
+  let snapshot = initial;
+  const listeners = new Set<() => void>();
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    set: (next) => {
+      snapshot = next;
+    },
+    notify: () => {
+      listeners.forEach((listener) => listener());
+    },
+  };
+}
+
+const TaskCenterContext = createContext<TaskCenterStore | null>(null);
 
 function isTerminalTask(task: AsyncTask) {
   return terminalStatusSet.has(task.status);
@@ -107,6 +139,9 @@ function isDocumentHidden() {
 
 export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; children: React.ReactNode }) {
   const [tasks, setTasks] = useState<AsyncTask[]>([]);
+  // waitForTask 读最新任务快照走 ref,不再把 tasks 闭进回调 → 回调引用跨拍稳定。
+  const tasksRef = useRef<AsyncTask[]>(tasks);
+  tasksRef.current = tasks;
   const [realtimeReady, setRealtimeReady] = useState(false);
   const watchersRef = useRef<Map<string, Set<WatcherCallbacks>>>(new Map());
   const previousTasksRef = useRef<Map<string, AsyncTask>>(new Map());
@@ -421,7 +456,7 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
   }, [apiToken]);
 
   const waitForTask = useCallback((taskId: string, callbacks: WatcherCallbacks) => {
-    const currentTask = tasks.find((task) => task.task_id === taskId);
+    const currentTask = tasksRef.current.find((task) => task.task_id === taskId);
     if (currentTask && isTerminalTask(currentTask)) {
       window.setTimeout(() => notifyWatcher(currentTask, callbacks), 0);
       return () => undefined;
@@ -436,7 +471,7 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
       currentWatchers.delete(callbacks);
       if (!currentWatchers.size) watchersRef.current.delete(taskId);
     };
-  }, [tasks]);
+  }, []);
 
   const value = useMemo<TaskCenterAPI>(() => ({
     tasks,
@@ -448,13 +483,59 @@ export function TaskCenterProvider({ apiToken, children }: { apiToken?: string; 
     waitForTask,
   }), [activeTasks, cancelTask, completedTasks, failedTasks, retryTask, tasks, waitForTask]);
 
-  return <TaskCenterContext.Provider value={value}>{children}</TaskCenterContext.Provider>;
+  // store 句柄恒定(context 引用永不变);快照在渲染期同步写入(同一轮渲染的子树读到新值),
+  // 监听方在 layout effect 里统一通知(已在本轮拿到新快照的消费方经 uSES 比较后不会二次渲染)。
+  const storeRef = useRef<ReturnType<typeof createTaskCenterStore> | null>(null);
+  if (!storeRef.current) storeRef.current = createTaskCenterStore(value);
+  const store = storeRef.current;
+  if (store.getSnapshot() !== value) store.set(value);
+  useLayoutEffect(() => {
+    store.notify();
+  }, [store, value]);
+
+  return <TaskCenterContext.Provider value={store}>{children}</TaskCenterContext.Provider>;
 }
 
-export function useTaskCenter() {
-  const context = useContext(TaskCenterContext);
-  if (!context) throw new Error('useTaskCenter must be used inside TaskCenterProvider');
-  return context;
+function useTaskCenterStore(): TaskCenterStore {
+  const store = useContext(TaskCenterContext);
+  if (!store) throw new Error('useTaskCenter must be used inside TaskCenterProvider');
+  return store;
+}
+
+/**
+ * 只订阅任务中心的一片:selector 结果按 isEqual(默认 Object.is)比较,未变不重渲染。
+ * selector 必须是纯函数且对同一快照返回稳定引用(返回新对象/数组要自带 isEqual)。
+ */
+export function useTaskCenterSelector<T>(
+  selector: (api: TaskCenterAPI) => T,
+  isEqual: (a: T, b: T) => boolean = Object.is,
+): T {
+  const store = useTaskCenterStore();
+  const selectorRef = useRef(selector);
+  selectorRef.current = selector;
+  const isEqualRef = useRef(isEqual);
+  isEqualRef.current = isEqual;
+  const cacheRef = useRef<{ snapshot: TaskCenterAPI; selected: T } | null>(null);
+  const getSelected = useCallback(() => {
+    const snapshot = store.getSnapshot();
+    const cached = cacheRef.current;
+    if (cached && cached.snapshot === snapshot) return cached.selected;
+    const selected = selectorRef.current(snapshot);
+    if (cached && isEqualRef.current(cached.selected, selected)) {
+      cacheRef.current = { snapshot, selected: cached.selected };
+      return cached.selected;
+    }
+    cacheRef.current = { snapshot, selected };
+    return selected;
+  }, [store]);
+  return useSyncExternalStore(store.subscribe, getSelected, getSelected);
+}
+
+const identitySelector = (api: TaskCenterAPI) => api;
+
+/** 全量 API(任务快照变化才重渲染;纯动作消费方请改用 useTaskCenterSelector 只取动作)。 */
+export function useTaskCenter(): TaskCenterAPI {
+  return useTaskCenterSelector(identitySelector);
 }
 
 function TaskRow({ task, kind, onCancel, onRetry }: { task: AsyncTask; kind: 'active' | 'done' | 'failed'; onCancel: (taskId: string) => void; onRetry: (taskId: string) => void }) {

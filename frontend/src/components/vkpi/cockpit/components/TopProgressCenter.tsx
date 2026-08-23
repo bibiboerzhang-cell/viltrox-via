@@ -22,6 +22,8 @@ import {
 import { buildApiUrl } from "../../../../services/http";
 import { readStoredApiToken } from "../../../../services/vkpi/globalSearch-api";
 import { relativeFromNow } from "../../lib/timeLocal";
+import { etaLabel, etaSecondsOf, hasReadableFailure } from "../../../../services/vkpi/failureReason";
+import { FailureGuidance } from "../lib/failureGuidance";
 import { useEventStreamOrPoll } from "../useEventStreamOrPoll";
 import {
   analysisProviderLabel,
@@ -72,12 +74,9 @@ function isDeepTask(task: ProgressTask): boolean {
   return /深析|全案/.test(kind) || /final_v1|deep|report/.test(String(task.job_type || ""));
 }
 
-// 人性化 ETA(TaskProgressBoard 同口径):<60s 秒,≥60s 分钟;非法值不显示。
+// 人性化 ETA(TaskProgressBoard 同口径,F7 新口径 eta_seconds):非法/缺失不显示。
 function etaText(seconds: unknown): string {
-  const eta = Number(seconds);
-  if (!Number.isFinite(eta) || eta <= 0) return "";
-  if (eta < 60) return `约 ${Math.max(1, Math.round(eta))} 秒`;
-  return `约 ${Math.round(eta / 60)} 分钟`;
+  return etaLabel(etaSecondsOf({ eta_seconds: seconds }));
 }
 
 function taskTitle(task: ProgressTask | ProgressRecentDone): string {
@@ -217,6 +216,14 @@ function RecentRow({ item }: { item: ProgressRecentDone }) {
       phaseLabel && e("span", null, phaseLabel),
       (providerLabel || taskBindingLabel || phaseLabel) && copy.detail && e("span", null, " · "),
       copy.detail && e("span", null, copy.detail)
+    ),
+    // F3 失败可读:有新契约字段才渲染类别提示/动作;authorization 类跳 MY KOL 由负责人重发。
+    copy.tone !== "ready" && hasReadableFailure(item) && e("div", { className: "pl-3.5" },
+      e(FailureGuidance, {
+        source: item,
+        compact: false,
+        onReissue: () => window.dispatchEvent(new CustomEvent("vkpi:open-mykol-kol", { detail: { kolPoolId: item.kol_pool_id ?? null } })),
+      })
     )
   );
 }

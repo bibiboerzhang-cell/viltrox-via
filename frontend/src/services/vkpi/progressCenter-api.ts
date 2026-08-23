@@ -39,6 +39,9 @@ export interface ProgressTask {
   reason_category?: string | null;
   reason_retryable?: boolean;
   error_category?: string | null;
+  /** 失败可读(优化波 B · O→F 契约):失败项才有;缺席 = 旧服务端。 */
+  failure_category?: string | null;
+  failure_reason_human?: string | null;
   next_retry_at?: string | null;
   parent_job_id?: string | number | null;
   phase?: string | null;
@@ -57,6 +60,7 @@ export interface ProgressRecentDone {
   has_error: boolean;
   masked: boolean;
   job_type?: string | null;
+  kol_pool_id?: string | null;
   provider?: string | null;
   model?: string | null;
   purpose?: string | null;
@@ -67,6 +71,9 @@ export interface ProgressRecentDone {
   reason_category?: string | null;
   reason_retryable?: boolean;
   error_category?: string | null;
+  /** 失败可读(优化波 B · O→F 契约):失败项才有;缺席 = 旧服务端。 */
+  failure_category?: string | null;
+  failure_reason_human?: string | null;
   parent_job_id?: string | number | null;
   phase?: string | null;
   subphase?: string | null;

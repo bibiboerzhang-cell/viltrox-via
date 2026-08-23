@@ -14,6 +14,7 @@ import { kolHumanDisplayName, kolHumanProfileLinkLabel, kolHumanPublicHandle } f
 import type { ContactState } from "../lib/kolContacts";
 import { COUNTRY_INFO } from "../data/countryInfo";
 import { PlatformPill } from "./PlatformPill";
+import { SearchFeedbackControl } from "./SearchFeedbackControl";
 import { CopyEmailButton, KOLDetailAvatar, RepresentativeVideoCard } from "./KOLDetailDrawer";
 import { SectionFold } from "./SectionFold";
 import { asArray, compactText, concernLabel, fixedOrDash, numberOr, pctOrZero, recordOr, scoreText, scoreValue } from "./KOLDetailDrawer.helpers";
@@ -21,7 +22,7 @@ import { asArray, compactText, concernLabel, fixedOrDash, numberOr, pctOrZero, r
 const e = React.createElement;
 
 // ─── Header ───
-export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onClose }: any) {
+export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onClose, apiToken = "" }: any) {
   const displayName = kolHumanDisplayName(item);
   const publicHandle = kolHumanPublicHandle(item);
   return e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
@@ -43,6 +44,8 @@ export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onC
           style: { color: item.v6_fit >= 85 ? "#10b981" : item.v6_fit >= 70 ? "#fbbf24" : "#fb923c" }
         }, item.v6_fit)
       ),
+      // F4 最小标注:KOL 详情头部 👍/👎(source=kol_detail;无 token / 无 pool id 自动不渲染)。
+      e(SearchFeedbackControl, { source: "kol_detail", kolPoolId: item?.id, apiToken, className: "shrink-0 self-start" }),
       e("button", { type: "button", "aria-label": "关闭详情", onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white shrink-0" },
         e(X, { size: 13 })
       )

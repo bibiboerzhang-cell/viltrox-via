@@ -441,6 +441,8 @@ export interface VkpiKolRecallItem {
   session_replay_contract?: string;
   session_replay_complete?: boolean;
   session_replay_missing_fields?: string[];
+  /** 发现墙项对应的搜索会话 item id(F4 标注回传 session_item_id;本地召回项无) */
+  session_item_id?: number;
   source_fields?: Record<string, unknown>;
 }
 

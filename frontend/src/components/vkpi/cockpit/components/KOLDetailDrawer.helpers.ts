@@ -237,8 +237,10 @@ export function videoAnalysisPollSnapshot(payload: any) {
     state,
     ready: state === "ready",
     terminal: TERMINAL_ANALYSIS_POLL_STATES.has(state),
+    // F3 失败可读:后端人话原因(failure_reason_human)优先;旧机器码只在缺席时兜底。
     reason: String(
-      payload?.analysis_job?.reason_detail
+      payload?.analysis_job?.failure_reason_human
+      || payload?.analysis_job?.reason_detail
       || payload?.analysis_job?.reason
       || payload?.analysis_job?.error_category
       || state,

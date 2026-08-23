@@ -7,7 +7,7 @@ import {
 } from '../../../../domains/channels';
 import { getOfficialDailyReport, runOfficialDailyReport } from '../../../../services/vkpi/channel-api';
 import type { ChannelCommentItem, ChannelCommentsResponse, ChannelContentPost, ChannelPostPagination, OfficialChannelAccount } from './channelTypes';
-import { useTaskCenter } from '../../../tasks/TaskCenter';
+import { useTaskCenterSelector } from '../../../tasks/TaskCenter';
 import { invalidateCachedVideoUrl, platformExternalUrl, proxiedImageUrl, useCachedVideoUrl } from "../../shared/mediaProxy";
 import {
   PAGE_SIZE,
@@ -294,7 +294,8 @@ function deltaTag(n: number | undefined | null) {
 }
 
 export function ChannelContentList({ account, apiToken }: { account?: OfficialChannelAccount; apiToken?: string }) {
-  const { waitForTask } = useTaskCenter();
+  // C9:只订阅 waitForTask(引用稳定),任务快照每拍变化不再重渲染整个内容列表。
+  const waitForTask = useTaskCenterSelector((api) => api.waitForTask);
   const [sort, setSort] = useState('latest');
   const [direction, setDirection] = useState('desc');
   const [windowKey, setWindowKey] = useState('year');

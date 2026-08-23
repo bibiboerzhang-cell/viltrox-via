@@ -112,3 +112,45 @@ export function profileStatusCopyFor(profileState: ProfileUiState): { label: str
   };
   return presentation[profileState];
 }
+
+/* ============ F5 诚实状态:「数据源暂不可用」必须带原因 ============ */
+
+const PROVIDER_GATE_REASON_LABELS: Record<string, string> = {
+  budget: "预算闸",
+  budget_exhausted: "预算已用尽",
+  budget_denied: "预算闸拒绝",
+  not_configured: "未配置",
+  provider_not_configured: "未配置",
+  missing_token: "未配置凭据",
+  disabled: "已关闭",
+  operator_disabled: "运营开关关闭",
+  rate_limited: "限流中",
+  provider_429: "限流中",
+  provider_5xx: "上游异常",
+  timeout: "上游超时",
+  unsupported_platform: "平台不支持",
+};
+
+/** 从合同/诊断记录里找 provider_gate_reason(或同义键);没有就空串。 */
+export function providerGateReasonOf(...records: unknown[]): string {
+  for (const raw of records) {
+    const row = asRecord(raw);
+    const direct = cleanText(
+      row.provider_gate_reason
+      ?? asRecord(row.provider_gate).reason
+      ?? asRecord(row.diagnostics).provider_gate_reason
+      ?? asRecord(row.provider_status).reason,
+    );
+    if (direct) return direct;
+  }
+  return "";
+}
+
+/** 「数据源暂不可用」文案:有原因带原因,没有就说明「未就绪(配置/预算)」——绝不写假排队。 */
+export function providerUnavailableLabel(reason: string): string {
+  const key = cleanText(reason);
+  if (!key) return "数据源未就绪(配置/预算)";
+  const label = PROVIDER_GATE_REASON_LABELS[key.toLowerCase()] || key;
+  return `数据源暂不可用(${label})`;
+}
+

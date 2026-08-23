@@ -11,6 +11,8 @@ import {
 } from "../../../../domains/kol";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
 import { translateBio } from "../../../../services/vkpi/kolPool-api";
+import type { SearchFeedbackSource } from "../../../../services/vkpi/searchFeedback-api";
+import { SearchFeedbackControl } from "./SearchFeedbackControl";
 
 import {
   cleanText,
@@ -332,12 +334,17 @@ export function RecallMiniItem({
   index,
   onOpen,
   className = "",
+  feedbackSource,
+  feedbackToken = "",
 }: {
   item: VkpiKolRecallItem;
   index: number;
   onOpen?: (item: VkpiKolRecallItem) => void;
   // 发现网格用:右上角有绝对定位勾选框时传 pr-6 留槽,徽章不再被压在勾选框下(UI 红圈①)。
   className?: string;
+  /** F4 最小标注:传 source 才渲染 👍/👎(发现墙=discovery_wall);需登录 token。 */
+  feedbackSource?: SearchFeedbackSource;
+  feedbackToken?: string;
 }) {
   const [imgError, setImgError] = useState(false);
   const avatar = proxiedImageUrl(item.avatar_url);
@@ -440,12 +447,22 @@ export function RecallMiniItem({
       data-kol-pool-id={item.kol_pool_id || undefined}
       data-candidate-bucket={candidateBucket || "legacy"}
       data-match-tier={matchTier || "unknown"}
-      className={`group h-full min-w-0 overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.015] text-left transition-all hover:border-cyan-300/25 hover:bg-cyan-400/[0.04] ${className}`}
+      className={`group relative h-full min-w-0 overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.015] text-left transition-all hover:border-cyan-300/25 hover:bg-cyan-400/[0.04] ${className}`}
     >
+      {/* F4 最小标注:主体是 <button>,控件不能嵌套其中 → 绝对定位在右上角(未入库项无 kol_pool_id 自动不渲染)。 */}
+      {feedbackSource && feedbackToken && item.kol_pool_id ? (
+        <SearchFeedbackControl
+          source={feedbackSource}
+          kolPoolId={item.kol_pool_id}
+          sessionItemId={item.session_item_id ?? null}
+          apiToken={feedbackToken}
+          className="absolute right-1.5 top-1.5"
+        />
+      ) : null}
       <button
         type="button"
         onClick={() => onOpen?.(item)}
-        className="flex w-full min-w-0 items-start gap-2.5 px-2.5 py-2 text-left focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-300/30"
+        className={`flex w-full min-w-0 items-start gap-2.5 px-2.5 py-2 text-left focus:outline-none focus:ring-1 focus:ring-inset focus:ring-cyan-300/30${feedbackSource && feedbackToken && item.kol_pool_id ? " pr-14" : ""}`}
         title={`${evidence.reasonLabel}：${evidence.reason}`}
       >
         <span className="mt-1 w-3.5 shrink-0 text-center text-[9px] font-medium tabular-nums text-slate-600">{index}</span>

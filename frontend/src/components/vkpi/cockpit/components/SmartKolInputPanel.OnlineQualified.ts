@@ -1,6 +1,6 @@
 import type { VkpiKolRecallItem, VkpiKolSearchHistoryItem } from "../../../../domains/kol";
 
-import { asRecord, cleanText, display, type Row } from "./SmartKolInputPanel.helpers";
+import { asRecord, cleanText, display, type Row, providerGateReasonOf, providerUnavailableLabel } from "./SmartKolInputPanel.helpers";
 import {
   LOCAL_QUALIFIED_TARGET,
   localQualifiedRowsFromItems,
@@ -158,7 +158,7 @@ const REASON_LABELS: Record<string, string> = {
   duplicate_online: "联网结果内重复",
   duplicate_batch: "供应商批次重复",
   duplicate_local_inventory: "已存在于本地库",
-  provider_failed: "数据源暂不可用",
+  provider_failed: "数据源未就绪(配置/预算)",
   candidate_budget_exhausted: "候选预算已用尽",
   provider_round_budget_exhausted: "供应商轮次已用尽",
   candidate_exhausted: "可核验候选已耗尽",
@@ -167,10 +167,13 @@ const REASON_LABELS: Record<string, string> = {
 
 function reasonLabels(contract: Row, shortfall: number): string[] {
   const raw = asRecord(contract.shortfall_reasons);
+  // F5:provider_failed 必须带原因(provider_gate_reason);没有就「未就绪(配置/预算)」,不假装排队。
+  const gateReason = providerGateReasonOf(contract);
   const labels = Object.entries(raw).flatMap(([key, value]) => {
     const amount = count(value);
     if (amount == null || amount <= 0) return [];
-    return [`${REASON_LABELS[key] || key} ${amount}`];
+    const label = key === "provider_failed" ? providerUnavailableLabel(gateReason) : (REASON_LABELS[key] || key);
+    return [`${label} ${amount}`];
   });
   if (!labels.length && shortfall > 0) labels.push(`还缺 ${shortfall} 个合格且联网净新增的 KOL`);
   return labels.slice(0, 8);

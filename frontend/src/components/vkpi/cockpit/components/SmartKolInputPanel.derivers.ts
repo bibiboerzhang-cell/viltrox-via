@@ -756,9 +756,12 @@ function discoveryItemsFromSessionRaw(session: VkpiKolSearchHistoryItem | null):
     const itemType = cleanText(item.item_type);
     if (itemType !== "new_creator" && itemType !== "existing_kol") return;
     const payload = asRecord(item.payload);
+    const sessionItemId = Number(item.id || item.item_id || 0);
     out.push({
       bucket: "creator",
       kol_pool_id: Number(item.kol_pool_id || payload.kol_pool_id || 0),
+      // F4 标注回传用;会话 item 无 id 时不带该键(旧形状兼容)。
+      ...(sessionItemId > 0 ? { session_item_id: sessionItemId } : {}),
       handle: display(payload.handle || payload.display_name || payload.channel_name, "unknown"),
       display_name: cleanText(payload.display_name || payload.channel_name || payload.handle),
       platform: cleanText(payload.platform),

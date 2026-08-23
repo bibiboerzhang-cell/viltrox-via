@@ -66,6 +66,18 @@ export function useWorkflowRunsStream(
 
   const refreshRunnerRef = useRef<() => Promise<void>>(async () => {});
   const previousTokenRef = useRef(apiToken);
+  // C9(优化波 B):后台轮询不击穿消费方——
+  //   · 指纹跳过:投影内容未变就不 setPayload(引用不换 → 消费方零重渲染);
+  //   · loading 只在「尚无快照」时翻动(首拍/换 token),后台刷新不再每 5s 翻 true→false 两次重渲染。
+  const payloadFingerprintRef = useRef("");
+  const hasPayloadRef = useRef(false);
+  // setError("") 在 error 已空时也会让 React 多走一轮渲染(bailout 不保证零渲染),用 ref 把它挡在外面。
+  const errorRef = useRef("");
+  const setErrorIfChanged = (next: string) => {
+    if (errorRef.current === next) return;
+    errorRef.current = next;
+    setError(next);
+  };
   const refresh = useCallback(() => refreshRunnerRef.current(), []);
 
   useEffect(() => {
@@ -84,7 +96,7 @@ export function useWorkflowRunsStream(
       const activeRequest = inFlight;
       inFlight = null;
       activeRequest?.controller.abort(new DOMException("Request paused", "AbortError"));
-      if (!stopped) setLoading(false);
+      if (!stopped && !hasPayloadRef.current) setLoading(false);
     };
 
     const requestOnce = (): Promise<void> => {
@@ -96,7 +108,8 @@ export function useWorkflowRunsStream(
         controller: requestController,
         promise: Promise.resolve(),
       };
-      setLoading(true);
+      const markedLoading = !hasPayloadRef.current;
+      if (markedLoading) setLoading(true);
 
       const request = (async () => {
         try {
@@ -106,15 +119,25 @@ export function useWorkflowRunsStream(
             { signal: requestController.signal },
           );
           if (stopped || requestController.signal.aborted) return;
-          setPayload(response);
-          setError("");
+          let fingerprint = "";
+          try {
+            fingerprint = JSON.stringify(response);
+          } catch {
+            fingerprint = "";
+          }
+          if (!fingerprint || fingerprint !== payloadFingerprintRef.current) {
+            payloadFingerprintRef.current = fingerprint;
+            hasPayloadRef.current = true;
+            setPayload(response);
+          }
+          setErrorIfChanged("");
         } catch (err) {
           if (stopped || requestController.signal.aborted) return;
-          setError(err instanceof Error ? err.message : "任务进度连接中");
+          setErrorIfChanged(err instanceof Error ? err.message : "任务进度连接中");
         } finally {
           if (inFlight === activeRequest) {
             inFlight = null;
-            if (!stopped) setLoading(false);
+            if (!stopped && markedLoading) setLoading(false);
           }
         }
       })();
@@ -141,14 +164,18 @@ export function useWorkflowRunsStream(
 
     if (previousTokenRef.current !== apiToken) {
       previousTokenRef.current = apiToken;
+      payloadFingerprintRef.current = "";
+      hasPayloadRef.current = false;
       setPayload(null);
-      setError("");
+      setErrorIfChanged("");
     }
 
     if (!apiToken) {
+      payloadFingerprintRef.current = "";
+      hasPayloadRef.current = false;
       setPayload(null);
       setLoading(false);
-      setError("缺少 API token");
+      setErrorIfChanged("缺少 API token");
       return () => {
         stopped = true;
         refreshRunnerRef.current = async () => {};

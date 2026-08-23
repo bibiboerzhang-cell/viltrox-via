@@ -1,6 +1,6 @@
 import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domains/kol";
 
-import { asRecord, cleanText, type Row } from "./SmartKolInputPanel.helpers";
+import { asRecord, cleanText, type Row, providerGateReasonOf, providerUnavailableLabel } from "./SmartKolInputPanel.helpers";
 
 export const LOCAL_QUALIFIED_TARGET = 30;
 export const LOCAL_QUALIFICATION_SPEC = Object.freeze({
@@ -301,27 +301,30 @@ const SHORTFALL_LABELS: Record<string, string> = {
   duplicate_canonical_identity: "跨来源重复",
   platform_unknown: "平台待核验",
   platform_mismatch: "不在所选平台",
-  provider_failed: "数据源暂不可用",
+  provider_failed: "数据源未就绪(配置/预算)",
   budget_exhausted: "本轮预算已到上限",
 };
 
 function shortfallReasons(records: Row[], pending: number, shortfall: number): string[] {
   const raw = firstValue(records, ["local_shortfall_reasons", "shortfall_reasons", "rejected_by_reason", "rejection_reasons", "shortfall_reason"]);
+  // F5:provider_failed 必须带原因(provider_gate_reason);没有就「未就绪(配置/预算)」,不假装排队。
+  const gateReason = providerGateReasonOf(...records);
+  const labelOf = (key: string) => (key === "provider_failed" ? providerUnavailableLabel(gateReason) : (SHORTFALL_LABELS[key] || key));
   const labels: string[] = [];
   if (Array.isArray(raw)) {
     raw.forEach((value) => {
       const key = cleanText(value);
-      if (key) labels.push(SHORTFALL_LABELS[key] || key);
+      if (key) labels.push(labelOf(key));
     });
   } else if (raw && typeof raw === "object") {
     Object.entries(raw as Row).forEach(([key, value]) => {
       const count = Number(value);
-      const label = SHORTFALL_LABELS[key] || key;
+      const label = labelOf(key);
       labels.push(Number.isFinite(count) && count > 0 ? `${label} ${count}` : label);
     });
   } else {
     const text = cleanText(raw);
-    if (text) labels.push(SHORTFALL_LABELS[text] || text);
+    if (text) labels.push(labelOf(text));
   }
   if (!labels.length && shortfall > 0) {
     labels.push(pending > 0 ? `仍有 ${pending} 人待服务端硬闸验收` : `还缺 ${shortfall} 个合格且唯一的本地 KOL`);
