@@ -54,12 +54,11 @@ from app.platform.models.runtime import (  # noqa: E402
 )
 
 
-# 2026-08-22 模型升级刀:TASK_MODEL_BINDING 去重后恰好 6 个精确绑定
-# (anthropic/claude-sonnet-5、anthropic/claude-opus-5、google/gemini-3.6-flash、
-# google/gemini-2.5-pro、openai/gpt-5.6-luna、openai/gpt-5.5)。A 车道改绑定表时这里
-# 必须同步(tests/test_vkpi_stage1_model_canary.py 与 test_vkpi_model_evidence_plan_contract
-# 的 unique_binding_count 同源);A 未合入前本不变量为红属预期。
-EXPECTED_UNIQUE_BINDINGS = 6
+# 2026-08-22 模型升级刀:TASK_MODEL_BINDING 去重后恰好 6 个精确绑定(sonnet-5/opus-5/
+# 3.6-flash/2.5-pro/luna/gpt-5.5);2026-08-23 A 车道 C3 +keyframe_qa → gemini-3.5-flash-lite
+# → 7(其余新任务复用既有绑定)。改绑定表时这里必须同步(tests/test_vkpi_stage1_model_canary.py
+# 与 test_vkpi_model_evidence_plan_contract 的 unique_binding_count 同源)。
+EXPECTED_UNIQUE_BINDINGS = 7
 MAX_CALLS_HARD_LIMIT = 8
 MAX_OUTPUT_TOKENS_HARD_LIMIT = 128
 MAX_PER_CALL_TIMEOUT_SECONDS = 30

@@ -23,6 +23,7 @@ from typing import Any, Optional
 
 from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
+from app.platform import llm_production
 from app.platform.apify_budget import call_apify_actor
 from app.platform.apify_lifecycle import register_apify_client_shutdown
 from app.services.ai.retry import call_ai_with_retry
@@ -285,13 +286,25 @@ def analyze_with_claude(lens_a: str, lens_b: str, stats_a: dict, stats_b: dict, 
     try:
         logger.info("lens_compare.claude_started", extra={"lens_a": lens_a, "lens_b": lens_b})
         t0 = time.time()
+        # 2026-08-23 C3 收口:走 llm_production 严格边界(任务绑定 lens_compare),
+        # 思考策略/无 temperature 由边界统一;client/重试/JSON 解析保持原样。
         resp = call_ai_with_retry(
             "lens_compare.claude",
-            lambda: client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=2000,
-                thinking={"type": "disabled"},
+            lambda: None,
+            attempt_fn=lambda attempt, total: llm_production.generate_anthropic_messages(
+                client=client,
                 messages=[{"role": "user", "content": prompt}],
+                model=CLAUDE_MODEL,
+                purpose="lens_compare",
+                max_output_tokens=2000,
+                metadata={
+                    "task_binding": "lens_compare",
+                    "surface": "intelligence_lens_compare",
+                    "phase": "lens_comparison",
+                    "attempt_index": attempt,
+                    "attempt_total": total,
+                    "target_label": f"{lens_a} vs {lens_b}"[:160],
+                },
             ),
         )
         elapsed = time.time() - t0

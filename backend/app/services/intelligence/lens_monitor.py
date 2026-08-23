@@ -38,6 +38,7 @@ from typing import Any, Optional
 
 from app.core.config import CLAUDE_MODEL
 from app.core.logging import get_logger
+from app.platform import llm_production
 from app.platform.apify_budget import call_apify_actor
 from app.platform.apify_lifecycle import register_apify_client_shutdown
 from app.services.ai.retry import call_ai_with_retry
@@ -447,13 +448,27 @@ def classify_videos_with_claude(query: str, videos: list[dict]) -> dict:
     try:
         logger.info("lens_monitor.claude_started", extra={"video_count": len(videos)})
         t0 = time.time()
+        # 2026-08-23 C3 收口:走 llm_production 严格边界(任务绑定 lens_monitor →
+        # 精确模型 + 就绪门 + 预算预留/台账/结算);思考策略由边界按 env 统一给
+        # (默认 disabled),不传 temperature。client/重试/JSON 解析保持原样。
         resp = call_ai_with_retry(
             "lens_monitor.claude",
-            lambda: client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=4000,
-                thinking={"type": "disabled"},
+            lambda: None,
+            attempt_fn=lambda attempt, total: llm_production.generate_anthropic_messages(
+                client=client,
                 messages=[{"role": "user", "content": prompt}],
+                model=CLAUDE_MODEL,
+                purpose="lens_monitor",
+                max_output_tokens=4000,
+                metadata={
+                    "task_binding": "lens_monitor",
+                    "surface": "intelligence_lens_monitor",
+                    "phase": "video_classification",
+                    "attempt_index": attempt,
+                    "attempt_total": total,
+                    "target_label": str(query or "")[:160],
+                    "video_count": len(videos),
+                },
             ),
         )
         elapsed = time.time() - t0

@@ -5,7 +5,11 @@ E 路(头像视觉)只在这里碰 SDK:模型解析、下载缩略图、组 cont
 audience_stats._age_avatar_batch 只负责挑人/解析结果/聚合,不再直接持有 SDK 细节。
 
 模型口径:默认 gemini-3.6-flash(3.x 家族必须 thinking_level="minimal",thinking_budget=0 会 400;
-temperature 已弃用一律不传);AUDIENCE_AVATAR_MODEL env 可钉回旧模型。
+temperature 已弃用一律不传);AUDIENCE_AVATAR_MODEL env 可钉回旧模型(经 model_registry
+TASK_MODEL_ENV_KEYS["audience_avatar"] 同步进任务绑定,否则严格边界判 task_binding_model_mismatch)。
+
+2026-08-23 C3 收口:generate_content 走 llm_production.generate_google_content(任务绑定
+audience_avatar;就绪门 + 预算预留/台账/结算);本模块不再直接碰 SDK 调用。
 """
 from __future__ import annotations
 
@@ -13,9 +17,14 @@ import os
 import urllib.request
 from typing import Any
 
+from app.platform import llm_production
+
 AUDIENCE_AVATAR_DEFAULT_MODEL = "gemini-3.6-flash"
 AUDIENCE_AVATAR_MAX_OUTPUT_TOKENS = 4000
 AUDIENCE_AVATAR_THINKING_LEVEL = "minimal"
+AUDIENCE_AVATAR_TASK_BINDING = "audience_avatar"
+# 预留估算:头像缩略图按 Gemini 图片瓦片上限保守估(1 张 ≈ 1600 token),文本按 4 字符/token。
+AUDIENCE_AVATAR_IMAGE_TOKENS = 1600
 
 AVATAR_BATCH_PROMPT = (
     "Task: AGGREGATE audience statistics for a marketing dashboard. The images above are public "
@@ -91,9 +100,28 @@ def classify_avatar_batch(
         contents.append(f"Image {idx}:")
         contents.append(genai_types.Part.from_bytes(data=data, mime_type=mime))
     contents.append(AVATAR_BATCH_PROMPT)
-    resp = client.models.generate_content(
-        model=model or avatar_model(),
+    exact_model = model or avatar_model()
+    resp = llm_production.generate_google_content(
+        client=client,
         contents=contents,
         config=avatar_generate_config(genai_types),
+        model=exact_model,
+        purpose="audience_avatar",
+        max_output_tokens=AUDIENCE_AVATAR_MAX_OUTPUT_TOKENS,
+        estimated_input_tokens=avatar_input_token_estimate(len(images)),
+        metadata={
+            "task_binding": AUDIENCE_AVATAR_TASK_BINDING,
+            "surface": "kol_audience_stats",
+            "phase": "audience_avatar",
+            "subphase": "avatar_batch",
+            "batch_size": len(images),
+            "target_label": f"avatar batch x{len(images)}",
+        },
     )
     return str(getattr(resp, "text", "") or "")
+
+
+def avatar_input_token_estimate(image_count: int) -> int:
+    """Conservative reservation: every image at the tile cap plus the prompt text."""
+    text_tokens = max(1, len(AVATAR_BATCH_PROMPT) // 4) + 16 * max(0, int(image_count))
+    return max(1, text_tokens + AUDIENCE_AVATAR_IMAGE_TOKENS * max(0, int(image_count)))

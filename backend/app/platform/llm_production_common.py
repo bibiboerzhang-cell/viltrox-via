@@ -2,7 +2,9 @@
 
 This module intentionally contains only side-effect-free metadata normalization
 and the public bounded failure type.  Provider I/O, fleet-breaker transitions,
-budget reservations and settlement remain in :mod:`llm_production` so their
+budget reservations and settlement live in the per-provider siblings
+(:mod:`llm_production_anthropic` / :mod:`llm_production_google` /
+:mod:`llm_production_openai`) behind the :mod:`llm_production` facade so their
 ordering stays explicit and reviewable.
 """
 from __future__ import annotations
@@ -62,6 +64,24 @@ def progress_metadata(
     return out
 
 
+def expected_task_binding(task_binding: str) -> str:
+    """Resolve the reviewed ``provider/model`` binding for one task name.
+
+    解析故意绕一圈门面 ``app.platform.llm_production``:provider 子模块
+    (``llm_production_anthropic/google/openai``)统一从这里取期望绑定,于是
+    ``monkeypatch.setattr(llm_production, "current_task_model_binding", ...)``
+    这种打在门面上的补丁对所有 provider 路径都生效(2026-08-23 拆分前后契约不变)。
+    门面 import 在函数体内,避免 common → facade → provider → common 的环。
+    """
+
+    from app.platform import llm_production
+
+    return str(
+        llm_production.current_task_model_binding().get(str(task_binding or ""), "")
+        or ""
+    )
+
+
 class ProductionLlmUnavailable(RuntimeError):
     """Safe, bounded failure raised when strict production generation degrades."""
 
@@ -100,4 +120,9 @@ def sdk_failure(
     )
 
 
-__all__ = ["ProductionLlmUnavailable", "progress_metadata", "sdk_failure"]
+__all__ = [
+    "ProductionLlmUnavailable",
+    "expected_task_binding",
+    "progress_metadata",
+    "sdk_failure",
+]

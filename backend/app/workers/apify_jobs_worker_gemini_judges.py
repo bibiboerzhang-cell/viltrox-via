@@ -35,6 +35,35 @@ from app.workers.apify_jobs_video_context import (
 logger = get_logger(__name__)
 
 
+def _judge_llm_context(
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    evidence: dict[str, Any],
+    *,
+    stage: str,
+) -> dict[str, Any]:
+    """台账归属上下文(C3 收口后裁判/QA 经 llm_production,需要 cost_tag/triggered_by)。
+
+    与 apify_jobs_worker_gemini 视频主通道同口径:cost_tag=LLM_BUDGET_SCOPE,
+    triggered_by 优先 payload.staff_id(台账 staff 外键),否则退 user id。
+    """
+    return {
+        "purpose": stage,
+        "cost_tag": LLM_BUDGET_SCOPE,
+        "triggered_by": payload.get("staff_id")
+        or payload.get("triggered_by_user_id", payload.get("user_id")),
+        "metadata": {
+            "surface": "apify_jobs_worker",
+            "parent_job_id": job.get("id"),
+            "target_type": "evidence",
+            "target_id": evidence.get("id"),
+            "platform": _platform_from_content_url(str(evidence.get("content_url") or "")),
+            "phase": "video_analysis",
+            "target_label": f"video:{evidence.get('id')}",
+        },
+    }
+
+
 def _process_gemini_video_final_v1_keyframe_qa(
     conn: psycopg.Connection[Any],
     job: dict[str, Any],
@@ -131,6 +160,7 @@ def _process_gemini_video_final_v1_keyframe_qa(
                 title=str(evidence.get("title") or ""),
                 performance_context=analysis_context,
                 model_name=qa_model,
+                llm_context=_judge_llm_context(job, payload, evidence, stage="final_v1_keyframe_qa"),
             )
         )
 
@@ -255,6 +285,7 @@ def _process_gemini_video_flash_pro_judge(
                 title=str(evidence.get("title") or ""),
                 performance_context=performance,
                 model_name=FINAL_V1_KEYFRAME_QA_MODEL,
+                llm_context=_judge_llm_context(job, payload, evidence, stage="keyframe_judgment"),
             )
         )
     judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _gemini_cost(judgment_raw, preflight_cost)
@@ -396,6 +427,7 @@ def _process_gemini_video_flash_gpt55_judge(
                 title=str(evidence.get("title") or ""),
                 performance_context=performance,
                 model_name="gpt-5.5",
+                llm_context=_judge_llm_context(job, payload, evidence, stage="openai_keyframe_judge"),
             )
         )
     judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _openai_cost(judgment_raw, openai_estimated_cost)
@@ -537,6 +569,7 @@ def _process_gemini_video_flash_claude_judge(
                 title=str(evidence.get("title") or ""),
                 performance_context=performance,
                 model_name=CLAUDE_OPUS_EXACT_MODEL,
+                llm_context=_judge_llm_context(job, payload, evidence, stage="anthropic_keyframe_judge"),
             )
         )
     judgment_cost, judgment_basis, judgment_tokens_in, judgment_tokens_out = _anthropic_cost(judgment_raw, anthropic_estimated_cost)
@@ -615,6 +648,7 @@ from app.workers.apify_jobs_worker import (  # noqa: E402
     FINAL_V1_GEMINI_MODELS,
     FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
     FINAL_V1_KEYFRAME_QA_MODEL,
+    LLM_BUDGET_SCOPE,
     _block_job,
     _extract_keyframes_for_qa,
     _gemini_worker_overrides,

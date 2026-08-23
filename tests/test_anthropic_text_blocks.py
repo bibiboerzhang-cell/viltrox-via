@@ -49,26 +49,34 @@ def test_text_blocks_joined_never_raises_on_empty_or_thinking_only() -> None:
     assert text_blocks_joined(SimpleNamespace(content="plain")) == "plain"
 
 
-# ── lens_monitor / lens_compare direct SDK paths ─────────────────────────────
+# ── lens_monitor / lens_compare(2026-08-23 C3 起走 llm_production 严格边界)──
 
 class _FakeClient:
-    def __init__(self, text: str) -> None:
-        self.calls: list[dict[str, Any]] = []
-        self._text = text
-        self.messages = SimpleNamespace(create=self._create)
+    """只剩占位 client:SDK 调用已收口到 llm_production.generate_anthropic_messages。"""
 
-    def _create(self, **kwargs: Any) -> SimpleNamespace:
-        self.calls.append(kwargs)
-        return _thinking_first(self._text)
+    def __init__(self) -> None:
+        self.messages = SimpleNamespace()
+
+
+def _capture_strict_anthropic(monkeypatch, module, text: str) -> list[dict[str, Any]]:
+    captured: list[dict[str, Any]] = []
+
+    def fake_messages(**kwargs: Any) -> SimpleNamespace:
+        captured.append(kwargs)
+        return _thinking_first(text)
+
+    monkeypatch.setattr(module.llm_production, "generate_anthropic_messages", fake_messages)
+    return captured
 
 
 def test_lens_monitor_classify_reads_text_after_thinking_block(monkeypatch) -> None:
     from app.services.intelligence import lens_monitor
 
     payload = {"categories": {"review": [0]}, "insights": ["ok"]}
-    client = _FakeClient("```json\n" + json.dumps(payload) + "\n```")
+    client = _FakeClient()
     monkeypatch.setattr(lens_monitor, "_claude_available", True)
     monkeypatch.setattr(lens_monitor, "get_claude_client", lambda: client)
+    captured = _capture_strict_anthropic(monkeypatch, lens_monitor, "```json\n" + json.dumps(payload) + "\n```")
 
     result = lens_monitor.classify_videos_with_claude(
         "viltrox 50mm",
@@ -76,30 +84,44 @@ def test_lens_monitor_classify_reads_text_after_thinking_block(monkeypatch) -> N
     )
 
     assert result == payload
-    assert len(client.calls) == 1
-    kwargs = client.calls[0]
+    assert len(captured) == 1
+    kwargs = captured[0]
+    assert kwargs["client"] is client
     assert kwargs["model"] == lens_monitor.CLAUDE_MODEL
-    assert kwargs["thinking"] == {"type": "disabled"}
-    assert "temperature" not in kwargs
+    assert kwargs["purpose"] == "lens_monitor"
+    assert kwargs["metadata"]["task_binding"] == "lens_monitor"
+    assert kwargs["max_output_tokens"] == 4000
+    assert "temperature" not in kwargs and "thinking" not in kwargs  # 思考/采样口径归边界
 
 
 def test_lens_compare_analyze_reads_text_after_thinking_block(monkeypatch) -> None:
     from app.services.intelligence import lens_compare
 
     payload = {"topics": ["bokeh"], "recommendation": "go"}
-    client = _FakeClient(json.dumps(payload))
+    client = _FakeClient()
     monkeypatch.setattr(lens_compare, "_claude_available", True)
     monkeypatch.setattr(lens_compare, "get_claude_client", lambda: client)
+    captured = _capture_strict_anthropic(monkeypatch, lens_compare, json.dumps(payload))
 
     stats = {"video_count": 0, "total_views": 0, "avg_views": 0, "avg_engagement_pct": 0.0}
     monkeypatch.setattr(lens_compare, "build_compare_prompt", lambda *_a, **_k: "compare prompt")
     result = lens_compare.analyze_with_claude("a", "b", stats, stats, [], [])
 
     assert result == payload
-    kwargs = client.calls[0]
+    kwargs = captured[0]
     assert kwargs["model"] == lens_compare.CLAUDE_MODEL
-    assert kwargs["thinking"] == {"type": "disabled"}
+    assert kwargs["purpose"] == "lens_compare"
+    assert kwargs["metadata"]["task_binding"] == "lens_compare"
+    assert kwargs["messages"] == [{"role": "user", "content": "compare prompt"}]
     assert "temperature" not in kwargs
+
+
+def test_lens_paths_are_registered_task_bindings() -> None:
+    from app.core import model_registry
+
+    assert model_registry.TASK_MODEL_BINDING["lens_monitor"] == "anthropic/claude-sonnet-5"
+    assert model_registry.TASK_MODEL_BINDING["lens_compare"] == "anthropic/claude-sonnet-5"
+    assert model_registry.TASK_MODEL_ENV_KEYS["lens_monitor"] == ("CLAUDE_MODEL", None)
 
 
 # ── analyzers that consume generate_anthropic_messages ───────────────────────

@@ -4,17 +4,12 @@ import json
 import os
 import re
 import tempfile
-import asyncio
 from typing import Any
 from pathlib import Path
 
 from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE
-from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client as _gemini_client
+from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE
 
-try:
-    from google.genai import types as genai_types
-except ImportError:
-    genai_types = None
 from app.services.ai.clients.openai_client import OPENAI_AVAILABLE
 from app.core.constants import VILTROX_CATALOG_PROMPT
 from app.core.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
@@ -23,7 +18,7 @@ from app.platform import llm_production
 from app.services.ai.analyzers.anthropic_response_text import text_blocks_joined
 from app.services.scoring.creator import get_creator_profile
 from app.services.scoring.core import compute_weighted_scores
-from app.services.scraping.ytdlp import download_video_ytdlp, fetch_youtube_subtitles, YTDLP_AVAILABLE
+from app.services.scraping.ytdlp import download_video_ytdlp, YTDLP_AVAILABLE
 from app.services.ai.analyzers.gpt_prefilter import gpt_prefilter_caption
 from app.services.ai.analyzers.gemini_video import analyze_youtube_with_gemini
 from app.services.ai.analyzers.claude_text import analyze_text_content
@@ -34,13 +29,16 @@ from app.services.ai.analyzers.claude_vision_client import _build_anthropic_clie
 from app.services.ai.analyzers.claude_vision_context import build_improvement_context
 from app.services.ai.analyzers.claude_vision_defaults import initial_smart_result, initial_video_result
 from app.services.ai.analyzers.claude_vision_images import _analyze_images_batch
+from app.services.ai.analyzers.claude_vision_local_gemini import (  # noqa: F401 - LOCAL_FILE_GEMINI_MODEL re-export
+    LOCAL_FILE_GEMINI_MODEL,
+    analyze_local_video_with_gemini_file_api,
+)
 from app.services.ai.analyzers.claude_vision_media import _download_direct_video_url, extract_dense_start_frames, fetch_all_images_from_post, save_best_frame
 from app.services.ai.analyzers.claude_vision_merge import _merge_analysis
 
 FRAMES_DIR = Path("uploads")
 logger = get_logger(__name__)
-# Legacy local-file Gemini ladder (layer 2 File API). 3.x family needs thinking_level=minimal.
-LOCAL_FILE_GEMINI_MODEL = "gemini-3.6-flash"
+# LOCAL_FILE_GEMINI_MODEL 现由 claude_vision_local_gemini 持有(上面 import 即 re-export,保旧引用)。
 
 
 def analyze_video_with_claude(video_path: str, filename: str, creator_handle: str = "") -> dict:
@@ -519,176 +517,19 @@ async def analyze_url_content_smart(
                 video_path = dl["path"]
 
                 # ── Route: Gemini File API (preferred for all platforms) ──
+                # 2026-08-23 C3:本地文件梯子抽到 claude_vision_local_gemini,并经
+                # llm_production 严格边界(任务绑定 local_file_video)。
                 gemini_ok = False
                 if GEMINI_AVAILABLE:
-                    try:
-                        logger.info("smart analysis | layer 2 Gemini File API | platform=%s", platform)
-                        def _upload_local():
-                            return _gemini_client.files.upload(
-                                file=video_path,
-                                config={"mime_type": "video/mp4"}
-                            )
-                        gfile = await asyncio.to_thread(_upload_local)
-
-                        # Wait for ACTIVE
-                        import time
-                        for _ in range(20):
-                            def _chk(f=gfile):
-                                return _gemini_client.files.get(name=f.name)
-                            gfile = await asyncio.to_thread(_chk)
-                            if gfile.state.name == "ACTIVE":
-                                break
-                            await asyncio.sleep(3)
-
-                        if gfile.state.name == "ACTIVE":
-                            # Reuse the same Gemini prompt
-                            subtitle_raw = fetch_youtube_subtitles(url) if "youtube" in url.lower() else ""
-                            subtitle_ctx = (
-                                "\n\n=== 字幕时间轴 ===\n" + subtitle_raw + "\n=== 字幕结束 ===\n"
-                                "timestamps 必须来自字幕真实时间，禁止等间隔填写。"
-                                if subtitle_raw else ""
-                            )
-                            profile_ctx = ""
-                            if creator_handle:
-                                prof = get_creator_profile(creator_handle)
-                                if prof.get("viltrox_lenses"):
-                                    profile_ctx = f"\n创作者历史使用过: {', '.join(prof['viltrox_lenses'][:3])}"
-
-                            # Build prompt inline (same structure as YouTube prompt)
-                            local_prompt = f"""你是 Viltrox 品牌内容分析师。仔细观看这个完整视频。{profile_ctx}{subtitle_ctx}
-平台: {platform} | 标题: {title or url}
-
-第一步识别内容类型: review/cinematic/tutorial/comparison/vlog/unboxing/showcase/bts
-第二步按类型标准评估，禁止生成 00:00/00:05 等间隔时间戳。
-
-评分标准（严格）：9-10分=TOP 5-10%；8分=良好(25%)；7分=普通(30%)；6分=有缺陷(20%)；5分以下=严重问题。
-
-只返回JSON，不含Markdown:
-{{
-  "content_genre": "review/cinematic/tutorial/comparison/vlog/unboxing/showcase/bts",
-  "content_type_cn": "类型中文名",
-  "content_summary": "3句中文：类型+内容+亮点",
-  "production_quality": "amateur/semi-pro/professional/broadcast",
-  "vertical_category": "wedding/food/lifestyle/review/cinematic/sports/travel/portrait/tutorial/commercial",
-  "viltrox_detected": true,
-  "viltrox_products_mentioned": ["精确型号"],
-  "camera_body": "型号或null",
-  "viltrox_lens": "型号或null",
-  "other_lens": "型号或null",
-  "timestamps": [
-    {{"time": "MM:SS", "event": "中文具体事件", "type": "viltrox/competitor/camera/key_moment/intro/conclusion"}}
-  ],
-  "brand_exposure_detail": {{
-    "logo_on_lens_barrel": false,
-    "logo_on_screen_overlay": false,
-    "logo_in_thumbnail": false,
-    "product_closeup_count": 0,
-    "brand_mention_count": 0,
-    "product_screen_time_pct": 0,
-    "notes": "中文说明"
-  }},
-  "quality_scores": {{
-    "exposure": 7, "stability": 7, "color_grade": 6, "composition": 7,
-    "lighting": 6, "editing": 7, "storytelling": 6, "hook": 7,
-    "viltrox_branding": 7, "logo_visibility": 6, "product_screen_time": 6,
-    "close_up_quality": 7, "audience_fit": 7, "authenticity": 7, "conclusion_strength": 6
-  }},
-  "quality_overall": 7,
-  "quality_summary": "2句中文：品牌曝光亮点+故事说服力不足",
-  "marketing_potential": "high/medium/low",
-  "marketing_notes": "转化分析（中文）",
-  "reference_value": "high/medium/low",
-  "improvements": [
-    {{"area": "品牌曝光", "priority": "high", "timestamp": "00:05", "problem": "具体问题", "suggestion": "具体方案（中文）", "expected_improvement": "预期效果"}}
-  ]
-}}"""
-
-                            # 本地文件 File API 梯子:3.x 家族必须 thinking_level="minimal"
-                            # (thinking_budget=0 会 400),不传 temperature;2.0-flash 已退役。
-                            MODELS = [LOCAL_FILE_GEMINI_MODEL]
-                            for model_name in MODELS:
-                                try:
-                                    def _analyze(m=model_name, f=gfile):
-                                        return _gemini_client.models.generate_content(
-                                            model=m,
-                                            contents=[
-                                                genai_types.Part.from_uri(
-                                                    file_uri=f.uri,
-                                                    mime_type="video/mp4"
-                                                ),
-                                                local_prompt
-                                            ],
-                                            config=genai_types.GenerateContentConfig(
-                                                thinking_config=genai_types.ThinkingConfig(thinking_level="minimal"),
-                                            ),
-                                        )
-                                    resp = await asyncio.to_thread(_analyze)
-                                    raw = resp.text.strip()
-                                    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-                                    parsed = json.loads(raw)
-
-                                    # Merge into result (same fields as YouTube Gemini)
-                                    for field in ["content_genre","content_type_cn","content_summary",
-                                                  "production_quality","vertical_category","marketing_potential",
-                                                  "marketing_notes","reference_value"]:
-                                        if parsed.get(field):
-                                            result[field] = parsed[field]
-                                    if parsed.get("viltrox_products_mentioned"):
-                                        result["viltrox_products_all"] = parsed["viltrox_products_mentioned"]
-                                    for f in ["camera_body","viltrox_lens","other_lens"]:
-                                        if parsed.get(f) and not result.get(f):
-                                            result[f] = parsed[f]
-                                    if parsed.get("timestamps"):
-                                        result["timestamps"] = parsed["timestamps"]
-                                    bed = parsed.get("brand_exposure_detail", {})
-                                    result["logo_detected"]         = int(bool(bed.get("logo_on_lens_barrel") or bed.get("logo_on_screen_overlay")))
-                                    result["product_closeup_count"] = bed.get("product_closeup_count", 0)
-                                    result["brand_mention_count"]   = bed.get("brand_mention_count", 0)
-                                    result["brand_exposure_detail"] = bed
-                                    qs = {k: v for k, v in parsed.get("quality_scores", {}).items()
-                                          if isinstance(v, (int, float)) and v > 0}
-                                    if qs:
-                                        result["quality_scores"]   = qs
-                                        result["quality_overall"]  = parsed.get("quality_overall", 0)
-                                        result["quality_summary"]  = parsed.get("quality_summary", "")
-                                        result["improvements"]     = parsed.get("improvements", [])
-                                    # Compute three-axis
-                                    ws = compute_weighted_scores(
-                                        result.get("quality_scores", {}),
-                                        result.get("content_genre", ""),
-                                        result.get("vertical_category", "")
-                                    )
-                                    result["brand_exposure_score"] = ws["brand_exposure_score"]
-                                    result["storytelling_score"]   = ws["storytelling_score"]
-                                    result["tech_status"]          = ws["tech_floor"]["status"]
-                                    result["tech_floor"]           = ws["tech_floor"]
-                                    result["tech_score"]           = ws["tech_score"]
-                                    result["marketing_score"]      = ws["marketing_score"]
-                                    result["analyzed"]             = True
-                                    result["method"]               = f"gemini_fileapi_{platform}_{model_name}"
-                                    result["layers_used"].append(f"gemini_{model_name}")
-                                    gemini_ok = True
-                                    logger.info(
-                                        "smart analysis | layer 2 Gemini ok | model=%s | brand=%s | story=%s | tech_floor=%s | qs=%s",
-                                        model_name,
-                                        ws["brand_exposure_score"],
-                                        ws["storytelling_score"],
-                                        ws["tech_floor"]["status"],
-                                        f"yes({len(qs)}dims)" if qs else "no",
-                                    )
-                                    break
-                                except Exception as e:
-                                    logger.warning("smart analysis | layer 2 Gemini failed | model=%s | error=%s", model_name, str(e)[:60])
-                                    continue
-
-                        # Cleanup Gemini file
-                        try:
-                            await asyncio.to_thread(lambda f=gfile: _gemini_client.files.delete(name=f.name))
-                        except Exception as exc:
-                            logger.debug("gemini file cleanup failed: %s", exc)
-
-                    except Exception as e:
-                        logger.warning("smart analysis | layer 2 Gemini upload error: %s", e)
+                    gemini_ok = await analyze_local_video_with_gemini_file_api(
+                        video_path=video_path,
+                        url=url,
+                        title=title,
+                        platform=platform,
+                        creator_handle=creator_handle,
+                        duration_seconds=dl.get("duration"),
+                        result=result,
+                    )
 
                 # ── Fallback: Claude frame analysis if Gemini failed ──
                 if not gemini_ok:

@@ -74,6 +74,16 @@ TASK_MODEL_BINDING = {
     # 情绪批注(sentiment_annotate.py 申报 task_binding 但此前漏登记,
     # 严格边界下恒 task_binding_model_mismatch —— 2026-07-16 回补实弹坐实)。
     "vkpi_sentiment_annotate": "google/gemini-3.6-flash",
+    # 2026-08-23 优化波 B·A 车道(C3):六条直连 SDK 路径收口到 llm_production,
+    # 每条各自一个精确绑定(prod 上线前要把对应 provider/model 写进
+    # VKPI_LLM_READINESS_OPERATOR_ACK 或备好就绪证据,否则 fail-closed)。
+    "lens_monitor": "anthropic/claude-sonnet-5",
+    "lens_compare": "anthropic/claude-sonnet-5",
+    "local_file_video": "google/gemini-3.6-flash",
+    "audience_avatar": "google/gemini-3.6-flash",
+    "keyframe_qa": "google/gemini-3.5-flash-lite",
+    "keyframe_claude_judge": f"anthropic/{CLAUDE_OPUS_EXACT_MODEL}",
+    "keyframe_openai_judge": "openai/gpt-5.5",
 }
 
 TASK_MODEL_ENV_KEYS = {
@@ -94,6 +104,11 @@ TASK_MODEL_ENV_KEYS = {
         "VKPI_SENTIMENT_ANNOTATE_MODEL",
         "VKPI_SENTIMENT_ANNOTATE_PROVIDER",
     ),
+    # C3 收口路径的 env 钉回口(与各调用方原有的 env 读取口一字不差)。
+    "lens_monitor": ("CLAUDE_MODEL", None),
+    "lens_compare": ("CLAUDE_MODEL", None),
+    "audience_avatar": ("AUDIENCE_AVATAR_MODEL", None),
+    "keyframe_qa": ("GEMINI_FINAL_V1_QA_MODEL", None),
 }
 
 

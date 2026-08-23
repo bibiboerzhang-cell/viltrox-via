@@ -52,19 +52,23 @@ def test_execution_plan_requires_thirty_actuals_per_task_not_per_shared_binding(
     manifest = plan["execution_manifest"]
     rows = {row["binding"]: row for row in manifest["bindings"]}
 
-    # 2026-08-22 模型升级刀:唯一绑定 8 → 6(Haiku 并入 luna;sonnet/opus/flash 换代),
-    # 数值由 scripts/ops/vkpi_model_evidence_plan.build_plan() 实跑得出,非手算。
-    assert manifest["task_binding_count"] == 18
-    assert manifest["unique_binding_count"] == 6
+    # 2026-08-22 模型升级刀:唯一绑定 8 → 6(Haiku 并入 luna;sonnet/opus/flash 换代);
+    # 2026-08-23 优化波 B·A 车道 C3:+7 任务绑定(lens_monitor/lens_compare/local_file_video/
+    # audience_avatar/keyframe_qa/keyframe_claude_judge/keyframe_openai_judge),唯一绑定 6 → 7
+    # (keyframe_qa 独占 google/gemini-3.5-flash-lite)。数值由
+    # scripts/ops/vkpi_model_evidence_plan.build_plan() 实跑得出,非手算。
+    assert manifest["task_binding_count"] == 25
+    assert manifest["unique_binding_count"] == 7
     assert manifest["minimum_actual_evaluation_cases_per_task"] == 30
-    assert manifest["minimum_possible_generation_calls"] == 540
-    assert manifest["provider_generation_calls_ceiling"] == 546
+    assert manifest["minimum_possible_generation_calls"] == 750
+    assert manifest["provider_generation_calls_ceiling"] == 757
     assert manifest["unknown_cost_binding_count"] == 0
-    assert manifest["known_text_only_cost_subtotal_usd"] == 5.27352
+    assert manifest["known_text_only_cost_subtotal_usd"] == 7.51647
     assert set(rows) == {
         "anthropic/claude-opus-5",
         "anthropic/claude-sonnet-5",
         "google/gemini-2.5-pro",
+        "google/gemini-3.5-flash-lite",
         "google/gemini-3.6-flash",
         "openai/gpt-5.5",
         "openai/gpt-5.6-luna",
@@ -90,25 +94,31 @@ def test_execution_plan_requires_thirty_actuals_per_task_not_per_shared_binding(
     }
     assert rows["anthropic/claude-sonnet-5"]["required_calls"][
         "actual_evaluation_cases"
-    ] == 90
+    ] == 150
     assert rows["anthropic/claude-sonnet-5"]["tasks"] == [
         "audit_deep_score",
         "audit_vision_fallback",
         "kol_outreach_pack",
+        "lens_compare",
+        "lens_monitor",
     ]
     assert rows["anthropic/claude-opus-5"]["tasks"] == [
         "ai_today_evidence_strategy",
         "contract_pdf_extract",
         "deepsight_strategy",
         "invoice_extract",
+        "keyframe_claude_judge",
     ]
     assert rows["google/gemini-3.6-flash"]["tasks"] == [
+        "audience_avatar",
         "audit_video_analysis",
         "kol_audience_analysis",
+        "local_file_video",
         "vkpi_sentiment_annotate",
     ]
+    assert rows["google/gemini-3.5-flash-lite"]["tasks"] == ["keyframe_qa"]
     assert rows["google/gemini-2.5-pro"]["tasks"] == [
         "ai_today_grounded_discovery",
         "deepsight_opportunity",
     ]
-    assert rows["openai/gpt-5.5"]["tasks"] == ["deepsight_market_empath"]
+    assert rows["openai/gpt-5.5"]["tasks"] == ["deepsight_market_empath", "keyframe_openai_judge"]

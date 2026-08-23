@@ -4,6 +4,13 @@
 依赖 gemini_video_results 的结果整形纯函数 + gemini_video_prompts 的 prompt 构造器,
 以及 gemini_client / llm_gateway / 多模态内容构造。被 gemini_video re-export 回灌,调用点不变。
 红线:LLM 判定只整形结果,零触 viltrox_fit_score。
+
+2026-08-23 C3 收口:四条直连 SDK 调用全部改走 llm_production 严格边界——
+Gemini 裁判/QA → generate_google_content(任务绑定 keyframe_qa),
+OpenAI 裁判 → generate_openai_responses(keyframe_openai_judge,client 用 services.ai.clients.openai_client
+的代理感知实例,不再 OpenAI(api_key=...) 裸建),
+Claude 裁判 → generate_anthropic_messages(keyframe_claude_judge)。
+``llm_context``(worker 传入 cost_tag/triggered_by/staff/metadata)用于台账归属;缺省也能跑。
 """
 from __future__ import annotations
 
@@ -22,7 +29,7 @@ try:
 except ImportError:
     genai_types = None
 
-from app.platform import llm_gateway
+from app.platform import llm_gateway, llm_production
 from app.services.media.video_keyframes import (
     build_anthropic_multimodal_content,
     build_openai_multimodal_content,
@@ -39,11 +46,84 @@ from app.services.ai.analyzers.gemini_video_results import (
 )
 
 logger = get_logger(__name__)
-# 关键帧裁判直连 SDK(不走 llm_production 边界):输出上限与思考口径必须自己带上。
+# 关键帧裁判输出上限与思考口径由本模块显式给出(边界只补缺省、不覆盖显式值)。
 # 4096 与 worker 的 APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS 默认一致;QA/判定 JSON 远小于此。
 KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS = max(
     256, int(os.environ.get("GEMINI_KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS", "4096"))
 )
+KEYFRAME_JUDGE_OUTPUT_TOKENS_OPENAI_ANTHROPIC = 4000
+# 预留估算:关键帧 JPG 按图片瓦片上限保守估(1 张 ≈ 1600 token),文本按 3 字符/token。
+KEYFRAME_IMAGE_RESERVE_TOKENS = 1600
+KEYFRAME_TASK_BINDING_GEMINI = "keyframe_qa"
+KEYFRAME_TASK_BINDING_OPENAI = "keyframe_openai_judge"
+KEYFRAME_TASK_BINDING_ANTHROPIC = "keyframe_claude_judge"
+
+
+def _keyframe_input_token_estimate(text: str, image_count: int) -> int:
+    return max(1, len(str(text or "")) // 3 + 512 + KEYFRAME_IMAGE_RESERVE_TOKENS * max(0, int(image_count)))
+
+
+def _strict_call_kwargs(
+    llm_context: dict[str, Any] | None,
+    *,
+    task_binding: str,
+    subphase: str,
+    title: str,
+    image_count: int,
+) -> dict[str, Any]:
+    """cost_tag/triggered_by/staff/metadata for one strict judge call (worker context optional)."""
+    context = llm_context if isinstance(llm_context, dict) else {}
+    base_metadata = context.get("metadata") if isinstance(context.get("metadata"), dict) else {}
+    return {
+        "purpose": str(context.get("purpose") or task_binding),
+        "cost_tag": str(context.get("cost_tag") or "") or None,
+        "triggered_by": context.get("triggered_by"),
+        "staff": context.get("staff") if isinstance(context.get("staff"), dict) else None,
+        "metadata": {
+            **base_metadata,
+            "task_binding": task_binding,
+            "phase": str(base_metadata.get("phase") or "video_analysis"),
+            "subphase": subphase,
+            "keyframe_count": int(image_count),
+            "target_label": str(base_metadata.get("target_label") or title or subphase)[:160],
+        },
+    }
+
+
+def _gemini_keyframe_contents(text: str, keyframes: list[dict[str, Any]]) -> list[Any]:
+    contents: list[Any] = [text]
+    for frame in keyframes:
+        image_path = Path(str(frame.get("image_path") or ""))
+        if not image_path.exists():
+            continue
+        contents.append(genai_types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/jpeg"))
+    return contents
+
+
+def _strict_gemini_generate(
+    *,
+    model_name: str,
+    contents: list[Any],
+    llm_context: dict[str, Any] | None,
+    subphase: str,
+    title: str,
+) -> Any:
+    text = str(contents[0]) if contents and isinstance(contents[0], str) else ""
+    return llm_production.generate_google_content(
+        client=gemini_client,
+        contents=contents,
+        config=_keyframe_judge_generate_config(model_name),
+        model=model_name,
+        max_output_tokens=KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS,
+        estimated_input_tokens=_keyframe_input_token_estimate(text, len(contents) - 1),
+        **_strict_call_kwargs(
+            llm_context,
+            task_binding=KEYFRAME_TASK_BINDING_GEMINI,
+            subphase=subphase,
+            title=title,
+            image_count=len(contents) - 1,
+        ),
+    )
 
 
 def _keyframe_judge_generate_config(model_name: str) -> Any:
@@ -67,6 +147,7 @@ async def analyze_v2_judgment_with_keyframes(
     title: str,
     performance_context: dict[str, Any] | None = None,
     model_name: str = DEFAULT_GEMINI_JUDGE_MODEL,
+    llm_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Judge Layer2+3 from Layer1 text plus keyframe JPGs."""
     result = {
@@ -85,21 +166,17 @@ async def analyze_v2_judgment_with_keyframes(
         keyframes=keyframes,
         performance_context=performance_context,
     )
-    contents: list[Any] = [f"视频标题: {title}\n\n{prompt}"]
-    for frame in keyframes:
-        image_path = Path(str(frame.get("image_path") or ""))
-        if not image_path.exists():
-            continue
-        contents.append(genai_types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/jpeg"))
+    contents = _gemini_keyframe_contents(f"视频标题: {title}\n\n{prompt}", keyframes)
     try:
-        def _analyze():
-            return gemini_client.models.generate_content(
-                model=model_name,
+        resp = await asyncio.to_thread(
+            lambda: _strict_gemini_generate(
+                model_name=model_name,
                 contents=contents,
-                config=_keyframe_judge_generate_config(model_name),
+                llm_context=llm_context,
+                subphase="keyframe_judgment",
+                title=title,
             )
-
-        resp = await asyncio.to_thread(_analyze)
+        )
         usage_metadata = _response_usage_metadata(resp)
         raw = resp.text.strip()
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
@@ -128,6 +205,7 @@ async def analyze_final_v1_keyframe_qa(
     title: str,
     performance_context: dict[str, Any] | None = None,
     model_name: str = DEFAULT_GEMINI_JUDGE_MODEL,
+    llm_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """QA final_v1 facts from keyframe JPGs without regenerating the six-layer result."""
     result = {
@@ -146,25 +224,21 @@ async def analyze_final_v1_keyframe_qa(
         keyframes=keyframes,
         performance_context=performance_context,
     )
-    contents: list[Any] = [f"视频标题: {title}\n\n{prompt}"]
-    for frame in keyframes:
-        image_path = Path(str(frame.get("image_path") or ""))
-        if not image_path.exists():
-            continue
-        contents.append(genai_types.Part.from_bytes(data=image_path.read_bytes(), mime_type="image/jpeg"))
+    contents = _gemini_keyframe_contents(f"视频标题: {title}\n\n{prompt}", keyframes)
     if len(contents) <= 1:
         result["error"] = "no keyframe images available for QA"
         return result
 
     try:
-        def _analyze():
-            return gemini_client.models.generate_content(
-                model=model_name,
+        resp = await asyncio.to_thread(
+            lambda: _strict_gemini_generate(
+                model_name=model_name,
                 contents=contents,
-                config=_keyframe_judge_generate_config(model_name),
+                llm_context=llm_context,
+                subphase="final_v1_keyframe_qa",
+                title=title,
             )
-
-        resp = await asyncio.to_thread(_analyze)
+        )
         usage_metadata = _response_usage_metadata(resp)
         raw = resp.text.strip()
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
@@ -188,6 +262,17 @@ async def analyze_final_v1_keyframe_qa(
         return result
 
 
+def _openai_judge_client() -> Any:
+    """Proxy-aware OpenAI client (services.ai.clients.openai_client); None when unavailable."""
+    try:
+        from app.services.ai.clients import openai_client as _module
+    except Exception:  # pragma: no cover - import environment specific
+        return None
+    if not getattr(_module, "OPENAI_AVAILABLE", False):
+        return None
+    return getattr(_module, "openai_client", None)
+
+
 async def analyze_v2_judgment_with_openai_keyframes(
     *,
     layer1_visual_content: dict[str, Any],
@@ -195,6 +280,7 @@ async def analyze_v2_judgment_with_openai_keyframes(
     title: str,
     performance_context: dict[str, Any] | None = None,
     model_name: str = "gpt-5.5",
+    llm_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Judge Layer2+3 from Layer1 text plus keyframe JPGs using OpenAI vision."""
     result = {
@@ -204,14 +290,11 @@ async def analyze_v2_judgment_with_openai_keyframes(
         "usage_metadata": {},
         "error": None,
     }
-    api_key = llm_gateway._get_api_key("openai")
-    if not api_key:
+    # 代理感知的进程级 client(api.openai.com 本网络不可直连;OPENAI_PROXY/YTDLP_PROXY),
+    # 取代此前 OpenAI(api_key=...) 裸建(不吃代理,线上必 SSL 超时)。
+    client = _openai_judge_client()
+    if client is None:
         result["error"] = "OpenAI not available"
-        return result
-    try:
-        from openai import OpenAI
-    except Exception as exc:
-        result["error"] = f"OpenAI SDK unavailable: {exc}"
         return result
 
     prompt = _video_v2_judgment_prompt(
@@ -220,16 +303,23 @@ async def analyze_v2_judgment_with_openai_keyframes(
         performance_context=performance_context,
     )
     content = build_openai_multimodal_content(f"视频标题: {title}\n\n{prompt}", keyframes)
-    client = OpenAI(api_key=api_key)
+    input_items = [{"role": "user", "content": content}]
     try:
-        def _analyze():
-            return client.responses.create(
+        resp = await asyncio.to_thread(
+            lambda: llm_production.generate_openai_responses(
+                client=client,
+                input_items=input_items,
                 model=model_name,
-                input=[{"role": "user", "content": content}],
-                max_output_tokens=4000,
+                max_output_tokens=KEYFRAME_JUDGE_OUTPUT_TOKENS_OPENAI_ANTHROPIC,
+                **_strict_call_kwargs(
+                    llm_context,
+                    task_binding=KEYFRAME_TASK_BINDING_OPENAI,
+                    subphase="openai_keyframe_judgment",
+                    title=title,
+                    image_count=max(0, len(content) - 1),
+                ),
             )
-
-        resp = await asyncio.to_thread(_analyze)
+        )
         usage = getattr(resp, "usage", None)
         usage_metadata: dict[str, Any] = {}
         if usage:
@@ -240,7 +330,7 @@ async def analyze_v2_judgment_with_openai_keyframes(
                     "input_tokens": getattr(usage, "input_tokens", None),
                     "output_tokens": getattr(usage, "output_tokens", None),
                 }
-        raw = str(getattr(resp, "output_text", "") or "").strip()
+        raw = llm_production.openai_response_text(resp)
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
         parsed = _parse_json_response_text(raw)
         subtitle_used = bool((layer1_visual_content.get("evidence") or {}).get("subtitle_used"))
@@ -267,6 +357,7 @@ async def analyze_v2_judgment_with_anthropic_keyframes(
     title: str,
     performance_context: dict[str, Any] | None = None,
     model_name: str = CLAUDE_OPUS_EXACT_MODEL,
+    llm_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Judge Layer2+3 from Layer1 text plus keyframe JPGs using Claude vision."""
     result = {
@@ -299,17 +390,24 @@ async def analyze_v2_judgment_with_anthropic_keyframes(
     )
     content = build_anthropic_multimodal_content(f"视频标题: {title}\n\n{prompt}", keyframes)
     client = anthropic.Anthropic(api_key=api_key)
+    messages = [{"role": "user", "content": content}]
     try:
-        def _analyze():
-            # 思考默认关死(成本中性,判定 JSON 不需要);max_tokens 4000 全给正文。无 temperature。
-            return client.messages.create(
+        # 思考策略由边界按 env 统一(默认 disabled,成本中性);max_tokens 4000 全给正文。无 temperature。
+        resp = await asyncio.to_thread(
+            lambda: llm_production.generate_anthropic_messages(
+                client=client,
+                messages=messages,
                 model=model_name,
-                max_tokens=4000,
-                thinking={"type": "disabled"},
-                messages=[{"role": "user", "content": content}],
+                max_output_tokens=KEYFRAME_JUDGE_OUTPUT_TOKENS_OPENAI_ANTHROPIC,
+                **_strict_call_kwargs(
+                    llm_context,
+                    task_binding=KEYFRAME_TASK_BINDING_ANTHROPIC,
+                    subphase="anthropic_keyframe_judgment",
+                    title=title,
+                    image_count=max(0, len(content) - 1),
+                ),
             )
-
-        resp = await asyncio.to_thread(_analyze)
+        )
         usage = getattr(resp, "usage", None)
         usage_metadata: dict[str, Any] = {}
         if usage:

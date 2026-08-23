@@ -14,20 +14,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "backend" / "app"
 
+# 2026-08-23 优化波 B·A 车道 C3:lens_monitor / lens_compare / claude_vision(本地文件
+# Gemini 梯子)/ audience_avatar_llm / gemini_video_keyframes(Gemini×2 + OpenAI + Claude)
+# 八处直连全部收口到 llm_production(12 → 4);清单随之删行,不许回流。
 DIRECT_PROVIDER_MAX = {
-    "domains/kol/audience_avatar_llm.py": 1,  # relocated from audience_stats.py (avatar-age Gemini call); debt unchanged
     "domains/kol/profile_recall.py": 1,
-    "domains/market/ai_today.py": 2,
-    "domains/projects/contract_assist.py": 1,
     "platform/llm_batch.py": 1,
-    "services/ai/analyzers/claude_contract_extract.py": 1,
-    "services/ai/analyzers/claude_vision.py": 1,
-    "services/ai/analyzers/gemini_video.py": 1,
-    "services/ai/analyzers/gemini_video_keyframes.py": 4,
-    "services/ai/analyzers/gemini_video_youtube.py": 2,
-    "services/intelligence/lens_compare.py": 1,
-    "services/intelligence/lens_monitor.py": 1,
-    "services/scraping/ytdlp.py": 1,
     "services/verification/comment_generator.py": 1,
     "services/via/vector_memory_embeddings.py": 1,
 }
@@ -44,6 +36,19 @@ LEGACY_GATEWAY_MAX = {
     "domains/reports/report_helpers.py": 1,
     "platform/models/router.py": 1,
 }
+
+# 2026-08-23 C6 拆分:门面 + 三个 provider 子模块合起来才是那一个被审过的边界;
+# 每个子模块各只持有一处 SDK 调用(anthropic messages.create / google
+# models.generate_content / openai responses.create)。新增任何第五个文件进这里
+# 都要过评审——这不是白名单扩容口。
+REVIEWED_PROVIDER_BOUNDARY = frozenset(
+    {
+        "platform/llm_production.py",
+        "platform/llm_production_anthropic.py",
+        "platform/llm_production_google.py",
+        "platform/llm_production_openai.py",
+    }
+)
 
 DIRECT_SUFFIXES = (
     "chat.completions.create",
@@ -76,14 +81,14 @@ def _inventory() -> tuple[dict[str, int], dict[str, int]]:
                 continue
             call = _attribute_chain(node.func)
             if any(call.endswith(suffix) for suffix in DIRECT_SUFFIXES):
-                if relative == "platform/llm_production.py":
+                if relative in REVIEWED_PROVIDER_BOUNDARY:
                     # This is the reviewed strict provider boundary: exact
                     # task/model match, dual-signed readiness, conservative
                     # media estimate, atomic reservation and settlement.
                     continue
                 direct[relative] = direct.get(relative, 0) + 1
             if call in {"llm_gateway.invoke", "llm_gateway.invoke_json"}:
-                if relative == "platform/llm_production.py":
+                if relative in REVIEWED_PROVIDER_BOUNDARY:
                     continue
                 legacy[relative] = legacy.get(relative, 0) + 1
     return direct, legacy
@@ -103,7 +108,7 @@ def _assert_ratchet(actual: dict[str, int], allowed: dict[str, int], label: str)
 def test_direct_provider_sdk_debt_can_only_decrease() -> None:
     direct, _legacy = _inventory()
     _assert_ratchet(direct, DIRECT_PROVIDER_MAX, "direct provider SDK")
-    assert sum(direct.values()) <= 20
+    assert sum(direct.values()) <= 4
 
 
 def test_legacy_non_atomic_gateway_debt_can_only_decrease() -> None:

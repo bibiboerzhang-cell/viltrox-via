@@ -181,8 +181,19 @@ def test_keyframe_qa_direct_call_passes_config_and_default_judge(monkeypatch, tm
     class _Client:
         models = _Models()
 
+    # 2026-08-23 C3:SDK 调用经 llm_production.generate_google_content;这里用透传假边界
+    # 记录收口参数,再按边界口径调 client.models.generate_content。
+    strict: dict = {}
+
+    def fake_generate_google_content(**kwargs):
+        strict.update(kwargs)
+        return kwargs["client"].models.generate_content(
+            model=kwargs["model"], contents=kwargs["contents"], config=kwargs["config"]
+        )
+
     monkeypatch.setattr(kf, "GEMINI_AVAILABLE", True)
     monkeypatch.setattr(kf, "gemini_client", _Client())
+    monkeypatch.setattr(kf.llm_production, "generate_google_content", fake_generate_google_content)
     result = asyncio.run(
         kf.analyze_final_v1_keyframe_qa(
             final_v1_result={},
@@ -194,6 +205,11 @@ def test_keyframe_qa_direct_call_passes_config_and_default_judge(monkeypatch, tm
     dumped = _config_dump(captured["config"])
     assert str(dumped["thinking_config"]["thinking_level"]).lower() == "minimal"
     assert dumped["max_output_tokens"] == kf.KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS
+    assert strict["max_output_tokens"] == kf.KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS
+    assert strict["purpose"] == "keyframe_qa"
+    assert strict["metadata"]["task_binding"] == "keyframe_qa"
+    assert strict["metadata"]["keyframe_count"] == 1
+    assert strict["estimated_input_tokens"] >= kf.KEYFRAME_IMAGE_RESERVE_TOKENS
     assert result["model"] == _CONTRACT_JUDGE_MODEL
     assert result["method"] == f"gemini_final_v1_keyframe_qa_{_CONTRACT_JUDGE_MODEL}"
 
@@ -229,6 +245,21 @@ def test_anthropic_keyframe_judgment_disables_thinking(monkeypatch) -> None:
     monkeypatch.setattr(kf.llm_gateway, "_get_api_key", lambda _provider: "test-key")
     monkeypatch.setattr(kf, "build_anthropic_multimodal_content", lambda text, frames: [{"type": "text", "text": text}])
 
+    # 2026-08-23 C3:经 llm_production.generate_anthropic_messages;透传假边界按
+    # anthropic_create_kwargs(thinking 默认 disabled、无 temperature)调 client.messages.create。
+    from app.platform.llm_production_anthropic_helpers import anthropic_create_kwargs
+
+    strict: dict = {}
+
+    def fake_generate_anthropic_messages(**kwargs):
+        strict.update(kwargs)
+        return kwargs["client"].messages.create(
+            **anthropic_create_kwargs(kwargs["model"], kwargs["max_output_tokens"], kwargs["messages"])
+        )
+
+    monkeypatch.delenv("VKPI_ANTHROPIC_THINKING", raising=False)
+    monkeypatch.setattr(kf.llm_production, "generate_anthropic_messages", fake_generate_anthropic_messages)
+
     result = asyncio.run(
         kf.analyze_v2_judgment_with_anthropic_keyframes(
             layer1_visual_content={},
@@ -240,4 +271,6 @@ def test_anthropic_keyframe_judgment_disables_thinking(monkeypatch) -> None:
     assert captured["thinking"] == {"type": "disabled"}
     assert captured["max_tokens"] == 4000
     assert "temperature" not in captured
+    assert strict["purpose"] == "keyframe_claude_judge"
+    assert strict["metadata"]["task_binding"] == "keyframe_claude_judge"
     assert result["method"] == f"anthropic_keyframe_judgment_{CLAUDE_OPUS_EXACT_MODEL}"

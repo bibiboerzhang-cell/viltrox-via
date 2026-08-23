@@ -1,10 +1,31 @@
-"""受众头像判龄 Gemini 调用(从 audience_stats 抽出):默认模型、thinking minimal、无 temperature、env 覆盖。"""
+"""受众头像判龄 Gemini 调用(从 audience_stats 抽出):默认模型、thinking minimal、无 temperature、env 覆盖。
+
+2026-08-23 C3 起 SDK 调用经 llm_production.generate_google_content;本文件用一个"透传"
+假边界把 kwargs 原样转给假 client,既验证收口参数,也保住原有 client.calls 断言。
+"""
 from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from app.domains.kol import audience_avatar_llm
+
+
+@pytest.fixture(autouse=True)
+def _passthrough_strict_google(monkeypatch):
+    """把严格边界替换成透传:记录收口参数,再按边界口径调用 client.models.generate_content。"""
+    captured: list[dict[str, Any]] = []
+
+    def fake_generate_google_content(**kwargs: Any):
+        captured.append(kwargs)
+        return kwargs["client"].models.generate_content(
+            model=kwargs["model"], contents=kwargs["contents"], config=kwargs["config"]
+        )
+
+    monkeypatch.setattr(audience_avatar_llm.llm_production, "generate_google_content", fake_generate_google_content)
+    return captured
 
 
 class _ThinkingConfig:
@@ -65,7 +86,7 @@ def test_generate_config_uses_minimal_thinking_and_no_sampling_params() -> None:
         assert forbidden not in config.kwargs
 
 
-def test_classify_batch_builds_numbered_contents_and_calls_default_model(monkeypatch) -> None:
+def test_classify_batch_builds_numbered_contents_and_calls_default_model(monkeypatch, _passthrough_strict_google) -> None:
     monkeypatch.delenv("AUDIENCE_AVATAR_MODEL", raising=False)
     client = _FakeClient('[{"i":1,"age":"19-29","gender":"female","conf":0.5}]')
 
@@ -77,6 +98,11 @@ def test_classify_batch_builds_numbered_contents_and_calls_default_model(monkeyp
 
     assert text.startswith("[")
     assert len(client.calls) == 1
+    strict = _passthrough_strict_google[0]
+    assert strict["purpose"] == "audience_avatar"
+    assert strict["metadata"]["task_binding"] == "audience_avatar"
+    assert strict["max_output_tokens"] == 4000
+    assert strict["estimated_input_tokens"] == audience_avatar_llm.avatar_input_token_estimate(2) > 3200
     call = client.calls[0]
     assert call["model"] == "gemini-3.6-flash"
     assert "temperature" not in call
@@ -134,3 +160,13 @@ def test_audience_stats_reports_unavailable_client(monkeypatch) -> None:
     assert out == {}
     assert meta["status"] == "gemini_unavailable"
     assert meta["calls"] == 0
+
+
+def test_audience_avatar_task_binding_follows_default_and_env_pin(monkeypatch) -> None:
+    from app.core import model_registry
+
+    assert model_registry.TASK_MODEL_BINDING["audience_avatar"] == "google/gemini-3.6-flash"
+    monkeypatch.delenv("AUDIENCE_AVATAR_MODEL", raising=False)
+    assert model_registry.current_task_model_binding()["audience_avatar"] == f"google/{audience_avatar_llm.avatar_model()}"
+    monkeypatch.setenv("AUDIENCE_AVATAR_MODEL", "gemini-2.5-flash")
+    assert model_registry.current_task_model_binding()["audience_avatar"] == f"google/{audience_avatar_llm.avatar_model()}"
