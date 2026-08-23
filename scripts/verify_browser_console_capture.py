@@ -966,13 +966,10 @@ def main(argv: Iterable[str] | None = None) -> int:
             "claims": {"live_extension_free_run_completed": False},
         }
         exit_code = 2
-    output = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
-    if args.json_out:
-        # 报告落盘即可;别把 ~1MB JSON 倒进 stdout——前序 Node(CDP 抓取)会把共享管道设成非阻塞,
-        # Python 写满 64KB 缓冲即 BlockingIOError(Errno 35)→ 解释器退出码 120 → 部署误判失败回滚(2026-08-23)。
+    if args.json_out:  # 只落盘:~1MB JSON 倒 stdout 会撞 Node 留下的非阻塞管道 Errno 35 → rc 120 误回滚(2026-08-23)
         write_json(args.json_out, report)
     else:
-        sys.stdout.write(output + "\n")
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False) + "\n")
     status = (
         "PASS browser console release gate"
         if exit_code == 0
