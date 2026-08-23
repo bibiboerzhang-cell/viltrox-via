@@ -1,7 +1,14 @@
-"""Thin read repository for unified analysis cache results."""
+"""Thin read repository for unified analysis cache results.
+
+优化波 B·C5(迁移 289):``vkpi_analysis_cache`` 多两列 ``prompt_version`` / ``model_family``。
+本模块同时是视频 worker 写路径的单一 SQL 真源(``VIDEO_ANALYSIS_CACHE_UPSERT_SQL`` +
+``video_analysis_cache_upsert_params``),两列在写入时就填好;唯一键
+(target_type, target_id, derive_method) 不动,避免同一目标重复分析。
+"""
 from __future__ import annotations
 
 import json
+import re
 from decimal import Decimal
 from typing import Any
 from urllib.parse import urlparse
@@ -22,6 +29,85 @@ _ACTIVE_VIDEO_JOB_STATUSES = {"queued", "running", "retrying", "processing"}
 _FAILED_VIDEO_JOB_STATUSES = {"failed", "blocked", "triage", "cancelled", "void", "timeout"}
 _FINAL_V1_METHOD = "video_analysis_final_v1"
 _FINAL_V1_QA_METHOD = "video_analysis_final_v1_keyframe_qa"
+
+
+_MODEL_FAMILY_PATTERNS = (
+    re.compile(r"(gemini-[0-9]+(?:\.[0-9]+)*)"),
+    re.compile(r"(gpt-[0-9]+(?:\.[0-9]+)*)"),
+    re.compile(r"(claude-[a-z]+-[0-9]+)"),
+)
+
+
+def model_family(model: Any) -> str | None:
+    """模型家族 = model 列前缀(与迁移 289 回填 SQL 同口径):gemini-3.6-flash → gemini-3.6,
+    gemini-2.5-flash → gemini-2.5,gpt-5.5-xxx → gpt-5.5,claude-opus-4-1 → claude-opus-4,
+    其余取首段(mock → mock);空 → None。"""
+
+    text = str(model or "").strip().lower()
+    if not text:
+        return None
+    for pattern in _MODEL_FAMILY_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return match.group(1)
+    head = text.split("-", 1)[0].strip()
+    return head or None
+
+
+# 视频 worker 写路径(psycopg 直连,%s 占位);两条 worker 路径共用,防 SQL 漂移。
+VIDEO_ANALYSIS_CACHE_UPSERT_SQL = """
+    INSERT INTO vkpi_analysis_cache (
+      target_type, target_id, model, derive_method, result, cost,
+      status, triggered_by_user_id, prompt_version, model_family, created_at, updated_at
+    )
+    VALUES (%s, %s, %s, %s, %s::jsonb, %s, 'ready', %s, %s, %s, NOW(), NOW())
+    ON CONFLICT (target_type, target_id, derive_method)
+    DO UPDATE SET
+      model = EXCLUDED.model,
+      result = EXCLUDED.result,
+      cost = EXCLUDED.cost,
+      status = 'ready',
+      triggered_by_user_id = EXCLUDED.triggered_by_user_id,
+      prompt_version = EXCLUDED.prompt_version,
+      model_family = EXCLUDED.model_family,
+      updated_at = NOW()
+    RETURNING id
+"""
+
+
+def video_analysis_cache_upsert_params(
+    *,
+    target_type: str,
+    target_id: str,
+    model: str,
+    derive_method: str,
+    result_json: str,
+    cost: Any,
+    triggered_by_user_id: int | None,
+    prompt_version: str | None,
+) -> tuple[Any, ...]:
+    """与 ``VIDEO_ANALYSIS_CACHE_UPSERT_SQL`` 一一对应的参数元组;model_family 自动派生。"""
+
+    exact_model = str(model or "")
+    return (
+        str(target_type),
+        str(target_id),
+        exact_model,
+        str(derive_method),
+        result_json,
+        cost,
+        triggered_by_user_id,
+        (str(prompt_version).strip() or None) if prompt_version else None,
+        model_family(exact_model),
+    )
+
+
+def upsert_video_analysis_cache(cur: Any, **fields: Any) -> int | None:
+    """在调用方的 psycopg cursor 上执行视频缓存 upsert,返回行 id(字段同 video_analysis_cache_upsert_params)。"""
+
+    cur.execute(VIDEO_ANALYSIS_CACHE_UPSERT_SQL, video_analysis_cache_upsert_params(**fields))
+    row = cur.fetchone()
+    return int(row[0]) if row else None
 
 
 def _loads_json(value: Any) -> Any:
@@ -113,12 +199,25 @@ def _project_video_item_state(
     return "not_requested", "analysis_not_requested"
 
 
+def _row_get(row: Any, key: str) -> Any:
+    """迁移 289 新列的容错读:旧快照/假行没有该键时返回 None。"""
+
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
 def _row_to_entry(row: Any) -> AnalysisCacheEntry:
+    model = row["model"] or None
+    family = _row_get(row, "model_family")
     return {
         "target_type": str(row["target_type"] or ""),
         "target_id": str(row["target_id"] or ""),
         "derive_method": str(row["derive_method"] or ""),
-        "model": row["model"] or None,
+        "model": model,
+        "model_family": str(family) if family else model_family(model),
+        "prompt_version": (str(_row_get(row, "prompt_version")) or None) if _row_get(row, "prompt_version") else None,
         "cost": _number_or_none(row["cost"]),
         "status": str(row["status"] or ""),
         "triggered_by_user_id": _int_or_none(row["triggered_by_user_id"]),
@@ -177,7 +276,8 @@ def get_analysis_cache_entry(
         row = active_conn.execute(
             f"""
             SELECT target_type, target_id, derive_method, model, cost, status,
-                   triggered_by_user_id, result, created_at, updated_at
+                   triggered_by_user_id, result, created_at, updated_at,
+                   prompt_version, model_family
             FROM vkpi_analysis_cache
             WHERE {" AND ".join(clauses)}
             ORDER BY {order_prefix}updated_at DESC, id DESC
@@ -221,7 +321,8 @@ def get_analysis_cache_entries_for_targets(
         rows = active_conn.execute(
             f"""
             SELECT target_type, target_id, derive_method, model, cost, status,
-                   triggered_by_user_id, result, created_at, updated_at
+                   triggered_by_user_id, result, created_at, updated_at,
+                   prompt_version, model_family
             FROM vkpi_analysis_cache
             WHERE target_type=?
               AND target_id IN ({id_placeholders})
@@ -434,7 +535,8 @@ def list_analysis_cache_entries(
         rows = active_conn.execute(
             f"""
             SELECT target_type, target_id, derive_method, model, cost, status,
-                   triggered_by_user_id, result, created_at, updated_at
+                   triggered_by_user_id, result, created_at, updated_at,
+                   prompt_version, model_family
             FROM vkpi_analysis_cache
             {where}
             ORDER BY updated_at DESC, id DESC

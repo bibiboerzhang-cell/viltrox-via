@@ -55,6 +55,7 @@ from app.workers.apify_jobs_worker_gemini_stages import (
     merged_stage_timings,
     record_final_v1_outcome_diagnostics,
 )
+from app.domains.analysis.cache_repo import upsert_video_analysis_cache
 from app.workers.apify_jobs_worker_session import (
     _enqueue_account_dossier_extract_after_final_v1,
     _enqueue_content_fit_after_final_v1,
@@ -65,6 +66,12 @@ from app.workers.apify_jobs_worker_session import (
 
 
 logger = get_logger(__name__)
+
+
+def _cache_prompt_version(derive_method: str) -> str | None:
+    """C5:final_v1 家族行打上当前提示契约;其他 derive_method 留空(非提示产物)。"""
+
+    return FINAL_V1_PROMPT_CONTRACT if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else None
 
 
 def _llm_execution_metadata(raw: dict[str, Any]) -> dict[str, Any]:
@@ -366,6 +373,8 @@ def _record_gemini_cost(
             cost_usd=cost,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            # 台账 staff 外键吃 staff id(payload.staff_id 由入队侧落),否则非 llm_production 路径恒 NULL
+            staff_id=_int_or_none(payload.get("staff_id")),
             metadata={
                 "status": "success" if raw.get("analyzed") else "provider_error",
                 "job_id": job.get("id"),
@@ -425,35 +434,17 @@ def _write_gemini_cache(
     )
     with conn.transaction():
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO vkpi_analysis_cache (
-                  target_type, target_id, model, derive_method, result, cost,
-                  status, triggered_by_user_id, created_at, updated_at
-                )
-                VALUES (%s, %s, %s, %s, %s::jsonb, %s, 'ready', %s, NOW(), NOW())
-                ON CONFLICT (target_type, target_id, derive_method)
-                DO UPDATE SET
-                  model = EXCLUDED.model,
-                  result = EXCLUDED.result,
-                  cost = EXCLUDED.cost,
-                  status = 'ready',
-                  triggered_by_user_id = EXCLUDED.triggered_by_user_id,
-                  updated_at = NOW()
-                RETURNING id
-                """,
-                (
-                    target_type,
-                    target_id,
-                    str(raw.get("model") or raw.get("method") or "gemini_video"),
-                    cache_derive_method,
-                    _json(shaped),
-                    cost,
-                    _int_or_none(triggered_by),
-                ),
+            cache_id = upsert_video_analysis_cache(
+                cur,
+                target_type=target_type,
+                target_id=target_id,
+                model=str(raw.get("model") or raw.get("method") or "gemini_video"),
+                derive_method=cache_derive_method,
+                result_json=_json(shaped),
+                cost=cost,
+                triggered_by_user_id=_int_or_none(triggered_by),
+                prompt_version=_cache_prompt_version(derive_method),
             )
-            cache_row = cur.fetchone()
-            cache_id = int(cache_row[0]) if cache_row else None
             cur.execute(
                 """
                 UPDATE apify_jobs
@@ -819,6 +810,10 @@ def _process_gemini_video(
     # worker 侧阶段(媒体解析/下载/子进程/R2/记账)并入 raw → 随 raw_gemini_video 与 cost.stage_timings_ms 落库
     raw["worker_stage_timings_ms"] = dict(clock.timings)
     if validation_error is not None:
+        # 契约校验失败(含截断续写后仍不完整)也要把 truncation / retries / 直链诊断落库,否则查不到真因
+        record_final_v1_outcome_diagnostics(
+            conn, job_id=int(job["id"]), raw=raw, clock=clock, platform=platform, error=str(validation_error)
+        )
         raise validation_error
     if not raw.get("analyzed"):
         raw_error = str(raw.get("error") or "not_analyzed")
@@ -848,35 +843,17 @@ def _process_gemini_video(
     persist_started = time.monotonic()
     with conn.transaction():
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO vkpi_analysis_cache (
-                  target_type, target_id, model, derive_method, result, cost,
-                  status, triggered_by_user_id, created_at, updated_at
-                )
-                VALUES (%s, %s, %s, %s, %s::jsonb, %s, 'ready', %s, NOW(), NOW())
-                ON CONFLICT (target_type, target_id, derive_method)
-                DO UPDATE SET
-                  model = EXCLUDED.model,
-                  result = EXCLUDED.result,
-                  cost = EXCLUDED.cost,
-                  status = 'ready',
-                  triggered_by_user_id = EXCLUDED.triggered_by_user_id,
-                  updated_at = NOW()
-                RETURNING id
-                """,
-                (
-                    target_type,
-                    target_id,
-                    str(raw.get("model") or raw.get("method") or "gemini_video"),
-                    cache_derive_method,
-                    _json(shaped),
-                    cost,
-                    triggered_by_user_id,
-                ),
+            cache_id = upsert_video_analysis_cache(
+                cur,
+                target_type=target_type,
+                target_id=target_id,
+                model=str(raw.get("model") or raw.get("method") or "gemini_video"),
+                derive_method=cache_derive_method,
+                result_json=_json(shaped),
+                cost=cost,
+                triggered_by_user_id=triggered_by_user_id,
+                prompt_version=_cache_prompt_version(derive_method),
             )
-            cache_row = cur.fetchone()
-            cache_id = int(cache_row[0]) if cache_row else None
             cur.execute(
                 """
                 UPDATE apify_jobs

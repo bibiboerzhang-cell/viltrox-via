@@ -28,8 +28,15 @@ DEFAULT_VIDEO_GEMINI_MODEL = _env_model("APIFY_WORKER_GEMINI_MODEL", "gemini-3.6
 DEFAULT_GEMINI_JUDGE_MODEL = _env_model("GEMINI_FINAL_V1_QA_MODEL", "gemini-3.5-flash-lite")
 # v2 多 pass 评审的「视觉 pass」模型:与视频主力同一模型。
 VISUAL_PASS_MODEL = DEFAULT_VIDEO_GEMINI_MODEL
-# final_v1 默认模型链:单精确模型(链语义仍保留给 GEMINI_FINAL_V1_MODELS env)。
-DEFAULT_FINAL_V1_CHAIN = (DEFAULT_VIDEO_GEMINI_MODEL,)
+# final_v1 默认回退链(优化波 B·C4):主力 → 裁判同款 lite。分析器只在提供方压力
+# (429/503/5xx/代理错)时才换到下一节;JSON 解析/校验失败不换模型(换了也是同一段视频
+# 同一份提示,只会多烧一次全价视频 token)。GEMINI_FINAL_V1_MODELS env 仍可钉成任意链;
+# 主力与裁判同名时退化成单节链(去重保序)。
+_chain: list[str] = []
+for _candidate in (DEFAULT_VIDEO_GEMINI_MODEL, DEFAULT_GEMINI_JUDGE_MODEL):
+    if _candidate and _candidate not in _chain:
+        _chain.append(_candidate)
+DEFAULT_FINAL_V1_CHAIN = tuple(_chain)
 
 
 def is_gemini_3_family(model_name: str) -> bool:

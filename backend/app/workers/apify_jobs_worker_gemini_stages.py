@@ -109,7 +109,11 @@ def analyzer_failure_diagnostics(raw: dict[str, Any] | None, *, platform: str, e
     """失败路径要落 payload.diagnostics 的子集:错误 + 直链尝试 + 下载诊断(全部脱敏)。"""
 
     raw = raw if isinstance(raw, dict) else {}
-    return redact_diagnostics(
+    # 优化波 B:分析器/子进程自带的 diagnostics(truncation / retries / subtitles /
+    # chain_stop_reason / child_stderr_tail ...)原样并入;固定键优先,不被覆盖。
+    analyzer_diag = raw.get("diagnostics") if isinstance(raw.get("diagnostics"), dict) else {}
+    merged: dict[str, Any] = {str(k): v for k, v in analyzer_diag.items()}
+    merged.update(
         {
             "platform": platform,
             "method": str(raw.get("method") or ""),
@@ -119,6 +123,7 @@ def analyzer_failure_diagnostics(raw: dict[str, Any] | None, *, platform: str, e
             "subtitle_chars": raw.get("subtitle_chars"),
         }
     )
+    return redact_diagnostics(merged)
 
 
 def record_final_v1_outcome_diagnostics(

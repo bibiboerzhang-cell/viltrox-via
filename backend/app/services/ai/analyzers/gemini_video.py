@@ -7,14 +7,18 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import time
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict
 
 from app.core.logging import get_logger
-from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
+from app.services.ai.clients.gemini_client import (
+    GEMINI_AVAILABLE,
+    gemini_client,
+    last_generate_retry_info,
+    reset_generate_retry_info,
+)
 try:
     from google.genai import types as genai_types
 except ImportError:
@@ -22,6 +26,17 @@ except ImportError:
 
 from app.core.constants import VILTROX_CATALOG_PROMPT
 from app.core.gemini_models import DEFAULT_FINAL_V1_CHAIN
+from app.platform.llm_production_google_helpers import google_response_truncated
+from app.services.ai.analyzers.gemini_video_recovery import (
+    continuation_contents,
+    gemini_video_max_output_tokens,
+    is_provider_pressure_error as _is_provider_pressure_error,
+    merge_retry_diagnostics,
+    merge_usage_metadata,
+    response_text as _response_text,
+    should_switch_model,
+    stitch_truncated_json,
+)
 from app.services.scoring.core import compute_weighted_scores, get_vertical
 from app.services.scraping.ytdlp import YTDLP_AVAILABLE, YTDLP_BIN, YTDLP_PROXY, fetch_youtube_subtitles
 from app.services.scoring.creator import get_creator_profile
@@ -41,18 +56,9 @@ GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS = max(
     60,
     int(os.environ.get("GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SEC", "900")),
 )
-GEMINI_VIDEO_MAX_OUTPUT_TOKENS = min(
-    llm_production.GOOGLE_GENERATE_MAX_OUTPUT_TOKENS_HARD_CAP,
-    max(
-        256,
-        int(
-            os.environ.get(
-                "GEMINI_VIDEO_MAX_OUTPUT_TOKENS",
-                os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"),
-            )
-        ),
-    ),
-)
+# F1:输出上限按模型家族定(3.x 默认 24576 / 2.5 默认 8192,env 仍可覆盖),每次调用按
+# 精确模型取 gemini_video_max_output_tokens(model);本常量只保留 2.5/通用档供旧调用点参考。
+GEMINI_VIDEO_MAX_OUTPUT_TOKENS = gemini_video_max_output_tokens("gemini-2.5-flash")
 GEMINI_VIDEO_RESERVE_TOKENS_PER_SECOND = min(
     512,
     max(300, int(os.environ.get("GEMINI_VIDEO_RESERVE_TOKENS_PER_SECOND", "300"))),
@@ -123,24 +129,7 @@ def _stage_add(result: dict[str, Any], stage: str, started_monotonic: float) -> 
     return elapsed_ms
 
 
-_PROVIDER_PRESSURE_MARKERS = (
-    "429",
-    "502",
-    "503",
-    "504",
-    "resource_exhausted",
-    "resource exhausted",
-    "high demand",
-    "overloaded",
-    "rate limit",
-    "service unavailable",
-    "internal error",
-)
-
-
-def _is_provider_pressure_error(text: str) -> bool:
-    low = (text or "").lower()
-    return any(marker in low for marker in _PROVIDER_PRESSURE_MARKERS)
+# _is_provider_pressure_error 已搬到 gemini_video_recovery(顶部 import 回灌,调用点不变)。
 
 
 def final_v1_gemini_models(value: Any = None) -> list[str]:
@@ -431,6 +420,7 @@ def _strict_generate_content(
     attempt_index: int,
     attempt_total: int,
     attempt_log: list[dict[str, Any]],
+    max_output_tokens: int | None = None,
 ) -> Any:
     context = llm_context if isinstance(llm_context, dict) else {}
     base_metadata = (
@@ -445,7 +435,11 @@ def _strict_generate_content(
         config=config,
         model=model_name,
         purpose=purpose,
-        max_output_tokens=GEMINI_VIDEO_MAX_OUTPUT_TOKENS,
+        max_output_tokens=(
+            int(max_output_tokens)
+            if max_output_tokens
+            else gemini_video_max_output_tokens(model_name)
+        ),
         estimated_input_tokens=_video_input_token_estimate(
             prompt,
             performance_context,
@@ -465,6 +459,84 @@ def _strict_generate_content(
         ),
         attempt_log=attempt_log,
     )
+
+
+def _generate_json_with_recovery(
+    *,
+    model_name: str,
+    contents: list[Any],
+    config: Any,
+    prompt: str,
+    performance_context: dict[str, Any] | None,
+    llm_context: dict[str, Any] | None,
+    subphase: str,
+    attempt_index: int,
+    attempt_total: int,
+    attempt_log: list[dict[str, Any]],
+    diagnostics: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """一次 generateContent → JSON;F1:finish_reason=MAX_TOKENS 时同模型续写一次再解析。
+
+    返回 ``(parsed, usage_metadata)``;``diagnostics`` 被写入
+    ``truncation={hit, recovered, continuation_chars}`` 与 ``retries``(C10 SDK 退避账)。
+    必须在调用 SDK 的同一线程里运行(重试账是线程局部的)。解析失败原样抛出——C4 的链
+    判据(should_switch_model)把 JSON 类错误判成「不换模型」。
+    """
+
+    def _call(call_contents: list[Any], call_subphase: str) -> Any:
+        reset_generate_retry_info()
+        try:
+            return _strict_generate_content(
+                model_name=model_name,
+                contents=call_contents,
+                config=config,
+                prompt=prompt,
+                performance_context=performance_context,
+                llm_context=llm_context,
+                subphase=call_subphase,
+                attempt_index=attempt_index,
+                attempt_total=attempt_total,
+                attempt_log=attempt_log,
+            )
+        finally:
+            merge_retry_diagnostics(diagnostics, last_generate_retry_info())
+
+    resp = _call(contents, subphase)
+    usage_metadata = _response_usage_metadata(resp)
+    text = _response_text(resp)
+    truncated = bool(google_response_truncated(resp))
+    truncation = diagnostics.setdefault("truncation", {"hit": False, "recovered": False})
+    if not truncated:
+        return _parse_json_response_text(text), usage_metadata
+    truncation.update({"hit": True, "recovered": False, "model": model_name, "prefix_chars": len(text)})
+    logger.warning(
+        "gemini_video_output_truncated_continuing",
+        extra={"model": model_name, "subphase": subphase, "prefix_chars": len(text)},
+    )
+    resp2 = _call(
+        continuation_contents(contents, text, genai_types=genai_types),
+        f"{subphase}_continuation",
+    )
+    usage_metadata = merge_usage_metadata(usage_metadata, _response_usage_metadata(resp2))
+    continuation = _response_text(resp2)
+    truncation["continuation_chars"] = len(continuation)
+    truncation["continuation_truncated"] = bool(google_response_truncated(resp2))
+    stitched = stitch_truncated_json(text, continuation)
+    try:
+        parsed = _parse_json_response_text(stitched)
+    except Exception:
+        # 模型偶尔无视指令从头重发整份 JSON:单独解析续写段再放弃。
+        parsed = _parse_json_response_text(continuation)
+    truncation["recovered"] = True
+    return parsed, usage_metadata
+
+
+def _mark_attempt_failed(diagnostics: dict[str, Any]) -> None:
+    """解析/校验在续写后仍失败:truncation.recovered 回落 False(诊断不许撒谎)。"""
+
+    truncation = diagnostics.get("truncation")
+    if isinstance(truncation, dict) and truncation.get("hit"):
+        truncation["recovered"] = False
 
 
 async def analyze_local_video_with_gemini(
@@ -634,6 +706,7 @@ async def analyze_local_video_with_gemini(
         attempt_total = len(model_names)
         attempt_plan = list(enumerate(model_names, start=1))
         cache_retried: set[str] = set()
+        diagnostics: dict[str, Any] = result.setdefault("diagnostics", {})
         plan_pos = 0
         while plan_pos < len(attempt_plan):
             attempt_index, model_name = attempt_plan[plan_pos]
@@ -662,7 +735,7 @@ async def analyze_local_video_with_gemini(
                     }
                     if request_config:
                         kwargs["config"] = request_config
-                    return _strict_generate_content(
+                    return _generate_json_with_recovery(
                         model_name=m,
                         contents=kwargs["contents"],
                         config=kwargs.get("config"),
@@ -673,14 +746,11 @@ async def analyze_local_video_with_gemini(
                         attempt_index=attempt_index,
                         attempt_total=attempt_total,
                         attempt_log=result["llm_attempts"],
+                        diagnostics=diagnostics,
                     )
 
-                resp = await asyncio.to_thread(_analyze)
+                parsed, usage_metadata = await asyncio.to_thread(_analyze)
                 _stage_add(result, "generation", attempt_started)
-                usage_metadata = _response_usage_metadata(resp)
-                raw = resp.text.strip()
-                raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-                parsed = _parse_json_response_text(raw)
                 if is_final_v1:
                     _apply_final_v1_result(
                         result,
@@ -711,10 +781,16 @@ async def analyze_local_video_with_gemini(
                 break
             except Exception as err:
                 _stage_add(result, "generation", attempt_started)
+                _mark_attempt_failed(diagnostics)
                 last_err = str(err)
                 logger.warning("gemini_local_fileapi_model_failed", extra={"model": model_name, "error": last_err[:100]})
                 if _retry_after_context_cache_error(err, cache_info, model_name, cache_retried):
                     attempt_plan.insert(plan_pos, (attempt_index, model_name))
+                    continue
+                # C4:只有提供方压力/代理抖动才换下一节模型;JSON/契约/4xx 错误换了也白烧。
+                if not should_switch_model(err):
+                    diagnostics["chain_stop_reason"] = f"{type(err).__name__}: {last_err[:120]}"
+                    break
                 continue
         if not result["analyzed"]:
             result["error"] = last_err or "Gemini local video analysis failed"

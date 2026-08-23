@@ -42,7 +42,8 @@ def test_leaf_defaults_are_the_contract_literals(monkeypatch) -> None:
     assert leaf.DEFAULT_VIDEO_GEMINI_MODEL == _CONTRACT_VIDEO_MODEL
     assert leaf.DEFAULT_GEMINI_JUDGE_MODEL == _CONTRACT_JUDGE_MODEL
     assert leaf.VISUAL_PASS_MODEL == leaf.DEFAULT_VIDEO_GEMINI_MODEL
-    assert leaf.DEFAULT_FINAL_V1_CHAIN == (leaf.DEFAULT_VIDEO_GEMINI_MODEL,)
+    assert leaf.DEFAULT_FINAL_V1_CHAIN == (leaf.DEFAULT_VIDEO_GEMINI_MODEL, leaf.DEFAULT_GEMINI_JUDGE_MODEL)
+    assert leaf.DEFAULT_FINAL_V1_CHAIN == (_CONTRACT_VIDEO_MODEL, _CONTRACT_JUDGE_MODEL)
 
 
 def test_leaf_honours_env_overrides_and_ignores_blank(monkeypatch) -> None:
@@ -53,7 +54,7 @@ def test_leaf_honours_env_overrides_and_ignores_blank(monkeypatch) -> None:
     )
     assert leaf.DEFAULT_VIDEO_GEMINI_MODEL == "gemini-2.5-flash"
     assert leaf.VISUAL_PASS_MODEL == "gemini-2.5-flash"
-    assert leaf.DEFAULT_FINAL_V1_CHAIN == ("gemini-2.5-flash",)
+    assert leaf.DEFAULT_FINAL_V1_CHAIN == ("gemini-2.5-flash", "gemini-3.5-flash")
     assert leaf.DEFAULT_GEMINI_JUDGE_MODEL == "gemini-3.5-flash"
     blank = _reload_leaf(monkeypatch, APIFY_WORKER_GEMINI_MODEL="   ", GEMINI_FINAL_V1_QA_MODEL="")
     assert blank.DEFAULT_VIDEO_GEMINI_MODEL == _CONTRACT_VIDEO_MODEL

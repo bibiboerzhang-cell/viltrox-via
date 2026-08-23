@@ -28,11 +28,63 @@ from app.workers.apify_jobs_worker_helpers import (
     _json,
     _parse_last_json_stdout,
     _platform_from_content_url,
+    _redact_sensitive_text,
     _url_host,
 )
 
 
 logger = get_logger(__name__)
+
+# C1:子进程 stderr 尾巴落 diagnostics 的长度上限(跨车道契约 V→O:≤500 字、脱敏)。
+CHILD_STDERR_TAIL_CHARS = 500
+_GOOGLE_API_KEY_RE = re.compile(r"AIza[0-9A-Za-z_\-]{20,}")
+_LONG_SECRET_RE = re.compile(r"\b(sk|hf|ghp|xox[abp]|apify_api)[-_][A-Za-z0-9_\-]{16,}\b")
+
+
+def child_stderr_tail(stderr: Any, *, limit: int = CHILD_STDERR_TAIL_CHARS) -> str:
+    """子进程 stderr 尾巴:脱敏(URL userinfo / token / key / bearer / Google key 形态)后截尾 ≤ limit。"""
+
+    text = str(stderr or "")
+    if not text:
+        return ""
+    tail = text[-(limit * 4):]
+    tail = _GOOGLE_API_KEY_RE.sub("AIza***", tail)
+    tail = _LONG_SECRET_RE.sub(lambda m: f"{m.group(1)}-***", tail)
+    tail = _redact_sensitive_text(tail, limit=len(tail) + 16)
+    return tail[-limit:]
+
+
+def _attach_child_diagnostics(
+    raw: dict[str, Any],
+    *,
+    stderr: Any,
+    returncode: Any,
+    job_id: Any,
+    target_id: str,
+    platform: str,
+    reason: str,
+) -> dict[str, Any]:
+    """C1:子进程失败(非零退出 / 无 JSON / 结果带 error)时把 stderr 尾巴放进
+    ``raw["diagnostics"]["child_stderr_tail"]`` 并 warning 一行——此前异常只留在子进程 stderr,
+    父进程只有超时才记,线上「Gemini video analysis failed: ...」永远查不到真因。"""
+
+    tail = child_stderr_tail(stderr)
+    diagnostics = raw.get("diagnostics") if isinstance(raw.get("diagnostics"), dict) else {}
+    diagnostics["child_stderr_tail"] = tail
+    diagnostics["child_returncode"] = returncode
+    diagnostics["child_failure_reason"] = str(reason or "")[:80]
+    raw["diagnostics"] = diagnostics
+    logger.warning(
+        "gemini analyzer child failed | job_id=%s target_id=%s platform=%s reason=%s returncode=%s error=%s stderr_tail=%s",
+        job_id,
+        target_id,
+        platform,
+        reason,
+        returncode,
+        _redact_sensitive_text(str(raw.get("error") or ""), limit=200),
+        tail.replace("\n", " | ")[-300:],
+    )
+    return raw
 
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -411,6 +463,9 @@ def _apply_worker_overrides(payload):
     skip_subtitles = _truthy(payload.get("skip_subtitles", payload.get("gemini_skip_subtitles", os.environ.get("APIFY_WORKER_GEMINI_SKIP_SUBTITLES"))))
     if skip_subtitles:
         stack.enter_context(patch.object(gemini_video_analyzer, "fetch_youtube_subtitles", lambda *_args, **_kwargs: ""))
+        # analyze_youtube_with_gemini 住在 gemini_video_youtube,按自己模块的全局名取字幕函数
+        from app.services.ai.analyzers import gemini_video_youtube as _yt
+        stack.enter_context(patch.object(_yt, "fetch_youtube_subtitles", lambda *_args, **_kwargs: ""))
     if model_override and getattr(gemini_video_analyzer, "gemini_client", None):
         original_generate = gemini_video_analyzer.gemini_client.models.generate_content
 
@@ -565,26 +620,53 @@ def _run_gemini_analyzer_with_timeout(payload: dict[str, Any], *, job_id: Any, t
             "provider_subprocess": {
                 "timeout": True,
                 "hard_killed": hard_killed,
-                "stdout_tail": str(stdout or "")[-500:],
-                "stderr_tail": str(stderr or "")[-500:],
+                "stdout_tail": _redact_sensitive_text(str(stdout or "")[-500:], limit=500),
+                "stderr_tail": child_stderr_tail(stderr),
+            },
+            "diagnostics": {
+                "child_stderr_tail": child_stderr_tail(stderr),
+                "child_returncode": None,
+                "child_failure_reason": "timeout",
             },
         }
     parsed = _parse_last_json_stdout(stdout)
     if not parsed:
-        return {
-            "analyzed": False,
-            "method": "gemini_worker_subprocess",
-            "error": f"gemini_child_no_json: {(stderr or stdout or '')[-1000:]}",
-            "provider_subprocess": {"returncode": proc.returncode},
-        }
+        return _attach_child_diagnostics(
+            {
+                "analyzed": False,
+                "method": "gemini_worker_subprocess",
+                "error": f"gemini_child_no_json: {child_stderr_tail(stderr or stdout, limit=1000)}",
+                "provider_subprocess": {"returncode": proc.returncode},
+            },
+            stderr=stderr,
+            returncode=proc.returncode,
+            job_id=job_id,
+            target_id=target_id,
+            platform=platform,
+            reason="no_json",
+        )
     raw = parsed.get("raw") if isinstance(parsed.get("raw"), dict) else {}
     if proc.returncode != 0 and not raw.get("error"):
-        raw["error"] = f"gemini_child_exit:{proc.returncode}: {(stderr or stdout or '')[-1000:]}"
+        raw["error"] = f"gemini_child_exit:{proc.returncode}: {child_stderr_tail(stderr or stdout, limit=1000)}"
     raw["provider_subprocess"] = {
         "returncode": proc.returncode,
         "timeout": False,
-        "stderr_tail": str(stderr or "")[-500:],
+        "stderr_tail": child_stderr_tail(stderr),
     }
+    if proc.returncode != 0 or raw.get("error") or not raw.get("analyzed"):
+        _attach_child_diagnostics(
+            raw,
+            stderr=stderr,
+            returncode=proc.returncode,
+            job_id=job_id,
+            target_id=target_id,
+            platform=platform,
+            reason=(
+                "nonzero_exit" if proc.returncode != 0
+                else "result_error" if raw.get("error")
+                else "not_analyzed"
+            ),
+        )
     return raw
 
 

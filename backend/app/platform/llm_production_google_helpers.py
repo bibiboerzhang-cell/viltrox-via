@@ -16,8 +16,44 @@ from app.platform import llm_gateway
 
 logger = logging.getLogger(__name__)
 
-GOOGLE_GENERATE_MAX_OUTPUT_TOKENS_HARD_CAP = 8192
+# 平台层输出硬顶:Gemini 2.5 / 3.x 家族 API 上限均为 65536。2026-08 隔离库实测
+# 2.5-flash 长视频 final_v1 在 8192 处 9/26 条被 MAX_TOKENS 截断丢 verdict,
+# 硬顶 8192 → 65536;各调用方仍各自给 max_output_tokens(视频分析器按家族定默认,
+# 见 gemini_video.gemini_video_max_output_tokens),本常量只做最终钳位。
+GOOGLE_GENERATE_MAX_OUTPUT_TOKENS_HARD_CAP = 65536
 GOOGLE_GENERATE_INPUT_TOKENS_HARD_CAP = 1_000_000
+# 视频分析按模型家族的默认输出上限(F1):3.x 家族 24576(六层 final_v1 + 分镜时间线
+# 实测需要 >8192),2.5 家族保持 8192。
+GOOGLE_VIDEO_DEFAULT_OUTPUT_TOKENS_GEMINI3 = 24576
+GOOGLE_VIDEO_DEFAULT_OUTPUT_TOKENS_LEGACY = 8192
+
+
+def google_finish_reason(response: Any) -> str:
+    """取首个候选的 finish_reason 名(大写字符串;取不到返回 "")。"""
+
+    candidates = getattr(response, "candidates", None)
+    if not candidates:
+        return ""
+    try:
+        first = candidates[0]
+    except (TypeError, IndexError, KeyError):
+        return ""
+    reason = getattr(first, "finish_reason", None)
+    if reason is None and isinstance(first, dict):
+        reason = first.get("finish_reason") or first.get("finishReason")
+    if reason is None:
+        return ""
+    name = getattr(reason, "name", None)
+    text = str(name if name is not None else reason)
+    if "." in text:
+        text = text.rsplit(".", 1)[-1]
+    return text.strip().upper()
+
+
+def google_response_truncated(response: Any) -> bool:
+    """finish_reason == MAX_TOKENS → 正文被输出上限截断。"""
+
+    return google_finish_reason(response) == "MAX_TOKENS"
 
 
 def google_contents_fingerprint(contents: list[Any]) -> str:
@@ -244,6 +280,10 @@ def append_google_attempt(
 __all__ = [
     "GOOGLE_GENERATE_INPUT_TOKENS_HARD_CAP",
     "GOOGLE_GENERATE_MAX_OUTPUT_TOKENS_HARD_CAP",
+    "GOOGLE_VIDEO_DEFAULT_OUTPUT_TOKENS_GEMINI3",
+    "GOOGLE_VIDEO_DEFAULT_OUTPUT_TOKENS_LEGACY",
+    "google_finish_reason",
+    "google_response_truncated",
     "append_google_attempt",
     "google_config_with_output_limit",
     "google_contents_fingerprint",

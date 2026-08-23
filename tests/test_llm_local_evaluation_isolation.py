@@ -162,7 +162,9 @@ def _cache_conn() -> sqlite3.Connection:
           triggered_by_user_id INTEGER,
           result TEXT,
           created_at TEXT,
-          updated_at TEXT
+          updated_at TEXT,
+          prompt_version TEXT,
+          model_family TEXT
         )
         """
     )
@@ -174,7 +176,7 @@ def test_cache_isolation_is_opt_in_and_production_always_wins() -> None:
 
     conn = _cache_conn()
     conn.execute(
-        "INSERT INTO vkpi_analysis_cache VALUES (1,'video','3951','video_analysis_final_v1__local_eval','gemini-3.6-flash',0,'ready',NULL,'{\"evaluation_only\":true}','2026-01-02','2026-01-02')"
+        "INSERT INTO vkpi_analysis_cache VALUES (1,'video','3951','video_analysis_final_v1__local_eval','gemini-3.6-flash',0,'ready',NULL,'{\"evaluation_only\":true}','2026-01-02','2026-01-02',NULL,NULL)"
     )
 
     assert get_analysis_cache_entry(
@@ -191,7 +193,7 @@ def test_cache_isolation_is_opt_in_and_production_always_wins() -> None:
 
     # An older production result is still authoritative over a newer eval row.
     conn.execute(
-        "INSERT INTO vkpi_analysis_cache VALUES (2,'video','3951','video_analysis_final_v1','gemini-3.5-flash',0,'ready',NULL,'{\"evaluation_only\":false}','2026-01-01','2026-01-01')"
+        "INSERT INTO vkpi_analysis_cache VALUES (2,'video','3951','video_analysis_final_v1','gemini-3.5-flash',0,'ready',NULL,'{\"evaluation_only\":false}','2026-01-01','2026-01-01',NULL,NULL)"
     )
     production = get_analysis_cache_entry(
         "video",

@@ -10,7 +10,7 @@ from typing import Any
 from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.db.connection import db_connection_sync_scope
 from app.domains.costs import budget_guard
-from app.workers.apify_jobs_worker_helpers import _redact_sensitive_text
+from app.workers.apify_jobs_worker_helpers import _int_or_none, _redact_sensitive_text
 
 
 def _llm_budget_scope() -> str:
@@ -43,6 +43,7 @@ def _record_openai_cost(
             cost_usd=cost,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            staff_id=_int_or_none(payload.get("staff_id")),
             metadata={
                 "status": "success" if raw.get("analyzed") else "provider_error",
                 "job_id": job.get("id"),
@@ -80,6 +81,7 @@ def _record_anthropic_cost(
             cost_usd=cost,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
+            staff_id=_int_or_none(payload.get("staff_id")),
             metadata={
                 "status": "success" if raw.get("analyzed") else "provider_error",
                 "job_id": job.get("id"),

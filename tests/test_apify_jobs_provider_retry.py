@@ -28,9 +28,11 @@ class ApifyJobsProviderRetryTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertEqual(worker._error_category(message), "provider_pressure")
 
-    def test_final_v1_model_chain_defaults_to_single_exact_model(self) -> None:
-        # 单精确模型默认链(core/gemini_models 字面契约);链语义只留给 GEMINI_FINAL_V1_MODELS env。
-        self.assertEqual(gemini_video.final_v1_gemini_models(""), ["gemini-3.6-flash"])
+    def test_final_v1_model_chain_defaults_to_primary_then_lite(self) -> None:
+        # 优化波 B·C4:默认链 = 主力 → 裁判同款 lite(core/gemini_models 字面契约);
+        # 只在提供方压力时换节;worker 仍通过 payload 钉单精确模型(见下)。
+        self.assertEqual(gemini_video.final_v1_gemini_models(""), ["gemini-3.6-flash", "gemini-3.5-flash-lite"])
+        self.assertEqual(worker.FINAL_V1_GEMINI_MODELS, ["gemini-3.6-flash"])
 
     def test_permanent_media_errors_do_not_become_provider_pressure(self) -> None:
         cases = {
