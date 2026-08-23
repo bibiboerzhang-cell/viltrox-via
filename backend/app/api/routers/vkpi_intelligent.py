@@ -558,6 +558,17 @@ def intelligent_ask(
 
 
 # ── /suggestions:当日"异动种"chips(vkpi_alerts 近24h + apify_jobs 近24h) ─────────
+SUGGESTION_SEED_MAX_LENGTH = 80  # 与 vkpi_search.GLOBAL_SEARCH_QUERY_MAX_LENGTH / catalog_suggest.MAX_QUERY_LENGTH 同值
+
+
+def _clip_seed(text: str, limit: int = SUGGESTION_SEED_MAX_LENGTH) -> str:
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    tail = "…」是什么原因,该怎么处理?" if "」是什么原因" in text else "…"
+    return text[: max(1, limit - len(tail))] + tail
+
+
 def _recent_alert_seeds() -> list[str]:
     """近24h open 告警标题 → 建议问题;缺表/异常返回空。"""
     try:
@@ -578,7 +589,9 @@ def _recent_alert_seeds() -> list[str]:
             d = dict(row)
             title = str(d.get("title") or "").strip()
             if title:
-                seeds.append(f"告警「{title}」是什么原因,该怎么处理?")
+                # 建议种子会被原样当查询发给 global-search / catalog/suggest(q ≤ 80):哨兵告警标题
+                # 可达 100+ 字(含帖子标题),曾让整条 Ask 旅程 422、浏览器闸拒收发布。按上限截断。
+                seeds.append(_clip_seed(f"告警「{title}」是什么原因,该怎么处理?"))
     except Exception:
         return []
     return seeds
