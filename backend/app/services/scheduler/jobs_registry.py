@@ -77,6 +77,7 @@ from app.services.scheduler.jobs import (
     scheduler_fire_recovery_interval_seconds,
 )
 from app.services.scheduler.jobs_forecast_batch import job_vkpi_forecast_batch_issue
+from app.services.scheduler.jobs_registry_gated import gated_daily_job as _gated_daily_job
 from app.services.scheduler.jobs_tasks_intel import with_scheduler_run_record
 from app.services.scheduler.jobs_weekly_eval import job_vkpi_weekly_offline_eval
 
@@ -319,6 +320,17 @@ def _register_learning_closeout_jobs(_scheduler: Any) -> None:
         max_instances=1,
         coalesce=True,
     )
+    # D2 车道(2026-08-23,迁移 295 种子,默认 OFF,零 LLM):数据断链兜底三日任务,错开 05:00/05:20/05:40 中国。
+    for task_key, module, entry, kwargs, minute, label in (
+        ("vkpi_pool_raw_fields_backfill", "app.domains.kol.pool_raw_fields_job", "run_raw_fields_backfill", {"limit": 500}, 0, "Pool raw-field backfill (500 rows/day, no Apify, no contacts enqueue)"),
+        ("vkpi_tracking_auto_enroll", "app.domains.kol.evidence_side_effects", "run_tracking_auto_enroll", {}, 20, "Auto-enroll favorites' new video evidence into metric tracking ($30 monthly gate)"),
+        ("vkpi_lens_evidence_backfill", "app.domains.kol.lens_evidence_followup", "run_lens_evidence_backfill", {"limit": 5000}, 40, "Lens evidence backfill over final_v1 cache (hook gaps / extractor upgrades)"),
+    ):
+        _scheduler.add_job(
+            _gated_daily_job(task_key, module, entry, **kwargs),
+            trigger=CronTrigger(hour=5, minute=minute, timezone=CHINA_TZ),
+            id=task_key, name=label, max_instances=1, coalesce=True, misfire_grace_time=3600,
+        )
 
 
 def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
