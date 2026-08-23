@@ -22,7 +22,14 @@ def project_budget_window(
 
     scope = str(row.get("scope") or "")
     daily = scope.startswith("cron:") or scope in _DAILY_WINDOW_SCOPES
-    monthly = scope == "monthly_total" or scope.startswith("provider:")
+    # 功能 scope(audience_stats / vkpi_kol_content_fit / kol_recall / agent_* …)此前既非日窗也非月窗,
+    # cap 变成终身额度:prod audience_stats $10 花到 $9.98 后受众年龄推断静默降级 rule_v0 数月。
+    # 现按月滚;single_call* 是单次上限语义、不滚。
+    monthly = (
+        scope == "monthly_total"
+        or scope.startswith("provider:")
+        or (not daily and bool(scope) and not scope.startswith("single_call"))
+    )
     if not daily and not monthly:
         return row, False, False
 
