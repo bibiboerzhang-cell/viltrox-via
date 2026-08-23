@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, TypeVar
 
 from app.core.logging import get_logger
+from app.platform.apify_budget_contracts import attach_reservation as _attach_reservation, provider_run_id as _provider_run_id
 from app.platform.apify_budget_contracts import (
     APIFY_BUDGET_BLOCK_CODE,
     APIFY_BUDGET_SCOPE,
@@ -575,6 +576,13 @@ def _reserve_apify_budget(
                     reservation_key=key, payload_hash=payload_hash, reservation_state=state,
                     apify_run_id=run_id,
                 )
+            if state == "settled" and run_id:
+                # 同 task 同输入已付费跑过且有 run id(上一 attempt 在 provider 成功后落库失败被 requeue):复用已结算
+                # run 的数据集(保留期内免费),不再启动第二个付费 run;此前一律 reservation_settled 拒绝→重试永远空结果。
+                conn.rollback()
+                return _decision(allowed=True, estimate=0.0, estimate_source="reuse_settled_run", reason="reuse_settled_run",
+                                 operation=operation, actor_id=actor, platform=platform, source=source, reservation_key=key,
+                                 payload_hash=payload_hash, reservation_state=state, apify_run_id=run_id)
             conn.rollback()
             raise ApifyProviderReplayBlocked(
                 "provider_start_unknown" if state in {"provider_started", "unknown"} else f"reservation_{state}",
@@ -841,26 +849,6 @@ def run_apify_network(
     )
 
 
-def _provider_run_id(result: Any) -> str:
-    if not isinstance(result, Mapping):
-        return ""
-    direct = str(result.get("id") or "").strip()
-    if direct:
-        return direct
-    data = result.get("data")
-    return str(data.get("id") or "").strip() if isinstance(data, Mapping) else ""
-
-
-def _attach_reservation(result: _ResultT, decision: ApifyBudgetDecision) -> _ResultT:
-    if not isinstance(result, dict):
-        return result
-    enriched = dict(result)
-    enriched["_vkpi_budget_reservation_key"] = decision.reservation_key
-    enriched["_vkpi_budget_estimated_cost_usd"] = decision.estimated_cost_usd
-    enriched["_vkpi_budget_estimate_source"] = decision.estimate_source
-    return enriched  # type: ignore[return-value]
-
-
 def _renew_current_execution_claim(*, lease_seconds: int = 900) -> None:
     context = _execution_context.get()
     if context is None:
@@ -930,7 +918,7 @@ def call_apify_actor(
     )
     wait_secs_raw = call_kwargs.pop("wait_secs", None)
     wait_secs = int(wait_secs_raw) if wait_secs_raw is not None else None
-    if decision.reason == "resume_same_run" and decision.apify_run_id:
+    if decision.reason in ("resume_same_run", "reuse_settled_run") and decision.apify_run_id:
         try:
             result = _wait_for_apify_run(
                 client,
@@ -942,7 +930,8 @@ def call_apify_actor(
             # resume; never fall through to actor.call() and start a second run.
             raise
         run_id = _provider_run_id(result) or decision.apify_run_id
-        _mark_provider_outcome(decision, run_id=run_id, unknown=False)
+        if decision.reason == "resume_same_run":
+            _mark_provider_outcome(decision, run_id=run_id, unknown=False)
         return _attach_reservation(result, decision)
     _mark_provider_started(decision)
     try:

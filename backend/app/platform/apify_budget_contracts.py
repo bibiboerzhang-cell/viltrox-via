@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 
 APIFY_BUDGET_SCOPE = "provider:apify"
@@ -132,3 +132,25 @@ def current_apify_execution_context() -> tuple[str, int] | None:
     """Return the active durable provider fence, if one was explicitly installed."""
 
     return _execution_context.get()
+
+
+def provider_run_id(result: Any) -> str:
+    """Apify run id from an SDK result mapping (top-level id or data.id)."""
+    if not isinstance(result, Mapping):
+        return ""
+    direct = str(result.get("id") or "").strip()
+    if direct:
+        return direct
+    data = result.get("data")
+    return str(data.get("id") or "").strip() if isinstance(data, Mapping) else ""
+
+
+def attach_reservation(result: Any, decision: "ApifyBudgetDecision") -> Any:
+    """Annotate a dict result with the reservation identity/estimate (non-dict passthrough)."""
+    if not isinstance(result, dict):
+        return result
+    enriched = dict(result)
+    enriched["_vkpi_budget_reservation_key"] = decision.reservation_key
+    enriched["_vkpi_budget_estimated_cost_usd"] = decision.estimated_cost_usd
+    enriched["_vkpi_budget_estimate_source"] = decision.estimate_source
+    return enriched
