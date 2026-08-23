@@ -82,6 +82,26 @@ def expected_task_binding(task_binding: str) -> str:
     )
 
 
+def allowed_task_bindings(task_binding: str) -> tuple[str, ...]:
+    """Return ``(primary, *fallbacks)`` accepted for one task name (primary first).
+
+    主绑定仍经门面解析(见 expected_task_binding,monkeypatch 契约不变);回退成员来自
+    model_registry.task_model_fallback_bindings(2026-08-23 波 C·C1:让 final_v1 视频链
+    的 lite 回退节能过绑定校验)。未登记任务回空元组。
+    """
+
+    from app.core.model_registry import task_model_fallback_bindings
+
+    primary = expected_task_binding(task_binding)
+    if not primary:
+        return ()
+    chain = [primary]
+    for fallback in task_model_fallback_bindings(str(task_binding or "")):
+        if fallback not in chain:
+            chain.append(fallback)
+    return tuple(chain)
+
+
 class ProductionLlmUnavailable(RuntimeError):
     """Safe, bounded failure raised when strict production generation degrades."""
 
@@ -122,6 +142,7 @@ def sdk_failure(
 
 __all__ = [
     "ProductionLlmUnavailable",
+    "allowed_task_bindings",
     "expected_task_binding",
     "progress_metadata",
     "sdk_failure",

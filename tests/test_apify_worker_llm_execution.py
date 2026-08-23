@@ -42,8 +42,15 @@ def test_worker_preflight_and_analyzer_use_the_same_exact_model(monkeypatch) -> 
         execution_class="local_evaluation",
     )
     assert captured["execution_class"] == "local_evaluation"
-    assert analyzer["gemini_model"] == worker.WORKER_GEMINI_MODEL
-    assert analyzer["gemini_final_v1_models"] == [worker.WORKER_GEMINI_MODEL]
+    # C1(2026-08-23):子进程不再强制单模型(gemini_model 置空);final_v1 生产 job 发
+    # 认可链(主力 → lite 回退),payload 里链外模型(gemini-3.5-flash)不能放宽链。
+    from app.core.video_model_chain import final_v1_model_chain
+
+    chain = final_v1_model_chain()
+    assert chain[0] == worker.WORKER_GEMINI_MODEL and len(chain) == 2
+    assert analyzer["gemini_model"] == ""
+    assert analyzer["gemini_models"] == chain
+    assert analyzer["gemini_final_v1_models"] == chain
     assert worker.FINAL_V1_GEMINI_MODELS == [worker.WORKER_GEMINI_MODEL]
 
 

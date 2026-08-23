@@ -17,10 +17,10 @@ from typing import Any
 import psycopg
 
 from app.core.logging import get_logger
+from app.core.video_model_chain import analyzer_model_chain
 from app.db.connection import db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.services.media.video_download import download_direct_video_url
-from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 from app.services.ai.analyzers.gemini_video_results import (
     InvalidFinalV1ResultError,
     ensure_final_v1_result_cacheable,
@@ -129,17 +129,15 @@ def _llm_execution_metadata(raw: dict[str, Any]) -> dict[str, Any]:
 def _gemini_analyzer_payload(
     payload: dict[str, Any], derive_method: str
 ) -> dict[str, Any]:
-    exact = {
-        **payload,
-        "gemini_model": WORKER_GEMINI_MODEL,
-        "gemini_models": [WORKER_GEMINI_MODEL],
-    }
+    # C1:final_v1 生产 job 发整条认可链(主力 → lite 回退;payload 只能收窄),子进程不再
+    # 强制覆盖 generate_content 的 model(gemini_model 置空),分析器如实报告命中的模型。
+    # 本地评测 / 非 final_v1 derive 仍钉主力单节。
+    chain = analyzer_model_chain(
+        payload, final_v1=derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
+    )
+    exact = {**payload, "gemini_model": "", "gemini_models": list(chain)}
     if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
-        exact["gemini_final_v1_models"] = (
-            gemini_video_analyzer.final_v1_gemini_models(
-                [WORKER_GEMINI_MODEL]
-            )
-        )
+        exact["gemini_final_v1_models"] = list(chain)
     return exact
 
 
@@ -609,9 +607,9 @@ def _process_gemini_video(
     )
     started = time.monotonic()
     clock = StageClock()
-    # The child process forces every generateContent call to this exact model;
-    # final_v1 receives the same one-model chain, so cache setup cannot drift.
+    # 子进程按 analyzer_payload 的链逐节尝试(只在提供方压力时换节);post-hoc 闸认链成员。
     analyzer_payload = _gemini_analyzer_payload(payload, derive_method)
+    model_chain = list(analyzer_payload.get("gemini_models") or [WORKER_GEMINI_MODEL])
     authorization = (
         payload.get("_llm_execution")
         if isinstance(payload.get("_llm_execution"), dict)
@@ -760,10 +758,10 @@ def _process_gemini_video(
         clock.add("analyzer_subprocess", analyzer_started)
     latency_ms = int((time.monotonic() - started) * 1000)
     reported_model = str(raw.get("model") or "")
-    if raw.get("analyzed") and reported_model != WORKER_GEMINI_MODEL:
+    if raw.get("analyzed") and reported_model not in model_chain:
         raise RuntimeError(
             "model_binding_mismatch:"
-            f"expected=google/{WORKER_GEMINI_MODEL}:reported={reported_model or 'missing'}"
+            f"expected=google/{'|'.join(model_chain)}:reported={reported_model or 'missing'}"
         )
     # YouTube children gate subtitles / direct attempts / download / File API
     # themselves and report ``scope_revoked``; the parent re-checks before writes.
@@ -773,10 +771,12 @@ def _process_gemini_video(
         return
     raw["llm_execution"] = {
         **authorization,
-        "binding": f"google/{WORKER_GEMINI_MODEL}",
-        "model": WORKER_GEMINI_MODEL,
+        "binding": f"google/{reported_model or WORKER_GEMINI_MODEL}",
+        "model": reported_model or WORKER_GEMINI_MODEL,
+        "model_chain": model_chain,
+        "fallback_used": bool(reported_model and reported_model != WORKER_GEMINI_MODEL),
         "reported_model": reported_model or None,
-        "model_match": bool(reported_model == WORKER_GEMINI_MODEL),
+        "model_match": bool(reported_model in model_chain),
     }
     logger.info(
         "apify_jobs gemini video returned | job_id=%s analyzed=%s method=%s latency_ms=%s",

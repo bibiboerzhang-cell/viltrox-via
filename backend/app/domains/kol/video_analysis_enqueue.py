@@ -9,6 +9,7 @@ import os
 from typing import Any
 
 from app.core.gemini_models import DEFAULT_VIDEO_GEMINI_MODEL
+from app.core.video_model_chain import PAYLOAD_CHAIN_KEY, final_v1_model_chain, model_fallback_candidates, ready_model_subchain
 from app.db.connection import get_conn
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 from app.domains.tasks.search_session_lineage import (
@@ -34,6 +35,8 @@ from app.domains.kol.video_url_identity import (
 FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_analysis_worker")
 PRODUCTION_VIDEO_MODEL = DEFAULT_VIDEO_GEMINI_MODEL  # 与 worker 同源(env APIFY_WORKER_GEMINI_MODEL)
+# C1:预检按整条链(主力预约 + 回退成员就绪)走;payload 只带 ready 子链,worker 只能再收窄。
+PRODUCTION_VIDEO_CHAIN = final_v1_model_chain()
 # 2026-07-02:默认 1200 会截断分镜 JSON(Extra data 占 unknown 失败桶大头);线上 .env 不随部署 → 代码默认 4096,env 仍可覆盖。
 LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"))
 ACTIVE_JOB_STATUSES = ("queued", "running", "retrying", "processing")
@@ -86,32 +89,29 @@ def _video_analysis_queue_lane(*, batch: str, local_evaluation: bool) -> str:
     return "batch"
 
 
-def _google_budget(preflight: dict[str, Any]) -> dict[str, Any]:
+def _google_budget(preflight: dict[str, Any], chain: list[str] | None = None) -> dict[str, Any]:
+    """C1:链逐成员看预检——任一成员 ready 即入队(ready 子链随 payload),全不 ready 才 ai_disabled。"""
+    chain = list(chain or PRODUCTION_VIDEO_CHAIN)
+    ready, blocked = ready_model_subchain(preflight, chain)
     providers = preflight.get("providers") if isinstance(preflight.get("providers"), list) else []
-    google = next((item for item in providers if item.get("provider") == "google"), {})
+    head = ready[0] if ready else chain[0]
+    google = next((i for i in providers if i.get("provider") == "google" and str(i.get("model") or chain[0]) == head), {})
     return {
-        "allowed": bool(google.get("provider_calls_allowed")),
+        "allowed": bool(ready),
         "reason": str(preflight.get("provider_gate_reason") or google.get("provider_gate_reason") or "provider_calls_blocked"),
         "estimated_cost_usd": float(google.get("estimated_cost_usd") or 0.0),
         "provider": "google",
-        "model": str(google.get("model") or ""),
-        "model_readiness_status": str(
-            preflight.get("model_readiness_status")
-            or google.get("model_readiness_status")
-            or "not_ready"
-        ),
+        "model": str(google.get("model") or head),
+        "ready_models": ready,
+        "blocked_models": blocked,
+        "model_readiness_status": str(preflight.get("model_readiness_status") or google.get("model_readiness_status") or "not_ready"),
         "checks": google.get("checks") if isinstance(google.get("checks"), list) else [],
         "preflight": preflight,
     }
 
 
 def _ai_analysis_state(
-    state: str,
-    *,
-    reason: str = "",
-    gate_reason: str = "",
-    model_readiness_status: str = "",
-    provider_calls_allowed: bool = False,
+    state: str, *, reason: str = "", gate_reason: str = "", model_readiness_status: str = "", provider_calls_allowed: bool = False
 ) -> dict[str, Any]:
     """Stable, frontend-safe AI-stage contract for URL/profile/text flows."""
 
@@ -194,11 +194,7 @@ def _ready_cache(
     return item
 
 
-def _active_job(
-    conn: Any,
-    *,
-    idempotency_key: str,
-) -> dict[str, Any] | None:
+def _active_job(conn: Any, *, idempotency_key: str) -> dict[str, Any] | None:
     row = conn.execute(
         """
         SELECT id, job_type, status, created_at, updated_at
@@ -353,12 +349,12 @@ def _enqueue_final_v1_video_analysis(
         max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
         preferred_provider="google",
         model_override=(LOCAL_EVALUATION_MODEL if local_evaluation else PRODUCTION_VIDEO_MODEL),
-        model_fallbacks=[],
+        model_fallbacks=([] if local_evaluation else model_fallback_candidates(PRODUCTION_VIDEO_CHAIN)),
         execution_class=execution_class,
         cost_tag=LLM_BUDGET_SCOPE,
         require_configured=False,
     )
-    budget = _google_budget(preflight)
+    budget = _google_budget(preflight, [LOCAL_EVALUATION_MODEL] if local_evaluation else PRODUCTION_VIDEO_CHAIN)
 
     # A durable AI job is only useful when the exact model chain is authorized
     # now.  Previously these rows were queued despite a failed production
@@ -423,6 +419,7 @@ def _enqueue_final_v1_video_analysis(
             "title": evidence.get("title"),
             "creator_handle": evidence.get("kol_handle"),
             "staff_id": _staff_fk_id(staff),
+            PAYLOAD_CHAIN_KEY: list(budget.get("ready_models") or []),
         },
         search_session_id=search_session_id,
         search_session_item_id=search_session_item_id,

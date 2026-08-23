@@ -86,6 +86,21 @@ TASK_MODEL_BINDING = {
     "keyframe_openai_judge": "openai/gpt-5.5",
 }
 
+# 2026-08-23 波 C·C1:任务绑定的「允许回退」成员(主绑定之外还被这条任务认可的精确绑定)。
+# 视频 final_v1 的分析器按 core/gemini_models.DEFAULT_FINAL_V1_CHAIN 在提供方压力
+# (429/503/5xx/代理错)时换到裁判同款 lite;此前 llm_production 的绑定硬闸只认主绑定,
+# 换节那一刀必 task_binding_model_mismatch——回退链在 worker 路径上从未真正生效。
+# 语义:current_task_model_binding() 仍只回主绑定(预算预留/就绪目录/切换审批不变);
+# allowed_task_model_bindings(task) 回「主 + 回退」,绑定校验/就绪 ack 校验认整条链。
+# 回退成员的 env 钉回口与 core/gemini_models 同一条(GEMINI_FINAL_V1_QA_MODEL),
+# 保证 worker 真发出的链与这里认可的链一字不差。
+TASK_MODEL_FALLBACK_BINDINGS: dict[str, tuple[str, ...]] = {
+    "audit_video_analysis": ("google/gemini-3.5-flash-lite",),
+}
+TASK_MODEL_FALLBACK_ENV_KEYS: dict[str, tuple[str, ...]] = {
+    "audit_video_analysis": ("GEMINI_FINAL_V1_QA_MODEL",),
+}
+
 TASK_MODEL_ENV_KEYS = {
     "audit_pre_filter": ("OPENAI_MODEL", None),
     "audit_video_analysis": ("APIFY_WORKER_GEMINI_MODEL", None),
@@ -143,6 +158,71 @@ def current_task_model_binding() -> dict[str, str]:
         provider = os.environ.get(provider_env, "").strip().lower() if provider_env else default_provider
         current[task] = f"{provider or default_provider}/{model or default_model}"
     return current
+
+
+def task_model_fallback_bindings(task: str) -> tuple[str, ...]:
+    """Return the reviewed fallback bindings for one task (never the primary).
+
+    每个回退位对应一个 env 钉回口(TASK_MODEL_FALLBACK_ENV_KEYS,按位次取);env 值
+    空白或 *-latest 一律忽略回代码默认;provider 沿用默认回退绑定的 provider。
+    """
+
+    defaults = TASK_MODEL_FALLBACK_BINDINGS.get(str(task or ""), ())
+    env_keys = TASK_MODEL_FALLBACK_ENV_KEYS.get(str(task or ""), ())
+    resolved: list[str] = []
+    for index, default_binding in enumerate(defaults):
+        provider, default_model = split_binding(default_binding)
+        if not provider or not default_model:
+            continue
+        env_key = env_keys[index] if index < len(env_keys) else ""
+        model = os.environ.get(env_key, "").strip() if env_key else ""
+        if model.lower().endswith("-latest"):
+            model = ""
+        binding = f"{provider}/{model or default_model}"
+        if binding not in resolved:
+            resolved.append(binding)
+    return tuple(resolved)
+
+
+def allowed_task_model_bindings(
+    task: str,
+    bindings: dict[str, str] | None = None,
+) -> tuple[str, ...]:
+    """Return ``(primary, *fallbacks)`` accepted for one task, primary first, deduplicated.
+
+    主绑定来自 current_task_model_binding()(或调用方传入的 bindings 快照),回退来自
+    task_model_fallback_bindings();主/回退同名时退化成单节(与 gemini_models 链去重保序一致)。
+    未登记的任务返回空元组。
+    """
+
+    current = current_task_model_binding() if bindings is None else bindings
+    primary = str(current.get(str(task or ""), "") or "")
+    if not primary:
+        return ()
+    chain = [primary]
+    for fallback in task_model_fallback_bindings(task):
+        if fallback not in chain:
+            chain.append(fallback)
+    return tuple(chain)
+
+
+def is_allowed_task_model_binding(task: str, binding: str) -> bool:
+    return str(binding or "") in allowed_task_model_bindings(task)
+
+
+def tasks_by_allowed_binding(
+    bindings: dict[str, str] | None = None,
+) -> dict[str, list[str]]:
+    """Return binding -> tasks that accept it as primary **or** fallback (readiness scope)."""
+
+    current = current_task_model_binding() if bindings is None else bindings
+    out: dict[str, list[str]] = {}
+    for task in current:
+        for binding in allowed_task_model_bindings(task, current):
+            tasks = out.setdefault(binding, [])
+            if task not in tasks:
+                tasks.append(task)
+    return out
 
 
 def floating_production_task_bindings(

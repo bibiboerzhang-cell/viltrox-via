@@ -15,7 +15,7 @@ from typing import Any
 
 from app.platform import llm_gateway
 from app.platform.llm_production_common import (
-    expected_task_binding as _expected_task_binding,
+    allowed_task_bindings as _allowed_task_bindings,
     progress_metadata as _progress_metadata,
     sdk_failure as _sdk_failure,
 )
@@ -85,8 +85,11 @@ def generate_google_content(
     task_binding = str(progress_metadata.get("task_binding") or "").strip()
     actual_binding = f"{provider}/{exact_model}"
     if task_binding:
-        expected_binding = _expected_task_binding(task_binding)
-        if expected_binding != actual_binding:
+        # 2026-08-23 波 C·C1:绑定校验认整条链(主 + 回退);台账仍按实际请求的精确模型
+        # 记(record_call model=exact_model),并标注本次是主力还是回退节。
+        allowed_bindings = _allowed_task_bindings(task_binding)
+        expected_binding = allowed_bindings[0] if allowed_bindings else ""
+        if actual_binding not in allowed_bindings:
             raise _sdk_failure(
                 "task_binding_model_mismatch",
                 provider=provider,
@@ -95,9 +98,14 @@ def generate_google_content(
                 details={
                     "task_binding": task_binding,
                     "expected_binding": expected_binding,
+                    "allowed_bindings": list(allowed_bindings),
                     "actual_binding": actual_binding,
                 },
             )
+        progress_metadata["task_binding_role"] = (
+            "primary" if actual_binding == expected_binding else "fallback"
+        )
+        progress_metadata["task_binding_primary"] = expected_binding
 
     request_identity = _google_contents_fingerprint(contents)
     preflight = llm_gateway.budget_preflight(

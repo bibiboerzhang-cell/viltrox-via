@@ -805,12 +805,10 @@ def build_model_readiness_catalog(
     evidence_map = _mapping(evidence_by_binding)
     configured_map = configured_providers or {}
     if expected_tasks_by_binding is None:
-        from app.core.model_registry import current_task_model_binding
+        # C1:回退绑定(如视频链的 lite)也算该任务的期望绑定,就绪评估同口径。
+        from app.core.model_registry import tasks_by_allowed_binding
 
-        inferred_tasks: dict[str, list[str]] = {}
-        for task, task_binding in current_task_model_binding().items():
-            inferred_tasks.setdefault(str(task_binding), []).append(str(task))
-        task_map: Mapping[str, Iterable[str]] = inferred_tasks
+        task_map: Mapping[str, Iterable[str]] = tasks_by_allowed_binding()
     else:
         task_map = expected_tasks_by_binding
     items: list[dict[str, Any]] = []
@@ -857,13 +855,9 @@ def exact_binding_readiness_from_environment(
     provider, model = split_binding(binding)
     resolved = resolve_model_binding(provider, model, runtime_availability={})
     if expected_tasks is None:
-        from app.core.model_registry import current_task_model_binding
+        from app.core.model_registry import tasks_by_allowed_binding
 
-        task_scope = tuple(
-            task
-            for task, task_binding in current_task_model_binding().items()
-            if str(task_binding) == str(binding)
-        )
+        task_scope = tuple(tasks_by_allowed_binding().get(str(binding), ()))
     else:
         task_scope = tuple(expected_tasks)
     item = assess_model_readiness(

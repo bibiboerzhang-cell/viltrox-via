@@ -13,8 +13,9 @@ scheduler 之前,对它们各自真正加载的 env 文件跑一遍本脚本,非
       == model_registry.TASK_MODEL_BINDING['audit_video_analysis'] 模型后缀
       == platform/llm_local_evaluation.LOCAL_EVALUATION_MODEL
       (--allow-worker-pin:prod 用 env 钉回旧模型的回滚场景,后两项降为 WARN);
-  (c) env 生效后 current_task_model_binding() 的每个绑定 + 三家 provider 默认链模型
-      都在 VKPI_LLM_READINESS_OPERATOR_ACK 内,或 VKPI_LLM_READINESS_EVIDENCE_JSON
+  (c) env 生效后 current_task_model_binding() 的每个绑定(含 allowed_task_model_bindings
+      的回退成员,如视频链 lite)+ 三家 provider 默认链模型都在
+      VKPI_LLM_READINESS_OPERATOR_ACK 内,或 VKPI_LLM_READINESS_EVIDENCE_JSON
       里有签名证据(production_ready);
   (d) GEMINI_FINAL_V1_MODELS 不含 preview id、每项已注册;
   (e) 任何值都不含 gemini-3.7 / gemini-flash-latest / gemini-pro-latest 作为运行模型。
@@ -223,12 +224,15 @@ def _check_video_model_contract(values: Mapping[str, str], *, allow_worker_pin: 
 def _required_bindings() -> dict[str, list[str]]:
     """Return binding -> reasons (task names / provider default) that must pass the readiness gate."""
 
-    from app.core.model_registry import current_task_model_binding
+    from app.core.model_registry import allowed_task_model_bindings, current_task_model_binding
     from app.platform import llm_gateway
 
     required: dict[str, list[str]] = {}
     for task, binding in sorted(current_task_model_binding().items()):
         required.setdefault(str(binding), []).append(str(task))
+        # C1:回退绑定(视频链 lite)同样必须被 ack / 有证据,否则换节那一刀会被闸掉。
+        for fallback in allowed_task_model_bindings(task)[1:]:
+            required.setdefault(str(fallback), []).append(f"fallback:{task}")
     for provider, config in llm_gateway.PROVIDER_CONFIG.items():
         model_id = str((config or {}).get("model") or "").strip()
         if model_id:
@@ -299,13 +303,16 @@ def _check_final_v1_chain(values: Mapping[str, str], registry: Mapping[str, set[
     if bad:
         return [Finding("FAIL", "d.final_v1_chain", f"{FINAL_V1_CHAIN_KEY}: " + "; ".join(bad))]
     findings = [Finding("PASS", "d.final_v1_chain", f"{FINAL_V1_CHAIN_KEY}={','.join(chain)}")]
-    worker_model, _ = _effective_worker_model(values)
-    if worker_model and chain != [worker_model]:
+    from app.core.video_model_chain import final_v1_model_chain
+
+    allowed_chain = final_v1_model_chain()
+    if chain != allowed_chain:
         findings.append(
             Finding(
                 "WARN",
                 "d.final_v1_chain",
-                f"{FINAL_V1_CHAIN_KEY} != [{worker_model}]: worker executes the exact {WORKER_MODEL_KEY} only",
+                f"{FINAL_V1_CHAIN_KEY} != worker chain {allowed_chain}: worker sends only registry-allowed "
+                f"{VIDEO_TASK} members ({WORKER_MODEL_KEY} primary, {JUDGE_MODEL_KEY} fallback); env chain is ignored on that path",
             )
         )
     return findings
