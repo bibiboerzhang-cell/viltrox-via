@@ -71,6 +71,20 @@ _PRODUCT_SPEC_TERM_RE = re.compile(
     re.IGNORECASE,
 )
 _PRODUCT_FOCAL_TERM_RE = re.compile(r"\d{2,3}(?:-\d{2,3})?mm", re.IGNORECASE)
+# 「卡口/品牌/系统」级产品语境:不是型号证明,但证明创作者在这款镜头的生态里(新品没人提过时的放行依据)。
+_PRODUCT_CONTEXT_TERMS = frozenset({
+    "viltrox", "sony", "nikon", "canon", "fujifilm", "fuji", "leica", "panasonic", "lumix", "sigma",
+    "e-mount", "z-mount", "x-mount", "rf-mount", "l-mount", "ef-mount", "m43", "full-frame", "aps-c",
+})
+_PRODUCT_MOUNT_RE = re.compile(r"^[a-z]{1,3}-?mount$", re.IGNORECASE)
+
+
+def product_context_proof_terms(product_terms: list[str], matched_terms: set[str]) -> list[str]:
+    """品牌/卡口/画幅级语境命中(与型号级区分;仅焦段/光圈属性仍不算)。"""
+    return [
+        term for term in product_terms
+        if term in matched_terms and (term in _PRODUCT_CONTEXT_TERMS or _PRODUCT_MOUNT_RE.fullmatch(term))
+    ][:2]
 
 
 def _normal_dimension(name: str, value: Any) -> str:
@@ -335,7 +349,10 @@ def build_match_evidence(
     distinct_terms = {item["term"] for item in matched}
     required_terms = 1 if len(terms) <= 1 else 2
     identity_proof_terms = _product_identity_proof_terms(product_terms, distinct_terms)
-    product_matched = not product_terms or bool(identity_proof_terms)
+    # 型号级(精确型号 / 系列+焦段)优先;没有时接受品牌/卡口/画幅级语境——新品上市池里没人提过型号,
+    # 严格 30 曾因此 496/500 全灭(2026-08-23)。仅焦段/光圈属性、仅人设仍不放行(契约不变)。
+    context_proof_terms = [] if identity_proof_terms else product_context_proof_terms(product_terms, distinct_terms)
+    product_matched = not product_terms or bool(identity_proof_terms) or bool(context_proof_terms)
     intent_matched = len(distinct_terms.intersection(terms)) >= required_terms
     if not intent_matched or not product_matched:
         return []
@@ -352,7 +369,7 @@ def build_match_evidence(
             selected_pairs.add(key)
             selected.append(item)
 
-    for proof_term in identity_proof_terms:
+    for proof_term in [*identity_proof_terms, *context_proof_terms]:
         proof = next((item for item in matched if item["term"] == proof_term), None)
         if proof:
             append(proof)

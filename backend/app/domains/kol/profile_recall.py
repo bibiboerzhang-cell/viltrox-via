@@ -510,6 +510,7 @@ def recall_kol_profiles(
         product_focus,
         target_persona,
     )
+    evidence_query_text = f"{resolved_text} {persona_text}".strip() if persona_text else resolved_text
     # 本次 query 是否偏视频/监视器人群(用于纯平面摄影候选的诚实标注与展示降权)。纯展示判据。
     video_leaning = _is_video_leaning_product(query_meta, persona_text, product_focus)
     # 首屏基础召回可显式选择 provider_free:只读本地 pool 文本,不打
@@ -675,12 +676,8 @@ def recall_kol_profiles(
             for field in rejected_fields:
                 hard_filter_rejected_by[field] = hard_filter_rejected_by.get(field, 0) + 1
             continue
-        field_evidence = build_match_evidence(
-            row,
-            evidence,
-            resolved_text,
-            required_product_terms=safe_product_evidence_terms,
-        )
+        # 证据意图词=检索词∪人群词(product_focus/target_persona);只用检索词时 LLM 常给泛角色词被剔光→496/500 判无证据(08-23)
+        field_evidence = build_match_evidence(row, evidence, evidence_query_text, required_product_terms=safe_product_evidence_terms)
         if not allow_backfill and not field_evidence:
             filtered_no_match_evidence_count += 1
             continue
