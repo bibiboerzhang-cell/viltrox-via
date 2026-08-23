@@ -304,10 +304,12 @@ def list_groups(staff: dict[str, Any] | None, *, limit: int = 200) -> dict[str, 
         "admin", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"
     }
     if not is_manager:
-        me = str((staff or {}).get("staff_id") or "")
+        # staff_context_for_user 给的键是 id(staff_id 只在部分调用方存在):此前只认 staff_id,
+        # 普通员工 GET /staff-groups 恒为空。创建者即使不在 member_ids 也应看到自己建的组。
+        me = str((staff or {}).get("staff_id") or (staff or {}).get("id") or "")
         items = [
             g for g in items
-            if me and any(str(x) == me for x in (g.get("member_ids") or []))
+            if me and (any(str(x) == me for x in (g.get("member_ids") or [])) or str(g.get("created_by") or "") == me)
         ]
     return {"items": items}
 
