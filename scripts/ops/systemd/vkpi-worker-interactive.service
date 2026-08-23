@@ -58,6 +58,8 @@ ReadOnlyPaths=/opt/viltrox-2.0/.env
 ReadOnlyPaths=-/opt/viltrox-2.0/.env.production
 ReadWritePaths=/opt/viltrox-2.0/uploads
 ReadOnlyPaths=/opt/viltrox-2.0/runtime
+# Qdrant 本地索引要写 .lock:只开这一个子目录可写(其余 runtime 仍只读)
+ReadWritePaths=/opt/viltrox-2.0/runtime/vkpi_qdrant
 ReadOnlyPaths=/opt/viltrox-2.0/frames
 ReadOnlyPaths=/opt/viltrox-2.0/creator_profiles
 InaccessiblePaths=/opt/viltrox-2.0/backups

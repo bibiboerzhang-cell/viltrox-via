@@ -13,7 +13,24 @@ METHOD = "vector_recall"
 EMBEDDING_MODEL = "text-embedding-3-small"
 VECTOR_SIZE = 1536
 PROJECT_ROOT = Path(__file__).resolve().parents[4]
-QDRANT_LOCAL_PATH = PROJECT_ROOT / "runtime" / "vkpi_qdrant"
+
+
+def _qdrant_local_path() -> Path:
+    """Qdrant 本地索引目录:env VKPI_KOL_QDRANT_PATH > VKPI_RUNTIME_DATA_DIR/runtime/vkpi_qdrant > 仓库 runtime/。
+    prod 发布树只读且 worker 沙箱把 runtime 设为只读时,打开 .lock 会 Errno 30 → 召回整段降级(2026-07-26 起 14 次);
+    单元模板已把 runtime/vkpi_qdrant 放进 ReadWritePaths,这里再给运维一个可移路径。"""
+    import os as _os
+
+    explicit = _os.environ.get("VKPI_KOL_QDRANT_PATH", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    data_root = _os.environ.get("VKPI_RUNTIME_DATA_DIR", "").strip()
+    if data_root:
+        return Path(data_root).expanduser() / "runtime" / "vkpi_qdrant"
+    return PROJECT_ROOT / "runtime" / "vkpi_qdrant"
+
+
+QDRANT_LOCAL_PATH = _qdrant_local_path()
 OPENAI_EMBEDDING_PRICE_PER_1M = Decimal("0.02")
 MAX_CANDIDATE_LIMIT = 500
 DEFAULT_RESULT_LIMIT = 30
