@@ -230,8 +230,8 @@ env \
   VKPI_HEALTH_ENV_FILE="${HEALTH_ENV_FILE}" \
   VKPI_BROWSER_GATE_URL="${BROWSER_GATE_URL}" \
   VKPI_STAGING_DB_CLONE=0 \
-  bash "${ROOT}/scripts/ops/deploy_local_to_cloud.sh" 2>&1 | tee "${DEPLOY_LOG}"
-DEPLOY_RC="${PIPESTATUS[0]}"
+  bash "${ROOT}/scripts/ops/deploy_local_to_cloud.sh" > "${DEPLOY_LOG}" 2>&1  # 不走 tee 管道:Node 会把共享管道设非阻塞,后续 Python 大输出 Errno 35 → rc 120 误回滚
+DEPLOY_RC=$?
 set -e
 
 # ── 8. 结果 ──

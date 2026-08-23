@@ -967,9 +967,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         }
         exit_code = 2
     output = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True, allow_nan=False)
-    sys.stdout.write(output + "\n")
     if args.json_out:
+        # 报告落盘即可;别把 ~1MB JSON 倒进 stdout——前序 Node(CDP 抓取)会把共享管道设成非阻塞,
+        # Python 写满 64KB 缓冲即 BlockingIOError(Errno 35)→ 解释器退出码 120 → 部署误判失败回滚(2026-08-23)。
         write_json(args.json_out, report)
+    else:
+        sys.stdout.write(output + "\n")
     status = (
         "PASS browser console release gate"
         if exit_code == 0
