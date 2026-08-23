@@ -28,6 +28,7 @@ export const FULL_BOARD_MODULE_CATALOG: FullBoardModuleSource[] = [
       { moduleKey: "funnel", label: "合作漏斗", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16 },
       { moduleKey: "team", label: "团队矩阵", defaultSpan: 8, minSpan: 6, defaultHeight: 13, minHeight: 6, maxHeight: 32 },
       { moduleKey: "activity", label: "分析动态", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 20 },
+      { moduleKey: "watchlist", label: "观察清单", defaultSpan: 12, minSpan: 6, defaultHeight: 12, minHeight: 5, maxHeight: 30 },
       { moduleKey: "library", label: "KOL 库", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26 },
       { moduleKey: "contentWall", label: "内容墙", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 5, maxHeight: 30 },
       { moduleKey: "fitdist", label: "Fit 分布", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16 },

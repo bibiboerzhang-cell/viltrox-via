@@ -21,6 +21,50 @@ describe("toCockpitKolPoolRows geo tier truth", () => {
   });
 });
 
+describe("toCockpitKolPoolRows audience geo truth (波 C·C3)", () => {
+  it("creator country no longer masquerades as audience geo: no geo breakdown → empty distribution", () => {
+    const [row] = toCockpitKolPoolRows([{ id: 1, handle: "us-creator", country: "US" } as any]);
+
+    expect(row.country).toBe("US");
+    expect(row.geo_distribution).toEqual([]);
+    expect(row.audience_geo).toBeNull();
+  });
+
+  it("insufficient_sample → empty distribution + honest meta (n/min_required)", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 2,
+      handle: "few-comments",
+      country: "US",
+      audience_estimated: {
+        sample_size: 40,
+        // 旧口径的语言→市场假地理,必须被忽略
+        top_countries: [{ code: "US", pct: 79 }],
+        geo: { method: "insufficient_sample", sample_n: 40, determined_n: 7, min_required: 30, confidence: 0, top_countries: [], note: "不足" },
+      },
+    } as any]);
+
+    expect(row.geo_distribution).toEqual([]);
+    expect(row.audience_geo).toMatchObject({ method: "insufficient_sample", determined_n: 7, min_required: 30 });
+  });
+
+  it("commenter_country_v1 → top_countries pct → share 0-1", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 3,
+      handle: "well-sampled",
+      country: "CN",
+      audience_estimated: {
+        sample_size: 300,
+        geo: { method: "commenter_country_v1", sample_n: 300, determined_n: 120, min_required: 30, confidence: 0.6, top_countries: [{ code: "US", pct: 55.5 }, { code: "de", pct: 20 }] },
+      },
+    } as any]);
+
+    expect(row.geo_distribution).toEqual([{ country: "US", share: 0.555 }, { country: "DE", share: 0.2 }]);
+    expect(row.audience_geo?.method).toBe("commenter_country_v1");
+    // 创作者国别仍走 country / geo_tier,不混进受众地理
+    expect(row.geo_tier).toBe("X");
+  });
+});
+
 describe("toCockpitKolPoolRows employee contact projection", () => {
   it("keeps a full list projection intact for the authorized employee UI", () => {
     const [row] = toCockpitKolPoolRows([{

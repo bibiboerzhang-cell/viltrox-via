@@ -8,6 +8,7 @@ import type { VkpiDashboardData, VkpiPageKey } from "../../vkpiTypes";
 import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } from "./MarketVoicePage.modules";
 import { AnalysisActivityModule, KolLibraryModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
 import { ContentWallModule } from "./MyKolBoardPage.content-wall";
+import { WatchlistModule } from "./MyKolBoardPage.watchlist";
 import {
   DigestEmbed,
   LensExposureEmbed,
@@ -87,7 +88,9 @@ import {
 // 旧本机布局不含新模块 → bump 键让全员看到新默认(手动改过布局的本机记忆一并重置)。
 // v2→v3(2026-08-22 车道 L4):默认布局插入「数值跟进」(8)+「镜头出镜」(4)一行
 // (被追踪视频实测曲线与 7d/30d 增量 · 深析内容按镜头汇总),同前例 bump 键让全员看到。
-const STORAGE_KEY = "vkpi-my-kol-layout-v3";
+// v3→v4(2026-08-23 波 C·C3):默认布局在团队行后插入「观察清单」(12)——按分组跟进
+// 重点 KOL 的追踪/深析进度(用户原话「给某些 kol 增加一个观察列表跟进进度」),同前例 bump 键。
+const STORAGE_KEY = "vkpi-my-kol-layout-v4";
 const MY_KOL_PAGE_SIZE = 50;
 
 // 默认布局(12 列 · 设计单定稿七行;2026-07-12 两刀:team 12→8 腾出 span4 给
@@ -102,6 +105,7 @@ const DEFAULT_LAYOUT = [
   { moduleKey: "funnel", span: 4 },
   { moduleKey: "team", span: 8 },
   { moduleKey: "activity", span: 4 },
+  { moduleKey: "watchlist", span: 12 },
   { moduleKey: "library", span: 8 },
   { moduleKey: "fitdist", span: 4 },
   { moduleKey: "contentWall", span: 8 },
@@ -391,6 +395,12 @@ export function MyKolBoardPage({
   // 车道 L4:数值跟进(被追踪视频实测曲线 + 7d/30d 增量)/ 镜头出镜(深析内容按镜头汇总),模块自取数。
   const renderMetricTracking = () => <MetricTrackingEmbed apiToken={apiToken} noToken={noTokenCard} isManager={isManager} />;
   const renderLensExposure = () => <LensExposureEmbed apiToken={apiToken} noToken={noTokenCard} isManager={isManager} />;
+  // 波 C·C3:观察清单(按既有员工分组跟进重点 KOL 的追踪/深析进度;模块自取 watch-overview 两端点)。
+  const renderWatchlist = () => (
+    <ModuleCard {...cardProps("watchlist", "观察清单")}>
+      <WatchlistModule apiToken={apiToken} noToken={noTokenCard} />
+    </ModuleCard>
+  );
   // 经典视图(palette 备选):旧两栏库整体内嵌保留不删,默认体验统一走新版行式库。
   const renderLibClassic = () => (
     <LibClassicEmbed apiToken={apiToken} data={data} viewMode={viewMode} noToken={noTokenCard} onRefreshData={onRefreshData} />
@@ -573,6 +583,7 @@ export function MyKolBoardPage({
     { key: "funnel", label: "合作漏斗", description: "8 段真阶段条形 · 点段过滤 KOL 库", category: "核心模块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFunnel },
     { key: "team", label: "团队矩阵", description: "负责人卡 + 分管 KOL · TeamMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 6, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderTeam },
     { key: "activity", label: "分析动态", description: "进行中的账号分析/深析/评论采集 · 点行直达 KOL Pool", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 20, render: renderActivity },
+    { key: "watchlist", label: "观察清单", description: "按分组跟进重点 KOL:追踪视频 / 最近快照 / 7 天播放增量 / 深析完成比 / 待处理失败", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 12, minHeight: 5, maxHeight: 30, render: renderWatchlist },
     { key: "library", label: "KOL 库", description: "收藏/共享全量 + 行级采集数据 · V 名单精确筛选 + 分区详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26, render: renderLibrary },
     { key: "contentWall", label: "内容墙", description: "收藏集已采集内容 · KOL/Viltrox证据/排序筛选 · 点卡直跳原帖", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 5, maxHeight: 30, render: renderContentWall },
     { key: "fitdist", label: "Fit 分布", description: "全池十分位直方 + 未评分诚实桶(只读)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFitdist },

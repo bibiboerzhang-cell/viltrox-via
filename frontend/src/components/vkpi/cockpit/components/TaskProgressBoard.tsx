@@ -7,6 +7,8 @@ import { buildApiUrl } from "../../../../services/http";
 import { retryTask } from "../../../../services/vkpi/tasks-api";
 import { useWorkflowRunsStream, type WorkflowRunsStream } from "../useWorkflowRunsStream";
 import { kolHumanDisplayName } from "../lib/kolIdentity";
+import { useT } from "../lib/i18n";
+import type { Translate } from "../../../../app/providers/LocaleProvider";
 
 const e = React.createElement;
 const PENDING_SEARCH_SESSION_KEY = "vkpi:pendingKolSearchSessionId";
@@ -50,16 +52,17 @@ function asArray(value: any) {
   return Array.isArray(value) ? value : [];
 }
 
-function taskTargetText(task: any) {
+function taskTargetText(task: any, t: Translate) {
   const target = task?.target && typeof task.target === "object" ? task.target : {};
   return kolHumanDisplayName({
     ...target,
     display_name: target.label || target.display_name || task?.target_label,
-  }, target.source_url ? "KOL 分析任务" : "");
+  }, target.source_url ? t("KOL 分析任务") : "");
 }
 
-function taskLabel(task: any) {
-  return `${task.kind || "任务"} · ${taskTargetText(task) || "未命名"}`;
+// kind 是后端 queue_view 产出的中文字面(同源口径),英文模式下原样透出不翻;只有兜底词走 t。
+function taskLabel(task: any, t: Translate) {
+  return `${task.kind || t("任务")} · ${taskTargetText(task, t) || t("未命名")}`;
 }
 
 // 人性化 ETA:<60s 显示秒,≥60s 显示分钟。字段缺失/非法(旧任务、LLM 调用行)返回空串不显示。
@@ -71,18 +74,18 @@ function etaHumanText(task: any) {
 }
 
 // 排队行元信息:「第 X 位 · 约 Y」。queue_position 缺失退回 ahead_count(前方 N 个),都缺则不显示。
-function queueMetaText(task: any) {
+function queueMetaText(task: any, t: Translate) {
   const parts: string[] = [];
   const pos = Number(task?.queue_position);
   const ahead = Number(task?.ahead_count);
-  if (Number.isFinite(pos) && pos > 0) parts.push(`第 ${pos} 位`);
-  else if (Number.isFinite(ahead)) parts.push(ahead > 0 ? `前方 ${ahead} 个` : "下一个就是它");
+  if (Number.isFinite(pos) && pos > 0) parts.push(t("第 {pos} 位", { pos }));
+  else if (Number.isFinite(ahead)) parts.push(ahead > 0 ? t("前方 {n} 个", { n: ahead }) : t("下一个就是它"));
   const eta = etaHumanText(task);
   if (eta) parts.push(eta);
   return parts.join(" · ");
 }
 
-function taskRetryText(task: any) {
+function taskRetryText(task: any, t: Translate) {
   const category = String(task?.error_category || "").trim();
   const retryAt = String(task?.next_retry_at || "").trim();
   if (!category && !retryAt) return "";
@@ -93,9 +96,9 @@ function taskRetryText(task: any) {
       timeText = parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
     }
   }
-  const categoryLabel = category === "provider_pressure" ? "provider压力" : category;
-  if (categoryLabel && timeText) return `${categoryLabel} · 退避至 ${timeText}`;
-  if (timeText) return `退避至 ${timeText}`;
+  const categoryLabel = category === "provider_pressure" ? t("服务方限流") : category;
+  if (categoryLabel && timeText) return `${categoryLabel} · ${t("退避至 {time}", { time: timeText })}`;
+  if (timeText) return t("退避至 {time}", { time: timeText });
   return categoryLabel;
 }
 
@@ -218,15 +221,15 @@ function taskIsMine(task: any, me: MeIdentity | null) {
 }
 
 // 归属 chip:自己的任务显示「我」+ 金色高亮边;别人的保持「用户 N」;无发起人字段(系统任务)不显示。
-function initiatorChipNode(task: any, me: MeIdentity | null) {
+function initiatorChipNode(task: any, me: MeIdentity | null, t: Translate) {
   const initiator = task?.initiator_user_id ?? task?.initiator_staff_id;
   if (initiator == null || initiator === "") return null;
   if (taskIsMine(task, me)) {
     return e("span", {
       className: "shrink-0 rounded border border-warn bg-warn-soft px-1 text-[9px] font-medium leading-4 text-warn",
-    }, "我");
+    }, t("我"));
   }
-  return e("span", { className: "shrink-0 text-[9px] text-muted" }, `用户 ${initiator}`);
+  return e("span", { className: "shrink-0 text-[9px] text-muted" }, t("用户 {id}", { id: String(initiator) }));
 }
 
 // 我的任务置顶:稳定排序(现代 JS Array.sort 保证稳定),两组内部保持原有顺序。
@@ -243,25 +246,26 @@ function lightColor(light: any) {
 }
 
 function TaskRow({ task, color, showBar, me }: any) {
+  const { t } = useT();
   const rawProgress = task.progress_pct ?? task.progress;
   const hasProgress = Number.isFinite(Number(rawProgress));
   const progress = Math.max(6, Math.min(100, Number(rawProgress || 0)));
   const canOpen = taskCanOpen(task);
-  const retryText = taskRetryText(task);
+  const retryText = taskRetryText(task, t);
   return e("button", {
     type: "button",
     onClick: canOpen ? () => openTaskOrigin(task) : undefined,
     disabled: !canOpen,
     className: `block w-full min-w-0 text-left ${canOpen ? "cursor-pointer rounded-md transition-colors hover:bg-accent-soft" : "cursor-default"} disabled:cursor-default`,
-    title: canOpen ? ((taskKolPoolId(task) || taskMyKolPoolId(task)) ? "打开 KOL Pool 该 KOL 完整详情" : "打开这次查找记录") : "",
+    title: canOpen ? ((taskKolPoolId(task) || taskMyKolPoolId(task)) ? t("打开 KOL Pool 该 KOL 完整详情") : t("打开这次查找记录")) : "",
   },
     e("div", { className: "flex items-center gap-1.5 min-w-0" },
       e("span", {
         className: `h-[5px] w-[5px] shrink-0 rounded-full ${showBar ? "animate-pulse" : ""}`,
         style: { background: color }
       }),
-      e("span", { className: "truncate text-[11px] leading-4 text-ink-2" }, taskLabel(task)),
-      initiatorChipNode(task, me)
+      e("span", { className: "truncate text-[11px] leading-4 text-ink-2" }, taskLabel(task, t)),
+      initiatorChipNode(task, me, t)
     ),
     retryText && e("div", { className: "ml-[11px] truncate text-[10px] leading-4 text-muted" }, retryText),
     showBar && (
@@ -283,6 +287,7 @@ function TaskRow({ task, color, showBar, me }: any) {
 }
 
 function TaskLane({ lane, tasks, me }: any) {
+  const { t } = useT();
   return e("section", {
     className: "rounded-lg border px-[9px] py-2",
     style: { borderColor: lane.border, background: lane.bg }
@@ -293,7 +298,7 @@ function TaskLane({ lane, tasks, me }: any) {
         e("span", {
           className: "truncate text-[11px] font-medium uppercase tracking-[0.04em]",
           style: { color: lane.titleColor }
-        }, lane.title)
+        }, t(lane.title))
       ),
       e("span", { className: "text-[11px] font-medium tabular-nums", style: { color: lane.color } }, tasks.length)
     ),
@@ -315,6 +320,7 @@ interface TaskProgressBoardProps {
 }
 
 export function TaskProgressBoard({ apiToken = "", stream, compact = false }: TaskProgressBoardProps) {
+  const { t } = useT();
   // 没传 stream 时(如 CockpitSidebar 用法)在内部起一个 hook 实例;传了就复用上层共享流。
   // 注:hooks 不能条件调用,故无条件 call,再在下面择一使用——内部实例在有 stream 时也无害(同源端点)。
   const localStream = useWorkflowRunsStream(apiToken, { intervalMs: 5000, limit: 30, recentMinutes: 5 });
@@ -360,9 +366,9 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
       setRetrying((s) => ({ ...s, [id]: "done" }));
       void refreshQueue();
     } catch (err) {
-      setRetrying((s) => ({ ...s, [id]: err instanceof Error ? err.message : "重试失败" }));
+      setRetrying((s) => ({ ...s, [id]: err instanceof Error ? err.message : t("重试失败") }));
     }
-  }, [apiToken, refreshQueue]);
+  }, [apiToken, refreshQueue, t]);
 
   const rawActiveTasks = useMemo(() => asArray(payload?.active), [payload]);
   const rawRecentTasks = useMemo(() => asArray(payload?.recent), [payload]);
@@ -425,19 +431,19 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
 
   if (compact) {
     const compactLanes = [
-      { key: "search", label: "搜索", tasks: laneTasks.search, color: "var(--ds-accent)" },
-      { key: "thinking", label: "思考", tasks: laneTasks.thinking, color: "var(--ds-accent-2)" },
-      { key: "summarizing", label: "总结", tasks: laneTasks.summarizing, color: "var(--ds-good)" },
-      { key: "queued", label: "排队", tasks: queuedTasks, color: "var(--ds-warn)" },
+      { key: "search", label: t("搜索"), tasks: laneTasks.search, color: "var(--ds-accent)" },
+      { key: "thinking", label: t("思考"), tasks: laneTasks.thinking, color: "var(--ds-accent-2)" },
+      { key: "summarizing", label: t("总结"), tasks: laneTasks.summarizing, color: "var(--ds-good)" },
+      { key: "queued", label: t("排队"), tasks: queuedTasks, color: "var(--ds-warn)" },
     ];
-    const statusText = activeTotal > 0 ? `${activeTotal} 处理中` : queueTotal > 0 ? `${queueTotal} 排队` : "空闲";
+    const statusText = activeTotal > 0 ? t("{n} 处理中", { n: activeTotal }) : queueTotal > 0 ? t("{queued} 排队", { queued: queueTotal }) : t("空闲");
 
     return e("div", {
       className: "vkpi-task-progress vkpi-task-progress--compact w-full",
-      title: "真实任务阶段 · 点击顶栏任务进度可查看明细",
+      title: t("真实任务阶段 · 点击顶栏任务进度可查看明细"),
     },
       e("div", { className: "vkpi-task-progress__compact-head" },
-        e("span", { className: "vkpi-task-progress__compact-title" }, "任务队列"),
+        e("span", { className: "vkpi-task-progress__compact-title" }, t("任务队列")),
         e("span", { className: `vkpi-task-progress__compact-status ${activeTotal > 0 ? "is-active" : ""}` }, statusText)
       ),
       e("div", { className: "vkpi-task-progress__compact-lanes" },
@@ -465,7 +471,7 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
         })
       ),
       e("div", { className: "vkpi-task-progress__compact-foot" },
-        loading && !payload ? "连接中" : error && !payload ? "暂不可用" : `真实阶段 · ${queueTotal} 排队`
+        loading && !payload ? t("连接中") : error && !payload ? t("暂不可用") : `${t("真实阶段")} · ${t("{queued} 排队", { queued: queueTotal })}`
       )
     );
   }
@@ -476,22 +482,22 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
     e("div", { className: "mb-3.5 flex items-center justify-between gap-2" },
       e("div", { className: "flex min-w-0 items-center gap-1.5" },
         e(Zap, { size: 15, className: "shrink-0 text-good" }),
-        e("span", { className: "truncate text-[13px] font-medium text-ink" }, "任务进度")
+        e("span", { className: "truncate text-[13px] font-medium text-ink" }, t("任务进度"))
       ),
       e("div", { className: "flex shrink-0 items-center gap-1.5" },
         // 「只看我的」开关(身份拉到才显示;记忆到 localStorage)
         me && e("button", {
           type: "button",
           onClick: toggleMineOnly,
-          title: mineOnly ? "当前只显示我发起的任务,点击看全部" : "只看我发起的任务",
+          title: mineOnly ? t("当前只显示我发起的任务,点击看全部") : t("只看我发起的任务"),
           className: `rounded border px-1.5 py-0.5 text-[9.5px] font-medium transition-colors ${
             mineOnly
               ? "border-warn bg-warn-soft text-warn"
               : "border-line text-muted hover:text-ink-2"
           }`,
-        }, "只看我的"),
+        }, t("只看我的")),
         e("span", { className: "text-[11px] text-muted tabular-nums" },
-          loading && !payload ? "连接中" : `${activeTotal} 活跃`
+          loading && !payload ? t("连接中") : t("{n} 活跃", { n: activeTotal })
         ),
         e("span", {
           className: "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9.5px] font-medium tabular-nums",
@@ -500,7 +506,7 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
             color: lightColor(speedLight),
             background: `color-mix(in srgb, ${lightColor(speedLight)} 8%, transparent)`,
           },
-          title: speedLight?.policy || "调度速度灯",
+          title: speedLight?.policy || t("调度速度灯"),
         },
           e("span", { className: "h-1.5 w-1.5 rounded-full", style: { background: lightColor(speedLight) } }),
           speedLight?.level || "L1"
@@ -508,10 +514,10 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
       )
     ),
     error && e("div", { className: "mb-2 rounded border border-warn-soft bg-warn-soft px-2 py-1 text-[10px] leading-4 text-warn" },
-      payload ? "任务进度连接中 · 保留上次状态" : error
+      payload ? t("任务进度连接中 · 保留上次状态") : error
     ),
     emptyActive && e("div", { className: "mb-2 rounded border border-line bg-panel px-2 py-1.5 text-center text-[10.5px] text-muted" },
-      "暂无运行中任务"
+      t("暂无运行中任务")
     ),
     e("div", { className: "flex flex-col gap-2.5" },
       lanes.map((lane) => e(TaskLane, { key: lane.key, lane, tasks: lane.tasks, me }))
@@ -520,7 +526,7 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
       e("div", { className: "flex items-center justify-between gap-2" },
         e("div", { className: "flex min-w-0 items-center gap-1.5" },
           e(Clock3, { size: 12, className: "text-muted" }),
-          e("span", { className: "truncate text-[11px] text-muted" }, "排队等待")
+          e("span", { className: "truncate text-[11px] text-muted" }, t("排队等待"))
         ),
         e("span", { className: "text-[11px] font-medium text-ink-2 tabular-nums" }, queueTotal)
       ),
@@ -536,11 +542,11 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
             e("span", { className: "w-[18px] shrink-0 text-[10px] text-muted tabular-nums" }, `#${Number.isFinite(Number(task?.queue_position)) ? Number(task.queue_position) : index + 1}`),
             e("span", { className: "min-w-0 flex-1" },
               e("span", { className: "flex min-w-0 items-center gap-1" },
-                e("span", { className: "min-w-0 truncate text-[11px] text-ink-2" }, taskLabel(task)),
-                initiatorChipNode(task, me)
+                e("span", { className: "min-w-0 truncate text-[11px] text-ink-2" }, taskLabel(task, t)),
+                initiatorChipNode(task, me, t)
               ),
               etaHumanText(task) && e("span", { className: "block truncate text-[10px] text-good" }, etaHumanText(task)),
-              taskRetryText(task) && e("span", { className: "block truncate text-[10px] text-muted" }, taskRetryText(task))
+              taskRetryText(task, t) && e("span", { className: "block truncate text-[10px] text-muted" }, taskRetryText(task, t))
             )
           ))
           : e("span", { className: "text-[11px] text-muted" }, "—")
@@ -552,10 +558,10 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
         className: "mt-1 flex w-full items-center gap-1.5 text-left text-muted hover:text-ink-2 transition-colors"
       },
         showAllQueue
-          ? e("span", { className: "text-[10.5px]" }, "收起 ▲")
+          ? e("span", { className: "text-[10.5px]" }, t("收起 ▲"))
           : e(React.Fragment, null,
               e("span", { className: "w-[18px] shrink-0 text-[10px] text-muted tabular-nums" }, `+${remainingQueue}`),
-              e("span", { className: "truncate text-[11px]" }, `更多任务…(展开看全部 ${queuedTasks.length} 条) ▼`)
+              e("span", { className: "truncate text-[11px]" }, t("更多任务…(展开看全部 {n} 条) ▼", { n: queuedTasks.length }))
             )
       )
     ),
@@ -563,8 +569,8 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
     // 2026-06-15:并入失败桶 — 标题改「最近完成/失败」,失败任务按桶分类并提供重试入口。
     (visibleRecent.length || failedRecent.length) ? e("div", { className: "mt-3 border-t border-line pt-2.5" },
       e("div", { className: "mb-1.5 flex items-center justify-between gap-2" },
-        e("span", { className: "text-[11px] text-muted" }, failedRecent.length ? "最近完成/失败" : "最近完成"),
-        visibleRecent.some((task) => taskCanOpen(task)) && e("span", { className: "text-[10px] text-good" }, "可打开")
+        e("span", { className: "text-[11px] text-muted" }, failedRecent.length ? t("最近完成/失败") : t("最近完成")),
+        visibleRecent.some((task) => taskCanOpen(task)) && e("span", { className: "text-[10px] text-good" }, t("可打开"))
       ),
       visibleRecent.length ? e("div", { className: "flex flex-col gap-1" },
         visibleRecent.map((task) => {
@@ -574,11 +580,11 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
             type: "button",
             onClick: canOpen ? () => openTaskOrigin(task) : undefined,
             disabled: !canOpen,
-            title: canOpen ? "" : "无可跳转的所属对象",
+            title: canOpen ? "" : t("无可跳转的所属对象"),
             className: `flex min-w-0 items-center justify-between gap-2 rounded-md border border-good-soft bg-good-soft px-2 py-1 text-left ${canOpen ? "hover:border-good" : "cursor-default opacity-60"}`
           },
-            e("span", { className: "truncate text-[10.5px] text-ink-2" }, taskLabel(task)),
-            canOpen && e("span", { className: "shrink-0 text-[10px] text-good" }, "打开")
+            e("span", { className: "truncate text-[10.5px] text-ink-2" }, taskLabel(task, t)),
+            canOpen && e("span", { className: "shrink-0 text-[10px] text-good" }, t("打开"))
           );
         })
       ) : null,
@@ -594,8 +600,8 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
               e("span", {
                 className: "shrink-0 rounded px-1 py-0.5 text-[9px] font-medium",
                 style: { color: bucket.tone, background: `${bucket.tone}1a`, borderColor: `${bucket.tone}33` }
-              }, bucket.label),
-              e("span", { className: "truncate text-[10.5px] text-ink-2", title: task.error || "" }, taskLabel(task))
+              }, t(bucket.label)),
+              e("span", { className: "truncate text-[10.5px] text-ink-2", title: task.error || "" }, taskLabel(task, t))
             ),
             e("button", {
               type: "button",
@@ -603,7 +609,7 @@ export function TaskProgressBoard({ apiToken = "", stream, compact = false }: Ta
               onClick: () => handleRetry(task),
               className: `shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium ${st === "done" ? "border-good-soft text-good cursor-default" : st === "loading" ? "border-line text-muted cursor-wait" : "border-crit-soft text-crit hover:bg-crit-soft"}`,
               title: typeof st === "string" && st !== "loading" && st !== "done" ? st : ""
-            }, st === "loading" ? "重试中…" : st === "done" ? "已重排" : "重试"),
+            }, st === "loading" ? t("重试中…") : st === "done" ? t("已重排") : t("重试")),
             // F3 失败可读:有 failure_category / failure_reason_human 才渲染;authorization 类跳 MY KOL 重发。
             hasReadableFailure(task) && e(FailureGuidance, {
               source: task,

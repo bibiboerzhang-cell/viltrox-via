@@ -269,8 +269,9 @@ describe("TopProgressCenter 渲染冒烟", () => {
     expect(screen.getByText("画像落库")).toBeTruthy();
     expect(screen.getByText("模型复核")).toBeTruthy();
     expect(screen.getByText("QA 落库")).toBeTruthy();
-    expect(screen.getByText("LLM 分析记录")).toBeTruthy();
-    expect(screen.getByText("Gateway 结果 / 严格调用")).toBeTruthy();
+    // 波 C·C3 门面去内部术语:不再写 LLM / Gateway 字面,分区仍单列
+    expect(screen.getByText("模型分析记录")).toBeTruthy();
+    expect(screen.getByText("已完成调用")).toBeTruthy();
     expect(screen.getByText("规则回退")).toBeTruthy();
     expect(screen.getByText(/不冒充模型结论/)).toBeTruthy();
     expect(screen.getAllByText("服务 google · 模型 gemini-2.5-pro").length).toBeGreaterThan(0);
@@ -280,7 +281,7 @@ describe("TopProgressCenter 渲染冒烟", () => {
     expect(screen.getByText("证据 QA · 模型生成 · 尝试 2/2")).toBeTruthy();
   });
 
-  it("migration 258 未应用时明确提示在飞 LLM 跟踪不可用", async () => {
+  it("在飞跟踪 schema 未就绪时明确提示在飞跟踪不可用(门面不提 migration 号)", async () => {
     fetchProgressCenter.mockResolvedValue(fixture({
       counts: { running: 0, queued: 0, active_total: 0, recent_total: 0 },
       running: [],
@@ -296,7 +297,8 @@ describe("TopProgressCenter 渲染冒烟", () => {
     render(React.createElement(TopProgressCenter));
 
     fireEvent.click(await screen.findByRole("button", { name: "Task Progress Center" }));
-    expect(await screen.findByText(/LLM 在飞跟踪尚未启用/)).toBeTruthy();
-    expect(screen.getByText(/migration 258/)).toBeTruthy();
+    expect(await screen.findByText(/在飞跟踪尚未启用/)).toBeTruthy();
+    expect(screen.getByText(/只显示已完成的分析结果/)).toBeTruthy();
+    expect(screen.queryByText(/migration 258/)).toBeNull();
   });
 });

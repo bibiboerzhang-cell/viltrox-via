@@ -95,6 +95,8 @@ const CATEGORY_META = {
   gtm_verdict: { label: "裁决对答案", Icon: Gavel, color: "text-fuchsia-300" },
   // GTM-Loop L1:GTM Plan materialize 落库的押注(无自动执行体,人做业务动作后标记已执行)。
   gtm_bet: { label: "GTM押注", Icon: Target, color: "text-sky-300" },
+  // 波 C·S 车道:Skill「创作者匹配」跑完后的建议条(marketing_brain/skill_license_gate INBOX_CATEGORY)。
+  skill_creator_match: { label: "创作者匹配建议", Icon: Sparkles, color: "text-emerald-300" },
 };
 
 // 闭环波 L4:gtm_verdict 条目定位结果账本行,id 口径与 L2 decide 端点对齐:

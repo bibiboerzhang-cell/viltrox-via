@@ -6,6 +6,7 @@ import { Bell, Check, ChevronRight, X } from "lucide-react";
 import { CenterModal } from "./CenterModal";
 import { useT } from "../../lib/i18n";
 import { NOTIF_ICON_MAP } from "../../data/notifIconMap";
+import { alertRuleLabel, isKnownAlertRule } from "../../../../../domains/dashboard/alertRuleLabels";
 
 const e = React.createElement;
 
@@ -32,7 +33,8 @@ export function NotificationDetailModal({ notification, onClose, onMarkRead, onN
     metadata.page_path && { label: "页面", value: metadata.page_path },
     metadata.source && { label: "来源", value: metadata.source },
     metadata.has_screenshot !== undefined && { label: "截图", value: metadata.has_screenshot ? "已附加" : "未附加" },
-    raw.rule_key && { label: "规则", value: raw.rule_key },
+    // 异常哨兵四路等已登记 rule_key 给可读标签(中英走 t),原始 key 保留在后;未登记的原样显示。
+    raw.rule_key && { label: "规则", value: isKnownAlertRule(raw.rule_key) ? `${t(alertRuleLabel(raw.rule_key))} · ${raw.rule_key}` : raw.rule_key },
   ].filter(Boolean);
   return e(CenterModal, { onClose, maxWidth: "md" },
     e("div", { className: "px-5 py-3.5 border-b border-white/[0.06] flex items-center justify-between" },

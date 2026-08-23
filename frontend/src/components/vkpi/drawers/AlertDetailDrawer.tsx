@@ -1,4 +1,5 @@
 import type { VkpiAlertDetail } from '../vkpiTypes';
+import { alertRuleLabel, isKnownAlertRule } from '../../../domains/dashboard/alertRuleLabels';
 
 function text(value: unknown, fallback = '-'): string {
   if (value === null || value === undefined || value === '') return fallback;
@@ -52,7 +53,7 @@ export function AlertDetailDrawer({
         <>
           <div className="vkpi-detail-grid">
             <div><span>Severity</span><strong>{text(alert.severity)}</strong></div>
-            <div><span>Rule</span><strong>{text(alert.rule_key || sourceSummary.rule_key)}</strong></div>
+            <div><span>Rule</span><strong>{isKnownAlertRule(alert.rule_key || sourceSummary.rule_key) ? `${alertRuleLabel(alert.rule_key || sourceSummary.rule_key)} · ${text(alert.rule_key || sourceSummary.rule_key)}` : text(alert.rule_key || sourceSummary.rule_key)}</strong></div>
             <div><span>Target</span><strong>{text(alert.target_type || sourceSummary.target_type)} #{text(alert.target_id || sourceSummary.target_id)}</strong></div>
             <div><span>Platform</span><strong>{text(metadata.platform || account?.platform || post?.platform)}</strong></div>
             <div><span>Flagged</span><strong>{text(metadata.flagged_comments || sourceSummary.comment_count || comments.length)}</strong></div>

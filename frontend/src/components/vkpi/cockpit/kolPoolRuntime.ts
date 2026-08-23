@@ -162,6 +162,50 @@ function avatarColor(seed: string) {
   return colors[Math.abs(hash)];
 }
 
+export interface CockpitAudienceGeoMeta {
+  /** commenter_country_v1 = 已分层;insufficient_sample = 样本不足;null = 画像里没有 geo 分层(旧 JSON / 未生成) */
+  method: string | null;
+  /** 有国家硬信号(自报 / 人名)的评论者数 */
+  determined_n: number | null;
+  /** 评论者抽样总数 */
+  sample_n: number | null;
+  /** 出分层所需最少硬信号样本(后端 GEO_MIN_SAMPLE,缺省 30) */
+  min_required: number | null;
+  confidence: number | null;
+  note: string;
+}
+
+/** audience_estimated.geo → 前端 geo_distribution([{country, share 0-1}])+ 口径元数据;无分层 = 诚实 []。 */
+export function normalizeAudienceGeo(audienceEstimated: Record<string, unknown> | null): {
+  distribution: Array<{ country: string; share: number }>;
+  meta: CockpitAudienceGeoMeta | null;
+} {
+  const geo = audienceEstimated && audienceEstimated.geo && typeof audienceEstimated.geo === "object" && !Array.isArray(audienceEstimated.geo)
+    ? audienceEstimated.geo as Record<string, unknown>
+    : null;
+  if (!geo) return { distribution: [], meta: null };
+  const method = geo.method != null ? String(geo.method) : null;
+  const meta: CockpitAudienceGeoMeta = {
+    method,
+    determined_n: numberOrNull(geo.determined_n),
+    sample_n: numberOrNull(geo.sample_n),
+    min_required: numberOrNull(geo.min_required),
+    confidence: numberOrNull(geo.confidence),
+    note: geo.note != null ? String(geo.note) : "",
+  };
+  const top = Array.isArray(geo.top_countries) && method !== "insufficient_sample" ? geo.top_countries : [];
+  const distribution = top
+    .map((entry) => {
+      const row = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
+      const code = normalizeCountryCode(String(row.code || row.country || ""));
+      const pct = numberOrNull(row.pct);
+      const share = pct != null ? pct / 100 : numberOrNull(row.share);
+      return code && share != null && share >= 0 ? { country: code, share: Math.min(1, share) } : null;
+    })
+    .filter((row): row is { country: string; share: number } => row != null);
+  return { distribution, meta };
+}
+
 export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
   return items.map((item, index) => {
     const raw = item as unknown as Record<string, unknown>;
@@ -253,6 +297,11 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       ? raw.audience_estimated as Record<string, unknown>
       : parseObject(raw.audience_estimated_json);
     const audienceEstimated = Object.keys(audienceEstimatedRaw).length ? audienceEstimatedRaw : null;
+    // 受众地理(波 C·C3 去假):只读 audience_estimated.geo(commenter_country_v1:有国家硬信号的
+    // 评论者 >= min_required 才出分层;不足 = method=insufficient_sample + top_countries=[])。
+    // 此前 geo_distribution 拿创作者国别 @100% 冒充受众地理;旧 JSON 顶层 top_countries 是
+    // 「评论语言→市场」假地理 —— 两者都不再当受众地理用,没有 geo 分层就诚实 []。
+    const audienceGeo = normalizeAudienceGeo(audienceEstimated);
 
     return {
       id: item.id || index + 1,
@@ -296,7 +345,9 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       audience_languages: (raw.audience_languages && typeof raw.audience_languages === "object") ? raw.audience_languages : null,
       // X 专指中国大陆；国家缺失必须保持未知，不能伪装成 CN。
       geo_tier: country === "CN" ? "X" : GEO_A.has(country) ? "A" : GEO_B.has(country) ? "B" : country ? "C" : null,
-      geo_distribution: country ? [{ country, share: 1 }] : [],
+      geo_distribution: audienceGeo.distribution,
+      // 受众地理口径元数据(抽屉诚实空态文案用):样本不足 → 「评论样本不足 n/30,未推断地理」。
+      audience_geo: audienceGeo.meta,
       trend_resonance: trendScore == null ? null : trendScore / 100,
       trend_hits: raw.trend_hits ? parseList(raw.trend_hits) : [],
       v6_fit: fit,

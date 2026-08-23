@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { VkpiAlertItem } from '../vkpiTypes';
+import { alertRuleLabel } from '../../../domains/dashboard/alertRuleLabels';
 
 type AlertFilter = 'all' | 'comment_intelligence' | 'workflow';
 
@@ -10,7 +11,12 @@ function filterLabel(filter: AlertFilter): string {
 }
 
 function formatAlertMeta(alert: VkpiAlertItem): string {
-  if (alert.triageGroup !== 'comment_intelligence') return alert.targetType || alert.ruleKey || 'workflow';
+  // 异常哨兵四路(anomaly.*)等已登记规则先给可读标签;其余沿用 targetType / ruleKey。
+  if (alert.triageGroup !== 'comment_intelligence') {
+    const ruleLabel = alertRuleLabel(alert.ruleKey);
+    if (ruleLabel && ruleLabel !== alert.ruleKey) return ruleLabel;
+    return alert.targetType || alert.ruleKey || 'workflow';
+  }
   const parts = [
     alert.hostileCount ? `${alert.hostileCount} hostile` : '',
     alert.criticalCount ? `${alert.criticalCount} critical` : '',

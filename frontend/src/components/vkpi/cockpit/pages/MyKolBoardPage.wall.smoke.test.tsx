@@ -97,6 +97,9 @@ function routeApi(overrides: { boardExt?: unknown } = {}) {
         page: { limit: 24, returned: items.length, has_more: false, next_cursor: null, cursor_kind: "published_at_id", order: "published_at_desc_id_desc" },
       };
     }
+    if (p.startsWith("/api/admin/vkpi/my-kol/watch-overview")) {
+      return { contract: "my_kol_watchlist_overview_v1", groups: [], totals: { kol_count: 0, group_count: 0 }, scheduler: { enabled: false }, empty_reason: "no_groups" };
+    }
     throw new Error(`unexpected apiFetch: ${p}`);
   });
 }

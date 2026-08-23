@@ -243,6 +243,20 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["范围", "收藏集(收藏 ∪ 授权共享)缺省;「全部已深析」管理层专属"],
     ],
   },
+  watchlist: {
+    label: "my-kol/watch-overview · vkpi_staff_groups × 追踪/深析账本",
+    rows: [
+      ["分组", "既有员工分组(团队浮层里建/改);组内 KOL = 分组「共享 KOL 池」勾选的 kol_pool_id,不造新表"],
+      ["追踪视频", "vkpi_kol_video_metric_tracking 登记数(active;paused 单列)/ 该 KOL 已采集视频总数"],
+      ["最近快照", "vkpi_content_metric_snapshots 最近一次成功实测时间;无成功快照显「未实测」"],
+      ["7 天播放", "组内追踪视频 7d 增量之和(口径同「数值跟进」);无追踪 = 未登记追踪,只有 1 个样本 = 样本不足,不编数"],
+      ["深析完成比", "最近 N 条视频里深析结果就绪数 / 范围数(口径同 KOL 详情深析进度);失败数进「待处理失败」"],
+      ["待处理失败", "深析失败 + 指标刷新失败(最近一次尝试 failed)之和"],
+      ["出镜镜头", "vkpi_kol_lens_evidence 按提及数 Top3;无深析结果显 —"],
+      ["可见性", "管理层全部分组;成员只看本人所在 / 本人创建的分组(服务端裁剪)"],
+      ["诚实", "端点 404 = 该版本暂无观察清单;批量登记追踪后端无端点,只显示未登记数"],
+    ],
+  },
 };
 
 export const PROV_TITLES: Record<string, string> = {
@@ -266,6 +280,7 @@ export const PROV_TITLES: Record<string, string> = {
   libclassic: "经典视图 · KOL 库",
   metricTracking: "数值跟进",
   lensExposure: "镜头出镜",
+  watchlist: "观察清单",
 };
 
 // KPI 带四卡与中文紧凑数(fmtZhCompact)M4 起搬家到 MyKolBoardPage.charts.tsx

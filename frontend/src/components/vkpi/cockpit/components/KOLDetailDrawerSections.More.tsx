@@ -9,7 +9,7 @@ import { SectionFold } from "./SectionFold";
 import { formatNumber } from "../lib/format";
 import { BRAND_TIER } from "../data/brandTier";
 import { getCountryInfo } from "../data/countryInfo";
-import { fixedOrDash, pctOrZero, scoreText } from "./KOLDetailDrawer.helpers";
+import { fixedOrDash, scoreText } from "./KOLDetailDrawer.helpers";
 import { isOpaqueKolChannelId, kolHumanDisplayName } from "../lib/kolIdentity";
 
 const e = React.createElement;
@@ -98,12 +98,16 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
   const aud = (item.audience_languages || {}) as any;
   const langs = Array.isArray(aud.languages) ? aud.languages : [];
   const hasLang = langs.length > 0 && Number(aud.sample_size || 0) > 0;
-  const hasGeo = geoDistribution.length > 0;
+  // 波 C·C3 去假:geoDistribution 自 kolPoolRuntime 起 = 受众地理(audience_estimated.geo 评论硬信号
+  // 分层,样本不足为 []);创作者所在国单独走 item.country 一行,绝不再拿它冒充受众地理。
+  const audienceGeoRows: Array<{ country: string; share: number }> = Array.isArray(geoDistribution) ? geoDistribution : [];
+  const creatorCountry = String(item.country || "").trim().toUpperCase();
+  const hasCreatorCountry = Boolean(creatorCountry);
   const est = (item.audience_estimated && typeof item.audience_estimated === "object") ? item.audience_estimated as any : null;
   const hasEst = Boolean(est && Number(est.sample_size || 0) > 0);
   const canRefresh = Boolean(apiToken && item?.id && typeof onRefreshAudience === "function");
   const canExpand = typeof onToggleAudienceBlock === "function";
-  if (!hasEst && !hasLang && !hasGeo && !canRefresh) return null;
+  if (!hasEst && !hasLang && !hasCreatorCountry && !canRefresh) return null;
 
   // ── 性别归一(v2 发布口径):male/(male+female) 外推 100;v1 旧 JSON 无 gender_normalized 时客户端补算 ──
   const sampleN = hasEst ? Number(est.sample_size || 0) : 0;
@@ -125,7 +129,21 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
   const ringFemale = genderDeterminedN > 0 ? Math.round((100 - ringMale) * 10) / 10 : 0;
   const hasGenderRing = genderDeterminedN > 0;
 
-  const estCountries = hasEst && Array.isArray(est.top_countries) ? est.top_countries.slice(0, 6) : [];
+  // Top countries 只认 geo 分层(commenter_country_v1);旧 JSON 顶层 top_countries 是「语言→市场」假地理,不渲染。
+  const geoMeta = (hasEst && est.geo && typeof est.geo === "object") ? est.geo as any : (item.audience_geo && typeof item.audience_geo === "object" ? item.audience_geo : null);
+  const geoInsufficient = Boolean(geoMeta && String(geoMeta.method || "") === "insufficient_sample");
+  const estCountries = hasEst && !geoInsufficient && Array.isArray(geoMeta?.top_countries)
+    ? geoMeta.top_countries.slice(0, 6)
+    : (hasEst && !geoMeta && audienceGeoRows.length > 0
+      ? audienceGeoRows.slice(0, 6).map((g) => ({ code: g.country, pct: Math.round(g.share * 1000) / 10 }))
+      : []);
+  const geoDeterminedN = geoMeta ? Number(geoMeta.determined_n) || 0 : 0;
+  const geoMinRequired = geoMeta ? Number(geoMeta.min_required) || 30 : 30;
+  const geoEmptyText = geoInsufficient
+    ? `评论样本不足 ${geoDeterminedN}/${geoMinRequired},未推断地理`
+    : geoMeta
+      ? "样本内无可判定国家信号,未推断地理"
+      : "受众地理未推断(画像为旧版,重新生成可补判)";
   const estLangs = hasEst && Array.isArray(est.languages) ? est.languages.slice(0, 6) : [];
   // ── v2 各块数据(coverage/method 等实现细节留在 JSON 内部,不渲染)──
   const ageMeta = (hasEst && est.age_bins && typeof est.age_bins === "object") ? est.age_bins as any : null;
@@ -241,9 +259,17 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
         `基于可判定样本 ${genderDeterminedN}(占 ${genderDeterminedPct}%)外推`
       ),
       hasEst && !hasGenderRing && e("div", { className: "text-[9.5px] text-slate-500 mb-2.5" }, "性别:样本内无可判定信号(诚实不外推)"),
-      // Top countries(国旗 + 条)
-      estCountries.length > 0 && e("div", { className: "mb-2.5" },
+      // Top countries 样本不足 / 未推断:诚实空态,绝不拿语言市场或创作者国别冒充
+      hasEst && estCountries.length === 0 && e("div", { className: "mb-2.5" },
         e("div", { className: "text-[10px] text-slate-500 mb-1" }, "Top Countries"),
+        e("div", { className: "text-[9.5px] text-slate-500" }, geoEmptyText)
+      ),
+      // Top countries(国旗 + 条;评论硬信号分层,pct 按已判定样本归一)
+      estCountries.length > 0 && e("div", { className: "mb-2.5" },
+        e("div", { className: "flex items-center gap-1.5 mb-1" },
+          e("span", { className: "text-[10px] text-slate-500" }, "Top Countries"),
+          geoDeterminedN > 0 && e("span", { className: "text-[9px] text-slate-600" }, `按 ${geoDeterminedN} 位有国家信号的评论者归一`)
+        ),
         e("div", { className: "space-y-1.5" },
           estCountries.map((c: any, i: number) => {
             const cInfo = getCountryInfo(c.code) || { code: c.code, flag: "·", name: c.code, tier: "?" };
@@ -456,26 +482,21 @@ export function KOLDrawerGeoDistribution({ item, geoDistribution, apiToken, audi
       Array.isArray(aud.top_markets) && aud.top_markets.length > 0 && e("div", { className: "text-[9px] text-slate-500" }, "推测市场: " + aud.top_markets.join(" · ")),
       e("div", { className: "text-[9px] text-amber-400/70" }, aud.note || "估算值,非平台官方粉丝数据")
     ),
-    hasGeo && e("div", null,
+    // 创作者所在地:单行(非受众地理,不画占比条 —— 此前 100% 条形曾被当受众分布误读)
+    hasCreatorCountry && e("div", null,
       e("div", { className: "flex items-center gap-1.5 mb-2" },
         e(Globe2, { size: 11, className: "text-slate-400" }),
-        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "创作者所在地")
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "创作者所在地"),
+        e("span", { className: "text-[9px] text-slate-600" }, "非受众地理")
       ),
-      e("div", { className: "space-y-1.5" },
-        geoDistribution.map((g: any, i: number) => {
-          const cInfo = getCountryInfo(g.country) || { code: g.country, flag: "·", name: g.country, tier: "?" };
-          const sharePct = pctOrZero(g.share);
-          return e("div", { key: i, className: "flex items-center gap-2 text-[11px]" },
-            e("span", { style: { fontSize: 12 } }, cInfo.flag),
-            e("span", { className: "text-white font-medium w-[28px]" }, cInfo.code),
-            e(GeoTierChip, { tier: cInfo.tier }),
-            e("div", { className: "flex-1 geo-bar-bg max-w-[120px]" },
-              e("div", { className: "geo-bar-fill", style: { width: sharePct + "%", background: cInfo.tier === "A" ? "#10b981" : cInfo.tier === "B" ? "#fbbf24" : "#64748b" } })
-            ),
-            e("span", { className: "text-slate-300 tabular-nums w-[40px] text-right" }, sharePct.toFixed(0) + "%")
-          );
-        })
-      )
+      (() => {
+        const cInfo = getCountryInfo(creatorCountry) || { code: creatorCountry, flag: "·", name: creatorCountry, tier: "?" };
+        return e("div", { className: "flex items-center gap-2 text-[11px]" },
+          e("span", { style: { fontSize: 12 } }, cInfo.flag),
+          e("span", { className: "text-white font-medium" }, cInfo.name || cInfo.code),
+          e(GeoTierChip, { tier: cInfo.tier })
+        );
+      })()
     )
   );
 }

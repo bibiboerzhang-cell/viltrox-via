@@ -122,7 +122,13 @@ export function filterPoolItems(poolItems: Row[], f: PoolFilters): Row[] {
       const hay = [it.handle, it.display_name, it.bio, it.country, it.devices?.camera_body, ...(it.devices?.lenses || []).map((l: any) => l.model || "")].join(" ").toLowerCase();
       if (!hay.includes(q)) return false;
     }
-    if (f.country && !it.geo_distribution?.some((g: any) => normalizeCountryCode(g.country) === f.country)) return false;
+    // 国家筛选 = 创作者所在国(it.country);geo_distribution 自波 C 起是受众地理(评论硬信号分层,
+    // 多数 KOL 样本不足为空),只作补充命中,不再当唯一判据(否则筛选几乎全空)。
+    if (
+      f.country &&
+      normalizeCountryCode(it.country) !== f.country &&
+      !it.geo_distribution?.some((g: any) => normalizeCountryCode(g.country) === f.country)
+    ) return false;
     if (f.audienceType && it.audience_type !== f.audienceType) return false;
     const trend = typeof it.trend_resonance === "number" ? it.trend_resonance : null;
     if (f.trendLevel && trend == null) return false;

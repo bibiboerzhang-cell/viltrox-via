@@ -154,6 +154,13 @@ export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOp
       window.alert("删除失败:" + String(err && err.message ? err.message : err));
     } finally { setDeleting(null); }
   };
+  // 波 C·C3:组卡「观察清单 →」= 关浮层 → 切 MY KOL 板块并自动展开该组的观察清单
+  //(sessionStorage 传组 id + 既有 vkpi:open-mykol-kol 切页管道;入口与分组管理同处)。
+  const openWatchlist = (g: any) => {
+    try { window.sessionStorage.setItem("vkpi:my-kol-watch-group", String(g?.id || "")); } catch { /* 存不进不阻断,仍切页 */ }
+    onClose();
+    window.dispatchEvent(new CustomEvent("vkpi:open-mykol-kol", { detail: { watchGroupId: g?.id || null } }));
+  };
   // 组卡信息行:读 group.permissions 真值,没填的行不显示(诚实空)。
   const permRows = (g: any) => {
     const p = (g && g.permissions) || {};
@@ -201,6 +208,11 @@ export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOp
                     e("span", { className: "text-[9px] text-slate-500 shrink-0" }, `${gMembers.length} ${t("成员")}`)
                   ),
                   e("div", { className: "flex items-center gap-2 shrink-0" },
+                    e("button", {
+                      onClick: () => openWatchlist(g),
+                      title: t("到 MY KOL 看本组 KOL 的追踪 / 深析进度"),
+                      className: "text-[10px] text-cyan-300 hover:text-cyan-200"
+                    }, t("观察清单 →")),
                     e("button", {
                       onClick: () => { onClose(); onOpenEditGroup && onOpenEditGroup(g); },
                       className: "text-[10px] text-purple-300 hover:text-purple-200"
@@ -283,8 +295,12 @@ export function TeamModal({ user, staff, groups, onClose, onImpersonate, t, onOp
                 e("div", { className: "text-[10px] text-slate-500" }, user.email)
               )
             ),
-            e("div", { className: "text-[10px] text-slate-500" },
-              `${t("我所在的分组")}:${myGroupNames.length ? myGroupNames.join("、") : t("未加入任何分组")}`
+            e("div", { className: "flex flex-wrap items-center gap-x-2 text-[10px] text-slate-500" },
+              e("span", null, `${t("我所在的分组")}:${myGroupNames.length ? myGroupNames.join("、") : t("未加入任何分组")}`),
+              myGroupNames.length > 0 && e("button", {
+                onClick: () => openWatchlist(groupList.find((g: any) => memberIdsOf(g).includes(String(user.id))) || null),
+                className: "text-[10px] text-cyan-300 hover:text-cyan-200"
+              }, t("观察清单 →"))
             ),
             e("div", { className: "space-y-1" },
               staff.filter((s: any) => s.id !== user.id).map((s: any) => e("div", {

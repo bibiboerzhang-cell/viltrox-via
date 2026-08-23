@@ -212,6 +212,8 @@ export function CockpitApp(props: any = {}) {
     try {
       const res = await listStaffGroups(apiToken);
       setStaffGroups((res.items || []).map(toUiGroup));
+      // 波 C·C3:分组增删改后广播,MY KOL「观察清单」等按分组取数的模块据此重读。
+      window.dispatchEvent(new CustomEvent("vkpi:staff-groups-changed"));
     } catch (err) {
       setStaffGroups([]);
     }
@@ -234,6 +236,32 @@ export function CockpitApp(props: any = {}) {
     setEditGroupName(mode === "new" ? "新分组" : (target?.name || "新分组"));
     setShowEditGroup(true);
   };
+  // 波 C·C3:MY KOL「观察清单」模块的分组管理入口(入口与分组管理同处):
+  //   detail.mode="new" → 直接开新建分组;detail.groupId → 直接开该组编辑器;
+  //   其余 → 打开团队浮层(分组列表 / 新建 / 编辑 / 删除都在那里)。
+  const staffGroupsRef = useRef<any[]>(staffGroups);
+  staffGroupsRef.current = staffGroups;
+  useEffect(() => {
+    const onOpenTeamGroups = (event: Event) => {
+      const detail = ((event as CustomEvent)?.detail || {}) as { mode?: string; groupId?: string };
+      if (detail.mode === "new") {
+        openGroupEditor("new");
+        return;
+      }
+      if (detail.groupId) {
+        const target = staffGroupsRef.current.find((g: any) => String(g?.id) === String(detail.groupId));
+        if (target) {
+          openGroupEditor("edit", target);
+          return;
+        }
+      }
+      setShowTeam(true);
+    };
+    window.addEventListener("vkpi:open-team-groups", onOpenTeamGroups);
+    return () => window.removeEventListener("vkpi:open-team-groups", onOpenTeamGroups);
+    // openGroupEditor 每帧新建闭包;其依赖(staffGroups)已走 ref,故监听只挂一次。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const pushLocalNotification = (notification: any) => {
     setRuntimeNotifications(prev => [notification, ...prev].slice(0, 80));
   };
