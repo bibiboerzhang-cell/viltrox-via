@@ -271,7 +271,8 @@ layer4_attribution = attribution_breakdown[{source, share_pct_estimate, confiden
 layer5_recommendations = cooperation_recommendation / buyout_or_license_recommendation / next_brief_adjustments / must_request_from_kol / budget_action / why。
 layer6_flags_and_scores = risk_flags / scores / final_verdict / key_hook。scores 至少包含 content_quality_score、viewer_heart_score、channel_value_score、asset_reuse_score、product_proof_score、marketing_value_score。
 分数锚点再次强调：90+ 必须罕见且证据强；70-85 是可用但要指出不足；55-70 是普通达标；40-55 是明显短板；40以下是投放风险或证据很差。不要因为画面好看就默认渠道值高，也不要因为互动高就忽略归因风险。
-final_verdict 必须分开说「这条视频对 Viltrox 投放的价值(拍竞品/非自家产品时可能确实低)」和「这个创作者对 Viltrox 未来合作的契合度(同品类高制作力时可能很高)」，不要把两者混成一句彻底失败/价值为零；自有内容或竞品内容默认按达人发掘视角(找合作候选)判断，不是已付费投放复盘。"""
+final_verdict 必须分开说「这条视频对 Viltrox 投放的价值(拍竞品/非自家产品时可能确实低)」和「这个创作者对 Viltrox 未来合作的契合度(同品类高制作力时可能很高)」，不要把两者混成一句彻底失败/价值为零；自有内容或竞品内容默认按达人发掘视角(找合作候选)判断，不是已付费投放复盘。
+输出语言与类型硬约束（违反即作废）：所有自然语言字段一律简体中文，无论视频本身是英语/葡语/德语/日语；产品名、品牌名、专有名词保留原文。final_verdict、key_hook、content_summary、product_presence、one_sentence_viewer_reaction 必须是单个字符串，不得是对象或数组；scores 必须是扁平对象且六个分数键齐全。不要输出 markdown 代码围栏。"""
 
 
 def _video_final_v1_dynamic_prompt(

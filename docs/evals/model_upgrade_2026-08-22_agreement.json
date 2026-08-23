@@ -1,0 +1,224 @@
+{
+  "baseline": {
+    "brand_status_distribution": {
+      "absent": 3,
+      "present": 2,
+      "unknown": 21
+    },
+    "cases": 26,
+    "contract": {
+      "missing_paths": [
+        "layer1_visual_content.brand_exposure",
+        "layer1_visual_content.competitor_presence",
+        "layer1_visual_content.product_presence",
+        "layer1_visual_content.production_observations"
+      ],
+      "valid_cases": 0,
+      "validity_rate": 0.0
+    },
+    "cost_usd": {
+      "mean": 0.039738,
+      "n": 26,
+      "p50": 0.041284,
+      "p95": 0.057656,
+      "sum": 1.03319
+    },
+    "dataset_id": "model-upgrade-2026-08",
+    "evidence_count": {
+      "mean": 0.576923,
+      "n": 26,
+      "p50": 0.0,
+      "p95": 3.75,
+      "sum": 15.0
+    },
+    "inspection_complete_rate": 1.0,
+    "latency_ms": {
+      "mean": 53816.923077,
+      "n": 26,
+      "p50": 50238.5,
+      "p95": 84746.25,
+      "sum": 1399240.0
+    },
+    "llm_dimensions_11_rate": 0.0,
+    "malformed_evidence_total": 0,
+    "missing": 4,
+    "model": "gemini-2.5-flash",
+    "output_tokens": {
+      "mean": 6235.230769,
+      "n": 26,
+      "p50": 6134.0,
+      "p95": 7971.5,
+      "sum": 162116.0
+    },
+    "prompt_version": "video_analysis_final_v1@99f828555901",
+    "requested": 30,
+    "unsupported_absent_count": 0
+  },
+  "candidates": [
+    {
+      "agreement_vs_baseline": {
+        "brand_status_agreement_rate": 0.923077,
+        "brand_status_disagreements": [
+          {
+            "baseline": "present",
+            "candidate": "unknown",
+            "case_id": "evidence-334"
+          },
+          {
+            "baseline": "present",
+            "candidate": "unknown",
+            "case_id": "evidence-283"
+          }
+        ],
+        "competitors_jaccard_mean": 1.0,
+        "paired_cases": 26,
+        "products_jaccard_mean": 1.0,
+        "unpaired_case_ids": [
+          "evidence-119",
+          "evidence-225",
+          "evidence-286",
+          "evidence-343"
+        ]
+      },
+      "brand_status_distribution": {
+        "absent": 3,
+        "unknown": 27
+      },
+      "cases": 30,
+      "contract": {
+        "missing_paths": [
+          "layer1_visual_content.brand_exposure",
+          "layer1_visual_content.competitor_presence",
+          "layer1_visual_content.product_presence",
+          "layer1_visual_content.production_observations"
+        ],
+        "valid_cases": 0,
+        "validity_rate": 0.0
+      },
+      "cost_usd": {
+        "mean": 0.020747,
+        "n": 30,
+        "p50": 0.020334,
+        "p95": 0.038619,
+        "sum": 0.622415
+      },
+      "dataset_id": "model-upgrade-2026-08",
+      "evidence_count": {
+        "mean": 0.0,
+        "n": 30,
+        "p50": 0.0,
+        "p95": 0.0,
+        "sum": 0.0
+      },
+      "inspection_complete_rate": 1.0,
+      "latency_ms": {
+        "mean": 21819.4,
+        "n": 30,
+        "p50": 20441.5,
+        "p95": 32808.25,
+        "sum": 654582.0
+      },
+      "llm_dimensions_11_rate": 0.0,
+      "malformed_evidence_total": 0,
+      "missing": 0,
+      "model": "gemini-3.5-flash-lite",
+      "output_tokens": {
+        "mean": 2388.566667,
+        "n": 30,
+        "p50": 2358.5,
+        "p95": 3067.75,
+        "sum": 71657.0
+      },
+      "prompt_version": "video_analysis_final_v1@99f828555901",
+      "requested": 30,
+      "unsupported_absent_count": 0
+    },
+    {
+      "agreement_vs_baseline": {
+        "brand_status_agreement_rate": 0.923077,
+        "brand_status_disagreements": [
+          {
+            "baseline": "present",
+            "candidate": "unknown",
+            "case_id": "evidence-334"
+          },
+          {
+            "baseline": "present",
+            "candidate": "unknown",
+            "case_id": "evidence-283"
+          }
+        ],
+        "competitors_jaccard_mean": 1.0,
+        "paired_cases": 26,
+        "products_jaccard_mean": 1.0,
+        "unpaired_case_ids": [
+          "evidence-119",
+          "evidence-225",
+          "evidence-286",
+          "evidence-343"
+        ]
+      },
+      "brand_status_distribution": {
+        "absent": 3,
+        "unknown": 27
+      },
+      "cases": 30,
+      "contract": {
+        "missing_paths": [
+          "layer1_visual_content.brand_exposure",
+          "layer1_visual_content.competitor_presence",
+          "layer1_visual_content.product_presence",
+          "layer1_visual_content.production_observations"
+        ],
+        "valid_cases": 0,
+        "validity_rate": 0.0
+      },
+      "cost_usd": {
+        "mean": 0.04756,
+        "n": 30,
+        "p50": 0.045081,
+        "p95": 0.087762,
+        "sum": 1.426814
+      },
+      "dataset_id": "model-upgrade-2026-08",
+      "evidence_count": {
+        "mean": 0.0,
+        "n": 30,
+        "p50": 0.0,
+        "p95": 0.0,
+        "sum": 0.0
+      },
+      "inspection_complete_rate": 0.433333,
+      "latency_ms": {
+        "mean": 28429.533333,
+        "n": 30,
+        "p50": 26472.5,
+        "p95": 42965.35,
+        "sum": 852886.0
+      },
+      "llm_dimensions_11_rate": 0.0,
+      "malformed_evidence_total": 0,
+      "missing": 0,
+      "model": "gemini-3.6-flash",
+      "output_tokens": {
+        "mean": 2867.833333,
+        "n": 30,
+        "p50": 2837.5,
+        "p95": 3742.55,
+        "sum": 86035.0
+      },
+      "prompt_version": "video_analysis_final_v1@99f828555901",
+      "requested": 30,
+      "unsupported_absent_count": 0
+    }
+  ],
+  "claim_status": "descriptive_only",
+  "generated_at": "2026-08-23T00:18:11Z",
+  "gold": "none_agreement_vs_baseline_mode",
+  "notes": [
+    "contract validity = all REQUIRED_OUTPUT_SHAPES paths present with the right types (final_v1 contract unchanged)",
+    "agreement metrics compare the candidate against the baseline model output, not against human truth",
+    "cost_usd/latency_ms come from result.cost recorded by the worker (ledger basis), per video"
+  ],
+  "schema_version": "vkpi_final_v1_model_agreement_summary_v1"
+}

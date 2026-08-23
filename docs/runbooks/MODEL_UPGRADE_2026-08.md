@@ -216,3 +216,20 @@ CLAIM_LANE=all)跑到目标 id 无活跃 job → `export_final_v1_predictions.py
 - `scripts/ops/vkpi_stage1_model_canary.py` `EXPECTED_UNIQUE_BINDINGS=6`(+ 测试同步)
 - `scripts/ops/dealer_web_verify.py` / `dealer_physical_store_judge.py` `--model` 默认 gemini-3.6-flash
 - 本手册
+
+## 附录 E · 2026-08-22 隔离库三模型 eval 实测(30 条 YouTube,同代码同提示,每模型独立克隆库)
+
+| 指标 | gemini-2.5-flash(原 prod) | gemini-3.5-flash-lite | gemini-3.6-flash(提示强化后) |
+|---|---|---|---|
+| 成功 | 26/30(4 条 8192 截断→回退下载失败) | 30/30 | 30/30 |
+| 六层齐全 / 六分齐全 / verdict 字符串 | 24 / 16 / 17 | 30 / 26 / 18(12 条 verdict 成 dict) | 30 / 30 / 30 |
+| 中文合规(verdict / summary) | 100% | 26/30 | 30/30(强化前 21/30、22/30) |
+| 成本/条 | $0.040 | $0.021 | $0.046 |
+| 端到端 p50 | 50s | 20s | 19–26s |
+| 输出 token 均值 | 6235 | 2389 | 2466 |
+
+- 结论:视频主力 `gemini-3.6-flash` + 裁判 `gemini-3.5-flash-lite`;2.5-flash 最啰嗦且被 8192 截断;lite 便宜但 schema 漂移。
+- 提示强化:static prompt 末尾加「输出语言与类型硬约束」(简体中文、verdict/hook/summary 必为字符串、scores 扁平六键),prompt_version 变更会自然失效上下文缓存。
+- 已知跨模型共性:`brand_product_evidence` 结构块多数写 unknown(散文识别正确,镜头抽取器从散文取)——后刀用 response_json_schema 强约束;`final_v1_quality_eval.REQUIRED_OUTPUT_SHAPES` 把 product_presence 等当 list,与生产提示(字符串)不一致,contract validity 全 0 属评测契约过期,非模型问题。
+- 实测踩坑:脚本入队须带 owner 围栏(`--actor-staff-id`);台账 staff 外键 bug(e5d12d21a);decodo 代理阶段性 522 使直链回退下载。
+- 数据:`docs/evals/model_upgrade_2026-08-22_agreement.json`。
