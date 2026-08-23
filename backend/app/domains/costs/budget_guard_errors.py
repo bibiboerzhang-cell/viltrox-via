@@ -66,8 +66,8 @@ def note_cost_ledger_failure(
     )
     try:
         exc.add_note(f"cost_ledger_write_failed: {summary}")
-    except Exception:  # noqa: BLE001 - note 只是可见性,绝不盖住原异常
-        pass
+    except Exception as note_exc:  # noqa: BLE001 - note 只是可见性,绝不盖住原异常
+        logger.debug("cost_ledger_error_note_skipped: %s", type(note_exc).__name__)
     return summary
 
 

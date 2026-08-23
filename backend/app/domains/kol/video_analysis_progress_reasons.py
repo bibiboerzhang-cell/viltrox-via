@@ -19,6 +19,10 @@ import json
 import os
 from typing import Any
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 FAILURE_CATEGORIES: tuple[str, ...] = ("download", "authorization", "budget", "model", "provider", "unknown")
 UNKNOWN_REASON_HUMAN = "分析未完成:原因待排查"
 _HEARTBEAT_WINDOW_SEC = 120
@@ -186,8 +190,8 @@ def _scalar(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> int | None:
         if callable(rollback):
             try:
                 rollback()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception as rb_exc:  # noqa: BLE001
+                logger.debug("progress_reasons.rollback_failed: %s", type(rb_exc).__name__)
         return None
     if row is None:
         return 0

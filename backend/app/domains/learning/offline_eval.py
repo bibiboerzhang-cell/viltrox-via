@@ -200,8 +200,8 @@ def persist_eval_run(suite: str, results: list[dict[str, Any]], *, chain: dict[s
     except Exception:
         try:
             conn.rollback()
-        except Exception:
-            pass
+        except Exception as rb_exc:
+            logger.debug("offline_eval.rollback_failed: %s", type(rb_exc).__name__)
         logger.warning("offline_eval.persist_failed", exc_info=True)
         return {"run_id": None, "evidence_status": "not_persisted", "result_set_sha256": None}
 

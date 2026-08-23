@@ -97,8 +97,8 @@ def _safe(conn: Any, sql: str, params: tuple = (), *, one: bool = False) -> Any:
     except Exception:
         try:
             conn.rollback()
-        except Exception:
-            pass
+        except Exception as rb_exc:
+            logger.debug("feature_store_derived.rollback_failed: %s", type(rb_exc).__name__)
         logger.debug("feature_store_derived.query_failed", exc_info=True)
         return None if one else []
 

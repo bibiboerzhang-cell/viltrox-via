@@ -239,8 +239,8 @@ class VideoJobPool:
             if conn is not None:
                 try:
                     conn.close()
-                except Exception:
-                    pass
+                except Exception as close_exc:
+                    logger.debug("apify_jobs pooled connection close failed | id=%s err=%s", job_id, type(close_exc).__name__)
             with self._lock:
                 self._threads.pop(job_id, None)
                 if not self._threads:

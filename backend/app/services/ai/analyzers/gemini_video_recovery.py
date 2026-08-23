@@ -27,6 +27,10 @@ from app.platform.llm_production_google_helpers import (
 )
 from app.services.ai.clients.gemini_client import is_transient_gemini_error
 
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
+
 
 CONTINUATION_INSTRUCTION = (
     "Your previous answer was cut off by the output token limit. Continue the JSON "
@@ -129,8 +133,8 @@ def _text_part(text: str, genai_types: Any) -> Any:
     if genai_types is not None:
         try:
             return genai_types.Part(text=text)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("gemini_video_recovery.part_fallback_dict: %s", type(exc).__name__)
     return {"text": text}
 
 
@@ -138,8 +142,8 @@ def _content(role: str, parts: list[Any], genai_types: Any) -> Any:
     if genai_types is not None:
         try:
             return genai_types.Content(role=role, parts=parts)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("gemini_video_recovery.content_fallback_dict: %s", type(exc).__name__)
     return {"role": role, "parts": parts}
 
 

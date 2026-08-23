@@ -293,7 +293,8 @@ def _raw_dict(raw: Any) -> dict[str, Any]:
     if isinstance(raw, (str, bytes)) and raw:
         try:
             data = json.loads(raw)
-        except Exception:
+        except Exception as exc:
+            logger.debug("pool_enrich.raw_json_unparseable: %s", type(exc).__name__)
             return {}
         return data if isinstance(data, dict) else {}
     return {}
