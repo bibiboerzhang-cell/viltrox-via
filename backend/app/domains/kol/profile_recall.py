@@ -554,14 +554,7 @@ def recall_kol_profiles(
                 ),
             )
         except Exception as exc:  # noqa: BLE001 — 召回不可用时降级,不让 500/503 冒泡
-            failure_text = f"{type(exc).__name__} {exc}".lower()
-            if "timeout" in failure_text or "deadline" in failure_text:
-                recall_degraded = "embedding_timeout"
-            elif isinstance(exc, OSError) or "read-only file system" in failure_text or "qdrant" in failure_text:
-                # 索引目录不可写/不存在(worker 沙箱只读、发布树只读):不是 embedding 的锅,别误导排障
-                recall_degraded = "qdrant_index_unavailable"
-            else:
-                recall_degraded = "embedding_unavailable"
+            recall_degraded = _support.classify_recall_failure(exc)
             logger.warning("recall_degraded reason=%s", recall_degraded, exc_info=True)
             query_vector, embedding_meta, hits = [], {}, lexical_hits
 

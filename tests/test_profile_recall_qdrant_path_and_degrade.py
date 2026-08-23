@@ -26,14 +26,12 @@ def test_worker_units_allow_writing_qdrant_lock():
         assert "ReadWritePaths=/opt/viltrox-2.0/runtime/vkpi_qdrant" in text, name
 
 
-def test_readonly_index_degrades_as_qdrant_not_embedding(monkeypatch):
-    from app.domains.kol import profile_recall as pr
+def test_readonly_index_degrades_as_qdrant_not_embedding():
+    from app.domains.kol import profile_recall_support as sup
 
-    monkeypatch.setattr(pr, "_embed_query", lambda text: ([0.0] * 8, {"embedding_model": "x"}))
-
-    def _boom(vec, limit):
-        raise OSError(30, "Read-only file system: '/opt/x/runtime/vkpi_qdrant/.lock'")
-
-    monkeypatch.setattr(pr, "_search_qdrant", _boom)
-    src = Path(pr.__file__).read_text(encoding="utf-8")
-    assert 'recall_degraded = "qdrant_index_unavailable"' in src
+    assert sup.classify_recall_failure(OSError(30, "Read-only file system: '/opt/x/runtime/vkpi_qdrant/.lock'")) == "qdrant_index_unavailable"
+    assert sup.classify_recall_failure(RuntimeError("qdrant_local_path_missing:/x")) == "qdrant_index_unavailable"
+    assert sup.classify_recall_failure(TimeoutError("deadline exceeded")) == "embedding_timeout"
+    assert sup.classify_recall_failure(RuntimeError("openai 401")) == "embedding_unavailable"
+    src = Path(importlib.import_module("app.domains.kol.profile_recall").__file__).read_text(encoding="utf-8")
+    assert "_support.classify_recall_failure(exc)" in src

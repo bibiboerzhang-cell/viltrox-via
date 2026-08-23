@@ -574,3 +574,14 @@ def smart_local_qualification_context(
     except Exception:
         logger.warning("smart_local latest-video context unavailable", exc_info=True)
     return row_context, evidence_context
+
+
+def classify_recall_failure(exc: BaseException) -> str:
+    """召回失败降级原因:超时 / 索引目录不可用(worker 沙箱只读、发布树只读 → Errno 30)/ embedding 不可用。
+    索引打不开曾被误报成 embedding_unavailable,排障绕了一圈。"""
+    failure_text = f"{type(exc).__name__} {exc}".lower()
+    if "timeout" in failure_text or "deadline" in failure_text:
+        return "embedding_timeout"
+    if isinstance(exc, OSError) or "read-only file system" in failure_text or "qdrant" in failure_text:
+        return "qdrant_index_unavailable"
+    return "embedding_unavailable"
