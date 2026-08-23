@@ -31,7 +31,6 @@ import { useCockpitRuntime } from "./useCockpitRuntime";
 import { createProject, deleteProject, updateProject } from "../../../services/vkpi/projects-api";
 import { addProjectCost } from "../../../services/vkpi/cost-api";
 import { toUiStaffList } from "../../../services/vkpi/staffAdapter";
-import { listStaffGroups, toUiGroup } from "../../../services/vkpi/groups-api";
 import { NAV_ITEMS } from "./data/navItems";
 import { VIEW_MODES } from "./data/viewModes";
 import { emptyDashboardData } from "../data/emptyDashboardData";
@@ -56,6 +55,7 @@ import {
   useCockpitPresenceHeartbeat,
   useCockpitVersionBadge,
 } from "./CockpitApp.shellHooks";
+import { useStaffGroups, useTeamGroupsOpener } from "./hooks/useStaffGroups";
 
 const e = React.createElement;
 const { COCKPIT_BOARDS, KOLPoolPage, ShopifyBoardPage, DealerMapPage, MyKolBoardPage, LegacyProjectsPage,
@@ -205,20 +205,8 @@ export function CockpitApp(props: any = {}) {
   const activeReminders = useMemo(() => viewingAs ? [] : runtimeReminders, [viewingAs, runtimeReminders]);
   // Real staff (17) adapted to the UI shape the team/group/events modals expect.
   const uiStaff = useMemo(() => toUiStaffList(dashboardData.staffMembers || []), [dashboardData.staffMembers]);
-  // Real staff-groups loaded from the new backend (replaces hardcoded "KOL Operations").
-  const [staffGroups, setStaffGroups] = useState<any[]>([]);
-  const refreshStaffGroups = useCallback(async () => {
-    if (!apiToken) return;
-    try {
-      const res = await listStaffGroups(apiToken);
-      setStaffGroups((res.items || []).map(toUiGroup));
-      // 波 C·C3:分组增删改后广播,MY KOL「观察清单」等按分组取数的模块据此重读。
-      window.dispatchEvent(new CustomEvent("vkpi:staff-groups-changed"));
-    } catch (err) {
-      setStaffGroups([]);
-    }
-  }, [apiToken]);
-  useEffect(() => { refreshStaffGroups(); }, [refreshStaffGroups]);
+  // Real staff-groups loaded from the new backend(hooks/useStaffGroups;增删改后 refresh + 广播)。
+  const { staffGroups, refreshStaffGroups } = useStaffGroups(apiToken);
   // The group currently targeted by the editor (edit mode binds to a real group).
   const [editGroupTarget, setEditGroupTarget] = useState<any>(null);
   const reportData = useMemo(() => ({
@@ -236,32 +224,8 @@ export function CockpitApp(props: any = {}) {
     setEditGroupName(mode === "new" ? "新分组" : (target?.name || "新分组"));
     setShowEditGroup(true);
   };
-  // 波 C·C3:MY KOL「观察清单」模块的分组管理入口(入口与分组管理同处):
-  //   detail.mode="new" → 直接开新建分组;detail.groupId → 直接开该组编辑器;
-  //   其余 → 打开团队浮层(分组列表 / 新建 / 编辑 / 删除都在那里)。
-  const staffGroupsRef = useRef<any[]>(staffGroups);
-  staffGroupsRef.current = staffGroups;
-  useEffect(() => {
-    const onOpenTeamGroups = (event: Event) => {
-      const detail = ((event as CustomEvent)?.detail || {}) as { mode?: string; groupId?: string };
-      if (detail.mode === "new") {
-        openGroupEditor("new");
-        return;
-      }
-      if (detail.groupId) {
-        const target = staffGroupsRef.current.find((g: any) => String(g?.id) === String(detail.groupId));
-        if (target) {
-          openGroupEditor("edit", target);
-          return;
-        }
-      }
-      setShowTeam(true);
-    };
-    window.addEventListener("vkpi:open-team-groups", onOpenTeamGroups);
-    return () => window.removeEventListener("vkpi:open-team-groups", onOpenTeamGroups);
-    // openGroupEditor 每帧新建闭包;其依赖(staffGroups)已走 ref,故监听只挂一次。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // 波 C·C3:观察清单模块「管理分组」入口(vkpi:open-team-groups 监听,抽到 hooks/useTeamGroupsOpener)。
+  useTeamGroupsOpener({ staffGroups, openGroupEditor, openTeamModal: () => setShowTeam(true) });
   const pushLocalNotification = (notification: any) => {
     setRuntimeNotifications(prev => [notification, ...prev].slice(0, 80));
   };
