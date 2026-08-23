@@ -774,7 +774,7 @@ def run_contract_polish_for_job(
             purpose="vkpi_contract_polish",
             max_output_tokens=POLISH_MAX_OUTPUT_TOKENS,
             cost_tag="vkpi_contract_polish",
-            triggered_by=contracts_domain._triggered_by_user_id(staff) or "projects.contract_polish",
+            triggered_by=staff or "projects.contract_polish",  # 身份类型化:传 staff dict,user_id 不当 staff 外键
             staff=staff or {},
             required_keys=tuple(clean),
             validator=lambda value: _valid_polish_payload(value, set(clean)),

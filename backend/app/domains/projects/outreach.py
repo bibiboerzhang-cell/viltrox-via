@@ -244,7 +244,8 @@ For compensation, output a neutral placeholder like "to be discussed" — never 
             purpose="kol_outreach_draft",
             max_output_tokens=min(4000, 600 + 240 * len(creators)),
             cost_tag="kol_outreach_draft",
-            triggered_by=(staff or {}).get("user_id") or "projects.outreach",
+            # 身份类型化:传 staff dict(台账/预留按 staff_id 解析),绝不把 user_id 当 staff 外键。
+            triggered_by=staff or "projects.outreach",
             staff=staff,
             required_keys=("messages", "sow_draft"),
             validator=lambda value: _valid_outreach_payload(value, expected_ids),

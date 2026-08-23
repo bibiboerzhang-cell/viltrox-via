@@ -377,7 +377,8 @@ def run_project_retrospective(
             purpose="vkpi_project_retrospective",
             max_output_tokens=MAX_OUTPUT_TOKENS,
             cost_tag=BUDGET_SCOPE,
-            triggered_by=_triggered_by_user_id(staff) or "projects.retrospective",
+            # 身份类型化:传 staff dict(台账/预留按 staff_id 解析),user_id 只进 triggered_by_user_id 列。
+            triggered_by=staff or "projects.retrospective",
             staff=staff or {},
             required_keys=("insight_text", "highlights", "risks", "next_steps"),
             validator=_valid_retrospective_payload,

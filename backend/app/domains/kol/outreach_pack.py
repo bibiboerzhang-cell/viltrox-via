@@ -473,7 +473,8 @@ def _generate_email_draft(
             purpose="kol_outreach_pack",
             max_output_tokens=MAX_OUTPUT_TOKENS,
             cost_tag=COST_TAG,
-            triggered_by=(staff or {}).get("user_id") or MODEL_TASK,
+            # 身份类型化:传 staff dict(台账/预留按 staff_id 解析),绝不把 user_id 当 staff 外键。
+            triggered_by=staff or MODEL_TASK,
             staff=staff or {},
             required_keys=("subject", "email_en", "email_zh", "talking_points"),
             validator=_valid_email_payload,

@@ -37,6 +37,9 @@ Contract ``my_kol_video_recovery_v1`` (served by
       "requested_at": iso | null,                # job created_at
       "updated_at": iso | null,                  # job updated_at
       "reason_class": str | null,                # only for blocked / failed, see below
+      "failure_category": str | null,            # O→F 六类(download|authorization|budget|model|provider|unknown)
+      "failure_reason_human": str | null,        # 中文一句,门面零内部术语
+      "failure_code": str | null,                # 稳定机器码(JSON reason / 类别),绝不回显自由文本
       "data": {                                  # persisted output, independent of the job
         "status": "ready" | "stale" | "none",
         "freshness": "fresh" | "stale" | "never" | "unavailable",
@@ -69,6 +72,15 @@ Rules the contract guarantees:
   - any other status, or a blocked/failed job whose ledger text matches no
     rule → ``null`` (honest "unclassified"; the UI shows the bare status).
 
+* **Failure fields share the O→F contract.**  ``failure_category`` /
+  ``failure_reason_human`` / ``failure_code`` are produced by
+  ``video_analysis_progress_reasons.failure_fields`` (the same rule table the
+  account progress endpoint uses) for ``blocked`` / ``failed`` / ``retrying``
+  jobs and are ``null`` otherwise.  ``failure_code`` keeps only token-like
+  machine codes (JSON ``reason`` / ``last_error_category``); a free-text
+  ``last_error`` first line is never echoed, so the "no raw worker text" rule
+  above still holds.
+
 * **Shared projection.**  ``attach_task_states`` is the single implementation
   behind this endpoint and the MY KOL board-ext ``recent_videos`` wall, so
   the same evidence id yields byte-identical ``tasks`` / ``viltrox_modalities``
@@ -84,10 +96,12 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from app.core.logging import get_logger
+from app.domains.kol import video_analysis_progress_reasons as progress_reasons
 from app.domains.kol.video_evidence_projection import (
     final_v1_modalities_for_evidence,
     viltrox_modalities,
@@ -113,6 +127,10 @@ FRESHNESS_VALUES = frozenset({"fresh", "stale", "never", "unavailable"})
 BLOCKED_REASON_CLASSES = frozenset({"permission", "budget", "missing_profile", "provider_unavailable"})
 FAILED_REASON_CLASSES = frozenset({"provider_error", "timeout", "code_error", "revoked"})
 REASON_CLASSES = BLOCKED_REASON_CLASSES | FAILED_REASON_CLASSES
+FAILURE_FIELD_KEYS: tuple[str, ...] = ("failure_category", "failure_reason_human", "failure_code")
+FAILURE_FIELD_STATUSES = frozenset({"blocked", "failed", "retrying"})
+_EMPTY_FAILURE_FIELDS: dict[str, Any] = {key: None for key in FAILURE_FIELD_KEYS}
+_MACHINE_CODE_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,80}$")
 
 # ── reason_class 规则表(词表规则,零 LLM;只输出类别,绝不回显 last_error 原文)──
 # 顺序即优先级:先命中先归类。blocked 与 failed 各自独立词表,互不串台。
@@ -332,6 +350,33 @@ def classify_reason(
     return None
 
 
+def failure_fields_for_job(status: str, *, error_category: Any = None, error_text: Any = None) -> dict[str, Any]:
+    """O→F failure fields for one projected job (shared rule table, never raw text).
+
+    ``status`` is the projected TaskState status.  ``retrying`` is fed to the
+    shared classifier as ``queued`` so a worker-categorised retry explains
+    itself ("…会自动重试"); any other non-failure status yields three ``None``.
+    ``failure_code`` is kept only when it looks like a machine code — a plain
+    text ``last_error`` first line is replaced by the structured category.
+    """
+    if status not in FAILURE_FIELD_STATUSES:
+        return dict(_EMPTY_FAILURE_FIELDS)
+    fields = progress_reasons.failure_fields(
+        status="queued" if status == "retrying" else status,
+        last_error_category=error_category,
+        last_error=error_text,
+    )
+    code = str(fields.get("failure_code") or "").strip()
+    if code and not _MACHINE_CODE_RE.match(code):
+        category = str(error_category or "").strip()
+        code = category if _MACHINE_CODE_RE.match(category) else ""
+    return {
+        "failure_category": fields.get("failure_category"),
+        "failure_reason_human": fields.get("failure_reason_human"),
+        "failure_code": code or None,
+    }
+
+
 def _project_job(row: Any) -> dict[str, Any] | None:
     if not row:
         return None
@@ -348,6 +393,11 @@ def _project_job(row: Any) -> dict[str, Any] | None:
         "reason_class": classify_reason(
             status,
             raw_status=item.get("status"),
+            error_category=item.get("last_error_category"),
+            error_text=item.get("last_error"),
+        ),
+        **failure_fields_for_job(
+            status,
             error_category=item.get("last_error_category"),
             error_text=item.get("last_error"),
         ),
@@ -435,12 +485,20 @@ def _task_state(job: dict[str, Any] | None, data: dict[str, Any]) -> dict[str, A
     reason_class = (job or {}).get("reason_class")
     if status not in {"blocked", "failed"} or reason_class not in REASON_CLASSES:
         reason_class = None
+    failure = dict(_EMPTY_FAILURE_FIELDS)
+    if status in FAILURE_FIELD_STATUSES:
+        category = (job or {}).get("failure_category")
+        if category in progress_reasons.FAILURE_CATEGORIES:
+            failure["failure_category"] = category
+            failure["failure_reason_human"] = str((job or {}).get("failure_reason_human") or "") or None
+            failure["failure_code"] = str((job or {}).get("failure_code") or "") or None
     return {
         "status": status,
         "job_id": (job or {}).get("job_id"),
         "requested_at": (job or {}).get("requested_at"),
         "updated_at": (job or {}).get("updated_at"),
         "reason_class": reason_class,
+        **failure,
         "data": data,
     }
 
@@ -721,6 +779,8 @@ __all__ = [
     "MAX_PAGE_SIZE",
     "BLOCKED_REASON_CLASSES",
     "FAILED_REASON_CLASSES",
+    "FAILURE_FIELD_KEYS",
+    "FAILURE_FIELD_STATUSES",
     "REASON_CLASSES",
     "TASK_STATUSES",
     "attach_task_states",
@@ -728,6 +788,7 @@ __all__ = [
     "classify_reason",
     "decode_cursor",
     "encode_cursor",
+    "failure_fields_for_job",
     "final_v1_task_state",
     "metric_refresh_task_state",
     "profile_crawl_task_state",

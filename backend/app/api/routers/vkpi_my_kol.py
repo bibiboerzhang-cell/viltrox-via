@@ -24,12 +24,7 @@ from app.db.connection import get_conn
 from app.domains import business_truth
 from app.domains.access import scope
 from app.domains.audit.decorator import audit_action
-from app.domains.kol import (
-    my_kol_aggregate,
-    my_kol_board_ext,
-    risk_index,
-    video_tracking,
-)
+from app.domains.kol import my_kol_aggregate, my_kol_board_ext, risk_index, video_tracking
 from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-my-kol"])
@@ -565,6 +560,17 @@ def _assert_can_share_kol(conn, staff, kol_pool_id: int) -> None:
         raise HTTPException(status_code=403, detail="仅该 KOL 的负责人或管理层可共享/撤销")
 
 
+def _record_member_feedback(kol_pool_id: int, staff: dict | None) -> None:
+    """L 车道插桩:勾选成员共享 = 正向 shortlist 信号,best-effort 桥进推荐反馈(payload.pool_action=member)。
+    主写已 commit 后才调;任何异常只记日志,绝不阻断响应;无推荐来源时桥本身 no-op。"""
+    try:
+        from app.domains.recommendations import actions as rec_actions
+
+        rec_actions.record_pool_action_feedback(int(kol_pool_id), "favorite", staff=staff, payload={"pool_action": "member"})
+    except Exception:
+        logger.warning("my_kol.share.feedback_bridge_failed kol_pool_id=%s", kol_pool_id, exc_info=True)
+
+
 @router.post("/my-kol/{kol_pool_id}/share")
 def my_kol_share_endpoint(
     kol_pool_id: int,
@@ -594,12 +600,8 @@ def my_kol_share_endpoint(
         (pid, target_staff_id, shared_by),
     )
     conn.commit()
-    return {
-        "status": "shared",
-        "kol_pool_id": pid,
-        "staff_id": target_staff_id,
-        "shared_by": shared_by,
-    }
+    _record_member_feedback(pid, staff)
+    return {"status": "shared", "kol_pool_id": pid, "staff_id": target_staff_id, "shared_by": shared_by}
 
 
 @router.delete("/my-kol/{kol_pool_id}/share/{staff_id}")
@@ -618,10 +620,7 @@ def my_kol_unshare_endpoint(
 
     conn = get_conn()
     _assert_can_share_kol(conn, staff, pid)
-    conn.execute(
-        "DELETE FROM vkpi_kol_pool_members WHERE kol_pool_id = ? AND staff_id = ?",
-        (pid, target_staff_id),
-    )
+    conn.execute("DELETE FROM vkpi_kol_pool_members WHERE kol_pool_id = ? AND staff_id = ?", (pid, target_staff_id))
     conn.commit()
     return {"status": "removed", "kol_pool_id": pid, "staff_id": target_staff_id}
 

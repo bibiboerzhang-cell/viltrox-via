@@ -222,9 +222,14 @@ def test_page_unifies_profile_metric_and_final_v1_task_states_and_keeps_freshnes
             assert row["viltrox_modalities"] == []          # fixture caches carry no evidence block
             for task in row["tasks"].values():
                 assert task["status"] in my_kol_video_recovery.TASK_STATUSES
-                assert set(task) == {"status", "job_id", "requested_at", "updated_at", "reason_class", "data"}
+                assert set(task) == {
+                    "status", "job_id", "requested_at", "updated_at", "reason_class",
+                    "failure_category", "failure_reason_human", "failure_code", "data",
+                }
                 if task["status"] not in {"blocked", "failed"}:
                     assert task["reason_class"] is None
+                if task["status"] not in my_kol_video_recovery.FAILURE_FIELD_STATUSES:
+                    assert (task["failure_category"], task["failure_reason_human"], task["failure_code"]) == (None, None, None)
 
         assert page["summary"] == {"total": 7, "views_total": 11_200, "views_measured": 6, "final_v1_ready": 2}
         assert page["page"] == {
@@ -266,6 +271,7 @@ def test_profile_crawl_state_uses_ready_runs_for_freshness() -> None:
         assert my_kol_video_recovery.profile_crawl_task_state(conn, 101) == {
             "status": "not_requested", "job_id": None, "requested_at": None, "updated_at": None,
             "reason_class": None,
+            "failure_category": None, "failure_reason_human": None, "failure_code": None,
             "data": {"status": "none", "freshness": "never", "updated_at": None, "superseded_by_job": False},
         }
         fresh_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
@@ -633,6 +639,93 @@ def test_task_state_reason_class_one_example_per_class_and_never_raw_text() -> N
             assert raw not in blob, raw
     finally:
         conn.close()
+
+
+# ── 波 C·C2: O→F failure fields on the MY KOL TaskState ─────────────────
+
+
+def test_task_state_carries_o_to_f_failure_fields_without_raw_text() -> None:
+    conn = _conn()
+    try:
+        final = "video_analysis_final_v1"
+        cases = {
+            # evidence_id: (ledger status, category, last_error, expected category, expected code)
+            1: ("blocked", "blocked", '{"reason": "budget_guard_blocked", "reason_detail": "budget_hard_stop"}',
+                "budget", "budget_guard_blocked"),
+            2: ("failed", "download", "RuntimeError: yt-dlp video download failed for Gemini analysis",
+                "download", "download"),                       # 自由文本首行不回显 → 退回结构化类别
+            3: ("failed", "code_error", "ModuleNotFoundError: No module named 'qdrant_client'",
+                "unknown", "code_error"),
+            4: ("blocked", None, "fence_required", "authorization", "fence_required"),   # 机器码原样
+            5: ("triage", "timeout", "RuntimeError: Gemini file ACTIVE timeout after 90s",
+                "provider", "timeout"),
+            6: ("cancelled", None, "cancelled: superseded", "unknown", None),   # 无类别/无规则词 → 诚实 unknown,code 落空
+        }
+        for target_id, (status, category, text, _cat, _code) in cases.items():
+            _job(conn, job_type="video", target_id=target_id, status=status, derive_method=final,
+                 last_error=text, last_error_category=category)
+        # retrying(queued + attempts + next_retry_at)且 worker 已分类 → 带「会自动重试」
+        _job(conn, job_type="video", target_id=7, status="queued", attempts=2, next_retry_at="2026-08-21T12:00:00Z",
+             derive_method=final, last_error="gemini_call_timeout", last_error_category="timeout")
+        _job(conn, job_type="video", target_id=8, status="running", derive_method=final,
+             last_error="stale text from an older attempt", last_error_category="download")
+        conn.commit()
+
+        page = my_kol_video_recovery.build_video_recovery_page(
+            conn, kol_pool_id=101, videos=[_video(index) for index in range(1, 9)], limit=20,
+        )
+        rows = {row["evidence_id"]: row["tasks"]["final_v1"] for row in page["items"]}
+        for key, (_s, _c, _t, expected_cat, expected_code) in cases.items():
+            assert rows[key]["failure_category"] == expected_cat, key
+            assert rows[key]["failure_code"] == expected_code, key
+            assert rows[key]["failure_reason_human"], key
+        assert rows[1]["failure_reason_human"] == "预算已达上限"
+        assert rows[2]["failure_reason_human"] == "视频下载失败:平台限制或代理不稳"
+        assert rows[3]["failure_reason_human"] == "分析程序出错:已记录,请联系管理员"
+        assert rows[5]["failure_reason_human"].endswith("多次重试仍失败,请稍后重新发起")
+        assert rows[6]["status"] == "failed"                      # cancelled collapses to failed
+        assert rows[6]["failure_reason_human"] == "分析未完成:原因待排查"
+        # retrying keeps the structured reason with the in-flight suffix
+        assert rows[7]["status"] == "retrying"
+        assert rows[7]["failure_category"] == "provider"
+        assert rows[7]["failure_reason_human"].endswith("会自动重试")
+        assert rows[7]["failure_code"] == "gemini_call_timeout"
+        # running never carries failure fields even with stale ledger text
+        assert rows[8]["status"] == "running"
+        assert (rows[8]["failure_category"], rows[8]["failure_reason_human"], rows[8]["failure_code"]) == (None, None, None)
+        blob = json.dumps(page, ensure_ascii=False)
+        for raw in ("qdrant_client", "ACTIVE timeout", "yt-dlp", "cancelled: superseded", "stale text", "provider_secret"):
+            assert raw not in blob, raw
+        for task in rows.values():
+            assert task["failure_category"] in (None, *my_kol_video_recovery.progress_reasons.FAILURE_CATEGORIES)
+    finally:
+        conn.close()
+
+
+def test_failure_fields_for_job_rules() -> None:
+    fn = my_kol_video_recovery.failure_fields_for_job
+    assert fn("ready", error_category="download", error_text="x") == {
+        "failure_category": None, "failure_reason_human": None, "failure_code": None,
+    }
+    assert fn("queued", error_category="download", error_text="x")["failure_category"] is None
+    machine = fn("failed", error_category="download", error_text="image_post_no_video")
+    assert machine == {
+        "failure_category": "download", "failure_reason_human": "该链接不是可分析的视频", "failure_code": "image_post_no_video",
+    }
+    free_text = fn("failed", error_category=None, error_text="RuntimeError: something exploded badly")
+    assert free_text["failure_category"] == "unknown" and free_text["failure_code"] is None
+    json_code = fn("blocked", error_category="blocked", error_text='{"reason": "fence_invalid", "reason_detail": "x y z"}')
+    assert json_code["failure_code"] == "fence_invalid" and json_code["failure_category"] == "authorization"
+
+
+def test_task_state_normalises_smuggled_failure_fields() -> None:
+    odd = {"job_id": 13, "status": "blocked", "requested_at": None, "updated_at": None, "reason_class": None,
+           "failure_category": "raw: boom", "failure_reason_human": "x", "failure_code": "y"}
+    state = my_kol_video_recovery.final_v1_task_state(None, odd)
+    assert (state["failure_category"], state["failure_reason_human"], state["failure_code"]) == (None, None, None)
+    ok = {**odd, "status": "ready", "failure_category": "download"}
+    state = my_kol_video_recovery.final_v1_task_state({"status": "ready", "updated_at": None}, ok)
+    assert state["failure_category"] is None          # non-failure status never carries them
 
 
 def test_final_v1_broken_promise_keeps_reason_class_null() -> None:
