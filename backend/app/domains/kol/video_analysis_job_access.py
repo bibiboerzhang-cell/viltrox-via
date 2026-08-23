@@ -80,14 +80,21 @@ def authorize_video_analysis_job(
         )
         source_session_id = _int(source.get("search_session_id"))
         if source_session_id != session_id:
-            raise ProviderJobAccessError("search_session_target_drifted", 409)
-        item_id = _int(source.get("search_session_item_id"))
-        if session_id > 0 and item_id <= 0:
-            raise ProviderJobAccessError("video_analysis_session_item_required", 409)
-        child["search_session_item_id"] = item_id or None
-        if not _same_video(source.get("source_url") or source.get("url"), evidence.get("content_url")):
-            raise ProviderJobAccessError("video_analysis_parent_evidence_mismatch", 409)
-        if actor.get("server_owned") is True:
+            # 跨会话复用已完成的解析结果(同 URL 重搜/重试):旧父围栏对不上新会话。
+            # 有活人 staff 时退回「会话+操作者」授权路径(与 UI 直发同信任);没有才拒。
+            if isinstance(staff, dict):
+                source = {}
+                actor = staff
+            else:
+                raise ProviderJobAccessError("search_session_target_drifted", 409)
+        item_id = _int(source.get("search_session_item_id")) if source else _int(child.get("search_session_item_id"))
+        if source:
+            if session_id > 0 and item_id <= 0:
+                raise ProviderJobAccessError("video_analysis_session_item_required", 409)
+            child["search_session_item_id"] = item_id or None
+            if not _same_video(source.get("source_url") or source.get("url"), evidence.get("content_url")):
+                raise ProviderJobAccessError("video_analysis_parent_evidence_mismatch", 409)
+        if source and actor.get("server_owned") is True:
             if session_id > 0:
                 raise ProviderJobAccessError("server_owned_session_must_be_root", 403)
             server_capability = issue_server_owned_provider_capability(

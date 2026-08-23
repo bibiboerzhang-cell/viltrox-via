@@ -32,6 +32,7 @@ from app.domains.kol.url_deep_crawl_video_meta import (
     _profile_representative_video_metadata,
 )
 from app.domains.kol.video_analysis_enqueue import _enqueue_final_v1_video_analysis
+from app.domains.kol.session_actor import session_creator_staff as _session_creator_staff
 from app.domains.kol.video_evidence import ensure_video_evidence_from_url
 
 from app.core.logging import get_logger
@@ -193,7 +194,9 @@ def _execute_profile_representative_video_analysis(
                     staff=(
                         body.get("paid_action_staff")
                         if isinstance(body.get("paid_action_staff"), dict)
-                        else None
+                        # worker 上下文无请求身份:用会话创建者的在职 staff 铸围栏,
+                        # 否则派生深析全部 blocked(2026-08-23「部分完成」根因)。
+                        else _session_creator_staff(conn, body.get("search_session_id"))
                     ),
                     enforce_target_write=body.get("enforce_target_write") is True,
                 )
