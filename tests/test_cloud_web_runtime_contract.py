@@ -514,7 +514,8 @@ def test_reviewed_worker_units_execute_only_from_atomic_current() -> None:
 
 
 def test_reviewed_worker_units_run_nonroot_with_minimal_mutable_surface() -> None:
-    expected_writes = {"/opt/viltrox-2.0/uploads"}
+    # runtime 整体只读,只有 Qdrant 本地索引子目录可写(.lock 需要 r+;否则 worker 向量召回整段降级)
+    expected_writes = {"/opt/viltrox-2.0/uploads", "/opt/viltrox-2.0/runtime/vkpi_qdrant"}
     expected_readonly = {
         "/opt/viltrox-2.0/current",
         "/opt/viltrox-2.0/.env",
