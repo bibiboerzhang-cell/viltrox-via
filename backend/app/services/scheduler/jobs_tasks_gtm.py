@@ -114,7 +114,7 @@ async def job_vkpi_forecast_outcomes_refresh():
 
 
 def _prediction_weekly_rollup_sync(scan_limit: int = 500) -> dict:
-    """同步实现:①已裁决预测流水补账进 evals(幂等)→ ②近 7 天评估出周指标 → ③落信号账本。
+    """同步实现:①已裁决预测流水补账进 evals(幂等)→ ②近 7 天评估出周指标 → ③落信号账本 → ④链尾对答案。
 
     ① 扫 vkpi_forecast_log 已裁决行(outcome 非 pending 且 actual_views 已回填),对
        run_id='fclog_<行id>' 逐条 prediction_ledger.record_eval((org, run_id, outcome_id NULL)
@@ -123,6 +123,8 @@ def _prediction_weekly_rollup_sync(scan_limit: int = 500) -> dict:
        wape / interval_coverage / direction_hit_rate。
     ③ 结果落 vkpi_signal_ledger(source_type='internal_eval',dedupe_key 带 ISO 周号,
        同周重跑 UPSERT 幂等)。表未建诚实 empty,绝不抛。
+    ④ 链尾 prediction_rollup_truth.rollup_forecast_log_truth:快照回填 actual + 幂等 UPSERT evals
+       (measured_from_snapshots),失败只记 result.forecast_log_truth 不拖垮 ①②③。
     """
     from datetime import datetime, timedelta, timezone
 
@@ -246,6 +248,27 @@ def _prediction_weekly_rollup_sync(scan_limit: int = 500) -> dict:
     result["signal_id"] = signal.get("id")
     if not signal.get("ok"):
         result["signal_reason"] = signal.get("reason")
+
+    # ④ 对答案链尾(L 车道 2026-08-23):prediction_rollup_truth.rollup_forecast_log_truth ——
+    #    满 30 天的流水行从快照表回填 actual(只写 forecast_log 三列),再把 actual 幂等 UPSERT 进
+    #    vkpi_prediction_evals(binding_status=measured_from_snapshots;run 缺席时用流水行自带 p10/p50/p90)。
+    #    此前该函数只被 import 从未调用。挂在 ③ 之后(链尾):本次新落的评估行进下周 ② 的 7 天窗;
+    #    本周的快照真相指标直接随 result.forecast_log_truth.metrics 返回。失败只计入结果不影响 ①②③。
+    try:
+        truth = prediction_ledger.weekly_forecast_log_rollup(conn, commit=True)
+        result["forecast_log_truth"] = {
+            "status": truth.get("status"),
+            "backfill": truth.get("backfill"),
+            "evals": truth.get("evals"),
+            "metrics": truth.get("metrics"),
+        }
+    except Exception as exc:  # noqa: BLE001 — 链尾是增益件,绝不拖垮既有周评估
+        logger.warning("scheduler.vkpi_prediction_weekly_rollup.forecast_log_truth_failed: %s", exc, exc_info=True)
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001
+            logger.debug("forecast_log_truth rollback failed", exc_info=True)
+        result["forecast_log_truth"] = {"status": "failed", "error": str(exc)[:240]}
     return result
 
 

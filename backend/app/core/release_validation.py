@@ -75,6 +75,8 @@ _READ_ONLY_GET_EXACT_PATHS = frozenset(
         "/api/admin/vkpi/projects",
         "/api/admin/vkpi/projects/deliverable-stages-summary",
         "/api/admin/vkpi/publish/pending",
+        "/api/admin/vkpi/recommendations/search-feedback/count",
+        "/api/admin/vkpi/recommendations/search-feedback/reasons",
         "/api/admin/vkpi/reply-queue",
         "/api/admin/vkpi/reports",
         "/api/admin/vkpi/settings/scheduler-tasks",

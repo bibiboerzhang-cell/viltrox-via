@@ -76,7 +76,52 @@ from app.services.scheduler.jobs import (
     register_market_listening_job,
     scheduler_fire_recovery_interval_seconds,
 )
+from app.services.scheduler.jobs_forecast_batch import job_vkpi_forecast_batch_issue
 from app.services.scheduler.jobs_tasks_intel import with_scheduler_run_record
+from app.services.scheduler.jobs_weekly_eval import job_vkpi_weekly_offline_eval
+
+# S 车道哨兵(contract S→L):模块由 S 车道提供,这里只按字符串路径延迟 import;模块缺失时注册一个
+# 诚实空跑的占位 callable(记 warning),保证注册表与 allowlist 测试在 S 车道未合入时仍绿。
+ANOMALY_SENTINEL_MODULE = "app.services.scheduler.jobs_anomaly"
+ANOMALY_SENTINEL_ENTRYPOINT = "run_anomaly_sentinel"
+
+
+def _resolve_anomaly_sentinel() -> Any:
+    import importlib
+
+    try:
+        module = importlib.import_module(ANOMALY_SENTINEL_MODULE)
+        entry = getattr(module, ANOMALY_SENTINEL_ENTRYPOINT)
+    except Exception as exc:  # noqa: BLE001 — S 车道模块未落地时诚实占位
+        reason = f"{type(exc).__name__}: {str(exc)[:120]}"
+
+        async def job_vkpi_anomaly_sentinel_missing() -> dict[str, Any]:
+            from app.services.scheduler.jobs import logger as _jobs_logger
+
+            _jobs_logger.warning("scheduler.vkpi_anomaly_sentinel_module_missing", extra={"reason": reason})
+            return {"status": "module_missing", "module": ANOMALY_SENTINEL_MODULE, "reason": reason}
+
+        return job_vkpi_anomaly_sentinel_missing
+
+    import asyncio
+    import inspect
+
+    from app.services.scheduler.jobs_tasks import _record_scheduler_run, _scheduler_task_enabled
+
+    async def job_vkpi_anomaly_sentinel() -> Any:
+        # config-gate 由注册方统一把守(scheduler_tasks.vkpi_anomaly_sentinel,迁移 290 种子默认 OFF),
+        # S 车道入口只管「扫 + 写 vkpi_alerts(alert_key 幂等)」。
+        if not _scheduler_task_enabled("vkpi_anomaly_sentinel"):
+            return None
+        try:
+            result = await entry() if inspect.iscoroutinefunction(entry) else await asyncio.to_thread(entry)
+            _record_scheduler_run("vkpi_anomaly_sentinel", ok=True)
+            return result
+        except Exception as exc:  # noqa: BLE001 — 哨兵失败只记账,不拖垮调度器
+            _record_scheduler_run("vkpi_anomaly_sentinel", ok=False, error=str(exc)[:240])
+            raise
+
+    return job_vkpi_anomaly_sentinel
 
 
 class _RunRecordingRegistration:
@@ -237,6 +282,42 @@ def _register_prediction_gtm_jobs(_scheduler: Any) -> None:
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
+    )
+    _register_learning_closeout_jobs(_scheduler)
+
+
+def _register_learning_closeout_jobs(_scheduler: Any) -> None:
+    """学习闭环 L 车道(2026-08-23,迁移 290 种子,全部 config-gate 默认 OFF,零 LLM):
+    ⑤ 预测批量发射(每日 04:30 中国,排在 04:50 对答案刷新前,让 D+30 有料可对);
+    ⑥ 离线评估周链(每周一 06:30 中国,早于 07:10 周评估 / 07:20 漂移哨兵);
+    ⑦ S 车道异常哨兵(每 30 分钟;模块延迟解析,缺失时占位空跑)。
+    """
+    _scheduler = _recording(_scheduler)
+    _scheduler.add_job(
+        job_vkpi_forecast_batch_issue,
+        trigger=CronTrigger(hour=4, minute=30, timezone=CHINA_TZ),
+        id="vkpi_forecast_batch_issue",
+        name="Daily forecast batch issue (MY KOL x active launch SKU, idempotent per kol/sku/day, no LLM)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    _scheduler.add_job(
+        job_vkpi_weekly_offline_eval,
+        trigger=CronTrigger(day_of_week="mon", hour=6, minute=30, timezone=CHINA_TZ),
+        id="vkpi_weekly_offline_eval",
+        name="Weekly offline eval chain (core_v1 + forecast backtest + rerank holdout + scorecard + feature coverage)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
+    )
+    _scheduler.add_job(
+        _resolve_anomaly_sentinel(),
+        trigger=IntervalTrigger(minutes=30),
+        id="vkpi_anomaly_sentinel",
+        name="Anomaly sentinel every 30 min (no LLM, vkpi_alerts alert_key idempotent; S lane module)",
+        max_instances=1,
+        coalesce=True,
     )
 
 

@@ -7,15 +7,21 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
+
+logger = get_logger(__name__)
 
 
 class HistoricalFeatureSnapshotUnavailable(LookupError):
     """Raised when a point-in-time request cannot be proven from frozen data."""
 
 
-FEATURE_SNAPSHOT_SCHEMA_VERSION = "vkpi_kol_feature_snapshot_v1"
+# v2(2026-08-23,L 车道):快照追加 ``derived`` 子字典(feature_store_derived,≤20 个只读派生强特征)
+# 与 ``derived_feature_version``;v1 快照仍可被 get_features_at_time 读回(_COMPATIBLE_SCHEMA_VERSIONS)。
+FEATURE_SNAPSHOT_SCHEMA_VERSION = "vkpi_kol_feature_snapshot_v2"
+_COMPATIBLE_SCHEMA_VERSIONS = frozenset({"", "vkpi_kol_feature_snapshot_v1", FEATURE_SNAPSHOT_SCHEMA_VERSION})
 _HISTORICAL_CANDIDATE_LIMIT = 1000
 _STANDARD_KOL_FEATURE_KEYS = frozenset(
     {
@@ -204,6 +210,16 @@ def snapshot_features(recommendation_id: int | None = None, kol_pool_id: int | N
                 "source_type": item.get("source_type"),
             }
         )
+        # v2 派生强特征(只读;任一来源缺料 = None;失败不拖垮快照本体)。
+        try:
+            from app.domains.recommendations import feature_store_derived
+
+            features["derived"] = feature_store_derived.derived_features(int(kol_pool_id or 0), conn=conn, pool_row=item)
+            features["derived_feature_version"] = feature_store_derived.DERIVED_FEATURE_VERSION
+        except Exception:
+            logger.warning("feature_store.derived_failed kol_pool_id=%s", kol_pool_id, exc_info=True)
+            features["derived"] = {}
+            features["derived_feature_version"] = ""
     if launch:
         item = dict(launch)
         features["launch"] = {
@@ -322,7 +338,7 @@ def get_features_at_time(
             rejected += 1
             continue
         schema_version = str(snapshot.get("feature_schema_version") or "").strip()
-        if schema_version not in {"", FEATURE_SNAPSHOT_SCHEMA_VERSION}:
+        if schema_version not in _COMPATIBLE_SCHEMA_VERSIONS:
             rejected += 1
             continue
         valid.append(
@@ -357,6 +373,8 @@ def get_features_at_time(
                 "feature_schema_version",
                 "snapshot_at",
                 "kol_pool_id",
+                "derived",
+                "derived_feature_version",
                 *_STANDARD_KOL_FEATURE_KEYS,
             )
             if key in snapshot
@@ -383,8 +401,8 @@ def get_features_at_time(
     }
 
 
-def list_feature_names() -> list[str]:
-    return [
+def list_feature_names(*, include_derived: bool = True) -> list[str]:
+    base = [
         "platform",
         "followers",
         "posts_count",
@@ -398,3 +416,15 @@ def list_feature_names() -> list[str]:
         "launch.category",
         "launch.target_platforms",
     ]
+    if not include_derived:
+        return base
+    from app.domains.recommendations import feature_store_derived
+
+    return base + [f"derived.{key}" for key in feature_store_derived.DERIVED_FEATURE_KEYS]
+
+
+def derived_nonnull_rates(*, sample_limit: int = 300) -> dict[str, Any]:
+    """v2 派生特征非空率(评估链用;只读)。"""
+    from app.domains.recommendations import feature_store_derived
+
+    return feature_store_derived.feature_coverage(sample_limit=sample_limit)

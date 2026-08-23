@@ -158,4 +158,6 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_board_series",
     # 顶栏 Ask P1:$SKU/镜头直达候选 catalog/suggest(纯读三列,零 LLM,append-only,2026-08-22)
     "vkpi_catalog_suggest",
+    # 学习闭环 L 车道:搜索页反馈写口 search-feedback(有用/没用+拒绝原因闭集,幂等落 recommendation_feedback,2026-08-23)
+    "vkpi_recommendations",
 ]

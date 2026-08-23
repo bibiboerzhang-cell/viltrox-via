@@ -6,7 +6,13 @@ vkpi_recommendation_feedback,派单阶段(contacted/device_sent/content_posted)�
 
   1. vkpi_recommendation_feedback(shortlist/claim/reject/create_project)→ 对应节点;
   2. vkpi_project_kol_assignments.stage(按 kol_pool_id 桥到最新推荐)→ stage 映射;
-  3. vkpi_kol_pool_touches(联系/触达)→ outreach_sent。
+  3. vkpi_kol_pool_touches(联系/触达)→ outreach_sent;
+  4. vkpi_messages(外联消息:outbound → outreach_sent / inbound → reply_received;
+     kol_id 经 vkpi_kol_pool.linked_main_kol_id 桥到池,缺 kol_id 时仅当项目只派了一个 KOL 才归属)
+     —— L 车道 2026-08-23 补:外联写口(evidence/messages.py、workflow_evidence_project_writes)不调反馈桥;
+  5. sync_favorite_feedback:收藏 / MY KOL 勾选成员 两个写口不经 actions.record_pool_action_feedback
+     (pool_favorites.py / vkpi_my_kol.py / staff_groups 直写表)→ 这里按 (recommendation_id x 'shortlist')
+     幂等补一行 feedback(带 staff),让人工动作真正进训练信号。
 
 全部只读真实业务行、按事件自身时间戳落 COALESCE 时间列、重复跑零写入;缺推荐行诚实计数跳过。
 零 LLM、零 provider、零触 viltrox_fit_score / rule_v0。
@@ -194,18 +200,136 @@ def sync_touch_outcomes(limit: int = 2000) -> dict[str, Any]:
     return {"status": "ok", "scanned": len(rows), "changed": changed, "no_recommendation": no_recommendation}
 
 
+def _pool_ids_for_kol(conn: Any, kol_id: int) -> list[int]:
+    if int(kol_id or 0) <= 0:
+        return []
+    rows = conn.execute(
+        "SELECT id FROM vkpi_kol_pool WHERE linked_main_kol_id=? ORDER BY id ASC LIMIT 5",
+        (int(kol_id),),
+    ).fetchall()
+    return [int(dict(r)["id"]) for r in rows]
+
+
+def _sole_project_pool_id(conn: Any, project_id: int) -> int:
+    """项目只派了一个 KOL 时才把项目级消息归属给它;多人项目诚实不猜。"""
+    if int(project_id or 0) <= 0 or not table_exists("vkpi_project_kol_assignments"):
+        return 0
+    rows = conn.execute(
+        """
+        SELECT kol_pool_id FROM vkpi_project_kol_assignments
+        WHERE project_id=? AND COALESCE(stage_status, 'active') != 'deleted'
+        ORDER BY id ASC LIMIT 2
+        """,
+        (int(project_id),),
+    ).fetchall()
+    return int(dict(rows[0])["kol_pool_id"]) if len(rows) == 1 else 0
+
+
+def sync_message_outcomes(limit: int = 2000) -> dict[str, Any]:
+    """外联消息 → outreach_sent(outbound)/ reply_received(inbound,含 outreach_sent 隐含)。"""
+    if not table_exists("vkpi_messages"):
+        return {"status": "table_missing", "scanned": 0, "changed": 0, "no_recommendation": 0, "ambiguous": 0}
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT id, project_id, kol_id, direction, captured_at, created_at
+        FROM vkpi_messages
+        ORDER BY captured_at DESC, id DESC
+        LIMIT ?
+        """,
+        (int(max(1, min(int(limit or 2000), 20000))),),
+    ).fetchall()
+    changed = 0
+    no_recommendation = 0
+    ambiguous = 0
+    for raw in rows:
+        row = dict(raw)
+        direction = str(row.get("direction") or "outbound").strip().lower()
+        node = "reply_received" if direction in {"inbound", "in", "reply", "received"} else "outreach_sent"
+        event_at = row.get("captured_at") or row.get("created_at")
+        pool_ids = _pool_ids_for_kol(conn, int(row.get("kol_id") or 0))
+        if not pool_ids:
+            sole = _sole_project_pool_id(conn, int(row.get("project_id") or 0))
+            if sole <= 0:
+                ambiguous += 1
+                continue
+            pool_ids = [sole]
+        rec_id = 0
+        for pool_id in pool_ids:
+            rec_id = _latest_recommendation_for_pool(conn, pool_id, not_after=event_at)
+            if rec_id > 0:
+                break
+        if rec_id <= 0:
+            no_recommendation += 1
+            continue
+        nodes = [*STAGE_IMPLIES.get(node, ()), node]
+        changed += _apply_nodes(
+            rec_id, nodes,
+            at=event_at,
+            context={"source": "message_sync", "message_id": row.get("id"), "direction": direction, "project_id": row.get("project_id")},
+        )
+    return {"status": "ok", "scanned": len(rows), "changed": changed,
+            "no_recommendation": no_recommendation, "ambiguous": ambiguous}
+
+
+def sync_favorite_feedback(limit: int = 2000) -> dict[str, Any]:
+    """收藏 / 勾选成员 → feedback 'shortlist'(recommendation_id x feedback_type 幂等,带 staff)。"""
+    from app.domains.recommendations import actions as rec_actions
+
+    result: dict[str, Any] = {"status": "ok", "scanned": 0, "inserted": 0, "no_recommendation": 0, "changed": 0}
+    conn = get_conn()
+    cap = int(max(1, min(int(limit or 2000), 20000)))
+    inserted = 0
+    for table, pool_action in (("vkpi_kol_pool_favorites", "favorite"), ("vkpi_kol_pool_members", "member")):
+        if not table_exists(table):
+            continue
+        rows = conn.execute(
+            f"SELECT id, kol_pool_id, staff_id, created_at FROM {table} ORDER BY id DESC LIMIT ?",
+            (cap,),
+        ).fetchall()
+        for raw in rows:
+            row = dict(raw)
+            result["scanned"] += 1
+            rec_id = _latest_recommendation_for_pool(conn, int(row.get("kol_pool_id") or 0), not_after=row.get("created_at"))
+            if rec_id <= 0:
+                result["no_recommendation"] += 1
+                continue
+            staff = {"id": int(row.get("staff_id") or 0)} if row.get("staff_id") else None
+            if rec_actions._record_action_feedback_once(
+                rec_id, "shortlist",
+                {"kol_pool_id": int(row.get("kol_pool_id") or 0), "pool_action": pool_action, "sync": "favorite_feedback", "row_id": row.get("id")},
+                staff=staff, note="",
+            ):
+                inserted += 1
+                changed = outcome_collector.record_if_missing(
+                    rec_id, "shortlisted", at=_ts(row.get("created_at")),
+                    context={"source": "favorite_sync", "pool_action": pool_action},
+                )
+                result["changed"] += 1 if changed else 0
+    if inserted:
+        conn.commit()
+    result["inserted"] = inserted
+    return result
+
+
+_SYNC_ROUTES: tuple[tuple[str, Any], ...] = (
+    ("feedback", sync_feedback_outcomes),
+    ("assignments", sync_assignment_outcomes),
+    ("touches", sync_touch_outcomes),
+    ("messages", sync_message_outcomes),
+    ("favorites", sync_favorite_feedback),
+)
+
+
 def sync_action_outcomes(limit: int = 2000) -> dict[str, Any]:
-    """三路同步合集(每路单独吞错计数,互不拖垮)。"""
+    """五路同步合集(每路单独吞错计数,互不拖垮);由 outcomes.refresh_open_outcomes(run_sync=True)
+    在每日 job_vkpi_recommendation_outcomes(04:40)链头调用。"""
     result: dict[str, Any] = {"status": "ok"}
-    for name, func in (
-        ("feedback", sync_feedback_outcomes),
-        ("assignments", sync_assignment_outcomes),
-        ("touches", sync_touch_outcomes),
-    ):
+    for name, func in _SYNC_ROUTES:
         try:
             result[name] = func(limit)
         except Exception as exc:
             logger.warning("outcome_sync.%s_failed: %s", name, exc, exc_info=True)
             result[name] = {"status": "failed", "error": str(exc), "changed": 0}
-    result["changed"] = sum(int((result.get(key) or {}).get("changed") or 0) for key in ("feedback", "assignments", "touches"))
+    result["changed"] = sum(int((result.get(key) or {}).get("changed") or 0) for key, _ in _SYNC_ROUTES)
     return result

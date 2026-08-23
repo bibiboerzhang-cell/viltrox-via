@@ -43,7 +43,8 @@ FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 METHOD = "evidence_quantile_v1"
 
 # 预测流水语境白名单(迁移215 vkpi_forecast_log.context);未知语境收敛回 drawer,不脏枚举。
-LOG_CONTEXTS: tuple[str, ...] = ("launchpad", "drawer", "sim")
+# batch = 每日批量发射(jobs_forecast_batch,MY KOL x 活跃 SKU,按 KOL/SKU/日幂等),与人工点开的三种语境可区分。
+LOG_CONTEXTS: tuple[str, ...] = ("launchpad", "drawer", "sim", "batch")
 
 # 调整系数护栏(全部可追溯进 basis)
 _RATIO_CLAMP = (0.75, 1.30)     # 覆盖史数据驱动因子的夹取范围

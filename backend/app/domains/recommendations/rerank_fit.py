@@ -360,3 +360,134 @@ def maybe_weekly_fit(*, force: bool = False) -> dict[str, Any]:
     if last is not None and not force and (_now() - last) < timedelta(days=interval):
         return {"status": "skipped_recent", "last_fit_at": last.isoformat(), "interval_days": interval, "activated": None}
     return fit_rerank_model(force=force)
+
+
+# ── 离线 holdout 评估(L 车道 2026-08-23:每周一评估链调用,纯读,零落账)────────
+#
+# 按推荐时间 80/20 切分已打标快照:前 80% 拟合 logistic,后 20% 上比较
+#   model(logistic 概率排序) vs rule_v0(快照 base_score 排序)
+# 的 precision@10 与 AUC,各带 n 与 95% 置信区间(p@k Wilson;AUC Hanley-McNeil)。
+# n < DEFAULT_MIN_SAMPLES 诚实记 insufficient_samples(n/30),绝不硬算。
+
+HOLDOUT_TRAIN_SHARE = 0.8
+HOLDOUT_K = 10
+
+
+def _wilson(successes: int, n: int, z: float = 1.96) -> tuple[float | None, float | None]:
+    if n <= 0:
+        return None, None
+    p = successes / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    half = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denom
+    return round(max(0.0, centre - half), 4), round(min(1.0, centre + half), 4)
+
+
+def _auc(scores: list[float], labels: list[int]) -> dict[str, Any]:
+    """Mann-Whitney AUC(并列计半分)+ Hanley-McNeil 95% CI;任一类为空 → None。"""
+    pos = [s for s, y in zip(scores, labels) if y == 1]
+    neg = [s for s, y in zip(scores, labels) if y == 0]
+    if not pos or not neg:
+        return {"auc": None, "ci95": [None, None], "n_pos": len(pos), "n_neg": len(neg)}
+    wins = 0.0
+    for p in pos:
+        for q in neg:
+            wins += 1.0 if p > q else (0.5 if p == q else 0.0)
+    auc = wins / (len(pos) * len(neg))
+    q1 = auc / (2 - auc)
+    q2 = 2 * auc * auc / (1 + auc)
+    var = (auc * (1 - auc) + (len(pos) - 1) * (q1 - auc * auc) + (len(neg) - 1) * (q2 - auc * auc)) / (len(pos) * len(neg))
+    se = var ** 0.5 if var > 0 else 0.0
+    return {
+        "auc": round(auc, 4),
+        "ci95": [round(max(0.0, auc - 1.96 * se), 4), round(min(1.0, auc + 1.96 * se), 4)],
+        "n_pos": len(pos),
+        "n_neg": len(neg),
+    }
+
+
+def _precision_at_k(scores: list[float], labels: list[int], k: int) -> dict[str, Any]:
+    order = sorted(range(len(scores)), key=lambda i: (-scores[i], i))[: max(1, min(k, len(scores)))]
+    hits = sum(1 for i in order if labels[i] == 1)
+    lo, hi = _wilson(hits, len(order))
+    return {"precision": round(hits / len(order), 4) if order else None, "k": len(order), "hits": hits, "ci95": [lo, hi]}
+
+
+def _predict_proba(fitted: dict[str, Any], vector: dict[str, Any]) -> float:
+    import math
+
+    z = float(fitted.get("bias") or 0.0)
+    coef = fitted.get("coef") or {}
+    mean = fitted.get("mean") or {}
+    std = fitted.get("std") or {}
+    for key, w in coef.items():
+        s = float(std.get(key) or 1.0) or 1.0
+        z += float(w) * ((float(vector.get(key, 0.0) or 0.0) - float(mean.get(key) or 0.0)) / s)
+    z = max(-30.0, min(30.0, z))
+    return 1.0 / (1.0 + math.exp(-z))
+
+
+def _load_holdout_rows(limit: int = 5000) -> list[dict[str, Any]]:
+    rows = get_conn().execute(
+        f"""
+        SELECT feature_vector, outcome_label, base_score, created_at
+        FROM {shadow.SNAPSHOT_TABLE}
+        WHERE outcome_label IS NOT NULL AND feature_keys_version=?
+        ORDER BY created_at ASC, id ASC
+        LIMIT ?
+        """,
+        (shadow.FEATURE_KEYS_VERSION, int(max(1, min(int(limit or 5000), 50000)))),
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for raw in rows:
+        row = dict(raw)
+        vector = shadow.loads(row.get("feature_vector"), {})
+        if not vector or row.get("outcome_label") is None:
+            continue
+        out.append({"vector": vector, "label": int(row["outcome_label"]), "base_score": float(row.get("base_score") or 0.0)})
+    return out
+
+
+def holdout_eval(*, limit: int = 5000, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """按推荐时间 80/20 holdout:model(logistic) vs rule_v0(base_score) 的 p@10 / AUC(带 n 与 CI)。纯读。"""
+    if rows is None:
+        if not shadow.tables_ready():
+            return {"status": "tables_missing", "n": 0, "min_samples": _min_samples()}
+        rows = _load_holdout_rows(limit)
+    n = len(rows)
+    min_samples = _min_samples()
+    base: dict[str, Any] = {
+        "method": "time_split_holdout_v1", "n": n, "min_samples": min_samples,
+        "train_share": HOLDOUT_TRAIN_SHARE, "k": HOLDOUT_K, "feature_keys_version": shadow.FEATURE_KEYS_VERSION,
+    }
+    if n < min_samples:
+        return {**base, "status": "insufficient_samples", "note": f"样本不足 {n}/{min_samples},不出 holdout 结论。"}
+    split = max(1, int(n * HOLDOUT_TRAIN_SHARE))
+    train, test = rows[:split], rows[split:]
+    train_pos = sum(1 for r in train if r["label"] == 1)
+    test_pos = sum(1 for r in test if r["label"] == 1)
+    base.update({"n_train": len(train), "n_test": len(test), "train_pos": train_pos, "test_pos": test_pos})
+    if not test or train_pos < MIN_CLASS_COUNT or (len(train) - train_pos) < MIN_CLASS_COUNT or test_pos == 0 or test_pos == len(test):
+        return {**base, "status": "insufficient_class_balance",
+                "note": "训练集正/负类不足 5 或测试集单一类别,AUC/p@k 无定义。"}
+    try:
+        fitted = logistic_fit([r["vector"] for r in train], [r["label"] for r in train])
+    except (ImportError, ValueError) as exc:
+        return {**base, "status": "fit_failed", "note": f"{type(exc).__name__}: {str(exc)[:120]}"}
+    fitted.pop("metrics", None)
+    labels = [r["label"] for r in test]
+    model_scores = [_predict_proba(fitted, r["vector"]) for r in test]
+    rule_scores = [r["base_score"] for r in test]
+    model = {"precision_at_k": _precision_at_k(model_scores, labels, HOLDOUT_K), **_auc(model_scores, labels)}
+    rule = {"precision_at_k": _precision_at_k(rule_scores, labels, HOLDOUT_K), **_auc(rule_scores, labels)}
+    mp, rp = model["precision_at_k"]["precision"], rule["precision_at_k"]["precision"]
+    verdict = "model_not_worse" if (mp is not None and rp is not None and mp >= rp) else "rule_v0_better"
+    return {
+        **base,
+        "status": "ok",
+        "model": model,
+        "rule_v0": rule,
+        "verdict": verdict,
+        "activation_gate": "samples>=30 and pos/neg>=5 and model p@10 >= rule_v0 p@10",
+        "note": "纯读 holdout;影子激活仍走 fit_rerank_model 硬规则,本结果只记录不改排序。",
+    }
