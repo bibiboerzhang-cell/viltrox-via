@@ -273,7 +273,8 @@ def test_series_only_mentions_project_to_likely_and_never_pick_a_model(index) ->
     by_key = {row["lens_key"]: row for row in rows}
     assert set(by_key) == {"series:pro", "series:epic", "series:lab"}
     for row in rows:
-        assert row["resolution"] == "unresolved" and row["product_sku"] is None
+        # 波 D·D2:「X 系列」归 family(series:xxx),不再算 unresolved;仍不猜型号、投影 likely
+        assert row["resolution"] == "family" and row["product_sku"] is None
         assert row["v_relevance"] == "likely" and row["v_reason"] == "series_only"
     assert by_key["series:pro"]["display_name"] == "Pro 系列"
     # Pro 跨镜头与闪光灯(Vintage Z1 Pro),品类不唯一就留空,不硬标 Lens

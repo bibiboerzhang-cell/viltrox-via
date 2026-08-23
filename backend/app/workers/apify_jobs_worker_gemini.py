@@ -56,6 +56,7 @@ from app.workers.apify_jobs_worker_gemini_stages import (
     record_final_v1_outcome_diagnostics,
 )
 from app.domains.analysis.cache_repo import upsert_video_analysis_cache
+from app.workers.apify_jobs_worker_gemini_followups import extract_lens_evidence_after_final_v1
 from app.workers.apify_jobs_worker_session import (
     _enqueue_account_dossier_extract_after_final_v1,
     _enqueue_content_fit_after_final_v1,
@@ -487,9 +488,7 @@ def _write_gemini_cache(
             job_id=int(job["id"]),
             deep_result=deep_result,
         )
-        # QA P0 修:主成功路径补内容契合链式入队(此前只接在 cache-skip 路径,主路径漏接 → 发现的新人
-        # 首次 final_v1 完成拿不到内容契合)。QA P1 修:连同 account_dossier 一并兜进 try/except,
-        # 入队异常仅 warning、绝不冒泡把 final_v1 标 failed(『失败不阻断 final_v1』)。
+        # QA P0/P1 修:主成功路径补内容契合链式入队,连同 account_dossier 兜进 try/except;入队异常仅 warning、绝不冒泡把 final_v1 标 failed。
         content_fit_job = _enqueue_content_fit_after_final_v1(
             conn,
             job_id=int(job["id"]),
@@ -502,6 +501,7 @@ def _write_gemini_cache(
             job.get("id"),
             type(exc).__name__,
         )
+    extract_lens_evidence_after_final_v1(cache_id=cache_id, derive_method=derive_method, job_id=job.get("id"))  # 波 D·D2:深析完成即提列(永不抛)
     analysis_summary = _search_session_analysis_summary_from_result(
         cache_id=cache_id,
         derive_method=derive_method,

@@ -161,25 +161,34 @@ def ensure_video_evidence_from_url(
             raise RuntimeError(f"viltrox_fit_score changed unexpectedly: {changed_ids}")
 
         _commit(db)
-        return {
-            "ok": True,
-            "dry_run": False,
-            "status": status,
-            "operation": operation,
-            "kol_pool_id": int(kol_pool_id),
-            "evidence_id": evidence_id,
-            "source_url": video_url,
-            "fields_written": sorted(planned_values),
-            "metadata": _public_metadata(resolved_metadata),
-            "score_before": before_scores,
-            "score_after": after_scores,
-            "viltrox_fit_score_changed_ids": [],
-            "viltrox_fit_score_untouched": True,
-            "method": method,
-        }
     except Exception:
         _rollback(db)
         raise
+    result = {
+        "ok": True,
+        "dry_run": False,
+        "status": status,
+        "operation": operation,
+        "kol_pool_id": int(kol_pool_id),
+        "evidence_id": evidence_id,
+        "source_url": video_url,
+        "fields_written": sorted(planned_values),
+        "metadata": _public_metadata(resolved_metadata),
+        "score_before": before_scores,
+        "score_after": after_scores,
+        "viltrox_fit_score_changed_ids": [],
+        "viltrox_fit_score_untouched": True,
+        "method": method,
+    }
+    if status == "created":
+        # 波 D·D2「新证据即登记」:收藏 KOL 的新视频幂等续登记进指标追踪(主写已 commit;永不抛)。
+        # lazy import:evidence_side_effects → video_tracking_enroll → ... → url_deep_crawl 回引本模块。
+        from app.domains.kol.evidence_side_effects import enroll_tracking_after_new_evidence
+
+        result["tracking_enroll"] = enroll_tracking_after_new_evidence(
+            int(kol_pool_id), evidence_id=evidence_id, conn=db,
+        )
+    return result
 
 
 def _evidence_values(

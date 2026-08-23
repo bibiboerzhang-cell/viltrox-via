@@ -19,7 +19,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Callable, Iterator
 
 import psycopg
@@ -28,6 +28,15 @@ from app.core.config import DATABASE_URL, DB_RUNTIME_URL
 from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
 from app.db.connection import db_connection_sync_scope, get_conn, is_postgres_runtime
+from app.services.scheduler.fleet_guard_claim import (
+    _MAX_RECOVERY_BATCH_SIZE,
+    _normalize_fire_time,
+    ledger_final_status,
+    record_scheduled_fire_claim_failure,
+    scheduled_fire_lease_seconds,
+    scheduled_fire_outcome_scope,
+    scheduled_fire_recovery_batch_size,
+)
 
 
 logger = get_logger(__name__)
@@ -50,11 +59,6 @@ _LEADER_LOCK_SCOPE = "vkpi_scheduler_fleet"
 _LEADER_LOCK_KEY = "apscheduler_leader_v1"
 _FIRE_LOCK_SCOPE = "vkpi_scheduler_fire_execution_v1"
 _DEFAULT_MONITOR_SECONDS = 5.0
-_DEFAULT_FIRE_LEASE_SECONDS = 300
-_MIN_FIRE_LEASE_SECONDS = 60
-_MAX_FIRE_LEASE_SECONDS = 86_400
-_DEFAULT_RECOVERY_BATCH_SIZE = 25
-_MAX_RECOVERY_BATCH_SIZE = 100
 _RECOVERY_REASON = "stale_heartbeat_and_lease_expired_execution_lock_reacquired"
 _RECOVERY_ERROR = (
     "stale_running_recovered: execution outcome unknown; same fire was not replayed"
@@ -84,35 +88,6 @@ def _row_value(row: Any, key: str, index: int = 0) -> Any:
             return row[index]
         except (IndexError, KeyError, TypeError):
             return None
-
-
-def _bounded_int_env(name: str, default: int, *, minimum: int, maximum: int) -> int:
-    raw = str(os.environ.get(name) or str(default)).strip()
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise RuntimeError(f"{name} must be an integer") from exc
-    if value < minimum or value > maximum:
-        raise RuntimeError(f"{name} must be between {minimum} and {maximum}")
-    return value
-
-
-def scheduled_fire_lease_seconds() -> int:
-    return _bounded_int_env(
-        "VKPI_SCHEDULER_FIRE_LEASE_SECONDS",
-        _DEFAULT_FIRE_LEASE_SECONDS,
-        minimum=_MIN_FIRE_LEASE_SECONDS,
-        maximum=_MAX_FIRE_LEASE_SECONDS,
-    )
-
-
-def scheduled_fire_recovery_batch_size() -> int:
-    return _bounded_int_env(
-        "VKPI_SCHEDULER_FIRE_RECOVERY_BATCH_SIZE",
-        _DEFAULT_RECOVERY_BATCH_SIZE,
-        minimum=1,
-        maximum=_MAX_RECOVERY_BATCH_SIZE,
-    )
 
 
 class SchedulerLeaderLease:
@@ -458,13 +433,6 @@ class ScheduledFireRecovery:
     reason: str
 
 
-def _normalize_fire_time(value: datetime | None = None) -> datetime:
-    moment = value or datetime.now(timezone.utc)
-    if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(timezone.utc)
-
-
 def _scheduled_fire_lock_key(task_key: str, planned_fire_text: str) -> str:
     return f"{task_key}|{planned_fire_text}"
 
@@ -599,7 +567,7 @@ def finish_scheduled_fire(
 ) -> bool:
     if not claim.persisted or claim.claim_id is None:
         return True
-    final_status = "completed" if status == "completed" else "failed"
+    final_status = ledger_final_status(status)
     with db_connection_sync_scope():
         conn = get_conn()
         if claim.lease_token:
@@ -912,27 +880,41 @@ def guard_scheduled_callable(
                 },
             )
 
+    def _claim_or_record_failure() -> ScheduledFireClaim:
+        # claim 抛错(PoolTimeout/锁连接失败)→ warning 带池快照 + 台账 claim_failed,再原样抛。
+        try:
+            return claim_scheduled_fire(task_key, owner_id)
+        except Exception as exc:
+            record_scheduled_fire_claim_failure(
+                task_key, owner_id, fire_at=_scheduled_fire_at.get(), exc=exc
+            )
+            raise
+
     if inspect.iscoroutinefunction(func):
         @functools.wraps(func)
         async def _async_guard(*args: Any, **kwargs: Any) -> Any:
             if release_validation_active():
                 return _release_validation_result()
-            claim = claim_scheduled_fire(task_key, owner_id)
+            # 2026-08-23:claim 含同步建连/池取连接,放 to_thread 不再卡事件循环(to_thread 拷贝
+            # contextvars,planned fire 身份随行)。
+            claim = await asyncio.to_thread(_claim_or_record_failure)
             if not claim.claimed:
                 return _duplicate_result(claim)
             try:
-                try:
-                    with scheduled_fire_heartbeat(claim):
-                        with db_connection_sync_scope():
-                            result = await func(*args, **kwargs)
-                except BaseException as exc:
-                    _record_finish_without_masking(
-                        claim,
-                        status="failed",
-                        error=f"{type(exc).__name__}: {str(exc)[:420]}",
-                    )
-                    raise
-                _record_finish_without_masking(claim, status="completed")
+                with scheduled_fire_outcome_scope() as outcome:
+                    try:
+                        with scheduled_fire_heartbeat(claim):
+                            with db_connection_sync_scope():
+                                result = await func(*args, **kwargs)
+                    except BaseException as exc:
+                        _record_finish_without_masking(
+                            claim,
+                            status="failed",
+                            error=f"{type(exc).__name__}: {str(exc)[:420]}",
+                        )
+                        raise
+                    status, error = outcome()
+                    _record_finish_without_masking(claim, status=status, error=error)
                 return result
             finally:
                 _release_scheduled_fire_execution_lease(claim)
@@ -943,22 +925,24 @@ def guard_scheduled_callable(
         def _sync_guard(*args: Any, **kwargs: Any) -> Any:
             if release_validation_active():
                 return _release_validation_result()
-            claim = claim_scheduled_fire(task_key, owner_id)
+            claim = _claim_or_record_failure()
             if not claim.claimed:
                 return _duplicate_result(claim)
             try:
-                try:
-                    with scheduled_fire_heartbeat(claim):
-                        with db_connection_sync_scope():
-                            result = func(*args, **kwargs)
-                except BaseException as exc:
-                    _record_finish_without_masking(
-                        claim,
-                        status="failed",
-                        error=f"{type(exc).__name__}: {str(exc)[:420]}",
-                    )
-                    raise
-                _record_finish_without_masking(claim, status="completed")
+                with scheduled_fire_outcome_scope() as outcome:
+                    try:
+                        with scheduled_fire_heartbeat(claim):
+                            with db_connection_sync_scope():
+                                result = func(*args, **kwargs)
+                    except BaseException as exc:
+                        _record_finish_without_masking(
+                            claim,
+                            status="failed",
+                            error=f"{type(exc).__name__}: {str(exc)[:420]}",
+                        )
+                        raise
+                    status, error = outcome()
+                    _record_finish_without_masking(claim, status=status, error=error)
                 return result
             finally:
                 _release_scheduled_fire_execution_lease(claim)

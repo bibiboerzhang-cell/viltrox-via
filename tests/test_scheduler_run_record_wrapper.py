@@ -51,7 +51,7 @@ def _register_all(monkeypatch: pytest.MonkeyPatch) -> _FakeScheduler:
 
 @pytest.fixture()
 def registry_table() -> Any:
-    """在密闭 sqlite 上建 scheduler_tasks 最小列集(迁移 130 的运行记录列)。"""
+    """在密闭 sqlite 上建 scheduler_tasks 最小列集(迁移 130 的运行记录列 + 294 的 last_status)。"""
     conn = db_connection.get_conn()
     conn.execute("DROP TABLE IF EXISTS scheduler_tasks")
     conn.execute(
@@ -62,7 +62,7 @@ def registry_table() -> Any:
         " allowed_hours TEXT NOT NULL DEFAULT '', owner TEXT NOT NULL DEFAULT '',"
         " risk_level TEXT NOT NULL DEFAULT 'low', last_run_at TEXT NULL,"
         " last_success_at TEXT NULL, last_error TEXT NOT NULL DEFAULT '',"
-        " created_at TEXT NULL, updated_at TEXT NULL)"
+        " last_status TEXT NOT NULL DEFAULT '', created_at TEXT NULL, updated_at TEXT NULL)"
     )
     conn.commit()
     try:

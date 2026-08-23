@@ -80,7 +80,7 @@ def test_scoped_postgres_read_transaction_disappears_after_exit(
     backend_pid = int(raw.info.backend_pid)
 
     monkeypatch.setattr(db_connection, "is_postgres_runtime", lambda: True)
-    monkeypatch.setattr(db_connection, "_build_postgres_conn", lambda: wrapped)
+    monkeypatch.setattr(db_connection, "_build_postgres_conn", lambda **_kwargs: wrapped)
     try:
         with db_connection.db_connection_sync_scope():
             row = db_connection.get_conn().execute("SELECT 1 AS ok").fetchone()
@@ -145,7 +145,7 @@ def test_real_postgres_fire_claim_is_unique_in_temporary_table(
     monkeypatch.setattr(
         db_connection,
         "_build_postgres_conn",
-        lambda: db_connection.PostgresCompatConnection(raw, pool=pool),
+        lambda **_kwargs: db_connection.PostgresCompatConnection(raw, pool=pool),
     )
     fire_at = datetime(2026, 7, 14, 21, 15, 42, tzinfo=timezone.utc)
     try:
@@ -216,7 +216,7 @@ def test_real_postgres_two_sessions_concurrently_claim_one_planned_fire(
         wrappers.put(db_connection.PostgresCompatConnection(second_raw, pool=pool))
         both_sessions_ready = Barrier(2, timeout=5)
 
-        def build_connection() -> db_connection.PostgresCompatConnection:
+        def build_connection(**_kwargs: object) -> db_connection.PostgresCompatConnection:
             wrapped = wrappers.get(timeout=5)
             both_sessions_ready.wait()
             return wrapped
@@ -278,7 +278,7 @@ def test_real_postgres_scoped_pool_connection_is_reusable_without_idle_tx(
     monkeypatch.setattr(
         db_connection,
         "_build_postgres_conn",
-        lambda: db_connection.PostgresCompatConnection(raw, pool=pool),
+        lambda **_kwargs: db_connection.PostgresCompatConnection(raw, pool=pool),
     )
 
     def state() -> str:
@@ -359,7 +359,7 @@ def test_real_postgres_stale_recovery_skips_live_lock_then_audits_unknown_failur
         monkeypatch.setattr(
             db_connection,
             "_build_postgres_conn",
-            lambda: db_connection.PostgresCompatConnection(raw, pool=pool),
+            lambda **_kwargs: db_connection.PostgresCompatConnection(raw, pool=pool),
         )
         monkeypatch.setattr(
             fleet_guard,
@@ -517,7 +517,7 @@ def test_real_postgres_recovery_token_cas_rejects_changed_attempt(
         monkeypatch.setattr(
             db_connection,
             "_build_postgres_conn",
-            lambda: db_connection.PostgresCompatConnection(raw, pool=pool),
+            lambda **_kwargs: db_connection.PostgresCompatConnection(raw, pool=pool),
         )
         monkeypatch.setenv("VKPI_SCHEDULER_FIRE_LEASE_SECONDS", "60")
 
@@ -612,7 +612,7 @@ def test_real_postgres_concurrent_stale_recoverers_terminalize_once(
         monkeypatch.setattr(fleet_guard, "is_postgres_runtime", lambda: True)
         monkeypatch.setenv("VKPI_SCHEDULER_FIRE_LEASE_SECONDS", "60")
 
-        def build_connection() -> db_connection.PostgresCompatConnection:
+        def build_connection(**_kwargs: object) -> db_connection.PostgresCompatConnection:
             raw = psycopg.connect(pg_dsn, connect_timeout=5)
             raw.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
             raw.commit()

@@ -264,7 +264,7 @@ def _finish_stats(stats: dict[str, Any], lens_counter: dict[str, int], unresolve
     if total:
         stats["unresolved_pct"] = round(100.0 * unresolved / total, 1)
         non_series = total - stats["series_only_rows"]
-        stats["unresolved_pct_excl_series"] = round(100.0 * (unresolved - stats["series_only_rows"]) / non_series, 1) if non_series else None
+        stats["unresolved_pct_excl_series"] = round(100.0 * unresolved / non_series, 1) if non_series else None
     stats["unresolved_samples"] = [
         {"mention": text, "count": count}
         for text, count in sorted(unresolved_counter.items(), key=lambda kv: (-kv[1], kv[0]))[:MAX_UNRESOLVED_SAMPLES]

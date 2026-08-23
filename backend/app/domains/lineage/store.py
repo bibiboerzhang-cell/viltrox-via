@@ -36,7 +36,10 @@ def _persist_value(conn: Any, *, run_id: int, metric_key: str, result: dict[str,
             len(result.get("sources") or []),
             data_status,
             _float(confidence),
-            1 if bool(result.get("is_partial")) else 0,
+            # 迁移 198 把 is_partial 建成 BOOLEAN;此前传 1/0 在 psycopg 下 DatatypeMismatch
+            # (smallint vs boolean),lineage 快照连败 8 天(2026-08-23 prod 体检)。Python bool
+            # 两端都对:psycopg 原生 boolean,sqlite 存 1/0。
+            bool(result.get("is_partial")),
             now,
         ),
     )

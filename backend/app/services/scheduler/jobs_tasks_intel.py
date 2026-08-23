@@ -17,6 +17,7 @@ import json
 from typing import Any, Callable
 
 from app.core.logging import get_logger
+from app.services.scheduler.fleet_guard_claim import mark_scheduled_fire_blocked
 
 logger = get_logger(__name__)
 
@@ -43,10 +44,41 @@ def _note_run_record_slot(task_key: str, flag: str) -> None:
 
 
 def _gate_result(task_key: str, enabled: bool) -> bool:
-    """config-gate 结果透传;拒跑时标记槽位 skipped,让包装层不伪造运行记录。"""
+    """config-gate 结果透传;拒跑时标记槽位 skipped,让包装层不伪造运行记录。
+
+    2026-08-23 假绿治理:拒跑此前零日志 + fire 台账记 completed(vkpi_anomaly_sentinel 20 次 fire
+    无声)。现在打 INFO ``scheduler.task_gate_refused task=…`` 并把本次 fire 标成 blocked:gate_disabled
+    (注册表 last_run_at 仍不写——没真跑)。
+    """
     if not enabled:
         _note_run_record_slot(task_key, "skipped")
+        logger.info("scheduler.task_gate_refused task=%s", task_key, extra={"task": task_key})
+        mark_scheduled_fire_blocked(f"gate_disabled: scheduler_tasks.{task_key} enabled=false")
     return enabled
+
+
+# readiness / 预算等"任务已启用但前置闸没放行"的原因前缀:记 blocked 而非 completed,也不算 failed。
+_BLOCKED_REASON_PREFIXES = (
+    "memory_not_ready",
+    "memory_readiness_probe_failed",
+    "provider_calls_allowed_true",
+)
+
+
+def blocked_or_raise(task_key: str, reason: str, *, prefixes: tuple[str, ...] = _BLOCKED_REASON_PREFIXES) -> dict[str, Any]:
+    """任务体拿到 ``ok=False`` 结果后的统一出口:
+
+    - reason 命中前置闸前缀 → 注册表 last_run_at + last_status=blocked + last_error=reason(不记 success),
+      fire 台账经 ``mark_scheduled_fire_blocked`` 记 ``blocked:<key>``,返回 {"status": "blocked", ...};
+    - 其它原因 → 抛 RuntimeError(guard 记 failed,注册表 last_error 落真因)。
+    """
+    text = str(reason or "").strip() or "unspecified"
+    if not text.startswith(prefixes):
+        raise RuntimeError(f"{task_key}: {text[:400]}")
+    logger.warning("scheduler.task_blocked task=%s reason=%s", task_key, text[:240], extra={"task": task_key})
+    _record_scheduler_run(task_key, ok=False, error=f"blocked: {text}"[:240], status="blocked")
+    mark_scheduled_fire_blocked(text)
+    return {"status": "blocked", "task_key": task_key, "reason": text}
 
 
 def with_scheduler_run_record(task_key: str, func: Callable[..., Any]) -> Callable[..., Any]:
@@ -171,11 +203,11 @@ def _scheduler_task_enabled(task_key: str) -> bool:
     return _impl(task_key)
 
 
-def _record_scheduler_run(task_key: str, *, ok: bool, error: str = "") -> None:
+def _record_scheduler_run(task_key: str, *, ok: bool, error: str = "", status: str = "") -> None:
     try:
         from .jobs_tasks import _record_scheduler_run as _impl
 
-        _impl(task_key, ok=ok, error=error)
+        _impl(task_key, ok=ok, error=error, status=status)
     except Exception:
         logger.debug("scheduler.intel_record_run_failed", extra={"task": task_key}, exc_info=True)
 

@@ -14,7 +14,7 @@ import asyncio
 import os
 
 from app.core.logging import get_logger
-from .jobs_tasks_intel import _gate_result, _note_run_record_slot  # 运行记录槽位协议(B3)
+from .jobs_tasks_intel import _gate_result, _note_run_record_slot, blocked_or_raise  # 运行记录槽位协议(B3)
 
 logger = get_logger(__name__)
 
@@ -276,14 +276,13 @@ async def job_vkpi_outcomes_refresh():
 
 
 async def job_vkpi_lineage_snapshot():
-    """V-KPI metric lineage snapshot for dashboard drilldown evidence."""
-    try:
-        from app.domains.sync import cron
+    """V-KPI metric lineage snapshot for dashboard drilldown evidence.
+    异常不再吞(2026-08-23:is_partial 类型错连败 8 天却记 completed):抛出 → guard 记 failed + 注册表 last_error。"""
+    from app.domains.sync import cron
 
-        result = await cron.run_job("lineage_snapshot", {"period_days": 7})
-        logger.info("scheduler.vkpi_lineage_snapshot", extra={"result": result.get("status")})
-    except Exception:
-        logger.exception("scheduler.vkpi_lineage_snapshot_failed")
+    result = await cron.run_job("lineage_snapshot", {"period_days": 7})
+    logger.info("scheduler.vkpi_lineage_snapshot", extra={"result": result.get("status")})
+    return result
 
 
 async def job_vkpi_kpi_rollup():
@@ -524,12 +523,13 @@ def _scheduler_task_enabled(task_key: str, *, default: bool = False) -> bool:
         return _gate_result(task_key, default)
 
 
-def _record_scheduler_run(task_key: str, *, ok: bool, error: str = "") -> None:
-    """S2:cron 任务运行后回写 last_run/last_success/last_error 到注册表(让"定时真跑"可见)。容错。"""
+def _record_scheduler_run(task_key: str, *, ok: bool, error: str = "", status: str = "") -> None:
+    """S2:cron 任务运行后回写 last_run/last_success/last_error(+last_status ok|failed|blocked)到注册表。容错。"""
     try:
         from app.domains.ops import scheduler_registry
 
-        scheduler_registry.record_run(task_key, ok=ok, error=error)
+        extra = {"status": status} if status else {}
+        scheduler_registry.record_run(task_key, ok=ok, error=error, **extra)
         _note_run_record_slot(task_key, "recorded")
     except Exception:
         logger.debug("scheduler.record_run_helper_failed", extra={"task": task_key}, exc_info=True)
@@ -959,19 +959,18 @@ from .jobs_tasks_intel import (  # noqa: E402,F401
 
 
 async def job_vkpi_recommendation_refresh():
-    """学习闭环·输入段:周期重算推荐喂新鲜料。确定性/零LLM/零预算/幂等/有上限;只读 fit 不写 fit。"""
-    try:
-        from app.domains.recommendations import recommendation_refresh
-        result = await asyncio.to_thread(
-            recommendation_refresh.refresh_recommendations,
-            max_families=8,
-            per_family_limit=25,
-        )
-        logger.info("scheduler.vkpi_recommendation_refresh",
-                    extra={"families_refreshed": result.get("families_refreshed"),
-                           "recommendations_written": result.get("recommendations_written")})
-    except Exception:
-        logger.exception("scheduler.vkpi_recommendation_refresh_failed")
+    """学习闭环·输入段:周期重算推荐喂新鲜料。确定性/零LLM/零预算/幂等/有上限;只读 fit 不写 fit。
+    readiness 挡住 → blocked(fire 台账 blocked:memory_not_ready,注册表 last_status=blocked);其它 ok=False 抛出记 failed。"""
+    from app.domains.recommendations import recommendation_refresh
+    result = await asyncio.to_thread(
+        recommendation_refresh.refresh_recommendations, max_families=8, per_family_limit=25,
+    )
+    if not result.get("ok", True):
+        return blocked_or_raise("vkpi_recommendation_refresh", str(result.get("reason") or ""))
+    logger.info("scheduler.vkpi_recommendation_refresh",
+                extra={"families_refreshed": result.get("families_refreshed"),
+                       "recommendations_written": result.get("recommendations_written")})
+    return result
 
 
 async def job_fulfillment_window_backfill():

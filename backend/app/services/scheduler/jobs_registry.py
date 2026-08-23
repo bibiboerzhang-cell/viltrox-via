@@ -360,9 +360,12 @@ def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
         coalesce=True,
     )
     # ── E2 物流自动同步(config-gate,默认 OFF;需 VKPI_17TRACK_TOKEN)──
+    # 2026-08-23 错峰:IntervalTrigger(hours=2) 的触发点 = 调度器启动时刻 + 2h·N,与 5/10/30/60 分钟
+    # 间隔族在偶数小时同秒(prod :50:47)叠成 23-24 个任务齐发 → 连接池 PoolTimeout 卡死 leader。
+    # 改成固定 cron 偶数小时 :20(节奏仍每 2h),脱离启动偏移;其它任务时刻不动。
     _scheduler.add_job(
         job_logistics_track_sync,
-        trigger=IntervalTrigger(hours=2),
+        trigger=CronTrigger(hour="*/2", minute=20),
         id="logistics_track_sync",
         name="17track logistics auto-sync (active shipments)",
         max_instances=1,
@@ -533,9 +536,10 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
     )
     # ── 市场之声声量告警(V0f·每 2h 扫近 8h 窗·lexicon_v0 复用·官号帖×2)── config-gate 默认关空跑;
     # 触发只推「今日该做什么」(vkpi_action_inbox,同类别同日幂等),零 LLM/零成本;开启方式见 job 注释。
+    # 2026-08-23 错峰(同 logistics_track_sync 注释):每 2h 改固定偶数小时 :35,避开启动偏移的整点齐发。
     _scheduler.add_job(
         job_market_voice_alerts,
-        trigger=IntervalTrigger(hours=2),
+        trigger=CronTrigger(hour="*/2", minute=35),
         id="market_voice_alerts",
         name="Market voice volume alerts (8h window x complaint category, owned x2, default-off)",
         max_instances=1,
@@ -597,9 +601,11 @@ def _register_fulfillment_autoops_jobs(_scheduler: Any) -> None:
         max_instances=1,
         coalesce=True,
     )
+    # 2026-08-23 错峰(同 logistics_track_sync 注释):履约扫窗/回填改固定奇数小时 :20 / :35
+    # (扫窗先、回填后,保持 scan→backfill 先后),节奏仍每 2h,与偶数小时的物流/声量告警互不叠加。
     _scheduler.add_job(
         job_fulfillment_content_scan,
-        trigger=IntervalTrigger(hours=2),
+        trigger=CronTrigger(hour="1-23/2", minute=20),
         id="fulfillment_content_scan",
         name="Fulfillment: scan due windows for KOL Viltrox content → candidates",
         max_instances=1,
@@ -608,7 +614,7 @@ def _register_fulfillment_autoops_jobs(_scheduler: Any) -> None:
     # ── 履约后半链:把已落库候选回填到活动观察窗口 matched_content_post_id(window→post 回链)──
     _scheduler.add_job(
         job_fulfillment_window_backfill,
-        trigger=IntervalTrigger(hours=2),
+        trigger=CronTrigger(hour="1-23/2", minute=35),
         id="fulfillment_window_backfill",
         name="Fulfillment: backfill matched_content_post_id onto active observation windows",
         max_instances=1,

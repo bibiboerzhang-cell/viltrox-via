@@ -61,6 +61,7 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
         "last_run_at": _to_iso(item.get("last_run_at")),
         "last_success_at": _to_iso(item.get("last_success_at")),
         "last_error": str(item.get("last_error") or ""),
+        "last_status": str(item.get("last_status") or ""),
         "created_at": _to_iso(item.get("created_at")),
         "updated_at": _to_iso(item.get("updated_at")),
     }
@@ -119,28 +120,49 @@ def set_scheduler_task_enabled(task_key: str, enabled: bool, staff: dict[str, An
     return _row_to_dict(row)
 
 
-def record_run(task_key: str, *, ok: bool, error: str = "") -> None:
-    """S2:cron 任务每次运行后回写 last_run_at / last_success_at / last_error(让"定时真跑"可见)。
+_LAST_STATUS_VALUES = ("ok", "failed", "blocked")
+_last_status_column_present: bool | None = None
 
+
+def _has_last_status_column(conn: Any) -> bool:
+    """迁移 294 加的 last_status 列是否存在(进程内缓存一次;迁移晚于代码上线时降级为不写该列)。"""
+    global _last_status_column_present
+    if _last_status_column_present is None:
+        try:
+            conn.execute(f"SELECT last_status FROM {_TABLE} LIMIT 1").fetchone()
+            _last_status_column_present = True
+        except Exception:
+            logger.info("scheduler_registry: last_status column absent (migration 294 pending); recording without it")
+            _last_status_column_present = False
+    return _last_status_column_present
+
+
+def record_run(task_key: str, *, ok: bool, error: str = "", status: str = "") -> None:
+    """S2:cron 任务每次运行后回写 last_run_at / last_success_at / last_error / last_status(让"定时真跑"可见)。
+
+    status 省略时按 ok 推 ok|failed;前置闸挡住没真跑传 ``blocked``(记 last_run_at + last_error,不记 success)。
     best-effort:只更新 scheduler_tasks 元数据,失败只 debug 不抛(绝不拖垮调度任务本体)。
     表缺/行缺 → 静默跳过(诚实)。零触业务表 / viltrox_fit_score。
     """
     key = str(task_key or "").strip()
     if not key or not table_exists(_TABLE):
         return
+    final_status = str(status or "").strip().lower() or ("ok" if ok else "failed")
+    if final_status not in _LAST_STATUS_VALUES:
+        final_status = "ok" if ok else "failed"
     try:
         conn = get_conn()
         now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        assignments = ["last_run_at=?", "last_error=?"]
+        params: list[Any] = [now, "" if ok else str(error or "")[:500]]
         if ok:
-            conn.execute(
-                f"UPDATE {_TABLE} SET last_run_at=?, last_success_at=?, last_error='' WHERE task_key=?",
-                (now, now, key),
-            )
-        else:
-            conn.execute(
-                f"UPDATE {_TABLE} SET last_run_at=?, last_error=? WHERE task_key=?",
-                (now, str(error or "")[:500], key),
-            )
+            assignments.append("last_success_at=?")
+            params.append(now)
+        if _has_last_status_column(conn):
+            assignments.append("last_status=?")
+            params.append(final_status)
+        params.append(key)
+        conn.execute(f"UPDATE {_TABLE} SET {', '.join(assignments)} WHERE task_key=?", tuple(params))
         conn.commit()
     except Exception:
         logger.debug("scheduler_registry: record_run failed for %s", key, exc_info=True)

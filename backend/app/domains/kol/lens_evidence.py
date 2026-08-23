@@ -9,8 +9,8 @@ raw.content_topic 等);结构化 viltrox_products_all 在存量里全空,所以�
 归一:只认 vkpi_products 目录(+ vkpi_product_aliases 别名表 + products/product_aliases_lens
 口语别名表);
   * sku        —— 唯一命中一个 SKU(含卡口);
-  * family     —— 命中同一镜头家族(焦段+光圈+系列)但卡口未知 / 目录无该卡口 → 多 SKU 候选;
-  * unresolved —— 目录无此型号 / 多家族歧义 / 仅系列(lens_key=series:xxx)→ 保留原文,绝不杜撰。
+  * family     —— 命中同一镜头家族但卡口未知 / 目录无该卡口 → 多 SKU 候选;仅系列提及(Pro / Air / EVO / LAB / EPIC)同归 family(lens_key=series:xxx);
+  * unresolved —— 目录无此型号 / 多家族歧义 → 保留原文,绝不杜撰。
 modality(画面 / 字幕·文字 / 口播)按提及所在句子的线索词判定,判不出 = unspecified。
 v_relevance 三态只读投影(v_relevance_for):
   * confirmed —— 归一到目录(sku/family)且画面 / 口播 / 字幕明确提及;
@@ -560,7 +560,7 @@ class CatalogIndex:
         return {"resolution": "unresolved", "product_sku": None, "lens_key": "", "display_name": mention, "category_main": "", "candidate_skus": candidates, "note": note}
 
     def series_outcome(self, code: str) -> dict[str, Any]:
-        """仅系列提及:不归一到家族,只挂系列键 + 该系列候选 SKU(上限 MAX_CANDIDATES)。"""
+        """仅系列提及:归 family(系列键 series:xxx + 该系列候选 SKU,上限 MAX_CANDIDATES),不猜型号。"""
 
         wanted = _text(code).lower()
         skus = sorted(
@@ -569,7 +569,7 @@ class CatalogIndex:
         )
         categories = {self.products[sku].category_main for sku in skus}
         return {
-            "resolution": "unresolved",
+            "resolution": "family" if skus else "unresolved",
             "product_sku": None,
             "lens_key": f"{SERIES_KEY_PREFIX}{wanted}",
             "display_name": series_label(code),
