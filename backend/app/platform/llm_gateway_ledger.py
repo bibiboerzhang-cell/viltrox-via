@@ -19,6 +19,47 @@ def _gateway_module() -> Any:
     return llm_gateway
 
 
+def _summarize_exception(exc: BaseException) -> str:
+    """异常类名 + 首行(脱敏)。复用 budget_guard 的脱敏口径(lazy import 防顶层倒挂)。"""
+    try:
+        from app.domains.costs.budget_guard_errors import summarize_exception
+
+        return summarize_exception(exc)
+    except Exception:  # noqa: BLE001 - 可见性辅助绝不反过来炸记账
+        return type(exc).__name__
+
+
+def _actor_staff_id(gateway: Any, conn: Any, staff: Any, triggered_by: Any) -> int | None:
+    """台账 staff 外键的唯一取值口径:staff dict → 否则 triggered_by(int 或 dict)→ 再做 PK 存在校验。
+
+    身份类型化(C2):``triggered_by_user_id`` 是 user id,绝不直接当 staff 外键;调用方
+    (worker 子进程的 llm_context)已按 payload.staff_id 传 triggered_by,这里统一兜底。
+    """
+    sid = gateway.resolve_staff_id(staff) if isinstance(staff, dict) else None
+    if not sid and triggered_by is not None:
+        if isinstance(triggered_by, dict):
+            sid = gateway.resolve_staff_id(triggered_by)
+        else:
+            try:
+                sid = int(triggered_by)
+            except (TypeError, ValueError):
+                sid = None
+    return gateway._existing_staff_id(conn, sid or None)
+
+
+def _attach_ledger_error(conn: Any, gateway: Any, call_uid: str, metadata: Any, summary: str) -> None:
+    """把台账失败摘要补进已落的 vkpi_llm_calls.metadata_json(best effort,不抛)。"""
+    try:
+        merged = {**(metadata if isinstance(metadata, dict) else {}), "cost_ledger_error": summary}
+        conn.execute(
+            "UPDATE vkpi_llm_calls SET metadata_json=? WHERE call_uid=?",
+            (gateway._json(merged), call_uid),
+        )
+        conn.commit()
+    except Exception:  # noqa: BLE001
+        gateway.logger.warning("vkpi.llm_gateway.ledger_error_note_failed", exc_info=True)
+
+
 def record_call(
     *,
     provider: str,
@@ -60,6 +101,7 @@ def record_call(
         else int(cost_cents or 0)
     )
     conn = gateway.get_conn()
+    actor_staff_id = _actor_staff_id(conn=conn, gateway=gateway, staff=staff, triggered_by=triggered_by)
     conn.execute(
         """
         INSERT INTO vkpi_llm_calls
@@ -83,13 +125,14 @@ def record_call(
             else None,
             status or "not_configured",
             bool(fallback_used),
-            gateway._existing_staff_id(conn, gateway.resolve_staff_id(staff)),
+            actor_staff_id,
             gateway._utcnow(),
             gateway._json(metadata),
         ),
     )
     conn.commit()
     cost_ledger: dict[str, Any] | None = None
+    cost_ledger_error: str | None = None
     if cost_tag and (
         bool(force_cost_ledger) or status == "success" or int(micro or 0) > 0
     ):
@@ -103,7 +146,7 @@ def record_call(
                 cost_usd=float(micro or 0) / 1_000_000,
                 tokens_in=int(input_tokens or 0),
                 tokens_out=int(output_tokens or 0),
-                staff_id=gateway.resolve_staff_id(staff) or None,
+                staff_id=actor_staff_id,
                 metadata={
                     **(metadata or {}),
                     "llm_call_uid": uid,
@@ -127,18 +170,33 @@ def record_call(
                 if int(cost_ledger.get("cost_micro_usd") or 0) != int(micro or 0):
                     raise RuntimeError("forced_ai_cost_ledger_amount_mismatch")
         except Exception as exc:
+            # 台账异常透明(C1):根因类名 + 首行(脱敏)进日志、进调用行 metadata、进异常信息。
+            # 此前只有一句 forced_ai_cost_ledger_write_failed,ForeignKeyViolation(staff_id 不存在)
+            # 只在子进程 stderr 里,6270 个单测都没拦住。
+            cost_ledger_error = _summarize_exception(exc)
             gateway.logger.warning(
-                "vkpi.llm_gateway.ai_cost_record_failed", exc_info=True
+                "vkpi.llm_gateway.ai_cost_record_failed | call_uid=%s scope=%s staff_id=%s | %s",
+                uid,
+                cost_tag,
+                actor_staff_id,
+                cost_ledger_error,
+                exc_info=True,
             )
+            _attach_ledger_error(conn, gateway, uid, metadata, cost_ledger_error)
             if force_cost_ledger:
-                raise RuntimeError("forced_ai_cost_ledger_write_failed") from exc
+                raise RuntimeError(
+                    f"forced_ai_cost_ledger_write_failed: {cost_ledger_error}"
+                ) from exc
     row = conn.execute(
         "SELECT * FROM vkpi_llm_calls WHERE call_uid=?", (uid,)
     ).fetchone()
-    return {
+    result: dict[str, Any] = {
         "call": dict(row) if row else {"call_uid": uid},
         "cost_ledger": cost_ledger,
     }
+    if cost_ledger_error:
+        result["cost_ledger_error"] = cost_ledger_error
+    return result
 
 
 _CACHE_HIT_NEEDLE = '"cache_hit": true'

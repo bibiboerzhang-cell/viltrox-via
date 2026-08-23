@@ -10,6 +10,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
+from app.domains.costs.budget_guard_errors import note_cost_ledger_failure
 from app.domains.costs.budget_windows import project_budget_window
 from app.domains.costs.budget_guard_persistence import (
     clean_value as _persistence_clean_value,
@@ -450,8 +451,10 @@ def record_cost(
                 (_money_db_param(cost), budget_scope),
             )
         conn.commit()
-    except Exception:
+    except Exception as exc:
         conn.rollback()
+        # 行为不变(原异常照抛);只把根因(类名+首行,脱敏)摆进日志与异常 note(C1 台账透明)。
+        note_cost_ledger_failure(exc, scope=scope_key, staff_id=actor_staff_id, unresolved_staff_id=unresolved_staff_id)
         raise
     return {
         "recorded": True,

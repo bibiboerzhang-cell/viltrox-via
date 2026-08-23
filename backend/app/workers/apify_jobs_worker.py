@@ -442,7 +442,11 @@ def _finish_skipped(
 
 
 def _block_job(conn: psycopg.Connection[Any], job_id: int, reason: str, detail: dict[str, Any] | None = None) -> None:
+    from app.workers.apify_jobs_worker_paid_scope import block_reason_category
+
     payload = {"reason": reason, **(detail or {})}
+    # last_error_category 按 reason 分类(authorization/budget/model/provider;其余仍 'blocked'),
+    # 让进度端点能把"授权围栏缺失"与"排队中"区分开(2026-08-22 复盘)。
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
@@ -450,12 +454,12 @@ def _block_job(conn: psycopg.Connection[Any], job_id: int, reason: str, detail: 
                 UPDATE apify_jobs
                 SET status='blocked',
                     last_error=%s,
-                    last_error_category='blocked',
+                    last_error_category=%s,
                     next_retry_at=NULL,
                     updated_at=NOW()
                 WHERE id=%s
                 """,
-                (_json(payload)[:2000], job_id),
+                (_json(payload)[:2000], block_reason_category(reason), job_id),
             )
     _sync_search_session_job(conn, job_id, raw_status="blocked", reason=_json(payload))
 

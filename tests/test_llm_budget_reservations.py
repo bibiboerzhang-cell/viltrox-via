@@ -343,15 +343,20 @@ def test_forced_cost_mirror_propagates_sanitized_write_failure(
     _install_fixture()
     ensure_vkpi_product_industry_schema()
 
+    class ForeignKeyViolation(RuntimeError):
+        pass
+
     class Mirror:
         @staticmethod
         def record_cost(**_kwargs):
-            raise RuntimeError("secret database detail")
+            raise ForeignKeyViolation(
+                'insert violates foreign key constraint "vkpi_ai_cost_ledger_staff_id_fkey"\n'
+                "DETAIL:  Key (staff_id)=(1) is not present in table staff. "
+                "api_key=sk-live-SECRET dsn=postgresql://u:pw@db/x"
+            )
 
     monkeypatch.setattr(llm_gateway, "_budget_guard", lambda: Mirror())
-    with pytest.raises(
-        RuntimeError, match="^forced_ai_cost_ledger_write_failed$"
-    ) as caught:
+    with pytest.raises(RuntimeError, match="^forced_ai_cost_ledger_write_failed: ") as caught:
         record_call(
             provider="anthropic",
             model="claude-opus-5",
@@ -362,7 +367,18 @@ def test_forced_cost_mirror_propagates_sanitized_write_failure(
             update_budget_scopes=False,
             force_cost_ledger=True,
         )
-    assert "secret database detail" not in str(caught.value)
+    message = str(caught.value)
+    # C1 台账透明:根因类名 + 首行 + DETAIL 行可见;密钥/URL userinfo 打码。
+    assert "ForeignKeyViolation:" in message and "staff_id" in message and "(staff_id)=(1)" in message
+    assert "sk-live-SECRET" not in message and "u:pw@" not in message
+    assert isinstance(caught.value.__cause__, ForeignKeyViolation)
+    # 调用行已落且 metadata 带 cost_ledger_error(排障不必再去翻子进程 stderr)。
+    row = get_conn().execute(
+        "SELECT metadata_json FROM vkpi_llm_calls WHERE purpose=? ORDER BY id DESC LIMIT 1",
+        ("forced-mirror-failure-unit",),
+    ).fetchone()
+    assert row is not None and "cost_ledger_error" in str(row["metadata_json"])
+    assert "ForeignKeyViolation" in str(row["metadata_json"]) and "sk-live-SECRET" not in str(row["metadata_json"])
 
 
 def test_forced_cost_mirror_requires_scope_before_call_row() -> None:

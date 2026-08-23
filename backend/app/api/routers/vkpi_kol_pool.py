@@ -762,6 +762,10 @@ from app.api.routers.vkpi_kol_pool_intel import (  # noqa: E402
 )
 
 router.include_router(_kol_pool_intel_router)
+# ── 账号级视频深析进度(只读,O→F 契约:failure_category/failure_reason_human/eta_seconds)→ vkpi_kol_pool_progress.py ──
+from app.api.routers.vkpi_kol_pool_progress import router as _kol_pool_progress_router  # noqa: E402
+
+router.include_router(_kol_pool_progress_router)
 
 
 @router.post("/kol-pool/{kol_pool_id}/promote")

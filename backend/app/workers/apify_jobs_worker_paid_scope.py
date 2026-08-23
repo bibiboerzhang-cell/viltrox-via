@@ -14,6 +14,44 @@ PAID_JOB_ACTIONS = {
     "kol_content_fit_analysis": "content_fit_analysis",
 }
 
+# blocked 原因 → last_error_category(F3 进度映射以此列为准;2026-08-22 复盘:owner 从 UI 点深析
+# 一直 blocked(video_analysis_authorization_fence_required)却只显示"排队中",因为类别恒为 'blocked')。
+# 顺序即优先级;没命中的保留旧值 'blocked'(下游 triage/recovery 仍按旧口径工作)。
+_BLOCK_REASON_CATEGORY_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("budget", ("budget",)),
+    (
+        "authorization",
+        (
+            "fence",
+            "authorization",
+            "scope",
+            "permission",
+            "actor",
+            "forbidden",
+            "identity",
+            "capability",
+            "release_validation",
+            "drifted",
+            "denied",
+            "revoked",
+            "inactive",
+        ),
+    ),
+    ("model", ("model_binding", "execution_class", "readiness", "derive", "unsupported_llm")),
+    ("provider", ("provider",)),
+)
+
+
+def block_reason_category(reason: Any) -> str:
+    """把 ``_block_job`` 的 reason 码映射成 ``last_error_category``(authorization/budget/model/provider/blocked)。"""
+    text = str(reason or "").strip().lower()
+    if not text:
+        return "blocked"
+    for category, markers in _BLOCK_REASON_CATEGORY_MARKERS:
+        if any(marker in text for marker in markers):
+            return category
+    return "blocked"
+
 
 def revalidate_paid_job_scope(
     payload: dict[str, Any],
@@ -192,6 +230,7 @@ def final_v1_scope_checkpoint(
 
 __all__ = [
     "PAID_JOB_ACTIONS",
+    "block_reason_category",
     "final_v1_scope_checkpoint",
     "revalidate_paid_job_scope",
 ]

@@ -24,6 +24,7 @@ from app.platform.llm_local_evaluation import (
     issue_local_evaluation_capability,
     redact_local_evaluation_capability,
 )
+from app.domains.kol import video_analysis_progress_reasons as progress_reasons
 from app.domains.kol.video_url_identity import (
     VideoUrlIdentityError,
     parse_supported_video_url,
@@ -56,12 +57,18 @@ def _platform_from_url(url: str) -> str:
 
 
 def _triggered_user_id(staff: dict[str, Any] | None) -> int | None:
+    """payload.triggered_by_user_id = **user id**(users.id),绝不退化成 staff id。
+
+    身份类型化(C2,2026-08-22 复盘):此前缺 user_id 时退回 staff.id,让两种 id 在同一个键里
+    混用,下游把它当 staff 外键写台账就炸 FK。staff 外键走 payload.staff_id(见 _staff_fk_id)。
+    """
+    return _int_or_none((staff or {}).get("user_id")) or None
+
+
+def _staff_fk_id(staff: dict[str, Any] | None) -> int | None:
+    """payload.staff_id = **staff 外键**(staff.id);只认 id / staff_id,绝不拿 user_id 凑数。"""
     staff = staff or {}
-    for key in ("user_id", "id", "staff_id"):
-        parsed = _int_or_none(staff.get(key))
-        if parsed:
-            return parsed
-    return None
+    return _int_or_none(staff.get("id") or staff.get("staff_id")) or None
 
 
 def _video_analysis_queue_lane(*, batch: str, local_evaluation: bool) -> str:
@@ -415,9 +422,7 @@ def _enqueue_final_v1_video_analysis(
             "source_url": evidence.get("content_url"),
             "title": evidence.get("title"),
             "creator_handle": evidence.get("kol_handle"),
-            "staff_id": _int_or_none(
-                (staff or {}).get("id") or (staff or {}).get("staff_id")
-            ),
+            "staff_id": _staff_fk_id(staff),
         },
         search_session_id=search_session_id,
         search_session_item_id=search_session_item_id,
@@ -763,13 +768,9 @@ PROGRESS_FAILED_STATES = ("failed", "blocked", "triage")
 
 
 def _video_concurrency_hint() -> int:
-    """视频槽位数(与 worker 的 APIFY_WORKER_GEMINI_VIDEO_CONCURRENCY 同源;解析失败按 1)。"""
+    """env 槽位提示(兼容名;真口径见 video_analysis_progress_reasons.active_lane_count)。"""
 
-    raw = str(os.environ.get("APIFY_WORKER_GEMINI_VIDEO_CONCURRENCY", "1") or "1").strip()
-    try:
-        return max(1, min(16, int(raw)))
-    except ValueError:
-        return 1
+    return progress_reasons.env_video_lane_hint()
 
 
 def _recent_final_v1_duration_p50_ms(conn: Any) -> tuple[int | None, str]:
@@ -809,7 +810,10 @@ def account_video_analysis_progress(
 
     口径:范围 = 该 KOL 最近 ``limit`` 条活跃视频证据(与 enqueue_all_kol_videos 同一切片)。
     每条状态优先级:ready(有 ready cache)> running/queued(最新任务活跃)> failed/blocked/triage
-    (最新任务终态且无 cache)> not_requested。ETA = ceil(进行中 / 视频槽位) × 最近 done 任务 p50。
+    (最新任务终态且无 cache)> not_requested。
+    ETA(F7)= ceil((前方排队 + 本账号进行中) / 活跃车道数) × 最近 done p50;车道数口径见
+    video_analysis_progress_reasons.active_lane_count。失败项(F3)带 failure_category /
+    failure_reason_human / failure_code(O→F 契约)。
     返回形状见 README 注释与 tests/test_video_analysis_account_progress.py。
     """
 
@@ -821,6 +825,7 @@ def account_video_analysis_progress(
     scope_ids = all_ids[:cap]
     counts = {"ready": 0, "running": 0, "queued": 0, "failed": 0, "blocked": 0, "triage": 0, "not_requested": 0}
     items: list[dict[str, Any]] = []
+    earliest_queued_created_at: Any = None
     if scope_ids:
         placeholders = ", ".join("?" for _ in scope_ids)
         id_params = tuple(int(eid) for eid in scope_ids)
@@ -850,8 +855,9 @@ def account_video_analysis_progress(
         job_rows = conn.execute(
             f"""
             SELECT DISTINCT ON (payload->>'target_id')
-                   id, status, attempts, last_error_category, created_at, started_at, updated_at,
-                   payload->>'target_id' AS target_id
+                   id, status, attempts, last_error_category, last_error, created_at, started_at, updated_at,
+                   payload->>'target_id' AS target_id,
+                   payload->'diagnostics'->>'child_stderr_tail' AS child_stderr_tail
             FROM apify_jobs
             WHERE job_type='video'
               AND payload->>'derive_method'=?
@@ -862,6 +868,10 @@ def account_video_analysis_progress(
             (FINAL_V1_DERIVE_METHOD, *text_params),
         ).fetchall()
         job_by_id = {str(dict(r)["target_id"]): dict(r) for r in job_rows}
+        earliest_queued_created_at = min(
+            (job.get("created_at") for job in job_by_id.values() if str(job.get("status") or "").lower() == "queued" and job.get("created_at")),
+            default=None,
+        )
         for eid in scope_ids:
             key = str(eid)
             cache = cache_by_id.get(key)
@@ -891,6 +901,12 @@ def account_video_analysis_progress(
                         "last_error_category": job.get("last_error_category"),
                         "cache_updated_at": cache.get("updated_at") if cache else None,
                         "job_updated_at": job.get("updated_at"),
+                        **progress_reasons.failure_fields(
+                            status=job_status,
+                            last_error_category=job.get("last_error_category"),
+                            last_error=job.get("last_error"),
+                            stderr_tail=job.get("child_stderr_tail"),
+                        ),
                     }
                 )
     completed = counts["ready"]
@@ -910,11 +926,19 @@ def account_video_analysis_progress(
     else:
         state = "partial"
     p50_ms, basis = _recent_final_v1_duration_p50_ms(conn) if in_progress else (None, "not_needed")
-    parallelism = _video_concurrency_hint()
-    eta_seconds: int | None = None
-    if in_progress and p50_ms:
-        waves = -(-in_progress // max(1, parallelism))  # ceil
-        eta_seconds = int(round(waves * p50_ms / 1000.0))
+    lanes, lanes_basis = progress_reasons.active_lane_count(conn) if in_progress else (0, "not_needed")
+    queue_ahead = (
+        progress_reasons.queue_ahead_count(
+            conn,
+            derive_method=FINAL_V1_DERIVE_METHOD,
+            earliest_queued_created_at=earliest_queued_created_at,
+        )
+        if in_progress
+        else 0
+    )
+    eta_seconds = progress_reasons.estimate_eta_seconds(
+        in_progress=in_progress, queue_ahead=queue_ahead, lanes=lanes, p50_ms=p50_ms
+    )
     return {
         "kol_pool_id": pool_id,
         "derive_method": FINAL_V1_DERIVE_METHOD,
@@ -926,11 +950,15 @@ def account_video_analysis_progress(
         "not_requested": counts["not_requested"],
         "percent": int(round(100.0 * completed / scope_total)) if scope_total else 0,
         "counts": counts,
+        "eta_seconds": eta_seconds,
         "eta": {
             "remaining": in_progress,
+            "queue_ahead": queue_ahead,
             "recent_p50_ms": p50_ms,
             "basis": basis,
-            "effective_parallelism": min(parallelism, in_progress) if in_progress else 0,
+            "active_lanes": lanes,
+            "lanes_basis": lanes_basis,
+            "effective_parallelism": min(lanes, in_progress + queue_ahead) if in_progress else 0,
             "estimated_remaining_seconds": eta_seconds,
         },
         "items": items if include_items else [],
