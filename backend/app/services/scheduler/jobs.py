@@ -279,11 +279,19 @@ def _register_learning_workflow_jobs(_scheduler: Any) -> None:
         misfire_grace_time=3600,
     )
 
-    # ── L4: Skill 编排自动触发(每日 06:20,对真产品出 recs>0 进生产账本)── gate+预算闸内建,dry_run 零成本。
+    # ── L4: Skill 编排自动触发(每日 06:20,对最近上市 SKU 出 recs 进生产账本 + action_inbox)──
+    # 驾照闸(skill_license_gate):驾照 skill_orchestrate < L2 或 agent_skill 预算闸拒绝 → 保持规则/dry_run
+    # 零成本;L2+ 且预算放行才为 creator_match 注入 gemini-3.6-flash(scope=agent_skill,$40/月)。不自动晋升。
     def _vkpi_skill_auto_orchestrate():
         try:
-            from app.domains.marketing_brain import skill_orchestrator
-            skill_orchestrator.auto_orchestrate(dry_run=True, record=True)
+            from app.domains.marketing_brain import skill_license_gate
+
+            out = skill_license_gate.licensed_auto_orchestrate(record=True, publish=True)
+            logger.info(
+                "vkpi_skill_auto_orchestrate",
+                extra={"status": out.get("status"), "gate": out.get("gate"), "llm_calls": out.get("llm_calls"),
+                       "inbox_persisted": out.get("inbox_persisted"), "product": out.get("product_used")},
+            )
         except Exception:
             logger.warning("vkpi_skill_auto_orchestrate failed", exc_info=True)
 

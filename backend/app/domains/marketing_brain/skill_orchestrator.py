@@ -250,8 +250,12 @@ def orchestrate_skills(
     model_fn: Optional[Callable[[dict[str, Any]], Any]] = None,
     record: bool = True,
     staff: dict[str, Any] | None = None,
+    model_fn_by_skill: Optional[Callable[[str], Any]] = None,
 ) -> dict[str, Any]:
     """据 plan_skills 的选择,经 skill_registry.dispatch_skill 真调用选中的 skill。
+
+    钩子(驾照闸,只加不改):model_fn_by_skill(skill_name) -> model_fn|None 可按 skill 粒度注入
+    (如仅 creator_match 拿 LLM);缺省 None 时行为与以前完全一致(统一用 model_fn)。
 
     这是「skill 能经编排器被调用(非仅人工 HTTP)」的真入口:
       - gate 关 → {status:'disabled'}(既有人工/ action 路径不受影响);
@@ -296,8 +300,11 @@ def orchestrate_skills(
     for node in nodes:
         name = _text(node.get("skill_name"))
         skill_input = node.get("input") if isinstance(node.get("input"), dict) else {}
+        node_model_fn = effective_model_fn
+        if model_fn_by_skill is not None and not dry_run:
+            node_model_fn = model_fn_by_skill(name)  # 驾照闸按 skill 粒度注入;dry_run 仍强制 None
         dispatched = skill_registry.dispatch_skill(
-            name, skill_input, model_fn=effective_model_fn, record=record, staff=staff
+            name, skill_input, model_fn=node_model_fn, record=record, staff=staff
         )
         out = dispatched.get("output") if isinstance(dispatched, dict) else {}
         item: dict[str, Any] = {
@@ -335,6 +342,7 @@ def auto_orchestrate(
     dry_run: bool = True,
     record: bool = True,
     staff: dict[str, Any] | None = None,
+    model_fn_by_skill: Optional[Callable[[str], Any]] = None,
 ) -> dict[str, Any]:
     """自动触发链的真入口(scheduler / agent loop / action 自动跑均经此):
 
@@ -367,7 +375,8 @@ def auto_orchestrate(
         ctx["product"] = real_product
         resolved_from = "catalog"
 
-    out = orchestrate_skills(goal, context=ctx, dry_run=dry_run, record=record, staff=staff)
+    out = orchestrate_skills(goal, context=ctx, dry_run=dry_run, record=record, staff=staff,
+                             model_fn_by_skill=model_fn_by_skill)
     if isinstance(out, dict):
         out["product_used"] = _text(ctx.get("product") or ctx.get("sku"))
         out["product_source"] = resolved_from
