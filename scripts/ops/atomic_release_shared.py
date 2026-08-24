@@ -470,10 +470,10 @@ def _database_release_metadata(
             raise LayoutError("clone-reuse owner release does not own the target database")
         if not ENV_FINGERPRINT_RE.fullmatch(env_fingerprint_before):
             raise LayoutError("clone-reuse env fingerprint must be a SHA-256 digest")
-        if pending_migrations:
-            raise LayoutError("clone-reuse strategy is app-only and forbids migrations")
-        if compatibility_declaration:
-            raise LayoutError("clone-reuse strategy must not claim forward compatibility")
+        if pending_migrations != compatibility_declaration:
+            raise LayoutError(
+                "clone-reuse migrations require an exact forward-compatibility declaration"
+            )
         return {
             "database_strategy": "reuse-active-clone",
             "source_database": None,

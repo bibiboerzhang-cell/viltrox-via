@@ -3848,10 +3848,14 @@ elif clone_re.fullmatch(database_name):
         database_owner_release_id = active_release_id
     elif strategy == "reuse-active-clone":
         database_owner_release_id = str(manifest.get("database_owner_release_id") or "")
-        if manifest.get("pending_migrations") not in ([], None) or manifest.get(
-            "forward_compatible_migrations"
-        ) not in ([], None):
-            raise SystemExit("clone-reuse manifest is not app-only")
+        pending = manifest.get("pending_migrations") or []
+        compatible = manifest.get("forward_compatible_migrations") or []
+        if (
+            not isinstance(pending, list)
+            or not isinstance(compatible, list)
+            or pending != compatible
+        ):
+            raise SystemExit("clone-reuse migrations lack an exact declaration")
     else:
         raise SystemExit("active clone manifest lost database lineage")
     if (
@@ -3966,11 +3970,6 @@ PY
   exit 1
 fi
 if [ -n "${PENDING_MIGRATIONS}" ]; then
-  if [ "${STAGING_SOURCE_KIND}" = "prior-release-clone" ] \
-    && [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
-    echo "Refusing to mutate an active release clone in place; use VKPI_STAGING_DB_CLONE=1 so the rollback anchor remains untouched." >&2
-    exit 1
-  fi
   if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
     if [ -n "${FORWARD_COMPATIBILITY_DECLARATION}" ]; then
       echo "A staging clone deploy must not declare in-place forward-compatible migrations." >&2
@@ -3990,10 +3989,12 @@ elif [ -n "${FORWARD_COMPATIBILITY_DECLARATION}" ]; then
 elif [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   echo "VKPI_STAGING_DB_CLONE=1 requires at least one pending migration." >&2
   exit 1
-elif [ "${STAGING_SOURCE_KIND}" = "prior-release-clone" ]; then
-  # An application-only release keeps using the already-active clone.  The new
-  # app manifest points to the original database-owning release and its
-  # activated receipt so the next migration release can prove its real source.
+fi
+if [ "${STAGING_SOURCE_KIND}" = "prior-release-clone" ] \
+  && [ "${STAGING_DB_CLONE_MODE}" != "1" ]; then
+  # App-only releases and exactly declared forward-compatible migrations keep
+  # using the proven active clone.  Preserve its original owner/receipt lineage
+  # so later releases never mistake the reused database for an in-place base.
   DATABASE_RELEASE_STRATEGY="reuse-active-clone"
   DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG="--allow-runtime-pool"
   STAGING_SOURCE_DATABASE=""
@@ -4126,6 +4127,12 @@ fi
 # source dist after remote writers have been quiesced.
 quiesce_remote_sync_units
 
+read_prior_clone_backup_boundary() {
+  ssh "${SSH_TARGET}" \
+    "sudo -n env -i PATH=/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B - --root '${REMOTE_ROOT}' --expected-active-release-id '${ACTIVE_RELEASE_ID}' --expected-database-owner-release-id '${PREDEPLOY_DATABASE_OWNER_RELEASE_ID}' --expected-database '${PREDEPLOY_DATABASE_NAME}'" \
+    <"${DEPLOY_CANDIDATE_DIR}/scripts/ops/prior_clone_backup_boundary.py"
+}
+
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   verify_deploy_candidate
   assert_deploy_source_unchanged
@@ -4167,6 +4174,150 @@ if digest.hexdigest() != expected:
 print("[deploy] verified staging database backup")
 PY
     STAGING_BACKUP_VERIFIED=1
+  elif [ "${STAGING_SOURCE_KIND}" = "prior-release-clone" ] \
+    && [ -n "${PENDING_MIGRATIONS}" ]; then
+    if ! PRIOR_CLONE_BOUNDARY_BEFORE="$(read_prior_clone_backup_boundary)"; then
+      echo "Refusing prior-clone migration because its pre-backup boundary is unreadable." >&2
+      exit 1
+    fi
+    if ! read -r PRIOR_CLONE_ENV_SHA_BEFORE PRIOR_CLONE_ACTIVE_MANIFEST_SHA256 < <(
+      printf '%s' "${PRIOR_CLONE_BOUNDARY_BEFORE}" | "${PROJECT_ROOT}/.venv/bin/python" -c \
+        'import json,sys; p=json.load(sys.stdin); print(p["env_sha256"], p["active_manifest_sha256"])'
+    ); then
+      echo "Refusing prior-clone migration because its pre-backup evidence is invalid." >&2
+      exit 1
+    fi
+    if [ "${PRIOR_CLONE_ENV_SHA_BEFORE}" != "${PREDEPLOY_ENV_SHA256}" ] \
+      || ! [[ "${PRIOR_CLONE_ACTIVE_MANIFEST_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "Refusing prior-clone migration because its environment or manifest changed before backup." >&2
+      exit 1
+    fi
+    PRIOR_CLONE_BACKUP_STAMP="${RELEASE_ID}-pre-migration"
+    PRIOR_CLONE_BACKUP_DIR="${PROJECT_ROOT}/runtime/prod-sync/${PRIOR_CLONE_BACKUP_STAMP}"
+    STAMP="${PRIOR_CLONE_BACKUP_STAMP}" LOCAL_DIR="${PRIOR_CLONE_BACKUP_DIR}" \
+      REMOTE_APP_USER="${REMOTE_APP_USER}" REMOTE_APP_GROUP="${REMOTE_APP_GROUP}" \
+      "${SCRIPT_DIR}/backup_prod_vkpi.sh"
+    if ! PRIOR_CLONE_BOUNDARY_AFTER="$(read_prior_clone_backup_boundary)"; then
+      echo "Refusing prior-clone migration because its post-backup boundary is unreadable." >&2
+      exit 1
+    fi
+    if ! read -r PRIOR_CLONE_ENV_SHA_AFTER PRIOR_CLONE_MANIFEST_SHA_AFTER < <(
+      printf '%s' "${PRIOR_CLONE_BOUNDARY_AFTER}" | "${PROJECT_ROOT}/.venv/bin/python" -c \
+        'import json,sys; p=json.load(sys.stdin); print(p["env_sha256"], p["active_manifest_sha256"])'
+    ); then
+      echo "Refusing prior-clone migration because its post-backup evidence is invalid." >&2
+      exit 1
+    fi
+    if [ "${PRIOR_CLONE_ENV_SHA_AFTER}" != "${PREDEPLOY_ENV_SHA256}" ] \
+      || [ "${PRIOR_CLONE_MANIFEST_SHA_AFTER}" != "${PRIOR_CLONE_ACTIVE_MANIFEST_SHA256}" ]; then
+      echo "Refusing prior-clone migration because its environment or manifest changed during backup." >&2
+      exit 1
+    fi
+    pg_restore --list "${PRIOR_CLONE_BACKUP_DIR}/prod-db.dump" >/dev/null
+    "${PROJECT_ROOT}/.venv/bin/python" - \
+      "${PRIOR_CLONE_BACKUP_DIR}" \
+      "${PRIOR_CLONE_BACKUP_STAMP}" \
+      "${RELEASE_ID}" \
+      "${ACTIVE_RELEASE_ID}" \
+      "${PREDEPLOY_APP_SHA}" \
+      "${PREDEPLOY_MIGRATION}" \
+      "${PREDEPLOY_DATABASE_NAME}" \
+      "${PREDEPLOY_DATABASE_OWNER_RELEASE_ID}" \
+      "${PREDEPLOY_ENV_SHA256}" \
+      "${PRIOR_CLONE_ACTIVE_MANIFEST_SHA256}" \
+      "${PENDING_MIGRATIONS}" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+directory = Path(sys.argv[1])
+stamp, release_id, active_release_id = sys.argv[2:5]
+predeploy_sha, predeploy_migration, database, database_owner_release_id = sys.argv[5:9]
+predeploy_env_sha256, active_manifest_sha256 = sys.argv[9:11]
+pending = [value for value in sys.argv[11].split(",") if value]
+dump = directory / "prod-db.dump"
+sidecar = directory / "prod-db.dump.sha256"
+runtime_state = directory / "runtime-state.txt"
+receipt = directory / "release-migration-backup-receipt.json"
+if not directory.is_dir() or directory.is_symlink():
+    raise SystemExit("prior-clone backup directory is unsafe")
+for path in (dump, sidecar, runtime_state):
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or path.is_symlink() or info.st_nlink != 1:
+        raise SystemExit("prior-clone backup artifact is unsafe")
+parts = sidecar.read_text(encoding="ascii").split()
+if len(parts) != 2 or parts[1] != "prod-db.dump" or not re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+    raise SystemExit("prior-clone backup sidecar is invalid")
+digest = hashlib.sha256()
+with dump.open("rb") as handle:
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+if digest.hexdigest() != parts[0]:
+    raise SystemExit("prior-clone backup digest mismatch")
+state: dict[str, str] = {}
+for line in runtime_state.read_text(encoding="utf-8").splitlines():
+    if "=" not in line:
+        raise SystemExit("prior-clone runtime manifest is malformed")
+    key, value = line.split("=", 1)
+    if not key or key in state:
+        raise SystemExit("prior-clone runtime manifest has duplicate keys")
+    state[key] = value
+expected = {
+    "stamp": stamp,
+    "remote_root": "/opt/viltrox-2.0",
+    "service": "viltrox-2.0-test.service",
+    "release_state": "valid",
+    "current_path": f"/opt/viltrox-2.0/releases/{active_release_id}",
+    "release_id": active_release_id,
+    "git_head": predeploy_sha,
+}
+if any(state.get(key) != value for key, value in expected.items()):
+    raise SystemExit("prior-clone runtime manifest is not bound to the predeploy release")
+if not re.fullmatch(r"app-[A-Za-z0-9_-]+\.js", state.get("frontend_asset", "")):
+    raise SystemExit("prior-clone runtime manifest lacks a valid frontend asset")
+if not re.fullmatch(r"[A-Za-z0-9_.-]+", database_owner_release_id):
+    raise SystemExit("prior-clone backup lost its database owner lineage")
+if not re.fullmatch(r"[0-9a-f]{64}", predeploy_env_sha256):
+    raise SystemExit("prior-clone backup lost its environment lineage")
+if not re.fullmatch(r"[0-9a-f]{64}", active_manifest_sha256):
+    raise SystemExit("prior-clone backup lost its active manifest lineage")
+payload = {
+    "schema_version": "vkpi-release-migration-backup/v1",
+    "release_id": release_id,
+    "backup_stamp": stamp,
+    "active_release_id": active_release_id,
+    "predeploy_git_sha": predeploy_sha,
+    "predeploy_migration": predeploy_migration,
+    "database": database,
+    "database_owner_release_id": database_owner_release_id,
+    "predeploy_env_sha256": predeploy_env_sha256,
+    "active_manifest_sha256": active_manifest_sha256,
+    "pending_migrations": pending,
+    "forward_compatible_migrations": pending,
+    "db_sha256": parts[0],
+    "runtime_state_sha256": hashlib.sha256(runtime_state.read_bytes()).hexdigest(),
+    "pg_restore_list_passed": True,
+    "local_copy_verified": True,
+}
+descriptor = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+parent = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+try:
+    os.fsync(parent)
+finally:
+    os.close(parent)
+print(f"[deploy] verified release-bound prior-clone backup receipt: {receipt}")
+PY
   else
     REMOTE_APP_USER="${REMOTE_APP_USER}" REMOTE_APP_GROUP="${REMOTE_APP_GROUP}" \
       "${SCRIPT_DIR}/backup_prod_vkpi.sh"

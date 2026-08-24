@@ -774,10 +774,10 @@ def prove_active_source(
         database_owner_release_id = str(
             manifest.get("database_owner_release_id") or ""
         )
-        if manifest.get("pending_migrations") not in ([], None) or manifest.get(
-            "forward_compatible_migrations"
-        ) not in ([], None):
-            raise CloneError("active clone-reuse manifest is not app-only")
+        pending = manifest.get("pending_migrations") or []
+        compatible = manifest.get("forward_compatible_migrations") or []
+        if not isinstance(pending, list) or not isinstance(compatible, list) or pending != compatible:
+            raise CloneError("active clone-reuse migrations lack an exact declaration")
     else:
         raise CloneError("active release manifest lost the clone database lineage")
     if (

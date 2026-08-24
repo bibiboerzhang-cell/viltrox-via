@@ -623,10 +623,9 @@ def prepare(args: argparse.Namespace) -> None:
             "staging-clone": "restore-captured-env-to-original-database",
             "reuse-active-clone": "restore-captured-env-on-reused-database",
         }.get(args.database_strategy, "never-automatic"),
+        "schema_retained_on_app_rollback": bool(args.database_strategy == "reuse-active-clone" and args.pending_migrations),
         "pending_migrations": args.pending_migrations.split(",") if args.pending_migrations else [],
-        "forward_compatible_migrations": (
-            args.compatibility_declaration.split(",") if args.compatibility_declaration else []
-        ),
+        "forward_compatible_migrations": args.compatibility_declaration.split(",") if args.compatibility_declaration else [],
         **database_metadata,
     }
     metadata_payload = (json.dumps(metadata, sort_keys=True) + "\n").encode("utf-8")

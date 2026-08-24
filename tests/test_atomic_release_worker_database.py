@@ -311,3 +311,93 @@ def test_app_only_clone_reuse_restore_is_symmetric(tmp_path: Path) -> None:
     assert (root / ".env").read_text(encoding="utf-8") == (
         "APP_GIT_SHA=old\nSECRET=preserved\n"
     )
+
+
+def test_forward_compatible_clone_reuse_retains_schema3_rollback_lineage(
+    tmp_path: Path,
+) -> None:
+    root, unit_dir = _layout(tmp_path)
+    owner_release_id = "release-owner"
+    release_id = "release-forward-migration"
+    database = "viltrox2_test_release_" + hashlib.sha256(
+        owner_release_id.encode("utf-8")
+    ).hexdigest()[:20]
+    fingerprint = hashlib.sha256((root / ".env").read_bytes()).hexdigest()
+    _release(
+        root,
+        owner_release_id,
+        "8" * 40,
+        seal_args=(
+            "--pending-migrations",
+            "295.sql",
+            "--database-strategy",
+            "staging-clone",
+            "--source-database",
+            "viltrox2_test",
+            "--target-database",
+            database,
+            "--env-fingerprint-before",
+            fingerprint,
+        ),
+    )
+    (root / "current").symlink_to(
+        Path("releases") / owner_release_id,
+        target_is_directory=True,
+    )
+    pending = "296.sql,297.sql"
+    release = _release(
+        root,
+        release_id,
+        "9" * 40,
+        seal_args=(
+            "--pending-migrations",
+            pending,
+            "--compatibility-declaration",
+            pending,
+            "--database-strategy",
+            "reuse-active-clone",
+            "--target-database",
+            database,
+            "--env-fingerprint-before",
+            fingerprint,
+            "--database-owner-release-id",
+            owner_release_id,
+        ),
+    )
+    args = [
+        "prepare",
+        "--root",
+        str(root),
+        "--release-id",
+        release_id,
+        "--unit-dir",
+        str(unit_dir),
+        "--pending-migrations",
+        pending,
+        "--compatibility-declaration",
+        pending,
+        "--database-strategy",
+        "reuse-active-clone",
+        "--target-database",
+        database,
+        "--env-fingerprint-before",
+        fingerprint,
+        "--database-owner-release-id",
+        owner_release_id,
+    ]
+    for unit in UNITS:
+        args.extend(("--unit-name", unit))
+    _run(*args)
+
+    manifest = json.loads((release / ".vkpi-release.json").read_text(encoding="utf-8"))
+    rollback = _rollback_metadata(root, release_id)
+    for payload in (manifest, rollback):
+        assert payload["database_strategy"] == "reuse-active-clone"
+        assert payload["database_owner_release_id"] == owner_release_id
+        assert payload["target_database"] == database
+        assert payload["env_fingerprint_before"] == fingerprint
+        assert payload["pending_migrations"] == ["296.sql", "297.sql"]
+        assert payload["forward_compatible_migrations"] == ["296.sql", "297.sql"]
+    assert rollback["schema"] == 3
+    assert rollback["database_rollback"] == "restore-captured-env-on-reused-database"
+    assert rollback["schema_retained_on_app_rollback"] is True

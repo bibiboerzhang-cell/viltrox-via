@@ -126,11 +126,11 @@ def validate_staging_web_root(
         database_owner_release_id = str(
             manifest.get("database_owner_release_id") or ""
         )
-        if manifest.get("pending_migrations") not in ([], None) or manifest.get(
-            "forward_compatible_migrations"
-        ) not in ([], None):
+        pending = manifest.get("pending_migrations") or []
+        compatible = manifest.get("forward_compatible_migrations") or []
+        if not isinstance(pending, list) or not isinstance(compatible, list) or pending != compatible:
             raise StagingWebPreflightError(
-                "clone-reuse staging release must be application-only"
+                "clone-reuse staging migrations lack an exact declaration"
             )
     else:
         raise StagingWebPreflightError(
