@@ -412,6 +412,13 @@ def test_unified_official_gate_blocks_confirmed_accounts_but_not_reviewers(
         "bio": "The official channel. Founded in 1954, we manufacture cinema camera systems.",
     }) == "brand_official"
     assert discovery_filters.discovery_account_gate_verdict({
+        "platform": "tiktok",
+        "handle": "tamron_europe",
+        "display_name": "TAMRON",
+        "profile_url": "https://www.tiktok.com/@tamron_europe",
+        "bio": "Gear | Tips | Creator Inspo. By TAMRON Europe. All our links.",
+    }) == "brand_official"
+    assert discovery_filters.discovery_account_gate_verdict({
         "platform": "youtube",
         "handle": "viltroxreviewer",
         "display_name": "Alex - Viltrox reviewer",
@@ -422,6 +429,20 @@ def test_unified_official_gate_blocks_confirmed_accounts_but_not_reviewers(
         "handle": "alex-films",
         "display_name": "Viltrox",
         "bio": "I'm an independent filmmaker reviewing Viltrox and other lenses.",
+    }) == ""
+    assert discovery_filters.discovery_account_gate_verdict({
+        "platform": "tiktok",
+        "handle": "tamron_europe_review",
+        "display_name": "Alex reviews Tamron Europe",
+        "profile_url": "https://www.tiktok.com/@tamron_europe_review",
+        "bio": "I'm an independent photographer sharing my own Tamron lens reviews.",
+    }) == ""
+    assert discovery_filters.discovery_account_gate_verdict({
+        "platform": "tiktok",
+        "handle": "tamron_europe",
+        "display_name": "TAMRON",
+        "profile_url": "https://www.tiktok.com/@tamron_europe_fan",
+        "bio": "Gear | Tips | Creator Inspo. By TAMRON Europe. All our links.",
     }) == ""
     assert discovery_filters.discovery_account_gate_verdict({
         "platform": "instagram",

@@ -15,6 +15,9 @@ from app.domains.kol.discovery_account_identity import (
     exact_brand_handle_confirmed,
     explicit_official_marker,
 )
+from app.domains.kol.discovery_regional_official import (
+    regional_brand_profile_self_attributed,
+)
 
 
 _EXCLUDED_REGION_RE = re.compile(
@@ -276,11 +279,18 @@ def _competitor_brand_official(
         explicit_official_marker(item.get(field))
         for field in ("handle", "channel_name", "display_name", "username")
     )
-    if not corporate_voice and not identity_has_official:
+    regional_self_attribution_candidate = bool(
+        re.search(r"\bby\s+[a-z0-9]", bio) and re.search(r"\bour\b", bio)
+    )
+    if not corporate_voice and not identity_has_official and not regional_self_attribution_candidate:
         return ""
     for brand, keywords in brands.items():
         if not _brand_identity_hit(item, brand, keywords):
             continue
+        if regional_self_attribution_candidate and regional_brand_profile_self_attributed(
+            item, brand,
+        ):
+            return brand
         # A corporate self-description is independent ownership evidence, so
         # it may corroborate a brand hit from any identity field.
         if corporate_voice:

@@ -63,6 +63,8 @@ FINAL_V1_CHAIN_KEY = "GEMINI_FINAL_V1_MODELS"
 JUDGE_MODEL_KEY = "GEMINI_FINAL_V1_QA_MODEL"
 ACK_KEY = "VKPI_LLM_READINESS_OPERATOR_ACK"
 BUDGET_KEY = "LLM_MONTHLY_BUDGET_USD"
+GEMINI_KEY = "GEMINI_API_KEY"
+GOOGLE_KEY_ALIAS = "GOOGLE_API_KEY"
 # 进程继承的这些键会改变判定,灌文件前先清掉(只清键,不读值)。
 _PURGE_SUFFIXES = ("_MODEL", "_MODELS", "_PROVIDER", "_MODEL_EXACT")
 _PURGE_KEYS = frozenset(
@@ -72,6 +74,8 @@ _PURGE_KEYS = frozenset(
         "LLM_PRIMARY_PROVIDER",
         "VKPI_LLM_GATEWAY_FORCE_OFFLINE",
         BUDGET_KEY,
+        GEMINI_KEY,
+        GOOGLE_KEY_ALIAS,
     }
 )
 
@@ -341,6 +345,49 @@ def _check_budget(values: Mapping[str, str]) -> list[Finding]:
     return [Finding("PASS", "f.monthly_budget", f"{BUDGET_KEY} present and > 0")]
 
 
+def _check_gemini_key_alias(values: Mapping[str, str]) -> list[Finding]:
+    """Require the canonical key consumed by the V-KPI video client.
+
+    ``gemini_client`` passes ``GEMINI_API_KEY`` explicitly to the Google SDK,
+    so an ambient ``GOOGLE_API_KEY`` cannot override that client.  The latter
+    is also a legitimate YouTube Data API fallback elsewhere in V-KPI and may
+    intentionally be a different credential.  Never compare or print the two
+    values; only fail closed when the canonical video key is absent.
+    """
+
+    gemini_key = str(values.get(GEMINI_KEY, "")).strip()
+    google_alias = str(values.get(GOOGLE_KEY_ALIAS, "")).strip()
+    if not gemini_key:
+        return [
+            Finding(
+                "FAIL",
+                "g.gemini_key_alias",
+                (
+                    f"canonical {GEMINI_KEY} is missing; V-KPI video client would be disabled"
+                    + (
+                        f" ({GOOGLE_KEY_ALIAS} is an independent credential and does not satisfy this contract)"
+                        if google_alias
+                        else ""
+                    )
+                ),
+            )
+        ]
+    return [
+        Finding(
+            "PASS",
+            "g.gemini_key_alias",
+            (
+                f"canonical {GEMINI_KEY} configured; explicit video client selection is stable"
+                + (
+                    f" and independent of {GOOGLE_KEY_ALIAS}"
+                    if google_alias
+                    else ""
+                )
+            ),
+        )
+    ]
+
+
 def run_preflight(
     values: Mapping[str, str],
     *,
@@ -358,6 +405,7 @@ def run_preflight(
     findings.extend(_check_final_v1_chain(values, registry))
     findings.extend(_check_forbidden_ids(values))
     findings.extend(_check_budget(values))
+    findings.extend(_check_gemini_key_alias(values))
     return findings
 
 

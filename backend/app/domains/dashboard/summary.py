@@ -8,6 +8,7 @@ from app.domains.dashboard.metric_maturity import (
     normalize_dashboard_scope,
 )
 from app.domains.dashboard.account_picker import build_dashboard_active_roster_counts
+from app.domains.dashboard.summary_roster import build_roster_movers_tabs
 from app.db.connection import get_conn, table_exists
 from app.services.cache.memory_cache import cache_get_or_build
 from app.domains.dashboard.recent_content import _dashboard_official_matrix_summary
@@ -40,7 +41,6 @@ from app.domains.dashboard.summary_rows import (  # noqa: E402,F401
     _as_float,
     _as_int,
     _fetch_dicts,
-    _metric_item,
     _row_dict,
     _row_value,
 )
@@ -127,64 +127,9 @@ def _build_roster_detail(active_roster_by_scope: dict[str, int]) -> dict[str, An
     }
 
     viltrox_evidence = _viltrox_evidence_predicate()
-    views_rows = _fetch_dicts(
-        f"""
-        SELECT p.id AS kol_id, COALESCE(NULLIF(p.display_name, ''), p.handle) AS kol_name,
-               p.handle, p.profile_url, p.platform,
-               COALESCE(e.title, e.video_title, e.content_url) AS title,
-               e.content_url AS url, e.view_count, e.like_count, e.comment_count, e.publish_date
-        FROM vkpi_kol_video_evidence e
-        JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
-        WHERE e.view_count IS NOT NULL
-          AND {viltrox_evidence}
-        ORDER BY e.view_count DESC NULLS LAST
-        LIMIT 10
-        """
-    )
-    # by_activity:按「Viltrox 相关视频数」排名(不用 pool.video_evidence_count,因为它含非 Viltrox 视频)。
-    activity_rows = _fetch_dicts(
-        f"""
-        SELECT p.id AS kol_id, COALESCE(NULLIF(p.display_name, ''), p.handle) AS kol_name,
-               p.handle, p.profile_url, p.platform,
-               COUNT(*) AS value
-        FROM vkpi_kol_video_evidence e
-        JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
-        WHERE {viltrox_evidence}
-        GROUP BY p.id, p.display_name, p.handle, p.profile_url, p.platform
-        ORDER BY COUNT(*) DESC, p.display_name
-        LIMIT 10
-        """
-    )
-    recent_rows = _fetch_dicts(
-        f"""
-        SELECT p.id AS kol_id, COALESCE(NULLIF(p.display_name, ''), p.handle) AS kol_name,
-               p.handle, p.profile_url, p.platform,
-               COALESCE(e.title, e.video_title, e.content_url) AS title,
-               e.content_url AS url, e.view_count, e.like_count, e.comment_count, e.publish_date
-        FROM vkpi_kol_video_evidence e
-        JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
-        WHERE e.view_count IS NOT NULL
-          AND e.publish_date >= NOW() - INTERVAL '30 days'
-          AND {viltrox_evidence}
-        ORDER BY e.view_count DESC NULLS LAST
-        LIMIT 10
-        """
-    )
-    engagement_rows = _fetch_dicts(
-        f"""
-        SELECT p.id AS kol_id, COALESCE(NULLIF(p.display_name, ''), p.handle) AS kol_name,
-               p.handle, p.profile_url, p.platform,
-               COALESCE(e.title, e.video_title, e.content_url) AS title,
-               e.content_url AS url, e.view_count, e.like_count, e.comment_count, e.publish_date,
-               COALESCE(e.like_count, 0) + COALESCE(e.comment_count, 0) AS engagement_count
-        FROM vkpi_kol_video_evidence e
-        JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
-        WHERE (e.like_count IS NOT NULL OR e.comment_count IS NOT NULL)
-          AND {viltrox_evidence}
-        ORDER BY COALESCE(e.like_count, 0) + COALESCE(e.comment_count, 0) DESC
-        LIMIT 10
-        """
-    )
+    # 四个 movers tab 共用同一份 Viltrox evidence 基集。Postgres 路径一次物化
+    # 扫描生成全部 tab;SQLite 保留原串行 SQL 契约。
+    movers_tabs = build_roster_movers_tabs(viltrox_evidence)
 
     company_trend_rows = _fetch_dicts(
         """
@@ -222,22 +167,7 @@ def _build_roster_detail(active_roster_by_scope: dict[str, int]) -> dict[str, An
         "partnership_4tier": partnership_4tier,
         "partnership_4tier_pct": partnership_4tier_pct,
         "by_platform": by_platform,
-        "movers_tabs": {
-            "by_views": [_metric_item(row, "view_count") for row in views_rows],
-            "by_activity": [
-                {
-                    "kol_id": _as_int(row.get("kol_id")),
-                    "kol_name": row.get("kol_name"),
-                    "handle": row.get("handle"),
-                    "profile_url": row.get("profile_url"),
-                    "platform": row.get("platform"),
-                    "value": _as_int(row.get("value")),
-                }
-                for row in activity_rows
-            ],
-            "by_recent": [_metric_item(row, "view_count") for row in recent_rows],
-            "by_engagement": [_metric_item(row, "engagement_count") for row in engagement_rows],
-        },
+        "movers_tabs": movers_tabs,
         "trend": {
             "all": {"status": "accumulating", "snapshot_days": 7, "required_days": 30},
             "kol": {"status": "accumulating", "snapshot_days": 7, "required_days": 30},
@@ -354,6 +284,20 @@ def _build_evidence_metrics_summary(*, window_days: int = 30, staff_scope_id: in
                     ELSE 0
                 END
             ), 0) AS total_engagement,
+            COUNT(*) FILTER (
+                WHERE published_at_norm >= NOW() - INTERVAL '{int(window_days)} days'
+            ) AS window_evidence_count,
+            COALESCE(SUM(COALESCE(view_count, 0)) FILTER (
+                WHERE published_at_norm >= NOW() - INTERVAL '{int(window_days)} days'
+            ), 0) AS window_total_views,
+            COALESCE(SUM(
+                CASE
+                    WHEN view_count IS NOT NULL THEN COALESCE(like_count, 0) + COALESCE(comment_count, 0)
+                    ELSE 0
+                END
+            ) FILTER (
+                WHERE published_at_norm >= NOW() - INTERVAL '{int(window_days)} days'
+            ), 0) AS window_total_engagement,
             MAX(metrics_scraped_at) AS last_refreshed_at
         FROM vkpi_kol_video_evidence
         {evidence_where}
@@ -367,28 +311,11 @@ def _build_evidence_metrics_summary(*, window_days: int = 30, staff_scope_id: in
     view_coverage_pct = (view_covered / evidence_total) if evidence_total > 0 else 0.0
     # 2026-07-18 体检修:total_views 是生涯累计,此前被前端当 30d 口径展示
     # (2.17B 冒充月增量)。补真 30d 窗口(按视频发布时间 published_at_norm),
-    # 前端 all 口径改吃这里;生涯字段保留兼容旧读方。
-    window_where = (
-        f"{evidence_where} AND " if evidence_where else "WHERE "
-    ) + f"published_at_norm >= NOW() - INTERVAL '{int(window_days)} days'"
-    window_row = get_conn().execute(
-        f"""
-        SELECT
-            COUNT(*) AS evidence_count,
-            COALESCE(SUM(COALESCE(view_count, 0)), 0) AS total_views,
-            COALESCE(SUM(
-                CASE
-                    WHEN view_count IS NOT NULL THEN COALESCE(like_count, 0) + COALESCE(comment_count, 0)
-                    ELSE 0
-                END
-            ), 0) AS total_engagement
-        FROM vkpi_kol_video_evidence
-        {window_where}
-        """
-    ).fetchone()
-    window_views = _as_int(_row_value(window_row, "total_views"))
-    window_engagement = _as_int(_row_value(window_row, "total_engagement"))
-    window_count = _as_int(_row_value(window_row, "evidence_count"))
+    # 前端 all 口径改吃这里;生涯字段保留兼容旧读方。生涯与窗口聚合合并在
+    # 同一次 evidence 扫描,避免冷请求再付一次连接往返与全表扫描。
+    window_views = _as_int(_row_value(row, "window_total_views"))
+    window_engagement = _as_int(_row_value(row, "window_total_engagement"))
+    window_count = _as_int(_row_value(row, "window_evidence_count"))
     return {
         "active_roster_by_scope": active_roster_by_scope,
         "active_30d_by_scope": _build_evidence_active_30d_summary(window_days=window_days, staff_scope_id=staff_scope_id),

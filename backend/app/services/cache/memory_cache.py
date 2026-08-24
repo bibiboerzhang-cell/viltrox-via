@@ -364,6 +364,7 @@ def cache_get_or_build(
     ttl: int = REDIS_CACHE_DEFAULT_TTL_SEC,
     *,
     cache_if: Callable[[Any], bool] | None = None,
+    observe: Callable[[dict[str, Any]], None] | None = None,
 ) -> Any:
     """Return a cached value or collapse concurrent cold builds.
 
@@ -373,11 +374,59 @@ def cache_get_or_build(
     workers as well.  Redis/lock failure falls back to one build per process.
     """
 
+    started_at = time.perf_counter()
+
+    def _observe(
+        outcome: str,
+        *,
+        builder_ms: float | None = None,
+        cache_candidate: bool | None = None,
+    ) -> None:
+        if observe is None:
+            return
+        payload = {
+            "outcome": outcome,
+            "elapsed_ms": round((time.perf_counter() - started_at) * 1000, 3),
+            "builder_ms": round(builder_ms, 3) if builder_ms is not None else None,
+            "cache_candidate": cache_candidate,
+        }
+        try:
+            observe(payload)
+        except Exception:
+            # Telemetry must never turn a healthy read into an endpoint error.
+            logger.warning("cache.get_or_build_observer_failed", exc_info=True)
+
+    def _build(*, outcome: str, allow_cache_write: bool) -> Any:
+        builder_started_at = time.perf_counter()
+        try:
+            value = builder()
+            candidate = (
+                bool(cache_if(value))
+                if allow_cache_write and cache_if is not None
+                else allow_cache_write
+            )
+            if allow_cache_write and candidate:
+                cache_set(key, value, ttl=ttl)
+        except Exception:
+            _observe(
+                "builder_error",
+                builder_ms=(time.perf_counter() - builder_started_at) * 1000,
+                cache_candidate=False,
+            )
+            raise
+        _observe(
+            outcome,
+            builder_ms=(time.perf_counter() - builder_started_at) * 1000,
+            cache_candidate=candidate if allow_cache_write else None,
+        )
+        return value
+
     cached_value = cache_get(key)
     if cached_value is not None:
+        _observe("hit")
         return cached_value
     if _cache_mutations_fenced():
-        return builder()
+        return _build(outcome="fenced_builder", allow_cache_write=False)
 
     with _build_locks_guard:
         build_lock = _build_locks.get(key)
@@ -388,24 +437,23 @@ def cache_get_or_build(
     with build_lock:
         cached_value = cache_get(key)
         if cached_value is not None:
+            _observe("miss_wait_hit")
             return cached_value
         if _cache_mutations_fenced():
-            return builder()
+            return _build(outcome="fenced_builder", allow_cache_write=False)
         with _distributed_build_lock(key):
             if _cache_mutations_fenced():
-                return builder()
+                return _build(outcome="fenced_builder", allow_cache_write=False)
             # A different process may have populated Redis while this worker
             # waited for the distributed lock.
             cached_value = cache_get(key)
             if cached_value is not None:
+                _observe("miss_distributed_hit")
                 return cached_value
-            value = builder()
             # Read aggregators may return an honest 200 error/degraded payload
             # instead of raising.  Callers can keep that fail-soft contract
             # without pinning the failure for the full TTL.
-            if cache_if is None or bool(cache_if(value)):
-                cache_set(key, value, ttl=ttl)
-            return value
+            return _build(outcome="miss_builder", allow_cache_write=True)
 
 
 async def cache_set_async(key: str, value: Any, ttl: int = REDIS_CACHE_DEFAULT_TTL_SEC) -> None:

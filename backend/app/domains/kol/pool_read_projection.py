@@ -8,9 +8,8 @@ profile avatars.
 """
 from __future__ import annotations
 
-import json
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -30,14 +29,16 @@ from app.domains.kol.pool_read_avatar_hydration import (
     profile_avatar_document_expression,
     profile_avatar_value_expression,
 )
+from app.domains.kol.pool_read_identity_evidence import (
+    _CREATOR_ITEM_TYPES,
+    _component_native_ids,
+    _json_obj,
+    _manual_bridge_conflict_ids,
+    _shared_explicit_profile_aliases,
+    _union_components,
+)
 
 
-_CREATOR_ITEM_TYPES = {
-    "existing_kol",
-    "new_creator",
-    "online_qualified_candidate",
-    "recall_candidate",
-}
 _PROFILE_OBJECT_KEYS = (
     "profile",
     "channel",
@@ -71,31 +72,9 @@ _CACHE_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
 _CONTENT_THUMBNAIL_HOSTS = ("ytimg.com", "img.youtube.com")
 
 
-def _json_obj(value: Any) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return dict(value)
-    if not isinstance(value, (str, bytes)) or not value:
-        return {}
-    try:
-        parsed = json.loads(value)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
 def _pool_probe(row: dict[str, Any]) -> dict[str, Any]:
     raw = _json_obj(row.get("raw_platform_data"))
     return {**raw, **row, "raw_platform_data": raw}
-
-
-def _session_probe(item: dict[str, Any]) -> dict[str, Any]:
-    payload = _json_obj(item.get("payload") or item.get("payload_json"))
-    return {
-        **payload,
-        "kol_pool_id": item.get("kol_pool_id") or payload.get("kol_pool_id"),
-        "profile_url": payload.get("profile_url") or item.get("source_url"),
-        "source_url": item.get("source_url") or payload.get("source_url"),
-    }
 
 
 def _local_cached_avatar(value: Any) -> bool:
@@ -252,83 +231,6 @@ def project_pool_avatar(
     }
 
 
-def _union_components(
-    rows: list[dict[str, Any]],
-    aliases_by_id: dict[int, set[str]],
-) -> list[list[dict[str, Any]]]:
-    parents = {int(row["id"]): int(row["id"]) for row in rows}
-
-    def find(value: int) -> int:
-        while parents[value] != value:
-            parents[value] = parents[parents[value]]
-            value = parents[value]
-        return value
-
-    def union(left: int, right: int) -> None:
-        left_root, right_root = find(left), find(right)
-        if left_root != right_root:
-            parents[max(left_root, right_root)] = min(left_root, right_root)
-
-    owner: dict[str, int] = {}
-    for pool_id in sorted(aliases_by_id):
-        for alias in sorted(aliases_by_id[pool_id]):
-            if alias in owner:
-                union(pool_id, owner[alias])
-            else:
-                owner[alias] = pool_id
-    grouped: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    for row in rows:
-        grouped[find(int(row["id"]))].append(row)
-    return list(grouped.values())
-
-
-def _manual_bridge_conflict_ids(
-    rows: list[dict[str, Any]],
-    aliases_by_id: dict[int, set[str]],
-    session_items: list[dict[str, Any]],
-) -> set[int]:
-    observed_owner: dict[str, set[int]] = defaultdict(set)
-    for pool_id, aliases in aliases_by_id.items():
-        for alias in aliases:
-            observed_owner[alias].add(pool_id)
-    evidence: dict[int, dict[str, set[str]]] = defaultdict(
-        lambda: {"ids": set(), "handles": set()}
-    )
-    reverse_bridge_owner: dict[str, set[int]] = defaultdict(set)
-    active_ids = set(aliases_by_id)
-    for item in session_items:
-        if str(item.get("item_type") or "") not in _CREATOR_ITEM_TYPES:
-            continue
-        probe = _session_probe(item)
-        try:
-            pool_id = int(probe.get("kol_pool_id") or 0)
-        except (TypeError, ValueError):
-            continue
-        if pool_id not in active_ids:
-            continue
-        aliases = canonical_creator_aliases(probe)
-        ids = {alias for alias in aliases if alias.startswith("youtube:id:")}
-        handles = {alias for alias in aliases if alias.startswith("youtube:handle:")}
-        if not ids or not handles:
-            continue
-        evidence[pool_id]["ids"].update(ids)
-        evidence[pool_id]["handles"].update(handles)
-        for alias in ids | handles:
-            reverse_bridge_owner[alias].add(pool_id)
-
-    conflicts: set[int] = set()
-    for pool_id, aliases in evidence.items():
-        combined = aliases["ids"] | aliases["handles"]
-        if len(aliases["ids"]) != 1 or len(aliases["handles"]) != 1:
-            conflicts.add(pool_id)
-        for alias in combined:
-            other_pool_ids = observed_owner.get(alias, set()) - {pool_id}
-            other_bridge_ids = reverse_bridge_owner.get(alias, set()) - {pool_id}
-            if other_pool_ids or other_bridge_ids:
-                conflicts.update({pool_id, *other_pool_ids, *other_bridge_ids})
-    return conflicts
-
-
 def _top_level_handle_aliases(row: dict[str, Any]) -> set[str]:
     return canonical_creator_aliases(
         {"platform": row.get("platform"), "handle": row.get("handle")}
@@ -450,16 +352,33 @@ def build_pool_read_selection(
     folded_groups = 0
     for group in components:
         ids = sorted(int(row["id"]) for row in group)
+        id_set = set(ids)
         frequency: Counter[str] = Counter(
             alias for pool_id in ids for alias in aliases_by_id.get(pool_id, set())
         )
         shared_aliases = {alias for alias, count in frequency.items() if count > 1}
-        native_ids = {
-            alias for pool_id in ids for alias in aliases_by_id.get(pool_id, set())
-            if ":id:" in alias
-        }
+        native_ids = _component_native_ids(
+            id_set,
+            aliases_by_id,
+            relevant_session_items,
+        )
+        # A legacy bad handle and its corrected row may both own one observed
+        # YouTube handle, making the bridge look conflicting even though every
+        # row points at the same explicit platform profile.  Override that
+        # conservative conflict only when bridge evidence is available, the
+        # exact profile URL alias is shared by every row, and at most one native
+        # account id exists across Pool plus session evidence.
+        strong_profile_evidence = bool(
+            bridge_evidence_available
+            and _shared_explicit_profile_aliases(group)
+            and len(native_ids) <= 1
+        )
         conflict = len(group) > 1 and (
-            bool(set(ids).intersection(bridge_conflicts)) or len(native_ids) > 1
+            len(native_ids) > 1
+            or (
+                bool(id_set.intersection(bridge_conflicts))
+                and not strong_profile_evidence
+            )
         )
         if len(group) == 1:
             representative_id = ids[0]

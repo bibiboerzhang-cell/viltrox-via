@@ -98,6 +98,7 @@ def test_happy_path_passes(tmp_path: Path) -> None:
     assert _findings(payload, "b.video_model_contract", "PASS")
     assert _findings(payload, "c.readiness_ack", "PASS")
     assert _findings(payload, "e.forbidden_runtime_models", "PASS")
+    assert _findings(payload, "g.gemini_key_alias", "PASS")
     assert "GEMINI_API_KEY" in payload["keys_seen"]
 
 
@@ -170,3 +171,44 @@ def test_extra_env_file_layers_the_ack(tmp_path: Path) -> None:
     rc_with, payload_with = _run(base, "--extra-env-file", str(operator))
     assert rc_with == 0, payload_with["findings"]
     assert payload_with["extra_env_files"] == [str(operator)]
+
+
+def test_equal_gemini_key_aliases_pass_without_exposing_values(tmp_path: Path) -> None:
+    values = _happy_env()
+    values["GEMINI_API_KEY"] = "same-secret-must-not-leak"
+    values["GOOGLE_API_KEY"] = "same-secret-must-not-leak"
+    rc, payload = _run(_write_env(tmp_path, values))
+    assert rc == 0, payload["findings"]
+    assert _findings(payload, "g.gemini_key_alias", "PASS")
+    assert "same-secret-must-not-leak" not in json.dumps(payload)
+
+
+def test_divergent_google_credential_does_not_override_canonical_gemini_key(tmp_path: Path) -> None:
+    values = _happy_env()
+    values["GEMINI_API_KEY"] = "canonical-secret-must-not-leak"
+    values["GOOGLE_API_KEY"] = "different-secret-must-not-leak"
+    rc, payload = _run(_write_env(tmp_path, values))
+    assert rc == 0, payload["findings"]
+    assert _findings(payload, "g.gemini_key_alias", "PASS")
+    rendered = json.dumps(payload)
+    assert "canonical-secret-must-not-leak" not in rendered
+    assert "different-secret-must-not-leak" not in rendered
+
+
+def test_google_alias_without_canonical_gemini_key_fails(tmp_path: Path) -> None:
+    values = _happy_env()
+    values.pop("GEMINI_API_KEY")
+    values["GOOGLE_API_KEY"] = "legacy-secret-must-not-leak"
+    rc, payload = _run(_write_env(tmp_path, values))
+    assert rc == 1
+    assert _findings(payload, "g.gemini_key_alias", "FAIL")
+    assert "legacy-secret-must-not-leak" not in json.dumps(payload)
+
+
+def test_missing_all_gemini_credentials_fails_closed(tmp_path: Path) -> None:
+    values = _happy_env()
+    values.pop("GEMINI_API_KEY")
+    values.pop("GOOGLE_API_KEY", None)
+    rc, payload = _run(_write_env(tmp_path, values))
+    assert rc == 1
+    assert _findings(payload, "g.gemini_key_alias", "FAIL")

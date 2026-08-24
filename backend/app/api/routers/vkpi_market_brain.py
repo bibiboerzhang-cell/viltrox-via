@@ -15,12 +15,16 @@ from __future__ import annotations
 import hashlib
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.api.dependencies.perms import require_tab
 from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
 from app.core.logging import get_logger
-from app.domains.market_brain.read_cache import cacheable_payload, freshness_version
+from app.domains.market_brain.read_cache import (
+    cache_contract_version,
+    cacheable_payload,
+    gtm_cache_observer,
+)
 from app.services.cache import cache_get_or_build
 
 logger = get_logger(__name__)
@@ -108,9 +112,9 @@ def _preview_cache_key(
     auth_digest = hashlib.sha256(
         json.dumps(authorization, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:24]
-    data_version = freshness_version(METHOD, ttl_seconds=_GTM_READ_CACHE_TTL_SEC)
+    data_version = cache_contract_version(METHOD)
     return (
-        f"vkpi_gtm:plan_preview:v3:data:{data_version}:"
+        f"vkpi_gtm:plan_preview:{data_version}:"
         f"org:{_organization_id_for_cache(staff)}:"
         f"auth:{auth_digest}:{digest}"
     )
@@ -124,6 +128,7 @@ def get_gtm_plan_preview(
     goal: str = Query("exposure", description="exposure|conversion|content|channel"),
     window_days: int = Query(30, ge=7, le=90, description="预判窗口天数,默认 30"),
     staff=Depends(require_tab("vkpi", "read")),
+    response: Response = None,
 ) -> dict:
     """GTM Plan 纯读预览:11 段建议 + meta(零写库零 LLM 零采集,同输入同输出)。"""
     from app.domains.market_brain import gtm_plan_preview
@@ -166,6 +171,7 @@ def get_gtm_plan_preview(
             ),
             ttl=_GTM_READ_CACHE_TTL_SEC,
             cache_if=cacheable_payload,
+            observe=gtm_cache_observer("plan_preview", response=response),
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

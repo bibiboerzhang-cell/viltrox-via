@@ -127,47 +127,6 @@ def _luke_bridge() -> list[dict[str, Any]]:
     ]
 
 
-def test_cloud_seven_groups_fold_six_and_keep_luke_fail_closed() -> None:
-    reviewer = _row(
-        6001,
-        "alex-films",
-        "https://youtube.com/@alex-films",
-        "Viltrox",
-        bio="I'm an independent filmmaker reviewing Viltrox and other lenses.",
-    )
-    selection = build_pool_read_selection(
-        [*_cloud_duplicate_rows(), *_cloud_official_rows(), reviewer],
-        session_items=_luke_bridge(),
-        bridge_evidence_available=True,
-    )
-
-    assert selection.folded_ids == frozenset({3533, 3571, 4946, 4948, 4950, 4952})
-    assert {3505, 4062}.issubset(selection.visible_ids)
-    assert selection.official_ids == frozenset({4561, 4581})
-    assert {1534, 4515}.issubset(selection.visible_ids)
-    assert 6001 in selection.visible_ids
-    assert selection.canonical_by_id[3533] == 3971
-    assert selection.canonical_by_id[3571] == 3572
-    assert selection.canonical_by_id[4946] == 4997
-    assert selection.audit_by_id[3505]["canonical_identity_status"] == "manual_review_conflict"
-    assert selection.audit_by_id[4062]["canonical_folded_count"] == 0
-    assert selection.diagnostics == {
-        "method": "canonical_pool_read_projection_v1",
-        "physical_master_rows": 19,
-        "visible_rows": 11,
-        "canonical_folded_groups": 6,
-        "canonical_folded_rows": 6,
-        "canonical_manual_review_groups": 1,
-        "excluded_confirmed_official": 2,
-        "official_verdict_counts": {"own_brand": 2},
-        "bridge_evidence_available": True,
-        "history_rows_deleted": 0,
-        "pool_rows_deleted": 0,
-        "duplicate_pointer_rows_written": 0,
-        "writes_performed": 0,
-    }
-
-
 def test_cloud_real_ambiguous_brand_rows_fail_open() -> None:
     selection = build_pool_read_selection(
         _cloud_official_rows(),
@@ -183,6 +142,39 @@ def test_cloud_real_ambiguous_brand_rows_fail_open() -> None:
     } == {"unique"}
     assert selection.diagnostics["excluded_confirmed_official"] == 2
     assert selection.diagnostics["official_verdict_counts"] == {"own_brand": 2}
+
+
+def test_cloud_real_tamron_europe_self_attribution_is_hidden_conservatively() -> None:
+    tamron_official = _row(
+        4791,
+        "tamron_europe",
+        "https://www.tiktok.com/@tamron_europe",
+        "TAMRON",
+        platform="tiktok",
+        bio=(
+            "Gear | Tips | Creator Inspo #withmytamron\n"
+            "By TAMRON Europe\n"
+            "All our links"
+        ),
+    )
+    independent_reviewer = _row(
+        4792,
+        "tamron_europe_review",
+        "https://www.tiktok.com/@tamron_europe_review",
+        "Alex reviews Tamron Europe",
+        platform="tiktok",
+        bio="I'm an independent photographer sharing my own Tamron lens reviews.",
+    )
+
+    selection = build_pool_read_selection(
+        [tamron_official, independent_reviewer],
+        session_items=[],
+        bridge_evidence_available=True,
+    )
+
+    assert selection.official_ids == frozenset({4791})
+    assert selection.visible_ids == frozenset({4792})
+    assert selection.diagnostics["official_verdict_counts"] == {"brand_official": 1}
 
 
 def test_missing_bridge_evidence_keeps_every_overlap_for_manual_review() -> None:
@@ -441,11 +433,13 @@ def test_pool_list_uses_projection_without_mutating_rows(monkeypatch: pytest.Mon
     result = pool.list_pool(limit=50, sort_by="followers")
 
     assert {int(item["id"]) for item in result["items"]} == {
-        1534, 3505, 3572, 3971, 4062, 4515, 4971, 4974, 4987, 4997,
+        1534, 3572, 3971, 4062, 4515, 4971, 4974, 4987, 4997,
     }
-    assert result["projection"]["canonical_folded_rows"] == 6
-    assert result["projection"]["canonical_manual_review_groups"] == 1
+    assert result["projection"]["canonical_folded_rows"] == 7
+    assert result["projection"]["canonical_manual_review_groups"] == 0
     assert result["projection"]["excluded_confirmed_official"] == 2
+    luke = next(item for item in result["items"] if int(item["id"]) == 4062)
+    assert luke["canonical_duplicate_ids"] == [3505]
     eren = next(item for item in result["items"] if int(item["id"]) == 3971)
     assert eren["canonical_duplicate_ids"] == [3533]
     assert eren["avatar_url_status"] == "missing"
@@ -473,11 +467,11 @@ def test_workspace_counts_and_paginates_after_global_projection(monkeypatch: pyt
     result = pool.workspace(limit=1, query="Luke")
     all_result = pool.workspace(limit=1)
 
-    assert result["counts"]["filtered"] == 2
+    assert result["counts"]["filtered"] == 1
     assert result["counts"]["returned"] == 1
-    assert result["counts"]["has_more"] is True
-    assert result["list"]["has_more"] is True
-    assert all_result["counts"]["filtered"] == 10
+    assert result["counts"]["has_more"] is False
+    assert result["list"]["has_more"] is False
+    assert all_result["counts"]["filtered"] == 9
     assert all_result["counts"]["returned"] == 1
     assert all_result["counts"]["has_more"] is True
 
@@ -527,7 +521,7 @@ def test_data_status_uses_projected_avatar_health(monkeypatch: pytest.MonkeyPatc
 
     assert [int(item["id"]) for item in complete["list"]["items"]] == [3572]
     assert 3971 in {int(item["id"]) for item in missing["list"]["items"]}
-    assert complete["counts"]["by_data_status"] == {"complete": 1, "missing": 9}
+    assert complete["counts"]["by_data_status"] == {"complete": 1, "missing": 8}
 
 
 def test_summary_uses_the_same_employee_visible_projection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -539,14 +533,14 @@ def test_summary_uses_the_same_employee_visible_projection(monkeypatch: pytest.M
 
     result = pool.summary()
 
-    assert result["total"] == 10
-    assert result["candidate_asset_count"] == 10
+    assert result["total"] == 9
+    assert result["candidate_asset_count"] == 9
     assert result["by_platform"] == [
-        {"platform": "youtube", "n": 9},
+        {"platform": "youtube", "n": 8},
         {"platform": "media", "n": 1},
     ]
     assert result["read_projection"]["physical_master_rows"] == 18
-    assert result["read_projection"]["canonical_folded_rows"] == 6
+    assert result["read_projection"]["canonical_folded_rows"] == 7
     assert result["read_projection"]["excluded_confirmed_official"] == 2
 
 

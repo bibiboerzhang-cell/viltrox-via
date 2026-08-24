@@ -19,12 +19,16 @@ from __future__ import annotations
 import hashlib
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
-from app.domains.market_brain.read_cache import cacheable_payload, freshness_version
+from app.domains.market_brain.read_cache import (
+    cache_contract_version,
+    cacheable_payload,
+    gtm_cache_observer,
+)
 from app.services.cache import cache_get_or_build
 
 logger = get_logger(__name__)
@@ -49,7 +53,7 @@ def _summary_cache_key(staff: dict | None) -> str:
     from app.domains.market_brain.summary import METHOD
 
     organization_id = _organization_id_for_cache(staff)
-    data_version = freshness_version(METHOD, ttl_seconds=_GTM_READ_CACHE_TTL_SEC)
+    data_version = cache_contract_version(METHOD)
     authorization = [
         max(0, int(scope.actor_staff_id(staff))),
         scope.role_key(staff),
@@ -60,7 +64,7 @@ def _summary_cache_key(staff: dict | None) -> str:
         json.dumps(authorization, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:24]
     return (
-        f"vkpi_gtm:summary:v3:data:{data_version}:"
+        f"vkpi_gtm:summary:{data_version}:"
         f"org:{organization_id}:auth:{auth_digest}"
     )
 
@@ -68,6 +72,7 @@ def _summary_cache_key(staff: dict | None) -> str:
 @router.get("/market-brain/summary")
 def get_market_brain_summary(
     staff=Depends(require_tab("vkpi", "read")),
+    response: Response = None,
 ) -> dict:
     """GTM 总脑页五卡数据,前端一次请求(全只读,不写库)。"""
     from app.domains.market_brain import summary
@@ -81,6 +86,7 @@ def get_market_brain_summary(
             lambda: summary.build_summary(staff),
             ttl=_GTM_READ_CACHE_TTL_SEC,
             cache_if=cacheable_payload,
+            observe=gtm_cache_observer("summary", response=response),
         )
     except Exception as exc:  # noqa: BLE001 — 聚合失败不炸接口,诚实回原因
         logger.warning("market_brain summary failed: %s", exc, exc_info=True)

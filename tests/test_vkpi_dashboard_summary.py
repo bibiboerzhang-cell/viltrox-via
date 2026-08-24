@@ -160,3 +160,106 @@ def test_nested_dashboard_cache_is_tenant_partitioned_and_unknown_bypasses(monke
     assert (first, same, other) == ({"value": 1}, {"value": 1}, {"value": 2})
     assert (unknown_a, unknown_b) == ({"value": 3}, {"value": 4})
     assert len(stored) == 2
+
+
+def test_uncached_dashboard_assembles_reads_serially_with_contract_unchanged(monkeypatch):
+    calls = []
+    monkeypatch.setattr(dashboard_summary.scope, "effective_staff_id", lambda _staff, _requested: None)
+    monkeypatch.setattr(dashboard_summary, "resolve_staff_id", lambda _staff: 7)
+    monkeypatch.setattr(
+        dashboard_summary,
+        "build_dashboard_active_roster_counts",
+        lambda **_kwargs: calls.append("active_roster")
+        or {"all": 3, "kol": 2, "media": 0, "company": 1},
+    )
+    monkeypatch.setattr(
+        dashboard_summary.decision_engine,
+        "dashboard",
+        lambda **_kwargs: calls.append("decision")
+        or {"summary": {"metric_series_by_scope": {}}},
+    )
+    monkeypatch.setattr(
+        dashboard_summary.metric_lineage,
+        "dashboard_metrics",
+        lambda **_kwargs: calls.append("lineage")
+        or {"run": {}, "metrics": []},
+    )
+    monkeypatch.setattr(
+        dashboard_summary,
+        "dashboard_metric_maturity_contract",
+        lambda: calls.append("maturity") or {
+            "scopes": {
+                "all": {
+                    "scope_label": "all",
+                    "snapshot_days": 0,
+                    "required_days": 30,
+                    "maturity_label": "pending",
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(
+        dashboard_summary,
+        "dashboard_window_metrics_contract",
+        lambda _contract: calls.append("window_metrics") or {
+            "exposure_30d_by_scope": {},
+            "engagement_rate_by_scope": {},
+            "active_30d_by_scope": {},
+        },
+    )
+    monkeypatch.setattr(
+        dashboard_summary,
+        "_dashboard_official_matrix_summary",
+        lambda **_kwargs: calls.append("official_summary") or {},
+    )
+    monkeypatch.setattr(
+        dashboard_summary,
+        "_build_evidence_metrics_summary",
+        lambda **_kwargs: calls.append("evidence_metrics")
+        or {"coverage": {"last_refreshed_at": "2026-08-24T00:00:00Z"}},
+    )
+    monkeypatch.setattr(
+        dashboard_summary,
+        "_build_active_campaigns_summary",
+        lambda **_kwargs: calls.append("active_campaigns") or {"active_count": 1},
+    )
+    monkeypatch.setattr(
+        dashboard_summary,
+        "_build_funnel_summary",
+        lambda **_kwargs: calls.append("funnel") or {"favorites_total": 3},
+    )
+    monkeypatch.setattr(
+        dashboard_summary,
+        "_build_company_window_metrics",
+        lambda: calls.append("company_window") or {},
+    )
+    monkeypatch.setattr(
+        dashboard_summary,
+        "_build_company_metric_series",
+        lambda **_kwargs: calls.append("company_series") or {"status": "real"},
+    )
+
+    result = dashboard_summary._build_dashboard_summary_uncached(
+        window_days=30,
+        metric_scope="all",
+        staff={"id": 7, "role": "owner", "organization_id": 1},
+    )
+
+    assert calls == [
+        "decision",
+        "lineage",
+        "maturity",
+        "window_metrics",
+        "official_summary",
+        "active_roster",
+        "evidence_metrics",
+        "active_campaigns",
+        "funnel",
+        "company_window",
+        "company_series",
+    ]
+    assert result["summary"]["active_roster"] == 3
+    assert result["summary"]["evidence_metrics"]["coverage"]["last_refreshed_at"] == "2026-08-24T00:00:00Z"
+    assert result["summary"]["active_campaigns"] == {"active_count": 1}
+    assert result["summary"]["funnel"] == {"favorites_total": 3}
+    assert result["summary"]["metric_series_by_scope"]["company"] == {"status": "real"}
