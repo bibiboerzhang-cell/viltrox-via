@@ -60,6 +60,86 @@ def test_explicit_vintage_z1_model_remains_resolvable(monkeypatch: pytest.Monkey
     assert resolved["sku"] == "VINTAGE-Z1-PRO"
 
 
+# Real vkpi_products rows (prod clone, 2026-08-24) around the Z1 / DC-550 families.
+_Z1_AND_DC550_ROWS: list[dict[str, Any]] = [
+    {
+        "sku": "VINTAGE-Z1-PRO-TTL-RETRO-ON-CAMERA-FLASH",
+        "model_name": "Viltrox Vintage Z1 Pro TTL Retro On-Camera Flash",
+        "marketing_name": "Vintage Z1 Pro TTL Retro On-Camera Flash",
+        "series": "Pro",
+        "category_main": "Lighting",
+    },
+    {
+        "sku": "VINTAGE-Z1-RETRO-ON-CAMERA-FLASH",
+        "model_name": "Viltrox Vintage Z1 Retro On-Camera Flash",
+        "marketing_name": "Vintage Z1 Retro On-Camera Flash",
+        "series": "",
+        "category_main": "Lighting",
+    },
+    {"sku": "VL-LIT073", "model_name": "Vintage Z1+", "marketing_name": "", "series": "", "category_main": "Lighting/Flash"},
+    {"sku": "VL-LIT092", "model_name": "Vintage Z1 PRO-N", "marketing_name": "", "series": "", "category_main": "Lighting/Flash"},
+    {"sku": "VL-LIT093", "model_name": "Vintage Z1 PRO-F", "marketing_name": "", "series": "", "category_main": "Lighting/Flash"},
+    {"sku": "VL-LIT094", "model_name": "Vintage Z1 PRO-C", "marketing_name": "", "series": "", "category_main": "Lighting/Flash"},
+    {"sku": "VL-LIT095", "model_name": "Vintage Z1 PRO-S", "marketing_name": "", "series": "", "category_main": "Lighting/Flash"},
+    {
+        "sku": "DC-550-PRO-LL-PORTABLE-5-5-INCH-HD-CAMERA-MONITOR",
+        "model_name": "Viltrox DC-550 Pro ll Portable 5.5 Inch HD Camera Monitor",
+        "marketing_name": "DC-550 Pro ll Portable 5.5 Inch HD Camera Monitor",
+        "series": "Pro",
+        "category_main": "Monitor",
+    },
+    {"sku": "VL-MON003", "model_name": "DC-550", "marketing_name": "", "series": "", "category_main": "Monitor"},
+    {"sku": "VL-MON005", "model_name": "DC-550 PRO", "marketing_name": "", "series": "", "category_main": "Monitor"},
+    {"sku": "VL-MON016", "model_name": "DC-550 PRO II", "marketing_name": "", "series": "", "category_main": "Monitor"},
+]
+
+
+@pytest.mark.parametrize("query", ["Z1 pro", "z1pro", "Z1 pro的一些不同行业的用户比如赛车,厨师餐饮等"])
+def test_compact_z1_pro_query_resolves_the_pro_flash(
+    monkeypatch: pytest.MonkeyPatch, query: str
+) -> None:
+    # 2026-08-24 R2:单字母型号 + pro("z1 pro")必须让 pro 进评分词,否则 Z1 Pro 与
+    # Z1 打平 → fail-closed None → 整条中文 query 死在澄清墙。
+    monkeypatch.setattr(
+        product_resolver, "list_product_catalog", lambda **_kwargs: {"products": _Z1_AND_DC550_ROWS}
+    )
+    resolved = product_resolver.resolve_product(query)
+    assert resolved is not None
+    assert resolved["sku"] == "VINTAGE-Z1-PRO-TTL-RETRO-ON-CAMERA-FLASH"
+
+
+def test_bare_z1_still_resolves_the_base_model_not_the_pro(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # (strong, matched) 平手时的 series 长度 tiebreak 取最短 = 基础款:query 没写
+    # "pro" 就绝不凭空升成 Pro 款。
+    monkeypatch.setattr(
+        product_resolver, "list_product_catalog", lambda **_kwargs: {"products": _Z1_AND_DC550_ROWS}
+    )
+    resolved = product_resolver.resolve_product("Z1")
+    assert resolved is not None
+    assert resolved["sku"] == "VINTAGE-Z1-RETRO-ON-CAMERA-FLASH"
+
+
+def test_550_pro_resolution_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        product_resolver, "list_product_catalog", lambda **_kwargs: {"products": _Z1_AND_DC550_ROWS}
+    )
+    resolved = product_resolver.resolve_product("550 pro")
+    assert resolved is not None
+    assert resolved["sku"] == "DC-550-PRO-LL-PORTABLE-5-5-INCH-HD-CAMERA-MONITOR"
+
+
+def test_genuinely_ambiguous_tie_still_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 只剩两条同分同 series 长度的卡口变体(PRO-N / PRO-F)→ tiebreak 后仍并列 →
+    # 保持 fail-closed 返回 None,不靠行序猜卡口。
+    variants = [row for row in _Z1_AND_DC550_ROWS if row["sku"] in {"VL-LIT092", "VL-LIT093"}]
+    monkeypatch.setattr(
+        product_resolver, "list_product_catalog", lambda **_kwargs: {"products": variants}
+    )
+    assert product_resolver.resolve_product("Z1 pro") is None
+
+
 def test_series_plus_category_does_not_guess_an_exact_catalog_sku(monkeypatch: pytest.MonkeyPatch) -> None:
     lab = {
         "sku": "LAB-35-F18",

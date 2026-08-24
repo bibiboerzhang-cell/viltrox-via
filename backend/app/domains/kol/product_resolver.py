@@ -96,6 +96,9 @@ def _explicit_product_series(text: str) -> str:
     return ""
 
 
+_COMPACT_PRO_RE = re.compile(r"(?<![a-z0-9])([a-z]\d{1,3})\s*pro(?![a-z0-9])")
+
+
 def _pro_is_product_series(text: str) -> bool:
     """Treat ``Pro`` as a series only when the query contains product evidence.
 
@@ -107,6 +110,12 @@ def _pro_is_product_series(text: str) -> bool:
     """
 
     low = str(text or "").lower()
+    # 2026-08-24 R2:单字母+数字的紧凑型号紧跟 pro("z1 pro"/"a7 pro"/粘连 "z1pro")也是产品证据。
+    # 整词锚定防 "web3 pro" 人设词子串;多字母型号("dc550 pro")由既有 \d{2,3}\s*pro 覆盖。
+    # 粘连形态没有独立 "pro" 词,所以在 standalone-pro 闸之前判。误配防线见 resolve_product
+    # 的复审 F-1 守卫(紧凑码必须命中赢家,防他牌 "a7 pro"+品类词凑赢)。
+    if _COMPACT_PRO_RE.search(low):
+        return True
     if not re.search(r"(?<![a-z0-9])pro(?![a-z0-9])", low):
         return False
     return bool(
@@ -313,17 +322,23 @@ def _candidate_pool(query: str, probe_tokens: list[str]) -> dict[str, dict[str, 
     return pool
 
 
-def _score(prod: dict[str, Any], score_tokens: list[str]) -> tuple[int, int, int]:
+def _row_words(prod: dict[str, Any]) -> tuple[str, str, set[str]]:
+    """行匹配底料:(blob, blob_split_glued, 整词集合)。_score 与复审 F-1 守卫共用。"""
     blob = " ".join(
         str(prod.get(key) or "")
         for key in ("sku", "model_name", "marketing_name", "series")
     ).lower()
     blob_sp = _split_glued(blob)
+    words = {w for w in re.split(r"[^a-z0-9.]+", blob) if w}
+    words |= {w for w in re.split(r"[^a-z0-9.]+", blob_sp) if w}
+    return blob, blob_sp, words
+
+
+def _score(prod: dict[str, Any], score_tokens: list[str]) -> tuple[int, int, int]:
     # 整词集合:同时用原始 blob 与拆粘连版切词。既认 "z1"(原词)又认 "65"(由 "65mm" 拆出),
     # 又杜绝短词子串误命中——曾让 "dp"→"a(dp)018"、"18"→"(18)→018" 把 NF-NEX 转接环
     # 错配成「EPIC 18mm 变宽」的搜索结果(generic photographer 检索词的真因)。
-    words = {w for w in re.split(r"[^a-z0-9.]+", blob) if w}
-    words |= {w for w in re.split(r"[^a-z0-9.]+", blob_sp) if w}
+    blob, blob_sp, words = _row_words(prod)
 
     def _hit(tok: str) -> bool:
         if len(tok) < 3:
@@ -502,7 +517,23 @@ def resolve_product(query: str) -> dict[str, Any] | None:
     if best_primary[1] < 2:
         return None
     winners = [(score, prod) for score, prod in scored if (score[0], score[1]) == best_primary]
+    if len(winners) > 1:
+        # 2026-08-24 R2:(strong, matched) 全平时,用 _score 早已算好的末位 tiebreak
+        # (series 长度)选唯一赢家——取 series 最短者,即基础款。方向是确定性的且
+        # 不放松匹配:query 里若真含系列词(pro 等),该系列行会在 strong/matched 上
+        # 直接胜出,根本走不到这里;此处偏向基础款意味着绝不凭空替操作者补一个
+        # "Pro"。tiebreak 后仍并列(同系列多卡口行等)→ 保持 fail-closed 返回 None。
+        min_series_len = min(score[2] for score, _prod in winners)
+        winners = [(score, prod) for score, prod in winners if score[2] == min_series_len]
     if len(winners) != 1:
         return None
     best_score, best = winners[0]
+    # 2026-08-24 复审 F-1:紧凑码("a7 pro")解锁的 "pro" 只有在该紧凑码本身也命中赢家时才作数——
+    # 否则他牌紧凑码 + 一个品类词(如 flash)就能把 Pro 系列行凑成赢家。仅当赢家确实靠 "pro"
+    # 词命中(blob 含 pro)且查询里的紧凑码全都不在赢家词集时 fail-closed。
+    compact_codes = _COMPACT_PRO_RE.findall(str(text or "").lower())
+    if compact_codes and "pro" in score_tokens:
+        _blob, _blob_sp, winner_words = _row_words(best)
+        if "pro" in winner_words and not any(code in winner_words for code in compact_codes):
+            return None
     return _public_product_projection(best, match_score=best_score)

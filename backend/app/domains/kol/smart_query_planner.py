@@ -115,6 +115,21 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
         keywords.append("macro")
     if any(term in lowered for term in ("产品摄影", "product photography")):
         keywords.append("product photography")
+    # 2026-08-24 R4:操作者自带的职业/场景词(赛车、餐饮…)必须独立命中英文检索词,
+    # 不能只藏在「监视器」组合关键词后面被整体丢弃。输出保持纯英文(问题A:中文进
+    # search_query 会捞中文号)。
+    if any(term in lowered for term in ("赛车", "机车", "摩托")):
+        keywords.extend(["automotive videographer", "motorsport", "racing"])
+    if any(term in lowered for term in ("厨师", "餐饮", "美食", "烹饪")):
+        keywords.extend(["food creator", "culinary", "chef", "food videographer"])
+    if "婚礼" in lowered:
+        keywords.append("wedding filmmaker")
+    if "健身" in lowered:
+        keywords.append("fitness creator")
+    if "宠物" in lowered:
+        keywords.append("pet creator")
+    if "旅拍" in lowered:
+        keywords.append("travel videographer")
 
     # 规避问题A:中文 query 直接塞进 search_query 会让平台搜出中文号。
     # 有英文关键词→只用英文关键词;纯中文无匹配→给英文影视器材兜底;ASCII 原串才保留。
@@ -125,6 +140,10 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
         search_query = "camera gear reviewer filmmaker videographer"
     else:
         search_query = query_text
+    # 2026-08-24 R1/F8:provider_free_* 是设计好的首屏免调用路径,不是降级事故。
+    # 再自标 rule_v0/fallback_used=true 会在运维面/会话史里读成「LLM 全灭」假警报。
+    provider_free_designed = str(reason).startswith("provider_free")
+    plan_label = "provider_free" if provider_free_designed else "rule_v0"
     return {
         "status": "fallback",
         "original_query": query_text,
@@ -138,9 +157,9 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
         "include_new_discovery": True,
         "new_discovery_limit": 15,
         "reason": reason,
-        "provider": "rule_v0",
-        "model": "rule_v0",
-        "fallback_used": True,
+        "provider": plan_label,
+        "model": plan_label,
+        "fallback_used": not provider_free_designed,
         "provider_calls_performed": False,
     }
 
@@ -178,6 +197,12 @@ def _require_evidence_anchor(plan: dict[str, Any]) -> dict[str, Any]:
 
     if query_evidence_terms(plan.get("search_query")):
         return plan
+    # 2026-08-24 R3:兜底英文检索词可能全是泛词(纯中文 query 撞英文兜底句),但原始
+    # query 本身有可举证词(型号/职业/场景)→ 不能误杀成 needs_clarification。保留 plan,
+    # 标注锚来自原始 query;search_query 原样保留——下游证据闸本就同时消费
+    # resolved_text+persona 兜底,不需要在这里改写检索词。
+    if query_evidence_terms(plan.get("original_query")):
+        return {**plan, "anchor_source": "original_query"}
     return {
         **plan,
         "status": "needs_clarification",
@@ -189,7 +214,7 @@ def _require_evidence_anchor(plan: dict[str, Any]) -> dict[str, Any]:
         "reason": "no_evidence_anchor",
         "clarification": {
             "reason": "no_evidence_anchor",
-            "message": "请补充具体内容场景、职业或产品型号后再搜索",
+            "message": "没识别出产品型号，也没识别出内容场景/职业——补一个具体产品（如 Z1 Pro）或职业词（如 赛车摄影）再搜",
         },
     }
 
@@ -453,13 +478,17 @@ def plan_text_query_provider_free(
         {"provider": "rule_v0", "model": "rule_v0", "status": "fallback"},
         resolved_product,
     )
+    # 2026-08-24 R1/F8(verify 补刀):本分支与 _fallback_plan 的 provider_free_* 同理——
+    # 设计好的首屏免调用路径(产品已解析、persona 未填充),不是 LLM 降级事故;
+    # 自标 rule_v0/fallback_used=True 会在台账/运维面读成假警报。durable worker
+    # 随后仍跑完整 plan_text_query,真降级在那里如实记账。
     return _require_evidence_anchor({
         **plan,
         "market": _text(plan.get("market")) or "US",
         "reason": "provider_free_product_fallback",
-        "provider": "rule_v0",
-        "model": "rule_v0",
-        "fallback_used": True,
+        "provider": "provider_free",
+        "model": "provider_free",
+        "fallback_used": False,
         "provider_calls_performed": False,
         "plan_stage": "initial_provider_free",
     })
