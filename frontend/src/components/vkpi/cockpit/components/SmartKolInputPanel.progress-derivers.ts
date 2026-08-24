@@ -251,10 +251,15 @@ export function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): bool
     if (active > 0 || contract.blockedByWorker || contract.orchestrationPending) return false;
     if (["queued", "running", "active", "blocked_by_worker"].includes(contract.state)) return false;
     if (contract.requestedTasksTerminal) return true;
+    // The versioned backend state is the authoritative read-time projection.
+    // A terminal strict-filter/provider shortfall may have fewer materialized
+    // rows than the requested target (for example 26/30); it must stop polling
+    // while remaining visibly partial, rather than masquerading as active work.
+    if (["ready", "partial", "failed", "cancelled", "canceled"].includes(contract.state)) return true;
     if (contract.requestedUnits != null && contract.requestedUnits > 0) {
       return contract.terminalUnits != null && contract.terminalUnits >= contract.requestedUnits;
     }
-    return ["ready", "partial", "failed", "cancelled", "canceled"].includes(contract.state);
+    return false;
   }
   const summary = asRecord(session.result_summary);
   const progress = asRecord(summary.progress);
@@ -450,12 +455,18 @@ export function searchSessionProgress(session: VkpiKolSearchHistoryItem | null):
       + (progressContract.runningUnits ?? 0)
       + (progressContract.activeUnits ?? 0);
     const contractTerminal = progressContract.requestedTasksTerminal || Boolean(
-      progressContract.requestedUnits != null
-      && progressContract.requestedUnits > 0
-      && progressContract.terminalUnits != null
-      && progressContract.terminalUnits >= progressContract.requestedUnits
-      && contractActive === 0
+      contractActive === 0
+      && !progressContract.blockedByWorker
       && !progressContract.orchestrationPending
+      && (
+        ["ready", "partial", "failed", "cancelled", "canceled"].includes(progressContract.state)
+        || (
+          progressContract.requestedUnits != null
+          && progressContract.requestedUnits > 0
+          && progressContract.terminalUnits != null
+          && progressContract.terminalUnits >= progressContract.requestedUnits
+        )
+      )
     );
     // 编排挂起期的阶段按「发现是否已落库」说话:未落 → 全网发现中;已落 → 基础资料补全中。
     const orchestrationPhase: SearchSessionProgress["phase"] | null = progressContract.orchestrationPending

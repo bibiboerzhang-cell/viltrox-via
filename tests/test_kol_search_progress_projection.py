@@ -316,6 +316,56 @@ def test_terminal_empty_ready_session_prefers_empty_result_over_success_label() 
     assert result["completion_kind"] == "empty_result"
 
 
+def test_terminal_search_shortfall_is_partial_and_never_left_pending() -> None:
+    """A strict/provider shortfall (26 visible for a requested 30) is final
+    once the durable session is terminal.  The four absent rows must advance
+    terminal progress without being invented as successful candidates."""
+    session = {
+        "status": "ready",
+        "result_summary": {"phase": "complete", "progress": {"base": 30, "total": 30}},
+    }
+    items = [
+        {"id": item_id, "status": "ready", "stage": "identified", "payload": {}}
+        for item_id in range(1, 27)
+    ]
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["state"] == "partial"
+    assert result["requested_tasks_terminal"] is True
+    assert result["requested_tasks_successful"] is False
+    assert result["completion_kind"] == "partial"
+    assert result["queued_units"] == result["running_units"] == result["active_units"] == 0
+    assert result["stages"]["search"]["population"] == 30
+    assert result["stages"]["search"]["successful"] == 26
+    assert result["stages"]["search"]["terminal"] == 30
+    assert result["stages"]["search"]["counts"]["partial"] == 4
+    assert result["failed_units"] == 4
+
+
+def test_active_search_shortfall_remains_unknown_until_orchestration_finishes() -> None:
+    session = {
+        "status": "running",
+        "result_summary": {
+            "phase": "base",
+            "progress": {"base": 30, "total": 30, "requested_tasks_terminal": False},
+        },
+    }
+    items = [
+        {"id": item_id, "status": "ready", "stage": "identified", "payload": {}}
+        for item_id in range(1, 27)
+    ]
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["state"] == "running"
+    assert result["orchestration_pending"] is True
+    assert result["requested_tasks_terminal"] is False
+    assert result["stages"]["search"]["terminal"] == 26
+    assert result["stages"]["search"]["counts"]["unknown"] == 4
+    assert result["failed_units"] == 0
+
+
 def test_active_and_failed_optional_units_remain_separate_from_not_requested() -> None:
     """Production-shape regression: active comments/audience keep the session
     open; video failures make the eventual terminal result partial; the

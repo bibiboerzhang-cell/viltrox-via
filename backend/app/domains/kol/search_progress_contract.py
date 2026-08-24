@@ -556,13 +556,21 @@ def project_search_progress(
     summary = _mapping(session.get("result_summary"))
     stored_progress = _mapping(summary.get("progress"))
     safe_items = [item for item in items if isinstance(item, Mapping)]
+    raw_session_status = _text(session.get("status"))
     intended_total = max(
         len(safe_items),
         _positive_int(stored_progress.get("total")),
         _positive_int(stored_progress.get("base")),
     )
     base_buckets = ["ready"] * min(len(safe_items), intended_total)
-    base_buckets.extend(["unknown"] * max(0, intended_total - len(base_buckets)))
+    # A terminal search can legitimately return fewer rows than its requested
+    # target after strict filtering/provider shortfall.  Those absent rows are
+    # a terminal partial result, not work that is still pending.  Keeping them
+    # as ``unknown`` makes a 26/30 terminal session poll for twelve minutes even
+    # though there is no queued/running unit left.  Active sessions retain the
+    # unknown bucket so the short orchestration-registration window stays open.
+    shortfall_bucket = "partial" if raw_session_status in _TERMINAL_SESSION_STATES else "unknown"
+    base_buckets.extend([shortfall_bucket] * max(0, intended_total - len(base_buckets)))
 
     profile_buckets = [_profile_bucket(item) for item in safe_items]
     downstream_buckets = {
@@ -620,7 +628,6 @@ def project_search_progress(
         else unobserved_worker_health(observed_at=observed_at)
     )
     orchestration_pending = _orchestration_pending(session, stored_progress)
-    raw_session_status = _text(session.get("status"))
     active_units_total = queued_units + running_units + active_units
     # Requested-unit totals are the strongest read-time evidence.  Empty-result
     # sessions are the important exception: there are deliberately no units to

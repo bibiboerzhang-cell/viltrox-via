@@ -628,6 +628,51 @@ describe("SmartKolInputPanel versioned real-progress contract", () => {
     expect(progress.contract).toMatchObject({ progressPct: null, terminalPct: null });
     expect(progress.requiredTasksComplete).toBe(false);
   });
+
+  it("stops polling an explicit terminal 26/30 shortfall without calling it successful", () => {
+    const session = {
+      id: 703,
+      status: "ready",
+      progress_contract: {
+        schema: "kol_search_progress_v1",
+        claim_status: "observed_execution_only",
+        state: "partial",
+        requested_units: 30,
+        successful_units: 26,
+        terminal_units: 26,
+        queued_units: 0,
+        running_units: 0,
+        active_units: 0,
+        failed_units: 4,
+        requested_tasks_terminal: false,
+        requested_tasks_successful: false,
+        completion_kind: "partial",
+        blocked_by_worker: false,
+        orchestration_pending: false,
+        full_analysis_complete: false,
+        full_analysis_execution_complete: false,
+        full_analysis_observable: false,
+        stages: {
+          search: { population: 30, requested: 30, successful: 26, terminal: 26, remaining: 4, state: "partial", data_ready: 26, counts: { ready: 26, queued: 0, running: 0, active: 0, partial: 4, failed: 0, skipped: 0, not_requested: 0 } },
+          profile: { population: 26, requested: 0, successful: 0, terminal: 0, remaining: 0, state: "not_requested", data_ready: 0, counts: { ready: 0, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, not_requested: 26 } },
+          video: { population: 26, requested: 0, successful: 0, terminal: 0, remaining: 0, state: "not_requested", data_ready: 0, counts: { ready: 0, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, not_requested: 26 } },
+          comments: { population: 26, requested: 0, successful: 0, terminal: 0, remaining: 0, state: "not_requested", data_ready: null, counts: { ready: 0, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, not_requested: 26 } },
+          audience: { population: 26, requested: 0, successful: 0, terminal: 0, remaining: 0, state: "not_requested", data_ready: 0, counts: { ready: 0, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, not_requested: 26 } },
+        },
+        worker: { observed: true, state: "online", online: true },
+      },
+    } as unknown as VkpiKolSearchHistoryItem;
+
+    expect(isSearchSessionTerminal(session)).toBe(true);
+    expect(searchSessionProgress(session)).toMatchObject({
+      phase: "partial",
+      requiredTasksComplete: true,
+      requestedTasksTerminal: true,
+      basicVisible: 26,
+      target: 30,
+      fullAnalysisComplete: false,
+    });
+  });
 });
 
 describe("SmartKolInputPanel discovery wall dedupe and identity", () => {
