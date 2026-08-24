@@ -5,9 +5,17 @@ After=network-online.target viltrox-2.0-test.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/viltrox-2.0
-Environment=PYTHONPATH=backend
-ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && .venv/bin/python -m app.domains.ops.health_sentinel >> /var/log/vkpi/health_sentinel_$(date -u +%%Y%%m%%d).log 2>&1'
+User=viltrox
+Group=viltrox
+UMask=0027
+WorkingDirectory=/opt/viltrox-2.0/current
+Environment=PYTHONPATH=/opt/viltrox-2.0/current/backend
+Environment=PYTHONDONTWRITEBYTECODE=1
+# systemd creates this dedicated directory for User=/Group= before ExecStart;
+# never reuse the root-owned /var/log/vkpi tree shared by legacy timers.
+LogsDirectory=vkpi-health-sentinel
+LogsDirectoryMode=0750
+ExecStart=/bin/bash -lc 'env PYTHONDONTWRITEBYTECODE=1 /opt/viltrox-2.0/.venv/bin/python -B -m app.domains.ops.health_sentinel >> /var/log/vkpi-health-sentinel/health_sentinel_$(date -u +%%Y%%m%%d).log 2>&1'
 TimeoutStartSec=15m
 Nice=10
 IOSchedulingClass=best-effort

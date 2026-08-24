@@ -146,3 +146,36 @@ def test_python_generated_remote_commands_have_both_guards() -> None:
     assert "env PYTHONDONTWRITEBYTECODE=1 python3 -B -" in readiness
     assert '"PYTHONDONTWRITEBYTECODE=1"' in transport
     assert 'python_path,\n        "-B",\n        "-",' in transport
+
+
+def test_health_sentinel_unit_runs_current_nonroot_without_bytecode() -> None:
+    unit = (ROOT / "scripts/ops/systemd/vkpi-health-sentinel.service").read_text(
+        encoding="utf-8"
+    )
+
+    for required in (
+        "User=viltrox",
+        "Group=viltrox",
+        "UMask=0027",
+        "WorkingDirectory=/opt/viltrox-2.0/current",
+        "Environment=PYTHONPATH=/opt/viltrox-2.0/current/backend",
+        "Environment=PYTHONDONTWRITEBYTECODE=1",
+        "LogsDirectory=vkpi-health-sentinel",
+        "LogsDirectoryMode=0750",
+        "env PYTHONDONTWRITEBYTECODE=1 "
+        "/opt/viltrox-2.0/.venv/bin/python -B -m "
+        "app.domains.ops.health_sentinel",
+        "/var/log/vkpi-health-sentinel/health_sentinel_",
+    ):
+        assert required in unit
+
+    assert "WorkingDirectory=/opt/viltrox-2.0\n" not in unit
+    assert "Environment=PYTHONPATH=backend" not in unit
+    assert "mkdir -p /var/log/vkpi" not in unit
+
+    entrypoint = (
+        ROOT / "backend/app/domains/ops/health_sentinel.py"
+    ).read_text(encoding="utf-8")
+    assert "cd /opt/viltrox-2.0/current && env PYTHONDONTWRITEBYTECODE=1" in entrypoint
+    assert "PYTHONPATH=/opt/viltrox-2.0/current/backend" in entrypoint
+    assert "/opt/viltrox-2.0/.venv/bin/python -B -m" in entrypoint

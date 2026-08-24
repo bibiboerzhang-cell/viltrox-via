@@ -17,112 +17,134 @@ V-KPI 上线后出事时的**回滚预案**。门卡 12 = 上线前必须有可�
 ## 0. 出事第一动作(60 秒内)
 
 1. **判级**:是「全站不可用 / 报错刷屏」还是「单功能异常」?
-   - 全站 → 走 §1(代码/dist 整体回退)。
+   - 全站 → 走 §1(revert 前向修复 + canonical train)。
    - 单灰度任务异常(`scheduler_tasks`)→ 先走 §4 一键关该档,**通常不必整体回退**。
 2. **记录现场**:先抓 `/health`(见 §6)拿当前 `git_sha` / `built_at`,截图告警,
    再动手。回滚后现场会消失。
 3. **通知**:在 ops 群发「正在回滚 + 原因一句话 + 预计影响」。
-4. 按下面对应章节执行。**先停写、后回退、再验证、最后开量**。
+4. 按下面对应章节执行。**先留证、再做前向修复、完整跑门禁、最后独立验收**。
 
 ---
 
-## 1. 回退到上一个 commit / dist
+## 1. 生产:revert 前向修复 + canonical train
 
-部署形态:nginx → `viltrox-2.0-public` / `viltrox-2.0-admin`(Python web)→
-gunicorn `app.main:app` 同时托管前端 `frontend/dist`。所以「回退」= 回退代码树 +
-重建 dist + 重启 web。前端构建**不会**自动跟随后端,必须显式重建(见门卡构建戳对齐)。
+生产常规“回滚”不是在服务器切指针,而是在本地从当前生产 SHA 创建一个新的
+`git revert` 前向修复提交,再让 `scripts/ops/train.sh` 对这个新 HEAD 执行完整门禁、
+冻结、部署和独立验收。生产禁止 `git checkout`、就地重建 `frontend/dist`、手改
+`current` / `previous`,也禁止重写部署根的 `BUILD_GIT_SHA` / `BUILD_TIME`。
 
-### 1.1 确认要退回的目标 commit
-
-```bash
-ROOT=/Users/bibiboer/Documents/V-KPI——marketing   # 生产为 /opt/viltrox-2.0
-cd "$ROOT"
-git log --oneline -n 10                  # 找「上一个已知好的」commit <GOOD_SHA>
-cat BUILD_GIT_SHA 2>/dev/null            # 当前部署戳(/health 的 git_sha 来源)
-```
-
-### 1.2 回退代码树(二选一)
-
-- **快速回退(推荐,不改历史)**:checkout 到目标 commit(detached)或新建回滚分支。
-  ```bash
-  git checkout <GOOD_SHA>                 # 或: git checkout -b rollback/<date> <GOOD_SHA>
-  ```
-- **revert 单个坏 commit**(只有一个坏改且历史干净时):
-  ```bash
-  git revert --no-edit <BAD_SHA>
-  ```
-
-> 注意:`git checkout <GOOD_SHA>` 进 detached HEAD 只为「先止血」。事后必须把
-> 修复正式 commit 回主干,别长期停在 detached。
-
-### 1.3 重建并对齐构建戳(顺序固定:commit → build → 重启)
+### 1.1 current/previous 双 Seal 仅作只读取证
 
 ```bash
-# 1) 后端构建戳(/health git_sha 的真源,HUP 不会刷,必须重写文件)
-git rev-parse HEAD            > "$ROOT/BUILD_GIT_SHA"
-date -u +"%Y-%m-%dT%H:%M:%SZ" > "$ROOT/BUILD_TIME"
+set -euo pipefail
+ROOT=/opt/viltrox-2.0
+CURRENT="$(readlink -f -- "$ROOT/current")"
+PREVIOUS="$(readlink -f -- "$ROOT/previous")"
 
-# 2) 重建前端 dist(否则浏览器仍跑旧 JS,与后端 git_sha 不一致)
-cd "$ROOT/frontend" && npm ci && npm run build      # 产物落 frontend/dist/
+case "$CURRENT" in "$ROOT/releases/"*) ;; *) echo "unsafe current: $CURRENT" >&2; exit 1;; esac
+case "$PREVIOUS" in "$ROOT/releases/"*) ;; *) echo "unsafe previous: $PREVIOUS" >&2; exit 1;; esac
+CURRENT_ID="${CURRENT##*/}"
+PREVIOUS_ID="${PREVIOUS##*/}"
+test "$CURRENT_ID" != "$PREVIOUS_ID"
+CURRENT_SHA="$(tr -d '[:space:]' < "$CURRENT/BUILD_GIT_SHA")"
+PREVIOUS_SHA="$(tr -d '[:space:]' < "$PREVIOUS/BUILD_GIT_SHA")"
+printf '%s\n' "$CURRENT_SHA" | grep -Eq '^[0-9a-f]{40}$' || exit 1
+printf '%s\n' "$PREVIOUS_SHA" | grep -Eq '^[0-9a-f]{40}$' || exit 1
 
-# 3) 全量重启 web(见 §2),不要只 reload —— dist/构建戳要全量生效
+for RELEASE_ID in "$CURRENT_ID" "$PREVIOUS_ID"; do
+  sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B \
+    "$CURRENT/scripts/ops/atomic_release_layout.py" verify-seal \
+    --root "$ROOT" --release-id "$RELEASE_ID" \
+    --expected-owner-uid 0 --expected-owner-gid 0
+done
+printf 'current=%s sha=%s\nprevious=%s sha=%s\n' \
+  "$CURRENT" "$CURRENT_SHA" "$PREVIOUS" "$PREVIOUS_SHA"
 ```
 
-校验:`/health` 的 `git_sha` 应等于 `BUILD_GIT_SHA`,`frontend/dist/build-info.json`
-里的 `gitSha` 也应一致(见 `vite.config.ts` 的 `vkpi-build-info` 插件)。三者不齐 = 没退干净。
+这一步只保存指针、双 Seal、`/health` 和 journal 证据,不授权任何生产写操作。
+任一指针或 Seal 不可信均为 **NO-GO**;不得把 previous 的存在误当成人工激活许可。
 
-### 1.4 不想重建?用上一份 dist 快照
+### 1.2 在本地创建 revert 前向修复提交
 
-若上线前对 `frontend/dist/` 做过快照(强烈建议每次上线前 `cp -r dist dist.bak.<sha>`),
-回滚可直接换目录,免 `npm run build`:
+以下单提交配方只适用于已确认“当前生产 SHA 就是要撤销的坏提交”、本地主分支 HEAD
+与该生产 SHA 完全一致且工作树干净的情况。合并提交、多提交范围、迁移或数据副作用
+必须先由代码/迁移负责人给出明确前向兼容方案。
 
 ```bash
-cd "$ROOT/frontend"
-mv dist dist.broken.$(date +%s)
-cp -r dist.bak.<GOOD_SHA> dist
-# 再重写 BUILD_GIT_SHA/BUILD_TIME 为 <GOOD_SHA>,然后 §2 重启
+set -euo pipefail
+cd /Users/bibiboer/Documents/V-KPI——marketing
+test -z "$(git status --porcelain=v1 --untracked-files=all)"
+PROD_SHA="<从 §1.1 与只读 /health 核实的 CURRENT_SHA>"
+test "$(git rev-parse HEAD)" = "$PROD_SHA"
+BAD_SHA="$PROD_SHA"
+git show --stat --oneline "$BAD_SHA"
+git revert --no-edit "$BAD_SHA"
+REPAIR_SHA="$(git rev-parse HEAD)"
+git show --stat --oneline "$REPAIR_SHA"
 ```
 
-> 本 PR 只改 `vite.config.ts` 的 `manualChunks`(纯 build 分包),**不动任何源**。
-> 若回滚仅为撤掉本次分包改动:`git checkout <prev> -- frontend/vite.config.ts`
-> 后重建 dist 即可,无需碰后端/迁移/灰度。分包改动**不影响运行时行为**,
-> 只影响产物 chunk 切分,回退风险极低。
+必须评审这个新提交确实是“撤销坏行为的前向版本”,而不是恢复旧服务器目录。若 revert
+冲突、需要 `_down`、或无法证明新代码兼容当前 schema,停止并升级事件负责人。
+
+### 1.3 只走 canonical train
+
+```bash
+set -euo pipefail
+cd /Users/bibiboer/Documents/V-KPI——marketing
+REPAIR_SHA="$(git rev-parse HEAD)"
+scripts/ops/train.sh "$REPAIR_SHA"
+```
+
+`train.sh` 必须完整执行,不得设置跳过生产门禁的临时覆盖。它调用的
+`deploy_local_to_cloud.sh` 只有在 `RELEASE_VALIDATION_COMMIT_STARTED=0`、即 activation
+commit 尚未开始时,才允许自动调用完整 rollback controller。完整 controller 会统一
+处理所有 release consumers、正在运行的 PgBouncer activation oneshot 的 stop +
+runtime mask、PgBouncer map 与 service、数据库 identity 与 `.env` fingerprint、
+validation fence、Redis worker,以及 sync service/timer 和 health sentinel service/timer
+这 4 个 reviewed unit 的精确状态,并重新验证 web/worker/runtime。
+
+人工单独调用 layout `restore` 只能恢复一部分文件系统状态,不能证明上述整体事务安全,
+因此**禁止作为生产命令**。一旦 activation commit 已开始,deploy 也禁止自动回退,只能
+按其保留的 receipt/fence 状态执行事件级 roll-forward 恢复。
+
+若当前生产 runtime 已失效,导致 canonical train 的认证、ancestor、prelock 或 drain
+门禁无法通过,结论是 **NO-GO / 事件升级**。保留 current/previous、Seal、部署日志和
+controller receipt,由事件负责人制定受审查的恢复步骤;本手册不给手改指针、手启服务
+或绕过 prelock 的兜底命令。
 
 ---
 
 ## 2. 停 / 启 admin · worker · 等服务
 
-生产为 systemd(`deploy/systemd/*.service`,实例化 `@<user>`);本地用 `scripts/start_*.sh`。
+生产为 systemd(`scripts/ops/systemd/*`);本地用 `scripts/start_*.sh`。
 
 ### 2.1 systemd(生产)
 
 | 角色 | unit | 说明 |
 | --- | --- | --- |
-| Admin Web | `viltrox-2.0-admin` | `app.main:app`,`PORT 8102` |
-| Public Web | `viltrox-2.0-public` | 对外站点 |
-| Worker | `viltrox-2.0-worker` | 任务执行,`ENABLE_SCHEDULER=0` |
-| Scheduler | `viltrox-2.0-scheduler` | 定时调度,`ENABLE_SCHEDULER=1` |
+| Web | `viltrox-2.0-test.service` | `app.main:app`,`127.0.0.1:8001` |
+| 交互 Worker | `vkpi-worker-interactive.service` | 交互/高优先级任务 |
+| 批量 Worker | `vkpi-worker-bulk@1..15.service` | 15 个批量实例 |
+| 可选 Redis Worker | `vkpi-redis-worker.service` | 只按捕获状态恢复,不可无条件开启 |
+| 健康巡检 | `vkpi-health-sentinel.timer` | 最后恢复 timer |
+| 日同步 | `vkpi-sync-daily.timer` | 最后恢复 timer |
 
 ```bash
-# 回滚时的安全顺序:先停「写侧」再停「读侧」,起来时反过来
-sudo systemctl stop  viltrox-2.0-scheduler@<user>   # 1) 先停定时器,止住新任务
-sudo systemctl stop  viltrox-2.0-worker@<user>      # 2) 停 worker,排空在跑任务
-# (此处做 §1 代码/dist 回退、§3 迁移回退)
-sudo systemctl restart viltrox-2.0-admin@<user>     # 3) 起 admin
-sudo systemctl restart viltrox-2.0-public@<user>    # 4) 起 public
-sudo systemctl start   viltrox-2.0-worker@<user>    # 5) 起 worker
-sudo systemctl start   viltrox-2.0-scheduler@<user> # 6) 最后再开 scheduler(放量见 §4)
-
-sudo systemctl status viltrox-2.0-admin@<user>      # 看 active/running
-journalctl -u viltrox-2.0-admin@<user> -n 100 --no-pager   # 看启动日志
+set -euo pipefail
+# 生产此处只读观察;服务状态转换由 §1 canonical train / deploy controller 独占。
+sudo systemctl status viltrox-2.0-test.service
+journalctl -u viltrox-2.0-test.service -n 100 --no-pager
+systemctl --no-pager --state=running \
+  'vkpi-worker-interactive.service' 'vkpi-worker-bulk@*.service'
 ```
 
-> 只想**暂停新任务、不动 web**:`stop scheduler` + `stop worker` 即可,读侧 admin/public
-> 继续服务。这是「单灰度任务出事」的最小动作,优先于整体回退。
+> 本节不提供生产 `stop/start/restart/mask/unmask` 配方。部分停服会破坏 deploy
+> controller 对 consumers、oneshot、fence 和 reviewed unit 状态的完整取证与恢复。
 
 ### 2.2 本地启动脚本(开发 / 应急直跑)
 
 ```bash
+set -euo pipefail
 ROOT=/Users/bibiboer/Documents/V-KPI——marketing
 # admin:gunicorn 守护进程,默认 127.0.0.1:8102,日志 runtime/logs/admin-8102-*.log
 bash "$ROOT/scripts/start_admin.sh"
@@ -140,11 +162,12 @@ lsof -ti:8102 | xargs -r kill          # 兜底:按端口杀
 
 ---
 
-## 3. 迁移 `_down` 怎么用(仅手动)
+## 3. 迁移 `_down` 处置边界(事件级受审)
 
 迁移结构:`migrations/NNN_<name>.sql` 正向,配对 `migrations/NNN_<name>_down.sql` 反向。
 正向由 `scripts/alembic_upgrade.sh`(→ `alembic upgrade head`)在部署时跑。
-**`_down` 永远不进流水线,只手动、单条、确认后执行。**
+通用 Runbook **不提供生产 `_down` 执行命令**。`_down` 常包含 `DROP TABLE` /
+`DROP COLUMN`,必须由迁移负责人针对具体事件给出并评审专用方案。
 
 ### 3.1 决策:要不要回滚迁移?
 
@@ -153,31 +176,32 @@ lsof -ti:8102 | xargs -r kill          # 兜底:按端口杀
 
 > 优先「代码回退 + 保留新 schema」。回退迁移有丢数据风险(`_down` 多含 `DROP`),是最后手段。
 
-### 3.2 手动执行单条 `_down`
+### 3.2 只读审查 `_down`
 
 ```bash
+set -euo pipefail
 ROOT=/Users/bibiboer/Documents/V-KPI——marketing
-# 0) 先备份(必须!_down 不可逆)
-pg_dump "$DATABASE_URL" -t '<受影响表>' > "$ROOT/backups/pre_down_<NNN>_$(date +%s).sql"
-
-# 1) 先 dry-read:看清这条 _down 会做什么(常是 DROP TABLE / DROP COLUMN)
-cat "$ROOT/migrations/<NNN>_<name>_down.sql"
-
-# 2) 确认无 viltrox_fit_score / rule_v0 字样后,手动 apply
-psql "$DATABASE_URL" -1 -v ON_ERROR_STOP=1 -f "$ROOT/migrations/<NNN>_<name>_down.sql"
+DOWN="$ROOT/migrations/<NNN>_<name>_down.sql"
+test -f "$DOWN"
+sed -n '1,240p' "$DOWN"
+shasum -a 256 "$DOWN"
+if rg -ni 'viltrox_fit_score|rule_v0' "$DOWN"; then
+  echo "protected field reference found; NO-GO" >&2
+  exit 1
+fi
 ```
 
-要点:
-- **逆序回退**:多条迁移要回退时,从最新 `NNN` 往小退,一条一条来。
-- `-1`(单事务)+ `ON_ERROR_STOP=1`:出错整条回滚,不留半截 schema。
-- 回退后 alembic 版本表可能与 SQL 现状不符 —— 记录在案,事后由迁移负责人对齐,
-  **别**为对齐而盲跑 `alembic downgrade`。
-- 红线复核:执行前 `grep -i 'viltrox_fit_score\|rule_v0' <该 _down.sql>` 必须为空。
+上述只证明“文件内容已被人工审阅”,不证明可安全执行。任何生产 schema 逆向操作
+至少要在专用 gate 中同时证明:精确数据库 identity / fingerprint、所有 consumer 与
+oneshot 完整 drain、PgBouncer 与 validation fence 状态、受影响数据备份可恢复、
+当前 schema 与目标代码兼容,以及执行失败后的 roll-forward 路径。任一证据缺失即
+**NO-GO**;不得直接运行 `psql -f ..._down.sql` 或盲跑 `alembic downgrade`。
 
 ### 3.3 灰度整表撤销(极端)
 
-撤掉整套调度任务表:`migrations/130_vkpi_scheduler_tasks_down.sql`(`DROP TABLE scheduler_tasks`)。
-**仅在确认调度子系统整体不要时**用;通常 §4 关开关就够,不必删表。
+`migrations/130_vkpi_scheduler_tasks_down.sql` 会 `DROP TABLE scheduler_tasks`,
+不属于常规止血手段。通常只走 §4 关开关；若确需撤表，必须按 §3.2 的事件级受审
+边界另行制定方案，通用 Runbook 不授权执行。
 
 ---
 
@@ -188,6 +212,7 @@ psql "$DATABASE_URL" -1 -v ON_ERROR_STOP=1 -f "$ROOT/migrations/<NNN>_<name>_dow
 `_scheduler_task_enabled(task_key)`。
 
 ```bash
+set -euo pipefail
 VENV=/Users/bibiboer/Documents/V-KPI——marketing/.venv/bin/python   # 必须用 .venv,非裸 python3
 cd /Users/bibiboer/Documents/V-KPI——marketing
 
@@ -211,8 +236,8 @@ UPDATE scheduler_tasks SET enabled=FALSE WHERE risk_level='low';
 
 要点:
 - 脚本默认 **dry-run**,不带 `--apply` 绝不写库;占位符 `'?'`(sqlite 风格,内部翻 `%s`)。
-- 关开关**立即生效**,无需重启 scheduler(job 每次进函数都查开关)。但要彻底停掉
-  「正在跑的一轮」,叠加 §2.1 `stop scheduler + stop worker`。
+- 关开关**立即生效**,无需重启 scheduler(job 每次进函数都查开关)。已在跑的一轮
+  不可用手工部分停服冒充回滚;需要整体处置时走 §1 canonical train / 事件升级。
 - `OPS_SCHEDULER_FORCE_ENABLE=1` 会**绕过开关整体强开**,生产严禁;回滚时确认它**未**被设置。
 - 关开关**不删数据、不触既有表**,是最低风险的回退动作。
 
@@ -221,15 +246,19 @@ UPDATE scheduler_tasks SET enabled=FALSE WHERE risk_level='low';
 ## 5. 验证回滚成功(开量前必过)
 
 ```bash
-# 1) 构建戳三齐(见 §1.3):/health git_sha == BUILD_GIT_SHA == dist/build-info.json gitSha
-curl -fsS https://admin.viltrox.com/health | python3 -m json.tool   # 看 git_sha / built_at / status
+set -euo pipefail
+VENV=/Users/bibiboer/Documents/V-KPI——marketing/.venv/bin/python
+# 1) atomic 身份四齐(见 §1.3):resolved current Seal / current/BUILD_GIT_SHA /
+#    /health server_git_sha / client_git_sha 必须同 SHA。
+readlink -f /opt/viltrox-2.0/current
+curl -fsS https://www.viltroxtest.com/health | python3 -m json.tool
 
 # 2) 关键页能开(admin 登录、Dashboard、Projects)—— 人工点一遍
 # 3) 灰度全 OFF(若走了 §4):
 $VENV scripts/gray_release.py --list   # 期望全 OFF 或仅留预期档
 # 4) web 日志无新错误:
 tail -n 200 runtime/logs/admin-8102-error.log    # 本地
-journalctl -u viltrox-2.0-admin@<user> -n 200 --no-pager   # 生产
+journalctl -u viltrox-2.0-test.service -n 200 --no-pager   # 生产
 # 5)(可选)上线门 smoke:
 $VENV scripts/smoke_vkpi_v3_release_gate.py
 ```
@@ -244,10 +273,10 @@ $VENV scripts/smoke_vkpi_v3_release_gate.py
 
 1. `/health` —— `status` / `git_sha` / `built_at`。sha 与预期不符 → 部署没生效或没退干净。
 2. **是否单灰度任务** —— `gray_release.py --list` 看 `last_error` 哪个非空。是 → §4 关该档,多半到此为止。
-3. **web 起没起** —— `systemctl status viltrox-2.0-admin@<user>` + `journalctl`。没起 → 看启动横幅的库/sha 是否错配。
-4. **前端白屏 / 跑旧 JS** —— `dist/build-info.json` 的 sha 对不对;对不上 → §1.3 重建 dist + 全量重启。
+3. **web 起没起** —— `systemctl status viltrox-2.0-test.service` + `journalctl`。没起 → 核对 resolved current、Seal、环境和 sha。
+4. **前端白屏 / 跑旧 JS** —— `current/frontend/dist/build-info.json` 的 sha 对不对;对不上说明 release 不完整。生产不要就地重建或激活 previous,改走 §1 的 revert 前向修复 + canonical train。
 5. **库层** —— 仅当 1~4 排除后,才怀疑迁移;按 §3 谨慎处理,先备份。
-6. **彻底回退** —— 以上都搞不定 → §1 整体退回上一个 good commit + dist。
+6. **彻底回退** —— 以上都搞不定 → §1 前向修复;若 train prelock 不过则 NO-GO / 事件升级。
 
 **联系人(按域):**
 
@@ -264,17 +293,8 @@ $VENV scripts/smoke_vkpi_v3_release_gate.py
 
 ---
 
-## 附:本次改动的回退(分包专用)
+## 附:分包类改动同样走前向修复
 
-本 PR 仅改 `frontend/vite.config.ts` 的 `build.rollupOptions.output.manualChunks`
-(把 react/router/framer-motion/lucide/recharts/three/leaflet/d3-geo 拆独立 vendor chunk),
-**零源码改动、运行时行为完全不变**。如只需撤掉它:
-
-```bash
-cd /Users/bibiboer/Documents/V-KPI——marketing
-git checkout <prev_sha> -- frontend/vite.config.ts
-cd frontend && npm run build        # 重建 dist
-# 再 §2 全量重启 web
-```
-
-无需碰后端、迁移、灰度。chunk 文件名带 hash,旧缓存不会串版。
+即使只是 `frontend/vite.config.ts` 的 `manualChunks` 变化,生产也不允许 checkout 文件
+或替换 dist。仍须在本地创建经评审的 `git revert` 前向提交并执行 §1 canonical train,
+让冻结产物、服务端/客户端 SHA 与生产 Seal 一起通过同一套门禁。

@@ -214,6 +214,49 @@ def test_health_sentinel_is_captured_quiesced_and_restored_on_every_exit() -> No
     )
 
 
+def test_health_sentinel_unit_is_verified_captured_and_installed() -> None:
+    deploy = _deploy()
+
+    assert (
+        'HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE="scripts/ops/systemd/'
+        'vkpi-health-sentinel.service"'
+    ) in deploy
+    assert "Reviewed health sentinel service unit must be an existing" in deploy
+
+    verify_lines = [
+        line for line in deploy.splitlines() if "sudo systemd-analyze verify" in line
+    ]
+    assert len(verify_lines) == 2
+    for line in verify_lines:
+        assert "'${REMOTE_RELEASE_DIR}/${HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE}'" in line
+
+    prepare = next(
+        line
+        for line in deploy.splitlines()
+        if "atomic_release_layout.py' prepare" in line
+    )
+    assert "--unit-name '${HEALTH_SENTINEL_SERVICE}'" in prepare
+
+    install = next(
+        line
+        for line in deploy.splitlines()
+        if "sentinel_unit_target='/etc/systemd/system/${HEALTH_SENTINEL_SERVICE}'" in line
+    )
+    for required in (
+        "sentinel_unit_source='${REMOTE_CURRENT_DIR}/"
+        "${HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE}'",
+        r"sentinel_unit_tmp=\$(sudo mktemp '/etc/systemd/system/."
+        "${HEALTH_SENTINEL_SERVICE}.XXXXXX')",
+        r"sudo install -o root -g root -m 0644 "
+        r'\"\${sentinel_unit_source}\" \"\${sentinel_unit_tmp}\"',
+        r'sudo mv -f -- \"\${sentinel_unit_tmp}\" \"\${sentinel_unit_target}\"',
+        "staged health sentinel owner, mode, or content verification failed",
+        "installed health sentinel owner, mode, or content verification failed",
+        r'sudo cmp -s \"\${sentinel_unit_source}\" \"\${sentinel_unit_target}\"',
+    ):
+        assert required in install
+
+
 def test_legacy_writer_and_live_pid_guard_is_dynamic_and_rechecked(
     tmp_path: Path,
 ) -> None:

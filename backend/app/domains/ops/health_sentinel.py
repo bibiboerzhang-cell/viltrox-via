@@ -835,7 +835,7 @@ def list_history(days: int = _HISTORY_DAYS) -> dict[str, Any]:
 
 if __name__ == "__main__":
     # systemd timer 入口(镜像 vkpi-sync-daily 模式):
-    # cd /opt/viltrox-2.0 && PYTHONPATH=backend .venv/bin/python -m app.domains.ops.health_sentinel
+    # cd /opt/viltrox-2.0/current && env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/viltrox-2.0/current/backend /opt/viltrox-2.0/.venv/bin/python -B -m app.domains.ops.health_sentinel
     # 线上 jobs.py 已分叉,APScheduler 注册只在本地/收敛后生效,线上日跑靠这个入口。
     import json as _json
 

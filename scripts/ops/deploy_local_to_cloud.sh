@@ -203,6 +203,8 @@ paths = {
     Path("scripts/ops/freeze_worktree_contract.py"): 0o400,
     Path("scripts/ops/freeze_git_bridge.py"): 0o400,
     Path("scripts/ops/legacy_to_atomic_preflight.py"): 0o500,
+    Path("scripts/ops/legacy_to_atomic_preflight_report.py"): 0o400,
+    Path("scripts/ops/legacy_to_atomic_preflight_transport.py"): 0o400,
     Path("scripts/ops/verify_legacy_bootstrap_anchor.py"): 0o500,
     Path("scripts/stdout_utils.py"): 0o400,
     Path("scripts/verify_redis_worker_health.py"): 0o500,
@@ -247,6 +249,8 @@ seal_deploy_verifier_bundle() {
     scripts/ops/freeze_worktree_contract.py \
     scripts/ops/freeze_git_bridge.py \
     scripts/ops/legacy_to_atomic_preflight.py \
+    scripts/ops/legacy_to_atomic_preflight_report.py \
+    scripts/ops/legacy_to_atomic_preflight_transport.py \
     scripts/ops/verify_legacy_bootstrap_anchor.py \
     scripts/stdout_utils.py \
     scripts/verify_redis_worker_health.py \
@@ -260,7 +264,7 @@ seal_deploy_verifier_bundle() {
       return 1
     fi
     case "${relative}" in
-      scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_git_bridge.py|scripts/ops/freeze_worktree_contract.py|scripts/stdout_utils.py)
+      scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_git_bridge.py|scripts/ops/freeze_worktree_contract.py|scripts/ops/legacy_to_atomic_preflight_report.py|scripts/ops/legacy_to_atomic_preflight_transport.py|scripts/stdout_utils.py)
         install -m 0400 "${source}" "${target}"
         ;;
       *)
@@ -287,6 +291,8 @@ for relative in (
     Path("scripts/ops/freeze_worktree_candidate.py"),
     Path("scripts/ops/freeze_worktree_contract.py"),
     Path("scripts/ops/legacy_to_atomic_preflight.py"),
+    Path("scripts/ops/legacy_to_atomic_preflight_report.py"),
+    Path("scripts/ops/legacy_to_atomic_preflight_transport.py"),
     Path("scripts/ops/verify_legacy_bootstrap_anchor.py"),
     Path("scripts/stdout_utils.py"),
     Path("scripts/verify_redis_worker_health.py"),
@@ -312,6 +318,8 @@ cleanup_deploy_verifier_bundle() {
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_contract.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_git_bridge.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight_report.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight_transport.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/stdout_utils.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_redis_worker_health.py" \
@@ -908,6 +916,7 @@ REMOTE_SYNC_SERVICE_UNIT_RELATIVE="${PRODUCTION_SYNC_UNIT_RELATIVE}"
 SYNC_TIMER="${PRODUCTION_SYNC_TIMER}"
 HEALTH_SENTINEL_SERVICE="vkpi-health-sentinel.service"
 HEALTH_SENTINEL_TIMER="vkpi-health-sentinel.timer"
+HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE="scripts/ops/systemd/vkpi-health-sentinel.service"
 ALLOW_DURING_SYNC="${ALLOW_DURING_SYNC:-0}"
 VKPI_EXPECT_ACCESS_GATED="${VKPI_EXPECT_ACCESS_GATED:-0}"
 REMOTE_APP_USER="${REMOTE_APP_USER:-viltrox}"
@@ -1265,6 +1274,12 @@ fi
 if [ ! -f "${DEPLOY_CANDIDATE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" ] \
   || [ -L "${DEPLOY_CANDIDATE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" ]; then
   echo "Reviewed sync service unit must be an existing regular non-symlink file: ${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}" >&2
+  exit 1
+fi
+if [ "${HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE##*/}" != "${HEALTH_SENTINEL_SERVICE}" ] \
+  || [ ! -f "${DEPLOY_CANDIDATE_DIR}/${HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE}" ] \
+  || [ -L "${DEPLOY_CANDIDATE_DIR}/${HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE}" ]; then
+  echo "Reviewed health sentinel service unit must be an existing regular non-symlink file: ${HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE}" >&2
   exit 1
 fi
 if [ ! -f "${DEPLOY_CANDIDATE_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}" ] \
@@ -4406,7 +4421,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   # seal; after prepare, harden .env and run the full worker permission checks
   # while the complete consumer fleet is stopped.
   ssh "${SSH_TARGET}" "runtime_dir='${REMOTE_ROOT}/runtime'; job_results_dir='${REMOTE_ROOT}/runtime/job-results'; if [ ! -d \"\${runtime_dir}\" ] || [ -L \"\${runtime_dir}\" ] || [ \"\$(stat -c '%U:%G:%a' \"\${runtime_dir}\")\" != '${REMOTE_APP_USER}:${REMOTE_APP_GROUP}:755' ]; then echo 'bootstrap shared runtime parent is unsafe' >&2; exit 1; fi; if [ ! -e \"\${job_results_dir}\" ] && [ ! -L \"\${job_results_dir}\" ]; then sudo install -d -o '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' -m 0750 \"\${job_results_dir}\"; fi; if [ ! -d \"\${job_results_dir}\" ] || [ -L \"\${job_results_dir}\" ] || [ \"\$(stat -c '%U:%G:%a' \"\${job_results_dir}\")\" != '${REMOTE_APP_USER}:${REMOTE_APP_GROUP}:750' ]; then echo 'bootstrap job-results directory is unsafe' >&2; exit 1; fi"
-  ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '' --database-strategy 'staging-clone' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '' --owner-uid 0 --owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -m yt_dlp --version >/dev/null && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
+  ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '' --database-strategy 'staging-clone' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '' --owner-uid 0 --owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -m yt_dlp --version >/dev/null && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/${HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
   BOOTSTRAP_CANDIDATE_MANIFEST="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/candidate-manifest.json"
   ssh "${SSH_TARGET}" "sudo cat -- '${REMOTE_RELEASE_DIR}/.vkpi-release.json'" >"${BOOTSTRAP_CANDIDATE_MANIFEST}"
   chmod 600 "${BOOTSTRAP_CANDIDATE_MANIFEST}"
@@ -4419,7 +4434,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   verify_deploy_candidate
   assert_deploy_source_unchanged
 else
-  ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-layout-preflight --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --provision-missing && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' --owner-uid 0 --owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -m yt_dlp --version >/dev/null && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env VKPI_JOB_RESULTS_DIR='${REMOTE_ROOT}/runtime/job-results' HOME=/tmp/vkpi-worker-home XDG_CACHE_HOME=/tmp/vkpi-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-runtime-preflight --root '${REMOTE_ROOT}' --release-path '${REMOTE_RELEASE_DIR}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --job-results-dir '${REMOTE_ROOT}/runtime/job-results' && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
+  ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-layout-preflight --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --provision-missing && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --git-sha '${LOCAL_GIT_SHA}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' --owner-uid 0 --owner-gid 0 && sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' verify-seal --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --expected-owner-uid 0 --expected-owner-gid 0 && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B -m yt_dlp --version >/dev/null && sudo -u '${REMOTE_APP_USER}' -g '${REMOTE_APP_GROUP}' env VKPI_JOB_RESULTS_DIR='${REMOTE_ROOT}/runtime/job-results' HOME=/tmp/vkpi-worker-home XDG_CACHE_HOME=/tmp/vkpi-worker-cache TMPDIR=/tmp PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' worker-runtime-preflight --root '${REMOTE_ROOT}' --release-path '${REMOTE_RELEASE_DIR}' --app-user '${REMOTE_APP_USER}' --app-group '${REMOTE_APP_GROUP}' --job-results-dir '${REMOTE_ROOT}/runtime/job-results' && sudo systemd-analyze verify '${REMOTE_RELEASE_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/${HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE}' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '${REMOTE_RELEASE_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}'"
 fi
 
 if [ "${RESCUE_ROLLBACK_MODE}" = "1" ]; then
@@ -4492,7 +4507,7 @@ if ! STAGING_REDIS_WORKER_CAPTURED_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHON
   exit 1
 fi
 ROLLBACK_PREPARE_MAY_HAVE_COMMITTED=1
-if ! ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' prepare --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system --unit-name '${SERVICE_NAME}' --unit-name '${SYNC_SERVICE}' --unit-name vkpi-worker-interactive.service --unit-name 'vkpi-worker-bulk@.service' --optional-unit-name '${STAGING_REDIS_WORKER_SERVICE}' --optional-unit-state '${STAGING_REDIS_WORKER_SERVICE}=${STAGING_REDIS_WORKER_CAPTURED_STATE}' --rollback-file '${REMOTE_LANE_OVERRIDE_FILE}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' ${ROLLBACK_ANCHOR_PREPARE_OPTION}"; then
+if ! ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' prepare --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system --unit-name '${SERVICE_NAME}' --unit-name '${SYNC_SERVICE}' --unit-name '${HEALTH_SENTINEL_SERVICE}' --unit-name vkpi-worker-interactive.service --unit-name 'vkpi-worker-bulk@.service' --optional-unit-name '${STAGING_REDIS_WORKER_SERVICE}' --optional-unit-state '${STAGING_REDIS_WORKER_SERVICE}=${STAGING_REDIS_WORKER_CAPTURED_STATE}' --rollback-file '${REMOTE_LANE_OVERRIDE_FILE}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' ${ROLLBACK_ANCHOR_PREPARE_OPTION}"; then
   if ! reconcile_remote_prepare_commit_state \
     || [ "${ROLLBACK_ARMED}" != "1" ]; then
     echo "Atomic release prepare failed without a verified committed receipt." >&2
@@ -4704,6 +4719,10 @@ fi
 # Install it atomically while the sync timer/service remain runtime-masked, then
 # make systemd observe the byte-checked replacement before any state restore.
 ssh "${SSH_TARGET}" "set -eu; sync_unit_source='${REMOTE_CURRENT_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}'; sync_unit_target='/etc/systemd/system/${SYNC_SERVICE}'; if [ ! -f \"\${sync_unit_source}\" ] || [ -L \"\${sync_unit_source}\" ]; then echo 'reviewed sync service source is not a regular non-symlink file' >&2; exit 1; fi; sync_unit_tmp=\$(sudo mktemp '/etc/systemd/system/.${SYNC_SERVICE}.XXXXXX'); cleanup_sync_unit_tmp() { if [ -n \"\${sync_unit_tmp}\" ]; then sudo rm -f -- \"\${sync_unit_tmp}\"; fi; }; trap cleanup_sync_unit_tmp EXIT; sudo install -o root -g root -m 0644 \"\${sync_unit_source}\" \"\${sync_unit_tmp}\"; if [ -L \"\${sync_unit_tmp}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${sync_unit_tmp}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${sync_unit_source}\" \"\${sync_unit_tmp}\"; then echo 'staged sync service owner, mode, or content verification failed' >&2; exit 1; fi; sudo mv -f -- \"\${sync_unit_tmp}\" \"\${sync_unit_target}\"; sync_unit_tmp=''; trap - EXIT; if [ ! -f \"\${sync_unit_target}\" ] || [ -L \"\${sync_unit_target}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${sync_unit_target}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${sync_unit_source}\" \"\${sync_unit_target}\"; then echo 'installed sync service owner, mode, or content verification failed' >&2; exit 1; fi; sudo systemctl daemon-reload"
+# The sentinel service is in the same rollback capture as the web/worker units.
+# Replace it through a verified same-filesystem temporary file so a lost SSH
+# connection cannot leave a truncated unit between prepare and state restore.
+ssh "${SSH_TARGET}" "set -eu; sentinel_unit_source='${REMOTE_CURRENT_DIR}/${HEALTH_SENTINEL_SERVICE_UNIT_RELATIVE}'; sentinel_unit_target='/etc/systemd/system/${HEALTH_SENTINEL_SERVICE}'; if [ ! -f \"\${sentinel_unit_source}\" ] || [ -L \"\${sentinel_unit_source}\" ]; then echo 'reviewed health sentinel source is not a regular non-symlink file' >&2; exit 1; fi; sentinel_unit_tmp=\$(sudo mktemp '/etc/systemd/system/.${HEALTH_SENTINEL_SERVICE}.XXXXXX'); cleanup_sentinel_unit_tmp() { if [ -n \"\${sentinel_unit_tmp}\" ]; then sudo rm -f -- \"\${sentinel_unit_tmp}\"; fi; }; trap cleanup_sentinel_unit_tmp EXIT; sudo install -o root -g root -m 0644 \"\${sentinel_unit_source}\" \"\${sentinel_unit_tmp}\"; if [ -L \"\${sentinel_unit_tmp}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${sentinel_unit_tmp}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${sentinel_unit_source}\" \"\${sentinel_unit_tmp}\"; then echo 'staged health sentinel owner, mode, or content verification failed' >&2; exit 1; fi; sudo mv -f -- \"\${sentinel_unit_tmp}\" \"\${sentinel_unit_target}\"; sentinel_unit_tmp=''; trap - EXIT; if [ ! -f \"\${sentinel_unit_target}\" ] || [ -L \"\${sentinel_unit_target}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${sentinel_unit_target}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${sentinel_unit_source}\" \"\${sentinel_unit_target}\"; then echo 'installed health sentinel owner, mode, or content verification failed' >&2; exit 1; fi; sudo systemctl daemon-reload"
 ssh "${SSH_TARGET}" "sudo systemctl unmask '${STAGING_REDIS_WORKER_SERVICE}' >/dev/null 2>&1 || true; sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/${REMOTE_SERVICE_UNIT_RELATIVE}' '/etc/systemd/system/${SERVICE_NAME}' && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/scripts/ops/systemd/vkpi-worker-interactive.service' '/etc/systemd/system/vkpi-worker-interactive.service' && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/scripts/ops/systemd/vkpi-worker-bulk@.service' '/etc/systemd/system/vkpi-worker-bulk@.service' && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/scripts/ops/systemd/${STAGING_REDIS_WORKER_SERVICE}' '/etc/systemd/system/${STAGING_REDIS_WORKER_SERVICE}' && sudo install -d -o root -g root -m 0755 '${REMOTE_LANE_OVERRIDE_DIR}' && [ ! -L '${REMOTE_LANE_OVERRIDE_DIR}' ] && [ \"\$(sudo stat -c '%u:%g:%a' '${REMOTE_LANE_OVERRIDE_DIR}')\" = '0:0:755' ] && lane_tmp=\$(sudo mktemp '${REMOTE_LANE_OVERRIDE_DIR}/.vkpi-lane-overrides.env.XXXXXX') && cleanup_lane_tmp() { if [ -n \"\${lane_tmp}\" ]; then sudo rm -f -- \"\${lane_tmp}\"; fi; } && trap cleanup_lane_tmp EXIT && sudo install -o root -g root -m 0644 '${REMOTE_CURRENT_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}' \"\${lane_tmp}\" && sudo cmp -s '${REMOTE_CURRENT_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}' \"\${lane_tmp}\" && sudo mv -f -- \"\${lane_tmp}\" '${REMOTE_LANE_OVERRIDE_FILE}' && lane_tmp='' && trap - EXIT && [ ! -L '${REMOTE_LANE_OVERRIDE_FILE}' ] && [ \"\$(sudo stat -c '%u:%g:%a' '${REMOTE_LANE_OVERRIDE_FILE}')\" = '0:0:644' ] && sudo cmp -s '${REMOTE_CURRENT_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}' '${REMOTE_LANE_OVERRIDE_FILE}' && sudo systemctl daemon-reload"
 
 # The static dual map must still match the prepared hash before PgBouncer is
