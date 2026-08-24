@@ -19,6 +19,7 @@ import {
   saveDashboardPreference,
 } from "../dashboardPreferenceStore";
 import { useT } from "../lib/i18n";
+import { ModuleSizeProvider } from "./moduleSize";
 import "./EditableDashboardBoard.css";
 
 const e = React.createElement;
@@ -757,6 +758,9 @@ export function EditableDashboardBoard({
       responsiveLayout.map((item) => {
         const definition = moduleMap.get(item.moduleKey);
         if (!definition) return null;
+        // 模块尺寸上下文:heightPx 与棋盘渲染公式一致(h*rowHeight + (h-1)*margin),
+        // 列表型模块据此自适应可见行数;不读上下文的模块零行为差异(默认 null)。
+        const moduleRows = normalizeHeight(item.height);
         return e("section", {
           key: item.instanceId,
           className: `vkpi-board-module vkpi-board-module--${definition.key}`,
@@ -765,10 +769,10 @@ export function EditableDashboardBoard({
           "data-dashboard-x": item.x,
           "data-dashboard-y": item.y,
           "data-dashboard-span": item.span,
-          "data-dashboard-height": normalizeHeight(item.height),
+          "data-dashboard-height": moduleRows,
           style: {
             "--vkpi-module-span": item.span,
-            "--vkpi-module-height": normalizeHeight(item.height),
+            "--vkpi-module-height": moduleRows,
           } as React.CSSProperties,
           tabIndex: -1,
         },
@@ -783,7 +787,13 @@ export function EditableDashboardBoard({
             }, e(GripVertical, { size: 14 })),
             e("button", { type: "button", onClick: () => removeItem(item.instanceId), title: t("移除模块"), "aria-label": `${t("移除")} ${t(definition.label)}` }, e(X, { size: 13 })),
           ),
-          e("div", { className: "vkpi-board-module__content" }, definition.render()),
+          e("div", { className: "vkpi-board-module__content" },
+            e(ModuleSizeProvider, {
+              heightRows: moduleRows,
+              heightPx: moduleRows * BOARD_ROW_HEIGHT_PX + (moduleRows - 1) * BOARD_GAP_PX,
+              spanCols: item.span,
+            }, definition.render()),
+          ),
         );
       }),
     ),

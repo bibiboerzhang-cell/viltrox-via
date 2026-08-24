@@ -1,0 +1,165 @@
+import React from "react";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// 「数据关注」一键流程冒烟(D 车道 2026-08-23):
+//   ① runDataWatchAction:tracking 成功回执 / sku_required 回落不假登记 / 未知状态如实报错 /
+//      错误码人话映射 / 只读与迟到响应双闸;
+//   ② VideoTrackActions 的「数据关注」按钮:props 直连(内容墙)与 DataWatchContext 回落
+//      (详情弹窗经 libdetail 不改签名)两条接线都要点亮;忙态/禁用原因如实。
+const dataWatchMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../../services/vkpi/myKolBoard-api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../../services/vkpi/myKolBoard-api")>();
+  return { ...actual, dataWatchMyKolVideo: (...args: unknown[]) => dataWatchMock(...args) };
+});
+
+import type { VkpiKolPoolVideoRow } from "../../../../services/vkpi/myKolBoard-api";
+import {
+  DataWatchContext,
+  dataWatchErrorText,
+  dataWatchSuccessText,
+  runDataWatchAction,
+  skuRequiredHintText,
+  WALL_SKU_REQUIRED_HINT,
+  type RunDataWatchDeps,
+} from "./MyKolBoardPage.data-watch";
+import { VideoTrackActions } from "./MyKolBoardPage.video-tasks";
+
+const video = (extra: Partial<VkpiKolPoolVideoRow> = {}): VkpiKolPoolVideoRow => ({
+  evidence_id: 901,
+  kol_pool_id: 101,
+  media_kind: "video",
+  title: "Video 901",
+  content_url: "https://www.youtube.com/watch?v=video901",
+  ...extra,
+});
+
+function makeDeps(overrides: Partial<RunDataWatchDeps> = {}) {
+  const busy = new Set<number>();
+  const deps: RunDataWatchDeps = {
+    apiToken: "tok",
+    kolPoolId: 101,
+    isBusy: (id) => busy.has(id),
+    setBusy: vi.fn((id: number, on: boolean) => { if (on) busy.add(id); else busy.delete(id); }),
+    setReceipt: vi.fn(),
+    onSkuRequired: vi.fn(),
+    onTracked: vi.fn(),
+    ...overrides,
+  };
+  return { deps, busy };
+}
+
+beforeEach(() => {
+  dataWatchMock.mockReset();
+});
+
+describe("runDataWatchAction(一键数据关注流程)", () => {
+  it("tracking 成功:回执如实列 SKU + 指向单品播放数据模块,并触发任务态重读", async () => {
+    dataWatchMock.mockResolvedValue({ status: "tracking", skus: ["AF-85-F14", "AF-35-F18"], sku_source: "auto", refresh: "queued" });
+    const { deps, busy } = makeDeps();
+    await runDataWatchAction(video(), deps);
+
+    expect(dataWatchMock).toHaveBeenCalledWith("tok", 101, 901);
+    const last = (deps.setReceipt as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
+    expect(last).toEqual({ text: "已登记数据关注(SKU AF-85-F14 / AF-35-F18)——系统定时抓取播放/点赞,结果见『单品播放数据』模块。", tone: "info" });
+    expect(deps.onTracked).toHaveBeenCalledTimes(1);
+    expect(busy.size).toBe(0);
+  });
+
+  it("refresh=already_queued 如实注明「已在队列」,绝不当新排队", () => {
+    expect(dataWatchSuccessText({ status: "tracking", skus: ["AF-85-F14"], refresh: "already_queued" }))
+      .toBe("已登记数据关注(SKU AF-85-F14)——系统定时抓取播放/点赞,结果见『单品播放数据』模块(指标刷新已在队列中)。");
+  });
+
+  it("sku_required:只回落 onSkuRequired(携候选),不写成功回执不触发重读", async () => {
+    dataWatchMock.mockResolvedValue({ status: "sku_required", candidates: [{ sku_code: "AF-85-F14", sku_name: "AF 85mm" }] });
+    const { deps } = makeDeps();
+    const row = video();
+    await runDataWatchAction(row, deps);
+
+    expect(deps.onSkuRequired).toHaveBeenCalledWith(row, [{ sku_code: "AF-85-F14", sku_name: "AF 85mm" }]);
+    // setReceipt 只被开场清空调用过(null),没有任何“已登记”假回执
+    expect((deps.setReceipt as ReturnType<typeof vi.fn>).mock.calls).toEqual([[null]]);
+    expect(deps.onTracked).not.toHaveBeenCalled();
+  });
+
+  it("未知状态如实报「未获服务端确认」", async () => {
+    dataWatchMock.mockResolvedValue({ status: "weird" });
+    const { deps } = makeDeps();
+    await runDataWatchAction(video(), deps);
+    expect((deps.setReceipt as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]).toEqual({ text: "数据关注未获服务端确认:weird", tone: "error" });
+  });
+
+  it("错误码映射成人话(共享只读 / 未采集 / 平台不支持)", async () => {
+    dataWatchMock.mockRejectedValue(Object.assign(new Error("x"), { detail: "my_kol_video_write_forbidden", status: 403 }));
+    const { deps } = makeDeps();
+    await runDataWatchAction(video(), deps);
+    expect((deps.setReceipt as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]).toEqual({ text: "共享 KOL 仅可查看,数据关注请由收藏负责人发起。", tone: "error" });
+    expect(dataWatchErrorText({ detail: "new_video_target_resolution_required" })).toContain("请先账号补采/深爬");
+    expect(dataWatchErrorText({ detail: "video_metric_platform_unsupported" })).toBe("该平台暂不支持播放追踪。");
+  });
+
+  it("只读 / 缺 evidence id / 已在提交中:零请求", async () => {
+    const { deps } = makeDeps({ readOnly: true });
+    await runDataWatchAction(video(), deps);
+    const { deps: noEid } = makeDeps();
+    await runDataWatchAction(video({ evidence_id: undefined, id: undefined }), noEid);
+    const { deps: busyDeps } = makeDeps({ isBusy: () => true });
+    await runDataWatchAction(video(), busyDeps);
+    expect(dataWatchMock).not.toHaveBeenCalled();
+  });
+
+  it("迟到响应被丢弃(切换 KOL 后不回写回执)", async () => {
+    dataWatchMock.mockResolvedValue({ status: "tracking", skus: ["AF-85-F14"] });
+    const { deps } = makeDeps({ isCurrent: () => false });
+    await runDataWatchAction(video(), deps);
+    // 开场清空发生在 isCurrent 判定之前;成功回执被丢弃
+    expect((deps.setReceipt as ReturnType<typeof vi.fn>).mock.calls).toEqual([[null]]);
+    expect(deps.onTracked).not.toHaveBeenCalled();
+  });
+
+  it("sku_required 提示文案:详情带候选,墙上引导去详情且不冒充完成", () => {
+    expect(skuRequiredHintText([{ sku_code: "AF-85-F14" }, { sku_code: "" }]))
+      .toBe("未能自动识别产品——请补一个 SKU 后用『追踪并排队刷新』提交(候选:AF-85-F14)。");
+    expect(skuRequiredHintText()).toBe("未能自动识别产品——请补一个 SKU 后用『追踪并排队刷新』提交。");
+    expect(WALL_SKU_REQUIRED_HINT).toContain("未登记");
+    expect(WALL_SKU_REQUIRED_HINT).toContain("关联 SKU");
+  });
+});
+
+describe("VideoTrackActions 数据关注按钮接线", () => {
+  it("props 直连(内容墙):点击回传整行;忙态标「关注提交中…」", () => {
+    const onDataWatch = vi.fn();
+    const row = video();
+    const { rerender } = render(<VideoTrackActions video={row} onDataWatch={onDataWatch} />);
+    fireEvent.click(screen.getByRole("button", { name: "数据关注" }));
+    expect(onDataWatch).toHaveBeenCalledWith(row);
+    rerender(<VideoTrackActions video={row} onDataWatch={onDataWatch} dataWatchBusy />);
+    expect(screen.getByRole("button", { name: "关注提交中…" })).toBeDisabled();
+  });
+
+  it("DataWatchContext 回落(详情弹窗):无 props 也点亮按钮,忙态取 busyEvidence", () => {
+    const onDataWatch = vi.fn();
+    const row = video();
+    render(
+      <DataWatchContext.Provider value={{ onDataWatch, busyEvidence: new Set<number>() }}>
+        <VideoTrackActions video={row} onTrack={vi.fn()} onLinkSku={vi.fn()} />
+      </DataWatchContext.Provider>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "数据关注" }));
+    expect(onDataWatch).toHaveBeenCalledWith(row);
+  });
+
+  it("共享只读禁用并如实给原因;无 URL / 图文轮播同禁", () => {
+    render(
+      <VideoTrackActions video={video()} onDataWatch={vi.fn()} readOnly readOnlyHint="共享 KOL 仅可查看" />,
+    );
+    const btn = screen.getByRole("button", { name: "数据关注" });
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("title", "共享 KOL 仅可查看");
+    render(<VideoTrackActions video={video({ content_url: "" })} onDataWatch={vi.fn()} />);
+    render(<VideoTrackActions video={video({ media_kind: "image" })} onDataWatch={vi.fn()} />);
+    const all = screen.getAllByRole("button", { name: "数据关注" });
+    expect(all.filter((el) => (el as HTMLButtonElement).disabled).length).toBe(3);
+  });
+});

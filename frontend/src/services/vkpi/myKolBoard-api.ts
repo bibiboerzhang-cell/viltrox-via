@@ -393,6 +393,43 @@ export async function refreshMyKolVideoMetrics(
   );
 }
 
+/* ——— 一键「数据关注」(收口波 2026-08-23 · D 车道):POST …/videos/{evidence_id}/data-watch ——— */
+
+export interface VkpiDataWatchSkuCandidate {
+  sku_code?: string;
+  sku_name?: string;
+}
+
+/** 契约(与后端 video_data_watch 并行锁定,禁编字段):
+ *  status=tracking → 已登记(skus + sku_source: manual|existing|auto,refresh 为排队真值);
+ *  status=sku_required → 服务端认不出关联产品(HTTP 200 + candidates 候选),
+ *  由前端回落「关联 SKU」流程 —— 绝不无 SKU 假登记。 */
+export interface VkpiDataWatchResponse {
+  status?: "tracking" | "sku_required" | string;
+  evidence_id?: number;
+  kol_pool_id?: number;
+  skus?: string[];
+  sku_source?: "manual" | "existing" | "auto" | string;
+  tracking?: "active" | string;
+  refresh?: "queued" | "already_queued" | string;
+  candidates?: VkpiDataWatchSkuCandidate[];
+}
+
+/** 一键数据关注:自动关联产品 + 登记持久追踪 + 排队指标刷新(只排队,不冒充实时完成)。
+    productSkus 缺省发空体,让服务端按「已关联 > 自动识别」顺序认 SKU。 */
+export async function dataWatchMyKolVideo(
+  token: string,
+  kolPoolId: number | string,
+  evidenceId: number | string,
+  productSkus?: string[],
+) {
+  return apiFetch<VkpiDataWatchResponse>(
+    `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/videos/${encodeURIComponent(String(evidenceId))}/data-watch`,
+    { method: "POST", body: jsonBody(productSkus && productSkus.length ? { product_skus: productSkus } : {}) },
+    token,
+  );
+}
+
 function signedDelta(value: number): string {
   const normalized = Number(value);
   if (!Number.isFinite(normalized)) return "待积累";

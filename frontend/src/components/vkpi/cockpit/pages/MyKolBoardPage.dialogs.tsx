@@ -14,6 +14,7 @@ import { KolLensUsageList } from "./MyKolBoardPage.charts";
 import { getLensInsightsForKol, type KolLensUsage } from "../../../../services/vkpi/lensInsights-api";
 import { ReceiptLine } from "./MyKolBoardPage.receipt";
 import { TrackExistingVideoForm } from "./MyKolBoardPage.track-form";
+import { DataWatchContext, runDataWatchAction, skuRequiredHintText, toggleIdInSet } from "./MyKolBoardPage.data-watch";
 import { RecoveryPollingLine } from "./MyKolBoardPage.video-tasks";
 import { useMyKolVideoRecovery } from "./useMyKolVideoRecovery";
 import {
@@ -528,11 +529,12 @@ export function KolDetailModal({
   const [refreshingEvidence, setRefreshingEvidence] = React.useState<Set<number>>(new Set());
   const [queuedRefreshEvidence, setQueuedRefreshEvidence] = React.useState<Set<number>>(new Set());
   const [trackingEvidence, setTrackingEvidence] = React.useState<Set<number>>(new Set());
+  const [dataWatchEvidence, setDataWatchEvidence] = React.useState<Set<number>>(new Set());
   const skuInputRef = React.useRef<HTMLInputElement | null>(null);
   React.useEffect(() => {
     setMsgs({}); setQueuedEvidence(new Set()); setProjId("");
     setTrackUrl(""); setTrackSkuInput(""); setTrackBusy(false);
-    setRefreshingEvidence(new Set()); setQueuedRefreshEvidence(new Set()); setTrackingEvidence(new Set());
+    setRefreshingEvidence(new Set()); setQueuedRefreshEvidence(new Set()); setTrackingEvidence(new Set()); setDataWatchEvidence(new Set());
   }, [item?.poolId]);
   const setMsg = (key: string, msg: FlowReceipt | null) => setMsgs((prev) => ({ ...prev, [key]: msg }));
   const setBusy = (key: string, on: boolean) =>
@@ -611,6 +613,22 @@ export function KolDetailModal({
       if (!input) return;
       input.focus();
       if (typeof input.scrollIntoView === "function") input.scrollIntoView({ block: "center" });
+    });
+  };
+  // 一键「数据关注」:自动认产品 + 登记追踪 + 排队刷新(流程/文案住 MyKolBoardPage.data-watch.ts);
+  //   sku_required 时回落既有「关联 SKU」流程(预填 URL + 焦点送 SKU 框),诚实提示补 SKU 再提交。
+  const runDataWatch = (video: VkpiKolPoolVideoRow) => {
+    const target = { ...targetRef.current };
+    return runDataWatchAction(video, {
+      apiToken,
+      kolPoolId: target.poolId,
+      readOnly: paidActionsReadOnly,
+      isCurrent: () => targetIsCurrent(target),
+      isBusy: (eid) => dataWatchEvidence.has(eid),
+      setBusy: toggleIdInSet(setDataWatchEvidence),
+      setReceipt: (msg) => setMsg("tracking", msg),
+      onSkuRequired: (v, candidates) => { linkSkuFromCard(v); setMsg("tracking", { text: skuRequiredHintText(candidates), tone: "info" }); },
+      onTracked: () => { void recovery.refresh(); },
     });
   };
 
@@ -916,24 +934,27 @@ export function KolDetailModal({
             暂无已采集内容——可发起补采。请使用上方“账号补采 / 深爬”入口；缺少主页时先打开 KOL 档案。
           </div>
         ) : (
-          <KolVideoSection
-            videos={loaded}
-            queuedEvidence={queuedEvidence}
-            busyKeys={busyKeys}
-            onEnqueueOne={enqueueOne}
-            refreshingEvidence={refreshingEvidence}
-            queuedRefreshEvidence={queuedRefreshEvidence}
-            onRefreshMetrics={runMetricRefresh}
-            trackingEvidence={trackingEvidence}
-            onTrackVideo={(video) => { void runTrackVideo({ video }); }}
-            onLinkSku={linkSkuFromCard}
-            hasMore={recovery.hasMore}
-            loadingMore={recovery.loadingMore}
-            onLoadMore={() => { void recovery.loadMore(); }}
-            total={recovery.total}
-            paidActionsReadOnly={paidActionsReadOnly}
-            paidActionsReadOnlyHint={paidActionsReadOnlyHint}
-          />
+          /* libdetail 不改签名:视频卡的一键「数据关注」经 context 供给(VideoTrackActions 回落消费) */
+          <DataWatchContext.Provider value={{ onDataWatch: (video) => { void runDataWatch(video); }, busyEvidence: dataWatchEvidence }}>
+            <KolVideoSection
+              videos={loaded}
+              queuedEvidence={queuedEvidence}
+              busyKeys={busyKeys}
+              onEnqueueOne={enqueueOne}
+              refreshingEvidence={refreshingEvidence}
+              queuedRefreshEvidence={queuedRefreshEvidence}
+              onRefreshMetrics={runMetricRefresh}
+              trackingEvidence={trackingEvidence}
+              onTrackVideo={(video) => { void runTrackVideo({ video }); }}
+              onLinkSku={linkSkuFromCard}
+              hasMore={recovery.hasMore}
+              loadingMore={recovery.loadingMore}
+              onLoadMore={() => { void recovery.loadMore(); }}
+              total={recovery.total}
+              paidActionsReadOnly={paidActionsReadOnly}
+              paidActionsReadOnlyHint={paidActionsReadOnlyHint}
+            />
+          </DataWatchContext.Provider>
         )}
         <RecoveryPollingLine polling={recovery.polling} paused={recovery.pollPaused} onResume={recovery.resumePolling} />
         <ReceiptLine msg={msgs.metrics || null} />

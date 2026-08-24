@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// dataWatchMyKolVideo 走 ../http.apiFetch 单出口(兄弟件 kolMemory-api.test.ts 同款 mock seam);
+// jsonBody 等其余导出保持真实现,本文件的纯函数用例零受影响。
+const apiFetchMock = vi.hoisted(() => vi.fn());
+vi.mock("../http", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../http")>();
+  return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
+});
 
 import {
   classifyVideoRow,
+  dataWatchMyKolVideo,
   filterClassifiedVideos,
   sortClassifiedVideos,
   summarizeKolVideos,
@@ -93,5 +102,44 @@ describe("Viltrox video evidence classification", () => {
       delta_7d_status: "insufficient_history",
       last_success: { fetched_at: "2026-08-18T09:00:00Z", status: "success" },
     }))).toBe("数据已陈旧 · 24h +5 · 7d 待积累 · 最后刷新 2026-08-18 09:00");
+  });
+});
+
+describe("dataWatchMyKolVideo(一键数据关注 POST 契约)", () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset();
+    apiFetchMock.mockResolvedValue({ status: "tracking" });
+  });
+
+  it("POST 到 data-watch 端点;缺省发空体,让服务端自动认 SKU", async () => {
+    await dataWatchMyKolVideo("tok", 101, 901);
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      "/api/admin/vkpi/my-kol/101/videos/901/data-watch",
+      { method: "POST", body: JSON.stringify({}) },
+      "tok",
+    );
+  });
+
+  it("显式 SKU 列表如实透传 product_skus", async () => {
+    await dataWatchMyKolVideo("tok", "101", 901, ["AF-85-F14", "AF-35-F18"]);
+    const [path, init] = apiFetchMock.mock.calls[0];
+    expect(path).toBe("/api/admin/vkpi/my-kol/101/videos/901/data-watch");
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({ product_skus: ["AF-85-F14", "AF-35-F18"] });
+  });
+
+  it("字符串 id 经 encodeURIComponent 归一(路径安全)", async () => {
+    await dataWatchMyKolVideo("tok", "a b", "9/1");
+    expect(String(apiFetchMock.mock.calls[0][0])).toBe("/api/admin/vkpi/my-kol/a%20b/videos/9%2F1/data-watch");
+  });
+
+  it("sku_required 响应(HTTP 200 携 candidates)原样返回,不吞不改", async () => {
+    apiFetchMock.mockResolvedValue({
+      status: "sku_required",
+      evidence_id: 901,
+      candidates: [{ sku_code: "AF-85-F14", sku_name: "AF 85mm F1.4 Pro" }],
+    });
+    const resp = await dataWatchMyKolVideo("tok", 101, 901);
+    expect(resp.status).toBe("sku_required");
+    expect(resp.candidates?.[0]?.sku_code).toBe("AF-85-F14");
   });
 });

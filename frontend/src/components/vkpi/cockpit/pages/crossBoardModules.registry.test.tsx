@@ -1,7 +1,11 @@
 import React from "react";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DashboardModuleDefinition } from "../components/EditableDashboardBoard";
+import { FULL_BOARD_MODULE_CATALOG } from "./crossBoardModules.catalog.generated";
 
 let capturedModules: DashboardModuleDefinition[] = [];
 let capturedDefaultLayout: Array<{ moduleKey: string; span: number }> = [];
@@ -104,5 +108,28 @@ describe("Dashboard 模块 registry 权限", () => {
       "xb-full-skill-studio-overview",
     ]));
     expect(new Set(capturedModules.map((module) => module.key)).size).toBe(capturedModules.length);
+  });
+});
+
+// 定标准(2026-08-23):新增模组必须同步上 Dashboard —— 任何板块页 modules 注册表
+// 加了模组,必须重跑 generate-cross-board-module-catalog.mjs 让它进 Dashboard
+// 「添加模块」palette(零手写目录)。结构性执法 = 生成器 --check 字节级比对:
+// 目录与全部板块页注册表任何一处失同步(新增/改名/改尺寸未重生成)本测试即红。
+describe("生成目录与各板注册表同步(新增模组必须同步上 Dashboard)", () => {
+  const frontendRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../../..");
+
+  it("generate-cross-board-module-catalog --check:每个板块模组都进了生成目录且不过期", () => {
+    const output = execFileSync(
+      process.execPath,
+      [path.join(frontendRoot, "scripts", "generate-cross-board-module-catalog.mjs"), "--check"],
+      { encoding: "utf8" },
+    );
+    expect(output).toContain("cross-board catalog current");
+  });
+
+  it("抽查:MY KOL 新增 skuPlay(单品播放数据)已在 Dashboard palette 目录里", () => {
+    const myKol = FULL_BOARD_MODULE_CATALOG.find((source) => source.board === "my-kol");
+    expect(myKol).toBeTruthy();
+    expect(myKol?.modules.some((row) => row.moduleKey === "skuPlay" && row.label === "单品播放数据")).toBe(true);
   });
 });

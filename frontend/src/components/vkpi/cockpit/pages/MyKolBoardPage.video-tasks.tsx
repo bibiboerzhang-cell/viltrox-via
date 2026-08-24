@@ -8,6 +8,7 @@ import {
   type VkpiVideoTasks,
 } from "../../../../services/vkpi/myKolVideoTasks";
 import type { VkpiKolPoolVideoRow } from "../../../../services/vkpi/myKolBoard-api";
+import { DataWatchContext } from "./MyKolBoardPage.data-watch";
 import { EtaHint, FailureGuidance } from "../lib/failureGuidance";
 import { useT } from "../lib/i18n";
 
@@ -15,8 +16,10 @@ import { useT } from "../lib/i18n";
 //   两层:任务态 chip(排队/进行中/重试中/已阻断/失败/已完成)+ 数据新鲜度(实测于 xx 前 / 已过期 / 从未测);
 //   旧结果被新任务 supersede 时显示「重测中 · 上次结果可见」。真值全部来自契约 my_kol_video_recovery_v1
 //   (services/vkpi/myKolVideoTasks.ts),本件只排版;门面禁内部词。
+//   「数据关注」= POST …/videos/{evidence_id}/data-watch(一键:自动认产品 + 登记追踪 + 排队刷新;
+//     认不出产品时服务端返回候选,入口回落「关联 SKU」流程,绝不无 SKU 假登记);
 //   「追踪播放」= POST /my-kol/{id}/videos(登记持久追踪 + 排队抓取,可带 SKU);
-//   「刷新指标」= POST …/videos/{evidence_id}/refresh(一次性)。两者都只排队,不冒充实时完成。
+//   「刷新指标」= POST …/videos/{evidence_id}/refresh(一次性)。三者都只排队,不冒充实时完成。
 
 const STATUS_CHIP = "inline-flex items-center gap-1 rounded-[5px] border px-1.5 py-px text-[9.5px] font-bold leading-4";
 
@@ -88,7 +91,7 @@ export const TRACK_BTN =
 export const SECONDARY_BTN =
   "inline-flex min-h-8 items-center rounded-lg border border-line px-2 py-1 text-[10.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default";
 
-/** 卡片级入口:追踪播放(主)+ 关联 SKU(次)。禁用原因如实放 title。 */
+/** 卡片级入口:数据关注(一键主入口)+ 追踪播放 + 关联 SKU(次)。禁用原因如实放 title。 */
 export function VideoTrackActions({
   video,
   busy = false,
@@ -96,6 +99,8 @@ export function VideoTrackActions({
   readOnlyHint = "",
   onTrack,
   onLinkSku,
+  onDataWatch,
+  dataWatchBusy = false,
 }: {
   video: VkpiKolPoolVideoRow;
   busy?: boolean;
@@ -103,24 +108,43 @@ export function VideoTrackActions({
   readOnlyHint?: string;
   onTrack?: (video: VkpiKolPoolVideoRow) => void;
   onLinkSku?: (video: VkpiKolPoolVideoRow) => void;
+  /** 一键「数据关注」;props 缺席时回落 DataWatchContext(详情弹窗经 libdetail 不改签名供给) */
+  onDataWatch?: (video: VkpiKolPoolVideoRow) => void;
+  dataWatchBusy?: boolean;
 }) {
   const { t } = useT();
+  const dataWatchCtx = React.useContext(DataWatchContext);
+  const eid = Number(video.evidence_id ?? video.id) || 0;
+  const handleDataWatch = onDataWatch ?? dataWatchCtx?.onDataWatch;
+  const watchBusy = dataWatchBusy || Boolean(eid && dataWatchCtx?.busyEvidence.has(eid));
   const url = String(video.content_url || "").trim();
   const kind = String(video.media_kind ?? video.evidence_type ?? "video").toLowerCase();
   const isVideo = kind !== "image" && kind !== "carousel";
   const metricActive = isTaskActive(video.tasks?.metric_refresh);
   const tracked = String(video.tasks?.metric_refresh?.data?.tracking_status || video.tracking_status || "") === "tracked";
-  const disabledReason = readOnly
+  const baseDisabledReason = readOnly
     ? readOnlyHint
     : !url
       ? t("该条未存原帖 URL,无法追踪;请先补采账号内容")
       : !isVideo
         ? t("图文/轮播没有播放数,不支持播放追踪")
-        : metricActive
-          ? t("已有追踪任务在后台进行,完成后可再次发起")
-          : "";
+        : "";
+  const disabledReason = baseDisabledReason || (metricActive ? t("已有追踪任务在后台进行,完成后可再次发起") : "");
+  // 数据关注不因在途任务禁用:服务端幂等(refresh already_queued 如实回执),仍可补登 SKU 关联。
+  const dataWatchDisabledReason = baseDisabledReason || (!eid ? t("该条缺库内编号,暂不支持一键数据关注") : "");
   return (
     <>
+      {handleDataWatch ? (
+        <button
+          type="button"
+          className={TRACK_BTN}
+          disabled={Boolean(dataWatchDisabledReason) || watchBusy}
+          title={dataWatchDisabledReason || t("一键数据关注:系统自动识别该视频关联的产品并登记持久追踪,定时抓取播放/点赞;认不出产品会请你补一个 SKU(只排队,不是实时完成)")}
+          onClick={() => handleDataWatch(video)}
+        >
+          {watchBusy ? t("关注提交中…") : t("数据关注")}
+        </button>
+      ) : null}
       {onTrack ? (
         <button
           type="button"
@@ -153,7 +177,7 @@ export function TrackGuideLine({ compact = false }: { compact?: boolean }) {
   return (
     <div className="rounded-lg border border-dashed border-accent bg-accent-soft px-3 py-2 text-[11.5px] leading-5 text-ink-2" data-vkpi-track-guide="">
       <span className="font-semibold text-accent">{t("想追踪某条视频的播放?")}</span>{" "}
-      {t("点视频卡片上的「追踪播放」,系统会定时抓取播放/点赞并记录走势;「关联 SKU」可把播放归到具体产品。")}
+      {t("点视频卡片上的「数据关注」一键登记:自动识别关联产品并定时抓取播放/点赞;「追踪播放」只登记播放追踪,「关联 SKU」可手动把播放归到具体产品。")}
       {compact ? null : <> {t("状态两行分别是:后台任务进展 + 数据实测时间;页面重开仍会显示在途任务。")}</>}
     </div>
   );

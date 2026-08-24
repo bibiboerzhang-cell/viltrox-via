@@ -13,7 +13,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 //   无实时接口的旧 cover 静态盘点已下线,避免历史快照冒充当前进度;
 // - 【M3→M4】库「有 V 视频」= board-ext v_content.v_kol_ids 名单精确过滤(Set 查找;
 //   truncated / 名单缺席均如实降级标注,绝不悄悄装精确);
-// - 注册表 manager vs employee 差异(裁决②A)+ 布局键 vkpi-my-kol-layout-v4 +
+// - 注册表 manager vs employee 差异(裁决②A)+ 布局键 vkpi-my-kol-layout-v5 +
 //   不传 apiToken → 绝不写账户级 dashboard_layout_v1;
 // - 诚实空态:aggregate 失败 = 错误卡;board-ext 失败 = 图形卡 ErrorCard + KPI 带
 //   时序/药丸缺席不编数;
@@ -482,8 +482,8 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(palette.queryByText("数据覆盖")).toBeNull();
   });
 
-  it("布局键 vkpi-my-kol-layout-v4 生效;不传 apiToken → 绝不写账户级 dashboard 布局", async () => {
-    window.localStorage.setItem("vkpi-my-kol-layout-v4", JSON.stringify([{ moduleKey: "kpiM", span: 12 }]));
+  it("布局键 vkpi-my-kol-layout-v5 生效;不传 apiToken → 绝不写账户级 dashboard 布局", async () => {
+    window.localStorage.setItem("vkpi-my-kol-layout-v5", JSON.stringify([{ moduleKey: "kpiM", span: 12 }]));
     renderBoard();
     expect((await screen.findAllByText("在库 KOL")).length).toBeGreaterThan(0);
     expect(screen.queryByText("每日学习摘要")).toBeNull();
@@ -577,7 +577,7 @@ describe("MyKolBoardPage M4(图形联动:漏斗点段 / 平台点行 / fitdist �
   });
 
   it("palette 五模块真身(预置布局):播放榜/覆盖/双线/认领/共享全真渲染,静态盘点退役", async () => {
-    window.localStorage.setItem("vkpi-my-kol-layout-v4", JSON.stringify(PALETTE_LAYOUT));
+    window.localStorage.setItem("vkpi-my-kol-layout-v5", JSON.stringify(PALETTE_LAYOUT));
     renderBoard();
     // viewsTop:实测播放条形榜(NULL 剔除口径注在 SrcChip/ProvNote)
     expect(await screen.findByText("播放 Top 视频")).toBeTruthy();

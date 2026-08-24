@@ -11,7 +11,9 @@ import {
   type VkpiRecentVideosGroup,
 } from "../../../../services/vkpi/myKolBoard-api";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
+import { adaptiveRowCount, useModuleSize } from "../components/moduleSize";
 import { CHIP, CHIP_OFF, CHIP_ON, MINI_BADGE, V_TIER_META } from "./MyKolBoardPage.libdetail";
+import { runDataWatchAction, toggleIdInSet, WALL_SKU_REQUIRED_HINT } from "./MyKolBoardPage.data-watch";
 import { EmptyLine, ErrorCard, LoadingLine } from "./MarketVoicePage.modules";
 import { ReceiptLine } from "./MyKolBoardPage.receipt";
 import { RecoveryPollingLine, TrackGuideLine, VideoTaskStatus, VideoTrackActions } from "./MyKolBoardPage.video-tasks";
@@ -24,6 +26,29 @@ import type { FlowReceipt } from "../../pages/myKol/PoolEvidenceContent.helpers"
 //   排队抓取),共享只读由服务端判定,失败如实回执。
 const WALL_PAGE = 12;
 const WALL_KOL_PAGE_SIZE = 24;
+
+// 首屏可见卡数自适应(消灭模块放大后的黑边):几何按真实类名实测——
+// 卡片(聚合视图,无逐条任务行):缩略图 92 + pt-2(8) + 标题行(20) + mt-0.5(2)
+//   + KOL 行(17) + mt-1(4) + 指标行(17) + mt-1.5(6) + 档位徽行(22)
+//   + 追踪钮行 mt-1.5+min-h-8(38) + pb-2(8) + 边框(2) = 236px;网格 gap-2(8) → 行距 244px。
+// chrome = 卡头 min-h-11(44) + 汇总条 mb-2+py-2.5+两行 leading-5+边框(70)
+//   + 筛选行 min-h-9+mb-2(44) + 追踪引导条 mb-2+py-2+两行 leading-5+边框(66)
+//   + 「查看更多」钮 mt-2+min-h-10(48) + 卡体底 pb-4(16) = 288px。
+// 上下文缺席(独立挂载/测试)→ 旧口径 WALL_PAGE=12,零行为变化。
+const WALL_CARD_PX = 244;
+const WALL_CHROME_PX = 288;
+// 聚合端点封顶 60 条,行数上限按此收口(封顶值见 board-ext recent_videos 契约)
+const WALL_MAX_ROWS = 60;
+
+// 墙网格列数是视口断点驱动(grid-cols-2 md:grid-cols-3 xl:grid-cols-4,Tailwind 缺省
+// md=768 / xl=1280),与模块跨列无关——按视口宽估列数是当前最准的口径。
+function wallColumnCount(): number {
+  if (typeof window === "undefined") return 3;
+  const width = window.innerWidth || 0;
+  if (width >= 1280) return 4;
+  if (width >= 768) return 3;
+  return 2;
+}
 
 function metricText(value: number | null | undefined): string {
   return value == null ? "未采集" : Number(value).toLocaleString();
@@ -67,7 +92,9 @@ function WallVideoCard({
   fallbackKolName,
   showTasks,
   trackBusy,
+  dataWatchBusy,
   onTrack,
+  onDataWatch,
 }: {
   video: VkpiRecentVideoItem;
   tier: VContentTier;
@@ -75,7 +102,10 @@ function WallVideoCard({
   /** 单 KOL 视图(契约行带 tasks)才渲染两层任务态;聚合视图诚实提示 */
   showTasks: boolean;
   trackBusy: boolean;
+  dataWatchBusy: boolean;
   onTrack?: (video: VkpiKolPoolVideoRow) => void;
+  /** 一键「数据关注」(自动认产品 + 登记追踪 + 排队刷新;认不出产品如实提示去详情补 SKU) */
+  onDataWatch?: (video: VkpiKolPoolVideoRow) => void;
 }) {
   const eid = Number(video.evidence_id ?? video.id) || 0;
   const title = String(video.title || video.video_title || "未命名视频");
@@ -109,9 +139,9 @@ function WallVideoCard({
           {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
           {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="ml-auto flex-none font-mono text-[10px] text-muted transition-colors hover:text-accent" title="直跳原帖">原帖 ↗</a> : null}
         </div>
-        {onTrack ? (
+        {onTrack || onDataWatch ? (
           <div className="mt-1.5 flex flex-wrap items-center gap-1" data-vkpi-track-actions="">
-            <VideoTrackActions video={video} busy={trackBusy} onTrack={onTrack} />
+            <VideoTrackActions video={video} busy={trackBusy} onTrack={onTrack} onDataWatch={onDataWatch} dataWatchBusy={dataWatchBusy} />
           </div>
         ) : null}
       </div>
@@ -131,13 +161,29 @@ export function ContentWallModule({
   const [kolId, setKolId] = React.useState(0);
   const [relationFilter, setRelationFilter] = React.useState<VideoRelationFilter>("all");
   const [sortBy, setSortBy] = React.useState<"time" | "views">("time");
-  const [visible, setVisible] = React.useState(WALL_PAGE);
+  // 首屏可见卡数 = 列数 × 按模块实际高度实算的行数,保底 WALL_PAGE(上下文缺席 → 旧口径 12);
+  // 「查看更多」的增量单独记(extraVisible),筛选/切 KOL 归零,模块改大小不吞掉已点开的增量。
+  const moduleSize = useModuleSize();
+  const initialVisible = React.useMemo(() => {
+    if (!moduleSize) return WALL_PAGE;
+    const rowsFit = adaptiveRowCount({
+      heightPx: moduleSize.heightPx,
+      chromePx: WALL_CHROME_PX,
+      rowPx: WALL_CARD_PX,
+      min: 0,
+      max: WALL_MAX_ROWS,
+    });
+    return Math.max(WALL_PAGE, wallColumnCount() * rowsFit);
+  }, [moduleSize]);
+  const [extraVisible, setExtraVisible] = React.useState(0);
+  const visible = initialVisible + extraVisible;
   // 单 KOL 视图走契约读模型:keyset 游标 + 逐条任务态 + 在途轮询(kolId=0 时 hook 禁用,零请求)
   const recovery = useMyKolVideoRecovery({ apiToken, kolPoolId: kolId || null, enabled: kolId > 0, pageSize: WALL_KOL_PAGE_SIZE });
   const [trackBusy, setTrackBusy] = React.useState<Set<number>>(new Set());
+  const [watchBusyIds, setWatchBusyIds] = React.useState<Set<number>>(new Set());
   const [trackReceipt, setTrackReceipt] = React.useState<FlowReceipt | null>(null);
 
-  React.useEffect(() => setVisible(WALL_PAGE), [kolId, relationFilter, sortBy]);
+  React.useEffect(() => setExtraVisible(0), [kolId, relationFilter, sortBy]);
   React.useEffect(() => setTrackReceipt(null), [kolId]);
 
   const kolName = React.useMemo(() => kolOptions.find((option) => option.poolId === kolId)?.name || "", [kolOptions, kolId]);
@@ -187,6 +233,19 @@ export function ContentWallModule({
     }
   };
 
+  // 一键「数据关注」(墙入口):POST …/videos/{evidence_id}/data-watch —— 自动认产品 + 登记追踪 +
+  //   排队刷新(流程/文案住 MyKolBoardPage.data-watch.ts);认不出产品时墙上没有 SKU 表单,
+  //   如实提示去 KOL 详情用「关联 SKU」补一个,绝不无 SKU 假登记。
+  const dataWatchVideo = (video: VkpiKolPoolVideoRow) => runDataWatchAction(video, {
+    apiToken,
+    kolPoolId: Number(video.kol_pool_id) || kolId,
+    isBusy: (eid) => watchBusyIds.has(eid),
+    setBusy: toggleIdInSet(setWatchBusyIds),
+    setReceipt: setTrackReceipt,
+    onSkuRequired: () => setTrackReceipt({ text: WALL_SKU_REQUIRED_HINT, tone: "info" }),
+    onTracked: kolId ? () => { void recovery.refresh(); } : undefined,
+  });
+
   return (
     <div>
       <div className="mb-2 rounded-[9px] border border-line bg-card px-3 py-2.5 text-[12px] leading-5 text-muted">
@@ -230,12 +289,14 @@ export function ContentWallModule({
                   fallbackKolName={kolId ? kolName : undefined}
                   showTasks={kolId > 0}
                   trackBusy={trackBusy.has(Number(video.evidence_id ?? video.id) || 0)}
+                  dataWatchBusy={watchBusyIds.has(Number(video.evidence_id ?? video.id) || 0)}
                   onTrack={apiToken ? trackVideo : undefined}
+                  onDataWatch={apiToken ? dataWatchVideo : undefined}
                 />
               ))}
             </div>
             {clientPaged && shown.length > visible ? (
-              <button type="button" onClick={() => setVisible((value) => value + WALL_PAGE)} className="mt-2 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft">
+              <button type="button" onClick={() => setExtraVisible((value) => value + WALL_PAGE)} className="mt-2 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft">
                 ≡ 查看更多（已显 {Math.min(visible, shown.length)} / 当前已采集 {shown.length}）
               </button>
             ) : null}

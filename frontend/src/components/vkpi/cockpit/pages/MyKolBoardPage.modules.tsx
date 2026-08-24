@@ -12,6 +12,7 @@ import {
 } from "./MyKolBoardPage.dialogs";
 import { KolLibraryFilterControls, KolLibraryPageActions } from "./MyKolBoardPage.library-controls";
 import { useKolEvidenceStats } from "./MyKolBoardPage.libdetail";
+import { adaptiveRowCount, useModuleSize } from "../components/moduleSize";
 import { useWorkflowRunsStream } from "../useWorkflowRunsStream";
 import { formatLocal } from "../../lib/timeLocal";
 import { kolHumanDisplayName } from "../lib/kolIdentity";
@@ -255,6 +256,18 @@ export const MODULE_SOURCES: Record<string, { label: string; rows: Array<[string
       ["出镜镜头", "vkpi_kol_lens_evidence 按提及数 Top3;无深析结果显 —"],
       ["可见性", "管理层全部分组;成员只看本人所在 / 本人创建的分组(服务端裁剪)"],
       ["诚实", "端点 404 = 该版本暂无观察清单;批量登记追踪后端无端点,只显示未登记数"],
+    ],
+  },
+  skuPlay: {
+    label: "my-kol/sku-play-overview · 单品关联 × 追踪快照",
+    rows: [
+      ["单品关联", "视频↔单品关联账本(「数据关注」登记时解析落地;解析不出由用户点选拍板)按 SKU 分组"],
+      ["追踪视频", "vkpi_kol_video_metric_tracking 登记行 × 关联单品(同视频多关联去重;封顶 800 行截断如实标注)"],
+      ["播放/点赞", "vkpi_content_metric_snapshots 最近一次成功实测(抓取时刻读数,非平台实时);未实测 = null 显「未实测」≠ 0"],
+      ["增量", "Δ7 天 = 各视频最近实测 − 窗口基线之和(口径同「数值跟进」;接口另备 Δ1/30 天暂未上卡);样本不足 = null 显「待积累」不编数"],
+      ["累计播放", "组内实测过的视频 view_count 求和;全组未实测 = null 显「未实测」"],
+      ["范围", "收藏 ∪ 授权共享(员工恒本人,管理层全团队;后端 scope 裁剪)"],
+      ["登记入口", "内容墙 / KOL 详情视频卡「数据关注」一键登记;本模块纯读零写"],
     ],
   },
 };
@@ -531,8 +544,21 @@ export function AnalysisActivityModule({ apiToken, onJumpPool }: { apiToken: str
   );
 }
 
-/* ============ KOL 库模块真身(M3 弹窗族 + M4 精确名单/漏斗联动)============
-   卡面 = 筛选 chips(有V视频/全部 + 平台 strip + 负责人)+ 6 条 KOL 行 + 「查看全量」;
+/* ============ KOL 库模块真身(M3 弹窗族 + M4 精确名单/漏斗联动)============ */
+
+// 卡面可见行数自适应(消灭模块放大后的黑边):几何按真实类名实测——
+// KolRowLine:min-h-10=40px + border-b 1px → 行距 41px(末行无边框,floor 取整吸收);
+// chrome = 卡头 min-h-11(44) + 筛选 chips 行 min-h-9+mb-2(44) + 分页条
+//   mt-2+py-2.5×2+min-h-8 钮+边框(62) + 「查看全量」钮 mt-2+min-h-9(44)
+//   + 卡体底 pb-4(16) = 210px。chips 换行/错误条等额外高度由卡体 overflow-auto 兜住。
+// 上下文缺席(独立挂载/测试)→ 旧口径固定 6 行,零行为变化。
+const LIBRARY_ROW_PX = 41;
+const LIBRARY_CHROME_PX = 210;
+const LIBRARY_MIN_ROWS = 6;
+
+/*
+   卡面 = 筛选 chips(有V视频/全部 + 平台 strip + 负责人)+ 自适应条数 KOL 行(按模块
+   实际高度实算,保底 6 条)+ 「查看全量」;
    弹窗族(全量列表/详情连续翻)住 MyKolBoardPage.dialogs(金样板 FeedList/FeedDetail 同构)。
    数据:baseRows 由 page 层从 aggregate.pool_favorites 映射注入(零重复请求);
    负责人筛选 = 管理层按 ?staff_id= 服务端 scope 重取(零本地猜);
@@ -701,8 +727,24 @@ export function KolLibraryModule({
   const mineProp = mineIds
     ? { on: mineOnly, count: mineCount, onToggle: () => setMineOnly((value) => !value) }
     : undefined;
-  // 采集数据列:卡面只拉当前可见 6 行(与全量弹窗/详情同源,会话级缓存)。
-  const visibleIds = React.useMemo(() => filtered.slice(0, 6).map((row) => row.poolId), [filtered]);
+  // 可见行数 = 模块实际高度实算(棋盘注入上下文;缺席 → 旧口径 6 行),保底 6、封顶过滤后行数。
+  const moduleSize = useModuleSize();
+  const visibleCount = React.useMemo(() => (
+    moduleSize
+      ? adaptiveRowCount({
+          heightPx: moduleSize.heightPx,
+          chromePx: LIBRARY_CHROME_PX,
+          rowPx: LIBRARY_ROW_PX,
+          min: LIBRARY_MIN_ROWS,
+          max: filtered.length,
+        })
+      : Math.min(LIBRARY_MIN_ROWS, filtered.length)
+  ), [moduleSize, filtered.length]);
+  // 采集数据列:卡面只拉当前可见行(与全量弹窗/详情同源,会话级缓存)。
+  const visibleIds = React.useMemo(
+    () => filtered.slice(0, visibleCount).map((row) => row.poolId),
+    [filtered, visibleCount],
+  );
   const statsMap = useKolEvidenceStats(apiToken, visibleIds);
   const openDetail = (i: number) => {
     if (i >= 0 && i < filtered.length) setDetailIndex(i);
@@ -730,7 +772,7 @@ export function KolLibraryModule({
         <EmptyLine text="该筛选组合下 0 条——诚实空,不编行。" />
       ) : (
         <div>
-          {filtered.slice(0, 6).map((row, i) => (
+          {filtered.slice(0, visibleCount).map((row, i) => (
             <KolRowLine key={row.poolId} row={row} index={i} onOpen={openDetail} stats={statsMap.get(row.poolId)} />
           ))}
           <KolLibraryPageActions

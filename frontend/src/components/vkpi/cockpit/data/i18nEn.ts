@@ -594,7 +594,12 @@ export const I18N_EN = {
   "提交中…": "Submitting…",
   "关联 SKU": "Link SKU",
   "想追踪某条视频的播放?": "Want to track a video's views?",
-  "点视频卡片上的「追踪播放」,系统会定时抓取播放/点赞并记录走势;「关联 SKU」可把播放归到具体产品。": "Click \"Track views\" on a video card: the system fetches views/likes on a schedule and records the trend. \"Link SKU\" attributes the views to a product.",
+  "点视频卡片上的「数据关注」一键登记:自动识别关联产品并定时抓取播放/点赞;「追踪播放」只登记播放追踪,「关联 SKU」可手动把播放归到具体产品。": "Click \"Watch data\" on a video card for one-click registration: the linked product is recognized automatically and views/likes are fetched on a schedule. \"Track views\" registers view tracking only, and \"Link SKU\" attributes the views to a product manually.",
+  // 一键「数据关注」(收口波 2026-08-23 · D 车道)
+  "数据关注": "Watch data",
+  "关注提交中…": "Submitting…",
+  "一键数据关注:系统自动识别该视频关联的产品并登记持久追踪,定时抓取播放/点赞;认不出产品会请你补一个 SKU(只排队,不是实时完成)": "One-click data watch: the system recognizes the product linked to this video and registers persistent tracking, fetching views/likes on a schedule. If the product cannot be recognized you will be asked to supply a SKU (queued only, not completed in real time)",
+  "该条缺库内编号,暂不支持一键数据关注": "This item has no library record id, so one-click data watch is unavailable",
   "状态两行分别是:后台任务进展 + 数据实测时间;页面重开仍会显示在途任务。": "The two status lines are: background task progress + when the data was last measured. In-flight tasks stay visible after reopening the page.",
   "登记这条视频的播放追踪:系统定时抓取播放/点赞并记录趋势(只排队,不是实时完成)": "Register view tracking for this video: views/likes are fetched on a schedule and the trend is recorded (queued only, not completed in real time)",
   "把这条视频的播放归到产品:填入 SKU 后一起登记追踪": "Attribute this video's views to a product: fill in the SKU and register tracking together",

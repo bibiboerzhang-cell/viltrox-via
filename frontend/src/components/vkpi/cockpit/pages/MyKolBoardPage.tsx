@@ -9,6 +9,7 @@ import { EmptyLine, ErrorCard, LoadingLine, ModuleCard, PendingCard, type Row } 
 import { AnalysisActivityModule, KolLibraryModule, MODULE_SOURCES } from "./MyKolBoardPage.modules";
 import { ContentWallModule } from "./MyKolBoardPage.content-wall";
 import { WatchlistModule } from "./MyKolBoardPage.watchlist";
+import { SkuPlayModule } from "./MyKolBoardPage.sku-play";
 import {
   DigestEmbed,
   LensExposureEmbed,
@@ -90,7 +91,9 @@ import {
 // (被追踪视频实测曲线与 7d/30d 增量 · 深析内容按镜头汇总),同前例 bump 键让全员看到。
 // v3→v4(2026-08-23 波 C·C3):默认布局在团队行后插入「观察清单」(12)——按分组跟进
 // 重点 KOL 的追踪/深析进度(用户原话「给某些 kol 增加一个观察列表跟进进度」),同前例 bump 键。
-const STORAGE_KEY = "vkpi-my-kol-layout-v4";
+// v4→v5(2026-08-23 波 D·C):观察清单行后插入「单品播放数据」(12)——被「数据关注」
+// 登记的视频按单品(SKU)聚合播放/增量总览,同前例 bump 键让全员看到新默认。
+const STORAGE_KEY = "vkpi-my-kol-layout-v5";
 const MY_KOL_PAGE_SIZE = 50;
 
 // 默认布局(12 列 · 设计单定稿七行;2026-07-12 两刀:team 12→8 腾出 span4 给
@@ -106,6 +109,7 @@ const DEFAULT_LAYOUT = [
   { moduleKey: "team", span: 8 },
   { moduleKey: "activity", span: 4 },
   { moduleKey: "watchlist", span: 12 },
+  { moduleKey: "skuPlay", span: 12 },
   { moduleKey: "library", span: 8 },
   { moduleKey: "fitdist", span: 4 },
   { moduleKey: "contentWall", span: 8 },
@@ -401,6 +405,12 @@ export function MyKolBoardPage({
       <WatchlistModule apiToken={apiToken} noToken={noTokenCard} />
     </ModuleCard>
   );
+  // 波 D·C:单品播放数据(被「数据关注」登记的视频按单品聚合播放/增量;模块自取 sku-play-overview)。
+  const renderSkuPlay = () => (
+    <ModuleCard {...cardProps("skuPlay", "单品播放数据")}>
+      <SkuPlayModule apiToken={apiToken} noToken={noTokenCard} />
+    </ModuleCard>
+  );
   // 经典视图(palette 备选):旧两栏库整体内嵌保留不删,默认体验统一走新版行式库。
   const renderLibClassic = () => (
     <LibClassicEmbed apiToken={apiToken} data={data} viewMode={viewMode} noToken={noTokenCard} onRefreshData={onRefreshData} />
@@ -584,8 +594,9 @@ export function MyKolBoardPage({
     { key: "team", label: "团队矩阵", description: "负责人卡 + 分管 KOL · TeamMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 6, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderTeam },
     { key: "activity", label: "分析动态", description: "进行中的账号分析/深析/评论采集 · 点行直达 KOL Pool", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 20, render: renderActivity },
     { key: "watchlist", label: "观察清单", description: "按分组跟进重点 KOL:追踪视频 / 最近快照 / 7 天播放增量 / 深析完成比 / 待处理失败", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 12, minHeight: 5, maxHeight: 30, render: renderWatchlist },
-    { key: "library", label: "KOL 库", description: "收藏/共享全量 + 行级采集数据 · V 名单精确筛选 + 分区详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 26, render: renderLibrary },
-    { key: "contentWall", label: "内容墙", description: "收藏集已采集内容 · KOL/Viltrox证据/排序筛选 · 点卡直跳原帖", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 5, maxHeight: 30, render: renderContentWall },
+    { key: "skuPlay", label: "单品播放数据", description: "被「数据关注」登记的视频按单品聚合:累计播放 / Δ7 天增量 / 逐视频实测明细", category: "业务板块", defaultSpan: 12, minSpan: 6, defaultHeight: 12, minHeight: 5, maxHeight: 30, render: renderSkuPlay },
+    { key: "library", label: "KOL 库", description: "收藏/共享全量 + 行级采集数据 · V 名单精确筛选 + 分区详情连续翻", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 10, minHeight: 5, maxHeight: 36, render: renderLibrary },
+    { key: "contentWall", label: "内容墙", description: "收藏集已采集内容 · KOL/Viltrox证据/排序筛选 · 点卡直跳原帖", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 5, maxHeight: 48, render: renderContentWall },
     { key: "fitdist", label: "Fit 分布", description: "全池十分位直方 + 未评分诚实桶(只读)", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 11, minHeight: 4, maxHeight: 16, render: renderFitdist },
     { key: "official", label: "官方账号矩阵", description: "当前官号平台总览 · OfficialMatrix 内嵌", category: "业务板块", defaultSpan: 8, minSpan: 4, defaultHeight: 13, minHeight: 6, maxHeight: 32, render: renderOfficial },
     { key: "platdist", label: "平台分布", description: "收藏集按平台条形 · 点行过滤 KOL 库", category: "业务板块", defaultSpan: 4, minSpan: 3, defaultHeight: 13, minHeight: 4, maxHeight: 16, render: renderPlatdist },
