@@ -83,6 +83,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.domains.kol import my_kol_video_recovery as recovery
 from app.domains.kol import my_kol_recent_filters as recent_filters
+from app.domains.kol import my_kol_recent_dedupe as recent_dedupe
 from app.domains.kol.video_evidence_projection import viltrox_modalities
 from app.domains.projects import stage_canonical
 
@@ -601,21 +602,26 @@ def _recent_videos(
     from app.domains.content.creative_segments import _thumbnail_fields
 
     filter_params = _recent_filter_params(days, kol_pool_id, since)
-    rows = conn.execute(
-        RECENT_VIDEOS_SQL,
-        (
-            *VILTROX_TITLE_TOKENS,
-            *_scope_params(sid),
-            *filter_params,
-            *_recent_keyset_params(before),
-            RECENT_VIDEOS_LIMIT + 1,
-        ),
-    ).fetchall()
-    rows = list(rows)
-    has_more = len(rows) > RECENT_VIDEOS_LIMIT
+    def fetch_rows(raw_before: tuple[str | None, int] | None, limit: int) -> list[dict[str, Any]]:
+        fetched = conn.execute(
+            RECENT_VIDEOS_SQL,
+            (
+                *VILTROX_TITLE_TOKENS,
+                *_scope_params(sid),
+                *filter_params,
+                *_recent_keyset_params(raw_before),
+                limit,
+            ),
+        ).fetchall()
+        return [dict(row) for row in fetched]
+
+    rows, has_more, folded_rows = recent_dedupe.canonical_page(
+        fetch_rows,
+        before=before,
+        limit=RECENT_VIDEOS_LIMIT,
+    )
     items: list[dict[str, Any]] = []
-    for r in rows[:RECENT_VIDEOS_LIMIT]:
-        rec = dict(r)
+    for rec in rows:
         view_count = rec.get("view_count")
         like_count = rec.get("like_count")
         project_id = rec.get("project_id")
@@ -693,6 +699,10 @@ def _recent_videos(
             "cursor_kind": recovery.CURSOR_KIND,
             "order": recovery.ORDER,
         },
+        "dedupe": {
+            "key": "kol_pool_id+video_url_identity(platform,video_id)",
+            "folded_rows_observed": folded_rows,
+        },
         "basis": (
             "vkpi_kol_video_evidence × 收藏集(收藏 ∪ 共享,去重;is_active IS NOT FALSE,"
             "video/image 两类)按 COALESCE(publish_date, posted_at, created_at) 降序取最近 "
@@ -704,7 +714,9 @@ def _recent_videos(
             "viltrox_modalities=final_v1 brand_product_evidence.viltrox_evidence[].modality 的 "
             "visual/subtitle/audio 固定序子集(metadata 不算,缺则 []);tasks=apify_jobs 最新"
             "一条 × 持久化产物(与 my-kol videos 端点同一投影函数,含 reason_class 闭集);"
-            "page=keyset 游标 (published_at DESC, id DESC),?cursor= 只翻本组"
+            "canonical 去重=同一 KOL 内按 backend video_url_identity(platform,video_id) "
+            "保留排序最新行(不改写存储);page=keyset 游标 "
+            "(published_at DESC, id DESC),?cursor= 只翻本组"
         ),
     }
     if not items:

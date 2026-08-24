@@ -30,6 +30,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.api.routers import vkpi_my_kol as router_mod  # noqa: E402
 from app.domains import content_metric_snapshots  # noqa: E402
 from app.domains.kol import my_kol_board_ext as ext  # noqa: E402
+from app.domains.kol import my_kol_recent_dedupe as recent_dedupe  # noqa: E402
 from app.domains.kol import my_kol_video_recovery as recovery  # noqa: E402
 from app.domains.kol import pool_detail  # noqa: E402
 from app.domains.kol import video_evidence_projection as projection  # noqa: E402
@@ -248,16 +249,17 @@ def _sqlite() -> sqlite3.Connection:
 
 def _seed(conn: sqlite3.Connection) -> None:
     conn.executemany(
-        "INSERT INTO vkpi_kol_video_evidence (id, kol_pool_id, view_count, publish_date, created_at, updated_at) "
-        "VALUES (?, 101, ?, ?, '2026-01-01T00:00:00Z', '2026-08-21T00:00:00Z')",
+        "INSERT INTO vkpi_kol_video_evidence "
+        "(id, kol_pool_id, view_count, publish_date, content_url, created_at, updated_at) "
+        "VALUES (?, 101, ?, ?, ?, '2026-01-01T00:00:00Z', '2026-08-21T00:00:00Z')",
         [
-            (1, 100, "2026-08-05T10:00:00Z"),
-            (2, None, "2026-08-07T10:00:00Z"),
-            (3, 300, "2026-08-07T10:00:00Z"),
-            (4, 9000, "2026-08-01T10:00:00Z"),
-            (5, 500, "2026-08-03T10:00:00Z"),
-            (6, 600, None),
-            (7, 700, "2026-08-09T10:00:00Z"),
+            (1, 100, "2026-08-05T10:00:00Z", "https://www.youtube.com/watch?v=seedvid00001"),
+            (2, None, "2026-08-07T10:00:00Z", "https://www.youtube.com/watch?v=seedvid00002"),
+            (3, 300, "2026-08-07T10:00:00Z", "https://www.youtube.com/watch?v=seedvid00003"),
+            (4, 9000, "2026-08-01T10:00:00Z", "https://www.youtube.com/watch?v=seedvid00004"),
+            (5, 500, "2026-08-03T10:00:00Z", "https://www.youtube.com/watch?v=seedvid00005"),
+            (6, 600, None, "https://www.youtube.com/watch?v=seedvid00006"),
+            (7, 700, "2026-08-09T10:00:00Z", "https://www.youtube.com/watch?v=seedvid00007"),
         ],
     )
     # metrics_scraped_at 故意留空:pool_detail 的 SQLite 镜像查询投 NULL(真 Postgres 两端同取
@@ -400,8 +402,10 @@ def test_recent_videos_keyset_walk_has_no_duplicates_and_no_gaps(monkeypatch):
         if pages == 1:
             # 中途有更新的视频进来:排在游标之前,绝不挤进后续页也不重复
             db.execute(
-                "INSERT INTO vkpi_kol_video_evidence (id, kol_pool_id, view_count, publish_date, created_at) "
-                "VALUES (8, 101, 1, '2026-08-30T10:00:00Z', '2026-08-30T10:00:00Z')"
+                "INSERT INTO vkpi_kol_video_evidence "
+                "(id, kol_pool_id, view_count, publish_date, content_url, created_at) "
+                "VALUES (8, 101, 1, '2026-08-30T10:00:00Z', "
+                "'https://www.youtube.com/watch?v=seedvid00008', '2026-08-30T10:00:00Z')"
             )
         if not page["page"]["has_more"]:
             assert page["page"]["next_cursor"] is None
@@ -421,6 +425,101 @@ def test_recent_videos_keyset_walk_has_no_duplicates_and_no_gaps(monkeypatch):
     )
 
 
+def test_recent_videos_folds_canonical_variants_across_keyset_pages(monkeypatch):
+    db = _sqlite()
+    _seed(db)
+    # The newest representation is on page 1; its URL variant would otherwise
+    # reappear on page 3 after the public cursor has crossed the first row.
+    db.execute(
+        "UPDATE vkpi_kol_video_evidence SET content_url = ? WHERE id = 3",
+        ("https://www.youtube.com/watch?v=variant00001",),
+    )
+    db.execute(
+        "UPDATE vkpi_kol_video_evidence SET content_url = ? WHERE id = 5",
+        ("https://youtu.be/variant00001?feature=shared",),
+    )
+    conn = _HybridConn(db)
+    monkeypatch.setattr(ext, "RECENT_VIDEOS_LIMIT", 2)
+
+    before = None
+    seen: list[dict[str, Any]] = []
+    folded_observed = False
+    for _ in range(10):
+        page = ext.build_recent_videos_page(conn, staff_scope_id=7684, before=before)
+        seen.extend(page["items"])
+        folded_observed = folded_observed or page["dedupe"]["folded_rows_observed"] > 0
+        if not page["page"]["has_more"]:
+            break
+        before = recovery.decode_cursor(page["page"]["next_cursor"])
+
+    assert [row["evidence_id"] for row in seen] == [7, 3, 2, 1, 4, 6]
+    assert len({recent_dedupe.canonical_video_key(row) for row in seen}) == len(seen)
+    assert folded_observed is True
+
+
+def test_canonical_key_uses_platform_video_id_not_route_or_account_name():
+    base = {"kol_pool_id": 101}
+    assert recent_dedupe.canonical_video_key({
+        **base, "evidence_id": 1, "content_url": "https://www.instagram.com/p/routevariant01/",
+    }) == recent_dedupe.canonical_video_key({
+        **base, "evidence_id": 2, "content_url": "https://www.instagram.com/reel/routevariant01/",
+    })
+    assert recent_dedupe.canonical_video_key({
+        **base, "evidence_id": 3, "content_url": "https://www.tiktok.com/@old/video/1234567890123456789/",
+    }) == recent_dedupe.canonical_video_key({
+        **base, "evidence_id": 4, "content_url": "https://www.tiktok.com/@new/video/1234567890123456789/",
+    })
+
+
+def test_recent_videos_all_equals_single_union_and_windows_are_monotonic(monkeypatch):
+    from datetime import datetime, timezone
+
+    db = _sqlite()
+    db.executemany("INSERT INTO fav VALUES (?, 7684)", [(101,), (202,)])
+    rows = [
+        (30, 101, "2026-08-23T10:00:00Z", "https://www.youtube.com/watch?v=windowvid001"),
+        (31, 101, "2026-08-20T10:00:00Z", "https://youtu.be/windowvid001"),
+        (32, 101, "2026-08-15T10:00:00Z", "https://www.youtube.com/shorts/windowvid002"),
+        # The same platform identity under a different KOL remains a distinct
+        # content-wall item, which makes all-scope the union of single scopes.
+        (33, 202, "2026-08-23T09:00:00Z", "https://youtu.be/windowvid001"),
+        (34, 202, "2026-08-01T10:00:00Z", "https://www.youtube.com/watch?v=windowvid003"),
+    ]
+    db.executemany(
+        "INSERT INTO vkpi_kol_video_evidence "
+        "(id, kol_pool_id, publish_date, content_url, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [(evidence_id, pool_id, published, url, published, published) for evidence_id, pool_id, published, url in rows],
+    )
+    conn = _HybridConn(db)
+    monkeypatch.setattr(ext, "_now_utc", lambda: datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc))
+    monkeypatch.setattr(ext, "RECENT_VIDEOS_LIMIT", 2)
+
+    def walk(days: int, pool_id: int = 0) -> list[dict[str, Any]]:
+        before = None
+        items: list[dict[str, Any]] = []
+        for _ in range(10):
+            page = ext.build_recent_videos_page(
+                conn, staff_scope_id=7684, before=before, days=days, kol_pool_id=pool_id,
+            )
+            items.extend(page["items"])
+            if not page["page"]["has_more"]:
+                return items
+            before = recovery.decode_cursor(page["page"]["next_cursor"])
+        raise AssertionError("recent-videos pager did not terminate")
+
+    counts: list[int] = []
+    for days in (7, 15, 30, 0):
+        all_items = walk(days)
+        single_items = walk(days, 101) + walk(days, 202)
+        all_keys = {recent_dedupe.canonical_video_key(row) for row in all_items}
+        single_keys = {recent_dedupe.canonical_video_key(row) for row in single_items}
+        assert all_keys == single_keys
+        assert len(all_keys) == len(all_items) == len(single_items)
+        counts.append(len(all_items))
+    assert counts == [2, 3, 4, 4]
+
+
 def test_recent_videos_combines_scope_kol_and_time_filters_before_paging(monkeypatch):
     from datetime import datetime, timezone
 
@@ -429,13 +528,16 @@ def test_recent_videos_combines_scope_kol_and_time_filters_before_paging(monkeyp
     db.execute("INSERT INTO fav VALUES (202, 7684)")
     db.execute(
         "INSERT INTO vkpi_kol_video_evidence "
-        "(id, kol_pool_id, view_count, publish_date, created_at, updated_at) "
-        "VALUES (20, 202, 1, '2026-08-23T10:00:00Z', '2026-08-23T10:00:00Z', '2026-08-23T10:00:00Z')"
+        "(id, kol_pool_id, view_count, publish_date, content_url, created_at, updated_at) "
+        "VALUES (20, 202, 1, '2026-08-23T10:00:00Z', "
+        "'https://www.youtube.com/watch?v=filtervid0020', "
+        "'2026-08-23T10:00:00Z', '2026-08-23T10:00:00Z')"
     )
     db.execute(
         "INSERT INTO vkpi_kol_video_evidence "
-        "(id, kol_pool_id, view_count, publish_date, created_at, updated_at) "
-        "VALUES (21, 202, 1, NULL, '2026-08-24T11:00:00Z', '2026-08-24T11:00:00Z')"
+        "(id, kol_pool_id, view_count, publish_date, content_url, created_at, updated_at) "
+        "VALUES (21, 202, 1, NULL, 'https://www.youtube.com/watch?v=filtervid0021', "
+        "'2026-08-24T11:00:00Z', '2026-08-24T11:00:00Z')"
     )
     conn = _HybridConn(db)
     monkeypatch.setattr(ext, "_now_utc", lambda: datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc))
