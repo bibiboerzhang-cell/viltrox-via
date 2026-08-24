@@ -22,8 +22,6 @@ from app.domains.kol.pool_read_projection_cache import (
     cached_global_pool_selection,
     clear_pool_read_selection_cache,
 )
-
-
 def _row(
     pool_id: int,
     handle: str,
@@ -659,21 +657,82 @@ def test_selection_cache_rebuilds_when_source_revision_changes() -> None:
     clear_pool_read_selection_cache()
 
 
-def test_shared_pool_cache_skips_ephemeral_avatar_payloads(
+def test_workspace_raw_profile_avatar_is_publicly_projected_but_never_cached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    writes: list[str] = []
-    monkeypatch.setattr(pool_common, "cache_set", lambda key, *_args, **_kwargs: writes.append(key))
-
-    result = pool_common._kol_pool_cache_store(
-        "pool:test",
-        {"items": [{"avatar_url": "https://signed.example/avatar", "avatar_url_status": "ephemeral"}]},
+    conn = _sqlite_cloud_fixture()
+    signed = "https://scontent.cdninstagram.com/raw-profile.jpg?oe=FFFFFFFF&_nc_sid=test"
+    conn.execute(
+        "UPDATE vkpi_kol_pool SET avatar_url='', raw_platform_data=? WHERE id=3971",
+        (json.dumps({"profile": {"profilePicUrlHD": signed}}),),
+    )
+    conn.commit()
+    cache: dict[str, Any] = {}
+    monkeypatch.setattr(pool, "ensure_vkpi_product_industry_schema", lambda: None)
+    monkeypatch.setattr(pool, "get_conn", lambda: conn)
+    monkeypatch.setattr(pool, "cache_get", lambda key: cache.get(key))
+    monkeypatch.setattr(
+        pool_common,
+        "cache_set",
+        lambda key, value, *, ttl: cache.__setitem__(key, value),
+    )
+    monkeypatch.setattr(
+        pool,
+        "summary",
+        lambda: {"total": 8, "by_platform": [], "country_distribution": []},
     )
 
-    assert writes == []
-    assert result["cache"] == {
-        "hit": False, "ttl_sec": 0, "stored": False, "reason": "ephemeral_avatar",
-    }
+    first = pool.workspace(limit=20)
+    first_eren = next(item for item in first["list"]["items"] if int(item["id"]) == 3971)
+
+    assert first_eren["avatar_url"] == signed
+    assert first_eren["avatar_url_status"] == "ephemeral"
+    assert "raw_profile_avatar_url" not in first_eren
+    cached_json = json.dumps(cache, ensure_ascii=False)
+    assert signed not in cached_json
+    assert "raw_profile_avatar_url" not in cached_json
+
+
+def test_workspace_cache_hit_reprojects_ephemeral_avatar_without_persisting_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _sqlite_cloud_fixture()
+    signed = "https://scontent.cdninstagram.com/avatar.jpg?oe=FFFFFFFF&_nc_sid=test"
+    conn.execute(
+        "UPDATE vkpi_kol_pool SET avatar_url=? WHERE id=3971",
+        (signed,),
+    )
+    conn.commit()
+    cache: dict[str, Any] = {}
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+    monkeypatch.setattr(pool, "ensure_vkpi_product_industry_schema", lambda: None)
+    monkeypatch.setattr(pool, "get_conn", lambda: conn)
+    monkeypatch.setattr(pool, "cache_get", lambda key: cache.get(key))
+    monkeypatch.setattr(
+        pool_common,
+        "cache_set",
+        lambda key, value, *, ttl: cache.__setitem__(key, value),
+    )
+    monkeypatch.setattr(
+        pool,
+        "summary",
+        lambda: {"total": 8, "by_platform": [], "country_distribution": []},
+    )
+
+    first = pool.workspace(limit=20)
+    second = pool.workspace(limit=20)
+
+    first_eren = next(item for item in first["list"]["items"] if int(item["id"]) == 3971)
+    second_eren = next(item for item in second["list"]["items"] if int(item["id"]) == 3971)
+    assert first["cache"]["hit"] is False
+    assert second["cache"] == {"hit": True, "ttl_sec": 30}
+    assert first_eren["avatar_url"] == signed
+    assert second_eren["avatar_url"] == signed
+    assert second_eren["avatar_url_status"] == "ephemeral"
+    assert signed not in json.dumps(cache, ensure_ascii=False)
+    mutating = re.compile(r"\b(?:INSERT|UPDATE|DELETE|MERGE|REPLACE)\b", re.IGNORECASE)
+    assert not any(mutating.search(statement) for statement in statements)
 
 
 def test_sql_projection_and_semantic_recall_are_read_only() -> None:

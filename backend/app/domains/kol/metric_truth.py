@@ -275,20 +275,36 @@ def _content_metric_values(raw: Any, field: str) -> list[int | float]:
     return values
 
 
-def _raw_field_values(raw: Any, field: str) -> list[int | float]:
-    explicit = _values_for_keys(raw, _FIELD_ALIASES.get(field) or set())
-    content = _content_metric_values(raw, field)
-    return explicit + content
+def _raw_metric_evidence(
+    raw: Any,
+    field: str,
+) -> tuple[list[int | float], list[int | float]]:
+    """Collect field evidence once for all truth checks on one Pool card."""
+    return (
+        _values_for_keys(raw, _FIELD_ALIASES.get(field) or set()),
+        _content_metric_values(raw, field),
+    )
 
 
 def _matches(value: int | float, expected: int | float, *, tolerance: float) -> bool:
     return abs(float(value) - float(expected)) <= tolerance
 
 
-def _raw_metric_match(raw: Any, field: str, stored: int | float) -> tuple[bool, str | None, int]:
+def _raw_metric_match(
+    raw: Any,
+    field: str,
+    stored: int | float,
+    *,
+    explicit_values: list[int | float] | None = None,
+    content_values: list[int | float] | None = None,
+) -> tuple[bool, str | None, int]:
     """Require field-level agreement; raw field presence alone is not a receipt."""
 
-    explicit = _values_for_keys(raw, _FIELD_ALIASES.get(field) or set())
+    explicit = (
+        explicit_values
+        if explicit_values is not None
+        else _values_for_keys(raw, _FIELD_ALIASES.get(field) or set())
+    )
     if field == "followers":
         matched = any(_matches(value, stored, tolerance=0.5) for value in explicit)
         return matched, "raw_profile_value" if matched else None, len(explicit)
@@ -302,7 +318,7 @@ def _raw_metric_match(raw: Any, field: str, stored: int | float) -> tuple[bool, 
     if any(_matches(value, stored, tolerance=tolerance) for value in explicit):
         return True, "raw_explicit_average", len(explicit)
 
-    content = _content_metric_values(raw, field)
+    content = content_values if content_values is not None else _content_metric_values(raw, field)
     if not content:
         return False, None, 0
     sample_mean = sum(float(value) for value in content) / len(content)
@@ -346,11 +362,18 @@ def _raw_source_state(raw: Any) -> dict[str, Any]:
     }
 
 
-def _pool_metric_projection(item: Mapping[str, Any], field: str, raw: Any) -> tuple[Any, dict[str, Any]]:
+def _pool_metric_projection(
+    item: Mapping[str, Any],
+    field: str,
+    raw: Any,
+    *,
+    source_state: dict[str, Any] | None = None,
+    raw_evidence: tuple[list[int | float], list[int | float]] | None = None,
+) -> tuple[Any, dict[str, Any]]:
     parsed = _number(item.get(field), percent=field == "engagement_rate")
     source_type = _text(item.get("source_type"))
     source_ref = _text(item.get("source_ref"))
-    source_state = _raw_source_state(raw)
+    source_state = source_state if source_state is not None else _raw_source_state(raw)
     source_label = (
         source_state.get("source")
         or _public_source_ref(source_ref)
@@ -376,8 +399,15 @@ def _pool_metric_projection(item: Mapping[str, Any], field: str, raw: Any) -> tu
         status = "unknown" if item.get(field) in (None, "") or _text(item.get(field)).casefold() in UNKNOWN_TOKENS else "invalid"
         return None, {**base, "status": status, "reason": "missing_or_invalid_numeric_value"}
 
-    raw_values = _raw_field_values(raw, field)
-    value_matches_raw, verification_basis, raw_sample_n = _raw_metric_match(raw, field, parsed)
+    explicit, content = raw_evidence if raw_evidence is not None else _raw_metric_evidence(raw, field)
+    raw_values = explicit + content
+    value_matches_raw, verification_basis, raw_sample_n = _raw_metric_match(
+        raw,
+        field,
+        parsed,
+        explicit_values=explicit,
+        content_values=content,
+    )
     raw_observed = bool(value_matches_raw and source_state.get("successful"))
     if field == "followers" and source_state.get("hidden_followers"):
         raw_observed = False
@@ -604,10 +634,22 @@ def project_pool_item_truth(item: Mapping[str, Any]) -> dict[str, Any]:
         projected.get("metric_truth_raw_platform_data", projected.get("raw_platform_data")),
         None,
     )
+    source_state = _raw_source_state(raw)
     fields: dict[str, Any] = {}
     suppressed: list[str] = []
     for field in POOL_NUMERIC_FIELDS:
-        value, receipt = _pool_metric_projection(projected, field, raw)
+        raw_evidence = (
+            _raw_metric_evidence(raw, field)
+            if _number(projected.get(field), percent=field == "engagement_rate") is not None
+            else ([], [])
+        )
+        value, receipt = _pool_metric_projection(
+            projected,
+            field,
+            raw,
+            source_state=source_state,
+            raw_evidence=raw_evidence,
+        )
         projected[field] = value
         fields[field] = receipt
         if not receipt["displayable"]:

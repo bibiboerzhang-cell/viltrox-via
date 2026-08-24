@@ -86,6 +86,7 @@ from app.domains.kol.pool_read_projection import (
 )
 from app.domains.kol.pool_read_projection_facets import pool_read_data_status_ids, pool_read_workspace_facets
 from app.domains.kol.pool_read_projection_evidence import project_pool_list_items
+from app.domains.kol.pool_read_cache_projection import restore_pool_response_cache_hit
 
 # detail_bundle 的 try/except 块此前引用 logger 却从未定义(潜伏 NameError);补齐模块级 logger。
 logger = get_logger(__name__)
@@ -322,7 +323,7 @@ def list_pool(
     )
     cached = cache_get(cache_key)
     if cached is not None:
-        return _kol_pool_cache_hit(cached)
+        return _kol_pool_cache_hit(restore_pool_response_cache_hit(conn, selection, cached))
     clause, params = _pool_filter_clause(
         platform=platform,
         query=query,
@@ -460,7 +461,7 @@ def workspace(
     )
     cached = cache_get(cache_key)
     if cached is not None:
-        return _kol_pool_cache_hit(cached)
+        return _kol_pool_cache_hit(restore_pool_response_cache_hit(conn, selection, cached))
 
     clause, params = _pool_filter_clause(
         platform=normalized_platform,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from app.domains.kol import metric_truth
 from app.domains.kol.metric_truth import (
     project_evidence_item_truth,
     project_pool_item_truth,
@@ -84,6 +85,37 @@ def test_stored_zero_requires_matching_successful_raw_observation() -> None:
         assert with_receipt[field] == 0
         assert with_receipt["data_truth"]["fields"][field]["status"] == "observed_zero"
         assert with_receipt["data_truth"]["fields"][field]["factual"] is True
+
+
+def test_pool_truth_indexes_raw_source_and_each_metric_once(
+    monkeypatch,
+) -> None:
+    calls = {"source": 0, "evidence": 0}
+    source = metric_truth._raw_source_state
+    evidence = metric_truth._raw_metric_evidence
+
+    def counted_source(raw):
+        calls["source"] += 1
+        return source(raw)
+
+    def counted_evidence(raw, field):
+        calls["evidence"] += 1
+        return evidence(raw, field)
+
+    monkeypatch.setattr(metric_truth, "_raw_source_state", counted_source)
+    monkeypatch.setattr(metric_truth, "_raw_metric_evidence", counted_evidence)
+
+    project_pool_item_truth({
+        "followers": 0,
+        "avg_views": 0,
+        "avg_likes": 0,
+        "avg_comments": 0,
+        "engagement_rate": 0,
+        "source_type": "provider",
+        "raw_platform_data": _observed_zero_raw(),
+    })
+
+    assert calls == {"source": 1, "evidence": len(metric_truth.POOL_NUMERIC_FIELDS)}
 
 
 def test_no_results_payload_does_not_prove_zero() -> None:

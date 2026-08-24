@@ -333,6 +333,7 @@ def mask_pool_item(
     # are not part of the public DTO and are removed for both masked and full
     # single-item projections after metric-truth extraction.
     masked.pop("raw_platform_data", None)
+    masked.pop("raw_profile_avatar_url", None)
     contact_keys = {
         "email",
         "contact_email",

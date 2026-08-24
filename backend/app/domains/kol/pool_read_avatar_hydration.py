@@ -23,6 +23,18 @@ _EPHEMERAL_MARKERS = (
 )
 
 
+def profile_avatar_fallback_needed(avatar_url: Any) -> bool:
+    """Return whether a bounded raw-profile lookup can improve this avatar.
+
+    Keep this predicate aligned with ``profile_avatar_document_expression``:
+    durable first-party/profile URLs never require the large provider JSON,
+    while missing or known time-sensitive/CDN values may need its profile-only
+    fallback.  This helper performs no I/O.
+    """
+    value = str(avatar_url or "").strip().lower()
+    return not value or any(marker in value for marker in _EPHEMERAL_MARKERS)
+
+
 def profile_avatar_document_expression(
     conn: Any,
     column: str = "raw_platform_data",
@@ -87,3 +99,39 @@ def profile_avatar_value_expression(conn: Any, document: str = "raw_profile_doc"
     ) + ")"
     expressions.append(f"CASE WHEN {channel_kind} THEN {channel_item} END")
     return "COALESCE(" + ",".join(expressions) + ")"
+
+
+def bounded_profile_avatar_urls(conn: Any, pool_ids: list[int]) -> dict[int, str]:
+    """Extract at most one profile avatar for an explicit, bounded ID set.
+
+    The global identity selection deliberately does not read the 100+ MB raw
+    provider column.  Employee-visible pages call this only for returned cards
+    whose durable ``avatar_url`` is missing or time-sensitive.  Full provider
+    documents never cross the DB/Python boundary or enter the selection cache.
+    """
+    ids = sorted({int(value) for value in pool_ids if int(value) > 0})
+    if not ids:
+        return {}
+    raw_doc = profile_avatar_document_expression(conn)
+    raw_avatar = profile_avatar_value_expression(conn)
+    if raw_avatar == "NULL":
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    materialized = "MATERIALIZED " if conn.__class__.__name__ == "PostgresCompatConnection" else ""
+    rows = conn.execute(
+        f"""
+        WITH pool_avatar_source AS {materialized}(
+            SELECT id, avatar_url, {raw_doc} AS raw_profile_doc
+            FROM vkpi_kol_pool
+            WHERE id IN ({placeholders})
+        )
+        SELECT id, {raw_avatar} AS raw_profile_avatar_url
+        FROM pool_avatar_source
+        """,
+        tuple(ids),
+    ).fetchall()
+    return {
+        int(row["id"]): str(row["raw_profile_avatar_url"] or "").strip()
+        for row in rows
+        if row["raw_profile_avatar_url"]
+    }

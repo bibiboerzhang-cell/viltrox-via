@@ -9,6 +9,99 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping
 
 
+def _candidate_readiness_and_authorization(
+    *,
+    binding: str,
+    provider_allowed: bool,
+    resolved_execution_class: str,
+    production_class: str,
+    evaluation_class: str,
+    namespace: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep signed model readiness separate from temporary runtime authority."""
+
+    readiness_item: Mapping[str, Any] = {}
+    evidence_source: Mapping[str, Any] = {}
+    readiness_check_failed = False
+    readiness_reader = namespace.get("exact_binding_readiness_from_environment")
+    try:
+        if not callable(readiness_reader):
+            raise RuntimeError("readiness reader unavailable")
+        raw_item, raw_source = readiness_reader(binding)
+        if isinstance(raw_item, Mapping):
+            readiness_item = raw_item
+        if isinstance(raw_source, Mapping):
+            evidence_source = raw_source
+    except Exception:  # noqa: BLE001 - malformed evidence must stay fail-closed
+        readiness_check_failed = True
+
+    signed_ready = readiness_item.get("production_ready") is True
+    signed_status = (
+        "production_ready"
+        if signed_ready
+        else "readiness_check_failed"
+        if readiness_check_failed
+        else "not_production_ready"
+    )
+    ack_reader = namespace.get("_readiness_operator_ack_bindings")
+    operator_acknowledged = bool(
+        callable(ack_reader) and binding in ack_reader()
+    )
+    production_authorized = bool(
+        provider_allowed and resolved_execution_class == production_class
+    )
+    evaluation_authorized = bool(
+        provider_allowed and resolved_execution_class == evaluation_class
+    )
+    if production_authorized:
+        authorization_source = (
+            "signed_evidence"
+            if signed_ready
+            else "operator_ack"
+            if operator_acknowledged
+            else "runtime_policy"
+        )
+        authorization_status = "operationally_authorized"
+    elif evaluation_authorized:
+        authorization_source = "local_evaluation"
+        authorization_status = "evaluation_only_authorized"
+    else:
+        authorization_source = "blocked"
+        authorization_status = "blocked"
+    authorization_temporary = bool(
+        production_authorized
+        and authorization_source == "operator_ack"
+        and not signed_ready
+    )
+    compatibility_status = (
+        "production_ready"
+        if signed_ready
+        else "operationally_authorized_temporary"
+        if authorization_temporary
+        else "evaluation_only_not_production_ready"
+        if evaluation_authorized
+        else "not_ready"
+    )
+    return {
+        # Compatibility field: it may describe a temporary operational
+        # authorization, but only signed evidence may use production_ready.
+        "model_readiness_status": compatibility_status,
+        "signed_model_production_ready": signed_ready,
+        "signed_model_readiness_status": signed_status,
+        "signed_model_readiness_claim_status": str(
+            readiness_item.get("claim_status") or "descriptive_only"
+        ),
+        "signed_model_readiness_evidence_source": str(
+            evidence_source.get("source") or "not_configured"
+        ),
+        "operator_acknowledged": operator_acknowledged,
+        "operationally_authorized": production_authorized,
+        "operational_authorization_status": authorization_status,
+        "operational_authorization_source": authorization_source,
+        "operational_authorization_temporary": authorization_temporary,
+    }
+
+
 def budget_preflight_impl(
     prompt: str,
     *,
@@ -66,6 +159,14 @@ def budget_preflight_impl(
             and not forced_offline
             and not binding_blocker
         )
+        readiness_authorization = _candidate_readiness_and_authorization(
+            binding=binding.binding,
+            provider_allowed=provider_allowed,
+            resolved_execution_class=resolved_execution_class,
+            production_class=production_class,
+            evaluation_class=evaluation_class,
+            namespace=namespace,
+        )
         runtime_gate = namespace["_build_runtime_error"](
             "model_binding_blocked" if binding_blocker else "ready",
             detail=binding_blocker,
@@ -101,13 +202,7 @@ def budget_preflight_impl(
                 ),
                 "claim_status": "descriptive_only",
                 "model_claim_status": "descriptive_only",
-                "model_readiness_status": (
-                    "production_ready"
-                    if provider_allowed and resolved_execution_class == production_class
-                    else "evaluation_only_not_production_ready"
-                    if provider_allowed and resolved_execution_class == evaluation_class
-                    else "not_ready"
-                ),
+                **readiness_authorization,
                 "explicit_model": explicit_model,
                 "model_fallback_index": index,
                 "configured": configured,
@@ -120,6 +215,10 @@ def budget_preflight_impl(
             }
         )
     provider_calls_allowed = any(bool(item.get("provider_calls_allowed")) for item in providers)
+    selected_provider = next(
+        (item for item in providers if bool(item.get("provider_calls_allowed"))),
+        providers[0] if providers else {},
+    )
     if forced_offline:
         reason = "force_offline"
     elif not (bool(skip_monthly_env_check) or monthly_budget > 0):
@@ -174,12 +273,38 @@ def budget_preflight_impl(
             provider_calls_allowed and resolved_execution_class == production_class
         ),
         "claim_status": "descriptive_only",
-        "model_readiness_status": (
-            "production_ready"
-            if provider_calls_allowed and resolved_execution_class == production_class
-            else "evaluation_only_not_production_ready"
-            if provider_calls_allowed and resolved_execution_class == evaluation_class
-            else "not_ready"
+        "model_readiness_status": str(
+            selected_provider.get("model_readiness_status") or "not_ready"
+        ),
+        "signed_model_production_ready": bool(
+            selected_provider.get("signed_model_production_ready")
+        ),
+        "signed_model_readiness_status": str(
+            selected_provider.get("signed_model_readiness_status")
+            or "not_production_ready"
+        ),
+        "signed_model_readiness_claim_status": str(
+            selected_provider.get("signed_model_readiness_claim_status")
+            or "descriptive_only"
+        ),
+        "signed_model_readiness_evidence_source": str(
+            selected_provider.get("signed_model_readiness_evidence_source")
+            or "not_configured"
+        ),
+        "operator_acknowledged": bool(
+            selected_provider.get("operator_acknowledged")
+        ),
+        "operationally_authorized": bool(
+            selected_provider.get("operationally_authorized")
+        ),
+        "operational_authorization_status": str(
+            selected_provider.get("operational_authorization_status") or "blocked"
+        ),
+        "operational_authorization_source": str(
+            selected_provider.get("operational_authorization_source") or "blocked"
+        ),
+        "operational_authorization_temporary": bool(
+            selected_provider.get("operational_authorization_temporary")
         ),
         "require_runtime_verified": resolved_execution_class == production_class,
         "providers": providers,

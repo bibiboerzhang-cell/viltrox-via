@@ -579,12 +579,13 @@ def prepare_pool_read_selection(
     params: list[Any] | tuple[Any, ...],
 ) -> PoolReadSelection:
     source_revision = _pool_source_revision(conn)
+    is_postgres = conn.__class__.__name__ == "PostgresCompatConnection"
+    global_scope = clause.strip() == "WHERE duplicate_of_id IS NULL" and not params
 
     def build() -> PoolReadSelection:
-        raw_doc = profile_avatar_document_expression(conn)
-        raw_avatar = profile_avatar_value_expression(conn)
-        materialized = "MATERIALIZED " if conn.__class__.__name__ == "PostgresCompatConnection" else ""
-        if raw_avatar == "NULL":
+        # Global PostgreSQL selection stays identity-only; returned cards use
+        # bounded raw-avatar hydration after pagination.
+        if is_postgres and global_scope:
             query = f"""
             SELECT id, platform, handle, profile_url, display_name, avatar_url,
                    bio, duplicate_of_id, avg_views, engagement_rate,
@@ -592,19 +593,30 @@ def prepare_pool_read_selection(
             FROM vkpi_kol_pool {clause} ORDER BY id
             """
         else:
-            query = f"""
-            WITH pool_read_source AS {materialized}(
+            raw_doc = profile_avatar_document_expression(conn)
+            raw_avatar = profile_avatar_value_expression(conn)
+            materialized = "MATERIALIZED " if is_postgres else ""
+            if raw_avatar == "NULL":
+                query = f"""
                 SELECT id, platform, handle, profile_url, display_name, avatar_url,
                        bio, duplicate_of_id, avg_views, engagement_rate,
-                       viltrox_fit_score, {raw_doc} AS raw_profile_doc
-                FROM vkpi_kol_pool {clause}
-            )
-            SELECT id, platform, handle, profile_url, display_name, avatar_url,
-                   bio, duplicate_of_id, avg_views, engagement_rate,
-                   viltrox_fit_score, {raw_avatar} AS raw_profile_avatar_url
-            FROM pool_read_source
-            ORDER BY id
-            """
+                       viltrox_fit_score, NULL AS raw_profile_avatar_url
+                FROM vkpi_kol_pool {clause} ORDER BY id
+                """
+            else:
+                query = f"""
+                WITH pool_read_source AS {materialized}(
+                    SELECT id, platform, handle, profile_url, display_name, avatar_url,
+                           bio, duplicate_of_id, avg_views, engagement_rate,
+                           viltrox_fit_score, {raw_doc} AS raw_profile_doc
+                    FROM vkpi_kol_pool {clause}
+                )
+                SELECT id, platform, handle, profile_url, display_name, avatar_url,
+                       bio, duplicate_of_id, avg_views, engagement_rate,
+                       viltrox_fit_score, {raw_avatar} AS raw_profile_avatar_url
+                FROM pool_read_source
+                ORDER BY id
+                """
         rows = conn.execute(query, tuple(params)).fetchall()
         pool_rows = [dict(row) for row in rows]
         session_items, available = _load_bridge_items(
@@ -617,13 +629,7 @@ def prepare_pool_read_selection(
         selection.diagnostics["source_revision"] = source_revision or "unavailable"
         return selection
 
-    is_postgres = conn.__class__.__name__ == "PostgresCompatConnection"
-    enabled = (
-        clause.strip() == "WHERE duplicate_of_id IS NULL"
-        and not params
-        and is_postgres
-        and bool(source_revision)
-    )
+    enabled = global_scope and is_postgres and bool(source_revision)
     return cached_global_pool_selection(
         enabled=enabled,
         builder=build,
@@ -767,6 +773,7 @@ def project_pool_read_item(
     # time instead of preferring the health state captured in the 30s identity
     # selection cache; otherwise an expired URL can be mislabeled as usable.
     projected.update(project_pool_avatar({**source_row, **projected}))
+    projected.pop("raw_profile_avatar_url", None)
     projected.update(selection.audit_by_id.get(pool_id) or {})
     return projected
 
@@ -790,5 +797,4 @@ def pool_read_public_fields(item: dict[str, Any]) -> dict[str, Any]:
 def project_pool_recall_items(conn: Any, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Map semantic-recall hits onto the same global Pool read projection."""
     from app.domains.kol.pool_read_recall import project_pool_recall_items as project
-
     return project(conn, items)

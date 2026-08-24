@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from app.domains.kol.pool_read_avatar_hydration import (
+    bounded_profile_avatar_urls,
+    profile_avatar_fallback_needed,
+)
 from app.domains.kol.pool_read_projection import project_pool_read_item
 
 
@@ -36,6 +40,16 @@ def project_pool_list_items(
     contact_visibility: str,
 ) -> list[dict[str, Any]]:
     raw_rows = [dict(row) for row in rows]
+    hydration_ids = [
+        int(row["id"])
+        for row in raw_rows
+        if row.get("id") and profile_avatar_fallback_needed(row.get("avatar_url"))
+    ]
+    hydrated_avatars = bounded_profile_avatar_urls(conn, hydration_ids)
+    for row in raw_rows:
+        pool_id = int(row.get("id") or 0)
+        if pool_id in hydrated_avatars:
+            row["raw_profile_avatar_url"] = hydrated_avatars[pool_id]
     items = [project_pool_read_item(row, selection) for row in raw_rows]
     scopes = {
         int(item["id"]): [int(item["id"]), *[int(value) for value in item.get("canonical_duplicate_ids") or []]]
