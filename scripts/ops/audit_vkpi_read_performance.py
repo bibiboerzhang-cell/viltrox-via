@@ -546,10 +546,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         if args.json_out:
             _write_json(args.json_out, report)
-        print(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2))
+        sys.stdout.write(json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2) + "\n")
         return 0 if report["passed"] else 1
     except (OSError, ValueError) as exc:
-        print(
+        sys.stderr.write(
             json.dumps(
                 {
                     "schema_version": SCHEMA_VERSION,
@@ -557,8 +557,8 @@ def main(argv: list[str] | None = None) -> int:
                     "error": str(exc)[:160],
                 },
                 sort_keys=True,
-            ),
-            file=sys.stderr,
+            )
+            + "\n"
         )
         return 2
     finally:
