@@ -9,6 +9,7 @@ import logging
 import os
 import re
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 
 _EXCLUDED_REGION_RE = re.compile(
@@ -190,6 +191,110 @@ _BRAND_SELF_VOICE_PATTERNS = _CORPORATE_VOICE_STRONG_PATTERNS + _CORPORATE_VOICE
 # sonyofficial 拦、sonya_official(真人 Sonya)放行)。
 _BRAND_HANDLE_SUFFIXES = ("", "official", "lofficial", "global", "usa", "us", "uk", "eu", "hq")
 
+# Imported publisher, retailer and website rows sometimes reuse ``handle`` for
+# a brand mentioned in an old spreadsheet.  A bare brand handle on those
+# sources is not proof that the row is the brand's official social account.
+_NON_CREATOR_EXACT_HANDLE_PLATFORMS = frozenset({
+    "blog", "community", "dealer", "forum", "media", "newsletter", "other",
+    "press", "publication", "retailer", "store", "website",
+})
+_CREATOR_PROFILE_HOST_PLATFORMS = {
+    "youtube.com": "youtube",
+    "youtu.be": "youtube",
+    "instagram.com": "instagram",
+    "tiktok.com": "tiktok",
+    "facebook.com": "facebook",
+    "fb.com": "facebook",
+    "twitter.com": "twitter",
+    "x.com": "twitter",
+}
+_EXACT_HANDLE_PLATFORM_ALIASES = {
+    "fb": "facebook",
+    "ig": "instagram",
+    "insta": "instagram",
+    "tt": "tiktok",
+    "x": "twitter",
+    "yt": "youtube",
+    "youtube_shorts": "youtube",
+}
+
+
+def _normalized_brand_locator(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", unquote(str(value or "")).lower().lstrip("@"))
+
+
+def _profile_url_confirms_exact_brand_handle(
+    value: Any,
+    *,
+    platform: str,
+    brand_norm: str,
+) -> bool:
+    """Require a social profile URL to carry the same public brand locator.
+
+    A YouTube ``/channel/UC...`` URL proves a channel but not that its public
+    handle equals an imported brand word, so it deliberately fails open here.
+    Explicit ``official`` identity or corporate bio evidence can still reach
+    the normal high-confidence signal path below.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return False
+    try:
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    except ValueError:
+        return False
+    host = parsed.netloc.lower().split(":", 1)[0]
+    for prefix in ("www.", "m.", "mobile."):
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+    url_platform = ""
+    for suffix, candidate in _CREATOR_PROFILE_HOST_PLATFORMS.items():
+        if host == suffix or host.endswith(f".{suffix}"):
+            url_platform = candidate
+            break
+    if not url_platform or (platform and platform != url_platform):
+        return False
+    parts = [unquote(part).strip() for part in parsed.path.split("/") if part.strip()]
+    locator = ""
+    if url_platform == "youtube":
+        if parts and parts[0].startswith("@"):
+            locator = parts[0]
+        elif len(parts) >= 2 and parts[0].lower() in {"c", "user"}:
+            locator = parts[1]
+    elif url_platform == "tiktok":
+        if parts and parts[0].startswith("@"):
+            locator = parts[0]
+    elif parts:
+        locator = parts[0]
+    return bool(locator) and _normalized_brand_locator(locator) == brand_norm
+
+
+def _exact_brand_handle_confirmed(item: dict[str, Any], brand_norm: str) -> bool:
+    """Keep the legacy exact-handle shortcut conservative across sources."""
+    platform = str(
+        item.get("platform") or item.get("normalized_platform") or ""
+    ).strip().lower()
+    platform = _EXACT_HANDLE_PLATFORM_ALIASES.get(platform, platform)
+    if platform in _NON_CREATOR_EXACT_HANDLE_PLATFORMS:
+        return False
+    profile_urls = [
+        item.get(field)
+        for field in ("profile_url", "channel_url", "source_url", "url")
+        if str(item.get(field) or "").strip()
+    ]
+    # Provider candidates can arrive before a URL.  Exact brand handle remains
+    # a strong signal unless the source explicitly says it is non-creator.
+    if not profile_urls:
+        return True
+    return any(
+        _profile_url_confirms_exact_brand_handle(
+            value,
+            platform=platform,
+            brand_norm=brand_norm,
+        )
+        for value in profile_urls
+    )
+
 
 def _competitor_brand_terms() -> dict[str, list[str]]:
     """竞品品牌词表(brand → keywords),lazy 复用 competitor_brands.json;失败回空表=闸不生效(fail-open)。"""
@@ -232,14 +337,16 @@ def _brand_identity_hit(item: dict[str, Any], brand: str, keywords: list[str]) -
 
 
 def _official_account_signal(item: dict[str, Any]) -> bool:
-    """官号信号:handle/名称含 official、或 bio 是品牌自述口吻("Official Channel"/"established in"/we 品牌自称)。"""
+    """High-confidence official signal; one weak ``we/our`` phrase is insufficient."""
     identity = " ".join(
         str(item.get(k) or "") for k in ("handle", "channel_name", "display_name", "username")
     ).lower()
     if "official" in identity:
         return True
     bio = str(item.get("bio") or item.get("description") or "").lower()
-    return bool(bio) and any(pattern in bio for pattern in _BRAND_SELF_VOICE_PATTERNS)
+    # One strong phrase, or three weak phrases without personal voice.  A lone
+    # "we provide" is common in affiliate/reviewer bios and is not ownership.
+    return _corporate_voice_bio(bio)
 
 
 def _competitor_brand_official(
@@ -258,7 +365,12 @@ def _competitor_brand_official(
     handle_norm = re.sub(r"[^a-z0-9]", "", str(item.get("handle") or "").lower())
     for brand in brands:
         brand_norm = re.sub(r"[^a-z0-9]", "", brand)
-        if handle_norm and brand_norm and handle_norm == brand_norm:
+        if (
+            handle_norm
+            and brand_norm
+            and handle_norm == brand_norm
+            and _exact_brand_handle_confirmed(item, brand_norm)
+        ):
             return brand
     if not _official_account_signal(item):
         return ""

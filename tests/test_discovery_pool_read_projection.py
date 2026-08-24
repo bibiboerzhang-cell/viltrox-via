@@ -35,6 +35,8 @@ def _row(
     bio: str = "",
     avatar_url: str = "",
     raw_platform_data: dict[str, Any] | None = None,
+    source_type: str = "",
+    source_ref: str = "",
 ) -> dict[str, Any]:
     return {
         "id": pool_id,
@@ -46,6 +48,8 @@ def _row(
         "avatar_url": avatar_url,
         "raw_platform_data": raw_platform_data or {},
         "duplicate_of_id": None,
+        "source_type": source_type,
+        "source_ref": source_ref,
     }
 
 
@@ -76,13 +80,31 @@ def _cloud_duplicate_rows() -> list[dict[str, Any]]:
 
 def _cloud_official_rows() -> list[dict[str, Any]]:
     return [
-        _row(1534, "nikon", "https://opticallimits.com/nikon", "opticallimits - 【MEDIA】", platform="media"),
+        _row(
+            1534,
+            "nikon",
+            "https://opticallimits.com/",
+            "opticallimits - 【MEDIA】",
+            platform="media",
+            source_type="promo_plan_xlsx",
+            source_ref="海外市场推广计划表-Viltrox_AF 35+55mm F1.8 EVO FE+Z.xlsx",
+        ),
         _row(
             4515,
             "UCS8XbKPaGqcXeamTuiLkg3A",
             "https://youtube.com/channel/UCS8XbKPaGqcXeamTuiLkg3A",
             "FUJIFILM Sample Images",
-            bio="Official channel for FUJIFILM sample images and our products.",
+            bio=(
+                "A channel for photographers who are interested in Fujifilm Fujinon photography. "
+                "There is no better way to appreciate the image quality of Fuji products than to "
+                "have a look at sample pictures on your computer. In this Fuji guide, we provide "
+                "you with short video clips, which contain sample images for Fujifilm X-series / "
+                "GFX system cameras and Fujinon lenses review. We post landscape photos, street "
+                "shots, architectural images, portraits, stills, wildlife, sports and event "
+                "pictures with various focal length range and lighting situations. Enjoy Fujifilm "
+                "photography tips and this photo gallery with samples!"
+            ),
+            source_type="manual",
         ),
         _row(4561, "viltrox_id", "https://tiktok.com/@viltrox_id", "", platform="tiktok"),
         _row(4581, "viltrox.cee", "https://tiktok.com/@viltrox.cee", "", platform="tiktok"),
@@ -121,7 +143,8 @@ def test_cloud_seven_groups_fold_six_and_keep_luke_fail_closed() -> None:
 
     assert selection.folded_ids == frozenset({3533, 3571, 4946, 4948, 4950, 4952})
     assert {3505, 4062}.issubset(selection.visible_ids)
-    assert selection.official_ids == frozenset({1534, 4515, 4561, 4581})
+    assert selection.official_ids == frozenset({4561, 4581})
+    assert {1534, 4515}.issubset(selection.visible_ids)
     assert 6001 in selection.visible_ids
     assert selection.canonical_by_id[3533] == 3971
     assert selection.canonical_by_id[3571] == 3572
@@ -131,18 +154,35 @@ def test_cloud_seven_groups_fold_six_and_keep_luke_fail_closed() -> None:
     assert selection.diagnostics == {
         "method": "canonical_pool_read_projection_v1",
         "physical_master_rows": 19,
-        "visible_rows": 9,
+        "visible_rows": 11,
         "canonical_folded_groups": 6,
         "canonical_folded_rows": 6,
         "canonical_manual_review_groups": 1,
-        "excluded_confirmed_official": 4,
-        "official_verdict_counts": {"brand_official": 2, "own_brand": 2},
+        "excluded_confirmed_official": 2,
+        "official_verdict_counts": {"own_brand": 2},
         "bridge_evidence_available": True,
         "history_rows_deleted": 0,
         "pool_rows_deleted": 0,
         "duplicate_pointer_rows_written": 0,
         "writes_performed": 0,
     }
+
+
+def test_cloud_real_ambiguous_brand_rows_fail_open() -> None:
+    selection = build_pool_read_selection(
+        _cloud_official_rows(),
+        session_items=[],
+        bridge_evidence_available=True,
+    )
+
+    assert selection.official_ids == frozenset({4561, 4581})
+    assert {1534, 4515}.issubset(selection.visible_ids)
+    assert {
+        selection.audit_by_id[pool_id]["canonical_identity_status"]
+        for pool_id in (1534, 4515)
+    } == {"unique"}
+    assert selection.diagnostics["excluded_confirmed_official"] == 2
+    assert selection.diagnostics["official_verdict_counts"] == {"own_brand": 2}
 
 
 def test_missing_bridge_evidence_keeps_every_overlap_for_manual_review() -> None:
@@ -401,11 +441,11 @@ def test_pool_list_uses_projection_without_mutating_rows(monkeypatch: pytest.Mon
     result = pool.list_pool(limit=50, sort_by="followers")
 
     assert {int(item["id"]) for item in result["items"]} == {
-        3505, 3572, 3971, 4062, 4971, 4974, 4987, 4997,
+        1534, 3505, 3572, 3971, 4062, 4515, 4971, 4974, 4987, 4997,
     }
     assert result["projection"]["canonical_folded_rows"] == 6
     assert result["projection"]["canonical_manual_review_groups"] == 1
-    assert result["projection"]["excluded_confirmed_official"] == 4
+    assert result["projection"]["excluded_confirmed_official"] == 2
     eren = next(item for item in result["items"] if int(item["id"]) == 3971)
     assert eren["canonical_duplicate_ids"] == [3533]
     assert eren["avatar_url_status"] == "missing"
@@ -437,7 +477,7 @@ def test_workspace_counts_and_paginates_after_global_projection(monkeypatch: pyt
     assert result["counts"]["returned"] == 1
     assert result["counts"]["has_more"] is True
     assert result["list"]["has_more"] is True
-    assert all_result["counts"]["filtered"] == 8
+    assert all_result["counts"]["filtered"] == 10
     assert all_result["counts"]["returned"] == 1
     assert all_result["counts"]["has_more"] is True
 
@@ -487,7 +527,7 @@ def test_data_status_uses_projected_avatar_health(monkeypatch: pytest.MonkeyPatc
 
     assert [int(item["id"]) for item in complete["list"]["items"]] == [3572]
     assert 3971 in {int(item["id"]) for item in missing["list"]["items"]}
-    assert complete["counts"]["by_data_status"] == {"complete": 1, "missing": 7}
+    assert complete["counts"]["by_data_status"] == {"complete": 1, "missing": 9}
 
 
 def test_summary_uses_the_same_employee_visible_projection(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -499,12 +539,15 @@ def test_summary_uses_the_same_employee_visible_projection(monkeypatch: pytest.M
 
     result = pool.summary()
 
-    assert result["total"] == 8
-    assert result["candidate_asset_count"] == 8
-    assert result["by_platform"] == [{"platform": "youtube", "n": 8}]
+    assert result["total"] == 10
+    assert result["candidate_asset_count"] == 10
+    assert result["by_platform"] == [
+        {"platform": "youtube", "n": 9},
+        {"platform": "media", "n": 1},
+    ]
     assert result["read_projection"]["physical_master_rows"] == 18
     assert result["read_projection"]["canonical_folded_rows"] == 6
-    assert result["read_projection"]["excluded_confirmed_official"] == 4
+    assert result["read_projection"]["excluded_confirmed_official"] == 2
 
 
 def test_summary_funnel_counts_folded_evidence_once_per_canonical_creator(
