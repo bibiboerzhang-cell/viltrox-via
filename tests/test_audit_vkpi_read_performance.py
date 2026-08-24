@@ -187,6 +187,20 @@ def test_strict_mode_fails_closed_before_any_request(
     assert requester.paths == []
 
 
+def test_warm_observe_refuses_plain_http_off_loopback_before_any_request() -> None:
+    requester = _Requester([])
+
+    with pytest.raises(ValueError, match="non_loopback_requires_https"):
+        _run(
+            requester,
+            mode=audit.MODE_WARM,
+            base_url="http://viltroxtest.com",
+            strict_runtime_confirmed=False,
+        )
+
+    assert requester.paths == []
+
+
 def test_surface_specific_headers_are_required() -> None:
     requester = _Requester(
         [

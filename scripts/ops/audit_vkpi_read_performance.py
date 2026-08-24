@@ -119,6 +119,8 @@ def _safe_base_url(value: str, *, mode: str) -> tuple[str, str, int | None]:
     ):
         raise ValueError("base_url_must_be_origin_only_http_or_https")
     host = parsed.hostname.lower()
+    if host not in LOOPBACK_HOSTS and parsed.scheme != "https":
+        raise ValueError("non_loopback_requires_https")
     if mode == MODE_STRICT and host not in LOOPBACK_HOSTS:
         raise ValueError("strict_cold_warm_is_loopback_only")
     return parsed.scheme, host, parsed.port

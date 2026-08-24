@@ -21,7 +21,8 @@ work.
 read is a warm-up/observation request; every measured request after it must be
 an exact application-cache hit with an identical response digest. This mode
 does not claim that the first request was cold and does not report a
-cold-to-warm speedup.
+cold-to-warm speedup. Any non-loopback target must use HTTPS; the auditor
+refuses plain HTTP before loading or sending a bearer token.
 
 ```bash
 VKPI_PERF_AUDIT_TOKEN_FILE=/absolute/private/token-file
