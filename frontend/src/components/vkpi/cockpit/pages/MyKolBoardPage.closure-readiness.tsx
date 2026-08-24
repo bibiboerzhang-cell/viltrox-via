@@ -84,6 +84,16 @@ export function ClosureReadinessCard({ apiToken, refreshKey = 0 }: ClosureReadin
 
   const counts = data?.counts || {};
   const flows = data?.flows || {};
+  const hasTrackingProvenance = counts.employee_explicit_tracked_videos != null
+    && counts.system_seeded_tracked_videos != null;
+  const hasGeminiEvidenceIntersection = counts.final_v1_lens_scanned_videos != null;
+  const trackingProvenanceText = [
+    `${n(counts.employee_explicit_tracked_videos)} 人工`,
+    `${n(counts.system_seeded_tracked_videos)} 系统`,
+    ...(n(counts.unclassified_tracked_videos) > 0
+      ? [`${n(counts.unclassified_tracked_videos)} 待归类`]
+      : []),
+  ].join(" · ");
   const rows = [
     {
       key: "content",
@@ -100,8 +110,12 @@ export function ClosureReadinessCard({ apiToken, refreshKey = 0 }: ClosureReadin
     {
       key: "tracking",
       label: "视频追踪",
-      value: `${n(counts.tracked_videos)} / ${n(counts.trackable_videos)}`,
-      note: stateText(flows.video_tracking?.state),
+      value: hasTrackingProvenance
+        ? trackingProvenanceText
+        : `${n(counts.tracked_videos)} / ${n(counts.trackable_videos)}`,
+      note: hasTrackingProvenance
+        ? `总追踪 ${n(counts.tracked_videos)} / ${n(counts.trackable_videos)} · ${stateText(flows.video_tracking?.state)}`
+        : stateText(flows.video_tracking?.state),
     },
     {
       key: "sku",
@@ -112,8 +126,12 @@ export function ClosureReadinessCard({ apiToken, refreshKey = 0 }: ClosureReadin
     {
       key: "gemini",
       label: "Gemini 视频深析",
-      value: `${n(counts.final_v1_ready_videos)} / ${n(counts.candidate_videos)}`,
-      note: stateText(flows.gemini_analysis?.state),
+      value: hasGeminiEvidenceIntersection
+        ? `${n(counts.final_v1_lens_scanned_videos)} / ${n(counts.final_v1_ready_videos)} 成套`
+        : `${n(counts.final_v1_ready_videos)} / ${n(counts.candidate_videos)}`,
+      note: hasGeminiEvidenceIntersection
+        ? `深析 ${n(counts.final_v1_ready_videos)} / ${n(counts.candidate_videos)} · ${stateText(flows.gemini_analysis?.state)}`
+        : stateText(flows.gemini_analysis?.state),
     },
   ];
   const blockers = Array.isArray(data?.blockers) ? data.blockers.slice(0, 5) : [];

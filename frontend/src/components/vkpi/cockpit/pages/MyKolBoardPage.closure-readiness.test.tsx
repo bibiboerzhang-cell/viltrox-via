@@ -24,11 +24,15 @@ const RESPONSE = {
     candidate_videos: 2,
     trackable_videos: 2,
     tracked_videos: 1,
+    employee_explicit_tracked_videos: 1,
+    system_seeded_tracked_videos: 0,
+    unclassified_tracked_videos: 0,
     measured_tracked_videos: 1,
     sku_linked_tracked_videos: 1,
     sku_detected_videos: 1,
     sku_confirmed_videos: 0,
     final_v1_ready_videos: 1,
+    final_v1_lens_scanned_videos: 0,
   },
   flows: {
     content_monitoring: { state: "configured_scheduler_disabled" },
@@ -61,9 +65,13 @@ describe("MY KOL 业务闭环状态卡", () => {
     expect(screen.getByText("SKU 关联")).toBeTruthy();
     expect(screen.getByText("Gemini 视频深析")).toBeTruthy();
     expect(screen.getAllByText("1 / 2").length).toBeGreaterThan(0);
+    expect(screen.getByText("1 人工 · 0 系统")).toBeTruthy();
+    expect(screen.getByText(/总追踪 1 \/ 2/)).toBeTruthy();
+    expect(screen.getByText("0 / 1 成套")).toBeTruthy();
+    expect(screen.getByText(/深析 1 \/ 2/)).toBeTruthy();
     expect(screen.getByText("已配置 · 调度未开启")).toBeTruthy();
     expect(screen.getByText("系统检出 · 待人工确认")).toBeTruthy();
-    expect(screen.getByText("已深析 · 镜头证据待整理")).toBeTruthy();
+    expect(screen.getByText(/深析 1 \/ 2 · 已深析 · 镜头证据待整理/)).toBeTruthy();
     expect(screen.queryByText(/KOL 内容订阅未选择/)).toBeNull();
     expect(screen.getByText(/内容巡检调度未开启 · 1 · 管理员开闸/)).toBeTruthy();
     expect(apiFetchMock).toHaveBeenCalledWith("/api/admin/vkpi/my-kol/closure-readiness", {}, "token");

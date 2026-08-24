@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
+
+import pytest
 
 from app.domains.intelligence import gemini_single_kol_preflight
 from scripts import vkpi_gemini_single_kol_preflight as preflight_script
@@ -15,6 +18,9 @@ def _fake_item(raw_platform_data: dict) -> dict:
         "display_name": "Creator One",
         "profile_url": "https://www.youtube.com/@creatorone",
         "raw_platform_data": raw_platform_data,
+        # Mirrors get_item(include_video_evidence=False): this public empty
+        # placeholder must never suppress the separate bounded durable reader.
+        "video_evidence": [],
         "sync_status": "synced",
         "last_seen_at": "2026-05-23T00:00:00Z",
     }
@@ -46,6 +52,17 @@ def _fake_budget_allowed(*_args, **_kwargs) -> dict:
             }
         ],
     }
+
+
+@pytest.fixture(autouse=True)
+def _no_durable_video_evidence(monkeypatch):
+    """Keep legacy raw-fixture tests isolated from the real database."""
+
+    monkeypatch.setattr(
+        gemini_single_kol_preflight.kol_pool,
+        "_video_evidence_for_kol",
+        lambda *_args, **_kwargs: [],
+    )
 
 
 def test_gemini_single_kol_preflight_selects_top_youtube_video_without_calls(monkeypatch) -> None:
@@ -94,6 +111,119 @@ def test_gemini_single_kol_preflight_blocks_missing_video(monkeypatch) -> None:
     assert payload["url_readiness"]["valid_video_url"] is False
     assert payload["go_no_go"]["blocked_reason"] == "no_cached_video_candidates"
     assert payload["checks"]["candidate_evaluated"] is True
+
+
+def test_gemini_preflight_consumes_private_raw_sibling_without_leaking_it(monkeypatch) -> None:
+    calls: list[dict] = []
+    raw = {
+        "contact_email": "private@example.test",
+        "videos": [
+            {
+                "id": "sibling123",
+                "kind": "youtube#video",
+                "title": "Viltrox field test",
+                "statistics": {"viewCount": 3210},
+            }
+        ],
+    }
+    public_item = _fake_item({})
+    public_item.pop("raw_platform_data")
+
+    def fake_get_item(*_args, **kwargs):
+        calls.append(kwargs)
+        return {
+            "item": {**public_item, "video_evidence": []},
+            "_raw_platform_data_for_derivation": json.dumps(raw),
+        }
+
+    monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", fake_get_item)
+    monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget)
+
+    payload = gemini_single_kol_preflight.build_kol_pool_gemini_preflight(123)
+    serialized = json.dumps(payload)
+
+    assert calls == [{"include_raw_for_derivation": True, "include_video_evidence": False}]
+    assert payload["top_candidate"]["post_uid"] == "sibling123"
+    assert payload["top_candidate"]["source_kind"] == "vkpi_kol_pool.raw_platform_data"
+    assert payload["provider_calls"] is False
+    assert payload["write_db"] is False
+    assert "_raw_platform_data_for_derivation" not in serialized
+    assert "raw_platform_data" not in payload
+    assert "raw_platform_data" not in payload["item"]
+    assert "private@example.test" not in serialized
+
+
+def test_gemini_preflight_prefers_durable_video_evidence_without_raw(monkeypatch) -> None:
+    public_item = _fake_item({})
+    public_item.pop("raw_platform_data")
+    public_item["platform"] = "instagram"
+    durable_rows = [
+        {
+            "evidence_id": 902,
+            "evidence_type": "image",
+            "platform": "instagram",
+            "content_url": "https://www.instagram.com/p/not-a-video/",
+        },
+        {
+            "evidence_id": 903,
+            "evidence_type": "video",
+            "is_active": False,
+            "platform": "youtube",
+            "content_url": "https://www.youtube.com/watch?v=inactive903",
+        },
+        {
+            "evidence_id": 904,
+            "evidence_type": "image",
+            "platform": "instagram",
+            "content_url": "https://www.instagram.com/p/also-not-video/",
+        },
+        {
+            "evidence_id": 901,
+            "evidence_type": "video",
+            "platform": "youtube",
+            "title": "Persisted Viltrox review",
+            "content_url": "https://www.youtube.com/watch?v=durable901",
+            "view_count": 8000,
+        },
+    ]
+    reader_calls: list[dict] = []
+
+    def fake_durable_reader(kol_pool_id, **kwargs):
+        reader_calls.append({"kol_pool_id": kol_pool_id, **kwargs})
+        return durable_rows[: int(kwargs.get("limit") or 0)]
+
+    monkeypatch.setattr(
+        gemini_single_kol_preflight.kol_pool,
+        "get_item",
+        lambda *_args, **_kwargs: {"item": public_item},
+    )
+    monkeypatch.setattr(
+        gemini_single_kol_preflight.kol_pool,
+        "_video_evidence_for_kol",
+        fake_durable_reader,
+    )
+    monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget)
+
+    payload = gemini_single_kol_preflight.build_kol_pool_gemini_preflight(
+        123,
+        candidate_limit=1,
+    )
+
+    assert payload["candidate_strategy"]["candidate_count"] == 1
+    assert reader_calls == [
+        {
+            "kol_pool_id": 123,
+            "limit": gemini_single_kol_preflight.DURABLE_EVIDENCE_SCAN_LIMIT,
+            "include_inactive": False,
+        }
+    ]
+    assert payload["candidate_strategy"]["limit"] == 1
+    assert payload["top_candidate"]["post_uid"] == "durable901"
+    assert payload["top_candidate"]["source_kind"] == "vkpi_kol_video_evidence"
+    assert payload["top_candidate"]["platform"] == "youtube"
+    assert payload["url_readiness"]["valid_video_url"] is True
+    assert payload["provider_calls"] is False
+    assert payload["write_db"] is False
 
 
 def test_gemini_single_kol_preflight_acceptance_script_is_readonly(monkeypatch) -> None:

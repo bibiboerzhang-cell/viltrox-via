@@ -119,15 +119,36 @@ def _video_counts(conn: Any, sid: int) -> dict[str, int]:
             WHERE COALESCE(e.evidence_type, 'video')='video'
               AND e.is_active IS NOT FALSE
         ), tracked AS (
-            SELECT t.evidence_id
+            SELECT t.evidence_id, COALESCE(t.source, '') AS source
             FROM vkpi_kol_video_metric_tracking t
             JOIN writable_video_base v ON v.id=t.evidence_id
             WHERE t.status='active'
+        ), final_ready AS (
+            SELECT DISTINCT d.source_evidence_id AS evidence_id
+            FROM vkpi_kol_llm_deep_analysis_results d
+            JOIN video_base v ON v.id=d.source_evidence_id
+            WHERE d.analysis_kind='video_final_v1' AND d.status='ready'
+        ), lens_scanned AS (
+            SELECT DISTINCT s.evidence_id
+            FROM vkpi_kol_lens_evidence_scan s
+            JOIN video_base v ON v.id=s.evidence_id
+            WHERE s.scan_status IN ('scanned', 'no_evidence', 'empty_result')
         )
         SELECT
           (SELECT COUNT(*) FROM video_base) AS candidate_videos,
           (SELECT COUNT(*) FROM writable_video_base) AS trackable_videos,
           (SELECT COUNT(*) FROM tracked) AS tracked_videos,
+          (SELECT COUNT(*) FROM tracked
+            WHERE source IN ('my_kol_video_tracking', 'migration_285_manual_product_link'))
+            AS employee_explicit_tracked_videos,
+          (SELECT COUNT(*) FROM tracked
+            WHERE source='enroll_metric_tracking') AS system_seeded_tracked_videos,
+          (SELECT COUNT(*) FROM tracked
+            WHERE source NOT IN (
+                'my_kol_video_tracking',
+                'migration_285_manual_product_link',
+                'enroll_metric_tracking'
+            )) AS unclassified_tracked_videos,
           (SELECT COUNT(DISTINCT s.evidence_id)
              FROM vkpi_content_metric_snapshots s
              JOIN tracked t ON t.evidence_id=s.evidence_id
@@ -135,7 +156,13 @@ def _video_counts(conn: Any, sid: int) -> dict[str, int]:
           (SELECT COUNT(DISTINCT s.evidence_id)
              FROM vkpi_content_metric_snapshots s
              JOIN tracked t ON t.evidence_id=s.evidence_id
-            WHERE s.status='legacy_current_only') AS legacy_only_tracked_videos,
+            WHERE s.status='legacy_current_only'
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM vkpi_content_metric_snapshots success
+                  WHERE success.evidence_id=s.evidence_id
+                    AND success.status='success'
+              )) AS legacy_only_tracked_videos,
           (SELECT COUNT(DISTINCT l.evidence_id)
              FROM vkpi_kol_video_product_links l
              JOIN tracked t ON t.evidence_id=l.evidence_id) AS sku_linked_tracked_videos,
@@ -161,14 +188,12 @@ def _video_counts(conn: Any, sid: int) -> dict[str, int]:
              FROM vkpi_kol_video_product_links l
              JOIN tracked t ON t.evidence_id=l.evidence_id
             WHERE l.relation_type='confirmed') AS sku_confirmed_videos,
-          (SELECT COUNT(DISTINCT d.source_evidence_id)
-             FROM vkpi_kol_llm_deep_analysis_results d
-             JOIN video_base v ON v.id=d.source_evidence_id
-            WHERE d.analysis_kind='video_final_v1' AND d.status='ready') AS final_v1_ready_videos,
-          (SELECT COUNT(DISTINCT s.evidence_id)
-             FROM vkpi_kol_lens_evidence_scan s
-             JOIN video_base v ON v.id=s.evidence_id
-            WHERE s.scan_status IN ('scanned', 'no_evidence', 'empty_result')) AS lens_scanned_videos,
+          (SELECT COUNT(*) FROM final_ready) AS final_v1_ready_videos,
+          (SELECT COUNT(*) FROM lens_scanned) AS lens_scanned_videos,
+          (SELECT COUNT(*)
+             FROM final_ready f
+             JOIN lens_scanned s ON s.evidence_id=f.evidence_id)
+            AS final_v1_lens_scanned_videos,
           (SELECT COUNT(DISTINCT l.evidence_id)
              FROM vkpi_kol_lens_evidence l
              JOIN video_base v ON v.id=l.evidence_id) AS lens_mention_videos
@@ -281,7 +306,7 @@ def build_closure_readiness(
         analysis_state = "no_targets"
     elif counts["final_v1_ready_videos"] <= 0:
         analysis_state = "no_final_v1_results"
-    elif counts["lens_scanned_videos"] < counts["final_v1_ready_videos"]:
+    elif counts["final_v1_lens_scanned_videos"] < counts["final_v1_ready_videos"]:
         analysis_state = "lens_extraction_pending"
     else:
         analysis_state = "ready_with_evidence"
@@ -352,7 +377,11 @@ def build_closure_readiness(
     )
     add_blocker(
         "lens_extraction_pending",
-        max(0, counts["final_v1_ready_videos"] - counts["lens_scanned_videos"]),
+        max(
+            0,
+            counts["final_v1_ready_videos"]
+            - counts["final_v1_lens_scanned_videos"],
+        ),
         "system",
         approval_required=False,
     )
@@ -360,7 +389,7 @@ def build_closure_readiness(
     configured_actions = (
         counts["monitoring_active_kols"]
         + counts["share_grants"]
-        + counts["tracked_videos"]
+        + counts["employee_explicit_tracked_videos"]
         + counts["sku_linked_tracked_videos"]
     )
     return {

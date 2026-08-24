@@ -19,6 +19,7 @@ from app.domains.costs import budget_guard
 
 
 GEMINI_SINGLE_KOL_SCOPE = "cron:p4_gemini_single_kol"
+DURABLE_EVIDENCE_SCAN_LIMIT = 201
 YOUTUBE_RE = re.compile(r"(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)([A-Za-z0-9_-]{6,})", re.I)
 VILTROX_RE = re.compile(r"\bviltrox\b", re.I)
 AnalyzerFn = Callable[[str, str, str], Awaitable[dict[str, Any]]]
@@ -230,12 +231,67 @@ def _candidate_from_post(post: dict[str, Any], *, item: dict[str, Any], index: i
     }
 
 
-def _cached_video_candidates(item: dict[str, Any], *, limit: int = 24) -> list[dict[str, Any]]:
-    raw = _loads(item.get("raw_platform_data"), {})
+def _cached_video_candidates(
+    item: dict[str, Any],
+    *,
+    raw_platform_data: Any = None,
+    durable_video_evidence: Iterable[dict[str, Any]] = (),
+    limit: int = 24,
+) -> list[dict[str, Any]]:
+    """Build candidates from persisted evidence and an internal raw handoff.
+
+    ``kol_pool.get_item`` intentionally strips raw provider payloads from its
+    public ``item`` DTO.  Callers that need derivation receive the raw value as
+    a separate private sibling.  Accept it explicitly here so it cannot be
+    mistaken for a response field or accidentally serialized with ``item``.
+    """
+
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
+    for index, evidence in enumerate(durable_video_evidence):
+        if not isinstance(evidence, dict):
+            continue
+        if evidence.get("is_active") in (False, 0):
+            continue
+        evidence_type = _lower(evidence.get("evidence_type") or "video")
+        if evidence_type != "video":
+            continue
+        evidence_item = {
+            **item,
+            "platform": evidence.get("platform") or item.get("platform"),
+        }
+        candidate = _candidate_from_post(
+            evidence,
+            item=evidence_item,
+            index=index,
+            source_kind="vkpi_kol_video_evidence",
+        )
+        if not candidate:
+            continue
+        key = _first_text(
+            candidate.get("video_url"),
+            candidate.get("url"),
+            candidate.get("post_uid"),
+            candidate.get("title"),
+        )
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+
+    raw = _loads(
+        raw_platform_data
+        if raw_platform_data is not None
+        else item.get("raw_platform_data"),
+        {},
+    )
     for index, post in enumerate(_raw_posts(raw)):
-        candidate = _candidate_from_post(post, item=item, index=index, source_kind="vkpi_kol_pool.raw_platform_data")
+        candidate = _candidate_from_post(
+            post,
+            item=item,
+            index=index + len(candidates),
+            source_kind="vkpi_kol_pool.raw_platform_data",
+        )
         if not candidate:
             continue
         key = _first_text(candidate.get("video_url"), candidate.get("url"), candidate.get("post_uid"), candidate.get("title"))
@@ -361,8 +417,40 @@ def _blocked_run(preflight: dict[str, Any], *, reason: str, execute: bool, allow
 
 
 def build_kol_pool_gemini_preflight(kol_pool_id: int, *, candidate_limit: int = 24, include_budget_preflight: bool = True) -> dict[str, Any]:
-    item = kol_pool.get_item(int(kol_pool_id))["item"]
-    candidates = _cached_video_candidates(item, limit=candidate_limit)
+    safe_candidate_limit = max(1, min(100, int(candidate_limit or 24)))
+    item_payload = kol_pool.get_item(
+        int(kol_pool_id),
+        include_raw_for_derivation=True,
+        # Load the requested candidate window below.  get_item's public detail
+        # projection is intentionally fixed at three rows and can include
+        # image evidence, so it cannot satisfy this preflight's 1..100 limit.
+        include_video_evidence=False,
+    )
+    item = dict(item_payload.get("item") or {})
+    raw_platform_data = item_payload.pop("_raw_platform_data_for_derivation", None)
+    # get_item always emits ``video_evidence=[]`` when include_video_evidence
+    # is false.  That empty public placeholder is not proof that no durable
+    # evidence exists, so never use it to suppress the bounded reader.
+    item.pop("video_evidence", None)
+    durable_video_evidence = kol_pool._video_evidence_for_kol(
+        int(kol_pool_id),
+        # The shared reader also returns image/carousel evidence and applies
+        # LIMIT before this module can filter to videos.  Scan its bounded
+        # maximum so a leading image cannot hide a later durable video, then
+        # truncate the scored video candidates to safe_candidate_limit below.
+        limit=DURABLE_EVIDENCE_SCAN_LIMIT,
+        include_inactive=False,
+    )
+    candidates = _cached_video_candidates(
+        item,
+        raw_platform_data=raw_platform_data,
+        durable_video_evidence=(
+            durable_video_evidence
+            if isinstance(durable_video_evidence, list)
+            else []
+        ),
+        limit=safe_candidate_limit,
+    )
     top_candidate = candidates[0] if candidates else None
     url_readiness = _url_readiness(top_candidate)
     budget_preflight: dict[str, Any] = {}
@@ -410,8 +498,12 @@ def build_kol_pool_gemini_preflight(kol_pool_id: int, *, candidate_limit: int = 
         "candidate_strategy": {
             "name": "cached_top1_youtube_first_then_engagement_v0",
             "candidate_count": len(candidates),
-            "limit": max(1, min(100, int(candidate_limit or 24))),
-            "sources": ["vkpi_kol_pool.raw_platform_data", "vkpi_kol_pool.profile_fallback"],
+            "limit": safe_candidate_limit,
+            "sources": [
+                "vkpi_kol_video_evidence",
+                "vkpi_kol_pool.raw_platform_data",
+                "vkpi_kol_pool.profile_fallback",
+            ],
         },
         "top_candidate": top_candidate or {},
         "candidate_sample": candidates[:5],

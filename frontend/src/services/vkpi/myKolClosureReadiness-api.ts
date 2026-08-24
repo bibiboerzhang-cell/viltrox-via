@@ -32,6 +32,9 @@ export interface VkpiMyKolClosureReadinessResponse {
     candidate_videos?: number;
     trackable_videos?: number;
     tracked_videos?: number;
+    employee_explicit_tracked_videos?: number;
+    system_seeded_tracked_videos?: number;
+    unclassified_tracked_videos?: number;
     measured_tracked_videos?: number;
     legacy_only_tracked_videos?: number;
     sku_linked_tracked_videos?: number;
@@ -41,6 +44,7 @@ export interface VkpiMyKolClosureReadinessResponse {
     sku_confirmed_videos?: number;
     final_v1_ready_videos?: number;
     lens_scanned_videos?: number;
+    final_v1_lens_scanned_videos?: number;
     lens_mention_videos?: number;
   };
   flows?: {

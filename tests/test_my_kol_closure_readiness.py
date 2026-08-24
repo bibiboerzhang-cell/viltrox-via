@@ -42,7 +42,8 @@ def _conn() -> sqlite3.Connection:
         );
         CREATE TABLE vkpi_kol_video_metric_tracking (
           evidence_id INTEGER PRIMARY KEY,
-          status TEXT NOT NULL
+          status TEXT NOT NULL,
+          source TEXT NOT NULL
         );
         CREATE TABLE vkpi_content_metric_snapshots (
           id INTEGER PRIMARY KEY,
@@ -85,12 +86,19 @@ def _conn() -> sqlite3.Connection:
         INSERT INTO vkpi_kol_video_evidence
           VALUES (11, 1, 'video', 1), (12, 2, 'video', 1), (13, 3, 'video', 1), (16, 1, 'video', 1),
                  (14, 1, 'carousel', 1), (15, 1, 'video', 0);
-        INSERT INTO vkpi_kol_video_metric_tracking VALUES (11, 'active'), (12, 'paused');
+        INSERT INTO vkpi_kol_video_metric_tracking VALUES
+          (11, 'active', 'my_kol_video_tracking'),
+          (12, 'paused', 'my_kol_video_tracking'),
+          (16, 'active', 'enroll_metric_tracking');
         INSERT INTO vkpi_content_metric_snapshots
-          VALUES (1, 11, 'legacy_current_only'), (2, 11, 'success');
+          VALUES (1, 11, 'legacy_current_only'), (2, 11, 'success'),
+                 (3, 16, 'legacy_current_only');
         INSERT INTO vkpi_kol_video_product_links VALUES (1, 11, 'SKU-A', 'detected');
         INSERT INTO vkpi_kol_llm_deep_analysis_results
-          VALUES (1, 11, 'video_final_v1', 'ready');
+          VALUES (1, 11, 'video_final_v1', 'ready'),
+                 (2, 16, 'video_final_v1', 'ready');
+        INSERT INTO vkpi_kol_lens_evidence_scan
+          VALUES (1, 11, 'scanned'), (2, 12, 'empty_result');
         INSERT INTO scheduler_tasks VALUES
           ('vkpi_kol_content_monitoring', 0, NULL, NULL),
           ('vkpi_kol_video_metric_refresh', 0, NULL, NULL),
@@ -118,7 +126,10 @@ def test_closure_readiness_separates_configuration_scheduler_and_results() -> No
         "share_grants": 1,
         "candidate_videos": 3,
         "trackable_videos": 2,
-        "tracked_videos": 1,
+        "tracked_videos": 2,
+        "employee_explicit_tracked_videos": 1,
+        "system_seeded_tracked_videos": 1,
+        "unclassified_tracked_videos": 0,
         "measured_tracked_videos": 1,
         "legacy_only_tracked_videos": 1,
         "sku_linked_tracked_videos": 1,
@@ -126,18 +137,19 @@ def test_closure_readiness_separates_configuration_scheduler_and_results() -> No
         "sku_detected_videos": 1,
         "sku_detected_pending_videos": 1,
         "sku_confirmed_videos": 0,
-        "final_v1_ready_videos": 1,
-        "lens_scanned_videos": 0,
+        "final_v1_ready_videos": 2,
+        "lens_scanned_videos": 2,
+        "final_v1_lens_scanned_videos": 1,
         "lens_mention_videos": 0,
     }
     assert result["flows"]["content_monitoring"]["state"] == "configured_scheduler_disabled"
     assert result["flows"]["video_tracking"]["state"] == "configured_scheduler_disabled"
     assert result["flows"]["sku_linking"]["state"] == "detected_pending_human_confirmation"
     assert result["flows"]["gemini_analysis"]["state"] == "lens_extraction_pending"
+    assert result["summary"]["configured_actions"] == 4
     codes = {item["code"] for item in result["blockers"]}
     assert {
-            "content_monitoring_scheduler_disabled",
-        "videos_not_tracked",
+        "content_monitoring_scheduler_disabled",
         "video_metric_scheduler_disabled",
         "detected_sku_pending_confirmation",
         "final_v1_missing",
@@ -146,6 +158,21 @@ def test_closure_readiness_separates_configuration_scheduler_and_results() -> No
     assert result["summary"]["automatic_changes_performed"] == 0
     assert statements
     assert all(statement.lstrip().upper().startswith(("SELECT", "WITH")) for statement in statements)
+
+
+def test_closure_readiness_unknown_tracking_source_is_not_employee_choice() -> None:
+    conn = _conn()
+    conn.execute(
+        "UPDATE vkpi_kol_video_metric_tracking SET source='future_unknown' WHERE evidence_id=16"
+    )
+
+    result = my_kol_closure_readiness.build_closure_readiness(conn, staff_scope_id=7)
+
+    assert result["counts"]["tracked_videos"] == 2
+    assert result["counts"]["employee_explicit_tracked_videos"] == 1
+    assert result["counts"]["system_seeded_tracked_videos"] == 0
+    assert result["counts"]["unclassified_tracked_videos"] == 1
+    assert result["summary"]["configured_actions"] == 4
 
 
 def test_closure_readiness_team_scope_includes_all_non_duplicate_collections() -> None:
