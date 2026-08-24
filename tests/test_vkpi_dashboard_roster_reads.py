@@ -1,5 +1,6 @@
 import json
 
+from app.domains.dashboard import summary as dashboard_summary
 from app.domains.dashboard import summary_roster
 
 
@@ -87,4 +88,64 @@ def test_roster_tabs_keep_serial_fallback_for_sqlite(monkeypatch):
         "by_activity": [],
         "by_recent": [],
         "by_engagement": [],
+    }
+
+
+def test_evidence_metrics_reuses_main_scan_for_active_external_counts(monkeypatch):
+    rows = [
+        {
+            "evidence_total": 20,
+            "view_covered": 18,
+            "total_views": 5_000,
+            "total_engagement": 500,
+            "window_evidence_count": 8,
+            "window_total_views": 2_000,
+            "window_total_engagement": 200,
+            "active_kol_accounts": 4,
+            "active_kol_evidence": 6,
+            "active_media_accounts": 1,
+            "active_media_evidence": 2,
+            "last_refreshed_at": "2026-08-24T00:00:00Z",
+        },
+        {"active_accounts": 2, "signal_rows": 7, "snapshot_days": 30},
+    ]
+
+    class SequentialConn:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, sql, params=None):
+            self.calls.append((" ".join(str(sql).split()), params))
+            return _Cursor(rows[len(self.calls) - 1])
+
+    conn = SequentialConn()
+    monkeypatch.setattr(dashboard_summary, "get_conn", lambda: conn)
+    monkeypatch.setattr(dashboard_summary, "_build_roster_detail", lambda _counts: {})
+
+    result = dashboard_summary._build_evidence_metrics_summary(
+        window_days=1000,
+        active_roster_by_scope={"all": 7, "kol": 4, "media": 1, "company": 2},
+    )
+
+    assert len(conn.calls) == 2
+    evidence_sql = conn.calls[0][0]
+    assert "active_kol_accounts" in evidence_sql
+    assert "INTERVAL '90 days'" in evidence_sql
+    assert "INTERVAL '1000 days'" in evidence_sql
+    assert evidence_sql.count("pool_row_id IS NOT NULL") == 4
+    assert "GROUP BY COALESCE(p.dashboard_account_type, 'kol')" not in evidence_sql
+    assert result["active_30d_by_scope"] == {
+        "all": 7,
+        "kol": 4,
+        "media": 1,
+        "company": 2,
+        "owned": 2,
+        "window_days": 90,
+        "basis": {
+            "kol_media": "vkpi_kol_video_evidence.publish_date within window",
+            "company": "vkpi_channel_post_metrics posted_at or positive deltas within window",
+        },
+        "evidence_count_by_scope": {"kol": 6, "media": 2},
+        "company_signal_rows": 7,
+        "company_snapshot_days": 30,
     }

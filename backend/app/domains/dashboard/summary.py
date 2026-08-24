@@ -176,33 +176,43 @@ def _build_roster_detail(active_roster_by_scope: dict[str, int]) -> dict[str, An
     }
 
 
-def _build_evidence_active_30d_summary(*, window_days: int = 30, staff_scope_id: int | None = None) -> dict[str, Any]:
+def _build_evidence_active_30d_summary(
+    *,
+    window_days: int = 30,
+    staff_scope_id: int | None = None,
+    external_counts: dict[str, int] | None = None,
+    external_evidence: dict[str, int] | None = None,
+) -> dict[str, Any]:
     days = max(1, min(int(window_days or 30), 90))
-    # P1 隔离:非 owner/admin 只算本人 KOL 的活跃;company(官方矩阵)是公共资产,保持全局。
-    kol_scope = f"AND e.kol_pool_id IN ({_actor_kols_sql(staff_scope_id)})" if staff_scope_id else ""
-    external_rows = _fetch_dicts(
-        f"""
-        SELECT
-            COALESCE(p.dashboard_account_type, 'kol') AS account_type,
-            COUNT(DISTINCT p.id) AS active_accounts,
-            COUNT(*) AS evidence_count
-        FROM vkpi_kol_video_evidence e
-        JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
-        WHERE COALESCE(e.is_active, TRUE) = TRUE
-          AND COALESCE(e.evidence_type, 'video') = 'video'
-          AND e.publish_date IS NOT NULL
-          AND e.publish_date >= NOW() - INTERVAL '{days} days'
-          {kol_scope}
-        GROUP BY COALESCE(p.dashboard_account_type, 'kol')
-        """
-    )
-    external_counts = {"kol": 0, "media": 0}
-    external_evidence = {"kol": 0, "media": 0}
-    for row in external_rows:
-        account_type = str(row.get("account_type") or "kol")
-        if account_type in external_counts:
-            external_counts[account_type] = _as_int(row.get("active_accounts"))
-            external_evidence[account_type] = _as_int(row.get("evidence_count"))
+    if external_counts is None or external_evidence is None:
+        # 直调兼容路径;完整 Dashboard 由主 evidence 扫描同步提供这四个数。
+        kol_scope = f"AND e.kol_pool_id IN ({_actor_kols_sql(staff_scope_id)})" if staff_scope_id else ""
+        external_rows = _fetch_dicts(
+            f"""
+            SELECT
+                COALESCE(p.dashboard_account_type, 'kol') AS account_type,
+                COUNT(DISTINCT p.id) AS active_accounts,
+                COUNT(*) AS evidence_count
+            FROM vkpi_kol_video_evidence e
+            JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
+            WHERE COALESCE(e.is_active, TRUE) = TRUE
+              AND COALESCE(e.evidence_type, 'video') = 'video'
+              AND e.publish_date IS NOT NULL
+              AND e.publish_date >= NOW() - INTERVAL '{days} days'
+              {kol_scope}
+            GROUP BY COALESCE(p.dashboard_account_type, 'kol')
+            """
+        )
+        external_counts = {"kol": 0, "media": 0}
+        external_evidence = {"kol": 0, "media": 0}
+        for row in external_rows:
+            account_type = str(row.get("account_type") or "kol")
+            if account_type in external_counts:
+                external_counts[account_type] = _as_int(row.get("active_accounts"))
+                external_evidence[account_type] = _as_int(row.get("evidence_count"))
+    else:
+        external_counts = {key: _as_int(external_counts.get(key)) for key in ("kol", "media")}
+        external_evidence = {key: _as_int(external_evidence.get(key)) for key in ("kol", "media")}
 
     official_row = get_conn().execute(
         f"""
@@ -270,10 +280,21 @@ def _build_evidence_active_30d_summary(*, window_days: int = 30, staff_scope_id:
 def _build_evidence_metrics_summary(*, window_days: int = 30, staff_scope_id: int | None = None,
                                     active_roster_by_scope: dict[str, int] | None = None) -> dict[str, Any]:
     active_roster_by_scope = dict(active_roster_by_scope or build_dashboard_active_roster_counts(staff_scope_id=staff_scope_id))
+    active_days = max(1, min(int(window_days or 30), 90))
     # P1 隔离:非 owner/admin 的曝光/覆盖只算本人 KOL 的证据。
-    evidence_where = f"WHERE kol_pool_id IN ({_actor_kols_sql(staff_scope_id)})" if staff_scope_id else ""
+    evidence_where = f"WHERE e.kol_pool_id IN ({_actor_kols_sql(staff_scope_id)})" if staff_scope_id else ""
     row = get_conn().execute(
         f"""
+        WITH evidence AS (
+            SELECT e.kol_pool_id, p.id AS pool_row_id,
+                   e.view_count, e.like_count, e.comment_count,
+                   e.published_at_norm, e.publish_date, e.is_active,
+                   e.evidence_type, e.metrics_scraped_at,
+                   COALESCE(p.dashboard_account_type, 'kol') AS account_type
+            FROM vkpi_kol_video_evidence e
+            LEFT JOIN vkpi_kol_pool p ON p.id = e.kol_pool_id
+            {evidence_where}
+        )
         SELECT
             COUNT(*) AS evidence_total,
             COUNT(*) FILTER (WHERE view_count IS NOT NULL) AS view_covered,
@@ -298,9 +319,40 @@ def _build_evidence_metrics_summary(*, window_days: int = 30, staff_scope_id: in
             ) FILTER (
                 WHERE published_at_norm >= NOW() - INTERVAL '{int(window_days)} days'
             ), 0) AS window_total_engagement,
+            COUNT(DISTINCT kol_pool_id) FILTER (
+                WHERE COALESCE(is_active, TRUE) = TRUE
+                  AND COALESCE(evidence_type, 'video') = 'video'
+                  AND pool_row_id IS NOT NULL
+                  AND publish_date IS NOT NULL
+                  AND publish_date >= NOW() - INTERVAL '{active_days} days'
+                  AND account_type = 'kol'
+            ) AS active_kol_accounts,
+            COUNT(*) FILTER (
+                WHERE COALESCE(is_active, TRUE) = TRUE
+                  AND COALESCE(evidence_type, 'video') = 'video'
+                  AND pool_row_id IS NOT NULL
+                  AND publish_date IS NOT NULL
+                  AND publish_date >= NOW() - INTERVAL '{active_days} days'
+                  AND account_type = 'kol'
+            ) AS active_kol_evidence,
+            COUNT(DISTINCT kol_pool_id) FILTER (
+                WHERE COALESCE(is_active, TRUE) = TRUE
+                  AND COALESCE(evidence_type, 'video') = 'video'
+                  AND pool_row_id IS NOT NULL
+                  AND publish_date IS NOT NULL
+                  AND publish_date >= NOW() - INTERVAL '{active_days} days'
+                  AND account_type = 'media'
+            ) AS active_media_accounts,
+            COUNT(*) FILTER (
+                WHERE COALESCE(is_active, TRUE) = TRUE
+                  AND COALESCE(evidence_type, 'video') = 'video'
+                  AND pool_row_id IS NOT NULL
+                  AND publish_date IS NOT NULL
+                  AND publish_date >= NOW() - INTERVAL '{active_days} days'
+                  AND account_type = 'media'
+            ) AS active_media_evidence,
             MAX(metrics_scraped_at) AS last_refreshed_at
-        FROM vkpi_kol_video_evidence
-        {evidence_where}
+        FROM evidence
         """
     ).fetchone()
     evidence_total = _as_int(_row_value(row, "evidence_total"))
@@ -316,9 +368,22 @@ def _build_evidence_metrics_summary(*, window_days: int = 30, staff_scope_id: in
     window_views = _as_int(_row_value(row, "window_total_views"))
     window_engagement = _as_int(_row_value(row, "window_total_engagement"))
     window_count = _as_int(_row_value(row, "window_evidence_count"))
+    external_counts = {
+        "kol": _as_int(_row_value(row, "active_kol_accounts")),
+        "media": _as_int(_row_value(row, "active_media_accounts")),
+    }
+    external_evidence = {
+        "kol": _as_int(_row_value(row, "active_kol_evidence")),
+        "media": _as_int(_row_value(row, "active_media_evidence")),
+    }
     return {
         "active_roster_by_scope": active_roster_by_scope,
-        "active_30d_by_scope": _build_evidence_active_30d_summary(window_days=window_days, staff_scope_id=staff_scope_id),
+        "active_30d_by_scope": _build_evidence_active_30d_summary(
+            window_days=window_days,
+            staff_scope_id=staff_scope_id,
+            external_counts=external_counts,
+            external_evidence=external_evidence,
+        ),
         "total_exposure": total_views,
         "total_exposure_30d": window_views if window_count > 0 else None,
         "evidence_30d_count": window_count,
@@ -600,23 +665,26 @@ def build_dashboard_summary(
     staff_id: int | None = None,
     metric_scope: str = "all",
     staff: dict[str, Any],
+    cache_observer: Any = None,
 ) -> dict[str, Any]:
     """Return the fully assembled dashboard with a short authorization-scoped cache."""
     normalized_scope = normalize_dashboard_scope(metric_scope)
+    normalized_window_days = max(1, min(180, int(window_days or 30)))
     effective_staff_id = scope.effective_staff_id(staff, staff_id)
     return _cached_full_summary(
         cache_get_or_build_fn=cache_get_or_build,
         builder=lambda: _build_dashboard_summary_uncached(
-            window_days=window_days,
+            window_days=normalized_window_days,
             staff_id=staff_id,
             metric_scope=normalized_scope,
             staff=staff,
         ),
-        window_days=window_days,
+        window_days=normalized_window_days,
         metric_scope=normalized_scope,
         effective_staff_id=effective_staff_id,
         staff=staff,
         ttl=_FULL_SUMMARY_CACHE_TTL,
+        observe=cache_observer,
     )
 
 

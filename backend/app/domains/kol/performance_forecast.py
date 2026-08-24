@@ -31,6 +31,7 @@ compat 约定:SQL 占位符用 ?;SQL 字符串零字面 percent(不用 LIKE);BOO
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 import math
 from datetime import date, datetime, timezone
 from typing import Any
@@ -52,6 +53,13 @@ _COMBINED_CLAMP = (0.60, 1.40)  # 合成系数的最终夹取范围
 _COVERED_MIN_FOR_RATIO = 3      # 覆盖样本≥3 才允许数据驱动因子
 _LIGHT_UP = 1.05                # 覆盖 1~2 条 / 带品史的轻微上调
 _BLANK_DOWN = 0.85              # 纯空白焦段的下调
+
+# GTM 预览会对同一批 KOL 连续计算同一 SKU 的预测。批量上下文只
+# 预取原单人函数需要的行，后续仍逐人走 forecast_for_kol 的原计算契约。
+_BATCH_READS: ContextVar[dict[str, Any] | None] = ContextVar(
+    "vkpi_performance_forecast_batch_reads",
+    default=None,
+)
 
 
 # ── 兄弟件/既有件守卫 import(拿不到就诚实降级,不硬猜)────────────────
@@ -126,6 +134,10 @@ def _clamp(value: float, bounds: tuple[float, float]) -> float:
 
 
 def _load_pool_row(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
+    batch = _BATCH_READS.get()
+    if batch is not None and int(kol_pool_id) in batch["ids"]:
+        row = batch["pool"].get(int(kol_pool_id))
+        return dict(row) if row else None
     row = conn.execute(
         "SELECT id, handle, display_name, platform FROM vkpi_kol_pool WHERE id = ?",
         (int(kol_pool_id),),
@@ -134,6 +146,13 @@ def _load_pool_row(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
 
 
 def _load_evidence_rows(conn: Any, kol_pool_id: int, limit: int = 500) -> list[dict[str, Any]]:
+    batch = _BATCH_READS.get()
+    if (
+        batch is not None
+        and int(kol_pool_id) in batch["ids"]
+        and int(limit) == int(batch["evidence_limit"])
+    ):
+        return [dict(row) for row in batch["evidence"].get(int(kol_pool_id), [])]
     rows = conn.execute(
         """
         SELECT
@@ -157,6 +176,13 @@ def _load_evidence_rows(conn: Any, kol_pool_id: int, limit: int = 500) -> list[d
 
 
 def _load_final_v1_rows(conn: Any, kol_pool_id: int, limit: int = 200) -> list[dict[str, Any]]:
+    batch = _BATCH_READS.get()
+    if (
+        batch is not None
+        and int(kol_pool_id) in batch["ids"]
+        and int(limit) == int(batch["final_limit"])
+    ):
+        return [dict(row) for row in batch["final"].get(int(kol_pool_id), [])]
     rows = conn.execute(
         """
         SELECT
@@ -177,6 +203,10 @@ def _load_final_v1_rows(conn: Any, kol_pool_id: int, limit: int = 200) -> list[d
 
 
 def _load_product_row(conn: Any, sku: str) -> dict[str, Any] | None:
+    batch = _BATCH_READS.get()
+    if batch is not None and _text(sku, 120).upper() == batch["sku_key"]:
+        product = batch.get("product")
+        return dict(product) if product else None
     row = conn.execute(
         """
         SELECT sku, series, category_main, category_detail,
@@ -187,6 +217,128 @@ def _load_product_row(conn: Any, sku: str) -> dict[str, Any] | None:
         (_text(sku, 120),),
     ).fetchone()
     return dict(row) if row else None
+
+
+def forecast_for_kols(
+    kol_pool_ids: list[int],
+    sku: str | None = None,
+    *,
+    conn: Any = None,
+    context: str = "drawer",
+    dry_run: bool = False,
+) -> dict[int, dict[str, Any]]:
+    """Batch-load forecast inputs, then reuse the exact single-KOL calculator.
+
+    This is a read-amplification optimization, not a second forecast algorithm.
+    Per-KOL row limits and ordering match ``forecast_for_kol``.  A batch-load
+    failure falls back to isolated single reads so the existing fail-soft
+    behavior remains authoritative.
+    """
+    from collections import defaultdict
+    from app.db.connection import get_conn
+
+    ids: list[int] = []
+    for value in kol_pool_ids:
+        parsed = _int_or_none(value)
+        if parsed is not None and parsed > 0 and parsed not in ids:
+            ids.append(parsed)
+    if not ids:
+        return {}
+    db = conn or get_conn()
+    placeholders = ",".join("?" for _ in ids)
+    evidence_limit = 500
+    final_limit = 200
+    try:
+        pool_rows = db.execute(
+            "SELECT id, handle, display_name, platform FROM vkpi_kol_pool "
+            f"WHERE id IN ({placeholders})",
+            tuple(ids),
+        ).fetchall()
+        evidence_rows = db.execute(
+            f"""
+            WITH ranked AS (
+              SELECT id AS evidence_id,
+                     kol_pool_id,
+                     COALESCE(video_title, title, '') AS title,
+                     content_url, platform, view_count, like_count, comment_count,
+                     posted_at, is_active,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY kol_pool_id
+                       ORDER BY COALESCE(view_count, 0) DESC, id DESC
+                     ) AS batch_rank
+              FROM vkpi_kol_video_evidence
+              WHERE kol_pool_id IN ({placeholders})
+            )
+            SELECT * FROM ranked WHERE batch_rank <= ?
+            ORDER BY kol_pool_id, batch_rank
+            """,
+            (*ids, evidence_limit),
+        ).fetchall()
+        final_rows = db.execute(
+            f"""
+            WITH ranked AS (
+              SELECT e.id AS evidence_id, e.kol_pool_id, ac.result AS result,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY e.kol_pool_id
+                       ORDER BY COALESCE(e.view_count, 0) DESC, e.id DESC
+                     ) AS batch_rank
+              FROM vkpi_analysis_cache ac
+              JOIN vkpi_kol_video_evidence e ON e.id::text = ac.target_id
+              WHERE ac.target_type = 'video'
+                AND ac.derive_method = ?
+                AND ac.status = 'ready'
+                AND e.kol_pool_id IN ({placeholders})
+            )
+            SELECT * FROM ranked WHERE batch_rank <= ?
+            ORDER BY kol_pool_id, batch_rank
+            """,
+            (FINAL_V1_DERIVE_METHOD, *ids, final_limit),
+        ).fetchall()
+        product = _load_product_row(db, _text(sku, 120)) if sku else None
+    except Exception as exc:  # noqa: BLE001 - 批读失败退原单人契约
+        logger.warning("forecast batch preload failed, falling back: %s", exc)
+        results: dict[int, dict[str, Any]] = {}
+        for kol_pool_id in ids:
+            try:
+                results[kol_pool_id] = forecast_for_kol(
+                    kol_pool_id, sku=sku, conn=db, context=context, dry_run=dry_run,
+                )
+            except Exception as item_exc:  # noqa: BLE001
+                results[kol_pool_id] = {"status": "error", "reason": _text(item_exc, 300)}
+        return results
+
+    evidence_by_kol: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    final_by_kol: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for raw in evidence_rows:
+        row = dict(raw)
+        if _truthy(row.get("is_active")):
+            evidence_by_kol[int(row["kol_pool_id"])].append(row)
+    for raw in final_rows:
+        row = dict(raw)
+        final_by_kol[int(row["kol_pool_id"])].append(row)
+    batch = {
+        "ids": frozenset(ids),
+        "pool": {int(dict(row)["id"]): dict(row) for row in pool_rows},
+        "evidence": dict(evidence_by_kol),
+        "final": dict(final_by_kol),
+        "evidence_limit": evidence_limit,
+        "final_limit": final_limit,
+        "sku_key": _text(sku, 120).upper(),
+        "product": product,
+    }
+    token = _BATCH_READS.set(batch)
+    try:
+        results = {}
+        for kol_pool_id in ids:
+            try:
+                results[kol_pool_id] = forecast_for_kol(
+                    kol_pool_id, sku=sku, conn=db, context=context, dry_run=dry_run,
+                )
+            except Exception as exc:  # noqa: BLE001 - 与 strategy_sim 单人守卫等价
+                results[kol_pool_id] = {"status": "error", "reason": _text(exc, 300)}
+        return results
+    finally:
+        _BATCH_READS.reset(token)
 
 
 # ── 视频合并视图(标题人人有;深析底料/带品旗标只有 final_v1 ready 的才有)──

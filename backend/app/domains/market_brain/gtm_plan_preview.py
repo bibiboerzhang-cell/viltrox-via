@@ -136,34 +136,14 @@ def _section_error(exc: Exception) -> dict[str, Any]:
     return {"status": "error", "reason": _text(str(exc), 300)}
 
 
-class _DryRunForecast:
-    """performance_forecast 的零落库替身:同契约、强制 dry_run=True。
-
-    strategy_sim._build_candidates 里的 forecast 调用默认会 best-effort 落
-    vkpi_forecast_log 预测流水;preview 是纯读端点,这里逐调用改走 dry_run,
-    结果字段完全一致,只是不写流水(冒烟以 vkpi_forecast_log 行数不变为证)。
-    """
-
-    @staticmethod
-    def forecast_for_kol(kol_pool_id: int, sku: str | None = None, *, conn: Any = None, **_kw: Any) -> dict[str, Any]:
-        from app.domains.kol import performance_forecast
-
-        return performance_forecast.forecast_for_kol(
-            int(kol_pool_id), sku=sku, conn=conn, context="sim", dry_run=True,
-        )
-
-
 # ── 数据装载(全部既有纯读函数;调用处逐项守卫) ─────────────────────
 
 
 def _build_candidates(sku: str, pool_items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], Any, str]:
-    """strategy_sim 引擎积木 + dry_run 预测 shim → 候选读数(零写库)。"""
-    from app.db.connection import get_conn
-    from app.domains.market import strategy_sim as ss
+    """strategy_sim 原算法 + 批量读适配(零写库)。"""
+    from app.domains.market_brain.gtm_candidate_batch import build_candidates
 
-    rate_card, _forecast_mod, roster_mod, engines_missing = ss._load_engines()
-    cands = ss._build_candidates(sku, pool_items, rate_card, _DryRunForecast, get_conn())
-    return cands, roster_mod, engines_missing
+    return build_candidates(sku, pool_items)
 
 
 def _official_channels_snapshot() -> dict[str, Any]:

@@ -312,6 +312,81 @@ def _self_commenter_keys(db: Any, kol_pool_id: int) -> set[str]:
     return keys
 
 
+def self_commenter_keys_for_kols(db: Any, kol_pool_ids: list[int]) -> dict[int, set[str]]:
+    """Batch form of ``_self_commenter_keys`` for roster overlap reads.
+
+    The same three bridges and author rescue rules are used; only the repeated
+    per-KOL SELECTs are folded into bounded ``IN`` reads. Callers retain the
+    single-item helper as a fail-soft fallback if any batch query is unavailable.
+    """
+    ids: list[int] = []
+    for raw in kol_pool_ids:
+        try:
+            kol_pool_id = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if kol_pool_id > 0 and kol_pool_id not in ids:
+            ids.append(kol_pool_id)
+    sets = {kol_pool_id: set() for kol_pool_id in ids}
+    if not ids:
+        return sets
+    placeholders = ",".join("?" for _ in ids)
+
+    account_rows = db.execute(
+        "SELECT account_id AS kol_pool_id, platform, author_handle, author_id, raw_data_json "
+        "FROM vkpi_comments WHERE account_id IN (" + placeholders + ") "
+        "AND post_table IN ('evidence','vkpi_kol_video_evidence')",
+        tuple(ids),
+    ).fetchall()
+    evidence_rows = db.execute(
+        "SELECT e.kol_pool_id, c.platform, c.author_handle, c.author_id, c.raw_data_json "
+        "FROM vkpi_comments c JOIN vkpi_kol_video_evidence e "
+        "ON c.post_table IN ('evidence','vkpi_kol_video_evidence') AND c.post_id=e.id "
+        "WHERE e.kol_pool_id IN (" + placeholders + ")",
+        tuple(ids),
+    ).fetchall()
+    for rows in (account_rows, evidence_rows):
+        for raw in rows:
+            rec = dict(raw)
+            kol_pool_id = int(rec.get("kol_pool_id") or 0)
+            key = _rescued_author_key(rec)
+            if kol_pool_id in sets and key:
+                sets[kol_pool_id].add(key)
+
+    if not _has_kol_comments(db):
+        return sets
+    linked_rows = db.execute(
+        "SELECT id, linked_main_kol_id FROM vkpi_kol_pool WHERE id IN (" + placeholders + ")",
+        tuple(ids),
+    ).fetchall()
+    pools_by_main: dict[int, list[int]] = {}
+    for raw in linked_rows:
+        rec = dict(raw)
+        linked_main = int(rec.get("linked_main_kol_id") or 0)
+        if linked_main > 0:
+            pools_by_main.setdefault(linked_main, []).append(int(rec["id"]))
+    if not pools_by_main:
+        return sets
+    main_ids = list(pools_by_main)
+    main_placeholders = ",".join("?" for _ in main_ids)
+    main_rows = db.execute(
+        "SELECT kol_id, platform, author_handle FROM kol_comments "
+        "WHERE kol_id IN (" + main_placeholders + ") "
+        "AND author_handle IS NOT NULL AND author_handle<>''",
+        tuple(main_ids),
+    ).fetchall()
+    for raw in main_rows:
+        rec = dict(raw)
+        linked_main = int(rec.get("kol_id") or 0)
+        key = (
+            f"{str(rec.get('platform') or '').lower()}:"
+            f"{str(rec.get('author_handle') or '').strip().lower()}"
+        )
+        for kol_pool_id in pools_by_main.get(linked_main, []):
+            sets[kol_pool_id].add(key)
+    return sets
+
+
 def compute_audience_overlap(kol_pool_id: int, *, conn: Any = None, top_n: int = 5) -> dict[str, Any]:
     """共同粉丝:该 KOL 评论者集合 vs 库内其他 KOL(evidence/account_id 桥)+ 官号(employee_channels 桥)。
 

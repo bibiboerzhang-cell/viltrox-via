@@ -1,7 +1,7 @@
 """V-KPI command center, staff, and dashboard routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from app.api.dependencies.manager_guard import require_manager_staff as _require_manager_staff
@@ -11,6 +11,7 @@ from app.domains import dashboard as dashboard_domain
 from app.domains import staff as staff_domain
 from app.domains.access import scope as access_scope
 from app.domains.projects import workflow
+from app.domains.dashboard.summary_cache import dashboard_cache_observer
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-dashboard"])
 
@@ -239,6 +240,7 @@ def architecture(staff=Depends(require_tab("vkpi", "read"))):
 
 @router.get("/dashboard")
 def dashboard(
+    response: Response,
     window_days: int = 30,
     scope: str = Query(default="all", pattern="^(all|owned|kol|company|official|owned_matrix)$"),
     staff_id: int | None = None,
@@ -250,6 +252,7 @@ def dashboard(
             metric_scope=scope,
             staff_id=staff_id,
             staff=staff,
+            cache_observer=dashboard_cache_observer(response=response),
         )
     except access_scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc

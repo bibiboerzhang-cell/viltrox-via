@@ -221,11 +221,17 @@ def _live_pair_jaccard(db: Any, ids: list[int]) -> tuple[dict[tuple[int, int], f
     if len(ids) > LIVE_JACCARD_MAX:
         return {}, f"候选数超过 {LIVE_JACCARD_MAX},现算 pairwise 跳过(用存量+代理)"
     try:
-        from app.domains.kol.comment_intel import _self_commenter_keys
+        from app.domains.kol.comment_intel import _self_commenter_keys, self_commenter_keys_for_kols
     except ImportError:
         return {}, "comment_intel 不可用,现算 pairwise 跳过"
-    sets: dict[int, set[str]] = {}
+    try:
+        sets = self_commenter_keys_for_kols(db, ids)
+    except Exception as exc:  # noqa: BLE001 - 批读不可用时保留原逐人隔离语义
+        logger.warning("roster live jaccard: batch commenter keys failed: %s", exc)
+        sets = {}
     for kid in ids:
+        if kid in sets:
+            continue
         try:
             sets[kid] = _self_commenter_keys(db, int(kid))
         except Exception as exc:  # noqa: BLE001 — 单个失败不拖垮整体
@@ -568,11 +574,18 @@ def _attach_rate_estimates(selected_entries: list[dict[str, Any]]) -> dict[str, 
         from app.domains.kol import rate_card
     except ImportError:
         return {"status": "unavailable", "reason": "rate_card 模块未就绪(兄弟件),报价段诚实缺席"}
+    ids = [int(entry["kol_pool_id"]) for entry in selected_entries]
+    try:
+        estimates = rate_card.estimate_rates(ids) if hasattr(rate_card, "estimate_rates") else {}
+    except Exception as exc:  # noqa: BLE001 - 批读失败仍可逐人回落
+        logger.warning("roster rate_card batch failed: %s", exc)
+        estimates = {}
     total_p50 = 0.0
     priced = 0
     for entry in selected_entries:
         try:
-            est = rate_card.estimate_rate(int(entry["kol_pool_id"]))
+            kol_pool_id = int(entry["kol_pool_id"])
+            est = estimates.get(kol_pool_id) or rate_card.estimate_rate(kol_pool_id)
         except Exception as exc:  # noqa: BLE001 — 增益段失败不阻断组合结果
             logger.warning("roster rate_card failed kol=%s: %s", entry.get("kol_pool_id"), exc)
             entry["rate_estimate"] = {"status": "error", "reason": str(exc)[:160]}

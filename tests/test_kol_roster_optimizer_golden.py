@@ -6,6 +6,7 @@ fake conn 喂固定行,断言:
 - 展示层统一折回 UNKNOWN:by_geo / geo_top / top_new_units 不泄漏 unknown:{id};
 - payload 键结构不变(selected/dropped_overlap/coverage/basis/confidence/budget)。
 """
+from app.domains.kol import comment_intel
 from app.domains.kol import roster_optimizer as ro
 
 
@@ -117,3 +118,72 @@ def test_known_geo_same_platform_still_discounts(monkeypatch):
     # 第二人被折减:同平台同地理 proxy 0.30 → 500 × 0.7 = 350
     assert selected[2]["marginal_reach"] == 350.0
     assert payload["coverage"]["total_dedup_reach"] == 1350.0
+
+
+def test_commenter_sets_batch_preserves_all_three_identity_bridges():
+    calls = []
+
+    def rows(sql):
+        normalized = " ".join(str(sql).split())
+        calls.append(normalized)
+        if "FROM vkpi_comments WHERE account_id IN" in normalized:
+            return [
+                {"kol_pool_id": 1, "platform": "youtube", "author_handle": "Alice", "author_id": None, "raw_data_json": None},
+                {"kol_pool_id": 2, "platform": "instagram", "author_handle": "Bob", "author_id": None, "raw_data_json": None},
+            ]
+        if "JOIN vkpi_kol_video_evidence" in normalized:
+            return [
+                {
+                    "kol_pool_id": 1,
+                    "platform": "tiktok",
+                    "author_handle": None,
+                    "author_id": None,
+                    "raw_data_json": '{"uniqueId":"uid-1"}',
+                }
+            ]
+        if "to_regclass('kol_comments')" in normalized:
+            return [{"t": "kol_comments"}]
+        if "SELECT id, linked_main_kol_id FROM vkpi_kol_pool" in normalized:
+            return [{"id": 1, "linked_main_kol_id": 101}, {"id": 2, "linked_main_kol_id": 102}]
+        if "FROM kol_comments" in normalized:
+            return [
+                {"kol_id": 101, "platform": "youtube", "author_handle": "Carol"},
+                {"kol_id": 102, "platform": "youtube", "author_handle": "Dave"},
+            ]
+        raise AssertionError(normalized)
+
+    class Conn:
+        def execute(self, sql, _params=()):
+            return _Result(rows(sql))
+
+    result = comment_intel.self_commenter_keys_for_kols(Conn(), [1, 2, 1])
+
+    assert len(calls) == 5
+    assert result == {
+        1: {"youtube:alice", "tiktok:uid-1", "youtube:carol"},
+        2: {"instagram:bob", "youtube:dave"},
+    }
+
+
+def test_live_jaccard_uses_one_batch_commenter_projection(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        comment_intel,
+        "self_commenter_keys_for_kols",
+        lambda _db, ids: calls.append(list(ids))
+        or {
+            1: {"yt:a", "yt:b", "yt:c", "yt:d", "yt:e"},
+            2: {"yt:a", "yt:b", "yt:x", "yt:y", "yt:z"},
+        },
+    )
+    monkeypatch.setattr(
+        comment_intel,
+        "_self_commenter_keys",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("single fallback not expected")),
+    )
+
+    pairs, note = ro._live_pair_jaccard(object(), [1, 2])
+
+    assert calls == [[1, 2]]
+    assert pairs == {(1, 2): 0.25}
+    assert note == ""

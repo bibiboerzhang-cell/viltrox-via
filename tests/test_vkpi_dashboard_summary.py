@@ -1,4 +1,5 @@
 import pytest
+from fastapi import Response
 
 from app.domains.dashboard import summary as dashboard_summary
 from app.domains.dashboard import summary_cache
@@ -132,6 +133,99 @@ def test_full_dashboard_cache_is_scope_isolated_and_returns_defensive_copies(mon
     assert any("tenant=9:scope=global" in key for key in stored)
     assert any("tenant=9:scope=42" in key for key in stored)
     assert any("tenant=10:scope=global" in key for key in stored)
+
+
+def test_dashboard_cache_observer_exposes_exact_builder_and_hit_headers():
+    miss_response = Response()
+    summary_cache.dashboard_cache_observer(response=miss_response)(
+        {"outcome": "miss_builder", "elapsed_ms": 12.3456, "builder_ms": 10.25}
+    )
+
+    assert miss_response.headers["X-VKPI-Cache"] == "miss_builder"
+    assert miss_response.headers["X-VKPI-Cache-Builder"] == "1"
+    assert miss_response.headers["X-VKPI-Cache-Key-Version"] == "v1"
+    assert miss_response.headers["Server-Timing"] == (
+        'dashboard-cache;desc="miss_builder";dur=12.346, dashboard-builder;dur=10.250'
+    )
+
+    hit_response = Response()
+    summary_cache.dashboard_cache_observer(response=hit_response)(
+        {"outcome": "hit", "elapsed_ms": 0.5}
+    )
+
+    assert hit_response.headers["X-VKPI-Cache"] == "hit"
+    assert hit_response.headers["X-VKPI-Cache-Builder"] == "0"
+    assert hit_response.headers["X-VKPI-Cache-Key-Version"] == "v1"
+    assert hit_response.headers["Server-Timing"] == 'dashboard-cache;desc="hit";dur=0.500'
+
+
+def test_dashboard_authz_bypass_is_observable_without_shared_cache():
+    response = Response()
+
+    result = summary_cache.cached_full_summary(
+        cache_get_or_build_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unprovable auth scope must bypass shared cache")
+        ),
+        builder=lambda: {"summary": {"value": 7}},
+        window_days=30,
+        metric_scope="all",
+        effective_staff_id=7,
+        staff={"id": 7},
+        ttl=30,
+        observe=summary_cache.dashboard_cache_observer(response=response),
+    )
+
+    assert result == {"summary": {"value": 7}}
+    assert response.headers["X-VKPI-Cache"] == "authz_bypass"
+    assert response.headers["X-VKPI-Cache-Builder"] == "1"
+    assert "dashboard-builder" in response.headers["Server-Timing"]
+
+
+def test_dashboard_authz_bypass_ignores_observer_failure():
+    result = summary_cache.cached_full_summary(
+        cache_get_or_build_fn=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unprovable auth scope must bypass shared cache")
+        ),
+        builder=lambda: {"summary": {"healthy": True}},
+        window_days=30,
+        metric_scope="all",
+        effective_staff_id=7,
+        staff={"id": 7},
+        ttl=30,
+        observe=lambda _payload: (_ for _ in ()).throw(RuntimeError("telemetry down")),
+    )
+
+    assert result == {"summary": {"healthy": True}}
+
+
+def test_dashboard_window_is_normalized_once_for_builder_and_cache(monkeypatch):
+    stored = {}
+    builds = []
+
+    def fake_cache_get_or_build(key, builder, ttl, cache_if):
+        if key not in stored:
+            value = builder()
+            assert cache_if(value) is True
+            stored[key] = value
+        return stored[key]
+
+    monkeypatch.setattr(dashboard_summary, "cache_get_or_build", fake_cache_get_or_build)
+    monkeypatch.setattr(dashboard_summary.scope, "effective_staff_id", lambda _staff, _requested: None)
+    monkeypatch.setattr(
+        dashboard_summary,
+        "_build_dashboard_summary_uncached",
+        lambda **kwargs: builds.append(kwargs["window_days"])
+        or {"window_days": kwargs["window_days"]},
+    )
+    staff = {"id": 1, "role": "owner", "organization_id": 9}
+
+    overflow = dashboard_summary.build_dashboard_summary(window_days=1000, staff=staff)
+    boundary = dashboard_summary.build_dashboard_summary(window_days=180, staff=staff)
+
+    assert overflow == boundary == {"window_days": 180}
+    assert builds == [180]
+    assert len(stored) == 1
+    assert "window=180" in next(iter(stored))
 
 
 def test_nested_dashboard_cache_is_tenant_partitioned_and_unknown_bypasses(monkeypatch):

@@ -24,6 +24,7 @@ confidence),数据不足诚实 low confidence 或空态,绝不杜撰;零触 vilt
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 import statistics
 from datetime import date, datetime, timezone
 from typing import Any
@@ -89,6 +90,13 @@ VIEW_RATE_BY_PLATFORM: dict[str, float] = {
 }
 FALLBACK_VIEW_RATE = 0.08
 
+# Request-local batch rows used by GTM planning.  ``estimate_rate`` remains the
+# only calculator; this context only replaces its repeated per-KOL SELECTs.
+_BATCH_READS: ContextVar[dict[str, Any] | None] = ContextVar(
+    "vkpi_rate_card_batch_reads",
+    default=None,
+)
+
 
 # ── 小工具 ───────────────────────────────────────────────────────────
 
@@ -145,6 +153,10 @@ def _cpm_range(platform: str, tier: str) -> tuple[float, float]:
 
 
 def _load_pool_row(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
+    batch = _BATCH_READS.get()
+    if batch is not None and int(kol_pool_id) in batch["ids"]:
+        row = batch["pool"].get(int(kol_pool_id))
+        return dict(row) if row else None
     row = conn.execute(
         """
         SELECT id, handle, display_name, platform, followers, avg_views
@@ -157,6 +169,13 @@ def _load_pool_row(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
 
 def _load_rate_rows(conn: Any, kol_pool_id: int, limit: int = 200) -> list[dict[str, Any]]:
     """已录报价行(新在前)。表未建(迁移211未 apply)时由调用方捕获异常降级。"""
+    batch = _BATCH_READS.get()
+    if (
+        batch is not None
+        and int(kol_pool_id) in batch["ids"]
+        and int(limit) == int(batch["rate_limit"])
+    ):
+        return [dict(row) for row in batch["rates"].get(int(kol_pool_id), [])]
     rows = conn.execute(
         """
         SELECT id, platform, content_type, amount_usd, currency, source,
@@ -173,6 +192,10 @@ def _load_rate_rows(conn: Any, kol_pool_id: int, limit: int = 200) -> list[dict[
 
 def _evidence_avg_views(conn: Any, kol_pool_id: int) -> int | None:
     """池表 avg_views 缺失时,退证据表有播放数视频的均播放;再缺诚实 None。"""
+    batch = _BATCH_READS.get()
+    if batch is not None and int(kol_pool_id) in batch["ids"]:
+        value = batch["evidence_avg"].get(int(kol_pool_id))
+        return int(value) if value is not None else None
     try:
         row = conn.execute(
             """
@@ -189,6 +212,101 @@ def _evidence_avg_views(conn: Any, kol_pool_id: int) -> int | None:
     except Exception as exc:  # noqa: BLE001 — 证据表读挂不影响主路径
         logger.warning("rate_card evidence avg_views failed for kol=%s: %s", kol_pool_id, exc)
     return None
+
+
+def estimate_rates(
+    kol_pool_ids: list[int],
+    *,
+    conn: Any = None,
+) -> dict[int, dict[str, Any]]:
+    """Batch-load inputs and reuse ``estimate_rate`` for every requested KOL.
+
+    The recorded-rate per-KOL cap, ordering, CPM fallback and confidence rules
+    remain exactly those of the public single-item function.
+    """
+    from collections import defaultdict
+    from app.db.connection import get_conn
+
+    ids: list[int] = []
+    for value in kol_pool_ids:
+        parsed = _int_or_none(value)
+        if parsed is not None and parsed > 0 and parsed not in ids:
+            ids.append(parsed)
+    if not ids:
+        return {}
+    db = conn or get_conn()
+    placeholders = ",".join("?" for _ in ids)
+    rate_limit = 200
+    try:
+        pool_rows = db.execute(
+            "SELECT id, handle, display_name, platform, followers, avg_views "
+            f"FROM vkpi_kol_pool WHERE id IN ({placeholders})",
+            tuple(ids),
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 - 批读失败退原单人契约
+        logger.warning("rate batch pool preload failed, falling back: %s", exc)
+        return {kol_pool_id: estimate_rate(kol_pool_id, conn=db) for kol_pool_id in ids}
+
+    try:
+        rate_rows = db.execute(
+            f"""
+            WITH ranked AS (
+              SELECT id, kol_pool_id, platform, content_type, amount_usd,
+                     currency, source, confidence, note, effective_date, created_at,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY kol_pool_id ORDER BY created_at DESC, id DESC
+                     ) AS batch_rank
+              FROM vkpi_kol_rates
+              WHERE kol_pool_id IN ({placeholders})
+            )
+            SELECT * FROM ranked WHERE batch_rank <= ?
+            ORDER BY kol_pool_id, batch_rank
+            """,
+            (*ids, rate_limit),
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 - 任一批读不等价时退回原单人契约
+        logger.warning("rate batch recorded-rate preload failed, falling back: %s", exc)
+        return {kol_pool_id: estimate_rate(kol_pool_id, conn=db) for kol_pool_id in ids}
+
+    try:
+        avg_rows = db.execute(
+            f"""
+            SELECT kol_pool_id, AVG(view_count) AS av, COUNT(*) AS n
+            FROM vkpi_kol_video_evidence
+            WHERE kol_pool_id IN ({placeholders})
+              AND view_count IS NOT NULL AND view_count > 0
+            GROUP BY kol_pool_id
+            """,
+            tuple(ids),
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 - 任一批读不等价时退回原单人契约
+        logger.warning("rate batch evidence averages failed, falling back: %s", exc)
+        return {kol_pool_id: estimate_rate(kol_pool_id, conn=db) for kol_pool_id in ids}
+
+    rates_by_kol: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for raw in rate_rows:
+        row = dict(raw)
+        rates_by_kol[int(row["kol_pool_id"])].append(row)
+    evidence_avg: dict[int, int] = {}
+    for raw in avg_rows:
+        row = dict(raw)
+        if (_int_or_none(row.get("n")) or 0) <= 0:
+            continue
+        average = _float_or_none(row.get("av"))
+        if average is not None and average > 0:
+            evidence_avg[int(row["kol_pool_id"])] = int(round(average))
+    batch = {
+        "ids": frozenset(ids),
+        "pool": {int(dict(row)["id"]): dict(row) for row in pool_rows},
+        "rates": dict(rates_by_kol),
+        "rate_limit": rate_limit,
+        "evidence_avg": evidence_avg,
+    }
+    token = _BATCH_READS.set(batch)
+    try:
+        return {kol_pool_id: estimate_rate(kol_pool_id, conn=db) for kol_pool_id in ids}
+    finally:
+        _BATCH_READS.reset(token)
 
 
 # ── 契约主入口:estimate_rate ────────────────────────────────────────
