@@ -416,6 +416,45 @@ def test_list_and_workspace_force_masked_and_never_cache_bulk_plaintext(
     assert len([key for key in cache if ":workspace-canonical-projection-v2:" in key]) == 1
 
 
+def test_workspace_list_only_mode_skips_optional_aggregate_bundle(monkeypatch) -> None:
+    cache = _install_hermetic_pool(monkeypatch)
+
+    def unexpected_summary() -> dict[str, Any]:
+        raise AssertionError("list-only workspace must not build the analytical summary")
+
+    def unexpected_facets(*_args: Any, **_kwargs: Any) -> tuple[list[Any], dict[str, int]]:
+        raise AssertionError("list-only workspace must not build optional facets")
+
+    monkeypatch.setattr(kol_pool, "summary", unexpected_summary)
+    monkeypatch.setattr(kol_pool, "pool_read_workspace_facets", unexpected_facets)
+
+    result = kol_pool.workspace(
+        query="contact-p0",
+        include_aggregates=False,
+        contact_visibility=CONTACT_VISIBILITY_MASKED,
+    )
+
+    _assert_no_contact_truth(result)
+    assert result["counts"]["total"] == 1
+    assert result["counts"]["filtered"] == 1
+    assert result["diagnostics"]["aggregate_scope"] == "list_only"
+    assert "summary" not in result
+    assert "filter_options" not in result
+    assert "market_coverage" not in result
+    assert any("aggregate_scope:list_only_v1" in key for key in cache)
+
+
+def test_workspace_list_only_mode_preserves_items_and_pagination_counts(monkeypatch) -> None:
+    _install_hermetic_pool(monkeypatch)
+
+    full = kol_pool.workspace(query="contact-p0")
+    lite = kol_pool.workspace(query="contact-p0", include_aggregates=False)
+
+    assert lite["list"] == full["list"]
+    for key in ("total", "filtered", "returned", "offset", "limit", "has_more"):
+        assert lite["counts"][key] == full["counts"][key]
+
+
 def test_domain_item_is_value_free_for_both_legacy_visibility_inputs(monkeypatch) -> None:
     conn = _SingleItemConn()
     monkeypatch.setattr(kol_pool, "ensure_vkpi_product_industry_schema", lambda: None)

@@ -35,7 +35,9 @@ def _pool_conn() -> sqlite3.Connection:
         CREATE TABLE vkpi_kol_pool (
             id INTEGER PRIMARY KEY, platform TEXT, raw_platform_data TEXT, updated_at TEXT, viltrox_fit_score REAL,
             is_verified INTEGER, is_tt_seller INTEGER, is_commerce_user INTEGER,
-            topic_details_json TEXT, tagged_brands_json TEXT, raw_fields_extracted_at TEXT, raw_fields_extractor_version TEXT
+            topic_details_json TEXT, tagged_brands_json TEXT, raw_fields_extracted_at TEXT, raw_fields_extractor_version TEXT,
+            raw_profile_avatar_present INTEGER, raw_profile_avatar_extracted_at TEXT,
+            raw_profile_avatar_extractor_version TEXT, last_scrape_at TEXT
         );
         CREATE TABLE vkpi_kol_contact_acquisition_queue (kol_pool_id INTEGER PRIMARY KEY, status TEXT);
         """
@@ -63,7 +65,10 @@ def test_raw_fields_backfill_dry_run_then_apply_then_ledger_skip(monkeypatch) ->
 
     dry = raw_script.run(conn, raw_script._parse([]))
     assert dry["candidates"] == 2 and dry["processed"] == 2  # '{}' 的行不是候选
-    assert dry["field_fill"] == {"is_verified": 2, "is_tt_seller": 1, "is_commerce_user": 2, "topic_details_json": 1, "tagged_brands_json": 1}
+    assert dry["field_fill"] == {
+        "is_verified": 2, "is_tt_seller": 1, "is_commerce_user": 2,
+        "topic_details_json": 1, "tagged_brands_json": 1, "raw_profile_avatar_present": 2,
+    }
     assert dry["written_rows"] == 0 and dry["contacts"]["would_enqueue"] == 1 and dry["contacts"]["enqueued"] == 0
     assert dry["contacts"]["by_type"] == {"email": 1}
     assert enqueued == []
@@ -75,6 +80,8 @@ def test_raw_fields_backfill_dry_run_then_apply_then_ledger_skip(monkeypatch) ->
     assert row["is_verified"] == 1 and row["is_commerce_user"] == 1 and row["is_tt_seller"] == 0
     assert json.loads(row["tagged_brands_json"])[0]["handle"] == "sonyalpha"
     assert row["viltrox_fit_score"] == 70.0 and row["raw_fields_extractor_version"] == pool_enrich.RAW_FIELDS_EXTRACTOR_VERSION
+    assert row["raw_profile_avatar_present"] == 0
+    assert row["raw_profile_avatar_extractor_version"] == pool_enrich.RAW_PROFILE_AVATAR_EXTRACTOR_VERSION
     # 联系方式不直写派生列:只经队列 -> contact_ingest(raw 本身当然还含邮箱)
     derived = {k: v for k, v in row.items() if k != "raw_platform_data"}
     assert "hello@studio.com" not in json.dumps(derived)
@@ -93,6 +100,19 @@ def test_raw_fields_backfill_dry_run_then_apply_then_ledger_skip(monkeypatch) ->
     conn.execute("UPDATE vkpi_kol_pool SET updated_at='2099-01-01T00:00:00+00:00' WHERE id=1")
     stale = raw_script.run(conn, raw_script._parse(["--skip-contacts"]))
     assert stale["processed"] == 1 and stale["skipped_fresh_ledger"] == 1
+
+
+def test_avatar_ledger_is_stale_when_any_raw_write_updated_at_is_newer() -> None:
+    row = {
+        "raw_fields_extracted_at": "2100-01-01T00:00:00Z",
+        "raw_fields_extractor_version": pool_enrich.RAW_FIELDS_EXTRACTOR_VERSION,
+        "raw_profile_avatar_extracted_at": "2026-08-01T00:00:00Z",
+        "raw_profile_avatar_extractor_version": pool_enrich.RAW_PROFILE_AVATAR_EXTRACTOR_VERSION,
+        "updated_at": "2099-01-01T00:00:00Z",
+        "last_scrape_at": None,
+    }
+
+    assert raw_script._ledger_stale(row) is True
 
 
 def _comments_conn() -> sqlite3.Connection:

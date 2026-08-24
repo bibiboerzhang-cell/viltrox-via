@@ -87,23 +87,28 @@ def test_stored_zero_requires_matching_successful_raw_observation() -> None:
         assert with_receipt["data_truth"]["fields"][field]["factual"] is True
 
 
-def test_pool_truth_indexes_raw_source_and_each_metric_once(
+def test_pool_truth_builds_one_shared_raw_metric_index(
     monkeypatch,
 ) -> None:
-    calls = {"source": 0, "evidence": 0}
+    calls = {"source": 0, "index": 0, "legacy_evidence": 0}
     source = metric_truth._raw_source_state
-    evidence = metric_truth._raw_metric_evidence
+    index = metric_truth.build_raw_metric_evidence_index
 
-    def counted_source(raw):
+    def counted_source(raw, **kwargs):
         calls["source"] += 1
-        return source(raw)
+        return source(raw, **kwargs)
 
-    def counted_evidence(raw, field):
-        calls["evidence"] += 1
-        return evidence(raw, field)
+    def counted_index(*args, **kwargs):
+        calls["index"] += 1
+        return index(*args, **kwargs)
+
+    def forbidden_legacy_evidence(*_args, **_kwargs):
+        calls["legacy_evidence"] += 1
+        raise AssertionError("pool projection must use the shared raw index")
 
     monkeypatch.setattr(metric_truth, "_raw_source_state", counted_source)
-    monkeypatch.setattr(metric_truth, "_raw_metric_evidence", counted_evidence)
+    monkeypatch.setattr(metric_truth, "build_raw_metric_evidence_index", counted_index)
+    monkeypatch.setattr(metric_truth, "_raw_metric_evidence", forbidden_legacy_evidence)
 
     project_pool_item_truth({
         "followers": 0,
@@ -115,7 +120,44 @@ def test_pool_truth_indexes_raw_source_and_each_metric_once(
         "raw_platform_data": _observed_zero_raw(),
     })
 
-    assert calls == {"source": 1, "evidence": len(metric_truth.POOL_NUMERIC_FIELDS)}
+    assert calls == {"source": 1, "index": 1, "legacy_evidence": 0}
+
+
+def test_shared_raw_index_preserves_legacy_nested_content_samples() -> None:
+    raw = {
+        "source": "youtube_api",
+        "providerStatus": "success",
+        "followers": 12,
+        "videos": [{
+            "kind": "youtube#video",
+            "id": "outer",
+            "viewCount": 10,
+            "related": {
+                "kind": "youtube#video",
+                "id": "nested",
+                "viewCount": 20,
+                "likeCount": 3,
+            },
+        }],
+    }
+    fields = tuple(metric_truth.POOL_NUMERIC_FIELDS)
+
+    _records, indexed = metric_truth.build_raw_metric_evidence_index(
+        raw,
+        fields,
+        field_aliases=metric_truth._FIELD_ALIASES,
+        content_aliases=metric_truth._CONTENT_ALIASES,
+        walk=metric_truth._walk,
+        normalize_key=metric_truth._key,
+        parse_number=metric_truth._number,
+        record_failed=metric_truth._record_has_failure_marker,
+        content_record=metric_truth._content_record,
+    )
+
+    assert indexed == {
+        field: metric_truth._raw_metric_evidence(raw, field)
+        for field in fields
+    }
 
 
 def test_no_results_payload_does_not_prove_zero() -> None:

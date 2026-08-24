@@ -6,7 +6,10 @@ cache.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
+
+from app.services.intelligence.account_scan_helpers import _avatar_url_policy
 
 
 _PROFILE_OBJECT_KEYS = (
@@ -17,6 +20,12 @@ _AVATAR_KEYS = (
     "profilePictureUrl", "profile_image_url", "channelAvatar",
 )
 _THUMBNAIL_SIZES = ("high", "medium", "default")
+RAW_PROFILE_AVATAR_EXTRACTOR_VERSION = "raw_profile_avatar_v1"
+_CAPABILITY_COLUMNS = frozenset({
+    "raw_profile_avatar_present",
+    "raw_profile_avatar_extracted_at",
+    "raw_profile_avatar_extractor_version",
+})
 _EPHEMERAL_MARKERS = (
     "cdninstagram.com", "fbcdn.net", "tiktokcdn.com", "tiktokcdn-us.com",
     "tiktokcdn-eu.com", "byteoversea.com", "ytimg.com", "img.youtube.com",
@@ -31,8 +40,104 @@ def profile_avatar_fallback_needed(avatar_url: Any) -> bool:
     while missing or known time-sensitive/CDN values may need its profile-only
     fallback.  This helper performs no I/O.
     """
-    value = str(avatar_url or "").strip().lower()
-    return not value or any(marker in value for marker in _EPHEMERAL_MARKERS)
+    value = str(avatar_url or "").strip()
+    if not value:
+        return True
+    lowered = value.lower()
+    if any(marker in lowered for marker in ("ytimg.com", "img.youtube.com")):
+        return True
+    usable_url, _status = _avatar_url_policy(value)
+    return not bool(usable_url)
+
+
+def raw_profile_avatar_capability(raw_value: Any) -> bool | None:
+    """Return the exact v1 SQL extractor capability without retaining a URL.
+
+    ``None`` means the payload is unavailable or invalid and must fail open.
+    ``False`` is safe negative evidence only when stored with the matching
+    extractor version and a freshness receipt.
+    """
+    if isinstance(raw_value, dict):
+        document = raw_value
+    elif isinstance(raw_value, (str, bytes)) and raw_value:
+        try:
+            parsed = json.loads(raw_value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        document = parsed
+    else:
+        return None
+
+    def avatar_in(source: Any) -> bool:
+        return isinstance(source, dict) and any(
+            str(source.get(key) or "").strip() for key in _AVATAR_KEYS
+        )
+
+    def snippet_thumbnail_in(source: Any) -> bool:
+        if not isinstance(source, dict):
+            return False
+        snippet = source.get("snippet") if isinstance(source.get("snippet"), dict) else {}
+        thumbs = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
+        return any(
+            isinstance(thumbs.get(size), dict)
+            and bool(str(thumbs[size].get("url") or "").strip())
+            for size in _THUMBNAIL_SIZES
+        )
+
+    if avatar_in(document):
+        return True
+    for key in _PROFILE_OBJECT_KEYS:
+        source = document.get(key)
+        if avatar_in(source) or (key in {"profile", "channel", "author"} and snippet_thumbnail_in(source)):
+            return True
+    profile = document.get("profile") if isinstance(document.get("profile"), dict) else {}
+    items = profile.get("items") if isinstance(profile.get("items"), list) else []
+    first = items[0] if items and isinstance(items[0], dict) else {}
+    return bool(first.get("kind") == "youtube#channel" and snippet_thumbnail_in(first))
+
+
+def _capability_negative_predicate(conn: Any) -> tuple[str, tuple[Any, ...]]:
+    """Return a fail-open SQL exclusion for fresh, versioned false evidence."""
+    has_last_scrape = True
+    has_updated_at = True
+    if conn.__class__.__module__.startswith("sqlite3"):
+        try:
+            columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(vkpi_kol_pool)").fetchall()}
+        except Exception:
+            return "", ()
+        if not _CAPABILITY_COLUMNS.issubset(columns):
+            return "", ()
+        has_last_scrape = "last_scrape_at" in columns
+        has_updated_at = "updated_at" in columns
+    elif conn.__class__.__name__ == "PostgresCompatConnection":
+        try:
+            rows = conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema=current_schema() AND table_name=?",
+                ("vkpi_kol_pool",),
+            ).fetchall()
+        except Exception:
+            return "", ()
+        columns = {str(row["column_name"]) for row in rows}
+        if not _CAPABILITY_COLUMNS.issubset(columns):
+            return "", ()
+        has_last_scrape = "last_scrape_at" in columns
+        has_updated_at = "updated_at" in columns
+    else:
+        return "", ()
+    freshness = ["raw_profile_avatar_extracted_at IS NOT NULL"]
+    if has_updated_at:
+        freshness.append("(updated_at IS NULL OR raw_profile_avatar_extracted_at >= updated_at)")
+    if has_last_scrape:
+        freshness.append("(last_scrape_at IS NULL OR raw_profile_avatar_extracted_at >= last_scrape_at)")
+    return (
+        "AND NOT COALESCE((raw_profile_avatar_present = FALSE "
+        "AND raw_profile_avatar_extractor_version = ? "
+        f"AND {' AND '.join(freshness)}), FALSE)",
+        (RAW_PROFILE_AVATAR_EXTRACTOR_VERSION,),
+    )
 
 
 def profile_avatar_document_expression(
@@ -118,17 +223,19 @@ def bounded_profile_avatar_urls(conn: Any, pool_ids: list[int]) -> dict[int, str
         return {}
     placeholders = ",".join("?" for _ in ids)
     materialized = "MATERIALIZED " if conn.__class__.__name__ == "PostgresCompatConnection" else ""
+    capability_clause, capability_params = _capability_negative_predicate(conn)
     rows = conn.execute(
         f"""
         WITH pool_avatar_source AS {materialized}(
             SELECT id, avatar_url, {raw_doc} AS raw_profile_doc
             FROM vkpi_kol_pool
             WHERE id IN ({placeholders})
+              {capability_clause}
         )
         SELECT id, {raw_avatar} AS raw_profile_avatar_url
         FROM pool_avatar_source
         """,
-        tuple(ids),
+        (*ids, *capability_params),
     ).fetchall()
     return {
         int(row["id"]): str(row["raw_profile_avatar_url"] or "").strip()

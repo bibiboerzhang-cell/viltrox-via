@@ -2,7 +2,7 @@
 
 附:raw 字段提列解析器(优化波 B · D 车道,迁移 291)。``extract_raw_fields`` 是纯函数
 (零网络、零 LLM),从已落库的 raw_platform_data 里榨 TikTok/Instagram/YouTube 的结构化资产;
-``apply_raw_fields`` 只写迁移 208/291 的派生列,列未迁移静默跳过。存量由
+``apply_raw_fields`` 只写迁移 208/291/298 的派生列,列未迁移静默跳过。存量由
 scripts/ops/backfill_pool_raw_fields.py 幂等回填。红线:绝不触 viltrox_fit_score / rule_v0。
 """
 from __future__ import annotations
@@ -40,6 +40,10 @@ from app.domains.kol.pool_common import (
     _table_columns,
     _thumb_url,
     _utcnow,
+)
+from app.domains.kol.pool_read_avatar_hydration import (
+    RAW_PROFILE_AVATAR_EXTRACTOR_VERSION,
+    raw_profile_avatar_capability,
 )
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.scoring import ScoringRegistry
@@ -491,7 +495,8 @@ def extract_raw_fields(raw_platform_data: Any, *, platform: str = "") -> dict[st
     """raw_platform_data -> 派生列值(纯函数)。None=raw 无该信号(调用方不写,保持 NULL)。
 
     返回键:is_verified / is_tt_seller / is_commerce_user(迁移 208 三列;IG isBusinessAccount
-    归入 is_commerce_user)、topic_details_json、tagged_brands_json(迁移 291)。
+    归入 is_commerce_user)、topic_details_json、tagged_brands_json(迁移 291)，以及不含 URL 的
+    raw_profile_avatar_present 三态能力证据(迁移 298)。
     联系方式不在此提列:bio/signature 里的邮箱外链走 business_contact_extract +
     contact_acquisition_queue -> contact_ingest(去重/抑制/合规闸),不新造路径。
     """
@@ -501,6 +506,7 @@ def extract_raw_fields(raw_platform_data: Any, *, platform: str = "") -> dict[st
         return {
             "is_verified": None, "is_tt_seller": None, "is_commerce_user": None,
             "topic_details_json": None, "tagged_brands_json": None,
+            "raw_profile_avatar_present": raw_profile_avatar_capability(raw_platform_data),
         }
     flags = _commerce_flags(raw)
     if flags.get("is_commerce_user") is None and platform_key == "instagram":
@@ -512,6 +518,7 @@ def extract_raw_fields(raw_platform_data: Any, *, platform: str = "") -> dict[st
         "is_commerce_user": flags.get("is_commerce_user"),
         "topic_details_json": _collect_topics(raw, platform_key),
         "tagged_brands_json": tagged or None,
+        "raw_profile_avatar_present": raw_profile_avatar_capability(raw_platform_data),
     }
 
 
@@ -531,6 +538,16 @@ def apply_raw_fields(conn: Any, kol_pool_id: int, raw_platform_data: Any, *, pla
         writable["raw_fields_extracted_at"] = datetime.now(timezone.utc).isoformat()
     if "raw_fields_extractor_version" in pool_columns:
         writable["raw_fields_extractor_version"] = RAW_FIELDS_EXTRACTOR_VERSION
+    avatar_columns = {
+        "raw_profile_avatar_present",
+        "raw_profile_avatar_extracted_at",
+        "raw_profile_avatar_extractor_version",
+    }
+    if avatar_columns.issubset(pool_columns):
+        capability = fields.get("raw_profile_avatar_present")
+        writable["raw_profile_avatar_present"] = None if capability is None else bool(capability)
+        writable["raw_profile_avatar_extracted_at"] = datetime.now(timezone.utc).isoformat()
+        writable["raw_profile_avatar_extractor_version"] = RAW_PROFILE_AVATAR_EXTRACTOR_VERSION
     if not writable:
         return {"written": 0, "fields": fields}
     assignments = ", ".join(f"{key}=?" for key in writable)

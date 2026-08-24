@@ -192,6 +192,7 @@ def get_pool_workspace(
     data_status: str = Query(default=""),
     sort_by: str = Query(default="fit"),
     enrichable: bool | None = Query(default=None),
+    include_aggregates: bool = Query(default=True),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """One read-only KOL Pool workspace bundle for 100-user-friendly page boot."""
@@ -204,6 +205,7 @@ def get_pool_workspace(
         data_status=data_status,
         sort_by=sort_by,
         enrichable=enrichable,
+        include_aggregates=include_aggregates,
         contact_visibility=CONTACT_VISIBILITY_MASKED,
     )
 

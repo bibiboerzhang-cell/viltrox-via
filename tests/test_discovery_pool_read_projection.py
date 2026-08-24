@@ -22,6 +22,9 @@ from app.domains.kol.pool_read_projection_cache import (
     cached_global_pool_selection,
     clear_pool_read_selection_cache,
 )
+from app.domains.kol.pool_read_avatar_hydration import profile_avatar_fallback_needed
+
+
 def _row(
     pool_id: int,
     handle: str,
@@ -192,6 +195,16 @@ def test_global_selection_never_probes_avatar_cache(monkeypatch: pytest.MonkeyPa
     )
 
     assert selection.avatar_by_id[7101]["avatar_url_status"] == "expired"
+
+
+def test_raw_avatar_hydration_skips_direct_url_that_projection_would_prefer() -> None:
+    live = "https://p16-common-sign.tiktokcdn-us.com/avatar.jpeg?x-expires=4102444800"
+    expired = "https://p16-common-sign.tiktokcdn-us.com/avatar.jpeg?x-expires=1"
+
+    assert profile_avatar_fallback_needed(live) is False
+    assert profile_avatar_fallback_needed(expired) is True
+    assert profile_avatar_fallback_needed("") is True
+    assert profile_avatar_fallback_needed("https://i.ytimg.com/vi/video/hqdefault.jpg") is True
 
 
 def test_returned_item_rechecks_signed_avatar_after_selection_cache(

@@ -17,6 +17,7 @@ import math
 import urllib.parse
 from typing import Any, Iterable, Mapping
 
+from app.domains.kol.metric_truth_index import build_raw_metric_evidence_index
 
 VERSION = "kol_metric_truth_v1"
 CLAIM_STATUS = "descriptive_only"
@@ -327,14 +328,14 @@ def _raw_metric_match(
     return matched, "raw_content_sample_mean" if matched else None, len(content)
 
 
-def _raw_source_state(raw: Any) -> dict[str, Any]:
+def _raw_source_state(raw: Any, *, records: Iterable[dict[str, Any]] | None = None) -> dict[str, Any]:
     if not isinstance(raw, (dict, list)):
         return {"present": False, "successful": False, "source": None}
     statuses: list[str] = []
     hidden_followers = False
     source = ""
     observed_at = ""
-    for record in _walk(raw):
+    for record in records if records is not None else _walk(raw):
         if not source:
             source = _text(record.get("source") or record.get("provider_source") or record.get("metrics_source"))
         for raw_key, value in record.items():
@@ -534,7 +535,6 @@ def _audience_projection(value: Any) -> tuple[Any, dict[str, Any]]:
         "reason": "sample_backed_estimate_not_platform_official_audience_fact",
     }
 
-
 def _collaboration_items(value: Any) -> tuple[list[Any], bool]:
     parsed = _json(value, [])
     if isinstance(parsed, dict):
@@ -634,15 +634,24 @@ def project_pool_item_truth(item: Mapping[str, Any]) -> dict[str, Any]:
         projected.get("metric_truth_raw_platform_data", projected.get("raw_platform_data")),
         None,
     )
-    source_state = _raw_source_state(raw)
+    active_metric_fields = [field for field in POOL_NUMERIC_FIELDS
+                            if _number(projected.get(field), percent=field == "engagement_rate") is not None]
+    raw_records, raw_evidence_by_field = build_raw_metric_evidence_index(
+        raw,
+        active_metric_fields,
+        field_aliases=_FIELD_ALIASES,
+        content_aliases=_CONTENT_ALIASES,
+        walk=_walk,
+        normalize_key=_key,
+        parse_number=_number,
+        record_failed=_record_has_failure_marker,
+        content_record=_content_record,
+    )
+    source_state = _raw_source_state(raw, records=raw_records)
     fields: dict[str, Any] = {}
     suppressed: list[str] = []
     for field in POOL_NUMERIC_FIELDS:
-        raw_evidence = (
-            _raw_metric_evidence(raw, field)
-            if _number(projected.get(field), percent=field == "engagement_rate") is not None
-            else ([], [])
-        )
+        raw_evidence = raw_evidence_by_field.get(field, ([], []))
         value, receipt = _pool_metric_projection(
             projected,
             field,

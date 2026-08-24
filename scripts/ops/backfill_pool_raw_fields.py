@@ -43,7 +43,10 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-FIELD_KEYS = ("is_verified", "is_tt_seller", "is_commerce_user", "topic_details_json", "tagged_brands_json")
+FIELD_KEYS = (
+    "is_verified", "is_tt_seller", "is_commerce_user", "topic_details_json", "tagged_brands_json",
+    "raw_profile_avatar_present",
+)
 
 
 def _emit(payload: Any) -> None:
@@ -75,9 +78,18 @@ def _candidate_rows(conn: Any, *, limit: int, platform: str, ids: list[int], for
 
     columns = _table_columns(conn, "vkpi_kol_pool")
     has_ledger = "raw_fields_extracted_at" in columns and "raw_fields_extractor_version" in columns
+    avatar_ledger_columns = {
+        "raw_profile_avatar_present", "raw_profile_avatar_extracted_at",
+        "raw_profile_avatar_extractor_version",
+    }
+    has_avatar_ledger = avatar_ledger_columns.issubset(columns)
     select_cols = "id, platform, raw_platform_data, updated_at"
     if has_ledger:
         select_cols += ", raw_fields_extracted_at, raw_fields_extractor_version"
+    if has_avatar_ledger:
+        select_cols += ", raw_profile_avatar_present, raw_profile_avatar_extracted_at, raw_profile_avatar_extractor_version"
+    if "last_scrape_at" in columns:
+        select_cols += ", last_scrape_at"
     where = ["raw_platform_data IS NOT NULL", "raw_platform_data <> ''", "raw_platform_data <> '{}'"]
     params: list[Any] = []
     if platform:
@@ -91,23 +103,36 @@ def _candidate_rows(conn: Any, *, limit: int, platform: str, ids: list[int], for
     rows = [dict(row) for row in conn.execute(sql, tuple(params)).fetchall()]
     for row in rows:
         row["_has_ledger"] = has_ledger
-        row["_stale"] = force or not has_ledger or _ledger_stale(row)
+        row["_has_avatar_ledger"] = has_avatar_ledger
+        row["_stale"] = force or not has_ledger or not has_avatar_ledger or _ledger_stale(row)
     return rows
 
 
 def _ledger_stale(row: dict[str, Any]) -> bool:
-    from app.domains.kol.pool_enrich import RAW_FIELDS_EXTRACTOR_VERSION
+    from app.domains.kol.pool_enrich import (
+        RAW_FIELDS_EXTRACTOR_VERSION,
+        RAW_PROFILE_AVATAR_EXTRACTOR_VERSION,
+    )
 
     extracted_at = row.get("raw_fields_extracted_at")
     if not extracted_at:
         return True
     if str(row.get("raw_fields_extractor_version") or "") != RAW_FIELDS_EXTRACTOR_VERSION:
         return True
+    avatar_extracted_at = row.get("raw_profile_avatar_extracted_at")
+    if not avatar_extracted_at:
+        return True
+    if str(row.get("raw_profile_avatar_extractor_version") or "") != RAW_PROFILE_AVATAR_EXTRACTOR_VERSION:
+        return True
     updated_at = row.get("updated_at")
-    if not updated_at:
-        return False
     try:
-        return _as_dt(updated_at) > _as_dt(extracted_at)
+        if updated_at and (
+            _as_dt(updated_at) > _as_dt(extracted_at)
+            or _as_dt(updated_at) > _as_dt(avatar_extracted_at)
+        ):
+            return True
+        last_scrape_at = row.get("last_scrape_at")
+        return bool(last_scrape_at and _as_dt(last_scrape_at) > _as_dt(avatar_extracted_at))
     except Exception:
         return True
 
@@ -137,12 +162,18 @@ def _queue_state(conn: Any, kol_pool_id: int) -> str | None:
 def run(conn: Any, args: argparse.Namespace) -> dict[str, Any]:
     import app.domains.kol.pool  # noqa: F401 — pool_enrich 单独先导会触发既有循环导入
     from app.domains.kol.business_contact_extract import extract_contacts_multi_source
-    from app.domains.kol.pool_enrich import RAW_FIELDS_EXTRACTOR_VERSION, apply_raw_fields, extract_raw_fields
+    from app.domains.kol.pool_enrich import (
+        RAW_FIELDS_EXTRACTOR_VERSION,
+        RAW_PROFILE_AVATAR_EXTRACTOR_VERSION,
+        apply_raw_fields,
+        extract_raw_fields,
+    )
 
     rows = _candidate_rows(conn, limit=max(1, int(args.limit)), platform=str(args.platform or "").strip().lower(),
                            ids=list(args.id or []), force=bool(args.force))
     stats: dict[str, Any] = {
         "extractor_version": RAW_FIELDS_EXTRACTOR_VERSION,
+        "avatar_extractor_version": RAW_PROFILE_AVATAR_EXTRACTOR_VERSION,
         "candidates": len(rows),
         "skipped_fresh_ledger": 0,
         "processed": 0,

@@ -66,7 +66,7 @@ export async function listKolPool(
 
 export async function getKolPoolWorkspace(
   token: string,
-  params: { search?: string; platform?: string; country?: string; limit?: number; offset?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean } = {},
+  params: { search?: string; platform?: string; country?: string; limit?: number; offset?: number; dataStatus?: string; sortBy?: string; enrichable?: boolean; includeAggregates?: boolean } = {},
 ): Promise<VkpiKolPoolWorkspaceResponse> {
   const query = new URLSearchParams({ limit: String(params.limit || 500) });
   if (typeof params.offset === "number") query.set("offset", String(params.offset));
@@ -76,6 +76,7 @@ export async function getKolPoolWorkspace(
   if (params.dataStatus) query.set("data_status", params.dataStatus);
   if (params.sortBy) query.set("sort_by", params.sortBy);
   if (typeof params.enrichable === "boolean") query.set("enrichable", String(params.enrichable));
+  if (typeof params.includeAggregates === "boolean") query.set("include_aggregates", String(params.includeAggregates));
   return apiFetch<VkpiKolPoolWorkspaceResponse>(
     `/api/admin/vkpi/kol-pool/workspace?${query.toString()}`,
     { cache: "no-store" },

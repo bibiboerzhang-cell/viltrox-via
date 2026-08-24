@@ -182,17 +182,25 @@ async function listAllKolPoolPages(apiToken: any) {
   return pages;
 }
 
-async function loadKolPoolWorkspaceRows(apiToken: any) {
+async function loadKolPoolWorkspaceRows(apiToken: any, onPage?: (rows: any[]) => void) {
   // 分页拉全量:此前固定 limit=1200 < 池实际行数(1353)→ 尾部约 150 条历史 KOL 永不显示
   // (用户「过往搜索的人没加进来」的真因之一)。逐页拉到取尽为止,硬上限 8000 防跑飞。
   const pageSize = 500;
   const hardCap = 8000;
   const rows: any[] = [];
   for (let offset = 0; offset < hardCap; offset += pageSize) {
-    const response = await getKolPoolWorkspace(apiToken, { limit: pageSize, offset, sortBy: "fit" });
+    const response = await getKolPoolWorkspace(apiToken, {
+      limit: pageSize,
+      offset,
+      sortBy: "fit",
+      // The board obtains low-reach/funnel analytics from /kol-pool/summary;
+      // list pagination does not need to recompute the full aggregate bundle.
+      includeAggregates: false,
+    });
     const items = response?.list?.items || [];
     if (!Array.isArray(items) || items.length === 0) break;
     rows.push(...items);
+    onPage?.([...rows]);
     if (items.length < pageSize) break;
   }
   return rows;
@@ -289,7 +297,14 @@ export function useCockpitRuntime({ apiToken, userName, userRole, userAvatar, us
     setKolPoolLoading(true);
     setKolPoolError("");
 
-    const refreshRows = () => loadKolPoolWorkspaceRows(apiToken)
+    const refreshRows = () => loadKolPoolWorkspaceRows(apiToken, (partialRows) => {
+      // A cold account can render the first 500 real rows immediately while
+      // later pages continue in the background.  A warm account keeps its
+      // complete safe cache mounted to avoid shrinking/flickering mid-refresh.
+      if (!cancelled && !hasCachedValue) {
+        setKolPoolRows(toCockpitKolPoolRows(partialRows));
+      }
+    })
       .catch(() => listAllKolPoolPages(apiToken))
       .then((response) => {
         if (!cancelled) {

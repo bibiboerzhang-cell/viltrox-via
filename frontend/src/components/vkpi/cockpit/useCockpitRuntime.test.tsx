@@ -82,6 +82,42 @@ beforeEach(() => {
 });
 
 describe("KOL Pool persistent cache privacy", () => {
+  it("requests the list-only workspace because summary analytics load separately", async () => {
+    const runtime = renderRuntime();
+
+    await waitFor(() => expect(kolMocks.getKolPoolWorkspace).toHaveBeenCalled());
+    expect(kolMocks.getKolPoolWorkspace).toHaveBeenCalledWith(
+      "token-ai",
+      expect.objectContaining({ limit: 500, offset: 0, sortBy: "fit", includeAggregates: false }),
+    );
+    runtime.unmount();
+  });
+
+  it("renders the first cold page while later workspace pages continue loading", async () => {
+    let resolveSecondPage: ((value: unknown) => void) | undefined;
+    const firstPage = Array.from({ length: 500 }, (_, index) => ({ id: index + 1 }));
+    kolMocks.getKolPoolWorkspace.mockImplementation((_token: string, params: { offset?: number }) => {
+      if ((params.offset || 0) === 0) return Promise.resolve({ list: { items: firstPage } });
+      return new Promise((resolve) => { resolveSecondPage = resolve; });
+    });
+    const runtime = renderRuntime();
+
+    await waitFor(() => expect(runtime.result.current.kolPoolRows).toHaveLength(500));
+    expect(runtime.result.current.kolPoolLoading).toBe(true);
+
+    await act(async () => {
+      resolveSecondPage?.({ list: { items: [{ id: 501 }] } });
+    });
+    await waitFor(() => expect(runtime.result.current.kolPoolRows).toHaveLength(501));
+    await waitFor(() => expect(runtime.result.current.kolPoolLoading).toBe(false));
+    expect(kolMocks.getKolPoolWorkspace).toHaveBeenNthCalledWith(
+      2,
+      "token-ai",
+      expect.objectContaining({ offset: 500, includeAggregates: false }),
+    );
+    runtime.unmount();
+  });
+
   it("recursively strips every contact projection before serialization", () => {
     const secretEmail = "creator-secret@example.com";
     const secretPhone = "+12025550199";

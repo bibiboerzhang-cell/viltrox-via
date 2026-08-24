@@ -16,16 +16,21 @@ from app.domains.kol import pool_enrich, pool_raw_fields_job as job  # noqa: E40
 from tests.test_backfill_raw_fields_and_language_scripts import TT_RAW, _patch_columns  # noqa: E402
 
 
-def _conn(*, with_ledger: bool = True) -> sqlite3.Connection:
+def _conn(*, with_ledger: bool = True, with_avatar_ledger: bool | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    ledger_cols = ", raw_fields_extracted_at TEXT, raw_fields_extractor_version TEXT" if with_ledger else ""
+    general_ledger = ", raw_fields_extracted_at TEXT, raw_fields_extractor_version TEXT" if with_ledger else ""
+    has_avatar = with_ledger if with_avatar_ledger is None else with_avatar_ledger
+    avatar_ledger = (
+        ", raw_profile_avatar_present INTEGER, raw_profile_avatar_extracted_at TEXT, "
+        "raw_profile_avatar_extractor_version TEXT" if has_avatar else ""
+    )
     conn.executescript(
         f"""
         CREATE TABLE vkpi_kol_pool (
             id INTEGER PRIMARY KEY, platform TEXT, raw_platform_data TEXT, updated_at TEXT, last_scrape_at TEXT,
             viltrox_fit_score REAL, is_verified INTEGER, is_tt_seller INTEGER, is_commerce_user INTEGER,
-            topic_details_json TEXT, tagged_brands_json TEXT{ledger_cols}
+            topic_details_json TEXT, tagged_brands_json TEXT{general_ledger}{avatar_ledger}
         );
         CREATE TABLE vkpi_kol_contact_acquisition_queue (kol_pool_id INTEGER PRIMARY KEY, status TEXT);
         """
@@ -54,10 +59,13 @@ def test_job_processes_only_stale_rows_and_is_idempotent(monkeypatch) -> None:
     applied = job.run_raw_fields_backfill(limit=10, conn=conn)
     assert applied["status"] == "ok" and applied["candidates"] == 3 and applied["written_rows"] == 3 and applied["errors"] == 0
     assert applied["field_fill"]["is_verified"] == 2 and applied["field_fill"]["tagged_brands_json"] == 1
+    assert applied["field_fill"]["raw_profile_avatar_present"] == 2
     assert applied["remaining_after"] == 0 and applied["provider_calls_performed"] is False and applied["contacts_enqueued"] == 0
     row = dict(conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=1").fetchone())
     assert row["is_verified"] == 1 and row["viltrox_fit_score"] == 70.0
     assert row["raw_fields_extractor_version"] == pool_enrich.RAW_FIELDS_EXTRACTOR_VERSION and row["raw_fields_extracted_at"]
+    assert row["raw_profile_avatar_present"] == 0
+    assert row["raw_profile_avatar_extractor_version"] == pool_enrich.RAW_PROFILE_AVATAR_EXTRACTOR_VERSION
     assert json.loads(row["tagged_brands_json"])[0]["handle"] == "sonyalpha"
     # 非法 raw 的行也记了账本(提列出空字段),不会每天重试
     assert dict(conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=4").fetchone())["raw_fields_extracted_at"]
@@ -93,4 +101,12 @@ def test_job_isolates_row_failures_and_blocks_without_migration(monkeypatch) -> 
 
     blocked = job.run_raw_fields_backfill(limit=10, conn=_conn(with_ledger=False))
     assert blocked["status"] == "blocked" and blocked["reason"] == "migration_291_not_applied"
-    assert set(blocked["missing_columns"]) == {"raw_fields_extracted_at", "raw_fields_extractor_version"}
+    assert {"raw_fields_extracted_at", "raw_fields_extractor_version"}.issubset(blocked["missing_columns"])
+    blocked_298 = job.run_raw_fields_backfill(
+        limit=10, conn=_conn(with_ledger=True, with_avatar_ledger=False),
+    )
+    assert blocked_298["status"] == "blocked" and blocked_298["reason"] == "migration_298_not_applied"
+    assert set(blocked_298["missing_columns"]) == {
+        "raw_profile_avatar_present", "raw_profile_avatar_extracted_at",
+        "raw_profile_avatar_extractor_version",
+    }

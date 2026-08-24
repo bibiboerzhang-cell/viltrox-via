@@ -85,6 +85,7 @@ from app.domains.kol.pool_read_projection import (
     prepare_pool_read_selection,
 )
 from app.domains.kol.pool_read_projection_facets import pool_read_data_status_ids, pool_read_workspace_facets
+from app.domains.kol.pool_workspace_bundle import workspace_aggregate_projection
 from app.domains.kol.pool_read_projection_evidence import project_pool_list_items
 from app.domains.kol.pool_read_cache_projection import restore_pool_response_cache_hit
 
@@ -430,6 +431,7 @@ def workspace(
     data_status: str = "",
     sort_by: str = "fit",
     enrichable: bool | None = None,
+    include_aggregates: bool = True,
     contact_visibility: str = CONTACT_VISIBILITY_MASKED,
 ) -> dict[str, Any]:
     """Return one read-only KOL Pool page bundle for the cockpit workspace."""
@@ -456,6 +458,7 @@ def workspace(
         data_status=normalized_data_status,
         sort_by=normalized_sort,
         enrichable="any" if enrichable is None else str(bool(enrichable)).lower(),
+        aggregate_scope="full" if include_aggregates else "list_only_v1",
         contact_visibility=normalized_contact_visibility,
         source_revision=selection.diagnostics.get("source_revision", "unavailable"),
     )
@@ -490,9 +493,14 @@ def workspace(
         (*projected_params, safe_limit, safe_offset),
     ).fetchall()
     filtered_count = int(conn.execute(f"SELECT COUNT(*) AS n FROM vkpi_kol_pool {projected_clause}", projected_params).fetchone()["n"])
-    all_summary = summary()
-    by_candidate_kind, by_data_status = pool_read_workspace_facets(conn, selection, table_columns)
-    countries = all_summary.get("country_distribution") if isinstance(all_summary.get("country_distribution"), list) else []
+    all_summary, aggregate_counts, aggregate_sections = workspace_aggregate_projection(
+        include_aggregates=include_aggregates,
+        summary_fn=summary,
+        facets_fn=pool_read_workspace_facets,
+        conn=conn,
+        selection=selection,
+        table_columns=table_columns,
+    )
     payload = {
         "status": "ready",
         "method": "kol_pool_workspace_v1",
@@ -505,8 +513,8 @@ def workspace(
             "data_status": normalized_data_status,
             "sort_by": normalized_sort,
             "enrichable": enrichable,
+            "include_aggregates": bool(include_aggregates),
         },
-        "summary": all_summary,
         "counts": {
             "total": int(all_summary.get("total") or 0),
             "filtered": filtered_count,
@@ -514,27 +522,7 @@ def workspace(
             "offset": safe_offset,
             "limit": safe_limit,
             "has_more": safe_offset + len(rows) < filtered_count,
-            "by_candidate_kind": [dict(row) for row in by_candidate_kind],
-            "by_data_status": by_data_status,
-        },
-        "filter_options": {
-            "platforms": all_summary.get("by_platform") or [],
-            "countries": countries,
-            "data_statuses": [
-                {"value": "", "label": "全部"},
-                {"value": "complete", "label": "已补全"},
-                {"value": "missing", "label": "待补全"},
-            ],
-            "sort_options": [
-                {"value": "fit", "label": "V6 Fit"},
-                {"value": "followers", "label": "粉丝"},
-                {"value": "updated", "label": "最近更新"},
-                {"value": "created", "label": "最近创建"},
-            ],
-        },
-        "market_coverage": {
-            "total_countries": len(countries),
-            "items": countries,
+            **aggregate_counts,
         },
         "list": {
             "items": project_pool_list_items(
@@ -555,8 +543,10 @@ def workspace(
             "write_db": False,
             "viltrox_fit_score_write": False,
             "cache": "kol_pool_read_cache",
+            "aggregate_scope": "full" if include_aggregates else "list_only",
             "read_projection": selection.diagnostics,
         },
+        **aggregate_sections,
     }
     return _kol_pool_cache_store(cache_key, payload)
 

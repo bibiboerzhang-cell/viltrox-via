@@ -25,8 +25,14 @@ logger = get_logger("viltrox.domains.kol.pool_raw_fields_job")
 TASK_KEY = "vkpi_pool_raw_fields_backfill"
 DEFAULT_LIMIT = 500
 MAX_LIMIT = 5000
-REQUIRED_COLUMNS = ("topic_details_json", "tagged_brands_json", "raw_fields_extracted_at", "raw_fields_extractor_version")
-FIELD_KEYS = ("is_verified", "is_tt_seller", "is_commerce_user", "topic_details_json", "tagged_brands_json")
+REQUIRED_COLUMNS = (
+    "topic_details_json", "tagged_brands_json", "raw_fields_extracted_at", "raw_fields_extractor_version",
+    "raw_profile_avatar_present", "raw_profile_avatar_extracted_at", "raw_profile_avatar_extractor_version",
+)
+FIELD_KEYS = (
+    "is_verified", "is_tt_seller", "is_commerce_user", "topic_details_json", "tagged_brands_json",
+    "raw_profile_avatar_present",
+)
 _RAW_PRESENT = "raw_platform_data IS NOT NULL AND raw_platform_data <> '' AND raw_platform_data <> '{}'"
 
 
@@ -35,16 +41,22 @@ def _stale_predicate(columns: set[str]) -> str:
         "raw_fields_extracted_at IS NULL",
         "raw_fields_extractor_version IS NULL",
         "raw_fields_extractor_version <> ?",
+        "raw_profile_avatar_extracted_at IS NULL",
+        "raw_profile_avatar_extractor_version IS NULL",
+        "raw_profile_avatar_extractor_version <> ?",
     ]
     if "last_scrape_at" in columns:
         parts.append("(last_scrape_at IS NOT NULL AND raw_fields_extracted_at < last_scrape_at)")
+        parts.append("(last_scrape_at IS NOT NULL AND raw_profile_avatar_extracted_at < last_scrape_at)")
+    if "updated_at" in columns:
+        parts.append("(updated_at IS NOT NULL AND raw_profile_avatar_extracted_at < updated_at)")
     return "(" + " OR ".join(parts) + ")"
 
 
-def _count_stale(conn: Any, predicate: str, version: str) -> int:
+def _count_stale(conn: Any, predicate: str, version: str, avatar_version: str) -> int:
     row = conn.execute(
         f"SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE {_RAW_PRESENT} AND {predicate}",
-        (version,),
+        (version, avatar_version),
     ).fetchone()
     try:
         return int(dict(row)["n"]) if row is not None else 0
@@ -52,7 +64,9 @@ def _count_stale(conn: Any, predicate: str, version: str) -> int:
         return 0
 
 
-def select_stale_rows(conn: Any, *, limit: int, columns: set[str], version: str) -> list[dict[str, Any]]:
+def select_stale_rows(
+    conn: Any, *, limit: int, columns: set[str], version: str, avatar_version: str,
+) -> list[dict[str, Any]]:
     """从未提列优先,再按 id;只取本轮要处理的行。"""
 
     predicate = _stale_predicate(columns)
@@ -64,7 +78,7 @@ def select_stale_rows(conn: Any, *, limit: int, columns: set[str], version: str)
         ORDER BY CASE WHEN raw_fields_extracted_at IS NULL THEN 0 ELSE 1 END, id ASC
         LIMIT ?
         """,
-        (version, int(limit)),
+        (version, avatar_version, int(limit)),
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -77,6 +91,7 @@ def run_raw_fields_backfill(limit: int = DEFAULT_LIMIT, *, conn: Any | None = No
     from app.domains.kol import pool_enrich
 
     RAW_FIELDS_EXTRACTOR_VERSION = pool_enrich.RAW_FIELDS_EXTRACTOR_VERSION
+    avatar_version = pool_enrich.RAW_PROFILE_AVATAR_EXTRACTOR_VERSION
     db = conn or get_conn()
     safe_limit = max(1, min(MAX_LIMIT, int(limit or DEFAULT_LIMIT)))
     # 列视图与 apply_raw_fields 同源(pool_enrich._table_columns),两边对「列是否存在」口径一致。
@@ -87,6 +102,7 @@ def run_raw_fields_backfill(limit: int = DEFAULT_LIMIT, *, conn: Any | None = No
         "task": TASK_KEY,
         "dry_run": bool(dry_run),
         "extractor_version": RAW_FIELDS_EXTRACTOR_VERSION,
+        "avatar_extractor_version": avatar_version,
         "limit": safe_limit,
         "candidates": 0,
         "written_rows": 0,
@@ -98,10 +114,14 @@ def run_raw_fields_backfill(limit: int = DEFAULT_LIMIT, *, conn: Any | None = No
         "contacts_enqueued": 0,
     }
     if missing:
-        stats.update({"status": "blocked", "reason": "migration_291_not_applied", "missing_columns": missing})
+        migration = "291" if any(name in missing for name in REQUIRED_COLUMNS[:4]) else "298"
+        stats.update({"status": "blocked", "reason": f"migration_{migration}_not_applied", "missing_columns": missing})
         return stats
     predicate = _stale_predicate(columns)
-    rows = select_stale_rows(db, limit=safe_limit, columns=columns, version=RAW_FIELDS_EXTRACTOR_VERSION)
+    rows = select_stale_rows(
+        db, limit=safe_limit, columns=columns,
+        version=RAW_FIELDS_EXTRACTOR_VERSION, avatar_version=avatar_version,
+    )
     stats["candidates"] = len(rows)
     for row in rows:
         kol_id = int(row["id"])
@@ -129,7 +149,9 @@ def run_raw_fields_backfill(limit: int = DEFAULT_LIMIT, *, conn: Any | None = No
                 any_field = True
         if any_field:
             stats["rows_with_any_field"] += 1
-    stats["remaining_after"] = _count_stale(db, predicate, RAW_FIELDS_EXTRACTOR_VERSION)
+    stats["remaining_after"] = _count_stale(
+        db, predicate, RAW_FIELDS_EXTRACTOR_VERSION, avatar_version,
+    )
     if not rows:
         stats["status"] = "empty"
     elif stats["errors"] and stats["errors"] == len(rows):

@@ -113,6 +113,7 @@ def test_youtube_keywords_and_category_histogram_without_topic_details() -> None
     assert topic["video_category_ids"] == {"28": 2, "26": 1}
     assert topic["topic_categories"] == [] and topic["topic_ids"] == []
     assert fields["tagged_brands_json"] is None
+    assert fields["raw_profile_avatar_present"] is False
 
 
 def test_youtube_topic_details_preferred_when_present() -> None:
@@ -127,15 +128,24 @@ def test_youtube_topic_details_preferred_when_present() -> None:
 
 
 def test_empty_or_garbage_raw_yields_all_none() -> None:
-    for raw in ("", "{}", "not json", None, [], {"profile": {}}):
+    for raw in ("", "not json", None, []):
         fields = pool_enrich.extract_raw_fields(raw, platform="tiktok")
         assert all(value is None for value in fields.values()), raw
+    for raw in ("{}", {"profile": {}}):
+        fields = pool_enrich.extract_raw_fields(raw, platform="tiktok")
+        assert fields["raw_profile_avatar_present"] is False
+        assert all(value is None for key, value in fields.items() if key != "raw_profile_avatar_present")
 
 
 def _pool_conn(with_291: bool) -> sqlite3.Connection:
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
-    extra = ", topic_details_json TEXT, tagged_brands_json TEXT, raw_fields_extracted_at TEXT, raw_fields_extractor_version TEXT" if with_291 else ""
+    extra = (
+        ", topic_details_json TEXT, tagged_brands_json TEXT, raw_fields_extracted_at TEXT, "
+        "raw_fields_extractor_version TEXT, raw_profile_avatar_present INTEGER, "
+        "raw_profile_avatar_extracted_at TEXT, raw_profile_avatar_extractor_version TEXT"
+        if with_291 else ""
+    )
     conn.executescript(
         f"CREATE TABLE vkpi_kol_pool (id INTEGER PRIMARY KEY, platform TEXT, viltrox_fit_score REAL, "
         f"is_verified INTEGER, is_tt_seller INTEGER, is_commerce_user INTEGER{extra});"
@@ -150,13 +160,17 @@ def test_apply_writes_only_existing_columns_and_never_touches_fit(monkeypatch) -
     })
     conn = _pool_conn(with_291=True)
     result = pool_enrich.apply_raw_fields(conn, 7, TT_RAW, platform="tiktok")
-    assert result["written"] == 7
+    assert result["written"] == 10
     row = dict(conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=7").fetchone())
     assert row["is_verified"] == 1 and row["is_tt_seller"] == 1 and row["is_commerce_user"] == 1
     assert json.loads(row["topic_details_json"])["commerce_category"] == "Electronics"
     assert json.loads(row["tagged_brands_json"])[0]["handle"] == "sidemen"
     assert row["raw_fields_extractor_version"] == pool_enrich.RAW_FIELDS_EXTRACTOR_VERSION
     assert row["raw_fields_extracted_at"]
+    assert row["raw_profile_avatar_present"] == 0
+    assert row["raw_profile_avatar_extractor_version"] == pool_enrich.RAW_PROFILE_AVATAR_EXTRACTOR_VERSION
+    assert row["raw_profile_avatar_extracted_at"]
+    assert "raw_profile_avatar_url" not in row
     assert row["viltrox_fit_score"] == 61.5
 
     # 旧布局(只有 208 三列):291 列静默跳过,三标记照写
