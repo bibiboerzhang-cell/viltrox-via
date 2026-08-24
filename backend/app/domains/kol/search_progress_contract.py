@@ -354,6 +354,24 @@ def _state_bucket(value: Any) -> str:
     return "not_requested"
 
 
+def _terminal_shortfall_bucket(session_status: str) -> str:
+    """Preserve why a terminal search stopped when requested rows are absent.
+
+    A ready/partial provider shortfall is a partial result.  Failed work remains
+    failed, while user/system cancellation is skipped work.  Collapsing all
+    three into ``partial`` made failed and cancelled 0/N sessions look like
+    ordinary provider underfill and hid their actual terminal reason.
+    """
+
+    if session_status in {"ready", "partial"}:
+        return "partial"
+    if session_status == "failed":
+        return "failed"
+    if session_status in {"cancelled", "canceled"}:
+        return "skipped"
+    return "unknown"
+
+
 def _profile_bucket(item: Mapping[str, Any]) -> str:
     payload = _mapping(item.get("payload"))
     profile = {**_mapping(payload.get("profile_flow")), **_mapping(payload.get("profile_execute"))}
@@ -569,7 +587,7 @@ def project_search_progress(
     # as ``unknown`` makes a 26/30 terminal session poll for twelve minutes even
     # though there is no queued/running unit left.  Active sessions retain the
     # unknown bucket so the short orchestration-registration window stays open.
-    shortfall_bucket = "partial" if raw_session_status in _TERMINAL_SESSION_STATES else "unknown"
+    shortfall_bucket = _terminal_shortfall_bucket(raw_session_status)
     base_buckets.extend([shortfall_bucket] * max(0, intended_total - len(base_buckets)))
 
     profile_buckets = [_profile_bucket(item) for item in safe_items]
@@ -669,7 +687,9 @@ def project_search_progress(
     elif queued_units:
         state = "queued"
     elif failed_units:
-        state = "partial"
+        # Preserve a total failure as failed.  If any requested unit did
+        # succeed, the aggregate is truthfully partial instead.
+        state = "failed" if raw_session_status == "failed" and successful_units == 0 else "partial"
     elif requested_units and successful_units >= requested_units:
         state = "ready"
     elif raw_session_status in _TERMINAL_SESSION_STATES:

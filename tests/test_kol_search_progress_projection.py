@@ -343,6 +343,54 @@ def test_terminal_search_shortfall_is_partial_and_never_left_pending() -> None:
     assert result["failed_units"] == 4
 
 
+def test_cancelled_search_shortfall_preserves_cancellation_reason() -> None:
+    session = {
+        "status": "cancelled",
+        "result_summary": {"phase": "cancelled", "progress": {"base": 30, "total": 30}},
+    }
+
+    empty = project_search_progress(session, [], worker_health=_worker(online=True))
+    assert empty["state"] == "cancelled"
+    assert empty["requested_tasks_terminal"] is True
+    assert empty["requested_tasks_successful"] is False
+    assert empty["stages"]["search"]["counts"]["skipped"] == 30
+    assert empty["stages"]["search"]["counts"]["partial"] == 0
+    assert empty["failed_units"] == 0
+
+    items = [
+        {"id": item_id, "status": "ready", "stage": "identified", "payload": {}}
+        for item_id in range(1, 11)
+    ]
+    partial = project_search_progress(session, items, worker_health=_worker(online=True))
+    assert partial["state"] == "cancelled"
+    assert partial["stages"]["search"]["successful"] == 10
+    assert partial["stages"]["search"]["counts"]["skipped"] == 20
+    assert partial["requested_tasks_terminal"] is True
+
+
+def test_failed_search_shortfall_distinguishes_total_failure_from_partial_results() -> None:
+    session = {
+        "status": "failed",
+        "result_summary": {"phase": "failed", "progress": {"base": 30, "total": 30}},
+    }
+
+    empty = project_search_progress(session, [], worker_health=_worker(online=True))
+    assert empty["state"] == "failed"
+    assert empty["stages"]["search"]["counts"]["failed"] == 30
+    assert empty["failed_units"] == 30
+    assert empty["requested_tasks_terminal"] is True
+
+    items = [
+        {"id": item_id, "status": "ready", "stage": "identified", "payload": {}}
+        for item_id in range(1, 11)
+    ]
+    partial = project_search_progress(session, items, worker_health=_worker(online=True))
+    assert partial["state"] == "partial"
+    assert partial["stages"]["search"]["successful"] == 10
+    assert partial["stages"]["search"]["counts"]["failed"] == 20
+    assert partial["failed_units"] == 20
+
+
 def test_active_search_shortfall_remains_unknown_until_orchestration_finishes() -> None:
     session = {
         "status": "running",
