@@ -105,6 +105,7 @@ def test_weekly_rollup_sync_fva_wired_and_directional(monkeypatch):
     assert norm["fva"] == {"n_groups": 1, "mean_delta": -0.1, "model_better_share": 1.0}
     eval_sql = next(sql for sql in captured["sql"] if "vkpi_prediction_evals" in sql)
     assert "e.outcome_id" in eval_sql
+    assert "e.actual_json" in eval_sql
     assert "LEFT JOIN vkpi_gtm_outcomes o" in eval_sql
     assert "prediction_actual_verified" in eval_sql
     assert "gtm_window_observed" in eval_sql
@@ -130,3 +131,52 @@ def test_weekly_rollup_sync_fva_empty_when_runs_unjoined(monkeypatch):
     assert rollup["fva"]["mean_delta"] is None
     assert captured["normalized"]["fva"] == {
         "n_groups": 0, "mean_delta": None, "model_better_share": None}
+
+
+def test_weekly_rollup_sync_passes_only_snapshot_backed_measured_contract(monkeypatch):
+    """Scheduler must carry actual_json through and reject false measured markers."""
+    from app.domains.market_brain import prediction_rollup_truth
+    from app.services.scheduler import jobs_tasks_gtm
+
+    measured_status = prediction_rollup_truth.MEASURED_BINDING_STATUS
+    eval_rows = [
+        {
+            "run_id": "fclog_1", "actual_value": 100, "error_abs": 10,
+            "interval_hit": 1, "direction_hit": None, "task_type": None,
+            "actual_json": {
+                "binding_status": measured_status,
+                "snapshot_backed_count": 2,
+            },
+        },
+        {
+            "run_id": "fclog_2", "actual_value": 100, "error_abs": 20,
+            "interval_hit": 0, "direction_hit": None, "task_type": None,
+            "actual_json": {
+                "binding_status": measured_status,
+                "snapshot_backed_count": 0,
+            },
+        },
+        {
+            "run_id": "fclog_3", "actual_value": 100, "error_abs": 30,
+            "interval_hit": 0, "direction_hit": None, "task_type": None,
+            "actual_json": "{invalid-json",
+        },
+        {
+            "run_id": "fclog_4", "actual_value": 100, "error_abs": 40,
+            "interval_hit": 0, "direction_hit": None, "task_type": None,
+            "actual_json": None,
+        },
+    ]
+    captured = _wire(monkeypatch, eval_rows)
+
+    out = jobs_tasks_gtm._prediction_weekly_rollup_sync()
+
+    measured = out["rollup"]["measured_nonbinary"]
+    assert measured["n"] == 1
+    assert measured["invalid_n"] == 1
+    assert measured["wape"] == 0.1
+    assert measured["interval_coverage"] == 1.0
+    assert measured["claimable"] is False
+    assert measured["sample_label"] == "1/20"
+    eval_sql = next(sql for sql in captured["sql"] if "vkpi_prediction_evals" in sql)
+    assert "e.actual_json" in eval_sql

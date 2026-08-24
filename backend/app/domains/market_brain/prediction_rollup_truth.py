@@ -167,8 +167,11 @@ def measured_nonbinary_rollup(
     """Aggregate snapshot-measured KOL view evals (one per forecast-log row).
 
     Rows qualify when their ``actual_json.binding_status`` is
-    :data:`MEASURED_BINDING_STATUS`; verified outcome-bound rows are handled by
-    :func:`verified_nonbinary_rollup` and are excluded here, so the two tiers
+    :data:`MEASURED_BINDING_STATUS` and at least one successful metric snapshot
+    backs the measured sample.  A row that claims the measured binding without
+    a positive ``snapshot_backed_count`` is retained in ``invalid_n`` instead
+    of inflating the claimable sample.  Verified outcome-bound rows are handled
+    by :func:`verified_nonbinary_rollup` and are excluded here, so the two tiers
     never double count.
     """
     measured: list[dict[str, Any]] = []
@@ -178,6 +181,9 @@ def measured_nonbinary_rollup(
             continue
         payload = _actual_json(row.get("actual_json"))
         if payload.get("binding_status") != MEASURED_BINDING_STATUS:
+            continue
+        if (_int(payload.get("snapshot_backed_count")) or 0) <= 0:
+            invalid_n += 1
             continue
         if _number(row.get("actual_value")) is None or _number(row.get("error_abs")) is None:
             invalid_n += 1

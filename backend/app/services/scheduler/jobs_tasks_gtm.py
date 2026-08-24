@@ -188,7 +188,7 @@ def _prediction_weekly_rollup_sync(scan_limit: int = 500) -> dict:
     verified_outcome = outcome_evidence_sql("o")
     eval_rows = conn.execute(
         f"""
-        SELECT e.run_id, e.outcome_id, e.actual_value, e.error_abs,
+        SELECT e.run_id, e.outcome_id, e.actual_value, e.actual_json, e.error_abs,
                e.interval_hit, e.direction_hit,
                r.task_type, r.p50, r.source_step, r.product_sku, r.market, r.channel,
                r.baseline_value,
