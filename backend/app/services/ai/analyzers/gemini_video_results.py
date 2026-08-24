@@ -150,7 +150,12 @@ def _final_v1_payload_validation_errors(payload: Any) -> list[str]:
 
 
 def validate_final_v1_result(raw: Any, *, allow_legacy_status: bool = True) -> list[str]:
-    """Return reasons why a normalized final_v1 result must not enter ready cache."""
+    """Return reasons why a normalized final_v1 result must not enter ready cache.
+
+    This boundary proves completed, attributable video analysis.  Individual
+    scalar scores remain optional: downstream projections must preserve a
+    missing score as unknown rather than reject useful evidence or invent 0.
+    """
     if not isinstance(raw, dict):
         return ["result_not_object"]
     errors: list[str] = []

@@ -402,7 +402,7 @@ def _sync_deep_analysis_result_from_cache(
             "source_cache_id",
             "source_evidence_id",
             "kol_pool_id",
-            "llm_v6_fit",
+            "llm_v6_fit", "score_status", "score_missing_reason",
             "viltrox_fit_score_changed_ids",
         )
         if key in result

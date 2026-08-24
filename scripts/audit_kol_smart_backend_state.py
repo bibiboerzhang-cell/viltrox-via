@@ -36,6 +36,7 @@ from app.domains.kol.account_dossier_extract import (  # noqa: E402
     METHOD as PROFILE_LLM_METHOD,
     prepare_account_dossier_extract,
 )
+from app.domains.kol.final_v1_extract import prepare_deep_analysis_projection  # noqa: E402
 
 QUEUE_LOAD_SMOKE_REPORT = ROOT / "runtime" / "kol-smart-queue-load-smoke-latest.json"
 
@@ -84,46 +85,6 @@ def _rows(conn: psycopg.Connection[Any], sql: str, params: tuple[Any, ...] = ())
         return [dict(row) for row in cur.fetchall()]
 
 
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _number_or_none(value: Any) -> float | None:
-    if value in (None, ""):
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed != parsed:
-        return None
-    return max(0.0, min(100.0, parsed))
-
-
-def _score_from_value(value: Any) -> float | None:
-    if isinstance(value, dict):
-        return _number_or_none(value.get("score"))
-    return _number_or_none(value)
-
-
-def _final_payload(result: Any) -> dict[str, Any]:
-    root = _as_dict(result)
-    nested = _as_dict(root.get("video_analysis_final_v1"))
-    if _as_dict(nested.get("layer1_visual_content")):
-        return nested
-    return root
-
-
-def _has_marketing_value_score(result: Any) -> bool:
-    payload = _final_payload(result)
-    layer6 = _as_dict(payload.get("layer6_flags_and_scores"))
-    scores = _as_dict(layer6.get("scores"))
-    return (
-        _score_from_value(scores.get("marketing_value_score")) is not None
-        or _score_from_value(layer6.get("marketing_value_score")) is not None
-    )
-
-
 def deep_result_state(conn: psycopg.Connection[Any]) -> dict[str, Any]:
     missing = _rows(
         conn,
@@ -156,7 +117,9 @@ def deep_result_state(conn: psycopg.Connection[Any]) -> dict[str, Any]:
         conn,
         """
         WITH final AS (
-          SELECT c.id, c.result, e.id AS evidence_id, e.kol_pool_id, p.handle
+          SELECT c.id, c.result, c.model, c.cost,
+                 e.id AS evidence_id, e.kol_pool_id, e.content_url, e.title, e.video_title,
+                 p.handle, p.display_name, p.platform
           FROM vkpi_analysis_cache c
           JOIN vkpi_kol_video_evidence e
             ON e.id::text=c.target_id
@@ -172,7 +135,23 @@ def deep_result_state(conn: psycopg.Connection[Any]) -> dict[str, Any]:
           WHERE analysis_kind='video_final_v1'
             AND status='ready'
         )
-        SELECT f.id AS cache_id, f.result, f.evidence_id, f.kol_pool_id, f.handle
+        SELECT f.id AS cache_id,
+               f.id AS final_cache_id,
+               f.result AS final_result,
+               f.model AS final_model,
+               f.cost AS final_cost,
+               f.evidence_id,
+               f.kol_pool_id,
+               f.content_url,
+               f.title,
+               f.video_title,
+               f.handle,
+               f.display_name,
+               f.platform,
+               NULL::bigint AS qa_cache_id,
+               NULL::jsonb AS qa_result,
+               NULL::text AS qa_model,
+               NULL::numeric AS qa_cost
         FROM final f
         LEFT JOIN deep d ON d.source_cache_id=f.id
         WHERE d.source_cache_id IS NULL
@@ -182,11 +161,15 @@ def deep_result_state(conn: psycopg.Connection[Any]) -> dict[str, Any]:
     writable_missing: list[dict[str, Any]] = []
     skipped_missing: list[dict[str, Any]] = []
     for row in missing_with_result:
-        item = {key: value for key, value in row.items() if key != "result"}
-        if _has_marketing_value_score(row.get("result")):
-            writable_missing.append(item)
+        item = {
+            key: row.get(key)
+            for key in ("cache_id", "evidence_id", "kol_pool_id", "handle")
+        }
+        projection = prepare_deep_analysis_projection(row)
+        if projection.get("status") == "ready":
+            writable_missing.append({**item, "score_status": projection.get("score_status")})
         else:
-            skipped_missing.append({**item, "reason": "missing_marketing_value_score"})
+            skipped_missing.append({**item, "reason": projection.get("reason") or "projection_not_ready"})
     profile_projection = profile_llm_projection(conn)
     return {
         "final_v1_ready": _scalar(

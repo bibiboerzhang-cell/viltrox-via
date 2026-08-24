@@ -34,13 +34,14 @@ except Exception:  # pragma: no cover - local dependency guard.
 import psycopg  # noqa: E402
 from psycopg.rows import dict_row  # noqa: E402
 from psycopg.types.json import Jsonb  # noqa: E402
-
-
-FINAL_DERIVE_METHOD = "video_analysis_final_v1"
-QA_DERIVE_METHOD = "video_analysis_final_v1_keyframe_qa"
-ANALYSIS_KIND = "video_final_v1"
-METHOD = "video_final_v1_cache_extract_v1"
-PROVIDER = "gemini"
+from app.domains.kol.final_v1_extract import (  # noqa: E402
+    ANALYSIS_KIND,
+    FINAL_DERIVE_METHOD,
+    METHOD,
+    PROVIDER,
+    QA_DERIVE_METHOD,
+    prepare_deep_analysis_projection,
+)
 
 
 @dataclass(frozen=True)
@@ -49,7 +50,7 @@ class PreparedResult:
     kol_pool_id: int
     source_url: str
     source_evidence_id: int
-    llm_v6_fit: Decimal
+    llm_v6_fit: Decimal | None
     confidence: Decimal | None
     llm_dimensions_11: dict[str, Any]
     action: str
@@ -88,210 +89,6 @@ def _database_url() -> str:
 
 def _connect() -> psycopg.Connection[Any]:
     return psycopg.connect(_database_url(), row_factory=dict_row)
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _truthy(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "pass", "passed"}
-
-
-def _decimal_or_none(value: Any) -> Decimal | None:
-    if value in (None, ""):
-        return None
-    try:
-        parsed = Decimal(str(value))
-    except Exception:
-        return None
-    if parsed.is_nan():
-        return None
-    if parsed < Decimal("0"):
-        return Decimal("0")
-    if parsed > Decimal("100"):
-        return Decimal("100")
-    return parsed.quantize(Decimal("0.001"))
-
-
-def _score_from_value(value: Any) -> tuple[Decimal | None, Decimal | None]:
-    if isinstance(value, dict):
-        score = _decimal_or_none(value.get("score"))
-        confidence = _decimal_or_none(value.get("confidence"))
-        if confidence is not None:
-            confidence = min(confidence, Decimal("1.000"))
-        return score, confidence
-    return _decimal_or_none(value), None
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, dict):
-        return {str(key): _json_ready(val) for key, val in value.items()}
-    if isinstance(value, list):
-        return [_json_ready(item) for item in value]
-    return value
-
-
-def _clean_text(value: Any, limit: int = 1200) -> str:
-    text = " ".join(str(value or "").replace("\x00", " ").split())
-    return text[:limit]
-
-
-def _final_payload(result: Any) -> dict[str, Any]:
-    root = _as_dict(result)
-    nested = _as_dict(root.get(FINAL_DERIVE_METHOD))
-    if _as_dict(nested.get("layer1_visual_content")):
-        return nested
-    return root
-
-
-def _qa_payload(result: Any) -> dict[str, Any]:
-    root = _as_dict(result)
-    direct = _as_dict(root.get("keyframe_qa"))
-    if direct:
-        return direct
-    nested = _as_dict(root.get("final_v1_keyframe_qa"))
-    if nested:
-        return nested
-    wrapped = _as_dict(_as_dict(root.get(QA_DERIVE_METHOD)).get("final_v1_keyframe_qa"))
-    if wrapped:
-        return wrapped
-    if any(key in root for key in ("qa_pass", "checks", "issues", "score_correction")):
-        return root
-    return {}
-
-
-def _normalised_scores(layer6: dict[str, Any]) -> dict[str, Any]:
-    scores = _as_dict(layer6.get("scores"))
-    output: dict[str, Any] = {}
-    for key, value in scores.items():
-        score, confidence = _score_from_value(value)
-        entry: dict[str, Any] = {}
-        if score is not None:
-            entry["score"] = score
-        if confidence is not None:
-            entry["confidence"] = confidence
-        if isinstance(value, dict):
-            for meta_key in ("rationale", "evidence", "reason"):
-                if value.get(meta_key) is not None:
-                    entry[meta_key] = value.get(meta_key)
-        if entry:
-            output[str(key)] = entry
-    return output
-
-
-def _marketing_score(layer6: dict[str, Any]) -> tuple[Decimal | None, Decimal | None, str]:
-    scores = _as_dict(layer6.get("scores"))
-    score, confidence = _score_from_value(scores.get("marketing_value_score"))
-    if score is not None:
-        return score, confidence, "layer6_flags_and_scores.scores.marketing_value_score"
-    score, confidence = _score_from_value(layer6.get("marketing_value_score"))
-    if score is not None:
-        return score, confidence, "layer6_flags_and_scores.marketing_value_score"
-    return None, None, ""
-
-
-def _apply_qa_score(
-    *,
-    base_score: Decimal,
-    qa_payload: dict[str, Any],
-) -> tuple[Decimal, bool, dict[str, Any]]:
-    correction = _as_dict(qa_payload.get("score_correction"))
-    corrected = _decimal_or_none(correction.get("corrected_marketing_value_score"))
-    if _truthy(correction.get("apply")) and corrected is not None:
-        return corrected, True, correction
-    return base_score, False, correction
-
-
-def _build_dimensions(
-    *,
-    row: dict[str, Any],
-    payload: dict[str, Any],
-    qa_payload: dict[str, Any],
-    base_score: Decimal,
-    final_score: Decimal,
-    score_path: str,
-    qa_adjusted: bool,
-    qa_correction: dict[str, Any],
-    confidence: Decimal | None,
-) -> dict[str, Any]:
-    layer1 = _as_dict(payload.get("layer1_visual_content"))
-    layer5 = _as_dict(payload.get("layer5_recommendations"))
-    layer6 = _as_dict(payload.get("layer6_flags_and_scores"))
-    qa_cache_id = row.get("qa_cache_id")
-    title = _clean_text(row.get("title") or row.get("video_title") or row.get("content_url"), 500)
-    dimensions: dict[str, Any] = {
-        "schema_version": "kol_llm_deep_analysis_from_final_v1_v1",
-        "source": {
-            "source_cache_id": row["final_cache_id"],
-            "source_evidence_id": row["evidence_id"],
-            "qa_source_cache_id": qa_cache_id,
-            "target_id": str(row["evidence_id"]),
-            "derive_method": FINAL_DERIVE_METHOD,
-            "qa_derive_method": QA_DERIVE_METHOD if qa_payload else None,
-            "source_url": row.get("content_url"),
-            "title": title,
-            "kol_pool_id": row["kol_pool_id"],
-            "handle": row.get("handle"),
-            "display_name": row.get("display_name"),
-            "platform": row.get("platform"),
-            "final_model": row.get("final_model"),
-            "qa_model": row.get("qa_model"),
-            "final_cost": row.get("final_cost"),
-            "qa_cost": row.get("qa_cost"),
-        },
-        "qa_source_cache_id": qa_cache_id,
-        "llm_v6_fit": {
-            "score": final_score,
-            "base_marketing_value_score": base_score,
-            "score_path": score_path,
-            "qa_adjusted": qa_adjusted,
-            "confidence": confidence,
-            "note": "Independent LLM/video deep-fit signal; not viltrox_fit_score.",
-        },
-        "scores": _normalised_scores(layer6),
-        "layer1_summary": {
-            "content_summary": layer1.get("content_summary"),
-            "scene_timeline": _as_list(layer1.get("scene_timeline"))[:12],
-            "product_presence": layer1.get("product_presence"),
-            "brand_exposure": layer1.get("brand_exposure"),
-            "competitor_presence": layer1.get("competitor_presence"),
-            "production_observations": layer1.get("production_observations"),
-        },
-        "recommendations": {
-            "cooperation_recommendation": layer5.get("cooperation_recommendation"),
-            "buyout_or_license_recommendation": layer5.get("buyout_or_license_recommendation"),
-            "next_brief_adjustments": layer5.get("next_brief_adjustments"),
-            "must_request_from_kol": layer5.get("must_request_from_kol"),
-            "budget_action": layer5.get("budget_action"),
-            "why": layer5.get("why"),
-        },
-        "risk": {
-            "risk_flags": layer6.get("risk_flags"),
-            "final_verdict": layer6.get("final_verdict"),
-            "key_hook": layer6.get("key_hook"),
-        },
-    }
-    if qa_payload:
-        dimensions["qa"] = {
-            "qa_source_cache_id": qa_cache_id,
-            "qa_pass": qa_payload.get("qa_pass"),
-            "confidence": qa_payload.get("confidence"),
-            "summary": qa_payload.get("summary"),
-            "checks": qa_payload.get("checks"),
-            "issues": qa_payload.get("issues"),
-            "score_correction": qa_correction,
-            "recommended_review_action": qa_payload.get("recommended_review_action"),
-        }
-    return _json_ready(dimensions)
 
 
 def fetch_rows(conn: psycopg.Connection[Any], *, cache_ids: list[int] | None = None) -> list[dict[str, Any]]:
@@ -397,49 +194,40 @@ def build_plan(
         if kol_pool_id is None or evidence_id is None:
             skipped.append(SkippedResult(cache_id, kol_pool_id, evidence_id, handle, "missing_kol_or_evidence"))
             continue
-        source_url = _clean_text(row.get("content_url"), 2000)
-        if not source_url:
-            skipped.append(SkippedResult(cache_id, kol_pool_id, evidence_id, handle, "missing_source_url"))
+        projection = prepare_deep_analysis_projection(row)
+        if projection.get("status") != "ready":
+            skipped.append(
+                SkippedResult(
+                    cache_id,
+                    kol_pool_id,
+                    evidence_id,
+                    handle,
+                    str(projection.get("reason") or "projection_not_ready"),
+                )
+            )
             continue
-        payload = _final_payload(row.get("final_result"))
-        layer6 = _as_dict(payload.get("layer6_flags_and_scores"))
-        base_score, confidence, score_path = _marketing_score(layer6)
-        if base_score is None:
-            skipped.append(SkippedResult(cache_id, kol_pool_id, evidence_id, handle, "missing_marketing_value_score"))
-            continue
-        qa_payload = _qa_payload(row.get("qa_result"))
-        final_score, qa_adjusted, qa_correction = _apply_qa_score(base_score=base_score, qa_payload=qa_payload)
-        dimensions = _build_dimensions(
-            row=row,
-            payload=payload,
-            qa_payload=qa_payload,
-            base_score=base_score,
-            final_score=final_score,
-            score_path=score_path,
-            qa_adjusted=qa_adjusted,
-            qa_correction=qa_correction,
-            confidence=confidence,
-        )
         action = "update" if cache_id in existing else "insert"
         prepared.append(
             PreparedResult(
                 final_cache_id=cache_id,
                 kol_pool_id=kol_pool_id,
-                source_url=source_url,
+                source_url=str(projection["source_url"]),
                 source_evidence_id=evidence_id,
-                llm_v6_fit=final_score,
-                confidence=confidence,
-                llm_dimensions_11=dimensions,
+                llm_v6_fit=projection["llm_v6_fit"],
+                confidence=projection["confidence"],
+                llm_dimensions_11=projection["llm_dimensions_11"],
                 action=action,
                 handle=handle,
                 platform=str(row.get("platform") or ""),
-                qa_cache_id=int(row["qa_cache_id"]) if row.get("qa_cache_id") is not None else None,
+                qa_cache_id=projection["qa_cache_id"],
             )
         )
     return prepared, skipped
 
 
-def _bucket(score: Decimal) -> str:
+def _bucket(score: Decimal | None) -> str:
+    if score is None:
+        return "unknown"
     if score == 0:
         return "0"
     if score < 40:
@@ -454,10 +242,10 @@ def _bucket(score: Decimal) -> str:
 
 
 def print_report(rows: list[dict[str, Any]], prepared: list[PreparedResult], skipped: list[SkippedResult]) -> None:
-    scores = [item.llm_v6_fit for item in prepared]
+    scores = [item.llm_v6_fit for item in prepared if item.llm_v6_fit is not None]
     action_counts = Counter(item.action for item in prepared)
     platform_counts = Counter(item.platform or "unknown" for item in prepared)
-    bucket_counts = Counter(_bucket(score) for score in scores)
+    bucket_counts = Counter(_bucket(item.llm_v6_fit) for item in prepared)
     qa_items = [item for item in prepared if item.qa_cache_id is not None]
     kol_ids = {item.kol_pool_id for item in prepared}
     out("mode: dry-run (no writes)")
@@ -467,6 +255,7 @@ def print_report(rows: list[dict[str, Any]], prepared: list[PreparedResult], ski
     out(f"would_update: {action_counts.get('update', 0)}")
     out(f"skipped: {len(skipped)}")
     out(f"with_qa: {len(qa_items)}")
+    out(f"score_unknown: {bucket_counts.get('unknown', 0)}")
     out(f"kol_coverage_writable: {len(kol_ids)}")
     if scores:
         avg = sum(scores, Decimal("0")) / Decimal(len(scores))
@@ -474,7 +263,7 @@ def print_report(rows: list[dict[str, Any]], prepared: list[PreparedResult], ski
         out(f"llm_v6_fit_max: {max(scores)}")
         out(f"llm_v6_fit_avg: {avg.quantize(Decimal('0.01'))}")
     out("score_distribution:")
-    for key in ["0", "1-39", "40-59", "60-74", "75-89", "90-100"]:
+    for key in ["unknown", "0", "1-39", "40-59", "60-74", "75-89", "90-100"]:
         out(f"  {key}: {bucket_counts.get(key, 0)}")
     out("platform_distribution:")
     for key, value in sorted(platform_counts.items()):

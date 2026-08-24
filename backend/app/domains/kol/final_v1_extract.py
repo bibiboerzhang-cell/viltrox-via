@@ -17,8 +17,10 @@ from psycopg.types.json import Jsonb
 FINAL_DERIVE_METHOD = "video_analysis_final_v1"
 QA_DERIVE_METHOD = "video_analysis_final_v1_keyframe_qa"
 ANALYSIS_KIND = "video_final_v1"
-METHOD = "video_final_v1_cache_extract_v1"
+METHOD = "video_final_v1_cache_extract_v2"
 PROVIDER = "gemini"
+DIMENSIONS_SCHEMA_VERSION = "kol_llm_deep_analysis_from_final_v1_v2"
+MISSING_SCORE_REASON = "source_final_v1_missing_marketing_value_score"
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -101,7 +103,10 @@ def _qa_payload(result: Any) -> dict[str, Any]:
 
 
 def _normalised_scores(layer6: dict[str, Any]) -> dict[str, Any]:
-    scores = _as_dict(layer6.get("scores"))
+    scores = dict(_as_dict(layer6.get("scores")))
+    # Preserve the documented legacy location without manufacturing a value.
+    if "marketing_value_score" not in scores and layer6.get("marketing_value_score") is not None:
+        scores["marketing_value_score"] = layer6.get("marketing_value_score")
     output: dict[str, Any] = {}
     for key, value in scores.items():
         score, confidence = _score_from_value(value)
@@ -130,10 +135,15 @@ def _marketing_score(layer6: dict[str, Any]) -> tuple[Decimal | None, Decimal | 
     return None, None, ""
 
 
-def _apply_qa_score(*, base_score: Decimal, qa_payload: dict[str, Any]) -> tuple[Decimal, bool, dict[str, Any]]:
+def _apply_qa_score(
+    *, base_score: Decimal | None, qa_payload: dict[str, Any]
+) -> tuple[Decimal | None, bool, dict[str, Any]]:
     correction = _as_dict(qa_payload.get("score_correction"))
     corrected = _decimal_or_none(correction.get("corrected_marketing_value_score"))
-    if _truthy(correction.get("apply")) and corrected is not None:
+    # A QA correction is defined as a correction of the final_v1 score, not a
+    # replacement score.  Without a source score there is no safe correction
+    # base, so keep the score unknown instead of promoting QA prose to a score.
+    if base_score is not None and _truthy(correction.get("apply")) and corrected is not None:
         return corrected, True, correction
     return base_score, False, correction
 
@@ -143,8 +153,8 @@ def _build_dimensions(
     row: dict[str, Any],
     payload: dict[str, Any],
     qa_payload: dict[str, Any],
-    base_score: Decimal,
-    final_score: Decimal,
+    base_score: Decimal | None,
+    final_score: Decimal | None,
     score_path: str,
     qa_adjusted: bool,
     qa_correction: dict[str, Any],
@@ -155,7 +165,7 @@ def _build_dimensions(
     layer6 = _as_dict(payload.get("layer6_flags_and_scores"))
     title = _clean_text(row.get("title") or row.get("video_title") or row.get("content_url"), 500)
     dimensions: dict[str, Any] = {
-        "schema_version": "kol_llm_deep_analysis_from_final_v1_v1",
+        "schema_version": DIMENSIONS_SCHEMA_VERSION,
         "source": {
             "source_cache_id": row["final_cache_id"],
             "source_evidence_id": row["evidence_id"],
@@ -176,11 +186,13 @@ def _build_dimensions(
         },
         "qa_source_cache_id": row.get("qa_cache_id"),
         "llm_v6_fit": {
+            "status": "available" if final_score is not None else "unknown",
             "score": final_score,
             "base_marketing_value_score": base_score,
-            "score_path": score_path,
+            "score_path": score_path or None,
             "qa_adjusted": qa_adjusted,
             "confidence": confidence,
+            "reason": None if final_score is not None else MISSING_SCORE_REASON,
             "note": "Independent LLM/video deep-fit signal; not viltrox_fit_score.",
         },
         "scores": _normalised_scores(layer6),
@@ -268,15 +280,21 @@ def _fetch_cache_row(conn: psycopg.Connection[Any], final_cache_id: int) -> dict
     return dict(row) if row else None
 
 
-def _prepare(row: dict[str, Any]) -> dict[str, Any]:
+def prepare_deep_analysis_projection(row: dict[str, Any]) -> dict[str, Any]:
+    """Project one validator-accepted final_v1 row without inventing a score.
+
+    ``marketing_value_score`` is useful but not part of the ready-cache truth
+    boundary: a result can contain attributable video content/evidence while a
+    scalar score is absent.  The deep-result schema deliberately allows
+    ``llm_v6_fit`` to be NULL, so preserve the analysis and mark that scalar as
+    unknown instead of either fabricating zero or discarding the whole result.
+    """
     source_url = _clean_text(row.get("content_url"), 2000)
     if not source_url:
         return {"status": "skipped", "reason": "missing_source_url", "final_cache_id": row.get("final_cache_id")}
     payload = _final_payload(row.get("final_result"))
     layer6 = _as_dict(payload.get("layer6_flags_and_scores"))
     base_score, confidence, score_path = _marketing_score(layer6)
-    if base_score is None:
-        return {"status": "skipped", "reason": "missing_marketing_value_score", "final_cache_id": row.get("final_cache_id")}
     qa = _qa_payload(row.get("qa_result"))
     final_score, qa_adjusted, qa_correction = _apply_qa_score(base_score=base_score, qa_payload=qa)
     dimensions = _build_dimensions(
@@ -302,6 +320,9 @@ def _prepare(row: dict[str, Any]) -> dict[str, Any]:
         "provider": PROVIDER,
         "confidence": confidence,
         "source_cache_id": int(row["final_cache_id"]),
+        "qa_cache_id": int(row["qa_cache_id"]) if row.get("qa_cache_id") is not None else None,
+        "score_status": "available" if final_score is not None else "unknown",
+        "score_missing_reason": None if final_score is not None else MISSING_SCORE_REASON,
     }
 
 
@@ -336,7 +357,7 @@ def upsert_deep_analysis_from_final_v1_cache(conn: psycopg.Connection[Any], fina
     row = _fetch_cache_row(conn, int(final_cache_id))
     if not row:
         return {"status": "skipped", "reason": "cache_not_found", "source_cache_id": int(final_cache_id)}
-    prepared = _prepare(row)
+    prepared = prepare_deep_analysis_projection(row)
     if prepared.get("status") != "ready":
         return prepared
     existing_ids = _existing_result_ids(conn, int(final_cache_id))
@@ -431,7 +452,9 @@ def upsert_deep_analysis_from_final_v1_cache(conn: psycopg.Connection[Any], fina
         "source_cache_id": int(final_cache_id),
         "source_evidence_id": prepared["source_evidence_id"],
         "kol_pool_id": kol_pool_id,
-        "llm_v6_fit": float(prepared["llm_v6_fit"]),
+        "llm_v6_fit": float(prepared["llm_v6_fit"]) if prepared["llm_v6_fit"] is not None else None,
         "confidence": float(prepared["confidence"]) if prepared["confidence"] is not None else None,
+        "score_status": prepared["score_status"],
+        "score_missing_reason": prepared["score_missing_reason"],
         "viltrox_fit_score_changed_ids": [],
     }
