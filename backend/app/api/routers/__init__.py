@@ -116,6 +116,8 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_my_kol",
     # C5 观察清单:MY KOL 分组进度总览两 GET(纯读零 provider,append-only,2026-08-23)
     "vkpi_my_kol_watchlist",
+    # 波 D·B:一键数据关注 POST + 按产品聚合播放总览 GET(写口全复用追踪围栏,append-only,2026-08-23)
+    "vkpi_my_kol_sku_play",
     "vkpi_operating_review",
     "vkpi_operations",
     "vkpi_pillars",
