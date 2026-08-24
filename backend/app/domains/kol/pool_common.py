@@ -10,6 +10,7 @@ from app.core.logging import get_logger
 from app.db.connection import is_postgres_runtime
 from app.domains.kol.metric_truth import project_pool_item_truth
 from app.domains.kol.pool_read_response_cache import store_pool_read_payload
+from app.domains.kol.pool_transport import normalize_pool_transport_types
 from app.services.cache import cache_clear, cache_set
 from app.services.system import staff as staff_service
 
@@ -324,14 +325,7 @@ def mask_pool_item(
     """
     if not isinstance(item, dict):
         return item
-    masked = project_pool_item_truth(item)
-    # PostgreSQL NUMERIC values arrive as Decimal.  FastAPI serializes a cold
-    # Decimal as a JSON string while the shared cache normalizes it to a float,
-    # which made the same card change transport type after the first request.
-    # Keep the public score numeric at the DTO boundary; this is read-only and
-    # never changes the persisted fit score or its ordering semantics.
-    if "viltrox_fit_score" in masked:
-        masked["viltrox_fit_score"] = _float_or_none(masked.get("viltrox_fit_score"))
+    masked = normalize_pool_transport_types(project_pool_item_truth(item))
     from app.domains.kol.contact_system import project_public_profile_url
     for profile_key in ("profile_url", "profileUrl", "channel_url", "channelUrl"):
         if profile_key in masked:
@@ -400,7 +394,6 @@ def _clear_kol_pool_read_cache() -> None:
         logger.warning("vkpi kol pool cache clear failed: %s", exc)
     from app.domains.kol.pool_read_projection_cache import clear_pool_read_selection_cache
     clear_pool_read_selection_cache()
-
 def _kol_pool_cache_hit(payload: Any) -> Any:
     if isinstance(payload, dict):
         result = dict(payload)
