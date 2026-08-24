@@ -8,7 +8,12 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.domains.kol.history_match import _avatar_from_raw, _recent_post_summary
+from app.domains.kol.history_match import _recent_post_summary
+from app.domains.kol.pool_read_projection import (
+    pool_read_public_fields,
+    prepare_pool_read_selection,
+    project_pool_match_rows,
+)
 
 
 logger = get_logger(__name__)
@@ -149,6 +154,7 @@ def _kol_pool_evidence(data: dict[str, Any], avatar_url: str, recent_posts: list
     evidence = {key: data.get(key) for key in keys}
     evidence["avatar_url"] = avatar_url
     evidence["recent_posts"] = recent_posts
+    evidence.update(pool_read_public_fields(data))
     return evidence
 
 
@@ -182,24 +188,28 @@ def _where_like(columns: list[str], tokens: list[str]) -> tuple[str, list[Any]]:
 
 def _search_kol_pool(tokens: list[str], limit: int) -> list[dict[str, Any]]:
     where, params = _where_like(["handle", "display_name", "platform", "country", "bio", "profile_url"], tokens)
-    rows = get_conn().execute(
+    conn = get_conn()
+    fetch_limit = max(limit, min(500, limit * 4))
+    rows = conn.execute(
         f"""
         SELECT id, platform, handle, display_name, country, bio, profile_url, avatar_url,
                sync_status, followers, posts_count, avg_views, avg_likes, avg_comments,
-               engagement_rate, raw_platform_data, last_seen_at, updated_at
+               engagement_rate, raw_platform_data, last_seen_at, updated_at,
+               duplicate_of_id
         FROM vkpi_kol_pool
-        WHERE {where}
+        WHERE duplicate_of_id IS NULL AND ({where})
         ORDER BY id DESC
         LIMIT ?
         """,
-        (*params, limit),
+        (*params, fetch_limit),
     ).fetchall()
+    selection = prepare_pool_read_selection(conn, clause="WHERE duplicate_of_id IS NULL", params=())
+    projected_rows = project_pool_match_rows(conn, [_row(row) for row in rows], selection)
     results = []
-    for row in rows:
-        data = _row(row)
+    for data in projected_rows:
         title = _text(data.get("display_name")) or _text(data.get("handle")) or f"KOL #{data.get('id')}"
         raw = _json_obj(data.get("raw_platform_data"))
-        avatar_url = _text(data.get("avatar_url")) or _avatar_from_raw(raw)
+        avatar_url = _text(data.get("avatar_url"))
         recent_posts = _recent_post_summary(raw, limit=4)
         evidence = _kol_pool_evidence(data, avatar_url, recent_posts)
         results.append(
@@ -218,9 +228,10 @@ def _search_kol_pool(tokens: list[str], limit: int) -> list[dict[str, Any]]:
                 "posts_count": data.get("posts_count"),
                 "sync_status": data.get("sync_status"),
                 "evidence": evidence,
+                **pool_read_public_fields(data),
             }
         )
-    return results
+    return results[:limit]
 
 
 def _search_memory_entities(tokens: list[str], limit: int) -> list[dict[str, Any]]:

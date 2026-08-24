@@ -117,12 +117,11 @@ def test_data_quality_list_never_bootstraps_action_schema(monkeypatch) -> None:
     assert isinstance(result["issues"], list)
 
 
-def test_memory_readiness_never_runs_migrations_under_release_fence(
+def test_memory_readiness_never_runs_migrations(
     monkeypatch,
 ) -> None:
-    """B 线口径:发布验证围栏激活时,Memory readiness 只 SELECT、不跑 bootstrap。"""
+    """Memory readiness 在任意运行态都只 SELECT、不跑 schema bootstrap。"""
     connection = _ReadOnlyConnection()
-    monkeypatch.setattr(memory_feedback, "release_validation_active", lambda: True)
     monkeypatch.setattr(memory_feedback, "get_conn", lambda: connection)
     monkeypatch.setattr(
         memory_feedback, "ensure_memory_schema", _unexpected_schema_bootstrap

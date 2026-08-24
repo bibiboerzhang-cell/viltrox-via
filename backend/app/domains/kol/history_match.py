@@ -7,6 +7,12 @@ from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
+from app.domains.kol.pool_read_projection import (
+    pool_read_public_fields,
+    prepare_pool_read_selection,
+    project_pool_avatar,
+    project_pool_match_rows,
+)
 
 
 from app.core.coerce import _text
@@ -304,7 +310,9 @@ def _recent_post_summary(raw: dict[str, Any], *, limit: int = 6) -> list[dict[st
     return rows
 
 
-def _recent_evidence_posts(conn, pool_id: int, *, limit: int = 6) -> tuple[list[dict[str, Any]], float | None]:
+def _recent_evidence_posts(
+    conn, pool_id: int, *, limit: int = 6,
+) -> tuple[list[dict[str, Any]], float | None, bool]:
     """Return real evidence rows for the mover preview; never synthesizes trend points."""
     try:
         rows = conn.execute(
@@ -343,12 +351,12 @@ def _recent_evidence_posts(conn, pool_id: int, *, limit: int = 6) -> tuple[list[
             (int(pool_id), max(1, min(24, int(limit)))),
         ).fetchall()
     except Exception:
-        return [], None
+        return [], None, False
     posts = [dict(row) | {"source_kind": "vkpi_kol_video_evidence"} for row in rows]
     total_views = sum(_int(post.get("views")) for post in posts)
     total_engagement = sum(_int(post.get("likes")) + _int(post.get("comments")) for post in posts)
     engagement_rate = round(total_engagement / total_views * 100, 3) if total_views > 0 else None
-    return posts, engagement_rate
+    return posts, engagement_rate, True
 
 
 def _cooperation_summary(conn, pool_id: int, raw: dict[str, Any]) -> dict[str, Any]:
@@ -358,7 +366,8 @@ def _cooperation_summary(conn, pool_id: int, raw: dict[str, Any]) -> dict[str, A
     risk_rows = _int(evidence.get("risk_rows"))
     evidence_count = _int(evidence.get("evidence_count"))
     recent: list[dict[str, Any]] = []
-    if _table_exists(conn, "vkpi_legacy_cooperations_staging"):
+    evidence_query_available = _table_exists(conn, "vkpi_legacy_cooperations_staging")
+    if evidence_query_available:
         try:
             count_row = conn.execute(
                 """
@@ -382,20 +391,118 @@ def _cooperation_summary(conn, pool_id: int, raw: dict[str, Any]) -> dict[str, A
             recent = [dict(row) for row in rows]
         except Exception:
             recent = []
+            evidence_query_available = False
     return {
         "cooperation_count": cooperation_count,
         "profile_rows": profile_rows,
         "risk_rows": risk_rows,
         "evidence_count": evidence_count,
         "recent_cooperations": recent,
+        "_evidence_query_available": evidence_query_available,
     }
 
 
+def _history_scope_ids(row: dict[str, Any]) -> list[int]:
+    values = [row.get("id"), *(row.get("canonical_duplicate_ids") or [])]
+    return list(dict.fromkeys(_int(value) for value in values if _int(value)))
+
+
+def _canonical_history_evidence(
+    conn: Any,
+    row: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], float | None, str, list[int], bool]:
+    scope_ids = _history_scope_ids(row)
+    evidence_scope_partial = False
+    raw_by_id = {_int(row.get("id")): _pool_raw(row)}
+    if len(scope_ids) > 1:
+        placeholders = ",".join("?" for _ in scope_ids)
+        try:
+            rows = conn.execute(
+                f"SELECT id, raw_platform_data FROM vkpi_kol_pool WHERE id IN ({placeholders})",
+                tuple(scope_ids),
+            ).fetchall()
+        except Exception:
+            rows = []
+            evidence_scope_partial = True
+        raw_by_id.update({
+            _int(value["id"]): _pool_raw({"raw_platform_data": value["raw_platform_data"]})
+            for value in rows
+        })
+    summaries = [
+        _cooperation_summary(conn, pool_id, raw_by_id.get(pool_id, {}))
+        for pool_id in scope_ids
+    ]
+    recent_cooperations: list[dict[str, Any]] = []
+    seen_cooperations: set[tuple[str, ...]] = set()
+    for summary in summaries:
+        for cooperation in summary.get("recent_cooperations") or []:
+            key = tuple(
+                _text(cooperation.get(field))
+                for field in ("content_link", "project", "product", "cooperation_date")
+            )
+            if key in seen_cooperations:
+                continue
+            seen_cooperations.add(key)
+            recent_cooperations.append(cooperation)
+    recent_cooperations.sort(key=lambda item: _text(item.get("cooperation_date")), reverse=True)
+    combined_summary = {
+        key: sum(_int(summary.get(key)) for summary in summaries)
+        for key in ("cooperation_count", "profile_rows", "risk_rows", "evidence_count")
+    }
+    if any(not summary.get("_evidence_query_available") for summary in summaries):
+        evidence_scope_partial = True
+    combined_summary["recent_cooperations"] = recent_cooperations[:5]
+    evidence_posts: list[dict[str, Any]] = []
+    engagement_rate_source = "unavailable"
+    seen_posts: set[str] = set()
+    for pool_id in scope_ids:
+        posts, _rate, available = _recent_evidence_posts(conn, pool_id, limit=6)
+        if not available:
+            evidence_scope_partial = True
+        for post in posts:
+            key = _first_text(post.get("id"), post.get("url"), post.get("post_url"), post.get("title"))
+            if not key or key in seen_posts:
+                continue
+            seen_posts.add(key)
+            evidence_posts.append(post)
+    if evidence_posts:
+        engagement_rate_source = "vkpi_kol_video_evidence"
+    evidence_posts.sort(
+        key=lambda item: (_text(item.get("published_at")), _int(item.get("views"))),
+        reverse=True,
+    )
+    evidence_posts = evidence_posts[:6]
+    if not evidence_posts:
+        for pool_id in scope_ids:
+            for post in _recent_post_summary(raw_by_id.get(pool_id, {}), limit=6):
+                key = _first_text(post.get("id"), post.get("url"), post.get("title"))
+                if key and key not in seen_posts:
+                    seen_posts.add(key)
+                    evidence_posts.append(post)
+        evidence_posts = evidence_posts[:6]
+        if evidence_posts:
+            engagement_rate_source = "history_pool_sample"
+    total_views = sum(_int(post.get("views")) for post in evidence_posts)
+    engagement = sum(_int(post.get("likes")) + _int(post.get("comments")) for post in evidence_posts)
+    rate = round(engagement / total_views * 100, 3) if total_views else None
+    return (
+        combined_summary, evidence_posts, rate, engagement_rate_source,
+        scope_ids, evidence_scope_partial,
+    )
+
+
 def _history_payload(conn, row: dict[str, Any], *, match_type: str, confidence: float) -> dict[str, Any]:
-    raw = _pool_raw(row)
-    summary = _cooperation_summary(conn, int(row.get("id") or 0), raw)
-    evidence_posts, evidence_engagement_rate = _recent_evidence_posts(conn, int(row.get("id") or 0))
-    avatar_url = _text(row.get("avatar_url")) or _avatar_from_raw(raw)
+    (
+        summary, evidence_posts, evidence_engagement_rate,
+        engagement_rate_source, scope_ids, evidence_scope_partial,
+    ) = _canonical_history_evidence(conn, row)
+    avatar = (
+        {key: row.get(key) for key in (
+            "avatar_url", "avatar_url_status", "avatar_upstream_status",
+            "avatar_url_source", "avatar_fallback", "avatar_health",
+        )}
+        if row.get("avatar_url_status") else project_pool_avatar(row)
+    )
     return {
         "matched": True,
         "source": "vkpi_kol_pool",
@@ -407,15 +514,18 @@ def _history_payload(conn, row: dict[str, Any], *, match_type: str, confidence: 
         "handle": _text(row.get("handle")),
         "display_name": _text(row.get("display_name")),
         "profile_url": _text(row.get("profile_url")),
-        "avatar_url": avatar_url,
+        "avatar_url": avatar["avatar_url"],
+        **pool_read_public_fields({**row, **avatar}),
         "followers": _int(row.get("followers")),
         "avg_views": _int(row.get("avg_views")),
         "source_type": _text(row.get("source_type")),
         "source_ref": _text(row.get("source_ref")),
         "sync_status": _text(row.get("sync_status")),
-        "recent_posts": evidence_posts or _recent_post_summary(raw),
+        "recent_posts": evidence_posts,
         "engagement_rate": evidence_engagement_rate,
-        "engagement_rate_source": "vkpi_kol_video_evidence" if evidence_engagement_rate is not None else "unavailable",
+        "engagement_rate_source": engagement_rate_source,
+        "evidence_scope_pool_ids": scope_ids,
+        "evidence_scope_partial": evidence_scope_partial,
         **summary,
     }
 
@@ -492,9 +602,16 @@ def _fetch_pool_by_names(conn, platform: str, names: list[str]) -> tuple[dict[st
     return None, ""
 
 
-def find_history_match(item: dict[str, Any], *, platform: str = "") -> dict[str, Any] | None:
-    ensure_vkpi_product_industry_schema()
-    conn = get_conn()
+def find_history_match(
+    item: dict[str, Any],
+    *,
+    platform: str = "",
+    _conn: Any | None = None,
+    _selection: Any | None = None,
+) -> dict[str, Any] | None:
+    if _conn is None:
+        ensure_vkpi_product_industry_schema()
+    conn = _conn or get_conn()
     normalized_platform = _platform(item.get("platform") or platform)
     handles = _candidate_handles(item)
     row, match_type = _fetch_pool_by_handles(conn, normalized_platform, handles)
@@ -504,14 +621,28 @@ def find_history_match(item: dict[str, Any], *, platform: str = "") -> dict[str,
         confidence = 0.78
     if not row:
         return None
+    selection = _selection or prepare_pool_read_selection(
+        conn, clause="WHERE duplicate_of_id IS NULL", params=(),
+    )
+    projected_rows = project_pool_match_rows(conn, [row], selection)
+    if not projected_rows:
+        return None
+    row = projected_rows[0]
     return _history_payload(conn, row, match_type=match_type, confidence=confidence)
 
 
 def annotate_platform_items(items: list[dict[str, Any]], *, platform: str = "") -> list[dict[str, Any]]:
+    if not items:
+        return []
+    ensure_vkpi_product_industry_schema()
+    conn = get_conn()
+    selection = prepare_pool_read_selection(conn, clause="WHERE duplicate_of_id IS NULL", params=())
     annotated: list[dict[str, Any]] = []
     for item in items:
         row = dict(item or {})
-        match = find_history_match(row, platform=platform)
+        match = find_history_match(
+            row, platform=platform, _conn=conn, _selection=selection,
+        )
         if match:
             row["historical_match"] = match
             row["history_kol_pool_id"] = match.get("kol_pool_id")
@@ -558,6 +689,7 @@ def search_pool_for_natural(query: str, parsed: dict[str, Any], *, limit: int = 
             like = f"%{token}%"
             params.extend([like, like, like, like, like])
         where.append("(" + " OR ".join(parts) + ")")
+    where.append("duplicate_of_id IS NULL")
     clause = "WHERE " + " AND ".join(where) if where else ""
     rows = conn.execute(
         f"""
@@ -573,14 +705,15 @@ def search_pool_for_natural(query: str, parsed: dict[str, Any], *, limit: int = 
         """,
         (*params, fetch_limit),
     ).fetchall()
+    selection = prepare_pool_read_selection(conn, clause="WHERE duplicate_of_id IS NULL", params=())
+    projected_rows = project_pool_match_rows(conn, [dict(row) for row in rows], selection)
     results: list[dict[str, Any]] = []
-    for row in rows:
-        data = dict(row)
+    for data in projected_rows:
         history = _history_payload(conn, data, match_type="natural_pool_search", confidence=0.7)
         if parsed.get("requires_collaboration") and not _int(history.get("cooperation_count")):
             continue
         recent_posts = history.get("recent_posts") or []
-        avatar_url = _text(data.get("avatar_url")) or _text(history.get("avatar_url"))
+        avatar_url = _text(data.get("avatar_url"))
         base_score = _int(data.get("viltrox_fit_score"), 42)
         evidence_boost = min(8, len(recent_posts) * 3) + (2 if avatar_url else 0)
         score = min(100, max(base_score, 42) + min(24, _int(history.get("cooperation_count")) * 6) + evidence_boost)
@@ -623,6 +756,7 @@ def search_pool_for_natural(query: str, parsed: dict[str, Any], *, limit: int = 
                 "latest_posts": recent_posts,
                 "posts": recent_posts,
                 "historical_match": history,
+                **pool_read_public_fields(data),
             }
         )
     results.sort(

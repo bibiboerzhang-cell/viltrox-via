@@ -129,7 +129,6 @@ def _slow_path_env(monkeypatch: pytest.MonkeyPatch, commands: list[list[str]]) -
     monkeypatch.setattr(gemini_video_youtube, "GEMINI_AVAILABLE", True)
     monkeypatch.setattr(gemini_video_youtube, "gemini_client", object())
     monkeypatch.setattr(gemini_video_youtube, "YTDLP_AVAILABLE", True)
-    monkeypatch.setattr(gemini_video_youtube, "YTDLP_BIN", "yt-dlp")
     monkeypatch.setattr(gemini_video_youtube, "YTDLP_PROXY", "")
     monkeypatch.setattr(gemini_video_youtube, "get_creator_profile", lambda _handle: {})
     monkeypatch.setattr(gemini_video_youtube, "fetch_youtube_subtitles", lambda _url: "")
@@ -159,10 +158,40 @@ def test_slow_path_defaults_keep_720p_and_no_cookies(monkeypatch: pytest.MonkeyP
     assert result["analyzed"] is False
     assert len(commands) == 1
     cmd = commands[0]
+    assert cmd[:3] == [gemini_video_youtube.sys.executable, "-m", "yt_dlp"]
     assert cmd[cmd.index("-f") + 1] == "best[ext=mp4][height<=720]/18/best[height<=720]/best"
     assert "--cookies" not in cmd
     assert result["download_diagnostics"]["max_height"] == 720
     assert result["download_diagnostics"]["cookies"] is False
+
+
+def test_slow_path_redacts_proxy_credentials_from_result_and_log(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    commands: list[list[str]] = []
+    _slow_path_env(monkeypatch, commands)
+
+    def _run(cmd: list[str], **_kwargs: Any) -> Any:
+        commands.append(list(cmd))
+        return SimpleNamespace(
+            returncode=1,
+            stderr=b"proxy failed http://user:secret@proxy.example:8080 token=abc123",
+            stdout=b"",
+        )
+
+    monkeypatch.setattr(gemini_video_youtube.subprocess, "run", _run)
+    with caplog.at_level("WARNING"):
+        result = asyncio.run(
+            gemini_video_youtube.analyze_youtube_with_gemini(
+                CANON, "demo", schema_version="final_v1", models=["gemini-3.6-flash"],
+            )
+        )
+
+    diagnostics = result["download_diagnostics"]["stderr_tail"]
+    assert "secret" not in diagnostics and "abc123" not in diagnostics
+    assert "http://***@proxy.example:8080" in diagnostics
+    assert "secret" not in caplog.text and "abc123" not in caplog.text
 
 
 def test_slow_path_env_levers_lower_resolution_and_pass_cookies(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:

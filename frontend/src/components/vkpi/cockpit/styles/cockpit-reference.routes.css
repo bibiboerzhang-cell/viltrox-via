@@ -332,6 +332,17 @@
   margin: 0 auto;
 }
 
+/*
+ * 大屏不再把 12 列看板压在屏幕中间的窄带里。阈值与字号
+ * 舒适档一致；主区域仍是 width:100%，所以 1920px 边界附近不会
+ * 撑出水平滚动。
+ */
+@media (min-width: 1920px) {
+  .vkpi-dashboard-canvas {
+    max-width: 1920px;
+  }
+}
+
 .vkpi-board-edit-hint {
   display: flex;
   align-items: center;
@@ -343,7 +354,7 @@
   border-radius: var(--ds-radius-md);
   color: var(--ds-muted);
   background: var(--ds-accent-soft);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-board-edit-hint strong {
@@ -361,7 +372,7 @@
   gap: 4px;
   margin-left: 8px;
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-board-edit-hint__sync::before {
@@ -388,7 +399,7 @@
   border-radius: var(--ds-radius-sm);
   color: var(--ds-text-2);
   background: var(--ds-panel) !important;
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   white-space: nowrap;
 }
 
@@ -603,7 +614,7 @@
   border-radius: var(--ds-radius-lg);
   color: var(--ds-muted);
   background: color-mix(in srgb, var(--ds-panel) 45%, transparent) !important;
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .vkpi-board-add:hover {
@@ -662,7 +673,7 @@
 .vkpi-module-palette__head p {
   margin: 0;
   color: var(--ds-muted);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-module-palette__eyebrow {
@@ -671,7 +682,7 @@
   gap: 6px;
   color: var(--ds-accent);
   font-family: var(--ds-font-mono);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -712,7 +723,7 @@
   outline: 0;
   color: var(--ds-text);
   background: transparent;
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .vkpi-module-palette__search input::placeholder {
@@ -743,7 +754,7 @@
   justify-content: space-between;
   margin: 0 0 8px;
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -767,7 +778,7 @@
   justify-content: space-between;
   margin: 0 0 7px;
   color: var(--ds-text-2);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   font-weight: 650;
 }
 
@@ -777,7 +788,7 @@
   border-radius: var(--ds-radius-md);
   color: var(--ds-muted);
   text-align: center;
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .vkpi-module-palette__grid {
@@ -811,13 +822,13 @@
 
 .vkpi-module-palette__grid strong {
   color: var(--ds-text);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .vkpi-module-palette__grid span {
   margin-top: 4px;
   color: var(--ds-muted);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
   line-height: 1.45;
 }
 
@@ -826,5 +837,5 @@
   padding-top: 8px;
   color: var(--ds-accent);
   font-family: var(--ds-font-mono);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
 }

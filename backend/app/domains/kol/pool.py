@@ -80,6 +80,12 @@ from app.domains.kol.pool_summary import (
     build_pool_summary as _build_pool_summary,
     canonical_discovery_funnel_counts as _canonical_discovery_funnel_counts,
 )
+from app.domains.kol.pool_read_projection import (
+    pool_read_match_clause,
+    prepare_pool_read_selection,
+)
+from app.domains.kol.pool_read_projection_facets import pool_read_data_status_ids, pool_read_workspace_facets
+from app.domains.kol.pool_read_projection_evidence import project_pool_list_items
 
 # detail_bundle 的 try/except 块此前引用 logger 却从未定义(潜伏 NameError);补齐模块级 logger。
 logger = get_logger(__name__)
@@ -297,12 +303,12 @@ def list_pool(
     ensure_vkpi_product_industry_schema()
     safe_limit = max(1, min(500, int(limit or 100)))
     safe_offset = max(0, int(offset or 0))
-    # Bulk results are shared-cacheable and therefore always contact-safe.
-    # Plaintext is available only through audited single-item detail routes.
     del contact_visibility
     normalized_contact_visibility = CONTACT_VISIBILITY_MASKED
+    conn = get_conn()
+    selection = prepare_pool_read_selection(conn, clause="WHERE duplicate_of_id IS NULL", params=())
     cache_key = _kol_pool_cache_key(
-        "list",
+        "list-canonical-projection-v2",
         limit=safe_limit,
         offset=safe_offset,
         platform=_platform(platform) if platform else "",
@@ -312,6 +318,7 @@ def list_pool(
         sort_by=str(sort_by or "fit").strip().lower(),
         enrichable="any" if enrichable is None else str(bool(enrichable)).lower(),
         contact_visibility=normalized_contact_visibility,
+        source_revision=selection.diagnostics.get("source_revision", "unavailable"),
     )
     cached = cache_get(cache_key)
     if cached is not None:
@@ -320,25 +327,35 @@ def list_pool(
         platform=platform,
         query=query,
         country=country,
-        data_status=data_status,
+        data_status="",
         enrichable=enrichable,
     )
+    structural_clause, structural_params = _pool_filter_clause(
+        platform=platform, country=country, data_status="", enrichable=enrichable,
+    )
+    match_clause, match_params = _pool_filter_clause(query=query) if str(query or "").strip() else (clause, params)
     order_clause = _sort_clause(sort_by)
-    conn = get_conn()
+    allowed_ids = pool_read_data_status_ids(selection, data_status)
+    projected_clause, projected_params = pool_read_match_clause(
+        conn, match_clause, match_params, selection, canonical_clause=structural_clause,
+        canonical_params=structural_params, remap_alias_matches=bool(str(query or "").strip()),
+        allowed_ids=allowed_ids,
+    )
     table_columns = _table_columns(conn, "vkpi_kol_pool")
     select_columns = [column for column in KOL_POOL_LIST_COLUMNS if column in table_columns]
     select_clause = (", ".join(select_columns) + ", " + KOL_POOL_LIST_EXTRA_SELECT) if "id" in select_columns else "*"
     rows = conn.execute(
-        f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
-        (*params, safe_limit, safe_offset),
+        f"SELECT {select_clause} FROM vkpi_kol_pool {projected_clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
+        (*projected_params, safe_limit, safe_offset),
     ).fetchall()
     return _kol_pool_cache_store(
         cache_key,
         {
-            "items": [
-                mask_pool_item(dict(row), contact_visibility=normalized_contact_visibility)
-                for row in rows
-            ]
+            "items": project_pool_list_items(
+                conn, rows, selection, mask_fn=mask_pool_item,
+                contact_visibility=normalized_contact_visibility,
+            ),
+            "projection": selection.diagnostics,
         },
     )
 
@@ -424,11 +441,12 @@ def workspace(
     normalized_query = str(query or "").strip()
     normalized_data_status = str(data_status or "").strip().lower()
     normalized_sort = str(sort_by or "fit").strip().lower()
-    # Workspace pages are bulk and shared-cacheable: never cache contact truth.
     del contact_visibility
     normalized_contact_visibility = CONTACT_VISIBILITY_MASKED
+    conn = get_conn()
+    selection = prepare_pool_read_selection(conn, clause="WHERE duplicate_of_id IS NULL", params=())
     cache_key = _kol_pool_cache_key(
-        "workspace",
+        "workspace-canonical-projection-v2",
         limit=safe_limit,
         offset=safe_offset,
         platform=normalized_platform,
@@ -438,62 +456,41 @@ def workspace(
         sort_by=normalized_sort,
         enrichable="any" if enrichable is None else str(bool(enrichable)).lower(),
         contact_visibility=normalized_contact_visibility,
+        source_revision=selection.diagnostics.get("source_revision", "unavailable"),
     )
     cached = cache_get(cache_key)
     if cached is not None:
         return _kol_pool_cache_hit(cached)
 
-    conn = get_conn()
     clause, params = _pool_filter_clause(
         platform=normalized_platform,
         query=normalized_query,
         country=normalized_country,
-        data_status=normalized_data_status,
+        data_status="",
         enrichable=enrichable,
     )
+    structural_clause, structural_params = _pool_filter_clause(
+        platform=normalized_platform, country=normalized_country,
+        data_status="", enrichable=enrichable,
+    )
+    match_clause, match_params = _pool_filter_clause(query=normalized_query) if normalized_query else (clause, params)
     order_clause = _sort_clause(normalized_sort)
+    allowed_ids = pool_read_data_status_ids(selection, normalized_data_status)
+    projected_clause, projected_params = pool_read_match_clause(
+        conn, match_clause, match_params, selection, canonical_clause=structural_clause,
+        canonical_params=structural_params, remap_alias_matches=bool(normalized_query),
+        allowed_ids=allowed_ids,
+    )
     table_columns = _table_columns(conn, "vkpi_kol_pool")
     select_columns = [column for column in KOL_POOL_LIST_COLUMNS if column in table_columns]
     select_clause = (", ".join(select_columns) + ", " + KOL_POOL_LIST_EXTRA_SELECT) if "id" in select_columns else "*"
     rows = conn.execute(
-        f"SELECT {select_clause} FROM vkpi_kol_pool {clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
-        (*params, safe_limit, safe_offset),
+        f"SELECT {select_clause} FROM vkpi_kol_pool {projected_clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
+        (*projected_params, safe_limit, safe_offset),
     ).fetchall()
-    filtered = conn.execute(
-        f"SELECT COUNT(*) AS n FROM vkpi_kol_pool {clause}",
-        tuple(params),
-    ).fetchone()
-    filtered_count = int(filtered["n"] if filtered else 0)
+    filtered_count = int(conn.execute(f"SELECT COUNT(*) AS n FROM vkpi_kol_pool {projected_clause}", projected_params).fetchone()["n"])
     all_summary = summary()
-    by_candidate_kind = conn.execute(
-        "SELECT COALESCE(NULLIF(candidate_kind, ''), 'unknown') AS candidate_kind, COUNT(*) AS n "
-        "FROM vkpi_kol_pool WHERE duplicate_of_id IS NULL "
-        "GROUP BY COALESCE(NULLIF(candidate_kind, ''), 'unknown') ORDER BY n DESC, candidate_kind ASC"
-    ).fetchall() if "candidate_kind" in table_columns else []
-    by_data_status = {
-        "complete": int(conn.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM vkpi_kol_pool
-            WHERE duplicate_of_id IS NULL
-              AND avatar_url IS NOT NULL AND avatar_url!=''
-              AND avg_views IS NOT NULL
-              AND engagement_rate IS NOT NULL
-              AND viltrox_fit_score IS NOT NULL
-            """
-        ).fetchone()["n"]),
-        "missing": int(conn.execute(
-            """
-            SELECT COUNT(*) AS n
-            FROM vkpi_kol_pool
-            WHERE duplicate_of_id IS NULL
-              AND (avatar_url IS NULL OR avatar_url=''
-               OR avg_views IS NULL
-               OR engagement_rate IS NULL
-               OR viltrox_fit_score IS NULL)
-            """
-        ).fetchone()["n"]),
-    }
+    by_candidate_kind, by_data_status = pool_read_workspace_facets(conn, selection, table_columns)
     countries = all_summary.get("country_distribution") if isinstance(all_summary.get("country_distribution"), list) else []
     payload = {
         "status": "ready",
@@ -539,10 +536,10 @@ def workspace(
             "items": countries,
         },
         "list": {
-            "items": [
-                mask_pool_item(dict(row), contact_visibility=normalized_contact_visibility)
-                for row in rows
-            ],
+            "items": project_pool_list_items(
+                conn, rows, selection, mask_fn=mask_pool_item,
+                contact_visibility=normalized_contact_visibility,
+            ),
             "limit": safe_limit,
             "offset": safe_offset,
             "sort_by": normalized_sort,
@@ -557,6 +554,7 @@ def workspace(
             "write_db": False,
             "viltrox_fit_score_write": False,
             "cache": "kol_pool_read_cache",
+            "read_projection": selection.diagnostics,
         },
     }
     return _kol_pool_cache_store(cache_key, payload)

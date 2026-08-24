@@ -9,7 +9,7 @@
   canvas { display: block; }
   .globe-hint {
     position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
-    font-size: 10px; color: var(--ds-muted); letter-spacing: 0.15em;
+    font-size: var(--ds-cockpit-fs-10); color: var(--ds-muted); letter-spacing: 0.15em;
     text-transform: uppercase; pointer-events: none; user-select: none;
   }
   /* Leaflet 跟随全局明暗主题(隔离皮肤刀:控件全 token) */
@@ -35,7 +35,7 @@
   .leaflet-control-attribution {
     background: color-mix(in srgb, var(--ds-panel) 85%, transparent) !important;
     color: var(--ds-muted) !important;
-    font-size: 9px !important;
+    font-size: var(--ds-cockpit-fs-9) !important;
     backdrop-filter: blur(10px);
   }
   .leaflet-control-attribution a {
@@ -79,7 +79,7 @@
     background: color-mix(in srgb, var(--cluster-color) 78%, var(--ds-card));
     box-shadow: 0 0 0 5px color-mix(in srgb, var(--cluster-color) 18%, transparent), 0 6px 18px rgba(0,0,0,.28);
     color: white;
-    font-size: 11px;
+    font-size: var(--ds-cockpit-fs-11);
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     cursor: pointer;
@@ -98,7 +98,7 @@
   }
   .vkpi-map-cluster-popup .leaflet-popup-content { margin: 10px; }
   .vkpi-map-cluster-members { display: grid; gap: 6px; min-width: 180px; }
-  .vkpi-map-cluster-members__title { color: var(--ds-muted); font-size: 10px; font-weight: 600; }
+  .vkpi-map-cluster-members__title { color: var(--ds-muted); font-size: var(--ds-cockpit-fs-10); font-weight: 600; }
   .vkpi-map-cluster-members__item {
     width: 100%;
     border: 1px solid var(--ds-line);
@@ -108,7 +108,7 @@
     padding: 7px 9px;
     text-align: left;
     font: inherit;
-    font-size: 11px;
+    font-size: var(--ds-cockpit-fs-11);
     cursor: pointer;
   }
   .vkpi-map-cluster-members__item:hover,
@@ -130,7 +130,7 @@
     border: 1px solid var(--ds-line-strong);
     backdrop-filter: blur(8px);
     color: var(--ds-text);
-    font-size: 10px;
+    font-size: var(--ds-cockpit-fs-10);
     padding: 3px 8px;
     border-radius: 6px;
     white-space: nowrap;
@@ -182,13 +182,13 @@
     justify-content: center;
     color: var(--ds-on-accent);
     font-weight: 600;
-    font-size: 12px;
+    font-size: var(--ds-cockpit-fs-12);
     flex-shrink: 0;
   }
   .vkpi-pin-info { min-width: 0; flex: 1; }
   .vkpi-pin-name {
     color: var(--ds-text);
-    font-size: 13px;
+    font-size: var(--ds-cockpit-fs-13);
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -196,7 +196,7 @@
   }
   .vkpi-pin-platform {
     color: var(--ds-muted);
-    font-size: 10px;
+    font-size: var(--ds-cockpit-fs-10);
     margin-top: 1px;
   }
   .vkpi-pin-row {
@@ -208,13 +208,13 @@
   }
   .vkpi-pin-key {
     color: var(--ds-muted);
-    font-size: 10px;
+    font-size: var(--ds-cockpit-fs-10);
     text-transform: uppercase;
     letter-spacing: 0.05em;
   }
   .vkpi-pin-val {
     color: var(--ds-text-2);
-    font-size: 11px;
+    font-size: var(--ds-cockpit-fs-11);
     font-weight: 500;
     text-align: right;
     font-variant-numeric: tabular-nums;
@@ -224,7 +224,7 @@
     padding-top: 8px;
     border-top: 1px solid var(--ds-line);
     color: var(--ds-muted);
-    font-size: 10px;
+    font-size: var(--ds-cockpit-fs-10);
     text-align: center;
   }
   /* Leaflet 默认 z-index 太高,限制 map 内部最高到 400(让我们的 overlay 浮在上面)*/
@@ -263,7 +263,7 @@
     backdrop-filter: blur(12px);
     z-index: 10;
     border-bottom: 1px solid rgba(255,255,255,0.08);
-    font-weight: 500; font-size: 10px;
+    font-weight: 500; font-size: var(--ds-cockpit-fs-10);
     text-transform: uppercase; letter-spacing: 0.06em;
     color: rgba(148,163,184,0.8);
     padding: 9px 10px; text-align: left; white-space: nowrap;
@@ -278,7 +278,7 @@
     border-left: 2px solid #a855f7;
   }
   .kp-table tbody td {
-    padding: 10px 10px; font-size: 12px;
+    padding: 10px 10px; font-size: var(--ds-cockpit-fs-12);
     color: rgba(226,232,240,0.85); vertical-align: middle;
   }
   .kp-table tbody td:first-child { padding-left: 14px; }

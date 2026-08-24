@@ -26,7 +26,7 @@
   background: var(--ds-panel);
   color: var(--ds-text-2);
   padding: 4px 6px 4px 10px;
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
   white-space: nowrap;
 }
 
@@ -51,7 +51,7 @@
   min-width: 16px;
   color: var(--ds-text);
   text-align: center;
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .mykol-team-grid {
@@ -111,7 +111,7 @@
   background: color-mix(in srgb, var(--ds-accent-2) 24%, transparent);
   color: var(--ds-accent-2);
   padding: 0 7px;
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
   font-style: normal;
   font-weight: 850;
   letter-spacing: 0.06em;
@@ -121,7 +121,7 @@
   display: block;
   margin-top: 4px;
   color: var(--ds-muted);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .mykol-staff-card__reach {
@@ -141,7 +141,7 @@
   display: block;
   margin-top: 5px;
   color: var(--ds-good);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
   font-weight: 780;
 }
 
@@ -161,7 +161,7 @@
 .mykol-staff-stats em {
   display: block;
   color: var(--ds-muted);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   font-style: normal;
 }
 
@@ -177,7 +177,7 @@
   display: block;
   margin-top: 3px;
   color: var(--ds-good);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .mykol-staff-stats small.is-warn {
@@ -248,7 +248,7 @@
   background: transparent;
   padding: 5px 6px;
   color: var(--ds-text-2);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
   text-align: left;
   cursor: pointer;
 }
@@ -267,7 +267,7 @@
   border-radius: 50%;
   background: color-mix(in srgb, var(--ds-accent-2) 20%, transparent);
   color: var(--ds-accent-2);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
   font-style: normal;
   font-weight: 780;
 }
@@ -283,26 +283,26 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ds-text);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .mykol-managed-list button span em {
   color: var(--ds-muted);
-  font-size: 10.5px;
+  font-size: var(--ds-cockpit-fs-10-5);
   font-style: normal;
 }
 
 .mykol-managed-list button strong {
   flex: none;
   color: var(--ds-good);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   font-weight: 780;
 }
 
 .mykol-managed-list p {
   margin: 2px 2px 0;
   color: var(--ds-muted);
-  font-size: 10.5px;
+  font-size: var(--ds-cockpit-fs-10-5);
 }
 
 /* A4:暂无分管的负责人折叠行 */
@@ -316,7 +316,7 @@
   background: var(--ds-panel);
   color: var(--ds-muted);
   padding: 7px 12px;
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
   cursor: pointer;
 }
 
@@ -341,7 +341,7 @@
   background: var(--ds-panel);
   padding: 4px 10px 4px 5px;
   color: var(--ds-text-2);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .mykol-team-folded__chips span i {
@@ -353,14 +353,14 @@
   border-radius: 50%;
   background: var(--ds-line-strong);
   color: var(--ds-text-2);
-  font-size: 9.5px;
+  font-size: var(--ds-cockpit-fs-9-5);
   font-style: normal;
   font-weight: 780;
 }
 
 .mykol-team-folded__chips span em {
   color: var(--ds-muted);
-  font-size: 10.5px;
+  font-size: var(--ds-cockpit-fs-10-5);
   font-style: normal;
 }
 
@@ -371,7 +371,7 @@
   gap: 14px;
   padding: 0 18px 18px;
   color: var(--ds-muted);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .mykol-team-pagination div {
@@ -386,7 +386,7 @@
   background: var(--ds-panel);
   color: var(--ds-text-2);
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
   font-weight: 760;
   cursor: pointer;
 }
@@ -398,7 +398,7 @@
 
 .mykol-team-pagination b {
   color: var(--ds-text);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 @media (max-width: 1100px) {

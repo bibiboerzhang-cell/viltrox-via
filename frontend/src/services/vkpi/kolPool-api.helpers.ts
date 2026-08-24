@@ -11,6 +11,16 @@ export interface VkpiKolPoolItem {
   profile_url?: string;
   display_name?: string;
   avatar_url?: string;
+  avatar_url_status?: 'durable' | 'ephemeral' | 'expired' | 'invalid' | 'missing' | string;
+  avatar_upstream_status?: string;
+  avatar_url_source?: string;
+  avatar_fallback?: '' | 'initials' | string;
+  avatar_health?: { status?: string; upstream_status?: string; source?: string; fallback?: string };
+  canonical_pool_id?: number;
+  canonical_duplicate_ids?: number[];
+  canonical_folded_count?: number;
+  canonical_identity_status?: 'unique' | 'canonical_read_folded' | 'manual_review_conflict' | string;
+  canonical_shared_aliases?: string[];
   bio?: string;
   country?: string;
   email?: string;

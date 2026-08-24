@@ -63,7 +63,7 @@ export function KolPoolDetailDrawer({
     <aside className="vkpi-drawer vkpi-kol-pool-drawer" aria-label="KOL Pool 详情">
       <div className="vkpi-drawer__header">
         <div className="vkpi-kol-pool-drawer-title">
-          <Avatar src={item.avatar_url} name={item.display_name || item.handle} size="md" />
+          <Avatar src={item.avatar_url} name={item.display_name || item.handle} status={item.avatar_url_status} size="md" />
           <div>
             <span className="vkpi-eyebrow">候选池 · {String(item.platform || 'other').toUpperCase()}</span>
             <h2>{item.display_name || item.handle || '未命名 KOL'}</h2>

@@ -12,7 +12,7 @@
   align-items: center;
   gap: 6px;
   color: var(--ds-text-2);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .mykol-content-toolbar {
@@ -37,7 +37,7 @@
   background: var(--ds-panel);
   color: var(--ds-text-2);
   padding: 7px 11px;
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
   font-weight: 720;
 }
 
@@ -71,14 +71,14 @@
   background: var(--ds-panel);
   color: var(--ds-muted);
   padding: 8px 9px;
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .mykol-content-insights b {
   display: block;
   margin-bottom: 2px;
   color: var(--ds-text);
-  font-size: 13px;
+  font-size: var(--ds-cockpit-fs-13);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -140,13 +140,13 @@
   margin: 0;
   padding: 0;
   color: var(--ds-text);
-  font-size: 13px;
+  font-size: var(--ds-cockpit-fs-13);
 }
 
 .mykol-post-card__body p {
   margin: 7px 0 0;
   color: var(--ds-muted);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .mykol-post-metrics {
@@ -184,7 +184,7 @@
   min-width: 0;
   padding: 0;
   color: var(--ds-muted);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
   white-space: nowrap;
 }
 
@@ -201,7 +201,7 @@
   background: var(--ds-panel);
   color: var(--ds-accent-2);
   padding: 5px 8px;
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   font-weight: 720;
   line-height: 1;
   text-decoration: none;
@@ -217,7 +217,7 @@
   padding-top: 14px;
   border-top: 1px solid var(--ds-line);
   color: var(--ds-text-2);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .mykol-content-pagination div {
@@ -238,7 +238,7 @@
 
 .mykol-content-pagination b {
   color: var(--ds-text);
-  font-size: 13px;
+  font-size: var(--ds-cockpit-fs-13);
 }
 
 .mykol-content-modal {
@@ -286,7 +286,7 @@
 
 .mykol-content-modal__panel header span {
   color: var(--ds-text-2);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .mykol-content-modal__panel h3 {
@@ -335,7 +335,7 @@
   border-top: 1px solid var(--ds-line);
   border-bottom: 0;
   color: var(--ds-text-2);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
   overflow: hidden;
 }
 
@@ -372,17 +372,17 @@
 
 .mykol-comments-list b {
   color: var(--ds-text);
-  font-size: 13px;
+  font-size: var(--ds-cockpit-fs-13);
 }
 
 .mykol-comments-list p {
   margin: 7px 0;
   color: var(--ds-text-2);
-  font-size: 13px;
+  font-size: var(--ds-cockpit-fs-13);
   line-height: 1.45;
 }
 
 .mykol-comments-list span {
   color: var(--ds-muted);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }

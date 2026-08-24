@@ -86,6 +86,7 @@ def test_real_video_rescued_via_download(monkeypatch, tmp_path):
     assert out["method"] == "ytdlp_fallback"
     # 下载命令必须带体积上限,且探测/下载各一次调用。
     assert len(calls) == 2 and "--max-filesize" in calls[1]
+    assert calls[0][:3] == [fb.sys.executable, "-m", "yt_dlp"]
 
 
 def test_carousel_video_entry_targets_that_entry(monkeypatch, tmp_path):

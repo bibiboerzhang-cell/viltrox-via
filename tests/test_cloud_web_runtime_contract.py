@@ -562,6 +562,8 @@ def test_reviewed_worker_units_run_nonroot_with_minimal_mutable_surface() -> Non
             line for line in unit.splitlines() if line.startswith("ExecStartPre=")
         )
         assert "worker-runtime-preflight" in preflight
+        assert "/opt/viltrox-2.0/.venv/bin/python" in preflight
+        assert "yt-dlp" not in preflight
         assert "--app-user viltrox --app-group viltrox" in preflight
         assert "--require-sandbox-readonly" in preflight
 
@@ -984,4 +986,3 @@ def test_systemd_contract_honours_vkpi_web_concurrency_override(tmp_path: Path) 
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "2|16"
-

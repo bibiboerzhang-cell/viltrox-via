@@ -9,13 +9,14 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import is_postgres_runtime
 from app.domains.kol.metric_truth import project_pool_item_truth
+from app.domains.kol.pool_read_response_cache import store_pool_read_payload
 from app.services.cache import cache_clear, cache_set
 from app.services.system import staff as staff_service
 
 ENRICHABLE_PLATFORMS = {"youtube", "instagram", "tiktok", "xiaohongshu", "x", "bilibili", "facebook", "reddit"}
 OWNER_NAME_KEYS = ("owner_name", "owner", "responsible_owner", "responsible_name", "assignee", "登记/对接人")
 OWNER_ID_KEYS = ("responsible_staff_id", "owner_staff_id", "assigned_staff_id", "source_staff_id")
-KOL_POOL_READ_CACHE_TTL_SEC = 300
+KOL_POOL_READ_CACHE_TTL_SEC = 30
 CONTACT_VISIBILITY_MASKED = "masked"
 CONTACT_VISIBILITY_FULL = "full"
 _INLINE_EMAIL_RE = re.compile(r"(?<![\w.+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -379,7 +380,6 @@ def mask_pool_item(
         masked["contact_masked"] = True
     return masked
 
-
 def _kol_pool_cache_key(name: str, **params: Any) -> str:
     parts = [f"{key}:{params[key]}" for key in sorted(params)]
     return f"vkpi:kol_pool:{name}:{':'.join(parts)}"
@@ -390,7 +390,8 @@ def _clear_kol_pool_read_cache() -> None:
         cache_clear(prefix="vkpi:kol_pool:")
     except Exception as exc:
         logger.warning("vkpi kol pool cache clear failed: %s", exc)
-
+    from app.domains.kol.pool_read_projection_cache import clear_pool_read_selection_cache
+    clear_pool_read_selection_cache()
 
 def _kol_pool_cache_hit(payload: Any) -> Any:
     if isinstance(payload, dict):
@@ -401,9 +402,7 @@ def _kol_pool_cache_hit(payload: Any) -> Any:
 
 
 def _kol_pool_cache_store(key: str, payload: dict[str, Any]) -> dict[str, Any]:
-    result = {**payload, "cache": {"hit": False, "ttl_sec": KOL_POOL_READ_CACHE_TTL_SEC}}
-    cache_set(key, result, ttl=KOL_POOL_READ_CACHE_TTL_SEC)
-    return result
+    return store_pool_read_payload(cache_set, key, payload, ttl=KOL_POOL_READ_CACHE_TTL_SEC)
 
 
 def _json(value: Any) -> str:

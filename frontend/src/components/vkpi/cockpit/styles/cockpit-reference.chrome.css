@@ -45,7 +45,7 @@
 .vkpi-northstar-dashboard__head h3 {
   margin: 0;
   color: var(--ds-text);
-  font-size: 13px;
+  font-size: var(--ds-cockpit-fs-13);
   font-weight: 650;
   letter-spacing: 0;
 }
@@ -54,7 +54,7 @@
   display: block;
   margin-top: 2px;
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-northstar-dashboard__body {
@@ -170,7 +170,7 @@
 .vkpi-northstar-dashboard__center span {
   margin-top: 5px;
   color: var(--ds-muted);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
   letter-spacing: 0;
   text-transform: uppercase;
 }
@@ -178,7 +178,7 @@
 .vkpi-northstar-dashboard__center small {
   margin-top: 5px;
   color: var(--ds-good);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-northstar-dashboard__metrics {
@@ -221,19 +221,19 @@
 .vkpi-northstar-dashboard__metrics span {
   margin-top: 2px;
   color: var(--ds-muted);
-  font-size: 8.5px;
+  font-size: var(--ds-cockpit-fs-8-5);
 }
 
 .vkpi-northstar-dashboard__metrics small {
   margin-top: 2px;
   color: var(--ds-muted);
-  font-size: 7.5px;
+  font-size: var(--ds-cockpit-fs-7-5);
 }
 
 .vkpi-northstar-dashboard__empty {
   margin-top: 12px;
   color: var(--ds-muted);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
   text-align: center;
 }
 
@@ -244,7 +244,7 @@
   border-top: 1px solid var(--ds-line);
   color: var(--ds-muted);
   font-family: var(--ds-font-mono);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
   text-align: right;
 }
 
@@ -373,7 +373,7 @@
   padding: 2px 8px 5px;
   border-bottom: 1px solid var(--ds-line);
   color: var(--ds-text-2);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .vkpi-topbar-overflow__progress > div > button {
@@ -391,7 +391,7 @@
   padding: 0 8px;
   border-radius: var(--ds-radius-sm);
   color: var(--ds-text-2);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   text-align: left;
 }
 
@@ -409,7 +409,7 @@
   color: var(--ds-crit);
   background: var(--ds-crit-soft);
   font-family: var(--ds-font-mono);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
 }
 
 .vkpi-appearance-menu {
@@ -440,7 +440,7 @@
 .vkpi-appearance-menu__label {
   margin: 0 2px 6px;
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   font-weight: 650;
   letter-spacing: 0;
 }
@@ -458,7 +458,7 @@
 .vkpi-appearance-menu__label--value output {
   color: var(--ds-text-2);
   font-family: var(--ds-font-mono);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-appearance-menu__range-control {
@@ -508,7 +508,7 @@
   justify-content: space-between;
   margin-top: 1px;
   color: var(--ds-muted);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
 }
 
 .vkpi-popover-layer {
@@ -562,7 +562,7 @@
   box-shadow: none;
   outline: 0;
   font-family: inherit;
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   font-weight: 600;
   transition: color 0.15s, background-color 0.15s, box-shadow 0.15s;
 }

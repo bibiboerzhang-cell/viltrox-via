@@ -242,24 +242,30 @@ def _official_account_signal(item: dict[str, Any]) -> bool:
     return bool(bio) and any(pattern in bio for pattern in _BRAND_SELF_VOICE_PATTERNS)
 
 
-def _competitor_brand_official(item: dict[str, Any]) -> str:
+def _competitor_brand_official(
+    item: dict[str, Any],
+    *,
+    competitor_brands: dict[str, list[str]] | None = None,
+) -> str:
     """竞品品牌官号判据:品牌词命中身份字段 **并且** 官号信号并发才拦,返回命中品牌名(未命中 "")。
 
     handle==品牌名(归一等值)本身即官号信号;仅 sample_title/bio 提到品牌的正常达人绝不命中。"""
     if not isinstance(item, dict):
         return ""
-    brands = _competitor_brand_terms()
+    brands = competitor_brands if competitor_brands is not None else _competitor_brand_terms()
     if not brands:
         return ""
     handle_norm = re.sub(r"[^a-z0-9]", "", str(item.get("handle") or "").lower())
+    for brand in brands:
+        brand_norm = re.sub(r"[^a-z0-9]", "", brand)
+        if handle_norm and brand_norm and handle_norm == brand_norm:
+            return brand
+    if not _official_account_signal(item):
+        return ""
     for brand, keywords in brands.items():
         if not _brand_identity_hit(item, brand, keywords):
             continue
-        brand_norm = re.sub(r"[^a-z0-9]", "", brand)
-        if handle_norm and brand_norm and handle_norm == brand_norm:
-            return brand  # handle 即品牌名 = 官号
-        if _official_account_signal(item):
-            return brand
+        return brand
     return ""
 
 
@@ -339,17 +345,25 @@ def _dynamic_brand_official(item: dict[str, Any]) -> bool:
     return _corporate_voice_bio(bio)
 
 
-def _brand_official_verdict(item: dict[str, Any]) -> str:
+def _brand_official_verdict(
+    item: dict[str, Any],
+    *,
+    competitor_brands: dict[str, list[str]] | None = None,
+) -> str:
     """品牌官号统一判据口:词表高精度快路优先("lexicon"),动态零词表路径兜漏网("dynamic"),
     未命中 ""。调用方拿真值即拦;子串区分只供 diagnostics 子计数,门面文案不透判据。"""
-    if _competitor_brand_official(item):
+    if _competitor_brand_official(item, competitor_brands=competitor_brands):
         return "lexicon"
     if _dynamic_brand_official(item):
         return "dynamic"
     return ""
 
 
-def discovery_account_gate_verdict(item: dict[str, Any] | None) -> str:
+def discovery_account_gate_verdict(
+    item: dict[str, Any] | None,
+    *,
+    competitor_brands: dict[str, list[str]] | None = None,
+) -> str:
     """Unified conservative account gate for every discovery intake path.
 
     Returns a typed reason only when the identity is confirmed as Viltrox-owned
@@ -366,7 +380,7 @@ def discovery_account_gate_verdict(item: dict[str, Any] | None) -> str:
 
     if _is_own_brand_account(item):
         return "own_brand"
-    if _brand_official_verdict(item):
+    if _brand_official_verdict(item, competitor_brands=competitor_brands):
         return "brand_official"
     return ""
 

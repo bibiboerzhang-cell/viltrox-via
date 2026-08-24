@@ -19,6 +19,7 @@ import asyncio
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 from typing import Any, Callable
@@ -26,13 +27,14 @@ from urllib.parse import parse_qs, urlparse
 
 from app.core.gemini_models import DEFAULT_VIDEO_GEMINI_MODEL
 from app.core.logging import get_logger
+from app.domains.costs.budget_guard_errors import redact_secrets
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE, gemini_client
 try:
     from google.genai import types as genai_types
 except ImportError:
     genai_types = None
 
-from app.services.scraping.ytdlp import YTDLP_AVAILABLE, YTDLP_BIN, YTDLP_PROXY, fetch_youtube_subtitles
+from app.services.scraping.ytdlp import YTDLP_AVAILABLE, YTDLP_PROXY, fetch_youtube_subtitles
 from app.services.scoring.creator import get_creator_profile
 
 from app.services.ai.analyzers.gemini_video_results import (
@@ -556,7 +558,9 @@ async def analyze_youtube_with_gemini(
 
             download_max_height = _ytdlp_max_height()
             dl_cmd = [
-                YTDLP_BIN,  # 解析好的全路径(.venv/bin/yt-dlp);裸 'yt-dlp' 在 worker PATH 上找不到 → media_resolve_failed
+                sys.executable,
+                "-m",
+                "yt_dlp",
                 "-f", _ytdlp_download_format(download_max_height),
                 "--merge-output-format", "mp4",
                 "-o", tmp_path,
@@ -583,6 +587,7 @@ async def analyze_youtube_with_gemini(
                 _stderr_text = _stderr_raw.decode("utf-8", errors="ignore")
             else:
                 _stderr_text = str(_stderr_raw or "")
+            _stderr_text = redact_secrets(_stderr_text, limit=600)
             result["download_diagnostics"] = {
                 "tool": "yt-dlp",
                 "returncode": getattr(dl_proc, "returncode", None) if dl_proc is not None else None,
@@ -591,7 +596,7 @@ async def analyze_youtube_with_gemini(
                 "proxy": bool(YTDLP_PROXY),
                 "max_height": download_max_height,
                 "cookies": "--cookies" in dl_cmd,
-                "stderr_tail": _stderr_text[-600:],
+                "stderr_tail": _stderr_text,
             }
             if downloaded_bytes < 1000:
                 result["error"] = "yt-dlp video download failed for Gemini analysis"

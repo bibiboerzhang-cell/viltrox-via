@@ -44,7 +44,7 @@
   min-width: 0;
   flex: 1;
   overflow: hidden;
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -58,7 +58,7 @@
   color: var(--ds-muted);
   background: var(--ds-panel);
   font-family: var(--ds-font-mono);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-ask-overlay {
@@ -139,7 +139,7 @@
   border-radius: 8px;
   color: var(--ds-text-2);
   background: var(--ds-panel) !important;
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-ask-dialog__suggestions button:hover,
@@ -162,7 +162,7 @@
   gap: 6px;
   margin: 0 0 5px;
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -192,7 +192,7 @@
 
 .vkpi-ask-result-group > button small {
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-ask-dialog__ask {
@@ -207,7 +207,7 @@
   border-radius: 9px;
   color: var(--ds-accent);
   background: var(--ds-accent-soft) !important;
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .vkpi-ask-dialog__key-hint {
@@ -217,7 +217,7 @@
   margin: -9px 16px 14px;
   color: var(--ds-muted);
   font-family: var(--ds-font-mono);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
 }
 
 .vkpi-ask-dialog__state {
@@ -229,11 +229,11 @@
   border: 1px dashed var(--ds-line);
   border-radius: 9px;
   color: var(--ds-muted);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-ask-dialog__state > svg { grid-row: 1 / span 2; margin-top: 2px; }
-.vkpi-ask-dialog__state strong { color: var(--ds-text-2); font-size: 11px; }
+.vkpi-ask-dialog__state strong { color: var(--ds-text-2); font-size: var(--ds-cockpit-fs-11); }
 .vkpi-ask-dialog__state.is-warning { border-color: color-mix(in srgb, var(--ds-warn) 36%, transparent); }
 .vkpi-ask-dialog__state.is-warning > svg { color: var(--ds-warn); }
 .vkpi-ask-dialog__state.is-error { border-color: color-mix(in srgb, var(--ds-crit) 34%, transparent); }
@@ -246,7 +246,7 @@
   border: 1px dashed var(--ds-line);
   border-radius: 10px;
   color: var(--ds-muted);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   text-align: center;
 }
 
@@ -269,14 +269,14 @@
   gap: 3px;
 }
 
-.vkpi-ask-dialog__failure strong { color: var(--ds-text); font-size: 11px; }
-.vkpi-ask-dialog__failure span { color: var(--ds-text-2); font-size: 10px; overflow-wrap: anywhere; }
+.vkpi-ask-dialog__failure strong { color: var(--ds-text); font-size: var(--ds-cockpit-fs-11); }
+.vkpi-ask-dialog__failure span { color: var(--ds-text-2); font-size: var(--ds-cockpit-fs-10); overflow-wrap: anywhere; }
 .vkpi-ask-dialog__failure button {
   flex: none;
   padding: 4px 8px;
   border: 1px solid currentColor !important;
   border-radius: 7px;
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-ask-dialog__thinking span {
@@ -309,7 +309,7 @@
   justify-content: space-between;
   gap: 12px;
   color: var(--ds-good);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-ask-dialog__answer-meta span {
@@ -338,13 +338,13 @@
   border-left: 2px solid var(--ds-warn);
   color: var(--ds-warn);
   background: color-mix(in srgb, var(--ds-warn) 7%, transparent);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-ask-dialog__answer p {
   margin: 12px 0 0;
   color: var(--ds-text-2);
-  font-size: 13px;
+  font-size: var(--ds-cockpit-fs-13);
   line-height: 1.75;
   white-space: pre-wrap;
 }
@@ -367,7 +367,7 @@
 
 .vkpi-ask-dialog__actions button small {
   color: var(--ds-warn);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
 }
 
 .vkpi-ask-dialog__proposal {
@@ -378,16 +378,16 @@
   border-radius: 8px;
   color: var(--ds-text-2);
   background: color-mix(in srgb, var(--ds-warn) 5%, transparent);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
-.vkpi-ask-dialog__proposal small { color: var(--ds-warn); font-size: 8px; }
+.vkpi-ask-dialog__proposal small { color: var(--ds-warn); font-size: var(--ds-cockpit-fs-8); }
 
 .vkpi-ask-dialog__evidence {
   margin-top: 14px;
   border-top: 1px solid var(--ds-line);
   padding-top: 10px;
   color: var(--ds-muted);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-ask-dialog__evidence summary { display: flex; align-items: center; gap: 6px; cursor: pointer; }
@@ -395,10 +395,10 @@
 .vkpi-ask-dialog__evidence article { padding: 9px; border: 1px solid var(--ds-line); border-radius: 8px; background: var(--ds-card); }
 .vkpi-ask-dialog__evidence article header,
 .vkpi-ask-dialog__evidence article footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.vkpi-ask-dialog__evidence article header strong { min-width: 0; overflow: hidden; color: var(--ds-text-2); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.vkpi-ask-dialog__evidence article header small { flex: none; color: var(--ds-good); font-size: 8px; }
-.vkpi-ask-dialog__evidence article p { margin: 6px 0; color: var(--ds-text-2); font-size: 10px; line-height: 1.55; }
-.vkpi-ask-dialog__evidence article footer { justify-content: flex-start; flex-wrap: wrap; color: var(--ds-muted); font-size: 8px; }
+.vkpi-ask-dialog__evidence article header strong { min-width: 0; overflow: hidden; color: var(--ds-text-2); font-size: var(--ds-cockpit-fs-10); text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-ask-dialog__evidence article header small { flex: none; color: var(--ds-good); font-size: var(--ds-cockpit-fs-8); }
+.vkpi-ask-dialog__evidence article p { margin: 6px 0; color: var(--ds-text-2); font-size: var(--ds-cockpit-fs-10); line-height: 1.55; }
+.vkpi-ask-dialog__evidence article footer { justify-content: flex-start; flex-wrap: wrap; color: var(--ds-muted); font-size: var(--ds-cockpit-fs-8); }
 .vkpi-ask-dialog__evidence article footer a { margin-left: auto; color: var(--ds-accent); }
 
 @media (max-width: 620px) {
@@ -450,7 +450,7 @@
   gap: 7px;
   margin: 0;
   color: var(--ds-text);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .vkpi-dashboard-memo header span,
@@ -458,7 +458,7 @@
 .vkpi-dashboard-trend header small {
   color: var(--ds-muted);
   font-family: var(--ds-font-mono);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
 }
 
 .vkpi-dashboard-memo header span.is-saved { color: var(--ds-good); }
@@ -488,7 +488,7 @@
   padding: 8px 0;
   border-top: 1px dashed var(--ds-line);
   border-bottom: 1px dashed var(--ds-line);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   line-height: 1.6;
 }
 
@@ -522,7 +522,7 @@
 }
 
 .vkpi-dashboard-memo__item input {
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .vkpi-dashboard-memo__item.is-done input {
@@ -548,7 +548,7 @@
   gap: 6px;
   margin-top: 10px;
   color: var(--ds-accent);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-dashboard-trend__stats {
@@ -579,7 +579,7 @@
 .vkpi-dashboard-trend__stats span {
   margin-top: 2px;
   color: var(--ds-muted);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
 }
 
 .vkpi-dashboard-trend__chart {
@@ -602,7 +602,7 @@
   border: 1px dashed var(--ds-line);
   border-radius: 8px;
   color: var(--ds-muted);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-dashboard-trend footer {
@@ -611,7 +611,7 @@
   gap: 12px;
   margin-top: 7px;
   color: var(--ds-muted);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
 }
 
 .vkpi-dashboard-trend footer span {
@@ -628,7 +628,7 @@
 
 .vkpi-dashboard-trend footer i.is-exposure { background: var(--ds-accent); }
 .vkpi-dashboard-trend footer i.is-engagement { background: var(--ds-good); }
-.vkpi-dashboard-trend footer small { margin-left: auto; font-size: 8px; }
+.vkpi-dashboard-trend footer small { margin-left: auto; font-size: var(--ds-cockpit-fs-8); }
 
 .vkpi-dashboard-task-queue > header > div {
   display: flex;
@@ -638,12 +638,12 @@
 }
 
 .vkpi-dashboard-task-queue > header strong {
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .vkpi-dashboard-task-queue > header > span {
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-dashboard-task-queue > header > span.is-running {
@@ -674,13 +674,13 @@
 
 .vkpi-dashboard-task-queue__name {
   color: var(--ds-text-2);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-dashboard-task-queue__task {
   overflow: hidden;
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -721,7 +721,7 @@
 .vkpi-dashboard-task-queue__lane small {
   color: var(--ds-muted);
   font-family: var(--ds-font-mono);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
   text-align: right;
 }
 
@@ -733,7 +733,7 @@
   margin-top: 9px;
   color: var(--ds-muted);
   font-family: var(--ds-font-mono);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
 }
 
 .cockpit-shell .vkpi-dashboard-task-queue.is-compact {
@@ -754,7 +754,7 @@
 }
 
 .vkpi-dashboard-task-queue.is-compact > header strong {
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-dashboard-task-queue__current {
@@ -765,7 +765,7 @@
   min-width: 0;
   margin: -1px 0 7px;
   color: var(--ds-muted);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
 }
 
 .vkpi-dashboard-task-queue__current > span {
@@ -775,7 +775,7 @@
 .vkpi-dashboard-task-queue__current > strong {
   overflow: hidden;
   color: var(--ds-text-2);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -783,7 +783,7 @@
 
 .vkpi-dashboard-task-queue__current > small {
   font-family: var(--ds-font-mono);
-  font-size: 7px;
+  font-size: var(--ds-cockpit-fs-7);
 }
 
 .vkpi-dashboard-task-queue.is-compact .vkpi-dashboard-task-queue__lane {
@@ -866,13 +866,13 @@
 .vkpi-dashboard-board-link__copy small,
 .vkpi-dashboard-board-link__name {
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-dashboard-board-link__name {
   grid-column: 2;
   color: var(--ds-text-2);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   font-weight: 650;
 }
 
@@ -891,7 +891,7 @@
 
 .vkpi-dashboard-error-card span {
   color: var(--ds-muted);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-dashboard-lazy-module {
@@ -902,7 +902,7 @@
   border-radius: var(--ds-radius-lg);
   color: var(--ds-muted);
   background: var(--ds-card);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 @keyframes vkpi-task-indeterminate {

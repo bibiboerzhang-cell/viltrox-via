@@ -58,9 +58,17 @@ def test_worker_runtime_preflight_exercises_exact_nonroot_surface(tmp_path: Path
 
     bin_dir = root / ".venv" / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    tool = bin_dir / "yt-dlp"
-    tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    tool.chmod(0o500)
+    python_bin = bin_dir / "python"
+    python_bin.chmod(0o700)
+    python_bin.write_text(
+        "#!/bin/sh\n"
+        "[ \"$1\" = '-m' ] && [ \"$2\" = 'yt_dlp' ] && [ \"$3\" = '--version' ]\n",
+        encoding="utf-8",
+    )
+    python_bin.chmod(0o500)
+    ytdlp_bin = bin_dir / "yt-dlp"
+    ytdlp_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    ytdlp_bin.chmod(0o500)
     fake_tools = tmp_path / "tools"
     fake_tools.mkdir()
     for name in ("ffmpeg", "ffprobe"):
@@ -98,14 +106,105 @@ def test_worker_runtime_preflight_exercises_exact_nonroot_surface(tmp_path: Path
     assert not list(tmp_path.glob("**/.vkpi-worker-preflight-*"))
 
 
+def test_worker_runtime_preflight_fails_closed_when_ytdlp_module_is_missing(
+    tmp_path: Path,
+) -> None:
+    root, _unit_dir = _layout(tmp_path)
+    release = _release(root, "release-1", "1" * 40)
+    user, group = _current_account()
+    (root / ".env").chmod(0o400)
+    python_bin = root / ".venv/bin/python"
+    python_bin.chmod(0o700)
+    python_bin.write_text(
+        "#!/bin/sh\nprintf 'raw-secret-must-not-leak\\n' >&2\nexit 7\n",
+        encoding="utf-8",
+    )
+    python_bin.chmod(0o500)
+    ytdlp_bin = root / ".venv/bin/yt-dlp"
+    ytdlp_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    ytdlp_bin.chmod(0o500)
+    fake_tools = tmp_path / "tools"
+    fake_tools.mkdir()
+    for name in ("ffmpeg", "ffprobe"):
+        binary = fake_tools / name
+        binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        binary.chmod(0o500)
+    runtime_env = {
+        **os.environ,
+        "PATH": str(fake_tools),
+        "HOME": str(tmp_path / "private-home"),
+        "XDG_CACHE_HOME": str(tmp_path / "private-cache"),
+        "TMPDIR": str(tmp_path / "private-tmp"),
+        "VKPI_JOB_RESULTS_DIR": str(root / "runtime/job-results"),
+    }
+
+    result = _run(
+        "worker-runtime-preflight",
+        "--root",
+        str(root),
+        "--release-path",
+        str(release),
+        "--app-user",
+        user,
+        "--app-group",
+        group,
+        "--job-results-dir",
+        str(root / "runtime/job-results"),
+        env=runtime_env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "worker tool execution preflight failed: yt_dlp module" in result.stderr
+    assert "raw-secret-must-not-leak" not in result.stderr
+
+
+def test_worker_runtime_preflight_fails_when_ytdlp_console_is_missing(
+    tmp_path: Path,
+) -> None:
+    root, _unit_dir = _layout(tmp_path)
+    release = _release(root, "release-1", "1" * 40)
+    user, group = _current_account()
+    (root / ".env").chmod(0o400)
+    python_bin = root / ".venv/bin/python"
+    python_bin.chmod(0o700)
+    python_bin.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    python_bin.chmod(0o500)
+    fake_tools = tmp_path / "tools"
+    fake_tools.mkdir()
+    for name in ("ffmpeg", "ffprobe"):
+        binary = fake_tools / name
+        binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        binary.chmod(0o500)
+    runtime_env = {
+        **os.environ,
+        "PATH": str(fake_tools),
+        "HOME": str(tmp_path / "private-home"),
+        "XDG_CACHE_HOME": str(tmp_path / "private-cache"),
+        "TMPDIR": str(tmp_path / "private-tmp"),
+        "VKPI_JOB_RESULTS_DIR": str(root / "runtime/job-results"),
+    }
+
+    result = _run(
+        "worker-runtime-preflight",
+        "--root", str(root),
+        "--release-path", str(release),
+        "--app-user", user,
+        "--app-group", group,
+        "--job-results-dir", str(root / "runtime/job-results"),
+        env=runtime_env,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "required venv worker tool is missing or not executable: yt-dlp" in result.stderr
+
+
 def test_worker_runtime_preflight_requires_systemd_readonly_mounts(tmp_path: Path) -> None:
     root, _unit_dir = _layout(tmp_path)
     release = _release(root, "release-1", "1" * 40)
     user, group = _current_account()
     (root / ".env").chmod(0o400)
-    tool = root / ".venv/bin/yt-dlp"
-    tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    tool.chmod(0o500)
     fake_tools = tmp_path / "tools"
     fake_tools.mkdir()
     for name in ("ffmpeg", "ffprobe"):

@@ -217,15 +217,18 @@ def _require_write_blocked(directory: Path, *, label: str) -> None:
     raise LayoutError(f"{label} unexpectedly remains writable inside the worker sandbox")
 
 
-def _tool_path(root: Path, name: str) -> str:
-    if name == "yt-dlp":
-        sibling = root / ".venv" / "bin" / "yt-dlp"
-        if sibling.is_file() and os.access(sibling, os.X_OK):
-            return str(sibling)
+def _tool_path(_root: Path, name: str) -> str:
     resolved = shutil.which(name)
     if not resolved or not os.access(resolved, os.X_OK):
         raise LayoutError(f"required worker tool is missing or not executable: {name}")
     return resolved
+
+
+def _venv_tool_path(root: Path, name: str) -> str:
+    candidate = root / ".venv" / "bin" / name
+    if not candidate.is_file() or not os.access(candidate, os.R_OK | os.X_OK):
+        raise LayoutError(f"required venv worker tool is missing or not executable: {name}")
+    return str(candidate)
 
 
 def worker_runtime_preflight(args: argparse.Namespace) -> None:
@@ -309,11 +312,12 @@ def worker_runtime_preflight(args: argparse.Namespace) -> None:
         _write_canary(cache_dir, label=variable)
 
     commands = (
-        (_tool_path(root, "yt-dlp"), "--version"),
-        (_tool_path(root, "ffmpeg"), "-version"),
-        (_tool_path(root, "ffprobe"), "-version"),
+        ("yt_dlp module", (str(python_bin), "-m", "yt_dlp", "--version")),
+        ("yt-dlp console", (_venv_tool_path(root, "yt-dlp"), "--version")),
+        ("ffmpeg", (_tool_path(root, "ffmpeg"), "-version")),
+        ("ffprobe", (_tool_path(root, "ffprobe"), "-version")),
     )
-    for command in commands:
+    for label, command in commands:
         try:
             subprocess.run(
                 command,
@@ -324,4 +328,4 @@ def worker_runtime_preflight(args: argparse.Namespace) -> None:
                 check=True,
             )
         except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
-            raise LayoutError(f"worker tool execution preflight failed: {command[0]}") from exc
+            raise LayoutError(f"worker tool execution preflight failed: {label}") from exc

@@ -33,13 +33,8 @@ DOWNLOAD_TIMEOUT_SECONDS = 240
 _NO_VIDEO_MARKERS = ("There is no video in this post",)
 
 
-def _ytdlp_bin() -> str:
-    candidate = Path(sys.executable).with_name("yt-dlp")
-    return str(candidate) if candidate.exists() else "yt-dlp"
-
-
 def _base_cmd() -> list[str]:
-    cmd = [_ytdlp_bin()]
+    cmd = [sys.executable, "-m", "yt_dlp"]
     proxy = str(os.environ.get("YTDLP_PROXY") or "").strip()
     if proxy:
         cmd += ["--proxy", proxy]

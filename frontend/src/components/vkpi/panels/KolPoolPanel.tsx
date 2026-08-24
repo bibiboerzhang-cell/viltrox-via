@@ -364,7 +364,7 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onGetIntelligenc
                     onClick={() => void openDetail(item)}
                     title={`点击查看 ${item.display_name || item.handle || item.id} 的候选详情`}
                   >
-                    <td><Avatar src={item.avatar_url} name={item.display_name || item.handle} size="sm" /></td>
+                    <td><Avatar src={item.avatar_url} name={item.display_name || item.handle} status={item.avatar_url_status} size="sm" /></td>
                     <td onClick={(event) => event.stopPropagation()}>
                       <input
                         aria-label={`选择 ${item.handle || item.display_name || item.id}`}
@@ -378,6 +378,7 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onGetIntelligenc
                       {item.display_name && <div className="vkpi-kol-pool-subtitle">{item.display_name}</div>}
                       <div className="vkpi-kol-pool-mini">
                         <span>{item.sync_status || 'unknown'}</span>
+                        <span>{item.avatar_url_status ? `头像 ${item.avatar_url_status}` : '头像状态未知'}</span>
                         {item.profile_url && <span>主页已记录</span>}
                         {item.bio && <span>简介已记录</span>}
                       </div>

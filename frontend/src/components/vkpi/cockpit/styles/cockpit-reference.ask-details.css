@@ -16,15 +16,15 @@
   background: var(--ds-card);
 }
 
-.vkpi-ask-dialog__facts article > span { color: var(--ds-muted); font-size: 9px; }
+.vkpi-ask-dialog__facts article > span { color: var(--ds-muted); font-size: var(--ds-cockpit-fs-9); }
 .vkpi-ask-dialog__facts article > strong { overflow-wrap: anywhere; color: var(--ds-text); font-size: 17px; font-weight: 650; }
-.vkpi-ask-dialog__facts article > small { overflow: hidden; color: var(--ds-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.vkpi-ask-dialog__facts article > small { overflow: hidden; color: var(--ds-muted); font-size: var(--ds-cockpit-fs-8); text-overflow: ellipsis; white-space: nowrap; }
 .vkpi-ask-dialog__facts article > em {
   position: absolute;
   top: 7px;
   right: 7px;
   color: var(--ds-muted);
-  font-size: 7px;
+  font-size: var(--ds-cockpit-fs-7);
   font-style: normal;
 }
 .vkpi-ask-dialog__facts article > em.is-high { color: var(--ds-good); }
@@ -47,9 +47,9 @@
   border-radius: 9px;
 }
 .vkpi-ask-dialog__quality svg { grid-row: 1 / span 2; color: var(--ds-accent); }
-.vkpi-ask-dialog__quality span { color: var(--ds-muted); font-size: 8px; }
-.vkpi-ask-dialog__quality strong { grid-column: 2; overflow-wrap: anywhere; color: var(--ds-text-2); font-size: 10px; }
-.vkpi-ask-dialog__quality small { grid-column: 3; grid-row: 1 / span 2; color: var(--ds-muted); font-size: 8px; }
+.vkpi-ask-dialog__quality span { color: var(--ds-muted); font-size: var(--ds-cockpit-fs-8); }
+.vkpi-ask-dialog__quality strong { grid-column: 2; overflow-wrap: anywhere; color: var(--ds-text-2); font-size: var(--ds-cockpit-fs-10); }
+.vkpi-ask-dialog__quality small { grid-column: 3; grid-row: 1 / span 2; color: var(--ds-muted); font-size: var(--ds-cockpit-fs-8); }
 
 .vkpi-ask-dialog__missing {
   margin-top: 12px;
@@ -58,11 +58,11 @@
   border-radius: 9px;
   background: color-mix(in srgb, var(--ds-warn) 5%, transparent);
 }
-.vkpi-ask-dialog__missing h3 { display: flex; align-items: center; gap: 5px; margin: 0 0 7px; color: var(--ds-warn); font-size: 10px; }
+.vkpi-ask-dialog__missing h3 { display: flex; align-items: center; gap: 5px; margin: 0 0 7px; color: var(--ds-warn); font-size: var(--ds-cockpit-fs-10); }
 .vkpi-ask-dialog__missing > div { display: grid; grid-template-columns: minmax(80px, auto) minmax(0, 1fr); gap: 2px 8px; padding: 5px 0; border-top: 1px solid var(--ds-line); }
-.vkpi-ask-dialog__missing strong { color: var(--ds-text-2); font-size: 9px; }
-.vkpi-ask-dialog__missing span { color: var(--ds-muted); font-size: 9px; }
-.vkpi-ask-dialog__missing small { grid-column: 2; color: var(--ds-warn); font-size: 8px; }
+.vkpi-ask-dialog__missing strong { color: var(--ds-text-2); font-size: var(--ds-cockpit-fs-9); }
+.vkpi-ask-dialog__missing span { color: var(--ds-muted); font-size: var(--ds-cockpit-fs-9); }
+.vkpi-ask-dialog__missing small { grid-column: 2; color: var(--ds-warn); font-size: var(--ds-cockpit-fs-8); }
 
 /* ── Ask P1 命令面板:前缀提示 / 三区分栏 / 候选分组备注 / 区活跃态 ───────── */
 .vkpi-ask-dialog__prefix-hints {
@@ -81,7 +81,7 @@
   border-radius: 7px;
   color: var(--ds-muted);
   background: transparent !important;
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-ask-dialog__prefix-hints button:hover { color: var(--ds-accent); border-color: var(--ds-accent) !important; }
@@ -94,7 +94,7 @@
   color: var(--ds-text-2);
   background: var(--ds-panel);
   font-family: var(--ds-font-mono);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   text-align: center;
 }
 
@@ -106,18 +106,18 @@
 
 .vkpi-ask-dialog__body.has-answer > .vkpi-ask-dialog__answer { margin-left: 0; }
 
-.vkpi-ask-dialog__loading { padding: 14px 16px; color: var(--ds-muted); font-size: 10px; }
+.vkpi-ask-dialog__loading { padding: 14px 16px; color: var(--ds-muted); font-size: var(--ds-cockpit-fs-10); }
 
 .vkpi-ask-result-group h3 em {
   margin-left: auto;
   color: var(--ds-warn);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
   font-style: normal;
   letter-spacing: 0;
   text-transform: none;
 }
 
-.vkpi-ask-result-group__empty { margin: 0 0 4px 9px; color: var(--ds-muted); font-size: 10px; }
+.vkpi-ask-result-group__empty { margin: 0 0 4px 9px; color: var(--ds-muted); font-size: var(--ds-cockpit-fs-10); }
 
 .vkpi-ask-dialog__results.is-zone-active .vkpi-ask-result-group > button.is-active {
   box-shadow: inset 0 0 0 1px var(--ds-accent);

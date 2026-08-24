@@ -17,7 +17,7 @@
 .mykol-employee-content__head span {
   display: block;
   color: var(--ds-muted);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -32,7 +32,7 @@
 .mykol-employee-content__head p {
   margin: 0;
   color: var(--ds-text-2);
-  font-size: 13px;
+  font-size: var(--ds-cockpit-fs-13);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -71,7 +71,7 @@
   border-radius: 999px;
   background: var(--ds-panel);
   color: var(--ds-text-2);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
   font-weight: 760;
 }
 
@@ -105,7 +105,7 @@
   background: var(--ds-panel);
   color: var(--ds-muted);
   padding: 7px 9px;
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .mykol-employee-content__insights b {
@@ -159,18 +159,18 @@
 
 .mykol-employee-content .vkpi-my-kol-content-card__body h3 {
   color: var(--ds-text);
-  font-size: 13px;
+  font-size: var(--ds-cockpit-fs-13);
   line-height: 1.28;
-  min-height: 17px;
-  max-height: 17px;
+  min-height: 1lh;
+  max-height: 1lh;
 }
 
 .mykol-employee-content .vkpi-my-kol-content-card__body p {
   color: var(--ds-text-2);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   line-height: 1.35;
-  min-height: 15px;
-  max-height: 15px;
+  min-height: 1lh;
+  max-height: 1lh;
 }
 
 .mykol-employee-content .vkpi-my-kol-content-card__metrics {
@@ -189,7 +189,7 @@
 
 .mykol-employee-content .vkpi-my-kol-content-card__metrics strong {
   color: var(--ds-text);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .mykol-employee-content .vkpi-my-kol-content-card__footer {
@@ -228,7 +228,7 @@
   padding: 11px 16px 14px;
   border-top: 1px solid var(--ds-line);
   color: var(--ds-muted);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .mykol-employee-content__pager div {
@@ -276,13 +276,13 @@
 .mykol-employee-platform-strip b {
   display: block;
   color: var(--ds-text);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
 }
 
 .mykol-employee-platform-strip span {
   display: block;
   margin-top: 3px;
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

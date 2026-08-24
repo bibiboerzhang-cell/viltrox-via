@@ -95,7 +95,7 @@
 .ai-evidence-card__metadata dt,
 .evidence-detail-grid dt {
   color: var(--ds-muted);
-  font-size: 8px;
+  font-size: var(--ds-cockpit-fs-8);
   line-height: 1.25;
 }
 
@@ -103,7 +103,7 @@
 .evidence-detail-grid dd {
   margin: 2px 0 0;
   color: var(--ds-text-2);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   line-height: 1.3;
 }
 

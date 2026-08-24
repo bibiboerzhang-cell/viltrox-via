@@ -11,7 +11,7 @@
   align-items: center;
   gap: 4px;
   font-family: var(--ds-font-mono);
-  font-size: 8.5px;
+  font-size: var(--ds-cockpit-fs-8-5);
   line-height: 1.5;
   color: var(--ds-muted);
   background: none;
@@ -39,7 +39,7 @@
 }
 .vkpi-prov-src::before {
   content: "⛁";
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   color: var(--ds-accent);
 }
 .vkpi-prov-srctip {
@@ -67,7 +67,7 @@
   display: block;
 }
 .vkpi-prov-st-cap {
-  font-size: 8.5px;
+  font-size: var(--ds-cockpit-fs-8-5);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ds-muted);
@@ -78,7 +78,7 @@
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
   padding: 3px 0;
   color: var(--ds-text-2);
 }
@@ -86,7 +86,7 @@
   font-family: var(--ds-font-mono);
   color: var(--ds-text);
   font-weight: 600;
-  font-size: 9.5px;
+  font-size: var(--ds-cockpit-fs-9-5);
   text-align: right;
 }
 
@@ -99,11 +99,11 @@
 }
 .vkpi-prov-arrow {
   color: var(--ds-muted);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 .vkpi-prov-pchip {
   appearance: none;
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
   line-height: 1.5;
   font-family: var(--ds-font-mono);
   border: 1px solid var(--ds-line);
@@ -125,11 +125,11 @@
 }
 .vkpi-prov-pchip--mini {
   padding: 2px 7px;
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   flex: none;
 }
 .vkpi-prov-note {
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   color: var(--ds-muted);
   margin-top: 7px;
   font-family: var(--ds-font-mono);
@@ -145,7 +145,7 @@
   animation: vkpi-prov-rise 0.25s;
 }
 .vkpi-prov-rec-cap {
-  font-size: 8.5px;
+  font-size: var(--ds-cockpit-fs-8-5);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ds-accent);
@@ -156,7 +156,7 @@
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  font-size: 10.5px;
+  font-size: var(--ds-cockpit-fs-10-5);
   padding: 2px 0;
   color: var(--ds-text-2);
 }

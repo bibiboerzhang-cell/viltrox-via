@@ -144,6 +144,10 @@ def unified_recall(
                 used_vector = True
         if not items:
             items = _recall_kind(k, tokens, limit)
+        if k == "kol" and items:
+            from app.domains.kol.pool_read_projection import project_pool_recall_items
+
+            items = project_pool_recall_items(get_conn(), items)
         per_kind[k] = items
         flat.extend(items)
     flat.sort(key=lambda x: x["score"], reverse=True)

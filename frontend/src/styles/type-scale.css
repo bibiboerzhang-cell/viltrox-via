@@ -37,6 +37,75 @@
   --ds-fs-caption: var(--ds-fs-11);  /* 次级说明 / 表格辅助列 */
   --ds-fs-body: var(--ds-fs-12);     /* 卡片正文 */
   --ds-fs-body-lg: var(--ds-fs-13);  /* 强调正文 / 表单输入 */
+
+  /*
+   * Cockpit 遗留 CSS 尺寸桥。与上面的 Tailwind 任意值 token 分开：
+   * - 普通视口保持原像素，不改 <=1919px 的任何布局；
+   * - 只在超宽屏切到舒适档，让 raw CSS 与 text-[npx] 同口径。
+   *
+   * 旧组件样式通过 var(--ds-cockpit-fs-*) 消费这组桥，不用
+   * transform/zoom，因此不会破坏 grid 拖拽、sticky 或 portal 坐标。
+   */
+  --ds-cockpit-fs-7: 7px;
+  --ds-cockpit-fs-7-5: 7.5px;
+  --ds-cockpit-fs-8: 8px;
+  --ds-cockpit-fs-8-5: 8.5px;
+  --ds-cockpit-fs-9: 9px;
+  --ds-cockpit-fs-9-5: 9.5px;
+  --ds-cockpit-fs-10: 10px;
+  --ds-cockpit-fs-10-5: 10.5px;
+  --ds-cockpit-fs-11: 11px;
+  --ds-cockpit-fs-11-5: 11.5px;
+  --ds-cockpit-fs-12: 12px;
+  --ds-cockpit-fs-12-5: 12.5px;
+  --ds-cockpit-fs-13: 13px;
+  --ds-cockpit-fs-13-5: 13.5px;
+}
+
+/*
+ * 超宽屏舒适档：起点严格放在 1920px，普通屏不受影响。
+ * 比全站默认舒适档再上调约 1px；微标签保留层级，正文封顶
+ * 15px，避免密集卡片被一次性放大到换行失控。
+ */
+@media (min-width: 1920px) {
+  :where(
+    .cockpit-shell,
+    .cockpit-modal,
+    .vkpi-popover-layer,
+    .cockpit-settings-dark,
+    .vkpi-page-stage--overlay,
+    .vkpi-ask-overlay
+  ) {
+    --ds-fs-7: 9px;
+    --ds-fs-7-5: 9.5px;
+    --ds-fs-8: 10px;
+    --ds-fs-8-5: 10.5px;
+    --ds-fs-9: 11px;
+    --ds-fs-9-5: 11.5px;
+    --ds-fs-10: 12px;
+    --ds-fs-10-5: 12.5px;
+    --ds-fs-11: 13px;
+    --ds-fs-11-5: 13.5px;
+    --ds-fs-12: 14px;
+    --ds-fs-12-5: 14.5px;
+    --ds-fs-13: 15px;
+    --ds-fs-13-5: 15px;
+
+    --ds-cockpit-fs-7: var(--ds-fs-7);
+    --ds-cockpit-fs-7-5: var(--ds-fs-7-5);
+    --ds-cockpit-fs-8: var(--ds-fs-8);
+    --ds-cockpit-fs-8-5: var(--ds-fs-8-5);
+    --ds-cockpit-fs-9: var(--ds-fs-9);
+    --ds-cockpit-fs-9-5: var(--ds-fs-9-5);
+    --ds-cockpit-fs-10: var(--ds-fs-10);
+    --ds-cockpit-fs-10-5: var(--ds-fs-10-5);
+    --ds-cockpit-fs-11: var(--ds-fs-11);
+    --ds-cockpit-fs-11-5: var(--ds-fs-11-5);
+    --ds-cockpit-fs-12: var(--ds-fs-12);
+    --ds-cockpit-fs-12-5: var(--ds-fs-12-5);
+    --ds-cockpit-fs-13: var(--ds-fs-13);
+    --ds-cockpit-fs-13-5: var(--ds-fs-13-5);
+  }
 }
 
 /* ---------- 遗留 Tailwind 任意值 → token(只列 ≤13.5px,标题层不动) ---------- */

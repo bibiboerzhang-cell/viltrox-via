@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
@@ -25,6 +26,7 @@ from app.services.media.video_keyframes import temporary_keyframes
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 from app.workers.apify_jobs_worker_helpers import (
     _int_or_none,
+    _redact_sensitive_text,
     _target,
     _truthy,
 )
@@ -214,7 +216,9 @@ def _download_youtube_for_keyframes(url: str, output_dir: str) -> dict[str, Any]
     out_tmpl = str(Path(output_dir) / "youtube_keyframes.%(ext)s")
     ytdlp_proxy = os.environ.get("YTDLP_PROXY", "").strip()
     cmd = [
-        "yt-dlp",
+        sys.executable,
+        "-m",
+        "yt_dlp",
         "--quiet",
         "--no-progress",
         "-f",
@@ -229,11 +233,18 @@ def _download_youtube_for_keyframes(url: str, output_dir: str) -> dict[str, Any]
     cmd.append(url)
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    except FileNotFoundError:
+        output["error"] = "yt_dlp_entrypoint_missing"
+        return output
+    except OSError:
+        output["error"] = "yt_dlp_execution_failed"
+        return output
     except subprocess.TimeoutExpired:
         output["error"] = "youtube keyframe download timed out"
         return output
     if proc.returncode != 0:
-        output["error"] = (proc.stderr or proc.stdout or "youtube keyframe download failed")[-500:]
+        raw_error = (proc.stderr or proc.stdout or "youtube keyframe download failed")[-500:]
+        output["error"] = _redact_sensitive_text(raw_error, limit=500)
         return output
     candidates = sorted(Path(output_dir).glob("youtube_keyframes.*"))
     if not candidates:

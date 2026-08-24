@@ -116,6 +116,10 @@ class _PoolConn:
         compact = " ".join(sql.split())
         if "GROUP BY COALESCE(NULLIF(candidate_kind" in compact:
             return _Result(rows=[])
+        if compact.startswith("SELECT id, platform, handle, profile_url, display_name, avatar_url,"):
+            return _Result(rows=[{**_row(), "duplicate_of_id": None}])
+        if compact.startswith("SELECT id FROM vkpi_kol_pool"):
+            return _Result(rows=[{"id": 7}])
         if "ORDER BY" in compact and "LIMIT" in compact:
             return _Result(rows=[_row()])
         if "COUNT(*) AS n" in compact:
@@ -408,8 +412,8 @@ def test_list_and_workspace_force_masked_and_never_cache_bulk_plaintext(
         _assert_no_contact_truth(payload)
     assert any("contact_visibility:masked" in key for key in cache)
     assert not any("contact_visibility:full" in key for key in cache)
-    assert len([key for key in cache if ":list:" in key]) == 1
-    assert len([key for key in cache if ":workspace:" in key]) == 1
+    assert len([key for key in cache if ":list-canonical-projection-v2:" in key]) == 1
+    assert len([key for key in cache if ":workspace-canonical-projection-v2:" in key]) == 1
 
 
 def test_domain_item_is_value_free_for_both_legacy_visibility_inputs(monkeypatch) -> None:

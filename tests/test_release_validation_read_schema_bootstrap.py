@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
 from app.domains.media import cache_core
@@ -66,8 +67,7 @@ def test_live_weekly_read_keeps_schema_compatibility_bootstrap(monkeypatch) -> N
     assert calls == ["ensure", "ensure"]
 
 
-def test_fenced_memory_readiness_skips_migration_bootstrap(monkeypatch) -> None:
-    monkeypatch.setattr(memory_feedback, "release_validation_active", lambda: True)
+def test_memory_readiness_always_skips_migration_bootstrap(monkeypatch) -> None:
     monkeypatch.setattr(memory_feedback, "ensure_memory_schema", _ddl_forbidden)
     monkeypatch.setattr(memory_feedback, "get_conn", _ReadOnlyConnection)
     monkeypatch.setattr(memory_feedback, "_market_signal_counts", lambda: {})
@@ -79,21 +79,84 @@ def test_fenced_memory_readiness_skips_migration_bootstrap(monkeypatch) -> None:
     assert result["provider_calls_allowed"] is False
 
 
-def test_live_memory_readiness_keeps_schema_compatibility_bootstrap(monkeypatch) -> None:
-    calls: list[str] = []
-    monkeypatch.setattr(memory_feedback, "release_validation_active", lambda: False)
-    monkeypatch.setattr(
-        memory_feedback,
-        "ensure_memory_schema",
-        lambda: calls.append("ensure"),
-    )
+def test_live_memory_readiness_is_also_pure_read(monkeypatch) -> None:
+    monkeypatch.setattr(memory_feedback, "ensure_memory_schema", _ddl_forbidden)
     monkeypatch.setattr(memory_feedback, "get_conn", _ReadOnlyConnection)
     monkeypatch.setattr(memory_feedback, "_market_signal_counts", lambda: {})
     monkeypatch.setattr(memory_feedback, "_table_exists", lambda _name: False)
 
-    memory_feedback.readiness()
+    result = memory_feedback.readiness()
 
-    assert calls == ["ensure"]
+    assert result["status"] == "blocked"
+    assert result["provider_calls_allowed"] is False
+
+
+def test_memory_readiness_blocks_cleanly_when_schema_is_absent(monkeypatch) -> None:
+    connection = sqlite3.connect(":memory:")
+    connection.row_factory = sqlite3.Row
+    monkeypatch.setattr(memory_feedback, "get_conn", lambda: connection)
+    monkeypatch.setattr(memory_feedback, "_table_exists", lambda _name: False)
+    monkeypatch.setattr(
+        memory_feedback,
+        "_market_signal_counts",
+        lambda: (_ for _ in ()).throw(AssertionError("missing schema must short-circuit")),
+    )
+
+    result = memory_feedback.readiness()
+
+    assert result["status"] == "blocked"
+    assert result["blockers"][0]["key"] == "memory_schema"
+    assert len(result["blockers"][0]["missing_tables"]) == 4
+
+
+def test_launch_candidate_readiness_has_no_ddl_provider_or_persistence(monkeypatch) -> None:
+    from app.domains.recommendations import new_launch_match
+    from app.domains.recommendations import new_launch_match_helpers
+
+    connection = _ReadOnlyConnection()
+    monkeypatch.setattr(memory_feedback, "ensure_memory_schema", _ddl_forbidden)
+    monkeypatch.setattr(memory_feedback, "get_conn", lambda: connection)
+    monkeypatch.setattr(memory_feedback, "_market_signal_counts", lambda: {})
+    monkeypatch.setattr(memory_feedback, "_table_exists", lambda _name: False)
+    monkeypatch.setattr(
+        new_launch_match_helpers,
+        "resolve_target_family",
+        lambda _query: (
+            {"entity_uid": "family_test", "display_name": "Test Family"},
+            "Test Family",
+            "",
+        ),
+    )
+
+    def _unexpected_provider(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("launch candidate dry-run attempted an LLM provider call")
+
+    def _unexpected_persist(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("launch candidate dry-run attempted persistence")
+
+    monkeypatch.setattr(new_launch_match.llm_production, "generate_json", _unexpected_provider)
+    monkeypatch.setattr(new_launch_match, "_persist_preview_run", _unexpected_persist)
+    real_build = new_launch_match.build_new_launch_match_preview
+    observed: list[dict[str, Any]] = []
+
+    def _observed_build(**kwargs: Any) -> dict[str, Any]:
+        observed.append(dict(kwargs))
+        return real_build(**kwargs)
+
+    monkeypatch.setattr(new_launch_match, "build_new_launch_match_preview", _observed_build)
+
+    result = launch_assembly._candidate_pool("AF 35/1.8", 12)
+
+    assert result["status"] == "unavailable"
+    assert "memory readiness blocked" in result["reason"]
+    assert observed == [
+        {
+            "product_query": "Test Family",
+            "limit": 12,
+            "with_llm_reasons": False,
+            "persist_run": False,
+        }
+    ]
 
 
 def test_fenced_media_cache_reads_skip_compatibility_ddl(monkeypatch) -> None:

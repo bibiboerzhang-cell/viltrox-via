@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn
 from app.domains.legacy_import.legacy_import_audit import _text
 from app.domains.legacy_import.legacy_import_staging import json_dumps
@@ -21,14 +20,50 @@ from app.domains.memory.common import (
 )
 
 def readiness() -> dict[str, Any]:
-    """Return a deterministic P4 dry-run readiness check for Memory."""
+    """Return a deterministic, read-only P4 dry-run readiness check for Memory.
 
-    # The release gate runs this existing read surface in a database-enforced
-    # read-only transaction.  Migrations already ran before the fence was
-    # installed; attempting the compatibility bootstrap here would turn an
-    # otherwise bounded SELECT into CREATE TABLE and abort the request.
-    if not release_validation_active():
-        ensure_memory_schema()
+    Schema creation belongs to the deploy migration gate.  This function is
+    also reached by GET launch previews, so a compatibility bootstrap here
+    would make an advertised read surface execute DDL in normal runtime.
+    """
+
+    required_tables = (
+        "vkpi_memory_entities",
+        "vkpi_memory_facts",
+        "vkpi_memory_links",
+        "vkpi_memory_feedback",
+    )
+    missing_tables: list[str] = []
+    for table_name in required_tables:
+        try:
+            exists = _table_exists(table_name)
+        except Exception:
+            exists = False
+        if not exists:
+            missing_tables.append(table_name)
+    if missing_tables:
+        schema_gate = {
+            "key": "memory_schema",
+            "status": "fail",
+            "severity": "critical",
+            "actual": len(required_tables) - len(missing_tables),
+            "expected_min": len(required_tables),
+            "detail": "required memory tables are unavailable; deploy migrations before readiness reads",
+            "missing_tables": missing_tables,
+        }
+        return {
+            "status": "blocked",
+            "provider_calls_allowed": False,
+            "provider_gate": "Memory schema is incomplete; provider calls and recommendation writes remain blocked",
+            "gates": [schema_gate],
+            "blockers": [schema_gate],
+            "warnings": [],
+            "counts": {
+                "entities": {}, "facts": {}, "links": {}, "feedback": {},
+                "product_normalization_status": {}, "market_signals": {},
+            },
+        }
+
     conn = get_conn()
     entity_counts = {
         row["entity_type"]: int(row["n"])

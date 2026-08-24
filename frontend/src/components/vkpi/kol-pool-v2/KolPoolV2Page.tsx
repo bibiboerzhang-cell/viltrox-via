@@ -10,7 +10,7 @@ import {
   type VkpiKolPoolIntelligenceCard,
 } from '../../../domains/kol';
 import { rows, type Row } from '../../../domains/dashboard';
-import { Avatar } from '../shared/Avatar';
+import { Avatar, avatarStatusLabel } from '../shared/Avatar';
 import {
   CANDIDATE_CLASS_INFO,
   dataGaps,
@@ -161,11 +161,11 @@ function KolPoolDetailDrawer({
       </header>
 
       <section className="kol-pool-v2-detail-hero">
-        <Avatar name={kolDisplayName(item)} src={item.avatar_url} size="lg" />
+        <Avatar name={kolDisplayName(item)} src={item.avatar_url} status={item.avatar_url_status} size="lg" />
         <div>
           <CandidateChip item={item} />
           <strong>{item.handle || item.pool_uid || `#${item.id}`}</strong>
-          <span>{item.profile_url ? '主页已记录' : '主页暂无数据'} · {item.sync_status || 'sync status 暂无数据'}</span>
+          <span>{item.profile_url ? '主页已记录' : '主页暂无数据'} · {item.sync_status || 'sync status 暂无数据'} · {avatarStatusLabel(item.avatar_url_status) || '头像状态暂无数据'}</span>
         </div>
       </section>
 
@@ -521,7 +521,7 @@ export function KolPoolV2Page({
                   <td>
                     <div className="kol-pool-v2-profile">
                       <span className={`kol-pool-v2-freshness is-${deriveFreshness(item)}`} />
-                      <Avatar name={kolDisplayName(item)} src={item.avatar_url} size="sm" />
+                      <Avatar name={kolDisplayName(item)} src={item.avatar_url} status={item.avatar_url_status} size="sm" />
                       <span>
                         <b>{kolDisplayName(item)}</b>
                         <em><PlatformPill value={item.platform} /> <CandidateChip item={item} /></em>

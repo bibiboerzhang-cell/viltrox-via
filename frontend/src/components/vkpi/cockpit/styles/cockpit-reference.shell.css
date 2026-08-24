@@ -181,7 +181,7 @@
 
 .vkpi-rail__name {
   color: var(--ds-text);
-  font-size: 13.5px;
+  font-size: var(--ds-cockpit-fs-13-5);
   font-weight: 660;
   line-height: 1.2;
 }
@@ -190,7 +190,7 @@
   margin-top: 2px;
   color: var(--ds-muted);
   font-family: var(--ds-font-mono);
-  font-size: 8.5px;
+  font-size: var(--ds-cockpit-fs-8-5);
   letter-spacing: 0.1em;
 }
 
@@ -209,7 +209,7 @@
   margin: 12px 10px 4px;
   padding: 0;
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   font-weight: 600;
   letter-spacing: 0.15em;
   opacity: 0.72;
@@ -222,7 +222,7 @@
   padding: 8px 10px;
   border-radius: 9px;
   color: var(--ds-text-2);
-  font-size: 12.5px;
+  font-size: var(--ds-cockpit-fs-12-5);
   line-height: 1.35;
   transition: color 0.16s, background-color 0.16s;
 }
@@ -277,7 +277,7 @@
 
 .vkpi-task-progress__compact-title {
   color: var(--ds-text);
-  font-size: 11px;
+  font-size: var(--ds-cockpit-fs-11);
   font-weight: 650;
 }
 
@@ -286,7 +286,7 @@
   align-items: center;
   gap: 5px;
   color: var(--ds-muted);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   font-variant-numeric: tabular-nums;
 }
 
@@ -319,7 +319,7 @@
   grid-template-columns: 28px minmax(0, 1fr) 24px;
   align-items: center;
   gap: 7px;
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
 }
 
 .vkpi-task-progress__compact-name {
@@ -364,7 +364,7 @@
   overflow: hidden;
   color: var(--ds-muted);
   font-family: var(--ds-font-mono);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -377,7 +377,7 @@
   border-top: 1px solid var(--ds-line);
   color: var(--ds-muted);
   font-family: var(--ds-font-mono);
-  font-size: 8.5px;
+  font-size: var(--ds-cockpit-fs-8-5);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -393,7 +393,7 @@
 .vkpi-rail__utility {
   min-height: 32px;
   color: var(--ds-muted);
-  font-size: 12px;
+  font-size: var(--ds-cockpit-fs-12);
 }
 
 .vkpi-rail.is-collapsed .vkpi-rail__item.is-active::before {
@@ -568,7 +568,7 @@
 .vkpi-kpi-overview__head h2 {
   margin: 0;
   color: var(--ds-text);
-  font-size: 13px;
+  font-size: var(--ds-cockpit-fs-13);
   font-weight: 650;
   letter-spacing: 0;
 }
@@ -579,7 +579,7 @@
   border-radius: 5px;
   color: var(--ds-muted);
   background: var(--ds-card);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
 }
 
 .vkpi-kpi-overview__tools,
@@ -604,7 +604,7 @@
   padding: 3px 9px;
   border-radius: 6px;
   color: var(--ds-muted);
-  font-size: 10px;
+  font-size: var(--ds-cockpit-fs-10);
   transition: color 0.16s, background-color 0.16s;
 }
 
@@ -618,7 +618,7 @@
   align-items: center;
   gap: 5px;
   color: var(--ds-good);
-  font-size: 9px;
+  font-size: var(--ds-cockpit-fs-9);
   white-space: nowrap;
 }
 
