@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 import hashlib
 import http.client
 import json
@@ -249,6 +250,79 @@ def _server_timing_metrics(value: str) -> frozenset[str]:
     return frozenset(metrics)
 
 
+def _canonical_decimal(value: Decimal) -> bytes:
+    """Encode one finite JSON number exactly, ignoring spelling only.
+
+    ``1``, ``1.0`` and ``1e0`` share a value and therefore an encoding.  No
+    binary-float conversion is allowed: decimals beyond IEEE-754 precision
+    must remain distinct so the audit can detect cache precision loss.
+    """
+
+    if not value.is_finite():
+        raise ValueError("non_finite_json_number")
+    if value.is_zero():
+        return b"0e0"
+    sign, raw_digits, exponent = value.as_tuple()
+    digits = list(raw_digits)
+    while digits and digits[-1] == 0:
+        digits.pop()
+        exponent += 1
+    coefficient = "".join(str(digit) for digit in digits) or "0"
+    prefix = "-" if sign else ""
+    return f"{prefix}{coefficient}e{exponent}".encode("ascii")
+
+
+def _frame(tag: bytes, payload: bytes) -> bytes:
+    return tag + str(len(payload)).encode("ascii") + b":" + payload
+
+
+def _canonical_json_value(value: Any) -> bytes:
+    """Return an unambiguous, type-preserving canonical byte stream."""
+
+    if value is None:
+        return b"N"
+    if isinstance(value, bool):
+        return b"T" if value else b"F"
+    if isinstance(value, Decimal):
+        return _frame(b"D", _canonical_decimal(value))
+    if isinstance(value, str):
+        return _frame(b"S", value.encode("utf-8"))
+    if isinstance(value, list):
+        return _frame(b"L", b"".join(_frame(b"V", _canonical_json_value(item)) for item in value))
+    if isinstance(value, dict):
+        members = []
+        for key in sorted(value):
+            key_bytes = str(key).encode("utf-8")
+            members.append(_frame(b"K", key_bytes))
+            members.append(_frame(b"V", _canonical_json_value(value[key])))
+        return _frame(b"O", b"".join(members))
+    raise ValueError("unsupported_json_value")
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"non_finite_json_number:{value}")
+
+
+def _reject_duplicate_object_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate_json_object_key")
+        value[key] = item
+    return value
+
+
+def _semantic_json_sha256(body: bytes) -> str:
+    parsed = json.loads(
+        body,
+        parse_int=Decimal,
+        parse_float=Decimal,
+        parse_constant=_reject_json_constant,
+        object_pairs_hook=_reject_duplicate_object_keys,
+    )
+    return hashlib.sha256(_canonical_json_value(parsed)).hexdigest()
+
+
 def _sample(
     result: HttpResult,
     *,
@@ -267,10 +341,13 @@ def _sample(
         errors.append(f"sample_{index}:http_status_{result.status}")
     if "application/json" not in content_type:
         errors.append(f"sample_{index}:content_type_not_json")
+    semantic_sha256: str | None = None
     try:
-        json.loads(result.body)
+        semantic_sha256 = _semantic_json_sha256(result.body)
     except (UnicodeDecodeError, json.JSONDecodeError):
         errors.append(f"sample_{index}:invalid_json")
+    except ValueError:
+        errors.append(f"sample_{index}:non_finite_json_number")
     if cache_outcome not in SAFE_CACHE_OUTCOMES:
         errors.append(f"sample_{index}:cache_outcome_missing_or_invalid")
     if cache_builder not in {"0", "1"}:
@@ -294,6 +371,7 @@ def _sample(
             "latency_ms": round(float(result.latency_ms), 3),
             "response_bytes": len(result.body),
             "response_sha256": hashlib.sha256(result.body).hexdigest(),
+            "response_semantic_sha256": semantic_sha256,
             "cache_outcome": cache_outcome or "missing",
             "cache_builder": cache_builder or "missing",
             "cache_key_version": key_version or "missing",
@@ -344,9 +422,9 @@ def audit_endpoint(
                 errors.append(f"sample_{sample['index']}:warm_hit_not_observed")
             if sample["server_timing_builder_present"]:
                 errors.append(f"sample_{sample['index']}:warm_builder_timing_present")
-        digests = {sample["response_sha256"] for sample in samples}
+        digests = {sample["response_semantic_sha256"] for sample in samples}
         if len(digests) != 1:
-            errors.append("response_changed_between_cold_and_warm_reads")
+            errors.append("response_semantics_changed_between_cold_and_warm_reads")
         warm_latency = _latency_summary([float(sample["latency_ms"]) for sample in warm])
         if warm_latency["p95_ms"] > warm_p95_max_ms:
             errors.append("warm_p95_budget_exceeded")

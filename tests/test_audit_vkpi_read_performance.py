@@ -155,6 +155,98 @@ def test_warm_observe_never_reports_a_cold_speedup_claim() -> None:
     assert endpoint["cold_to_warm_p95_speedup"] is None
 
 
+def test_response_stability_compares_json_numbers_semantically() -> None:
+    requester = _Requester(
+        [
+            _result(
+                surface="gtm",
+                outcome="miss_builder",
+                builder=True,
+                latency_ms=700,
+                body=b'{"status":"ok","score":1,"nested":[0,2.5]}',
+            ),
+            _result(
+                surface="gtm",
+                outcome="hit",
+                builder=False,
+                latency_ms=70,
+                body=b'{"nested":[0.0,2.50],"score":1.0,"status":"ok"}',
+            ),
+            _result(
+                surface="gtm",
+                outcome="hit",
+                builder=False,
+                latency_ms=75,
+                body=b'{"score":1e0,"status":"ok","nested":[0,2.5]}',
+            ),
+        ]
+    )
+
+    endpoint = _run(
+        requester,
+        mode=audit.MODE_WARM,
+        strict_runtime_confirmed=False,
+    )["endpoints"][0]
+
+    assert endpoint["passed"] is True
+    assert len({sample["response_sha256"] for sample in endpoint["samples"]}) == 3
+    assert len({sample["response_semantic_sha256"] for sample in endpoint["samples"]}) == 1
+
+
+def test_response_stability_still_rejects_semantic_changes() -> None:
+    requester = _Requester(
+        [
+            _result(
+                surface="gtm",
+                outcome="miss_builder",
+                builder=True,
+                latency_ms=700,
+                body=b'{"status":"ok","score":1}',
+            ),
+            _result(
+                surface="gtm",
+                outcome="hit",
+                builder=False,
+                latency_ms=70,
+                body=b'{"status":"ok","score":2}',
+            ),
+            _result(
+                surface="gtm",
+                outcome="hit",
+                builder=False,
+                latency_ms=75,
+                body=b'{"status":"ok","score":2}',
+            ),
+        ]
+    )
+
+    endpoint = _run(
+        requester,
+        mode=audit.MODE_WARM,
+        strict_runtime_confirmed=False,
+    )["endpoints"][0]
+
+    assert endpoint["passed"] is False
+    assert "response_semantics_changed_between_cold_and_warm_reads" in endpoint["errors"]
+
+
+@pytest.mark.parametrize(
+    ("left", "right"),
+    [
+        (b'{"value":0.1}', b'{"value":0.10000000000000001}'),
+        (b'{"value":1}', b'{"value":1.0000000000000000000000000001}'),
+        (b'{"value":9007199254740992}', b'{"value":9007199254740992.1}'),
+    ],
+)
+def test_semantic_digest_preserves_decimal_precision(left: bytes, right: bytes) -> None:
+    assert audit._semantic_json_sha256(left) != audit._semantic_json_sha256(right)
+
+
+def test_semantic_digest_rejects_duplicate_object_keys() -> None:
+    with pytest.raises(ValueError, match="duplicate_json_object_key"):
+        audit._semantic_json_sha256(b'{"value":1,"value":2}')
+
+
 @pytest.mark.parametrize(
     ("base_url", "confirmed", "error"),
     [
