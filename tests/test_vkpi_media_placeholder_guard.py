@@ -51,11 +51,19 @@ def test_cached_image_file_treats_placeholder_as_miss(tmp_path, monkeypatch):
 def test_cached_image_url_skips_placeholder(tmp_path, monkeypatch):
     url = "https://scontent.cdninstagram.com/poisoned.jpg"
     digest, cache_path, content_type_path = media_cache._cache_paths(url)
-    monkeypatch.setattr(media_cache, "_cache_paths", lambda _url: (digest, tmp_path / digest, tmp_path / f"{digest}.content-type"))
+    monkeypatch.setattr(media_cache, "_cache_paths", lambda _url, **_kwargs: (digest, tmp_path / digest, tmp_path / f"{digest}.content-type"))
     _write_entry(tmp_path, digest, TRANSPARENT_SVG, "image/svg+xml")
 
     # 存在但是失败占位 → 不得声称已缓存(media_status=cached 的上游谎言就来自这里)。
     assert media_cache.cached_image_url(url) == ""
+
+
+def test_cached_image_url_miss_does_not_create_cache_directory(tmp_path, monkeypatch):
+    missing = tmp_path / "not-created"
+    monkeypatch.setattr(media_cache_core, "CACHE_DIR", missing)
+
+    assert media_cache.cached_image_url("https://scontent.cdninstagram.com/missing.jpg") == ""
+    assert not missing.exists()
 
 
 def test_fetch_external_image_failure_reports_not_ok(monkeypatch):

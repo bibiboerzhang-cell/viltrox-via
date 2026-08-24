@@ -345,6 +345,7 @@ export function TextResultSection({
   outreachBusy,
   displayedSearchSessionId,
   isSessionPolling,
+  isSessionPollPaused,
   resultsStale,
   approvalReady,
   favoriteOne,
@@ -358,6 +359,7 @@ export function TextResultSection({
   activeSessionCounts,
   sessionPollNotice,
   retrySearchSession,
+  resumeSearchPolling,
 }: {
   recallResult: VkpiKolRecallResponse;
   searchSession: VkpiKolSearchHistoryItem | null;
@@ -412,6 +414,7 @@ export function TextResultSection({
   outreachBusy: boolean;
   displayedSearchSessionId: number | null;
   isSessionPolling: boolean;
+  isSessionPollPaused: boolean;
   resultsStale: boolean;
   approvalReady: boolean;
   favoriteOne: (kolPoolId: number) => void;
@@ -425,6 +428,7 @@ export function TextResultSection({
   activeSessionCounts: Record<string, any>;
   sessionPollNotice: string;
   retrySearchSession: () => void;
+  resumeSearchPolling: () => void;
 }) {
   // 发现真总数 = 可见 + 被触达闸折叠(分析中/低触达):K3 入库反馈按真总数说话,
   // 否则「发现 3 人、入库 15 人」自相矛盾(隐藏项也都入了库)。纯派生,无 hooks。
@@ -806,6 +810,18 @@ export function TextResultSection({
           <div className="flex items-center gap-1.5 rounded-md border border-emerald-300/15 bg-black/15 px-2.5 py-2 text-[10.5px] text-emerald-100/80">
             <Loader2 size={12} className="animate-spin" /> 正在从所选平台找新号，完成后自动显示
           </div>
+        ) : isSessionPollPaused ? (
+          <div className="rounded-md border border-amber-300/20 bg-amber-400/[0.08] px-3 py-2.5 text-[10.5px] leading-relaxed text-amber-100">
+            <div className="font-medium">后台任务状态待继续同步</div>
+            <div className="mt-0.5 opacity-85">高频同步已到时限，但没有把任务判成失败，也没有重新入队。</div>
+            <button
+              type="button"
+              onClick={resumeSearchPolling}
+              className="mt-1.5 inline-flex min-h-[26px] items-center justify-center gap-1.5 rounded-md border border-amber-300/30 bg-amber-500/[0.14] px-2.5 text-[10px] font-medium text-amber-100 hover:bg-amber-500/[0.22]"
+            >
+              <RefreshCw size={11} /> 继续同步原任务
+            </button>
+          </div>
         ) : sessionBanner && (sessionBanner.tone === "error" || sessionBanner.tone === "warn") ? (
           // 失败/部分但无发现项:不再静默落空白占位,直接说明状态与原因(诚实兜底)。
           <div className={`rounded-md border px-3 py-2.5 text-[10.5px] leading-relaxed ${
@@ -845,8 +861,8 @@ export function TextResultSection({
                   : "border-emerald-300/15 bg-black/15 text-emerald-100/75"
           }`}>
             <div className="flex flex-wrap items-center gap-1.5">
-              {sessionBanner.tone === "info" ? <Loader2 size={11} className="animate-spin" /> : null}
-              <span className="font-medium">{sessionBanner.label}</span>
+              {sessionBanner.tone === "info" && !isSessionPollPaused ? <Loader2 size={11} className="animate-spin" /> : null}
+              <span className="font-medium">{isSessionPollPaused ? "后台状态待继续同步" : sessionBanner.label}</span>
               {Object.keys(activeSessionCounts).length ? (
                 <>
                   <span className="rounded border border-white/[0.1] bg-black/15 px-1.5 py-0.5">已找到 {display(activeSessionCounts.ready, "0")}</span>
@@ -859,6 +875,15 @@ export function TextResultSection({
             </div>
             <div className="mt-0.5 opacity-85">{sessionBanner.note}</div>
             {sessionPollNotice ? <div className="mt-0.5 opacity-70">{sessionPollNotice}</div> : null}
+            {isSessionPollPaused ? (
+              <button
+                type="button"
+                onClick={resumeSearchPolling}
+                className="mt-1.5 inline-flex min-h-[26px] items-center justify-center gap-1.5 rounded-md border border-amber-300/25 px-2.5 text-[10px] font-medium text-amber-100 hover:bg-amber-400/[0.08]"
+              >
+                <RefreshCw size={11} /> 继续同步原任务
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>

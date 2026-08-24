@@ -76,7 +76,7 @@ def cached_image_url(raw_url: Any) -> str:
     normalized = _normalize_image_url(raw_url)
     if not normalized:
         return ""
-    digest, cache_path, content_type_path = _cache_paths(normalized[0])
+    digest, cache_path, content_type_path = _cache_paths(normalized[0], create=False)
     if cache_path.exists() and content_type_path.exists() and not is_failure_placeholder_cache(cache_path, content_type_path):
         return f"{PUBLIC_IMAGE_CACHE_PREFIX}/{digest}"
     return ""
@@ -86,7 +86,7 @@ def cached_video_url(raw_url: Any) -> str:
     normalized = _normalize_video_url(raw_url)
     if not normalized:
         return ""
-    digest, cache_path, content_type_path = _video_cache_paths(normalized[0])
+    digest, cache_path, content_type_path = _video_cache_paths(normalized[0], create=False)
     if cache_path.exists() and content_type_path.exists():
         return f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
     r2_url = _cached_asset_url_by_digest("video", digest)

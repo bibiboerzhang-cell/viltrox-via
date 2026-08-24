@@ -8,15 +8,8 @@ import {
   type VkpiVideoTasks,
 } from "./myKolVideoTasks";
 
-// MY KOL 板块页 · 看板扩展数据层(M3/M4):
-//   ① GET /api/admin/vkpi/my-kol/board-ext?days=30 —— 八组聚合(kpi_series/funnel/
-//      platform_dist/fit_dist/contact_coverage/views_top/recent_videos/v_content)
-//      类型化 fetch;M4 把各组契约逐组类型化(形状 1:1 对齐 backend
-//      my_kol_board_ext.py 构建器,禁编字段);v_content 五档互斥证据 + v_kol_ids /
-//      v_kol_ids_truncated / tiers_by_kol(库「有 V 视频」名单精确过滤 + KOL 级
-//      去重计数);recent_videos(内容墙)= 收藏集最近采集视频
-//      带缩略图三件套(创意库同一条毒缓存自愈链,best_thumbnail 语义)。
-//   ② GET /api/admin/vkpi/kol-pool/{id}/videos —— 单 KOL 全部 evidence 视频(类型化);
+// MY KOL 看板读模型：board-ext 八组聚合、单 KOL evidence 与内容墙。
+// 契约形状 1:1 对齐后端构建器；缩略图与创意库共用毒缓存自愈链。
 //   ③ classifyVContent —— 后端 my_kol_board_ext.classify_v_content 的前端同构复现:
 //      项目关联 > latest ready final_v1 positive/products > 中英文标题品牌词 >
 //      final_v1 explicit false > 未判定；只消费结构化证据，不暴露深析原文;
@@ -157,6 +150,10 @@ export interface VkpiRecentVideosGroup extends VkpiBoardExtGroup {
   items?: VkpiRecentVideoItem[];
   /** 后端封顶常量(SQL + Python 双封顶)原样透出 */
   limit?: number;
+  /** keyset 游标页;继续请求可走到当前组合筛选的真末页。 */
+  page?: VkpiVideoPageInfo;
+  /** 服务端已实际下推的组合筛选;days=0 = 全时间。 */
+  filters?: { days?: number; kol_pool_id?: number | null; since?: string | null };
 }
 
 export interface VkpiVContentGroup extends VkpiBoardExtGroup {
@@ -209,6 +206,43 @@ export async function getMyKolBoardExt(token: string, params: { days?: number; s
   const query = new URLSearchParams({ days: String(params.days ?? 30) });
   if (params.staffId != null) query.set("staff_id", String(params.staffId));
   return apiFetch<VkpiMyKolBoardExtResponse>(`/api/admin/vkpi/my-kol/board-ext?${query.toString()}`, {}, token);
+}
+
+/** 只读内容墙一页:全部/单 KOL × 全时间/7/15/30 天均在服务端筛选。
+ * cursor 是上一页 page.next_cursor 原样回传,不在前端解析。 */
+export async function getMyKolRecentVideos(
+  token: string,
+  params: { days?: number; kolPoolId?: number; staffId?: number; cursor?: string | null; since?: string | null } = {},
+) {
+  const query = new URLSearchParams({ days: String(Math.max(0, Number(params.days) || 0)) });
+  if (params.kolPoolId) query.set("kol_pool_id", String(params.kolPoolId));
+  if (params.staffId) query.set("staff_id", String(params.staffId));
+  if (params.cursor) query.set("cursor", params.cursor);
+  if (params.since) query.set("since", params.since);
+  const response = await apiFetch<VkpiRecentVideosGroup>(
+    `/api/admin/vkpi/my-kol/board-ext/recent-videos?${query.toString()}`,
+    {},
+    token,
+  );
+  if (String(response?.status || "").toLowerCase() === "error") {
+    throw new Error(String(response?.reason || "内容墙读取失败").slice(0, 160));
+  }
+  const items = (Array.isArray(response?.items) ? response.items : []).map((video) => ({
+    ...video,
+    tasks: video && typeof video === "object" && "tasks" in video
+      ? normalizeVideoTasks((video as VkpiRecentVideoItem).tasks)
+      : null,
+  }));
+  const page = response?.page && typeof response.page === "object" ? response.page : undefined;
+  return {
+    ...(response || {}),
+    items,
+    page: page ? {
+      ...page,
+      has_more: Boolean(page.has_more && page.next_cursor),
+      next_cursor: page.has_more && page.next_cursor ? String(page.next_cursor) : null,
+    } : undefined,
+  } as VkpiRecentVideosGroup;
 }
 
 /* ============ ② 单 KOL 全部 evidence 视频(/kol-pool/{id}/videos 类型化) ============ */
@@ -433,6 +467,11 @@ export async function enqueueMyKolVideoKeyframeQa(
 export interface VkpiDataWatchSkuCandidate {
   sku_code?: string;
   sku_name?: string;
+  /** 候选从哪个可审计读模型命中；缺省表示产品目录全量候选。 */
+  match_source?: "final_v1_lens_evidence_v2" | string;
+  /** final_v1 证据模态：visual=画面，text=字幕/OCR，voice=口播。 */
+  modalities?: string[];
+  evidence_excerpt?: string;
 }
 
 /** 契约(与后端 video_data_watch 并行锁定,禁编字段):
@@ -447,9 +486,20 @@ export interface VkpiDataWatchResponse {
   sku_source?: "manual" | "existing" | "auto" | string;
   sku_provenance?: {
     relation_type?: "manual" | "detected" | "confirmed" | "existing" | string;
-    source?: "title_alias_v1" | "my_kol_video_tracking" | "existing_link" | string;
+    source?: "title_alias_v1" | "final_v1_lens_evidence_v2" | "my_kol_video_tracking" | "existing_link" | string;
     confidence?: number | null;
     requires_human_confirmation?: boolean;
+    cache_id?: number;
+    modalities?: string[];
+    source_fields?: string[];
+    evidence_excerpt?: string;
+    extractor_version?: string;
+    links?: Array<{
+      sku?: string;
+      relation_type?: "manual" | "detected" | "confirmed" | string;
+      source?: string;
+      confidence?: number | null;
+    }>;
   };
   tracking?: "active" | string;
   refresh?: "queued" | "already_queued" | string;

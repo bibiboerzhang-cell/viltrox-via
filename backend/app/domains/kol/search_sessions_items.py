@@ -12,7 +12,6 @@ from app.domains.kol.search_sessions_identity_projection import (
     _session_creator_probe,
     canonicalize_session_creator_items,
 )
-from app.domains.kol.search_sessions_schema import PENDING_ENRICHMENT_STATUSES
 from app.domains.kol.search_sessions_serde import (
     _compact_enrichment_state,
     _compact_public_profile_data,
@@ -93,14 +92,12 @@ def update_item_profile_execution(
     )
     contact_enrichment = _dict(profile_result.get("contact_enrichment"))
     audience_enrichment = _dict(profile_result.get("audience_enrichment"))
-    enrichment_statuses = {
-        _text(contact_enrichment.get("status")).lower(),
-        _text(audience_enrichment.get("status")).lower(),
-    }
-    if next_status == "ready" and enrichment_statuses & (
-        PENDING_ENRICHMENT_STATUSES | {"partial", "error", "failed"}
-    ):
-        next_status = "partial"
+    # Profile materialization and optional async enrichments are independent
+    # stages.  A ready profile must stay ready while contact/audience work is
+    # queued, waiting for evidence, or fails; those states remain observable in
+    # profile_execute and the versioned progress contract.  Collapsing them into
+    # the item status was the source of durable "partial" sessions even when the
+    # requested profile stage had succeeded.
     kol_pool_id = _int_or_none(
         profile_flow.get("kol_pool_id")
         or profile_result.get("matched_kol_pool_id")

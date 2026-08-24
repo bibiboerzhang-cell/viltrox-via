@@ -49,11 +49,17 @@ def test_recent_videos_sql_projects_keyset_modalities_and_keeps_compat_redlines(
     assert "__FINAL_V1_MODALITIES_EXPR__" not in ext.V_CONTENT_CLASSIFIED_CTE
     assert "detail" not in ext.V_CONTENT_CLASSIFIED_CTE
     assert "ORDER BY COALESCE(e.publish_date, e.posted_at, e.created_at) DESC NULLS LAST, e.id DESC" in sql
+    assert "OR COALESCE(e.publish_date, e.posted_at) >= CAST(? AS TIMESTAMPTZ)" in sql
+    assert "OR COALESCE(e.publish_date, e.posted_at, e.created_at) >= CAST(? AS TIMESTAMPTZ)" not in sql
     # keyset 段:NOT ? 短路 + (p, id) 严格之后 + NULL 尾段
-    assert sql.count("CAST(? AS TIMESTAMPTZ)") == 4
+    assert sql.count("CAST(? AS TIMESTAMPTZ)") == 6
     assert "AND e.id < ?" in sql
     assert ext.RECENT_KEYSET_PARAM_COUNT == 7
-    assert sql.count("?") == len(ext.VILTROX_TITLE_TOKENS) + 4 + ext.RECENT_KEYSET_PARAM_COUNT + 1
+    assert ext.RECENT_FILTER_PARAM_COUNT == 4
+    assert sql.count("?") == (
+        len(ext.VILTROX_TITLE_TOKENS) + 4 + ext.RECENT_FILTER_PARAM_COUNT
+        + ext.RECENT_KEYSET_PARAM_COUNT + 1
+    )
     assert "%" not in sql
     assert " LIKE " not in f" {sql.upper()} ".replace("\n", " ")
     assert "--" not in sql
@@ -66,6 +72,23 @@ def test_recent_keyset_params_shape():
     )
     assert ext._recent_keyset_params((None, 6)) == (True, None, None, None, 6, None, 6)
     assert ext._recent_keyset_params(("x", 0)) == (False, None, None, None, 0, None, 0)
+
+
+def test_recent_filter_params_shape_and_cutoff(monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(ext, "_now_utc", lambda: datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc))
+    assert ext._recent_filter_params(0, 0) == (None, None, 0, 0)
+    assert ext._recent_filter_params(7, 101) == (
+        "2026-08-17T12:00:00+00:00", "2026-08-17T12:00:00+00:00", 101, 101,
+    )
+    assert ext._recent_filter_params(999, -2) == (
+        "2025-08-24T12:00:00+00:00", "2025-08-24T12:00:00+00:00", 0, 0,
+    )
+    anchor = datetime(2026, 8, 17, 11, 59, 30, tzinfo=timezone.utc)
+    assert ext._recent_filter_params(7, 101, anchor) == (
+        "2026-08-17T11:59:30+00:00", "2026-08-17T11:59:30+00:00", 101, 101,
+    )
 
 
 # ── 混合 conn:SQLite 真表 + board-ext CTE 等价替身 ────────────────────────
@@ -121,7 +144,14 @@ class _HybridConn:
     def _recent_rows(self, params: tuple) -> list[dict[str, Any]]:
         tokens = len(ext.VILTROX_TITLE_TOKENS)
         scope_sid = params[tokens]
-        use_keyset, p1, _p2, _p3, kid, _p5, _kid2 = params[tokens + 4: tokens + 4 + ext.RECENT_KEYSET_PARAM_COUNT]
+        filter_start = tokens + 4
+        since, _since2, pool_id, _pool_id2 = params[
+            filter_start: filter_start + ext.RECENT_FILTER_PARAM_COUNT
+        ]
+        keyset_start = filter_start + ext.RECENT_FILTER_PARAM_COUNT
+        use_keyset, p1, _p2, _p3, kid, _p5, _kid2 = params[
+            keyset_start: keyset_start + ext.RECENT_KEYSET_PARAM_COUNT
+        ]
         limit = params[-1]
         rows = self._db.execute(
             """
@@ -151,6 +181,14 @@ class _HybridConn:
             (scope_sid, scope_sid),
         ).fetchall()
         items = [dict(r) for r in rows]
+        if since is not None:
+            items = [
+                row for row in items
+                if (row.get("publish_date") or row.get("posted_at")) is not None
+                and (row.get("publish_date") or row.get("posted_at")) >= since
+            ]
+        if pool_id:
+            items = [row for row in items if int(row.get("kol_pool_id") or 0) == int(pool_id)]
         if use_keyset:
             def after(row: dict[str, Any]) -> bool:
                 published = row.get("published_at")
@@ -376,7 +414,65 @@ def test_recent_videos_keyset_walk_has_no_duplicates_and_no_gaps(monkeypatch):
     assert pages == 3
     # 首页(无游标)与 build_board_ext 旧调用同 SQL 同参
     first_call = next(p for s, p in conn.calls if s == ext.RECENT_VIDEOS_SQL)
-    assert first_call[len(ext.VILTROX_TITLE_TOKENS) + 4:] == (False, None, None, None, 0, None, 0, 4)
+    assert first_call[len(ext.VILTROX_TITLE_TOKENS) + 4:] == (
+        None, None, 0, 0,
+        False, None, None, None, 0, None, 0,
+        4,
+    )
+
+
+def test_recent_videos_combines_scope_kol_and_time_filters_before_paging(monkeypatch):
+    from datetime import datetime, timezone
+
+    db = _sqlite()
+    _seed(db)
+    db.execute("INSERT INTO fav VALUES (202, 7684)")
+    db.execute(
+        "INSERT INTO vkpi_kol_video_evidence "
+        "(id, kol_pool_id, view_count, publish_date, created_at, updated_at) "
+        "VALUES (20, 202, 1, '2026-08-23T10:00:00Z', '2026-08-23T10:00:00Z', '2026-08-23T10:00:00Z')"
+    )
+    db.execute(
+        "INSERT INTO vkpi_kol_video_evidence "
+        "(id, kol_pool_id, view_count, publish_date, created_at, updated_at) "
+        "VALUES (21, 202, 1, NULL, '2026-08-24T11:00:00Z', '2026-08-24T11:00:00Z')"
+    )
+    conn = _HybridConn(db)
+    monkeypatch.setattr(ext, "_now_utc", lambda: datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc))
+
+    recent_all = ext.build_recent_videos_page(conn, staff_scope_id=7684, days=15)
+    assert [row["evidence_id"] for row in recent_all["items"]] == [20]
+    assert recent_all["filters"] == {
+        "days": 15, "kol_pool_id": None, "since": "2026-08-09T12:00:00+00:00",
+    }
+
+    recent_one = ext.build_recent_videos_page(
+        conn, staff_scope_id=7684, days=15, kol_pool_id=202,
+    )
+    assert [row["evidence_id"] for row in recent_one["items"]] == [20]
+    assert recent_one["filters"] == {
+        "days": 15, "kol_pool_id": 202, "since": "2026-08-09T12:00:00+00:00",
+    }
+
+    not_in_scope = ext.build_recent_videos_page(
+        conn, staff_scope_id=9999, days=15, kol_pool_id=202,
+    )
+    assert not_in_scope["status"] == "empty" and not_in_scope["items"] == []
+
+
+def test_recent_videos_since_cannot_widen_or_move_window_into_future(monkeypatch):
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 8, 24, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(ext, "_now_utc", lambda: now)
+    old = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    future = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    assert ext._recent_filter_params(7, since=old)[:2] == (
+        "2026-08-17T12:00:00+00:00", "2026-08-17T12:00:00+00:00",
+    )
+    assert ext._recent_filter_params(7, since=future)[:2] == (
+        "2026-08-17T12:00:00+00:00", "2026-08-17T12:00:00+00:00",
+    )
 
 
 def test_board_ext_cursor_only_affects_recent_videos_and_keeps_legacy_first_page(monkeypatch):
@@ -420,8 +516,8 @@ def _route_env(monkeypatch, captured: dict):
         captured["board"] = (staff_scope_id, days, recent_videos_before)
         return {"status": "ready"}
 
-    def fake_page(conn, *, staff_scope_id, before=None):
-        captured["page"] = (staff_scope_id, before)
+    def fake_page(conn, *, staff_scope_id, before=None, days=0, kol_pool_id=0, since=None):
+        captured["page"] = (staff_scope_id, before, days, kol_pool_id, since)
         return {"status": "ready", "items": []}
 
     monkeypatch.setattr(router_mod.my_kol_board_ext, "build_board_ext", fake_board)
@@ -449,13 +545,19 @@ def test_board_ext_routes_pass_keyset_cursor_and_fail_closed_on_bad_cursor(monke
     assert bad.value.status_code == 400 and captured == {}
 
     # 单组翻页端点:同款 scope 闸 + 游标
-    router_mod.my_kol_board_ext_recent_videos_endpoint(staff_id=9, cursor=token, staff=manager)
-    assert captured["page"] == (9, ("2026-08-07T10:00:00Z", 3))
+    router_mod.my_kol_board_ext_recent_videos_endpoint(
+        staff_id=9, cursor=token, days=15, kol_pool_id=202, since=None, staff=manager,
+    )
+    assert captured["page"] == (9, ("2026-08-07T10:00:00Z", 3), 15, 202, None)
     with pytest.raises(HTTPException) as denied:
-        router_mod.my_kol_board_ext_recent_videos_endpoint(staff_id=None, cursor=None, staff=nobody)
+        router_mod.my_kol_board_ext_recent_videos_endpoint(
+            staff_id=None, cursor=None, days=0, kol_pool_id=None, since=None, staff=nobody,
+        )
     assert denied.value.status_code == 403
     with pytest.raises(HTTPException) as bad_page:
-        router_mod.my_kol_board_ext_recent_videos_endpoint(staff_id=None, cursor="garbage", staff=manager)
+        router_mod.my_kol_board_ext_recent_videos_endpoint(
+            staff_id=None, cursor="garbage", days=0, kol_pool_id=None, since=None, staff=manager,
+        )
     assert bad_page.value.status_code == 400
 
 

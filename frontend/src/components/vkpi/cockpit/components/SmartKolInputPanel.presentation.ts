@@ -9,7 +9,10 @@ import {
   numberLabel,
   type Row,
 } from "./SmartKolInputPanel.helpers";
-import { isSearchSessionTerminal } from "./SmartKolInputPanel.progress-derivers";
+import {
+  isSearchSessionTerminal,
+  searchProgressContractFromSession,
+} from "./SmartKolInputPanel.progress-derivers";
 
 // 全网发现状态码 → 人话(面向营销人,不暴露 queued/running 等内部状态码)。
 export function advanceStatusLabel(value: unknown): string {
@@ -64,24 +67,48 @@ export function sessionStatusBanner(
 ): SessionBanner {
   if (!session && !advanceStatus && !polling) return null;
   const summary = asRecord(session?.result_summary);
+  const contract = searchProgressContractFromSession(session);
   const job = asRecord(summary.smart_search_profile_advance_job);
-  const raw = cleanText(advanceStatus || job.advance_status || job.status || session?.status).toLowerCase();
+  const storedRaw = cleanText(advanceStatus || job.advance_status || job.status || session?.status).toLowerCase();
+  // When available, the read-time contract owns the user-facing state.  The
+  // stored session/job value remains audit evidence but can legitimately lag
+  // downstream item closure.
+  const raw = cleanText(contract?.state || storedRaw).toLowerCase();
   const jobError = cleanText(job.error);
   const ready = Number(counts.ready ?? 0);
   const failed = Number(counts.failed ?? 0) + Number(counts.errors ?? 0);
   // 完成态以会话本身为准(会话 1106 案):会话已 ready/complete 而任务状态字段仍是旧的
   // running、或展示端仍挂着轮询 id,都不得再显示「正在查找」——改成完成态摘要。
   const terminal = session ? isSearchSessionTerminal(session) : false;
+  if (contract?.blockedByWorker || raw === "blocked_by_worker") {
+    return {
+      tone: "info",
+      label: "等待 Worker 恢复",
+      note: "后台任务已被 Worker 状态阻塞；Worker 恢复后会继续，当前不会把排队或运行项算作完成。",
+    };
+  }
   if (["failed", "blocked"].includes(raw) && ready <= 0) {
     return { tone: "error", label: "这次没找到结果", note: jobError ? `失败原因:${jobError}` : "查找未能完成,可调整描述或换个区域重试。" };
   }
-  if (["partial"].includes(raw) || (failed > 0 && ready > 0)) {
+  if (raw === "partial" || (failed > 0 && ready > 0)) {
+    if (terminal && (contract?.emptyResult || (!sessionTallyText(session) && (contract?.requestedUnits ?? 0) === 0))) {
+      return {
+        tone: "warn",
+        label: "本轮已结束（无结果）",
+        note: "没有可展示候选，也没有仍在运行的阶段；可调整条件后重新发起。",
+      };
+    }
+    const contractFailures = contract?.failedUnits ?? failed;
     return {
       tone: "warn",
       label: "已找到部分结果",
-      note: `${sessionTallyText(session) || "下方结果可直接查看"};${failed > 0
-        ? `另有 ${failed} 个没跑完,可稍后重试补齐。`
-        : "部分人选还在补全,完成后会自动更新。"}`,
+      note: `${sessionTallyText(session) || "下方结果可直接查看"};${terminal
+        ? contractFailures > 0
+          ? `另有 ${contractFailures} 个失败或不完整；未请求阶段不算失败。`
+          : "本轮已结束，没有仍在运行的阶段。"
+        : failed > 0
+          ? `另有 ${failed} 个没跑完,可稍后重试补齐。`
+          : "部分人选还在补全,完成后会自动更新。"}`,
     };
   }
   if (["ready", "done"].includes(raw) || (terminal && !["queued", "planned"].includes(raw))) {
@@ -185,6 +212,25 @@ export function historyStatusMeta(value: unknown): { label: string; cls: string;
 export function historySessionStatusMeta(session: VkpiKolSearchHistoryItem): { label: string; cls: string; dot: string } {
   if (cleanText(asRecord(session.result_summary).result_state) === "unsupported") {
     return { label: "不支持", cls: "text-slate-500", dot: "#64748b" };
+  }
+  const contract = searchProgressContractFromSession(session);
+  if (contract) {
+    if (contract.blockedByWorker) return { label: "Worker 阻塞", cls: "text-rose-300/85", dot: "#fb7185" };
+    if (contract.orchestrationPending || ["queued", "running", "active"].includes(contract.state)) {
+      return historyStatusMeta(contract.state === "queued" ? "queued" : "running");
+    }
+    if (contract.emptyResult && contract.requestedTasksTerminal) {
+      return { label: "无结果，已结束", cls: "text-amber-300/85", dot: "#fbbf24" };
+    }
+    if (contract.requestedTasksSuccessful || contract.state === "ready") {
+      return { label: "已请求阶段完成", cls: "text-emerald-300/85", dot: "#34d399" };
+    }
+    if (["failed", "cancelled", "canceled"].includes(contract.state)) {
+      return { label: "未完成", cls: "text-rose-300/85", dot: "#fb7185" };
+    }
+    if (contract.requestedTasksTerminal || contract.state === "partial") {
+      return { label: "部分完成", cls: "text-amber-300/85", dot: "#fbbf24" };
+    }
   }
   return historyStatusMeta(session.status || "ready");
 }

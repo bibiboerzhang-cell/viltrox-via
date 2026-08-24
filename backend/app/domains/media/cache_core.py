@@ -827,16 +827,16 @@ def _normalize_video_url(raw_url: Any) -> tuple[str, str] | None:
         return None
     return urllib.parse.urlunparse(parsed), host
 
-
-def _cache_paths(normalized_url: str) -> tuple[str, Path, Path]:
+def _cache_paths(normalized_url: str, *, create: bool = True) -> tuple[str, Path, Path]:
     digest = hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    if create:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return digest, CACHE_DIR / digest, CACHE_DIR / f"{digest}.content-type"
 
-
-def _video_cache_paths(normalized_url: str) -> tuple[str, Path, Path]:
+def _video_cache_paths(normalized_url: str, *, create: bool = True) -> tuple[str, Path, Path]:
     digest = hashlib.sha256(normalized_url.encode("utf-8")).hexdigest()
-    VIDEO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    if create:
+        VIDEO_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return digest, VIDEO_CACHE_DIR / digest, VIDEO_CACHE_DIR / f"{digest}.content-type"
 
 

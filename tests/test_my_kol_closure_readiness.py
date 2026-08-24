@@ -187,6 +187,23 @@ def test_closure_readiness_separates_configuration_scheduler_and_results() -> No
     assert all(statement.lstrip().upper().startswith(("SELECT", "WITH")) for statement in statements)
 
 
+def test_confirmed_row_clears_detected_pending_without_erasing_detection() -> None:
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO vkpi_kol_video_product_links VALUES (2, 11, 'SKU-A', 'confirmed')"
+    )
+
+    result = my_kol_closure_readiness.build_closure_readiness(conn, staff_scope_id=7)
+
+    assert result["counts"]["sku_detected_videos"] == 1
+    assert result["counts"]["sku_confirmed_videos"] == 1
+    assert result["counts"]["sku_detected_pending_videos"] == 0
+    assert result["flows"]["sku_linking"]["state"] == "partial"
+    assert "detected_sku_pending_confirmation" not in {
+        item["code"] for item in result["blockers"]
+    }
+
+
 def test_closure_readiness_unknown_tracking_source_is_not_employee_choice() -> None:
     conn = _conn()
     conn.execute(

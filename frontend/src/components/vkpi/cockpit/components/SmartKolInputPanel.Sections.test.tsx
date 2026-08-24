@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import type { VkpiKolSearchHistoryItem } from "../../../../domains/kol";
 import { HistoryStrip, PlanPills, RecallMiniItem } from "./SmartKolInputPanel.Sections";
 
 describe("SmartKolInputPanel search quality surfaces", () => {
@@ -149,5 +150,65 @@ describe("SmartKolInputPanel search quality surfaces", () => {
     fireEvent.click(screen.getByText("查看"));
     expect(screen.getByText("当前登录账号暂无搜索历史")).toBeTruthy();
     expect(screen.getByText("历史记录暂时无法同步，主搜索功能不受影响")).toBeTruthy();
+  });
+
+  it("uses the progress contract to close empty and stale raw history states honestly", () => {
+    const emptyPartial: VkpiKolSearchHistoryItem = {
+      id: 1142,
+      query_text: "empty terminal search",
+      query_type: "text_recall",
+      status: "partial",
+      item_count: 0,
+      progress_contract: {
+        schema: "kol_search_progress_v1",
+        state: "partial",
+        requested_units: 0,
+        successful_units: 0,
+        terminal_units: 0,
+        requested_tasks_terminal: true,
+        requested_tasks_successful: false,
+        completion_kind: "empty_result",
+        empty_result: true,
+        stages: {},
+        worker: { observed: true, state: "online", online: true },
+      },
+    };
+    const staleRawPartial: VkpiKolSearchHistoryItem = {
+      id: 1144,
+      query_text: "requested stages done",
+      query_type: "text_recall",
+      status: "partial",
+      effective_status: "ready",
+      item_count: 30,
+      progress_contract: {
+        schema: "kol_search_progress_v1",
+        state: "ready",
+        requested_units: 56,
+        successful_units: 56,
+        terminal_units: 56,
+        requested_tasks_terminal: true,
+        requested_tasks_successful: true,
+        completion_kind: "requested_stages",
+        empty_result: false,
+        stages: {},
+        worker: { observed: true, state: "online", online: true },
+      },
+    };
+
+    render(
+      <HistoryStrip
+        items={[emptyPartial, staleRawPartial]}
+        archivedItems={[]}
+        loading={false}
+        onOpen={() => undefined}
+        onArchive={() => undefined}
+        onRestore={() => undefined}
+        onArchiveAll={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("历史记录"));
+    expect(screen.getByText("无结果，已结束")).toBeTruthy();
+    expect(screen.getByText("已请求阶段完成")).toBeTruthy();
   });
 });

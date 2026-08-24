@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BadgeCheck, Link2, Loader2, Search, Sparkles, Video } from "lucide-react";
+import { BadgeCheck, Loader2, Search, Video } from "lucide-react";
 import {
   deepCrawlKolUrl,
   getKolSearchSession,
@@ -48,6 +48,7 @@ import {
   writePersistedSearchDisplay,
 } from "./SmartKolInputPanel.Sections";
 import { TextResultSection } from "./SmartKolInputPanel.TextResult";
+import { SmartKolSearchEntry } from "./SmartKolInputPanel.Entry";
 import {
   canExecuteUrlResult,
   extractUrls,
@@ -72,7 +73,12 @@ import {
   useLatestSearchRequestEpoch,
 } from "./SmartKolInputPanel.sessionEpoch";
 import { useSmartKolSelection } from "./SmartKolInputPanel.selection";
-import { sessionDisplayState, smartKolSearchFingerprint } from "./SmartKolInputPanel.searchState";
+import {
+  resumePausedSessionState,
+  sessionDisplayState,
+  sessionPollStateAfterTimeout,
+  smartKolSearchFingerprint,
+} from "./SmartKolInputPanel.searchState";
 type State = "idle" | "loading" | "ready" | "executing" | "error";
 export function SmartKolInputPanel({
   apiToken = "",
@@ -100,6 +106,10 @@ export function SmartKolInputPanel({
   });
   const [activeSearchSession, setActiveSearchSession] = useState<VkpiKolSearchHistoryItem | null>(() => persistedDisplay?.activeSearchSession ?? null);
   const [sessionPollNotice, setSessionPollNotice] = useState("");
+  // A long-running task may outlive the high-frequency browser poll.  Keep a
+  // separate paused-sync state so "continue" performs GET-only observation,
+  // never a duplicate provider-backed search.
+  const [pollPausedSessionId, setPollPausedSessionId] = useState<number | null>(null);
   const [historyItems, setHistoryItems] = useState<VkpiKolSearchHistoryItem[]>([]);
   const [archivedHistoryItems, setArchivedHistoryItems] = useState<VkpiKolSearchHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -333,6 +343,7 @@ export function SmartKolInputPanel({
     const sessionState = sessionDisplayState(sessionId, isSearchSessionTerminal(session));
     setDisplayedSearchSessionId(sessionState.displayedSessionId);
     setPollingSearchSessionId(sessionState.pollingSessionId);
+    setPollPausedSessionId(null);
     if (sessionState.pollingSessionId) {
       setSessionPollNotice("正在续接后台查找…");
     }
@@ -460,6 +471,7 @@ export function SmartKolInputPanel({
           const graceUsedUp = Date.now() - terminalSince >= 30000;
           if (graceUsedUp || timedOut) {
             setPollingSearchSessionId(null);
+            setPollPausedSessionId(null);
             setSessionPollNotice(`${progressNote} · 结果已更新`);
             void refreshHistory();
             return;
@@ -468,8 +480,10 @@ export function SmartKolInputPanel({
         } else {
           terminalSince = null;
           if (timedOut) {
-            setPollingSearchSessionId(null);
-            setSessionPollNotice(`${progressNote} · 仍在后台补全，可从历史或任务里继续查看`);
+            const timeoutState = sessionPollStateAfterTimeout(pollingSearchSessionId, false);
+            setPollingSearchSessionId(timeoutState.pollingSessionId);
+            setPollPausedSessionId(timeoutState.pausedSessionId);
+            setSessionPollNotice(`${progressNote} · 后台任务未确认结束，已暂停高频同步；“继续同步”只刷新状态，不会重复发起查找`);
             void refreshHistory();
           }
         }
@@ -524,6 +538,7 @@ export function SmartKolInputPanel({
     setAdvanceResult(null);
     setDisplayedSearchSessionId(null);
     setPollingSearchSessionId(null);
+    setPollPausedSessionId(null);
     setActiveSearchSession(null);
     setSessionPollNotice("");
     try {
@@ -702,6 +717,7 @@ export function SmartKolInputPanel({
       if (nextSessionId) {
         setDisplayedSearchSessionId(nextSessionId);
         setPollingSearchSessionId(nextSessionId);
+        setPollPausedSessionId(null);
         setSessionPollNotice(response.url_type === "video" ? "视频分析状态同步中..." : "账号资料抓取状态同步中...");
       }
       setState("ready");
@@ -744,6 +760,7 @@ export function SmartKolInputPanel({
       setActiveSearchSession(null);
       setDisplayedSearchSessionId(null);
       setPollingSearchSessionId(null);
+      setPollPausedSessionId(null);
     }
     setRecallFingerprint(requestFingerprint);
     setState("executing");
@@ -788,6 +805,7 @@ export function SmartKolInputPanel({
       if (sessionId) {
         setDisplayedSearchSessionId(sessionId);
         setPollingSearchSessionId(sessionId);
+        setPollPausedSessionId(null);
         setSessionPollNotice("后台查找中...");
       }
       setState("ready");
@@ -808,6 +826,14 @@ export function SmartKolInputPanel({
     await queueTextAdvance(query);
   };
 
+  const resumeSearchPolling = () => {
+    if (!apiToken || !pollPausedSessionId) return;
+    const resumed = resumePausedSessionState(pollPausedSessionId);
+    setSessionPollNotice("正在继续同步原任务状态…");
+    setPollingSearchSessionId(resumed.pollingSessionId);
+    setPollPausedSessionId(resumed.pausedSessionId);
+  };
+
   // 搜索可能创建会话、抓取和分析任务，只允许显式点击按钮触发，避免输入时误按回车重复排队。
   const runCurrentInput = () => {
     if (isBusy || !apiToken || !cleanText(input)) return;
@@ -824,51 +850,14 @@ export function SmartKolInputPanel({
       data-testid="smart-kol-input-panel"
       className="rounded-lg border border-white/[0.065] bg-black/[0.14] p-2.5"
     >
-      <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-cyan-300/15 bg-cyan-400/[0.08] text-cyan-100">
-            <Sparkles size={12} />
-          </span>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <h2 className="text-[12px] font-semibold text-white">找达人</h2>
-            </div>
-            <div className="mt-0.5 truncate text-[10px] text-slate-600">
-              贴主页/视频链接看资料，或描述产品需求找人。
-            </div>
-          </div>
-        </div>
-        <div className="flex flex-wrap gap-1.5 text-[9px] text-slate-500">
-          <span className="rounded border border-cyan-300/10 bg-cyan-400/[0.035] px-1.5 py-0.5 text-cyan-100">Video</span>
-          <span className="rounded border border-violet-300/10 bg-violet-400/[0.035] px-1.5 py-0.5 text-violet-100">Profile</span>
-          <span className="rounded border border-emerald-300/10 bg-emerald-400/[0.035] px-1.5 py-0.5 text-emerald-100">查找</span>
-        </div>
-      </div>
-
-      <div
-        className="mt-2 grid gap-2 lg:grid-cols-[minmax(0,1fr)_112px]"
-      >
-        <input
-          data-testid="smart-kol-input"
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") event.preventDefault();
-          }}
-          placeholder="粘贴 KOL 主页 / 视频 URL，或输入产品需求，例如: 35mm 低光人像 YouTube 摄影师"
-          className="min-h-[40px] rounded-md border border-white/[0.075] bg-black/30 px-3 py-2 text-[11.5px] text-slate-200 outline-none placeholder-slate-600 focus:border-cyan-300/45"
-        />
-        <button
-          data-testid="smart-kol-run"
-          type="button"
-          onClick={runCurrentInput}
-          disabled={isBusy || !apiToken || !cleanText(input)}
-          className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/18 bg-cyan-500/[0.14] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.22] disabled:cursor-not-allowed disabled:opacity-55"
-        >
-          {isBusy ? <Loader2 size={13} className="animate-spin" /> : inferredMode === "url" ? <Link2 size={13} /> : <Search size={13} />}
-          {inferredMode === "url" ? "查看" : "查找"}
-        </button>
-      </div>
+      <SmartKolSearchEntry
+        value={input}
+        inferredMode={inferredMode}
+        busy={isBusy}
+        disabled={isBusy || !apiToken || !cleanText(input)}
+        onInputChange={setInput}
+        onRun={runCurrentInput}
+      />
 
       <KolSearchPolicyPanel
         open={searchFiltersOpen}
@@ -979,6 +968,7 @@ export function SmartKolInputPanel({
           outreachBusy={outreachBusy}
           displayedSearchSessionId={displayedSearchSessionId}
           isSessionPolling={Boolean(pollingSearchSessionId)}
+          isSessionPollPaused={Boolean(pollPausedSessionId && pollPausedSessionId === displayedSearchSessionId)}
           resultsStale={recallIsStale}
           approvalReady={approvalReady}
           favoriteOne={favoriteOne}
@@ -992,6 +982,7 @@ export function SmartKolInputPanel({
           activeSessionCounts={activeSessionCounts}
           sessionPollNotice={sessionPollNotice}
           retrySearchSession={retrySearchSession}
+          resumeSearchPolling={resumeSearchPolling}
         />
       ) : null}
 

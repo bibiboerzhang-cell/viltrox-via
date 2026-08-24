@@ -277,6 +277,39 @@ def test_profile_update_persists_only_public_profile_and_progress_state() -> Non
         assert canary not in serialized
 
 
+def test_profile_update_keeps_ready_status_while_optional_enrichment_is_pending() -> None:
+    conn = _ProfileUpdateConn()
+    session_updates: list[dict[str, Any]] = []
+
+    result = update_item_profile_execution(
+        7,
+        41,
+        profile_result={
+            "status": "ready",
+            "profile_flow": {
+                "status": "ready",
+                "kol_pool_id": 9001,
+                "profile_data": {"platform": "youtube", "handle": "privacy-canary"},
+            },
+            "contact_enrichment": {"status": "pending_l0", "async": True},
+            "audience_enrichment": {"status": "queued", "async": True, "job_id": 501},
+        },
+        get_conn_fn=lambda: conn,
+        update_session_fn=lambda _conn, _session_id, **kwargs: session_updates.append(kwargs),
+    )
+
+    assert result["status"] == "ready"
+    assert session_updates[-1]["status"] == "running"
+    stored = json.loads(conn.item["payload_json"])
+    assert stored["profile_execute"]["status"] == "ready"
+    assert stored["profile_execute"]["contact_enrichment"]["status"] == "pending_l0"
+    assert stored["profile_execute"]["audience_enrichment"] == {
+        "status": "queued",
+        "async": True,
+        "job_id": 501,
+    }
+
+
 def test_row_mapper_redacts_legacy_dirty_profile_and_contact_preview() -> None:
     restored = _row_to_item(
         {

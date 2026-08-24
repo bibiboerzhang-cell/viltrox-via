@@ -135,7 +135,9 @@ def test_profile_advance_enqueues_provider_free_contact_reconcile_before_session
     )
 
     assert call_order == ["enqueue:42", "session_update"]
-    assert result["status"] == "partial"
+    # Optional audience work is a separate active stage; it must not downgrade
+    # a successfully materialized profile to partial.
+    assert result["status"] == "ready"
     assert result["contact_enrichment"]["status"] == "pending_l0"
     assert result["contact_enrichment"]["provider_calls"] is False
     assert "email" not in result["contact_enrichment"]

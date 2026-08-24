@@ -366,20 +366,19 @@ def my_kol_board_ext_endpoint(
 def my_kol_board_ext_recent_videos_endpoint(
     staff_id: int | None = Query(default=None, ge=1),
     cursor: str | None = Query(default=None),
+    days: int = Query(default=0, ge=0, le=365), kol_pool_id: int | None = Query(default=None, ge=1),
+    since: datetime | None = Query(default=None),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
     """board-ext recent_videos 单组翻页(「加载更多」;纯 SELECT 零副作用)。
-
-    返回体 = board-ext.recent_videos 同一结构(items 行含 tasks / viltrox_modalities /
-    published_at,page{has_more, next_cursor} keyset 游标)+ 信封字段;scope /
-    权限口径与 board-ext 完全一致(员工 own-only、管理层 ?staff_id=)。
     """
     before = _decode_recent_videos_cursor(cursor)
     target = scope.effective_staff_id(staff, staff_id)
     if target is None and not scope.can_view_all(staff):
         raise HTTPException(status_code=403, detail="no staff identity in scope")
     body = my_kol_board_ext.build_recent_videos_page(
-        get_conn(), staff_scope_id=target, before=before
+        get_conn(), staff_scope_id=target, before=before, days=int(days), kol_pool_id=int(kol_pool_id or 0),
+        since=since if isinstance(since, datetime) else None,
     )
     body["scope"] = scope.scope_context(staff, staff_id)
     return body

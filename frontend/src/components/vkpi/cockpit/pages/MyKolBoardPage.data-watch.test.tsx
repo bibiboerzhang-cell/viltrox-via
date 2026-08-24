@@ -8,10 +8,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //   ② VideoTrackActions 的「数据关注」按钮:props 直连(内容墙)与 DataWatchContext 回落
 //      (详情弹窗经 libdetail 不改签名)两条接线都要点亮;忙态/禁用原因如实。
 const dataWatchMock = vi.hoisted(() => vi.fn());
+const confirmDetectedMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../../services/vkpi/myKolBoard-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../../services/vkpi/myKolBoard-api")>();
   return { ...actual, dataWatchMyKolVideo: (...args: unknown[]) => dataWatchMock(...args) };
 });
+vi.mock("../../../../services/vkpi/myKolDataWatchConfirmation-api", () => ({
+  confirmDetectedMyKolVideoSku: (...args: unknown[]) => confirmDetectedMock(...args),
+}));
 
 import type { VkpiKolPoolVideoRow } from "../../../../services/vkpi/myKolBoard-api";
 import {
@@ -19,6 +23,7 @@ import {
   dataWatchErrorText,
   dataWatchSuccessText,
   runDataWatchAction,
+  SKU_PLAY_CHANGED_EVENT,
   skuRequiredHintText,
   WALL_SKU_REQUIRED_HINT,
   type RunDataWatchDeps,
@@ -51,6 +56,7 @@ function makeDeps(overrides: Partial<RunDataWatchDeps> = {}) {
 
 beforeEach(() => {
   dataWatchMock.mockReset();
+  confirmDetectedMock.mockReset();
 });
 
 describe("runDataWatchAction(一键数据关注流程)", () => {
@@ -72,9 +78,99 @@ describe("runDataWatchAction(一键数据关注流程)", () => {
     expect(busy.size).toBe(0);
   });
 
+  it("唯一系统检测回执要求员工二次确认，不自动写 confirmed", async () => {
+    dataWatchMock.mockResolvedValue({
+      status: "tracking",
+      skus: ["AF-85-F14"],
+      sku_source: "auto",
+      sku_provenance: {
+        relation_type: "detected",
+        source: "final_v1_lens_evidence_v2",
+        confidence: 0.85,
+        requires_human_confirmation: true,
+        modalities: ["visual", "voice"],
+        evidence_excerpt: "AF 85 shown in frame",
+      },
+      refresh: "queued",
+    });
+    const onDetectedConfirmationRequired = vi.fn();
+    const { deps } = makeDeps({ onDetectedConfirmationRequired });
+    const row = video();
+
+    await runDataWatchAction(row, deps);
+
+    expect(onDetectedConfirmationRequired).toHaveBeenCalledWith(row, [{
+      sku_code: "AF-85-F14",
+      sku_name: "AF-85-F14",
+      match_source: "final_v1_lens_evidence_v2",
+      modalities: ["visual", "voice"],
+      evidence_excerpt: "AF 85 shown in frame",
+    }]);
+    expect(confirmDetectedMock).not.toHaveBeenCalled();
+  });
+
+  it("员工确认唯一系统检测:走独立确认意图,不冒充 manual 提交", async () => {
+    confirmDetectedMock.mockResolvedValue({
+      status: "tracking",
+      skus: ["AF-85-F14"],
+      sku_source: "confirmation",
+      sku_provenance: {
+        relation_type: "confirmed",
+        source: "human_confirmed_detected_v1",
+        confidence: 1,
+        requires_human_confirmation: false,
+      },
+      refresh: "already_queued",
+    });
+    const { deps } = makeDeps();
+
+    await runDataWatchAction(video(), deps, ["AF-85-F14"], "confirm_detected");
+
+    expect(confirmDetectedMock).toHaveBeenCalledWith("tok", 101, 901, ["AF-85-F14"]);
+    expect(dataWatchMock).not.toHaveBeenCalled();
+    expect((deps.setReceipt as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0].text)
+      .toContain("系统检测 SKU 已由你显式确认");
+    expect(deps.onTracked).toHaveBeenCalledTimes(1);
+  });
+
+  it("sku_required 后员工显式选择:二次 POST 原样传 SKU，成功后通知单品读模型重读", async () => {
+    dataWatchMock.mockResolvedValue({
+      status: "tracking",
+      skus: ["AF-85-F14"],
+      sku_source: "manual",
+      sku_provenance: { relation_type: "manual", source: "my_kol_video_tracking", confidence: 1, requires_human_confirmation: false },
+      refresh: "queued",
+    });
+    const changed = vi.fn();
+    window.addEventListener(SKU_PLAY_CHANGED_EVENT, changed);
+    const { deps } = makeDeps();
+    await runDataWatchAction(video(), deps, ["AF-85-F14"]);
+
+    expect(dataWatchMock).toHaveBeenCalledWith("tok", 101, 901, ["AF-85-F14"]);
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(deps.onTracked).toHaveBeenCalledTimes(1);
+    window.removeEventListener(SKU_PLAY_CHANGED_EVENT, changed);
+  });
+
   it("refresh=already_queued 如实注明「已在队列」,绝不当新排队", () => {
     expect(dataWatchSuccessText({ status: "tracking", skus: ["AF-85-F14"], refresh: "already_queued" }))
       .toBe("已登记数据关注(SKU AF-85-F14)——系统定时抓取播放/点赞,结果见『单品播放数据』模块(指标刷新已在队列中)。");
+  });
+
+  it("结构化深析唯一命中回执显示画面/字幕/口播来源，不冒充员工确认", () => {
+    expect(dataWatchSuccessText({
+      status: "tracking",
+      skus: ["AF-85-F14"],
+      sku_source: "auto",
+      sku_provenance: {
+        relation_type: "detected",
+        source: "final_v1_lens_evidence_v2",
+        confidence: 0.85,
+        requires_human_confirmation: true,
+        modalities: ["visual", "text", "voice"],
+      },
+      refresh: "queued",
+    })).toContain("SKU 来自已有视频深析（画面/字幕·文字/口播）唯一命中");
   });
 
   it("sku_required:只回落 onSkuRequired(携候选),不写成功回执不触发重读", async () => {
@@ -128,8 +224,8 @@ describe("runDataWatchAction(一键数据关注流程)", () => {
     expect(skuRequiredHintText([{ sku_code: "AF-85-F14" }, { sku_code: "" }]))
       .toBe("未能自动识别产品——请补一个 SKU 后用『追踪并排队刷新』提交(候选:AF-85-F14)。");
     expect(skuRequiredHintText()).toBe("未能自动识别产品——请补一个 SKU 后用『追踪并排队刷新』提交。");
-    expect(WALL_SKU_REQUIRED_HINT).toContain("未登记");
-    expect(WALL_SKU_REQUIRED_HINT).toContain("关联 SKU");
+    expect(WALL_SKU_REQUIRED_HINT).toContain("未选择不会登记");
+    expect(WALL_SKU_REQUIRED_HINT).toContain("内容墙选择对应 SKU");
   });
 });
 

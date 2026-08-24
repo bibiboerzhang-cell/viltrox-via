@@ -550,6 +550,8 @@ export interface VkpiKolSearchHistoryItem {
   query_type?: "url_video" | "url_profile" | "text_recall" | "unknown" | string;
   source?: string;
   status?: string;
+  /** Evidence-based read status; the stored status remains available for audit. */
+  effective_status?: string;
   /** 可选渐进阶段；旧后端缺失时前端从 result_summary/counts 诚实派生。 */
   phase?: string;
   progress?: Row;

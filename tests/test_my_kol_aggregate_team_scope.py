@@ -97,6 +97,57 @@ def test_pool_favorites_team_shape_and_bool_coercion():
     assert "--" not in team_sql
 
 
+def test_favorite_avatar_projection_restores_bounded_read_cache(monkeypatch):
+    items = [{
+        "kol_pool_id": 6224,
+        "avatar_url": "https://cdninstagram.com/expired.jpg",
+    }]
+    seen = {}
+
+    monkeypatch.setattr(agg, "profile_avatar_fallback_needed", lambda _value: True)
+    monkeypatch.setattr(
+        agg,
+        "bounded_profile_avatar_urls",
+        lambda conn, ids: {6224: "https://cdninstagram.com/profile.jpg"},
+    )
+
+    def fake_project(row):
+        seen.update(row)
+        return {
+            "avatar_url": "/api/vkpi-media/image-cache/" + "a" * 64,
+            "avatar_url_status": "durable",
+            "avatar_url_source": "local_prewarm_cache",
+        }
+
+    monkeypatch.setattr(agg, "project_pool_avatar", fake_project)
+    agg._project_favorite_avatars(object(), items)
+
+    assert seen["raw_profile_avatar_url"].endswith("profile.jpg")
+    assert items[0]["avatar_url_status"] == "durable"
+    assert items[0]["avatar_url_source"] == "local_prewarm_cache"
+    assert items[0]["avatar_url"].startswith("/api/vkpi-media/image-cache/")
+
+
+def test_favorite_avatar_projection_failures_do_not_hide_library(monkeypatch):
+    original = "https://cdninstagram.com/expired.jpg"
+    items = [{"kol_pool_id": 6224, "avatar_url": original}]
+    monkeypatch.setattr(agg, "profile_avatar_fallback_needed", lambda _value: True)
+    monkeypatch.setattr(
+        agg,
+        "bounded_profile_avatar_urls",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("hydrate failed")),
+    )
+    monkeypatch.setattr(
+        agg,
+        "project_pool_avatar",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("project failed")),
+    )
+
+    agg._project_favorite_avatars(object(), items)
+
+    assert items == [{"kol_pool_id": 6224, "avatar_url": original}]
+
+
 def test_staff_favorite_projection_uses_project_scope_and_masks_contacts():
     class _ProjectionConn:
         def __init__(self):

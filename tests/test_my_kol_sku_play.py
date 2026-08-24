@@ -1,6 +1,6 @@
 """波 D·B 一键数据关注 + 按产品聚合播放总览(sqlite 假库,零 provider)。
 
-覆盖:SKU 三级解析(manual/existing/auto)全走既有追踪路径;解析不出诚实
+覆盖:SKU 四级解析(manual/existing/structured-final-v1/title)全走既有追踪路径;解析不出诚实
 sku_required + 候选;总览分组 + d1/d7/d30 增量口径;未实测一律 null 不编 0;
 收藏集 scope(员工只看本人,管理层全团队)。
 """
@@ -124,6 +124,29 @@ def _conn() -> sqlite3.Connection:
             pause_reason TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
+            FOREIGN KEY(evidence_id) REFERENCES vkpi_kol_video_evidence(id)
+        );
+        CREATE TABLE vkpi_analysis_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            target_type TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            derive_method TEXT NOT NULL,
+            status TEXT NOT NULL,
+            result TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE vkpi_kol_lens_evidence (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cache_id INTEGER NOT NULL,
+            evidence_id INTEGER,
+            kol_pool_id INTEGER,
+            mention_text TEXT NOT NULL,
+            resolution TEXT NOT NULL,
+            product_sku TEXT,
+            modalities TEXT,
+            source_fields TEXT,
+            extractor_version TEXT,
+            FOREIGN KEY(cache_id) REFERENCES vkpi_analysis_cache(id),
             FOREIGN KEY(evidence_id) REFERENCES vkpi_kol_video_evidence(id)
         );
         """
@@ -262,6 +285,48 @@ def _seed_tracking(conn, evidence_id: int, staff_id: int = 10, status: str = "ac
     )
 
 
+def _seed_structured_product(
+    conn,
+    evidence_id: int,
+    sku: str,
+    *,
+    cache_status: str = "ready",
+    modalities: tuple[str, ...] = ("visual", "voice"),
+    source_fields: tuple[str, ...] = ("product_presence", "scene_timeline"),
+) -> int:
+    import json
+
+    cache_id = int(
+        conn.execute(
+            """
+            INSERT INTO vkpi_analysis_cache (
+                target_type, target_id, derive_method, status, result, updated_at
+            ) VALUES ('video', ?, 'video_analysis_final_v1', ?, '{}', NOW())
+            """,
+            (str(evidence_id), cache_status),
+        ).lastrowid
+    )
+    conn.execute(
+        """
+        INSERT INTO vkpi_kol_lens_evidence (
+            cache_id, evidence_id, kol_pool_id, mention_text, resolution,
+            product_sku, modalities, source_fields, extractor_version
+        ) VALUES (?, ?, (SELECT kol_pool_id FROM vkpi_kol_video_evidence WHERE id=?),
+                  ?, 'sku', ?, ?, ?, 'lens_evidence_v2')
+        """,
+        (
+            cache_id,
+            evidence_id,
+            evidence_id,
+            f"Viltrox {sku} shown and discussed",
+            sku,
+            json.dumps(list(modalities)),
+            json.dumps(list(source_fields)),
+        ),
+    )
+    return cache_id
+
+
 def _seed_snapshot(conn, evidence_id: int, fetched_at: datetime, *, views=None, likes=None, status="success") -> None:
     conn.execute(
         """
@@ -288,10 +353,18 @@ def test_data_watch_uses_existing_links_and_queues_refresh(conn):
         "skus": ["SKU-A"],
         "sku_source": "existing",
         "sku_provenance": {
-            "relation_type": "existing",
-            "source": "existing_link",
-            "confidence": None,
-            "requires_human_confirmation": False,
+            "relation_type": "detected",
+            "source": "test_seed",
+            "confidence": 0.9,
+            "requires_human_confirmation": True,
+            "links": [
+                {
+                    "sku": "SKU-A",
+                    "relation_type": "detected",
+                    "source": "test_seed",
+                    "confidence": 0.9,
+                }
+            ],
         },
         "tracking": "active",
         "refresh": "queued",
@@ -330,6 +403,185 @@ def test_data_watch_auto_detects_single_unambiguous_sku(conn):
         0.6,
     )
     assert _job_count(conn) == 1
+
+
+def test_data_watch_auto_detects_unique_structured_content_evidence_before_title(conn):
+    cache_id = _seed_structured_product(
+        conn,
+        103,
+        "SKU-C",
+        modalities=("visual", "text", "voice"),
+        source_fields=("product_presence", "scene_timeline", "content_summary"),
+    )
+    result = video_data_watch.data_watch(
+        conn, kol_pool_id=1, evidence_id=103, staff=STAFF_A
+    )
+    assert result["status"] == "tracking"
+    assert result["sku_source"] == "auto"
+    assert result["skus"] == ["SKU-C"]
+    assert result["sku_provenance"] == {
+        "relation_type": "detected",
+        "source": "final_v1_lens_evidence_v2",
+        "confidence": 0.85,
+        "requires_human_confirmation": True,
+        "cache_id": cache_id,
+        "modalities": ["visual", "text", "voice"],
+        "source_fields": ["product_presence", "scene_timeline", "content_summary"],
+        "evidence_excerpt": "Viltrox SKU-C shown and discussed",
+        "extractor_version": "lens_evidence_v2",
+    }
+    assert _link_detail(conn, 103) == (
+        "SKU-C",
+        "detected",
+        "final_v1_lens_evidence_v2",
+        0.85,
+    )
+    assert _job_count(conn) == 1
+
+
+def test_data_watch_employee_confirms_one_detected_sku_without_erasing_detection(conn):
+    _seed_structured_product(
+        conn,
+        103,
+        "SKU-C",
+        modalities=("visual", "voice"),
+    )
+    detected = video_data_watch.data_watch(
+        conn, kol_pool_id=1, evidence_id=103, staff=STAFF_A
+    )
+    assert detected["sku_provenance"]["relation_type"] == "detected"
+
+    confirmed = video_data_watch.data_watch(
+        conn,
+        kol_pool_id=1,
+        evidence_id=103,
+        staff=STAFF_A,
+        confirm_detected_skus=["SKU-C"],
+    )
+    assert confirmed["sku_source"] == "confirmation"
+    assert confirmed["sku_provenance"] == {
+        "relation_type": "confirmed",
+        "source": "human_confirmed_detected_v1",
+        "confidence": 1.0,
+        "requires_human_confirmation": False,
+        "confirmed_from": {
+            "relation_type": "detected",
+            "source": "final_v1_lens_evidence_v2",
+            "confidence": 0.85,
+        },
+    }
+    # The detected row remains as auditable machine provenance; confirmation is append-only.
+    assert _link_rows(conn, 103) == [
+        ("SKU-C", "confirmed"),
+        ("SKU-C", "detected"),
+    ]
+    assert confirmed["refresh"] == "already_queued"
+
+    # A repeated employee confirmation is idempotent, and the normal read path now
+    # reports the strongest confirmed truth instead of returning to pending.
+    again = video_data_watch.data_watch(
+        conn,
+        kol_pool_id=1,
+        evidence_id=103,
+        staff=STAFF_A,
+        confirm_detected_skus=["SKU-C"],
+    )
+    assert again["sku_provenance"]["relation_type"] == "confirmed"
+    assert _link_rows(conn, 103) == [
+        ("SKU-C", "confirmed"),
+        ("SKU-C", "detected"),
+    ]
+    normal = video_data_watch.data_watch(
+        conn, kol_pool_id=1, evidence_id=103, staff=STAFF_A
+    )
+    assert normal["sku_source"] == "existing"
+    assert normal["sku_provenance"]["relation_type"] == "confirmed"
+    assert normal["sku_provenance"]["requires_human_confirmation"] is False
+
+
+def test_data_watch_detected_confirmation_rejects_mismatch_multi_and_conflicting_intent(conn):
+    _seed_link(conn, 101, "SKU-A", "detected", 0.85)
+    with pytest.raises(video_tracking.VideoTrackingError) as mismatch:
+        video_data_watch.data_watch(
+            conn,
+            kol_pool_id=1,
+            evidence_id=101,
+            staff=STAFF_A,
+            confirm_detected_skus=["SKU-B"],
+        )
+    assert mismatch.value.code == "detected_sku_confirmation_mismatch"
+    assert mismatch.value.status_code == 409
+    assert _link_rows(conn, 101) == [("SKU-A", "detected")]
+
+    _seed_link(conn, 101, "SKU-B", "detected", 0.7)
+    with pytest.raises(video_tracking.VideoTrackingError) as multi:
+        video_data_watch.data_watch(
+            conn,
+            kol_pool_id=1,
+            evidence_id=101,
+            staff=STAFF_A,
+            confirm_detected_skus=["SKU-A"],
+        )
+    assert multi.value.code == "detected_sku_confirmation_requires_unique_detection"
+    assert multi.value.status_code == 409
+    assert all(relation != "confirmed" for _, relation in _link_rows(conn, 101))
+
+    with pytest.raises(video_tracking.VideoTrackingError) as conflict:
+        video_data_watch.data_watch(
+            conn,
+            kol_pool_id=1,
+            evidence_id=101,
+            staff=STAFF_A,
+            product_skus=["SKU-A"],
+            confirm_detected_skus=["SKU-A"],
+        )
+    assert conflict.value.code == "data_watch_sku_intent_conflict"
+
+
+def test_data_watch_structured_multi_sku_requires_employee_choice(conn):
+    # One final_v1 cache can resolve several actual products in one comparison video.
+    cache_id = _seed_structured_product(conn, 104, "SKU-A", modalities=("visual",))
+    import json
+
+    conn.execute(
+        """
+        INSERT INTO vkpi_kol_lens_evidence (
+            cache_id, evidence_id, kol_pool_id, mention_text, resolution,
+            product_sku, modalities, source_fields, extractor_version
+        ) VALUES (?, 104, 1, 'Viltrox SKU-B in subtitle', 'sku', 'SKU-B', ?, ?, 'lens_evidence_v2')
+        """,
+        (cache_id, json.dumps(["text"]), json.dumps(["scene_timeline"])),
+    )
+    result = video_data_watch.data_watch(
+        conn, kol_pool_id=1, evidence_id=104, staff=STAFF_A
+    )
+    assert result["status"] == "sku_required"
+    assert [candidate["sku_code"] for candidate in result["candidates"]] == ["SKU-A", "SKU-B"]
+    assert result["candidates"][0]["match_source"] == "final_v1_lens_evidence_v2"
+    assert result["candidates"][0]["modalities"] == ["visual"]
+    assert result["candidates"][1]["modalities"] == ["text"]
+    assert _link_rows(conn, 104) == []
+    assert _job_count(conn) == 0
+
+    selected = video_data_watch.data_watch(
+        conn,
+        kol_pool_id=1,
+        evidence_id=104,
+        staff=STAFF_A,
+        product_skus=["SKU-B"],
+    )
+    assert selected["sku_provenance"]["relation_type"] == "manual"
+    assert _link_rows(conn, 104) == [("SKU-B", "manual")]
+
+
+def test_data_watch_ignores_stale_structured_cache_and_falls_back_honestly(conn):
+    _seed_structured_product(conn, 103, "SKU-C", cache_status="stale")
+    result = video_data_watch.data_watch(
+        conn, kol_pool_id=1, evidence_id=103, staff=STAFF_A
+    )
+    assert result["status"] == "sku_required"
+    assert _link_rows(conn, 103) == []
+    assert _job_count(conn) == 0
 
 
 def test_data_watch_sku_required_when_nothing_detectable(conn):
@@ -441,12 +693,14 @@ def test_overview_groups_delta_math_and_null_honesty(conn):
     assert item_measured["measured_at"] == _iso(NOW)
     assert item_measured["delta"] == {"d1": 100, "d7": 600, "d30": 600}
     assert item_measured["tracking_status"] == "active"
+    assert item_measured["link_relation_type"] == "manual"
     # 只有 failed 快照 = 从未实测:一律 null,绝不编 0。
     assert item_unmeasured["evidence_id"] == 102
     assert item_unmeasured["view_count"] is None
     assert item_unmeasured["like_count"] is None
     assert item_unmeasured["measured_at"] is None
     assert item_unmeasured["delta"] == {"d1": None, "d7": None, "d30": None}
+    assert item_unmeasured["link_relation_type"] == "manual"
 
     assert group_b["sku_code"] == "SKU-B"
     assert group_b["latest_measured_at"] is None

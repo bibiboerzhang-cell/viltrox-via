@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
 // 波 D·C 车道 单品播放数据模块冒烟:
 // - 汇总条 = 单品/视频/红人/已实测 真值 + 手动「刷新」重读;
@@ -16,6 +16,7 @@ vi.mock("../../../../services/http", async (importOriginal) => {
 });
 
 import { ApiResponseError } from "../../../../services/http";
+import { SKU_PLAY_CHANGED_EVENT } from "./MyKolBoardPage.data-watch";
 import { SkuPlayModule } from "./MyKolBoardPage.sku-play";
 
 const OVERVIEW = {
@@ -36,13 +37,13 @@ const OVERVIEW = {
           evidence_id: 501, kol_pool_id: 101, kol_name: "Alpha Cam", platform: "youtube",
           title: "85mm 实拍评测", content_url: "https://youtube.com/watch?v=abc",
           view_count: 12345, like_count: 678, measured_at: "2026-08-22T10:00:00+00:00",
-          delta: { d1: 100, d7: 2468, d30: null }, tracking_status: "active",
+          delta: { d1: 100, d7: 2468, d30: null }, tracking_status: "active", link_relation_type: "manual",
         },
         {
           evidence_id: 502, kol_pool_id: 102, kol_name: "Beta Vlog", platform: "tiktok",
           title: "开箱短片", content_url: "https://tiktok.com/@beta/video/2",
           view_count: 1234, like_count: null, measured_at: "2026-08-21T09:00:00+00:00",
-          delta: { d1: null, d7: -20, d30: null }, tracking_status: "paused",
+          delta: { d1: null, d7: -20, d30: null }, tracking_status: "paused", link_relation_type: "detected",
         },
       ],
     },
@@ -59,7 +60,7 @@ const OVERVIEW = {
           evidence_id: 503, kol_pool_id: 102, kol_name: "Beta Vlog", platform: "tiktok",
           title: "135mm 预告", content_url: "",
           view_count: null, like_count: null, measured_at: null,
-          delta: { d1: null, d7: null, d30: null }, tracking_status: "active",
+          delta: { d1: null, d7: null, d30: null }, tracking_status: "active", link_relation_type: "confirmed",
         },
       ],
     },
@@ -117,6 +118,8 @@ describe("MY KOL 单品播放数据模块", () => {
     expect(screen.getByText("678")).toBeTruthy();
     expect(screen.getByText("追踪中")).toBeTruthy();
     expect(screen.getByText("已暂停")).toBeTruthy();
+    expect(screen.getByText("员工关联")).toBeTruthy();
+    expect(screen.getByText("系统检测·待确认")).toBeTruthy();
     // 负增量 ↓ 红向文案
     expect(screen.getByText("↓-20")).toBeTruthy();
     // 再点收起
@@ -130,6 +133,18 @@ describe("MY KOL 单品播放数据模块", () => {
     const calls = apiFetchMock.mock.calls.length;
     fireEvent.click(screen.getByText("刷新"));
     await waitFor(() => expect(apiFetchMock.mock.calls.length).toBe(calls + 1));
+  });
+
+  it("数据关注落库事件会自动重读，不停留在点击前的 0 空态", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    render(<SkuPlayModule apiToken="t" noToken={<div>no token</div>} />);
+    await screen.findByText("AF 85mm F1.4 Pro");
+    const calls = apiFetchMock.mock.calls.length;
+    act(() => window.dispatchEvent(new CustomEvent(SKU_PLAY_CHANGED_EVENT)));
+    await waitFor(() => expect(apiFetchMock.mock.calls.length).toBe(calls + 1));
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+    expect(document.querySelector("[data-vkpi-sku-play-module]")).toHaveAttribute("data-vkpi-sku-play-highlight", "active");
   });
 
   it("无登记 → 诚实空态引导「数据关注」入口", async () => {

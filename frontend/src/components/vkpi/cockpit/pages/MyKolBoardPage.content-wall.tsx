@@ -13,19 +13,29 @@ import {
 import { proxiedImageUrl } from "../../shared/mediaProxy";
 import { adaptiveRowCount, useModuleSize } from "../components/moduleSize";
 import { CHIP, CHIP_OFF, CHIP_ON, MINI_BADGE, V_TIER_META } from "./MyKolBoardPage.libdetail";
-import { runDataWatchAction, toggleIdInSet, WALL_SKU_REQUIRED_HINT } from "./MyKolBoardPage.data-watch";
-import { EmptyLine, ErrorCard, LoadingLine } from "./MarketVoicePage.modules";
+import { runDataWatchAction, toggleIdInSet, type DataWatchSubmitIntent } from "./MyKolBoardPage.data-watch";
+import {
+  DataWatchSkuPicker,
+  type PendingDataWatchSkuChoice,
+} from "./MyKolBoardPage.data-watch-sku-picker";
+import { EmptyLine, LoadingLine } from "./MarketVoicePage.modules";
 import { ReceiptLine } from "./MyKolBoardPage.receipt";
 import { RecoveryPollingLine, TrackGuideLine, VideoTaskStatus, VideoTrackActions } from "./MyKolBoardPage.video-tasks";
-import { useMyKolVideoRecovery } from "./useMyKolVideoRecovery";
+import { useMyKolContentWallPages } from "./useMyKolContentWallPages";
 import type { FlowReceipt } from "../../pages/myKol/PoolEvidenceContent.helpers";
 
-// 内容墙(MY KOL 板面):两路真端点 —— 全部收藏 = board-ext recent_videos(聚合,封顶 60,无逐条任务态);
-//   选中单 KOL = GET /my-kol/{id}/videos(契约 my_kol_video_recovery_v1:keyset 游标「查看更多」+
-//   逐条任务态/新鲜度 + 在途轮询)。卡片「追踪播放」= POST /my-kol/{kol_pool_id}/videos(登记持久追踪 +
-//   排队抓取),共享只读由服务端判定,失败如实回执。
+// 内容墙(MY KOL 板面):全部/单 KOL × 全时间/7/15/30 天统一走
+//   /my-kol/board-ext/recent-videos 的服务端组合筛选 + keyset 游标;首屏全部可复用
+//   board-ext 已取页。这保证「近 N 天」与「单 KOL」都是数据库真筛选,能翻过
+//   首 60 条走到真末页,不做浏览器假全量。卡片追踪写链不变。
 const WALL_PAGE = 12;
-const WALL_KOL_PAGE_SIZE = 24;
+type WallDays = 0 | 7 | 15 | 30;
+const WALL_DAY_OPTIONS: Array<{ value: WallDays; label: string }> = [
+  { value: 0, label: "全部时间" },
+  { value: 7, label: "滚动近 7 天" },
+  { value: 15, label: "滚动近 15 天" },
+  { value: 30, label: "滚动近 30 天" },
+];
 
 // 首屏可见卡数自适应(消灭模块放大后的黑边):几何按真实类名实测——
 // 卡片(聚合视图,无逐条任务行):缩略图 92 + pt-2(8) + 标题行(20) + mt-0.5(2)
@@ -159,6 +169,7 @@ export function ContentWallModule({
   kolOptions: Array<{ poolId: number; name: string }>;
 }) {
   const [kolId, setKolId] = React.useState(0);
+  const [days, setDays] = React.useState<WallDays>(0);
   const [relationFilter, setRelationFilter] = React.useState<VideoRelationFilter>("all");
   const [sortBy, setSortBy] = React.useState<"time" | "views">("time");
   // 首屏可见卡数 = 列数 × 按模块实际高度实算的行数,保底 WALL_PAGE(上下文缺席 → 旧口径 12);
@@ -177,26 +188,40 @@ export function ContentWallModule({
   }, [moduleSize]);
   const [extraVisible, setExtraVisible] = React.useState(0);
   const visible = initialVisible + extraVisible;
-  // 单 KOL 视图走契约读模型:keyset 游标 + 逐条任务态 + 在途轮询(kolId=0 时 hook 禁用,零请求)
-  const recovery = useMyKolVideoRecovery({ apiToken, kolPoolId: kolId || null, enabled: kolId > 0, pageSize: WALL_KOL_PAGE_SIZE });
+  const wallPages = useMyKolContentWallPages({ apiToken, initialGroup: group, kolPoolId: kolId, days });
   const [trackBusy, setTrackBusy] = React.useState<Set<number>>(new Set());
   const [watchBusyIds, setWatchBusyIds] = React.useState<Set<number>>(new Set());
   const [trackReceipt, setTrackReceipt] = React.useState<FlowReceipt | null>(null);
+  const [pendingSkuChoice, setPendingSkuChoice] = React.useState<PendingDataWatchSkuChoice | null>(null);
+  const autoFullQueryKeyRef = React.useRef("");
 
-  React.useEffect(() => setExtraVisible(0), [kolId, relationFilter, sortBy]);
-  React.useEffect(() => setTrackReceipt(null), [kolId]);
+  React.useEffect(() => setExtraVisible(0), [kolId, days, relationFilter, sortBy]);
+  React.useEffect(() => {
+    setTrackReceipt(null);
+    setPendingSkuChoice(null);
+    autoFullQueryKeyRef.current = "";
+  }, [kolId, days]);
 
   const kolName = React.useMemo(() => kolOptions.find((option) => option.poolId === kolId)?.name || "", [kolOptions, kolId]);
-  const kolBusy = kolId > 0 && recovery.loading && !recovery.loaded;
-  const kolError = kolId > 0 ? recovery.error : "";
-  const baseItems: VkpiRecentVideoItem[] = kolId ? (recovery.videos as VkpiRecentVideoItem[]) : Array.isArray(group.items) ? group.items : [];
+  const wallBusy = !wallPages.loadedForTarget || (wallPages.loading && !wallPages.loaded);
+  const wallError = wallPages.error;
+  const baseItems: VkpiRecentVideoItem[] = wallPages.loadedForTarget ? wallPages.items : [];
   const summary = React.useMemo(() => summarizeKolVideos(baseItems), [baseItems]);
   const shown = React.useMemo(
     () => sortClassifiedVideos(summary.classified, relationFilter, sortBy),
     [summary.classified, relationFilter, sortBy],
   );
-  const clientPaged = !kolId;
-  const visibleRows = clientPaged ? shown.slice(0, visible) : shown;
+  const visibleRows = shown.slice(0, visible);
+
+  // 有限时间窗的行数可控,首页就自动沿 keyset 走到真末页;
+  // 「全部时间」保留显式「查询全量」,避免页面初开就无界拉取。
+  React.useEffect(() => {
+    const key = `${kolId}:${days}`;
+    if (!days || !wallPages.loadedForTarget || !wallPages.hasMore || wallPages.loadingAll || wallPages.loading) return;
+    if (autoFullQueryKeyRef.current === key) return;
+    autoFullQueryKeyRef.current = key;
+    void wallPages.loadAll();
+  }, [days, kolId, wallPages.hasMore, wallPages.loadAll, wallPages.loadedForTarget, wallPages.loading, wallPages.loadingAll]);
 
   // 卡片「追踪播放」:POST /my-kol/{kol_pool_id}/videos(登记持久追踪 + 排队抓取);只排队不冒充完成。
   const trackVideo = async (video: VkpiKolPoolVideoRow) => {
@@ -217,7 +242,7 @@ export function ContentWallModule({
         text: `${status === "already_queued" ? "该视频已在追踪队列中" : "已登记追踪并排队抓取"}（#${eid}）${kolId ? ";下方状态会自动同步" : ";选中该 KOL 或打开 KOL 详情可看进度"}。`,
         tone: "info",
       });
-      if (kolId) void recovery.refresh();
+      void wallPages.refresh();
     } catch (error) {
       const code = String((error as { detail?: unknown; message?: unknown })?.detail || (error as Error)?.message || "");
       const text = code === "my_kol_paid_action_write_forbidden"
@@ -234,35 +259,60 @@ export function ContentWallModule({
   };
 
   // 一键「数据关注」(墙入口):POST …/videos/{evidence_id}/data-watch —— 自动认产品 + 登记追踪 +
-  //   排队刷新(流程/文案住 MyKolBoardPage.data-watch.ts);认不出产品时墙上没有 SKU 表单,
-  //   如实提示去 KOL 详情用「关联 SKU」补一个,绝不无 SKU 假登记。
-  const dataWatchVideo = (video: VkpiKolPoolVideoRow) => runDataWatchAction(video, {
+  //   排队刷新(流程/文案住 MyKolBoardPage.data-watch.ts);认不出产品时墙内展示
+  //   服务端候选 SKU 多选器,只在员工明确勾选后二次提交,绝不无 SKU 假登记。
+  const dataWatchVideo = (video: VkpiKolPoolVideoRow, productSkus: string[] = [], intent: DataWatchSubmitIntent = productSkus.length ? "manual" : "auto") => runDataWatchAction(video, {
     apiToken,
     kolPoolId: Number(video.kol_pool_id) || kolId,
     isBusy: (eid) => watchBusyIds.has(eid),
     setBusy: toggleIdInSet(setWatchBusyIds),
     setReceipt: setTrackReceipt,
-    onSkuRequired: () => setTrackReceipt({ text: WALL_SKU_REQUIRED_HINT, tone: "info" }),
-    onTracked: kolId ? () => { void recovery.refresh(); } : undefined,
-  });
+    onSkuRequired: (pendingVideo, candidates) => {
+      setPendingSkuChoice({ video: pendingVideo, candidates, intent: "manual" });
+      setTrackReceipt({ text: "未能自动识别产品——请选择对应 SKU 后确认；未选择不会登记。", tone: "info" });
+    },
+    onDetectedConfirmationRequired: (pendingVideo, candidates) => {
+      setPendingSkuChoice({ video: pendingVideo, candidates, intent: "confirm_detected" });
+      setTrackReceipt({ text: "系统已唯一识别到 SKU，仍需你勾选确认；未确认前保持『待人工确认』。", tone: "info" });
+    },
+    onTracked: () => {
+      setPendingSkuChoice(null);
+      void wallPages.refresh();
+    },
+  }, productSkus, intent);
 
   return (
     <div>
       <div className="mb-2 rounded-[9px] border border-line bg-card px-3 py-2.5 text-[12px] leading-5 text-muted">
-        已采集 {summary.classified.length}｜品牌相关 {summary.vRelatedCount}｜待深析 {summary.undeterminedCount}｜深析未见 V {summary.unrelatedCount}｜播放已实测 {summary.measuredCount}/{summary.classified.length}
-        <span className="ml-2">当前为系统已采集窗口，不代表平台频道全量；播放趋势请在 KOL 详情查看。</span>
+        已查询 {summary.classified.length}{wallPages.hasMore ? "+" : ""}｜品牌相关 {summary.vRelatedCount}｜待深析 {summary.undeterminedCount}｜深析未见 V {summary.unrelatedCount}｜播放已实测 {summary.measuredCount}/{summary.classified.length}
+        <span className="ml-2">范围：{kolId ? kolName || `KOL #${kolId}` : "全部收藏 KOL"} · {WALL_DAY_OPTIONS.find((option) => option.value === days)?.label}；查询范围仅限系统已釆集库，不冒充平台频道全量。</span>
       </div>
-      <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+      <div className="mb-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted" aria-label="内容墙组合筛选">
+        <span className="font-semibold text-ink-2">KOL 范围</span>
         <select
           aria-label="按 KOL 筛选"
           value={String(kolId)}
           onChange={(event) => setKolId(Number(event.target.value) || 0)}
           className="min-h-9 max-w-[210px] rounded-xl border border-line bg-card px-3 py-1.5 text-[12px] text-ink outline-none focus:border-accent [&>option]:bg-[var(--ds-card)]"
-          title="选择单个收藏KOL，查看该账号当前已采集内容"
+          title="选择全部或一个收藏 KOL；与时间范围组合后在服务端查询"
         >
           <option value="0">全部收藏 KOL</option>
           {kolOptions.map((option) => <option key={option.poolId} value={String(option.poolId)}>{option.name}</option>)}
         </select>
+        <span className="ml-1 font-semibold text-ink-2">发布时间</span>
+        {WALL_DAY_OPTIONS.map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            aria-pressed={days === option.value}
+            className={`${CHIP} ${days === option.value ? CHIP_ON : CHIP_OFF}`}
+            onClick={() => setDays(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+        <span className="basis-full h-0" aria-hidden="true" />
+        <span className="font-semibold text-ink-2">内容判定</span>
         <button type="button" className={`${CHIP} ${relationFilter === "all" ? CHIP_ON : CHIP_OFF}`} onClick={() => setRelationFilter("all")}>全部已采集</button>
         <button type="button" className={`${CHIP} ${relationFilter === "viltrox" ? CHIP_ON : CHIP_OFF}`} onClick={() => setRelationFilter("viltrox")} title="项目关联 / 画面·口播识别 V / 标题提及 V(按结构化证据,不只看标题)">品牌相关</button>
         <button type="button" className={`${CHIP} ${relationFilter === "undetermined" ? CHIP_ON : CHIP_OFF}`} onClick={() => setRelationFilter("undetermined")} title="还没深析或证据不足的内容——不等于不相关">待深析</button>
@@ -274,8 +324,35 @@ export function ContentWallModule({
       </div>
       <div className="mb-2"><TrackGuideLine compact /></div>
       <ReceiptLine msg={trackReceipt} />
-      {kolError ? <ErrorCard title="按 KOL 读取失败" text={kolError} />
-        : kolBusy ? <LoadingLine text={`${kolName || "该 KOL"} 已采集内容读取中…`} />
+      <DataWatchSkuPicker
+        pending={pendingSkuChoice}
+        apiToken={apiToken}
+        busy={pendingSkuChoice ? watchBusyIds.has(Number(pendingSkuChoice.video.evidence_id ?? pendingSkuChoice.video.id) || 0) : false}
+        onCancel={() => setPendingSkuChoice(null)}
+        onSubmit={(skus, submitIntent) => { if (pendingSkuChoice) void dataWatchVideo(pendingSkuChoice.video, skus, submitIntent); }}
+      />
+      {wallError ? (
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-[9px] border border-bad bg-bad-soft px-3 py-2 text-[11.5px] text-bad" role="alert">
+          <span>内容墙查询中断：{wallError}{baseItems.length ? `（已保留 ${baseItems.length} 条可信结果）` : ""}</span>
+          <button
+            type="button"
+            className="ml-auto min-h-8 rounded-lg border border-bad px-3 py-1 font-semibold"
+            onClick={() => {
+              if (baseItems.length) {
+                autoFullQueryKeyRef.current = `${kolId}:${days}`;
+                void wallPages.loadAll();
+              } else {
+                autoFullQueryKeyRef.current = "";
+                void wallPages.reload();
+              }
+            }}
+          >
+            {baseItems.length ? "继续全量查询" : "重新查询"}
+          </button>
+        </div>
+      ) : null}
+      {wallError && baseItems.length === 0 ? null
+        : wallBusy ? <LoadingLine text={`${kolId ? kolName || "该 KOL" : "全部收藏 KOL"} · ${WALL_DAY_OPTIONS.find((option) => option.value === days)?.label || "全部时间"}读取中…`} />
         : baseItems.length === 0 ? <EmptyLine text={kolId ? `${kolName || "该 KOL"} 暂无已采集内容——可在KOL详情发起补采。` : "暂无已采集内容——可在KOL详情发起补采。"} />
         : shown.length === 0 ? <EmptyLine text="当前筛选没有内容，可切回“全部已采集”或继续补采。" />
         : (
@@ -295,23 +372,35 @@ export function ContentWallModule({
                 />
               ))}
             </div>
-            {clientPaged && shown.length > visible ? (
+            {shown.length > visible ? (
               <button type="button" onClick={() => setExtraVisible((value) => value + WALL_PAGE)} className="mt-2 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft">
-                ≡ 查看更多（已显 {Math.min(visible, shown.length)} / 当前已采集 {shown.length}）
+                ≡ 展开更多卡片（已显 {Math.min(visible, shown.length)} / 已查询 {shown.length}{wallPages.hasMore ? "+" : ""}）
               </button>
             ) : null}
-            {!clientPaged && recovery.hasMore ? (
+            {wallPages.hasMore ? (
               <button
                 type="button"
-                onClick={() => { void recovery.loadMore(); }}
-                disabled={recovery.loadingMore}
+                onClick={() => { void wallPages.loadMore(); }}
+                disabled={wallPages.loadingMore || wallPages.loadingAll}
                 className="mt-2 min-h-10 w-full rounded-[9px] border border-dashed border-line-strong px-3 py-2 text-center text-[11.5px] text-accent transition-colors hover:border-accent hover:bg-accent-soft disabled:cursor-default disabled:text-muted"
-                title="按发布时间游标读取下一页(后台刷新不会打乱顺序)"
+                title="按发布时间游标读取下一页；时间/KOL 筛选均在服务端保持"
               >
-                {recovery.loadingMore ? "读取中…" : `≡ 查看更多（已加载 ${baseItems.length}${recovery.total ? ` / 共 ${recovery.total}` : ""}）`}
+                {wallPages.loadingMore ? "下一页读取中…" : `≡ 查询下一批（已查询 ${baseItems.length}）`}
               </button>
             ) : null}
-            {kolId ? <RecoveryPollingLine polling={recovery.polling} paused={recovery.pollPaused} onResume={recovery.resumePolling} /> : null}
+            {wallPages.hasMore && days === 0 ? (
+              <button
+                type="button"
+                onClick={() => { void wallPages.loadAll(); }}
+                disabled={wallPages.loadingAll || wallPages.loadingMore}
+                className="mt-2 min-h-10 w-full rounded-[9px] border border-accent bg-accent-soft px-3 py-2 text-center text-[11.5px] font-semibold text-accent transition-colors hover:bg-card disabled:cursor-default disabled:text-muted"
+                title="沿服务端 keyset 游标读到当前 KOL 范围的真末页"
+              >
+                {wallPages.loadingAll ? `全量查询中…已读 ${baseItems.length}` : `查询当前范围全量（已读 ${baseItems.length}）`}
+              </button>
+            ) : null}
+            {wallPages.loadingAll && days > 0 ? <LoadingLine text={`${WALL_DAY_OPTIONS.find((option) => option.value === days)?.label}全量查询中…已读 ${baseItems.length}`} /> : null}
+            {kolId ? <RecoveryPollingLine polling={wallPages.polling} paused={wallPages.pollPaused} onResume={wallPages.resumePolling} /> : null}
           </div>
         )}
     </div>

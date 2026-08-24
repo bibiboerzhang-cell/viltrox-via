@@ -534,6 +534,7 @@ def test_recent_videos_limit_double_capped_scope_pushed_and_empty_reason(monkeyp
     params = next(p for s, p in conn.calls if s == ext.RECENT_VIDEOS_SQL)
     assert params == (
         *ext.VILTROX_TITLE_TOKENS, 7684, 7684, 7684, 7684,
+        None, None, 0, 0,
         False, None, None, None, 0, None, 0,
         ext.RECENT_VIDEOS_LIMIT + 1,
     )

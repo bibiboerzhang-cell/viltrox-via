@@ -271,6 +271,12 @@ _RECENT_KEYSET_COND = """(
       )"""
 RECENT_KEYSET_PARAM_COUNT = 7
 
+# 内容墙组合筛选:时间窗口两个占位(since 判空 + 比较),KOL
+# 范围两个占位(0=全部收藏 KOL,否则仅一个 kol_pool_id)。这些条件在
+# keyset 之前下推,因此 7/15/30 天的「查询全量」可通过游标翻到真末页,
+# 而不是先取 60 条再在浏览器裁切。
+RECENT_FILTER_PARAM_COUNT = 4
+
 RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
     SELECT e.id AS evidence_id,
            e.kol_pool_id AS kol_pool_id,
@@ -304,6 +310,11 @@ RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
       AND e.is_active IS NOT FALSE
       AND COALESCE(e.evidence_type, 'video') IN ('video', 'image')
       AND {_COLLECTION_COND}
+      AND (
+          CAST(? AS TIMESTAMPTZ) IS NULL
+          OR COALESCE(e.publish_date, e.posted_at) >= CAST(? AS TIMESTAMPTZ)
+      )
+      AND (? = 0 OR e.kol_pool_id = ?)
       AND {_RECENT_KEYSET_COND}
     ORDER BY COALESCE(e.publish_date, e.posted_at, e.created_at) DESC NULLS LAST, e.id DESC
     LIMIT ?

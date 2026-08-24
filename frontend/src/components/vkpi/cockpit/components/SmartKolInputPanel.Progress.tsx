@@ -163,11 +163,35 @@ function ContractProgressCard({ progress }: { progress: SearchSessionProgress })
     : search.dataReady != null
       ? `已返回 ${search.dataReady}`
       : "返回数量未确认";
+  const contractActive = !contract.requestedTasksTerminal && (
+    contract.orchestrationPending
+    || ["queued", "running", "active"].includes(contract.state)
+    || (contract.queuedUnits ?? 0) + (contract.runningUnits ?? 0) + (contract.activeUnits ?? 0) > 0
+  );
+  const requestedOnlyComplete = contract.requestedTasksSuccessful && !contract.fullAnalysisComplete;
   const overallState = contract.blockedByWorker
     ? "Worker 阻塞"
     : contract.fullAnalysisComplete
       ? "完整数据可用"
-      : progress.phaseLabel;
+      : contract.emptyResult && contract.requestedTasksTerminal
+        ? "无结果，已结束"
+        : requestedOnlyComplete
+          ? "已请求阶段完成"
+          : ["failed", "cancelled", "canceled"].includes(contract.state)
+            ? "未完成"
+          : contract.requestedTasksTerminal
+            ? "部分完成"
+            : progress.phaseLabel;
+  const optionalStageLabels: Record<string, string> = {
+    profile: "档案",
+    video: "视频",
+    comments: "评论",
+    audience: "受众",
+  };
+  const unrequestedStages = contract.notRequestedStages.length
+    ? contract.notRequestedStages
+    : (["profile", "video", "comments", "audience"] as const)
+      .filter((key) => contract.stages[key].state === "not_requested");
   const runtimeIcon = runtime.kind === "local" ? Laptop : runtime.kind === "cloud" ? Cloud : Server;
   const RuntimeIcon = runtimeIcon;
 
@@ -181,11 +205,17 @@ function ContractProgressCard({ progress }: { progress: SearchSessionProgress })
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-1.5 text-[10.5px] font-medium text-cyan-50">
-          {contract.blockedByWorker
-            ? <WifiOff size={12} className="text-rose-300" />
-            : contract.fullAnalysisComplete
-              ? <CheckCircle2 size={12} className="text-emerald-300" />
-              : <Loader2 size={12} className="animate-spin text-cyan-200" />}
+          <span data-testid="kol-progress-state-icon" data-state={contract.blockedByWorker ? "blocked" : contractActive ? "active" : contract.requestedTasksTerminal ? "terminal" : "idle"}>
+            {contract.blockedByWorker
+              ? <WifiOff size={12} className="text-rose-300" />
+              : contractActive
+                ? <Loader2 size={12} className="animate-spin text-cyan-200" />
+                : contract.fullAnalysisComplete || contract.requestedTasksSuccessful
+                  ? <CheckCircle2 size={12} className={contract.fullAnalysisComplete ? "text-emerald-300" : "text-cyan-200"} />
+                  : contract.requestedTasksTerminal
+                    ? <TriangleAlert size={12} className="text-amber-300" />
+                    : <Clock3 size={12} className="text-slate-400" />}
+          </span>
           找达人真实进度
           <span
             data-testid="kol-progress-runtime"
@@ -238,6 +268,11 @@ function ContractProgressCard({ progress }: { progress: SearchSessionProgress })
         {(contract.runningUnits ?? 0) > 0 ? <span>运行 {contract.runningUnits} · 不计完成</span> : null}
         {(contract.activeUnits ?? 0) > 0 ? <span>处理中/状态待确认 {contract.activeUnits} · 不计完成</span> : null}
         {(contract.failedUnits ?? 0) > 0 ? <span className="text-rose-200/80">失败/不完整 {contract.failedUnits} · 不计完成</span> : null}
+        {unrequestedStages.length ? (
+          <span data-testid="kol-progress-not-requested-stages" className="text-amber-100/75">
+            本次未请求{unrequestedStages.map((key) => optionalStageLabels[key]).join("/")}；不算失败，也不代表完整分析
+          </span>
+        ) : null}
         {contract.fullAnalysisExecutionComplete && !contract.fullAnalysisObservable ? (
           <span className="text-amber-200/80">执行已结束，但可用数据尚未完全可观测</span>
         ) : null}

@@ -141,9 +141,15 @@ describe("SmartKolInputPanel progressive stage card", () => {
         runningUnits: 0,
         activeUnits: 5,
         failedUnits: 2,
+        requestedTasksTerminal: false,
+        requestedTasksSuccessful: false,
+        completionKind: "blocked_by_worker",
+        notRequestedStages: ["audience"],
+        emptyResult: false,
         progressPct: 61.5,
         terminalPct: 64.6,
         blockedByWorker: true,
+        orchestrationPending: false,
         fullAnalysisComplete: false,
         fullAnalysisExecutionComplete: false,
         fullAnalysisObservable: false,
@@ -161,7 +167,7 @@ describe("SmartKolInputPanel progressive stage card", () => {
         stages: {
           search: contractStage({ key: "search", successful: 30, terminal: 30, remaining: 0, dataReady: 30, state: "ready", counts: { ready: 30, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, notRequested: 0 } }),
           profile: contractStage({ key: "profile", successful: 10, terminal: 12, remaining: 18, dataReady: 10, state: "active", counts: { ready: 10, queued: 8, running: 0, active: 0, partial: 2, failed: 0, skipped: 0, notRequested: 0 } }),
-          video: contractStage({ key: "video", requested: 0, successful: 0, terminal: 0, remaining: 0, dataReady: 0, state: "not_requested", counts: { ready: 0, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, notRequested: 30 } }),
+          video: contractStage({ key: "video", requested: 14, successful: 10, terminal: 14, remaining: 0, dataReady: 10, state: "partial", counts: { ready: 10, queued: 0, running: 0, active: 0, partial: 0, failed: 4, skipped: 0, notRequested: 19 } }),
           comments: contractStage({ key: "comments", requested: 5, successful: 0, terminal: 0, remaining: 5, dataReady: null, state: "active", counts: { ready: 0, queued: 0, running: 0, active: 5, partial: 0, failed: 0, skipped: 0, notRequested: 25 } }),
           audience: contractStage({ key: "audience", requested: 0, successful: 0, terminal: 0, remaining: 0, dataReady: 0, state: "not_requested", counts: { ready: 0, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, notRequested: 30 } }),
         },
@@ -171,7 +177,8 @@ describe("SmartKolInputPanel progressive stage card", () => {
     expect(screen.getByTestId("kol-progress-base")).toHaveTextContent("30/30 已返回");
     expect(screen.getByTestId("kol-truth-progress-profile")).toHaveTextContent("10/30 成功");
     expect(screen.getByTestId("kol-truth-progress-profile")).toHaveTextContent("Worker 阻塞 8");
-    expect(screen.getByTestId("kol-truth-progress-video")).toHaveTextContent("未请求");
+    expect(screen.getByTestId("kol-truth-progress-video")).toHaveTextContent("10/14 成功");
+    expect(screen.getByTestId("kol-truth-progress-video")).toHaveTextContent("完成 10 · 失败/不完整 4 · 未请求 19");
     expect(screen.getByTestId("kol-truth-progress-comments")).toHaveTextContent("Worker 阻塞 5");
     expect(screen.getByTestId("kol-progress-worker")).toHaveTextContent("Worker 0/16 · 离线");
     expect(screen.getByTestId("kol-progress-success-pct")).toHaveTextContent("已请求成功 61.5%");
@@ -193,9 +200,15 @@ describe("SmartKolInputPanel progressive stage card", () => {
         runningUnits: null,
         activeUnits: null,
         failedUnits: null,
+        requestedTasksTerminal: false,
+        requestedTasksSuccessful: false,
+        completionKind: "planned",
+        notRequestedStages: [],
+        emptyResult: false,
         progressPct: null,
         terminalPct: null,
         blockedByWorker: false,
+        orchestrationPending: false,
         fullAnalysisComplete: false,
         fullAnalysisExecutionComplete: false,
         fullAnalysisObservable: false,
@@ -215,6 +228,55 @@ describe("SmartKolInputPanel progressive stage card", () => {
     expect(screen.queryByTestId("kol-progress-success-pct")).not.toBeInTheDocument();
     expect(screen.queryByTestId("kol-progress-terminal-pct")).not.toBeInTheDocument();
     expect(screen.getByTestId("kol-progress-worker")).toHaveTextContent("Worker 未观测");
+  });
+
+  it("closes the 30-returned / 26-audience window without spinning or treating unrequested stages as failures", () => {
+    render(<ProgressiveSearchStageCard progress={progress({
+      phase: "complete",
+      phaseLabel: "已请求阶段已结束",
+      target: 30,
+      requestedTasksTerminal: true,
+      requiredTasksComplete: true,
+      contract: {
+        schema: "kol_search_progress_v1",
+        claimStatus: "observed_execution_only",
+        state: "ready",
+        requestedUnits: 56,
+        successfulUnits: 56,
+        terminalUnits: 56,
+        queuedUnits: 0,
+        runningUnits: 0,
+        activeUnits: 0,
+        failedUnits: 0,
+        requestedTasksTerminal: true,
+        requestedTasksSuccessful: true,
+        completionKind: "requested_stages",
+        notRequestedStages: ["profile", "video", "comments"],
+        emptyResult: false,
+        progressPct: 100,
+        terminalPct: 100,
+        blockedByWorker: false,
+        orchestrationPending: false,
+        fullAnalysisComplete: false,
+        fullAnalysisExecutionComplete: false,
+        fullAnalysisObservable: false,
+        observedAt: "2026-08-24T15:10:00Z",
+        worker: { observed: true, state: "online", online: true, onlineCount: 16, expectedCount: null, capacityReady: true, latestHeartbeatAt: "2026-08-24T15:09:59Z", shaAligned: true },
+        stages: {
+          search: contractStage({ key: "search", successful: 30, terminal: 30, remaining: 0, dataReady: 30, state: "ready", counts: { ready: 30, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, notRequested: 0 } }),
+          profile: contractStage({ key: "profile", requested: 0, successful: 0, terminal: 0, remaining: 0, dataReady: 0, state: "not_requested", counts: { ready: 0, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, notRequested: 30 } }),
+          video: contractStage({ key: "video", requested: 0, successful: 0, terminal: 0, remaining: 0, dataReady: 0, state: "not_requested", counts: { ready: 0, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, notRequested: 30 } }),
+          comments: contractStage({ key: "comments", requested: 0, successful: 0, terminal: 0, remaining: 0, dataReady: null, state: "not_requested", counts: { ready: 0, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, notRequested: 30 } }),
+          audience: contractStage({ key: "audience", requested: 26, successful: 26, terminal: 26, remaining: 0, dataReady: 26, state: "ready", counts: { ready: 26, queued: 0, running: 0, active: 0, partial: 0, failed: 0, skipped: 0, notRequested: 4 } }),
+        },
+      },
+    })} />);
+
+    expect(screen.getByTestId("kol-progress-state-icon")).toHaveAttribute("data-state", "terminal");
+    expect(screen.getByTestId("kol-progress-state-icon").querySelector(".animate-spin")).toBeNull();
+    expect(screen.getByTestId("kol-progress-strict-status")).toHaveTextContent("已请求阶段完成");
+    expect(screen.getByTestId("kol-progress-not-requested-stages")).toHaveTextContent("本次未请求档案/视频/评论；不算失败，也不代表完整分析");
+    expect(screen.getByTestId("kol-truth-progress-audience")).toHaveTextContent("26/26 成功");
   });
 
   it("labels local and cloud API surfaces from the effective request origin without claiming deployment parity", () => {

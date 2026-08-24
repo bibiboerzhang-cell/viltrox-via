@@ -60,6 +60,15 @@ def _tracked_link_rows(conn: Any, sid: int, *, cap: int) -> tuple[list[dict[str,
                LOWER(COALESCE(e.platform, '')) AS platform,
                COALESCE(NULLIF(e.video_title, ''), e.title, '') AS video_title,
                COALESCE(t.status, '') AS tracking_status,
+               CASE
+                 WHEN EXISTS (SELECT 1 FROM vkpi_kol_video_product_links lx
+                              WHERE lx.evidence_id=l.evidence_id AND lx.product_sku=l.product_sku
+                                AND lx.relation_type='confirmed') THEN 'confirmed'
+                 WHEN EXISTS (SELECT 1 FROM vkpi_kol_video_product_links lx
+                              WHERE lx.evidence_id=l.evidence_id AND lx.product_sku=l.product_sku
+                                AND lx.relation_type='manual') THEN 'manual'
+                 ELSE 'detected'
+               END AS link_relation_type,
                COALESCE(NULLIF(kp.display_name, ''), kp.handle, '') AS kol_name,
                COALESCE(NULLIF(p.marketing_name, ''), NULLIF(p.model_name, ''), l.product_sku) AS sku_name
         FROM vkpi_kol_video_product_links l
@@ -188,6 +197,7 @@ def build_sku_play_overview(
             "measured_at": measure["measured_at"],
             "delta": dict(measure["delta"]),
             "tracking_status": _text(row.get("tracking_status")),
+            "link_relation_type": _text(row.get("link_relation_type")),
             "_measured_dt": measure["measured_dt"],
         })
 

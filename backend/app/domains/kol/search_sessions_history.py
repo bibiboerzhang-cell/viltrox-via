@@ -207,6 +207,7 @@ def list_history(
         for key in ("excluded_total", "excluded_own_brand", "excluded_brand_official"):
             account_gate_totals[key] += int(account_gate_counts[key])
         session["progress_contract"] = progress_contract
+        session["effective_status"] = progress_contract.get("state")
         session["worker_health"] = dict(worker_health)
         result_summary = _dict(session.get("result_summary")).copy()
         result_summary["progress_contract"] = progress_contract

@@ -170,6 +170,22 @@ describe("session 1106 replay · discovery visibility", () => {
     expect(sessionStatusBanner(session, "running", {}, true)?.label).toBe("正在查找");
   });
 
+  it("shows a Worker blockage instead of falling back to queued", () => {
+    const session = session1106({
+      status: "running",
+      progress_contract: contract({
+        state: "blocked_by_worker",
+        blocked_by_worker: true,
+        queued_units: 3,
+        worker: { observed: true, online: false, state: "offline" },
+      }),
+    });
+    const banner = sessionStatusBanner(session, "running", {}, true);
+    expect(banner).toMatchObject({ tone: "info", label: "等待 Worker 恢复" });
+    expect(banner?.note).toContain("Worker");
+    expect(banner?.label).not.toBe("已排队");
+  });
+
   it("legacy contract without the pending flag still reads the same window as terminal (documents the old trap)", () => {
     const recallItems = Array.from({ length: 30 }, (_, index) => ({
       id: index + 1, item_type: "recall_candidate", status: "ready", stage: "identified", kol_pool_id: 1000 + index, payload: {},

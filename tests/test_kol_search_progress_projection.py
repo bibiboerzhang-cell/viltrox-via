@@ -145,6 +145,104 @@ def test_not_requested_optional_stages_do_not_claim_full_analysis() -> None:
     assert result["full_analysis_complete"] is False
 
 
+def test_30_returned_and_26_audience_is_terminal_requested_work_not_full_analysis() -> None:
+    """The user-visible 30/30 + audience 26/26 shape is complete for what was
+    requested.  Profile/video/comments were never requested and therefore are
+    neither failures nor reasons to keep a spinner alive."""
+    session = {"status": "ready", "result_summary": {"phase": "complete", "progress": {"total": 30}}}
+    items = []
+    for item_id in range(1, 31):
+        payload: dict[str, Any] = {}
+        if item_id <= 26:
+            payload = {
+                "audience_preview": {"status": "ready", "sample_size": 50},
+                "downstream_jobs": {"audience": {"state": "ready", "job_ids": [1000 + item_id]}},
+            }
+        items.append({"id": item_id, "status": "ready", "stage": "identified", "payload": payload})
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["state"] == "ready"
+    assert result["requested_units"] == 56
+    assert result["successful_units"] == 56
+    assert result["requested_tasks_terminal"] is True
+    assert result["requested_tasks_successful"] is True
+    assert result["completion_kind"] == "requested_stages"
+    assert result["not_requested_stages"] == ["profile", "video", "comments"]
+    assert result["stages"]["audience"]["successful"] == 26
+    assert result["stages"]["audience"]["counts"]["not_requested"] == 4
+    assert result["full_analysis_complete"] is False
+
+
+def test_terminal_empty_partial_session_does_not_fall_back_to_planned() -> None:
+    result = project_search_progress(
+        {"status": "partial", "result_summary": {"phase": "partial", "progress": {"total": 0}}},
+        [],
+        worker_health=_worker(online=True),
+    )
+
+    assert result["state"] == "partial"
+    assert result["requested_units"] == 0
+    assert result["requested_tasks_terminal"] is True
+    assert result["requested_tasks_successful"] is False
+    assert result["completion_kind"] == "empty_result"
+    assert result["empty_result"] is True
+
+
+def test_terminal_empty_ready_session_prefers_empty_result_over_success_label() -> None:
+    result = project_search_progress(
+        {"status": "ready", "result_summary": {"phase": "complete", "progress": {"total": 0}}},
+        [],
+        worker_health=_worker(online=True),
+    )
+
+    assert result["state"] == "ready"
+    assert result["requested_tasks_terminal"] is True
+    assert result["requested_tasks_successful"] is True
+    assert result["empty_result"] is True
+    assert result["completion_kind"] == "empty_result"
+
+
+def test_active_and_failed_optional_units_remain_separate_from_not_requested() -> None:
+    """Production-shape regression: active comments/audience keep the session
+    open; video failures make the eventual terminal result partial; the
+    unrequested remainder is still explicit and never counted as failed."""
+    session = {"status": "running", "result_summary": {"phase": "analysis", "progress": {"total": 33}}}
+    items: list[dict[str, Any]] = []
+    for item_id in range(1, 34):
+        downstream: dict[str, Any] = {}
+        payload: dict[str, Any] = {"downstream_jobs": downstream}
+        if item_id <= 30:
+            payload["profile_execute"] = {"status": "ready", "kol_pool_id": item_id}
+        if item_id <= 10:
+            downstream["video"] = {"state": "ready"}
+        elif item_id <= 14:
+            downstream["video"] = {"state": "failed"}
+        if item_id <= 18:
+            downstream["comments"] = {"state": "ready"}
+        elif item_id <= 21:
+            downstream["comments"] = {"state": "active"}
+        if item_id <= 27:
+            downstream["audience"] = {"state": "ready"}
+            payload["audience_preview"] = {"status": "ready"}
+        elif item_id <= 30:
+            downstream["audience"] = {"state": "queued"}
+        items.append({"id": item_id, "status": "ready", "stage": "identified", "kol_pool_id": item_id, "payload": payload})
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["state"] == "active"
+    assert result["requested_tasks_terminal"] is False
+    assert result["stages"]["profile"]["successful"] == 30
+    assert result["stages"]["video"]["counts"] == {
+        "ready": 10, "queued": 0, "running": 0, "active": 0, "partial": 0,
+        "failed": 4, "skipped": 0, "not_requested": 19, "unknown": 0,
+    }
+    assert result["stages"]["comments"]["counts"]["active"] == 3
+    assert result["stages"]["audience"]["counts"]["queued"] == 3
+    assert result["failed_units"] == 4
+
+
 def test_full_analysis_job_success_is_not_complete_when_comments_data_is_unobservable() -> None:
     session = {"status": "ready", "result_summary": {"progress": {"total": 1}}}
     items = [

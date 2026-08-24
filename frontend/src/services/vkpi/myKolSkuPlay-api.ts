@@ -28,6 +28,8 @@ export interface SkuPlayItem {
   measured_at?: string | null;
   delta?: SkuPlayDelta;
   tracking_status?: "active" | "paused" | string;
+  /** SKU 归属真值：manual=员工手选，detected=系统检测待确认，confirmed=已审核确认。 */
+  link_relation_type?: "manual" | "detected" | "confirmed" | string;
 }
 
 export interface SkuPlayGroup {

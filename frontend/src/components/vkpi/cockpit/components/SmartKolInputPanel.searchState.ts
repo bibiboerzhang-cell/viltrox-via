@@ -35,3 +35,25 @@ export function sessionDisplayState(
     pollingSessionId: displayedSessionId && !terminal ? displayedSessionId : null,
   };
 }
+
+export function sessionPollStateAfterTimeout(
+  sessionId: number | null | undefined,
+  terminal: boolean,
+): { pollingSessionId: null; pausedSessionId: number | null } {
+  const normalized = Number(sessionId);
+  const validSessionId = Number.isFinite(normalized) && normalized > 0 ? normalized : null;
+  return {
+    pollingSessionId: null,
+    pausedSessionId: terminal ? null : validSessionId,
+  };
+}
+
+export function resumePausedSessionState(
+  pausedSessionId: number | null | undefined,
+): { pollingSessionId: number | null; pausedSessionId: null } {
+  const normalized = Number(pausedSessionId);
+  return {
+    pollingSessionId: Number.isFinite(normalized) && normalized > 0 ? normalized : null,
+    pausedSessionId: null,
+  };
+}

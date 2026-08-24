@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { sessionDisplayState, smartKolSearchFingerprint } from "./SmartKolInputPanel.searchState";
+import {
+  resumePausedSessionState,
+  sessionDisplayState,
+  sessionPollStateAfterTimeout,
+  smartKolSearchFingerprint,
+} from "./SmartKolInputPanel.searchState";
 
 describe("Smart KOL search display state", () => {
   it("keeps the displayed approval session after terminal polling stops", () => {
@@ -18,5 +23,11 @@ describe("Smart KOL search display state", () => {
     }));
     expect(smartKolSearchFingerprint(base)).not.toBe(smartKolSearchFingerprint({ ...base, languages: ["en"] }));
     expect(smartKolSearchFingerprint(base)).not.toBe(smartKolSearchFingerprint({ ...base, market: "JP" }));
+  });
+
+  it("pauses observation after timeout and resumes the same session without creating a new id", () => {
+    expect(sessionPollStateAfterTimeout(1143, false)).toEqual({ pollingSessionId: null, pausedSessionId: 1143 });
+    expect(sessionPollStateAfterTimeout(1142, true)).toEqual({ pollingSessionId: null, pausedSessionId: null });
+    expect(resumePausedSessionState(1143)).toEqual({ pollingSessionId: 1143, pausedSessionId: null });
   });
 });

@@ -267,21 +267,12 @@ def execute_profile_crawl_for_session_item(
         profile_result=profile_result,
     )
     profile_status = _text(profile_flow.get("status") or profile_result.get("status") or "unknown").lower()
-    audience_enrichment = profile_result.get("audience_enrichment") if isinstance(profile_result.get("audience_enrichment"), dict) else {}
-    audience_status = _text(audience_enrichment.get("status")).lower()
-    overall_status = profile_status
-    if profile_status == "ready" and audience_status in {
-        "pending",
-        "partial",
-        "waiting_for_evidence",
-        "waiting_for_profile",
-        "error",
-    }:
-        overall_status = "partial"
     return {
         **plan,
         "execute": True,
-        "status": overall_status,
+        # Optional audience work has its own explicit stage/status below.  It
+        # must not downgrade a successfully materialized profile to partial.
+        "status": profile_status,
         "profile_status": profile_status,
         "kol_pool_id": profile_flow.get("kol_pool_id") or profile_result.get("matched_kol_pool_id"),
         "contact_enrichment": profile_result.get("contact_enrichment"),

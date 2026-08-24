@@ -113,6 +113,9 @@ def _attach_progress_contract(
 
     contract = project_search_progress(session, items, worker_health=worker_health)
     session["progress_contract"] = contract
+    # Preserve the stored status for audit/reconciliation, while giving every
+    # reader the same evidence-based state used by the progress UI.
+    session["effective_status"] = contract.get("state")
     session["worker_health"] = dict(worker_health)
     summary = _dict(session.get("result_summary")).copy()
     summary["progress_contract"] = contract

@@ -18,9 +18,18 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from app.core.logging import get_logger
 from app.core.staff_avatars import serialize_staff_avatar_url
 from app.domains.access import scope
 from app.domains.kol.contact_access import mask_contact_payload
+from app.domains.kol.pool_read_avatar_hydration import (
+    bounded_profile_avatar_urls,
+    profile_avatar_fallback_needed,
+)
+from app.domains.kol.pool_read_projection import project_pool_avatar
+
+
+logger = get_logger(__name__)
 
 
 def _json(value: Any, default: Any) -> Any:
@@ -51,6 +60,47 @@ def _masked_contact_rows(value: Any) -> list[dict[str, Any]]:
         item["contact_masked"] = True
         result.append(item)
     return result
+
+
+def _project_favorite_avatars(conn: Any, items: list[dict[str, Any]]) -> None:
+    """Replace time-sensitive favorite avatars with the honest read projection.
+
+    MY KOL historically returned ``vkpi_kol_pool.avatar_url`` verbatim while
+    the main Pool read path already restored locally prewarmed copies.  That
+    made the same creator show an avatar in discovery but only initials in MY
+    KOL once an Instagram/TikTok CDN URL expired.  Keep this aggregate pure
+    read-only and project only the bounded rows already selected for the page.
+    """
+    hydration_ids = [
+        _int(item.get("kol_pool_id"))
+        for item in items
+        if _int(item.get("kol_pool_id")) > 0
+        and not str(item.get("avatar_url") or "").startswith(
+            ("/api/vkpi-media/image-cache/", "/api/admin/vkpi/media/image-cache/")
+        )
+        and profile_avatar_fallback_needed(item.get("avatar_url"))
+    ]
+    hydrated: dict[int, str] = {}
+    # Avoid an unbounded IN list if a large team library is requested without
+    # pagination. Each chunk extracts at most one profile-only URL per explicit
+    # Pool row and never calls a provider or writes to the database.
+    try:
+        for offset in range(0, len(hydration_ids), 200):
+            hydrated.update(
+                bounded_profile_avatar_urls(conn, hydration_ids[offset : offset + 200])
+            )
+    except Exception as exc:  # avatar restoration must never hide the whole MY KOL library
+        logger.warning("MY KOL favorite avatar hydration failed: %s", type(exc).__name__)
+        hydrated = {}
+    for item in items:
+        pool_id = _int(item.get("kol_pool_id"))
+        probe = dict(item)
+        if pool_id in hydrated:
+            probe["raw_profile_avatar_url"] = hydrated[pool_id]
+        try:
+            item.update(project_pool_avatar(probe))
+        except Exception as exc:  # retain the raw URL; frontend still has initials fallback
+            logger.warning("MY KOL favorite avatar projection failed: %s", type(exc).__name__)
 
 
 def _project_scope_for_favorite_projection(
@@ -300,6 +350,7 @@ def _pool_favorites(
         if limit is None:
             item.pop("favorites_sort_epoch", None)
         items.append(item)
+    _project_favorite_avatars(conn, items)
     return items
 
 
@@ -387,6 +438,7 @@ def _pool_favorites_team(
         if limit is None:
             item.pop("favorites_sort_epoch", None)
         items.append(item)
+    _project_favorite_avatars(conn, items)
     return items
 
 

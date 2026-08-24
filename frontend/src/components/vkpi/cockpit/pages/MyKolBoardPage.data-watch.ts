@@ -6,6 +6,7 @@ import {
   type VkpiDataWatchSkuCandidate,
   type VkpiKolPoolVideoRow,
 } from "../../../../services/vkpi/myKolBoard-api";
+import { confirmDetectedMyKolVideoSku } from "../../../../services/vkpi/myKolDataWatchConfirmation-api";
 import type { FlowReceipt } from "../../pages/myKol/PoolEvidenceContent.helpers";
 
 // 「数据关注」一键流程(收口波 2026-08-23 · D 车道):内容墙卡片 + KOL 详情视频卡共用。
@@ -26,13 +27,36 @@ export interface DataWatchContextValue {
 
 export const DataWatchContext = React.createContext<DataWatchContextValue | null>(null);
 
+/**
+ * 数据关注 / 手工 SKU 关联落库后的板面内部通知。
+ * 单品播放模块是独立读模型，不监听这个事件就会一直保留点击前的 0 空态，
+ * 直到用户手工点“刷新”或重载页面。事件只触发重读，不代表抓取已完成。
+ */
+export const SKU_PLAY_CHANGED_EVENT = "vkpi:sku-play-changed";
+
+export type DataWatchSubmitIntent = "auto" | "manual" | "confirm_detected";
+
+export function notifySkuPlayChanged(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(SKU_PLAY_CHANGED_EVENT));
+}
+
 /** 成功回执:SKU 如实列出;refresh=already_queued 时如实注明「已在队列」,绝不当新排队。 */
 export function dataWatchSuccessText(resp: VkpiDataWatchResponse): string {
   const skus = (Array.isArray(resp.skus) ? resp.skus : []).map((sku) => String(sku || "").trim()).filter(Boolean);
   const queueNote = String(resp.refresh || "") === "already_queued" ? "(指标刷新已在队列中)" : "";
-  const provenanceNote = resp.sku_provenance?.relation_type === "detected"
-    ? "；SKU 来自标题唯一命中，已标为系统检测、待人工确认"
-    : "";
+  const detectedSource = String(resp.sku_provenance?.source || "");
+  const modalityLabels = (resp.sku_provenance?.modalities || []).map((value) => ({ visual: "画面", text: "字幕·文字", voice: "口播", unspecified: "未注明" }[value] || value));
+  const provenanceNote = resp.sku_provenance?.relation_type === "confirmed"
+    ? "；系统检测 SKU 已由你显式确认"
+    : resp.sku_provenance?.relation_type === "detected"
+    ? detectedSource === "final_v1_lens_evidence_v2"
+      ? `；SKU 来自已有视频深析${modalityLabels.length ? `（${modalityLabels.join("/")}）` : ""}唯一命中，已标为系统检测、待人工确认`
+      : detectedSource === "title_alias_v1"
+        ? "；SKU 来自标题唯一命中，已标为系统检测、待人工确认"
+        : "；SKU 来自已有系统检测关联，仍待人工确认"
+    : resp.sku_provenance?.requires_human_confirmation
+      ? "；关联中含系统检测项，仍待人工确认"
+      : "";
   return `已登记数据关注(SKU ${skus.length ? skus.join(" / ") : "—"})${provenanceNote}——系统定时抓取播放/点赞,结果见『单品播放数据』模块${queueNote}。`;
 }
 
@@ -42,9 +66,9 @@ export function skuRequiredHintText(candidates: VkpiDataWatchSkuCandidate[] = []
   return `未能自动识别产品——请补一个 SKU 后用『追踪并排队刷新』提交${codes.length ? `(候选:${codes.join(" / ")})` : ""}。`;
 }
 
-/** 内容墙 sku_required 提示:墙上没有 SKU 表单,如实引导去 KOL 详情补,绝不冒充已登记。 */
+/** 旧调用方兼容文案;新内容墙会就地展示候选 SKU 多选器。 */
 export const WALL_SKU_REQUIRED_HINT =
-  "未能自动识别产品——本次未登记;请打开该 KOL 详情,用「关联 SKU」补一个产品后提交。";
+  "未能自动识别产品——请在内容墙选择对应 SKU 后确认；未选择不会登记。";
 
 /** 失败文案:与卡片「追踪播放」同一套错误码口径(共享只读 / 未采集 / 平台不支持如实说人话)。 */
 export function dataWatchErrorText(err: unknown): string {
@@ -84,19 +108,33 @@ export interface RunDataWatchDeps {
   setReceipt: (msg: FlowReceipt | null) => void;
   /** 服务端认不出产品时的回落(两入口各自引导;candidates 原样透传) */
   onSkuRequired: (video: VkpiKolPoolVideoRow, candidates: VkpiDataWatchSkuCandidate[]) => void;
+  /** 服务端已落唯一 detected 时，由界面要求员工再确认；未确认不写 confirmed。 */
+  onDetectedConfirmationRequired?: (video: VkpiKolPoolVideoRow, candidates: VkpiDataWatchSkuCandidate[]) => void;
   /** status=tracking 后触发(详情/单 KOL 墙重读任务态;聚合墙缺席) */
   onTracked?: () => void;
 }
 
-/** 一键数据关注完整流程:回执一律以端点真实返回为准,未知状态如实报错。 */
-export async function runDataWatchAction(video: VkpiKolPoolVideoRow, deps: RunDataWatchDeps): Promise<void> {
+/**
+ * 一键数据关注完整流程：回执一律以端点真实返回为准，未知状态如实报错。
+ * productSkus 仅用于 sku_required 后员工明确选定的二次提交；空数组仍走服务端保守识别。
+ */
+export async function runDataWatchAction(
+  video: VkpiKolPoolVideoRow,
+  deps: RunDataWatchDeps,
+  productSkus: string[] = [],
+  submitIntent: DataWatchSubmitIntent = productSkus.length ? "manual" : "auto",
+): Promise<void> {
   const evidenceId = Number(video.evidence_id ?? video.id) || 0;
   if (!deps.apiToken || !deps.kolPoolId || !evidenceId || deps.readOnly || deps.isBusy(evidenceId)) return;
   const isCurrent = deps.isCurrent || (() => true);
   deps.setBusy(evidenceId, true);
   deps.setReceipt(null);
   try {
-    const resp = await dataWatchMyKolVideo(deps.apiToken, deps.kolPoolId, evidenceId);
+    const resp = submitIntent === "confirm_detected"
+      ? await confirmDetectedMyKolVideoSku(deps.apiToken, deps.kolPoolId, evidenceId, productSkus)
+      : productSkus.length
+        ? await dataWatchMyKolVideo(deps.apiToken, deps.kolPoolId, evidenceId, productSkus)
+        : await dataWatchMyKolVideo(deps.apiToken, deps.kolPoolId, evidenceId);
     if (!isCurrent()) return;
     const status = String(resp?.status || "");
     if (status === "sku_required") {
@@ -108,7 +146,24 @@ export async function runDataWatchAction(video: VkpiKolPoolVideoRow, deps: RunDa
       return;
     }
     deps.setReceipt({ text: dataWatchSuccessText(resp), tone: "info" });
+    notifySkuPlayChanged();
     deps.onTracked?.();
+    if (
+      resp.sku_provenance?.relation_type === "detected"
+      && resp.sku_provenance?.requires_human_confirmation
+      && deps.onDetectedConfirmationRequired
+    ) {
+      const detectedSkus = [...new Set((resp.skus || []).map((sku) => String(sku || "").trim()).filter(Boolean))];
+      if (detectedSkus.length === 1) {
+        deps.onDetectedConfirmationRequired(video, [{
+          sku_code: detectedSkus[0],
+          sku_name: detectedSkus[0],
+          match_source: String(resp.sku_provenance.source || ""),
+          modalities: resp.sku_provenance.modalities || [],
+          evidence_excerpt: String(resp.sku_provenance.evidence_excerpt || ""),
+        }]);
+      }
+    }
   } catch (err) {
     if (isCurrent()) deps.setReceipt({ text: dataWatchErrorText(err), tone: "error" });
   } finally {

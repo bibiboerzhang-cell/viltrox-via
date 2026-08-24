@@ -82,6 +82,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.domains.kol import my_kol_video_recovery as recovery
+from app.domains.kol import my_kol_recent_filters as recent_filters
 from app.domains.kol.video_evidence_projection import viltrox_modalities
 from app.domains.projects import stage_canonical
 
@@ -110,6 +111,7 @@ from app.domains.kol.my_kol_board_ext_sql import (  # noqa: F401 — 契约测�
     PLATFORM_ROWS_LIMIT,
     POOL_FOLLOWERS_DAY_SQL,
     RECENT_KEYSET_PARAM_COUNT,
+    RECENT_FILTER_PARAM_COUNT,
     RECENT_VIDEOS_LIMIT,
     RECENT_VIDEOS_SQL,
     SERIES_MAX_DAYS,
@@ -571,16 +573,11 @@ def _views_top(conn: Any, sid: int) -> dict[str, Any]:
     return body
 
 
-def _recent_keyset_params(before: tuple[str | None, int] | None) -> tuple[Any, ...]:
-    """RECENT_VIDEOS_SQL 游标段 7 参:use_keyset, p, p, p, id, p, id(无游标全空短路)。"""
-    if not before or _int0(before[1]) <= 0:
-        params: tuple[Any, ...] = (False, None, None, None, 0, None, 0)
-    else:
-        published_at, evidence_id = before
-        key = str(published_at) if published_at not in (None, "") else None
-        params = (True, key, key, key, int(evidence_id), key, int(evidence_id))
-    assert len(params) == RECENT_KEYSET_PARAM_COUNT
-    return params
+_recent_keyset_params = recent_filters.recent_keyset_params
+
+
+def _recent_filter_params(days: int = 0, kol_pool_id: int = 0, since: datetime | None = None) -> tuple[Any, ...]:
+    return recent_filters.recent_filter_params(_now_utc(), days, kol_pool_id, since)
 
 
 def _recent_videos(
@@ -588,6 +585,7 @@ def _recent_videos(
     sid: int,
     *,
     before: tuple[str | None, int] | None = None,
+    days: int = 0, kol_pool_id: int = 0, since: datetime | None = None,
 ) -> dict[str, Any]:
     """8. recent_videos:收藏集最近采集视频墙 + 五档 Viltrox 证据 + 任务态 + 游标。
 
@@ -604,11 +602,13 @@ def _recent_videos(
     """
     from app.domains.content.creative_segments import _thumbnail_fields
 
+    filter_params = _recent_filter_params(days, kol_pool_id, since)
     rows = conn.execute(
         RECENT_VIDEOS_SQL,
         (
             *VILTROX_TITLE_TOKENS,
             *_scope_params(sid),
+            *filter_params,
             *_recent_keyset_params(before),
             RECENT_VIDEOS_LIMIT + 1,
         ),
@@ -686,6 +686,7 @@ def _recent_videos(
         "status": "ready" if items else "empty",
         "items": items,
         "limit": RECENT_VIDEOS_LIMIT,
+        "filters": recent_filters.recent_filter_payload(days, kol_pool_id, filter_params[0]),
         "page": {
             "limit": RECENT_VIDEOS_LIMIT,
             "returned": len(items),
@@ -802,9 +803,9 @@ def build_recent_videos_page(
     *,
     staff_scope_id: int | None = None,
     before: tuple[str | None, int] | None = None,
+    days: int = 0, kol_pool_id: int = 0, since: datetime | None = None,
 ) -> dict[str, Any]:
     """只翻 recent_videos 一组(前端「加载更多」用,不重算其余七组)。
-
     返回体 = recent_videos 组 + 同款信封字段(status/staff_scope_id/method/
     generated_at);失败诚实 {status:'error'} 不抛。
     """
@@ -813,7 +814,7 @@ def build_recent_videos_page(
     db = conn if conn is not None else get_conn()
     sid = _int0(staff_scope_id)
     try:
-        body = _recent_videos(db, sid, before=before)
+        body = _recent_videos(db, sid, before=before, days=days, kol_pool_id=kol_pool_id, since=since)
     except Exception as exc:  # noqa: BLE001 — 单组失败诚实降级,同 build_board_ext 口径
         logger.warning("my_kol_board_ext recent_videos page failed: %s", exc)
         body = {"status": "error", "reason": str(exc)[:200], "items": []}
@@ -833,7 +834,6 @@ def build_board_ext(
     recent_videos_before: tuple[str | None, int] | None = None,
 ) -> dict[str, Any]:
     """八组看板字段 + 窗口信封;单组失败降级 {status:'error'} 不拖全响应。
-
     staff_scope_id=已解析 scope(路由 scope.effective_staff_id 产物):None=管理层
     全团队收藏集口径,>0=该成员收藏集(员工恒被压回本人)。纯读;conn 可注入
     (测试),缺省懒取 get_conn(get_conn 非上下文管理器,直接调用)。

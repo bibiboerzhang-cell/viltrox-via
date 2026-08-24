@@ -70,6 +70,13 @@ export type SearchProgressContractView = {
   runningUnits: number | null;
   activeUnits: number | null;
   failedUnits: number | null;
+  /** Every requested unit is terminal; zero-unit terminal/empty sessions are included. */
+  requestedTasksTerminal: boolean;
+  /** Terminal and every requested unit succeeded (not merely stopped). */
+  requestedTasksSuccessful: boolean;
+  completionKind: string;
+  notRequestedStages: Array<"profile" | "video" | "comments" | "audience">;
+  emptyResult: boolean;
   progressPct: number | null;
   terminalPct: number | null;
   blockedByWorker: boolean;
@@ -176,6 +183,21 @@ export function searchProgressContractFromSession(session: VkpiKolSearchHistoryI
   if (cleanText(contract.schema) !== "kol_search_progress_v1") return null;
   const stages = asRecord(contract.stages);
   const requestedUnits = contractNumber(contract.requested_units);
+  const terminalUnits = contractNumber(contract.terminal_units);
+  const queuedUnits = contractNumber(contract.queued_units);
+  const runningUnits = contractNumber(contract.running_units);
+  const activeUnits = contractNumber(contract.active_units);
+  const failedUnits = contractNumber(contract.failed_units);
+  const activeTotal = (queuedUnits ?? 0) + (runningUnits ?? 0) + (activeUnits ?? 0);
+  const requestedTasksTerminal = typeof contract.requested_tasks_terminal === "boolean"
+    ? contract.requested_tasks_terminal
+    : Boolean(requestedUnits && terminalUnits != null && terminalUnits >= requestedUnits && activeTotal === 0 && contract.orchestration_pending !== true);
+  const allowedStageKeys = new Set(["profile", "video", "comments", "audience"]);
+  const notRequestedStages = Array.isArray(contract.not_requested_stages)
+    ? contract.not_requested_stages
+      .map((value) => cleanText(value))
+      .filter((value): value is "profile" | "video" | "comments" | "audience" => allowedStageKeys.has(value))
+    : [];
   const worker = asRecord(contract.worker);
   return {
     schema: "kol_search_progress_v1",
@@ -183,11 +205,16 @@ export function searchProgressContractFromSession(session: VkpiKolSearchHistoryI
     state: cleanText(contract.state),
     requestedUnits,
     successfulUnits: contractNumber(contract.successful_units),
-    terminalUnits: contractNumber(contract.terminal_units),
-    queuedUnits: contractNumber(contract.queued_units),
-    runningUnits: contractNumber(contract.running_units),
-    activeUnits: contractNumber(contract.active_units),
-    failedUnits: contractNumber(contract.failed_units),
+    terminalUnits,
+    queuedUnits,
+    runningUnits,
+    activeUnits,
+    failedUnits,
+    requestedTasksTerminal,
+    requestedTasksSuccessful: contract.requested_tasks_successful === true,
+    completionKind: cleanText(contract.completion_kind),
+    notRequestedStages,
+    emptyResult: contract.empty_result === true,
     progressPct: contractPercent(contract.progress_pct, requestedUnits),
     terminalPct: contractPercent(contract.terminal_pct, requestedUnits),
     blockedByWorker: contract.blocked_by_worker === true,
@@ -223,6 +250,7 @@ export function isSearchSessionTerminal(session: VkpiKolSearchHistoryItem): bool
     const active = (contract.queuedUnits ?? 0) + (contract.runningUnits ?? 0) + (contract.activeUnits ?? 0);
     if (active > 0 || contract.blockedByWorker || contract.orchestrationPending) return false;
     if (["queued", "running", "active", "blocked_by_worker"].includes(contract.state)) return false;
+    if (contract.requestedTasksTerminal) return true;
     if (contract.requestedUnits != null && contract.requestedUnits > 0) {
       return contract.terminalUnits != null && contract.terminalUnits >= contract.requestedUnits;
     }
@@ -421,12 +449,14 @@ export function searchSessionProgress(session: VkpiKolSearchHistoryItem | null):
     const contractActive = (progressContract.queuedUnits ?? 0)
       + (progressContract.runningUnits ?? 0)
       + (progressContract.activeUnits ?? 0);
-    const contractTerminal = progressContract.requestedUnits != null
+    const contractTerminal = progressContract.requestedTasksTerminal || Boolean(
+      progressContract.requestedUnits != null
       && progressContract.requestedUnits > 0
       && progressContract.terminalUnits != null
       && progressContract.terminalUnits >= progressContract.requestedUnits
       && contractActive === 0
-      && !progressContract.orchestrationPending;
+      && !progressContract.orchestrationPending
+    );
     // 编排挂起期的阶段按「发现是否已落库」说话:未落 → 全网发现中;已落 → 基础资料补全中。
     const orchestrationPhase: SearchSessionProgress["phase"] | null = progressContract.orchestrationPending
       ? (Object.keys(discovery).length ? "profiling" : "discovering")

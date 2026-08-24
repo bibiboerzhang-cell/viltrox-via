@@ -76,6 +76,7 @@ def my_kol_video_data_watch_endpoint(
             evidence_id=int(evidence_id),
             staff=staff,
             product_skus=body.get("product_skus"),
+            confirm_detected_skus=body.get("confirm_detected_skus"),
         )
         conn.commit()
     except video_tracking.VideoTrackingError as exc:

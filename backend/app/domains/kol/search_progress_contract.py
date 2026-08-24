@@ -34,6 +34,7 @@ _TERMINAL_BUCKETS = ("ready", "partial", "failed", "skipped")
 # requested_tasks_terminal=False(「后面还会登记任务」),且会话仍 queued/running —— 这是
 # 管线自己落的持久证据,不是杜撰:契约在此期间必须报 running,而非 ready。
 _ORCHESTRATION_PENDING_SESSION_STATES = frozenset({"queued", "running"})
+_TERMINAL_SESSION_STATES = frozenset({"ready", "partial", "failed", "cancelled", "canceled"})
 _HEARTBEAT_WINDOW_SECONDS = 120
 _EXACT_RELEASE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _PROJECT_ROOT = Path(__file__).resolve().parents[4]
@@ -118,7 +119,6 @@ def completion_contract(
             for role in ("profile", *FULL_ANALYSIS_ROLES)
         )
     )
-
     decision_eligible = bool(
         full_analysis_complete
         and safe_profile_failed == 0
@@ -566,6 +566,31 @@ def project_search_progress(
         else unobserved_worker_health(observed_at=observed_at)
     )
     orchestration_pending = _orchestration_pending(session, stored_progress)
+    raw_session_status = _text(session.get("status"))
+    active_units_total = queued_units + running_units + active_units
+    # Requested-unit totals are the strongest read-time evidence.  Empty-result
+    # sessions are the important exception: there are deliberately no units to
+    # count, so the durable terminal session status is the closure evidence.
+    requested_tasks_terminal = bool(
+        not orchestration_pending
+        and active_units_total == 0
+        and (
+            (requested_units > 0 and terminal_units >= requested_units)
+            or (requested_units == 0 and raw_session_status in _TERMINAL_SESSION_STATES)
+        )
+    )
+    requested_tasks_successful = bool(
+        requested_tasks_terminal
+        and (
+            (requested_units > 0 and successful_units >= requested_units and failed_units == 0)
+            or (requested_units == 0 and raw_session_status == "ready")
+        )
+    )
+    not_requested_stages = [
+        key
+        for key in ("profile", *FULL_ANALYSIS_ROLES)
+        if stages[key]["state"] == "not_requested"
+    ]
     blocked_by_worker = bool(
         worker.get("observed") is True
         and worker.get("online") is False
@@ -586,8 +611,11 @@ def project_search_progress(
         state = "partial"
     elif requested_units and successful_units >= requested_units:
         state = "ready"
-    elif _text(session.get("status")) in {"failed", "cancelled"}:
-        state = _text(session.get("status"))
+    elif raw_session_status in _TERMINAL_SESSION_STATES:
+        # A partial/failed session with zero materialized rows is still a
+        # terminal empty result.  Calling it "planned" made historical searches
+        # look as if they were waiting forever even though no task remained.
+        state = raw_session_status
     else:
         state = "planned"
 
@@ -614,6 +642,26 @@ def project_search_progress(
             for role in ("profile", *FULL_ANALYSIS_ROLES)
         )
     )
+    empty_result = bool(
+        not safe_items
+        and requested_tasks_terminal
+        and raw_session_status in {"ready", "partial"}
+    )
+
+    if blocked_by_worker:
+        completion_kind = "blocked_by_worker"
+    elif orchestration_pending or active_units_total > 0:
+        completion_kind = "active"
+    elif full_analysis_complete:
+        completion_kind = "full_analysis"
+    elif empty_result:
+        completion_kind = "empty_result"
+    elif requested_tasks_successful:
+        completion_kind = "requested_stages"
+    elif requested_tasks_terminal:
+        completion_kind = "partial"
+    else:
+        completion_kind = "planned"
 
     return {
         "schema": PROGRESS_CONTRACT_SCHEMA,
@@ -628,6 +676,11 @@ def project_search_progress(
         "running_units": running_units,
         "active_units": active_units,
         "failed_units": failed_units,
+        "requested_tasks_terminal": requested_tasks_terminal,
+        "requested_tasks_successful": requested_tasks_successful,
+        "completion_kind": completion_kind,
+        "not_requested_stages": not_requested_stages,
+        "empty_result": empty_result,
         "orchestration_pending": orchestration_pending,
         "orchestration_pending_basis": (
             "session_running_and_orchestrator_declares_more_tasks" if orchestration_pending else None

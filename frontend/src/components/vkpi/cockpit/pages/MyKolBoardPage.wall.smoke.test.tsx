@@ -51,7 +51,11 @@ const WALL_ITEMS = [
 const EXT = {
   status: "ready",
   days: 30,
-  recent_videos: { status: "ready", limit: 60, items: WALL_ITEMS, basis: "vkpi_kol_video_evidence 收藏集最近采集(封顶 60)" },
+  recent_videos: {
+    status: "ready", limit: 60, items: WALL_ITEMS,
+    page: { limit: 60, returned: WALL_ITEMS.length, has_more: false, next_cursor: null, cursor_kind: "published_at_id", order: "published_at_desc_id_desc" },
+    basis: "vkpi_kol_video_evidence 收藏集最近采集(封顶 60)",
+  },
 };
 
 // 单 KOL 视图(/kol-pool/{id}/videos 同源端点):Alpha 两条 / Beta 零条
@@ -63,16 +67,78 @@ const KOL_VIDEOS: Record<string, unknown[]> = {
   "102": [],
 };
 
-function routeApi(overrides: { boardExt?: unknown } = {}) {
+function recentGroup(items: unknown[], cursor: string | null = null, nextCursor: string | null = null) {
+  return {
+    status: items.length ? "ready" : "empty",
+    limit: 60,
+    items,
+    page: {
+      limit: 60, returned: items.length, has_more: Boolean(nextCursor), next_cursor: nextCursor,
+      cursor_kind: "published_at_id", order: "published_at_desc_id_desc",
+    },
+    filters: { days: 0, kol_pool_id: null },
+    cursor,
+  };
+}
+
+function routeApi(overrides: {
+  boardExt?: unknown;
+  recentPage?: (url: URL) => unknown;
+} = {}) {
   apiFetchMock.mockReset().mockImplementation(async (path: unknown, init?: unknown) => {
     const p = String(path);
     if (p.startsWith("/api/admin/vkpi/my-kol/aggregate")) return AGG;
+    if (p.startsWith("/api/admin/vkpi/my-kol/board-ext/recent-videos")) {
+      const url = new URL(p, "https://test.local");
+      const poolId = url.searchParams.get("kol_pool_id") || "";
+      const days = Number(url.searchParams.get("days") || 0);
+      const since = url.searchParams.get("since") || (days ? "2026-08-17T12:00:00+00:00" : null);
+      const result = overrides.recentPage ? await overrides.recentPage(url) : null;
+      if (result && typeof result === "object") {
+        return {
+          ...result,
+          filters: { days, kol_pool_id: Number(poolId) || null, since },
+        };
+      }
+      const rows = poolId ? (KOL_VIDEOS[poolId] || []).map((row) => ({
+        ...row,
+        tasks: {
+          metric_refresh: TRACKED.has(Number(row.evidence_id))
+            ? { status: "queued", job_id: 77, requested_at: "2026-08-21T10:00:00Z", data: { status: "none", freshness: "never", updated_at: null, superseded_by_job: false } }
+            : { status: "not_requested", job_id: null, data: { status: "none", freshness: "never", updated_at: null, superseded_by_job: false } },
+          final_v1: { status: "not_requested", job_id: null, data: { status: "none", freshness: "never", updated_at: null, superseded_by_job: false } },
+        },
+      })) : WALL_ITEMS;
+      return {
+        ...recentGroup(rows),
+        filters: { days, kol_pool_id: Number(poolId) || null, since },
+      };
+    }
     if (p.startsWith("/api/admin/vkpi/my-kol/board-ext")) {
       const value = overrides.boardExt ?? EXT;
       if (value instanceof Error) throw value;
       return value;
     }
     if (p.startsWith("/api/marketing/channels/official-matrix")) return MATRIX;
+    const dataWatchMatch = p.match(/\/api\/admin\/vkpi\/my-kol\/(\d+)\/videos\/(\d+)\/data-watch$/);
+    if (dataWatchMatch && (init as RequestInit | undefined)?.method === "POST") {
+      const body = JSON.parse(String((init as RequestInit).body || "{}"));
+      DATA_WATCH_CALLS.push({ poolId: Number(dataWatchMatch[1]), evidenceId: Number(dataWatchMatch[2]), body });
+      if (DATA_WATCH_REQUIRE_SKU && !Array.isArray(body.product_skus)) {
+        return {
+          status: "sku_required",
+          candidates: [
+            { sku_code: "AF-85-F14", sku_name: "AF 85mm F1.4 Pro", match_source: "final_v1_lens_evidence_v2", modalities: ["visual"] },
+            { sku_code: "AF-35-F18", sku_name: "AF 35mm F1.8", match_source: "catalog" },
+          ],
+        };
+      }
+      return {
+        status: "tracking", evidence_id: Number(dataWatchMatch[2]),
+        skus: body.product_skus || ["AF-AUTO"], sku_source: body.product_skus ? "manual" : "auto",
+        tracking: "active", refresh: "queued",
+      };
+    }
     const trackMatch = p.match(/\/api\/admin\/vkpi\/my-kol\/(\d+)\/videos$/);
     if (trackMatch && (init as RequestInit | undefined)?.method === "POST") {
       TRACK_CALLS.push({ poolId: Number(trackMatch[1]), body: JSON.parse(String((init as RequestInit).body)) });
@@ -105,6 +171,8 @@ function routeApi(overrides: { boardExt?: unknown } = {}) {
 }
 const TRACK_CALLS: Array<{ poolId: number; body: { content_url: string; product_skus: string[] } }> = [];
 const TRACKED = new Set<number>();
+const DATA_WATCH_CALLS: Array<{ poolId: number; evidenceId: number; body: Record<string, unknown> }> = [];
+let DATA_WATCH_REQUIRE_SKU = false;
 
 // 预置布局只挂内容墙(布局键 v2);matrix hook 有按 token 分键的模块级缓存 → 固定独立 token
 const renderWall = () => {
@@ -119,6 +187,8 @@ beforeEach(() => {
   window.localStorage.clear();
   TRACK_CALLS.length = 0;
   TRACKED.clear();
+  DATA_WATCH_CALLS.length = 0;
+  DATA_WATCH_REQUIRE_SKU = false;
   routeApi();
 });
 
@@ -148,12 +218,12 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(screen.getAllByText("待深析").length).toBeGreaterThanOrEqual(10);
     expect(screen.getAllByText("已深析").length).toBe(1);
     // 增页:已显 12 / 14 → 点后全量 14,按钮消失
-    const more = screen.getByText(/查看更多/);
-    expect(more.textContent).toContain("已显 12 / 当前已采集 14");
+    const more = screen.getByText(/展开更多卡片/);
+    expect(more.textContent).toContain("已显 12 / 已查询 14");
     fireEvent.click(more);
     await waitFor(() => {
       expect(wallCards().length).toBe(14);
-      expect(screen.queryByText(/查看更多/)).toBeNull();
+      expect(screen.queryByText(/展开更多卡片/)).toBeNull();
     });
   });
 
@@ -181,7 +251,7 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(wallTitles()).toEqual(["Wall Coop Film", "VILTROX wall mention"]);
     // 关掉仅 V + 播放排序:填充片(100+i)按实测降序,未实测仍最后一张
     fireEvent.click(screen.getByText("全部已采集"));
-    fireEvent.click(screen.getByText(/查看更多/));
+    fireEvent.click(screen.getByText(/展开更多卡片/));
     await waitFor(() => expect(wallCards().length).toBe(14));
     const titles = wallTitles();
     expect(titles[0]).toBe("Wall Coop Film");
@@ -215,7 +285,7 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(wallCards()).toHaveLength(4);
   });
 
-  it("单 KOL 视图:选中收藏 KOL 改走 /kol-pool/{id}/videos(库详情同源);零采集 KOL 诚实空;切回全部零重取", async () => {
+  it("单 KOL 视图:选中收藏 KOL 走 recent-videos 同源组合筛选;零采集 KOL 诚实空;切回全部零重取", async () => {
     renderWall();
     expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "101" } });
@@ -223,15 +293,192 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(screen.getByText("daily vlog")).toBeTruthy();
     expect(screen.queryByText("Wall Coop Film")).toBeNull();
     const calls = () => apiFetchMock.mock.calls.map((call) => String(call[0]));
-    expect(calls().some((p) => p.includes("/my-kol/101/videos?"))).toBe(true);
+    expect(calls().some((p) => p.includes("/my-kol/board-ext/recent-videos?") && p.includes("kol_pool_id=101"))).toBe(true);
     // 零采集 KOL → 板面空态口径(带 KOL 名,不透传后端字段)
     fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "102" } });
     expect(await screen.findByText(/Beta Vlog 暂无已采集内容——可在KOL详情发起补采。/)).toBeTruthy();
-    // 切回全部:回 board-ext 聚合(已在手,不再发请求)
+    // 切回全部:回 board-ext 首页(已在手,不再发请求)
     const before = calls().length;
     fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "0" } });
     expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
     expect(calls().length).toBe(before);
+  });
+
+  it("全量查询沿服务端 keyset 翻过首 60 条到真末页", async () => {
+    const all = Array.from({ length: 65 }, (_, index) => {
+      const publishedAt = new Date(Date.UTC(2026, 7, 24) - index * 3_600_000).toISOString();
+      return {
+        ...filler(index + 100), evidence_id: 10000 + index, title: `All video ${index + 1}`,
+        publish_date: publishedAt.slice(0, 10), published_at: publishedAt,
+      };
+    });
+    const first = recentGroup(all.slice(0, 60), null, "page-2");
+    routeApi({
+      boardExt: { ...EXT, recent_videos: first },
+      recentPage: (url) => url.searchParams.get("cursor") === "page-2"
+        ? recentGroup(all.slice(60), "page-2", null)
+        : first,
+    });
+    renderWall();
+    expect(await screen.findByText("All video 1")).toBeTruthy();
+    expect(screen.getAllByText(/已查询 60\+/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /查询当前范围全量/ }));
+    await waitFor(() => expect(screen.getByText(/已查询 65｜/)).toBeTruthy());
+    expect(apiFetchMock.mock.calls.map((call) => String(call[0])).some(
+      (path) => path.includes("/board-ext/recent-videos?") && path.includes("cursor=page-2"),
+    )).toBe(true);
+    expect(screen.queryByRole("button", { name: /查询当前范围全量/ })).toBeNull();
+  });
+
+  it("全部/单 KOL 与滚动 7/15/30 天可组合,参数在服务端下推", async () => {
+    routeApi({ recentPage: (url) => {
+      const days = Number(url.searchParams.get("days") || 0);
+      const poolId = Number(url.searchParams.get("kol_pool_id") || 0);
+      return recentGroup([{
+        ...filler(80 + days), evidence_id: 10800 + days + poolId, kol_pool_id: poolId || 101,
+        title: poolId ? `KOL ${poolId} d${days}` : `ALL d${days}`,
+      }]);
+    } });
+    renderWall();
+    expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "滚动近 7 天" }));
+    expect(await screen.findByText("ALL d7")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "101" } });
+    fireEvent.click(screen.getByRole("button", { name: "滚动近 15 天" }));
+    expect(await screen.findByText("KOL 101 d15")).toBeTruthy();
+    const calls = apiFetchMock.mock.calls.map((call) => String(call[0]));
+    expect(calls.some((path) => path.includes("recent-videos?days=7") && !path.includes("kol_pool_id"))).toBe(true);
+    expect(calls.some((path) => path.includes("recent-videos?days=15") && path.includes("kol_pool_id=101"))).toBe(true);
+    expect(screen.getByRole("button", { name: "滚动近 30 天" })).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("切换有限时间窗后等新首页返回，再自动沿游标查到真末页", async () => {
+    const rows = Array.from({ length: 65 }, (_, index) => ({
+      ...filler(index + 300), evidence_id: 13000 + index, title: `D7 video ${index + 1}`,
+    }));
+    routeApi({
+      boardExt: {
+        ...EXT,
+        recent_videos: { ...recentGroup(WALL_ITEMS, null, "old-page-2"), filters: { days: 0, kol_pool_id: null } },
+      },
+      recentPage: (url) => url.searchParams.get("cursor") === "d7-page-2"
+        ? recentGroup(rows.slice(60), "d7-page-2", null)
+        : recentGroup(rows.slice(0, 60), null, "d7-page-2"),
+    });
+    renderWall();
+    expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "滚动近 7 天" }));
+    await waitFor(() => expect(screen.getByText(/已查询 65｜/)).toBeTruthy());
+    expect(apiFetchMock.mock.calls.map((call) => String(call[0])).some(
+      (path) => path.includes("days=7") && path.includes("cursor=d7-page-2"),
+    )).toBe(true);
+    const secondPageUrl = apiFetchMock.mock.calls.map((call) => String(call[0])).find(
+      (path) => path.includes("cursor=d7-page-2"),
+    );
+    expect(new URL(String(secondPageUrl), "https://test.local").searchParams.get("since")).toBe("2026-08-17T12:00:00+00:00");
+  });
+
+  it("动作后从新首页游标重走已加载深度，首部新增视频不造成边界丢项", async () => {
+    const oldRows = Array.from({ length: 65 }, (_, index) => {
+      const publishedAt = new Date(Date.UTC(2026, 7, 24) - index * 3_600_000).toISOString();
+      return {
+        ...filler(index + 400), evidence_id: 14000 + index, title: `Refresh video ${index + 1}`,
+        publish_date: publishedAt.slice(0, 10), published_at: publishedAt,
+      };
+    });
+    const newest = {
+      ...filler(499), evidence_id: 14999, title: "Refresh newest",
+      publish_date: "2026-08-24", published_at: "2026-08-24T01:00:00.000Z",
+    };
+    let refreshed = false;
+    routeApi({
+      boardExt: { ...EXT, recent_videos: recentGroup(oldRows.slice(0, 60), null, "old-p2") },
+      recentPage: (url) => {
+        const cursor = url.searchParams.get("cursor");
+        if (!refreshed) return cursor === "old-p2" ? recentGroup(oldRows.slice(60), "old-p2", null) : recentGroup(oldRows.slice(0, 60), null, "old-p2");
+        if (cursor === "new-p2") return recentGroup(oldRows.slice(59), "new-p2", null);
+        if (cursor === "old-p2") return recentGroup(oldRows.slice(60), "old-p2", null);
+        return recentGroup([newest, ...oldRows.slice(0, 59)], null, "new-p2");
+      },
+    });
+    renderWall();
+    expect(await screen.findByText("Refresh video 1")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /查询当前范围全量/ }));
+    await waitFor(() => expect(screen.getByText(/已查询 65｜/)).toBeTruthy());
+    refreshed = true;
+    const firstCard = screen.getByText("Refresh video 1").closest("[data-vkpi-wall-card]") as HTMLElement;
+    fireEvent.click(within(firstCard).getByRole("button", { name: "追踪播放" }));
+    await waitFor(() => expect(screen.getByText(/已查询 66｜/)).toBeTruthy());
+    expect(apiFetchMock.mock.calls.map((call) => String(call[0])).some(
+      (path) => path.includes("cursor=new-p2"),
+    )).toBe(true);
+  });
+
+  it("首次查询失败可重试;下一页/全量中断保留已读结果并可继续", async () => {
+    let firstFails = true;
+    routeApi({ recentPage: (url) => {
+      if (url.searchParams.get("kol_pool_id") === "101" && firstFails) throw new Error("first page unavailable");
+      return recentGroup(KOL_VIDEOS["101"] || []);
+    } });
+    const initialRender = renderWall();
+    expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "101" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent("first page unavailable");
+    firstFails = false;
+    fireEvent.click(screen.getByRole("button", { name: "重新查询" }));
+    expect(await screen.findByText("On set with the new lens")).toBeTruthy();
+    initialRender.unmount();
+    window.localStorage.clear();
+
+    const all = Array.from({ length: 67 }, (_, index) => {
+      const publishedAt = new Date(Date.UTC(2026, 7, 24) - index * 3_600_000).toISOString();
+      return {
+        ...filler(index + 200), evidence_id: 12000 + index, title: `Recoverable ${index + 1}`,
+        publish_date: publishedAt.slice(0, 10), published_at: publishedAt,
+      };
+    });
+    const first = recentGroup(all.slice(0, 60), null, "p2");
+    let mode: "next-fail" | "mid-fail" | "ok" = "next-fail";
+    routeApi({
+      boardExt: { ...EXT, recent_videos: first },
+      recentPage: (url) => {
+        const cursor = url.searchParams.get("cursor");
+        if (cursor === "p2" && mode === "next-fail") return { status: "error", reason: "next page unavailable", items: [] };
+        if (cursor === "p2") return recentGroup(all.slice(60, 65), "p2", "p3");
+        if (cursor === "p3" && mode === "mid-fail") throw new Error("mid query unavailable");
+        return recentGroup(all.slice(65), "p3", null);
+      },
+    });
+    renderWall();
+    expect(await screen.findByText("Recoverable 1")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /查询下一批/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/已保留 60 条/);
+    expect(screen.getByText("Recoverable 1")).toBeTruthy();
+    mode = "mid-fail";
+    fireEvent.click(screen.getByRole("button", { name: "继续全量查询" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/已保留 65 条/));
+    mode = "ok";
+    fireEvent.click(screen.getByRole("button", { name: "继续全量查询" }));
+    await waitFor(() => expect(screen.getByText(/已查询 67｜/)).toBeTruthy());
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("sku_required 在墙内显式选 SKU 后二次提交,不默认猜产品", async () => {
+    DATA_WATCH_REQUIRE_SKU = true;
+    renderWall();
+    expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
+    const card = screen.getByText("Wall Coop Film").closest("[data-vkpi-wall-card]") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "数据关注" }));
+    expect(await screen.findByRole("group", { name: "为数据关注选择 SKU" })).toBeTruthy();
+    expect(DATA_WATCH_CALLS).toHaveLength(1);
+    expect(DATA_WATCH_CALLS[0].body).toEqual({});
+    expect(screen.getByRole("button", { name: "确认关联并关注" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /AF-85-F14/ }));
+    fireEvent.click(screen.getByRole("button", { name: /确认关联并关注/ }));
+    await waitFor(() => expect(DATA_WATCH_CALLS).toHaveLength(2));
+    expect(DATA_WATCH_CALLS[1]).toMatchObject({ poolId: 101, evidenceId: 9101, body: { product_skus: ["AF-85-F14"] } });
+    expect(await screen.findByRole("status")).toHaveTextContent(/已登记数据关注\(SKU AF-85-F14\)/);
+    expect(screen.queryByRole("group", { name: "为数据关注选择 SKU" })).toBeNull();
   });
 
   it("员工反馈 #5:卡片「追踪播放」入口 + 引导文案;入队后单 KOL 视图按服务端任务态显示「播放追踪排队中」;共享只读如实回执", async () => {

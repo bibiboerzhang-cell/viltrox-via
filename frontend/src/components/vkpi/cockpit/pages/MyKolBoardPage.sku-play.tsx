@@ -11,6 +11,7 @@ import {
   type SkuPlayItem,
   type VkpiMyKolSkuPlayOverviewResponse,
 } from "../../../../services/vkpi/myKolSkuPlay-api";
+import { SKU_PLAY_CHANGED_EVENT } from "./MyKolBoardPage.data-watch";
 
 /* ============ MY KOL · 单品播放数据(波 D·C 车道)============
    被「数据关注」登记追踪的视频按单品(SKU)聚合:每个单品一组 —— 组头 = 单品名 +
@@ -49,6 +50,20 @@ function TrackingChip({ status }: { status: string | undefined }) {
       {known ? known.label : key}
     </span>
   );
+}
+
+const LINK_LABEL: Record<string, { label: string; cls: string }> = {
+  manual: { label: "员工关联", cls: "border-accent text-accent" },
+  confirmed: { label: "已确认", cls: "border-good text-good" },
+  detected: { label: "系统检测·待确认", cls: "border-warn text-warn" },
+};
+
+function ProductLinkChip({ relation }: { relation: string | undefined }) {
+  const key = String(relation || "").trim();
+  const known = LINK_LABEL[key];
+  return known ? (
+    <span className={`rounded-[4px] border px-1 py-px text-[8.5px] font-semibold ${known.cls}`}>{known.label}</span>
+  ) : <span className="text-muted">—</span>;
 }
 
 /** Δ 播放:正 ↑ 绿 / 负 ↓ 红 / 0 中性;null = 待积累(样本不足不编数)。 */
@@ -97,6 +112,7 @@ function GroupItemsTable({ items }: { items: SkuPlayItem[] }) {
             <th className="py-1.5 pr-2 text-right font-semibold">点赞</th>
             <th className="py-1.5 pr-2 font-semibold">最后实测</th>
             <th className="py-1.5 pr-2 text-right font-semibold">Δ7 天</th>
+            <th className="py-1.5 pr-2 font-semibold">SKU 归属</th>
             <th className="py-1.5 font-semibold">状态</th>
           </tr>
         </thead>
@@ -133,6 +149,7 @@ function GroupItemsTable({ items }: { items: SkuPlayItem[] }) {
                 <td className={`py-1.5 pr-2 text-right font-mono ${row.like_count == null ? "text-muted" : "text-ink-2"}`}>{skuPlayCountText(row.like_count)}</td>
                 <td className="py-1.5 pr-2 font-mono text-[10px]"><MeasuredAt ts={row.measured_at} /></td>
                 <td className="py-1.5 pr-2 text-right"><DeltaText value={row.delta?.d7} /></td>
+                <td className="py-1.5 pr-2"><ProductLinkChip relation={row.link_relation_type} /></td>
                 <td className="py-1.5"><TrackingChip status={row.tracking_status} /></td>
               </tr>
             );
@@ -196,6 +213,26 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
   const [loading, setLoading] = React.useState(false);
   const [tick, setTick] = React.useState(0);
   const [expanded, setExpanded] = React.useState("");
+  const [highlighted, setHighlighted] = React.useState(false);
+  const anchorRef = React.useRef<HTMLDivElement | null>(null);
+  const highlightTimer = React.useRef<number | null>(null);
+
+  // 写模型与本纯读模块独立：数据关注成功后立即重读，
+  // 避免用户已明确关联 SKU，卡面仍停在旧的“0 / 空态”。
+  React.useEffect(() => {
+    const refresh = () => {
+      setTick((value) => value + 1);
+      setHighlighted(true);
+      window.requestAnimationFrame(() => anchorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" }));
+      if (highlightTimer.current != null) window.clearTimeout(highlightTimer.current);
+      highlightTimer.current = window.setTimeout(() => setHighlighted(false), 2400);
+    };
+    window.addEventListener(SKU_PLAY_CHANGED_EVENT, refresh);
+    return () => {
+      window.removeEventListener(SKU_PLAY_CHANGED_EVENT, refresh);
+      if (highlightTimer.current != null) window.clearTimeout(highlightTimer.current);
+    };
+  }, []);
 
   React.useEffect(() => {
     if (!apiToken) return;
@@ -224,16 +261,27 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
     };
   }, [apiToken, tick]);
 
-  if (!apiToken) return <>{noToken}</>;
+  const wrap = (body: React.ReactNode) => (
+    <div
+      ref={anchorRef}
+      data-vkpi-sku-play-module=""
+      data-vkpi-sku-play-highlight={highlighted ? "active" : "idle"}
+      className={`rounded-[10px] transition-shadow duration-300 ${highlighted ? "ring-2 ring-accent ring-offset-2 ring-offset-panel" : ""}`}
+    >
+      {body}
+    </div>
+  );
+
+  if (!apiToken) return wrap(noToken);
   if (unsupported) {
-    return (
+    return wrap(
       <PendingCard>
         <b>该版本暂无单品播放总览</b> —— 后端尚未提供按单品聚合的播放端点;接通后本模块自动点亮,不摆假数。
       </PendingCard>
     );
   }
-  if (error) return <ErrorCard title="单品播放数据读取失败" text={error} />;
-  if (!data) return <LoadingLine text={loading ? "单品播放数据读取中…" : "等待读取…"} />;
+  if (error) return wrap(<ErrorCard title="单品播放数据读取失败" text={error} />);
+  if (!data) return wrap(<LoadingLine text={loading ? "单品播放数据读取中…" : "等待读取…"} />);
 
   const groups = Array.isArray(data.groups) ? data.groups : [];
   const summary = data.summary;
@@ -259,7 +307,7 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
   );
 
   if (groups.length === 0) {
-    return (
+    return wrap(
       <div>
         {toolbar}
         <PendingCard>
@@ -269,7 +317,7 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
     );
   }
 
-  return (
+  return wrap(
     <div>
       {toolbar}
       <div className="grid gap-2">
