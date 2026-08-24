@@ -189,6 +189,95 @@ def test_startup_repair_replays_only_selected_terminal_jobs(monkeypatch) -> None
     assert conn.calls[0][1] == (1000,)
 
 
+def test_startup_repair_restores_legacy_single_video_url_item_lineage(monkeypatch) -> None:
+    conn = _RepairConn(
+        [],
+        one_row={
+            "payload": {
+                "search_session_id": 1135,
+                "derive_method": "video_url_resolve_v1",
+                "target_type": "video_url",
+            },
+            "job_status": "blocked",
+            "session_status": "running",
+            "item_id": 6224,
+            "item_status": "queued",
+        },
+    )
+    synced: list[tuple[int, str, str]] = []
+    monkeypatch.setattr(
+        maintenance,
+        "_sync_search_session_job",
+        lambda _conn, job_id, *, raw_status, reason: synced.append(
+            (job_id, raw_status, reason)
+        )
+        or True,
+    )
+
+    result = maintenance._reconcile_legacy_single_video_url_session(
+        conn,
+        {
+            "id": 6077,
+            "session_id": 1135,
+            "job_type": "video_url_resolve",
+            "status": "blocked",
+            "last_error": "creator_unresolved",
+        },
+    )
+
+    assert result is True
+    assert synced == [(6077, "blocked", "creator_unresolved")]
+    assert len(conn.calls) == 2
+    select_sql, select_params = conn.calls[0]
+    assert "item.job_id=job.id" in select_sql
+    assert "item.item_type='url_video'" in select_sql
+    assert "session.status='running'" in select_sql
+    assert "NOT EXISTS" in select_sql
+    assert select_params == (1135, 6077)
+    update_sql, update_params = conn.calls[1]
+    assert "UPDATE apify_jobs SET payload=" in update_sql
+    payload = json.loads(update_params[0])
+    assert payload["search_session_lineage"] == [
+        {
+            "search_session_id": 1135,
+            "search_session_item_id": 6224,
+            "role": "resolver",
+        }
+    ]
+    assert update_params[1] == 6077
+
+
+def test_startup_repair_uses_legacy_video_fallback_before_zero_item_fallback(
+    monkeypatch,
+) -> None:
+    candidate = {
+        "id": 6077,
+        "status": "blocked",
+        "last_error": "creator_unresolved",
+        "job_type": "video_url_resolve",
+        "session_id": 1135,
+        "session_item_count": 1,
+    }
+    conn = _RepairConn([candidate])
+    calls: list[str] = []
+    monkeypatch.setattr(maintenance, "_sync_search_session_job", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        maintenance,
+        "_reconcile_legacy_single_video_url_session",
+        lambda *_args, **_kwargs: calls.append("video") or True,
+    )
+    monkeypatch.setattr(
+        maintenance,
+        "_reconcile_zero_item_profile_advance_session",
+        lambda *_args, **_kwargs: calls.append("zero") or False,
+    )
+
+    result = maintenance._reconcile_terminal_search_session_jobs(conn)
+
+    assert result == [candidate]
+    assert calls == ["video"]
+
+
 def test_startup_repair_closes_zero_item_profile_advance_after_admin_shutdown(
     monkeypatch,
 ) -> None:

@@ -94,7 +94,9 @@ import {
 // 重点 KOL 的追踪/深析进度(用户原话「给某些 kol 增加一个观察列表跟进进度」),同前例 bump 键。
 // v4→v5(2026-08-23 波 D·C):观察清单行后插入「单品播放数据」(12)——被「数据关注」
 // 登记的视频按单品(SKU)聚合播放/增量总览,同前例 bump 键让全员看到新默认。
-const STORAGE_KEY = "vkpi-my-kol-layout-v5";
+// v5→v6:旧版允许删除 skuPlay；本次迁移保留旧卡几何，仅把缺失的 skuPlay 追加到底部。
+const STORAGE_KEY = "vkpi-my-kol-layout-v6";
+const LEGACY_STORAGE_KEYS = ["vkpi-my-kol-layout-v5"];
 const MY_KOL_PAGE_SIZE = 50;
 
 // 默认布局(12 列 · 设计单定稿七行;2026-07-12 两刀:team 12→8 腾出 span4 给
@@ -678,7 +680,14 @@ export function MyKolBoardPage({
       <ClosureReadinessCard apiToken={apiToken} refreshKey={reloadTick} />
 
       {/* 可编辑看板:布局本机记忆(storageKey);不传 apiToken,见文件头红线注释 */}
-      <EditableDashboardBoard modules={modules} defaultLayout={defaultLayout} editing={editing} storageKey={STORAGE_KEY} />
+      <EditableDashboardBoard
+        modules={modules}
+        defaultLayout={defaultLayout}
+        editing={editing}
+        storageKey={STORAGE_KEY}
+        legacyStorageKeys={LEGACY_STORAGE_KEYS}
+        requiredDefaultModuleKeys={["skuPlay"]}
+      />
     </div>
   );
 }

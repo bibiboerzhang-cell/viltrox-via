@@ -12,9 +12,11 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.core.logging import get_logger
+from app.domains.tasks.search_session_lineage import with_search_session_lineage
 from app.workers.apify_jobs_worker_helpers import (
     _error_category,
     _json,
+    _loads,
     _provider_retry_reason,
 )
 from app.workers.apify_jobs_worker_session import _sync_search_session_job
@@ -22,6 +24,108 @@ from app.workers.apify_jobs_worker_session import _sync_search_session_job
 
 logger = get_logger(__name__)
 _TERMINAL_JOB_STATUSES = frozenset({"done", "blocked", "failed", "triage"})
+
+
+def _reconcile_legacy_single_video_url_session(
+    conn: psycopg.Connection[Any],
+    row: dict[str, Any],
+) -> bool:
+    """Restore the missing item lineage on one legacy URL-video resolver.
+
+    Older ``video_url_resolve`` jobs could finish before the session item was
+    attached.  Those rows retained only the scalar ``search_session_id``; the
+    terminal reducer requires an item id and thus left the sole item ``queued``
+    forever.  Repair only the unambiguous case: one still-active URL-video item
+    references this exact terminal job in the still-running session.  The
+    normal reducer remains the only code that decides the terminal state.
+    """
+
+    if str(row.get("job_type") or "").strip().lower() != "video_url_resolve":
+        return False
+    raw_status = str(row.get("status") or "").strip().lower()
+    if raw_status not in _TERMINAL_JOB_STATUSES:
+        return False
+    try:
+        job_id = int(row["id"])
+        session_id = int(row["session_id"])
+    except (KeyError, TypeError, ValueError):
+        return False
+
+    target: dict[str, Any] | None = None
+    synced = False
+    with conn.transaction():
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                SELECT job.payload, job.status AS job_status,
+                       session.status AS session_status,
+                       item.id AS item_id, item.status AS item_status
+                FROM apify_jobs AS job
+                JOIN vkpi_kol_search_sessions AS session
+                  ON session.id=%s
+                 AND session.status='running'
+                JOIN vkpi_kol_search_session_items AS item
+                  ON item.session_id=session.id
+                 AND item.job_id=job.id
+                 AND item.item_type='url_video'
+                 AND item.status IN (
+                     'planned', 'identified', 'matched', 'queued',
+                     'running', 'already_queued', 'unknown'
+                 )
+                WHERE job.id=%s
+                  AND job.job_type='video_url_resolve'
+                  AND job.status IN ('done', 'blocked', 'failed', 'triage')
+                  AND CASE
+                      WHEN COALESCE(job.payload->>'search_session_id', '') ~ '^[0-9]+$'
+                      THEN (job.payload->>'search_session_id')::bigint
+                  END = session.id
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM vkpi_kol_search_session_items AS other
+                      WHERE other.session_id=session.id
+                        AND other.job_id=job.id
+                        AND other.id<>item.id
+                  )
+                FOR UPDATE OF job, session, item
+                """,
+                (session_id, job_id),
+            )
+            fetched = cur.fetchone()
+            target = dict(fetched) if fetched else None
+            if not target:
+                return False
+            payload = (
+                dict(target.get("payload"))
+                if isinstance(target.get("payload"), dict)
+                else _loads(target.get("payload"), {})
+            )
+            merged = with_search_session_lineage(
+                payload,
+                search_session_id=session_id,
+                search_session_item_id=int(target["item_id"]),
+                role="resolver",
+            )
+            cur.execute(
+                "UPDATE apify_jobs SET payload=%s::jsonb WHERE id=%s",
+                (_json(merged), job_id),
+            )
+        # Keep the still-running session/item locks through terminal reduction.
+        # A concurrent cancel can therefore win before this transaction starts
+        # or wait until after it commits, but cannot be overwritten mid-repair.
+        synced = _sync_search_session_job(
+            conn,
+            job_id,
+            raw_status=raw_status,
+            reason=str(row.get("last_error") or ""),
+        )
+    if synced:
+        logger.info(
+            "legacy video URL session lineage repaired | job_id=%s session_id=%s item_id=%s",
+            job_id,
+            session_id,
+            target.get("item_id") if target else None,
+        )
+    return bool(synced)
 
 
 def _reconcile_zero_item_profile_advance_session(
@@ -188,6 +292,9 @@ def _reconcile_terminal_search_session_jobs(
             raw_status=raw_status,
             reason=str(row.get("last_error") or ""),
         ):
+            if _reconcile_legacy_single_video_url_session(conn, row):
+                replayed.append(row)
+                continue
             if not _reconcile_zero_item_profile_advance_session(conn, row):
                 continue
         replayed.append(row)

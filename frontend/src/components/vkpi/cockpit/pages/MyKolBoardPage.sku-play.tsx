@@ -11,7 +11,7 @@ import {
   type SkuPlayItem,
   type VkpiMyKolSkuPlayOverviewResponse,
 } from "../../../../services/vkpi/myKolSkuPlay-api";
-import { SKU_PLAY_CHANGED_EVENT } from "./MyKolBoardPage.data-watch";
+import { SKU_PLAY_CHANGED_EVENT, type SkuPlayChangedDetail } from "./MyKolBoardPage.data-watch";
 
 /* ============ MY KOL · 单品播放数据(波 D·C 车道)============
    被「数据关注」登记追踪的视频按单品(SKU)聚合:每个单品一组 —— 组头 = 单品名 +
@@ -100,7 +100,15 @@ function Stat({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function GroupItemsTable({ items }: { items: SkuPlayItem[] }) {
+function GroupItemsTable({
+  items,
+  focusedEvidenceId,
+  setEvidenceAnchor,
+}: {
+  items: SkuPlayItem[];
+  focusedEvidenceId: number;
+  setEvidenceAnchor: (evidenceId: number, node: HTMLTableRowElement | null) => void;
+}) {
   return (
     <div className="overflow-x-auto">
       <table className="w-full min-w-[680px] border-collapse text-[11.5px]">
@@ -119,8 +127,17 @@ function GroupItemsTable({ items }: { items: SkuPlayItem[] }) {
         <tbody>
           {items.map((row) => {
             const title = row.title || row.content_url || `#${row.evidence_id}`;
+            const focused = focusedEvidenceId > 0 && Number(row.evidence_id) === focusedEvidenceId;
             return (
-              <tr key={row.evidence_id} className="border-t border-line">
+              <tr
+                key={row.evidence_id}
+                ref={(node) => setEvidenceAnchor(Number(row.evidence_id), node)}
+                tabIndex={-1}
+                aria-current={focused ? "true" : undefined}
+                data-vkpi-sku-play-evidence={row.evidence_id}
+                data-vkpi-sku-play-evidence-focus={focused ? "active" : "idle"}
+                className={`border-t border-line transition-colors duration-300 ${focused ? "bg-accent-soft outline outline-2 outline-accent outline-offset-[-2px]" : ""}`}
+              >
                 <td className="max-w-[260px] py-1.5 pr-2">
                   {row.content_url ? (
                     <a
@@ -160,11 +177,32 @@ function GroupItemsTable({ items }: { items: SkuPlayItem[] }) {
   );
 }
 
-function GroupRow({ group, expanded, onToggle }: { group: SkuPlayGroup; expanded: boolean; onToggle: () => void }) {
+function GroupRow({
+  group,
+  expanded,
+  focused,
+  focusedEvidenceId,
+  onToggle,
+  setAnchor,
+  setEvidenceAnchor,
+}: {
+  group: SkuPlayGroup;
+  expanded: boolean;
+  focused: boolean;
+  focusedEvidenceId: number;
+  onToggle: () => void;
+  setAnchor: (node: HTMLDivElement | null) => void;
+  setEvidenceAnchor: (evidenceId: number, node: HTMLTableRowElement | null) => void;
+}) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const items = Array.isArray(group.items) ? group.items : [];
   return (
-    <div className={`rounded-[10px] border ${expanded ? "border-accent" : "border-line"} bg-card`}>
+    <div
+      ref={setAnchor}
+      data-vkpi-sku-play-sku={group.sku_code}
+      data-vkpi-sku-play-focus={focused ? "active" : "idle"}
+      className={`rounded-[10px] border ${expanded ? "border-accent" : "border-line"} bg-card transition-shadow duration-300 ${focused ? "ring-2 ring-accent ring-offset-2 ring-offset-panel" : ""}`}
+    >
       <button
         type="button"
         onClick={onToggle}
@@ -198,7 +236,11 @@ function GroupRow({ group, expanded, onToggle }: { group: SkuPlayGroup; expanded
           {items.length === 0 ? (
             <EmptyLine text="本单品暂无被追踪视频行。" />
           ) : (
-            <GroupItemsTable items={items} />
+            <GroupItemsTable
+              items={items}
+              focusedEvidenceId={focusedEvidenceId}
+              setEvidenceAnchor={setEvidenceAnchor}
+            />
           )}
         </div>
       ) : null}
@@ -212,27 +254,58 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
   const [unsupported, setUnsupported] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [tick, setTick] = React.useState(0);
-  const [expanded, setExpanded] = React.useState("");
+  const [loadedTick, setLoadedTick] = React.useState(-1);
+  const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set());
   const [highlighted, setHighlighted] = React.useState(false);
+  const [pendingTarget, setPendingTarget] = React.useState<(SkuPlayChangedDetail & { refreshTick: number }) | null>(null);
   const anchorRef = React.useRef<HTMLDivElement | null>(null);
+  const groupRefs = React.useRef(new Map<string, HTMLDivElement>());
+  const evidenceRefs = React.useRef(new Map<number, HTMLTableRowElement>());
   const highlightTimer = React.useRef<number | null>(null);
+  const positionFrame = React.useRef<number | null>(null);
+  const tickRef = React.useRef(0);
+
+  const nextTick = React.useCallback(() => {
+    tickRef.current += 1;
+    setTick(tickRef.current);
+    return tickRef.current;
+  }, []);
+
+  const refreshPreservingTarget = React.useCallback(() => {
+    const refreshTick = nextTick();
+    setPendingTarget((current) => current ? { ...current, refreshTick } : current);
+  }, [nextTick]);
 
   // 写模型与本纯读模块独立：数据关注成功后立即重读，
   // 避免用户已明确关联 SKU，卡面仍停在旧的“0 / 空态”。
   React.useEffect(() => {
-    const refresh = () => {
-      setTick((value) => value + 1);
+    const refresh = (event: Event) => {
+      const detail = (event as CustomEvent<SkuPlayChangedDetail>).detail;
+      const evidenceId = Number(detail?.evidenceId) || 0;
+      const skus = [...new Set((Array.isArray(detail?.skus) ? detail.skus : [])
+        .map((sku) => String(sku || "").trim())
+        .filter(Boolean))];
+      const refreshTick = nextTick();
+      setPendingTarget({ evidenceId, skus, refreshTick });
       setHighlighted(true);
-      window.requestAnimationFrame(() => anchorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" }));
+      if (positionFrame.current != null) {
+        window.cancelAnimationFrame(positionFrame.current);
+        positionFrame.current = null;
+      }
       if (highlightTimer.current != null) window.clearTimeout(highlightTimer.current);
-      highlightTimer.current = window.setTimeout(() => setHighlighted(false), 2400);
+      // 网络异常时也不会永久高亮；正常响应后会改为目标行定位后的短高亮。
+      highlightTimer.current = window.setTimeout(() => {
+        setHighlighted(false);
+        setPendingTarget(null);
+      }, 10_000);
     };
     window.addEventListener(SKU_PLAY_CHANGED_EVENT, refresh);
     return () => {
       window.removeEventListener(SKU_PLAY_CHANGED_EVENT, refresh);
       if (highlightTimer.current != null) window.clearTimeout(highlightTimer.current);
+      if (positionFrame.current != null) window.cancelAnimationFrame(positionFrame.current);
     };
-  }, []);
+  }, [nextTick]);
 
   React.useEffect(() => {
     if (!apiToken) return;
@@ -244,6 +317,7 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
         if (!alive) return;
         setUnsupported(false);
         setData(res && typeof res === "object" ? res : null);
+        setLoadedTick(tick);
       })
       .catch((err: unknown) => {
         if (!alive) return;
@@ -261,11 +335,53 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
     };
   }, [apiToken, tick]);
 
+  React.useEffect(() => {
+    if (!pendingTarget || loadedTick !== pendingTarget.refreshTick) return;
+    const groups = Array.isArray(data?.groups) ? data.groups : [];
+    const wantedSkus = new Set(pendingTarget.skus.map((sku) => sku.toUpperCase()));
+    const matched = groups.filter((group) => (
+      wantedSkus.has(String(group.sku_code || "").trim().toUpperCase())
+      || (Array.isArray(group.items) && group.items.some((item) => Number(item.evidence_id) === pendingTarget.evidenceId))
+    ));
+    const matchedCodes = matched.map((group) => group.sku_code);
+    if (matchedCodes.length) {
+      setExpanded((current) => new Set([...current, ...matchedCodes]));
+    }
+    if (positionFrame.current != null) window.cancelAnimationFrame(positionFrame.current);
+    const frame = window.requestAnimationFrame(() => {
+      if (positionFrame.current === frame) positionFrame.current = null;
+      // 后续事件或手动刷新已推进 tick 时，旧定位回调绝不再抢焦点。
+      if (tickRef.current !== pendingTarget.refreshTick) return;
+      const evidenceTarget = pendingTarget.evidenceId > 0
+        ? evidenceRefs.current.get(pendingTarget.evidenceId)
+        : null;
+      const target = evidenceTarget
+        || (matchedCodes.length ? groupRefs.current.get(matchedCodes[0]) : null)
+        || anchorRef.current;
+      target?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      if (target instanceof HTMLTableRowElement) target.focus({ preventScroll: true });
+      else target?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
+    });
+    positionFrame.current = frame;
+    if (highlightTimer.current != null) window.clearTimeout(highlightTimer.current);
+    highlightTimer.current = window.setTimeout(() => {
+      setHighlighted(false);
+      setPendingTarget(null);
+    }, 2400);
+    return () => {
+      if (positionFrame.current === frame) {
+        window.cancelAnimationFrame(frame);
+        positionFrame.current = null;
+      }
+    };
+  }, [data, loadedTick, pendingTarget]);
+
   const wrap = (body: React.ReactNode) => (
     <div
       ref={anchorRef}
       data-vkpi-sku-play-module=""
       data-vkpi-sku-play-highlight={highlighted ? "active" : "idle"}
+      data-vkpi-sku-play-evidence-id={pendingTarget?.evidenceId || undefined}
       className={`rounded-[10px] transition-shadow duration-300 ${highlighted ? "ring-2 ring-accent ring-offset-2 ring-offset-panel" : ""}`}
     >
       {body}
@@ -295,7 +411,7 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
       <span className="ml-auto flex items-center gap-1.5">
         <button
           type="button"
-          onClick={() => setTick((t) => t + 1)}
+          onClick={refreshPreservingTarget}
           className="flex items-center gap-1 rounded-full border border-line px-2 py-0.5 text-[9.5px] text-muted transition-colors hover:text-ink"
           title="重新读取(不触发抓取)"
         >
@@ -325,8 +441,26 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
           <GroupRow
             key={group.sku_code}
             group={group}
-            expanded={expanded === group.sku_code}
-            onToggle={() => setExpanded((current) => (current === group.sku_code ? "" : group.sku_code))}
+            expanded={expanded.has(group.sku_code)}
+            focused={Boolean(pendingTarget && (
+              pendingTarget.skus.some((sku) => sku.toUpperCase() === group.sku_code.toUpperCase())
+              || (Array.isArray(group.items) && group.items.some((item) => Number(item.evidence_id) === pendingTarget.evidenceId))
+            ))}
+            focusedEvidenceId={pendingTarget?.evidenceId || 0}
+            onToggle={() => setExpanded((current) => {
+              const next = new Set(current);
+              if (next.has(group.sku_code)) next.delete(group.sku_code);
+              else next.add(group.sku_code);
+              return next;
+            })}
+            setAnchor={(node) => {
+              if (node) groupRefs.current.set(group.sku_code, node);
+              else groupRefs.current.delete(group.sku_code);
+            }}
+            setEvidenceAnchor={(evidenceId, node) => {
+              if (node && evidenceId > 0) evidenceRefs.current.set(evidenceId, node);
+              else if (evidenceId > 0) evidenceRefs.current.delete(evidenceId);
+            }}
           />
         ))}
       </div>

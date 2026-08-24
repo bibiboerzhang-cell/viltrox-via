@@ -482,7 +482,16 @@ def test_http_defer_condition_accepts_cn_video(monkeypatch):
 
     def fake_attach(session_id, result):
         seen["attach"] = {"session_id": session_id}
-        return {"session_id": session_id, "items": []}
+        return {
+            "session_id": session_id,
+            "items": [
+                {
+                    "id": 78,
+                    "item_type": "url_video",
+                    "source_url": "https://www.douyin.com/video/7534679152504376595",
+                }
+            ],
+        }
 
     monkeypatch.setattr(router_module.kol_url_deep_crawl, "dry_run_url_deep_crawl", fake_dry_run)
     monkeypatch.setattr(router_module.kol_search_sessions, "ensure_session_for_result", fake_ensure)
@@ -498,5 +507,6 @@ def test_http_defer_condition_accepts_cn_video(monkeypatch):
     )
 
     assert seen["enqueue"]["url"] == "https://www.douyin.com/video/7534679152504376595"
+    assert seen["enqueue"]["search_session_item_id"] == 78
     assert result["deferred_to_queue"] is True
     assert result["video_flow"]["operation"] == "video_url_resolve_queue"

@@ -13,7 +13,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 //   无实时接口的旧 cover 静态盘点已下线,避免历史快照冒充当前进度;
 // - 【M3→M4】库「有 V 视频」= board-ext v_content.v_kol_ids 名单精确过滤(Set 查找;
 //   truncated / 名单缺席均如实降级标注,绝不悄悄装精确);
-// - 注册表 manager vs employee 差异(裁决②A)+ 布局键 vkpi-my-kol-layout-v5 +
+// - 注册表 manager vs employee 差异(裁决②A)+ 布局键 v5→v6 迁移 +
 //   不传 apiToken → 绝不写账户级 dashboard_layout_v1;
 // - 诚实空态:aggregate 失败 = 错误卡;board-ext 失败 = 图形卡 ErrorCard + KPI 带
 //   时序/药丸缺席不编数;
@@ -363,7 +363,7 @@ beforeEach(() => {
   routeApi();
 });
 
-describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布局键 v2)", () => {
+describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布局键 v6)", () => {
   it("KPI 带四卡:现值全真;K1/K2/K4 真 sparkline + delta 药丸,K1 缺快照日断点(两段线),K3 点时口径诚实虚线", async () => {
     expect(() => renderBoard()).not.toThrow();
 
@@ -482,15 +482,59 @@ describe("MyKolBoardPage smoke (M1 页壳 + M4 KPI 带 series + 注册表 + 布�
     expect(palette.queryByText("数据覆盖")).toBeNull();
   });
 
-  it("布局键 vkpi-my-kol-layout-v5 生效;不传 apiToken → 绝不写账户级 dashboard 布局", async () => {
-    window.localStorage.setItem("vkpi-my-kol-layout-v5", JSON.stringify([{ moduleKey: "kpiM", span: 12 }]));
+  it("v5→v6 迁移保留旧布局几何并补回 skuPlay；不传 apiToken 时不写账户级布局", async () => {
+    const legacyValue = JSON.stringify({
+      version: 4,
+      columns: 12,
+      items: [{ instanceId: "legacy-kpi", moduleKey: "kpiM", span: 8, height: 5, x: 4, y: 0 }],
+    });
+    window.localStorage.setItem("vkpi-my-kol-layout-v5", legacyValue);
     renderBoard();
     expect((await screen.findAllByText("在库 KOL")).length).toBeGreaterThan(0);
+    expect(screen.getByText("单品播放数据")).toBeTruthy();
     expect(screen.queryByText("每日学习摘要")).toBeNull();
     expect(screen.queryByText("合作漏斗")).toBeNull();
     expect(screen.queryByText("官方账号矩阵")).toBeNull();
+    expect(window.localStorage.getItem("vkpi-my-kol-layout-v5")).toBe(legacyValue);
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem("vkpi-my-kol-layout-v6") || "null");
+      expect(saved.items.find((item: { moduleKey: string }) => item.moduleKey === "kpiM"))
+        .toMatchObject({ instanceId: "legacy-kpi", span: 8, height: 5, x: 4, y: 0 });
+      expect(saved.items.find((item: { moduleKey: string }) => item.moduleKey === "skuPlay"))
+        .toMatchObject({ instanceId: "migrated-required-skuPlay-0", x: 0, y: 5 });
+    });
     const calledPaths = apiFetchMock.mock.calls.map((call) => String(call[0]));
     expect(calledPaths.some((p) => p.includes("preference"))).toBe(false);
+  });
+
+  it("v5 旧布局已含 skuPlay 时保留旧实例与几何，v6 不重复追加", async () => {
+    const legacyValue = JSON.stringify({
+      version: 5,
+      columns: 12,
+      items: [
+        { instanceId: "legacy-kpi", moduleKey: "kpiM", span: 12, height: 5, x: 0, y: 0 },
+        { instanceId: "legacy-sku-play", moduleKey: "skuPlay", span: 8, height: 9, x: 4, y: 5 },
+      ],
+    });
+    window.localStorage.setItem("vkpi-my-kol-layout-v5", legacyValue);
+
+    renderBoard();
+
+    expect((await screen.findAllByText("在库 KOL")).length).toBeGreaterThan(0);
+    expect(document.querySelectorAll('[data-dashboard-module="skuPlay"]')).toHaveLength(1);
+    await waitFor(() => {
+      const saved = JSON.parse(window.localStorage.getItem("vkpi-my-kol-layout-v6") || "null");
+      const skuItems = saved.items.filter((item: { moduleKey: string }) => item.moduleKey === "skuPlay");
+      expect(skuItems).toHaveLength(1);
+      expect(skuItems[0]).toMatchObject({
+        instanceId: "legacy-sku-play",
+        span: 8,
+        height: 9,
+        x: 4,
+        y: 5,
+      });
+    });
+    expect(window.localStorage.getItem("vkpi-my-kol-layout-v5")).toBe(legacyValue);
   });
 
   it("aggregate 失败 → 诚实错误卡(绝不假数据)", async () => {
@@ -577,7 +621,17 @@ describe("MyKolBoardPage M4(图形联动:漏斗点段 / 平台点行 / fitdist �
   });
 
   it("palette 五模块真身(预置布局):播放榜/覆盖/双线/认领/共享全真渲染,静态盘点退役", async () => {
-    window.localStorage.setItem("vkpi-my-kol-layout-v5", JSON.stringify(PALETTE_LAYOUT));
+    window.localStorage.setItem("vkpi-my-kol-layout-v6", JSON.stringify({
+      version: 5,
+      columns: 12,
+      items: PALETTE_LAYOUT.map((item, index) => ({
+        ...item,
+        instanceId: `palette-${item.moduleKey}`,
+        height: 6,
+        x: 0,
+        y: index * 6,
+      })),
+    }));
     renderBoard();
     // viewsTop:实测播放条形榜(NULL 剔除口径注在 SrcChip/ProvNote)
     expect(await screen.findByText("播放 Top 视频")).toBeTruthy();
@@ -598,6 +652,8 @@ describe("MyKolBoardPage M4(图形联动:漏斗点段 / 平台点行 / fitdist �
     expect(screen.getAllByText("共享池").length).toBeGreaterThan(0);
     expect(screen.getByText("Beta Vlog")).toBeTruthy();
     expect(screen.getByText("来自 Alice")).toBeTruthy();
+    // v6 已完成一次性迁移后仍尊重用户主动移除 skuPlay，不会每次加载强制补回。
+    expect(screen.queryByText("单品播放数据")).toBeNull();
     expect(screen.queryByText(/静态盘点 2026-07-11/)).toBeNull();
     expect(screen.queryByText("0 条 · 盲区")).toBeNull();
   });

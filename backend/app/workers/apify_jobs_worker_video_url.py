@@ -13,6 +13,7 @@ from app.domains.kol.provider_job_access import (
     revalidate_provider_job_checkpoint,
     terminal_block_provider_job,
 )
+from app.domains.kol.provider_job_payloads import provider_job_payload_delta
 from app.domains.kol.video_url_resolver import (
     failed_video_url_resolution_progress,
     run_video_url_resolve_for_job,
@@ -31,8 +32,13 @@ def _persist_progress(
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE apify_jobs SET payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
-                (_json(payload), int(job_id)),
+                """
+                UPDATE apify_jobs
+                SET payload=COALESCE(apify_jobs.payload, '{}'::jsonb) || %s::jsonb,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (_json(provider_job_payload_delta(payload)), int(job_id)),
             )
     # Publish each real stage into the already-linked Smart Search item.  This
     # is a read/write projection only; it never calls a provider.
@@ -118,9 +124,14 @@ def _process_video_url_resolve(
                 UPDATE apify_jobs
                 SET status=%s,
                     last_error=%s,
-                    payload=%s::jsonb,
+                    payload=COALESCE(apify_jobs.payload, '{}'::jsonb) || %s::jsonb,
                     updated_at=NOW()
                 WHERE id=%s
                 """,
-                (terminal_status, last_error, _json(payload), job_id),
+                (
+                    terminal_status,
+                    last_error,
+                    _json(provider_job_payload_delta(payload)),
+                    job_id,
+                ),
             )

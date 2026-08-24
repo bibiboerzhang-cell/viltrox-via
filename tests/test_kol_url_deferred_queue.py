@@ -375,6 +375,176 @@ def test_unresolved_video_never_enters_profile_deep_crawl_queue(monkeypatch):
     assert seen["source"] == "kol_url_deep_crawl_video_resolve"
 
 
+def test_unresolved_video_item_is_persisted_before_resolver_enqueue(monkeypatch):
+    order: list[str] = []
+    captured: dict = {}
+    normalized_url = "https://www.youtube.com/watch?v=abcdefghijk"
+    monkeypatch.setattr(
+        router_module.kol_url_deep_crawl,
+        "classify_url",
+        lambda _url: SimpleNamespace(url_type="video", platform="youtube"),
+    )
+    monkeypatch.setattr(
+        router_module.kol_url_deep_crawl,
+        "dry_run_url_deep_crawl",
+        lambda _body: {
+            "execute": False,
+            "url_type": "video",
+            "platform": "youtube",
+            "url": {"input": normalized_url, "normalized": normalized_url},
+            "matched_kol_pool_id": None,
+            "video_flow": {"status": "provider_refresh_pending"},
+        },
+    )
+    monkeypatch.setattr(
+        router_module.kol_search_sessions,
+        "ensure_session_for_result",
+        lambda **_kwargs: {"id": 55},
+    )
+
+    def fake_attach(session_id, result):
+        job_id = (result.get("video_flow") or {}).get("job_id")
+        order.append(f"attach:{job_id or 'pending'}")
+        return {
+            "session_id": session_id,
+            "items": [
+                {
+                    "id": 66,
+                    "item_type": "url_video",
+                    "source_url": normalized_url,
+                    "job_id": job_id,
+                }
+            ],
+        }
+
+    def fake_enqueue(_url, **kwargs):
+        order.append("enqueue")
+        captured.update(kwargs)
+        return {
+            "status": "queued",
+            "job_id": 9911,
+            "job_type": "video_url_resolve",
+            "write_db": True,
+            "provider_calls_performed": False,
+            "resolution_progress": {"status": "queued"},
+            "ai_analysis": {"state": "waiting_for_evidence"},
+        }
+
+    monkeypatch.setattr(router_module.kol_search_sessions, "attach_url_result", fake_attach)
+    monkeypatch.setattr(router_module.kol_url_deep_crawl, "enqueue_video_url_resolve_job", fake_enqueue)
+
+    router_module._run_url_deep_crawl(
+        {"url": normalized_url, "execute": True},
+        staff={"id": 12, "user_id": 34},
+        default_defer_profile=True,
+        default_create_session=True,
+        default_source="smart_kol_input_auto",
+    )
+
+    assert order[:2] == ["attach:pending", "enqueue"]
+    assert captured["search_session_id"] == 55
+    assert captured["search_session_item_id"] == 66
+
+
+def test_ambiguous_video_items_do_not_enqueue_resolver(monkeypatch):
+    normalized_url = "https://www.youtube.com/watch?v=abcdefghijk"
+    monkeypatch.setattr(
+        router_module.kol_url_deep_crawl,
+        "classify_url",
+        lambda _url: SimpleNamespace(url_type="video", platform="youtube"),
+    )
+    monkeypatch.setattr(
+        router_module.kol_url_deep_crawl,
+        "dry_run_url_deep_crawl",
+        lambda _body: {
+            "execute": False,
+            "url_type": "video",
+            "platform": "youtube",
+            "url": {"input": normalized_url, "normalized": normalized_url},
+            "matched_kol_pool_id": None,
+            "video_flow": {"status": "provider_refresh_pending"},
+        },
+    )
+    monkeypatch.setattr(
+        router_module.kol_search_sessions,
+        "ensure_session_for_result",
+        lambda **_kwargs: {"id": 55},
+    )
+    monkeypatch.setattr(
+        router_module.kol_search_sessions,
+        "attach_url_result",
+        lambda *_args, **_kwargs: {
+            "items": [
+                {"id": 66, "item_type": "url_video", "source_url": normalized_url},
+                {"id": 67, "item_type": "url_video", "source_url": normalized_url},
+            ]
+        },
+    )
+    monkeypatch.setattr(
+        router_module.kol_url_deep_crawl,
+        "enqueue_video_url_resolve_job",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("ambiguous session items must not enqueue provider work")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="video_url_resolve_session_item_required"):
+        router_module._run_url_deep_crawl(
+            {"url": normalized_url, "execute": True},
+            staff={"id": 12, "user_id": 34},
+            default_defer_profile=True,
+            default_create_session=True,
+            default_source="smart_kol_input_auto",
+        )
+
+
+@pytest.mark.parametrize(
+    ("shared_url", "stored_public_url"),
+    [
+        (
+            "https://www.youtube.com/watch?v=abcdefghijk&utm_source=share",
+            "https://www.youtube.com/watch?v=abcdefghijk",
+        ),
+        (
+            "https://www.instagram.com/reel/ABC123/?igsh=token&utm_source=share",
+            "https://www.instagram.com/reel/ABC123/",
+        ),
+        (
+            "https://www.tiktok.com/@creator/video/1234567890123456789?_t=token&_r=1",
+            "https://www.tiktok.com/@creator/video/1234567890123456789",
+        ),
+    ],
+)
+def test_video_resolver_item_match_uses_the_persistence_url_projection(
+    monkeypatch,
+    shared_url,
+    stored_public_url,
+):
+    monkeypatch.setattr(
+        router_module.kol_search_sessions,
+        "attach_url_result",
+        lambda *_args, **_kwargs: {
+            "items": [
+                {
+                    "id": 66,
+                    "item_type": "url_video",
+                    "source_url": stored_public_url,
+                }
+            ]
+        },
+    )
+
+    item_id = router_module._prepare_video_resolver_session_item(
+        {"id": 55},
+        {
+            "url_type": "video",
+            "url": {"input": shared_url, "normalized": shared_url},
+        },
+    )
+
+    assert item_id == 66
+
+
 def test_smart_url_unexpected_failure_is_diagnostic_503_not_500(monkeypatch):
     monkeypatch.setattr(
         router_module.kol_url_deep_crawl,

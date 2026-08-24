@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { DataWatchSkuPicker, type PendingDataWatchSkuChoice } from "./MyKolBoardPage.data-watch-sku-picker";
@@ -19,6 +19,24 @@ const pending: PendingDataWatchSkuChoice = {
 };
 
 describe("内容墙数据关注 SKU 选择器", () => {
+  it("出现时滚动到选择器，并聚焦首个可操作输入", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    render(<DataWatchSkuPicker pending={pending} busy={false} onCancel={vi.fn()} onSubmit={vi.fn()} />);
+
+    const picker = document.querySelector("[data-vkpi-data-watch-sku-picker]");
+    const firstCheckbox = screen.getAllByRole("checkbox")[0];
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" }));
+    expect(scrollIntoView.mock.instances).toContain(picker);
+    expect(firstCheckbox).toHaveFocus();
+  });
+
+  it("无候选时聚焦仍可操作的 SKU 搜索输入", async () => {
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
+    render(<DataWatchSkuPicker pending={{ ...pending, candidates: [] }} busy={false} onCancel={vi.fn()} onSubmit={vi.fn()} />);
+    await waitFor(() => expect(screen.getByLabelText("搜索或输入产品 SKU")).toHaveFocus());
+  });
+
   it("不默认伪选 SKU，只提交员工明确勾选的候选", () => {
     const onSubmit = vi.fn();
     render(<DataWatchSkuPicker pending={pending} busy={false} onCancel={vi.fn()} onSubmit={onSubmit} />);

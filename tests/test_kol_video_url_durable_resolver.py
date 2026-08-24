@@ -1,6 +1,7 @@
 """Offline contracts for the durable unseen-video URL resolver."""
 from __future__ import annotations
 
+from contextlib import contextmanager, nullcontext
 from typing import Any
 
 import json
@@ -33,6 +34,7 @@ def test_enqueue_uses_dedicated_video_job_and_native_idempotency(monkeypatch) ->
         "https://www.youtube.com/watch?v=abcdefghijk&utm_source=test",
         staff={"id": 12, "user_id": 34},
         search_session_id=55,
+        search_session_item_id=66,
     )
 
     payload = captured["payload"]
@@ -42,6 +44,14 @@ def test_enqueue_uses_dedicated_video_job_and_native_idempotency(monkeypatch) ->
     assert payload["target_type"] == "video_url"
     assert payload["target_id"] == "youtube:abcdefghijk"
     assert payload["search_session_id"] == 55
+    assert payload["search_session_item_id"] == 66
+    assert search_session_lineages(payload) == [
+        {
+            "search_session_id": 55,
+            "search_session_item_id": 66,
+            "role": "resolver",
+        }
+    ]
     assert payload["derive_method"] == "video_url_resolve_v1"
     assert [step["label"] for step in payload["video_url_resolution"]["steps"]] == [
         "解析视频",
@@ -299,6 +309,165 @@ def test_worker_dispatches_resolver_without_falling_into_mock(monkeypatch) -> No
     worker._process_job(conn, job)
 
     assert seen == [(conn, job, job["payload"])]
+
+
+class _PayloadMergeCursor:
+    def __init__(self, conn: "_PayloadMergeConn") -> None:
+        self.conn = conn
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def execute(self, sql, params=()):
+        compact = " ".join(str(sql).split())
+        self.conn.sql.append(compact)
+        if "status='blocked'" in compact:
+            serialized = params[1]
+        elif "SET status=%s" in compact:
+            serialized = params[2]
+        else:
+            serialized = params[0]
+        self.conn.payload.update(json.loads(str(serialized)))
+
+
+class _PayloadMergeConn:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = dict(payload)
+        self.sql: list[str] = []
+
+    @contextmanager
+    def transaction(self):
+        yield
+
+    def cursor(self, *_args, **_kwargs):
+        return _PayloadMergeCursor(self)
+
+
+def _late_resolver_lineage() -> dict[str, Any]:
+    return {
+        "search_session_id": 55,
+        "search_session_item_id": 66,
+        "search_session_role": "resolver",
+        "search_session_lineage": [
+            {
+                "search_session_id": 55,
+                "search_session_item_id": 66,
+                "role": "resolver",
+            },
+            {
+                "search_session_id": 56,
+                "search_session_item_id": 67,
+                "role": "resolver",
+            },
+        ],
+    }
+
+
+def _stale_resolver_lineage() -> dict[str, Any]:
+    return {
+        "search_session_id": 55,
+        "search_session_item_id": 66,
+        "search_session_role": "resolver",
+        "search_session_lineage": [
+            {
+                "search_session_id": 55,
+                "search_session_item_id": 66,
+                "role": "resolver",
+            }
+        ],
+    }
+
+
+def test_stale_claim_progress_merge_preserves_late_attached_lineage(monkeypatch) -> None:
+    from app.workers import apify_jobs_worker_session
+    from app.workers import apify_jobs_worker_video_url as video_handler
+
+    conn = _PayloadMergeConn(_late_resolver_lineage())
+    stale_claim = {
+        "target_type": "video_url",
+        "target_id": "youtube:abcdefghijk",
+        **_stale_resolver_lineage(),
+    }
+    monkeypatch.setattr(apify_jobs_worker_session, "_sync_search_session_job", lambda *_a, **_k: True)
+
+    video_handler._persist_progress(
+        conn,
+        job_id=9911,
+        payload=stale_claim,
+        progress=resolver.initial_video_url_resolution_progress(),
+    )
+
+    assert search_session_lineages(conn.payload) == search_session_lineages(
+        _late_resolver_lineage()
+    )
+    assert conn.payload["video_url_resolution"]["status"] == "queued"
+    assert "COALESCE(apify_jobs.payload, '{}'::jsonb) ||" in conn.sql[0]
+
+
+def test_stale_claim_success_merge_preserves_late_attached_lineage(monkeypatch) -> None:
+    from app.workers import apify_jobs_worker_handlers as handlers
+    from app.workers import apify_jobs_worker_video_url as video_handler
+
+    conn = _PayloadMergeConn(_late_resolver_lineage())
+    stale_claim = {
+        "target_type": "video_url",
+        "target_id": "youtube:abcdefghijk",
+        "video_url_resolution": resolver.initial_video_url_resolution_progress(),
+        **_stale_resolver_lineage(),
+    }
+    monkeypatch.setattr(video_handler, "guard_provider_job_before_execution", lambda *_a, **_k: True)
+    monkeypatch.setattr(video_handler, "db_connection_sync_scope", nullcontext)
+    monkeypatch.setattr(handlers, "_resolve_job_staff", lambda *_a, **_k: {"id": 12, "user_id": 34})
+    monkeypatch.setattr(
+        video_handler,
+        "run_video_url_resolve_for_job",
+        lambda *_a, **_k: {
+            "status": "official_channel_video",
+            "resolution_progress": resolver.initial_video_url_resolution_progress(),
+        },
+    )
+
+    video_handler._process_video_url_resolve(
+        conn,
+        {"id": 9911, "job_type": "video_url_resolve"},
+        stale_claim,
+    )
+
+    assert search_session_lineages(conn.payload) == search_session_lineages(
+        _late_resolver_lineage()
+    )
+    assert conn.payload["video_url_resolve_result"]["status"] == "official_channel_video"
+    assert "COALESCE(apify_jobs.payload, '{}'::jsonb) ||" in conn.sql[-1]
+
+
+def test_stale_claim_block_merge_preserves_late_attached_lineage() -> None:
+    from app.domains.kol.provider_job_access import (
+        ProviderJobAccessError,
+        terminal_block_provider_job,
+    )
+
+    conn = _PayloadMergeConn(_late_resolver_lineage())
+    stale_claim = {
+        "target_type": "video_url",
+        "target_id": "youtube:abcdefghijk",
+        **_stale_resolver_lineage(),
+    }
+
+    terminal_block_provider_job(
+        conn,
+        job_id=9911,
+        payload=stale_claim,
+        error=ProviderJobAccessError("search_session_cancelled", 409),
+    )
+
+    assert search_session_lineages(conn.payload) == search_session_lineages(
+        _late_resolver_lineage()
+    )
+    assert conn.payload["kol_provider_job_fence_result"]["status"] == "blocked"
+    assert "COALESCE(apify_jobs.payload, '{}'::jsonb) ||" in conn.sql[-1]
 
 
 class _Rows:

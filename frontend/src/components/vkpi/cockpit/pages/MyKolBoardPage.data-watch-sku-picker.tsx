@@ -55,11 +55,22 @@ export function DataWatchSkuPicker({
   const [manualInput, setManualInput] = React.useState("");
   const [directory, setDirectory] = React.useState<Array<{ sku: string; name: string }>>(skuDirectoryCache || []);
   const datalistId = React.useId();
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
 
   React.useEffect(() => {
     setSelected(new Set());
     setManualInput("");
   }, [evidenceId, pending?.intent]);
+  React.useEffect(() => {
+    if (!pending) return;
+    const frame = window.requestAnimationFrame(() => {
+      const root = rootRef.current;
+      if (!root) return;
+      root.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      root.querySelector<HTMLInputElement>("input:not(:disabled)")?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [busy, evidenceId, pending]);
   React.useEffect(() => {
     if (!pending || !apiToken) return;
     if (skuDirectoryCache) {
@@ -120,6 +131,7 @@ export function DataWatchSkuPicker({
 
   return (
     <div
+      ref={rootRef}
       className="mb-2 rounded-[10px] border border-accent bg-accent-soft px-3 py-2.5"
       role="group"
       aria-label="为数据关注选择 SKU"

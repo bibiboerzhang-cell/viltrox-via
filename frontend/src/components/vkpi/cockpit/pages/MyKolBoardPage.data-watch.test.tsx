@@ -148,6 +148,10 @@ describe("runDataWatchAction(一键数据关注流程)", () => {
 
     expect(dataWatchMock).toHaveBeenCalledWith("tok", 101, 901, ["AF-85-F14"]);
     expect(changed).toHaveBeenCalledTimes(1);
+    expect((changed.mock.calls[0][0] as CustomEvent).detail).toEqual({
+      evidenceId: 901,
+      skus: ["AF-85-F14"],
+    });
     expect(deps.onTracked).toHaveBeenCalledTimes(1);
     window.removeEventListener(SKU_PLAY_CHANGED_EVENT, changed);
   });

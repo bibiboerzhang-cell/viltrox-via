@@ -5,6 +5,7 @@ from fastapi import HTTPException
 
 import app.domains.kol.search_sessions as kol_search_sessions
 from app.api.routers.vkpi_kol_pool_helpers import _int_or_none
+from app.domains.kol.search_sessions_serde import _public_session_item_source_url
 
 
 def _owned_search_session_or_http(session_id: int, staff: dict) -> dict:
@@ -102,8 +103,51 @@ def _reused_video_session_lineage(
     return dict(session or {}), int(item_id)
 
 
+def _prepare_video_resolver_session_item(
+    session: dict | None,
+    result: dict,
+) -> int | None:
+    """Persist and resolve one exact URL-video item before resolver enqueue.
+
+    The resolver worker may claim immediately after its queue row commits.  Its
+    signed parent payload therefore needs the durable item id at creation time;
+    attaching lineage only after enqueue leaves a last-write-wins race with
+    worker progress updates.  Never guess when the recorded projection is
+    missing or ambiguous—the caller can fail before enqueue instead of binding
+    provider work to the wrong history item.
+    """
+
+    if not session:
+        return None
+    session_id = _int_or_none(session.get("id"))
+    if not session_id:
+        raise RuntimeError("video_url_resolve_session_item_required")
+    recorded = kol_search_sessions.attach_url_result(int(session_id), result)
+    url = result.get("url") if isinstance(result.get("url"), dict) else {}
+    expected_url = _public_session_item_source_url(
+        url.get("normalized") or url.get("input") or result.get("source_url"),
+        item_type="url_video",
+    )
+    candidate_ids: set[int] = set()
+    for item in recorded.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("item_type") or "").strip().lower() != "url_video":
+            continue
+        source_url = str(item.get("source_url") or "").strip()
+        if expected_url and source_url != expected_url:
+            continue
+        item_id = _int_or_none(item.get("id"))
+        if item_id:
+            candidate_ids.add(int(item_id))
+    if len(candidate_ids) != 1:
+        raise RuntimeError("video_url_resolve_session_item_required")
+    return next(iter(candidate_ids))
+
+
 __all__ = [
     "_approved_session_kol_ids",
     "_owned_search_session_or_http",
+    "_prepare_video_resolver_session_item",
     "_reused_video_session_lineage",
 ]

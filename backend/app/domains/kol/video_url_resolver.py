@@ -21,6 +21,7 @@ from app.domains.tasks.apify_idempotency import (
     active_job_idempotency_key,
     enqueue_active_apify_job,
 )
+from app.domains.tasks.search_session_lineage import with_search_session_lineage
 
 
 VIDEO_URL_RESOLVE_JOB_TYPE = "video_url_resolve"
@@ -131,6 +132,7 @@ def enqueue_video_url_resolve_job(
     *,
     staff: dict[str, Any] | None = None,
     search_session_id: int | None = None,
+    search_session_item_id: int | None = None,
     source: str = "kol_video_url_resolve",
     queue_lane: str = "interactive",
     max_posts: int = 3,
@@ -155,24 +157,29 @@ def enqueue_video_url_resolve_job(
         raise ValueError("queue_lane must be interactive or batch")
     native_identity = f"{classified.platform}:{classified.video_id}"
     progress = initial_video_url_resolution_progress()
-    payload = {
-        "queue_lane": lane,
-        "url": classified.normalized_url,
-        "source_url": classified.normalized_url,
-        "platform": classified.platform,
-        "video_id": classified.video_id,
-        "query_text": classified.normalized_url[:96],
-        "target_type": "video_url",
-        "target_id": native_identity,
-        "derive_method": "video_url_resolve_v1",
-        "max_posts": max(1, min(12, int(max_posts or 3))),
-        "triggered_by_user_id": (staff or {}).get("user_id"),
-        "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
-        "search_session_id": _int_or_none(search_session_id),
-        "source": _text(source)[:80] or "kol_video_url_resolve",
-        "local_evaluation": bool(local_evaluation),
-        "video_url_resolution": progress,
-    }
+    payload = with_search_session_lineage(
+        {
+            "queue_lane": lane,
+            "url": classified.normalized_url,
+            "source_url": classified.normalized_url,
+            "platform": classified.platform,
+            "video_id": classified.video_id,
+            "query_text": classified.normalized_url[:96],
+            "target_type": "video_url",
+            "target_id": native_identity,
+            "derive_method": "video_url_resolve_v1",
+            "max_posts": max(1, min(12, int(max_posts or 3))),
+            "triggered_by_user_id": (staff or {}).get("user_id"),
+            "staff_id": (staff or {}).get("id") or (staff or {}).get("staff_id"),
+            "search_session_id": _int_or_none(search_session_id),
+            "source": _text(source)[:80] or "kol_video_url_resolve",
+            "local_evaluation": bool(local_evaluation),
+            "video_url_resolution": progress,
+        },
+        search_session_id=search_session_id,
+        search_session_item_id=search_session_item_id,
+        role="resolver",
+    )
     payload[PROVIDER_JOB_FENCE_KEY] = build_video_url_provider_fence(
         payload=payload,
         staff=staff,

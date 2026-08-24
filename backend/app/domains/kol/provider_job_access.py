@@ -23,6 +23,7 @@ from app.core.config import IS_PRODUCTION, JWT_SECRET
 from app.core.permissions import check_tab_permission
 from app.core.security import user_status_allows_auth
 from app.db.connection import db_connection_sync_scope, get_conn
+from app.domains.kol.provider_job_payloads import provider_job_payload_delta
 
 
 FENCE_KEY = "kol_provider_job_fence"
@@ -43,7 +44,6 @@ SUPPORTED_ACTIONS = frozenset(
         VIDEO_URL_RESOLVE,
     }
 )
-
 # Search-session linkage/progress is appended after enqueue and result fields
 # are appended while a job is running.  They do not authorize provider scope.
 # Every other queued field is sealed, including all query/filter/model knobs.
@@ -877,7 +877,7 @@ def terminal_block_provider_job(
     }
     payload[FENCE_RESULT_KEY] = result
     last_error = _canonical(result)[:2000]
-    serialized = _canonical(payload)
+    serialized = _canonical(provider_job_payload_delta(payload))
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(
@@ -887,7 +887,7 @@ def terminal_block_provider_job(
                     last_error=%s,
                     last_error_category='blocked',
                     next_retry_at=NULL,
-                    payload=%s::jsonb,
+                    payload=COALESCE(apify_jobs.payload, '{}'::jsonb) || %s::jsonb,
                     updated_at=NOW()
                 WHERE id=%s
                 """,

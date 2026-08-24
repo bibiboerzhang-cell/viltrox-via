@@ -32,9 +32,8 @@ from app.api.routers.vkpi_kol_pool_search_responses import (
     _url_response_status,
 )
 from app.api.routers.vkpi_kol_pool_search_scope import (
-    _approved_session_kol_ids,
-    _owned_search_session_or_http,
-    _reused_video_session_lineage,
+    _approved_session_kol_ids, _owned_search_session_or_http,
+    _prepare_video_resolver_session_item, _reused_video_session_lineage,
 )
 from app.api.routers.vkpi_kol_pool_recall_route import (
     recall_kol_profiles,
@@ -123,13 +122,14 @@ def _run_url_deep_crawl(
         elif is_profile and kol_url_deep_crawl.profile_deep_crawl_is_fresh(matched_kol_pool_id):
             queued = {"status": "already_fresh", "job_id": None}
         elif not is_profile:
-            # A video URL is never a profile-crawl target.  Resolve unseen
-            # native videos in their own durable provider-fenced job; only the
-            # worker may create evidence and reach the gated final_v1 enqueue.
+            # Unseen videos use a dedicated fenced resolver; only its worker
+            # may create evidence and reach the gated final_v1 enqueue.
+            resolver_item_id = _prepare_video_resolver_session_item(session, result)
             queued = kol_url_deep_crawl.enqueue_video_url_resolve_job(
                 str(body.get("url") or ""),
                 staff=staff,
                 search_session_id=_int_or_none((session or {}).get("id")),
+                search_session_item_id=resolver_item_id,
                 source=str(body.get("source") or f"{default_source}_video_resolve"),
                 max_posts=int(body.get("max_posts") or 3),
                 local_evaluation=False,

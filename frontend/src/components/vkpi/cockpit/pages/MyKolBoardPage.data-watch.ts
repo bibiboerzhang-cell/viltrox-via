@@ -34,10 +34,20 @@ export const DataWatchContext = React.createContext<DataWatchContextValue | null
  */
 export const SKU_PLAY_CHANGED_EVENT = "vkpi:sku-play-changed";
 
+export interface SkuPlayChangedDetail {
+  evidenceId: number;
+  skus: string[];
+}
+
 export type DataWatchSubmitIntent = "auto" | "manual" | "confirm_detected";
 
-export function notifySkuPlayChanged(): void {
-  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(SKU_PLAY_CHANGED_EVENT));
+export function notifySkuPlayChanged(evidenceId: number, skus: string[]): void {
+  if (typeof window === "undefined") return;
+  const detail: SkuPlayChangedDetail = {
+    evidenceId: Number(evidenceId) || 0,
+    skus: [...new Set(skus.map((sku) => String(sku || "").trim()).filter(Boolean))],
+  };
+  window.dispatchEvent(new CustomEvent<SkuPlayChangedDetail>(SKU_PLAY_CHANGED_EVENT, { detail }));
 }
 
 /** 成功回执:SKU 如实列出;refresh=already_queued 时如实注明「已在队列」,绝不当新排队。 */
@@ -146,7 +156,7 @@ export async function runDataWatchAction(
       return;
     }
     deps.setReceipt({ text: dataWatchSuccessText(resp), tone: "info" });
-    notifySkuPlayChanged();
+    notifySkuPlayChanged(evidenceId, Array.isArray(resp.skus) ? resp.skus : []);
     deps.onTracked?.();
     if (
       resp.sku_provenance?.relation_type === "detected"
