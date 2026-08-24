@@ -60,9 +60,9 @@ _MUTABLE_RUNTIME_KEYS = frozenset(
         "video_url_resolution",
         "video_url_resolve_result",
         "session_advance_result",
-        "smart_search_profile_advance_result",
-        "search_session_last_job_status",
+        "smart_search_profile_advance_result", "search_session_last_job_status",
         "search_session_last_error", "diagnostics", "search_session_item_statuses",
+        "search_session_cache_id", "search_session_analysis_status", "my_kol_paid_action_fence",
     }
 )
 

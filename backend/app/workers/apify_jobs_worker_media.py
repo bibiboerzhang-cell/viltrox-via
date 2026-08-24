@@ -488,11 +488,37 @@ def _scope_checkpoint_for(payload):
         return None
 
     def _checkpoint(stage):
+        import json
+
+        from app.db import connection as db_connection
         from app.db.connection import db_connection_sync_scope
         from app.workers.apify_jobs_worker_paid_scope import revalidate_paid_job_scope
 
+        # 子进程 payload 是执行超集(mode/video_path/llm_context/gemini_models…都不在
+        # 围栏合同里),拿它算指纹必判 payload_drifted(2026-08-24 事故)。复验对象必须是
+        # 落库 payload——围栏保护的本体,顺带把执行中途的行篡改一并抓住。
+        try:
+            job_id = int(payload.get("job_id"))
+        except (TypeError, ValueError):
+            raise gemini_video_analyzer.AnalysisScopeRevoked(
+                "fence_job_identity_missing", stage=stage
+            ) from None
+        with db_connection_sync_scope():
+            row = db_connection.get_conn().execute(
+                "SELECT payload FROM apify_jobs WHERE id=?", (job_id,)
+            ).fetchone()
+        durable = dict(row).get("payload") if row else None
+        if isinstance(durable, str):
+            try:
+                durable = json.loads(durable)
+            except ValueError:
+                durable = None
+        if not isinstance(durable, dict):
+            raise gemini_video_analyzer.AnalysisScopeRevoked(
+                "fence_durable_payload_unavailable", stage=stage
+            )
         _action, reason, _actor = revalidate_paid_job_scope(
-            payload, "video", connection_scope=db_connection_sync_scope
+            durable, "video", connection_scope=db_connection_sync_scope
         )
         if reason:
             raise gemini_video_analyzer.AnalysisScopeRevoked(reason, stage=stage)

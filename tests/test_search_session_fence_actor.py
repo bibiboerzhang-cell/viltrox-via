@@ -40,9 +40,32 @@ def test_session_creator_staff_maps_user_id_to_active_staff():
 def test_runtime_diagnostic_keys_are_outside_the_fence_hash():
     assert "diagnostics" in pja._MUTABLE_RUNTIME_KEYS
     assert "search_session_item_statuses" in pja._MUTABLE_RUNTIME_KEYS
+    # 会话同步器在分析摘要就绪时补写的两键 + 运行时重铸的 my_kol 围栏(worker_session L663)
+    # 都不进 provider 合同哈希,否则重试/复验必判 payload_drifted(2026-08-24 事故)。
+    assert "search_session_cache_id" in pja._MUTABLE_RUNTIME_KEYS
+    assert "search_session_analysis_status" in pja._MUTABLE_RUNTIME_KEYS
+    assert "my_kol_paid_action_fence" in pja._MUTABLE_RUNTIME_KEYS
     a = pja._execution_contract({"target_id": "9", "diagnostics": {"x": 1}}, action=pja.VIDEO_ANALYSIS)
     b = pja._execution_contract({"target_id": "9", "diagnostics": {"y": 2, "child_stderr_tail": "s"}}, action=pja.VIDEO_ANALYSIS)
-    assert a == b
+    c = pja._execution_contract(
+        {"target_id": "9", "search_session_cache_id": 77, "search_session_analysis_status": "partial", "my_kol_paid_action_fence": {"v": 1}},
+        action=pja.VIDEO_ANALYSIS,
+    )
+    assert a == b == c
+
+
+def test_analyzer_child_revalidates_durable_row_payload_not_execution_superset():
+    """子进程 payload 带 mode/video_path/llm_context 等执行键,不是围栏合同本体;
+    checkpoint 必须按 job_id 回读落库 payload 复验,否则指纹必漂(2026-08-24 事故)。"""
+    from pathlib import Path
+
+    workers = Path(pja.__file__).resolve().parents[2].joinpath("workers")
+    media_src = workers.joinpath("apify_jobs_worker_media.py").read_text(encoding="utf-8")
+    assert "SELECT payload FROM apify_jobs WHERE id=?" in media_src
+    assert "fence_durable_payload_unavailable" in media_src
+    assert "fence_job_identity_missing" in media_src
+    gemini_src = workers.joinpath("apify_jobs_worker_gemini.py").read_text(encoding="utf-8")
+    assert '"job_id": int(job["id"])' in gemini_src
 
 
 def test_profile_videos_enqueue_uses_session_creator_staff():

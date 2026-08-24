@@ -607,8 +607,8 @@ def _process_gemini_video(
     )
     started = time.monotonic()
     clock = StageClock()
-    # 子进程按 analyzer_payload 的链逐节尝试(只在提供方压力时换节);post-hoc 闸认链成员。
-    analyzer_payload = _gemini_analyzer_payload(payload, derive_method)
+    # 子进程按 analyzer_payload 的链逐节尝试(只在提供方压力时换节);post-hoc 闸认链成员。job_id 供子进程按落库 payload 复验围栏。
+    analyzer_payload = {**_gemini_analyzer_payload(payload, derive_method), "job_id": int(job["id"])}
     model_chain = list(analyzer_payload.get("gemini_models") or [WORKER_GEMINI_MODEL])
     authorization = (
         payload.get("_llm_execution")

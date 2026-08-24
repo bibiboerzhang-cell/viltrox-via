@@ -265,12 +265,41 @@ def test_child_checkpoint_revalidates_signed_final_v1_only(
         return ("video_analysis", "provider_job_actor_inactive", None)
 
     monkeypatch.setattr(paid_scope, "revalidate_paid_job_scope", fake_revalidate)
+
+    # 2026-08-24 契约:子进程 payload 是执行超集(mode/llm_context…),复验对象必须是按
+    # job_id 回读的落库 payload;缺 job_id 一律 fail-closed,绝不拿超集算指纹。
     checkpoint = factory({"derive_method": "video_analysis_final_v1", "target_id": "701"})
+    assert checkpoint is not None
+    with pytest.raises(gemini_video.AnalysisScopeRevoked) as raised:
+        checkpoint("youtube_download")
+    assert raised.value.reason == "fence_job_identity_missing"
+    assert raised.value.stage == "youtube_download"
+    assert seen == []
+
+    import contextlib
+
+    from app.db import connection as db_connection
+
+    class _Cur:
+        def fetchone(self) -> dict[str, Any]:
+            return {"payload": {"derive_method": "video_analysis_final_v1", "target_id": "701"}}
+
+    class _Conn:
+        def execute(self, sql: str, params: tuple = ()) -> "_Cur":
+            assert "SELECT payload FROM apify_jobs WHERE id=?" in sql and params == (6101,)
+            return _Cur()
+
+    monkeypatch.setattr(db_connection, "get_conn", lambda: _Conn())
+    monkeypatch.setattr(db_connection, "db_connection_sync_scope", contextlib.nullcontext)
+    checkpoint = factory(
+        {"derive_method": "video_analysis_final_v1", "target_id": "superset-x", "job_id": 6101, "mode": "youtube", "llm_context": {"k": 1}}
+    )
     assert checkpoint is not None
     with pytest.raises(gemini_video.AnalysisScopeRevoked) as raised:
         checkpoint("youtube_download")
     assert raised.value.reason == "provider_job_actor_inactive"
     assert raised.value.stage == "youtube_download"
+    # 复验看到的是落库 payload(target_id=701),不是子进程超集(superset-x)。
     assert seen == [("video", "701")]
 
 
