@@ -6,9 +6,11 @@ from typing import Any
 import pytest
 
 from app.domains.kol import search_sessions, search_sessions_history
+from app.domains.kol import pool_read_projection
 from app.domains.kol.search_sessions_items import canonicalize_session_creator_items
 from app.domains.kol.search_sessions_previews import (
     hydrate_session_item_avatar_fallbacks,
+    hydrate_session_item_previews,
 )
 from app.services.intelligence import account_scan_helpers
 from app.services.intelligence import account_scan_service
@@ -244,6 +246,110 @@ def test_session_avatar_pool_fallback_is_durable_exact_identity_and_read_only() 
     assert "avatar_url" not in items[5]["payload"]
     assert all("thumbnail" not in sql.lower() for sql in conn.sql)
     assert not any("UPDATE" in sql or "DELETE" in sql or "INSERT" in sql for sql in conn.sql)
+
+
+def test_historical_session_reprojects_exact_prewarmed_pool_avatars_without_cross_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    live = "https://p16-sign.tiktokcdn.com/avatar.jpeg?x-expires=4102444800"
+    expired = "https://p16-sign.tiktokcdn.com/avatar.jpeg?x-expires=1"
+    cached = {
+        pool_id: f"/api/vkpi-media/image-cache/{pool_id:064x}"
+        for pool_id in (3705, 5008, 5256)
+    }
+
+    class _Rows:
+        def fetchall(self):
+            return [
+                {
+                    "id": pool_id,
+                    "platform": "tiktok",
+                    "handle": f"creator{pool_id}",
+                    "profile_url": f"https://tiktok.com/@creator{pool_id}/",
+                    "avatar_url": f"{live}&pool_id={pool_id}",
+                    "raw_platform_data": {},
+                }
+                for pool_id in (3705, 5008, 5256)
+            ]
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, tuple[int, ...]]] = []
+
+        def execute(self, sql, params=()):
+            self.calls.append((" ".join(sql.split()), tuple(params)))
+            return _Rows()
+
+    class _Logger:
+        @staticmethod
+        def warning(*_args, **_kwargs) -> None:
+            raise AssertionError("avatar reprojection query should not fail")
+
+    def cached_lookup(raw_url: str) -> str:
+        for pool_id, cache_url in cached.items():
+            if f"pool_id={pool_id}" in raw_url:
+                return cache_url
+        return ""
+
+    monkeypatch.setattr(
+        pool_read_projection,
+        "_default_cached_avatar_lookup",
+        cached_lookup,
+    )
+    items = [
+        {
+            "id": pool_id + 10_000,
+            "kol_pool_id": pool_id,
+            "item_type": "recall_candidate",
+            "payload": {
+                "platform": "tiktok",
+                "handle": f"creator{pool_id}",
+                "profile_url": f"https://tiktok.com/@creator{pool_id}/",
+                "avatar_url": expired if pool_id == 5008 else f"{live}&history={pool_id}",
+                "avatar_url_status": "expired" if pool_id == 5008 else "ephemeral",
+            },
+        }
+        for pool_id in (3705, 5008, 5256)
+    ]
+    # An explicit pool id is necessary but not sufficient when the historical
+    # item also carries a conflicting native identity: never cross-bind it.
+    wrong_identity = {
+        "id": 99_999,
+        "kol_pool_id": 3705,
+        "item_type": "recall_candidate",
+        "payload": {
+            "platform": "tiktok",
+            "handle": "different.creator",
+            "profile_url": "https://tiktok.com/@different.creator/",
+            "avatar_url": live,
+            "avatar_url_status": "ephemeral",
+        },
+    }
+    items.append(wrong_identity)
+    conn = _Conn()
+
+    hydrate_session_item_previews(
+        conn,
+        items,
+        enrichment_status_fn=lambda *_args, **_kwargs: "pending",
+        logger=_Logger(),
+    )
+
+    for item, pool_id in zip(items[:3], (3705, 5008, 5256)):
+        payload = item["payload"]
+        assert payload["avatar_url"] == cached[pool_id]
+        assert payload["avatar_url_status"] == "durable"
+        assert payload["avatar_url_source"] == "local_prewarm_cache"
+        assert payload["avatar_upstream_status"] == "ephemeral"
+        assert "x-expires" not in payload["avatar_url"]
+    assert wrong_identity["payload"]["avatar_url"] == live
+    assert wrong_identity["payload"]["avatar_url_status"] == "ephemeral"
+    assert conn.calls[0][1] == (3705, 5008, 5256)
+    assert not any(
+        keyword in sql
+        for sql, _params in conn.calls
+        for keyword in ("UPDATE", "DELETE", "INSERT")
+    )
 
 
 def test_session_detail_and_history_list_share_pool_avatar_fallback(monkeypatch) -> None:

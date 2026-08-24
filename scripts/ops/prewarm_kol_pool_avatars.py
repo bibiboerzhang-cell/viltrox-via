@@ -199,12 +199,24 @@ def run(
 def _make_read_only(conn: Any) -> None:
     """Fence the database handle itself; cache files remain the only execute write."""
 
-    try:
-        conn.execute("SET TRANSACTION READ ONLY")
+    from app.db.connection import is_postgres_runtime
+
+    if is_postgres_runtime():
+        raw = getattr(conn, "_raw", None)
+        if raw is None:
+            raise RuntimeError("postgres_read_only_handle_unavailable")
+        # Set before the first statement so psycopg applies read-only mode to
+        # every transaction opened by this one-shot process.
+        raw.read_only = True
+        if not bool(getattr(raw, "read_only", False)):
+            raise RuntimeError("postgres_read_only_not_verified")
         return
-    except Exception:
-        conn.rollback()
+
     conn.execute("PRAGMA query_only=ON")
+    row = conn.execute("PRAGMA query_only").fetchone()
+    value = row[0] if isinstance(row, (tuple, list)) else row["query_only"]
+    if int(value or 0) != 1:
+        raise RuntimeError("sqlite_query_only_not_verified")
 
 
 def _build_parser() -> argparse.ArgumentParser:

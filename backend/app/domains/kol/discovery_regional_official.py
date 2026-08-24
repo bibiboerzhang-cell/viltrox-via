@@ -16,7 +16,19 @@ from app.domains.kol.identity import (
 
 
 _BRAND_REGIONAL_ACCOUNT_SUFFIXES = frozenset(
-    {"global", "usa", "us", "uk", "eu", "europe", "asia", "japan", "india", "hq"}
+    {
+        "global",
+        "usa",
+        "us",
+        "uk",
+        "eu",
+        "europe",
+        "asia",
+        "japan",
+        "india",
+        "malaysia",
+        "hq",
+    }
 )
 
 
@@ -69,12 +81,26 @@ def regional_brand_profile_self_attributed(item: dict[str, Any], brand: str) -> 
     if not platform or not handle_aliases.intersection(profile_aliases):
         return False
 
+    raw_bio = str(item.get("bio") or item.get("description") or "").lower()
     bio = re.sub(
         r"[^a-z0-9]+",
         " ",
-        str(item.get("bio") or item.get("description") or "").lower(),
+        raw_bio,
     ).strip()
-    return bool(
+    first_party_by_brand = bool(
         re.search(rf"\bby\s+{re.escape(brand_norm)}\b", bio)
         and re.search(r"\bour\b", bio)
+    )
+    # Some regional brand accounts use the equally explicit social CTA
+    # ``tag us @<this exact handle>`` instead of ``by <brand> ... our``.
+    # Require the CTA to name the already profile-aligned handle; bare ``us``,
+    # a brand hashtag, or a tag to a different account remains insufficient.
+    first_party_exact_tag = bool(
+        re.search(
+            rf"\btag\s+us\s+@{re.escape(raw_handle.lower().lstrip('@'))}\b",
+            raw_bio,
+        )
+    )
+    return bool(
+        first_party_by_brand or first_party_exact_tag
     )

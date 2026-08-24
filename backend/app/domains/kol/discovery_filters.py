@@ -280,7 +280,8 @@ def _competitor_brand_official(
         for field in ("handle", "channel_name", "display_name", "username")
     )
     regional_self_attribution_candidate = bool(
-        re.search(r"\bby\s+[a-z0-9]", bio) and re.search(r"\bour\b", bio)
+        (re.search(r"\bby\s+[a-z0-9]", bio) and re.search(r"\bour\b", bio))
+        or re.search(r"\btag\s+us\s+@[a-z0-9_.-]+", bio)
     )
     if not corporate_voice and not identity_has_official and not regional_self_attribution_candidate:
         return ""

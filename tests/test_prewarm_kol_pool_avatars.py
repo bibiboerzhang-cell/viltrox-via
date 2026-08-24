@@ -172,6 +172,45 @@ def test_release_validation_fence_refuses_execute_before_query_or_cache() -> Non
     assert called == []
 
 
+def test_make_read_only_uses_verified_postgres_handle_without_sqlite_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Raw:
+        read_only = False
+
+    class Conn:
+        _raw = Raw()
+
+        def execute(self, _sql: str) -> None:
+            raise AssertionError("postgres path must not execute PRAGMA")
+
+    monkeypatch.setattr("app.db.connection.is_postgres_runtime", lambda: True)
+    conn = Conn()
+    prewarm._make_read_only(conn)
+    assert conn._raw.read_only is True
+
+
+def test_make_read_only_verifies_sqlite_query_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Result:
+        def fetchone(self) -> tuple[int]:
+            return (1,)
+
+    class Conn:
+        def __init__(self) -> None:
+            self.sql: list[str] = []
+
+        def execute(self, sql: str) -> Result:
+            self.sql.append(sql)
+            return Result()
+
+    monkeypatch.setattr("app.db.connection.is_postgres_runtime", lambda: False)
+    conn = Conn()
+    prewarm._make_read_only(conn)
+    assert conn.sql == ["PRAGMA query_only=ON", "PRAGMA query_only"]
+
+
 def test_process_exit_code_is_nonzero_for_blocked_or_failed_rows() -> None:
     assert prewarm._exit_code([{"status": "cached"}, {"status": "skipped"}]) == 0
     assert prewarm._exit_code([{"status": "failed"}]) == 1

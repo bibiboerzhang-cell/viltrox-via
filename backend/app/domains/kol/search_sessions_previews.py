@@ -42,8 +42,9 @@ def _apply_durable_pool_avatar_fallback(
     item: dict[str, Any],
     pool_profile: dict[str, Any],
 ) -> bool:
-    """Project a linked Pool avatar only into an absent/dead session slot."""
+    """Project a linked Pool avatar into an absent/dead or prewarmed slot."""
     from app.domains.kol.identity import canonical_creator_aliases
+    from app.domains.kol.pool_read_projection import project_pool_avatar
     from app.services.intelligence.account_scan_helpers import _avatar_url_policy
 
     if _text(item.get("item_type")) not in _SESSION_CREATOR_ITEM_TYPES:
@@ -54,11 +55,21 @@ def _apply_durable_pool_avatar_fallback(
     current_url, current_state = _avatar_url_policy(payload.get("avatar_url"))
     declared_state = _text(payload.get("avatar_url_status")).lower()
     current_dead = current_state in _DEAD_AVATAR_STATES or declared_state in _DEAD_AVATAR_STATES
-    if current_url and not current_dead:
+    current_ephemeral = current_state == "ephemeral" or declared_state == "ephemeral"
+    if current_url and not current_dead and not current_ephemeral:
         return False
 
-    pool_url, pool_state = _avatar_url_policy(pool_profile.get("avatar_url"))
+    pool_projection = project_pool_avatar(pool_profile)
+    pool_url = _text(pool_projection.get("avatar_url"))
+    pool_state = _text(pool_projection.get("avatar_url_status")).lower()
+    pool_source = _text(pool_projection.get("avatar_url_source"))
     if not pool_url or pool_state != "durable":
+        return False
+    # A live signed URL remains honest while no cache exists.  Replace it only
+    # when the exact linked Pool row proves that this source has already been
+    # materialized into the reviewed local cache.  Do not let an unrelated
+    # direct Pool URL silently overwrite a still-live historical avatar.
+    if current_ephemeral and pool_source != "local_prewarm_cache":
         return False
 
     session_aliases = _creator_aliases_without_pool(item)
@@ -74,7 +85,14 @@ def _apply_durable_pool_avatar_fallback(
 
     payload["avatar_url"] = pool_url
     payload["avatar_url_status"] = "durable"
-    payload["avatar_url_source"] = "pool_durable_read_fallback"
+    payload["avatar_url_source"] = (
+        "local_prewarm_cache"
+        if pool_source == "local_prewarm_cache"
+        else "pool_durable_read_fallback"
+    )
+    payload["avatar_upstream_status"] = _text(
+        pool_projection.get("avatar_upstream_status")
+    )
     return True
 
 
