@@ -9,7 +9,7 @@ discovery filters while remaining pure: no provider, database or score writes.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import unquote, urlparse
 
 
@@ -36,6 +36,8 @@ _EXACT_HANDLE_PLATFORM_ALIASES = {
     "yt": "youtube",
     "youtube_shorts": "youtube",
 }
+_BRAND_IDENTITY_FIELDS = ("handle", "channel_name", "display_name", "username")
+_NEGATED_OFFICIAL_RE = re.compile(r"(?:unofficial|\bnot[\s_-]+official)", re.IGNORECASE)
 
 
 def _normalized_brand_locator(value: Any) -> str:
@@ -115,4 +117,33 @@ def exact_brand_handle_confirmed(item: dict[str, Any], brand_norm: str) -> bool:
     )
 
 
-__all__ = ["exact_brand_handle_confirmed"]
+def explicit_official_marker(value: Any) -> bool:
+    """Return an affirmative marker while treating negation as a rebuttal.
+
+    Matching remains substring-based so glued handles such as
+    ``feelworldlofficial`` work; ``unofficial`` and ``not_official`` do not.
+    """
+
+    text = str(value or "").strip().lower()
+    return bool(text and not _NEGATED_OFFICIAL_RE.search(text) and "official" in text)
+
+
+def brand_and_official_share_identity_field(
+    item: dict[str, Any],
+    *,
+    brand_match: Callable[[dict[str, Any]], bool],
+) -> bool:
+    """Require the brand match and ``official`` marker in the same field."""
+
+    for field in _BRAND_IDENTITY_FIELDS:
+        value = item.get(field)
+        if explicit_official_marker(value) and brand_match({field: value}):
+            return True
+    return False
+
+
+__all__ = [
+    "brand_and_official_share_identity_field",
+    "exact_brand_handle_confirmed",
+    "explicit_official_marker",
+]

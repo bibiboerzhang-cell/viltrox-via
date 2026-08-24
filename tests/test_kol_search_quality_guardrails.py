@@ -630,6 +630,25 @@ def test_competitor_brand_official_gate_blocks_official_keeps_reviewer() -> None
     assert discovery_filters._competitor_brand_official(
         {"handle": "sonyaofficial", "channel_name": "Sonya Rivera"}
     ) == ""
+    # 个人 official handle 与评测品牌显示名来自不同字段，不能拼成品牌官号证据。
+    assert discovery_filters._competitor_brand_official(
+        {
+            "handle": "alexofficial",
+            "channel_name": "Alex | Sony Camera Reviews",
+            "bio": "I'm an independent filmmaker reviewing Sony cameras.",
+        },
+        competitor_brands={"sony": ["sony"]},
+    ) == ""
+    # 明确否定 official 不是官号证据；即便品牌与否定词在同一字段也应放行。
+    assert discovery_filters._competitor_brand_official(
+        {"handle": "sony_unofficial", "channel_name": "Unofficial Sony Reviews"},
+        competitor_brands={"sony": ["sony"]},
+    ) == ""
+    # 无反证时，品牌与 official 同字段仍是确定官号。
+    assert discovery_filters._competitor_brand_official(
+        {"handle": "sonyofficial", "channel_name": "Sony Official"},
+        competitor_brands={"sony": ["sony"]},
+    ) == "sony"
 
 
 def test_bio_irrelevant_gate_blocks_non_visual_but_keeps_sparse_bio() -> None:

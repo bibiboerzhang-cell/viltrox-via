@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+from app.core.gemini_models import DEFAULT_FINAL_V1_CHAIN
+from app.domains.costs import budget_guard
 from app.domains.intelligence import gemini_single_kol_preflight
 from scripts import vkpi_gemini_single_kol_preflight as preflight_script
 from scripts import vkpi_gemini_go_no_go_report
@@ -71,11 +73,11 @@ def test_gemini_single_kol_preflight_selects_top_youtube_video_without_calls(mon
             {
                 "id": "low",
                 "title": "General update",
-                "url": "https://www.youtube.com/watch?v=low123456",
+                "url": "https://www.youtube.com/watch?v=low12345678",
                 "statistics": {"viewCount": 100},
             },
             {
-                "id": "top123456",
+                "id": "top12345678",
                 "snippet": {"title": "Viltrox lens review"},
                 "statistics": {"viewCount": 25000, "likeCount": 200, "commentCount": 80},
                 "kind": "youtube#video",
@@ -92,12 +94,88 @@ def test_gemini_single_kol_preflight_selects_top_youtube_video_without_calls(mon
     assert payload["write_db"] is False
     assert payload["sync_triggered"] is False
     assert payload["task_enqueued"] is False
-    assert payload["top_candidate"]["post_uid"] == "top123456"
+    assert payload["top_candidate"]["post_uid"] == "top12345678"
     assert payload["url_readiness"]["valid_video_url"] is True
     assert payload["url_readiness"]["provider_path"] == "youtube_direct_url_preflight"
     assert payload["go_no_go"]["candidate_ready_for_live_test"] is True
     assert payload["go_no_go"]["ready_for_manual_live_test"] is False
     assert payload["go_no_go"]["blocked_reason"] == "provider_gate:force_offline"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://notyoutube.com/watch?v=abcdefghijk",
+        "https://youtube.com.evil.test/watch?v=abcdefghijk",
+        "https://evil.test/?next=youtube.com/watch?v=abcdefghijk&token=secret",
+        "https://www.youtube.com/watch?v=abcdef",
+        "https://www.youtube.com/embed/abcdefghijk/extra",
+    ],
+)
+def test_gemini_preflight_strictly_rejects_malicious_or_invalid_youtube_urls(url: str) -> None:
+    readiness = gemini_single_kol_preflight._url_readiness({"video_url": url})
+
+    assert readiness["valid_video_url"] is False
+    assert readiness["youtube_video_id"] == ""
+    assert readiness["video_url"] == ""
+    assert readiness["blocked_reason"] == "non_youtube_url"
+
+
+def test_gemini_preflight_canonicalizes_valid_youtube_url_without_query_secrets() -> None:
+    readiness = gemini_single_kol_preflight._url_readiness(
+        {
+            "video_url": (
+                "https://m.youtube.com/shorts/abcdefghijk"
+                "?si=secret-token&utm_source=private"
+            )
+        }
+    )
+
+    assert readiness["valid_video_url"] is True
+    assert readiness["youtube_video_id"] == "abcdefghijk"
+    assert readiness["video_url"] == "https://www.youtube.com/watch?v=abcdefghijk"
+    assert "secret-token" not in json.dumps(readiness)
+
+
+def test_gemini_preflight_prioritizes_viltrox_content_over_pure_traffic(monkeypatch) -> None:
+    raw = {
+        "videos": [
+            {
+                "id": "viral000001",
+                "kind": "youtube#video",
+                "title": "The biggest camera video this year",
+                "description": "General camera news without a product review.",
+                "statistics": {
+                    "viewCount": 10_000_000,
+                    "likeCount": 500_000,
+                    "commentCount": 100_000,
+                },
+            },
+            {
+                "id": "viltrox0001",
+                "kind": "youtube#video",
+                "title": "My latest field test",
+                "description": "Full hands-on coverage of the Viltrox 27mm lens.",
+                "statistics": {"viewCount": 100},
+            },
+        ]
+    }
+    monkeypatch.setattr(
+        gemini_single_kol_preflight.kol_pool,
+        "get_item",
+        lambda *_args, **_kwargs: {"item": _fake_item(raw)},
+    )
+    monkeypatch.setattr(
+        gemini_single_kol_preflight.llm_gateway,
+        "budget_preflight",
+        _fake_budget,
+    )
+
+    payload = gemini_single_kol_preflight.build_kol_pool_gemini_preflight(123)
+
+    assert payload["top_candidate"]["post_uid"] == "viltrox0001"
+    assert "viltrox_text_match" in payload["top_candidate"]["reasons"]
+    assert payload["candidate_sample"][0]["candidate_score"] > payload["candidate_sample"][1]["candidate_score"]
 
 
 def test_gemini_single_kol_preflight_blocks_missing_video(monkeypatch) -> None:
@@ -119,9 +197,13 @@ def test_gemini_preflight_consumes_private_raw_sibling_without_leaking_it(monkey
         "contact_email": "private@example.test",
         "videos": [
             {
-                "id": "sibling123",
+                "id": "sibling123X",
                 "kind": "youtube#video",
                 "title": "Viltrox field test",
+                "url": (
+                    "https://www.youtube.com/watch?v=sibling123X"
+                    "&token=private-url-token"
+                ),
                 "statistics": {"viewCount": 3210},
             }
         ],
@@ -143,7 +225,7 @@ def test_gemini_preflight_consumes_private_raw_sibling_without_leaking_it(monkey
     serialized = json.dumps(payload)
 
     assert calls == [{"include_raw_for_derivation": True, "include_video_evidence": False}]
-    assert payload["top_candidate"]["post_uid"] == "sibling123"
+    assert payload["top_candidate"]["post_uid"] == "sibling123X"
     assert payload["top_candidate"]["source_kind"] == "vkpi_kol_pool.raw_platform_data"
     assert payload["provider_calls"] is False
     assert payload["write_db"] is False
@@ -151,6 +233,7 @@ def test_gemini_preflight_consumes_private_raw_sibling_without_leaking_it(monkey
     assert "raw_platform_data" not in payload
     assert "raw_platform_data" not in payload["item"]
     assert "private@example.test" not in serialized
+    assert "private-url-token" not in serialized
 
 
 def test_gemini_preflight_prefers_durable_video_evidence_without_raw(monkeypatch) -> None:
@@ -182,7 +265,7 @@ def test_gemini_preflight_prefers_durable_video_evidence_without_raw(monkeypatch
             "evidence_type": "video",
             "platform": "youtube",
             "title": "Persisted Viltrox review",
-            "content_url": "https://www.youtube.com/watch?v=durable901",
+            "content_url": "https://www.youtube.com/watch?v=durable901X",
             "view_count": 8000,
         },
     ]
@@ -218,12 +301,77 @@ def test_gemini_preflight_prefers_durable_video_evidence_without_raw(monkeypatch
         }
     ]
     assert payload["candidate_strategy"]["limit"] == 1
-    assert payload["top_candidate"]["post_uid"] == "durable901"
+    assert payload["top_candidate"]["post_uid"] == "durable901X"
     assert payload["top_candidate"]["source_kind"] == "vkpi_kol_video_evidence"
     assert payload["top_candidate"]["platform"] == "youtube"
     assert payload["url_readiness"]["valid_video_url"] is True
     assert payload["provider_calls"] is False
     assert payload["write_db"] is False
+
+
+def test_gemini_preflight_merges_raw_relevance_into_same_durable_video(monkeypatch) -> None:
+    public_item = _fake_item({})
+    public_item.pop("raw_platform_data")
+    raw = {
+        "videos": [
+            {
+                "id": "mergevid001",
+                "kind": "youtube#video",
+                "title": "My latest field test",
+                "description": "Complete Viltrox autofocus and image-quality review.",
+                "statistics": {"viewCount": 100},
+            },
+            {
+                "id": "viral000001",
+                "kind": "youtube#video",
+                "title": "General camera news",
+                "statistics": {
+                    "viewCount": 10_000_000,
+                    "likeCount": 500_000,
+                    "commentCount": 100_000,
+                },
+            },
+        ]
+    }
+    durable_rows = [
+        {
+            "evidence_id": 905,
+            "evidence_type": "video",
+            "platform": "youtube",
+            "title": "My latest field test",
+            "content_url": "https://www.youtube.com/watch?v=mergevid001",
+            "view_count": 50,
+        }
+    ]
+    monkeypatch.setattr(
+        gemini_single_kol_preflight.kol_pool,
+        "get_item",
+        lambda *_args, **_kwargs: {
+            "item": public_item,
+            "_raw_platform_data_for_derivation": raw,
+        },
+    )
+    monkeypatch.setattr(
+        gemini_single_kol_preflight.kol_pool,
+        "_video_evidence_for_kol",
+        lambda *_args, **_kwargs: durable_rows,
+    )
+    monkeypatch.setattr(
+        gemini_single_kol_preflight.llm_gateway,
+        "budget_preflight",
+        _fake_budget,
+    )
+
+    payload = gemini_single_kol_preflight.build_kol_pool_gemini_preflight(123)
+
+    assert payload["candidate_strategy"]["candidate_count"] == 2
+    assert payload["top_candidate"]["post_uid"] == "mergevid001"
+    assert payload["top_candidate"]["source_kind"] == "vkpi_kol_video_evidence"
+    assert payload["top_candidate"]["merged_source_kinds"] == [
+        "vkpi_kol_video_evidence",
+        "vkpi_kol_pool.raw_platform_data",
+    ]
+    assert "viltrox_text_match" in payload["top_candidate"]["reasons"]
 
 
 def test_gemini_single_kol_preflight_acceptance_script_is_readonly(monkeypatch) -> None:
@@ -253,7 +401,7 @@ def test_gemini_single_kol_preflight_acceptance_script_is_readonly(monkeypatch) 
                 "budget_preflight_readonly": True,
             },
             "candidate_strategy": {"candidate_count": 1},
-            "top_candidate": {"video_url": "https://www.youtube.com/watch?v=top123456"},
+            "top_candidate": {"video_url": "https://www.youtube.com/watch?v=top12345678"},
             "url_readiness": {"valid_video_url": True, "provider_path": "youtube_direct_url_preflight"},
             "budget_preflight": {"provider_gate_reason": "force_offline"},
             "go_no_go": {"ready_for_manual_live_test": False, "blocked_reason": "provider_gate:force_offline"},
@@ -273,7 +421,7 @@ def test_gemini_single_kol_preflight_acceptance_script_is_readonly(monkeypatch) 
 
 
 def test_gemini_single_kol_live_run_blocks_without_execute(monkeypatch) -> None:
-    raw = {"videos": [{"id": "top123456", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+    raw = {"videos": [{"id": "top12345678", "kind": "youtube#video", "title": "Viltrox lens review"}]}
     monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item(raw)})
     monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget_allowed)
     called = {"n": 0}
@@ -299,7 +447,7 @@ def test_gemini_single_kol_live_run_blocks_without_execute(monkeypatch) -> None:
 
 
 def test_gemini_single_kol_live_run_blocks_when_budget_blocks(monkeypatch) -> None:
-    raw = {"videos": [{"id": "top123456", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+    raw = {"videos": [{"id": "top12345678", "kind": "youtube#video", "title": "Viltrox lens review"}]}
     monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item(raw)})
     monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget)
     called = {"n": 0}
@@ -324,32 +472,54 @@ def test_gemini_single_kol_live_run_blocks_when_budget_blocks(monkeypatch) -> No
     assert called["n"] == 0
 
 
-def test_gemini_single_kol_live_run_requires_explicit_flags_and_records_ledger(monkeypatch) -> None:
-    raw = {"videos": [{"id": "top123456", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+def test_gemini_single_kol_live_run_uses_final_v1_p4_context_and_single_accounting(monkeypatch) -> None:
+    from app.services.ai.analyzers import gemini_video
+
+    raw = {"videos": [{"id": "top12345678", "kind": "youtube#video", "title": "Viltrox lens review"}]}
     monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item(raw)})
     monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget_allowed)
-    recorded = {"payload": None}
+    wrapper_record_calls: list[dict] = []
     calls = {"n": 0}
 
-    async def fake_analyzer(url: str, title: str, handle: str) -> dict:
+    async def fake_analyzer(url: str, title: str, handle: str, **kwargs) -> dict:
         calls["n"] += 1
-        assert url == "https://www.youtube.com/watch?v=top123456"
+        assert url == "https://www.youtube.com/watch?v=top12345678"
         assert title == "Viltrox lens review"
         assert handle == "creatorone"
-        return {"analyzed": True, "method": "gemini_direct_test", "quality_overall": 7}
+        assert kwargs["schema_version"] == "final_v1"
+        assert kwargs["final_v1_models"] == list(DEFAULT_FINAL_V1_CHAIN)
+        llm_context = kwargs["llm_context"]
+        assert llm_context["purpose"] == "p4_gemini_single_kol"
+        assert llm_context["cost_tag"] == gemini_single_kol_preflight.GEMINI_SINGLE_KOL_SCOPE
+        assert llm_context["metadata"]["task_binding"] == "audit_video_analysis"
+        assert llm_context["metadata"]["phase"] == "video_analysis"
+        assert llm_context["metadata"]["schema_version"] == "final_v1"
+        return {
+            "analyzed": True,
+            "method": "gemini_direct_test",
+            "quality_overall": 7,
+            "cost_authority": gemini_single_kol_preflight.STRICT_GOOGLE_COST_AUTHORITY,
+            "llm_attempts": [
+                {
+                    "authority": gemini_single_kol_preflight.STRICT_GOOGLE_COST_AUTHORITY,
+                    "state": "settled",
+                    "actual_cost_usd": 0.0042,
+                }
+            ],
+        }
 
     def fake_record_cost(**kwargs) -> dict:
-        recorded["payload"] = kwargs
+        wrapper_record_calls.append(kwargs)
         return {"recorded": True, "scope": kwargs.get("scope"), "cost_usd": kwargs.get("cost_usd")}
 
-    monkeypatch.setattr(gemini_single_kol_preflight.budget_guard, "record_cost", fake_record_cost)
+    monkeypatch.setattr(budget_guard, "record_cost", fake_record_cost)
+    monkeypatch.setattr(gemini_video, "analyze_youtube_with_gemini", fake_analyzer)
 
     payload = asyncio.run(
         gemini_single_kol_preflight.run_kol_pool_gemini_single(
             123,
             execute=True,
             allow_provider_calls=True,
-            analyzer=fake_analyzer,
         )
     )
 
@@ -361,12 +531,103 @@ def test_gemini_single_kol_live_run_requires_explicit_flags_and_records_ledger(m
     assert payload["ledger_write_db"] is True
     assert payload["checks"]["provider_call_was_explicit"] is True
     assert payload["checks"]["ledger_recorded"] is True
-    assert recorded["payload"]["scope"] == gemini_single_kol_preflight.GEMINI_SINGLE_KOL_SCOPE
-    assert recorded["payload"]["ai_provider"] == "gemini"
+    assert payload["checks"]["single_accounting_authority"] is True
+    assert payload["checks"]["wrapper_cost_recorded"] is False
+    assert payload["ledger"]["settled_attempt_count"] == 1
+    assert payload["ledger"]["actual_cost_usd"] == pytest.approx(0.0042)
+    assert wrapper_record_calls == []
+
+
+def test_gemini_single_kol_custom_three_arg_analyzer_stays_compatible_without_false_ledger(monkeypatch) -> None:
+    raw = {"videos": [{"id": "top12345678", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+    monkeypatch.setattr(
+        gemini_single_kol_preflight.kol_pool,
+        "get_item",
+        lambda *_args, **_kwargs: {"item": _fake_item(raw)},
+    )
+    monkeypatch.setattr(
+        gemini_single_kol_preflight.llm_gateway,
+        "budget_preflight",
+        _fake_budget_allowed,
+    )
+    calls: list[tuple[str, str, str]] = []
+
+    async def custom_analyzer(url: str, title: str, handle: str) -> dict:
+        calls.append((url, title, handle))
+        return {
+            "analyzed": False,
+            "method": "custom_three_arg_analyzer",
+            "cost_authority": gemini_single_kol_preflight.STRICT_GOOGLE_COST_AUTHORITY,
+            "llm_attempts": [],
+            "error": "no_provider_attempt",
+        }
+
+    payload = asyncio.run(
+        gemini_single_kol_preflight.run_kol_pool_gemini_single(
+            123,
+            execute=True,
+            allow_provider_calls=True,
+            analyzer=custom_analyzer,
+        )
+    )
+
+    assert calls == [
+        (
+            "https://www.youtube.com/watch?v=top12345678",
+            "Viltrox lens review",
+            "creatorone",
+        )
+    ]
+    assert payload["executed"] is True
+    assert payload["execution_status"] == "provider_error"
+    assert payload["ledger_write_db"] is False
+    assert payload["write_db"] is False
+    assert payload["ledger"]["recorded"] is False
+    assert payload["ledger"]["authoritative"] is False
+    assert payload["checks"]["ledger_recorded"] is False
+
+
+def test_strict_ledger_summary_rejects_attempt_missing_authority() -> None:
+    ledger = gemini_single_kol_preflight._strict_ledger_summary(
+        {
+            "cost_authority": gemini_single_kol_preflight.STRICT_GOOGLE_COST_AUTHORITY,
+            "llm_attempts": [
+                {"state": "settled", "actual_cost_usd": 0.0042},
+                {
+                    "authority": gemini_single_kol_preflight.STRICT_GOOGLE_COST_AUTHORITY,
+                    "state": "settled",
+                    "actual_cost_usd": 0.0031,
+                },
+            ],
+        }
+    )
+
+    assert ledger["authoritative"] is False
+    assert ledger["recorded"] is False
+
+
+def test_strict_ledger_summary_counts_released_reservation_as_ledger_write() -> None:
+    ledger = gemini_single_kol_preflight._strict_ledger_summary(
+        {
+            "cost_authority": gemini_single_kol_preflight.STRICT_GOOGLE_COST_AUTHORITY,
+            "llm_attempts": [
+                {
+                    "authority": gemini_single_kol_preflight.STRICT_GOOGLE_COST_AUTHORITY,
+                    "state": "released",
+                    "actual_cost_usd": None,
+                }
+            ],
+        }
+    )
+
+    assert ledger["authoritative"] is True
+    assert ledger["recorded"] is True
+    assert ledger["released_attempt_count"] == 1
+    assert ledger["actual_cost_usd"] == 0.0
 
 
 def test_gemini_go_no_go_holds_when_budget_blocks(monkeypatch) -> None:
-    raw = {"videos": [{"id": "top123456", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+    raw = {"videos": [{"id": "top12345678", "kind": "youtube#video", "title": "Viltrox lens review"}]}
     monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item(raw)})
     monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget)
 
@@ -394,7 +655,7 @@ def test_gemini_go_no_go_rejects_kol_without_video(monkeypatch) -> None:
 
 
 def test_gemini_go_no_go_allows_manual_single_call_when_ready(monkeypatch) -> None:
-    raw = {"videos": [{"id": "top123456", "kind": "youtube#video", "title": "Viltrox lens review"}]}
+    raw = {"videos": [{"id": "top12345678", "kind": "youtube#video", "title": "Viltrox lens review"}]}
     monkeypatch.setattr(gemini_single_kol_preflight.kol_pool, "get_item", lambda *_args, **_kwargs: {"item": _fake_item(raw)})
     monkeypatch.setattr(gemini_single_kol_preflight.llm_gateway, "budget_preflight", _fake_budget_allowed)
 
@@ -433,7 +694,7 @@ def test_gemini_go_no_go_acceptance_script_is_readonly(monkeypatch) -> None:
                 "candidate_count": 1,
                 "valid_video_url": True,
                 "provider_path": "youtube_direct_url_preflight",
-                "top_video_url": "https://www.youtube.com/watch?v=top123456",
+                "top_video_url": "https://www.youtube.com/watch?v=top12345678",
                 "provider_gate_reason": "force_offline",
                 "ready_for_manual_live_test": False,
             },

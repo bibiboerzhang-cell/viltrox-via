@@ -10,7 +10,10 @@ import os
 import re
 from typing import Any
 
-from app.domains.kol.discovery_account_identity import exact_brand_handle_confirmed
+from app.domains.kol.discovery_account_identity import (
+    brand_and_official_share_identity_field,
+    exact_brand_handle_confirmed,
+)
 
 
 _EXCLUDED_REGION_RE = re.compile(
@@ -232,19 +235,6 @@ def _brand_identity_hit(item: dict[str, Any], brand: str, keywords: list[str]) -
     return False
 
 
-def _official_account_signal(item: dict[str, Any]) -> bool:
-    """High-confidence official signal; one weak ``we/our`` phrase is insufficient."""
-    identity = " ".join(
-        str(item.get(k) or "") for k in ("handle", "channel_name", "display_name", "username")
-    ).lower()
-    if "official" in identity:
-        return True
-    bio = str(item.get("bio") or item.get("description") or "").lower()
-    # One strong phrase, or three weak phrases without personal voice.  A lone
-    # "we provide" is common in affiliate/reviewer bios and is not ownership.
-    return _corporate_voice_bio(bio)
-
-
 def _competitor_brand_official(
     item: dict[str, Any],
     *,
@@ -268,12 +258,29 @@ def _competitor_brand_official(
             and exact_brand_handle_confirmed(item, brand_norm)
         ):
             return brand
-    if not _official_account_signal(item):
-        return ""
+    bio = str(item.get("bio") or item.get("description") or "").strip().lower()
+    corporate_voice = _corporate_voice_bio(bio)
+    personal_voice = bool(_PERSONAL_VOICE_RE.search(bio))
     for brand, keywords in brands.items():
         if not _brand_identity_hit(item, brand, keywords):
             continue
-        return brand
+        # A corporate self-description is independent ownership evidence, so
+        # it may corroborate a brand hit from any identity field.
+        if corporate_voice:
+            return brand
+        # Personal first-person language rebuts an otherwise ambiguous
+        # ``official`` marker.  Fail open: the discovery wall should only drop
+        # accounts whose brand ownership is actually established.
+        if personal_voice:
+            continue
+        # Without a corporate bio, brand and ``official`` must be co-located in
+        # the same identity field.  Never combine a creator's personal handle
+        # with a reviewed brand mentioned in their display name.
+        if brand_and_official_share_identity_field(
+            item,
+            brand_match=lambda identity: _brand_identity_hit(identity, brand, keywords),
+        ):
+            return brand
     return ""
 
 
