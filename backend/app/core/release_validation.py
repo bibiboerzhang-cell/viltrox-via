@@ -166,6 +166,8 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
         "/api/admin/vkpi/my-kol/board-ext/recent-videos",
         # 2026-08-23 C5 观察清单总览:本人分组汇总,纯 SELECT 零 provider。
         "/api/admin/vkpi/my-kol/watch-overview",
+        # 2026-08-24 单品播放总览:links×tracking×snapshots 纯 SELECT 聚合,零 provider。
+        "/api/admin/vkpi/my-kol/sku-play-overview",
         "/api/admin/vkpi/lens-insights/summary",
         "/api/admin/vkpi/official-matrix",
         "/api/admin/vkpi/ops/cost-ledger",
