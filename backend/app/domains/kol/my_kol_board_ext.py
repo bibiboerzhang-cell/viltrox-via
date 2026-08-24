@@ -586,18 +586,9 @@ def _recent_videos(
     before: tuple[str | None, int] | None = None,
     days: int = 0, kol_pool_id: int = 0, since: datetime | None = None,
 ) -> dict[str, Any]:
-    """8. recent_videos:收藏集最近采集视频墙 + 五档 Viltrox 证据 + 任务态 + 游标。
+    """收藏集内容墙；按发布时间游标分页并投影五档证据、任务态和缩略图。
 
-    收藏集(收藏 ∪ 共享,scope 同族)evidence 最近 N 条,按发布时间(缺则回退
-    posted_at/采集时间)降序;LIMIT 双层封顶(SQL 多取 1 行只用于 has_more 判定)。
-    缩略图三件套复用创意库同一条毒缓存自愈链(creative_segments._thumbnail_fields:
-    cached → raw → youtube 派生,失败占位 SVG 不算真图,三路皆无 = null 前端诚实
-    占位)。view_count 保持 NULL 原样透出(未实测 ≠ 0 播放);列白名单,零明文联系
-    方式零 fit 分。
-
-    ``before``=(published_at, evidence_id) keyset 游标(my_kol_video_recovery.decode_cursor
-    产物):只取严格排在该键之后的行;None=首页,SQL 游标段短路为真,与旧调用同行。
-    行级 tasks / viltrox_modalities 由 recovery.attach_task_states 统一投影(零 LLM)。
+    URL 变体读端折叠；view_count 的 NULL、列白名单及零 LLM/零写边界不变。
     """
     from app.domains.content.creative_segments import _thumbnail_fields
 
