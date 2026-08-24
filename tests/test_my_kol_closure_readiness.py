@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from app.api.routers import vkpi_my_kol
+from app.core import release_validation
 from app.domains.kol import my_kol_closure_readiness
 
 
@@ -171,3 +172,11 @@ def test_closure_readiness_router_enforces_employee_own_scope(monkeypatch) -> No
     assert result["scope"]["staff_scope_id"] == 7
     assert result["scope_context"]["scope_mode"] == "own"
     assert result["scope_context"]["requested_staff_id"] == 8
+
+
+def test_closure_readiness_is_allowed_during_read_only_release_validation() -> None:
+    path = "/api/admin/vkpi/my-kol/closure-readiness"
+
+    assert release_validation.release_validation_request_allowed("GET", path)
+    assert release_validation.release_validation_request_allowed("HEAD", path)
+    assert not release_validation.release_validation_request_allowed("POST", path)
