@@ -306,6 +306,20 @@ def list_sessions(
         conn,
         [int(session["id"]) for session in sessions if _int_or_none(session.get("id"))],
     )
+    # Keep the compact list on the same read-time truth as history and detail.
+    # Stored session payloads are audit snapshots: an old ``queued`` downstream
+    # marker must not outlive a terminal job or already-materialized preview in
+    # the user-visible progress projection.  Both helpers are SELECT-only and
+    # mutate only these response dictionaries; real queued/running job rows
+    # remain active and are never inferred terminal from age alone.
+    all_session_items = [item for items in grouped.values() for item in items]
+    _refresh_enrichment_queue_states(conn, all_session_items)
+    hydrate_session_item_previews(
+        conn,
+        all_session_items,
+        enrichment_status_fn=_enrichment_preview_status,
+        logger=logger,
+    )
     worker_health = observe_worker_health(conn)
     for session in sessions:
         session_items = canonicalize_session_creator_items(

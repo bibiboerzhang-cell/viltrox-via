@@ -9,6 +9,10 @@ from app.domains.kol.search_sessions_serde import (
     _compact_contact_preview,
     _loads,
     _text,
+    project_public_profile_text,
+)
+from app.domains.kol.search_sessions_identity_projection import (
+    POOL_ACCOUNT_GATE_BIO_FIELD,
 )
 
 
@@ -38,12 +42,48 @@ def _creator_aliases_without_pool(item: dict[str, Any]) -> set[str]:
     }
 
 
+def _pool_profile_identity_matches(
+    item: dict[str, Any],
+    pool_profile: dict[str, Any],
+) -> bool:
+    """Accept the explicit Pool link unless supplied native identity conflicts."""
+    from app.domains.kol.identity import canonical_creator_aliases
+
+    session_aliases = _creator_aliases_without_pool(item)
+    if not session_aliases:
+        return True
+    pool_aliases = {
+        alias
+        for alias in canonical_creator_aliases(pool_profile)
+        if not alias.startswith("pool:")
+    }
+    return bool(session_aliases.intersection(pool_aliases))
+
+
+def _apply_pool_bio_for_account_gate(
+    item: dict[str, Any],
+    pool_profile: dict[str, Any],
+) -> bool:
+    """Attach bounded transient evidence only when the session snapshot lacks it."""
+    if _text(item.get("item_type")) not in _SESSION_CREATOR_ITEM_TYPES:
+        return False
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else None
+    if payload is None or _text(payload.get("bio") or payload.get("description")):
+        return False
+    if not _pool_profile_identity_matches(item, pool_profile):
+        return False
+    public_bio = project_public_profile_text(pool_profile.get("bio"), limit=1000)
+    if not public_bio:
+        return False
+    payload[POOL_ACCOUNT_GATE_BIO_FIELD] = public_bio
+    return True
+
+
 def _apply_durable_pool_avatar_fallback(
     item: dict[str, Any],
     pool_profile: dict[str, Any],
 ) -> bool:
     """Project a linked Pool avatar into an absent/dead or prewarmed slot."""
-    from app.domains.kol.identity import canonical_creator_aliases
     from app.domains.kol.pool_read_projection import project_pool_avatar
     from app.services.intelligence.account_scan_helpers import _avatar_url_policy
 
@@ -72,15 +112,9 @@ def _apply_durable_pool_avatar_fallback(
     if current_ephemeral and pool_source != "local_prewarm_cache":
         return False
 
-    session_aliases = _creator_aliases_without_pool(item)
-    pool_aliases = {
-        alias
-        for alias in canonical_creator_aliases(pool_profile)
-        if not alias.startswith("pool:")
-    }
     # ``kol_pool_id`` is the exact row link. If the session also carries
     # creator identity, require it to agree with that row before projecting.
-    if session_aliases and not session_aliases.intersection(pool_aliases):
+    if not _pool_profile_identity_matches(item, pool_profile):
         return False
 
     payload["avatar_url"] = pool_url
@@ -158,7 +192,7 @@ def hydrate_session_item_previews(
                 f"""
                 SELECT id, display_name, email, contact_channels,
                        other_contacts_json, audience_estimated_json,
-                       platform, handle, profile_url, avatar_url,
+                       platform, handle, profile_url, avatar_url, bio,
                        raw_platform_data
                 FROM vkpi_kol_pool
                 WHERE id IN ({placeholders})
@@ -172,6 +206,7 @@ def hydrate_session_item_previews(
                     continue
                 profile = profiles.get(int(kol_pool_id), {})
                 _apply_durable_pool_avatar_fallback(item, profile)
+                _apply_pool_bio_for_account_gate(item, profile)
                 display_name = str(profile.get("display_name") or "").strip()
                 if display_name and not str(item["payload"].get("display_name") or "").strip():
                     item["payload"]["display_name"] = display_name

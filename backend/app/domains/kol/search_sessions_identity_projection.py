@@ -29,6 +29,11 @@ _CREATOR_ITEM_PREFERENCE = {
     "new_creator": 1,
 }
 
+# Read-time-only evidence projected from the exact linked Pool row.  This key
+# must be consumed and removed by the account display gate before any session
+# item is returned to a caller; historical payloads are never rewritten.
+POOL_ACCOUNT_GATE_BIO_FIELD = "_pool_account_gate_bio"
+
 
 def _session_creator_probe(item: dict[str, Any]) -> dict[str, Any]:
     payload = _dict(item.get("payload"))
@@ -40,6 +45,11 @@ def _session_creator_probe(item: dict[str, Any]) -> dict[str, Any]:
         "profile_url": payload.get("profile_url") or item.get("source_url"),
         "source_url": item.get("source_url") or payload.get("source_url"),
         "historical_match": payload.get("historical_match"),
+        "bio": (
+            payload.get("bio")
+            or payload.get("description")
+            or payload.get(POOL_ACCOUNT_GATE_BIO_FIELD)
+        ),
     }
 
 

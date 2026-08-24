@@ -187,7 +187,7 @@ def test_scoped_session_reader_returns_not_found_for_other_staff(monkeypatch: py
     assert conn.calls[0][1] == (44, 7)
 
 
-def test_history_and_detail_refresh_done_audience_job_without_claiming_empty_success(
+def test_list_history_and_detail_refresh_done_audience_job_without_claiming_empty_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_row = _session_row(
@@ -222,8 +222,9 @@ def test_history_and_detail_refresh_done_audience_job_without_claiming_empty_suc
     }
 
     class _ProjectionConn:
-        def __init__(self) -> None:
+        def __init__(self, *, job_status: str = "done") -> None:
             self.calls: list[str] = []
+            self.job_status = job_status
 
         def execute(self, sql: str, _params: tuple[Any, ...] = ()) -> _Result:
             compact = " ".join(sql.split())
@@ -233,7 +234,7 @@ def test_history_and_detail_refresh_done_audience_job_without_claiming_empty_suc
             if "FROM vkpi_kol_search_session_items" in compact:
                 return _Result(rows=[dict(item_row)])
             if "FROM apify_jobs" in compact:
-                return _Result(rows=[{"id": 77, "status": "done"}])
+                return _Result(rows=[{"id": 77, "status": self.job_status}])
             if "FROM vkpi_kol_pool" in compact:
                 return _Result(
                     rows=[
@@ -278,6 +279,10 @@ def test_history_and_detail_refresh_done_audience_job_without_claiming_empty_suc
     monkeypatch.setattr(search_sessions, "get_conn", lambda: detail_conn)
     detail = search_sessions.get_session(44)
 
+    list_conn = _ProjectionConn()
+    monkeypatch.setattr(search_sessions, "get_conn", lambda: list_conn)
+    listed = search_sessions.list_sessions(scope_to_staff=False)["items"][0]
+
     history_conn = _ProjectionConn()
     history = search_sessions_history.list_history(
         scope_to_staff=False,
@@ -287,10 +292,29 @@ def test_history_and_detail_refresh_done_audience_job_without_claiming_empty_suc
     )["items"][0]
 
     detail_contract = detail["progress_contract"]
+    list_contract = listed["progress_contract"]
     history_contract = history["progress_contract"]
-    assert detail_contract["state"] == history_contract["state"] == "partial"
-    assert detail_contract["queued_units"] == history_contract["queued_units"] == 0
+    assert detail_contract["state"] == list_contract["state"] == history_contract["state"] == "partial"
+    assert detail_contract["queued_units"] == list_contract["queued_units"] == history_contract["queued_units"] == 0
     assert detail_contract["stages"]["audience"]["successful"] == 0
+    assert list_contract["stages"]["audience"]["counts"]["partial"] == 1
     assert history_contract["stages"]["audience"]["counts"]["partial"] == 1
     assert any("FROM apify_jobs" in sql for sql in detail_conn.calls)
+    assert any("FROM apify_jobs" in sql for sql in list_conn.calls)
     assert any("FROM apify_jobs" in sql for sql in history_conn.calls)
+
+    # The list refresh is conservative: live/retryable queue truth wins over
+    # stored terminal session status, so real work is never folded to partial.
+    running_conn = _ProjectionConn(job_status="running")
+    monkeypatch.setattr(search_sessions, "get_conn", lambda: running_conn)
+    running = search_sessions.list_sessions(scope_to_staff=False)["items"][0]["progress_contract"]
+    assert running["state"] == "running"
+    assert running["running_units"] == 1
+    assert running["requested_tasks_terminal"] is False
+
+    queued_conn = _ProjectionConn(job_status="queued")
+    monkeypatch.setattr(search_sessions, "get_conn", lambda: queued_conn)
+    queued = search_sessions.list_sessions(scope_to_staff=False)["items"][0]["progress_contract"]
+    assert queued["state"] == "queued"
+    assert queued["queued_units"] == 1
+    assert queued["requested_tasks_terminal"] is False

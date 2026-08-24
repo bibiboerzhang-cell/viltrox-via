@@ -22,6 +22,9 @@ from app.domains.kol.search_sessions_items import (
     _session_creator_probe,
     canonicalize_session_creator_items,
 )
+from app.domains.kol.search_sessions_identity_projection import (
+    POOL_ACCOUNT_GATE_BIO_FIELD,
+)
 from app.domains.kol.search_sessions_previews import (
     hydrate_session_item_previews,
 )
@@ -69,10 +72,18 @@ def apply_discovery_account_display_gate(
         "basis": "conservative_discovery_account_gate_v1",
     }
     for item in items:
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else None
+        # Consume before any other projection so the transient cannot escape
+        # through non-creator or exceptional branches. Re-attach it only to the
+        # local probe used by the gate, never to the response item.
+        pool_bio = payload.pop(POOL_ACCOUNT_GATE_BIO_FIELD, None) if payload is not None else None
+        probe = _session_creator_probe(item)
+        if pool_bio and not _text(probe.get("bio") or probe.get("description")):
+            probe["bio"] = pool_bio
         if _text(item.get("item_type")) not in _CREATOR_ITEM_LANES:
             kept.append(item)
             continue
-        verdict = discovery_account_gate_verdict(_session_creator_probe(item))
+        verdict = discovery_account_gate_verdict(probe)
         if verdict not in {"own_brand", "brand_official"}:
             kept.append(item)
             continue

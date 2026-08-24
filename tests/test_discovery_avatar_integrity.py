@@ -9,8 +9,12 @@ from app.domains.kol import search_sessions, search_sessions_history
 from app.domains.kol import pool_read_projection
 from app.domains.kol.search_sessions_items import canonicalize_session_creator_items
 from app.domains.kol.search_sessions_previews import (
+    _pool_profile_identity_matches,
     hydrate_session_item_avatar_fallbacks,
     hydrate_session_item_previews,
+)
+from app.domains.kol.search_sessions_identity_projection import (
+    POOL_ACCOUNT_GATE_BIO_FIELD,
 )
 from app.services.intelligence import account_scan_helpers
 from app.services.intelligence import account_scan_service
@@ -350,6 +354,202 @@ def test_historical_session_reprojects_exact_prewarmed_pool_avatars_without_cros
         for sql, _params in conn.calls
         for keyword in ("UPDATE", "DELETE", "INSERT")
     )
+
+
+def test_pool_read_projection_identity_match_is_exact_and_fail_closed_on_conflict() -> None:
+    pool_profile = {
+        "id": 5256,
+        "platform": "instagram",
+        "handle": "tamronmalaysia",
+        "profile_url": "https://instagram.com/tamronmalaysia/",
+    }
+
+    assert _pool_profile_identity_matches(
+        {
+            "kol_pool_id": 5256,
+            "payload": {
+                "platform": "instagram",
+                "handle": "tamronmalaysia",
+                "profile_url": "https://instagram.com/tamronmalaysia/",
+            },
+        },
+        pool_profile,
+    )
+    assert not _pool_profile_identity_matches(
+        {
+            "kol_pool_id": 5256,
+            "payload": {
+                "platform": "instagram",
+                "handle": "different.person",
+                "profile_url": "https://instagram.com/different.person/",
+            },
+        },
+        pool_profile,
+    )
+    # An explicit Pool id remains sufficient when the old snapshot carries no
+    # native identity at all; no alias is invented or matched heuristically.
+    assert _pool_profile_identity_matches(
+        {"kol_pool_id": 5256, "payload": {}},
+        pool_profile,
+    )
+
+
+def test_historical_session_uses_exact_pool_bio_only_for_conservative_account_gate() -> None:
+    official_bio = (
+        "Use the hashtag #tamronlensmy and tag us @tamronmalaysia to be featured!"
+    )
+
+    class _Rows:
+        def fetchall(self):
+            return [
+                {
+                    "id": 5256,
+                    "platform": "instagram",
+                    "handle": "tamronmalaysia",
+                    "display_name": "Tamron Malaysia",
+                    "profile_url": "https://instagram.com/tamronmalaysia/",
+                    "avatar_url": "",
+                    "bio": official_bio,
+                    "email": "",
+                    "contact_channels": {},
+                    "other_contacts_json": [],
+                    "audience_estimated_json": {},
+                    "raw_platform_data": {},
+                },
+                {
+                    "id": 6001,
+                    "platform": "instagram",
+                    "handle": "alexreviews",
+                    "display_name": "Alex Reviews",
+                    "profile_url": "https://instagram.com/alexreviews/",
+                    "avatar_url": "",
+                    "bio": "Independent photographer reviewing Tamron lenses.",
+                    "email": "",
+                    "contact_channels": {},
+                    "other_contacts_json": [],
+                    "audience_estimated_json": {},
+                    "raw_platform_data": {},
+                },
+            ]
+
+    class _Conn:
+        def __init__(self) -> None:
+            self.sql: list[str] = []
+
+        def execute(self, sql, _params=()):
+            self.sql.append(" ".join(sql.split()))
+            return _Rows()
+
+    class _Logger:
+        @staticmethod
+        def warning(*_args, **_kwargs) -> None:
+            raise AssertionError("pool profile projection query should not fail")
+
+    items = [
+        {
+            "id": 4059,
+            "kol_pool_id": 5256,
+            "item_type": "new_creator",
+            "payload": {
+                "platform": "instagram",
+                "handle": "tamronmalaysia",
+                "display_name": "Tamron Malaysia",
+                "profile_url": "https://instagram.com/tamronmalaysia/",
+            },
+        },
+        {
+            "id": 4060,
+            "kol_pool_id": 6001,
+            "item_type": "new_creator",
+            "payload": {
+                "platform": "instagram",
+                "handle": "alexreviews",
+                "display_name": "Alex Reviews",
+                "profile_url": "https://instagram.com/alexreviews/",
+            },
+        },
+        {
+            "id": 4061,
+            "kol_pool_id": 5256,
+            "item_type": "new_creator",
+            "payload": {
+                "platform": "instagram",
+                "handle": "different.person",
+                "display_name": "Different Person",
+                "profile_url": "https://instagram.com/different.person/",
+            },
+        },
+        {
+            "id": 4062,
+            "kol_pool_id": 5256,
+            "item_type": "new_creator",
+            "payload": {
+                "platform": "instagram",
+                "handle": "tamronmalaysia",
+                "display_name": "Tamron Malaysia",
+                "profile_url": "https://instagram.com/tamronmalaysia/",
+                "bio": "I'm an independent photographer reviewing lenses.",
+            },
+        },
+    ]
+    conn = _Conn()
+
+    hydrate_session_item_previews(
+        conn,
+        items,
+        enrichment_status_fn=lambda *_args, **_kwargs: "missing",
+        logger=_Logger(),
+    )
+
+    assert items[0]["payload"][POOL_ACCOUNT_GATE_BIO_FIELD] == official_bio
+    assert items[1]["payload"][POOL_ACCOUNT_GATE_BIO_FIELD].startswith("Independent")
+    assert POOL_ACCOUNT_GATE_BIO_FIELD not in items[2]["payload"]
+    assert POOL_ACCOUNT_GATE_BIO_FIELD not in items[3]["payload"]
+
+    kept, counts = search_sessions_history.apply_discovery_account_display_gate(items)
+
+    assert [item["id"] for item in kept] == [4060, 4061, 4062]
+    assert counts["excluded_brand_official"] == 1
+    assert counts["excluded_total"] == 1
+    assert all(
+        POOL_ACCOUNT_GATE_BIO_FIELD not in item["payload"]
+        for item in kept
+    )
+    assert items[3]["payload"]["bio"].startswith("I'm an independent")
+    assert not any(
+        keyword in sql
+        for sql in conn.sql
+        for keyword in ("UPDATE", "DELETE", "INSERT")
+    )
+
+
+def test_transient_pool_bio_is_consumed_on_non_creator_and_gate_error(monkeypatch) -> None:
+    non_creator = {
+        "id": 1,
+        "item_type": "video_evidence",
+        "payload": {POOL_ACCOUNT_GATE_BIO_FIELD: "internal-only"},
+    }
+    kept, _counts = search_sessions_history.apply_discovery_account_display_gate(
+        [non_creator]
+    )
+    assert kept == [{"id": 1, "item_type": "video_evidence", "payload": {}}]
+
+    creator = {
+        "id": 2,
+        "item_type": "new_creator",
+        "payload": {POOL_ACCOUNT_GATE_BIO_FIELD: "internal-only"},
+    }
+
+    def fail_gate(_probe):
+        raise RuntimeError("synthetic gate error")
+
+    monkeypatch.setattr(
+        "app.domains.kol.discovery_filters.discovery_account_gate_verdict",
+        fail_gate,
+    )
+    with pytest.raises(RuntimeError, match="synthetic gate error"):
+        search_sessions_history.apply_discovery_account_display_gate([creator])
+    assert POOL_ACCOUNT_GATE_BIO_FIELD not in creator["payload"]
 
 
 def test_session_detail_and_history_list_share_pool_avatar_fallback(monkeypatch) -> None:
