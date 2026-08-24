@@ -239,6 +239,7 @@ def _worker_env(monkeypatch: pytest.MonkeyPatch, raw: dict[str, Any]) -> Any:
     monkeypatch.setattr(gemini, "_sync_deep_analysis_result_from_cache", lambda *_a, **_k: {"status": "ready", "kol_pool_id": 88})
     monkeypatch.setattr(gemini, "_enqueue_account_dossier_extract_after_final_v1", lambda *_a, **_k: None)
     monkeypatch.setattr(gemini, "_enqueue_content_fit_after_final_v1", lambda *_a, **_k: None)
+    monkeypatch.setattr(gemini, "extract_lens_evidence_after_final_v1", lambda **_k: None)
     monkeypatch.setattr(gemini, "_search_session_analysis_summary_from_result", lambda **_k: None)
     monkeypatch.setattr(gemini, "_sync_search_session_job", lambda *_a, **_k: None)
     return gemini
@@ -257,6 +258,12 @@ def test_worker_success_path_writes_stage_timings_to_cache_and_job_diagnostics(m
         "youtube_direct": {"attempted": True, "success": True, "attempts": [], "fallback_reason": ""},
     }
     gemini = _worker_env(monkeypatch, raw)
+    lens_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        gemini,
+        "extract_lens_evidence_after_final_v1",
+        lambda **kwargs: lens_calls.append(kwargs),
+    )
     conn = _DiagConn()
     gemini._process_gemini_video(
         conn,
@@ -280,6 +287,13 @@ def test_worker_success_path_writes_stage_timings_to_cache_and_job_diagnostics(m
     assert {"persist", "followups", "analyzer_subprocess"} <= set(diag["stage_timings_ms"])
     assert diag["youtube_direct"]["success"] is True
     assert diag_updates[0][1] == 99
+    assert lens_calls == [
+        {
+            "cache_id": 4242,
+            "derive_method": "video_analysis_final_v1",
+            "job_id": 99,
+        }
+    ]
 
 
 def test_worker_failure_path_persists_direct_and_download_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
