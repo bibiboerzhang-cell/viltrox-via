@@ -68,6 +68,10 @@ from app.domains.market.ai_today_evidence import (
     _video_content_origin,
     recent_recommended_lines as _recent_recommended_lines,
 )
+from app.domains.market.ai_today_json_guard import (
+    extract_json_object,
+    generate_json_with_parse_retry,
+)
 
 logger = get_logger(__name__)
 
@@ -147,29 +151,10 @@ def _read_hot_brands(ops_dir: str = "runtime/ops", limit: int = 6) -> list[str]:
 
 
 def _parse_json(raw: str) -> dict[str, Any]:
-    text = str(raw or "").strip()
-    if text.startswith("```"):
-        text = text.split("```", 2)[1] if "```" in text[3:] else text[3:]
-        if text.lstrip().startswith("json"):
-            text = text.lstrip()[4:]
-    try:
-        obj = json.loads(text.strip())
-        if isinstance(obj, dict):
-            return obj
-    except Exception:
-        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-        pass
-    # 兜底:Gemini 接地输出常带引用/前后说明文字 → 抽取第一个 { 到最后一个 } 再解析。
-    try:
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            obj = json.loads(text[start : end + 1])
-            return obj if isinstance(obj, dict) else {}
-    except Exception:
-        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-        pass
-    return {}
+    """LLM JSON 抽取(围栏/前后缀剥离 + 2026-07-16 修复梯 + 截断收口;实现见 ai_today_json_guard)。
+
+    行为兼容旧版:永不抛、失败/非 dict 返回 {};official_daily_report 也 import 本函数。"""
+    return extract_json_object(raw, surface="ai_today")
 
 
 def _ensure_schema() -> None:
@@ -264,7 +249,10 @@ def _generate(
             tools=[types.Tool(google_search=types.GoogleSearch())],
             http_options=types.HttpOptions(
                 timeout=int(_PROVIDER_TIMEOUT_SECONDS * 1000),
-                retry_options=types.HttpRetryOptions(attempts=1),
+                # F4(2026-08-24 审计):attempts=1 时代理隧道抖动一发即灭整日
+                # (08-19/08-22 两次 ~10.9s RemoteProtocolError 直接断供雷达/AI Today)。
+                # SDK 层放 3 发传输重试;预算注:重试只在传输失败(未产出计费响应)时发生。
+                retry_options=types.HttpRetryOptions(attempts=3),
             ),
         )
         response = llm_production.generate_google_content(
@@ -455,21 +443,33 @@ def _run_ai_today_evidence_strategy(
 ) -> dict[str, Any]:
     try:
         from app.platform import llm_production
-        result = llm_production.generate_json(
-            _ai_today_strategy_prompt(discovery, sources, recent_products=_recent_recommended_lines()),
-            provider="anthropic", model=_AI_TODAY_STRATEGY_MODEL,
-            purpose=_AI_TODAY_STRATEGY_PURPOSE,
-            max_output_tokens=_AI_TODAY_STRATEGY_OUTPUT_TOKENS,
-            cost_tag=_BUDGET_SCOPE,
-            required_keys=("headline", "shooting_plans", "hot_topics", "product_recommendations",
-                           "content_recommendations", "video_recommendations"),
-            validator=_gateway_strategy_validator,
-            deadline_seconds=_STRATEGY_TIMEOUT_SECONDS,
-            metadata={"surface": "ai_today", "pipeline": _AI_TODAY_PIPELINE_VERSION,
-                      "pipeline_stage": "evidence_strategy", "evidence_only": True,
-                      "task_binding": "ai_today_evidence_strategy",
-                      "source_count": len(sources), "request_content_recorded": False},
-            require_configured_budget=True,
+        prompt = _ai_today_strategy_prompt(
+            discovery, sources, recent_products=_recent_recommended_lines()
+        )
+
+        def _invoke_strategy() -> dict[str, Any]:
+            return llm_production.generate_json(
+                prompt,
+                provider="anthropic", model=_AI_TODAY_STRATEGY_MODEL,
+                purpose=_AI_TODAY_STRATEGY_PURPOSE,
+                max_output_tokens=_AI_TODAY_STRATEGY_OUTPUT_TOKENS,
+                cost_tag=_BUDGET_SCOPE,
+                required_keys=("headline", "shooting_plans", "hot_topics", "product_recommendations",
+                               "content_recommendations", "video_recommendations"),
+                validator=_gateway_strategy_validator,
+                deadline_seconds=_STRATEGY_TIMEOUT_SECONDS,
+                metadata={"surface": "ai_today", "pipeline": _AI_TODAY_PIPELINE_VERSION,
+                          "pipeline_stage": "evidence_strategy", "evidence_only": True,
+                          "task_binding": "ai_today_evidence_strategy",
+                          "source_count": len(sources), "request_content_recorded": False},
+                require_configured_budget=True,
+            )
+
+        # F7(2026-08-24 审计):opus 输出偶发截断(08-24 "Unterminated string" @char 1919,
+        # 整晚产出被丢、降级 rule fallback)。网关按红线不外泄坏 JSON 原文,调用侧无从重修 →
+        # 解析失败封顶重打 1 次(共 2 发,预算闸逐发照常);其余失败不重打。
+        result, _parse_attempts = generate_json_with_parse_retry(
+            _invoke_strategy, surface=_AI_TODAY_STRATEGY_PURPOSE, max_attempts=2
         )
     except Exception as exc:
         logger.warning("ai_today.evidence_strategy_unavailable",

@@ -21,7 +21,8 @@ from app.core.config import CLAUDE_MODEL, GEMINI_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.costs import budget_guard
-from app.domains.market.ai_today import _parse_json  # 复用加固的 JSON 抽取
+from app.domains.market.ai_today import _parse_json  # 复用加固的 JSON 抽取(2026-07-16 修复梯 + 截断收口)
+from app.domains.market.ai_today_json_guard import generate_json_with_parse_retry
 from app.platform import llm_production
 
 logger = get_logger(__name__)
@@ -230,8 +231,8 @@ def _generate(prompt: str) -> tuple[str, str]:
         ("google", GEMINI_MODEL, "gemini", "explicit_fallback"),
     )
     for provider, model, label, stage in candidates:
-        try:
-            result = llm_production.generate_json(
+        def _invoke(provider: str = provider, model: str = model, stage: str = stage) -> dict[str, Any]:
+            return llm_production.generate_json(
                 prompt,
                 provider=provider,
                 model=model,
@@ -246,6 +247,14 @@ def _generate(prompt: str) -> tuple[str, str]:
                     "model_stage": stage,
                     "explicit_cross_model_fallback": stage == "explicit_fallback",
                 },
+            )
+
+        try:
+            # F9(2026-08-24 审计):长期 ~7% parse_failure 且 attempt_total=1 →
+            # 花了钱输出直接作废。同模型解析失败封顶重打 1 次(共 2 发,预算闸逐发照常);
+            # 其余失败(预算/绑定/校验)不重打,跨模型显式兜底顺序照旧。
+            result, attempt_total = generate_json_with_parse_retry(
+                _invoke, surface="official_daily_report", max_attempts=2
             )
         except Exception:
             logger.warning(
@@ -268,6 +277,7 @@ def _generate(prompt: str) -> tuple[str, str]:
                 "provider": provider,
                 "model": model,
                 "stage": stage,
+                "attempt_total": attempt_total,
                 "status": (
                     str(result.get("status") or "failed")
                     if isinstance(result, dict)

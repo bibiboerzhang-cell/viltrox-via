@@ -286,18 +286,50 @@ async def job_vkpi_brief_agent():
 
 async def job_vkpi_competitor_radar():
     """竞品新品雷达(每早·Gemini+Google 接地):查海外竞品新镜头/相机发布 + 对 Viltrox 影响。
-    红线:走预算闸(cron:competitor_radar)+ 代理;一天一次。config-gate(scheduler_tasks.vkpi_competitor_radar)。"""
+    红线:走预算闸(cron:competitor_radar)+ 代理;一天一次。config-gate(scheduler_tasks.vkpi_competitor_radar)。
+    F4(2026-08-24 审计):provider 异常/ungrounded → in-job 封顶重试(5s/15s 退避,
+    见 competitor_radar_resilience;每发仍 fail-closed,预算注 ≤2 加发/日 ≈ $0.11)。"""
     if not _scheduler_task_enabled("vkpi_competitor_radar"):
         return
     try:
         import asyncio
-        from app.domains.market import competitor_radar
+        from app.domains.market import competitor_radar_resilience
 
-        result = await asyncio.to_thread(competitor_radar.generate_competitor_radar)
+        result = await asyncio.to_thread(
+            competitor_radar_resilience.generate_competitor_radar_with_retries
+        )
         logger.info("scheduler.vkpi_competitor_radar", extra={"result": result})
         _record_scheduler_result("vkpi_competitor_radar", result)
     except Exception as exc:
         logger.exception("scheduler.vkpi_competitor_radar_failed")
+        _record_scheduler_run("vkpi_competitor_radar", ok=False, error=str(exc)[:240])
+
+
+async def job_vkpi_competitor_radar_catchup():
+    """竞品雷达补漏班车(12:00 中国;F5,2026-08-24 审计):早班 06:30 长期 ~40-50% 天级断档
+    (08-09/10、13/14、18/19、22/23 均缺快照)且无 run-now 兜底。先查当日快照(与写端同一
+    SQL CURRENT_DATE 口径)——已有即如实跳过零成本;缺失才重跑同一 fail-closed 生成链
+    (带 in-job 重试)。共用 config-gate scheduler_tasks.vkpi_competitor_radar(与早班同开同关,
+    不新增注册表行);真跑的结果仍回写 vkpi_competitor_radar 任务行,catchup 自身 id 在
+    scheduler_tasks 无行 → record_run UPDATE 空转(行缺静默跳过,S2 口径),不会炸台账。"""
+    if not _scheduler_task_enabled("vkpi_competitor_radar"):
+        return
+    try:
+        import asyncio
+        from app.domains.market import competitor_radar_resilience
+
+        if await asyncio.to_thread(competitor_radar_resilience.today_snapshot_exists):
+            # 槽位标 skipped:补漏没真跑,包装层不为 catchup id 伪造运行记录。
+            _note_run_record_slot("vkpi_competitor_radar_catchup", "skipped")
+            logger.info("scheduler.vkpi_competitor_radar_catchup_skipped_snapshot_exists")
+            return
+        result = await asyncio.to_thread(
+            competitor_radar_resilience.generate_competitor_radar_with_retries
+        )
+        logger.info("scheduler.vkpi_competitor_radar_catchup", extra={"result": result})
+        _record_scheduler_result("vkpi_competitor_radar", result)
+    except Exception as exc:
+        logger.exception("scheduler.vkpi_competitor_radar_catchup_failed")
         _record_scheduler_run("vkpi_competitor_radar", ok=False, error=str(exc)[:240])
 
 

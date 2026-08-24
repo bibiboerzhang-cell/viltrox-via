@@ -78,7 +78,10 @@ from app.services.scheduler.jobs import (
 )
 from app.services.scheduler.jobs_forecast_batch import job_vkpi_forecast_batch_issue
 from app.services.scheduler.jobs_registry_gated import gated_daily_job as _gated_daily_job
-from app.services.scheduler.jobs_tasks_intel import with_scheduler_run_record
+from app.services.scheduler.jobs_tasks_intel import (
+    job_vkpi_competitor_radar_catchup,
+    with_scheduler_run_record,
+)
 from app.services.scheduler.jobs_weekly_eval import job_vkpi_weekly_offline_eval
 
 # S 车道哨兵(contract S→L):模块由 S 车道提供,这里只按字符串路径延迟 import;模块缺失时注册一个
@@ -536,6 +539,17 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
         name="Competitor product radar (06:30 China, Gemini+Google grounding, budget-gated)",
         max_instances=1,
         coalesce=True,
+    )
+    # ── 竞品雷达补漏班车(12:00 中国;F5,2026-08-24 审计)── 与早班共用 config-gate
+    # scheduler_tasks.vkpi_competitor_radar;当日快照已存在 → 记日志跳过零成本(见 job 注释)。
+    _scheduler.add_job(
+        job_vkpi_competitor_radar_catchup,
+        trigger=CronTrigger(hour=12, minute=0, timezone=CHINA_TZ),
+        id="vkpi_competitor_radar_catchup",
+        name="Competitor radar catch-up (12:00 China, no-op when today's snapshot exists)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
     # ── Signals & Alerts 每日刷新(07:00 中国·allowlisted 有界抓取·无 LLM)── 先于 AI Today,喂新鲜热点。
     _scheduler.add_job(
