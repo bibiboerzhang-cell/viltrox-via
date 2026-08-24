@@ -447,6 +447,39 @@ def test_unified_official_gate_blocks_confirmed_accounts_but_not_reviewers(
         )
 
 
+def test_brand_gate_skips_full_lexicon_scan_when_ownership_signals_are_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Personal/neutral creators cannot satisfy the remaining official proof path."""
+    brands = {"feelworld": ["feelworld"], "tamron": ["tamron"]}
+    monkeypatch.setattr(
+        discovery_filters,
+        "_brand_identity_hit",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("brand keyword scan must be skipped without ownership proof")
+        ),
+    )
+
+    assert discovery_filters._competitor_brand_official(
+        {
+            "platform": "youtube",
+            "handle": "alex-films",
+            "display_name": "Alex reviews FEELWORLD",
+            "bio": "I'm an independent filmmaker and camera reviewer.",
+        },
+        competitor_brands=brands,
+    ) == ""
+    assert discovery_filters._competitor_brand_official(
+        {
+            "platform": "youtube",
+            "handle": "alex-films",
+            "display_name": "Alex Films",
+            "bio": "Camera tests and filmmaking tutorials.",
+        },
+        competitor_brands=brands,
+    ) == ""
+
+
 def test_discovery_funnel_reports_unique_creator_denominator() -> None:
     class FunnelConn:
         def execute(self, sql: str, _params: tuple[Any, ...] = ()) -> _Rows:

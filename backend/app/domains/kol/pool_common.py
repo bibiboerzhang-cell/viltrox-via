@@ -46,11 +46,11 @@ CONTACT_METADATA_KEYS = {
     "reason",
 }
 logger = get_logger(__name__)
-# d8:列表 payload 的两根现成水管(只读相关子查询;前端 KolPoolAllModal『已分析』chip
-# 早已按 llm_deep_analysis_count 等键设计,此前后端从未供给——饿死字段)。
+# 列表主 SQL 只投影指标真值回执所需的有界 raw。视频/深析计数由
+# pool_read_projection_evidence.project_pool_list_items 对当页 canonical
+# folded scope 做两条批量 GROUP BY 并覆盖。此处曾每行再跑两条相关
+# COUNT 子计划，既浪费又不包含 duplicate scope，删除后响应契约不变。
 KOL_POOL_LIST_EXTRA_SELECT = (
-    "(SELECT COUNT(*) FROM vkpi_kol_video_evidence ve WHERE ve.kol_pool_id = vkpi_kol_pool.id) AS video_evidence_count, "
-    "(SELECT COUNT(*) FROM vkpi_kol_llm_deep_analysis_results ld WHERE ld.kol_pool_id = vkpi_kol_pool.id) AS llm_deep_analysis_count, "
     "CASE WHEN followers = 0 OR avg_views = 0 OR avg_likes = 0 OR avg_comments = 0 OR engagement_rate = 0 "
     "THEN raw_platform_data ELSE NULL END AS metric_truth_raw_platform_data"
 )

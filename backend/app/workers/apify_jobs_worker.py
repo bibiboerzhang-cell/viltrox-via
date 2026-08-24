@@ -442,9 +442,9 @@ def _finish_skipped(
 
 
 def _block_job(conn: psycopg.Connection[Any], job_id: int, reason: str, detail: dict[str, Any] | None = None) -> None:
-    from app.workers.apify_jobs_worker_paid_scope import block_reason_category
+    from app.workers.apify_jobs_worker_paid_scope import block_reason_category, canonical_block_payload
 
-    payload = {"reason": reason, **(detail or {})}
+    payload = canonical_block_payload(reason, detail)
     # last_error_category 按 reason 分类(authorization/budget/model/provider;其余仍 'blocked'),
     # 让进度端点能把"授权围栏缺失"与"排队中"区分开(2026-08-22 复盘)。
     with conn.transaction():

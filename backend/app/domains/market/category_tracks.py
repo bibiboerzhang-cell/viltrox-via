@@ -37,9 +37,9 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.market.category_tracks_matching import prepare_keyword_groups
 
 logger = get_logger(__name__)
-
 TRACKS_METHOD = "category_tracks_v0"
 
 # ── 窗口常量(决定性;写进 basis)────────────────────────────────────────
@@ -442,9 +442,9 @@ def _prep_docs(docs: list[dict[str, Any]], mid_day: date) -> list[dict[str, Any]
 
 def _prep_evidence(rows: list[dict[str, Any]], mid_day: date, start_day: date, end_day: date) -> list[dict[str, Any]]:
     """证据行预处理:标题 blob + 焦段集合 + Viltrox 旗标 + 竞品命中品牌集 + 半窗归属。"""
-    vocab = _competitor_vocab()
-    viltrox_terms = _viltrox_terms()
-    match = _matcher()
+    brand_keywords, viltrox_terms, match = prepare_keyword_groups(
+        _competitor_vocab(), _viltrox_terms()
+    )
     out = []
     for row in rows:
         day = _parse_day(row.get("pub_day"))
@@ -455,8 +455,8 @@ def _prep_evidence(rows: list[dict[str, Any]], mid_day: date, start_day: date, e
         if not blob.strip():
             continue
         brand_hits = {
-            brand for brand, meta in vocab.items()
-            if any(match(blob, kw) for kw in (meta.get("keywords") or []))
+            brand for brand, keywords in brand_keywords.items()
+            if any(match(blob, keyword) for keyword in keywords)
         }
         out.append({
             "title": title,

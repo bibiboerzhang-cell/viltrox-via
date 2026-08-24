@@ -57,6 +57,16 @@ def block_reason_category(reason: Any) -> str:
     return "blocked"
 
 
+def canonical_block_payload(reason: str, detail: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Keep the worker reason authoritative and retain any provider reason."""
+    payload = dict(detail or {})
+    upstream_reason = str(payload.get("reason") or "").strip()
+    if upstream_reason and upstream_reason != reason and not payload.get("reason_detail"):
+        payload["reason_detail"] = upstream_reason
+    payload["reason"] = reason
+    return payload
+
+
 def revalidate_paid_job_scope(
     payload: dict[str, Any],
     job_type: str,

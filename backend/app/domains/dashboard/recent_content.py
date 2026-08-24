@@ -43,16 +43,15 @@ def _dashboard_int(value: Any) -> int:
 
 def _dashboard_official_matrix_summary(limit: int = 20) -> dict[str, Any]:
     try:
-        matrix = channels.official_account_matrix(limit=limit)
+        matrix = channels.official_account_matrix_summary(limit=limit)
     except Exception:
         logger.debug("Failed to read official matrix summary", exc_info=True)
         return {}
-    platforms = matrix.get("platforms") if isinstance(matrix.get("platforms"), list) else []
     return {
         "account_count": _dashboard_int(matrix.get("account_count")),
         "post_count": _dashboard_int(matrix.get("post_count")),
         "total_views": _dashboard_int(matrix.get("total_views")),
-        "platform_count": len(platforms),
+        "platform_count": _dashboard_int(matrix.get("platform_count")),
         "source": "official-channel-matrix",
     }
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 from app.domains.channels.common import *
 from app.domains.channels.crud import *
 from app.domains.channels.official import *
+from app.domains.channels.official_summary import *
 from app.domains.channels.posts import *
 from app.domains.channels.post_metrics import *
 from app.domains.channels.refill import *

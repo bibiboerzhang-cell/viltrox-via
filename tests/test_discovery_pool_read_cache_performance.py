@@ -68,6 +68,13 @@ def test_global_postgres_selection_never_selects_raw_provider_payload() -> None:
     clear_pool_read_selection_cache()
 
 
+def test_pool_list_primary_select_has_no_per_row_evidence_counts() -> None:
+    extra = pool_common.KOL_POOL_LIST_EXTRA_SELECT.lower()
+    assert "select count" not in extra
+    assert "video_evidence_count" not in extra
+    assert "llm_deep_analysis_count" not in extra
+    assert "metric_truth_raw_platform_data" in extra
+
 def test_shared_pool_cache_redacts_ephemeral_url_and_restores_request_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -10,6 +10,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.workers import apify_jobs_worker_ytdlp_fallback as fb
 
 APIFY_FAIL = {
@@ -179,4 +181,79 @@ def test_wiring_source_contract():
     gemini = workers.joinpath("apify_jobs_worker_gemini.py").read_text(encoding="utf-8")
     assert 'resolved.get("cache_hit") or resolved.get("local_path_ready")' in gemini
     # 复审 HIGH 契约:media_kind 图章只盖 yt-dlp 定论,IG 老口径 blocked 不落章。
-    assert 'if resolved.get("no_video_confirmed"):\n                        _persist_image_post_verdict(conn, evidence)' in gemini
+    assert 'if resolved.get("no_video_confirmed") is True:\n                    _persist_image_post_verdict(conn, evidence)' in gemini
+    assert 'resolved.get("scraped_ok")' not in gemini.split('if not resolved.get("ok"):', 1)[1].split('if resolved.get("cache_hit")', 1)[0]
+
+
+def test_worker_keeps_generic_instagram_no_formats_in_retry_flow(monkeypatch):
+    """通用 no-formats 不是图文定论：调用方必须抛回既有重试/triage，不落 blocked。"""
+    from app.workers import apify_jobs_worker_gemini as gemini
+
+    blocked: list[tuple[Any, ...]] = []
+    persisted: list[int] = []
+    monkeypatch.setattr(
+        gemini,
+        "_load_video_evidence",
+        lambda *_args: {
+            "id": 5722,
+            "kol_pool_id": 88,
+            "content_url": "https://www.instagram.com/p/DZUm9lEDWaD/",
+            "title": "demo",
+        },
+    )
+    monkeypatch.setattr(
+        gemini,
+        "_resolve_cached_or_provider_video",
+        lambda *_args: dict(APIFY_FAIL, ytdlp={"error": "no_video_formats_inconclusive"}),
+    )
+    monkeypatch.setattr(gemini, "_block_job", lambda *args: blocked.append(args))
+    monkeypatch.setattr(gemini, "_persist_image_post_verdict", lambda _conn, evidence: persisted.append(int(evidence["id"])))
+
+    with pytest.raises(RuntimeError, match="scraped_no_downloadable_url"):
+        gemini._process_gemini_video(
+            object(),
+            {"id": 9001},
+            {"target_type": "video", "target_id": "5722", "derive_method": "video_analysis_final_v1"},
+            0.01,
+        )
+
+    assert blocked == []
+    assert persisted == []
+
+
+def test_worker_terminal_blocks_only_confirmed_image_post(monkeypatch):
+    from app.workers import apify_jobs_worker_gemini as gemini
+
+    blocked: list[tuple[Any, ...]] = []
+    persisted: list[int] = []
+    monkeypatch.setattr(
+        gemini,
+        "_load_video_evidence",
+        lambda *_args: {
+            "id": 5722,
+            "kol_pool_id": 88,
+            "content_url": "https://www.instagram.com/p/DZUm9lEDWaD/",
+            "title": "demo",
+        },
+    )
+    monkeypatch.setattr(
+        gemini,
+        "_resolve_cached_or_provider_video",
+        lambda *_args: {
+            **APIFY_FAIL,
+            "no_video_confirmed": True,
+            "reason": "media_resolve_failed:instagram:image_post_no_video_confirmed",
+        },
+    )
+    monkeypatch.setattr(gemini, "_block_job", lambda *args: blocked.append(args))
+    monkeypatch.setattr(gemini, "_persist_image_post_verdict", lambda _conn, evidence: persisted.append(int(evidence["id"])))
+
+    gemini._process_gemini_video(
+        object(),
+        {"id": 9002},
+        {"target_type": "video", "target_id": "5722", "derive_method": "video_analysis_final_v1"},
+        0.01,
+    )
+
+    assert persisted == [5722]
+    assert blocked[0][2] == "image_post_no_video"

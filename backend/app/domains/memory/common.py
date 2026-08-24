@@ -296,6 +296,46 @@ def _readiness_gate(key: str, actual: int, expected_min: int, severity: str) -> 
 
 
 def _market_signal_counts() -> dict[str, int]:
+    # PostgreSQL production keeps ``fact_json`` as TEXT for SQLite parity.  The
+    # original implementation fetched every market-signal document and parsed
+    # it in Python; a few thousand official-content facts made a read-only P4
+    # readiness check spend more than a second in json.loads before every GTM
+    # preview.  Aggregate the same fallback expression in the database when
+    # PostgreSQL can validate JSON safely.  SQLite retains the portable Python
+    # path below, so hermetic tests and legacy snapshots keep identical
+    # semantics.  This remains one SELECT and never repairs malformed rows.
+    from app.db.connection import is_postgres_runtime
+
+    if is_postgres_runtime():
+        rows = get_conn().execute(
+            """
+            SELECT
+              COALESCE(
+                NULLIF(
+                  BTRIM(
+                    CASE
+                      WHEN fact_json IS JSON OBJECT
+                      THEN CAST(fact_json AS JSONB)->>'signal_type'
+                      ELSE NULL
+                    END
+                  ),
+                  ''
+                ),
+                BTRIM(SPLIT_PART(COALESCE(fact_key, ''), ':', 1))
+              ) AS signal_type,
+              COUNT(*) AS n
+            FROM vkpi_memory_facts
+            WHERE fact_type='market_signal'
+            GROUP BY 1
+            ORDER BY 1
+            """
+        ).fetchall()
+        return {
+            _text(row["signal_type"]): int(row["n"])
+            for row in rows
+            if _text(row["signal_type"])
+        }
+
     counts: Counter[str] = Counter()
     rows = get_conn().execute(
         """

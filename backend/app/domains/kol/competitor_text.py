@@ -77,9 +77,13 @@ def load_competitor_brands() -> dict[str, dict[str, Any]]:
     return result or DEFAULT_BRANDS
 
 
-def _keyword_match(text: str, keyword: str) -> bool:
-    lowered = text.lower()
-    key = keyword.lower().strip()
+def _keyword_match_prepared(lowered: str, key: str) -> bool:
+    """Match inputs that the caller has already lower-cased and stripped.
+
+    Category Tracks compares every evidence title with the same vocabulary and
+    therefore prepares both sides once outside its row-by-keyword loop.  Keep
+    the public helper below as the normalization boundary for all other callers.
+    """
     if not key:
         return False
     if key.startswith("@") or " " in key:
@@ -101,6 +105,12 @@ def _keyword_match(text: str, keyword: str) -> bool:
         if left_ok and right_ok:
             return True
         start = index + 1
+
+
+def _keyword_match(text: str, keyword: str) -> bool:
+    lowered = text.lower()
+    key = keyword.lower().strip()
+    return _keyword_match_prepared(lowered, key)
 
 
 def _first_text(*values: Any) -> str:

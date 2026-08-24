@@ -76,10 +76,8 @@ ALL_SQL_CONSTANTS = (
     ext.CONTACT_COVERAGE_SQL,
     ext.VIEWS_TOP_SQL,
     ext.RECENT_VIDEOS_SQL,
-    ext.V_CONTENT_SQL,
-    ext.V_KOL_COUNT_SQL,
-    ext.V_KOL_IDS_SQL,
-    ext.V_KOL_TIERS_SQL,
+    ext.V_CONTENT_SUMMARY_SQL,
+    ext.V_CONTENT_SUMMARY_MATERIALIZED_SQL,
 )
 ALL_SQL = "\n".join(ALL_SQL_CONSTANTS)
 
@@ -106,6 +104,11 @@ def _frozen(monkeypatch):
     monkeypatch.setattr(ext, "_now_utc", lambda: FROZEN_NOW)
 
 
+def _v_summary_rows(summary, ids=(None,)):
+    """Single-query wire shape: one repeated summary row per returned KOL id."""
+    return [{**summary, "kol_pool_id": kid} for kid in ids]
+
+
 # ── 1. SQL 常量静态审查 ─────────────────────────────────────────────────
 
 
@@ -114,7 +117,7 @@ def test_sql_constants_parameterized_with_limit_pushdown():
         ext.POOL_FOLLOWERS_DAY_SQL, ext.NEW_VIDEOS_DAY_SQL, ext.OFFICIAL_DAY_SQL,
         ext.FUNNEL_SQL, ext.PLATFORM_DIST_SQL, ext.FIT_DIST_SQL,
         ext.CONTACT_TYPES_SQL, ext.VIEWS_TOP_SQL, ext.RECENT_VIDEOS_SQL,
-        ext.V_KOL_IDS_SQL,
+        ext.V_CONTENT_SUMMARY_SQL,
     )
     for sql in limited:
         assert "LIMIT ?" in sql
@@ -129,10 +132,7 @@ def test_my_kol_content_queries_use_favorite_or_authorized_share_scope():
         ext.KOL_VIEWS_CURRENT_SQL,
         ext.CONTACT_TYPES_SQL,
         ext.VIEWS_TOP_SQL,
-        ext.V_CONTENT_SQL,
-        ext.V_KOL_COUNT_SQL,
-        ext.V_KOL_IDS_SQL,
-        ext.V_KOL_TIERS_SQL,
+        ext.V_CONTENT_SUMMARY_SQL,
     )
     for sql in scoped_sqls:
         assert "vkpi_kol_pool_favorites" in sql
@@ -147,19 +147,12 @@ def test_sql_compat_redlines_no_percent_no_like():
     """compat 红线:SQL 字符串零字面 percent;标题命中走 strpos 参数化,不用 LIKE。"""
     assert "%" not in ALL_SQL
     assert " LIKE " not in f" {ALL_SQL.upper()} ".replace("\n", " ")
-    assert "strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?)" in ext.V_CONTENT_SQL
-    assert "strpos" in ext.V_KOL_COUNT_SQL
+    assert "strpos(lower(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, '')), ?)" in ext.V_CONTENT_SUMMARY_SQL
 
 
 def test_v_content_queries_share_latest_ready_five_tier_cte():
     """聚合、名单与 recent 共用同一 CTE，只消费 final_v1 结构化证据。"""
-    queries = (
-        ext.RECENT_VIDEOS_SQL,
-        ext.V_CONTENT_SQL,
-        ext.V_KOL_COUNT_SQL,
-        ext.V_KOL_IDS_SQL,
-        ext.V_KOL_TIERS_SQL,
-    )
+    queries = (ext.RECENT_VIDEOS_SQL, ext.V_CONTENT_SUMMARY_SQL)
     for sql in queries:
         assert sql.startswith(ext.V_CONTENT_CLASSIFIED_CTE)
         assert "c.target_type = 'video'" in sql
@@ -173,6 +166,51 @@ def test_v_content_queries_share_latest_ready_five_tier_cte():
     assert ext.VILTROX_TITLE_TOKENS == ("viltrox", "唯卓仕", "唯卓")
     assert ext.V_CONTENT_CLASSIFIED_CTE.count("final_v1_competitor_mentions") == 1
     assert "c.result AS" not in ext.RECENT_VIDEOS_SQL
+
+
+def test_v_content_summary_materializes_once_with_sqlite_compat_twin():
+    """PostgreSQL materializes the scoped classification; sqlite keeps the same query shape."""
+    pg = ext.V_CONTENT_SUMMARY_MATERIALIZED_SQL
+    sqlite = ext.V_CONTENT_SUMMARY_SQL
+    assert "scoped_v_content AS MATERIALIZED (" in pg
+    assert "scoped_v_content AS (" in sqlite
+    assert "MATERIALIZED" not in sqlite
+    assert pg.replace("MATERIALIZED ", "") == sqlite
+    for sql in (pg, sqlite):
+        assert sql.count("WITH v_content_signals AS") == 1
+        assert sql.count("FROM scoped_v_content") == 2
+        assert "COUNT(DISTINCT CASE WHEN v_tier IN" in sql
+        assert "LEFT JOIN v_content_ids ids ON TRUE" in sql
+        assert "ORDER BY ids.kol_pool_id" in sql
+
+
+def test_postgres_v_content_uses_materialized_query_once(monkeypatch):
+    """Runtime abstraction selects PostgreSQL MATERIALIZED without changing params/output."""
+    _frozen(monkeypatch)
+
+    class PostgresCompatConnection(_FakeConn):
+        pass
+
+    summary = {
+        "total_evidence": 3, "cooperation": 1, "analysis_confirmed": 1,
+        "title_mention": 0, "not_related": 1, "undetermined": 0,
+        "v_kol_count": 2, "cooperation_kols": 1,
+        "analysis_confirmed_kols": 1, "title_mention_kols": 0,
+        "not_related_kols": 1, "undetermined_kols": 0,
+    }
+    conn = PostgresCompatConnection(routes={
+        ext.V_CONTENT_SUMMARY_MATERIALIZED_SQL: _v_summary_rows(summary, (7, 42)),
+    })
+    vc = ext._v_content(conn, 7684)
+    assert vc["tiers"] == {
+        "cooperation": 1, "analysis_confirmed": 1, "title_mention": 0,
+        "not_related": 1, "undetermined": 0,
+    }
+    assert vc["v_kol_ids"] == [7, 42]
+    assert conn.calls == [(ext.V_CONTENT_SUMMARY_MATERIALIZED_SQL, (
+        *ext.VILTROX_TITLE_TOKENS, 7684, 7684, 7684, 7684,
+        ext.V_KOL_IDS_ROWS_LIMIT,
+    ))]
 
 
 def test_sql_never_selects_private_columns():
@@ -549,15 +587,14 @@ def test_recent_videos_limit_double_capped_scope_pushed_and_empty_reason(monkeyp
 def test_v_content_tiers_math(monkeypatch):
     _frozen(monkeypatch)
     conn = _FakeConn(routes={
-        ext.V_CONTENT_SQL: [
-            {"total_evidence": 2769, "cooperation": 806,
-             "analysis_confirmed": 400, "title_mention": 273,
-             "not_related": 500, "undetermined": 790},
-        ],
-        ext.V_KOL_COUNT_SQL: [{"n": 387}],
-        ext.V_KOL_TIERS_SQL: [{"cooperation_kols": 210, "analysis_confirmed_kols": 140,
-                               "title_mention_kols": 120, "not_related_kols": 240,
-                               "undetermined_kols": 330}],
+        ext.V_CONTENT_SUMMARY_SQL: _v_summary_rows({
+            "total_evidence": 2769, "cooperation": 806,
+            "analysis_confirmed": 400, "title_mention": 273,
+            "not_related": 500, "undetermined": 790, "v_kol_count": 387,
+            "cooperation_kols": 210, "analysis_confirmed_kols": 140,
+            "title_mention_kols": 120, "not_related_kols": 240,
+            "undetermined_kols": 330,
+        }),
     })
     vc = _build(conn)["v_content"]
     assert vc["status"] == "ready"
@@ -578,28 +615,25 @@ def test_v_content_tiers_math(monkeypatch):
         "not_related_kols": 240,
         "undetermined_kols": 330,
     }
-    # 四条聚合/名单 SQL 都以相同标题词 + team collection scope 驱动共享 CTE。
-    by_sql = {sql: params for sql, params in conn.calls}
-    scoped = (*ext.VILTROX_TITLE_TOKENS, 0, 0, 0, 0)
-    assert by_sql[ext.V_CONTENT_SQL] == scoped
-    assert by_sql[ext.V_KOL_COUNT_SQL] == scoped
-    assert by_sql[ext.V_KOL_TIERS_SQL] == scoped
+    # 同一次查询传入标题词、team collection scope 和 2001 行读取封顶。
+    calls = [(sql, params) for sql, params in conn.calls if sql == ext.V_CONTENT_SUMMARY_SQL]
+    assert calls == [(ext.V_CONTENT_SUMMARY_SQL, (
+        *ext.VILTROX_TITLE_TOKENS, 0, 0, 0, 0, ext.V_KOL_IDS_ROWS_LIMIT,
+    ))]
 
 
 def test_v_kol_ids_dedup_sorted_and_consistent_with_count(monkeypatch):
     """行级名单:去重升序(mock 放水乱序带重复也稳);未截断时长度=v_kol_count。"""
     _frozen(monkeypatch)
+    summary = {
+        "total_evidence": 10, "cooperation": 4, "analysis_confirmed": 1,
+        "title_mention": 2, "not_related": 1, "undetermined": 2,
+        "v_kol_count": 4,
+    }
     conn = _FakeConn(routes={
-        ext.V_CONTENT_SQL: [
-            {"total_evidence": 10, "cooperation": 4, "analysis_confirmed": 1,
-             "title_mention": 2, "not_related": 1, "undetermined": 2},
-        ],
-        ext.V_KOL_COUNT_SQL: [{"n": 4}],
-        ext.V_KOL_IDS_SQL: [   # SQL 层被 mock 放水:乱序 + 重复 + 非法 0/None
-            {"kol_pool_id": 42}, {"kol_pool_id": 7}, {"kol_pool_id": 42},
-            {"kol_pool_id": 9001}, {"kol_pool_id": 0}, {"kol_pool_id": None},
-            {"kol_pool_id": 13},
-        ],
+        ext.V_CONTENT_SUMMARY_SQL: _v_summary_rows(
+            summary, (42, 7, 42, 9001, 0, None, 13),
+        ),
     })
     vc = _build(conn)["v_content"]
     assert vc["v_kol_ids"] == [7, 13, 42, 9001]        # 去重 + 升序,0/None 剔除
@@ -608,7 +642,7 @@ def test_v_kol_ids_dedup_sorted_and_consistent_with_count(monkeypatch):
     assert len(vc["v_kol_ids"]) == vc["v_kol_count"]    # 名单与 KOL 级计数一致
     # LIMIT 下推=封顶+1(多取 1 行如实检测截断),词元参数化
     by_sql = {sql: params for sql, params in conn.calls}
-    assert by_sql[ext.V_KOL_IDS_SQL] == (
+    assert by_sql[ext.V_CONTENT_SUMMARY_SQL] == (
         *ext.VILTROX_TITLE_TOKENS, 0, 0, 0, 0, ext.V_KOL_IDS_ROWS_LIMIT,
     )
     assert ext.V_KOL_IDS_ROWS_LIMIT == ext.V_KOL_IDS_MAX + 1
@@ -617,14 +651,16 @@ def test_v_kol_ids_dedup_sorted_and_consistent_with_count(monkeypatch):
 def test_v_kol_ids_capped_at_2000_with_truncated_note(monkeypatch):
     """封顶 2000:超出 → 切片 + truncated:true + note;v_kol_count 仍给全量真数。"""
     _frozen(monkeypatch)
-    over = [{"kol_pool_id": i} for i in range(1, ext.V_KOL_IDS_ROWS_LIMIT + 50)]
+    summary = {
+        "total_evidence": 5000, "cooperation": 2500, "analysis_confirmed": 0,
+        "title_mention": 0, "not_related": 1000, "undetermined": 1500,
+        "v_kol_count": 2050,
+    }
     conn = _FakeConn(routes={
-        ext.V_CONTENT_SQL: [
-            {"total_evidence": 5000, "cooperation": 2500, "analysis_confirmed": 0,
-             "title_mention": 0, "not_related": 1000, "undetermined": 1500},
-        ],
-        ext.V_KOL_COUNT_SQL: [{"n": 2050}],
-        ext.V_KOL_IDS_SQL: over,
+        # 仿真 SQL LIMIT 2001；更多行不应进入 Python 结果。
+        ext.V_CONTENT_SUMMARY_SQL: _v_summary_rows(
+            summary, range(1, ext.V_KOL_IDS_ROWS_LIMIT + 1),
+        ),
     })
     vc = _build(conn)["v_content"]
     assert ext.V_KOL_IDS_MAX == 2000
@@ -731,10 +767,12 @@ def test_staff_scope_params_pushed_down(monkeypatch):
     assert recent[3:7] == (7684, 7684, 7684, 7684)
     official = next(p for s, p in conn.calls if s == ext.OFFICIAL_DAY_SQL)
     assert official[:2] == (7684, 7684)
-    for sql in (ext.V_CONTENT_SQL, ext.V_KOL_COUNT_SQL, ext.V_KOL_IDS_SQL, ext.V_KOL_TIERS_SQL):
-        params = next(p for s, p in conn.calls if s == sql)
-        assert params[:3] == ext.VILTROX_TITLE_TOKENS
-        assert params[3:7] == (7684, 7684, 7684, 7684)
+    v_content_params = next(
+        p for s, p in conn.calls if s == ext.V_CONTENT_SUMMARY_SQL
+    )
+    assert v_content_params[:3] == ext.VILTROX_TITLE_TOKENS
+    assert v_content_params[3:7] == (7684, 7684, 7684, 7684)
+    assert v_content_params[7:] == (ext.V_KOL_IDS_ROWS_LIMIT,)
 
     conn_all = _FakeConn()
     _build(conn_all, sid=None)
@@ -777,38 +815,31 @@ def test_staff_a_b_content_metrics_are_isolated_while_global_fit_is_preserved(mo
         sid = staff_id(params)
         return [{"total": 2 if sid == 101 else 1, "covered": 1}]
 
-    def v_rollup(params: tuple):
+    def v_summary(params: tuple):
         sid = staff_id(params, 3)
-        return [{
+        summary = {
             "total_evidence": 2 if sid == 101 else 1,
             "cooperation": 1,
             "analysis_confirmed": 0,
             "title_mention": 0,
             "not_related": 0,
             "undetermined": 1 if sid == 101 else 0,
-        }]
-
-    def v_count(params: tuple):
-        return [{"n": 1 if staff_id(params, 3) in {101, 202} else 0}]
-
-    def v_ids(params: tuple):
-        return [{"kol_pool_id": 1001 if staff_id(params, 3) == 101 else 2002}]
-
-    def v_tiers(params: tuple):
-        staff_id(params, 3)
-        return [{"cooperation_kols": 1, "analysis_confirmed_kols": 0,
-                 "title_mention_kols": 0, "not_related_kols": 0,
-                 "undetermined_kols": 0}]
+            "v_kol_count": 1,
+            "cooperation_kols": 1,
+            "analysis_confirmed_kols": 0,
+            "title_mention_kols": 0,
+            "not_related_kols": 0,
+            "undetermined_kols": 0,
+        }
+        kid = 1001 if sid == 101 else 2002
+        return _v_summary_rows(summary, (kid,))
 
     routes = {
         ext.KOL_VIEWS_CURRENT_SQL: current_views,
         ext.VIEWS_TOP_SQL: views_top,
         ext.CONTACT_TYPES_SQL: contact_types,
         ext.CONTACT_COVERAGE_SQL: coverage,
-        ext.V_CONTENT_SQL: v_rollup,
-        ext.V_KOL_COUNT_SQL: v_count,
-        ext.V_KOL_IDS_SQL: v_ids,
-        ext.V_KOL_TIERS_SQL: v_tiers,
+        ext.V_CONTENT_SUMMARY_SQL: v_summary,
         ext.FIT_DIST_SQL: [{"bucket": 7, "n": 9}],
     }
     a = _build(_FakeConn(routes), sid=101)

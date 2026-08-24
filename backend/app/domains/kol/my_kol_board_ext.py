@@ -117,12 +117,10 @@ from app.domains.kol.my_kol_board_ext_sql import (  # noqa: F401 — 契约测�
     SERIES_MAX_DAYS,
     SERIES_ROWS_LIMIT,
     V_CONTENT_CLASSIFIED_CTE,
-    V_CONTENT_SQL,
-    V_KOL_COUNT_SQL,
+    V_CONTENT_SUMMARY_MATERIALIZED_SQL,
+    V_CONTENT_SUMMARY_SQL,
     V_KOL_IDS_MAX,
     V_KOL_IDS_ROWS_LIMIT,
-    V_KOL_IDS_SQL,
-    V_KOL_TIERS_SQL,
     VIEWS_TOP_LIMIT,
     VIEWS_TOP_SQL,
     VILTROX_TOKEN,
@@ -721,7 +719,13 @@ def _recent_videos(
 def _v_content(conn: Any, sid: int) -> dict[str, Any]:
     """7. v_content:收藏集五档证据 + 相关 KOL 汇总/名单(同一 CTE)。"""
     scoped_tokens = (*VILTROX_TITLE_TOKENS, *_scope_params(sid))
-    row = dict(conn.execute(V_CONTENT_SQL, scoped_tokens).fetchone() or {})
+    sql = (
+        V_CONTENT_SUMMARY_MATERIALIZED_SQL
+        if conn.__class__.__name__ == "PostgresCompatConnection"
+        else V_CONTENT_SUMMARY_SQL
+    )
+    rows = conn.execute(sql, (*scoped_tokens, V_KOL_IDS_ROWS_LIMIT)).fetchall()
+    row = dict(rows[0]) if rows else {}
     total = _int0(row.get("total_evidence"))
     cooperation = _int0(row.get("cooperation"))
     analysis_confirmed = _int0(row.get("analysis_confirmed"))
@@ -729,30 +733,22 @@ def _v_content(conn: Any, sid: int) -> dict[str, Any]:
     not_related = _int0(row.get("not_related"))
     undetermined = _int0(row.get("undetermined"))
     v_related_evidence = cooperation + analysis_confirmed + title_mention
-    kol_row = dict(conn.execute(V_KOL_COUNT_SQL, scoped_tokens).fetchone() or {})
-    tier_row = dict(conn.execute(V_KOL_TIERS_SQL, scoped_tokens).fetchone() or {})
-
     # 行级名单:SQL DISTINCT+升序+LIMIT 多取 1 行,Python 去重二保险 + 切片封顶;
     # 是否截断以「真取回超上限」如实判定,绝不拿 v_kol_count 反推。
-    id_rows = conn.execute(
-        V_KOL_IDS_SQL,
-        (*scoped_tokens, V_KOL_IDS_ROWS_LIMIT),
-    ).fetchall()
     seen: set[int] = set()
-    v_kol_ids: list[int] = []
-    for r in list(id_rows)[:V_KOL_IDS_ROWS_LIMIT]:
+    for r in list(rows)[:V_KOL_IDS_ROWS_LIMIT]:
         kid = _int0(dict(r).get("kol_pool_id"))
-        if kid > 0 and kid not in seen:
+        if kid > 0:
             seen.add(kid)
-            v_kol_ids.append(kid)
-    ids_truncated = len(v_kol_ids) > V_KOL_IDS_MAX
-    v_kol_ids = sorted(v_kol_ids[:V_KOL_IDS_MAX])
+    ordered_ids = sorted(seen)
+    ids_truncated = len(ordered_ids) > V_KOL_IDS_MAX
+    v_kol_ids = ordered_ids[:V_KOL_IDS_MAX]
 
     body: dict[str, Any] = {
         "status": "ready" if total else "empty",
         "total_evidence": total,
         "v_related_evidence": v_related_evidence,
-        "v_kol_count": _int0(kol_row.get("n")),
+        "v_kol_count": _int0(row.get("v_kol_count")),
         "v_kol_ids": v_kol_ids,
         "v_kol_ids_truncated": ids_truncated,
         "scope": _collection_scope_diagnostics(sid),
@@ -764,11 +760,11 @@ def _v_content(conn: Any, sid: int) -> dict[str, Any]:
             "undetermined": undetermined,
         },
         "tiers_by_kol": {
-            "cooperation_kols": _int0(tier_row.get("cooperation_kols")),
-            "analysis_confirmed_kols": _int0(tier_row.get("analysis_confirmed_kols")),
-            "title_mention_kols": _int0(tier_row.get("title_mention_kols")),
-            "not_related_kols": _int0(tier_row.get("not_related_kols")),
-            "undetermined_kols": _int0(tier_row.get("undetermined_kols")),
+            "cooperation_kols": _int0(row.get("cooperation_kols")),
+            "analysis_confirmed_kols": _int0(row.get("analysis_confirmed_kols")),
+            "title_mention_kols": _int0(row.get("title_mention_kols")),
+            "not_related_kols": _int0(row.get("not_related_kols")),
+            "undetermined_kols": _int0(row.get("undetermined_kols")),
         },
         "basis": (
             "范围=收藏集(收藏 ∪ 授权共享,duplicate_of_id IS NULL);五档互斥优先级:"

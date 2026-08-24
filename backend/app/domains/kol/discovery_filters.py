@@ -13,6 +13,7 @@ from typing import Any
 from app.domains.kol.discovery_account_identity import (
     brand_and_official_share_identity_field,
     exact_brand_handle_confirmed,
+    explicit_official_marker,
 )
 
 
@@ -261,6 +262,22 @@ def _competitor_brand_official(
     bio = str(item.get("bio") or item.get("description") or "").strip().lower()
     corporate_voice = _corporate_voice_bio(bio)
     personal_voice = bool(_PERSONAL_VOICE_RE.search(bio))
+    # After the exact-handle shortcut above, the remaining lexicon path can
+    # only convict through either a corporate self-description or an explicit
+    # affirmative ``official`` marker co-located with the brand identity.
+    # Most Pool rows have neither.  Fail-open here before scanning every brand
+    # keyword; this preserves the old verdict while removing the dominant
+    # O(pool_rows × brand_terms) cold-read cost.  Personal voice is an explicit
+    # rebuttal in the existing contract unless the exact-handle proof already
+    # returned above.
+    if personal_voice and not corporate_voice:
+        return ""
+    identity_has_official = any(
+        explicit_official_marker(item.get(field))
+        for field in ("handle", "channel_name", "display_name", "username")
+    )
+    if not corporate_voice and not identity_has_official:
+        return ""
     for brand, keywords in brands.items():
         if not _brand_identity_hit(item, brand, keywords):
             continue

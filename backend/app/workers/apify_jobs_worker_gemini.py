@@ -646,11 +646,9 @@ def _process_gemini_video(
                 return
             if not resolved.get("ok"):
                 resolve_reason = str(resolved.get("reason") or "")
-                # X6 + yt-dlp 复核(2026-08-24):确认无视频或 IG 老口径(抓成功没视频 URL)→ 终态
-                # blocked;media_kind 图章只盖 yt-dlp 定论,未定论/被剥链绝不落章(复审 HIGH:误章永久拦真视频)。
-                if resolved.get("no_video_confirmed") or (platform == "instagram" and resolved.get("scraped_ok") and resolve_reason.endswith("scraped_no_downloadable_url")):
-                    if resolved.get("no_video_confirmed"):
-                        _persist_image_post_verdict(conn, evidence)
+                # 仅提取器明确证明图文/轮播才终态；剥链/无格式继续重试且不落图章。
+                if resolved.get("no_video_confirmed") is True:
+                    _persist_image_post_verdict(conn, evidence)
                     _block_job(conn, int(job["id"]), "image_post_no_video", resolved)
                     return
                 raise RuntimeError(resolve_reason or f"media_resolve_failed:{platform}")

@@ -320,48 +320,65 @@ RECENT_VIDEOS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
     LIMIT ?
 """
 
-V_CONTENT_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
+# v_content 卡片的四组读数在同一条 SQL 中完成。scope 后的五档行集只物化
+# 一次，summary 与最多 2001 条 ID 共用它；最终结果的每个 ID 行重复同一份
+# summary，方便 sqlite/PostgreSQL 兼容层通过 fetchall 一次读回。
+# PostgreSQL 使用 AS MATERIALIZED；SQLite 形式通过下方同一模板去掉关键字，
+# 与 pool_read_projection / pool_read_avatar_hydration 的既有兼容抽象一致。
+_V_CONTENT_SUMMARY_SQL_TEMPLATE = V_CONTENT_CLASSIFIED_CTE + f""",
+scoped_v_content AS __V_CONTENT_MATERIALIZED__(
+    SELECT vc.evidence_id AS evidence_id,
+           vc.kol_pool_id AS kol_pool_id,
+           vc.v_tier AS v_tier
+    FROM v_content_classified vc
+    JOIN vkpi_kol_pool kp ON kp.id = vc.kol_pool_id
+    WHERE kp.duplicate_of_id IS NULL
+      AND {_COLLECTION_COND}
+),
+v_content_summary AS (
     SELECT COUNT(*) AS total_evidence,
            SUM(CASE WHEN v_tier = 'cooperation' THEN 1 ELSE 0 END) AS cooperation,
            SUM(CASE WHEN v_tier = 'analysis_confirmed' THEN 1 ELSE 0 END) AS analysis_confirmed,
            SUM(CASE WHEN v_tier = 'title_mention' THEN 1 ELSE 0 END) AS title_mention,
            SUM(CASE WHEN v_tier = 'not_related' THEN 1 ELSE 0 END) AS not_related,
-           SUM(CASE WHEN v_tier = 'undetermined' THEN 1 ELSE 0 END) AS undetermined
-    FROM v_content_classified vc
-    JOIN vkpi_kol_pool kp ON kp.id = vc.kol_pool_id
-    WHERE kp.duplicate_of_id IS NULL
-      AND {_COLLECTION_COND}
-"""
-
-V_KOL_COUNT_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
-    SELECT COUNT(DISTINCT vc.kol_pool_id) AS n
-    FROM v_content_classified vc
-    JOIN vkpi_kol_pool kp ON kp.id = vc.kol_pool_id
-    WHERE kp.duplicate_of_id IS NULL
-      AND {_COLLECTION_COND}
-      AND vc.v_tier IN ('cooperation', 'analysis_confirmed', 'title_mention')
-"""
-
-V_KOL_IDS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
-    SELECT DISTINCT vc.kol_pool_id AS kol_pool_id
-    FROM v_content_classified vc
-    JOIN vkpi_kol_pool kp ON kp.id = vc.kol_pool_id
-    WHERE kp.duplicate_of_id IS NULL
-      AND {_COLLECTION_COND}
-      AND vc.kol_pool_id IS NOT NULL
-      AND vc.v_tier IN ('cooperation', 'analysis_confirmed', 'title_mention')
+           SUM(CASE WHEN v_tier = 'undetermined' THEN 1 ELSE 0 END) AS undetermined,
+           COUNT(DISTINCT CASE WHEN v_tier IN ('cooperation', 'analysis_confirmed', 'title_mention') THEN kol_pool_id END) AS v_kol_count,
+           COUNT(DISTINCT CASE WHEN v_tier = 'cooperation' THEN kol_pool_id END) AS cooperation_kols,
+           COUNT(DISTINCT CASE WHEN v_tier = 'analysis_confirmed' THEN kol_pool_id END) AS analysis_confirmed_kols,
+           COUNT(DISTINCT CASE WHEN v_tier = 'title_mention' THEN kol_pool_id END) AS title_mention_kols,
+           COUNT(DISTINCT CASE WHEN v_tier = 'not_related' THEN kol_pool_id END) AS not_related_kols,
+           COUNT(DISTINCT CASE WHEN v_tier = 'undetermined' THEN kol_pool_id END) AS undetermined_kols
+    FROM scoped_v_content
+),
+v_content_ids AS (
+    SELECT DISTINCT kol_pool_id AS kol_pool_id
+    FROM scoped_v_content
+    WHERE kol_pool_id IS NOT NULL
+      AND v_tier IN ('cooperation', 'analysis_confirmed', 'title_mention')
     ORDER BY 1
     LIMIT ?
+)
+SELECT s.total_evidence AS total_evidence,
+       s.cooperation AS cooperation,
+       s.analysis_confirmed AS analysis_confirmed,
+       s.title_mention AS title_mention,
+       s.not_related AS not_related,
+       s.undetermined AS undetermined,
+       s.v_kol_count AS v_kol_count,
+       s.cooperation_kols AS cooperation_kols,
+       s.analysis_confirmed_kols AS analysis_confirmed_kols,
+       s.title_mention_kols AS title_mention_kols,
+       s.not_related_kols AS not_related_kols,
+       s.undetermined_kols AS undetermined_kols,
+       ids.kol_pool_id AS kol_pool_id
+FROM v_content_summary s
+LEFT JOIN v_content_ids ids ON TRUE
+ORDER BY ids.kol_pool_id
 """
 
-V_KOL_TIERS_SQL = V_CONTENT_CLASSIFIED_CTE + f"""
-    SELECT COUNT(DISTINCT CASE WHEN vc.v_tier = 'cooperation' THEN vc.kol_pool_id END) AS cooperation_kols,
-           COUNT(DISTINCT CASE WHEN vc.v_tier = 'analysis_confirmed' THEN vc.kol_pool_id END) AS analysis_confirmed_kols,
-           COUNT(DISTINCT CASE WHEN vc.v_tier = 'title_mention' THEN vc.kol_pool_id END) AS title_mention_kols,
-           COUNT(DISTINCT CASE WHEN vc.v_tier = 'not_related' THEN vc.kol_pool_id END) AS not_related_kols,
-           COUNT(DISTINCT CASE WHEN vc.v_tier = 'undetermined' THEN vc.kol_pool_id END) AS undetermined_kols
-    FROM v_content_classified vc
-    JOIN vkpi_kol_pool kp ON kp.id = vc.kol_pool_id
-    WHERE kp.duplicate_of_id IS NULL
-      AND {_COLLECTION_COND}
-"""
+V_CONTENT_SUMMARY_SQL = _V_CONTENT_SUMMARY_SQL_TEMPLATE.replace(
+    "__V_CONTENT_MATERIALIZED__", "",
+)
+V_CONTENT_SUMMARY_MATERIALIZED_SQL = _V_CONTENT_SUMMARY_SQL_TEMPLATE.replace(
+    "__V_CONTENT_MATERIALIZED__", "MATERIALIZED ",
+)

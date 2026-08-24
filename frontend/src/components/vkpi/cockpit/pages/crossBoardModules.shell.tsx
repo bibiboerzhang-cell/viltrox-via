@@ -67,6 +67,29 @@ export function xbNoToken(boardLabel: string): React.ReactNode {
   );
 }
 
+// Dashboard 可同时挂载多张来自同一板块的卡。这些卡复用同一个稳定
+// fetcher 时，共用进行中的 Promise，避免同一 token 在同一时刻重复下载
+// board-ext 大包。只合并 in-flight，settle 后立即清除：不会把旧业务数据当缓存，
+// 不会延长 token 在内存中的存活期。WeakMap 以 fetcher 身份分隔不同端点。
+const xbInFlight = new WeakMap<Function, Map<string, Promise<unknown>>>();
+
+export function fetchXbShared<T>(apiToken: string, fetcher: (token: string) => Promise<T>): Promise<T> {
+  let byToken = xbInFlight.get(fetcher);
+  if (!byToken) {
+    byToken = new Map<string, Promise<unknown>>();
+    xbInFlight.set(fetcher, byToken);
+  }
+  const existing = byToken.get(apiToken);
+  if (existing) return existing as Promise<T>;
+  const shared = Promise.resolve().then(() => fetcher(apiToken));
+  byToken.set(apiToken, shared);
+  const cleanup = () => {
+    if (byToken?.get(apiToken) === shared) byToken.delete(apiToken);
+  };
+  void shared.then(cleanup, cleanup);
+  return shared;
+}
+
 /**
  * 通用自带取数 hook(源板块页级 effect 同构:alive 旗防晚到响应;挂载即取一次)。
  * fetcher 必须引用稳定(模块级函数或 useCallback),否则会循环重取。
@@ -81,7 +104,7 @@ export function useXbFetch<T>(apiToken: string, fetcher: (token: string) => Prom
     setLoading(true);
     setError("");
     setData(null);
-    fetcher(apiToken)
+    fetchXbShared(apiToken, fetcher)
       .then((res) => {
         if (alive) setData((res ?? null) as T | null);
       })

@@ -30,6 +30,7 @@ from app.domains.kol.video_url_identity import (
     VideoUrlIdentityError,
     parse_supported_video_url,
 )
+from app.domains.kol.video_analysis_media import eligible_video_evidence_sql
 
 
 FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
@@ -684,13 +685,15 @@ def enqueue_final_v1_video_analysis_batch(
 
 
 def list_kol_all_evidence_ids(conn: Any, kol_pool_id: int) -> list[int]:
-    """该 KOL 全部活跃视频证据 id(去重、按时间降序)。只读。"""
+    """全部活跃视频证据 id；排除已确认非视频并兼容旧表缺列。"""
+    eligible_sql = eligible_video_evidence_sql(conn)
     rows = conn.execute(
-        """
+        f"""
         SELECT e.id AS evidence_id
         FROM vkpi_kol_video_evidence e
         WHERE e.kol_pool_id = ?
           AND (e.is_active IS NULL OR e.is_active = TRUE)
+          AND {eligible_sql}
         ORDER BY e.id DESC
         """,
         (int(kol_pool_id),),

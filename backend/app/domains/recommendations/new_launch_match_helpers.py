@@ -7,7 +7,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.shared.vkpi_utils import json_loads, row_to_dict, to_float, to_int, to_text
 
 def _row_to_dict(row: Any) -> dict[str, Any]:
@@ -418,10 +418,34 @@ def _kol_entities() -> list[dict[str, Any]]:
 
 
 def _pool_by_source_ref() -> dict[str, dict[str, Any]]:
+    # Production stores raw provider payloads in TEXT for SQLite parity.  The
+    # legacy launch-preview path only needs the durable low-reach stamp, but it
+    # used to transfer every complete payload (about 59 MB in the current
+    # production snapshot) just to inspect that one flag.  Project the stamped
+    # boolean in PostgreSQL and keep the full JSON only on the portable SQLite
+    # path.  The writer's contract always stores exactly
+    # {"low_reach": {"flag": true, ...}} and removes the key when the account
+    # passes again.  Key presence is therefore the durable verdict.  POSITION
+    # is deliberate: casting all ~59 MB to JSONB costs more than returning the
+    # original payload; a bounded substring projection returns only one boolean
+    # per row and is parity-checked against the writer contract.
+    raw_reach_projection = (
+        "POSITION('\"low_reach\"' IN COALESCE(raw_platform_data, '')) > 0 AS low_reach_flagged, "
+        "CASE WHEN POSITION('\"contact_has_email\"' IN COALESCE(raw_platform_data, '')) > 0 "
+        "AND raw_platform_data IS JSON OBJECT "
+        "THEN COALESCE(CAST(raw_platform_data AS JSONB)->>'contact_has_email', 'false')='true' "
+        "ELSE FALSE END AS contact_has_email, "
+        "CASE WHEN POSITION('\"contact_has_phone\"' IN COALESCE(raw_platform_data, '')) > 0 "
+        "AND raw_platform_data IS JSON OBJECT "
+        "THEN COALESCE(CAST(raw_platform_data AS JSONB)->>'contact_has_phone', 'false')='true' "
+        "ELSE FALSE END AS contact_has_phone"
+        if is_postgres_runtime()
+        else "raw_platform_data"
+    )
     rows = get_conn().execute(
-        """
+        f"""
         SELECT id, platform, handle, display_name, country, source_ref,
-               sync_status, raw_platform_data,
+               sync_status, {raw_reach_projection},
                followers, avg_views, avg_comments, engagement_rate
         FROM vkpi_kol_pool
         WHERE source_type='legacy_excel_p2d'
@@ -528,9 +552,16 @@ def _risk_count(facts: list[dict[str, Any]]) -> int:
 
 
 def _contact_score(contact_status: str, pool: dict[str, Any] | None) -> tuple[int, str]:
-    raw = _load_json((pool or {}).get("raw_platform_data") or "{}", {})
-    has_email = bool(raw.get("contact_has_email")) if isinstance(raw, dict) else False
-    has_phone = bool(raw.get("contact_has_phone")) if isinstance(raw, dict) else False
+    source = pool or {}
+    raw = _load_json(source.get("raw_platform_data") or "{}", {})
+    has_email = (
+        bool(source.get("contact_has_email"))
+        if "contact_has_email" in source else bool(raw.get("contact_has_email"))
+    )
+    has_phone = (
+        bool(source.get("contact_has_phone"))
+        if "contact_has_phone" in source else bool(raw.get("contact_has_phone"))
+    )
     if has_email and has_phone:
         return 10, "email_and_phone_available_restricted"
     if has_email:
