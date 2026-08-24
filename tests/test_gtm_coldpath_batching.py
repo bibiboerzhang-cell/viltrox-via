@@ -4,7 +4,7 @@ from app.db.connection import PostgresCompatCursor
 from app.domains.kol import performance_forecast, rate_card
 from app.domains.market import strategy_sim
 from app.domains.market_brain import gtm_candidate_batch
-from app.domains.products import sku_performance
+from app.domains.products import sku_performance, sku_performance_aggregate_rows
 
 
 class _RawCursor:
@@ -93,6 +93,8 @@ def test_multi_sku_aggregate_projection_matches_single_sku_reader(monkeypatch) -
 
     monkeypatch.setattr(sku_performance, "_deep_rows", load_deep)
     monkeypatch.setattr(sku_performance, "_title_rows", load_titles)
+    monkeypatch.setattr(sku_performance_aggregate_rows, "load_deep_rows", load_deep)
+    monkeypatch.setattr(sku_performance_aggregate_rows, "load_title_rows", load_titles)
     monkeypatch.setattr(sku_performance, "_content_fit_matches", lambda _conn, _sku: [])
 
     expected = {

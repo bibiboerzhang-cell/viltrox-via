@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn, table_exists
+from app.db.connection import get_conn, is_postgres_runtime, table_exists
 
 logger = get_logger(__name__)
 
@@ -486,6 +486,31 @@ def _row(conn: Any, sql: str, params: tuple[Any, ...] = ()) -> dict[str, Any]:
         return {}
 
 
+_LEARNING_TABLES = (
+    "vkpi_prediction_runs",
+    "vkpi_gtm_outcomes",
+    "vkpi_prediction_evals",
+    "vkpi_event_ledger",
+    "vkpi_recommendation_feedback",
+)
+
+
+def _learning_table_presence(conn: Any) -> dict[str, bool]:
+    """Resolve the fixed readiness schema set in one PostgreSQL round trip."""
+    if is_postgres_runtime():
+        projections = ", ".join(
+            f"to_regclass(current_schema() || '.{name}') IS NOT NULL AS {name}"
+            for name in _LEARNING_TABLES
+        )
+        try:
+            raw = conn.execute(f"SELECT {projections}").fetchone()
+            row = dict(raw) if raw else {}
+            return {name: bool(row.get(name)) for name in _LEARNING_TABLES}
+        except Exception:
+            logger.warning("market_brain.data_readiness.table_presence_batch_failed", exc_info=True)
+    return {name: bool(table_exists(name)) for name in _LEARNING_TABLES}
+
+
 def build_learning_readiness(
     *,
     conn: Any = None,
@@ -503,6 +528,7 @@ def build_learning_readiness(
     by the derived GTM weight-feedback bridge.
     """
     db = conn or get_conn()
+    tables = _learning_table_presence(db)
     observed_outcome_sql = outcome_evidence_sql("o")
     outcomes = {}
     evals = {}
@@ -511,7 +537,7 @@ def build_learning_readiness(
         "status": "not_applicable", "registered_due": 0, "claimable": False,
         "claim_level": "descriptive_only",
     }
-    if table_exists("vkpi_prediction_runs"):
+    if tables["vkpi_prediction_runs"]:
         from app.domains.market_brain import outreach_truth_bridge
 
         outreach_coverage = outreach_truth_bridge.outreach_prediction_coverage(
@@ -520,7 +546,7 @@ def build_learning_readiness(
     outreach_due = int(outreach_coverage.get("registered_due") or 0)
     outreach_claimable = bool(outreach_coverage.get("claimable"))
 
-    if table_exists("vkpi_gtm_outcomes"):
+    if tables["vkpi_gtm_outcomes"]:
         outcomes = _row(
             db,
             f"""
@@ -546,7 +572,7 @@ def build_learning_readiness(
             """,
         )
 
-    if table_exists("vkpi_prediction_evals") and table_exists("vkpi_gtm_outcomes"):
+    if tables["vkpi_prediction_evals"] and tables["vkpi_gtm_outcomes"]:
         eval_outcome_evidence_sql = outcome_evidence_sql("o")
         finite_actual_sql = """(
             e.actual_value IS NOT NULL
@@ -555,7 +581,7 @@ def build_learning_readiness(
         verified_binding_sql = verified_prediction_binding_sql("e")
         verified_event_sql = (
             verified_prediction_event_sql("e")
-            if table_exists("vkpi_event_ledger")
+            if tables["vkpi_event_ledger"]
             else "FALSE"
         )
         evals = _row(
@@ -605,7 +631,7 @@ def build_learning_readiness(
             """,
         )
 
-    if table_exists("vkpi_recommendation_feedback"):
+    if tables["vkpi_recommendation_feedback"]:
         real_feedback_sql, real_feedback_params = real_recommendation_feedback_sql()
         feedback = _row(
             db,

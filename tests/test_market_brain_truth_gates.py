@@ -96,6 +96,40 @@ class _LearningReadinessConn:
         raise AssertionError(sql)
 
 
+def test_learning_readiness_batches_postgres_table_presence(monkeypatch):
+    calls = []
+
+    class _Conn:
+        def execute(self, sql: str, params: tuple = ()):
+            calls.append((sql, params))
+            return _Cursor([{
+                "vkpi_prediction_runs": True,
+                "vkpi_gtm_outcomes": True,
+                "vkpi_prediction_evals": False,
+                "vkpi_event_ledger": True,
+                "vkpi_recommendation_feedback": False,
+            }])
+
+    monkeypatch.setattr(data_readiness, "is_postgres_runtime", lambda: True)
+    monkeypatch.setattr(
+        data_readiness,
+        "table_exists",
+        lambda _name: (_ for _ in ()).throw(AssertionError("single table probe")),
+    )
+
+    result = data_readiness._learning_table_presence(_Conn())
+
+    assert result == {
+        "vkpi_prediction_runs": True,
+        "vkpi_gtm_outcomes": True,
+        "vkpi_prediction_evals": False,
+        "vkpi_event_ledger": True,
+        "vkpi_recommendation_feedback": False,
+    }
+    assert len(calls) == 1
+    assert calls[0][1] == ()
+
+
 def test_learning_readiness_requires_all_three_real_evidence_legs(monkeypatch):
     monkeypatch.setattr(data_readiness, "table_exists", lambda _name: True)
     conn = _LearningReadinessConn()

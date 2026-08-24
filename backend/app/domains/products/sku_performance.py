@@ -14,7 +14,6 @@
   - vkpi_kol_pool                          创作者展示字段(handle/display_name/platform)
   - vkpi_comments                          评论文本 + language_detected
   - vkpi_bh_reviews                        B&H 用户评论(迁移 207;表存在才读)
-
 匹配口径:双端归一化(product_aliases.normalize_alias)后按 token 边界子串命中;
 命中来源分级 final_v1_products > final_v1_presence > evidence_title
 > final_v1_brand_exposure > final_v1_summary,逐条回报 matched_alias / matched_field。
@@ -32,6 +31,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.products import sku_performance_aggregate_rows
 
 logger = get_logger("viltrox.domains.products.sku_performance")
 
@@ -647,7 +647,7 @@ def sku_content_aggregate_briefs(sku_codes: list[str]) -> dict[str, dict[str, An
 
     if active:
         conn = get_conn()
-        for row in _deep_rows(conn):
+        for row in sku_performance_aggregate_rows.load_deep_rows(conn):
             evidence_id = _int_or_none(row.get("evidence_id"))
             if evidence_id is None:
                 continue
@@ -662,7 +662,7 @@ def sku_content_aggregate_briefs(sku_codes: list[str]) -> dict[str, dict[str, An
                 seen.add(evidence_id)
                 state["items"].append(_build_item(row, matched, field, deep=True))
 
-        for row in _title_rows(conn):
+        for row in sku_performance_aggregate_rows.load_title_rows(conn):
             evidence_id = _int_or_none(row.get("evidence_id"))
             if evidence_id is None:
                 continue
