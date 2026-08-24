@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import re
-import unicodedata
 from time import perf_counter
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
 
 from app.domains.kol.discovery_filters import _brand_official_verdict, _is_discovery_garbage
+from app.domains.kol.identity import (
+    canonical_creator_aliases as _shared_creator_aliases,
+    canonical_creator_key as _shared_creator_key,
+)
 from app.domains.kol.profile_discovery_candidates import (
     _is_own_brand_account,
     normalize_market_constraint,
@@ -492,50 +494,25 @@ def _account_quality_verdict(item: dict[str, Any], row: dict[str, Any]) -> str:
 
 
 def canonical_creator_aliases(item: dict[str, Any]) -> set[str]:
-    """Return all stable server identity aliases, strongest first at call sites."""
-    platform = unicodedata.normalize("NFKC", str(item.get("platform") or "")).casefold().strip()
-    platform = "".join(char for char in platform if char.isalnum() or char in "._-")
-    aliases: set[str] = set()
-    for field in ("channel_id", "account_id", "platform_user_id", "native_id"):
-        stable_id = unicodedata.normalize("NFKC", str(item.get(field) or "")).casefold().strip()
-        if platform and stable_id:
-            aliases.add(f"{platform}:id:{stable_id}")
-    handle = unicodedata.normalize("NFKC", str(item.get("handle") or "")).casefold().strip().lstrip("@")
-    handle = "".join(char for char in handle if char.isalnum() or char in "._-")
-    if platform and handle:
-        aliases.add(f"{platform}:handle:{handle}")
-    profile_url = str(
-        item.get("profile_url") or item.get("channel_url") or item.get("source_url") or ""
-    ).strip()
-    if platform and profile_url:
-        try:
-            parsed = urlsplit(profile_url)
-        except ValueError:
-            parsed = None
-        if parsed and parsed.scheme in {"http", "https"} and parsed.netloc:
-            path = unicodedata.normalize("NFKC", parsed.path).rstrip("/").casefold()
-            host = parsed.netloc.casefold().removeprefix("www.").removeprefix("m.")
-            canonical_url = urlunsplit(("https", host, path, "", ""))
-            aliases.add(f"{platform}:url:{canonical_url}")
-    pool_id = int(item.get("kol_pool_id") or 0)
-    if not aliases and pool_id:
-        aliases.add(f"pool:{pool_id}")
-    return aliases
+    """Compatibility export for the shared discovery/session/pool identity."""
+    return _shared_creator_aliases(item)
 
 
 def _canonical_key(item: dict[str, Any]) -> str:
-    aliases = canonical_creator_aliases(item)
-    for kind in (":id:", ":handle:", ":url:"):
-        match = sorted(alias for alias in aliases if kind in alias)
-        if match:
-            return match[0]
-    pool = sorted(alias for alias in aliases if alias.startswith("pool:"))
-    return pool[0] if pool else "pool:0"
+    return _shared_creator_key(item) or "pool:0"
 
 
 def canonical_creator_key(item: dict[str, Any]) -> str:
     """Return the shared server canonical identity for local and online lanes."""
     return _canonical_key(item)
+
+
+def _claim_identity_aliases(seen: set[str], aliases: set[str]) -> bool:
+    """Claim one observed creator once, even when its strongest key changes."""
+    if aliases.intersection(seen):
+        return False
+    seen.update(aliases)
+    return True
 
 
 def _score_key(item: dict[str, Any]) -> tuple[float, float, float]:
@@ -658,15 +635,17 @@ def qualify_local_candidates(
             funnel["evidence_relevant"] += 1
         if not relevance_pass:
             reasons.append("low_relevance")
-        canonical_first_seen = relevance_pass and canonical not in seen_identities
+        canonical_first_seen = relevance_pass and _claim_identity_aliases(
+            seen_identities, identity_aliases
+        )
         if canonical_first_seen:
-            seen_identities.add(canonical)
             funnel["canonical_unique"] += 1
 
         account_verdict = _account_quality_verdict(item, row)
         account_quality_pass = not account_verdict
-        if relevance_pass and account_quality_pass and canonical not in account_quality_identities:
-            account_quality_identities.add(canonical)
+        if relevance_pass and account_quality_pass and _claim_identity_aliases(
+            account_quality_identities, identity_aliases
+        ):
             funnel["account_quality_pass"] += 1
         if not account_quality_pass:
             reasons.append(f"account_{account_verdict}")
@@ -681,8 +660,9 @@ def qualify_local_candidates(
         except (TypeError, ValueError):
             followers = None
         followers_pass = followers is not None and followers >= SMART_LOCAL_MIN_FOLLOWERS
-        if relevance_pass and account_quality_pass and followers_pass and canonical not in followers_identities:
-            followers_identities.add(canonical)
+        if relevance_pass and account_quality_pass and followers_pass and _claim_identity_aliases(
+            followers_identities, identity_aliases
+        ):
             funnel["followers_pass"] += 1
         if not followers_pass:
             reasons.append("followers_unknown" if followers is None else "followers_below_3000")
@@ -713,9 +693,8 @@ def qualify_local_candidates(
             and relevance_pass
             and followers_pass
             and activity_pass
-            and canonical not in fresh_video_identities
+            and _claim_identity_aliases(fresh_video_identities, identity_aliases)
         ):
-            fresh_video_identities.add(canonical)
             funnel["fresh_video_pass"] += 1
         if not activity_pass:
             reasons.append(
@@ -743,9 +722,8 @@ def qualify_local_candidates(
             and followers_pass
             and activity_pass
             and market_pass
-            and canonical not in market_identities
+            and _claim_identity_aliases(market_identities, identity_aliases)
         ):
-            market_identities.add(canonical)
             funnel["market_pass"] += 1
         if not market_pass:
             reasons.append(
@@ -779,9 +757,8 @@ def qualify_local_candidates(
             and activity_pass
             and market_pass
             and language_pass
-            and canonical not in language_identities
+            and _claim_identity_aliases(language_identities, identity_aliases)
         ):
-            language_identities.add(canonical)
             funnel["language_pass"] += 1
         if not language_pass:
             reasons.append(
@@ -816,9 +793,8 @@ def qualify_local_candidates(
             and market_pass
             and language_pass
             and profile_type_pass
-            and canonical not in profile_type_identities
+            and _claim_identity_aliases(profile_type_identities, identity_aliases)
         ):
-            profile_type_identities.add(canonical)
             funnel["profile_type_pass"] += 1
         if not profile_type_pass:
             reasons.append(
@@ -840,9 +816,8 @@ def qualify_local_candidates(
             and language_pass
             and profile_type_pass
             and platform_pass
-            and canonical not in platform_identities
+            and _claim_identity_aliases(platform_identities, identity_aliases)
         ):
-            platform_identities.add(canonical)
             funnel["platform_pass"] += 1
         if not platform_pass:
             reasons.append("platform_unknown" if not platform else "platform_mismatch")

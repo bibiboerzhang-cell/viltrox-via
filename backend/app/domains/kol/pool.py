@@ -76,6 +76,10 @@ from app.domains.kol.pool_enrich import (
     enrich_item,
     batch_enrich_items,
 )
+from app.domains.kol.pool_summary import (
+    build_pool_summary as _build_pool_summary,
+    canonical_discovery_funnel_counts as _canonical_discovery_funnel_counts,
+)
 
 # detail_bundle 的 try/except 块此前引用 logger 却从未定义(潜伏 NameError);补齐模块级 logger。
 logger = get_logger(__name__)
@@ -107,6 +111,8 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
     conn = get_conn()
     imported = 0
     skipped = 0
+    excluded_official = 0
+    canonical_matches = 0
     rows: list[dict[str, Any]] = []
     now = _utcnow()
     staff_lookup = _staff_lookup_by_owner_key()
@@ -115,6 +121,50 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
         if not item["handle"]:
             skipped += 1
             continue
+        identity_probe = {
+            **dict(raw),
+            **item,
+            "platform": item["platform"],
+            "handle": item["handle"],
+            "channel_id": raw.get("channel_id") or raw.get("channelId"),
+            "account_id": raw.get("account_id") or raw.get("accountId"),
+            "platform_user_id": raw.get("platform_user_id") or raw.get("platformUserId"),
+            "raw_platform_data": raw,
+        }
+        from app.domains.kol.discovery_filters import discovery_account_gate_verdict
+
+        if discovery_account_gate_verdict(identity_probe):
+            skipped += 1
+            excluded_official += 1
+            continue
+        # Imports and URL/provider materialization share one canonical resolver. If @handle bridges to a legacy UC id,
+        # row, retain the incumbent unique key and update that row rather than
+        # inserting a second creator.
+        from app.domains.kol.profile_basics import (
+            _canonical_existing_pool_id,
+            _lock_creator_identity_write_boundary,
+            _merge_presence_payload,
+            _record_creator_identity_alias,
+        )
+
+        try:
+            _lock_creator_identity_write_boundary(conn, identity_probe)
+            canonical_id = _canonical_existing_pool_id(conn, identity_probe)
+        except Exception:
+            conn.rollback()
+            raise
+        if canonical_id:
+            existing_identity = conn.execute(
+                "SELECT platform, handle, raw_platform_data FROM vkpi_kol_pool WHERE id=?",
+                (int(canonical_id),),
+            ).fetchone()
+            if existing_identity:
+                existing_data = dict(existing_identity)
+                item["platform"] = str(existing_data.get("platform") or item["platform"])
+                item["handle"] = str(existing_data.get("handle") or item["handle"])
+                if not any(str(raw.get(key) or "").strip() for key in ("display_name", "fullName", "name")):
+                    item["display_name"] = ""
+                canonical_matches += 1
         raw_payload = dict(item["raw"] or {})
         # P0-1: 入池时若 raw 已含手填/导入侧公开商务联系方式,带 contact_source 留痕落 other_contacts_json。
         # 严格白名单:仅采纳显式 contact 字段(manual);不在此处做任何网络抓取/全网正则。
@@ -125,7 +175,10 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
             raw_payload["owner_names"] = owner_names
         if responsible_staff_id:
             raw_payload["responsible_staff_id"] = responsible_staff_id
-        raw_payload["responsible_staff_match_status"] = match_status
+        if match_status != "missing_owner" or not canonical_id:
+            raw_payload["responsible_staff_match_status"] = match_status
+        if canonical_id and existing_identity:
+            raw_payload = _merge_presence_payload(dict(existing_identity).get("raw_platform_data"), raw_payload)
         item["raw"] = raw_payload
         uid = f"pool-{secrets.token_hex(8)}"
         conn.execute(
@@ -138,20 +191,20 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
 +                 last_seen_at, created_at, updated_at)
 +            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 +            ON CONFLICT(platform, handle) DO UPDATE SET
-+                profile_url=excluded.profile_url,
-+                display_name=excluded.display_name,
-+                avatar_url=excluded.avatar_url,
-+                bio=excluded.bio,
-+                email=excluded.email,
++                profile_url=COALESCE(NULLIF(TRIM(excluded.profile_url), ''), vkpi_kol_pool.profile_url),
++                display_name=COALESCE(NULLIF(TRIM(excluded.display_name), ''), vkpi_kol_pool.display_name),
++                avatar_url=COALESCE(NULLIF(TRIM(excluded.avatar_url), ''), vkpi_kol_pool.avatar_url),
++                bio=COALESCE(NULLIF(TRIM(excluded.bio), ''), vkpi_kol_pool.bio),
++                email=COALESCE(NULLIF(TRIM(excluded.email), ''), vkpi_kol_pool.email),
 +                other_contacts_json=CASE WHEN excluded.other_contacts_json <> '[]' THEN excluded.other_contacts_json ELSE vkpi_kol_pool.other_contacts_json END,
 +                contact_source=CASE WHEN excluded.contact_source <> '' THEN excluded.contact_source ELSE vkpi_kol_pool.contact_source END,
-+                followers=excluded.followers,
-+                following=excluded.following,
-+                posts_count=excluded.posts_count,
-+                avg_views=excluded.avg_views,
-+                avg_likes=excluded.avg_likes,
-+                avg_comments=excluded.avg_comments,
-+                engagement_rate=excluded.engagement_rate,
++                followers=COALESCE(excluded.followers, vkpi_kol_pool.followers),
++                following=COALESCE(excluded.following, vkpi_kol_pool.following),
++                posts_count=COALESCE(excluded.posts_count, vkpi_kol_pool.posts_count),
++                avg_views=COALESCE(excluded.avg_views, vkpi_kol_pool.avg_views),
++                avg_likes=COALESCE(excluded.avg_likes, vkpi_kol_pool.avg_likes),
++                avg_comments=COALESCE(excluded.avg_comments, vkpi_kol_pool.avg_comments),
++                engagement_rate=COALESCE(excluded.engagement_rate, vkpi_kol_pool.engagement_rate),
 +                source_type=excluded.source_type,
 +                source_ref=excluded.source_ref,
 +                raw_platform_data=excluded.raw_platform_data,
@@ -189,6 +242,16 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
         row = conn.execute("SELECT * FROM vkpi_kol_pool WHERE platform=? AND handle=?", (item["platform"], item["handle"])).fetchone()
         if row:
             rows.append(dict(row))
+            try:
+                _record_creator_identity_alias(
+                    conn,
+                    int(dict(row)["id"]),
+                    identity_probe,
+                    canonical_match=bool(canonical_id),
+                )
+            except Exception:
+                conn.rollback()
+                raise
     conn.commit()
     _clear_kol_pool_read_cache()
     # Materialization only enters the durable provider-free L0 queue.  The
@@ -211,7 +274,13 @@ def import_items(items: list[dict[str, Any]], *, source_type: str = "manual", so
                 "contact acquisition enqueue unavailable after import ids=%s",
                 imported_ids,
             )
-    return {"imported": imported, "skipped": skipped, "items": rows}
+    return {
+        "imported": imported,
+        "skipped": skipped,
+        "excluded_official": excluded_official,
+        "canonical_matches": canonical_matches,
+        "items": rows,
+    }
 
 
 def list_pool(
@@ -398,14 +467,16 @@ def workspace(
     all_summary = summary()
     by_candidate_kind = conn.execute(
         "SELECT COALESCE(NULLIF(candidate_kind, ''), 'unknown') AS candidate_kind, COUNT(*) AS n "
-        "FROM vkpi_kol_pool GROUP BY COALESCE(NULLIF(candidate_kind, ''), 'unknown') ORDER BY n DESC, candidate_kind ASC"
+        "FROM vkpi_kol_pool WHERE duplicate_of_id IS NULL "
+        "GROUP BY COALESCE(NULLIF(candidate_kind, ''), 'unknown') ORDER BY n DESC, candidate_kind ASC"
     ).fetchall() if "candidate_kind" in table_columns else []
     by_data_status = {
         "complete": int(conn.execute(
             """
             SELECT COUNT(*) AS n
             FROM vkpi_kol_pool
-            WHERE avatar_url IS NOT NULL AND avatar_url!=''
+            WHERE duplicate_of_id IS NULL
+              AND avatar_url IS NOT NULL AND avatar_url!=''
               AND avg_views IS NOT NULL
               AND engagement_rate IS NOT NULL
               AND viltrox_fit_score IS NOT NULL
@@ -415,10 +486,11 @@ def workspace(
             """
             SELECT COUNT(*) AS n
             FROM vkpi_kol_pool
-            WHERE avatar_url IS NULL OR avatar_url=''
+            WHERE duplicate_of_id IS NULL
+              AND (avatar_url IS NULL OR avatar_url=''
                OR avg_views IS NULL
                OR engagement_rate IS NULL
-               OR viltrox_fit_score IS NULL
+               OR viltrox_fit_score IS NULL)
             """
         ).fetchone()["n"]),
     }
@@ -491,89 +563,17 @@ def workspace(
 
 
 def summary() -> dict[str, Any]:
-    ensure_vkpi_product_industry_schema()
-    cache_key = _kol_pool_cache_key("summary")
-    cached = cache_get(cache_key)
-    if cached is not None:
-        return _kol_pool_cache_hit(cached)
-    conn = get_conn()
-    # P0-4 半接修复:workspace(:390)调 summary() 算总量,若 total 不滤 duplicate_of_id,
-    # 归并后 filtered_count(已滤)与 summary().total(未滤)打架。total/linked 加 IS NULL 对齐。
-    # historical(source_type 分布)保留口径不滤——它是『历史名录占比』统计语义,见 open_question。
-    total = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE duplicate_of_id IS NULL").fetchone()
-    linked = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE duplicate_of_id IS NULL AND linked_main_kol_id IS NOT NULL").fetchone()
-    historical = conn.execute("SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE source_type=?", ("promo_plan_xlsx",)).fetchone()
-    by_platform = conn.execute(
-        "SELECT platform, COUNT(*) AS n FROM vkpi_kol_pool GROUP BY platform ORDER BY n DESC, platform ASC"
-    ).fetchall()
-    by_source = conn.execute(
-        "SELECT source_type, COUNT(*) AS n FROM vkpi_kol_pool GROUP BY source_type ORDER BY n DESC, source_type ASC"
-    ).fetchall()
-    country_distribution = _country_distribution(conn)
-    payload: dict[str, Any] = {
-        "total": int(total["n"] if total else 0),
-        "linked_main_kol_count": int(linked["n"] if linked else 0),
-        "historical_collaboration_count": int(historical["n"] if historical else 0),
-        "candidate_asset_count": int(total["n"] if total else 0),
-        "source_scope": "partial" if historical and int(historical["n"] or 0) else "mixed",
-        "by_platform": [dict(row) for row in by_platform],
-        "by_source": [dict(row) for row in by_source],
-        "country_distribution": country_distribution,
-        "note": "KOL Pool 是资产池；source_type=promo_plan_xlsx 表示局部历史/计划名录，不等于 Daily Top100 新候选。",
-    }
-    # 触达二段闸可见性计数(2026-07-12,KOL 池板块页 KPI 带消费):raw_platform_data.low_reach
-    # 标由 reach_floor_regate 单一真源打/摘;LIKE 预筛 + _low_reach_flagged 复核(尊重
-    # VKPI_DISCOVERY_REACH_FLOOR_ENABLED 总开关)。纯读计数零行为影响;失败=键缺席
-    # (前端诚实 pending,绝不编 0)。零触 viltrox_fit_score / rule_v0。
-    try:
-        from app.domains.kol.discovery_filters import (
-            LOW_REACH_FLAG_LIKE_PATTERN,
-            _low_reach_flagged,
-        )
-
-        flagged_rows = conn.execute(
-            "SELECT raw_platform_data FROM vkpi_kol_pool WHERE duplicate_of_id IS NULL AND raw_platform_data LIKE ?",
-            (LOW_REACH_FLAG_LIKE_PATTERN,),
-        ).fetchall()
-        payload["low_reach_hidden_count"] = sum(
-            1 for row in flagged_rows if _low_reach_flagged(dict(row))
-        )
-    except Exception:  # noqa: BLE001 — 计数失败绝不拖垮 summary 主体
-        logger.warning("low-reach visibility count failed", exc_info=True)
-    # 发现转化漏斗 · 近 30 天(2026-07-12,KOL 池板块页「发现转化」图形模块消费):
-    #   discovered    = vkpi_kol_search_session_items 近 30 天条目(找达人产出,含在库命中)
-    #   enrolled      = vkpi_kol_pool 近 30 天新建非重复行(搜到自动落池)
-    #   deep_analyzed = vkpi_kol_llm_deep_analysis_results 近 30 天 ready 覆盖 KOL 数
-    #   favorited     = vkpi_kol_pool_favorites 近 30 天收藏覆盖 KOL 数
-    # 四段同窗各自计数(非严格同批 cohort 追踪,前端 tooltip 如实标注)。纯读零行为影响;
-    # 逐段独立兜底:单段算不出=该键缺席(前端诚实缺席,绝不编 0)。零触 viltrox_fit_score / rule_v0。
-    funnel: dict[str, Any] = {"window_days": 30}
-    funnel_counts = {
-        "discovered": (
-            "SELECT COUNT(*) AS n FROM vkpi_kol_search_session_items "
-            "WHERE created_at >= NOW() - INTERVAL '30 days'"
-        ),
-        "enrolled": (
-            "SELECT COUNT(*) AS n FROM vkpi_kol_pool "
-            "WHERE duplicate_of_id IS NULL AND created_at >= NOW() - INTERVAL '30 days'"
-        ),
-        "deep_analyzed": (
-            "SELECT COUNT(DISTINCT kol_pool_id) AS n FROM vkpi_kol_llm_deep_analysis_results "
-            "WHERE status='ready' AND created_at >= NOW() - INTERVAL '30 days'"
-        ),
-        "favorited": (
-            "SELECT COUNT(DISTINCT kol_pool_id) AS n FROM vkpi_kol_pool_favorites "
-            "WHERE created_at >= NOW() - INTERVAL '30 days'"
-        ),
-    }
-    for segment_key, segment_sql in funnel_counts.items():
-        try:
-            segment_row = conn.execute(segment_sql).fetchone()
-            funnel[segment_key] = int(segment_row["n"] if segment_row else 0)
-        except Exception:  # noqa: BLE001 — 单段失败=键缺席,绝不拖垮 summary 主体
-            continue
-    payload["discovery_funnel_30d"] = funnel
-    return _kol_pool_cache_store(cache_key, payload)
+    return _build_pool_summary(
+        ensure_schema_fn=ensure_vkpi_product_industry_schema,
+        cache_key_fn=_kol_pool_cache_key,
+        cache_get_fn=cache_get,
+        cache_hit_fn=_kol_pool_cache_hit,
+        get_conn_fn=get_conn,
+        country_distribution_fn=_country_distribution,
+        cache_store_fn=_kol_pool_cache_store,
+        canonical_counts_fn=_canonical_discovery_funnel_counts,
+        logger=logger,
+    )
 
 
 def get_item(

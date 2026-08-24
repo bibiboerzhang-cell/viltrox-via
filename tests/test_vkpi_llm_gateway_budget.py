@@ -324,6 +324,163 @@ def test_cron_window_daily_roll_behavior_not_regressed() -> None:
         _cleanup()
 
 
+def test_record_cost_rolls_expired_window_before_incrementing_new_spend() -> None:
+    scope = "cron:record_cost_roll_vkpi_llm_budget_test"
+    try:
+        budget_guard.update_budget(
+            scope,
+            {"cap_usd": 4.0, "current_spend": 4.0, "reset_at": _yesterday_utc()},
+        )
+
+        budget_guard.record_cost(
+            scope=scope,
+            cron_task=scope,
+            ai_provider="gemini",
+            model_name="roll-probe",
+            cost_usd="0.25",
+            metadata={"marker": MARKER},
+        )
+
+        row = _snapshot_scope(scope)
+        assert row is not None
+        assert float(row["current_spend"]) == pytest.approx(0.25)
+        assert str(row["reset_at"]) == _tomorrow_midnight_utc()
+    finally:
+        _cleanup()
+
+
+def test_record_cost_missing_budget_scope_rolls_back_ledger_insert() -> None:
+    scope = _scope("a_existing_record_cost")
+    missing_scope = _scope("z_missing_record_cost")
+    budget_guard.update_budget(
+        scope,
+        {
+            "cap_usd": 1.0,
+            "current_spend": 0.0,
+            "reset_at": "2999-01-01T00:00:00Z",
+        },
+    )
+    conn = get_conn()
+    before = int(
+        conn.execute("SELECT COUNT(*) AS n FROM vkpi_ai_cost_ledger").fetchone()["n"]
+    )
+
+    with pytest.raises(RuntimeError, match="budget_scope_missing_during_cost_record"):
+        budget_guard.record_cost(
+            scope=scope,
+            cron_task=scope,
+            ai_provider="gemini",
+            model_name="missing-scope-probe",
+            cost_usd="0.01",
+            extra_scopes=[missing_scope],
+        )
+
+    after = int(
+        conn.execute("SELECT COUNT(*) AS n FROM vkpi_ai_cost_ledger").fetchone()["n"]
+    )
+    assert after == before
+    assert float(
+        conn.execute(
+            "SELECT current_spend FROM vkpi_provider_budget_caps WHERE scope=?",
+            (scope,),
+        ).fetchone()["current_spend"]
+    ) == pytest.approx(0.0)
+    _delete_scope(scope)
+
+
+def test_record_cost_skips_initially_missing_optional_scope_but_updates_core() -> None:
+    missing_scope = _scope("optional_missing_record_cost")
+    core_scope = _scope("configured_core_record_cost")
+    budget_guard.update_budget(
+        core_scope,
+        {
+            "cap_usd": 1.0,
+            "current_spend": 0.0,
+            "reset_at": "2999-01-01T00:00:00Z",
+        },
+    )
+
+    receipt = budget_guard.record_cost(
+        scope=missing_scope,
+        cron_task=missing_scope,
+        ai_provider="openai",
+        model_name="optional-scope-probe",
+        cost_usd="0.01",
+        extra_scopes=[core_scope],
+        optional_scopes=[missing_scope, core_scope],
+        metadata={"marker": MARKER},
+    )
+
+    assert receipt["recorded"] is True
+    assert receipt["scopes_updated"] == [core_scope]
+    assert float(
+        get_conn().execute(
+            "SELECT current_spend FROM vkpi_provider_budget_caps WHERE scope=?",
+            (core_scope,),
+        ).fetchone()["current_spend"]
+    ) == pytest.approx(0.01)
+    assert get_conn().execute(
+        "SELECT COUNT(*) AS n FROM vkpi_provider_budget_caps WHERE scope=?",
+        (missing_scope,),
+    ).fetchone()["n"] == 0
+    _cleanup()
+
+
+def test_record_cost_zero_row_update_rolls_back_entire_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scope = _scope("zero_update_record_cost")
+    budget_guard.update_budget(
+        scope,
+        {
+            "cap_usd": 1.0,
+            "current_spend": 0.0,
+            "reset_at": "2999-01-01T00:00:00Z",
+        },
+    )
+    raw = get_conn()
+    before = int(
+        raw.execute("SELECT COUNT(*) AS n FROM vkpi_ai_cost_ledger").fetchone()["n"]
+    )
+
+    class _ZeroUpdate:
+        rowcount = 0
+
+    class _ZeroUpdateConnection:
+        def execute(self, sql, params=()):
+            if "SET current_spend=COALESCE(current_spend, 0) +" in sql:
+                return _ZeroUpdate()
+            return raw.execute(sql, params)
+
+        def commit(self):
+            raw.commit()
+
+        def rollback(self):
+            raw.rollback()
+
+    monkeypatch.setattr(budget_guard, "ensure_budget_schema", lambda: None)
+    monkeypatch.setattr(budget_guard, "get_conn", lambda: _ZeroUpdateConnection())
+
+    with pytest.raises(RuntimeError, match="budget_scope_update_unconfirmed"):
+        budget_guard.record_cost(
+            scope=scope,
+            cron_task=scope,
+            ai_provider="gemini",
+            model_name="zero-update-probe",
+            cost_usd="0.01",
+        )
+
+    assert int(
+        raw.execute("SELECT COUNT(*) AS n FROM vkpi_ai_cost_ledger").fetchone()["n"]
+    ) == before
+    assert float(
+        raw.execute(
+            "SELECT current_spend FROM vkpi_provider_budget_caps WHERE scope=?",
+            (scope,),
+        ).fetchone()["current_spend"]
+    ) == pytest.approx(0.0)
+
+
 def test_report_analysis_scope_is_a_daily_window() -> None:
     scope = "dashboard:report_analysis"
     snapshot = _snapshot_scope(scope)

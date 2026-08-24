@@ -32,10 +32,7 @@ def _scan_service():
     return _scan
 
 
-# Instagram hashtag 召回口径:与 YouTube/TikTok 一致 —— 把多词 query 当作完整的
-# 召回意图,而不是只取首词当单 hashtag(旧逻辑系统性少召回/错召回)。
-# IG hashtag actor 不能整串去空格拼成一个超长无效 hashtag(搜不到 → 恒空),
-# 故拆成「多个 hashtag」:每个有意义词单独成 tag,保留组合关键词语义。
+# IG 多词查询拆成多个有意义 hashtag，避免整句拼接成无效 tag。
 _INSTAGRAM_HASHTAG_STOPWORDS = frozenset({
     "the", "and", "for", "with", "from", "into", "your", "you", "are",
     "this", "that", "best", "top", "new", "all", "any", "how", "why",
@@ -147,6 +144,10 @@ def _youtube_channel_statistics(crawler: Any, channel_ids: List[str]) -> Dict[st
                 continue
             snippet = row.get("snippet") if isinstance(row.get("snippet"), dict) else {}
             stats = row.get("statistics") if isinstance(row.get("statistics"), dict) else {}
+            thumbs = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
+            avatar_url, avatar_url_status = _avatar_url_policy(
+                ((thumbs.get("high") or thumbs.get("medium") or thumbs.get("default")) or {}).get("url")
+            )
             hidden = bool(stats.get("hiddenSubscriberCount"))
             out[cid] = {
                 # 隐藏订阅数 → 0(=未知,读端归「分析中」),绝不杜撰。
@@ -158,6 +159,8 @@ def _youtube_channel_statistics(crawler: Any, channel_ids: List[str]) -> Dict[st
                 "country": str(snippet.get("country") or "").strip(),
                 "description": str(snippet.get("description") or "").strip(),
                 "default_language": str(snippet.get("defaultLanguage") or "").strip(),
+                "avatar_url": avatar_url,
+                "avatar_url_status": avatar_url_status,
             }
     return out
 
@@ -427,7 +430,10 @@ async def _youtube_data_api_strict_video_search(
             "video_id": video_id,
             "sample_title": str(snippet.get("title") or "")[:300],
             "published": str(snippet.get("publishedAt") or "").strip(),
-            "avatar_url": str(thumbnail).strip(),
+            # search.list(type=video) thumbnails are content covers, never creator avatars.
+            "avatar_url": str(stats.get("avatar_url") or "").strip(),
+            "avatar_url_status": str(stats.get("avatar_url_status") or "missing"),
+            "thumbnail_url": str(thumbnail).strip(),
             "bio": str(stats.get("description") or "")[:500],
             "provider_actor": "youtube-data-api/search.list:video",
             **({"followers": followers} if followers > 0 else {}),
@@ -560,11 +566,7 @@ async def search_platform_content(
     search_query = _market_query(normalized_query, market)
     provider_queries = [search_query]
 
-    # YouTube fast path: YouTube Data API search.list (~1s) before the slow Apify actor
-    # (10-60s cold start). 命中即返回归一化候选;无 key / 配额耗尽 / 错误 → None,落回下方
-    # 原 Apify youtube-scraper 分支(逻辑零改动)。
-    # K2 修:≥1 条即短路会让 1-2 条的贫瘠结果饿死 YT 新发现(997 案 requested 20 → 1),
-    # 快路径多路合并后仍 <3 条 → 一样落回 Apify 视频搜索补深。
+    # YouTube Data API 快路不足三条时继续走 Apify 补深。
     if normalized_platform == "youtube":
         fast = await (
             _youtube_data_api_strict_video_search(
@@ -611,16 +613,11 @@ async def search_platform_content(
         }
     elif normalized_platform == "instagram":
         actor_id = "apify/instagram-hashtag-scraper"
-        # 多词 query 拆成「多个 hashtag」(与 YouTube/TikTok 召回口径对齐),
-        # 而非旧逻辑只取首词当单 hashtag → 系统性少召回/错召回。
-        # 整串去空格会拼成超长无效 hashtag(IG actor 搜不到 → 恒空),故分词。
+        # 多词 query 拆成多个 hashtag，与 YouTube/TikTok 召回意图对齐。
         hashtags = _instagram_hashtags(search_query)
         if not hashtags:
             return {"status": "invalid_query", "items": [], "message": "instagram hashtag query is empty after normalization"}
-        # resultsLimit 是「总条数(帖)」上限。K2 扩量刀:帖→号主收敛比实测 ~3:2
-        # (20 帖 → 13 号主,top 帖常被同号主屠占),抓帖量放到 3×safe_limit(≤100 帽)
-        # 再由 _instagram_collapse_owner_posts 收敛回 safe_limit 个「独立号主」——
-        # 最终候选量口径不变,只治槽位浪费。
+        # 多抓帖子后按号主收敛，最终候选上限仍是 safe_limit。
         payload = {
             "hashtags": hashtags,
             "resultsLimit": min(max(1, safe_limit) * 3, 100),
@@ -628,12 +625,7 @@ async def search_platform_content(
         }
         timeout = 300
     elif normalized_platform == "facebook":
-        # Facebook 发现(用户口径:FB 流量一般般,做够用的就行,别过度设计)。
-        # actor 选择说明:仓库既有 apify/facebook-posts-scraper 只吃 startUrls(页面 URL)+
-        # resultsLimit(见本文件 scan_facebook_account 与 facebook_crawler.py),不支持关键词
-        # 搜索,做不了「检索词 → 发现新创作者」。故此分支换官方 apify/facebook-search-scraper:
-        # 关键词搜公开帖文,帖文项自带发帖主页名/URL,可映射成统一候选结构。
-        # env 可换 actor(与 douyin 分支同模式);resultsLimit 沿用仓库 FB 调用的封顶口径。
+        # 关键词搜索使用支持 searchQueries 的 Facebook actor；env 可替换。
         actor_id = (os.getenv("APIFY_FACEBOOK_SEARCH_ACTOR_ID") or "apify/facebook-search-scraper").strip()
         payload = {
             "searchQueries": [search_query],
@@ -683,6 +675,7 @@ async def search_platform_content(
     for item in raw_items[:safe_limit]:
         handle = ""
         avatar_url = ""
+        avatar_url_status = "missing"
         thumbnail_url = ""
         bio = ""  # instagram(档案富化)/其余平台留空;有值才随 item 透出
         followers = 0  # facebook/tiktok/instagram(富化后)可能填上;>0 才随 item 透出,其余输出不变
@@ -697,7 +690,7 @@ async def search_platform_content(
                 channel_id = str(match.group(1) if match else "").strip()
             # Never use display-name/author text as a strict account handle.
             handle = _source_key(item, "channelHandle", "channelUsername", "handle") or channel_id
-            avatar_url = _clean_url(_source_key(item, "channelAvatar", "channelThumbnail", "channelImage", "avatarUrl", "authorThumbnail"))
+            avatar_url, avatar_url_status = _avatar_url_policy(_source_key(item, "channelAvatar", "channelThumbnail", "channelImage", "avatarUrl", "authorThumbnail"))
             thumbnail_url = _clean_url(_source_key(item, "thumbnailUrl", "thumbnail", "image", "cover"))
             source_url = _source_key(item, "url", "link")
             title = _source_key(item, "title", "text")
@@ -716,7 +709,7 @@ async def search_platform_content(
             channel_name = _source_key(author, "nickName", "name") or _source_key(item, "authorName", "author")
             handle = _source_key(author, "name") or _source_key(item, "author")
             channel_url = f"https://www.tiktok.com/@{handle}" if handle else ""
-            avatar_url = _clean_url(_source_key(author, "avatar", "avatarThumb", "avatarMedium", "avatarLarger", "profilePicture"))
+            avatar_url, avatar_url_status = _avatar_url_policy(_source_key(author, "avatar", "avatarThumb", "avatarMedium", "avatarLarger", "profilePicture"))
             thumbnail_url = _clean_url(_source_key(item, "videoMeta.coverUrl", "cover", "coverUrl", "thumbnail"))
             source_url = _source_key(item, "webVideoUrl", "url")
             title = _source_key(item, "text", "desc", "title")
@@ -743,7 +736,7 @@ async def search_platform_content(
                     handle = _slug
             if not channel_url and handle:
                 channel_url = f"https://www.facebook.com/{handle}"
-            avatar_url = _clean_url(_source_key(item, "user.profilePic", "pageProfilePic", "profilePic", "avatar"))
+            avatar_url, avatar_url_status = _avatar_url_policy(_source_key(item, "user.profilePic", "pageProfilePic", "profilePic", "avatar"))
             thumbnail_url = _clean_url(_source_key(item, "thumbnail", "imageUrl", "image"))
             source_url = _source_key(item, "url", "postUrl", "topLevelUrl")
             title = _source_key(item, "text", "message", "title")
@@ -757,7 +750,7 @@ async def search_platform_content(
             channel_name = str(post.get("channel") or "Unknown creator")
             handle = str(post.get("handle") or channel_name)
             channel_url = str(post.get("channel_url") or "")
-            avatar_url = str(post.get("avatar_url") or "")
+            avatar_url, avatar_url_status = _avatar_url_policy(post.get("avatar_url"))
             thumbnail_url = str(post.get("thumbnail") or "")
             source_url = str(post.get("url") or "")
             title = str(post.get("title") or "")
@@ -768,7 +761,7 @@ async def search_platform_content(
             channel_name = _source_key(item, "ownerUsername", "username", "ownerFullName")
             handle = _source_key(item, "ownerUsername", "username")
             channel_url = f"https://www.instagram.com/{channel_name}/" if channel_name else _source_key(item, "ownerProfileUrl")
-            avatar_url = _clean_url(_source_key(item, "ownerProfilePicUrl", "profilePicUrl", "profilePictureUrl", "displayProfilePicUrl", "avatarUrl"))
+            avatar_url, avatar_url_status = _avatar_url_policy(_source_key(item, "ownerProfilePicUrl", "profilePicUrl", "profilePictureUrl", "displayProfilePicUrl", "avatarUrl"))
             thumbnail_url = _clean_url(_source_key(item, "displayUrl", "imageUrl", "thumbnailUrl", "thumbnail", "image"))
             source_url = _source_key(item, "url", "shortCode")
             title = _source_key(item, "caption", "title", "text")
@@ -780,7 +773,11 @@ async def search_platform_content(
             if isinstance(profile, dict):
                 followers = _normalize_int(profile.get("followersCount") or profile.get("followers") or 0)
                 channel_name = _source_key(profile, "fullName") or channel_name
-                avatar_url = avatar_url or _clean_url(_source_key(profile, "profilePicUrlHD", "profilePicUrl"))
+                refreshed_avatar, refreshed_status = _avatar_url_policy(_source_key(profile, "profilePicUrlHD", "profilePicUrl"))
+                if refreshed_avatar:
+                    avatar_url, avatar_url_status = refreshed_avatar, refreshed_status
+                elif not avatar_url and refreshed_status != "missing":
+                    avatar_url_status = refreshed_status
                 bio = str(profile.get("biography") or "").strip()[:500]
 
         # 修 query-as-handle bug:去掉 normalized_query 兜底——无真 handle/name 时不再把整句查询
@@ -790,7 +787,10 @@ async def search_platform_content(
                 "platform": normalized_platform,
                 "channel_name": clean_channel_name,
                 "handle": _known_text(handle, channel_name),
-                "avatar_url": avatar_url or thumbnail_url,
+                # Avatar and content cover are distinct evidence. Never persist a post/video
+                # thumbnail as creator identity when the provider omitted a profile avatar.
+                "avatar_url": avatar_url,
+                "avatar_url_status": avatar_url_status,
                 "thumbnail_url": thumbnail_url,
                 "channel_url": channel_url,
                 "source_url": source_url,

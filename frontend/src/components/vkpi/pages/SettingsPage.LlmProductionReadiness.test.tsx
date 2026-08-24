@@ -58,6 +58,13 @@ describe('LLM 生产就绪只读卡片', () => {
           evaluated: false,
           production_ready: false,
           runtime_gate: { failure_reasons: ['probe_evidence_missing', 'evaluation_evidence_missing'] },
+          runtime_authorization: {
+            allowed_by_model_readiness: true,
+            source: 'operator_ack',
+            operator_acknowledged: true,
+            temporary: true,
+            budget_and_feature_gates_still_apply: true,
+          },
           probe: { attestation_verified: false },
           evaluation: { attestation_verified: false, sample_count: 0, latency_ms: { p95: null } },
           thresholds: { minimum_eval_samples: 30, maximum_p95_latency_ms: 15000 },
@@ -81,14 +88,18 @@ describe('LLM 生产就绪只读卡片', () => {
     expect(within(screen.getByText('真实评测').parentElement as HTMLElement).getByText('2/7')).toBeInTheDocument();
     expect(within(screen.getByText('生产闸门通过').parentElement as HTMLElement).getByText('2')).toBeInTheDocument();
     expect(within(screen.getByText('生产闸门阻断').parentElement as HTMLElement).getByText('5')).toBeInTheDocument();
-    expect(screen.getByText('2 通过 / 1 阻断')).toBeInTheDocument();
+    expect(within(screen.getByText('签名生产就绪').parentElement as HTMLElement).getByText('2/3')).toBeInTheDocument();
+    expect(within(screen.getByText('临时运行授权').parentElement as HTMLElement).getByText('1/3')).toBeInTheDocument();
+    expect(screen.queryByText('2 通过 / 1 阻断')).not.toBeInTheDocument();
     expect(screen.getByText('已注册 / 已配置不等于可用；', { exact: false })).toBeInTheDocument();
     expect(screen.getByText('本卡片只读，不会调用外部模型；', { exact: false })).toBeInTheDocument();
     expect(screen.getAllByText('环境凭据已配置', { exact: false })).toHaveLength(2);
     expect(screen.getByText('证据来源：VKPI_MODEL_READINESS_EVIDENCE_JSON · 已解析 7 个绑定')).toBeInTheDocument();
     expect(within(screen.getByTestId('llm-trust-root-status')).getByText(/已具备校验独立签名证据/)).toBeInTheDocument();
-    expect(screen.getByText('逐任务真实状态（2/3 通过）')).toBeInTheDocument();
+    expect(screen.getByText('逐任务真实状态（签名 2/3 · 临时授权 1/3）')).toBeInTheDocument();
     expect(within(screen.getByTestId('llm-task-kol_audience_analysis')).getByText('KOL 受众分析')).toBeInTheDocument();
+    expect(within(screen.getByTestId('llm-task-kol_audience_analysis')).getByText('临时精确授权 · 证据待补')).toBeInTheDocument();
+    expect(within(screen.getByTestId('llm-task-kol_audience_analysis')).getByText(/预算、功能开关和每次用户确认仍会独立校验/)).toBeInTheDocument();
     expect(within(screen.getByTestId('llm-task-kol_audience_analysis')).getByText(/缺少该精确模型的实时探针证据/)).toBeInTheDocument();
     expect(screen.getByText(/当前模型清单仅代表候选注册/)).toBeInTheDocument();
 
@@ -98,6 +109,46 @@ describe('LLM 生产就绪只读卡片', () => {
       expect.objectContaining({ timeoutMs: 15000, signal: expect.any(AbortSignal) }),
       'admin-token',
     );
+  });
+
+  it('签名证据为零时仍单独显示临时运行授权，不暗示全不可用', async () => {
+    const operatorAck = {
+      allowed_by_model_readiness: true,
+      source: 'operator_ack',
+      operator_acknowledged: true,
+      temporary: true,
+      budget_and_feature_gates_still_apply: true,
+    };
+    apiFetchMock.mockResolvedValue({
+      readiness_audit: {
+        candidate_count: 2,
+        production_ready_count: 0,
+        blocked_count: 2,
+        operator_acknowledged_count: 2,
+      },
+      task_model_readiness: {
+        audit_video_analysis: {
+          binding: 'google/gemini-3.6-flash',
+          configured: true,
+          production_ready: false,
+          runtime_authorization: operatorAck,
+        },
+        keyframe_qa: {
+          binding: 'google/gemini-3.5-flash-lite',
+          configured: true,
+          production_ready: false,
+          runtime_authorization: operatorAck,
+        },
+      },
+    });
+
+    render(<LlmProductionReadinessCard apiToken="admin-token" />);
+
+    expect(await screen.findByText('生产证据仍待补；2 个精确绑定获临时操作员授权')).toBeInTheDocument();
+    expect(within(screen.getByText('签名生产就绪').parentElement as HTMLElement).getByText('0/2')).toBeInTheDocument();
+    expect(within(screen.getByText('临时运行授权').parentElement as HTMLElement).getByText('2/2')).toBeInTheDocument();
+    expect(screen.getByText('逐任务真实状态（签名 0/2 · 临时授权 2/2）')).toBeInTheDocument();
+    expect(screen.queryByText(/0 通过 \/ 2 阻断/)).not.toBeInTheDocument();
   });
 
   it('信任根未发布时直接显示真正阻断原因', async () => {

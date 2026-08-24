@@ -52,4 +52,43 @@ describe('KolVideoSection media safety', () => {
     expect(getByTestId('video-trend-42')).toHaveTextContent('24h +25 · 7d +140 · 最后刷新 2026-08-21 12:00');
     expect(getByTestId('video-trend-42')).toHaveAttribute('title', expect.stringContaining('不是实时数据'));
   });
+
+  it('offers keyframe QA only for ready YouTube final_v1 and distinguishes queued from reviewed', () => {
+    const onQa = vi.fn();
+    const task = (status: string, dataStatus = 'none') => ({
+      status, job_id: status === 'not_requested' ? null : 9, requested_at: null, updated_at: null,
+      data: { status: dataStatus, freshness: dataStatus === 'ready' ? 'fresh' : 'never', updated_at: null, superseded_by_job: false },
+    });
+    const youtube = {
+      ...video(), platform: 'youtube', content_url: 'https://youtu.be/abc', has_final_v1_cache: true,
+      tasks: { metric_refresh: task('not_requested'), final_v1: task('ready', 'ready'), keyframe_qa: task('not_requested') },
+    } as VkpiKolPoolVideoRow;
+    const { getByRole, rerender, queryByRole, getByText } = render(
+      <KolVideoSection videos={[youtube]} queuedEvidence={new Set()} busyKeys={new Set()} onEnqueueOne={vi.fn()} onEnqueueKeyframeQa={onQa} />,
+    );
+    fireEvent.click(getByRole('button', { name: '关键帧复核' }));
+    expect(onQa).toHaveBeenCalledWith(youtube);
+
+    const queued = { ...youtube, tasks: { ...youtube.tasks!, keyframe_qa: task('queued') } };
+    rerender(<KolVideoSection videos={[queued]} queuedEvidence={new Set()} busyKeys={new Set()} onEnqueueOne={vi.fn()} onEnqueueKeyframeQa={onQa} />);
+    expect(getByRole('button', { name: '复核已排队' })).toBeDisabled();
+
+    const failed = { ...youtube, has_keyframe_qa_cache: true, tasks: { ...youtube.tasks!, keyframe_qa: task('failed') } };
+    rerender(<KolVideoSection videos={[failed]} queuedEvidence={new Set()} busyKeys={new Set()} onEnqueueOne={vi.fn()} onEnqueueKeyframeQa={onQa} />);
+    expect(getByRole('button', { name: '重新复核' })).toBeEnabled();
+
+    const reviewed = { ...youtube, tasks: { ...youtube.tasks!, keyframe_qa: task('ready', 'ready') } };
+    rerender(<KolVideoSection videos={[reviewed]} queuedEvidence={new Set()} busyKeys={new Set()} onEnqueueOne={vi.fn()} onEnqueueKeyframeQa={onQa} />);
+    expect(getByText('关键帧已复核')).toBeInTheDocument();
+    expect(queryByRole('button', { name: '关键帧复核' })).toBeNull();
+  });
+
+  it('does not expose keyframe QA for a non-YouTube row or a row without final_v1', () => {
+    const { queryByRole, rerender } = render(
+      <KolVideoSection videos={[{ ...video(), has_final_v1_cache: true }]} queuedEvidence={new Set()} busyKeys={new Set()} onEnqueueOne={vi.fn()} onEnqueueKeyframeQa={vi.fn()} />,
+    );
+    expect(queryByRole('button', { name: '关键帧复核' })).toBeNull();
+    rerender(<KolVideoSection videos={[{ ...video(), platform: 'youtube', content_url: 'https://youtube.com/watch?v=x' }]} queuedEvidence={new Set()} busyKeys={new Set()} onEnqueueOne={vi.fn()} onEnqueueKeyframeQa={vi.fn()} />);
+    expect(queryByRole('button', { name: '关键帧复核' })).toBeNull();
+  });
 });

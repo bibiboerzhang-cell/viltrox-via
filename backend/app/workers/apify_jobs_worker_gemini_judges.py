@@ -15,14 +15,20 @@ import time
 from typing import Any
 
 import psycopg
+from psycopg.rows import dict_row
 
 from app.core.gemini_models import VISUAL_PASS_MODEL
 from app.core.logging import get_logger
 from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
+from app.domains.kol.video_keyframe_qa_enqueue import (
+    final_v1_payload_from_cache_result,
+    final_v1_payload_sha256,
+)
 from app.workers.apify_jobs_worker_helpers import _platform_from_content_url
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 from app.workers.apify_jobs_cost import (
     _anthropic_cost,
+    _authoritative_gemini_cost,
     _gemini_cost,
     _openai_cost,
 )
@@ -33,6 +39,91 @@ from app.workers.apify_jobs_video_context import (
 
 
 logger = get_logger(__name__)
+
+
+class KeyframeQaSourceError(RuntimeError):
+    """The queued review no longer points at the exact ready final_v1 source."""
+
+
+def _load_ready_final_v1_source_for_qa(
+    conn: psycopg.Connection[Any],
+    *,
+    payload: dict[str, Any],
+    evidence_id: int,
+) -> dict[str, Any]:
+    cache_id = int(payload.get("source_final_v1_cache_id") or 0)
+    expected_sha = str(payload.get("source_final_v1_sha256") or "").strip().lower()
+    if cache_id <= 0 or len(expected_sha) != 64:
+        raise KeyframeQaSourceError("keyframe_qa_source_fence_required")
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            """
+            SELECT id, target_id, model, result, prompt_version, updated_at
+            FROM vkpi_analysis_cache
+            WHERE id=%s AND target_type='video' AND target_id=%s
+              AND derive_method='video_analysis_final_v1' AND status='ready'
+              AND id=(
+                  SELECT latest.id FROM vkpi_analysis_cache latest
+                  WHERE latest.target_type='video' AND latest.target_id=%s
+                    AND latest.derive_method='video_analysis_final_v1' AND latest.status='ready'
+                  ORDER BY latest.updated_at DESC, latest.id DESC LIMIT 1
+              )
+            LIMIT 1
+            """,
+            (cache_id, str(int(evidence_id)), str(int(evidence_id))),
+        )
+        row = cur.fetchone()
+    if not row:
+        raise KeyframeQaSourceError("keyframe_qa_source_not_ready")
+    item = dict(row)
+    final_v1 = final_v1_payload_from_cache_result(item.get("result"))
+    if not final_v1:
+        raise KeyframeQaSourceError("keyframe_qa_source_invalid")
+    actual_sha = final_v1_payload_sha256(final_v1)
+    if actual_sha != expected_sha:
+        raise KeyframeQaSourceError("keyframe_qa_source_drifted")
+    return {
+        "cache_id": int(item["id"]),
+        "model": str(item.get("model") or ""),
+        "prompt_version": str(item.get("prompt_version") or "") or None,
+        "updated_at": item.get("updated_at"),
+        "payload_sha256": actual_sha,
+        "final_v1": final_v1,
+    }
+
+
+def _keyframe_qa_scope_checkpoint(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    provider_calls_performed: bool,
+) -> bool:
+    from app.db.connection import db_connection_sync_scope
+    from app.workers.apify_jobs_worker_paid_scope import final_v1_scope_checkpoint
+
+    return final_v1_scope_checkpoint(
+        conn,
+        job,
+        payload,
+        FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+        provider_calls_performed=provider_calls_performed,
+        block_job=_block_job,
+        connection_scope=db_connection_sync_scope,
+    )
+
+
+def _keyframe_qa_provider_calls_performed(raw: dict[str, Any]) -> bool:
+    """Use analyzer truth; fall back to the strict-attempt ledger for old rows/tests."""
+    if raw.get("provider_calls_performed") is True:
+        return True
+    attempts = raw.get("llm_attempts") if isinstance(raw.get("llm_attempts"), list) else []
+    provider_states = {"settled", "model_mismatch", "usage_missing", "unknown"}
+    return any(
+        str(item.get("state") or "").strip().lower() in provider_states
+        for item in attempts
+        if isinstance(item, dict)
+    )
 
 
 def _judge_llm_context(
@@ -74,6 +165,32 @@ def _process_gemini_video_final_v1_keyframe_qa(
     if _platform_from_content_url(str(evidence.get("content_url") or "")) != "youtube":
         raise RuntimeError("video_analysis_final_v1_keyframe_qa currently supports YouTube only")
 
+    if not _keyframe_qa_scope_checkpoint(
+        conn,
+        job,
+        payload,
+        provider_calls_performed=False,
+    ):
+        return
+    try:
+        source = _load_ready_final_v1_source_for_qa(
+            conn,
+            payload=payload,
+            evidence_id=int(evidence.get("id") or 0),
+        )
+    except KeyframeQaSourceError as exc:
+        _block_job(
+            conn,
+            int(job["id"]),
+            str(exc),
+            {
+                "stage": "keyframe_qa_source",
+                "provider_calls_performed": False,
+                "source_final_v1_cache_id": payload.get("source_final_v1_cache_id"),
+            },
+        )
+        return
+
     qa_model = str(payload.get("final_v1_qa_model") or FINAL_V1_KEYFRAME_QA_MODEL).strip() or FINAL_V1_KEYFRAME_QA_MODEL
     qa_preflight = _provider_budget_preflight(
         job,
@@ -106,53 +223,23 @@ def _process_gemini_video_final_v1_keyframe_qa(
             },
         )
         return
+    qa_preflight_cost = qa_estimated_cost if qa_estimated_cost > 0 else max(0.0, float(preflight_cost or 0.0))
 
     started = time.monotonic()
     analysis_context = _video_final_context(evidence)
-    analyzer_payload = {
-        **payload,
-        "gemini_final_v1_models": gemini_video_analyzer.final_v1_gemini_models(
-            payload.get("gemini_final_v1_models") or FINAL_V1_GEMINI_MODELS
-        ),
-    }
-    visual_raw = _run_gemini_analyzer_with_timeout(
-        {
-            **analyzer_payload,
-            "mode": "youtube",
-            "url": str(evidence.get("content_url") or ""),
-            "title": str(evidence.get("title") or ""),
-            "creator_handle": str(evidence.get("creator_handle") or ""),
-            "schema_version": "final_v1",
-            "performance_context": analysis_context,
-        },
-        job_id=job.get("id"),
-        target_id=str(evidence.get("id")),
-        platform="youtube",
-    )
-    visual_cost, visual_basis, visual_tokens_in, visual_tokens_out = _gemini_cost(visual_raw, preflight_cost)
-    _record_gemini_cost(
-        job=job,
-        payload=payload,
-        raw=visual_raw,
-        cost=visual_cost,
-        cost_basis=visual_basis,
-        tokens_in=visual_tokens_in,
-        tokens_out=visual_tokens_out,
-        latency_ms=0,
-        preflight_cost=preflight_cost,
-    )
-    if not visual_raw.get("analyzed"):
-        raw_error = str(visual_raw.get("error") or "not_analyzed")
-        if raw_error == "gemini_call_timeout":
-            raise RuntimeError("gemini_call_timeout")
-        raise RuntimeError(f"Gemini final_v1 pass failed: {raw_error}")
-
-    final_v1 = visual_raw.get("video_analysis_final_v1") if isinstance(visual_raw.get("video_analysis_final_v1"), dict) else {}
+    final_v1 = source["final_v1"]
     layer1 = final_v1.get("layer1_visual_content") if isinstance(final_v1.get("layer1_visual_content"), dict) else {}
     with _extract_keyframes_for_qa(evidence, layer1, limit=6, temp_prefix="vkpi-final-v1-qa-video-") as qa_frames:
         keyframe_requests = qa_frames["keyframe_requests"]
         frame_meta = qa_frames["frame_meta"]
         download = qa_frames["download"]
+        if not _keyframe_qa_scope_checkpoint(
+            conn,
+            job,
+            payload,
+            provider_calls_performed=False,
+        ):
+            return
         qa_raw = asyncio.run(
             gemini_video_analyzer.analyze_final_v1_keyframe_qa(
                 final_v1_result=final_v1,
@@ -160,11 +247,45 @@ def _process_gemini_video_final_v1_keyframe_qa(
                 title=str(evidence.get("title") or ""),
                 performance_context=analysis_context,
                 model_name=qa_model,
-                llm_context=_judge_llm_context(job, payload, evidence, stage="final_v1_keyframe_qa"),
+                llm_context=_judge_llm_context(job, payload, evidence, stage="keyframe_qa"),
             )
         )
 
-    qa_cost, qa_basis, qa_tokens_in, qa_tokens_out = _gemini_cost(qa_raw, qa_estimated_cost)
+    qa_provider_calls_performed = _keyframe_qa_provider_calls_performed(qa_raw)
+    if not _keyframe_qa_scope_checkpoint(
+        conn,
+        job,
+        payload,
+        provider_calls_performed=qa_provider_calls_performed,
+    ):
+        return
+    if not qa_provider_calls_performed:
+        # Local capability/keyframe early returns never reached Google.  Do not
+        # recheck as a post-provider write and do not manufacture preflight cost.
+        raise RuntimeError(
+            "Gemini final_v1 keyframe QA failed before provider call: "
+            f"{qa_raw.get('error') or 'provider_call_not_performed'}"
+        )
+    # The main analysis may have been replaced while the provider call was in
+    # flight.  Recheck its exact cache id + payload hash before publishing QA.
+    try:
+        source = _load_ready_final_v1_source_for_qa(
+            conn, payload=payload, evidence_id=int(evidence.get("id") or 0)
+        )
+    except KeyframeQaSourceError as exc:
+        _block_job(
+            conn,
+            int(job["id"]),
+            str(exc),
+            {
+                "stage": "keyframe_qa_source_recheck",
+                "provider_calls_performed": qa_provider_calls_performed,
+            },
+        )
+        return
+    qa_cost, qa_basis, qa_tokens_in, qa_tokens_out = _authoritative_gemini_cost(
+        qa_raw, qa_preflight_cost
+    )
     _record_gemini_cost(
         job=job,
         payload=payload,
@@ -174,33 +295,47 @@ def _process_gemini_video_final_v1_keyframe_qa(
         tokens_in=qa_tokens_in,
         tokens_out=qa_tokens_out,
         latency_ms=0,
-        preflight_cost=qa_estimated_cost,
+        preflight_cost=qa_preflight_cost,
     )
     if not qa_raw.get("analyzed"):
         raise RuntimeError(f"Gemini final_v1 keyframe QA failed: {qa_raw.get('error') or 'not_analyzed'}")
 
     latency_ms = int((time.monotonic() - started) * 1000)
-    total_cost = round(visual_cost + qa_cost, 6)
-    visual_model = str(visual_raw.get("model") or visual_raw.get("method") or "final_v1_gemini")
+    total_cost = round(qa_cost, 6)
+    execution = payload.get("_llm_execution") if isinstance(payload.get("_llm_execution"), dict) else {}
     combined_raw = {
-        **visual_raw,
-        "method": "final_v1_flash_keyframe_qa",
-        "model": f"{visual_model}+{qa_model}",
-        "final_v1_pass": visual_raw,
+        "analyzed": True,
+        "status": "completed",
+        "provider_calls_performed": qa_provider_calls_performed,
+        "method": "final_v1_ready_cache_keyframe_qa",
+        "model": str(qa_raw.get("model") or qa_model),
+        "video_analysis_final_v1": final_v1,
+        "final_v1_pass": {
+            "reused_ready_cache": True,
+            "provider_calls_performed": False,
+            "source_target_id": str(int(evidence.get("id") or 0)),
+            "source_cache_id": source["cache_id"],
+            "source_model": source.get("model"),
+            "source_prompt_version": source.get("prompt_version"),
+            "source_payload_sha256": source["payload_sha256"],
+        },
         "final_v1_keyframe_qa": qa_raw.get("final_v1_keyframe_qa") if isinstance(qa_raw.get("final_v1_keyframe_qa"), dict) else {},
         "qa_pass": qa_raw.get("qa_pass"),
         "qa_method": qa_raw.get("method"),
         "qa_model": qa_raw.get("model") or qa_model,
         "qa_usage_metadata": qa_raw.get("usage_metadata") if isinstance(qa_raw.get("usage_metadata"), dict) else {},
+        "usage_metadata": qa_raw.get("usage_metadata") if isinstance(qa_raw.get("usage_metadata"), dict) else {},
+        "llm_attempts": qa_raw.get("llm_attempts") if isinstance(qa_raw.get("llm_attempts"), list) else [],
+        "cost_authority": qa_raw.get("cost_authority"),
+        "llm_execution": {
+            **execution,
+            "binding": f"google/{qa_model}",
+            "model": qa_model,
+            "reported_model": str(qa_raw.get("model") or qa_model),
+            "base_derive_method": FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+            "cache_derive_method": FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+        },
         "cost_segments": [
-            {
-                "stage": "final_v1_video_pass",
-                "provider": "gemini",
-                "model": visual_model,
-                "cost_usd": visual_cost,
-                "cost_basis": visual_basis,
-                "usage_metadata": visual_raw.get("usage_metadata") if isinstance(visual_raw.get("usage_metadata"), dict) else {},
-            },
             {
                 "stage": "keyframe_qa_pass",
                 "provider": "gemini",
@@ -225,8 +360,8 @@ def _process_gemini_video_final_v1_keyframe_qa(
         evidence=evidence,
         raw=combined_raw,
         cost=total_cost,
-        cost_basis="gemini_final_v1_keyframe_qa_segmented_model_rate",
-        preflight_cost=preflight_cost + qa_estimated_cost,
+        cost_basis=qa_basis,
+        preflight_cost=qa_preflight_cost,
         latency_ms=latency_ms,
         derive_method=FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
     )
@@ -645,7 +780,6 @@ from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
 
 # 原 worker 留下的常量/小工具:放模块底部 import(避免循环导入;调用点均在函数体内、运行期才解析)。
 from app.workers.apify_jobs_worker import (  # noqa: E402
-    FINAL_V1_GEMINI_MODELS,
     FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
     FINAL_V1_KEYFRAME_QA_MODEL,
     LLM_BUDGET_SCOPE,
@@ -655,5 +789,4 @@ from app.workers.apify_jobs_worker import (  # noqa: E402
     _log_budget_preflight_record_only,
     _provider_allowed,
     _provider_budget_preflight,
-    _run_gemini_analyzer_with_timeout,
 )

@@ -30,11 +30,28 @@ VILTROX_MODALITIES: tuple[str, ...] = ("visual", "subtitle", "audio")
 FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
 MAX_BATCH = 200
 
-# Gemini final_v1 结果里 brand_product_evidence 的两个落点(services/ai/analyzers/
-# gemini_video_results 同时写顶层与 layer1 副本;旧结果两处皆无 → 空数组)。
-_PG_MODALITY_PATHS: tuple[str, ...] = (
-    "$.raw_gemini_video.brand_product_evidence.viltrox_evidence[*].modality",
-    "$.raw_gemini_video.video_analysis_final_v1.layer1_visual_content.brand_product_evidence.viltrox_evidence[*].modality",
+# final_v1 结果里 brand_product_evidence 的两个落点。只有块级状态明确为
+# ``present`` 才允许把其中的 modality 当成品牌提及；矛盾的
+# ``absent/unknown + evidence`` 旧缓存必须失败关闭，不能制造假阳性。
+_PG_MODALITY_BLOCKS: tuple[tuple[tuple[str, ...], str], ...] = (
+    (
+        ("raw_gemini_video", "brand_product_evidence", "viltrox_status"),
+        "$.raw_gemini_video.brand_product_evidence.viltrox_evidence[*].modality",
+    ),
+    (
+        (
+            "raw_gemini_video",
+            "video_analysis_final_v1",
+            "layer1_visual_content",
+            "brand_product_evidence",
+            "viltrox_status",
+        ),
+        "$.raw_gemini_video.video_analysis_final_v1.layer1_visual_content.brand_product_evidence.viltrox_evidence[*].modality",
+    ),
+)
+_SQLITE_STATUS_PATHS: tuple[str, ...] = (
+    "$.raw_gemini_video.brand_product_evidence.viltrox_status",
+    "$.raw_gemini_video.video_analysis_final_v1.layer1_visual_content.brand_product_evidence.viltrox_status",
 )
 _SQLITE_EVIDENCE_PATHS: tuple[str, ...] = (
     "$.raw_gemini_video.brand_product_evidence.viltrox_evidence",
@@ -44,10 +61,15 @@ _SQLITE_EVIDENCE_PATHS: tuple[str, ...] = (
 
 def modalities_pg_expr(alias: str = "fv") -> str:
     """Postgres 表达式:只投影 modality 字符串的 jsonb 数组(lax 路径缺失 → '[]')。"""
-    parts = [
-        f"COALESCE(jsonb_path_query_array({alias}.result, '{path}'), '[]'::jsonb)"
-        for path in _PG_MODALITY_PATHS
-    ]
+    parts = []
+    for status_path, modality_path in _PG_MODALITY_BLOCKS:
+        args = ", ".join(f"'{part}'" for part in status_path)
+        parts.append(
+            "CASE WHEN LOWER(COALESCE("
+            f"jsonb_extract_path_text({alias}.result, {args}), '')) = 'present' "
+            f"THEN COALESCE(jsonb_path_query_array({alias}.result, '{modality_path}'), '[]'::jsonb) "
+            "ELSE '[]'::jsonb END"
+        )
     return " || ".join(parts)
 
 
@@ -119,9 +141,12 @@ def final_v1_modalities_for_evidence(conn: Any, evidence_ids: Iterable[int]) -> 
     placeholders = ",".join("?" for _ in ids)
     if _is_sqlite(conn):
         first, second = _SQLITE_EVIDENCE_PATHS
+        status_first, status_second = _SQLITE_STATUS_PATHS
         sql = f"""
             WITH ranked AS (
                 SELECT c.target_id AS target_id,
+                       CASE WHEN json_valid(c.result) THEN json_extract(c.result, '{status_first}') END AS viltrox_status,
+                       CASE WHEN json_valid(c.result) THEN json_extract(c.result, '{status_second}') END AS viltrox_status_layer1,
                        CASE WHEN json_valid(c.result) THEN json_extract(c.result, '{first}') END AS modality_payload,
                        CASE WHEN json_valid(c.result) THEN json_extract(c.result, '{second}') END AS modality_payload_layer1,
                        ROW_NUMBER() OVER (PARTITION BY c.target_id ORDER BY c.id DESC) AS row_num
@@ -131,7 +156,8 @@ def final_v1_modalities_for_evidence(conn: Any, evidence_ids: Iterable[int]) -> 
                   AND c.status='ready'
                   AND c.target_id IN ({placeholders})
             )
-            SELECT target_id, modality_payload, modality_payload_layer1
+            SELECT target_id, viltrox_status, viltrox_status_layer1,
+                   modality_payload, modality_payload_layer1
             FROM ranked
             WHERE row_num=1
         """
@@ -140,6 +166,8 @@ def final_v1_modalities_for_evidence(conn: Any, evidence_ids: Iterable[int]) -> 
             WITH ranked AS (
                 SELECT c.target_id AS target_id,
                        {modalities_pg_expr("c")} AS modality_payload,
+                       'present' AS viltrox_status,
+                       NULL AS viltrox_status_layer1,
                        NULL AS modality_payload_layer1,
                        ROW_NUMBER() OVER (PARTITION BY c.target_id ORDER BY c.id DESC) AS row_num
                 FROM vkpi_analysis_cache c
@@ -148,7 +176,8 @@ def final_v1_modalities_for_evidence(conn: Any, evidence_ids: Iterable[int]) -> 
                   AND c.status='ready'
                   AND c.target_id IN ({placeholders})
             )
-            SELECT target_id, modality_payload, modality_payload_layer1
+            SELECT target_id, viltrox_status, viltrox_status_layer1,
+                   modality_payload, modality_payload_layer1
             FROM ranked
             WHERE row_num=1
         """
@@ -169,9 +198,17 @@ def final_v1_modalities_for_evidence(conn: Any, evidence_ids: Iterable[int]) -> 
             continue
         if evidence_id <= 0:
             continue
-        result[evidence_id] = merge_modalities(
-            item.get("modality_payload"), item.get("modality_payload_layer1")
+        first = item.get("modality_payload") if str(item.get("viltrox_status") or "").lower() == "present" else None
+        second = (
+            item.get("modality_payload_layer1")
+            if str(item.get("viltrox_status_layer1") or "").lower() == "present"
+            else None
         )
+        # PostgreSQL applies both status guards inside the projection and
+        # returns their merged array in ``first``.
+        if not _is_sqlite(conn):
+            first, second = item.get("modality_payload"), None
+        result[evidence_id] = merge_modalities(first, second)
     return result
 
 

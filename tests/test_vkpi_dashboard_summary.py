@@ -1,6 +1,7 @@
 import pytest
 
 from app.domains.dashboard import summary as dashboard_summary
+from app.domains.dashboard import summary_cache
 
 
 @pytest.fixture(autouse=True)
@@ -84,3 +85,78 @@ def test_build_dashboard_summary_uses_staff_dashboard_when_scoped(monkeypatch):
     assert calls == {"view": "staff", "window_days": 30, "staff_id": 42}
     assert payload["metric_run"] == {"staff_id": 42}
     assert payload["metrics"] == []
+
+
+def test_full_dashboard_cache_is_scope_isolated_and_returns_defensive_copies(monkeypatch):
+    stored = {}
+    builds = []
+
+    def fake_cache_get_or_build(key, builder, ttl, cache_if):
+        if key not in stored:
+            value = builder()
+            assert cache_if(value) is True
+            stored[key] = value
+        return stored[key]
+
+    monkeypatch.setattr(dashboard_summary, "cache_get_or_build", fake_cache_get_or_build)
+    monkeypatch.setattr(
+        dashboard_summary.scope,
+        "effective_staff_id",
+        lambda staff, _requested: None if staff.get("role") == "owner" else int(staff["id"]),
+    )
+    monkeypatch.setattr(
+        dashboard_summary,
+        "_build_dashboard_summary_uncached",
+        lambda **kwargs: builds.append(kwargs) or {"summary": {"value": len(builds)}},
+    )
+
+    owner = {"id": 1, "role": "owner", "organization_id": 9}
+    first = dashboard_summary.build_dashboard_summary(window_days=30, metric_scope="all", staff=owner)
+    first["summary"]["value"] = 999
+    second = dashboard_summary.build_dashboard_summary(window_days=30, metric_scope="all", staff=owner)
+    employee = dashboard_summary.build_dashboard_summary(
+        window_days=30,
+        metric_scope="all",
+        staff={"id": 42, "role": "employee", "organization_id": 9},
+    )
+    other_tenant = dashboard_summary.build_dashboard_summary(
+        window_days=30,
+        metric_scope="all",
+        staff={"id": 1, "role": "owner", "organization_id": 10},
+    )
+
+    assert len(builds) == 3
+    assert second["summary"]["value"] == 1
+    assert employee["summary"]["value"] == 2
+    assert other_tenant["summary"]["value"] == 3
+    assert any("tenant=9:scope=global" in key for key in stored)
+    assert any("tenant=9:scope=42" in key for key in stored)
+    assert any("tenant=10:scope=global" in key for key in stored)
+
+
+def test_nested_dashboard_cache_is_tenant_partitioned_and_unknown_bypasses(monkeypatch):
+    stored = {}
+    builds = []
+
+    monkeypatch.setattr(summary_cache, "cache_get", lambda key: stored.get(key))
+    monkeypatch.setattr(summary_cache, "cache_set", lambda key, value, _ttl: stored.__setitem__(key, value))
+
+    def build():
+        builds.append(len(builds) + 1)
+        return {"value": builds[-1]}
+
+    first = summary_cache.cached_summary_block(
+        "funnel", None, build, tenant_partition="9", window=30
+    )
+    same = summary_cache.cached_summary_block(
+        "funnel", None, build, tenant_partition="9", window=30
+    )
+    other = summary_cache.cached_summary_block(
+        "funnel", None, build, tenant_partition="10", window=30
+    )
+    unknown_a = summary_cache.cached_summary_block("funnel", None, build)
+    unknown_b = summary_cache.cached_summary_block("funnel", None, build)
+
+    assert (first, same, other) == ({"value": 1}, {"value": 1}, {"value": 2})
+    assert (unknown_a, unknown_b) == ({"value": 3}, {"value": 4})
+    assert len(stored) == 2

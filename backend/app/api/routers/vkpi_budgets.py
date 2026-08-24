@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.dependencies.manager_guard import require_manager_tab
 from app.api.dependencies.perms import require_tab
-from app.domains.costs import budget_guard
+from app.domains.costs import budget_guard, budget_readonly
 
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-budgets"])
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-budgets"])
 @router.get("/budgets")
 def budgets(staff=Depends(require_manager_tab("vkpi", "read"))):
     del staff
-    return budget_guard.get_budget_status()
+    return budget_readonly.list_budget_status_readonly()
 
 
 @router.post("/budgets/{scope}/update")

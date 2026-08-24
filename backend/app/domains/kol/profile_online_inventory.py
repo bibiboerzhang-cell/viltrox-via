@@ -1,8 +1,8 @@
 """Inventory identity and safe materialization for online KOLs."""
 from __future__ import annotations
 
-import hashlib
 import json
+import re
 import unicodedata
 from typing import Any
 
@@ -51,6 +51,7 @@ def _row_identity(row: dict[str, Any]) -> dict[str, Any]:
         "platform": row.get("platform"),
         "handle": row.get("handle"),
         "profile_url": row.get("profile_url"),
+        "raw_platform_data": row.get("raw_platform_data"),
         **_persisted_native_ids(_json_object(row.get("raw_platform_data"))),
     }
 
@@ -136,16 +137,12 @@ def inventory_alias_snapshot(*, conn: Any | None = None) -> dict[str, Any]:
     }
 
 
-def _advisory_identity_locks(conn: Any, aliases: set[str]) -> None:
-    if conn.__class__.__name__ != "PostgresCompatConnection":
-        return
-    for alias in sorted(aliases):
-        digest = hashlib.sha256(alias.encode("utf-8")).digest()
-        lock_key = int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
-        conn.execute("SELECT pg_advisory_xact_lock(?)", (lock_key,))
-
-
-def _matching_pool_ids(conn: Any, probe: dict[str, Any]) -> set[int]:
+def _matching_pool_ids(
+    conn: Any,
+    probe: dict[str, Any],
+    *,
+    fail_closed: bool = False,
+) -> set[int]:
     platform = unicodedata.normalize("NFKC", _text(probe.get("platform"))).casefold()
     raw_handles = (probe.get("handle"), probe.get("_provider_handle"))
     handles: set[str] = set()
@@ -163,6 +160,19 @@ def _matching_pool_ids(conn: Any, probe: dict[str, Any]) -> set[int]:
         handles = sorted({unicodedata.normalize("NFKC", value) for value in handles})
     profile_url = _text(probe.get("profile_url"))
     native_ids = profile_online_identity.safe_native_identity(probe, platform=platform)
+    if platform == "youtube":
+        uc_handle = next(
+            (
+                value
+                for value in handles
+                if re.fullmatch(r"UC[0-9A-Za-z_-]{10,}", value, re.IGNORECASE)
+            ),
+            "",
+        )
+        url_match = re.search(r"/channel/(UC[0-9A-Za-z_-]{10,})", profile_url, re.IGNORECASE)
+        channel_id = uc_handle or (url_match.group(1) if url_match else "")
+        if channel_id and not native_ids.get("channel_id"):
+            native_ids["channel_id"] = channel_id
     conditions: list[str] = []
     params: list[Any] = [platform]
     if handles:
@@ -173,8 +183,8 @@ def _matching_pool_ids(conn: Any, probe: dict[str, Any]) -> set[int]:
         conditions.append("lower(COALESCE(profile_url, ''))=lower(?)")
         params.append(profile_url)
     for value in native_ids.values():
-        conditions.append("raw_platform_data LIKE ?")
-        params.append(f"%{value}%")
+        conditions.append("lower(COALESCE(raw_platform_data, '')) LIKE ?")
+        params.append(f"%{str(value).casefold()}%")
     if not conditions:
         return set()
     if postgres_runtime:
@@ -207,8 +217,8 @@ def _matching_pool_ids(conn: Any, probe: dict[str, Any]) -> set[int]:
         alias_conditions.append("lower(COALESCE(profile_url, ''))=lower(?)")
         alias_params.append(profile_url)
     for value in native_ids.values():
-        alias_conditions.append("metadata_json LIKE ?")
-        alias_params.append(f"%{value}%")
+        alias_conditions.append("lower(COALESCE(metadata_json, '')) LIKE ?")
+        alias_params.append(f"%{str(value).casefold()}%")
     try:
         if postgres_runtime:
             alias_sql = f"""
@@ -226,6 +236,8 @@ def _matching_pool_ids(conn: Any, probe: dict[str, Any]) -> set[int]:
             bounded_alias_params = (platform,)
         alias_rows = conn.execute(alias_sql, bounded_alias_params).fetchall()
     except Exception:
+        if fail_closed:
+            raise
         alias_rows = []
     target_aliases = profile_recall_qualification.canonical_creator_aliases(probe)
     matched = {
@@ -269,7 +281,9 @@ def materialize_online_candidate(raw: dict[str, Any], *, conn: Any | None = None
     if conn is None:
         from app.db.connection import get_conn
         conn = get_conn()
-    _advisory_identity_locks(conn, aliases)
+    from app.domains.kol.profile_basics import _lock_creator_aliases
+
+    _lock_creator_aliases(conn, aliases)
     preexisting = _matching_pool_ids(conn, probe)
     if preexisting:
         rollback = getattr(conn, "rollback", None)

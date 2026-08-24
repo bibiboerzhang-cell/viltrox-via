@@ -284,7 +284,7 @@ export interface VkpiKolPoolVideoRow {
   product_skus?: string[];
   /** 契约 my_kol_video_recovery_v1:COALESCE(publish_date, posted_at, created_at),keyset 排序键。 */
   published_at?: string | null;
-  /** 两条持久任务(播放追踪 / 深析)的统一任务态 + 数据真值;只有 /my-kol/{id}/videos 下发,
+  /** 播放追踪 / 深析 / 关键帧复核的持久任务态 + 数据真值;只有 /my-kol/{id}/videos 下发,
    *  board-ext recent_videos 缺席(null)。形状与门面文案见 services/vkpi/myKolVideoTasks.ts。 */
   tasks?: VkpiVideoTasks | null;
 }
@@ -389,6 +389,41 @@ export async function refreshMyKolVideoMetrics(
   return apiFetch<VkpiMyKolVideoQueueResponse>(
     `/api/admin/vkpi/my-kol/${encodeURIComponent(String(kolPoolId))}/videos/${encodeURIComponent(String(evidenceId))}/refresh`,
     { method: "POST" },
+    token,
+  );
+}
+
+/* ============ ②b 单 KOL 最近内容跟进(显式订阅,与“已抓取”严格分层) ============ */
+
+export * from "./myKolContentMonitoring-api";
+
+/* ============ ②c 已深析 YouTube 视频的 Gemini 关键帧复核 ============ */
+
+export interface VkpiKeyframeQaQueueResponse {
+  status?: "queued" | "already_queued" | "already_reviewed" | "unsupported_platform" | "final_v1_not_ready" | "ai_disabled" | string;
+  kol_pool_id?: number;
+  evidence_id?: number;
+  derive_method?: string;
+  reason?: string;
+  provider_gate_reason?: string;
+  provider_calls?: boolean;
+  write_db?: boolean;
+  job?: { id?: number; status?: string } | null;
+  cache?: { id?: number; model?: string; updated_at?: string | null } | null;
+}
+
+/**
+ * 只把已存在的 ready final_v1 交给后台关键帧 QA 队列。
+ * HTTP 回执仅表示排队/已有结果，不代表 Gemini 已在本次请求完成分析。
+ */
+export async function enqueueMyKolVideoKeyframeQa(
+  token: string,
+  kolPoolId: number | string,
+  evidenceId: number | string,
+) {
+  return apiFetch<VkpiKeyframeQaQueueResponse>(
+    `/api/admin/vkpi/kol-pool/${encodeURIComponent(String(kolPoolId))}/enqueue-video-keyframe-qa`,
+    { method: "POST", body: jsonBody({ evidence_id: evidenceId }) },
     token,
   );
 }

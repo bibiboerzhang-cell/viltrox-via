@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""指标追踪 + 预测验证三任务开闸(scheduler_tasks.enabled),默认只列现状。
+"""数据飞轮七任务开闸(scheduler_tasks.enabled),默认只列现状。
 
-三任务(config-gate,迁移种子默认 OFF):
+七任务(config-gate,迁移种子默认 OFF):
   vkpi_kol_video_metric_refresh   每小时:按 hot/warm/cold 期限把到期订阅入队(worker 才调 provider)
+  vkpi_kol_content_monitoring     每小时:只扫显式 active 的最近内容订阅
   vkpi_forecast_outcomes_refresh  每日 04:50 CN:满窗 pending 预测回查实测播放 → 写回 actual/outcome
   vkpi_prediction_weekly_rollup   每周一 07:10 CN:已裁决流水补账 evals + WAPE/带内率/方向命中/FVA
+  vkpi_baseline_forecast_daily    每日:补预测对照基线
+  vkpi_drift_monitor              每周:有样本才计算漂移
+  vkpi_gtm_windows_refresh        每日:只回填 7/14/28 天证据,不自动裁决
 
 用法:
   PYTHONPATH=backend .venv/bin/python scripts/ops/enable_tracking_schedulers.py            # 只看
@@ -32,9 +36,21 @@ from stdout_utils import out, out_json  # noqa: E402
 
 TASK_KEYS = (
     "vkpi_kol_video_metric_refresh",
+    "vkpi_kol_content_monitoring",
     "vkpi_forecast_outcomes_refresh",
     "vkpi_prediction_weekly_rollup",
+    "vkpi_baseline_forecast_daily",
+    "vkpi_drift_monitor",
+    "vkpi_gtm_windows_refresh",
 )
+
+
+class SchedulerTaskUpdateIncomplete(RuntimeError):
+    """The reviewed seven-row scheduler scope changed during an apply."""
+
+    def __init__(self, updated: int) -> None:
+        self.updated = int(updated)
+        super().__init__(f"scheduler task update incomplete: {self.updated}/{len(TASK_KEYS)}")
 
 
 def _truthy(value: Any) -> bool:
@@ -74,7 +90,7 @@ def task_status(conn: Any) -> list[dict[str, Any]]:
 
 
 def readiness(conn: Any) -> dict[str, Any]:
-    """Inputs the three tasks depend on, so an operator sees why a run is empty."""
+    """Key inputs the seven tasks depend on, so an operator sees why a run is empty."""
     from app.domains.kol import video_tracking_budget
 
     def scalar(sql: str, params: tuple[Any, ...] = ()) -> Any:
@@ -89,6 +105,14 @@ def readiness(conn: Any) -> dict[str, Any]:
         "tracking_paused": scalar(
             "SELECT COUNT(*) AS n FROM vkpi_kol_video_metric_tracking WHERE status<>'active'"
         ),
+        "content_subscriptions": {
+            "active": scalar(
+                "SELECT COUNT(*) AS n FROM vkpi_kol_content_monitoring_subscriptions WHERE status='active'"
+            ),
+            "paused": scalar(
+                "SELECT COUNT(*) AS n FROM vkpi_kol_content_monitoring_subscriptions WHERE status='paused'"
+            ),
+        },
         "budget_scope": None if scope is None else {
             "cap_usd": float(scope.get("cap_usd") or 0),
             "current_spend": float(scope.get("current_spend") or 0),
@@ -119,7 +143,10 @@ def set_enabled(conn: Any, *, enabled: bool) -> dict[str, int]:
         f"UPDATE scheduler_tasks SET enabled=?, updated_at=NOW() WHERE task_key IN ({placeholders})",
         (bool(enabled), *TASK_KEYS),
     )
-    return {"updated": int(getattr(cursor, "rowcount", 0) or 0)}
+    updated = int(getattr(cursor, "rowcount", 0) or 0)
+    if updated != len(TASK_KEYS):
+        raise SchedulerTaskUpdateIncomplete(updated)
+    return {"updated": updated}
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -146,31 +173,58 @@ def main(argv: list[str] | None = None) -> int:
         "update": None,
         "after": None,
         "rollup": None,
+        "missing_task_keys": [],
+        "error": None,
     }
+    report["missing_task_keys"] = [
+        row["task_key"] for row in report["before"] if not row.get("registered")
+    ]
+    exit_code = 0
     if args.apply:
-        report["update"] = set_enabled(conn, enabled=not args.disable)
-        conn.commit()
-        report["after"] = task_status(conn)
-        if args.run_rollup:
-            from app.domains.market_brain import prediction_rollup_truth
-
-            rollup = prediction_rollup_truth.rollup_forecast_log_truth(conn)
-            report["rollup"] = {
-                "backfill": rollup.get("backfill"),
-                "evals": rollup.get("evals"),
-                "metrics": rollup.get("metrics"),
+        if report["missing_task_keys"]:
+            conn.rollback()
+            report["error"] = {
+                "code": "scheduler_tasks_missing",
+                "expected": len(TASK_KEYS),
+                "registered": len(TASK_KEYS) - len(report["missing_task_keys"]),
+                "missing_task_keys": list(report["missing_task_keys"]),
             }
+            exit_code = 2
+        else:
+            try:
+                report["update"] = set_enabled(conn, enabled=not args.disable)
+                conn.commit()
+                report["after"] = task_status(conn)
+                if args.run_rollup:
+                    from app.domains.market_brain import prediction_rollup_truth
+
+                    rollup = prediction_rollup_truth.rollup_forecast_log_truth(conn)
+                    report["rollup"] = {
+                        "backfill": rollup.get("backfill"),
+                        "evals": rollup.get("evals"),
+                        "metrics": rollup.get("metrics"),
+                    }
+            except SchedulerTaskUpdateIncomplete as exc:
+                conn.rollback()
+                report["error"] = {
+                    "code": "scheduler_task_update_incomplete",
+                    "expected": len(TASK_KEYS),
+                    "updated": exc.updated,
+                }
+                exit_code = 2
     else:
         conn.rollback()
 
     if args.json:
         out_json(report, ensure_ascii=False, default=str)
-        return 0
+        return exit_code
     out(f"mode={report['mode']}")
     for row in report["before"]:
         out(f"  {row['task_key']}: registered={row['registered']} enabled={row['enabled']} "
             f"last_run={row.get('last_run_at') or '-'} last_error={row.get('last_error') or '-'}")
     out(f"readiness={json.dumps(report['readiness'], ensure_ascii=False, default=str)}")
+    if report["error"] is not None:
+        out(f"error={json.dumps(report['error'], ensure_ascii=False, default=str)}")
     if report["update"] is not None:
         out(f"update={json.dumps(report['update'])} -> enabled={not args.disable}")
         for row in report["after"] or []:
@@ -179,7 +233,7 @@ def main(argv: list[str] | None = None) -> int:
         out(f"rollup={json.dumps(report['rollup'], ensure_ascii=False, default=str)}")
     if not args.apply:
         out("dry-run: 未改 scheduler_tasks;加 --apply 开闸(--disable 关闸)。")
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

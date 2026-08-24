@@ -510,7 +510,7 @@ def invoke_json(
                     purpose=purpose,
                     prompt=safe_prompt,
                     estimated_cost_usd=estimated_cost,
-                    cost_scope=cost_scope,
+                    cost_scope=cost_scope, require_cost_scope=bool(require_configured_budget),
                     metadata=metadata,
                     staff=staff,
                     triggered_by=triggered_by,

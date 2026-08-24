@@ -35,6 +35,7 @@ describe("my_kol_video_recovery_v1 task state facade", () => {
 
     const never = state("not_requested");
     expect(taskChip("analysis", never)).toMatchObject({ label: "深析未发起", tone: "idle" });
+    expect(taskChip("review", never)).toMatchObject({ label: "关键帧复核未发起", tone: "idle" });
     expect(freshnessText("analysis", never).label).toBe("从未分析");
     expect(freshnessText("metric", normalizeTaskState(undefined)).label).toBe("实测数据暂不可用");
   });
@@ -67,6 +68,7 @@ describe("normalizeVideoPage (keyset contract)", () => {
     expect(page.profile_crawl?.status).toBe("running");
     expect(page.items?.[0].tasks?.metric_refresh.status).toBe("queued");
     expect(page.items?.[0].tasks?.final_v1.status).toBe("not_requested");
+    expect(page.items?.[0].tasks?.keyframe_qa?.status).toBe("not_requested");
     expect(page.items?.[1].tasks).toBeNull();
 
     const last = normalizeVideoPage({ items: [], page: { limit: 60, returned: 0, has_more: false, next_cursor: "stale", cursor_kind: "published_at_id", order: "published_at_desc_id_desc" } });

@@ -15,7 +15,8 @@ Contract ``my_kol_video_recovery_v1`` (served by
           "viltrox_modalities": ["visual", "subtitle", "audio"],  # subset, fixed order; [] when unknown
           "tasks": {
             "metric_refresh": TaskState,        # kol_video_metric_refresh + metric snapshot
-            "final_v1": TaskState               # Gemini final_v1 job + analysis cache
+            "final_v1": TaskState,              # main video analysis + cache
+            "keyframe_qa": TaskState            # keyframe review + cache
           }
         }
       ],
@@ -62,7 +63,6 @@ Rules the contract guarantees:
   ``published_at = COALESCE(publish_date, posted_at, created_at)`` (never
   ``updated_at`` / ``view_count``, which drift with every metric refresh).  The
   cursor encodes the last row's ``(published_at, id)``; offsets are gone.
-* The response never includes provider payloads, prompts, or raw worker errors.
 * **reason_class is a closed vocabulary, never raw text.**  It is derived by
   rule from ``apify_jobs.status`` / ``last_error_category`` / ``last_error``
   (the text is classified, never echoed):
@@ -106,9 +106,9 @@ from app.domains.kol.video_evidence_projection import (
     final_v1_modalities_for_evidence,
     viltrox_modalities,
 )
+from app.domains.kol.video_keyframe_qa_cache import KEYFRAME_QA_DERIVE_METHOD, valid_qa_caches
 
 logger = get_logger("viltrox.domains.kol.my_kol_video_recovery")
-
 CONTRACT = "my_kol_video_recovery_v1"
 CURSOR_KIND = "published_at_id"
 ORDER = "published_at_desc_id_desc"
@@ -511,19 +511,20 @@ def _job_is_newer(job: dict[str, Any] | None, data_updated_at: Any) -> bool:
     return data_at is None or job_at is None or job_at > data_at
 
 
-def _final_v1_caches(conn: Any, evidence_ids: list[int]) -> dict[int, dict[str, Any]]:
+def _final_v1_caches(conn: Any, evidence_ids: list[int], derive_method: str = FINAL_V1_DERIVE_METHOD) -> dict[int, dict[str, Any]]:
     if not evidence_ids or not _table_available(conn, "vkpi_analysis_cache"):
         return {}
     placeholders = ",".join("?" for _ in evidence_ids)
     rows = conn.execute(
         f"""
-        SELECT id, target_id, status, updated_at
+        SELECT id, target_id, status, result, updated_at
         FROM vkpi_analysis_cache
         WHERE target_type='video'
           AND target_id IN ({placeholders})
           AND derive_method=?
+        ORDER BY updated_at ASC, id ASC
         """,
-        (*(str(value) for value in evidence_ids), FINAL_V1_DERIVE_METHOD),
+        (*(str(value) for value in evidence_ids), str(derive_method)),
     ).fetchall()
     result: dict[int, dict[str, Any]] = {}
     for row in rows:
@@ -532,12 +533,10 @@ def _final_v1_caches(conn: Any, evidence_ids: list[int]) -> dict[int, dict[str, 
         status = str(item.get("status") or "").strip().lower()
         if evidence_id <= 0 or status not in {"ready", "stale"}:
             continue
-        result[evidence_id] = {"status": status, "updated_at": _stamp(item.get("updated_at"))}
+        result[evidence_id] = {"id": item.get("id"), "status": status, "result": item.get("result"), "updated_at": _stamp(item.get("updated_at"))}
     return result
-
-
 def final_v1_task_state(cache: dict[str, Any] | None, job: dict[str, Any] | None) -> dict[str, Any]:
-    """Gemini final_v1: job ledger vs. analysis cache row.
+    """Video-analysis job ledger vs. its analysis cache row.
 
     * active job newer than the cache  -> status = job state, data.superseded_by_job = true
     * finished job but no ready cache  -> status = failed (the promise was not kept)
@@ -706,9 +705,12 @@ def attach_task_states(
         )
     )
     caches = _final_v1_caches(conn, evidence_ids)
+    qa_caches = valid_qa_caches(caches, _final_v1_caches(conn, evidence_ids, KEYFRAME_QA_DERIVE_METHOD))
     final_jobs = _latest_jobs_for_targets(
         conn, job_type=VIDEO_JOB_TYPE, target_ids=evidence_ids, derive_method=FINAL_V1_DERIVE_METHOD
     )
+    qa_jobs = _latest_jobs_for_targets(conn, job_type=VIDEO_JOB_TYPE, target_ids=evidence_ids,
+                                       derive_method=KEYFRAME_QA_DERIVE_METHOD)
     metric_jobs = _latest_jobs_for_targets(conn, job_type=METRIC_JOB_TYPE, target_ids=evidence_ids)
     modalities = final_v1_modalities_for_evidence(conn, evidence_ids) if fetch_modalities else {}
     trends = _metric_trends_for_rows(conn, evidence_ids) if fetch_metric_trends else {}
@@ -724,6 +726,7 @@ def attach_task_states(
         video["tasks"] = {
             "metric_refresh": metric_refresh_task_state(tracking, metric_jobs.get(evidence_id)),
             "final_v1": final_v1_task_state(caches.get(evidence_id), final_jobs.get(evidence_id)),
+            "keyframe_qa": final_v1_task_state(qa_caches.get(evidence_id), qa_jobs.get(evidence_id)),
         }
     return rows
 
@@ -781,6 +784,7 @@ __all__ = [
     "FAILED_REASON_CLASSES",
     "FAILURE_FIELD_KEYS",
     "FAILURE_FIELD_STATUSES",
+    "KEYFRAME_QA_DERIVE_METHOD",
     "REASON_CLASSES",
     "TASK_STATUSES",
     "attach_task_states",

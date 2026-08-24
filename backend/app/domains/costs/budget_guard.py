@@ -11,7 +11,8 @@ from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.costs.budget_guard_errors import note_cost_ledger_failure
-from app.domains.costs.budget_windows import project_budget_window
+from app.domains.costs.budget_windows import budget_window_kind
+from app.domains.costs.budget_window_roll import roll_budget_window
 from app.domains.costs.budget_guard_persistence import (
     clean_value as _persistence_clean_value,
     cost_decimal as _cost_decimal,
@@ -22,7 +23,6 @@ from app.domains.costs.budget_guard_persistence import (
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 logger = get_logger(__name__)
-
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -132,7 +132,7 @@ def _budget_payload(row: dict[str, Any], *, estimated_cost: float = 0.0) -> dict
     cap = _float(row.get("cap_usd"))
     current = _float(row.get("current_spend"))
     warning_at = _clamp_ratio(row.get("warning_at"), 0.8)
-    hard_stop_at = _clamp_ratio(row.get("hard_stop_at"), 1.0)
+    hard_stop_at = max(warning_at, _clamp_ratio(row.get("hard_stop_at"), 1.0))
     projected = current + max(0.0, float(estimated_cost or 0))
     usage_ratio = (current / cap) if cap > 0 else 0.0
     projected_ratio = (projected / cap) if cap > 0 else 0.0
@@ -153,6 +153,7 @@ def _budget_payload(row: dict[str, Any], *, estimated_cost: float = 0.0) -> dict
         "warning": warning,
         "hard_stopped": hard_stopped,
         "allowed": not hard_stopped,
+        "window": budget_window_kind(str(row.get("scope") or "")),
         "reset_at": row.get("reset_at"),
         "fallback_action": row.get("fallback_action") or "",
         "metadata": _load_json(row.get("metadata_json")),
@@ -165,34 +166,15 @@ def _maybe_roll_budget_window(conn: Any, row: dict[str, Any]) -> dict[str, Any]:
     日窗(cron:*、dashboard:report_analysis):reset_at 过期(或从未设置)即清零并推进到
     下一个 UTC 零点。修复官号日报『$4/日』被实现成『$4/终身』后的永久 hard stop。
 
-    月窗(monthly_total、provider:*):reset_at 过期即清零并推进到下月 1 日(UTC);
+    月窗(全部普通功能 scope、monthly_total、provider:*):过期清零并推进到下月 1 日(UTC);
     从未设置时只补窗口锚点、不清零，保留既有累计与台账读回口径。
 
     投影口径(该不该滚/滚到哪/清不清零)统一出自 budget_windows.project_budget_window
     纯函数;只读路径(budget_readonly)复用同一投影但绝不落 UPDATE/commit。"""
-    projected, roll_required, zero_spend = project_budget_window(row)
-    if not roll_required:
-        return row
-    if release_validation_active():  # Preserve persisted hard-stop; live traffic rolls after activation.
-        return row
-    scope_key = str(row.get("scope") or "")
-    next_reset = str(projected.get("reset_at") or "")
-    try:
-        if zero_spend:
-            conn.execute(
-                "UPDATE vkpi_provider_budget_caps SET current_spend = 0, reset_at = ? WHERE scope = ?",
-                (next_reset, scope_key),
-            )
-        else:
-            conn.execute(
-                "UPDATE vkpi_provider_budget_caps SET reset_at = ? WHERE scope = ?",
-                (next_reset, scope_key),
-            )
-        conn.commit()
-        row = projected
-    except Exception:
-        logger.warning("budget window roll failed scope=%s", scope_key, exc_info=True)
-    return row
+    return roll_budget_window(
+        conn, row, postgres=is_postgres_runtime(),
+        release_fenced=release_validation_active(), commit=True,
+    )
 
 
 def check_budget(scope: str, estimated_cost: float, *, require_configured: bool = False) -> bool:
@@ -219,20 +201,17 @@ def check_budget_scopes(
 ) -> dict[str, Any]:
     """Return a read-only hard-gate plan across multiple budget scopes."""
 
-    ensure_budget_schema()
+    from app.domains.costs.budget_readonly import get_budget_status_readonly
+
     clean_scopes = [scope for scope in dict.fromkeys(_normalize_scope(scope) for scope in (scopes or [])) if scope]
     checks: list[dict[str, Any]] = []
     allowed = True
     for scope in clean_scopes:
-        status = get_budget_status(scope, estimated_cost=estimated_cost)
+        status = get_budget_status_readonly(scope, estimated_cost=estimated_cost)
         configured = bool(status.get("configured", False))
         scope_allowed = bool(status.get("allowed", True))
-        if _is_single_call_ceiling_scope(scope) and configured:
-            # single_call[_*] is a per-request ceiling, not a cumulative budget pool.
-            cap = _float(status.get("cap_usd"))
-            scope_allowed = _single_call_ceiling_allowed(cap, float(estimated_cost or 0))
-            status["allowed"] = scope_allowed
-            status["hard_stopped"] = not scope_allowed
+        if not configured and not require_configured:
+            scope_allowed = True
         if require_configured and not configured:
             scope_allowed = False
         check = {
@@ -365,6 +344,7 @@ def record_cost(
     metadata: dict[str, Any] | None = None,
     triggered_by: Any = None,
     extra_scopes: list[str] | tuple[str, ...] | None = None,
+    optional_scopes: list[str] | tuple[str, ...] | None = None,
     update_budget_scopes: bool = True,
 ) -> dict[str, Any]:
     ensure_budget_schema()
@@ -384,6 +364,11 @@ def record_cost(
     actor_staff_id = _existing_staff_id(conn, unresolved_staff_id)
     if unresolved_staff_id and not actor_staff_id:
         metadata = {**(metadata or {}), "unresolved_staff_id": unresolved_staff_id}
+    optional_scope_keys = {_normalize_scope(item) for item in (optional_scopes or []) if item}
+    configured_optional_scopes = {
+        item for item in optional_scope_keys
+        if conn.execute("SELECT 1 FROM vkpi_provider_budget_caps WHERE scope=?", (item,)).fetchone()
+    } if update_budget_scopes else set()
     try:
         inserted = conn.execute(
             """
@@ -427,7 +412,7 @@ def record_cost(
                 scope_key,
                 *(_normalize_scope(scope) for scope in (extra_scopes or [])),
             ]
-            if scope
+            if scope and (scope not in optional_scope_keys or scope in configured_optional_scopes)
         ]
         # single_call[_*] are per-request ceilings: never accumulate current_spend on
         # them or the shared row creeps past cap and hard-stops every later call
@@ -441,8 +426,18 @@ def record_cost(
             if update_budget_scopes
             else []
         )
-        for budget_scope in scopes_to_update:
-            conn.execute(
+        for budget_scope in sorted(scopes_to_update):
+            budget_row = conn.execute(
+                "SELECT * FROM vkpi_provider_budget_caps WHERE scope=?"
+                + (" FOR UPDATE" if is_postgres_runtime() else ""), (budget_scope,)
+            ).fetchone()
+            if budget_row is None:
+                raise RuntimeError(f"budget_scope_missing_during_cost_record:{budget_scope}")
+            roll_budget_window(
+                conn, _clean_row(budget_row), postgres=is_postgres_runtime(),
+                release_fenced=release_validation_active(), commit=False, strict=True,
+            )
+            updated = conn.execute(
                 """
                 UPDATE vkpi_provider_budget_caps
                 SET current_spend=COALESCE(current_spend, 0) + ?
@@ -450,6 +445,8 @@ def record_cost(
                 """,
                 (_money_db_param(cost), budget_scope),
             )
+            if int(getattr(updated, "rowcount", 0) or 0) != 1:
+                raise RuntimeError(f"budget_scope_update_unconfirmed:{budget_scope}")
         conn.commit()
     except Exception as exc:
         conn.rollback()

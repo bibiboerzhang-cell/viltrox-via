@@ -115,6 +115,58 @@ def test_reservation_is_atomic_against_open_allowance_and_never_stores_prompt() 
     assert "nested" not in metadata
 
 
+def test_required_advisor_scope_missing_blocks_inside_atomic_reservation() -> None:
+    _install_fixture()
+
+    with pytest.raises(LlmBudgetBlocked) as caught:
+        reserve_llm_budget(
+            provider="anthropic",
+            model="claude-opus-5",
+            purpose="marketing_advisor",
+            prompt="safe",
+            estimated_cost_usd=0.01,
+            cost_scope="cron:marketing_advisor",
+            require_cost_scope=True,
+        )
+
+    assert caught.value.reason == "budget_scope_not_configured"
+    assert caught.value.scope == "cron:marketing_advisor"
+    assert get_conn().execute(
+        "SELECT COUNT(*) AS n FROM vkpi_llm_budget_reservations"
+    ).fetchone()["n"] == 0
+
+
+def test_required_advisor_scope_rolls_and_checks_in_reservation_transaction() -> None:
+    _install_fixture()
+    budget_guard.update_budget(
+        "cron:marketing_advisor",
+        {
+            "cap_usd": 0.50,
+            "current_spend": 0.50,
+            "hard_stop_at": 1.0,
+            "reset_at": "2020-01-01T00:00:00Z",
+        },
+    )
+
+    reservation = reserve_llm_budget(
+        provider="anthropic",
+        model="claude-opus-5",
+        purpose="marketing_advisor",
+        prompt="safe",
+        estimated_cost_usd=0.01,
+        cost_scope="cron:marketing_advisor",
+        require_cost_scope=True,
+    )
+
+    row = get_conn().execute(
+        "SELECT current_spend,reset_at FROM vkpi_provider_budget_caps WHERE scope=?",
+        ("cron:marketing_advisor",),
+    ).fetchone()
+    assert float(row["current_spend"]) == pytest.approx(0.0)
+    assert str(row["reset_at"]) > "2020-01-01T00:00:00Z"
+    assert "cron:marketing_advisor" in reservation.cumulative_scopes
+
+
 def test_progress_metadata_normalizes_total_to_attempt_total() -> None:
     metadata = reservations._progress_metadata(
         {"phase": "provider_generation", "attempt_index": 2, "total": 3},

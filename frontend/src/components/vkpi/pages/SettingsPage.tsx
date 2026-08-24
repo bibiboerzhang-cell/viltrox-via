@@ -66,6 +66,8 @@ interface LlmReadinessAudit {
   evaluated_count?: number;
   production_ready_count?: number;
   blocked_count?: number;
+  operator_acknowledged_count?: number;
+  model_readiness_authorized_count?: number;
   evidence_source?: LlmReadinessEvidenceSource;
   attestation_trust_roots?: {
     exact_probe?: { configured?: boolean; declared_key_count?: number; valid_key_count?: number };
@@ -94,6 +96,14 @@ interface LlmTaskReadiness {
   production_ready?: boolean;
   failure_reasons?: string[];
   runtime_gate?: LlmRuntimeGate;
+  runtime_authorization?: {
+    allowed_by_model_readiness?: boolean;
+    source?: 'signed_evidence' | 'operator_ack' | 'blocked';
+    operator_acknowledged?: boolean;
+    temporary?: boolean;
+    budget_and_feature_gates_still_apply?: boolean;
+    claim_status?: string;
+  };
   probe?: {
     attestation_verified?: boolean;
     as_of?: string | null;
@@ -141,6 +151,7 @@ const LLM_TASK_LABELS: Record<string, string> = {
 
 function llmTaskState(row: LlmTaskReadiness): string {
   if (row.production_ready === true) return '生产就绪';
+  if (row.runtime_authorization?.source === 'operator_ack') return '临时精确授权 · 证据待补';
   if (row.configured === true || row.state === 'configured') return '已配置 · 未就绪';
   return '未配置 · 未就绪';
 }
@@ -191,14 +202,18 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
   const audit = result?.readiness_audit;
   const taskEntries = Object.entries(result?.task_model_readiness || {});
   const taskRows = taskEntries.map(([, row]) => row);
-  const taskReadyCount = taskRows.filter((row) => row?.production_ready === true).length;
-  const taskBlockedCount = taskRows.length - taskReadyCount;
+  const taskSignedReadyCount = taskRows.filter((row) => row?.production_ready === true).length;
+  const taskTemporaryAuthorizationCount = taskRows.filter(
+    (row) => row?.runtime_authorization?.source === 'operator_ack',
+  ).length;
   const candidateCount = Number(audit?.candidate_count ?? 0);
   const configuredCount = Number(audit?.configured_count ?? 0);
   const probedCount = Number(audit?.probed_count ?? 0);
   const evaluatedCount = Number(audit?.evaluated_count ?? 0);
   const readyCount = Number(audit?.production_ready_count ?? 0);
   const blockedCount = Number(audit?.blocked_count ?? Math.max(candidateCount - readyCount, 0));
+  const operatorAckCount = Number(audit?.operator_acknowledged_count ?? 0);
+  const modelAuthorizedCount = Number(audit?.model_readiness_authorized_count ?? readyCount);
   const evidence = audit?.evidence_source;
   const hasAudit = Boolean(audit);
   const evidenceSource = String(evidence?.source || 'not_configured');
@@ -214,7 +229,10 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
     { label: '真实评测', value: `${evaluatedCount}/${candidateCount}` },
     { label: '生产闸门通过', value: readyCount },
     { label: '生产闸门阻断', value: blockedCount },
-    { label: '任务绑定', value: `${taskReadyCount} 通过 / ${taskBlockedCount} 阻断` },
+    { label: '临时精确授权', value: operatorAckCount },
+    { label: '模型门放行（不含预算）', value: modelAuthorizedCount },
+    { label: '签名生产就绪', value: `${taskSignedReadyCount}/${taskRows.length}` },
+    { label: '临时运行授权', value: `${taskTemporaryAuthorizationCount}/${taskRows.length}` },
   ];
 
   return (
@@ -228,7 +246,9 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
               : hasAudit
                 ? readyCount > 0
                   ? `已有 ${readyCount} 个精确模型绑定通过当前证据闸门`
-                  : '尚无精确模型绑定通过当前生产闸门'
+                  : operatorAckCount > 0
+                    ? `生产证据仍待补；${operatorAckCount} 个精确绑定获临时操作员授权`
+                    : '尚无精确模型绑定通过当前生产闸门'
                 : '不可核验'}
           </span>
         </div>
@@ -277,7 +297,7 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
           ) : null}
           <details style={{ marginTop: 10 }}>
             <summary style={{ cursor: 'pointer', fontSize: 'var(--ds-fs-12)', fontWeight: 600 }}>
-              逐任务真实状态（{taskReadyCount}/{taskRows.length} 通过）
+              逐任务真实状态（签名 {taskSignedReadyCount}/{taskRows.length} · 临时授权 {taskTemporaryAuthorizationCount}/{taskRows.length}）
             </summary>
             <div style={{ marginTop: 8, display: 'grid', gap: 8 }}>
               {taskEntries.map(([task, row]) => {
@@ -312,6 +332,11 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
                         evaluation.safety_valid_rate,
                       ].map(llmPercent).join(' / ')}
                     </div>
+                    {row.runtime_authorization?.source === 'operator_ack' ? (
+                      <div className="vkpi-inline-message" style={{ marginTop: 5, fontSize: 'var(--ds-fs-10)' }}>
+                        当前仅凭操作员对该精确模型的临时授权通过模型门；预算、功能开关和每次用户确认仍会独立校验。
+                      </div>
+                    ) : null}
                     {reasons.length ? (
                       <ul style={{ margin: '5px 0 0', paddingLeft: 18, fontSize: 'var(--ds-fs-10)', lineHeight: 1.55 }}>
                         {reasons.map((reason) => {
@@ -331,6 +356,7 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
       <div className="text-muted" style={{ marginTop: 10, fontSize: 'var(--ds-fs-11)', lineHeight: 1.6 }}>
         已注册 / 已配置不等于可用；仅 production_ready 表示该精确绑定满足当前证据闸门。
         “环境凭据已配置”只表示运行环境检测到对应 provider 凭据，不表示设置页已保存、账号已授权或精确模型可调用。
+        操作员临时授权只放行精确模型就绪门，不会改写 production_ready，也不绕过预算、功能开关和逐次用户确认。
         本卡片只读，不会调用外部模型；AI 未就绪或关闭时，基础数据流程继续可用。
         {result?.available_models_semantics === 'registered_candidates_only_not_verified_availability'
           ? ' 当前模型清单仅代表候选注册，不代表供应商已授权或模型真实可调用。'

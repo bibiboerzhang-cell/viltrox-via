@@ -21,6 +21,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
+from app.domains.costs.budget_window_roll import roll_budget_window
 
 
 logger = get_logger(__name__)
@@ -337,6 +338,7 @@ def reserve_llm_budget(
     prompt: str,
     estimated_cost_usd: Decimal | float | str,
     cost_scope: str = "",
+    require_cost_scope: bool = False,
     metadata: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
     triggered_by: Any = None,
@@ -384,23 +386,6 @@ def reserve_llm_budget(
     # 单调吃满 scope 日闸。独立事务,失败不阻断预约主流程。
     _maybe_reap_stale_reservations()
 
-    # Roll an expired cron window before acquiring the transaction's cap locks.
-    # The helper owns its own commit, so it must run before the atomic section.
-    if clean_cost_scope.startswith("cron:"):
-        try:
-            from app.domains.costs import budget_guard
-
-            budget_guard.get_budget_status(
-                clean_cost_scope,
-                estimated_cost=float(estimate),
-            )
-        except Exception as exc:
-            raise LlmBudgetBlocked(
-                f"budget_window_unavailable:{type(exc).__name__}",
-                estimated_cost_usd=float(estimate),
-                scope=clean_cost_scope,
-            ) from exc
-
     request_hash = request_fingerprint(
         provider=provider_key,
         model=model_name,
@@ -409,6 +394,15 @@ def reserve_llm_budget(
     )
     reservation_key = f"llmres-{secrets.token_hex(16)}"
     core_scopes = (_MONTHLY_SCOPE, _SINGLE_CALL_SCOPE, provider_budget_scope)
+    required_scopes = list(core_scopes)
+    if require_cost_scope:
+        if not clean_cost_scope:
+            raise LlmBudgetBlocked(
+                "budget_scope_not_configured",
+                estimated_cost_usd=float(estimate),
+                scope="cost_scope",
+            )
+        required_scopes.append(clean_cost_scope)
     requested_scopes = list(dict.fromkeys([*core_scopes, clean_cost_scope]))
     requested_scopes = [scope for scope in requested_scopes if scope]
     lock = " FOR UPDATE" if is_postgres_runtime() else ""
@@ -423,21 +417,44 @@ def reserve_llm_budget(
             if row:
                 rows[scope] = dict(row)
 
-        missing_core = [scope for scope in core_scopes if scope not in rows]
-        if missing_core:
+        missing_required = [scope for scope in required_scopes if scope not in rows]
+        if missing_required:
             conn.rollback()
             raise LlmBudgetBlocked(
                 "budget_scope_not_configured",
                 estimated_cost_usd=float(estimate),
-                scope=missing_core[0],
+                scope=missing_required[0],
             )
+
+        # All requested rows are locked in stable scope order before a window
+        # is changed.  Re-project the purpose scope from the locked row and keep
+        # rollover plus reservation in this transaction, closing the preflight
+        # -> reservation gap where an operator could delete, edit, or exhaust
+        # the Advisor's mandatory daily scope.
+        if clean_cost_scope in rows:
+            try:
+                rows[clean_cost_scope] = roll_budget_window(
+                    conn,
+                    rows[clean_cost_scope],
+                    postgres=is_postgres_runtime(),
+                    release_fenced=False,
+                    commit=False,
+                    strict=True,
+                )
+            except Exception as exc:
+                conn.rollback()
+                raise LlmBudgetBlocked(
+                    f"budget_window_unavailable:{type(exc).__name__}",
+                    estimated_cost_usd=float(estimate),
+                    scope=clean_cost_scope,
+                ) from exc
 
         cumulative_scopes: list[str] = []
         for scope in requested_scopes:
             row = rows.get(scope)
             if row is None:
-                # Purpose-specific scopes are optional; the three core caps are
-                # mandatory and were checked above.
+                # Purpose-specific scopes remain optional unless the caller's
+                # preflight explicitly required the cost scope above.
                 continue
             cap = _money_decimal(
                 row.get("cap_usd"),

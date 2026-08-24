@@ -51,6 +51,12 @@ logger = get_logger(__name__)
 KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS = max(
     256, int(os.environ.get("GEMINI_KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS", "4096"))
 )
+# Google GenAI 的 timeout 单位是毫秒。SDK 默认会自己重试 5 次，再叠加
+# RetryingGeminiClient 的外层重试会让一次 QA 长时间无上界；因此本路径把单次
+# HTTP 请求截止在有界时间内，并关掉 SDK 内层重试，只保留已有可观测的外层重试账。
+KEYFRAME_JUDGE_REQUEST_TIMEOUT_SECONDS = max(
+    5, min(180, int(os.environ.get("GEMINI_KEYFRAME_JUDGE_REQUEST_TIMEOUT_SECONDS", "60")))
+)
 KEYFRAME_JUDGE_OUTPUT_TOKENS_OPENAI_ANTHROPIC = 4000
 # 预留估算:关键帧 JPG 按图片瓦片上限保守估(1 张 ≈ 1600 token),文本按 3 字符/token。
 KEYFRAME_IMAGE_RESERVE_TOKENS = 1600
@@ -107,6 +113,7 @@ def _strict_gemini_generate(
     llm_context: dict[str, Any] | None,
     subphase: str,
     title: str,
+    attempt_log: list[dict[str, Any]] | None = None,
 ) -> Any:
     text = str(contents[0]) if contents and isinstance(contents[0], str) else ""
     return llm_production.generate_google_content(
@@ -116,6 +123,7 @@ def _strict_gemini_generate(
         model=model_name,
         max_output_tokens=KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS,
         estimated_input_tokens=_keyframe_input_token_estimate(text, len(contents) - 1),
+        attempt_log=attempt_log,
         **_strict_call_kwargs(
             llm_context,
             task_binding=KEYFRAME_TASK_BINDING_GEMINI,
@@ -137,6 +145,24 @@ def _keyframe_judge_generate_config(model_name: str) -> Any:
     return genai_types.GenerateContentConfig(
         max_output_tokens=KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS,
         thinking_config=thinking,
+        http_options=genai_types.HttpOptions(
+            timeout=KEYFRAME_JUDGE_REQUEST_TIMEOUT_SECONDS * 1000,
+            retry_options=genai_types.HttpRetryOptions(attempts=1),
+        ),
+    )
+
+
+def _provider_calls_from_attempts(attempts: Any) -> bool:
+    """Conservatively report whether the strict boundary reached provider I/O."""
+    if not isinstance(attempts, list):
+        return False
+    # ``unknown`` is fail-closed: after provider_started we cannot prove that
+    # the remote side did not receive/charge the request.
+    provider_states = {"settled", "model_mismatch", "usage_missing", "unknown"}
+    return any(
+        str(item.get("state") or "").strip().lower() in provider_states
+        for item in attempts
+        if isinstance(item, dict)
     )
 
 
@@ -213,6 +239,9 @@ async def analyze_final_v1_keyframe_qa(
         "method": f"gemini_final_v1_keyframe_qa_{model_name}",
         "model": model_name,
         "usage_metadata": {},
+        "llm_attempts": [],
+        "cost_authority": "llm_production_google_generate_content_v1",
+        "provider_calls_performed": False,
         "error": None,
     }
     if not GEMINI_AVAILABLE or not gemini_client or not genai_types:
@@ -237,8 +266,12 @@ async def analyze_final_v1_keyframe_qa(
                 llm_context=llm_context,
                 subphase="final_v1_keyframe_qa",
                 title=title,
+                attempt_log=result["llm_attempts"],
             )
         )
+        # A response from the strict boundary proves provider I/O happened,
+        # even if a test double omitted the attempt summary.
+        result["provider_calls_performed"] = True
         usage_metadata = _response_usage_metadata(resp)
         raw = resp.text.strip()
         raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
@@ -257,6 +290,10 @@ async def analyze_final_v1_keyframe_qa(
         )
         return result
     except Exception as exc:
+        result["provider_calls_performed"] = bool(
+            result.get("provider_calls_performed")
+            or _provider_calls_from_attempts(result.get("llm_attempts"))
+        )
         result["error"] = f"Gemini final_v1 keyframe QA failed: {str(exc)[:500]}"
         logger.warning("gemini_final_v1_keyframe_qa_failed", extra={"error": str(exc)[:160]})
         return result

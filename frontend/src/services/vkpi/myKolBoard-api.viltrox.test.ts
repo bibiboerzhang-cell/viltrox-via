@@ -11,7 +11,11 @@ vi.mock("../http", async (importOriginal) => {
 import {
   classifyVideoRow,
   dataWatchMyKolVideo,
+  enableMyKolContentMonitoring,
+  enqueueMyKolVideoKeyframeQa,
   filterClassifiedVideos,
+  getMyKolContentMonitoring,
+  pauseMyKolContentMonitoring,
   sortClassifiedVideos,
   summarizeKolVideos,
   videoTrendText,
@@ -141,5 +145,45 @@ describe("dataWatchMyKolVideo(一键数据关注 POST 契约)", () => {
     const resp = await dataWatchMyKolVideo("tok", 101, 901);
     expect(resp.status).toBe("sku_required");
     expect(resp.candidates?.[0]?.sku_code).toBe("AF-85-F14");
+  });
+});
+
+describe("MY KOL content-monitoring explicit subscription contract", () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset();
+    apiFetchMock.mockResolvedValue({ status: "ready", provider_calls_performed: false });
+  });
+
+  it("keeps pure read, explicit enable, and pause on one encoded endpoint", async () => {
+    await getMyKolContentMonitoring("tok", "a b");
+    await enableMyKolContentMonitoring("tok", "a b", 48);
+    await pauseMyKolContentMonitoring("tok", "a b");
+
+    const path = "/api/admin/vkpi/my-kol/a%20b/content-monitoring";
+    expect(apiFetchMock).toHaveBeenNthCalledWith(1, path, {}, "tok");
+    expect(apiFetchMock).toHaveBeenNthCalledWith(
+      2,
+      path,
+      { method: "POST", body: JSON.stringify({ cadence_hours: 48 }) },
+      "tok",
+    );
+    expect(apiFetchMock).toHaveBeenNthCalledWith(3, path, { method: "DELETE" }, "tok");
+  });
+});
+
+describe("MY KOL keyframe QA queue contract", () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset();
+    apiFetchMock.mockResolvedValue({ status: "queued", provider_calls: false });
+  });
+
+  it("POSTs one encoded evidence target without claiming provider completion", async () => {
+    const response = await enqueueMyKolVideoKeyframeQa("tok", "a b", "9/1");
+    expect(apiFetchMock).toHaveBeenCalledWith(
+      "/api/admin/vkpi/kol-pool/a%20b/enqueue-video-keyframe-qa",
+      { method: "POST", body: JSON.stringify({ evidence_id: "9/1" }) },
+      "tok",
+    );
+    expect(response).toEqual({ status: "queued", provider_calls: false });
   });
 });

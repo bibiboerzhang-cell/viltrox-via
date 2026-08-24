@@ -5,7 +5,25 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 
-_DAILY_WINDOW_SCOPES = ("dashboard:report_analysis",)
+_DAILY_WINDOW_SCOPES = frozenset({"dashboard:report_analysis"})
+
+
+def budget_window_kind(scope: str) -> str:
+    """Return the runtime window contract for one normalized budget scope.
+
+    Scope prefixes, rather than mutable metadata, are the enforcement source of
+    truth.  Metadata may describe the same contract for operators, but it must
+    never silently change reset behavior.
+    """
+
+    key = str(scope or "").strip().lower()
+    if not key:
+        return "none"
+    if key == "single_call" or key.startswith("single_call_"):
+        return "per_call"
+    if key.startswith("cron:") or key in _DAILY_WINDOW_SCOPES:
+        return "daily"
+    return "monthly"
 
 
 def project_budget_window(
@@ -21,15 +39,12 @@ def project_budget_window(
     """
 
     scope = str(row.get("scope") or "")
-    daily = scope.startswith("cron:") or scope in _DAILY_WINDOW_SCOPES
+    window = budget_window_kind(scope)
+    daily = window == "daily"
     # 功能 scope(audience_stats / vkpi_kol_content_fit / kol_recall / agent_* …)此前既非日窗也非月窗,
     # cap 变成终身额度:prod audience_stats $10 花到 $9.98 后受众年龄推断静默降级 rule_v0 数月。
     # 现按月滚;single_call* 是单次上限语义、不滚。
-    monthly = (
-        scope == "monthly_total"
-        or scope.startswith("provider:")
-        or (not daily and bool(scope) and not scope.startswith("single_call"))
-    )
+    monthly = window == "monthly"
     if not daily and not monthly:
         return row, False, False
 

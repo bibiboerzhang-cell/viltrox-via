@@ -265,6 +265,59 @@ def test_ready_cache_yields_only_to_a_newer_active_reanalysis() -> None:
     assert broken["status"] == "failed" and broken["data"]["status"] == "none"
 
 
+def test_keyframe_qa_task_state_requires_exact_main_analysis_source() -> None:
+    conn = _conn()
+    try:
+        final_payload = {
+            "layer1_visual_content": {"content_summary": "demo"},
+            "layer2_viewer_emotion": {}, "layer3_three_values": {},
+            "layer4_attribution": {}, "layer5_recommendations": {},
+            "layer6_flags_and_scores": {},
+        }
+        conn.execute(
+            "UPDATE vkpi_analysis_cache SET result=? WHERE target_id='1' AND derive_method=?",
+            (json.dumps(final_payload), my_kol_video_recovery.FINAL_V1_DERIVE_METHOD),
+        )
+        source_id = int(conn.execute(
+            "SELECT id FROM vkpi_analysis_cache WHERE target_id='1' AND derive_method=?",
+            (my_kol_video_recovery.FINAL_V1_DERIVE_METHOD,),
+        ).fetchone()["id"])
+        from app.domains.kol.video_keyframe_qa_cache import final_v1_payload_sha256
+
+        qa_result = {"final_v1_pass": {
+            "source_target_id": "1", "source_cache_id": source_id,
+            "source_payload_sha256": final_v1_payload_sha256(final_payload),
+        }}
+        conn.execute(
+            "INSERT INTO vkpi_analysis_cache (target_type,target_id,derive_method,status,result,updated_at) "
+            "VALUES ('video','1',?,'ready',?,'2026-08-22T00:00:00Z')",
+            (my_kol_video_recovery.KEYFRAME_QA_DERIVE_METHOD, json.dumps(qa_result)),
+        )
+        ready = my_kol_video_recovery.attach_task_states(
+            conn, [_video(1)], fetch_modalities=False
+        )[0]["tasks"]["keyframe_qa"]
+        assert ready["status"] == "ready" and ready["data"]["status"] == "ready"
+
+        qa_result["final_v1_pass"]["source_payload_sha256"] = "f" * 64
+        conn.execute(
+            "UPDATE vkpi_analysis_cache SET result=? WHERE target_id='1' AND derive_method=?",
+            (json.dumps(qa_result), my_kol_video_recovery.KEYFRAME_QA_DERIVE_METHOD),
+        )
+        invalid = my_kol_video_recovery.attach_task_states(
+            conn, [_video(1)], fetch_modalities=False
+        )[0]["tasks"]["keyframe_qa"]
+        assert invalid["status"] == "not_requested" and invalid["data"]["status"] == "none"
+
+        _job(conn, job_type="video", target_id=1, status="running",
+             derive_method=my_kol_video_recovery.KEYFRAME_QA_DERIVE_METHOD)
+        active = my_kol_video_recovery.attach_task_states(
+            conn, [_video(1)], fetch_modalities=False
+        )[0]["tasks"]["keyframe_qa"]
+        assert active["status"] == "running" and active["data"]["status"] == "none"
+    finally:
+        conn.close()
+
+
 def test_profile_crawl_state_uses_ready_runs_for_freshness() -> None:
     conn = _conn()
     try:
@@ -527,8 +580,26 @@ def test_viltrox_modalities_normaliser_is_order_stable_and_fail_closed() -> None
     assert projection.merge_modalities('["audio"]', [{"modality": "visual"}], None) == ["visual", "audio"]
     # the Postgres projection only ever reads modality strings (detail never leaves the DB)
     assert "[*].modality" in projection.FINAL_V1_MODALITIES_PG_EXPR
+    assert "viltrox_status" in projection.FINAL_V1_MODALITIES_PG_EXPR
+    assert "present" in projection.FINAL_V1_MODALITIES_PG_EXPR
     assert "detail" not in projection.FINAL_V1_MODALITIES_PG_EXPR
     assert "%" not in projection.FINAL_V1_MODALITIES_PG_EXPR
+
+
+def test_viltrox_modalities_rejects_contradictory_absent_cache_evidence() -> None:
+    from app.domains.kol import video_evidence_projection as projection
+
+    conn = _conn()
+    try:
+        conn.execute("DELETE FROM vkpi_analysis_cache")
+        payload = json.loads(_final_v1_result(["visual", "audio"]))
+        payload["raw_gemini_video"]["brand_product_evidence"]["viltrox_status"] = "absent"
+        _cache(conn, 8, json.dumps(payload))
+        conn.commit()
+
+        assert projection.final_v1_modalities_for_evidence(conn, [8]) == {8: []}
+    finally:
+        conn.close()
 
 
 def test_viltrox_modalities_degrade_to_empty_when_cache_schema_is_narrow() -> None:

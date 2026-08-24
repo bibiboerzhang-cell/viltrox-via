@@ -216,6 +216,67 @@ def test_real_postgres_micro_writes_caps_and_thousand_settlements(
         _drop_schema(pg_dsn, schema)
 
 
+def test_real_postgres_required_advisor_scope_rolls_and_missing_row_blocks(
+    pg_dsn: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = f"vkpi_llm_advisor_budget_{uuid.uuid4().hex}"
+    _create_schema(pg_dsn, schema)
+    compat = _compat(pg_dsn, schema)
+    monkeypatch.setattr(reservations, "get_conn", lambda: compat)
+    monkeypatch.setattr(reservations, "is_postgres_runtime", lambda: True)
+    monkeypatch.setattr(reservations, "table_exists", lambda _name: True)
+    try:
+        _seed_caps(compat, "1.000000")
+        compat.execute(
+            """
+            INSERT INTO vkpi_provider_budget_caps
+              (scope,cap_usd,current_spend,warning_at,hard_stop_at,reset_at,metadata_json)
+            VALUES ('cron:marketing_advisor',0.500000,0.500000,0.80,1.00,
+                    NOW() - INTERVAL '1 day','{}')
+            """
+        )
+        compat.commit()
+
+        reserved = reservations.reserve_llm_budget(
+            provider="anthropic",
+            model="test-model",
+            purpose="marketing_advisor",
+            prompt="fixed",
+            estimated_cost_usd="0.010000",
+            cost_scope="cron:marketing_advisor",
+            require_cost_scope=True,
+        )
+        advisor = compat.execute(
+            "SELECT current_spend,reset_at FROM vkpi_provider_budget_caps "
+            "WHERE scope='cron:marketing_advisor'"
+        ).fetchone()
+        assert advisor["current_spend"] == Decimal("0.000000")
+        assert advisor["reset_at"] is not None
+        assert "cron:marketing_advisor" in reserved.cumulative_scopes
+
+        compat.execute(
+            "DELETE FROM vkpi_provider_budget_caps "
+            "WHERE scope='cron:marketing_advisor'"
+        )
+        compat.commit()
+        with pytest.raises(LlmBudgetBlocked) as caught:
+            reservations.reserve_llm_budget(
+                provider="anthropic",
+                model="test-model",
+                purpose="marketing_advisor",
+                prompt="fixed-again",
+                estimated_cost_usd="0.010000",
+                cost_scope="cron:marketing_advisor",
+                require_cost_scope=True,
+            )
+        assert caught.value.reason == "budget_scope_not_configured"
+        assert caught.value.scope == "cron:marketing_advisor"
+    finally:
+        compat.close()
+        _drop_schema(pg_dsn, schema)
+
+
 def test_real_postgres_concurrent_settlement_has_no_lost_micro(
     pg_dsn: str,
     monkeypatch: pytest.MonkeyPatch,

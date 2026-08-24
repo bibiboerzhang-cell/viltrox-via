@@ -138,6 +138,9 @@ def record_call(
     ):
         try:
             provider_scope = gateway._provider_budget_scope(provider)
+            cumulative_scopes = [
+                scope for scope in ("monthly_total", provider_scope) if scope
+            ]
             cost_ledger = gateway._budget_guard().record_cost(
                 scope=cost_tag,
                 cron_task=purpose,
@@ -155,9 +158,10 @@ def record_call(
                     "fallback_used": bool(fallback_used),
                 },
                 triggered_by=triggered_by if triggered_by is not None else staff,
-                extra_scopes=[
-                    scope for scope in ("monthly_total", provider_scope) if scope
-                ],
+                extra_scopes=cumulative_scopes,
+                optional_scopes=(
+                    [cost_tag, *cumulative_scopes] if not force_cost_ledger else ()
+                ),
                 update_budget_scopes=bool(update_budget_scopes),
             )
             if force_cost_ledger:

@@ -349,6 +349,28 @@ def _brand_official_verdict(item: dict[str, Any]) -> str:
     return ""
 
 
+def discovery_account_gate_verdict(item: dict[str, Any] | None) -> str:
+    """Unified conservative account gate for every discovery intake path.
+
+    Returns a typed reason only when the identity is confirmed as Viltrox-owned
+    or a brand official account.  Missing bio/ambiguous brand-shaped handles
+    fail open, so a real creator is never rejected from one weak signal.  This
+    helper is intentionally reusable by provider filtering, URL materialization
+    and manual/federated imports.
+    """
+    if not isinstance(item, dict):
+        return ""
+    # Lazy import avoids the existing candidates -> discovery_filters module
+    # dependency while keeping the own-brand predicate a single source.
+    from app.domains.kol.profile_discovery_candidates import _is_own_brand_account
+
+    if _is_own_brand_account(item):
+        return "own_brand"
+    if _brand_official_verdict(item):
+        return "brand_official"
+    return ""
+
+
 # ── bio 明显无关补强(askmonitorofficial 案:bio="Web Development and Data Analyst")──────
 # 双条件并发才丢(防误杀):① bio 实在且自述**非视觉职业**(web/软件/数据类);② 候选自身身份
 # (channel_name/handle/bio,故意不含 sample_title——搜索命中的视频标题是「查询词回声」不算自证)

@@ -9,8 +9,12 @@ from typing import Any, Mapping
 
 import psycopg
 
+from app.workers.apify_jobs_worker_keyframe_cache import keyframe_qa_cache_exists_for_source
+
 def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespace: Mapping[str, Any]) -> None:
     GEMINI_VIDEO_DERIVE_METHODS = namespace['GEMINI_VIDEO_DERIVE_METHODS']
+    FINAL_V1_KEYFRAME_QA_DERIVE_METHOD = namespace['FINAL_V1_KEYFRAME_QA_DERIVE_METHOD']
+    FINAL_V1_KEYFRAME_QA_MODEL = namespace['FINAL_V1_KEYFRAME_QA_MODEL']
     LLM_TARGET_TYPES = namespace['LLM_TARGET_TYPES']
     LOCAL_EVALUATION_CACHE_DERIVE_METHOD = namespace['LOCAL_EVALUATION_CACHE_DERIVE_METHOD']
     LOCAL_EVALUATION_DERIVE_METHOD = namespace['LOCAL_EVALUATION_DERIVE_METHOD']
@@ -21,6 +25,9 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
     _advisory_lock = namespace['_advisory_lock']
     _advisory_unlock = namespace['_advisory_unlock']
     _analysis_cache_exists = namespace['_analysis_cache_exists']
+    _keyframe_qa_cache_exists_for_source = namespace.get(
+        '_keyframe_qa_cache_exists_for_source', keyframe_qa_cache_exists_for_source
+    )
     _block_job = namespace['_block_job']
     _derive_method = namespace['_derive_method']
     _finish_skipped = namespace['_finish_skipped']
@@ -163,12 +170,23 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
             if slot is None:
                 _requeue_job(conn, int(job["id"]), "llm concurrency limit reached", retry_delay_seconds=random.uniform(5.0, 10.0))
                 return
-            if _analysis_cache_exists(
-                conn,
-                target_type,
-                target_id,
-                cache_derive_method,
-            ):
+            cache_exists = (
+                _keyframe_qa_cache_exists_for_source(
+                    conn,
+                    target_type=target_type,
+                    target_id=target_id,
+                    derive_method=cache_derive_method,
+                    payload=payload,
+                )
+                if cache_derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD
+                else _analysis_cache_exists(
+                    conn,
+                    target_type,
+                    target_id,
+                    cache_derive_method,
+                )
+            )
+            if cache_exists:
                 if not _final_v1_scope_checkpoint(
                     conn,
                     job,
@@ -215,7 +233,12 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
                 )
                 return
             authorization = _google_execution_authorization(preflight)
-            expected_binding = f"google/{WORKER_GEMINI_MODEL}"
+            expected_model = (
+                str(payload.get("final_v1_qa_model") or FINAL_V1_KEYFRAME_QA_MODEL).strip()
+                if derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD
+                else WORKER_GEMINI_MODEL
+            )
+            expected_binding = f"google/{expected_model}"
             if authorization.get("binding") != expected_binding:
                 _block_job(
                     conn,

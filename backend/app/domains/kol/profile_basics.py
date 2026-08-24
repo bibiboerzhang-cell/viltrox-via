@@ -6,8 +6,10 @@ not change.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
@@ -86,14 +88,54 @@ def write_kol_profile_basics(
     if not columns:
         raise RuntimeError("vkpi_kol_pool schema unavailable")
 
+    # Every path that creates a Pool row (provider discovery and URL deep
+    # crawl included) crosses the same conservative official-account gate.
+    # Existing rows remain refreshable; this gate prevents new pollution and
+    # does not turn a profile refresh into a destructive cleanup operation.
+    if not kol_pool_id:
+        from app.domains.kol.discovery_filters import discovery_account_gate_verdict
+
+        gate_verdict = discovery_account_gate_verdict(profile_data)
+        if gate_verdict:
+            raise ValueError(f"discovery_account_rejected:{gate_verdict}")
+
+    requested_identity = dict(profile_data)
+    identity_write_locked = bool(not kol_pool_id and not dry_run)
+    canonical_match_id: int | None = None
+    if not kol_pool_id:
+        try:
+            if not dry_run:
+                _lock_creator_identity_write_boundary(db, requested_identity)
+            canonical_match_id = _canonical_existing_pool_id(db, requested_identity)
+        except Exception:
+            if not dry_run:
+                _rollback(db)
+            raise
+        if canonical_match_id:
+            kol_pool_id = canonical_match_id
+
     now = _utcnow()
-    row = _load_pool_row(db, kol_pool_id) if kol_pool_id else None
+    try:
+        row = _load_pool_row(db, kol_pool_id) if kol_pool_id else None
+    except Exception:
+        if identity_write_locked:
+            _rollback(db)
+        raise
     operation = "update" if row else "insert"
-    normalized = _normalise_profile_data(profile_data, existing=row, now=now, method=method)
+    normalized_input = dict(profile_data)
+    if canonical_match_id and row:
+        # The incumbent handle remains the durable key.  The incoming handle
+        # is recorded as an alias below; rewriting the unique key here could
+        # collide with a legacy duplicate before its backfill is reconciled.
+        normalized_input.pop("platform", None)
+        normalized_input.pop("handle", None)
+    normalized = _normalise_profile_data(normalized_input, existing=row, now=now, method=method)
     ignored_fields = sorted(set(profile_data) - PROFILE_BASICS_WHITELIST)
 
     if operation == "insert":
         if not normalized.get("platform") or not normalized.get("handle"):
+            if not dry_run:
+                _rollback(db)
             raise ValueError("platform and handle are required for new KOL profile basics")
         normalized.setdefault("pool_uid", f"url-profile-{secrets.token_hex(8)}")
 
@@ -108,7 +150,12 @@ def write_kol_profile_basics(
     if operation == "insert" and "pool_uid" in columns:
         planned_values["pool_uid"] = normalized["pool_uid"]
 
-    before_scores = _score_snapshot(db, [int(kol_pool_id)]) if row else {}
+    try:
+        before_scores = _score_snapshot(db, [int(kol_pool_id)]) if row else {}
+    except Exception:
+        if identity_write_locked:
+            _rollback(db)
+        raise
     if dry_run:
         return {
             "ok": True,
@@ -159,6 +206,12 @@ def write_kol_profile_basics(
             _rollback(db)
             raise RuntimeError(f"viltrox_fit_score changed unexpectedly: {changed_ids}")
 
+        _record_creator_identity_alias(
+            db,
+            target_id,
+            requested_identity,
+            canonical_match=bool(canonical_match_id),
+        )
         if commit_write:
             _commit(db)
         # 第二道闸(2026-07-12 两粉号案):本次写入含 followers(深爬回填/发现入库都走此口)
@@ -202,6 +255,7 @@ def write_kol_profile_basics(
             "viltrox_fit_score_untouched": True,
             "method": method,
             "matched_existing": matched_existing,
+            "matched_by_canonical_identity": bool(canonical_match_id),
         }
     except Exception:
         _rollback(db)
@@ -250,6 +304,7 @@ def _normalise_profile_data(
     if "raw_platform_data" in normalized:
         normalized["raw_platform_data"] = _merge_raw_payload(
             normalized.get("raw_platform_data"),
+            existing_value=(existing or {}).get("raw_platform_data"),
             method=method,
             profile_backfilled_at=backfilled_at,
         )
@@ -357,8 +412,14 @@ def _should_write(field: str, value: Any, *, operation: str) -> bool:
     return _text(value) != ""
 
 
-def _merge_raw_payload(value: Any, *, method: str, profile_backfilled_at: str) -> str:
-    payload = _json_obj(value)
+def _merge_raw_payload(
+    value: Any,
+    *,
+    existing_value: Any = None,
+    method: str,
+    profile_backfilled_at: str,
+) -> str:
+    payload = _merge_presence_payload(existing_value, value)
     payload.setdefault("profile_backfill", {})
     if isinstance(payload["profile_backfill"], dict):
         payload["profile_backfill"].update(
@@ -368,6 +429,148 @@ def _merge_raw_payload(value: Any, *, method: str, profile_backfilled_at: str) -
             }
         )
     return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _merge_presence_payload(existing: Any, incoming: Any) -> dict[str, Any]:
+    """Deep-merge observed payloads without erasing richer identity evidence."""
+    result = _json_obj(existing)
+    for key, value in _json_obj(incoming).items():
+        previous = result.get(key)
+        if isinstance(previous, dict) and isinstance(value, dict):
+            result[key] = _merge_presence_payload(previous, value)
+        elif isinstance(previous, list) and isinstance(value, list) and "alias" in str(key).lower():
+            merged: list[Any] = []
+            markers: set[str] = set()
+            for entry in [*previous, *value]:
+                marker = json.dumps(entry, ensure_ascii=True, sort_keys=True, default=str)
+                if marker not in markers:
+                    markers.add(marker)
+                    merged.append(entry)
+            result[key] = merged
+        elif value not in (None, "", [], {}):
+            result[key] = value
+        elif key not in result:
+            result[key] = value
+    return result
+
+
+def _canonical_existing_pool_id(conn: Any, profile_data: dict[str, Any]) -> int | None:
+    """Find an existing master row by any observed stable identity alias."""
+    from app.domains.kol.profile_online_inventory import _matching_pool_ids
+
+    matches = _matching_pool_ids(conn, profile_data, fail_closed=True)
+    if len(matches) > 1:
+        raise RuntimeError(
+            "canonical creator identity is ambiguous across multiple pool masters: "
+            f"{sorted(matches)}"
+        )
+    return next(iter(matches), None)
+
+
+def _lock_creator_aliases(conn: Any, aliases: set[str]) -> None:
+    """Serialize canonical check-and-write for PostgreSQL and SQLite.
+
+    PostgreSQL takes transaction-scoped advisory locks for every observed
+    alias in deterministic order. SQLite upgrades the current transaction to
+    a database writer (or begins one immediately), so a second process cannot
+    perform its canonical read until the first creator write commits.
+    """
+    stable_aliases = sorted(str(alias) for alias in aliases if str(alias).strip())
+    if not stable_aliases:
+        raise ValueError("creator identity has no stable canonical alias")
+    if conn.__class__.__name__ == "PostgresCompatConnection":
+        for alias in stable_aliases:
+            digest = hashlib.sha256(alias.encode("utf-8")).digest()
+            lock_key = int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
+            conn.execute("SELECT pg_advisory_xact_lock(?)", (lock_key,))
+        return
+    if isinstance(conn, sqlite3.Connection):
+        if conn.in_transaction:
+            # A zero-row UPDATE upgrades an existing deferred transaction to a
+            # RESERVED writer without mutating application data.
+            conn.execute("UPDATE vkpi_kol_pool SET id=id WHERE 0")
+        else:
+            conn.execute("BEGIN IMMEDIATE")
+
+
+def _lock_creator_identity_write_boundary(conn: Any, identity: dict[str, Any]) -> None:
+    from app.domains.kol.identity import canonical_creator_aliases
+
+    _lock_creator_aliases(conn, canonical_creator_aliases(identity))
+
+
+def _record_creator_identity_alias(
+    conn: Any,
+    kol_pool_id: int,
+    identity: dict[str, Any],
+    *,
+    canonical_match: bool,
+) -> None:
+    """Persist the observed locator without ever rebinding another master.
+
+    The alias table already exists in the current schema.  This write contains
+    identity metadata only and never touches fit fields.
+    """
+    platform = _normalise_platform(identity.get("platform"))
+    handle = _normalise_handle(
+        platform,
+        identity.get("handle")
+        or identity.get("username")
+        or identity.get("channel_handle"),
+    )
+    if not platform or not handle:
+        return
+    profile_url = _text(
+        identity.get("profile_url")
+        or identity.get("channel_url")
+        or identity.get("url")
+    )
+    raw = _json_obj(identity.get("raw_platform_data") or identity.get("raw"))
+    nested_identity = _json_obj(
+        raw.get("discovery_identity_v1") or raw.get("online_identity_v1")
+    )
+    metadata = {
+        "source": "profile_basics_identity_boundary",
+        "canonical_match": canonical_match,
+    }
+    for key in ("channel_id", "channelId", "account_id", "platform_user_id", "native_id"):
+        value = identity.get(key) or raw.get(key) or nested_identity.get(key)
+        if value:
+            metadata[key] = str(value)[:200]
+    conn.execute(
+        """
+        INSERT INTO vkpi_kol_pool_aliases
+            (kol_pool_id, platform, handle, profile_url, confidence, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(platform, handle) DO UPDATE SET
+            profile_url=CASE WHEN excluded.profile_url<>'' THEN excluded.profile_url ELSE vkpi_kol_pool_aliases.profile_url END,
+            confidence=excluded.confidence,
+            metadata_json=excluded.metadata_json
+        WHERE vkpi_kol_pool_aliases.kol_pool_id=excluded.kol_pool_id
+        """,
+        (
+            int(kol_pool_id),
+            platform,
+            handle,
+            profile_url,
+            1.0,
+            json.dumps(metadata, ensure_ascii=True, separators=(",", ":")),
+        ),
+    )
+    owner = conn.execute(
+        """
+        SELECT kol_pool_id
+        FROM vkpi_kol_pool_aliases
+        WHERE platform=? AND handle=?
+        """,
+        (platform, handle),
+    ).fetchone()
+    owner_id = int(owner["kol_pool_id"]) if owner else None
+    if owner_id != int(kol_pool_id):
+        raise RuntimeError(
+            "creator identity alias belongs to a different pool master: "
+            f"{platform}:{handle} owner={owner_id} requested={int(kol_pool_id)}"
+        )
 
 
 def _json_obj(value: Any) -> dict[str, Any]:
@@ -423,11 +626,7 @@ def _utcnow() -> str:
 
 
 def _commit(conn: Any) -> None:
-    try:
-        conn.commit()
-    except Exception:
-        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-        pass
+    conn.commit()
 
 
 def _rollback(conn: Any) -> None:

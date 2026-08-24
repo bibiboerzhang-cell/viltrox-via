@@ -156,6 +156,7 @@ def test_invoke_json_atomic_reservation_covers_provider_and_settlement(
         "Return JSON",
         required_keys=("answer",),
         skip_budget_check=True,
+        require_configured_budget=True,
         enforce_atomic_reservation=True,
     )
 
@@ -168,6 +169,7 @@ def test_invoke_json_atomic_reservation_covers_provider_and_settlement(
     ]
     assert result["json"] == {"answer": "ok"}
     assert result["budget_reservation_key"] == "llmres-json"
+    assert events[0][1]["require_cost_scope"] is True
     assert ledger[0]["update_budget_scopes"] is False
     assert ledger[0]["force_cost_ledger"] is True
     assert ledger[0]["metadata"]["budget_gate"] == "atomic_reservation"

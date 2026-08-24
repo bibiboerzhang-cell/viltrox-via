@@ -7,7 +7,7 @@ vi.mock("../../../../services/http", async (importOriginal) => {
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
 });
 
-import { MY_KOL_RECOVERY_POLL_MS, useMyKolVideoRecovery } from "./useMyKolVideoRecovery";
+import { MY_KOL_RECOVERY_POLL_MS, recoveryPageHasActiveWork, useMyKolVideoRecovery } from "./useMyKolVideoRecovery";
 
 function page(items: Array<Record<string, unknown>>, extra: Record<string, unknown> = {}) {
   return {
@@ -22,12 +22,13 @@ function page(items: Array<Record<string, unknown>>, extra: Record<string, unkno
   };
 }
 
-const video = (id: number, metricStatus = "not_requested") => ({
+const video = (id: number, metricStatus = "not_requested", reviewStatus = "not_requested") => ({
   evidence_id: id,
   title: `clip ${id}`,
   tasks: {
     metric_refresh: { status: metricStatus, job_id: metricStatus === "not_requested" ? null : 5, data: { status: "none", freshness: "never", updated_at: null, superseded_by_job: false } },
     final_v1: { status: "not_requested", job_id: null, data: { status: "none", freshness: "never", updated_at: null, superseded_by_job: false } },
+    keyframe_qa: { status: reviewStatus, job_id: reviewStatus === "not_requested" ? null : 6, data: { status: "none", freshness: "never", updated_at: null, superseded_by_job: false } },
   },
 });
 
@@ -40,6 +41,11 @@ afterEach(() => {
 });
 
 describe("useMyKolVideoRecovery (contract my_kol_video_recovery_v1)", () => {
+  it("treats a server-side keyframe review as active work", () => {
+    expect(recoveryPageHasActiveWork(page([video(1, "not_requested", "queued")]))).toBe(true);
+    expect(recoveryPageHasActiveWork(page([video(1)]))).toBe(false);
+  });
+
   it("restores in-flight task state on open, polls only while active, and stops at terminal state", async () => {
     let tick = 0;
     apiFetchMock.mockImplementation(async () => {

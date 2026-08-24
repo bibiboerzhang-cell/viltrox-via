@@ -5,8 +5,8 @@
   📈 view_shift       播放异动(环比):按「发布日期」比较 当期 vs 前一期 发布视频的播放合计
                       (method=posted_window_v1,老视频播放有更长累积时间,口径如实标注);
                       附 followers 环比(vkpi_kol_fit_snapshot 日快照,真时间序列);
-  💬 viltrox_mentions 提及 Viltrox 的新内容:窗口期新增 evidence 标题/频道名词表匹配
-                      (lexicon_v1:viltrox/唯卓仕/唯卓,宁缺毋滥);
+  💬 viltrox_mentions 提及 Viltrox 的新内容:窗口期新增 evidence 优先读已有
+                      final_v1 结构化画面/字幕/口播证据,标题/频道名词表仅兜底;
   📇 new_contacts     联系方式新获得:vkpi_kol_pool_contacts 窗口期新增(只出类型/来源计数,
                       绝不在摘要里裸露联系方式明文,明文走既有 contact_reveal 门控);
   🏢 official         公司官号:vkpi_channel_metrics 最近一天日快照(需落窗)聚合
@@ -28,6 +28,10 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.kol.video_evidence_projection import (
+    VILTROX_MODALITIES,
+    final_v1_modalities_for_evidence,
+)
 
 logger = get_logger(__name__)
 
@@ -35,6 +39,15 @@ logger = get_logger(__name__)
 VILTROX_TERMS: tuple[str, ...] = ("viltrox", "唯卓仕", "唯卓")
 
 _MAX_ITEMS = 8
+_FINAL_V1_BATCH_SIZE = 200
+
+_MODALITY_LABELS: dict[str, str] = {
+    "visual": "画面",
+    "subtitle": "字幕",
+    "audio": "口播",
+}
+
+_MENTION_METHOD = "final_v1_modalities_present+lexicon_fallback_v2"
 
 # MY KOL 集合子查询(口径=my_kol_aggregate._pool_favorites:收藏 ∪ 共享;0=全员并集)。
 # 占位符 4 个,一律绑 (sid, sid, sid, sid)。
@@ -134,6 +147,7 @@ def _new_videos(conn: Any, sid: int, since: str) -> dict[str, Any]:
         JOIN vkpi_kol_pool kp ON kp.id = e.kol_pool_id
         JOIN ({_MYSET_SUBQUERY}) ms ON ms.kol_pool_id = e.kol_pool_id
         WHERE DATE(e.created_at) >= ?
+          AND COALESCE(e.is_active, TRUE) = TRUE
         ORDER BY COALESCE(e.view_count, 0) DESC, e.id DESC
         LIMIT 400
         """,  # noqa: S608 — 常量子查询,参数全绑定
@@ -271,14 +285,82 @@ def _followers_shift(conn: Any, sid: int, days: int) -> dict[str, Any]:
     return {"status": "ready", "as_of": latest, "base_date": base, "items": movers[:_MAX_ITEMS]}
 
 
-# ── 💬 块三:提及 Viltrox 的新内容(词表)────────────────────────────
+# ── 💬 块三:提及 Viltrox 的新内容(final_v1 多模态 + 词表兜底)───────────────
+
+
+def _rollback_quietly(conn: Any) -> None:
+    """Postgres 读语句失败会 abort 事务;本链纯读,安静恢复供后续块使用。"""
+    rollback = getattr(conn, "rollback", None)
+    if not callable(rollback):
+        return
+    try:
+        rollback()
+    except Exception:
+        logger.debug("daily digest read rollback skipped", exc_info=True)
+
+
+def _final_v1_modalities(conn: Any, evidence_ids: list[int]) -> dict[int, list[str]]:
+    """Reuse the shared projection in bounded batches (the digest can inspect 400 rows)."""
+    projected: dict[int, list[str]] = {}
+    for offset in range(0, len(evidence_ids), _FINAL_V1_BATCH_SIZE):
+        batch = evidence_ids[offset:offset + _FINAL_V1_BATCH_SIZE]
+        projected.update(final_v1_modalities_for_evidence(conn, batch))
+    return projected
+
+
+def _ready_final_v1_ids(conn: Any, evidence_ids: list[int]) -> tuple[set[int], bool]:
+    """Return ready-cache coverage only; never infer absence from a missing/unreadable table."""
+    if not evidence_ids:
+        return set(), True
+    placeholders = ",".join("?" for _ in evidence_ids)
+    try:
+        rows = conn.execute(
+            f"""
+            SELECT target_id
+            FROM vkpi_analysis_cache
+            WHERE target_type = 'video'
+              AND derive_method = ?
+              AND status = 'ready'
+              AND target_id IN ({placeholders})
+            """,  # noqa: S608 — 占位符数由有界 evidence ids 生成,值全绑定
+            ("video_analysis_final_v1", *(str(value) for value in evidence_ids)),
+        ).fetchall()
+    except Exception:
+        logger.warning("daily digest final_v1 coverage unavailable; keeping rows undetermined", exc_info=True)
+        _rollback_quietly(conn)
+        return set(), False
+    ready: set[int] = set()
+    for row in rows:
+        try:
+            evidence_id = int(dict(row).get("target_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        if evidence_id > 0:
+            ready.add(evidence_id)
+    return ready, True
+
+
+def _mention_reason(
+    modalities: list[str],
+    title_terms: list[str],
+    channel_terms: list[str],
+) -> str:
+    reasons: list[str] = []
+    if modalities:
+        labels = [str(_MODALITY_LABELS.get(value) or value) for value in modalities]
+        reasons.append("final_v1 结构化证据确认:" + "/".join(labels))
+    if title_terms:
+        reasons.append("标题词表命中:" + "/".join(title_terms))
+    if channel_terms:
+        reasons.append("频道名词表命中:" + "/".join(channel_terms))
+    return ";".join(reasons)
 
 
 def _viltrox_mentions(conn: Any, sid: int, since: str) -> dict[str, Any]:
     rows = conn.execute(
         f"""
         SELECT e.id AS evidence_id, e.kol_pool_id,
-               COALESCE(e.video_title, e.title, '') AS title,
+               COALESCE(NULLIF(e.video_title, ''), e.title, '') AS title,
                COALESCE(e.channel_name, '') AS channel_name,
                e.content_url, e.view_count, e.is_active, e.created_at,
                kp.handle, kp.display_name, kp.platform
@@ -286,35 +368,101 @@ def _viltrox_mentions(conn: Any, sid: int, since: str) -> dict[str, Any]:
         JOIN vkpi_kol_pool kp ON kp.id = e.kol_pool_id
         JOIN ({_MYSET_SUBQUERY}) ms ON ms.kol_pool_id = e.kol_pool_id
         WHERE DATE(e.created_at) >= ?
+          AND COALESCE(e.is_active, TRUE) = TRUE
         ORDER BY COALESCE(e.view_count, 0) DESC, e.id DESC
         LIMIT 400
         """,  # noqa: S608 — 常量子查询,参数全绑定
         (*_myset_params(sid), since),
     ).fetchall()
+    candidates = [dict(raw) for raw in rows if _active(dict(raw).get("is_active"))]
+    evidence_ids = [_int0(row.get("evidence_id")) for row in candidates if _int0(row.get("evidence_id")) > 0]
+    modality_by_evidence = _final_v1_modalities(conn, evidence_ids)
+    ready_final_v1_ids, coverage_available = _ready_final_v1_ids(conn, evidence_ids)
+
     hits: list[dict[str, Any]] = []
-    for raw in rows:
-        r = dict(raw)
-        if not _active(r.get("is_active")):
+    used_sources: set[str] = set()
+    used_modalities: set[str] = set()
+    lexicon_only_count = 0
+    for r in candidates:
+        evidence_id = _int0(r.get("evidence_id"))
+        modalities = list(modality_by_evidence.get(evidence_id) or [])
+        title_blob = _text(r.get("title"), 300).lower()
+        channel_blob = _text(r.get("channel_name"), 120).lower()
+        title_terms = [term for term in VILTROX_TERMS if term in title_blob]
+        channel_terms = [term for term in VILTROX_TERMS if term in channel_blob]
+        matched = [term for term in VILTROX_TERMS if term in {*title_terms, *channel_terms}]
+        sources: list[str] = []
+        if modalities:
+            sources.append("final_v1")
+        if title_terms:
+            sources.append("title_lexicon")
+        if channel_terms:
+            sources.append("channel_lexicon")
+        if not sources:
             continue
-        blob = (_text(r.get("title"), 300) + " " + _text(r.get("channel_name"), 120)).lower()
-        matched = [term for term in VILTROX_TERMS if term in blob]
-        if not matched:
-            continue
+        if not modalities:
+            lexicon_only_count += 1
+        used_sources.update(sources)
+        used_modalities.update(modalities)
         hits.append({
             **_kol_brief(r),
-            "evidence_id": _int0(r.get("evidence_id")),
+            "evidence_id": evidence_id,
             "title": _text(r.get("title"), 120),
             "content_url": _text(r.get("content_url"), 400),
             "view_count": r.get("view_count"),
             "added_day": _day(r.get("created_at")),
             "matched_terms": matched,
+            "method": "final_v1_modalities" if modalities else "lexicon_fallback",
+            "sources": sources,
+            "modalities": modalities,
+            "reason": _mention_reason(modalities, title_terms, channel_terms),
         })
+
+    source_order = ("final_v1", "title_lexicon", "channel_lexicon")
+    aggregate_sources = [source for source in source_order if source in used_sources]
+    aggregate_modalities = [modality for modality in VILTROX_MODALITIES if modality in used_modalities]
+    ready_count = len(ready_final_v1_ids.intersection(evidence_ids))
+    coverage = {
+        "candidate_count": len(candidates),
+        "final_v1_coverage_status": "ready" if coverage_available else "unavailable",
+        "final_v1_ready_count": ready_count if coverage_available else None,
+        "without_ready_final_v1_count": (len(candidates) - ready_count) if coverage_available else None,
+        "multimodal_present_count": sum(1 for item in hits if item.get("modalities")),
+        "lexicon_only_count": lexicon_only_count,
+        "not_confirmed_count": len(candidates) - len(hits),
+    }
+    common = {
+        "method": _MENTION_METHOD,
+        "sources": aggregate_sources,
+        "modalities": aggregate_modalities,
+        "coverage": coverage,
+    }
     if not hits:
+        if coverage_available:
+            unknown_note = (
+                f"{coverage['without_ready_final_v1_count']} 条尚无 ready final_v1"
+                "(未深析或深析未就绪)"
+            )
+        else:
+            unknown_note = "final_v1 覆盖暂无法读取"
         return {
             "status": "empty",
-            "reason": f"{since} 以来新增内容里没有词表可识别的 Viltrox 提及(lexicon_v1,只看标题/频道名,宁缺毋滥)",
+            **common,
+            "reason": (
+                f"{since} 以来新增内容里没有 final_v1 画面/字幕/口播确认"
+                f"或标题/频道词表命中;{unknown_note},仍保留未确认,不判为不相关"
+            ),
         }
-    return {"status": "ready", "method": "lexicon_v1", "count": len(hits), "items": hits[:_MAX_ITEMS]}
+    return {
+        "status": "ready",
+        **common,
+        "reason": (
+            "只收录 ready final_v1 的画面/字幕/口播结构化证据或标题/频道词表兜底;"
+            "未深析内容保留未确认,不判为不相关"
+        ),
+        "count": len(hits),
+        "items": hits[:_MAX_ITEMS],
+    }
 
 
 # ── 📇 块四:联系方式新获得(不出明文)────────────────────────────────

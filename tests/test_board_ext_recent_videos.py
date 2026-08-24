@@ -322,7 +322,8 @@ def test_same_evidence_yields_identical_task_state_and_modalities_on_both_endpoi
                 "has_final_v1_cache", "llm_viltrox_status", "llm_viltrox_detected", "v_tier", "best_thumbnail",
                 "viltrox_modalities", "tasks", "published_at"):
         assert key in by_board[1], key
-    assert set(by_board[1]["tasks"]) == {"metric_refresh", "final_v1"}
+    assert set(by_board[1]["tasks"]) == {"metric_refresh", "final_v1", "keyframe_qa"}
+    assert {row["tasks"]["keyframe_qa"]["status"] for row in by_board.values()} == {"not_requested"}
     blob = json.dumps(board, ensure_ascii=False)
     for raw in ("secret-", "yt-dlp", "budget_hard_stop", "NameError", "cancelled by operator", "contact_value"):
         assert raw not in blob, raw

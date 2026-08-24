@@ -1,6 +1,7 @@
 """Tests for V-KPI KOL Pool helpers and DB lifecycle."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from app.api.routers import kol_ops_schema
 from app.db import connection as db_connection
 from app.db.connection import get_conn
+from app.domains.discovery import enroll, federation
 from app.domains.kol import pool as kol_pool
 from app.domains.kol.pool_common import _country_code, _country_name
 from app.platform.db import schema_product_industry as product_industry_schema
@@ -125,7 +127,7 @@ def seeded_staff():
         ]
         user_ids = [int(row["id"]) for row in conn.execute("SELECT id FROM users WHERE email=?", (EMAIL,)).fetchall()]
 
-        conn.execute("DELETE FROM vkpi_kol_pool WHERE source_ref=? OR handle LIKE ?", (MARKER, f"{MARKER}%"))
+        conn.execute("DELETE FROM vkpi_kol_pool WHERE source_ref=? OR handle LIKE ?", (MARKER, f"%{MARKER}%"))
         for kol_id in kol_ids:
             conn.execute("DELETE FROM kols WHERE id=?", (kol_id,))
         for staff_id in staff_ids:
@@ -280,6 +282,288 @@ def test_import_items_dedups_by_platform_handle_and_updates_row(seeded_staff):
     assert len(rows) == 1
     assert rows[0]["display_name"] == "Updated Name"
     assert int(rows[0]["followers"]) == 200
+
+
+def test_canonical_thin_import_preserves_rich_master_and_merges_raw_aliases(seeded_staff):
+    staff = _staff_context(seeded_staff["staff_id"])
+    channel_id = "UCvkpiKolPoolRichMaster12345"
+    first = kol_pool.import_items(
+        [{
+            "platform": "youtube",
+            "handle": channel_id,
+            "channel_id": channel_id,
+            "display_name": "Rich Camera Creator",
+            "profile_url": f"https://youtube.com/channel/{channel_id}",
+            "avatar_url": "https://images.example/rich-avatar.jpg",
+            "bio": "Independent filmmaker and lens reviewer",
+            "email": "rich-creator@example.test",
+            "followers": 12000,
+            "following": 321,
+            "posts_count": 87,
+            "avg_views": 4500,
+            "avg_likes": 640,
+            "avg_comments": 33,
+            "engagement_rate": 4.2,
+            "identity_aliases": ["legacy-uc"],
+            "discovery_identity_v1": {
+                "channel_id": channel_id,
+                "identity_aliases": ["legacy-handle"],
+                "rich_only": "keep-me",
+            },
+        }],
+        source_type="unit-rich",
+        source_ref=MARKER,
+        staff=staff,
+    )
+    second = kol_pool.import_items(
+        [{
+            "platform": "youtube",
+            "handle": "@rich-camera-alias",
+            "channel_id": channel_id,
+            "display_name": "   ",
+            "profile_url": " ",
+            "avatar_url": " ",
+            "bio": "",
+            "email": None,
+            "identity_aliases": ["fresh-handle"],
+            "discovery_identity_v1": {
+                "channel_id": channel_id,
+                "identity_aliases": ["fresh-handle"],
+            },
+        }],
+        source_type="unit-thin",
+        source_ref=MARKER,
+        staff=staff,
+    )
+
+    assert second["canonical_matches"] == 1
+    assert int(second["items"][0]["id"]) == int(first["items"][0]["id"])
+    row = dict(get_conn().execute(
+        "SELECT * FROM vkpi_kol_pool WHERE id=?",
+        (int(first["items"][0]["id"]),),
+    ).fetchone())
+    assert row["display_name"] == "Rich Camera Creator"
+    assert row["profile_url"] == f"https://youtube.com/channel/{channel_id}"
+    assert row["avatar_url"] == "https://images.example/rich-avatar.jpg"
+    assert row["bio"] == "Independent filmmaker and lens reviewer"
+    assert row["email"] == "rich-creator@example.test"
+    assert [row[key] for key in (
+        "followers", "following", "posts_count", "avg_views", "avg_likes", "avg_comments",
+    )] == [12000, 321, 87, 4500, 640, 33]
+    assert float(row["engagement_rate"]) == 4.2
+    raw = json.loads(row["raw_platform_data"])
+    assert raw["identity_aliases"] == ["legacy-uc", "fresh-handle"]
+    assert raw["discovery_identity_v1"]["identity_aliases"] == [
+        "legacy-handle", "fresh-handle",
+    ]
+    assert raw["discovery_identity_v1"]["rich_only"] == "keep-me"
+
+
+def test_federation_enroll_persists_profile_and_avatar_evidence_without_thumbnail_promotion(
+    seeded_staff,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    handle = f"{MARKER}-avatar-e2e"
+    profile_url = f"https://www.youtube.com/@{handle}/?si=tracking"
+    avatar_url = "https://yt3.ggpht.com/profile-avatar-e2e"
+    thumbnail_url = "https://i.ytimg.com/vi/e2e-video/hqdefault.jpg"
+
+    async def fake_search(platform: str, *_args, **_kwargs):
+        if platform != "youtube":
+            return {"status": "done", "items": []}
+        return {
+            "status": "done",
+            "items": [{
+                "handle": f"@{handle}",
+                "channel_id": "UCvkpiFederationAvatarE2E12345",
+                "channel_name": "Federated Creator",
+                "channel_url": profile_url,
+                "avatar_url": avatar_url,
+                "avatar_url_status": "durable",
+                "thumbnail_url": thumbnail_url,
+                "source_url": "https://youtube.com/watch?v=e2e-video",
+            }],
+        }
+
+    from app.domains.discovery import buildout
+    from app.domains.intelligence import semantic_recall
+    from app.domains.platform import event_ledger
+    from app.services.intelligence import account_search_discovery
+
+    monkeypatch.setattr(federation, "current_apify_execution_context", lambda: object())
+    monkeypatch.setattr(
+        federation,
+        "list_providers",
+        lambda _kind="": [{"name": "apify_search", "enabled": True}],
+    )
+    monkeypatch.setattr(account_search_discovery, "search_platform_content", fake_search)
+    monkeypatch.setattr(semantic_recall, "unified_recall", lambda *_args, **_kwargs: {"results": []})
+    monkeypatch.setattr(buildout, "ignite_profile_buildout", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(event_ledger, "emit", lambda *_args, **_kwargs: None)
+
+    result = enroll.federated_discover_and_enroll(
+        "camera creators",
+        limit=3,
+        staff=_staff_context(seeded_staff["staff_id"]),
+        include_external=True,
+    )
+
+    assert result["enrolled"] == 1
+    row = dict(get_conn().execute(
+        "SELECT profile_url, avatar_url, raw_platform_data FROM vkpi_kol_pool WHERE id=?",
+        (int(result["enrolled_ids"][0]),),
+    ).fetchone())
+    assert row["profile_url"] == f"https://youtube.com/@{handle}/"
+    assert row["profile_url"] != f"@{handle}"
+    assert row["avatar_url"] == avatar_url
+    assert row["avatar_url"] != thumbnail_url
+    raw = json.loads(row["raw_platform_data"])
+    assert raw["profile_url"] == row["profile_url"]
+    assert raw["channel_url"] == row["profile_url"]
+    assert raw["avatar_url"] == avatar_url
+    assert raw["avatar_url_status"] == "durable"
+    assert raw["thumbnail_url"] == thumbnail_url
+
+
+def test_enroll_canonical_bridge_merges_evidence_and_blocks_handle_only_duplicate(seeded_staff):
+    channel_id = "UCvkpiEnrollCanonicalBridge12345"
+    handle = f"{MARKER}-canonical-alias"
+    seeded = kol_pool.import_items(
+        [{
+            "platform": "youtube",
+            "handle": channel_id,
+            "channel_id": channel_id,
+            "display_name": "Canonical Bridge Creator",
+            "rich_only": "preserve-me",
+        }],
+        source_type="unit",
+        source_ref=MARKER,
+        staff=_staff_context(seeded_staff["staff_id"]),
+    )
+    master_id = int(seeded["items"][0]["id"])
+    profile_url = f"https://youtube.com/@{handle}/"
+    avatar_url = "https://yt3.ggpht.com/canonical-bridge-avatar"
+
+    bridged = enroll.enroll_candidates([{
+        "source": "apify_search",
+        "platform": "youtube",
+        "handle": f"@{handle}",
+        "channel_id": channel_id,
+        "name": "Canonical Bridge Creator",
+        "profile_url": profile_url,
+        "avatar_url": avatar_url,
+        "avatar_url_status": "durable",
+        "thumbnail_url": "https://i.ytimg.com/vi/bridge/cover.jpg",
+    }])
+    assert bridged["enrolled"] == 0
+    assert bridged["skipped"] == 1
+
+    row = dict(get_conn().execute(
+        "SELECT profile_url, avatar_url, raw_platform_data FROM vkpi_kol_pool WHERE id=?",
+        (master_id,),
+    ).fetchone())
+    assert row["profile_url"] == profile_url
+    assert row["avatar_url"] == avatar_url
+    raw = json.loads(row["raw_platform_data"])
+    assert raw["rich_only"] == "preserve-me"
+    assert raw["avatar_url_status"] == "durable"
+    alias = get_conn().execute(
+        "SELECT kol_pool_id FROM vkpi_kol_pool_aliases WHERE platform=? AND handle=?",
+        ("youtube", handle),
+    ).fetchone()
+    assert alias and int(alias["kol_pool_id"]) == master_id
+
+    handle_only = enroll.enroll_candidates([{
+        "source": "apify_search",
+        "platform": "youtube",
+        "handle": f"@{handle}",
+        "name": "Canonical Bridge Creator",
+    }])
+    assert handle_only["enrolled"] == 0
+    assert handle_only["skipped"] == 1
+    assert int(get_conn().execute(
+        "SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE id=? OR handle=?",
+        (master_id, f"@{handle}"),
+    ).fetchone()["n"]) == 1
+
+
+def test_enroll_canonical_avatar_quality_keeps_durable_and_prewarms_accepted_ephemeral(
+    seeded_staff,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.domains.kol import profile_discovery_provider
+
+    warmed: list[str] = []
+    monkeypatch.setattr(
+        profile_discovery_provider,
+        "_warm_discovery_avatar_cache",
+        lambda items, **_kwargs: warmed.extend(str(item["avatar_url"]) for item in items),
+    )
+    live_ephemeral = "https://scontent.cdninstagram.com/avatar.jpg?oe=FFFFFFFF&_nc_sid=test"
+
+    durable_id = int(kol_pool.import_items(
+        [{
+            "platform": "instagram",
+            "handle": f"{MARKER}-durable-old",
+            "account_id": "ig-canonical-durable-1",
+            "avatar_url": "https://images.example/incumbent-durable.jpg",
+            "avatar_url_status": "durable",
+        }],
+        source_type="unit",
+        source_ref=MARKER,
+        staff=_staff_context(seeded_staff["staff_id"]),
+    )["items"][0]["id"])
+    durable_bridge = f"{MARKER}-durable-new"
+    enroll.enroll_candidates([{
+        "source": "apify_search",
+        "platform": "instagram",
+        "handle": durable_bridge,
+        "account_id": "ig-canonical-durable-1",
+        "avatar_url": live_ephemeral,
+        "avatar_url_status": "ephemeral",
+    }])
+    durable = dict(get_conn().execute(
+        "SELECT avatar_url, raw_platform_data FROM vkpi_kol_pool WHERE id=?",
+        (durable_id,),
+    ).fetchone())
+    durable_raw = json.loads(durable["raw_platform_data"])
+    assert durable["avatar_url"] == "https://images.example/incumbent-durable.jpg"
+    assert durable_raw["avatar_url_status"] == "durable"
+    assert durable_raw["avatar_observation_v1"]["decision"] == "kept_incumbent"
+    assert warmed == []
+    assert int(get_conn().execute(
+        "SELECT kol_pool_id FROM vkpi_kol_pool_aliases WHERE platform=? AND handle=?",
+        ("instagram", durable_bridge),
+    ).fetchone()["kol_pool_id"]) == durable_id
+
+    missing_id = int(kol_pool.import_items(
+        [{
+            "platform": "instagram",
+            "handle": f"{MARKER}-missing-old",
+            "account_id": "ig-canonical-missing-1",
+            "avatar_url_status": "missing",
+        }],
+        source_type="unit",
+        source_ref=MARKER,
+        staff=_staff_context(seeded_staff["staff_id"]),
+    )["items"][0]["id"])
+    enroll.enroll_candidates([{
+        "source": "apify_search",
+        "platform": "instagram",
+        "handle": f"{MARKER}-missing-new",
+        "account_id": "ig-canonical-missing-1",
+        "avatar_url": live_ephemeral,
+        "avatar_url_status": "ephemeral",
+    }])
+    missing = dict(get_conn().execute(
+        "SELECT avatar_url, raw_platform_data FROM vkpi_kol_pool WHERE id=?",
+        (missing_id,),
+    ).fetchone())
+    missing_raw = json.loads(missing["raw_platform_data"])
+    assert missing["avatar_url"] == live_ephemeral
+    assert missing_raw["avatar_url_status"] == "ephemeral"
+    assert missing_raw["avatar_observation_v1"]["proxy_prewarm_requested"] is True
+    assert warmed == [live_ephemeral]
 
 
 def test_missing_and_complete_filters_use_real_pool_columns(seeded_staff):

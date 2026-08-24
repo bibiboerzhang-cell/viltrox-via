@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.domains.costs.budget_windows import project_budget_window
+from app.domains.costs.budget_windows import budget_window_kind, project_budget_window
 
 
 def test_feature_scope_gets_monthly_anchor_and_rolls_next_month():
@@ -31,3 +31,13 @@ def test_cron_and_provider_semantics_unchanged():
     assert roll and zero
     _, roll, zero = project_budget_window({"scope": "provider:gemini", "current_spend": 1, "reset_at": ""}, now=now)
     assert roll and not zero
+
+
+def test_budget_window_kind_is_the_shared_scope_contract():
+    assert budget_window_kind("") == "none"
+    assert budget_window_kind("single_call") == "per_call"
+    assert budget_window_kind("single_call_contract") == "per_call"
+    assert budget_window_kind("cron:vkpi_weekly_summary") == "daily"
+    assert budget_window_kind("DASHBOARD:REPORT_ANALYSIS") == "daily"
+    assert budget_window_kind("metric_tracking") == "monthly"
+    assert budget_window_kind("agent_skill") == "monthly"

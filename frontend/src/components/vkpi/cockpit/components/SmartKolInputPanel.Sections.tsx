@@ -346,12 +346,14 @@ export function RecallMiniItem({
   feedbackSource?: SearchFeedbackSource;
   feedbackToken?: string;
 }) {
-  const [imgError, setImgError] = useState(false);
+  const [failedAvatar, setFailedAvatar] = useState("");
   const avatar = proxiedImageUrl(item.avatar_url);
   const name = candidateText(readableCreatorName(item)) || (item.kol_pool_id ? `KOL #${item.kol_pool_id}` : "候选达人");
   const rank = candidateRankSummary(item);
   const relevanceFlags = Array.isArray(item.relevance_flags) ? item.relevance_flags.map(cleanText).filter(Boolean) : [];
-  const showImg = Boolean(avatar) && !imgError;
+  // Bind failure to the URL, not the card instance: polling can replace an
+  // expired signed avatar with a refreshed URL without remounting the card.
+  const showImg = Boolean(avatar) && failedAvatar !== avatar;
   const evidence = candidateEvidenceSummary(item);
   // 三引擎产出·候选卡展示信号(全部纯只读透传,绝不触评分):
   const itemRow = item as unknown as Row;
@@ -476,10 +478,10 @@ export function RecallMiniItem({
               alt=""
               className="h-full w-full rounded-full object-cover"
               referrerPolicy="no-referrer"
-              onError={() => setImgError(true)}
+              onError={() => setFailedAvatar(avatar)}
               onLoad={(event) => {
                 const img = event.currentTarget;
-                if (img.naturalWidth <= 2 && img.naturalHeight <= 2) setImgError(true);
+                if (img.naturalWidth <= 2 && img.naturalHeight <= 2) setFailedAvatar(avatar);
               }}
             />
           ) : (

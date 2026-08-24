@@ -28,12 +28,17 @@ class KolPoolRepository(BaseRepository):
         return "disc_" + hashlib.sha1(f"{platform}:{handle}".encode("utf-8")).hexdigest()[:16]
 
     def insert_discovered(self, *, platform: str, handle: str, name: str = "",
-                          profile_url: str = "", source_ref: str = "federation") -> int | None:
+                          profile_url: str = "", avatar_url: str = "",
+                          raw_platform_data: str = "{}",
+                          source_ref: str = "federation") -> int | None:
         """落一条 discovered 新档(数据薄诚实)。返回 id。调用方负责去重(find_id_by_platform_handle)。"""
         row = self.fetch_one(
-            "INSERT INTO vkpi_kol_pool (pool_uid, platform, handle, display_name, profile_url, source_type, source_ref) "
-            "VALUES (?,?,?,?,?,?,?) RETURNING id",
+            "INSERT INTO vkpi_kol_pool "
+            "(pool_uid, platform, handle, display_name, profile_url, avatar_url, "
+            "source_type, source_ref, raw_platform_data, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP) RETURNING id",
             (self.discovered_uid(platform, handle), str(platform), str(handle),
-             str(name)[:200], str(profile_url)[:500], "discovered", str(source_ref)[:80]),
+             str(name)[:200], str(profile_url)[:500], str(avatar_url)[:1000],
+             "discovered", str(source_ref)[:80], str(raw_platform_data)),
         )
         return int(row["id"]) if row else None

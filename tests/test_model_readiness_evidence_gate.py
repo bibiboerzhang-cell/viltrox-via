@@ -629,6 +629,30 @@ def test_system_models_endpoint_labels_candidates_unverified_without_evidence(mo
         assert '"availability": "verified"' not in json.dumps(items[binding]).lower()
 
 
+def test_system_models_exposes_operator_ack_without_claiming_production_ready(monkeypatch) -> None:
+    binding = "google/gemini-3.6-flash"
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-but-secret")
+    monkeypatch.setenv("VKPI_LLM_READINESS_OPERATOR_ACK", binding)
+    monkeypatch.delenv(READINESS_EVIDENCE_ENV, raising=False)
+
+    payload = system_admin.system_models(admin={"id": 1})
+    item = next(row for row in payload["model_readiness"]["items"] if row["binding"] == binding)
+
+    assert item["production_ready"] is False
+    assert item["claim_status"] == "descriptive_only"
+    assert item["runtime_authorization"] == {
+        "allowed_by_model_readiness": True,
+        "source": "operator_ack",
+        "operator_acknowledged": True,
+        "temporary": True,
+        "budget_and_feature_gates_still_apply": True,
+        "claim_status": "descriptive_only",
+    }
+    assert payload["readiness_audit"]["operator_acknowledged_count"] >= 1
+    assert payload["readiness_audit"]["model_readiness_authorized_count"] >= 1
+    assert "configured-but-secret" not in json.dumps(payload)
+
+
 def test_attestation_trust_root_status_fails_closed_when_release_keys_are_missing(
     monkeypatch,
 ) -> None:

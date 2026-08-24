@@ -8,14 +8,65 @@ stale-while-revalidate 刷新闸)。函数体逐字搬运,原文件 re-export �
 from __future__ import annotations
 
 import os
+import uuid
 from urllib.parse import urlparse
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 
+from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
 import app.domains.kol.search_sessions as kol_search_sessions
 import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
+
+
+logger = get_logger(__name__)
+
+
+def _kol_operation_error(operation: str, exc: Exception) -> HTTPException:
+    """Map KOL writes to stable client errors without exposing internals."""
+    correlation_id = uuid.uuid4().hex
+    class_name = type(exc).__name__.lower()
+    message = str(exc).lower()
+    explicit_status = getattr(exc, "status_code", None)
+    explicit_code = str(getattr(exc, "code", "") or "")
+    if explicit_code and isinstance(explicit_status, int):
+        return HTTPException(status_code=explicit_status, detail=explicit_code)
+    if isinstance(exc, LookupError):
+        status_code, code, retryable = 404, f"{operation}_not_found", False
+        public_message = "请求的 KOL 或视频证据不存在。"
+    elif isinstance(exc, ValueError):
+        status_code, code, retryable = 422, f"{operation}_invalid_request", False
+        public_message = "请求参数无效，请检查后重试。"
+    elif (
+        "integrity" in class_name
+        or "uniqueviolation" in class_name
+        or any(token in message for token in ("already linked", "conflict", "duplicate", "changed_ids", "rolled back"))
+    ):
+        status_code, code, retryable = 409, f"{operation}_conflict", False
+        public_message = "当前数据状态与该操作冲突，请刷新后核对。"
+    elif isinstance(exc, RuntimeError) or any(
+        token in class_name for token in ("operationalerror", "interfaceerror", "databaseerror", "timeouterror")
+    ):
+        status_code, code, retryable = 503, f"{operation}_queue_unavailable", True
+        public_message = "任务队列暂时不可用，操作未完成，请稍后重试。"
+    else:
+        status_code, code, retryable = 500, f"{operation}_internal_error", False
+        public_message = "操作未完成，请联系管理员并提供错误编号。"
+    if status_code >= 500:
+        logger.exception("kol operation failed operation=%s correlation_id=%s", operation, correlation_id)
+    else:
+        logger.info(
+            "kol operation rejected operation=%s status=%s correlation_id=%s exception=%s",
+            operation,
+            status_code,
+            correlation_id,
+            type(exc).__name__,
+        )
+    return HTTPException(
+        status_code=status_code,
+        detail={"code": code, "message": public_message, "retryable": retryable, "correlation_id": correlation_id},
+    )
 
 
 def _on_demand_refresh_enabled() -> bool:

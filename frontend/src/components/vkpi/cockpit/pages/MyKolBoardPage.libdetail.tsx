@@ -294,6 +294,7 @@ export function KolVideoSection({
   queuedEvidence,
   busyKeys,
   onEnqueueOne,
+  onEnqueueKeyframeQa,
   refreshingEvidence = new Set<number>(),
   queuedRefreshEvidence = new Set<number>(),
   onRefreshMetrics,
@@ -314,6 +315,8 @@ export function KolVideoSection({
   /** 忙碌键(`deep:{eid}`),按钮禁用与 dialogs 同一份 */
   busyKeys: ReadonlySet<string>;
   onEnqueueOne: (video: VkpiKolPoolVideoRow) => void;
+  /** 只对已完成主深析的 YouTube 视频发起关键帧复核；状态回读服务端。 */
+  onEnqueueKeyframeQa?: (video: VkpiKolPoolVideoRow) => void;
   /** 指标刷新只表示 HTTP 已排队，不代表 provider 已完成。 */
   refreshingEvidence?: ReadonlySet<number>;
   queuedRefreshEvidence?: ReadonlySet<number>;
@@ -407,6 +410,17 @@ export function KolVideoSection({
             const thumb = String(video.cached_thumbnail_url || video.thumbnail_url || "");
             const title = String(video.title || video.video_title || "未命名视频");
             const meta = V_TIER_META[tier];
+            const isYouTube = String(video.platform || "").toLowerCase() === "youtube"
+              || /(?:youtube\.com|youtu\.be)\//i.test(String(video.content_url || ""));
+            const qaState = video.tasks?.keyframe_qa;
+            const qaActive = isTaskActive(qaState);
+            const mainAnalysisReady = video.tasks?.final_v1
+              ? video.tasks.final_v1.status === "ready" && video.tasks.final_v1.data.status === "ready"
+              : Boolean(video.has_final_v1_cache);
+            const qaReady = qaState
+              ? qaState.status === "ready" && qaState.data.status === "ready"
+              : Boolean(video.has_keyframe_qa_cache);
+            const qaRetry = qaState?.status === "failed" || qaState?.status === "blocked";
             const productSkus = [...new Set((video.product_skus || []).map((value) => String(value || "").trim()).filter(Boolean))];
             return (
               <div key={eid} className="overflow-hidden rounded-[11px] border border-line bg-panel">
@@ -441,6 +455,7 @@ export function KolVideoSection({
                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
                     <span className={`rounded-[5px] border px-1 py-px text-[8px] font-bold ${meta.cls}`} title={meta.title}>{meta.label}</span>
                     {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
+                    {qaReady ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>关键帧已复核</span> : null}
                     {video.content_url ? (
                       <a
                         className="vkpi-prov-pchip vkpi-prov-pchip--ext vkpi-prov-pchip--mini flex-none"
@@ -470,6 +485,17 @@ export function KolVideoSection({
                         onClick={() => onEnqueueOne(video)}
                       >
                         {queuedEvidence.has(eid) ? "已入队" : busyKeys.has(`deep:${eid}`) ? "入队中…" : "深析"}
+                      </button>
+                    ) : null}
+                    {onEnqueueKeyframeQa && isYouTube && mainAnalysisReady && !qaReady && !isImageKindVideo(video) ? (
+                      <button
+                        type="button"
+                        className="inline-flex min-h-8 items-center rounded-lg border border-line px-2 py-1 text-[10.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default"
+                        disabled={paidActionsReadOnly || qaActive || busyKeys.has(`qa:${eid}`)}
+                        title={paidActionsReadOnly ? paidActionsReadOnlyHint : qaActive ? "关键帧复核正在后台处理，页面会自动同步结果" : "复用已完成的主深析结果，排队视频复核模型检查关键帧；排队不等于完成"}
+                        onClick={() => onEnqueueKeyframeQa(video)}
+                      >
+                        {busyKeys.has(`qa:${eid}`) ? "排队中…" : qaActive ? (qaState?.status === "running" ? "复核进行中" : qaState?.status === "retrying" ? "复核重试中" : "复核已排队") : qaRetry ? "重新复核" : "关键帧复核"}
                       </button>
                     ) : null}
                     {onRefreshMetrics && eid > 0 && !isImageKindVideo(video) ? (

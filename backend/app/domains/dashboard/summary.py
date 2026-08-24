@@ -1,8 +1,6 @@
 """Dashboard summary assembly use cases."""
 from __future__ import annotations
-
 from typing import Any
-
 from app.domains.dashboard.metric_maturity import (
     _OFFICIAL_CHANNEL_FILTER_SQL,
     dashboard_metric_maturity_contract,
@@ -11,14 +9,19 @@ from app.domains.dashboard.metric_maturity import (
 )
 from app.domains.dashboard.account_picker import build_dashboard_kpi
 from app.db.connection import get_conn, table_exists
-from app.services.cache.memory_cache import cache_get, cache_set
+from app.services.cache.memory_cache import cache_get_or_build
 from app.domains.dashboard.recent_content import _dashboard_official_matrix_summary
 from app.domains import lineage as metric_lineage
 from app.domains.dashboard import decision_dashboard as decision_engine
 from app.domains.access import scope
 from app.domains.projects.workflow import staff_id as resolve_staff_id
-
-
+from app.domains.dashboard.summary_cache import (  # noqa: F401
+    cached_full_summary as _cached_full_summary,
+    cached_summary_block as _cached_summary_block,
+    full_summary_cache_key as _full_summary_cache_key,
+    summary_cache_key as _summary_cache_key,
+    summary_tenant_partition as _summary_tenant_partition,
+)
 # Viltrox-only evidence filter (constants + helpers) 已整簇搬到 summary_viltrox.py;
 # 行为不变,这里 re-export 兜本文件及外部调用点(含下划线私有名)。
 from app.domains.dashboard.summary_viltrox import (  # noqa: E402,F401
@@ -41,8 +44,6 @@ from app.domains.dashboard.summary_rows import (  # noqa: E402,F401
     _row_dict,
     _row_value,
 )
-
-
 # 公司/官方矩阵聚合器(_build_company_roster_detail / _build_company_window_metrics)
 # 已整簇搬到 summary_company.py;行为不变,re-export 兜本文件 orchestrator 调用点。
 from app.domains.dashboard.summary_company import (  # noqa: E402,F401
@@ -50,32 +51,11 @@ from app.domains.dashboard.summary_company import (  # noqa: E402,F401
     _build_company_roster_detail,
     _build_company_window_metrics,
 )
-
-
 # 大聚合读缓存(60-300s)。键必含 staff_scope_id(=effective_staff_id)→ 绝不把 A 的
 # 聚合喂给 B(dashboard-scope-isolation 在缓存层延续)。None=owner/admin 全局桶。
 # 只在 GET /dashboard 汇总路径(build_dashboard_summary)对聚合结果套缓存;各 _build_*
 # 原函数保持无缓存,直连单测(如 authz 隔离用例)照旧命中真 SQL 分支。
-_SUMMARY_CACHE_TTL = 120
-
-
-def _summary_cache_key(name: str, staff_scope_id: int | None, **parts: Any) -> str:
-    sid = str(staff_scope_id) if staff_scope_id else "global"
-    kp = ":".join(f"{k}={parts[k]}" for k in sorted(parts))
-    return f"dash_summary:{name}:scope={sid}:{kp}"
-
-
-def _cached_summary_block(name: str, staff_scope_id: int | None, builder, **key_parts: Any) -> dict[str, Any]:
-    """Read-through cache for one summary aggregate. ``builder`` is a 0-arg callable
-    invoked only on a miss; the returned block is assigned (never mutated) by the
-    caller, so sharing the cached dict across requests is safe."""
-    cache_key = _summary_cache_key(name, staff_scope_id, **key_parts)
-    hit = cache_get(cache_key)
-    if hit is not None:
-        return hit
-    result = builder()
-    cache_set(cache_key, result, _SUMMARY_CACHE_TTL)
-    return result
+_FULL_SUMMARY_CACHE_TTL = 30
 
 
 def _build_roster_detail(active_roster_by_scope: dict[str, int]) -> dict[str, Any]:
@@ -696,6 +676,32 @@ def build_dashboard_summary(
     metric_scope: str = "all",
     staff: dict[str, Any],
 ) -> dict[str, Any]:
+    """Return the fully assembled dashboard with a short authorization-scoped cache."""
+    normalized_scope = normalize_dashboard_scope(metric_scope)
+    effective_staff_id = scope.effective_staff_id(staff, staff_id)
+    return _cached_full_summary(
+        cache_get_or_build_fn=cache_get_or_build,
+        builder=lambda: _build_dashboard_summary_uncached(
+            window_days=window_days,
+            staff_id=staff_id,
+            metric_scope=normalized_scope,
+            staff=staff,
+        ),
+        window_days=window_days,
+        metric_scope=normalized_scope,
+        effective_staff_id=effective_staff_id,
+        staff=staff,
+        ttl=_FULL_SUMMARY_CACHE_TTL,
+    )
+
+
+def _build_dashboard_summary_uncached(
+    *,
+    window_days: int = 30,
+    staff_id: int | None = None,
+    metric_scope: str = "all",
+    staff: dict[str, Any],
+) -> dict[str, Any]:
     normalized_scope = normalize_dashboard_scope(metric_scope)
     effective_staff_id = scope.effective_staff_id(staff, staff_id)
     result = (
@@ -723,20 +729,24 @@ def build_dashboard_summary(
     # 四聚合统一吃这把 scope —— 此前它们各自全局口径,导致小号也看到全公司数据。
     summary["active_roster"] = int(build_dashboard_kpi(account_type="all", staff_scope_id=effective_staff_id).get("active_roster") or 0)
     win = int(window_days or 30)
+    tenant_partition = _summary_tenant_partition(staff)
     summary["evidence_metrics"] = _cached_summary_block(
         "evidence_metrics", effective_staff_id,
         lambda: _build_evidence_metrics_summary(window_days=window_days, staff_scope_id=effective_staff_id),
+        tenant_partition=tenant_partition,
         window=win,
     )
     summary["active_campaigns"] = _cached_summary_block(
         "active_campaigns", effective_staff_id,
         lambda: _build_active_campaigns_summary(window_days=window_days, staff_scope_id=effective_staff_id),
+        tenant_partition=tenant_partition,
         window=win,
     )
     # 波3 R1 / C9(2026-06-12):四环漏斗块(收藏→认领→进项目→已发布),shape 契约见 _build_funnel_summary docstring。
     summary["funnel"] = _cached_summary_block(
         "funnel", effective_staff_id,
         lambda: _build_funnel_summary(staff_scope_id=effective_staff_id),
+        tenant_partition=tenant_partition,
     )
     # 2026-07-18 体检修:summary.generated_at 此前从不赋值 → 真值卡新鲜度恒
     # 「时间待接入」。真实时间戳一直存在,取 metric_run 兜底 evidence 刷新时间。

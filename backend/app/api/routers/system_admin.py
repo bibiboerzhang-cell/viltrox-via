@@ -391,6 +391,13 @@ def restart_system_roles(
 @legacy_admin_router.get("/system/models")
 def system_models(admin=Depends(require_system_permission("system.models", "read"))):
     del admin
+    # Operator acknowledgements are a temporary, exact-binding runtime
+    # authorization.  They must be visible alongside (never rewritten into)
+    # signed production-readiness evidence, otherwise the settings page says
+    # "all blocked" while the gateway is actually allowed to call a model.
+    from app.platform import llm_gateway
+
+    operator_ack_bindings = llm_gateway._readiness_operator_ack_bindings()
     registered_bindings = [
         f"{provider}/{model}"
         for provider, models in AVAILABLE_MODELS.items()
@@ -402,10 +409,23 @@ def system_models(admin=Depends(require_system_permission("system.models", "read
         evidence_by_binding=evidence,
         configured_providers=configured_providers_from_environment(),
     )
-    audited_items = [
-        {**item, "runtime_gate": readiness_gate(item, evidence_source)}
-        for item in readiness["items"]
-    ]
+    audited_items = []
+    for item in readiness["items"]:
+        binding = str(item.get("binding") or "")
+        signed_ready = item.get("production_ready") is True
+        operator_ack = item.get("configured") is True and binding in operator_ack_bindings
+        audited_items.append({
+            **item,
+            "runtime_gate": readiness_gate(item, evidence_source),
+            "runtime_authorization": {
+                "allowed_by_model_readiness": bool(signed_ready or operator_ack),
+                "source": "signed_evidence" if signed_ready else "operator_ack" if operator_ack else "blocked",
+                "operator_acknowledged": operator_ack,
+                "temporary": bool(operator_ack and not signed_ready),
+                "budget_and_feature_gates_still_apply": True,
+                "claim_status": item.get("claim_status") or "descriptive_only",
+            },
+        })
     readiness = {**readiness, "items": audited_items}
     by_binding = {item["binding"]: item for item in audited_items}
     task_bindings = current_task_model_binding()
@@ -450,6 +470,14 @@ def system_models(admin=Depends(require_system_permission("system.models", "read
             "evaluated_count": readiness["evaluated_count"],
             "production_ready_count": readiness["production_ready_count"],
             "blocked_count": len(blocked_bindings),
+            "operator_acknowledged_count": sum(
+                1 for item in audited_items
+                if (item.get("runtime_authorization") or {}).get("operator_acknowledged") is True
+            ),
+            "model_readiness_authorized_count": sum(
+                1 for item in audited_items
+                if (item.get("runtime_authorization") or {}).get("allowed_by_model_readiness") is True
+            ),
             "blocked_bindings": blocked_bindings,
             "attestation_trust_roots": trust_roots,
             "evidence_source": {

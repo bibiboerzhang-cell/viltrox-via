@@ -48,7 +48,6 @@ from app.domains.kol.search_sessions_serde import (
     _text,
 )
 from app.domains.kol.search_sessions_schema import (
-    PENDING_ENRICHMENT_STATUSES as _PENDING_ENRICHMENT_STATUSES,
     REACH_GATED_ITEM_TYPES as _REACH_GATED_ITEM_TYPES,
     TERMINAL_SESSION_STATUSES as _TERMINAL_SESSION_STATUSES,
 )
@@ -57,6 +56,7 @@ from app.domains.kol.search_progress_contract import (
     project_search_progress,
 )
 from app.domains.kol.search_sessions_history import (
+    apply_discovery_account_display_gate as _apply_discovery_account_display_gate,
     archive_history_session as _archive_history_session,
     archive_history_sessions as _archive_history_sessions,
     list_history as _list_history,
@@ -70,12 +70,17 @@ from app.domains.kol.search_sessions_previews import hydrate_session_item_previe
 from app.domains.kol.search_sessions_items import (
     _update_session as _update_session_impl,
     _upsert_item as _upsert_item_impl,
+    canonicalize_session_creator_items,
     get_session_item as _get_session_item,
     mark_items_profile_cancelled as _mark_items_profile_cancelled,
     mark_items_profile_queued as _mark_items_profile_queued,
     mark_items_profile_running as _mark_items_profile_running,
     record_items as _record_items,
     update_item_profile_execution as _update_item_profile_execution,
+)
+from app.domains.kol.search_sessions_enrichment import (
+    _enrichment_preview_status,
+    _refresh_enrichment_queue_states,
 )
 
 # Re-export attach-result builders (behavior-preserving move).
@@ -96,69 +101,6 @@ from app.domains.kol.search_sessions_reach_gate import (  # noqa: E402
     _item_reach_pair,
     _reach_gate_pool_rows,
 )
-
-
-def _enrichment_preview_status(item: dict[str, Any], key: str, *, ready: bool) -> str:
-    if ready:
-        return "ready"
-    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-    profile_execute = payload.get("profile_execute") if isinstance(payload.get("profile_execute"), dict) else {}
-    explicit = profile_execute.get(key) if isinstance(profile_execute.get(key), dict) else {}
-    explicit_status = _text(explicit.get("status")).lower()
-    if explicit_status in _PENDING_ENRICHMENT_STATUSES:
-        return "pending"
-    if explicit_status in {"ok", "ready", "done"}:
-        return "ready"
-    if explicit_status in {"no_contacts", "no_commenters", "no_posts", "no_raw", "not_found"}:
-        return "empty"
-    if explicit_status in {"error", "failed", "partial"}:
-        return "partial"
-    job = payload.get("profile_advance_job") if isinstance(payload.get("profile_advance_job"), dict) else {}
-    item_status = _text(item.get("status")).lower()
-    job_status = _text(job.get("status")).lower()
-    if item_status in {"queued", "running"} or job_status in _PENDING_ENRICHMENT_STATUSES:
-        return "pending"
-    return "missing"
-
-
-def _refresh_enrichment_queue_states(conn: Any, items: list[dict[str, Any]]) -> None:
-    job_ids: set[int] = set()
-    for item in items:
-        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        profile_execute = payload.get("profile_execute") if isinstance(payload.get("profile_execute"), dict) else {}
-        for key in ("contact_enrichment", "audience_enrichment"):
-            enrichment = profile_execute.get(key) if isinstance(profile_execute.get(key), dict) else {}
-            job_id = _int_or_none(enrichment.get("job_id"))
-            if job_id:
-                job_ids.add(job_id)
-    if not job_ids:
-        return
-    placeholders = ",".join(["?"] * len(job_ids))
-    try:
-        rows = conn.execute(
-            f"SELECT id, status FROM apify_jobs WHERE id IN ({placeholders})",
-            tuple(sorted(job_ids)),
-        ).fetchall()
-    except Exception:
-        logger.warning("search_sessions.enrichment_job_lookup_failed", exc_info=True)
-        return
-    job_statuses = {int(dict(row)["id"]): _text(dict(row).get("status")).lower() for row in rows}
-    for item in items:
-        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        profile_execute = payload.get("profile_execute") if isinstance(payload.get("profile_execute"), dict) else {}
-        for key in ("contact_enrichment", "audience_enrichment"):
-            enrichment = profile_execute.get(key) if isinstance(profile_execute.get(key), dict) else None
-            if enrichment is None:
-                continue
-            queue_status = job_statuses.get(_int_or_none(enrichment.get("job_id")) or 0)
-            if not queue_status:
-                continue
-            enrichment["queue_status"] = queue_status
-            if _text(enrichment.get("status")).lower() in _PENDING_ENRICHMENT_STATUSES:
-                if queue_status == "done":
-                    enrichment["status"] = "empty"
-                elif queue_status in {"failed", "blocked", "cancelled"}:
-                    enrichment["status"] = "partial"
 
 
 def _attach_progress_contract(
@@ -363,9 +305,12 @@ def list_sessions(
     )
     worker_health = observe_worker_health(conn)
     for session in sessions:
+        session_items = canonicalize_session_creator_items(
+            grouped.get(int(session.get("id") or 0), [])
+        )
         _attach_progress_contract(
             session,
-            grouped.get(int(session.get("id") or 0), []),
+            session_items,
             worker_health=worker_health,
         )
         summary = _dict(session.get("result_summary"))
@@ -477,15 +422,22 @@ def get_session(
         enrichment_status_fn=_enrichment_preview_status,
         logger=logger,
     )
+    items = canonicalize_session_creator_items(items)
     _attach_progress_contract(
         session,
         items,
         worker_health=observe_worker_health(conn),
     )
+    # Match the history-list projection: keep every durable evidence row, but
+    # hide only accounts confirmed by the conservative official-account gate.
+    items, account_gate_counts = _apply_discovery_account_display_gate(items)
     # 触达展示闸(第二道闸落点①):会话项按 pool 现值实时重判——补全回填 followers 后,
     # 低触达行(如 kol_pool 12297,2 粉)从「全网新发现/库内已有」消失;followers 未知折叠为
     # 「分析中 ×N」。counts/count 按可见项重算,隐藏计数走 reach_floor_display 诚实透出。
     items, reach_counts = _apply_reach_display_gate(conn, items)
+    # Historical sessions retain their original rows for auditability, while
+    # the visible projection folds legacy duplicate keys by the same canonical
+    # identity used at today's write boundary.
     _refresh_visible_recall_summary(session, items)
     summary = _dict(session.get("result_summary"))
     if "llm_query_plan" in summary:
@@ -505,6 +457,7 @@ def get_session(
     session["item_count"] = len(items)
     session["counts"] = _item_counts(items)
     session["reach_floor_display"] = reach_counts
+    session["discovery_account_display_gate"] = account_gate_counts
     return session
 
 

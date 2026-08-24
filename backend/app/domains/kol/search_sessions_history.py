@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol.contact_access import mask_contact_payload
 from app.domains.kol.search_sessions_schema import TERMINAL_SESSION_STATUSES
@@ -11,6 +12,14 @@ from app.domains.kol.search_progress_contract import (
     observe_worker_health,
     project_search_progress,
     unobserved_worker_health,
+)
+from app.domains.kol.search_sessions_items import (
+    _CREATOR_ITEM_LANES,
+    _session_creator_probe,
+    canonicalize_session_creator_items,
+)
+from app.domains.kol.search_sessions_previews import (
+    hydrate_session_item_avatar_fallbacks,
 )
 from app.domains.kol.search_sessions_serde import (
     _dict,
@@ -25,12 +34,47 @@ from app.domains.kol.search_sessions_serde import (
 )
 
 
+logger = get_logger(__name__)
+
+
 GetConn = Callable[[], Any]
 ReachDisplayGate = Callable[
     [Any, list[dict[str, Any]]],
     tuple[list[dict[str, Any]], dict[str, Any]],
 ]
 PayloadMasker = Callable[[dict[str, Any]], dict[str, Any]]
+
+
+def apply_discovery_account_display_gate(
+    items: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Hide confirmed official accounts from discovery history projections.
+
+    Historical evidence rows remain untouched.  The shared conservative gate
+    requires identity/profile evidence, so a display name that merely mentions
+    Viltrox (for example an independent reviewer) does not disappear.
+    """
+    from app.domains.kol.discovery_filters import discovery_account_gate_verdict
+
+    kept: list[dict[str, Any]] = []
+    counts = {
+        "excluded_total": 0,
+        "excluded_own_brand": 0,
+        "excluded_brand_official": 0,
+        "history_rows_deleted": 0,
+        "basis": "conservative_discovery_account_gate_v1",
+    }
+    for item in items:
+        if _text(item.get("item_type")) not in _CREATOR_ITEM_LANES:
+            kept.append(item)
+            continue
+        verdict = discovery_account_gate_verdict(_session_creator_probe(item))
+        if verdict not in {"own_brand", "brand_official"}:
+            kept.append(item)
+            continue
+        counts["excluded_total"] += 1
+        counts[f"excluded_{verdict}"] += 1
+    return kept, counts
 
 
 def list_history(
@@ -128,6 +172,12 @@ def list_history(
             item["payload"] = payload_masker(item["payload"])
         grouped.setdefault(int(item.get("session_id") or 0), []).append(item)
 
+    hydrate_session_item_avatar_fallbacks(
+        conn,
+        [item for items in grouped.values() for item in items],
+        logger=logger,
+    )
+
     if apply_reach_display_gate_fn is None:
         from app.domains.kol.search_sessions import _apply_reach_display_gate
 
@@ -135,14 +185,27 @@ def list_history(
 
     worker_health = observe_worker_health(conn)
     history_items: list[dict[str, Any]] = []
+    account_gate_totals = {
+        "excluded_total": 0,
+        "excluded_own_brand": 0,
+        "excluded_brand_official": 0,
+        "history_rows_deleted": 0,
+        "basis": "conservative_discovery_account_gate_v1",
+    }
     for session in sessions:
         session_id = int(session["id"])
-        all_items = grouped.get(session_id, [])
+        all_items = canonicalize_session_creator_items(grouped.get(session_id, []))
+        # Execution progress remains based on every durable task/evidence row.
+        # The official-account gate is a display projection only and must not
+        # turn a terminal session into an apparently incomplete one.
         progress_contract = project_search_progress(
             session,
             all_items,
             worker_health=worker_health,
         )
+        all_items, account_gate_counts = apply_discovery_account_display_gate(all_items)
+        for key in ("excluded_total", "excluded_own_brand", "excluded_brand_official"):
+            account_gate_totals[key] += int(account_gate_counts[key])
         session["progress_contract"] = progress_contract
         session["worker_health"] = dict(worker_health)
         result_summary = _dict(session.get("result_summary")).copy()
@@ -164,6 +227,7 @@ def list_history(
                 "active_items": active_items[:3],
                 "counts": counts,
                 "reach_floor_display": reach_counts,
+                "discovery_account_display_gate": account_gate_counts,
                 "summary": {
                     "kind": result_summary.get("kind"),
                     "platform": result_summary.get("platform"),
@@ -181,6 +245,7 @@ def list_history(
         "count": len(history_items),
         "items": history_items,
         "worker_health": worker_health,
+        "discovery_account_display_gate": account_gate_totals,
         "filters": {
             "status": normalized_status,
             "query_type": normalized_query_type,

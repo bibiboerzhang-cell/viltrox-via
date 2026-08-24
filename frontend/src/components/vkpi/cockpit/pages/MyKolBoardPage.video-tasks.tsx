@@ -29,13 +29,14 @@ function TaskRow({
   onRetryAnalysis,
   retryBusy = false,
 }: {
-  kind: "metric" | "analysis";
+  kind: "metric" | "analysis" | "review";
   tasks: VkpiVideoTasks;
   onRetryAnalysis?: () => void;
   retryBusy?: boolean;
 }) {
   const { t } = useT();
-  const state = kind === "metric" ? tasks.metric_refresh : tasks.final_v1;
+  const state = kind === "metric" ? tasks.metric_refresh : kind === "analysis" ? tasks.final_v1 : tasks.keyframe_qa;
+  if (!state) return null;
   const chip = taskChip(kind, state);
   const fresh = freshnessText(kind, state);
   const active = isTaskActive(state);
@@ -82,6 +83,9 @@ export function VideoTaskStatus({
     <div className="mt-1 flex flex-col gap-0.5">
       <TaskRow kind="metric" tasks={tasks} />
       {compact ? null : <TaskRow kind="analysis" tasks={tasks} onRetryAnalysis={onRetryAnalysis} retryBusy={retryBusy} />}
+      {!compact && tasks.keyframe_qa && (tasks.keyframe_qa.status !== "not_requested" || tasks.keyframe_qa.data.status !== "none")
+        ? <TaskRow kind="review" tasks={tasks} />
+        : null}
     </div>
   );
 }

@@ -36,9 +36,83 @@ from app.domains.kol.profile_discovery_localize import (
     _localize_search_terms,
     _market_to_language,
 )
+from app.domains.kol.identity import (
+    YOUTUBE_CHANNEL_ID_RE,
+    canonical_creator_aliases,
+)
 from app.services.intelligence.account_scan_service import search_platform_content
 
 logger = logging.getLogger(__name__)
+
+
+def _provider_handle_quality(value: Any, platform: str) -> int:
+    handle = _text(value).lstrip("@")
+    if not handle:
+        return 0
+    if platform == "youtube" and YOUTUBE_CHANNEL_ID_RE.fullmatch(handle):
+        return 1
+    return 2
+
+
+def _merge_provider_creator_observation(
+    existing: dict[str, Any],
+    incoming: dict[str, Any],
+    *,
+    platform: str,
+) -> dict[str, Any]:
+    """Combine two provider rows for one observed identity without synthesis."""
+    incoming_wins = _provider_handle_quality(
+        incoming.get("handle"), platform
+    ) > _provider_handle_quality(existing.get("handle"), platform)
+    winner = dict(incoming if incoming_wins else existing)
+    other = existing if incoming_wins else incoming
+    for key, value in other.items():
+        if winner.get(key) in (None, "", [], {}):
+            winner[key] = value
+    winner["platform"] = platform
+    return winner
+
+
+def _canonicalize_provider_candidates(
+    items: list[dict[str, Any]],
+    *,
+    platform: str,
+) -> list[dict[str, Any]]:
+    """Fold UC-id/@handle/URL variants before any account-quality gate."""
+    pending = [{**raw, "platform": platform} for raw in items]
+    while True:
+        output: list[dict[str, Any]] = []
+        groups: list[tuple[set[str], int]] = []
+        fallback_indexes: dict[str, int] = {}
+        for item in pending:
+            aliases = canonical_creator_aliases(item)
+            match_index: int | None = None
+            if aliases:
+                for group_aliases, output_index in groups:
+                    if aliases.intersection(group_aliases):
+                        match_index = output_index
+                        group_aliases.update(aliases)
+                        break
+            else:
+                fallback = _candidate_key(item, platform)
+                match_index = fallback_indexes.get(fallback)
+            if match_index is None:
+                output_index = len(output)
+                output.append(item)
+                if aliases:
+                    groups.append((set(aliases), output_index))
+                else:
+                    fallback_indexes[fallback] = output_index
+                continue
+            output[match_index] = _merge_provider_creator_observation(
+                output[match_index], item, platform=platform
+            )
+        if len(output) == len(pending):
+            return output
+        # A bridge row may join two groups that did not overlap earlier in the
+        # input (UC-only, handle-only, then UC+handle).  Repeat until the
+        # connected identity components are stable.
+        pending = output
 
 
 def discovery_plan(
@@ -133,6 +207,24 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
             # 绝不再拿 avg_views 冒充粉丝数、也不把「未知」编成 0——否则第二道闸
             # (followers 已知才推荐)会被杜撰值穿透。真值由 buildout 深爬回填。
             "followers": _int(item.get("followers") or item.get("subscriber_count") or item.get("follower_count") or 0) or None,
+            # Although these are outside PROFILE_BASICS_WHITELIST, the writer
+            # reads them before projection for canonical identity matching.
+            "channel_id": _text(item.get("channel_id") or item.get("channelId")),
+            "account_id": _text(item.get("account_id") or item.get("accountId")),
+            "platform_user_id": _text(item.get("platform_user_id")),
+            # 同一身份真源:把 provider 同时给出的 UC channel id / @handle 留在原始
+            # profile 身份包。后续 URL 深爬或导入即使只带其中一条别名,也能命中本行,
+            # 不再依赖 (platform,handle) 的单键偶然一致。
+            "raw_platform_data": {
+                "discovery_identity_v1": {
+                    "platform": platform,
+                    "handle": handle,
+                    "channel_id": _text(item.get("channel_id") or item.get("channelId")),
+                    "account_id": _text(item.get("account_id") or item.get("accountId")),
+                    "platform_user_id": _text(item.get("platform_user_id")),
+                    "profile_url": _text(item.get("profile_url") or item.get("channel_url") or item.get("url")),
+                }
+            },
         }
         try:
             _enroll_res = write_kol_profile_basics(None, profile_data, dry_run=False)
@@ -354,7 +446,8 @@ async def discover_new_creators(
     survivors: list[dict[str, Any]] = []  # 全部通过去重/garbage/地区过滤的存活候选,待 relevance 排序后再 top-N 截断
     existing_matches: list[dict[str, Any]] = []
     platform_results: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    seen_keys: set[str] = set()
+    seen_aliases: set[str] = set()
     # persona 检索词原料(英文优先;avoid 命中重扣)。helper 内做泛词过滤与归一,空表零影响。
     _pos_terms = _persona_positive_terms(product_focus, ideal_creator_types, verticals, search_query_en or query_text)
     _neg_terms = _persona_avoid_terms(avoid_types)
@@ -401,6 +494,7 @@ async def discover_new_creators(
             item["platform"] = platform
             strict_items.append(item)
         annotated = history_match.annotate_platform_items(strict_items, platform=platform)
+        annotated = _canonicalize_provider_candidates(annotated, platform=platform)
         return {
             "platform": platform,
             "status": result.get("status"),
@@ -438,10 +532,16 @@ async def discover_new_creators(
         if outcome.get("error"):
             errors.append({"platform": platform, "status": outcome.get("status"), "message": outcome.get("message")})
         for item in annotated:
-            key = _candidate_key(item, platform)
-            if key in seen:
+            identity_probe = {**item, "platform": platform}
+            aliases = canonical_creator_aliases(identity_probe)
+            fallback_key = _candidate_key(item, platform)
+            if aliases:
+                if aliases.intersection(seen_aliases):
+                    continue
+                seen_aliases.update(aliases)
+            elif fallback_key in seen_keys:
                 continue
-            seen.add(key)
+            seen_keys.add(fallback_key)
             # 品牌官号闸(FEELWORLD 官号混入案 + Panavision/DZOFilm/Thypoch 漏网案):
             # 词表快路 = competitor_brands.json 命中身份字段**并发**官号信号才拦;词表外品牌
             # 走动态判据(官号形态 + bio 企业自述口吻并发,bio 缺=证据不足放行)。两路都

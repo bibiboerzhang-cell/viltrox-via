@@ -10,6 +10,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol import video_metric_refresh
 from app.domains.kol.my_kol_paid_action_access import (
@@ -19,6 +20,7 @@ from app.domains.kol.my_kol_paid_action_access import (
     target_write_context,
 )
 
+logger = get_logger(__name__)
 
 TASK_KEY = "vkpi_kol_content_monitoring"
 SOURCE = TASK_KEY
@@ -112,6 +114,59 @@ def _subscription_rows(conn: Any, *, kol_pool_id: int, actor_id: int) -> list[di
     return [dict(row) for row in rows]
 
 
+def _scheduler_state(conn: Any) -> dict[str, Any]:
+    """Read the execution gate separately from subscription state.
+
+    An active subscription is only consent/configuration; it must never be
+    presented as evidence that the scheduler ran or that provider data landed.
+    """
+
+    try:
+        row = conn.execute(
+            """
+            SELECT task_key, enabled, last_run_at, last_success_at
+            FROM scheduler_tasks
+            WHERE task_key=?
+            LIMIT 1
+            """,
+            (TASK_KEY,),
+        ).fetchone()
+    except Exception:
+        # PostgreSQL marks the whole transaction aborted after a missing-table
+        # (or similar) read failure.  Clear that state before returning the
+        # honest ``unknown`` scheduler result so a pooled connection remains
+        # usable by the rest of the request.
+        try:
+            conn.rollback()
+        except Exception:
+            logger.debug("content monitoring scheduler read rollback skipped", exc_info=True)
+        # Backward-compatible/read-only degradation for fixtures or a partially
+        # migrated database. Unknown must remain unknown, never false-green.
+        return {
+            "task_key": TASK_KEY,
+            "configured": False,
+            "enabled": None,
+            "last_run_at": None,
+            "last_success_at": None,
+        }
+    if not row:
+        return {
+            "task_key": TASK_KEY,
+            "configured": False,
+            "enabled": None,
+            "last_run_at": None,
+            "last_success_at": None,
+        }
+    record = dict(row)
+    return {
+        "task_key": TASK_KEY,
+        "configured": True,
+        "enabled": bool(record.get("enabled")),
+        "last_run_at": record.get("last_run_at") or None,
+        "last_success_at": record.get("last_success_at") or None,
+    }
+
+
 def _public_subscription(
     row: dict[str, Any] | None,
     *,
@@ -165,6 +220,7 @@ def get_content_monitoring(
         "read_only": write_context.get("can_run_paid_actions") is not True,
         "can_enable_or_pause_own": write_context.get("can_run_paid_actions") is True,
         "scope": "own" if own else "target_aggregate" if selected else "none",
+        "scheduler": _scheduler_state(db),
         "provider_calls_performed": False,
     }
 
@@ -206,15 +262,58 @@ def enable_content_monitoring(
         )
         state = "resumed"
     else:
-        db.execute(
+        # The first enable is a check-then-insert race across browser retries,
+        # tabs, and workers.  Let the exact staff/target unique key arbitrate
+        # that race without raising an IntegrityError (which poisons a
+        # PostgreSQL transaction).  Other FK/check/integrity failures still
+        # propagate because the conflict target is deliberately narrow.
+        created = db.execute(
             """
             INSERT INTO vkpi_kol_content_monitoring_subscriptions
               (staff_id, kol_pool_id, status, cadence_hours, next_due_at)
             VALUES (?, ?, 'active', ?, NOW())
+            ON CONFLICT (staff_id, kol_pool_id) DO NOTHING
+            RETURNING id
             """,
             (int(actor_id), int(kol_pool_id), cadence),
-        )
-        state = "enabled"
+        ).fetchone()
+        db.commit()
+        if created:
+            state = "enabled"
+        else:
+            # The competing insert is now durable.  Re-read its real state;
+            # never claim this request created a second subscription.
+            concurrent = db.execute(
+                """
+                SELECT * FROM vkpi_kol_content_monitoring_subscriptions
+                WHERE staff_id=? AND kol_pool_id=? LIMIT 1
+                """,
+                (int(actor_id), int(kol_pool_id)),
+            ).fetchone()
+            if not concurrent:
+                raise ContentMonitoringError("content_monitor_enable_conflict_state_unknown", 409)
+            row = dict(concurrent)
+            if row.get("status") == "active" and _int(row.get("cadence_hours")) == cadence:
+                return {
+                    "status": "already_active",
+                    "kol_pool_id": int(kol_pool_id),
+                    "subscription": _public_subscription(row),
+                    "provider_calls_performed": False,
+                }
+            # A simultaneous enable with a different cadence (or a pause that
+            # won immediately afterwards) is still an explicit enable request.
+            # Preserve the generation fence exactly as the ordinary resume
+            # path does.
+            db.execute(
+                """
+                UPDATE vkpi_kol_content_monitoring_subscriptions
+                SET status='active', cadence_hours=?, next_due_at=NOW(),
+                    generation=generation+1, pause_reason='', updated_at=NOW()
+                WHERE id=?
+                """,
+                (cadence, _int(row.get("id"))),
+            )
+            state = "resumed"
     db.commit()
     current = db.execute(
         """
@@ -363,29 +462,115 @@ def _pause_invalid_subscription(conn: Any, row: dict[str, Any], reason: str) -> 
     )
 
 
+def _monitor_job_receipt(
+    conn: Any,
+    row: dict[str, Any],
+    *,
+    job_id: int,
+) -> dict[str, Any]:
+    """Prove that ``job_id`` carries this subscription generation's fence."""
+
+    if job_id <= 0:
+        return {}
+    receipt = conn.execute(
+        """
+        SELECT id, status
+        FROM apify_jobs
+        WHERE id=? AND job_type='kol_profile_deep_crawl'
+          AND CAST(payload->'content_monitor_fence'->>'version' AS TEXT)=?
+          AND CAST(payload->'content_monitor_fence'->>'subscription_id' AS TEXT)=?
+          AND CAST(payload->'content_monitor_fence'->>'staff_id' AS TEXT)=?
+          AND CAST(payload->'content_monitor_fence'->>'kol_pool_id' AS TEXT)=?
+          AND CAST(payload->'content_monitor_fence'->>'generation' AS TEXT)=?
+        LIMIT 1
+        """,
+        (
+            int(job_id),
+            str(FENCE_VERSION),
+            str(_int(row.get("id"))),
+            str(_int(row.get("staff_id"))),
+            str(_int(row.get("kol_pool_id"))),
+            str(_int(row.get("generation"))),
+        ),
+    ).fetchone()
+    return dict(receipt) if receipt else {}
+
+
+def _observed_job_state(value: Any) -> str:
+    raw = _text(value, 32).lower()
+    # The queue's triage state is terminal but migration 286 intentionally
+    # exposes only the simpler employee-facing ``failed`` state.
+    return "failed" if raw == "triage" else _safe_job_status(raw)
+
+
 def _mark_enqueued(
     conn: Any,
     row: dict[str, Any],
     *,
     now: datetime,
     result: dict[str, Any],
-) -> None:
+) -> bool:
+    requested_state = _safe_job_status(result.get("status"))
+    if requested_state not in {"queued", "already_queued"}:
+        return False
+    job_id = _int(result.get("job_id"))
+    receipt = _monitor_job_receipt(conn, row, job_id=job_id)
+    if not receipt:
+        # Fail closed: a plain same-URL crawl has no subscription fence and
+        # therefore cannot advance next_due_at or become last_job_id.
+        return False
     cadence = _cadence_hours(row.get("cadence_hours"))
-    conn.execute(
+    observed_state = _observed_job_state(receipt.get("status"))
+    state = observed_state or requested_state
+    cursor = conn.execute(
         """
         UPDATE vkpi_kol_content_monitoring_subscriptions
         SET last_enqueued_at=?, last_job_id=?, last_job_status=?,
+            last_success_at=CASE WHEN ?='done' THEN NOW() ELSE last_success_at END,
             next_due_at=?, pause_reason='', updated_at=NOW()
         WHERE id=? AND generation=? AND status='active'
         """,
         (
             now.isoformat(),
-            _int(result.get("job_id")) or None,
-            _safe_job_status(result.get("status")),
+            job_id,
+            state,
+            state,
             (now + timedelta(hours=cadence)).isoformat(),
             _int(row.get("id")),
             _int(row.get("generation")),
         ),
+    )
+    return bool(getattr(cursor, "rowcount", 0))
+
+
+def _reconcile_bound_monitor_terminal(
+    conn: Any,
+    row: dict[str, Any],
+    *,
+    job_id: int,
+) -> None:
+    """Close the enqueue/worker race after last_job_id becomes durable.
+
+    If the worker finished before the subscription binding committed, its
+    callback could not match ``last_job_id``.  Re-reading after that commit is
+    sufficient: if the job is still active its later callback will match; if
+    it is already terminal this observer records the missed receipt now.
+    """
+
+    receipt = _monitor_job_receipt(conn, row, job_id=job_id)
+    state = _observed_job_state(receipt.get("status")) if receipt else ""
+    if state not in {"done", "blocked", "failed"}:
+        return
+    record_monitor_job_terminal(
+        {
+            FENCE_KEY: {
+                "subscription_id": _int(row.get("id")),
+                "generation": _int(row.get("generation")),
+            }
+        },
+        job_id=job_id,
+        status=state,
+        conn=conn,
     )
 
 
@@ -471,8 +656,17 @@ def enqueue_due_content_monitoring(
                 suppress_contact_followup=True,
                 suppress_profile_followups=True,
             )
-            _mark_enqueued(db, row, now=current, result=result)
+            marked = _mark_enqueued(db, row, now=current, result=result)
+            if not marked:
+                db.rollback()
+                summary["failed"] += 1
+                continue
             db.commit()
+            _reconcile_bound_monitor_terminal(
+                db,
+                row,
+                job_id=_int(result.get("job_id")),
+            )
             state = _safe_job_status(result.get("status"))
             if state == "queued":
                 summary["queued"] += 1

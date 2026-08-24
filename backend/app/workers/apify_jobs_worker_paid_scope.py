@@ -13,6 +13,10 @@ PAID_JOB_ACTIONS = {
     "kol_outreach_draft": "outreach_draft",
     "kol_content_fit_analysis": "content_fit_analysis",
 }
+_PAID_VIDEO_DERIVE_METHODS = {
+    "video_analysis_final_v1",
+    "video_analysis_final_v1_keyframe_qa",
+}
 
 # blocked 原因 → last_error_category(F3 进度映射以此列为准;2026-08-22 复盘:owner 从 UI 点深析
 # 一直 blocked(video_analysis_authorization_fence_required)却只显示"排队中",因为类别恒为 'blocked')。
@@ -83,11 +87,12 @@ def revalidate_paid_job_scope(
         return paid_action, "release_validation_fenced", None
     has_my_kol_fence = isinstance(payload.get(MY_KOL_FENCE_KEY), dict)
     has_provider_fence = isinstance(payload.get(PROVIDER_FENCE_KEY), dict)
-    final_v1_video = (
+    video_derive_method = str(payload.get("derive_method") or "").strip().lower()
+    paid_video = (
         job_type == "video"
-        and str(payload.get("derive_method") or "").strip().lower()
-        == "video_analysis_final_v1"
+        and video_derive_method in _PAID_VIDEO_DERIVE_METHODS
     )
+    final_v1_video = paid_video and video_derive_method == "video_analysis_final_v1"
     local_evaluation = payload.get("local_evaluation") is True
     if job_type == "kol_outreach_draft" and not has_my_kol_fence:
         # Fail without even opening a database connection: old direct jobs do
@@ -101,7 +106,7 @@ def revalidate_paid_job_scope(
         payload.get("_local_evaluation_capability"), dict
     ):
         return paid_action, "local_evaluation_capability_required", None
-    if final_v1_video and not local_evaluation and not (
+    if paid_video and not local_evaluation and not (
         has_my_kol_fence or has_provider_fence
     ):
         return paid_action, "video_analysis_authorization_fence_required", None
@@ -116,7 +121,7 @@ def revalidate_paid_job_scope(
                     expected_action=paid_action,
                 )
             elif (
-                job_type == "kol_content_fit_analysis" or final_v1_video
+                job_type == "kol_content_fit_analysis" or paid_video
             ) and has_provider_fence:
                 actor = revalidate_provider_job_fence(
                     connection.get_conn(),
@@ -162,7 +167,7 @@ def final_v1_scope_checkpoint(
     Other derive methods are not paid MY KOL actions and always pass.
     """
 
-    if derive_method != "video_analysis_final_v1":
+    if derive_method not in _PAID_VIDEO_DERIVE_METHODS:
         return True
     paid_action = PAID_JOB_ACTIONS["video"]
     child_revoked = str((raw or {}).get("scope_revoked") or "").strip()

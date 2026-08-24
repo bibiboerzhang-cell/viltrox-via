@@ -17,6 +17,7 @@ from app.db.connection import (
     table_exists,
 )
 from app.platform.apify_budget import current_apify_execution_context
+from app.domains.kol.identity import canonical_creator_aliases
 
 logger = get_logger(__name__)
 MAX_DISCOVERY_QUERY_LENGTH = 256
@@ -24,8 +25,60 @@ MAX_DISCOVERY_QUERY_LENGTH = 256
 _TABLE = "vkpi_discovery_providers"
 
 # 商业/自定义源适配器注册表:name -> fn(query, limit) -> list[candidate]。
-# candidate 统一字段:{source, external_id, name, platform, followers, handle, score(外部分,展示用)}。
+# candidate 统一字段:{source, external_id(仅明确创作者ID), content_id(内容证据),
+# name, platform, followers, handle, score(外部分,展示用)}。
 _CUSTOM: dict[str, Callable[[str, int], list[dict[str, Any]]]] = {}
+
+
+def _provider_creator_id_projection(item: dict[str, Any]) -> dict[str, str]:
+    """Project only explicitly creator-scoped ids from a provider item."""
+    field_map = (
+        ("channel_id", ("channel_id", "channelId"), "channel_id"),
+        ("account_id", ("account_id", "accountId"), "account_id"),
+        (
+            "platform_user_id",
+            ("platform_user_id", "platformUserId"),
+            "user_id",
+        ),
+        ("user_id", ("user_id", "userId"), "user_id"),
+        ("native_id", ("native_id", "nativeId"), "native_id"),
+    )
+    projected: dict[str, str] = {}
+    external_id = ""
+    external_kind = ""
+    for output_field, source_fields, kind in field_map:
+        value = next(
+            (
+                str(item.get(field) or "").strip()
+                for field in source_fields
+                if str(item.get(field) or "").strip()
+            ),
+            "",
+        )
+        if not value:
+            continue
+        projected[output_field] = value
+        if not external_id:
+            external_id, external_kind = value, kind
+    projected["external_id"] = external_id
+    projected["external_id_kind"] = external_kind
+    return projected
+
+
+def _provider_content_id(item: dict[str, Any]) -> str:
+    """Keep ambiguous provider ids as content evidence, never creator identity."""
+    for field in ("content_id", "video_id", "post_id", "media_id", "aweme_id"):
+        value = str(item.get(field) or "").strip()
+        if value:
+            return value
+    ambiguous = item.get("id")
+    if isinstance(ambiguous, dict):
+        for field in ("videoId", "postId", "mediaId", "id"):
+            value = str(ambiguous.get(field) or "").strip()
+            if value:
+                return value
+        return ""
+    return str(ambiguous or "").strip()
 
 
 def register_provider(name: str, fn: Callable[[str, int], list[dict[str, Any]]]) -> None:
@@ -82,6 +135,7 @@ def _apify_search(query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
     # production consequently advertised apify_search as enabled while having
     # no executable actor configuration.  The shared adapters already own the
     # actor ids, payload contracts, throttles, normalization, and budget ledger.
+    from app.domains.kol.contact_system import project_public_profile_url
     from app.services.intelligence.account_search_discovery import search_platform_content
 
     platforms = ("youtube", "tiktok", "instagram")
@@ -102,24 +156,38 @@ def _apify_search(query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
             for item in result.get("items") or []:
                 if not isinstance(item, dict):
                     continue
+                creator_ids = _provider_creator_id_projection(item)
                 handle = str(
                     item.get("handle")
-                    or item.get("channel_url")
-                    or item.get("profile_url")
-                    or item.get("source_url")
+                    or item.get("channel_handle")
+                    or item.get("username")
+                    or creator_ids.get("channel_id")
+                    or creator_ids.get("account_id")
+                    or creator_ids.get("platform_user_id")
+                    or creator_ids.get("user_id")
+                    or creator_ids.get("native_id")
                     or ""
+                ).strip()
+                profile_url = project_public_profile_url(
+                    item.get("profile_url") or item.get("channel_url")
+                )
+                avatar_url = str(item.get("avatar_url") or "").strip()
+                avatar_url_status = str(
+                    item.get("avatar_url_status")
+                    or ("unverified" if avatar_url else "missing")
+                ).strip().lower()[:40]
+                # Content thumbnail is kept as separate evidence and is never
+                # promoted into the account avatar slot when an avatar is
+                # missing/expired.
+                thumbnail_url = str(
+                    item.get("thumbnail_url") or item.get("thumbnail") or ""
                 ).strip()
                 out.append(
                     {
                         "source": "apify_search",
                         "platform": platform,
-                        "external_id": str(
-                            item.get("channel_id")
-                            or item.get("id")
-                            or item.get("handle")
-                            or handle
-                            or ""
-                        ),
+                        **creator_ids,
+                        "content_id": _provider_content_id(item),
                         "name": (
                             item.get("channel_name")
                             or item.get("display_name")
@@ -129,6 +197,12 @@ def _apify_search(query: str, limit: int) -> tuple[list[dict[str, Any]], str]:
                         ),
                         "followers": item.get("followers") or item.get("subscribers"),
                         "handle": handle,
+                        "profile_url": profile_url,
+                        "channel_url": profile_url,
+                        "avatar_url": avatar_url,
+                        "avatar_url_status": avatar_url_status,
+                        "thumbnail_url": thumbnail_url,
+                        "source_url": str(item.get("source_url") or "").strip(),
                         "in_pool": False,
                         "provider_status": status,
                     }
@@ -187,15 +261,44 @@ def _run_provider(
 
 
 def _dedupe(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    seen: set[str] = set()
-    out = []
+    groups: list[dict[str, Any]] = []
     for x in items:
-        key = str(x.get("kol_pool_id") or "") or f"{x.get('platform','')}:{(x.get('name') or '').strip().lower()}"
-        if key in seen:
+        try:
+            pool_id = int(x.get("kol_pool_id") or 0)
+        except (TypeError, ValueError):
+            pool_id = 0
+        aliases = canonical_creator_aliases(x)
+        key = str(x.get("kol_pool_id") or "") or f"{x.get('platform','')}:{(x.get('handle') or x.get('name') or '').strip().lower()}"
+        matching = [
+            index
+            for index, group in enumerate(groups)
+            if (pool_id and pool_id in group["pool_ids"])
+            or (aliases and aliases.intersection(group["aliases"]))
+            or (not aliases and key in group["fallback_keys"])
+        ]
+        if not matching:
+            groups.append({
+                "item": x,
+                "aliases": set(aliases),
+                "pool_ids": {pool_id} if pool_id else set(),
+                "fallback_keys": {key},
+            })
             continue
-        seen.add(key)
-        out.append(x)
-    return out
+        # One bridge observation can connect two groups already emitted in
+        # this pass (UC-only, @handle-only, then UC+handle). Merge every
+        # matching group rather than discarding the bridge and leaving two
+        # physical cards behind.
+        target = groups[matching[0]]
+        target["aliases"].update(aliases)
+        target["fallback_keys"].add(key)
+        if pool_id:
+            target["pool_ids"].add(pool_id)
+        for index in reversed(matching[1:]):
+            other = groups.pop(index)
+            target["aliases"].update(other["aliases"])
+            target["pool_ids"].update(other["pool_ids"])
+            target["fallback_keys"].update(other["fallback_keys"])
+    return [group["item"] for group in groups]
 
 
 def federated_search(

@@ -293,6 +293,75 @@ def _revalidate_target_write_fence(payload: dict[str, Any]) -> dict[str, Any] | 
     return current_staff
 
 
+def _active_profile_job(
+    conn: Any,
+    *,
+    clean_url: str,
+    content_monitor_fence: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Return only an active job that can safely satisfy this exact request.
+
+    A monitoring subscription owns its completion receipt.  Reusing an
+    unrelated one-shot crawl for the same public URL would bind the
+    subscription to a job whose payload has no monitor fence, so its terminal
+    callback could never update the subscription.  Conversely, a one-shot
+    request must not observe a monitoring job as its own active request.
+    """
+
+    if content_monitor_fence is None:
+        row = conn.execute(
+            """
+            SELECT id FROM apify_jobs
+            WHERE job_type=? AND status IN ('queued','running')
+              AND payload->>'url'=?
+              AND payload->'content_monitor_fence' IS NULL
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (DEEP_CRAWL_JOB_TYPE, clean_url),
+        ).fetchone()
+        return dict(row) if row else {}
+
+    identity = (
+        int(content_monitor_fence["version"]),
+        int(content_monitor_fence["subscription_id"]),
+        int(content_monitor_fence["staff_id"]),
+        int(content_monitor_fence["kol_pool_id"]),
+        int(content_monitor_fence["generation"]),
+    )
+    row = conn.execute(
+        """
+        SELECT id FROM apify_jobs
+        WHERE job_type=? AND status IN ('queued','running')
+          AND CAST(payload->'content_monitor_fence'->>'version' AS TEXT)=?
+          AND CAST(payload->'content_monitor_fence'->>'subscription_id' AS TEXT)=?
+          AND CAST(payload->'content_monitor_fence'->>'staff_id' AS TEXT)=?
+          AND CAST(payload->'content_monitor_fence'->>'kol_pool_id' AS TEXT)=?
+          AND CAST(payload->'content_monitor_fence'->>'generation' AS TEXT)=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (DEEP_CRAWL_JOB_TYPE, *(str(value) for value in identity)),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
+def _profile_job_idempotency_key(
+    clean_url: str,
+    content_monitor_fence: dict[str, Any] | None,
+) -> str:
+    if content_monitor_fence is None:
+        return active_job_idempotency_key(DEEP_CRAWL_JOB_TYPE, clean_url)
+    return active_job_idempotency_key(
+        f"{DEEP_CRAWL_JOB_TYPE}.content-monitor",
+        int(content_monitor_fence["version"]),
+        int(content_monitor_fence["subscription_id"]),
+        int(content_monitor_fence["staff_id"]),
+        int(content_monitor_fence["kol_pool_id"]),
+        int(content_monitor_fence["generation"]),
+    )
+
+
 def enqueue_profile_deep_crawl_job(
     url: str,
     *,
@@ -312,7 +381,8 @@ def enqueue_profile_deep_crawl_job(
 ) -> dict[str, Any]:
     """把账号深爬 execute 入 apify_jobs 队列(泳道可见),替代同步 HTTP 内爬。
 
-    幂等:同 URL 已有 queued/running 任务则返回 already_queued。
+    幂等:普通任务仅复用同 URL 的普通 active 任务;内容监控仅复用
+    同 subscription/staff/KOL/generation 围栏的 active 任务。
     """
     conn = get_conn()
     clean_url = str(url or "").strip()
@@ -352,16 +422,13 @@ def enqueue_profile_deep_crawl_job(
     normalized_queue_lane = str(queue_lane or "interactive").strip().lower()
     if normalized_queue_lane not in {"interactive", "batch"}:
         raise ValueError("queue_lane must be interactive or batch")
-    active = conn.execute(
-        """
-        SELECT id FROM apify_jobs
-        WHERE job_type=? AND status IN ('queued','running')
-          AND payload->>'url'=? LIMIT 1
-        """,
-        (DEEP_CRAWL_JOB_TYPE, clean_url),
-    ).fetchone()
+    active = _active_profile_job(
+        conn,
+        clean_url=clean_url,
+        content_monitor_fence=content_monitor_fence,
+    )
     if active:
-        return {"status": "already_queued", "job_id": int(dict(active)["id"])}
+        return {"status": "already_queued", "job_id": int(active["id"])}
     payload = {
         "queue_lane": normalized_queue_lane,
         "url": clean_url,
@@ -395,7 +462,7 @@ def enqueue_profile_deep_crawl_job(
         conn,
         job_type=DEEP_CRAWL_JOB_TYPE,
         payload=payload,
-        idempotency_key=active_job_idempotency_key(DEEP_CRAWL_JOB_TYPE, clean_url),
+        idempotency_key=_profile_job_idempotency_key(clean_url, content_monitor_fence),
     )
     conn.commit()
     return {"status": "queued" if inserted else "already_queued", "job_id": int(job["id"])}

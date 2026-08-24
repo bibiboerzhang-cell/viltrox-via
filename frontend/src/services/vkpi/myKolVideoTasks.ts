@@ -41,6 +41,7 @@ export interface VkpiTaskState {
 export interface VkpiVideoTasks {
   metric_refresh: VkpiTaskState;
   final_v1: VkpiTaskState;
+  keyframe_qa?: VkpiTaskState;
 }
 
 export interface VkpiVideoPageInfo {
@@ -99,6 +100,7 @@ export function normalizeVideoTasks(raw: unknown): VkpiVideoTasks | null {
   return {
     metric_refresh: normalizeTaskState(source.metric_refresh),
     final_v1: normalizeTaskState(source.final_v1),
+    keyframe_qa: normalizeTaskState(source.keyframe_qa),
   };
 }
 
@@ -114,7 +116,7 @@ export interface TaskChip {
   title: string;
 }
 
-export type VideoTaskKind = "metric" | "analysis";
+export type VideoTaskKind = "metric" | "analysis" | "review";
 
 const TASK_STATUS_LABEL: Record<VkpiTaskStatus, string> = {
   queued: "排队中",
@@ -126,8 +128,8 @@ const TASK_STATUS_LABEL: Record<VkpiTaskStatus, string> = {
   not_requested: "未发起",
 };
 
-const TASK_KIND_NOUN: Record<VideoTaskKind, string> = { metric: "播放追踪", analysis: "深析" };
-const SUPERSEDED_LABEL: Record<VideoTaskKind, string> = { metric: "重测中 · 上次结果可见", analysis: "重分析中 · 上次结果可见" };
+const TASK_KIND_NOUN: Record<VideoTaskKind, string> = { metric: "播放追踪", analysis: "深析", review: "关键帧复核" };
+const SUPERSEDED_LABEL: Record<VideoTaskKind, string> = { metric: "重测中 · 上次结果可见", analysis: "重分析中 · 上次结果可见", review: "重新复核中 · 上次结果可见" };
 
 function stamp(value: string | null | undefined): string {
   if (!value) return "";
@@ -166,12 +168,12 @@ export function taskChip(kind: VideoTaskKind, state: VkpiTaskState): TaskChip {
   if (state.status === "blocked") return { label: `${noun}已阻断`, tone: "blocked", title: failureLevel(kind, state) };
   if (state.status === "failed") return { label: `${noun}失败`, tone: "failed", title: `${failureLevel(kind, state)}${updated ? ` · ${updated}` : ""}` };
   if (state.status === "ready") return { label: `${noun}已完成`, tone: "ready", title: `${noun}已完成${updated ? ` · ${updated}` : ""}` };
-  return { label: `${noun}未发起`, tone: "idle", title: `还没有发起过${noun};点「追踪播放」或「深析」开始` };
+  return { label: `${noun}未发起`, tone: "idle", title: `还没有发起过${noun}` };
 }
 
 /** 数据新鲜度(第二层):实测于 xx 前 / 已过期 / 从未测 / 暂不可用。 */
 export function freshnessText(kind: VideoTaskKind, state: VkpiTaskState): { label: string; title: string } {
-  const verb = kind === "metric" ? "实测" : "分析";
+  const verb = kind === "metric" ? "实测" : kind === "analysis" ? "分析" : "复核";
   const at = state.data.updated_at;
   const rel = at ? relativeFromNow(at) : "";
   const abs = at ? formatLocal(at) : "";

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from app.domains.kol.profile_recall_match_evidence import candidate_set_distribution_from_items
 
@@ -24,19 +24,116 @@ _OWN_BRAND_PREFIXES = tuple(
     if p.strip()
 )
 
+_OWN_BRAND_CONFIRMED_SUFFIXES = frozenset({
+    "",
+    "official",
+    "global",
+    "photography",
+    "photo",
+    "video",
+    "camera",
+    "lens",
+    "lenses",
+    "store",
+    "shop",
+    "hq",
+    "usa",
+    "us",
+    "uk",
+    "eu",
+    "europe",
+    "asia",
+    "japan",
+    "india",
+    "indonesia",
+    "id",
+    "philippines",
+    "ph",
+    "cee",
+    "de",
+    "fr",
+    "es",
+    "it",
+})
+_OWN_BRAND_PROFILE_HOSTS = frozenset({
+    "youtube.com",
+    "instagram.com",
+    "tiktok.com",
+    "facebook.com",
+    "fb.com",
+})
+
+
+def _own_brand_identity_suffix(value: Any) -> str | None:
+    norm = re.sub(r"[^a-z0-9]", "", str(value or "").lower().lstrip("@"))
+    if not norm:
+        return None
+    for prefix in _OWN_BRAND_PREFIXES:
+        base = re.sub(r"[^a-z0-9]", "", prefix)
+        if base and norm.startswith(base):
+            suffix = norm[len(base):]
+            if suffix in _OWN_BRAND_CONFIRMED_SUFFIXES:
+                return suffix
+    return None
+
+
+def _profile_identity_locator(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw if "://" in raw else f"https://{raw}")
+    except ValueError:
+        return ""
+    host = parsed.netloc.lower().split(":", 1)[0]
+    for prefix in ("www.", "m.", "mobile."):
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+    if host not in _OWN_BRAND_PROFILE_HOSTS:
+        return ""
+    parts = [unquote(part).strip() for part in parsed.path.split("/") if part.strip()]
+    if host == "youtube.com":
+        if len(parts) == 1 and parts[0].startswith("@"):
+            return parts[0]
+        if len(parts) == 2 and parts[0].lower() in {"channel", "c", "user"}:
+            return parts[1]
+        return ""
+    if host == "tiktok.com":
+        return parts[0] if len(parts) == 1 and parts[0].startswith("@") else ""
+    return parts[0] if len(parts) == 1 else ""
+
 
 def _is_own_brand_account(item: dict[str, Any]) -> bool:
-    for field in (
-        "handle", "channel_handle", "username", "display_name", "channel_name", "author_name",
-        "profile_url", "channel_url", "url",
+    """Conservatively recognize confirmed Viltrox-owned account identities.
+
+    Strong identity comes only from a handle or normalized platform profile
+    URL. Display/channel names are weak evidence: a Viltrox mention there must
+    also carry an explicit official form or a corporate-voice bio.
+    """
+    if any(
+        _own_brand_identity_suffix(item.get(field)) is not None
+        for field in ("handle", "channel_handle", "username")
     ):
-        raw = str(item.get(field) or "")
-        # 从 URL 尾段/@handle 里提取账号名,再剥非字母数字。
-        tail = re.split(r"[/@]", raw)[-1] if raw else ""
-        norm = re.sub(r"[^a-z0-9]", "", tail.lower())
-        if norm and any(norm.startswith(p) for p in _OWN_BRAND_PREFIXES):
-            return True
-    return False
+        return True
+    if any(
+        _own_brand_identity_suffix(_profile_identity_locator(item.get(field))) is not None
+        for field in ("profile_url", "channel_url", "url")
+    ):
+        return True
+    names = " ".join(
+        str(item.get(field) or "")
+        for field in ("display_name", "channel_name", "author_name")
+    ).strip()
+    if not names or not any(
+        _own_brand_identity_suffix(item.get(field)) is not None
+        for field in ("display_name", "channel_name", "author_name")
+    ):
+        return False
+    if "official" in names.lower():
+        return True
+    from app.domains.kol.discovery_filters import _corporate_voice_bio
+
+    return _corporate_voice_bio(item.get("bio") or item.get("description"))
 
 
 _PLATFORM_HOSTS = {

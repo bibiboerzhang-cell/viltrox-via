@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from typing import Any, Dict, List
-from urllib.parse import quote_plus
+from urllib.parse import parse_qs, quote_plus, urlparse
 
 
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
@@ -228,6 +229,84 @@ def _clean_url(value: Any) -> str:
     return text
 
 
+_EPHEMERAL_AVATAR_HOST_SUFFIXES = (
+    "cdninstagram.com",
+    "fbcdn.net",
+    "tiktokcdn.com",
+    "tiktokcdn-us.com",
+    "tiktokcdn-eu.com",
+    "byteoversea.com",
+)
+
+
+def _avatar_url_policy(value: Any, *, now_epoch: float | None = None) -> tuple[str, str]:
+    """Return ``(usable_url, state)`` for a provider profile avatar.
+
+    Instagram/Facebook and TikTok commonly return signed CDN URLs.  A still
+    valid signed URL may be used long enough for the image proxy to cache it,
+    but an explicitly expired URL must not be presented or persisted as if it
+    were a live creator avatar.  Durable sources are labelled separately so
+    callers can keep the evidence boundary visible in raw discovery payloads.
+    """
+    url = _clean_url(value)
+    if not url:
+        return "", "missing"
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return "", "invalid"
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+        return "", "invalid"
+    host = (parsed.hostname or "").lower()
+    ephemeral = any(host == suffix or host.endswith(f".{suffix}") for suffix in _EPHEMERAL_AVATAR_HOST_SUFFIXES)
+    if not ephemeral:
+        return url, "durable"
+
+    query = {str(key).lower(): values for key, values in parse_qs(parsed.query).items()}
+    expiry: float | None = None
+    for key in ("x-expires", "expires", "expiry", "exp"):
+        raw = str((query.get(key) or [""])[0]).strip()
+        if raw:
+            try:
+                expiry = float(raw)
+                if expiry > 100_000_000_000:  # provider emitted milliseconds
+                    expiry /= 1000
+            except ValueError:
+                pass
+            break
+    if expiry is None:
+        # Meta's ``oe`` value is a hexadecimal Unix expiry timestamp.
+        raw_oe = str((query.get("oe") or [""])[0]).strip()
+        if raw_oe:
+            try:
+                expiry = float(int(raw_oe, 16))
+            except ValueError:
+                pass
+    if expiry is not None and expiry <= (float(now_epoch) if now_epoch is not None else time.time()):
+        return "", "expired"
+    return url, "ephemeral"
+
+
+def _first_usable_avatar_from_sources(
+    sources: list[Dict[str, Any]], *, now_epoch: float | None = None,
+) -> tuple[str, str]:
+    """Choose the first usable profile avatar and skip explicitly dead URLs."""
+    last_state = "missing"
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in AVATAR_KEYS:
+            raw = _first_from_sources([source], (key,))
+            if raw in (None, ""):
+                continue
+            url, state = _avatar_url_policy(raw, now_epoch=now_epoch)
+            if url:
+                return url, state
+            if state != "missing":
+                last_state = state
+    return "", last_state
+
+
 def _clean_email(value: str) -> str:
     return str(value or "").strip().lower().strip(".,;，。；")
 
@@ -333,15 +412,23 @@ def _profile_from_items(platform: str, handle: str, items: List[Dict[str, Any]])
     the UI can show "待同步/未抓到" instead of fake zeroes.
     """
     sources: list[Dict[str, Any]] = []
+    avatar_profile_sources: list[Dict[str, Any]] = []
+    avatar_fallback_sources: list[Dict[str, Any]] = []
     text_blobs: list[str] = []
     for item in items[:50]:
         if not isinstance(item, dict):
             continue
         item_sources = _profile_sources(item)
         sources.extend(item_sources)
+        # A freshly returned nested owner/author/profile record is stronger
+        # avatar evidence than a top-level post snapshot from the same item.
+        avatar_profile_sources.extend(item_sources[1:])
+        avatar_fallback_sources.append(item)
         text_blobs.extend(_text_blobs_from_item(item))
 
-    avatar_url = _clean_url(_first_from_sources(sources, AVATAR_KEYS))
+    avatar_url, avatar_url_status = _first_usable_avatar_from_sources(
+        [*avatar_profile_sources, *avatar_fallback_sources]
+    )
     profile_url = _clean_url(_first_from_sources(sources, PROFILE_URL_KEYS))
     display_name = str(_first_from_sources(sources, DISPLAY_NAME_KEYS) or "").strip()
     follower_count = _normalize_int(_first_from_sources(sources, FOLLOWER_KEYS))
@@ -367,6 +454,7 @@ def _profile_from_items(platform: str, handle: str, items: List[Dict[str, Any]])
         "handle": handle,
         "display_name": display_name,
         "avatar_url": avatar_url,
+        "avatar_url_status": avatar_url_status,
         "profile_url": profile_url,
         "bio": bio,
         "follower_count": follower_count,

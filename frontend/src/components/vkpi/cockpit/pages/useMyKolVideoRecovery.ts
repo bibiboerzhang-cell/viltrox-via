@@ -20,7 +20,9 @@ type LoadedPage = { cursor: string | null; response: VkpiMyKolVideoPage };
 export function recoveryPageHasActiveWork(page: VkpiMyKolVideoPage | null | undefined): boolean {
   if (isTaskActive(page?.profile_crawl)) return true;
   return (page?.items || []).some((video) => (
-    isTaskActive(video.tasks?.metric_refresh) || isTaskActive(video.tasks?.final_v1)
+    isTaskActive(video.tasks?.metric_refresh)
+      || isTaskActive(video.tasks?.final_v1)
+      || isTaskActive(video.tasks?.keyframe_qa)
   ));
 }
 

@@ -6,6 +6,12 @@ from datetime import datetime
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.kol.search_sessions_identity_projection import (
+    _CREATOR_ITEM_LANES,
+    _canonical_session_dedupe_key,
+    _session_creator_probe,
+    canonicalize_session_creator_items,
+)
 from app.domains.kol.search_sessions_schema import PENDING_ENRICHMENT_STATUSES
 from app.domains.kol.search_sessions_serde import (
     _compact_enrichment_state,
@@ -27,7 +33,6 @@ from app.domains.kol.search_sessions_serde import (
 GetConn = Callable[[], Any]
 UpdateSession = Callable[..., None]
 UpsertItem = Callable[[Any, int, dict[str, Any]], dict[str, Any]]
-
 
 def _session_status_after_profile_item(current_status: str, current_phase: str, item_status: str) -> str:
     if _text(current_status).lower() == "running" and _text(current_phase).lower() in {"base", "profile"}:
@@ -465,10 +470,11 @@ def _update_session(
 
 def _upsert_item(conn: Any, session_id: int, item: dict[str, Any]) -> dict[str, Any]:
     raw_dedupe = _sanitize_session_value(_text(item.get("dedupe_key"))[:500])
-    dedupe_key = raw_dedupe if isinstance(raw_dedupe, str) and raw_dedupe else (
+    canonical_dedupe = _canonical_session_dedupe_key(item)
+    dedupe_key = canonical_dedupe or (raw_dedupe if isinstance(raw_dedupe, str) and raw_dedupe else (
         f"item:{_text(item.get('item_type'))}:pool:{_text(item.get('kol_pool_id')) or 'unknown'}:"
         f"rank:{_text(item.get('rank')) or '0'}"
-    )
+    ))
     source_url = _public_session_item_source_url(
         item.get("source_url"), item_type=item.get("item_type")
     )
@@ -619,8 +625,11 @@ def record_items(
     if not existing:
         raise LookupError(f"search session not found: {session_id}")
     upsert = upsert_item_fn or _upsert_item
-    written = [upsert(conn, int(session_id), item) for item in items]
+    canonical_items = canonicalize_session_creator_items(items)
+    written = [upsert(conn, int(session_id), item) for item in canonical_items]
     resolved_summary = dict(summary or {"items_written": len(written)})
+    if "items_written" in resolved_summary:
+        resolved_summary["items_written"] = len(written)
     _prune_authoritative_recall_snapshot(
         conn,
         int(session_id),

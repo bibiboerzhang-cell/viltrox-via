@@ -42,13 +42,20 @@ def _llm_budget_preflight(
 ) -> dict[str, Any]:
     target_type, target_id = _target(payload)
     prompt = str(payload.get("prompt") or f"{job.get('job_type') or 'analysis'} {target_type}:{target_id}")
+    derive_method = str(payload.get("derive_method") or "").strip()
+    keyframe_only = derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD
+    exact_model = (
+        str(payload.get("final_v1_qa_model") or FINAL_V1_KEYFRAME_QA_MODEL).strip()
+        if keyframe_only
+        else WORKER_GEMINI_MODEL
+    )
     with db_connection_sync_scope():
         return llm_gateway.budget_preflight(
             prompt,
-            purpose="vkpi_analysis_worker",
+            purpose="keyframe_qa" if keyframe_only else "vkpi_analysis_worker",
             max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
             preferred_provider="google",
-            model_override=WORKER_GEMINI_MODEL,
+            model_override=exact_model,
             model_fallbacks=[],
             execution_class=execution_class,
             cost_tag=LLM_BUDGET_SCOPE,
@@ -136,10 +143,19 @@ def _log_budget_preflight_record_only(
 def _provider_budget_preflight(job: dict[str, Any], payload: dict[str, Any], provider: str) -> dict[str, Any]:
     target_type, target_id = _target(payload)
     prompt = str(payload.get("prompt") or f"{job.get('job_type') or 'analysis'} {target_type}:{target_id} {provider}")
+    keyframe_only = (
+        provider == "google"
+        and str(payload.get("derive_method") or "").strip() == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD
+    )
+    model_kwargs = (
+        {"model_override": str(payload.get("final_v1_qa_model") or FINAL_V1_KEYFRAME_QA_MODEL).strip()}
+        if keyframe_only
+        else {}
+    )
     with db_connection_sync_scope():
         return llm_gateway.budget_preflight(
             prompt,
-            purpose="vkpi_analysis_worker",
+            purpose="keyframe_qa" if keyframe_only else "vkpi_analysis_worker",
             max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
             preferred_provider=provider,
             # QA and judge calls never inherit a final_v1 local-evaluation
@@ -147,6 +163,7 @@ def _provider_budget_preflight(job: dict[str, Any], payload: dict[str, Any], pro
             execution_class=llm_gateway.PRODUCTION_EXECUTION_CLASS,
             cost_tag=LLM_BUDGET_SCOPE,
             require_configured=False,
+            **model_kwargs,
         )
 
 
@@ -280,6 +297,8 @@ def _gemini_worker_overrides(payload: dict[str, Any]):
 
 # 原文件留下的常量在本模块底部 import(避免循环导入;函数体内运行期解析)。
 from app.workers.apify_jobs_worker import (  # noqa: E402
+    FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+    FINAL_V1_KEYFRAME_QA_MODEL,
     LLM_BUDGET_SCOPE,
     LLM_MAX_OUTPUT_TOKENS,
     WORKER_GEMINI_MODEL,

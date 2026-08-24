@@ -15,6 +15,8 @@ import { getLensInsightsForKol, type KolLensUsage } from "../../../../services/v
 import { ReceiptLine } from "./MyKolBoardPage.receipt";
 import { TrackExistingVideoForm } from "./MyKolBoardPage.track-form";
 import { DataWatchContext, runDataWatchAction, skuRequiredHintText, toggleIdInSet } from "./MyKolBoardPage.data-watch";
+import { KolContentMonitoringSection } from "./MyKolBoardPage.content-monitoring";
+import { runKeyframeQaAction } from "./MyKolBoardPage.keyframe-qa";
 import { RecoveryPollingLine } from "./MyKolBoardPage.video-tasks";
 import { useMyKolVideoRecovery } from "./useMyKolVideoRecovery";
 import {
@@ -39,17 +41,8 @@ import type { VkpiProjectRow } from "../../vkpiTypes";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
 import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
 
-// MY KOL · 弹窗族(M3:库弹窗化 + V 视频筛选;金样板 = MarketVoicePage.dialogs 的
-//   FeedListModal/FeedDetailModal 连续翻体验,ModalShell/SectionLabel 复用零重写)。
-//   依赖单向:MyKolBoardPage.modules → 本文件 → MyKolBoardPage.libdetail(反向禁止);
-//   行件/筛选 chips 住这里供两侧共用;详情弹窗分区族(追踪链/合作结果/V 内容网格/
-//   行级采集统计)住 libdetail(闭环数据补刀 2026-07-12:旧两栏库右栏真数据零丢失接回)。
-//   与金样板的一处如实差异:本弹窗族持 apiToken 直调 services(动作端点多,页面层保持瘦身);
-//   mock seam 不变 —— 全部网络仍收敛到 services/http.apiFetch 单出口。
-// 动作纪律(绝不假成功):回执一律以端点真实返回为准;评论采集走 job 终态轮询(gone ≠ done
-//   绝不写 ✓);受众画像/深析/深爬只报「已受理/已入队」。V 三档=派生规则(后端同构),
-//   口径只进 SrcChip/记录预览,卡面零技术术语;播放合计只算实测,NULL 条数如实注明。
-// 红线:颜色全 token 类零写死色;禁 opacity 修饰类;纯展示绝不写 fit 分 / 不触 rule_v0。
+// MY KOL 弹窗：网络统一经 services/http；排队、运行、完成三态严格分层。
+// 纯展示不写 fit/rule_v0；播放合计仅计实测值，缺失值不当 0。
 
 const NAV_BTN =
   "inline-flex min-h-9 items-center rounded-lg border border-line px-3 py-1.5 text-[11.5px] text-ink-2 transition-colors hover:border-line-strong hover:text-ink disabled:cursor-default disabled:text-muted";
@@ -473,7 +466,6 @@ export function KolDetailModal({
     return () => { cancelledRef.current = true; };
   }, [item?.poolId]);
 
-  // ↑↓(以及 ←→)方向键连续翻(金样板同款);Escape 交给 ModalShell 栈。
   React.useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === "ArrowDown" || ev.key === "ArrowRight") { ev.preventDefault(); onNav(index + 1); }
@@ -483,14 +475,12 @@ export function KolDetailModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [index, onNav]);
 
-  // 视频区取数:GET /my-kol/{id}/videos(契约 my_kol_video_recovery_v1;keyset 游标分页 + 在途任务轮询)。
-  //   动作入队后 recovery.refresh() 重读已加载页,卡面 chip 以服务端持久任务态为准(页面重开同样恢复)。
+  // 视频区以 keyset 分页、服务端持久任务态和轮询恢复为准。
   const recovery = useMyKolVideoRecovery({ apiToken, kolPoolId: item?.poolId });
   const videos: VkpiKolPoolVideoRow[] | null = recovery.loading && !recovery.loaded ? null : recovery.videos;
   const videosError = recovery.error;
 
-  // 观看者上下文(认领真值):GET /my-kol/{id}/viewer-context —— 释放按钮据 can_release;
-  // 读取失败 → 释放按钮保持不可用(诚实降级,不猜)。
+  // viewer-context 读取失败时按钮保持不可用，不猜权限。
   const [viewer, setViewer] = React.useState<{ claimId: string; staffName: string; expiresAt: string; canRelease: boolean; canPaidActions: boolean; paidActionReason: string } | null>(null);
   const [viewerTick, setViewerTick] = React.useState(0);
   React.useEffect(() => {
@@ -508,7 +498,6 @@ export function KolDetailModal({
     return () => { alive = false; };
   }, [apiToken, item?.poolId, viewerTick]);
 
-  // 用过的镜头(车道 L4):GET /lens-insights/kol/{id}(深析结果按产品目录归一的派生表;读取失败 = 分区诚实缺席)。
   const [lensUsage, setLensUsage] = React.useState<KolLensUsage | null>(null);
   React.useEffect(() => {
     if (!apiToken || !item?.poolId) return;
@@ -518,7 +507,6 @@ export function KolDetailModal({
     return () => { alive = false; };
   }, [apiToken, item?.poolId]);
 
-  // 动作回执槽(每流独立,失败不被后续覆盖)+ 每条切换全部清空。
   const [msgs, setMsgs] = React.useState<Record<string, FlowReceipt | null>>({});
   const [busyKeys, setBusyKeys] = React.useState<Set<string>>(new Set());
   const [queuedEvidence, setQueuedEvidence] = React.useState<Set<number>>(new Set());
@@ -549,14 +537,11 @@ export function KolDetailModal({
     });
     return [...unique.entries()].map(([url, video]) => ({ url, video }));
   }, [videos]);
-  // 汇总口径与视频网格住 libdetail(KolVideoSection);这里只留动作排要用的未析清单。
   const { unanalyzed } = React.useMemo(() => summarizeKolVideos(loaded), [loaded]);
   const paidActionsReadOnly = Boolean(item.isShared || (viewer && !viewer.canPaidActions));
   const paidActionsReadOnlyHint = "共享 KOL 仅可查看；视频追踪、指标刷新、深析、评论采集和受众画像请由收藏负责人或管理层发起。";
 
-  // 追踪已有视频:表单提交(URL + SKU)与卡片「追踪播放」(直接带卡 URL,零 SKU)同一条真端点
-  //   POST /my-kol/{id}/videos —— 登记持久追踪 + 排队抓取;成功后 recovery.refresh() 让卡面 chip
-  //   读服务端任务态(排队中 → 进行中 → 已完成/失败),不靠本地乐观态冒充。
+  // 表单与卡片共用真追踪端点；卡面状态始终回读服务端。
   const runTrackVideo = async (direct?: { video: VkpiKolPoolVideoRow }) => {
     if (!apiToken || !poolId || paidActionsReadOnly) return;
     const cardEid = direct ? Number(direct.video.evidence_id ?? direct.video.id) || 0 : 0;
@@ -602,7 +587,6 @@ export function KolDetailModal({
       }
     }
   };
-  // 卡片「关联 SKU」:把该卡 URL 填进表单并把焦点送到 SKU 框(员工不必再找 URL)。
   const linkSkuFromCard = (video: VkpiKolPoolVideoRow) => {
     const url = String(video.content_url || "").trim();
     if (!url) return;
@@ -615,8 +599,7 @@ export function KolDetailModal({
       if (typeof input.scrollIntoView === "function") input.scrollIntoView({ block: "center" });
     });
   };
-  // 一键「数据关注」:自动认产品 + 登记追踪 + 排队刷新(流程/文案住 MyKolBoardPage.data-watch.ts);
-  //   sku_required 时回落既有「关联 SKU」流程(预填 URL + 焦点送 SKU 框),诚实提示补 SKU 再提交。
+  // 自动认产品失败时回落到显式 SKU 关联流程。
   const runDataWatch = (video: VkpiKolPoolVideoRow) => {
     const target = { ...targetRef.current };
     return runDataWatchAction(video, {
@@ -665,7 +648,6 @@ export function KolDetailModal({
     }
   };
 
-  // 单条深析入队(「未判定」一键深析同用):端点真实返回才标「已入队」。
   const enqueueOne = async (video: VkpiKolPoolVideoRow) => {
     const eid = Number(video.evidence_id ?? video.id);
     if (!apiToken || !eid || paidActionsReadOnly || busyKeys.has(`deep:${eid}`)) return;
@@ -688,7 +670,17 @@ export function KolDetailModal({
     }
   };
 
-  // 批量深析:未析真视频前 5 条(配额保护,PoolEvidenceContent 同款限批)。
+  const enqueueKeyframeQa = (video: VkpiKolPoolVideoRow) => {
+    const eid = Number(video.evidence_id ?? video.id) || 0;
+    const target = { ...targetRef.current };
+    return runKeyframeQaAction(video, {
+      apiToken, target, readOnly: paidActionsReadOnly,
+      isCurrent: targetIsCurrent, isBusy: () => !eid || busyKeys.has(`qa:${eid}`),
+      setBusy: (id, on) => setBusy(`qa:${id}`, on),
+      setReceipt: (receipt) => setMsg("qa", receipt), refresh: () => { void recovery.refresh(); }, writeError: videoWriteError,
+    });
+  };
+
   const runDeepBatch = async () => {
     if (!apiToken || !unanalyzed.length || paidActionsReadOnly || busyKeys.has("deepBatch")) return;
     setBusy("deepBatch", true);
@@ -839,7 +831,7 @@ export function KolDetailModal({
   return (
     <ModalShell
       title={`KOL 详情 · ${platformBadge(item.platform)}`}
-      sub={<>{item.isShared ? `来自 ${item.sharedByName || "成员"} 的共享(只读可见)` : "我的收藏"} · 入库 {formatLocal(item.createdAt, { year: "numeric" })}(按浏览器时区)</>}
+      sub={<>{item.isShared ? `来自 ${item.sharedByName || "成员"} 的共享(只读可见)` : "我的收藏"} · 入库 {formatLocal(item.createdAt, { year: "numeric" })}(按浏览器时区) · 内容区可向下滚动到底</>}
       onClose={onClose}
       maxWidth="max-w-[760px]"
     >
@@ -848,7 +840,7 @@ export function KolDetailModal({
         <span className="font-mono text-[10.5px] font-bold text-accent">#{index + 1} / {total}</span>
         <button type="button" className={NAV_BTN} disabled={index >= total - 1} onClick={() => onNav(index + 1)}>下一条 ›</button>
         <button type="button" className={NAV_BTN} onClick={onClose}>≡ 回列表</button>
-        <span className="ml-auto font-mono text-[9px] text-muted">↑↓ 方向键连续翻</span>
+        <span className="ml-auto font-mono text-[9px] text-muted">↑↓ 连续翻 · ↓ 滚动查看完整内容</span>
       </div>
 
       {/* 档案卡:头像/名称/平台/粉丝/Fit(只读)/状态徽 + SrcChip 溯源 */}
@@ -879,6 +871,14 @@ export function KolDetailModal({
           <SrcChip label={`vkpi_kol_pool #${item.poolId}`} rows={srcRows} />
         </div>
       </div>
+
+      {/* 显式最近内容订阅:登记态、调度态、最近成功三层分开，绝不把 active 写成已抓取。 */}
+      <KolContentMonitoringSection
+        apiToken={apiToken}
+        kolPoolId={item.poolId}
+        paidActionsReadOnly={paidActionsReadOnly}
+        paidActionsReadOnlyHint={paidActionsReadOnlyHint}
+      />
 
       {/* 分区②:追踪链(GOAFFPRO 共享件原样内嵌 —— 生成/复制/优惠码/佣金调整功能零改动) */}
       <GoaffproTrackSection apiToken={apiToken} kolPoolId={item.poolId} readOnly={item.isShared} />
@@ -941,6 +941,7 @@ export function KolDetailModal({
               queuedEvidence={queuedEvidence}
               busyKeys={busyKeys}
               onEnqueueOne={enqueueOne}
+              onEnqueueKeyframeQa={(video) => { void enqueueKeyframeQa(video); }}
               refreshingEvidence={refreshingEvidence}
               queuedRefreshEvidence={queuedRefreshEvidence}
               onRefreshMetrics={runMetricRefresh}
@@ -958,6 +959,7 @@ export function KolDetailModal({
         )}
         <RecoveryPollingLine polling={recovery.polling} paused={recovery.pollPaused} onResume={recovery.resumePolling} />
         <ReceiptLine msg={msgs.metrics || null} />
+        <ReceiptLine msg={msgs.qa || null} />
       </div>
 
       {/* 闭环动作排:入项目 / 受众画像 / 深析入队 / 采集评论 / 释放认领(全真端点回执) */}

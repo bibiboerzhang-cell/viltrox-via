@@ -60,7 +60,11 @@ def test_planner_stops_before_llm_for_explicit_unresolved_product(monkeypatch: p
 
 
 def test_brand_name_and_retailer_identity_are_filtered() -> None:
-    assert profile_discovery._is_own_brand_account({"handle": "UCDVTU", "channel_name": "VILTROX Photography"})
+    assert profile_discovery._is_own_brand_account({
+        "handle": "UCDVTU",
+        "channel_name": "VILTROX Photography",
+        "bio": "Official channel of our brand. We manufacture camera lenses and provide warranty service.",
+    })
     assert discovery_filters._is_discovery_garbage({"handle": "focuscenter", "channel_name": "Focus Camera Store"})
     assert not discovery_filters._is_discovery_garbage({"handle": "constantine_photo", "channel_name": "Constantine Photography"})
 

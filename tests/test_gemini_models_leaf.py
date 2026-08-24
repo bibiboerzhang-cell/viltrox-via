@@ -188,6 +188,10 @@ def test_keyframe_qa_direct_call_passes_config_and_default_judge(monkeypatch, tm
 
     def fake_generate_google_content(**kwargs):
         strict.update(kwargs)
+        kwargs["attempt_log"].append({
+            "state": "settled", "actual_cost_usd": 0.001,
+            "input_tokens": 10, "output_tokens": 2,
+        })
         return kwargs["client"].models.generate_content(
             model=kwargs["model"], contents=kwargs["contents"], config=kwargs["config"]
         )
@@ -206,6 +210,8 @@ def test_keyframe_qa_direct_call_passes_config_and_default_judge(monkeypatch, tm
     dumped = _config_dump(captured["config"])
     assert str(dumped["thinking_config"]["thinking_level"]).lower() == "minimal"
     assert dumped["max_output_tokens"] == kf.KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS
+    assert dumped["http_options"]["timeout"] == kf.KEYFRAME_JUDGE_REQUEST_TIMEOUT_SECONDS * 1000
+    assert dumped["http_options"]["retry_options"]["attempts"] == 1
     assert strict["max_output_tokens"] == kf.KEYFRAME_JUDGE_MAX_OUTPUT_TOKENS
     assert strict["purpose"] == "keyframe_qa"
     assert strict["metadata"]["task_binding"] == "keyframe_qa"
@@ -213,6 +219,26 @@ def test_keyframe_qa_direct_call_passes_config_and_default_judge(monkeypatch, tm
     assert strict["estimated_input_tokens"] >= kf.KEYFRAME_IMAGE_RESERVE_TOKENS
     assert result["model"] == _CONTRACT_JUDGE_MODEL
     assert result["method"] == f"gemini_final_v1_keyframe_qa_{_CONTRACT_JUDGE_MODEL}"
+    assert result["cost_authority"] == "llm_production_google_generate_content_v1"
+    assert result["llm_attempts"] == strict["attempt_log"]
+    assert result["provider_calls_performed"] is True
+
+
+def test_keyframe_qa_local_early_return_reports_no_provider_call(monkeypatch) -> None:
+    from app.services.ai.analyzers import gemini_video_keyframes as kf
+
+    monkeypatch.setattr(kf, "GEMINI_AVAILABLE", False)
+    result = asyncio.run(
+        kf.analyze_final_v1_keyframe_qa(
+            final_v1_result={},
+            keyframes=[],
+            title="local early return",
+        )
+    )
+
+    assert result["analyzed"] is False
+    assert result["provider_calls_performed"] is False
+    assert result["llm_attempts"] == []
 
 
 def test_anthropic_keyframe_judgment_disables_thinking(monkeypatch) -> None:

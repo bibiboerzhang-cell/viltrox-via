@@ -19,7 +19,6 @@ R59: 独立 KOL Pool 路由 + 防火墙 + 审计装饰器集成示范.
 from __future__ import annotations
 
 import os
-import uuid
 from urllib.parse import urlparse
 
 from app.core.logging import get_logger
@@ -46,6 +45,7 @@ import app.domains.kol.search_sessions as kol_search_sessions
 import app.domains.kol.smart_query_planner as kol_smart_query_planner
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
 import app.domains.kol.video_analysis_enqueue as kol_video_analysis_enqueue
+import app.domains.kol.video_keyframe_qa_enqueue as kol_video_keyframe_qa_enqueue
 from app.domains.intelligence import gemini_single_kol_preflight
 import app.domains.intelligence.ai_brief as ai_brief
 import app.domains.evidence.summary as evidence_summary
@@ -59,58 +59,6 @@ from app.domains.access.firewall import firewall_check
 
 
 logger = get_logger(__name__)
-
-def _kol_operation_error(operation: str, exc: Exception) -> HTTPException:
-    """Map KOL writes to stable client errors without exposing internals."""
-    correlation_id = uuid.uuid4().hex
-    class_name = type(exc).__name__.lower()
-    message = str(exc).lower()
-
-    explicit_status = getattr(exc, "status_code", None)
-    explicit_code = str(getattr(exc, "code", "") or "")
-    if explicit_code and isinstance(explicit_status, int):
-        return HTTPException(status_code=explicit_status, detail=explicit_code)
-    if isinstance(exc, LookupError):
-        status_code, code, retryable = 404, f"{operation}_not_found", False
-        public_message = "请求的 KOL 或视频证据不存在。"
-    elif isinstance(exc, ValueError):
-        status_code, code, retryable = 422, f"{operation}_invalid_request", False
-        public_message = "请求参数无效，请检查后重试。"
-    elif (
-        "integrity" in class_name
-        or "uniqueviolation" in class_name
-        or any(token in message for token in ("already linked", "conflict", "duplicate", "changed_ids", "rolled back"))
-    ):
-        status_code, code, retryable = 409, f"{operation}_conflict", False
-        public_message = "当前数据状态与该操作冲突，请刷新后核对。"
-    elif isinstance(exc, RuntimeError) or any(
-        token in class_name for token in ("operationalerror", "interfaceerror", "databaseerror", "timeouterror")
-    ):
-        status_code, code, retryable = 503, f"{operation}_queue_unavailable", True
-        public_message = "任务队列暂时不可用，操作未完成，请稍后重试。"
-    else:
-        status_code, code, retryable = 500, f"{operation}_internal_error", False
-        public_message = "操作未完成，请联系管理员并提供错误编号。"
-
-    if status_code >= 500:
-        logger.exception("kol operation failed operation=%s correlation_id=%s", operation, correlation_id)
-    else:
-        logger.info(
-            "kol operation rejected operation=%s status=%s correlation_id=%s exception=%s",
-            operation,
-            status_code,
-            correlation_id,
-            type(exc).__name__,
-        )
-    return HTTPException(
-        status_code=status_code,
-        detail={
-            "code": code,
-            "message": public_message,
-            "retryable": retryable,
-            "correlation_id": correlation_id,
-        },
-    )
 
 
 def _sanitize_batch_enqueue_result(result: dict) -> dict:
@@ -173,6 +121,7 @@ from app.api.routers.vkpi_kol_pool_helpers import (  # noqa: E402
     _KNOWN_URL_DOMAINS,
     _looks_like_url,
     _maybe_enqueue_refresh,
+    _kol_operation_error,
     _on_demand_refresh_enabled,
     _smart_query_type,
 )
@@ -675,6 +624,29 @@ def enqueue_pool_item_video_analysis(
         )
     except Exception as exc:
         raise _kol_operation_error("video_analysis_enqueue", exc) from exc
+
+
+@router.post("/kol-pool/{kol_pool_id}/enqueue-video-keyframe-qa")
+def enqueue_pool_item_video_keyframe_qa(
+    kol_pool_id: int,
+    body: dict = Body(default_factory=dict),
+    staff=Depends(require_tab("vkpi", "write")),
+) -> dict:
+    """Queue a YouTube keyframe review of an already-ready final_v1 cache."""
+
+    evidence_id = body.get("evidence_id")
+    try:
+        evidence_id_int = int(evidence_id)
+    except (TypeError, ValueError) as exc:
+        raise _kol_operation_error("video_keyframe_qa_enqueue", ValueError("invalid evidence_id")) from exc
+    try:
+        return kol_video_keyframe_qa_enqueue.enqueue_final_v1_keyframe_qa(
+            kol_pool_id=int(kol_pool_id),
+            evidence_id=evidence_id_int,
+            staff=staff,
+        )
+    except Exception as exc:
+        raise _kol_operation_error("video_keyframe_qa_enqueue", exc) from exc
 
 
 @router.post("/kol-pool/enqueue-video-analysis-batch")
