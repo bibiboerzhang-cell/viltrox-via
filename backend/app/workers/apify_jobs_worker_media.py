@@ -335,6 +335,15 @@ def _resolve_cached_or_provider_video(
     resolved["cache_candidate_count"] = int(cached.get("cache_candidate_count") or 0)
     if cached.get("cache_failure_reasons"):
         resolved["cache_failure_reasons"] = list(cached["cache_failure_reasons"])
+    # 2026-08-24 yt-dlp 兜底:只在「Apify 抓成功但没视频 URL」这一失败因上二轮复核——
+    # 分清图文帖(终态)与真视频被反爬剥链(接管下载);其余失败保留原判可重试。
+    # (抓取本身失败/空的 lane 恒带 error 文案,永远走不到这里;要扩面须另立决策。)
+    if not resolved.get("ok") and str(resolved.get("platform") or "") in ("instagram", "tiktok"):
+        reason = str(resolved.get("reason") or "")
+        if reason.endswith("scraped_no_downloadable_url"):
+            from app.workers.apify_jobs_worker_ytdlp_fallback import ytdlp_fallback_resolve
+
+            resolved = ytdlp_fallback_resolve(evidence, output_dir, apify_resolved=resolved)
     return resolved
 
 

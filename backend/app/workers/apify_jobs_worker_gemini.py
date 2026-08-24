@@ -21,6 +21,7 @@ from app.core.video_model_chain import analyzer_model_chain
 from app.db.connection import db_connection_sync_scope
 from app.domains.costs import budget_guard
 from app.services.media.video_download import download_direct_video_url
+from app.workers.apify_jobs_worker_ytdlp_fallback import persist_image_post_verdict as _persist_image_post_verdict
 from app.services.ai.analyzers.gemini_video_results import (
     InvalidFinalV1ResultError,
     ensure_final_v1_result_cacheable,
@@ -645,16 +646,15 @@ def _process_gemini_video(
                 return
             if not resolved.get("ok"):
                 resolve_reason = str(resolved.get("reason") or "")
-                # X6(2026-07-02 对齐 prod 热修):IG 图文帖 —— 抓取本身成功(scraped_ok)但没有可下载
-                # 视频 URL(scraped_no_downloadable_url)= 这条内容就是图文没有视频,重试多少次也长不出
-                # 视频。裸 raise 会进 retry/triage 白耗预算 → 直接转 blocked(image_post_no_video)。
-                if platform == "instagram" and resolved.get("scraped_ok") and resolve_reason.endswith("scraped_no_downloadable_url"):
+                # X6 + yt-dlp 复核(2026-08-24):确认无视频或 IG 老口径(抓成功没视频 URL)→ 终态
+                # blocked;media_kind 图章只盖 yt-dlp 定论,未定论/被剥链绝不落章(复审 HIGH:误章永久拦真视频)。
+                if resolved.get("no_video_confirmed") or (platform == "instagram" and resolved.get("scraped_ok") and resolve_reason.endswith("scraped_no_downloadable_url")):
+                    if resolved.get("no_video_confirmed"):
+                        _persist_image_post_verdict(conn, evidence)
                     _block_job(conn, int(job["id"]), "image_post_no_video", resolved)
                     return
-                # reason 已含 media_resolve_failed:<platform>:<真因>(见 _resolve_video_media 诚实化),
-                # 不再二次包装成 "media_resolve_failed: media_resolve_failed",保留可诊断真因。
                 raise RuntimeError(resolve_reason or f"media_resolve_failed:{platform}")
-            if resolved.get("cache_hit"):
+            if resolved.get("cache_hit") or resolved.get("local_path_ready"):
                 download = {
                     "success": True,
                     "path": str(resolved.get("path") or ""),
