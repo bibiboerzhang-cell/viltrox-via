@@ -17,6 +17,10 @@ const STATE_LABELS: Record<string, string> = {
   partially_measured: "部分已实测",
   operational: "已运行且有成功证据",
   configured: "已配置",
+  employee_selected_all: "员工已全部显式选择",
+  outbound_configured: "已发出共享",
+  received_only: "仅收到共享 · 非本人发起",
+  none_observed: "尚无共享记录",
   no_tracked_videos: "尚无追踪视频",
   needs_product_link: "待关联产品",
   detected_pending_human_confirmation: "系统检出 · 待人工确认",
@@ -29,7 +33,8 @@ const STATE_LABELS: Record<string, string> = {
 const BLOCKER_LABELS: Record<string, string> = {
   content_monitoring_not_configured: "KOL 内容订阅未选择",
   content_monitoring_scheduler_disabled: "内容巡检调度未开启",
-  videos_not_tracked: "视频尚未登记追踪",
+  videos_not_operationally_tracked: "视频总追踪尚未运行",
+  employee_explicit_tracking_not_selected: "员工尚未显式选择追踪",
   video_metric_scheduler_disabled: "视频指标刷新调度未开启",
   tracked_without_success_snapshot: "追踪视频还没有成功实测",
   tracked_without_sku: "追踪视频尚未关联 SKU",
@@ -86,12 +91,17 @@ export function ClosureReadinessCard({ apiToken, refreshKey = 0 }: ClosureReadin
   const flows = data?.flows || {};
   const hasTrackingProvenance = counts.employee_explicit_tracked_videos != null
     && counts.system_seeded_tracked_videos != null;
+  const hasShareDirection = counts.outbound_share_grants != null
+    && counts.received_share_grants != null;
   const hasGeminiEvidenceIntersection = counts.final_v1_lens_scanned_videos != null;
   const trackingProvenanceText = [
     `${n(counts.employee_explicit_tracked_videos)} 人工`,
     `${n(counts.system_seeded_tracked_videos)} 系统`,
     ...(n(counts.unclassified_tracked_videos) > 0
       ? [`${n(counts.unclassified_tracked_videos)} 待归类`]
+      : []),
+    ...(n(counts.other_employee_explicit_tracked_videos) > 0
+      ? [`${n(counts.other_employee_explicit_tracked_videos)} 他人选择`]
       : []),
   ].join(" · ");
   const rows = [
@@ -104,7 +114,9 @@ export function ClosureReadinessCard({ apiToken, refreshKey = 0 }: ClosureReadin
     {
       key: "share",
       label: "KOL 共享",
-      value: `${n(counts.share_grants)} 条授权`,
+      value: hasShareDirection
+        ? `发出 ${n(counts.outbound_share_grants)} · 收到 ${n(counts.received_share_grants)}`
+        : `${n(counts.share_grants)} 条授权`,
       note: stateText(flows.sharing?.state),
     },
     {
@@ -114,7 +126,7 @@ export function ClosureReadinessCard({ apiToken, refreshKey = 0 }: ClosureReadin
         ? trackingProvenanceText
         : `${n(counts.tracked_videos)} / ${n(counts.trackable_videos)}`,
       note: hasTrackingProvenance
-        ? `总追踪 ${n(counts.tracked_videos)} / ${n(counts.trackable_videos)} · ${stateText(flows.video_tracking?.state)}`
+        ? `员工待选 ${n(counts.employee_explicit_tracking_gap_videos)} · 总追踪 ${n(counts.tracked_videos)} / ${n(counts.trackable_videos)} · ${stateText(flows.video_tracking?.state)}`
         : stateText(flows.video_tracking?.state),
     },
     {
@@ -127,7 +139,7 @@ export function ClosureReadinessCard({ apiToken, refreshKey = 0 }: ClosureReadin
       key: "gemini",
       label: "Gemini 视频深析",
       value: hasGeminiEvidenceIntersection
-        ? `${n(counts.final_v1_lens_scanned_videos)} / ${n(counts.final_v1_ready_videos)} 成套`
+        ? `${n(counts.final_v1_lens_scanned_videos)} / ${n(counts.final_v1_ready_videos)} 同源成套`
         : `${n(counts.final_v1_ready_videos)} / ${n(counts.candidate_videos)}`,
       note: hasGeminiEvidenceIntersection
         ? `深析 ${n(counts.final_v1_ready_videos)} / ${n(counts.candidate_videos)} · ${stateText(flows.gemini_analysis?.state)}`

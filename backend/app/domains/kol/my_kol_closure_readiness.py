@@ -94,11 +94,26 @@ def _collection_counts(conn: Any, sid: int) -> dict[str, int]:
           (SELECT COUNT(*)
              FROM vkpi_kol_pool_members sm
              JOIN collection c ON c.id=sm.kol_pool_id
-            WHERE (?=0 OR sm.staff_id=?)) AS share_grants
+            WHERE sm.shared_by IS NOT NULL
+              AND (?=0 OR sm.shared_by=?)) AS outbound_share_grants,
+          (SELECT COUNT(*)
+             FROM vkpi_kol_pool_members sm
+             JOIN collection c ON c.id=sm.kol_pool_id
+            WHERE (?=0 OR sm.staff_id=?)) AS received_share_grants,
+          (SELECT COUNT(*)
+             FROM vkpi_kol_pool_members sm
+             JOIN collection c ON c.id=sm.kol_pool_id
+            WHERE sm.shared_by IS NULL
+              AND (?=0 OR sm.staff_id=?)) AS unattributed_received_share_grants
         """,
-        (*_scope_params(sid), sid, sid, sid, sid, sid, sid),
+        (*_scope_params(sid), sid, sid, sid, sid, sid, sid, sid, sid, sid, sid),
     )
-    return {key: _int(value) for key, value in row.items()}
+    counts = {key: _int(value) for key, value in row.items()}
+    # Backward-compatible alias: historically ``share_grants`` counted grants
+    # received by the scoped collection.  Keep it descriptive, but never use
+    # it as proof that the scoped employee initiated a sharing action.
+    counts["share_grants"] = counts.get("received_share_grants", 0)
+    return counts
 
 
 def _video_counts(conn: Any, sid: int) -> dict[str, int]:
@@ -119,7 +134,8 @@ def _video_counts(conn: Any, sid: int) -> dict[str, int]:
             WHERE COALESCE(e.evidence_type, 'video')='video'
               AND e.is_active IS NOT FALSE
         ), tracked AS (
-            SELECT t.evidence_id, COALESCE(t.source, '') AS source
+            SELECT t.evidence_id, COALESCE(t.source, '') AS source,
+                   t.tracked_by_staff_id
             FROM vkpi_kol_video_metric_tracking t
             JOIN writable_video_base v ON v.id=t.evidence_id
             WHERE t.status='active'
@@ -128,27 +144,69 @@ def _video_counts(conn: Any, sid: int) -> dict[str, int]:
             FROM vkpi_kol_llm_deep_analysis_results d
             JOIN video_base v ON v.id=d.source_evidence_id
             WHERE d.analysis_kind='video_final_v1' AND d.status='ready'
+        ), final_ready_sources AS (
+            SELECT DISTINCT d.source_evidence_id AS evidence_id,
+                            d.source_cache_id AS cache_id,
+                            d.created_at AS deep_recorded_at
+            FROM vkpi_kol_llm_deep_analysis_results d
+            JOIN video_base v ON v.id=d.source_evidence_id
+            WHERE d.analysis_kind='video_final_v1' AND d.status='ready'
+              AND d.source_cache_id IS NOT NULL
+        ), final_ready_current_sources AS (
+            SELECT DISTINCT f.evidence_id, f.cache_id
+            FROM final_ready_sources f
+            JOIN vkpi_analysis_cache c ON c.id=f.cache_id
+            WHERE c.status='ready'
+              AND c.target_type='video'
+              AND c.derive_method='video_analysis_final_v1'
+              AND c.updated_at IS NOT NULL
+              AND f.deep_recorded_at IS NOT NULL
+              AND f.deep_recorded_at>=c.updated_at
         ), lens_scanned AS (
-            SELECT DISTINCT s.evidence_id
+            SELECT DISTINCT s.evidence_id, s.cache_id
             FROM vkpi_kol_lens_evidence_scan s
             JOIN video_base v ON v.id=s.evidence_id
             WHERE s.scan_status IN ('scanned', 'no_evidence', 'empty_result')
+        ), lens_scanned_sources AS (
+            -- cache_updated_at is a provenance marker, but legacy rows store
+            -- it at second precision while analysis_cache keeps microseconds.
+            -- The immutable cache id is therefore the portable same-source
+            -- join key; exact timestamp equality would falsely reject every
+            -- legacy scan.
+            SELECT DISTINCT s.evidence_id, s.cache_id
+            FROM vkpi_kol_lens_evidence_scan s
+            JOIN video_base v ON v.id=s.evidence_id
+            JOIN vkpi_analysis_cache c ON c.id=s.cache_id
+            WHERE s.scan_status IN ('scanned', 'no_evidence', 'empty_result')
+              AND s.cache_updated_at IS NOT NULL
+              AND c.status='ready'
+              AND c.derive_method='video_analysis_final_v1'
+              AND c.target_type IN ('video', 'cn_platform_video')
         )
         SELECT
           (SELECT COUNT(*) FROM video_base) AS candidate_videos,
           (SELECT COUNT(*) FROM writable_video_base) AS trackable_videos,
           (SELECT COUNT(*) FROM tracked) AS tracked_videos,
           (SELECT COUNT(*) FROM tracked
-            WHERE source IN ('my_kol_video_tracking', 'migration_285_manual_product_link'))
+            WHERE source IN ('my_kol_video_tracking', 'migration_285_manual_product_link')
+              AND tracked_by_staff_id IS NOT NULL
+              AND (?=0 OR tracked_by_staff_id=?))
             AS employee_explicit_tracked_videos,
+          (SELECT COUNT(*) FROM tracked
+            WHERE source IN ('my_kol_video_tracking', 'migration_285_manual_product_link')
+              AND tracked_by_staff_id IS NOT NULL
+              AND ?<>0 AND tracked_by_staff_id<>?)
+            AS other_employee_explicit_tracked_videos,
           (SELECT COUNT(*) FROM tracked
             WHERE source='enroll_metric_tracking') AS system_seeded_tracked_videos,
           (SELECT COUNT(*) FROM tracked
             WHERE source NOT IN (
-                'my_kol_video_tracking',
-                'migration_285_manual_product_link',
-                'enroll_metric_tracking'
-            )) AS unclassified_tracked_videos,
+                    'my_kol_video_tracking',
+                    'migration_285_manual_product_link',
+                    'enroll_metric_tracking'
+                  )
+               OR (source IN ('my_kol_video_tracking', 'migration_285_manual_product_link')
+                   AND tracked_by_staff_id IS NULL)) AS unclassified_tracked_videos,
           (SELECT COUNT(DISTINCT s.evidence_id)
              FROM vkpi_content_metric_snapshots s
              JOIN tracked t ON t.evidence_id=s.evidence_id
@@ -189,18 +247,31 @@ def _video_counts(conn: Any, sid: int) -> dict[str, int]:
              JOIN tracked t ON t.evidence_id=l.evidence_id
             WHERE l.relation_type='confirmed') AS sku_confirmed_videos,
           (SELECT COUNT(*) FROM final_ready) AS final_v1_ready_videos,
-          (SELECT COUNT(*) FROM lens_scanned) AS lens_scanned_videos,
-          (SELECT COUNT(*)
-             FROM final_ready f
-             JOIN lens_scanned s ON s.evidence_id=f.evidence_id)
+          (SELECT COUNT(DISTINCT evidence_id) FROM final_ready_sources)
+            AS final_v1_source_linked_videos,
+          (SELECT COUNT(DISTINCT evidence_id) FROM final_ready_current_sources)
+            AS final_v1_current_source_videos,
+          (SELECT COUNT(DISTINCT evidence_id) FROM lens_scanned) AS lens_scanned_videos,
+          (SELECT COUNT(DISTINCT evidence_id) FROM lens_scanned_sources)
+            AS lens_source_linked_videos,
+          (SELECT COUNT(DISTINCT f.evidence_id)
+             FROM final_ready_current_sources f
+             JOIN lens_scanned_sources s
+               ON s.evidence_id=f.evidence_id AND s.cache_id=f.cache_id)
             AS final_v1_lens_scanned_videos,
           (SELECT COUNT(DISTINCT l.evidence_id)
              FROM vkpi_kol_lens_evidence l
              JOIN video_base v ON v.id=l.evidence_id) AS lens_mention_videos
         """,
-        _scope_params(sid),
+        (*_scope_params(sid), sid, sid, sid, sid),
     )
-    return {key: _int(value) for key, value in row.items()}
+    counts = {key: _int(value) for key, value in row.items()}
+    counts["employee_explicit_tracking_gap_videos"] = max(
+        0,
+        counts.get("trackable_videos", 0)
+        - counts.get("employee_explicit_tracked_videos", 0),
+    )
+    return counts
 
 
 def _scheduler_states(conn: Any) -> dict[str, dict[str, Any]]:
@@ -291,6 +362,13 @@ def build_closure_readiness(
         else:
             tracking_state = "operational"
 
+    if counts["trackable_videos"] <= 0:
+        employee_tracking_state = "no_targets"
+    elif counts["employee_explicit_tracking_gap_videos"] > 0:
+        employee_tracking_state = "needs_employee_selection"
+    else:
+        employee_tracking_state = "employee_selected_all"
+
     if counts["tracked_videos"] <= 0:
         sku_state = "no_tracked_videos"
     elif counts["sku_linked_tracked_videos"] <= 0:
@@ -339,8 +417,14 @@ def build_closure_readiness(
             approval_required=True,
         )
     add_blocker(
-        "videos_not_tracked",
+        "videos_not_operationally_tracked",
         max(0, counts["trackable_videos"] - counts["tracked_videos"]),
+        "system",
+        approval_required=False,
+    )
+    add_blocker(
+        "employee_explicit_tracking_not_selected",
+        counts["employee_explicit_tracking_gap_videos"],
         "employee",
         approval_required=True,
     )
@@ -388,10 +472,16 @@ def build_closure_readiness(
 
     configured_actions = (
         counts["monitoring_active_kols"]
-        + counts["share_grants"]
+        + counts["outbound_share_grants"]
         + counts["employee_explicit_tracked_videos"]
         + counts["sku_linked_tracked_videos"]
     )
+    if counts["outbound_share_grants"] > 0:
+        sharing_state = "outbound_configured"
+    elif counts["received_share_grants"] > 0:
+        sharing_state = "received_only"
+    else:
+        sharing_state = "none_observed"
     return {
         "contract": CONTRACT,
         "status": "empty" if counts["kol_count"] <= 0 else ("attention" if blockers else "ready"),
@@ -407,11 +497,12 @@ def build_closure_readiness(
                 "scheduler": schedulers["vkpi_kol_content_monitoring"],
             },
             "sharing": {
-                "state": "configured" if counts["share_grants"] > 0 else "needs_employee_choice",
+                "state": sharing_state,
                 "requires_employee_choice": True,
             },
             "video_tracking": {
                 "state": tracking_state,
+                "employee_explicit_state": employee_tracking_state,
                 "requires_employee_choice": True,
                 "scheduler": schedulers["vkpi_kol_video_metric_refresh"],
                 "auto_enroll_scheduler": {

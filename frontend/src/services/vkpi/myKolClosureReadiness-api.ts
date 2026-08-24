@@ -2,6 +2,7 @@ import { apiFetch } from "../http";
 
 export interface VkpiMyKolClosureFlow {
   state?: string;
+  employee_explicit_state?: string;
   requires_employee_choice?: boolean;
   requires_human_confirmation_for_detected?: boolean;
   provider_calls_performed?: boolean;
@@ -29,10 +30,15 @@ export interface VkpiMyKolClosureReadinessResponse {
     monitoring_active_kols?: number;
     monitoring_succeeded_kols?: number;
     share_grants?: number;
+    outbound_share_grants?: number;
+    received_share_grants?: number;
+    unattributed_received_share_grants?: number;
     candidate_videos?: number;
     trackable_videos?: number;
     tracked_videos?: number;
     employee_explicit_tracked_videos?: number;
+    other_employee_explicit_tracked_videos?: number;
+    employee_explicit_tracking_gap_videos?: number;
     system_seeded_tracked_videos?: number;
     unclassified_tracked_videos?: number;
     measured_tracked_videos?: number;
@@ -43,7 +49,10 @@ export interface VkpiMyKolClosureReadinessResponse {
     sku_detected_pending_videos?: number;
     sku_confirmed_videos?: number;
     final_v1_ready_videos?: number;
+    final_v1_source_linked_videos?: number;
+    final_v1_current_source_videos?: number;
     lens_scanned_videos?: number;
+    lens_source_linked_videos?: number;
     final_v1_lens_scanned_videos?: number;
     lens_mention_videos?: number;
   };

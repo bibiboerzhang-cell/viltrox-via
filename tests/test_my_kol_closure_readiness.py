@@ -43,7 +43,8 @@ def _conn() -> sqlite3.Connection:
         CREATE TABLE vkpi_kol_video_metric_tracking (
           evidence_id INTEGER PRIMARY KEY,
           status TEXT NOT NULL,
-          source TEXT NOT NULL
+          source TEXT NOT NULL,
+          tracked_by_staff_id INTEGER
         );
         CREATE TABLE vkpi_content_metric_snapshots (
           id INTEGER PRIMARY KEY,
@@ -59,12 +60,22 @@ def _conn() -> sqlite3.Connection:
         CREATE TABLE vkpi_kol_llm_deep_analysis_results (
           id INTEGER PRIMARY KEY,
           source_evidence_id INTEGER,
+          source_cache_id INTEGER,
           analysis_kind TEXT NOT NULL,
-          status TEXT NOT NULL
+          status TEXT NOT NULL,
+          created_at TEXT
+        );
+        CREATE TABLE vkpi_analysis_cache (
+          id INTEGER PRIMARY KEY,
+          target_type TEXT NOT NULL,
+          derive_method TEXT NOT NULL,
+          status TEXT NOT NULL,
+          updated_at TEXT NOT NULL
         );
         CREATE TABLE vkpi_kol_lens_evidence_scan (
           cache_id INTEGER PRIMARY KEY,
           evidence_id INTEGER,
+          cache_updated_at TEXT,
           scan_status TEXT NOT NULL
         );
         CREATE TABLE vkpi_kol_lens_evidence (
@@ -87,18 +98,23 @@ def _conn() -> sqlite3.Connection:
           VALUES (11, 1, 'video', 1), (12, 2, 'video', 1), (13, 3, 'video', 1), (16, 1, 'video', 1),
                  (14, 1, 'carousel', 1), (15, 1, 'video', 0);
         INSERT INTO vkpi_kol_video_metric_tracking VALUES
-          (11, 'active', 'my_kol_video_tracking'),
-          (12, 'paused', 'my_kol_video_tracking'),
-          (16, 'active', 'enroll_metric_tracking');
+          (11, 'active', 'my_kol_video_tracking', 7),
+          (12, 'paused', 'my_kol_video_tracking', 7),
+          (16, 'active', 'enroll_metric_tracking', 7);
         INSERT INTO vkpi_content_metric_snapshots
           VALUES (1, 11, 'legacy_current_only'), (2, 11, 'success'),
                  (3, 16, 'legacy_current_only');
         INSERT INTO vkpi_kol_video_product_links VALUES (1, 11, 'SKU-A', 'detected');
         INSERT INTO vkpi_kol_llm_deep_analysis_results
-          VALUES (1, 11, 'video_final_v1', 'ready'),
-                 (2, 16, 'video_final_v1', 'ready');
+          VALUES (1, 11, 101, 'video_final_v1', 'ready', '2026-08-24T00:01:00Z'),
+                 (2, 16, 102, 'video_final_v1', 'ready', '2026-08-24T00:01:00Z');
+        INSERT INTO vkpi_analysis_cache VALUES
+          (101, 'video', 'video_analysis_final_v1', 'ready', '2026-08-24T00:00:00Z'),
+          (102, 'video', 'video_analysis_final_v1', 'ready', '2026-08-24T00:00:00Z'),
+          (103, 'video', 'video_analysis_final_v1', 'ready', '2026-08-24T00:00:00Z');
         INSERT INTO vkpi_kol_lens_evidence_scan
-          VALUES (1, 11, 'scanned'), (2, 12, 'empty_result');
+          VALUES (101, 11, '2026-08-24T00:00:00Z', 'scanned'),
+                 (103, 16, '2026-08-24T00:00:00Z', 'empty_result');
         INSERT INTO scheduler_tasks VALUES
           ('vkpi_kol_content_monitoring', 0, NULL, NULL),
           ('vkpi_kol_video_metric_refresh', 0, NULL, NULL),
@@ -123,11 +139,15 @@ def test_closure_readiness_separates_configuration_scheduler_and_results() -> No
         "writable_kol_count": 1,
         "monitoring_active_kols": 1,
         "monitoring_succeeded_kols": 0,
+        "outbound_share_grants": 0,
+        "received_share_grants": 1,
+        "unattributed_received_share_grants": 0,
         "share_grants": 1,
         "candidate_videos": 3,
         "trackable_videos": 2,
         "tracked_videos": 2,
         "employee_explicit_tracked_videos": 1,
+        "other_employee_explicit_tracked_videos": 0,
         "system_seeded_tracked_videos": 1,
         "unclassified_tracked_videos": 0,
         "measured_tracked_videos": 1,
@@ -138,19 +158,26 @@ def test_closure_readiness_separates_configuration_scheduler_and_results() -> No
         "sku_detected_pending_videos": 1,
         "sku_confirmed_videos": 0,
         "final_v1_ready_videos": 2,
+        "final_v1_source_linked_videos": 2,
+        "final_v1_current_source_videos": 2,
         "lens_scanned_videos": 2,
+        "lens_source_linked_videos": 2,
         "final_v1_lens_scanned_videos": 1,
         "lens_mention_videos": 0,
+        "employee_explicit_tracking_gap_videos": 1,
     }
     assert result["flows"]["content_monitoring"]["state"] == "configured_scheduler_disabled"
     assert result["flows"]["video_tracking"]["state"] == "configured_scheduler_disabled"
     assert result["flows"]["sku_linking"]["state"] == "detected_pending_human_confirmation"
     assert result["flows"]["gemini_analysis"]["state"] == "lens_extraction_pending"
-    assert result["summary"]["configured_actions"] == 4
+    assert result["flows"]["sharing"]["state"] == "received_only"
+    assert result["flows"]["video_tracking"]["employee_explicit_state"] == "needs_employee_selection"
+    assert result["summary"]["configured_actions"] == 3
     codes = {item["code"] for item in result["blockers"]}
     assert {
         "content_monitoring_scheduler_disabled",
         "video_metric_scheduler_disabled",
+        "employee_explicit_tracking_not_selected",
         "detected_sku_pending_confirmation",
         "final_v1_missing",
         "lens_extraction_pending",
@@ -172,7 +199,64 @@ def test_closure_readiness_unknown_tracking_source_is_not_employee_choice() -> N
     assert result["counts"]["employee_explicit_tracked_videos"] == 1
     assert result["counts"]["system_seeded_tracked_videos"] == 0
     assert result["counts"]["unclassified_tracked_videos"] == 1
-    assert result["summary"]["configured_actions"] == 4
+    assert result["counts"]["employee_explicit_tracking_gap_videos"] == 1
+    assert result["summary"]["configured_actions"] == 3
+
+
+def test_other_staff_tracking_does_not_become_scoped_employee_choice() -> None:
+    conn = _conn()
+    conn.execute(
+        "UPDATE vkpi_kol_video_metric_tracking SET tracked_by_staff_id=8 WHERE evidence_id=11"
+    )
+
+    result = my_kol_closure_readiness.build_closure_readiness(conn, staff_scope_id=7)
+
+    assert result["counts"]["tracked_videos"] == 2
+    assert result["counts"]["employee_explicit_tracked_videos"] == 0
+    assert result["counts"]["other_employee_explicit_tracked_videos"] == 1
+    assert result["counts"]["employee_explicit_tracking_gap_videos"] == 2
+    assert result["flows"]["video_tracking"]["state"] == "configured_scheduler_disabled"
+
+
+def test_received_share_is_not_configured_action_but_outbound_share_is() -> None:
+    conn = _conn()
+    received_only = my_kol_closure_readiness.build_closure_readiness(conn, staff_scope_id=7)
+
+    assert received_only["counts"]["received_share_grants"] == 1
+    assert received_only["counts"]["outbound_share_grants"] == 0
+    assert received_only["summary"]["configured_actions"] == 3
+
+    conn.execute("INSERT INTO vkpi_kol_pool_members VALUES (2, 1, 8, 7)")
+    with_outbound = my_kol_closure_readiness.build_closure_readiness(conn, staff_scope_id=7)
+
+    assert with_outbound["counts"]["received_share_grants"] == 1
+    assert with_outbound["counts"]["outbound_share_grants"] == 1
+    assert with_outbound["summary"]["configured_actions"] == 4
+    assert with_outbound["flows"]["sharing"]["state"] == "outbound_configured"
+
+
+def test_gemini_bundle_requires_same_fresh_source_cache() -> None:
+    conn = _conn()
+    result = my_kol_closure_readiness.build_closure_readiness(conn, staff_scope_id=7)
+
+    # Evidence 16 has both final_v1 and a lens scan, but their cache ids differ.
+    assert result["counts"]["final_v1_ready_videos"] == 2
+    assert result["counts"]["lens_scanned_videos"] == 2
+    assert result["counts"]["final_v1_lens_scanned_videos"] == 1
+
+    conn.execute(
+        "UPDATE vkpi_analysis_cache SET updated_at='2026-08-25T00:00:00Z' WHERE id=101"
+    )
+    conn.execute(
+        "UPDATE vkpi_kol_lens_evidence_scan "
+        "SET cache_updated_at='2026-08-25T00:00:00Z' WHERE cache_id=101"
+    )
+    stale = my_kol_closure_readiness.build_closure_readiness(conn, staff_scope_id=7)
+
+    assert stale["counts"]["lens_source_linked_videos"] == 2
+    assert stale["counts"]["final_v1_current_source_videos"] == 1
+    assert stale["counts"]["final_v1_lens_scanned_videos"] == 0
+    assert stale["flows"]["gemini_analysis"]["state"] == "lens_extraction_pending"
 
 
 def test_closure_readiness_team_scope_includes_all_non_duplicate_collections() -> None:
@@ -185,6 +269,9 @@ def test_closure_readiness_team_scope_includes_all_non_duplicate_collections() -
     assert result["counts"]["monitoring_succeeded_kols"] == 1
     assert result["counts"]["candidate_videos"] == 4
     assert result["counts"]["trackable_videos"] == 4
+    assert result["counts"]["outbound_share_grants"] == 1
+    assert result["counts"]["received_share_grants"] == 1
+    assert result["counts"]["unattributed_received_share_grants"] == 0
 
 
 def test_closure_readiness_router_enforces_employee_own_scope(monkeypatch) -> None:

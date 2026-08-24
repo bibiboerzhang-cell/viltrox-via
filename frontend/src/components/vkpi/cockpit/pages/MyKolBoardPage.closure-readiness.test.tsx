@@ -21,10 +21,15 @@ const RESPONSE = {
     writable_kol_count: 2,
     monitoring_active_kols: 1,
     share_grants: 1,
+    outbound_share_grants: 0,
+    received_share_grants: 1,
+    unattributed_received_share_grants: 0,
     candidate_videos: 2,
     trackable_videos: 2,
     tracked_videos: 1,
     employee_explicit_tracked_videos: 1,
+    other_employee_explicit_tracked_videos: 0,
+    employee_explicit_tracking_gap_videos: 1,
     system_seeded_tracked_videos: 0,
     unclassified_tracked_videos: 0,
     measured_tracked_videos: 1,
@@ -36,7 +41,7 @@ const RESPONSE = {
   },
   flows: {
     content_monitoring: { state: "configured_scheduler_disabled" },
-    sharing: { state: "configured" },
+    sharing: { state: "received_only" },
     video_tracking: { state: "partially_measured" },
     sku_linking: { state: "detected_pending_human_confirmation" },
     gemini_analysis: { state: "lens_extraction_pending" },
@@ -66,8 +71,10 @@ describe("MY KOL 业务闭环状态卡", () => {
     expect(screen.getByText("Gemini 视频深析")).toBeTruthy();
     expect(screen.getAllByText("1 / 2").length).toBeGreaterThan(0);
     expect(screen.getByText("1 人工 · 0 系统")).toBeTruthy();
-    expect(screen.getByText(/总追踪 1 \/ 2/)).toBeTruthy();
-    expect(screen.getByText("0 / 1 成套")).toBeTruthy();
+    expect(screen.getByText("发出 0 · 收到 1")).toBeTruthy();
+    expect(screen.getByText("仅收到共享 · 非本人发起")).toBeTruthy();
+    expect(screen.getByText(/员工待选 1 · 总追踪 1 \/ 2/)).toBeTruthy();
+    expect(screen.getByText("0 / 1 同源成套")).toBeTruthy();
     expect(screen.getByText(/深析 1 \/ 2/)).toBeTruthy();
     expect(screen.getByText("已配置 · 调度未开启")).toBeTruthy();
     expect(screen.getByText("系统检出 · 待人工确认")).toBeTruthy();
