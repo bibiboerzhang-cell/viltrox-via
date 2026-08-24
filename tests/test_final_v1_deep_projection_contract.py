@@ -162,6 +162,21 @@ def test_legacy_top_level_marketing_score_is_preserved_in_normalized_scores() ->
     }
 
 
+def test_valid_legacy_score_replaces_invalid_nested_placeholder_consistently() -> None:
+    row = _ready_cache(score={"score": None, "reason": "legacy placeholder"})
+    layer6 = row["final_result"]["video_analysis_final_v1"]["layer6_flags_and_scores"]
+    layer6["marketing_value_score"] = {"score": 55, "confidence": 0.5}
+
+    projected = final_v1_extract.prepare_deep_analysis_projection(row)
+
+    assert projected["llm_v6_fit"] == Decimal("55.000")
+    assert projected["score_status"] == "available"
+    assert projected["llm_dimensions_11"]["scores"]["marketing_value_score"] == {
+        "score": 55.0,
+        "confidence": 0.5,
+    }
+
+
 def test_score_consumers_keep_missing_marketing_dimension_missing_not_zero() -> None:
     dimensions = final_v1_extract.prepare_deep_analysis_projection(_ready_cache())["llm_dimensions_11"]
 

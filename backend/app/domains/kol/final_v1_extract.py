@@ -104,8 +104,11 @@ def _qa_payload(result: Any) -> dict[str, Any]:
 
 def _normalised_scores(layer6: dict[str, Any]) -> dict[str, Any]:
     scores = dict(_as_dict(layer6.get("scores")))
-    # Preserve the documented legacy location without manufacturing a value.
-    if "marketing_value_score" not in scores and layer6.get("marketing_value_score") is not None:
+    # Preserve the documented legacy location when the nested value is absent
+    # *or invalid*.  This must mirror ``_marketing_score`` so the scalar fit and
+    # the dimensions score map cannot disagree about the same real value.
+    nested_score, _nested_confidence = _score_from_value(scores.get("marketing_value_score"))
+    if nested_score is None and layer6.get("marketing_value_score") is not None:
         scores["marketing_value_score"] = layer6.get("marketing_value_score")
     output: dict[str, Any] = {}
     for key, value in scores.items():
