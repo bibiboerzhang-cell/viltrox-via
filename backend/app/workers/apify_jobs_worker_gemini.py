@@ -917,15 +917,7 @@ def _process_gemini_video(
             job.get("id"),
             type(exc).__name__,
         )
-    # The primary video-analysis path persists final_v1 directly instead of
-    # going through ``_write_gemini_cache``.  Keep its deterministic lens
-    # projection in parity with judge/cache writes; the hook is idempotent,
-    # provider-free, and fail-soft.
-    extract_lens_evidence_after_final_v1(
-        cache_id=cache_id,
-        derive_method=derive_method,
-        job_id=job.get("id"),
-    )
+    extract_lens_evidence_after_final_v1(cache_id=cache_id, derive_method=derive_method, job_id=job.get("id"))
     analysis_summary = _search_session_analysis_summary_from_result(
         cache_id=cache_id,
         derive_method=derive_method,
