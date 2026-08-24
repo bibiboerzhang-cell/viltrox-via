@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from app.domains.kol import search_sessions
+from app.domains.kol import search_sessions, search_sessions_history
 
 
 class _Result:
@@ -185,3 +185,112 @@ def test_scoped_session_reader_returns_not_found_for_other_staff(monkeypatch: py
         search_sessions.get_session(44, staff={"id": 7}, scope_to_staff=True)
 
     assert conn.calls[0][1] == (44, 7)
+
+
+def test_history_and_detail_refresh_done_audience_job_without_claiming_empty_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_row = _session_row(
+        status="ready",
+        result_summary_json={"progress": {"total": 1}},
+    )
+    item_row = {
+        "id": 101,
+        "session_id": 44,
+        "kol_pool_id": 501,
+        "item_type": "existing_kol",
+        "status": "ready",
+        "stage": "summary",
+        "dedupe_key": "existing:501",
+        "source_url": "https://instagram.com/creator/",
+        "payload_json": {
+            "platform": "instagram",
+            "handle": "creator",
+            "profile_execute": {
+                "status": "ready",
+                "kol_pool_id": 501,
+                "audience_enrichment": {
+                    "status": "pending",
+                    "queue_status": "queued",
+                    "job_id": 77,
+                },
+            },
+            "downstream_jobs": {
+                "audience": {"state": "queued", "job_ids": [77]},
+            },
+        },
+    }
+
+    class _ProjectionConn:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def execute(self, sql: str, _params: tuple[Any, ...] = ()) -> _Result:
+            compact = " ".join(sql.split())
+            self.calls.append(compact)
+            if "FROM vkpi_kol_search_sessions" in compact:
+                return _Result(row=dict(session_row), rows=[dict(session_row)])
+            if "FROM vkpi_kol_search_session_items" in compact:
+                return _Result(rows=[dict(item_row)])
+            if "FROM apify_jobs" in compact:
+                return _Result(rows=[{"id": 77, "status": "done"}])
+            if "FROM vkpi_kol_pool" in compact:
+                return _Result(
+                    rows=[
+                        {
+                            "id": 501,
+                            "display_name": "Creator",
+                            "email": "",
+                            "contact_channels": {},
+                            "other_contacts_json": [],
+                            "audience_estimated_json": {},
+                            "platform": "instagram",
+                            "handle": "creator",
+                            "profile_url": "https://instagram.com/creator/",
+                            "avatar_url": "",
+                            "raw_platform_data": {},
+                        }
+                    ]
+                )
+            raise AssertionError(f"unexpected SQL: {compact}")
+
+    worker = {
+        "observed": True,
+        "online": True,
+        "online_count": 1,
+        "state": "online",
+        "capacity_ready": True,
+    }
+    monkeypatch.setattr(search_sessions, "observe_worker_health", lambda _conn: worker)
+    monkeypatch.setattr(search_sessions_history, "observe_worker_health", lambda _conn: worker)
+    monkeypatch.setattr(
+        search_sessions,
+        "_apply_discovery_account_display_gate",
+        lambda items: (items, {"excluded_total": 0, "excluded_own_brand": 0, "excluded_brand_official": 0}),
+    )
+    monkeypatch.setattr(
+        search_sessions,
+        "_apply_reach_display_gate",
+        lambda _conn, items: (items, {"hidden": 0}),
+    )
+
+    detail_conn = _ProjectionConn()
+    monkeypatch.setattr(search_sessions, "get_conn", lambda: detail_conn)
+    detail = search_sessions.get_session(44)
+
+    history_conn = _ProjectionConn()
+    history = search_sessions_history.list_history(
+        scope_to_staff=False,
+        get_conn_fn=lambda: history_conn,
+        apply_reach_display_gate_fn=lambda _conn, items: (items, {"hidden": 0}),
+        mask_contact_payload_fn=lambda payload: payload,
+    )["items"][0]
+
+    detail_contract = detail["progress_contract"]
+    history_contract = history["progress_contract"]
+    assert detail_contract["state"] == history_contract["state"] == "partial"
+    assert detail_contract["queued_units"] == history_contract["queued_units"] == 0
+    assert detail_contract["stages"]["audience"]["successful"] == 0
+    assert history_contract["stages"]["audience"]["counts"]["partial"] == 1
+    assert any("FROM apify_jobs" in sql for sql in detail_conn.calls)
+    assert any("FROM apify_jobs" in sql for sql in history_conn.calls)

@@ -145,6 +145,119 @@ def test_not_requested_optional_stages_do_not_claim_full_analysis() -> None:
     assert result["full_analysis_complete"] is False
 
 
+def test_terminal_profile_without_audience_job_closes_waiting_stage_as_skipped() -> None:
+    """Legacy profile failures wrote ``waiting_for_profile`` without creating
+    an audience job.  Once profile work is terminal, that optional marker must
+    not keep history/detail active forever."""
+    session = {"status": "partial", "result_summary": {"progress": {"total": 1}}}
+    items = [
+        {
+            "id": 1,
+            "status": "partial",
+            "stage": "summary",
+            "payload": {
+                "profile_execute": {
+                    "status": "partial",
+                    "audience_enrichment": {"status": "waiting_for_profile", "async": True},
+                },
+                "audience_preview": {"status": "pending", "async": True},
+            },
+        }
+    ]
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["state"] == "partial"
+    assert result["requested_tasks_terminal"] is True
+    assert result["queued_units"] == 0
+    assert result["stages"]["audience"]["state"] == "partial"
+    assert result["stages"]["audience"]["counts"]["skipped"] == 1
+    assert result["stages"]["audience"]["successful"] == 0
+
+
+def test_waiting_audience_marker_remains_queued_while_profile_is_active() -> None:
+    session = {"status": "running", "result_summary": {"progress": {"total": 1}}}
+    items = [
+        {
+            "id": 1,
+            "status": "running",
+            "stage": "profile",
+            "payload": {
+                "profile_execute": {
+                    "status": "running",
+                    "audience_enrichment": {"status": "waiting_for_profile", "async": True},
+                }
+            },
+        }
+    ]
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["state"] == "running"
+    assert result["requested_tasks_terminal"] is False
+    assert result["stages"]["audience"]["counts"]["queued"] == 1
+
+
+def test_ready_profile_without_audience_job_keeps_registration_window_open() -> None:
+    session = {"status": "running", "result_summary": {"progress": {"total": 1}}}
+    items = [
+        {
+            "id": 1,
+            "status": "ready",
+            "stage": "summary",
+            "kol_pool_id": 101,
+            "payload": {
+                "profile_execute": {
+                    "status": "ready",
+                    "kol_pool_id": 101,
+                    "audience_enrichment": {"status": "waiting_for_profile", "async": True},
+                }
+            },
+        }
+    ]
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["state"] == "queued"
+    assert result["requested_tasks_terminal"] is False
+    assert result["stages"]["audience"]["counts"]["queued"] == 1
+
+
+def test_done_audience_job_with_empty_result_overrides_stale_queued_lineage_as_partial() -> None:
+    session = {"status": "ready", "result_summary": {"progress": {"total": 1}}}
+    items = [
+        {
+            "id": 1,
+            "status": "ready",
+            "stage": "summary",
+            "kol_pool_id": 101,
+            "payload": {
+                "profile_execute": {
+                    "status": "ready",
+                    "kol_pool_id": 101,
+                    "audience_enrichment": {
+                        "status": "empty",
+                        "queue_status": "done",
+                        "job_id": 77,
+                    },
+                },
+                "audience_preview": {"status": "empty", "async": True},
+                "downstream_jobs": {
+                    "audience": {"state": "queued", "job_ids": [77]},
+                },
+            },
+        }
+    ]
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["state"] == "partial"
+    assert result["queued_units"] == 0
+    assert result["requested_tasks_successful"] is False
+    assert result["stages"]["audience"]["counts"]["partial"] == 1
+    assert result["stages"]["audience"]["successful"] == 0
+
+
 def test_30_returned_and_26_audience_is_terminal_requested_work_not_full_analysis() -> None:
     """The user-visible 30/30 + audience 26/26 shape is complete for what was
     requested.  Profile/video/comments were never requested and therefore are

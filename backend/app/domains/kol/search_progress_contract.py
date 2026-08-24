@@ -373,20 +373,74 @@ def _profile_bucket(item: Mapping[str, Any]) -> str:
 def _downstream_bucket(item: Mapping[str, Any], role: str) -> str:
     payload = _mapping(item.get("payload"))
     downstream = _mapping(_mapping(payload.get("downstream_jobs")).get(role))
-    explicit = _state_bucket(downstream.get("state"))
-    if explicit != "not_requested":
-        return explicit
-
     if role == "audience":
         profile = {**_mapping(payload.get("profile_flow")), **_mapping(payload.get("profile_execute"))}
         enrichment = _mapping(profile.get("audience_enrichment"))
-        explicit = _state_bucket(enrichment.get("queue_status") or enrichment.get("status"))
-        if explicit != "not_requested":
-            return explicit
         preview = _mapping(payload.get("audience_preview"))
-        explicit = _state_bucket(preview.get("status"))
-        if explicit != "not_requested":
-            return explicit
+        preview_bucket = _state_bucket(preview.get("status"))
+        enrichment_bucket = _state_bucket(enrichment.get("status"))
+        queue_bucket = _state_bucket(enrichment.get("queue_status"))
+        downstream_bucket = _state_bucket(downstream.get("state"))
+        downstream_job_ids = downstream.get("job_ids")
+        has_concrete_job = bool(
+            _positive_int(enrichment.get("job_id"))
+            or (
+                isinstance(downstream_job_ids, Sequence)
+                and not isinstance(downstream_job_ids, (str, bytes))
+                and any(_positive_int(job_id) for job_id in downstream_job_ids)
+            )
+        )
+
+        # Materialized audience data is stronger than any stale queue snapshot.
+        if preview_bucket == "ready":
+            return "ready"
+
+        # ``queue_status`` is refreshed from apify_jobs at read time.  A done
+        # job only proves execution finished: without a ready preview (or an
+        # explicit ready enrichment result), it must remain partial rather than
+        # being counted as a successful audience result.
+        if queue_bucket != "not_requested":
+            if queue_bucket == "ready":
+                if enrichment_bucket == "ready":
+                    return "ready"
+                if enrichment_bucket in _TERMINAL_BUCKETS:
+                    return enrichment_bucket
+                if preview_bucket in _TERMINAL_BUCKETS:
+                    return preview_bucket
+                return "partial"
+            return queue_bucket
+
+        # The persisted lineage is the next-strongest job truth.  Apply the same
+        # execution-vs-data boundary when an old row says the job completed.
+        if downstream_bucket != "not_requested":
+            if downstream_bucket == "ready":
+                if enrichment_bucket == "ready":
+                    return "ready"
+                if enrichment_bucket in _TERMINAL_BUCKETS:
+                    return enrichment_bucket
+                if preview_bucket in _TERMINAL_BUCKETS:
+                    return preview_bucket
+                return "partial"
+            return downstream_bucket
+
+        # Legacy profile failures recorded a synthetic waiting marker without
+        # ever creating an audience job.  It may shadow an active upstream
+        # profile, but once that upstream has failed/partial evidence it is a
+        # skipped optional stage, not an eternal queued unit.  A ready profile
+        # can still be inside the short orchestration-registration window and
+        # therefore must retain the waiting marker until stronger truth arrives.
+        if enrichment_bucket in {"queued", "running", "active"} and not has_concrete_job:
+            profile_bucket = _profile_bucket(item)
+            if profile_bucket in {"partial", "failed", "skipped"}:
+                return "skipped"
+        if enrichment_bucket != "not_requested":
+            return enrichment_bucket
+        if preview_bucket != "not_requested":
+            return preview_bucket
+
+    explicit = _state_bucket(downstream.get("state"))
+    if explicit != "not_requested":
+        return explicit
     if role == "video" and _mapping(payload.get("analysis")):
         return "ready"
     return "not_requested"

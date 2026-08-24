@@ -13,13 +13,17 @@ from app.domains.kol.search_progress_contract import (
     project_search_progress,
     unobserved_worker_health,
 )
+from app.domains.kol.search_sessions_enrichment import (
+    _enrichment_preview_status,
+    _refresh_enrichment_queue_states,
+)
 from app.domains.kol.search_sessions_items import (
     _CREATOR_ITEM_LANES,
     _session_creator_probe,
     canonicalize_session_creator_items,
 )
 from app.domains.kol.search_sessions_previews import (
-    hydrate_session_item_avatar_fallbacks,
+    hydrate_session_item_previews,
 )
 from app.domains.kol.search_sessions_serde import (
     _dict,
@@ -168,15 +172,22 @@ def list_history(
     grouped: dict[int, list[dict[str, Any]]] = {int(session_id): [] for session_id in session_ids}
     for row in item_rows:
         item = _row_to_item(row)
-        if isinstance(item.get("payload"), dict):
-            item["payload"] = payload_masker(item["payload"])
         grouped.setdefault(int(item.get("session_id") or 0), []).append(item)
 
-    hydrate_session_item_avatar_fallbacks(
+    all_session_items = [item for items in grouped.values() for item in items]
+    # Match the detail reader's live projection.  Historical payloads retain the
+    # original queue snapshot, while apify_jobs and current Pool previews are the
+    # read-time truth for execution completion and materialized audience data.
+    _refresh_enrichment_queue_states(conn, all_session_items)
+    hydrate_session_item_previews(
         conn,
-        [item for items in grouped.values() for item in items],
+        all_session_items,
+        enrichment_status_fn=_enrichment_preview_status,
         logger=logger,
     )
+    for item in all_session_items:
+        if isinstance(item.get("payload"), dict):
+            item["payload"] = payload_masker(item["payload"])
 
     if apply_reach_display_gate_fn is None:
         from app.domains.kol.search_sessions import _apply_reach_display_gate
