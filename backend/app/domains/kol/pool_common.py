@@ -325,6 +325,13 @@ def mask_pool_item(
     if not isinstance(item, dict):
         return item
     masked = project_pool_item_truth(item)
+    # PostgreSQL NUMERIC values arrive as Decimal.  FastAPI serializes a cold
+    # Decimal as a JSON string while the shared cache normalizes it to a float,
+    # which made the same card change transport type after the first request.
+    # Keep the public score numeric at the DTO boundary; this is read-only and
+    # never changes the persisted fit score or its ordering semantics.
+    if "viltrox_fit_score" in masked:
+        masked["viltrox_fit_score"] = _float_or_none(masked.get("viltrox_fit_score"))
     from app.domains.kol.contact_system import project_public_profile_url
     for profile_key in ("profile_url", "profileUrl", "channel_url", "channelUrl"):
         if profile_key in masked:

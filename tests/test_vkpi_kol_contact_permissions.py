@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -380,6 +381,15 @@ def test_mask_pool_item_covers_email_phone_other_contacts_and_channels() -> None
     assert "https://contact.example.com/private" not in json.dumps(masked)
     assert "nonstandard@example.com" not in json.dumps(masked)
     assert "private-contact-not-json" not in json.dumps(malformed_json)
+
+
+def test_mask_pool_item_normalizes_fit_score_for_cold_and_cached_transport_parity() -> None:
+    projected = mask_pool_item({"id": 7, "viltrox_fit_score": Decimal("95.000")})
+    unknown = mask_pool_item({"id": 8, "viltrox_fit_score": "not-a-score"})
+
+    assert projected["viltrox_fit_score"] == 95.0
+    assert isinstance(projected["viltrox_fit_score"], float)
+    assert unknown["viltrox_fit_score"] is None
 
 
 def test_list_and_workspace_force_masked_and_never_cache_bulk_plaintext(
