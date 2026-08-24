@@ -177,13 +177,26 @@ def data_watch(
             else:
                 return _sku_required(conn, evidence, matches)
 
-    # 关联已在库的不重复写;manual/auto 交由既有路径校验 + 落 manual 关联。
+    if sku_source == "auto":
+        link_relation_type = "detected"
+        link_source = "title_alias_v1"
+        link_confidence = 0.6
+    else:
+        link_relation_type = "manual"
+        link_source = video_tracking.TRACKING_SOURCE
+        link_confidence = 1.0
+
+    # 关联已在库的不重复写;标题唯一命中只能落 detected,
+    # 绝不得冒充员工手选的 manual/1.0 事实。
     queued = video_tracking.queue_tracked_video(
         conn,
         kol_pool_id=int(kol_pool_id),
         content_url=evidence.get("content_url"),
         product_skus=[] if sku_source == "existing" else skus,
         staff=staff,
+        product_link_relation_type=link_relation_type,
+        product_link_source=link_source,
+        product_link_confidence=link_confidence,
     )
     return {
         "status": "tracking",
@@ -191,6 +204,21 @@ def data_watch(
         "kol_pool_id": int(kol_pool_id),
         "skus": skus,
         "sku_source": sku_source,
+        "sku_provenance": (
+            {
+                "relation_type": "detected",
+                "source": "title_alias_v1",
+                "confidence": 0.6,
+                "requires_human_confirmation": True,
+            }
+            if sku_source == "auto"
+            else {
+                "relation_type": link_relation_type if sku_source == "manual" else "existing",
+                "source": link_source if sku_source == "manual" else "existing_link",
+                "confidence": link_confidence if sku_source == "manual" else None,
+                "requires_human_confirmation": False,
+            }
+        ),
         "tracking": _text(queued.get("metric_tracking_status")) or "active",
         "refresh": _text(queued.get("status")),
     }

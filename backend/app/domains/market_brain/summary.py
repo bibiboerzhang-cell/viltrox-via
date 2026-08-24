@@ -723,9 +723,12 @@ def build_summary(staff: dict[str, Any] | None = None) -> dict[str, Any]:
     tracks_result: dict[str, Any] | None = None
     tracks_error: str | None = None
     try:
-        from app.domains.market.category_tracks import tracks
+        from app.domains.market.strategy_read_cache import cached_category_tracks
+        from app.domains.platform.tenancy import default_organization_id
 
-        tracks_result = tracks()
+        raw_organization_id = (staff or {}).get("organization_id")
+        organization_id = int(raw_organization_id or default_organization_id())
+        tracks_result = cached_category_tracks(organization_id)
     except Exception as exc:  # noqa: BLE001 — 共享数据源失败,两张卡各自诚实降级
         logger.warning("market_brain.summary.tracks failed: %s", exc, exc_info=True)
         tracks_error = _text(str(exc), 300)

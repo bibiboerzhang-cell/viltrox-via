@@ -226,6 +226,19 @@ def _link_rows(conn, evidence_id: int) -> list[tuple[str, str]]:
     ]
 
 
+def _link_detail(conn, evidence_id: int) -> tuple[str, str, str, float]:
+    row = conn.execute(
+        """
+        SELECT product_sku, relation_type, source, confidence
+        FROM vkpi_kol_video_product_links
+        WHERE evidence_id=?
+        ORDER BY id DESC LIMIT 1
+        """,
+        (evidence_id,),
+    ).fetchone()
+    return (str(row[0]), str(row[1]), str(row[2]), float(row[3]))
+
+
 def _seed_link(conn, evidence_id: int, sku: str, relation: str = "manual", confidence: float = 1.0) -> None:
     conn.execute(
         """
@@ -274,6 +287,12 @@ def test_data_watch_uses_existing_links_and_queues_refresh(conn):
         "kol_pool_id": 1,
         "skus": ["SKU-A"],
         "sku_source": "existing",
+        "sku_provenance": {
+            "relation_type": "existing",
+            "source": "existing_link",
+            "confidence": None,
+            "requires_human_confirmation": False,
+        },
         "tracking": "active",
         "refresh": "queued",
     }
@@ -295,9 +314,21 @@ def test_data_watch_auto_detects_single_unambiguous_sku(conn):
     )
     assert result["status"] == "tracking"
     assert result["sku_source"] == "auto"
+    assert result["sku_provenance"] == {
+        "relation_type": "detected",
+        "source": "title_alias_v1",
+        "confidence": 0.6,
+        "requires_human_confirmation": True,
+    }
     assert result["skus"] == ["SKU-A"]
     assert result["refresh"] == "queued"
-    assert _link_rows(conn, 102) == [("SKU-A", "manual")]
+    assert _link_rows(conn, 102) == [("SKU-A", "detected")]
+    assert _link_detail(conn, 102) == (
+        "SKU-A",
+        "detected",
+        "title_alias_v1",
+        0.6,
+    )
     assert _job_count(conn) == 1
 
 
@@ -330,6 +361,12 @@ def test_data_watch_manual_skus_validated_and_linked(conn):
     )
     assert result["status"] == "tracking"
     assert result["sku_source"] == "manual"
+    assert result["sku_provenance"] == {
+        "relation_type": "manual",
+        "source": "my_kol_video_tracking",
+        "confidence": 1.0,
+        "requires_human_confirmation": False,
+    }
     assert result["skus"] == ["SKU-C"]
     assert _link_rows(conn, 103) == [("SKU-C", "manual")]
     assert _job_count(conn) == 1

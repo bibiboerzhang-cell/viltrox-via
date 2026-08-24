@@ -36,6 +36,11 @@ def _conn() -> sqlite3.Connection:
             staff_id INTEGER NOT NULL,
             status TEXT NOT NULL
         );
+        CREATE TABLE vkpi_kol_pool_favorites (
+            id INTEGER PRIMARY KEY,
+            kol_pool_id INTEGER NOT NULL,
+            staff_id INTEGER NOT NULL
+        );
         CREATE TABLE vkpi_kol_pool_members (
             id INTEGER PRIMARY KEY,
             kol_pool_id INTEGER NOT NULL,
@@ -123,6 +128,18 @@ def test_share_members_allows_only_owner_or_manager_and_never_returns_email(monk
     assert payload["count"] == 1
     assert payload["items"][0]["staff_id"] == 12
     assert payload["items"][0]["name"] == "Staff"
+    _assert_no_email_pii(payload)
+
+
+def test_share_members_allows_favorite_owner_without_active_claim(monkeypatch) -> None:
+    conn = _conn()
+    conn.execute("INSERT INTO vkpi_kol_pool_favorites (id, kol_pool_id, staff_id) VALUES (1, 7, 13)")
+    conn.commit()
+    monkeypatch.setattr(router, "get_conn", lambda: conn)
+
+    payload = router.my_kol_share_members_endpoint(7, staff=_staff(13))
+
+    assert payload["count"] == 1
     _assert_no_email_pii(payload)
 
 

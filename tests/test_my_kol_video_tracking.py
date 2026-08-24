@@ -280,6 +280,11 @@ def test_existing_video_links_skus_and_refresh_enqueue_are_idempotent(
     assert first["provider_calls_performed"] is False
     assert first["product_links_created"] == 2
     assert again["product_links_created"] == 0
+    assert first["product_link_provenance"] == {
+        "relation_type": "manual",
+        "source": "my_kol_video_tracking",
+        "confidence": 1.0,
+    }
     assert first["product_skus"] == ["SKU-A", "SKU-B"]
     assert _job_count(tracking_conn) == 1
     assert _link_count(tracking_conn) == 2

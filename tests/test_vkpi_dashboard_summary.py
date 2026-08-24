@@ -24,8 +24,8 @@ def test_build_dashboard_summary_adds_lineage_and_official_summary(monkeypatch):
     monkeypatch.setattr(dashboard_summary, "resolve_staff_id", lambda staff: 7)
     monkeypatch.setattr(
         dashboard_summary,
-        "build_dashboard_kpi",
-        lambda **kwargs: {"active_roster": 12, "scope": kwargs.get("staff_scope_id")},
+        "build_dashboard_active_roster_counts",
+        lambda **kwargs: {"all": 12, "kol": 8, "media": 2, "company": 2},
     )
     monkeypatch.setattr(
         dashboard_summary.decision_engine,
@@ -62,8 +62,8 @@ def test_build_dashboard_summary_uses_staff_dashboard_when_scoped(monkeypatch):
     monkeypatch.setattr(dashboard_summary, "resolve_staff_id", lambda staff: 9)
     monkeypatch.setattr(
         dashboard_summary,
-        "build_dashboard_kpi",
-        lambda **kwargs: {"active_roster": 4, "scope": kwargs.get("staff_scope_id")},
+        "build_dashboard_active_roster_counts",
+        lambda **kwargs: {"all": 4, "kol": 4, "media": 0, "company": 0},
     )
 
     def dashboard_view(view, *, window_days, staff_id):

@@ -55,13 +55,19 @@ beforeEach(() => {
 
 describe("runDataWatchAction(一键数据关注流程)", () => {
   it("tracking 成功:回执如实列 SKU + 指向单品播放数据模块,并触发任务态重读", async () => {
-    dataWatchMock.mockResolvedValue({ status: "tracking", skus: ["AF-85-F14", "AF-35-F18"], sku_source: "auto", refresh: "queued" });
+    dataWatchMock.mockResolvedValue({
+      status: "tracking",
+      skus: ["AF-85-F14", "AF-35-F18"],
+      sku_source: "auto",
+      sku_provenance: { relation_type: "detected", source: "title_alias_v1", confidence: 0.6, requires_human_confirmation: true },
+      refresh: "queued",
+    });
     const { deps, busy } = makeDeps();
     await runDataWatchAction(video(), deps);
 
     expect(dataWatchMock).toHaveBeenCalledWith("tok", 101, 901);
     const last = (deps.setReceipt as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
-    expect(last).toEqual({ text: "已登记数据关注(SKU AF-85-F14 / AF-35-F18)——系统定时抓取播放/点赞,结果见『单品播放数据』模块。", tone: "info" });
+    expect(last).toEqual({ text: "已登记数据关注(SKU AF-85-F14 / AF-35-F18)；SKU 来自标题唯一命中，已标为系统检测、待人工确认——系统定时抓取播放/点赞,结果见『单品播放数据』模块。", tone: "info" });
     expect(deps.onTracked).toHaveBeenCalledTimes(1);
     expect(busy.size).toBe(0);
   });

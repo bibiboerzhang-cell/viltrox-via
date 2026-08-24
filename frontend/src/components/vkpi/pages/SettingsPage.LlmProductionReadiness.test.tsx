@@ -22,6 +22,14 @@ describe('LLM 生产就绪只读卡片', () => {
         evaluated_count: 2,
         production_ready_count: 2,
         blocked_count: 5,
+        signed_evidence_blocked_count: 5,
+        active_scope: {
+          binding_count: 2,
+          task_assignment_count: 3,
+          production_ready_count: 1,
+          runtime_authorized_count: 2,
+          runtime_blocked_count: 0,
+        },
         attestation_trust_roots: {
           exact_probe: { configured: true, declared_key_count: 1, valid_key_count: 1 },
           evaluation: { configured: true, declared_key_count: 1, valid_key_count: 1 },
@@ -81,19 +89,22 @@ describe('LLM 生产就绪只读卡片', () => {
 
     render(<LlmProductionReadinessCard apiToken="admin-token" />);
 
-    expect(await screen.findByText('已有 2 个精确模型绑定通过当前证据闸门')).toBeInTheDocument();
-    expect(within(screen.getByText('候选注册').parentElement as HTMLElement).getByText('7')).toBeInTheDocument();
-    expect(within(screen.getByText('环境凭据已配置').parentElement as HTMLElement).getByText('6/7')).toBeInTheDocument();
-    expect(within(screen.getByText('精确模型探针').parentElement as HTMLElement).getByText('2/7')).toBeInTheDocument();
-    expect(within(screen.getByText('真实评测').parentElement as HTMLElement).getByText('2/7')).toBeInTheDocument();
-    expect(within(screen.getByText('生产闸门通过').parentElement as HTMLElement).getByText('2')).toBeInTheDocument();
-    expect(within(screen.getByText('生产闸门阻断').parentElement as HTMLElement).getByText('5')).toBeInTheDocument();
-    expect(within(screen.getByText('签名生产就绪').parentElement as HTMLElement).getByText('2/3')).toBeInTheDocument();
-    expect(within(screen.getByText('临时运行授权').parentElement as HTMLElement).getByText('1/3')).toBeInTheDocument();
+    expect(await screen.findByText('2/2 个实际绑定模型门已放行；正式签名 1/2')).toBeInTheDocument();
+    expect(within(screen.getByText('实际精确绑定').parentElement as HTMLElement).getByText('2')).toBeInTheDocument();
+    expect(within(screen.getByText('实际绑定·正式签名').parentElement as HTMLElement).getByText('1/2')).toBeInTheDocument();
+    expect(within(screen.getByText('实际绑定·运行放行').parentElement as HTMLElement).getByText('2/2')).toBeInTheDocument();
+    expect(within(screen.getByText('实际绑定·运行阻断').parentElement as HTMLElement).getByText('0')).toBeInTheDocument();
+    expect(within(screen.getByText('任务分配').parentElement as HTMLElement).getByText('3')).toBeInTheDocument();
+    expect(within(screen.getByText('候选目录（次级）').parentElement as HTMLElement).getByText('7')).toBeInTheDocument();
+    expect(within(screen.getByText('凭据键存在（非探针）').parentElement as HTMLElement).getByText('6/7')).toBeInTheDocument();
+    expect(within(screen.getByText('目录精确探针').parentElement as HTMLElement).getByText('2/7')).toBeInTheDocument();
+    expect(within(screen.getByText('目录真实评测').parentElement as HTMLElement).getByText('2/7')).toBeInTheDocument();
+    expect(within(screen.getByText('目录正式签名').parentElement as HTMLElement).getByText('2/7')).toBeInTheDocument();
+    expect(within(screen.getByText('目录待补签名').parentElement as HTMLElement).getByText('5')).toBeInTheDocument();
     expect(screen.queryByText('2 通过 / 1 阻断')).not.toBeInTheDocument();
-    expect(screen.getByText('已注册 / 已配置不等于可用；', { exact: false })).toBeInTheDocument();
+    expect(screen.getByText('实际绑定是当前任务真正使用的唯一模型集；', { exact: false })).toBeInTheDocument();
     expect(screen.getByText('本卡片只读，不会调用外部模型；', { exact: false })).toBeInTheDocument();
-    expect(screen.getAllByText('环境凭据已配置', { exact: false })).toHaveLength(2);
+    expect(screen.getAllByText('凭据键存在', { exact: false })).toHaveLength(2);
     expect(screen.getByText('证据来源：VKPI_MODEL_READINESS_EVIDENCE_JSON · 已解析 7 个绑定')).toBeInTheDocument();
     expect(within(screen.getByTestId('llm-trust-root-status')).getByText(/已具备校验独立签名证据/)).toBeInTheDocument();
     expect(screen.getByText('逐任务真实状态（签名 2/3 · 临时授权 1/3）')).toBeInTheDocument();
@@ -124,7 +135,15 @@ describe('LLM 生产就绪只读卡片', () => {
         candidate_count: 2,
         production_ready_count: 0,
         blocked_count: 2,
+        signed_evidence_blocked_count: 2,
         operator_acknowledged_count: 2,
+        active_scope: {
+          binding_count: 2,
+          task_assignment_count: 2,
+          production_ready_count: 0,
+          runtime_authorized_count: 2,
+          runtime_blocked_count: 0,
+        },
       },
       task_model_readiness: {
         audit_video_analysis: {
@@ -144,9 +163,9 @@ describe('LLM 生产就绪只读卡片', () => {
 
     render(<LlmProductionReadinessCard apiToken="admin-token" />);
 
-    expect(await screen.findByText('生产证据仍待补；2 个精确绑定获临时操作员授权')).toBeInTheDocument();
-    expect(within(screen.getByText('签名生产就绪').parentElement as HTMLElement).getByText('0/2')).toBeInTheDocument();
-    expect(within(screen.getByText('临时运行授权').parentElement as HTMLElement).getByText('2/2')).toBeInTheDocument();
+    expect(await screen.findByText('2/2 个实际绑定模型门已放行；正式签名 0/2')).toBeInTheDocument();
+    expect(within(screen.getByText('实际绑定·正式签名').parentElement as HTMLElement).getByText('0/2')).toBeInTheDocument();
+    expect(within(screen.getByText('实际绑定·运行放行').parentElement as HTMLElement).getByText('2/2')).toBeInTheDocument();
     expect(screen.getByText('逐任务真实状态（签名 0/2 · 临时授权 2/2）')).toBeInTheDocument();
     expect(screen.queryByText(/0 通过 \/ 2 阻断/)).not.toBeInTheDocument();
   });

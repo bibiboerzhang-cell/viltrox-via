@@ -24,6 +24,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.legacy_scope import require_legacy_system_admin_scope
+from app.api.routers.system_admin_model_readiness import build_readiness_audit_extension
 from app.api.routers.system_admin_staff import router as staff_router
 from app.core.security import require_admin_async as require_admin, verify_password
 from app.db.connection import get_conn
@@ -443,17 +444,15 @@ def system_models(admin=Depends(require_system_permission("system.models", "read
             "runtime_gate": item.get("runtime_gate")
             or readiness_gate(item, evidence_source),
         }
-    blocked_bindings = [
-        {
-            "binding": item["binding"],
-            "code": item["runtime_gate"]["code"],
-            "category": item["runtime_gate"]["category"],
-            "failure_reasons": item["runtime_gate"]["failure_reasons"],
-        }
-        for item in audited_items
-        if item.get("production_ready") is not True
-    ]
     trust_roots = model_attestation_trust_root_status()
+    audit_extension = build_readiness_audit_extension(
+        audited_items=audited_items,
+        task_bindings=task_bindings,
+        task_model_readiness=task_model_readiness,
+        readiness=readiness,
+        trust_roots=trust_roots,
+        evidence_source=evidence_source,
+    )
     return {
         "status": readiness["status"],
         "claim_status": readiness["claim_status"],
@@ -463,22 +462,13 @@ def system_models(admin=Depends(require_system_permission("system.models", "read
         "task_model_binding": task_bindings,
         "task_model_readiness": task_model_readiness,
         "readiness_audit": {
-            "version": "model_readiness_audit_v1",
+            "version": "model_readiness_audit_v2",
             "candidate_count": readiness["candidate_count"],
             "configured_count": readiness["configured_count"],
             "probed_count": readiness["probed_count"],
             "evaluated_count": readiness["evaluated_count"],
             "production_ready_count": readiness["production_ready_count"],
-            "blocked_count": len(blocked_bindings),
-            "operator_acknowledged_count": sum(
-                1 for item in audited_items
-                if (item.get("runtime_authorization") or {}).get("operator_acknowledged") is True
-            ),
-            "model_readiness_authorized_count": sum(
-                1 for item in audited_items
-                if (item.get("runtime_authorization") or {}).get("allowed_by_model_readiness") is True
-            ),
-            "blocked_bindings": blocked_bindings,
+            **audit_extension,
             "attestation_trust_roots": trust_roots,
             "evidence_source": {
                 "source": evidence_source.get("source") or "not_configured",

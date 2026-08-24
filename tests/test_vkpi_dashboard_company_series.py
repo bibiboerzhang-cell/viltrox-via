@@ -263,7 +263,11 @@ def test_dashboard_summary_adds_company_and_owned_series_without_overwriting_oth
             "active_30d_by_scope": {"owned": None, "kol": None, "all": None},
         },
     )
-    monkeypatch.setattr(dashboard_summary, "build_dashboard_kpi", lambda **kwargs: {"active_roster": 0})
+    monkeypatch.setattr(
+        dashboard_summary,
+        "build_dashboard_active_roster_counts",
+        lambda **kwargs: {"all": 0, "kol": 0, "media": 0, "company": 0},
+    )
     monkeypatch.setattr(dashboard_summary, "_cached_summary_block", lambda *args, **kwargs: {})
     monkeypatch.setattr(dashboard_summary, "_build_company_window_metrics", lambda: {})
     monkeypatch.setattr(dashboard_summary, "_build_company_metric_series", lambda **kwargs: company_series)

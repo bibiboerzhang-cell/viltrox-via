@@ -201,6 +201,59 @@ def build_dashboard_account_counts() -> dict[str, int]:
     return counts
 
 
+def _build_dashboard_active_roster_counts_impl(
+    *,
+    staff_scope_id: int | None = None,
+) -> dict[str, int]:
+    """Return all four active-roster counters with one scoped pool scan.
+
+    ``build_dashboard_kpi`` also computes exposure, engagement, GMV, ROI, and
+    account totals.  The dashboard summary only needs its active-roster field
+    for four account types, so calling that full builder four times repeated
+    unrelated business-truth queries.  This batch keeps the exact same active
+    predicate and employee KOL scope while grouping the pool once.
+    """
+
+    scope_sql, scope_params = _staff_scope_clause(staff_scope_id)
+    where_sql = f"WHERE {scope_sql}" if scope_sql else ""
+    rows = get_conn().execute(
+        f"""
+        SELECT account_type,
+               COUNT(*) FILTER (WHERE {ACTIVE_ACCOUNT_SQL}) AS active_roster
+        FROM v_dashboard_account_pool
+        {where_sql}
+        GROUP BY account_type
+        """,
+        scope_params,
+    ).fetchall()
+    counts = {"all": 0, "kol": 0, "media": 0, "company": 0}
+    for row in rows:
+        account_type = str(_row_value(row, "account_type", "") or "")
+        if account_type not in counts or account_type == "all":
+            continue
+        value = _as_int(_row_value(row, "active_roster"))
+        counts[account_type] = value
+        counts["all"] += value
+    return counts
+
+
+def build_dashboard_active_roster_counts(
+    *,
+    staff_scope_id: int | None = None,
+) -> dict[str, int]:
+    """Cached public wrapper for the dashboard summary batch counter."""
+
+    ck = _dash_cache_key("active-roster-counts", staff_scope_id)
+    hit = cache_get(ck)
+    if hit is not None:
+        return hit
+    result = _build_dashboard_active_roster_counts_impl(
+        staff_scope_id=staff_scope_id,
+    )
+    cache_set(ck, result, _DASH_CACHE_TTL)
+    return result
+
+
 def _shopify_configured() -> bool:
     """True when the canonical encrypted-DB-or-env resolver has credentials."""
     try:

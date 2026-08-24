@@ -822,16 +822,16 @@ def build_preview(
 
     from app.domains.content.creative_segments import segment_top_items
     from app.domains.costs.product_persona import get_product_persona
-    from app.domains.market.category_tracks import tracks
-    from app.domains.market.industry_benchmark import benchmark
-
-    # Independent source reads dominate the preview cold path.  PostgreSQL can
+    from app.domains.market.strategy_read_cache import cached_category_tracks, cached_industry_benchmark
+    from app.domains.platform.tenancy import default_organization_id
+    organization_id = default_organization_id()
+    # Independent source reads dominate the preview cold path. PostgreSQL can
     # safely overlap them because run_read_tasks assigns a scoped connection to
     # each worker and bounds fleet-local pool usage; SQLite remains sequential.
     source_reads = run_read_tasks(
         {
-            "tracks": lambda: _guard("tracks", tracks),
-            "benchmark": lambda: _guard("benchmark", benchmark),
+            "tracks": lambda: _guard("tracks", lambda: cached_category_tracks(organization_id)),
+            "benchmark": lambda: _guard("benchmark", lambda: cached_industry_benchmark(organization_id, window_days=90)),
             "persona": lambda: _guard(
                 "persona",
                 lambda: get_product_persona(sku_code),

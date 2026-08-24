@@ -445,6 +445,12 @@ export interface VkpiDataWatchResponse {
   kol_pool_id?: number;
   skus?: string[];
   sku_source?: "manual" | "existing" | "auto" | string;
+  sku_provenance?: {
+    relation_type?: "manual" | "detected" | "confirmed" | "existing" | string;
+    source?: "title_alias_v1" | "my_kol_video_tracking" | "existing_link" | string;
+    confidence?: number | null;
+    requires_human_confirmation?: boolean;
+  };
   tracking?: "active" | string;
   refresh?: "queued" | "already_queued" | string;
   candidates?: VkpiDataWatchSkuCandidate[];

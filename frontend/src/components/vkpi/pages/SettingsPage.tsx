@@ -66,8 +66,24 @@ interface LlmReadinessAudit {
   evaluated_count?: number;
   production_ready_count?: number;
   blocked_count?: number;
+  blocked_count_semantics?: string;
+  signed_evidence_blocked_count?: number;
+  runtime_model_gate_blocked_count?: number;
   operator_acknowledged_count?: number;
   model_readiness_authorized_count?: number;
+  active_scope?: {
+    binding_count?: number;
+    bindings?: string[];
+    task_assignment_count?: number;
+    production_ready_count?: number;
+    signed_evidence_blocked_count?: number;
+    runtime_authorized_count?: number;
+    runtime_blocked_count?: number;
+    runtime_blocked_bindings?: string[];
+    task_production_ready_count?: number;
+    task_runtime_authorized_count?: number;
+    claim_status?: string;
+  };
   evidence_source?: LlmReadinessEvidenceSource;
   attestation_trust_roots?: {
     exact_probe?: { configured?: boolean; declared_key_count?: number; valid_key_count?: number };
@@ -206,14 +222,39 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
   const taskTemporaryAuthorizationCount = taskRows.filter(
     (row) => row?.runtime_authorization?.source === 'operator_ack',
   ).length;
+  const derivedActiveBindings = new Set(
+    taskRows.map((row) => String(row?.binding || '')).filter(Boolean),
+  );
   const candidateCount = Number(audit?.candidate_count ?? 0);
   const configuredCount = Number(audit?.configured_count ?? 0);
   const probedCount = Number(audit?.probed_count ?? 0);
   const evaluatedCount = Number(audit?.evaluated_count ?? 0);
   const readyCount = Number(audit?.production_ready_count ?? 0);
-  const blockedCount = Number(audit?.blocked_count ?? Math.max(candidateCount - readyCount, 0));
+  const signedEvidenceBlockedCount = Number(
+    audit?.signed_evidence_blocked_count
+      ?? audit?.blocked_count
+      ?? Math.max(candidateCount - readyCount, 0),
+  );
   const operatorAckCount = Number(audit?.operator_acknowledged_count ?? 0);
   const modelAuthorizedCount = Number(audit?.model_readiness_authorized_count ?? readyCount);
+  const activeScope = audit?.active_scope;
+  const activeBindingCount = Number(activeScope?.binding_count ?? derivedActiveBindings.size);
+  const activeSignedReadyCount = Number(
+    activeScope?.production_ready_count
+      ?? new Set(taskRows.filter((row) => row?.production_ready === true).map((row) => row.binding)).size,
+  );
+  const activeRuntimeAuthorizedCount = Number(
+    activeScope?.runtime_authorized_count
+      ?? new Set(taskRows.filter(
+        (row) => row?.production_ready === true
+          || row?.runtime_authorization?.allowed_by_model_readiness === true,
+      ).map((row) => row.binding)).size,
+  );
+  const activeRuntimeBlockedCount = Number(
+    activeScope?.runtime_blocked_count
+      ?? Math.max(activeBindingCount - activeRuntimeAuthorizedCount, 0),
+  );
+  const taskAssignmentCount = Number(activeScope?.task_assignment_count ?? taskRows.length);
   const evidence = audit?.evidence_source;
   const hasAudit = Boolean(audit);
   const evidenceSource = String(evidence?.source || 'not_configured');
@@ -223,16 +264,19 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
   const trustRoots = audit?.attestation_trust_roots;
   const trustRootFailures = trustRoots?.failure_reasons || [];
   const stats = [
-    { label: '候选注册', value: candidateCount },
-    { label: '环境凭据已配置', value: `${configuredCount}/${candidateCount}` },
-    { label: '精确模型探针', value: `${probedCount}/${candidateCount}` },
-    { label: '真实评测', value: `${evaluatedCount}/${candidateCount}` },
-    { label: '生产闸门通过', value: readyCount },
-    { label: '生产闸门阻断', value: blockedCount },
-    { label: '临时精确授权', value: operatorAckCount },
-    { label: '模型门放行（不含预算）', value: modelAuthorizedCount },
-    { label: '签名生产就绪', value: `${taskSignedReadyCount}/${taskRows.length}` },
-    { label: '临时运行授权', value: `${taskTemporaryAuthorizationCount}/${taskRows.length}` },
+    { label: '实际精确绑定', value: activeBindingCount },
+    { label: '实际绑定·正式签名', value: `${activeSignedReadyCount}/${activeBindingCount}` },
+    { label: '实际绑定·运行放行', value: `${activeRuntimeAuthorizedCount}/${activeBindingCount}` },
+    { label: '实际绑定·运行阻断', value: activeRuntimeBlockedCount },
+    { label: '任务分配', value: taskAssignmentCount },
+    { label: '候选目录（次级）', value: candidateCount },
+    { label: '凭据键存在（非探针）', value: `${configuredCount}/${candidateCount}` },
+    { label: '目录精确探针', value: `${probedCount}/${candidateCount}` },
+    { label: '目录真实评测', value: `${evaluatedCount}/${candidateCount}` },
+    { label: '目录正式签名', value: `${readyCount}/${candidateCount}` },
+    { label: '目录待补签名', value: signedEvidenceBlockedCount },
+    { label: '目录临时授权', value: operatorAckCount },
+    { label: '目录模型门放行', value: modelAuthorizedCount },
   ];
 
   return (
@@ -244,11 +288,13 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
             {loading
               ? '读取生产证据中…'
               : hasAudit
-                ? readyCount > 0
-                  ? `已有 ${readyCount} 个精确模型绑定通过当前证据闸门`
-                  : operatorAckCount > 0
-                    ? `生产证据仍待补；${operatorAckCount} 个精确绑定获临时操作员授权`
-                    : '尚无精确模型绑定通过当前生产闸门'
+                ? activeBindingCount === 0
+                  ? '尚无可核验的实际任务绑定'
+                  : activeSignedReadyCount === activeBindingCount
+                  ? `${activeBindingCount} 个实际绑定已全部通过正式签名证据闸门`
+                  : activeRuntimeAuthorizedCount > 0
+                    ? `${activeRuntimeAuthorizedCount}/${activeBindingCount} 个实际绑定模型门已放行；正式签名 ${activeSignedReadyCount}/${activeBindingCount}`
+                    : `${activeRuntimeBlockedCount}/${activeBindingCount} 个实际绑定被模型门阻断`
                 : '不可核验'}
           </span>
         </div>
@@ -354,8 +400,9 @@ export function LlmProductionReadinessCard({ apiToken }: { apiToken?: string }) 
       ) : null}
 
       <div className="text-muted" style={{ marginTop: 10, fontSize: 'var(--ds-fs-11)', lineHeight: 1.6 }}>
-        已注册 / 已配置不等于可用；仅 production_ready 表示该精确绑定满足当前证据闸门。
-        “环境凭据已配置”只表示运行环境检测到对应 provider 凭据，不表示设置页已保存、账号已授权或精确模型可调用。
+        实际绑定是当前任务真正使用的唯一模型集；候选目录只是注册清单，不应当作运行分母。
+        凭据键存在只表示环境检测到 provider 凭据，不表示账号 entitlement 、精确模型探针或真实可调用。
+        仅 production_ready 表示正式双签证据已通过。
         操作员临时授权只放行精确模型就绪门，不会改写 production_ready，也不绕过预算、功能开关和逐次用户确认。
         本卡片只读，不会调用外部模型；AI 未就绪或关闭时，基础数据流程继续可用。
         {result?.available_models_semantics === 'registered_candidates_only_not_verified_availability'

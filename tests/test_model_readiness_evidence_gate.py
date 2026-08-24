@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from app.api.routers import system_admin
+from app.api.routers import system_admin, system_admin_model_readiness
 from app.platform.models.evaluation_artifact import (
     build_model_evaluation_artifact,
     canonical_sha256,
@@ -650,6 +650,90 @@ def test_system_models_exposes_operator_ack_without_claiming_production_ready(mo
     }
     assert payload["readiness_audit"]["operator_acknowledged_count"] >= 1
     assert payload["readiness_audit"]["model_readiness_authorized_count"] >= 1
+    assert "configured-but-secret" not in json.dumps(payload)
+
+
+def test_system_models_separates_active_runtime_scope_from_catalog_evidence_scope(
+    monkeypatch,
+) -> None:
+    primary = "google/gemini-3.6-flash"
+    fallback = "google/gemini-3.5-flash-lite"
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-but-secret")
+    monkeypatch.setenv(
+        "VKPI_LLM_READINESS_OPERATOR_ACK",
+        f"{primary},{fallback}",
+    )
+    monkeypatch.delenv(READINESS_EVIDENCE_ENV, raising=False)
+    monkeypatch.setattr(
+        system_admin,
+        "current_task_model_binding",
+        lambda: {
+            "audit_video_analysis": primary,
+            "kol_audience_analysis": primary,
+            "keyframe_qa": fallback,
+        },
+    )
+
+    payload = system_admin.system_models(admin={"id": 1})
+    audit = payload["readiness_audit"]
+    active = audit["active_scope"]
+
+    assert audit["version"] == "model_readiness_audit_v2"
+    assert audit["blocked_count"] == audit["signed_evidence_blocked_count"]
+    assert audit["blocked_count_semantics"] == (
+        "registered_candidates_not_production_ready_under_formal_gate"
+    )
+    assert active == {
+        "binding_count": 2,
+        "bindings": [fallback, primary],
+        "task_assignment_count": 3,
+        "production_ready_count": 0,
+        "signed_evidence_blocked_count": 2,
+        "runtime_authorized_count": 2,
+        "runtime_blocked_count": 0,
+        "runtime_blocked_bindings": [],
+        "task_production_ready_count": 0,
+        "task_runtime_authorized_count": 3,
+        "claim_status": "descriptive_only",
+    }
+    assert audit["runtime_model_gate_blocked_count"] == 0
+    assert audit["blocker_categories"]["provider_credentials"]["claim_status"] == (
+        "presence_only_not_entitlement_probe"
+    )
+    assert audit["blocker_categories"]["budget_and_feature_gates"]["status"] == (
+        "independent_not_evaluated_by_this_read_only_endpoint"
+    )
+    assert "configured-but-secret" not in json.dumps(payload)
+
+
+def test_system_models_active_scope_includes_fallback_only_binding(monkeypatch) -> None:
+    primary = "google/gemini-3.6-flash"
+    fallback = "google/gemini-3.5-flash-lite"
+    monkeypatch.setenv("GEMINI_API_KEY", "configured-but-secret")
+    monkeypatch.setenv("VKPI_LLM_READINESS_OPERATOR_ACK", f"{primary},{fallback}")
+    monkeypatch.delenv(READINESS_EVIDENCE_ENV, raising=False)
+    monkeypatch.setattr(
+        system_admin,
+        "current_task_model_binding",
+        lambda: {"audit_video_analysis": primary},
+    )
+    monkeypatch.setattr(
+        system_admin_model_readiness,
+        "tasks_by_allowed_binding",
+        lambda bindings: {
+            primary: ["audit_video_analysis"],
+            fallback: ["audit_video_analysis"],
+        },
+    )
+
+    payload = system_admin.system_models(admin={"id": 1})
+    active = payload["readiness_audit"]["active_scope"]
+
+    assert active["bindings"] == [fallback, primary]
+    assert active["binding_count"] == 2
+    assert active["runtime_authorized_count"] == 2
+    assert active["runtime_blocked_count"] == 0
+    assert active["task_assignment_count"] == 1
     assert "configured-but-secret" not in json.dumps(payload)
 
 

@@ -1,15 +1,4 @@
-"""P3: single additive MY KOL aggregate read-endpoint.
-
-GET /api/admin/vkpi/my-kol/aggregate?staff_id=&window_days=
-
-One read-only call that returns a staff member's full MY KOL payload (staff row,
-official channel matrix, pool favorites, projects, claims, kpi summary). Additive:
-the frontend MyKolPage keeps its current calls until it adopts this later.
-
-RBAC: require_tab("vkpi","read"). Employees (non can_view_all) only ever get
-their own aggregate; managers may pass ?staff_id= to view a specific member,
-defaulting to themselves.
-"""
+"""MY KOL aggregate, collaboration, monitoring and paid-action API routes."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta
@@ -20,11 +9,18 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from app.api.dependencies.perms import require_tab
 from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
+from app.core.security import user_status_allows_auth
 from app.db.connection import get_conn
 from app.domains import business_truth
 from app.domains.access import scope
 from app.domains.audit.decorator import audit_action
-from app.domains.kol import my_kol_aggregate, my_kol_board_ext, risk_index, video_tracking
+from app.domains.kol import (
+    my_kol_aggregate,
+    my_kol_board_ext,
+    my_kol_closure_readiness,
+    risk_index,
+    video_tracking,
+)
 from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-my-kol"])
@@ -60,6 +56,24 @@ def _content_monitoring_error(exc: Exception) -> HTTPException:
     status_code = int(getattr(exc, "status_code", 400) or 400)
     code = str(getattr(exc, "code", "content_monitoring_failed") or "content_monitoring_failed")
     return HTTPException(status_code=status_code, detail=code)
+
+
+@router.get("/my-kol/closure-readiness")
+def my_kol_closure_readiness_endpoint(
+    staff_id: int | None = Query(default=None, ge=1),
+    staff=Depends(require_tab("vkpi", "read")),
+) -> dict:
+    """Pure-read employee workflow closure card; never chooses or runs work."""
+
+    target = scope.effective_staff_id(staff, staff_id)
+    if target is None and not scope.can_view_all(staff):
+        raise HTTPException(status_code=403, detail="no staff identity in scope")
+    body = my_kol_closure_readiness.build_closure_readiness(
+        get_conn(),
+        staff_scope_id=target,
+    )
+    body["scope_context"] = scope.scope_context(staff, staff_id)
+    return body
 
 
 @router.get("/my-kol/{kol_pool_id}/content-monitoring")
@@ -524,45 +538,54 @@ def my_kol_contribution_rollup_endpoint(
     }
 
 
-# ---------------------------------------------------------------------------
-# P-GROUP-7 共享 KOL 池写端点(ADDITIVE,2026-06-16)。
-# 表 vkpi_kol_pool_members(迁移 159):把某 kol_pool_id 显式共享给某 staff_id(只读授予)。
-# scope.member_shared_kol_ids + my_kol_aggregate._pool_favorites 已据本表把「共享进来的池
-# KOL」自动并入接收方 MY KOL 视图(只读,is_shared=true)。这里只补「写/撤销/列出已共享给谁」。
-# 红线:只触 vkpi_kol_pool_members 这张隔离表;绝不读写 viltrox_fit_score / rule_v0 / 归属。
-# 全程 '?' 占位(方言层翻译);commit + 错误处理对齐 project_members。
-# ---------------------------------------------------------------------------
+def _assert_can_share_kol(conn, staff, kol_pool_id: int) -> int:
+    actor = scope.actor_staff_id(staff)
+    if actor <= 0:
+        raise HTTPException(status_code=403, detail="staff_identity_required")
+    grant = conn.execute(
+        """
+        SELECT EXISTS(SELECT 1 FROM vkpi_kol_pool WHERE id=?) AS pool_exists,
+               EXISTS(SELECT 1 FROM vkpi_kol_pool_favorites f
+                      WHERE f.kol_pool_id=? AND f.staff_id=?) AS owns_favorite,
+               EXISTS(SELECT 1 FROM vkpi_kol_pool p JOIN vkpi_kol_claims c
+                        ON c.kol_id=p.linked_main_kol_id AND c.status='active'
+                      WHERE p.id=? AND c.staff_id=?) AS owns_active_claim
+        """,
+        (int(kol_pool_id), int(kol_pool_id), actor, int(kol_pool_id), actor),
+    ).fetchone()
+    access = dict(grant) if grant else {}
+    if not access.get("pool_exists"):
+        raise HTTPException(status_code=404, detail="kol_pool_not_found")
+    if scope.can_view_all(staff) or access.get("owns_favorite") or access.get("owns_active_claim"):
+        return actor
+    raise HTTPException(status_code=403, detail="my_kol_share_write_forbidden")
 
 
-def _kol_pool_claim_owner(conn, kol_pool_id: int) -> int | None:
-    """该 kol_pool_id 的 active claim 归属人 staff_id(经 linked_main_kol_id),无则 None。"""
+def _assert_share_recipient(conn, *, actor_staff_id: int, target_staff_id: int) -> None:
+    if actor_staff_id == target_staff_id:
+        raise HTTPException(status_code=422, detail="share_recipient_self")
     row = conn.execute(
         """
-        SELECT c.staff_id AS sid
-        FROM vkpi_kol_pool p
-        JOIN vkpi_kol_claims c ON c.kol_id = p.linked_main_kol_id AND c.status = 'active'
-        WHERE p.id = ?
-        LIMIT 1
+        SELECT s.id, s.active, s.suspended_at, u.status AS user_status
+        FROM staff s LEFT JOIN users u ON u.id=s.user_id
+        WHERE s.id=? LIMIT 1
         """,
-        (int(kol_pool_id),),
+        (int(target_staff_id),),
     ).fetchone()
-    return _int(dict(row).get("sid")) if row else None
-
-
-def _assert_can_share_kol(conn, staff, kol_pool_id: int) -> None:
-    """归属校验:仅该 KOL 的 active claim 归属人 或 管理层(can_view_all)可共享/撤销——
-    与项目侧 assert_can_manage_members 同口径,避免任意 vkpi:write 转授/撤销他人 KOL。"""
-    if scope.can_view_all(staff):
-        return
-    actor = scope.actor_staff_id(staff)
-    owner = _kol_pool_claim_owner(conn, kol_pool_id)
-    if not actor or owner != actor:
-        raise HTTPException(status_code=403, detail="仅该 KOL 的负责人或管理层可共享/撤销")
+    if not row:
+        raise HTTPException(status_code=404, detail="share_recipient_not_found")
+    recipient = dict(row)
+    if recipient.get("active") not in (True, 1, "1") or recipient.get("suspended_at"):
+        raise HTTPException(status_code=422, detail="share_recipient_inactive")
+    user_status = str(recipient.get("user_status") or "").strip().lower()
+    if user_status == "pending":
+        raise HTTPException(status_code=422, detail="share_recipient_pending")
+    if not user_status_allows_auth(user_status, production=True):
+        raise HTTPException(status_code=422, detail="share_recipient_inactive")
 
 
 def _record_member_feedback(kol_pool_id: int, staff: dict | None) -> None:
-    """L 车道插桩:勾选成员共享 = 正向 shortlist 信号,best-effort 桥进推荐反馈(payload.pool_action=member)。
-    主写已 commit 后才调;任何异常只记日志,绝不阻断响应;无推荐来源时桥本身 no-op。"""
+    """共享 commit 后 best-effort 记录 shortlist 反馈；反馈失败不回滚主写。"""
     try:
         from app.domains.recommendations import actions as rec_actions
 
@@ -577,10 +600,7 @@ def my_kol_share_endpoint(
     body: dict = Body(default={}),
     staff=Depends(require_tab("vkpi", "write")),
 ) -> dict:
-    """把某 kol_pool_id 共享给 body.staff_id(只读授予)。幂等:UNIQUE 冲突即 DO NOTHING。
-
-    归属校验:仅该 KOL 负责人/管理层可共享。shared_by 取当前操作者 staff_id。
-    """
+    """管理层/收藏者/active claim 负责人向其他有效员工授予幂等只读共享。"""
     pid = _int(kol_pool_id)
     target_staff_id = _int(body.get("staff_id"))
     if pid <= 0:
@@ -589,8 +609,8 @@ def my_kol_share_endpoint(
         raise HTTPException(status_code=400, detail="staff_id required")
 
     conn = get_conn()
-    _assert_can_share_kol(conn, staff, pid)
-    shared_by = scope.actor_staff_id(staff) or None
+    shared_by = _assert_can_share_kol(conn, staff, pid)
+    _assert_share_recipient(conn, actor_staff_id=shared_by, target_staff_id=target_staff_id)
     conn.execute(
         """
         INSERT INTO vkpi_kol_pool_members (kol_pool_id, staff_id, shared_by)
@@ -625,32 +645,12 @@ def my_kol_unshare_endpoint(
     return {"status": "removed", "kol_pool_id": pid, "staff_id": target_staff_id}
 
 
-# ---------------------------------------------------------------------------
-# C2 团队共享管理(集中管控,2026-07-02):看全部共享关系 + 按 share id 撤销。
-# 与上面的 per-KOL 弹窗端点(/{kol_pool_id}/share*)互补:那组按单个 KOL 增删,
-# 这组给 TeamModal「共享管理」区一个全局视图(谁把哪个 KOL 分享给了谁)。
-# 红线:只触 vkpi_kol_pool_members / vkpi_collab_settings(读)两张隔离表;
-# 绝不读写 viltrox_fit_score / rule_v0 / 归属。全程 '?' 占位(方言层翻译)。
-# ---------------------------------------------------------------------------
-
-
 @router.get("/my-kol/shares")
 def my_kol_shares_list_endpoint(
     limit: int = Query(default=200, ge=1, le=500),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """团队 KOL 共享关系总列表(集中管控)。
-
-    - 管理层(can_view_all)看全部;普通成员只看「自己发出 + 自己收到」的行。
-    - JOIN staff→users 两次只取分享人/接收人展示名，不返回邮箱;
-      JOIN vkpi_kol_pool 取 KOL 展示名/平台/handle(display_name 空串回落 handle)。
-    - 协作设置:LEFT JOIN vkpi_collab_settings(kind='kol',target_id=kol_pool_id 文本),
-      未设过诚实回空串(不伪造)。
-    - shared_via_group_id 非 NULL = 该行由分组共享展开产生(迁移 161;改组即重算,
-      单行撤销后组重算可能恢复,前端据此提示)。
-    - can_revoke:管理层恒可撤;普通成员仅可撤自己发出的行(与 DELETE 权限同口径)。
-    纯 SELECT,无副作用。
-    """
+    """管理层看全部；普通成员只看自己发出/收到的共享，不返回邮箱。"""
     conn = get_conn()
     view_all = scope.can_view_all(staff)
     actor = scope.actor_staff_id(staff)
@@ -924,6 +924,7 @@ def my_kol_viewer_context_endpoint(
 
     return {
         "kol_pool_id": pid,
+        "actor_staff_id": actor or None,
         "share_origin": share_origin,
         "claim": claim,
         "paid_actions": paid_action,

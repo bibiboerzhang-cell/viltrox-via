@@ -91,6 +91,13 @@ def _bomb(label: str) -> Callable[..., Any]:
 
 
 def _block_all_gtm_side_effect_seams(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Load the complete application graph before replacing connection-module
+    # attributes with bombs.  Otherwise a module imported for the first time
+    # while the bomb is installed can bind ``from app.db.connection import
+    # get_conn`` permanently; MonkeyPatch restores the source module attribute,
+    # not aliases copied into newly imported modules.
+    import app.main  # noqa: F401
+
     from app.api.routers import (
         vkpi_gtm_materialize,
         vkpi_gtm_verdicts,

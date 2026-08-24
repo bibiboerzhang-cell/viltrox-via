@@ -20,6 +20,7 @@ from app.domains.kol.video_url_identity import (
 
 MAX_PRODUCT_SKUS = 5
 TRACKING_SOURCE = "my_kol_video_tracking"
+PRODUCT_LINK_RELATION_TYPES = frozenset({"manual", "detected", "confirmed"})
 
 
 class VideoTrackingError(RuntimeError):
@@ -195,7 +196,22 @@ def _link_products(
     evidence_id: int,
     product_skus: list[str],
     actor_id: int,
+    relation_type: str = "manual",
+    source: str = TRACKING_SOURCE,
+    confidence: float = 1.0,
 ) -> tuple[int, list[str]]:
+    relation = _text(relation_type).lower()
+    link_source = _text(source)[:80]
+    try:
+        link_confidence = float(confidence)
+    except (TypeError, ValueError) as exc:
+        raise VideoTrackingError("product_link_confidence_invalid") from exc
+    if relation not in PRODUCT_LINK_RELATION_TYPES:
+        raise VideoTrackingError("product_link_relation_type_invalid")
+    if not link_source:
+        raise VideoTrackingError("product_link_source_required")
+    if not 0.0 <= link_confidence <= 1.0:
+        raise VideoTrackingError("product_link_confidence_invalid")
     inserted = 0
     for sku in product_skus:
         row = conn.execute(
@@ -203,21 +219,28 @@ def _link_products(
             INSERT INTO vkpi_kol_video_product_links (
                 evidence_id, product_sku, relation_type, source,
                 confidence, created_by_staff_id, created_at, updated_at
-            ) VALUES (?, ?, 'manual', 'my_kol_video_tracking', 1.000, ?, NOW(), NOW())
+            ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
             ON CONFLICT (evidence_id, product_sku, relation_type) DO NOTHING
             RETURNING product_sku
             """,
-            (int(evidence_id), sku, int(actor_id)),
+            (
+                int(evidence_id),
+                sku,
+                relation,
+                link_source,
+                link_confidence,
+                int(actor_id),
+            ),
         ).fetchone()
         inserted += 1 if row else 0
     rows = conn.execute(
         """
         SELECT product_sku
         FROM vkpi_kol_video_product_links
-        WHERE evidence_id=? AND relation_type='manual'
+        WHERE evidence_id=? AND relation_type=?
         ORDER BY product_sku
         """,
-        (int(evidence_id),),
+        (int(evidence_id), relation),
     ).fetchall()
     return inserted, [_text(dict(row).get("product_sku")) for row in rows]
 
@@ -313,6 +336,9 @@ def _queue_for_evidence(
     register_tracking: bool = True,
     refresh_source: str = TRACKING_SOURCE,
     queue_lane: str = "interactive",
+    product_link_relation_type: str = "manual",
+    product_link_source: str = TRACKING_SOURCE,
+    product_link_confidence: float = 1.0,
 ) -> dict[str, Any]:
     _validate_skus_exist(conn, product_skus)
     links_created, all_product_skus = _link_products(
@@ -320,6 +346,9 @@ def _queue_for_evidence(
         evidence_id=_int(evidence.get("id")),
         product_skus=product_skus,
         actor_id=actor_id,
+        relation_type=product_link_relation_type,
+        source=product_link_source,
+        confidence=product_link_confidence,
     )
     tracking_active = False
     if register_tracking:
@@ -349,6 +378,11 @@ def _queue_for_evidence(
         "kol_pool_id": int(kol_pool_id),
         "product_skus": all_product_skus,
         "product_links_created": links_created,
+        "product_link_provenance": {
+            "relation_type": product_link_relation_type,
+            "source": product_link_source,
+            "confidence": float(product_link_confidence),
+        },
         "existing_evidence": True,
         "new_url_resolution_supported": False,
         "metric_tracking_status": "active" if tracking_active else "not_registered",
@@ -362,6 +396,9 @@ def queue_tracked_video(
     content_url: Any,
     product_skus: Any,
     staff: dict[str, Any] | None,
+    product_link_relation_type: str = "manual",
+    product_link_source: str = TRACKING_SOURCE,
+    product_link_confidence: float = 1.0,
 ) -> dict[str, Any]:
     """Link products and queue metrics for an already-owned video URL."""
 
@@ -394,6 +431,9 @@ def queue_tracked_video(
         product_skus=skus,
         actor_id=actor_id,
         staff=staff,
+        product_link_relation_type=product_link_relation_type,
+        product_link_source=product_link_source,
+        product_link_confidence=product_link_confidence,
     )
 
 

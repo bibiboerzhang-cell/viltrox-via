@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from app.api.routers import vkpi_category_tracks, vkpi_industry_benchmark
+from app.domains.market import strategy_read_cache
+from app.domains.market_brain import summary as market_brain_summary
 from app.services.cache import memory_cache
 
 
@@ -350,22 +352,24 @@ def test_redis_failure_invalidation_also_clears_memory_fallback(monkeypatch):
 def test_category_tracks_router_uses_short_singleflight_cache(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_cache(key, builder, ttl):
-        captured.update(key=key, ttl=ttl)
+    def fake_cache(key, builder, ttl, cache_if=None):
+        captured.update(key=key, ttl=ttl, cache_if=cache_if)
         return {"status": "cached-test"}
 
     monkeypatch.setattr(vkpi_category_tracks, "cache_get_or_build", fake_cache)
     result = vkpi_category_tracks.get_category_tracks(staff={"id": 1, "organization_id": 17})
 
     assert result == {"status": "cached-test"}
-    assert captured == {"key": "vkpi_strategy:category_tracks:v2:org:17", "ttl": 30}
+    assert captured["key"] == "vkpi_strategy:category_tracks:v2:org:17"
+    assert captured["ttl"] == 30
+    assert captured["cache_if"] is not None
 
 
 def test_industry_benchmark_cache_key_uses_clamped_window(monkeypatch):
     captured: dict[str, object] = {}
 
-    def fake_cache(key, builder, ttl):
-        captured.update(key=key, ttl=ttl)
+    def fake_cache(key, builder, ttl, cache_if=None):
+        captured.update(key=key, ttl=ttl, cache_if=cache_if)
         return {"status": "cached-test"}
 
     monkeypatch.setattr(vkpi_industry_benchmark, "cache_get_or_build", fake_cache)
@@ -375,14 +379,17 @@ def test_industry_benchmark_cache_key_uses_clamped_window(monkeypatch):
     )
 
     assert result == {"status": "cached-test"}
-    assert captured == {"key": "vkpi_strategy:industry_benchmark:v2:org:23:days:365", "ttl": 30}
+    assert captured["key"] == "vkpi_strategy:industry_benchmark:v2:org:23:days:365"
+    assert captured["ttl"] == 30
+    assert captured["cache_if"] is not None
 
 
 def test_strategy_cache_keys_are_isolated_by_organization(monkeypatch):
     keys: list[str] = []
 
-    def fake_cache(key, _builder, ttl):
+    def fake_cache(key, _builder, ttl, cache_if=None):
         assert ttl == 30
+        assert cache_if is not None
         keys.append(key)
         return {"status": "cached-test"}
 
@@ -403,8 +410,9 @@ def test_strategy_cache_keys_are_isolated_by_organization(monkeypatch):
 
 
 def test_non_default_organization_fails_closed_without_reading_legacy_global_data(monkeypatch):
-    def uncached(_key, builder, ttl):
+    def uncached(_key, builder, ttl, cache_if=None):
         assert ttl == 30
+        assert cache_if is not None
         return builder()
 
     monkeypatch.setattr(vkpi_category_tracks, "cache_get_or_build", uncached)
@@ -446,3 +454,68 @@ def test_default_organization_keeps_existing_strategy_builders(monkeypatch):
         "status": "industry-ready",
         "window_days": 90,
     }
+
+
+def test_strategy_route_and_gtm_summary_share_category_tracks_cache(monkeypatch):
+    from app.domains.market import category_tracks
+
+    calls = 0
+    payload = {"status": "ready", "opportunities": [{"track_id": "focal:85mm"}]}
+
+    def build_tracks():
+        nonlocal calls
+        calls += 1
+        return payload
+
+    monkeypatch.setattr(category_tracks, "tracks", build_tracks)
+    monkeypatch.setattr(
+        market_brain_summary,
+        "run_read_tasks",
+        lambda tasks: {name: fn() for name, fn in tasks.items()},
+    )
+    monkeypatch.setattr(
+        market_brain_summary,
+        "_weekly_signals_card",
+        lambda tracks, error: {"tracks": tracks, "error": error},
+    )
+    monkeypatch.setattr(
+        market_brain_summary,
+        "_product_opportunities_card",
+        lambda tracks, error: {"tracks": tracks, "error": error},
+    )
+    monkeypatch.setattr(
+        market_brain_summary,
+        "_recommended_actions_card",
+        lambda _staff: {"status": "ready"},
+    )
+    monkeypatch.setattr(
+        market_brain_summary,
+        "_learning_digest_card",
+        lambda: {"status": "ready"},
+    )
+    monkeypatch.setattr(
+        market_brain_summary,
+        "_strategy_defaults_card",
+        lambda _opportunities: {"status": "ready"},
+    )
+
+    route_result = vkpi_category_tracks.get_category_tracks(
+        staff={"id": 7, "organization_id": 1}
+    )
+    summary_result = market_brain_summary.build_summary(
+        {"id": 7, "organization_id": 1}
+    )
+
+    assert route_result == payload
+    assert summary_result["weekly_signals"]["tracks"] == payload
+    assert summary_result["product_opportunities"]["tracks"] == payload
+    assert calls == 1
+
+
+def test_shared_strategy_cache_key_and_window_are_tenant_partitioned():
+    assert strategy_read_cache.category_tracks_cache_key(3) != (
+        strategy_read_cache.category_tracks_cache_key(4)
+    )
+    assert strategy_read_cache.industry_benchmark_cache_key(
+        3, window_days=90
+    ) != strategy_read_cache.industry_benchmark_cache_key(3, window_days=30)

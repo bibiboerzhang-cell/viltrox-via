@@ -7,7 +7,7 @@ from app.domains.dashboard.metric_maturity import (
     dashboard_window_metrics_contract,
     normalize_dashboard_scope,
 )
-from app.domains.dashboard.account_picker import build_dashboard_kpi
+from app.domains.dashboard.account_picker import build_dashboard_active_roster_counts
 from app.db.connection import get_conn, table_exists
 from app.services.cache.memory_cache import cache_get_or_build
 from app.domains.dashboard.recent_content import _dashboard_official_matrix_summary
@@ -337,11 +337,9 @@ def _build_evidence_active_30d_summary(*, window_days: int = 30, staff_scope_id:
     }
 
 
-def _build_evidence_metrics_summary(*, window_days: int = 30, staff_scope_id: int | None = None) -> dict[str, Any]:
-    active_roster_by_scope = {
-        account_type: _as_int(build_dashboard_kpi(account_type=account_type, staff_scope_id=staff_scope_id).get("active_roster"))
-        for account_type in ("all", "kol", "media", "company")
-    }
+def _build_evidence_metrics_summary(*, window_days: int = 30, staff_scope_id: int | None = None,
+                                    active_roster_by_scope: dict[str, int] | None = None) -> dict[str, Any]:
+    active_roster_by_scope = dict(active_roster_by_scope or build_dashboard_active_roster_counts(staff_scope_id=staff_scope_id))
     # P1 隔离:非 owner/admin 的曝光/覆盖只算本人 KOL 的证据。
     evidence_where = f"WHERE kol_pool_id IN ({_actor_kols_sql(staff_scope_id)})" if staff_scope_id else ""
     row = get_conn().execute(
@@ -727,12 +725,14 @@ def _build_dashboard_summary_uncached(
     summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
     # P1 隔离:effective_staff_id 为 None=owner/admin(全局),否则=该员工(own-only)。
     # 四聚合统一吃这把 scope —— 此前它们各自全局口径,导致小号也看到全公司数据。
-    summary["active_roster"] = int(build_dashboard_kpi(account_type="all", staff_scope_id=effective_staff_id).get("active_roster") or 0)
+    active_roster_by_scope = build_dashboard_active_roster_counts(staff_scope_id=effective_staff_id)
+    summary["active_roster"] = int(active_roster_by_scope.get("all") or 0)
     win = int(window_days or 30)
     tenant_partition = _summary_tenant_partition(staff)
     summary["evidence_metrics"] = _cached_summary_block(
         "evidence_metrics", effective_staff_id,
-        lambda: _build_evidence_metrics_summary(window_days=window_days, staff_scope_id=effective_staff_id),
+        lambda: _build_evidence_metrics_summary(window_days=window_days, staff_scope_id=effective_staff_id,
+                                                active_roster_by_scope=active_roster_by_scope),
         tenant_partition=tenant_partition,
         window=win,
     )

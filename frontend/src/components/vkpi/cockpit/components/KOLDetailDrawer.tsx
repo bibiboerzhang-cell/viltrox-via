@@ -961,6 +961,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
       kolPoolId: String(item?.id ?? ""),
       kolName: kolHumanDisplayName(item),
       staff,
+      actorStaffId: viewerCtx?.actor_staff_id,
       apiToken,
       onClose: () => setShareOpen(false),
     })

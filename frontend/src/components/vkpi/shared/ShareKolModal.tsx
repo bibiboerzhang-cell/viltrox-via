@@ -25,9 +25,21 @@ import {
 
 const e = React.createElement;
 
-function errMessage(err: any) {
+export function shareKolErrorMessage(err: any): string {
   if (!err) return "操作失败";
-  if (err.status === 403) return "无权限:只有具备 vkpi 写权限的成员可以共享 KOL。";
+  const code = String(err.detail || err.message || "").trim();
+  const messages: Record<string, string> = {
+    staff_identity_required: "当前账号未绑定有效员工身份，无法共享。",
+    my_kol_share_write_forbidden: "无权共享：仅管理层、本人收藏者或当前负责人可操作；他人共享给你的 KOL 不能转分享。",
+    share_recipient_self: "不能把 KOL 共享给自己。",
+    share_recipient_not_found: "目标成员不存在或已删除。",
+    share_recipient_pending: "该成员账号仍在待批准状态，暂不能接收共享。",
+    share_recipient_inactive: "该成员已停用或被暂停，暂不能接收共享。",
+  };
+  if (messages[code]) return messages[code];
+  if (err.status === 403) {
+    return "当前账号无权共享：需具备 VKPI 写权限，且必须是管理层、本人收藏者或当前负责人。";
+  }
   return String(err.message || err);
 }
 
@@ -41,7 +53,15 @@ function unwrapMembers(res: unknown): VkpiKolShareMember[] {
   return [];
 }
 
-export function ShareKolModal({ kolPoolId, kolName, staff = [], apiToken, onClose }: any) {
+export function isShareStaffPickable(s: any, memberIds: Set<string>, actorStaffId?: unknown): boolean {
+  const id = String(s?.id ?? s?.staff_id ?? "");
+  if (!id || memberIds.has(id) || (actorStaffId != null && id === String(actorStaffId))) return false;
+  if (s?.active === false || s?.suspendedAt || s?.suspended_at) return false;
+  const status = String(s?.verificationStatus ?? s?.verification_status ?? "").trim().toLowerCase();
+  return !["pending", "invited", "inactive", "disabled", "suspended"].includes(status);
+}
+
+export function ShareKolModal({ kolPoolId, kolName, staff = [], actorStaffId, apiToken, onClose }: any) {
   const [members, setMembers] = useState<VkpiKolShareMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -63,7 +83,7 @@ export function ShareKolModal({ kolPoolId, kolName, staff = [], apiToken, onClos
     setError("");
     return listKolShareMembers(apiToken, String(kolPoolId))
       .then((res) => setMembers(unwrapMembers(res)))
-      .catch((err) => setError(errMessage(err)))
+      .catch((err) => setError(shareKolErrorMessage(err)))
       .finally(() => setLoading(false));
   }, [apiToken, kolPoolId]);
 
@@ -79,7 +99,7 @@ export function ShareKolModal({ kolPoolId, kolName, staff = [], apiToken, onClos
     setError("");
     listKolShareMembers(apiToken, String(kolPoolId))
       .then((res) => { if (alive) setMembers(unwrapMembers(res)); })
-      .catch((err) => { if (alive) setError(errMessage(err)); })
+      .catch((err) => { if (alive) setError(shareKolErrorMessage(err)); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [apiToken, kolPoolId]);
@@ -90,8 +110,8 @@ export function ShareKolModal({ kolPoolId, kolName, staff = [], apiToken, onClos
     [members],
   );
   const pickable = useMemo(
-    () => (Array.isArray(staff) ? staff : []).filter((s: any) => !memberIds.has(String(s.id))),
-    [staff, memberIds],
+    () => (Array.isArray(staff) ? staff : []).filter((s: any) => isShareStaffPickable(s, memberIds, actorStaffId)),
+    [staff, memberIds, actorStaffId],
   );
 
   const nameForStaff = useCallback(
@@ -111,7 +131,7 @@ export function ShareKolModal({ kolPoolId, kolName, staff = [], apiToken, onClos
       setPickStaffId("");
       await reload();
     } catch (err) {
-      setActionError(errMessage(err));
+      setActionError(shareKolErrorMessage(err));
     } finally {
       setAdding(false);
     }
@@ -124,7 +144,7 @@ export function ShareKolModal({ kolPoolId, kolName, staff = [], apiToken, onClos
       await unshareKolFromStaff(apiToken, String(kolPoolId), sid);
       await reload();
     } catch (err) {
-      setActionError(errMessage(err));
+      setActionError(shareKolErrorMessage(err));
     } finally {
       setRemovingId("");
     }

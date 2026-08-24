@@ -30,7 +30,10 @@ export const DataWatchContext = React.createContext<DataWatchContextValue | null
 export function dataWatchSuccessText(resp: VkpiDataWatchResponse): string {
   const skus = (Array.isArray(resp.skus) ? resp.skus : []).map((sku) => String(sku || "").trim()).filter(Boolean);
   const queueNote = String(resp.refresh || "") === "already_queued" ? "(指标刷新已在队列中)" : "";
-  return `已登记数据关注(SKU ${skus.length ? skus.join(" / ") : "—"})——系统定时抓取播放/点赞,结果见『单品播放数据』模块${queueNote}。`;
+  const provenanceNote = resp.sku_provenance?.relation_type === "detected"
+    ? "；SKU 来自标题唯一命中，已标为系统检测、待人工确认"
+    : "";
+  return `已登记数据关注(SKU ${skus.length ? skus.join(" / ") : "—"})${provenanceNote}——系统定时抓取播放/点赞,结果见『单品播放数据』模块${queueNote}。`;
 }
 
 /** 详情弹窗 sku_required 提示:引导用既有「追踪并排队刷新」表单补 SKU;候选如实附上,不硬选。 */
