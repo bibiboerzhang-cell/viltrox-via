@@ -7,6 +7,7 @@ from app.domains.kol import (
     profile_online_qualification,
     profile_recall,
     profile_recall_qualification,
+    search_session_diagnostics,
     search_sessions,
 )
 from app.domains.kol.discovery_filters import _annotate_new_priority, _int, _text
@@ -266,6 +267,9 @@ async def execute_smart_search_profile_advance_pipeline(
             except Exception:
                 _persona_kb = {}
         strict_online_30 = payload.get("_smart_online_30_contract") is True
+        # A7:逐轮收走 provider 自带的闸门漏斗切片(只读不改),用于会话诊断落库。
+        provider_funnels: list[dict[str, Any]] = []
+        online_contract: dict[str, Any] | None = None
         discovery_kwargs = {
             "query_text": query,
             "platforms": resolved_platforms,
@@ -284,12 +288,17 @@ async def execute_smart_search_profile_advance_pipeline(
                 del cursor
                 if round_no > 1:
                     return {"status": "empty", "new_creators": [], "provider_calls": False}
-                return await discover_new_creators(
+                batch = await discover_new_creators(
                     **discovery_kwargs,
                     limit=max(1, min(limit, 150)),
                     per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 50), 50)),
+                    # B3:operator 的每平台上限覆盖({平台: 上限});缺 → 全平台沿用上面的标量。
+                    per_platform_limits=payload.get("new_discovery_per_platform_limits"),
                     auto_enroll=False,
                 )
+                if isinstance(batch.get("discovery_funnel"), dict):
+                    provider_funnels.append(batch["discovery_funnel"])
+                return batch
 
             online_result = await profile_online_qualification.collect_strict_online_for_session(
                 session_id=int(session_id),
@@ -338,10 +347,13 @@ async def execute_smart_search_profile_advance_pipeline(
                 **discovery_kwargs,
                 limit=max(1, min(_int(payload.get("new_discovery_limit"), 15), 50)),
                 per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 15), 50)),
+                per_platform_limits=payload.get("new_discovery_per_platform_limits"),
             )
             # 收口路①-4:新人优先展示信号(新发现/低合作/成长期加权,饱和大号降位)。纯展示透出,
             # 绝不写 viltrox_fit_score / 不改 rule_v0;注解后再 attach(库内召回的 display_rank_score 已在 recall 侧产出)。
             new_discovery = _annotate_new_priority(new_discovery)
+            if isinstance(new_discovery.get("discovery_funnel"), dict):
+                provider_funnels.append(new_discovery["discovery_funnel"])
         discovery_count = len(new_discovery.get("existing_matches") or []) + len(new_discovery.get("new_creators") or [])
         if discovery_count <= 0:
             discovery_count = len(new_discovery.get("items") or [])
@@ -372,6 +384,23 @@ async def execute_smart_search_profile_advance_pipeline(
                     },
                 },
             )
+        # A7-a:漏斗落库。严格在线模式跳过 attach_new_discovery_result,这段坍缩此前在库里
+        # 零痕迹、唯一证据是会滚掉的 INFO 日志。这里把每层进/出与丢弃原因分布并进会话诊断
+        # ——纯记账,零过滤行为改动。必须写在 attach_* 之后:那些是整块覆写 result_summary。
+        search_session_diagnostics.record_search_diagnostics(
+            int(session_id),
+            {
+                search_session_diagnostics.DISCOVERY_FUNNEL_KEY: (
+                    search_session_diagnostics.build_discovery_funnel(
+                        lane="online_strict" if strict_online_30 else "legacy_discovery",
+                        provider_funnels=provider_funnels,
+                        online_contract=online_contract,
+                        discovery_counts=new_discovery.get("counts"),
+                        returned_count=discovery_count,
+                    )
+                ),
+            },
+        )
 
     advance_result = advance_search_session_items(
         session_id=int(session_id),

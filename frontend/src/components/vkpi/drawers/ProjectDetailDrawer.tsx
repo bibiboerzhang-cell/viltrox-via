@@ -94,6 +94,21 @@ function analysisPreview(value: unknown): string {
   return raw.length > 260 ? `${raw.slice(0, 260)}...` : raw;
 }
 
+export function projectAnalysisCachePresentation(stateValue: unknown, loading = false) {
+  const state = textValue(stateValue, '').trim().toLowerCase();
+  if (loading) return { state, label: '读取中', displayEntry: false };
+  if (state === 'ready') return { state, label: '已缓存', displayEntry: true };
+  if (state === 'stale') return { state, label: '缓存已过期', displayEntry: true };
+  if (state === 'quality_incomplete') return { state, label: '结果质量未通过', displayEntry: false };
+  if (state === 'legacy_unverified') return { state, label: '历史结果待核验', displayEntry: false };
+  if (['queued', 'running', 'retrying', 'processing', 'pending'].includes(state)) {
+    return { state, label: '分析中', displayEntry: false };
+  }
+  if (['blocked', 'failed'].includes(state)) return { state, label: '分析未完成', displayEntry: false };
+  if (state === 'not_requested') return { state, label: '尚未请求', displayEntry: false };
+  return { state: state || 'unknown', label: '状态待确认', displayEntry: false };
+}
+
 export function ProjectDetailDrawer({
   detail,
   apiToken,
@@ -174,11 +189,13 @@ export function ProjectDetailDrawer({
     return projectId ? { targetType: 'project', targetId: projectId, label: '项目' } : null;
   }, [contentPosts, projectId]);
   const [analysisEntry, setAnalysisEntry] = useState<VkpiAnalysisCacheEntry | null>(null);
+  const [analysisState, setAnalysisState] = useState('');
   const [analysisLoading, setAnalysisLoading] = useState(false);
   const [analysisError, setAnalysisError] = useState('');
 
   useEffect(() => {
     setAnalysisEntry(null);
+    setAnalysisState('');
     setAnalysisError('');
     if (!apiToken || !analysisTarget) {
       setAnalysisLoading(false);
@@ -188,7 +205,10 @@ export function ProjectDetailDrawer({
     setAnalysisLoading(true);
     getAnalysisCache(apiToken, analysisTarget.targetType, analysisTarget.targetId)
       .then((response) => {
-        if (!cancelled) setAnalysisEntry(response.entry || null);
+        if (!cancelled) {
+          setAnalysisState(String(response.state || 'unknown'));
+          setAnalysisEntry(response.entry || null);
+        }
       })
       .catch((error) => {
         if (!cancelled) setAnalysisError(error instanceof Error ? error.message : '分析缓存读取失败');
@@ -200,7 +220,8 @@ export function ProjectDetailDrawer({
       cancelled = true;
     };
   }, [apiToken, analysisTarget?.targetId, analysisTarget?.targetType]);
-  const analysisStatus = analysisLoading ? '读取中' : analysisEntry ? '已缓存' : '分析中 / 待分析';
+  const analysisPresentation = projectAnalysisCachePresentation(analysisState, analysisLoading);
+  const analysisStatus = analysisPresentation.label;
 
   return (
     <aside className="vkpi-evidence-drawer vkpi-project-detail-drawer vkpi-project-detail-campaign" role="dialog" aria-label="项目详情">
@@ -273,8 +294,9 @@ export function ProjectDetailDrawer({
         </article>
         <article id="project-detail-analysis-cache">
           <div><strong>分析缓存</strong><span>{analysisStatus}</span></div>
-          {analysisEntry ? (
+          {analysisEntry && analysisPresentation.displayEntry ? (
             <>
+              {analysisPresentation.state === 'stale' ? <p>上次分析结果已过期，仅供历史参考。</p> : null}
               <p>{analysisPreview(analysisEntry.result)}</p>
               <em>
                 {analysisTarget?.label || '目标'} {analysisEntry.target_type}:{analysisEntry.target_id}
@@ -282,9 +304,19 @@ export function ProjectDetailDrawer({
                 {' · '}成本 {analysisEntry.cost ?? 0}
               </em>
             </>
+          ) : analysisPresentation.state === 'legacy_unverified' ? (
+            <>
+              <p>历史结果待核验，未作为当前已核验结论展示。</p>
+              <em>原始结果已保留；完成重新验证后才会恢复为已缓存。</em>
+            </>
+          ) : analysisPresentation.state === 'quality_incomplete' ? (
+            <>
+              <p>本次结果未通过结构质量闸，不计为已分析。</p>
+              <em>待重试或人工复核；未合格 payload 不在项目详情中展示。</em>
+            </>
           ) : (
             <>
-              <p>分析中 / 待分析</p>
+              <p>{analysisStatus}</p>
               <em>{analysisTarget ? `${analysisTarget.label} ${analysisTarget.targetType}:${analysisTarget.targetId}` : '暂无目标'}{analysisError ? ` · ${analysisError}` : ''}</em>
             </>
           )}

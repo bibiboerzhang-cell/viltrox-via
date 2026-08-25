@@ -40,6 +40,23 @@ describe("my_kol_video_recovery_v1 task state facade", () => {
     expect(freshnessText("metric", normalizeTaskState(undefined)).label).toBe("实测数据暂不可用");
   });
 
+  it("keeps legacy cache truth terminal and descriptive instead of mapping it to failure", () => {
+    const legacy = state("legacy_unverified", {
+      status: "legacy_unverified", freshness: "stale", cache_reuse_status: "legacy_unverified",
+      revalidation_required: true, claim_status: "descriptive_only",
+    }, {
+      terminal: true, cache_reuse_status: "legacy_unverified",
+      revalidation_required: true, claim_status: "descriptive_only",
+    });
+    expect(legacy).toMatchObject({
+      status: "legacy_unverified", terminal: true, revalidation_required: true,
+      claim_status: "descriptive_only", data: { status: "legacy_unverified", revalidation_required: true },
+    });
+    expect(isTaskActive(legacy)).toBe(false);
+    expect(taskChip("analysis", legacy)).toMatchObject({ label: "深析旧结果待复核", tone: "pending" });
+    expect(freshnessText("analysis", legacy).label).toBe("旧结果仅供查看");
+  });
+
   it("gives honest failure levels without leaking raw worker text", () => {
     const blocked = state("blocked");
     expect(taskChip("metric", blocked)).toMatchObject({ label: "播放追踪已阻断", tone: "blocked" });

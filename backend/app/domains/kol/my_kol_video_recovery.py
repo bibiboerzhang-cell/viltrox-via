@@ -102,6 +102,7 @@ from typing import Any, Iterable
 
 from app.core.logging import get_logger
 from app.domains.kol import video_analysis_progress_reasons as progress_reasons
+from app.domains.kol.my_kol_video_cache_truth import analysis_cache_summary_for_kol, analysis_caches_for_evidence
 from app.domains.kol.video_evidence_projection import (
     final_v1_modalities_for_evidence,
     viltrox_modalities,
@@ -120,9 +121,9 @@ METRIC_JOB_TYPE = "kol_video_metric_refresh"
 VIDEO_JOB_TYPE = "video"
 PROFILE_FRESH_HOURS = 24
 
-TASK_STATUSES = frozenset({"queued", "running", "retrying", "blocked", "failed", "ready", "not_requested"})
+TASK_STATUSES = frozenset({"queued", "running", "retrying", "blocked", "failed", "ready", "legacy_unverified", "not_requested"})
 ACTIVE_TASK_STATUSES = frozenset({"queued", "running", "retrying"})
-DATA_STATUSES = frozenset({"ready", "stale", "none"})
+DATA_STATUSES = frozenset({"ready", "stale", "legacy_unverified", "none"})
 FRESHNESS_VALUES = frozenset({"fresh", "stale", "never", "unavailable"})
 BLOCKED_REASON_CLASSES = frozenset({"permission", "budget", "missing_profile", "provider_unavailable"})
 FAILED_REASON_CLASSES = frozenset({"provider_error", "timeout", "code_error", "revoked"})
@@ -514,27 +515,7 @@ def _job_is_newer(job: dict[str, Any] | None, data_updated_at: Any) -> bool:
 def _final_v1_caches(conn: Any, evidence_ids: list[int], derive_method: str = FINAL_V1_DERIVE_METHOD) -> dict[int, dict[str, Any]]:
     if not evidence_ids or not _table_available(conn, "vkpi_analysis_cache"):
         return {}
-    placeholders = ",".join("?" for _ in evidence_ids)
-    rows = conn.execute(
-        f"""
-        SELECT id, target_id, status, result, updated_at
-        FROM vkpi_analysis_cache
-        WHERE target_type='video'
-          AND target_id IN ({placeholders})
-          AND derive_method=?
-        ORDER BY updated_at ASC, id ASC
-        """,
-        (*(str(value) for value in evidence_ids), str(derive_method)),
-    ).fetchall()
-    result: dict[int, dict[str, Any]] = {}
-    for row in rows:
-        item = dict(row)
-        evidence_id = _int(item.get("target_id"))
-        status = str(item.get("status") or "").strip().lower()
-        if evidence_id <= 0 or status not in {"ready", "stale"}:
-            continue
-        result[evidence_id] = {"id": item.get("id"), "status": status, "result": item.get("result"), "updated_at": _stamp(item.get("updated_at"))}
-    return result
+    return analysis_caches_for_evidence(conn, evidence_ids, derive_method=derive_method)
 def final_v1_task_state(cache: dict[str, Any] | None, job: dict[str, Any] | None) -> dict[str, Any]:
     """Video-analysis job ledger vs. its analysis cache row.
 
@@ -546,6 +527,8 @@ def final_v1_task_state(cache: dict[str, Any] | None, job: dict[str, Any] | None
     cache_at = (cache or {}).get("updated_at")
     if cache_status == "ready":
         data_status, freshness = "ready", "fresh"
+    elif cache_status == "legacy_unverified":
+        data_status, freshness = "legacy_unverified", "stale"
     elif cache_status == "stale":
         data_status, freshness = "stale", "stale"
     else:
@@ -557,7 +540,17 @@ def final_v1_task_state(cache: dict[str, Any] | None, job: dict[str, Any] | None
         superseded_by_job=_job_is_newer(job, cache_at),
     )
     state = _task_state(job, data)
-    if state["status"] == "ready" and data["status"] != "ready":
+    if cache_status == "legacy_unverified":
+        truth = {
+            "cache_reuse_status": "legacy_unverified",
+            "revalidation_required": True,
+            "claim_status": "descriptive_only",
+        }
+        data.update(truth)
+        state.update(truth)
+        if state["status"] in {"ready", "not_requested"}:
+            state.update(status="legacy_unverified", terminal=True, reason_class=None, **_EMPTY_FAILURE_FIELDS)
+    elif state["status"] == "ready" and data["status"] != "ready":
         state["status"] = "failed"
     elif state["status"] == "not_requested" and data["status"] == "ready":
         state["status"] = "ready"
@@ -626,25 +619,13 @@ def profile_crawl_task_state(conn: Any, kol_pool_id: int) -> dict[str, Any]:
 
 def _library_summary(conn: Any, kol_pool_id: int) -> dict[str, int]:
     if not _table_available(conn, "vkpi_kol_video_evidence"):
-        return {"total": 0, "views_total": 0, "views_measured": 0, "final_v1_ready": 0}
+        return {"total": 0, "views_total": 0, "views_measured": 0, "final_v1_ready": 0, "legacy_unverified": 0}
     cache_available = _table_available(conn, "vkpi_analysis_cache")
-    analyzed_sql = (
-        """
-        SUM(CASE WHEN EXISTS (
-            SELECT 1 FROM vkpi_analysis_cache c
-            WHERE c.target_type='video' AND c.target_id=CAST(e.id AS TEXT)
-              AND c.derive_method='video_analysis_final_v1' AND c.status='ready'
-        ) THEN 1 ELSE 0 END)
-        """
-        if cache_available
-        else "0"
-    )
     row = conn.execute(
-        f"""
+        """
         SELECT COUNT(*) AS total,
                COALESCE(SUM(CASE WHEN e.view_count IS NOT NULL THEN 1 ELSE 0 END), 0) AS views_measured,
-               COALESCE(SUM(e.view_count), 0) AS views_total,
-               COALESCE({analyzed_sql}, 0) AS final_v1_ready
+               COALESCE(SUM(e.view_count), 0) AS views_total
         FROM vkpi_kol_video_evidence e
         WHERE e.kol_pool_id=?
           AND COALESCE(e.is_active, TRUE) != FALSE
@@ -653,11 +634,13 @@ def _library_summary(conn: Any, kol_pool_id: int) -> dict[str, int]:
         (int(kol_pool_id),),
     ).fetchone()
     item = dict(row) if row else {}
+    cache_summary = analysis_cache_summary_for_kol(conn, int(kol_pool_id)) if cache_available else {}
     return {
         "total": max(0, _int(item.get("total"))),
         "views_total": max(0, _int(item.get("views_total"))),
         "views_measured": max(0, _int(item.get("views_measured"))),
-        "final_v1_ready": max(0, _int(item.get("final_v1_ready"))),
+        "final_v1_ready": max(0, _int(cache_summary.get("final_v1_ready"))),
+        "legacy_unverified": max(0, _int(cache_summary.get("legacy_unverified"))),
     }
 
 
@@ -716,16 +699,34 @@ def attach_task_states(
     trends = _metric_trends_for_rows(conn, evidence_ids) if fetch_metric_trends else {}
     for video in rows:
         evidence_id = _int(video.get("evidence_id") or video.get("id"))
+        cache = caches.get(evidence_id) or {}
+        cache_reuse_status = str(cache.get("cache_reuse_status") or "")
+        legacy_unverified = cache_reuse_status == "legacy_unverified"
         video["evidence_id"] = evidence_id
         video["published_at"] = _stamp(video.get("published_at"))
-        if fetch_modalities:
+        video["has_final_v1_cache"] = cache.get("status") == "ready"
+        if legacy_unverified:
+            video.update(
+                has_final_v1_raw_cache=True,
+                analysis_cache_reuse_status="legacy_unverified",
+                revalidation_required=True,
+                claim_status="descriptive_only",
+                v_tier="cooperation" if video.get("project_id") else "undetermined",
+                llm_viltrox_status=None, llm_viltrox_detected=None,
+                llm_viltrox_products=[], llm_competitor_mentions=[],
+            )
+        elif cache_reuse_status:
+            video["analysis_cache_reuse_status"] = cache_reuse_status
+        if legacy_unverified:
+            video["viltrox_modalities"] = []
+        elif fetch_modalities:
             video["viltrox_modalities"] = list(modalities.get(evidence_id) or [])
         else:
             video["viltrox_modalities"] = viltrox_modalities(video.get("viltrox_modalities"))
         tracking = {**video, **(trends.get(evidence_id) or {})} if fetch_metric_trends else video
         video["tasks"] = {
             "metric_refresh": metric_refresh_task_state(tracking, metric_jobs.get(evidence_id)),
-            "final_v1": final_v1_task_state(caches.get(evidence_id), final_jobs.get(evidence_id)),
+            "final_v1": final_v1_task_state(cache, final_jobs.get(evidence_id)),
             "keyframe_qa": final_v1_task_state(qa_caches.get(evidence_id), qa_jobs.get(evidence_id)),
         }
     return rows

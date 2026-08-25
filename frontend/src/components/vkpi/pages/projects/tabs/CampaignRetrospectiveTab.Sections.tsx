@@ -80,18 +80,20 @@ export function ProjectVideoAnalysisCard({
   const verdict = textFrom(layer6.final_verdict) || marketingScore.rationale || keyHook;
   const activeJobStatus = String(item.active_job?.status || '').toLowerCase();
   const analysisIsActive = ['queued', 'running', 'retrying', 'processing'].includes(activeJobStatus);
-  const qaReady = qaItem?.state === 'ready' && Boolean(qaItem.entry);
+  const qaReady = Boolean(ready) && qaItem?.state === 'ready' && Boolean(qaItem.entry);
   const qaActiveStatus = String(qaItem?.active_job?.status || '').toLowerCase();
   const qaIsActive = ['queued', 'running', 'retrying', 'processing'].includes(qaActiveStatus);
   const qaVerificationText = qaReady
     ? '已核验'
-    : qaItem?.state === 'unsupported'
-      ? '分析完成·QA仅支持YouTube'
-      : qaItem?.state === 'failed'
-        ? '分析完成·QA未完成'
-        : qaIsActive
-          ? '分析完成·QA待核验'
-          : '分析完成·QA未请求';
+    : qaItem?.state === 'quality_incomplete'
+      ? '分析完成·QA质量未通过'
+      : qaItem?.state === 'unsupported'
+        ? '分析完成·QA仅支持YouTube'
+        : qaItem?.state === 'failed'
+          ? '分析完成·QA未完成'
+          : qaIsActive
+            ? '分析完成·QA待核验'
+            : '分析完成·QA未请求';
   const qaPayload = qaReady ? finalV1QaPayload(qaItem?.entry) : {};
   const qaHasPayload = Object.keys(qaPayload).length > 0;
   const qaResultRecord = asRecord(qaItem?.entry?.result);
@@ -115,22 +117,30 @@ export function ProjectVideoAnalysisCard({
   if (!ready) {
     const pendingLabel = analysisIsActive
       ? activeJobStatus === 'queued' || activeJobStatus === 'retrying' ? '排队中' : '分析中'
-      : item.state === 'failed'
-        ? '分析未完成'
-        : item.state === 'unsupported'
-          ? '暂不支持'
-          : item.state === 'pending'
-            ? '状态待确认'
-            : '尚未请求';
+      : item.state === 'quality_incomplete'
+        ? '结果质量未通过'
+        : item.state === 'legacy_unverified'
+          ? '历史结果待核验'
+        : item.state === 'failed'
+          ? '分析未完成'
+          : item.state === 'unsupported'
+            ? '暂不支持'
+            : item.state === 'pending'
+              ? '状态待确认'
+              : '尚未请求';
     const pendingBody = analysisIsActive
       ? `Worker 已有 ${activeJobStatus} 任务，完成写入缓存后这里会自动亮起。`
-      : item.state === 'failed'
-        ? `最近任务未产出可用缓存${item.terminal_reason ? `：${item.terminal_reason}` : '。'}`
-        : item.state === 'unsupported'
-          ? '当前视频平台不支持这项分析。'
-          : item.state === 'pending'
-            ? '旧接口未返回活动任务证据；不会自动轮询，请点“刷新状态”确认。'
-            : '当前没有 queued/running 分析任务；“刷新状态”只读取现状，不会新建任务。';
+      : item.state === 'quality_incomplete'
+        ? '本次输出未通过 final_v1 结构质量闸，不计为已分析；待重试或人工复核。'
+        : item.state === 'legacy_unverified'
+          ? '历史原始结果已保留，但未通过当前核验；重新验证前不展示结论。'
+        : item.state === 'failed'
+          ? `最近任务未产出可用缓存${item.terminal_reason ? `：${item.terminal_reason}` : '。'}`
+          : item.state === 'unsupported'
+            ? '当前视频平台不支持这项分析。'
+            : item.state === 'pending'
+              ? '旧接口未返回活动任务证据；不会自动轮询，请点“刷新状态”确认。'
+              : '当前没有 queued/running 分析任务；“刷新状态”只读取现状，不会新建任务。';
     return (
       <div className="rounded-lg border border-white/[0.05] bg-white/[0.012] p-3">
         <div className="flex items-center justify-between gap-3">
@@ -138,7 +148,7 @@ export function ProjectVideoAnalysisCard({
             <div className="text-[11px] font-semibold text-slate-300 truncate">{displayName}</div>
             <div className="text-[9.5px] text-slate-500 truncate">{item.platform || row.platform} · evidence #{item.evidence_id || '-'}</div>
           </div>
-          <span className={`px-2 py-1 rounded text-[10px] shrink-0 ${analysisIsActive ? 'bg-amber-500/10 text-amber-200' : 'bg-white/[0.05] text-slate-400'}`}>{pendingLabel}</span>
+          <span className={`px-2 py-1 rounded text-[10px] shrink-0 ${item.state === 'quality_incomplete' ? 'bg-rose-500/10 text-rose-200' : item.state === 'legacy_unverified' ? 'bg-amber-500/10 text-amber-200' : analysisIsActive ? 'bg-amber-500/10 text-amber-200' : 'bg-white/[0.05] text-slate-400'}`}>{pendingLabel}</span>
         </div>
         <div className="mt-2 text-[10.5px] text-slate-500">{pendingBody}</div>
       </div>

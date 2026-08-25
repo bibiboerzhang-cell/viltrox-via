@@ -4,6 +4,7 @@ import type { VkpiProjectDetail } from "../../components/vkpi/vkpiTypes";
 type Row = Record<string, unknown>;
 
 export interface VkpiAnalysisCacheEntry {
+  cache_id?: number | null;
   target_type: string;
   target_id: string;
   derive_method: string;
@@ -20,8 +21,14 @@ export interface VkpiAnalysisCacheResponse {
   target_type: string;
   target_id: string;
   derive_method?: string | null;
-  state: "ready" | "pending";
+  state: "ready" | "stale" | "quality_incomplete" | "legacy_unverified" | "pending" | "queued" | "running" | "retrying" | "processing" | "blocked" | "failed" | "not_requested" | "unknown";
   entry?: VkpiAnalysisCacheEntry | null;
+  terminal?: boolean;
+  revalidation_required?: boolean;
+  claim_status?: string | null;
+  cache_reuse_status?: string | null;
+  cache_id?: number | null;
+  reasons?: string[];
 }
 
 export interface VkpiProjectVideoAnalysisCacheItem {
@@ -38,11 +45,16 @@ export interface VkpiProjectVideoAnalysisCacheItem {
   like_count?: number | null;
   comment_count?: number | null;
   publish_date?: string | null;
-  state: "ready" | "pending" | "queued" | "running" | "retrying" | "processing" | "failed" | "unsupported" | "not_requested";
+  state: "ready" | "quality_incomplete" | "legacy_unverified" | "pending" | "queued" | "running" | "retrying" | "processing" | "failed" | "unsupported" | "not_requested";
   entry?: VkpiAnalysisCacheEntry | null;
   active_job?: VkpiProjectVideoAnalysisJob | null;
   last_job?: VkpiProjectVideoAnalysisJob | null;
   terminal_reason?: string | null;
+  terminal?: boolean;
+  revalidation_required?: boolean;
+  claim_status?: string | null;
+  cache_reuse_status?: string | null;
+  reasons?: string[];
 }
 
 export interface VkpiProjectVideoAnalysisJob {
@@ -65,6 +77,8 @@ export interface VkpiProjectVideoAnalysisCacheResponse {
     active_count?: number;
     not_requested_count?: number;
     failed_count?: number;
+    quality_incomplete_count?: number;
+    legacy_unverified_count?: number;
     unsupported_count?: number;
     state_counts?: Record<string, number>;
   };

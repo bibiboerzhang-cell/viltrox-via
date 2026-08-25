@@ -197,11 +197,13 @@ export function CampaignRetrospectiveTab({
               {publishedKols.length === 0 ? '等待 KOL 推进到「已发布」阶段后开始复盘。' : null}
             </div>
             )}
-            <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+            <div className="mt-3 grid grid-cols-2 md:grid-cols-6 gap-2">
               {[
                 ['成品视频', analysisSummary?.evidence_count ?? 0, '#06b6d4'],
                 ['已分析', analysisSummary?.ready_count ?? 0, '#10b981'],
                 ['处理中', analysisSummary?.pending_count ?? 0, '#facc15'],
+                ['质量待复核', analysisSummary?.quality_incomplete_count ?? analysisSummary?.state_counts?.quality_incomplete ?? 0, '#fb7185'],
+                ['历史待核验', analysisSummary?.legacy_unverified_count ?? analysisSummary?.state_counts?.legacy_unverified ?? 0, '#f59e0b'],
                 ['后续维度', '沟通/合同/时效/反馈', '#a855f7'],
               ].map(([label, value, color]) => (
                 <div key={label as string} className="rounded-md border border-white/[0.05] bg-black/20 px-2.5 py-2">

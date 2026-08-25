@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 import sys
 
 import pytest
 
 from app.services.ai.analyzers.gemini_video_results import (
+    FINAL_V1_QUALITY_COMPLETE,
+    FINAL_V1_QUALITY_INCOMPLETE,
     VIDEO_FINAL_LAYERS,
     InvalidFinalV1ResultError,
     _apply_final_v1_result,
@@ -52,6 +55,9 @@ def test_valid_legacy_fixture_remains_compatible_and_gains_truth_metadata():
 
     assert result["analyzed"] is True
     assert result["status"] == "completed"
+    assert result["quality_status"] == FINAL_V1_QUALITY_INCOMPLETE
+    assert "missing_brand_product_evidence" in result["quality_issues"]
+    assert "layer6_flags_and_scores.scores" in result["quality_issues"]
     assert result["error"] is None
     assert result["provenance"] == {
         "provider": "gemini",
@@ -78,6 +84,7 @@ def test_product_identification_plus_timestamp_evidence_is_a_valid_minimum():
 
     assert result["analyzed"] is True
     assert result["status"] == "completed"
+    assert result["quality_status"] == FINAL_V1_QUALITY_INCOMPLETE
 
 
 def _brand_fixture(brand_product_evidence: dict) -> dict:
@@ -90,6 +97,45 @@ def _brand_fixture(brand_product_evidence: dict) -> dict:
         },
         "layer6_flags_and_scores": {"final_verdict": "Evidence-bounded brand review."},
     }
+
+
+def _quality_complete_payload() -> dict:
+    payload = _brand_fixture(
+        {
+            "viltrox_status": "unknown",
+            "inspection_complete": True,
+            "checked_modalities": ["visual", "audio"],
+            "viltrox_evidence": [],
+            "viltrox_products": [],
+            "competitors": [],
+        }
+    )
+    payload["layer6_flags_and_scores"] = {
+        "risk_flags": [],
+        "scores": {
+            key: {"score": None, "confidence": 0.0, "rationale": "Insufficient evidence."}
+            for key in (
+                "content_quality_score",
+                "viewer_heart_score",
+                "channel_value_score",
+                "asset_reuse_score",
+                "product_proof_score",
+                "marketing_value_score",
+            )
+        },
+        "final_verdict": "Evidence-bounded brand review.",
+        "key_hook": "No attributable brand claim was found.",
+    }
+    return payload
+
+
+def test_complete_quality_contract_is_ready_without_inventing_scores():
+    result = _apply(_quality_complete_payload())
+
+    assert result["status"] == "completed"
+    assert result["quality_status"] == FINAL_V1_QUALITY_COMPLETE
+    assert result["quality_issues"] == []
+    assert ensure_final_v1_result_cacheable(result) == "ready"
 
 
 def _evidence(modality: str, detail: str, timestamp: str = "00:08") -> dict:
@@ -318,7 +364,7 @@ def test_later_valid_model_clears_an_earlier_invalid_result_state():
     assert result["model"] == "gemini-second"
 
 
-def test_cache_validator_upgrades_only_a_valid_legacy_completion_envelope():
+def test_cache_validator_keeps_legacy_execution_but_does_not_promote_its_quality():
     raw = {
         "analyzed": True,
         "method": "gemini_fileapi_legacy",
@@ -326,10 +372,12 @@ def test_cache_validator_upgrades_only_a_valid_legacy_completion_envelope():
         "video_analysis_final_v1": _valid_legacy_payload(),
     }
 
-    ensure_final_v1_result_cacheable(raw)
+    cache_status = ensure_final_v1_result_cacheable(raw)
 
     assert raw["status"] == "completed"
     assert raw["provenance"]["model"] == "gemini-legacy"
+    assert raw["quality_status"] == FINAL_V1_QUALITY_INCOMPLETE
+    assert cache_status == "quality_incomplete"
 
 
 def test_missing_completion_state_is_not_cacheable():
@@ -389,6 +437,103 @@ def test_worker_cache_guard_stops_before_ready_transaction():
     assert conn.transaction_called is False
     assert raw["status"] == "invalid_result"
     assert raw["analyzed"] is False
+
+
+def test_authorization_snapshot_missing_is_triaged_and_never_runs_ready_followups(monkeypatch):
+    import app.workers.apify_jobs_worker  # noqa: F401
+    from app.workers import apify_jobs_worker_gemini as worker_gemini
+
+    statements: list[tuple[str, tuple]] = []
+    syncs: list[dict] = []
+
+    class _Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=()):
+            statements.append((" ".join(str(sql).split()), params))
+
+        def fetchone(self):
+            return (42,)
+
+    class _Transaction:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class _Connection:
+        def transaction(self):
+            return _Transaction()
+
+        def cursor(self, **_kwargs):
+            return _Cursor()
+
+    def _forbidden(*_args, **_kwargs):
+        raise AssertionError("quality_incomplete entered a ready-only followup")
+
+    monkeypatch.setattr(
+        worker_gemini,
+        "_sync_search_session_job",
+        lambda *_args, **kwargs: syncs.append(kwargs) or True,
+    )
+    monkeypatch.setattr(worker_gemini, "_sync_deep_analysis_result_from_cache", _forbidden)
+    monkeypatch.setattr(worker_gemini, "_enqueue_account_dossier_extract_after_final_v1", _forbidden)
+    monkeypatch.setattr(worker_gemini, "_enqueue_content_fit_after_final_v1", _forbidden)
+    monkeypatch.setattr(worker_gemini, "extract_lens_evidence_after_final_v1", _forbidden)
+
+    raw = {
+        "analyzed": True,
+        "status": "completed",
+        "method": "gemini_fileapi_gemini-test",
+        "model": "gemini-test",
+        "video_analysis_final_v1": _valid_legacy_payload(),
+        "llm_execution": {
+            "production_authorized": False,
+            "authorization_snapshot_match": False,
+            "authorization_issue": "authorization_snapshot_missing",
+        },
+    }
+    worker_gemini._mark_authorization_snapshot_missing(raw)
+    worker_gemini._write_gemini_cache(
+        _Connection(),
+        job={"id": 99},
+        payload={"target_type": "video", "target_id": "123"},
+        evidence={"id": 123},
+        raw=raw,
+        cost=0.01,
+        cost_basis="test",
+        preflight_cost=0.01,
+        latency_ms=10,
+        derive_method="video_analysis_final_v1",
+    )
+
+    insert = next((sql, params) for sql, params in statements if "INSERT INTO vkpi_analysis_cache" in sql)
+    assert insert[1][0] == "video_quality_triage"
+    assert insert[1][9] == "quality_incomplete"
+    assert json.loads(insert[1][4])["quality_status"] == "quality_incomplete"
+    triage = next((sql, params) for sql, params in statements if "SET status='triage'" in sql)
+    assert json.loads(triage[1][0])["reason"] == "authorization_snapshot_missing"
+    assert not any("SET status='done'" in sql for sql, _params in statements)
+    assert syncs == [
+        {
+            "raw_status": "triage",
+            "reason": "authorization_snapshot_missing",
+            "analysis_summary": {
+                "status": "quality_incomplete",
+                "cache_id": 42,
+                "derive_method": "video_analysis_final_v1",
+                "target_type": "video",
+                "cache_target_type": "video_quality_triage",
+                "target_id": "123",
+                "quality_issues": raw["quality_issues"],
+            },
+        }
+    ]
 
 
 def test_worker_rejects_forged_analyzed_result_without_downstream(monkeypatch):

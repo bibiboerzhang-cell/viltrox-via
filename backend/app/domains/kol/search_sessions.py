@@ -17,6 +17,7 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol.contact_access import mask_contact_payload
 from app.domains.kol.profile_recall_match_evidence import candidate_set_distribution_from_items
+from app.domains.kol import search_session_diagnostics
 
 logger = get_logger(__name__)
 
@@ -242,6 +243,12 @@ def create_session(
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     conn = get_conn()
+    # ``advance_request_snapshots`` 是本服务自己写的诊断键,不接受客户端投喂(否则请求体
+    # 可以伪造留痕)。第一段建会话时一律剥掉,只有 ensure_session_for_result 能追加。
+    input_payload = {
+        key: value for key, value in _dict(input_payload).items()
+        if key != search_session_diagnostics.ADVANCE_REQUEST_SNAPSHOTS_KEY
+    }
     safe_query = _sanitize_session_value(_text(query_text)[:500])
     safe_source = _sanitize_session_value(_text(source)[:160])
     row = conn.execute(
@@ -806,11 +813,22 @@ def ensure_session_for_result(
         # A client-supplied session id may only resume the current employee's
         # session.  URL and text-search helpers both attach results after this
         # lookup, so an unscoped read here would also become a cross-user write.
-        return get_session(
+        session = get_session(
             int(session_id),
             staff=staff,
             scope_to_staff=True,
         )
+        # A7-b:第二段(profile-advance)此前只读不写,真正产出结果的那次请求零留痕,
+        # 真实 filter 只能从 diagnostics.applied_filters 反查。这里用**独立键**追加
+        # filter 快照:第一段的原始 input 原样不动,两段各自的真相都在。
+        # 越权已由上面 scope_to_staff 挡住;写失败只告警不抛,诊断绝不拖垮搜索。
+        search_session_diagnostics.record_advance_request_snapshot(
+            int(session_id),
+            body=input_payload,
+            stage=_normalize_query_type(query_type),
+            source=source,
+        )
+        return session
     if create:
         return create_session(
             query_text=query_text,

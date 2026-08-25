@@ -20,6 +20,11 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.core.logging import get_logger
+from app.core.video_model_chain import (
+    analyzer_model_chain,
+    model_fallback_candidates,
+    ready_model_subchain,
+)
 from app.db.connection import db_connection_sync_scope
 from app.platform import llm_gateway
 from app.services.media.video_keyframes import temporary_keyframes
@@ -35,6 +40,65 @@ from app.workers.apify_jobs_video_context import _select_keyframe_requests
 
 logger = get_logger(__name__)
 
+_FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
+_WORKER_MODEL_EXECUTION_KEY = "worker_model_execution"
+
+
+def _worker_execution_model_chain(
+    payload: dict[str, Any],
+    derive_method: str,
+) -> list[str]:
+    """Return the exact execution-time chain that the analyzer may consume."""
+
+    if derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD:
+        return [
+            str(
+                payload.get("final_v1_qa_model") or FINAL_V1_KEYFRAME_QA_MODEL
+            ).strip()
+        ]
+    if derive_method == _FINAL_V1_DERIVE_METHOD:
+        return analyzer_model_chain(payload, final_v1=True)
+    return [WORKER_GEMINI_MODEL]
+
+
+def _google_provider_row(
+    preflight: dict[str, Any],
+    *,
+    model: str = "",
+    binding: str = "",
+) -> dict[str, Any]:
+    providers = (
+        preflight.get("providers")
+        if isinstance(preflight.get("providers"), list)
+        else []
+    )
+    google = [item for item in providers if item.get("provider") == "google"]
+    wanted_model = str(model or "").strip()
+    wanted_binding = str(binding or "").strip()
+    if wanted_model:
+        exact = next(
+            (
+                item
+                for item in google
+                if str(item.get("model") or "").strip() == wanted_model
+            ),
+            None,
+        )
+        if exact is not None:
+            return exact
+    if wanted_binding:
+        exact = next(
+            (
+                item
+                for item in google
+                if str(item.get("binding") or "").strip() == wanted_binding
+            ),
+            None,
+        )
+        if exact is not None:
+            return exact
+    return google[0] if google else {}
+
 
 def _llm_budget_preflight(
     job: dict[str, Any],
@@ -46,25 +110,50 @@ def _llm_budget_preflight(
     prompt = str(payload.get("prompt") or f"{job.get('job_type') or 'analysis'} {target_type}:{target_id}")
     derive_method = str(payload.get("derive_method") or "").strip()
     keyframe_only = derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD
-    exact_model = (
-        str(payload.get("final_v1_qa_model") or FINAL_V1_KEYFRAME_QA_MODEL).strip()
-        if keyframe_only
-        else WORKER_GEMINI_MODEL
-    )
+    requested_models = _worker_execution_model_chain(payload, derive_method)
+    exact_model = requested_models[0]
     with db_connection_sync_scope():
-        return llm_gateway.budget_preflight(
+        preflight = llm_gateway.budget_preflight(
             prompt,
             purpose="keyframe_qa" if keyframe_only else "vkpi_analysis_worker",
             max_output_tokens=LLM_MAX_OUTPUT_TOKENS,
             preferred_provider="google",
             model_override=exact_model,
-            model_fallbacks=[],
+            model_fallbacks=model_fallback_candidates(requested_models),
             execution_class=execution_class,
             cost_tag=LLM_BUDGET_SCOPE,
             # 主线 enforce 口径:只对真有 caps 行的 scope 硬拦,未配额的 cost_scope
             # (如 video_analysis_final_v1)放行,避免视频深析被「未配额=全拦」误杀。
             require_configured=False,
         )
+    ready_models, blocked_models = ready_model_subchain(
+        preflight,
+        requested_models,
+    )
+    authorizations_by_model = {
+        model: _google_execution_authorization(preflight, model=model)
+        for model in ready_models
+    }
+    authorizations_by_binding = {
+        authorization["binding"]: authorization
+        for authorization in authorizations_by_model.values()
+        if str(authorization.get("binding") or "").strip()
+    }
+    head = ready_models[0] if ready_models else requested_models[0]
+    head_row = _google_provider_row(preflight, model=head)
+    return {
+        **preflight,
+        _WORKER_MODEL_EXECUTION_KEY: {
+            "requested_models": list(requested_models),
+            "ready_models": list(ready_models),
+            "blocked_models": dict(blocked_models),
+            "authorizations_by_model": authorizations_by_model,
+            "authorizations_by_binding": authorizations_by_binding,
+            "estimated_cost_usd": float(
+                head_row.get("estimated_cost_usd") or 0.0
+            ),
+        },
+    }
 
 
 def _google_allowed(preflight: dict[str, Any]) -> tuple[bool, str, float]:
@@ -78,15 +167,16 @@ def _google_allowed(preflight: dict[str, Any]) -> tuple[bool, str, float]:
     return bool(google.get("provider_calls_allowed")), reason, float(google.get("estimated_cost_usd") or 0.0)
 
 
-def _google_execution_authorization(preflight: dict[str, Any]) -> dict[str, Any]:
-    providers = (
-        preflight.get("providers")
-        if isinstance(preflight.get("providers"), list)
-        else []
-    )
-    google = next(
-        (item for item in providers if item.get("provider") == "google"), {}
-    )
+def _google_execution_authorization(
+    preflight: dict[str, Any],
+    *,
+    model: str = "",
+    binding: str = "",
+) -> dict[str, Any]:
+    google = _google_provider_row(preflight, model=model, binding=binding)
+    signed_ready = bool(google.get("signed_model_production_ready"))
+    production_authorized = bool(google.get("production_authorized"))
+    evaluation_only = bool(google.get("evaluation_only"))
     return {
         "binding": str(google.get("binding") or ""),
         "model": str(google.get("model") or ""),
@@ -98,8 +188,8 @@ def _google_execution_authorization(preflight: dict[str, Any]) -> dict[str, Any]
         "authorization_scope": str(
             google.get("authorization_scope") or "blocked"
         ),
-        "evaluation_only": bool(google.get("evaluation_only")),
-        "production_authorized": bool(google.get("production_authorized")),
+        "evaluation_only": evaluation_only,
+        "production_authorized": production_authorized,
         "claim_status": str(
             google.get("claim_status")
             or google.get("model_claim_status")
@@ -111,6 +201,51 @@ def _google_execution_authorization(preflight: dict[str, Any]) -> dict[str, Any]
             or preflight.get("model_readiness_status")
             or "not_ready"
         ),
+        # Immutable preflight snapshots.  Historical permission to execute is
+        # deliberately not represented as current signed model readiness.
+        "execution_authorization_at_run": {
+            "scope": "execution_time_snapshot",
+            "authorized": bool(production_authorized or evaluation_only),
+            "production_authorized": production_authorized,
+            "evaluation_only": evaluation_only,
+            "status": str(
+                google.get("operational_authorization_status")
+                or (
+                    "operationally_authorized"
+                    if production_authorized
+                    else "evaluation_only_authorized"
+                    if evaluation_only
+                    else "blocked"
+                )
+            ),
+            "source": str(
+                google.get("operational_authorization_source")
+                or (
+                    "legacy_runtime_policy"
+                    if production_authorized
+                    else "local_evaluation"
+                    if evaluation_only
+                    else "blocked"
+                )
+            ),
+            "temporary": bool(google.get("operational_authorization_temporary")),
+        },
+        "signed_readiness_at_run": {
+            "scope": "execution_time_snapshot",
+            "production_ready": signed_ready,
+            "status": str(
+                google.get("signed_model_readiness_status")
+                or ("production_ready" if signed_ready else "not_production_ready")
+            ),
+            "claim_status": str(
+                google.get("signed_model_readiness_claim_status")
+                or "descriptive_only"
+            ),
+            "evidence_source": str(
+                google.get("signed_model_readiness_evidence_source")
+                or "not_configured"
+            ),
+        },
     }
 
 

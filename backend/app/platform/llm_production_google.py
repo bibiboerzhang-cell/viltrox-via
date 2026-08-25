@@ -84,6 +84,7 @@ def generate_google_content(
     )
     task_binding = str(progress_metadata.get("task_binding") or "").strip()
     actual_binding = f"{provider}/{exact_model}"
+    progress_metadata["task_binding_actual"] = actual_binding
     if task_binding:
         # 2026-08-23 波 C·C1:绑定校验认整条链(主 + 回退);台账仍按实际请求的精确模型
         # 记(record_call model=exact_model),并标注本次是主力还是回退节。
@@ -106,6 +107,12 @@ def generate_google_content(
             "primary" if actual_binding == expected_binding else "fallback"
         )
         progress_metadata["task_binding_primary"] = expected_binding
+    task_binding_fallback = bool(
+        task_binding
+        and progress_metadata.get("task_binding_role") == "fallback"
+        and actual_binding != progress_metadata.get("task_binding_primary")
+    )
+    progress_metadata["fallback_semantics"] = "task_binding_role_v1"
 
     request_identity = _google_contents_fingerprint(contents)
     preflight = llm_gateway.budget_preflight(
@@ -146,7 +153,7 @@ def generate_google_content(
             purpose=exact_purpose,
             prompt=request_identity,
             status="provider_blocked",
-            fallback_used=True,
+            fallback_used=task_binding_fallback,
             metadata={
                 **progress_metadata,
                 "entrypoint": "llm_production_google_generate_content_v1",
@@ -236,7 +243,7 @@ def generate_google_content(
             purpose=exact_purpose,
             prompt=request_identity,
             status="budget_blocked",
-            fallback_used=True,
+            fallback_used=task_binding_fallback,
             cost_tag=cost_scope,
             metadata={
                 **progress_metadata,
@@ -325,7 +332,7 @@ def generate_google_content(
                 purpose=exact_purpose,
                 prompt=request_identity,
                 status="provider_exception",
-                fallback_used=False,
+                fallback_used=task_binding_fallback,
                 metadata={
                     **progress_metadata,
                     "entrypoint": "llm_production_google_generate_content_v1",
@@ -429,7 +436,7 @@ def generate_google_content(
             output_tokens=output_tokens,
             cost_micro_usd=actual_micro,
             status=status,
-            fallback_used=status != "success",
+            fallback_used=task_binding_fallback,
             cost_tag=cost_scope,
             metadata={
                 **progress_metadata,
@@ -508,6 +515,7 @@ def generate_google_content(
         actual_cost_usd=actual_cost,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        response_model=response_model,
     )
     if status != "success":
         raise _sdk_failure(

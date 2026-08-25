@@ -16,7 +16,7 @@ const getCacheMock = vi.mocked(getProjectVideoAnalysisCacheMulti);
 
 function cache(
   method: string,
-  state: 'ready' | 'pending' | 'queued' | 'running' | 'failed' | 'unsupported' | 'not_requested',
+  state: 'ready' | 'quality_incomplete' | 'legacy_unverified' | 'pending' | 'queued' | 'running' | 'failed' | 'unsupported' | 'not_requested',
   result: Record<string, unknown> = {},
 ): VkpiProjectVideoAnalysisCacheResponse {
   const active = state === 'queued' || state === 'running';
@@ -29,11 +29,11 @@ function cache(
       title: state === 'ready' ? '完整标题' : '',
       state,
       active_job: active ? { id: 91, status: state } : null,
-      entry: state === 'ready' ? {
+      entry: state === 'ready' || state === 'quality_incomplete' || state === 'legacy_unverified' ? {
         target_type: 'content_evidence',
         target_id: '11',
         derive_method: method,
-        status: 'ready',
+        status: state,
         result,
       } : null,
     }],
@@ -66,6 +66,33 @@ describe('project video progressive cache', () => {
     expect(merged?.items[0]).toMatchObject({ state: 'ready', title: '完整标题' });
     expect(merged?.items[0].entry?.result).toEqual({ verdict: 'keep me' });
     expect(merged?.summary).toMatchObject({ evidence_count: 1, ready_count: 1, pending_count: 0 });
+  });
+
+  it('显式 quality_incomplete 终态覆盖旧 ready，不保留伪合格结果', () => {
+    const ready = cache('video_analysis_final_v1', 'ready', { verdict: 'old ready' });
+    const incomplete = cache('video_analysis_final_v1', 'quality_incomplete', { quality_issues: ['layer6_missing'] });
+    incomplete.items[0].terminal_reason = 'final_v1_quality_incomplete';
+
+    const merged = mergeProjectVideoAnalysisCache(ready, incomplete);
+
+    expect(merged?.items[0]).toMatchObject({
+      state: 'quality_incomplete',
+      terminal_reason: 'final_v1_quality_incomplete',
+    });
+    expect(merged?.items[0].entry?.status).toBe('quality_incomplete');
+    expect(merged?.summary).toMatchObject({ ready_count: 0, pending_count: 0, quality_incomplete_count: 1 });
+  });
+
+  it('显式 legacy_unverified 终态覆盖旧 ready 且不计 ready', () => {
+    const ready = cache('video_analysis_final_v1', 'ready', { verdict: 'old ready' });
+    const legacy = cache('video_analysis_final_v1', 'legacy_unverified', { verdict: 'historical only' });
+    legacy.items[0].terminal = true;
+    legacy.items[0].revalidation_required = true;
+
+    const merged = mergeProjectVideoAnalysisCache(ready, legacy);
+
+    expect(merged?.items[0]).toMatchObject({ state: 'legacy_unverified', terminal: true, revalidation_required: true });
+    expect(merged?.summary).toMatchObject({ ready_count: 0, pending_count: 0, legacy_unverified_count: 1 });
   });
 
   it('两边都有不同 evidence_id 时不因 URL 相同而串分析', () => {
@@ -147,6 +174,21 @@ describe('project video progressive cache', () => {
     renderHook(() => useProjectVideoAnalysisCache('token', '7'));
     await act(async () => { await Promise.resolve(); });
 
+    await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
+    expect(getCacheMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('legacy_unverified 是终态，不自动轮询', async () => {
+    getCacheMock.mockResolvedValue({
+      project_id: 7,
+      by_method: {
+        video_analysis_final_v1: cache('video_analysis_final_v1', 'legacy_unverified', { verdict: 'historical' }),
+        video_analysis_final_v1_keyframe_qa: cache('video_analysis_final_v1_keyframe_qa', 'not_requested'),
+      },
+    });
+    const { result } = renderHook(() => useProjectVideoAnalysisCache('token', '7'));
+    await act(async () => { await Promise.resolve(); });
+    expect(result.current.videoAnalysisCache?.items[0].state).toBe('legacy_unverified');
     await act(async () => { await vi.advanceTimersByTimeAsync(30000); });
     expect(getCacheMock).toHaveBeenCalledTimes(1);
   });

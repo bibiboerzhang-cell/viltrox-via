@@ -11,6 +11,7 @@ const SOURCE_FILES = [
   "cockpit-reference.routes.css",
   "cockpit-reference.ask-details.css",
   "cockpit-reference.modules.css",
+  "cockpit-reference.llm-status.css",
 ] as const;
 
 function lineCount(source: string): number {

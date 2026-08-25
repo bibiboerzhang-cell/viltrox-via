@@ -52,6 +52,10 @@ CONTENT_FIT_LLM_MAX_OUTPUT_TOKENS = 1400
 CONTENT_FIT_LLM_COST_TAG = "vkpi_kol_content_fit"
 
 
+class _CanonicalVideoEvidenceIds(set[int]):
+    """Set-compatible candidate result with per-KOL legacy proof failures."""
+
+
 def _content_fit_ai_readiness() -> dict[str, Any]:
     """Read-only authorization check matching the content-fit LLM call chain."""
 
@@ -117,25 +121,26 @@ def _ids_with_video_evidence(conn: Any, kol_pool_ids: list[int]) -> set[int]:
     wanted = [pid for pid in kol_pool_ids if pid and pid > 0]
     if not wanted:
         return set()
-    placeholders = ",".join("?" for _ in wanted)
-    try:
-        rows = conn.execute(
-            f"""
-            SELECT DISTINCT e.kol_pool_id
-            FROM vkpi_kol_video_evidence e
-            JOIN vkpi_analysis_cache ac
-              ON ac.target_type = 'video'
-             AND ac.target_id = CAST(e.id AS TEXT)
-             AND ac.derive_method = ?
-             AND ac.status = 'ready'
-            WHERE e.kol_pool_id IN ({placeholders})
-            """,
-            (VIDEO_DERIVE_METHOD, *wanted),
-        ).fetchall()
-    except Exception:
-        logger.warning("vkpi.content_fit_enqueue.evidence_probe_failed", exc_info=True)
-        return set()
-    return {int(row["kol_pool_id"]) for row in rows if row and row["kol_pool_id"] is not None}
+    canonical = _CanonicalVideoEvidenceIds()
+    canonical.legacy_unverified = {}
+    for kid in wanted:
+        try:
+            videos = content_fit_analysis._video_analyses(conn, kid)
+        except Exception:
+            logger.warning("vkpi.content_fit_enqueue.evidence_probe_failed", exc_info=True)
+            canonical.legacy_unverified[kid] = {
+                "status": "legacy_unverified",
+                "revalidation_required": True,
+                "claim_status": "descriptive_only",
+                "reasons": ["canonical_evidence_probe_failed"],
+            }
+            continue
+        gate = content_fit_analysis._video_analysis_cache_gate(videos)
+        if gate.get("status") == "legacy_unverified":
+            canonical.legacy_unverified[kid] = gate
+        elif videos:
+            canonical.add(kid)
+    return canonical
 
 
 def _ids_with_existing_fit(
@@ -322,17 +327,30 @@ def enqueue_content_fit_for_session(
     else:
         has_fit = _ids_with_existing_fit(conn, pool_ids)
         already_queued = _already_queued_ids(conn, sid, pool_ids)
-    readiness = _content_fit_ai_readiness()
-
     enqueued: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     exposure: list[dict[str, Any]] = []
     ai_disabled_count = 0
+    legacy_by_id = getattr(has_evidence, "legacy_unverified", {})
+    legacy_count = 0
+    readiness: dict[str, Any] | None = None
 
     for cand in candidates:
         kid = _int(cand.get("kol_pool_id"))
         # content_fit confidence 取已 ready 的(若有);否则 exposure 用基线(不含 fit 因子)。
         fit_conf: float | None = None
+        legacy_gate = legacy_by_id.get(kid) if isinstance(legacy_by_id, dict) else None
+        if legacy_gate:
+            legacy_count += 1
+            skipped.append({
+                "kol_pool_id": kid,
+                "reason": "legacy_unverified",
+                "revalidation_required": True,
+                "claim_status": "descriptive_only",
+                "cache_gate": legacy_gate,
+            })
+            exposure.append(_exposure_potential(conn, kid, None))
+            continue
         if kid in has_fit:
             try:
                 from app.domains.kol import content_fit_analysis as _cfa
@@ -349,6 +367,11 @@ def enqueue_content_fit_for_session(
         if kid not in has_evidence:
             skipped.append({"kol_pool_id": kid, "reason": "no_ready_video_analysis_evidence"})
             continue
+        if kid in already_queued:
+            skipped.append({"kol_pool_id": kid, "reason": "already_queued_in_session"})
+            continue
+        if readiness is None:
+            readiness = _content_fit_ai_readiness()
         if not readiness["allowed"]:
             ai_disabled_count += 1
             skipped.append(
@@ -359,10 +382,6 @@ def enqueue_content_fit_for_session(
                 }
             )
             continue
-        if kid in already_queued:
-            skipped.append({"kol_pool_id": kid, "reason": "already_queued_in_session"})
-            continue
-
         payload = with_search_session_lineage({
             "queue_lane": "batch",
             "target_type": "kol",
@@ -420,17 +439,31 @@ def enqueue_content_fit_for_session(
             )
             skipped.append({"kol_pool_id": kid, "reason": "enqueue_failed"})
 
-    status = "queued" if enqueued else "ai_disabled" if ai_disabled_count else "nothing_to_queue"
+    if readiness is None:
+        readiness = {
+            "allowed": False,
+            "gate_reason": "legacy_unverified" if legacy_count else "no_eligible_candidate",
+            "model_readiness_status": "not_requested",
+            "ai_analysis": {
+                "state": "not_requested",
+                "reason": "legacy_unverified" if legacy_count else "no_eligible_candidate",
+                "provider_calls_allowed": False,
+            },
+        }
+    status = (
+        "queued" if enqueued else "ai_disabled" if ai_disabled_count
+        else "legacy_unverified" if legacy_count else "nothing_to_queue"
+    )
     ai_analysis = dict(readiness["ai_analysis"])
     if enqueued:
         ai_analysis.update({"state": "queued", "reason": "analysis_queued"})
-    elif not ai_disabled_count:
+    elif not ai_disabled_count and not legacy_count:
         ai_analysis.update({"state": "not_requested", "reason": "no_eligible_candidate"})
     return {
         "status": status,
         "state": "not_requested" if status == "ai_disabled" else status,
-        "stage": "ai_disabled" if status == "ai_disabled" else "analysis",
-        "terminal": status in {"ai_disabled", "nothing_to_queue"},
+        "stage": "revalidation_required" if status == "legacy_unverified" else "ai_disabled" if status == "ai_disabled" else "analysis",
+        "terminal": status in {"ai_disabled", "nothing_to_queue", "legacy_unverified"},
         "session_id": sid,
         "product_sku": normalized_product_sku or None,
         "derive_method": derive_method,
@@ -442,6 +475,9 @@ def enqueue_content_fit_for_session(
         "exposure_potential": exposure,
         "job_type": CONTENT_FIT_JOB_TYPE,
         "ai_disabled_count": ai_disabled_count,
+        "legacy_unverified_count": legacy_count,
+        "revalidation_required": bool(legacy_count),
+        "claim_status": "descriptive_only" if legacy_count else None,
         "provider_gate_reason": readiness["gate_reason"],
         "model_readiness_status": readiness["model_readiness_status"],
         "ai_analysis": ai_analysis,
@@ -481,6 +517,26 @@ def enqueue_content_fit_on_demand(
         )
     normalized_product_sku = kol_content_fit.normalize_product_sku(product_sku)
     derive_method = kol_content_fit.content_fit_derive_method(normalized_product_sku)
+
+    try:
+        source_videos = kol_content_fit._video_analyses(conn, kid)
+        source_gate = kol_content_fit._video_analysis_cache_gate(source_videos)
+    except Exception:
+        logger.warning("vkpi.content_fit_enqueue.on_demand_evidence_probe_failed", exc_info=True)
+        source_gate = {
+            "status": "legacy_unverified",
+            "revalidation_required": True,
+            "claim_status": "descriptive_only",
+            "reasons": ["canonical_evidence_probe_failed"],
+        }
+    if source_gate.get("status") == "legacy_unverified":
+        return {
+            **kol_content_fit.legacy_video_cache_response(kid, normalized_product_sku, source_gate),
+            "job_id": None,
+            "job_type": CONTENT_FIT_JOB_TYPE,
+            "writes": [],
+            "viltrox_fit_score_untouched": True,
+        }
 
     if not force:
         cached = kol_content_fit.get_content_fit(kid, normalized_product_sku)

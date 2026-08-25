@@ -253,9 +253,19 @@ def append_google_attempt(
     actual_cost_usd: float | None = None,
     input_tokens: int = 0,
     output_tokens: int = 0,
+    response_model: str = "",
 ) -> None:
     if not isinstance(attempt_log, list):
         return
+    primary_binding = str(metadata.get("task_binding_primary") or "").strip()
+    actual_binding = str(
+        metadata.get("task_binding_actual") or f"google/{model}"
+    ).strip()
+    fallback_used = bool(
+        metadata.get("task_binding_role") == "fallback"
+        and primary_binding
+        and actual_binding != primary_binding
+    )
     attempt_log.append(
         {
             "authority": "llm_production_google_generate_content_v1",
@@ -265,6 +275,11 @@ def append_google_attempt(
             "subphase": metadata.get("subphase"),
             "attempt_index": metadata.get("attempt_index"),
             "attempt_total": metadata.get("attempt_total"),
+            "task_binding_role": metadata.get("task_binding_role"),
+            "task_binding_primary": metadata.get("task_binding_primary"),
+            "task_binding_actual": actual_binding,
+            "fallback_used": fallback_used,
+            "fallback_semantics": metadata.get("fallback_semantics"),
             "estimated_cost_usd": round(max(0.0, estimated_cost_usd), 8),
             "actual_cost_usd": (
                 round(max(0.0, float(actual_cost_usd)), 8)
@@ -273,6 +288,10 @@ def append_google_attempt(
             ),
             "input_tokens": max(0, int(input_tokens or 0)),
             "output_tokens": max(0, int(output_tokens or 0)),
+            # Provider-returned identity is distinct from ``model`` (the
+            # requested binding).  Keeping both prevents downstream code from
+            # relabelling a request choice as provider evidence.
+            "response_model": str(response_model or "").strip() or None,
         }
     )
 

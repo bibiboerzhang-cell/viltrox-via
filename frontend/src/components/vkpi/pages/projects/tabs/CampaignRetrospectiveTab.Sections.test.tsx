@@ -31,7 +31,7 @@ function item(method: string, state: VkpiProjectVideoAnalysisCacheItem['state'])
 }
 
 describe('ProjectVideoAnalysisCard progressive state', () => {
-  it.each(['queued', 'running', 'failed', 'unsupported', 'not_requested'] as const)(
+  it.each(['queued', 'running', 'failed', 'quality_incomplete', 'unsupported', 'not_requested'] as const)(
     '通过真实 QA lookup 保留 %s 状态',
     (state) => {
       const analysisItem = item('video_analysis_final_v1', 'ready');
@@ -81,5 +81,34 @@ describe('ProjectVideoAnalysisCard progressive state', () => {
       />,
     );
     expect(screen.getByText('已核验')).toBeInTheDocument();
+  });
+
+  it('quality_incomplete 是独立终态，不渲染缓存 payload', () => {
+    const qualityItem = item('video_analysis_final_v1', 'quality_incomplete');
+    qualityItem.entry = {
+      target_type: 'content_evidence',
+      target_id: '11',
+      derive_method: 'video_analysis_final_v1',
+      status: 'quality_incomplete',
+      result: { verdict: 'DO NOT RENDER' },
+    };
+    qualityItem.terminal_reason = 'final_v1_quality_incomplete';
+
+    render(<ProjectVideoAnalysisCard row={row} item={qualityItem} />);
+
+    expect(screen.getByText('结果质量未通过')).toBeInTheDocument();
+    expect(screen.getByText(/待重试或人工复核/)).toBeInTheDocument();
+    expect(screen.queryByText('DO NOT RENDER')).not.toBeInTheDocument();
+  });
+
+  it('legacy_unverified 显示历史待核验，不渲染 payload', () => {
+    const legacyItem = item('video_analysis_final_v1', 'legacy_unverified');
+    legacyItem.entry = {
+      target_type: 'video', target_id: '11', derive_method: 'video_analysis_final_v1',
+      status: 'ready', result: { verdict: 'LEGACY PAYLOAD' },
+    };
+    render(<ProjectVideoAnalysisCard row={row} item={legacyItem} />);
+    expect(screen.getByText('历史结果待核验')).toBeInTheDocument();
+    expect(screen.queryByText('LEGACY PAYLOAD')).not.toBeInTheDocument();
   });
 });

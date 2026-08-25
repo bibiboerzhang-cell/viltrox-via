@@ -22,6 +22,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse
 
 FINAL_V1_ANALYSIS_KIND = "video_final_v1"
 FINAL_V1_DERIVE_METHOD = "video_analysis_final_v1"
@@ -46,11 +47,36 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
-def _is_analyzed(conn: Any, evidence_id: int) -> bool:
-    # Path A: a ready final_v1 deep-analysis row referencing this evidence (102).
-    row = conn.execute(
+def _analysis_state(conn: Any, evidence_id: int) -> dict[str, Any]:
+    """Classify one video without trusting a projected deep row by itself."""
+    cache = conn.execute(
         """
-        SELECT 1
+        SELECT id, target_type, target_id, derive_method, model,
+               prompt_version, result, status
+        FROM vkpi_analysis_cache
+        WHERE target_type='video'
+          AND target_id=?
+          AND derive_method=?
+          AND status='ready'
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+        """,
+        (str(int(evidence_id)), FINAL_V1_DERIVE_METHOD),
+    ).fetchone()
+    if cache:
+        decision = canonical_final_v1_cache_reuse(
+            dict(cache),
+            target_type="video",
+            target_id=str(int(evidence_id)),
+            derive_method=FINAL_V1_DERIVE_METHOD,
+        )
+        return {
+            "state": "canonical" if decision.get("reusable") is True else "legacy_unverified",
+            **decision,
+        }
+    projected = conn.execute(
+        """
+        SELECT source_cache_id
         FROM vkpi_kol_llm_deep_analysis_results
         WHERE source_evidence_id=?
           AND analysis_kind=?
@@ -59,22 +85,23 @@ def _is_analyzed(conn: Any, evidence_id: int) -> bool:
         """,
         (int(evidence_id), FINAL_V1_ANALYSIS_KIND),
     ).fetchone()
-    if row:
-        return True
-    # Path B: a ready analysis_cache entry for this video (mirrors _ready_cache).
-    cache = conn.execute(
-        """
-        SELECT 1
-        FROM vkpi_analysis_cache
-        WHERE target_type='video'
-          AND target_id=?
-          AND derive_method=?
-          AND status='ready'
-        LIMIT 1
-        """,
-        (str(int(evidence_id)), FINAL_V1_DERIVE_METHOD),
-    ).fetchone()
-    return bool(cache)
+    if projected:
+        return {
+            "state": "legacy_unverified",
+            "exists": True,
+            "reusable": False,
+            "cache_id": dict(projected).get("source_cache_id"),
+            "cache_reuse_status": "legacy_unverified",
+            "revalidation_required": True,
+            "claim_status": "descriptive_only",
+            "reasons": ["deep_projection_source_cache_not_verifiable"],
+        }
+    return {"state": "missing", "exists": False, "reusable": False, "reasons": []}
+
+
+def _is_analyzed(conn: Any, evidence_id: int) -> bool:
+    """Compatibility predicate: only canonical source evidence is analyzed."""
+    return _analysis_state(conn, evidence_id).get("state") == "canonical"
 
 
 def plan_kol_video_fullscan(kol_pool_id: int, *, top_n: int = 5) -> dict[str, Any]:
@@ -107,18 +134,31 @@ def plan_kol_video_fullscan(kol_pool_id: int, *, top_n: int = 5) -> dict[str, An
     evidence = [dict(row) for row in rows]
 
     analyzed_count = 0
+    legacy_unverified: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
     for item in evidence:
         evidence_id = _int_or_none(item.get("id"))
         if evidence_id is None:
             continue
-        if _is_analyzed(conn, evidence_id):
+        analysis_state = _analysis_state(conn, evidence_id)
+        if analysis_state.get("state") == "canonical":
             analyzed_count += 1
+        elif analysis_state.get("state") == "legacy_unverified":
+            legacy_unverified.append(
+                {
+                    "evidence_id": evidence_id,
+                    "cache_id": analysis_state.get("cache_id"),
+                    "cache_reuse_status": "legacy_unverified",
+                    "revalidation_required": True,
+                    "claim_status": "descriptive_only",
+                }
+            )
         else:
             pending.append(item)
 
     total_videos = len(evidence)
     pending_count = len(pending)
+    legacy_unverified_count = len(legacy_unverified)
 
     # top-N representatives: highest-signal pending videos
     # (view_count DESC, posted_at DESC). The full query is already ordered by
@@ -147,9 +187,18 @@ def plan_kol_video_fullscan(kol_pool_id: int, *, top_n: int = 5) -> dict[str, An
     )
 
     return {
+        "status": "partial" if legacy_unverified_count else "ready",
+        "state": "partial" if legacy_unverified_count else "ready",
+        "effective_status": "legacy_unverified" if legacy_unverified_count else "canonical",
+        "terminal": True,
+        "revalidation_required": legacy_unverified_count > 0,
+        "claim_status": "descriptive_only",
         "kol_pool_id": kol_pool_id,
         "total_videos": total_videos,
         "analyzed_count": analyzed_count,
+        "canonical_analyzed_count": analyzed_count,
+        "legacy_unverified_count": legacy_unverified_count,
+        "legacy_unverified": legacy_unverified,
         "pending_count": pending_count,
         # Full-scan ledger: visible N / analyzed M / to-fetch K.
         "materialized_visible_n": total_videos,
@@ -201,8 +250,14 @@ def enqueue_kol_video_fullscan(
     from app.domains.kol import video_analysis_enqueue
 
     if not items:
+        has_legacy = bool(plan.get("legacy_unverified_count"))
         return {
-            "status": "no_candidates",
+            "status": "partial" if has_legacy else "no_candidates",
+            "state": "partial" if has_legacy else "completed",
+            "effective_status": "legacy_unverified" if has_legacy else "no_candidates",
+            "terminal": True,
+            "revalidation_required": has_legacy,
+            "claim_status": "descriptive_only",
             "kol_pool_id": int(kol_pool_id),
             "plan": plan,
             "queued": 0,
@@ -214,12 +269,26 @@ def enqueue_kol_video_fullscan(
         items=items,
         staff=staff,
     )
+    queued = int(enqueue_result.get("queued") or 0)
+    has_legacy = bool(plan.get("legacy_unverified_count"))
+    batch_status = str(enqueue_result.get("status") or ("queued" if queued else "completed"))
+    batch_state = str(enqueue_result.get("state") or batch_status)
+    batch_terminal = bool(enqueue_result.get("terminal", queued == 0))
     return {
-        "status": "enqueued",
+        "status": "partial" if has_legacy else batch_status,
+        "state": "partial" if has_legacy else batch_state,
+        "effective_status": (
+            "legacy_unverified"
+            if has_legacy
+            else str(enqueue_result.get("effective_status") or batch_state)
+        ),
+        "terminal": batch_terminal,
+        "revalidation_required": has_legacy or bool(enqueue_result.get("revalidation_required")),
+        "claim_status": "descriptive_only",
         "kol_pool_id": int(kol_pool_id),
         "plan": plan,
         "enqueue": enqueue_result,
-        "queued": enqueue_result.get("queued", 0),
+        "queued": queued,
         "evidence_ids": [it["evidence_id"] for it in items],
         "budget_gate": "record_only",
         "provider_calls": False,

@@ -455,6 +455,7 @@ export function KolVideoSection({
                   <div className="mt-1.5 flex flex-wrap items-center gap-1">
                     <span className={`rounded-[5px] border px-1 py-px text-[8px] font-bold ${meta.cls}`} title={meta.title}>{meta.label}</span>
                     {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
+                    {video.revalidation_required ? <span className={`${MINI_BADGE} border-warn bg-warn-soft text-warn`} title="历史分析仍可查看,但未通过当前版本的来源与质量校验">历史结果待核验</span> : null}
                     {qaReady ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>关键帧已复核</span> : null}
                     {video.content_url ? (
                       <a
@@ -476,7 +477,7 @@ export function KolVideoSection({
                     >
                       #{eid}
                     </button>
-                    {tier === "undetermined" && !video.has_final_v1_cache && !isImageKindVideo(video) ? (
+                    {tier === "undetermined" && !video.has_final_v1_cache && !video.revalidation_required && !isImageKindVideo(video) ? (
                       <button
                         type="button"
                         className="inline-flex min-h-8 items-center rounded-lg border border-line px-2 py-1 text-[10.5px] text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-default"

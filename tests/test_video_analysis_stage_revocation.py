@@ -365,6 +365,11 @@ def test_cache_hit_revocation_blocks_before_result_sync_and_followups(
             "_advisory_unlock": lambda *_args: None,
             "_acquire_llm_slot": lambda _conn: "slot-1",
             "_analysis_cache_exists": lambda *_args: True,
+            "_analysis_cache_reuse_decision": lambda *_args: {
+                "exists": True,
+                "reusable": True,
+                "reasons": [],
+            },
             "_finish_skipped": lambda *args, **kwargs: skipped.append(str(args[2])),
             "_process_gemini_video": lambda *_args: skipped.append("gemini"),
         }
@@ -410,6 +415,11 @@ def test_cache_hit_with_valid_actor_still_finishes_as_skipped(
             "_advisory_unlock": lambda *_args: None,
             "_acquire_llm_slot": lambda _conn: "slot-1",
             "_analysis_cache_exists": lambda *_args: True,
+            "_analysis_cache_reuse_decision": lambda *_args: {
+                "exists": True,
+                "reusable": True,
+                "reasons": [],
+            },
             "_finish_skipped": lambda *args, **kwargs: skipped.append(str(args[2])),
         }
     )

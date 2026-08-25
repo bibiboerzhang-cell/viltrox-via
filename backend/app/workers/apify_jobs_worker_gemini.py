@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
@@ -43,7 +42,6 @@ from app.workers.apify_jobs_cost import (
 )
 from app.workers.apify_jobs_video_context import (
     FINAL_V1_PROMPT_CONTRACT,
-    _low_scores,
     _video_final_context,
     _video_performance_context,
 )
@@ -53,10 +51,17 @@ from app.workers.apify_jobs_worker_gemini_cost import (  # noqa: F401
 )
 from app.workers.apify_jobs_worker_gemini_stages import (
     StageClock,
-    merged_stage_timings,
     record_final_v1_outcome_diagnostics,
 )
-from app.domains.analysis.cache_repo import upsert_video_analysis_cache
+from app.workers.apify_jobs_worker_gemini_result import (
+    bind_execution_authorization_to_selected_model,
+    llm_execution_metadata as _llm_execution_metadata_impl,
+    shape_gemini_result as _shape_gemini_result_impl,
+)
+from app.domains.analysis.cache_repo import (
+    quality_triage_target_type,
+    upsert_video_analysis_cache,
+)
 from app.workers.apify_jobs_worker_gemini_followups import extract_lens_evidence_after_final_v1
 from app.workers.apify_jobs_worker_session import (
     _enqueue_account_dossier_extract_after_final_v1,
@@ -77,55 +82,11 @@ def _cache_prompt_version(derive_method: str) -> str | None:
 
 
 def _llm_execution_metadata(raw: dict[str, Any]) -> dict[str, Any]:
-    value = raw.get("llm_execution") if isinstance(raw.get("llm_execution"), dict) else {}
-    execution_class = str(
-        value.get("execution_class") or WORKER_LLM_EXECUTION_CLASS
+    return _llm_execution_metadata_impl(
+        raw,
+        worker_execution_class=WORKER_LLM_EXECUTION_CLASS,
+        worker_gemini_model=WORKER_GEMINI_MODEL,
     )
-    evaluation_only = execution_class == "local_evaluation"
-    production_authorized = bool(value.get("production_authorized")) and not evaluation_only
-    requested_model = str(value.get("model") or WORKER_GEMINI_MODEL)
-    reported_model = str(value.get("reported_model") or raw.get("model") or "")
-    return {
-        "binding": str(value.get("binding") or f"google/{WORKER_GEMINI_MODEL}"),
-        "model": requested_model,
-        "reported_model": reported_model or None,
-        "model_match": bool(reported_model and reported_model == requested_model),
-        "execution_class": execution_class,
-        "authorization_scope": (
-            "evaluation_only"
-            if evaluation_only
-            else "production"
-            if production_authorized
-            else str(value.get("authorization_scope") or "blocked")
-        ),
-        "evaluation_only": evaluation_only,
-        "production_authorized": production_authorized,
-        # Model readiness and content claims are orthogonal.  No model result
-        # promotes a descriptive content claim to a validated business claim.
-        "claim_status": "descriptive_only",
-        "model_readiness_status": str(
-            value.get("model_readiness_status")
-            or (
-                "evaluation_only_not_production_ready"
-                if evaluation_only
-                else "production_ready"
-                if production_authorized
-                else "not_ready"
-            )
-        ),
-        "base_derive_method": str(
-            value.get("base_derive_method") or "video_analysis_final_v1"
-        ),
-        "cache_derive_method": str(
-            value.get("cache_derive_method")
-            or (
-                "video_analysis_final_v1__local_eval"
-                if evaluation_only
-                else value.get("base_derive_method")
-                or "video_analysis_final_v1"
-            )
-        ),
-    }
 
 
 def _gemini_analyzer_payload(
@@ -154,184 +115,22 @@ def _shape_gemini_result(
     latency_ms: int,
     derive_method: str,
 ) -> dict[str, Any]:
-    execution = _llm_execution_metadata(raw)
-    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
-        final = raw.get("video_analysis_final_v1") if isinstance(raw.get("video_analysis_final_v1"), dict) else {}
-        model_name = str(raw.get("model") or raw.get("method") or "gemini_video")
-        segments = raw.get("cost_segments") if isinstance(raw.get("cost_segments"), list) else None
-        shaped: dict[str, Any] = {
-            "schema_version": "video_analysis_final_v1",
-            "status": "completed",
-            "mock": False,
-            "analysis_method": derive_method,
-            "model": model_name,
-            "provenance": {
-                **(
-                    raw.get("provenance")
-                    if isinstance(raw.get("provenance"), dict)
-                    else {
-                        "provider": "gemini",
-                        "model": model_name,
-                        "method": str(raw.get("method") or "gemini_video"),
-                    }
-                ),
-                "binding": execution["binding"],
-                "execution_class": execution["execution_class"],
-                "evaluation_only": execution["evaluation_only"],
-                "production_authorized": execution["production_authorized"],
-                "claim_status": execution["claim_status"],
-                "model_readiness_status": execution["model_readiness_status"],
-                "base_derive_method": execution["base_derive_method"],
-                "cache_derive_method": execution["cache_derive_method"],
-                "prompt_contract": FINAL_V1_PROMPT_CONTRACT,
-            },
-            "llm_execution": execution,
-            "evaluation_only": execution["evaluation_only"],
-            "production_authorized": execution["production_authorized"],
-            "claim_status": execution["claim_status"],
-            "model_readiness_status": execution["model_readiness_status"],
-            "job_id": job.get("id"),
-            "target_type": "video",
-            "target_id": str(evidence.get("id")),
-            "source": {
-                "url": evidence.get("content_url"),
-                "title": evidence.get("title"),
-                "platform": evidence.get("platform"),
-                "creator_handle": evidence.get("creator_handle"),
-                "creator_name": evidence.get("creator_name"),
-                "kol_pool_id": evidence.get("kol_pool_id"),
-            },
-            "performance_metrics": _video_performance_context(evidence),
-            "layer1_visual_content": final.get("layer1_visual_content") or {},
-            "layer2_viewer_emotion": final.get("layer2_viewer_emotion") or {},
-            "layer3_three_values": final.get("layer3_three_values") or {},
-            "layer4_attribution": final.get("layer4_attribution") or {},
-            "layer5_recommendations": final.get("layer5_recommendations") or {},
-            "layer6_flags_and_scores": final.get("layer6_flags_and_scores") or {},
-            "cost": {
-                "recorded_cost_usd": cost,
-                "cost_basis": cost_basis,
-                "preflight_estimated_cost_usd": preflight_cost,
-                "segments": segments
-                or [
-                    {
-                        "stage": "single_pass",
-                        "provider": "gemini",
-                        "model": model_name,
-                        "cost_usd": cost,
-                    }
-                ],
-                "usage_metadata": raw.get("usage_metadata") if isinstance(raw.get("usage_metadata"), dict) else {},
-                "latency_ms": latency_ms,
-                # 剖面用阶段耗时(分析器子进程 + worker 合并;零 LLM 成本,只追加不改六层)
-                "stage_timings_ms": merged_stage_timings(raw),
-            },
-            "raw_gemini_video": raw,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-        }
-        if isinstance(raw.get("final_v1_keyframe_qa"), dict):
-            shaped["keyframe_qa"] = raw.get("final_v1_keyframe_qa") or {}
-            shaped["qa_pass"] = raw.get("qa_pass")
-            shaped["frame_extraction"] = raw.get("frame_extraction") if isinstance(raw.get("frame_extraction"), dict) else {}
-            shaped["final_v1_pass"] = raw.get("final_v1_pass") if isinstance(raw.get("final_v1_pass"), dict) else {}
-        return shaped
-    if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS:
-        v2 = raw.get("video_analysis_v2") if isinstance(raw.get("video_analysis_v2"), dict) else {}
-        layer3 = dict(v2.get("layer3_integrated_judgment") or {})
-        layer3["performance_metrics"] = _video_performance_context(evidence)
-        model_name = str(raw.get("model") or raw.get("method") or "gemini_video")
-        segments = raw.get("cost_segments") if isinstance(raw.get("cost_segments"), list) else None
-        return {
-            "schema_version": "video_analysis_v2",
-            "mock": False,
-            "analysis_method": derive_method,
-            "llm_execution": execution,
-            "evaluation_only": execution["evaluation_only"],
-            "production_authorized": execution["production_authorized"],
-            "claim_status": execution["claim_status"],
-            "job_id": job.get("id"),
-            "target_type": "video",
-            "target_id": str(evidence.get("id")),
-            "source": {
-                "url": evidence.get("content_url"),
-                "title": evidence.get("title"),
-                "platform": evidence.get("platform"),
-                "creator_handle": evidence.get("creator_handle"),
-                "creator_name": evidence.get("creator_name"),
-                "project_id": evidence.get("project_id"),
-                "project_name": evidence.get("project_name"),
-                "product_name": evidence.get("product_name"),
-                "kol_pool_id": evidence.get("kol_pool_id"),
-            },
-            "layer1_visual_content": v2.get("layer1_visual_content") or {},
-            "layer2_video_scores": v2.get("layer2_video_scores") or {},
-            "layer3_integrated_judgment": layer3,
-            "cost": {
-                "recorded_cost_usd": cost,
-                "cost_basis": cost_basis,
-                "preflight_estimated_cost_usd": preflight_cost,
-                "segments": segments
-                or [
-                    {
-                        "stage": "single_pass",
-                        "provider": "gemini",
-                        "model": model_name,
-                        "cost_usd": cost,
-                    }
-                ],
-                "usage_metadata": raw.get("usage_metadata") if isinstance(raw.get("usage_metadata"), dict) else {},
-                "latency_ms": latency_ms,
-            },
-            "raw_gemini_video": raw,
-            "frame_extraction": raw.get("frame_extraction") if isinstance(raw.get("frame_extraction"), dict) else {},
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    quality_scores = raw.get("quality_scores") if isinstance(raw.get("quality_scores"), dict) else {}
-    return {
-        "mock": False,
-        "analysis_method": "gemini",
-        "llm_execution": execution,
-        "evaluation_only": execution["evaluation_only"],
-        "production_authorized": execution["production_authorized"],
-        "claim_status": execution["claim_status"],
-        "job_id": job.get("id"),
-        "target_type": "video",
-        "target_id": str(evidence.get("id")),
-        "source": {
-            "url": evidence.get("content_url"),
-            "title": evidence.get("title"),
-            "platform": evidence.get("platform"),
-            "creator_handle": evidence.get("creator_handle"),
-            "project_id": evidence.get("project_id"),
-            "kol_pool_id": evidence.get("kol_pool_id"),
-        },
-        "platform_algorithm_rules": {
-            "content_genre": raw.get("content_genre"),
-            "target_audience": raw.get("target_audience"),
-            "hook_analysis": raw.get("hook_analysis"),
-            "marketing_potential": raw.get("marketing_potential"),
-            "brand_integration_depth": raw.get("brand_integration_depth"),
-            "community_value": raw.get("community_value"),
-            "quality_scores": quality_scores,
-        },
-        "weak_performance_reasons": {
-            "quality_summary": raw.get("quality_summary"),
-            "vertical_quality_notes": raw.get("vertical_quality_notes"),
-            "marketing_notes": raw.get("marketing_notes"),
-            "tech_floor": raw.get("tech_floor"),
-            "low_scores": _low_scores(quality_scores),
-        },
-        "improvement_suggestions": raw.get("improvements") if isinstance(raw.get("improvements"), list) else [],
-        "raw_gemini_video": raw,
-        "cost": {
-            "recorded_cost_usd": cost,
-            "cost_basis": cost_basis,
-            "preflight_estimated_cost_usd": preflight_cost,
-            "usage_metadata": raw.get("usage_metadata") if isinstance(raw.get("usage_metadata"), dict) else {},
-            "latency_ms": latency_ms,
-        },
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
+    return _shape_gemini_result_impl(
+        job=job,
+        evidence=evidence,
+        raw=raw,
+        cost=cost,
+        cost_basis=cost_basis,
+        preflight_cost=preflight_cost,
+        latency_ms=latency_ms,
+        derive_method=derive_method,
+        worker_execution_class=WORKER_LLM_EXECUTION_CLASS,
+        worker_gemini_model=WORKER_GEMINI_MODEL,
+        final_derive_methods=GEMINI_VIDEO_FINAL_DERIVE_METHODS,
+        v2_derive_methods=GEMINI_VIDEO_V2_DERIVE_METHODS,
+        final_prompt_contract=FINAL_V1_PROMPT_CONTRACT,
+        execution_metadata=_llm_execution_metadata(raw),
+    )
 
 
 def _record_gemini_cost(
@@ -387,6 +186,8 @@ def _record_gemini_cost(
                 "authorization_scope": execution["authorization_scope"],
                 "evaluation_only": execution["evaluation_only"],
                 "production_authorized": execution["production_authorized"],
+                "execution_authorization_at_run": execution["execution_authorization_at_run"],
+                "signed_readiness_at_run": execution["signed_readiness_at_run"],
                 "claim_status": execution["claim_status"],
                 "model_readiness_status": execution["model_readiness_status"],
                 "base_derive_method": execution["base_derive_method"],
@@ -394,6 +195,84 @@ def _record_gemini_cost(
             },
             extra_scopes=["monthly_total", "single_call", "provider:gemini"],
         )
+
+
+def _quality_incomplete_reason(raw: dict[str, Any]) -> dict[str, Any]:
+    issues = raw.get("quality_issues") if isinstance(raw.get("quality_issues"), list) else []
+    authorization_missing = "authorization_snapshot_missing" in issues
+    return {
+        "reason": (
+            "authorization_snapshot_missing"
+            if authorization_missing
+            else "final_v1_quality_incomplete"
+        ),
+        "stage": (
+            "video_analysis_final_v1_authorization_gate"
+            if authorization_missing
+            else "video_analysis_final_v1_quality_gate"
+        ),
+        "quality_status": "quality_incomplete",
+        "quality_issues": [str(item)[:160] for item in issues[:32]],
+    }
+
+
+def _mark_authorization_snapshot_missing(raw: dict[str, Any]) -> None:
+    """Keep paid output for triage without admitting it to ready consumers."""
+
+    execution = (
+        raw.get("llm_execution")
+        if isinstance(raw.get("llm_execution"), dict)
+        else {}
+    )
+    if raw.get("analyzed") is not True or execution.get(
+        "authorization_snapshot_match"
+    ) is not False:
+        return
+    issues = (
+        list(raw.get("quality_issues"))
+        if isinstance(raw.get("quality_issues"), list)
+        else []
+    )
+    issues.append("authorization_snapshot_missing")
+    raw["quality_status"] = "quality_incomplete"
+    raw["quality_issues"] = list(
+        dict.fromkeys(str(item) for item in issues if str(item).strip())
+    )
+
+
+def _finish_cache_job(
+    cur: Any,
+    *,
+    job_id: int,
+    cache_status: str,
+    raw: dict[str, Any],
+) -> None:
+    if cache_status == "quality_incomplete":
+        cur.execute(
+            """
+            UPDATE apify_jobs
+            SET status='triage',
+                last_error=%s::jsonb,
+                last_error_category='data_quality',
+                next_retry_at=NULL,
+                updated_at=NOW()
+            WHERE id=%s
+            """,
+            (_json(_quality_incomplete_reason(raw)), int(job_id)),
+        )
+        return
+    cur.execute(
+        """
+        UPDATE apify_jobs
+        SET status='done',
+            last_error=NULL,
+            last_error_category=NULL,
+            next_retry_at=NULL,
+            updated_at=NOW()
+        WHERE id=%s
+        """,
+        (int(job_id),),
+    )
 
 
 def _write_gemini_cache(
@@ -409,8 +288,9 @@ def _write_gemini_cache(
     latency_ms: int,
     derive_method: str,
 ) -> None:
+    cache_status = "ready"
     if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
-        ensure_final_v1_result_cacheable(raw)
+        cache_status = ensure_final_v1_result_cacheable(raw) or "ready"
     target_type, target_id = _target(payload)
     triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
     shaped = _shape_gemini_result(
@@ -429,11 +309,16 @@ def _write_gemini_cache(
         if execution["evaluation_only"]
         else derive_method
     )
+    cache_target_type = (
+        quality_triage_target_type(target_type)
+        if cache_status == "quality_incomplete"
+        else target_type
+    )
     with conn.transaction():
         with conn.cursor() as cur:
             cache_id = upsert_video_analysis_cache(
                 cur,
-                target_type=target_type,
+                target_type=cache_target_type,
                 target_id=target_id,
                 model=str(raw.get("model") or raw.get("method") or "gemini_video"),
                 derive_method=cache_derive_method,
@@ -441,19 +326,32 @@ def _write_gemini_cache(
                 cost=cost,
                 triggered_by_user_id=_int_or_none(triggered_by),
                 prompt_version=_cache_prompt_version(derive_method),
+                status=cache_status,
             )
-            cur.execute(
-                """
-                UPDATE apify_jobs
-                SET status='done',
-                    last_error=NULL,
-                    last_error_category=NULL,
-                    next_retry_at=NULL,
-                    updated_at=NOW()
-                WHERE id=%s
-                """,
-                (job["id"],),
+            _finish_cache_job(
+                cur,
+                job_id=int(job["id"]),
+                cache_status=cache_status,
+                raw=raw,
             )
+    if cache_status == "quality_incomplete":
+        reason = _quality_incomplete_reason(raw)
+        _sync_search_session_job(
+            conn,
+            int(job["id"]),
+            raw_status="triage",
+            reason=str(reason["reason"]),
+            analysis_summary={
+                "status": "quality_incomplete",
+                "cache_id": cache_id,
+                "derive_method": cache_derive_method,
+                "target_type": target_type,
+                "cache_target_type": cache_target_type,
+                "target_id": target_id,
+                "quality_issues": reason["quality_issues"],
+            },
+        )
+        return
     if execution["evaluation_only"]:
         _sync_search_session_job(
             conn,
@@ -644,7 +542,10 @@ def _process_gemini_video(
             if not resolved.get("ok"):
                 resolve_reason = str(resolved.get("reason") or "")
                 # 仅提取器明确证明图文/轮播才终态；剥链/无格式继续重试且不落图章。
-                if resolved.get("no_video_confirmed") is True:
+                if (
+                    resolved.get("confirmed_non_video") is True
+                    or resolved.get("no_video_confirmed") is True
+                ):
                     _persist_image_post_verdict(conn, evidence)
                     _block_job(conn, int(job["id"]), "image_post_no_video", resolved)
                     return
@@ -704,10 +605,16 @@ def _process_gemini_video(
             ):
                 return
             raw["media_resolution"] = {
+                "contract": resolved.get("media_resolution_contract"),
+                "state": resolved.get("media_resolution_state"),
                 "platform": platform,
                 "source_url_host": _url_host(str(evidence.get("content_url") or "")),
                 "direct_video_url_host": resolved.get("direct_video_url_host"),
                 "status": resolved.get("status"),
+                "scrape_success": bool(resolved.get("scrape_success")),
+                "media_resolved": bool(resolved.get("media_resolved")),
+                "downloadable": bool(resolved.get("downloadable")),
+                "confirmed_non_video": bool(resolved.get("confirmed_non_video")),
                 "cache_hit": bool(resolved.get("cache_hit")),
                 "cache_source": resolved.get("cache_source"),
                 "cache_asset_id": resolved.get("cache_asset_id"),
@@ -752,27 +659,26 @@ def _process_gemini_video(
         )
         clock.add("analyzer_subprocess", analyzer_started)
     latency_ms = int((time.monotonic() - started) * 1000)
-    reported_model = str(raw.get("model") or "")
-    if raw.get("analyzed") and reported_model not in model_chain:
-        raise RuntimeError(
-            "model_binding_mismatch:"
-            f"expected=google/{'|'.join(model_chain)}:reported={reported_model or 'missing'}"
-        )
+    selected_model = str(raw.get("selected_model") or raw.get("model") or "").strip()
+    provider_reported_model = str(raw.get("provider_reported_model") or "").strip()
+    raw["selected_model"] = selected_model or None
+    raw["provider_reported_model"] = provider_reported_model or None
     # YouTube children gate subtitles / direct attempts / download / File API
     # themselves and report ``scope_revoked``; the parent re-checks before writes.
     if not _final_v1_scope_checkpoint(
         conn, job, payload, derive_method, provider_calls_performed=True, raw=raw
     ):
         return
-    raw["llm_execution"] = {
-        **authorization,
-        "binding": f"google/{reported_model or WORKER_GEMINI_MODEL}",
-        "model": reported_model or WORKER_GEMINI_MODEL,
-        "model_chain": model_chain,
-        "fallback_used": bool(reported_model and reported_model != WORKER_GEMINI_MODEL),
-        "reported_model": reported_model or None,
-        "model_match": bool(reported_model in model_chain),
-    }
+    raw["llm_execution"] = bind_execution_authorization_to_selected_model(
+        authorization,
+        selected_model=selected_model,
+        provider_reported_model=provider_reported_model,
+        model_chain=model_chain,
+        worker_execution_class=WORKER_LLM_EXECUTION_CLASS,
+        worker_gemini_model=WORKER_GEMINI_MODEL,
+    )
+    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
+        _mark_authorization_snapshot_missing(raw)
     logger.info(
         "apify_jobs gemini video returned | job_id=%s analyzed=%s method=%s latency_ms=%s",
         job.get("id"),
@@ -781,9 +687,10 @@ def _process_gemini_video(
         latency_ms,
     )
     validation_error: InvalidFinalV1ResultError | None = None
+    cache_status = "ready"
     if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS and raw.get("analyzed"):
         try:
-            ensure_final_v1_result_cacheable(raw)
+            cache_status = ensure_final_v1_result_cacheable(raw) or "ready"
         except InvalidFinalV1ResultError as exc:
             validation_error = exc
     cost, cost_basis, tokens_in, tokens_out = _authoritative_gemini_cost(
@@ -835,12 +742,17 @@ def _process_gemini_video(
         if execution["evaluation_only"]
         else derive_method
     )
+    cache_target_type = (
+        quality_triage_target_type(target_type)
+        if cache_status == "quality_incomplete"
+        else target_type
+    )
     persist_started = time.monotonic()
     with conn.transaction():
         with conn.cursor() as cur:
             cache_id = upsert_video_analysis_cache(
                 cur,
-                target_type=target_type,
+                target_type=cache_target_type,
                 target_id=target_id,
                 model=str(raw.get("model") or raw.get("method") or "gemini_video"),
                 derive_method=cache_derive_method,
@@ -848,20 +760,41 @@ def _process_gemini_video(
                 cost=cost,
                 triggered_by_user_id=triggered_by_user_id,
                 prompt_version=_cache_prompt_version(derive_method),
+                status=cache_status,
             )
-            cur.execute(
-                """
-                UPDATE apify_jobs
-                SET status='done',
-                    last_error=NULL,
-                    last_error_category=NULL,
-                    next_retry_at=NULL,
-                    updated_at=NOW()
-                WHERE id=%s
-                """,
-                (job["id"],),
+            _finish_cache_job(
+                cur,
+                job_id=int(job["id"]),
+                cache_status=cache_status,
+                raw=raw,
             )
     clock.add("persist", persist_started)
+    if cache_status == "quality_incomplete":
+        reason = _quality_incomplete_reason(raw)
+        _sync_search_session_job(
+            conn,
+            int(job["id"]),
+            raw_status="triage",
+            reason=str(reason["reason"]),
+            analysis_summary={
+                "status": "quality_incomplete",
+                "cache_id": cache_id,
+                "derive_method": cache_derive_method,
+                "target_type": target_type,
+                "cache_target_type": cache_target_type,
+                "target_id": target_id,
+                "quality_issues": reason["quality_issues"],
+            },
+        )
+        record_final_v1_outcome_diagnostics(
+            conn,
+            job_id=int(job["id"]),
+            raw=raw,
+            clock=clock,
+            platform=platform,
+            error=str(reason["reason"]),
+        )
+        return
     followups_started = time.monotonic()
     if execution["evaluation_only"]:
         # Local evidence is physically/logically isolated from production

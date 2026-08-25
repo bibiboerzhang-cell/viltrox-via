@@ -198,13 +198,78 @@ def test_google_adapter_accepts_fallback_chain_member_and_ledgers_actual_model(m
     settled = [kwargs for kwargs in ledgers if kwargs["status"] == "success"]
     assert settled and settled[0]["model"] == LITE
     assert settled[0]["metadata"]["task_binding_role"] == "fallback"
+    assert settled[0]["fallback_used"] is True
 
 
 def test_google_adapter_primary_is_labelled_primary(monkeypatch) -> None:
-    llm_production, reservations, _ledgers = _install_boundary(monkeypatch, model=PRIMARY)
+    llm_production, reservations, ledgers = _install_boundary(monkeypatch, model=PRIMARY)
     _generate(llm_production, client=_Client(PRIMARY), model=PRIMARY)
     reserve = next(kwargs for name, kwargs in reservations.events if name == "reserve")
     assert reserve["metadata"]["task_binding_role"] == "primary"
+    assert ledgers[-1]["fallback_used"] is False
+
+
+def test_google_adapter_fallback_failures_keep_binding_role_semantics(monkeypatch) -> None:
+    llm_production, _reservations, ledgers = _install_boundary(monkeypatch, model=LITE)
+
+    class FailingClient(_Client):
+        def generate_content(self, **kwargs):
+            self.calls.append(kwargs)
+            raise TimeoutError("fallback provider outcome uncertain")
+
+    with pytest.raises(TimeoutError):
+        _generate(llm_production, client=FailingClient(LITE), model=LITE)
+    assert ledgers[-1]["status"] == "provider_exception"
+    assert ledgers[-1]["fallback_used"] is True
+    assert ledgers[-1]["metadata"]["task_binding_role"] == "fallback"
+
+
+def test_google_adapter_fallback_block_is_not_inferred_from_status(monkeypatch) -> None:
+    llm_production, reservations, ledgers = _install_boundary(monkeypatch, model=LITE)
+    monkeypatch.setattr(
+        llm_production.llm_gateway,
+        "budget_preflight",
+        lambda *_args, **_kwargs: {
+            "provider_gate_reason": "readiness_not_production_ready",
+            "providers": [
+                {
+                    "binding": f"google/{LITE}",
+                    "provider_calls_allowed": False,
+                    "binding_gate_reason": "readiness_not_production_ready",
+                }
+            ],
+        },
+    )
+    with pytest.raises(llm_production.ProductionLlmUnavailable):
+        _generate(llm_production, client=_Client(LITE), model=LITE)
+    assert reservations.events == []
+    assert ledgers[-1]["status"] == "provider_blocked"
+    assert ledgers[-1]["fallback_used"] is True
+
+
+@pytest.mark.parametrize(
+    ("metadata", "model", "expected"),
+    [
+        ({"task_binding_role": "primary", "task_binding_primary": f"google/{PRIMARY}"}, PRIMARY, False),
+        ({"task_binding_role": "fallback", "task_binding_primary": f"google/{PRIMARY}"}, LITE, True),
+        ({"task_binding_role": "fallback", "task_binding_primary": f"google/{PRIMARY}"}, PRIMARY, False),
+        ({}, LITE, False),
+    ],
+)
+def test_google_attempt_fallback_flag_requires_actual_nonprimary_binding(
+    metadata: dict[str, str], model: str, expected: bool,
+) -> None:
+    from app.platform.llm_production_google_helpers import append_google_attempt
+
+    attempts: list[dict[str, Any]] = []
+    append_google_attempt(
+        attempts,
+        model=model,
+        metadata={**metadata, "fallback_semantics": "task_binding_role_v1"},
+        state="provider_exception",
+        estimated_cost_usd=0.01,
+    )
+    assert attempts[0]["fallback_used"] is expected
 
 
 def test_google_adapter_still_rejects_non_chain_member_before_any_reservation(monkeypatch) -> None:
@@ -411,7 +476,14 @@ def _run_worker_with_reported_model(monkeypatch, reported: str, payload_chain: l
         gemini,
         "_run_gemini_analyzer_with_timeout",
         lambda payload, **_kwargs: seen.update({"analyzer_payload": payload})
-        or {"analyzed": True, "model": reported, "method": f"gemini_direct_{reported}", "video_analysis_final_v1": {}},
+        or {
+            "analyzed": True,
+            "model": reported,
+            "selected_model": reported,
+            "provider_reported_model": reported,
+            "method": f"gemini_direct_{reported}",
+            "video_analysis_final_v1": {},
+        },
     )
 
     def _reject(raw: dict[str, Any]) -> None:
@@ -420,7 +492,50 @@ def _run_worker_with_reported_model(monkeypatch, reported: str, payload_chain: l
     monkeypatch.setattr(gemini, "ensure_final_v1_result_cacheable", _reject)
     monkeypatch.setattr(gemini, "_record_gemini_cost", lambda **kwargs: seen.update({"ledger_raw": kwargs["raw"]}) or {})
     monkeypatch.setattr(gemini, "record_final_v1_outcome_diagnostics", lambda *_args, **kwargs: seen.update({"diag_raw": kwargs["raw"]}))
-    payload: dict[str, Any] = {"target_type": "video", "target_id": "701", "derive_method": "video_analysis_final_v1"}
+    effective_chain = list(payload_chain or [PRIMARY, LITE])
+
+    def _authorization(model: str) -> dict[str, Any]:
+        return {
+            "binding": f"google/{model}",
+            "model": model,
+            "execution_class": "production",
+            "authorization_scope": "production",
+            "evaluation_only": False,
+            "production_authorized": True,
+            "model_readiness_status": "production_ready",
+            "execution_authorization_at_run": {
+                "scope": "execution_time_snapshot",
+                "authorized": True,
+                "production_authorized": True,
+                "evaluation_only": False,
+                "status": "operationally_authorized",
+                "source": f"{model}-execution-proof",
+                "temporary": False,
+            },
+            "signed_readiness_at_run": {
+                "scope": "execution_time_snapshot",
+                "production_ready": True,
+                "status": "production_ready",
+                "claim_status": "descriptive_only",
+                "evidence_source": f"{model}-signed-proof",
+            },
+        }
+
+    authorizations = {model: _authorization(model) for model in effective_chain}
+    payload: dict[str, Any] = {
+        "target_type": "video",
+        "target_id": "701",
+        "derive_method": "video_analysis_final_v1",
+        "_llm_execution": {
+            **authorizations[effective_chain[0]],
+            "requested_model_chain": list(effective_chain),
+            "ready_model_chain": list(effective_chain),
+            "execution_authorizations_by_model": authorizations,
+            "execution_authorizations_by_binding": {
+                f"google/{model}": auth for model, auth in authorizations.items()
+            },
+        },
+    }
     if payload_chain is not None:
         payload["gemini_final_v1_models"] = payload_chain
     try:
@@ -440,9 +555,13 @@ def test_worker_post_hoc_gate_accepts_fallback_member_and_records_fallback_used(
     assert execution["binding"] == f"google/{LITE}"
     assert execution["model"] == LITE
     assert execution["reported_model"] == LITE
+    assert execution["selected_model"] == LITE
+    assert execution["provider_reported_model"] == LITE
     assert execution["model_chain"] == [PRIMARY, LITE]
     assert execution["fallback_used"] is True
     assert execution["model_match"] is True
+    assert execution["authorization_snapshot_match"] is True
+    assert execution["signed_readiness_at_run"]["evidence_source"] == f"{LITE}-signed-proof"
     assert seen["diag_raw"] is seen["ledger_raw"]
 
 
@@ -453,19 +572,22 @@ def test_worker_post_hoc_gate_primary_is_not_fallback(monkeypatch) -> None:
     assert execution["fallback_used"] is False and execution["model_match"] is True
 
 
-def test_worker_post_hoc_gate_still_rejects_non_chain_model(monkeypatch) -> None:
+def test_worker_post_hoc_gate_quarantines_non_chain_model(monkeypatch) -> None:
     seen = _run_worker_with_reported_model(monkeypatch, "gemini-2.5-flash")
-    assert "ledger_raw" not in seen
-    assert seen["runtime_error"].startswith("model_binding_mismatch:")
-    assert f"expected=google/{PRIMARY}|{LITE}" in seen["runtime_error"]
-    assert "reported=gemini-2.5-flash" in seen["runtime_error"]
+    raw = seen["ledger_raw"]
+    assert raw["llm_execution"]["authorization_snapshot_match"] is False
+    assert raw["llm_execution"]["authorization_issue"] == "authorization_snapshot_missing"
+    assert raw["quality_status"] == "quality_incomplete"
+    assert "authorization_snapshot_missing" in raw["quality_issues"]
 
 
 def test_worker_post_hoc_gate_respects_enqueue_narrowed_chain(monkeypatch) -> None:
     # 入队侧只放行 [主力] 时,worker 报 lite 也算链外(payload 收窄对 post-hoc 闸同样生效)。
     seen = _run_worker_with_reported_model(monkeypatch, LITE, payload_chain=[PRIMARY])
     assert seen["analyzer_payload"]["gemini_final_v1_models"] == [PRIMARY]
-    assert seen["runtime_error"].startswith("model_binding_mismatch:")
+    raw = seen["ledger_raw"]
+    assert raw["llm_execution"]["authorization_snapshot_match"] is False
+    assert raw["quality_status"] == "quality_incomplete"
 
 
 # ------------------------------------------------------------- readiness

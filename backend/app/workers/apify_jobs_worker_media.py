@@ -24,6 +24,10 @@ from app.core.logging import get_logger
 from app.domains.media.cache import cache_local_video_file
 from app.domains.media.cache_core import MAX_VIDEO_BYTES, VIDEO_CACHE_DIR
 from app.domains.kol.url_deep_crawl_helpers import _video_id as _content_url_video_id
+from app.services.media.resolution_state import (
+    needs_secondary_video_probe,
+    stamp_video_media_resolution,
+)
 from app.workers.apify_jobs_worker_helpers import (
     _json,
     _parse_last_json_stdout,
@@ -31,6 +35,7 @@ from app.workers.apify_jobs_worker_helpers import (
     _redact_sensitive_text,
     _url_host,
 )
+from app.workers.apify_jobs_worker_media_resolver import resolve_video_media
 
 
 logger = get_logger(__name__)
@@ -287,26 +292,32 @@ def _materialize_cached_video_media(
             destination.unlink(missing_ok=True)
             failure_reasons.append(str(validation.get("reason") or "media_cache_validation_failed"))
             continue
-        return {
-            "ok": True,
-            "status": "ready",
-            "reason": "media_cache_hit",
-            "cache_hit": True,
-            "cache_source": source,
-            "cache_asset_id": int(asset.get("id") or 0) or None,
-            "cache_storage_backend": str(asset.get("storage_backend") or ""),
-            "cache_candidate_count": len(candidates),
-            "platform": platform,
-            "source_url_host": _url_host(content_url),
-            "direct_video_url": "",
-            "direct_video_url_host": "",
-            "path": str(destination),
-            "bytes": int(validation.get("bytes") or 0),
-            "content_type": str(validation.get("content_type") or "video/mp4"),
-            "checksum": str(validation.get("checksum") or ""),
-            "scraped_ok": False,
-            "provider_calls_performed": False,
-        }
+        return stamp_video_media_resolution(
+            {
+                "ok": True,
+                "status": "ready",
+                "reason": "media_cache_hit",
+                "cache_hit": True,
+                "cache_source": source,
+                "cache_asset_id": int(asset.get("id") or 0) or None,
+                "cache_storage_backend": str(asset.get("storage_backend") or ""),
+                "cache_candidate_count": len(candidates),
+                "platform": platform,
+                "source_url_host": _url_host(content_url),
+                "direct_video_url": "",
+                "direct_video_url_host": "",
+                "path": str(destination),
+                "bytes": int(validation.get("bytes") or 0),
+                "content_type": str(validation.get("content_type") or "video/mp4"),
+                "checksum": str(validation.get("checksum") or ""),
+                "scraped_ok": False,
+                "provider_calls_performed": False,
+            },
+            scrape_success=False,
+            media_resolved=True,
+            downloadable=True,
+            confirmed_non_video=False,
+        )
     return {
         "ok": False,
         "status": "miss",
@@ -335,12 +346,12 @@ def _resolve_cached_or_provider_video(
     resolved["cache_candidate_count"] = int(cached.get("cache_candidate_count") or 0)
     if cached.get("cache_failure_reasons"):
         resolved["cache_failure_reasons"] = list(cached["cache_failure_reasons"])
-    # 2026-08-24 yt-dlp 兜底:只在「Apify 抓成功但没视频 URL」这一失败因上二轮复核——
-    # 分清图文帖(终态)与真视频被反爬剥链(接管下载);其余失败保留原判可重试。
-    # (抓取本身失败/空的 lane 恒带 error 文案,永远走不到这里;要扩面须另立决策。)
+    resolved = stamp_video_media_resolution(resolved)
+    # yt-dlp 兜底改按结构化状态接线,不再依赖可漂移的 error suffix。
+    # 只有「帖子元数据抓成功 + 未得到视频输入 + 尚未确认纯图」才复核;
+    # 抓取本身失败保持可重试,已确认图文则终态收口。
     if not resolved.get("ok") and str(resolved.get("platform") or "") in ("instagram", "tiktok"):
-        reason = str(resolved.get("reason") or "")
-        if reason.endswith("scraped_no_downloadable_url"):
+        if needs_secondary_video_probe(resolved):
             from app.workers.apify_jobs_worker_ytdlp_fallback import ytdlp_fallback_resolve
 
             resolved = ytdlp_fallback_resolve(evidence, output_dir, apify_resolved=resolved)
@@ -706,64 +717,11 @@ def _run_gemini_analyzer_with_timeout(payload: dict[str, Any], *, job_id: Any, t
 
 
 def _resolve_video_media(evidence: dict[str, Any]) -> dict[str, Any]:
-    content_url = str(evidence.get("content_url") or "").strip()
-    platform = _platform_from_content_url(content_url)
-    output = {
-        "ok": False,
-        "platform": platform,
-        "source_url_host": _url_host(content_url),
-        "direct_video_url": "",
-        "direct_video_url_host": "",
-        "reason": "",
-        "scraped_ok": False,
-    }
-    if platform == "unsupported":
-        output["reason"] = "unsupported_platform"
-        output["status"] = "blocked"
-        return output
-    if platform == "youtube":
-        output["ok"] = True
-        output["reason"] = "youtube_direct_url_path"
-        output["status"] = "ready"
-        return output
-    if not os.environ.get("APIFY_TOKEN", "").strip():
-        output["reason"] = "apify_not_configured"
-        output["status"] = "blocked"
-        return output
-    scraped = _scrape_with_apify_timeout(content_url, platform)
-    if scraped.get("_timeout"):
-        output["reason"] = "media_resolve_timeout"
-        output["status"] = "failed"
-        return output
-    if scraped.get("_child_exit"):
-        output["reason"] = f"media_resolve_child_exit: {scraped.get('error') or platform}"
-        output["status"] = "failed"
-        return output
-    if scraped.get("_parse_error"):
-        output["reason"] = str(scraped.get("error") or "media_resolve_parse_failed")
-        output["status"] = "failed"
-        return output
-    output["scraped_ok"] = bool(scraped.get("scraped_ok"))
-    direct_video_url = str(scraped.get("video_url") or "").strip()
-    if not direct_video_url:
-        # 真因诚实化:旧码空 error 时 fallback 字面量 "media_resolve_failed",真因(反爬剥离可下载
-        # URL / 代理被挡)被吞成双重包装。分清「抓成功但无 downloadAddr」与「抓本身空/被挡」。
-        detail = str(scraped.get("error") or "").strip()
-        if not detail:
-            detail = "scraped_no_downloadable_url" if scraped.get("scraped_ok") else "scrape_empty_or_blocked"
-        output["reason"] = f"media_resolve_failed:{platform}:{detail}"[:240]
-        output["status"] = "failed"
-        return output
-    output.update(
-        {
-            "ok": True,
-            "direct_video_url": direct_video_url,
-            "direct_video_url_host": _url_host(direct_video_url),
-            "reason": "media_resolved",
-            "status": "ready",
-        }
+    return resolve_video_media(
+        evidence,
+        apify_configured=bool(os.environ.get("APIFY_TOKEN", "").strip()),
+        scrape_with_timeout=_scrape_with_apify_timeout,
     )
-    return output
 
 
 # 原文件留下的超时常量:放模块底部 import(避免循环导入;均在函数体内运行期解析)。

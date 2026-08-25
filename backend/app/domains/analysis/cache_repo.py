@@ -14,6 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.db.connection import close_standalone_conn, open_standalone_conn
+from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse
 from app.platform.llm_local_evaluation import (
     LOCAL_EVALUATION_CACHE_DERIVE_METHOD,
     LOCAL_EVALUATION_DERIVE_METHOD,
@@ -24,11 +25,17 @@ from app.platform.llm_runtime_errors import normalise_job_error
 
 AnalysisCacheEntry = dict[str, Any]
 ProjectVideoAnalysisCache = dict[str, Any]
-
 _ACTIVE_VIDEO_JOB_STATUSES = {"queued", "running", "retrying", "processing"}
 _FAILED_VIDEO_JOB_STATUSES = {"failed", "blocked", "triage", "cancelled", "void", "timeout"}
 _FINAL_V1_METHOD = "video_analysis_final_v1"
 _FINAL_V1_QA_METHOD = "video_analysis_final_v1_keyframe_qa"
+# Semantically incomplete model output must remain inspectable without entering
+# the legacy ``target_type='video'`` namespace.  That namespace separation is a
+# rollback invariant: an older application release treats every matching cache
+# row as ready and does not understand the new status value.
+VIDEO_QUALITY_TRIAGE_TARGET_TYPE = "video_quality_triage"
+_LEGACY_REASON_LIMIT = 12
+_LEGACY_REASON_LENGTH = 120
 
 
 _MODEL_FAMILY_PATTERNS = (
@@ -54,19 +61,63 @@ def model_family(model: Any) -> str | None:
     return head or None
 
 
+def quality_triage_target_type(target_type: Any) -> str:
+    """Return the isolated cache namespace for incomplete video analysis."""
+
+    normalized = str(target_type or "").strip().lower()
+    if normalized != "video":
+        raise ValueError("quality triage cache is only supported for video targets")
+    return VIDEO_QUALITY_TRIAGE_TARGET_TYPE
+
+
+def _cache_target_types(target_type: Any) -> tuple[str, ...]:
+    normalized = str(target_type or "").strip()
+    if normalized.lower() == "video":
+        return (normalized, VIDEO_QUALITY_TRIAGE_TARGET_TYPE)
+    return (normalized,)
+
+
+def analysis_cache_read_projection(
+    entry: AnalysisCacheEntry | None, *, target_type: Any = None,
+    target_id: Any = None, derive_method: Any = None,
+) -> dict[str, Any]:
+    """Project cache truth without mutating the historical paid result."""
+    if not entry:
+        return {"state": "not_requested", "terminal": False}
+    status = str(entry.get("status") or "").strip().lower() or "unknown"
+    status = status if status in {"ready", "stale", "quality_incomplete"} else "unknown"
+    resolved_type = str(target_type or entry.get("target_type") or "").strip()
+    resolved_id = str(target_id or entry.get("target_id") or "").strip()
+    resolved_method = str(derive_method or entry.get("derive_method") or "").strip()
+    if status != "ready" or resolved_method != _FINAL_V1_METHOD:
+        return {"state": status, "terminal": status in {"ready", "stale", "quality_incomplete"}}
+    reuse = canonical_final_v1_cache_reuse(
+        entry, target_type=resolved_type, target_id=resolved_id, derive_method=resolved_method,
+    )
+    if reuse.get("reusable"):
+        return {"state": "ready", "terminal": True}
+    reasons = [str(reason)[:_LEGACY_REASON_LENGTH] for reason in
+               (list(reuse.get("reasons") or []) or ["canonical_final_v1_proof_missing"])[:_LEGACY_REASON_LIMIT]]
+    return {
+        "state": "legacy_unverified", "terminal": True,
+        "revalidation_required": True, "claim_status": "descriptive_only",
+        "cache_reuse_status": "legacy_unverified", "cache_id": reuse.get("cache_id"),
+        "reasons": reasons,
+    }
+
 # 视频 worker 写路径(psycopg 直连,%s 占位);两条 worker 路径共用,防 SQL 漂移。
 VIDEO_ANALYSIS_CACHE_UPSERT_SQL = """
     INSERT INTO vkpi_analysis_cache (
       target_type, target_id, model, derive_method, result, cost,
-      status, triggered_by_user_id, prompt_version, model_family, created_at, updated_at
+      triggered_by_user_id, prompt_version, model_family, status, created_at, updated_at
     )
-    VALUES (%s, %s, %s, %s, %s::jsonb, %s, 'ready', %s, %s, %s, NOW(), NOW())
+    VALUES (%s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, NOW(), NOW())
     ON CONFLICT (target_type, target_id, derive_method)
     DO UPDATE SET
       model = EXCLUDED.model,
       result = EXCLUDED.result,
       cost = EXCLUDED.cost,
-      status = 'ready',
+      status = EXCLUDED.status,
       triggered_by_user_id = EXCLUDED.triggered_by_user_id,
       prompt_version = EXCLUDED.prompt_version,
       model_family = EXCLUDED.model_family,
@@ -85,12 +136,22 @@ def video_analysis_cache_upsert_params(
     cost: Any,
     triggered_by_user_id: int | None,
     prompt_version: str | None,
+    status: str = "ready",
 ) -> tuple[Any, ...]:
     """与 ``VIDEO_ANALYSIS_CACHE_UPSERT_SQL`` 一一对应的参数元组;model_family 自动派生。"""
 
     exact_model = str(model or "")
+    cache_target_type = str(target_type).strip()
+    normalized_target_type = cache_target_type.lower()
+    cache_status = str(status).strip().lower() if status is not None else ""
+    if cache_status not in {"ready", "quality_incomplete"}:
+        raise ValueError("video analysis cache status must be ready or quality_incomplete")
+    if cache_status == "quality_incomplete" and cache_target_type != VIDEO_QUALITY_TRIAGE_TARGET_TYPE:
+        raise ValueError("quality_incomplete cache must use target_type=video_quality_triage")
+    if cache_status == "ready" and normalized_target_type == VIDEO_QUALITY_TRIAGE_TARGET_TYPE:
+        raise ValueError("ready cache must not use target_type=video_quality_triage")
     return (
-        str(target_type),
+        cache_target_type,
         str(target_id),
         exact_model,
         str(derive_method),
@@ -99,6 +160,7 @@ def video_analysis_cache_upsert_params(
         triggered_by_user_id,
         (str(prompt_version).strip() or None) if prompt_version else None,
         model_family(exact_model),
+        cache_status,
     )
 
 
@@ -180,10 +242,21 @@ def _project_video_item_state(
     platform: str,
     entry: AnalysisCacheEntry | None,
     job: dict[str, Any] | None,
+    projection: dict[str, Any] | None = None,
 ) -> tuple[str, str | None]:
     """Return a truthful display state; missing cache alone is never treated as queued."""
     if entry:
-        return "ready", None
+        projected_state = str((projection or analysis_cache_read_projection(
+            entry,
+            target_type="video",
+            target_id=entry.get("target_id"),
+            derive_method=derive_method,
+        )).get("state") or "unknown")
+        if projected_state == "quality_incomplete":
+            return "quality_incomplete", "final_v1_quality_incomplete"
+        if projected_state == "legacy_unverified":
+            return "legacy_unverified", "final_v1_cache_legacy_unverified"
+        return projected_state, None
     if derive_method == _FINAL_V1_QA_METHOD and platform != "youtube":
         return "unsupported", "keyframe_qa_youtube_only"
     if derive_method == _FINAL_V1_METHOD and platform not in {"youtube", "instagram", "tiktok"}:
@@ -212,6 +285,7 @@ def _row_to_entry(row: Any) -> AnalysisCacheEntry:
     model = row["model"] or None
     family = _row_get(row, "model_family")
     return {
+        "cache_id": _int_or_none(_row_get(row, "cache_id") or _row_get(row, "id")),
         "target_type": str(row["target_type"] or ""),
         "target_id": str(row["target_id"] or ""),
         "derive_method": str(row["derive_method"] or ""),
@@ -249,8 +323,10 @@ def get_analysis_cache_entry(
     """
     active_conn, should_close = _with_connection(conn)
     try:
-        clauses = ["target_type=?", "target_id=?"]
-        params: list[Any] = [target_type, str(target_id)]
+        target_types = _cache_target_types(target_type)
+        target_type_placeholders = ",".join("?" for _ in target_types)
+        clauses = [f"target_type IN ({target_type_placeholders})", "target_id=?"]
+        params: list[Any] = [*target_types, str(target_id)]
         use_eval_fallback = bool(
             allow_local_evaluation_fallback
             and derive_method == LOCAL_EVALUATION_DERIVE_METHOD
@@ -266,21 +342,23 @@ def get_analysis_cache_entry(
         elif derive_method:
             clauses.append("derive_method=?")
             params.append(derive_method)
-        order_prefix = (
-            "CASE WHEN derive_method=? THEN 0 ELSE 1 END, "
-            if use_eval_fallback
-            else ""
-        )
+        order_parts = [
+            "CASE status WHEN 'ready' THEN 0 WHEN 'quality_incomplete' THEN 1 ELSE 2 END",
+            "CASE WHEN target_type=? THEN 0 ELSE 1 END",
+        ]
+        params.append(str(target_type).strip())
         if use_eval_fallback:
+            order_parts.append("CASE WHEN derive_method=? THEN 0 ELSE 1 END")
             params.append(LOCAL_EVALUATION_DERIVE_METHOD)
+        order_parts.extend(["updated_at DESC", "id DESC"])
         row = active_conn.execute(
             f"""
-            SELECT target_type, target_id, derive_method, model, cost, status,
+            SELECT id AS cache_id, target_type, target_id, derive_method, model, cost, status,
                    triggered_by_user_id, result, created_at, updated_at,
                    prompt_version, model_family
             FROM vkpi_analysis_cache
             WHERE {" AND ".join(clauses)}
-            ORDER BY {order_prefix}updated_at DESC, id DESC
+            ORDER BY {", ".join(order_parts)}
             LIMIT 1
             """,
             tuple(params),
@@ -316,24 +394,33 @@ def get_analysis_cache_entries_for_targets(
 
     active_conn, should_close = _with_connection(conn)
     try:
+        target_types = _cache_target_types(target_type)
+        target_type_placeholders = ",".join("?" for _ in target_types)
         id_placeholders = ",".join("?" for _ in normalized_ids)
         method_placeholders = ",".join("?" for _ in normalized_methods)
         rows = active_conn.execute(
             f"""
-            SELECT target_type, target_id, derive_method, model, cost, status,
+            SELECT id AS cache_id, target_type, target_id, derive_method, model, cost, status,
                    triggered_by_user_id, result, created_at, updated_at,
                    prompt_version, model_family
             FROM vkpi_analysis_cache
-            WHERE target_type=?
+            WHERE target_type IN ({target_type_placeholders})
               AND target_id IN ({id_placeholders})
               AND derive_method IN ({method_placeholders})
+            ORDER BY target_id,
+                     derive_method,
+                     CASE status WHEN 'ready' THEN 0 WHEN 'quality_incomplete' THEN 1 ELSE 2 END,
+                     CASE WHEN target_type=? THEN 0 ELSE 1 END,
+                     updated_at DESC,
+                     id DESC
             """,
-            (str(target_type).strip(), *normalized_ids, *normalized_methods),
+            (*target_types, *normalized_ids, *normalized_methods, str(target_type).strip()),
         ).fetchall()
-        return {
-            (str(row["target_id"]), str(row["derive_method"])): _row_to_entry(row)
-            for row in rows
-        }
+        result: dict[tuple[str, str], AnalysisCacheEntry] = {}
+        for row in rows:
+            key = (str(row["target_id"]), str(row["derive_method"]))
+            result.setdefault(key, _row_to_entry(row))
+        return result
     finally:
         if should_close:
             close_standalone_conn(active_conn)
@@ -534,7 +621,7 @@ def list_analysis_cache_entries(
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         rows = active_conn.execute(
             f"""
-            SELECT target_type, target_id, derive_method, model, cost, status,
+            SELECT id AS cache_id, target_type, target_id, derive_method, model, cost, status,
                    triggered_by_user_id, result, created_at, updated_at,
                    prompt_version, model_family
             FROM vkpi_analysis_cache
@@ -563,13 +650,18 @@ def list_project_video_analysis_cache(
             """
             WITH cache AS (
                 SELECT DISTINCT ON (target_id)
-                       target_type, target_id, derive_method, model, cost, status,
-                       triggered_by_user_id, result, created_at, updated_at
+                       id AS cache_id, target_type, target_id, derive_method, model, cost, status,
+                       triggered_by_user_id, result, created_at, updated_at,
+                       prompt_version, model_family
                 FROM vkpi_analysis_cache
-                WHERE target_type='video'
+                WHERE target_type IN ('video', 'video_quality_triage')
                   AND derive_method=?
-                  AND status='ready'
-                ORDER BY target_id, updated_at DESC, id DESC
+                  AND status IN ('ready', 'quality_incomplete')
+                ORDER BY target_id,
+                         CASE status WHEN 'ready' THEN 0 ELSE 1 END,
+                         CASE WHEN target_type='video' THEN 0 ELSE 1 END,
+                         updated_at DESC,
+                         id DESC
             ), jobs AS (
                 SELECT DISTINCT ON (payload->>'target_id')
                        id,
@@ -604,6 +696,7 @@ def list_project_video_analysis_cache(
                 e.comment_count,
                 e.publish_date,
                 cache.target_type,
+                cache.cache_id,
                 cache.target_id,
                 cache.derive_method,
                 cache.model,
@@ -613,6 +706,8 @@ def list_project_video_analysis_cache(
                 cache.result,
                 cache.created_at,
                 cache.updated_at,
+                cache.prompt_version,
+                cache.model_family,
                 jobs.id AS job_id,
                 jobs.status AS job_status,
                 jobs.last_error AS job_last_error,
@@ -641,11 +736,18 @@ def list_project_video_analysis_cache(
             entry = _row_to_entry(row) if row["target_id"] else None
             platform = _video_platform(row["platform"], row["content_url"])
             last_job = _video_job_snapshot(row)
+            projection = analysis_cache_read_projection(
+                entry,
+                target_type="video",
+                target_id=str(row["evidence_id"] or ""),
+                derive_method=derive_method,
+            )
             state, terminal_reason = _project_video_item_state(
                 derive_method=derive_method,
                 platform=platform,
                 entry=entry,
                 job=last_job,
+                projection=projection,
             )
             state_counts[state] = state_counts.get(state, 0) + 1
             items.append(
@@ -668,6 +770,9 @@ def list_project_video_analysis_cache(
                     "active_job": last_job if state in _ACTIVE_VIDEO_JOB_STATUSES else None,
                     "last_job": last_job,
                     "terminal_reason": terminal_reason,
+                    **({key: projection[key] for key in (
+                        "terminal", "revalidation_required", "claim_status", "cache_reuse_status", "cache_id", "reasons",
+                    ) if key in projection} if state == "legacy_unverified" else {}),
                 }
             )
         ready_count = state_counts.get("ready", 0)
@@ -684,6 +789,8 @@ def list_project_video_analysis_cache(
                 "active_count": active_count,
                 "not_requested_count": state_counts.get("not_requested", 0),
                 "failed_count": state_counts.get("failed", 0),
+                "quality_incomplete_count": state_counts.get("quality_incomplete", 0),
+                "legacy_unverified_count": state_counts.get("legacy_unverified", 0),
                 "unsupported_count": state_counts.get("unsupported", 0),
                 "state_counts": state_counts,
             },

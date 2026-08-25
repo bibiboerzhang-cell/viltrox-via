@@ -31,9 +31,23 @@ from app.api.routers import vkpi_my_kol as router_mod  # noqa: E402
 from app.domains import content_metric_snapshots  # noqa: E402
 from app.domains.kol import my_kol_board_ext as ext  # noqa: E402
 from app.domains.kol import my_kol_recent_dedupe as recent_dedupe  # noqa: E402
+from app.domains.kol import my_kol_video_cache_truth as cache_truth  # noqa: E402
 from app.domains.kol import my_kol_video_recovery as recovery  # noqa: E402
 from app.domains.kol import pool_detail  # noqa: E402
 from app.domains.kol import video_evidence_projection as projection  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _canonicalize_minimal_ready_fixtures(monkeypatch):
+    """Legacy-shaped fixtures stay focused on the board contract, not proof construction."""
+    def classify(row, **_kwargs):
+        return {
+            "exists": True, "reusable": True, "cache_id": row.get("id"),
+            "cache_reuse_status": "canonical", "revalidation_required": False,
+            "claim_status": "descriptive_only", "reasons": [],
+        }
+
+    monkeypatch.setattr(cache_truth, "canonical_final_v1_cache_reuse", classify)
 
 
 # ── 1. SQL 静态审查 ─────────────────────────────────────────────────────
@@ -230,7 +244,8 @@ def _sqlite() -> sqlite3.Connection:
         );
         CREATE TABLE vkpi_analysis_cache (
             id INTEGER PRIMARY KEY AUTOINCREMENT, target_type TEXT NOT NULL, target_id TEXT NOT NULL,
-            derive_method TEXT NOT NULL, status TEXT NOT NULL, result TEXT, updated_at TEXT
+            derive_method TEXT NOT NULL, model TEXT, prompt_version TEXT,
+            status TEXT NOT NULL, result TEXT, updated_at TEXT
         );
         CREATE TABLE apify_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT, job_type TEXT NOT NULL, payload TEXT NOT NULL,
@@ -377,6 +392,47 @@ def test_same_evidence_yields_identical_task_state_and_modalities_on_both_endpoi
         assert head.startswith(("SELECT", "WITH", "PRAGMA TABLE_INFO")), sql[:60]
         for verb in ("INSERT ", "UPDATE ", "DELETE "):
             assert verb not in head
+
+
+def test_legacy_ready_is_partial_on_my_kol_and_board_ext_without_verified_modalities(monkeypatch):
+    db = _sqlite()
+    _seed(db)
+    db.execute(
+        "INSERT INTO vkpi_analysis_cache "
+        "(target_type,target_id,derive_method,status,result,updated_at) "
+        "VALUES ('video','5','video_analysis_final_v1','ready',?,'2026-08-22T00:00:00Z')",
+        (_final_v1_result(["visual"]),),
+    )
+
+    def classify(row, **_kwargs):
+        reusable = str(row.get("target_id")) != "5"
+        return {
+            "exists": True, "reusable": reusable, "cache_id": row.get("id"),
+            "cache_reuse_status": "canonical" if reusable else "legacy_unverified",
+            "revalidation_required": not reusable, "claim_status": "descriptive_only",
+            "reasons": [] if reusable else ["execution_authorization_snapshot_missing"],
+        }
+
+    monkeypatch.setattr(cache_truth, "canonical_final_v1_cache_reuse", classify)
+    conn = _HybridConn(db)
+    _env(monkeypatch, conn)
+    my_rows = pool_detail._video_evidence_for_kol(101, limit=50, stable_order=True, before=None)
+    my_page = recovery.build_video_recovery_page(conn, kol_pool_id=101, videos=my_rows, limit=50)
+    board_page = ext.build_recent_videos_page(conn, staff_scope_id=7684, before=None)
+    my_item = next(item for item in my_page["items"] if item["evidence_id"] == 5)
+    board_item = next(item for item in board_page["items"] if item["evidence_id"] == 5)
+
+    for item in (my_item, board_item):
+        assert item["tasks"]["final_v1"]["status"] == "legacy_unverified"
+        assert item["tasks"]["final_v1"]["terminal"] is True
+        assert item["revalidation_required"] is True
+        assert item["claim_status"] == "descriptive_only"
+        assert item["has_final_v1_cache"] is False
+        assert item["has_final_v1_raw_cache"] is True
+        assert item["viltrox_modalities"] == []
+        assert item["v_tier"] == "undetermined"
+    assert my_page["summary"]["final_v1_ready"] == 3
+    assert my_page["summary"]["legacy_unverified"] == 1
 
 
 # ── 3. 游标翻页无重无漏 ────────────────────────────────────────────────

@@ -15,6 +15,8 @@ if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 from app.api.routers import vkpi_lens_insights as router_mod  # noqa: E402
+from app.core.video_analysis_contract import FINAL_V1_PROMPT_CONTRACT  # noqa: E402
+from app.core.video_model_chain import final_v1_model_chain  # noqa: E402
 from app.domains.kol import lens_evidence as le  # noqa: E402
 from app.domains.kol import lens_evidence_store as store  # noqa: E402
 
@@ -54,6 +56,89 @@ def _result(**layer1: object) -> dict:
         "layer4_attribution": {"product_contribution": "Viltrox 75mm F1.8 EVO 贡献了焦外。"},
         "layer6_flags_and_scores": {"scores": {"product_proof_score": {"evidence": "Sony 85mm GM II 作对比。"}}},
         "raw_gemini_video": {"content_topic": "唯卓仕 DC-A1 监视器开箱。", "viltrox_products_all": []},
+    }
+
+
+def _canonical_result(result: dict, *, target_id: str) -> dict:
+    model = final_v1_model_chain()[0]
+    binding = f"google/{model}"
+    execution_snapshot = {
+        "scope": "execution_time_snapshot", "authorized": True,
+        "production_authorized": True, "evaluation_only": False,
+        "status": "operationally_authorized", "source": "signed_evidence",
+        "temporary": False,
+    }
+    signed_snapshot = {
+        "scope": "execution_time_snapshot", "production_ready": True,
+        "status": "production_ready", "claim_status": "descriptive_only",
+        "evidence_source": "fixture_signed_registry",
+    }
+    authorization = {
+        "binding": binding, "model": model,
+        "execution_authorization_at_run": execution_snapshot,
+        "signed_readiness_at_run": signed_snapshot,
+    }
+    layer1 = dict(result.get("layer1_visual_content") or {})
+    layer1.setdefault("evidence", {"inspection": "full video reviewed"})
+    layer1["brand_product_evidence"] = {
+        "viltrox_status": "unknown", "inspection_complete": True,
+        "checked_modalities": ["visual", "audio"], "viltrox_evidence": [],
+        "viltrox_products": [], "competitors": [],
+    }
+    layer6 = dict(result.get("layer6_flags_and_scores") or {})
+    scores = dict(layer6.get("scores") or {})
+    for key in (
+        "content_quality_score", "viewer_heart_score", "channel_value_score",
+        "asset_reuse_score", "product_proof_score", "marketing_value_score",
+    ):
+        entry = dict(scores.get(key) or {})
+        entry.setdefault("score", None)
+        scores[key] = entry
+    layer6.update({
+        "risk_flags": list(layer6.get("risk_flags") or []), "scores": scores,
+        "final_verdict": "Descriptive evidence only.",
+        "key_hook": "Product evidence review.",
+    })
+    layers = {
+        "layer1_visual_content": layer1,
+        "layer2_viewer_emotion": dict(result.get("layer2_viewer_emotion") or {}),
+        "layer3_three_values": dict(result.get("layer3_three_values") or {}),
+        "layer4_attribution": dict(result.get("layer4_attribution") or {}),
+        "layer5_recommendations": dict(result.get("layer5_recommendations") or {}),
+        "layer6_flags_and_scores": layer6,
+    }
+    execution = {
+        **authorization, "selected_model": model,
+        "provider_reported_model": model, "provider_model_match": True,
+        "model_match": True, "requested_model_chain": [model],
+        "ready_model_chain": [model], "model_chain": [model],
+        "fallback_used": False, "authorization_snapshot_match": True,
+        "execution_authorizations_by_model": {model: authorization},
+        "execution_authorizations_by_binding": {binding: authorization},
+        "execution_class": "production", "authorization_scope": "production",
+        "evaluation_only": False, "production_authorized": True,
+    }
+    return {
+        **result, **layers, "schema_version": "video_analysis_final_v1",
+        "status": "completed", "quality_status": "quality_complete",
+        "quality_issues": [], "mock": False,
+        "analysis_method": "video_analysis_final_v1", "model": model,
+        "target_type": "video", "target_id": target_id,
+        "evaluation_only": False, "production_authorized": True,
+        "claim_status": "descriptive_only", "llm_execution": execution,
+        "provenance": {
+            "prompt_contract": FINAL_V1_PROMPT_CONTRACT, "binding": binding,
+            "selected_model": model, "provider_reported_model": model,
+            "requested_model_chain": [model], "ready_model_chain": [model],
+            "model_chain": [model], "fallback_used": False,
+            "authorization_snapshot_match": True, "execution_class": "production",
+            "authorization_scope": "production", "evaluation_only": False,
+            "production_authorized": True,
+            "execution_authorization_at_run": execution_snapshot,
+            "signed_readiness_at_run": signed_snapshot,
+        },
+        "execution_authorization_at_run": execution_snapshot,
+        "signed_readiness_at_run": signed_snapshot,
     }
 
 
@@ -130,7 +215,8 @@ def _conn() -> sqlite3.Connection:
             title TEXT, video_title TEXT, view_count INTEGER, is_active INTEGER DEFAULT 1
         );
         CREATE TABLE vkpi_analysis_cache (
-            id INTEGER PRIMARY KEY, target_type TEXT, target_id TEXT, derive_method TEXT, result TEXT,
+            id INTEGER PRIMARY KEY, target_type TEXT, target_id TEXT, derive_method TEXT,
+            model TEXT, prompt_version TEXT, result TEXT,
             status TEXT DEFAULT 'ready', updated_at TEXT
         );
         CREATE TABLE vkpi_kol_lens_evidence (
@@ -165,12 +251,12 @@ def _conn() -> sqlite3.Connection:
     }
     for cache_id, (evidence_id, result) in enumerate(results.items(), start=500):
         conn.execute(
-            "INSERT INTO vkpi_analysis_cache (id, target_type, target_id, derive_method, result, status, updated_at) VALUES (?, 'video', ?, 'video_analysis_final_v1', ?, 'ready', '2026-08-20T00:00:00Z')",
-            (cache_id, str(evidence_id), json.dumps(result, ensure_ascii=False)),
+            "INSERT INTO vkpi_analysis_cache (id, target_type, target_id, derive_method, model, prompt_version, result, status, updated_at) VALUES (?, 'video', ?, 'video_analysis_final_v1', ?, ?, ?, 'ready', '2026-08-20T00:00:00Z')",
+            (cache_id, str(evidence_id), final_v1_model_chain()[0], FINAL_V1_PROMPT_CONTRACT, json.dumps(_canonical_result(result, target_id=str(evidence_id)), ensure_ascii=False)),
         )
     conn.execute(
-        "INSERT INTO vkpi_analysis_cache (id, target_type, target_id, derive_method, result, status, updated_at) VALUES (600, 'cn_platform_video', 'bilibili:BV1', 'video_analysis_final_v1', ?, 'ready', '2026-08-20T00:00:00Z')",
-        (json.dumps(_result(), ensure_ascii=False),),
+        "INSERT INTO vkpi_analysis_cache (id, target_type, target_id, derive_method, model, prompt_version, result, status, updated_at) VALUES (600, 'video', 'bilibili:BV1', 'video_analysis_final_v1', ?, ?, ?, 'ready', '2026-08-20T00:00:00Z')",
+        (final_v1_model_chain()[0], FINAL_V1_PROMPT_CONTRACT, json.dumps(_canonical_result(_result(), target_id="bilibili:BV1"), ensure_ascii=False)),
     )
     return conn
 

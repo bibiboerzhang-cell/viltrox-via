@@ -13,6 +13,8 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
+from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse
+
 
 FINAL_DERIVE_METHOD = "video_analysis_final_v1"
 QA_DERIVE_METHOD = "video_analysis_final_v1_keyframe_qa"
@@ -251,6 +253,11 @@ def _fetch_cache_row(conn: psycopg.Connection[Any], final_cache_id: int) -> dict
                    c.result AS final_result,
                    c.model AS final_model,
                    c.cost AS final_cost,
+                   c.target_type AS final_target_type,
+                   c.target_id AS final_target_id,
+                   c.derive_method AS final_derive_method,
+                   c.prompt_version AS final_prompt_version,
+                   c.status AS final_status,
                    e.id AS evidence_id,
                    e.kol_pool_id,
                    e.content_url,
@@ -360,6 +367,31 @@ def upsert_deep_analysis_from_final_v1_cache(conn: psycopg.Connection[Any], fina
     row = _fetch_cache_row(conn, int(final_cache_id))
     if not row:
         return {"status": "skipped", "reason": "cache_not_found", "source_cache_id": int(final_cache_id)}
+    reuse = canonical_final_v1_cache_reuse(
+        {
+            "id": row.get("final_cache_id"),
+            "target_type": row.get("final_target_type"),
+            "target_id": row.get("final_target_id"),
+            "derive_method": row.get("final_derive_method"),
+            "model": row.get("final_model"),
+            "prompt_version": row.get("final_prompt_version"),
+            "result": row.get("final_result"),
+            "status": row.get("final_status"),
+        },
+        target_type="video",
+        target_id=str(row.get("evidence_id") or ""),
+        derive_method=FINAL_DERIVE_METHOD,
+    )
+    if reuse.get("reusable") is not True:
+        return {
+            "status": "skipped",
+            "reason": "legacy_cache_unverified",
+            "source_cache_id": int(final_cache_id),
+            "cache_reuse_status": "legacy_unverified",
+            "revalidation_required": True,
+            "claim_status": "descriptive_only",
+            "reuse_reasons": reuse.get("reasons") or [],
+        }
     prepared = prepare_deep_analysis_projection(row)
     if prepared.get("status") != "ready":
         return prepared

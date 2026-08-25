@@ -26,6 +26,7 @@ URL = "https://www.youtube.com/watch?v=QfcIpjtZ1s4"
 def _resp(text: str, finish: str = "STOP", *, tokens: int = 5) -> Any:
     return SimpleNamespace(
         text=text,
+        model_version="gemini-3.6-flash",
         usage_metadata=SimpleNamespace(prompt_token_count=10, candidates_token_count=tokens, total_token_count=10 + tokens),
         candidates=[SimpleNamespace(finish_reason=SimpleNamespace(name=finish))],
     )
@@ -168,6 +169,7 @@ def test_truncated_output_is_continued_once_on_same_model(monkeypatch: pytest.Mo
     assert diagnostics["truncation"]["hit"] is True
     assert diagnostics["truncation"]["recovered"] is True
     assert diagnostics["retries"]["calls"] == 2
+    assert diagnostics["provider_reported_model"] == "gemini-3.6-flash"
 
 
 def test_not_truncated_output_makes_single_call(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -192,6 +192,14 @@ function videoUrl(video: VideoEvidence) {
   return textFrom(video.url ?? video.content_url);
 }
 
+function analysisBundleState(bundle: AnalysisBundle) {
+  return textFrom(bundle.state || bundle.finalEntry?.status).toLowerCase();
+}
+
+function isReadyAnalysisBundle(bundle: AnalysisBundle) {
+  return analysisBundleState(bundle) === "ready" && Boolean(bundle.finalEntry);
+}
+
 function ScoreBlock({ label, score }: { label: string; score: ReturnType<typeof normaliseScore> }) {
   return (
     <div className="rounded-md border border-white/[0.05] bg-black/25 px-2.5 py-2">
@@ -504,9 +512,15 @@ export function KOLVideoAnalysisPanel({
     const preloadedByEvidence = new Map(
       (Array.isArray(preloadedBundles) ? preloadedBundles : []).map((bundle) => [videoEvidenceId(bundle.video), bundle]),
     );
-    const allPreloadedReady = evidenceVideos.length > 0
-      && evidenceVideos.every((video) => Boolean(preloadedByEvidence.get(videoEvidenceId(video))?.finalEntry));
-    if (allPreloadedReady) {
+    const allPreloadedSettled = evidenceVideos.length > 0
+      && evidenceVideos.every((video) => {
+        const bundle = preloadedByEvidence.get(videoEvidenceId(video));
+        return Boolean(bundle && (
+          isReadyAnalysisBundle(bundle)
+          || ["quality_incomplete", "stale", "legacy_unverified"].includes(analysisBundleState(bundle))
+        ));
+      });
+    if (allPreloadedSettled) {
       setBundles(Array.isArray(preloadedBundles) ? preloadedBundles : []);
       setLoading(false);
       return () => {
@@ -542,7 +556,7 @@ export function KOLVideoAnalysisPanel({
           return {
             video,
             finalEntry: finalResponse?.state === "ready" ? (finalResponse.entry as VkpiKolVideoAnalysisCacheEntry) || null : null,
-            qaEntry: qaResponse?.state === "ready" ? (qaResponse.entry as VkpiKolVideoAnalysisCacheEntry) || null : null,
+            qaEntry: state === "ready" && qaResponse?.state === "ready" ? (qaResponse.entry as VkpiKolVideoAnalysisCacheEntry) || null : null,
             state,
             // F3 失败可读:后端人话原因优先;旧机器码只在缺席时兜底。
             reason: failureReasonHumanOf(analysisJob) || firstText(analysisJob.reason_detail, analysisJob.reason, analysisJob.error_category, state),
@@ -564,11 +578,20 @@ export function KOLVideoAnalysisPanel({
     };
   }, [apiToken, evidenceSignature, preloadedSignature]);
 
-  const readyBundles = bundles.filter((bundle) => bundle.finalEntry);
+  const readyBundles = bundles.filter(isReadyAnalysisBundle);
   const requestedState = textFrom(analysisState?.status).toLowerCase();
   const liveBundle = bundles.find((bundle) => ["queued", "running", "retrying", "processing", "pending"].includes(String(bundle.state || "")));
   const terminalBundle = bundles.find((bundle) => ["blocked", "failed", "error", "cancelled", "canceled"].includes(String(bundle.state || "")));
-  const analysisNotice = analysisState?.message
+  const qualityIncompleteBundle = bundles.find((bundle) => analysisBundleState(bundle) === "quality_incomplete");
+  const staleBundle = bundles.find((bundle) => analysisBundleState(bundle) === "stale");
+  const legacyBundle = bundles.find((bundle) => analysisBundleState(bundle) === "legacy_unverified");
+  const analysisNotice: { kind: "active" | "blocked" | "idle" | "quality" | "stale" | "legacy"; text: string } | null = legacyBundle
+    ? { kind: "legacy", text: "历史结果待核验；完成重新验证前不计入已分析。" }
+    : qualityIncompleteBundle
+    ? { kind: "quality", text: "结果质量未通过；待重试或人工复核。" }
+    : staleBundle
+      ? { kind: "stale", text: "历史分析已过期；请重新发起分析以生成当前结果。" }
+    : analysisState?.message
     ? { kind: requestedState === "ai_disabled" || requestedState === "not_requested" ? "blocked" : "active", text: analysisState.message }
     : terminalBundle
       ? { kind: "blocked", text: `视频深析未完成：${terminalBundle.reason || terminalBundle.state || "任务终止"}` }
@@ -591,6 +614,12 @@ export function KOLVideoAnalysisPanel({
           ) : null}
           {analysisNotice?.kind === "active" ? (
             <span className="rounded border border-cyan-400/25 bg-cyan-400/[0.08] px-1.5 py-0.5 text-[8.5px] font-medium text-cyan-200">分析处理中</span>
+          ) : analysisNotice?.kind === "quality" ? (
+            <span className="rounded border border-rose-400/25 bg-rose-400/[0.08] px-1.5 py-0.5 text-[8.5px] font-medium text-rose-200">结果质量未通过</span>
+          ) : analysisNotice?.kind === "stale" ? (
+            <span className="rounded border border-amber-400/25 bg-amber-400/[0.08] px-1.5 py-0.5 text-[8.5px] font-medium text-amber-200">历史分析已过期</span>
+          ) : analysisNotice?.kind === "legacy" ? (
+            <span className="rounded border border-amber-400/25 bg-amber-400/[0.08] px-1.5 py-0.5 text-[8.5px] font-medium text-amber-200">历史结果待核验</span>
           ) : analysisNotice?.kind === "blocked" ? (
             <span className="rounded border border-amber-400/25 bg-amber-400/[0.08] px-1.5 py-0.5 text-[8.5px] font-medium text-amber-200">未入队/已阻断</span>
           ) : null}
@@ -625,6 +654,24 @@ export function KOLVideoAnalysisPanel({
         <div className="rounded-md border border-white/[0.05] bg-white/[0.012] p-3 text-[10.5px] text-slate-400">读取 final_v1 / 关键帧 QA 缓存...</div>
       ) : readyBundles.length ? (
         <div className="space-y-2">
+          {analysisNotice?.kind === "quality" ? (
+            <div className="rounded-md border border-rose-300/20 bg-rose-500/[0.07] px-3 py-2 text-[10px] text-rose-100" role="status">
+              <div className="font-medium">有视频结果质量未通过</div>
+              <div className="mt-0.5 text-[9.5px] text-rose-100/75">待重试或人工复核；该条不计入已分析结果。</div>
+            </div>
+          ) : null}
+          {staleBundle ? (
+            <div className="rounded-md border border-amber-300/20 bg-amber-500/[0.07] px-3 py-2 text-[10px] text-amber-100" role="status">
+              <div className="font-medium">有历史分析已过期</div>
+              <div className="mt-0.5 text-[9.5px] text-amber-100/75">请重新发起分析；过期条目不计入当前已分析结果。</div>
+            </div>
+          ) : null}
+          {legacyBundle ? (
+            <div className="rounded-md border border-amber-300/20 bg-amber-500/[0.07] px-3 py-2 text-[10px] text-amber-100" role="status">
+              <div className="font-medium">历史结果待核验</div>
+              <div className="mt-0.5 text-[9.5px] text-amber-100/75">原始结果已保留，但当前界面不将其作为已核验结论展示。</div>
+            </div>
+          ) : null}
           {(showAll ? readyBundles : readyBundles.slice(0, 3)).map((bundle) => (
             <AnalysisCard key={videoEvidenceId(bundle.video)} bundle={bundle} />
           ))}
@@ -641,8 +688,8 @@ export function KOLVideoAnalysisPanel({
       ) : (
         <div className="rounded-md border border-white/[0.05] bg-white/[0.012] p-3">
           <div className="flex items-center gap-1.5 text-[10.5px] text-slate-400">
-            {analysisNotice?.kind === "blocked" ? <AlertTriangle size={11} className="text-amber-300" /> : <CheckCircle2 size={11} className="text-slate-500" />}
-            {analysisNotice?.kind === "active" ? "深度分析处理中" : analysisNotice?.kind === "blocked" ? "深度分析未启动" : "暂无深度分析"}
+            {analysisNotice?.kind === "blocked" || analysisNotice?.kind === "quality" || analysisNotice?.kind === "stale" || analysisNotice?.kind === "legacy" ? <AlertTriangle size={11} className={analysisNotice.kind === "quality" ? "text-rose-300" : "text-amber-300"} /> : <CheckCircle2 size={11} className="text-slate-500" />}
+            {analysisNotice?.kind === "active" ? "深度分析处理中" : analysisNotice?.kind === "quality" ? "结果质量未通过" : analysisNotice?.kind === "legacy" ? "历史结果待核验" : analysisNotice?.kind === "stale" ? "历史分析已过期" : analysisNotice?.kind === "blocked" ? "深度分析未启动" : "暂无深度分析"}
           </div>
           <div className="mt-1 text-[9.5px] text-slate-600">
             {analysisNotice?.text || `已找到 ${Number.isFinite(summaryEvidenceCount) && summaryEvidenceCount > 0 ? summaryEvidenceCount : evidenceVideos.length} 条 video evidence，但尚无 video_analysis_final_v1 结果。`}

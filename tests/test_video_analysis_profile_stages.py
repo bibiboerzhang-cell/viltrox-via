@@ -25,18 +25,42 @@ SIX_LAYERS = {
         "content_summary": "A creator compares autofocus and flare performance.",
         "scene_timeline": [{"timestamp": "00:04", "what": "Lens close-up followed by autofocus samples."}],
         "evidence": {"timestamps": ["00:04 lens close-up"]},
+        "brand_product_evidence": {
+            "viltrox_status": "unknown",
+            "inspection_complete": True,
+            "checked_modalities": ["visual", "audio"],
+            "viltrox_evidence": [],
+            "viltrox_products": [],
+            "competitors": [],
+        },
     },
     "layer2_viewer_emotion": {"hook_analysis": "x"},
     "layer3_three_values": {"entertainment": 7},
     "layer4_attribution": {"why_it_worked": "y"},
     "layer5_recommendations": {"next": ["z"]},
-    "layer6_flags_and_scores": {"final_verdict": "Useful category evidence for creator discovery."},
+    "layer6_flags_and_scores": {
+        "risk_flags": [],
+        "scores": {
+            key: {"score": None, "confidence": 0.0, "rationale": "Evidence unavailable."}
+            for key in (
+                "content_quality_score",
+                "viewer_heart_score",
+                "channel_value_score",
+                "asset_reuse_score",
+                "product_proof_score",
+                "marketing_value_score",
+            )
+        },
+        "final_verdict": "Useful category evidence for creator discovery.",
+        "key_hook": "Autofocus evidence needs closer review.",
+    },
 }
 
 
 class _Resp:
     def __init__(self, payload: dict[str, Any]) -> None:
         self.text = json.dumps(payload)
+        self.model_version = "gemini-3.6-flash"
         self.usage_metadata = SimpleNamespace(prompt_token_count=10, candidates_token_count=5, total_token_count=15)
 
 
@@ -76,6 +100,9 @@ def test_youtube_direct_success_records_stage_timings_and_direct_diag(monkeypatc
     assert set(timings) >= {"subtitles", "youtube_direct"}
     assert all(isinstance(v, int) and v >= 0 for v in timings.values())
     assert result["subtitle_chars"] == len("[00:01] hi")
+    assert result["requested_model_chain"] == ["gemini-3.6-flash"]
+    assert result["selected_model"] == "gemini-3.6-flash"
+    assert result["provider_reported_model"] == "gemini-3.6-flash"
     direct = result["youtube_direct"]
     assert direct["attempted"] is True and direct["success"] is True
     assert direct["attempts"][0]["model"] == "gemini-3.6-flash" and direct["attempts"][0]["ok"] is True
@@ -140,6 +167,9 @@ def test_local_analyzer_records_upload_wait_generation_cleanup(monkeypatch: pyte
     assert result["analyzed"] is True
     assert set(result["stage_timings_ms"]) >= {"upload", "file_active_wait", "cache_setup", "generation", "cleanup"}
     assert result["local_video_bytes"] == 4096
+    assert result["requested_model_chain"] == ["gemini-3.6-flash"]
+    assert result["selected_model"] == "gemini-3.6-flash"
+    assert result["provider_reported_model"] == "gemini-3.6-flash"
     assert deleted == ["files/abc"]
 
 
@@ -245,6 +275,41 @@ def _worker_env(monkeypatch: pytest.MonkeyPatch, raw: dict[str, Any]) -> Any:
     return gemini
 
 
+def _authorized_execution(model: str) -> dict[str, Any]:
+    snapshot = {
+        "binding": f"google/{model}",
+        "model": model,
+        "execution_class": "production",
+        "authorization_scope": "production",
+        "evaluation_only": False,
+        "production_authorized": True,
+        "model_readiness_status": "production_ready",
+        "execution_authorization_at_run": {
+            "scope": "execution_time_snapshot",
+            "authorized": True,
+            "production_authorized": True,
+            "evaluation_only": False,
+            "status": "operationally_authorized",
+            "source": "test",
+            "temporary": False,
+        },
+        "signed_readiness_at_run": {
+            "scope": "execution_time_snapshot",
+            "production_ready": True,
+            "status": "production_ready",
+            "claim_status": "descriptive_only",
+            "evidence_source": "test",
+        },
+    }
+    return {
+        **snapshot,
+        "requested_model_chain": [model],
+        "ready_model_chain": [model],
+        "execution_authorizations_by_model": {model: snapshot},
+        "execution_authorizations_by_binding": {f"google/{model}": snapshot},
+    }
+
+
 def test_worker_success_path_writes_stage_timings_to_cache_and_job_diagnostics(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.workers import apify_jobs_worker
 
@@ -253,6 +318,8 @@ def test_worker_success_path_writes_stage_timings_to_cache_and_job_diagnostics(m
         "status": "completed",
         "method": f"gemini_direct_{apify_jobs_worker.WORKER_GEMINI_MODEL}",
         "model": apify_jobs_worker.WORKER_GEMINI_MODEL,
+        "selected_model": apify_jobs_worker.WORKER_GEMINI_MODEL,
+        "provider_reported_model": apify_jobs_worker.WORKER_GEMINI_MODEL,
         "video_analysis_final_v1": SIX_LAYERS,
         "stage_timings_ms": {"subtitles": 900, "youtube_direct": 30000},
         "youtube_direct": {"attempted": True, "success": True, "attempts": [], "fallback_reason": ""},
@@ -268,7 +335,14 @@ def test_worker_success_path_writes_stage_timings_to_cache_and_job_diagnostics(m
     gemini._process_gemini_video(
         conn,
         {"id": 99},
-        {"target_type": "video", "target_id": "701", "derive_method": "video_analysis_final_v1", "_llm_execution": {}},
+        {
+            "target_type": "video",
+            "target_id": "701",
+            "derive_method": "video_analysis_final_v1",
+            "_llm_execution": _authorized_execution(
+                apify_jobs_worker.WORKER_GEMINI_MODEL
+            ),
+        },
         0.01,
     )
     inserts = [p for s, p in conn.sql if "INSERT INTO vkpi_analysis_cache" in s]

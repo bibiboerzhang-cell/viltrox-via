@@ -281,6 +281,7 @@ async def analyze_youtube_with_gemini(
         _mark_attempt_failed,
         _retry_after_context_cache_error,
         _scope_guard,
+        _stamp_analyzer_model_identity,
         _stage_add,
         _video_generate_config,
         final_v1_gemini_models,
@@ -357,6 +358,7 @@ async def analyze_youtube_with_gemini(
 
     def _apply_parsed(parsed: dict[str, Any], usage_metadata: dict[str, Any], *, method_prefix: str, model_name: str) -> None:
         method = f"{method_prefix}_{model_name}"
+        _stamp_analyzer_model_identity(result, GEMINI_MODELS, model_name, diagnostics)
         if is_final_v1:
             _apply_final_v1_result(
                 result, parsed, method=method, model=model_name,

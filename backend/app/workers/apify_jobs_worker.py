@@ -325,18 +325,13 @@ def _acquire_llm_slot(conn: psycopg.Connection[Any]) -> str | None:
     return None
 
 
+from app.workers.apify_jobs_worker_cache_reuse import (  # noqa: E402
+    analysis_cache_reuse_decision as _analysis_cache_reuse_decision,
+)
+
+
 def _analysis_cache_exists(conn: psycopg.Connection[Any], target_type: str, target_id: str, derive_method: str) -> bool:
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            """
-            SELECT 1
-            FROM vkpi_analysis_cache
-            WHERE target_type=%s AND target_id=%s AND derive_method=%s AND status='ready'
-            LIMIT 1
-            """,
-            (target_type, target_id, derive_method),
-        )
-        return cur.fetchone() is not None
+    return bool(_analysis_cache_reuse_decision(conn, target_type, target_id, derive_method)["exists"])
 
 
 # 搜索会话同步 + final_v1 后续链式入队整簇已抽到 apify_jobs_worker_session.py
@@ -367,78 +362,15 @@ def _finish_skipped(
     *,
     evaluation_only: bool = False,
 ) -> None:
-    analysis_summary: dict[str, Any] | None = (
-        {
-            "evaluation_only": True,
-            "production_authorized": False,
-            "claim_status": "descriptive_only",
-            "model_readiness_status": "evaluation_only_not_production_ready",
-            "cache_derive_method": LOCAL_EVALUATION_CACHE_DERIVE_METHOD,
-        }
-        if evaluation_only
-        else None
+    from app.workers.apify_jobs_worker_skip import finish_skipped_impl
+
+    finish_skipped_impl(
+        conn,
+        job_id,
+        reason,
+        evaluation_only=evaluation_only,
+        namespace=globals(),
     )
-    if not evaluation_only and "skipped_existing_analysis_cache" in str(reason or ""):
-        try:
-            with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute("SELECT payload FROM apify_jobs WHERE id=%s LIMIT 1", (int(job_id),))
-                row = cur.fetchone() or {}
-            payload = row.get("payload") if isinstance(row.get("payload"), dict) else _loads(row.get("payload"), {})
-            analysis_summary = _search_session_analysis_summary_from_ready_cache(conn, payload if isinstance(payload, dict) else {})
-            cache_id = _int_or_none((analysis_summary or {}).get("cache_id"))
-            deep_result = _sync_deep_analysis_result_from_cache(
-                conn,
-                cache_id=cache_id,
-                derive_method=_derive_method(payload if isinstance(payload, dict) else {}),
-                job_id=int(job_id),
-            )
-            account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
-                conn,
-                job_id=int(job_id),
-                deep_result=deep_result,
-            )
-            # L2:final_v1 就绪 → 链式入队内容契合深析(每 KOL 一次,cache 复用/去重/预算闸控量)。
-            content_fit_job = _enqueue_content_fit_after_final_v1(
-                conn,
-                job_id=int(job_id),
-                deep_result=deep_result,
-                source_payload=payload if isinstance(payload, dict) else None,
-            )
-            if analysis_summary and content_fit_job:
-                analysis_summary["content_fit_job"] = content_fit_job
-            # 2026-06-16:视频深析就绪 → 链式入队评论采集(用户要求:评论也要抓)。
-            comments_collect_job = _enqueue_comments_collect_after_final_v1(
-                conn,
-                job_id=int(job_id),
-                deep_result=deep_result,
-            )
-            if analysis_summary and comments_collect_job:
-                analysis_summary["comments_collect_job"] = comments_collect_job
-            if analysis_summary and deep_result:
-                analysis_summary["deep_result"] = deep_result
-            if analysis_summary and account_extract_job:
-                analysis_summary["account_dossier_extract_job"] = account_extract_job
-        except Exception as exc:
-            logger.warning(
-                "skipped cache deep/account sync failed | job_id=%s exception_type=%s",
-                job_id,
-                type(exc).__name__,
-            )
-    with conn.transaction():
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE apify_jobs
-                SET status='done',
-                    last_error=%s,
-                    last_error_category=NULL,
-                    next_retry_at=NULL,
-                    updated_at=NOW()
-                WHERE id=%s
-                """,
-                (reason[:2000], job_id),
-            )
-    _sync_search_session_job(conn, job_id, raw_status="done", reason=reason, analysis_summary=analysis_summary)
 
 
 def _block_job(conn: psycopg.Connection[Any], job_id: int, reason: str, detail: dict[str, Any] | None = None) -> None:

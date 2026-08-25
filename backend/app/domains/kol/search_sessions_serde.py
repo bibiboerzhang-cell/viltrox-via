@@ -650,12 +650,12 @@ def _sanitize_session_payload(value: Any) -> dict[str, Any]:
 
 
 _SESSION_INPUT_FIELDS = {
-    "advance_limit", "candidate_limit", "content_languages", "country", "create_session",
+    "advance_limit", "advance_request_snapshots", "candidate_limit", "content_languages", "country", "create_session",
     "creator_quota", "dedupe", "defer_to_queue", "discovery_platforms", "execute",
     "exclude_chinese", "force_full_history", "handle", "handle_or_url", "include_discovery",
     "include_new_discovery", "input", "kol_types", "languages", "limit", "local_evaluation",
     "local_qualification_spec", "market", "max_posts", "mixed_policy", "mode",
-    "new_discovery_limit", "new_discovery_per_platform_limit", "new_discovery_platforms",
+    "new_discovery_limit", "new_discovery_per_platform_limit", "new_discovery_per_platform_limits", "new_discovery_platforms",
     "platform", "platforms", "product_sku", "profile_types", "query_text", "queue_pipeline",
     "ratio_policy", "representative_video_limit", "reviewer_quota", "scan_account",
     "search_session_id", "session_id", "source", "task_id", "type_boost_enabled",

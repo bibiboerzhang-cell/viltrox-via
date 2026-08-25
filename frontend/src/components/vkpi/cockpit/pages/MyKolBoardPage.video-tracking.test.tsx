@@ -200,6 +200,24 @@ describe("KolVideoSection task-state facade (my_kol_video_recovery_v1)", () => {
     expect(document.body.textContent).not.toMatch(/final_v1|apify|job_id/);
   });
 
+  it("shows legacy analysis as historical verification work and does not offer normal deep analysis", () => {
+    const legacy = {
+      ...video(904), has_final_v1_cache: false, has_final_v1_raw_cache: true,
+      analysis_cache_reuse_status: "legacy_unverified", revalidation_required: true,
+      tasks: {
+        metric_refresh: task("not_requested"),
+        final_v1: task("legacy_unverified", {
+          status: "legacy_unverified", freshness: "stale", revalidation_required: true,
+        }),
+      },
+    } as VkpiKolPoolVideoRow;
+    render(<KolVideoSection {...base} videos={[legacy]} />);
+    expect(screen.getByText("深析旧结果待复核")).toBeInTheDocument();
+    expect(screen.getByText("旧结果仅供查看")).toBeInTheDocument();
+    expect(screen.getByText("历史结果待核验")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "深析" })).toBeNull();
+  });
+
   it("exposes the keyset load-more with honest counts", () => {
     const onLoadMore = vi.fn();
     render(<KolVideoSection {...base} videos={[video(901)]} hasMore loadingMore={false} onLoadMore={onLoadMore} total={120} />);

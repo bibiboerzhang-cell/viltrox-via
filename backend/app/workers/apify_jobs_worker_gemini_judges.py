@@ -1,13 +1,4 @@
-"""Gemini 视频多 pass 评审处理簇(keyframe QA / flash+pro / flash+gpt55 / flash+claude),
-从 apify_jobs_worker_gemini.py 整簇 move 出来。
-
-函数体逐字不变 → 行为必然不变。原 gemini 模块用
-`from app.workers.apify_jobs_worker_gemini_judges import (...)` re-export 兜住所有调用点。
-成本入账/落库(_record_*_cost / _write_gemini_cache)从 apify_jobs_worker_gemini 在本模块
-**底部** lazy import(放底部避免循环导入:此时本簇函数已定义,gemini 模块也已先于其 re-export
-行绑定本簇函数);其余常量/小工具从各自中性模块取。红线:本簇零 fit 写;LLM 绝不写
-viltrox_fit_score。
-"""
+"""Gemini 视频多 pass 评审簇；零 fit 写，provider 落库依赖在底部延迟导入以避免循环。"""
 from __future__ import annotations
 
 import asyncio
@@ -16,10 +7,10 @@ from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
-
 from app.core.gemini_models import VISUAL_PASS_MODEL
 from app.core.logging import get_logger
 from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
+from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse
 from app.domains.kol.video_keyframe_qa_enqueue import (
     final_v1_payload_from_cache_result,
     final_v1_payload_sha256,
@@ -36,7 +27,6 @@ from app.workers.apify_jobs_video_context import (
     _video_final_context,
     _video_performance_context,
 )
-
 
 logger = get_logger(__name__)
 
@@ -58,7 +48,8 @@ def _load_ready_final_v1_source_for_qa(
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
-            SELECT id, target_id, model, result, prompt_version, updated_at
+            SELECT id, target_type, target_id, derive_method, model, result,
+                   prompt_version, status, updated_at
             FROM vkpi_analysis_cache
             WHERE id=%s AND target_type='video' AND target_id=%s
               AND derive_method='video_analysis_final_v1' AND status='ready'
@@ -76,6 +67,14 @@ def _load_ready_final_v1_source_for_qa(
     if not row:
         raise KeyframeQaSourceError("keyframe_qa_source_not_ready")
     item = dict(row)
+    reuse = canonical_final_v1_cache_reuse(
+        item,
+        target_type="video",
+        target_id=str(int(evidence_id)),
+        derive_method="video_analysis_final_v1",
+    )
+    if reuse.get("reusable") is not True:
+        raise KeyframeQaSourceError("keyframe_qa_source_legacy_unverified")
     final_v1 = final_v1_payload_from_cache_result(item.get("result"))
     if not final_v1:
         raise KeyframeQaSourceError("keyframe_qa_source_invalid")
@@ -179,6 +178,13 @@ def _process_gemini_video_final_v1_keyframe_qa(
             evidence_id=int(evidence.get("id") or 0),
         )
     except KeyframeQaSourceError as exc:
+        if str(exc) == "keyframe_qa_source_legacy_unverified":
+            _finish_skipped(
+                conn,
+                int(job["id"]),
+                "skipped_legacy_cache_unverified:keyframe_qa_source",
+            )
+            return
         _block_job(
             conn,
             int(job["id"]),
@@ -769,8 +775,7 @@ def _process_gemini_video_flash_claude_judge(
     )
 
 
-# 成本入账/落库:仍归 apify_jobs_worker_gemini(本簇被它 re-export);放底部 import 避免循环导入
-# (调用点均在函数体内、运行期才解析)。
+# 成本落库仍归 gemini 主模块；底部导入避免循环。
 from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
     _record_anthropic_cost,
     _record_gemini_cost,
@@ -784,6 +789,7 @@ from app.workers.apify_jobs_worker import (  # noqa: E402
     FINAL_V1_KEYFRAME_QA_MODEL,
     LLM_BUDGET_SCOPE,
     _block_job,
+    _finish_skipped,
     _extract_keyframes_for_qa,
     _gemini_worker_overrides,
     _log_budget_preflight_record_only,

@@ -204,10 +204,30 @@ export function detailBundleAnalysisItems(detailBundle: any) {
   const videoAnalysis = recordOr(recordOr(detailBundle).video_analysis);
   return asArray(videoAnalysis.items).map((item) => {
     const record = recordOr(item);
+    const candidateFinalEntry = cacheEntryOrNull(record.final_entry);
+    const analysisJob = cacheEntryOrNull(record.analysis_job);
+    const state = String(
+      record.state
+      || analysisJob?.state
+      || analysisJob?.status
+      || candidateFinalEntry?.status
+      || (candidateFinalEntry ? "ready" : "not_requested"),
+    ).toLowerCase();
     return {
       video: recordOr(record.video),
-      finalEntry: cacheEntryOrNull(record.final_entry),
+      // 未过当前真值闸的 payload 只保留诊断，绝不当 ready 渲染。
+      finalEntry: ["quality_incomplete", "stale", "legacy_unverified"].includes(state) ? null : candidateFinalEntry,
       qaEntry: cacheEntryOrNull(record.qa_entry),
+      state,
+      reason: String(
+        record.reason
+        || analysisJob?.failure_reason_human
+        || analysisJob?.reason_detail
+        || analysisJob?.reason
+        || analysisJob?.error_category
+        || state,
+      ),
+      analysisJob,
     };
   }).filter((item) => Object.keys(item.video).length);
 }
@@ -225,7 +245,7 @@ export function evidenceIdOf(video: any) {
 }
 
 const TERMINAL_ANALYSIS_POLL_STATES = new Set([
-  "blocked", "failed", "error", "cancelled", "canceled", "not_requested",
+  "blocked", "failed", "error", "cancelled", "canceled", "not_requested", "quality_incomplete", "stale", "legacy_unverified",
 ]);
 
 export function videoAnalysisPollSnapshot(payload: any) {

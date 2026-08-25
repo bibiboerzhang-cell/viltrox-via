@@ -51,6 +51,8 @@ def _search_session_job_state(raw_status: str, reason: str = "") -> tuple[str, s
     if status == "queued":
         return "queued", "analysis"
     if status == "done":
+        if "skipped_legacy_cache_unverified" in reason_text:
+            return "partial", "summary"
         if "skipped_existing_analysis_cache" in reason_text:
             return "already_analyzed", "summary"
         return "ready", "summary"
@@ -323,51 +325,9 @@ def _rebuild_search_session_summary(
     )
 
 
-def _search_session_analysis_summary_from_ready_cache(
-    conn: psycopg.Connection[Any],
-    payload: dict[str, Any],
-) -> dict[str, Any] | None:
-    target_type, target_id = _target(payload)
-    derive_method = _derive_method(payload)
-    if derive_method != "video_analysis_final_v1" or target_type != "video" or not target_id:
-        return None
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            """
-            SELECT id, result, cost
-            FROM vkpi_analysis_cache
-            WHERE target_type=%s
-              AND target_id=%s
-              AND derive_method=%s
-              AND status='ready'
-            ORDER BY updated_at DESC, id DESC
-            LIMIT 1
-            """,
-            (target_type, target_id, derive_method),
-        )
-        cache = cur.fetchone()
-        cur.execute(
-            """
-            SELECT id, kol_pool_id, content_url, title, video_title
-            FROM vkpi_kol_video_evidence
-            WHERE id=%s
-            LIMIT 1
-            """,
-            (_int_or_none(target_id),),
-        )
-        evidence = cur.fetchone() or {}
-    if not cache:
-        return None
-    result = cache.get("result") if isinstance(cache.get("result"), dict) else _loads(cache.get("result"), {})
-    return _search_session_analysis_summary_from_result(
-        cache_id=_int_or_none(cache.get("id")),
-        derive_method=derive_method,
-        target_type=target_type,
-        target_id=target_id,
-        evidence=dict(evidence),
-        result=result if isinstance(result, dict) else {},
-        cost=float(cache.get("cost") or 0.0),
-    )
+from app.workers.apify_jobs_worker_session_cache import (  # noqa: E402
+    search_session_analysis_summary_from_ready_cache as _search_session_analysis_summary_from_ready_cache,
+)
 
 
 def _sync_deep_analysis_result_from_cache(

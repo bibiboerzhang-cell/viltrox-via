@@ -51,6 +51,15 @@ def extract_for_cache_row(
     cache_id = _int(cache_row.get("cache_id"))
     if cache_id <= 0:
         return {"status": "invalid_cache_row", "cache_id": None, "mention_rows": 0}
+    if cache_row.get("reusable") is not True:
+        return {
+            "status": "legacy_unverified",
+            "cache_id": cache_id,
+            "mention_rows": 0,
+            "cache_reuse_status": "legacy_unverified",
+            "revalidation_required": True,
+            "claim_status": "descriptive_only",
+        }
     catalog = index or extractor.load_catalog_index(conn)
     rows = extractor.extract_resolved(cache_row.get("result"), catalog)
     written = store._write_rows(conn, cache_row, rows)
@@ -84,7 +93,13 @@ def extract_for_cache_id(
     cid = _int(cache_id)
     if cid <= 0:
         return {"status": "invalid_cache_id", "cache_id": None, "mention_rows": 0}
-    rows = store._candidate_cache_rows(conn, limit=1, force=True, cache_ids=[cid])
+    rows = store._candidate_cache_rows(
+        conn,
+        limit=1,
+        force=True,
+        cache_ids=[cid],
+        include_unverified=True,
+    )
     if not rows:
         return {"status": "not_final_v1_ready", "cache_id": cid, "mention_rows": 0}
     return extract_for_cache_row(conn, rows[0], index=index, commit=commit)

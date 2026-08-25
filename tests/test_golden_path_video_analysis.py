@@ -54,12 +54,35 @@ def _valid_final_v1_payload() -> dict[str, Any]:
             "content_summary": "Golden path: creator reviews a Viltrox AF 35mm lens on camera.",
             "scene_timeline": [{"timestamp": "00:05", "what": "Lens unboxing on desk"}],
             "product_presence": {"products": ["Viltrox AF 35mm"], "notes": "visible"},
+            "brand_product_evidence": {
+                "viltrox_status": "unknown",
+                "inspection_complete": True,
+                "checked_modalities": ["visual", "audio"],
+                "viltrox_evidence": [],
+                "viltrox_products": [],
+                "competitors": [],
+            },
         },
         "layer2_viewer_emotion": {"evidence": ["upbeat narration"]},
         "layer3_three_values": {},
         "layer4_attribution": {},
         "layer5_recommendations": {},
-        "layer6_flags_and_scores": {},
+        "layer6_flags_and_scores": {
+            "risk_flags": [],
+            "scores": {
+                key: {"score": None, "confidence": 0.0, "rationale": "Golden fixture."}
+                for key in (
+                    "content_quality_score",
+                    "viewer_heart_score",
+                    "channel_value_score",
+                    "asset_reuse_score",
+                    "product_proof_score",
+                    "marketing_value_score",
+                )
+            },
+            "final_verdict": "Golden fixture final verdict.",
+            "key_hook": "Golden fixture key hook.",
+        },
     }
 
 

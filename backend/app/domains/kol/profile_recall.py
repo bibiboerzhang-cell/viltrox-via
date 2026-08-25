@@ -16,6 +16,7 @@ from app.domains.kol.discovery_filters import (
     _reach_floor_reason,
 )
 from app.domains.kol.pool_common import _table_columns
+from app.domains.kol.profile_recall_funnel import RecallStageLedger
 from app.domains.kol.profile_recall_contract import (
     COLLECTION_NAME,
     DEFAULT_RESULT_LIMIT,
@@ -625,25 +626,20 @@ def recall_kol_profiles(
             evidence_by_id=evidence_by_id,
         )
     evidence_loaded_at = perf_counter()
-    fallback_used_count = 0
-    missing_type_count = 0
-    excluded_chinese_count = 0
-    filtered_low_reach_count = 0
-    filtered_unknown_reach_count = 0
-    hard_filter_rejected_count = 0
-    hard_filter_rejected_by: dict[str, int] = {}
-    filtered_no_match_evidence_count = 0
+    # A8 分层记账:每道闸各自进/出多少、硬筛「未知驳回 vs 值不匹配驳回」拆两本账。
+    # 纯计数托管,过滤判定仍在本循环里,通过集合与记账前逐条一致。
+    ledger = RecallStageLedger()
     for hit in ordered_hits:
         row = rows_by_id.get(hit.kol_pool_id)
         if not row:
             row = fallback_rows.get(hit.kol_pool_id)
             if not row:
-                missing_type_count += 1
+                ledger.missing_type += 1
                 continue
-            fallback_used_count += 1
+            ledger.fallback_used += 1
         # P0-6:纯地区判据(CN/HK/TW),不再按汉字名排除;country 为空放行(预期)。
         if exclude_chinese and _country_in_excluded_region(row.get("country")):
-            excluded_chinese_count += 1
+            ledger.excluded_region += 1
             continue
         # 召回触达门槛(用户裁决 2026-07-11 + 2026-07-12 第二道闸升级,与地区排除同层的召回
         # FILTER):三态走 _reach_display_state 单一真源——low_reach(followers 明确 < 门槛/
@@ -652,14 +648,14 @@ def recall_kol_profiles(
         # 零触 viltrox_fit_score。
         _reach_state = _reach_display_state(row)
         if not smart_local_enabled and _reach_state == "low_reach":
-            filtered_low_reach_count += 1
+            ledger.low_reach += 1
             logger.debug(
                 "recall_reach_floor_filtered handle=%r kol_pool_id=%s reason=%s",
                 row.get("handle"), hit.kol_pool_id, _reach_floor_reason(row) or "low_reach_flag",
             )
             continue
         if not smart_local_enabled and _reach_state == "unknown":
-            filtered_unknown_reach_count += 1
+            ledger.unknown_reach += 1
             logger.debug(
                 "recall_reach_unknown_hidden handle=%r kol_pool_id=%s",
                 row.get("handle"), hit.kol_pool_id,
@@ -671,17 +667,15 @@ def recall_kol_profiles(
             evidence,
             normalized_filters,
         )
+        ledger.note_hard_filter(rejected_fields, unknown_fields, passed=passes_filters)
         if not passes_filters:
-            hard_filter_rejected_count += 1
-            for field in rejected_fields:
-                hard_filter_rejected_by[field] = hard_filter_rejected_by.get(field, 0) + 1
             continue
         # 先按检索词判(老行为);判空再用 检索词∪人群词 兜底——LLM 常给泛角色词被剔光→496/500 判无证据(08-23)
         field_evidence = build_match_evidence(row, evidence, resolved_text, required_product_terms=safe_product_evidence_terms) or (
             build_match_evidence(row, evidence, evidence_query_text, required_product_terms=safe_product_evidence_terms)
             if evidence_query_text != resolved_text else [])
         if not allow_backfill and not field_evidence:
-            filtered_no_match_evidence_count += 1
+            ledger.no_match_evidence += 1
             continue
         bucket = _bucket_for(row, mixed_policy)
         item = _format_item(
@@ -900,21 +894,15 @@ def recall_kol_profiles(
             "duplicate_count": duplicate_count,
             "typed_candidate_count": len(buckets["creator"]) + len(buckets["reviewer"]),
             "unknown_type_candidate_count": len(buckets["unknown"]),
-            "missing_type_count": missing_type_count,
-            # 召回触达门槛命中数(诚实可见:被挡=从本出口静默缺席,非降分)。
-            "filtered_low_reach": filtered_low_reach_count,
-            # followers 未知不展示(「分析后再 po」,2026-07-12 裁决);补全回填达标后自动回归。
-            "filtered_unknown_reach": filtered_unknown_reach_count,
-            "filtered_excluded_region": excluded_chinese_count,
-            "hard_filter_rejected_count": hard_filter_rejected_count,
-            "hard_filter_rejected_by": hard_filter_rejected_by,
-            "filtered_no_match_evidence": filtered_no_match_evidence_count,
+            # 分层记账(既有键原样保留:低触达/未知触达/地区/硬筛/无证据 命中数,
+            # 诚实可见——被挡=从本出口静默缺席,非降分)。新增每闸进/出与未知拆账。
+            **ledger.as_diagnostics(deduped_candidate_count=len(ordered_hits)),
             "evidence_gate_enabled": not bool(allow_backfill),
             "empty_reason": empty_reason,
             "shortfall_reason": evidence_shortfall_reason,
             "applied_filters": normalized_filters,
             "unsupported_filters": unsupported_filters,
-            "fallback_pool_rows": fallback_used_count,
+            "fallback_pool_rows": ledger.fallback_used,
             "pool_text_fallback_count": pool_text_fallback_count,
             "lexical_candidate_count": lexical_candidate_count,
             "display_rerank": _rerank_note,

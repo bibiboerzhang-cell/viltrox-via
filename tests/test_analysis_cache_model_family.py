@@ -51,9 +51,12 @@ def test_upsert_params_fill_prompt_version_and_family() -> None:
         triggered_by_user_id=5,
         prompt_version="final_v1_pure_video_evidence_v2",
     )
-    assert params == ("video", "701", "gemini-3.6-flash", "video_analysis_final_v1", "{}", 0.01, 5, "final_v1_pure_video_evidence_v2", "gemini-3.6")
+    assert params == (
+        "video", "701", "gemini-3.6-flash", "video_analysis_final_v1", "{}", 0.01,
+        5, "final_v1_pure_video_evidence_v2", "gemini-3.6", "ready",
+    )
     sql = cache_repo.VIDEO_ANALYSIS_CACHE_UPSERT_SQL
-    assert sql.count("%s") == 9
+    assert sql.count("%s") == 10
     assert "prompt_version = EXCLUDED.prompt_version" in sql
     assert "model_family = EXCLUDED.model_family" in sql
     assert "ON CONFLICT (target_type, target_id, derive_method)" in sql  # 唯一键不动
@@ -61,7 +64,51 @@ def test_upsert_params_fill_prompt_version_and_family() -> None:
         target_type="video", target_id="1", model="mock", derive_method="mock", result_json="{}",
         cost=0, triggered_by_user_id=None, prompt_version="  ",
     )
-    assert blank[7] is None and blank[8] == "mock"
+    assert blank[7] is None and blank[8] == "mock" and blank[9] == "ready"
+
+    incomplete = cache_repo.video_analysis_cache_upsert_params(
+        target_type=cache_repo.VIDEO_QUALITY_TRIAGE_TARGET_TYPE,
+        target_id="2", model="mock", derive_method="video_analysis_final_v1",
+        result_json="{}", cost=0, triggered_by_user_id=None, prompt_version=None,
+        status="quality_incomplete",
+    )
+    assert incomplete[0] == "video_quality_triage"
+    assert incomplete[9] == "quality_incomplete"
+    with pytest.raises(ValueError, match="cache status"):
+        cache_repo.video_analysis_cache_upsert_params(
+            target_type="video", target_id="3", model="mock", derive_method="video_analysis_final_v1",
+            result_json="{}", cost=0, triggered_by_user_id=None, prompt_version=None,
+            status="forged_ready",
+        )
+
+
+@pytest.mark.parametrize(
+    ("target_type", "status", "message"),
+    [
+        ("video", "quality_incomplete", "must use target_type=video_quality_triage"),
+        ("VIDEO_QUALITY_TRIAGE", "quality_incomplete", "must use target_type=video_quality_triage"),
+        ("video_quality_triage", "ready", "must not use target_type=video_quality_triage"),
+        ("video", "", "cache status"),
+        ("video", None, "cache status"),
+    ],
+)
+def test_upsert_params_fail_closed_status_namespace_matrix(
+    target_type: str,
+    status: str | None,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        cache_repo.video_analysis_cache_upsert_params(
+            target_type=target_type,
+            target_id="guarded",
+            model="gemini-3.6-flash",
+            derive_method="video_analysis_final_v1",
+            result_json="{}",
+            cost=0.01,
+            triggered_by_user_id=None,
+            prompt_version="final_v1_pure_video_evidence_v2",
+            status=status,  # type: ignore[arg-type] - invalid runtime input is the contract under test.
+        )
 
 
 def test_row_to_entry_reads_new_columns_and_tolerates_old_rows() -> None:

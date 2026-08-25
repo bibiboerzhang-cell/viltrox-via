@@ -146,6 +146,8 @@ export async function smartKolSearchProfileAdvanceJob(
     includeNewDiscovery?: boolean;
     newDiscoveryLimit?: number;
     newDiscoveryPerPlatformLimit?: number;
+    /** 每平台上限覆盖（{平台: 上限}）；缺省时后端全平台沿用上面的标量。 */
+    newDiscoveryPerPlatformLimits?: Readonly<Record<string, number>>;
     newDiscoveryPlatforms?: string[];
     excludeChinese?: boolean;
     market?: string;
@@ -187,6 +189,9 @@ export async function smartKolSearchProfileAdvanceJob(
   if (typeof params.representativeVideoLimit === "number") body.representative_video_limit = params.representativeVideoLimit;
   if (typeof params.newDiscoveryLimit === "number") body.new_discovery_limit = params.newDiscoveryLimit;
   if (typeof params.newDiscoveryPerPlatformLimit === "number") body.new_discovery_per_platform_limit = params.newDiscoveryPerPlatformLimit;
+  if (params.newDiscoveryPerPlatformLimits && Object.keys(params.newDiscoveryPerPlatformLimits).length) {
+    body.new_discovery_per_platform_limits = params.newDiscoveryPerPlatformLimits;
+  }
   return apiFetch<VkpiKolSmartSearchProfileAdvanceResponse>(
     "/api/admin/vkpi/kol-smart-search/profile-advance-job",
     {

@@ -115,6 +115,21 @@ def test_operator_ack_preflight_is_temporary_authorization_not_signed_readiness(
     assert provider["operational_authorization_source"] == "operator_ack"
     assert provider["operational_authorization_temporary"] is True
 
+    from app.workers import apify_jobs_worker
+
+    snapshot = apify_jobs_worker._google_execution_authorization(result)
+    assert snapshot["execution_authorization_at_run"] == {
+        "scope": "execution_time_snapshot",
+        "authorized": True,
+        "production_authorized": True,
+        "evaluation_only": False,
+        "status": "operationally_authorized",
+        "source": "operator_ack",
+        "temporary": True,
+    }
+    assert snapshot["signed_readiness_at_run"]["production_ready"] is False
+    assert snapshot["signed_readiness_at_run"]["status"] == "not_production_ready"
+
 
 def test_signed_readiness_remains_production_ready_even_when_ack_is_present(
     monkeypatch,
@@ -147,3 +162,15 @@ def test_signed_readiness_remains_production_ready_even_when_ack_is_present(
     assert provider["signed_model_production_ready"] is True
     assert provider["operational_authorization_source"] == "signed_evidence"
     assert provider["operational_authorization_temporary"] is False
+
+    from app.workers import apify_jobs_worker
+
+    snapshot = apify_jobs_worker._google_execution_authorization(result)
+    assert snapshot["execution_authorization_at_run"]["source"] == "signed_evidence"
+    assert snapshot["signed_readiness_at_run"] == {
+        "scope": "execution_time_snapshot",
+        "production_ready": True,
+        "status": "production_ready",
+        "claim_status": "verified",
+        "evidence_source": "test_signed_fixture",
+    }

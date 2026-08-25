@@ -10,6 +10,7 @@ import urllib.parse
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
+from app.domains.analysis.cache_repo import analysis_cache_read_projection
 from app.domains import content_metric_snapshots
 from app.domains.kol.metric_truth import project_evidence_item_truth
 from app.domains.kol.pool_common import (
@@ -680,6 +681,29 @@ def _video_evidence_for_kol(
         )
         items.append(project_evidence_item_truth(item))
     return items
+
+
+def _final_analysis_cache_projection(
+    entry: dict[str, Any] | None,
+    *,
+    target_id: Any = None,
+) -> tuple[dict[str, Any] | None, str, str | None, dict[str, Any]]:
+    """Project one final-v1 cache row without promoting quality triage."""
+
+    projection = analysis_cache_read_projection(
+        entry,
+        target_type="video",
+        target_id=target_id or (entry or {}).get("target_id"),
+        derive_method="video_analysis_final_v1",
+    )
+    state = str(projection.get("state") or "not_requested")
+    if state == "ready":
+        return entry, state, None, projection
+    if state == "quality_incomplete":
+        return None, state, "final_v1_quality_incomplete", projection
+    if state == "legacy_unverified":
+        return None, state, "final_v1_cache_legacy_unverified", projection
+    return None, "not_requested", "analysis_not_requested", projection
 
 
 def _confidence_badge_from_dims(dimensions: dict[str, Any]) -> dict[str, Any]:

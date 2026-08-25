@@ -19,6 +19,10 @@ APIFY_FAIL = {
     "status": "failed",
     "platform": "instagram",
     "scraped_ok": True,
+    "scrape_success": True,
+    "media_resolved": False,
+    "downloadable": False,
+    "confirmed_non_video": False,
     "reason": "media_resolve_failed:instagram:scraped_no_downloadable_url",
     "cache_hit": False,
     "provider_calls_performed": True,
@@ -55,6 +59,10 @@ def test_empty_entries_carousel_is_no_video_confirmed(monkeypatch, tmp_path):
     )
     out = fb.ytdlp_fallback_resolve(EVIDENCE, str(tmp_path), apify_resolved=dict(APIFY_FAIL))
     assert out["no_video_confirmed"] is True
+    assert out["confirmed_non_video"] is True
+    assert out["media_resolved"] is False
+    assert out["downloadable"] is False
+    assert out["media_resolution_state"] == "confirmed_non_video"
     assert out["reason"] == "media_resolve_failed:instagram:image_post_no_video_confirmed"
     assert out["ok"] is False
 
@@ -86,6 +94,11 @@ def test_real_video_rescued_via_download(monkeypatch, tmp_path):
     assert out["bytes"] == 2048 and out["path"].endswith("ytdlp_fallback.mp4")
     assert out["provider_calls_performed"] is True
     assert out["method"] == "ytdlp_fallback"
+    assert out["scrape_success"] is True
+    assert out["media_resolved"] is True
+    assert out["downloadable"] is True
+    assert out["confirmed_non_video"] is False
+    assert out["media_resolution_state"] == "local_video_ready"
     # 下载命令必须带体积上限,且探测/下载各一次调用。
     assert len(calls) == 2 and "--max-filesize" in calls[1]
     assert calls[0][:3] == [fb.sys.executable, "-m", "yt_dlp"]
@@ -176,12 +189,14 @@ def test_wiring_source_contract():
     workers = Path(fb.__file__).resolve().parent
     media = workers.joinpath("apify_jobs_worker_media.py").read_text(encoding="utf-8")
     assert "ytdlp_fallback_resolve" in media
-    assert 'reason.endswith("scraped_no_downloadable_url")' in media
+    assert "needs_secondary_video_probe(resolved)" in media
+    assert 'reason.endswith("scraped_no_downloadable_url")' not in media
     assert "scrape_empty_or_blocked" not in media.split("yt-dlp 兜底")[1].split("return resolved")[0]
     gemini = workers.joinpath("apify_jobs_worker_gemini.py").read_text(encoding="utf-8")
     assert 'resolved.get("cache_hit") or resolved.get("local_path_ready")' in gemini
     # 复审 HIGH 契约:media_kind 图章只盖 yt-dlp 定论,IG 老口径 blocked 不落章。
-    assert 'if resolved.get("no_video_confirmed") is True:\n                    _persist_image_post_verdict(conn, evidence)' in gemini
+    assert 'resolved.get("confirmed_non_video") is True' in gemini
+    assert '_persist_image_post_verdict(conn, evidence)' in gemini
     assert 'resolved.get("scraped_ok")' not in gemini.split('if not resolved.get("ok"):', 1)[1].split('if resolved.get("cache_hit")', 1)[0]
 
 
@@ -242,6 +257,7 @@ def test_worker_terminal_blocks_only_confirmed_image_post(monkeypatch):
         lambda *_args: {
             **APIFY_FAIL,
             "no_video_confirmed": True,
+            "confirmed_non_video": True,
             "reason": "media_resolve_failed:instagram:image_post_no_video_confirmed",
         },
     )

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.video_analysis_contract import FINAL_V1_PROMPT_CONTRACT
 from app.workers.apify_jobs_worker_helpers import (
     _float_or_none,
     _int_or_none,
@@ -14,13 +15,6 @@ from app.workers.apify_jobs_worker_helpers import (
     _rate,
     _truthy,
 )
-
-# Identity of the project-free final_v1 prompt contract.  Stored under
-# ``provenance.prompt_contract`` of every final_v1 cache row so a later audit
-# (scripts/ops/mark_stale_final_v1_sku_context_cache.py) can separate rows
-# produced by this contract from rows produced while project SKU context was
-# being injected into the prompt.
-FINAL_V1_PROMPT_CONTRACT = "final_v1_pure_video_evidence_v2"
 
 # Keys that must never reach the final_v1 prompt (project / employee scope).
 FINAL_V1_PROJECT_SCOPED_KEYS = frozenset(

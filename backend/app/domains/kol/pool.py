@@ -58,6 +58,7 @@ from app.domains.kol.pool_detail import (
     _v6_breakdown_for_item,
     _video_evidence_for_kol,
     _confidence_badge_from_dims,
+    _final_analysis_cache_projection,
 )
 # P0-3 inflation outlier detection moved to pool_inflation.py (behavior-preserving).
 from app.domains.kol.pool_inflation import (
@@ -629,26 +630,18 @@ def detail_bundle(
     from app.domains.kol.eleven_dimensions import load_persisted_dimensions_11
     from app.domains.kol.llm_deep_analysis import get_kol_llm_deep_analysis
 
-    # Keep the domain contract aligned with the API route (1..200).  The
-    # previous hard cap of 10 silently truncated account detail bundles even
-    # when callers explicitly requested the route default of 24 videos.
     safe_video_limit = max(1, min(200, int(video_limit or 3)))
     safe_llm_limit = max(1, min(50, int(llm_limit or 20)))
     item_payload = get_item(
         int(kol_pool_id),
         contact_visibility=contact_visibility,
         include_raw_for_derivation=True,
-        # detail_bundle immediately replaces this field with the caller's
-        # requested video_limit; skip the legacy three-row read and its media
-        # projections instead of doing the same work twice.
         include_video_evidence=False,
     )
     raw_platform_data_for_derivation = item_payload.pop("_raw_platform_data_for_derivation", None)
     item = dict(item_payload.get("item") or {})
     videos = _video_evidence_for_kol(int(kol_pool_id), limit=safe_video_limit)
     item["video_evidence"] = videos
-    # 视频分析与展示用 videos(限 3)解耦:单独查该 kol 全部有 final_v1/keyframe_qa cache 的
-    # evidence(放宽 is_active 回挂 inactive 上的已有分析),修「找到 N 条但 video_analysis 未命中」。
     analysis_evidence = _video_evidence_for_kol(
         int(kol_pool_id), limit=200, only_with_cache=True, include_inactive=True
     )
@@ -677,33 +670,50 @@ def detail_bundle(
     }
     llm_deep = get_kol_llm_deep_analysis(int(kol_pool_id), limit=safe_llm_limit)
     analysis_items: list[dict[str, Any]] = []
+    analysis_states: dict[int, str] = {}
     ready_count = 0
+    quality_incomplete_count = 0
+    legacy_unverified_count = 0
     qa_ready_count = 0
     for video in analysis_evidence:
         evidence_id = _int_or_none(video.get("evidence_id") or video.get("id"))
         if not evidence_id:
             continue
-        final_entry = analysis_cache.get((str(evidence_id), "video_analysis_final_v1"))
+        final_cache_entry = analysis_cache.get((str(evidence_id), "video_analysis_final_v1"))
         qa_entry = analysis_cache.get((str(evidence_id), "video_analysis_final_v1_keyframe_qa"))
-        if final_entry and final_entry.get("status") == "ready":
+        final_entry, final_state, final_reason, final_projection = _final_analysis_cache_projection(final_cache_entry, target_id=str(evidence_id))
+        analysis_states[evidence_id] = final_state
+        if final_state == "ready":
             ready_count += 1
-        else:
-            final_entry = None
-        if qa_entry and qa_entry.get("status") == "ready":
+        elif final_state == "quality_incomplete":
+            quality_incomplete_count += 1
+        elif final_state == "legacy_unverified":
+            legacy_unverified_count += 1
+        if final_state == "ready" and qa_entry and qa_entry.get("status") == "ready":
             qa_ready_count += 1
         else:
             qa_entry = None
+        projected_video = dict(video)
+        projected_video["has_final_v1_cache"] = final_state == "ready"
+        projected_video["analysis_cache_state"] = final_state
         analysis_items.append(
             {
-                "video": video,
+                "video": projected_video,
                 "final_entry": final_entry,
+                "raw_final_entry": final_cache_entry if final_state == "legacy_unverified" else None,
                 "qa_entry": qa_entry,
-                "state": "ready" if final_entry else "pending",
+                "state": final_state,
+                "reason": final_reason,
+                **({key: final_projection[key] for key in (
+                    "terminal", "revalidation_required", "claim_status", "cache_reuse_status", "cache_id", "reasons",
+                ) if key in final_projection} if final_state == "legacy_unverified" else {}),
             }
         )
-    # 当前设备 & 升级机会:从已有分析散文抽机身/镜头品牌(零 LLM、纯读),填 device_* 供前端「当前设备」块,
-    # 治「机身 待接入」占位。升级机会:已用 Viltrox=low(已是客户)/ 用竞品镜头=high(可推)/ 仅机身=medium。
-    # 红线:纯读分析文本,绝不触 viltrox_fit_score。
+    for video in videos:
+        evidence_id = _int_or_none(video.get("evidence_id") or video.get("id"))
+        if evidence_id in analysis_states:
+            video["has_final_v1_cache"] = analysis_states[evidence_id] == "ready"
+            video["analysis_cache_state"] = analysis_states[evidence_id]
     try:
         import json as _gear_json
         from app.domains.kol.creator_gear import aggregate_creator_gear
@@ -759,9 +769,6 @@ def detail_bundle(
         item["audience_estimated"] = _aud if isinstance(_aud, dict) and _aud else None
     except Exception:
         item["audience_estimated"] = None
-    # Readiness ratios use their own active-evidence denominator (up to 200),
-    # never the drawer's display page (commonly 24).  The loader fetches one
-    # extra row and marks truncation, so 200 is not misreported as full scope.
     readiness_sample = load_readiness_video_evidence(
         int(kol_pool_id), limit=200, conn=get_conn()
     )
@@ -778,11 +785,14 @@ def detail_bundle(
     video_analysis_summary = {
         "evidence_count": len(analysis_evidence),
         "ready_count": ready_count,
-        "pending_count": len(analysis_evidence) - ready_count,
+        "pending_count": max(
+            0,
+            len(analysis_evidence) - ready_count - quality_incomplete_count - legacy_unverified_count,
+        ),
+        "quality_incomplete_count": quality_incomplete_count,
+        "legacy_unverified_count": legacy_unverified_count,
         "qa_ready_count": qa_ready_count,
         "source": "vkpi_analysis_cache",
-        # Compatibility projection for clients that read readiness beside the
-        # existing video-analysis counters.  The full contract remains top-level.
         "analysis_readiness": {
             key: analysis_readiness.get(key)
             for key in (

@@ -32,6 +32,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.domains.kol import my_kol_board_ext as ext  # noqa: E402
+from app.domains.kol import my_kol_video_recovery as recovery  # noqa: E402
 
 
 # ── mock conn(仿 test_voice_report_ext_contract._FakeConn)────────────────
@@ -516,9 +517,29 @@ def test_limits_pushed_down_and_python_side_capped(monkeypatch):
 
 
 def test_recent_videos_honest_nulls_bool_and_thumbnail_chain(monkeypatch):
-    """view_count NULL 原样透出(未实测 ≠ 0);BOOLEAN 读回 1 → 真布尔;
-    缩略图三件套=创意库自愈链(无 raw 无缓存 → youtube 派生兜底)。"""
+    """view_count NULL 原样透出(未实测 ≠ 0);已证完成读回真布尔;
+    缩略图三件套=创意库自愈链(无 raw 无缓存 → youtube 派生兜底)。
+
+    ``has_final_v1_cache`` 的唯一真源是 ``attach_task_states`` 复核过的缓存行
+    (SQL 里的 ``result IS NOT NULL`` 会把未过证据闸的旧行也算成已完成),所以
+    这里按真源喂一条已证 ready 缓存,而不是喂 SQL 列。
+    """
     _frozen(monkeypatch)
+    monkeypatch.setattr(
+        recovery,
+        "_final_v1_caches",
+        lambda _conn, ids, derive_method=recovery.FINAL_V1_DERIVE_METHOD: (
+            {
+                11: {
+                    "id": 501, "status": "ready", "result": None,
+                    "updated_at": "2026-07-10T09:00:00+00:00",
+                    "cache_reuse_status": "canonical",
+                }
+            }
+            if derive_method == recovery.FINAL_V1_DERIVE_METHOD and 11 in list(ids)
+            else {}
+        ),
+    )
     conn = _FakeConn(routes={
         ext.RECENT_VIDEOS_SQL: [
             {"evidence_id": 11, "kol_pool_id": 101, "project_id": 7,

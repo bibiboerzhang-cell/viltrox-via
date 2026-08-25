@@ -14,7 +14,7 @@ from app.domains.analysis.cache_repo import (
 @pytest.mark.parametrize(
     ("derive_method", "platform", "entry", "job", "expected"),
     [
-        ("video_analysis_final_v1", "youtube", {"status": "ready"}, None, "ready"),
+        ("video_analysis_final_v1", "youtube", {"status": "ready"}, None, "legacy_unverified"),
         ("video_analysis_final_v1", "youtube", None, {"status": "queued"}, "queued"),
         ("video_analysis_final_v1", "youtube", None, {"status": "running"}, "running"),
         ("video_analysis_final_v1", "youtube", None, None, "not_requested"),
@@ -115,13 +115,14 @@ def test_project_video_cache_summary_counts_only_real_active_jobs_as_pending() -
 
     assert conn.params == ("video_analysis_final_v1", "video_analysis_final_v1", 7)
     assert [item["state"] for item in result["items"]] == [
-        "ready",
+        "legacy_unverified",
         "queued",
         "running",
         "not_requested",
         "failed",
     ]
-    assert result["summary"]["ready_count"] == 1
+    assert result["summary"]["ready_count"] == 0
+    assert result["summary"]["legacy_unverified_count"] == 1
     assert result["summary"]["active_count"] == 2
     assert result["summary"]["pending_count"] == 2
     assert result["summary"]["not_requested_count"] == 1

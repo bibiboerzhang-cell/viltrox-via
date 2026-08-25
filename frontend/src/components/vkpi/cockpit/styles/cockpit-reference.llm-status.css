@@ -1,0 +1,88 @@
+.vkpi-dashboard-task-queue__runtime {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.vkpi-dashboard-task-queue__runtime > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  padding: 5px 6px;
+  border: 1px solid var(--ds-line);
+  border-radius: 7px;
+  background: var(--ds-panel);
+}
+
+.vkpi-dashboard-task-queue__runtime small,
+.vkpi-dashboard-task-queue__recent small {
+  flex: none;
+  color: var(--ds-muted);
+  font-size: var(--ds-cockpit-fs-8);
+}
+
+.vkpi-dashboard-task-queue__runtime strong {
+  overflow: hidden;
+  color: var(--ds-text-2);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-cockpit-fs-8);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vkpi-dashboard-task-queue__runtime strong.is-ok {
+  color: var(--ds-good);
+}
+
+.vkpi-dashboard-task-queue__runtime strong.is-warn,
+.vkpi-dashboard-task-queue__recent > span.is-warn strong {
+  color: var(--ds-warn);
+}
+
+.vkpi-dashboard-task-queue__recent {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.vkpi-dashboard-task-queue__recent > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.vkpi-dashboard-task-queue__recent strong {
+  overflow: hidden;
+  color: var(--ds-text-2);
+  font-size: var(--ds-cockpit-fs-8);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vkpi-dashboard-task-queue.is-compact .vkpi-dashboard-task-queue__runtime {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.vkpi-dashboard-task-queue.is-compact .vkpi-dashboard-task-queue__runtime > span {
+  padding: 3px 4px;
+}
+
+.vkpi-dashboard-task-queue.is-compact .vkpi-dashboard-task-queue__recent {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  margin-bottom: 6px;
+}
+
+.vkpi-rail.is-collapsed .vkpi-dashboard-task-queue.is-compact .vkpi-dashboard-task-queue__runtime,
+.vkpi-rail.is-collapsed .vkpi-dashboard-task-queue.is-compact .vkpi-dashboard-task-queue__recent {
+  display: none;
+}

@@ -67,6 +67,13 @@ def test_owner_content_fit_enqueue_persists_target_fence(monkeypatch) -> None:
     conn.execute("ALTER TABLE apify_jobs ADD COLUMN created_at TEXT")
     captured: dict[str, Any] = {}
     monkeypatch.setattr(connection, "get_conn", lambda: conn)
+    canonical_videos = content_fit_enqueue.content_fit_analysis._VideoAnalyses([{"evidence_id": 101}])
+    canonical_videos.cache_gate = {"status": "canonical", "revalidation_required": False}
+    monkeypatch.setattr(
+        content_fit_enqueue.content_fit_analysis,
+        "_video_analyses",
+        lambda *_a, **_k: canonical_videos,
+    )
     monkeypatch.setattr(
         content_fit_enqueue,
         "_content_fit_ai_readiness",

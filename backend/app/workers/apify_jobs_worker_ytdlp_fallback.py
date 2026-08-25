@@ -23,6 +23,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.domains.media.cache_core import MAX_VIDEO_BYTES
+from app.services.media.resolution_state import stamp_video_media_resolution
 from app.workers.apify_jobs_worker_helpers import _redact_sensitive_text
 
 logger = get_logger("workers.apify_jobs_worker_ytdlp_fallback")
@@ -118,7 +119,7 @@ def ytdlp_fallback_resolve(
     """Apify 直链失败后的第二轮;任何非确定结论都原样保留 Apify 判决。"""
     url = str(evidence.get("content_url") or "").strip()
     platform = str(apify_resolved.get("platform") or "").strip().lower()
-    out = dict(apify_resolved)
+    out = stamp_video_media_resolution(apify_resolved)
     if not url:
         return out
     probe = _probe(url)
@@ -126,7 +127,12 @@ def ytdlp_fallback_resolve(
     if probe["verdict"] == "no_video":
         out["no_video_confirmed"] = True
         out["reason"] = f"media_resolve_failed:{platform}:image_post_no_video_confirmed"
-        return out
+        return stamp_video_media_resolution(
+            out,
+            media_resolved=False,
+            downloadable=False,
+            confirmed_non_video=True,
+        )
     if probe["verdict"] != "video":
         return out
     download = _download(probe.get("target_url") or url, probe.get("playlist_index"), output_dir)
@@ -136,22 +142,27 @@ def ytdlp_fallback_resolve(
     logger.info(
         "ytdlp fallback rescued media | platform=%s bytes=%s", platform, download["bytes"]
     )
-    return {
-        **apify_resolved,
-        "ok": True,
-        "status": "ready",
-        "reason": "media_resolved_ytdlp_fallback",
-        "method": "ytdlp_fallback",
-        "local_path_ready": True,
-        "path": str(download["path"]),
-        "bytes": int(download["bytes"]),
-        "content_type": "video/mp4",
-        "cache_hit": False,
-        "provider_calls_performed": True,
-        "direct_video_url": "",
-        "direct_video_url_host": "",
-        "ytdlp": {**(probe.get("diag") or {}), "stage": "download_ok"},
-    }
+    return stamp_video_media_resolution(
+        {
+            **apify_resolved,
+            "ok": True,
+            "status": "ready",
+            "reason": "media_resolved_ytdlp_fallback",
+            "method": "ytdlp_fallback",
+            "local_path_ready": True,
+            "path": str(download["path"]),
+            "bytes": int(download["bytes"]),
+            "content_type": "video/mp4",
+            "cache_hit": False,
+            "provider_calls_performed": True,
+            "direct_video_url": "",
+            "direct_video_url_host": "",
+            "ytdlp": {**(probe.get("diag") or {}), "stage": "download_ok"},
+        },
+        media_resolved=True,
+        downloadable=True,
+        confirmed_non_video=False,
+    )
 
 
 def persist_image_post_verdict(conn: Any, evidence: dict[str, Any]) -> None:

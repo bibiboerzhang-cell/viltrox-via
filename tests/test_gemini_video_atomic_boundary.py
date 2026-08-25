@@ -180,6 +180,10 @@ def test_uri_and_file_attempts_each_reserve_settle_once_without_double_budget(
         for kwargs in provider_kwargs
     )
     assert [row["state"] for row in attempt_log] == ["settled", "settled"]
+    assert [row["response_model"] for row in attempt_log] == [
+        "gemini-3.6-flash",
+        "gemini-3.6-flash",
+    ]
 
 
 def test_google_multimodal_attempt_is_covered_by_fleet_breaker(monkeypatch) -> None:
@@ -250,6 +254,8 @@ def test_provider_exception_is_unknown_and_never_released(monkeypatch) -> None:
         "unknown",
     ]
     assert ledgers[-1]["status"] == "provider_exception"
+    assert ledgers[-1]["fallback_used"] is False
+    assert ledgers[-1]["metadata"]["task_binding_role"] == "primary"
     assert attempt_log[-1]["state"] == "unknown"
 
 
@@ -304,6 +310,7 @@ def test_readiness_block_runs_neither_reservation_nor_provider(monkeypatch) -> N
 
     assert [event[0] for event in reservations.events] == ["ledger"]
     assert ledgers[-1]["status"] == "provider_blocked"
+    assert ledgers[-1]["fallback_used"] is False
 
 
 def test_worker_outer_cost_path_does_not_write_a_second_ledger(monkeypatch) -> None:

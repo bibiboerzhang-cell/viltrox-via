@@ -54,6 +54,22 @@ describe("Viltrox video evidence classification", () => {
     expect(classifyVideoRow(row(17, { llm_viltrox_status: null, llm_viltrox_detected: false }))).toBe("not_related");
   });
 
+  it("does not turn an unverified historical cache into a brand claim or paid batch candidate", () => {
+    const legacy = row(18, {
+      has_final_v1_cache: false,
+      has_final_v1_raw_cache: true,
+      analysis_cache_reuse_status: "legacy_unverified",
+      revalidation_required: true,
+      v_tier: "analysis_confirmed",
+      llm_viltrox_status: "present",
+      llm_viltrox_products: ["AF 85mm"],
+    });
+    expect(classifyVideoRow(legacy)).toBe("undetermined");
+    const summary = summarizeKolVideos([legacy]);
+    expect(summary.analyzedCount).toBe(0);
+    expect(summary.unanalyzed).toEqual([]);
+  });
+
   it("never counts analyzed-negative or unknown rows as Viltrox related", () => {
     const videos = [
       row(1, { project_id: 4, view_count: 100 }),

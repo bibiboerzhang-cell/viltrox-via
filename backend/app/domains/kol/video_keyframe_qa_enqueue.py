@@ -13,6 +13,7 @@ from typing import Any
 
 from app.core.gemini_models import DEFAULT_GEMINI_JUDGE_MODEL
 from app.db.connection import get_conn
+from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse
 from app.domains.kol.my_kol_paid_action_access import FENCE_KEY, build_target_fence
 from app.domains.kol.video_keyframe_qa_cache import (
     FINAL_V1_DERIVE_METHOD,
@@ -61,7 +62,8 @@ def _load_owned_evidence(conn: Any, *, kol_pool_id: int, evidence_id: int) -> di
 def _ready_final_v1_source(conn: Any, *, evidence_id: int) -> dict[str, Any] | None:
     row = conn.execute(
         """
-        SELECT id, target_id, model, result, prompt_version, updated_at
+        SELECT id, target_type, target_id, derive_method, model, result,
+               prompt_version, status, updated_at
         FROM vkpi_analysis_cache
         WHERE target_type='video' AND target_id=?
           AND derive_method=? AND status='ready'
@@ -73,6 +75,14 @@ def _ready_final_v1_source(conn: Any, *, evidence_id: int) -> dict[str, Any] | N
     if not row:
         return None
     item = dict(row)
+    reuse = canonical_final_v1_cache_reuse(
+        item,
+        target_type="video",
+        target_id=str(evidence_id),
+        derive_method=FINAL_V1_DERIVE_METHOD,
+    )
+    if reuse.get("reusable") is not True:
+        return {**item, **reuse}
     payload = final_v1_payload_from_cache_result(item.get("result"))
     if not payload:
         return None
@@ -83,6 +93,7 @@ def _ready_final_v1_source(conn: Any, *, evidence_id: int) -> dict[str, Any] | N
         "prompt_version": str(item.get("prompt_version") or "") or None,
         "updated_at": item.get("updated_at"),
         "payload_sha256": final_v1_payload_sha256(payload),
+        **reuse,
     }
 
 
@@ -241,6 +252,22 @@ def _enqueue_final_v1_keyframe_qa(
             "evidence_id": video_id,
             "derive_method": KEYFRAME_QA_DERIVE_METHOD,
             "reason": "ready_final_v1_required",
+            "provider_calls": False,
+            "write_db": False,
+        }
+    if source.get("reusable", True) is not True:
+        return {
+            "status": "partial",
+            "state": "partial",
+            "effective_status": "legacy_unverified",
+            "terminal": True,
+            "kol_pool_id": pool_id,
+            "evidence_id": video_id,
+            "derive_method": KEYFRAME_QA_DERIVE_METHOD,
+            "reason": "legacy_final_v1_requires_explicit_revalidation",
+            "cache_reuse_status": "legacy_unverified",
+            "revalidation_required": True,
+            "claim_status": "descriptive_only",
             "provider_calls": False,
             "write_db": False,
         }

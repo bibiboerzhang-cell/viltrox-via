@@ -29,7 +29,7 @@ import { humanizeLlmReason } from "../llmReasonCopy";
 // 分镜时间线 layer1、三观/归因/建议 layer3-5(复用 DeepLayersSection)、关键帧 QA。
 // 绝不触 viltrox_fit_score:此处只读 final_v1/QA,从不写任何评分。
 type AnalysisNotice = {
-  state: "pending" | "ready" | "paused" | "blocked" | "failed" | "not_requested" | "unavailable";
+  state: "pending" | "ready" | "stale" | "quality_incomplete" | "legacy_unverified" | "paused" | "blocked" | "failed" | "not_requested" | "unavailable";
   reason?: string;
   detail?: string;
   provider?: string;
@@ -111,9 +111,18 @@ function VideoDecisionOverview({
       : accountRecommendationReady
         ? "账号 Fit · outcome 未验证"
         : "";
-  const analysisTerminal = ["blocked", "failed", "not_requested", "unavailable"].includes(notice.state);
+  const qualityIncomplete = notice.state === "quality_incomplete";
+  const stale = notice.state === "stale";
+  const legacy = notice.state === "legacy_unverified";
+  const analysisTerminal = ["stale", "quality_incomplete", "legacy_unverified", "blocked", "failed", "not_requested", "unavailable"].includes(notice.state);
   const analysisFinished = notice.state === "ready" || hasAnalysisContent;
-  const analysisState = hasAnalysisContent ? "ready" : analysisTerminal ? "blocked" : "pending";
+  const analysisState: "ready" | "pending" | "blocked" | "review" = hasAnalysisContent
+    ? "ready"
+    : qualityIncomplete
+      ? "review"
+      : analysisTerminal
+        ? "blocked"
+        : "pending";
   const qaState = qaPass === true
     ? "ready"
     : qaPass === false || qaHasPayload
@@ -126,7 +135,7 @@ function VideoDecisionOverview({
     { label: "基础数据", detail: "已入库", state: "ready" },
     {
       label: "分镜深析",
-      detail: hasAnalysisContent ? `${sceneCount} 个时间点` : analysisTerminal ? "未启用/已停止" : "后台生成中",
+      detail: hasAnalysisContent ? `${sceneCount} 个时间点` : qualityIncomplete ? "结果质量未通过" : legacy ? "历史结果待核验" : stale ? "历史分析已过期" : analysisTerminal ? "未启用/已停止" : "后台生成中",
       state: analysisState,
     },
     {
@@ -311,15 +320,47 @@ export function VideoSceneAnalysis({
           const job = asRecord(res.analysis_job);
           const responseState = cleanText(res.state).toLowerCase();
           const jobState = cleanText(job.state || job.status).toLowerCase();
+          const qualityIncomplete = responseState === "quality_incomplete" || jobState === "quality_incomplete";
+          const stale = responseState === "stale" || jobState === "stale";
+          const legacy = responseState === "legacy_unverified" || jobState === "legacy_unverified";
           const terminalState = terminalStates.has(jobState) ? jobState : terminalStates.has(responseState) ? responseState : "";
           const notRequested = jobState === "not_requested" || responseState === "not_requested" || Boolean(disabledReason);
           const reason = cleanText(job.reason || job.error_category || disabledReason);
           const detail = cleanText(job.reason_detail || disabledDetail);
           const provider = cleanText(job.provider);
           const stage = cleanText(job.stage);
-          if (res.state === "ready" && res.entry) {
+          if (legacy) {
+            setEntry(null);
+            setNotice({
+              state: "legacy_unverified",
+              reason: reason || "final_v1_cache_legacy_unverified",
+              detail: detail || "历史结果待核验；重新验证前不作为已核验结论展示。",
+              provider,
+              stage,
+            });
+          } else if (res.state === "ready" && res.entry) {
             setEntry(res.entry);
             setNotice({ state: "ready", provider, stage });
+          } else if (qualityIncomplete) {
+            // 缓存保留仅供诊断；未过质量闸的 payload 不进入分数/结论 UI，也不再轮询。
+            setEntry(null);
+            setNotice({
+              state: "quality_incomplete",
+              reason: reason || "final_v1_quality_incomplete",
+              detail: detail || "结果结构不完整，本次不计为已分析；待重试或人工复核。",
+              provider,
+              stage,
+            });
+          } else if (stale) {
+            // 纯 stale 代表只有历史缓存且当前没有重算任务；停止轮询，也不渲染过期 payload。
+            setEntry(null);
+            setNotice({
+              state: "stale",
+              reason: reason || "analysis_cache_stale",
+              detail: detail || "历史分析已过期，请重新发起分析后再查看当前结果。",
+              provider,
+              stage,
+            });
           } else if (notRequested) {
             setNotice({
               state: "not_requested",
@@ -364,7 +405,7 @@ export function VideoSceneAnalysis({
     let timer = 0;
     let attempts = 0;
     setQaEntry(null);
-    if (!apiToken || !evidenceId) return undefined;
+    if (!apiToken || !evidenceId || notice.state === "legacy_unverified") return undefined;
     const activeStates = new Set(["pending", "queued", "running", "retrying", "processing", "unknown"]);
     // QA 是 final_v1 的独立阶段；主分析先 ready 时也要继续补拉 QA，避免用户必须刷新页面。
     // not_requested 只短暂观察 5 次，给刚落 final_v1、QA job 尚未登记的窄窗口；没有任务时不会长轮询。
@@ -394,7 +435,7 @@ export function VideoSceneAnalysis({
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
-  }, [apiToken, evidenceId, targetType]);
+  }, [apiToken, evidenceId, notice.state, targetType]);
   const result = asRecord(entry?.result);
   const payload = asRecord(result.video_analysis_final_v1).layer1_visual_content ? asRecord(result.video_analysis_final_v1) : result;
   const evaluationOnly = notice.state === "ready" && isEvaluationOnlyAnalysis(result, payload);
@@ -443,6 +484,39 @@ export function VideoSceneAnalysis({
     />
   );
   if (!hasAnalysisContent) {
+    if (notice.state === "legacy_unverified") {
+      return (
+        <div className="mt-2 space-y-2">
+          {overview}
+          <div className="rounded-md border border-amber-300/20 bg-amber-400/[0.08] px-3 py-2 text-[10.5px] text-amber-100" role="status">
+            <div className="flex items-center gap-1.5 font-medium"><AlertTriangle size={12} /> 历史结果待核验</div>
+            <div className="mt-1 leading-relaxed text-amber-100/85">{notice.detail || "原始结果已保留，但本次不将其当作已核验结论。"}</div>
+          </div>
+        </div>
+      );
+    }
+    if (notice.state === "stale") {
+      return (
+        <div className="mt-2 space-y-2">
+          {overview}
+          <div className="rounded-md border border-amber-300/20 bg-amber-400/[0.08] px-3 py-2 text-[10.5px] text-amber-100" role="status">
+            <div className="flex items-center gap-1.5 font-medium"><AlertTriangle size={12} /> 历史分析已过期</div>
+            <div className="mt-1 leading-relaxed text-amber-100/85">{notice.detail || "请重新发起分析后再查看当前结果。"}</div>
+          </div>
+        </div>
+      );
+    }
+    if (notice.state === "quality_incomplete") {
+      return (
+        <div className="mt-2 space-y-2">
+          {overview}
+          <div className="rounded-md border border-rose-300/20 bg-rose-500/[0.08] px-3 py-2 text-[10.5px] text-rose-100" role="status">
+            <div className="flex items-center gap-1.5 font-medium"><AlertTriangle size={12} /> 结果质量未通过</div>
+            <div className="mt-1 leading-relaxed text-rose-100/85">{notice.detail || "该结果不计为已分析，待重试或人工复核。"}</div>
+          </div>
+        </div>
+      );
+    }
     if (["blocked", "failed"].includes(notice.state)) {
       const failureCopy = humanizeLlmReason(notice.reason, "后台分析任务已停止，请检查模型授权与预算状态。");
       const diagnosticCode = failureCopy.code || (notice.detail ? cleanText(notice.reason) : "");

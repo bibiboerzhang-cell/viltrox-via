@@ -16,6 +16,7 @@ from app.domains.kol import (
     search_sessions_online,
 )
 from app.domains.kol.discovery_filters import _int, _staff_user_id, _text
+from app.domains.kol.profile_discovery_supply import sanitize_platform_limits
 from app.domains.kol.provider_job_access import (
     FENCE_KEY as PROVIDER_JOB_FENCE_KEY,
     SESSION_ADVANCE,
@@ -474,6 +475,14 @@ def enqueue_smart_search_profile_advance(
         "content_fit_top_n": max(1, min(_int(body.get("content_fit_top_n"), 6), 12)),
         "new_discovery_limit": max(1, min(_int(body.get("new_discovery_limit") or body.get("discovery_limit"), 50 if smart_online_30 else 15), 50)),
         "new_discovery_per_platform_limit": max(1, min(_int(body.get("new_discovery_per_platform_limit") or body.get("new_discovery_limit") or body.get("discovery_limit"), 50 if smart_online_30 else 15), 50)),
+        # B3 每平台上限覆盖({平台: 上限})。YouTube 那条腿走 YouTube Data API,
+        # search.list 无论 maxResults 取 1 还是 50 都恒定 100 quota units、仍是一次往返
+        # → 提到 50 配额不变、延迟不变、零 Apify 花费;IG/TT 是按结果计费的 Apify actor
+        # (prod 14 天实测 IG hashtag 一家吃掉发现总花费的 93.7%),所以本批保持 20 不动。
+        # 服务端只做归一(小写平台名、夹到 1..50),不替 operator 决定值。
+        "new_discovery_per_platform_limits": sanitize_platform_limits(
+            body.get("new_discovery_per_platform_limits") or body.get("newDiscoveryPerPlatformLimits")
+        ),
         "new_discovery_platforms": body.get("new_discovery_platforms") or body.get("discovery_platforms"),
         "platform": _text(body.get("platform")),
         "market": _text(body.get("market") or body.get("country")),

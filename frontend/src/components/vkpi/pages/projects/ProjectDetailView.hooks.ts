@@ -61,6 +61,12 @@ function mergeProjectVideoCacheItem(previous: ProjectVideoCacheItem, incoming: P
     merged.entry = incoming.entry;
     return merged;
   }
+  if (incoming.state === 'quality_incomplete' || incoming.state === 'legacy_unverified') {
+    // 显式质量终态是当前权威快照；不得用上一版 ready 覆盖或深合并成假结果。
+    merged.state = incoming.state;
+    merged.entry = incoming.entry ?? null;
+    return merged;
+  }
   if (previous.state === 'ready') {
     merged.state = 'ready';
     merged.entry = previous.entry;
@@ -125,6 +131,8 @@ export function mergeProjectVideoAnalysisCache(
       active_count: activeCount,
       not_requested_count: stateCounts.not_requested || 0,
       failed_count: stateCounts.failed || 0,
+      quality_incomplete_count: stateCounts.quality_incomplete || 0,
+      legacy_unverified_count: stateCounts.legacy_unverified || 0,
       unsupported_count: stateCounts.unsupported || 0,
       state_counts: stateCounts,
     },

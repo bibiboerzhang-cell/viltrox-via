@@ -83,42 +83,9 @@ _COLLECTION_COND = """(
 # ── 回填 ────────────────────────────────────────────────────────────────────
 
 
-def _candidate_cache_rows(conn: Any, *, limit: int, force: bool, cache_ids: Iterable[int] | None = None) -> list[dict[str, Any]]:
-    ids = sorted({_int(x) for x in (cache_ids or []) if _int(x) > 0})
-    id_clause = ""
-    params: list[Any] = [extractor.FINAL_DERIVE_METHOD]
-    if ids:
-        id_clause = " AND c.id IN (" + ",".join("?" for _ in ids) + ")"
-        params.extend(ids)
-    params.append(int(limit))
-    rows = conn.execute(
-        """
-        SELECT c.id AS cache_id, c.target_type, c.target_id, c.result, c.updated_at,
-               e.id AS evidence_id, e.kol_pool_id,
-               s.extractor_version AS scanned_version, s.cache_updated_at AS scanned_cache_updated_at,
-               s.scan_status AS scanned_status, s.mention_rows AS scanned_mention_rows
-        FROM vkpi_analysis_cache c
-        LEFT JOIN vkpi_kol_video_evidence e
-          ON c.target_type = 'video' AND c.target_id = CAST(e.id AS TEXT)
-        LEFT JOIN vkpi_kol_lens_evidence_scan s ON s.cache_id = c.id
-        WHERE c.derive_method = ?
-          AND c.status = 'ready'
-        """ + id_clause + """
-        ORDER BY c.id ASC
-        LIMIT ?
-        """,
-        tuple(params),
-    ).fetchall()
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        item = dict(row)
-        if not force and not ids:
-            same_version = _text(item.get("scanned_version")) == extractor.EXTRACTOR_VERSION
-            same_stamp = _ts_text(item.get("scanned_cache_updated_at")) == _ts_text(item.get("updated_at"))
-            if same_version and same_stamp:
-                continue
-        out.append(item)
-    return out
+from app.domains.kol.lens_evidence_candidates import (  # noqa: E402
+    candidate_cache_rows as _candidate_cache_rows,
+)
 
 
 def _write_rows(conn: Any, cache: dict[str, Any], rows: list[dict[str, Any]]) -> int:

@@ -147,6 +147,7 @@ function WallVideoCard({
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
           <span className={`rounded-[5px] border px-1.5 py-0.5 text-[10.5px] font-bold ${meta.cls}`} title={meta.title}>{meta.label}</span>
           {video.has_final_v1_cache ? <span className={`${MINI_BADGE} border-good bg-good-soft text-good`}>已深析</span> : null}
+          {video.revalidation_required ? <span className={`${MINI_BADGE} border-warn bg-warn-soft text-warn`} title="历史分析仍可查看,但未通过当前版本的来源与质量校验">历史结果待核验</span> : null}
           {href ? <a href={href} target="_blank" rel="noopener noreferrer" className="ml-auto flex-none font-mono text-[10px] text-muted transition-colors hover:text-accent" title="直跳原帖">原帖 ↗</a> : null}
         </div>
         {onTrack || onDataWatch ? (

@@ -162,6 +162,86 @@ def _first_video_url(item: dict[str, Any]) -> str:
     return ""
 
 
+_EXPLICIT_VIDEO_TYPES = frozenset(
+    {"video", "graphvideo", "reel", "reels", "clip", "clips", "igtv"}
+)
+_EXPLICIT_IMAGE_TYPES = frozenset(
+    {"image", "graphimage", "photo", "photos", "picture", "carousel_image"}
+)
+
+
+def _media_type_token(value: Any) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _metadata_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _instagram_media_kind(item: dict[str, Any], *, video_url: str = "") -> str:
+    """Conservatively classify one Instagram actor item as video/image/unknown.
+
+    ``/p/`` is only a URL shape; it can contain an image, a video or a sidecar.
+    We call an item ``image`` only when the actor explicitly labels the top
+    item as an image or every typed sidecar child as an image.  Missing
+    ``videoUrl`` alone is never proof of a photo.
+    """
+
+    if str(video_url or "").strip():
+        return "video"
+    children = item.get("childPosts") if isinstance(item.get("childPosts"), list) else []
+    child_types = [
+        _media_type_token(child.get("type") or child.get("mediaType"))
+        for child in children
+        if isinstance(child, dict)
+    ]
+    if any(token in _EXPLICIT_VIDEO_TYPES for token in child_types):
+        return "video"
+    if (
+        children
+        and len(child_types) == len(children)
+        and all(token in _EXPLICIT_IMAGE_TYPES for token in child_types)
+    ):
+        return "image"
+    top_type = _media_type_token(item.get("type") or item.get("mediaType"))
+    if top_type in _EXPLICIT_VIDEO_TYPES:
+        return "video"
+    if top_type in _EXPLICIT_IMAGE_TYPES:
+        return "image"
+    return ""
+
+
+def _tiktok_media_kind(item: dict[str, Any], *, video_url: str = "") -> str:
+    """Conservatively distinguish TikTok video posts from photo-mode posts."""
+
+    if str(video_url or "").strip():
+        return "video"
+    top_type = _media_type_token(
+        item.get("type") or item.get("mediaType") or item.get("postType")
+    )
+    if top_type in _EXPLICIT_VIDEO_TYPES:
+        return "video"
+    video_meta = item.get("videoMeta") if isinstance(item.get("videoMeta"), dict) else {}
+    if _int(video_meta.get("duration")) > 0:
+        return "video"
+    photo_flag = any(
+        _metadata_flag(item.get(key))
+        for key in ("isSlideshow", "isPhoto", "isPhotoMode", "isImagePost")
+    )
+    image_post = item.get("imagePost")
+    image_lists = [
+        item.get("images"),
+        image_post.get("images") if isinstance(image_post, dict) else None,
+    ]
+    if top_type in _EXPLICIT_IMAGE_TYPES or photo_flag or any(
+        isinstance(images, list) and bool(images) for images in image_lists
+    ):
+        return "image"
+    return ""
+
+
 def _tiktok_actor_id() -> str:
     return (os.getenv("APIFY_TIKTOK_ACTOR_ID", "").strip() or "clockworks/tiktok-scraper")
 
@@ -426,6 +506,19 @@ async def scrape_instagram(url: str, *, timeout_secs: int | None = None) -> Dict
         comments = int(item.get("commentsCount") or 0)
         views = int(item.get("videoPlayCount") or item.get("videoViewCount") or 0)
 
+        video_url = (
+            (item.get("videoUrl") or "")
+            or next(
+                (
+                    str(child.get("videoUrl") or "")
+                    for child in (item.get("childPosts") or [])
+                    if isinstance(child, dict) and child.get("videoUrl")
+                ),
+                "",
+            )
+        )
+        media_kind = _instagram_media_kind(item, video_url=str(video_url or ""))
+
         return {
             "scraped_ok": True,
             "title": (item.get("caption", "") or "")[:200],
@@ -451,17 +544,11 @@ async def scrape_instagram(url: str, *, timeout_secs: int | None = None) -> Dict
             # 2026-07-02 修 media_resolve 失败大头(62% 全是 IG /p/ 链接):轮播/sidecar 帖
             # 顶层 videoUrl 为空,视频在 childPosts[].videoUrl —— 取第一个视频 child;
             # 纯图帖仍为空,由上层按图文(media_kind)处理,不再一律报 media_resolve_failed。
-            "video_url": (
-                (item.get("videoUrl") or "")
-                or next(
-                    (
-                        str(child.get("videoUrl") or "")
-                        for child in (item.get("childPosts") or [])
-                        if isinstance(child, dict) and child.get("videoUrl")
-                    ),
-                    "",
-                )
-            ),
+            "video_url": video_url,
+            # 只有 actor 显式标注纯图/全图 sidecar 才是确定非视频;
+            # 单纯缺 videoUrl 仍是暧昧态,由 yt-dlp 复核,绝不把图帖假装成视频。
+            "media_kind": media_kind,
+            "confirmed_non_video": media_kind == "image",
             "owner_username": item.get("ownerUsername", "") or "",
             "owner_full_name": item.get("ownerFullName", "") or "",
             "duration": item.get("videoDuration", 0),
@@ -523,6 +610,8 @@ async def scrape_tiktok(url: str, *, timeout_secs: int | None = None) -> Dict[st
 
         covers = item.get("covers", []) or []
         cover_url = covers[0] if covers else ""
+        video_url = _first_video_url(item)
+        media_kind = _tiktok_media_kind(item, video_url=video_url)
 
         return {
             "scraped_ok": True,
@@ -546,7 +635,9 @@ async def scrape_tiktok(url: str, *, timeout_secs: int | None = None) -> Dict[st
             },
             "visible_comments": [],
             "published_at": item.get("createTimeISO") or None,
-            "video_url": _first_video_url(item),
+            "video_url": video_url,
+            "media_kind": media_kind,
+            "confirmed_non_video": media_kind == "image",
             "owner_username": author.get("name", "") or "",
             "owner_full_name": author.get("nickName", "") or "",
             "duration": video.get("duration", 0),

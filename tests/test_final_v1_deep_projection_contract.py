@@ -8,6 +8,11 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from app.core.video_analysis_contract import (
+    FINAL_V1_DERIVE_METHOD,
+    FINAL_V1_PROMPT_CONTRACT,
+)
+from app.core.video_model_chain import final_v1_model_chain
 from app.domains.kol import final_v1_extract, quality_compliance, risk_index, video_similarity
 from app.services.ai.analyzers.gemini_video_results import (
     ensure_final_v1_result_cacheable,
@@ -27,7 +32,12 @@ SPEC.loader.exec_module(backfill)
 def _payload(*, score: Any = None) -> dict[str, Any]:
     scores: dict[str, Any] = {
         "content_quality_score": {"score": 81, "confidence": 0.8},
+        "viewer_heart_score": {"score": None},
+        "channel_value_score": {"score": None},
+        "asset_reuse_score": {"score": None},
         "product_proof_score": {"score": 64, "confidence": 0.7},
+        # Explicit null is quality-complete but remains unknown to score consumers.
+        "marketing_value_score": {"score": None},
     }
     if score is not None:
         scores["marketing_value_score"] = score
@@ -38,28 +48,117 @@ def _payload(*, score: Any = None) -> dict[str, Any]:
                 {"timestamp": "00:08", "what": "Autofocus tracking demonstration."},
             ],
             "evidence": {"timestamps": ["00:08 autofocus demonstration"]},
+            "brand_product_evidence": {
+                "viltrox_status": "unknown",
+                "inspection_complete": True,
+                "checked_modalities": ["visual", "audio"],
+                "viltrox_evidence": [],
+                "viltrox_products": [],
+                "competitors": [],
+            },
         },
         "layer5_recommendations": {"why": "Useful product-demo evidence."},
         "layer6_flags_and_scores": {
+            "risk_flags": [],
             "scores": scores,
             "final_verdict": "Analysis complete; scalar availability is reported separately.",
+            "key_hook": "Autofocus proof is the main review point.",
         },
     }
 
 
 def _ready_cache(*, score: Any = None, qa_result: Any = None) -> dict[str, Any]:
+    model = final_v1_model_chain()[0]
+    binding = f"google/{model}"
+    execution_snapshot = {
+        "scope": "execution_time_snapshot",
+        "authorized": True,
+        "production_authorized": True,
+        "evaluation_only": False,
+        "status": "operationally_authorized",
+        "source": "signed_evidence",
+        "temporary": False,
+    }
+    signed_snapshot = {
+        "scope": "execution_time_snapshot",
+        "production_ready": True,
+        "status": "production_ready",
+        "claim_status": "descriptive_only",
+        "evidence_source": "fixture_signed_registry",
+    }
+    authorization = {
+        "binding": binding,
+        "model": model,
+        "execution_authorization_at_run": execution_snapshot,
+        "signed_readiness_at_run": signed_snapshot,
+    }
+    execution = {
+        **authorization,
+        "selected_model": model,
+        "provider_reported_model": model,
+        "provider_model_match": True,
+        "model_match": True,
+        "requested_model_chain": [model],
+        "ready_model_chain": [model],
+        "model_chain": [model],
+        "fallback_used": False,
+        "authorization_snapshot_match": True,
+        "execution_authorizations_by_model": {model: authorization},
+        "execution_authorizations_by_binding": {binding: authorization},
+        "execution_class": "production",
+        "authorization_scope": "production",
+        "evaluation_only": False,
+        "production_authorized": True,
+    }
+    payload = _payload(score=score)
     result = {
         "analyzed": True,
+        "schema_version": "video_analysis_final_v1",
         "status": "completed",
-        "model": "gemini-test",
-        "method": "gemini_fileapi_gemini-test",
-        "video_analysis_final_v1": _payload(score=score),
+        "quality_status": "quality_complete",
+        "quality_issues": [],
+        "mock": False,
+        "model": model,
+        "method": f"gemini_fileapi_{model}",
+        "analysis_method": FINAL_V1_DERIVE_METHOD,
+        "target_type": "video",
+        "target_id": "701",
+        "evaluation_only": False,
+        "production_authorized": True,
+        "claim_status": "descriptive_only",
+        "video_analysis_final_v1": payload,
+        **payload,
+        "llm_execution": execution,
+        "provenance": {
+            "prompt_contract": FINAL_V1_PROMPT_CONTRACT,
+            "binding": binding,
+            "selected_model": model,
+            "provider_reported_model": model,
+            "requested_model_chain": [model],
+            "ready_model_chain": [model],
+            "model_chain": [model],
+            "fallback_used": False,
+            "authorization_snapshot_match": True,
+            "execution_class": "production",
+            "authorization_scope": "production",
+            "evaluation_only": False,
+            "production_authorized": True,
+            "execution_authorization_at_run": execution_snapshot,
+            "signed_readiness_at_run": signed_snapshot,
+        },
+        "execution_authorization_at_run": execution_snapshot,
+        "signed_readiness_at_run": signed_snapshot,
     }
     return {
         "final_cache_id": 501,
         "final_result": result,
-        "final_model": "gemini-test",
+        "final_model": model,
         "final_cost": Decimal("0.01"),
+        "final_target_type": "video",
+        "final_target_id": "701",
+        "final_derive_method": FINAL_V1_DERIVE_METHOD,
+        "final_prompt_version": FINAL_V1_PROMPT_CONTRACT,
+        "final_status": "ready",
         "evidence_id": 701,
         "kol_pool_id": 41,
         "content_url": "https://example.test/video/701",

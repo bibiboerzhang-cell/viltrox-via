@@ -160,11 +160,16 @@ def _lineage_item_state(
         for role, role_jobs in grouped.items()
     }
     role_states = {
-        role: _lineage_role_state([str(job.get("status") or "")])
+        role: (
+            "partial"
+            if "skipped_legacy_cache_unverified"
+            in str(job.get("last_error") or "").strip().lower()
+            else _lineage_role_state([str(job.get("status") or "")])
+        )
         for role, job in latest_by_role.items()
     }
     active = any(state == "active" for state in role_states.values())
-    failed = any(state == "failed" for state in role_states.values())
+    failed = any(state in {"failed", "partial"} for state in role_states.values())
 
     audience = _as_dict(profile_execute.get("audience_enrichment"))
     audience_status = str(audience.get("status") or "").strip().lower()

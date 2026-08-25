@@ -10,7 +10,20 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.routers import vkpi_my_kol as router_mod
-from app.domains.kol import my_kol_paid_action_access, my_kol_video_recovery, pool, pool_detail
+from app.domains.kol import my_kol_paid_action_access, my_kol_video_cache_truth, my_kol_video_recovery, pool, pool_detail
+
+
+@pytest.fixture(autouse=True)
+def _canonicalize_minimal_ready_fixtures(monkeypatch):
+    """These contract fixtures predate canonical provenance; classifier behavior has its own suite."""
+    def classify(row, **_kwargs):
+        return {
+            "exists": True, "reusable": True, "cache_id": row.get("id"),
+            "cache_reuse_status": "canonical", "revalidation_required": False,
+            "claim_status": "descriptive_only", "reasons": [],
+        }
+
+    monkeypatch.setattr(my_kol_video_cache_truth, "canonical_final_v1_cache_reuse", classify)
 
 
 def _conn() -> sqlite3.Connection:
@@ -38,6 +51,8 @@ def _conn() -> sqlite3.Connection:
             target_type TEXT NOT NULL,
             target_id TEXT NOT NULL,
             derive_method TEXT NOT NULL,
+            model TEXT,
+            prompt_version TEXT,
             status TEXT NOT NULL,
             result TEXT,
             updated_at TEXT
@@ -231,7 +246,10 @@ def test_page_unifies_profile_metric_and_final_v1_task_states_and_keeps_freshnes
                 if task["status"] not in my_kol_video_recovery.FAILURE_FIELD_STATUSES:
                     assert (task["failure_category"], task["failure_reason_human"], task["failure_code"]) == (None, None, None)
 
-        assert page["summary"] == {"total": 7, "views_total": 11_200, "views_measured": 6, "final_v1_ready": 2}
+        assert page["summary"] == {
+            "total": 7, "views_total": 11_200, "views_measured": 6,
+            "final_v1_ready": 2, "legacy_unverified": 0,
+        }
         assert page["page"] == {
             "limit": 20, "returned": 7, "has_more": False, "next_cursor": None,
             "cursor_kind": "published_at_id", "order": "published_at_desc_id_desc",
@@ -263,6 +281,56 @@ def test_ready_cache_yields_only_to_a_newer_active_reanalysis() -> None:
 
     broken = my_kol_video_recovery.final_v1_task_state(None, finished)
     assert broken["status"] == "failed" and broken["data"]["status"] == "none"
+
+
+def test_legacy_ready_cache_is_terminal_descriptive_only_and_not_counted(monkeypatch) -> None:
+    def classify(row, **_kwargs):
+        reusable = str(row.get("target_id")) == "2"
+        return {
+            "exists": True, "reusable": reusable, "cache_id": row.get("id"),
+            "cache_reuse_status": "canonical" if reusable else "legacy_unverified",
+            "revalidation_required": not reusable, "claim_status": "descriptive_only",
+            "reasons": [] if reusable else ["result_prompt_contract_mismatch"],
+        }
+
+    monkeypatch.setattr(my_kol_video_cache_truth, "canonical_final_v1_cache_reuse", classify)
+    conn = _conn()
+    try:
+        page = my_kol_video_recovery.build_video_recovery_page(
+            conn, kol_pool_id=101, videos=[_video(1), _video(2)], limit=20,
+        )
+        rows = {row["evidence_id"]: row for row in page["items"]}
+        legacy = rows[1]
+        state = legacy["tasks"]["final_v1"]
+        assert state["status"] == "legacy_unverified"
+        assert state["terminal"] is True
+        assert state["revalidation_required"] is True
+        assert state["claim_status"] == "descriptive_only"
+        assert state["data"]["status"] == "legacy_unverified"
+        assert legacy["has_final_v1_cache"] is False
+        assert legacy["has_final_v1_raw_cache"] is True
+        assert legacy["viltrox_modalities"] == []
+        assert legacy["v_tier"] == "undetermined"
+        assert page["summary"]["final_v1_ready"] == 1
+        assert page["summary"]["legacy_unverified"] == 1
+    finally:
+        conn.close()
+
+
+def test_legacy_data_does_not_hide_a_durable_failed_job() -> None:
+    cache = {
+        "status": "legacy_unverified", "updated_at": "2026-08-20T10:00:00Z",
+        "cache_reuse_status": "legacy_unverified", "revalidation_required": True,
+    }
+    job = {
+        "job_id": 22, "status": "failed", "requested_at": "2026-08-21T10:00:00Z",
+        "updated_at": "2026-08-21T10:01:00Z", "reason_class": "provider_error",
+    }
+    state = my_kol_video_recovery.final_v1_task_state(cache, job)
+    assert state["status"] == "failed"
+    assert state["data"]["status"] == "legacy_unverified"
+    assert state["revalidation_required"] is True
+    assert "terminal" not in state
 
 
 def test_keyframe_qa_task_state_requires_exact_main_analysis_source() -> None:

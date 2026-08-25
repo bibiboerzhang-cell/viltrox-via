@@ -128,10 +128,6 @@ def _stage_add(result: dict[str, Any], stage: str, started_monotonic: float) -> 
     timings[stage] = int(timings.get(stage) or 0) + elapsed_ms
     return elapsed_ms
 
-
-# _is_provider_pressure_error 已搬到 gemini_video_recovery(顶部 import 回灌,调用点不变)。
-
-
 def final_v1_gemini_models(value: Any = None) -> list[str]:
     raw = value
     if raw is None:
@@ -149,14 +145,14 @@ from app.services.ai.analyzers.gemini_video_results import (  # noqa: E402,F401
     VIDEO_V2_SCORE_KEYS,
     _apply_final_v1_result,
     _apply_v2_result,
-    _bool_value,
+    _bool_value, _capture_provider_reported_model,
     _clamped_confidence,
     _normalise_final_v1_keyframe_qa,
     _normalise_final_v1_result,
     _normalise_v2_result,
     _parse_json_response_text,
     _response_usage_metadata,
-    _score_value,
+    _score_value, _stamp_analyzer_model_identity,
 )
 
 # 关键帧判定业务函数簇已抽到 gemini_video_keyframes.py(行为不变,re-export 兜调用点)。
@@ -486,7 +482,7 @@ def _generate_json_with_recovery(
     def _call(call_contents: list[Any], call_subphase: str) -> Any:
         reset_generate_retry_info()
         try:
-            return _strict_generate_content(
+            response = _strict_generate_content(
                 model_name=model_name,
                 contents=call_contents,
                 config=config,
@@ -498,6 +494,7 @@ def _generate_json_with_recovery(
                 attempt_total=attempt_total,
                 attempt_log=attempt_log,
             )
+            return _capture_provider_reported_model(diagnostics, response)
         finally:
             merge_retry_diagnostics(diagnostics, last_generate_retry_info())
 
@@ -761,6 +758,7 @@ async def analyze_local_video_with_gemini(
                         subtitle_used=bool(subtitle_text),
                     )
                     result["context_cache"] = cache_info
+                    _stamp_analyzer_model_identity(result, model_names, model_name, diagnostics)
                     logger.info(
                         "gemini_local_fileapi_final_v1_success",
                         extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
@@ -774,6 +772,7 @@ async def analyze_local_video_with_gemini(
                     usage_metadata=usage_metadata,
                     subtitle_used=bool(subtitle_text),
                 )
+                _stamp_analyzer_model_identity(result, model_names, model_name, diagnostics)
                 logger.info(
                     "gemini_local_fileapi_v2_success",
                     extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},

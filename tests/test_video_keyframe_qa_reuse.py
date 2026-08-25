@@ -53,6 +53,7 @@ class _WorkerCacheCursor:
     def execute(self, sql: str, params: tuple[Any, ...]) -> None:
         compact = " ".join(str(sql).split())
         assert "WITH latest_source AS" in compact
+        assert "latest_source.result AS source_result" in compact
         assert params[0] == params[1] == "701"
         assert params[2] == enqueue.KEYFRAME_QA_DERIVE_METHOD
 
@@ -191,6 +192,37 @@ def test_enqueue_is_youtube_only_and_requires_ready_source(monkeypatch: pytest.M
     assert missing["provider_calls"] is False
 
 
+def test_enqueue_legacy_source_is_terminal_partial_before_budget_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {
+        **_source(),
+        "reusable": False,
+        "cache_reuse_status": "legacy_unverified",
+        "revalidation_required": True,
+    }
+    conn = _prepare_enqueue(monkeypatch, source=source)
+    monkeypatch.setattr(
+        enqueue,
+        "_qa_budget_preflight",
+        lambda *_args, **_kwargs: pytest.fail("legacy source must not run preflight"),
+    )
+
+    result = enqueue._enqueue_final_v1_keyframe_qa(
+        conn,
+        kol_pool_id=88,
+        evidence_id=701,
+        staff={"id": 12, "user_id": 34},
+    )
+
+    assert result["status"] == result["state"] == "partial"
+    assert result["effective_status"] == "legacy_unverified"
+    assert result["terminal"] is True
+    assert result["revalidation_required"] is True
+    assert result["provider_calls"] is False
+    assert result["write_db"] is False
+
+
 def test_enqueue_authorizes_before_any_evidence_or_cache_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     conn = _Conn()
     probes: list[str] = []
@@ -273,6 +305,11 @@ def test_worker_cache_shortcut_rejects_stale_or_legacy_qa_across_runtime(
             "_advisory_unlock": lambda *_args: None,
             "_acquire_llm_slot": lambda _conn: "slot-1",
             "_analysis_cache_exists": lambda *_args: pytest.fail("generic cache shortcut used for keyframe QA"),
+            "_keyframe_qa_cache_reuse_state_for_source": lambda *_args, **_kwargs: {
+                "exists": False,
+                "reusable": False,
+                "reasons": [],
+            },
             "_finish_skipped": lambda *_args, **_kwargs: events.append("skipped"),
             "_llm_budget_preflight": lambda *_args, **_kwargs: {},
             "_google_allowed": lambda *_args, **_kwargs: (True, "allowed", 0.01),
@@ -338,6 +375,11 @@ def test_worker_cache_shortcut_skips_only_exactly_fenced_qa() -> None:
             "_advisory_unlock": lambda *_args: None,
             "_acquire_llm_slot": lambda _conn: "slot-1",
             "_analysis_cache_exists": lambda *_args: pytest.fail("generic cache shortcut used for keyframe QA"),
+            "_keyframe_qa_cache_reuse_state_for_source": lambda *_args, **_kwargs: {
+                "exists": True,
+                "reusable": True,
+                "reasons": [],
+            },
             "_final_v1_scope_checkpoint": lambda *_args, **_kwargs: True,
             "_finish_skipped": lambda *_args, **_kwargs: events.append("skipped"),
             "_process_gemini_video": lambda *_args: events.append("processed"),
@@ -360,6 +402,112 @@ def test_worker_cache_shortcut_skips_only_exactly_fenced_qa() -> None:
         namespace,
     )
     assert events == ["skipped"]
+
+
+def test_worker_legacy_keyframe_source_finishes_before_lock_slot_or_preflight() -> None:
+    from app.workers import apify_jobs_worker
+    from app.workers.apify_jobs_worker_runtime import process_job_impl
+
+    events: list[tuple[str, Any]] = []
+    namespace = dict(vars(apify_jobs_worker))
+    namespace.update(
+        {
+            "_keyframe_qa_cache_reuse_state_for_source": lambda *_args, **_kwargs: {
+                "exists": True,
+                "reusable": False,
+                "cache_reuse_status": "legacy_unverified",
+                "revalidation_required": True,
+                "reasons": ["result_prompt_contract_mismatch"],
+            },
+            "_final_v1_scope_checkpoint": lambda *_args, **_kwargs: True,
+            "_finish_skipped": lambda _conn, job_id, reason, **_kwargs: events.append(
+                ("skipped", (job_id, reason))
+            ),
+            "_advisory_lock": lambda *_args: pytest.fail("legacy source must not take target lock"),
+            "_acquire_llm_slot": lambda *_args: pytest.fail("legacy source must not take LLM slot"),
+            "_llm_budget_preflight": lambda *_args, **_kwargs: pytest.fail(
+                "legacy source must not run budget preflight"
+            ),
+            "_process_gemini_video": lambda *_args: pytest.fail(
+                "legacy source must not call provider path"
+            ),
+        }
+    )
+    process_job_impl(
+        object(),  # type: ignore[arg-type]
+        {
+            "id": 9707,
+            "job_type": "video",
+            "payload": {
+                "target_type": "video",
+                "target_id": "701",
+                "derive_method": enqueue.KEYFRAME_QA_DERIVE_METHOD,
+                "source_final_v1_cache_id": 1701,
+                "source_final_v1_sha256": "a" * 64,
+                "final_v1_qa_model": enqueue.KEYFRAME_QA_MODEL,
+            },
+        },
+        namespace,
+    )
+    assert events == [
+        (
+            "skipped",
+            (9707, "skipped_legacy_cache_unverified:result_prompt_contract_mismatch"),
+        )
+    ]
+
+
+def test_worker_keyframe_cache_passes_source_result_row_shape_to_classifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.workers import apify_jobs_worker_keyframe_cache as cache_gate
+
+    captured: dict[str, Any] = {}
+    source_result = {"legacy": "paid raw remains inspectable"}
+
+    def classify(row: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        captured.update({"row": row, "kwargs": kwargs})
+        return {
+            "exists": True,
+            "reusable": False,
+            "cache_reuse_status": "legacy_unverified",
+            "revalidation_required": True,
+            "reasons": ["result_prompt_contract_mismatch"],
+        }
+
+    monkeypatch.setattr(cache_gate, "canonical_final_v1_cache_reuse", classify)
+    conn = _WorkerCacheConn(
+        {
+            "source_cache_id": 1701,
+            "target_type": "video",
+            "target_id": "701",
+            "derive_method": "video_analysis_final_v1",
+            "model": "gemini-3.6-flash",
+            "prompt_version": "legacy",
+            "status": "ready",
+            "source_result": source_result,
+            "qa_result": None,
+        }
+    )
+    result = cache_gate.keyframe_qa_cache_reuse_state_for_source(
+        conn,  # type: ignore[arg-type]
+        target_type="video",
+        target_id="701",
+        derive_method=enqueue.KEYFRAME_QA_DERIVE_METHOD,
+        payload={
+            "source_final_v1_cache_id": 1701,
+            "source_final_v1_sha256": "a" * 64,
+        },
+    )
+    assert captured["row"]["result"] is source_result
+    assert captured["row"]["id"] == 1701
+    assert captured["kwargs"] == {
+        "target_type": "video",
+        "target_id": "701",
+        "derive_method": "video_analysis_final_v1",
+    }
+    assert result["cache_reuse_status"] == "legacy_unverified"
+    assert result["reusable"] is False
 
 
 def test_enqueue_preflight_uses_exact_qa_binding_and_cost_scope(monkeypatch: pytest.MonkeyPatch) -> None:

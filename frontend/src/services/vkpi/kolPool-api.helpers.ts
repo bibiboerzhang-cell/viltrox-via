@@ -139,6 +139,7 @@ export interface VkpiKolEvidenceQuality extends Row {
 }
 
 export interface VkpiKolVideoAnalysisCacheEntry {
+  cache_id?: number | null;
   target_type: string;
   target_id: string;
   derive_method: string;
@@ -154,8 +155,14 @@ export interface VkpiKolVideoAnalysisCacheResponse {
   target_type: string;
   target_id: string;
   derive_method?: string | null;
-  state: "ready" | "pending" | "queued" | "running" | "retrying" | "processing" | "blocked" | "failed" | "not_requested" | "unknown";
+  state: "ready" | "stale" | "quality_incomplete" | "legacy_unverified" | "pending" | "queued" | "running" | "retrying" | "processing" | "blocked" | "failed" | "not_requested" | "unknown";
   entry?: VkpiKolVideoAnalysisCacheEntry | null;
+  terminal?: boolean;
+  revalidation_required?: boolean;
+  claim_status?: string | null;
+  cache_reuse_status?: string | null;
+  cache_id?: number | null;
+  reasons?: string[];
   /** 分析结果未落 cache 时的真实 Worker 状态；不含完整任务 payload 或原始错误。 */
   analysis_job?: {
     id?: number | null;
@@ -178,7 +185,7 @@ export interface VkpiKolVideoAnalysisBatchResponse {
   target_type: string;
   derive_method: string;
   count: number;
-  items: Array<Pick<VkpiKolVideoAnalysisCacheResponse, "target_id" | "state" | "entry" | "analysis_job">>;
+  items: Array<Pick<VkpiKolVideoAnalysisCacheResponse, "target_id" | "state" | "entry" | "analysis_job" | "terminal" | "revalidation_required" | "claim_status" | "cache_reuse_status" | "cache_id" | "reasons">>;
 }
 
 export interface VkpiVideoAnalysisEnqueueResponse {
@@ -283,8 +290,14 @@ export interface VkpiKolPoolDetailBundleResponse {
     items?: Array<{
       video?: Row;
       final_entry?: VkpiKolVideoAnalysisCacheEntry | null;
+      raw_final_entry?: VkpiKolVideoAnalysisCacheEntry | null;
       qa_entry?: VkpiKolVideoAnalysisCacheEntry | null;
       state?: string;
+      terminal?: boolean;
+      revalidation_required?: boolean;
+      claim_status?: string | null;
+      cache_reuse_status?: string | null;
+      reasons?: string[];
     }>;
     summary?: Row;
   };

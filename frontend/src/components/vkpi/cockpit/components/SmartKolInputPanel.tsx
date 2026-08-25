@@ -785,6 +785,7 @@ export function SmartKolInputPanel({
         includeNewDiscovery: true,
         newDiscoveryLimit: searchPolicy.newDiscoveryLimit,
         newDiscoveryPerPlatformLimit: searchPolicy.perPlatformLimit,
+        newDiscoveryPerPlatformLimits: searchPolicy.perPlatformLimits,
         newDiscoveryPlatforms: strictOnlineDiscoveryPlatforms(discoveryPlatforms),
         excludeChinese,
         market: discoveryRegion,

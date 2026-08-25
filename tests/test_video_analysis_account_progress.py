@@ -6,6 +6,25 @@ from typing import Any
 import pytest
 
 from app.domains.kol import video_analysis_enqueue as enqueue
+from app.domains.kol import video_analysis_account_progress as progress_impl
+
+
+@pytest.fixture(autouse=True)
+def _canonical_cache_fixture(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These focused progress tests model canonical rows unless stated otherwise."""
+    monkeypatch.setattr(
+        progress_impl,
+        "canonical_final_v1_cache_reuse",
+        lambda row, **_kwargs: {
+            "exists": True,
+            "reusable": True,
+            "cache_id": row.get("id"),
+            "cache_reuse_status": "canonical",
+            "revalidation_required": False,
+            "claim_status": "descriptive_only",
+            "reasons": [],
+        },
+    )
 
 
 class _Rows:
@@ -100,7 +119,7 @@ def test_progress_counts_states_and_eta(monkeypatch: pytest.MonkeyPatch) -> None
     out = enqueue.account_video_analysis_progress(conn, 88, limit=20)
     assert out["kol_pool_id"] == 88 and out["derive_method"] == "video_analysis_final_v1"
     assert out["scope"] == {"limit": 20, "evidence_total": 10, "scope_total": 10}
-    assert out["counts"] == {"ready": 2, "running": 1, "queued": 4, "failed": 1, "blocked": 1, "triage": 0, "not_requested": 1}
+    assert out["counts"] == {"ready": 2, "legacy_unverified": 0, "running": 1, "queued": 4, "failed": 1, "blocked": 1, "triage": 0, "not_requested": 1}
     assert (out["completed"], out["in_progress"], out["failed"], out["not_requested"]) == (2, 5, 2, 1)
     assert out["percent"] == 20 and out["state"] == "running"
     # F7:(前方 3 + 本账号 5 条进行中) / 4 条活跃车道(心跳)= 2 波 × 40s;env 槽位提示(1)不再是口径
@@ -160,6 +179,33 @@ def test_progress_states_idle_partial_failed_and_no_evidence() -> None:
     assert partial_failed["state"] == "partial_failed" and partial_failed["failed"] == 1
     empty = enqueue.account_video_analysis_progress(_Conn(evidence_ids=[], caches={}, jobs={}), 1)
     assert empty["state"] == "no_evidence" and empty["scope"]["scope_total"] == 0 and empty["percent"] == 0
+
+
+def test_progress_legacy_cache_is_terminal_partial_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        progress_impl,
+        "canonical_final_v1_cache_reuse",
+        lambda *_args, **_kwargs: {
+            "exists": True,
+            "reusable": False,
+            "cache_reuse_status": "legacy_unverified",
+            "revalidation_required": True,
+            "claim_status": "descriptive_only",
+            "reasons": ["result_prompt_contract_mismatch"],
+        },
+    )
+    out = enqueue.account_video_analysis_progress(
+        _Conn(evidence_ids=[1], caches={"1": "ts"}, jobs={}),
+        1,
+    )
+    assert out["state"] == "partial"
+    assert out["completed"] == 0
+    assert out["legacy_unverified"] == 1
+    assert out["counts"]["legacy_unverified"] == 1
+    assert out["items"][0]["state"] == "legacy_unverified"
+    assert out["items"][0]["revalidation_required"] is True
 
 
 def test_progress_eta_without_samples_is_honest(monkeypatch: pytest.MonkeyPatch) -> None:

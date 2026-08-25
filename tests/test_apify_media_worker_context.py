@@ -69,7 +69,135 @@ def test_instagram_media_resolution_keeps_durable_fence_in_parent_process(monkey
     assert observed == [("apify-job:123", 17)]
     assert result["ok"] is True
     assert result["direct_video_url"] == "https://cdn.example.test/reel.mp4"
+    assert result["scrape_success"] is True
+    assert result["media_resolved"] is True
+    assert result["downloadable"] is True
+    assert result["confirmed_non_video"] is False
+    assert result["media_resolution_state"] == "direct_video_ready"
     assert "durable_execution_context_required" not in str(result)
+
+
+def test_metadata_only_scrape_uses_state_based_secondary_probe(monkeypatch, tmp_path):
+    """Error wording may drift; metadata-only truth, not a suffix, owns fallback routing."""
+
+    from app.workers import apify_jobs_worker_ytdlp_fallback as fallback
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        media,
+        "_materialize_cached_video_media",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "status": "miss",
+            "reason": "media_cache_miss",
+            "cache_candidate_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        media,
+        "_resolve_video_media",
+        lambda _evidence: {
+            "ok": False,
+            "status": "failed",
+            "platform": "instagram",
+            "reason": "provider_wording_changed",
+            "scraped_ok": True,
+            "scrape_success": True,
+            "media_resolved": False,
+            "downloadable": False,
+            "confirmed_non_video": False,
+        },
+    )
+    monkeypatch.setattr(
+        fallback,
+        "ytdlp_fallback_resolve",
+        lambda evidence, output_dir, *, apify_resolved: calls.append(
+            {"evidence": evidence, "output_dir": output_dir, "resolved": apify_resolved}
+        )
+        or {**apify_resolved, "ytdlp_probe_ran": True},
+    )
+
+    result = media._resolve_cached_or_provider_video(
+        object(),
+        {"id": 3233, "content_url": "https://www.instagram.com/p/example/"},
+        str(tmp_path),
+    )
+
+    assert result["ytdlp_probe_ran"] is True
+    assert len(calls) == 1
+    assert calls[0]["resolved"]["media_resolution_state"] == "metadata_only"
+
+
+def test_scrape_failure_never_uses_secondary_video_probe(monkeypatch, tmp_path):
+    from app.workers import apify_jobs_worker_ytdlp_fallback as fallback
+
+    monkeypatch.setattr(
+        media,
+        "_materialize_cached_video_media",
+        lambda *_args, **_kwargs: {
+            "ok": False,
+            "status": "miss",
+            "reason": "media_cache_miss",
+            "cache_candidate_count": 0,
+        },
+    )
+    monkeypatch.setattr(
+        media,
+        "_resolve_video_media",
+        lambda _evidence: {
+            "ok": False,
+            "status": "failed",
+            "platform": "tiktok",
+            "reason": "apify_provider_replay_blocked",
+            "scraped_ok": False,
+        },
+    )
+    monkeypatch.setattr(
+        fallback,
+        "ytdlp_fallback_resolve",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a failed scrape has no metadata truth to probe")
+        ),
+    )
+
+    result = media._resolve_cached_or_provider_video(
+        object(),
+        {"id": 1763, "content_url": "https://www.tiktok.com/@x/video/1"},
+        str(tmp_path),
+    )
+
+    assert result["scrape_success"] is False
+    assert result["media_resolved"] is False
+    assert result["downloadable"] is False
+    assert result["confirmed_non_video"] is False
+    assert result["media_resolution_state"] == "unresolved"
+
+
+def test_explicit_image_metadata_is_terminal_non_video_without_ytdlp(monkeypatch):
+    async def fake_scrape(_url: str, _platform: str, *, timeout_secs: int | None = None):
+        assert timeout_secs == media.MEDIA_RESOLVE_TIMEOUT_SECONDS
+        return {
+            "scraped_ok": True,
+            "video_url": "",
+            "media_kind": "image",
+            "confirmed_non_video": True,
+        }
+
+    monkeypatch.setenv("APIFY_TOKEN", "configured-for-test")
+    monkeypatch.setattr(apify_scraper, "scrape_with_apify", fake_scrape)
+
+    with apify_execution_context("apify-job:124", 18):
+        result = media._resolve_video_media(
+            {"content_url": "https://www.instagram.com/p/image-only/"}
+        )
+
+    assert result["ok"] is False
+    assert result["scrape_success"] is True
+    assert result["media_resolved"] is False
+    assert result["downloadable"] is False
+    assert result["confirmed_non_video"] is True
+    assert result["no_video_confirmed"] is True
+    assert result["media_resolution_state"] == "confirmed_non_video"
 
 
 def test_media_resolution_without_worker_fence_fails_closed_without_provider_call(monkeypatch):
@@ -133,6 +261,11 @@ def test_r2_cache_hit_is_materialized_before_provider_resolver(monkeypatch, tmp_
     assert result["cache_source"] == "r2_cache"
     assert result["cache_asset_id"] == 11153
     assert result["bytes"] == len(payload)
+    assert result["scrape_success"] is False
+    assert result["media_resolved"] is True
+    assert result["downloadable"] is True
+    assert result["confirmed_non_video"] is False
+    assert result["media_resolution_state"] == "local_video_ready"
     assert Path(result["path"]).read_bytes() == payload
     assert "source_url_hash=%s" in conn.cursor_value.sql
 
@@ -226,6 +359,12 @@ def test_gemini_worker_consumes_cache_path_without_redownload_or_reupload(monkey
             "platform": "tiktok",
             "path": str(cached_path),
             "bytes": cached_path.stat().st_size,
+            "media_resolution_contract": "video_media_resolution_v1",
+            "media_resolution_state": "local_video_ready",
+            "scrape_success": False,
+            "media_resolved": True,
+            "downloadable": True,
+            "confirmed_non_video": False,
         },
     )
     monkeypatch.setattr(
@@ -276,10 +415,16 @@ def test_gemini_worker_consumes_cache_path_without_redownload_or_reupload(monkey
     assert analyzer_payloads[0]["mode"] == "local"
     assert analyzer_payloads[0]["video_path"] == str(cached_path)
     assert raw["media_resolution"] == {
+        "contract": "video_media_resolution_v1",
+        "state": "local_video_ready",
         "platform": "tiktok",
         "source_url_host": "www.tiktok.com",
         "direct_video_url_host": None,
         "status": "ready",
+        "scrape_success": False,
+        "media_resolved": True,
+        "downloadable": True,
+        "confirmed_non_video": False,
         "cache_hit": True,
         "cache_source": "r2_cache",
         "cache_asset_id": 11153,

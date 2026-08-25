@@ -9,7 +9,79 @@ from typing import Any, Mapping
 
 import psycopg
 
-from app.workers.apify_jobs_worker_keyframe_cache import keyframe_qa_cache_exists_for_source
+from app.workers.apify_jobs_worker_keyframe_cache import (
+    keyframe_qa_cache_reuse_state_for_source,
+)
+
+
+def _cache_reuse_state(
+    conn: psycopg.Connection[Any],
+    *,
+    target_type: str,
+    target_id: str,
+    derive_method: str,
+    payload: dict[str, Any],
+    keyframe_derive_method: str,
+    keyframe_lookup: Any,
+    reuse_lookup: Any,
+    legacy_lookup: Any,
+) -> dict[str, Any]:
+    if derive_method == keyframe_derive_method:
+        return keyframe_lookup(
+            conn,
+            target_type=target_type,
+            target_id=target_id,
+            derive_method=derive_method,
+            payload=payload,
+        )
+    if callable(reuse_lookup):
+        return reuse_lookup(conn, target_type, target_id, derive_method)
+    return {
+        "exists": bool(legacy_lookup(conn, target_type, target_id, derive_method)),
+        "reusable": True,
+        "reasons": [],
+    }
+
+
+def _finish_cache_hit(
+    conn: psycopg.Connection[Any],
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    derive_method: str,
+    cache_state: dict[str, Any],
+    evaluation_only: bool,
+    scope_checkpoint: Any,
+    finish_skipped: Any,
+) -> bool:
+    if not cache_state.get("exists"):
+        return False
+    if not scope_checkpoint(
+        conn,
+        job,
+        payload,
+        derive_method,
+        provider_calls_performed=False,
+    ):
+        return True
+    reason = "skipped_existing_analysis_cache"
+    if cache_state.get("reusable") is not True:
+        details = ",".join(
+            str(item)
+            for item in cache_state.get("reasons", [])[:12]
+            if str(item).strip()
+        )
+        reason = "skipped_legacy_cache_unverified"
+        if details:
+            reason = f"{reason}:{details}"
+    finish_skipped(
+        conn,
+        int(job["id"]),
+        reason,
+        evaluation_only=evaluation_only,
+    )
+    return True
+
 
 def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespace: Mapping[str, Any]) -> None:
     GEMINI_VIDEO_DERIVE_METHODS = namespace['GEMINI_VIDEO_DERIVE_METHODS']
@@ -25,8 +97,10 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
     _advisory_lock = namespace['_advisory_lock']
     _advisory_unlock = namespace['_advisory_unlock']
     _analysis_cache_exists = namespace['_analysis_cache_exists']
-    _keyframe_qa_cache_exists_for_source = namespace.get(
-        '_keyframe_qa_cache_exists_for_source', keyframe_qa_cache_exists_for_source
+    _analysis_cache_reuse_decision = namespace.get('_analysis_cache_reuse_decision')
+    _keyframe_qa_cache_reuse_state_for_source = namespace.get(
+        '_keyframe_qa_cache_reuse_state_for_source',
+        keyframe_qa_cache_reuse_state_for_source,
     )
     _block_job = namespace['_block_job']
     _derive_method = namespace['_derive_method']
@@ -161,55 +235,98 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
                 {"derive_method": derive_method},
             )
             return
+        cache_state = _cache_reuse_state(
+            conn,
+            target_type=target_type,
+            target_id=target_id,
+            derive_method=cache_derive_method,
+            payload=payload,
+            keyframe_derive_method=FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+            keyframe_lookup=_keyframe_qa_cache_reuse_state_for_source,
+            reuse_lookup=_analysis_cache_reuse_decision,
+            legacy_lookup=_analysis_cache_exists,
+        )
+        if _finish_cache_hit(
+            conn,
+            job=job,
+            payload=payload,
+            derive_method=derive_method,
+            cache_state=cache_state,
+            evaluation_only=execution_class == LOCAL_EVALUATION_EXECUTION_CLASS,
+            scope_checkpoint=_final_v1_scope_checkpoint,
+            finish_skipped=_finish_skipped,
+        ):
+            return
         target_lock = f"{target_type}:{target_id}:{derive_method}"
         if not _advisory_lock(conn, "vkpi_analysis_worker_target", target_lock):
             _requeue_job(conn, int(job["id"]), "analysis target already in progress", retry_delay_seconds=random.uniform(2.0, 5.0))
             return
-        slot = _acquire_llm_slot(conn)
+        slot = None
         try:
+            cache_state = _cache_reuse_state(
+                conn,
+                target_type=target_type,
+                target_id=target_id,
+                derive_method=cache_derive_method,
+                payload=payload,
+                keyframe_derive_method=FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+                keyframe_lookup=_keyframe_qa_cache_reuse_state_for_source,
+                reuse_lookup=_analysis_cache_reuse_decision,
+                legacy_lookup=_analysis_cache_exists,
+            )
+            if _finish_cache_hit(
+                conn,
+                job=job,
+                payload=payload,
+                derive_method=derive_method,
+                cache_state=cache_state,
+                evaluation_only=execution_class == LOCAL_EVALUATION_EXECUTION_CLASS,
+                scope_checkpoint=_final_v1_scope_checkpoint,
+                finish_skipped=_finish_skipped,
+            ):
+                return
+            slot = _acquire_llm_slot(conn)
             if slot is None:
                 _requeue_job(conn, int(job["id"]), "llm concurrency limit reached", retry_delay_seconds=random.uniform(5.0, 10.0))
-                return
-            cache_exists = (
-                _keyframe_qa_cache_exists_for_source(
-                    conn,
-                    target_type=target_type,
-                    target_id=target_id,
-                    derive_method=cache_derive_method,
-                    payload=payload,
-                )
-                if cache_derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD
-                else _analysis_cache_exists(
-                    conn,
-                    target_type,
-                    target_id,
-                    cache_derive_method,
-                )
-            )
-            if cache_exists:
-                if not _final_v1_scope_checkpoint(
-                    conn,
-                    job,
-                    payload,
-                    derive_method,
-                    provider_calls_performed=False,
-                ):
-                    return
-                _finish_skipped(
-                    conn,
-                    int(job["id"]),
-                    "skipped_existing_analysis_cache",
-                    evaluation_only=(
-                        execution_class == LOCAL_EVALUATION_EXECUTION_CLASS
-                    ),
-                )
                 return
             preflight = _llm_budget_preflight(
                 job,
                 payload,
                 execution_class=execution_class,
             )
-            allowed, reason, estimated_cost = _google_allowed(preflight)
+            execution_plan = (
+                preflight.get("worker_model_execution")
+                if isinstance(preflight.get("worker_model_execution"), dict)
+                else {}
+            )
+            ready_models = [
+                str(model).strip()
+                for model in execution_plan.get("ready_models", [])
+                if str(model).strip()
+            ]
+            if execution_plan:
+                allowed = bool(ready_models)
+                blocked_models = (
+                    execution_plan.get("blocked_models")
+                    if isinstance(execution_plan.get("blocked_models"), dict)
+                    else {}
+                )
+                reason = str(
+                    preflight.get("provider_gate_reason")
+                    or next(iter(blocked_models.values()), "")
+                    or (
+                        "provider_calls_allowed"
+                        if allowed
+                        else "provider_calls_blocked"
+                    )
+                )
+                estimated_cost = float(
+                    execution_plan.get("estimated_cost_usd") or 0.0
+                )
+            else:
+                # Compatibility for narrow unit/operational shims that still
+                # return the legacy single-provider preflight shape.
+                allowed, reason, estimated_cost = _google_allowed(preflight)
             _log_budget_preflight_record_only(
                 job=job,
                 provider="google",
@@ -232,11 +349,30 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
                     },
                 )
                 return
-            authorization = _google_execution_authorization(preflight)
+            authorizations_by_model = (
+                execution_plan.get("authorizations_by_model")
+                if isinstance(execution_plan.get("authorizations_by_model"), dict)
+                else {}
+            )
+            authorizations_by_binding = (
+                execution_plan.get("authorizations_by_binding")
+                if isinstance(execution_plan.get("authorizations_by_binding"), dict)
+                else {}
+            )
             expected_model = (
-                str(payload.get("final_v1_qa_model") or FINAL_V1_KEYFRAME_QA_MODEL).strip()
+                ready_models[0]
+                if ready_models
+                else str(
+                    payload.get("final_v1_qa_model")
+                    or FINAL_V1_KEYFRAME_QA_MODEL
+                ).strip()
                 if derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD
                 else WORKER_GEMINI_MODEL
+            )
+            authorization = (
+                authorizations_by_model.get(expected_model)
+                if isinstance(authorizations_by_model.get(expected_model), dict)
+                else _google_execution_authorization(preflight)
             )
             expected_binding = f"google/{expected_model}"
             if authorization.get("binding") != expected_binding:
@@ -266,8 +402,20 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
             # provider preflight contributes exact binding/readiness/budget.
             payload = {
                 **payload,
+                **(
+                    {"gemini_final_v1_models": list(ready_models)}
+                    if derive_method == "video_analysis_final_v1"
+                    and ready_models
+                    else {}
+                ),
                 "_llm_execution": {
                     **authorization,
+                    "requested_model_chain": list(
+                        execution_plan.get("requested_models") or ready_models
+                    ),
+                    "ready_model_chain": list(ready_models or [expected_model]),
+                    "execution_authorizations_by_model": authorizations_by_model,
+                    "execution_authorizations_by_binding": authorizations_by_binding,
                     **(
                         job_authorization
                         if execution_class == LOCAL_EVALUATION_EXECUTION_CLASS

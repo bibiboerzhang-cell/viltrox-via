@@ -34,6 +34,16 @@ VIDEO_FINAL_LAYERS = (
 )
 
 FINAL_V1_COMPLETED_STATUSES = frozenset({"complete", "completed", "ready", "success", "succeeded"})
+FINAL_V1_QUALITY_COMPLETE = "quality_complete"
+FINAL_V1_QUALITY_INCOMPLETE = "quality_incomplete"
+FINAL_V1_LAYER6_SCORE_KEYS = (
+    "content_quality_score",
+    "viewer_heart_score",
+    "channel_value_score",
+    "asset_reuse_score",
+    "product_proof_score",
+    "marketing_value_score",
+)
 BRAND_PRODUCT_STATUSES = frozenset({"present", "absent", "unknown"})
 BRAND_EVIDENCE_MODALITIES = frozenset({"visual", "subtitle", "audio", "metadata"})
 TIMED_BRAND_EVIDENCE_MODALITIES = frozenset({"visual", "subtitle", "audio"})
@@ -149,6 +159,63 @@ def _final_v1_payload_validation_errors(payload: Any) -> list[str]:
     return errors
 
 
+def final_v1_quality_issues(raw: Any) -> list[str]:
+    """Return completion-quality gaps without reclassifying structural errors.
+
+    Provider execution can finish successfully while omitting required semantic
+    sections.  Those results remain inspectable/cost-attributable, but they must
+    not become a ``ready`` cache fact.  ``None`` score values are allowed by the
+    prompt contract; the gate checks that each core score field was explicitly
+    returned, not that the model invented a number.
+    """
+
+    if not isinstance(raw, dict):
+        return ["quality_payload_not_object"]
+    payload = raw.get("video_analysis_final_v1")
+    if not isinstance(payload, dict):
+        payload = raw if any(layer in raw for layer in VIDEO_FINAL_LAYERS) else {}
+
+    issues: list[str] = []
+    layer1 = payload.get("layer1_visual_content")
+    layer1 = layer1 if isinstance(layer1, dict) else {}
+    brand = layer1.get("brand_product_evidence")
+    if not isinstance(brand, dict):
+        issues.append("missing_brand_product_evidence")
+    else:
+        status = str(brand.get("viltrox_status") or "").strip().lower()
+        if status not in BRAND_PRODUCT_STATUSES:
+            issues.append("brand_product_evidence.viltrox_status")
+        if brand.get("inspection_complete") is not True:
+            issues.append("brand_product_evidence.inspection_complete")
+        for field in (
+            "checked_modalities",
+            "viltrox_evidence",
+            "viltrox_products",
+            "competitors",
+        ):
+            if not isinstance(brand.get(field), list):
+                issues.append(f"brand_product_evidence.{field}")
+
+    layer6 = payload.get("layer6_flags_and_scores")
+    if not isinstance(layer6, dict):
+        issues.append("missing_layer6_flags_and_scores")
+    else:
+        if not isinstance(layer6.get("risk_flags"), list):
+            issues.append("layer6_flags_and_scores.risk_flags")
+        scores = layer6.get("scores")
+        if not isinstance(scores, dict):
+            issues.append("layer6_flags_and_scores.scores")
+        else:
+            for key in FINAL_V1_LAYER6_SCORE_KEYS:
+                entry = scores.get(key)
+                if not isinstance(entry, dict) or "score" not in entry:
+                    issues.append(f"layer6_flags_and_scores.scores.{key}")
+        for field in ("final_verdict", "key_hook"):
+            if not _nonempty_text(layer6.get(field)):
+                issues.append(f"layer6_flags_and_scores.{field}")
+    return list(dict.fromkeys(issues))
+
+
 def validate_final_v1_result(raw: Any, *, allow_legacy_status: bool = True) -> list[str]:
     """Return reasons why a normalized final_v1 result must not enter ready cache.
 
@@ -187,11 +254,36 @@ def mark_invalid_final_v1_result(raw: dict[str, Any], errors: list[str]) -> str:
     return message
 
 
-def ensure_final_v1_result_cacheable(raw: dict[str, Any]) -> None:
-    """Validate at the cache boundary and upgrade valid legacy envelopes in place."""
+def ensure_final_v1_result_cacheable(raw: dict[str, Any]) -> str:
+    """Validate at the cache boundary and return its truthful cache status.
+
+    Structurally invalid output still raises.  Structurally valid but incomplete
+    output is retained under ``quality_incomplete`` for triage and must not be
+    promoted to the ready evidence path.
+    """
     errors = validate_final_v1_result(raw, allow_legacy_status=True)
     if errors:
         raise InvalidFinalV1ResultError(mark_invalid_final_v1_result(raw, errors))
+    observed_issues = final_v1_quality_issues(raw)
+    prior_issues = (
+        raw.get("quality_issues")
+        if raw.get("quality_status") == FINAL_V1_QUALITY_INCOMPLETE
+        and isinstance(raw.get("quality_issues"), list)
+        else []
+    )
+    quality_issues = list(
+        dict.fromkeys(
+            str(item)
+            for item in [*prior_issues, *observed_issues]
+            if str(item).strip()
+        )
+    )
+    raw["quality_status"] = (
+        FINAL_V1_QUALITY_INCOMPLETE
+        if quality_issues
+        else FINAL_V1_QUALITY_COMPLETE
+    )
+    raw["quality_issues"] = quality_issues
     raw.setdefault("status", "completed")
     raw.setdefault(
         "provenance",
@@ -201,6 +293,7 @@ def ensure_final_v1_result_cacheable(raw: dict[str, Any]) -> None:
             "method": str(raw.get("method") or "").strip(),
         },
     )
+    return "quality_incomplete" if quality_issues else "ready"
 
 
 def _response_usage_metadata(resp: Any) -> dict[str, Any]:
@@ -229,6 +322,34 @@ def _response_usage_metadata(resp: Any) -> dict[str, Any]:
         if value is not None:
             output[field] = value
     return output
+
+
+def _capture_provider_reported_model(
+    diagnostics: dict[str, Any], response: Any
+) -> Any:
+    """Record provider identity without confusing it with requested model."""
+
+    reported = str(
+        getattr(response, "model_version", "")
+        or getattr(response, "model", "")
+        or ""
+    ).strip()
+    if reported:
+        diagnostics["provider_reported_model"] = reported
+    return response
+
+
+def _stamp_analyzer_model_identity(
+    result: dict[str, Any],
+    model_chain: list[str],
+    selected_model: str,
+    diagnostics: dict[str, Any],
+) -> None:
+    result["requested_model_chain"] = list(model_chain)
+    result["selected_model"] = str(selected_model or "").strip() or None
+    result["provider_reported_model"] = (
+        str(diagnostics.get("provider_reported_model") or "").strip() or None
+    )
 
 
 _STRING_TOKEN_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
@@ -598,6 +719,7 @@ def _apply_final_v1_result(
     errors = validate_final_v1_result(candidate, allow_legacy_status=False)
     if errors:
         raise InvalidFinalV1ResultError(mark_invalid_final_v1_result(result, errors))
+    quality_issues = final_v1_quality_issues(parsed)
     payload = _normalise_final_v1_result(parsed, subtitle_used=subtitle_used)
     layer1 = payload["layer1_visual_content"]
     layer6 = payload["layer6_flags_and_scores"]
@@ -617,6 +739,12 @@ def _apply_final_v1_result(
         {
             "analyzed": True,
             "status": "completed",
+            "quality_status": (
+                FINAL_V1_QUALITY_INCOMPLETE
+                if quality_issues
+                else FINAL_V1_QUALITY_COMPLETE
+            ),
+            "quality_issues": quality_issues,
             "error": None,
             "method": method,
             "model": model,

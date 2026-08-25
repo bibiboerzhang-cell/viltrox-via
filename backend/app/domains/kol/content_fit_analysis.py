@@ -1,24 +1,4 @@
-"""内容契合深析引擎(地基B)——KOL 适配判断的主依据。
-
-裁令(Jianbo 多轮成文):KOL 适配判断的**主依据** = 该 KOL 过往视频的画面/故事
-(Gemini 视频深析 final_v1)+ 粉丝评论综合,**胜过粉丝数等表层指标**。
-
-本模块只做一件事:把一个 KOL 已有的 ① 全部视频 final_v1 Gemini 分析
-(layer1 画面/scene_timeline 分镜/story、viltrox/competitor 识别、marketing_value)
-② 粉丝评论情报(vkpi_comments,post_table=vkpi_kol_video_evidence)
-③ 规则版 dimensions_11
-汇总后交给严格的 llm_production 精确模型边界产出结构化判断,落 cache 复用。
-
-红线(逐条):
-  - **绝不**读/写/并入 viltrox_fit_score、viltrox_fit_reason;本模块零触 rule_v0 打分公式。
-  - 完全独立的 cache 命名空间:target_type='kol'、derive_method='content_fit_v1',
-    与 outreach_draft(target_type='kol_pool')、video 分析(target_type='video')互不重叠。
-  - **不**新跑 Gemini 视频分析(那是另一条重链 video_analysis_enqueue);只**读**已有 final_v1。
-  - 预算走闸:LLM 经 llm_production(运行就绪+原子预留+单次模型锁定),不绕过。
-  - 无视频证据 → 诚实返回 status='insufficient_evidence',**不**写 cache、**不**烧 LLM、不杜撰。
-  - vkpi_analysis_cache.status CHECK 仅允许 ready/stale —— insufficient_evidence 只存在于返回
-    payload,绝不写入 status 列(写库恒 status='ready',业务态在 result.verdict_status)。
-"""
+"""KOL 内容契合深析：只消费经证明的 final_v1 视频证据，绝不改 rule_v0 评分。"""
 from __future__ import annotations
 
 import hashlib
@@ -31,6 +11,7 @@ from typing import Any, Callable
 from app.core.logging import get_logger
 from app.core.model_registry import current_task_model_binding, split_binding
 from app.db.connection import get_conn
+from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse
 from app.platform import llm_production
 from app.platform.llm_runtime_errors import normalise_job_error
 
@@ -55,25 +36,34 @@ CONTENT_FIT_JOB_TYPE = "kol_content_fit_analysis"
 ACTIVE_JOB_STATES = frozenset({"queued", "running", "retrying", "processing"})
 FAILED_JOB_STATES = frozenset({"failed", "triage", "cancelled", "canceled", "void", "timeout"})
 
+
+class _VideoAnalyses(list[dict[str, Any]]):
+    """List-compatible loader result carrying the read-only cache proof gate."""
+
+
+def _video_analysis_cache_gate(videos: Any) -> dict[str, Any]:
+    gate = getattr(videos, "cache_gate", None)
+    return dict(gate) if isinstance(gate, dict) else {}
+
+
+def legacy_video_cache_response(kol_pool_id: int, product_sku: str | None, gate: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "legacy_unverified", "state": "legacy_unverified", "terminal": True,
+        "kol_pool_id": int(kol_pool_id), "product_sku": normalize_product_sku(product_sku) or None,
+        "derive_method": content_fit_derive_method(product_sku),
+        "reason": "legacy_video_analysis_cache_unverified",
+        "revalidation_required": True, "claim_status": "descriptive_only",
+        "cache_reuse_status": "legacy_unverified", "cache_gate": dict(gate),
+        "provider_calls": False, "write_db": False, "cached": False,
+    }
+
 def normalize_product_sku(product_sku: str | None) -> str:
-    """Canonical product identity used by cache and active-job idempotency.
-
-    A content-fit verdict is about one KOL *and one product*.  Treating the SKU
-    as optional cache metadata allowed a generic verdict, EVO verdict, Pro
-    verdict, and EPIC verdict for the same creator to overwrite/reuse one row.
-    """
-
+    """Canonical product identity used by cache and active-job idempotency."""
     return " ".join(str(product_sku or "").strip().upper().split())
 
 
 def content_fit_derive_method(product_sku: str | None = None) -> str:
-    """Return the cache namespace for the exact product scope.
-
-    Keep the historical base method for an explicitly generic analysis.  A
-    bounded digest avoids leaking arbitrary SKU text into an index key while
-    preserving deterministic separation between products.
-    """
-
+    """Return a stable cache namespace for the exact product scope."""
     normalized = normalize_product_sku(product_sku)
     if not normalized:
         return DERIVE_METHOD
@@ -308,10 +298,7 @@ def _kol_row(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
 
 
 def _video_analyses(conn: Any, kol_pool_id: int, *, limit: int = MAX_VIDEOS) -> list[dict[str, Any]]:
-    """读该 KOL 全部 ready 的 video_analysis_final_v1（画面/分镜/故事/竞品识别/营销价值）。
-
-    纯 SELECT；JOIN evidence 拿标题/链接；不触 viltrox_fit_score。
-    """
+    """只读并返回全体 canonical final_v1；任一 legacy ready 行即整体拒绝。"""
     rows = conn.execute(
         """
         SELECT
@@ -322,6 +309,8 @@ def _video_analyses(conn: Any, kol_pool_id: int, *, limit: int = MAX_VIDEOS) -> 
             e.view_count,
             e.like_count,
             e.comment_count,
+            ac.id, ac.target_type, ac.target_id, ac.derive_method,
+            ac.model, ac.prompt_version, ac.status,
             ac.result AS result
         FROM vkpi_analysis_cache ac
         JOIN vkpi_kol_video_evidence e ON e.id = CAST(ac.target_id AS BIGINT)
@@ -330,13 +319,33 @@ def _video_analyses(conn: Any, kol_pool_id: int, *, limit: int = MAX_VIDEOS) -> 
           AND ac.status = 'ready'
           AND e.kol_pool_id = ?
         ORDER BY COALESCE(e.view_count, 0) DESC, e.id DESC
-        LIMIT ?
         """,
-        (VIDEO_DERIVE_METHOD, int(kol_pool_id), int(limit)),
+        (VIDEO_DERIVE_METHOD, int(kol_pool_id)),
     ).fetchall()
-    analyses: list[dict[str, Any]] = []
+    analyses = _VideoAnalyses()
+    analyses.cache_gate = {
+        "status": "canonical", "revalidation_required": False,
+        "claim_status": "descriptive_only", "reasons": [],
+    }
+    legacy: list[dict[str, Any]] = []
     for row in rows:
         data = dict(row)
+        try:
+            decision = canonical_final_v1_cache_reuse(
+                data,
+                target_type="video",
+                target_id=str(data.get("evidence_id") or data.get("target_id") or ""),
+                derive_method=VIDEO_DERIVE_METHOD,
+            )
+        except Exception:
+            logger.warning("vkpi.content_fit.video_cache_classifier_failed", exc_info=True)
+            decision = {"reusable": False, "cache_id": data.get("id"),
+                        "reasons": ["canonical_classifier_failed"]}
+        if not decision.get("reusable"):
+            legacy.append(dict(decision))
+            continue
+        if len(analyses) >= int(limit):
+            continue
         result = _loads(data.get("result")) or {}
         if not isinstance(result, dict):
             continue
@@ -387,6 +396,16 @@ def _video_analyses(conn: Any, kol_pool_id: int, *, limit: int = MAX_VIDEOS) -> 
                 "competitor_mentions": (raw or {}).get("competitor_mentions") or [],
             }
         )
+    if legacy:
+        analyses.clear()
+        analyses.cache_gate = {
+            "status": "legacy_unverified", "revalidation_required": True,
+            "claim_status": "descriptive_only",
+            "reasons": list(dict.fromkeys(
+                reason for item in legacy for reason in (item.get("reasons") or [])
+            )),
+            "cache_ids": [item.get("cache_id") for item in legacy if item.get("cache_id") is not None],
+        }
     return analyses
 
 
@@ -394,10 +413,7 @@ def _video_analyses(conn: Any, kol_pool_id: int, *, limit: int = MAX_VIDEOS) -> 
 
 
 def _fan_comments(conn: Any, kol_pool_id: int, *, limit: int = MAX_COMMENTS) -> list[dict[str, Any]]:
-    """读该 KOL 全部 evidence 下的粉丝评论(vkpi_comments,post_table=evidence)。
-
-    评论可选:无评论不报错,只是 audience_signal 置信度降低。
-    """
+    """只读该 KOL evidence 下的可用粉丝评论。"""
     rows = conn.execute(
         """
         SELECT v.comment_text, v.author_handle, v.likes_count, v.language_detected
@@ -429,7 +445,6 @@ def _dimensions_11(kol_pool_id: int) -> dict[str, Any]:
     """读规则版 11 维(rule_dimensions_11_v0);失败返回 {} 不阻断(评论/视频已是主依据)。"""
     try:
         from app.domains.kol import eleven_dimensions
-
         persisted = eleven_dimensions.load_persisted_dimensions_11(int(kol_pool_id))
         if isinstance(persisted, dict) and persisted:
             return persisted
@@ -448,7 +463,6 @@ def _resolve_product(product_sku: str | None, product_persona: str | None) -> di
     if sku:
         try:
             from app.domains.costs.product_catalog import list_product_catalog
-
             products = list_product_catalog(limit=300, query="").get("products") or []
             for prod in products:
                 if str(prod.get("sku") or "").strip().lower() == sku.lower():
@@ -489,7 +503,6 @@ def _build_prompt(
         f"- 粉丝/Followers: {kol.get('followers') or '-'}（注意:粉丝数是表层指标,判断不得以它为主）",
         f"- 主题/Topic: {kol.get('primary_topic') or '-'}",
     ]
-
     if product.get("mode") == "sku":
         product_lines = [
             f"- 模式: 真实 SKU 深度",
@@ -505,7 +518,6 @@ def _build_prompt(
         product_lines = [f"- 模式: 产品画像/persona", f"- 画像: {product.get('persona')}"]
     else:
         product_lines = ["- 模式: 未指定具体产品,做通用品牌契合判断(VILTROX 唯卓仕 相机镜头/影像配件)"]
-
     video_blocks: list[str] = []
     for idx, v in enumerate(videos, 1):
         scenes = "; ".join(
@@ -528,11 +540,9 @@ def _build_prompt(
                 ]
             )
         )
-
     comment_lines = [
         f"  - ({c.get('likes') or 0}赞) @{c.get('author')}: {c.get('text')}" for c in comments[:MAX_COMMENTS]
     ]
-
     dim_summary = "-"
     if isinstance(dimensions, dict) and dimensions:
         dim_summary = (
@@ -540,7 +550,6 @@ def _build_prompt(
             f"method={dimensions.get('method')}, "
             f"data_completeness={(dimensions.get('confidence') or {}).get('data_completeness')}"
         )
-
     return (
         "你是 VILTROX(唯卓仕,相机镜头/影像配件品牌)的 KOL 内容契合深析专家。\n"
         "**判断主依据**:该 KOL 过往视频的画面/故事(Gemini 视频深析)+ 粉丝评论。"
@@ -824,28 +833,20 @@ def analyze_content_fit(
     staff: dict[str, Any] | None = None,
     authorization_checkpoint: Callable[[bool], None] | None = None,
 ) -> dict[str, Any]:
-    """内容契合深析主入口。
-
-    读 ① 全部视频 final_v1 Gemini 分析 ② 粉丝评论 ③ dimensions_11,汇总后经
-    llm_production 精确绑定产出结构化判断,落 cache 复用。
-
-    - force=False 且已有 ready cache → 直接返回缓存(不烧 LLM)。
-    - 无视频证据 → status='insufficient_evidence',不写 cache、不烧 LLM(诚实)。
-    - 红线:零触 viltrox_fit_score;预算走运行就绪+原子预留闸。
-    """
+    """基于 canonical final_v1、评论和 dimensions_11 生成独立 fit 缓存。"""
     kid = int(kol_pool_id)
     conn = get_conn()
-
     kol = _kol_row(conn, kid)
     if not kol:
         raise LookupError(f"kol_pool_id not found: {kid}")
-
+    videos = _video_analyses(conn, kid)
+    cache_gate = _video_analysis_cache_gate(videos)
+    if cache_gate.get("status") == "legacy_unverified":
+        return legacy_video_cache_response(kid, product_sku, cache_gate)
     if not force:
         cached = _read_cache(conn, kid, product_sku)
         if cached:
             return cached
-
-    videos = _video_analyses(conn, kid)
     if not videos:
         # 诚实:无已分析视频证据,不杜撰、不烧 LLM、不写 cache(status 列只允许 ready/stale)。
         return {
@@ -858,7 +859,6 @@ def analyze_content_fit(
             "comment_count": 0,
             "cached": False,
         }
-
     comments = _fan_comments(conn, kid)
     dimensions = _dimensions_11(kid)
     product = _resolve_product(product_sku, product_persona)

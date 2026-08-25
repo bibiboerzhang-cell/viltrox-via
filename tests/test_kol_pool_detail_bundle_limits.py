@@ -102,6 +102,11 @@ def test_detail_bundle_skips_get_item_legacy_three_video_projection(monkeypatch)
 
 def test_detail_bundle_batches_analysis_cache_reads(monkeypatch):
     calls: list[tuple[list[str], tuple[str, ...]]] = []
+    monkeypatch.setattr(
+        cache_repo,
+        "canonical_final_v1_cache_reuse",
+        lambda *_args, **_kwargs: {"reusable": True, "reasons": []},
+    )
 
     def fake_video_evidence(_kol_pool_id: int, *, limit: int, **kwargs):
         if kwargs.get("only_with_cache"):
@@ -112,11 +117,14 @@ def test_detail_bundle_batches_analysis_cache_reads(monkeypatch):
         del conn
         calls.append((list(target_ids), tuple(derive_methods)))
         return {
-            (str(evidence_id), "video_analysis_final_v1"): {
+            **{(str(evidence_id), "video_analysis_final_v1"): {
                 "status": "ready",
                 "result": {},
-            }
-            for evidence_id in target_ids
+            } for evidence_id in target_ids},
+            **{(str(evidence_id), "video_analysis_final_v1_keyframe_qa"): {
+                "status": "ready",
+                "result": {"qa_pass": True},
+            } for evidence_id in target_ids},
         }
 
     monkeypatch.setattr(kol_pool, "get_item", lambda _kol_pool_id, **_kwargs: {"item": {"id": _kol_pool_id}})
@@ -143,6 +151,90 @@ def test_detail_bundle_batches_analysis_cache_reads(monkeypatch):
         "video_analysis_final_v1_keyframe_qa",
     )
     assert result["video_analysis"]["summary"]["ready_count"] == 50
+    assert result["video_analysis"]["summary"]["qa_ready_count"] == 50
+
+    monkeypatch.setattr(
+        cache_repo,
+        "canonical_final_v1_cache_reuse",
+        lambda *_args, **_kwargs: {
+            "reusable": False,
+            "cache_id": 7,
+            "reasons": ["cache_prompt_contract_mismatch"],
+        },
+    )
+    legacy = kol_pool.detail_bundle(13053, video_limit=24, llm_limit=20)
+    legacy_item = legacy["video_analysis"]["items"][0]
+    legacy_summary = legacy["video_analysis"]["summary"]
+    assert legacy_item["state"] == "legacy_unverified"
+    assert legacy_item["final_entry"] is None
+    assert legacy_item["raw_final_entry"]["status"] == "ready"
+    assert legacy_item["terminal"] is True
+    assert legacy_item["revalidation_required"] is True
+    assert legacy_summary["ready_count"] == 0
+    assert legacy_summary["legacy_unverified_count"] == 50
+    assert legacy_summary["qa_ready_count"] == 0
+    assert legacy_summary["pending_count"] == 0
+
+
+def test_detail_bundle_surfaces_quality_incomplete_as_terminal_not_pending(monkeypatch):
+    def fake_video_evidence(_kol_pool_id: int, *, limit: int, **kwargs):
+        del limit
+        if kwargs.get("only_with_cache"):
+            return [{"id": 77, "content_url": "https://example.com/video/77"}]
+        return []
+
+    monkeypatch.setattr(
+        kol_pool,
+        "get_item",
+        lambda _kol_pool_id, **_kwargs: {"item": {"id": _kol_pool_id}},
+    )
+    monkeypatch.setattr(kol_pool, "_video_evidence_for_kol", fake_video_evidence)
+    monkeypatch.setattr(
+        eleven_dimensions,
+        "load_persisted_dimensions_11",
+        lambda _kol_pool_id: None,
+    )
+    monkeypatch.setattr(
+        llm_deep_analysis,
+        "get_kol_llm_deep_analysis",
+        lambda _kol_pool_id, *, limit: {
+            "status": "empty",
+            "count": 0,
+            "limit": limit,
+        },
+    )
+    monkeypatch.setattr(
+        cache_repo,
+        "get_analysis_cache_entries_for_targets",
+        lambda *_args, **_kwargs: {
+            ("77", "video_analysis_final_v1"): {
+                "target_type": "video_quality_triage",
+                "target_id": "77",
+                "derive_method": "video_analysis_final_v1",
+                "status": "quality_incomplete",
+                "result": {
+                    "quality_status": "quality_incomplete",
+                    "quality_issues": ["missing_brand_product_evidence"],
+                },
+            }
+        },
+    )
+    monkeypatch.setattr(
+        audience_language,
+        "audience_language_for_kol",
+        lambda _kol_pool_id: {"sample_size": 0, "languages": []},
+    )
+
+    result = kol_pool.detail_bundle(13053, video_limit=24, llm_limit=20)
+
+    item = result["video_analysis"]["items"][0]
+    summary = result["video_analysis"]["summary"]
+    assert item["state"] == "quality_incomplete"
+    assert item["reason"] == "final_v1_quality_incomplete"
+    assert item["final_entry"] is None
+    assert summary["ready_count"] == 0
+    assert summary["quality_incomplete_count"] == 1
+    assert summary["pending_count"] == 0
 
 
 def test_detail_bundle_derives_gear_from_raw_without_exposing_raw(monkeypatch):

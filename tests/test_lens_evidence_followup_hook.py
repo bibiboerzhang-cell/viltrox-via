@@ -22,7 +22,32 @@ for path in (ROOT / "backend", ROOT):
 from app.domains.kol import lens_evidence as le  # noqa: E402
 from app.domains.kol import lens_evidence_followup as followup  # noqa: E402
 from app.domains.kol import lens_evidence_store as store  # noqa: E402
-from tests.test_kol_lens_evidence import _conn, _result  # noqa: E402
+from tests.test_kol_lens_evidence import _canonical_result, _conn, _result  # noqa: E402
+
+
+def test_legacy_final_v1_never_spreads_into_lens_evidence() -> None:
+    conn = _conn()
+    conn.execute(
+        "UPDATE vkpi_analysis_cache SET prompt_version='legacy_prompt' WHERE id=500"
+    )
+
+    direct = followup.extract_for_cache_id(conn, 500)
+    assert direct["status"] == "legacy_unverified"
+    assert direct["cache_reuse_status"] == "legacy_unverified"
+    assert direct["revalidation_required"] is True
+    assert direct["claim_status"] == "descriptive_only"
+    assert conn.execute(
+        "SELECT COUNT(*) FROM vkpi_kol_lens_evidence WHERE cache_id=500"
+    ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM vkpi_kol_lens_evidence_scan WHERE cache_id=500"
+    ).fetchone()[0] == 0
+
+    daily = store.backfill_lens_evidence(conn, apply=True)
+    assert daily["cache_rows_considered"] == 3
+    assert conn.execute(
+        "SELECT COUNT(*) FROM vkpi_kol_lens_evidence WHERE cache_id=500"
+    ).fetchone()[0] == 0
 
 
 def test_extract_for_cache_id_writes_once_and_is_idempotent() -> None:
@@ -56,9 +81,18 @@ def test_extract_for_cache_id_writes_once_and_is_idempotent() -> None:
 
 def test_series_mentions_resolve_to_family_not_unresolved() -> None:
     conn = _conn()
+    result = _canonical_result(
+        _result(
+            product_presence="画面里多次出现 Viltrox LAB 系列标识;Viltrox Air 系列 也上镜。",
+            content_summary="",
+            scene_timeline=[],
+        )
+        | {"layer4_attribution": {}, "raw_gemini_video": {}},
+        target_id="42",
+    )
     conn.execute(
-        "INSERT INTO vkpi_analysis_cache (id, target_type, target_id, derive_method, result, status, updated_at) VALUES (700, 'video', '42', 'video_analysis_final_v1', ?, 'ready', '2026-08-21T00:00:00Z')",
-        (json.dumps(_result(product_presence="画面里多次出现 Viltrox LAB 系列标识;Viltrox Air 系列 也上镜。", content_summary="", scene_timeline=[]) | {"layer4_attribution": {}, "raw_gemini_video": {}}, ensure_ascii=False),),
+        "INSERT INTO vkpi_analysis_cache (id, target_type, target_id, derive_method, model, prompt_version, result, status, updated_at) VALUES (700, 'video', '42', 'video_analysis_final_v1', ?, ?, ?, 'ready', '2026-08-21T00:00:00Z')",
+        (result["model"], result["provenance"]["prompt_contract"], json.dumps(result, ensure_ascii=False)),
     )
     out = followup.extract_for_cache_id(conn, 700)
     assert out["status"] == "scanned" and out["by_resolution"]["unresolved"] == 0 and out["by_resolution"]["family"] == 2

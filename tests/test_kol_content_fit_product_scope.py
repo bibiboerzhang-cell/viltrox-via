@@ -89,6 +89,9 @@ def test_on_demand_jobs_for_two_products_have_distinct_idempotency_and_payload(
     conn = _Conn([None, None])
     captured: list[dict[str, Any]] = []
     monkeypatch.setattr(connection, "get_conn", lambda: conn)
+    canonical_videos = content_fit_analysis._VideoAnalyses([{"evidence_id": 9}])
+    canonical_videos.cache_gate = {"status": "canonical", "revalidation_required": False}
+    monkeypatch.setattr(content_fit_analysis, "_video_analyses", lambda *_a, **_k: canonical_videos)
     monkeypatch.setattr(
         content_fit_analysis,
         "get_content_fit",
@@ -144,6 +147,9 @@ def test_batch_consumer_writes_product_scoped_cache(monkeypatch: pytest.MonkeyPa
     conn = _Conn()
     writes: list[dict[str, Any]] = []
     monkeypatch.setattr(content_fit_batch, "get_conn", lambda: conn)
+    canonical_videos = content_fit_analysis._VideoAnalyses([{"evidence_id": 9}])
+    canonical_videos.cache_gate = {"status": "canonical", "revalidation_required": False}
+    monkeypatch.setattr(content_fit_analysis, "_video_analyses", lambda *_a, **_k: canonical_videos)
     monkeypatch.setattr(
         content_fit_analysis,
         "_write_cache",

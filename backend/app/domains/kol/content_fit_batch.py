@@ -40,6 +40,19 @@ def build_item(
     if not kol:
         return None
     videos = cfa._video_analyses(conn, kid)
+    cache_gate = cfa._video_analysis_cache_gate(videos)
+    if cache_gate.get("status") == "legacy_unverified":
+        logger.warning(
+            "content_fit_batch.legacy_video_cache_unverified",
+            extra={
+                "kol_pool_id": kid,
+                "status": "legacy_unverified",
+                "revalidation_required": True,
+                "claim_status": "descriptive_only",
+                "cache_gate": cache_gate,
+            },
+        )
+        return None
     if not videos:
         return None  # 诚实:无 ready 视频证据,不烧 batch
     comments = cfa._fan_comments(conn, kid)
@@ -67,6 +80,7 @@ def build_item(
             "product": product,
             "product_sku": normalized_product_sku or None,
             "derive_method": derive_method,
+            "video_cache_reuse": cache_gate,
         },
     }
 
@@ -105,10 +119,26 @@ def consume(results_by_id: dict[str, str], request_map: dict[str, Any]) -> dict[
     conn = get_conn()
     written = 0
     failed = 0
+    legacy_unverified = 0
     for cid, text in (results_by_id or {}).items():
         meta = (request_map or {}).get(cid) or {}
         try:
             kid = int(meta.get("kol_pool_id") or str(cid).split("-", 1)[0])
+            videos = cfa._video_analyses(conn, kid)
+            cache_gate = cfa._video_analysis_cache_gate(videos)
+            if cache_gate.get("status") == "legacy_unverified":
+                legacy_unverified += 1
+                logger.warning(
+                    "content_fit_batch.consume_legacy_video_cache_unverified",
+                    extra={
+                        "kol_pool_id": kid,
+                        "status": "legacy_unverified",
+                        "revalidation_required": True,
+                        "claim_status": "descriptive_only",
+                        "cache_gate": cache_gate,
+                    },
+                )
+                continue
             parsed = cfa._parse_llm_json(text)
             if not parsed:
                 failed += 1
@@ -150,7 +180,14 @@ def consume(results_by_id: dict[str, str], request_map: dict[str, Any]) -> dict[
         except Exception:
             logger.warning("content_fit_batch.consume_entry_failed", extra={"custom_id": cid}, exc_info=True)
             failed += 1
-    return {"written": written, "failed": failed, "total": len(results_by_id or {})}
+    result = {"written": written, "failed": failed, "total": len(results_by_id or {})}
+    if legacy_unverified:
+        result.update({
+            "legacy_unverified": legacy_unverified,
+            "revalidation_required": True,
+            "claim_status": "descriptive_only",
+        })
+    return result
 
 
 # import 时自注册回收消费者(poller 在 dispatch 前 import 本模块以触发注册)。

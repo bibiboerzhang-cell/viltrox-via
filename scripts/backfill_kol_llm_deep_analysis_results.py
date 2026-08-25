@@ -34,6 +34,7 @@ except Exception:  # pragma: no cover - local dependency guard.
 import psycopg  # noqa: E402
 from psycopg.rows import dict_row  # noqa: E402
 from psycopg.types.json import Jsonb  # noqa: E402
+from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse  # noqa: E402
 from app.domains.kol.final_v1_extract import (  # noqa: E402
     ANALYSIS_KIND,
     FINAL_DERIVE_METHOD,
@@ -108,6 +109,11 @@ def fetch_rows(conn: psycopg.Connection[Any], *, cache_ids: list[int] | None = N
                    c.result AS final_result,
                    c.model AS final_model,
                    c.cost AS final_cost,
+                   c.target_type AS final_target_type,
+                   c.target_id AS final_target_id,
+                   c.derive_method AS final_derive_method,
+                   c.prompt_version AS final_prompt_version,
+                   c.status AS final_status,
                    c.updated_at AS final_updated_at,
                    e.id AS evidence_id,
                    e.kol_pool_id,
@@ -193,6 +199,32 @@ def build_plan(
         handle = str(row.get("handle") or row.get("display_name") or "")
         if kol_pool_id is None or evidence_id is None:
             skipped.append(SkippedResult(cache_id, kol_pool_id, evidence_id, handle, "missing_kol_or_evidence"))
+            continue
+        reuse = canonical_final_v1_cache_reuse(
+            {
+                "id": row.get("final_cache_id"),
+                "target_type": row.get("final_target_type"),
+                "target_id": row.get("final_target_id"),
+                "derive_method": row.get("final_derive_method"),
+                "model": row.get("final_model"),
+                "prompt_version": row.get("final_prompt_version"),
+                "result": row.get("final_result"),
+                "status": row.get("final_status"),
+            },
+            target_type="video",
+            target_id=str(evidence_id),
+            derive_method=FINAL_DERIVE_METHOD,
+        )
+        if reuse.get("reusable") is not True:
+            skipped.append(
+                SkippedResult(
+                    cache_id,
+                    kol_pool_id,
+                    evidence_id,
+                    handle,
+                    "legacy_cache_unverified",
+                )
+            )
             continue
         projection = prepare_deep_analysis_projection(row)
         if projection.get("status") != "ready":

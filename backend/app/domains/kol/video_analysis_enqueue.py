@@ -11,6 +11,7 @@ from typing import Any
 from app.core.gemini_models import DEFAULT_VIDEO_GEMINI_MODEL
 from app.core.video_model_chain import PAYLOAD_CHAIN_KEY, final_v1_model_chain, model_fallback_candidates, ready_model_subchain
 from app.db.connection import get_conn
+from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 from app.domains.tasks.search_session_lineage import (
     attach_search_session_lineage_to_job,
@@ -25,7 +26,11 @@ from app.platform.llm_local_evaluation import (
     issue_local_evaluation_capability,
     redact_local_evaluation_capability,
 )
-from app.domains.kol import video_analysis_progress_reasons as progress_reasons
+from app.domains.kol import video_analysis_account_progress as account_progress
+from app.domains.kol.video_analysis_account_progress import (
+    PROGRESS_ACTIVE_STATES,
+    PROGRESS_FAILED_STATES,
+)
 from app.domains.kol.video_url_identity import (
     VideoUrlIdentityError,
     parse_supported_video_url,
@@ -173,7 +178,8 @@ def _ready_cache(
     placeholders = ", ".join("?" for _ in methods)
     row = conn.execute(
         f"""
-        SELECT id, model, derive_method, cost, status, result, updated_at
+        SELECT id, target_type, target_id, model, derive_method, cost, status,
+               prompt_version, result, updated_at
         FROM vkpi_analysis_cache
         WHERE target_type='video'
           AND target_id=?
@@ -191,6 +197,15 @@ def _ready_cache(
         return None
     item = dict(row)
     item["evaluation_only"] = item.get("derive_method") == LOCAL_EVALUATION_CACHE_DERIVE_METHOD
+    if not item["evaluation_only"]:
+        item.update(
+            canonical_final_v1_cache_reuse(
+                item,
+                target_type="video",
+                target_id=str(evidence_id),
+                derive_method=FINAL_V1_DERIVE_METHOD,
+            )
+        )
     item.pop("result", None)
     return item
 
@@ -321,6 +336,30 @@ def _enqueue_final_v1_video_analysis(
         include_local_evaluation=bool(local_evaluation),
     )
     if cache:
+        if not cache.get("evaluation_only") and cache.get("reusable") is not True:
+            return {
+                "status": "partial",
+                "effective_status": "legacy_unverified",
+                "state": "partial",
+                "stage": "legacy_cache_unverified",
+                "terminal": True,
+                "kol_pool_id": kol_pool_id,
+                "evidence_id": evidence_id,
+                "derive_method": FINAL_V1_DERIVE_METHOD,
+                "cache": cache,
+                "cache_reuse_status": "legacy_unverified",
+                "revalidation_required": True,
+                "production_authorized": False,
+                "claim_status": "descriptive_only",
+                "model_readiness_status": "legacy_cache_unverified",
+                "provider_calls": False,
+                "write_db": False,
+                "ai_analysis": _ai_analysis_state(
+                    "partial",
+                    reason="legacy_cache_requires_explicit_revalidation",
+                    model_readiness_status="legacy_cache_unverified",
+                ),
+            }
         return {
             "status": (
                 "already_evaluated"
@@ -633,6 +672,7 @@ def enqueue_final_v1_video_analysis_batch(
     skipped = 0
     errors = 0
     ai_disabled = 0
+    legacy_unverified = 0
     for item in normalized:
         kol_pool_id = item.get("kol_pool_id")
         evidence_id = item.get("evidence_id")
@@ -658,27 +698,45 @@ def enqueue_final_v1_video_analysis_batch(
                 skipped += 1
                 if result.get("status") == "ai_disabled":
                     ai_disabled += 1
+                if result.get("effective_status") == "legacy_unverified":
+                    legacy_unverified += 1
         except LookupError as exc:
             errors += 1
             results.append({"status": "not_found", "kol_pool_id": kol_pool_id, "evidence_id": evidence_id, "reason": str(exc)})
         except Exception as exc:
             errors += 1
             results.append({"status": "error", "kol_pool_id": kol_pool_id, "evidence_id": evidence_id, "reason": str(exc)})
+    batch_status = "partial" if not queued and legacy_unverified else "completed"
+    batch_state = "queued" if queued else batch_status
     return {
-        "status": "completed",
+        "status": batch_status,
+        "state": batch_state,
+        "terminal": queued == 0,
+        **(
+            {
+                "effective_status": "legacy_unverified",
+                "cache_reuse_status": "legacy_unverified",
+                "revalidation_required": True,
+                "claim_status": "descriptive_only",
+            }
+            if not queued and legacy_unverified
+            else {}
+        ),
         "derive_method": FINAL_V1_DERIVE_METHOD,
         "requested": len(normalized),
         "queued": queued,
         "skipped": skipped,
         "ai_disabled": ai_disabled,
+        "legacy_unverified_count": legacy_unverified,
         "errors": errors,
         "budget_gate": "enforced_at_enqueue",
         "ai_analysis": _ai_analysis_state(
-            "queued" if queued else "not_requested",
-            reason="analysis_queued" if queued else "ai_disabled" if ai_disabled else "no_eligible_video",
+            "queued" if queued else "partial" if legacy_unverified else "not_requested",
+            reason="analysis_queued" if queued else "legacy_cache_requires_explicit_revalidation" if legacy_unverified else "ai_disabled" if ai_disabled else "no_eligible_video",
             provider_calls_allowed=queued > 0,
         ),
         "items": results,
+        "provider_calls": False,
         "write_db": queued > 0,
         "writes": ["apify_jobs"] if queued else [],
     }
@@ -759,44 +817,13 @@ def enqueue_all_kol_videos(
     return result
 
 
-# ── 账号级进度(只读;供前端 account_deep 进度条/预计剩余时间接线)──────────────────────
-# 一个账号 N 条视频各是一条独立 apify_jobs(幂等键 video-final-v1:<evidence_id>:<scope>、目标锁
-# video:<id>:final_v1 都按视频粒度,批量入队走 batch 车道、SKIP LOCKED 天然散到多车道),
-# 此前没有任何地方把 N 条的整体状态汇总起来。本函数零写、零 LLM、零 fit。
-PROGRESS_ACTIVE_STATES = ("queued", "running")
-PROGRESS_FAILED_STATES = ("failed", "blocked", "triage")
-
-
+# ── 账号级进度(只读;实现拆至兄弟模块以守住行数门禁)────────────────────────
 def _video_concurrency_hint() -> int:
-    """env 槽位提示(兼容名;真口径见 video_analysis_progress_reasons.active_lane_count)。"""
-
-    return progress_reasons.env_video_lane_hint()
+    return account_progress.video_concurrency_hint()
 
 
 def _recent_final_v1_duration_p50_ms(conn: Any) -> tuple[int | None, str]:
-    """最近 done 的 final_v1 任务 wall time 中位数(先 24h,再 7d);没有样本返回 (None, 'no_sample')。"""
-
-    for hours, basis in ((24, "done_jobs_24h_p50"), (24 * 7, "done_jobs_7d_p50")):
-        row = conn.execute(
-            """
-            SELECT percentile_cont(0.5) WITHIN GROUP (
-                     ORDER BY EXTRACT(EPOCH FROM (updated_at - started_at)) * 1000
-                   ) AS p50_ms,
-                   COUNT(*) AS n
-            FROM apify_jobs
-            WHERE job_type='video'
-              AND status='done'
-              AND payload->>'derive_method'=?
-              AND started_at IS NOT NULL
-              AND updated_at >= NOW() - make_interval(hours => ?)
-              AND updated_at > started_at
-            """,
-            (FINAL_V1_DERIVE_METHOD, int(hours)),
-        ).fetchone()
-        data = dict(row) if row else {}
-        if _int_or_none(data.get("n")) and data.get("p50_ms") is not None:
-            return int(float(data["p50_ms"])), basis
-    return None, "no_sample"
+    return account_progress.recent_final_v1_duration_p50_ms(conn)
 
 
 def account_video_analysis_progress(
@@ -806,162 +833,10 @@ def account_video_analysis_progress(
     limit: int = KOL_DEEP_ANALYSIS_VIDEO_LIMIT,
     include_items: bool = True,
 ) -> dict[str, Any]:
-    """account_deep 一个账号 N 条视频 final_v1 的整体进度(已完成/进行中/失败/预计剩余)。
-
-    口径:范围 = 该 KOL 最近 ``limit`` 条活跃视频证据(与 enqueue_all_kol_videos 同一切片)。
-    每条状态优先级:ready(有 ready cache)> running/queued(最新任务活跃)> failed/blocked/triage
-    (最新任务终态且无 cache)> not_requested。
-    ETA(F7)= ceil((前方排队 + 本账号进行中) / 活跃车道数) × 最近 done p50;车道数口径见
-    video_analysis_progress_reasons.active_lane_count。失败项(F3)带 failure_category /
-    failure_reason_human / failure_code(O→F 契约)。
-    返回形状见 README 注释与 tests/test_video_analysis_account_progress.py。
-    """
-
-    pool_id = _int_or_none(kol_pool_id)
-    if not pool_id:
-        raise ValueError("kol_pool_id required")
-    cap = max(1, int(limit or KOL_DEEP_ANALYSIS_VIDEO_LIMIT))
-    all_ids = list_kol_all_evidence_ids(conn, pool_id)
-    scope_ids = all_ids[:cap]
-    counts = {"ready": 0, "running": 0, "queued": 0, "failed": 0, "blocked": 0, "triage": 0, "not_requested": 0}
-    items: list[dict[str, Any]] = []
-    earliest_queued_created_at: Any = None
-    if scope_ids:
-        placeholders = ", ".join("?" for _ in scope_ids)
-        id_params = tuple(int(eid) for eid in scope_ids)
-        text_params = tuple(str(eid) for eid in scope_ids)
-        evidence_rows = conn.execute(
-            f"""
-            SELECT id, content_url, platform,
-                   COALESCE(NULLIF(title, ''), NULLIF(video_title, ''), '') AS title
-            FROM vkpi_kol_video_evidence
-            WHERE id IN ({placeholders})
-            """,
-            id_params,
-        ).fetchall()
-        evidence_by_id = {int(dict(r)["id"]): dict(r) for r in evidence_rows}
-        cache_rows = conn.execute(
-            f"""
-            SELECT target_id, updated_at
-            FROM vkpi_analysis_cache
-            WHERE target_type='video'
-              AND derive_method=?
-              AND status='ready'
-              AND target_id IN ({placeholders})
-            """,
-            (FINAL_V1_DERIVE_METHOD, *text_params),
-        ).fetchall()
-        cache_by_id = {str(dict(r)["target_id"]): dict(r) for r in cache_rows}
-        job_rows = conn.execute(
-            f"""
-            SELECT DISTINCT ON (payload->>'target_id')
-                   id, status, attempts, last_error_category, last_error, created_at, started_at, updated_at,
-                   payload->>'target_id' AS target_id,
-                   payload->'diagnostics'->>'child_stderr_tail' AS child_stderr_tail
-            FROM apify_jobs
-            WHERE job_type='video'
-              AND payload->>'derive_method'=?
-              AND payload->>'target_type'='video'
-              AND payload->>'target_id' IN ({placeholders})
-            ORDER BY payload->>'target_id', created_at DESC, id DESC
-            """,
-            (FINAL_V1_DERIVE_METHOD, *text_params),
-        ).fetchall()
-        job_by_id = {str(dict(r)["target_id"]): dict(r) for r in job_rows}
-        earliest_queued_created_at = min(
-            (job.get("created_at") for job in job_by_id.values() if str(job.get("status") or "").lower() == "queued" and job.get("created_at")),
-            default=None,
-        )
-        for eid in scope_ids:
-            key = str(eid)
-            cache = cache_by_id.get(key)
-            job = job_by_id.get(key) or {}
-            job_status = str(job.get("status") or "").lower()
-            if cache:
-                state = "ready"
-            elif job_status in PROGRESS_ACTIVE_STATES:
-                state = job_status
-            elif job_status in PROGRESS_FAILED_STATES:
-                state = job_status
-            else:
-                state = "not_requested"
-            counts[state] += 1
-            if include_items:
-                evidence = evidence_by_id.get(int(eid), {})
-                items.append(
-                    {
-                        "evidence_id": int(eid),
-                        "content_url": evidence.get("content_url"),
-                        "platform": evidence.get("platform"),
-                        "title": evidence.get("title"),
-                        "state": state,
-                        "job_id": _int_or_none(job.get("id")),
-                        "job_status": job_status or None,
-                        "attempts": _int_or_none(job.get("attempts")),
-                        "last_error_category": job.get("last_error_category"),
-                        "cache_updated_at": cache.get("updated_at") if cache else None,
-                        "job_updated_at": job.get("updated_at"),
-                        **progress_reasons.failure_fields(
-                            status=job_status,
-                            last_error_category=job.get("last_error_category"),
-                            last_error=job.get("last_error"),
-                            stderr_tail=job.get("child_stderr_tail"),
-                        ),
-                    }
-                )
-    completed = counts["ready"]
-    in_progress = counts["running"] + counts["queued"]
-    failed = counts["failed"] + counts["blocked"] + counts["triage"]
-    scope_total = len(scope_ids)
-    if scope_total == 0:
-        state = "no_evidence"
-    elif in_progress > 0:
-        state = "running"
-    elif completed == scope_total:
-        state = "done"
-    elif completed + failed == scope_total:
-        state = "partial_failed"
-    elif completed == 0 and failed == 0:
-        state = "idle"
-    else:
-        state = "partial"
-    p50_ms, basis = _recent_final_v1_duration_p50_ms(conn) if in_progress else (None, "not_needed")
-    lanes, lanes_basis = progress_reasons.active_lane_count(conn) if in_progress else (0, "not_needed")
-    queue_ahead = (
-        progress_reasons.queue_ahead_count(
-            conn,
-            derive_method=FINAL_V1_DERIVE_METHOD,
-            earliest_queued_created_at=earliest_queued_created_at,
-        )
-        if in_progress
-        else 0
+    return account_progress.account_video_analysis_progress(
+        conn,
+        kol_pool_id,
+        limit=limit,
+        include_items=include_items,
+        list_evidence_ids=list_kol_all_evidence_ids,
     )
-    eta_seconds = progress_reasons.estimate_eta_seconds(
-        in_progress=in_progress, queue_ahead=queue_ahead, lanes=lanes, p50_ms=p50_ms
-    )
-    return {
-        "kol_pool_id": pool_id,
-        "derive_method": FINAL_V1_DERIVE_METHOD,
-        "scope": {"limit": cap, "evidence_total": len(all_ids), "scope_total": scope_total},
-        "state": state,
-        "completed": completed,
-        "in_progress": in_progress,
-        "failed": failed,
-        "not_requested": counts["not_requested"],
-        "percent": int(round(100.0 * completed / scope_total)) if scope_total else 0,
-        "counts": counts,
-        "eta_seconds": eta_seconds,
-        "eta": {
-            "remaining": in_progress,
-            "queue_ahead": queue_ahead,
-            "recent_p50_ms": p50_ms,
-            "basis": basis,
-            "active_lanes": lanes,
-            "lanes_basis": lanes_basis,
-            "effective_parallelism": min(lanes, in_progress + queue_ahead) if in_progress else 0,
-            "estimated_remaining_seconds": eta_seconds,
-        },
-        "items": items if include_items else [],
-        "write_db": False,
-        "provider_calls": False,
-    }

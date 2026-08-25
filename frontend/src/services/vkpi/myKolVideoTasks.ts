@@ -9,8 +9,8 @@ import { formatLocal, relativeFromNow } from "../../components/vkpi/lib/timeLoca
 
 export const MY_KOL_VIDEO_RECOVERY_CONTRACT = "my_kol_video_recovery_v1";
 
-export type VkpiTaskStatus = "queued" | "running" | "retrying" | "blocked" | "failed" | "ready" | "not_requested";
-export type VkpiTaskDataStatus = "ready" | "stale" | "none";
+export type VkpiTaskStatus = "queued" | "running" | "retrying" | "blocked" | "failed" | "ready" | "legacy_unverified" | "not_requested";
+export type VkpiTaskDataStatus = "ready" | "stale" | "legacy_unverified" | "none";
 export type VkpiTaskFreshness = "fresh" | "stale" | "never" | "unavailable";
 export type VkpiTrackingStatus = "tracked" | "failed" | "stale" | "insufficient_history" | "unavailable";
 
@@ -23,6 +23,9 @@ export interface VkpiTaskData {
   tracking_status?: VkpiTrackingStatus | string;
   sample_count?: number;
   attempt_count?: number;
+  cache_reuse_status?: string;
+  revalidation_required?: boolean;
+  claim_status?: string;
 }
 
 export interface VkpiTaskState {
@@ -36,6 +39,10 @@ export interface VkpiTaskState {
   failure_reason_human?: string;
   /** ETA 新口径(活跃车道数 × 队列位置 × p50);只在排队/进行中且服务端给了才有。 */
   eta_seconds?: number | null;
+  cache_reuse_status?: string;
+  revalidation_required?: boolean;
+  claim_status?: string;
+  terminal?: boolean;
 }
 
 export interface VkpiVideoTasks {
@@ -74,23 +81,30 @@ export function normalizeTaskState(raw: unknown): VkpiTaskState {
   const etaRaw = source.eta_seconds ?? data.eta_seconds;
   const etaSeconds = etaRaw == null ? null : Number(etaRaw);
   return {
-    status: (["queued", "running", "retrying", "blocked", "failed", "ready", "not_requested"].includes(status) ? status : "failed") as VkpiTaskStatus,
+    status: (["queued", "running", "retrying", "blocked", "failed", "ready", "legacy_unverified", "not_requested"].includes(status) ? status : "failed") as VkpiTaskStatus,
     job_id: Number.isFinite(Number(source.job_id)) && source.job_id != null ? Number(source.job_id) : null,
     requested_at: source.requested_at ? String(source.requested_at) : null,
     updated_at: source.updated_at ? String(source.updated_at) : null,
     data: {
       ...EMPTY_DATA,
-      status: (["ready", "stale", "none"].includes(dataStatus) ? dataStatus : "none") as VkpiTaskDataStatus,
+      status: (["ready", "stale", "legacy_unverified", "none"].includes(dataStatus) ? dataStatus : "none") as VkpiTaskDataStatus,
       freshness: (["fresh", "stale", "never", "unavailable"].includes(freshness) ? freshness : "unavailable") as VkpiTaskFreshness,
       updated_at: data.updated_at ? String(data.updated_at) : null,
       superseded_by_job: Boolean(data.superseded_by_job),
       ...(data.tracking_status != null ? { tracking_status: String(data.tracking_status) } : {}),
       ...(data.sample_count != null ? { sample_count: Math.max(0, Number(data.sample_count) || 0) } : {}),
       ...(data.attempt_count != null ? { attempt_count: Math.max(0, Number(data.attempt_count) || 0) } : {}),
+      ...(data.cache_reuse_status != null ? { cache_reuse_status: String(data.cache_reuse_status) } : {}),
+      ...(data.revalidation_required != null ? { revalidation_required: Boolean(data.revalidation_required) } : {}),
+      ...(data.claim_status != null ? { claim_status: String(data.claim_status) } : {}),
     },
     ...(failureCategory ? { failure_category: failureCategory } : {}),
     ...(failureReasonHuman ? { failure_reason_human: failureReasonHuman } : {}),
     ...(etaRaw != null && Number.isFinite(etaSeconds) ? { eta_seconds: etaSeconds } : {}),
+    ...(source.cache_reuse_status != null ? { cache_reuse_status: String(source.cache_reuse_status) } : {}),
+    ...(source.revalidation_required != null ? { revalidation_required: Boolean(source.revalidation_required) } : {}),
+    ...(source.claim_status != null ? { claim_status: String(source.claim_status) } : {}),
+    ...(source.terminal != null ? { terminal: Boolean(source.terminal) } : {}),
   };
 }
 
@@ -125,6 +139,7 @@ const TASK_STATUS_LABEL: Record<VkpiTaskStatus, string> = {
   blocked: "已阻断",
   failed: "失败",
   ready: "已完成",
+  legacy_unverified: "旧结果待复核",
   not_requested: "未发起",
 };
 
@@ -167,6 +182,10 @@ export function taskChip(kind: VideoTaskKind, state: VkpiTaskState): TaskChip {
   }
   if (state.status === "blocked") return { label: `${noun}已阻断`, tone: "blocked", title: failureLevel(kind, state) };
   if (state.status === "failed") return { label: `${noun}失败`, tone: "failed", title: `${failureLevel(kind, state)}${updated ? ` · ${updated}` : ""}` };
+  if (state.status === "legacy_unverified") return {
+    label: `${noun}旧结果待复核`, tone: "pending",
+    title: `${noun}旧结果仍可查看,但缺少当前版本的完整来源与质量证明;本页不会自动付费重跑`,
+  };
   if (state.status === "ready") return { label: `${noun}已完成`, tone: "ready", title: `${noun}已完成${updated ? ` · ${updated}` : ""}` };
   return { label: `${noun}未发起`, tone: "idle", title: `还没有发起过${noun}` };
 }
@@ -177,6 +196,7 @@ export function freshnessText(kind: VideoTaskKind, state: VkpiTaskState): { labe
   const at = state.data.updated_at;
   const rel = at ? relativeFromNow(at) : "";
   const abs = at ? formatLocal(at) : "";
+  if (state.data.status === "legacy_unverified") return { label: "旧结果仅供查看", title: "旧分析未通过当前复用校验,需显式复核后才能作为已完成结果" };
   if (state.data.freshness === "fresh" && at) return { label: `${verb}于 ${rel || abs}`, title: `${verb}于 ${abs}(按浏览器时区)` };
   if (state.data.freshness === "stale") return { label: at ? `已过期 · 上次${verb} ${rel || abs}` : "已过期", title: at ? `上次${verb} ${abs};可重新发起` : "结果已过期;可重新发起" };
   if (state.data.freshness === "never") return { label: `从未${verb}`, title: `还没有${verb}结果` };
