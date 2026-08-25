@@ -40,6 +40,7 @@ import {
 import type { VkpiProjectRow } from "../../vkpiTypes";
 import { proxiedImageUrl } from "../../shared/mediaProxy";
 import { kolHumanDisplayName, kolHumanPublicHandle } from "../lib/kolIdentity";
+import { preservesNativeArrowKeys } from "./MyKolBoardPage.dialog-keyboard";
 
 // MY KOL 弹窗：网络统一经 services/http；排队、运行、完成三态严格分层。
 // 纯展示不写 fit/rule_v0；播放合计仅计实测值，缺失值不当 0。
@@ -468,6 +469,7 @@ export function KolDetailModal({
 
   React.useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
+      if (ev.defaultPrevented || ev.isComposing || preservesNativeArrowKeys(ev.target)) return;
       if (ev.key === "ArrowDown" || ev.key === "ArrowRight") { ev.preventDefault(); onNav(index + 1); }
       else if (ev.key === "ArrowUp" || ev.key === "ArrowLeft") { ev.preventDefault(); onNav(index - 1); }
     };
@@ -839,7 +841,7 @@ export function KolDetailModal({
         <span className="font-mono text-[10.5px] font-bold text-accent">#{index + 1} / {total}</span>
         <button type="button" className={NAV_BTN} disabled={index >= total - 1} onClick={() => onNav(index + 1)}>下一条 ›</button>
         <button type="button" className={NAV_BTN} onClick={onClose}>≡ 回列表</button>
-        <span className="ml-auto font-mono text-[9px] text-muted">↑↓ 连续翻 · ↓ 滚动查看完整内容</span>
+        <span className="ml-auto font-mono text-[9px] text-muted">↑↓ 连续翻 · 表单内方向键不翻页 · ↓ 滚动查看完整内容</span>
       </div>
 
       {/* 档案卡:头像/名称/平台/粉丝/Fit(只读)/状态徽 + SrcChip 溯源 */}

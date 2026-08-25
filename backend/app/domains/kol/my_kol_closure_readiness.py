@@ -17,6 +17,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.domains.kol.video_analysis_media import eligible_video_evidence_sql
+
 
 CONTRACT = "my_kol_closure_readiness_v1"
 TASK_KEYS = (
@@ -117,22 +119,33 @@ def _collection_counts(conn: Any, sid: int) -> dict[str, int]:
 
 
 def _video_counts(conn: Any, sid: int) -> dict[str, int]:
+    eligible_sql = eligible_video_evidence_sql(conn, alias="e")
     row = _row(
         conn,
         _COLLECTION_CTE
-        + """
-        , video_base AS (
+        + f"""
+        , content_base AS (
             SELECT e.id
             FROM vkpi_kol_video_evidence e
             JOIN collection c ON c.id=e.kol_pool_id
-            WHERE COALESCE(e.evidence_type, 'video')='video'
-              AND e.is_active IS NOT FALSE
+            WHERE e.is_active IS NOT FALSE
+        ), writable_content_base AS (
+            SELECT e.id
+            FROM vkpi_kol_video_evidence e
+            JOIN writable_collection c ON c.id=e.kol_pool_id
+            WHERE e.is_active IS NOT FALSE
+        ), video_base AS (
+            SELECT e.id
+            FROM vkpi_kol_video_evidence e
+            JOIN collection c ON c.id=e.kol_pool_id
+            WHERE e.is_active IS NOT FALSE
+              AND {eligible_sql}
         ), writable_video_base AS (
             SELECT e.id
             FROM vkpi_kol_video_evidence e
             JOIN writable_collection c ON c.id=e.kol_pool_id
-            WHERE COALESCE(e.evidence_type, 'video')='video'
-              AND e.is_active IS NOT FALSE
+            WHERE e.is_active IS NOT FALSE
+              AND {eligible_sql}
         ), tracked AS (
             SELECT t.evidence_id, COALESCE(t.source, '') AS source,
                    t.tracked_by_staff_id
@@ -144,6 +157,22 @@ def _video_counts(conn: Any, sid: int) -> dict[str, int]:
             FROM vkpi_kol_llm_deep_analysis_results d
             JOIN video_base v ON v.id=d.source_evidence_id
             WHERE d.analysis_kind='video_final_v1' AND d.status='ready'
+        ), final_cache_ready AS (
+            SELECT DISTINCT v.id AS evidence_id, c.id AS cache_id
+            FROM video_base v
+            JOIN vkpi_analysis_cache c ON c.target_id=CAST(v.id AS TEXT)
+            WHERE c.status='ready'
+              AND c.target_type IN ('video', 'cn_platform_video')
+              AND c.derive_method='video_analysis_final_v1'
+        ), final_requested AS (
+            SELECT DISTINCT v.id AS evidence_id
+            FROM video_base v
+            JOIN apify_jobs j ON j.payload->>'target_id'=CAST(v.id AS TEXT)
+            WHERE j.payload->>'derive_method'='video_analysis_final_v1'
+            UNION
+            SELECT evidence_id FROM final_cache_ready
+            UNION
+            SELECT evidence_id FROM final_ready
         ), final_ready_sources AS (
             SELECT DISTINCT d.source_evidence_id AS evidence_id,
                             d.source_cache_id AS cache_id,
@@ -157,7 +186,7 @@ def _video_counts(conn: Any, sid: int) -> dict[str, int]:
             FROM final_ready_sources f
             JOIN vkpi_analysis_cache c ON c.id=f.cache_id
             WHERE c.status='ready'
-              AND c.target_type='video'
+              AND c.target_type IN ('video', 'cn_platform_video')
               AND c.derive_method='video_analysis_final_v1'
               AND c.updated_at IS NOT NULL
               AND f.deep_recorded_at IS NOT NULL
@@ -184,6 +213,14 @@ def _video_counts(conn: Any, sid: int) -> dict[str, int]:
               AND c.target_type IN ('video', 'cn_platform_video')
         )
         SELECT
+          (SELECT COUNT(*) FROM content_base) AS content_items,
+          (SELECT COUNT(*) FROM writable_content_base) AS writable_content_items,
+          (SELECT COUNT(*) FROM video_base) AS analysis_eligible_videos,
+          (SELECT COUNT(*) FROM final_requested) AS final_v1_requested_videos,
+          (SELECT COUNT(DISTINCT evidence_id) FROM final_cache_ready)
+            AS final_v1_completed_videos,
+          (SELECT COUNT(DISTINCT evidence_id) FROM final_ready_current_sources)
+            AS final_v1_projected_videos,
           (SELECT COUNT(*) FROM video_base) AS candidate_videos,
           (SELECT COUNT(*) FROM writable_video_base) AS trackable_videos,
           (SELECT COUNT(*) FROM tracked) AS tracked_videos,
@@ -266,6 +303,26 @@ def _video_counts(conn: Any, sid: int) -> dict[str, int]:
         (*_scope_params(sid), sid, sid, sid, sid),
     )
     counts = {key: _int(value) for key, value in row.items()}
+    counts["non_video_content_items"] = max(
+        0,
+        counts.get("content_items", 0)
+        - counts.get("analysis_eligible_videos", 0),
+    )
+    counts["final_v1_not_requested_videos"] = max(
+        0,
+        counts.get("analysis_eligible_videos", 0)
+        - counts.get("final_v1_requested_videos", 0),
+    )
+    counts["final_v1_requested_not_completed_videos"] = max(
+        0,
+        counts.get("final_v1_requested_videos", 0)
+        - counts.get("final_v1_completed_videos", 0),
+    )
+    counts["final_v1_projection_pending_videos"] = max(
+        0,
+        counts.get("final_v1_completed_videos", 0)
+        - counts.get("final_v1_projected_videos", 0),
+    )
     counts["employee_explicit_tracking_gap_videos"] = max(
         0,
         counts.get("trackable_videos", 0)
@@ -380,11 +437,17 @@ def build_closure_readiness(
     else:
         sku_state = "configured"
 
-    if counts["candidate_videos"] <= 0:
+    if counts["analysis_eligible_videos"] <= 0:
         analysis_state = "no_targets"
-    elif counts["final_v1_ready_videos"] <= 0:
-        analysis_state = "no_final_v1_results"
-    elif counts["final_v1_lens_scanned_videos"] < counts["final_v1_ready_videos"]:
+    elif counts["final_v1_requested_videos"] <= 0:
+        analysis_state = "no_analysis_requests"
+    elif counts["final_v1_requested_not_completed_videos"] > 0:
+        analysis_state = "requested_not_completed"
+    elif counts["final_v1_not_requested_videos"] > 0:
+        analysis_state = "partially_requested"
+    elif counts["final_v1_projection_pending_videos"] > 0:
+        analysis_state = "projection_pending"
+    elif counts["final_v1_lens_scanned_videos"] < counts["final_v1_projected_videos"]:
         analysis_state = "lens_extraction_pending"
     else:
         analysis_state = "ready_with_evidence"
@@ -454,16 +517,28 @@ def build_closure_readiness(
         approval_required=True,
     )
     add_blocker(
-        "final_v1_missing",
-        max(0, counts["candidate_videos"] - counts["final_v1_ready_videos"]),
+        "final_v1_not_requested",
+        counts["final_v1_not_requested_videos"],
         "manager",
         approval_required=True,
+    )
+    add_blocker(
+        "final_v1_requested_not_completed",
+        counts["final_v1_requested_not_completed_videos"],
+        "system",
+        approval_required=False,
+    )
+    add_blocker(
+        "final_v1_projection_pending",
+        counts["final_v1_projection_pending_videos"],
+        "system",
+        approval_required=False,
     )
     add_blocker(
         "lens_extraction_pending",
         max(
             0,
-            counts["final_v1_ready_videos"]
+            counts["final_v1_projected_videos"]
             - counts["final_v1_lens_scanned_videos"],
         ),
         "system",

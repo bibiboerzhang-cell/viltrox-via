@@ -1,21 +1,10 @@
 import React from "react";
 import { createPortal } from "react-dom";
+import { useModalFocusContract } from "../components/modals/modalFocus";
 import { useT } from "../lib/i18n";
 
 // Shared cockpit modal layer. It must stay outside react-grid-layout because transformed/overflow
 // grid ancestors otherwise clip position:fixed descendants.
-const MODAL_STACK: symbol[] = [];
-const MODAL_FOCUSABLE = [
-  "a[href]",
-  "button:not([disabled])",
-  "input:not([disabled])",
-  "select:not([disabled])",
-  "textarea:not([disabled])",
-  '[tabindex]:not([tabindex="-1"])',
-].join(",");
-let modalBodyLockCount = 0;
-let modalBodyPreviousOverflow = "";
-
 export function ModalShell({
   title,
   sub,
@@ -30,80 +19,15 @@ export function ModalShell({
   maxWidth?: string;
 }) {
   const { t } = useT();
-  const idRef = React.useRef<symbol | null>(null);
-  const dialogRef = React.useRef<HTMLDivElement | null>(null);
-  const restoreFocusRef = React.useRef<HTMLElement | null>(null);
+  const dialogRef = useModalFocusContract<HTMLDivElement>({ onClose });
   const titleId = React.useId();
   const subId = React.useId();
-  if (!idRef.current) idRef.current = Symbol("vkpi-modal");
 
   const [on, setOn] = React.useState(false);
   React.useEffect(() => {
     const raf = requestAnimationFrame(() => setOn(true));
     return () => cancelAnimationFrame(raf);
   }, []);
-
-  React.useEffect(() => {
-    const id = idRef.current as symbol;
-    MODAL_STACK.push(id);
-    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    if (modalBodyLockCount === 0) {
-      modalBodyPreviousOverflow = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-    }
-    modalBodyLockCount += 1;
-    const focusRaf = requestAnimationFrame(() => {
-      if (MODAL_STACK[MODAL_STACK.length - 1] !== id) return;
-      const target = dialogRef.current?.querySelector<HTMLElement>("[data-modal-initial-focus]") || dialogRef.current;
-      target?.focus();
-    });
-    return () => {
-      cancelAnimationFrame(focusRaf);
-      const at = MODAL_STACK.indexOf(id);
-      if (at >= 0) MODAL_STACK.splice(at, 1);
-      modalBodyLockCount = Math.max(0, modalBodyLockCount - 1);
-      if (modalBodyLockCount === 0) {
-        document.body.style.overflow = modalBodyPreviousOverflow;
-        modalBodyPreviousOverflow = "";
-      }
-      const restoreTarget = restoreFocusRef.current;
-      if (restoreTarget?.isConnected) restoreTarget.focus();
-    };
-  }, []);
-
-  React.useEffect(() => {
-    const onKey = (ev: KeyboardEvent) => {
-      if (MODAL_STACK[MODAL_STACK.length - 1] !== idRef.current) return;
-      if (ev.key === "Escape") {
-        ev.preventDefault();
-        onClose();
-        return;
-      }
-      if (ev.key !== "Tab") return;
-      const dialog = dialogRef.current;
-      if (!dialog) return;
-      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(MODAL_FOCUSABLE)).filter(
-        (element) => element.getAttribute("aria-hidden") !== "true" && !element.hidden,
-      );
-      if (focusable.length === 0) {
-        ev.preventDefault();
-        dialog.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (ev.shiftKey && (active === first || !dialog.contains(active))) {
-        ev.preventDefault();
-        last.focus();
-      } else if (!ev.shiftKey && (active === last || !dialog.contains(active))) {
-        ev.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const modal = (
     <div

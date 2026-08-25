@@ -193,18 +193,18 @@ export function HistoryStrip({
             setExpanded((x) => !x);
             setClearArmed(false);
           }}
-          className="inline-flex items-center gap-1.5 text-[10px] font-medium text-slate-300 hover:text-cyan-100"
+          className="inline-flex min-h-9 items-center gap-1.5 text-[11px] font-medium leading-[18px] text-slate-200 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300"
           aria-expanded={expanded}
         >
           <Clock3 size={11} className="text-slate-500" />
           历史记录
-          <span className="text-[9px] text-slate-600">
+          <span className="text-[10.5px] leading-4 text-[var(--ds-text-meta)]">
             · 最近 {items.length}{items.length >= 50 ? "+" : ""} · 已移除 {archivedItems.length}{archivedItems.length >= 50 ? "+" : ""}
           </span>
         </button>
         <div className="inline-flex items-center gap-2">
-          {loading ? <span className="text-[9.5px] text-slate-600">同步中</span> : null}
-          {!loading && notice ? <span className="text-[9.5px] text-amber-300/80">同步异常</span> : null}
+          {loading ? <span className="text-[10.5px] leading-4 text-[var(--ds-text-meta)]">同步中</span> : null}
+          {!loading && notice ? <span className="text-[10.5px] leading-4 text-amber-200">同步异常</span> : null}
           {!loading ? (
             <button
               type="button"
@@ -212,7 +212,7 @@ export function HistoryStrip({
                 setExpanded((x) => !x);
                 setClearArmed(false);
               }}
-              className="text-[9.5px] font-medium text-slate-500 hover:text-cyan-200"
+              className="min-h-9 px-2 text-[10.5px] font-medium leading-4 text-[var(--ds-text-meta)] hover:text-cyan-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300"
             >
               {expanded ? "收起" : "查看"}
             </button>
@@ -225,14 +225,14 @@ export function HistoryStrip({
             <button
               type="button"
               onClick={() => { setTab("active"); setClearArmed(false); }}
-              className={`rounded px-2 py-1 text-[9.5px] transition-colors ${tab === "active" ? "bg-white/[0.08] text-cyan-100" : "text-slate-500 hover:text-slate-300"}`}
+              className={`min-h-9 rounded px-2 py-1 text-[10.5px] leading-4 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 ${tab === "active" ? "bg-white/[0.08] text-cyan-100" : "text-[var(--ds-text-meta)] hover:text-slate-200"}`}
             >
               最近 {items.length}{items.length >= 50 ? "+" : ""}
             </button>
             <button
               type="button"
               onClick={() => { setTab("archived"); setClearArmed(false); }}
-              className={`rounded px-2 py-1 text-[9.5px] transition-colors ${tab === "archived" ? "bg-white/[0.08] text-cyan-100" : "text-slate-500 hover:text-slate-300"}`}
+              className={`min-h-9 rounded px-2 py-1 text-[10.5px] leading-4 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 ${tab === "archived" ? "bg-white/[0.08] text-cyan-100" : "text-[var(--ds-text-meta)] hover:text-slate-200"}`}
             >
               已移除 {archivedItems.length}{archivedItems.length >= 50 ? "+" : ""}
             </button>
@@ -243,7 +243,7 @@ export function HistoryStrip({
               value={filter}
               onChange={(event) => setFilter(event.target.value)}
               placeholder="筛选历史"
-              className="min-w-0 flex-1 bg-transparent text-[10px] text-slate-300 outline-none placeholder:text-slate-700"
+              className="min-h-9 min-w-0 flex-1 bg-transparent text-[11px] leading-[18px] text-slate-200 outline-none placeholder:text-[var(--ds-text-meta)]"
               aria-label="筛选历史记录"
             />
           </label>
@@ -259,7 +259,7 @@ export function HistoryStrip({
                   setClearArmed(true);
                 }
               }}
-              className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[9px] transition-colors disabled:cursor-wait disabled:opacity-50 ${clearArmed ? "border-rose-300/30 bg-rose-500/[0.08] text-rose-200" : "border-white/[0.065] text-slate-500 hover:border-rose-300/20 hover:text-rose-200"}`}
+              className={`inline-flex min-h-9 items-center gap-1 rounded-md border px-2 py-1 text-[10.5px] leading-4 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 disabled:cursor-wait disabled:opacity-50 ${clearArmed ? "border-rose-300/30 bg-rose-500/[0.08] text-rose-200" : "border-white/[0.065] text-[var(--ds-text-meta)] hover:border-rose-300/20 hover:text-rose-200"}`}
               title="只移除已完成记录；运行中任务会保留"
             >
               <Trash2 size={10} />
@@ -268,10 +268,10 @@ export function HistoryStrip({
           ) : null}
         </div>
       ) : null}
-      {expanded && notice ? <div className="mb-1.5 rounded-md border border-cyan-300/10 bg-cyan-400/[0.035] px-2 py-1.5 text-[9.5px] text-cyan-100/80">{notice}</div> : null}
+      {expanded && notice ? <div className="mb-1.5 rounded-md border border-cyan-300/10 bg-cyan-400/[0.035] px-2 py-2 text-[10.5px] leading-4 text-cyan-100">{notice}</div> : null}
       <div className={expanded ? "max-h-64 space-y-1 overflow-y-auto pr-0.5" : ""}>
         {expanded && !shown.length && !loading ? (
-          <div className="rounded-md border border-dashed border-white/[0.065] px-3 py-4 text-center text-[10px] text-slate-600">
+          <div className="rounded-md border border-dashed border-white/[0.065] px-3 py-4 text-center text-[11px] leading-[18px] text-[var(--ds-text-meta)]">
             {normalizedFilter
               ? "没有匹配的历史记录"
               : tab === "archived"
@@ -309,17 +309,17 @@ export function HistoryStrip({
               <button
                 type="button"
                 onClick={() => onOpen(item)}
-                className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
+                className="flex min-h-11 min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-cyan-300"
               >
-                <span className={`shrink-0 rounded border px-1.5 py-0.5 text-[8.5px] font-semibold ${kind.cls}`}>{kind.label}</span>
+                <span className={`shrink-0 rounded border px-1.5 py-1 text-[10.5px] font-semibold leading-4 ${kind.cls}`}>{kind.label}</span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-[11px] text-slate-300 group-hover:text-cyan-100">{label}</span>
-                  <span className="mt-0.5 block truncate text-[8.5px] text-slate-600">
+                  <span className="mt-1 block truncate text-[10.5px] leading-4 text-[var(--ds-text-meta)]">
                     {sessionId ? `会话 #${sessionId}` : "历史会话"} · {resultCount} 个结果{exactWhen ? ` · ${exactWhen}` : ""}
                   </span>
                 </span>
-                {whenLabel ? <span className="shrink-0 text-[9px] text-slate-600">{whenLabel}</span> : null}
-                <span className={`inline-flex shrink-0 items-center gap-1 text-[9.5px] font-medium ${st.cls}`}>
+                {whenLabel ? <span className="shrink-0 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">{whenLabel}</span> : null}
+                <span className={`inline-flex shrink-0 items-center gap-1 text-[10.5px] font-medium leading-4 ${st.cls}`}>
                   <span className="h-1 w-1 rounded-full" style={{ background: st.dot }} />
                   {st.label}
                 </span>
@@ -328,11 +328,11 @@ export function HistoryStrip({
                 type="button"
                 disabled={busy || !sessionId || (tab === "active" && !terminal)}
                 onClick={() => tab === "active" ? onArchive(item) : onRestore(item)}
-                className="mx-1 my-1 inline-flex w-7 shrink-0 items-center justify-center rounded border border-transparent text-slate-600 transition-colors hover:border-white/[0.065] hover:bg-black/20 hover:text-cyan-100 disabled:cursor-not-allowed disabled:opacity-30"
+                className="mx-1 my-1 inline-flex min-h-9 w-9 shrink-0 items-center justify-center rounded border border-transparent text-[var(--ds-text-meta)] transition-colors hover:border-white/[0.065] hover:bg-black/20 hover:text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 disabled:cursor-not-allowed disabled:opacity-30"
                 aria-label={tab === "active" ? `移除历史：${label}` : `恢复历史：${label}`}
                 title={tab === "active" ? (terminal ? "从最近历史移除（数据仍保留）" : "任务进行中，完成后可移除") : "恢复到最近历史"}
               >
-                {actionBusy === actionKey ? <span className="text-[9px]">…</span> : tab === "active" ? <Trash2 size={11} /> : <RotateCcw size={11} />}
+                {actionBusy === actionKey ? <span className="text-[10.5px]">…</span> : tab === "active" ? <Trash2 size={13} /> : <RotateCcw size={13} />}
               </button>
             </div>
           );

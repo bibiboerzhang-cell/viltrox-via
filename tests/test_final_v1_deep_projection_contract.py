@@ -202,8 +202,13 @@ def test_backfill_uses_the_same_projection_and_counts_unknown_separately(monkeyp
     output: list[str] = []
     monkeypatch.setattr(backfill, "out", lambda value: output.append(str(value)))
     backfill.print_report([_ready_cache()], prepared, skipped)
+    assert output[0] == "mode: dry-run (no writes)"
     assert "score_unknown: 1" in output
     assert "  unknown: 1" in output
+
+    output.clear()
+    backfill.print_report([_ready_cache()], prepared, skipped, commit=True)
+    assert output[0] == "mode: commit (writes enabled)"
 
 
 class _Cursor:

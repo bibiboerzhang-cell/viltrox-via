@@ -11,6 +11,7 @@ import type { ContactState, KolContactChannel, KolContactTier } from "../../lib/
 import { useKolContactState } from "../../lib/useKolContactState";
 import { apiFetch } from "../../../../../services/http";
 import { OverlayPortal } from "./OverlayPortal";
+import { useModalFocusContract } from "./modalFocus";
 
 const e = React.createElement;
 
@@ -63,6 +64,7 @@ function ContactTierBadge({ tier, t }: { tier?: KolContactTier; t: (source: stri
 export function ContactModal({ item, onClose, apiToken, currentUser, sessionGeneration = 0, initialContactState = null }: any) {
   if (!item) return null;
   const { t } = useT();
+  const titleId = React.useId();
   const {
     state: contactState,
     retry: retryContact,
@@ -138,6 +140,7 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
     clearContact();
     onClose && onClose();
   }, [clearContact, onClose]);
+  const dialogRef = useModalFocusContract<HTMLDivElement>({ onClose: closeModal });
 
   const otherContactChannels = contactChannels.filter((contact) => contact.type !== "email");
   const renderOtherContacts = () => otherContactChannels.length > 0 && e("div", {
@@ -278,8 +281,11 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
     onClick: closeModal
   },
     e("div", {
+      ref: dialogRef,
       role: "dialog",
       "aria-modal": "true",
+      "aria-labelledby": titleId,
+      tabIndex: -1,
       className: "flex max-h-[calc(100dvh-2rem)] w-full max-w-[520px] flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-[#0a1020] shadow-2xl",
       onClick: (ev: any) => ev.stopPropagation()
     },
@@ -287,10 +293,10 @@ export function ContactModal({ item, onClose, apiToken, currentUser, sessionGene
       e("div", { className: "flex flex-none items-center gap-3 border-b border-white/[0.06] px-5 py-3" },
         e(KPAvatar, { name: outreachName, color: item.avatar_color, size: 36 }),
         e("div", { className: "flex-1 min-w-0" },
-          e("h3", { className: "text-[13px] font-semibold text-white" }, hasEmail ? "发起合作邀请" : hasAnyContact ? "联系 KOL" : "联系人与合作邀请"),
+          e("h3", { id: titleId, className: "text-[13px] font-semibold text-white" }, hasEmail ? "发起合作邀请" : hasAnyContact ? "联系 KOL" : "联系人与合作邀请"),
           e("p", { className: "text-[10px] text-slate-500" }, outreachSubtitle)
         ),
-        e("button", { onClick: closeModal, "aria-label": "关闭合作邀请", className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white" },
+        e("button", { type: "button", onClick: closeModal, "aria-label": "关闭合作邀请", "data-modal-initial-focus": "", className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-300" },
           e(X, { size: 13 })
         )
       ),

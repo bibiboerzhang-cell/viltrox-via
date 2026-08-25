@@ -12,6 +12,14 @@
 :root {
   --ds-font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Display", "PingFang SC", system-ui, sans-serif;
   --ds-font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+  /* Employee-facing decision/status copy must never fall back to the low-contrast
+     decorative muted token. Components can opt into this semantic meta colour. */
+  --ds-fs-body-sm: 12px;
+  --ds-lh-body-sm: 18px;
+  --ds-fs-meta: 11.5px;
+  --ds-lh-meta: 16px;
+  --ds-control-sm: 36px;
+  --ds-text-meta: #5f6b7a;
   --ds-space-sm: 12px;
   --ds-space-md: 16px;
   --ds-space-lg: 32px;
@@ -58,7 +66,7 @@
   --ds-overlay-surface:rgb(255 255 255 / var(--vkpi-glass-overlay-opacity)); --ds-drawer-surface:rgb(248 250 253 / var(--vkpi-glass-drawer-opacity)); --ds-drawer-surface-solid:#f8fafd;
   --ds-card-2:#ffffff; /* 卡中卡表面:demo glass light --card2(外层 .86 → 内层实白) */
   --ds-line:rgba(16,26,50,.10); --ds-line-strong:rgba(16,26,50,.20);
-  --ds-text:#0d1017; --ds-text-2:#3d4653; --ds-muted:#7a8496;
+  --ds-text:#0d1017; --ds-text-2:#3d4653; --ds-muted:#7a8496; --ds-text-meta:#5f6b7a;
   --ds-accent:#0071e3; --ds-accent-hover:#0067cf; --ds-accent-soft:rgba(0,113,227,.09); --ds-accent-2:#7c3aed;
   --ds-on-accent:#ffffff;
   --ds-good:#0a8f57; --ds-good-soft:rgba(10,143,87,.10);
@@ -80,7 +88,7 @@
   --ds-overlay-surface:rgb(10 15 26 / var(--vkpi-glass-overlay-opacity)); --ds-drawer-surface:rgb(9 14 25 / var(--vkpi-glass-drawer-opacity)); --ds-drawer-surface-solid:#090e19;
   --ds-card-2:rgba(255,255,255,.07); /* 卡中卡表面:demo glass dark --card2(.07 vs 外层 .045,亮一档) */
   --ds-line:rgba(255,255,255,.09); --ds-line-strong:rgba(255,255,255,.17);
-  --ds-text:#f3f5fa; --ds-text-2:#c0c7d5; --ds-muted:#727b8d;
+  --ds-text:#f3f5fa; --ds-text-2:#c0c7d5; --ds-muted:#727b8d; --ds-text-meta:#9ba8bb;
   --ds-accent:#3f9bff; --ds-accent-hover:#63adff; --ds-accent-soft:rgba(63,155,255,.15); --ds-accent-2:#9d5cff;
   --ds-on-accent:#08111f;
   --ds-good:#37dd9a; --ds-good-soft:rgba(55,221,154,.14);
@@ -104,7 +112,7 @@
   --ds-overlay-surface:#ffffff; --ds-drawer-surface:#f8fafc; --ds-drawer-surface-solid:#f8fafc;
   --ds-card-2:#ffffff; /* 卡中卡表面:demo instrument light --card2(同白,靠边线分层) */
   --ds-line:#e0e5ec; --ds-line-strong:#c9d2dd;
-  --ds-text:#141a22; --ds-text-2:#4a5666; --ds-muted:#8794a4;
+  --ds-text:#141a22; --ds-text-2:#4a5666; --ds-muted:#8794a4; --ds-text-meta:#5f6b7a;
   --ds-accent:#a9791f; --ds-accent-hover:#8a6014; --ds-accent-soft:rgba(169,121,31,.12); --ds-accent-2:#0ea5e9;
   --ds-on-accent:#ffffff;
   --ds-good:#2f7d63; --ds-good-soft:rgba(47,125,99,.10);
@@ -124,7 +132,7 @@
   --ds-overlay-surface:#161c24; --ds-drawer-surface:#12161d; --ds-drawer-surface-solid:#12161d;
   --ds-card-2:#212a36; /* 卡中卡表面:比 --ds-card #1b222c 亮一档(demo card→card2 同步进) */
   --ds-line:#28303c; --ds-line-strong:#3b4653;
-  --ds-text:#eef1f5; --ds-text-2:#aab4c2; --ds-muted:#6d7988;
+  --ds-text:#eef1f5; --ds-text-2:#aab4c2; --ds-muted:#6d7988; --ds-text-meta:#9ba8bb;
   --ds-accent:#e0a94a; --ds-accent-hover:#c7913a; --ds-accent-soft:rgba(224,169,74,.14); --ds-accent-2:#8ee6ff;
   --ds-on-accent:#141a08;
   --ds-good:#4fa487; --ds-good-soft:rgba(79,164,135,.14);
@@ -149,7 +157,7 @@
   --ds-overlay-surface:#ffffff; --ds-drawer-surface:#fafbfc; --ds-drawer-surface-solid:#fafbfc;
   --ds-card-2:#ffffff; /* 卡中卡表面:demo commandos light --card2(外层 .9 → 内层实白) */
   --ds-line:rgba(11,18,32,.13); --ds-line-strong:rgba(11,18,32,.24);
-  --ds-text:#05070c; --ds-text-2:#3a4150; --ds-muted:#79818e;
+  --ds-text:#05070c; --ds-text-2:#3a4150; --ds-muted:#79818e; --ds-text-meta:#5f6b7a;
   --ds-accent:#05070c; --ds-accent-hover:#000000; --ds-accent-soft:rgba(5,7,12,.06); --ds-accent-2:#0284c7;
   --ds-on-accent:#ffffff;
   --ds-good:#0a8f57; --ds-good-soft:rgba(10,143,87,.10);
@@ -169,7 +177,7 @@
   --ds-overlay-surface:#0d1018; --ds-drawer-surface:#080b12; --ds-drawer-surface-solid:#080b12;
   --ds-card-2:rgba(255,255,255,.12); /* 卡中卡表面:demo commandos dark card→card2 步进(.05→.085)同幅上抬 */
   --ds-line:rgba(255,255,255,.12); --ds-line-strong:rgba(255,255,255,.24);
-  --ds-text:#f7f8fb; --ds-text-2:#c7ced9; --ds-muted:#7f8896;
+  --ds-text:#f7f8fb; --ds-text-2:#c7ced9; --ds-muted:#7f8896; --ds-text-meta:#9ba8bb;
   --ds-accent:#eef2f8; --ds-accent-hover:#ffffff; --ds-accent-soft:rgba(255,255,255,.10); --ds-accent-2:#8ee6ff;
   --ds-on-accent:#05070c;
   --ds-good:#7ff0c2; --ds-good-soft:rgba(127,240,194,.12);

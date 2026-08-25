@@ -24,6 +24,15 @@ const RESPONSE = {
     outbound_share_grants: 0,
     received_share_grants: 1,
     unattributed_received_share_grants: 0,
+    content_items: 3,
+    analysis_eligible_videos: 2,
+    non_video_content_items: 1,
+    final_v1_requested_videos: 2,
+    final_v1_completed_videos: 1,
+    final_v1_projected_videos: 1,
+    final_v1_not_requested_videos: 0,
+    final_v1_requested_not_completed_videos: 1,
+    final_v1_projection_pending_videos: 0,
     candidate_videos: 2,
     trackable_videos: 2,
     tracked_videos: 1,
@@ -44,7 +53,7 @@ const RESPONSE = {
     sharing: { state: "received_only" },
     video_tracking: { state: "partially_measured" },
     sku_linking: { state: "detected_pending_human_confirmation" },
-    gemini_analysis: { state: "lens_extraction_pending" },
+    gemini_analysis: { state: "requested_not_completed" },
   },
   blockers: [
     { code: "content_monitoring_scheduler_disabled", count: 1, owner: "manager", approval_required: true },
@@ -74,11 +83,11 @@ describe("MY KOL 业务闭环状态卡", () => {
     expect(screen.getByText("发出 0 · 收到 1")).toBeTruthy();
     expect(screen.getByText("仅收到共享 · 非本人发起")).toBeTruthy();
     expect(screen.getByText(/员工待选 1 · 总追踪 1 \/ 2/)).toBeTruthy();
-    expect(screen.getByText("0 / 1 同源成套")).toBeTruthy();
-    expect(screen.getByText(/深析 1 \/ 2/)).toBeTruthy();
+    expect(screen.getByText("1 / 2 已完成")).toBeTruthy();
+    expect(screen.getByText(/全部内容 3 · 可分析 2 · 已请求 2 · 已完成 1 · 已投影 1/)).toBeTruthy();
     expect(screen.getByText("已配置 · 调度未开启")).toBeTruthy();
     expect(screen.getByText("系统检出 · 待人工确认")).toBeTruthy();
-    expect(screen.getByText(/深析 1 \/ 2 · 已深析 · 镜头证据待整理/)).toBeTruthy();
+    expect(screen.getByText(/已请求 · 部分未完成/)).toBeTruthy();
     expect(screen.queryByText(/KOL 内容订阅未选择/)).toBeNull();
     expect(screen.getByText(/内容巡检调度未开启 · 1 · 管理员开闸/)).toBeTruthy();
     expect(apiFetchMock).toHaveBeenCalledWith("/api/admin/vkpi/my-kol/closure-readiness", {}, "token");

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Search, X } from "lucide-react";
 
 import { KPAvatar } from "../KPAvatar";
@@ -69,6 +69,7 @@ export function KolPoolAllModal({
   onClose: () => void;
   onRowClick: (item: Row) => void;
 }) {
+  const titleId = useId();
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState("");
   const normalizedQuery = norm(query);
@@ -86,19 +87,20 @@ export function KolPoolAllModal({
   ];
 
   return (
-    <CenterModal onClose={onClose} maxWidth="6xl">
+    <CenterModal onClose={onClose} maxWidth="6xl" ariaLabelledBy={titleId}>
       <div className="shrink-0 border-b border-white/[0.06] bg-[#0b1324] px-5 py-3.5">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-white">全部 KOL</h2>
+            <h2 id={titleId} className="text-sm font-semibold text-white">全部 KOL</h2>
             <div className="mt-0.5 text-[10px] text-slate-500">
               {items.length} 个 KOL · 可搜索、筛选、点行打开现有详情抽屉
             </div>
           </div>
           <button
+            data-modal-initial-focus
             type="button"
             onClick={onClose}
-            className="rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:bg-white/[0.08] hover:text-white"
+            className="rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:bg-white/[0.08] hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300"
             aria-label="关闭"
           >
             <X size={14} />

@@ -651,16 +651,16 @@ def sku_content_aggregate_briefs(sku_codes: list[str]) -> dict[str, dict[str, An
             evidence_id = _int_or_none(row.get("evidence_id"))
             if evidence_id is None:
                 continue
+            haystacks, normalized_haystacks = sku_performance_aggregate_rows.deep_haystacks(row), {}
             for state in active:
                 seen = state["seen_evidence"]
                 if evidence_id in seen:
                     continue
-                hit = _match_deep_row(row, state["matcher"])
+                hit = sku_performance_aggregate_rows.match_haystacks(haystacks, state["matcher"], normalized_haystacks)
                 if not hit:
                     continue
-                matched, field = hit
                 seen.add(evidence_id)
-                state["items"].append(_build_item(row, matched, field, deep=True))
+                state["items"].append(sku_performance_aggregate_rows.build_aggregate_item(row))
 
         for row in sku_performance_aggregate_rows.load_title_rows(conn):
             evidence_id = _int_or_none(row.get("evidence_id"))
@@ -672,11 +672,11 @@ def sku_content_aggregate_briefs(sku_codes: list[str]) -> dict[str, dict[str, An
                 seen = state["seen_evidence"]
                 if evidence_id in seen:
                     continue
-                matched = state["matcher"].match(normalized_title)
+                matched = sku_performance_aggregate_rows.match_alias(state["matcher"], normalized_title)
                 if not matched:
                     continue
                 seen.add(evidence_id)
-                state["items"].append(_build_item(row, matched, "evidence_title", deep=False))
+                state["items"].append(sku_performance_aggregate_rows.build_aggregate_item(row))
 
     output: dict[str, dict[str, Any] | None] = {}
     for query in queries:

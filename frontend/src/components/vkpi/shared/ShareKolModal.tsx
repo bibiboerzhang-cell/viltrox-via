@@ -22,6 +22,7 @@ import {
   unshareKolFromStaff,
   type VkpiKolShareMember,
 } from "../../../services/vkpi/kol-api";
+import { useModalFocusContract } from "../cockpit/components/modals/modalFocus";
 
 const e = React.createElement;
 
@@ -62,6 +63,8 @@ export function isShareStaffPickable(s: any, memberIds: Set<string>, actorStaffI
 }
 
 export function ShareKolModal({ kolPoolId, kolName, staff = [], actorStaffId, apiToken, onClose }: any) {
+  const titleId = React.useId();
+  const dialogRef = useModalFocusContract<HTMLDivElement>({ onClose });
   const [members, setMembers] = useState<VkpiKolShareMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -152,9 +155,15 @@ export function ShareKolModal({ kolPoolId, kolName, staff = [], actorStaffId, ap
 
   return e("div", {
     className: "fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4",
+    role: "presentation",
     onClick: onClose,
   },
     e("div", {
+      ref: dialogRef,
+      role: "dialog",
+      "aria-modal": "true",
+      "aria-labelledby": titleId,
+      tabIndex: -1,
       className: "rounded-2xl border border-white/[0.08] bg-[#0b1220] w-full max-w-lg max-h-[92vh] flex flex-col shadow-2xl",
       onClick: (ev: any) => ev.stopPropagation(),
     },
@@ -164,11 +173,17 @@ export function ShareKolModal({ kolPoolId, kolName, staff = [], actorStaffId, ap
           e("div", { className: "w-8 h-8 rounded-lg flex items-center justify-center border border-purple-500/30 bg-purple-500/[0.08] shrink-0" },
             e(Share2, { size: 15, className: "text-purple-300" })),
           e("div", { className: "min-w-0" },
-            e("h3", { className: "text-[14px] font-semibold text-white truncate" }, "共享 KOL 给成员"),
+            e("h3", { id: titleId, className: "text-[14px] font-semibold text-white truncate" }, "共享 KOL 给成员"),
             e("p", { className: "text-[10.5px] text-slate-500 truncate" }, kolName || String(kolPoolId))
           )
         ),
-        e("button", { onClick: onClose, className: "text-slate-500 hover:text-white shrink-0" }, e(X, { size: 16 }))
+        e("button", {
+          type: "button",
+          onClick: onClose,
+          "aria-label": "关闭共享 KOL",
+          "data-modal-initial-focus": "",
+          className: "text-slate-500 hover:text-white shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-purple-300",
+        }, e(X, { size: 16 }))
       ),
 
       // Body

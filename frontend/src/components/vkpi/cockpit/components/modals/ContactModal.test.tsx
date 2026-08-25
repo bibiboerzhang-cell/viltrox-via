@@ -45,6 +45,36 @@ beforeEach(() => {
 });
 
 describe("ContactModal audited contact reveal", () => {
+  it("provides a named dialog, initial close focus, Escape handling, and focus restoration", async () => {
+    const opener = document.createElement("button");
+    opener.textContent = "打开合作邀请";
+    document.body.appendChild(opener);
+    opener.focus();
+    const onClose = vi.fn();
+    const view = render(
+      <ContactModal
+        item={item}
+        apiToken="token"
+        initialContactState={auditedState({
+          status: "full",
+          contact_masked: false,
+          contacts: [{ type: "email", value: "manager@example.com" }],
+        })}
+        onClose={onClose}
+      />,
+    );
+
+    expect(screen.getByRole("dialog", { name: "发起合作邀请" })).toHaveAttribute("aria-modal", "true");
+    const close = screen.getByRole("button", { name: "关闭合作邀请" });
+    await waitFor(() => expect(close).toHaveFocus());
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    view.unmount();
+    expect(opener).toHaveFocus();
+    opener.remove();
+  });
+
   it("reuses a same-purpose audited state without another reveal request", () => {
     const initialContactState = auditedState({
       status: "full",

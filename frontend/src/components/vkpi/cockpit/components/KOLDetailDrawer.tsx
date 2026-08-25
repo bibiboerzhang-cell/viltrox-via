@@ -4,6 +4,7 @@ import { Sparkles } from "lucide-react";
 import { KOLVideoAnalysisPanel } from "./KOLVideoAnalysisPanel";
 import { ShareKolModal } from "../../shared/ShareKolModal";
 import { OverlayPortal } from "./modals/OverlayPortal";
+import { useModalFocusContract } from "./modals/modalFocus";
 import { enqueueAllKolVideos, enqueueKolProfileCrawl, enqueueVideoAnalysis, getKolPoolDimensions11, getKolPoolLlmDeepAnalysis, getKolVideoAnalysisBatch, getKolVideoAnalysisCache, promoteKolPoolToMain, refreshAudienceStats } from "../../../../services/vkpi/kolPool-api";
 import { getKolMemory } from "../../../../services/vkpi/kolMemory-api";
 import { KOLDrawerOutreachSection } from "./KOLDrawerOutreachSection";
@@ -86,6 +87,10 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
     clearContact();
     onClose?.();
   }, [clearContact, onClose]);
+  const drawerRef = useModalFocusContract<HTMLDivElement>({
+    active: Boolean(item),
+    onClose: handleClose,
+  });
   // P-GROUP-7 共享 KOL 池:把这条 My KOL(item.id = kol_pool_id)显式共享给成员(只读授予)。
   const [shareOpen, setShareOpen] = React.useState(false);
   // 【M3/M5】观看者上下文:共享来源(来自谁的共享)+ active 认领(本人/管理层可释放)。
@@ -773,11 +778,13 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
   // 头部/行动条常驻 + 中段单一滚动区;玻璃皮的磨砂(backdrop)在 routes.css 的抽屉规则里。
   return e(OverlayPortal, { stage: "kol-pool" },
   e(m.div, {
+    ref: drawerRef,
     initial: { x: "100%" }, animate: { x: 0 }, exit: { x: "100%" },
     transition: { type: "spring", damping: 28, stiffness: 240 },
     "aria-label": "KOL Pool 详情",
     role: "dialog",
     "aria-modal": "true",
+    tabIndex: -1,
     className: "vkpi-kol-detail-drawer fixed top-0 right-0 h-[100dvh] max-h-[100dvh] w-[520px] max-w-[100vw] bg-[#0a1020] border-l border-white/[0.08] shadow-2xl z-50 flex flex-col"
   },
     // ─── Header ───

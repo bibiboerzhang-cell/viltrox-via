@@ -109,6 +109,79 @@ def test_multi_sku_aggregate_projection_matches_single_sku_reader(monkeypatch) -
     assert calls == {"deep": 1, "title": 1}
 
 
+def test_multi_sku_deep_projection_normalizes_each_field_once(monkeypatch) -> None:
+    products = {
+        "sku-50": {"sku": "sku-50", "model_name": "Viltrox 50mm"},
+        "sku-85": {"sku": "sku-85", "model_name": "Viltrox 85mm"},
+    }
+    aliases = {
+        "sku-50": [{"alias": "50mm", "alias_norm": "50mm", "confidence": 1.0}],
+        "sku-85": [{"alias": "85mm", "alias_norm": "85mm", "confidence": 1.0}],
+    }
+    deep = _evidence(10, "unrelated title", '{"notes":"unrelated presence"}')
+    deep.update(brand_exposure="unrelated brand", content_summary="unrelated summary")
+    normalized_values: list[str] = []
+    real_norm = sku_performance._norm
+
+    monkeypatch.setattr(sku_performance, "resolve_sku", lambda sku: products.get(sku))
+    monkeypatch.setattr(sku_performance, "_aliases_for", lambda product: aliases[str(product["sku"])])
+    monkeypatch.setattr("app.db.connection.get_conn", lambda: object())
+    monkeypatch.setattr(sku_performance_aggregate_rows, "load_deep_rows", lambda _conn: [deep])
+    monkeypatch.setattr(sku_performance_aggregate_rows, "load_title_rows", lambda _conn: [])
+
+    def counted_norm(value):
+        normalized_values.append(str(value))
+        return real_norm(value)
+
+    monkeypatch.setattr(sku_performance, "_norm", counted_norm)
+
+    result = sku_performance.sku_content_aggregate_briefs(list(products))
+
+    assert result == {sku: sku_performance._aggregate([]) for sku in products}
+    assert normalized_values == [
+        "unrelated presence",
+        "unrelated title",
+        "unrelated brand",
+        "unrelated summary",
+    ]
+
+
+def test_gtm_alias_fast_path_is_semantically_equal_to_canonical_matcher() -> None:
+    aliases = [
+        {"alias": "85mm f18", "alias_norm": "85mm f18", "confidence": 1.0},
+        {"alias": "85mm", "alias_norm": "85mm", "confidence": 0.9},
+    ]
+    matcher = sku_performance._AliasMatcher(aliases)
+    texts = [
+        "",
+        "85mm f18",
+        "camera 85mm f18 review",
+        "x85mm f18",
+        "85mm f180",
+        "x85mm and 85mm later",
+        "an 85mm only review",
+        "unrelated 50mm f18",
+    ]
+
+    for text in texts:
+        assert sku_performance_aggregate_rows.match_alias(matcher, text) == matcher.match(text)
+
+
+def test_gtm_deep_projection_keeps_only_aggregate_and_match_fields() -> None:
+    conn = _ScriptedConn(lambda _sql, _params: [])
+
+    sku_performance_aggregate_rows.load_deep_rows(conn)
+
+    sql = conn.calls[0][0]
+    assert "ac.result #>> '{layer1_visual_content,product_presence}' AS product_presence" in sql
+    assert "ac.result #>> '{layer1_visual_content,brand_exposure}' AS brand_exposure" in sql
+    assert "ac.result #>> '{layer1_visual_content,content_summary}' AS content_summary" in sql
+    assert "e.content_url AS content_url" not in sql
+    assert "e.publish_date" not in sql
+    assert "e.posted_at" not in sql
+    assert "marketing_value" not in sql
+
+
 def test_multi_sku_aggregate_projection_keeps_not_found_and_empty_state(monkeypatch) -> None:
     monkeypatch.setattr(
         sku_performance,

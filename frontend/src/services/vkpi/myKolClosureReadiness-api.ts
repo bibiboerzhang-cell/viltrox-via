@@ -33,6 +33,16 @@ export interface VkpiMyKolClosureReadinessResponse {
     outbound_share_grants?: number;
     received_share_grants?: number;
     unattributed_received_share_grants?: number;
+    content_items?: number;
+    writable_content_items?: number;
+    analysis_eligible_videos?: number;
+    non_video_content_items?: number;
+    final_v1_requested_videos?: number;
+    final_v1_completed_videos?: number;
+    final_v1_projected_videos?: number;
+    final_v1_not_requested_videos?: number;
+    final_v1_requested_not_completed_videos?: number;
+    final_v1_projection_pending_videos?: number;
     candidate_videos?: number;
     trackable_videos?: number;
     tracked_videos?: number;

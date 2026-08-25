@@ -133,7 +133,11 @@ def test_shaped_final_v1_result_records_pure_prompt_contract() -> None:
 
     shaped = gemini._shape_gemini_result(
         job={"id": 1},
-        evidence={"id": 71, "content_url": "https://youtu.be/x", "kol_pool_id": 88},
+        evidence={
+            **PROJECT_EVIDENCE,
+            "content_url": "https://youtu.be/x",
+            "title": "Untitled lens test",
+        },
         raw={"analyzed": True, "model": gemini.WORKER_GEMINI_MODEL, "video_analysis_final_v1": {}},
         cost=0.0,
         cost_basis="test",
@@ -142,6 +146,10 @@ def test_shaped_final_v1_result_records_pure_prompt_contract() -> None:
         derive_method="video_analysis_final_v1",
     )
     assert shaped["provenance"]["prompt_contract"] == video_context.FINAL_V1_PROMPT_CONTRACT
+    assert not ({"project_id", "project_name", "product_name"} & shaped["source"].keys())
+    serialized = json.dumps(shaped, ensure_ascii=False, default=str)
+    for marker in PROJECT_MARKERS:
+        assert marker not in serialized
 
 
 # ── cache clean-up script ──────────────────────────────────────────────

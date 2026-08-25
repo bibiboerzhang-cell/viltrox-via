@@ -1,10 +1,25 @@
 // Verbatim from vkpi_v6.15.7_integrated.html
 
 
+import React from "react";
 import { createPortal } from "react-dom";
 import { m } from "framer-motion";
+import { useModalFocusContract } from "./modalFocus";
 
-export function CenterModal({ children, onClose, maxWidth = "lg" }: { children?: any; onClose?: () => void; maxWidth?: string }) {
+export function CenterModal({
+  children,
+  onClose,
+  maxWidth = "lg",
+  ariaLabel = "对话框",
+  ariaLabelledBy,
+}: {
+  children?: React.ReactNode;
+  onClose?: () => void;
+  maxWidth?: string;
+  ariaLabel?: string;
+  ariaLabelledBy?: string;
+}) {
+  const dialogRef = useModalFocusContract<HTMLDivElement>({ onClose });
   const widthClass = ({
     sm: "max-w-sm",
     md: "max-w-md",
@@ -22,11 +37,18 @@ export function CenterModal({ children, onClose, maxWidth = "lg" }: { children?:
       initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
       className="cockpit-modal fixed inset-0 flex items-center justify-center bg-black/75 backdrop-blur-md p-4"
       style={{ zIndex: 9999 }}
+      role="presentation"
     >
       <m.div
+        ref={dialogRef}
         initial={{ scale: 0.95, opacity: 0, y: 20 }} animate={{ scale: 1, opacity: 1, y: 0 }} exit={{ scale: 0.95, opacity: 0 }}
         onClick={(ev: any) => ev.stopPropagation()}
         style={{ zIndex: 1 }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={ariaLabelledBy ? undefined : ariaLabel}
+        aria-labelledby={ariaLabelledBy}
+        tabIndex={-1}
         className={"relative z-10 flex max-h-[92vh] w-full flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0a1020] shadow-2xl " + widthClass}
       >
         {children}

@@ -111,20 +111,20 @@ function ContractStageTile({
   return (
     <div
       data-testid={`kol-truth-progress-${stageKey}`}
-      className={`rounded-md border px-2 py-1.5 ${blocked
+      className={`min-h-20 rounded-md border px-2.5 py-2 ${blocked
         ? "border-rose-300/20 bg-rose-400/[0.055]"
         : "border-white/[0.07] bg-black/15"}`}
     >
       <div className="flex items-center justify-between gap-1.5">
-        <span className="text-[9px] text-slate-500">{label}</span>
-        <span className={`text-[8.5px] ${blocked ? "text-rose-200" : stage.state === "ready" ? "text-emerald-200" : "text-slate-400"}`}>
+        <span className="text-[10.5px] leading-4 text-[var(--ds-text-meta)]">{label}</span>
+        <span className={`text-[10.5px] leading-4 ${blocked ? "text-rose-200" : stage.state === "ready" ? "text-emerald-200" : "text-[var(--ds-text-meta)]"}`}>
           {contractStageLabel(stage, blockedByWorker)}
         </span>
       </div>
-      <div className="mt-0.5 text-[10.5px] font-medium text-slate-100">{main}</div>
-      {parts.length ? <div className="mt-0.5 text-[8.5px] leading-relaxed text-slate-400">{parts.join(" · ")}</div> : null}
+      <div className="mt-1 text-[11px] font-medium leading-[18px] text-slate-100">{main}</div>
+      {parts.length ? <div className="mt-1 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">{parts.join(" · ")}</div> : null}
       {stage.dataReady != null ? (
-        <div className="mt-0.5 text-[8.5px] text-cyan-100/70">可用数据 {stage.dataReady}</div>
+        <div className="mt-1 text-[10.5px] leading-4 text-cyan-100">可用数据 {stage.dataReady}</div>
       ) : null}
     </div>
   );
@@ -204,7 +204,7 @@ function ContractProgressCard({ progress }: { progress: SearchSessionProgress })
         : "border-cyan-300/15 bg-cyan-950/[0.10]"}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-1.5 text-[10.5px] font-medium text-cyan-50">
+        <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-medium leading-[18px] text-cyan-50">
           <span data-testid="kol-progress-state-icon" data-state={contract.blockedByWorker ? "blocked" : contractActive ? "active" : contract.requestedTasksTerminal ? "terminal" : "idle"}>
             {contract.blockedByWorker
               ? <WifiOff size={12} className="text-rose-300" />
@@ -220,41 +220,41 @@ function ContractProgressCard({ progress }: { progress: SearchSessionProgress })
           <span
             data-testid="kol-progress-runtime"
             title={`依据当前 API 请求地址判定${runtime.host ? `：${runtime.host}` : ""}；不代表另一套环境状态`}
-            className="inline-flex items-center gap-1 rounded-full border border-white/[0.09] px-1.5 py-0.5 text-[8.5px] font-normal text-slate-300"
+            className="inline-flex min-h-7 items-center gap-1 rounded-full border border-white/[0.09] px-2 py-1 text-[10.5px] font-normal leading-4 text-slate-200"
           >
             <RuntimeIcon size={9} /> {runtime.label}
           </span>
           <span
             data-testid="kol-progress-worker"
             title={worker.title}
-            className={`rounded-full border px-1.5 py-0.5 text-[8.5px] font-normal ${worker.tone}`}
+            className={`inline-flex min-h-7 items-center rounded-full border px-2 py-1 text-[10.5px] font-normal leading-4 ${worker.tone}`}
           >{worker.label}</span>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {contract.progressPct != null ? (
-            <span data-testid="kol-progress-success-pct" title="只计已持久化成功结果；排队、运行、失败均不计完成" className="rounded-full border border-emerald-300/20 bg-emerald-400/[0.07] px-2 py-0.5 text-[9px] text-emerald-100">
+            <span data-testid="kol-progress-success-pct" title="只计已持久化成功结果；排队、运行、失败均不计完成" className="inline-flex min-h-7 items-center rounded-full border border-emerald-300/20 bg-emerald-400/[0.07] px-2 py-1 text-[10.5px] leading-4 text-emerald-100">
               已请求成功 {compactPercent(contract.progressPct)}
             </span>
           ) : null}
           {contract.terminalPct != null ? (
-            <span data-testid="kol-progress-terminal-pct" title="已结束包含成功、部分完成、失败和跳过；不等于成功完成" className="rounded-full border border-white/[0.09] px-2 py-0.5 text-[9px] text-slate-400">
+            <span data-testid="kol-progress-terminal-pct" title="已结束包含成功、部分完成、失败和跳过；不等于成功完成" className="inline-flex min-h-7 items-center rounded-full border border-white/[0.09] px-2 py-1 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">
               已结束 {compactPercent(contract.terminalPct)}
             </span>
           ) : null}
-          <span data-testid="kol-progress-strict-status" className={`rounded-full border px-2 py-0.5 text-[9px] ${contract.blockedByWorker ? "border-rose-300/25 text-rose-200" : "border-cyan-300/20 text-cyan-100"}`}>
+          <span data-testid="kol-progress-strict-status" className={`inline-flex min-h-7 items-center rounded-full border px-2 py-1 text-[10.5px] leading-4 ${contract.blockedByWorker ? "border-rose-300/25 text-rose-200" : "border-cyan-300/20 text-cyan-100"}`}>
             {overallState}
           </span>
         </div>
       </div>
 
       <div className="mt-2 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-5">
-        <div data-testid="kol-progress-base" className="rounded-md border border-white/[0.07] bg-black/15 px-2 py-1.5">
+        <div data-testid="kol-progress-base" className="min-h-20 rounded-md border border-white/[0.07] bg-black/15 px-2.5 py-2">
           <div className="flex items-center justify-between gap-1.5">
-            <span className="text-[9px] text-slate-500">候选返回</span>
-            <span className={`text-[8.5px] ${search.state === "ready" ? "text-emerald-200" : "text-slate-400"}`}>{contractStageLabel(search, false)}</span>
+            <span className="text-[10.5px] leading-4 text-[var(--ds-text-meta)]">候选返回</span>
+            <span className={`text-[10.5px] leading-4 ${search.state === "ready" ? "text-emerald-200" : "text-[var(--ds-text-meta)]"}`}>{contractStageLabel(search, false)}</span>
           </div>
-          <div className="mt-0.5 text-[10.5px] font-medium text-slate-100">{candidateMain}</div>
-          <div className="mt-0.5 text-[8.5px] text-slate-400">只报当前会话已持久化候选</div>
+          <div className="mt-1 text-[11px] font-medium leading-[18px] text-slate-100">{candidateMain}</div>
+          <div className="mt-1 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">只报当前会话已持久化候选</div>
         </div>
         <ContractStageTile stageKey="profile" label="档案" stage={contract.stages.profile} blockedByWorker={contract.blockedByWorker} />
         <ContractStageTile stageKey="video" label="视频" stage={contract.stages.video} blockedByWorker={contract.blockedByWorker} />
@@ -262,7 +262,7 @@ function ContractProgressCard({ progress }: { progress: SearchSessionProgress })
         <ContractStageTile stageKey="audience" label="受众" stage={contract.stages.audience} blockedByWorker={contract.blockedByWorker} />
       </div>
 
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[9px] text-slate-500">
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">
         <span>完成口径：持久化成功 {contract.successfulUnits ?? "未返回"}/{contract.requestedUnits ?? "未返回"} 单元</span>
         {(contract.queuedUnits ?? 0) > 0 ? <span>排队 {contract.queuedUnits} · 不计完成</span> : null}
         {(contract.runningUnits ?? 0) > 0 ? <span>运行 {contract.runningUnits} · 不计完成</span> : null}

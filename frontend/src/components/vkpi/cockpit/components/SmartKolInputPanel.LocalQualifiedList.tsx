@@ -101,39 +101,39 @@ export function StrictQualifiedList({
           <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-violet-100">
             <CheckCircle2 size={12} /> {laneLabel} {summary.qualified}/{summary.target}
           </span>
-          <span className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[9.5px] text-slate-400">
+          <span className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">
             {online ? "服务端 accepted" : "服务端返回"} {summary.serverReturned}
           </span>
-          <span className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[9.5px] text-slate-400">
+          <span className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">
             {online ? "严格过闸" : "过闸候选"} {summary.serverQualified}
           </span>
-          <span className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[9.5px] text-slate-400">
+          <span className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">
             {online ? "净新增唯一" : "合格唯一"} {summary.uniqueQualified}
           </span>
           {summary.pending > 0 ? (
-            <span className="inline-flex items-center gap-1 rounded border border-amber-300/15 bg-amber-400/[0.05] px-1.5 py-0.5 text-[9.5px] text-amber-100/80">
+            <span className="inline-flex items-center gap-1 rounded border border-amber-300/15 bg-amber-400/[0.05] px-1.5 py-0.5 text-[10.5px] leading-4 text-amber-100">
               <Clock3 size={9} /> 待验收 {summary.pending}（不计入）
             </span>
           ) : null}
           {summary.rejected > 0 ? (
-            <span className="rounded border border-rose-300/15 bg-rose-400/[0.05] px-1.5 py-0.5 text-[9.5px] text-rose-100/80">
+            <span className="rounded border border-rose-300/15 bg-rose-400/[0.05] px-1.5 py-0.5 text-[10.5px] leading-4 text-rose-100">
               未通过 {summary.rejected}（不计入）
             </span>
           ) : null}
           {extraStats.map((label) => (
-            <span key={label} className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[9.5px] text-slate-400">{label}</span>
+            <span key={label} className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">{label}</span>
           ))}
           {selectableIds.length ? (
-            <span className="rounded border border-emerald-300/15 px-1.5 py-0.5 text-[9.5px] text-emerald-100/80">
+            <span className="rounded border border-emerald-300/15 px-1.5 py-0.5 text-[10.5px] leading-4 text-emerald-100">
               可选 {selectableIds.length}
             </span>
           ) : null}
         </div>
-        <span className="text-[9.5px] text-slate-500">按服务端排名逐条出现 · 不在浏览器重算资格</span>
+        <span className="text-[10.5px] leading-4 text-[var(--ds-text-meta)]">按服务端排名逐条出现 · 不在浏览器重算资格</span>
       </div>
 
       {summary.shortfall > 0 ? (
-        <div className="flex items-start gap-1.5 rounded-md border border-amber-300/20 bg-amber-400/[0.06] px-2.5 py-1.5 text-[10px] text-amber-100/90">
+        <div className="flex items-start gap-1.5 rounded-md border border-amber-300/20 bg-amber-400/[0.06] px-2.5 py-2 text-[11px] leading-[18px] text-amber-100">
           <ShieldAlert size={11} className="mt-0.5 shrink-0" />
           <span>
             还缺 {summary.shortfall} 人
@@ -141,15 +141,15 @@ export function StrictQualifiedList({
           </span>
         </div>
       ) : (
-        <div className="rounded-md border border-emerald-300/20 bg-emerald-400/[0.06] px-2.5 py-1.5 text-[10px] text-emerald-100">
+        <div className="rounded-md border border-emerald-300/20 bg-emerald-400/[0.06] px-2.5 py-2 text-[11px] leading-[18px] text-emerald-100">
           {online ? "联网净新增 30 人硬闸已满足" : "本地 30 人硬闸已满足"}；未知或待核验候选未计入。
         </div>
       )}
 
       {summary.rows.length ? (
         <div className="overflow-x-auto rounded-lg border border-white/[0.07]">
-          <table className="min-w-[1380px] w-full border-collapse text-left text-[10px]">
-            <thead className="bg-white/[0.035] text-slate-500">
+          <table className="min-w-[1180px] w-full border-collapse text-left text-[11px] leading-[18px]">
+            <thead className="bg-white/[0.035] text-[10.5px] text-[var(--ds-text-meta)]">
               <tr>
                 <th className="w-14 px-2 py-2 font-medium">
                   <label className="inline-flex items-center gap-1" title={`只选择服务端已通过全部硬闸的${online ? "联网净新增" : "库内"}候选`}>
@@ -191,7 +191,7 @@ export function StrictQualifiedList({
                 return (
                   <tr
                     key={row.identity}
-                    className="border-t border-white/[0.055] bg-black/10 text-slate-300 hover:bg-violet-400/[0.035]"
+                    className="h-11 border-t border-white/[0.055] bg-black/10 text-slate-200 hover:bg-violet-400/[0.035]"
                   >
                   <td className="px-2 py-2">
                     <input
@@ -217,11 +217,11 @@ export function StrictQualifiedList({
                   </td>
                   <td className="px-2 py-2">
                     {!row.strictQualified ? (
-                      <span className="text-[9.5px] text-slate-500">过闸后可关注</span>
+                      <span className="text-[10.5px] leading-4 text-[var(--ds-text-meta)]">过闸后可关注</span>
                     ) : poolId <= 0 ? (
-                      <span className="text-[9.5px] text-amber-200/80">待入库</span>
+                      <span className="text-[10.5px] leading-4 text-amber-200">待入库</span>
                     ) : favorited ? (
-                      <span className="inline-flex items-center gap-1 rounded border border-emerald-300/25 bg-emerald-400/[0.08] px-1.5 py-0.5 text-[9.5px] text-emerald-100">
+                      <span className="inline-flex min-h-8 items-center gap-1 rounded border border-emerald-300/25 bg-emerald-400/[0.08] px-2 py-1 text-[10.5px] leading-4 text-emerald-100">
                         <CheckCircle2 size={9} /> 已关注
                       </span>
                     ) : (
@@ -231,15 +231,15 @@ export function StrictQualifiedList({
                         disabled={!favoriteAllowed || favoriteBusy}
                         onClick={() => onFavorite?.(poolId)}
                         title={favoriteAllowed ? "关注后进入本人 MY KOL；不会批准项目或自动外联" : selectionDisabled ? "当前结果已过期，重新搜索后可关注" : !selectionReady ? "联网严格名单终态后可关注" : "当前行暂不可关注"}
-                        className="inline-flex items-center gap-1 rounded border border-emerald-300/25 bg-emerald-500/[0.10] px-1.5 py-0.5 text-[9.5px] text-emerald-100 transition-colors hover:bg-emerald-500/[0.18] disabled:cursor-not-allowed disabled:opacity-45"
+                        className="inline-flex min-h-9 items-center gap-1 rounded border border-emerald-300/25 bg-emerald-500/[0.10] px-2 py-1 text-[10.5px] leading-4 text-emerald-100 transition-colors hover:bg-emerald-500/[0.18] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 disabled:cursor-not-allowed disabled:opacity-45"
                       >
                         {favoriteBusy ? <Loader2 size={9} className="animate-spin" /> : <Heart size={9} />}
                         {favoriteBusy ? "关注中" : favoriteError ? "重试" : "关注"}
                       </button>
                     )}
-                    {favoriteError ? <div className="mt-0.5 text-[8.5px] text-rose-200">{favoriteError}</div> : null}
-                    {!favoriteError && favoriteResult && !favorited ? <div className="mt-0.5 text-[8.5px] text-emerald-200">{favoriteResult}</div> : null}
-                    {!favoriteError && !favoriteResult && favoritesSyncing && !favorited ? <div className="mt-0.5 text-[8.5px] text-slate-500">状态同步中</div> : null}
+                    {favoriteError ? <div className="mt-1 text-[10.5px] leading-4 text-rose-200">{favoriteError}</div> : null}
+                    {!favoriteError && favoriteResult && !favorited ? <div className="mt-1 text-[10.5px] leading-4 text-emerald-200">{favoriteResult}</div> : null}
+                    {!favoriteError && !favoriteResult && favoritesSyncing && !favorited ? <div className="mt-1 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">状态同步中</div> : null}
                   </td>
                   <td className="px-2 py-2 uppercase text-slate-400">{row.platform}</td>
                   <td className="px-2 py-2 tabular-nums">{compactNumber(row.followers)}</td>
@@ -255,7 +255,7 @@ export function StrictQualifiedList({
                   <td className={`px-2 py-2 ${statusTone(row.contactStatus)}`}>{row.contactStatus}</td>
                   <td className={`px-2 py-2 ${statusTone(row.analysisStatus)}`}>{row.analysisStatus}</td>
                   <td className="px-2 py-2">
-                    <span className={`inline-flex rounded border px-1.5 py-0.5 text-[9px] ${qualificationTone(row)}`}>
+                    <span className={`inline-flex rounded border px-2 py-1 text-[10.5px] leading-4 ${qualificationTone(row)}`}>
                       {row.qualificationLabel}{row.qualification === "pending" ? "（不计数）" : ""}
                     </span>
                   </td>
@@ -266,7 +266,7 @@ export function StrictQualifiedList({
           </table>
         </div>
       ) : (
-        <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-4 text-center text-[11px] text-slate-500">
+        <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-4 text-center text-[11px] leading-[18px] text-[var(--ds-text-meta)]">
           {online ? "联网严格候选正在进入服务端排名流，首批 accepted 到达后会立即显示。" : "本地候选正在进入服务端排名流，首批到达后会立即显示。"}
         </div>
       )}

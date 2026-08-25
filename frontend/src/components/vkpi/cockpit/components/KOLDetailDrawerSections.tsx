@@ -46,7 +46,7 @@ export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onC
       ),
       // F4 最小标注:KOL 详情头部 👍/👎(source=kol_detail;无 token / 无 pool id 自动不渲染)。
       e(SearchFeedbackControl, { source: "kol_detail", kolPoolId: item?.id, apiToken, className: "shrink-0 self-start" }),
-      e("button", { type: "button", "aria-label": "关闭详情", onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white shrink-0" },
+      e("button", { type: "button", "aria-label": "关闭详情", "data-modal-initial-focus": "", onClick: onClose, className: "rounded-md border border-white/10 bg-white/5 p-1.5 text-slate-400 hover:text-white shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300" },
         e(X, { size: 13 })
       )
     ),

@@ -773,6 +773,31 @@ describe("MyKolBoardPage M3/M4(KOL 库:V 名单精确过滤 + 弹窗族)", () =>
     fireEvent.keyDown(window, { key: "ArrowUp" });
     expect(await screen.findByText("#2 / 3")).toBeTruthy();
   });
+
+  it("详情方向键在输入框、select 与 combobox 内保留原生行为，只在非编辑区连续翻", async () => {
+    renderBoard();
+    fireEvent.click(await screen.findByText("Alpha Cam"));
+    expect(await screen.findByText("#1 / 3")).toBeTruthy();
+    expect(screen.getByText(/表单内方向键不翻页/)).toBeTruthy();
+
+    const skuInput = screen.getByLabelText("关联产品 SKU");
+    fireEvent.keyDown(skuInput, { key: "ArrowDown" });
+    fireEvent.keyDown(skuInput, { key: "ArrowRight" });
+    expect(screen.getByText("#1 / 3")).toBeTruthy();
+
+    const videoSelect = screen.getByLabelText("从已采集内容选择视频");
+    fireEvent.keyDown(videoSelect, { key: "ArrowDown" });
+    expect(screen.getByText("#1 / 3")).toBeTruthy();
+
+    const combobox = document.createElement("div");
+    combobox.setAttribute("role", "combobox");
+    screen.getByRole("dialog").appendChild(combobox);
+    fireEvent.keyDown(combobox, { key: "ArrowDown" });
+    expect(screen.getByText("#1 / 3")).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: "ArrowDown" });
+    expect(await screen.findByText("#2 / 3")).toBeTruthy();
+  });
 });
 
 describe("MyKolBoardPage M5/M6(溯源身份跳 + 内嵌模块卡头收编)", () => {

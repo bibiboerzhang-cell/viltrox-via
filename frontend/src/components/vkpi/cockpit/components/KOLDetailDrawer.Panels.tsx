@@ -30,6 +30,7 @@ import {
   youtubeIdForVideo,
 } from "./KOLDetailDrawer.helpers";
 import { kolHumanDisplayName } from "../lib/kolIdentity";
+import { useModalFocusContract } from "./modals/modalFocus";
 
 const e = React.createElement;
 
@@ -187,6 +188,7 @@ export function RepresentativeVideoCard({ video, index, onOpen, compact = false 
 // 代表作卡有时不带 evidence_id(loose key 回退到 url),故再按 watch_url/url/content_url 兜底匹配。
 // 命中复用 KOLVideoAnalysisPanel 的 AnalysisCard;未命中显示「该视频暂无深析」。绝不触评分。
 export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null, apiToken = "" }: any) {
+  const dialogRef = useModalFocusContract<HTMLDivElement>({ onClose });
   const title = videoString(video, ["title", "video_title"], "代表作");
   const thumbnail = proxiedImageUrl(videoString(video, ["best_thumbnail", "thumbnail_url", "youtube_thumbnail_url"]));
   const cachedVideoUrl = proxiedVideoUrl(videoString(video, ["cached_video_url"]));
@@ -201,14 +203,6 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
   // 命中条件:既能从该视频取到 evidence_id,又在 preloaded bundles 里找到同 id 且有 final_v1 的那条。
   const matchedBundle = matchAnalysisBundle(video, bundles);
   const analysisBundle = matchedBundle && recordOr(matchedBundle).finalEntry ? matchedBundle : null;
-
-  React.useEffect(() => {
-    const handleKey = (event: any) => {
-      if (event.key === "Escape") onClose?.();
-    };
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [onClose]);
 
   React.useEffect(() => {
     setCachedVideoFailed(false);
@@ -276,10 +270,12 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
         );
 
   return e("div", {
+    ref: dialogRef,
     className: "fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 p-4 backdrop-blur-md",
     role: "dialog",
     "aria-modal": true,
     "aria-label": "代表作视频播放器",
+    tabIndex: -1,
     onClick: onClose,
   },
     e(m.div, {
@@ -295,9 +291,10 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
           e("h3", { className: "mt-1 truncate text-sm font-semibold text-white", title }, title)
         ),
         e("button", {
+          "data-modal-initial-focus": "",
           type: "button",
           onClick: onClose,
-          className: "shrink-0 rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-sm text-slate-300 hover:bg-white/[0.08] hover:text-white",
+          className: "shrink-0 rounded-md border border-white/10 bg-white/[0.04] px-2 py-1 text-sm text-slate-300 hover:bg-white/[0.08] hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300",
           "aria-label": "关闭播放器",
         }, "×")
       ),

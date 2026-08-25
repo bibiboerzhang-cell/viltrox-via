@@ -38,7 +38,14 @@ def _conn() -> sqlite3.Connection:
           id INTEGER PRIMARY KEY,
           kol_pool_id INTEGER NOT NULL,
           evidence_type TEXT,
+          media_kind TEXT,
           is_active BOOLEAN
+        );
+        CREATE TABLE apify_jobs (
+          id INTEGER PRIMARY KEY,
+          job_type TEXT,
+          payload TEXT,
+          status TEXT
         );
         CREATE TABLE vkpi_kol_video_metric_tracking (
           evidence_id INTEGER PRIMARY KEY,
@@ -68,6 +75,7 @@ def _conn() -> sqlite3.Connection:
         CREATE TABLE vkpi_analysis_cache (
           id INTEGER PRIMARY KEY,
           target_type TEXT NOT NULL,
+          target_id TEXT NOT NULL,
           derive_method TEXT NOT NULL,
           status TEXT NOT NULL,
           updated_at TEXT NOT NULL
@@ -95,8 +103,12 @@ def _conn() -> sqlite3.Connection:
         INSERT INTO vkpi_kol_content_monitoring_subscriptions
           VALUES (1, 7, 1, 'active', NULL), (2, 8, 2, 'active', '2026-08-24T00:00:00Z');
         INSERT INTO vkpi_kol_video_evidence
-          VALUES (11, 1, 'video', 1), (12, 2, 'video', 1), (13, 3, 'video', 1), (16, 1, 'video', 1),
-                 (14, 1, 'carousel', 1), (15, 1, 'video', 0);
+          VALUES (11, 1, 'video', 'video', 1), (12, 2, 'video', 'video', 1),
+                 (13, 3, 'video', 'video', 1), (16, 1, 'video', 'video', 1),
+                 (14, 1, 'video', 'carousel', 1), (15, 1, 'video', 'video', 0);
+        INSERT INTO apify_jobs VALUES
+          (1, 'video', '{"target_id":"11","derive_method":"video_analysis_final_v1"}', 'done'),
+          (2, 'video', '{"target_id":"16","derive_method":"video_analysis_final_v1"}', 'done');
         INSERT INTO vkpi_kol_video_metric_tracking VALUES
           (11, 'active', 'my_kol_video_tracking', 7),
           (12, 'paused', 'my_kol_video_tracking', 7),
@@ -109,9 +121,9 @@ def _conn() -> sqlite3.Connection:
           VALUES (1, 11, 101, 'video_final_v1', 'ready', '2026-08-24T00:01:00Z'),
                  (2, 16, 102, 'video_final_v1', 'ready', '2026-08-24T00:01:00Z');
         INSERT INTO vkpi_analysis_cache VALUES
-          (101, 'video', 'video_analysis_final_v1', 'ready', '2026-08-24T00:00:00Z'),
-          (102, 'video', 'video_analysis_final_v1', 'ready', '2026-08-24T00:00:00Z'),
-          (103, 'video', 'video_analysis_final_v1', 'ready', '2026-08-24T00:00:00Z');
+          (101, 'video', '11', 'video_analysis_final_v1', 'ready', '2026-08-24T00:00:00Z'),
+          (102, 'video', '16', 'video_analysis_final_v1', 'ready', '2026-08-24T00:00:00Z'),
+          (103, 'video', '16', 'video_analysis_final_v1', 'ready', '2026-08-24T00:00:00Z');
         INSERT INTO vkpi_kol_lens_evidence_scan
           VALUES (101, 11, '2026-08-24T00:00:00Z', 'scanned'),
                  (103, 16, '2026-08-24T00:00:00Z', 'empty_result');
@@ -143,6 +155,16 @@ def test_closure_readiness_separates_configuration_scheduler_and_results() -> No
         "received_share_grants": 1,
         "unattributed_received_share_grants": 0,
         "share_grants": 1,
+        "content_items": 4,
+        "writable_content_items": 3,
+        "analysis_eligible_videos": 3,
+        "non_video_content_items": 1,
+        "final_v1_requested_videos": 2,
+        "final_v1_completed_videos": 2,
+        "final_v1_projected_videos": 2,
+        "final_v1_not_requested_videos": 1,
+        "final_v1_requested_not_completed_videos": 0,
+        "final_v1_projection_pending_videos": 0,
         "candidate_videos": 3,
         "trackable_videos": 2,
         "tracked_videos": 2,
@@ -169,7 +191,7 @@ def test_closure_readiness_separates_configuration_scheduler_and_results() -> No
     assert result["flows"]["content_monitoring"]["state"] == "configured_scheduler_disabled"
     assert result["flows"]["video_tracking"]["state"] == "configured_scheduler_disabled"
     assert result["flows"]["sku_linking"]["state"] == "detected_pending_human_confirmation"
-    assert result["flows"]["gemini_analysis"]["state"] == "lens_extraction_pending"
+    assert result["flows"]["gemini_analysis"]["state"] == "partially_requested"
     assert result["flows"]["sharing"]["state"] == "received_only"
     assert result["flows"]["video_tracking"]["employee_explicit_state"] == "needs_employee_selection"
     assert result["summary"]["configured_actions"] == 3
@@ -179,12 +201,12 @@ def test_closure_readiness_separates_configuration_scheduler_and_results() -> No
         "video_metric_scheduler_disabled",
         "employee_explicit_tracking_not_selected",
         "detected_sku_pending_confirmation",
-        "final_v1_missing",
+        "final_v1_not_requested",
         "lens_extraction_pending",
     } <= codes
     assert result["summary"]["automatic_changes_performed"] == 0
     assert statements
-    assert all(statement.lstrip().upper().startswith(("SELECT", "WITH")) for statement in statements)
+    assert all(statement.lstrip().upper().startswith(("SELECT", "WITH", "PRAGMA")) for statement in statements)
 
 
 def test_confirmed_row_clears_detected_pending_without_erasing_detection() -> None:
@@ -273,7 +295,56 @@ def test_gemini_bundle_requires_same_fresh_source_cache() -> None:
     assert stale["counts"]["lens_source_linked_videos"] == 2
     assert stale["counts"]["final_v1_current_source_videos"] == 1
     assert stale["counts"]["final_v1_lens_scanned_videos"] == 0
-    assert stale["flows"]["gemini_analysis"]["state"] == "lens_extraction_pending"
+    assert stale["flows"]["gemini_analysis"]["state"] == "partially_requested"
+
+
+def test_non_video_content_is_visible_but_never_in_final_v1_denominator() -> None:
+    conn = _conn()
+
+    result = my_kol_closure_readiness.build_closure_readiness(conn, staff_scope_id=7)
+
+    assert result["counts"]["content_items"] == 4
+    assert result["counts"]["analysis_eligible_videos"] == 3
+    assert result["counts"]["non_video_content_items"] == 1
+    assert result["counts"]["candidate_videos"] == 3
+    final_blockers = {
+        item["code"]: item["count"]
+        for item in result["blockers"]
+        if str(item["code"]).startswith("final_v1_")
+    }
+    assert final_blockers == {"final_v1_not_requested": 1}
+
+
+def test_final_v1_requested_completed_and_projected_are_independent() -> None:
+    conn = _conn()
+    conn.execute(
+        "INSERT INTO apify_jobs VALUES "
+        "(3, 'video', '{\"target_id\":\"12\",\"derive_method\":\"video_analysis_final_v1\"}', 'queued')"
+    )
+
+    requested = my_kol_closure_readiness.build_closure_readiness(conn, staff_scope_id=7)
+
+    assert requested["counts"]["analysis_eligible_videos"] == 3
+    assert requested["counts"]["final_v1_requested_videos"] == 3
+    assert requested["counts"]["final_v1_completed_videos"] == 2
+    assert requested["counts"]["final_v1_requested_not_completed_videos"] == 1
+    assert requested["counts"]["final_v1_not_requested_videos"] == 0
+    assert requested["flows"]["gemini_analysis"]["state"] == "requested_not_completed"
+    assert any(
+        item["code"] == "final_v1_requested_not_completed" and item["count"] == 1
+        for item in requested["blockers"]
+    )
+
+    conn.execute("UPDATE vkpi_kol_video_evidence SET is_active=0 WHERE id=12")
+    conn.execute("DELETE FROM vkpi_kol_llm_deep_analysis_results WHERE source_evidence_id=16")
+    projection = my_kol_closure_readiness.build_closure_readiness(conn, staff_scope_id=7)
+
+    assert projection["counts"]["analysis_eligible_videos"] == 2
+    assert projection["counts"]["final_v1_requested_videos"] == 2
+    assert projection["counts"]["final_v1_completed_videos"] == 2
+    assert projection["counts"]["final_v1_projected_videos"] == 1
+    assert projection["counts"]["final_v1_projection_pending_videos"] == 1
+    assert projection["flows"]["gemini_analysis"]["state"] == "projection_pending"
 
 
 def test_closure_readiness_team_scope_includes_all_non_duplicate_collections() -> None:
@@ -284,6 +355,9 @@ def test_closure_readiness_team_scope_includes_all_non_duplicate_collections() -
     assert result["counts"]["writable_kol_count"] == 3
     assert result["counts"]["monitoring_active_kols"] == 2
     assert result["counts"]["monitoring_succeeded_kols"] == 1
+    assert result["counts"]["content_items"] == 5
+    assert result["counts"]["analysis_eligible_videos"] == 4
+    assert result["counts"]["non_video_content_items"] == 1
     assert result["counts"]["candidate_videos"] == 4
     assert result["counts"]["trackable_videos"] == 4
     assert result["counts"]["outbound_share_grants"] == 1

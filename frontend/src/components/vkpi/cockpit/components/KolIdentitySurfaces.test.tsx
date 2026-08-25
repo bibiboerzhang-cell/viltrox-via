@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { KOLDrawerContactAndVideos, KOLDrawerHeader } from "./KOLDetailDrawerSections";
@@ -34,7 +34,7 @@ describe("human KOL identity on major pool surfaces", () => {
     expect(screen.queryByText(machineId)).toBeNull();
   });
 
-  it("all-pool modal uses Creator plus YouTube when no human name exists", () => {
+  it("all-pool modal is named, focuses its close action, and uses Creator plus YouTube when no human name exists", async () => {
     render(
       <KolPoolAllModal
         items={[{ id: 42, display_name: "", handle: machineId, platform: "youtube" }]}
@@ -46,6 +46,8 @@ describe("human KOL identity on major pool surfaces", () => {
     expect(screen.getByText("Creator")).toBeTruthy();
     expect(screen.getAllByText(/youtube/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(machineId)).toBeNull();
+    expect(screen.getByRole("dialog", { name: "全部 KOL" })).toHaveAttribute("aria-modal", "true");
+    await waitFor(() => expect(screen.getByRole("button", { name: "关闭" })).toHaveFocus());
   });
 
   it("keeps the opaque channel id in the profile href but not in visible drawer text", () => {

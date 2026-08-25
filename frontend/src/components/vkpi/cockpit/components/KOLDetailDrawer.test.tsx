@@ -15,8 +15,8 @@ vi.mock("framer-motion", () => {
     {
       get: (_target, key: string) => {
         if (!cache[key]) {
-          cache[key] = (props: Record<string, unknown>) =>
-            React.createElement("div", props, props.children as React.ReactNode);
+          cache[key] = React.forwardRef((props: Record<string, unknown>, ref: React.ForwardedRef<HTMLDivElement>) =>
+            React.createElement("div", { ...props, ref }, props.children as React.ReactNode));
         }
         return cache[key];
       },
@@ -160,6 +160,28 @@ function renderDrawer(props: Record<string, unknown> = {}) {
 }
 
 describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
+  it("抽屉具备命名、首焦点、Escape 与焦点恢复契约", async () => {
+    const opener = document.createElement("button");
+    opener.textContent = "打开 KOL 详情";
+    document.body.appendChild(opener);
+    opener.focus();
+    const onClose = vi.fn();
+    const view = renderDrawer({ onClose });
+
+    const dialog = screen.getByRole("dialog", { name: "KOL Pool 详情" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveAttribute("tabindex", "-1");
+    const close = screen.getByRole("button", { name: "关闭详情" });
+    await waitFor(() => expect(close).toHaveFocus());
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    view.unmount();
+    expect(opener).toHaveFocus();
+    opener.remove();
+  });
+
   it("档案瘦且无证据时挂载不自动入队，显式点击才提交规范主页", async () => {
     renderDrawer({
       item: {

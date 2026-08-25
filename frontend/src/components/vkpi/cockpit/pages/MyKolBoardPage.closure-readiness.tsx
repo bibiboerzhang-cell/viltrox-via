@@ -26,6 +26,10 @@ const STATE_LABELS: Record<string, string> = {
   detected_pending_human_confirmation: "系统检出 · 待人工确认",
   partial: "部分已关联",
   no_final_v1_results: "暂无 final_v1 结果",
+  no_analysis_requests: "尚未请求视频深析",
+  partially_requested: "部分视频待请求深析",
+  requested_not_completed: "已请求 · 部分未完成",
+  projection_pending: "已完成 · 结果投影待补",
   lens_extraction_pending: "已深析 · 镜头证据待整理",
   ready_with_evidence: "已深析且有结构化证据",
 };
@@ -39,7 +43,9 @@ const BLOCKER_LABELS: Record<string, string> = {
   tracked_without_success_snapshot: "追踪视频还没有成功实测",
   tracked_without_sku: "追踪视频尚未关联 SKU",
   detected_sku_pending_confirmation: "自动检出 SKU 待员工确认",
-  final_v1_missing: "视频尚无 Gemini final_v1 深析",
+  final_v1_not_requested: "可分析视频尚未请求 final_v1",
+  final_v1_requested_not_completed: "final_v1 已请求但未完成",
+  final_v1_projection_pending: "final_v1 已完成但结果投影待补",
   lens_extraction_pending: "final_v1 镜头证据待结构化",
 };
 
@@ -94,6 +100,10 @@ export function ClosureReadinessCard({ apiToken, refreshKey = 0 }: ClosureReadin
   const hasShareDirection = counts.outbound_share_grants != null
     && counts.received_share_grants != null;
   const hasGeminiEvidenceIntersection = counts.final_v1_lens_scanned_videos != null;
+  const hasAnalysisDenominators = counts.content_items != null
+    && counts.analysis_eligible_videos != null
+    && counts.final_v1_requested_videos != null
+    && counts.final_v1_completed_videos != null;
   const trackingProvenanceText = [
     `${n(counts.employee_explicit_tracked_videos)} 人工`,
     `${n(counts.system_seeded_tracked_videos)} 系统`,
@@ -138,10 +148,14 @@ export function ClosureReadinessCard({ apiToken, refreshKey = 0 }: ClosureReadin
     {
       key: "gemini",
       label: "Gemini 视频深析",
-      value: hasGeminiEvidenceIntersection
+      value: hasAnalysisDenominators
+        ? `${n(counts.final_v1_completed_videos)} / ${n(counts.analysis_eligible_videos)} 已完成`
+        : hasGeminiEvidenceIntersection
         ? `${n(counts.final_v1_lens_scanned_videos)} / ${n(counts.final_v1_ready_videos)} 同源成套`
         : `${n(counts.final_v1_ready_videos)} / ${n(counts.candidate_videos)}`,
-      note: hasGeminiEvidenceIntersection
+      note: hasAnalysisDenominators
+        ? `全部内容 ${n(counts.content_items)} · 可分析 ${n(counts.analysis_eligible_videos)} · 已请求 ${n(counts.final_v1_requested_videos)} · 已完成 ${n(counts.final_v1_completed_videos)} · 已投影 ${n(counts.final_v1_projected_videos)} · ${stateText(flows.gemini_analysis?.state)}`
+        : hasGeminiEvidenceIntersection
         ? `深析 ${n(counts.final_v1_ready_videos)} / ${n(counts.candidate_videos)} · ${stateText(flows.gemini_analysis?.state)}`
         : stateText(flows.gemini_analysis?.state),
     },

@@ -241,14 +241,20 @@ def _bucket(score: Decimal | None) -> str:
     return "90-100"
 
 
-def print_report(rows: list[dict[str, Any]], prepared: list[PreparedResult], skipped: list[SkippedResult]) -> None:
+def print_report(
+    rows: list[dict[str, Any]],
+    prepared: list[PreparedResult],
+    skipped: list[SkippedResult],
+    *,
+    commit: bool = False,
+) -> None:
     scores = [item.llm_v6_fit for item in prepared if item.llm_v6_fit is not None]
     action_counts = Counter(item.action for item in prepared)
     platform_counts = Counter(item.platform or "unknown" for item in prepared)
     bucket_counts = Counter(_bucket(item.llm_v6_fit) for item in prepared)
     qa_items = [item for item in prepared if item.qa_cache_id is not None]
     kol_ids = {item.kol_pool_id for item in prepared}
-    out("mode: dry-run (no writes)")
+    out("mode: commit (writes enabled)" if commit else "mode: dry-run (no writes)")
     out(f"source final_v1 ready rows: {len(rows)}")
     out(f"would_write: {len(prepared)}")
     out(f"would_insert: {action_counts.get('insert', 0)}")
@@ -404,7 +410,7 @@ def main() -> None:
         rows = fetch_rows(conn, cache_ids=cache_ids)
         existing = fetch_existing_by_source_cache(conn)
         prepared, skipped = build_plan(rows, existing)
-        print_report(rows, prepared, skipped)
+        print_report(rows, prepared, skipped, commit=bool(args.commit))
         if not args.commit:
             return
         result = write_results(conn, prepared, existing)
