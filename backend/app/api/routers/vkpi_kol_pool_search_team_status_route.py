@@ -13,7 +13,12 @@ router = APIRouter(tags=["vkpi-kol-pool"])
 
 @router.get("/kol-search-sessions/team-status")
 def get_kol_search_team_status(
-    limit: int = Query(default=1000, ge=1, le=1000),
+    limit: int = Query(
+        default=search_sessions_team_status.MAX_TEAM_STATUS_BATCH_SIZE,
+        ge=1,
+        le=search_sessions_team_status.MAX_TEAM_STATUS_BATCH_SIZE,
+        description="Compatible batch-size hint; the server scans to the bounded population fence.",
+    ),
     staff=Depends(require_manager_tab("vkpi", "read")),
 ) -> dict:
     """Return PII-free progress counts across current employee searches."""

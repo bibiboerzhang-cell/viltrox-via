@@ -111,20 +111,120 @@ class _AggregateConn:
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Result:
         compact = " ".join(sql.split())
         self.calls.append((compact, tuple(params)))
+        if compact == "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY":
+            return _Result()
         if "COUNT(*) AS session_count" in compact:
             return _Result(
                 row={
                     "session_count": self.population,
                     "staff_count": self.staff_population,
+                    "max_session_id": max(
+                        (int(row["id"]) for row in self.sessions),
+                        default=0,
+                    ),
                 }
             )
-        if compact.startswith("SELECT * FROM vkpi_kol_search_sessions"):
-            limit = int(params[0])
-            return _Result(rows=self.sessions[:limit])
-        if compact.startswith("SELECT * FROM vkpi_kol_search_session_items"):
-            selected = {int(value) for value in params}
+        if (
+            "COUNT(*) AS item_count" in compact
+            and "JOIN vkpi_kol_search_sessions AS session" in compact
+        ):
+            snapshot_max_id = int(params[0])
+            eligible_session_ids = {
+                int(row["id"])
+                for row in self.sessions
+                if int(row["id"]) <= snapshot_max_id
+            }
+            eligible_items = [
+                row
+                for row in self.items
+                if int(row["session_id"]) in eligible_session_ids
+            ]
             return _Result(
-                rows=[row for row in self.items if int(row["session_id"]) in selected]
+                row={
+                    "item_count": len(eligible_items),
+                    "max_item_id": max(
+                        (int(row["id"]) for row in eligible_items),
+                        default=0,
+                    ),
+                }
+            )
+        if (
+            "FROM vkpi_kol_search_sessions" in compact
+            and "ORDER BY id DESC" in compact
+        ):
+            if "AND id < ?" in compact:
+                snapshot_max_id, before_id, limit = map(int, params)
+            else:
+                snapshot_max_id, limit = map(int, params)
+                before_id = snapshot_max_id + 1
+            eligible = [
+                row
+                for row in self.sessions
+                if int(row["id"]) <= snapshot_max_id
+                and int(row["id"]) < before_id
+            ]
+            eligible.sort(key=lambda row: int(row["id"]), reverse=True)
+            rows = []
+            for row in eligible[:limit]:
+                summary = row.get("result_summary_json")
+                summary = summary if isinstance(summary, dict) else {}
+                progress = summary.get("progress")
+                progress = progress if isinstance(progress, dict) else {}
+                rows.append(
+                    {
+                        "id": row["id"],
+                        "status": row["status"],
+                        "created_by": row["created_by"],
+                        "progress_summary_json": {
+                            "phase": summary.get("phase"),
+                            "progress": {
+                                key: progress.get(key)
+                                for key in (
+                                    "total",
+                                    "base",
+                                    "requested_tasks_terminal",
+                                )
+                                if key in progress
+                            },
+                        },
+                    }
+                )
+            return _Result(rows=rows)
+        if compact.startswith("SELECT session_id, COUNT(*) AS item_count"):
+            snapshot_max_item_id = int(params[0])
+            selected = {int(value) for value in params[1:]}
+            counts: dict[int, int] = {}
+            for row in self.items:
+                session_id = int(row["session_id"])
+                if int(row["id"]) <= snapshot_max_item_id and session_id in selected:
+                    counts[session_id] = counts.get(session_id, 0) + 1
+            return _Result(
+                rows=[
+                    {"session_id": session_id, "item_count": count}
+                    for session_id, count in sorted(counts.items())
+                ]
+            )
+        if "AS progress_payload_json" in compact:
+            snapshot_max_item_id = int(params[0])
+            selected = {int(value) for value in params[1:]}
+            return _Result(
+                rows=[
+                    {
+                        "id": row["id"],
+                        "session_id": row["session_id"],
+                        "item_type": row["item_type"],
+                        "status": row["status"],
+                        "stage": row["stage"],
+                        "rank": row["rank"],
+                        "kol_pool_id": row["kol_pool_id"],
+                        "evidence_id": row["evidence_id"],
+                        "job_id": row["job_id"],
+                        "progress_payload_json": {},
+                    }
+                    for row in self.items
+                    if int(row["id"]) <= snapshot_max_item_id
+                    and int(row["session_id"]) in selected
+                ]
             )
         raise AssertionError(f"unexpected SQL: {compact}")
 
@@ -172,7 +272,13 @@ def _progress_from_id(
     }
 
 
-def _build(conn: _AggregateConn, *, limit: int = 500) -> dict[str, Any]:
+def _build(
+    conn: _AggregateConn,
+    *,
+    limit: int = 500,
+    max_scan_sessions: int = team_status.MAX_TEAM_STATUS_SCAN_SESSIONS,
+    max_scan_items: int = team_status.MAX_TEAM_STATUS_SCAN_ITEMS,
+) -> dict[str, Any]:
     return team_status.build_team_search_status(
         staff={"id": 901, "organization_id": 1},
         limit=limit,
@@ -180,9 +286,10 @@ def _build(conn: _AggregateConn, *, limit: int = 500) -> dict[str, Any]:
         project_progress_fn=_progress_from_id,
         observe_worker_fn=lambda _conn: dict(_WORKER),
         refresh_queue_states_fn=lambda _conn, _items: None,
-        hydrate_previews_fn=lambda _conn, _items: None,
         canonicalize_items_fn=lambda items: items,
         organization_guard_fn=lambda _staff, _conn: 1,
+        max_scan_sessions=max_scan_sessions,
+        max_scan_items=max_scan_items,
     )
 
 
@@ -255,31 +362,172 @@ def test_team_status_uses_live_terminal_semantics_and_never_emits_pii() -> None:
 
     walk(result)
     assert all("COMMIT" not in sql.upper() for sql, _params in conn.calls)
+    joined_sql = "\n".join(sql.lower() for sql, _params in conn.calls)
+    for forbidden_sql in (
+        "select *",
+        "query_text",
+        "input_payload_json",
+        "display_name",
+        "handle",
+        "contact",
+        "email",
+        "source_url",
+        "dedupe_key",
+    ):
+        assert forbidden_sql not in joined_sql
+    assert "select result_summary_json" not in joined_sql
+    assert "select item.payload_json" not in joined_sql
+    assert "item.payload_json as progress_payload_json" not in joined_sql
 
 
-def test_truncated_team_status_never_claims_global_terminal_closure() -> None:
+def test_limit_is_a_batch_hint_and_keyset_scan_proves_the_full_population() -> None:
+    sessions = [
+        _session_row(
+            session_id,
+            status="running" if session_id == 1 else "ready",
+            created_by=1000 + session_id,
+        )
+        for session_id in range(1, 1140)
+    ]
+    conn = _AggregateConn(sessions, [])
+
+    result = _build(conn, limit=1000)
+
+    assert result["status"] == "ready"
+    assert result["coverage"] == {
+        "population": 1139,
+        "evaluated": 1139,
+        "session_population": 1139,
+        "staff_population": 1139,
+        "evaluated_sessions": 1139,
+        "unevaluated_sessions": 0,
+        "session_complete": True,
+        "session_truncated": False,
+        "item_population": 0,
+        "evaluated_items": 0,
+        "unevaluated_items": 0,
+        "item_scan_cap": team_status.MAX_TEAM_STATUS_SCAN_ITEMS,
+        "items_complete": True,
+        "items_truncated": False,
+        "limit": 1000,
+        "batch_size": team_status.MAX_TEAM_STATUS_QUERY_BATCH,
+        "batches": 5,
+        "scan_cap": team_status.MAX_TEAM_STATUS_SCAN_SESSIONS,
+        "snapshot_consistent": True,
+        "complete": True,
+        "truncated": False,
+    }
+    assert result["counts"]["sessions_evaluated"] == 1139
+    assert result["nonterminal"]["all_current_sessions_terminal"] is False
+    session_reads = [
+        (sql, params)
+        for sql, params in conn.calls
+        if "FROM vkpi_kol_search_sessions" in sql and "ORDER BY id DESC" in sql
+    ]
+    assert len(session_reads) == 5
+    assert all("OFFSET" not in sql for sql, _params in session_reads)
+    assert "AND id < ?" not in session_reads[0][0]
+    assert "AND id < ?" in session_reads[1][0]
+
+
+def test_scan_budget_truncation_never_claims_global_terminal_closure() -> None:
     conn = _AggregateConn(
         [
+            _session_row(1, status="running", created_by=71),
             _session_row(2, status="running", created_by=72),
             _session_row(3, status="running", created_by=73),
         ],
         [],
-        population=3,
-        staff_population=3,
     )
 
-    result = _build(conn, limit=2)
+    result = _build(conn, limit=2, max_scan_sessions=2)
 
     assert result["status"] == "partial"
     assert result["coverage"] == {
+        "population": 3,
+        "evaluated": 2,
         "session_population": 3,
         "staff_population": 3,
         "evaluated_sessions": 2,
         "unevaluated_sessions": 1,
+        "session_complete": False,
+        "session_truncated": True,
+        "item_population": 0,
+        "evaluated_items": 0,
+        "unevaluated_items": 0,
+        "item_scan_cap": team_status.MAX_TEAM_STATUS_SCAN_ITEMS,
+        "items_complete": True,
+        "items_truncated": False,
         "limit": 2,
+        "batch_size": team_status.MIN_TEAM_STATUS_QUERY_BATCH,
+        "batches": 1,
+        "scan_cap": 2,
+        "snapshot_consistent": True,
         "complete": False,
         "truncated": True,
     }
+    assert result["nonterminal"]["all_current_sessions_terminal"] is None
+
+
+def test_concurrent_restore_changes_membership_and_fails_global_closure() -> None:
+    class _RestoreDuringScanConn(_AggregateConn):
+        restored = False
+
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Result:
+            compact = " ".join(sql.split())
+            if (
+                not self.restored
+                and "FROM vkpi_kol_search_sessions" in compact
+                and "ORDER BY id DESC" in compact
+            ):
+                # Restore an older nonterminal session after the opening COUNT.
+                # The old population target would stop after ids 4/3/2 and miss 1.
+                self.sessions.append(_session_row(1, status="running", created_by=71))
+                self.population += 1
+                self.staff_population += 1
+                self.restored = True
+            return super().execute(sql, params)
+
+    conn = _RestoreDuringScanConn(
+        [
+            _session_row(2, status="ready", created_by=72),
+            _session_row(3, status="ready", created_by=73),
+            _session_row(4, status="ready", created_by=74),
+        ],
+        [],
+    )
+
+    result = _build(conn, limit=1000)
+
+    assert result["coverage"]["evaluated_sessions"] == 3
+    assert result["coverage"]["snapshot_consistent"] is False
+    assert result["coverage"]["complete"] is False
+    assert result["status"] == "partial"
+    assert result["nonterminal"]["all_current_sessions_terminal"] is None
+
+
+def test_item_scan_budget_stops_on_a_session_boundary_and_never_claims_closure() -> None:
+    sessions = [
+        _session_row(session_id, status="ready", created_by=70 + session_id)
+        for session_id in range(1, 4)
+    ]
+    items = [_item_row(10 + session_id, session_id) for session_id in range(1, 4)]
+    conn = _AggregateConn(sessions, items)
+
+    result = _build(conn, max_scan_items=2)
+
+    assert result["status"] == "partial"
+    assert result["coverage"]["population"] == 3
+    assert result["coverage"]["evaluated"] == 2
+    assert result["coverage"]["item_population"] == 3
+    assert result["coverage"]["evaluated_items"] == 2
+    assert result["coverage"]["unevaluated_items"] == 1
+    assert result["coverage"]["item_scan_cap"] == 2
+    assert result["coverage"]["items_complete"] is False
+    assert result["coverage"]["items_truncated"] is True
+    assert result["coverage"]["complete"] is False
+    assert result["coverage"]["truncated"] is True
+    assert result["nonterminal"]["observed_count"] == 0
     assert result["nonterminal"]["all_current_sessions_terminal"] is None
 
 
@@ -296,6 +544,33 @@ def test_legacy_team_status_fails_closed_outside_default_organization() -> None:
         )
 
     assert conn.calls == []
+
+
+def test_postgres_repeatable_read_is_the_first_projection_statement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _AggregateConn([_session_row(1, status="ready", created_by=71)], [])
+    guard_calls: list[int] = []
+    monkeypatch.setattr(team_status, "is_postgres_runtime", lambda: True)
+
+    result = team_status.build_team_search_status(
+        staff={"id": 901, "organization_id": 1},
+        get_conn_fn=lambda: conn,
+        project_progress_fn=lambda *_args, **_kwargs: {
+            "state": "ready",
+            "requested_tasks_terminal": True,
+        },
+        observe_worker_fn=lambda _conn: dict(_WORKER),
+        refresh_queue_states_fn=lambda _conn, _items: None,
+        canonicalize_items_fn=lambda items: items,
+        organization_guard_fn=lambda _staff, _conn: guard_calls.append(len(conn.calls)) or 1,
+    )
+
+    assert conn.calls[0][0] == (
+        "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+    )
+    assert guard_calls == [1]
+    assert result["coverage"]["snapshot_consistent"] is True
 
 
 def _client_for_staff(monkeypatch: pytest.MonkeyPatch, staff: dict[str, Any]) -> TestClient:

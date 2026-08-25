@@ -355,14 +355,7 @@ def _state_bucket(value: Any) -> str:
 
 
 def _terminal_shortfall_bucket(session_status: str) -> str:
-    """Preserve why a terminal search stopped when requested rows are absent.
-
-    A ready/partial provider shortfall is a partial result.  Failed work remains
-    failed, while user/system cancellation is skipped work.  Collapsing all
-    three into ``partial`` made failed and cancelled 0/N sessions look like
-    ordinary provider underfill and hid their actual terminal reason.
-    """
-
+    """Classify missing requested rows without erasing terminal cause."""
     if session_status in {"ready", "partial"}:
         return "partial"
     if session_status == "failed":
@@ -372,91 +365,103 @@ def _terminal_shortfall_bucket(session_status: str) -> str:
     return "unknown"
 
 
-def _profile_bucket(item: Mapping[str, Any]) -> str:
+def _has_job_reference(*records: Mapping[str, Any]) -> bool:
+    for record in records:
+        if _positive_int(record.get("job_id")):
+            return True
+        job_ids = record.get("job_ids")
+        if isinstance(job_ids, Sequence) and not isinstance(job_ids, (str, bytes)) and any(_positive_int(job_id) for job_id in job_ids):
+            return True
+    return False
+
+
+def _queue_truth(*records: Mapping[str, Any]) -> str:
+    buckets = tuple(_state_bucket(record.get("queue_status")) for record in records)
+    registered = tuple(_state_bucket(record.get("status")) for record, queue in zip(records, buckets) if queue == "not_requested" and _has_job_reference(record))
+    for candidates in (buckets, registered):
+        active = next((state for state in ("running", "active", "queued") if state in candidates), "")
+        if active:
+            return active
+    return next((state for state in reversed(buckets) if state != "not_requested"), "not_requested")
+
+
+def _terminal_job_bucket(job_bucket: str, *data_buckets: str) -> str:
+    return job_bucket if job_bucket != "ready" else next((bucket for bucket in data_buckets if bucket in _TERMINAL_BUCKETS), "partial")
+
+
+def _profile_bucket(item: Mapping[str, Any], *, session_status: str = "") -> str:
     payload = _mapping(item.get("payload"))
-    profile = {**_mapping(payload.get("profile_flow")), **_mapping(payload.get("profile_execute"))}
-    explicit = _state_bucket(profile.get("status"))
+    flow, execute = _mapping(payload.get("profile_flow")), _mapping(payload.get("profile_execute"))
+    profile = {**flow, **execute}
+    advance_job = _mapping(payload.get("profile_advance_job"))
+    explicit, advance = _state_bucket(profile.get("status")), _state_bucket(advance_job.get("status"))
+    concrete = _queue_truth(flow, execute, advance_job)
+    stage = _text(item.get("stage"))
+    item_bucket = _state_bucket(item.get("status")) if stage in {"profile", "evidence", "analysis", "summary"} else "not_requested"
+    active = {"queued", "running", "active"}
+    if concrete in active:  # any refreshed apify_jobs activity wins, including retry
+        return concrete
+    if concrete in _TERMINAL_BUCKETS:
+        default = "partial" if concrete == "ready" else concrete
+        return next((state for state in (item_bucket, explicit) if state in _TERMINAL_BUCKETS), default)
+    if explicit in active:
+        if advance in active and _has_job_reference(advance_job):
+            return advance
+        if advance in _TERMINAL_BUCKETS:
+            return advance
+        if item_bucket in _TERMINAL_BUCKETS:
+            return item_bucket
+        terminal = _terminal_shortfall_bucket(_text(session_status))
+        if terminal != "unknown":  # closes legacy 965/898 stale profile_flow
+            return terminal
+        return next((state for state in ("running", "active", "queued") if state in {explicit, item_bucket}), explicit)
     if explicit != "not_requested":
         return explicit
-    advance_job = _mapping(payload.get("profile_advance_job"))
-    queued = _state_bucket(advance_job.get("status"))
-    if queued != "not_requested":
-        return queued
-    stage = _text(item.get("stage"))
-    if stage in {"profile", "evidence", "analysis", "summary"}:
-        return _state_bucket(item.get("status"))
-    return "not_requested"
+    if advance in active and not _has_job_reference(advance_job):
+        terminal = _terminal_shortfall_bucket(_text(session_status))
+        return advance if terminal == "unknown" else terminal
+    return advance if advance != "not_requested" else item_bucket
 
 
-def _downstream_bucket(item: Mapping[str, Any], role: str) -> str:
+def _downstream_bucket(item: Mapping[str, Any], role: str, *, session_status: str = "") -> str:
     payload = _mapping(item.get("payload"))
     downstream = _mapping(_mapping(payload.get("downstream_jobs")).get(role))
     if role == "audience":
-        profile = {**_mapping(payload.get("profile_flow")), **_mapping(payload.get("profile_execute"))}
-        enrichment = _mapping(profile.get("audience_enrichment"))
+        flow, execute = _mapping(payload.get("profile_flow")), _mapping(payload.get("profile_execute"))
+        enrichments = tuple(_mapping(profile.get("audience_enrichment")) for profile in (flow, execute))
+        enrichment = {**enrichments[0], **enrichments[1]}
         preview = _mapping(payload.get("audience_preview"))
         preview_bucket = _state_bucket(preview.get("status"))
         enrichment_bucket = _state_bucket(enrichment.get("status"))
-        queue_bucket = _state_bucket(enrichment.get("queue_status"))
+        queue_bucket = _queue_truth(*enrichments)
         downstream_bucket = _state_bucket(downstream.get("state"))
-        downstream_job_ids = downstream.get("job_ids")
-        has_concrete_job = bool(
-            _positive_int(enrichment.get("job_id"))
-            or (
-                isinstance(downstream_job_ids, Sequence)
-                and not isinstance(downstream_job_ids, (str, bytes))
-                and any(_positive_int(job_id) for job_id in downstream_job_ids)
-            )
-        )
-
-        # Materialized audience data is stronger than any stale queue snapshot.
+        has_concrete_job = _has_job_reference(*enrichments, downstream)
+        if queue_bucket in {"queued", "running", "active"}:
+            return queue_bucket
         if preview_bucket == "ready":
             return "ready"
-
-        # ``queue_status`` is refreshed from apify_jobs at read time.  A done
-        # job only proves execution finished: without a ready preview (or an
-        # explicit ready enrichment result), it must remain partial rather than
-        # being counted as a successful audience result.
         if queue_bucket != "not_requested":
-            if queue_bucket == "ready":
-                if enrichment_bucket == "ready":
-                    return "ready"
-                if enrichment_bucket in _TERMINAL_BUCKETS:
-                    return enrichment_bucket
-                if preview_bucket in _TERMINAL_BUCKETS:
-                    return preview_bucket
-                return "partial"
-            return queue_bucket
-
-        # The persisted lineage is the next-strongest job truth.  Apply the same
-        # execution-vs-data boundary when an old row says the job completed.
+            return _terminal_job_bucket(queue_bucket, enrichment_bucket, preview_bucket)
+        synthetic_active = any(bucket in {"queued", "running", "active"} for bucket in (enrichment_bucket, preview_bucket, downstream_bucket))
+        if (
+            _text(session_status) in _TERMINAL_SESSION_STATES
+            and synthetic_active
+            and not has_concrete_job
+        ):
+            return "skipped"
         if downstream_bucket != "not_requested":
-            if downstream_bucket == "ready":
-                if enrichment_bucket == "ready":
-                    return "ready"
-                if enrichment_bucket in _TERMINAL_BUCKETS:
-                    return enrichment_bucket
-                if preview_bucket in _TERMINAL_BUCKETS:
-                    return preview_bucket
-                return "partial"
-            return downstream_bucket
-
-        # Legacy profile failures recorded a synthetic waiting marker without
-        # ever creating an audience job.  It may shadow an active upstream
-        # profile, but once that upstream has failed/partial evidence it is a
-        # skipped optional stage, not an eternal queued unit.  A ready profile
-        # can still be inside the short orchestration-registration window and
-        # therefore must retain the waiting marker until stronger truth arrives.
+            return _terminal_job_bucket(downstream_bucket, enrichment_bucket, preview_bucket)
         if enrichment_bucket in {"queued", "running", "active"} and not has_concrete_job:
-            profile_bucket = _profile_bucket(item)
+            profile_bucket = _profile_bucket(item, session_status=session_status)
             if profile_bucket in {"partial", "failed", "skipped"}:
                 return "skipped"
         if enrichment_bucket != "not_requested":
             return enrichment_bucket
         if preview_bucket != "not_requested":
             return preview_bucket
-
     explicit = _state_bucket(downstream.get("state"))
+    if _text(session_status) in _TERMINAL_SESSION_STATES and explicit in {"queued", "running", "active"} and not _has_job_reference(downstream):
+        return "skipped"  # unregistered planner marker cannot outlive session
     if explicit != "not_requested":
         return explicit
     if role == "video" and _mapping(payload.get("analysis")):
@@ -590,9 +595,9 @@ def project_search_progress(
     shortfall_bucket = _terminal_shortfall_bucket(raw_session_status)
     base_buckets.extend([shortfall_bucket] * max(0, intended_total - len(base_buckets)))
 
-    profile_buckets = [_profile_bucket(item) for item in safe_items]
+    profile_buckets = [_profile_bucket(item, session_status=raw_session_status) for item in safe_items]
     downstream_buckets = {
-        role: [_downstream_bucket(item, role) for item in safe_items]
+        role: [_downstream_bucket(item, role, session_status=raw_session_status) for item in safe_items]
         for role in FULL_ANALYSIS_ROLES
     }
     stages = {

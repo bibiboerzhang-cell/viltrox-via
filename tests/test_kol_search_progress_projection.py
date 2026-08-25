@@ -145,6 +145,151 @@ def test_not_requested_optional_stages_do_not_claim_full_analysis() -> None:
     assert result["full_analysis_complete"] is False
 
 
+def test_terminal_profile_item_and_job_override_stale_profile_flow_queue() -> None:
+    """Production rows 965/898 were already partial with a failed item/job,
+    but an older profile_flow=queued snapshot kept the read model active."""
+    session = {
+        "status": "partial",
+        "result_summary": {"phase": "partial", "progress": {"total": 1}},
+    }
+    item = {
+        "id": 1,
+        "status": "failed",
+        "stage": "profile",
+        "job_id": 501,
+        "payload": {"profile_flow": {"status": "queued"}},
+    }
+
+    stale_snapshot = project_search_progress(
+        session,
+        [item],
+        worker_health=_worker(online=True),
+    )
+    terminal_job = project_search_progress(
+        session,
+        [{**item, "payload": {"profile_flow": {"status": "queued", "queue_status": "failed"}}}],
+        worker_health=_worker(online=True),
+    )
+
+    for result in (stale_snapshot, terminal_job):
+        assert result["state"] == "partial"
+        assert result["requested_tasks_terminal"] is True
+        assert result["queued_units"] == result["running_units"] == 0
+        assert result["stages"]["profile"]["counts"]["failed"] == 1
+        assert result["terminal_units"] == result["requested_units"] == 2
+
+
+def test_concrete_profile_queue_truth_remains_active_over_terminal_snapshot() -> None:
+    """A read-time apify_jobs queued/running state is stronger than an older
+    terminal item; the stale-closure repair must not hide real work."""
+    session = {
+        "status": "partial",
+        "result_summary": {"phase": "partial", "progress": {"total": 1}},
+    }
+    for queue_status, expected_state in (("queued", "queued"), ("running", "running")):
+        result = project_search_progress(
+            session,
+            [
+                {
+                    "id": 1,
+                    "status": "failed",
+                    "stage": "profile",
+                    "job_id": 501,
+                    "payload": {
+                        "profile_flow": {
+                            "status": "queued",
+                            "queue_status": queue_status,
+                        }
+                    },
+                }
+            ],
+            worker_health=_worker(online=True),
+        )
+
+        assert result["state"] == expected_state
+        assert result["requested_tasks_terminal"] is False
+        assert result["stages"]["profile"]["counts"][expected_state] == 1
+
+
+def test_any_concrete_profile_retry_queue_wins_over_other_terminal_job() -> None:
+    session = {"status": "partial", "result_summary": {"progress": {"total": 1}}}
+    payloads = (
+        {
+            "profile_flow": {"status": "queued", "queue_status": "running"},
+            "profile_execute": {"status": "failed", "queue_status": "failed"},
+        },
+        {
+            "profile_flow": {"status": "queued", "queue_status": "failed"},
+            "profile_execute": {"status": "failed", "queue_status": "running"},
+        },
+        {
+            "profile_flow": {"status": "queued", "queue_status": "failed"},
+            "profile_execute": {"status": "failed"},
+            "profile_advance_job": {"status": "queued", "queue_status": "running", "job_id": 502},
+        },
+    )
+    for payload in payloads:
+        result = project_search_progress(
+            session,
+            [
+                {
+                    "id": 1,
+                    "status": "failed",
+                    "stage": "profile",
+                    "payload": payload,
+                }
+            ],
+            worker_health=_worker(online=True),
+        )
+
+        assert result["state"] == "running"
+        assert result["requested_tasks_terminal"] is False
+        assert result["stages"]["profile"]["counts"]["running"] == 1
+
+
+def test_registered_profile_advance_job_keeps_queue_without_transient_refresh() -> None:
+    """Fail closed when the read-time job lookup is unavailable: the concrete
+    job id plus persisted queued state still proves that work was registered."""
+    result = project_search_progress(
+        {"status": "partial", "result_summary": {"progress": {"total": 1}}},
+        [
+            {
+                "id": 1,
+                "status": "failed",
+                "stage": "profile",
+                "payload": {
+                    "profile_flow": {"status": "queued"},
+                    "profile_advance_job": {"status": "queued", "job_id": 501},
+                },
+            }
+        ],
+        worker_health=_worker(online=True),
+    )
+
+    assert result["state"] == "queued"
+    assert result["requested_tasks_terminal"] is False
+    assert result["stages"]["profile"]["counts"]["queued"] == 1
+
+
+def test_registered_profile_container_activity_survives_missing_queue_refresh() -> None:
+    session = {"status": "partial", "result_summary": {"progress": {"total": 1}}}
+    for active_container in ("profile_flow", "profile_execute"):
+        sibling = "profile_execute" if active_container == "profile_flow" else "profile_flow"
+        payload = {
+            active_container: {"status": "running", "job_id": 601},
+            sibling: {"status": "failed"},
+        }
+        result = project_search_progress(
+            session,
+            [{"id": 1, "status": "failed", "stage": "profile", "payload": payload}],
+            worker_health=_worker(online=True),
+        )
+
+        assert result["state"] == "running"
+        assert result["requested_tasks_terminal"] is False
+        assert result["stages"]["profile"]["counts"]["running"] == 1
+
+
 def test_terminal_profile_without_audience_job_closes_waiting_stage_as_skipped() -> None:
     """Legacy profile failures wrote ``waiting_for_profile`` without creating
     an audience job.  Once profile work is terminal, that optional marker must
@@ -173,6 +318,180 @@ def test_terminal_profile_without_audience_job_closes_waiting_stage_as_skipped()
     assert result["stages"]["audience"]["state"] == "partial"
     assert result["stages"]["audience"]["counts"]["skipped"] == 1
     assert result["stages"]["audience"]["successful"] == 0
+
+
+def test_terminal_ready_profile_closes_synthetic_audience_waiting_markers() -> None:
+    """Production row 718 had two ready profiles with old audience waiting
+    markers, but no concrete job. A terminal session must close those markers."""
+    session = {
+        "status": "partial",
+        "result_summary": {"phase": "partial", "progress": {"total": 2}},
+    }
+    items = [
+        {
+            "id": item_id,
+            "status": "ready",
+            "stage": "summary",
+            "kol_pool_id": 100 + item_id,
+            "payload": {
+                "profile_execute": {
+                    "status": "ready",
+                    "kol_pool_id": 100 + item_id,
+                    "audience_enrichment": {"status": "queued", "async": True},
+                },
+                "audience_preview": {"status": "pending", "async": True},
+            },
+        }
+        for item_id in (1, 2)
+    ]
+
+    result = project_search_progress(session, items, worker_health=_worker(online=True))
+
+    assert result["state"] == "partial"
+    assert result["requested_tasks_terminal"] is True
+    assert result["queued_units"] == result["running_units"] == 0
+    assert result["stages"]["audience"]["counts"]["skipped"] == 2
+    assert result["terminal_units"] == result["requested_units"] == 6
+
+
+def test_concrete_audience_job_queue_remains_active_in_terminal_session() -> None:
+    session = {
+        "status": "partial",
+        "result_summary": {"phase": "partial", "progress": {"total": 1}},
+    }
+    for queue_status, expected_state in (("queued", "queued"), ("running", "running")):
+        result = project_search_progress(
+            session,
+            [
+                {
+                    "id": 1,
+                    "status": "ready",
+                    "stage": "summary",
+                    "kol_pool_id": 101,
+                    "payload": {
+                        "audience_preview": {"status": "ready", "sample_size": 50},
+                        "profile_execute": {
+                            "status": "ready",
+                            "kol_pool_id": 101,
+                            "audience_enrichment": {
+                                "status": "queued",
+                                "queue_status": queue_status,
+                                "job_id": 701,
+                            },
+                        }
+                    },
+                }
+            ],
+            worker_health=_worker(online=True),
+        )
+
+        assert result["state"] == expected_state
+        assert result["requested_tasks_terminal"] is False
+        assert result["stages"]["audience"]["counts"][expected_state] == 1
+
+
+def test_any_concrete_audience_refresh_queue_wins_over_other_terminal_job() -> None:
+    session = {"status": "partial", "result_summary": {"progress": {"total": 1}}}
+    for flow_queue, execute_queue in (("running", "failed"), ("failed", "running")):
+        result = project_search_progress(
+            session,
+            [
+                {
+                    "id": 1,
+                    "status": "ready",
+                    "stage": "summary",
+                    "payload": {
+                        "profile_flow": {
+                            "audience_enrichment": {"status": "running", "queue_status": flow_queue, "job_id": 701},
+                        },
+                        "profile_execute": {
+                            "status": "ready",
+                            "audience_enrichment": {"status": "partial", "queue_status": execute_queue, "job_id": 702},
+                        },
+                    },
+                }
+            ],
+            worker_health=_worker(online=True),
+        )
+
+        assert result["state"] == "running"
+        assert result["requested_tasks_terminal"] is False
+        assert result["stages"]["audience"]["counts"]["running"] == 1
+
+
+def test_registered_audience_activity_survives_missing_queue_refresh() -> None:
+    session = {"status": "partial", "result_summary": {"progress": {"total": 1}}}
+    for active_container in ("profile_flow", "profile_execute"):
+        sibling = "profile_execute" if active_container == "profile_flow" else "profile_flow"
+        payload = {
+            "audience_preview": {"status": "ready", "sample_size": 50},
+            active_container: {"audience_enrichment": {"status": "running", "job_id": 701}},
+            sibling: {"audience_enrichment": {"status": "partial"}},
+        }
+        result = project_search_progress(
+            session,
+            [{"id": 1, "status": "ready", "stage": "summary", "payload": payload}],
+            worker_health=_worker(online=True),
+        )
+
+        assert result["state"] == "running"
+        assert result["requested_tasks_terminal"] is False
+        assert result["stages"]["audience"]["counts"]["running"] == 1
+
+
+def test_terminal_session_closes_synthetic_video_and_comment_markers() -> None:
+    result = project_search_progress(
+        {"status": "partial", "result_summary": {"progress": {"total": 1}}},
+        [
+            {
+                "id": 1,
+                "status": "ready",
+                "stage": "summary",
+                "kol_pool_id": 101,
+                "payload": {
+                    "profile_execute": {"status": "ready", "kol_pool_id": 101},
+                    "downstream_jobs": {
+                        "video": {"state": "queued"},
+                        "comments": {"state": "active"},
+                    },
+                },
+            }
+        ],
+        worker_health=_worker(online=True),
+    )
+
+    assert result["state"] == "partial"
+    assert result["requested_tasks_terminal"] is True
+    assert result["queued_units"] == result["running_units"] == 0
+    assert result["stages"]["video"]["counts"]["skipped"] == 1
+    assert result["stages"]["comments"]["counts"]["skipped"] == 1
+
+
+def test_registered_video_and_comment_jobs_remain_active_in_terminal_session() -> None:
+    result = project_search_progress(
+        {"status": "partial", "result_summary": {"progress": {"total": 1}}},
+        [
+            {
+                "id": 1,
+                "status": "ready",
+                "stage": "summary",
+                "kol_pool_id": 101,
+                "payload": {
+                    "profile_execute": {"status": "ready", "kol_pool_id": 101},
+                    "downstream_jobs": {
+                        "video": {"state": "queued", "job_ids": [801]},
+                        "comments": {"state": "running", "job_id": 802},
+                    },
+                },
+            }
+        ],
+        worker_health=_worker(online=True),
+    )
+
+    assert result["state"] == "running"
+    assert result["requested_tasks_terminal"] is False
+    assert result["stages"]["video"]["counts"]["queued"] == 1
+    assert result["stages"]["comments"]["counts"]["running"] == 1
 
 
 def test_waiting_audience_marker_remains_queued_while_profile_is_active() -> None:
