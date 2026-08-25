@@ -248,6 +248,18 @@ function GroupRow({
   );
 }
 
+const TARGET_AUTO_READ_LIMIT = 3;
+const TARGET_AUTO_RETRY_MS = 900;
+
+type PendingTargetPhase = "loading" | "waiting" | "located";
+
+interface PendingSkuPlayTarget extends SkuPlayChangedDetail {
+  refreshTick: number;
+  attempt: number;
+  sequence: number;
+  phase: PendingTargetPhase;
+}
+
 export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken: React.ReactNode }) {
   const [data, setData] = React.useState<VkpiMyKolSkuPlayOverviewResponse | null>(null);
   const [error, setError] = React.useState("");
@@ -257,13 +269,27 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
   const [loadedTick, setLoadedTick] = React.useState(-1);
   const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set());
   const [highlighted, setHighlighted] = React.useState(false);
-  const [pendingTarget, setPendingTarget] = React.useState<(SkuPlayChangedDetail & { refreshTick: number }) | null>(null);
+  const [pendingTarget, setPendingTargetState] = React.useState<PendingSkuPlayTarget | null>(null);
   const anchorRef = React.useRef<HTMLDivElement | null>(null);
   const groupRefs = React.useRef(new Map<string, HTMLDivElement>());
   const evidenceRefs = React.useRef(new Map<number, HTMLTableRowElement>());
+  const pendingTargetRef = React.useRef<PendingSkuPlayTarget | null>(null);
   const highlightTimer = React.useRef<number | null>(null);
+  const retryTimer = React.useRef<number | null>(null);
   const positionFrame = React.useRef<number | null>(null);
+  const targetSequence = React.useRef(0);
   const tickRef = React.useRef(0);
+
+  const setPendingTarget = React.useCallback((next: PendingSkuPlayTarget | null) => {
+    pendingTargetRef.current = next;
+    setPendingTargetState(next);
+  }, []);
+
+  const clearRetryTimer = React.useCallback(() => {
+    if (retryTimer.current == null) return;
+    window.clearTimeout(retryTimer.current);
+    retryTimer.current = null;
+  }, []);
 
   const nextTick = React.useCallback(() => {
     tickRef.current += 1;
@@ -272,9 +298,15 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
   }, []);
 
   const refreshPreservingTarget = React.useCallback(() => {
+    clearRetryTimer();
+    if (highlightTimer.current != null) {
+      window.clearTimeout(highlightTimer.current);
+      highlightTimer.current = null;
+    }
     const refreshTick = nextTick();
-    setPendingTarget((current) => current ? { ...current, refreshTick } : current);
-  }, [nextTick]);
+    const current = pendingTargetRef.current;
+    if (current) setPendingTarget({ ...current, refreshTick, attempt: current.attempt + 1, phase: "loading" });
+  }, [clearRetryTimer, nextTick, setPendingTarget]);
 
   // 写模型与本纯读模块独立：数据关注成功后立即重读，
   // 避免用户已明确关联 SKU，卡面仍停在旧的“0 / 空态”。
@@ -286,26 +318,29 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
         .map((sku) => String(sku || "").trim())
         .filter(Boolean))];
       const refreshTick = nextTick();
-      setPendingTarget({ evidenceId, skus, refreshTick });
+      targetSequence.current += 1;
+      setPendingTarget({ evidenceId, skus, refreshTick, attempt: 1, sequence: targetSequence.current, phase: "loading" });
       setHighlighted(true);
+      clearRetryTimer();
       if (positionFrame.current != null) {
         window.cancelAnimationFrame(positionFrame.current);
         positionFrame.current = null;
       }
       if (highlightTimer.current != null) window.clearTimeout(highlightTimer.current);
-      // 网络异常时也不会永久高亮；正常响应后会改为目标行定位后的短高亮。
-      highlightTimer.current = window.setTimeout(() => {
-        setHighlighted(false);
-        setPendingTarget(null);
-      }, 10_000);
+      // 点击成功先把用户带到单品模块；具体行等读模型返回后再展开、聚焦。
+      positionFrame.current = window.requestAnimationFrame(() => {
+        positionFrame.current = null;
+        anchorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+      });
     };
     window.addEventListener(SKU_PLAY_CHANGED_EVENT, refresh);
     return () => {
       window.removeEventListener(SKU_PLAY_CHANGED_EVENT, refresh);
       if (highlightTimer.current != null) window.clearTimeout(highlightTimer.current);
+      clearRetryTimer();
       if (positionFrame.current != null) window.cancelAnimationFrame(positionFrame.current);
     };
-  }, [nextTick]);
+  }, [clearRetryTimer, nextTick, setPendingTarget]);
 
   React.useEffect(() => {
     if (!apiToken) return;
@@ -323,9 +358,11 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
         if (!alive) return;
         if (isNotFound(err)) {
           setUnsupported(true);
-          return;
+        } else {
+          setError(errDetail(err, "读取失败"));
         }
-        setError(errDetail(err, "读取失败"));
+        const current = pendingTargetRef.current;
+        if (current && current.refreshTick === tick) setPendingTarget({ ...current, phase: "waiting" });
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -333,10 +370,10 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
     return () => {
       alive = false;
     };
-  }, [apiToken, tick]);
+  }, [apiToken, setPendingTarget, tick]);
 
   React.useEffect(() => {
-    if (!pendingTarget || loadedTick !== pendingTarget.refreshTick) return;
+    if (!pendingTarget || pendingTarget.phase === "located" || loadedTick !== pendingTarget.refreshTick) return;
     const groups = Array.isArray(data?.groups) ? data.groups : [];
     const wantedSkus = new Set(pendingTarget.skus.map((sku) => sku.toUpperCase()));
     const matched = groups.filter((group) => (
@@ -344,37 +381,78 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
       || (Array.isArray(group.items) && group.items.some((item) => Number(item.evidence_id) === pendingTarget.evidenceId))
     ));
     const matchedCodes = matched.map((group) => group.sku_code);
-    if (matchedCodes.length) {
+    const needsExpansion = matchedCodes.some((code) => !expanded.has(code));
+    if (needsExpansion) {
       setExpanded((current) => new Set([...current, ...matchedCodes]));
+      return;
     }
-    if (positionFrame.current != null) window.cancelAnimationFrame(positionFrame.current);
-    const frame = window.requestAnimationFrame(() => {
-      if (positionFrame.current === frame) positionFrame.current = null;
-      // 后续事件或手动刷新已推进 tick 时，旧定位回调绝不再抢焦点。
-      if (tickRef.current !== pendingTarget.refreshTick) return;
-      const evidenceTarget = pendingTarget.evidenceId > 0
-        ? evidenceRefs.current.get(pendingTarget.evidenceId)
-        : null;
-      const target = evidenceTarget
-        || (matchedCodes.length ? groupRefs.current.get(matchedCodes[0]) : null)
-        || anchorRef.current;
+
+    const evidenceTarget = pendingTarget.evidenceId > 0
+      ? evidenceRefs.current.get(pendingTarget.evidenceId)
+      : null;
+    const groupTarget = matchedCodes.length ? groupRefs.current.get(matchedCodes[0]) : null;
+    const legacyEvent = pendingTarget.evidenceId <= 0 && pendingTarget.skus.length === 0;
+    const groupOnlyTarget = pendingTarget.evidenceId <= 0 && Boolean(groupTarget);
+    if (evidenceTarget || groupOnlyTarget || legacyEvent) {
+      clearRetryTimer();
+      const target = evidenceTarget || groupTarget || anchorRef.current;
       target?.scrollIntoView?.({ behavior: "smooth", block: "center" });
       if (target instanceof HTMLTableRowElement) target.focus({ preventScroll: true });
       else target?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus({ preventScroll: true });
-    });
-    positionFrame.current = frame;
-    if (highlightTimer.current != null) window.clearTimeout(highlightTimer.current);
-    highlightTimer.current = window.setTimeout(() => {
-      setHighlighted(false);
-      setPendingTarget(null);
-    }, 2400);
-    return () => {
-      if (positionFrame.current === frame) {
-        window.cancelAnimationFrame(frame);
-        positionFrame.current = null;
-      }
-    };
-  }, [data, loadedTick, pendingTarget]);
+      const located = { ...pendingTarget, phase: "located" as const };
+      setPendingTarget(located);
+      if (highlightTimer.current != null) window.clearTimeout(highlightTimer.current);
+      highlightTimer.current = window.setTimeout(() => {
+        if (pendingTargetRef.current?.sequence !== located.sequence) return;
+        setHighlighted(false);
+        setPendingTarget(null);
+      }, 2400);
+      return;
+    }
+
+    // 写模型成功不等于聚合读模型同一毫秒可见。保留目标与可见等待态，先定位模块，
+    // 再做有限自动重读；达到上限也不静默清掉，由员工手工重试。
+    (groupTarget || anchorRef.current)?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    const waiting = pendingTarget.phase === "waiting" ? pendingTarget : { ...pendingTarget, phase: "waiting" as const };
+    if (waiting !== pendingTarget) setPendingTarget(waiting);
+    if (waiting.attempt < TARGET_AUTO_READ_LIMIT && retryTimer.current == null) {
+      retryTimer.current = window.setTimeout(() => {
+        retryTimer.current = null;
+        const current = pendingTargetRef.current;
+        if (!current || current.sequence !== waiting.sequence || current.phase === "located") return;
+        const refreshTick = nextTick();
+        setPendingTarget({ ...current, refreshTick, attempt: current.attempt + 1, phase: "loading" });
+      }, TARGET_AUTO_RETRY_MS);
+    }
+  }, [clearRetryTimer, data, expanded, loadedTick, nextTick, pendingTarget, setPendingTarget]);
+
+  const targetNotice = pendingTarget ? (
+    <div className="mb-2" role="status" aria-live="polite" data-vkpi-sku-play-target-state={pendingTarget.phase}>
+      <PendingCard>
+        <div className="flex flex-wrap items-center gap-2">
+          <span>
+            <b>{pendingTarget.phase === "located" ? "已定位目标视频" : pendingTarget.phase === "loading" ? "正在同步单品播放" : "目标视频行尚未生成"}</b>
+            {pendingTarget.phase === "located"
+              ? " —— 已展开对应单品并聚焦视频行。"
+              : pendingTarget.phase === "loading"
+                ? ` —— 正在进行第 ${pendingTarget.attempt} 次只读定位；指标刷新排队不代表抓取完成。`
+                : ` —— 已完成 ${pendingTarget.attempt} 次定位读取；聚合行可能仍在生成，目标会保留，不会静默消失。`}
+          </span>
+          {pendingTarget.phase !== "located" ? (
+            <button
+              type="button"
+              disabled={pendingTarget.phase === "loading" || loading}
+              onClick={refreshPreservingTarget}
+              className="ml-auto min-h-8 rounded-lg border border-warn px-3 py-1 text-[11px] font-semibold text-warn disabled:cursor-default disabled:opacity-50"
+              title="只重新读取并定位，不触发新的抓取"
+            >
+              {pendingTarget.phase === "loading" || loading ? "定位读取中…" : "重试定位"}
+            </button>
+          ) : null}
+        </div>
+      </PendingCard>
+    </div>
+  ) : null;
 
   const wrap = (body: React.ReactNode) => (
     <div
@@ -384,6 +462,7 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
       data-vkpi-sku-play-evidence-id={pendingTarget?.evidenceId || undefined}
       className={`rounded-[10px] transition-shadow duration-300 ${highlighted ? "ring-2 ring-accent ring-offset-2 ring-offset-panel" : ""}`}
     >
+      {targetNotice}
       {body}
     </div>
   );
@@ -426,9 +505,11 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
     return wrap(
       <div>
         {toolbar}
-        <PendingCard>
-          <b>还没有登记「数据关注」的视频</b> —— 在内容墙或 KOL 详情的视频卡上点「数据关注」即可开始追踪,之后按单品在这里汇总播放走势。
-        </PendingCard>
+        {!pendingTarget ? (
+          <PendingCard>
+            <b>还没有登记「数据关注」的视频</b> —— 在内容墙或 KOL 详情的视频卡上点「数据关注」即可开始追踪,之后按单品在这里汇总播放走势。
+          </PendingCard>
+        ) : null}
       </div>
     );
   }

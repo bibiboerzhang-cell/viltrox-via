@@ -23,6 +23,55 @@ _SESSION_CREATOR_ITEM_TYPES = {
     "recall_candidate",
 }
 _DEAD_AVATAR_STATES = {"expired", "invalid", "missing"}
+_SESSION_AVATAR_FIELDS = (
+    "avatar_url",
+    "avatar_url_status",
+    "avatar_upstream_status",
+    "avatar_url_source",
+    "avatar_fallback",
+    "avatar_health",
+)
+
+
+def _project_session_snapshot_avatar(item: dict[str, Any]) -> bool:
+    """Attach request-time avatar health to one historical creator snapshot.
+
+    Older search rows often contain a real ``avatar_url`` but predate the
+    explicit health fields.  Leaving those rows untouched makes the API call a
+    present URL ``missing`` and also prevents an existing local cache hit from
+    replacing the external URL.  This projection is read-only: it revalidates
+    the URL, consults only the existing image cache, and never calls a provider.
+    """
+    from app.domains.kol.pool_read_projection import project_pool_avatar
+
+    if _text(item.get("item_type")) not in _SESSION_CREATOR_ITEM_TYPES:
+        return False
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else None
+    if payload is None:
+        return False
+
+    before = tuple(payload.get(key) for key in _SESSION_AVATAR_FIELDS)
+    projection = project_pool_avatar({"avatar_url": payload.get("avatar_url")})
+    source = _text(projection.get("avatar_url_source"))
+    if source == "pool_avatar_url":
+        projection["avatar_url_source"] = "session_snapshot_avatar"
+        health = projection.get("avatar_health")
+        if isinstance(health, dict):
+            projection["avatar_health"] = {**health, "source": "session_snapshot_avatar"}
+        # A stable-looking third-party URL is displayable, but it is not a
+        # locally materialized asset.  Keep that distinction explicit instead
+        # of closing the durable gap by relabelling an external reference.
+        if (
+            _text(projection.get("avatar_url")).startswith(("http://", "https://"))
+            and _text(projection.get("avatar_url_status")).lower() == "durable"
+        ):
+            projection["avatar_url_status"] = "external"
+            projection["avatar_health"] = {
+                **(projection.get("avatar_health") or {}),
+                "status": "external",
+            }
+    payload.update({key: projection.get(key) for key in _SESSION_AVATAR_FIELDS})
+    return before != tuple(payload.get(key) for key in _SESSION_AVATAR_FIELDS)
 
 
 def _creator_aliases_without_pool(item: dict[str, Any]) -> set[str]:
@@ -84,13 +133,22 @@ def _apply_durable_pool_avatar_fallback(
     pool_profile: dict[str, Any],
 ) -> bool:
     """Project a linked Pool avatar into an absent/dead or prewarmed slot."""
-    from app.domains.kol.pool_read_projection import project_pool_avatar
+    from app.domains.kol.pool_read_projection import (
+        is_local_cached_avatar_url,
+        project_pool_avatar,
+    )
     from app.services.intelligence.account_scan_helpers import _avatar_url_policy
 
     if _text(item.get("item_type")) not in _SESSION_CREATOR_ITEM_TYPES:
         return False
     payload = item.get("payload") if isinstance(item.get("payload"), dict) else None
     if payload is None:
+        return False
+    # ``_avatar_url_policy`` intentionally validates upstream HTTP(S) URLs and
+    # therefore calls our local cache route invalid.  Preserve an exact
+    # 64-hex cache path before applying that upstream-only policy; otherwise a
+    # linked Pool external URL can incorrectly overwrite a better durable copy.
+    if is_local_cached_avatar_url(payload.get("avatar_url")):
         return False
     current_url, current_state = _avatar_url_policy(payload.get("avatar_url"))
     declared_state = _text(payload.get("avatar_url_status")).lower()
@@ -103,7 +161,7 @@ def _apply_durable_pool_avatar_fallback(
     pool_url = _text(pool_projection.get("avatar_url"))
     pool_state = _text(pool_projection.get("avatar_url_status")).lower()
     pool_source = _text(pool_projection.get("avatar_url_source"))
-    if not pool_url or pool_state != "durable":
+    if not pool_url or pool_state not in {"durable", "external"}:
         return False
     # A live signed URL remains honest while no cache exists.  Replace it only
     # when the exact linked Pool row proves that this source has already been
@@ -117,16 +175,23 @@ def _apply_durable_pool_avatar_fallback(
     if not _pool_profile_identity_matches(item, pool_profile):
         return False
 
+    local_materialized = (
+        pool_source == "local_prewarm_cache"
+        or is_local_cached_avatar_url(pool_url)
+    )
     payload["avatar_url"] = pool_url
-    payload["avatar_url_status"] = "durable"
+    payload["avatar_url_status"] = "durable" if local_materialized else "external"
     payload["avatar_url_source"] = (
-        "local_prewarm_cache"
-        if pool_source == "local_prewarm_cache"
-        else "pool_durable_read_fallback"
+        "local_prewarm_cache" if local_materialized else "pool_external_read_fallback"
     )
-    payload["avatar_upstream_status"] = _text(
-        pool_projection.get("avatar_upstream_status")
-    )
+    payload["avatar_upstream_status"] = _text(pool_projection.get("avatar_upstream_status"))
+    payload["avatar_fallback"] = ""
+    payload["avatar_health"] = {
+        "status": payload["avatar_url_status"],
+        "upstream_status": payload["avatar_upstream_status"],
+        "source": payload["avatar_url_source"],
+        "fallback": "",
+    }
     return True
 
 
@@ -137,6 +202,8 @@ def hydrate_session_item_avatar_fallbacks(
     logger: Any,
 ) -> int:
     """Read current linked Pool avatars without mutating historical rows."""
+    for item in items:
+        _project_session_snapshot_avatar(item)
     profile_ids = sorted({
         int(item["kol_pool_id"])
         for item in items
@@ -177,6 +244,12 @@ def hydrate_session_item_previews(
     logger: Any,
 ) -> None:
     """Hydrate display names and masked preview state without exposing contacts."""
+
+    # Classify every historical creator snapshot, including discoveries which
+    # have not yet been linked to a Pool row.  This closes the projection loss
+    # where the URL was present but its health field was absent.
+    for item in items:
+        _project_session_snapshot_avatar(item)
 
     # Some materialization paths omit display_name. Batch-read the current pool
     # projection so validation, existing-pool, and discovery lanes agree.

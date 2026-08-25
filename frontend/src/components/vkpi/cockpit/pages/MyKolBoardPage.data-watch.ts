@@ -53,7 +53,12 @@ export function notifySkuPlayChanged(evidenceId: number, skus: string[]): void {
 /** 成功回执:SKU 如实列出;refresh=already_queued 时如实注明「已在队列」,绝不当新排队。 */
 export function dataWatchSuccessText(resp: VkpiDataWatchResponse): string {
   const skus = (Array.isArray(resp.skus) ? resp.skus : []).map((sku) => String(sku || "").trim()).filter(Boolean);
-  const queueNote = String(resp.refresh || "") === "already_queued" ? "(指标刷新已在队列中)" : "";
+  const refresh = String(resp.refresh || "");
+  const queueNote = refresh === "already_queued"
+    ? "指标刷新已在队列中"
+    : refresh === "queued"
+      ? "指标刷新已排队"
+      : "指标刷新状态待确认";
   const detectedSource = String(resp.sku_provenance?.source || "");
   const modalityLabels = (resp.sku_provenance?.modalities || []).map((value) => ({ visual: "画面", text: "字幕·文字", voice: "口播", unspecified: "未注明" }[value] || value));
   const provenanceNote = resp.sku_provenance?.relation_type === "confirmed"
@@ -67,7 +72,33 @@ export function dataWatchSuccessText(resp: VkpiDataWatchResponse): string {
     : resp.sku_provenance?.requires_human_confirmation
       ? "；关联中含系统检测项，仍待人工确认"
       : "";
-  return `已登记数据关注(SKU ${skus.length ? skus.join(" / ") : "—"})${provenanceNote}——系统定时抓取播放/点赞,结果见『单品播放数据』模块${queueNote}。`;
+  return `已登记数据关注(SKU ${skus.length ? skus.join(" / ") : "—"})${provenanceNote}；${queueNote}，不代表抓取完成。正在定位『单品播放数据』模块。`;
+}
+
+/** detected 只落系统候选关系；员工未确认时留在选择器，不提前跳转单品闭环。 */
+export function dataWatchDetectedPendingText(resp: VkpiDataWatchResponse): string {
+  const skus = [...new Set((resp.skus || []).map((sku) => String(sku || "").trim()).filter(Boolean))];
+  const refresh = String(resp.refresh || "");
+  const queue = refresh === "already_queued" ? "指标刷新已在队列中" : refresh === "queued" ? "指标刷新已排队" : "指标刷新状态待确认";
+  return `系统检测到 SKU ${skus.length ? skus.join(" / ") : "候选"}，已保留为『系统检测·待确认』；${queue}，不代表抓取完成。尚未登记为员工确认的单品关注，请在当前 SKU 确认入口核对确认。`;
+}
+
+function detectedConfirmationCandidates(resp: VkpiDataWatchResponse): VkpiDataWatchSkuCandidate[] {
+  const links = Array.isArray(resp.sku_provenance?.links) ? resp.sku_provenance.links : [];
+  const detectedLinks = links.filter((link) => String(link?.relation_type || "") === "detected");
+  const skus = [...new Set((detectedLinks.length ? detectedLinks.map((link) => link.sku) : resp.skus || [])
+    .map((sku) => String(sku || "").trim())
+    .filter(Boolean))];
+  return skus.map((sku) => {
+    const link = detectedLinks.find((item) => String(item?.sku || "").trim() === sku);
+    return {
+      sku_code: sku,
+      sku_name: sku,
+      match_source: String(link?.source || resp.sku_provenance?.source || ""),
+      modalities: resp.sku_provenance?.modalities || [],
+      evidence_excerpt: String(resp.sku_provenance?.evidence_excerpt || ""),
+    };
+  });
 }
 
 /** 详情弹窗 sku_required 提示:引导用既有「追踪并排队刷新」表单补 SKU;候选如实附上,不硬选。 */
@@ -155,28 +186,20 @@ export async function runDataWatchAction(
       deps.setReceipt({ text: `数据关注未获服务端确认:${status || "未知状态"}`, tone: "error" });
       return;
     }
+    if (resp.sku_provenance?.requires_human_confirmation) {
+      deps.setReceipt({ text: dataWatchDetectedPendingText(resp), tone: "info" });
+      const candidates = detectedConfirmationCandidates(resp);
+      if (deps.onDetectedConfirmationRequired) deps.onDetectedConfirmationRequired(video, candidates);
+      else deps.onSkuRequired(video, candidates);
+      return;
+    }
     deps.setReceipt({ text: dataWatchSuccessText(resp), tone: "info" });
     notifySkuPlayChanged(evidenceId, Array.isArray(resp.skus) ? resp.skus : []);
     deps.onTracked?.();
-    if (
-      resp.sku_provenance?.relation_type === "detected"
-      && resp.sku_provenance?.requires_human_confirmation
-      && deps.onDetectedConfirmationRequired
-    ) {
-      const detectedSkus = [...new Set((resp.skus || []).map((sku) => String(sku || "").trim()).filter(Boolean))];
-      if (detectedSkus.length === 1) {
-        deps.onDetectedConfirmationRequired(video, [{
-          sku_code: detectedSkus[0],
-          sku_name: detectedSkus[0],
-          match_source: String(resp.sku_provenance.source || ""),
-          modalities: resp.sku_provenance.modalities || [],
-          evidence_excerpt: String(resp.sku_provenance.evidence_excerpt || ""),
-        }]);
-      }
-    }
   } catch (err) {
     if (isCurrent()) deps.setReceipt({ text: dataWatchErrorText(err), tone: "error" });
   } finally {
-    if (isCurrent()) deps.setBusy(evidenceId, false);
+    // 迟到响应不得改 UI，但每条 evidence 自己的 busy 必须清理，避免永久锁死按钮。
+    deps.setBusy(evidenceId, false);
   }
 }

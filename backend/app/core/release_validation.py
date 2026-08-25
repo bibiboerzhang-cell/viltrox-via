@@ -147,6 +147,9 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
         "/api/admin/vkpi/industry-data/hashtag-trends/v0",
         "/api/admin/vkpi/industry-data/market-intelligence/cards/v0",
         "/api/admin/vkpi/kol-pool/needs-analysis",
+        # Manager-only cross-employee search health is a bounded SELECT and
+        # returns aggregate counts/release evidence only (no query/card data).
+        "/api/admin/vkpi/kol-search-sessions/team-status",
         "/api/admin/vkpi/kols",
         "/api/admin/vkpi/kpi-ledger",
         "/api/admin/vkpi/learning/weekly-scorecard",

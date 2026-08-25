@@ -14,7 +14,10 @@ def pool_read_data_status_ids(selection: Any, status: str) -> frozenset[int] | N
     for pool_id in selection.visible_ids:
         row = selection.row_by_id.get(pool_id) or {}
         avatar = project_pool_avatar(row, cached_avatar_lookup=lambda _url: "")
-        avatar_ready = avatar.get("avatar_url_status") in {"durable", "ephemeral"} and bool(avatar.get("avatar_url"))
+        avatar_ready = (
+            avatar.get("avatar_url_status") in {"durable", "external", "ephemeral"}
+            and bool(avatar.get("avatar_url"))
+        )
         metrics_ready = all(row.get(key) is not None for key in ("avg_views", "engagement_rate", "viltrox_fit_score"))
         if avatar_ready and metrics_ready:
             complete.add(int(pool_id))

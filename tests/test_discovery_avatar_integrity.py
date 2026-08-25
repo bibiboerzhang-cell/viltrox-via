@@ -9,6 +9,7 @@ from app.domains.kol import search_sessions, search_sessions_history
 from app.domains.kol import pool_read_projection
 from app.domains.kol.search_sessions_items import canonicalize_session_creator_items
 from app.domains.kol.search_sessions_previews import (
+    _apply_durable_pool_avatar_fallback,
     _pool_profile_identity_matches,
     hydrate_session_item_avatar_fallbacks,
     hydrate_session_item_previews,
@@ -242,14 +243,122 @@ def test_session_avatar_pool_fallback_is_durable_exact_identity_and_read_only() 
     assert applied == 2
     assert items[0]["payload"]["avatar_url"] == "https://images.example/missing-current.jpg"
     assert items[1]["payload"]["avatar_url"] == "https://images.example/expired-current.jpg"
-    assert items[0]["payload"]["avatar_url_source"] == "pool_durable_read_fallback"
-    assert "avatar_url" not in items[2]["payload"]
+    assert items[0]["payload"]["avatar_url_status"] == "external"
+    assert items[1]["payload"]["avatar_url_status"] == "external"
+    assert items[0]["payload"]["avatar_url_source"] == "pool_external_read_fallback"
+    assert items[0]["payload"]["avatar_fallback"] == ""
+    assert items[2]["payload"]["avatar_url"] == ""
+    assert items[2]["payload"]["avatar_url_status"] == "missing"
     assert items[2]["payload"]["thumbnail_url"].endswith("content-cover.jpg")
     assert items[3]["payload"]["avatar_url"] == live_ephemeral
-    assert "avatar_url" not in items[4]["payload"]
+    assert items[4]["payload"]["avatar_url"] == ""
+    assert items[4]["payload"]["avatar_url_status"] == "missing"
     assert "avatar_url" not in items[5]["payload"]
     assert all("thumbnail" not in sql.lower() for sql in conn.sql)
     assert not any("UPDATE" in sql or "DELETE" in sql or "INSERT" in sql for sql in conn.sql)
+
+
+def test_linked_session_preserves_valid_local_cache_over_pool_external() -> None:
+    local_cache = "/api/vkpi-media/image-cache/" + "d" * 64
+    item = {
+        "kol_pool_id": 3705,
+        "item_type": "recall_candidate",
+        "payload": {
+            "platform": "instagram",
+            "handle": "same.creator",
+            "profile_url": "https://instagram.com/same.creator/",
+            "avatar_url": local_cache,
+            "avatar_url_status": "durable",
+            "avatar_upstream_status": "ephemeral",
+            "avatar_url_source": "local_prewarm_cache",
+        },
+    }
+    pool_profile = {
+        "id": 3705,
+        "platform": "instagram",
+        "handle": "same.creator",
+        "profile_url": "https://instagram.com/same.creator/",
+        "avatar_url": "https://images.example/different-external-avatar.jpg",
+        "raw_platform_data": {},
+    }
+
+    applied = _apply_durable_pool_avatar_fallback(item, pool_profile)
+
+    assert applied is False
+    assert item["payload"]["avatar_url"] == local_cache
+    assert item["payload"]["avatar_url_status"] == "durable"
+    assert item["payload"]["avatar_url_source"] == "local_prewarm_cache"
+
+
+def test_historical_session_classifies_unlinked_avatar_and_prefers_existing_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A URL without a legacy status is not missing, and no provider is called."""
+    signed_cached = (
+        "https://p16-sign.tiktokcdn.com/avatar.jpeg"
+        "?x-expires=4102444800&x-signature=cached"
+    )
+    signed_live = (
+        "https://p16-sign.tiktokcdn.com/avatar.jpeg"
+        "?x-expires=4102444800&x-signature=live"
+    )
+    expired = (
+        "https://p16-sign.tiktokcdn.com/avatar.jpeg"
+        "?x-expires=1&x-signature=expired"
+    )
+    cached = "/api/vkpi-media/image-cache/" + "a" * 64
+    monkeypatch.setattr(
+        pool_read_projection,
+        "_default_cached_avatar_lookup",
+        lambda value: cached if value == signed_cached else "",
+    )
+
+    class _NoQueryConnection:
+        @staticmethod
+        def execute(*_args, **_kwargs):
+            raise AssertionError("unlinked session avatars must not query the database")
+
+    class _Logger:
+        @staticmethod
+        def warning(*_args, **_kwargs) -> None:
+            raise AssertionError("projection should not fail")
+
+    items = [
+        {
+            "id": 1,
+            "item_type": "new_creator",
+            "payload": {"platform": "tiktok", "handle": "cached", "avatar_url": signed_cached},
+        },
+        {
+            "id": 2,
+            "item_type": "new_creator",
+            "payload": {"platform": "tiktok", "handle": "live", "avatar_url": signed_live},
+        },
+        {
+            "id": 3,
+            "item_type": "new_creator",
+            "payload": {"platform": "tiktok", "handle": "expired", "avatar_url": expired},
+        },
+    ]
+
+    hydrate_session_item_previews(
+        _NoQueryConnection(),
+        items,
+        enrichment_status_fn=lambda *_args, **_kwargs: "pending",
+        logger=_Logger(),
+    )
+
+    cached_payload, live_payload, expired_payload = [item["payload"] for item in items]
+    assert cached_payload["avatar_url"] == cached
+    assert cached_payload["avatar_url_status"] == "durable"
+    assert cached_payload["avatar_url_source"] == "local_prewarm_cache"
+    assert cached_payload["avatar_upstream_status"] == "ephemeral"
+    assert live_payload["avatar_url"] == signed_live
+    assert live_payload["avatar_url_status"] == "ephemeral"
+    assert live_payload["avatar_url_source"] == "session_snapshot_avatar"
+    assert expired_payload["avatar_url"] == ""
+    assert expired_payload["avatar_url_status"] == "expired"
+    assert expired_payload["avatar_fallback"] == "initials"
 
 
 def test_historical_session_reprojects_exact_prewarmed_pool_avatars_without_cross_binding(
@@ -552,8 +661,8 @@ def test_transient_pool_bio_is_consumed_on_non_creator_and_gate_error(monkeypatc
     assert POOL_ACCOUNT_GATE_BIO_FIELD not in creator["payload"]
 
 
-def test_session_detail_and_history_list_share_pool_avatar_fallback(monkeypatch) -> None:
-    durable = "https://images.example/current-pool-avatar.jpg"
+def test_session_detail_and_history_list_share_external_pool_avatar_fallback(monkeypatch) -> None:
+    external = "https://images.example/current-pool-avatar.jpg"
 
     class _Rows:
         def __init__(self, rows):
@@ -617,7 +726,7 @@ def test_session_detail_and_history_list_share_pool_avatar_fallback(monkeypatch)
                             "platform": "instagram",
                             "handle": "creator",
                             "profile_url": "https://instagram.com/creator/",
-                            "avatar_url": durable,
+                            "avatar_url": external,
                             "raw_platform_data": {},
                             "display_name": "Creator",
                             "email": "",
@@ -670,12 +779,12 @@ def test_session_detail_and_history_list_share_pool_avatar_fallback(monkeypatch)
 
     detail_payload = detail["items"][0]["payload"]
     history_payload = history["items"][0]["items_preview"][0]["payload"]
-    assert detail_payload["avatar_url"] == durable
-    assert history_payload["avatar_url"] == durable
-    assert detail_payload["avatar_url_status"] == "durable"
-    assert history_payload["avatar_url_status"] == "durable"
-    assert detail_payload["avatar_url_source"] == "pool_durable_read_fallback"
-    assert history_payload["avatar_url_source"] == "pool_durable_read_fallback"
+    assert detail_payload["avatar_url"] == external
+    assert history_payload["avatar_url"] == external
+    assert detail_payload["avatar_url_status"] == "external"
+    assert history_payload["avatar_url_status"] == "external"
+    assert detail_payload["avatar_url_source"] == "pool_external_read_fallback"
+    assert history_payload["avatar_url_source"] == "pool_external_read_fallback"
     assert not any(
         keyword in sql
         for conn in (detail_conn, history_conn)

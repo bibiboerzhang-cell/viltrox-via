@@ -56,6 +56,7 @@ function video(evidenceId: number, poolId = 101): VkpiKolPoolVideoRow {
 function installDialogRoutes(
   trackResult?: () => Promise<unknown>,
   videoRows?: (poolId: number) => VkpiKolPoolVideoRow[],
+  dataWatchResult?: (evidenceId: number) => unknown | Promise<unknown>,
 ) {
   apiFetchMock.mockImplementation(async (path: unknown, init: RequestInit = {}) => {
     const value = String(path);
@@ -68,6 +69,10 @@ function installDialogRoutes(
     }
     if (value === "/api/admin/vkpi/my-kol/102/videos" && init.method === "POST") {
       return { status: "queued", evidence_id: 902, job_id: 72, product_skus: [] };
+    }
+    const dataWatchMatch = value.match(/\/api\/admin\/vkpi\/my-kol\/\d+\/videos\/(\d+)\/data-watch$/);
+    if (dataWatchMatch && init.method === "POST") {
+      return dataWatchResult ? dataWatchResult(Number(dataWatchMatch[1])) : { status: "tracking", skus: ["AF-85-F14"], refresh: "queued", sku_provenance: { relation_type: "manual", requires_human_confirmation: false } };
     }
     if (value === "/api/admin/vkpi/kol-pool/profile-deep-crawl/enqueue" && init.method === "POST") {
       return { status: "queued", job_id: 88 };
@@ -229,6 +234,162 @@ describe("KolDetailModal existing-video tracking", () => {
     expect(screen.getByLabelText("已有视频 URL")).toHaveValue("https://www.youtube.com/watch?v=video901");
     expect(screen.getByRole("status")).toHaveTextContent("填入 SKU 后点「追踪并排队刷新」");
     await waitFor(() => expect(screen.getByLabelText("关联产品 SKU")).toHaveFocus());
+  });
+
+  it("详情数据关注遇 detected 时 fail-closed：预填显式 SKU 表单，不触发单品跳转", async () => {
+    installDialogRoutes(undefined, undefined, () => ({
+      status: "tracking", skus: ["AF-85-F14"], refresh: "queued",
+      sku_provenance: { relation_type: "detected", source: "title_alias_v1", requires_human_confirmation: true },
+    }));
+    const changed = vi.fn();
+    window.addEventListener("vkpi:sku-play-changed", changed);
+    renderDetail();
+    await screen.findByText("Video 901");
+    fireEvent.click(screen.getByRole("button", { name: "数据关注" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent(/尚未登记为员工确认/);
+    expect(screen.getByRole("status")).toHaveTextContent(/排队.*不代表抓取完成/);
+    expect(screen.getByLabelText("已有视频 URL")).toHaveValue("https://www.youtube.com/watch?v=video901");
+    expect(screen.getByLabelText("关联产品 SKU")).toHaveValue("AF-85-F14");
+    expect(screen.getByRole("button", { name: "确认系统识别并关注" })).toBeEnabled();
+    expect(changed).not.toHaveBeenCalled();
+    window.removeEventListener("vkpi:sku-play-changed", changed);
+  });
+
+  it("A detected 预填后点击 B 关联 SKU，会同步清掉 A SKU 与确认上下文", async () => {
+    installDialogRoutes(undefined, (poolId) => [video(901, poolId), video(903, poolId)], (evidenceId) => ({
+      status: "tracking", skus: [evidenceId === 901 ? "AF-85-F14" : "AF-35-F18"], refresh: "queued",
+      sku_provenance: { relation_type: "detected", source: "title_alias_v1", requires_human_confirmation: true },
+    }));
+    renderDetail();
+    await screen.findByText("Video 901");
+    fireEvent.click(screen.getAllByRole("button", { name: "数据关注" })[0]);
+    expect(await screen.findByRole("button", { name: "确认系统识别并关注" })).toBeEnabled();
+    expect(screen.getByLabelText("关联产品 SKU")).toHaveValue("AF-85-F14");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "关联 SKU" })[1]);
+    expect(screen.getByLabelText("已有视频 URL")).toHaveValue("https://www.youtube.com/watch?v=video903");
+    expect(screen.getByLabelText("关联产品 SKU")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "确认系统识别并关注" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "追踪并排队刷新" })).toBeEnabled();
+    expect(screen.getByRole("status")).toHaveTextContent(/已选中「Video 903」/);
+  });
+
+  it.each([
+    ["URL 输入", "已有视频 URL"],
+    ["已采集下拉", "从已采集内容选择视频"],
+  ])("A detected pending 时通过%s切到 B，会清 A SKU 与 pending", async (_kind, controlLabel) => {
+    installDialogRoutes(undefined, (poolId) => [video(901, poolId), video(903, poolId)], () => ({
+      status: "tracking", skus: ["AF-85-F14"], refresh: "queued",
+      sku_provenance: { relation_type: "detected", source: "title_alias_v1", requires_human_confirmation: true },
+    }));
+    renderDetail();
+    await screen.findByText("Video 901");
+    fireEvent.click(screen.getAllByRole("button", { name: "数据关注" })[0]);
+    expect(await screen.findByRole("button", { name: "确认系统识别并关注" })).toBeEnabled();
+
+    fireEvent.change(screen.getByLabelText(controlLabel), { target: { value: "https://www.youtube.com/watch?v=video903" } });
+    expect(screen.getByLabelText("已有视频 URL")).toHaveValue("https://www.youtube.com/watch?v=video903");
+    expect(screen.getByLabelText("关联产品 SKU")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "确认系统识别并关注" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "追踪并排队刷新" })).toBeEnabled();
+  });
+
+  it("详情 detected 经员工显式确认后走 confirm_detected，并按真实队列状态定位单品", async () => {
+    let callCount = 0;
+    installDialogRoutes(undefined, undefined, () => ++callCount === 1 ? {
+      status: "tracking", skus: ["AF-85-F14"], refresh: "queued",
+      sku_provenance: { relation_type: "detected", source: "title_alias_v1", requires_human_confirmation: true },
+    } : {
+      status: "tracking", skus: ["AF-85-F14"], refresh: "already_queued",
+      sku_provenance: { relation_type: "confirmed", source: "title_alias_v1", requires_human_confirmation: false },
+    });
+    const changed = vi.fn();
+    window.addEventListener("vkpi:sku-play-changed", changed);
+    renderDetail();
+    await screen.findByText("Video 901");
+    fireEvent.click(screen.getByRole("button", { name: "数据关注" }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认系统识别并关注" }));
+
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    expect((changed.mock.calls[0][0] as CustomEvent).detail).toEqual({ evidenceId: 901, skus: ["AF-85-F14"] });
+    const writes = apiFetchMock.mock.calls.filter(([path, init]) => String(path).endsWith("/videos/901/data-watch") && (init as RequestInit)?.method === "POST");
+    expect(JSON.parse(String((writes[1][1] as RequestInit).body))).toEqual({ confirm_detected_skus: ["AF-85-F14"] });
+    expect(screen.getByRole("status")).toHaveTextContent(/已由你显式确认/);
+    expect(screen.getByRole("status")).toHaveTextContent(/已在队列中.*不代表抓取完成/);
+    expect(screen.getByLabelText("已有视频 URL")).toHaveValue("");
+    expect(screen.getByLabelText("关联产品 SKU")).toHaveValue("");
+    window.removeEventListener("vkpi:sku-play-changed", changed);
+  });
+
+  it("详情 A 确认慢、B 自动关注快时立即清 A 上下文，迟到 A 不得恢复或 dispatch", async () => {
+    let aCalls = 0;
+    let resolveAConfirm!: (value: unknown) => void;
+    const slowAConfirm = new Promise<unknown>((resolve) => { resolveAConfirm = resolve; });
+    installDialogRoutes(undefined, (poolId) => [video(901, poolId), video(903, poolId)], (evidenceId) => {
+      if (evidenceId === 901 && ++aCalls === 1) return {
+        status: "tracking", skus: ["AF-85-F14"], refresh: "queued",
+        sku_provenance: { relation_type: "detected", source: "title_alias_v1", requires_human_confirmation: true },
+      };
+      if (evidenceId === 901) return slowAConfirm;
+      return { status: "tracking", skus: ["AF-35-F18"], refresh: "queued", sku_provenance: { relation_type: "manual", requires_human_confirmation: false } };
+    });
+    const changed = vi.fn();
+    window.addEventListener("vkpi:sku-play-changed", changed);
+    renderDetail();
+    await screen.findByText("Video 901");
+    const dataWatchButtons = screen.getAllByRole("button", { name: "数据关注" });
+    fireEvent.click(dataWatchButtons[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "确认系统识别并关注" }));
+    await waitFor(() => expect(apiFetchMock.mock.calls.filter(([path]) => String(path).endsWith("/videos/901/data-watch")).length).toBe(2));
+    fireEvent.click(dataWatchButtons[1]);
+    expect(screen.getByLabelText("已有视频 URL")).toHaveValue("");
+    expect(screen.getByLabelText("关联产品 SKU")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "确认系统识别并关注" })).not.toBeInTheDocument();
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    expect((changed.mock.calls[0][0] as CustomEvent).detail).toEqual({ evidenceId: 903, skus: ["AF-35-F18"] });
+
+    await act(async () => {
+      resolveAConfirm({ status: "tracking", skus: ["AF-85-F14"], refresh: "queued", sku_provenance: { relation_type: "confirmed", requires_human_confirmation: false } });
+      await slowAConfirm;
+    });
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toHaveTextContent(/已登记数据关注\(SKU AF-35-F18\)/);
+    expect(screen.getByLabelText("已有视频 URL")).toHaveValue("");
+    expect(screen.getByLabelText("关联产品 SKU")).toHaveValue("");
+    window.removeEventListener("vkpi:sku-play-changed", changed);
+  });
+
+  it("详情 A 慢 detected、B 快成功反序返回时，仅最新 B 可更新回执与 dispatch", async () => {
+    let resolveA!: (value: unknown) => void;
+    const slowA = new Promise<unknown>((resolve) => { resolveA = resolve; });
+    installDialogRoutes(undefined, (poolId) => [video(901, poolId), video(903, poolId)], (evidenceId) => evidenceId === 901 ? slowA : {
+      status: "tracking", skus: ["AF-35-F18"], refresh: "queued",
+      sku_provenance: { relation_type: "manual", requires_human_confirmation: false },
+    });
+    const changed = vi.fn();
+    window.addEventListener("vkpi:sku-play-changed", changed);
+    renderDetail();
+    await screen.findByText("Video 901");
+    const buttons = screen.getAllByRole("button", { name: "数据关注" });
+    fireEvent.click(buttons[0]);
+    fireEvent.click(buttons[1]);
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    expect((changed.mock.calls[0][0] as CustomEvent).detail).toEqual({ evidenceId: 903, skus: ["AF-35-F18"] });
+
+    await act(async () => {
+      resolveA({
+        status: "tracking", skus: ["AF-85-F14"], refresh: "queued",
+        sku_provenance: { relation_type: "detected", source: "title_alias_v1", requires_human_confirmation: true },
+      });
+      await slowA;
+    });
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("已有视频 URL")).toHaveValue("");
+    expect(screen.getByLabelText("关联产品 SKU")).toHaveValue("");
+    expect(screen.getByRole("status")).toHaveTextContent(/已登记数据关注\(SKU AF-35-F18\)/);
+    await waitFor(() => expect(buttons[0]).toBeEnabled());
+    window.removeEventListener("vkpi:sku-play-changed", changed);
   });
 
 

@@ -11,7 +11,7 @@ export interface VkpiKolPoolItem {
   profile_url?: string;
   display_name?: string;
   avatar_url?: string;
-  avatar_url_status?: 'durable' | 'ephemeral' | 'expired' | 'invalid' | 'missing' | string;
+  avatar_url_status?: 'durable' | 'external' | 'ephemeral' | 'expired' | 'invalid' | 'missing' | string;
   avatar_upstream_status?: string;
   avatar_url_source?: string;
   avatar_fallback?: '' | 'initials' | string;

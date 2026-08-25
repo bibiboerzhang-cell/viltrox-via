@@ -120,6 +120,11 @@ export function DataWatchSkuPicker({
     && candidates.length === 1
     && chosenSkus[0] === candidates[0].sku
   ) ? "confirm_detected" : "manual";
+  const submitLabelIntent: Exclude<DataWatchSubmitIntent, "auto"> = (
+    pending.intent === "confirm_detected"
+    && manualSkus.length === 0
+    && candidates.length === 1
+  ) ? "confirm_detected" : submitIntent;
   const toggle = (sku: string) => {
     setSelected((current) => {
       const next = new Set(current);
@@ -190,15 +195,15 @@ export function DataWatchSkuPicker({
           onClick={() => onSubmit(chosenSkus, submitIntent)}
           className="min-h-8 rounded-lg border border-accent bg-accent px-3 py-1 text-[11px] font-semibold text-white disabled:cursor-default disabled:border-line disabled:bg-card disabled:text-muted"
         >
-          {busy ? "关联提交中…" : `${submitIntent === "confirm_detected" ? "确认系统识别并关注" : "确认关联并关注"}${chosenSkus.length ? `（${chosenSkus.length}）` : ""}`}
+          {busy ? "关联提交中…" : `${submitLabelIntent === "confirm_detected" ? "确认系统识别并关注" : "确认关联并关注"}${chosenSkus.length ? `（${chosenSkus.length}）` : ""}`}
         </button>
         <button type="button" disabled={busy} onClick={onCancel} className="min-h-8 rounded-lg border border-line bg-card px-3 py-1 text-[11px] text-muted hover:text-ink disabled:cursor-default">
           取消
         </button>
         <span className="text-[10px] text-muted">
           {pending.intent === "confirm_detected"
-            ? "勾选唯一系统识别项才会记为员工确认；改选或手填仍记为员工手工关联。"
-            : "只有你勾选后才会记为员工手工关联；支持 1–5 个 SKU。"}
+            ? "当前尚未登记为员工确认；勾选唯一系统识别项后才确认。改选或手填仍记为员工手工关联。"
+            : "当前尚未登记所选 SKU；只有你勾选后才会记为员工手工关联，支持 1–5 个 SKU。"}
         </span>
       </div>
     </div>

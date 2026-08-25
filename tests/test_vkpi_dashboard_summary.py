@@ -256,7 +256,7 @@ def test_nested_dashboard_cache_is_tenant_partitioned_and_unknown_bypasses(monke
     assert len(stored) == 2
 
 
-def test_uncached_dashboard_assembles_reads_serially_with_contract_unchanged(monkeypatch):
+def test_uncached_dashboard_assembles_staged_reads_with_contract_unchanged(monkeypatch):
     calls = []
     monkeypatch.setattr(dashboard_summary.scope, "effective_staff_id", lambda _staff, _requested: None)
     monkeypatch.setattr(dashboard_summary, "resolve_staff_id", lambda _staff: 7)
@@ -342,10 +342,10 @@ def test_uncached_dashboard_assembles_reads_serially_with_contract_unchanged(mon
     assert calls == [
         "decision",
         "lineage",
-        "maturity",
-        "window_metrics",
         "official_summary",
         "active_roster",
+        "maturity",
+        "window_metrics",
         "evidence_metrics",
         "active_campaigns",
         "funnel",

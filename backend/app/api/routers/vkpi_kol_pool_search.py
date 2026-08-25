@@ -1,7 +1,7 @@
 """KOL smart search, search-session, recall, and URL-crawl routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import Body, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from app.core.logging import get_logger
 from app.api.dependencies.perms import require_tab
@@ -39,8 +39,8 @@ from app.api.routers.vkpi_kol_pool_recall_route import (
     recall_kol_profiles,
     router as kol_recall_router,
 )
+from app.api.routers.vkpi_kol_pool_search_team_status_route import router
 
-router = APIRouter(tags=["vkpi-kol-pool"])
 logger = get_logger(__name__)
 
 def _run_url_deep_crawl(

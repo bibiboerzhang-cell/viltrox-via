@@ -14,7 +14,7 @@ import { KolLensUsageList } from "./MyKolBoardPage.charts";
 import { getLensInsightsForKol, type KolLensUsage } from "../../../../services/vkpi/lensInsights-api";
 import { ReceiptLine } from "./MyKolBoardPage.receipt";
 import { TrackExistingVideoForm } from "./MyKolBoardPage.track-form";
-import { DataWatchContext, runDataWatchAction, skuRequiredHintText, toggleIdInSet } from "./MyKolBoardPage.data-watch";
+import { DataWatchContext, runDataWatchAction, skuRequiredHintText, toggleIdInSet, type DataWatchSubmitIntent } from "./MyKolBoardPage.data-watch";
 import { KolContentMonitoringSection } from "./MyKolBoardPage.content-monitoring";
 import { runKeyframeQaAction } from "./MyKolBoardPage.keyframe-qa";
 import { RecoveryPollingLine } from "./MyKolBoardPage.video-tasks";
@@ -519,15 +519,15 @@ export function KolDetailModal({
   const [trackingEvidence, setTrackingEvidence] = React.useState<Set<number>>(new Set());
   const [dataWatchEvidence, setDataWatchEvidence] = React.useState<Set<number>>(new Set());
   const skuInputRef = React.useRef<HTMLInputElement | null>(null);
+  const dataWatchInteractionEpoch = React.useRef(0), pendingDetectedRef = React.useRef<{ video: VkpiKolPoolVideoRow; target: { poolId: number; epoch: number }; interactionEpoch: number } | null>(null);
   React.useEffect(() => {
     setMsgs({}); setQueuedEvidence(new Set()); setProjId("");
     setTrackUrl(""); setTrackSkuInput(""); setTrackBusy(false);
-    setRefreshingEvidence(new Set()); setQueuedRefreshEvidence(new Set()); setTrackingEvidence(new Set()); setDataWatchEvidence(new Set());
+    setRefreshingEvidence(new Set()); setQueuedRefreshEvidence(new Set()); setTrackingEvidence(new Set()); setDataWatchEvidence(new Set()); pendingDetectedRef.current = null; dataWatchInteractionEpoch.current += 1;
   }, [item?.poolId]);
   const setMsg = (key: string, msg: FlowReceipt | null) => setMsgs((prev) => ({ ...prev, [key]: msg }));
   const setBusy = (key: string, on: boolean) =>
     setBusyKeys((prev) => { const next = new Set(prev); if (on) next.add(key); else next.delete(key); return next; });
-
   const loaded = videos || [];
   const collectedUrlVideos = React.useMemo(() => {
     const unique = new Map<string, VkpiKolPoolVideoRow>();
@@ -540,28 +540,26 @@ export function KolDetailModal({
   const { unanalyzed } = React.useMemo(() => summarizeKolVideos(loaded), [loaded]);
   const paidActionsReadOnly = Boolean(item.isShared || (viewer && !viewer.canPaidActions));
   const paidActionsReadOnlyHint = "共享 KOL 仅可查看；视频追踪、指标刷新、深析、评论采集和受众画像请由收藏负责人或管理层发起。";
-
-  // 表单与卡片共用真追踪端点；卡面状态始终回读服务端。
   const runTrackVideo = async (direct?: { video: VkpiKolPoolVideoRow }) => {
     if (!apiToken || !poolId || paidActionsReadOnly) return;
     const cardEid = direct ? Number(direct.video.evidence_id ?? direct.video.id) || 0 : 0;
     if (direct ? trackingEvidence.has(cardEid) : trackBusy) return;
     const contentUrl = direct ? String(direct.video.content_url || "").trim() : trackUrl.trim();
-    if (!contentUrl) {
-      setMsg("tracking", { text: direct ? "该条未存原帖 URL,无法追踪;请先补采账号内容。" : "请先填写已采集视频 URL。", tone: "error" });
-      return;
-    }
+    if (!contentUrl) { setMsg("tracking", { text: direct ? "该条未存原帖 URL,无法追踪;请先补采账号内容。" : "请先填写已采集视频 URL。", tone: "error" }); return; }
     const productSkus = direct ? [] : parseProductSkus(trackSkuInput);
-    if (productSkus.length > 5) {
-      setMsg("tracking", { text: "一次最多关联 5 个产品 SKU。", tone: "error" });
-      return;
+    if (productSkus.length > 5) { setMsg("tracking", { text: "一次最多关联 5 个产品 SKU。", tone: "error" }); return; }
+    const pendingDetected = direct ? null : pendingDetectedRef.current;
+    if (pendingDetected) {
+      const pendingUrl = String(pendingDetected.video.content_url || "").trim();
+      if (!targetIsCurrent(pendingDetected.target) || dataWatchInteractionEpoch.current !== pendingDetected.interactionEpoch || contentUrl !== pendingUrl) { pendingDetectedRef.current = null; setMsg("tracking", { text: "检测确认上下文已失效，请重新点击该视频的『数据关注』。", tone: "error" }); return; }
+      return runDataWatch(pendingDetected.video, productSkus, "confirm_detected");
     }
-    const target = { ...targetRef.current };
+    const target = { ...targetRef.current }, interactionEpoch = ++dataWatchInteractionEpoch.current; pendingDetectedRef.current = null;
     if (direct) setTrackingEvidence((prev) => new Set(prev).add(cardEid)); else setTrackBusy(true);
     setMsg("tracking", null);
     try {
       const resp = await trackMyKolExistingVideo(apiToken, target.poolId, { contentUrl, productSkus });
-      if (!targetIsCurrent(target)) return;
+      if (!targetIsCurrent(target) || dataWatchInteractionEpoch.current !== interactionEpoch) return;
       const status = String(resp?.status || "");
       if (status !== "queued" && status !== "already_queued") {
         setMsg("tracking", { text: `追踪请求未获服务端确认：${status || "未知状态"}`, tone: "error" });
@@ -579,19 +577,18 @@ export function KolDetailModal({
       }
       void recovery.refresh();
     } catch (err) {
-      if (targetIsCurrent(target)) setMsg("tracking", { text: videoWriteError(err, "追踪"), tone: "error" });
+      if (targetIsCurrent(target) && dataWatchInteractionEpoch.current === interactionEpoch) setMsg("tracking", { text: videoWriteError(err, "追踪"), tone: "error" });
     } finally {
-      if (targetIsCurrent(target)) {
-        if (direct) setTrackingEvidence((prev) => { const next = new Set(prev); next.delete(cardEid); return next; });
-        else setTrackBusy(false);
-      }
+      if (direct) setTrackingEvidence((prev) => { const next = new Set(prev); next.delete(cardEid); return next; });
+      else setTrackBusy(false);
     }
   };
-  const linkSkuFromCard = (video: VkpiKolPoolVideoRow) => {
+  const linkSkuFromCard = (video: VkpiKolPoolVideoRow, announce = true) => {
     const url = String(video.content_url || "").trim();
     if (!url) return;
+    if (announce) { pendingDetectedRef.current = null; dataWatchInteractionEpoch.current += 1; setTrackSkuInput(""); }
     setTrackUrl(url);
-    setMsg("tracking", { text: `已选中「${String(video.title || video.video_title || `视频 #${Number(video.evidence_id ?? video.id) || 0}`)}」,填入 SKU 后点「追踪并排队刷新」。`, tone: "info" });
+    if (announce) setMsg("tracking", { text: `已选中「${String(video.title || video.video_title || `视频 #${Number(video.evidence_id ?? video.id) || 0}`)}」,填入 SKU 后点「追踪并排队刷新」。`, tone: "info" });
     window.requestAnimationFrame(() => {
       const input = skuInputRef.current;
       if (!input) return;
@@ -599,22 +596,24 @@ export function KolDetailModal({
       if (typeof input.scrollIntoView === "function") input.scrollIntoView({ block: "center" });
     });
   };
-  // 自动认产品失败时回落到显式 SKU 关联流程。
-  const runDataWatch = (video: VkpiKolPoolVideoRow) => {
+  function runDataWatch(video: VkpiKolPoolVideoRow, productSkus: string[] = [], submitIntent: DataWatchSubmitIntent = "auto") {
     const target = { ...targetRef.current };
+    const interactionEpoch = ++dataWatchInteractionEpoch.current;
+    if (submitIntent === "auto") { pendingDetectedRef.current = null; setTrackUrl(""); setTrackSkuInput(""); }
+    else if (pendingDetectedRef.current) pendingDetectedRef.current = { ...pendingDetectedRef.current, target, interactionEpoch };
     return runDataWatchAction(video, {
       apiToken,
       kolPoolId: target.poolId,
       readOnly: paidActionsReadOnly,
-      isCurrent: () => targetIsCurrent(target),
+      isCurrent: () => targetIsCurrent(target) && dataWatchInteractionEpoch.current === interactionEpoch,
       isBusy: (eid) => dataWatchEvidence.has(eid),
       setBusy: toggleIdInSet(setDataWatchEvidence),
       setReceipt: (msg) => setMsg("tracking", msg),
       onSkuRequired: (v, candidates) => { linkSkuFromCard(v); setMsg("tracking", { text: skuRequiredHintText(candidates), tone: "info" }); },
-      onTracked: () => { void recovery.refresh(); },
-    });
-  };
-
+      onDetectedConfirmationRequired: (v, candidates) => { pendingDetectedRef.current = { video: v, target, interactionEpoch }; linkSkuFromCard(v, false); setTrackSkuInput(candidates.map((item) => String(item.sku_code || "").trim()).filter(Boolean).join(", ")); },
+      onTracked: () => { if (submitIntent === "confirm_detected") { pendingDetectedRef.current = null; setTrackUrl(""); setTrackSkuInput(""); } void recovery.refresh(); },
+    }, productSkus, submitIntent);
+  }
   const runMetricRefresh = async (video: VkpiKolPoolVideoRow) => {
     const evidenceId = Number(video.evidence_id ?? video.id) || 0;
     if (!apiToken || !poolId || !evidenceId || paidActionsReadOnly || refreshingEvidence.has(evidenceId) || queuedRefreshEvidence.has(evidenceId)) return;
@@ -908,10 +907,11 @@ export function KolDetailModal({
           apiToken={apiToken}
           collectedUrlVideos={collectedUrlVideos}
           trackUrl={trackUrl}
-          setTrackUrl={setTrackUrl}
+          setTrackUrl={(value) => { if (pendingDetectedRef.current && value !== String(pendingDetectedRef.current.video.content_url || "").trim()) { pendingDetectedRef.current = null; dataWatchInteractionEpoch.current += 1; setTrackSkuInput(""); } setTrackUrl(value); }}
           trackSkuInput={trackSkuInput}
           setTrackSkuInput={setTrackSkuInput}
-          trackBusy={trackBusy}
+          trackBusy={trackBusy || Boolean(pendingDetectedRef.current && dataWatchEvidence.has(Number(pendingDetectedRef.current.video.evidence_id ?? pendingDetectedRef.current.video.id) || 0))}
+          confirmDetected={Boolean(pendingDetectedRef.current)}
           paidActionsReadOnly={paidActionsReadOnly}
           paidActionsReadOnlyHint={paidActionsReadOnlyHint}
           onSubmit={() => { void runTrackVideo(); }}

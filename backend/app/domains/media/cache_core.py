@@ -45,7 +45,7 @@ ALLOWED_IMAGE_HOST_SUFFIXES = (
     ".fbcdn.net",
     ".xx.fbcdn.net",
     ".ytimg.com",
-    ".img.youtube.com",
+    ".img.youtube.com", ".ggpht.com",
     ".googleusercontent.com",
     ".tiktokcdn.com",
     ".tiktokcdn-us.com",

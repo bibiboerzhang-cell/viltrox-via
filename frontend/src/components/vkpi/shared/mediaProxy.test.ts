@@ -23,6 +23,13 @@ describe('media proxy URL normalization', () => {
     expect(proxiedImageUrl(raw)).toBe(`/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(raw)}`);
   });
 
+  it.each([
+    'https://yt3.ggpht.com/profile-avatar',
+    'https://yt3.googleusercontent.com/profile-avatar',
+  ])('routes YouTube profile avatars through the cache-building proxy: %s', (raw) => {
+    expect(proxiedImageUrl(raw)).toBe(`/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(raw)}`);
+  });
+
   it('normalizes protocol-relative video URLs for proxy and redirect candidates', () => {
     const raw = '//v16-webapp-prime.tiktokcdn-us.com/video/test.mp4';
     const absolute = `https:${raw}`;

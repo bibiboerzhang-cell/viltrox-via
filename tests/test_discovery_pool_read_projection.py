@@ -297,6 +297,31 @@ def test_avatar_projection_uses_only_profile_evidence_and_existing_cache() -> No
     assert cached["avatar_upstream_status"] == "expired"
     assert cached["avatar_url_source"] == "local_prewarm_cache"
 
+    stable_external = "https://yt3.ggpht.com/profile-avatar"
+    stable_uncached = project_pool_avatar(
+        {"avatar_url": stable_external},
+        cached_avatar_lookup=lambda _value: "",
+    )
+    assert stable_uncached["avatar_url"] == stable_external
+    assert stable_uncached["avatar_url_status"] == "external"
+    assert stable_uncached["avatar_upstream_status"] == "durable"
+    assert stable_uncached["avatar_health"] == {
+        "status": "external",
+        "upstream_status": "durable",
+        "source": "pool_avatar_url",
+        "fallback": "",
+    }
+
+    stable_cached_path = "/api/vkpi-media/image-cache/" + "c" * 64
+    stable_cached = project_pool_avatar(
+        {"avatar_url": stable_external},
+        cached_avatar_lookup=lambda value: stable_cached_path if value == stable_external else "",
+    )
+    assert stable_cached["avatar_url"] == stable_cached_path
+    assert stable_cached["avatar_url_status"] == "durable"
+    assert stable_cached["avatar_upstream_status"] == "durable"
+    assert stable_cached["avatar_url_source"] == "local_prewarm_cache"
+
     raw_profile = project_pool_avatar(
         {
             "avatar_url": "",
@@ -313,6 +338,8 @@ def test_avatar_projection_uses_only_profile_evidence_and_existing_cache() -> No
         cached_avatar_lookup=lambda _value: "",
     )
     assert raw_profile["avatar_url"] == "https://yt3.ggpht.com/profile-avatar"
+    assert raw_profile["avatar_url_status"] == "external"
+    assert raw_profile["avatar_upstream_status"] == "durable"
     assert raw_profile["avatar_url_source"] == "raw_profile_avatar"
 
     video_only = project_pool_avatar(
@@ -876,7 +903,8 @@ def test_prepared_pool_projection_keeps_raw_profile_avatar_fallback() -> None:
     )
 
     assert projected["avatar_url"] == "https://yt3.ggpht.com/raw-profile-avatar"
-    assert projected["avatar_url_status"] == "durable"
+    assert projected["avatar_url_status"] == "external"
+    assert projected["avatar_upstream_status"] == "durable"
     assert projected["avatar_url_source"] == "raw_profile_avatar"
 
 

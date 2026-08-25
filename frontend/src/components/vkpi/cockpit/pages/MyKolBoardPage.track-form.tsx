@@ -25,6 +25,7 @@ export function TrackExistingVideoForm({
   trackSkuInput,
   setTrackSkuInput,
   trackBusy,
+  confirmDetected = false,
   paidActionsReadOnly,
   paidActionsReadOnlyHint,
   onSubmit,
@@ -43,6 +44,7 @@ export function TrackExistingVideoForm({
   trackSkuInput: string;
   setTrackSkuInput: (value: string) => void;
   trackBusy: boolean;
+  confirmDetected?: boolean;
   paidActionsReadOnly: boolean;
   paidActionsReadOnlyHint: string;
   onSubmit: () => void;
@@ -115,11 +117,11 @@ export function TrackExistingVideoForm({
         <button
           type="button"
           className={TRACK_ACT_BTN}
-          disabled={paidActionsReadOnly || trackBusy || !trackUrl.trim()}
-          title={paidActionsReadOnly ? paidActionsReadOnlyHint : trackUrl.trim() ? "提交已采集视频追踪并排队刷新指标" : "请先从已采集内容选择或粘贴视频 URL"}
+          disabled={paidActionsReadOnly || trackBusy || !trackUrl.trim() || (confirmDetected && !trackSkuInput.trim())}
+          title={paidActionsReadOnly ? paidActionsReadOnlyHint : confirmDetected ? "显式确认系统识别的 SKU 后登记数据关注" : trackUrl.trim() ? "提交已采集视频追踪并排队刷新指标" : "请先从已采集内容选择或粘贴视频 URL"}
           onClick={onSubmit}
         >
-          {trackBusy ? "提交中…" : "追踪并排队刷新"}
+          {trackBusy ? "提交中…" : confirmDetected ? "确认系统识别并关注" : "追踪并排队刷新"}
         </button>
       </div>
       <div className="mt-1.5 text-[11px] leading-4 text-muted">

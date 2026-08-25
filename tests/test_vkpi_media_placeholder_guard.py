@@ -108,6 +108,17 @@ def test_both_youtube_thumbnail_hosts_are_allowlisted_for_cache_warmup():
         )
 
 
+def test_youtube_profile_avatar_hosts_are_allowlisted_for_proxy_and_cache_warmup():
+    for url in (
+        "https://yt3.ggpht.com/profile-avatar",
+        "https://yt3.googleusercontent.com/profile-avatar",
+    ):
+        normalized, host = media_router._allowed_external_image_url(url)
+        assert normalized == url
+        assert host == urllib.parse.urlparse(url).hostname
+        assert media_cache_core._normalize_image_url(url) == (url, host)
+
+
 # --- 播放数诚实口径 ---
 
 def test_instagram_image_post_views_marked_unavailable():

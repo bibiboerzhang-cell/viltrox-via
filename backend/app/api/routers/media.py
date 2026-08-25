@@ -46,6 +46,7 @@ VKPI_IMAGE_ALLOWED_HOST_SUFFIXES = (
     ".xx.fbcdn.net",
     ".ytimg.com",
     ".img.youtube.com",
+    ".ggpht.com",
     ".googleusercontent.com",
     ".tiktokcdn.com",
     ".tiktokcdn-us.com",

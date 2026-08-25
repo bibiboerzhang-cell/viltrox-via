@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import React from "react";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 
 // MY KOL 内容墙模块冒烟(contentWall · 2026-07-12)。
 // 主冒烟文件(MyKolBoardPage.smoke.test.tsx)对 recent_videos 恒喂诚实 empty ——
@@ -124,6 +124,7 @@ function routeApi(overrides: {
     if (dataWatchMatch && (init as RequestInit | undefined)?.method === "POST") {
       const body = JSON.parse(String((init as RequestInit).body || "{}"));
       DATA_WATCH_CALLS.push({ poolId: Number(dataWatchMatch[1]), evidenceId: Number(dataWatchMatch[2]), body });
+      if (DATA_WATCH_HANDLER) return DATA_WATCH_HANDLER({ poolId: Number(dataWatchMatch[1]), evidenceId: Number(dataWatchMatch[2]), body });
       if (DATA_WATCH_REQUIRE_SKU && !Array.isArray(body.product_skus)) {
         return {
           status: "sku_required",
@@ -131,6 +132,16 @@ function routeApi(overrides: {
             { sku_code: "AF-85-F14", sku_name: "AF 85mm F1.4 Pro", match_source: "final_v1_lens_evidence_v2", modalities: ["visual"] },
             { sku_code: "AF-35-F18", sku_name: "AF 35mm F1.8", match_source: "catalog" },
           ],
+        };
+      }
+      if (DATA_WATCH_DETECTED_PENDING && !Array.isArray(body.product_skus)) {
+        return {
+          status: "tracking", evidence_id: Number(dataWatchMatch[2]), skus: ["AF-85-F14"], sku_source: "auto",
+          sku_provenance: {
+            relation_type: "detected", source: "final_v1_lens_evidence_v2", confidence: 0.85,
+            requires_human_confirmation: true, modalities: ["visual"], evidence_excerpt: "AF 85 in frame",
+          },
+          tracking: "active", refresh: "queued",
         };
       }
       return {
@@ -173,6 +184,14 @@ const TRACK_CALLS: Array<{ poolId: number; body: { content_url: string; product_
 const TRACKED = new Set<number>();
 const DATA_WATCH_CALLS: Array<{ poolId: number; evidenceId: number; body: Record<string, unknown> }> = [];
 let DATA_WATCH_REQUIRE_SKU = false;
+let DATA_WATCH_DETECTED_PENDING = false;
+let DATA_WATCH_HANDLER: ((call: { poolId: number; evidenceId: number; body: Record<string, unknown> }) => unknown | Promise<unknown>) | null = null;
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 // 预置布局只挂内容墙(布局键 v2);matrix hook 有按 token 分键的模块级缓存 → 固定独立 token
 const renderWall = () => {
@@ -189,6 +208,8 @@ beforeEach(() => {
   TRACKED.clear();
   DATA_WATCH_CALLS.length = 0;
   DATA_WATCH_REQUIRE_SKU = false;
+  DATA_WATCH_DETECTED_PENDING = false;
+  DATA_WATCH_HANDLER = null;
   routeApi();
 });
 
@@ -477,8 +498,102 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     fireEvent.click(screen.getByRole("button", { name: /确认关联并关注/ }));
     await waitFor(() => expect(DATA_WATCH_CALLS).toHaveLength(2));
     expect(DATA_WATCH_CALLS[1]).toMatchObject({ poolId: 101, evidenceId: 9101, body: { product_skus: ["AF-85-F14"] } });
-    expect(await screen.findByRole("status")).toHaveTextContent(/已登记数据关注\(SKU AF-85-F14\)/);
+    expect(await screen.findByText(/已登记数据关注\(SKU AF-85-F14\)/)).toBeTruthy();
     expect(screen.queryByRole("group", { name: "为数据关注选择 SKU" })).toBeNull();
+  });
+
+  it("detected 待确认留在墙内选择器，不提前跳转或冒充抓取完成", async () => {
+    DATA_WATCH_DETECTED_PENDING = true;
+    renderWall();
+    expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
+    const card = screen.getByText("Wall Coop Film").closest("[data-vkpi-wall-card]") as HTMLElement;
+    fireEvent.click(within(card).getByRole("button", { name: "数据关注" }));
+
+    const picker = await screen.findByRole("group", { name: "为数据关注选择 SKU" });
+    expect(picker).toBeTruthy();
+    expect(screen.getByText(/尚未登记为员工确认的单品关注/)).toBeTruthy();
+    expect(screen.getByText(/排队.*不代表抓取完成/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认系统识别并关注" })).toBeDisabled();
+    expect(DATA_WATCH_CALLS).toHaveLength(1);
+  });
+
+  it("A 慢成功、B 快 sku_required 反序返回时，旧 A 不抢 B 的 picker/receipt/跳转", async () => {
+    const slowA = deferred<unknown>();
+    const changed = vi.fn();
+    window.addEventListener("vkpi:sku-play-changed", changed);
+    DATA_WATCH_HANDLER = ({ evidenceId }) => evidenceId === 9101 ? slowA.promise : {
+      status: "sku_required", candidates: [{ sku_code: "AF-35-F18", sku_name: "AF 35mm" }],
+    };
+    renderWall();
+    const cardA = (await screen.findByText("Wall Coop Film")).closest("[data-vkpi-wall-card]") as HTMLElement;
+    const cardB = screen.getByText("Filler clip 1").closest("[data-vkpi-wall-card]") as HTMLElement;
+    fireEvent.click(within(cardA).getByRole("button", { name: "数据关注" }));
+    fireEvent.click(within(cardB).getByRole("button", { name: "数据关注" }));
+
+    const picker = await screen.findByRole("group", { name: "为数据关注选择 SKU" });
+    expect(picker).toHaveAttribute("data-vkpi-data-watch-sku-picker", "9201");
+    await act(async () => {
+      slowA.resolve({
+        status: "tracking", skus: ["AF-85-F14"], refresh: "queued",
+        sku_provenance: { relation_type: "manual", requires_human_confirmation: false },
+      });
+      await slowA.promise;
+    });
+    expect(screen.getByRole("group", { name: "为数据关注选择 SKU" })).toHaveAttribute("data-vkpi-data-watch-sku-picker", "9201");
+    expect(screen.getByText(/未能自动识别产品/)).toBeTruthy();
+    expect(changed).not.toHaveBeenCalled();
+    await waitFor(() => expect(within(cardA).getByRole("button", { name: "数据关注" })).toBeEnabled());
+    window.removeEventListener("vkpi:sku-play-changed", changed);
+  });
+
+  it("A 慢 detected、B 快成功反序返回时，只保留 B 成功与单品跳转", async () => {
+    const slowA = deferred<unknown>();
+    const changed = vi.fn();
+    window.addEventListener("vkpi:sku-play-changed", changed);
+    DATA_WATCH_HANDLER = ({ evidenceId }) => evidenceId === 9101 ? slowA.promise : {
+      status: "tracking", skus: ["AF-35-F18"], refresh: "already_queued",
+      sku_provenance: { relation_type: "manual", requires_human_confirmation: false },
+    };
+    renderWall();
+    const cardA = (await screen.findByText("Wall Coop Film")).closest("[data-vkpi-wall-card]") as HTMLElement;
+    const cardB = screen.getByText("Filler clip 1").closest("[data-vkpi-wall-card]") as HTMLElement;
+    fireEvent.click(within(cardA).getByRole("button", { name: "数据关注" }));
+    fireEvent.click(within(cardB).getByRole("button", { name: "数据关注" }));
+    await waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+    expect((changed.mock.calls[0][0] as CustomEvent).detail).toEqual({ evidenceId: 9201, skus: ["AF-35-F18"] });
+    expect(await screen.findByText(/已登记数据关注\(SKU AF-35-F18\).*已在队列中/)).toBeTruthy();
+
+    await act(async () => {
+      slowA.resolve({
+        status: "tracking", skus: ["AF-85-F14"], refresh: "queued",
+        sku_provenance: { relation_type: "detected", source: "title_alias_v1", requires_human_confirmation: true },
+      });
+      await slowA.promise;
+    });
+    expect(changed).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("group", { name: "为数据关注选择 SKU" })).toBeNull();
+    expect(screen.getByText(/已登记数据关注\(SKU AF-35-F18\).*已在队列中/)).toBeTruthy();
+    await waitFor(() => expect(within(cardA).getByRole("button", { name: "数据关注" })).toBeEnabled());
+    window.removeEventListener("vkpi:sku-play-changed", changed);
+  });
+
+  it("已有 A picker 后发起 B auto，会立即撤下旧 picker；B 未返回前不可误提交 A", async () => {
+    const slowB = deferred<unknown>();
+    DATA_WATCH_HANDLER = ({ evidenceId }) => evidenceId === 9101
+      ? { status: "sku_required", candidates: [{ sku_code: "AF-85-F14" }] }
+      : slowB.promise;
+    renderWall();
+    const cardA = (await screen.findByText("Wall Coop Film")).closest("[data-vkpi-wall-card]") as HTMLElement;
+    const cardB = screen.getByText("Filler clip 1").closest("[data-vkpi-wall-card]") as HTMLElement;
+    fireEvent.click(within(cardA).getByRole("button", { name: "数据关注" }));
+    expect(await screen.findByRole("group", { name: "为数据关注选择 SKU" })).toHaveAttribute("data-vkpi-data-watch-sku-picker", "9101");
+    fireEvent.click(within(cardB).getByRole("button", { name: "数据关注" }));
+    expect(screen.queryByRole("group", { name: "为数据关注选择 SKU" })).toBeNull();
+    await act(async () => {
+      slowB.resolve({ status: "sku_required", candidates: [{ sku_code: "AF-35-F18" }] });
+      await slowB.promise;
+    });
+    expect(await screen.findByRole("group", { name: "为数据关注选择 SKU" })).toHaveAttribute("data-vkpi-data-watch-sku-picker", "9201");
   });
 
   it("员工反馈 #5:卡片「追踪播放」入口 + 引导文案;入队后单 KOL 视图按服务端任务态显示「播放追踪排队中」;共享只读如实回执", async () => {

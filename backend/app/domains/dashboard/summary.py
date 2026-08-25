@@ -8,6 +8,10 @@ from app.domains.dashboard.metric_maturity import (
     normalize_dashboard_scope,
 )
 from app.domains.dashboard.account_picker import build_dashboard_active_roster_counts
+from app.domains.dashboard.parallel_reads import run_dashboard_read_tasks
+from app.domains.dashboard.summary_campaigns import (
+    build_active_campaigns_summary as _build_active_campaigns_summary,
+)
 from app.domains.dashboard.summary_roster import build_roster_movers_tabs
 from app.db.connection import get_conn, table_exists
 from app.services.cache.memory_cache import cache_get_or_build
@@ -530,135 +534,6 @@ def _build_funnel_summary(staff_scope_id: int | None = None) -> dict[str, Any]:
     }
 
 
-def _build_active_campaigns_summary(*, window_days: int = 30, staff_scope_id: int | None = None) -> dict[str, Any]:
-    days = max(1, min(int(window_days or 30), 365))
-    # P1 隔离:非 owner/admin 只看本人(assigned/created/被共享)项目;owner/admin 看全部。
-    project_scope = (
-        f"AND (p.assigned_staff_id={int(staff_scope_id)} OR p.created_by_staff_id={int(staff_scope_id)} "
-        f"OR p.id IN (SELECT project_id FROM vkpi_project_members WHERE staff_id={int(staff_scope_id)}))"
-        if staff_scope_id else ""
-    )
-    rows = _fetch_dicts(
-        f"""
-        WITH assignment_stats AS (
-          SELECT
-            project_id,
-            COUNT(DISTINCT kol_pool_id) AS kol_count,
-            COUNT(DISTINCT kol_pool_id) FILTER (
-              WHERE stage IN {_EXECUTION_STAGES_SQL}
-            ) AS execution_kol_count,
-            COUNT(DISTINCT kol_pool_id) FILTER (
-              WHERE stage IN {_FUNNEL_PUBLISHED_STAGES_SQL}
-            ) AS published_kol_count,
-            BOOL_OR(stage IN {_EXECUTION_STAGES_SQL}) AS has_execution_stage
-          FROM vkpi_project_kol_assignments
-          GROUP BY project_id
-        ),
-        evidence_stats AS (
-          SELECT
-            project_id,
-            COUNT(*) AS evidence_count,
-            COUNT(*) FILTER (
-              WHERE created_at >= NOW() - INTERVAL '{days} days'
-            ) AS recent_evidence_count,
-            COALESCE(SUM(view_count), 0) AS total_views,
-            COALESCE(SUM(view_count) FILTER (
-              WHERE created_at >= NOW() - INTERVAL '{days} days'
-            ), 0) AS recent_views,
-            BOOL_OR(created_at >= NOW() - INTERVAL '{days} days') AS has_recent_evidence
-          FROM vkpi_kol_video_evidence
-          WHERE project_id IS NOT NULL
-            AND COALESCE(is_active, TRUE) = TRUE
-            AND COALESCE(evidence_type, 'video') = 'video'
-          GROUP BY project_id
-        ),
-        active_projects AS (
-          SELECT
-            p.id,
-            p.project_uid,
-            p.project_name,
-            p.product_sku,
-            p.product_name,
-            p.stage,
-            p.stage_status,
-            p.source_type,
-            p.updated_at,
-            COALESCE(a.kol_count, 0) AS kol_count,
-            COALESCE(a.execution_kol_count, 0) AS execution_kol_count,
-            COALESCE(a.published_kol_count, 0) AS published_kol_count,
-            COALESCE(e.evidence_count, 0) AS evidence_count,
-            COALESCE(e.recent_evidence_count, 0) AS recent_evidence_count,
-            COALESCE(e.total_views, 0) AS total_views,
-            COALESCE(e.recent_views, 0) AS recent_views,
-            COALESCE(a.has_execution_stage, FALSE) AS has_execution_stage,
-            COALESCE(e.has_recent_evidence, FALSE) AS has_recent_evidence
-          FROM vkpi_projects p
-          LEFT JOIN assignment_stats a ON a.project_id = p.id
-          LEFT JOIN evidence_stats e ON e.project_id = p.id
-          WHERE COALESCE(p.stage, '') NOT IN (
-              'closed', 'churned', 'cancelled', 'canceled', 'done', 'deleted',
-              '已关闭', '已取消', '已中止', '合作中止'
-            )
-            AND COALESCE(p.stage_status, '') NOT IN (
-              'closed', 'churned', 'cancelled', 'canceled', 'done', 'deleted',
-              '已关闭', '已取消', '已中止', '合作中止'
-            )
-            AND COALESCE(p.source_type, '') <> 'codex_test'
-            {project_scope}
-        )
-        SELECT *
-        FROM active_projects
-        WHERE has_execution_stage = TRUE OR has_recent_evidence = TRUE
-        ORDER BY recent_evidence_count DESC, execution_kol_count DESC, updated_at DESC NULLS LAST, id DESC
-        """
-    )
-
-    items: list[dict[str, Any]] = []
-    for index, row in enumerate(rows[:8]):
-        recent_evidence_count = _as_int(row.get("recent_evidence_count"))
-        execution_kol_count = _as_int(row.get("execution_kol_count"))
-        signals: list[str] = []
-        if execution_kol_count:
-            signals.append(f"实操阶段 {execution_kol_count} KOL")
-        if recent_evidence_count:
-            signals.append(f"近 {days} 天出片 {recent_evidence_count}")
-        items.append(
-            {
-                "id": _as_int(row.get("id")),
-                "project_uid": row.get("project_uid"),
-                "name": row.get("project_name"),
-                "product": row.get("product_name") or row.get("product_sku"),
-                "status": "active",
-                "status_label": "进行中",
-                "icon_key": "camera",
-                "icon_color": ["#a855f7", "#3b82f6", "#10b981", "#f59e0b", "#ec4899", "#06b6d4"][index % 6],
-                "kol_count": _as_int(row.get("kol_count")),
-                "execution_kol_count": execution_kol_count,
-                "published_count": _as_int(row.get("published_kol_count")),
-                "recent_video_count": recent_evidence_count,
-                "evidence_count": _as_int(row.get("evidence_count")),
-                "total_views": _as_int(row.get("total_views")),
-                "recent_views": _as_int(row.get("recent_views")),
-                "active_signals": signals,
-                "bottleneck_text": " · ".join(signals) or "符合当前 active campaign 口径",
-            }
-        )
-
-    return {
-        "active_count": len(rows),
-        "items": items,
-        "window_days": days,
-        "criteria": {
-            "project_status": "vkpi_projects.stage/stage_status not in closed/churned/cancelled/done/deleted/已关闭/已取消/已中止/合作中止",
-            "signals": [
-                "assignment stage in device_sent/received/content_posted",
-                f"video evidence created in the last {days} days",
-            ],
-            "excluded_source_types": ["codex_test"],
-        },
-    }
-
-
 def build_dashboard_summary(
     *,
     window_days: int = 30,
@@ -697,17 +572,35 @@ def _build_dashboard_summary_uncached(
 ) -> dict[str, Any]:
     normalized_scope = normalize_dashboard_scope(metric_scope)
     effective_staff_id = scope.effective_staff_id(staff, staff_id)
-    result = (
-        decision_engine.dashboard_view("staff", window_days=window_days, staff_id=effective_staff_id)
-        if effective_staff_id
-        else decision_engine.dashboard(window_days=window_days)
+    # These sources have no data dependency.  PostgreSQL gives each worker its
+    # own release-guarded connection; SQLite keeps the previous serial order.
+    # This shortens a genuine cold miss without sharing the request transaction
+    # or weakening the authorization-scoped outer cache.
+    primary_sources = run_dashboard_read_tasks(
+        {
+            "decision": lambda: (
+                decision_engine.dashboard_view(
+                    "staff",
+                    window_days=window_days,
+                    staff_id=effective_staff_id,
+                )
+                if effective_staff_id
+                else decision_engine.dashboard(window_days=window_days)
+            ),
+            "lineage": lambda: metric_lineage.dashboard_metrics(
+                period_days=window_days,
+                staff=staff,
+                staff_id=effective_staff_id,
+                generated_by_staff_id=resolve_staff_id(staff) or None,
+            ),
+            "official_summary": lambda: _dashboard_official_matrix_summary(limit=20),
+            "active_roster": lambda: build_dashboard_active_roster_counts(
+                staff_scope_id=effective_staff_id
+            ),
+        }
     )
-    lineage = metric_lineage.dashboard_metrics(
-        period_days=window_days,
-        staff=staff,
-        staff_id=effective_staff_id,
-        generated_by_staff_id=resolve_staff_id(staff) or None,
-    )
+    result = primary_sources["decision"]
+    lineage = primary_sources["lineage"]
     result["metric_run"] = lineage.get("run") or {}
     result["metrics"] = lineage.get("metrics") or []
     maturity_contract = dashboard_metric_maturity_contract()
@@ -716,33 +609,54 @@ def _build_dashboard_summary_uncached(
     result["metric_maturity"] = scope_maturity
     result["metric_maturity_by_scope"] = maturity_contract["scopes"]
     window_metrics = dashboard_window_metrics_contract(maturity_contract)
-    official_summary = _dashboard_official_matrix_summary(limit=20)
+    official_summary = primary_sources["official_summary"]
     summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
     # P1 隔离:effective_staff_id 为 None=owner/admin(全局),否则=该员工(own-only)。
     # 四聚合统一吃这把 scope —— 此前它们各自全局口径,导致小号也看到全公司数据。
-    active_roster_by_scope = build_dashboard_active_roster_counts(staff_scope_id=effective_staff_id)
+    active_roster_by_scope = primary_sources["active_roster"]
     summary["active_roster"] = int(active_roster_by_scope.get("all") or 0)
     win = int(window_days or 30)
     tenant_partition = _summary_tenant_partition(staff)
-    summary["evidence_metrics"] = _cached_summary_block(
-        "evidence_metrics", effective_staff_id,
-        lambda: _build_evidence_metrics_summary(window_days=window_days, staff_scope_id=effective_staff_id,
-                                                active_roster_by_scope=active_roster_by_scope),
-        tenant_partition=tenant_partition,
-        window=win,
+    secondary_sources = run_dashboard_read_tasks(
+        {
+            "evidence_metrics": lambda: _cached_summary_block(
+                "evidence_metrics",
+                effective_staff_id,
+                lambda: _build_evidence_metrics_summary(
+                    window_days=window_days,
+                    staff_scope_id=effective_staff_id,
+                    active_roster_by_scope=active_roster_by_scope,
+                ),
+                tenant_partition=tenant_partition,
+                window=win,
+            ),
+            "active_campaigns": lambda: _cached_summary_block(
+                "active_campaigns",
+                effective_staff_id,
+                lambda: _build_active_campaigns_summary(
+                    window_days=window_days,
+                    staff_scope_id=effective_staff_id,
+                ),
+                tenant_partition=tenant_partition,
+                window=win,
+            ),
+            # 四环漏斗块(收藏→认领→进项目→已发布),shape 契约见 builder docstring。
+            "funnel": lambda: _cached_summary_block(
+                "funnel",
+                effective_staff_id,
+                lambda: _build_funnel_summary(staff_scope_id=effective_staff_id),
+                tenant_partition=tenant_partition,
+            ),
+            "company_window": _build_company_window_metrics,
+            "company_series": lambda: _build_company_metric_series(
+                window_days=30,
+                lookback_days=60,
+            ),
+        }
     )
-    summary["active_campaigns"] = _cached_summary_block(
-        "active_campaigns", effective_staff_id,
-        lambda: _build_active_campaigns_summary(window_days=window_days, staff_scope_id=effective_staff_id),
-        tenant_partition=tenant_partition,
-        window=win,
-    )
-    # 波3 R1 / C9(2026-06-12):四环漏斗块(收藏→认领→进项目→已发布),shape 契约见 _build_funnel_summary docstring。
-    summary["funnel"] = _cached_summary_block(
-        "funnel", effective_staff_id,
-        lambda: _build_funnel_summary(staff_scope_id=effective_staff_id),
-        tenant_partition=tenant_partition,
-    )
+    summary["evidence_metrics"] = secondary_sources["evidence_metrics"]
+    summary["active_campaigns"] = secondary_sources["active_campaigns"]
+    summary["funnel"] = secondary_sources["funnel"]
     # 2026-07-18 体检修:summary.generated_at 此前从不赋值 → 真值卡新鲜度恒
     # 「时间待接入」。真实时间戳一直存在,取 metric_run 兜底 evidence 刷新时间。
     if not summary.get("generated_at"):
@@ -763,7 +677,7 @@ def _build_dashboard_summary_uncached(
     # post-level snapshot 未满 30d 前 window_metrics.owned 为 null(走「累积中」),
     # 但 channel-level vkpi_channel_metrics 已有 ~30d 真实快照,可诚实算出官方 30d 曝光增量与互动率。
     # 仅写 company/owned,绝不动 all/kol(KOL 窗口仍未就绪)。
-    company_window = _build_company_window_metrics()
+    company_window = secondary_sources["company_window"]
     company_exposure_30d = company_window.get("exposure_30d")
     company_engagement_rate = company_window.get("engagement_rate")
     if company_exposure_30d is not None:
@@ -773,7 +687,7 @@ def _build_dashboard_summary_uncached(
         summary["engagement_rate_by_scope"]["company"] = company_engagement_rate
         summary["engagement_rate_by_scope"]["owned"] = company_engagement_rate
     summary["company_window_metrics"] = company_window
-    company_metric_series = _build_company_metric_series(window_days=30, lookback_days=60)
+    company_metric_series = secondary_sources["company_series"]
     metric_series_by_scope = (
         dict(summary["metric_series_by_scope"])
         if isinstance(summary.get("metric_series_by_scope"), dict)

@@ -263,6 +263,67 @@ describe("MY KOL 单品播放数据模块", () => {
     expect(scrollIntoView.mock.instances).toContain(targetRow);
   });
 
+  it("目标行首轮尚未生成时保留可见 pending；手工重试后展开并聚焦精确视频行", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    render(<SkuPlayModule apiToken="t" noToken={<div>no token</div>} />);
+    await screen.findByText("AF 85mm F1.4 Pro");
+    const withoutTarget = {
+      ...OVERVIEW,
+      summary: { ...OVERVIEW.summary, videos: 2 },
+      groups: OVERVIEW.groups.map((group) => group.sku_code === "AF85F14-Z"
+        ? { ...group, videos: 1, items: group.items.filter((item) => item.evidence_id !== 501) }
+        : group),
+    };
+    apiFetchMock.mockResolvedValueOnce(withoutTarget).mockResolvedValueOnce(OVERVIEW);
+    const calls = apiFetchMock.mock.calls.length;
+
+    act(() => window.dispatchEvent(new CustomEvent(SKU_PLAY_CHANGED_EVENT, {
+      detail: { evidenceId: 501, skus: ["AF85F14-Z"] },
+    })));
+
+    await waitFor(() => expect(apiFetchMock.mock.calls.length).toBe(calls + 1));
+    expect(await screen.findByText("目标视频行尚未生成")).toBeTruthy();
+    expect(screen.getByText(/目标会保留，不会静默消失/)).toBeTruthy();
+    expect(document.querySelector('[data-vkpi-sku-play-evidence="501"]')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "重试定位" }));
+
+    await waitFor(() => expect(apiFetchMock.mock.calls.length).toBe(calls + 2));
+    const targetRow = await waitFor(() => {
+      const row = document.querySelector('[data-vkpi-sku-play-evidence="501"]') as HTMLTableRowElement | null;
+      expect(row).toHaveAttribute("data-vkpi-sku-play-evidence-focus", "active");
+      return row as HTMLTableRowElement;
+    });
+    expect(await screen.findByText("已定位目标视频")).toBeTruthy();
+    expect(scrollIntoView.mock.instances).toContain(targetRow);
+    expect(document.activeElement).toBe(targetRow);
+  });
+
+  it("已定位后立即刷新且 GET 很慢时，旧 2.4s 高亮 timer 不会清掉新 target", async () => {
+    render(<SkuPlayModule apiToken="t" noToken={<div>no token</div>} />);
+    await screen.findByText("AF 85mm F1.4 Pro");
+    act(() => window.dispatchEvent(new CustomEvent(SKU_PLAY_CHANGED_EVENT, {
+      detail: { evidenceId: 501, skus: ["AF85F14-Z"] },
+    })));
+    expect(await screen.findByText("已定位目标视频")).toBeTruthy();
+    const slowRefresh = deferred<typeof OVERVIEW>();
+    apiFetchMock.mockImplementationOnce(() => slowRefresh.promise);
+    const calls = apiFetchMock.mock.calls.length;
+
+    fireEvent.click(screen.getByText("刷新"));
+    await waitFor(() => expect(apiFetchMock.mock.calls.length).toBe(calls + 1));
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 2600)); });
+    expect(screen.getByText("正在同步单品播放")).toBeTruthy();
+    expect(document.querySelector("[data-vkpi-sku-play-module]"))
+      .toHaveAttribute("data-vkpi-sku-play-evidence-id", "501");
+
+    await act(async () => {
+      slowRefresh.resolve(OVERVIEW);
+      await slowRefresh.promise;
+    });
+    expect(await screen.findByText("已定位目标视频")).toBeTruthy();
+  });
+
   it("无登记 → 诚实空态引导「数据关注」入口", async () => {
     route({ contract: "my_kol_sku_play_overview_v1", summary: { skus: 0, videos: 0, kols: 0, measured_videos: 0 }, groups: [], truncated: false, empty_reason: "no_tracked_sku_videos" });
     render(<SkuPlayModule apiToken="t" noToken={<div>no token</div>} />);

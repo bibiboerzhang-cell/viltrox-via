@@ -79,6 +79,7 @@ describe("内容墙数据关注 SKU 选择器", () => {
     };
     render(<DataWatchSkuPicker pending={detectedPending} busy={false} onCancel={vi.fn()} onSubmit={onSubmit} />);
 
+    expect(screen.getByText(/当前尚未登记为员工确认/)).toBeTruthy();
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(screen.getByRole("button", { name: "确认系统识别并关注（1）" }));
     expect(onSubmit).toHaveBeenCalledWith(["AF-35"], "confirm_detected");

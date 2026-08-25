@@ -19,9 +19,6 @@ const IMAGE_PROXY_HOSTS = [
   // existing honest, non-cacheable media fallback instead of console noise.
   'ytimg.com',
   'img.youtube.com',
-];
-
-const DIRECT_IMAGE_HOSTS = [
   'ggpht.com',
   'googleusercontent.com',
 ];
@@ -82,9 +79,6 @@ export function proxiedImageUrl(rawUrl: unknown): string {
     const absoluteUrl = absoluteExternalUrl(url);
     const parsed = new URL(absoluteUrl);
     const host = parsed.hostname.toLowerCase();
-    if (hostMatches(host, DIRECT_IMAGE_HOSTS)) {
-      return absoluteUrl;
-    }
     if (hostMatches(host, IMAGE_PROXY_HOSTS)) {
       return `/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(absoluteUrl)}`;
     }

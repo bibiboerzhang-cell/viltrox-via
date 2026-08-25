@@ -3,6 +3,7 @@ import { proxiedImageUrl } from '../pages/data-analysis/utils/mediaProxy';
 
 const AVATAR_STATUS_LABELS: Record<string, string> = {
   durable: '头像健康',
+  external: '外部头像，等待本地缓存',
   ephemeral: '临时头像，可能过期',
   expired: '头像已过期，显示姓名缩写',
   invalid: '头像地址无效，显示姓名缩写',

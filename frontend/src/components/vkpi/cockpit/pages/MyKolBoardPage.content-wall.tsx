@@ -193,12 +193,14 @@ export function ContentWallModule({
   const [watchBusyIds, setWatchBusyIds] = React.useState<Set<number>>(new Set());
   const [trackReceipt, setTrackReceipt] = React.useState<FlowReceipt | null>(null);
   const [pendingSkuChoice, setPendingSkuChoice] = React.useState<PendingDataWatchSkuChoice | null>(null);
+  const dataWatchInteractionEpoch = React.useRef(0);
   const autoFullQueryKeyRef = React.useRef("");
 
   React.useEffect(() => setExtraVisible(0), [kolId, days, relationFilter, sortBy]);
   React.useEffect(() => {
     setTrackReceipt(null);
     setPendingSkuChoice(null);
+    dataWatchInteractionEpoch.current += 1;
     autoFullQueryKeyRef.current = "";
   }, [kolId, days]);
 
@@ -261,25 +263,29 @@ export function ContentWallModule({
   // 一键「数据关注」(墙入口):POST …/videos/{evidence_id}/data-watch —— 自动认产品 + 登记追踪 +
   //   排队刷新(流程/文案住 MyKolBoardPage.data-watch.ts);认不出产品时墙内展示
   //   服务端候选 SKU 多选器,只在员工明确勾选后二次提交,绝不无 SKU 假登记。
-  const dataWatchVideo = (video: VkpiKolPoolVideoRow, productSkus: string[] = [], intent: DataWatchSubmitIntent = productSkus.length ? "manual" : "auto") => runDataWatchAction(video, {
-    apiToken,
-    kolPoolId: Number(video.kol_pool_id) || kolId,
-    isBusy: (eid) => watchBusyIds.has(eid),
-    setBusy: toggleIdInSet(setWatchBusyIds),
-    setReceipt: setTrackReceipt,
-    onSkuRequired: (pendingVideo, candidates) => {
-      setPendingSkuChoice({ video: pendingVideo, candidates, intent: "manual" });
-      setTrackReceipt({ text: "未能自动识别产品——请选择对应 SKU 后确认；未选择不会登记。", tone: "info" });
-    },
-    onDetectedConfirmationRequired: (pendingVideo, candidates) => {
-      setPendingSkuChoice({ video: pendingVideo, candidates, intent: "confirm_detected" });
-      setTrackReceipt({ text: "系统已唯一识别到 SKU，仍需你勾选确认；未确认前保持『待人工确认』。", tone: "info" });
-    },
-    onTracked: () => {
-      setPendingSkuChoice(null);
-      void wallPages.refresh();
-    },
-  }, productSkus, intent);
+  const dataWatchVideo = (video: VkpiKolPoolVideoRow, productSkus: string[] = [], intent: DataWatchSubmitIntent = productSkus.length ? "manual" : "auto") => {
+    const interactionEpoch = ++dataWatchInteractionEpoch.current;
+    if (intent === "auto") setPendingSkuChoice(null);
+    return runDataWatchAction(video, {
+      apiToken,
+      kolPoolId: Number(video.kol_pool_id) || kolId,
+      isCurrent: () => dataWatchInteractionEpoch.current === interactionEpoch,
+      isBusy: (eid) => watchBusyIds.has(eid),
+      setBusy: toggleIdInSet(setWatchBusyIds),
+      setReceipt: setTrackReceipt,
+      onSkuRequired: (pendingVideo, candidates) => {
+        setPendingSkuChoice({ video: pendingVideo, candidates, intent: "manual" });
+        setTrackReceipt({ text: "未能自动识别产品——请选择对应 SKU 后确认；未选择不会登记。", tone: "info" });
+      },
+      onDetectedConfirmationRequired: (pendingVideo, candidates) => {
+        setPendingSkuChoice({ video: pendingVideo, candidates, intent: candidates.length === 1 ? "confirm_detected" : "manual" });
+      },
+      onTracked: () => {
+        setPendingSkuChoice(null);
+        void wallPages.refresh();
+      },
+    }, productSkus, intent);
+  };
 
   return (
     <div>

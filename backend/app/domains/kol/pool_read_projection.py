@@ -77,7 +77,8 @@ def _pool_probe(row: dict[str, Any]) -> dict[str, Any]:
     return {**raw, **row, "raw_platform_data": raw}
 
 
-def _local_cached_avatar(value: Any) -> bool:
+def is_local_cached_avatar_url(value: Any) -> bool:
+    """Return whether ``value`` is one exact public path for our local cache."""
     text = str(value or "").strip()
     for prefix in _PUBLIC_IMAGE_CACHE_PREFIXES:
         if text.startswith(prefix):
@@ -169,7 +170,7 @@ def project_pool_avatar(
         if source == "pool_avatar_url" and _content_thumbnail_url(raw_url):
             terminal_state = "invalid"
             continue
-        if _local_cached_avatar(raw_url):
+        if is_local_cached_avatar_url(raw_url):
             return {
                 "avatar_url": raw_url,
                 "avatar_url_status": "durable",
@@ -186,7 +187,12 @@ def project_pool_avatar(
         usable_url, status = _avatar_url_policy(raw_url)
         if status != "missing":
             terminal_state = status
-        cached_url = lookup(raw_url) if status in {"ephemeral", "expired"} else ""
+        # Prefer an already-materialized local copy for every reviewed source,
+        # including otherwise stable YouTube profile CDNs.  The old branch only
+        # consulted the cache for signed/expired URLs, so a successful prewarm
+        # of a stable external avatar could never become a genuinely local,
+        # immutable read projection.
+        cached_url = lookup(raw_url) if status in {"durable", "ephemeral", "expired"} else ""
         if cached_url:
             return {
                 "avatar_url": cached_url,
@@ -202,14 +208,15 @@ def project_pool_avatar(
                 },
             }
         if usable_url:
+            visible_status = "external" if status == "durable" else status
             return {
                 "avatar_url": usable_url,
-                "avatar_url_status": status,
+                "avatar_url_status": visible_status,
                 "avatar_upstream_status": status,
                 "avatar_url_source": source,
                 "avatar_fallback": "",
                 "avatar_health": {
-                    "status": status,
+                    "status": visible_status,
                     "upstream_status": status,
                     "source": source,
                     "fallback": "",
@@ -248,7 +255,7 @@ def _stable_avatar_quality(row: dict[str, Any]) -> int:
     for source, candidate in dict.fromkeys(pair for pair in candidates if pair[1]):
         if source == "pool_avatar_url" and _content_thumbnail_url(candidate):
             continue
-        if _local_cached_avatar(candidate):
+        if is_local_cached_avatar_url(candidate):
             return 2
         usable_url, status = _avatar_url_policy(candidate, now_epoch=0)
         if usable_url and status == "durable":
