@@ -6,6 +6,7 @@ established imports and monkeypatch points used by routers, workers, and tests.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any
 
 from app.db.connection import get_conn
@@ -82,6 +83,69 @@ from app.services.intelligence.account_scan_service import search_platform_conte
 logger = logging.getLogger(__name__)
 
 
+_MISSING = object()
+
+
+class _CompatBinding:
+    """把门面此刻的属性临时装进真实现模块,最外层调用退出后无条件还原。
+
+    还原是硬要求:pytest 的 monkeypatch 只还原门面那一侧,早先这里直接 setattr
+    写死,门面上的桩就永久留在真实现模块里污染后面的用例(实测:先跑
+    tests/test_kol_search_quality_guardrails.py,``profile_discovery_provider
+    ._auto_enroll_discoveries`` 会一直是那边的 lambda)。装/还原按引用计数配对,
+    只要还有调用在飞就不还原,所以「调用期间真实现看见的是门面上的值」这条
+    契约一字未改——变的只是调用结束后不再留下脚印。
+    """
+
+    def __init__(
+        self,
+        module: Any,
+        shared_names: tuple[str, ...],
+        implementations: dict[str, Any] | None = None,
+        defaults: dict[str, Any] | None = None,
+    ) -> None:
+        self._module = module
+        self._shared_names = shared_names
+        self._implementations = implementations if implementations is not None else {}
+        self._defaults = defaults if defaults is not None else {}
+        self._lock = threading.Lock()
+        self._depth = 0
+        self._saved: list[tuple[str, Any]] = []
+
+    def _overrides(self) -> dict[str, Any]:
+        """门面当前值;实现槽被 monkeypatch 过才覆盖,否则回落到真实现。"""
+        values = {name: globals()[name] for name in self._shared_names}
+        for name, implementation in self._implementations.items():
+            current = globals()[name]
+            values[name] = implementation if current is self._defaults[name] else current
+        return values
+
+    def __enter__(self) -> "_CompatBinding":
+        overrides = self._overrides()
+        with self._lock:
+            if self._depth == 0:
+                self._saved = [
+                    (name, getattr(self._module, name, _MISSING)) for name in overrides
+                ]
+            self._depth += 1
+            for name, value in overrides.items():
+                setattr(self._module, name, value)
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        with self._lock:
+            self._depth = max(0, self._depth - 1)
+            if self._depth:
+                return
+            for name, previous in self._saved:
+                if previous is _MISSING:
+                    # 门面注入前真实现本来就没这个名字(如 _competitor_brand_official)
+                    self._module.__dict__.pop(name, None)
+                else:
+                    setattr(self._module, name, previous)
+            self._saved = []
+
+
 _PROVIDER_IMPLEMENTATIONS = {
     "discovery_plan": _provider_impl.discovery_plan,
     "_dedupe_enrolled_row_best_effort": _provider_impl._dedupe_enrolled_row_best_effort,
@@ -122,15 +186,6 @@ _PROVIDER_SHARED_NAMES = (
 )
 
 
-def _sync_provider_compat() -> None:
-    for name in _PROVIDER_SHARED_NAMES:
-        setattr(_provider_impl, name, globals()[name])
-    for name, implementation in _PROVIDER_IMPLEMENTATIONS.items():
-        current = globals()[name]
-        default = _PROVIDER_COMPAT_DEFAULTS[name]
-        setattr(_provider_impl, name, implementation if current is default else current)
-
-
 def discovery_plan(
     *,
     query_text: str,
@@ -138,35 +193,35 @@ def discovery_plan(
     platform_hint: str = "",
     limit: int = 15,
 ) -> dict[str, Any]:
-    _sync_provider_compat()
-    return _PROVIDER_IMPLEMENTATIONS["discovery_plan"](
-        query_text=query_text,
-        platforms=platforms,
-        platform_hint=platform_hint,
-        limit=limit,
-    )
+    with _PROVIDER_COMPAT:
+        return _PROVIDER_IMPLEMENTATIONS["discovery_plan"](
+            query_text=query_text,
+            platforms=platforms,
+            platform_hint=platform_hint,
+            limit=limit,
+        )
 
 
 def _dedupe_enrolled_row_best_effort(enroll_result: Any) -> None:
-    _sync_provider_compat()
-    return _PROVIDER_IMPLEMENTATIONS["_dedupe_enrolled_row_best_effort"](enroll_result)
+    with _PROVIDER_COMPAT:
+        return _PROVIDER_IMPLEMENTATIONS["_dedupe_enrolled_row_best_effort"](enroll_result)
 
 
 def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
-    _sync_provider_compat()
-    return _PROVIDER_IMPLEMENTATIONS["_auto_enroll_discoveries"](new_creators)
+    with _PROVIDER_COMPAT:
+        return _PROVIDER_IMPLEMENTATIONS["_auto_enroll_discoveries"](new_creators)
 
 
 def _existing_match_pool_id(item: dict[str, Any]) -> int:
-    _sync_provider_compat()
-    return _PROVIDER_IMPLEMENTATIONS["_existing_match_pool_id"](item)
+    with _PROVIDER_COMPAT:
+        return _PROVIDER_IMPLEMENTATIONS["_existing_match_pool_id"](item)
 
 
 def _triage_existing_matches_reach(
     existing_matches: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    _sync_provider_compat()
-    return _PROVIDER_IMPLEMENTATIONS["_triage_existing_matches_reach"](existing_matches)
+    with _PROVIDER_COMPAT:
+        return _PROVIDER_IMPLEMENTATIONS["_triage_existing_matches_reach"](existing_matches)
 
 
 async def discover_new_creators(
@@ -188,25 +243,25 @@ async def discover_new_creators(
     exclude_chinese: bool = True,
 ) -> dict[str, Any]:
     # 与 profile_discovery_provider.discover_new_creators 签名同集(守卫测试
-    # test_profile_discovery_facade_signature);流水线经 _sync_pipeline_compat 拿到的是本壳。
-    _sync_provider_compat()
-    return await _PROVIDER_IMPLEMENTATIONS["discover_new_creators"](
-        query_text=query_text,
-        platforms=platforms,
-        platform_hint=platform_hint,
-        market=market,
-        limit=limit,
-        per_platform_limit=per_platform_limit,
-        per_platform_limits=per_platform_limits,
-        search_query_en=search_query_en,
-        product_focus=product_focus,
-        ideal_creator_types=ideal_creator_types,
-        verticals=verticals,
-        avoid_types=avoid_types,
-        target_persona=target_persona,
-        auto_enroll=auto_enroll,
-        exclude_chinese=exclude_chinese,
-    )
+    # test_profile_discovery_facade_signature);流水线经 _PIPELINE_COMPAT 拿到的是本壳。
+    with _PROVIDER_COMPAT:
+        return await _PROVIDER_IMPLEMENTATIONS["discover_new_creators"](
+            query_text=query_text,
+            platforms=platforms,
+            platform_hint=platform_hint,
+            market=market,
+            limit=limit,
+            per_platform_limit=per_platform_limit,
+            per_platform_limits=per_platform_limits,
+            search_query_en=search_query_en,
+            product_focus=product_focus,
+            ideal_creator_types=ideal_creator_types,
+            verticals=verticals,
+            avoid_types=avoid_types,
+            target_persona=target_persona,
+            auto_enroll=auto_enroll,
+            exclude_chinese=exclude_chinese,
+        )
 
 
 _PROVIDER_COMPAT_DEFAULTS = {
@@ -217,6 +272,12 @@ _PROVIDER_COMPAT_DEFAULTS = {
     "_triage_existing_matches_reach": _triage_existing_matches_reach,
     "discover_new_creators": discover_new_creators,
 }
+_PROVIDER_COMPAT = _CompatBinding(
+    _provider_impl,
+    _PROVIDER_SHARED_NAMES,
+    _PROVIDER_IMPLEMENTATIONS,
+    _PROVIDER_COMPAT_DEFAULTS,
+)
 
 
 _SESSION_IMPLEMENTATIONS = {
@@ -231,23 +292,14 @@ _SESSION_IMPLEMENTATIONS = {
 _SESSION_SHARED_NAMES = ("_int", "_text", "get_conn", "search_sessions", "url_deep_crawl")
 
 
-def _sync_session_compat() -> None:
-    for name in _SESSION_SHARED_NAMES:
-        setattr(_session_impl, name, globals()[name])
-    for name, implementation in _SESSION_IMPLEMENTATIONS.items():
-        current = globals()[name]
-        default = _SESSION_COMPAT_DEFAULTS[name]
-        setattr(_session_impl, name, implementation if current is default else current)
-
-
 def _profile_url_from_kol_pool_id(kol_pool_id: Any) -> str:
-    _sync_session_compat()
-    return _SESSION_IMPLEMENTATIONS["_profile_url_from_kol_pool_id"](kol_pool_id)
+    with _SESSION_COMPAT:
+        return _SESSION_IMPLEMENTATIONS["_profile_url_from_kol_pool_id"](kol_pool_id)
 
 
 def _profile_url_from_item(item: dict[str, Any]) -> str:
-    _sync_session_compat()
-    return _SESSION_IMPLEMENTATIONS["_profile_url_from_item"](item)
+    with _SESSION_COMPAT:
+        return _SESSION_IMPLEMENTATIONS["_profile_url_from_item"](item)
 
 
 def profile_crawl_plan_for_session_item(
@@ -257,18 +309,18 @@ def profile_crawl_plan_for_session_item(
     max_posts: int = 12,
     mode: str = "profile_only",
 ) -> dict[str, Any]:
-    _sync_session_compat()
-    return _SESSION_IMPLEMENTATIONS["profile_crawl_plan_for_session_item"](
-        session_id=session_id,
-        item_id=item_id,
-        max_posts=max_posts,
-        mode=mode,
-    )
+    with _SESSION_COMPAT:
+        return _SESSION_IMPLEMENTATIONS["profile_crawl_plan_for_session_item"](
+            session_id=session_id,
+            item_id=item_id,
+            max_posts=max_posts,
+            mode=mode,
+        )
 
 
 def _enqueue_audience_enrichment(kol_pool_id: int) -> dict[str, Any]:
-    _sync_session_compat()
-    return _SESSION_IMPLEMENTATIONS["_enqueue_audience_enrichment"](kol_pool_id)
+    with _SESSION_COMPAT:
+        return _SESSION_IMPLEMENTATIONS["_enqueue_audience_enrichment"](kol_pool_id)
 
 
 def execute_profile_crawl_for_session_item(
@@ -277,12 +329,12 @@ def execute_profile_crawl_for_session_item(
     item_id: int,
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    _sync_session_compat()
-    return _SESSION_IMPLEMENTATIONS["execute_profile_crawl_for_session_item"](
-        session_id=session_id,
-        item_id=item_id,
-        body=body,
-    )
+    with _SESSION_COMPAT:
+        return _SESSION_IMPLEMENTATIONS["execute_profile_crawl_for_session_item"](
+            session_id=session_id,
+            item_id=item_id,
+            body=body,
+        )
 
 
 def advance_search_session_items(
@@ -291,15 +343,15 @@ def advance_search_session_items(
     body: dict[str, Any] | None = None,
     smart_local_contract: bool = False,
 ) -> dict[str, Any]:
-    # 门面壳会被 _sync_pipeline_compat() 塞回流水线模块,签名必须与
+    # 门面壳会被 _PIPELINE_COMPAT 塞回流水线模块,签名必须与
     # profile_discovery_session 真实现保持同集;漏转发 smart_local_contract 曾让
     # 严格 30+30 搜索在 prod 直接 TypeError(「分析未完成」)。
-    _sync_session_compat()
-    return _SESSION_IMPLEMENTATIONS["advance_search_session_items"](
-        session_id=session_id,
-        body=body,
-        smart_local_contract=bool(smart_local_contract),
-    )
+    with _SESSION_COMPAT:
+        return _SESSION_IMPLEMENTATIONS["advance_search_session_items"](
+            session_id=session_id,
+            body=body,
+            smart_local_contract=bool(smart_local_contract),
+        )
 
 
 def _profile_advance_pipeline_status(
@@ -307,12 +359,12 @@ def _profile_advance_pipeline_status(
     new_discovery: dict[str, Any] | None,
     advance_result: dict[str, Any],
 ) -> str:
-    _sync_session_compat()
-    return _SESSION_IMPLEMENTATIONS["_profile_advance_pipeline_status"](
-        recall_result,
-        new_discovery,
-        advance_result,
-    )
+    with _SESSION_COMPAT:
+        return _SESSION_IMPLEMENTATIONS["_profile_advance_pipeline_status"](
+            recall_result,
+            new_discovery,
+            advance_result,
+        )
 
 
 _SESSION_COMPAT_DEFAULTS = {
@@ -324,6 +376,12 @@ _SESSION_COMPAT_DEFAULTS = {
     "advance_search_session_items": advance_search_session_items,
     "_profile_advance_pipeline_status": _profile_advance_pipeline_status,
 }
+_SESSION_COMPAT = _CompatBinding(
+    _session_impl,
+    _SESSION_SHARED_NAMES,
+    _SESSION_IMPLEMENTATIONS,
+    _SESSION_COMPAT_DEFAULTS,
+)
 
 
 _PIPELINE_IMPLEMENTATION = _pipeline_impl.execute_smart_search_profile_advance_pipeline
@@ -341,11 +399,7 @@ _PIPELINE_SHARED_NAMES = (
     "profile_recall",
     "search_sessions",
 )
-
-
-def _sync_pipeline_compat() -> None:
-    for name in _PIPELINE_SHARED_NAMES:
-        setattr(_pipeline_impl, name, globals()[name])
+_PIPELINE_COMPAT = _CompatBinding(_pipeline_impl, _PIPELINE_SHARED_NAMES)
 
 
 async def execute_smart_search_profile_advance_pipeline(
@@ -354,9 +408,9 @@ async def execute_smart_search_profile_advance_pipeline(
     payload: dict[str, Any],
     provider_actor: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    _sync_pipeline_compat()
-    return await _PIPELINE_IMPLEMENTATION(
-        session_id=session_id,
-        payload=payload,
-        provider_actor=provider_actor,
-    )
+    with _PIPELINE_COMPAT:
+        return await _PIPELINE_IMPLEMENTATION(
+            session_id=session_id,
+            payload=payload,
+            provider_actor=provider_actor,
+        )

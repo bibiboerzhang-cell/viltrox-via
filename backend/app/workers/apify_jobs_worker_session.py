@@ -731,6 +731,7 @@ def _sync_search_session_job_impl(
         enrichment_error = _session_url_enrichment_error(existing_payload)
         progressive = any(roles)
         downstream: dict[str, Any] | None = None
+        optional_gaps: dict[str, Any] | None = None
         required_tasks_complete = False
         if progressive:
             state = _lineage_item_state(
@@ -740,6 +741,7 @@ def _sync_search_session_job_impl(
             item_status = str(state.get("item_status") or "partial")
             stage = str(state.get("stage") or "analysis")
             downstream = state.get("downstream") if isinstance(state.get("downstream"), dict) else {}
+            optional_gaps = state.get("optional_gaps") if isinstance(state.get("optional_gaps"), dict) else {}
             required_tasks_complete = bool(state.get("required_tasks_complete"))
         else:
             item_status, stage = _search_session_job_state(raw_status, reason or row.get("last_error") or "")
@@ -758,6 +760,10 @@ def _sync_search_session_job_impl(
         }
         if downstream is not None:
             item_patch["downstream_jobs"] = downstream
+        if optional_gaps is not None:
+            # Optional augmentation never gates item_status; it is recorded here
+            # so the facade can say 已出结果,受众资料补全中 instead of hiding it.
+            item_patch["optional_gaps"] = optional_gaps
         if current_analysis_summary:
             item_patch["analysis"] = current_analysis_summary
         if resolver_projection:

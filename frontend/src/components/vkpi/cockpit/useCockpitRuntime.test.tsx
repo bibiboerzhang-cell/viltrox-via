@@ -176,6 +176,65 @@ describe("KOL Pool persistent cache privacy", () => {
 
 });
 
+// 读端把同一个人的重复记录折叠展示后,一页 500 行进、返回可能只有 498 条。
+// 旧的「返回条数 < 每页条数 就是末页」判据会在池中段停手(隔离库实测停在 1498/2020,
+// 尾部 522 行 26% 永不加载)。这三条锁住新契约:has_more 说了算,没有 has_more 才看条数。
+describe("KOL Pool 分页:短页不等于末页", () => {
+  const page = (count: number, startId: number) =>
+    Array.from({ length: count }, (_, index) => ({ id: startId + index }));
+
+  it("短页但 has_more=true 时继续翻,直到后端说没有下一页", async () => {
+    const offsets: number[] = [];
+    kolMocks.getKolPoolWorkspace.mockImplementation((_token: string, params: any) => {
+      offsets.push(params.offset);
+      if (params.offset === 0) {
+        return Promise.resolve({
+          list: { items: page(498, 1), has_more: true, projection: { duplicates_collapsed: 2 } },
+        });
+      }
+      if (params.offset === 500) {
+        return Promise.resolve({ list: { items: page(20, 501), has_more: false } });
+      }
+      return Promise.resolve({ list: { items: page(500, 9000), has_more: true } });
+    });
+
+    const runtime = renderRuntime();
+    await waitFor(() => expect(runtime.result.current.kolPoolRows).toHaveLength(518));
+    expect(offsets).toEqual([0, 500]);
+    runtime.unmount();
+  });
+
+  it("后端不给 has_more 时,用折叠数还原折叠前条数再决定翻不翻", async () => {
+    kolMocks.getKolPoolWorkspace.mockRejectedValue(new Error("workspace 不可用"));
+    const offsets: number[] = [];
+    kolMocks.listKolPool.mockImplementation((_token: string, params: any) => {
+      offsets.push(params.offset);
+      if (params.offset === 0) {
+        return Promise.resolve({ items: page(498, 1), projection: { duplicates_collapsed: 2 } });
+      }
+      return Promise.resolve({ items: page(20, 501), projection: { duplicates_collapsed: 0 } });
+    });
+
+    const runtime = renderRuntime();
+    await waitFor(() => expect(runtime.result.current.kolPoolRows).toHaveLength(518));
+    expect(offsets).toEqual([0, 500]);
+    runtime.unmount();
+  });
+
+  it("has_more 恒真也不失控:最多翻 16 页就收手", async () => {
+    const offsets: number[] = [];
+    kolMocks.getKolPoolWorkspace.mockImplementation((_token: string, params: any) => {
+      offsets.push(params.offset);
+      return Promise.resolve({ list: { items: page(500, params.offset + 1), has_more: true } });
+    });
+
+    const runtime = renderRuntime();
+    await waitFor(() => expect(runtime.result.current.kolPoolRows).toHaveLength(8000));
+    expect(offsets).toHaveLength(16);
+    runtime.unmount();
+  });
+});
+
 describe("useCockpitRuntime AI Today regeneration", () => {
   it("先触发 scheduler，再轮询新快照，最后强制刷新整个 Dashboard bundle", async () => {
     const readySnapshot = {

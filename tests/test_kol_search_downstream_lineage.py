@@ -462,3 +462,143 @@ def test_summary_separates_finished_jobs_from_observable_full_analysis() -> None
     assert summary["full_analysis_observable"] is False
     assert summary["full_analysis_complete"] is False
     assert summary["decision_eligible"] is False
+
+
+# --- 车道 2: optional augmentation must not manufacture "partial" -------------
+# Prod probe (30d window, 2026-08-25): 188 items landed on 'partial'; 133 of them
+# (70.7%) had a ready profile and only optional enrichment outstanding.
+# Payload shapes below are copied from that probe's real samples.
+
+
+def _reducer():
+    from app.workers import apify_jobs_worker_session as worker
+
+    return worker._lineage_item_state
+
+
+def test_optional_enrichment_gap_does_not_downgrade_item() -> None:
+    """Prod bucket E (133/188): profile ready, only audience/contact outstanding."""
+
+    state = _reducer()(
+        {
+            "profile_execute": {
+                "status": "ready",
+                "audience_enrichment": {"status": "partial"},
+                "contact_enrichment": {"status": "pending_l0"},
+            }
+        },
+        [{"id": 4056, "role": "comments", "status": "done"}],
+    )
+
+    assert state["item_status"] == "ready"
+    assert state["stage"] == "summary"
+    assert state["required_tasks_complete"] is True
+    # ...and the gap is recorded, not erased.
+    assert state["optional_gaps"]["audience"] == {"state": "incomplete", "status": "partial"}
+    assert state["optional_gaps"]["contact"] == {"state": "incomplete", "status": "pending_l0"}
+    assert state["optional_gaps"]["incomplete"] == ["audience", "contact"]
+
+
+def test_optional_enrichment_pending_alone_does_not_downgrade_item() -> None:
+    """The other half of bucket E: audience still 'pending', contact terminal-empty."""
+
+    state = _reducer()(
+        {
+            "profile_execute": {
+                "status": "ready",
+                "audience_enrichment": {"status": "pending"},
+                "contact_enrichment": {"status": "no_contacts"},
+            }
+        },
+        [{"id": 9, "role": "video", "status": "done"}],
+    )
+
+    assert state["item_status"] == "ready"
+    assert state["required_tasks_complete"] is True
+    assert state["optional_gaps"]["audience"]["state"] == "incomplete"
+    # no_contacts is terminal-but-empty, not an open gap: 无公开联系方式 != 补全中
+    assert state["optional_gaps"]["contact"]["state"] == "empty"
+    assert state["optional_gaps"]["incomplete"] == ["audience"]
+
+
+def test_real_downstream_failure_still_downgrades_despite_optional_gaps() -> None:
+    """Prod bucket C (47/188): identical optional gaps, but a real failed job."""
+
+    state = _reducer()(
+        {
+            "profile_execute": {
+                "status": "ready",
+                "audience_enrichment": {"status": "pending"},
+                "contact_enrichment": {"status": "pending_l0"},
+            }
+        },
+        [
+            {"id": 4086, "role": "video", "status": "failed"},
+            {"id": 4087, "role": "comments", "status": "done"},
+            {"id": 4088, "role": "audience", "status": "done"},
+        ],
+    )
+
+    assert state["item_status"] == "partial"
+    assert state["stage"] == "summary"
+    assert state["required_tasks_complete"] is False
+    assert state["downstream"]["video"]["state"] == "failed"
+    # the audience job actually succeeded, so its stale status string is not a gap
+    assert state["optional_gaps"]["audience"]["state"] == "complete"
+
+
+def test_unready_profile_still_downgrades_despite_optional_gaps() -> None:
+    """Prod bucket D (8/188): needs_human_choice must not be waved through."""
+
+    state = _reducer()(
+        {
+            "profile_execute": {
+                "status": "needs_human_choice",
+                "audience_enrichment": {"status": "waiting_for_profile"},
+                "contact_enrichment": {"status": "waiting_for_profile"},
+            }
+        },
+        [],
+    )
+
+    assert state["item_status"] == "partial"
+    assert state["stage"] == "profile"
+    assert state["required_tasks_complete"] is False
+
+
+def test_hard_profile_failure_still_fails() -> None:
+    state = _reducer()(
+        {"profile_execute": {"status": "crawl_failed", "audience_enrichment": {"status": "ready"}}},
+        [],
+    )
+
+    assert state["item_status"] == "failed"
+    assert state["stage"] == "profile"
+
+
+def test_optional_gap_ledger_classifies_every_state_honestly() -> None:
+    from app.workers.apify_jobs_worker_lineage import _optional_gap_state
+
+    assert _optional_gap_state("", role_state="") == "not_requested"
+    assert _optional_gap_state("ready", role_state="") == "complete"
+    assert _optional_gap_state("ok", role_state="") == "complete"
+    assert _optional_gap_state("no_contacts", role_state="") == "empty"
+    assert _optional_gap_state("pending", role_state="") == "incomplete"
+    assert _optional_gap_state("failed", role_state="") == "incomplete"
+    assert _optional_gap_state("waiting_for_evidence", role_state="") == "incomplete"
+    # unknown status -> incomplete: never claim a gap we have not closed
+    assert _optional_gap_state("brand_new_status", role_state="") == "incomplete"
+    # a succeeded queue job wins over a stale status string
+    assert _optional_gap_state("pending", role_state="ready") == "complete"
+    # a failed queue job is NOT laundered into the optional ledger
+    assert _optional_gap_state("pending", role_state="failed") == "incomplete"
+
+
+def test_optional_gap_ledger_reaches_the_item_payload() -> None:
+    """The ledger must be persisted, otherwise the facade cannot say 补全中."""
+    import inspect
+
+    from app.workers import apify_jobs_worker_session as worker
+
+    source = inspect.getsource(worker._sync_search_session_job_impl)
+    assert 'item_patch["optional_gaps"] = optional_gaps' in source

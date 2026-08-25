@@ -74,6 +74,7 @@ def write_kol_profile_basics(
     method: str = PROFILE_BASICS_METHOD,
     commit_write: bool = True,
     avatar_landing_budget: Any | None = None,
+    allow_brand_official: bool = False,
 ) -> dict[str, Any]:
     """Insert/update profile basics without touching V6 Fit fields.
 
@@ -84,6 +85,20 @@ def write_kol_profile_basics(
     ``avatar_landing_budget`` 是批量入库的落地闸(见 ``kol.avatar_landing``)。
     不传则按「单条写入最多落地一张」处理;落地永远在主写入提交之后进行,
     失败只告警,绝不阻断建档。
+
+    ``allow_brand_official`` 放行品牌官方账号**建档**(默认不放行)。2026-08-25 取证:
+    prod 与隔离库里 tamron_europe(id 4791)、tamron_south_africa(5063)、twnz.official
+    (5216)、sirui.cine(5240)、tamronmalaysia(5256,2026-08-22 新入池)都是从本入口
+    新建进池的,而上面那道 ``discovery_account_gate_verdict`` 对它们**全判空**
+    (全池 2020 行只命中 2 行 own_brand)。此处只拦**新建行**:既有行照常刷新,
+    绝不删行、绝不动评分;``VKPI_BRAND_OFFICIAL_GATE=0`` 可整闸关。
+
+    判据刻意保守(整只 handle/名称 = 品牌词,或品牌词 + 官方/地区后缀),**只拦得住这一类**:
+    上面五行里 tamron_europe / tamron_south_africa / tamronmalaysia 会被拦;
+    sirui.cine、twnz.official、viltrox_id 这种「品牌词 + 表内没有的后缀 / 表外品牌词」
+    按现口径**放行**(twnz 可用 ``VKPI_BRAND_OFFICIAL_TOKENS`` 加词收);
+    sonyalpharumors / sonya_official 这类真达人也一律放行。
+    隔离库全池扫描:2020 行命中 6 行,全是真官号,零误吃——宁可漏拦,绝不误吃真达人。
     """
     if not isinstance(profile_data, dict):
         raise ValueError("profile_data must be a dict")
@@ -161,10 +176,44 @@ def write_kol_profile_basics(
         if identity_write_locked:
             _rollback(db)
         raise
+    # 品牌官号建档闸(第二道,补上面那道 discovery_account_gate_verdict 漏的地区/官方后缀形态)。
+    # 只看 operation=="insert",既有行(含 canonical 命中转成的 update)一概照常刷新。
+    brand_gate = _brand_official_insert_gate(
+        db, operation, normalized, allow_brand_official=allow_brand_official
+    )
+    if brand_gate and not dry_run:
+        # 上面若已取过身份写入边界锁,这里要先放掉——被闸拦下不是异常,但事务不能悬着。
+        if identity_write_locked:
+            _rollback(db)
+        logger.info(
+            "kol_pool brand-official enrollment skipped platform=%r handle=%r brand=%s field=%s",
+            normalized.get("platform"), str(normalized.get("handle") or "")[:60],
+            brand_gate.get("brand"), brand_gate.get("field"),
+        )
+        return {
+            "ok": True,
+            "dry_run": False,
+            "skipped": True,
+            "skip_reason": brand_gate.get("reason"),
+            "brand_official": brand_gate,
+            "operation": operation,
+            "kol_pool_id": None,
+            "fields_written": [],
+            "ignored_fields": ignored_fields,
+            "missing_columns": missing_columns,
+            "score_before": before_scores,
+            "score_after": before_scores,
+            "viltrox_fit_score_changed_ids": [],
+            "viltrox_fit_score_untouched": True,
+            "method": method,
+            "matched_existing": False,
+        }
     if dry_run:
         return {
             "ok": True,
             "dry_run": True,
+            "skipped": bool(brand_gate),
+            "skip_reason": brand_gate.get("reason") if brand_gate else "",
             "operation": operation,
             "kol_pool_id": int(kol_pool_id) if row else None,
             "fields_to_write": sorted(planned_values),
@@ -377,6 +426,40 @@ def _execute_update(conn: Any, kol_pool_id: int, values: dict[str, Any]) -> None
 # profile-basics 列。SCORE_FIELDS 绝不出现在 SET(skip 列 + 派生自 INSERT_FIELDS),
 # 既有评分原样保留(红线:不新增 fit_score 写点)。pool_uid 仅 INSERT 生效、冲突不覆写。
 _PROFILE_BASICS_CONFLICT_SKIP = {"platform", "handle", "pool_uid"}
+
+
+def _brand_official_insert_gate(
+    conn: Any,
+    operation: str,
+    normalized: dict[str, Any],
+    *,
+    allow_brand_official: bool,
+) -> dict[str, Any]:
+    """品牌官方账号建档闸:命中返回判据 dict,放行返回 {}。
+
+    三重收窄,只拦最清楚的那一类:① 只管 insert(既有行刷新照旧,含 canonical 命中
+    转成的 update);② 闸可整关(``VKPI_BRAND_OFFICIAL_GATE=0``);③ 撞到
+    (platform,handle) 既有行 = 刷新既有官号行,不是新建 → 放行。
+    判据本身异常一律 fail-open(闸绝不当故障放大器),但必留告警,绝不静默。
+    """
+    if allow_brand_official or operation != "insert":
+        return {}
+    try:
+        from app.domains.kol.brand_official_gate import brand_official_match
+
+        match = brand_official_match(
+            handle=normalized.get("handle"),
+            display_name=normalized.get("display_name"),
+            platform=normalized.get("platform"),
+        )
+        if not match:
+            return {}
+        if _preexisting_pool_id(conn, normalized.get("platform"), normalized.get("handle")) is not None:
+            return {}
+        return match
+    except Exception:
+        logger.warning("brand-official gate skipped(fail-open)", exc_info=True)
+        return {}
 
 
 def _preexisting_pool_id(conn: Any, platform: Any, handle: Any) -> int | None:

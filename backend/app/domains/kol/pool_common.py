@@ -839,18 +839,22 @@ def _platform(value: Any) -> str:
     return {"ig": "instagram", "tt": "tiktok", "yt": "youtube", "twitter": "x", "小红书": "xiaohongshu"}.get(raw, raw or "other")
 
 
+# 每档末位都补唯一键 id:下面的排序键都不唯一(fit 大面积 NULL、updated_at 同秒并列),并列行在
+# LIMIT/OFFSET 下由执行计划自行定序,同一个人可能连翻几页都不出现、另一个人反复出现。
+# 隔离库(2020 行池,读端投影后可见 2009)实测:按 fit 每页 500 连翻 6 页,取回 2009 条去重只剩 1999
+# —— 10 个人怎么翻都取不到。补 id DESC 只打破并列,各档原有的可见排序意图分毫不动。
 def _sort_clause(sort_by: str) -> str:
     sort_key = str(sort_by or "fit").strip().lower()
     if sort_key == "followers":
-        return "COALESCE(followers, 0) DESC, updated_at DESC"
+        return "COALESCE(followers, 0) DESC, updated_at DESC, id DESC"
     if sort_key in {"avg_views", "views"}:
-        return "COALESCE(avg_views, 0) DESC, updated_at DESC"
+        return "COALESCE(avg_views, 0) DESC, updated_at DESC, id DESC"
     if sort_key in {"engagement", "engagement_rate"}:
-        return "COALESCE(engagement_rate, 0) DESC, updated_at DESC"
+        return "COALESCE(engagement_rate, 0) DESC, updated_at DESC, id DESC"
     if sort_key in {"updated", "recent"}:
-        return "updated_at DESC"
+        return "updated_at DESC, id DESC"
     if sort_key in {"oldest", "updated_oldest"}:
-        return "updated_at ASC"
+        return "updated_at ASC, id DESC"
     if sort_key in {"missing", "gaps"}:
         return """
             (
@@ -859,16 +863,12 @@ def _sort_clause(sort_by: str) -> str:
                 CASE WHEN engagement_rate IS NULL THEN 1 ELSE 0 END +
                 CASE WHEN viltrox_fit_score IS NULL THEN 1 ELSE 0 END
             ) DESC,
-            updated_at DESC
+            updated_at DESC, id DESC
         """
     # 红线第一次修订(2026-06-12 裁决,意图不变字面升级):fit 99% NULL 时
     # 旧 COALESCE(fit,0) DESC 实为 1112 行并列 0 的假排序。三段式:有分行仍 fit 主导,
     # 无分行按最近活跃排;rule_v0 backfill 落地后第一段恒真,自动收敛回 fit 主导(自愈)。
-    return (
-        "(viltrox_fit_score IS NOT NULL) DESC, "
-        "COALESCE(viltrox_fit_score, 0) DESC, "
-        "COALESCE(last_video_at, last_seen_at, updated_at) DESC NULLS LAST"
-    )
+    return "(viltrox_fit_score IS NOT NULL) DESC, COALESCE(viltrox_fit_score, 0) DESC, COALESCE(last_video_at, last_seen_at, updated_at) DESC NULLS LAST, id DESC"
 
 
 def _pool_item_gaps(item: dict[str, Any]) -> list[str]:

@@ -727,7 +727,30 @@ def _platforms(value: Any, fallback: str = "") -> list[str]:
     return out or ["youtube", "instagram", "tiktok"]
 
 
+# 归一键取不到时只告警一次(_candidate_key 在候选循环里逐条调用,逐条刷栈会淹掉日志)。
+_CANDIDATE_KEY_FALLBACK_WARNED: set[str] = set()
+
+
 def _candidate_key(item: dict[str, Any], platform: str) -> str:
+    """单次发现结果内的候选去重键。
+
+    2026-08-25:改走归一身份键(平台 + 归一 handle,退回归一主页 URL)。旧口径按「首个
+    非空原始字段」成键——同一个人一次带 handle、一次只带 channel_url 就成两把键,单次
+    结果里也重复出现。归一不出键(两者皆空)时逐字退回旧口径,行为不变。"""
+    try:
+        from app.domains.kol.pool_identity_key import discovery_candidate_key
+
+        return discovery_candidate_key(item, platform)
+    except Exception:
+        # 失败方向安全:逐字退回旧口径(= 本刀之前的行为),绝不因去重键算不出就丢候选。
+        # 但**不能静默**:产线日志级别下 debug 等于什么都没说,归一去重会悄悄退化回旧的
+        # 重复口径而无人知晓(正是本刀要治的病)。告警只发一次,与 pool_identity_key.
+        # _is_garbage_handle / brand_official_gate._handle_is_identity 同一套写法。
+        if not _CANDIDATE_KEY_FALLBACK_WARNED:
+            _CANDIDATE_KEY_FALLBACK_WARNED.add("import")
+            logging.getLogger("viltrox.discovery_filters").warning(
+                "候选归一键不可用,发现结果退回旧去重口径(同一个人可能重复出现)", exc_info=True
+            )
     for key in ("handle", "channel_url", "source_url", "channel_name"):
         value = _text(item.get(key)).lower()
         if value:

@@ -7,6 +7,13 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.kol import history_match
+from app.domains.kol.brand_official_gate import BRAND_OFFICIAL_SKIP_REASON
+from app.domains.kol.discovery_enroll_intake import (
+    enroll_profile_payload,
+    enroll_skip_counts,
+    mark_gate_rejection,
+    mark_writer_skip,
+)
 from app.domains.kol.search_session_diagnostics import provider_gate_funnel
 from app.domains.kol.discovery_filters import (
     LOW_REACH_FLAG_LIKE_PATTERN,
@@ -183,6 +190,10 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
     下次即被归到「库内已有」、不再重复。
     redline-safe:走 write_kol_profile_basics——其 score 守卫会在任何 fit 变动时回滚,结构上不可能动评分域。
     最佳努力:env(KOL_AUTO_ENROLL_DISCOVERY)可关、单条失败只记日志不抛、绝不阻断发现主流程。返回入库条数。
+
+    2026-08-25:写端两道闸拦下时,被拦的项打 ``auto_enroll_skipped`` 原因标(见
+    ``discovery_enroll_intake``),**不计入返回的入库条数**。函数签名不动——门面壳与
+    真实现签名同集是硬约束,新增关键字参数=prod TypeError。
     """
     import os
 
@@ -204,42 +215,14 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
         handle = _text(item.get("handle") or item.get("channel_handle") or item.get("username"))
         if not platform or not handle:
             continue
-        profile_data = {
-            "platform": platform,
-            "handle": handle,
-            # 线上修(2026-07-10):入库行此前不带名字,列表/抽屉只剩 handle(YT=UC 频道 ID 串)。
-            "display_name": _text(item.get("display_name") or item.get("name") or item.get("title") or item.get("channel_name")),
-            "profile_url": _text(item.get("profile_url") or item.get("channel_url") or item.get("url")),
-            "avatar_url": _text(item.get("avatar_url") or item.get("avatar")),
-            "bio": _text(item.get("bio") or item.get("description") or item.get("snippet")),
-            # 诚实回填(2026-07-12 两粉号案随手修):followers 只写真粉丝族;未知写 NULL,
-            # 绝不再拿 avg_views 冒充粉丝数、也不把「未知」编成 0——否则第二道闸
-            # (followers 已知才推荐)会被杜撰值穿透。真值由 buildout 深爬回填。
-            "followers": _int(item.get("followers") or item.get("subscriber_count") or item.get("follower_count") or 0) or None,
-            # Although these are outside PROFILE_BASICS_WHITELIST, the writer
-            # reads them before projection for canonical identity matching.
-            "channel_id": _text(item.get("channel_id") or item.get("channelId")),
-            "account_id": _text(item.get("account_id") or item.get("accountId")),
-            "platform_user_id": _text(item.get("platform_user_id")),
-            # 同一身份真源:把 provider 同时给出的 UC channel id / @handle 留在原始
-            # profile 身份包。后续 URL 深爬或导入即使只带其中一条别名,也能命中本行,
-            # 不再依赖 (platform,handle) 的单键偶然一致。
-            "raw_platform_data": {
-                "discovery_identity_v1": {
-                    "platform": platform,
-                    "handle": handle,
-                    "channel_id": _text(item.get("channel_id") or item.get("channelId")),
-                    "account_id": _text(item.get("account_id") or item.get("accountId")),
-                    "platform_user_id": _text(item.get("platform_user_id")),
-                    "profile_url": _text(item.get("profile_url") or item.get("channel_url") or item.get("url")),
-                }
-            },
-        }
+        profile_data = enroll_profile_payload(item, platform, handle)
         try:
             _enroll_res = write_kol_profile_basics(None, profile_data, dry_run=False)
             # ⚠不要把 kol_pool_id 回写到会话项! 设计不变量(search_sessions.approve_session 注释):
             # new_creator 入池后会话项 kol_pool_id 必须保持 NULL,否则「会话项交集」会把这些真候选
             # 全误杀 → 全网发现框整组消失(550pro2 监视器搜索 15 个新发现却 0 显示的真因)。
+            if mark_writer_skip(item, _enroll_res):
+                continue  # 建档闸拦下(品牌官号):不算入库,原因已就地留标
             enrolled += 1
             # L6 去重 hook:落库后立即为该行找跨平台同一人。email 强信号自动合并、模糊只进人工清单。
             # 最佳努力:apply_merge 自带 fit 守卫;任何异常吞掉只记日志,绝不阻断 enroll 主流程。
@@ -271,6 +254,7 @@ def _auto_enroll_discoveries(new_creators: list[dict[str, Any]]) -> int:
             except Exception:
                 logger.info("discovery buildout ignite skip(不阻断 enroll)", exc_info=True)
         except Exception as exc:
+            mark_gate_rejection(item, exc)  # 闸抛错拦人也要留诚实原因标,不与「网络挂了」混为一谈
             logger.info("auto_enroll_discovery skip handle=%r: %s", handle, str(exc)[:200])
     if enrolled:
         logger.info("auto_enroll_discovery enrolled=%d into vkpi_kol_pool", enrolled)
@@ -732,6 +716,9 @@ async def discover_new_creators(
         except Exception:
             logger.debug("discovery avatar warmup call skipped", exc_info=True)
 
+    # 建档闸的诚实计数(2026-08-25):被拦的项自带 auto_enroll_skipped 原因标。
+    _enroll_skips = enroll_skip_counts(new_creators)
+
     status = "ready" if new_creators or existing_matches else "empty"
     if errors and (new_creators or existing_matches):
         status = "partial"
@@ -755,6 +742,11 @@ async def discover_new_creators(
             # K3:本次真实自动入库条数(_auto_enroll_discoveries 逐条 upsert 的成功数;
             # 缺 handle/入库失败/已在库的项不计)。前端据此显示真数,不再拿发现数冒充入库数。
             "auto_enrolled": auto_enrolled_count,
+            # 建档闸(2026-08-25):写端两道闸(discovery_account_gate_verdict 抛错拦人 /
+            # brand_official_gate 返回 skip)拦下、没进池的条数。0 = 本次真的一条没拦
+            # (诚实计数,不藏);逐原因明细另挂 enroll_skipped_by_reason,不汇总掉任何一档。
+            "enroll_skipped_brand_official": int(_enroll_skips.get(BRAND_OFFICIAL_SKIP_REASON) or 0),
+            "enroll_skipped_by_reason": _enroll_skips,
             # 召回触达门槛命中数(诚实可见,非静默;明细见 debug 日志 discovery_reach_floor_filtered)。
             "filtered_low_reach": _gate_dropped["low_reach"],
             # 品牌官号排除数(诚实可见;门面文案只说「品牌官方账号已排除」,不暴露词表/判据)。

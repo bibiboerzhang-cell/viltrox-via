@@ -20,6 +20,80 @@ _LINEAGE_READY_JOB_STATUSES = frozenset({"done"})
 _LINEAGE_FAILED_JOB_STATUSES = frozenset({"failed", "blocked", "triage", "cancelled"})
 _LINEAGE_STAGE_ROLES = ("resolver", "video", "comments", "audience")
 
+# --- What counts as "optional" for an item's status verdict -------------------
+#
+# Boundary (deliberately narrow, so nothing real is waved through):
+#
+#   BLOCKING  — (a) the profile materialization stage itself (``profile_status``
+#               / resolver base status), and (b) any lineage role whose latest
+#               queue job reached a terminal non-success state.  Both keep
+#               downgrading the item to ``partial``; a failed job is never
+#               reclassified as an optional gap.
+#
+#   OPTIONAL  — the *status strings* of the two best-effort augmentation
+#               sub-stages carried on ``profile_execute``:
+#               ``audience_enrichment.status`` and ``contact_enrichment.status``.
+#               They qualify because: they are never requested on their own (the
+#               caller asked for a profile, these ride along), they can be
+#               permanently unfillable for legitimate reasons (private audience,
+#               no public contact address), and when they do own a real queue
+#               job its failure is already reported through ``role_states`` and
+#               keeps blocking.  A gap here is recorded in ``optional_gaps``,
+#               never collapsed into the item status.
+#
+# This mirrors the producer to the policy already written at
+# ``app/domains/kol/search_sessions_items.py`` (``update_item_profile_execution``):
+# a ready profile stays ready while contact/audience work is queued, waiting for
+# evidence, or fails.
+_OPTIONAL_GAP_SIGNALS = ("audience", "contact")
+# Terminal + successful: the sub-stage delivered.
+_OPTIONAL_COMPLETE_STATUSES = frozenset(
+    {"ready", "ok", "done", "complete", "completed", "already_enriched", "enriched"}
+)
+# Terminal but empty: we looked and there is genuinely nothing to fill.  Distinct
+# from "incomplete" so the facade can say 无公开联系方式 instead of 补全中.
+_OPTIONAL_EMPTY_STATUSES = frozenset(
+    {"no_contacts", "no_audience", "not_found", "unavailable", "not_applicable", "skipped"}
+)
+
+
+def _optional_gap_state(status: str, *, role_state: str) -> str:
+    """Classify one optional sub-stage into not_requested/complete/empty/incomplete.
+
+    Unknown statuses fall through to ``incomplete`` on purpose: claiming a gap we
+    have not actually closed would be the unsafe direction.
+    """
+
+    if role_state == "ready":
+        return "complete"
+    normalized = str(status or "").strip().lower()
+    if not normalized:
+        return "not_requested"
+    if normalized in _OPTIONAL_COMPLETE_STATUSES:
+        return "complete"
+    if normalized in _OPTIONAL_EMPTY_STATUSES:
+        return "empty"
+    return "incomplete"
+
+
+def _optional_gaps(
+    profile_execute: dict[str, Any],
+    role_states: dict[str, str],
+) -> dict[str, Any]:
+    """Ledger the optional augmentation gaps instead of downgrading the item."""
+
+    gaps: dict[str, Any] = {}
+    incomplete: list[str] = []
+    for signal in _OPTIONAL_GAP_SIGNALS:
+        enrichment = _as_dict(profile_execute.get(f"{signal}_enrichment"))
+        status = str(enrichment.get("status") or "").strip().lower()
+        state = _optional_gap_state(status, role_state=role_states.get(signal, ""))
+        gaps[signal] = {"state": state, "status": status}
+        if state == "incomplete":
+            incomplete.append(signal)
+    gaps["incomplete"] = incomplete
+    return gaps
+
 
 def _item_profile_state(item_payload: dict[str, Any]) -> dict[str, Any]:
     """Normalize progressive profile state across discovery and URL items."""
@@ -171,14 +245,9 @@ def _lineage_item_state(
     active = any(state == "active" for state in role_states.values())
     failed = any(state in {"failed", "partial"} for state in role_states.values())
 
-    audience = _as_dict(profile_execute.get("audience_enrichment"))
-    audience_status = str(audience.get("status") or "").strip().lower()
-    audience_incomplete = audience_status in {
-        "pending", "partial", "error", "failed", "waiting_for_evidence", "waiting_for_profile",
-    } and role_states.get("audience") != "ready"
-    contacts = _as_dict(profile_execute.get("contact_enrichment"))
-    contact_status = str(contacts.get("status") or "").strip().lower()
-    contact_incomplete = contact_status in {"pending", "partial", "error", "failed"}
+    # Optional augmentation is ledgered, not gated -- see _OPTIONAL_GAP_SIGNALS
+    # for the exact boundary.  ``failed`` (a real terminal job) still downgrades.
+    optional_gaps = _optional_gaps(profile_execute, role_states)
 
     if "failed" in profile_status or profile_status in {"error", "crawl_failed", "unsupported"}:
         item_status, stage = "failed", "profile"
@@ -188,7 +257,7 @@ def _lineage_item_state(
             if role_states.get("resolver") == "active" and resolution
             else "analysis"
         )
-    elif failed or audience_incomplete or contact_incomplete:
+    elif failed:
         item_status, stage = "partial", "summary"
     elif profile_status in {"ready", "already_analyzed"} or resolution_base == "ready":
         item_status, stage = "ready", "summary"
@@ -211,5 +280,8 @@ def _lineage_item_state(
         "stage": stage,
         "profile_status": profile_status,
         "downstream": downstream,
+        "optional_gaps": optional_gaps,
+        # "required" is literal: optional gaps stay out of this flag and are
+        # reported through ``optional_gaps`` instead.
         "required_tasks_complete": item_status == "ready" and not active,
     }

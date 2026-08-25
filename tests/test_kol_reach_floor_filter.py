@@ -280,6 +280,16 @@ def test_discover_new_creators_switch_off_keeps_all(monkeypatch: pytest.MonkeyPa
 
 def _wire_new_launch_match(monkeypatch: pytest.MonkeyPatch) -> Any:
     import app.domains.recommendations.new_launch_match as nlm
+    from app.domains.costs.budget_guard import ensure_budget_schema
+
+    # 预览走只读预算面 get_budget_status_readonly——它刻意**不**建表(docstring:without
+    # schema bootstrap)。缺**行**能优雅降级({configured:False, allowed:True}),缺**表**
+    # 直接 OperationalError。密闭 sqlite 库本来就没有这张表,于是本文件两条 preview 用例
+    # 红在夹具缺表上,而不是被测的触达门槛口径。用产线自己的 DDL 建表(CREATE TABLE IF
+    # NOT EXISTS,幂等),不手抄列——手抄一漂移,夹具就会替真 schema 说谎。
+    # 与迁移 303「新环境没有 caps 种子行 → 调用方开局全降级」是同一族病:一个缺行、一个缺表。
+    # 建完表本 scope 仍无行,只读面照旧返回「未配置 → 放行」,被测口径分毫不动。
+    ensure_budget_schema()
 
     monkeypatch.setattr(
         nlm.memory, "readiness", lambda: {"status": "ready_for_p4_dry_run", "provider_calls_allowed": False}

@@ -169,39 +169,64 @@ function scheduleRuntimeRefresh(work: any, delay = 0) {
   };
 }
 
+const KOL_POOL_PAGE_SIZE = 500;
+// 防跑飞上限:16 页 × 500 = 8000 行(池当前约 2k 行)。它只防「后端 has_more 恒真」的失控,
+// 不再兼任「翻到底了」的判据——判到底是 has_more 的事。
+const KOL_POOL_MAX_PAGES = 16;
+
+// 「本页返回条数 < 每页条数」**不等于**翻到底了,而「固定行数上限」更不是。
+// 隔离库(2020 行池,读端投影后可见 2009)实测:旧 listAllKolPoolPages 卡在 maxRows=2000,
+// 第 5 页压根不发,池尾 9 个人永远加载不到;读端一旦做折叠投影(每页返回条数变少),
+// 长度判据还会在半路就停——下面那句「尾部约 150 条历史 KOL 永不显示」是同一个病的上一轮。
+// 后端 has_more 按**筛选总数**算,才是真正的「还有没有下一页」;拿不到该字段时(旧后端、
+// 或不带该键的列表端点)退回长度判据,并先用折叠数还原折叠前条数。
+// 失败方向:判不准时宁可多翻一页(多一次纯读请求,该页为空即停),绝不少加载人。
+function hasNextKolPoolPage(hasMore: any, visibleCount: number, collapsedCount: number) {
+  if (typeof hasMore === "boolean") return hasMore;
+  return visibleCount + collapsedCount >= KOL_POOL_PAGE_SIZE;
+}
+
+function collapsedCountOf(projection: any) {
+  const collapsed = Number(projection?.duplicates_collapsed);
+  return Number.isFinite(collapsed) && collapsed > 0 ? collapsed : 0;
+}
+
 async function listAllKolPoolPages(apiToken: any) {
-  const pageSize = 500;
-  const maxRows = 2000;
-  const pages: any[] = [];
-  for (let offset = 0; offset < maxRows; offset += pageSize) {
-    const response = await listKolPool(apiToken, { limit: pageSize, offset, refreshIfStale: false });
-    const items = response.items || [];
-    pages.push(...items);
-    if (items.length < pageSize) break;
+  const rows: any[] = [];
+  for (let page = 0; page < KOL_POOL_MAX_PAGES; page += 1) {
+    const response: any = await listKolPool(apiToken, {
+      limit: KOL_POOL_PAGE_SIZE,
+      offset: page * KOL_POOL_PAGE_SIZE,
+      refreshIfStale: false,
+    });
+    const items = Array.isArray(response?.items) ? response.items : [];
+    if (items.length === 0) break;
+    rows.push(...items);
+    if (!hasNextKolPoolPage(response?.has_more, items.length, collapsedCountOf(response?.projection))) break;
   }
-  return pages;
+  return rows;
 }
 
 async function loadKolPoolWorkspaceRows(apiToken: any, onPage?: (rows: any[]) => void) {
   // 分页拉全量:此前固定 limit=1200 < 池实际行数(1353)→ 尾部约 150 条历史 KOL 永不显示
-  // (用户「过往搜索的人没加进来」的真因之一)。逐页拉到取尽为止,硬上限 8000 防跑飞。
-  const pageSize = 500;
-  const hardCap = 8000;
+  // (用户「过往搜索的人没加进来」的真因之一)。逐页拉到后端说没有下一页为止。
   const rows: any[] = [];
-  for (let offset = 0; offset < hardCap; offset += pageSize) {
-    const response = await getKolPoolWorkspace(apiToken, {
-      limit: pageSize,
-      offset,
+  for (let page = 0; page < KOL_POOL_MAX_PAGES; page += 1) {
+    const response: any = await getKolPoolWorkspace(apiToken, {
+      limit: KOL_POOL_PAGE_SIZE,
+      offset: page * KOL_POOL_PAGE_SIZE,
       sortBy: "fit",
       // The board obtains low-reach/funnel analytics from /kol-pool/summary;
       // list pagination does not need to recompute the full aggregate bundle.
       includeAggregates: false,
     });
-    const items = response?.list?.items || [];
-    if (!Array.isArray(items) || items.length === 0) break;
+    const listing = (response?.list || {}) as any;
+    const items = Array.isArray(listing.items) ? listing.items : [];
+    if (items.length === 0) break;
     rows.push(...items);
     onPage?.([...rows]);
-    if (items.length < pageSize) break;
+    const hasMore = typeof listing.has_more === "boolean" ? listing.has_more : response?.counts?.has_more;
+    if (!hasNextKolPoolPage(hasMore, items.length, collapsedCountOf(listing.projection))) break;
   }
   return rows;
 }
