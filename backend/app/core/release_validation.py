@@ -116,6 +116,9 @@ _READ_ONLY_GET_PREFIXES = (
 _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
     {
         "/api/admin/runtime/metrics",
+        # 2026-08-25 仪表盘 LLM 队列卡改版后会在验收窗口内读它:纯 GET、read 权限、
+        # 零写操作(只汇总模型注册表与就绪证据)。未登记时候选闸抓到 22 次 503。
+        "/api/admin/system/models",
         "/api/admin/vkpi/actions/inbox",
         "/api/admin/vkpi/agents/learning-status",
         "/api/admin/vkpi/agents/loop/trace",
