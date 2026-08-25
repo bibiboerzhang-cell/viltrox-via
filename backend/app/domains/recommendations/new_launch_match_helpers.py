@@ -342,22 +342,32 @@ def resolve_target_family(product_query: str) -> tuple[dict[str, Any] | None, st
     never writes any score field.
     """
     raw = _text(product_query)
-    candidates: list[str] = [raw]
-    candidates.extend(_query_derived_candidates(raw))
-    candidates.extend(_resolver_derived_candidates(raw))
-
     tried: list[str] = []
-    for candidate in candidates:
-        candidate = _text(candidate)
-        if not candidate or candidate in tried:
-            continue
-        tried.append(candidate)
-        try:
-            return _select_target_family(candidate), candidate, ""
-        except ValueError:
-            continue
-        except Exception:  # pragma: no cover - DB hiccup; treat as a miss, don't crash caller
-            continue
+
+    def _first_match(candidates: list[str]) -> tuple[dict[str, Any], str, str] | None:
+        for candidate in candidates:
+            candidate = _text(candidate)
+            if not candidate or candidate in tried:
+                continue
+            tried.append(candidate)
+            try:
+                return _select_target_family(candidate), candidate, ""
+            except ValueError:
+                continue
+            except Exception:  # pragma: no cover - DB hiccup; treat as a miss, don't crash caller
+                continue
+        return None
+
+    # Keep the documented candidate order, but do not resolve the full product
+    # catalog until every cheap text-derived candidate has actually missed.
+    # Product resolution can scan a large catalog; eagerly building its
+    # candidates made even a direct/raw family hit pay that unrelated cost.
+    matched = _first_match([raw, *_query_derived_candidates(raw)])
+    if matched is not None:
+        return matched
+    matched = _first_match(_resolver_derived_candidates(raw))
+    if matched is not None:
+        return matched
     return (
         None,
         "",

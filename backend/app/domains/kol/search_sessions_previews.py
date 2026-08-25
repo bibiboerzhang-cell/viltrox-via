@@ -31,6 +31,7 @@ _SESSION_AVATAR_FIELDS = (
     "avatar_fallback",
     "avatar_health",
 )
+_AUDIENCE_PREVIEW_QUERY_BATCH = 1000
 
 
 def _project_session_snapshot_avatar(item: dict[str, Any]) -> bool:
@@ -347,3 +348,71 @@ def hydrate_session_item_previews(
                     "async": True,
                 }
             )
+
+
+def hydrate_session_item_audience_progress(
+    conn: Any,
+    items: list[dict[str, Any]],
+    *,
+    logger: Any,
+) -> int:
+    """Project only durable audience readiness for aggregate progress reads.
+
+    Management search status must use the same current Pool evidence as the
+    employee history/detail readers, but it does not need names, handles or
+    contact fields.  This narrower hydrator reads only the exact linked Pool
+    ids and their audience JSON, mutates response DTOs only, and fails closed
+    when the read is unavailable.
+    """
+
+    items_by_profile: dict[int, list[dict[str, Any]]] = {}
+    for item in items:
+        try:
+            profile_id = int(item.get("kol_pool_id") or 0)
+        except (TypeError, ValueError):
+            continue
+        payload = item.get("payload") if isinstance(item.get("payload"), dict) else None
+        preview = payload.get("audience_preview") if payload is not None else None
+        if (
+            profile_id > 0
+            and payload is not None
+            and _text(preview.get("status") if isinstance(preview, dict) else "").lower()
+            != "ready"
+        ):
+            items_by_profile.setdefault(profile_id, []).append(item)
+    if not items_by_profile:
+        return 0
+
+    hydrated = 0
+    profile_ids = sorted(items_by_profile)
+    try:
+        for offset in range(0, len(profile_ids), _AUDIENCE_PREVIEW_QUERY_BATCH):
+            batch = profile_ids[offset : offset + _AUDIENCE_PREVIEW_QUERY_BATCH]
+            placeholders = ",".join(["?"] * len(batch))
+            rows = conn.execute(
+                f"""
+                SELECT id, audience_estimated_json
+                FROM vkpi_kol_pool
+                WHERE id IN ({placeholders})
+                """,
+                tuple(batch),
+            ).fetchall()
+            for raw in rows:
+                row = dict(raw)
+                try:
+                    profile_id = int(row.get("id") or 0)
+                except (TypeError, ValueError):
+                    continue
+                audience = _loads(row.get("audience_estimated_json"), {})
+                if not isinstance(audience, dict) or not audience:
+                    continue
+                for item in items_by_profile.get(profile_id, []):
+                    payload = item["payload"]
+                    payload["audience_preview"] = {"status": "ready"}
+                    hydrated += 1
+    except Exception:
+        logger.warning(
+            "search_sessions.audience_progress_backfill_failed",
+            exc_info=True,
+        )
+    return hydrated

@@ -8,7 +8,10 @@ fake conn 喂固定行,断言:
 """
 import json
 
+import pytest
+
 from app.domains.kol import signature_profile as sp
+from app.domains.projects import launch_assembly
 
 
 # ── 纯函数级:词边界行为 ─────────────────────────────────────────────
@@ -144,3 +147,119 @@ def test_signature_profile_multilabel_and_word_boundary_golden():
     mode = styles["modes"][0]
     for key in ("key", "label", "video_count", "avg_views", "views_sample", "top_example"):
         assert key in mode
+
+
+def test_shooting_style_summary_matches_consumed_full_profile_fields_without_extra_reads():
+    full_conn = _conn()
+    projected_conn = _conn()
+
+    full = sp.signature_profile(7, conn=full_conn)
+    projected = sp.shooting_style_summary(7, conn=projected_conn)
+
+    assert projected["status"] == full["status"]
+    assert projected["coverage"]["deep_analyzed_count"] == full["coverage"]["deep_analyzed_count"]
+    assert projected["shooting_styles"] == full["shooting_styles"]
+    projected_sql = [sql for sql, _params in projected_conn.calls]
+    assert len(projected_sql) == 2
+    assert any("FROM vkpi_kol_pool" in sql for sql in projected_sql)
+    assert any("FROM vkpi_analysis_cache" in sql for sql in projected_sql)
+    assert all("FROM vkpi_comments" not in sql for sql in projected_sql)
+
+
+def test_gtm_top_five_shooting_style_projections_are_ten_reads() -> None:
+    conn = _conn()
+
+    for kol_pool_id in range(1, 6):
+        sp.shooting_style_summary(kol_pool_id, conn=conn)
+
+    sql = [statement for statement, _params in conn.calls]
+    assert len(sql) == 10
+    assert sum("FROM vkpi_kol_pool" in statement for statement in sql) == 5
+    assert sum("FROM vkpi_analysis_cache" in statement for statement in sql) == 5
+    assert all("FROM vkpi_kol_video_evidence\n        WHERE" not in statement for statement in sql)
+    assert all("FROM vkpi_comments" not in statement for statement in sql)
+
+
+def test_shooting_style_summary_missing_pool_matches_full_profile_error() -> None:
+    with pytest.raises(LookupError, match="kol_pool 404 not found"):
+        sp.signature_profile(404, conn=_Conn({}))
+    with pytest.raises(LookupError, match="kol_pool 404 not found"):
+        sp.shooting_style_summary(404, conn=_Conn({}))
+
+
+def test_shooting_style_summary_no_final_rows_matches_consumed_full_fields() -> None:
+    routes = {
+        "FROM vkpi_kol_pool": [{
+            "id": 7, "handle": "tester", "display_name": "Tester",
+            "platform": "youtube", "avatar_url": "",
+        }],
+        "FROM vkpi_analysis_cache": [],
+        "FROM vkpi_kol_video_evidence": [],
+        "FROM vkpi_comments": [],
+    }
+
+    full = sp.signature_profile(7, conn=_Conn(routes))
+    projected = sp.shooting_style_summary(7, conn=_Conn(routes))
+
+    assert projected["status"] == full["status"] == "ready"
+    assert projected["coverage"]["deep_analyzed_count"] == 0
+    assert projected["shooting_styles"] == full["shooting_styles"]
+    assert projected["shooting_styles"]["status"] == "empty"
+
+
+def test_launch_signature_summary_wires_lightweight_ready_projection(monkeypatch) -> None:
+    top_mode = {"key": "tutorial", "label": "Tutorial", "video_count": 3}
+    monkeypatch.setattr(
+        sp,
+        "shooting_style_summary",
+        lambda kol_pool_id: {
+            "status": "ready",
+            "kol_pool_id": kol_pool_id,
+            "coverage": {"deep_analyzed_count": 4},
+            "shooting_styles": {
+                "status": "ready",
+                "modes": [top_mode],
+                "sample_size": 4,
+                "method": "final_v1_layer1_lexicon_v1",
+            },
+        },
+    )
+
+    assert launch_assembly._signature_summary(7) == {
+        "status": "ready",
+        "top_mode": top_mode,
+        "sample_size": 4,
+        "method": "final_v1_layer1_lexicon_v1",
+        "deep_analyzed_count": 4,
+    }
+
+
+def test_launch_signature_summary_wires_lightweight_empty_projection(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sp,
+        "shooting_style_summary",
+        lambda kol_pool_id: {
+            "status": "ready",
+            "kol_pool_id": kol_pool_id,
+            "coverage": {"deep_analyzed_count": 0},
+            "shooting_styles": {"status": "empty", "reason": "no final_v1"},
+        },
+    )
+
+    assert launch_assembly._signature_summary(7) == {
+        "status": "empty",
+        "reason": "no final_v1",
+        "deep_analyzed_count": 0,
+    }
+
+
+def test_launch_signature_summary_wires_lightweight_error(monkeypatch) -> None:
+    def fail(_kol_pool_id: int) -> dict:
+        raise RuntimeError("projection unavailable")
+
+    monkeypatch.setattr(sp, "shooting_style_summary", fail)
+
+    assert launch_assembly._signature_summary(7) == {
+        "status": "error",
+        "reason": "projection unavailable",
+    }

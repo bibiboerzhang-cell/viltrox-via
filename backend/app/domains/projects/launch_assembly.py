@@ -251,9 +251,9 @@ def _candidate_pool(sku: str, pool_limit: int) -> dict[str, Any]:
 def _signature_summary(kol_pool_id: int) -> dict[str, Any]:
     """招牌拍法 top1(signature_profile 件①复用);缺深析诚实 empty。"""
     try:
-        from app.domains.kol.signature_profile import signature_profile
+        from app.domains.kol.signature_profile import shooting_style_summary
 
-        payload = signature_profile(int(kol_pool_id))
+        payload = shooting_style_summary(int(kol_pool_id))
     except Exception as exc:  # noqa: BLE001 — 单人聚合失败不拖垮整案
         return {"status": "error", "reason": _text(str(exc), 200)}
     styles = payload.get("shooting_styles") or {}

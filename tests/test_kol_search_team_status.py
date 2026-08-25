@@ -97,6 +97,7 @@ class _AggregateConn:
         *,
         population: int | None = None,
         staff_population: int | None = None,
+        audience_by_pool_id: dict[int, Any] | None = None,
     ) -> None:
         self.sessions = list(sessions)
         self.items = list(items)
@@ -106,6 +107,7 @@ class _AggregateConn:
             if staff_population is None
             else staff_population
         )
+        self.audience_by_pool_id = dict(audience_by_pool_id or {})
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Result:
@@ -226,6 +228,18 @@ class _AggregateConn:
                     and int(row["session_id"]) in selected
                 ]
             )
+        if compact.startswith("SELECT id, audience_estimated_json FROM vkpi_kol_pool"):
+            selected = {int(value) for value in params}
+            return _Result(
+                rows=[
+                    {
+                        "id": profile_id,
+                        "audience_estimated_json": audience,
+                    }
+                    for profile_id, audience in sorted(self.audience_by_pool_id.items())
+                    if profile_id in selected
+                ]
+            )
         raise AssertionError(f"unexpected SQL: {compact}")
 
 
@@ -323,6 +337,13 @@ def test_team_status_uses_live_terminal_semantics_and_never_emits_pii() -> None:
     }
     assert result["release_evidence"]["worker_sha_aligned"] is True
     assert result["release_evidence"]["app_release_sha"] == "a" * 40
+    assert result["sources"] == [
+        "vkpi_kol_search_sessions",
+        "vkpi_kol_search_session_items",
+        "vkpi_kol_pool",
+        "apify_jobs",
+        "vkpi_worker_heartbeat",
+    ]
 
     serialized = json.dumps(result, ensure_ascii=False)
     for secret in (
@@ -378,6 +399,53 @@ def test_team_status_uses_live_terminal_semantics_and_never_emits_pii() -> None:
     assert "select result_summary_json" not in joined_sql
     assert "select item.payload_json" not in joined_sql
     assert "item.payload_json as progress_payload_json" not in joined_sql
+
+
+def test_team_status_hydrates_durable_audience_without_reading_profile_pii() -> None:
+    conn = _AggregateConn(
+        [_session_row(1, status="partial", created_by=71)],
+        [_item_row(11, 1)],
+        audience_by_pool_id={1011: {"method": "public_metrics"}},
+    )
+    projected: list[dict[str, Any]] = []
+
+    def project(
+        _session: dict[str, Any],
+        items: list[dict[str, Any]],
+        *,
+        worker_health: dict[str, Any],
+    ) -> dict[str, Any]:
+        assert worker_health == _WORKER
+        projected.extend(items)
+        return {
+            "state": "ready",
+            "requested_tasks_terminal": True,
+            "blocked_by_worker": False,
+            "orchestration_pending": False,
+            "full_analysis_complete": False,
+        }
+
+    result = team_status.build_team_search_status(
+        staff={"id": 901, "organization_id": 1},
+        get_conn_fn=lambda: conn,
+        project_progress_fn=project,
+        observe_worker_fn=lambda _conn: dict(_WORKER),
+        refresh_queue_states_fn=lambda _conn, _items: None,
+        canonicalize_items_fn=lambda items: items,
+        organization_guard_fn=lambda _staff, _conn: 1,
+    )
+
+    assert result["counts"]["by_effective_state"] == {"ready": 1}
+    assert projected[0]["payload"]["audience_preview"] == {"status": "ready"}
+    audience_sql = [
+        sql
+        for sql, _params in conn.calls
+        if "FROM vkpi_kol_pool" in sql
+    ]
+    assert len(audience_sql) == 1
+    assert "audience_estimated_json" in audience_sql[0]
+    for forbidden in ("display_name", "handle", "profile_url", "email", "contact"):
+        assert forbidden not in audience_sql[0].lower()
 
 
 def test_limit_is_a_batch_hint_and_keyset_scan_proves_the_full_population() -> None:

@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.coerce import _loads
+from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.access import scope
 from app.domains.kol.search_progress_contract import (
@@ -27,6 +28,9 @@ from app.domains.kol.search_progress_contract import (
 )
 from app.domains.kol.search_sessions_enrichment import _refresh_enrichment_queue_states
 from app.domains.kol.search_sessions_items import canonicalize_session_creator_items
+from app.domains.kol.search_sessions_previews import (
+    hydrate_session_item_audience_progress,
+)
 from app.domains.kol.search_sessions_serde import (
     _int_or_none,
     _normalize_status,
@@ -34,6 +38,7 @@ from app.domains.kol.search_sessions_serde import (
 
 
 TEAM_STATUS_SCHEMA = "kol_search_team_status_v1"
+logger = get_logger(__name__)
 MAX_TEAM_STATUS_BATCH_SIZE = 1000
 # Backward-compatible exported name used by older callers and tests.
 MAX_TEAM_STATUS_SESSIONS = MAX_TEAM_STATUS_BATCH_SIZE
@@ -132,6 +137,10 @@ def _release_evidence(worker: dict[str, Any]) -> dict[str, Any]:
 
 def _default_refresh(conn: Any, items: list[dict[str, Any]]) -> None:
     _refresh_enrichment_queue_states(conn, items)
+
+
+def _default_hydrate_progress(conn: Any, items: list[dict[str, Any]]) -> None:
+    hydrate_session_item_audience_progress(conn, items, logger=logger)
 
 
 def _default_organization_guard(staff: dict[str, Any] | None, conn: Any) -> int:
@@ -374,6 +383,7 @@ def build_team_search_status(
     project_progress_fn: ProgressProjector = project_search_progress,
     observe_worker_fn: WorkerObserver = observe_worker_health,
     refresh_queue_states_fn: ItemsMutator = _default_refresh,
+    hydrate_progress_fn: ItemsMutator = _default_hydrate_progress,
     canonicalize_items_fn: ItemsCanonicalizer = canonicalize_session_creator_items,
     organization_guard_fn: OrganizationGuard = _default_organization_guard,
     max_scan_sessions: int = MAX_TEAM_STATUS_SCAN_SESSIONS,
@@ -493,6 +503,7 @@ def build_team_search_status(
             raise RuntimeError("KOL search team status item scan budget violated")
         if all_items:
             refresh_queue_states_fn(conn, all_items)
+            hydrate_progress_fn(conn, all_items)
 
         for session in sessions:
             session_id = _int_or_none(session.get("id")) or 0
@@ -636,6 +647,7 @@ def build_team_search_status(
         "sources": [
             "vkpi_kol_search_sessions",
             "vkpi_kol_search_session_items",
+            "vkpi_kol_pool",
             "apify_jobs",
             "vkpi_worker_heartbeat",
         ],

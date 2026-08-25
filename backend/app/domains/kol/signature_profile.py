@@ -596,3 +596,27 @@ def signature_profile(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "note": "纯聚合已有数据(final_v1 深析 + evidence + 已入库评论);独立展示信号,不参与 V6 Fit 评分。",
     }
+
+
+def shooting_style_summary(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
+    """Return the exact shooting-style subset without building unused panels.
+
+    GTM preview only consumes ``shooting_styles`` and the deep-analysis count
+    from the full signature profile.  Loading evidence, top videos and comment
+    distributions for those two fields adds no information, so this projection
+    deliberately reuses the same final-v1 loader and classifier while omitting
+    the unrelated reads.
+    """
+    from app.db.connection import get_conn
+
+    db = conn or get_conn()
+    pool = _load_pool_row(db, int(kol_pool_id))
+    if not pool:
+        raise LookupError(f"kol_pool {kol_pool_id} not found")
+    final_rows = _load_final_v1_rows(db, int(kol_pool_id))
+    return {
+        "status": "ready",
+        "kol_pool_id": int(kol_pool_id),
+        "coverage": {"deep_analyzed_count": len(final_rows)},
+        "shooting_styles": _shooting_styles_block(final_rows),
+    }
