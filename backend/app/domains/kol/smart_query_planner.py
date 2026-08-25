@@ -12,6 +12,7 @@ from typing import Any
 
 from app.platform import llm_gateway
 from app.domains.kol import product_resolver
+from app.domains.kol import smart_query_intent
 
 from app.core.logging import get_logger
 
@@ -89,10 +90,14 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
         platforms = ["youtube", "instagram", "tiktok"]
 
     keywords: list[str] = []
-    if any(term in lowered for term in ("flash", "strobe", "lighting", "light", "闪光", "灯", "补光")):
+    is_lighting = any(term in lowered for term in ("flash", "strobe", "lighting", "light", "闪光", "灯", "补光"))
+    if is_lighting:
         keywords.extend(["lighting", "flash", "strobe", "studio lighting"])
-    if any(term in lowered for term in ("evo", "300", "300w")):
-        keywords.extend(["300W", "EVO", "portable lighting"])
+    # 2026-08-25 车道A/A4:此前裸 "evo" 也命中 300W 便携灯分支——「55evo」是 55mm F1.8 EVO
+    # 镜头,却被翻成 "300W EVO portable lighting"(实测坐实),把用户的话理解成了另一个品类。
+    # 瓦数词必须由灯光语境或真实瓦数触发;EVO 只是系列族名,交给产品锚去承载。
+    if any(term in lowered for term in ("300w", "300 w")) or (is_lighting and "300" in lowered):
+        keywords.extend(["300W", "portable lighting"])
     if any(term in lowered for term in ("人像", "portrait")):
         keywords.extend(["portrait", "portrait photographer"])
     if any(term in lowered for term in ("测评", "评测", "review", "gear")):
@@ -144,10 +149,19 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
     # 再自标 rule_v0/fallback_used=true 会在运维面/会话史里读成「LLM 全灭」假警报。
     provider_free_designed = str(reason).startswith("provider_free")
     plan_label = "provider_free" if provider_free_designed else "rule_v0"
+    # 车道A/A3+A4:规则路径与 LLM 路径产出同一套结构(多条短 query + 受众规模档位)。
+    # 未解析到产品 → 空锚,短 query 退化为纯题材短句,绝不编造品牌/型号词。
+    anchor = smart_query_intent.product_anchor(None)
+    search_queries = smart_query_intent.build_search_queries(anchor, keywords or [search_query])
+    audience = smart_query_intent.normalise_audience_scale(
+        None, None, detected=smart_query_intent.detect_audience_scale(query_text)
+    )
     return {
         "status": "fallback",
         "original_query": query_text,
         "search_query": search_query or query_text,
+        "search_queries": search_queries or [search_query or query_text],
+        **audience,
         "product_focus": keywords[:6],
         "target_persona": query_text,
         "platforms": platforms,
@@ -170,6 +184,10 @@ def _clarification_plan(query: str, clarification: dict[str, Any]) -> dict[str, 
         "status": "needs_clarification",
         "original_query": _text(query),
         "search_query": "",
+        "search_queries": [],
+        "audience_scale": "",
+        "min_followers_hint": None,
+        "audience_scale_source": "unspecified",
         "product_focus": [],
         "target_persona": "",
         "avoid_types": [],
@@ -207,6 +225,7 @@ def _require_evidence_anchor(plan: dict[str, Any]) -> dict[str, Any]:
         **plan,
         "status": "needs_clarification",
         "search_query": "",
+        "search_queries": [],
         "creator_quota": 0,
         "reviewer_quota": 0,
         "include_new_discovery": False,
@@ -333,10 +352,34 @@ def _normalise_plan(
         or product_positioning
         or fallback["target_persona"]
     )
+    # ── 车道A(2026-08-25)意图契约 ─────────────────────────────────────────────
+    # A2:检索词必须携带产品锚。证据闸的 intent 腿(≥2 非泛词)与产品腿此前吃两套完全
+    #     分开的词表,人为造成跨词表 AND。prod a05e48dd3 只读复验(vkpi_kol_pool 全量
+    #     2034 人 + 代表作标题,产品腿按 55mm F1.8 EVO 要求):无锚 70 人过闸、带锚 88 人
+    #     过闸(1.26×,零人掉队——锚词只进 intent 词池,过闸集合是严格超集)。
+    # A3:一条长 query 同时服务向量召回 / YT 搜索 / IG 标签 → 拆成 2-4 条 ≤6 词短 query,
+    #     search_query 保留为合并串供未改造的下游消费(向后兼容)。
+    # A1:受众规模落成档位 + 粉丝下限**建议值**,绝不再被译成题材词。
+    anchor = smart_query_intent.product_anchor(product, query_text=query)
+    angles = smart_query_intent.angle_terms(
+        [*_as_list(raw_plan.get("search_queries")), *product_focus, search_query], anchor
+    )
+    search_queries = smart_query_intent.build_search_queries(anchor, angles)
+    compat_query = smart_query_intent.compat_search_query(
+        search_queries, anchor, extra_terms=[search_query, *product_focus]
+    )
+    audience = smart_query_intent.normalise_audience_scale(
+        raw_plan.get("audience_scale"),
+        raw_plan.get("min_followers_hint") or raw_plan.get("followers_min_hint"),
+        detected=smart_query_intent.detect_audience_scale(query),
+    )
     return {
         "status": "ready" if raw_plan else fallback["status"],
         "original_query": _text(query),
-        "search_query": search_query,
+        "search_query": compat_query or search_query,
+        "search_queries": search_queries or [compat_query or search_query],
+        **audience,
+        "product_anchor": anchor["prefix"],
         "product_focus": product_focus[:10],
         "target_persona": target_persona,
         "avoid_types": avoid_types[:8],
@@ -401,15 +444,28 @@ def _plan_from_product_persona(
     if not focus:
         # persona 行存在但类型/垂类为空 → 退 LLM,避免空检索词。
         return None
-    search_query = " ".join(focus).strip()
     target_persona = ideal_persona or _text(query)
     product_positioning = what_is or _text(product.get("specs_line"))
+
+    # 车道A:persona 路径与 LLM 路径共用同一套锚/短 query/受众规模契约。
+    anchor = smart_query_intent.product_anchor(product, query_text=query)
+    angles = smart_query_intent.angle_terms(focus, anchor)
+    search_queries = smart_query_intent.build_search_queries(anchor, angles)
+    search_query = smart_query_intent.compat_search_query(
+        search_queries, anchor, extra_terms=focus
+    ) or " ".join(focus).strip()
+    audience = smart_query_intent.normalise_audience_scale(
+        None, None, detected=smart_query_intent.detect_audience_scale(query)
+    )
 
     fallback = _fallback_plan(query)
     return {
         "status": "ready",
         "original_query": _text(query),
         "search_query": search_query or fallback["search_query"],
+        "search_queries": search_queries or [search_query or fallback["search_query"]],
+        **audience,
+        "product_anchor": anchor["prefix"],
         "product_focus": focus[:10],
         "target_persona": target_persona,
         "avoid_types": avoid_types[:8],
@@ -538,6 +594,10 @@ First DEEPLY analyse THIS specific product (what it is, its price tier, its prof
     else:
         product_block = "\nNo specific catalog product was matched from the text; infer the product family from the words and plan a sensible creator search.\n"
 
+    # 车道A/A2:锚串由目录真值推导后喂进 prompt,LLM 不必自己拼品牌/型号(拼错就没锚)。
+    _anchor = smart_query_intent.product_anchor(resolved_product, query_text=query_text)
+    anchor_hint = _anchor["prefix"] or "the product name the operator named"
+
     prompt = f"""
 You are a V-KPI KOL search planner for Viltrox marketing.
 Convert the operator request into ONE JSON object only. Output ONLY the JSON object — no markdown fences, no prose, no thinking, no explanation before or after.
@@ -554,11 +614,17 @@ Rules:
 - FIRST analyze WHO actually uses/buys this product, then BROADEN the search — do NOT narrow to only literal product-name matches. A camera monitor is used by filmmakers, videographers, photographers and content creators ACROSS many verticals (automotive/racing, food/culinary, weddings & events, travel, commercial/ad, sports, real-estate, music video, documentary). product_focus should mix creator-type terms (videographer, filmmaker, cinematographer, content creator, DP) with a few representative verticals; write target_persona as one sentence describing this buyer group broadly.
 - Target the ENGLISH-speaking market. Set market to "US" unless the user explicitly names another English region (UK/CA/AU/EU). Exclude Chinese-language creators.
 - Preserve the original intent but expand it into searchable English creator terms.
+{smart_query_intent.AUDIENCE_SCALE_PROMPT_RULE}
+- PRODUCT ANCHOR IS MANDATORY. Every entry of search_queries, and search_query itself, MUST start with the resolved product anchor "{anchor_hint}" (brand + model, plus the mount where it fits). A search term set that never names the product cannot prove product relevance downstream.
+- OUTPUT SHORT QUERIES, NOT ONE LONG SENTENCE. search_queries must hold 2-4 entries, each at most 6 words, each carrying the product anchor, and each covering a DIFFERENT angle (product + mount / product + genre / product + use case / product + category). Do not restate the same angle with synonyms.
 - If the request mentions flash, lighting, strobe, LED, Godox, or price/value, include lighting/flash creator terms.
 - Prefer a balanced 15 creator / 15 reviewer search unless the user says otherwise.
 - Platforms must be from: youtube, instagram, tiktok.
 - Return JSON keys:
-  search_query: string (precise English creator search terms for THIS product's buyers; for a cine lens use cinema/anamorphic/DP/commercial-film terms, never generic "camera gear review")
+  search_queries: string[] (2-4 entries, each <= 6 words, each starting with the product anchor, each a different angle)
+  search_query: string (the single merged fallback line; it MUST also start with the product anchor)
+  audience_scale: string (one of micro / mid / large / mega, or "" when the operator said nothing about reach)
+  min_followers_hint: number (follower floor implied by audience_scale; 0 when unspecified — it is only a HINT, the operator's own filter always wins)
   product_focus: string[] (precise creator-type + vertical terms for this product's buyers)
   target_persona: string (one English sentence describing the ideal creator/buyer for this exact product)
   avoid_types: string[] (mismatched creator types to exclude for this exact product)

@@ -15,11 +15,23 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
 from app.core.logging import get_logger
 from app.services.intelligence.account_scan_helpers import *  # noqa: F403
+
+# IG 腿的检索词/收敛/富化已拆到 account_search_instagram.py(800 软棘轮:本文件在
+# 快照里锁死 843 行)。原名 re-export —— account_scan_service 的 re-export 链与
+# 既有 monkeypatch 点(account_scan_service._instagram_hashtags 等)全部不变。
+from app.services.intelligence.account_search_instagram import (  # noqa: F401
+    _instagram_collapse_owner_posts,
+    _instagram_hashtags,
+    _instagram_owner_profiles,
+    instagram_enrich_min_budget_seconds,
+    instagram_enrich_targets,
+)
 
 logger = get_logger(__name__)
 
@@ -30,48 +42,6 @@ def _scan_service():
     from app.services.intelligence import account_scan_service as _scan
 
     return _scan
-
-
-# IG 多词查询拆成多个有意义 hashtag，避免整句拼接成无效 tag。
-_INSTAGRAM_HASHTAG_STOPWORDS = frozenset({
-    "the", "and", "for", "with", "from", "into", "your", "you", "are",
-    "this", "that", "best", "top", "new", "all", "any", "how", "why",
-    "what", "who", "kol", "kols", "influencer", "influencers", "creator",
-    "creators", "channel", "channels", "video", "videos", "review",
-    "reviews",
-})
-
-
-def _instagram_hashtags(query: str, *, max_tags: int = 5) -> List[str]:
-    """Split a (possibly multi-word) query into multiple Instagram hashtags.
-
-    Aligns IG recall with YouTube/TikTok, which pass the full query. Each
-    meaningful token becomes its own hashtag (alnum/underscore only, <=80
-    chars), stopwords and tiny tokens are dropped, duplicates collapsed, and
-    the count is capped at ``max_tags`` to preserve actor throttle/budget.
-
-    Pure function (no Apify call) so it can be unit-tested directly.
-    """
-    seen: set[str] = set()
-    tags: List[str] = []
-    fallback: List[str] = []  # short/stopword tokens kept only if nothing else
-    for word in (query or "").lower().split():
-        token = "".join(ch for ch in word if ch.isalnum() or ch == "_")[:80]
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        if len(token) > 2 and token not in _INSTAGRAM_HASHTAG_STOPWORDS:
-            tags.append(token)
-            if len(tags) >= max_tags:
-                break
-        elif len(token) > 1:
-            fallback.append(token)
-    if not tags:
-        # No "meaningful" token survived (e.g. very short brand like "
-        # dji" already >2, but pure-stopword/short queries) → keep what we
-        # have so IG still gets a real hashtag instead of returning empty.
-        tags = fallback[:max_tags]
-    return tags
 
 
 def _short_search_queries(query: str, *, max_queries: int = 4) -> List[str]:
@@ -497,52 +467,6 @@ def _candidate_identity_key(item: Dict[str, Any]) -> str:
     return ""
 
 
-def _instagram_collapse_owner_posts(raw_items: List[Dict[str, Any]], safe_limit: int) -> List[Dict[str, Any]]:
-    """K2 扩量刀·IG 号主收敛:hashtag 帖子流按 ownerUsername 收敛成「每号主一帖」
-    (保 hashtag 排序首帖),再截 safe_limit。治「20 帖只剩 13 号主、槽位被同号主
-    多帖吃掉」(funnel 实测收敛比 ~3:2)。无 owner 的帖保序排尾兜底。纯函数零 IO。"""
-    by_owner: Dict[str, Dict[str, Any]] = {}
-    ownerless: List[Dict[str, Any]] = []
-    for item in raw_items:
-        row = item if isinstance(item, dict) else {}
-        owner = str(row.get("ownerUsername") or row.get("username") or "").strip().lower()
-        if not owner:
-            ownerless.append(row)
-            continue
-        if owner not in by_owner:
-            by_owner[owner] = row
-    merged = list(by_owner.values()) + ownerless
-    return merged[: max(1, int(safe_limit or 1))]
-
-
-async def _instagram_owner_profiles(usernames: List[str]) -> Dict[str, Dict[str, Any]]:
-    """K2 扩量刀·IG 档案富化:apify/instagram-profile-scraper 批量拉号主档案
-    (followersCount/biography/fullName/头像)。治「IG 新面孔恒无 followers →
-    会话读端全折叠成分析中,面上永远见不到 IG 新人」。一次 actor run 喂全部
-    usernames(≤50 封顶);actor 失败/空 → {}(诚实降级,行为退回旧版 followers 未知)。
-    env APIFY_INSTAGRAM_PROFILE_ACTOR_ID 可换 actor(与 douyin/facebook 分支同模式)。"""
-    names: List[str] = []
-    seen: set[str] = set()
-    for username in usernames:
-        name = str(username or "").strip().lstrip("@")
-        if name and name.lower() not in seen:
-            seen.add(name.lower())
-            names.append(name)
-    names = names[:50]
-    if not names:
-        return {}
-    actor_id = (os.getenv("APIFY_INSTAGRAM_PROFILE_ACTOR_ID") or "apify/instagram-profile-scraper").strip()
-    rows = await _scan_service()._run_actor(actor_id, {"usernames": names}, timeout=300)
-    out: Dict[str, Dict[str, Any]] = {}
-    for row in rows or []:
-        if not isinstance(row, dict):
-            continue
-        uname = str(row.get("username") or "").strip().lower()
-        if uname:
-            out[uname] = row
-    return out
-
-
 async def search_platform_content(
     platform: str,
     query: str,
@@ -551,13 +475,24 @@ async def search_platform_content(
     max_results: int = 25,
     relevance_language: str = "en",
     strict_evidence: bool = False,
+    enrich_prefilter: Any = None,
+    deadline_seconds: float | None = None,
 ) -> Dict[str, Any]:
     """Search public platform content and normalize it into KOL candidates.
 
     This returns real provider results only. If the Apify provider is not
     configured or a platform search actor is unavailable, the status says so
     explicitly instead of fabricating rows.
+
+    车道 2·A2 新增两个**可选**参数(缺省 = 旧行为逐字不变):
+    - ``enrich_prefilter(probe) -> bool``:IG 富化前的单调闸,True=这条候选无论
+      富化与否都会被下游丢弃 → 不为它烧 profile-scraper 配额。口径见
+      ``account_search_instagram.instagram_enrich_targets`` 的文档(只许传单调闸)。
+    - ``deadline_seconds``:本条腿的总时间预算。hashtag 阶段吃完预算后,富化阶段
+      诚实跳过(候选照常返回、followers 未知 → 读端归「分析中」),而不是把整条腿
+      拖过 deadline 变成「本轮该平台无供给」——**少个 followers 好过整腿归零**。
     """
+    leg_started_monotonic = time.monotonic()
     normalized_platform = (platform or "youtube").strip().lower()
     normalized_query = (query or "").strip()
     safe_limit = max(1, min(int(max_results or 25), 100))
@@ -655,6 +590,9 @@ async def search_platform_content(
     raw_items = await _scan_service()._run_actor(actor_id, payload, timeout=timeout)
     ig_profiles: Dict[str, Dict[str, Any]] = {}
     ig_raw_posts = len(raw_items)
+    ig_enrich_note = ""  # "" = 照常富化;非空 = 诚实记录本轮富化为什么没做满
+    ig_enrich_prefiltered = 0
+    ig_enrich_requested = 0
     if normalized_platform == "tiktok" and raw_items:
         # 重复卡修:视频流先按号主收敛(每号主一条),再截 safe_limit——否则同号主多视频/
         # 多路检索变体重复项既吃槽位又重复上墙(sky_vanya 案)。
@@ -663,13 +601,41 @@ async def search_platform_content(
         # K2:帖→号主收敛(每号主一帖)+ 批量档案富化(followers/bio/真名/头像)。
         # 富化失败诚实降级:候选照常返回,只是 followers 未知(读端归「分析中」)。
         raw_items = _instagram_collapse_owner_posts(raw_items, safe_limit)
-        try:
-            ig_profiles = await _instagram_owner_profiles(
-                [str((row or {}).get("ownerUsername") or (row or {}).get("username") or "") for row in raw_items]
+        # A2「富化后置」:先用 hashtag 帖已有的信息过**单调闸**,只把存活者送去富化。
+        # 被前置闸判死的候选照旧留在 raw_items 里走完下游同一条闸(结果集合逐条等价),
+        # 只是不再为它花一次 profile-scraper 配额。
+        ig_targets, ig_enrich_prefiltered = instagram_enrich_targets(raw_items, enrich_prefilter)
+        ig_enrich_requested = len(ig_targets)
+        _enrich_budget = (
+            None if deadline_seconds is None
+            else float(deadline_seconds) - (time.monotonic() - leg_started_monotonic)
+        )
+        if not ig_targets:
+            ig_enrich_note = "no_target" if ig_enrich_prefiltered else ""
+        elif _enrich_budget is not None and _enrich_budget < instagram_enrich_min_budget_seconds():
+            # 预算不够就别发:发了也会被腿级 deadline 砍掉,钱花了结果拿不到。
+            ig_enrich_note = "deadline_budget_exhausted"
+            logger.info(
+                "scanner.instagram_profile_enrich_skipped budget_left=%.1fs targets=%d",
+                _enrich_budget, len(ig_targets),
             )
-        except Exception as exc:
-            logger.warning("scanner.instagram_profile_enrich_failed", extra={"error": str(exc)[:300]})
-            ig_profiles = {}
+        else:
+            try:
+                if _enrich_budget is None:
+                    ig_profiles = await _instagram_owner_profiles(ig_targets)
+                else:
+                    ig_profiles = await asyncio.wait_for(
+                        _instagram_owner_profiles(ig_targets), timeout=_enrich_budget
+                    )
+            except asyncio.TimeoutError:
+                # actor 线程仍会跑完并照常计费(asyncio 取消不了 to_thread);这里只是不再等它。
+                ig_enrich_note = "deadline_timeout"
+                logger.warning("scanner.instagram_profile_enrich_timeout budget=%.1fs", _enrich_budget)
+                ig_profiles = {}
+            except Exception as exc:
+                ig_enrich_note = "actor_failed"
+                logger.warning("scanner.instagram_profile_enrich_failed", extra={"error": str(exc)[:300]})
+                ig_profiles = {}
     items: List[Dict[str, Any]] = []
     seen_identities: set[str] = set()  # 聚合层兜底去重:(platform, handle 小写) 每号主一条
     for item in raw_items[:safe_limit]:
@@ -834,10 +800,15 @@ async def search_platform_content(
             "provider_queries": provider_queries,
             "searched_at": started_at,
             # K2 可观测(仅 instagram 有意义):原始帖量/号主收敛后量/档案富化命中数。
+            # A2 补三个诚实计数:前置闸挡掉几个(省下的富化配额)、实际请求富化几个、
+            # 以及富化没做满时的原因(空=正常做满)。
             **({
                 "raw_posts": ig_raw_posts,
                 "unique_owners": len(items),
                 "profile_enriched": len(ig_profiles),
+                "profile_enrich_prefiltered": ig_enrich_prefiltered,
+                "profile_enrich_requested": ig_enrich_requested,
+                **({"profile_enrich_degraded": ig_enrich_note} if ig_enrich_note else {}),
             } if normalized_platform == "instagram" else {}),
         },
     }

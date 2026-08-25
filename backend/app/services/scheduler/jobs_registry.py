@@ -323,11 +323,17 @@ def _register_learning_closeout_jobs(_scheduler: Any) -> None:
         max_instances=1,
         coalesce=True,
     )
-    # D2 车道(2026-08-23,迁移 295 种子,默认 OFF,零 LLM):数据断链兜底三日任务,错开 05:00/05:20/05:40 中国。
+    # D2 车道(2026-08-23 起,迁移 295 / 302 种子,全部默认 OFF,零 LLM):数据断链兜底日任务,
+    # 错开 05:00 / 05:20 / 05:40 / 05:50 中国时区,避免与整点间隔族叠成同秒齐发压爆连接池。
     for task_key, module, entry, kwargs, minute, label in (
         ("vkpi_pool_raw_fields_backfill", "app.domains.kol.pool_raw_fields_job", "run_raw_fields_backfill", {"limit": 500}, 0, "Pool raw-field backfill (500 rows/day, no Apify, no contacts enqueue)"),
         ("vkpi_tracking_auto_enroll", "app.domains.kol.evidence_side_effects", "run_tracking_auto_enroll", {}, 20, "Auto-enroll favorites' new video evidence into metric tracking ($30 monthly gate)"),
         ("vkpi_lens_evidence_backfill", "app.domains.kol.lens_evidence_followup", "run_lens_evidence_backfill", {"limit": 5000}, 40, "Lens evidence backfill over final_v1 cache (hook gaps / extractor upgrades)"),
+        # 2026-08-25 迁移 302 种子:搜索会话卡住项续补。prod 只读探针实测 242 条会话项长期
+        # 停在 status='partial',其中 239 条身上连一个在跑的 job 都没有——没有任何机制会再碰
+        # 它们,永远停在半路。本任务只按 item 自己已记下的证据结算或判终态,零 provider 调用、
+        # 零 LLM、零 Apify;要花钱才能补的只打标交人裁决,自己绝不下单。05:50 继续错峰。
+        ("vkpi_session_stuck_item_followup", "app.domains.kol.search_session_stuck_followup", "run_session_stuck_followup_job", {"limit": 100, "dry_run": False}, 50, "Search-session stuck item follow-up (<=100/run, no provider calls, terminal reasons recorded)"),
     ):
         _scheduler.add_job(
             _gated_daily_job(task_key, module, entry, **kwargs),

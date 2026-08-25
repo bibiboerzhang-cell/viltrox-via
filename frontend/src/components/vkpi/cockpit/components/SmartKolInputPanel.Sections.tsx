@@ -21,6 +21,7 @@ import {
   type Row,
 } from "./SmartKolInputPanel.helpers";
 import { candidateEvidenceSummary, candidateRankSummary } from "./SmartKolInputPanel.CandidateEvidence";
+import { resultOriginBadge } from "./SmartKolInputPanel.sessionProjection";
 import { kolHumanDisplayName, kolHumanProfileLinkLabel, kolHumanPublicHandle } from "../lib/kolIdentity";
 
 // 纯派生器 / 常量 / 类型已再抽到 SmartKolInputPanel.derivers.ts(行为不变;展示子组件留此文件)。
@@ -385,6 +386,7 @@ export function RecallMiniItem({
   const fitBadge = contentFitBadge(itemRow.fit_verdict ?? fitSrc.fit_verdict);
   const creatorType = cleanText(itemRow.creator_type ?? fitSrc.creator_type);
   const marks = freshnessMarks(item);
+  const originBadge = resultOriginBadge(item); // 库内 / 新发现 / 你提供的;判不出返回 null → 不摆徽标
   const platform = candidateText(item.platform);
   const country = candidateText(itemRow.country ?? fitSrc.country);
   const language = candidateText(itemRow.language ?? fitSrc.language);
@@ -504,6 +506,9 @@ export function RecallMiniItem({
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="truncate text-[11.5px] font-medium text-slate-100 group-hover:text-white">{name}</span>
+            {originBadge ? (
+              <span data-testid="candidate-origin-badge" data-origin={originBadge.kind} title={originBadge.title} className={`shrink-0 rounded border px-1 text-[8px] font-semibold ${originBadge.toneClassName}`}>{originBadge.label}</span>
+            ) : null}
             {marks.newcomer ? (
               <span className="shrink-0 rounded border border-emerald-300/25 bg-emerald-400/[0.08] px-1 text-[8px] font-medium text-emerald-100">新人</span>
             ) : null}

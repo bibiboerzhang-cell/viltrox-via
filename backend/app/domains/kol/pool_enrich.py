@@ -58,6 +58,7 @@ def enrich_item(
     *,
     max_posts: int = 12,
     staff: dict[str, Any] | None = None,
+    avatar_landing_budget: Any | None = None,
 ) -> dict[str, Any]:
     """Fetch one KOL Pool candidate from the real platform adapter and update metrics.
 
@@ -176,6 +177,18 @@ def enrich_item(
         },
         {"product_name": "Viltrox lens", "category": "camera lens", "target_platforms": [platform]},
     )
+    # 头像落地(2026-08-25 车道 2):富化写 avatar_url 的同一条路径上,把图片复制进
+    # 我们自己的媒体缓存。本函数是整列覆写 raw_platform_data,所以诚实标记必须随这份
+    # payload 一起写,否则刚打的标记会被自己抹掉。落地失败只降级成 external 标记,
+    # 绝不影响富化落库。
+    _stamp_enrich_avatar(
+        raw_data,
+        avatar_url,
+        platform=platform,
+        external_id=str(item.get("handle") or ""),
+        budget=avatar_landing_budget,
+        conn=conn,
+    )
     now = _utcnow()
     conn.execute(
         """
@@ -289,6 +302,35 @@ RAW_FIELDS_EXTRACTOR_VERSION = "raw_fields_v1"
 TAGGED_BRANDS_MAX = 40
 _YT_KEYWORD_RE = re.compile(r'"([^"]+)"|(\S+)')
 _HANDLE_STRIP_RE = re.compile(r"^[@\s]+|[\s,.:;!]+$")
+
+
+def _stamp_enrich_avatar(
+    raw_data: dict[str, Any],
+    avatar_url: Any,
+    *,
+    platform: str,
+    external_id: str,
+    budget: Any | None,
+    conn: Any,
+) -> None:
+    """把头像落地结论写进本次要落库的 raw payload。异常一律吞在这里,富化照常。"""
+    try:
+        from app.domains.kol.avatar_landing import (
+            AVATAR_MEDIA_MARKER_KEY,
+            SINGLE_WRITE_LANDING_LIMIT,
+            land_avatar_url,
+            new_landing_budget,
+        )
+
+        raw_data[AVATAR_MEDIA_MARKER_KEY] = land_avatar_url(
+            avatar_url,
+            platform=platform,
+            external_id=external_id,
+            budget=budget if budget is not None else new_landing_budget(SINGLE_WRITE_LANDING_LIMIT),
+            conn=conn,
+        )
+    except Exception:
+        logger.warning("avatar landing unavailable during enrich platform=%s", platform, exc_info=True)
 
 
 def _raw_dict(raw: Any) -> dict[str, Any]:
@@ -559,6 +601,17 @@ def apply_raw_fields(conn: Any, kol_pool_id: int, raw_platform_data: Any, *, pla
     return {"written": len(writable), "fields": fields}
 
 
+def _new_avatar_landing_budget() -> Any | None:
+    """开一把批量落地闸;模块缺席时返回 None(退回单条默认闸,绝不阻断批量富化)。"""
+    try:
+        from app.domains.kol.avatar_landing import new_landing_budget
+
+        return new_landing_budget()
+    except Exception:
+        logger.warning("avatar landing budget unavailable for batch enrich", exc_info=True)
+        return None
+
+
 def batch_enrich_items(
     *,
     ids: list[int] | None = None,
@@ -607,6 +660,9 @@ def batch_enrich_items(
     skipped: list[dict[str, Any]] = []
     partial: list[dict[str, Any]] = []
     complete = 0
+    # 一把闸管整批:单次批量入库真正落地(抓图/上传)的张数有上限,
+    # 一次导入不会把带宽和 R2 成本打爆。命中缓存的重复行不占额度。
+    avatar_budget = _new_avatar_landing_budget()
     for kol_pool_id in selected_ids:
         row = conn.execute("SELECT id, platform, handle FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
         if not row:
@@ -618,7 +674,12 @@ def batch_enrich_items(
             skipped.append({"id": kol_pool_id, "platform": platform_key, "reason": "unsupported"})
             continue
         try:
-            result = enrich_item(kol_pool_id, max_posts=max_posts_i, staff=staff)
+            result = enrich_item(
+                kol_pool_id,
+                max_posts=max_posts_i,
+                staff=staff,
+                avatar_landing_budget=avatar_budget,
+            )
             if result.get("item"):
                 updated_item = result["item"]
                 items.append(updated_item)

@@ -18,6 +18,20 @@ from app.domains.kol.discovery_account_identity import (
 from app.domains.kol.discovery_regional_official import (
     regional_brand_profile_self_attributed,
 )
+# persona 词表/相关度已抽到兄弟文件(A1 修补撑过 800 行软棘轮,按 house 规矩拆不刷快照)。
+# 这里 re-export 回灌:profile_discovery 门面与既有 `from ...discovery_filters import _persona_*`
+# 调用点一律不变。
+from app.domains.kol.discovery_persona_terms import (  # noqa: F401  (re-export)
+    _PERSONA_GENERIC_TERMS,
+    _PERSONA_PHRASE_SPLIT_RE,
+    _persona_avoid_terms,
+    _persona_entries,
+    _persona_phrase_list,
+    _persona_positive_terms,
+    _persona_relevance,
+    _persona_term_list,
+    _term_hit,
+)
 
 
 _EXCLUDED_REGION_RE = re.compile(
@@ -67,86 +81,6 @@ def _detect_excluded_region(item: dict[str, Any]) -> str:
         return "CN/HK/TW"
     return ""
 
-
-# persona 启发式相关度:发现 item 文本 vs 产品 persona 正/负词。泛词不计分,英文优先。
-_PERSONA_GENERIC_TERMS = {
-    "photo", "photos", "photography", "photographer", "photographers", "video", "videos",
-    "videography", "videographer", "content", "creator", "creators", "vlog", "vlogger",
-    "vlogging", "camera", "gear", "film", "filmmaker", "filmmaking", "reel", "reels",
-    "shoot", "shooting", "and", "the", "for", "with",
-    "摄影", "攝影", "摄影师", "攝影師", "视频", "視頻", "创作者", "創作者", "博主", "内容",
-    "拍摄", "拍攝", "短视频", "短視頻", "相机", "相機", "器材", "视频创作者",
-}
-
-
-def _persona_term_list(*sources: Any) -> list[str]:
-    """归一 persona 字段(list / JSON 串 / None 各自兜底)→ 分词 → 去泛词 → 去重保序。"""
-    out: list[str] = []
-    for src in sources:
-        if src is None:
-            continue
-        value: Any = src
-        if isinstance(src, (str, bytes)):
-            s = src.decode() if isinstance(src, bytes) else src
-            s = s.strip()
-            if s[:1] in ("[", "{"):
-                try:
-                    import json as _json_mod
-
-                    value = _json_mod.loads(s)
-                except Exception:
-                    value = s
-            else:
-                value = s
-        if isinstance(value, dict):
-            value = list(value.values())
-        items = value if isinstance(value, (list, tuple, set)) else [value]
-        for entry in items:
-            for tok in re.split(r"[\s,/、，;；|·\-]+", str(entry or "").lower()):
-                tok = tok.strip()
-                if len(tok) >= 2 and tok not in _PERSONA_GENERIC_TERMS:
-                    out.append(tok)
-    seen: set[str] = set()
-    uniq: list[str] = []
-    for t in out:
-        if t not in seen:
-            seen.add(t)
-            uniq.append(t)
-    return uniq
-
-
-def _persona_positive_terms(product_focus: Any, ideal_creator_types: Any, verticals: Any, query: Any) -> list[str]:
-    return _persona_term_list(product_focus, ideal_creator_types, verticals, query)
-
-
-def _persona_avoid_terms(avoid_types: Any) -> list[str]:
-    return _persona_term_list(avoid_types)
-
-
-def _persona_relevance(item: dict[str, Any], *, pos_terms: list[str], neg_terms: list[str]) -> dict[str, Any]:
-    """persona 启发式相关度(纯本地零 LLM):扫 item 文本对正/负词命中打分。
-    返回 {score, relevance_score, relevance_tier, relevance_hits};score=relevance_score 供落库。
-    red line:独立展示信号,绝不并入 viltrox_fit_score / rule_v0。CN/HK/TW 不在此扣分(交 _detect_excluded_region 排)。"""
-    # 只看候选**自身内容**(标题/频道名/handle/bio);绝不含 search_query —— 那是查询词本身,会自命中致全 1.0。
-    # bio 为 K2 富化新增(频道简介/IG biography),真摄影师的自述是最诚实的相关度证据;无 bio 行为不变。
-    blob = " ".join(
-        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle", "bio")
-    ).lower()
-    if not pos_terms and not neg_terms:
-        return {"score": 0.5, "relevance_score": 0.5, "relevance_tier": "中", "relevance_hits": []}
-    hits = [t for t in pos_terms if t in blob]
-    neg_hits = [t for t in neg_terms if t in blob]
-    score = 0.35 + 0.18 * len(hits) - 0.30 * len(neg_hits)
-    if not hits:
-        score = min(score, 0.12)  # 零正命中=泛结果,压低,排序后置
-    score = max(0.0, min(1.0, score))
-    tier = "高" if score >= 0.6 else ("中" if score >= 0.3 else "低")
-    return {
-        "score": round(score, 4),
-        "relevance_score": round(score, 4),
-        "relevance_tier": tier,
-        "relevance_hits": hits[:6],
-    }
 
 
 # ── 相机/视觉创作者相关度闸门(用户硬要求:「用户得有相机,得需要拍摄」)──────────────────────
@@ -468,12 +402,36 @@ def _has_camera_signal(item: dict[str, Any]) -> bool:
     return any(term in blob for term in _CAMERA_SIGNAL_TERMS)
 
 
+# persona 负词丢弃的应急回滚闸(A1,2026-08-25)。默认 **关** = 只扣分不丢弃。
+# 失败方向安全口径:漏挡一个错配的人 → 操作员在列表里看得见、能自己跳过;误杀一个真人
+# → 结果里静默缺席、操作员永远不知道。所以默认走「看得见」那一侧。置 1/true 才恢复旧行为。
+PERSONA_AVOID_DROP_ENV = "VKPI_DISCOVERY_PERSONA_AVOID_DROP"
+
+
+def _persona_avoid_drop_enabled() -> bool:
+    """persona 负词是否仍按「命中即丢弃」处理(默认否)。运行时读 env(非 import 时快照),
+    线上改 env 重启即生效;与 REACH_FLOOR_SWITCH_ENV 同款 env 布尔口径,只是默认相反。"""
+    raw = str(os.environ.get(PERSONA_AVOID_DROP_ENV, "0")).strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 def _is_hard_avoid(item: dict[str, Any], neg_terms: list[str]) -> bool:
-    """候选是否命中明确非视觉「硬避免」品类,或命中任一 persona 负词 → 直接丢弃(不止扣分)。"""
+    """候选是否命中明确非视觉「硬避免」品类 → 直接丢弃(不止扣分)。
+
+    2026-08-25(A1 误杀修)两处改动:
+    ① _HARD_AVOID_TERMS 从裸子串改**词边界**匹配(_term_hit)—— 旧口径让 scent 连坐
+       crescent/descent/nascent、political 连坐 apolitical、wine 连坐 winery,全是误杀;
+    ② persona 的 avoid_types 是 LLM 写的人话短语,**不再在这里丢弃**,降级为
+       _persona_relevance 的排序扣分 + persona_avoid_hits 诚实透出。真丢弃只留给上面这份
+       静态高精词表(人工维护、逐词都是明确非视觉品类)。需要旧行为时置
+       VKPI_DISCOVERY_PERSONA_AVOID_DROP=1(应急回滚,不必改代码)。
+    非视觉创作者的兜底并没有消失:_has_camera_signal / _is_bio_irrelevant 两道闸照旧丢人。"""
     blob = _candidate_blob(item)
-    if any(term in blob for term in _HARD_AVOID_TERMS):
+    if any(_term_hit(blob, term) for term in _HARD_AVOID_TERMS):
         return True
-    return any(t and t in blob for t in neg_terms)
+    if not _persona_avoid_drop_enabled():
+        return False
+    return any(_term_hit(blob, t) for t in neg_terms)
 
 
 # ── 召回触达门槛(用户裁决 2026-07-11):粉丝明确低于门槛、或互动信号实测全零的账号

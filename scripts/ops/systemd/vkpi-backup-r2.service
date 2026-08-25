@@ -1,0 +1,85 @@
+[Unit]
+Description=V-KPI off-host PostgreSQL backup push to Cloudflare R2
+Wants=network-online.target
+After=network-online.target postgresql.service
+StartLimitIntervalSec=3600
+StartLimitBurst=6
+
+[Service]
+Type=oneshot
+User=viltrox
+Group=viltrox
+UMask=0077
+WorkingDirectory=/opt/viltrox-2.0/current
+# Deliberately no EnvironmentFile=.  backup_to_r2.py reads /opt/viltrox-2.0/.env
+# itself as a private regular file, so DATABASE_URL and the R2 token never enter
+# this unit's process environment (and therefore never reach /proc/<pid>/environ
+# or a child's argv).
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=RUNTIME_ENV_QUIET=1
+Environment=HOME=/tmp/vkpi-backup-r2-home
+Environment=XDG_CACHE_HOME=/tmp/vkpi-backup-r2-cache
+Environment=TMPDIR=/tmp
+Environment=LC_ALL=C
+
+# Fail closed before the dump starts.  If the 200GB volume is not mounted, the
+# staging directory would silently land on the 89%-full system disk; refuse
+# instead.  The .env read is the other hard precondition.
+ExecStartPre=/usr/bin/mountpoint -q /mnt/HC_Volume_106700445
+ExecStartPre=/usr/bin/test -r /opt/viltrox-2.0/.env
+ExecStartPre=/usr/bin/test -x /opt/viltrox-2.0/.venv/bin/python
+
+# The .venv interpreter is mandatory: boto3 only exists there, and a bare
+# python3 used to degrade silently to "no off-host backup".  backup_to_r2.py
+# turns that into stage=client category=boto3_missing instead.
+ExecStart=/opt/viltrox-2.0/.venv/bin/python -B /opt/viltrox-2.0/current/scripts/ops/backup_to_r2.py --env-file /opt/viltrox-2.0/.env --work-dir /mnt/HC_Volume_106700445/vkpi-backups/r2-staging --prefix vkpi-db
+
+# One dump of the ~1.4GB production clone plus the upload; well inside 2h.
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=vkpi-backup-r2
+LimitNOFILE=8192
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RemoveIPC=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/viltrox-2.0/current
+ReadOnlyPaths=/opt/viltrox-2.0/.env
+ReadOnlyPaths=-/opt/viltrox-2.0/.env.production
+# The only writable surface is the staging directory on the attached volume.
+ReadWritePaths=/mnt/HC_Volume_106700445/vkpi-backups
+# ProtectSystem=strict makes the whole tree read-only, which blocks connect()
+# on a local PostgreSQL unix socket.  Production DATABASE_URL is TCP, so these
+# are optional (leading '-') and only matter if the DSN is ever switched.
+ReadWritePaths=-/run/postgresql
+ReadWritePaths=-/var/run/postgresql
+# The system-disk backup tree is the leak this timer exists to survive; this
+# unit must never add to it.  /opt/viltrox-2.0/releases is NOT listed here:
+# WorkingDirectory=/opt/viltrox-2.0/current is a symlink into it.
+InaccessiblePaths=/opt/viltrox-2.0/backups
+
+# No [Install] section on purpose, matching vkpi-sync-daily.service and
+# vkpi-health-sentinel.service: this unit is owned by vkpi-backup-r2.timer.
+# A WantedBy=multi-user.target here would additionally fire a full dump on
+# every boot.  Enable the timer, never the service:
+#   systemctl daemon-reload && systemctl enable --now vkpi-backup-r2.timer

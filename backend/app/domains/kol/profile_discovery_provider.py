@@ -7,6 +7,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.kol import history_match
+from app.domains.kol.search_session_diagnostics import provider_gate_funnel
 from app.domains.kol.discovery_filters import (
     LOW_REACH_FLAG_LIKE_PATTERN,
     _brand_official_verdict,
@@ -30,6 +31,14 @@ from app.domains.kol.profile_discovery_candidates import (
     _candidate_platform_signals,
     _is_own_brand_account,
     _strict_discovery_platforms,
+)
+from app.domains.kol.profile_discovery_supply import (
+    build_enrich_doom_gate,
+    leg_accounting,
+    leg_deadline_seconds,
+    resolve_platform_limit,
+    run_all_legs,
+    sanitize_platform_limits,
 )
 from app.domains.kol.profile_discovery_localize import (
     _has_cjk,
@@ -382,6 +391,7 @@ async def discover_new_creators(
     market: str = "",
     limit: int = 15,
     per_platform_limit: int = 15,
+    per_platform_limits: Any = None,
     search_query_en: str = "",
     product_focus: Any = None,
     ideal_creator_types: Any = None,
@@ -418,6 +428,9 @@ async def discover_new_creators(
     safe_limit_cap = 150 if not auto_enroll else 50
     safe_limit = max(1, min(_int(limit, 15), safe_limit_cap))
     safe_per_platform = max(1, min(_int(per_platform_limit, 15), 50))
+    # B3 每平台上限:operator 显式的 {平台: 上限} 覆盖标量默认;缺/垃圾值 → 全平台沿用
+    # safe_per_platform(旧行为逐字不变)。为什么只提 YouTube:见 profile_discovery_supply 模块头。
+    _platform_limits = sanitize_platform_limits(per_platform_limits)
     resolved_platforms = _strict_discovery_platforms(platforms, fallback=platform_hint)
     if not query:
         return {
@@ -441,6 +454,9 @@ async def discover_new_creators(
             "provider_calls": False,
             "message": "no supported discovery platform was selected",
         }
+    _leg_limits = {
+        p: resolve_platform_limit(p, safe_per_platform, _platform_limits) for p in resolved_platforms
+    }
 
     new_creators: list[dict[str, Any]] = []
     survivors: list[dict[str, Any]] = []  # 全部通过去重/garbage/地区过滤的存活候选,待 relevance 排序后再 top-N 截断
@@ -455,10 +471,19 @@ async def discover_new_creators(
     # 闸门丢弃计数(可观测,用于调参):brand_official=品牌官号总数(lexicon=词表快路命中/
     # dynamic=零词表动态判据命中,两子计数只供排障),bio_irrelevant=bio 自述明显非视觉职业
     # 且自身零相机信号(askmonitorofficial 类)。
+    # persona_avoid_penalized 不是丢弃计数(不进 _total_dropped):A1 修后 persona 的
+    # avoid_types 只做排序扣分,这里记「有多少候选因负词被扣分但仍留在结果里」——负词从
+    # 静默杀人改成看得见的扣分,扣分量必须同样看得见。
     _gate_dropped = {
         "hard_avoid": 0, "no_camera_signal": 0, "low_reach": 0, "brand_official": 0,
         "brand_official_lexicon": 0, "brand_official_dynamic": 0, "bio_irrelevant": 0,
+        "persona_avoid_penalized": 0,
     }
+
+    # A2 富化前置闸(单调闸,只决定花不花钱、从不删候选;口径与下方主环同源)。
+    _enrich_doom_gate = build_enrich_doom_gate(
+        exclude_chinese=exclude_chinese, neg_terms=_neg_terms
+    )
 
     async def _search_one_platform(platform: str) -> dict[str, Any]:
         """Run one platform search with error isolation; returns annotated items + meta.
@@ -470,9 +495,11 @@ async def discover_new_creators(
                 platform,
                 search_term,
                 market=_text(market).upper(),
-                max_results=safe_per_platform,
+                max_results=_leg_limits.get(platform, safe_per_platform),
                 relevance_language=_relevance_language,
                 strict_evidence=not auto_enroll,
+                enrich_prefilter=_enrich_doom_gate,
+                deadline_seconds=leg_deadline_seconds(platform),
             )
         except Exception as exc:
             logger.warning("profile discovery provider failed platform=%s", platform, exc_info=True)
@@ -507,10 +534,9 @@ async def discover_new_creators(
 
     # 并行化:YT/IG/TikTok 同时发,替代旧串行 for(一个接一个 await)。
     # return_exceptions=True 双保险——_search_one_platform 已内部捕获,这里再兜一层防御。
-    platform_outcomes = await asyncio.gather(
-        *[_search_one_platform(platform) for platform in resolved_platforms],
-        return_exceptions=True,
-    )
+    # A3:每条腿再包一层 deadline;超时的腿诚实降级为「本轮该平台无供给」并进 errors,
+    # 不影响其余腿。口径与实测依据见 profile_discovery_supply.run_all_legs。
+    platform_outcomes = await run_all_legs(resolved_platforms, _search_one_platform)
 
     # 按 resolved_platforms 原顺序合并(gather 保序),保留确定性的去重/limit 语义。
     for platform, outcome in zip(resolved_platforms, platform_outcomes):
@@ -527,6 +553,9 @@ async def discover_new_creators(
                 "metadata": outcome.get("metadata") or {},
                 "message": outcome.get("message"),
                 "filtered_platform_mismatch": int(outcome.get("filtered_platform_mismatch") or 0),
+                # A3/B3 记账:这条腿是不是被 deadline 砍掉的,以及本轮实际要了多少条。
+                **leg_accounting(outcome),
+                "requested_limit": _leg_limits.get(platform, safe_per_platform),
             }
         )
         if outcome.get("error"):
@@ -603,6 +632,8 @@ async def discover_new_creators(
             # persona 启发式相关度(纯本地零 LLM):写 item['score']/relevance_score/relevance_tier;
             # 先全收集到 survivors,循环外按 relevance 降序排序再 top-N 截断(否则按到达顺序砍掉高相关项)。
             item.update(_persona_relevance(item, pos_terms=_pos_terms, neg_terms=_neg_terms))
+            if item.get("persona_avoid_hits"):
+                _gate_dropped["persona_avoid_penalized"] += 1
             survivors.append(item)
 
     # 闸门可观测:单行 INFO,丢弃明细(诚实——被丢=结果中静默缺席,非杜撰分)。便于调参。
@@ -610,12 +641,12 @@ async def discover_new_creators(
         _gate_dropped["hard_avoid"] + _gate_dropped["no_camera_signal"] + _gate_dropped["low_reach"]
         + _gate_dropped["brand_official"] + _gate_dropped["bio_irrelevant"]
     )
-    if _total_dropped:
+    if _total_dropped or _gate_dropped["persona_avoid_penalized"]:
         logger.info(
-            "camera_relevance_gate dropped=%d hard_avoid=%d no_camera_signal=%d low_reach=%d brand_official=%d bio_irrelevant=%d survivors=%d query=%r",
+            "camera_relevance_gate dropped=%d hard_avoid=%d no_camera_signal=%d low_reach=%d brand_official=%d bio_irrelevant=%d persona_avoid_penalized=%d survivors=%d query=%r",
             _total_dropped, _gate_dropped["hard_avoid"], _gate_dropped["no_camera_signal"],
             _gate_dropped["low_reach"], _gate_dropped["brand_official"], _gate_dropped["bio_irrelevant"],
-            len(survivors), query,
+            _gate_dropped["persona_avoid_penalized"], len(survivors), query,
         )
     # relevance 降序排序 → top-N 截断。red line:relevance 是独立展示信号,绝不并入 viltrox_fit_score / rule_v0。
     # Relevance remains primary. When candidates tie, prefer rows with observed
@@ -713,6 +744,8 @@ async def discover_new_creators(
         "market": _text(market).upper(),
         "limit": safe_limit,
         "per_platform_limit": safe_per_platform,
+        # B3:每平台真实生效上限,让「YT 要了 50、IG/TT 要了 20」在返回体里可查。
+        "per_platform_limits": _leg_limits,
         "items": [*existing_matches, *new_creators],
         "new_creators": new_creators,
         "existing_matches": existing_matches,
@@ -731,13 +764,29 @@ async def discover_new_creators(
             "excluded_brand_official_dynamic": _gate_dropped["brand_official_dynamic"],
             # bio 明显无关排除数(askmonitorofficial 类;双条件并发才丢,防误杀)。
             "excluded_bio_irrelevant": _gate_dropped["bio_irrelevant"],
+            # persona 负词(avoid_types)扣分数 —— **不是**排除数:A1 修后负词只扣排序分、
+            # 人仍在结果里(明细见每项 persona_avoid_hits)。放这里是为了让「负词到底起没起
+            # 作用」有个可查的真数,而不是只能从会滚掉的日志里反查。
+            "persona_avoid_penalized": _gate_dropped["persona_avoid_penalized"],
             # 「分析后再 po」折叠计数:followers 未知、已入库并点火补全的候选(会话读端不展示,
             # 前端据此显示「分析中 ×N」;补全回填达标后自动放出)。
             "analyzing": _analyzing_total,
             "platforms": len(resolved_platforms),
             "errors": len(errors),
+            # A3 记账:本轮有几条腿因超时降级成「无供给」。>0 时整体 status 已经是
+            # partial/failed(超时进 errors),这里给的是可直接上门面的真数。
+            "deadline_exceeded_platforms": sum(
+                1 for row in platform_results if row.get("deadline_exceeded")
+            ),
         },
         "platform_results": platform_results,
+        # A7 可观测:本次调用的闸门漏斗切片(平台原始给量 → 逐闸丢弃 → 存活 → top-N 截断)。
+        # 纯记账零行为改动;严格在线模式由 pipeline 逐轮收走落库,那段坍缩不再零痕迹。
+        "discovery_funnel": provider_gate_funnel(
+            platform_results=platform_results, gate_dropped=_gate_dropped,
+            survivors=len(survivors), returned_new_creators=len(new_creators),
+            existing_matched=len(existing_matches),
+        ),
         "errors": errors,
         "provider_calls": True,
     }

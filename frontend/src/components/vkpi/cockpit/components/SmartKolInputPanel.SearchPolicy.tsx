@@ -9,6 +9,21 @@ import {
 export const KOL_SEARCH_RESULT_LIMIT = 30;
 
 export type KolSearchStrategy = "vertical" | "balanced" | "expansion";
+
+/**
+ * 每平台在线发现上限。YouTube 那条腿走 YouTube Data API search.list：
+ * 同一次调用无论 maxResults 取 1 还是 50 都恒定 100 quota units、仍是一次 HTTP 往返，
+ * 所以 20→50 配额不变、延迟不变、零 Apify 花费（prod 实测该腿 <2s）。
+ * Instagram / TikTok 走按结果计费的 Apify actor —— prod 14 天实测 IG hashtag 一家
+ * 就吃掉在线发现总花费的 93.7%（29 次 run／$16.57），且它的 resultsLimit 是按 tag 计的
+ * （单次 dataset 实测 240~300 条 = 4~5 个 tag × 60），上限翻 2.5 倍成本同步翻倍。
+ * 所以本批只提 YouTube，IG/TT 维持 20 不动。
+ */
+export const KOL_SEARCH_PER_PLATFORM_LIMITS: Readonly<Record<string, number>> = Object.freeze({
+  youtube: 50,
+  instagram: 20,
+  tiktok: 20,
+});
 export type GearContentFilter = "any" | "yes" | "no";
 
 export interface KolSearchFilterState {
@@ -44,7 +59,10 @@ export interface KolSearchStrategyPolicy {
   creatorQuota: number;
   reviewerQuota: number;
   newDiscoveryLimit: number;
+  /** 未在 perPlatformLimits 里显式列出的平台使用的兜底上限。 */
   perPlatformLimit: number;
+  /** 每平台上限覆盖（{平台: 上限}），随请求体透传给后端。 */
+  perPlatformLimits: Readonly<Record<string, number>>;
   bucketPolicy: KolSearchBucketPolicy;
 }
 
@@ -59,6 +77,7 @@ export const KOL_SEARCH_STRATEGIES: Record<KolSearchStrategy, KolSearchStrategyP
     reviewerQuota: 21,
     newDiscoveryLimit: 45,
     perPlatformLimit: 20,
+    perPlatformLimits: KOL_SEARCH_PER_PLATFORM_LIMITS,
     bucketPolicy: { core_vertical: 24, expansion: 5, exploration: 1 },
   },
   balanced: {
@@ -71,6 +90,7 @@ export const KOL_SEARCH_STRATEGIES: Record<KolSearchStrategy, KolSearchStrategyP
     reviewerQuota: 12,
     newDiscoveryLimit: 45,
     perPlatformLimit: 20,
+    perPlatformLimits: KOL_SEARCH_PER_PLATFORM_LIMITS,
     bucketPolicy: { core_vertical: 18, expansion: 9, exploration: 3 },
   },
   expansion: {
@@ -83,6 +103,7 @@ export const KOL_SEARCH_STRATEGIES: Record<KolSearchStrategy, KolSearchStrategyP
     reviewerQuota: 9,
     newDiscoveryLimit: 50,
     perPlatformLimit: 20,
+    perPlatformLimits: KOL_SEARCH_PER_PLATFORM_LIMITS,
     bucketPolicy: { core_vertical: 15, expansion: 12, exploration: 3 },
   },
 };

@@ -6,11 +6,18 @@ from datetime import datetime
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.kol.search_sessions_completion import session_completion_breakdown
 from app.domains.kol.search_sessions_identity_projection import (
     _CREATOR_ITEM_LANES,
     _canonical_session_dedupe_key,
     _session_creator_probe,
     canonicalize_session_creator_items,
+)
+from app.domains.kol.search_sessions_item_origin import (
+    ITEM_ORIGIN_UNKNOWN,
+    apply_item_origin_to_payload,
+    infer_item_origin,
+    session_origin_breakdown,
 )
 from app.domains.kol.search_sessions_serde import (
     _compact_enrichment_state,
@@ -449,6 +456,18 @@ def _update_session(
     status: str,
     summary: dict[str, Any],
 ) -> None:
+    # 每次持久化会话汇总时都重算来源分布。这是 result_summary_json 的唯一写入口,
+    # 放在这里才能保证「本次结果:本地 N 人 / 新发现 M 人」永远与库里的行一致——
+    # 一次搜索会分多批(召回 / 发现墙 / 在线严格)各调一次 record_items,若只统计
+    # 当批写入的行,后一批会把前一批的数字盖掉。
+    persisted_summary = dict(_dict(summary))
+    persisted_summary["origin_breakdown"] = session_origin_breakdown(conn, int(session_id))
+    # 完成度同理,从行里现算,不留可漂的快照。``status`` 只有 partial 一个词,盖住了
+    # 「0 条结果」到「29/30 已完成」的整个区间;线上 104 个 partial 会话里既有 13 个
+    # 空会话,也有 1 个其实全好的(2026-08-25 只读探针)。既有的
+    # result_state / counts / item_status 覆盖率只有 78 / 38 / 77(共 104)且与行对不上,
+    # 所以另立一份现算的权威口径 —— status 语义一个字不动,不新增取值、不碰 CHECK。
+    persisted_summary["completion"] = session_completion_breakdown(conn, int(session_id))
     conn.execute(
         """
         UPDATE vkpi_kol_search_sessions
@@ -459,7 +478,7 @@ def _update_session(
         """,
         (
             _normalize_status(status),
-            _json_dumps(_sanitize_session_payload(summary)),
+            _json_dumps(_sanitize_session_payload(persisted_summary)),
             int(session_id),
         ),
     )
@@ -475,11 +494,16 @@ def _upsert_item(conn: Any, session_id: int, item: dict[str, Any]) -> dict[str, 
     source_url = _public_session_item_source_url(
         item.get("source_url"), item_type=item.get("item_type")
     )
+    item_type = _text(item.get("item_type")) or "unknown"
+    # 来源在落库这一刻定死(唯一真源见 search_sessions_item_origin),下游一律不再猜:
+    # 列支撑「按来源统计/筛选」,payload 里的同名字段让每条记录自带口径。
+    origin = infer_item_origin(item_type, item.get("payload"))
+    payload = apply_item_origin_to_payload(item_type, item.get("payload") or {})
     row = conn.execute(
         """
         INSERT INTO vkpi_kol_search_session_items
-          (session_id, dedupe_key, item_type, status, stage, rank, score, kol_pool_id, evidence_id, job_id, source_url, payload_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+          (session_id, dedupe_key, item_type, status, stage, rank, score, kol_pool_id, evidence_id, job_id, source_url, origin, payload_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
         ON CONFLICT (session_id, dedupe_key) DO UPDATE
         SET item_type=EXCLUDED.item_type,
             status=EXCLUDED.status,
@@ -490,6 +514,7 @@ def _upsert_item(conn: Any, session_id: int, item: dict[str, Any]) -> dict[str, 
             evidence_id=COALESCE(EXCLUDED.evidence_id, vkpi_kol_search_session_items.evidence_id),
             job_id=COALESCE(EXCLUDED.job_id, vkpi_kol_search_session_items.job_id),
             source_url=COALESCE(NULLIF(EXCLUDED.source_url, ''), vkpi_kol_search_session_items.source_url),
+            origin=COALESCE(NULLIF(EXCLUDED.origin, ?), vkpi_kol_search_session_items.origin, EXCLUDED.origin),
             payload_json=EXCLUDED.payload_json,
             updated_at=NOW()
         RETURNING *
@@ -497,7 +522,7 @@ def _upsert_item(conn: Any, session_id: int, item: dict[str, Any]) -> dict[str, 
         (
             int(session_id),
             dedupe_key,
-            _text(item.get("item_type")) or "unknown",
+            item_type,
             _normalize_status(item.get("status"), item=True),
             _text(item.get("stage")) or "identified",
             _int_or_none(item.get("rank")),
@@ -506,7 +531,11 @@ def _upsert_item(conn: Any, session_id: int, item: dict[str, Any]) -> dict[str, 
             _int_or_none(item.get("evidence_id")),
             _int_or_none(item.get("job_id")),
             source_url,
-            _json_dumps(_sanitize_session_payload(item.get("payload") or {})),
+            origin,
+            _json_dumps(_sanitize_session_payload(payload)),
+            # 同一身份被两条通道重复写入时(canonicalize 会把 item_type 折叠成偏好更高
+            # 的那个),已经判定过的来源不许被一次判不出的重写覆盖成 unknown。
+            ITEM_ORIGIN_UNKNOWN,
         ),
     ).fetchone()
     return _row_to_item(row)

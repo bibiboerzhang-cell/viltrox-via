@@ -122,25 +122,39 @@ def set_scheduler_task_enabled(task_key: str, enabled: bool, staff: dict[str, An
 
 _LAST_STATUS_VALUES = ("ok", "failed", "blocked")
 _last_status_column_present: bool | None = None
+_last_run_summary_column_present: bool | None = None
+
+
+def _has_column(conn: Any, column: str, cache_name: str) -> bool:
+    """某个后加的列是否存在(进程内缓存一次;迁移晚于代码上线时降级为不写该列)。"""
+    cached = globals().get(cache_name)
+    if cached is None:
+        try:
+            conn.execute(f"SELECT {column} FROM {_TABLE} LIMIT 1").fetchone()
+            cached = True
+        except Exception:
+            logger.info("scheduler_registry: %s column absent (migration pending); recording without it", column)
+            cached = False
+        globals()[cache_name] = cached
+    return bool(cached)
 
 
 def _has_last_status_column(conn: Any) -> bool:
-    """迁移 294 加的 last_status 列是否存在(进程内缓存一次;迁移晚于代码上线时降级为不写该列)。"""
-    global _last_status_column_present
-    if _last_status_column_present is None:
-        try:
-            conn.execute(f"SELECT last_status FROM {_TABLE} LIMIT 1").fetchone()
-            _last_status_column_present = True
-        except Exception:
-            logger.info("scheduler_registry: last_status column absent (migration 294 pending); recording without it")
-            _last_status_column_present = False
-    return _last_status_column_present
+    """迁移 294 加的 last_status 列是否存在。"""
+    return _has_column(conn, "last_status", "_last_status_column_present")
 
 
-def record_run(task_key: str, *, ok: bool, error: str = "", status: str = "") -> None:
+def _has_last_run_summary_column(conn: Any) -> bool:
+    """迁移 302 加的 last_run_summary 列是否存在。"""
+    return _has_column(conn, "last_run_summary", "_last_run_summary_column_present")
+
+
+def record_run(task_key: str, *, ok: bool, error: str = "", status: str = "", note: str = "") -> None:
     """S2:cron 任务每次运行后回写 last_run_at / last_success_at / last_error / last_status(让"定时真跑"可见)。
 
     status 省略时按 ok 推 ok|failed;前置闸挡住没真跑传 ``blocked``(记 last_run_at + last_error,不记 success)。
+    ``note`` 是这一轮的记账明细(如 ``scanned=100 advanced=87 terminal=11``),写进迁移 302 的
+    ``last_run_summary``——``last_status`` 被约束成三值装不下明细,两者语义分开不互相污染。
     best-effort:只更新 scheduler_tasks 元数据,失败只 debug 不抛(绝不拖垮调度任务本体)。
     表缺/行缺 → 静默跳过(诚实)。零触业务表 / viltrox_fit_score。
     """
@@ -161,6 +175,10 @@ def record_run(task_key: str, *, ok: bool, error: str = "", status: str = "") ->
         if _has_last_status_column(conn):
             assignments.append("last_status=?")
             params.append(final_status)
+        # note 为空时不动这一列:避免一次没传明细就把上一轮的记账抹成空。
+        if str(note or "").strip() and _has_last_run_summary_column(conn):
+            assignments.append("last_run_summary=?")
+            params.append(str(note).strip()[:500])
         params.append(key)
         conn.execute(f"UPDATE {_TABLE} SET {', '.join(assignments)} WHERE task_key=?", tuple(params))
         conn.commit()

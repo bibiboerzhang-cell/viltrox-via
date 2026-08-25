@@ -11,6 +11,13 @@ import { recallDistributionView } from "./SmartKolInputPanel.evidence";
 import { localQualifiedSummary } from "./SmartKolInputPanel.LocalQualified";
 import { LocalQualifiedList, StrictQualifiedList } from "./SmartKolInputPanel.LocalQualifiedList";
 import { onlineQualifiedSummaryFromSession } from "./SmartKolInputPanel.OnlineQualified";
+import {
+  resultOriginBadgeOfKind,
+  resultOriginCounts,
+  summaryResultOriginCounts,
+  withLocalRecallOrigin,
+  type ResultOriginCounts,
+} from "./SmartKolInputPanel.sessionProjection";
 import { SmartKolQualityFilters } from "./SmartKolInputPanel.QualityFilters";
 import { PlanPills, RecallMiniItem } from "./SmartKolInputPanel.Sections";
 import { recallTopItems, type SearchSessionProgress } from "./SmartKolInputPanel.derivers";
@@ -292,6 +299,48 @@ export function recallReturnedCount(result: VkpiKolRecallResponse, items: VkpiKo
   return Number.isInteger(returned) && returned >= 0 ? returned : items.length;
 }
 
+/* ============ 结果来源分布:本次 N 人:库内 X · 新发现 Y ============
+   口径全部来自 sessionProjection 的纯函数;这里只负责摆。
+   数字优先用服务端已经算好的分布,没有就按本页已显示的结果现数,并把用的是哪一种口径写在脸上。 */
+const ORIGIN_BASIS_NOTE: Readonly<Record<ResultOriginCounts["basis"], string>> = {
+  summary: "本次搜索全部结果",
+  session: "本次搜索全部结果",
+  displayed: "本页已显示的结果",
+};
+
+export function ResultOriginSummaryBar({ counts }: { counts: ResultOriginCounts }) {
+  if (counts.total <= 0) return null;
+  const chips = (["local", "online", "provided"] as const)
+    .map((kind) => ({ kind, badge: resultOriginBadgeOfKind(kind), value: counts[kind] }))
+    // 库内 / 新发现 是用户点名要看的两个数,即使是 0 也照实摆;「你提供的」没有就不占位。
+    .filter((chip) => chip.badge != null && (chip.kind !== "provided" || chip.value > 0));
+  return (
+    <div
+      data-testid="result-origin-summary"
+      data-origin-basis={counts.basis}
+      className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-1.5 text-[10px] text-slate-400"
+    >
+      <span data-testid="result-origin-total" className="font-medium text-slate-200">本次 {counts.total} 人</span>
+      {chips.map((chip) => (
+        <span
+          key={chip.kind}
+          data-testid={`result-origin-count-${chip.kind}`}
+          title={chip.badge?.title}
+          className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[9.5px] font-semibold ${chip.badge?.toneClassName ?? ""}`}
+        >{chip.badge?.label} {chip.value}</span>
+      ))}
+      {counts.unknown > 0 ? (
+        <span
+          data-testid="result-origin-count-unknown"
+          title="这些结果的来源后端还没给出判据,宁可不标也不猜"
+          className="inline-flex items-center gap-1 rounded-full border border-amber-300/25 bg-amber-400/[0.08] px-1.5 py-0.5 text-[9.5px] text-amber-100/85"
+        >来源待标注 {counts.unknown}</span>
+      ) : null}
+      <span className="ml-auto text-[9px] text-slate-600">{ORIGIN_BASIS_NOTE[counts.basis]} · 同一人只计一次</span>
+    </div>
+  );
+}
+
 export function nextRequiredPlatformSelection(current: readonly string[], platform: string): string[] {
   if (current.includes(platform)) return current.length > 1 ? current.filter((value) => value !== platform) : [...current];
   return [...current, platform];
@@ -436,7 +485,8 @@ export function TextResultSection({
     ? (reachFloorDisplay.discovery.analyzing || 0) + (reachFloorDisplay.discovery.lowReach || 0)
     : 0;
   const discoveryGrandTotal = discoveryTotal + hiddenDiscovery;
-  const recallItems = recallTopItems(recallResult);
+  // 本地召回接口只读我们自己的达人库 → 它返回的每一条都是「库内」;已带明确来源的行原样不动。
+  const recallItems = withLocalRecallOrigin(recallTopItems(recallResult));
   const distribution = recallDistributionView(recallResult.candidate_set_distribution);
   const localStrict = localQualifiedSummary(recallResult);
   const onlineStrict = onlineQualifiedSummaryFromSession(searchSession);
@@ -451,12 +501,18 @@ export function TextResultSection({
   ].filter(Boolean);
   const resolvedProductSku = resolvedProductSkuFromPlan(llmPlan);
   const recallCounts = recallDisplayCounts(recallItems, (recallResult.diagnostics || {}) as Row);
+  // 来源分布:服务端算好的优先;没有就把本页三段列表(本地严格 / 联网净新增 / 全网发现)拼起来现数。
+  const originCounts = summaryResultOriginCounts(asRecord(searchSession?.result_summary))
+    ?? resultOriginCounts(recallItems, onlineStrict.rows.map((row) => row.item), discoveryItems);
   const openProductScopedItem = (item: VkpiKolRecallItem) => {
     onOpenRecallItem?.(withResolvedProductSku(item, resolvedProductSku));
   };
   return (
     <div className="mt-3 space-y-2.5">
       <ProgressiveSearchStageCard progress={sessionProgress} />
+
+      {/* 结果来源分布(用户点名要的:哪些是库里捞的、哪些是这次现场新找到的) */}
+      <ResultOriginSummaryBar counts={originCounts} />
 
       {/* 框1 · 产品人群分析(可编辑,防 LLM 理解偏) */}
       <div className="rounded-lg border border-cyan-300/15 bg-cyan-400/[0.04] p-3">

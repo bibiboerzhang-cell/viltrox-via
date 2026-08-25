@@ -16,6 +16,10 @@ from app.domains.kol.profile_recall_contract import (
     SUPPORTED_RECALL_FILTERS,
     _clean_text,
 )
+from app.domains.kol.profile_recall_filter_modes import (
+    CandidateFilterVerdict, TRI_STATE_FILTER_FIELDS, normalize_tri_state_filter,
+    tri_state_outcome, unknown_field_candidates,
+)
 from app.domains.kol.profile_recall_precision import missingness_aware_weighted_score
 from app.domains.kol.profile_recall_product_queries import PRODUCT_LINE_PERSONAS
 from app.domains.kol.profile_recall_relevance import WHY_FIT_RULES, _relevance_signals
@@ -513,9 +517,14 @@ def _normalize_recall_filters(value: Any) -> tuple[dict[str, Any], list[str]]:
     unsupported = sorted(str(key) for key in value if str(key) not in SUPPORTED_RECALL_FILTERS)
     normalized: dict[str, Any] = {}
     for key in ("platforms", "countries", "languages", "verticals"):
-        values = _filter_values(value.get(key))
+        source, mode, invalid_mode = normalize_tri_state_filter(value.get(key))
+        values = _filter_values(source)
         if values:
             normalized[key] = values
+        if values and mode != "require" and key in TRI_STATE_FILTER_FIELDS:
+            normalized[f"{key}_mode"] = mode
+        elif invalid_mode or mode != "require":
+            unsupported.append(f"{key}_mode")
     for canonical, aliases in (
         ("followers_min", ("followers_min", "follower_min")),
         ("followers_max", ("followers_max", "follower_max")),
@@ -594,9 +603,13 @@ def _candidate_filter_verdict(
     row: dict[str, Any],
     evidence: dict[str, Any],
     filters: dict[str, Any],
-) -> tuple[bool, list[str], list[str]]:
-    """Return (passes hard filters, rejected fields, unknown evidence fields)."""
-    rejected: list[str] = []
+) -> CandidateFilterVerdict:
+    """Return (passes hard filters, rejected fields, unknown evidence fields).
+
+    countries / languages 走三态(``countries_mode`` / ``languages_mode``,缺省 ``require`` 与
+    历史行为逐字节一致);返回值仍可解包成三元组,只是旁挂了 ``rejected_known_mismatch`` /
+    ``rejected_unknown`` / ``unknown_field_candidates``(见 profile_recall_filter_modes)。"""
+    reasons: dict[str, str] = {}
     unknown: list[str] = []
 
     platform = str(row.get("platform") or "").strip().lower()
@@ -604,29 +617,21 @@ def _candidate_filter_verdict(
     if requested_platforms:
         if not platform:
             unknown.append("platform")
-            rejected.append("platforms")
+            reasons["platforms"] = "unknown"
         elif platform not in requested_platforms:
-            rejected.append("platforms")
+            reasons["platforms"] = "mismatch"
 
     country = _country_match_key(row.get("country"))
-    requested_countries = {_country_match_key(item) for item in filters.get("countries") or []}
-    requested_countries.discard("")
-    if requested_countries:
-        if not country:
-            unknown.append("country")
-            rejected.append("countries")
-        elif country not in requested_countries:
-            rejected.append("countries")
-
     language = _language_match_key(row.get("language"))
-    requested_languages = {_language_match_key(item) for item in filters.get("languages") or []}
-    requested_languages.discard("")
-    if requested_languages:
-        if not language:
-            unknown.append("language")
-            rejected.append("languages")
-        elif language not in requested_languages:
-            rejected.append("languages")
+    for filter_key, current, match_key in (
+        ("countries", country, _country_match_key),
+        ("languages", language, _language_match_key),
+    ):
+        requested = {match_key(item) for item in filters.get(filter_key) or []}
+        requested.discard("")
+        outcome = tri_state_outcome(current, requested, filters.get(f"{filter_key}_mode"))
+        if outcome:
+            reasons[filter_key] = outcome
 
     followers_raw = row.get("followers")
     followers_known = followers_raw not in (None, "")
@@ -639,45 +644,38 @@ def _candidate_filter_verdict(
     if "followers_min" in filters:
         if not followers_known:
             unknown.append("followers")
-            rejected.append("followers_min")
+            reasons["followers_min"] = "unknown"
         elif followers < int(filters["followers_min"]):
-            rejected.append("followers_min")
+            reasons["followers_min"] = "mismatch"
     if "followers_max" in filters:
         if not followers_known:
             unknown.append("followers")
-            rejected.append("followers_max")
+            reasons["followers_max"] = "unknown"
         elif followers > int(filters["followers_max"]):
-            rejected.append("followers_max")
+            reasons["followers_max"] = "mismatch"
 
     vertical_blob = _factual_candidate_signal_blob(row, evidence)
     requested_verticals = [str(item).strip().lower() for item in filters.get("verticals") or []]
     if requested_verticals:
         if not vertical_blob:
             unknown.append("verticals")
-            rejected.append("verticals")
+            reasons["verticals"] = "unknown"
         elif not any(_vertical_filter_matches(term, vertical_blob) for term in requested_verticals):
-            rejected.append("verticals")
+            reasons["verticals"] = "mismatch"
 
     used_lenses = list(evidence.get("used_lenses") or [])
     gear_signal = bool(used_lenses) or any(term in vertical_blob for term in _GEAR_CONTENT_TERMS)
     if filters.get("gear_content") == "yes" and not gear_signal:
-        if not vertical_blob and not used_lenses:
-            unknown.append("gear_content")
-        rejected.append("gear_content")
+        reasons["gear_content"] = "unknown" if not vertical_blob and not used_lenses else "mismatch"
 
     # These fields are useful UI honesty signals even when no filter targets
     # them.  Missing does not become a numeric zero or a negative claim.
-    if not country:
-        unknown.append("country")
-    if not language:
-        unknown.append("language")
-    if not followers_known:
-        unknown.append("followers")
-    if not vertical_blob:
-        unknown.append("verticals")
-    if not used_lenses and not gear_signal:
-        unknown.append("gear_content")
-    return not rejected, sorted(set(rejected)), sorted(set(unknown))
+    # 三态放行(include_unknown / exclude)也照旧走这里 —— 放行 != 假装知道。
+    unknown.extend(field for field, missing in (
+        ("country", not country), ("language", not language), ("followers", not followers_known),
+        ("verticals", not vertical_blob), ("gear_content", not used_lenses and not gear_signal),
+    ) if missing)
+    return CandidateFilterVerdict(reasons, unknown, unknown_field_candidates(row, reasons))
 
 
 def _normalize_bucket_policy(

@@ -30,9 +30,21 @@ _GENERIC_TERMS = frozenset(
 )
 _GENERIC_CJK_TERMS = (
     "寻找", "查找", "搜索", "适合", "推荐", "一些", "达人", "创作者", "找",
+    # 受众规模是筛选条件(落 followers_min),不是题材证据——不得充当意图举证词。
+    "消费", "群体", "受众", "粉丝", "流量", "曝光", "影响力", "人群",
     "美国", "英国", "加拿大", "德国", "法国", "日本", "韩国", "澳大利亚", "西班牙",
     "意大利", "巴西", "俄罗斯", "泰国", "越南", "印尼", "印度尼西亚", "墨西哥",
 )
+# Grammatical particles only: characters that carry no topic of their own and
+# therefore mark a word boundary.  Cutting there can only remove candidate
+# terms, never admit one, so it cannot loosen any downstream gate.
+_CJK_FUNCTION_CHARS = (
+    "比如", "以及", "还有",
+    "的", "了", "和", "与", "及", "或", "在", "是", "有", "我", "你", "他", "她", "它",
+    "们", "这", "那", "就", "都", "也", "很", "把", "被", "请", "帮", "给", "让", "从",
+    "对", "为", "到", "个", "等",
+)
+_CJK_RUN_RE = re.compile(r"[一-鿿]+")
 _MATCH_FIELDS = (
     "handle",
     "display_name",
@@ -99,17 +111,56 @@ def _normal_dimension(name: str, value: Any) -> str:
     return text
 
 
+def _has_cjk(text: Any) -> bool:
+    return any("一" <= char <= "鿿" for char in str(text or ""))
+
+
+def _cjk_segments(run: str) -> list[str]:
+    """Split one CJK run into 2-character candidate words.
+
+    Chinese writes no spaces, so ``_TOKEN_RE`` can only capture a whole run and
+    a whole run matches nothing in a bio.  The run is first cut at the known
+    generic and grammatical words — both lists only ever remove candidates — and
+    each surviving span is then tiled into overlapping bigrams, the
+    boundary-free segmentation a CJK search analyzer uses.
+
+    Overlap buys no leniency downstream: ``_intent_proof_terms`` charges the
+    query's character spans, so 摄影 + 影师 out of 摄影师 still count as the one
+    word they are, while 消费 + 群体 out of 消费群体 correctly count as two.
+    """
+    spans = [run]
+    for generic in (*_GENERIC_CJK_TERMS, *_CJK_FUNCTION_CHARS):
+        spans = [part for span in spans for part in span.split(generic)]
+    return [
+        span[index:index + 2]
+        for span in spans
+        for index in range(len(span) - 1)
+    ]
+
+
+def _candidate_terms(value: Any) -> list[str]:
+    """Tokenize to comparable words: ASCII tokens as-is, CJK runs segmented."""
+    candidates: list[str] = []
+    for raw in _TOKEN_RE.findall(str(value or "").lower()):
+        term = raw.strip("-_.+")
+        if _CJK_RUN_RE.fullmatch(term):
+            candidates.extend(_cjk_segments(term))
+        elif term:
+            candidates.append(term)
+    return candidates
+
+
 def query_evidence_terms(value: Any, *, limit: int = 16) -> list[str]:
     """Return bounded, de-duplicated intent terms suitable for lexical proof."""
-    raw_terms = [raw.strip("-_.+") for raw in _TOKEN_RE.findall(str(value or "").lower())]
+    raw_terms = _candidate_terms(value)
     terms: list[str] = []
     seen: set[str] = set()
     for term in raw_terms:
-        for generic in _GENERIC_CJK_TERMS:
-            term = term.replace(generic, "")
         if not term or term in _GENERIC_TERMS or term in seen:
             continue
-        if len(term) < 3 and not any(ch.isdigit() for ch in term):
+        # A 2-character Chinese word is a full word, not an English stub: the
+        # min-length rule is an ASCII rule and must not silently delete it.
+        if len(term) < 3 and not any(ch.isdigit() for ch in term) and not _has_cjk(term):
             continue
         seen.add(term)
         terms.append(term)
@@ -315,9 +366,42 @@ def _contains_term(text: Any, term: str) -> bool:
     haystack = str(text or "").lower()
     if not haystack:
         return False
-    if any("\u4e00" <= ch <= "\u9fff" for ch in term):
+    if _has_cjk(term):
         return term in haystack
     return re.search(rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])", haystack) is not None
+
+
+def _intent_proof_terms(
+    terms: list[str],
+    matched_terms: set[str],
+    query_text: Any,
+) -> list[str]:
+    """Return the proven intent words, charging overlapping CJK bigrams once.
+
+    ASCII terms are maximal tokens and can never overlap inside the query, so
+    for a query without CJK this is exactly the previous intersection.  CJK
+    bigrams do overlap, so the query's character spans are scheduled greedily:
+    摄影师 yields one word, 消费群体 yields the two words it really contains.
+    """
+    hits = [term for term in terms if term in matched_terms]
+    cjk_hits = {term for term in hits if _has_cjk(term)}
+    proven = [term for term in hits if term not in cjk_hits]
+    if not cjk_hits:
+        return proven
+    haystack = str(query_text or "").lower()
+    spans: list[tuple[int, int, str]] = []
+    for term in cjk_hits:
+        start = haystack.find(term)
+        while start >= 0:
+            spans.append((start + len(term), start, term))
+            start = haystack.find(term, start + 1)
+    reserved = -1
+    for end, start, term in sorted(spans):
+        if start >= reserved:
+            reserved = end
+            if term not in proven:
+                proven.append(term)
+    return proven
 
 
 def build_match_evidence(
@@ -347,15 +431,36 @@ def build_match_evidence(
         if isinstance(item, dict):
             add("representative_evidence.title", item.get("title"))
     distinct_terms = {item["term"] for item in matched}
-    required_terms = 1 if len(terms) <= 1 else 2
+    # Count the words the query can prove at all, not the tokens it produced:
+    # 摄影师 tiles into two bigrams but is still one word, and demanding two
+    # proofs from it would make a one-word Chinese query unsatisfiable.
+    provable_words = _intent_proof_terms(terms, set(terms), query_text)
+    required_terms = 1 if len(provable_words) <= 1 else 2
     identity_proof_terms = _product_identity_proof_terms(product_terms, distinct_terms)
     # 型号级(精确型号 / 系列+焦段)优先;没有时接受品牌/卡口/画幅级语境——新品上市池里没人提过型号,
     # 严格 30 曾因此 496/500 全灭(2026-08-23)。仅焦段/光圈属性、仅人设仍不放行(契约不变)。
     context_proof_terms = [] if identity_proof_terms else product_context_proof_terms(product_terms, distinct_terms)
     product_matched = not product_terms or bool(identity_proof_terms) or bool(context_proof_terms)
-    intent_matched = len(distinct_terms.intersection(terms)) >= required_terms
+    # 一词不得两用(2026-08-25):产品锚进入 search_query 后品牌词也成了意图词,而池内 66.7%
+    # 的资料本就写着品牌名——它若既算产品腿又算意图腿,AND-2 就有一个槽位近乎白送(实测出货
+    # 78→333,其中 87% 由这一个词买来)。已被产品腿消费的词不再计入意图腿,回到两腿各自举证。
+    product_proof_used = {str(term).lower() for term in (*identity_proof_terms, *context_proof_terms)}
+    intent_proofs = [
+        term
+        for term in _intent_proof_terms(terms, distinct_terms, query_text)
+        if str(term).lower() not in product_proof_used
+    ]
+    intent_matched = len(intent_proofs) >= required_terms
     if not intent_matched or not product_matched:
         return []
+    # A losing bigram (影师 out of 摄影师) is a slice of a word, not a word: it
+    # proved nothing above and must not be shown as a reason to the operator.
+    intent_term_set = set(terms)
+    proof_term_set = set(intent_proofs)
+    matched = [
+        item for item in matched
+        if not (_has_cjk(item["term"]) and item["term"] in intent_term_set and item["term"] not in proof_term_set)
+    ]
 
     # The response is itself the explanation contract. Preserve the product
     # identity proof and enough query-intent proof before filling the 12-row

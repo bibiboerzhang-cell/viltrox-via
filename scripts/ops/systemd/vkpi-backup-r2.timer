@@ -1,0 +1,19 @@
+[Unit]
+Description=Run the V-KPI off-host R2 backup push every 6 hours
+
+[Timer]
+# 00/06/12/18 UTC deliberately avoids vkpi-health-sentinel (01:30 UTC),
+# vkpi-sync-daily (04:00 UTC) and vkpi-qualified-kol-refresh (05:00 UTC),
+# so the dump never competes with the daily ingest for disk and CPU.
+# Four runs a day put the worst-case RPO at 6 hours.
+OnCalendar=*-*-* 00,06,12,18:00:00 UTC
+# A missed window (host reboot, maintenance) runs as soon as the machine is
+# back instead of silently skipping a whole 6-hour bucket.
+Persistent=true
+# Spread the start so a fleet-wide restart does not stack dumps and uploads.
+RandomizedDelaySec=900
+AccuracySec=1min
+Unit=vkpi-backup-r2.service
+
+[Install]
+WantedBy=timers.target

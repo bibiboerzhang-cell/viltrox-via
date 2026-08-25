@@ -73,12 +73,17 @@ def write_kol_profile_basics(
     conn: Any | None = None,
     method: str = PROFILE_BASICS_METHOD,
     commit_write: bool = True,
+    avatar_landing_budget: Any | None = None,
 ) -> dict[str, Any]:
     """Insert/update profile basics without touching V6 Fit fields.
 
     ``dry_run`` defaults to True so callers must explicitly opt into a write.
     When writing, this function checks score fields before/after and rolls back
     if any existing score changes or a newly inserted row receives a score.
+
+    ``avatar_landing_budget`` 是批量入库的落地闸(见 ``kol.avatar_landing``)。
+    不传则按「单条写入最多落地一张」处理;落地永远在主写入提交之后进行,
+    失败只告警,绝不阻断建档。
     """
     if not isinstance(profile_data, dict):
         raise ValueError("profile_data must be a dict")
@@ -224,6 +229,21 @@ def write_kol_profile_basics(
                 reapply_reach_floor(int(target_id), conn=db)
             except Exception:
                 logger.warning("reach floor regate skipped kol=%s", target_id, exc_info=True)
+        # 头像落地(2026-08-25 车道 2):池表里只存一根会过期的签名外链是病根
+        # (实测 927 行签名型 CDN,过期抽样 12/12 全死)。凡本次真写了 avatar_url,
+        # 就在主写入提交之后把图片复制进我们自己的媒体缓存,并打诚实标记。
+        # 全程 best-effort:抓不到/传不上只降级为 external,绝不害建档失败。
+        avatar_landing: dict[str, Any] = {}
+        if target_id and "avatar_url" in planned_values:
+            avatar_landing = _land_profile_avatar(
+                db,
+                int(target_id),
+                planned_values.get("avatar_url"),
+                platform=str(normalized.get("platform") or (row or {}).get("platform") or ""),
+                external_id=str(normalized.get("handle") or (row or {}).get("handle") or ""),
+                budget=avatar_landing_budget,
+                commit=commit_write,
+            )
         # Both URL materialization and deep-crawl writes converge here.  Queue
         # the persisted profile for a later provider-free L0 pass only; never
         # extract, crawl or send inside the profile write transaction.
@@ -256,10 +276,43 @@ def write_kol_profile_basics(
             "method": method,
             "matched_existing": matched_existing,
             "matched_by_canonical_identity": bool(canonical_match_id),
+            "avatar_landing": avatar_landing,
         }
     except Exception:
         _rollback(db)
         raise
+
+
+def _land_profile_avatar(
+    conn: Any,
+    kol_pool_id: int,
+    avatar_url: Any,
+    *,
+    platform: str,
+    external_id: str,
+    budget: Any | None,
+    commit: bool,
+) -> dict[str, Any]:
+    """建档收尾:把头像落进自家缓存并打标记。任何异常都吞在这里,建档已经成功。"""
+    try:
+        from app.domains.kol.avatar_landing import (
+            SINGLE_WRITE_LANDING_LIMIT,
+            land_and_stamp_avatar,
+            new_landing_budget,
+        )
+
+        return land_and_stamp_avatar(
+            conn,
+            kol_pool_id,
+            avatar_url,
+            platform=platform,
+            external_id=external_id,
+            budget=budget if budget is not None else new_landing_budget(SINGLE_WRITE_LANDING_LIMIT),
+            commit=commit,
+        )
+    except Exception:
+        logger.warning("avatar landing unavailable after profile write kol=%s", kol_pool_id, exc_info=True)
+        return {}
 
 
 def _normalise_profile_data(
