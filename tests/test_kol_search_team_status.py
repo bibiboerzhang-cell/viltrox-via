@@ -448,6 +448,109 @@ def test_team_status_hydrates_durable_audience_without_reading_profile_pii() -> 
         assert forbidden not in audience_sql[0].lower()
 
 
+class _AudienceProgressConn:
+    def __init__(self, *, fail_on_call: int | None = None) -> None:
+        self.fail_on_call = fail_on_call
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+
+    def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Result:
+        compact = " ".join(sql.split())
+        self.calls.append((compact, tuple(params)))
+        if self.fail_on_call == len(self.calls):
+            raise RuntimeError("audience progress read unavailable")
+        return _Result(
+            rows=[
+                {
+                    "id": int(profile_id),
+                    "audience_estimated_json": {"method": "public_metrics"},
+                }
+                for profile_id in params
+            ]
+        )
+
+
+class _AudienceProgressLogger:
+    def __init__(self) -> None:
+        self.warnings: list[tuple[str, bool]] = []
+
+    def warning(self, message: str, *, exc_info: bool) -> None:
+        self.warnings.append((message, exc_info))
+
+
+def _audience_progress_items(count: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "kol_pool_id": profile_id,
+            "payload": {
+                "audience_preview": {"status": "partial"},
+                "email": f"private-{profile_id}@example.test",
+                "handle": f"private-{profile_id}",
+            },
+        }
+        for profile_id in range(1, count + 1)
+    ]
+
+
+def _assert_audience_queries_are_pii_free(
+    calls: list[tuple[str, tuple[Any, ...]]],
+) -> None:
+    assert calls
+    for sql, params in calls:
+        assert "SELECT id, audience_estimated_json FROM vkpi_kol_pool" in sql
+        assert all(isinstance(profile_id, int) for profile_id in params)
+        for forbidden in (
+            "display_name",
+            "handle",
+            "profile_url",
+            "email",
+            "contact",
+            "private-",
+        ):
+            assert forbidden not in sql.lower()
+
+
+def test_audience_progress_hydration_batches_more_than_one_thousand_pool_ids() -> None:
+    conn = _AudienceProgressConn()
+    logger = _AudienceProgressLogger()
+    items = _audience_progress_items(1001)
+
+    hydrated = team_status.hydrate_session_item_audience_progress(
+        conn,
+        items,
+        logger=logger,
+    )
+
+    assert hydrated == 1001
+    assert [len(params) for _sql, params in conn.calls] == [1000, 1]
+    assert all(item["payload"]["audience_preview"] == {"status": "ready"} for item in items)
+    assert logger.warnings == []
+    _assert_audience_queries_are_pii_free(conn.calls)
+
+
+def test_audience_progress_second_batch_failure_does_not_invent_readiness_or_pii() -> None:
+    conn = _AudienceProgressConn(fail_on_call=2)
+    logger = _AudienceProgressLogger()
+    items = _audience_progress_items(1001)
+
+    hydrated = team_status.hydrate_session_item_audience_progress(
+        conn,
+        items,
+        logger=logger,
+    )
+
+    assert hydrated == 1000
+    assert [len(params) for _sql, params in conn.calls] == [1000, 1]
+    assert all(
+        item["payload"]["audience_preview"] == {"status": "ready"}
+        for item in items[:1000]
+    )
+    assert items[1000]["payload"]["audience_preview"] == {"status": "partial"}
+    assert logger.warnings == [
+        ("search_sessions.audience_progress_backfill_failed", True)
+    ]
+    _assert_audience_queries_are_pii_free(conn.calls)
+
+
 def test_limit_is_a_batch_hint_and_keyset_scan_proves_the_full_population() -> None:
     sessions = [
         _session_row(

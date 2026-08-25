@@ -498,7 +498,17 @@ def segment_top_items(
             "items": [],
         }
 
-    page_size = max(16, min(64, bounded_limit * 2))
+    # A selective query often has to walk far past the leading videos before it
+    # finds ``bounded_limit`` matches.  Fetching only 16 rows for a small GTM
+    # projection turned a sparse focal (26 mm in production) into 16 sequential
+    # round trips.  Keep the compact page for an unfiltered top-N, but amortize
+    # DB latency for query/style/focal scans with a bounded wider page.  Rows are
+    # still consumed in the exact source order and iteration still stops at N,
+    # so the returned slice and honesty contract do not change.
+    if query_token or style_token or focal_token:
+        page_size = max(64, min(128, bounded_limit * 4))
+    else:
+        page_size = max(16, min(64, bounded_limit * 2))
     selected: list[dict[str, Any]] = []
     offset = 0
     while offset < available_videos and len(selected) < bounded_limit:

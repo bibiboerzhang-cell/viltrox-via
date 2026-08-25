@@ -10,6 +10,10 @@ from typing import Any
 from app.db.connection import get_conn, is_postgres_runtime
 from app.shared.vkpi_utils import json_loads, row_to_dict, to_float, to_int, to_text
 
+
+_LEGACY_CONTACT_CAPABILITY_PREFIX_CHARS = 512
+
+
 def _row_to_dict(row: Any) -> dict[str, Any]:
     return row_to_dict(row)
 
@@ -439,19 +443,29 @@ def _pool_by_source_ref() -> dict[str, dict[str, Any]]:
     # is deliberate: casting all ~59 MB to JSONB costs more than returning the
     # original payload; a bounded substring projection returns only one boolean
     # per row and is parity-checked against the writer contract.
-    raw_reach_projection = (
-        "POSITION('\"low_reach\"' IN COALESCE(raw_platform_data, '')) > 0 AS low_reach_flagged, "
-        "CASE WHEN POSITION('\"contact_has_email\"' IN COALESCE(raw_platform_data, '')) > 0 "
-        "AND raw_platform_data IS JSON OBJECT "
-        "THEN COALESCE(CAST(raw_platform_data AS JSONB)->>'contact_has_email', 'false')='true' "
-        "ELSE FALSE END AS contact_has_email, "
-        "CASE WHEN POSITION('\"contact_has_phone\"' IN COALESCE(raw_platform_data, '')) > 0 "
-        "AND raw_platform_data IS JSON OBJECT "
-        "THEN COALESCE(CAST(raw_platform_data AS JSONB)->>'contact_has_phone', 'false')='true' "
-        "ELSE FALSE END AS contact_has_phone"
-        if is_postgres_runtime()
-        else "raw_platform_data"
-    )
+    if is_postgres_runtime():
+        # legacy_kol_commit serializes with sort_keys=True, so these contact
+        # booleans are stable top-level keys at the start of the payload. Read
+        # only that bounded prefix instead of scanning/casting up to ~1 MB of
+        # provider JSON per row, and accept both stdlib and compact separators.
+        # ``low_reach`` is added later by the re-gate writer and can live at the
+        # tail, so its independent durable guard remains a full-text check.
+        contact_prefix = (
+            "LEFT(COALESCE(raw_platform_data, ''), "
+            f"{_LEGACY_CONTACT_CAPABILITY_PREFIX_CHARS})"
+        )
+        raw_reach_projection = (
+            "POSITION('\"low_reach\"' IN COALESCE(raw_platform_data, '')) > 0 "
+            "AS low_reach_flagged, "
+            f"(POSITION('\"contact_has_email\": true' IN {contact_prefix}) > 0 "
+            f"OR POSITION('\"contact_has_email\":true' IN {contact_prefix}) > 0) "
+            "AS contact_has_email, "
+            f"(POSITION('\"contact_has_phone\": true' IN {contact_prefix}) > 0 "
+            f"OR POSITION('\"contact_has_phone\":true' IN {contact_prefix}) > 0) "
+            "AS contact_has_phone"
+        )
+    else:
+        raw_reach_projection = "raw_platform_data"
     rows = get_conn().execute(
         f"""
         SELECT id, platform, handle, display_name, country, source_ref,

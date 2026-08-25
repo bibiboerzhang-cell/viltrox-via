@@ -54,7 +54,7 @@ def test_segment_top_items_stops_after_exact_leading_slice(monkeypatch) -> None:
 
 
 def test_segment_top_items_pages_until_filtered_match(monkeypatch) -> None:
-    rows = [{"evidence_id": row_id} for row_id in range(1, 41)]
+    rows = [{"evidence_id": row_id} for row_id in range(1, 131)]
     offsets: list[int] = []
 
     monkeypatch.setattr(creative_segments, "_count_final_v1_rows", lambda _conn: len(rows))
@@ -65,7 +65,7 @@ def test_segment_top_items_pages_until_filtered_match(monkeypatch) -> None:
 
     def decompose(row, *, include_thumbnails: bool = True):
         row_id = int(row["evidence_id"])
-        return [_segment(row_id, focal="135mm" if row_id == 20 else "85mm")]
+        return [_segment(row_id, focal="135mm" if row_id == 100 else "85mm")]
 
     monkeypatch.setattr(creative_segments, "_load_final_v1_rows", load)
     monkeypatch.setattr(creative_segments, "_decompose_video", decompose)
@@ -73,6 +73,6 @@ def test_segment_top_items_pages_until_filtered_match(monkeypatch) -> None:
 
     result = creative_segments.segment_top_items(focal="135", limit=1)
 
-    assert [item["segment_id"] for item in result["items"]] == ["20:scene"]
-    assert offsets == [0, 16]
+    assert [item["segment_id"] for item in result["items"]] == ["100:scene"]
+    assert offsets == [0, 64]
     assert "matched" not in result

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.domains.legacy_import import legacy_kol_commit
 from app.domains.recommendations import new_launch_match_helpers as helpers
 
 
@@ -60,6 +61,8 @@ def test_pool_projection_extracts_only_low_reach_flag_in_postgres(monkeypatch) -
     assert "AS contact_has_email" in select_list
     assert "AS contact_has_phone" in select_list
     assert "POSITION" in select_list
+    assert "LEFT(COALESCE(raw_platform_data, ''), 512)" in select_list
+    assert "CAST(raw_platform_data AS JSONB)" not in select_list
     assert "sync_status, raw_platform_data," not in select_list
 
 
@@ -101,3 +104,27 @@ def test_projected_contact_flags_match_raw_contact_score_contract() -> None:
         raw_pool = {"raw_platform_data": json.dumps(flags)}
         assert helpers._contact_score("available_restricted", raw_pool) == expected
         assert helpers._contact_score("available_restricted", flags) == expected
+
+
+def test_legacy_writer_keeps_contact_capabilities_inside_bounded_prefix() -> None:
+    target = legacy_kol_commit._target_payload(
+        {
+            "entity_uid": "legacy-1",
+            "weak_label": "ready",
+            "resolution_decision": "",
+            "normalized_platform": "youtube",
+            "normalized_handle": "creator",
+            "contact_visibility_level": "restricted",
+            "contact_status": "available_restricted",
+            "email": "private@example.test",
+            "phone": "+1-555-0100",
+            "identity_json": "{}",
+            "evidence_json": "{}",
+        },
+        batch_uid="batch-1",
+    )
+
+    raw = str(target["raw_platform_data"])
+    prefix = raw[: helpers._LEGACY_CONTACT_CAPABILITY_PREFIX_CHARS]
+    assert '"contact_has_email": true' in prefix
+    assert '"contact_has_phone": true' in prefix
