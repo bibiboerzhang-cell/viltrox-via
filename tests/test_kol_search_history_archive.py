@@ -144,6 +144,40 @@ def test_active_or_other_staff_session_cannot_be_archived(monkeypatch: pytest.Mo
     assert other_conn.commits == 0
 
 
+def test_raw_running_effective_terminal_session_remains_non_archivable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conn = _SingleSessionConn(
+        _session_row(
+            status="running",
+            result_summary_json={
+                "progress_contract": {
+                    "schema": "kol_search_progress_v1",
+                    "state": "ready",
+                    "requested_tasks_terminal": True,
+                }
+            },
+        )
+    )
+    monkeypatch.setattr(search_sessions, "get_conn", lambda: conn)
+
+    with pytest.raises(ValueError, match="still active"):
+        search_sessions.archive_history_session(44, staff={"id": 7})
+
+    assert conn.commits == 0
+
+
+def test_legacy_canceled_spelling_can_be_archived(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = _SingleSessionConn(_session_row(status="canceled"))
+    monkeypatch.setattr(search_sessions, "get_conn", lambda: conn)
+
+    archived = search_sessions.archive_history_session(44, staff={"id": 7})
+
+    assert archived["archive_status"] == "archived"
+    assert archived["status"] == "canceled"
+    assert conn.commits == 1
+
+
 def test_bulk_archive_keeps_running_sessions_visible(monkeypatch: pytest.MonkeyPatch) -> None:
     class _BulkConn:
         def __init__(self) -> None:
@@ -154,7 +188,7 @@ def test_bulk_archive_keeps_running_sessions_visible(monkeypatch: pytest.MonkeyP
             compact = " ".join(sql.split())
             self.calls.append((compact, tuple(params)))
             if compact.startswith("UPDATE vkpi_kol_search_sessions"):
-                return _Result(rows=[{"id": 41}, {"id": 42}])
+                return _Result(rows=[{"id": 41}, {"id": 42}, {"id": 46}])
             if compact.startswith("SELECT COUNT(*) AS n"):
                 return _Result(row={"n": 3})
             raise AssertionError(f"unexpected SQL: {compact}")
@@ -169,12 +203,25 @@ def test_bulk_archive_keeps_running_sessions_visible(monkeypatch: pytest.MonkeyP
 
     assert result == {
         "status": "archived",
-        "archived_count": 2,
-        "archived_session_ids": [41, 42],
+        "archived_count": 3,
+        "archived_session_ids": [41, 42, 46],
         "skipped_active_count": 3,
     }
     assert conn.commits == 1
-    assert all(params[0] == 7 for _sql, params in conn.calls)
+    update_sql, update_params = next(
+        (sql, params)
+        for sql, params in conn.calls
+        if sql.startswith("UPDATE vkpi_kol_search_sessions")
+    )
+    assert "'canceled'" in update_sql
+    assert update_params == (7, 7)
+    active_sql, active_params = next(
+        (sql, params)
+        for sql, params in conn.calls
+        if sql.startswith("SELECT COUNT(*) AS n")
+    )
+    assert "'canceled'" in active_sql
+    assert active_params == (7,)
 
 
 def test_scoped_session_reader_returns_not_found_for_other_staff(monkeypatch: pytest.MonkeyPatch) -> None:

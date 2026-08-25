@@ -67,6 +67,12 @@ describe("getMarketBrainSummary", () => {
     expect(r.learning_digest.honesty_note).toBe("");
   });
 
+  it("adds an explicit refresh query only when requested", async () => {
+    apiFetch.mockResolvedValue({});
+    await getMarketBrainSummary("tok", { refresh: true });
+    expect(String(apiFetch.mock.calls[0][0])).toBe("/api/admin/vkpi/market-brain/summary?refresh=true");
+  });
+
   it("合约形状正常归一(含 simulate_entry 包壳)", () => {
     const r = normalizeMarketBrainSummary({
       weekly_signals: {
@@ -122,6 +128,13 @@ describe("getGtmPlanPreview", () => {
     expect(url).toContain("budget_usd=3000");
     expect(url).toContain("goal=conversion");
     expect(url).toContain("window_days=30");
+  });
+
+  it("adds refresh=true for a manual rebuild", async () => {
+    apiFetch.mockResolvedValue({});
+    await getGtmPlanPreview("tok", { sku: "S", refresh: true });
+    const path = String(apiFetch.mock.calls[0][0]);
+    expect(path).toContain("refresh=true");
   });
 
   it("空响应 11 段全兜底;dealer 诚实占位透传", async () => {

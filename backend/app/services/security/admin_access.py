@@ -18,6 +18,7 @@ from app.services.security.rate_limiter import get_client_ip
 
 _ADMIN_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _ADMIN_PATH_PREFIXES = ("/api/admin", "/api/vios")
+_ADMIN_PRIVATE_VARY = ("Authorization", "Cookie")
 
 
 def is_admin_path(path: str) -> bool:
@@ -78,10 +79,37 @@ def get_admin_security_response(request: Request) -> Response | None:
     )
 
 
+def _merge_private_vary(response: Response) -> None:
+    existing = [
+        token.strip()
+        for token in str(response.headers.get("Vary") or "").split(",")
+        if token.strip()
+    ]
+    seen = {token.lower() for token in existing}
+    for token in _ADMIN_PRIVATE_VARY:
+        if token.lower() not in seen:
+            existing.append(token)
+            seen.add(token.lower())
+    response.headers["Vary"] = ", ".join(existing)
+
+
 def apply_admin_security_headers(path: str, response: Response) -> Response:
     if not is_admin_path(path):
         return response
-    response.headers.setdefault("Cache-Control", "no-store")
+    if not str(response.headers.get("Cache-Control") or "").strip():
+        response.headers["Cache-Control"] = "no-store"
+    cache_directives = {
+        directive.strip().lower()
+        for directive in str(response.headers.get("Cache-Control") or "").split(",")
+        if directive.strip()
+    }
+    # JSON/admin responses without an explicit cache policy default to no-store
+    # and must vary across both supported authentication transports.  Explicit
+    # media policies (private/public max-age, immutable, Range video) are
+    # intentional performance contracts and must not be replaced or fragmented
+    # by a global Authorization/Cookie Vary.
+    if "no-store" in cache_directives:
+        _merge_private_vary(response)
     response.headers.setdefault("Pragma", "no-cache")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")

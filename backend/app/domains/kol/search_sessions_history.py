@@ -44,6 +44,11 @@ from app.domains.kol.search_sessions_serde import (
 logger = get_logger(__name__)
 
 
+_ARCHIVABLE_RAW_SESSION_STATUSES = frozenset(
+    {*TERMINAL_SESSION_STATUSES, "canceled"}
+)
+
+
 GetConn = Callable[[], Any]
 ReachDisplayGate = Callable[
     [Any, list[dict[str, Any]]],
@@ -305,8 +310,8 @@ def archive_history_session(
         session = _row_to_session(current)
         session["archive_status"] = "already_archived"
         return session
-    status = _normalize_status(current.get("status"))
-    if status not in TERMINAL_SESSION_STATUSES:
+    status = _text(current.get("status")).lower()
+    if status not in _ARCHIVABLE_RAW_SESSION_STATUSES:
         raise ValueError("search session is still active; archive it after the task finishes")
     updated = conn.execute(
         """
@@ -378,7 +383,7 @@ def archive_history_sessions(
         UPDATE vkpi_kol_search_sessions
         SET archived_at=NOW(), archived_by=?, archive_reason='user_cleared_completed', updated_at=NOW()
         WHERE created_by=? AND archived_at IS NULL
-          AND status IN ('ready', 'partial', 'failed', 'cancelled')
+          AND status IN ('ready', 'partial', 'failed', 'cancelled', 'canceled')
         RETURNING id
         """,
         (actor_id, actor_id),
@@ -388,7 +393,7 @@ def archive_history_sessions(
         SELECT COUNT(*) AS n
         FROM vkpi_kol_search_sessions
         WHERE created_by=? AND archived_at IS NULL
-          AND status NOT IN ('ready', 'partial', 'failed', 'cancelled')
+          AND status NOT IN ('ready', 'partial', 'failed', 'cancelled', 'canceled')
         """,
         (actor_id,),
     ).fetchone()

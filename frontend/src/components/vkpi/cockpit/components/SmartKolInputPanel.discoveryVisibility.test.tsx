@@ -212,6 +212,49 @@ describe("session 1106 replay · discovery visibility", () => {
     expect(banner?.note).toContain("本次全网新发现 18 人 · 库内已有 15 人");
   });
 
+  it("closes a cancelled session without calling it successful or leaving it searching", () => {
+    const session = session1106({
+      status: "cancelled",
+      progress_contract: contract({
+        state: "cancelled",
+        requested_tasks_terminal: true,
+        requested_tasks_successful: false,
+        successful_units: 12,
+        terminal_units: 30,
+      }),
+    });
+
+    expect(isSearchSessionTerminal(session)).toBe(true);
+    expect(sessionStatusBanner(session, "running", {}, true)).toMatchObject({
+      tone: "warn",
+      label: "本轮已取消",
+    });
+    expect(sessionStatusBanner(session, "running", {}, true)?.note).toContain("后台不会继续运行");
+  });
+
+  it("lets a legacy terminal session override a stale nested running marker", () => {
+    const cancelled = session1106({
+      status: "cancelled",
+      result_summary: {
+        smart_search_profile_advance_job: { status: "running", advance_status: "running" },
+      },
+    });
+    const failed = session1106({
+      status: "failed",
+      items: [],
+      result_summary: {
+        smart_search_profile_advance_job: { status: "running", advance_status: "running", error: "provider stopped" },
+      },
+    });
+
+    expect(sessionStatusBanner(cancelled, "running", {}, true)?.label).toBe("本轮已取消");
+    expect(sessionStatusBanner(failed, "running", {}, true)).toMatchObject({
+      tone: "error",
+      label: "这次没找到结果",
+      note: "失败原因:provider stopped",
+    });
+  });
+
   it("empty completion stays honest", () => {
     const session = session1106({ items: [], result_summary: { phase: "complete", new_discovery: { counts: { new_creators: 0, existing_matches: 0 } } }, progress_contract: contract({}) });
     expect(sessionStatusBanner(session, "ready", {}, false)?.note).toBe("这次没有新的人选,可换个描述再试。");

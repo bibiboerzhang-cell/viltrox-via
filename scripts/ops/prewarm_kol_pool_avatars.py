@@ -4,7 +4,8 @@
 The command is deliberately narrow:
 
 * exactly one of ``--pool-id`` or ``--session-id`` is required;
-* Pool IDs are capped at 50; session IDs at 5 and session URLs at 50;
+* Pool IDs are capped at 50; session IDs at 5, linked Pool IDs at 50, and
+  combined session/Pool avatar URLs at 50;
 * the database is queried only for those explicit IDs and is never written;
 * dry-run is the default; only ``--execute`` may call ``cache_image``;
 * only a live, allowlisted, external profile-avatar URL is eligible; stable
@@ -49,14 +50,21 @@ MAX_POOL_IDS = 50
 MAX_SESSION_IDS = 5
 MAX_SESSION_AVATAR_URLS = 50
 MAX_SESSION_CREATOR_ITEMS = 500
+MAX_SESSION_LINKED_POOL_IDS = 50
 SELECT_EXPLICIT_POOL_ROWS_SQL = """
 SELECT id, avatar_url, raw_platform_data
 FROM vkpi_kol_pool
 WHERE id IN ({placeholders})
 ORDER BY id
 """
+SELECT_LINKED_POOL_AVATAR_ROWS_SQL = """
+SELECT id, platform, handle, profile_url, avatar_url
+FROM vkpi_kol_pool
+WHERE id IN ({placeholders})
+ORDER BY id
+"""
 SELECT_EXPLICIT_SESSION_ITEMS_SQL = """
-SELECT session_id, item_type, payload_json
+SELECT session_id, item_type, kol_pool_id, source_url, payload_json
 FROM vkpi_kol_search_session_items
 WHERE session_id IN ({placeholders})
   AND item_type IN ('existing_kol', 'new_creator', 'online_qualified_candidate', 'recall_candidate')
@@ -137,6 +145,29 @@ def _fetch_explicit_rows(conn: Any, pool_ids: list[int]) -> dict[int, dict[str, 
     return {int(row["id"]): dict(row) for row in rows}
 
 
+def _fetch_linked_pool_avatar_rows(
+    conn: Any,
+    pool_ids: list[int],
+) -> dict[int, dict[str, Any]]:
+    """Read bounded identity fields plus at most one DB-extracted raw avatar."""
+    placeholders = ",".join("?" for _ in pool_ids)
+    rows = conn.execute(
+        SELECT_LINKED_POOL_AVATAR_ROWS_SQL.format(placeholders=placeholders),
+        tuple(pool_ids),
+    ).fetchall()
+    rows_by_id = {int(row["id"]): dict(row) for row in rows}
+    try:
+        from app.domains.kol.pool_read_avatar_hydration import bounded_profile_avatar_urls
+
+        extracted = bounded_profile_avatar_urls(conn, pool_ids)
+    except Exception:
+        extracted = {}
+    for pool_id, avatar_url in extracted.items():
+        if pool_id in rows_by_id:
+            rows_by_id[pool_id]["raw_profile_avatar_url"] = avatar_url
+    return rows_by_id
+
+
 def _project_eligibility(row: dict[str, Any]) -> tuple[str, str, str]:
     """Return ``(status, reason, private_url)`` without consulting providers.
 
@@ -203,6 +234,10 @@ def _session_summary(session_ids: list[int], *, execute: bool) -> dict[str, Any]
         "sessions_found": 0,
         "creator_items_scanned": 0,
         "avatar_references": 0,
+        "linked_pool_ids": 0,
+        "linked_pool_rows_found": 0,
+        "linked_pool_identity_conflicts": 0,
+        "linked_pool_eligible_urls": 0,
         "unique_avatar_urls": 0,
         "duplicate_avatar_references": 0,
         "eligible_urls": 0,
@@ -214,6 +249,8 @@ def _session_summary(session_ids: list[int], *, execute: bool) -> dict[str, Any]
         "url_cap": MAX_SESSION_AVATAR_URLS,
         "url_cap_exceeded": False,
         "item_scan_cap_exceeded": False,
+        "linked_pool_cap": MAX_SESSION_LINKED_POOL_IDS,
+        "linked_pool_cap_exceeded": False,
         "avatar_scan_complete": True,
         "provider_calls_performed": False,
         "business_db_writes": 0,
@@ -257,8 +294,10 @@ def run_sessions(
 ) -> dict[str, Any]:
     """Plan or cache creator avatars from explicit historical sessions.
 
-    Only the top-level ``payload_json.avatar_url`` is inspected. Content
-    thumbnails, names, handles and raw provider documents are never selected.
+    The session snapshot contributes only top-level ``payload_json.avatar_url``.
+    If that value is absent/dead, an exact identity-matched ``kol_pool_id`` may
+    contribute one reviewed profile-avatar candidate. Content thumbnails and
+    raw payloads are never rendered.
     """
 
     ids = normalize_session_ids(session_ids)
@@ -285,30 +324,79 @@ def run_sessions(
 
     unique_urls: list[str] = []
     seen_urls: set[str] = set()
-    for row in rows:
-        payload = _parse_session_payload(row.get("payload_json"))
-        if payload is None:
-            summary["invalid_payloads"] += 1
-            continue
-        raw_url = str(payload.get("avatar_url") or "").strip()
-        if not raw_url:
-            continue
-        summary["avatar_references"] += 1
+    linked_pool_items: dict[int, list[dict[str, Any]]] = {}
+
+    def add_url(raw_url: str) -> bool:
+        """Retain one private URL or fail closed on the aggregate cap."""
         if raw_url in seen_urls:
             summary["duplicate_avatar_references"] += 1
-            continue
+            return True
         seen_urls.add(raw_url)
         if len(unique_urls) >= MAX_SESSION_AVATAR_URLS:
             summary.update({
                 "status": "blocked",
                 "reason": "avatar_url_cap_exceeded",
                 "url_cap_exceeded": True,
-                # The extra URL is observed but never retained or fetched.
                 "unique_avatar_urls": len(seen_urls),
                 "avatar_scan_complete": False,
             })
-            return summary
+            return False
         unique_urls.append(raw_url)
+        return True
+
+    for row in rows:
+        payload = _parse_session_payload(row.get("payload_json"))
+        if payload is None:
+            summary["invalid_payloads"] += 1
+            continue
+        raw_url = str(payload.get("avatar_url") or "").strip()
+        if raw_url:
+            summary["avatar_references"] += 1
+            if not add_url(raw_url):
+                return summary
+        _status, reason, _private_url = _project_eligibility({
+            "avatar_url": raw_url,
+            "raw_platform_data": {},
+        })
+        pool_id = int(row.get("kol_pool_id") or 0)
+        if pool_id > 0 and reason in {"missing", "expired", "invalid"}:
+            linked_pool_items.setdefault(pool_id, []).append({
+                "item_type": row.get("item_type"),
+                "source_url": row.get("source_url"),
+                "payload": payload,
+            })
+
+    summary["linked_pool_ids"] = len(linked_pool_items)
+    if len(linked_pool_items) > MAX_SESSION_LINKED_POOL_IDS:
+        summary.update({
+            "status": "blocked",
+            "reason": "linked_pool_cap_exceeded",
+            "linked_pool_cap_exceeded": True,
+            "avatar_scan_complete": False,
+        })
+        return summary
+
+    if linked_pool_items:
+        from app.domains.kol.search_sessions_previews import _pool_profile_identity_matches
+
+        rows_by_id = _fetch_linked_pool_avatar_rows(conn, sorted(linked_pool_items))
+        summary["linked_pool_rows_found"] = len(rows_by_id)
+        for pool_id, session_items in linked_pool_items.items():
+            pool_row = rows_by_id.get(pool_id)
+            if not pool_row:
+                continue
+            if not any(
+                _pool_profile_identity_matches(item, pool_row)
+                for item in session_items
+            ):
+                summary["linked_pool_identity_conflicts"] += 1
+                continue
+            status, _reason, private_url = _project_eligibility(pool_row)
+            if status != "eligible" or not private_url:
+                continue
+            summary["linked_pool_eligible_urls"] += 1
+            if not add_url(private_url):
+                return summary
     summary["unique_avatar_urls"] = len(unique_urls)
 
     eligible: list[str] = []

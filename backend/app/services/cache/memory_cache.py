@@ -365,16 +365,25 @@ def cache_get_or_build(
     *,
     cache_if: Callable[[Any], bool] | None = None,
     observe: Callable[[dict[str, Any]], None] | None = None,
+    force_refresh: bool = False,
 ) -> Any:
     """Return a cached value or collapse concurrent cold builds.
 
     The second cache read inside the per-key lock prevents a request burst from
-    repeating the same expensive read-only aggregation.  When Redis is
-    available, a token-safe bounded lock collapses cold misses across web
-    workers as well.  Redis/lock failure falls back to one build per process.
+    repeating the same expensive read-only aggregation.  ``force_refresh``
+    skips a pre-existing value, while a short-lived generation marker lets
+    concurrent or immediately repeated refreshes reuse the value just rebuilt
+    by their leader.  This preserves a truthful manual refresh without turning
+    it into an unbounded rebuild amplifier.  When Redis is available, a
+    token-safe bounded lock collapses cold misses across web workers as well.
+    Redis/lock failure falls back to one build per process.
     """
 
     started_at = time.perf_counter()
+    refresh_marker_key = f"manual_refresh:{key}"
+    refresh_result_key = f"manual_refresh_result:{key}"
+    refresh_window_ttl = max(1, min(int(ttl), 5))
+    refresh_marker_at_start = None
 
     def _observe(
         outcome: str,
@@ -396,6 +405,33 @@ def cache_get_or_build(
             # Telemetry must never turn a healthy read into an endpoint error.
             logger.warning("cache.get_or_build_observer_failed", exc_info=True)
 
+    def _recent_refresh_value(marker: Any, *, outcome: str) -> tuple[bool, Any]:
+        if marker is None:
+            return False, None
+        state = str(marker.get("state") or "") if isinstance(marker, dict) else "cached"
+        if state == "error":
+            _observe(outcome.replace("hit", "error"), cache_candidate=False)
+            raise RuntimeError(
+                "manual refresh was attempted recently but did not complete; retry after 5 seconds"
+            )
+        if state == "result":
+            wrapped = cache_get(refresh_result_key)
+            if isinstance(wrapped, dict) and "value" in wrapped:
+                _observe(outcome, cache_candidate=False)
+                return True, wrapped["value"]
+            return False, None
+        cached = cache_get(key)
+        if cached is not None:
+            _observe(outcome)
+            return True, cached
+        return False, None
+
+    if force_refresh and _cache_mutations_fenced():
+        _observe("refresh_fenced", cache_candidate=False)
+        raise RuntimeError("manual refresh is unavailable while cache mutations are fenced")
+    if force_refresh:
+        refresh_marker_at_start = cache_get(refresh_marker_key)
+
     def _build(*, outcome: str, allow_cache_write: bool) -> Any:
         builder_started_at = time.perf_counter()
         try:
@@ -407,7 +443,26 @@ def cache_get_or_build(
             )
             if allow_cache_write and candidate:
                 cache_set(key, value, ttl=ttl)
+            if allow_cache_write and force_refresh:
+                state = "cached" if candidate else "result"
+                if not candidate:
+                    cache_set(
+                        refresh_result_key,
+                        {"value": value},
+                        ttl=refresh_window_ttl,
+                    )
+                cache_set(
+                    refresh_marker_key,
+                    {"generation": time.time_ns(), "state": state},
+                    ttl=refresh_window_ttl,
+                )
         except Exception:
+            if allow_cache_write and force_refresh and not _cache_mutations_fenced():
+                cache_set(
+                    refresh_marker_key,
+                    {"generation": time.time_ns(), "state": "error"},
+                    ttl=refresh_window_ttl,
+                )
             _observe(
                 "builder_error",
                 builder_ms=(time.perf_counter() - builder_started_at) * 1000,
@@ -421,10 +476,18 @@ def cache_get_or_build(
         )
         return value
 
-    cached_value = cache_get(key)
-    if cached_value is not None:
-        _observe("hit")
-        return cached_value
+    if force_refresh and refresh_marker_at_start is not None:
+        handled, cached_value = _recent_refresh_value(
+            refresh_marker_at_start,
+            outcome="refresh_recent_hit",
+        )
+        if handled:
+            return cached_value
+    elif not force_refresh:
+        cached_value = cache_get(key)
+        if cached_value is not None:
+            _observe("hit")
+            return cached_value
     if _cache_mutations_fenced():
         return _build(outcome="fenced_builder", allow_cache_write=False)
 
@@ -435,10 +498,20 @@ def cache_get_or_build(
             _build_locks[key] = build_lock
 
     with build_lock:
-        cached_value = cache_get(key)
-        if cached_value is not None:
-            _observe("miss_wait_hit")
-            return cached_value
+        if force_refresh:
+            current_marker = cache_get(refresh_marker_key)
+            if current_marker is not None and current_marker != refresh_marker_at_start:
+                handled, cached_value = _recent_refresh_value(
+                    current_marker,
+                    outcome="refresh_wait_hit",
+                )
+                if handled:
+                    return cached_value
+        else:
+            cached_value = cache_get(key)
+            if cached_value is not None:
+                _observe("miss_wait_hit")
+                return cached_value
         if _cache_mutations_fenced():
             return _build(outcome="fenced_builder", allow_cache_write=False)
         with _distributed_build_lock(key):
@@ -446,14 +519,27 @@ def cache_get_or_build(
                 return _build(outcome="fenced_builder", allow_cache_write=False)
             # A different process may have populated Redis while this worker
             # waited for the distributed lock.
-            cached_value = cache_get(key)
-            if cached_value is not None:
-                _observe("miss_distributed_hit")
-                return cached_value
+            if force_refresh:
+                current_marker = cache_get(refresh_marker_key)
+                if current_marker is not None and current_marker != refresh_marker_at_start:
+                    handled, cached_value = _recent_refresh_value(
+                        current_marker,
+                        outcome="refresh_distributed_hit",
+                    )
+                    if handled:
+                        return cached_value
+            else:
+                cached_value = cache_get(key)
+                if cached_value is not None:
+                    _observe("miss_distributed_hit")
+                    return cached_value
             # Read aggregators may return an honest 200 error/degraded payload
             # instead of raising.  Callers can keep that fail-soft contract
             # without pinning the failure for the full TTL.
-            return _build(outcome="miss_builder", allow_cache_write=True)
+            return _build(
+                outcome="refresh_builder" if force_refresh else "miss_builder",
+                allow_cache_write=True,
+            )
 
 
 async def cache_set_async(key: str, value: Any, ttl: int = REDIS_CACHE_DEFAULT_TTL_SEC) -> None:

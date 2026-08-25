@@ -14,6 +14,7 @@ import pytest
 
 from app.api.routers import vkpi_market_brain, vkpi_market_brain_summary
 from app.api.dependencies.perms import require_tab
+from app.core.config import VKPI_GTM_READ_CACHE_TTL_SEC
 from app.core import permissions as core_permissions
 from app.domains.market_brain import gtm_plan_preview, summary
 from app.domains.market_brain import read_cache
@@ -61,6 +62,12 @@ def test_summary_cache_key_partitions_tenant_actor_and_role() -> None:
     )
     assert base.startswith("vkpi_gtm:summary:v4:")
     assert ":org:1:auth:" in base
+
+
+def test_gtm_read_cache_ttl_is_shared_and_bounded() -> None:
+    assert 30 <= VKPI_GTM_READ_CACHE_TTL_SEC <= 600
+    assert vkpi_market_brain._GTM_READ_CACHE_TTL_SEC == VKPI_GTM_READ_CACHE_TTL_SEC
+    assert vkpi_market_brain_summary._GTM_READ_CACHE_TTL_SEC == VKPI_GTM_READ_CACHE_TTL_SEC
 
 
 def test_preview_key_canonicalizes_equivalent_inputs_and_hides_raw_sku() -> None:
@@ -525,6 +532,296 @@ def test_cache_observer_failure_never_breaks_a_healthy_read(
     assert calls == 1
 
 
+def test_force_refresh_rebuilds_and_replaces_an_existing_cache_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(memory_cache, "_get_redis", lambda: None)
+    observations: list[dict] = []
+    calls = 0
+
+    def build() -> dict:
+        nonlocal calls
+        calls += 1
+        return {"status": "ready", "revision": calls}
+
+    first = memory_cache.cache_get_or_build(
+        "vkpi_gtm:test:manual-refresh",
+        build,
+        ttl=30,
+        observe=observations.append,
+    )
+    refreshed = memory_cache.cache_get_or_build(
+        "vkpi_gtm:test:manual-refresh",
+        build,
+        ttl=30,
+        observe=observations.append,
+        force_refresh=True,
+    )
+    final_hit = memory_cache.cache_get_or_build(
+        "vkpi_gtm:test:manual-refresh",
+        build,
+        ttl=30,
+        observe=observations.append,
+    )
+
+    assert first == {"status": "ready", "revision": 1}
+    assert refreshed == final_hit == {"status": "ready", "revision": 2}
+    assert calls == 2
+    assert [item["outcome"] for item in observations] == [
+        "miss_builder",
+        "refresh_builder",
+        "hit",
+    ]
+
+
+def test_concurrent_force_refreshes_collapse_to_one_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(memory_cache, "_get_redis", lambda: None)
+    calls = 0
+    calls_guard = threading.Lock()
+    release_builder = threading.Event()
+    build_started = threading.Event()
+
+    def build() -> dict:
+        nonlocal calls
+        with calls_guard:
+            calls += 1
+        build_started.set()
+        assert release_builder.wait(timeout=2)
+        return {"status": "ready", "revision": 1}
+
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        futures = [
+            pool.submit(
+                memory_cache.cache_get_or_build,
+                "vkpi_gtm:test:manual-refresh-burst",
+                build,
+                30,
+                force_refresh=True,
+            )
+            for _index in range(32)
+        ]
+        assert build_started.wait(timeout=1)
+        release_builder.set()
+        results = [future.result(timeout=2) for future in futures]
+
+    assert calls == 1
+    assert results == [{"status": "ready", "revision": 1}] * 32
+
+
+def test_concurrent_uncacheable_force_refreshes_share_one_short_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(memory_cache, "_get_redis", lambda: None)
+    calls = 0
+    calls_guard = threading.Lock()
+    release_builder = threading.Event()
+    build_started = threading.Event()
+
+    def build() -> dict:
+        nonlocal calls
+        with calls_guard:
+            calls += 1
+        build_started.set()
+        assert release_builder.wait(timeout=2)
+        return {"status": "degraded", "reason": "source unavailable"}
+
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        futures = [
+            pool.submit(
+                memory_cache.cache_get_or_build,
+                "vkpi_gtm:test:manual-refresh-uncacheable",
+                build,
+                30,
+                cache_if=read_cache.cacheable_payload,
+                force_refresh=True,
+            )
+            for _index in range(32)
+        ]
+        assert build_started.wait(timeout=1)
+        release_builder.set()
+        results = [future.result(timeout=2) for future in futures]
+
+    assert calls == 1
+    assert results == [
+        {"status": "degraded", "reason": "source unavailable"}
+    ] * 32
+    assert memory_cache.cache_get("vkpi_gtm:test:manual-refresh-uncacheable") is None
+
+
+def test_concurrent_failed_force_refreshes_do_not_repeat_the_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(memory_cache, "_get_redis", lambda: None)
+    calls = 0
+    calls_guard = threading.Lock()
+    release_builder = threading.Event()
+    build_started = threading.Event()
+
+    def build() -> dict:
+        nonlocal calls
+        with calls_guard:
+            calls += 1
+        build_started.set()
+        assert release_builder.wait(timeout=2)
+        raise RuntimeError("source failed")
+
+    with ThreadPoolExecutor(max_workers=32) as pool:
+        futures = [
+            pool.submit(
+                memory_cache.cache_get_or_build,
+                "vkpi_gtm:test:manual-refresh-error",
+                build,
+                30,
+                force_refresh=True,
+            )
+            for _index in range(32)
+        ]
+        assert build_started.wait(timeout=1)
+        release_builder.set()
+        errors = []
+        for future in futures:
+            with pytest.raises(RuntimeError) as error:
+                future.result(timeout=2)
+            errors.append(str(error.value))
+
+    assert calls == 1
+    assert "source failed" in errors
+    assert all(
+        message == "source failed" or "retry after 5 seconds" in message
+        for message in errors
+    )
+
+
+def test_force_refresh_fails_closed_without_building_during_validation_fence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(memory_cache, "_cache_mutations_fenced", lambda: True)
+    calls = 0
+
+    def build() -> dict:
+        nonlocal calls
+        calls += 1
+        return {"status": "ready"}
+
+    with pytest.raises(RuntimeError, match="mutations are fenced"):
+        memory_cache.cache_get_or_build(
+            "vkpi_gtm:test:manual-refresh-fenced",
+            build,
+            ttl=30,
+            force_refresh=True,
+        )
+
+    assert calls == 0
+
+
+def test_immediately_repeated_force_refresh_uses_recent_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(memory_cache, "_get_redis", lambda: None)
+    observations: list[dict] = []
+    calls = 0
+
+    def build() -> dict:
+        nonlocal calls
+        calls += 1
+        return {"status": "ready", "revision": calls}
+
+    first = memory_cache.cache_get_or_build(
+        "vkpi_gtm:test:manual-refresh-cooldown",
+        build,
+        ttl=30,
+        observe=observations.append,
+        force_refresh=True,
+    )
+    second = memory_cache.cache_get_or_build(
+        "vkpi_gtm:test:manual-refresh-cooldown",
+        build,
+        ttl=30,
+        observe=observations.append,
+        force_refresh=True,
+    )
+
+    assert first == second == {"status": "ready", "revision": 1}
+    assert calls == 1
+    assert [item["outcome"] for item in observations] == [
+        "refresh_builder",
+        "refresh_recent_hit",
+    ]
+
+
+def test_gtm_routes_explicit_refresh_bypasses_then_replaces_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    summary_calls = 0
+    preview_calls = 0
+
+    def build_summary(_staff_value: dict) -> dict:
+        nonlocal summary_calls
+        summary_calls += 1
+        return {"status": "ready", "revision": summary_calls}
+
+    def build_preview(**kwargs) -> dict:
+        nonlocal preview_calls
+        preview_calls += 1
+        return {
+            "status": "ready",
+            "revision": preview_calls,
+            "sku": kwargs["sku"],
+        }
+
+    monkeypatch.setattr(summary, "build_summary", build_summary)
+    monkeypatch.setattr(gtm_plan_preview, "build_preview", build_preview)
+
+    summary_first_response = Response()
+    summary_refresh_response = Response()
+    summary_hit_response = Response()
+    summary_first = vkpi_market_brain_summary.get_market_brain_summary(
+        staff=_staff(), response=summary_first_response
+    )
+    summary_refreshed = vkpi_market_brain_summary.get_market_brain_summary(
+        refresh=True, staff=_staff(), response=summary_refresh_response
+    )
+    summary_hit = vkpi_market_brain_summary.get_market_brain_summary(
+        staff=_staff(), response=summary_hit_response
+    )
+
+    preview_first_response = Response()
+    preview_refresh_response = Response()
+    preview_hit_response = Response()
+    preview_kwargs = {
+        "sku": "AF 85",
+        "country": "US",
+        "budget_usd": 3000,
+        "goal": "conversion",
+        "window_days": 30,
+        "staff": _staff(),
+    }
+    preview_first = vkpi_market_brain.get_gtm_plan_preview(
+        **preview_kwargs, response=preview_first_response
+    )
+    preview_refreshed = vkpi_market_brain.get_gtm_plan_preview(
+        **preview_kwargs, refresh=True, response=preview_refresh_response
+    )
+    preview_hit = vkpi_market_brain.get_gtm_plan_preview(
+        **preview_kwargs, response=preview_hit_response
+    )
+
+    assert [summary_first["revision"], summary_refreshed["revision"], summary_hit["revision"]] == [1, 2, 2]
+    assert [preview_first["revision"], preview_refreshed["revision"], preview_hit["revision"]] == [1, 2, 2]
+    assert [
+        summary_first_response.headers["x-vkpi-cache"],
+        summary_refresh_response.headers["x-vkpi-cache"],
+        summary_hit_response.headers["x-vkpi-cache"],
+    ] == ["miss_builder", "refresh_builder", "hit"]
+    assert [
+        preview_first_response.headers["x-vkpi-cache"],
+        preview_refresh_response.headers["x-vkpi-cache"],
+        preview_hit_response.headers["x-vkpi-cache"],
+    ] == ["miss_builder", "refresh_builder", "hit"]
+
+
 def test_gtm_observer_allowlists_surface_and_never_accepts_identity_or_key(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -660,31 +957,3 @@ def test_cache_observer_distinguishes_distributed_wait_hit(
 
     assert result == {"status": "ready", "source": "peer"}
     assert [item["outcome"] for item in observations] == ["miss_distributed_hit"]
-
-
-def test_concurrent_summary_requests_collapse_to_one_build(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls = 0
-    guard = threading.Lock()
-
-    def slow_build(_staff_value: dict) -> dict:
-        nonlocal calls
-        with guard:
-            calls += 1
-        time.sleep(0.03)
-        return {"method": "summary-test", "items": [1, 2, 3]}
-
-    monkeypatch.setattr(summary, "build_summary", slow_build)
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        results = list(
-            pool.map(
-                lambda _index: vkpi_market_brain_summary.get_market_brain_summary(
-                    staff=_staff()
-                ),
-                range(32),
-            )
-        )
-
-    assert calls == 1
-    assert all(result == {"method": "summary-test", "items": [1, 2, 3]} for result in results)

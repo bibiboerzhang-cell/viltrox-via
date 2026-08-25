@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
 from app.api.dependencies.perms import require_tab
+from app.core.config import VKPI_GTM_READ_CACHE_TTL_SEC
 from app.core.logging import get_logger
 from app.domains.market_brain.read_cache import (
     cache_contract_version,
@@ -34,7 +35,7 @@ from app.services.cache import cache_get_or_build
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-market-brain"])
-_GTM_READ_CACHE_TTL_SEC = 30
+_GTM_READ_CACHE_TTL_SEC = VKPI_GTM_READ_CACHE_TTL_SEC
 
 
 def _organization_id_for_cache(staff: dict | None) -> int:
@@ -71,10 +72,11 @@ def _summary_cache_key(staff: dict | None) -> str:
 
 @router.get("/market-brain/summary")
 def get_market_brain_summary(
+    refresh: bool = False,
     staff=Depends(require_tab("vkpi", "read")),
     response: Response = None,
 ) -> dict:
-    """GTM 总脑页五卡数据,前端一次请求(全只读,不写库)。"""
+    """GTM 总脑页五卡数据；refresh=true 时绕过短时缓存重新聚合。"""
     from app.domains.market_brain import summary
 
     scope_unavailable = legacy_gtm_scope_guard(staff, surface="summary")
@@ -87,6 +89,7 @@ def get_market_brain_summary(
             ttl=_GTM_READ_CACHE_TTL_SEC,
             cache_if=cacheable_payload,
             observe=gtm_cache_observer("summary", response=response),
+            force_refresh=refresh,
         )
     except Exception as exc:  # noqa: BLE001 — 聚合失败不炸接口,诚实回原因
         logger.warning("market_brain summary failed: %s", exc, exc_info=True)

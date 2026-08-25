@@ -614,6 +614,69 @@ def test_manager_and_admin_can_read_team_status(
     assert captured == {"staff_id": 901, "limit": 123}
 
 
+def test_main_application_marks_manager_team_status_private_and_no_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app import main as main_mod
+
+    staff = {
+        "id": 903,
+        "staff_id": 903,
+        "user_id": 903,
+        "role": "manager",
+        "is_owner": 0,
+        "permissions": {"vkpi": "read"},
+    }
+
+    def allow_manager(request: Any) -> bool:
+        request.state.vkpi_authorized_staff = staff
+        return True
+
+    monkeypatch.setattr(main_mod, "_admin_rbac_allowed_bounded", allow_manager)
+    monkeypatch.setattr(main_mod, "_request_requires_db_admission", lambda _request: False)
+    monkeypatch.setattr(main_mod, "_audit_sensitive_request", lambda *_args: None)
+    monkeypatch.setattr(
+        main_mod.main_release_validation,
+        "release_validation_active",
+        lambda: False,
+    )
+    monkeypatch.setattr(
+        team_status,
+        "build_team_search_status",
+        lambda *, staff, limit: {
+            "schema": team_status.TEAM_STATUS_SCHEMA,
+            "status": "ready",
+        },
+    )
+    previous_override = main_mod.app.dependency_overrides.get(get_user_required)
+    main_mod.app.dependency_overrides[get_user_required] = lambda: {
+        "id": 903,
+        "role": "manager",
+    }
+    try:
+        response = TestClient(main_mod.app, raise_server_exceptions=False).get(
+            "/api/admin/vkpi/kol-search-sessions/team-status",
+            headers={
+                "Authorization": "Bearer test-manager",
+                "Cookie": "access_token=test-manager",
+            },
+        )
+    finally:
+        if previous_override is None:
+            main_mod.app.dependency_overrides.pop(get_user_required, None)
+        else:
+            main_mod.app.dependency_overrides[get_user_required] = previous_override
+
+    assert response.status_code == 200
+    assert "no-store" in response.headers["cache-control"].lower()
+    vary = {
+        token.strip().lower()
+        for token in response.headers["vary"].split(",")
+        if token.strip()
+    }
+    assert {"authorization", "cookie"}.issubset(vary)
+
+
 def test_staff_is_denied_team_status_but_existing_session_list_stays_own_scoped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

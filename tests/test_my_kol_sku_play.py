@@ -1,11 +1,12 @@
 """波 D·B 一键数据关注 + 按产品聚合播放总览(sqlite 假库,零 provider)。
 
-覆盖:SKU 四级解析(manual/existing/structured-final-v1/title)全走既有追踪路径;解析不出诚实
+覆盖:SKU 五级解析(manual/existing/structured-final-v1/cached-content/title)全走既有追踪路径;解析不出诚实
 sku_required + 候选;总览分组 + d1/d7/d30 增量口径;未实测一律 null 不编 0;
 收藏集 scope(员工只看本人,管理层全团队)。
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -58,7 +59,8 @@ def _conn() -> sqlite3.Connection:
             duplicate_of_id INTEGER,
             display_name TEXT,
             handle TEXT,
-            platform TEXT
+            platform TEXT,
+            raw_platform_data TEXT
         );
         CREATE TABLE vkpi_kol_pool_favorites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -437,6 +439,121 @@ def test_data_watch_auto_detects_unique_structured_content_evidence_before_title
         0.85,
     )
     assert _job_count(conn) == 1
+
+
+def test_data_watch_auto_detects_exact_cached_caption_without_using_other_posts(conn):
+    conn.execute(
+        "UPDATE vkpi_kol_pool SET raw_platform_data=? WHERE id=1",
+        (json.dumps({
+            "profile": {
+                "raw": {
+                    "videos": [
+                        {
+                            "id": {"videoId": "cccDEF12345"},
+                            "snippet": {
+                                "title": "random vlog untitled",
+                                "description": "Field test made with the EPIC 2035 cinema lens.",
+                            },
+                        },
+                        {
+                            "id": {"videoId": "notTheTarget99"},
+                            "snippet": {"description": "Viltrox AF 85mm F1.8 FE on another video."},
+                        },
+                        {
+                            "id": {"videoId": "cccDEF12345"},
+                            "url": "https://www.youtube.com/watch?v=otherVideo99",
+                            "caption": "Conflicting ids must not leak AF 35mm F1.8 into the target.",
+                        },
+                    ]
+                }
+            }
+        }),),
+    )
+
+    result = video_data_watch.data_watch(
+        conn, kol_pool_id=1, evidence_id=103, staff=STAFF_A
+    )
+
+    assert result["status"] == "tracking"
+    assert result["skus"] == ["SKU-C"]
+    assert result["sku_provenance"] == {
+        "relation_type": "detected",
+        "source": "cached_content_alias_v1",
+        "confidence": 0.55,
+        "requires_human_confirmation": True,
+    }
+    assert _link_detail(conn, 103) == (
+        "SKU-C", "detected", "cached_content_alias_v1", 0.55,
+    )
+    assert _job_count(conn) == 1
+
+
+def test_data_watch_cached_content_and_title_conflict_requires_employee_choice(conn):
+    conn.execute(
+        "UPDATE vkpi_kol_pool SET raw_platform_data=? WHERE id=2",
+        (json.dumps({
+            "videos": [{
+                "url": "https://youtu.be/bbbDEF12345?t=9",
+                "caption": "A field comparison featuring the AF 35mm F1.8.",
+            }]
+        }),),
+    )
+
+    result = video_data_watch.data_watch(
+        conn, kol_pool_id=2, evidence_id=102, staff=STAFF_A
+    )
+
+    assert result["status"] == "sku_required"
+    assert [item["sku_code"] for item in result["candidates"]] == ["SKU-B", "SKU-A"]
+    assert [item["match_source"] for item in result["candidates"]] == [
+        "cached_content_alias_v1", "title_alias_v1",
+    ]
+    assert _link_rows(conn, 102) == []
+    assert _job_count(conn) == 0
+
+
+def test_data_watch_same_sku_in_cached_content_and_title_keeps_stronger_title_source(conn):
+    conn.execute(
+        "UPDATE vkpi_kol_pool SET raw_platform_data=? WHERE id=2",
+        (json.dumps({
+            "videos": [{
+                "url": "https://youtu.be/bbbDEF12345?t=9",
+                "caption": "Also filmed with the Viltrox AF 85mm F1.8 FE.",
+            }]
+        }),),
+    )
+
+    result = video_data_watch.data_watch(
+        conn, kol_pool_id=2, evidence_id=102, staff=STAFF_A
+    )
+
+    assert result["status"] == "tracking"
+    assert result["skus"] == ["SKU-A"]
+    assert result["sku_provenance"] == {
+        "relation_type": "detected",
+        "source": "title_alias_v1",
+        "confidence": 0.6,
+        "requires_human_confirmation": True,
+    }
+
+
+def test_cached_content_text_has_one_total_character_budget(conn):
+    conn.execute(
+        "UPDATE vkpi_kol_pool SET raw_platform_data=? WHERE id=1",
+        (json.dumps({
+            "videos": [
+                {"video_id": "cccDEF12345", "description": str(index) * 8_000}
+                for index in range(1, 4)
+            ]
+        }),),
+    )
+
+    text = video_data_watch._cached_content_text(
+        conn,
+        {"kol_pool_id": 1, "content_url": "https://youtu.be/cccDEF12345"},
+    )
+
+    assert len(text) == video_data_watch.MAX_CACHED_CONTENT_CHARS
 
 
 def test_data_watch_employee_confirms_one_detected_sku_without_erasing_detection(conn):

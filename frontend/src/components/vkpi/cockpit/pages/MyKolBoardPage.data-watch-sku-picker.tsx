@@ -140,10 +140,14 @@ export function DataWatchSkuPicker({
       className="mb-2 rounded-[10px] border border-accent bg-accent-soft px-3 py-2.5"
       role="group"
       aria-label="为数据关注选择 SKU"
+      aria-describedby={`${datalistId}-state`}
       data-vkpi-data-watch-sku-picker={evidenceId}
     >
-      <div className="text-[12px] font-semibold text-ink">选择这条视频对应的单品</div>
+      <div className="text-[12px] font-semibold text-ink">第 2 步 · 确认这条视频对应的单品</div>
       <div className="mt-0.5 truncate text-[11px] text-muted" title={title}>{title}</div>
+      <div id={`${datalistId}-state`} className="mt-1 text-[10.5px] leading-4 text-accent">
+        当前还没有进入单品播放；确认成功后会自动打开对应 SKU，并定位到这条视频。
+      </div>
       <div className="mt-2 grid gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
         {candidates.map((row) => {
           const checked = selected.has(row.sku);

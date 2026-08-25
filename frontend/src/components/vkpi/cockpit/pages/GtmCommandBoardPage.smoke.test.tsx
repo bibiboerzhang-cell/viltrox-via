@@ -225,6 +225,7 @@ describe("GtmCommandBoardPage smoke(页壳 + KPI 带真数 + 默认八行 + 生�
     expect(screen.getByText("GTM Command")).toBeTruthy();
     expect(screen.getByText("编辑布局")).toBeTruthy();
     expect(screen.getByText("生成作战预览")).toBeTruthy();
+    expect(screen.getByText("短时缓存")).toBeTruthy();
 
     // 【总脑纯读红线】marketing-brain/daily 与 market/trends 全程零调用
     const paths = calledPaths();
@@ -232,6 +233,41 @@ describe("GtmCommandBoardPage smoke(页壳 + KPI 带真数 + 默认八行 + 生�
     expect(paths.some((pp) => pp.includes("market/trends"))).toBe(false);
     expect(paths.some((pp) => pp.startsWith("/api/admin/vkpi/market-brain/summary"))).toBe(true);
     expect(paths.some((pp) => pp.startsWith("/api/admin/vkpi/actions/inbox"))).toBe(true);
+  });
+
+  it("刷新数据会明确绕过 summary 与当前 SKU 预览缓存", async () => {
+    renderBoard();
+    const buttons = await screen.findAllByText("生成路线");
+    fireEvent.click(buttons[0]);
+    expect(await screen.findByText("决策 GO")).toBeTruthy();
+
+    fireEvent.click(screen.getByText("刷新数据"));
+    await waitFor(() => {
+      const paths = calledPaths();
+      expect(paths.some((path) => path === "/api/admin/vkpi/market-brain/summary?refresh=true")).toBe(true);
+      expect(
+        paths.some(
+          (path) => path.startsWith("/api/admin/vkpi/market-brain/gtm-plan/preview?") && path.includes("refresh=true"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("刷新返回 error 时保留上次可信 summary，不伪装成空数据", async () => {
+    renderBoard();
+    expect(await screen.findByText("85mm 人像话题热度上行")).toBeTruthy();
+
+    routeApi({
+      summary: {
+        status: "error",
+        reason: "manual refresh is unavailable while cache mutations are fenced",
+      },
+    });
+    fireEvent.click(screen.getByText("刷新数据"));
+
+    expect(await screen.findByText(/本次刷新未完成，已保留上次可信数据/)).toBeTruthy();
+    expect(screen.getByText("85mm 人像话题热度上行")).toBeTruthy();
+    expect(screen.queryByText("market-brain/summary 读取失败")).toBeNull();
   });
 
   it("默认八行:全局态真身(路线 Top 机会/信号/队列/健康/北极星/复盘)+ 预览模块诚实 pending;palette 不进默认", async () => {

@@ -7,6 +7,7 @@ import {
   cleanText,
   display,
   numberLabel,
+  terminalSessionStatus,
   type Row,
 } from "./SmartKolInputPanel.helpers";
 import {
@@ -19,6 +20,7 @@ export function advanceStatusLabel(value: unknown): string {
   const status = cleanText(value).toLowerCase();
   if (["ready", "done"].includes(status)) return "已完成";
   if (status === "partial") return "部分完成";
+  if (["cancelled", "canceled"].includes(status)) return "已取消";
   if (["failed", "blocked"].includes(status)) return "未完成";
   if (status === "running") return "查找中";
   return "排队中";
@@ -70,10 +72,14 @@ export function sessionStatusBanner(
   const contract = searchProgressContractFromSession(session);
   const job = asRecord(summary.smart_search_profile_advance_job);
   const storedRaw = cleanText(advanceStatus || job.advance_status || job.status || session?.status).toLowerCase();
+  const sessionRaw = cleanText(session?.status).toLowerCase();
   // When available, the read-time contract owns the user-facing state.  The
-  // stored session/job value remains audit evidence but can legitimately lag
-  // downstream item closure.
-  const raw = cleanText(contract?.state || storedRaw).toLowerCase();
+  // stored job value remains audit evidence but can legitimately lag downstream
+  // item closure. For legacy sessions without the versioned contract, an explicit
+  // terminal session status still outranks a stale nested job status.
+  const raw = cleanText(
+    contract?.state || (terminalSessionStatus(sessionRaw) ? sessionRaw : storedRaw),
+  ).toLowerCase();
   const jobError = cleanText(job.error);
   const ready = Number(counts.ready ?? 0);
   const failed = Number(counts.failed ?? 0) + Number(counts.errors ?? 0);
@@ -85,6 +91,16 @@ export function sessionStatusBanner(
       tone: "info",
       label: "等待 Worker 恢复",
       note: "后台任务已被 Worker 状态阻塞；Worker 恢复后会继续，当前不会把排队或运行项算作完成。",
+    };
+  }
+  if (["cancelled", "canceled"].includes(raw)) {
+    const tally = sessionTallyText(session);
+    return {
+      tone: "warn",
+      label: "本轮已取消",
+      note: tally
+        ? `${tally};已返回的结果会保留，后台不会继续运行。`
+        : "后台任务已取消，没有仍在运行的阶段；可调整条件后重新发起。",
     };
   }
   if (["failed", "blocked"].includes(raw) && ready <= 0) {
@@ -201,6 +217,7 @@ export function historyStatusMeta(value: unknown): { label: string; cls: string;
   const label = advanceStatusLabel(value);
   if (label === "已完成") return { label, cls: "text-emerald-300/85", dot: "#34d399" };
   if (label === "部分完成") return { label, cls: "text-amber-300/85", dot: "#fbbf24" };
+  if (label === "已取消") return { label, cls: "text-amber-300/85", dot: "#fbbf24" };
   if (label === "查找中") return { label, cls: "text-amber-300/85", dot: "#fbbf24" };
   if (label === "未完成") return { label, cls: "text-rose-300/85", dot: "#fb7185" };
   return { label, cls: "text-slate-500", dot: "#64748b" };

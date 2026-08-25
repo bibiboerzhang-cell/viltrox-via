@@ -80,7 +80,7 @@ export function dataWatchDetectedPendingText(resp: VkpiDataWatchResponse): strin
   const skus = [...new Set((resp.skus || []).map((sku) => String(sku || "").trim()).filter(Boolean))];
   const refresh = String(resp.refresh || "");
   const queue = refresh === "already_queued" ? "指标刷新已在队列中" : refresh === "queued" ? "指标刷新已排队" : "指标刷新状态待确认";
-  return `系统检测到 SKU ${skus.length ? skus.join(" / ") : "候选"}，已保留为『系统检测·待确认』；${queue}，不代表抓取完成。尚未登记为员工确认的单品关注，请在当前 SKU 确认入口核对确认。`;
+  return `系统检测到 SKU ${skus.length ? skus.join(" / ") : "候选"}，已保留为『系统检测·待确认』；${queue}，不代表抓取完成。尚未登记为员工确认的单品关注；已定位到当前 SKU 确认区，完成第 2 步后才会进入『单品播放数据』。`;
 }
 
 function detectedConfirmationCandidates(resp: VkpiDataWatchResponse): VkpiDataWatchSkuCandidate[] {

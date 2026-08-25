@@ -485,8 +485,14 @@ export async function listSkuOptions(token: string, query: string, limit = 30): 
   }));
 }
 
-export async function getMarketBrainSummary(token: string): Promise<MarketBrainSummary> {
-  const res = await apiFetch<Row>("/api/admin/vkpi/market-brain/summary", { timeoutMs: 15000 }, token);
+export async function getMarketBrainSummary(
+  token: string,
+  opts: { refresh?: boolean } = {},
+): Promise<MarketBrainSummary> {
+  const path = opts.refresh
+    ? "/api/admin/vkpi/market-brain/summary?refresh=true"
+    : "/api/admin/vkpi/market-brain/summary";
+  const res = await apiFetch<Row>(path, { timeoutMs: 15000 }, token);
   return normalizeMarketBrainSummary(res);
 }
 
@@ -496,6 +502,7 @@ export interface GtmPlanPreviewParams {
   budgetUsd?: number;
   goal?: GtmGoal;
   windowDays?: number;
+  refresh?: boolean;
 }
 
 export async function getGtmPlanPreview(token: string, opts: GtmPlanPreviewParams): Promise<GtmPlanPreview> {
@@ -504,6 +511,7 @@ export async function getGtmPlanPreview(token: string, opts: GtmPlanPreviewParam
   params.set("budget_usd", String(opts.budgetUsd && opts.budgetUsd > 0 ? opts.budgetUsd : 3000));
   if (opts.goal) params.set("goal", opts.goal);
   params.set("window_days", String(opts.windowDays && opts.windowDays > 0 ? opts.windowDays : 30));
+  if (opts.refresh) params.set("refresh", "true");
   const res = await apiFetch<Row>(
     `/api/admin/vkpi/market-brain/gtm-plan/preview?${params.toString()}`,
     { timeoutMs: 60000 },

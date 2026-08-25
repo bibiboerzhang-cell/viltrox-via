@@ -8,6 +8,7 @@ from app.domains.kol.search_sessions_schema import PENDING_ENRICHMENT_STATUSES
 from app.domains.kol.search_sessions_serde import _int_or_none, _text
 
 logger = get_logger(__name__)
+ENRICHMENT_JOB_STATUS_QUERY_BATCH = 1000
 
 
 def _enrichment_preview_status(item: dict[str, Any], key: str, *, ready: bool) -> str:
@@ -93,16 +94,26 @@ def _refresh_enrichment_queue_states(conn: Any, items: list[dict[str, Any]]) -> 
             queue_targets.append((advance, direct_job_id, "profile"))
     if not job_ids:
         return
-    placeholders = ",".join(["?"] * len(job_ids))
+    ordered_job_ids = sorted(job_ids)
+    job_statuses: dict[int, str] = {}
     try:
-        rows = conn.execute(
-            f"SELECT id, status FROM apify_jobs WHERE id IN ({placeholders})",
-            tuple(sorted(job_ids)),
-        ).fetchall()
+        for offset in range(0, len(ordered_job_ids), ENRICHMENT_JOB_STATUS_QUERY_BATCH):
+            batch = ordered_job_ids[
+                offset : offset + ENRICHMENT_JOB_STATUS_QUERY_BATCH
+            ]
+            placeholders = ",".join(["?"] * len(batch))
+            rows = conn.execute(
+                f"SELECT id, status FROM apify_jobs WHERE id IN ({placeholders})",
+                tuple(batch),
+            ).fetchall()
+            for row in rows:
+                raw = dict(row)
+                job_id = _int_or_none(raw.get("id"))
+                if job_id and job_id in job_ids:
+                    job_statuses[job_id] = _text(raw.get("status")).lower()
     except Exception:
         logger.warning("search_sessions.enrichment_job_lookup_failed", exc_info=True)
         return
-    job_statuses = {int(dict(row)["id"]): _text(dict(row).get("status")).lower() for row in rows}
     seen_targets: set[tuple[int, int, str]] = set()
     for target, job_id, target_kind in queue_targets:
         target_key = (id(target), job_id, target_kind)

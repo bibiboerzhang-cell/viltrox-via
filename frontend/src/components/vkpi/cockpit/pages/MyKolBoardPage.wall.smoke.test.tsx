@@ -351,7 +351,7 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     expect(screen.queryByRole("button", { name: /查询当前范围全量/ })).toBeNull();
   });
 
-  it("全部/单 KOL 与滚动 7/15/30 天可组合,参数在服务端下推", async () => {
+  it("全部/单 KOL 与全部/7/15/30 天八种组合均可达,参数在服务端下推", async () => {
     routeApi({ recentPage: (url) => {
       const days = Number(url.searchParams.get("days") || 0);
       const poolId = Number(url.searchParams.get("kol_pool_id") || 0);
@@ -362,15 +362,27 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     } });
     renderWall();
     expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "滚动近 7 天" }));
-    expect(await screen.findByText("ALL d7")).toBeTruthy();
+    for (const day of [7, 15, 30] as const) {
+      fireEvent.click(screen.getByRole("button", { name: `滚动近 ${day} 天` }));
+      expect(await screen.findByText(`ALL d${day}`)).toBeTruthy();
+    }
     fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "101" } });
-    fireEvent.click(screen.getByRole("button", { name: "滚动近 15 天" }));
-    expect(await screen.findByText("KOL 101 d15")).toBeTruthy();
+    expect(await screen.findByText("KOL 101 d30")).toBeTruthy();
+    for (const day of [15, 7] as const) {
+      fireEvent.click(screen.getByRole("button", { name: `滚动近 ${day} 天` }));
+      expect(await screen.findByText(`KOL 101 d${day}`)).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole("button", { name: "全部时间" }));
+    expect(await screen.findByText("KOL 101 d0")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("按 KOL 筛选"), { target: { value: "0" } });
+    expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
     const calls = apiFetchMock.mock.calls.map((call) => String(call[0]));
-    expect(calls.some((path) => path.includes("recent-videos?days=7") && !path.includes("kol_pool_id"))).toBe(true);
-    expect(calls.some((path) => path.includes("recent-videos?days=15") && path.includes("kol_pool_id=101"))).toBe(true);
-    expect(screen.getByRole("button", { name: "滚动近 30 天" })).toHaveAttribute("aria-pressed", "false");
+    for (const day of [7, 15, 30]) {
+      expect(calls.some((path) => path.includes(`recent-videos?days=${day}`) && !path.includes("kol_pool_id"))).toBe(true);
+      expect(calls.some((path) => path.includes(`recent-videos?days=${day}`) && path.includes("kol_pool_id=101"))).toBe(true);
+    }
+    expect(calls.some((path) => path.includes("recent-videos?days=0") && path.includes("kol_pool_id=101"))).toBe(true);
+    expect(screen.getByRole("button", { name: "全部时间" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("切换有限时间窗后等新首页返回，再自动沿游标查到真末页", async () => {
@@ -485,12 +497,19 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
   });
 
   it("sku_required 在墙内显式选 SKU 后二次提交,不默认猜产品", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
     DATA_WATCH_REQUIRE_SKU = true;
     renderWall();
     expect(await screen.findByText("Wall Coop Film")).toBeTruthy();
     const card = screen.getByText("Wall Coop Film").closest("[data-vkpi-wall-card]") as HTMLElement;
     fireEvent.click(within(card).getByRole("button", { name: "数据关注" }));
-    expect(await screen.findByRole("group", { name: "为数据关注选择 SKU" })).toBeTruthy();
+    const picker = await screen.findByRole("group", { name: "为数据关注选择 SKU" });
+    await waitFor(() => expect(scrollIntoView.mock.instances).toContain(picker));
+    expect(within(picker).getByText(/第 2 步/)).toBeTruthy();
+    expect(within(picker).getByText(/确认成功后会自动打开对应 SKU/)).toBeTruthy();
+    expect(within(picker).getAllByRole("checkbox")[0]).toHaveFocus();
+    expect(screen.getByRole("status")).toHaveTextContent(/第 1 步已完成.*完成第 2 步.*单品播放数据/);
     expect(DATA_WATCH_CALLS).toHaveLength(1);
     expect(DATA_WATCH_CALLS[0].body).toEqual({});
     expect(screen.getByRole("button", { name: "确认关联并关注" })).toBeDisabled();
@@ -540,7 +559,7 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
       await slowA.promise;
     });
     expect(screen.getByRole("group", { name: "为数据关注选择 SKU" })).toHaveAttribute("data-vkpi-data-watch-sku-picker", "9201");
-    expect(screen.getByText(/未能自动识别产品/)).toBeTruthy();
+    expect(screen.getByText(/第 1 步已完成.*完成第 2 步.*单品播放数据/)).toBeTruthy();
     expect(changed).not.toHaveBeenCalled();
     await waitFor(() => expect(within(cardA).getByRole("button", { name: "数据关注" })).toBeEnabled());
     window.removeEventListener("vkpi:sku-play-changed", changed);

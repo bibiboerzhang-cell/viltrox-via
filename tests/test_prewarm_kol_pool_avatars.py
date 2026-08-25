@@ -43,12 +43,22 @@ class FakeConnection:
 
 
 class FakeSessionConnection:
-    def __init__(self, rows: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        rows: list[dict[str, Any]],
+        pool_rows: list[dict[str, Any]] | None = None,
+    ) -> None:
         self.rows = rows
+        self.pool_rows = list(pool_rows or [])
         self.calls: list[tuple[str, tuple[Any, ...]]] = []
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> FakeResult:
         self.calls.append((sql, tuple(params)))
+        if "FROM vkpi_kol_pool" in sql:
+            selected = {int(value) for value in params}
+            return FakeResult([
+                row for row in self.pool_rows if int(row["id"]) in selected
+            ])
         session_ids = {int(value) for value in params[:-1]}
         limit = int(params[-1])
         creator_types = {
@@ -66,9 +76,19 @@ class FakeSessionConnection:
         return FakeResult(selected[:limit])
 
 
-def _row(pool_id: int, avatar_url: str) -> dict[str, Any]:
+def _row(
+    pool_id: int,
+    avatar_url: str,
+    *,
+    platform: str = "",
+    handle: str = "",
+    profile_url: str = "",
+) -> dict[str, Any]:
     return {
         "id": pool_id,
+        "platform": platform,
+        "handle": handle,
+        "profile_url": profile_url,
         "avatar_url": avatar_url,
         "raw_platform_data": {},
     }
@@ -80,11 +100,15 @@ def _session_row(
     *,
     session_id: int = 1143,
     item_type: str = "new_creator",
+    kol_pool_id: int | None = None,
+    source_url: str = "",
 ) -> dict[str, Any]:
     return {
         "id": row_id,
         "session_id": session_id,
         "item_type": item_type,
+        "kol_pool_id": kol_pool_id,
+        "source_url": source_url,
         "payload_json": payload if isinstance(payload, str) else json.dumps(payload),
     }
 
@@ -290,7 +314,7 @@ def test_session_dry_run_is_explicit_bounded_aggregate_only_and_provider_free(
 
     assert len(conn.calls) == 1
     sql, params = conn.calls[0]
-    assert "SELECT session_id, item_type, payload_json" in " ".join(sql.split())
+    assert "SELECT session_id, item_type, kol_pool_id, source_url, payload_json" in " ".join(sql.split())
     assert "SELECT *" not in sql.upper()
     assert "raw_platform_data" not in sql
     assert "name" not in sql.lower()
@@ -335,6 +359,164 @@ def test_session_execute_caches_only_allowlisted_live_external_avatars() -> None
     assert summary["cached_urls"] == 2
     assert summary["skipped_urls"] == 1
     assert summary["failed_urls"] == 0
+
+
+def test_session_mode_includes_identity_matched_linked_pool_avatar_for_dead_snapshot(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    expired = "https://scontent.cdninstagram.com/avatar.jpg?oe=00000001"
+    linked_secret = "https://scontent.cdninstagram.com/linked.jpg?oe=FFFFFFFF&token=linked-secret"
+    conn = FakeSessionConnection(
+        [
+            _session_row(1, {}, kol_pool_id=31),
+            _session_row(2, {"avatar_url": expired}, kol_pool_id=32),
+            _session_row(3, {"avatar_url": STABLE_SECRET_URL}, kol_pool_id=33),
+        ],
+        pool_rows=[
+            _row(31, linked_secret),
+            _row(32, LIVE_SECRET_URL),
+            _row(33, "https://yt3.ggpht.com/not-needed"),
+        ],
+    )
+    called: list[str] = []
+
+    summary = prewarm.run_sessions(
+        conn,
+        session_ids=[1143],
+        execute=False,
+        cache_image_fn=lambda url: called.append(url) or {"status": "cached"},
+        fence_active_fn=lambda: False,
+    )
+    prewarm.out_json(summary, ensure_ascii=False, sort_keys=True)
+    rendered = capsys.readouterr().out
+
+    assert summary["linked_pool_ids"] == 2
+    assert summary["linked_pool_rows_found"] == 2
+    assert summary["linked_pool_identity_conflicts"] == 0
+    assert summary["linked_pool_eligible_urls"] == 2
+    assert summary["eligible_urls"] == 3
+    assert summary["skipped_urls"] == 1
+    assert called == []
+    assert len(conn.calls) == 2
+    assert conn.calls[1][1] == (31, 32)
+    assert "raw_platform_data" not in conn.calls[1][0]
+    assert json.loads(rendered) == summary
+    assert "linked-secret" not in rendered
+    assert "must-never-leak" not in rendered
+    assert "31" not in rendered
+    assert "32" not in rendered
+
+
+def test_session_execute_caches_linked_pool_avatar_without_business_write() -> None:
+    conn = FakeSessionConnection(
+        [_session_row(1, {}, kol_pool_id=41)],
+        pool_rows=[_row(41, LIVE_SECRET_URL)],
+    )
+    called: list[str] = []
+
+    summary = prewarm.run_sessions(
+        conn,
+        session_ids=[1143],
+        execute=True,
+        cache_image_fn=lambda url: called.append(url) or {"status": "cached"},
+        fence_active_fn=lambda: False,
+    )
+
+    assert called == [LIVE_SECRET_URL]
+    assert summary["linked_pool_eligible_urls"] == 1
+    assert summary["eligible_urls"] == 1
+    assert summary["cached_urls"] == 1
+    assert summary["business_db_writes"] == 0
+
+
+def test_session_linked_pool_avatar_requires_creator_identity_agreement() -> None:
+    first = "https://www.youtube.com/@first"
+    second = "https://www.youtube.com/@second"
+    conn = FakeSessionConnection(
+        [
+            _session_row(
+                1,
+                {"platform": "youtube", "profile_url": first},
+                kol_pool_id=51,
+                source_url=first,
+            )
+        ],
+        pool_rows=[
+            _row(
+                51,
+                STABLE_SECRET_URL,
+                platform="youtube",
+                handle="second",
+                profile_url=second,
+            )
+        ],
+    )
+    called: list[str] = []
+
+    summary = prewarm.run_sessions(
+        conn,
+        session_ids=[1143],
+        execute=True,
+        cache_image_fn=lambda url: called.append(url) or {"status": "cached"},
+        fence_active_fn=lambda: False,
+    )
+
+    assert summary["linked_pool_ids"] == 1
+    assert summary["linked_pool_identity_conflicts"] == 1
+    assert summary["linked_pool_eligible_urls"] == 0
+    assert summary["eligible_urls"] == 0
+    assert called == []
+
+
+def test_session_linked_pool_id_cap_blocks_before_pool_query_or_cache() -> None:
+    rows = [
+        _session_row(index, {}, kol_pool_id=index)
+        for index in range(1, prewarm.MAX_SESSION_LINKED_POOL_IDS + 2)
+    ]
+    conn = FakeSessionConnection(rows)
+    called: list[str] = []
+
+    summary = prewarm.run_sessions(
+        conn,
+        session_ids=[1143],
+        execute=True,
+        cache_image_fn=lambda url: called.append(url) or {"status": "cached"},
+        fence_active_fn=lambda: False,
+    )
+
+    assert summary["status"] == "blocked"
+    assert summary["reason"] == "linked_pool_cap_exceeded"
+    assert summary["linked_pool_ids"] == prewarm.MAX_SESSION_LINKED_POOL_IDS + 1
+    assert summary["linked_pool_cap_exceeded"] is True
+    assert summary["avatar_scan_complete"] is False
+    assert len(conn.calls) == 1
+    assert called == []
+
+
+def test_session_combined_url_cap_includes_linked_pool_fallback() -> None:
+    rows = [
+        _session_row(index, {"avatar_url": f"https://yt3.ggpht.com/profile-{index}"})
+        for index in range(1, prewarm.MAX_SESSION_AVATAR_URLS + 1)
+    ]
+    rows.append(_session_row(100, {}, kol_pool_id=61))
+    conn = FakeSessionConnection(rows, pool_rows=[_row(61, LIVE_SECRET_URL)])
+    called: list[str] = []
+
+    summary = prewarm.run_sessions(
+        conn,
+        session_ids=[1143],
+        execute=True,
+        cache_image_fn=lambda url: called.append(url) or {"status": "cached"},
+        fence_active_fn=lambda: False,
+    )
+
+    assert summary["status"] == "blocked"
+    assert summary["reason"] == "avatar_url_cap_exceeded"
+    assert summary["unique_avatar_urls"] == prewarm.MAX_SESSION_AVATAR_URLS + 1
+    assert summary["url_cap_exceeded"] is True
+    assert summary["avatar_scan_complete"] is False
+    assert len(conn.calls) == 2
+    assert called == []
 
 
 def test_session_execute_fence_refuses_before_query_or_cache() -> None:

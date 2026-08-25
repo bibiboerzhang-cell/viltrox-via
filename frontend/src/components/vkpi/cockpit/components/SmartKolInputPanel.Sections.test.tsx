@@ -177,7 +177,7 @@ describe("SmartKolInputPanel search quality surfaces", () => {
       id: 1144,
       query_text: "requested stages done",
       query_type: "text_recall",
-      status: "partial",
+      status: "running",
       effective_status: "ready",
       item_count: 30,
       progress_contract: {
@@ -210,5 +210,64 @@ describe("SmartKolInputPanel search quality surfaces", () => {
     fireEvent.click(screen.getByText("历史记录"));
     expect(screen.getByText("无结果，已结束")).toBeTruthy();
     expect(screen.getByText("已请求阶段完成")).toBeTruthy();
+    expect(screen.getByLabelText("移除历史：requested stages done")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "清理已完成" })).toBeTruthy();
+  });
+
+  it("keeps raw-running effective-terminal history read-only until the durable row closes", () => {
+    render(
+      <HistoryStrip
+        items={[{
+          id: 1144,
+          query_text: "requested stages done",
+          query_type: "text_recall",
+          status: "running",
+          effective_status: "ready",
+          progress_contract: {
+            schema: "kol_search_progress_v1",
+            state: "ready",
+            requested_units: 56,
+            successful_units: 56,
+            terminal_units: 56,
+            requested_tasks_terminal: true,
+            stages: {},
+            worker: { observed: true, state: "online", online: true },
+          },
+        }]}
+        archivedItems={[]}
+        loading={false}
+        onOpen={() => undefined}
+        onArchive={() => undefined}
+        onRestore={() => undefined}
+        onArchiveAll={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("历史记录"));
+    expect(screen.getByText("已请求阶段完成")).toBeTruthy();
+    expect(screen.getByLabelText("移除历史：requested stages done")).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "清理已完成" })).toBeNull();
+  });
+
+  it("treats both cancellation spellings as terminal history instead of queued", () => {
+    render(
+      <HistoryStrip
+        items={[
+          { id: 1145, query_text: "cancelled search", query_type: "text_recall", status: "cancelled" },
+          { id: 1146, query_text: "canceled search", query_type: "text_recall", status: "canceled" },
+        ]}
+        archivedItems={[]}
+        loading={false}
+        onOpen={() => undefined}
+        onArchive={() => undefined}
+        onRestore={() => undefined}
+        onArchiveAll={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByText("历史记录"));
+    expect(screen.getAllByText("已取消")).toHaveLength(2);
+    expect(screen.getByLabelText("移除历史：cancelled search")).toBeEnabled();
+    expect(screen.getByLabelText("移除历史：canceled search")).toBeEnabled();
   });
 });

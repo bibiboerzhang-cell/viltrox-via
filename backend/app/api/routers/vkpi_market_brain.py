@@ -19,6 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from app.api.dependencies.perms import require_tab
 from app.api.dependencies.gtm_scope import legacy_gtm_scope_guard
+from app.core.config import VKPI_GTM_READ_CACHE_TTL_SEC
 from app.core.logging import get_logger
 from app.domains.market_brain.read_cache import (
     cache_contract_version,
@@ -30,7 +31,7 @@ from app.services.cache import cache_get_or_build
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-market-brain"])
-_GTM_READ_CACHE_TTL_SEC = 30
+_GTM_READ_CACHE_TTL_SEC = VKPI_GTM_READ_CACHE_TTL_SEC
 
 
 def _canonical_preview_request(
@@ -127,10 +128,11 @@ def get_gtm_plan_preview(
     budget_usd: float = Query(3000, gt=0, le=1_000_000, description="预算(USD),默认 3000"),
     goal: str = Query("exposure", description="exposure|conversion|content|channel"),
     window_days: int = Query(30, ge=7, le=90, description="预判窗口天数,默认 30"),
+    refresh: bool = False,
     staff=Depends(require_tab("vkpi", "read")),
     response: Response = None,
 ) -> dict:
-    """GTM Plan 纯读预览:11 段建议 + meta(零写库零 LLM 零采集,同输入同输出)。"""
+    """GTM Plan 纯读预览；refresh=true 时绕过短时缓存重新聚合。"""
     from app.domains.market_brain import gtm_plan_preview
 
     try:
@@ -172,6 +174,7 @@ def get_gtm_plan_preview(
             ttl=_GTM_READ_CACHE_TTL_SEC,
             cache_if=cacheable_payload,
             observe=gtm_cache_observer("plan_preview", response=response),
+            force_refresh=refresh,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

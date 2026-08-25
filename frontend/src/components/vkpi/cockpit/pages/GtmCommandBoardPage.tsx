@@ -167,9 +167,14 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleK
     let alive = true;
     setSummaryLoading(true);
     setSummaryError("");
-    getMarketBrainSummary(apiToken)
+    getMarketBrainSummary(apiToken, { refresh: reloadTick > 0 })
       .then((res) => {
-        if (alive) setSummary(res);
+        if (!alive) return;
+        if (res.status === "error") {
+          setSummaryError(res.reason || "全局摘要刷新未完成");
+          return;
+        }
+        setSummary(res);
       })
       .catch((err: unknown) => {
         const detail = (err as { detail?: unknown; message?: unknown }) || {};
@@ -206,7 +211,7 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleK
   }, [apiToken, query]);
 
   const loadPreview = React.useCallback(
-    (sku: string) => {
+    (sku: string, refresh = false) => {
       if (!apiToken || !sku) return;
       setSelectedSku(sku);
       setDropdownOpen(false);
@@ -224,6 +229,7 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleK
         budgetUsd: Number.isFinite(budget) && budget > 0 ? budget : 3000,
         goal,
         windowDays,
+        refresh,
       })
         .then((res) => setPlan(res))
         .catch((err: unknown) => {
@@ -323,7 +329,7 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleK
   const summaryGate = (): React.ReactNode | null => {
     if (!apiToken) return noTokenCard;
     if (summaryLoading && !summary) return <LoadingLine text="全局聚合读取中…" />;
-    if (summaryError) return <ErrorCard title="market-brain/summary 读取失败" text={summaryError} />;
+    if (summaryError && !summary) return <ErrorCard title="market-brain/summary 读取失败" text={summaryError} />;
     if (!summary) return <LoadingLine text="全局聚合读取中…" />;
     if (summary.status === "scope_unavailable") {
       return (
@@ -532,7 +538,7 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleK
 
   return (
     <div className="p-4 md:px-[22px] md:py-[15px]">
-      {/* pagehead(demo 范式):标题 + SKU 徽 + 实时辉光点 + 刷新 + 编辑布局 */}
+      {/* pagehead(demo 范式):标题 + SKU 徽 + 缓存口径 + 真刷新 + 编辑布局 */}
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="text-[18px] font-[680] tracking-[-0.02em] text-ink">GTM Command</span>
@@ -542,14 +548,15 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleK
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <span className="mr-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted">
             <span className="h-[5px] w-[5px] rounded-full bg-good" style={{ boxShadow: "0 0 var(--ds-glow-radius, 0px) var(--ds-good)" }} />
-            实时
+            短时缓存
           </span>
           <button
             type="button"
             onClick={() => {
               setReloadTick((tick) => tick + 1);
-              if (selectedSku) loadPreview(selectedSku);
+              if (selectedSku) loadPreview(selectedSku, true);
             }}
+            title="跳过常规短时缓存并重新聚合；5 秒内的重复刷新会合并"
             className="flex items-center gap-1.5 rounded-xl border border-line bg-card px-3 py-2 text-[12px] text-muted transition-colors hover:text-ink"
           >
             <RefreshCw size={13} />
@@ -646,7 +653,7 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleK
         <button
           type="button"
           onClick={() => {
-            if (selectedSku) loadPreview(selectedSku);
+            if (selectedSku) loadPreview(selectedSku, true);
           }}
           disabled={!selectedSku || planLoading}
           title={selectedSku ? `重新生成 ${selectedSku} 的作战预览` : "先在左侧选一个 SKU"}
@@ -666,6 +673,11 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleK
       </div>
 
       {!apiToken && <div className="mb-3">{noTokenCard}</div>}
+      {summaryError && summary ? (
+        <div className="mb-3 rounded-[10px] border border-warn bg-warn-soft px-3 py-2 text-[11.5px] text-warn" role="status">
+          本次刷新未完成，已保留上次可信数据：{summaryError}
+        </div>
+      ) : null}
       {planError && (
         <div className="mb-3">
           <ErrorCard title="gtm-plan/preview 生成失败" text={planError} />

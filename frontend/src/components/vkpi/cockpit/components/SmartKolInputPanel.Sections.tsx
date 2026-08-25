@@ -87,6 +87,17 @@ export { UrlSummary } from "./SmartKolInputPanel.UrlSummary";
 type State = "idle" | "loading" | "ready" | "executing" | "error";
 
 const EMPTY_CANDIDATE_TEXT = new Set(["", "-", "--", "unknown", "n/a", "na", "null", "none", "未知", "未提供"]);
+const ARCHIVABLE_RAW_SEARCH_SESSION_STATUSES = new Set([
+  "ready",
+  "partial",
+  "failed",
+  "cancelled",
+  "canceled",
+]);
+
+function searchHistoryArchiveEligible(item: VkpiKolSearchHistoryItem): boolean {
+  return ARCHIVABLE_RAW_SEARCH_SESSION_STATUSES.has(cleanText(item.status).toLowerCase());
+}
 
 function candidateText(value: unknown): string {
   const normalized = cleanText(value);
@@ -169,7 +180,9 @@ export function HistoryStrip({
           .includes(normalizedFilter);
       })
     : [];
-  const terminalCount = items.filter((item) => ["ready", "partial", "failed", "cancelled"].includes(String(item.status || ""))).length;
+  // 展示状态信任 progress_contract，但归档是写操作：在后端业务行
+  // 尚未收口前继续 fail-closed，避免只读投影与并发任务之间的竞态。
+  const terminalCount = items.filter(searchHistoryArchiveEligible).length;
   const busy = Boolean(actionBusy);
   return (
     <div className="mt-2 rounded-lg border border-white/[0.065] bg-black/15 px-2.5 py-2" data-testid="kol-search-history">
@@ -285,7 +298,7 @@ export function HistoryStrip({
             ? new Date(String(archiveTimeValue)).toLocaleString()
             : "";
           const resultCount = Math.max(0, Number(item.item_count) || 0);
-          const terminal = ["ready", "partial", "failed", "cancelled"].includes(String(item.status || ""));
+          const terminal = searchHistoryArchiveEligible(item);
           const actionKey = `${tab}-${sessionId || label}`;
           return (
             <div

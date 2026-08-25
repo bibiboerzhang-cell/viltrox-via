@@ -275,7 +275,7 @@ export function ContentWallModule({
       setReceipt: setTrackReceipt,
       onSkuRequired: (pendingVideo, candidates) => {
         setPendingSkuChoice({ video: pendingVideo, candidates, intent: "manual" });
-        setTrackReceipt({ text: "未能自动识别产品——请选择对应 SKU 后确认；未选择不会登记。", tone: "info" });
+        setTrackReceipt({ text: "第 1 步已完成：未能唯一识别产品，已定位到 SKU 选择区。请完成第 2 步；未确认不会建立单品关系，也不会进入『单品播放数据』。", tone: "info" });
       },
       onDetectedConfirmationRequired: (pendingVideo, candidates) => {
         setPendingSkuChoice({ video: pendingVideo, candidates, intent: candidates.length === 1 ? "confirm_detected" : "manual" });

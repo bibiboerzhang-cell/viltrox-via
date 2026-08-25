@@ -1,14 +1,15 @@
 """MY KOL 一键「数据关注」写边界(波 D·B 车道)。
 
 用户在视频卡上点一下「数据关注」= 关联产品 + 激活持续追踪 + 排一次数值刷新。
-SKU 解析四级优先:
+SKU 解析五级优先:
   1. 请求体 product_skus(手选,sku_source=manual)
   2. 该视频已有产品关联 vkpi_kol_video_product_links(sku_source=existing)
   3. 已有 final_v1 结构化深析派生证据 vkpi_kol_lens_evidence:只接受
      resolution=sku 且最新 ready cache 的目录命中，保留画面/字幕/口播来源;
      唯一命中才落 detected，多命中必须员工选择。
-  4. 保守自动识别:标题归一化(product_aliases.normalize_alias)后按 token 边界
-     唯一命中产品 SKU/型号/市场名(sku_source=auto);零命中或多命中 →
+  4. 与该 evidence 严格同视频身份的 Pool 已缓存 caption/description/snippet;
+  5. 保守自动识别:标题归一化(product_aliases.normalize_alias)后按 token 边界
+     唯一命中产品 SKU/型号/市场名(sku_source=auto);内容与标题冲突、零命中或多命中 →
      诚实返回 status=sku_required + 候选清单,绝不瞎猜落库。
 
 落地路径 100% 复用 video_tracking.queue_tracked_video(行级权限围栏 / SKU 校验 /
@@ -24,14 +25,27 @@ from typing import Any
 
 from app.domains.kol import video_tracking
 from app.domains.kol.pool_common import _table_columns
+from app.domains.kol.video_url_identity import (
+    VideoUrlIdentity,
+    VideoUrlIdentityError,
+    parse_supported_video_url,
+)
 
 
 MAX_CANDIDATES = 20
 MAX_PRODUCTS_SCANNED = 2000
+MAX_CACHED_CONTENT_ITEMS = 500
+MAX_CACHED_CONTENT_CHARS = 12_000
 # 与 sku_performance._aliases_for 同款保守闸:太短或纯字母短词的别名不参与匹配。
 MIN_ALIAS_LEN = 5
 MIN_ALIAS_LEN_NO_DIGIT = 10
 STRUCTURED_EVIDENCE_SOURCE = "final_v1_lens_evidence_v2"
+CACHED_CONTENT_SOURCE = "cached_content_alias_v1"
+TITLE_ALIAS_SOURCE = "title_alias_v1"
+MATCH_SOURCE_PRIORITY = {
+    CACHED_CONTENT_SOURCE: 1,
+    TITLE_ALIAS_SOURCE: 2,
+}
 STRUCTURED_EXPLICIT_MODALITIES = frozenset({"visual", "text", "voice"})
 DETECTED_CONFIRMATION_SOURCE = "human_confirmed_detected_v1"
 
@@ -90,6 +104,164 @@ def _json_list(value: Any) -> list[str]:
             return []
         return [_text(item) for item in parsed if _text(item)] if isinstance(parsed, list) else []
     return []
+
+
+def _json_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if not isinstance(value, (str, bytes, bytearray)) or not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _cached_post_items(raw: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Read a bounded set of already-cached post rows; never crawl or infer a profile."""
+
+    roots: list[dict[str, Any]] = [raw]
+    for key in ("profile", "raw"):
+        nested = raw.get(key)
+        if isinstance(nested, dict):
+            roots.append(nested)
+            nested_raw = nested.get("raw")
+            if isinstance(nested_raw, dict):
+                roots.append(nested_raw)
+    rows: list[tuple[str, dict[str, Any]]] = []
+    seen: set[int] = set()
+    for root in roots:
+        for collection in ("videos", "posts", "items", "latest_posts", "latestPosts"):
+            value = root.get(collection)
+            if isinstance(value, dict):
+                value = value.get("items") or value.get("results") or value.get("data") or []
+            if not isinstance(value, list):
+                continue
+            for item in value:
+                if not isinstance(item, dict) or id(item) in seen:
+                    continue
+                seen.add(id(item))
+                rows.append((collection, item))
+                if len(rows) >= MAX_CACHED_CONTENT_ITEMS:
+                    return rows
+    return rows
+
+
+def _candidate_video_urls(item: dict[str, Any]) -> list[str]:
+    urls: list[str] = []
+    for key in (
+        "content_url", "video_url", "videoUrl", "post_url", "postUrl", "url",
+        "webVideoUrl", "permalink", "link",
+    ):
+        value = _text(item.get(key))
+        if value and value not in urls:
+            urls.append(value)
+    return urls
+
+
+def _candidate_video_id(item: dict[str, Any], platform: str, collection: str) -> str:
+    raw_id: Any = None
+    if platform == "youtube":
+        raw_id = item.get("video_id") or item.get("videoId")
+        if not raw_id and isinstance(item.get("id"), dict):
+            raw_id = (item.get("id") or {}).get("videoId")
+        if not raw_id and collection == "videos" and "channel" not in _text(item.get("kind")).lower():
+            raw_id = item.get("id")
+    elif platform == "instagram":
+        raw_id = item.get("shortCode") or item.get("shortcode") or item.get("code") or item.get("post_uid")
+        if not raw_id and collection in {"videos", "posts", "latest_posts", "latestPosts"}:
+            raw_id = item.get("id")
+    elif platform == "tiktok":
+        raw_id = item.get("video_id") or item.get("videoId")
+        if not raw_id and collection in {"videos", "posts", "latest_posts", "latestPosts"}:
+            raw_id = item.get("id")
+    return _text(raw_id)
+
+
+def _cached_item_matches_video(
+    item: dict[str, Any],
+    *,
+    collection: str,
+    target: VideoUrlIdentity,
+) -> bool:
+    saw_supported_url = False
+    for candidate_url in _candidate_video_urls(item):
+        try:
+            candidate = parse_supported_video_url(candidate_url)
+        except VideoUrlIdentityError:
+            continue
+        saw_supported_url = True
+        if candidate.platform == target.platform and candidate.video_id == target.video_id:
+            return True
+    if saw_supported_url:
+        return False
+    return _candidate_video_id(item, target.platform, collection) == target.video_id
+
+
+def _cached_item_content(item: dict[str, Any]) -> str:
+    """Return caption/description/snippet prose only; title stays a separate provenance."""
+
+    snippet = item.get("snippet") if isinstance(item.get("snippet"), dict) else {}
+    localized = snippet.get("localized") if isinstance(snippet.get("localized"), dict) else {}
+    parts: list[str] = []
+    for value in (
+        item.get("caption"),
+        item.get("description"),
+        item.get("desc"),
+        item.get("text"),
+        snippet.get("description"),
+        localized.get("description"),
+    ):
+        text = _text(value)
+        if text and text not in parts:
+            parts.append(text)
+    return "\n".join(parts)[:MAX_CACHED_CONTENT_CHARS]
+
+
+def _cached_content_text(conn: Any, evidence: dict[str, Any]) -> str:
+    """Find prose for this exact cached video in its exact linked Pool row.
+
+    The evidence table intentionally has no description column.  This fallback is
+    read-only and identity-gated: a different post from the same creator can never
+    contribute product text to the clicked evidence.
+    """
+
+    if "raw_platform_data" not in _table_columns(conn, "vkpi_kol_pool"):
+        return ""
+    try:
+        target = parse_supported_video_url(evidence.get("content_url"))
+    except VideoUrlIdentityError:
+        return ""
+    row = conn.execute(
+        "SELECT platform, raw_platform_data FROM vkpi_kol_pool WHERE id=? LIMIT 1",
+        (_int(evidence.get("kol_pool_id")),),
+    ).fetchone()
+    if not row:
+        return ""
+    pool = dict(row)
+    pool_platform = _text(pool.get("platform")).lower()
+    if pool_platform and pool_platform != target.platform:
+        return ""
+    raw = _json_object(pool.get("raw_platform_data"))
+    matches: list[str] = []
+    used_chars = 0
+    for collection, item in _cached_post_items(raw):
+        if not _cached_item_matches_video(item, collection=collection, target=target):
+            continue
+        text = _cached_item_content(item)
+        if not text or text in matches:
+            continue
+        separator_chars = 1 if matches else 0
+        remaining = MAX_CACHED_CONTENT_CHARS - used_chars - separator_chars
+        if remaining <= 0:
+            break
+        bounded = text[:remaining]
+        matches.append(bounded)
+        used_chars += separator_chars + len(bounded)
+        if used_chars >= MAX_CACHED_CONTENT_CHARS:
+            break
+    return "\n".join(matches)
 
 
 def _structured_product_matches(conn: Any, evidence_id: int) -> list[dict[str, Any]]:
@@ -268,7 +440,7 @@ def _match_products_in_title(
     products: list[dict[str, Any]],
     title: str,
 ) -> list[dict[str, Any]]:
-    """标题归一化后按 token 边界找产品;每个产品试 SKU/型号/市场名三个别名。"""
+    """文本归一化后按 token 边界找产品;每个产品试 SKU/型号/市场名三个别名。"""
 
     title_norm = _normalize(title)
     if not title_norm:
@@ -287,6 +459,28 @@ def _match_products_in_title(
                 matched.append(row)
                 break
     return matched
+
+
+def _with_match_source(rows: list[dict[str, Any]], source: str) -> list[dict[str, Any]]:
+    return [{**row, "match_source": source} for row in rows]
+
+
+def _merge_product_matches(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_sku: dict[str, dict[str, Any]] = {}
+    for group in groups:
+        for row in group:
+            sku = _text(row.get("sku"))
+            current = by_sku.get(sku)
+            if sku and (
+                current is None
+                or MATCH_SOURCE_PRIORITY.get(_text(row.get("match_source")), 0)
+                > MATCH_SOURCE_PRIORITY.get(_text(current.get("match_source")), 0)
+            ):
+                # Keep the stronger direct title signal when the same SKU also
+                # appears in cached prose.  Replacing a value does not change its
+                # insertion order, so truly conflicting SKU choices stay stable.
+                by_sku[sku] = row
+    return list(by_sku.values())
 
 
 def _sku_required(conn: Any, evidence: dict[str, Any], matches: list[dict[str, Any]]) -> dict[str, Any]:
@@ -338,6 +532,7 @@ def data_watch(
         else []
     )
     detected_detail: dict[str, Any] | None = None
+    detected_source = ""
     existing_detail: list[dict[str, Any]] = []
     confirmed_detection: dict[str, Any] | None = None
     if confirm_detected_skus is not None:
@@ -367,12 +562,25 @@ def data_watch(
             if len(structured) == 1:
                 skus, sku_source = [_text(structured[0].get("sku"))], "auto"
                 detected_detail = structured[0]
+                detected_source = STRUCTURED_EVIDENCE_SOURCE
             elif len(structured) > 1:
                 return _sku_required(conn, evidence, structured)
             else:
-                matches = _match_products_in_title(_catalog_rows(conn), _title_text(evidence))
+                products = _catalog_rows(conn)
+                cached_matches = _with_match_source(
+                    _match_products_in_title(products, _cached_content_text(conn, evidence)),
+                    CACHED_CONTENT_SOURCE,
+                )
+                title_matches = _with_match_source(
+                    _match_products_in_title(products, _title_text(evidence)),
+                    TITLE_ALIAS_SOURCE,
+                )
+                # Cached prose and title are both creator-authored text signals.  A
+                # disagreement is ambiguity, not permission to let either source win.
+                matches = _merge_product_matches(cached_matches, title_matches)
                 if len(matches) == 1:
                     skus, sku_source = [_text(matches[0].get("sku"))], "auto"
+                    detected_source = _text(matches[0].get("match_source")) or TITLE_ALIAS_SOURCE
                 else:
                     return _sku_required(conn, evidence, matches)
 
@@ -382,11 +590,13 @@ def data_watch(
         link_confidence = 1.0
     elif sku_source == "auto":
         link_relation_type = "detected"
-        link_source = (
-            STRUCTURED_EVIDENCE_SOURCE if detected_detail else "title_alias_v1"
+        link_source = detected_source or (
+            STRUCTURED_EVIDENCE_SOURCE if detected_detail else TITLE_ALIAS_SOURCE
         )
         link_confidence = (
-            _structured_confidence(detected_detail) if detected_detail else 0.6
+            _structured_confidence(detected_detail)
+            if detected_detail
+            else 0.55 if link_source == CACHED_CONTENT_SOURCE else 0.6
         )
     else:
         link_relation_type = "manual"

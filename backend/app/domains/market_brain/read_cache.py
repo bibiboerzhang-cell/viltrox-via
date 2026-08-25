@@ -3,8 +3,9 @@
 Freshness is enforced by Redis/memory TTL, not by embedding a wall-clock bucket
 in the key.  A stable method digest and explicit schema version invalidate
 incompatible builders while allowing repeated requests throughout the full TTL
-to hit the same entry.  Source rows may therefore be at most one TTL old, which
-is the explicit UI freshness contract for these views.
+to hit the same entry.  Source rows may therefore be at most one configured
+GTM TTL old (default 120 seconds, clamped to 30-600 seconds), which is the
+explicit UI freshness contract for these views.
 """
 from __future__ import annotations
 
