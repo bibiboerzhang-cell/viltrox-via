@@ -822,12 +822,24 @@ def ensure_session_for_result(
         # 真实 filter 只能从 diagnostics.applied_filters 反查。这里用**独立键**追加
         # filter 快照:第一段的原始 input 原样不动,两段各自的真相都在。
         # 越权已由上面 scope_to_staff 挡住;写失败只告警不抛,诊断绝不拖垮搜索。
-        search_session_diagnostics.record_advance_request_snapshot(
+        recorded = search_session_diagnostics.record_advance_request_snapshot(
             int(session_id),
             body=input_payload,
             stage=_normalize_query_type(query_type),
             source=source,
         )
+        # 上面这次写入改的是 ``input_payload_json``,而授权围栏正是拿这一列算
+        # ``input_payload_fingerprint`` 封印会话。``session`` 是写入**之前**读的:直接返回
+        # 会让调用方用过期状态签发凭证,而 worker 校验时重新读库拿到的是写入**之后**的值
+        # —— 两边对不上即 ``search_session_query_drifted`` 且 retry_allowed=False。
+        # 2026-08-25 线上实证:会话 1147 的两次 smart_search_profile_advance 全部 blocked、
+        # 零 provider 调用、搜索整体瘫痪(同类任务 8/13–8/24 共 27 次全部 done)。
+        # 真写了就重读一次,让返回值与库内一致 —— 不依赖「那次写入到底改了哪些键」,
+        # 任何改动都被这次重读覆盖住。**只认 recorded**:skipped 是一个字节没写(重放/轮询),
+        # failed 是 UPDATE 与 commit 同在一个 try 里抛了、同样没落库 —— 这两种都不该多付一次
+        # 查询,更不该多打一次 get_session(会话归属的 fail-closed 测试正是按调用序列断言的)。
+        if (recorded or {}).get("status") == "recorded":
+            session = get_session(int(session_id), staff=staff, scope_to_staff=True) or session
         return session
     if create:
         return create_session(

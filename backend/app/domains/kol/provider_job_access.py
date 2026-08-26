@@ -24,6 +24,7 @@ from app.core.permissions import check_tab_permission
 from app.core.security import user_status_allows_auth
 from app.db.connection import db_connection_sync_scope, get_conn
 from app.domains.kol.provider_job_payloads import provider_job_payload_delta
+from app.domains.kol.search_session_diagnostics import sealed_session_input
 
 
 FENCE_KEY = "kol_provider_job_fence"
@@ -44,9 +45,8 @@ SUPPORTED_ACTIONS = frozenset(
         VIDEO_URL_RESOLVE,
     }
 )
-# Search-session linkage/progress is appended after enqueue and result fields
-# are appended while a job is running.  They do not authorize provider scope.
-# Every other queued field is sealed, including all query/filter/model knobs.
+# Search-session linkage/progress and result fields are appended after enqueue or
+# while running; they authorize nothing.  Every other queued field stays sealed.
 _MUTABLE_RUNTIME_KEYS = frozenset(
     {
         FENCE_KEY,
@@ -187,7 +187,7 @@ def _session_binding(
                 "query_type": _text(
                     session.get("query_type") or fallback_query_type or "unknown"
                 ).lower(),
-                "input_payload_fingerprint": _digest(input_payload),
+                "input_payload_fingerprint": _digest(sealed_session_input(input_payload)),
             }
         )
     return binding

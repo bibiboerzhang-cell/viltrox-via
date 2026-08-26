@@ -34,6 +34,32 @@ MAX_SNAPSHOTS = 6
 _MAX_LIST_ITEMS = 12
 _MAX_CODE_LEN = 40
 
+# 本服务自己追加进 ``input_payload_json`` 的诊断键 —— **凡在此列的都不得参与会话绑定指纹**。
+# 2026-08-25 线上实证:`record_advance_request_snapshot` 在入队前后把快照写进
+# ``input_payload_json``(见下方 :224 的 UPDATE),而 provider_job_access 正是拿这个字段算
+# ``input_payload_fingerprint`` 来封印会话。于是「签发凭证」这个动作本身改变了凭证绑定的
+# 内容:会话 1147 的两次 smart_search_profile_advance 全部 ``search_session_query_drifted``
+# 且 retry_allowed=False —— 一次 provider 都没调,线上搜索整体瘫痪(8/13–8/24 该任务 27 次
+# 全 done,今天部署后 2 次全 blocked)。
+# 与 provider_job_access._MUTABLE_RUNTIME_KEYS 同理:诊断键不授权任何 provider 范围,
+# 必须出哈希。**今后任何写进 input_payload_json 的服务端键都必须登记到这里**,否则重演。
+SERVER_WRITTEN_INPUT_KEYS = frozenset({ADVANCE_REQUEST_SNAPSHOTS_KEY})
+
+
+def sealed_session_input(input_payload: Any) -> dict[str, Any]:
+    """只对操作员请求本身封印;本服务追加的诊断键不参与指纹。
+
+    非 dict(NULL/空/脏数据)一律返回空 dict —— 与既有 ``_session_binding`` 在
+    ``input_payload`` 不是 dict 时退回 ``{}`` 的口径一致,不改变既有行为。
+    """
+    if not isinstance(input_payload, dict):
+        return {}
+    return {
+        key: value
+        for key, value in input_payload.items()
+        if key not in SERVER_WRITTEN_INPUT_KEYS
+    }
+
 # 快照只收「筛选面」——决定谁被留下的那些键。自由文本(query_text / persona / bio)一律
 # 不收:留痕的目的是复盘筛选口径,不是复制请求体,更不是给联系方式开后门。
 _SNAPSHOT_LIST_KEYS = (
