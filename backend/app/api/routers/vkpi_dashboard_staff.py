@@ -393,6 +393,10 @@ class _ReportAnalysisBody(BaseModel):
     report_text: str
     period: str = "monthly"
     language: str = "zh"
+    #: 只报价、不执行。报价路径是纯 SELECT(缓存探测 + 预算读),零成本。
+    #: 刻意复用同一个 POST 而不另开 GET:报价与执行必须共用同一份口径与同一段入参,
+    #: 分成两个端点迟早会各自漂移,用户看到的价格就不再是真要花的那笔。
+    dry_run: bool = False
 
 
 @router.post("/dashboard/report-analysis")
@@ -400,7 +404,10 @@ def dashboard_report_analysis(
     body: _ReportAnalysisBody,
     staff=Depends(require_manager_tab("vkpi", "write")),
 ) -> dict:
-    """按需:把「生成报告」拼好的全量真实数据喂 LLM,整理成经营深度分析(预算闸硬限 + 当天缓存)。"""
+    """按需:把「生成报告」拼好的全量真实数据整理成经营深度分析(预算闸硬限 + 当天缓存)。
+
+    ``dry_run=true`` 只返回这一次的预计成本与是否命中当天缓存,绝不花钱。
+    """
     del staff
     from app.domains.dashboard import report_analysis
 
@@ -408,6 +415,7 @@ def dashboard_report_analysis(
         report_text=body.report_text,
         period=(body.period or "monthly"),
         language=(body.language or "zh"),
+        dry_run=bool(body.dry_run),
     )
 
 

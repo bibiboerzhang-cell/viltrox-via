@@ -167,8 +167,71 @@ def _normalize(content: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def analyze(report_text: str, period: str = "monthly", language: str = "zh") -> dict[str, Any]:
-    """按需:命中缓存(当天同内容)直接复用;否则预算闸 → LLM 分析 → 存库。"""
+def _cached_row(chash: str) -> dict[str, Any] | None:
+    """当天同内容的上一次分析。纯 SELECT;读不出来就当没有(失败方向 = 不谎报缓存)。"""
+
+    try:
+        row = get_conn().execute(
+            "SELECT analysis_json, model FROM vkpi_report_analysis "
+            "WHERE content_hash = ? AND created_at > now() - INTERVAL '1 day' "
+            "ORDER BY created_at DESC LIMIT 1",
+            (chash,),
+        ).fetchone()
+        return dict(row) if row else None
+    except Exception:
+        logger.debug("report_analysis.cache_read_failed", exc_info=True)
+        return None
+
+
+def quote(report_text: str, period: str = "monthly", language: str = "zh") -> dict[str, Any]:
+    """点之前先报价。**零成本**:只有缓存探测与预算读两条 SELECT,不调用任何模型。
+
+    红线要求「花钱的动作不许自动武装」,所以入口分两步:先报价让人看见这一次要不要
+    花钱、花多少,确认之后才真跑。三种结果,措辞都必须诚实:
+
+    * ``cached=True``    当天同一份报告已经分析过 -> 直接复用,这一次 **0 成本**。
+    * ``budget_blocked`` 当天额度已用尽 -> 点了也不会花钱,但也出不来结果。
+    * 其余                会真花钱,``estimated_cost_usd`` 就是预估值。
+
+    ``estimated_cost_usd`` 与送进预算闸的是同一个常量 ``_EST_COST``,刻意不在前端另写
+    一份 —— 两处各写一遍就一定会漂,而漂掉的那一方正是给用户看的那个数。
+    """
+
+    report_text = str(report_text or "").strip()
+    if len(report_text) < 40:
+        return {"available": False, "dry_run": True, "reason": "report_too_short"}
+
+    _ensure_schema()
+    if _cached_row(_hash(period, language, report_text)) is not None:
+        return {
+            "available": True, "dry_run": True, "cached": True,
+            "will_spend": False, "estimated_cost_usd": 0.0,
+        }
+    if not budget_guard.check_budget(_BUDGET_SCOPE, _EST_COST):
+        return {
+            "available": False, "dry_run": True, "cached": False,
+            "will_spend": False, "estimated_cost_usd": 0.0, "reason": "budget_blocked",
+        }
+    return {
+        "available": True, "dry_run": True, "cached": False,
+        "will_spend": True, "estimated_cost_usd": _EST_COST,
+    }
+
+
+def analyze(
+    report_text: str,
+    period: str = "monthly",
+    language: str = "zh",
+    *,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """按需:命中缓存(当天同内容)直接复用;否则预算闸 → LLM 分析 → 存库。
+
+    ``dry_run=True`` 只报价、绝不花钱(转交 ``quote``)。
+    """
+    if dry_run:
+        return quote(report_text, period=period, language=language)
+
     report_text = str(report_text or "").strip()
     if len(report_text) < 40:
         return {"available": False, "reason": "report_too_short"}
@@ -177,23 +240,14 @@ def analyze(report_text: str, period: str = "monthly", language: str = "zh") -> 
     chash = _hash(period, language, report_text)
 
     # 1) 当天同内容缓存命中 → 直接返回(省预算 + 秒回)。
-    try:
-        row = get_conn().execute(
-            "SELECT analysis_json, model FROM vkpi_report_analysis "
-            "WHERE content_hash = ? AND created_at > now() - INTERVAL '1 day' "
-            "ORDER BY created_at DESC LIMIT 1",
-            (chash,),
-        ).fetchone()
-        if row:
-            d = dict(row)
-            return {
-                "available": True,
-                "cached": True,
-                "model": d.get("model"),
-                "analysis": json.loads(d.get("analysis_json") or "{}"),
-            }
-    except Exception:
-        logger.debug("report_analysis.cache_read_failed", exc_info=True)
+    cached = _cached_row(chash)
+    if cached:
+        return {
+            "available": True,
+            "cached": True,
+            "model": cached.get("model"),
+            "analysis": json.loads(cached.get("analysis_json") or "{}"),
+        }
 
     # 2) 预算闸(硬上限)。
     if not budget_guard.check_budget(_BUDGET_SCOPE, _EST_COST):

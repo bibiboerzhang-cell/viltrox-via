@@ -33,6 +33,7 @@ import {
   type VkpiReportSectionKey,
 } from "../../../../services/vkpi/reports-api";
 import { loadStoredState, saveStoredState } from "../lib/storage";
+import ReportDeepAnalysis from "./ReportPanel.deep-analysis";
 
 interface ReportPanelProps {
   onClose: () => void;
@@ -126,6 +127,25 @@ export function ReportPanel({ onClose, data, apiToken }: ReportPanelProps) {
     format,
     scope,
   }), [format, language, period, reportDate, scope, selectedSectionKeys]);
+
+  // 深度分析的输入:**只用服务端真的返回过的内容**(管理摘要 + 指标行),
+  // 绝不拿页面当前卡片去拼 —— 那正是本面板顶上那句「不会用页面当前卡片拼接成报告」
+  // 承诺过的事。指标里状态未知的行照实标成「待数据」,不静默略过,免得分析把
+  // 缺数据读成零。
+  const deepAnalysisText = useMemo(() => {
+    if (!generated) return "";
+    const lines = [
+      `报告 ${generated.reportUid}`,
+      `周期 ${generated.periodStart.slice(0, 10)} 至 ${generated.periodEnd.slice(0, 10)}`,
+      generated.summary ? `管理摘要：${generated.summary}` : "",
+      ...generated.metrics.map((metric) => {
+        const unknown = UNKNOWN_STATUSES.has(metric.dataStatus.toLowerCase()) || metric.rawValue === null;
+        const value = unknown ? "待数据" : String(metric.value ?? metric.rawValue);
+        return `${metric.label || metric.key}：${value}${metric.note ? `（${metric.note}）` : ""}`;
+      }),
+    ];
+    return lines.filter(Boolean).join("\n");
+  }, [generated]);
 
   useEffect(() => { saveStoredState({ reportPeriod: period }); }, [period]);
   useEffect(() => { saveStoredState({ reportLanguage: language }); }, [language]);
@@ -321,6 +341,7 @@ export function ReportPanel({ onClose, data, apiToken }: ReportPanelProps) {
               {generated ? <div className="space-y-4">
                 <div className="flex flex-wrap gap-2 text-[10px]"><span className="rounded border border-line bg-card px-2 py-1">{generated.reportUid}</span><span className="rounded border border-emerald-400/20 bg-emerald-400/10 px-2 py-1 text-emerald-300">{statusLabel(generated.status)}</span><span className="rounded border border-line bg-card px-2 py-1">{dataStatusLabel(generated.dataStatus)}</span><span className="rounded border border-line bg-card px-2 py-1">{reportModelPolicyLabel(generated.modelPolicy, generated.claimLevel)}</span><span className="rounded border border-line bg-card px-2 py-1">{generated.periodStart.slice(0, 10)} 至 {generated.periodEnd.slice(0, 10)}</span></div>
                 <div className="rounded-lg border border-line bg-card p-4"><div className="text-[10px] uppercase tracking-wider text-muted">管理摘要</div><p className="mt-2 whitespace-pre-wrap text-[12px] leading-relaxed text-ink-2">{generated.summary || "服务端没有返回摘要。"}</p></div>
+                <ReportDeepAnalysis apiToken={apiToken} reportText={deepAnalysisText} period={period} language={language} />
                 <div className="grid grid-cols-2 gap-2 md:grid-cols-3">{generated.metrics.map((metric) => { const unknown = UNKNOWN_STATUSES.has(metric.dataStatus.toLowerCase()) || metric.rawValue === null; return <article key={metric.key} className="rounded-lg border border-line bg-card p-3"><div className="text-[9px] uppercase tracking-wider text-muted">{metric.label || metric.key}</div><strong className="mt-2 block text-lg font-semibold">{unknown ? "待数据" : String(metric.value ?? metric.rawValue)}</strong><span className="mt-1 block text-[9px] text-muted">{dataStatusLabel(metric.dataStatus)}{metric.note ? ` · ${metric.note}` : ""}</span></article>; })}</div>
               </div> : currentHistory ? <div className="rounded-lg border border-line bg-card p-4"><div className="flex flex-wrap gap-2 text-[10px]"><span>{currentHistory.reportUid}</span><span>{reportDateLabel(currentHistory)}</span><span>{statusLabel(currentHistory.status)}</span><span>{dataStatusLabel(currentHistory.dataStatus)}</span><span>{reportModelPolicyLabel(currentHistory.modelPolicy, currentHistory.claimLevel)}</span></div><p className="mt-4 whitespace-pre-wrap text-[12px] leading-relaxed text-ink-2">{currentHistory.truthInvalidated ? "该报告已因真实业务口径升级撤销，仅保留审计记录。" : currentHistory.summary || "此历史记录没有服务端摘要。"}</p></div> : <div className="flex min-h-52 flex-col items-center justify-center rounded-lg border border-dashed border-line text-center"><Server size={24} className="text-muted" /><p className="mt-3 text-[12px] text-ink-2">尚未选择或生成报告</p><p className="mt-1 text-[10px] text-muted">生成后将同时登记数据库历史与下载文件。</p></div>}
             </section>

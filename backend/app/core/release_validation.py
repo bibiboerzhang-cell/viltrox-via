@@ -177,6 +177,14 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
         "/api/admin/vkpi/my-kol/watch-overview",
         # 2026-08-24 单品播放总览:links×tracking×snapshots 纯 SELECT 聚合,零 provider。
         "/api/admin/vkpi/my-kol/sku-play-overview",
+        # 2026-08-25 单品「重新实测」报价:纯 SELECT + 只读预算投影;不入队、不取数、
+        # 不写库。同族的 POST /my-kol/sku-play-refresh 刻意不登记。
+        "/api/admin/vkpi/my-kol/sku-play-refresh/plan",
+        # 2026-08-25 内容墙「去查最新内容」报价:纯 SELECT + 只读预算投影;
+        # 不入队、不调 provider、不写库。同族的 POST /my-kol/wall-fetch 刻意不登记。
+        "/api/admin/vkpi/my-kol/wall-fetch/plan",
+        # 2026-08-25 内容墙派单结局回读:apify_jobs 纯 SELECT 状态投影,零写库。
+        "/api/admin/vkpi/my-kol/wall-fetch/status",
         "/api/admin/vkpi/lens-insights/summary",
         "/api/admin/vkpi/official-matrix",
         "/api/admin/vkpi/ops/cost-ledger",

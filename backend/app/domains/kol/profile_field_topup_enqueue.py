@@ -261,6 +261,83 @@ def _expected_fill(planned: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _platform_of(item: Any) -> str:
+    return str((item or {}).get("platform") or "").strip().lower() or "unknown"
+
+
+def plan_by_platform(
+    eligible: list[dict[str, Any]],
+    planned: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """按平台拆开「这一次要为谁花钱、预计能换回几个字段」。
+
+    用户裁令是三条腿全开,但要求**按平台分别记账** —— 因为 prod 2026-08-25 实测
+    Instagram 的两项填充率都是 0.0(见 ``MEASURED_FILL_RATE``,n=145)。三条腿混在一个
+    总数里,那条 0 产出的腿就永远看不见;拆开之后,一周的真实数据会自己把结论摆出来,
+    用户据此决定关不关某条腿,而不是靠谁的印象。
+
+    ``expected_fields`` 是按实测率算出来的**预期**,``fetches`` 是这次真要花的抓取次数。
+    真实产出要等抓取落库后由 ``profile_field_topup_yield`` 回读,两者刻意不混为一谈。
+    """
+
+    buckets: dict[str, dict[str, Any]] = {}
+
+    def bucket(platform: str) -> dict[str, Any]:
+        if platform not in buckets:
+            buckets[platform] = {
+                "eligible": 0,
+                "fetches": 0,
+                "expected_fields": {field: 0.0 for field in TOPUP_FIELDS},
+                "expected_fields_total": 0.0,
+                "measured_fill_rate": MEASURED_FILL_RATE.get(platform),
+            }
+        return buckets[platform]
+
+    for item in eligible or ():
+        bucket(_platform_of(item))["eligible"] += 1
+    for item in planned or ():
+        platform = _platform_of(item)
+        entry = bucket(platform)
+        entry["fetches"] += 1
+        rates = MEASURED_FILL_RATE.get(platform)
+        if rates is None:
+            continue
+        for field in item.get("missing_fields") or ():
+            if field in entry["expected_fields"]:
+                entry["expected_fields"][field] += float(rates.get(field, 0.0))
+
+    for entry in buckets.values():
+        entry["expected_fields"] = {
+            field: round(value, 2) for field, value in entry["expected_fields"].items()
+        }
+        entry["expected_fields_total"] = round(sum(entry["expected_fields"].values()), 2)
+    return dict(sorted(buckets.items()))
+
+
+def enqueue_by_platform(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """按平台记「本次真排了几个队、几个早就在队里、几个报错」。
+
+    这是**已发生**的记账(不是预期),一周后与 ``profile_field_topup_yield`` 的真实
+    填充数一起看,就能直接回答「这条腿值不值得继续花钱」。
+    """
+
+    buckets: dict[str, dict[str, Any]] = {}
+    for item in items or ():
+        platform = _platform_of(item)
+        entry = buckets.setdefault(
+            platform, {"fetches": 0, "queued": 0, "already_queued": 0, "errors": 0}
+        )
+        entry["fetches"] += 1
+        status = str(item.get("status") or "")
+        if status == "queued":
+            entry["queued"] += 1
+        elif status == "already_queued":
+            entry["already_queued"] += 1
+        elif status == "error":
+            entry["errors"] += 1
+    return dict(sorted(buckets.items()))
+
+
 def plan_field_topup(
     candidates: Any,
     *,
@@ -291,6 +368,8 @@ def plan_field_topup(
         "skipped_total": 0,
         "daily": {"max": config["daily_max"], "used": 0, "remaining": config["daily_max"]},
         "settings": config,
+        # 平台记账在任何早退分支上都存在(空字典),调用方不必到处做 None 判断。
+        "by_platform": {},
     }
     if not marked_ids:
         return {**base, "status": "no_candidates"}
@@ -351,6 +430,7 @@ def plan_field_topup(
         "skipped_total": sum(skipped.values()),
         "daily": {"max": config["daily_max"], "used": used, "remaining": remaining},
         "expected_field_fill": _expected_fill(planned),
+        "by_platform": plan_by_platform(eligible, planned),
     }
 
 
@@ -471,9 +551,20 @@ def enqueue_field_topup_for_candidates(
     enqueued = sum(1 for item in items if item.get("status") == "queued")
     already = sum(1 for item in items if item.get("status") == "already_queued")
     errors = sum(1 for item in items if item.get("status") == "error")
+    # 把「已发生」的入队结果并回计划期的平台记账,让每个平台只有一行:
+    # 预期(expected_fields)与实际(queued / errors)并排,谁产出为零一眼可见。
+    realized = enqueue_by_platform(items)
+    by_platform = {
+        platform: {**entry, **realized.get(platform, {})}
+        for platform, entry in (plan.get("by_platform") or {}).items()
+    }
+    for platform, entry in realized.items():
+        if platform not in by_platform:
+            by_platform[platform] = dict(entry)
     logger.info(
-        "field_topup_enqueued session_id=%s marked=%s planned=%s queued=%s already=%s errors=%s",
+        "field_topup_enqueued session_id=%s marked=%s planned=%s queued=%s already=%s errors=%s by_platform=%s",
         session_id, plan["marked"], plan["planned_fetch_count"], enqueued, already, errors,
+        {platform: entry.get("queued", 0) for platform, entry in sorted(by_platform.items())},
     )
     return _finish(
         {
@@ -482,6 +573,7 @@ def enqueue_field_topup_for_candidates(
             "already_queued": already,
             "errors": errors,
             "items": items,
+            "by_platform": dict(sorted(by_platform.items())),
         }
     )
 
@@ -493,7 +585,9 @@ __all__ = [
     "MEASURED_FILL_RATE",
     "TOPUP_FIELDS",
     "TOPUP_SOURCE",
+    "enqueue_by_platform",
     "enqueue_field_topup_for_candidates",
+    "plan_by_platform",
     "plan_field_topup",
     "topup_settings",
 ]

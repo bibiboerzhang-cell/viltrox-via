@@ -195,7 +195,7 @@ export async function fetchCockpitDashboardBundle(
   };
 }
 
-// 报告深度分析:把「生成报告」拼好的全量真实数据 POST 给后端,LLM 整理成经营分析(预算闸 + 当天缓存)。
+// 报告深度分析:把「生成报告」拼好的全量真实数据 POST 给后端,整理成经营分析(预算闸 + 当天缓存)。
 export async function fetchCockpitReportAnalysis(
   apiToken: string,
   reportText: string,
@@ -205,6 +205,26 @@ export async function fetchCockpitReportAnalysis(
   return apiFetch<Row>(
     "/api/admin/vkpi/dashboard/report-analysis",
     { method: "POST", body: jsonBody({ report_text: reportText, period, language }), timeoutMs: 120000 },
+    apiToken,
+  );
+}
+
+// 深度分析报价:同一个端点的 dry_run 分支,后端只跑两条 SELECT,零成本。
+// 分析是花钱动作,所以入口固定两步 —— 先拿这个报价给人看,确认之后才调上面那个。
+// 超时给 20s(报价只读库,不该等到 120s);真跑那次才需要长超时。
+export async function quoteCockpitReportAnalysis(
+  apiToken: string,
+  reportText: string,
+  period: string,
+  language: string,
+): Promise<Row> {
+  return apiFetch<Row>(
+    "/api/admin/vkpi/dashboard/report-analysis",
+    {
+      method: "POST",
+      body: jsonBody({ report_text: reportText, period, language, dry_run: true }),
+      timeoutMs: 20000,
+    },
     apiToken,
   );
 }
