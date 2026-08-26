@@ -254,18 +254,36 @@ def test_smart_local_gates_are_before_limit_and_shortfall_is_honest(
         ),
     )
 
-    assert [item["kol_pool_id"] for item in result["items"]] == [1, 2]
+    # 11 holds no video evidence at all, so it backfills *behind* the two
+    # qualified rows instead of being discarded; 4 is 46 days stale and stays
+    # rejected, which is the whole point of the split.
+    assert [item["kol_pool_id"] for item in result["items"]] == [1, 2, 11]
+    assert result["items"][2]["activity_status"] == "activity_unknown_pending_fetch"
+    assert result["items"][2]["selection_tier"] == "deferred_activity_unknown"
     contract = result["local_qualification"]
     assert contract["status"] == "shortfall"
     assert contract["qualified_count"] == 2
-    assert contract["returned_count"] == 2
+    assert contract["returned_count"] == 3
+    assert contract["qualified_returned_count"] == 2
+    assert contract["deferred_activity"] == {
+        "policy": "defer",
+        "reason_code": "latest_video_unknown",
+        "status": "activity_unknown_pending_fetch",
+        "available": 1,
+        "returned": 1,
+        "counts_toward_target": False,
+        "selectable": True,
+        "max_video_age_days": 45,
+        "fresh_priority_days": 30,
+    }
+    # 28, not 27: the deferred row is returned in its own zone and never
+    # shrinks the gap that only a qualified creator can close.
     assert contract["shortfall"] == 28
     assert contract["shortfall_reason"] == "qualified_candidates_exhausted"
     assert contract["rejected_by_reason"] == {
         "followers_below_3000": 1,
         "followers_unknown": 1,
         "latest_video_stale": 1,
-        "latest_video_unknown": 1,
         "market_unknown": 2,
         "market_mismatch": 1,
         "platform_mismatch": 1,
@@ -287,12 +305,16 @@ def test_smart_local_gates_are_before_limit_and_shortfall_is_honest(
         "account_quality_pass": 10,
         "followers_pass": 8,
         "fresh_video_pass": 6,
-        "market_pass": 3,
-        "language_pass": 3,
-        "profile_type_pass": 3,
-        "platform_pass": 2,
+        "activity_unknown_deferred": 1,
+        "activity_stage_pass": 7,
+        "market_pass": 4,
+        "language_pass": 4,
+        "profile_type_pass": 4,
+        "platform_pass": 3,
         "qualified": 2,
-        "returned": 2,
+        "deferred_available": 1,
+        "deferred_returned": 1,
+        "returned": 3,
     }
 
 

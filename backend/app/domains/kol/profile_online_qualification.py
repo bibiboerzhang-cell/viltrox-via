@@ -179,7 +179,14 @@ def _adapt_candidates(
             "latest_real_video": latest,
             "representative_evidence": representative,
         }
-        match_evidence = build_match_evidence(row, evidence, query_text)
+        # 在线腿把意图门槛降到 1(2026-08-25)。上面的 _candidate_row(:134-159)只填得出
+        # handle / display_name / bio 和最新视频标题;primary_topic / content_style /
+        # profile_text / type_reason 取自 provider 从不下发的键,恒为空串,
+        # secondary_topics_json 恒为 []。8 个可举证字段里在线只有 3 个有内容,
+        # 要它凑 2 个意图词是要求它证明一件它没资料证明的事。本地车道字段丰富,
+        # 继续走默认的 2(profile_recall.py:681-682 不传此参数)。
+        # 产品腿在线侧仍不传 required_product_terms —— 那是另一个缺口,本处不动。
+        match_evidence = build_match_evidence(row, evidence, query_text, min_intent_terms=1)
         profile_type = _text(row.get("profile_type")).lower()
         item = {
             "kol_pool_id": synthetic_id,

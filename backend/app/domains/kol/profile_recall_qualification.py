@@ -1,6 +1,6 @@
 """Server-owned qualification contract for Smart local KOL recall."""
 from __future__ import annotations
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 import re
 from time import perf_counter
@@ -15,7 +15,23 @@ from app.domains.kol.profile_discovery_candidates import (
     _is_own_brand_account,
     normalize_market_constraint,
 )
-from app.domains.kol.profile_recall_match_evidence import why_fit_from_match_evidence
+from app.domains.kol.profile_recall_activity_gate import (
+    DEFERRED_ACTIVITY_STATUS,
+    UNKNOWN_ACTIVITY_DEFER,
+    UNKNOWN_ACTIVITY_POLICY_KEY,
+    UNKNOWN_ACTIVITY_REASON,
+    activity_gate_evidence,
+    evaluate_activity,
+    mark_deferred_item,
+    select_deferred_backfill,
+    should_defer_activity,
+    unknown_activity_mode,
+)
+from app.domains.kol.profile_recall_qualification_projection import (
+    _project_gate_evidence,
+    _project_smart_local_item,
+    _strip_private_smart_local_values,
+)
 from app.domains.kol.profile_recall_search_spec import (
     normalize_operator_languages,
     normalize_operator_profile_types,
@@ -63,49 +79,6 @@ _APPROVED_AUDIENCE_MARKET_SOURCES = {
     "audience_ensemble_v1",
     "audience_comments_sample_v1",
 }
-_SMART_LOCAL_PRIVATE_ITEM_FIELDS = {
-    "bio",
-    "profile_text",
-    "raw",
-    "raw_data",
-    "raw_platform_data",
-    "email",
-    "business_email",
-    "contact_email",
-    "phone",
-    "phone_number",
-    "other_contacts_json",
-    "contact",
-    "contacts",
-    "contact_channels",
-    "contact_details",
-    "contact_methods",
-    "wechat",
-    "whatsapp",
-    "telegram",
-    "line",
-}
-_SMART_LOCAL_FACET_FIELDS = {
-    "platform",
-    "country",
-    "language",
-    "profile_type",
-    "contact_available",
-    "video_evidence",
-}
-_SMART_LOCAL_EVIDENCE_FIELDS = {
-    "handle",
-    "display_name",
-    "bio",
-    "primary_topic",
-    "content_style",
-    "secondary_topics_json",
-    "profile_text",
-    "type_reason",
-    "representative_evidence.title",
-}
-_SMART_LOCAL_EVIDENCE_SOURCES = {"server_profile_evidence"}
-_CONTACT_TERM_RE = re.compile(r"@|(?:^|\D)\+?\d(?:[\s().-]*\d){6,}(?:\D|$)")
 
 
 def smart_local_policy(
@@ -147,86 +120,22 @@ def smart_local_policy(
             "garbage",
         ],
         "allow_unknown_followers": False,
-        "allow_unknown_or_stale_video": False,
+        # Live knob, read by ``qualify_local_candidates`` through
+        # ``unknown_activity_mode``.  It replaces the former
+        # ``allow_unknown_or_stale_video`` flag, which nothing in the
+        # repository ever read while reading as if it could open the gate.
+        # "defer": a creator we simply never crawled waits behind every
+        # qualified candidate and is labelled as pending a re-crawl.
+        # "reject": the pre-2026-08 behaviour, a hard rejection.
+        # Stale / future / non-video rows are outside this knob's vocabulary
+        # and stay hard rejections under either value.
+        UNKNOWN_ACTIVITY_POLICY_KEY: UNKNOWN_ACTIVITY_DEFER,
         "allow_unknown_market": not bool(normalized_market),
         "allow_unknown_language": not bool(filter_spec["languages"]["requested"]),
         "allow_unknown_profile_type": not bool(filter_spec["profile_types"]["requested"]),
         "allow_low_quality_backfill": False,
         "canonical_dedupe": True,
     }
-
-
-def _private_smart_local_field(key: Any) -> bool:
-    normalized = str(key or "").strip().lower()
-    return bool(
-        normalized in _SMART_LOCAL_PRIVATE_ITEM_FIELDS
-        or normalized.startswith("raw_")
-        or normalized.endswith("_email")
-        or normalized.endswith("_phone")
-        or ("contact" in normalized and normalized != "contact_available")
-    )
-
-
-def _strip_private_smart_local_values(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _strip_private_smart_local_values(nested)
-            for key, nested in value.items()
-            if not _private_smart_local_field(key)
-        }
-    if isinstance(value, list):
-        return [_strip_private_smart_local_values(item) for item in value]
-    return value
-
-
-def _project_match_evidence(value: Any) -> list[dict[str, str]]:
-    projected: list[dict[str, str]] = []
-    for raw in value if isinstance(value, list) else []:
-        if not isinstance(raw, dict):
-            continue
-        field = str(raw.get("field") or "").strip()
-        term = str(raw.get("term") or "").strip()
-        source = str(raw.get("source") or "").strip()
-        if (
-            field not in _SMART_LOCAL_EVIDENCE_FIELDS
-            or not term
-            or _CONTACT_TERM_RE.search(term)
-            or (source and source not in _SMART_LOCAL_EVIDENCE_SOURCES)
-        ):
-            continue
-        evidence = {"field": field, "term": term}
-        if source:
-            evidence["source"] = source
-        projected.append(evidence)
-    return projected[:12]
-
-
-def _project_gate_evidence(value: Any) -> dict[str, Any]:
-    gate = _strip_private_smart_local_values(value) if isinstance(value, dict) else {}
-    relevance = gate.get("relevance") if isinstance(gate.get("relevance"), dict) else None
-    if relevance is not None:
-        safe_evidence = _project_match_evidence(relevance.get("evidence"))
-        gate["relevance"] = {
-            **relevance,
-            "passed": bool(safe_evidence),
-            "evidence": safe_evidence,
-        }
-    return gate
-
-
-def _project_smart_local_item(value: Any) -> dict[str, Any]:
-    item = _strip_private_smart_local_values(value) if isinstance(value, dict) else {}
-    match_evidence = _project_match_evidence(item.get("match_evidence"))
-    item["match_evidence"] = match_evidence
-    item["why_fit"] = why_fit_from_match_evidence(match_evidence)
-    facets = item.get("candidate_facets") if isinstance(item.get("candidate_facets"), dict) else {}
-    item["candidate_facets"] = {
-        key: str(facets.get(key) or "unknown")
-        for key in _SMART_LOCAL_FACET_FIELDS
-    }
-    if isinstance(item.get("qualification_evidence"), dict):
-        item["qualification_evidence"] = _project_gate_evidence(item["qualification_evidence"])
-    return item
 
 
 def project_smart_local_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -259,24 +168,6 @@ def project_smart_local_result(result: dict[str, Any]) -> dict[str, Any]:
     ]
     projected["local_qualification"] = safe_contract
     return projected
-
-
-def _parse_datetime(value: Any) -> datetime | None:
-    if isinstance(value, datetime):
-        parsed = value
-    else:
-        text = str(value or "").strip()
-        if not text:
-            return None
-        if text.endswith("Z"):
-            text = f"{text[:-1]}+00:00"
-        try:
-            parsed = datetime.fromisoformat(text)
-        except ValueError:
-            return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
 
 
 def _json_dict(value: Any) -> dict[str, Any]:
@@ -597,21 +488,30 @@ def qualify_local_candidates(
         "account_quality_pass": 0,
         "followers_pass": 0,
         "fresh_video_pass": 0,
+        "activity_unknown_deferred": 0,
+        "activity_stage_pass": 0,
         "market_pass": 0,
         "language_pass": 0,
         "profile_type_pass": 0,
         "platform_pass": 0,
         "qualified": 0,
+        "deferred_available": 0,
+        "deferred_returned": 0,
         "returned": 0,
     }
+    unknown_activity = unknown_activity_mode(policy)
     rejected_by_reason: dict[str, int] = {}
     audit: list[dict[str, Any]] = []
     qualified: dict[str, list[dict[str, Any]]] = {"creator": [], "reviewer": []}
+    deferred: dict[str, list[dict[str, Any]]] = {"creator": [], "reviewer": []}
     seen_identities: set[str] = set()
     qualified_identity_aliases: set[str] = set()
+    deferred_identity_aliases: set[str] = set()
     account_quality_identities: set[str] = set()
     followers_identities: set[str] = set()
     fresh_video_identities: set[str] = set()
+    deferred_activity_identities: set[str] = set()
+    activity_stage_identities: set[str] = set()
     market_identities: set[str] = set()
     language_identities: set[str] = set()
     profile_type_identities: set[str] = set()
@@ -667,27 +567,21 @@ def qualify_local_candidates(
         if not followers_pass:
             reasons.append("followers_unknown" if followers is None else "followers_below_3000")
 
-        latest = evidence.get("latest_real_video") if isinstance(evidence.get("latest_real_video"), dict) else {}
-        posted_at = _parse_datetime(latest.get("posted_at"))
-        future_video = bool(posted_at and posted_at > now + timedelta(minutes=5))
-        age_days = max(0.0, (now - posted_at).total_seconds() / 86_400.0) if posted_at else None
-        evidence_type = str(latest.get("evidence_type") or "video").strip().lower()
-        active_video = evidence_type == "video" and latest.get("is_active") is not False
-        video_identity = ""
-        video_identity_kind = ""
-        for key in ("content_url", "video_id"):
-            value = str(latest.get(key) or "").strip()
-            if value:
-                video_identity = value
-                video_identity_kind = key
-                break
-        activity_pass = (
-            age_days is not None
-            and not future_video
-            and age_days <= SMART_LOCAL_MAX_VIDEO_AGE_DAYS
-            and active_video
-            and bool(video_identity)
+        activity = evaluate_activity(
+            latest=evidence.get("latest_real_video"),
+            now=now,
+            max_video_age_days=SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
+            fresh_priority_days=SMART_LOCAL_FRESH_DAYS,
         )
+        activity_pass = bool(activity["passed"])
+        # "We never crawled this creator" is a data gap, not a stale verdict.
+        # It leaves the hard-rejection path and waits in the deferred bucket;
+        # every other activity failure still fails closed below.
+        activity_deferred = should_defer_activity(activity, unknown_activity)
+        # Downstream stage counters describe "still in the running", which now
+        # includes the deferred bucket.  ``fresh_video_pass`` keeps its exact
+        # old meaning so the freshness number can never be read as widened.
+        activity_stage_pass = activity_pass or activity_deferred
         if (
             account_quality_pass
             and relevance_pass
@@ -696,18 +590,24 @@ def qualify_local_candidates(
             and _claim_identity_aliases(fresh_video_identities, identity_aliases)
         ):
             funnel["fresh_video_pass"] += 1
-        if not activity_pass:
-            reasons.append(
-                "latest_video_unknown"
-                if age_days is None
-                else "latest_video_in_future"
-                if future_video
-                else "latest_video_stale"
-                if age_days > SMART_LOCAL_MAX_VIDEO_AGE_DAYS
-                else "latest_video_not_active_video"
-                if not active_video
-                else "latest_video_identity_missing"
-            )
+        if (
+            account_quality_pass
+            and relevance_pass
+            and followers_pass
+            and activity_deferred
+            and _claim_identity_aliases(deferred_activity_identities, identity_aliases)
+        ):
+            funnel["activity_unknown_deferred"] += 1
+        if (
+            account_quality_pass
+            and relevance_pass
+            and followers_pass
+            and activity_stage_pass
+            and _claim_identity_aliases(activity_stage_identities, identity_aliases)
+        ):
+            funnel["activity_stage_pass"] += 1
+        if not activity_stage_pass:
+            reasons.append(activity["reason"])
 
         market = _market_resolution(row)
         market_value = str(market.get("market") or "")
@@ -720,7 +620,7 @@ def qualify_local_candidates(
             account_quality_pass
             and relevance_pass
             and followers_pass
-            and activity_pass
+            and activity_stage_pass
             and market_pass
             and _claim_identity_aliases(market_identities, identity_aliases)
         ):
@@ -754,7 +654,7 @@ def qualify_local_candidates(
             account_quality_pass
             and relevance_pass
             and followers_pass
-            and activity_pass
+            and activity_stage_pass
             and market_pass
             and language_pass
             and _claim_identity_aliases(language_identities, identity_aliases)
@@ -789,7 +689,7 @@ def qualify_local_candidates(
             account_quality_pass
             and relevance_pass
             and followers_pass
-            and activity_pass
+            and activity_stage_pass
             and market_pass
             and language_pass
             and profile_type_pass
@@ -811,7 +711,7 @@ def qualify_local_candidates(
             account_quality_pass
             and relevance_pass
             and followers_pass
-            and activity_pass
+            and activity_stage_pass
             and market_pass
             and language_pass
             and profile_type_pass
@@ -825,9 +725,18 @@ def qualify_local_candidates(
         # An invalid duplicate must not reserve the identity and hide a later
         # valid row for the same account.  Only a candidate that passed every
         # non-identity gate claims the canonical key.
+        # A deferred row must never reserve the canonical key ahead of a fully
+        # qualified row for the same creator, so the two claims use separate
+        # alias registers and the deferred bucket is filtered against the
+        # qualified register once the whole pass is done.
         if not reasons:
             if identity_aliases.intersection(excluded_identities):
                 reasons.append(excluded_identity_reason)
+            elif activity_deferred:
+                if identity_aliases.intersection(deferred_identity_aliases):
+                    reasons.append("duplicate_canonical_identity")
+                else:
+                    deferred_identity_aliases.update(identity_aliases)
             elif identity_aliases.intersection(qualified_identity_aliases):
                 reasons.append("duplicate_canonical_identity")
             else:
@@ -838,7 +747,9 @@ def qualify_local_candidates(
             "kol_pool_id": kol_id,
             "canonical_key": canonical,
             "canonical_aliases": sorted(identity_aliases),
-            "passed": not reasons,
+            "passed": not reasons and not activity_deferred,
+            "deferred": activity_deferred,
+            "deferred_reason": activity["reason"] if activity_deferred else None,
             "rejection_reasons": reasons,
             "account_quality": {
                 "verdict": account_verdict or "eligible_creator_account",
@@ -853,21 +764,11 @@ def qualify_local_candidates(
                 "passed": followers_pass,
                 "source": evidence_sources.get("followers") or "vkpi_kol_pool.followers",
             },
-            "activity": {
-                "posted_at": posted_at.isoformat() if posted_at else None,
-                "age_days": round(age_days, 3) if age_days is not None else None,
-                "future_timestamp": future_video,
-                "fresh_priority": bool(
-                    activity_pass and age_days is not None and age_days <= SMART_LOCAL_FRESH_DAYS
-                ),
-                "maximum_age_days": SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
-                "evidence_type": evidence_type or None,
-                "active_video": active_video,
-                "identity_kind": video_identity_kind or None,
-                "identity": video_identity or None,
-                "passed": activity_pass,
-                "source": latest.get("source") or "vkpi_kol_video_evidence.posted_at",
-            },
+            "activity": activity_gate_evidence(
+                activity,
+                maximum_age_days=SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
+                deferred=activity_deferred,
+            ),
             "market": {
                 "value": market_value or None,
                 "target": target_market or None,
@@ -916,7 +817,10 @@ def qualify_local_candidates(
                 rejected_by_reason[reason] = rejected_by_reason.get(reason, 0) + 1
             continue
         bucket = "reviewer" if item.get("bucket") == "reviewer" else "creator"
-        qualified[bucket].append(item)
+        if activity_deferred:
+            deferred[bucket].append(mark_deferred_item(item))
+        else:
+            qualified[bucket].append(item)
 
     for values in qualified.values():
         values.sort(key=_score_key, reverse=True)
@@ -940,23 +844,77 @@ def qualify_local_candidates(
             selected_creator.append(item)
     items = [*selected_creator, *selected_reviewer]
     items.sort(key=_score_key, reverse=True)
+
+    # Deferred backfill: unknown-activity creators fill the slots that the
+    # qualified pool could not, never more, and always behind every qualified
+    # candidate — hence the concatenation instead of a shared sort.
+    deferred_selected, deferred_superseded = select_deferred_backfill(
+        deferred_items=[*deferred["creator"], *deferred["reviewer"]],
+        qualified_aliases=qualified_identity_aliases,
+        capacity=max(0, target - len(items)),
+        sort_key=_score_key,
+    )
+    for entry in deferred_superseded:
+        proof = entry.get("qualification_evidence")
+        if isinstance(proof, dict):
+            proof["passed"] = False
+            proof["deferred"] = False
+            proof["rejection_reasons"] = ["duplicate_canonical_identity"]
+        rejected_by_reason["duplicate_canonical_identity"] = (
+            rejected_by_reason.get("duplicate_canonical_identity", 0) + 1
+        )
+    funnel["deferred_available"] = len(
+        [*deferred["creator"], *deferred["reviewer"]]
+    ) - len(deferred_superseded)
+    funnel["deferred_returned"] = len(deferred_selected)
+    for entry in deferred_selected:
+        if entry.get("bucket") == "reviewer":
+            selected_reviewer.append(entry)
+        else:
+            selected_creator.append(entry)
+    items.extend(deferred_selected)
     funnel["returned"] = len(items)
-    shortfall = max(0, target - len(items))
+    # The deferred bucket is a *separate zone*, not part of the 30-person
+    # target: an unknown-activity creator has not satisfied the activity gate,
+    # so counting it here would report a gap of 0 while zero candidates
+    # actually qualified.  The gap is therefore measured against the qualified
+    # rows alone, exactly as it was before the bucket existed.
+    qualified_returned = len(items) - len(deferred_selected)
+    shortfall = max(0, target - qualified_returned)
     contract = {
         "schema": SMART_LOCAL_SCHEMA,
         "status": "ready" if not shortfall else "shortfall",
         "policy": dict(policy),
         "qualified_count": funnel["qualified"],
         "returned_count": len(items),
+        "qualified_returned_count": qualified_returned,
         "shortfall": shortfall,
         "shortfall_reason": "" if not shortfall else "qualified_candidates_exhausted",
+        # Unknown activity is a crawl gap, so it is reported separately and
+        # never folded into the freshness numbers above.
+        "deferred_activity": {
+            "policy": unknown_activity,
+            "reason_code": UNKNOWN_ACTIVITY_REASON,
+            "status": DEFERRED_ACTIVITY_STATUS,
+            "available": funnel["deferred_available"],
+            "returned": funnel["deferred_returned"],
+            # Never part of the target count, but the operator may still tick
+            # one deliberately — occupying a slot implies selectable, not the
+            # other way round.  Both halves are asserted end to end.
+            "counts_toward_target": False,
+            "selectable": True,
+            "max_video_age_days": SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
+            "fresh_priority_days": SMART_LOCAL_FRESH_DAYS,
+        },
         "funnel": funnel,
         "rejected_by_reason": rejected_by_reason,
         # Per-returned-item proof is complete; rejected rows are summarized
         # and sampled so a 500-row recall cannot inflate the first response.
         "gate_evidence_scope": "returned_candidates",
         "gate_evidence": [item["qualification_evidence"] for item in items],
-        "rejected_evidence_sample": [entry for entry in audit if not entry["passed"]][:30],
+        "rejected_evidence_sample": [
+            entry for entry in audit if not entry["passed"] and not entry.get("deferred")
+        ][:30],
         "evaluated_count": len(audit),
         "stage_timing": {
             "qualification_ms": round((perf_counter() - started) * 1000.0, 3),

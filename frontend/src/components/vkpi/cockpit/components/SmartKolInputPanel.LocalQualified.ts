@@ -16,6 +16,14 @@ export const LOCAL_QUALIFICATION_SPEC = Object.freeze({
 
 export type LocalQualificationState = "qualified" | "pending" | "rejected";
 
+// 服务端「活跃度未知」桶:这个人的最近视频我们一次都没抓到过。他不是被判不
+// 合格,也不算进 30 人目标数,但确实被返回给了操作员,所以必须一眼看得出来
+// 和真·活跃的人不一样,并且能单独勾选。
+export const ACTIVITY_UNKNOWN_STATUS = "activity_unknown_pending_fetch";
+export const ACTIVITY_UNKNOWN_TIER = "deferred_activity_unknown";
+export const ACTIVITY_UNKNOWN_LABEL = "活跃度未知 · 从没抓到过视频";
+export const ACTIVITY_UNKNOWN_VIDEO_LABEL = "从没抓到过";
+
 export type LocalQualifiedRow = {
   identity: string;
   rank: number;
@@ -34,6 +42,8 @@ export type LocalQualifiedRow = {
   qualification: LocalQualificationState;
   qualificationLabel: string;
   strictQualified: boolean;
+  /** 服务端说「这个人的视频我们从没抓到过」:不计入 30 人,但可单独勾选。 */
+  activityUnknown: boolean;
 };
 
 export type LocalQualifiedSummary = {
@@ -44,6 +54,7 @@ export type LocalQualifiedSummary = {
   uniqueQualified: number;
   pending: number;
   rejected: number;
+  activityUnknown: number;
   shortfall: number;
   shortfallReasons: string[];
   rows: LocalQualifiedRow[];
@@ -114,7 +125,23 @@ function identityFor(item: VkpiKolRecallItem): string {
   return `unresolved:${platform}:${handle}`;
 }
 
-function qualificationFor(qualification: Row): Pick<LocalQualifiedRow, "qualification" | "qualificationLabel"> {
+/** 服务端标记 → 界面判据。证据面(proof)与条目面(item)两处任一命中即成立,
+ *  因为会话回放走的是条目字段,实时搜索走的是证据字段。 */
+function activityUnknownFor(qualification: Row, root: Row, source: Row): boolean {
+  const activity = asRecord(qualification.activity);
+  if (qualification.deferred === true && cleanText(activity.status) === ACTIVITY_UNKNOWN_STATUS) return true;
+  if (activity.deferred === true && activity.known === false) return true;
+  return cleanText(firstValue([root, source], ["activity_status"])) === ACTIVITY_UNKNOWN_STATUS
+    || cleanText(firstValue([root, source], ["selection_tier"])) === ACTIVITY_UNKNOWN_TIER;
+}
+
+function qualificationFor(
+  qualification: Row,
+  activityUnknown: boolean,
+): Pick<LocalQualifiedRow, "qualification" | "qualificationLabel"> {
+  // 「从没抓到过视频」不是「未通过」。先于合格判据回答,否则这批人会被涂成
+  // 红色的「未通过」,把一个数据缺口谎报成一次质量裁决。
+  if (activityUnknown) return { qualification: "pending", qualificationLabel: ACTIVITY_UNKNOWN_LABEL };
   const proofSchema = cleanText(qualification.schema);
   const strictState = strictV2QualificationState(qualification);
   if (proofSchema === "smart_local_gate_evidence_v2") {
@@ -227,8 +254,10 @@ function rowFromItem(item: VkpiKolRecallItem, fallbackRank: number): LocalQualif
       ?? gateFollowers.value,
   );
   const whyFit = cleanText(firstValue(records, ["why_fit", "recall_reason", "evidence", "sample_title"]));
+  const activityUnknown = activityUnknownFor(qualification, root, source);
   return {
     identity: identityFor(item),
+    activityUnknown,
     rank: rankFor(records, fallbackRank),
     item,
     name: cleanText(item.display_name || item.handle) || `KOL #${item.kol_pool_id}`,
@@ -242,8 +271,8 @@ function rowFromItem(item: VkpiKolRecallItem, fallbackRank: number): LocalQualif
     whyFit,
     contactStatus: statusLabel(contactStatus, "contact"),
     analysisStatus: statusLabel(analysisStatus, "analysis"),
-    strictQualified: strictV2QualificationState(qualification) === "qualified",
-    ...qualificationFor(qualification),
+    strictQualified: !activityUnknown && strictV2QualificationState(qualification) === "qualified",
+    ...qualificationFor(qualification, activityUnknown),
   };
 }
 
@@ -276,7 +305,7 @@ const SHORTFALL_LABELS: Record<string, string> = {
   followers_below_3000: "粉丝不足 3,000",
   followers_unknown: "粉丝数待核验",
   freshness_unknown: "最新视频日期待核验",
-  latest_video_unknown: "最新视频日期待核验",
+  latest_video_unknown: "从没抓到过视频，活跃度未知",
   stale: "最近 45 天未更新",
   latest_video_stale: "最近 45 天未更新",
   latest_video_identity_missing: "最新视频缺少可审计链接或视频 ID",
@@ -356,8 +385,10 @@ export function localQualifiedSummary(result: VkpiKolRecallResponse): LocalQuali
   const claimedQualified = (hasSmartLocalContract
     ? explicitCount(contractRecords, ["qualified_count"])
     : null) ?? parsedQualified;
+  // qualified_returned_count 是「真正过闸并返回」的人数,不含活跃度未知桶;
+  // returned_count 含,所以它只能垫底,不能排在前面。
   const claimedAccepted = (hasSmartLocalContract
-    ? explicitCount(contractRecords, ["accepted_count", "returned_count"])
+    ? explicitCount(contractRecords, ["qualified_returned_count", "accepted_count", "returned_count"])
     : null) ?? parsedQualified;
   const claimedUnique = (hasSmartLocalContract
     ? explicitCount(contractRecords, ["unique_qualified_count", "accepted_unique_count"])
@@ -371,7 +402,8 @@ export function localQualifiedSummary(result: VkpiKolRecallResponse): LocalQuali
   const target = (hasSmartLocalContract
     ? explicitCount([localLane, asRecord(localLane.policy)], ["target_count", "target"])
     : null) ?? LOCAL_QUALIFIED_TARGET;
-  const pending = rows.filter((row) => row.qualification === "pending").length;
+  const activityUnknown = rows.filter((row) => row.activityUnknown).length;
+  const pending = rows.filter((row) => row.qualification === "pending" && !row.activityUnknown).length;
   const rejected = rows.filter((row) => row.qualification === "rejected").length;
   const shortfall = Math.max(0, target - qualified);
   return {
@@ -382,6 +414,7 @@ export function localQualifiedSummary(result: VkpiKolRecallResponse): LocalQuali
     uniqueQualified,
     pending,
     rejected,
+    activityUnknown,
     shortfall,
     shortfallReasons: shortfallReasons(contractRecords, pending, shortfall),
     rows,

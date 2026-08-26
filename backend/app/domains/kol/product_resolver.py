@@ -15,6 +15,7 @@ import re
 from typing import Any
 
 from app.domains.costs.product_catalog import list_product_catalog
+from app.domains.kol import product_focal_family
 
 
 # Tokens too generic to score a product on their own.
@@ -149,8 +150,11 @@ def _query_focals(text: str) -> set[int]:
         or bool(_explicit_product_series(low))
         or _pro_is_product_series(low)
     ):
-        for m in re.findall(r"(?<![0-9a-z.])(\d{2,3})(?![0-9])(?!\s*(?:ws|w\b|nit|寸|inch|mah|fps))", low):
-            focals.add(int(m))
+        # 2026-08-26:这条分支过去自带一套裸数字判据,只挡功率/尺寸单位,不认时间跨度、
+        # 区间、价格、排名。于是「24小时内更新的 evo 用户」被读出焦段 24,再撞上目录里
+        # 没有 24mm EVO,弹出「请先选择正确产品」把一次正常搜索整个拦掉。
+        # 两个焦段解析器从此共用 product_focal_family 那一套判据,不再各写各的。
+        focals.update(product_focal_family.bare_focal_numbers(low, strict_word=False))
     return {f for f in focals if 8 <= f <= 800}
 
 
@@ -173,6 +177,71 @@ def _has_product_identity_anchor(query: str, probe_tokens: list[str]) -> bool:
         re.search(r"\b(?:viltrox|lens|prime|anamorphic|cine|t\d(?:\.\d)?|f/?\d(?:\.\d)?)\b|维卓|镜头|定焦", text)
     )
     return has_lens_identity and bool(_query_focals(text))
+
+
+def _focal_suggestions(rows: Any, *, limit: int = 6) -> list[dict[str, Any]]:
+    return [
+        {
+            "sku": row.get("sku"),
+            "name": row.get("marketing_name") or row.get("model_name"),
+            "mount": row.get("mount"),
+            "series": row.get("series"),
+        }
+        for row in list(rows or [])[: max(1, int(limit))]
+    ]
+
+
+def _focal_clarification(text: str) -> dict[str, Any] | None:
+    """焦段说清楚了但目录对不上时,如实告诉操作员,别让他等一趟注定零结果的搜索。
+
+    只在**明确写了焦段**(带 mm 单位、或点名了卡口)时才拦——一个孤立数字如果目录里
+    没有对应焦段,按「压根没提产品」处理,照常放行普通搜索。
+    """
+    decision = _focal_family_decision(text)
+    if not decision:
+        return None
+    status = str(decision.get("status") or "")
+    focal = decision.get("focal")
+    if status == "mount_unavailable":
+        mounts = decision.get("available_mounts") or []
+        mount_text = " / ".join(str(item) for item in mounts) or "其他卡口"
+        return {
+            "reason": "focal_mount_not_in_catalog",
+            "requested_series": "",
+            "requested_model_code": "",
+            "requested_focals": [focal],
+            "requested_mount": str(decision.get("requested_mount") or ""),
+            "message": f"没认出你要找的产品：{focal}mm 目录里没有这个卡口的版本，现有 {mount_text}。请挑一个再找达人。",
+            "suggestions": _focal_suggestions(decision.get("rows")),
+        }
+    if status == "multiple_focals":
+        listed = "、".join(f"{value}mm" for value in (decision.get("focals") or []))
+        return {
+            "reason": "multiple_focals_requested",
+            "requested_series": "",
+            "requested_model_code": "",
+            "requested_focals": list(decision.get("focals") or []),
+            "requested_mount": str(decision.get("requested_mount") or ""),
+            "message": f"你一次提到了 {listed}，一次只能按一个焦段找达人。请挑一个再搜。",
+            "suggestions": [],
+        }
+    if status == "no_catalog_match":
+        available = [value for value in (decision.get("available_focals") or [])]
+        try:
+            nearest = sorted(available, key=lambda value: abs(int(value) - int(focal or 0)))[:3]
+        except (TypeError, ValueError):
+            nearest = available[:3]
+        nearest_text = "、".join(f"{value}mm" for value in nearest) or "目录内其他焦段"
+        return {
+            "reason": "focal_not_in_catalog",
+            "requested_series": "",
+            "requested_model_code": "",
+            "requested_focals": list(decision.get("focals") or []),
+            "requested_mount": str(decision.get("requested_mount") or ""),
+            "message": f"没认出你要找的产品：目录里没有 {focal}mm 的镜头。最接近的是 {nearest_text}。",
+            "suggestions": [],
+        }
+    return None
 
 
 def unresolved_product_request(query: str) -> dict[str, Any] | None:
@@ -201,7 +270,9 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
     focals = sorted(_query_focals(text))
     mount = _query_mount(text)
     if not series and not model_code:
-        return None
+        # 已有的「系列/型号明确但目录没有」提示优先——它带着更具体的候选。
+        # 只有连系列和型号码都没有(操作员只说了个焦段)时,才轮到焦段口径来解释。
+        return _focal_clarification(text)
 
     probes = [value for value in (series, model_code, str(focals[0]) if focals else "") if value]
     suggestions: dict[str, dict[str, Any]] = {}
@@ -459,6 +530,59 @@ def resolve_product_sku(value: Any) -> dict[str, Any] | None:
     )
 
 
+def _focal_family_decision(query: str) -> dict[str, Any] | None:
+    """焦段判定(读目录,失败静默 None)。卡口/系列线索由本模块既有解析器提供。"""
+    try:
+        return product_focal_family.focal_family_decision(
+            query,
+            mount=_query_mount(query),
+            series=_explicit_product_series(query),
+            # 全链路只认本模块这一份目录读取器,打桩/降级行为与既有解析路径完全一致。
+            catalog_reader=list_product_catalog,
+        )
+    except Exception:
+        return None
+
+
+def resolve_focal_family_product(query: str) -> dict[str, Any] | None:
+    """裸焦段兜底:「135」「55 z卡口」这类口语说法 → 焦段家族,或被卡口收窄后的唯一 SKU。
+
+    只在常规解析(型号/系列/昵称打分)全无结果时才走这条路,所以它只会把
+    「本来什么都认不出」变成「认出一个焦段」,不会改写任何已有的解析结论。
+
+    同焦段多款时**不挑具体型号**——返回的投影 ``sku`` 为空、``price_usd`` 为 None,
+    产品证据词只落在焦段本身("Viltrox 135mm")。挑一个具体 SKU 才是错配的来源。
+
+    裸数字(没写 mm)即便焦段家族只有一行也不认具体 SKU:那一行是目录形状凑出来的,
+    不是操作员点的。要认 SKU,得有卡口/系列线索,或者操作员自己写了单位。
+    """
+    decision = _focal_family_decision(query)
+    if not decision:
+        return None
+    status = str(decision.get("status") or "")
+    if status == "unique":
+        product = decision.get("product")
+        if not isinstance(product, dict):
+            return None
+        projection = _public_product_projection(
+            product,
+            match_score=(1, 1, len(str(product.get("series") or ""))),
+        )
+        # 标签必须等于实际发生的事:没有卡口线索却写 "narrowed_by_mount",
+        # 排障时会把「目录里只有一支」误读成「操作员点了卡口」。
+        narrowed_by = str(decision.get("narrowed_by") or "")
+        projection["resolution_kind"] = {
+            "mount": "focal_narrowed_by_mount",
+            "series": "focal_narrowed_by_series",
+        }.get(narrowed_by, "focal_single_in_catalog")
+        projection["focal_mm"] = decision.get("focal")
+        return projection
+    if status != "family":
+        return None
+    family = product_focal_family.family_projection(decision)
+    return {**family, "specs_line": _specs_line(family), "match_score": [1, 1, 0]}
+
+
 def resolve_product(query: str) -> dict[str, Any] | None:
     """Resolve operator free text to a real catalog product, or None.
 
@@ -466,6 +590,13 @@ def resolve_product(query: str) -> dict[str, Any] | None:
     category_detail / series / price_usd / description / specs_line / match_score.
     Read only; never raises on catalog failure (returns None instead).
     """
+    resolved = _resolve_product_impl(query)
+    if resolved is not None:
+        return resolved
+    return resolve_focal_family_product(query)
+
+
+def _resolve_product_impl(query: str) -> dict[str, Any] | None:
     text = str(query or "").strip()
     if not text:
         return None

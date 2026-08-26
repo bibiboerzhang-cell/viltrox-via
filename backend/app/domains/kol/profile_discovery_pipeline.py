@@ -9,6 +9,7 @@ from app.domains.kol import (
     profile_online_qualification,
     profile_recall,
     profile_recall_qualification,
+    recall_favorite_exclusion,
     search_session_diagnostics,
     search_sessions,
 )
@@ -274,6 +275,11 @@ async def execute_smart_search_profile_advance_pipeline(
         # A7:逐轮收走 provider 自带的闸门漏斗切片(只读不改),用于会话诊断落库。
         provider_funnels: list[dict[str, Any]] = []
         online_contract: dict[str, Any] | None = None
+        # 用户裁决 2026-08-25 第 2 条的在线腿:任意员工收藏过的人,在线也不再出现。
+        # 身份键(平台+handle)只查一次,逐轮复用——在线候选没有 pool id,只能按身份比。
+        # 摘除点在 provider 一返回、进资质判定之前,是在线腿最早的可排除位置。
+        _favorite_identity_keys = recall_favorite_exclusion.favorited_identity_keys()
+        _online_favorite_blocks: list[dict[str, Any]] = []
         discovery_kwargs = {
             "query_text": query,
             "platforms": resolved_platforms,
@@ -330,6 +336,13 @@ async def execute_smart_search_profile_advance_pipeline(
                     auto_enroll=False,
                     page_cursors=cursor,
                 )
+                # 全局排除已被关注的人:就地摘掉,计数逐轮累加(缺口照实,不补别人充数)。
+                _kept, _fav_block = recall_favorite_exclusion.exclude_favorited_online_candidates(
+                    batch.get("new_creators") or [],
+                    identity_keys=_favorite_identity_keys,
+                )
+                batch["new_creators"] = _kept
+                _online_favorite_blocks.append(_fav_block)
                 if not _round_legs:
                     _round_legs.extend(_text(item) for item in (batch.get("platforms") or []) if _text(item))
                 _round_cursor.clear()
@@ -376,6 +389,10 @@ async def execute_smart_search_profile_advance_pipeline(
                 "failed": 0,
             }
             online_result["_session_pipeline_running"] = True
+            # 在线腿摘了几个已被关注的人,逐轮加总后如实回执(0 也写,空态诚实)。
+            online_result["favorite_exclusion"] = recall_favorite_exclusion.merge_diagnostics(
+                *_online_favorite_blocks
+            )
             search_sessions.attach_online_qualified_result(int(session_id), online_result)
             online_contract = {key: value for key, value in online_result.items() if key != "items"}
             new_discovery = {
@@ -391,6 +408,7 @@ async def execute_smart_search_profile_advance_pipeline(
                 "existing_matches": [],
                 "provider_calls": online_result.get("provider_calls_performed"),
                 "online_qualification": online_contract,
+                "favorite_exclusion": online_result.get("favorite_exclusion"),
             }
         else:
             new_discovery = await discover_new_creators(
@@ -399,6 +417,13 @@ async def execute_smart_search_profile_advance_pipeline(
                 per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 15), 50)),
                 per_platform_limits=payload.get("new_discovery_per_platform_limits"),
             )
+            # 旧发现路径同样受全局排除约束(两条在线路径口径必须一致)。
+            _kept, _fav_block = recall_favorite_exclusion.exclude_favorited_online_candidates(
+                new_discovery.get("new_creators") or [],
+                identity_keys=_favorite_identity_keys,
+            )
+            new_discovery["new_creators"] = _kept
+            new_discovery["favorite_exclusion"] = _fav_block
             # 收口路①-4:新人优先展示信号(新发现/低合作/成长期加权,饱和大号降位)。纯展示透出,
             # 绝不写 viltrox_fit_score / 不改 rule_v0;注解后再 attach(库内召回的 display_rank_score 已在 recall 侧产出)。
             new_discovery = _annotate_new_priority(new_discovery)

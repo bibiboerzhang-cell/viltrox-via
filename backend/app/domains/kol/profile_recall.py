@@ -66,6 +66,8 @@ from app.domains.kol.profile_recall_precision import (
     ranking_key,
     select_with_business_lane_quotas,
 )
+from app.domains.kol import profile_recall_display_boost as _display_boost
+from app.domains.kol import recall_favorite_exclusion as _favorite_exclusion
 from app.domains.kol.profile_vertical_signals import classify_verticals, vertical_explanations
 from app.domains.kol.search_relevance_eval import build_runtime_evaluation_status
 from app.domains.kol import profile_recall_support as _support
@@ -591,6 +593,12 @@ def recall_kol_profiles(
             local_backfill = []
         hits.extend(hit for hit in local_backfill if hit.kol_pool_id not in known_ids)
         hits = hits[:safe_candidate_limit]
+    # 用户裁决 2026-08-25 第 2 条:任意员工收藏过的人,任何人搜索时都不再出现(全局排除,
+    # 非按员工隔离——目的正是避免两个同事撞同一个 KOL)。放在召回段出口、行/证据水化之前,
+    # 是本函数里最早的可排除点:被摘掉的人不再吃 _entry_rows / 证据投影 / 排序 / rerank 的算力。
+    # 缺表或查询异常一律不排除(诚实降级、计数照实为 0),绝不因为查不到收藏就误杀。
+    retrieved_hit_count = len(hits)
+    hits, favorite_exclusion = _favorite_exclusion.exclude_favorited_hits(hits)
     retrieved_at = perf_counter()
 
     ordered_hits: list[RecallHit] = []
@@ -739,36 +747,20 @@ def recall_kol_profiles(
             reverse=True,
         )
 
-    # ── 展示层二段增强(2026-07-02 用户令):①采纳回流上浮 ②LLM 头部 rerank。
-    # 两段都只动 display_rank_score(与「新人优先」同款展示信号),失败静默、诊断留痕。
-    _rerank_note = ""
-    try:
-        _adoption = _adoption_profile()
-        _boosted = 0
-        if _adoption:
-            for _bucket_items in buckets.values():
-                for _it in _bucket_items:
-                    _b = _adoption_boost_for(_it, _adoption)
-                    if _b:
-                        _it["display_rank_score"] = round(_float(_it.get("display_rank_score")) + _b, 6)
-                        _it["adoption_boost"] = _b
-                        _boosted += 1
-        if provider_free:
-            _rerank_note = "provider_free_initial"
-        elif os.environ.get("RECALL_LLM_RERANK_ENABLED", "1").strip().lower() not in {"0", "false", "no"}:
-            _rerank_note = _llm_rerank_buckets(buckets, resolved_text, persona_text, product_label)
-        if _boosted or _rerank_note.startswith("ok"):
-            for _bucket_items in buckets.values():
-                _bucket_items.sort(
-                    key=ranking_key,
-                    reverse=True,
-                )
-        _rerank_note = (_rerank_note or "off") + f" boost:{_boosted}"
-    except Exception as _rr_exc:
-        failure_text = f"{type(_rr_exc).__name__} {_rr_exc}".lower()
-        reason = "rerank_timeout" if "timeout" in failure_text or "deadline" in failure_text else "rerank_unavailable"
-        logger.warning("profile_recall rerank skipped reason=%s", reason, exc_info=True)
-        _rerank_note = f"stage_skipped:{reason}"
+    # 展示层二段增强(2026-07-02 用户令)已抽到 profile_recall_display_boost;钩子按名传入,
+    # 所以测试对本模块 _adoption_profile / _llm_rerank_buckets 的 monkeypatch 照旧生效。
+    _rerank_note = _display_boost.apply_display_boost_and_rerank(
+        buckets,
+        provider_free=bool(provider_free),
+        resolved_text=resolved_text,
+        persona_text=persona_text,
+        product_label=product_label,
+        adoption_profile=_adoption_profile,
+        adoption_boost_for=_adoption_boost_for,
+        llm_rerank_buckets=_llm_rerank_buckets,
+        ranking_key=ranking_key,
+        to_float=_float,
+    )
     gated_at = perf_counter()
 
     # Business lanes are now an actual selection contract.  Creator/reviewer
@@ -901,6 +893,11 @@ def recall_kol_profiles(
         "business_buckets": business_buckets,
         "diagnostics": {
             "candidate_count": len(hits),
+            # 召回段真实吐出多少 vs 全局排除后剩多少。两个数并排放,操作员一眼能把
+            # 「少了几个人」归因到「他们已被同事关注」,而不是误读成搜索能力变差。
+            "retrieved_candidate_count": retrieved_hit_count,
+            "favorite_excluded_count": int(favorite_exclusion.get("excluded_count") or 0),
+            "favorite_exclusion": favorite_exclusion,
             "deduped_candidate_count": len(ordered_hits),
             "duplicate_count": duplicate_count,
             "typed_candidate_count": len(buckets["creator"]) + len(buckets["reviewer"]),
@@ -992,4 +989,7 @@ def recall_kol_profiles(
             ]
             for lane in ("core_vertical", "expansion", "exploration")
         }
+    # 缺口照实说:排除了几个已被关注的人、还差几个。两条分支都走这一句(smart_local 的
+    # shortfall 在上面刚被覆写),所以放在最后统一补,永远读的是最终真值。
+    _favorite_exclusion.annotate_shortfall(response["diagnostics"])
     return response

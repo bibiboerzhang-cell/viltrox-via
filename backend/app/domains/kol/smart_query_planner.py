@@ -582,12 +582,17 @@ def _plan_text_query_impl(
             return persona_plan
 
     if resolved_product:
+        # 焦段家族(操作员只说了「135」)没有唯一 SKU、也没有唯一价格。这两行必须如实写
+        # "not specified",绝不能渲染成空 SKU 或 "None USD" —— 那会让模型把空值当成事实。
+        _sku_line = _text(resolved_product.get("sku")) or "not a single SKU — the operator named a focal length family, not one model"
+        _price = _as_float_or_none(resolved_product.get("price_usd"))
+        _price_line = f"{_price} USD" if _price else "not specified (family spans several price points)"
         product_block = f"""
 Resolved Viltrox product (matched from the operator text against the live product catalog — TRUST THIS over the raw text):
-- SKU: {resolved_product.get('sku')}
+- SKU: {_sku_line}
 - Name: {resolved_product.get('marketing_name') or resolved_product.get('model_name')}
 - Category: {resolved_product.get('category_main')} / {resolved_product.get('series')}
-- Price: {resolved_product.get('price_usd')} USD
+- Price: {_price_line}
 - Specs: {resolved_product.get('specs_line')}
 First DEEPLY analyse THIS specific product (what it is, its price tier, its professional level, who actually buys it), then plan the creator search. Do NOT treat it as a generic camera accessory.
 """

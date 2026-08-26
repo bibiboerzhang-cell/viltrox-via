@@ -219,6 +219,8 @@ export function onlineQualifiedSummaryFromSession(session: VkpiKolSearchHistoryI
     uniqueQualified: accepted,
     pending,
     rejected,
+    // 联网车道对「没有视频证据」是硬拒绝(陌生人零历史),没有待补抓这一桶。
+    activityUnknown: 0,
     shortfall,
     shortfallReasons: contractValid
       ? reasonLabels(contract, shortfall)

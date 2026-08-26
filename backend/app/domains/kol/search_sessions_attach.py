@@ -17,6 +17,10 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.kol.contact_system import project_public_profile_url
+from app.domains.kol.profile_recall_activity_gate import (
+    UNKNOWN_ACTIVITY_MODES,
+    UNKNOWN_ACTIVITY_POLICY_KEY,
+)
 from app.domains.kol.profile_recall_match_evidence import query_evidence_terms, why_fit_from_match_evidence
 from app.domains.kol import search_sessions_attach_jobs as _attach_jobs
 
@@ -116,6 +120,10 @@ def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any
     output: dict[str, Any] = {
         "schema": "smart_local_gate_evidence_v2",
         "passed": raw.get("passed") is True,
+        # 「活跃度未知·待补抓」是判定结果的一部分,不是可丢的装饰:丢了它,
+        # 回放里这一行就与「陈旧被拒」长得一模一样,界面也就没得如实显示。
+        "deferred": raw.get("deferred") is True,
+        "deferred_reason": _safe_public_code(raw.get("deferred_reason"), limit=80) or None,
         "rejection_reasons": [
             reason
             for entry in _list(raw.get("rejection_reasons"))[:12]
@@ -175,6 +183,11 @@ def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any
         "identity_kind": _safe_public_code(activity.get("identity_kind"), limit=40) or None,
         "identity_present": bool(_text(activity.get("identity"))),
         "passed": activity.get("passed") is True,
+        # known=False 是「从没抓过」,与 passed=False 的「抓过但不合格」是两件事。
+        "known": activity.get("known") is True,
+        "deferred": activity.get("deferred") is True,
+        "status": _safe_public_code(activity.get("status"), limit=80),
+        "deferred_reason": _safe_public_code(activity.get("deferred_reason"), limit=80) or None,
         "source": _safe_public_code(activity.get("source")),
     }
 
@@ -260,7 +273,13 @@ def _safe_local_qualification(value: Any) -> dict[str, Any]:
     status = _text(raw.get("status")).lower()
     if status in {"ready", "shortfall"}:
         output["status"] = status
-    for key in ("qualified_count", "returned_count", "shortfall", "evaluated_count"):
+    for key in (
+        "qualified_count",
+        "returned_count",
+        "qualified_returned_count",
+        "shortfall",
+        "evaluated_count",
+    ):
         number = _safe_non_negative_int(raw.get(key), maximum=100_000)
         if number is not None:
             output[key] = number
@@ -274,9 +293,15 @@ def _safe_local_qualification(value: Any) -> dict[str, Any]:
         number = _safe_non_negative_int(policy.get(key), maximum=5_000_000_000)
         if number is not None:
             safe_policy[key] = number
-    for key in ("server_owned", "allow_unknown_followers", "allow_unknown_or_stale_video", "allow_unknown_market", "allow_unknown_language", "allow_unknown_profile_type", "allow_low_quality_backfill", "canonical_dedupe"):
+    for key in ("server_owned", "allow_unknown_followers", "allow_unknown_market", "allow_unknown_language", "allow_unknown_profile_type", "allow_low_quality_backfill", "canonical_dedupe"):
         if isinstance(policy.get(key), bool):
             safe_policy[key] = policy[key]
+    # 活跃度未知旋钮是 defer/reject 的字符串,不是布尔:上一版白名单还留着已被
+    # 删掉的 allow_unknown_or_stale_video,新旋钮却一个字都存不下,会话历史里
+    # 因此查不到「这批人为什么被拆到待补抓桶」的出处。
+    unknown_activity = _safe_public_code(policy.get(UNKNOWN_ACTIVITY_POLICY_KEY), limit=40)
+    if unknown_activity in UNKNOWN_ACTIVITY_MODES:
+        safe_policy[UNKNOWN_ACTIVITY_POLICY_KEY] = unknown_activity
     safe_policy["market"] = _safe_public_code(policy.get("market"), limit=40)
     safe_policy["platforms"] = [
         platform
@@ -290,6 +315,25 @@ def _safe_local_qualification(value: Any) -> dict[str, Any]:
             if (item := _safe_public_code(entry, limit=80))
         ]
     output["policy"] = safe_policy
+
+    deferred_activity = _dict(raw.get("deferred_activity"))
+    if deferred_activity:
+        safe_deferred: dict[str, Any] = {
+            "counts_toward_target": deferred_activity.get("counts_toward_target") is True,
+            "selectable": deferred_activity.get("selectable") is True,
+        }
+        mode = _safe_public_code(deferred_activity.get("policy"), limit=40)
+        if mode in UNKNOWN_ACTIVITY_MODES:
+            safe_deferred["policy"] = mode
+        for key in ("reason_code", "status"):
+            code = _safe_public_code(deferred_activity.get(key), limit=80)
+            if code:
+                safe_deferred[key] = code
+        for key in ("available", "returned", "max_video_age_days", "fresh_priority_days"):
+            number = _safe_non_negative_int(deferred_activity.get(key), maximum=100_000)
+            if number is not None:
+                safe_deferred[key] = number
+        output["deferred_activity"] = safe_deferred
 
     for source_key in ("funnel", "rejected_by_reason"):
         safe_counts: dict[str, int] = {}

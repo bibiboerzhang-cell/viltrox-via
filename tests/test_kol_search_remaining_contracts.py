@@ -481,9 +481,19 @@ def test_canon_brand_without_mount_does_not_guess_ef_variant(
         lambda **_kwargs: {"products": [ef, rf]},
     )
 
-    assert product_resolver.resolve_product(
+    resolved = product_resolver.resolve_product(
         "Viltrox AF 85mm F1.8 Pro Canon portrait lens"
-    ) is None
+    )
+
+    # 2026-08-25 焦段家族兜底上线后,这条 query 不再是「什么都没解析出来」,而是
+    # 「85mm Pro 焦段家族」。本契约保护的东西一分没松:Canon 既可能是 EF 也可能是 RF,
+    # 谁都不许被挑中。断言由「必须是 None」收紧为「绝不许绑定任一卡口变体」——
+    # 家族投影 sku 为空、两个卡口都如实列出;替操作员挑一个才是事故。
+    assert (resolved or {}).get("sku") in ("", None)
+    if resolved is not None:
+        assert resolved["resolution_kind"] == "focal_family"
+        assert resolved["focal_family_mounts"] == ["EF-mount", "RF-mount"]
+        assert set(resolved["focal_family_skus"]) == {"AF-85-A", "AF-85-B"}
 
 
 def test_recall_attachment_saves_llm_query_plan_in_result_summary(

@@ -2,7 +2,18 @@
 
 Approval is a security boundary: a request may only select pool rows already
 materialized as recall candidates on the owned session.  Strict local sessions
-additionally require the persisted server qualification proof to have passed.
+additionally require the persisted server qualification proof to have passed —
+with exactly one named exception, the "we never crawled this creator" bucket.
+
+That bucket is reported outside the 30-person target, so the "occupying a slot
+implies selectable" rule does not force it open; it is opened on purpose all the
+same.  A row that is returned to the operator, labelled, and then impossible to
+act on is worse than one that was never returned, and every other gate
+(account quality / followers / market / language / profile type / platform /
+relevance) has already passed for these rows.  Freshness itself is not relaxed:
+stale, future-dated, non-video and unauditable rows never reach this branch.
+The picks are recorded separately in the approval summary, so the audit shows
+which of them the operator knowingly took with activity still unverified.
 """
 from __future__ import annotations
 
@@ -12,6 +23,11 @@ import re
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.kol.profile_recall_activity_gate import (
+    DEFERRED_ACTIVITY_STATUS,
+    UNKNOWN_ACTIVITY_REASON,
+    deferred_activity_proof,
+)
 from app.domains.kol.search_sessions_serde import (
     _dict,
     _int_or_none,
@@ -84,14 +100,34 @@ def _strict_gate_passed(value: Any) -> bool:
     )
 
 
+def _strict_gate_deferred(value: Any) -> bool:
+    """活跃度未知(从未抓到过视频证据)的候选:除活跃度外每道闸都已通过。
+
+    与 ``_strict_gate_passed`` 同一份证据、同一套字段来源;区别只在活跃度这一
+    项是「没抓过」而不是「不合格」。陈旧 / 未来时间 / 非视频 / 无可审计链接的
+    行都进不来,天数阈值也不在这里读——它们在服务端出证据时就已经判过。
+    """
+    proof = _dict(value)
+    relevance = _dict(proof.get("relevance"))
+    return bool(
+        _text(proof.get("schema")) == _STRICT_GATE_SCHEMA
+        and deferred_activity_proof(proof)
+        and bool(_list(relevance.get("evidence")))
+    )
+
+
 def _candidate_sets(
     conn: Any,
     session_id: int,
     *,
     require_passed_proof: bool,
     online_contract: dict[str, Any],
-) -> tuple[set[int], set[int]]:
-    """Return (session candidate IDs, approvable IDs), both pool-backed."""
+) -> tuple[set[int], set[int], set[int]]:
+    """Return (session IDs, approvable IDs, activity-unknown IDs), pool-backed.
+
+    The third set is a strict subset of the second: it names the approvable rows
+    whose only open gate is "we never crawled a video for this creator".
+    """
     rows = conn.execute(
         """
         SELECT i.kol_pool_id, i.item_type, i.status, i.payload_json
@@ -105,6 +141,7 @@ def _candidate_sets(
     ).fetchall()
     session_ids: set[int] = set()
     approvable_ids: set[int] = set()
+    activity_unknown_ids: set[int] = set()
     for raw in rows:
         row = dict(raw)
         kol_pool_id = _int_or_none(row.get("kol_pool_id"))
@@ -138,9 +175,13 @@ def _candidate_sets(
             ):
                 continue
         elif require_passed_proof and not _strict_gate_passed(proof):
-            continue
+            # 唯一放行的非通过分支:活跃度未知桶。它不占 30 人目标数,但
+            # 必须能被勾选——否则界面上就是一批看得见、点不动的死行。
+            if not _strict_gate_deferred(proof):
+                continue
+            activity_unknown_ids.add(kol_pool_id)
         approvable_ids.add(kol_pool_id)
-    return session_ids, approvable_ids
+    return session_ids, approvable_ids, activity_unknown_ids
 
 
 def approve_session(
@@ -173,13 +214,16 @@ def approve_session(
     strict_local = _strict_local_session(session_row)
     online_contract = _strict_online_contract(session_row)
     strict_online = bool(online_contract)
-    session_ids, approvable_ids = _candidate_sets(
+    session_ids, approvable_ids, activity_unknown_ids = _candidate_sets(
         conn,
         int(session_id),
         require_passed_proof=strict_local,
         online_contract=online_contract,
     )
     accepted = [kol_pool_id for kol_pool_id in requested if kol_pool_id in approvable_ids]
+    accepted_activity_unknown = [
+        kol_pool_id for kol_pool_id in accepted if kol_pool_id in activity_unknown_ids
+    ]
     skipped_not_in_session = [kol_pool_id for kol_pool_id in requested if kol_pool_id not in session_ids]
     skipped_failed_qualification = [
         kol_pool_id
@@ -197,6 +241,12 @@ def approve_session(
         "approved_count": len(accepted),
         "skipped_not_in_session": skipped_not_in_session,
         "skipped_failed_qualification": skipped_failed_qualification,
+        # 活跃度未知的选择单独记账:批准记录里看得出哪几个人是在「还没抓到
+        # 视频证据」的状态下被操作员主动收下的,不与合格者混为一谈。
+        "approved_activity_unknown_ids": accepted_activity_unknown,
+        "approved_activity_unknown_count": len(accepted_activity_unknown),
+        "approved_activity_unknown_status": DEFERRED_ACTIVITY_STATUS,
+        "approved_activity_unknown_reason": UNKNOWN_ACTIVITY_REASON,
         "strict_local_proof_required": strict_local,
         "strict_online_proof_required": strict_online,
         "approved_by": actor_id,
@@ -225,6 +275,8 @@ def approve_session(
             "skipped_not_in_pool": skipped,
             "skipped_not_in_session": skipped_not_in_session,
             "skipped_failed_qualification": skipped_failed_qualification,
+            "approved_activity_unknown_ids": accepted_activity_unknown,
+            "approved_activity_unknown_count": len(accepted_activity_unknown),
         }
     )
     return session

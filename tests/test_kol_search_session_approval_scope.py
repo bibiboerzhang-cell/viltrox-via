@@ -299,3 +299,108 @@ def test_outreach_ignores_request_body_candidate_override(
     )
 
     assert captured["ids"] == [11]
+
+
+def _deferred_candidate(kol_pool_id: int) -> dict[str, Any]:
+    """A real "we never crawled this creator" proof, taken from the qualifier."""
+    from datetime import datetime, timezone
+
+    from app.domains.kol import profile_recall_qualification
+
+    item = {
+        "kol_pool_id": kol_pool_id,
+        "handle": f"creator-{kol_pool_id}",
+        "platform": "youtube",
+        "bucket": "creator",
+        "display_rank_score": 1.0,
+        "match_evidence": [{"field": "bio", "term": "lens", "source": "server_profile_evidence"}],
+    }
+    row = {
+        "kol_pool_id": kol_pool_id,
+        "followers": 5_000,
+        "country": "US",
+        "language": "en",
+        "profile_type": "creator",
+        "platform": "youtube",
+        "bio": "Independent photographer testing camera lenses in the field.",
+        "raw_platform_data": {},
+    }
+    selected, _, _ = profile_recall_qualification.qualify_local_candidates(
+        buckets={"creator": [item], "reviewer": []},
+        rows_by_id={kol_pool_id: row},
+        evidence_by_id={kol_pool_id: {}},
+        policy=profile_recall_qualification.smart_local_policy(market="US", platforms=["youtube"]),
+        creator_quota=30,
+        reviewer_quota=0,
+        as_of=datetime(2026, 8, 25, 12, tzinfo=timezone.utc),
+    )
+    proof = _safe_gate_evidence(selected[0]["qualification_evidence"], allowed_terms={"lens"})
+    assert proof["deferred"] is True and proof["passed"] is False
+    return {
+        "kol_pool_id": kol_pool_id,
+        "status": "matched",
+        "payload_json": json.dumps({"qualification_evidence": proof}),
+    }
+
+
+def test_strict_local_approval_accepts_the_activity_unknown_bucket_it_returned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """占名额或不占名额都行,唯独不许「返回了却点不动」。
+
+    活跃度未知的候选不计入 30 人目标数,但它确实被返回给了操作员,所以必须
+    能勾选入库——并且在批准记录里单独记账,不与真·合格者混同。
+    """
+    conn = _ApprovalConn(
+        session=_session_row(strict=True),
+        items=[_candidate(11, passed=True), _deferred_candidate(12), _candidate(13, passed=False)],
+    )
+    monkeypatch.setattr(search_sessions, "get_conn", lambda: conn)
+
+    result = search_sessions.approve_session(51, kol_pool_ids=[11, 12, 13], staff={"id": 7})
+
+    assert result["approved_kol_ids"] == [11, 12]
+    assert result["skipped_failed_qualification"] == [13]
+    assert result["approved_activity_unknown_ids"] == [12]
+    approval = result["result_summary"]["approval"]
+    assert approval["approved_activity_unknown_ids"] == [12]
+    assert approval["approved_activity_unknown_count"] == 1
+    assert approval["approved_activity_unknown_status"] == "activity_unknown_pending_fetch"
+    assert approval["strict_local_proof_required"] is True
+
+
+def test_activity_unknown_branch_never_launders_a_stale_or_broken_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one open gate is ``activity``; every other failure still fails closed."""
+    from app.domains.kol.search_sessions_approval import _strict_gate_deferred
+
+    deferred = json.loads(_deferred_candidate(12)["payload_json"])["qualification_evidence"]
+    assert _strict_gate_deferred(deferred) is True
+
+    stale = {
+        **deferred,
+        "activity": {**deferred["activity"], "known": True, "age_days": 200.0, "deferred": False},
+    }
+    assert _strict_gate_deferred(stale) is False
+
+    broken_market = {**deferred, "market": {**deferred["market"], "passed": False}}
+    assert _strict_gate_deferred(broken_market) is False
+
+    no_evidence = {**deferred, "relevance": {**deferred["relevance"], "evidence": []}}
+    assert _strict_gate_deferred(no_evidence) is False
+
+    # A plain failed row must not be approvable just because someone stamps it.
+    plain_failure = json.loads(_candidate(13, passed=False)["payload_json"])["qualification_evidence"]
+    assert _strict_gate_deferred({**plain_failure, "deferred": True}) is False
+
+    conn = _ApprovalConn(
+        session=_session_row(strict=True),
+        items=[
+            {**_deferred_candidate(12), "payload_json": json.dumps({"qualification_evidence": stale})},
+        ],
+    )
+    monkeypatch.setattr(search_sessions, "get_conn", lambda: conn)
+    result = search_sessions.approve_session(51, kol_pool_ids=[12], staff={"id": 7})
+    assert result["approved_kol_ids"] == []
+    assert result["skipped_failed_qualification"] == [12]

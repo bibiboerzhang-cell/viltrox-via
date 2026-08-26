@@ -3,6 +3,7 @@ import { CheckCircle2, Clock3, Heart, Loader2, ShieldAlert } from "lucide-react"
 import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domains/kol";
 
 import {
+  ACTIVITY_UNKNOWN_VIDEO_LABEL,
   localQualifiedSummary,
   type LocalQualifiedRow,
   type LocalQualifiedSummary,
@@ -34,6 +35,8 @@ function dateLabel(value: string): string {
 function qualificationTone(row: LocalQualifiedRow): string {
   if (row.qualification === "qualified") return "border-emerald-300/25 bg-emerald-400/[0.10] text-emerald-100";
   if (row.qualification === "rejected") return "border-rose-300/20 bg-rose-400/[0.08] text-rose-100";
+  // 「从没抓到过视频」自成一色:既不是绿色的合格,也不是红色的未通过。
+  if (row.activityUnknown) return "border-sky-300/25 bg-sky-400/[0.10] text-sky-100";
   return "border-amber-300/20 bg-amber-400/[0.08] text-amber-100";
 }
 
@@ -80,6 +83,9 @@ export function StrictQualifiedList({
   const selectableIds = summary.rows
     .filter((row) => row.strictQualified && Number(row.item.kol_pool_id) > 0)
     .map((row) => Number(row.item.kol_pool_id));
+  // 活跃度未知的人不进「全选」——他们不计入 30 人目标,要一个个主动确认。
+  const activityUnknownSelectable = summary.rows
+    .filter((row) => row.activityUnknown && Number(row.item.kol_pool_id) > 0).length;
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
   const updateAll = () => {
     if (selectionDisabled || !selectionReady || !onSelectionChange || !selectableIds.length) return;
@@ -120,12 +126,21 @@ export function StrictQualifiedList({
               未通过 {summary.rejected}（不计入）
             </span>
           ) : null}
+          {summary.activityUnknown > 0 ? (
+            <span
+              data-testid={`${lane}-activity-unknown-count`}
+              title="这些人其他条件都合格，但我们一次都没抓到过他们的视频，所以还不知道他们最近有没有更新。不计入 30 人，可以单独勾选先收着。"
+              className="inline-flex items-center gap-1 rounded border border-sky-300/20 bg-sky-400/[0.06] px-1.5 py-0.5 text-[10.5px] leading-4 text-sky-100"
+            >
+              <Clock3 size={9} /> 从没抓到过视频 {summary.activityUnknown}（不计入 {summary.target} 人，可单独勾选）
+            </span>
+          ) : null}
           {extraStats.map((label) => (
             <span key={label} className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">{label}</span>
           ))}
-          {selectableIds.length ? (
+          {selectableIds.length || activityUnknownSelectable ? (
             <span className="rounded border border-emerald-300/15 px-1.5 py-0.5 text-[10.5px] leading-4 text-emerald-100">
-              可选 {selectableIds.length}
+              可选 {selectableIds.length + activityUnknownSelectable}
             </span>
           ) : null}
         </div>
@@ -182,7 +197,9 @@ export function StrictQualifiedList({
             <tbody>
               {summary.rows.map((row) => {
                 const poolId = Number(row.item.kol_pool_id) || 0;
-                const selectable = row.strictQualified && poolId > 0;
+                // 返回给操作员的行必须点得动:活跃度未知的人不计入 30 人目标,
+                // 但同样可以勾选入库——看得见却点不动才是最坏的一种。
+                const selectable = (row.strictQualified || row.activityUnknown) && poolId > 0;
                 const favorited = favoriteIds.has(poolId);
                 const favoriteBusy = favoriteBusyIds.has(poolId);
                 const favoriteResult = favoriteResults.get(poolId) || "";
@@ -199,7 +216,13 @@ export function StrictQualifiedList({
                       aria-label={`选择${online ? "联网" : "本地"} KOL ${row.name}`}
                       checked={selectable && selectedIds.has(poolId)}
                       disabled={selectionDisabled || !selectionReady || !selectable || !onSelectionChange}
-                      title={selectable && selectionReady ? "选择此服务端合格候选" : "待验收、未终态或未通过候选不可选择"}
+                      title={
+                        !selectable || !selectionReady
+                          ? "待验收、未终态或未通过候选不可选择"
+                          : row.activityUnknown
+                            ? "这个人其他条件都合格，但我们一次都没抓到过他的视频，先收着也可以"
+                            : "选择此服务端合格候选"
+                      }
                       onChange={() => updateOne(poolId)}
                       className="accent-emerald-500 disabled:cursor-not-allowed disabled:opacity-35"
                     />
@@ -216,7 +239,7 @@ export function StrictQualifiedList({
                     </button>
                   </td>
                   <td className="px-2 py-2">
-                    {!row.strictQualified ? (
+                    {!row.strictQualified && !row.activityUnknown ? (
                       <span className="text-[10.5px] leading-4 text-[var(--ds-text-meta)]">过闸后可关注</span>
                     ) : poolId <= 0 ? (
                       <span className="text-[10.5px] leading-4 text-amber-200">待入库</span>
@@ -243,7 +266,12 @@ export function StrictQualifiedList({
                   </td>
                   <td className="px-2 py-2 uppercase text-slate-400">{row.platform}</td>
                   <td className="px-2 py-2 tabular-nums">{compactNumber(row.followers)}</td>
-                  <td className="px-2 py-2 tabular-nums">{dateLabel(row.latestVideoAt)}</td>
+                  <td
+                    className={`px-2 py-2 ${row.activityUnknown ? "text-sky-200" : "tabular-nums"}`}
+                    title={row.activityUnknown ? "这个人的视频我们一次都没抓到过，还不知道他最近有没有更新" : undefined}
+                  >
+                    {row.activityUnknown ? ACTIVITY_UNKNOWN_VIDEO_LABEL : dateLabel(row.latestVideoAt)}
+                  </td>
                   <td className="max-w-48 truncate px-2 py-2" title={row.marketEvidence || "待服务端提供市场证据"}>
                     {row.marketEvidence || "待核验"}
                   </td>
@@ -256,7 +284,10 @@ export function StrictQualifiedList({
                   <td className={`px-2 py-2 ${statusTone(row.analysisStatus)}`}>{row.analysisStatus}</td>
                   <td className="px-2 py-2">
                     <span className={`inline-flex rounded border px-2 py-1 text-[10.5px] leading-4 ${qualificationTone(row)}`}>
-                      {row.qualificationLabel}{row.qualification === "pending" ? "（不计数）" : ""}
+                      {row.qualificationLabel}
+                      {row.activityUnknown
+                        ? `（不计入 ${summary.target} 人）`
+                        : row.qualification === "pending" ? "（不计数）" : ""}
                     </span>
                   </td>
                   </tr>

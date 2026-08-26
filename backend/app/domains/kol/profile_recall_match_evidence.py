@@ -404,14 +404,51 @@ def _intent_proof_terms(
     return proven
 
 
+INTENT_TERMS_DEFAULT = 2
+INTENT_TERMS_FLOOR = 1
+
+
+def _intent_terms_required(provable_words: list[str], min_intent_terms: Any) -> int:
+    """How many query-intent words this candidate must prove.
+
+    A query that can only ever prove one word stays at 1 — demanding two proofs
+    from 摄影师 would make a one-word Chinese query unsatisfiable.  Above that
+    the caller's ``min_intent_terms`` decides, clamped to [1, 2] so no caller can
+    silently invent a looser or stricter regime than the two the contract knows.
+
+    为什么在线车道传 1(2026-08-25):AND-2 的前提是候选行有 8 个可举证字段。在线
+    provider 行只填得出 handle / display_name / bio / 最新视频标题——
+    ``profile_online_qualification._candidate_row`` 里的 primary_topic /
+    content_style / profile_text / type_reason 一律取自 provider 从不下发的键
+    (``profile_discovery_provider`` 全程不产出这四个字段),恒为空串;
+    secondary_topics_json 同理恒为 []。要它凑够 2 个意图词,等于要它证明一件它
+    没有资料可证明的事:实测 16 个会话 evaluated≈308 / accepted=11(3.6%),
+    low_relevance≈87%,ONLINE_TARGET=30 一次都没达到过。
+    这不是放宽标准,是让举证门槛跟随可举证面——本地行字段丰富,继续要 2 个。
+    """
+    if len(provable_words) <= 1:
+        return INTENT_TERMS_FLOOR
+    try:
+        requested = int(min_intent_terms)
+    except (TypeError, ValueError):
+        return INTENT_TERMS_DEFAULT
+    return max(INTENT_TERMS_FLOOR, min(INTENT_TERMS_DEFAULT, requested))
+
+
 def build_match_evidence(
     row: dict[str, Any],
     evidence: dict[str, Any],
     query_text: Any,
     *,
     required_product_terms: Iterable[str] = (),
+    min_intent_terms: int = INTENT_TERMS_DEFAULT,
 ) -> list[dict[str, str]]:
-    """Build field-level proof from public profile or representative-work data."""
+    """Build field-level proof from public profile or representative-work data.
+
+    ``min_intent_terms`` 只调「查询本身能举证 2 个及以上意图词时,要求候选证明几个」。
+    默认 2 = 现有口径逐字不变;唯一传 1 的调用方是在线车道
+    (``profile_online_qualification``),理由见 :func:`_intent_terms_required`。
+    """
     terms = query_evidence_terms(query_text)
     product_terms = query_evidence_terms(" ".join(str(item or "") for item in required_product_terms))
     all_terms = list(dict.fromkeys([*terms, *product_terms]))
@@ -435,7 +472,7 @@ def build_match_evidence(
     # 摄影师 tiles into two bigrams but is still one word, and demanding two
     # proofs from it would make a one-word Chinese query unsatisfiable.
     provable_words = _intent_proof_terms(terms, set(terms), query_text)
-    required_terms = 1 if len(provable_words) <= 1 else 2
+    required_terms = _intent_terms_required(provable_words, min_intent_terms)
     identity_proof_terms = _product_identity_proof_terms(product_terms, distinct_terms)
     # 型号级(精确型号 / 系列+焦段)优先;没有时接受品牌/卡口/画幅级语境——新品上市池里没人提过型号,
     # 严格 30 曾因此 496/500 全灭(2026-08-23)。仅焦段/光圈属性、仅人设仍不放行(契约不变)。

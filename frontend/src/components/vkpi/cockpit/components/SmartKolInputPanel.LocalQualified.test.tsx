@@ -405,3 +405,97 @@ describe("search display cache privacy", () => {
     expect(safe.contact_preview).toEqual({ status: "ready", channel_count: 2, available: true });
   });
 });
+
+// 「从没抓到过视频」桶:不计入 30 人目标数,但既然返回给了操作员,就必须
+// 一眼看得出与真·活跃的人不同,而且点得动。返回了却点不动是最坏的一种。
+function deferredProof(): Record<string, unknown> {
+  return strictProof({
+    passed: false,
+    deferred: true,
+    deferred_reason: "latest_video_unknown",
+    rejection_reasons: [],
+    activity: {
+      passed: false,
+      known: false,
+      deferred: true,
+      age_days: null,
+      posted_at: null,
+      status: "activity_unknown_pending_fetch",
+      deferred_reason: "latest_video_unknown",
+    },
+  });
+}
+
+function contractResult(items: any[], contract: Record<string, unknown>): any {
+  return {
+    ...result(items),
+    local_qualification: {
+      schema: "smart_local_qualified_v2",
+      policy: { target_count: 30 },
+      ...contract,
+    },
+  };
+}
+
+describe("activity-unknown bucket stays honest and stays clickable", () => {
+  it("labels it as never-crawled instead of rejected, and keeps it out of the 30", () => {
+    const summary = localQualifiedSummary(contractResult(
+      [
+        { kol_pool_id: 1, handle: "fresh", platform: "youtube", qualification_evidence: strictProof() },
+        { kol_pool_id: 2, handle: "never-crawled", platform: "youtube", qualification_evidence: deferredProof() },
+      ],
+      { qualified_count: 1, returned_count: 2, qualified_returned_count: 1, shortfall: 29 },
+    ));
+
+    expect(summary.rows.map((row) => row.qualification)).toEqual(["qualified", "pending"]);
+    expect(summary.rows[1].qualificationLabel).toBe("活跃度未知 · 从没抓到过视频");
+    expect(summary.rows[1].activityUnknown).toBe(true);
+    expect(summary.rows[1].strictQualified).toBe(false);
+    expect(summary.activityUnknown).toBe(1);
+    expect(summary.pending).toBe(0);
+    expect(summary.rejected).toBe(0);
+    expect(summary.qualified).toBe(1);
+    expect(summary.shortfall).toBe(29);
+  });
+
+  it("reads the marker off a replayed session item that carries no proof block", () => {
+    const summary = localQualifiedSummary(result([
+      {
+        kol_pool_id: 5,
+        handle: "replayed",
+        platform: "youtube",
+        selection_tier: "deferred_activity_unknown",
+        activity_status: "activity_unknown_pending_fetch",
+      },
+    ]));
+
+    expect(summary.rows[0].activityUnknown).toBe(true);
+    expect(summary.rows[0].qualificationLabel).toBe("活跃度未知 · 从没抓到过视频");
+  });
+
+  it("lets the operator tick it one by one while keeping it out of 全选", () => {
+    const onSelectionChange = vi.fn();
+    const summary = localQualifiedSummary(contractResult(
+      [
+        { kol_pool_id: 1, handle: "fresh", platform: "youtube", qualification_evidence: strictProof() },
+        { kol_pool_id: 2, handle: "never-crawled", platform: "youtube", qualification_evidence: deferredProof() },
+      ],
+      { qualified_count: 1, returned_count: 2, qualified_returned_count: 1, shortfall: 29 },
+    ));
+    render(<StrictQualifiedList summary={summary} selectedIds={new Set()} onSelectionChange={onSelectionChange} />);
+
+    const unknownBox = screen.getByRole("checkbox", { name: "选择本地 KOL never-crawled" }) as HTMLInputElement;
+    expect(unknownBox.disabled).toBe(false);
+    fireEvent.click(unknownBox);
+    expect([...onSelectionChange.mock.calls[0][0]]).toEqual([2]);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "全选本地合格 KOL" }));
+    expect([...onSelectionChange.mock.calls[1][0]]).toEqual([1]);
+
+    expect(screen.getByTestId("local-activity-unknown-count").textContent)
+      .toContain("从没抓到过视频 1（不计入 30 人，可单独勾选）");
+    expect(screen.getByText("从没抓到过")).toBeTruthy();
+    expect(screen.getByText("还缺 29 人", { exact: false })).toBeTruthy();
+    expect(screen.queryByText("未通过", { exact: false })).toBeNull();
+  });
+});

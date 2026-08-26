@@ -70,6 +70,11 @@ _RECALL_SESSION_PAYLOAD_FIELDS = (
     # 车道 3:判到的垂类 + 「为什么算他是这一类」,回放时卡面照样说得清。
     "vertical_tags",
     "vertical_evidence",
+    # 活跃度未知桶(「从没抓到过视频证据」)的三个标记。少了它们,回放出来的
+    # 行与真·活跃的行长得一模一样,操作员无从分辨,所以属于必存字段。
+    "selection_tier",
+    "activity_status",
+    "activity_status_reason",
     "candidate_bucket",
     "candidate_bucket_reason",
     "candidate_bucket_target",
