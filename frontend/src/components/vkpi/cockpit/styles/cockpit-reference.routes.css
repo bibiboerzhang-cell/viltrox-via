@@ -487,6 +487,13 @@
   opacity: 0.48;
   pointer-events: none;
   mask-image: linear-gradient(90deg, transparent 0%, #000 15%, #000 84%, transparent 100%);
+  /* 代价降点(失效范围隔离):这一层是两条 200% 宽、22s/34s 持续平移的 svg,而它就压在
+     趋势卡的模糊面底下 —— 底图内容每帧变会让上方模糊的取样源每帧失效。本元素已经是
+     overflow:hidden + mask,paint containment 不改变任何裁切结果,只是把重绘失效钉死在
+     这一层里,不再向外扩散到看板网格。
+     注意:contain 只能加在这层,绝不能加到 .vkpi-board-module 上 —— 那里 .is-resizing 的
+     box-shadow 会溢出卡外被裁掉;北极星圆环更是靠 overflow:visible 吐光晕(红线第 3 条)。 */
+  contain: paint;
 }
 
 .vkpi-board-module__flow svg {
@@ -503,7 +510,17 @@
   stroke: var(--vkpi-module-flow-a);
   stroke-width: 1.5;
   opacity: 0.48;
-  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--vkpi-module-flow-a) 52%, transparent));
+  /* 发光按主题分档(见 shell.css 说明):浅色三风格与仪器·暗按规格「一律不发光」,
+     省掉一条挂在持续平移元素上、每帧都要重跑的高斯;暗色的发光在下一条原样给回。
+     这里不能像流动波那样收进外壳上的令牌 —— 每个模块的 --vkpi-module-flow-a 各不相同,
+     而自定义属性的 var() 在声明处就求值了,在外壳上代入会取不到模块自己的颜色。
+     写成选择器分档,颜色才是在 path 上求值、拿到本模块的那一份。 */
+  filter: none;
+}
+
+[data-style="glass"][data-theme="dark"] .vkpi-board-module__flow path,
+[data-style="commandos"][data-theme="dark"] .vkpi-board-module__flow path {
+  filter: drop-shadow(0 0 var(--ds-glow-radius) color-mix(in srgb, var(--vkpi-module-flow-a) 52%, transparent));
 }
 
 .vkpi-board-module__flow .is-secondary path {

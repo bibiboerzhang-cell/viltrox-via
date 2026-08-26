@@ -424,7 +424,10 @@
   color: var(--ds-text-2);
   background: var(--ds-card);
   box-shadow: var(--ds-shadow);
-  backdrop-filter: var(--ds-backdrop);
+  /* 看板卡背后是静止的底(暗色下 stage 已 transparent,取样源只有外壳固定径向底 + 环境层)
+     → 走 static 档,见 shell.css 里 .cockpit-shell 的说明。顶栏/地图标题/浮层不吃这档。 */
+  backdrop-filter: var(--ds-backdrop-static, var(--ds-backdrop));
+  -webkit-backdrop-filter: var(--ds-backdrop-static, var(--ds-backdrop));
 }
 
 .vkpi-dashboard-memo,
@@ -745,8 +748,11 @@
   border-radius: 10px;
   background: var(--ds-queue-surface);
   box-shadow: var(--ds-queue-shadow), var(--ds-queue-inset);
-  backdrop-filter: var(--ds-backdrop);
-  -webkit-backdrop-filter: var(--ds-backdrop);
+  /* 代价降点(嵌套模糊 B 组):compact 变体只在侧栏 rail__footer 出现(CockpitSidebar 是唯一
+     传 compact 的调用方),也就是永远套在侧栏那层模糊里面。面本身 96% 不透明,对一份"已经
+     模糊过的结果"再模糊一遍是不可辨的色差,直接关掉;底色仍吃现成的 --ds-queue-surface。 */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .vkpi-dashboard-task-queue.is-compact > header {

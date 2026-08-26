@@ -84,7 +84,9 @@
   stroke-width: 1.45;
   stroke-linecap: round;
   stroke-dasharray: 0.18 0.06;
-  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--ds-flow-blue) 55%, transparent));
+  /* 发光改吃令牌:暗色原样发光,浅色/仪器风回归规格的「不发光」并省掉每帧一遍高斯。
+     串珠状虚线沿波形爬行的观感(dasharray + stroke-dashoffset)一个字没动 —— 那是验收项。 */
+  filter: var(--ds-flow-glow-wave, none);
 }
 
 .vkpi-northstar-dashboard__waves .is-secondary {
@@ -252,10 +254,12 @@
   to { transform: rotate(270deg); }
 }
 
-@keyframes vkpi-dashboard-ambient-flow {
-  0%, 100% { background-position: 0% 0%, 100% 100%, 0 0; }
-  50% { background-position: 44% 22%, 58% 68%, 0 0; }
-}
+/* 代价降点(删掉一条零产出的常驻动画):此处原有 vkpi-dashboard-ambient-flow 20s,挂在
+   [data-theme="dark"] .vkpi-page-stage--dashboard 上动 background-position。但同一元素在
+   shell.css 里已被更高特异度置成 background: transparent(全站再无第二处给它 background-image),
+   所以这条动画的像素输出恒等于零 —— 却仍让这个撑满整块看板、且是首屏全部模块祖先的元素
+   每帧进重绘队列,并持续搅动上方每一个玻璃面的 backdrop 取样。关键帧一并删除。
+   下方 reduced-motion 兜底里对应的那一条也随之清掉(动画没了,兜底无对象)。 */
 
 @keyframes vkpi-map-signal-flow {
   to { stroke-dashoffset: -42; }
@@ -266,10 +270,6 @@
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  [data-theme="dark"] .vkpi-page-stage--dashboard {
-    animation: vkpi-dashboard-ambient-flow 20s ease-in-out infinite;
-  }
-
   .vkpi-map-network-line--flow {
     animation: vkpi-map-signal-flow 3.8s linear infinite;
   }
@@ -288,6 +288,18 @@
 
   .vkpi-board-module__flow .is-secondary {
     animation: vkpi-module-flow-x 34s linear infinite;
+  }
+
+  /* 代价降点(层提升,克制使用):只给「每帧真的在动 transform」的元素提示 —— 彗星 1 个
+     + 趋势卡两条流动波 svg 2 个,加上外壳那两层环境流光,首屏合计 5 个,每个都远小于一屏。
+     彗星同元素带 drop-shadow:提层后光晕只光栅化一次,之后每帧纯转贴图,转速与观感一模一样。
+     北极星流动波动的是 stroke-dashoffset(几何量,不可合成),给它 will-change:transform
+     没有收益、只白占显存,故刻意不列入。
+     也绝不给 .vkpi-board-module(11 张整卡贴图)或任何 backdrop-filter 元素加 will-change:
+     后者会把模糊面钉成常驻回读层,适得其反。 */
+  .vkpi-northstar-dashboard__comet,
+  .vkpi-board-module__flow svg {
+    will-change: transform;
   }
 }
 
@@ -596,7 +608,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* 环境流光层现在是 ::before + ::after 两层(见 shell.css),兜底同步覆盖新增的那一层 */
   .cockpit-shell::before,
+  .cockpit-shell::after,
   .cockpit-shell .vkpi-rail,
   .vkpi-rail__item,
   .vkpi-global-search__input,
@@ -604,13 +618,14 @@
     transition: none;
   }
 
+  /* 原列表里的 [data-theme="dark"] .vkpi-page-stage--dashboard 已随那条零产出动画一并删除
+     (动画没了,兜底无对象)。其余条目一个没动 —— 兜底强度不变。 */
   .vkpi-task-progress__compact-status::before,
   .vkpi-task-progress__compact-bar i,
   .vkpi-northstar-dashboard__comet,
   .vkpi-map-network-line--flow,
   .vkpi-northstar-dashboard__waves path,
-  .vkpi-board-module__flow svg,
-  [data-theme="dark"] .vkpi-page-stage--dashboard {
+  .vkpi-board-module__flow svg {
     animation: none !important;
     transition: none;
   }

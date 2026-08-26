@@ -10,13 +10,65 @@
   background: var(--ds-workspace-surface);
   font-family: var(--ds-font-sans);
   letter-spacing: 0;
+
+  /* 代价降点(模糊半径分档):全站 --ds-backdrop 是 saturate(180%) blur(20px),
+     而 Chrome 的 backdrop 模糊代价随半径超线性增长。把「背后是静止内容」的面单独分一档:
+     侧栏、看板各卡的取样源只有那张平滑的固定径向底 + 低透明度环境层,没有任何高频内容,
+     10px 与 20px 在这种底纹上不可分辨(卡面本身还有 78%~86% 不透明度压着)。
+     顶栏、地图标题、各类浮层不吃这个令牌 —— 它们背后是真会滚动/平移的内容,必须留真模糊。 */
+  --ds-backdrop-static: saturate(180%) blur(10px);
+
+  /* 代价降点 + 回归规格(发光只在暗色):北极星流动波与模块流动波两处的 drop-shadow 原先把半径
+     写死成 5px,完全没走 --ds-glow-radius(= demo 的 --nglow)。而 design-tokens.md 明写
+     「浅色一律不发光,防 UI 崩」,浅色三风格与仪器·暗的该值都是 0px;demo 的 nglow() 在 0px 时
+     压根不输出 filter。写死的后果是浅色也在为一个本不该存在的光晕每帧重跑一遍高斯 ——
+     这两条 drop-shadow 挂在持续运动的元素上,是首屏唯一每帧都要重算的滤镜。
+     必须写 none 而不是 0px:drop-shadow(0 0 0) 依然是一个非 none 的 filter,Chrome 照样
+     开滤镜通道,只有 none 才真省。暗色下发光原样保留 —— 验收项「发光」不受影响。
+     只有北极星流动波走令牌(它的颜色 --ds-flow-blue 在 :root 上,能在这里正确求值);
+     模块流动波的颜色 --vkpi-module-flow-a 是「每个模块一份」的,不能在这里代入 ——
+     自定义属性的 var() 是在**声明处**求值的,在外壳上代入会拿不到值,故那一处改用选择器分档,
+     见 routes.css。 */
+  --ds-flow-glow-wave: none;
 }
 
-.cockpit-shell::before {
+/* 只有 glass·dark(--ds-glow-radius 5px)与 commandos·dark(6px)发光;instrument·dark 是 0px,
+   按规格就该不发光,故不在此列。半径改吃令牌,不再写死。 */
+[data-style="glass"][data-theme="dark"] .cockpit-shell,
+[data-style="commandos"][data-theme="dark"] .cockpit-shell {
+  --ds-flow-glow-wave: drop-shadow(0 0 var(--ds-glow-radius) color-mix(in srgb, var(--ds-flow-blue) 55%, transparent));
+}
+
+/* 仪器风的 --ds-panel / --ds-card / --ds-queue-surface 是全不透明实色(#ffffff / #161c24 /
+   #1b222c),背后一个像素都透不出来,模糊结果 100% 被盖掉 —— 纯付账零产出,直接关掉。
+   仓里早有先例:下方 .vkpi-command-map__title 就已针对 instrument/commandos 关过模糊。 */
+[data-style="instrument"] .cockpit-shell {
+  --ds-backdrop-static: none;
+}
+
+/* 代价降点(Chrome 渲染波 · 头号开销):环境流光层原本靠 animation 动 background-position。
+   background-position 不是可合成属性 —— 一个 position:fixed + inset:0 的整视口层(1920×1080
+   ≈ 2.07M 像素)每帧都要在主线程整块重绘;而它 z-index:0 正躺在侧栏、顶栏与全部玻璃卡的
+   backdrop-filter 取样底下,底图每帧变 = 上方每一个 20px 模糊面每帧强制重算。一条动画的成本
+   被乘了二十多次,这就是「Safari 顺 / Chrome 卡」的直接来源。
+   改法:拆成 ::before / ::after 两层(原三张渐变里前两张朝相反方向漂移,单个 transform 表达
+   不了两个方向),各自只动 transform: translate3d —— 可合成,整层只光栅化一次,之后每帧纯搬贴图。
+   轨迹是从原 background-position 精确换算的,不是重新调的:位移 = Δ百分比 ×(视口 − 图尺寸),
+   用 vw/vh 写死,所以观感 1:1(motion.md 里 demo 原件的 .aura 本来就是 translate 实现)。
+   inset:-17% 是平移余量(最大位移 15.6vw / 9.1vh),否则平移会把视口边缘露出来。 */
+.cockpit-shell::before,
+.cockpit-shell::after {
   position: fixed;
   z-index: 0;
-  inset: 0;
+  inset: -17%;
+  background-repeat: no-repeat;
   pointer-events: none;
+}
+
+/* 只有玻璃风有环境流光。仪器/单色风此前也在生成一个满屏空图层(有 content 无背景),
+   一并收掉:少一个整视口合成层,零观感变化。 */
+[data-style="glass"] .cockpit-shell::before,
+[data-style="glass"] .cockpit-shell::after {
   content: "";
 }
 
@@ -29,29 +81,80 @@
   background: radial-gradient(1200px 600px at 70% -10%, var(--ds-bg-2), var(--ds-workspace-surface)) fixed;
 }
 
-[data-style="glass"][data-theme="dark"] .cockpit-shell::before {
+/* 原环境层的第三张渐变(顶部白色薄雾)本就不参与漂移。环境层改走 transform 后整层会跟着位移,
+   故把这张静态雾移到外壳自身背景、用 fixed 附着 —— 附着后按视口取尺寸,落点与改前一致;
+   透明度 .018 × 原层 opacity .95 = .017,已折算写入。 */
+[data-style="glass"][data-theme="dark"] .cockpit-shell {
   background:
-    linear-gradient(118deg, rgba(41, 118, 255, 0.12) 0%, rgba(41, 118, 255, 0.025) 32%, transparent 48%),
-    linear-gradient(292deg, rgba(143, 99, 255, 0.09) 0%, rgba(55, 221, 197, 0.025) 38%, transparent 58%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 34%);
-  background-position: 0% 0%, 100% 100%, 0 0;
-  background-size: 165% 165%, 150% 150%, 100% 100%;
+    linear-gradient(180deg, rgba(255, 255, 255, 0.017), transparent 34%) fixed,
+    radial-gradient(1200px 600px at 70% -10%, var(--ds-bg-2), var(--ds-workspace-surface)) fixed;
+  /* 漂移终点(由原 background-position 关键帧换算,不是重新调的数):
+     A 层 size 165% → Δx = 24% ×(100−165)vw = −15.6vw,Δy = 14% ×(100−165)vh = −9.1vh
+     B 层 size 150% → Δx =(76−100)% ×(100−150)vw = +12vw,Δy =(84−100)% ×(100−150)vh = +8vh */
+  --vkpi-ambient-ax: -15.6vw;
+  --vkpi-ambient-ay: -9.1vh;
+  --vkpi-ambient-bx: 12vw;
+  --vkpi-ambient-by: 8vh;
+}
+
+[data-style="glass"][data-theme="dark"] .cockpit-shell::before {
+  background-image: linear-gradient(118deg, rgba(41, 118, 255, 0.12) 0%, rgba(41, 118, 255, 0.025) 32%, transparent 48%);
+  /* 17vw/17vh = 把图钉回视口原点(层比视口大 17%,起点在 −17vw/−17vh) */
+  background-position: 17vw 17vh;
+  background-size: 165vw 165vh;
   opacity: 0.95;
-  animation: vkpi-ambient-flow 24s ease-in-out infinite alternate;
+  animation: vkpi-ambient-drift-a 24s ease-in-out infinite alternate;
+}
+
+[data-style="glass"][data-theme="dark"] .cockpit-shell::after {
+  background-image: linear-gradient(292deg, rgba(143, 99, 255, 0.09) 0%, rgba(55, 221, 197, 0.025) 38%, transparent 58%);
+  /* 原 background-position 100% 100% + size 150% ⇒ 相对视口偏移 −50vw/−50vh,叠上 17 的层边距 = −33 */
+  background-position: -33vw -33vh;
+  background-size: 150vw 150vh;
+  opacity: 0.95;
+  animation: vkpi-ambient-drift-b 24s ease-in-out infinite alternate;
+}
+
+[data-style="glass"][data-theme="light"] .cockpit-shell {
+  /* A 层浅色 size 155% → Δx = 24% ×(100−155)vw = −13.2vw,Δy = 14% × −55vh = −7.7vh */
+  --vkpi-ambient-ax: -13.2vw;
+  --vkpi-ambient-ay: -7.7vh;
+  --vkpi-ambient-bx: 12vw;
+  --vkpi-ambient-by: 8vh;
 }
 
 [data-style="glass"][data-theme="light"] .cockpit-shell::before {
-  background:
-    linear-gradient(118deg, rgba(0, 113, 227, 0.09), transparent 42%),
-    linear-gradient(292deg, rgba(124, 58, 237, 0.055), rgba(55, 221, 197, 0.025) 36%, transparent 58%);
-  background-position: 0% 0%, 100% 100%;
-  background-size: 155% 155%, 150% 150%;
-  animation: vkpi-ambient-flow 28s ease-in-out infinite alternate;
+  background-image: linear-gradient(118deg, rgba(0, 113, 227, 0.09), transparent 42%);
+  background-position: 17vw 17vh;
+  background-size: 155vw 155vh;
+  animation: vkpi-ambient-drift-a 28s ease-in-out infinite alternate;
 }
 
-@keyframes vkpi-ambient-flow {
-  from { background-position: 0% 0%, 100% 100%, 0 0; }
-  to { background-position: 24% 14%, 76% 84%, 0 0; }
+[data-style="glass"][data-theme="light"] .cockpit-shell::after {
+  background-image: linear-gradient(292deg, rgba(124, 58, 237, 0.055), rgba(55, 221, 197, 0.025) 36%, transparent 58%);
+  background-position: -33vw -33vh;
+  background-size: 150vw 150vh;
+  animation: vkpi-ambient-drift-b 28s ease-in-out infinite alternate;
+}
+
+/* 关键帧读自定义属性:同一对关键帧服务明暗两套轨迹,省掉重复声明 */
+@keyframes vkpi-ambient-drift-a {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(var(--vkpi-ambient-ax, 0), var(--vkpi-ambient-ay, 0), 0); }
+}
+
+@keyframes vkpi-ambient-drift-b {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(var(--vkpi-ambient-bx, 0), var(--vkpi-ambient-by, 0), 0); }
+}
+
+/* 层提升提示只给这两个「真的每帧在动」的层。放进 no-preference,
+   让选了减弱动效的用户不为不会播放的动画付显存。 */
+@media (prefers-reduced-motion: no-preference) {
+  [data-style="glass"] .cockpit-shell::before,
+  [data-style="glass"] .cockpit-shell::after {
+    will-change: transform;
+  }
 }
 
 [data-theme="dark"] .vkpi-page-stage--dashboard {
@@ -76,8 +179,24 @@
   .vkpi-dashboard-error-card
 ) {
   box-shadow: var(--ds-shadow-sm), var(--ds-inner);
-  backdrop-filter: var(--ds-backdrop);
-  -webkit-backdrop-filter: var(--ds-backdrop);
+  /* 看板各卡背后是静止的底 → 走 static 档(见 .cockpit-shell 处说明) */
+  backdrop-filter: var(--ds-backdrop-static, var(--ds-backdrop));
+  -webkit-backdrop-filter: var(--ds-backdrop-static, var(--ds-backdrop));
+}
+
+/* 代价降点(嵌套模糊 · 收益最大的一刀):Chrome 里模糊嵌套是叠乘不是叠加 ——
+   外层先把背后内容做一遍 20px 高斯并栅格化,内层再对这份"已经模糊过的结果"做第二遍,
+   两次离屏取样换来的色差几乎不可辨(内层面本身 86%~96% 不透明,背后最多只剩 4%~14% 像素)。
+   首屏有两组嵌套,这里一次拆掉:
+     A 组 1 套 6:增长总览面 ⊃ 6 张 KPI 卡  → 单模块 7 遍模糊降到 1 遍
+     B 组 1 套 2:侧栏(sticky 100vh,首屏面积最大)⊃ 任务队列卡 / 任务进度卡
+   两组都只去内层,外层玻璃基调原样保留;彗星环、流动波、发光端点都不在这些元素上,验收项不受影响。
+   写成后代覆盖而不是改 ds-viz.css 的原规则行,是为了把改动圈在本目录、不与并行车道撞车。
+   (任务队列卡 compact 变体的那一份在 modules.css 就地关掉,见该处注释。) */
+.cockpit-shell .vkpi-kpi-overview .ds-kpi,
+.cockpit-shell .vkpi-rail .vkpi-task-progress--compact {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 
 .cockpit-shell .vkpi-rail {
@@ -88,8 +207,10 @@
   border-right: 1px solid var(--ds-sidebar-divider);
   background: var(--ds-sidebar-surface);
   box-shadow: none;
-  backdrop-filter: var(--ds-backdrop);
-  -webkit-backdrop-filter: var(--ds-backdrop);
+  /* 侧栏是首屏面积最大的模糊面(sticky 100vh),而正文在它旁边一列、不从它背后滚过 ——
+     取样源只有那张平滑的固定底 + 环境层,走 static 档(见 .cockpit-shell 处说明)。 */
+  backdrop-filter: var(--ds-backdrop-static, var(--ds-backdrop));
+  -webkit-backdrop-filter: var(--ds-backdrop-static, var(--ds-backdrop));
   transition: width 0.22s ease;
   /* 融合修(波A-A2):此前 overflow:hidden 把 right:-11px 的收合圆钮切成半圆,
      且矮窗口下底部 LLM 卡被静默裁掉。内部滚动由 .vkpi-rail__nav 承担(min-height:0
@@ -263,8 +384,10 @@
   border-radius: 11px;
   background: var(--ds-queue-surface);
   box-shadow: var(--ds-queue-shadow), var(--ds-queue-inset);
-  backdrop-filter: var(--ds-backdrop);
-  -webkit-backdrop-filter: var(--ds-backdrop);
+  /* 面本身 96% 不透明,背后最多只剩 4% 像素,20px 与 10px 无从分辨 → static 档。
+     它落在侧栏里的那一份还会被上面的「嵌套模糊」规则整个关掉。 */
+  backdrop-filter: var(--ds-backdrop-static, var(--ds-backdrop));
+  -webkit-backdrop-filter: var(--ds-backdrop-static, var(--ds-backdrop));
 }
 
 .vkpi-task-progress__compact-head {
@@ -547,8 +670,15 @@
   border-radius: var(--ds-radius-lg);
   background: var(--ds-panel);
   box-shadow: var(--ds-shadow-sm);
-  backdrop-filter: var(--ds-backdrop);
-  -webkit-backdrop-filter: var(--ds-backdrop);
+  backdrop-filter: var(--ds-backdrop-static, var(--ds-backdrop));
+  -webkit-backdrop-filter: var(--ds-backdrop-static, var(--ds-backdrop));
+  /* 代价降点(失效范围隔离):卡内 6 条 sparkline 各有一条每帧动 stroke-dashoffset 的流动线,
+     不加约束时它们的重绘失效会往外扩散到整个看板网格。本元素已经是 overflow:hidden,
+     paint containment 不改变任何裁切结果,只是把失效范围钉死在这张卡里。
+     注意:只在这层加,绝不能加到 .vkpi-board-module 或北极星圆环上 —— 那里靠 overflow:visible
+     吐光晕,任何祖先 contain:paint 都会把光晕裁成方(红线第 3 条点名的历史 bug)。
+     下钻浮层 .vkpi-popover-panel 走 createPortal 挂 document.body,不会被这里的包含块困住。 */
+  contain: paint;
 }
 
 [data-theme="dark"] .vkpi-kpi-overview {

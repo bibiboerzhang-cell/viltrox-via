@@ -33,10 +33,12 @@
     color: var(--ds-text) !important;
   }
   .leaflet-control-attribution {
-    background: color-mix(in srgb, var(--ds-panel) 85%, transparent) !important;
+    /* 代价降点:署名条原有 blur(10px)。它压在 Leaflet 瓦片上,地图每次 pan/zoom 底图全变、
+       这层就得重算 —— 而它只是一行灰色小字的底衬,底色提到 94% 后模糊本就无从分辨。
+       去掉一个常驻模糊层,零验收影响。 */
+    background: color-mix(in srgb, var(--ds-panel) 94%, transparent) !important;
     color: var(--ds-muted) !important;
     font-size: var(--ds-cockpit-fs-9) !important;
-    backdrop-filter: blur(10px);
   }
   .leaflet-control-attribution a {
     color: var(--ds-text-2) !important;
@@ -128,7 +130,10 @@
     transform: translateX(-50%);
     background: color-mix(in srgb, var(--ds-card) 94%, transparent);
     border: 1px solid var(--ds-line-strong);
-    backdrop-filter: blur(8px);
+    /* 代价降点:标签底色已 94% 不透明,blur(8px) 只作用在剩下 6% 的像素上,肉眼无从分辨;
+       而它是「每个 pin 一个」的常驻模糊层,压在会平移缩放的瓦片上 —— 数量一上来就是纯浪费。
+       (脉冲动画本身是最优形态,只动 transform/opacity,原样保留;也刻意不给 .vkpi-pin-wrapper
+       加 contain:paint —— 脉冲要放大到 1.8 倍、标签在 top:18px,都会被裁掉。) */
     color: var(--ds-text);
     font-size: var(--ds-cockpit-fs-10);
     padding: 3px 8px;
