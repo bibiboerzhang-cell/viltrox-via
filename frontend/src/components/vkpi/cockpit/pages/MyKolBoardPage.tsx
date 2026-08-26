@@ -10,7 +10,6 @@ import { AnalysisActivityModule, KolLibraryModule, MODULE_SOURCES } from "./MyKo
 import { ContentWallModule } from "./MyKolBoardPage.content-wall";
 import { WatchlistModule } from "./MyKolBoardPage.watchlist";
 import { SkuPlayModule } from "./MyKolBoardPage.sku-play";
-import { ClosureReadinessCard } from "./MyKolBoardPage.closure-readiness";
 import {
   DigestEmbed,
   LensExposureEmbed,
@@ -677,7 +676,6 @@ export function MyKolBoardPage({
         </div>
       )}
 
-      <ClosureReadinessCard apiToken={apiToken} refreshKey={reloadTick} />
 
       {/* 可编辑看板:布局本机记忆(storageKey);不传 apiToken,见文件头红线注释 */}
       <EditableDashboardBoard

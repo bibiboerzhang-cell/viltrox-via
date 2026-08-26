@@ -168,7 +168,6 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
         "/api/admin/vkpi/my-kol/daily-digest",
         # MY KOL 业务闭环卡只读聚合收藏、追踪、SKU 与深析状态；
         # 不选目标、不启调度、不入队也不调 provider。
-        "/api/admin/vkpi/my-kol/closure-readiness",
         "/api/admin/vkpi/my-kol/risk-index",
         # 2026-08-22 MY KOL 数值跟进 / 聚合视频墙 / 镜头出镜:纯 SELECT 只读投影,零 provider。
         "/api/admin/vkpi/my-kol/metrics/tracking-overview",

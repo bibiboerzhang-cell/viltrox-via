@@ -17,7 +17,6 @@ from app.domains.audit.decorator import audit_action
 from app.domains.kol import (
     my_kol_aggregate,
     my_kol_board_ext,
-    my_kol_closure_readiness,
     risk_index,
     video_tracking,
 )
@@ -56,24 +55,6 @@ def _content_monitoring_error(exc: Exception) -> HTTPException:
     status_code = int(getattr(exc, "status_code", 400) or 400)
     code = str(getattr(exc, "code", "content_monitoring_failed") or "content_monitoring_failed")
     return HTTPException(status_code=status_code, detail=code)
-
-
-@router.get("/my-kol/closure-readiness")
-def my_kol_closure_readiness_endpoint(
-    staff_id: int | None = Query(default=None, ge=1),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """Pure-read employee workflow closure card; never chooses or runs work."""
-
-    target = scope.effective_staff_id(staff, staff_id)
-    if target is None and not scope.can_view_all(staff):
-        raise HTTPException(status_code=403, detail="no staff identity in scope")
-    body = my_kol_closure_readiness.build_closure_readiness(
-        get_conn(),
-        staff_scope_id=target,
-    )
-    body["scope_context"] = scope.scope_context(staff, staff_id)
-    return body
 
 
 @router.get("/my-kol/{kol_pool_id}/content-monitoring")
