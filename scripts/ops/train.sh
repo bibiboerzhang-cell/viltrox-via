@@ -57,6 +57,38 @@ assert_clean_tree() {
 }
 assert_clean_tree "出发前"
 
+# ── 1b. 迁移预检:早说,别等打包完二十几分钟才被部署脚本拦(2026-08-26 白跑一轮的教训)──
+# 口径与 deploy_local_to_cloud.sh 完全一致:待应用 = 本地迁移清单里、线上最高水位**之后**的全部
+# (不是集合差 —— 001/002/004 这类被基线取代的老迁移永远在水位之下,不算待应用)。
+# 只提示不硬拦:staging-clone 模式下反而禁止声明,两条路都留给操作员判断。
+migration_preflight() {
+  local remote manifest pending
+  remote="$(ssh -o BatchMode=yes -o ConnectTimeout=8 viltrox \
+    'set -a; . /opt/viltrox-2.0/.env >/dev/null 2>&1; set +a; cd /tmp \
+     && psql "$DATABASE_URL" -At -c "SELECT version_key FROM schema_migrations ORDER BY version_key DESC LIMIT 1"' \
+    2>/dev/null | tr -d "[:space:]")" || { log "迁移预检跳过(连不上线上,不影响发车)"; return 0; }
+  [ -n "${remote}" ] || { log "迁移预检跳过(读不到线上水位)"; return 0; }
+  manifest="$(find "${ROOT}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' \
+    -exec basename {} \; | LC_ALL=C sort | paste -sd, -)"
+  pending="$("${PYTHON_BIN}" -B -c '
+import sys
+applied, csv = sys.argv[1], sys.argv[2]
+items = [v for v in csv.split(",") if v]
+print(",".join(items[items.index(applied) + 1:]) if applied in items else "")
+' "${remote}" "${manifest}" 2>/dev/null)" || return 0
+  if [ -z "${pending}" ]; then
+    log "迁移预检:线上水位 ${remote},无待应用迁移"
+    return 0
+  fi
+  log "迁移预检:线上水位 ${remote},待应用 → ${pending}"
+  if [ -z "${VKPI_FORWARD_COMPATIBLE_MIGRATIONS:-}" ]; then
+    printf '[train] 提示:本次带着待应用迁移。就地升级需人工审阅后声明:\n' >&2
+    printf '[train]   VKPI_FORWARD_COMPATIBLE_MIGRATIONS=%s scripts/ops/train.sh\n' "${pending}" >&2
+    printf '[train]   (若走 staging-clone 则相反:禁止声明。)审阅要点:有无 DDL、是否幂等、是否单调。\n' >&2
+  fi
+}
+migration_preflight
+
 # ── 2. SHA:缺省 HEAD;显式给的必须等于 HEAD ──
 HEAD_SHA="$(git rev-parse --verify HEAD)"
 if [ "$#" -ge 1 ] && [ -n "${1}" ]; then
