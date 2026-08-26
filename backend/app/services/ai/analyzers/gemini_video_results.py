@@ -11,6 +11,10 @@ import re
 from typing import Any
 
 from app.platform.llm_gateway_json import _json_container_candidates
+from app.services.ai.analyzers.gemini_video_scores import (
+    _final_v1_score_returned,
+    _score_value,
+)
 
 
 VIDEO_V2_SCORE_KEYS = (
@@ -185,7 +189,11 @@ def final_v1_quality_issues(raw: Any) -> list[str]:
         status = str(brand.get("viltrox_status") or "").strip().lower()
         if status not in BRAND_PRODUCT_STATUSES:
             issues.append("brand_product_evidence.viltrox_status")
-        if brand.get("inspection_complete") is not True:
+        # The flag crosses two boundaries that both drop real ``bool``: the
+        # provider answers ``1``/``"true"`` as readily as ``true``, and a
+        # BOOLEAN read back through the compat adapter arrives as int 1/0.
+        # ``is not True`` failed every one of those, so read it tolerantly.
+        if not _bool_value(brand.get("inspection_complete")):
             issues.append("brand_product_evidence.inspection_complete")
         for field in (
             "checked_modalities",
@@ -207,8 +215,7 @@ def final_v1_quality_issues(raw: Any) -> list[str]:
             issues.append("layer6_flags_and_scores.scores")
         else:
             for key in FINAL_V1_LAYER6_SCORE_KEYS:
-                entry = scores.get(key)
-                if not isinstance(entry, dict) or "score" not in entry:
+                if not _final_v1_score_returned(scores, key):
                     issues.append(f"layer6_flags_and_scores.scores.{key}")
         for field in ("final_verdict", "key_hook"):
             if not _nonempty_text(layer6.get(field)):
@@ -542,7 +549,16 @@ def _normalise_brand_product_evidence(value: Any) -> dict[str, Any]:
         item.get("modality") in TIMED_BRAND_EVIDENCE_MODALITIES
         for item in positive_evidence
     )
-    inspection_complete = raw.get("inspection_complete") is True
+    # Read the flag the way the quality gate reads it.  ``is True`` dropped every
+    # truthy shape the provider actually emits (``1``, ``"true"``) and the int
+    # 1/0 a BOOLEAN read back through the compat adapter arrives as, so a
+    # completed inspection was stored as ``False`` and could never be re-judged.
+    # This is a read fix, not a relaxed standard: the ``present`` branch below
+    # never consults the flag, so nothing becomes ``present`` that could not
+    # before.  The only reachable movement is ``unknown -> absent`` -- a
+    # *negative* verdict that still demands an explicit ``absent`` from the
+    # model, visual+audio inspection, and zero positive evidence.
+    inspection_complete = _bool_value(raw.get("inspection_complete"))
     complete_absence_check = inspection_complete and {"visual", "audio"}.issubset(checked_modalities)
     if requested_status == "present" and has_timed_positive:
         status = "present"
@@ -577,20 +593,6 @@ def _normalise_final_v1_result(parsed: dict[str, Any], *, subtitle_used: bool) -
         layer1.get("brand_product_evidence")
     )
     return payload
-
-
-def _score_value(entry: Any) -> float | int | None:
-    if not isinstance(entry, dict):
-        return None
-    value = entry.get("score")
-    if value is None:
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    parsed = max(0.0, min(100.0, parsed))
-    return int(parsed) if parsed.is_integer() else round(parsed, 2)
 
 
 def _clamped_confidence(value: Any) -> float | None:
@@ -732,7 +734,7 @@ def _apply_final_v1_result(
     ] if brand_status == "present" else []
     structured_competitors = brand_product.get("competitors")
     scores = layer6.get("scores") if isinstance(layer6.get("scores"), dict) else {}
-    content_quality = scores.get("content_quality_score") if isinstance(scores.get("content_quality_score"), dict) else {}
+    content_quality = scores.get("content_quality_score")
     evidence = layer1.get("evidence") if isinstance(layer1.get("evidence"), dict) else {}
     timeline = layer1.get("scene_timeline") if isinstance(layer1.get("scene_timeline"), list) else []
     result.update(
@@ -772,9 +774,9 @@ def _apply_final_v1_result(
             if isinstance(layer1.get("competitor_presence"), list)
             else [],
             "quality_scores": {
-                key: _score_value(value)
-                for key, value in scores.items()
-                if isinstance(value, dict) and _score_value(value) is not None
+                key: value
+                for key, entry in scores.items()
+                if (value := _score_value(entry)) is not None
             },
             "quality_overall": _score_value(content_quality) or 0,
         }
