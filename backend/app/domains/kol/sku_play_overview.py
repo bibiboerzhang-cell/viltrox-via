@@ -10,6 +10,9 @@
 可见范围与数值跟进总览同款收藏集口径(收藏 ∪ 授权共享):员工恒被
 scope.effective_staff_id 压回本人,管理层缺省全团队、?staff_id= 看指定成员。
 诚实空态:未实测一律 null(绝不编 0);total_views 只汇总实测过的视频。
+逐行重新实测所需的三件真值(能不能点 / 现在什么状态 / 上次实测多久前)由
+sku_play_refresh_state 就地补齐,同样纯读:任务态复用 my_kol_video_recovery
+的 TaskState 契约,围栏复用 my_kol_paid_action_access,零 provider 零入队。
 红线:纯 SELECT;绝不触 viltrox_fit_score / rule_v0;SQL 全 ? 占位。
 """
 from __future__ import annotations
@@ -19,6 +22,7 @@ from typing import Any
 
 from app.domains.access import scope
 from app.domains.content_metric_snapshots import _parse_timestamp, metric_or_none
+from app.domains.kol import sku_play_refresh_state as _refresh
 from app.domains.kol import video_tracking_trends as _trends
 
 
@@ -56,6 +60,7 @@ def _tracked_link_rows(conn: Any, sid: int, *, cap: int) -> tuple[list[dict[str,
         for row in conn.execute(
             """
         SELECT DISTINCT l.product_sku, l.evidence_id, e.kol_pool_id,
+               e.published_at_norm, e.publish_date, e.posted_at,
                COALESCE(e.content_url, '') AS content_url,
                LOWER(COALESCE(e.platform, '')) AS platform,
                COALESCE(NULLIF(e.video_title, ''), e.title, '') AS video_title,
@@ -112,6 +117,7 @@ def _measure_evidence(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
             "like_count": None,
             "measured_at": None,
             "measured_dt": None,
+            "sample_count": 0,
             "delta": {label: None for label in WINDOW_DAYS},
         }
     delta = {
@@ -125,6 +131,7 @@ def _measure_evidence(snapshots: list[dict[str, Any]]) -> dict[str, Any]:
         "like_count": metric_or_none(latest.get("likes")),
         "measured_at": _iso(latest_at),
         "measured_dt": latest_at,
+        "sample_count": len(successful),
         "delta": delta,
     }
 
@@ -149,6 +156,7 @@ def _build_group(sku_code: str, sku_name: str, items: list[dict[str, Any]]) -> d
             for label in WINDOW_DAYS
         },
         "items": items,
+        **_refresh.group_refresh_summary(items),
         "_latest_dt": latest_dt,
     }
     items.sort(key=lambda it: (it["_measured_dt"] or _TS_FLOOR, it["evidence_id"]), reverse=True)
@@ -199,8 +207,17 @@ def build_sku_play_overview(
             "tracking_status": _text(row.get("tracking_status")),
             "link_relation_type": _text(row.get("link_relation_type")),
             "_measured_dt": measure["measured_dt"],
+            "_sample_count": _int(measure.get("sample_count")),
+            # 采样档位(hot/warm/cold)要按发布时刻定,原样带过去、投影前剔除。
+            "_publish_row": {
+                "published_at_norm": row.get("published_at_norm"),
+                "publish_date": row.get("publish_date"),
+                "posted_at": row.get("posted_at"),
+            },
         })
 
+    all_items = [item for items in grouped.values() for item in items]
+    _refresh.annotate_items(conn, all_items, staff=staff, now=current)
     groups = [
         _build_group(sku_code, sku_names[sku_code], items)
         for sku_code, items in grouped.items()
@@ -221,6 +238,8 @@ def build_sku_play_overview(
         group.pop("_latest_dt", None)
         for item in group["items"]:
             item.pop("_measured_dt", None)
+            item.pop("_sample_count", None)
+            item.pop("_publish_row", None)
 
     return {
         "contract": CONTRACT,

@@ -94,7 +94,9 @@ def _execute_profile_flow(
     incremental_state = _profile_incremental_state(kol_pool_id, force_full=_profile_force_full_history(body))
     conn = get_conn()
 
-    crawl = _crawl_profile_basics(classified, target=target, max_posts=max_posts)
+    crawl = _crawl_profile_basics(
+        classified, target=target, max_posts=max_posts, since=str(body.get("since") or "").strip()
+    )
     if str(crawl.get("status") or "").lower() not in {"ok", "synced"}:
         run_id = _record_deep_crawl_run(
             conn,
@@ -399,8 +401,26 @@ def _enqueue_account_dossier_extract_followup(
     }
 
 
-def _crawl_profile_basics(classified: ClassifiedUrl, *, target: str, max_posts: int) -> dict[str, Any]:
+def _crawl_profile_basics(
+    classified: ClassifiedUrl, *, target: str, max_posts: int, since: str = ""
+) -> dict[str, Any]:
+    """``since``(ISO 日期)= 发布时间下限,空=与升级前逐字节同行为。
+
+    **三个抓取器本来就支持真时间窗,此前 ``since`` 是签名里的死参数、全仓无人传**
+    (2026-08-25 复核坐实):
+
+    * YouTube:``crawl_channel_videos`` 带 since → ``publishedAfter``,平台侧按发布
+      时间截取。代价是从 playlistItems(1 配额单位)切到 search 端点(100 单位),
+      换到的是「窗口内的内容」而不是「最近 N 条里恰好落在窗口内的那几条」——只在
+      调用方明确要一个时间窗时才发生(``since`` 为空一律走原来的 playlistItems)。
+    * TikTok:``crawl_channel_profile`` 带 since → ``oldestPostDate``,同为平台侧截取。
+    * Instagram:账号资料抓取器**没有日期字段**,since 只放宽取数窗口,取回的内容
+      可能落在所选范围之外。这一档由报价如实标为「只能取最近内容」,门面照实说,
+      **不许**为了文案整齐说成精确过滤。
+    """
+
     crawler = _crawler_for(classified.platform)
+    since_text = str(since or "").strip()
     started = time.monotonic()
     profile_payload: dict[str, Any] = {}
     videos_payload: dict[str, Any] = {}
@@ -412,14 +432,19 @@ def _crawl_profile_basics(classified: ClassifiedUrl, *, target: str, max_posts: 
         profile = profile_items[0] if isinstance(profile_items, list) and profile_items and isinstance(profile_items[0], dict) else {}
         channel_id = str(profile.get("id") or classified.channel_id or "")
         if channel_id and hasattr(crawler, "crawl_channel_videos"):
-            videos_payload = crawler.crawl_channel_videos(channel_id, max_results=max_posts)
+            # since 非空 → publishedAfter 下推,拿的是「窗口内的内容」;空 → 原路径不变。
+            videos_payload = crawler.crawl_channel_videos(
+                channel_id, max_results=max_posts, since=since_text
+            )
             videos = videos_payload.get("items") if isinstance(videos_payload, dict) else []
             videos_items = [video for video in videos if isinstance(video, dict)] if isinstance(videos, list) else []
         fallback_videos = profile_payload.get("videos") if isinstance(profile_payload, dict) else None
         if not videos_items and isinstance(fallback_videos, list):
             videos_items = [video for video in fallback_videos if isinstance(video, dict)]
     else:
-        profile_payload = crawler.crawl_channel_profile(target, channel_id="", max_posts=max_posts)
+        profile_payload = crawler.crawl_channel_profile(
+            target, channel_id="", max_posts=max_posts, since=since_text
+        )
         payload_items = _content_items_from_payload(profile_payload) if isinstance(profile_payload, dict) else []
         profile_items = profile_payload.get("items") if isinstance(profile_payload, dict) else []
         if payload_items and _looks_like_content_item(payload_items[0]):

@@ -12,6 +12,13 @@ import {
   type VkpiMyKolSkuPlayOverviewResponse,
 } from "../../../../services/vkpi/myKolSkuPlay-api";
 import { SKU_PLAY_CHANGED_EVENT, type SkuPlayChangedDetail } from "./MyKolBoardPage.data-watch";
+import {
+  GroupRefreshControl,
+  RefreshReceiptLine,
+  RowRefreshCell,
+  useSkuPlayRefresh,
+} from "./MyKolBoardPage.sku-play-refresh";
+import type { SkuPlayRefreshPlan } from "../../../../services/vkpi/myKolSkuPlay-api";
 
 /* ============ MY KOL · 单品播放数据(波 D·C 车道)============
    被「数据关注」登记追踪的视频按单品(SKU)聚合:每个单品一组 —— 组头 = 单品名 +
@@ -20,6 +27,8 @@ import { SKU_PLAY_CHANGED_EVENT, type SkuPlayChangedDetail } from "./MyKolBoardP
    (纯读;收藏 ∪ 授权共享口径,员工恒本人,管理层全团队,后端 scope 裁剪)。
    诚实口径:null = 未实测(绝不当 0);Δ 样本不足 = 待积累;端点 404 = 该版本暂无,
    整块如实待接。时间走 timeLocal(浏览器时区),禁硬编码「刚刚/实时」。
+   逐行/逐单品「重新实测」在 MyKolBoardPage.sku-play-refresh:异步排队,
+   界面只说「已排队 / 还在路上 / 已完成」,绝不假装点一下就出数。
    红线:纯读;颜色全 token;零 fit/rule_v0;登记入口在内容墙 / KOL 详情视频卡。 */
 
 function errDetail(err: unknown, fallback: string): string {
@@ -104,10 +113,14 @@ function GroupItemsTable({
   items,
   focusedEvidenceId,
   setEvidenceAnchor,
+  refreshBusy,
+  onRefreshRow,
 }: {
   items: SkuPlayItem[];
   focusedEvidenceId: number;
   setEvidenceAnchor: (evidenceId: number, node: HTMLTableRowElement | null) => void;
+  refreshBusy: Set<number>;
+  onRefreshRow: (item: SkuPlayItem) => void;
 }) {
   return (
     <div className="overflow-x-auto">
@@ -121,7 +134,8 @@ function GroupItemsTable({
             <th className="py-1.5 pr-2 font-semibold">最后实测</th>
             <th className="py-1.5 pr-2 text-right font-semibold">Δ7 天</th>
             <th className="py-1.5 pr-2 font-semibold">SKU 归属</th>
-            <th className="py-1.5 font-semibold">状态</th>
+            <th className="py-1.5 pr-2 font-semibold">状态</th>
+            <th className="py-1.5 text-right font-semibold">操作</th>
           </tr>
         </thead>
         <tbody>
@@ -167,7 +181,14 @@ function GroupItemsTable({
                 <td className="py-1.5 pr-2 font-mono text-[10px]"><MeasuredAt ts={row.measured_at} /></td>
                 <td className="py-1.5 pr-2 text-right"><DeltaText value={row.delta?.d7} /></td>
                 <td className="py-1.5 pr-2"><ProductLinkChip relation={row.link_relation_type} /></td>
-                <td className="py-1.5"><TrackingChip status={row.tracking_status} /></td>
+                <td className="py-1.5 pr-2"><TrackingChip status={row.tracking_status} /></td>
+                <td className="py-1.5">
+                  <RowRefreshCell
+                    item={row}
+                    busy={refreshBusy.has(Number(row.evidence_id))}
+                    onRefresh={onRefreshRow}
+                  />
+                </td>
               </tr>
             );
           })}
@@ -185,6 +206,10 @@ function GroupRow({
   onToggle,
   setAnchor,
   setEvidenceAnchor,
+  refreshBusy,
+  onRefreshRow,
+  onLoadRefreshPlan,
+  onRefreshGroup,
 }: {
   group: SkuPlayGroup;
   expanded: boolean;
@@ -193,6 +218,10 @@ function GroupRow({
   onToggle: () => void;
   setAnchor: (node: HTMLDivElement | null) => void;
   setEvidenceAnchor: (evidenceId: number, node: HTMLTableRowElement | null) => void;
+  refreshBusy: Set<number>;
+  onRefreshRow: (item: SkuPlayItem) => void;
+  onLoadRefreshPlan: (skuCode: string, evidenceId?: number) => Promise<SkuPlayRefreshPlan>;
+  onRefreshGroup: (plan: SkuPlayRefreshPlan) => void;
 }) {
   const Chevron = expanded ? ChevronDown : ChevronRight;
   const items = Array.isArray(group.items) ? group.items : [];
@@ -231,6 +260,14 @@ function GroupRow({
           </span>
         </span>
       </button>
+      <div className="flex flex-wrap items-center justify-end gap-1.5 px-3 pb-2">
+        <GroupRefreshControl
+          group={group}
+          disabled={items.some((item) => refreshBusy.has(Number(item.evidence_id)))}
+          loadPlan={onLoadRefreshPlan}
+          onConfirm={onRefreshGroup}
+        />
+      </div>
       {expanded ? (
         <div className="border-t border-line px-3 py-2">
           {items.length === 0 ? (
@@ -240,6 +277,8 @@ function GroupRow({
               items={items}
               focusedEvidenceId={focusedEvidenceId}
               setEvidenceAnchor={setEvidenceAnchor}
+              refreshBusy={refreshBusy}
+              onRefreshRow={onRefreshRow}
             />
           )}
         </div>
@@ -426,6 +465,18 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
     }
   }, [clearRetryTimer, data, expanded, loadedTick, nextTick, pendingTarget, setPendingTarget]);
 
+  const groups = React.useMemo(() => (Array.isArray(data?.groups) ? data.groups : []), [data]);
+  const refresh = useSkuPlayRefresh({ apiToken, groups, loadedTick, nextTick });
+  // 逐行入口同样先走服务端报价再派活:三道闸(单次 / 每日 / 冷却)由后台判,前端只显示。
+  const refreshRow = React.useCallback(
+    (skuCode: string, item: SkuPlayItem) => { void refresh.refreshRow(skuCode, item); },
+    [refresh],
+  );
+  const refreshGroup = React.useCallback(
+    (plan: SkuPlayRefreshPlan) => { void refresh.runPlan(plan); },
+    [refresh],
+  );
+
   const targetNotice = pendingTarget ? (
     <div className="mb-2" role="status" aria-live="polite" data-vkpi-sku-play-target-state={pendingTarget.phase}>
       <PendingCard>
@@ -463,6 +514,12 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
       className={`rounded-[10px] transition-shadow duration-300 ${highlighted ? "ring-2 ring-accent ring-offset-2 ring-offset-panel" : ""}`}
     >
       {targetNotice}
+      <RefreshReceiptLine
+        receipt={refresh.receipt}
+        inFlight={refresh.inFlight}
+        exhausted={refresh.exhausted}
+        onRetryRead={refresh.retryRead}
+      />
       {body}
     </div>
   );
@@ -478,7 +535,6 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
   if (error) return wrap(<ErrorCard title="单品播放数据读取失败" text={error} />);
   if (!data) return wrap(<LoadingLine text={loading ? "单品播放数据读取中…" : "等待读取…"} />);
 
-  const groups = Array.isArray(data.groups) ? data.groups : [];
   const summary = data.summary;
 
   const toolbar = (
@@ -542,13 +598,17 @@ export function SkuPlayModule({ apiToken, noToken }: { apiToken: string; noToken
               if (node && evidenceId > 0) evidenceRefs.current.set(evidenceId, node);
               else if (evidenceId > 0) evidenceRefs.current.delete(evidenceId);
             }}
+            refreshBusy={refresh.busy}
+            onRefreshRow={(item) => refreshRow(String(group.sku_code || ""), item)}
+            onLoadRefreshPlan={refresh.loadPlan}
+            onRefreshGroup={refreshGroup}
           />
         ))}
       </div>
       {data.truncated ? (
         <div className="mt-1 text-[10px] text-muted">被追踪视频超过统计上限,只汇总已读取部分(已截断如实标注)。</div>
       ) : null}
-      <div className="mt-1 text-[10px] text-muted">播放/点赞 = 抓取时刻实测读数(非平台实时);未实测 ≠ 0;Δ7 天 = 最近实测 − 窗口基线之和,样本不足显「待积累」;时间按浏览器时区。</div>
+      <div className="mt-1 text-[10px] text-muted">播放/点赞 = 抓取时刻实测读数(非平台实时);未实测 ≠ 0;Δ7 天 = 最近实测 − 窗口基线之和,样本不足显「待积累」;时间按浏览器时区。「重新实测」是排队取数,不会立刻出数,回来后本页自动更新对应行。</div>
     </div>
   );
 }

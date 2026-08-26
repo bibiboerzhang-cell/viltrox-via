@@ -22,6 +22,7 @@ import { EmptyLine, LoadingLine } from "./MarketVoicePage.modules";
 import { ReceiptLine } from "./MyKolBoardPage.receipt";
 import { RecoveryPollingLine, TrackGuideLine, VideoTaskStatus, VideoTrackActions } from "./MyKolBoardPage.video-tasks";
 import { useMyKolContentWallPages } from "./useMyKolContentWallPages";
+import { WallFetchControl } from "./MyKolBoardPage.wall-fetch";
 import type { FlowReceipt } from "../../pages/myKol/PoolEvidenceContent.helpers";
 
 // 内容墙(MY KOL 板面):全部/单 KOL × 全时间/7/15/30 天统一走
@@ -328,6 +329,16 @@ export function ContentWallModule({
           <button type="button" className={`${CHIP} ${sortBy === "time" ? CHIP_ON : CHIP_OFF}`} onClick={() => setSortBy("time")}>最新</button>
           <button type="button" className={`${CHIP} ${sortBy === "views" ? CHIP_ON : CHIP_OFF}`} onClick={() => setSortBy("views")}>播放</button>
         </span>
+      </div>
+      <div className="mb-2">
+        <WallFetchControl
+          apiToken={apiToken}
+          kolPoolId={kolId}
+          kolLabel={kolId ? kolName || `KOL #${kolId}` : "全部收藏 KOL"}
+          days={days}
+          dayLabel={WALL_DAY_OPTIONS.find((option) => option.value === days)?.label || "全部时间"}
+          onRefreshWall={() => { void wallPages.refresh(); }}
+        />
       </div>
       <div className="mb-2"><TrackGuideLine compact /></div>
       <ReceiptLine msg={trackReceipt} />

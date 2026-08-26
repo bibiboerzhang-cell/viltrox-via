@@ -118,6 +118,9 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_my_kol_watchlist",
     # 波 D·B:一键数据关注 POST + 按产品聚合播放总览 GET(写口全复用追踪围栏,append-only,2026-08-23)
     "vkpi_my_kol_sku_play",
+    # 内容墙「去查最新内容」:报价 GET(纯读)+ 派活 POST(复用既有账号取数入队器,
+    # 报价指纹绑定确认框数字,append-only,2026-08-25)
+    "vkpi_my_kol_wall_fetch",
     "vkpi_operating_review",
     "vkpi_operations",
     "vkpi_pillars",

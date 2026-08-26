@@ -113,7 +113,13 @@ def _conn() -> sqlite3.Connection:
             job_type TEXT NOT NULL,
             payload TEXT NOT NULL,
             idempotency_key TEXT NOT NULL,
-            status TEXT NOT NULL
+            status TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_retry_at TEXT,
+            last_error TEXT,
+            last_error_category TEXT,
+            created_at TEXT,
+            updated_at TEXT
         );
         CREATE TABLE vkpi_kol_video_metric_tracking (
             evidence_id INTEGER PRIMARY KEY,

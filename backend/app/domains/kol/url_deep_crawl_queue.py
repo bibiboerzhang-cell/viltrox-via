@@ -378,11 +378,17 @@ def enqueue_profile_deep_crawl_job(
     suppress_final_v1: bool = False,
     suppress_contact_followup: bool = False,
     suppress_profile_followups: bool = False,
+    since_iso: str = "",
 ) -> dict[str, Any]:
     """把账号深爬 execute 入 apify_jobs 队列(泳道可见),替代同步 HTTP 内爬。
 
     幂等:普通任务仅复用同 URL 的普通 active 任务;内容监控仅复用
     同 subscription/staff/KOL/generation 围栏的 active 任务。
+
+    ``since_iso``(可选,ISO 日期 YYYY-MM-DD):发布时间下限,只在抓取器支持日期
+    截断的平台生效,其余平台由客户端按发布时间筛。**它既不抬 max_posts,也不改
+    幂等口径**——同 URL 已有在途任务时仍然并入那一条(窗口以先入队的为准),由调
+    用方如实回执「已有一次在跑,本次并入」,而不是各起一条去翻倍花钱。
     """
     conn = get_conn()
     clean_url = str(url or "").strip()
@@ -458,6 +464,9 @@ def enqueue_profile_deep_crawl_job(
         payload["suppress_contact_followup"] = True
     if suppress_profile_followups:
         payload["suppress_profile_followups"] = True
+    normalized_since = str(since_iso or "").strip()[:32]
+    if normalized_since:
+        payload["since"] = normalized_since
     job, inserted = enqueue_active_apify_job(
         conn,
         job_type=DEEP_CRAWL_JOB_TYPE,
@@ -536,6 +545,8 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
         "source": str(payload.get("source") or "queue:kol_profile_deep_crawl"),
         "suppress_final_v1": payload.get("suppress_final_v1") is True,
         "suppress_profile_followups": payload.get("suppress_profile_followups") is True,
+        # 发布时间下限:老任务没有这个键 → "" → 与升级前逐字节同行为。
+        "since": str(payload.get("since") or ""),
     }
     if revalidated_staff is not None:
         body["paid_action_staff"] = {
