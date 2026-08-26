@@ -156,6 +156,6 @@ describe("SemanticRecallCard · 加载态骨架屏", () => {
     });
     expect(await screen.findByText("Alice")).toBeInTheDocument();
     expect(container.querySelectorAll('[data-ui="skeleton"]').length).toBe(0);
-    expect(screen.getByText(/① 向量召回/)).toBeInTheDocument();
+    expect(screen.getByText(/① 语义召回/)).toBeInTheDocument();
   });
 });

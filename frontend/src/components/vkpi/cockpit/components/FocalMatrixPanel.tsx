@@ -216,8 +216,8 @@ export function FocalMatrixPanel({ apiToken, kolPoolId }: any) {
             ? "border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-200"
             : "border-amber-400/20 bg-amber-400/[0.05] text-amber-200"),
           title: creatorContext.recommendation_stage === "deep_validated"
-            ? `已有 ${Number(creatorContext.deep_evidence_count) || 0} 条 final_v1 深析证据`
-            : "仅档案/标题/设备词证据；final_v1 完成后会自动升级",
+            ? `已有 ${Number(creatorContext.deep_evidence_count) || 0} 条深度分析证据`
+            : "仅档案/标题/设备词证据；深度分析完成后会自动升级",
         }, creatorContext.recommendation_stage === "deep_validated" ? "深析已验证" : "初步推荐"),
         creatorContext.catalog_price_ceiling_proxy_usd != null
           ? e("span", {

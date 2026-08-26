@@ -4,70 +4,43 @@ import { apiFetch } from "../../../../services/http";
 import {
   fetchProgressCenter,
   type ProgressCenterData,
-  type ProgressRecentDone,
   type ProgressTask,
 } from "../../../../services/vkpi/progressCenter-api";
-import { humanizeLlmReason } from "../llmReasonCopy";
+import {
+  ACTIVE_POLL_INTERVAL_MS,
+  BASE_CONFIG_TITLE,
+  COST_REFRESH_INTERVAL_MS,
+  IDLE_POLL_INTERVAL_MS,
+  RECENT_WINDOW_TITLE,
+  channelGroupKey,
+  classifyFetchError,
+  isRecentLlmBlocked,
+  isRecentLlmSuccess,
+  laneProgress,
+  laneStateShortText,
+  nonNegativeCount,
+  progressStateLabel,
+  readStateLabel,
+  recentBlockedLabel,
+  recentSuccessLabel,
+  taskTitle,
+  type CostOverview,
+  type LlmSystemModelsOverview,
+  type LlmTaskReadiness,
+  type ReadState,
+} from "./DashboardTaskQueueCard.copy";
 
 const LANES = [
-  { key: "search", label: "抓取", Icon: Search, color: "var(--ds-accent)" },
-  { key: "thinking", label: "分析", Icon: Sparkles, color: "var(--ds-accent-2)" },
-  { key: "summarizing", label: "落库", Icon: Database, color: "var(--ds-good)" },
-  { key: "queued", label: "排队", Icon: Clock3, color: "var(--ds-warn)" },
+  { key: "search", label: "抓取", empty: "暂无抓取任务", Icon: Search, color: "var(--ds-accent)" },
+  { key: "thinking", label: "分析", empty: "暂无分析任务", Icon: Sparkles, color: "var(--ds-accent-2)" },
+  { key: "summarizing", label: "落库", empty: "暂无落库任务", Icon: Database, color: "var(--ds-good)" },
+  { key: "queued", label: "等待中", empty: "暂无排队任务", Icon: Clock3, color: "var(--ds-warn)" },
 ] as const;
 
-interface CostOverview {
-  today?: {
-    apify_usd?: number;
-    apify_calls?: number;
-    llm_usd?: number;
-    llm_calls?: number;
-    total_usd?: number;
-  };
-  budgets?: {
-    monthly_total?: {
-      configured?: boolean;
-      allowed?: boolean;
-      hard_stopped?: boolean;
-      cap_usd?: number;
-      current_spend?: number;
-    };
-  };
-}
+/** 每条链路各自持有状态:一条读失败不得把另外两条也塌成 null。 */
+interface Link<T> { state: ReadState; data: T | null }
 
-interface LlmTaskReadiness {
-  binding?: string;
-  configured?: boolean;
-  production_ready?: boolean;
-  runtime_authorization?: {
-    allowed_by_model_readiness?: boolean;
-    source?: "signed_evidence" | "operator_ack" | "blocked";
-    temporary?: boolean;
-  };
-}
-
-interface LlmSystemModelsOverview {
-  task_model_readiness?: Record<string, LlmTaskReadiness>;
-  readiness_audit?: {
-    active_scope?: {
-      binding_count?: number;
-      bindings?: string[];
-      production_ready_count?: number;
-      runtime_authorized_count?: number;
-      runtime_blocked_count?: number;
-    };
-  };
-}
-
-const ACTIVE_POLL_INTERVAL_MS = 10_000;
-const IDLE_POLL_INTERVAL_MS = 30_000;
-const STATUS_REFRESH_INTERVAL_MS = 60_000;
-const SUCCESS_LLM_STATUSES = new Set(["success", "done", "completed", "settled"]);
-const BLOCKED_LLM_STATUSES = new Set([
-  "blocked", "budget_blocked", "cancelled", "failed", "timeout", "triage",
-  "parse_failure", "validation_failure", "all_providers_failed", "fleet_breaker_open",
-  "provider_exception", "provider_http_error", "provider_blocked", "transport_error",
-]);
+const LOADING: Link<never> = { state: "loading", data: null };
 
 function hasActiveTasks(payload: ProgressCenterData): boolean {
   return Number(payload.counts?.active_total || 0) > 0
@@ -81,71 +54,10 @@ function isDocumentHidden(): boolean {
   return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
-function taskTitle(task: ProgressTask | undefined) {
-  if (!task) return "空闲 · 等待入队";
-  const kind = String(task.kind || task.job_type || "").trim();
-  const label = String(task.label || "").trim();
-  if (kind && label && kind !== label) return `${kind} · ${label}`;
-  return label || kind || `任务 ${task.id}`;
-}
-
-function laneProgress(tasks: ProgressTask[]) {
-  // Number(null) === 0.  进度端点用 null 表示“已超历史均时/无法可靠估算”，
-  // 不能把它误画成 0% 后再由最小宽度伪装成 6%。
-  const values = tasks
-    .filter((task) => task.progress_pct !== null && task.progress_pct !== undefined)
-    .map((task) => Number(task.progress_pct))
-    .filter(Number.isFinite);
-  if (values.length === 0) return tasks.length > 0 ? null : 0;
-  return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
-}
-
-function nonNegativeCount(value: unknown): number | null {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : null;
-}
-
-function providerLabel(bindingOrProvider: unknown): string {
-  const raw = String(bindingOrProvider || "").trim();
-  const provider = raw.split(/[/:]/, 1)[0].toLowerCase();
-  if (provider === "google" || provider === "gemini") return "Google";
-  if (provider === "openai") return "OpenAI";
-  if (provider === "anthropic" || provider === "claude") return "Anthropic";
-  return provider ? `${provider.slice(0, 1).toUpperCase()}${provider.slice(1)}` : "未知 Provider";
-}
-
-function isRecentLlmSuccess(item: ProgressRecentDone): boolean {
-  return !item.has_error && SUCCESS_LLM_STATUSES.has(String(item.status || "").toLowerCase());
-}
-
-function isRecentLlmBlocked(item: ProgressRecentDone): boolean {
-  const status = String(item.status || "").toLowerCase();
-  return item.has_error || BLOCKED_LLM_STATUSES.has(status)
-    || (Boolean(item.reason_code) && !SUCCESS_LLM_STATUSES.has(status));
-}
-
-function recentSuccessLabel(item: ProgressRecentDone | undefined): string {
-  if (!item) return "窗口内无成功记录";
-  const binding = String(item.task_binding || "");
-  const provider = providerLabel(item.provider || (binding.includes("/") ? binding : ""));
-  const model = String(item.model || "").trim();
-  return model ? `${provider} · ${model}` : provider;
-}
-
-function recentBlockedLabel(item: ProgressRecentDone | undefined): string {
-  if (!item) return "最近记录未见阻断";
-  const reason = item.failure_reason_human
-    || item.reason_code
-    || item.error_category
-    || item.reason_category
-    || item.status;
-  return humanizeLlmReason(reason, "最近一条 LLM 任务未完成，请查看设置页。").message;
-}
-
-export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { apiToken?: string; compact?: boolean }) {
-  const [data, setData] = React.useState<ProgressCenterData | null>(null);
-  const [cost, setCost] = React.useState<CostOverview | null>(null);
-  const [models, setModels] = React.useState<LlmSystemModelsOverview | null>(null);
+function DashboardTaskQueueCardImpl({ apiToken = "", compact = false }: { apiToken?: string; compact?: boolean }) {
+  const [progress, setProgress] = React.useState<Link<ProgressCenterData>>(LOADING);
+  const [cost, setCost] = React.useState<Link<CostOverview>>(LOADING);
+  const [models, setModels] = React.useState<Link<LlmSystemModelsOverview>>(LOADING);
 
   React.useEffect(() => {
     if (!apiToken) return;
@@ -190,11 +102,11 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
         try {
           const payload = await fetchProgressCenter({ token: apiToken, signal: controller.signal });
           if (stopped || controller.signal.aborted) return;
-          setData(payload);
+          setProgress({ state: "ready", data: payload });
           nextDelayMs = hasActiveTasks(payload) ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS;
-        } catch {
+        } catch (error) {
           if (stopped || controller.signal.aborted) return;
-          setData(null);
+          setProgress({ state: classifyFetchError(error), data: null });
         } finally {
           // hidden/unmount 会先解除当前请求所有权；被中止的旧请求即使延迟结算，
           // 也不能替新一轮再挂一个计时器。
@@ -230,52 +142,102 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
     };
   }, [apiToken]);
 
+  // 成本账本每次要跑 8 个只读聚合，5 分钟一拍即可；页面隐藏期间完全不发，
+  // 回到前台时只有真的过期了才补一拍。
   React.useEffect(() => {
     if (!apiToken) return;
     let cancelled = false;
     let controller: AbortController | null = null;
-    const refresh = () => {
+    let timer: number | undefined;
+    let lastRunAt = 0;
+
+    const run = () => {
       if (cancelled) return;
+      lastRunAt = Date.now();
       controller?.abort();
-      controller = new AbortController();
-      const signal = controller.signal;
-      void apiFetch<CostOverview>(`/api/admin/vkpi/ops/cost-ledger?tz_offset_minutes=${-new Date().getTimezoneOffset()}`, { signal, timeoutMs: 12000 }, apiToken)
-        .then((payload) => { if (!cancelled && !signal.aborted) setCost(payload); })
-        .catch(() => { if (!cancelled && !signal.aborted) setCost(null); });
-      void apiFetch<LlmSystemModelsOverview>("/api/admin/system/models", { signal, timeoutMs: 12000 }, apiToken)
-        .then((payload) => { if (!cancelled && !signal.aborted) setModels(payload); })
-        .catch(() => { if (!cancelled && !signal.aborted) setModels(null); });
+      const active = new AbortController();
+      controller = active;
+      const url = `/api/admin/vkpi/ops/cost-ledger?tz_offset_minutes=${-new Date().getTimezoneOffset()}`;
+      void apiFetch<CostOverview>(url, { signal: active.signal, timeoutMs: 12000 }, apiToken)
+        .then((payload) => {
+          if (!cancelled && !active.signal.aborted) setCost({ state: "ready", data: payload });
+        })
+        .catch((error) => {
+          if (!cancelled && !active.signal.aborted) setCost({ state: classifyFetchError(error), data: null });
+        });
     };
-    setCost(null);
-    setModels(null);
-    refresh();
-    const refreshTimer = window.setInterval(() => {
-      if (!isDocumentHidden()) refresh();
-    }, STATUS_REFRESH_INTERVAL_MS);
+
+    const startTimer = () => {
+      window.clearInterval(timer);
+      timer = window.setInterval(run, COST_REFRESH_INTERVAL_MS);
+    };
+
+    const handleVisibility = () => {
+      if (isDocumentHidden()) {
+        window.clearInterval(timer);
+        timer = undefined;
+        return;
+      }
+      if (Date.now() - lastRunAt >= COST_REFRESH_INTERVAL_MS) run();
+      startTimer();
+    };
+
+    setCost(LOADING);
+    run();
+    startTimer();
+    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       cancelled = true;
-      window.clearInterval(refreshTimer);
+      window.clearInterval(timer);
       controller?.abort();
+      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [apiToken]);
 
+  // 基础配置快照只由进程环境与注册表决定，唯一的时间依赖是证据新鲜度（小时/天量级）。
+  // 原来的 60 秒轮询零收益，改为每次挂载取一次。
+  React.useEffect(() => {
+    if (!apiToken) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    setModels(LOADING);
+    void apiFetch<LlmSystemModelsOverview>("/api/admin/system/models", { signal: controller.signal, timeoutMs: 12000 }, apiToken)
+      .then((payload) => {
+        if (!cancelled && !controller.signal.aborted) setModels({ state: "ready", data: payload });
+      })
+      .catch((error) => {
+        if (!cancelled && !controller.signal.aborted) setModels({ state: classifyFetchError(error), data: null });
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [apiToken]);
+
+  const data = progress.data;
+  const progressReady = progress.state === "ready" && data !== null;
+
+  const byStage = React.useMemo(() => {
+    const running = data?.running || [];
+    return {
+      search: running.filter((task) => task.stage === "search"),
+      thinking: running.filter((task) => task.stage === "thinking"),
+      summarizing: running.filter((task) => task.stage === "summarizing"),
+      queued: data?.queued || [],
+    } as Record<string, ProgressTask[]>;
+  }, [data]);
+
   const running = data?.running || [];
-  const queued = data?.queued || [];
-  const byStage: Record<string, ProgressTask[]> = {
-    search: running.filter((task) => task.stage === "search"),
-    thinking: running.filter((task) => task.stage === "thinking"),
-    summarizing: running.filter((task) => task.stage === "summarizing"),
-    queued,
-  };
   const runningTotal = Number(data?.counts.running ?? running.length);
-  const queueTotal = Number(data?.counts.queued ?? queued.length);
+  const queueTotal = Number(data?.counts.queued ?? byStage.queued.length);
   const currentTask = running[0];
   const workerOffline = data?.diagnostics?.worker_online === false;
   const queueBlocked = workerOffline && queueTotal > 0;
-  const today = cost?.today;
+
+  const today = cost.data?.today;
   const todayCalls = Number(today?.apify_calls || 0) + Number(today?.llm_calls || 0);
   const todayUsd = Number(today?.total_usd);
-  const budget = cost?.budgets?.monthly_total;
+  const budget = cost.data?.budgets?.monthly_total;
   const cap = Number(budget?.cap_usd);
   const spend = Number(budget?.current_spend);
   const budgetPct = budget?.configured && cap > 0 && Number.isFinite(spend)
@@ -290,100 +252,129 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
     && budget?.allowed !== false
     && budget?.hard_stopped !== true;
 
-  const taskReadiness = Object.values(models?.task_model_readiness || {});
-  const readinessByBinding = new Map<string, LlmTaskReadiness>();
-  taskReadiness.forEach((row) => {
-    const binding = String(row.binding || "").trim();
-    if (binding) readinessByBinding.set(binding, row);
-  });
-  const auditScope = models?.readiness_audit?.active_scope;
-  const activeBindings = Array.from(new Set(
-    (Array.isArray(auditScope?.bindings) && auditScope.bindings.length > 0
-      ? auditScope.bindings
-      : taskReadiness.map((row) => row.binding)
-    ).map((binding) => String(binding || "").trim()).filter(Boolean),
-  ));
-  const providers = new Map<string, boolean[]>();
-  activeBindings.forEach((binding) => {
-    const provider = providerLabel(binding);
-    const states = providers.get(provider) || [];
-    states.push(readinessByBinding.get(binding)?.configured === true);
-    providers.set(provider, states);
-  });
-  const providerTotal = providers.size;
-  const providerConfigured = Array.from(providers.values()).filter(
-    (states) => states.length > 0 && states.every(Boolean),
-  ).length;
-  const providerGateKnown = models !== null && activeBindings.length > 0 && providerTotal > 0;
-  const providerGateAllowed = providerGateKnown && providerConfigured === providerTotal;
+  const readiness = React.useMemo(() => {
+    const overview = models.data;
+    const taskReadiness = Object.values(overview?.task_model_readiness || {});
+    const readinessByBinding = new Map<string, LlmTaskReadiness>();
+    taskReadiness.forEach((row) => {
+      const binding = String(row.binding || "").trim();
+      if (binding) readinessByBinding.set(binding, row);
+    });
+    const auditScope = overview?.readiness_audit?.active_scope;
+    const activeBindings = Array.from(new Set(
+      (Array.isArray(auditScope?.bindings) && auditScope.bindings.length > 0
+        ? auditScope.bindings
+        : taskReadiness.map((row) => row.binding)
+      ).map((binding) => String(binding || "").trim()).filter(Boolean),
+    ));
+    // 只按服务通道归组计数，键不渲染 —— 卡面不出厂商名。
+    const channels = new Map<string, boolean[]>();
+    activeBindings.forEach((binding) => {
+      const key = channelGroupKey(binding);
+      const states = channels.get(key) || [];
+      states.push(readinessByBinding.get(binding)?.configured === true);
+      channels.set(key, states);
+    });
+    const channelTotal = channels.size;
+    const channelConfigured = Array.from(channels.values()).filter(
+      (states) => states.length > 0 && states.every(Boolean),
+    ).length;
+    const bindingTotal = nonNegativeCount(auditScope?.binding_count) ?? activeBindings.length;
+    const derivedRuntimeAuthorized = activeBindings.filter((binding) => (
+      readinessByBinding.get(binding)?.runtime_authorization?.allowed_by_model_readiness === true
+    )).length;
+    const derivedSignedReady = activeBindings.filter((binding) => (
+      readinessByBinding.get(binding)?.production_ready === true
+    )).length;
+    const derivedTemporaryAuthorized = activeBindings.filter((binding) => (
+      readinessByBinding.get(binding)?.runtime_authorization?.source === "operator_ack"
+      || readinessByBinding.get(binding)?.runtime_authorization?.temporary === true
+    )).length;
+    const runtimeAuthorized = nonNegativeCount(auditScope?.runtime_authorized_count) ?? derivedRuntimeAuthorized;
+    const signedReady = nonNegativeCount(auditScope?.production_ready_count) ?? derivedSignedReady;
+    return {
+      activeBindings,
+      channelTotal,
+      channelConfigured,
+      bindingTotal,
+      runtimeAuthorized,
+      signedReady,
+      temporaryAuthorized: Math.max(derivedTemporaryAuthorized, runtimeAuthorized - signedReady, 0),
+    };
+  }, [models.data]);
 
-  const bindingTotal = nonNegativeCount(auditScope?.binding_count) ?? activeBindings.length;
-  const derivedRuntimeAuthorized = activeBindings.filter((binding) => (
-    readinessByBinding.get(binding)?.runtime_authorization?.allowed_by_model_readiness === true
-  )).length;
-  const derivedSignedReady = activeBindings.filter((binding) => (
-    readinessByBinding.get(binding)?.production_ready === true
-  )).length;
-  const derivedTemporaryAuthorized = activeBindings.filter((binding) => (
-    readinessByBinding.get(binding)?.runtime_authorization?.source === "operator_ack"
-    || readinessByBinding.get(binding)?.runtime_authorization?.temporary === true
-  )).length;
-  const runtimeAuthorized = nonNegativeCount(auditScope?.runtime_authorized_count) ?? derivedRuntimeAuthorized;
-  const signedReady = nonNegativeCount(auditScope?.production_ready_count) ?? derivedSignedReady;
-  const temporaryAuthorized = Math.max(derivedTemporaryAuthorized, runtimeAuthorized - signedReady, 0);
-  const modelGateKnown = models !== null && bindingTotal > 0;
-  const modelGateAllowed = modelGateKnown && runtimeAuthorized === bindingTotal;
+  const modelsReady = models.state === "ready" && models.data !== null;
+  const channelGateKnown = modelsReady && readiness.activeBindings.length > 0 && readiness.channelTotal > 0;
+  const channelGateAllowed = channelGateKnown && readiness.channelConfigured === readiness.channelTotal;
+  const modelGateKnown = modelsReady && readiness.bindingTotal > 0;
+  const modelGateAllowed = modelGateKnown && readiness.runtimeAuthorized === readiness.bindingTotal;
   const workerGateKnown = typeof data?.diagnostics?.worker_online === "boolean";
   const workerGateAllowed = workerGateKnown && !workerOffline;
-  const baseConfigurationFullyChecked = workerGateKnown && providerGateKnown && budgetGateKnown && modelGateKnown;
-  const llmBaseConfigurationVerified = baseConfigurationFullyChecked
+  const baseConfigurationFullyChecked = workerGateKnown && channelGateKnown && budgetGateKnown && modelGateKnown;
+  const baseConfigurationVerified = baseConfigurationFullyChecked
     && workerGateAllowed
-    && providerGateAllowed
+    && channelGateAllowed
     && budgetGateAllowed
     && modelGateAllowed;
 
   const recentLlm = data?.recent_llm || [];
-  const latestLlmSuccess = recentLlm.find(isRecentLlmSuccess);
-  const latestLlmBlocked = recentLlm.find(isRecentLlmBlocked);
-  const idleStatusLabel = llmBaseConfigurationVerified
-    ? "基础配置已核 · 具体任务待预检"
+  const latestSuccess = recentLlm.find(isRecentLlmSuccess);
+  const latestBlocked = recentLlm.find(isRecentLlmBlocked);
+  const idleStatusLabel = baseConfigurationVerified
+    ? "基础配置正常 · 每个任务开跑前再确认"
     : !baseConfigurationFullyChecked
       ? "当前无任务 · 状态待核"
       : !workerGateAllowed
-        ? "当前受限 · Worker 离线"
-        : !providerGateAllowed
-          ? "当前受限 · Provider"
+        ? "当前受限 · 后台未运行"
+        : !channelGateAllowed
+          ? "当前受限 · 服务通道"
           : !budgetGateAllowed
-            ? "当前受限 · 预算闸"
-            : "当前受限 · 模型门";
-  const statusLabel = runningTotal > 0
-    ? `${runningTotal} 处理中${workerOffline ? " · Worker 心跳断开" : ""}`
-    : queueBlocked
-      ? `Worker 离线 · ${queueTotal} 等待`
-      : queueTotal > 0
-        ? `${queueTotal} 排队`
-        : idleStatusLabel;
-  const idleBaseConfigurationBlocked = runningTotal === 0
+            ? "当前受限 · 预算"
+            : "当前受限 · 模型未授权";
+  const statusLabel = !progressReady
+    ? progressStateLabel(progress.state)
+    : runningTotal > 0
+      ? `${runningTotal} 处理中${workerOffline ? " · 后台心跳中断" : ""}`
+      : queueBlocked
+        ? `后台未运行 · ${queueTotal} 等待中`
+        : queueTotal > 0
+          ? `${queueTotal} 等待中`
+          : idleStatusLabel;
+  const idleBaseConfigurationBlocked = progressReady
+    && runningTotal === 0
     && queueTotal === 0
     && baseConfigurationFullyChecked
-    && !llmBaseConfigurationVerified;
-  const cardTitle = workerOffline
-    ? runningTotal > 0
-      ? "检测到跑中记录，但 Worker 心跳已过期；请按当前任务与最近更新时间核验是否仍在执行"
-      : queueBlocked
-        ? "Worker 当前离线，排队任务尚未开始"
-        : "Worker 心跳已过期"
-    : "基础配置状态只核 Worker 心跳、Provider 配置、月总预算闸与模型运行授权，不代表具体任务已可调用；single_call、任务所选 provider/cost scope、force_offline 与 fleet breaker 仍由每次任务预检决定；最近结果仅覆盖近 2 小时最多 5 条记录";
-  const runtimeTitle = providerGateKnown
-    ? `${Array.from(providers.keys()).join(" / ")}；配置完整 ${providerConfigured}/${providerTotal}`
-    : "当前账号无权读取或尚未取得 Provider 配置状态";
+    && !baseConfigurationVerified;
+  const cardTitle = !progressReady
+    ? `${progressStateLabel(progress.state)}；下方四项基础状态与最近结果仍按各自数据链路单独显示`
+    : workerOffline
+      ? runningTotal > 0
+        ? "检测到跑中记录，但后台心跳已过期；请按当前任务与最近更新时间核验是否仍在执行"
+        : queueBlocked
+          ? "后台当前未运行，排队任务尚未开始"
+          : "后台心跳已过期"
+      : BASE_CONFIG_TITLE;
+  const channelTitle = channelGateKnown
+    ? `已配置 ${readiness.channelConfigured} 条，共 ${readiness.channelTotal} 条服务通道；缺一条就可能有任务跑不动`
+    : models.state === "forbidden"
+      ? "当前账号无权查看服务通道配置状态"
+      : `服务通道配置状态${readStateLabel(models.state)}`;
+  const modelsUnknownText = modelsReady ? "待核" : readStateLabel(models.state);
+  const budgetUnknownText = cost.state === "ready" ? "待核" : readStateLabel(cost.state);
   const budgetState = !budgetGateKnown
-    ? "待核"
+    ? budgetUnknownText
     : !budgetGateAllowed
       ? "已阻断"
       : budget?.configured === false
         ? "未配置·放行"
         : "可用";
+  const currentRowText = !progressReady
+    ? progressStateLabel(progress.state)
+    : currentTask
+      ? taskTitle(currentTask)
+      : queueBlocked
+        ? "后台未运行，排队任务尚未开始"
+        : "当前没有在跑的任务";
 
   return (
     <article
@@ -393,100 +384,116 @@ export function DashboardTaskQueueCard({ apiToken = "", compact = false }: { api
       <header>
         <div>
           <Activity size={13} />
-          <strong>{compact ? "LLM 队列" : "LLM 任务队列"}</strong>
+          <strong>{compact ? "排队" : "任务队列"}</strong>
         </div>
-        <span className={runningTotal > 0 ? "is-running" : queueBlocked || idleBaseConfigurationBlocked ? "is-blocked" : ""}>{statusLabel}</span>
+        <span className={progressReady && runningTotal > 0 ? "is-running" : !progressReady || queueBlocked || idleBaseConfigurationBlocked ? "is-blocked" : ""}>{statusLabel}</span>
       </header>
-      {compact && currentTask ? (
-        <div className="vkpi-dashboard-task-queue__current" title={`${taskTitle(currentTask)} · #${currentTask.id}`}>
+      {compact ? (
+        <div
+          className="vkpi-dashboard-task-queue__current"
+          title={currentTask ? `${taskTitle(currentTask)} · #${currentTask.id}` : currentRowText}
+        >
           <span>当前</span>
-          <strong>{taskTitle(currentTask)}</strong>
-          <small>#{currentTask.id}</small>
+          <strong>{currentRowText}</strong>
+          {currentTask ? <small>#{currentTask.id}</small> : null}
         </div>
       ) : null}
-      <div className="vkpi-dashboard-task-queue__runtime" aria-label="LLM 基础配置状态">
-        <span title={runtimeTitle}>
-          <small>Provider</small>
-          <strong className={providerGateKnown ? providerGateAllowed ? "is-ok" : "is-warn" : ""}>
-            {providerGateKnown ? `${providerConfigured}/${providerTotal}` : "待核"}
+      <div className="vkpi-dashboard-task-queue__runtime" aria-label="基础配置状态">
+        <span title={channelTitle}>
+          <small>服务通道</small>
+          <strong className={channelGateKnown ? channelGateAllowed ? "is-ok" : "is-warn" : ""}>
+            {channelGateKnown ? `${readiness.channelConfigured}/${readiness.channelTotal}` : modelsUnknownText}
           </strong>
         </span>
         <span title="月度总预算闸；未配置时仅按全局基础契约默认放行，具体任务的独立预算闸仍可能阻断">
           <small>月总预算</small>
           <strong className={budgetGateKnown ? budgetGateAllowed ? "is-ok" : "is-warn" : ""}>{budgetState}</strong>
         </span>
-        <span title="运营临时授权仅代表当前运行放行，不等于签名生产就绪">
-          <small>临时授权</small>
-          <strong className={modelGateKnown && temporaryAuthorized > 0 ? "is-warn" : ""}>
-            {modelGateKnown ? `${temporaryAuthorized}/${bindingTotal}` : "待核"}
+        <span title="这几项是人工先放行的，还没走完整核验，结果要多留意">
+          <small>人工放行</small>
+          <strong className={modelGateKnown && readiness.temporaryAuthorized > 0 ? "is-warn" : ""}>
+            {modelGateKnown ? `${readiness.temporaryAuthorized}/${readiness.bindingTotal}` : modelsUnknownText}
           </strong>
         </span>
-        <span title="经独立信任根校验的签名生产就绪绑定">
-          <small>签名就绪</small>
-          <strong className={modelGateKnown && signedReady === bindingTotal ? "is-ok" : modelGateKnown ? "is-warn" : ""}>
-            {modelGateKnown ? `${signedReady}/${bindingTotal}` : "待核"}
+        <span title="已通过完整核验的项数；数字等于总数才算全部就绪。当前未配置核验证据源时会长期为 0，模型仍以人工放行运行">
+          <small>正式核验</small>
+          <strong className={modelGateKnown && readiness.signedReady === readiness.bindingTotal ? "is-ok" : modelGateKnown ? "is-warn" : ""}>
+            {modelGateKnown ? `${readiness.signedReady}/${readiness.bindingTotal}` : modelsUnknownText}
           </strong>
         </span>
       </div>
-      <div
-        className="vkpi-dashboard-task-queue__recent"
-        title="进度中心近 2 小时最多 5 条 LLM 记录的只读摘要，不代表 24 小时全量统计"
-      >
+      <div className="vkpi-dashboard-task-queue__recent" title={RECENT_WINDOW_TITLE}>
         <span>
-          <small>近窗成功</small>
-          <strong>{recentSuccessLabel(latestLlmSuccess)}</strong>
+          <small>最近成功</small>
+          <strong>{progressReady ? recentSuccessLabel(latestSuccess) : progressStateLabel(progress.state)}</strong>
         </span>
-        <span className={latestLlmBlocked ? "is-warn" : ""}>
-          <small>近窗阻断</small>
-          <strong>{recentBlockedLabel(latestLlmBlocked)}</strong>
+        <span className={progressReady && latestBlocked ? "is-warn" : ""}>
+          <small>最近受阻</small>
+          <strong>{progressReady ? recentBlockedLabel(latestBlocked) : progressStateLabel(progress.state)}</strong>
         </span>
       </div>
       <div className="vkpi-dashboard-task-queue__lanes">
         {LANES.map((lane) => {
-          const tasks = byStage[lane.key] || [];
+          const tasks = progressReady ? byStage[lane.key] || [] : [];
           const isQueuedLane = lane.key === "queued";
           const isWaiting = isQueuedLane && tasks.length > 0;
           const isBlocked = isQueuedLane && queueBlocked;
-          const progress = isQueuedLane ? 0 : laneProgress(tasks);
+          const progressPct = isQueuedLane ? 0 : laneProgress(tasks);
           const topTask = tasks[0];
-          const progressText = tasks.length === 0
-            ? "--"
-            : isWaiting
-              ? String(tasks.length)
-              : topTask?.progress_overdue
-                ? "超均时"
-                : progress === null
-                  ? String(tasks.length)
-                  : `${progress}%`;
+          const countText = !progressReady
+            ? laneStateShortText(progress.state)
+            : tasks.length === 0
+              ? "0"
+              : isWaiting
+                ? String(tasks.length)
+                : topTask?.progress_overdue
+                  ? "超均时"
+                  : progressPct === null
+                    ? String(tasks.length)
+                    : `${progressPct}%`;
+          const laneText = !progressReady
+            ? progressStateLabel(progress.state)
+            : isBlocked
+              ? "等待后台恢复"
+              : topTask
+                ? taskTitle(topTask)
+                : lane.empty;
           return (
             <div
               className={`vkpi-dashboard-task-queue__lane ${tasks.length > 0 ? "is-active" : "is-idle"} ${isBlocked ? "is-blocked" : ""}`}
               key={lane.key}
-              title={topTask ? `${taskTitle(topTask)} · #${topTask.id}${topTask.progress_overdue ? " · 已超历史均时" : ""}` : undefined}
+              title={topTask
+                ? `${taskTitle(topTask)} · #${topTask.id}${topTask.progress_overdue ? " · 已超历史均时" : ""}`
+                : laneText}
             >
               <lane.Icon size={compact ? 11 : 12} />
               <span className="vkpi-dashboard-task-queue__name">{lane.label}</span>
-              {!compact ? <span className="vkpi-dashboard-task-queue__task">{isBlocked ? "等待 Worker 上线" : taskTitle(topTask)}</span> : null}
+              {!compact ? <span className="vkpi-dashboard-task-queue__task">{laneText}</span> : null}
               <span className="vkpi-dashboard-task-queue__bar">
                 <i
-                  className={isWaiting ? "is-waiting" : progress === null ? "is-indeterminate" : ""}
+                  className={isWaiting ? "is-waiting" : progressPct === null ? "is-indeterminate" : ""}
                   style={{
-                    width: isWaiting ? "10%" : progress === null ? "42%" : `${Math.max(tasks.length > 0 ? 6 : 0, Number(progress || 0))}%`,
+                    width: isWaiting ? "10%" : progressPct === null ? "42%" : `${Math.max(tasks.length > 0 ? 6 : 0, Number(progressPct || 0))}%`,
                     background: tasks.length > 0 ? lane.color : undefined,
                   }}
                 />
               </span>
-              <small>{progressText}</small>
+              <small>{countText}</small>
             </div>
           );
         })}
       </div>
       <footer>
-        {today && Number.isFinite(todayUsd)
-          ? <span>今日 {todayCalls.toLocaleString()} 次 · ${todayUsd.toFixed(2)}{compact && budgetPct !== null ? ` · 预算 ${budgetPct}%` : ""}</span>
-          : <span>成本账本不可见</span>}
+        {cost.state !== "ready"
+          ? <span>{`今日成本${readStateLabel(cost.state)}`}</span>
+          : today && Number.isFinite(todayUsd)
+            ? <span>今日 {todayCalls.toLocaleString()} 次 · ${todayUsd.toFixed(2)}{compact && budgetPct !== null ? ` · 预算 ${budgetPct}%` : ""}</span>
+            : <span>今日暂无成本记录</span>}
         {!compact ? <span>{budgetPct === null ? "预算未配置" : `月预算已用 ${budgetPct}%`}</span> : null}
       </footer>
     </article>
   );
 }
+
+// props 是两个原始值，memo 能真正挡住父层(侧栏/看板)重渲染引发的整卡重算。
+export const DashboardTaskQueueCard = React.memo(DashboardTaskQueueCardImpl);

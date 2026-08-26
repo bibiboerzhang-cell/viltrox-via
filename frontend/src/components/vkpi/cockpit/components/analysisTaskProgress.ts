@@ -95,11 +95,20 @@ const TASK_BINDING_LABELS: Record<string, string> = {
   kol_outreach_pack: "KOL 外联包",
 };
 
-/** Human-readable task binding carried by the strict reservation ledger. */
+/**
+ * 门面口径:任务绑定只出已登记的人话标签。
+ * 未登记的绑定不再把机器码原样上脸(红线2),回落成中性说法;
+ * 原始 binding 值由调用方放进 title/溯源层,信息不丢。
+ */
 export function analysisTaskBindingLabel(task: AnalysisTaskLike): string {
   const binding = String(task.task_binding || "").trim();
   if (!binding) return "";
-  return TASK_BINDING_LABELS[binding] || binding;
+  return TASK_BINDING_LABELS[binding] || "其他分析任务";
+}
+
+/** 溯源层用:原始任务绑定标识(只进 title/详情,不上卡面)。 */
+export function analysisTaskBindingTrace(task: AnalysisTaskLike): string {
+  return String(task.task_binding || "").trim();
 }
 
 export function analysisTaskFamily(task: AnalysisTaskLike): AnalysisTaskFamily {
@@ -184,7 +193,19 @@ export function analysisTerminalCopy(item: AnalysisTaskLike): {
   return { label: "失败", detail: reason.message, tone: "failed" };
 }
 
-export function analysisProviderLabel(item: AnalysisTaskLike): string {
+/**
+ * 门面口径:只出「走的是哪条通道」这一层业务语义,不出厂商名与模型标识(红线2)。
+ * 信息不丢——具体厂商/模型由 analysisProviderTrace 供给 title/溯源层。
+ */
+export function analysisChannelLabel(item: AnalysisTaskLike): string {
+  const mode = String(item.fallback_mode || "").trim();
+  if (mode === "provider_fallback") return "备用通道";
+  if (mode === "rule_v0" || mode === "safe_fallback") return "规则降级";
+  return String(item.provider || "").trim() ? "主通道" : "";
+}
+
+/** 溯源层用:原始厂商/模型标识(只进 title/详情,不上卡面)。 */
+export function analysisProviderTrace(item: AnalysisTaskLike): string {
   const provider = String(item.provider || "").trim();
   const model = String(item.model || "").trim();
   return [provider && `服务 ${provider}`, model && `模型 ${model}`].filter(Boolean).join(" · ");

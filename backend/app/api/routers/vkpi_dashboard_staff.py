@@ -244,6 +244,10 @@ def dashboard(
     window_days: int = 30,
     scope: str = Query(default="all", pattern="^(all|owned|kol|company|official|owned_matrix)$"),
     staff_id: int | None = None,
+    force_refresh: bool = Query(
+        default=False,
+        description="仅用户手动刷新可带:跳过读缓存重建一次。定时轮询不得带。",
+    ),
     staff=Depends(require_tab("vkpi", "read")),
 ):
     try:
@@ -253,6 +257,7 @@ def dashboard(
             staff_id=staff_id,
             staff=staff,
             cache_observer=dashboard_cache_observer(response=response),
+            force_refresh=force_refresh,
         )
     except access_scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
@@ -356,13 +361,21 @@ def dashboard_fit_movers(
 
 @router.get("/dashboard/ai-today-hot")
 def dashboard_ai_today_hot(
+    force_refresh: bool = Query(
+        default=False,
+        description="仅用户手动刷新可带:跳过读缓存重读一次。定时轮询不得带。",
+    ),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """AI Today 今日热点(LLM 每早生成的拍摄方案/话题/重点决策;只读)。未生成则诚实空。"""
-    del staff
-    from app.domains.market import ai_today
+    """AI Today 今日热点(每早生成的拍摄方案/话题/重点决策;只读)。未生成则诚实空。
 
-    return ai_today.get_ai_today_hot()
+    读端套 300s 缓存:快照一天只生成一次,而门面 90s 轮询下这条读路径线上实测
+    稳定 2.3-2.7s(全 bundle 最慢)。缓存口径见 ai_today_read_cache 模块 docstring。
+    """
+    del staff
+    from app.domains.market import ai_today_read_cache
+
+    return ai_today_read_cache.get_ai_today_hot_cached(force_refresh=force_refresh)
 
 
 @router.get("/dashboard/competitor-radar")

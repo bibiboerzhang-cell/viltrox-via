@@ -135,6 +135,47 @@ def test_full_dashboard_cache_is_scope_isolated_and_returns_defensive_copies(mon
     assert any("tenant=10:scope=global" in key for key in stored)
 
 
+def test_full_summary_cache_ttl_outlives_the_dashboard_poll_interval():
+    """TTL 必须大于门面轮询间隔,否则每一拍都过期 = 缓存等于没有。
+
+    门面轮询是 90s(frontend useCockpitRuntime.ts DASHBOARD_REFRESH_MS)。
+    2026-08-25 线上取证:TTL=30s 时近 6h 60 次读缓存只命中 6 次(10%),
+    其余全走 1.5-2.7s 的 builder。这条断言就是钉住那次回归的护栏。
+    """
+
+    assert dashboard_summary._FULL_SUMMARY_CACHE_TTL > 90
+
+
+def test_manual_force_refresh_reaches_cache_layer_and_polling_does_not(monkeypatch):
+    """手动刷新必须能穿透读缓存;默认(轮询)路径的调用形状保持不变。"""
+
+    seen_kwargs: list[dict] = []
+
+    def fake_cache_get_or_build(key, builder, ttl, cache_if, **kwargs):
+        del key, ttl, cache_if
+        seen_kwargs.append(dict(kwargs))
+        return builder()
+
+    monkeypatch.setattr(dashboard_summary, "cache_get_or_build", fake_cache_get_or_build)
+    monkeypatch.setattr(dashboard_summary.scope, "effective_staff_id", lambda staff, _requested: None)
+    monkeypatch.setattr(
+        dashboard_summary,
+        "_build_dashboard_summary_uncached",
+        lambda **_kwargs: {"summary": {}},
+    )
+
+    owner = {"id": 1, "role": "owner", "organization_id": 9}
+    dashboard_summary.build_dashboard_summary(window_days=30, metric_scope="all", staff=owner)
+    dashboard_summary.build_dashboard_summary(
+        window_days=30,
+        metric_scope="all",
+        staff=owner,
+        force_refresh=True,
+    )
+
+    assert seen_kwargs == [{}, {"force_refresh": True}]
+
+
 def test_dashboard_cache_observer_exposes_exact_builder_and_hit_headers():
     miss_response = Response()
     summary_cache.dashboard_cache_observer(response=miss_response)(

@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  analysisProviderLabel,
+  analysisChannelLabel,
+  analysisProviderTrace,
   analysisStageFlow,
   analysisTaskBindingLabel,
+  analysisTaskBindingTrace,
   analysisTaskFamily,
   analysisTerminalCopy,
 } from "./analysisTaskProgress";
@@ -63,17 +65,28 @@ describe("analysisTaskProgress", () => {
       .toBe("外部模型未能完成本次请求，本任务可按策略重试。");
   });
 
-  it("只展示安全的 provider/model 标识", () => {
-    expect(analysisProviderLabel({ provider: "google", model: "gemini-2.5-pro" }))
+  it("门面只出通道角色，厂商与模型标识只留在溯源层", () => {
+    expect(analysisChannelLabel({ provider: "google", model: "gemini-2.5-pro" })).toBe("主通道");
+    expect(analysisChannelLabel({ provider: "google", fallback_mode: "provider_fallback" }))
+      .toBe("备用通道");
+    expect(analysisChannelLabel({ provider: "google", fallback_mode: "rule_v0" })).toBe("规则降级");
+    expect(analysisChannelLabel({})).toBe("");
+    expect(analysisChannelLabel({ provider: "google" })).not.toMatch(/google|gemini/i);
+
+    expect(analysisProviderTrace({ provider: "google", model: "gemini-2.5-pro" }))
       .toBe("服务 google · 模型 gemini-2.5-pro");
-    expect(analysisProviderLabel({})).toBe("");
+    expect(analysisProviderTrace({})).toBe("");
   });
 
   it("将严格预留里的任务绑定映射成用户可读标签", () => {
     expect(analysisTaskBindingLabel({ task_binding: "kol_content_fit_analysis" }))
       .toBe("KOL 内容契合");
+    // 未登记绑定不把机器码上脸,回落中性说法;原码只进溯源层。
     expect(analysisTaskBindingLabel({ task_binding: "future_reviewed_task" }))
+      .toBe("其他分析任务");
+    expect(analysisTaskBindingTrace({ task_binding: "future_reviewed_task" }))
       .toBe("future_reviewed_task");
     expect(analysisTaskBindingLabel({})).toBe("");
+    expect(analysisTaskBindingTrace({})).toBe("");
   });
 });

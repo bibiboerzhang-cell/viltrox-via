@@ -59,21 +59,21 @@ function StageChips(stages: Stages) {
       className: "rounded px-1.5 py-0.5 text-[9px] " +
         (degraded ? "bg-warn-soft text-warn" : "bg-cyan-400/10 text-cyan-200"),
       title: degraded
-        ? "embedding 不可用(无网/无 key/预算闸),已决定性降级:字符 3-gram + 词表标签混合召回" +
+        ? "语义召回暂不可用(无网络/未配置/预算受限),已按确定性规则降级:字符片段 + 标签混合召回" +
           (recall.degraded_reason ? ` — ${recall.degraded_reason}` : "")
-        : "OpenAI embedding × Qdrant 档案索引召回",
+        : "按语义向量在档案索引里召回",
     },
-      degraded ? "① 降级召回 ngram" : "① 向量召回",
+      degraded ? "① 降级召回" : "① 语义召回",
       ` · ${Number(recall.candidates) || 0}人`,
     ),
     e("span", {
       className: "rounded bg-card px-1.5 py-0.5 text-[9px] text-muted",
-      title: "final_v1 十一维余弦粗排(video_similarity 向量口径)" +
-        (coarse.with_dims_cosine != null ? ` — ${coarse.with_dims_cosine} 人有十一维向量` : ""),
+      title: "按十一维内容特征做余弦粗排" +
+        (coarse.with_dims_cosine != null ? ` — ${coarse.with_dims_cosine} 人有十一维特征` : ""),
     }, `② 粗排 ${Number(coarse.n) || 0}`),
     e("span", {
       className: "rounded px-1.5 py-0.5 text-[9px] " + rerankTone,
-      title: `LLM top-${Number(rerank.top_n) || 20} 重排 · ${rerank.cost_note || ""}`,
+      title: `对前 ${Number(rerank.top_n) || 20} 名做智能重排 · ${rerank.cost_note || ""}`,
     },
       rerankStatus === "ok" ? "③ 重排 ok"
       : rerankStatus === "cached" ? "③ 重排 缓存"
@@ -102,8 +102,8 @@ function CandidateRow(it: RecallItem, i: number) {
         e("span", { className: "text-[9px] tabular-nums text-muted" }, fmtFollowers(it.followers) + " 粉"),
         it.llm_relevance != null && e("span", {
           className: "rounded bg-violet-400/10 px-1 py-px text-[8.5px] tabular-nums text-violet-300",
-          title: "LLM 相关度(仅展示排序,不参与任何评分列)",
-        }, "LLM " + Math.round(Number(it.llm_relevance))),
+          title: "相关度(仅用于排序,不参与任何评分列)",
+        }, "相关 " + Math.round(Number(it.llm_relevance))),
         it.profile_url && e("a", {
           href: it.profile_url, target: "_blank", rel: "noreferrer",
           className: "text-muted hover:text-cyan-300",
@@ -144,7 +144,7 @@ export function SemanticRecallCard({ apiToken }: any) {
     e("div", { className: "flex items-center gap-2 px-3 py-1.5 border-b border-line" },
       e(Sparkles, { size: 13, className: "text-violet-400", strokeWidth: 2 }),
       e("span", { className: "text-[11px] font-medium text-ink-2" }, "语义找人 · 三段式召回"),
-      e("span", { className: "text-[8.5px] text-muted" }, "embedding→十一维粗排→LLM重排 · 不参与 Fit 评分"),
+      e("span", { className: "text-[8.5px] text-muted" }, "语义召回→特征粗排→智能重排 · 不参与拟合评分"),
     ),
     e("div", { className: "flex items-center gap-1.5 px-3 py-2" },
       e("input", {
@@ -189,10 +189,10 @@ export function SemanticRecallCard({ apiToken }: any) {
         e("div", { className: "divide-y divide-line" }, items.map((it, i) => CandidateRow(it, i))),
         e("div", { className: "px-3 pb-1.5 pt-1 text-[8.5px] leading-relaxed text-muted" },
           `召回 ${Number(stages.recall?.candidates) || 0} 人 → 粗排 ${Number(stages.coarse?.n) || 0} → ` +
-          (String(stages.rerank?.status) === "ok" ? "LLM 重排完成"
-            : String(stages.rerank?.status) === "cached" ? "LLM 重排(当日缓存)"
+          (String(stages.rerank?.status) === "ok" ? "智能重排完成"
+            : String(stages.rerank?.status) === "cached" ? "智能重排(当日缓存)"
             : `重排跳过(${stages.rerank?.cost_note || "预算/网络"})`) +
-          " · 纯读展示信号 · 不参与 Fit 评分"),
+          " · 纯读展示信号 · 不参与拟合评分"),
       ),
   );
 }

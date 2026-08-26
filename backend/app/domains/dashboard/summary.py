@@ -59,7 +59,15 @@ from app.domains.dashboard.summary_company import (  # noqa: E402,F401
 # 聚合喂给 B(dashboard-scope-isolation 在缓存层延续)。None=owner/admin 全局桶。
 # 只在 GET /dashboard 汇总路径(build_dashboard_summary)对聚合结果套缓存;各 _build_*
 # 原函数保持无缓存,直连单测(如 authz 隔离用例)照旧命中真 SQL 分支。
-_FULL_SUMMARY_CACHE_TTL = 30
+# TTL 必须 > 门面轮询间隔,否则「每拍必过期」= 缓存等于没有。
+# 2026-08-25 线上取证:前端 DASHBOARD_REFRESH_MS = 90s,而 TTL=30s 结构性小于它 →
+# 近 6h 60 次读缓存只有 6 次 hit(10%),其余全走 builder(1501-2747ms;hit 是 1.3-23ms)。
+# 提到 180s 后一个 90s 周期内可命中一次,数据最陈旧 3 分钟。本汇总对外的真值时间戳
+# summary["generated_at"] 取自 metric_run/evidence 刷新时间(见本文件下方),与缓存窗口
+# 无关 → 门面显示的仍是数据的真新鲜度,TTL 不会把陈旧数据粉饰成「实时」。
+# 要立刻拿最新一版走 build_dashboard_summary(force_refresh=True)——只给用户手动刷新用,
+# 定时轮询绝不允许带;memory_cache 的 5s 生成标记会把并发强刷收敛成一次重建。
+_FULL_SUMMARY_CACHE_TTL = 180
 
 
 def _build_roster_detail(active_roster_by_scope: dict[str, int]) -> dict[str, Any]:
@@ -541,8 +549,12 @@ def build_dashboard_summary(
     metric_scope: str = "all",
     staff: dict[str, Any],
     cache_observer: Any = None,
+    force_refresh: bool = False,
 ) -> dict[str, Any]:
-    """Return the fully assembled dashboard with a short authorization-scoped cache."""
+    """Return the fully assembled dashboard with a short authorization-scoped cache.
+
+    ``force_refresh=True`` 只给用户手动刷新用(定时轮询不得带),见 _FULL_SUMMARY_CACHE_TTL 注释。
+    """
     normalized_scope = normalize_dashboard_scope(metric_scope)
     normalized_window_days = max(1, min(180, int(window_days or 30)))
     effective_staff_id = scope.effective_staff_id(staff, staff_id)
@@ -560,6 +572,7 @@ def build_dashboard_summary(
         staff=staff,
         ttl=_FULL_SUMMARY_CACHE_TTL,
         observe=cache_observer,
+        force_refresh=bool(force_refresh),
     )
 
 

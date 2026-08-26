@@ -80,7 +80,7 @@ describe("TopProgressCenter 渲染冒烟", () => {
     expect(await screen.findByText("任务进度中心")).toBeTruthy();
 
     // 跑中:标题 + 进度% + 视频深析的专属阶段流。
-    expect(screen.getByText("video深析 · youtube/@gearhead")).toBeTruthy();
+    expect(screen.getByText("视频深度分析 · youtube/@gearhead")).toBeTruthy();
     expect(screen.getByText("≈42%")).toBeTruthy();
     expect(screen.getByText("模型深析")).toBeTruthy();
     expect(screen.getByText("分镜落库")).toBeTruthy();
@@ -134,7 +134,7 @@ describe("TopProgressCenter 渲染冒烟", () => {
     expect(await screen.findByText("队列空闲,没有在跑的任务")).toBeTruthy();
   });
 
-  it("只有排队且 Worker 离线时不显示跑中动画，并解释等待原因", async () => {
+  it("只有排队且后台没在跑时不显示跑中动画，并解释等待原因", async () => {
     fetchProgressCenter.mockResolvedValue(fixture({
       counts: { running: 0, queued: 1, active_total: 1, recent_total: 0 },
       running: [],
@@ -144,12 +144,12 @@ describe("TopProgressCenter 渲染冒烟", () => {
     }));
     const { container } = render(React.createElement(TopProgressCenter));
 
-    expect(await screen.findByText("Worker 离线 · 1 等待")).toBeTruthy();
+    expect(await screen.findByText("后台没在跑 · 1 等待")).toBeTruthy();
     expect(container.querySelector(".tpc-breath")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Task Progress Center" }));
-    expect(await screen.findByText("Worker 未在线，排队任务不会开始")).toBeTruthy();
-    expect(screen.getByText("等待 Worker")).toBeTruthy();
+    expect(await screen.findByText("后台未在运行，排队任务不会开始")).toBeTruthy();
+    expect(screen.getByText("等待后台")).toBeTruthy();
   });
 
   it("首拉失败:不炸,并明确当前状态未知而非伪装成空闲", async () => {
@@ -208,7 +208,7 @@ describe("TopProgressCenter 渲染冒烟", () => {
     expect(screen.queryByText(/跑中/)).toBeNull();
   });
 
-  it("按真实任务类型展示受众/QA 阶段，并单列 Gateway LLM 回退记录", async () => {
+  it("按真实任务类型展示受众/QA 阶段，并单列模型分析回退记录", async () => {
     const base = fixture();
     fetchProgressCenter.mockResolvedValue(fixture({
       counts: { running: 2, queued: 0, active_total: 2, recent_total: 1 },
@@ -274,7 +274,11 @@ describe("TopProgressCenter 渲染冒烟", () => {
     expect(screen.getByText("已完成调用")).toBeTruthy();
     expect(screen.getByText("规则回退")).toBeTruthy();
     expect(screen.getByText(/不冒充模型结论/)).toBeTruthy();
-    expect(screen.getAllByText("服务 google · 模型 gemini-2.5-pro").length).toBeGreaterThan(0);
+    // 红线2:厂商名/模型 id 不上门面,只出通道角色;原标识下沉到 title/溯源。
+    expect(screen.getAllByText("主通道").length).toBeGreaterThan(0);
+    expect(screen.getByText("规则降级")).toBeTruthy();
+    expect(screen.queryByText(/gemini|Google|OpenAI|Anthropic|Claude/i)).toBeNull();
+    expect(screen.getAllByTitle("服务 google · 模型 gemini-2.5-pro").length).toBeGreaterThan(0);
     expect(screen.getByText("任务绑定 · 视频 AI 分析")).toBeTruthy();
     expect(screen.getByText("任务绑定 KOL 受众分析")).toBeTruthy();
     expect(screen.getByText("结果评估 · 模型生成 · 尝试 1/2")).toBeTruthy();

@@ -149,7 +149,7 @@ describe("external evidence dashboard cards", () => {
     expect(onRegenerate).toHaveBeenCalledTimes(1);
   });
 
-  it("AI Today 持久显示最新失败尝试的时间、状态、provider 和 reason", () => {
+  it("AI Today 持久显示最新失败尝试的时间、状态与原因,厂商名与机器码只进溯源 title", () => {
     const { container } = render(<AIIntelligenceCard
       insight={{
         ...baseInsight,
@@ -165,9 +165,15 @@ describe("external evidence dashboard cards", () => {
     />);
 
     const attempt = container.querySelector('[data-ai-latest-attempt-status="invalid"]');
-    expect(attempt).toHaveTextContent("最近生成尝试 · 2 分钟前 · 合同未通过 · anthropic");
-    expect(attempt).toHaveTextContent("结果合同未通过（invalid_result_contract）");
-    expect(attempt).toHaveTextContent("all_providers_failed");
+    expect(attempt).toHaveTextContent("最近生成尝试 · 2 分钟前 · 合同未通过");
+    expect(attempt).toHaveTextContent("结果合同未通过");
+    expect(attempt).toHaveTextContent("所有可用通道均未成功");
+    // 红线2:厂商名与原始机器码不上卡面,但信息不删——完整原始串下沉到 title。
+    expect(attempt?.textContent || "").not.toMatch(/anthropic|invalid_result_contract|all_providers_failed/);
+    expect(attempt).toHaveAttribute(
+      "title",
+      "anthropic · invalid_result_contract · all_providers_failed",
+    );
   });
 
   it("AI Today 展示 Claude 基于热点证据产出的产品、内容与视频建议", () => {

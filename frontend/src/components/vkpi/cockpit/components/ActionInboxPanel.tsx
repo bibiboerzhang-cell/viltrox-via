@@ -213,7 +213,7 @@ export function ActionInboxPanel({
       // 二次确认搬到 execute(真跑这步):approve 只是人审标记,不在此弹窗。
       if (kind === "execute") {
         const warn = it.uses_llm
-          ? t("执行该动作可能调用 LLM 并产生成本。确认执行?")
+          ? t("执行该动作可能消耗分析额度并产生成本。确认执行?")
           : t("执行该动作会写入业务数据。确认执行?");
         // eslint-disable-next-line no-alert
         if (typeof window !== "undefined" && !window.confirm(warn)) return;
@@ -556,7 +556,7 @@ export function ActionInboxPanel({
             type: "button",
             disabled: Boolean(b),
             onClick: () => runAction(it, "execute"),
-            title: t("执行该动作(写入业务数据 / 可能调用 LLM,进 ledger)"),
+            title: t("执行该动作(会写入业务数据,可能消耗分析额度,并记入成本台账)"),
             className:
               "flex items-center gap-1 rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[9px] text-sky-300 transition-colors hover:bg-sky-500/20 disabled:opacity-40",
           },
@@ -763,12 +763,12 @@ export function ActionInboxPanel({
                     : ""),
               )
             : null,
-          // 红线提示:需人审 / 烧 LLM 的动作明示(approve 时会二次确认)
+          // 红线提示:需人审 / 会消耗分析额度的动作明示(approve 时会二次确认)
           (it.requires_approval || it.uses_llm)
             ? e(
                 "div",
                 { className: "mt-1 flex items-center gap-1.5 text-[8px] text-muted" },
-                it.uses_llm && e("span", { className: "text-violet-300/70" }, "LLM"),
+                it.uses_llm && e("span", { className: "text-violet-300/70" }, t("消耗额度")),
                 it.requires_approval && e("span", null, `· ${t("需人工审批")}`),
               )
             : null,

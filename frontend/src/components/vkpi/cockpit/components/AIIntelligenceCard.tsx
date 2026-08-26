@@ -242,10 +242,20 @@ export function AIIntelligenceCard({
     invalid_result_contract: "结果合同未通过",
     partial_result_contract: "结果字段不完整",
     budget_blocked: "预算闸已拦截",
-    claude_fallback_without_grounding: "Claude 回退缺少可回溯来源",
+    claude_fallback_without_grounding: "回退结果缺少可回溯来源",
     invalid_grounding_contract: "来源合同未通过",
     no_grounded_citations: "未取得可回溯引文",
-  } as Record<string, string>)[latestAttemptReason] || latestAttemptReason;
+  } as Record<string, string>)[latestAttemptReason] || "未登记的失败原因";
+  // 门面禁内部术语(红线2):厂商名与原始机器码只进 title/溯源,不上卡面。
+  // 诚实信息不删——完整原始串仍在 attemptTrace 里,鼠标悬停即见。
+  const generationStatusLabel = ({
+    all_providers_failed: "所有可用通道均未成功",
+    budget_blocked: "预算闸已拦截",
+  } as Record<string, string>)[String(latestAttempt?.generationStatus || "")] || "";
+  const attemptTrace = [latestAttemptProvider, latestAttemptReason, latestAttempt?.generationStatus]
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(" · ");
   const regenerationPhase = String(regenerationState?.phase || "idle");
   const regenerationMessage = String(regenerationState?.message || "").trim();
   const regenerationTone = regenerationPhase === "success"
@@ -452,14 +462,14 @@ export function AIIntelligenceCard({
           role="status"
           data-ai-latest-attempt-status={latestAttemptStatus || "unknown"}
           className="mt-3 rounded-lg border border-warn bg-warn-soft px-2.5 py-2 text-[9.5px] leading-relaxed text-warn"
-          title={`${latestAttemptProvider} · ${latestAttemptReason}`}
+          title={attemptTrace}
         >
           <div className="font-medium">
-            最近生成尝试 · {latestAttempt.attemptedLabel || "时间未记录"} · {attemptStatusLabel} · {latestAttemptProvider}
+            最近生成尝试 · {latestAttempt.attemptedLabel || "时间未记录"} · {attemptStatusLabel}
           </div>
           <div className="mt-0.5 opacity-90">
-            原因：{reasonLabel}{reasonLabel !== latestAttemptReason ? `（${latestAttemptReason}）` : ""}
-            {latestAttempt.generationStatus ? ` · ${latestAttempt.generationStatus}` : ""}
+            原因：{reasonLabel}
+            {generationStatusLabel ? ` · ${generationStatusLabel}` : ""}
           </div>
         </div>
       ) : null}

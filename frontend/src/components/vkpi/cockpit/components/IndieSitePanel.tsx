@@ -125,7 +125,7 @@ export function IndieSitePanel({ apiToken, sku }: any) {
     // 头部
     e("div", { className: "flex items-center gap-1.5 mb-2" },
       e(Store, { size: 11, className: "text-sky-400" }),
-      e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "承接就绪 · Conversion Readiness"),
+      e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "承接就绪"),
       data && e("span", { className: "text-[9px] text-slate-600" }, `就绪 ${Number(summary.ready) || 0}/${Number(summary.total) || checklist.length}`),
     ),
 

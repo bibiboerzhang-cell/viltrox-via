@@ -141,8 +141,14 @@ def cached_full_summary(
     staff: dict[str, Any] | None,
     ttl: int,
     observe: Callable[[dict[str, Any]], None] | None = None,
+    force_refresh: bool = False,
 ) -> dict[str, Any]:
-    """Collapse concurrent cold builds and return a defensive response copy."""
+    """Collapse concurrent cold builds and return a defensive response copy.
+
+    ``force_refresh`` 只服务「用户手动刷新」这一条路径:TTL 抬到分钟级之后必须留一个
+    诚实的即时重建入口,否则用户点了刷新还看旧数,会以为门面坏了。它交给
+    ``cache_get_or_build`` 的 5s 生成标记收敛并发,不会变成无限重建放大器。
+    """
 
     actor = staff or {}
     tenant = summary_tenant_partition(staff)
@@ -183,6 +189,9 @@ def cached_full_summary(
     }
     if observe is not None:
         cache_kwargs["observe"] = observe
+    if force_refresh:
+        # 只在真的强刷时才把这个入参交出去,默认路径的调用形状保持不变。
+        cache_kwargs["force_refresh"] = True
     result = cache_get_or_build_fn(cache_key, builder, **cache_kwargs)
     return copy.deepcopy(result)
 
