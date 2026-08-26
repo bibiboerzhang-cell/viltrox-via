@@ -183,11 +183,17 @@ export function KOLDrawerOutreachSection({ apiToken, kolPoolId }: any) {
         renderEmailBlock("中文", String(draft.email_zh || "")),
         renderBullets("后续沟通要点", talkingPoints, "#06b6d4"),
       ),
-      // 出处行:模型/是否缓存;LLM 未用时如实展示原因。
-      e("div", { className: "text-[9px] text-slate-500" },
+      // 出处行:生成方式/是否缓存;未走智能生成时如实展示原因。
+      // 红线2:具体模型/厂商标识只进 title 溯源,不上门面。
+      e("div", {
+        className: "text-[9px] text-slate-500",
+        title: provenance.llm_used
+          ? String(provenance.model || provenance.provider || "")
+          : undefined,
+      },
         (provenance.llm_used
-          ? "模型 " + (provenance.model || provenance.provider || "llm")
-          : "确定性模板(" + (provenance.reason || "LLM 暂不可达") + ")")
+          ? "智能生成"
+          : "确定性模板(" + (provenance.reason || "智能生成暂不可用") + ")")
         + (resp?.cached ? " · 今日缓存" : "")
         + (provenance.generated_at ? " · " + String(provenance.generated_at).slice(0, 16).replace("T", " ") + " UTC" : ""),
       ),

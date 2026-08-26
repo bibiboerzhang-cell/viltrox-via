@@ -511,7 +511,7 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleK
   const modules: DashboardModuleDefinition[] = [
     { key: "kpiG", label: "指挥台总览", description: "本周信号 / 产品机会 / 待执行动作 / 增长押注 四真数", category: "核心模块", defaultSpan: 12, minSpan: 6, defaultHeight: 6, minHeight: 4, maxHeight: 12, render: renderKpiBand },
     { key: "route", label: "今日增长路线", description: "全局 Top 机会一键生成路线;预览态五段作战链", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 4, maxHeight: 18, render: renderRoute },
-    { key: "health", label: "系统健康", description: "版本 / 迁移 / Worker / 调度 / 留痕 五点纯读", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 5, minHeight: 3, maxHeight: 10, render: renderHealth },
+    { key: "health", label: "系统健康", description: "版本 / 迁移 / 后台 / 调度 / 留痕 五点纯读", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 5, minHeight: 3, maxHeight: 10, render: renderHealth },
     { key: "signals", label: "本周信号", description: "库内信号逐条 · freshness / 样本 / 置信随行", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 9, minHeight: 4, maxHeight: 20, render: renderSignals },
     { key: "queue", label: "今日执行队列", description: "近 50 条建议按类型聚合 · 点击跳 Action Inbox", category: "实时模块", defaultSpan: 4, minSpan: 3, defaultHeight: 9, minHeight: 4, maxHeight: 16, render: renderQueue },
     { key: "thesis", label: "主判断", description: "该不该推 / 市场 / 人群 / 主线 + 市场机会段", category: "核心模块", defaultSpan: 8, minSpan: 4, defaultHeight: 12, minHeight: 5, maxHeight: 24, render: renderThesis },

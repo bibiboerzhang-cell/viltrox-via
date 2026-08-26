@@ -170,7 +170,7 @@ describe("session 1106 replay · discovery visibility", () => {
     expect(sessionStatusBanner(session, "running", {}, true)?.label).toBe("正在查找");
   });
 
-  it("shows a Worker blockage instead of falling back to queued", () => {
+  it("shows a background-execution blockage instead of falling back to queued", () => {
     const session = session1106({
       status: "running",
       progress_contract: contract({
@@ -181,8 +181,8 @@ describe("session 1106 replay · discovery visibility", () => {
       }),
     });
     const banner = sessionStatusBanner(session, "running", {}, true);
-    expect(banner).toMatchObject({ tone: "info", label: "等待 Worker 恢复" });
-    expect(banner?.note).toContain("Worker");
+    expect(banner).toMatchObject({ tone: "info", label: "等待后台恢复" });
+    expect(banner?.note).toContain("后台执行当前被阻塞");
     expect(banner?.label).not.toBe("已排队");
   });
 

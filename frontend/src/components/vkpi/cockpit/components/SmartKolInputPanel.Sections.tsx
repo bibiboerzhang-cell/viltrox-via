@@ -20,7 +20,8 @@ import {
   numberLabel,
   type Row,
 } from "./SmartKolInputPanel.helpers";
-import { candidateEvidenceSummary, candidateRankSummary } from "./SmartKolInputPanel.CandidateEvidence";
+import { candidateEvidenceSummary, candidateRankSummary, candidateVerticalTags } from "./SmartKolInputPanel.CandidateEvidence";
+import { CandidateVerticalChips } from "./SmartKolInputPanel.VerticalChips";
 import { resultOriginBadge } from "./SmartKolInputPanel.sessionProjection";
 import { kolHumanDisplayName, kolHumanProfileLinkLabel, kolHumanPublicHandle } from "../lib/kolIdentity";
 
@@ -444,6 +445,7 @@ export function RecallMiniItem({
       : "";
   const matchTier = cleanText(item.match_tier);
   const missingLabels = evidence.missingLabels;
+  const verticalTags = candidateVerticalTags(item);
   const relaxedFilters = (Array.isArray(item.relaxed_filters) ? item.relaxed_filters : [])
     .map(cleanText)
     .filter(Boolean);
@@ -536,6 +538,7 @@ export function RecallMiniItem({
               代表内容：{representativeEvidence[0].metricLabel}
             </span>
           ) : null}
+          <CandidateVerticalChips tags={verticalTags} />
           {(laneLabel || matchTier === "backfill" || relaxedFilters.length || contactReady || audienceReady || missingLabels.length) ? (
             <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
               {laneLabel ? (

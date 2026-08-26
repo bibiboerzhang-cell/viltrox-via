@@ -324,7 +324,7 @@ export function useSmartKolSelection({
       if (!isCurrentSearchRequest(requestEpoch)) return;
       setOutreachResult(response || null);
       const count = Array.isArray(response?.messages) ? response.messages.length : 0;
-      const source = response?.llm_used ? "LLM" : "确定性模板(LLM 未启用/预算关)";
+      const source = response?.llm_used ? "智能生成" : "确定性模板(智能生成未启用或预算已关)";
       setOutreachNote(`已生成 ${count} 封话术草案 · ${source}${response?.truncated ? " · 已截断至上限" : ""}`);
     } catch (error: any) {
       if (isCurrentSearchRequest(requestEpoch)) setOutreachNote(`生成话术失败 · ${error?.message || "请重试"}`);

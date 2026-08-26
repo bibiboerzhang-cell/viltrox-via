@@ -598,7 +598,7 @@ export function KOLVideoAnalysisPanel({
       : liveBundle?.analysisJob
         ? { kind: "active", text: `视频深析正在${liveBundle.state === "queued" ? "排队" : "处理"}，完成后自动回填。` }
         : bundles.some((bundle) => bundle.state === "not_requested")
-          ? { kind: "idle", text: "尚未请求 final_v1 深析；可点击下方“AI深度分析”发起。" }
+          ? { kind: "idle", text: "尚未发起视频深度分析；可点击下方“AI深度分析”发起。" }
           : null;
 
   return (

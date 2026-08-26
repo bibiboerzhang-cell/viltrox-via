@@ -424,7 +424,7 @@ export function searchSessionProgress(session: VkpiKolSearchHistoryItem | null):
     discovering: "全网发现中",
     profiling: "基础资料补全中",
     enriching: "后台深析中",
-    blocked: "Worker 阻塞",
+    blocked: "后台阻塞",
     complete: fullAnalysisComplete
       ? "完整分析已完成"
       : completionContractExplicit && requestedTasksTerminal
@@ -494,7 +494,7 @@ export function searchSessionProgress(session: VkpiKolSearchHistoryItem | null):
     return {
       phase: contractPhase,
       phaseLabel: contractPhase === "blocked"
-        ? "Worker 阻塞"
+        ? "后台阻塞"
         : contractPhase === "complete" && progressContract.fullAnalysisComplete
           ? "完整分析已完成"
           : phaseLabel[contractPhase],

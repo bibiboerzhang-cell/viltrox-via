@@ -77,7 +77,7 @@ describe("MY KOL 业务闭环状态卡", () => {
     expect(screen.getByText("内容订阅")).toBeTruthy();
     expect(screen.getByText("视频追踪")).toBeTruthy();
     expect(screen.getByText("SKU 关联")).toBeTruthy();
-    expect(screen.getByText("Gemini 视频深析")).toBeTruthy();
+    expect(screen.getByText("视频深度分析")).toBeTruthy();
     expect(screen.getAllByText("1 / 2").length).toBeGreaterThan(0);
     expect(screen.getByText("1 人工 · 0 系统")).toBeTruthy();
     expect(screen.getByText("发出 0 · 收到 1")).toBeTruthy();

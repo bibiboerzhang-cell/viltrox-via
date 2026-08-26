@@ -304,7 +304,7 @@ export function RepresentativeVideoPlayerModal({ video, onClose, bundles = null,
         e("div", { className: "mb-2 flex items-center gap-1.5" },
           e(Sparkles, { size: 11, className: "text-cyan-300" }),
           e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "该视频逐条深析"),
-          e("span", { className: "text-[8.5px] text-slate-600" }, "final_v1 · 只读缓存")
+          e("span", { className: "text-[8.5px] text-slate-600", title: "口径:video_analysis_final_v1" }, "深度分析结果 · 只读缓存")
         ),
         analysisBundle
           ? e(AnalysisCard, { bundle: analysisBundle })
@@ -567,7 +567,7 @@ export function AccountDossierPanel({ apiToken, kolPoolId }: any) {
       header: e(React.Fragment, null,
         e(UserCircle2Icon, null),
         e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "账号档案"),
-        fit != null && e("span", { className: "rounded bg-fuchsia-500/12 px-1.5 py-0.5 text-[9px] text-fuchsia-200" }, "LLM fit " + scoreText(fit)),
+        fit != null && e("span", { className: "rounded bg-fuchsia-500/12 px-1.5 py-0.5 text-[9px] text-fuchsia-200" }, "智能拟合 " + scoreText(fit)),
         e("span", {
           role: "button",
           title: open ? "收起详情(建议/风险/事件)" : "展开详情(建议/风险/事件)",
@@ -629,7 +629,7 @@ export function LlmDeepAnalysisPanel({ payload }: any) {
     return e("div", { className: "px-5 py-3 border-b border-white/[0.06]" },
       e("div", { className: "flex items-center gap-1.5 mb-1" },
         e(Sparkles, { size: 11, className: "text-slate-500" }),
-        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "LLM 深度判断")
+        e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, "智能深度判断")
       ),
       e("div", { className: "text-[10.5px] text-slate-500 leading-relaxed" },
         "该 KOL 还没跑过深度分析 —— 点上方「AI深度分析」(单条代表作)或「全部深析」(全部视频)入队,几分钟后自动出现;进度见左下角任务板。"
@@ -643,9 +643,9 @@ export function LlmDeepAnalysisPanel({ payload }: any) {
   const isLocalAggregate = resultKind === "local_aggregate";
   const isVerifiedLlm = resultKind === "llm";
   const resultTitle = isLocalAggregate
-    ? "账号基础聚合（无 LLM）"
+    ? "账号基础聚合(未做智能分析)"
     : isVerifiedLlm
-      ? "LLM 深度判断"
+      ? "智能深度判断"
       : "历史 AI 判断（来源待核验）";
   const dimensions = recordOr(primary.llm_dimensions_11);
   const fitPayload = recordOr(dimensions.llm_v6_fit);
@@ -674,12 +674,12 @@ export function LlmDeepAnalysisPanel({ payload }: any) {
         e("span", { className: "text-[10px] uppercase tracking-wider text-slate-500" }, resultTitle)
       ),
       e("span", { className: "text-[8.5px] text-slate-600" },
-        isLocalAggregate ? "local_extract · zero provider calls" : isVerifiedLlm ? "verified provider lineage" : "lineage incomplete")
+        isLocalAggregate ? "本地聚合 · 未调用外部模型" : isVerifiedLlm ? "来源链路已核验" : "来源链路不完整")
     ),
     e("div", { className: "rounded-md border border-fuchsia-400/15 bg-fuchsia-400/[0.035] p-2.5" },
       isLocalAggregate && e("div", {
         className: "mb-2 rounded border border-cyan-300/15 bg-cyan-300/[0.04] px-2 py-1 text-[9.5px] leading-relaxed text-cyan-100/80",
-      }, "这是本地规则/档案聚合，不是外部大模型结果；真实 LLM 深析仍需 final_v1 与 provider lineage。"),
+      }, "这是本地规则与档案聚合的结果，不是智能深度分析；完整深析需要视频分析结果与来源链路齐备。"),
       e("div", { className: "flex items-start justify-between gap-3" },
         e("div", null,
           e("div", { className: "text-[9px] uppercase tracking-wider text-fuchsia-200/80" },

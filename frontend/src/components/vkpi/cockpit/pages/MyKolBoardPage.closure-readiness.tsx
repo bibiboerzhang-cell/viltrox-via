@@ -25,7 +25,7 @@ const STATE_LABELS: Record<string, string> = {
   needs_product_link: "待关联产品",
   detected_pending_human_confirmation: "系统检出 · 待人工确认",
   partial: "部分已关联",
-  no_final_v1_results: "暂无 final_v1 结果",
+  no_final_v1_results: "暂无深度分析结果",
   no_analysis_requests: "尚未请求视频深析",
   partially_requested: "部分视频待请求深析",
   requested_not_completed: "已请求 · 部分未完成",
@@ -43,10 +43,10 @@ const BLOCKER_LABELS: Record<string, string> = {
   tracked_without_success_snapshot: "追踪视频还没有成功实测",
   tracked_without_sku: "追踪视频尚未关联 SKU",
   detected_sku_pending_confirmation: "自动检出 SKU 待员工确认",
-  final_v1_not_requested: "可分析视频尚未请求 final_v1",
-  final_v1_requested_not_completed: "final_v1 已请求但未完成",
-  final_v1_projection_pending: "final_v1 已完成但结果投影待补",
-  lens_extraction_pending: "final_v1 镜头证据待结构化",
+  final_v1_not_requested: "可分析视频尚未发起深度分析",
+  final_v1_requested_not_completed: "深度分析已请求但未完成",
+  final_v1_projection_pending: "深度分析已完成但结果投影待补",
+  lens_extraction_pending: "深度分析镜头证据待结构化",
 };
 
 const OWNER_LABELS: Record<string, string> = {
@@ -147,7 +147,7 @@ export function ClosureReadinessCard({ apiToken, refreshKey = 0 }: ClosureReadin
     },
     {
       key: "gemini",
-      label: "Gemini 视频深析",
+      label: "视频深度分析",
       value: hasAnalysisDenominators
         ? `${n(counts.final_v1_completed_videos)} / ${n(counts.analysis_eligible_videos)} 已完成`
         : hasGeminiEvidenceIntersection

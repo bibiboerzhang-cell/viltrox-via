@@ -89,8 +89,8 @@ export function sessionStatusBanner(
   if (contract?.blockedByWorker || raw === "blocked_by_worker") {
     return {
       tone: "info",
-      label: "等待 Worker 恢复",
-      note: "后台任务已被 Worker 状态阻塞；Worker 恢复后会继续，当前不会把排队或运行项算作完成。",
+      label: "等待后台恢复",
+      note: "后台执行当前被阻塞；恢复后会继续，当前不会把排队或运行项算作完成。",
     };
   }
   if (["cancelled", "canceled"].includes(raw)) {
@@ -232,7 +232,7 @@ export function historySessionStatusMeta(session: VkpiKolSearchHistoryItem): { l
   }
   const contract = searchProgressContractFromSession(session);
   if (contract) {
-    if (contract.blockedByWorker) return { label: "Worker 阻塞", cls: "text-rose-300/85", dot: "#fb7185" };
+    if (contract.blockedByWorker) return { label: "后台阻塞", cls: "text-rose-300/85", dot: "#fb7185" };
     if (contract.orchestrationPending || ["queued", "running", "active"].includes(contract.state)) {
       return historyStatusMeta(contract.state === "queued" ? "queued" : "running");
     }

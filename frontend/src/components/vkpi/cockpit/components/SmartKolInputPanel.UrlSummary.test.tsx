@@ -462,7 +462,7 @@ describe("SmartKolInputPanel URL result mapping", () => {
 
     await waitFor(() => expect(screen.getByTestId("video-analysis-evaluation-notice")).toBeTruthy());
     expect(screen.getByText("本地评估 · 描述性结论 · 非生产授权")).toBeTruthy();
-    expect(screen.getByText("来源: 本地评估 final_v1（非生产）")).toBeTruthy();
+    expect(screen.getByText("来源: 本地评估结果(非正式)")).toBeTruthy();
     expect(screen.getByText("Evaluation-only analysis")).toBeTruthy();
   });
 

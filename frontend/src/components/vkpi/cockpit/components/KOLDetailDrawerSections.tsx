@@ -538,7 +538,7 @@ export function KOLDrawerContentFit({ apiToken, item, contentFit, contentFitBusy
         onClick: () => onAnalyze(Boolean(contentFit)),
         title: !canAnalyze
           ? "请先关注该 KOL；共享条目为只读"
-          : contentFit ? "重新深析(force,重算 LLM)" : "按需触发深析(读已有视频分析+评论,经 LLM 综合)",
+          : contentFit ? "重新深析(强制重算)" : "按需触发深析(读已有视频分析+评论,做智能综合)",
       }, contentFitBusy ? "深析中…" : !canAnalyze ? "关注后可深析" : contentFit ? "重新深析" : "开始深析")
     ),
     contentFitError && e("div", { className: "text-[10px] text-amber-300/90 mb-2" }, contentFitError),

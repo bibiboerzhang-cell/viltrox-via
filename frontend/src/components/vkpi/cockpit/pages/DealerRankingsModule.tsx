@@ -22,7 +22,7 @@ export const RANK_MODULE_SOURCE: { label: string; rows: Array<[string, string]> 
   label: "vkpi_dealer_web_verification · dealers/rankings",
   rows: [
     ["读取", "GET /dealers/rankings 每店最新一条核验回执(历史全保留,只取 MAX(verified_at))"],
-    ["核验通道", "Gemini 联网搜索逐店判定(官网在营 / 仍售相机器材 / Viltrox 在售 / 体量档 / 知名度);证据 URL 逐条落库可溯"],
+    ["核验通道", "联网搜索逐店判定(官网在营 / 仍售相机器材 / Viltrox 在售 / 体量档 / 知名度);证据 URL 逐条落库可溯"],
     ["Viltrox 在售", "confirmed 必须带零售商自有域名页面 URL;只代表核验时点页面出现过 Viltrox,不代表实时库存、成交或官方授权"],
     ["体量档", "全国连锁 / 区域连锁 / 本地单店 / 以线上为主 / 待定 —— 依零售商自有门店页 + 公开来源判定"],
     ["知名度分", "0-100 公开知名度信号(连锁店数 / 媒体口碑 / 本地评价规模),附判定依据;描述性排序用,绝不进任何评分管线"],
@@ -292,7 +292,7 @@ export function DealerRankingsBody({
  *     label: "vkpi_dealer_web_verification · dealers/rankings",
  *     rows: [
  *       ["读取", "GET /dealers/rankings 每店最新一条核验回执(历史全保留,只取 MAX(verified_at))"],
- *       ["核验通道", "Gemini 联网搜索逐店判定(官网在营 / 仍售相机器材 / Viltrox 在售 / 体量档 / 知名度);证据 URL 逐条落库可溯"],
+ *       ["核验通道", "联网搜索逐店判定(官网在营 / 仍售相机器材 / Viltrox 在售 / 体量档 / 知名度);证据 URL 逐条落库可溯"],
  *       ["Viltrox 在售", "confirmed 必须带零售商自有域名页面 URL;只代表核验时点页面出现过 Viltrox,不代表实时库存、成交或官方授权"],
  *       ["体量档", "全国连锁 / 区域连锁 / 本地单店 / 以线上为主 / 待定 —— 依零售商自有门店页 + 公开来源判定"],
  *       ["知名度分", "0-100 公开知名度信号(连锁店数 / 媒体口碑 / 本地评价规模),附判定依据;描述性排序用,绝不进任何评分管线"],

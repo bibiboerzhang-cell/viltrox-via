@@ -66,7 +66,7 @@ function contractStageParts(stage: SearchProgressContractStage, blockedByWorker:
   const active = (stage.counts.queued ?? 0) + (stage.counts.running ?? 0) + (stage.counts.active ?? 0);
   return [
     contractCount(stage.counts.ready, "完成"),
-    blockedByWorker && active > 0 ? `Worker 阻塞 ${active}` : "",
+    blockedByWorker && active > 0 ? `后台阻塞 ${active}` : "",
     !blockedByWorker ? contractCount(stage.counts.queued, "排队") : "",
     !blockedByWorker ? contractCount(stage.counts.running, "运行") : "",
     !blockedByWorker ? contractCount(stage.counts.active, "处理中/状态待确认") : "",
@@ -79,7 +79,7 @@ function contractStageParts(stage: SearchProgressContractStage, blockedByWorker:
 function contractStageLabel(stage: SearchProgressContractStage, blockedByWorker: boolean): string {
   const active = (stage.counts.queued ?? 0) + (stage.counts.running ?? 0) + (stage.counts.active ?? 0);
   if (!stage.tracked) return "状态未返回";
-  if (blockedByWorker && active > 0) return "Worker 阻塞";
+  if (blockedByWorker && active > 0) return "后台阻塞";
   if (stage.state === "not_requested" || stage.requested === 0) return "未请求";
   if (stage.state === "ready") return "完成";
   if (stage.state === "running") return "运行中";
@@ -137,20 +137,20 @@ function workerCopy(contract: SearchProgressContractView): { label: string; tone
     : "";
   const title = [
     worker.latestHeartbeatAt ? `最近心跳 ${worker.latestHeartbeatAt}` : "未返回心跳时间",
-    worker.shaAligned === false ? "Worker 与当前发布版本不一致" : "",
+    worker.shaAligned === false ? "后台与当前发布版本不一致" : "",
   ].filter(Boolean).join(" · ");
-  if (!worker.observed) return { label: "Worker 未观测", tone: "text-slate-400 border-white/[0.09]", title };
+  if (!worker.observed) return { label: "后台未观测", tone: "text-slate-400 border-white/[0.09]", title };
   if (worker.state === "release_mismatch" || worker.shaAligned === false) {
-    return { label: `Worker${count ? ` ${count}` : ""} · 版本不一致`, tone: "text-rose-200 border-rose-300/25", title };
+    return { label: `后台${count ? ` ${count}` : ""} · 版本不一致`, tone: "text-rose-200 border-rose-300/25", title };
   }
   if (worker.online === false || worker.state === "offline") {
-    return { label: `Worker${count ? ` ${count}` : ""} · 离线`, tone: "text-rose-200 border-rose-300/25", title };
+    return { label: `后台${count ? ` ${count}` : ""} · 未在跑`, tone: "text-rose-200 border-rose-300/25", title };
   }
   if (worker.state === "under_capacity" || worker.capacityReady === false) {
-    return { label: `Worker${count ? ` ${count}` : ""} · 容量不足`, tone: "text-amber-200 border-amber-300/25", title };
+    return { label: `后台${count ? ` ${count}` : ""} · 容量不足`, tone: "text-amber-200 border-amber-300/25", title };
   }
-  if (worker.online === true) return { label: `Worker${count ? ` ${count}` : ""} · 在线`, tone: "text-emerald-200 border-emerald-300/25", title };
-  return { label: "Worker 状态未知", tone: "text-slate-400 border-white/[0.09]", title };
+  if (worker.online === true) return { label: `后台${count ? ` ${count}` : ""} · 在跑`, tone: "text-emerald-200 border-emerald-300/25", title };
+  return { label: "后台状态未知", tone: "text-slate-400 border-white/[0.09]", title };
 }
 
 function ContractProgressCard({ progress }: { progress: SearchSessionProgress }) {
@@ -170,7 +170,7 @@ function ContractProgressCard({ progress }: { progress: SearchSessionProgress })
   );
   const requestedOnlyComplete = contract.requestedTasksSuccessful && !contract.fullAnalysisComplete;
   const overallState = contract.blockedByWorker
-    ? "Worker 阻塞"
+    ? "后台阻塞"
     : contract.fullAnalysisComplete
       ? "完整数据可用"
       : contract.emptyResult && contract.requestedTasksTerminal

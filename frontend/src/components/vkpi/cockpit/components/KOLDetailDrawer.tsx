@@ -639,7 +639,7 @@ export function KOLDetailDrawer({ item, detailBundle = null, apiToken = "", deta
           setVideoEnqueueState({ status, message: "已入队；左侧任务进度看板会自动显示" });
           startVideoAnalysisPoll({ evidenceId: primaryVideoEvidenceId, itemIdentity: operationItemIdentity, mode: "single" });
         } else if (status === "already_analyzed") {
-          setVideoEnqueueState({ status, message: "这条 evidence 已有 final_v1 深析结果" });
+          setVideoEnqueueState({ status, message: "这条证据已有深度分析结果" });
           void reloadDetailSafely();
         } else if (status === "already_queued") {
           setVideoEnqueueState({ status, message: "这条 evidence 已在队列中，避免重复入队" });

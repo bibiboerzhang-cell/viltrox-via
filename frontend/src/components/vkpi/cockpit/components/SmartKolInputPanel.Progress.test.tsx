@@ -128,7 +128,7 @@ describe("SmartKolInputPanel progressive stage card", () => {
   it("uses the versioned contract for 30 candidates, stage truth, worker blockage, and durable-success percent", () => {
     render(<ProgressiveSearchStageCard progress={progress({
       phase: "blocked",
-      phaseLabel: "Worker 阻塞",
+      phaseLabel: "后台阻塞",
       target: 30,
       contract: {
         schema: "kol_search_progress_v1",
@@ -176,11 +176,11 @@ describe("SmartKolInputPanel progressive stage card", () => {
 
     expect(screen.getByTestId("kol-progress-base")).toHaveTextContent("30/30 已返回");
     expect(screen.getByTestId("kol-truth-progress-profile")).toHaveTextContent("10/30 成功");
-    expect(screen.getByTestId("kol-truth-progress-profile")).toHaveTextContent("Worker 阻塞 8");
+    expect(screen.getByTestId("kol-truth-progress-profile")).toHaveTextContent("后台阻塞 8");
     expect(screen.getByTestId("kol-truth-progress-video")).toHaveTextContent("10/14 成功");
     expect(screen.getByTestId("kol-truth-progress-video")).toHaveTextContent("完成 10 · 失败/不完整 4 · 未请求 19");
-    expect(screen.getByTestId("kol-truth-progress-comments")).toHaveTextContent("Worker 阻塞 5");
-    expect(screen.getByTestId("kol-progress-worker")).toHaveTextContent("Worker 0/16 · 离线");
+    expect(screen.getByTestId("kol-truth-progress-comments")).toHaveTextContent("后台阻塞 5");
+    expect(screen.getByTestId("kol-progress-worker")).toHaveTextContent("后台 0/16 · 未在跑");
     expect(screen.getByTestId("kol-progress-success-pct")).toHaveTextContent("已请求成功 61.5%");
     expect(screen.getByTestId("kol-progress-terminal-pct")).toHaveTextContent("已结束 64.6%");
     expect(screen.getByText("排队 8 · 不计完成")).toBeInTheDocument();
@@ -227,7 +227,7 @@ describe("SmartKolInputPanel progressive stage card", () => {
     expect(screen.getByTestId("kol-progress-base")).toHaveTextContent("已返回 4");
     expect(screen.queryByTestId("kol-progress-success-pct")).not.toBeInTheDocument();
     expect(screen.queryByTestId("kol-progress-terminal-pct")).not.toBeInTheDocument();
-    expect(screen.getByTestId("kol-progress-worker")).toHaveTextContent("Worker 未观测");
+    expect(screen.getByTestId("kol-progress-worker")).toHaveTextContent("后台未观测");
   });
 
   it("closes the 30-returned / 26-audience window without spinning or treating unrequested stages as failures", () => {

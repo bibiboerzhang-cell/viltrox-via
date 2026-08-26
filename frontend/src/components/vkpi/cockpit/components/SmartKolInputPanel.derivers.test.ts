@@ -589,7 +589,7 @@ describe("SmartKolInputPanel versioned real-progress contract", () => {
     const progress = searchSessionProgress(session);
     expect(progress).toMatchObject({
       phase: "blocked",
-      phaseLabel: "Worker 阻塞",
+      phaseLabel: "后台阻塞",
       target: 30,
       basicVisible: 30,
       profileSucceeded: 10,

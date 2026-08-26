@@ -615,7 +615,7 @@ export function UrlSummary({
           commit("done", "已发现历史视频并入库；AI 深析未启用，本轮未创建模型任务");
         } else {
           const enq = await enqueueAllKolVideos(apiToken, kid);
-          commit("done", `已发现并入队:${enq.queued ?? 0} 条 final_v1 排队中(进度见左侧任务板)`);
+          commit("done", `已发现并入队:${enq.queued ?? 0} 条深度分析排队中(进度见左侧任务板)`);
         }
       } else {
         commit("done", "已发现视频并入库,稍后在抽屉查看");
@@ -891,7 +891,7 @@ export function UrlSummary({
                     ? "视频基础数据已入库 · AI 深析未启用"
                     : "视频基础数据已入库"
                   : deepAnalysisRunning
-                    ? `资料已入库 · 账号深度分析进行中(${repQueued} 条代表视频，完成后「查看完整分析」即出 LLM 账号分)`
+                    ? `资料已入库 · 账号深度分析进行中(${repQueued} 条代表视频，完成后「查看完整分析」即出账号深度评分)`
                     : accountAiDisabled
                       ? "资料已抓取并入库 · AI 深析未启用"
                       : "资料已抓取并入库")}

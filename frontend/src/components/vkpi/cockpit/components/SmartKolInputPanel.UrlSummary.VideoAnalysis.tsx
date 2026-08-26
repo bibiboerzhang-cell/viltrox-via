@@ -200,8 +200,8 @@ function VideoDecisionOverview({
           <div className="mt-1 text-[20px] font-bold tabular-nums" style={{ color: analysisScoreColor(marketingScore.score) }}>
             {marketingScore.score ?? "待深析"}
           </div>
-          <div className="mt-1 text-[8px] text-slate-600">
-            来源: {evaluationOnly ? "本地评估 final_v1（非生产）" : "video_analysis_final_v1"}
+          <div className="mt-1 text-[8px] text-slate-600" title="口径:video_analysis_final_v1">
+            来源: {evaluationOnly ? "本地评估结果(非正式)" : "视频深度分析结果"}
           </div>
         </div>
         <div className="bg-slate-950/55 px-3 py-2.5">
@@ -526,9 +526,13 @@ export function VideoSceneAnalysis({
           <div className="rounded-md border border-rose-300/20 bg-rose-500/[0.08] px-3 py-2 text-[10.5px] text-rose-100" role="status">
             <div className="flex items-center gap-1.5 font-medium"><AlertTriangle size={12} /> AI 分析未完成</div>
             <div className="mt-1 leading-relaxed text-rose-100/85">{notice.detail || failureCopy.message}</div>
+            {/* 红线2:厂商标识不上门面,只进 title;阶段与诊断码是诚实信息,保留可见。 */}
             {(notice.provider || notice.stage || diagnosticCode) ? (
-              <div className="mt-1 text-[9px] text-rose-200/60">
-                {[notice.provider && `服务 ${notice.provider}`, notice.stage && `阶段 ${notice.stage}`, diagnosticCode && `诊断码 ${diagnosticCode}`].filter(Boolean).join(" · ")}
+              <div
+                className="mt-1 text-[9px] text-rose-200/60"
+                title={notice.provider ? `服务 ${notice.provider}` : undefined}
+              >
+                {[notice.provider && "分析通道已记录", notice.stage && `阶段 ${notice.stage}`, diagnosticCode && `诊断码 ${diagnosticCode}`].filter(Boolean).join(" · ")}
               </div>
             ) : null}
           </div>
