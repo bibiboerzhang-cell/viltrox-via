@@ -22,6 +22,12 @@ from typing import Any, Iterable
 
 RECALL_FUNNEL_SCHEMA = "recall_stage_funnel_v1"
 
+#: 定点补齐候选的收集上限。硬筛最多评估 candidate_limit(线上实测 458~500)个候选,
+#: 全量塞进 ``result_summary_json`` 会把会话行撑大;而下游每次搜索最多补 10~25 人,
+#: 120 已是排序池的十倍余量。超出部分**不静默丢**:诊断里 ``field_topup_truncated``
+#: 与全量 ``field_topup_candidate_count`` 同时透出。
+TOPUP_CANDIDATE_CAP = 120
+
 # ``_candidate_filter_verdict`` 的 rejected 名(复数,过滤器名)与 unknown 名(单数,字段名)
 # 不同族。要判断一次驳回究竟是「值不匹配」还是「字段本身未知」,必须先把两族名字对齐。
 _UNKNOWN_FIELD_FOR: dict[str, str] = {
@@ -60,6 +66,8 @@ class RecallStageLedger:
         "rejected_mismatch_by",
         "sole_reason_by",
         "unknown_field_counts",
+        "topup_candidates",
+        "topup_candidate_total",
     )
 
     def __init__(self) -> None:
@@ -76,6 +84,8 @@ class RecallStageLedger:
         self.rejected_mismatch_by: dict[str, int] = {}
         self.sole_reason_by: dict[str, int] = {}
         self.unknown_field_counts: dict[str, int] = {}
+        self.topup_candidates: list[dict[str, Any]] = []
+        self.topup_candidate_total = 0
 
     def note_hard_filter(
         self,
@@ -102,6 +112,21 @@ class RecallStageLedger:
                 _bump(self.rejected_mismatch_by, field)
         if len(rejected) == 1:
             _bump(self.sole_reason_by, rejected[0])
+
+    def note_topup_candidates(self, candidates: Iterable[Any] | None) -> None:
+        """收下判定层已经标好的「只差 country/language 未知」候选。**纯登记,不抓取。**
+
+        判定完全在 ``profile_recall_filter_modes.unknown_field_candidates`` 里做过了,
+        这里既不重判也不过滤;只负责按 ``TOPUP_CANDIDATE_CAP`` 收进内存,并把**全量**
+        计数留在 ``topup_candidate_total`` —— 截断必须可见,不可假装没发生。
+        """
+
+        for candidate in candidates or ():
+            if not isinstance(candidate, dict):
+                continue
+            self.topup_candidate_total += 1
+            if len(self.topup_candidates) < TOPUP_CANDIDATE_CAP:
+                self.topup_candidates.append(dict(candidate))
 
     def stage_funnel(self, *, deduped_candidate_count: int) -> dict[str, Any]:
         """每道闸的进 / 出。进入量按上游减去上游丢弃量推算,零额外循环开销。"""
@@ -148,4 +173,10 @@ class RecallStageLedger:
             "hard_filter_rejected_mismatch_by": dict(self.rejected_mismatch_by),
             "hard_filter_sole_reason_by": dict(self.sole_reason_by),
             "unknown_field_counts": dict(self.unknown_field_counts),
+            # 定点补齐钩子的**标记**结果。标记 != 已补:本次搜索的结果集不含这批人,
+            # 他们最快也要等后台抓完、下一次搜索才可能出现。消费方见
+            # profile_field_topup_enqueue。
+            "field_topup_candidate_count": self.topup_candidate_total,
+            "field_topup_candidates": [dict(item) for item in self.topup_candidates],
+            "field_topup_truncated": self.topup_candidate_total > len(self.topup_candidates),
         }

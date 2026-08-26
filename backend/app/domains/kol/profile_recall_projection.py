@@ -23,6 +23,7 @@ from app.domains.kol.profile_recall_filter_modes import (
 from app.domains.kol.profile_recall_precision import missingness_aware_weighted_score
 from app.domains.kol.profile_recall_product_queries import PRODUCT_LINE_PERSONAS
 from app.domains.kol.profile_recall_relevance import WHY_FIT_RULES, _relevance_signals
+from app.domains.kol.profile_vertical_signals import VerticalReading, vertical_filter_outcome
 
 
 logger = get_logger(__name__)
@@ -332,6 +333,13 @@ def _evidence_summaries(
             if len(representative) >= 3:
                 break
 
+        # 垂类多路取证要读的标题窗口(展示用 representative 仍只留 3 条,互不干扰)。
+        evidence_titles: list[str] = []
+        for item in ranked[:20]:
+            title = _clean_text(item.get("title"), 220)
+            if title and title not in evidence_titles:
+                evidence_titles.append(title)
+
         texts: list[str] = []
         for item in ranked[:6]:
             texts.extend(
@@ -343,6 +351,7 @@ def _evidence_summaries(
             )
         summaries[kol_id] = {
             "representative_evidence": representative,
+            "evidence_titles": evidence_titles[:12],
             "used_lenses": _extract_lenses(*texts),
             "reason_labels": _reason_labels(
                 *(texts + [_clean_text(item.get("content_summary"), 500) for item in ranked[:3]])
@@ -558,28 +567,6 @@ _GEAR_CONTENT_TERMS = (
     "fujifilm", "sony", "canon", "nikon", "lumix", "viltrox", "sigma", "tamron",
 )
 
-_VERTICAL_FILTER_GROUPS: dict[str, tuple[tuple[str, ...], ...]] = {
-    "lens_review": (("lens", "镜头"), ("review", "reviewer", "comparison", "评测", "测评", "对比")),
-    "photography_tutorial": (("photo", "photography", "摄影"), ("tutorial", "tips", "guide", "教程", "教学")),
-    "gear_comparison": (("gear", "camera", "lens", "器材", "相机", "镜头"), ("comparison", "versus", "review", "对比", "横评", "评测")),
-    "portrait": (("portrait", "fashion", "人像", "肖像"),),
-    "video_creation": (("video", "filmmaker", "filmmaking", "cinematic", "视频", "影视", "电影"),),
-    "camera_system": (("camera system", "camera", "相机系统", "相机"),),
-    "vlog": (("vlog", "vlogger", "日常记录"),),
-    "lifestyle": (("lifestyle", "生活方式", "生活记录"),),
-    "technology": (("technology", "tech", "科技", "数码"),),
-}
-
-
-def _vertical_filter_matches(value: Any, signal_blob: str) -> bool:
-    key = re.sub(r"[^a-z0-9_\u4e00-\u9fff]", "", str(value or "").strip().lower().replace("-", "_"))
-    groups = _VERTICAL_FILTER_GROUPS.get(key)
-    if groups:
-        return all(any(term in signal_blob for term in group) for group in groups)
-    tokens = [token for token in re.split(r"[_\s]+", str(value or "").strip().lower()) if token]
-    return bool(tokens) and all(token in signal_blob for token in tokens)
-
-
 def _factual_candidate_signal_blob(row: dict[str, Any], evidence: dict[str, Any]) -> str:
     """Pool facts + persisted content evidence; never derived profile prose."""
 
@@ -603,6 +590,8 @@ def _candidate_filter_verdict(
     row: dict[str, Any],
     evidence: dict[str, Any],
     filters: dict[str, Any],
+    *,
+    vertical_reading: VerticalReading | None = None,
 ) -> CandidateFilterVerdict:
     """Return (passes hard filters, rejected fields, unknown evidence fields).
 
@@ -654,14 +643,16 @@ def _candidate_filter_verdict(
         elif followers > int(filters["followers_max"]):
             reasons["followers_max"] = "mismatch"
 
+    # gear_content 闸继续吃它原来的语料(逐字节不动);垂类改走多路取证,两者刻意分家——
+    # 垂类语料变宽绝不允许顺带把器材证据要求放宽(用户红线)。
     vertical_blob = _factual_candidate_signal_blob(row, evidence)
-    requested_verticals = [str(item).strip().lower() for item in filters.get("verticals") or []]
-    if requested_verticals:
-        if not vertical_blob:
+    vertical_outcome, vertical_reading, _vertical_hits = vertical_filter_outcome(
+        row, evidence, filters.get("verticals") or [], reading=vertical_reading,
+    )
+    if vertical_outcome:
+        reasons["verticals"] = vertical_outcome
+        if vertical_outcome == "unknown":
             unknown.append("verticals")
-            reasons["verticals"] = "unknown"
-        elif not any(_vertical_filter_matches(term, vertical_blob) for term in requested_verticals):
-            reasons["verticals"] = "mismatch"
 
     used_lenses = list(evidence.get("used_lenses") or [])
     gear_signal = bool(used_lenses) or any(term in vertical_blob for term in _GEAR_CONTENT_TERMS)
@@ -673,7 +664,8 @@ def _candidate_filter_verdict(
     # 三态放行(include_unknown / exclude)也照旧走这里 —— 放行 != 假装知道。
     unknown.extend(field for field, missing in (
         ("country", not country), ("language", not language), ("followers", not followers_known),
-        ("verticals", not vertical_blob), ("gear_content", not used_lenses and not gear_signal),
+        ("verticals", vertical_reading.is_unknown),
+        ("gear_content", not used_lenses and not gear_signal),
     ) if missing)
     return CandidateFilterVerdict(reasons, unknown, unknown_field_candidates(row, reasons))
 

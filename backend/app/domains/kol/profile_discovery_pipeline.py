@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.core.logging import get_logger
 from app.domains.kol import (
+    profile_discovery_rounds,
     profile_online_qualification,
     profile_recall,
     profile_recall_qualification,
@@ -24,6 +26,8 @@ from app.domains.kol.profile_discovery_session import (
     advance_search_session_items,
 )
 from app.domains.kol.search_progress_contract import completion_contract
+
+logger = get_logger(__name__)
 
 
 async def execute_smart_search_profile_advance_pipeline(
@@ -284,22 +288,65 @@ async def execute_smart_search_profile_advance_pipeline(
             "target_persona": _text(payload.get("target_persona")),
         }
         if strict_online_30:
+            # 车道 2:多轮 + 分页。第 1 轮与旧行为逐字一致(全平台、第一页);第 2 轮起
+            # 只跑「真能翻页且真还有下一页」的腿(默认只有 YouTube:实测 <2s、零 Apify 花费),
+            # 所以多轮不会把在线段耗时线性拉长 —— 107s 那条 IG 腿只跑第一轮。
+            _per_platform_limit = max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 50), 50))
+            _per_platform_limits = payload.get("new_discovery_per_platform_limits")
+            # 第 1 轮的预报只能按「operator 选了哪些平台」估;真解析出的腿在第 1 轮返回后写回
+            # _round_legs(provider 的 platforms 才是权威)。空 = 未限定平台 = 三条腿全上。
+            _plan_legs = [
+                _text(item) for item in (
+                    resolved_platforms if isinstance(resolved_platforms, (list, tuple, set))
+                    else [resolved_platforms] if resolved_platforms else []
+                ) if _text(item)
+            ] or sorted(profile_online_qualification.ONLINE_SUPPORTED_PLATFORMS)
+            _round_legs: list[str] = []
+            _round_cursor: dict[str, Any] = {}
+            _round_forecasts: list[dict[str, Any]] = []
+            _round_yield: dict[str, int] = {"last": 0}
+
             async def _fetch_online_batch(*, round_no: int, limit: int, cursor: Any) -> dict[str, Any]:
-                del cursor
-                if round_no > 1:
-                    return {"status": "empty", "new_creators": [], "provider_calls": False}
-                batch = await discover_new_creators(
-                    **discovery_kwargs,
-                    limit=max(1, min(limit, 150)),
-                    per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 50), 50)),
-                    # B3:operator 的每平台上限覆盖({平台: 上限});缺 → 全平台沿用上面的标量。
-                    per_platform_limits=payload.get("new_discovery_per_platform_limits"),
-                    auto_enroll=False,
+                legs = profile_discovery_rounds.platforms_for_round(round_no, _round_legs, cursor)
+                if round_no > 1 and not legs:
+                    # 兜底(正常路径上 _round_gate 已在发 provider 之前以
+                    # no_paginated_leg_left 拦下,并保住 has_more 的真值)。走到这里说明
+                    # 没装闸,那就诚实收工:一次抓取都别发。
+                    return {"status": "empty", "new_creators": [], "provider_calls": False, "has_more": False}
+                _forecast = profile_discovery_rounds.round_cost_forecast(
+                    legs if round_no > 1 else (_round_legs or _plan_legs),
+                    round_no=round_no,
+                    per_platform_limit=_per_platform_limit,
+                    per_platform_limits=_per_platform_limits,
                 )
+                _round_forecasts.append(_forecast)
+                logger.info("discovery_round_forecast %s", profile_discovery_rounds.forecast_line(_forecast))
+                batch = await discover_new_creators(
+                    **{**discovery_kwargs, **({"platforms": legs} if round_no > 1 else {})},
+                    limit=max(1, min(limit, 150)),
+                    per_platform_limit=_per_platform_limit,
+                    # B3:operator 的每平台上限覆盖({平台: 上限});缺 → 全平台沿用上面的标量。
+                    per_platform_limits=_per_platform_limits,
+                    auto_enroll=False,
+                    page_cursors=cursor,
+                )
+                if not _round_legs:
+                    _round_legs.extend(_text(item) for item in (batch.get("platforms") or []) if _text(item))
+                _round_cursor.clear()
+                _round_cursor.update(batch.get("next_cursor") or {})
+                _round_yield["last"] = len(batch.get("new_creators") or [])
                 if isinstance(batch.get("discovery_funnel"), dict):
                     provider_funnels.append(batch["discovery_funnel"])
                 return batch
 
+            _round_gate = profile_discovery_rounds.build_round_gate(
+                legs_for_round=lambda round_no: profile_discovery_rounds.platforms_for_round(
+                    round_no, _round_legs, _round_cursor,
+                ),
+                per_platform_limit=_per_platform_limit,
+                per_platform_limits=_per_platform_limits,
+                progress_reader=lambda: _round_yield["last"],
+            )
             online_result = await profile_online_qualification.collect_strict_online_for_session(
                 session_id=int(session_id),
                 query_text=query,
@@ -312,7 +359,10 @@ async def execute_smart_search_profile_advance_pipeline(
                 ),
                 fetch_batch=_fetch_online_batch,
                 candidate_budget=150,
-                max_provider_rounds=1,
+                # 多轮不再是死代码:上限 3 轮,但每一轮都要先过 _round_gate(时间/钱/
+                # 真的还有下一页)。够 30 人、真翻完、或闸拦下,三者任一即停。
+                max_provider_rounds=profile_online_qualification.ONLINE_MAX_PROVIDER_ROUNDS,
+                round_gate=_round_gate,
                 exhaustion_reason="bounded_provider_batch_exhausted",
             )
             # Base strict discovery is intentionally bounded to qualification and
@@ -399,6 +449,18 @@ async def execute_smart_search_profile_advance_pipeline(
                         returned_count=discovery_count,
                     )
                 ),
+                # 车道 2:这次搜索每一轮各要了几次抓取、预估多少钱、闸怎么判的 —— 落库可查,
+                # 因为在线严格契约的白名单不收这些键(会话摘要那边只留计数)。
+                **(
+                    {
+                        "discovery_round_plan": profile_discovery_rounds.round_plan_record(
+                            forecasts=_round_forecasts,
+                            round_gate=(online_contract or {}).get("round_gate"),
+                            provider_rounds=(online_contract or {}).get("provider_rounds"),
+                        )
+                    }
+                    if strict_online_30 else {}
+                ),
             },
         )
 
@@ -452,6 +514,26 @@ async def execute_smart_search_profile_advance_pipeline(
             )
         except Exception:
             video_backfill = {"status": "error", "reason": "video_backfill_enqueue_failed"}
+    # 车道 1(用户裁令「每次搜索的时候定点抓取就行」):硬筛标出的「其他维度都合格、
+    # 只差 country/language 未知」候选,在这里被消费——按需补一次轻量档案。总开关默认 OFF,
+    # 关着时只算账单不花钱。写在结果装配之后 = 绝不阻塞首屏;补完的人下次搜索才可能出现。
+    # 入队失败不阻断 pipeline。
+    field_topup: dict[str, Any] | None = None
+    if bool(payload.get("include_field_topup", True)):
+        try:
+            from app.domains.kol import profile_field_topup_enqueue
+
+            field_topup = profile_field_topup_enqueue.enqueue_field_topup_for_candidates(
+                candidates=(recall_result.get("diagnostics") or {}).get("field_topup_candidates"),
+                session_id=int(session_id),
+                staff=None,
+                dry_run=bool(payload.get("field_topup_dry_run")),
+            )
+        except Exception:
+            logger.warning("field_topup_enqueue_failed session_id=%s", session_id, exc_info=True)
+            field_topup = {"status": "error", "reason": "field_topup_enqueue_failed"}
+        # 诊断落库不另起一次写:搭本管线收尾那次 update_session_result_summary 的顺风车
+        # (见下方 summary_patch 里的 "field_topup" 键),省掉每次搜索都要付的一个往返。
     pipeline_status = _profile_advance_pipeline_status(recall_result, new_discovery, advance_result)
     final_status = "partial" if changed_ids else pipeline_status
     profile_ready = 0
@@ -500,6 +582,10 @@ async def execute_smart_search_profile_advance_pipeline(
                 **final_contract,
             },
             **final_contract,
+            # 车道 1 记账:本次标记了多少人待补 / 实际入队多少 / 因预算·冷却·上限跳过多少,
+            # 以及「这一次要花多少次抓取」(planned_fetch_count)。总开关关着时也照落库,
+            # 让人在武装之前先看见账单。applies_to_this_search 恒 False,不假装本次就补上了。
+            **({"field_topup": field_topup} if field_topup else {}),
             "smart_search_profile_advance_job": {
                 "status": pipeline_status,
                 "query_text": query,
@@ -529,6 +615,9 @@ async def execute_smart_search_profile_advance_pipeline(
         "query": query,
         "query_plan_source": payload.get("query_plan_source"),
         "content_fit": content_fit,
+        # 车道 1 诊断:本次标记多少人待补 / 实际入队多少 / 被预算或冷却拦下多少。
+        # applies_to_this_search 恒 False —— 补齐是后台的,不假装本次就补上了。
+        "field_topup": field_topup,
         "recall": {
             "method": recall_result.get("method"),
             "returned_count": len(recall_result.get("items") or []),

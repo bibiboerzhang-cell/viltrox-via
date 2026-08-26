@@ -48,6 +48,10 @@ def _entry_rows(
         "real_er_method",
         "last_seen_at",
         "updated_at",
+        # 垂类多路取证的真信号(迁移 291 回填)。列未迁移的旧布局自动退成 NULL =
+        # 这一路没有信号,判定照样跑,只是这个人在这一路上算未知。
+        "topic_details_json",
+        "tagged_brands_json",
     )
     optional_select = ",\n               ".join(
         f"p.{column}" if column in pool_columns else f"NULL AS {column}"
@@ -140,6 +144,10 @@ def _pool_rows_fallback(
         "real_er_method",
         "last_seen_at",
         "updated_at",
+        # 垂类多路取证的真信号(迁移 291 回填)。列未迁移的旧布局自动退成 NULL =
+        # 这一路没有信号,判定照样跑,只是这个人在这一路上算未知。
+        "topic_details_json",
+        "tagged_brands_json",
     )
     optional_select = ", ".join(
         f"p.{column}" if column in pool_columns else f"NULL AS {column}"

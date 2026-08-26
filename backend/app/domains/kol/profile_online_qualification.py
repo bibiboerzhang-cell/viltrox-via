@@ -387,10 +387,16 @@ async def collect_strict_online_candidates(
     enroll_candidate: EnrollCandidate,
     candidate_budget: int = ONLINE_CANDIDATE_BUDGET,
     max_provider_rounds: int = ONLINE_MAX_PROVIDER_ROUNDS,
+    round_gate: Callable[[int], dict[str, Any]] | None = None,
     exhaustion_reason: str = "bounded_provider_batch_exhausted",
     as_of: datetime | None = None,
 ) -> dict[str, Any]:
-    """Collect 30 pool-backed, cross-lane-unique strict candidates or shortfall."""
+    """Collect 30 pool-backed, cross-lane-unique strict candidates or shortfall.
+
+    车道 2·``round_gate``:第 2 轮起、发 provider 之前的准入闸(时间/钱/是否还有下一页)。
+    被闸拦下与「真的翻完了」必须分得开 —— 拦下时 ``has_more`` 原样保留(于是
+    ``exhausted`` 仍为 False),终止原因用闸给的机器码,绝不冒充「已耗尽」。
+    """
     started = perf_counter()
     budget = max(ONLINE_TARGET, min(int(candidate_budget or ONLINE_CANDIDATE_BUDGET), 500))
     max_rounds = max(1, min(int(max_provider_rounds or 1), 10))
@@ -413,8 +419,18 @@ async def collect_strict_online_candidates(
     provider_failed = False
     has_more = True
     seen_batch_fingerprints: set[str] = set()
+    gate_verdicts: list[dict[str, Any]] = []
+    gate_stop_reason = ""
 
     while len(accepted) < ONLINE_TARGET and has_more and provider_rounds < max_rounds and budget_used < budget:
+        if provider_rounds >= 1 and round_gate is not None:
+            verdict = round_gate(provider_rounds + 1)
+            verdict = verdict if isinstance(verdict, dict) else {}
+            gate_verdicts.append(verdict)
+            if verdict.get("allowed") is not True:
+                # 拦下 ≠ 翻完了:has_more 保持上一轮的真值,exhausted 因此仍诚实为 False。
+                gate_stop_reason = _text(verdict.get("reason")) or "round_gate_denied"
+                break
         provider_rounds += 1
         request_limit = min(150, budget - budget_used)
         try:
@@ -543,6 +559,7 @@ async def collect_strict_online_candidates(
     if shortfall:
         terminal_reason = (
             "provider_failed" if provider_failed
+            else gate_stop_reason if gate_stop_reason
             else "candidate_budget_exhausted" if budget_used >= budget
             else "provider_round_budget_exhausted" if has_more and provider_rounds >= max_rounds
             else _text(exhaustion_reason) or "bounded_provider_batch_exhausted"
@@ -628,7 +645,13 @@ async def collect_strict_online_candidates(
         "inventory_db_reads": max(0, int(inventory_db_reads or 0)),
         "materialization_db_reads": materialization_db_reads,
         "total_identity_db_reads": max(0, int(inventory_db_reads or 0)) + materialization_db_reads,
+        # 「真的没有下一页」才叫 exhausted。被轮次闸(时间/钱)拦下时 has_more 仍为 True,
+        # 这里就诚实说没耗尽 —— 差多少人由 shortfall_reasons 里的闸原因交代。
         "exhausted": not has_more,
+        "round_gate": {
+            "stopped_by": gate_stop_reason or None,
+            "verdicts": gate_verdicts,
+        },
         "shortfall": shortfall,
         "shortfall_reasons": shortfall_reasons,
         "rejected_by_reason": rejected_by_reason,
@@ -654,6 +677,7 @@ async def collect_strict_online_for_session(
     enroll_candidate: EnrollCandidate = materialize_online_candidate,
     candidate_budget: int = ONLINE_CANDIDATE_BUDGET,
     max_provider_rounds: int = ONLINE_MAX_PROVIDER_ROUNDS,
+    round_gate: Callable[[int], dict[str, Any]] | None = None,
     exhaustion_reason: str = "bounded_provider_batch_exhausted",
     as_of: datetime | None = None,
 ) -> dict[str, Any]:
@@ -674,6 +698,7 @@ async def collect_strict_online_for_session(
         enroll_candidate=enroll_candidate,
         candidate_budget=candidate_budget,
         max_provider_rounds=max_provider_rounds,
+        round_gate=round_gate,
         exhaustion_reason=exhaustion_reason,
         as_of=as_of,
     )

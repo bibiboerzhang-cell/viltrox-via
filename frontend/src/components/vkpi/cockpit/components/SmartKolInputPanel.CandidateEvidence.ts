@@ -137,6 +137,45 @@ export function candidateRankSummary(item: VkpiKolRecallItem): CandidateRankSumm
   return { score, scoreLabel, methodLabel, kind, sourceField, rawMethod, detail };
 }
 
+/** 与后端 VERTICAL_LABELS_ZH / 筛选面板 VERTICAL_OPTIONS 同源；门面只出中文。 */
+const VERTICAL_LABELS: Record<string, string> = {
+  lens_review: "镜头评测",
+  photography_tutorial: "摄影教程",
+  gear_comparison: "器材对比",
+  portrait: "人像创作",
+  video_creation: "视频创作",
+  camera_system: "相机系统",
+  vlog: "Vlog",
+  lifestyle: "生活方式",
+  technology: "科技",
+};
+
+export type CandidateVerticalTag = { label: string; reasons: string[] };
+
+/**
+ * 卡面垂类标签：后端判到几类就显示几类，每类都带「为什么算他是这一类」。
+ * 判不出就是空数组 —— 由卡面显示“垂类未知”，绝不默认归进某一类。
+ */
+export function candidateVerticalTags(item: VkpiKolRecallItem): CandidateVerticalTag[] {
+  const explained = Array.isArray(item.vertical_evidence) ? item.vertical_evidence : [];
+  const byVertical = new Map<string, string[]>();
+  explained.forEach((entry) => {
+    if (!entry || typeof entry !== "object") return;
+    const label = text(entry.label) || text(entry.vertical);
+    if (!label) return;
+    const reasons = Array.isArray(entry.reasons) ? entry.reasons.map(text).filter(Boolean) : [];
+    byVertical.set(label, reasons);
+  });
+  const tags = Array.isArray(item.vertical_tags) ? item.vertical_tags.map(text).filter(Boolean) : [];
+  tags.forEach((tag) => {
+    // 后端只给了 id 没给解释(旧会话回放)时按口径表翻中文;认不出的一律不显示,
+    // 绝不把内部 id 摆到卡面上。
+    const label = VERTICAL_LABELS[tag.toLowerCase()];
+    if (label && !byVertical.has(label)) byVertical.set(label, []);
+  });
+  return Array.from(byVertical, ([label, reasons]) => ({ label, reasons }));
+}
+
 export function candidateMissingLabels(item: VkpiKolRecallItem): string[] {
   const unknown = Array.isArray(item.unknown_fields) ? item.unknown_fields : [];
   return Array.from(new Set(unknown

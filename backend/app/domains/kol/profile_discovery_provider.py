@@ -39,6 +39,7 @@ from app.domains.kol.profile_discovery_candidates import (
     _is_own_brand_account,
     _strict_discovery_platforms,
 )
+from app.domains.kol.profile_discovery_rounds import leg_cursors, pagination_state
 from app.domains.kol.profile_discovery_supply import (
     build_enrich_doom_gate,
     leg_accounting,
@@ -384,12 +385,16 @@ async def discover_new_creators(
     target_persona: str = "",
     auto_enroll: bool = True,
     exclude_chinese: bool = True,
+    page_cursors: Any = None,
 ) -> dict[str, Any]:
     """Search platforms for creator candidates and mark existing KOL matches.
 
     发现精准修:search_query_en(英文平台检索词,优先于中文 query_text 用于实际平台搜索,治
     中文 query 捞中文圈);product_focus/ideal_creator_types/verticals/avoid_types 供 per-item
-    persona 启发式相关度打分(纯本地字符串比对,零 LLM/零 Apify,无需预算闸)。全 default,既有调用不破坏。"""
+    persona 启发式相关度打分(纯本地字符串比对,零 LLM/零 Apify,无需预算闸)。全 default,既有调用不破坏。
+
+    车道 2·分页:``page_cursors``={平台: 上一轮游标},缺省=各腿第一页(旧行为逐字不变);返回体新增
+    ``next_page_cursors``/``next_cursor``/``has_more``,口径见 profile_discovery_rounds 模块头。"""
     query = _text(search_query_en) or _text(query_text)
     # 区域语言本地化:目标市场非英语区 → 英文检索词翻成该区语言搜平台(捞本地达人),relevanceLanguage 同步。
     # 英语区/空 market → search_term=query、relevance_language='en',与现状完全一致(零回归)。
@@ -441,6 +446,8 @@ async def discover_new_creators(
     _leg_limits = {
         p: resolve_platform_limit(p, safe_per_platform, _platform_limits) for p in resolved_platforms
     }
+    # 车道 2:每条腿的分页游标(缺 = 第一页)。游标只透传给 provider 层,不参与任何判据。
+    _leg_cursors = leg_cursors(page_cursors)
 
     new_creators: list[dict[str, Any]] = []
     survivors: list[dict[str, Any]] = []  # 全部通过去重/garbage/地区过滤的存活候选,待 relevance 排序后再 top-N 截断
@@ -484,6 +491,7 @@ async def discover_new_creators(
                 strict_evidence=not auto_enroll,
                 enrich_prefilter=_enrich_doom_gate,
                 deadline_seconds=leg_deadline_seconds(platform),
+                page_cursor=_leg_cursors.get(platform),
             )
         except Exception as exc:
             logger.warning("profile discovery provider failed platform=%s", platform, exc_info=True)
@@ -724,6 +732,8 @@ async def discover_new_creators(
         status = "partial"
     elif errors:
         status = "failed"
+    # 车道 2:收每条腿 metadata 里的分页事实。has_more 只可能来自 provider 真给的游标。
+    _pagination = pagination_state(platform_results)
     return {
         "status": status,
         "query": query,
@@ -772,6 +782,10 @@ async def discover_new_creators(
             ),
         },
         "platform_results": platform_results,
+        # 车道 2·分页事实(下一轮的游标 / 还有没有下一页 / 每条腿到底支不支持分页)。
+        "next_page_cursors": _pagination["next_page_cursors"],
+        "next_cursor": _pagination["next_cursor"],
+        "has_more": _pagination["has_more"],
         # A7 可观测:本次调用的闸门漏斗切片(平台原始给量 → 逐闸丢弃 → 存活 → top-N 截断)。
         # 纯记账零行为改动;严格在线模式由 pipeline 逐轮收走落库,那段坍缩不再零痕迹。
         "discovery_funnel": provider_gate_funnel(

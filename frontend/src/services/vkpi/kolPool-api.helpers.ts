@@ -445,6 +445,10 @@ export interface VkpiKolRecallItem {
   match_tier?: "strict" | "backfill" | string;
   relaxed_filters?: string[];
   unknown_fields?: string[];
+  /** 判到的内容垂类(可多个);空 = 判不出,卡面显示未知,不默认归类。 */
+  vertical_tags?: string[];
+  /** 每个垂类「为什么算他是这一类」的中文短句(命中了哪一路的哪个词)。 */
+  vertical_evidence?: Array<{ vertical?: string; label?: string; reasons?: string[]; routes?: string[] }>;
   recall_reason?: string;
   why_fit?: string;
   used_lenses?: string[];

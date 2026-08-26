@@ -427,6 +427,12 @@ def smart_local_evidence_summaries(
             )
             if len(representative) >= 3:
                 break
+        evidence_titles: list[str] = []
+        for row in ranked[:20]:
+            title = _clean_text(row.get("title"), 220)
+            if title and title not in evidence_titles:
+                evidence_titles.append(title)
+
         texts: list[str] = []
         for row in ranked[:6]:
             texts.extend(
@@ -447,6 +453,7 @@ def smart_local_evidence_summaries(
         )
         summaries[kol_id] = {
             "representative_evidence": representative,
+            "evidence_titles": evidence_titles[:12],
             "used_lenses": _extract_lenses(*texts),
             "reason_labels": _reason_labels(
                 *(texts + [_clean_text(row.get("content_summary"), 500) for row in ranked[:3]])

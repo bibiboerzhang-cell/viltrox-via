@@ -33,6 +33,15 @@ from app.services.intelligence.account_search_instagram import (  # noqa: F401
     instagram_enrich_targets,
 )
 
+# 检索词整形与候选收敛的纯函数已拆到 account_search_terms.py(同 843 行棘轮理由)。
+# 原名 re-export —— account_scan_service 的 re-export 链与既有 monkeypatch 点全部不变。
+from app.services.intelligence.account_search_terms import (  # noqa: F401
+    _candidate_identity_key,
+    _short_search_queries,
+    _tiktok_collapse_author_videos,
+    _youtube_search_query_variants,
+)
+
 logger = get_logger(__name__)
 
 
@@ -42,48 +51,6 @@ def _scan_service():
     from app.services.intelligence import account_scan_service as _scan
 
     return _scan
-
-
-def _short_search_queries(query: str, *, max_queries: int = 4) -> List[str]:
-    """Turn a planner's comma-separated persona list into short search intents.
-
-    TikTok's keyword actor performs poorly when it receives the whole planner
-    sentence as one exact query. The returned list is bounded and deterministic;
-    callers divide the original result budget across these variants.
-    """
-    chunks = [" ".join(part.split()) for part in re.split(r"[,;|，；]+", query or "") if part.strip()]
-    if len(chunks) <= 1:
-        words = (query or "").split()
-        chunks = [" ".join(words[index:index + 5]) for index in range(0, len(words), 5)] or [query]
-    out: List[str] = []
-    seen: set[str] = set()
-    for chunk in chunks:
-        value = " ".join(chunk.split()[:8]).strip()[:100]
-        key = value.lower()
-        if not value or key in seen:
-            continue
-        seen.add(key)
-        out.append(value)
-        if len(out) >= max_queries:
-            break
-    return out or [" ".join((query or "").split())[:100]]
-
-
-
-def _youtube_search_query_variants(search_query: str, *, max_variants: int = 3) -> List[str]:
-    """K2 扩量刀·YT 多路短词:planner 的长 persona 整句在 search.list type=channel 上
-    命中率极低(实测 20 词整句只回 1 条频道,funnel 997/1089 两轮坐实)。整句 ≤6 词
-    直接用(与旧行为一致);更长则拆成 ≤max_variants 条短意图词(复用
-    _short_search_queries 的逗号/5 词分块口径),调用方逐条搜后按 channelId 合并去重。
-    纯函数零 IO,便于单测。"""
-    full_q = " ".join(str(search_query or "").split())
-    if not full_q:
-        return []
-    variants: List[str] = [full_q] if len(full_q.split()) <= 6 else []
-    for candidate in _short_search_queries(full_q, max_queries=max_variants):
-        if candidate and candidate.lower() not in {v.lower() for v in variants}:
-            variants.append(candidate)
-    return variants[:max_variants] or [full_q]
 
 
 def _youtube_channel_statistics(crawler: Any, channel_ids: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -297,6 +264,10 @@ async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_
             "provider_queries": used_queries,
             "quota_units": 100 * max(1, len(used_queries)) + (1 if stats_by_id else 0),
             "channels_enriched": sum(1 for item in items if item.get("followers")),
+            # 车道 2:非严格频道搜索路只服务 legacy 单轮发现,刻意没接分页(接了也没人翻)。
+            "pagination_supported": False,
+            "pagination_unsupported_reason": "legacy_channel_search_not_wired",
+            "has_more": False,
         },
     }
 
@@ -307,8 +278,16 @@ async def _youtube_data_api_strict_video_search(
     market: str = "",
     safe_limit: int = 25,
     relevance_language: str = "en",
+    page_cursor: Any = None,
 ) -> Dict[str, Any] | None:
-    """Fetch real <=45-day videos, then batch-enrich their declared channels."""
+    """Fetch real <=45-day videos, then batch-enrich their declared channels.
+
+    车道 2·分页:``page_cursor`` = {检索词变体: 上一轮该变体的 nextPageToken}。
+    search.list 官方支持 pageToken/nextPageToken(每个变体各有一条页链),所以游标
+    必须按变体存。返回的 metadata 带 ``next_page_cursor`` 与 ``has_more``——
+    ``has_more`` 只在「真有 nextPageToken」或「本轮提前 break、还有变体没查过」时为真,
+    绝不因为「跑过一轮了」就声称还有下一页。
+    """
     from app.platform.industry_crawlers.youtube_crawler import YouTubeCrawler
 
     crawler = YouTubeCrawler()
@@ -318,14 +297,18 @@ async def _youtube_data_api_strict_video_search(
     if not variants:
         return None
     result_limit = max(1, min(50, int(safe_limit or 25)))
+    page_tokens: Dict[str, str] = {}
+    if isinstance(page_cursor, dict):
+        page_tokens = {str(k): str(v).strip() for k, v in page_cursor.items() if str(v or "").strip()}
     published_after = (
         datetime.now(timezone.utc) - timedelta(days=45)
     ).isoformat(timespec="seconds").replace("+00:00", "Z")
 
-    def go() -> tuple[List[Dict[str, Any]], List[str], bool]:
+    def go() -> tuple[List[Dict[str, Any]], List[str], bool, Dict[str, str]]:
         merged: List[Dict[str, Any]] = []
         seen_channels: set[str] = set()
         used_queries: List[str] = []
+        next_tokens: Dict[str, str] = {}
         any_ok = False
         for query_variant in variants:
             payload = crawler._request(
@@ -338,12 +321,16 @@ async def _youtube_data_api_strict_video_search(
                     "maxResults": result_limit,
                     "relevanceLanguage": (relevance_language or "en").strip().lower() or "en",
                     "safeSearch": "none",
+                    "pageToken": page_tokens.get(query_variant) or None,
                 },
             )
             if crawler._should_use_apify_fallback(payload) or str(payload.get("provider_status") or "") == "error":
                 continue
             any_ok = True
             used_queries.append(query_variant)
+            next_page = str(payload.get("nextPageToken") or "").strip()
+            if next_page:
+                next_tokens[query_variant] = next_page
             for raw in payload.get("items") or []:
                 if not isinstance(raw, dict):
                     continue
@@ -358,15 +345,21 @@ async def _youtube_data_api_strict_video_search(
                     break
             if len(merged) >= result_limit:
                 break
-        return merged, used_queries, any_ok
+        return merged, used_queries, any_ok, next_tokens
 
     try:
-        raw_items, used_queries, any_ok = await asyncio.to_thread(go)
+        raw_items, used_queries, any_ok, next_tokens = await asyncio.to_thread(go)
     except Exception as exc:  # pragma: no cover - network only
         logger.warning("scanner.youtube_strict_video_search_failed", extra={"error": str(exc)})
         return None
     if not any_ok:
         return None
+    # 还有下一页的两种真凭据:某个变体回了 nextPageToken;或本轮装满提前 break、
+    # 还有变体一次都没查过(它们下一轮从第一页开始)。两者都不成立 = 真的翻完了。
+    unvisited = [item for item in variants if item not in used_queries]
+    for stale in unvisited:
+        if page_tokens.get(stale):
+            next_tokens.setdefault(stale, page_tokens[stale])
     channel_ids = [
         str(((raw.get("snippet") or {}).get("channelId")) or "").strip()
         for raw in raw_items
@@ -426,45 +419,13 @@ async def _youtube_data_api_strict_video_search(
             "published_after": published_after,
             "quota_units": 100 * max(1, len(used_queries)) + (1 if stats_by_id else 0),
             "channels_enriched": sum(1 for item in items if item.get("followers")),
+            # 车道 2·分页事实(只有这条腿是真分页;IG/TT actor 的输入 schema 里没有游标)。
+            "pagination_supported": True,
+            "next_page_cursor": dict(next_tokens),
+            "has_more": bool(next_tokens) or bool(unvisited),
+            "page_cursor_in": dict(page_tokens),
         },
     }
-
-
-def _tiktok_collapse_author_videos(raw_items: List[Dict[str, Any]], safe_limit: int) -> List[Dict[str, Any]]:
-    """重复卡修(2026-07-21 sky_vanya 案)·TT 号主收敛:关键词搜出的视频流按 authorMeta.name
-    收敛成「每号主一条」(保 actor 相关度序首条)。多路短词变体 + 同号主多视频会让同一人
-    吃掉多个候选槽位并重复上墙——YT 快路径按 channelId 合并、IG 有 owner 收敛,TT 此前缺
-    这道 (platform, handle 小写) 去重。无 author 的条目保序排尾兜底。纯函数零 IO。"""
-    by_author: Dict[str, Dict[str, Any]] = {}
-    authorless: List[Dict[str, Any]] = []
-    for item in raw_items:
-        row = item if isinstance(item, dict) else {}
-        author = row.get("authorMeta") if isinstance(row.get("authorMeta"), dict) else {}
-        handle = str(author.get("name") or "").strip().lstrip("@").lower()
-        if not handle:
-            raw_author = row.get("author")
-            handle = str(raw_author or "").strip().lstrip("@").lower() if isinstance(raw_author, str) else ""
-        if not handle:
-            authorless.append(row)
-            continue
-        if handle not in by_author:
-            by_author[handle] = row
-    merged = list(by_author.values()) + authorless
-    return merged[: max(1, int(safe_limit or 1))]
-
-
-def _candidate_identity_key(item: Dict[str, Any]) -> str:
-    """归一候选身份键 (platform, handle 小写去 @);无 handle 退 channel_url/source_url 小写。
-    键为空 → 调用方放行(不误杀)。供聚合层「每号主一条」兜底去重,纯函数零 IO。"""
-    platform = str(item.get("platform") or "").strip().lower()
-    handle = str(item.get("handle") or "").strip().lstrip("@").lower()
-    if handle:
-        return f"{platform}:{handle}"
-    for key in ("channel_url", "source_url"):
-        url = str(item.get(key) or "").strip().lower()
-        if url:
-            return f"{platform}:{url}"
-    return ""
 
 
 async def search_platform_content(
@@ -477,6 +438,7 @@ async def search_platform_content(
     strict_evidence: bool = False,
     enrich_prefilter: Any = None,
     deadline_seconds: float | None = None,
+    page_cursor: Any = None,
 ) -> Dict[str, Any]:
     """Search public platform content and normalize it into KOL candidates.
 
@@ -491,6 +453,12 @@ async def search_platform_content(
     - ``deadline_seconds``:本条腿的总时间预算。hashtag 阶段吃完预算后,富化阶段
       诚实跳过(候选照常返回、followers 未知 → 读端归「分析中」),而不是把整条腿
       拖过 deadline 变成「本轮该平台无供给」——**少个 followers 好过整腿归零**。
+
+    车道 2·分页(可选 ``page_cursor``,缺省 = 第一页 = 旧行为逐字不变):
+    只有 YouTube 严格视频路是**真分页**(Data API search.list 的 pageToken/nextPageToken)。
+    IG hashtag actor 与 clockworks TikTok actor 的输入 schema 里**没有** offset/cursor/
+    page/skip 任何一个字段(2026-08-25 逐个核对),所以这两条腿的 metadata 一律
+    ``pagination_supported=False`` + ``has_more=False``,绝不伪造游标假装还能翻页。
     """
     leg_started_monotonic = time.monotonic()
     normalized_platform = (platform or "youtube").strip().lower()
@@ -509,6 +477,7 @@ async def search_platform_content(
                 market=market,
                 safe_limit=safe_limit,
                 relevance_language=relevance_language,
+                page_cursor=page_cursor,
             )
             if strict_evidence
             else _youtube_data_api_search(
@@ -799,6 +768,11 @@ async def search_platform_content(
             "returned": len(items),
             "provider_queries": provider_queries,
             "searched_at": started_at,
+            # 车道 2:走到这里的都是 Apify actor 路径。这些 actor 的输入 schema 里没有
+            # offset/cursor/page/skip —— 如实上报「本腿不支持分页」,不伪造下一页。
+            "pagination_supported": False,
+            "pagination_unsupported_reason": "actor_input_schema_has_no_cursor",
+            "has_more": False,
             # K2 可观测(仅 instagram 有意义):原始帖量/号主收敛后量/档案富化命中数。
             # A2 补三个诚实计数:前置闸挡掉几个(省下的富化配额)、实际请求富化几个、
             # 以及富化没做满时的原因(空=正常做满)。

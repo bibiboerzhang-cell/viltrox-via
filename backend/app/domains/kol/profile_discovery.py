@@ -241,6 +241,7 @@ async def discover_new_creators(
     target_persona: str = "",
     auto_enroll: bool = True,
     exclude_chinese: bool = True,
+    page_cursors: Any = None,
 ) -> dict[str, Any]:
     # 与 profile_discovery_provider.discover_new_creators 签名同集(守卫测试
     # test_profile_discovery_facade_signature);流水线经 _PIPELINE_COMPAT 拿到的是本壳。
@@ -261,6 +262,7 @@ async def discover_new_creators(
             target_persona=target_persona,
             auto_enroll=auto_enroll,
             exclude_chinese=exclude_chinese,
+            page_cursors=page_cursors,
         )
 
 

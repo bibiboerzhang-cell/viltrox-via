@@ -66,6 +66,7 @@ from app.domains.kol.profile_recall_precision import (
     ranking_key,
     select_with_business_lane_quotas,
 )
+from app.domains.kol.profile_vertical_signals import classify_verticals, vertical_explanations
 from app.domains.kol.search_relevance_eval import build_runtime_evaluation_status
 from app.domains.kol import profile_recall_support as _support
 
@@ -260,7 +261,6 @@ from app.domains.kol.profile_recall_projection import (  # noqa: E402
     _EXCLUDED_REGION_RE,
     _GEAR_CONTENT_TERMS,
     _LANGUAGE_ALIASES,
-    _VERTICAL_FILTER_GROUPS,
     _adoption_boost_for,
     _assign_business_buckets,
     _bucket_for,
@@ -288,7 +288,6 @@ from app.domains.kol.profile_recall_projection import (  # noqa: E402
     _recall_reason,
     _type_label,
     _type_score_for_bucket,
-    _vertical_filter_matches,
     _why_fit,
 )
 from app.domains.kol.profile_recall_relevance import (  # noqa: E402
@@ -662,13 +661,21 @@ def recall_kol_profiles(
             )
             continue
         evidence = evidence_by_id.get(hit.kol_pool_id, {})
-        passes_filters, rejected_fields, unknown_fields = _candidate_filter_verdict(
+        # 车道 3:垂类多路取证判一次,硬筛与结果卡共用同一份读数(判定与解释永远同源)。
+        vertical_reading = classify_verticals(row, evidence)
+        verdict = _candidate_filter_verdict(
             row,
             evidence,
             normalized_filters,
+            vertical_reading=vertical_reading,
         )
+        passes_filters, rejected_fields, unknown_fields = verdict
         ledger.note_hard_filter(rejected_fields, unknown_fields, passed=passes_filters)
         if not passes_filters:
+            # 车道 1:判定层已把「其他维度都合格、只差 country/language 未知」的候选标好
+            # (profile_recall_filter_modes.unknown_field_candidates),此前无人消费。这里
+            # 只把标记收进账本,**不抓取、不改判定**——本次通过集合逐条不变。
+            ledger.note_topup_candidates(getattr(verdict, "unknown_field_candidates", ()))
             continue
         # 先按检索词判(老行为);判空再用 检索词∪人群词 兜底——LLM 常给泛角色词被剔光→496/500 判无证据(08-23)
         field_evidence = build_match_evidence(row, evidence, resolved_text, required_product_terms=safe_product_evidence_terms) or (
@@ -713,6 +720,10 @@ def recall_kol_profiles(
                     else []
                 ),
                 "unknown_fields": unknown_fields,
+                # 车道 3:判到的垂类 + 「为什么算他是这一类」。判不出就是空列表 = 未知,
+                # 绝不默认归进某一类(卡面照此显示垂类未知)。
+                "vertical_tags": list(vertical_reading.verticals),
+                "vertical_evidence": vertical_explanations(vertical_reading),
             }
         )
         buckets[bucket].append(item)
