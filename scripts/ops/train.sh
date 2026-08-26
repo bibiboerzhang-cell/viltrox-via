@@ -49,7 +49,9 @@ assert_clean_tree() {
   dirty="$(git status --porcelain=v1 --untracked-files=all)"
   if [ -n "${dirty}" ]; then
     printf '%s\n' "${dirty}" >&2
-    die "工作树不干净(${phase})。先 commit/stash(配方:git stash → train → git stash pop),或等并行会话收工。"
+    # 共享工作树禁用 git stash:它是全树操作,会连并行会话未提交的活一起卷走(且 pop 可能撞冲突)。
+    # 唯一安全解:要么把上面这些文件按文件原子提交,要么等写它们的那个会话收工。
+    die "工作树不干净(${phase})。把上面的文件逐个 commit,或等并行会话/工作流收工再发车——不要 git stash(共享树全树操作会卷走别人的活)。"
   fi
   log "脏树检查通过(${phase})"
 }
