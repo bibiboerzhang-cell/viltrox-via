@@ -72,6 +72,12 @@ export async function smartKolSearch(
     sessionId?: number;
     createSession?: boolean;
     excludeChinese?: boolean;
+    /** false = 这次一格都不许自动放宽（操作员按了「改回我的条件」）。缺省即开启。 */
+    autoRelax?: boolean;
+    /** false = 系统推断出来的筛选一条都不加（「改回我的条件」的另一半，缺一就回不去）。 */
+    autoFilters?: boolean;
+    /** 操作员逐条点掉的系统加项（筛选键名）。 */
+    droppedAutoFilters?: string[];
     market?: string;
     platforms?: string[];
     languages?: string[];
@@ -103,6 +109,9 @@ export async function smartKolSearch(
   if (params.productSku) body.product_sku = params.productSku;
   if (typeof params.sessionId === "number") body.session_id = params.sessionId;
   if (typeof params.excludeChinese === "boolean") body.exclude_chinese = params.excludeChinese;
+  if (params.autoRelax === false) body.auto_relax = false;
+  if (params.autoFilters === false) body.auto_filters = false;
+  if (params.droppedAutoFilters?.length) body.dropped_auto_filters = params.droppedAutoFilters;
   if (params.market) body.market = params.market;
   if (params.platforms?.length) body.platforms = params.platforms;
   if (params.languages?.length) body.languages = params.languages;

@@ -66,6 +66,7 @@ import {
   type KolSearchFilterState,
   type KolSearchStrategy,
 } from "./SmartKolInputPanel.SearchPolicy";
+import { useAutoRelaxControl } from "./SmartKolInputPanel.AutoRelax";
 import { LOCAL_QUALIFICATION_SPEC } from "./SmartKolInputPanel.LocalQualified";
 import { ONLINE_QUALIFICATION_SPEC, strictOnlineDiscoveryPlatforms } from "./SmartKolInputPanel.OnlineQualified";
 import {
@@ -182,6 +183,7 @@ export function SmartKolInputPanel({
   const urlCanExecute = canExecuteUrlResult(apiToken, urlResult, isBusy);
   const recallItems = useMemo(() => recallTopItems(recallResult), [recallResult]);
   const llmPlan = asRecord((recallResult as Row | null)?.llm_query_plan);
+  const autoRelax = useAutoRelaxControl(recallResult); // 系统替操作员松了 / 加了哪些筛选 + 一键改回
   // 三框·框3:全网发现项(new_creator)从在役 advance 会话抽取,与框2 库内召回分开展示。
   const discoveryItems = useMemo(() => {
     const all = discoveryItemsFromSession(activeSearchSession);
@@ -565,6 +567,7 @@ export function SmartKolInputPanel({
         // 整组「全网新发现」消失(550pro2 监视器搜出 15 个却 0 显示的真因)。宁可历史多一条空会话,也要保显示。
         createSession: true,
         excludeChinese,
+        ...autoRelax.requestParams(), // 三个开关一起送:少送一个「改回我的条件」就回不去
         timeoutMs: 60000,
       });
       if (!isCurrentSearchRequest(requestEpoch)) return;
@@ -871,6 +874,9 @@ export function SmartKolInputPanel({
         onLanguagesChange={setContentLanguages}
         filters={searchFilters}
         onFiltersChange={setSearchFilters}
+        autoRelax={autoRelax.view} autoRelaxBusy={isBusy} autoRelaxRemovedKeys={autoRelax.droppedKeys}
+        onAutoRelaxRestore={() => { autoRelax.toggleOptOut(); runCurrentInput(); }}
+        onAutoRelaxRemoveAdded={(key) => { autoRelax.removeAdded(key); runCurrentInput(); }}
       />
 
       {batchNote ? (

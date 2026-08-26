@@ -9,6 +9,7 @@ from app.domains.audit.decorator import audit_action
 import app.domains.kol.profile_recall as kol_profile_recall
 import app.domains.kol.profile_recall_qualification as kol_profile_recall_qualification
 import app.domains.kol.profile_recall_response as kol_profile_recall_response
+import app.domains.kol.search_auto_relax as kol_search_auto_relax
 import app.domains.kol.search_sessions as kol_search_sessions
 import app.domains.kol.search_sessions_online as kol_search_sessions_online
 import app.domains.kol.smart_query_planner as kol_smart_query_planner
@@ -704,37 +705,27 @@ async def smart_kol_search(
                 "new_discovery_status": "not_requested",
             }
         effective_query = str(llm_query_plan.get("search_query") or recall_query).strip()
-        if body.get("filters") not in (None, "") and not isinstance(body.get("filters"), dict):
-            raise ValueError("filters must be an object")
-        recall_filters = dict(body.get("filters") or {})
-        # Compatibility with the existing top-level platform control while
-        # the UI migrates all pre-filters under ``filters``.
-        explicit_body_platforms = (
-            body.get("platforms")
-            or body.get("platform")
-            or body.get("new_discovery_platforms")
-            or body.get("discovery_platforms")
-        )
         explicit_query_platforms = kol_profile_recall.explicit_platforms_from_query(recall_query)
-        if not recall_filters.get("platforms"):
-            if explicit_body_platforms:
-                recall_filters["platforms"] = explicit_body_platforms
-            elif explicit_query_platforms:
-                # Only literal operator text becomes a hard filter.  The
-                # planner's default all-platform list is intentionally ignored.
-                recall_filters["platforms"] = explicit_query_platforms
-        for filter_key in (
-            "countries",
-            "languages",
-            "followers_min",
-            "followers_max",
-            "follower_min",
-            "follower_max",
-            "verticals",
-            "gear_content",
-        ):
-            if body.get(filter_key) not in (None, "") and filter_key not in recall_filters:
-                recall_filters[filter_key] = body.get(filter_key)
+        # 筛选拼装 + 自动放宽(app/domains/kol/search_auto_relax.py):
+        # 模型只提议,人数由零成本 SQL COUNT 定夺;不够 30 人就按「代价最小」的顺序
+        # 放宽**模型推断的**筛选(操作员亲手勾的和质量合格线一格都不动),
+        # 松了哪一项、松之前松之后各多少人,全部原样进 result["auto_relax"] 回给操作员。
+        # 产量预估是同步 SQL COUNT,必须离开事件循环再跑。
+        # 上线默认关(2026-08-26):对抗复核坐实两条尚未修完的缺陷——①预估数与召回腿
+        # 未逐字对齐(「含未知」那一格的增益召回腿结构上取不到人、国家同义词两套口径、
+        # 未计合格线),用不准的数驱动自动放宽比不放宽更糟;②系统「自动加筛选」这半边
+        # 完全静默,能悄悄替操作员加上他从没说过的条件。两条修完并复核通过后删掉这两行,
+        # 默认即恢复为开。函数自身的默认值刻意保持不变,单测口径不受影响。
+        auto_body = dict(body)
+        auto_body.setdefault("auto_relax", False)
+        auto_body.setdefault(kol_search_auto_relax.BODY_AUTO_FILTERS_KEY, False)
+        recall_filters, auto_relax_ledger = await run_in_threadpool(
+            kol_search_auto_relax.run_auto_relax,
+            auto_body,
+            llm_query_plan,
+            query_platforms=explicit_query_platforms,
+            target=_int_or_none(body.get("result_limit")) or kol_search_auto_relax.DEFAULT_TARGET,
+        )
         resolved_product = (
             llm_query_plan.get("resolved_product")
             if isinstance(llm_query_plan.get("resolved_product"), dict)
@@ -805,6 +796,8 @@ async def smart_kol_search(
         # Only version-negotiated Smart clients receive the compact wire shape.
         if str(body.get("response_projection") or "").strip() == "smart_local_compact_v1":
             result = kol_profile_recall_response.compact_smart_local_api_result(result)
+        # 紧凑投影之后再挂:自动放宽的台账在任何投影下都必须到得了操作员眼前(绝不静默)。
+        result["auto_relax"] = auto_relax_ledger
         discovery_payload: dict | None = None
         include_new_discovery = bool(body.get("include_new_discovery") or body.get("include_discovery"))
         execute_new_discovery = bool(body.get("execute_new_discovery"))

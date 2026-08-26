@@ -1,5 +1,7 @@
 import { ChevronDown, SlidersHorizontal } from "lucide-react";
 
+import type { AutoRelaxView } from "./SmartKolInputPanel.AutoRelax";
+import { AutoRelaxNotice } from "./SmartKolInputPanel.AutoRelaxNotice";
 import { COUNTRY_INFO } from "../data/countryInfo";
 import {
   SMART_KOL_LANGUAGE_OPTIONS,
@@ -201,6 +203,11 @@ export function KolSearchPolicyPanel({
   onLanguagesChange,
   filters,
   onFiltersChange,
+  autoRelax = null,
+  onAutoRelaxRestore,
+  onAutoRelaxRemoveAdded,
+  autoRelaxRemovedKeys = [],
+  autoRelaxBusy = false,
 }: {
   open: boolean;
   onToggleOpen: () => void;
@@ -212,6 +219,13 @@ export function KolSearchPolicyPanel({
   onLanguagesChange: (languages: string[]) => void;
   filters: KolSearchFilterState;
   onFiltersChange: (filters: KolSearchFilterState) => void;
+  /** 上一次搜索里系统自动放宽了什么、又替操作员加了什么。挂在筛选面板上——说的就是这些控件本身。 */
+  autoRelax?: AutoRelaxView | null;
+  onAutoRelaxRestore?: () => void;
+  /** 去掉系统加的某一条(操作员从没说过的那种)。 */
+  onAutoRelaxRemoveAdded?: (key: string) => void;
+  autoRelaxRemovedKeys?: string[];
+  autoRelaxBusy?: boolean;
 }) {
   const policy = KOL_SEARCH_STRATEGIES[strategy];
   const canonicalLanguages = normalizeKolSearchLanguages(languages);
@@ -260,6 +274,15 @@ export function KolSearchPolicyPanel({
           </button>
         </div>
       </div>
+
+      {/* 折叠与否都显示:自动放宽**和自动加筛选**都是替操作员做的决定,不能藏在抽屉里。 */}
+      <AutoRelaxNotice
+        view={autoRelax}
+        onRestore={onAutoRelaxRestore}
+        onRemoveAdded={onAutoRelaxRemoveAdded}
+        removedKeys={autoRelaxRemovedKeys}
+        busy={autoRelaxBusy}
+      />
 
       {open ? (
         <div className="mt-2 space-y-2 border-t border-white/[0.05] pt-2">

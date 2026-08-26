@@ -12,6 +12,7 @@ from typing import Any
 
 from app.platform import llm_gateway
 from app.domains.kol import product_resolver
+from app.domains.kol import smart_query_facets
 from app.domains.kol import smart_query_intent
 
 from app.core.logging import get_logger
@@ -156,7 +157,7 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
     audience = smart_query_intent.normalise_audience_scale(
         None, None, detected=smart_query_intent.detect_audience_scale(query_text)
     )
-    return {
+    plan = {
         "status": "fallback",
         "original_query": query_text,
         "search_query": search_query or query_text,
@@ -176,6 +177,10 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
         "fallback_used": not provider_free_designed,
         "provider_calls_performed": False,
     }
+    # 车道「模型提议筛选」:规则路径也要给出五项筛选提议(全部标成推断项),
+    # 否则操作员在降级时又回到「自己勾一堆最后 0 个人」。零成本、纯字符串规则。
+    plan["filter_proposal"] = smart_query_facets.propose_facets(query_text, plan)
+    return plan
 
 
 def _clarification_plan(query: str, clarification: dict[str, Any]) -> dict[str, Any]:
@@ -373,7 +378,7 @@ def _normalise_plan(
         raw_plan.get("min_followers_hint") or raw_plan.get("followers_min_hint"),
         detected=smart_query_intent.detect_audience_scale(query),
     )
-    return {
+    plan = {
         "status": "ready" if raw_plan else fallback["status"],
         "original_query": _text(query),
         "search_query": compat_query or search_query,
@@ -409,6 +414,11 @@ def _normalise_plan(
             else None
         ),
     }
+    # 车道「模型提议筛选」:五项筛选提议(国家/语言/垂类/粉丝下限/平台)。
+    # 模型的 filter_proposal 只提供**取值**;「是不是操作员明确要求的」由原话规则判定,
+    # 模型无权自封 —— 否则自动松绑车道会被它一句话冻死。
+    plan["filter_proposal"] = smart_query_facets.propose_facets(query, plan, raw_plan=raw_plan)
+    return plan
 
 
 def _plan_from_product_persona(
@@ -459,7 +469,7 @@ def _plan_from_product_persona(
     )
 
     fallback = _fallback_plan(query)
-    return {
+    plan = {
         "status": "ready",
         "original_query": _text(query),
         "search_query": search_query or fallback["search_query"],
@@ -492,6 +502,10 @@ def _plan_from_product_persona(
             "price_usd": _as_float_or_none(product.get("price_usd")),
         },
     }
+    # persona 路径同样给五项筛选提议:产品知识库只解决「找什么人」,
+    # 「按什么筛」照旧全部标成推断项,人不够时由自动松绑车道先松这些。
+    plan["filter_proposal"] = smart_query_facets.propose_facets(query, plan)
+    return plan
 
 
 def plan_text_query_provider_free(
@@ -620,6 +634,7 @@ Rules:
 - Target the ENGLISH-speaking market. Set market to "US" unless the user explicitly names another English region (UK/CA/AU/EU). Exclude Chinese-language creators.
 - Preserve the original intent but expand it into searchable English creator terms.
 {smart_query_intent.AUDIENCE_SCALE_PROMPT_RULE}
+{smart_query_facets.FACET_PROMPT_RULE}
 - PRODUCT ANCHOR IS MANDATORY. Every entry of search_queries, and search_query itself, MUST start with the resolved product anchor "{anchor_hint}" (brand + model, plus the mount where it fits). A search term set that never names the product cannot prove product relevance downstream.
 - OUTPUT SHORT QUERIES, NOT ONE LONG SENTENCE. search_queries must hold 2-4 entries, each at most 6 words, each carrying the product anchor, and each covering a DIFFERENT angle (product + mount / product + genre / product + use case / product + category). Do not restate the same angle with synonyms.
 - If the request mentions flash, lighting, strobe, LED, Godox, or price/value, include lighting/flash creator terms.
@@ -635,6 +650,7 @@ Rules:
   avoid_types: string[] (mismatched creator types to exclude for this exact product)
   product_positioning: string (one plain-language sentence: what it is, price tier, who it is for)
   platforms: string[]
+  filter_proposal: object (countries / languages / verticals / min_followers / platforms — the operator's filter picks)
   market: string
   creator_quota: number
   reviewer_quota: number
@@ -694,6 +710,11 @@ def plan_text_query(
                 _plan = _pj.loads(_res) if isinstance(_res, str) else _res
                 if isinstance(_plan, dict) and _plan.get("search_query"):
                     _plan["plan_cache"] = "hit"
+                    # 本车道之前落盘的计划没有 filter_proposal。不 bump derive_method 去
+                    # 强制重算(那等于把 7 天缓存全作废、白烧一轮钱);缺了就地按规则补一份
+                    # (纯字符串、零调用),并如实标成规则推荐,不冒充模型推断。
+                    if not isinstance(_plan.get("filter_proposal"), dict):
+                        _plan["filter_proposal"] = smart_query_facets.propose_facets(query, _plan)
                     return _plan
     except Exception:
         logger.debug("plan 缓存读取失败,走实时规划(best-effort)", exc_info=True)

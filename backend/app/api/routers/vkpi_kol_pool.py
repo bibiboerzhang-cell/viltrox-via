@@ -131,6 +131,11 @@ from app.api.routers.vkpi_kol_pool_search import router as _kol_pool_search_rout
 
 router.include_router(_kol_pool_search_router)
 
+# ── 产量预估(只读、零成本、零 provider):GET /kol-pool/yield-estimate;无 prefix 子 router include ──
+from app.api.routers.vkpi_kol_pool_yield_route import router as _kol_pool_yield_router  # noqa: E402
+
+router.include_router(_kol_pool_yield_router)
+
 
 @router.get("/kol-pool")
 async def list_pool(

@@ -150,6 +150,9 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
         "/api/admin/vkpi/industry-data/hashtag-trends/v0",
         "/api/admin/vkpi/industry-data/market-intelligence/cards/v0",
         "/api/admin/vkpi/kol-pool/needs-analysis",
+        # 2026-08-26 产量预估「这个组合能出几个人」:一条 GROUP BY COUNT 起步的纯 SELECT
+        # 投影;不入队、不调 provider、不调 LLM、不写库。
+        "/api/admin/vkpi/kol-pool/yield-estimate",
         # Manager-only cross-employee search health is a bounded SELECT and
         # returns aggregate counts/release evidence only (no query/card data).
         "/api/admin/vkpi/kol-search-sessions/team-status",
