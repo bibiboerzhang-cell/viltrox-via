@@ -1,6 +1,7 @@
 import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domains/kol";
 
 import { asRecord, cleanText, type Row, providerGateReasonOf, providerUnavailableLabel } from "./SmartKolInputPanel.helpers";
+import { resolveLanguageProvenance, type LanguageProvenance } from "./LanguageProvenance";
 
 export const LOCAL_QUALIFIED_TARGET = 30;
 export const LOCAL_QUALIFICATION_SPEC = Object.freeze({
@@ -34,6 +35,8 @@ export type LocalQualifiedRow = {
   latestVideoAt: string;
   marketEvidence: string;
   languageEvidence: string;
+  /** 语言到底是他自己填的还是我们推断的 —— 门面必须分得开,见 LanguageProvenance.ts。 */
+  language: LanguageProvenance;
   profileType: string;
   accountQuality: string;
   whyFit: string;
@@ -266,6 +269,7 @@ function rowFromItem(item: VkpiKolRecallItem, fallbackRank: number): LocalQualif
     latestVideoAt: latestVideoFor(records),
     marketEvidence: marketEvidenceFor(marketEvidence, root, source),
     languageEvidence: languageEvidenceFor(qualification, candidateFacets, root, source),
+    language: resolveLanguageProvenance([qualification, candidateFacets, root, source]),
     profileType: profileTypeFor(qualification, candidateFacets, root, source),
     accountQuality: cleanText(accountQuality.verdict),
     whyFit,

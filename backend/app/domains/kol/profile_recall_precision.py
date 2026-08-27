@@ -13,6 +13,9 @@ import re
 from typing import Any, Iterable
 
 from app.db.connection import get_conn, is_postgres_runtime
+from app.domains.kol.pool_common import _table_columns
+from app.domains.kol.profile_recall_country_gate import country_hard_filter
+from app.domains.kol.profile_recall_language_gate import language_hard_filter
 
 
 logger = logging.getLogger(__name__)
@@ -321,30 +324,19 @@ def lexical_recall_candidates(
     if filters.get("followers_max") not in (None, ""):
         hard_clauses.append("p.followers IS NOT NULL AND p.followers <= ?")
         hard_params.append(int(filters["followers_max"]))
-    country_values = [
-        str(value).strip().lower()
-        for value in filters.get("_country_values") or filters.get("countries") or []
-        if str(value).strip()
-    ]
-    if country_values:
-        hard_clauses.append(
-            "LOWER(COALESCE(p.country, '')) IN (" + ",".join("?" for _ in country_values) + ")"
-        )
-        hard_params.extend(country_values)
-    language_values = [
-        str(value).strip().lower()
-        for value in filters.get("_language_values") or filters.get("languages") or []
-        if str(value).strip()
-    ]
-    if language_values:
-        hard_clauses.append(
-            "(" + " OR ".join(
-                "LOWER(COALESCE(p.language, ''))=? OR LOWER(COALESCE(p.language, '')) LIKE ?"
-                for _ in language_values
-            ) + ")"
-        )
-        for value in language_values:
-            hard_params.extend((value, f"{value}-%"))
+    # 国家下推走归一化闭包(见 profile_recall_country_gate.country_hard_filter):
+    # 闸判的是国家码(USA / 美国 / America / U.S. → US),取数腿此前只认原值字面量,
+    # 于是操作员点「美国」时,库里 country 写作「美国」的人在闸之前就被整批剔掉了。
+    country_clause, country_params = country_hard_filter(filters)
+    if country_clause:
+        hard_clauses.append(country_clause)
+        hard_params.extend(country_params)
+    # 语言下推同时认「自报」与「推断」两列 —— 这一腿是线上唯一的取数腿,
+    # 只按 p.language 筛等于在闸之前就把 language 为空的人整批剔掉(推断值永远到不了闸)。
+    language_clause, language_params = language_hard_filter(filters, active_conn, _table_columns)
+    if language_clause:
+        hard_clauses.append(language_clause)
+        hard_params.extend(language_params)
     hard_sql = "".join(f" AND {clause}" for clause in hard_clauses)
 
     pool_expression = _text_expression(

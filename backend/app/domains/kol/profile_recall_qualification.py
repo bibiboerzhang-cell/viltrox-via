@@ -27,6 +27,11 @@ from app.domains.kol.profile_recall_activity_gate import (
     should_defer_activity,
     unknown_activity_mode,
 )
+from app.domains.kol.profile_recall_language_gate import (
+    SELF_REPORTED_SOURCE as LANGUAGE_SELF_REPORTED_SOURCE,
+    language_gate_evidence,
+    resolve_candidate_language,
+)
 from app.domains.kol.profile_recall_qualification_projection import (
     _project_gate_evidence,
     _project_smart_local_item,
@@ -634,15 +639,13 @@ def qualify_local_candidates(
                 else "market_mismatch"
             )
 
-        candidate_languages = normalize_operator_languages(
-            row.get("language")
-            or item.get("language")
-            or (
-                item.get("candidate_facets", {}).get("language")
-                if isinstance(item.get("candidate_facets"), dict)
-                else None
-            )
+        # 自报优先 -> 推断兜底 -> 未知。推断值住在**另一列**,永不冒充自报值;
+        # 推断不出来的人回到「未知」档,由既有三态(缺省 require)决定拦不拦 ——
+        # 与新鲜闸拆桶同口径:未知 != 不合格。判定门槛本身一条不动。
+        language_resolution = resolve_candidate_language(
+            row, item, normalize=normalize_operator_languages,
         )
+        candidate_languages = list(language_resolution["values"])
         language_pass = (
             not invalid_languages
             and (
@@ -782,14 +785,16 @@ def qualify_local_candidates(
                 ),
                 "passed": market_pass,
             },
-            "language": {
-                "values": candidate_languages,
-                "targets": sorted(target_languages),
-                "filter_requested": language_requested,
-                "invalid_targets": invalid_languages,
-                "passed": language_pass,
-                "source": evidence_sources.get("language") or "vkpi_kol_profiles.language",
-            },
+            "language": language_gate_evidence(
+                language_resolution,
+                targets=sorted(target_languages),
+                filter_requested=language_requested,
+                invalid_targets=invalid_languages,
+                passed=language_pass,
+                self_source=(
+                    evidence_sources.get("language") or LANGUAGE_SELF_REPORTED_SOURCE
+                ),
+            ),
             "profile_type": {
                 "values": candidate_profile_types,
                 "targets": sorted(target_profile_types),

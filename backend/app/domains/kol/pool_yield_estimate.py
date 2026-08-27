@@ -307,11 +307,15 @@ def _combination_totals(
     """整组筛选的总账 —— 四档相加**必然**等于全池人数,不许有人没着落。
 
     * ``qualified`` —— 每一维都过,搜索真给得出;
-    * ``unknown`` —— 挡住他的**全部**是「资料没填」。**这批人今天搜索取不回来**:
-      库内取数只按填了的值取人。所以 ``unknown_recoverable_by_mode`` 恒为 False,
-      这个数只当诊断(「该去补数据了」),绝不许当成放宽后的增益;
+    * ``unknown`` —— 挡住他的**全部**是「资料没填」;
     * ``unrecallable`` —— 判定放行了但取数腿够不着(同义词落差、或点了兑现不了的档);
     * ``mismatch`` —— 至少有一维**确认**不符。补数据救不了他们。
+
+    ``unknown_recoverable_by_mode`` = 这一档里**有没有**人切个档就能回来。
+    2026-08-26 之前恒为 False:取数腿只按填了的值取人,任何模式都够不着没填的人。
+    搜索车道把**语言**这一维改成走 ``language_sql_filter``(自报 ∪ 推断,并且认三态)之后,
+    语言的「含未知」是真能兑现的了;国家 / 平台还是老形态,照旧兑现不了。
+    所以这个标志按**本次点了哪几维**如实算,不再写死。
     """
     qualified = 0
     unknown_only = 0
@@ -330,8 +334,12 @@ def _combination_totals(
         "qualified": qualified,
         "unknown": unknown_only,
         "unrecallable": unrecallable_only,
-        # 「含未知」那一档取数腿够不着,别让下游把 unknown 当成能回收的人。
-        "unknown_recoverable_by_mode": False,
+        # 只有取数腿真兑现得了「含未知」的维度,才算这批 unknown 能回收。
+        "unknown_recoverable_by_mode": any(
+            mode_is_recallable(name, "include_unknown")
+            for name in dimensions
+            if name in SQL_FILTERED_DIMENSIONS
+        ),
         "mismatch": pool_total - qualified - unknown_only - unrecallable_only,
         "pool_total": pool_total,
     }
@@ -483,7 +491,13 @@ def _not_estimated(
     keys: list[str] = []
     if unrecallable_total > 0:
         keys.append("recall_key_gap")
-    if any(name in ("countries", "languages") for name in dimensions):
+    # 2026-08-26:这条登记必须**自己去问**取数腿兑不兑现,不能写死。语言腿与国家腿
+    # 都已支持三态下推,「含未知」在这两维上是真能多捞回人的 —— 再挂这条,就是替
+    # 系统对操作员做一个**已经不成立**的事实声明(「这一档搜索兑现不了」)。
+    if any(
+        name in ("countries", "languages") and not mode_is_recallable(name, "include_unknown")
+        for name in dimensions
+    ):
         keys.append("unknown_mode_not_recallable")
     if any(spec.modes[name] == "exclude" for name in spec.unrecallable_modes()):
         keys.append("exclude_mode_not_recallable")

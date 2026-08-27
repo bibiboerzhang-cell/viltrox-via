@@ -1,6 +1,7 @@
 import type { VkpiKolPoolItem } from "../../../domains/kol";
 import { normalizeCountryCode } from "./data/countryInfo";
 import { kolHumanDisplayName } from "./lib/kolIdentity";
+import { resolveLanguageProvenance } from "./components/LanguageProvenance";
 
 const GEO_A = new Set(["US", "CA", "UK", "DE", "JP", "AU", "SE", "NL", "KR", "SG"]);
 const GEO_B = new Set(["FR", "IT", "ES", "AT", "CH", "BE", "TW", "HK", "MY", "AE", "IE", "RU", "ZA", "NZ"]);
@@ -320,6 +321,8 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       // C-fix:账户信息此前被本固定键白名单滤掉,抽屉拿不到 → 透传(后端 detail item 走 SELECT *,
       // pool_common.py 列已含 language/following/posts_count/avg_*;first/last_video_at 落 raw_platform_data)。
       language: firstValue(valueFrom(raw, ["language"]), rawPlatformData.language) || null,
+      // 语言是他自己填的还是我们照他发的东西推断的 —— 抽屉要如实标注,不能混为一谈。
+      language_provenance: resolveLanguageProvenance([raw, rawPlatformData, nestedObject(rawPlatformData, "raw")]),
       following: numberOrNull(item.following),
       posts_count: numberOrNull(item.posts_count),
       avg_views: numberOrNull(item.avg_views),

@@ -161,15 +161,18 @@ def test_every_dimension_reports_the_same_qualified_number(pool_conn: Any) -> No
         assert row["qualified"] == result["estimated"], row
 
 
-def test_include_unknown_mode_promises_nothing_because_search_cannot_deliver_it(
+def test_include_unknown_now_delivers_on_both_language_and_country(
     pool_conn: Any,
 ) -> None:
-    """「含未知」这一档**一个人都放不回来** —— 而且必须当面说清楚,不许闷着。
+    """「含未知」这一档:**语言与国家现在都兑现得了** —— 两边都要如实报。
 
-    这条用例是本次谎报的重灾区,方向是**反的**:旧口径按逐人三态判定算,报「切到含未知
-    能多回来 7 个人」;可真搜一遍时,候选先要被库内取数腿捞出来,而取数腿写的是
-    ``LOWER(COALESCE(p.language,'')) IN (...)`` —— 资料没填的人恒等于空串,任何模式下
-    都捞不到。所以那 7 个人搜索给不出。预估从此如实报 0 增益,并把这件事登记出来。
+    这条用例原来钉的是「一个人都放不回来」:取数腿写的是
+    ``LOWER(COALESCE(p.language,'')) IN (...)``,资料没填的人恒等于空串,任何模式下都
+    捞不到,于是预估必须报 0 增益。2026-08-26 搜索车道把语言这一维改成走
+    ``profile_recall_language_gate.language_sql_filter``(自报 ∪ 推断,并且认三态);
+    同日国家腿治了同一个病(``profile_recall_country_gate.country_sql_filter``:
+    归一化闭包 + 三态)。两维的「含未知」从此都是真的,预估跟着如实报增益,
+    「这一档兑现不了」那句话也不许再挂在界面上。
     """
     strict = _estimate(
         pool_conn, {"countries": [_US], "languages": ["English"], "followers_min": 50000}
@@ -182,24 +185,52 @@ def test_include_unknown_mode_promises_nothing_because_search_cannot_deliver_it(
             "followers_min": 50000,
         },
     )
-    assert relaxed["estimated"] == strict["estimated"] == 2
-    # 那 7 个人没有被藏起来,只是改记在「取数腿够不着」这一档,而不是「放宽就能回来」。
+    assert strict["estimated"] == 2
+    # 语言没填的那 7 个人,现在取数腿够得着了 —— 增益是真的,不再记成「够不着」。
     assert _tri(strict, "languages")["unknown"] == 7
-    assert _tri(relaxed, "languages")["unrecallable"] == 7
+    assert relaxed["estimated"] == 9
+    assert _tri(relaxed, "languages")["unrecallable"] == 0
     assert _tri(relaxed, "languages")["unknown"] == 0
-    # 界面必须看得见这句话。
-    assert "unknown_mode_not_recallable" in {item["item"] for item in relaxed["not_estimated"]}
+    # 国家那一维也治好了。在这一组里它的增益被**语言**那一刀盖住了(国家没填的 50 人
+    # 语言也没填,require 档的语言照旧把他们拦下),所以总数仍是 2 —— 这不是够不着,
+    # 而是另一维真的把他们判掉了。
+    country_relaxed = _estimate(
+        pool_conn,
+        {
+            "countries": {"values": [_US], "mode": "include_unknown"},
+            "languages": ["English"],
+            "followers_min": 50000,
+        },
+    )
+    assert country_relaxed["estimated"] == strict["estimated"] == 2
+    # 把语言这一刀拿开,国家的「含未知」就露出真增益:10 -> 60。
+    assert _estimate(pool_conn, {"countries": [_US], "followers_min": 50000})["estimated"] == 10
+    assert _estimate(
+        pool_conn,
+        {"countries": {"values": [_US], "mode": "include_unknown"}, "followers_min": 50000},
+    )["estimated"] == 60
+    # 界面不许再说「这一档搜索兑现不了」—— 那句话现在是不实陈述。
+    for result in (relaxed, country_relaxed):
+        assert "unknown_mode_not_recallable" not in {
+            item["item"] for item in result["not_estimated"]
+        }
     # 而「整条去掉语言」是真兑现得了的 —— 那张表的数字照旧。
     assert next(row for row in relaxed["drop_one"] if row["filter"] == "languages")["gain"] > 0
 
 
-def test_exclude_mode_is_reported_as_zero_and_says_why(pool_conn: Any) -> None:
-    """「排除某国」这一档搜索恒给 0(取数腿只捞点名的人,判定再把他们全排掉)。"""
+def test_exclude_mode_now_returns_the_people_it_was_supposed_to(pool_conn: Any) -> None:
+    """「排除某国」此前恒给 0,现在给的是**真的那批人**。
+
+    旧行为不是「筛得严」,是**反着来**:取数腿不认模式,照样 ``IN (点名的值)``
+    只捞美国人,判定再把这些人全部排掉,结果必然是 0。国家腿改完之后负向筛选
+    **不下推**(交给逐人判定),于是这一档报的是「不是美国的那 80 人」,
+    界面上那句「这一档兑现不了」也随之撤掉。
+    """
     result = _estimate(pool_conn, {"countries": {"values": [_US], "mode": "exclude"}})
-    assert result["estimated"] == 0
+    assert result["estimated"] == 80  # 100 人里 20 个美国人被排掉
     items = {item["item"] for item in result["not_estimated"]}
-    assert "exclude_mode_not_recallable" in items
-    assert next(row for row in result["applied"] if row["filter"] == "countries")["mode_recallable"] is False
+    assert "exclude_mode_not_recallable" not in items
+    assert next(row for row in result["applied"] if row["filter"] == "countries")["mode_recallable"] is True
 
 
 # ── 产量阶梯 ───────────────────────────────────────────────────────────────
@@ -499,17 +530,22 @@ def test_combination_totals_account_for_every_single_person(pool_conn: Any) -> N
         )
 
 
-def test_totals_never_sell_the_unfilled_bucket_as_recoverable(pool_conn: Any) -> None:
-    """「只差没填」这一档是**诊断**(该去补数据了),不是「切个档就能回来的人」。
+def test_totals_flag_recoverability_per_dimension_not_wishfully(pool_conn: Any) -> None:
+    """「只差没填」这一档能不能回收,按**哪几维真兑现得了**算,不许拍脑袋。
 
-    旧口径把它当成后者,自动放宽照着它松,松完一个人也没多。现在总账上直接钉一句
-    ``unknown_recoverable_by_mode = False``,并且真去切一遍档,人数一个不多。
+    原来这个标志写死 False(取数腿任何模式都够不着没填的人)。语言腿与国家腿
+    先后治好之后它是 True 了 —— 而且这次是**真的**:切一遍档,57 个「只差没填」的人
+    一个不少地回来了(语言 7 个 + 国家 50 个)。标志为真不许再靠拍脑袋,
+    它现在由 ``mode_is_recallable`` 逐维算出来。
     """
     strict = {"countries": [_US], "languages": ["English"], "followers_min": 50000}
     baseline = _estimate(pool_conn, strict)
     totals = baseline["totals"]
     assert totals["unknown"] == 57  # 50 个国家没填 + 7 个语言没填
-    assert totals["unknown_recoverable_by_mode"] is False
+    assert totals["unknown_recoverable_by_mode"] is True
+    # 只点国家(语言不在筛选里):国家腿也认三态了,所以这一批同样回得来。
+    country_only = _estimate(pool_conn, {"countries": [_US], "followers_min": 50000})
+    assert country_only["totals"]["unknown_recoverable_by_mode"] is True
     admitted = _estimate(
         pool_conn,
         {
@@ -518,7 +554,8 @@ def test_totals_never_sell_the_unfilled_bucket_as_recoverable(pool_conn: Any) ->
             "followers_min": 50000,
         },
     )
-    assert admitted["estimated"] == baseline["estimated"] == totals["qualified"]
+    # 57 个「只差没填」的人一个不少地回来了 —— 标志说 True,就真兑现 True。
+    assert admitted["estimated"] == baseline["estimated"] + 57 == totals["qualified"] + 57
 
 
 def test_auto_relax_facing_estimator_exposes_the_agreed_keys(pool_conn: Any) -> None:

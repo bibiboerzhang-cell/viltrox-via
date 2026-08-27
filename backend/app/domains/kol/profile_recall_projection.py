@@ -20,6 +20,8 @@ from app.domains.kol.profile_recall_filter_modes import (
     CandidateFilterVerdict, TRI_STATE_FILTER_FIELDS, normalize_tri_state_filter,
     tri_state_outcome, unknown_field_candidates,
 )
+from app.domains.kol.profile_recall_country_gate import country_match_key
+from app.domains.kol.profile_recall_language_gate import resolve_language_match_key
 from app.domains.kol.profile_recall_precision import missingness_aware_weighted_score
 from app.domains.kol.profile_recall_product_queries import PRODUCT_LINE_PERSONAS
 from app.domains.kol.profile_recall_relevance import WHY_FIT_RULES, _relevance_signals
@@ -475,18 +477,9 @@ def _filter_values(value: Any) -> list[str]:
 
 
 def _country_match_key(value: Any) -> str:
-    text = " ".join(str(value or "").split()).strip()
-    if not text:
-        return ""
-    try:
-        from app.domains.kol.pool_common import _country_code
-
-        code = str(_country_code(text) or "").strip().upper()
-        if code:
-            return code
-    except Exception:
-        logger.debug("country filter normalization fallback", exc_info=True)
-    return re.sub(r"[^a-z0-9\u4e00-\u9fff]", "", text.lower())
+    """闸的国家归一化口径。实现已搬进 ``profile_recall_country_gate``(逐字节不变),
+    取数腿按同一把尺子反查出可匹配写法的闭包 —— 两侧共用一把尺子,不许再有第二把。"""
+    return country_match_key(value)
 
 
 _LANGUAGE_ALIASES = {
@@ -611,7 +604,9 @@ def _candidate_filter_verdict(
             reasons["platforms"] = "mismatch"
 
     country = _country_match_key(row.get("country"))
-    language = _language_match_key(row.get("language"))
+    # 自报优先 -> 推断兜底 -> 都没有才是未知。推断值住在另一列(迁移 305),永不冒充自报值;
+    # 这一行之前只读 p.language,于是推断车道的成果在**真正把人剔掉的这道闸**上完全不存在。
+    language, _language_origin = resolve_language_match_key(row, match_key=_language_match_key)
     for filter_key, current, match_key in (
         ("countries", country, _country_match_key),
         ("languages", language, _language_match_key),

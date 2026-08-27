@@ -16,6 +16,15 @@
    随后三态判定把他们**全部**排掉 —— 结果恒为 0。预估过去按判定口径算,报出一个
    搜索永远给不出的正数。
 
+## 2026-08-26 更新:三处不一致已由搜索车道**在取数腿那一侧**修掉
+
+语言腿先修(自报列 ∪ 推断列 + 三态下推),国家腿同日跟上(归一化闭包 + 三态下推,
+见 ``profile_recall_country_gate``)。于是上面 1/2/3 三条对**语言与国家**都不再成立:
+「含未知」真能多捞回人、同义词写法全捞得到、「排除」不再下推正向匹配。本层因此不再
+把这两维登记成「兑现不了」,而是照着取数腿的新口径**跟着算** —— 口径仍然只有一套,
+只是那一套现在住在取数腿的共用构造器里,本层调它,不自己复刻。
+**平台**仍是老形态(SQL 里没有模式这回事),照旧只有 ``require`` 兑现得了。
+
 ## 二选一:选「预估只估召回腿真能兑现的部分」
 
 红线给了两条路:(甲)让召回腿真支持三态与同义词,让预估兑现;(乙)预估只估召回腿
@@ -34,6 +43,8 @@
   确实存在(资料没填而已),但**今天的搜索取不回他们**。想把他们放回来,唯一真能兑现
   的动作是把这一维**整条去掉**(``drop_one`` 那张表里的数字是真的)。这一点必须
   写在界面上,不许让操作员以为「含未知」这一档还有用。
+  (2026-08-26:这一段的代价对**语言与国家**已经不用付了 —— 取数腿真支持了三态,
+  那两维的「含未知」增益从此是真数。平台照旧。)
   另:向量召回那条腿不带硬筛,理论上能捞到没填的人,但它取决于向量库在不在、预算够不够、
   这个人有没有被索引、以及他排不排得进 top-K —— 那是「碰运气」,不是能拿去驱动
   自动松绑的产量。本层一律不把它算进可兑现的数。
@@ -54,6 +65,10 @@ from app.domains.kol.profile_recall_filter_modes import (
     normalize_mode,
     tri_state_outcome,
 )
+from app.domains.kol.profile_recall_country_gate import (
+    country_sql_value,
+    country_sql_values,
+)
 from app.domains.kol.profile_recall_projection import (
     _country_match_key,
     _language_match_key,
@@ -72,11 +87,19 @@ SQL_FILTERED_DIMENSIONS: tuple[str, ...] = ("platforms", "countries", "languages
 #: ``profile_recall_precision.lexical_recall_candidates``、
 #: ``profile_recall_storage._pool_text_fallback_hits``(广度兜底腿)、
 #: ``profile_recall.recall_kol_profiles``(绑值的构造)。
+#:
+#: 2026-08-26 更新:搜索车道已经把语言这一维改成走共用构造器
+#: ``profile_recall_language_gate.language_hard_filter``(自报列 ∪ 推断列,并且认三态),
+#: 同日国家这一维也改成走 ``profile_recall_country_gate.country_hard_filter``
+#: (归一化闭包,并且认三态),于是「兑现不了」这条前提对这两维都不再成立 ——
+#: 见 :func:`mode_is_recallable`。平台仍是老形态,预估口径照旧。
 RECALL_SQL_PINS: dict[str, str] = {
     "platforms": "LOWER(COALESCE(p.platform, '')) IN (",
-    "countries": "LOWER(COALESCE(p.country, '')) IN (",
-    "languages": "LOWER(COALESCE(p.language, ''))=? OR LOWER(COALESCE(p.language, '')) LIKE ?",
-    "languages_like_suffix": "-%",
+    "countries": "country_hard_filter(",
+    "countries_column": "LOWER(COALESCE(p.country, ''))",
+    "languages": "language_hard_filter(",
+    "languages_self_column": "LOWER(TRIM(COALESCE(p.language, '')))",
+    "languages_inferred_column": "LOWER(TRIM(COALESCE(p.language_inferred, '')))",
 }
 
 
@@ -91,36 +114,65 @@ def recall_sql_values(dimension: str, requested: Iterable[Any]) -> frozenset[str
     ``_language_values`` 的表达式逐字同源:国家 = 「原值小写 ∪ 国家码小写」,
     语言 = 「原值小写 ∪ 语言主码」,平台 = 「原值小写」。
     """
+    if dimension == "countries":
+        # 2026-08-26 起国家腿下推的是**归一化闭包**(所有会归一到被点名国家码的写法),
+        # 由 ``profile_recall_country_gate`` 独家产出 —— 预估这一侧照抄那一份,
+        # 不再自己拼「原值小写 ∪ 国家码小写」那两个字面量。
+        return frozenset(country_sql_values(requested or []))
     out: set[str] = set()
     for raw in requested or []:
         text = _clean(raw)
         if not text:
             continue
         out.add(text.lower())
-        if dimension == "countries":
-            code = _country_match_key(text).lower()
-            if code:
-                out.add(code)
-        elif dimension == "languages":
+        if dimension == "languages":
             code = _language_match_key(text)
             if code:
                 out.add(code)
     return frozenset(out)
 
 
-def sql_admits(dimension: str, raw_value: Any, values: frozenset[str]) -> bool:
+def sql_admits(
+    dimension: str,
+    raw_value: Any,
+    values: frozenset[str],
+    mode: Any = "require",
+) -> bool:
     """这个人**能不能被取数腿捞出来**。
 
-    刻意**不** btrim:召回腿写的是 ``LOWER(COALESCE(p.country,''))``,库里带空白的值
-    在那边就是捞不出来。这里跟着不 btrim,才不会估出一个搜索给不出的人。
-    (比对时该 btrim 的是**筛选值**那一侧,``recall_sql_values`` 已经 btrim 过再 lower。)
+    平台:刻意**不** btrim —— 那一腿写的还是 ``LOWER(COALESCE(p.platform,''))``,
+    库里带空白的值在那边就是捞不出来。这里跟着不 btrim,才不会估出一个搜索给不出的人。
+
+    国家:2026-08-26 起走 ``country_sql_filter``,那一侧按 :func:`country_sql_value`
+    抹空白 + 小写地比,并且认三态 —— 所以这里直接调那个函数,两边一个口径,
+    「库里写 ``United States`` 而操作员点 ``US``」这类同义词落差不再算成够不着。
+
+    语言:2026-08-26 起走 ``language_sql_filter``,那一侧 ``LOWER(TRIM(COALESCE(...)))``
+    并且认三态 —— 所以这里跟着 strip、跟着认模式,两边一个口径。
+    **推断列(``language_inferred``)刻意不算进预估**:预估的分组 SQL 只取了自报列,
+    多算等于承诺一个自己没数过的数。因此有推断值的库上,语言这一维的预估会**偏保守**
+    (少报,绝不多报),方向红线仍然成立。
     """
     if not values:
         return True
-    current = str(raw_value or "").lower()
+    if dimension == "countries":
+        normalized = normalize_mode(mode)
+        if normalized == "exclude":
+            return True  # 负向筛选不下推,取数腿谁都不挡,排除全交给逐人判定
+        current = country_sql_value(raw_value)
+        if not current:
+            return normalized == "include_unknown"
+        return current in values
     if dimension == "languages":
-        # ``=? OR LIKE ?`` 里的第二个参数是 ``f"{value}-%"``:主码相同、带地区后缀也算。
+        current = str(raw_value or "").strip().lower()
+        normalized = normalize_mode(mode)
+        if normalized == "exclude":
+            return True  # 语言这一维不再正向下推,取数腿谁都不挡,排除全交给逐人判定
+        if not current:
+            return normalized == "include_unknown"
+        # ``= ?`` 或 ``substr(...,1,?) = ?``:主码相同、带地区后缀也算。
         return any(current == value or current.startswith(f"{value}-") for value in values)
+    current = str(raw_value or "").lower()
     return current in values
 
 
@@ -165,7 +217,7 @@ def recall_leg_outcome(
     outcome = verdict_outcome(dimension, raw_value, requested, mode) if verdict is None else verdict
     if outcome:
         return outcome
-    return OUTCOME_PASS if sql_admits(dimension, raw_value, values) else OUTCOME_UNRECALLABLE
+    return OUTCOME_PASS if sql_admits(dimension, raw_value, values, mode) else OUTCOME_UNRECALLABLE
 
 
 def mode_is_recallable(dimension: str, mode: Any) -> bool:
@@ -173,8 +225,15 @@ def mode_is_recallable(dimension: str, mode: Any) -> bool:
 
     ``require`` 兑现得了(取数腿与判定同向);``include_unknown`` / ``exclude``
     兑现不了 —— 取数腿不认模式,前者取不到没填的人,后者只取点名的人再被判定全排掉。
+
+    **语言(2026-08-26)与国家(同日,国家腿同病同修)都已不是这样**:两条腿都改走
+    共用构造器(``language_sql_filter`` / ``country_sql_filter``),三态全部下推,
+    ``exclude`` 直接不下推交给逐人判定。三档都兑现得了,不再登记为不可兑现。
+    **平台**还是老形态(SQL 里就没有模式这回事),照旧只有 ``require`` 兑现得了。
     """
     if dimension not in SQL_FILTERED_DIMENSIONS:
+        return True
+    if dimension in {"countries", "languages"}:
         return True
     return normalize_mode(mode) == "require"
 

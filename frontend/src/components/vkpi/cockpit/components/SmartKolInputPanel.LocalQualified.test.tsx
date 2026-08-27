@@ -245,7 +245,9 @@ describe("local qualified first-list contract", () => {
     expect(screen.getByText("Creator Eight")).toBeTruthy();
     expect(screen.getByText(/1\.9万|18\.8K|1\.88万/)).toBeTruthy();
     expect(screen.getByText(/2026.*08.*03/)).toBeTruthy();
-    expect(screen.getByText("en")).toBeTruthy();
+    // 语言格现在如实标注口径:这条是他自己填的,所以只出代码、不挂「推断」角标。
+    expect(screen.getByText("EN")).toBeTruthy();
+    expect(screen.queryByText("推断")).toBeNull();
     expect(screen.getByText("评测号")).toBeTruthy();
     expect(screen.getByText("可联系")).toBeTruthy();
     expect(screen.getByText("分析中")).toBeTruthy();

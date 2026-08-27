@@ -8,6 +8,8 @@ import { AudienceTypeChip } from "./AudienceTypeChip";
 import { CandidateKindChip } from "./CandidateKindChip";
 import { ContactTierBadge } from "./ContactTierBadge";
 import { GeoTierChip } from "./GeoTierChip";
+import { LanguageProvenanceDetail } from "./LanguageProvenanceChip";
+import { resolveLanguageProvenance } from "./LanguageProvenance";
 import { candidateKindGroup } from "../lib/candidateKind";
 import { formatPercent } from "../lib/format";
 import { kolHumanDisplayName, kolHumanProfileLinkLabel, kolHumanPublicHandle } from "../lib/kolIdentity";
@@ -89,7 +91,11 @@ export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onC
       ),
       e("div", { className: "flex flex-col" },
         e("span", { className: "text-[8px] uppercase tracking-wider text-slate-500" }, "语言"),
-        e("span", { className: "text-slate-200" }, item.language || "—")
+        // 自报 / 推断 / 未知 必须分得开:留空或一律显示会让推断值冒充他自己填的。
+        e(LanguageProvenanceDetail, {
+          provenance: item.language_provenance || resolveLanguageProvenance([item]),
+          testId: "kol-detail-language",
+        })
       ),
       e("div", { className: "col-span-2 flex flex-col" },
         e("span", { className: "text-[8px] uppercase tracking-wider text-slate-500" }, "视频区间"),

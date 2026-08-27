@@ -8,6 +8,8 @@ import {
   type LocalQualifiedRow,
   type LocalQualifiedSummary,
 } from "./SmartKolInputPanel.LocalQualified";
+import { languageOriginCounts, languageOriginSummaryLabel } from "./LanguageProvenance";
+import { LanguageProvenanceCell } from "./LanguageProvenanceChip";
 
 const EMPTY_SELECTION: ReadonlySet<number> = new Set<number>();
 
@@ -87,6 +89,8 @@ export function StrictQualifiedList({
   const activityUnknownSelectable = summary.rows
     .filter((row) => row.activityUnknown && Number(row.item.kol_pool_id) > 0).length;
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
+  // 语言口径的分布:全是自报时不显示,免得跟旁边的「活跃度未知」挤成一片。
+  const languageStat = languageOriginSummaryLabel(languageOriginCounts(summary.rows.map((row) => row.language)));
   const updateAll = () => {
     if (selectionDisabled || !selectionReady || !onSelectionChange || !selectableIds.length) return;
     const next = new Set(selectedIds);
@@ -138,6 +142,15 @@ export function StrictQualifiedList({
           {extraStats.map((label) => (
             <span key={label} className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[10.5px] leading-4 text-[var(--ds-text-meta)]">{label}</span>
           ))}
+          {languageStat ? (
+            <span
+              data-testid={`${lane}-language-origin-stat`}
+              title="「自报」是他在平台资料里自己填的；「推断」是平台没填、我们照他自己发的个人简介或作品标题倒推的；「未知」是两样都没有。推断只作参考，不改任何合格标准。"
+              className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[10.5px] leading-4 text-[var(--ds-text-meta)]"
+            >
+              {languageStat}
+            </span>
+          ) : null}
           {selectableIds.length || activityUnknownSelectable ? (
             <span className="rounded border border-emerald-300/15 px-1.5 py-0.5 text-[10.5px] leading-4 text-emerald-100">
               可选 {selectableIds.length + activityUnknownSelectable}
@@ -186,7 +199,7 @@ export function StrictQualifiedList({
                 <th className="w-24 px-2 py-2 font-medium">粉丝</th>
                 <th className="w-28 px-2 py-2 font-medium">最新视频</th>
                 <th className="min-w-36 px-2 py-2 font-medium">市场证据</th>
-                <th className="w-20 px-2 py-2 font-medium">语言</th>
+                <th className="w-28 px-2 py-2 font-medium" title="他自己填的语言正常显示；平台没填、由我们照他发的东西推断出来的会带「推断」角标；两样都没有就是「未知」。">语言</th>
                 <th className="w-24 px-2 py-2 font-medium">KOL 类型</th>
                 <th className="min-w-52 px-2 py-2 font-medium">为什么匹配</th>
                 <th className="w-24 px-2 py-2 font-medium">联系方式</th>
@@ -275,7 +288,9 @@ export function StrictQualifiedList({
                   <td className="max-w-48 truncate px-2 py-2" title={row.marketEvidence || "待服务端提供市场证据"}>
                     {row.marketEvidence || "待核验"}
                   </td>
-                  <td className="px-2 py-2 uppercase text-slate-400">{row.languageEvidence || "待核验"}</td>
+                  <td className="px-2 py-2">
+                    <LanguageProvenanceCell provenance={row.language} testId={`${lane}-language-${row.identity}`} />
+                  </td>
                   <td className="px-2 py-2" title={row.accountQuality || "账号质量待核验"}>{row.profileType || "待核验"}</td>
                   <td className="max-w-72 truncate px-2 py-2" title={row.whyFit || "待补充匹配依据"}>
                     {row.whyFit || "待补充"}

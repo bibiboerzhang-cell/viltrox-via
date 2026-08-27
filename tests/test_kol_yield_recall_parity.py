@@ -28,6 +28,14 @@ from app.domains.kol import profile_recall as recall_module
 from app.domains.kol import profile_recall_precision as precision
 from app.domains.kol import profile_recall_storage as storage
 from app.domains.kol.pool_yield_estimate import estimate_pool_yield
+from app.domains.kol.profile_recall_country_gate import (
+    country_hard_filter,
+    country_sql_filter,
+)
+from app.domains.kol.profile_recall_language_gate import (
+    language_hard_filter,
+    language_sql_filter,
+)
 from app.domains.kol.profile_recall_projection import (
     _candidate_filter_verdict,
     _country_match_key,
@@ -215,18 +223,25 @@ def test_every_combination_matches_a_real_recall_run(pool_conn: Any) -> None:
     )
 
 
-def test_include_unknown_cell_gains_exactly_zero_in_both_legs(pool_conn: Any) -> None:
-    """本次谎报的重灾区单独对拍:「含未知」那一格,两边都必须是 0 增益。"""
+def test_include_unknown_cell_now_gains_real_people_in_both_legs(pool_conn: Any) -> None:
+    """「含未知」那一格 2026-08-26 起是**真增益**,而且两边一分不差。
+
+    国家腿此前与语言腿犯同一个病:取数腿的条件是 ``IN (点名的值)``,``country``
+    没填的人恒等于空串,**任何模式下**都不在这个集合里 —— 那一格的增益结构性恒为 0。
+    国家腿改走 ``country_sql_filter`` 之后,「含未知」真能把没填的人捞回来,
+    于是这条从「必须是 0」翻成「必须是真数,并且预估与实搜逐个对得上」。
+    """
     strict = {"countries": ["US"]}
     admitted = {"countries": {"values": ["US"], "mode": "include_unknown"}}
-    assert (
-        estimate_pool_yield(strict, get_connection=lambda: pool_conn)["estimated"]
-        == estimate_pool_yield(admitted, get_connection=lambda: pool_conn)["estimated"]
-        == len(_recall_leg_ids(pool_conn, strict))
-        == len(_recall_leg_ids(pool_conn, admitted))
-    )
+    strict_real = len(_recall_leg_ids(pool_conn, strict))
+    admitted_real = len(_recall_leg_ids(pool_conn, admitted))
+    assert admitted_real > strict_real, "「含未知」必须真能多捞回人"
+    assert estimate_pool_yield(strict, get_connection=lambda: pool_conn)["estimated"] == strict_real
     result = estimate_pool_yield(admitted, get_connection=lambda: pool_conn)
-    assert "unknown_mode_not_recallable" in {item["item"] for item in result["not_estimated"]}
+    assert result["estimated"] == admitted_real
+    # 门面不许再替系统做一个已经不成立的事实声明(「这一档搜索兑现不了」)。
+    assert "unknown_mode_not_recallable" not in {item["item"] for item in result["not_estimated"]}
+    assert parity.mode_is_recallable("countries", "include_unknown")
 
 
 def test_country_synonyms_are_one_shared_key_set(pool_conn: Any) -> None:
@@ -237,12 +252,19 @@ def test_country_synonyms_are_one_shared_key_set(pool_conn: Any) -> None:
         assert estimated == len(_recall_leg_ids(pool_conn, filters)), spelling
 
 
-def test_padded_pool_values_are_counted_as_unrecallable_not_qualified(pool_conn: Any) -> None:
-    """库里写成 ``" US "`` 的人取数腿捞不到 —— 预估必须跟着不算他,并如实说为什么。"""
+def test_country_spelling_gap_is_no_longer_a_recall_gap(pool_conn: Any) -> None:
+    """同义词落差(``United States`` / ``美国`` / ``" US "`` vs 点 ``US``)已经不再丢人。
+
+    这条此前钉的是「这些人取数腿捞不到,预估必须跟着不算他,并如实说为什么」。
+    国家腿改走归一化闭包之后,他们全都捞得回来 —— 于是 ``unrecallable`` 归零,
+    「写法对不上所以取不到」那条说明也不该再挂在界面上(它现在是不实陈述)。
+    """
     result = estimate_pool_yield({"countries": ["US"]}, get_connection=lambda: pool_conn)
     row = next(item for item in result["tri_state"] if item["filter"] == "countries")
-    assert row["unrecallable"] >= 3
-    assert "recall_key_gap" in {item["item"] for item in result["not_estimated"]}
+    assert row["unrecallable"] == 0
+    assert "recall_key_gap" not in {item["item"] for item in result["not_estimated"]}
+    # 各种写法真的都在实搜结果里(固定盘里 United States 20 + US 12 + us 8 + 美国 6 + " US " 3)。
+    assert len(_recall_leg_ids(pool_conn, {"countries": ["US"]})) >= 49
 
 
 def test_estimate_never_promises_more_than_the_recall_leg(pool_conn: Any) -> None:
@@ -291,8 +313,17 @@ def test_recall_sql_predicates_are_pinned(pool_conn: Any) -> None:
     for source in (lexical_src, backfill_src):
         assert parity.RECALL_SQL_PINS["platforms"] in source
         assert parity.RECALL_SQL_PINS["countries"] in source
+        # 语言下推 2026-08-26 起由两条腿共用的构造器产出,两边都必须走它(不许再各写各的)。
         assert parity.RECALL_SQL_PINS["languages"] in source
-        assert 'f"{value}' + parity.RECALL_SQL_PINS["languages_like_suffix"] + '"' in source
+    sql, _params = language_sql_filter(["en"], has_inferred_column=True)
+    assert parity.RECALL_SQL_PINS["languages_self_column"] in sql
+    assert parity.RECALL_SQL_PINS["languages_inferred_column"] in sql
+    country_sql, country_params = country_sql_filter(["US"])
+    assert parity.RECALL_SQL_PINS["countries_column"] in country_sql
+    assert "%" not in country_sql and "LIKE" not in country_sql.upper()
+    assert country_sql.count("?") == len(country_params)
+    # compat 红线:零字面百分号、零 LIKE(见记忆「迁移注释里 ASCII ? 陷阱」同源的转义坑)。
+    assert "%" not in sql and "LIKE" not in sql.upper()
 
 
 def test_recall_binding_expression_is_pinned() -> None:
@@ -308,8 +339,17 @@ def test_recall_binding_expression_is_pinned() -> None:
         assert fragment in source, fragment
 
 
-def test_tri_state_is_still_absent_from_the_recall_sql(pool_conn: Any) -> None:
-    """本次选「缩小预估」的前提:取数腿仍然不认三态。哪天它认了,这条会红,提醒来放开预估。"""
-    source = inspect.getsource(precision.lexical_recall_candidates)
-    assert "countries_mode" not in source
-    assert "languages_mode" not in source
+def test_recall_sql_honours_tri_state_on_both_country_and_language(pool_conn: Any) -> None:
+    """取数腿现在**国家与语言都认三态**;平台照旧只有 ``require`` 兑现得了。
+
+    这条钉住的是预估口径的分界线。国家腿 2026-08-26 与语言腿同日治好同一个病
+    (闸归一化、取数腿只认原值),三档从此都兑现得了。平台这一维 SQL 里根本没有
+    模式这回事,分界线留在它身上 —— 哪天它也认了,这条会红,提醒回来一并放开。
+    """
+    # 两维的三态口径都住在各自取数腿共用的构造器里,腿只负责调它。
+    assert "countries_mode" in inspect.getsource(country_hard_filter)
+    assert "languages_mode" in inspect.getsource(language_hard_filter)
+    for dimension in ("countries", "languages"):
+        assert parity.mode_is_recallable(dimension, "include_unknown"), dimension
+        assert parity.mode_is_recallable(dimension, "exclude"), dimension
+    assert not parity.mode_is_recallable("platforms", "include_unknown")

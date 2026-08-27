@@ -12,6 +12,11 @@ from app.domains.kol.profile_recall_contract import (
     METHOD,
     RecallHit,
 )
+from app.domains.kol.profile_recall_country_gate import country_hard_filter
+from app.domains.kol.profile_recall_language_gate import (
+    INFERRED_POOL_COLUMNS,
+    language_hard_filter,
+)
 from app.domains.kol.profile_recall_precision import (
     LEXICAL_METHOD,
     lexical_recall_candidates,
@@ -52,6 +57,9 @@ def _entry_rows(
         # 这一路没有信号,判定照样跑,只是这个人在这一路上算未知。
         "topic_details_json",
         "tagged_brands_json",
+        # 迁移 305 的推断语言四列(与自报 language 分列存)。同上:列没迁移就退 NULL,
+        # 那个人只是在语言这一路上算未知 —— 读不到绝不等于「不合格」。
+        *INFERRED_POOL_COLUMNS,
     )
     optional_select = ",\n               ".join(
         f"p.{column}" if column in pool_columns else f"NULL AS {column}"
@@ -148,6 +156,9 @@ def _pool_rows_fallback(
         # 这一路没有信号,判定照样跑,只是这个人在这一路上算未知。
         "topic_details_json",
         "tagged_brands_json",
+        # 迁移 305 的推断语言四列(与自报 language 分列存)。同上:列没迁移就退 NULL,
+        # 那个人只是在语言这一路上算未知 —— 读不到绝不等于「不合格」。
+        *INFERRED_POOL_COLUMNS,
     )
     optional_select = ", ".join(
         f"p.{column}" if column in pool_columns else f"NULL AS {column}"
@@ -311,30 +322,18 @@ def _pool_text_fallback_hits(
     if hard_filters.get("followers_max") not in (None, ""):
         broad_clauses.append("p.followers IS NOT NULL AND p.followers <= ?")
         broad_params.append(int(hard_filters["followers_max"]))
-    country_values = [
-        str(value).strip().lower()
-        for value in hard_filters.get("_country_values") or hard_filters.get("countries") or []
-        if str(value).strip()
-    ]
-    if country_values:
-        broad_clauses.append(
-            "LOWER(COALESCE(p.country, '')) IN (" + ",".join("?" for _ in country_values) + ")"
-        )
-        broad_params.extend(country_values)
-    language_values = [
-        str(value).strip().lower()
-        for value in hard_filters.get("_language_values") or hard_filters.get("languages") or []
-        if str(value).strip()
-    ]
-    if language_values:
-        broad_clauses.append(
-            "(" + " OR ".join(
-                "LOWER(COALESCE(p.language, ''))=? OR LOWER(COALESCE(p.language, '')) LIKE ?"
-                for _ in language_values
-            ) + ")"
-        )
-        for value in language_values:
-            broad_params.extend((value, f"{value}-%"))
+    # 国家下推与词法腿共用归一化闭包(见 profile_recall_country_gate.country_hard_filter):
+    # 只按原值字面量筛,库里写「美国」而操作员点了国家码 US 的人一个都捞不回来。
+    country_clause, country_params = country_hard_filter(hard_filters)
+    if country_clause:
+        broad_clauses.append(country_clause)
+        broad_params.extend(country_params)
+    # 语言下推同时认「自报」与「推断」两列(见 profile_recall_language_gate.language_hard_filter):
+    # 只按 p.language 筛,会在取数腿就把 language 为空的人剔光,推断值再准也进不了搜索。
+    language_clause, language_params = language_hard_filter(hard_filters, conn, _table_columns)
+    if language_clause:
+        broad_clauses.append(language_clause)
+        broad_params.extend(language_params)
     broad_where = "".join(f" AND {clause}" for clause in broad_clauses)
     _collect(
         conn.execute(
