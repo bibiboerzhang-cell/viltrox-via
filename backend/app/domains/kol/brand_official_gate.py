@@ -133,6 +133,28 @@ _OFFICIAL_SUFFIXES = frozenset({
     "turkiye",
     "arabia",
 })
+# 品类/自媒体后缀:品牌词后面跟这些词,整只名字就是「品牌 + 它卖的东西」——
+# 2026-08-27 实测漏网案:Samyang 官方号 handle=samyanglens / 名字「Samyang Lens 엘케이삼양」,
+# 余段 lens 不在官方/地区表里 → 主线闸、本闸、发现墙 8 道严格闸**全部放行**,直接混进
+# 达人池;同批还有 TamronVids(Tamron 官方视频号,bio 是产品文案)。
+# 词表刻意只收「几乎不可能出现在真人频道名里、且必须紧跟品牌词」的那几个:
+# photo / photography / studio / films 这类真人常用词**故意不收**(宁可漏拦,绝不误吃)。
+# 防误杀取证(本批 45 个合格新人全量回归):真人 Alt Buzz Lenses(altbuzzlenses)以
+# lenses 结尾却不以品牌词开头 → 放行;店铺 KEH Camera(kehcamera)keh 不是品牌词 → 放行。
+_PRODUCT_CATEGORY_SUFFIXES = frozenset({
+    "lens",
+    "lenses",
+    "optic",
+    "optics",
+    "optical",
+    "camera",
+    "cameras",
+    "vids",
+    "video",
+    "videos",
+    "tv",
+    "gear",
+})
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _OFF_FLAGS = {"0", "false", "no", "off"}
 
@@ -160,16 +182,36 @@ def _split_env(raw: Any) -> list[str]:
     return [_norm(part) for part in re.split(r"[,\s;|]+", _text(raw)) if _norm(part)]
 
 
+def official_suffix_tokens() -> frozenset[str]:
+    """允许跟在品牌词后面的后缀词池 = 官方/地区词 ∪ 品类/自媒体词。
+
+    供发现墙的 exact-handle 快路复用(``discovery_filters._competitor_brand_official``),
+    两边共用一份词表 —— 官号形态的判据只能有一个定义。"""
+    return _OFFICIAL_SUFFIXES | _PRODUCT_CATEGORY_SUFFIXES
+
+
 def _suffix_ok(remainder: str) -> bool:
-    """余段必须整只是官方/地区后缀,或两个后缀相接(officialusa / globalstore)。"""
+    """余段必须整只是后缀词,或两个后缀词相接(officialusa / globalstore / lensusa)。"""
     if not remainder:
         return False
-    if remainder in _OFFICIAL_SUFFIXES:
+    pool = official_suffix_tokens()
+    if remainder in pool:
         return True
     for cut in range(2, len(remainder) - 1):
-        if remainder[:cut] in _OFFICIAL_SUFFIXES and remainder[cut:] in _OFFICIAL_SUFFIXES:
+        if remainder[:cut] in pool and remainder[cut:] in pool:
             return True
     return False
+
+
+def brand_plus_suffix_handle(handle_norm: str, brand_norm: str) -> bool:
+    """归一 handle 是否 = 品牌词 或 品牌词 + 官方/地区/品类后缀(samyanglens / tamronvids)。
+
+    发现墙的 exact-handle 快路用它把「等值品牌名」放宽到「品牌名 + 它卖的东西」。
+    纯字符串判据、零 IO;调用方仍要另外拿 URL 佐证(exact_brand_handle_confirmed)。"""
+    if not handle_norm or not brand_norm or not handle_norm.startswith(brand_norm):
+        return False
+    remainder = handle_norm[len(brand_norm):]
+    return not remainder or _suffix_ok(remainder)
 
 
 def _match_field(value: Any, tokens: frozenset[str]) -> str:
@@ -179,9 +221,7 @@ def _match_field(value: Any, tokens: frozenset[str]) -> str:
         return ""
     # 长词优先(sonyalpha 先于 sony),命中即定;避免短词把长词的余段判成「非后缀」而漏拦。
     for token in sorted(tokens, key=len, reverse=True):
-        if norm == token:
-            return token
-        if norm.startswith(token) and _suffix_ok(norm[len(token):]):
+        if brand_plus_suffix_handle(norm, token):
             return token
     return ""
 
@@ -250,8 +290,36 @@ def is_brand_official_row(row: Any) -> bool:
     )
 
 
+def discovery_wall_verdict(item: Any) -> str:
+    """发现墙的品牌官号判词:词表快路 / 动态判据 / **身份形态**,未命中 ""。
+
+    第三路「身份形态」是 2026-08-27 Samyang 漏网案的落点:整只 handle / 整只名字 =
+    品牌词 + 官方/地区/品类后缀。前两路对 ``samyanglens``(名字「Samyang Lens 엘케이삼양」、
+    48.6k、证据标题「AF 135mm F1.8 FE | The Ultimate Portrait Prime.」)全落空 ——
+    词表路要 bio 企业自述口吻(它的 bio 是 LK 集团愿景,强/弱口吻词一个都不含),
+    动态路要 official/global/驼峰形态(它一个都没有),exact-handle 快路要 URL 里带
+    公开 handle(发现 item 给的是 /channel/UC...,按设计 fail-open)。于是它带着产品级
+    证据穿过全部 8 道严格闸进了达人池。同批漏网的还有 TamronVids(Tamron 官方视频号)。
+
+    判据就是本模块那一份(整只命中才算、后缀表刻意不收 photo/photography/studio 这类
+    真人常用词),不另发明第二套官号形态定义。刻意**只**装在发现墙上、不进
+    ``discovery_filters.discovery_account_gate_verdict``:那条是建档硬闸、没有显式放行口,
+    装上去会连 ``allow_brand_official=True`` 的显式建档也一并拒掉。
+
+    防误吃取证:2026-08-27 实验的 209 个「旧闸放行的真候选」全量回归,第三路只新增判了
+    TamronVids 一个;真达人 Alt Buzz Lenses(以 lenses 结尾但 altbuzz 不是品牌词)、
+    二手商 KEH Camera 均照常放行。懒 import 防循环依赖。
+    """
+    from app.domains.kol.discovery_filters import _brand_official_verdict
+
+    return _brand_official_verdict(item) or ("identity_form" if is_brand_official_row(item) else "")
+
+
 __all__ = [
     "BRAND_OFFICIAL_SKIP_REASON",
+    "brand_plus_suffix_handle",
+    "discovery_wall_verdict",
+    "official_suffix_tokens",
     "brand_official_gate_enabled",
     "brand_official_match",
     "configured_brand_tokens",

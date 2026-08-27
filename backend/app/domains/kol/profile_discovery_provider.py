@@ -7,7 +7,7 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.kol import history_match
-from app.domains.kol.brand_official_gate import BRAND_OFFICIAL_SKIP_REASON
+from app.domains.kol.brand_official_gate import BRAND_OFFICIAL_SKIP_REASON, discovery_wall_verdict
 from app.domains.kol.discovery_enroll_intake import (
     enroll_profile_payload,
     enroll_skip_counts,
@@ -568,10 +568,11 @@ async def discover_new_creators(
             # 走动态判据(官号形态 + bio 企业自述口吻并发,bio 缺=证据不足放行)。两路都
             # 不自动入库、不上新发现墙;「我评测了 FEELWORLD」类正常达人只在标题/内容提品牌,
             # 不命中。库内已有的官号(existing_match)同口径拦,防经发现面回流。
-            _brand_gate = _brand_official_verdict(item)
+            _brand_gate = discovery_wall_verdict(item)
             if _brand_gate:
                 _gate_dropped["brand_official"] += 1
-                _gate_dropped[f"brand_official_{_brand_gate}"] += 1
+                _sub = f"brand_official_{_brand_gate}"
+                _gate_dropped[_sub] = _gate_dropped.get(_sub, 0) + 1
                 logger.debug(
                     "discovery_brand_official_excluded handle=%r platform=%s via=%s",
                     item.get("handle"), platform, _brand_gate,
