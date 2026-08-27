@@ -1,7 +1,7 @@
 import type { VkpiKolPoolItem } from "../../../domains/kol";
 import { normalizeCountryCode } from "./data/countryInfo";
 import { kolHumanDisplayName } from "./lib/kolIdentity";
-import { resolveLanguageProvenance } from "./components/LanguageProvenance";
+import { kolLanguageProvenance } from "./components/LanguageProvenance";
 
 const GEO_A = new Set(["US", "CA", "UK", "DE", "JP", "AU", "SE", "NL", "KR", "SG"]);
 const GEO_B = new Set(["FR", "IT", "ES", "AT", "CH", "BE", "TW", "HK", "MY", "AE", "IE", "RU", "ZA", "NZ"]);
@@ -207,6 +207,21 @@ export function normalizeAudienceGeo(audienceEstimated: Record<string, unknown> 
   return { distribution, meta };
 }
 
+// ── 数据来源分级:本地列 ≠ 抓取器载荷 ──────────────────────────────────────
+//
+// 这条链上喂进归属解析的东西来自两个完全不同的地方:
+//   · `item` 本身 —— 我们自己的列(`vkpi_kol_pool` 的 SELECT * 投影)以及后端裁决;
+//   · `raw_platform_data` 及其嵌套的 `raw` —— **抓取器/平台原样存下来的载荷**。
+//
+// 后者是 provider 说的话,不是他在我们这儿填的。分级读法写死在
+// `components/LanguageProvenance.ts` 的 `kolLanguageProvenance` 里,**这里只调用**:
+// 谁是本地列、谁是载荷,由那一处说了算。
+//
+// 2026-08-27:这里原先自己又实现了一份「本地说不出话就改读载荷」的平行规则 ——
+// 同一条规矩两份实现,而且结果不一样:后端裁决判 unknown 时,那份实现会把裁决整个
+// 丢掉、改用载荷的值显示成「来源不明」,正是「有裁决就照裁决渲染」那条规矩的反面。
+// 一条规矩只留一份实现,这里不再复述它。
+
 export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
   return items.map((item, index) => {
     const raw = item as unknown as Record<string, unknown>;
@@ -322,7 +337,13 @@ export function toCockpitKolPoolRows(items: VkpiKolPoolItem[]) {
       // pool_common.py 列已含 language/following/posts_count/avg_*;first/last_video_at 落 raw_platform_data)。
       language: firstValue(valueFrom(raw, ["language"]), rawPlatformData.language) || null,
       // 语言是他自己填的还是我们照他发的东西推断的 —— 抽屉要如实标注,不能混为一谈。
-      language_provenance: resolveLanguageProvenance([raw, rawPlatformData, nestedObject(rawPlatformData, "raw")]),
+      // 本地列 / 后端裁决与抓取器载荷**分两路读**(见 components/LanguageProvenance.ts
+      // 的 kolLanguageProvenance):载荷是 provider 说的话,它得来的值最多只能说到
+      // 「来源不明」;有裁决时照裁决渲染,载荷一个字都插不进去。
+      language_provenance: kolLanguageProvenance(
+        raw,
+        [rawPlatformData, nestedObject(rawPlatformData, "raw")],
+      ),
       following: numberOrNull(item.following),
       posts_count: numberOrNull(item.posts_count),
       avg_views: numberOrNull(item.avg_views),

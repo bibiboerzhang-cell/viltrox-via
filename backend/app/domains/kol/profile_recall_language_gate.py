@@ -51,6 +51,13 @@ ORIGIN_UNKNOWN = "unknown"
 SELF_REPORTED_SOURCE = "vkpi_kol_profiles.language"
 #: 推断值的来源串 —— 另一列,与自报值分开存,操作员一眼可分。
 INFERRED_SOURCE = "vkpi_kol_pool.language_inferred"
+#: ``projected`` 档读不到逐行来源串时的落点(读得到就如实回那一串,见
+#: :func:`language_evidence_source`)。它只说一句「这个值没有出处」,
+#: **不冒认任何一列** —— 回落自报列等于替他签一份他没签过的声明。
+PROJECTED_SOURCE = "unattributed.language"
+#: ``unknown`` 档的落点:没有取到值,就没有出处可写。空串是这里唯一诚实的答案 ——
+#: 「不知道」不许写成任何一列的名字。
+UNKNOWN_SOURCE = ""
 
 #: 「谁说的」这句话去哪儿读。标量键先读,读不到再拆 facet 证据块。
 #: ``language_source`` 是在线腿 ``profile_online_qualification._candidate_row`` 落的真键。
@@ -406,14 +413,33 @@ def resolve_language_match_key(
 def language_evidence_source(resolution: Any, *, self_source: str = SELF_REPORTED_SOURCE) -> str:
     """证据里的 ``source``:值从哪一列/哪条腿来,就写哪一条 —— 来源可追的落点。
 
-    推断值有两条腿:迁移 305 的列(默认 :data:`INFERRED_SOURCE`),以及在线腿当场
-    检测(``inference_source`` 里写着它自己的来源串)。**不许互相冒名。**
+    **四档各有各的答案,没有一档回落到自报列。**
+
+    * ``self_reported`` —— 自报列(``self_source`` 由调用方指名是哪条腿的自报列);
+    * ``inferred``      —— 两条推断腿各写各的:在线腿写它自己的来源串
+      (``inference_source``),迁移 305 那条列车道写 :data:`INFERRED_SOURCE`。
+      **不许互相冒名。**
+    * ``projected``     —— 有值但证不出是他自己说的:读得到逐行来源串就**如实回那一串**
+      (``platform_content_metadata`` 之类 —— 那才是这个值真正的出处),
+      读不到才落 :data:`PROJECTED_SOURCE`,只说「没有出处」,不冒认任何一列;
+    * ``unknown``       —— 没有取到值就没有出处,回 :data:`UNKNOWN_SOURCE`(空串)。
+
+    2026-08-26 复核前只有 ``inferred`` 开了特例,``projected`` 与 ``unknown`` 一律回落
+    ``self_source`` —— 那是把「证不出」和「不知道」两件事都说成「他自己说的」。
+    认不出的档位(拼写漂移 / 将来的新档)一律走同一个保守出口:宁可空着,
+    **绝不退化成自报** —— 与 ``self_reported`` 那个明牌布尔同一个方向。
+
+    只改这个值头上「谁说的」那句话,不碰 ``values`` —— 一个人的去留都不改。
     """
     entry = resolution if isinstance(resolution, dict) else {}
     origin = str(entry.get("origin") or ORIGIN_UNKNOWN)
+    if origin == ORIGIN_SELF_REPORTED:
+        return self_source or SELF_REPORTED_SOURCE
     if origin == ORIGIN_INFERRED:
         return str(entry.get("inference_source") or "").strip()[:80] or INFERRED_SOURCE
-    return self_source or SELF_REPORTED_SOURCE
+    if origin == ORIGIN_PROJECTED:
+        return str(entry.get("origin_source") or "").strip()[:80] or PROJECTED_SOURCE
+    return UNKNOWN_SOURCE
 
 
 def language_gate_evidence(
@@ -428,7 +454,11 @@ def language_gate_evidence(
     """``qualification_evidence.language`` 的完整块。
 
     ``values`` / ``targets`` / ``filter_requested`` / ``invalid_targets`` / ``passed`` /
-    ``source`` 五个既有键**逐字保留**(下游契约),只在旁边加上来源分层的诚实字段。
+    ``source`` 六个既有键**一个不少**(下游契约),只在旁边加上来源分层的诚实字段。
+
+    ``source`` 的**键名与类型不动**,只有 ``projected`` / ``unknown`` 两档的取值不再
+    回落自报列(见 :func:`language_evidence_source`):自报档与推断档逐字不变,
+    另两档改说真话。这只影响这一格显示什么,不影响 ``values`` / ``passed``。
     """
     origin = str(resolution.get("origin") or ORIGIN_UNKNOWN)
     evidence: dict[str, Any] = {
@@ -587,8 +617,10 @@ __all__ = [
     "ORIGIN_PROJECTED",
     "ORIGIN_SELF_REPORTED",
     "ORIGIN_UNKNOWN",
+    "PROJECTED_SOURCE",
     "SELF_DECLARED_SOURCES",
     "SELF_REPORTED_SOURCE",
+    "UNKNOWN_SOURCE",
     "admitted_confidence_tiers",
     "classify_language_origin",
     "language_evidence_block",

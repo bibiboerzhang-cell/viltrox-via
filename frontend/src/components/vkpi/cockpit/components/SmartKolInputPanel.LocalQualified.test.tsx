@@ -254,6 +254,73 @@ describe("local qualified first-list contract", () => {
     expect(screen.queryByText("private@example.com")).toBeNull();
   });
 
+  // 门面上的说明只要与实际行为对不上,就是在替系统说一句没验证过的话。这两句过去
+  // 都不对:一句说推断「只作参考」(其实它真的在参与语言筛选),一句把「未知」定义成
+  // 「两样都没有」(其实还有别的来路)。锁住改后的文案。
+  //
+  // 历轮锁住的两件事:
+  //  · 界面显示四档,说明就得讲满四档 —— 少讲的那一档会被顺手当成「他自己填的」;
+  //  · 「两样都没有就是未知」这种排他式写法一个字都不许留 —— 照它读,「来源不明」
+  //    的人本该显示成「未知」,与眼前看到的直接打架。
+  //
+  // 本轮:说明里只许出现界面上真会出现的状态。「手上两份记录说法不一致、判不出该信
+  // 哪一份」那一档,随门面仲裁被删一起消失了 —— 归属现在只由服务端裁决说了算,门面
+  // 不再自己判该信哪份,这个状态永远不会再出现,留着它就是在描述一个不存在的东西。
+  // 顶上它位置的是「未知」真正的第二种来路:试着判断过、但把握不够,没当结论。
+  it("keeps the language tooltips honest about filtering and about what 未知 covers", () => {
+    render(<LocalQualifiedList result={result([{
+      kol_pool_id: 11,
+      handle: "inferred-eleven",
+      platform: "youtube",
+      followers: 21000,
+      qualification_evidence: strictProof({
+        language: { values: ["en"], targets: ["en"], origin: "inferred", passed: true },
+      }),
+      source_fields: { server_rank: 1 },
+    }])} />);
+
+    const statCopy = screen.getByTestId("local-language-origin-stat").getAttribute("title") || "";
+    // 推断值确实在参与硬筛,不许再说它「只作参考,不改任何合格标准」。
+    expect(statCopy).not.toContain("只作参考");
+    expect(statCopy).toContain("参与语言筛选");
+    // 但也不许反过来吓人:被影响的只有语言这一条,别的合格标准一格没动。
+    expect(statCopy).toContain("语言之外的其他合格标准不受影响");
+    const headerCopy = screen.getByText("语言").getAttribute("title") || "";
+
+    // 四档一档不少 —— 界面会显示哪几档,说明就得讲哪几档。
+    ["自报", "推断", "来源不明", "未知"].forEach((tier) => {
+      expect(statCopy).toContain(tier);
+      expect(headerCopy).toContain(tier);
+    });
+
+    // 「未知」的定义要说全:我们这里没有他的语言,**或者**试着判断过、但把握不够,
+    // 没当结论 —— 后者才是现在真正的第二种来路。
+    expect(statCopy).toContain("把握不够");
+    expect(headerCopy).toContain("把握不够");
+    // 门面仲裁已经删了,这一档永远不会出现在界面上,说明里一个字都不许留。
+    expect(statCopy).not.toContain("说法不一致");
+    expect(headerCopy).not.toContain("说法不一致");
+
+    // 排他式写法必须绝迹:照「两样都没有就是未知」读,「来源不明」的人本该显示成
+    // 「未知」,而他实际上带着值和「来源不明」角标显示 —— 说明与显示直接打架。
+    ["两样都没有", "两者都没有", "都没有就是"].forEach((phrase) => {
+      expect(statCopy).not.toContain(phrase);
+      expect(headerCopy).not.toContain(phrase);
+    });
+
+    // 有推断值但印证不够的那一票:说明里必须有它的位置,并且写明它按「未知」算、
+    // 不算进「推断」—— 否则操作员会以为我们连试都没试过,或者以为它被算成了推断。
+    expect(statCopy).toContain("印证");
+    expect(statCopy).toContain("不算进上面的「推断」");
+    expect(headerCopy).toContain("印证不够");
+
+    // 门面禁内部术语。
+    ["置信度", "provenance", "origin", "projected", "哨兵"].forEach((term) => {
+      expect(statCopy).not.toContain(term);
+      expect(headerCopy).not.toContain(term);
+    });
+  });
+
   it("falls back to the server-owned follower proof when the session row has no root value", () => {
     const summary = localQualifiedSummary(result([{
       kol_pool_id: 9,

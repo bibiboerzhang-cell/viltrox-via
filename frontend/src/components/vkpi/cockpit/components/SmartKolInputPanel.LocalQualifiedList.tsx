@@ -90,6 +90,25 @@ export function StrictQualifiedList({
     .filter((row) => row.activityUnknown && Number(row.item.kol_pool_id) > 0).length;
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
   // 语言口径的分布:全是自报时不显示,免得跟旁边的「活跃度未知」挤成一片。
+  //
+  // 这一格与语言列表头的两句悬停说明必须与**实际显示出来的档数**对得上。说明少一档,
+  // 那一档就会被操作员顺手归进他最熟的那一档 —— 而最熟的那一档正是「他自己填的」。
+  // 历轮补过的、以及本轮补的:
+  //  1. 「推断只作参考,不改任何合格标准」是假话 —— 推断出来的语言和自报的语言一样
+  //     参与语言筛选,真的决定一个人被选中还是被筛掉。改的是**文案**:照实说出来,
+  //     同时讲清它只管语言这一条、别的合格标准一格没动。
+  //  2. 「未知」不止一种来路 —— 还有一种是照他发的东西试着判断过、但把握不够,
+  //     没当结论,于是值不显示(见 LanguageProvenance.ts 的 WITHHELD_NOTE 一档)。
+  //     曾经写在这里的「两份记录各执一词」那一档已经随门面仲裁一起删掉了:
+  //     现在归属只由服务端裁决说了算,门面不再自己判该信哪一份,那个状态永不出现。
+  //  3. 本轮:界面已经会显示第四档「来源不明」(资料里有这个值,但看不出是不是他自己
+  //     填的),说明却还只讲三档,而且是**排他式**的写法(「两样都没有就是未知」)——
+  //     照那句话读,来源不明的人本该显示成「未知」,与眼前看到的直接打架。四档改成
+  //     逐档正面说,不再用「剩下的就是」这种反推句式。
+  //  4. 同一轮:有推断值、但他发的文字互相印证不够的那一票,服务端没敢用、不参与筛选,
+  //     门面也不许把它算成推断档。说明里给它留了位置,免得操作员看见一个「未知」,
+  //     以为我们连试都没试过。
+  // 两句说明只转述服务端已经定好的口径,不在这里判定谁是哪一档。
   const languageStat = languageOriginSummaryLabel(languageOriginCounts(summary.rows.map((row) => row.language)));
   const updateAll = () => {
     if (selectionDisabled || !selectionReady || !onSelectionChange || !selectableIds.length) return;
@@ -145,7 +164,7 @@ export function StrictQualifiedList({
           {languageStat ? (
             <span
               data-testid={`${lane}-language-origin-stat`}
-              title="「自报」是他在平台资料里自己填的；「推断」是平台没填、我们照他自己发的个人简介或作品标题倒推的；「未知」是两样都没有。推断只作参考，不改任何合格标准。"
+              title="这一栏按「这个语言是谁说的」分四档。「自报」是他在平台资料里自己填的；「推断」是平台资料没填、我们照他自己发的个人简介或作品标题倒推出来的；「来源不明」是资料里确实有这个值、但看不出是不是他自己填的；「未知」有两种来路：一种是我们这里没有他的语言，另一种是照他发的东西试着判断过、但把握不够，没当结论。除「未知」外，前三档的语言值都一样参与语言筛选，会影响一个人被选中还是被筛掉。推断另有一道门槛：只有他发的文字里有多处互相印证才算数；印证不足、我们没敢用的那一票不参与筛选，也不算进上面的「推断」，按「未知」计。语言之外的其他合格标准不受影响。"
               className="rounded border border-white/[0.08] px-1.5 py-0.5 text-[10.5px] leading-4 text-[var(--ds-text-meta)]"
             >
               {languageStat}
@@ -199,7 +218,7 @@ export function StrictQualifiedList({
                 <th className="w-24 px-2 py-2 font-medium">粉丝</th>
                 <th className="w-28 px-2 py-2 font-medium">最新视频</th>
                 <th className="min-w-36 px-2 py-2 font-medium">市场证据</th>
-                <th className="w-28 px-2 py-2 font-medium" title="他自己填的语言正常显示；平台没填、由我们照他发的东西推断出来的会带「推断」角标；两样都没有就是「未知」。">语言</th>
+                <th className="w-28 px-2 py-2 font-medium" title="这一格分四档。「自报」是他在平台资料里自己填的，值正常显示、不带角标；「推断」是平台资料没填、由我们照他发的东西倒推出来的，值旁边带「推断」角标；「来源不明」是资料里有这个值、但看不出是不是他自己填的，值旁边带「来源不明」角标；「未知」有两种来路：一种是我们这里没有他的语言，另一种是照他发的东西试着判断过，但他发的文字互相印证不够、我们把握不够，没当结论。这两种都只显示「未知」，不显示语言值，也不带「推断」角标。">语言</th>
                 <th className="w-24 px-2 py-2 font-medium">KOL 类型</th>
                 <th className="min-w-52 px-2 py-2 font-medium">为什么匹配</th>
                 <th className="w-24 px-2 py-2 font-medium">联系方式</th>

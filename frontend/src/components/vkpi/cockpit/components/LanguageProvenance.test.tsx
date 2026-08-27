@@ -7,6 +7,23 @@ import { StrictQualifiedList } from "./SmartKolInputPanel.LocalQualifiedList";
 import { localQualifiedSummary } from "./SmartKolInputPanel.LocalQualified";
 import { SMART_KOL_LANGUAGE_OPTIONS } from "./SmartKolInputPanel.QualityFilters";
 
+// 服务端 profile_recall_language_gate.language_gate_evidence() 的真实出参形状。
+// 归属由它裁,门面只渲染 —— 所以本文件里凡是要看「档」的用例,一律从这个形状出发。
+function gateEvidence(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    values: [], targets: [], filter_requested: false, invalid_targets: [], passed: true,
+    source: "vkpi_kol_profiles.language",
+    origin: "unknown",
+    inferred: false,
+    self_reported: false,
+    self_reported_values: [],
+    inferred_values: [],
+    projected_values: [],
+    origin_source: "",
+    ...overrides,
+  };
+}
+
 function strictProof(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     schema: "smart_local_gate_evidence_v2",
@@ -29,10 +46,14 @@ function result(items: any[]): any {
   };
 }
 
-describe("language provenance: 自报 / 推断 / 未知 三态可追", () => {
-  it("平台自报值照常显示，并且说得出是他自己填的", () => {
+describe("裁决怎么说,门面就怎么显示", () => {
+  it("裁决说自报:值照常显示，并且说得出是他自己填的", () => {
     const provenance = resolveLanguageProvenance([
-      { language: { values: ["en"], source: "vkpi_kol_profiles.language", passed: true } },
+      {
+        language: gateEvidence({
+          values: ["en"], origin: "self_reported", self_reported: true, self_reported_values: ["en"],
+        }),
+      },
       { language: "en" },
     ]);
     expect(provenance.origin).toBe("self_reported");
@@ -40,11 +61,18 @@ describe("language provenance: 自报 / 推断 / 未知 三态可追", () => {
     expect(provenance.originLabel).toBe("自报");
     expect(provenance.basisLabel).toBe("");
     expect(provenance.title).toContain("自己填的");
+    expect(provenance.hasServerVerdict).toBe(true);
   });
 
-  it("来源串带推断口径时判为推断，并说出依据是个人简介", () => {
+  it("裁决说推断:说出依据是个人简介", () => {
     const provenance = resolveLanguageProvenance([
-      { language: { values: ["ja"], source: "content_inference_v1", evidence_fields: ["bio"] } },
+      {
+        language: gateEvidence({
+          values: ["ja"], origin: "inferred", inferred: true, inferred_values: ["ja"],
+          source: "vkpi_kol_pool.language_inferred",
+          basis: "bio", evidence_fields: ["bio"],
+        }),
+      },
     ]);
     expect(provenance.origin).toBe("inferred");
     expect(provenance.originLabel).toBe("推断");
@@ -53,15 +81,15 @@ describe("language provenance: 自报 / 推断 / 未知 三态可追", () => {
     expect(provenance.title).toContain("个人简介");
   });
 
-  it("既有的公开内容检出口径同样判为推断，依据是作品标题", () => {
+  it("裁决落在 facet 证据块上时同样照收，依据是作品标题", () => {
     const provenance = resolveLanguageProvenance([
       {
         facet_evidence: {
-          language: {
-            value: "ko",
+          language: gateEvidence({
+            values: ["ko"], origin: "inferred", inferred: true, inferred_values: ["ko"],
             source: "provider_public_content_language_v1",
             evidence_fields: ["sample_title", "title"],
-          },
+          }),
         },
       },
     ]);
@@ -71,23 +99,63 @@ describe("language provenance: 自报 / 推断 / 未知 三态可追", () => {
 
   it("简介与标题都用到时两样都说出来", () => {
     const provenance = resolveLanguageProvenance([
-      { language_source: "inferred_from_public_text", language: "de", language_evidence_fields: ["bio", "sample_title"] },
+      {
+        language_evidence: gateEvidence({
+          values: ["de"], origin: "inferred", inferred: true, inferred_values: ["de"],
+          evidence_fields: ["bio", "sample_title"],
+        }),
+      },
     ]);
     expect(provenance.origin).toBe("inferred");
     expect(provenance.basisLabel).toBe("个人简介和作品标题");
   });
 
-  it("布尔标记也算数：inferred=true 时绝不冒充自报", () => {
+  it("落库列 language_inferred 是我们那一列,没有裁决时也算得上推断", () => {
     const provenance = resolveLanguageProvenance([
-      { language: { values: ["fr"], source: "vkpi_kol_profiles.language", inferred: true } },
+      { inferred_language: "es", inferred_language_confidence: "high" },
     ]);
     expect(provenance.origin).toBe("inferred");
+    expect(provenance.displayLabel).toBe("ES");
+    expect(provenance.hasServerVerdict).toBe(false);
   });
 
-  it("只在推断形状的键上有值时判为推断", () => {
-    const provenance = resolveLanguageProvenance([{ inferred_language: "es" }]);
-    expect(provenance.origin).toBe("inferred");
-    expect(provenance.displayLabel).toBe("ES");
+  // 第五种形态在**没有裁决**这条路上也得成立:后端在同一行上判「未知(试过、没敢用)」的
+  // 那一票,不许在 KOL 池 / 详情抽屉里被升格成「推断」。
+  it("没有裁决时,把握度没过门槛的推断值算未知,不算推断,值也不上墙", () => {
+    const provenance = resolveLanguageProvenance([
+      {
+        language: null,
+        language_inferred: "ko",
+        language_inferred_source: "video_titles",
+        language_inferred_confidence: "low",
+      },
+    ]);
+    expect(provenance.origin).toBe("unknown");
+    expect(provenance.displayLabel).toBe("未知");
+    expect(provenance.inferenceWithheld).toBe(true);
+    expect(provenance.noteLabel).toBe("试着判断过，但把握不够，没当结论");
+    expect(provenance.codes).toEqual([]);
+    expect(provenance.inferredCodes).toEqual([]);
+    expect(provenance.title).not.toContain("KO");
+    expect(provenance.title).not.toContain("韩语");
+  });
+
+  it("没有裁决、连把握度都读不出来时同样不放行 —— 证不出达标就是没达标", () => {
+    const provenance = resolveLanguageProvenance([
+      { language: null, language_inferred: "ko", language_inferred_source: "video_titles" },
+    ]);
+    expect(provenance.origin).toBe("unknown");
+    expect(provenance.inferenceWithheld).toBe(true);
+    expect(provenance.codes).toEqual([]);
+  });
+
+  it("自报列有值时,门槛下的那一票不改变这一格显示什么", () => {
+    const provenance = resolveLanguageProvenance([
+      { language: "en", language_inferred: "ja", language_inferred_confidence: "low" },
+    ]);
+    expect(provenance.origin).toBe("projected");
+    expect(provenance.displayLabel).toBe("EN");
+    expect(provenance.inferredCodes).toEqual([]);
   });
 
   it("拿不到语言时显示「未知」，不留空；话只说到「我们这里没有」为止", () => {
@@ -95,25 +163,19 @@ describe("language provenance: 自报 / 推断 / 未知 三态可追", () => {
     expect(provenance.origin).toBe("unknown");
     expect(provenance.displayLabel).toBe("未知");
     expect(provenance.title).toContain("我们这里没有");
-    // 「推不出来」是一句我们**查不到**的事实声明:推断列有没有被读到、推断有没有跑过,
-    // 门面无从知道。不知道的事就不许写在墙上。
-    // 说得出口的只有「我们这里没有拿到」这种关于收到了什么的陈述。
+    // 「推不出来」是一句我们**查不到**的事实声明:推断有没有跑过,这一档无从知道。
+    // 只有服务端亲口说了它试过(旁挂了一票),才许说「试过」——见「没过门槛」那一组。
     expect(provenance.title).toContain("没有拿到");
-    ["没有足够的文字", "推不出", "推断不出", "无法推断", "试过"].forEach((claim) => {
+    ["没有足够的文字", "推不出", "推断不出", "无法推断", "试着判断"].forEach((claim) => {
       expect(provenance.title).not.toContain(claim);
       expect(provenance.noteLabel).not.toContain(claim);
     });
   });
 
-  it("条目自己的 source 是「这条结果哪来的」，不许当语言来源读", () => {
-    const provenance = resolveLanguageProvenance([
-      { language: "en", source: "platform_discovery_strict", origin: "content_inference_v1" },
-    ]);
-    expect(provenance.origin).toBe("self_reported");
-  });
-
   it("多语言与地区后缀都归一到可读文案", () => {
-    const provenance = resolveLanguageProvenance([{ language: { values: ["zh-CN", "en_US", "zh"] } }]);
+    const provenance = resolveLanguageProvenance([
+      { language: gateEvidence({ values: ["zh-CN", "en_US", "zh"], origin: "projected" }) },
+    ]);
     expect(provenance.codes).toEqual(["zh", "en"]);
     expect(provenance.displayLabel).toBe("ZH/EN");
     expect(provenance.nameLabel).toBe("中文、英语");
@@ -137,26 +199,61 @@ describe("language provenance: 自报 / 推断 / 未知 三态可追", () => {
   });
 });
 
-// 服务端 profile_recall_language_gate.language_gate_evidence() 的真实出参形状。
-function gateEvidence(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
-    values: [], targets: [], filter_requested: false, invalid_targets: [], passed: true,
-    source: "vkpi_kol_profiles.language",
-    origin: "unknown",
-    inferred: false,
-    self_reported_values: [],
-    inferred_values: [],
-    ...overrides,
-  };
-}
+// ── 拆推导:没有裁决时,降级路径没有通向「自报」的出口 ─────────────────────────
+//
+// 这一组钉的是三轮复核都没根治的那句假话:门面手上有个值、又没有任何一份材料说得出
+// 是谁填的,于是默认说成「他自己填的」。现在这条路被拆了 —— 有值说「来源不明」,
+// 没值说「未知」,两个出口,一个都不通向「自报」。
+describe("没有裁决时绝不落「自报」", () => {
+  it("裸的 language 列:说得出「资料里有」,说不出「他自己填的」", () => {
+    const provenance = resolveLanguageProvenance([{ language: "en" }]);
+    expect(provenance.hasServerVerdict).toBe(false);
+    expect(provenance.origin).toBe("projected");
+    expect(provenance.originLabel).toBe("来源不明");
+    expect(provenance.displayLabel).toBe("EN");
+    expect(provenance.selfReportedCodes).toEqual([]);
+    expect(provenance.divergenceLabel).toBe("");
+    expect(provenance.title).not.toContain("他在平台资料里自己填的");
+  });
 
-describe("对齐服务端硬闸给的三态明牌", () => {
+  it("行上的 source / origin 这类记号不是裁决,读了就是门面自己在判", () => {
+    const provenance = resolveLanguageProvenance([
+      { language: "en", source: "platform_discovery_strict", origin: "content_inference_v1" },
+    ]);
+    expect(provenance.origin).toBe("projected");
+    expect(provenance.hasServerVerdict).toBe(false);
+    expect(provenance.title).not.toContain("他在平台资料里自己填的");
+  });
+
+  it("自报列与推断列同时有值、又没有裁决:显示自报列那个值,但不认领那句声明", () => {
+    const provenance = resolveLanguageProvenance([{ language: "en", language_inferred: "ja" }]);
+    expect(provenance.origin).toBe("projected");
+    expect(provenance.displayLabel).toBe("EN");
+    expect(provenance.selfReportedCodes).toEqual([]);
+    // 「他自己填的是……」是替他转述一句话,没人说过就一个字都不许出现。
+    expect(provenance.divergenceLabel).toBe("");
+    expect(provenance.title).not.toContain("他自己填的是");
+  });
+
+  it("language_inferred 当布尔标记用时不当语言值读,也不因此判成推断", () => {
+    const provenance = resolveLanguageProvenance([{ language: "en", language_inferred: true }]);
+    expect(provenance.origin).toBe("projected");
+    expect(provenance.displayLabel).toBe("EN");
+  });
+
+  it("筛选面板里能勾的语言,没有裁决时一个都不许被说成「自报」", () => {
+    SMART_KOL_LANGUAGE_OPTIONS.forEach((option) => {
+      expect(resolveLanguageProvenance([{ language: option.value }]).origin).not.toBe("self_reported");
+    });
+  });
+});
+
+describe("对齐服务端裁决的四档明牌", () => {
   it("origin=self_reported 照实显示为自报", () => {
     const provenance = resolveLanguageProvenance([
       {
         language: gateEvidence({
-          values: ["en"], origin: "self_reported", self_reported_values: ["en"],
-          source: "vkpi_kol_profiles.language",
+          values: ["en"], origin: "self_reported", self_reported: true, self_reported_values: ["en"],
         }),
       },
     ]);
@@ -192,7 +289,7 @@ describe("对齐服务端硬闸给的三态明牌", () => {
     const provenance = resolveLanguageProvenance([
       {
         language: gateEvidence({
-          values: ["zh"], origin: "self_reported",
+          values: ["zh"], origin: "self_reported", self_reported: true,
           self_reported_values: ["zh"], inferred_values: ["en"],
         }),
       },
@@ -219,44 +316,55 @@ describe("对齐服务端硬闸给的三态明牌", () => {
     expect(provenance.title).not.toContain("langdetect");
     expect(provenance.title).not.toContain("置信");
   });
-
-  it("池行有自报值时,推断列不顶替它", () => {
-    const provenance = resolveLanguageProvenance([{ language: "en", language_inferred: "ja" }]);
-    expect(provenance.origin).toBe("self_reported");
-    expect(provenance.displayLabel).toBe("EN");
-    expect(provenance.divergenceLabel).toBe("他自己填的是英语，照他发的东西推断出来的是日语。");
-  });
-
-  it("language_inferred 当布尔标记用时也认，不当语言代码读", () => {
-    const provenance = resolveLanguageProvenance([{ language: "en", language_inferred: true }]);
-    expect(provenance.origin).toBe("inferred");
-    expect(provenance.displayLabel).toBe("EN");
-  });
 });
 
 describe("language provenance 统计条", () => {
+  const verdict = (overrides: Record<string, unknown>) =>
+    resolveLanguageProvenance([{ language: gateEvidence(overrides) }]);
+
   it("全是自报时不占位，出现推断或未知才显示", () => {
-    const selfOnly = [resolveLanguageProvenance([{ language: "en" }])];
+    const selfOnly = [verdict({ values: ["en"], origin: "self_reported", self_reported: true })];
     expect(languageOriginSummaryLabel(languageOriginCounts(selfOnly))).toBe("");
     const mixed = [
-      resolveLanguageProvenance([{ language: "en" }]),
-      resolveLanguageProvenance([{ inferred_language: "ja" }]),
-      resolveLanguageProvenance([{}]),
+      verdict({ values: ["en"], origin: "self_reported", self_reported: true }),
+      verdict({ values: ["ja"], origin: "inferred", inferred: true, inferred_values: ["ja"] }),
+      verdict({}),
     ];
-    expect(languageOriginCounts(mixed)).toEqual({ selfReported: 1, inferred: 1, unknown: 1 });
+    expect(languageOriginCounts(mixed)).toEqual({ selfReported: 1, inferred: 1, projected: 0, unknown: 1 });
     expect(languageOriginSummaryLabel(languageOriginCounts(mixed))).toBe("语言 · 自报 1 · 推断 1 · 未知 1");
+  });
+
+  it("「来源不明」这一档也要数进去 —— 少列一档，那几个人就被顺手当成自报了", () => {
+    const four = [
+      verdict({ values: ["en"], origin: "self_reported", self_reported: true }),
+      verdict({ values: ["ja"], origin: "inferred", inferred: true, inferred_values: ["ja"] }),
+      verdict({ values: ["ko"], origin: "projected", projected_values: ["ko"] }),
+      verdict({}),
+    ];
+    const counts = languageOriginCounts(four);
+    expect(counts).toEqual({ selfReported: 1, inferred: 1, projected: 1, unknown: 1 });
+    // 四个数字加起来等于人数 —— 这一栏不许有「没被数进去的人」。
+    expect(counts.selfReported + counts.inferred + counts.projected + counts.unknown).toBe(four.length);
+    expect(languageOriginSummaryLabel(counts)).toBe("语言 · 自报 1 · 推断 1 · 来源不明 1 · 未知 1");
   });
 });
 
 describe("language provenance 门面件", () => {
   it("自报不挂角标，推断挂「推断」角标", () => {
     const { rerender } = render(
-      <LanguageProvenanceCell provenance={resolveLanguageProvenance([{ language: "en" }])} testId="cell" />,
+      <LanguageProvenanceCell
+        provenance={resolveLanguageProvenance([
+          { language: gateEvidence({ values: ["en"], origin: "self_reported", self_reported: true }) },
+        ])}
+        testId="cell"
+      />,
     );
     expect(screen.getByTestId("cell").textContent).toBe("EN");
     rerender(
       <LanguageProvenanceCell
-        provenance={resolveLanguageProvenance([{ language_source: "content_inference_v1", language: "en" }])}
+        provenance={resolveLanguageProvenance([
+          { language: gateEvidence({ values: ["en"], origin: "inferred", inferred: true, inferred_values: ["en"] }) },
+        ])}
         testId="cell"
       />,
     );
@@ -267,7 +375,12 @@ describe("language provenance 门面件", () => {
     render(
       <LanguageProvenanceDetail
         provenance={resolveLanguageProvenance([
-          { language_source: "content_inference_v1", language: "ja", language_evidence_fields: ["bio"] },
+          {
+            language: gateEvidence({
+              values: ["ja"], origin: "inferred", inferred: true, inferred_values: ["ja"],
+              evidence_fields: ["bio"],
+            }),
+          },
         ])}
         testId="detail"
       />,
@@ -288,16 +401,13 @@ describe("language provenance 门面件", () => {
 });
 
 // ── H4:平台把「没填」写成占位词时,门面绝不许把它当成一句自报声明 ──────────────
-//
-// 这一组钉的是本功能的立身之本:自报 / 推断 / 未知 三态泾渭分明。
-// 判不出就是「未知」——不显示任何具体值,不标「自报」,也不拼出「他自己填的是……」。
 const PLACEHOLDER_VALUES = [
   "Unknown", "unknown", "UNKNOWN", "N/A", "n/a", "None", "null", "NA",
   "unspecified", "not_specified", "NOT SPECIFIED", "not-specified",
   "undetermined", "unavailable", "no data", "other", "auto", "default", "?",
   "und", "zxx", "mis", "mul", "未知", "无", "未填写", "不详",
-  // 光剩一根横杠的空位占位符。"\u2014" 是长破折号「—」——**这块门面自己原来用的那个**。
-  "-", "\u2014", "\u2013", "\u2012", "\u2015", "\u2212", "\uFF0D", "--", "___",
+  // 光剩一根横杠的空位占位符。"—" 是长破折号「—」——**这块门面自己原来用的那个**。
+  "-", "—", "–", "‒", "―", "−", "－", "--", "___",
 ];
 
 describe("占位词不是语言，更不是一句自报声明", () => {
@@ -318,12 +428,12 @@ describe("占位词不是语言，更不是一句自报声明", () => {
     expect(provenance.displayLabel).toBe("未知");
   });
 
-  it("服务端硬闸把占位词当自报值传上来时，门面不跟着认", () => {
+  it("裁决把占位词当自报值传上来时，门面不跟着认", () => {
     const provenance = resolveLanguageProvenance([
       {
         language: gateEvidence({
-          values: ["unknown"], origin: "self_reported", self_reported_values: ["unknown"],
-          source: "vkpi_kol_profiles.language",
+          values: ["unknown"], origin: "self_reported", self_reported: true,
+          self_reported_values: ["unknown"],
         }),
       },
     ]);
@@ -333,21 +443,28 @@ describe("占位词不是语言，更不是一句自报声明", () => {
   });
 
   it("占位词与真值混在一起时只留真值，占位词不上墙", () => {
-    const provenance = resolveLanguageProvenance([{ language: { values: ["Unknown", "en", "N/A"] } }]);
+    const provenance = resolveLanguageProvenance([
+      {
+        language: gateEvidence({
+          values: ["Unknown", "en", "N/A"], origin: "self_reported", self_reported: true,
+          self_reported_values: ["Unknown", "en", "N/A"],
+        }),
+      },
+    ]);
     expect(provenance.origin).toBe("self_reported");
     expect(provenance.codes).toEqual(["en"]);
     expect(provenance.displayLabel).toBe("EN");
   });
 
   it("真语言不会被误当占位词吃掉（挪威语 no / 荷兰语 nl）", () => {
-    expect(resolveLanguageProvenance([{ language: "no" }]).origin).toBe("self_reported");
     expect(resolveLanguageProvenance([{ language: "no" }]).displayLabel).toBe("NO");
+    expect(resolveLanguageProvenance([{ language: "no" }]).origin).toBe("projected");
     expect(resolveLanguageProvenance([{ language: "nl" }]).nameLabel).toBe("荷兰语");
   });
 
   it("筛选面板里能勾的语言，一个都不许被当成占位词", () => {
     SMART_KOL_LANGUAGE_OPTIONS.forEach((option) => {
-      expect(resolveLanguageProvenance([{ language: option.value }]).origin).toBe("self_reported");
+      expect(resolveLanguageProvenance([{ language: option.value }]).origin).not.toBe("unknown");
     });
   });
 });
@@ -370,7 +487,7 @@ describe("没有自报值就不许说「他自己填的是……」", () => {
     expect(provenance.title).not.toContain("他自己填的是");
   });
 
-  it("硬闸证据里 self_reported_values 是占位词时，分歧那句话也不许出现", () => {
+  it("裁决里 self_reported_values 是占位词时，分歧那句话也不许出现", () => {
     const provenance = resolveLanguageProvenance([
       {
         language: gateEvidence({
@@ -394,8 +511,15 @@ describe("没有自报值就不许说「他自己填的是……」", () => {
     expect(provenance.divergenceLabel).toBe("");
   });
 
-  it("他真填了值、且与我们推断的不一样时，照旧如实说出分歧", () => {
-    const provenance = resolveLanguageProvenance([{ language: "en", language_inferred: "ja" }]);
+  it("裁决说他真填了、且与我们推断的不一样时，照旧如实说出分歧", () => {
+    const provenance = resolveLanguageProvenance([
+      {
+        language: gateEvidence({
+          values: ["en"], origin: "self_reported", self_reported: true,
+          self_reported_values: ["en"], inferred_values: ["ja"],
+        }),
+      },
+    ]);
     expect(provenance.divergenceLabel).toBe("他自己填的是英语，照他发的东西推断出来的是日语。");
   });
 
@@ -414,7 +538,12 @@ describe("没有自报值就不许说「他自己填的是……」", () => {
     rerender(
       <LanguageProvenanceDetail
         provenance={resolveLanguageProvenance([
-          { language: "Unknown", language_inferred: "ko", language_inferred_source: "video_titles" },
+          {
+            language: "Unknown",
+            language_inferred: "ko",
+            language_inferred_source: "video_titles",
+            language_inferred_confidence: "high",
+          },
         ])}
         testId="detail"
       />,
@@ -436,7 +565,7 @@ describe("没有自报值就不许说「他自己填的是……」", () => {
     expect(screen.getByTestId("cell-placeholder").textContent).toBe("未知");
   });
 
-  it("门面禁内部术语:三态的文案里都不出现检测器 / 置信度 / 哨兵之类的说法", () => {
+  it("门面禁内部术语:各档的文案里都不出现检测器 / 置信度 / 哨兵之类的说法", () => {
     const samples = [
       resolveLanguageProvenance([{ language: "en" }]),
       resolveLanguageProvenance([
@@ -463,7 +592,12 @@ describe("语言标注与活跃度未知标注互不打架", () => {
       handle: "self_reported",
       platform: "youtube",
       followers: 12000,
-      qualification_evidence: strictProof({ language: { passed: true, values: ["en"], source: "vkpi_kol_profiles.language" } }),
+      qualification_evidence: strictProof({
+        language: {
+          passed: true, values: ["en"], origin: "self_reported", self_reported: true,
+          self_reported_values: ["en"], source: "vkpi_kol_profiles.language",
+        },
+      }),
       source_fields: { server_rank: 1 },
     },
     {
@@ -475,7 +609,10 @@ describe("语言标注与活跃度未知标注互不打架", () => {
         passed: false,
         deferred: true,
         deferred_reason: "latest_video_unknown",
-        language: { passed: true, values: ["ja"], source: "content_inference_v1", evidence_fields: ["bio"] },
+        language: {
+          passed: true, values: ["ja"], origin: "inferred", inferred: true, inferred_values: ["ja"],
+          source: "provider_public_content_language_v1", evidence_fields: ["bio"],
+        },
         activity: { passed: false, known: false, deferred: true, status: "activity_unknown_pending_fetch" },
       }),
       source_fields: { server_rank: 2 },
@@ -485,12 +622,13 @@ describe("语言标注与活跃度未知标注互不打架", () => {
       handle: "no_language_at_all",
       platform: "youtube",
       followers: 5000,
-      qualification_evidence: strictProof({ language: { passed: true, values: [], source: "unknown" } }),
+      qualification_evidence: strictProof({
+        language: { passed: true, values: [], origin: "unknown", self_reported: false, source: "" },
+      }),
       source_fields: { server_rank: 3 },
     },
     {
       // 两个「未知」撞在同一行:语言是占位词判不出,活跃度也从没抓到过。
-      // 两句话必须各占各的格子,谁也不许替谁把话说满。
       kol_pool_id: 14,
       handle: "placeholder_language_and_activity_unknown",
       platform: "youtube",
@@ -500,7 +638,10 @@ describe("语言标注与活跃度未知标注互不打架", () => {
         passed: false,
         deferred: true,
         deferred_reason: "latest_video_unknown",
-        language: { passed: true, values: ["Unknown"], origin: "self_reported", self_reported_values: ["Unknown"], source: "vkpi_kol_profiles.language" },
+        language: {
+          passed: true, values: ["Unknown"], origin: "self_reported", self_reported: true,
+          self_reported_values: ["Unknown"], source: "vkpi_kol_profiles.language",
+        },
         activity: { passed: false, known: false, deferred: true, status: "activity_unknown_pending_fetch" },
       }),
       source_fields: { server_rank: 4 },
@@ -513,7 +654,6 @@ describe("语言标注与活跃度未知标注互不打架", () => {
     const inferredRow = summary.rows.find((row) => row.item.kol_pool_id === 12)!;
     expect(inferredRow.activityUnknown).toBe(true);
     expect(inferredRow.language.origin).toBe("inferred");
-    // 活跃度未知说的是「从没抓到过」,语言说的是「推断」,两句话不互相顶替。
     expect(screen.getAllByText("从没抓到过").length).toBe(2);
     expect(screen.getByTestId(`local-language-${inferredRow.identity}`).textContent).toBe("JA推断");
   });
@@ -522,15 +662,12 @@ describe("语言标注与活跃度未知标注互不打架", () => {
     const summary = localQualifiedSummary(rowsResult);
     render(<StrictQualifiedList summary={summary} />);
     const doubleUnknown = summary.rows.find((row) => row.item.kol_pool_id === 14)!;
-    // 活跃度那一格照旧说「从没抓到过」;语言那一格独立地说「未知」。
     expect(doubleUnknown.activityUnknown).toBe(true);
     expect(doubleUnknown.language.origin).toBe("unknown");
     const languageCell = screen.getByTestId(`local-language-${doubleUnknown.identity}`);
     expect(languageCell.textContent).toBe("未知");
-    // 占位词既不上墙,也没被误标成「自报」。
     expect(languageCell.textContent).not.toContain("Unknown");
     expect(languageCell.getAttribute("title") || "").not.toContain("自己填的");
-    // 「从没抓到过」是活跃度那一格的话,没有跑到语言格里来。
     expect(languageCell.textContent).not.toContain("从没抓到过");
   });
 
@@ -541,7 +678,7 @@ describe("语言标注与活跃度未知标注互不打架", () => {
     expect(screen.getByTestId(`local-language-${blankRow.identity}`).textContent).toBe("未知");
   });
 
-  it("统计条如实报出三态人数", () => {
+  it("统计条如实报出各档人数", () => {
     const summary = localQualifiedSummary(rowsResult);
     render(<StrictQualifiedList summary={summary} />);
     expect(screen.getByTestId("local-language-origin-stat").textContent).toBe("语言 · 自报 1 · 推断 1 · 未知 2");

@@ -177,3 +177,160 @@ describe("toCockpitKolPoolRows engagement truth labels", () => {
     expect(row.real_er_verified).toBe(true);
   });
 });
+
+// 抓取器原始载荷(raw_platform_data 及其嵌套 raw)是 provider 说的话,不是我们的列。
+// 它得来的语言最多只能说到「来源不明」——「他自己填的」这句话必须由本地列/后端裁决来说。
+describe("toCockpitKolPoolRows language provenance source tiering", () => {
+  it("never calls a scraper-payload language self-reported", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 1,
+      handle: "provider-only",
+      raw_platform_data: { language: "ja" },
+    }] as any);
+
+    expect(row.language_provenance.origin).toBe("projected");
+    expect(row.language_provenance.originLabel).toBe("来源不明");
+    expect(row.language_provenance.codes).toEqual(["ja"]);
+    // 「他自己填的是……」这半句一个字都不许出现。
+    expect(row.language_provenance.selfReportedCodes).toEqual([]);
+    expect(row.language_provenance.divergenceLabel).toBe("");
+  });
+
+  it("treats the payload's own nested raw the same way", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 2,
+      handle: "nested-provider-only",
+      raw_platform_data: { raw: { language: "ko" } },
+    }] as any);
+
+    expect(row.language_provenance.origin).toBe("projected");
+    expect(row.language_provenance.selfReportedCodes).toEqual([]);
+  });
+
+  it("does not launder a payload value into the self-reported bucket beside a local column", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 3,
+      handle: "local-plus-provider",
+      language: "en",
+      raw_platform_data: { language: "ja" },
+    }] as any);
+
+    // 本地列说得出话 → 照它说的,载荷根本不参与。
+    expect(row.language_provenance.codes).toEqual(["en"]);
+    // 但「他自己填的是英语」这半句**没有人说过**:一个裸的 language 列只证明
+    // 「资料里有这个值」,证不出是他自己填的。没有裁决的路上不许落自报。
+    expect(row.language_provenance.origin).toBe("projected");
+    expect(row.language_provenance.originLabel).toBe("来源不明");
+    expect(row.language_provenance.selfReportedCodes).toEqual([]);
+  });
+
+  // 行上的 language_origin / language_source 是**原料上的记号**(后端把它当输入读),
+  // 后端从不把裁决写到行上 —— 裁决落在 qualification_evidence.language 那个块里。
+  it("keeps a backend verdict verbatim instead of letting the payload demote it", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 4,
+      handle: "verdict-wins",
+      language: {
+        values: ["de"], origin: "inferred", inferred: true, inferred_values: ["de"],
+        self_reported: false, self_reported_values: [], projected_values: [],
+        source: "vkpi_kol_pool.language_inferred", evidence_fields: ["bio"],
+      },
+      raw_platform_data: { language: "ja" },
+    }] as any);
+
+    expect(row.language_provenance.hasServerVerdict).toBe(true);
+    expect(row.language_provenance.origin).toBe("inferred");
+    expect(row.language_provenance.codes).toEqual(["de"]);
+  });
+
+  it("treats a flat language_origin marker as raw material, not as a verdict", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 8,
+      handle: "flat-origin-marker",
+      language: "de",
+      language_origin: "inferred",
+      language_source: "content_inference",
+      raw_platform_data: { language: "ja" },
+    }] as any);
+
+    // 记号读不出裁决 → 走降级路径:值照显示,归属只说得到「来源不明」。
+    expect(row.language_provenance.hasServerVerdict).toBe(false);
+    expect(row.language_provenance.origin).toBe("projected");
+    expect(row.language_provenance.codes).toEqual(["de"]);
+    expect(row.language_provenance.selfReportedCodes).toEqual([]);
+  });
+
+  // 红线:有裁决时照裁决渲染。裁决说未知就是未知 —— 不许改用载荷的值把它显示成别的档。
+  it("keeps an unknown verdict unknown even when the payload still carries a language", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 9,
+      handle: "unknown-verdict-plus-payload",
+      language: {
+        values: [], origin: "unknown", inferred: false, inferred_values: [],
+        self_reported: false, self_reported_values: [], projected_values: [], source: "",
+      },
+      raw_platform_data: { language: "ja" },
+    }] as any);
+
+    expect(row.language_provenance.hasServerVerdict).toBe(true);
+    expect(row.language_provenance.origin).toBe("unknown");
+    expect(row.language_provenance.displayLabel).toBe("未知");
+    expect(row.language_provenance.codes).toEqual([]);
+  });
+
+  // 第五种形态在池行上也不许升格:把握度没过门槛的那一票算未知,不挂「推断」。
+  it("does not promote a below-floor inferred column into an inference", () => {
+    const [withheld, admitted] = toCockpitKolPoolRows([{
+      id: 10,
+      handle: "below-floor",
+      language_inferred: "ko",
+      language_inferred_source: "video_titles",
+      language_inferred_confidence: "low",
+    }, {
+      id: 11,
+      handle: "above-floor",
+      language_inferred: "ko",
+      language_inferred_source: "video_titles",
+      language_inferred_confidence: "high",
+    }] as any);
+
+    expect(withheld.language_provenance.origin).toBe("unknown");
+    expect(withheld.language_provenance.inferenceWithheld).toBe(true);
+    expect(withheld.language_provenance.codes).toEqual([]);
+    expect(admitted.language_provenance.origin).toBe("inferred");
+    expect(admitted.language_provenance.codes).toEqual(["ko"]);
+  });
+
+  it("does not promote a payload placeholder into a value", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 5,
+      handle: "provider-placeholder",
+      raw_platform_data: { language: "Unknown" },
+    }] as any);
+
+    expect(row.language_provenance.origin).toBe("unknown");
+    expect(row.language_provenance.codes).toEqual([]);
+  });
+
+  it("stays unknown when neither our columns nor the payload carry a language", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 6,
+      handle: "nothing-anywhere",
+      raw_platform_data: { country: "JP" },
+    }] as any);
+
+    expect(row.language_provenance.origin).toBe("unknown");
+    expect(row.language_provenance.originLabel).toBe("未知");
+  });
+
+  it("refuses to call a payload-side inference our own inference", () => {
+    const [row] = toCockpitKolPoolRows([{
+      id: 7,
+      handle: "provider-inference",
+      raw_platform_data: { language_evidence: { value: "th", source: "provider_detected", inferred: true } },
+    }] as any);
+
+    expect(row.language_provenance.origin).toBe("projected");
+    expect(row.language_provenance.inferredCodes).toEqual([]);
+  });
+});

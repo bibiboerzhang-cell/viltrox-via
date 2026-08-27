@@ -28,8 +28,11 @@ from app.domains.kol.profile_recall_language_gate import (  # noqa: E402
     ORIGIN_PROJECTED,
     ORIGIN_SELF_REPORTED,
     ORIGIN_UNKNOWN,
+    PROJECTED_SOURCE,
     SELF_REPORTED_SOURCE,
+    UNKNOWN_SOURCE,
     classify_language_origin,
+    language_evidence_source,
     language_gate_evidence,
     language_source_token,
     resolve_candidate_language,
@@ -486,3 +489,141 @@ def test_a_person_blocked_by_the_floor_is_recoverable_via_include_unknown():
     admitted, _ = _qualify([(909, {"language": "", "language_inferred": "en",
                                    "language_inferred_confidence": "low"})])
     assert [item["kol_pool_id"] for item in admitted] == [909]
+
+
+# ── H3 证据来源回落错档:``projected`` / ``unknown`` 不许指向自报列 ───────────
+#
+# 复核原文:``language_evidence_source`` 只给 ``ORIGIN_INFERRED`` 开了特例,
+# ``projected`` 与 ``unknown`` 一律回落自报列 —— 又是把「不知道」说成「他自己说的」。
+# 本地全池实测:1790 行 × 5 种进闸形状 = 8950 条里,有 4663 条(52.1%)明明不是
+# 自报档,``source`` 却指着 ``vkpi_kol_profiles.language``。下面这一组把四档
+# 各自的落点分开钉死;取值一格不动,由 test_naming_the_real_source_changes_nobody 兜底。
+
+
+def test_projected_source_names_the_real_leg_not_the_self_reported_column():
+    """``platform_content_metadata`` 才是这个值真正的出处,如实写它。"""
+    resolution = _resolve({"language": "ja", "language_source": "platform_content_metadata"})
+    assert resolution["origin"] == ORIGIN_PROJECTED
+    assert language_evidence_source(resolution) == "platform_content_metadata"
+    assert language_evidence_source(resolution) != SELF_REPORTED_SOURCE
+    assert language_evidence_source(resolution) != INFERRED_SOURCE
+
+
+def test_projected_without_a_readable_source_admits_it_has_none():
+    """展示投影取到的值没有逐行来源:说「没有出处」,不许冒认任何一列。"""
+    resolution = _resolve({}, {"candidate_facets": {"language": "en"}})
+    assert resolution["origin"] == ORIGIN_PROJECTED
+    assert resolution["origin_source"] == ""
+    assert language_evidence_source(resolution) == PROJECTED_SOURCE
+    assert PROJECTED_SOURCE not in (SELF_REPORTED_SOURCE, INFERRED_SOURCE, "")
+
+
+def test_unknown_has_no_source_because_it_has_no_value():
+    """没取到值就没有出处。空串是这里唯一诚实的答案 —— 不是自报列的名字。"""
+    rows = (
+        {"language": ""},
+        # 有一票推断、但档位没过门槛:用的仍是「没有值」,出处照样是空的。
+        {"language": "", "language_inferred": "en", "language_inferred_confidence": "low"},
+        # 有来源串、却没有值:那句来源描述的不是任何被采用的值,一样不许拿来充数。
+        {"language": "", "language_source": "platform_profile"},
+    )
+    for row in rows:
+        resolution = _resolve(row)
+        assert resolution["origin"] == ORIGIN_UNKNOWN, row
+        assert language_evidence_source(resolution) == UNKNOWN_SOURCE == "", row
+        assert language_evidence_source(resolution) != SELF_REPORTED_SOURCE, row
+
+
+def test_the_lane_specific_self_source_never_leaks_into_the_other_three_tiers():
+    """在线腿会传自己的自报列名(``evidence_sources.language``)。
+
+    那是**自报档专用**的落点 —— 另外三档一个都不许沾。
+    """
+    lane_self_source = "online_provider.language"
+    others = (
+        {"language": "en", "language_source": "platform_content_metadata"},   # projected
+        {"language": "en", "language_source": "provider_public_content_language_v1"},  # inferred
+        {"language": "", "language_inferred": "en", "language_inferred_confidence": "high"},
+        {"language": ""},                                                     # unknown
+    )
+    for row in others:
+        resolution = _resolve(row)
+        assert resolution["origin"] != ORIGIN_SELF_REPORTED, row
+        assert language_evidence_source(resolution, self_source=lane_self_source) != lane_self_source, row
+    # 自报档本身照旧听调用方的 —— 这一格逐字不变。
+    assert language_evidence_source(
+        _resolve({"language": "en", "language_source": "platform_profile"}),
+        self_source=lane_self_source,
+    ) == lane_self_source
+
+
+def test_an_unrecognised_origin_never_degrades_to_self_reported():
+    """拼写漂移 / 将来的第五档走同一个保守出口:宁可空着,绝不说成「他自己说的」。"""
+    for resolution in ({"origin": "some_future_tier", "values": ["en"]}, {}, "not a dict", None):
+        assert language_evidence_source(resolution) == UNKNOWN_SOURCE
+        assert language_evidence_source(resolution, self_source="online_provider.language") != \
+            "online_provider.language"
+
+
+def test_gate_evidence_source_is_honest_in_all_four_tiers():
+    cases = (
+        ({"language": "en", "language_source": "platform_profile"},
+         ORIGIN_SELF_REPORTED, SELF_REPORTED_SOURCE),
+        ({"language": "", "language_inferred": "en", "language_inferred_confidence": "high"},
+         ORIGIN_INFERRED, INFERRED_SOURCE),
+        ({"language": "en", "language_source": "platform_content_metadata"},
+         ORIGIN_PROJECTED, "platform_content_metadata"),
+        ({"language": ""}, ORIGIN_UNKNOWN, UNKNOWN_SOURCE),
+    )
+    seen = set()
+    for row, origin, source in cases:
+        evidence = language_gate_evidence(
+            _resolve(row), targets=["en"], filter_requested=True, invalid_targets=[], passed=True,
+        )
+        assert evidence["origin"] == origin, row
+        assert evidence["source"] == source, row
+        assert "source" in evidence, row      # 既有键一个不少
+        if origin != ORIGIN_SELF_REPORTED:
+            assert evidence["source"] != SELF_REPORTED_SOURCE, row
+        seen.add(evidence["source"])
+    # 四档四个落点,彼此可分 —— 门面才有得区分显示。
+    assert len(seen) == 4
+
+
+def test_end_to_end_neither_projected_nor_unknown_cites_the_self_reported_column():
+    selected, _ = _qualify(
+        [(910, {"language": "en", "language_source": "platform_content_metadata"})],
+        languages=["en"],
+    )
+    projected = selected[0]["qualification_evidence"]["language"]
+    assert projected["origin"] == ORIGIN_PROJECTED
+    assert projected["source"] == "platform_content_metadata" != SELF_REPORTED_SOURCE
+
+    admitted, _ = _qualify([(911, {"language": ""})])
+    unknown = admitted[0]["qualification_evidence"]["language"]
+    assert unknown["origin"] == ORIGIN_UNKNOWN
+    assert unknown["source"] == UNKNOWN_SOURCE != SELF_REPORTED_SOURCE
+
+
+def test_naming_the_real_source_changes_nobody():
+    """这一刀只改「谁说的」那一格 —— 取值与去留逐字不变(全池 8950 条实测漂移 0)。"""
+    expected = (
+        ({"language": "en", "language_source": "platform_profile"}, ["en"], ORIGIN_SELF_REPORTED),
+        ({"language": "en", "language_source": "platform_content_metadata"}, ["en"], ORIGIN_PROJECTED),
+        ({"language": "en", "language_source": "provider_public_content_language_v1"},
+         ["en"], ORIGIN_INFERRED),
+        ({"language": "", "language_inferred": "en", "language_inferred_confidence": "high"},
+         ["en"], ORIGIN_INFERRED),
+        ({"language": "", "language_inferred": "en", "language_inferred_confidence": "low"},
+         [], ORIGIN_UNKNOWN),
+        ({"language": ""}, [], ORIGIN_UNKNOWN),
+    )
+    for row, values, origin in expected:
+        resolution = _resolve(row)
+        assert resolution["values"] == values, row
+        assert resolution["origin"] == origin, row
+    # 门槛一个字节没动。
+    assert MIN_INFERRED_CONFIDENCE == "medium"
+    assert qualification.SMART_LOCAL_MIN_FOLLOWERS == 3_000
+    assert qualification.SMART_LOCAL_FRESH_DAYS == 30
+    assert qualification.SMART_LOCAL_MAX_VIDEO_AGE_DAYS == 45
