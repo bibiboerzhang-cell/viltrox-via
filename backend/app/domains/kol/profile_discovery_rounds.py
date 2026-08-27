@@ -91,9 +91,36 @@ MEASURED_ROUND_COST_USD: dict[str, float] = {
     "tiktok": 0.032,
     "youtube": 0.0,
 }
-# YouTube 腿每轮的 API 调用面(≤3 个检索词变体的 search.list + 1 次 channels.list)。
-YOUTUBE_API_CALLS_PER_ROUND = 4
-YOUTUBE_QUOTA_UNITS_PER_ROUND = 301
+# YouTube 腿每轮的 API 调用面(检索词变体各一次 search.list + 1 次 channels.list)。
+# ``YOUTUBE_MAX_QUERY_VARIANTS`` 只是**不知道真实变体数时**的兜底(旧的 ≤3 词块口径);
+# 检索词车道的精准词梯会发更多条,所以传进来的真实数只受 ``CEILING`` 约束 —— 按 3 封顶
+# 会把 4~5 条词的轮次**低估**成 301,那是预算闸最不能接受的失败方向。
+YOUTUBE_MAX_QUERY_VARIANTS = 3
+YOUTUBE_QUERY_VARIANTS_CEILING = 8
+YOUTUBE_SEARCH_UNITS_PER_QUERY = 100
+YOUTUBE_CHANNELS_LIST_UNITS = 1
+YOUTUBE_API_CALLS_PER_ROUND = YOUTUBE_MAX_QUERY_VARIANTS + 1
+YOUTUBE_QUOTA_UNITS_PER_ROUND = (
+    YOUTUBE_SEARCH_UNITS_PER_QUERY * YOUTUBE_MAX_QUERY_VARIANTS + YOUTUBE_CHANNELS_LIST_UNITS
+)
+
+
+def youtube_quota_units(query_variants: Any = None) -> int:
+    """这一轮 YouTube 腿要吃多少配额单位:search.list 100/变体 + channels.list 1。
+
+    **2026-08-27 修「每轮固定按 301 预报、实际 201」的 50% 高估**:预报此前写死 3 条变体,
+    真发出去的常常只有 2 条(候选装满提前 break)。虚高的账会让轮次守门按不存在的消耗
+    提前收手、少跑轮次。调用方知道真实/计划变体数就传进来;不知道才退回旧上限
+    (失败方向:高估,不会低估)。
+    """
+    try:
+        variants = int(query_variants)
+    except (TypeError, ValueError):
+        variants = 0
+    if variants <= 0:
+        variants = YOUTUBE_MAX_QUERY_VARIANTS
+    variants = min(variants, YOUTUBE_QUERY_VARIANTS_CEILING)
+    return YOUTUBE_SEARCH_UNITS_PER_QUERY * variants + YOUTUBE_CHANNELS_LIST_UNITS
 
 
 def _text(value: Any) -> str:
@@ -214,12 +241,16 @@ def round_cost_forecast(
     round_no: int = 1,
     per_platform_limit: int = MEASURED_BASELINE_LIMIT,
     per_platform_limits: Any = None,
+    youtube_query_variants: Any = None,
 ) -> dict[str, Any]:
     """这一轮要花多少次抓取 / 多少钱。跑前必须能报出来的那份账。
 
     口径:每条腿会启动几个 Apify actor run(付费)、几次 YouTube API 调用(免费但吃配额)、
     按 prod 实测单价线性外推的美元数。IG 的 resultsLimit 按 tag 计,线性外推正确;
     TT 的 resultsPerPage 会被检索词变体摊薄,线性外推是**高估**——失败方向安全。
+
+    ``youtube_query_variants``:这一轮 YouTube 腿真会发几条检索词变体。传了就按它算配额
+    (治「固定 301」的 50% 高估);不传退回旧上限,行为逐字不变。
     """
     legs = [_code(item) for item in (platforms or []) if _code(item)]
     by_platform: dict[str, dict[str, Any]] = {}
@@ -232,8 +263,8 @@ def round_cost_forecast(
         runs = len(DISCOVERY_ACTORS.get(platform, ()))
         unit = MEASURED_ROUND_COST_USD.get(platform, 0.0)
         usd = round(unit * limit / float(MEASURED_BASELINE_LIMIT), 4)
-        calls = YOUTUBE_API_CALLS_PER_ROUND if platform == "youtube" else 0
-        units = YOUTUBE_QUOTA_UNITS_PER_ROUND if platform == "youtube" else 0
+        units = youtube_quota_units(youtube_query_variants) if platform == "youtube" else 0
+        calls = (units - YOUTUBE_CHANNELS_LIST_UNITS) // YOUTUBE_SEARCH_UNITS_PER_QUERY + 1 if units else 0
         by_platform[platform] = {
             "requested_limit": limit,
             "apify_runs": runs,
@@ -274,21 +305,32 @@ def round_plan_record(
     forecasts: Any,
     round_gate: Any = None,
     provider_rounds: Any = None,
+    actual_quota_units: Any = None,
+    actual_apify_runs: Any = None,
 ) -> dict[str, Any]:
     """落库用的「这次搜索到底花了几次抓取」记录。纯记账,零判定。
 
     每一轮一条:跑了哪几条腿、启动几个 Apify run、几次 YouTube API 调用、预估多少美元;
     再带上轮次闸的判词(为什么停在第 N 轮)。诚实空态:没跑过在线段就只有零值。
+
+    ``actual_*``(2026-08-27):provider metadata 报回来的**真实**消耗。此前这份记录只有预报,
+    于是「预报 903、实际 603」在库里查不出来。有了实际值,预报误差是一条 SELECT 的事。
     """
     rows = [dict(item) for item in (forecasts or []) if isinstance(item, dict)]
     gate = round_gate if isinstance(round_gate, dict) else {}
+    forecast_units = sum(int(row.get("youtube_quota_units") or 0) for row in rows)
+    actual_units = None if actual_quota_units is None else max(0, int(actual_quota_units))
     return {
         "schema": ROUND_PLAN_SCHEMA,
         "rounds": rows,
         "provider_rounds": max(0, int(provider_rounds or 0)),
         "apify_runs_total": sum(int(row.get("apify_runs") or 0) for row in rows),
         "youtube_api_calls_total": sum(int(row.get("youtube_api_calls") or 0) for row in rows),
-        "youtube_quota_units_total": sum(int(row.get("youtube_quota_units") or 0) for row in rows),
+        "youtube_quota_units_total": forecast_units,
+        # 真实消耗与预报误差(None = 本次没有可对账的实际值,不拿预报冒充实际)。
+        "youtube_quota_units_actual": actual_units,
+        "quota_forecast_delta_units": None if actual_units is None else forecast_units - actual_units,
+        "apify_runs_actual": None if actual_apify_runs is None else max(0, int(actual_apify_runs)),
         "estimated_usd_total": round(sum(float(row.get("estimated_usd") or 0.0) for row in rows), 4),
         "daily_budget_usd": round(daily_budget_usd(), 4),
         "online_deadline_seconds": round(online_deadline_seconds(), 3),

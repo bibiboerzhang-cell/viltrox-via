@@ -20,7 +20,7 @@ import pytest
 
 from app.domains.kol import profile_discovery_rounds as rounds
 from app.domains.kol import profile_online_qualification
-from app.services.intelligence import account_scan_service, account_search_discovery
+from app.services.intelligence import account_scan_service, account_search_discovery, account_search_terms
 
 
 # ── ① 分页:YouTube 严格视频路真的翻页 ─────────────────────────────────────────
@@ -92,18 +92,39 @@ def test_youtube_second_round_sends_the_first_round_page_token(monkeypatch: pyte
     cursor = md["next_page_cursor"]
     assert set(cursor.values()) == {"TOKEN-P2"}
 
+    # ——第二轮:词梯里还有**没发过**的词,先广后深(2026-08-27 轮转)。
+    # 旧行为是头位的词只要还回 nextPageToken 就一直续页,后面的词跨轮永远轮不到
+    # (实测 4 轮 804 配额发的始终是同两条词)。现在没发过的词优先拿配额。
     second = asyncio.run(account_search_discovery._youtube_data_api_strict_video_search(
         "viltrox lens review", safe_limit=1, page_cursor=cursor,
     ))
     assert second is not None
-    # ——第二轮送出去的 pageToken 必须正是第一轮回来的那个(分页真的发生)。
     assert calls[0].get("pageToken") is None
+    assert calls[-1].get("pageToken") is None          # 发的是没发过的那条词,从第一页起
+    assert calls[-1]["q"] == "Viltrox lens test"
+    # 没轮到的那条词,它的游标必须原样带到下一轮 —— 丢了就等于下一轮重发第一页。
+    assert second["metadata"]["next_page_cursor"]["viltrox lens review"] == "TOKEN-P2"
+
+    # ——第三轮:没发过的词用完了,存着的 pageToken 这时才真正送出去(深度没丢,只是延后)。
+    third = asyncio.run(account_search_discovery._youtube_data_api_strict_video_search(
+        "viltrox lens review", safe_limit=1,
+        page_cursor=second["metadata"]["next_page_cursor"],
+    ))
+    assert third is not None
     assert calls[-1]["pageToken"] == "TOKEN-P2"
+    assert calls[-1]["q"] == "viltrox lens review"
     # 翻到的是**新**频道,不是把第一页又抓一遍。
-    assert second["items"][0]["channel_id"] == "UC-beta"
-    # 最后一页没有 nextPageToken → 诚实说没有下一页(这才是 exhausted 的依据)。
-    assert second["metadata"]["has_more"] is False
-    assert second["metadata"]["next_page_cursor"] == {}
+    assert third["items"][0]["channel_id"] == "UC-beta"
+    # 最后一页没有 nextPageToken → 这条**词**抓干了,游标里落哨兵(下一轮跳过它,
+    # 不再重发第一页)。2026-08-27 精准检索词车道后,一条腿带的是 5 条词的词梯,
+    # 所以「这条词抓干」≠「这条腿翻完」——还有没查过的词,has_more 诚实保持 True。
+    # 「全部词都抓干 → has_more=False」由 test_kol_youtube_precision_search_terms.py
+    # 的 test_has_more_is_false_once_every_term_is_exhausted 钉住。
+    third_cursor = third["metadata"]["next_page_cursor"]
+    assert third_cursor["viltrox lens review"] == account_search_terms.TERM_EXHAUSTED_TOKEN
+    # 另一条词还带着活游标 —— 抓干是**逐词**的,不是整条腿的。
+    assert third_cursor["Viltrox lens test"] == "TOKEN-P2"
+    assert third["metadata"]["has_more"] is True
 
 
 def test_instagram_leg_reports_no_pagination_instead_of_faking_a_cursor(

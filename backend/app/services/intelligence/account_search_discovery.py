@@ -36,10 +36,17 @@ from app.services.intelligence.account_search_instagram import (  # noqa: F401
 # 检索词整形与候选收敛的纯函数已拆到 account_search_terms.py(同 843 行棘轮理由)。
 # 原名 re-export —— account_scan_service 的 re-export 链与既有 monkeypatch 点全部不变。
 from app.services.intelligence.account_search_terms import (  # noqa: F401
+    PRECISION_TERMS_DEFAULT,
+    _youtube_data_api_normalize,
+    TERM_EXHAUSTED_TOKEN,
     _candidate_identity_key,
     _short_search_queries,
     _tiktok_collapse_author_videos,
     _youtube_search_query_variants,
+    query_anchor_signals,
+    term_anchor_index,
+    term_ledger_row,
+    youtube_precision_terms,
 )
 
 logger = get_logger(__name__)
@@ -100,69 +107,6 @@ def _youtube_channel_statistics(crawler: Any, channel_ids: List[str]) -> Dict[st
                 "avatar_url_status": avatar_url_status,
             }
     return out
-
-
-def _youtube_data_api_normalize(
-    items: List[Dict[str, Any]],
-    query: str,
-    market: str,
-    actor_id: str,
-    safe_limit: int,
-    stats_by_id: Dict[str, Dict[str, Any]] | None = None,
-) -> List[Dict[str, Any]]:
-    """Map YouTube Data API search.list (type=channel) snippets to discovery candidates.
-
-    Output shape matches the Apify-path item exactly so downstream annotate / region /
-    garbage filters behave identically regardless of which provider fed the candidate.
-    stats_by_id(channels.list 富化,可缺):补 followers/真 @handle/country/频道简介。
-    """
-    normalized: List[Dict[str, Any]] = []
-    for raw in items[:safe_limit]:
-        snippet = raw.get("snippet") if isinstance(raw.get("snippet"), dict) else {}
-        channel_id = str(((raw.get("id") or {}).get("channelId")) or "").strip()
-        channel_name = str(snippet.get("channelTitle") or snippet.get("title") or "").strip()
-        thumbs = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
-        avatar_url = str(
-            (((thumbs.get("high") or thumbs.get("medium") or thumbs.get("default")) or {}).get("url")) or ""
-        ).strip()
-        channel_url = f"https://www.youtube.com/channel/{channel_id}" if channel_id else ""
-        stats = (stats_by_id or {}).get(channel_id) or {}
-        # 真 @handle 优先(channels.list customUrl);缺富化时退回旧口径 channel_id 当 handle
-        # (保证非空避开 _is_discovery_garbage)。channel_url 恒 /channel/UCxxx,
-        # 旧轮以 UC id 入库的行仍可经 _candidate_handles(channel_url) 命中,不产重复。
-        custom_handle = str(stats.get("custom_url") or "").lstrip("@").strip()
-        handle = custom_handle or channel_id or channel_name
-        followers = _normalize_int(stats.get("subscribers"))
-        country = str(stats.get("country") or "").strip()
-        bio = str(stats.get("description") or snippet.get("description") or "").strip()
-        clean_channel_name = _known_text(channel_name, handle) or "Unknown creator"
-        normalized.append(
-            {
-                "platform": "youtube",
-                "channel_name": clean_channel_name,
-                "handle": _known_text(handle, channel_name),
-                "avatar_url": avatar_url,
-                "thumbnail_url": avatar_url,
-                "channel_url": channel_url,
-                "source_url": channel_url,
-                "sample_title": str(snippet.get("description") or "")[:300],
-                "views": 0,
-                "likes": 0,
-                "comments": 0,
-                "avg_views": 0,
-                "published": str(snippet.get("publishedAt") or "").strip(),
-                "market": (market or "").strip().upper(),
-                "search_query": (query or "").strip(),
-                "provider_actor": actor_id,
-                "channel_id": channel_id,
-                "fast_path": True,
-                # followers 仅真有值才透出(隐藏/未知不带键 → 读端诚实归「分析中」)。
-                **({"followers": followers} if followers > 0 else {}),
-                **({"country": country, "country_source": "platform_profile"} if country else {}),
-                **({"bio": bio[:500]} if bio else {}),
-            }
-        )
-    return normalized
 
 
 async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_limit: int = 25, relevance_language: str = "en") -> Dict[str, Any] | None:
@@ -293,9 +237,10 @@ async def _youtube_data_api_strict_video_search(
     crawler = YouTubeCrawler()
     if not crawler.api_key:
         return None
-    variants = _youtube_search_query_variants(search_query)
+    variants = _youtube_search_query_variants(search_query, max_variants=PRECISION_TERMS_DEFAULT)
     if not variants:
         return None
+    anchors = term_anchor_index(search_query, max_terms=PRECISION_TERMS_DEFAULT)
     result_limit = max(1, min(50, int(safe_limit or 25)))
     page_tokens: Dict[str, str] = {}
     if isinstance(page_cursor, dict):
@@ -304,13 +249,29 @@ async def _youtube_data_api_strict_video_search(
         datetime.now(timezone.utc) - timedelta(days=45)
     ).isoformat(timespec="seconds").replace("+00:00", "Z")
 
-    def go() -> tuple[List[Dict[str, Any]], List[str], bool, Dict[str, str]]:
+    def go() -> tuple[List[Dict[str, Any]], List[str], bool, Dict[str, str], List[Dict[str, Any]]]:
         merged: List[Dict[str, Any]] = []
         seen_channels: set[str] = set()
         used_queries: List[str] = []
         next_tokens: Dict[str, str] = {}
+        ledger: List[Dict[str, Any]] = []
         any_ok = False
-        for query_variant in variants:
+        # 轮转(2026-08-27):候选池 merged 被全部变体共享、装满 result_limit 即停,而头部的
+        # 词只要还在回 nextPageToken 就永远排在最前 —— 实测 4 轮烧 804 配额,发出去的始终是
+        # 同两条词,tier 3/4/5 跨轮一次都轮不到。「5 条并联」从未在真实一轮里发生过。
+        # 改为**这一轮没发过的词优先**:page_tokens 里有没有该词就是「发过没有」的现成凭据,
+        # 不引入新状态、不多发一次请求(每轮仍是装满即停),只改谁先拿到配额。
+        ordered = sorted(variants, key=lambda q: 1 if page_tokens.get(q) else 0)
+        for query_variant in ordered:
+            # 抓干哨兵:上一轮这条词已经翻到官方不再给 nextPageToken —— 再发就是逐条
+            # 相同的第一页(实测同 query 重跑 3 次返回几乎逐条相同、0 产出)。跳过它、
+            # 把配额留给还没见底的词,这才是「识别重跑无效并换词」而不是原样重发。
+            if page_tokens.get(query_variant) == TERM_EXHAUSTED_TOKEN:
+                ledger.append(term_ledger_row(
+                    query_variant, anchors=anchors, quota_units=0,
+                    exhausted=True, skipped="exhausted_previous_round",
+                ))
+                continue
             payload = crawler._request(
                 "search",
                 {
@@ -325,12 +286,18 @@ async def _youtube_data_api_strict_video_search(
                 },
             )
             if crawler._should_use_apify_fallback(payload) or str(payload.get("provider_status") or "") == "error":
+                ledger.append(term_ledger_row(
+                    query_variant, anchors=anchors, quota_units=0,
+                    provider_status=str(payload.get("provider_status") or "error"),
+                ))
                 continue
             any_ok = True
             used_queries.append(query_variant)
             next_page = str(payload.get("nextPageToken") or "").strip()
-            if next_page:
-                next_tokens[query_variant] = next_page
+            # 没有 nextPageToken = 官方说这条词的语料翻完了(型号级窄词实测一页见底)。
+            # 落哨兵而不是留空:留空的话下一轮会被当成「没查过」再发一次第一页。
+            next_tokens[query_variant] = next_page or TERM_EXHAUSTED_TOKEN
+            fresh = 0
             for raw in payload.get("items") or []:
                 if not isinstance(raw, dict):
                     continue
@@ -340,15 +307,24 @@ async def _youtube_data_api_strict_video_search(
                 if not channel_id or not video_id or channel_id in seen_channels:
                     continue
                 seen_channels.add(channel_id)
+                # 证据埋点(2026-08-27):这条候选是**哪条检索词**捞回来的。一轮发多条变体、
+                # 按 channelId 合并之后就再也分不清了,归因必须在这里当场记下。
+                # 消费端:app.domains.kol.profile_discovery_evidence.CANDIDATE_TERM_KEY。
+                raw["_discovery_query_variant"] = query_variant
                 merged.append(raw)
+                fresh += 1
                 if len(merged) >= result_limit:
                     break
+            ledger.append(term_ledger_row(
+                query_variant, anchors=anchors, page_token_in=page_tokens.get(query_variant) or "",
+                channels_new=fresh, exhausted=not next_page,
+            ))
             if len(merged) >= result_limit:
                 break
-        return merged, used_queries, any_ok, next_tokens
+        return merged, used_queries, any_ok, next_tokens, ledger
 
     try:
-        raw_items, used_queries, any_ok, next_tokens = await asyncio.to_thread(go)
+        raw_items, used_queries, any_ok, next_tokens, term_ledger = await asyncio.to_thread(go)
     except Exception as exc:  # pragma: no cover - network only
         logger.warning("scanner.youtube_strict_video_search_failed", extra={"error": str(exc)})
         return None
@@ -356,10 +332,17 @@ async def _youtube_data_api_strict_video_search(
         return None
     # 还有下一页的两种真凭据:某个变体回了 nextPageToken;或本轮装满提前 break、
     # 还有变体一次都没查过(它们下一轮从第一页开始)。两者都不成立 = 真的翻完了。
-    unvisited = [item for item in variants if item not in used_queries]
+    unvisited = [
+        item for item in variants
+        if item not in used_queries and page_tokens.get(item) != TERM_EXHAUSTED_TOKEN
+    ]
     for stale in unvisited:
         if page_tokens.get(stale):
             next_tokens.setdefault(stale, page_tokens[stale])
+    for done in variants:  # 抓干判定必须跨轮存活,否则下一轮又从第一页重发
+        if page_tokens.get(done) == TERM_EXHAUSTED_TOKEN:
+            next_tokens.setdefault(done, TERM_EXHAUSTED_TOKEN)
+    live_tokens = {k: v for k, v in next_tokens.items() if v != TERM_EXHAUSTED_TOKEN}
     channel_ids = [
         str(((raw.get("snippet") or {}).get("channelId")) or "").strip()
         for raw in raw_items
@@ -399,6 +382,8 @@ async def _youtube_data_api_strict_video_search(
             "thumbnail_url": str(thumbnail).strip(),
             "bio": str(stats.get("description") or "")[:500],
             "provider_actor": "youtube-data-api/search.list:video",
+            # 逐条检索词溯源(证据埋点):没有它就答不出「哪条词产出了这个人」。
+            "discovery_query": str(raw.get("_discovery_query_variant") or "").strip(),
             **({"followers": followers} if followers > 0 else {}),
             **({"country": country, "country_source": "platform_profile"} if country else {}),
             **({"language": language, "language_source": "platform_profile"} if language else {}),
@@ -417,12 +402,18 @@ async def _youtube_data_api_strict_video_search(
             "returned": len(items),
             "provider_queries": used_queries,
             "published_after": published_after,
-            "quota_units": 100 * max(1, len(used_queries)) + (1 if stats_by_id else 0),
+            # 实发几条 search.list 就记几条 100 —— 旧式 max(1, ...) 会给「一条都没发成」
+            # 的轮次也记 100,是配额账本里的凭空多记。
+            "quota_units": 100 * len(used_queries) + (1 if stats_by_id else 0),
             "channels_enriched": sum(1 for item in items if item.get("followers")),
+            # 逐词台账:哪条词、锚是什么、从哪一页起、烧多少配额、捞回几个新频道、
+            # 是否已抓干。落库后「泛词烧掉一半配额」这类事不必再靠猜。
+            "term_ledger": term_ledger,
+            "query_anchor_signals": query_anchor_signals(search_query),
             # 车道 2·分页事实(只有这条腿是真分页;IG/TT actor 的输入 schema 里没有游标)。
             "pagination_supported": True,
             "next_page_cursor": dict(next_tokens),
-            "has_more": bool(next_tokens) or bool(unvisited),
+            "has_more": bool(live_tokens) or bool(unvisited),
             "page_cursor_in": dict(page_tokens),
         },
     }

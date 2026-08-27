@@ -5,6 +5,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.domains.kol import (
+    profile_discovery_evidence,
     profile_discovery_rounds,
     profile_online_qualification,
     profile_recall,
@@ -43,6 +44,9 @@ async def execute_smart_search_profile_advance_pipeline(
     if not query:
         raise ValueError("smart profile advance payload missing query_text")
     operator_query = query
+    # 证据埋点:planner 会把解析出的 SKU 回填进 payload,之后就分不清「操作员点的产品」
+    # 和「模型猜的产品」了 —— 锚的来源必须在改写之前拍照。纯读,零副作用。
+    operator_anchor = profile_discovery_evidence.operator_anchor_inputs(payload)
     operator_platforms = explicit_platforms_from_query(operator_query)
     operator_market = resolve_market_constraint(
         operator_query,
@@ -275,6 +279,15 @@ async def execute_smart_search_profile_advance_pipeline(
         # A7:逐轮收走 provider 自带的闸门漏斗切片(只读不改),用于会话诊断落库。
         provider_funnels: list[dict[str, Any]] = []
         online_contract: dict[str, Any] | None = None
+        # 证据埋点:逐轮收「实际用了哪几条检索词 / 真烧了多少配额 / 到手候选的字段普查」,
+        # 外加候选原件(带 discovery_query 溯源标)用于把合格新人回连到具体检索词。
+        _term_rounds: list[dict[str, Any]] = []
+        # 轮次预报表在两条腿上都要可读(legacy 腿不跑多轮 → 恒空,诊断按空态处理)。
+        _round_forecasts: list[dict[str, Any]] = []
+        _observed_candidates: list[dict[str, Any]] = []
+        # YouTube 腿这次真打算发几条变体(确定性纯函数,零 IO)。配额预报按它算,
+        # 治「每轮固定按 301 预报、实际 201」的 50% 高估。
+        _yt_variants = profile_discovery_evidence.planned_youtube_variants(query)
         # 用户裁决 2026-08-25 第 2 条的在线腿:任意员工收藏过的人,在线也不再出现。
         # 身份键(平台+handle)只查一次,逐轮复用——在线候选没有 pool id,只能按身份比。
         # 摘除点在 provider 一返回、进资质判定之前,是在线腿最早的可排除位置。
@@ -309,7 +322,6 @@ async def execute_smart_search_profile_advance_pipeline(
             ] or sorted(profile_online_qualification.ONLINE_SUPPORTED_PLATFORMS)
             _round_legs: list[str] = []
             _round_cursor: dict[str, Any] = {}
-            _round_forecasts: list[dict[str, Any]] = []
             _round_yield: dict[str, int] = {"last": 0}
 
             async def _fetch_online_batch(*, round_no: int, limit: int, cursor: Any) -> dict[str, Any]:
@@ -324,6 +336,7 @@ async def execute_smart_search_profile_advance_pipeline(
                     round_no=round_no,
                     per_platform_limit=_per_platform_limit,
                     per_platform_limits=_per_platform_limits,
+                    youtube_query_variants=_yt_variants,
                 )
                 _round_forecasts.append(_forecast)
                 logger.info("discovery_round_forecast %s", profile_discovery_rounds.forecast_line(_forecast))
@@ -335,6 +348,16 @@ async def execute_smart_search_profile_advance_pipeline(
                     per_platform_limits=_per_platform_limits,
                     auto_enroll=False,
                     page_cursors=cursor,
+                )
+                # 证据埋点:先按 provider 原件记账(收藏排除之前),这样「某条词捞回几个人」
+                # 是 provider 侧的真相;后面各道闸丢了多少另有 discovery_funnel 的账。
+                _term_rounds.append(profile_discovery_evidence.observe_round(
+                    round_no=round_no,
+                    platform_results=batch.get("platform_results"),
+                    candidates=batch.get("new_creators"),
+                ))
+                _observed_candidates.extend(
+                    row for row in (batch.get("new_creators") or []) if isinstance(row, dict)
                 )
                 # 全局排除已被关注的人:就地摘掉,计数逐轮累加(缺口照实,不补别人充数)。
                 _kept, _fav_block = recall_favorite_exclusion.exclude_favorited_online_candidates(
@@ -417,6 +440,15 @@ async def execute_smart_search_profile_advance_pipeline(
                 per_platform_limit=max(1, min(_int(payload.get("new_discovery_per_platform_limit"), 15), 50)),
                 per_platform_limits=payload.get("new_discovery_per_platform_limits"),
             )
+            # 证据埋点:两条在线路径的用词/配额记账口径必须一致(legacy 只有一轮)。
+            _term_rounds.append(profile_discovery_evidence.observe_round(
+                round_no=1,
+                platform_results=new_discovery.get("platform_results"),
+                candidates=new_discovery.get("new_creators"),
+            ))
+            _observed_candidates.extend(
+                row for row in (new_discovery.get("new_creators") or []) if isinstance(row, dict)
+            )
             # 旧发现路径同样受全局排除约束(两条在线路径口径必须一致)。
             _kept, _fav_block = recall_favorite_exclusion.exclude_favorited_online_candidates(
                 new_discovery.get("new_creators") or [],
@@ -482,9 +514,37 @@ async def execute_smart_search_profile_advance_pipeline(
                             forecasts=_round_forecasts,
                             round_gate=(online_contract or {}).get("round_gate"),
                             provider_rounds=(online_contract or {}).get("provider_rounds"),
+                            # 预报的对账面:provider metadata 报回来的真实消耗。
+                            actual_quota_units=sum(
+                                _int(row.get("quota_units_actual")) for row in _term_rounds
+                            ),
+                            actual_apify_runs=sum(
+                                _int(row.get("apify_actor_runs")) for row in _term_rounds
+                            ),
                         )
                     }
                     if strict_online_30 else {}
+                ),
+                # 证据埋点(2026-08-27):实际用词 / 产品锚及来源 / 判定时字段数 /
+                # 每条词的产出与配额。四样落库后,「新东西有没有被生产路径调用」
+                # 就是一条 SELECT 的事,不必再翻会滚掉的日志。
+                profile_discovery_evidence.TERM_EVIDENCE_KEY: (
+                    profile_discovery_evidence.build_term_evidence(
+                        lane="online_strict" if strict_online_30 else "legacy_discovery",
+                        anchor=profile_discovery_evidence.product_anchor_record(
+                            payload=payload,
+                            operator_anchor=operator_anchor,
+                            effective_query=query,
+                        ),
+                        rounds=_term_rounds,
+                        observed_candidates=_observed_candidates,
+                        accepted_items=(new_discovery or {}).get("new_creators"),
+                        # legacy 腿没有轮次预报 → None(不拿 0 冒充「预报过 0 单位」)。
+                        quota_forecast_units=(
+                            sum(_int(row.get("youtube_quota_units")) for row in _round_forecasts)
+                            if _round_forecasts else None
+                        ),
+                    )
                 ),
             },
         )
