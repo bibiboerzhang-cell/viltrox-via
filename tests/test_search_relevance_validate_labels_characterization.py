@@ -115,7 +115,7 @@ def test_valid_rows_normalize_exactly_and_produce_no_issues():
     assert report["issues"] == []
     assert report["issue_counts"] == {}
     assert report["unlabeled_template_count"] == 0
-    assert report["manifest_candidate_count"] == 180
+    assert report["manifest_candidate_count"] == 300
     first = _TEMPLATE[0]
     assert report["valid_labels"][0] == {
         "query_id": first["query"]["id"],

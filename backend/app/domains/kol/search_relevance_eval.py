@@ -92,12 +92,39 @@ DEFAULT_QUERY_SUITE: tuple[SearchEvalQuery, ...] = (
         query_text="85mm 人像镜头婚礼摄影师",
         filters={},
     ),
+    # 2026-08-31 市场维扩充(L3 正门):套件从 6 条扩到 10 条 → 10×30=300 双审候选,
+    # 同时补齐用户 L3 标尺的「3+ 市场」维(此前 6 条零市场维)。四条同为去标识化的
+    # 真实业务意图;开标注前本套件随 fingerprint 冻结,此后改一字 = 全部标注作废。
+    SearchEvalQuery(
+        query_id="q07_us_135mm_portrait",
+        category="market_product_fit",
+        query_text="美国市场 135mm 人像摄影 KOL",
+        filters={"market": "US"},
+    ),
+    SearchEvalQuery(
+        query_id="q08_eu_evo_review",
+        category="market_product_fit",
+        query_text="欧洲市场 EVO 系列评测博主",
+        filters={"market": "EU"},
+    ),
+    SearchEvalQuery(
+        query_id="q09_jp_zmount_creator",
+        category="market_mount_fit",
+        query_text="日本市场 Z 卡口镜头创作者",
+        filters={"market": "JP"},
+    ),
+    SearchEvalQuery(
+        query_id="q10_sea_budget_lens_youtube",
+        category="market_scene_platform",
+        query_text="东南亚市场入门级镜头 YouTube 博主",
+        filters={"market": "SEA", "platforms": ["youtube"]},
+    ),
 )
 
 
 @dataclass(frozen=True)
 class SearchEvaluationPolicy:
-    required_query_count: int = 6
+    required_query_count: int = 10
     required_candidates_per_query: int = 30
     required_independent_reviews_per_candidate: int = 2
     precision_cutoffs: tuple[int, ...] = (10, 30)

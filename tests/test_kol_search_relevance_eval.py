@@ -111,13 +111,13 @@ def _completed_labels(manifest):
 def test_fixed_suite_is_deidentified_business_queries_not_gold_truth():
     manifest = _manifest()
 
-    assert len(DEFAULT_QUERY_SUITE) == 6
+    assert len(DEFAULT_QUERY_SUITE) == 10  # 2026-08-31 市场维扩充:6→10
     assert manifest["query_suite_version"] == QUERY_SUITE_VERSION
     assert manifest["query_source"] == QUERY_SOURCE
     assert manifest["truth_status"] == "candidate_export_not_gold_truth"
     assert manifest["claim_status"] == "not_evaluated"
-    assert manifest["query_count"] == 6
-    assert manifest["candidate_count"] == 180
+    assert manifest["query_count"] == 10
+    assert manifest["candidate_count"] == 300
     assert manifest["candidate_export_complete"] is True
     assert all(query["source"] == QUERY_SOURCE for query in manifest["queries"])
     assert all(query["truth_status"] == "not_gold_truth" for query in manifest["queries"])
@@ -135,7 +135,7 @@ def test_export_is_deterministic_and_forces_provider_free_30_candidate_contract(
 
     assert first["manifest_fingerprint"] == second["manifest_fingerprint"]
     assert first["candidates"] == second["candidates"]
-    assert len(calls) == 6
+    assert len(calls) == 10
     assert all(call["provider_free"] is True for call in calls)
     assert all(call["limit"] == 30 and call["candidate_limit"] == 500 for call in calls)
     assert all(call["operator_query_text"] == call["query_text"] for call in calls)
@@ -151,7 +151,7 @@ def test_blank_label_template_is_explicitly_blocked_and_metrics_are_not_computed
     manifest = _manifest()
     labels = build_label_template(manifest)
 
-    assert len(labels) == 360
+    assert len(labels) == 600
     assert labels[0]["schema_version"] == LABEL_SCHEMA_VERSION
     assert labels[0]["label_source"] is None
     assert labels[0]["relevance"] is None
@@ -164,15 +164,15 @@ def test_blank_label_template_is_explicitly_blocked_and_metrics_are_not_computed
     assert report["offline_relevance_metrics_claimable"] is False
     assert "no_human_labels" in report["blockers"]
     assert report["metrics"] is None
-    assert report["label_validation"]["unlabeled_template_count"] == 360
+    assert report["label_validation"]["unlabeled_template_count"] == 600
 
 
 def test_runtime_status_never_exposes_metrics_before_human_evaluation():
     status = build_runtime_evaluation_status(algorithm_version="rank-v1")
 
     assert status["state"] == "not_evaluated"
-    assert status["target_count"] == 360
-    assert status["dual_review_target"] == 180
+    assert status["target_count"] == 600
+    assert status["dual_review_target"] == 300
     assert status["labeled_count"] == 0
     assert status["algorithm_version"] == "rank-v1"
     assert status["metrics"] is None
@@ -369,21 +369,21 @@ def test_complete_human_labels_compute_rank_metrics_strata_ci_and_sample_sizes()
     assert report["business_outcome_claimable"] is False
     metrics = report["metrics"]
     assert metrics["relevance_threshold"] == 2
-    assert metrics["aggregate"]["query_sample_size"] == 6
-    assert metrics["aggregate"]["candidate_sample_size"] == 180
+    assert metrics["aggregate"]["query_sample_size"] == 10
+    assert metrics["aggregate"]["candidate_sample_size"] == 300
     assert metrics["aggregate"]["precision_at_10"]["macro_mean"] == 0.5
-    assert metrics["aggregate"]["precision_at_10"]["candidate_sample_size"] == 60
+    assert metrics["aggregate"]["precision_at_10"]["candidate_sample_size"] == 100
     assert metrics["aggregate"]["precision_at_30"]["macro_mean"] == 0.1667
-    assert metrics["aggregate"]["precision_at_30"]["candidate_sample_size"] == 180
-    assert metrics["aggregate"]["ndcg_at_30"]["query_sample_size"] == 6
+    assert metrics["aggregate"]["precision_at_30"]["candidate_sample_size"] == 300
+    assert metrics["aggregate"]["ndcg_at_30"]["query_sample_size"] == 10
     assert metrics["aggregate"]["ndcg_at_30"]["query_level_ci95"]["low"] is not None
-    assert metrics["by_match_tier"]["strict"]["sample_size"] == 90
-    assert metrics["by_match_tier"]["relaxed"]["sample_size"] == 90
+    assert metrics["by_match_tier"]["strict"]["sample_size"] == 150
+    assert metrics["by_match_tier"]["relaxed"]["sample_size"] == 150
     assert metrics["by_match_tier"]["backfill"]["sample_size"] == 0
-    assert metrics["by_match_tier"]["strict"]["relevance_hit_rate_ci95"]["sample_size"] == 90
+    assert metrics["by_match_tier"]["strict"]["relevance_hit_rate_ci95"]["sample_size"] == 150
     assert set(metrics["by_query"]) == {query.query_id for query in DEFAULT_QUERY_SUITE}
     assert report["coverage"]["distinct_human_labelers"] == 2
-    assert report["coverage"]["dual_reviewed_candidates"] == 180
+    assert report["coverage"]["dual_reviewed_candidates"] == 300
     assert metrics["inter_rater"]["value"] == 1.0
     runtime = report["runtime_evaluation_status"]
     assert runtime["state"] == "shareable"
@@ -415,10 +415,10 @@ def test_label_input_order_does_not_change_ranked_metrics_or_blocker_order():
     assert reversed_input == ordered
     assert ordered["metrics"]["aggregate"]["precision_at_10"][
         "candidate_sample_size"
-    ] == 60
+    ] == 100
     assert ordered["metrics"]["aggregate"]["precision_at_30"][
         "candidate_sample_size"
-    ] == 180
+    ] == 300
 
 
 def test_profile_facets_remain_metadata_and_do_not_shrink_offline_denominators():
@@ -440,7 +440,7 @@ def test_profile_facets_remain_metadata_and_do_not_shrink_offline_denominators()
     )
 
     assert report["evaluation_status"] == "evaluated"
-    assert report["metrics"]["aggregate"]["candidate_sample_size"] == 180
+    assert report["metrics"]["aggregate"]["candidate_sample_size"] == 300
     assert {row["country"] for row in manifest["candidates"]} == set(countries)
     assert {row["followers"] for row in manifest["candidates"]} == set(
         follower_bands
