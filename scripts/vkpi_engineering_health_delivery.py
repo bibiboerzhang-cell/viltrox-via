@@ -471,7 +471,8 @@ def _ledger_gate(
         return None
     if exposure < 1:
         return _metric("missing_or_insufficient", None, 0, "ledger_covered_zero_deployments")
-    return _observed_or_insufficient(at_target, exposure, minimum, EMPTY_SAMPLE_AT_TARGET)
+    # 合同 v1.1:台账类指标 sample_unit=ledger_days(30 天地板防起账首日白拿分)。
+    return _observed_or_insufficient(at_target, int(ledger_covered_days), minimum, EMPTY_SAMPLE_AT_TARGET)
 
 
 def _mttr_metric(
@@ -496,7 +497,7 @@ def _mttr_metric(
         )
     return _observed_or_insufficient(
         round(_nearest_rank(resolved, percentile), 2),
-        max(exposure, len(resolved)),
+        int(ledger_covered_days),
         minimum,
         f"resolved_incidents_{len(resolved)}",
     )
@@ -519,7 +520,10 @@ def _sla_metric(
         if item.resolved_at is not None
         and (item.deadline_at is None or item.resolved_at <= item.deadline_at)
     )
-    return _observed_or_insufficient(round(met / len(relevant), 4), len(relevant), minimum)
+    return _observed_or_insufficient(
+        round(met / len(relevant), 4), int(ledger_covered_days), minimum,
+        f"relevant_incidents_{len(relevant)}",
+    )
 
 
 def _overdue_metric(
@@ -541,7 +545,10 @@ def _overdue_metric(
         still_open_late = item.resolved_at is None and window_end > item.deadline_at
         if resolved_late or still_open_late:
             overdue += 1
-    return _observed_or_insufficient(float(overdue), len(criticals), minimum)
+    return _observed_or_insufficient(
+        float(overdue), int(ledger_covered_days), minimum,
+        f"critical_incidents_{len(criticals)}",
+    )
 
 
 def _build_test_metric(durations: Sequence[float], minimum: float | None) -> dict[str, Any]:

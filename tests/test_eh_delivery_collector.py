@@ -256,20 +256,22 @@ def test_mttr_percentiles_over_resolved_incidents(rich_tree: Path) -> None:
     metrics = _collect(rich_tree)["metrics"]
     p50 = metrics["mttr_p50_minutes"]
     p90 = metrics["mttr_p90_minutes"]
-    # Resolved durations 30/100/200 minutes; exposure = 26 covered deployments.
-    assert (p50["status"], p50["value"], p50["sample_count"]) == ("observed", 100.0, 26)
-    assert (p90["status"], p90["value"], p90["sample_count"]) == ("observed", 200.0, 26)
+    # Resolved durations 30/100/200 minutes; v1.1 样本单位 = 台账覆盖天数(窗内 90)。
+    assert (p50["status"], p50["value"], p50["sample_count"]) == ("observed", 100.0, 90)
+    assert (p90["status"], p90["value"], p90["sample_count"]) == ("observed", 200.0, 90)
     assert p50["reason"] == "resolved_incidents_3"
 
 
 def test_p1_p2_sla_rate_counts_open_incident_as_missed(rich_tree: Path) -> None:
     metric = _collect(rich_tree)["metrics"]["p1_p2_sla_rate"]
-    assert metric == {"status": "observed", "value": 0.6667, "sample_count": 3}
+    assert metric == {"status": "observed", "value": 0.6667, "sample_count": 90,
+                      "reason": "relevant_incidents_3"}
 
 
 def test_overdue_critical_counts_deadline_breach(rich_tree: Path) -> None:
     metric = _collect(rich_tree)["metrics"]["overdue_critical_count"]
-    assert metric == {"status": "observed", "value": 1.0, "sample_count": 1}
+    assert metric == {"status": "observed", "value": 1.0, "sample_count": 90,
+                      "reason": "critical_incidents_1"}
 
 
 def test_build_test_p95_from_verify_receipt_durations(rich_tree: Path) -> None:
@@ -280,17 +282,17 @@ def test_build_test_p95_from_verify_receipt_durations(rich_tree: Path) -> None:
 
 @pytest.fixture()
 def at_target_tree(tmp_path: Path) -> Path:
-    """21 covered deployments, ledger open 29 days, zero incidents."""
+    """21 covered deployments, ledger open 30 days (v1.1 地板线上), zero incidents."""
     start = datetime(2026, 8, 5, tzinfo=UTC)
     for index in range(21):
         _mk_deploy(tmp_path, start + timedelta(days=index), _sha12(index))
-    _write_incidents(tmp_path, [{"type": "ledger_opened", "at": "2026-08-01T00:00:00Z"}])
+    _write_incidents(tmp_path, [{"type": "ledger_opened", "at": "2026-07-31T00:00:00Z"}])
     return tmp_path
 
 
 def test_empty_ledger_records_at_target_with_reason(at_target_tree: Path) -> None:
     receipt = _collect(at_target_tree)
-    assert receipt["window"]["ledger_covered_days"] == 29.0
+    assert receipt["window"]["ledger_covered_days"] == 30.0
     metrics = receipt["metrics"]
     for name, value in (
         ("mttr_p50_minutes", 60.0),
@@ -301,8 +303,21 @@ def test_empty_ledger_records_at_target_with_reason(at_target_tree: Path) -> Non
         metric = metrics[name]
         assert metric["status"] == "observed", name
         assert metric["value"] == value, name
-        assert metric["sample_count"] == 21, name
+        assert metric["sample_count"] == 30, name  # v1.1 sample_unit=ledger_days
         assert metric["reason"] == delivery.EMPTY_SAMPLE_AT_TARGET, name
+
+
+def test_ledger_under_thirty_days_downgrades_at_target(at_target_tree: Path) -> None:
+    """合同 v1.1 的 30 台账天地板:29 天不许白拿 at-target(防起账首日拿分)。"""
+    incidents = at_target_tree / "runtime" / "ops" / "incidents.jsonl"
+    if not incidents.exists():
+        incidents = next(at_target_tree.rglob("incidents.jsonl"))
+    lines = incidents.read_text().splitlines()
+    lines[0] = json.dumps({"type": "ledger_opened", "at": "2026-08-01T00:00:00Z"})
+    incidents.write_text("\n".join(lines) + "\n")
+    metric = _collect(at_target_tree)["metrics"]["mttr_p50_minutes"]
+    assert metric["status"] == "missing_or_insufficient"
+    assert metric["sample_count"] == 29
 
 
 def test_zero_incident_cfr_is_observed_zero_over_covered_deploys(
