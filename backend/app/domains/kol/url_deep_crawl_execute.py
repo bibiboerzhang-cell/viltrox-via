@@ -422,63 +422,125 @@ def _crawl_profile_basics(
     crawler = _crawler_for(classified.platform)
     since_text = str(since or "").strip()
     started = time.monotonic()
-    profile_payload: dict[str, Any] = {}
     videos_payload: dict[str, Any] = {}
-    videos_items: list[dict[str, Any]] = []
 
     if classified.platform == "youtube":
-        profile_payload = crawler.crawl_channel_profile(target, channel_id="", max_posts=max_posts)
-        profile_items = profile_payload.get("items") if isinstance(profile_payload, dict) else []
-        profile = profile_items[0] if isinstance(profile_items, list) and profile_items and isinstance(profile_items[0], dict) else {}
-        channel_id = str(profile.get("id") or classified.channel_id or "")
-        if channel_id and hasattr(crawler, "crawl_channel_videos"):
-            # since 非空 → publishedAfter 下推,拿的是「窗口内的内容」;空 → 原路径不变。
-            videos_payload = crawler.crawl_channel_videos(
-                channel_id, max_results=max_posts, since=since_text
-            )
-            videos = videos_payload.get("items") if isinstance(videos_payload, dict) else []
-            videos_items = [video for video in videos if isinstance(video, dict)] if isinstance(videos, list) else []
-        fallback_videos = profile_payload.get("videos") if isinstance(profile_payload, dict) else None
-        if not videos_items and isinstance(fallback_videos, list):
-            videos_items = [video for video in fallback_videos if isinstance(video, dict)]
-    else:
-        profile_payload = crawler.crawl_channel_profile(
-            target, channel_id="", max_posts=max_posts, since=since_text
+        profile_payload, videos_payload, videos_items = _crawl_youtube_profile_basics(
+            crawler, classified, target=target, max_posts=max_posts, since_text=since_text
         )
-        payload_items = _content_items_from_payload(profile_payload) if isinstance(profile_payload, dict) else []
-        profile_items = profile_payload.get("items") if isinstance(profile_payload, dict) else []
-        if payload_items and _looks_like_content_item(payload_items[0]):
-            videos_items = payload_items
-        elif isinstance(profile_items, list):
-            videos_items = [item for item in profile_items if isinstance(item, dict) and _looks_like_content_item(item)]
-        if not videos_items and isinstance(profile_items, list) and profile_items and isinstance(profile_items[0], dict):
-            # IG 断点(2026-06-12 审计):instagram-profile-scraper 的 dataset item 是 profile 对象,
-            # 帖子嵌在 profile.latestPosts 里——此前没人下钻这层,IG 账号分析永远 no_history_video_url。
-            # 下钻口径对齐 industry/snapshot_collector.py。
-            profile_obj = profile_items[0]
-            for nested_key in ("latestPosts", "posts", "videos"):
-                nested = profile_obj.get(nested_key)
-                if isinstance(nested, list) and nested:
-                    videos_items = [item for item in nested if isinstance(item, dict) and _looks_like_content_item(item)]
-                    if videos_items:
-                        break
+    else:
+        profile_payload, videos_items = _crawl_generic_profile_basics(
+            crawler, target=target, max_posts=max_posts, since_text=since_text
+        )
 
-    provider_source = str((profile_payload or {}).get("provider_source") or (videos_payload or {}).get("provider_source") or "")
-    status = str(
+    return {
+        "profile_payload": profile_payload if isinstance(profile_payload, dict) else {},
+        "videos_payload": videos_payload if isinstance(videos_payload, dict) else {},
+        "videos_items": videos_items,
+        "status": _crawl_payload_status(profile_payload, videos_payload),
+        "provider_source": _crawl_provider_source(profile_payload, videos_payload),
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
+def _crawl_youtube_profile_basics(
+    crawler: Any,
+    classified: ClassifiedUrl,
+    *,
+    target: str,
+    max_posts: int,
+    since_text: str,
+) -> tuple[Any, dict[str, Any], list[dict[str, Any]]]:
+    profile_payload = crawler.crawl_channel_profile(target, channel_id="", max_posts=max_posts)
+    videos_payload: dict[str, Any] = {}
+    videos_items: list[dict[str, Any]] = []
+    channel_id = _youtube_profile_channel_id(profile_payload, classified)
+    if channel_id and hasattr(crawler, "crawl_channel_videos"):
+        # since 非空 → publishedAfter 下推,拿的是「窗口内的内容」;空 → 原路径不变。
+        videos_payload = crawler.crawl_channel_videos(
+            channel_id, max_results=max_posts, since=since_text
+        )
+        videos = videos_payload.get("items") if isinstance(videos_payload, dict) else []
+        videos_items = _dict_video_items(videos)
+    fallback_videos = profile_payload.get("videos") if isinstance(profile_payload, dict) else None
+    if not videos_items and isinstance(fallback_videos, list):
+        videos_items = _dict_video_items(fallback_videos)
+    return profile_payload, videos_payload, videos_items
+
+
+def _youtube_profile_channel_id(profile_payload: Any, classified: ClassifiedUrl) -> str:
+    profile_items = profile_payload.get("items") if isinstance(profile_payload, dict) else []
+    profile = (
+        profile_items[0]
+        if isinstance(profile_items, list) and profile_items and isinstance(profile_items[0], dict)
+        else {}
+    )
+    return str(profile.get("id") or classified.channel_id or "")
+
+
+def _dict_video_items(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, list):
+        return []
+    return [video for video in values if isinstance(video, dict)]
+
+
+def _crawl_generic_profile_basics(
+    crawler: Any,
+    *,
+    target: str,
+    max_posts: int,
+    since_text: str,
+) -> tuple[Any, list[dict[str, Any]]]:
+    profile_payload = crawler.crawl_channel_profile(
+        target, channel_id="", max_posts=max_posts, since=since_text
+    )
+    payload_items = _content_items_from_payload(profile_payload) if isinstance(profile_payload, dict) else []
+    profile_items = profile_payload.get("items") if isinstance(profile_payload, dict) else []
+    videos_items: list[dict[str, Any]] = []
+    if payload_items and _looks_like_content_item(payload_items[0]):
+        videos_items = payload_items
+    elif isinstance(profile_items, list):
+        videos_items = _content_video_items(profile_items)
+    if not videos_items and isinstance(profile_items, list) and profile_items and isinstance(profile_items[0], dict):
+        videos_items = _nested_profile_video_items(profile_items[0])
+    return profile_payload, videos_items
+
+
+def _content_video_items(items: Any) -> list[dict[str, Any]]:
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict) and _looks_like_content_item(item)]
+
+
+def _nested_profile_video_items(profile_obj: dict[str, Any]) -> list[dict[str, Any]]:
+    # IG 断点(2026-06-12 审计):instagram-profile-scraper 的 dataset item 是 profile 对象,
+    # 帖子嵌在 profile.latestPosts 里——此前没人下钻这层,IG 账号分析永远 no_history_video_url。
+    # 下钻口径对齐 industry/snapshot_collector.py。
+    for nested_key in ("latestPosts", "posts", "videos"):
+        nested = profile_obj.get(nested_key)
+        if isinstance(nested, list) and nested:
+            videos_items = _content_video_items(nested)
+            if videos_items:
+                return videos_items
+    return []
+
+
+def _crawl_payload_status(profile_payload: Any, videos_payload: Any) -> str:
+    return str(
         (profile_payload or {}).get("sync_status")
         or (profile_payload or {}).get("provider_status")
         or (videos_payload or {}).get("sync_status")
         or (videos_payload or {}).get("provider_status")
         or "unknown"
     )
-    return {
-        "profile_payload": profile_payload if isinstance(profile_payload, dict) else {},
-        "videos_payload": videos_payload if isinstance(videos_payload, dict) else {},
-        "videos_items": videos_items,
-        "status": status,
-        "provider_source": provider_source,
-        "elapsed_ms": int((time.monotonic() - started) * 1000),
-    }
+
+
+def _crawl_provider_source(profile_payload: Any, videos_payload: Any) -> str:
+    return str(
+        (profile_payload or {}).get("provider_source")
+        or (videos_payload or {}).get("provider_source")
+        or ""
+    )
 
 
 def _profile_data_from_crawl(

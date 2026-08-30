@@ -148,11 +148,33 @@ def _batch_cached_video_urls(
 
     if not is_postgres_runtime():
         return None
-    from app.domains.kol.url_deep_crawl_queue import _content_url_video_id
-    from app.domains.media import cache
-    from app.domains.media.cache_core import _resolved_cached_asset_row
-
     items = [dict(row) for row in rows]
+    candidates, pairs, digests = _batch_cache_candidates(items)
+    asset_rows = _batch_cache_asset_rows(conn, pairs, digests)
+    if asset_rows is None:
+        return None
+    by_pair, by_digest = _batch_cache_asset_index(asset_rows)
+    resolved: dict[int, str] = {}
+    for item in items:
+        evidence_id = int(item.get("evidence_id") or item.get("id") or 0)
+        if evidence_id not in candidates:
+            continue
+        value = _batch_item_cache_value(item, candidates[evidence_id], by_pair, by_digest)
+        if value:
+            resolved[evidence_id] = value
+    return resolved
+
+
+def _batch_cache_hex_digest(value: Any) -> str:
+    digest = str(value or "").strip().lower()
+    if len(digest) == 64 and not any(ch not in "0123456789abcdef" for ch in digest):
+        return digest
+    return ""
+
+
+def _batch_cache_candidates(
+    items: list[dict[str, Any]],
+) -> tuple[dict[int, list[tuple[str, str]]], list[tuple[str, str]], list[str]]:
     candidates: dict[int, list[tuple[str, str]]] = {}
     pairs: list[tuple[str, str]] = []
     digests: list[str] = []
@@ -163,26 +185,37 @@ def _batch_cached_video_urls(
         platform = _platform(item.get("platform") or "")
         if not evidence_id or platform not in _BATCH_VIDEO_CACHE_PLATFORMS:
             continue
-        values = [
-            _content_url_video_id(platform, item.get("content_url")),
-            str(evidence_id),
-        ]
-        item_pairs: list[tuple[str, str]] = []
-        for external_id in values:
-            pair = (platform, str(external_id or "").strip())
-            if not pair[1] or pair in item_pairs:
-                continue
-            item_pairs.append(pair)
+        item_pairs = _batch_item_cache_pairs(platform, evidence_id, item.get("content_url"))
+        for pair in item_pairs:
             if pair not in seen_pairs:
                 seen_pairs.add(pair)
                 pairs.append(pair)
         candidates[evidence_id] = item_pairs
-        digest = str(item.get("cached_video_digest") or "").strip().lower()
-        if len(digest) == 64 and not any(ch not in "0123456789abcdef" for ch in digest):
-            if digest not in seen_digests:
-                seen_digests.add(digest)
-                digests.append(digest)
+        digest = _batch_cache_hex_digest(item.get("cached_video_digest"))
+        if digest and digest not in seen_digests:
+            seen_digests.add(digest)
+            digests.append(digest)
+    return candidates, pairs, digests
 
+
+def _batch_item_cache_pairs(
+    platform: str, evidence_id: int, content_url: Any
+) -> list[tuple[str, str]]:
+    # 懒 import 保持在函数体内(与改前同位):顶层导入会撞 url_deep_crawl_queue 循环。
+    from app.domains.kol.url_deep_crawl_queue import _content_url_video_id
+
+    item_pairs: list[tuple[str, str]] = []
+    for external_id in (_content_url_video_id(platform, content_url), str(evidence_id)):
+        pair = (platform, str(external_id or "").strip())
+        if not pair[1] or pair in item_pairs:
+            continue
+        item_pairs.append(pair)
+    return item_pairs
+
+
+def _batch_cache_asset_rows(
+    conn: Any, pairs: list[tuple[str, str]], digests: list[str]
+) -> list[Any] | None:
     conditions: list[str] = []
     params: list[Any] = []
     for platform, external_id in pairs:
@@ -191,22 +224,27 @@ def _batch_cached_video_urls(
     if digests:
         conditions.append(f"digest IN ({','.join(['?'] * len(digests))})")
         params.extend(digests)
-    asset_rows: list[Any] = []
-    if conditions:
-        try:
-            asset_rows = conn.execute(
-                f"""
-                SELECT digest, cache_url, storage_backend, r2_key, platform, external_id
-                FROM vkpi_media_cache_assets
-                WHERE media_kind='video' AND status='cached'
-                  AND ({' OR '.join(conditions)})
-                ORDER BY updated_at DESC, id DESC
-                """,
-                tuple(params),
-            ).fetchall()
-        except Exception:
-            return None
+    if not conditions:
+        return []
+    try:
+        return conn.execute(
+            f"""
+            SELECT digest, cache_url, storage_backend, r2_key, platform, external_id
+            FROM vkpi_media_cache_assets
+            WHERE media_kind='video' AND status='cached'
+              AND ({' OR '.join(conditions)})
+            ORDER BY updated_at DESC, id DESC
+            """,
+            tuple(params),
+        ).fetchall()
+    except Exception:
+        # ``None`` 是文档化哨兵(批读不可用→调用方回退逐条老路径),非静默吞错。
+        return None
 
+
+def _batch_cache_asset_index(
+    asset_rows: list[Any],
+) -> tuple[dict[tuple[str, str], dict[str, Any]], dict[str, dict[str, Any]]]:
     by_pair: dict[tuple[str, str], dict[str, Any]] = {}
     by_digest: dict[str, dict[str, Any]] = {}
     for raw in asset_rows:
@@ -217,51 +255,65 @@ def _batch_cached_video_urls(
             by_pair.setdefault(pair, asset)
         if digest:
             by_digest.setdefault(digest, asset)
+    return by_pair, by_digest
 
-    def resolve_asset(asset: dict[str, Any] | None) -> str:
-        if not asset:
-            return ""
-        digest = str(asset.get("digest") or "").strip().lower()
-        if digest and cache.cached_video_file(digest):
-            return f"/api/vkpi-media/video-cache/{digest}"
-        return str(_resolved_cached_asset_row(asset) or "").strip()
 
-    resolved: dict[int, str] = {}
-    for item in items:
-        evidence_id = int(item.get("evidence_id") or item.get("id") or 0)
-        if evidence_id not in candidates:
-            continue
-        raw_url = str(item.get("cached_video_url") or "").strip()
-        raw_digest = str(item.get("cached_video_digest") or "").strip().lower()
-        digest = raw_digest if len(raw_digest) == 64 and not any(ch not in "0123456789abcdef" for ch in raw_digest) else ""
-        value = ""
-        if digest:
-            if cache.cached_video_file(digest):
-                value = f"/api/vkpi-media/video-cache/{digest}"
-            if not value:
-                projected_asset = {
-                    "digest": digest,
-                    "cache_url": item.get("cached_video_url"),
-                    "storage_backend": item.get("cached_video_storage_backend"),
-                    "r2_key": item.get("cached_video_r2_key"),
-                }
-                value = resolve_asset(projected_asset) or resolve_asset(by_digest.get(digest))
-        elif raw_url and not _video_cache_digest(raw_url):
-            value = raw_url
-        for pair in candidates[evidence_id]:
-            if value:
-                break
-            try:
-                value = str(cache.cached_video_url_for_item(*pair, allow_db_fallback=False) or "").strip()
-            except TypeError:
-                # A rolling test double may expose the older two-argument
-                # signature; the batched DB projection below remains valid.
-                value = ""
-            if not value:
-                value = resolve_asset(by_pair.get(pair))
+def _batch_resolve_cache_asset(asset: dict[str, Any] | None) -> str:
+    if not asset:
+        return ""
+    # 懒 import 保持在函数体内(与改前同位),monkeypatch 走模块属性路径不受影响。
+    from app.domains.media import cache
+    from app.domains.media.cache_core import _resolved_cached_asset_row
+
+    digest = str(asset.get("digest") or "").strip().lower()
+    if digest and cache.cached_video_file(digest):
+        return f"/api/vkpi-media/video-cache/{digest}"
+    return str(_resolved_cached_asset_row(asset) or "").strip()
+
+
+def _batch_item_hint_value(item: dict[str, Any], by_digest: dict[str, dict[str, Any]]) -> str:
+    from app.domains.media import cache
+
+    raw_url = str(item.get("cached_video_url") or "").strip()
+    digest = _batch_cache_hex_digest(item.get("cached_video_digest"))
+    value = ""
+    if digest:
+        if cache.cached_video_file(digest):
+            value = f"/api/vkpi-media/video-cache/{digest}"
+        if not value:
+            projected_asset = {
+                "digest": digest,
+                "cache_url": item.get("cached_video_url"),
+                "storage_backend": item.get("cached_video_storage_backend"),
+                "r2_key": item.get("cached_video_r2_key"),
+            }
+            value = _batch_resolve_cache_asset(projected_asset) or _batch_resolve_cache_asset(by_digest.get(digest))
+    elif raw_url and not _video_cache_digest(raw_url):
+        value = raw_url
+    return value
+
+
+def _batch_item_cache_value(
+    item: dict[str, Any],
+    item_pairs: list[tuple[str, str]],
+    by_pair: dict[tuple[str, str], dict[str, Any]],
+    by_digest: dict[str, dict[str, Any]],
+) -> str:
+    from app.domains.media import cache
+
+    value = _batch_item_hint_value(item, by_digest)
+    for pair in item_pairs:
         if value:
-            resolved[evidence_id] = value
-    return resolved
+            break
+        try:
+            value = str(cache.cached_video_url_for_item(*pair, allow_db_fallback=False) or "").strip()
+        except TypeError:
+            # A rolling test double may expose the older two-argument
+            # signature; the batched DB projection below remains valid.
+            value = ""
+        if not value:
+            value = _batch_resolve_cache_asset(by_pair.get(pair))
+    return value
 
 
 def _v6_breakdown_for_item(item: dict[str, Any]) -> dict[str, Any] | None:
