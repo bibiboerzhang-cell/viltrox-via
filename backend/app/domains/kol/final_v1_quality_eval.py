@@ -551,163 +551,185 @@ def _metric_checks(metrics: dict[str, Any], thresholds: dict[str, Any]) -> list[
     return checks
 
 
-def evaluate_final_v1_quality(gold: Any, predictions: Any) -> dict[str, Any]:
-    """Evaluate saved outputs without calling Gemini, another provider, or a DB."""
-
-    gold_manifest = validate_gold(gold)
-    prediction_manifest = validate_predictions(predictions)
-    if prediction_manifest.get("dataset_id") != gold_manifest.get("dataset_id"):
-        raise FinalV1QualityInputError("prediction_dataset_id_mismatch")
+def _new_eval_state(gold_manifest: dict[str, Any], prediction_manifest: dict[str, Any]) -> dict[str, Any]:
     prediction_records = {
         str(item["case_id"]): item for item in prediction_manifest.get("predictions") or []
     }
     gold_case_ids = {str(item["case_id"]) for item in gold_manifest.get("cases") or []}
-    unexpected_case_ids = sorted(set(prediction_records) - gold_case_ids)
-    brand_matrix = {
-        actual: {predicted: 0 for predicted in (*BRAND_STATUSES, "invalid")}
-        for actual in BRAND_STATUSES
-    }
-    product_counts = {key: 0 for key in ("expected", "predicted", "true_positive", "false_positive", "false_negative")}
-    competitor_counts = dict(product_counts)
-    schema_present = 0
-    schema_total = len(REQUIRED_OUTPUT_SHAPES) * len(gold_case_ids)
-    expected_non_title = 0
-    matched_non_title = 0
-    evidence_claim_count = 0
-    modality_supported = 0
-    timestamp_supported = 0
-    absent_predictions = 0
-    unsupported_absent = 0
-    malformed_evidence = 0
-    case_reports: list[dict[str, Any]] = []
-    input_errors: list[str] = []
+    counts = {key: 0 for key in ("expected", "predicted", "true_positive", "false_positive", "false_negative")}
     tolerance = _number(gold_manifest.get("timestamp_tolerance_seconds"))
-    tolerance = 2.0 if tolerance is None else max(0.0, tolerance)
-    for gold_case in gold_manifest.get("cases") or []:
-        case_id = str(gold_case["case_id"])
-        expected = gold_case["expected"]
-        record = prediction_records.get(case_id)
-        errors: list[str] = []
-        if record is None:
-            errors.append("prediction_missing")
-            payload: dict[str, Any] = {}
-        else:
-            for field in ("media_sha256", "model", "prompt_version"):
-                if record.get(field) != gold_case.get(field):
-                    errors.append(f"prediction_{field}_mismatch")
-            payload = _unwrap_output(record) if not errors else {}
-        input_errors.extend(f"{case_id}:{error}" for error in errors)
-        present, missing_paths = _schema_profile(payload)
-        schema_present += present
-        expected_products, product_aliases = _expected_aliases(expected.get("products") or [])
-        expected_competitors, competitor_aliases = _expected_aliases(expected.get("competitors") or [])
-        extracted = _extract_case_prediction(
-            payload,
-            product_aliases=product_aliases,
-            competitor_aliases=competitor_aliases,
-        )
-        actual_status = str(expected["brand_status"])
-        predicted_status = str(extracted["status"])
-        brand_matrix[actual_status][predicted_status] += 1
-        case_product_counts = _set_counts(expected_products, extracted["products"])
-        case_competitor_counts = _set_counts(expected_competitors, extracted["competitors"])
-        for key in product_counts:
-            product_counts[key] += case_product_counts[key]
-            competitor_counts[key] += case_competitor_counts[key]
-        case_expected_evidence = [
-            item for item in expected.get("evidence") or [] if item.get("in_title") is False
+    return {
+        "prediction_records": prediction_records,
+        "gold_case_ids": gold_case_ids,
+        "unexpected_case_ids": sorted(set(prediction_records) - gold_case_ids),
+        "brand_matrix": {
+            actual: {predicted: 0 for predicted in (*BRAND_STATUSES, "invalid")}
+            for actual in BRAND_STATUSES
+        },
+        "product_counts": counts,
+        "competitor_counts": dict(counts),
+        **dict.fromkeys(
+            ("schema_present", "expected_non_title", "matched_non_title", "evidence_claim_count",
+             "modality_supported", "timestamp_supported", "absent_predictions", "unsupported_absent",
+             "malformed_evidence"),
+            0,
+        ),
+        "case_reports": [],
+        "input_errors": [],
+        "tolerance": 2.0 if tolerance is None else max(0.0, tolerance),
+    }
+
+
+def _case_provenance(gold_case: dict[str, Any], record: Any) -> tuple[list[str], dict[str, Any]]:
+    errors: list[str] = []
+    if record is None:
+        errors.append("prediction_missing")
+        payload: dict[str, Any] = {}
+    else:
+        for field in ("media_sha256", "model", "prompt_version"):
+            if record.get(field) != gold_case.get(field):
+                errors.append(f"prediction_{field}_mismatch")
+        payload = _unwrap_output(record) if not errors else {}
+    return errors, payload
+
+
+def _non_title_evidence(expected: dict[str, Any], predicted: list[dict[str, Any]], tolerance: float) -> tuple[int, int]:
+    case_expected_evidence = [
+        item for item in expected.get("evidence") or [] if item.get("in_title") is False
+    ]
+    case_matched = sum(
+        1
+        for expected_item in case_expected_evidence
+        if any(_evidence_matches(expected_item, item, tolerance) for item in predicted)
+    )
+    return len(case_expected_evidence), case_matched
+
+
+def _claim_evidence_flags(matching: list[dict[str, Any]]) -> tuple[bool, bool]:
+    modality_supported = any(
+        item["modality"] in EVIDENCE_MODALITIES and item["has_support_text"] is True
+        for item in matching
+    )
+    timestamp_supported = any(
+        item["modality"] in EVIDENCE_MODALITIES
+        and item["timestamp_seconds"] is not None
+        and item["has_support_text"] is True
+        for item in matching
+    )
+    return modality_supported, timestamp_supported
+
+
+def _claim_support(predicted_status: str, extracted: dict[str, Any]) -> dict[str, int]:
+    claims: set[tuple[str, str]] = set()
+    if predicted_status == "present":
+        claims.add(("brand", "viltrox"))
+    claims.update(("product", key) for key in extracted["products"])
+    claims.update(("competitor", key) for key in extracted["competitors"])
+    support = {"claims": 0, "modality": 0, "timestamp": 0}
+    for entity_type, entity_key in claims:
+        matching = [
+            item for item in extracted["evidence"]
+            if item["entity_type"] == entity_type and item["entity_key"] == entity_key
         ]
-        case_matched = sum(
-            1
-            for expected_item in case_expected_evidence
-            if any(
-                _evidence_matches(expected_item, predicted_item, tolerance)
-                for predicted_item in extracted["evidence"]
-            )
+        support["claims"] += 1
+        modality_supported, timestamp_supported = _claim_evidence_flags(matching)
+        support["modality"] += int(modality_supported)
+        support["timestamp"] += int(timestamp_supported)
+    return support
+
+
+def _accumulate_case(state: dict[str, Any], gold_case: dict[str, Any]) -> None:
+    case_id = str(gold_case["case_id"])
+    expected = gold_case["expected"]
+    errors, payload = _case_provenance(gold_case, state["prediction_records"].get(case_id))
+    state["input_errors"].extend(f"{case_id}:{error}" for error in errors)
+    present, missing_paths = _schema_profile(payload)
+    state["schema_present"] += present
+    expected_products, product_aliases = _expected_aliases(expected.get("products") or [])
+    expected_competitors, competitor_aliases = _expected_aliases(expected.get("competitors") or [])
+    extracted = _extract_case_prediction(payload, product_aliases=product_aliases, competitor_aliases=competitor_aliases)
+    actual_status = str(expected["brand_status"])
+    predicted_status = str(extracted["status"])
+    state["brand_matrix"][actual_status][predicted_status] += 1
+    case_product_counts = _set_counts(expected_products, extracted["products"])
+    case_competitor_counts = _set_counts(expected_competitors, extracted["competitors"])
+    for key in state["product_counts"]:
+        state["product_counts"][key] += case_product_counts[key]
+        state["competitor_counts"][key] += case_competitor_counts[key]
+    expected_evidence_count, case_matched = _non_title_evidence(
+        expected, extracted["evidence"], state["tolerance"]
+    )
+    state["expected_non_title"] += expected_evidence_count
+    state["matched_non_title"] += case_matched
+    support = _claim_support(predicted_status, extracted)
+    state["evidence_claim_count"] += support["claims"]
+    state["modality_supported"] += support["modality"]
+    state["timestamp_supported"] += support["timestamp"]
+    if predicted_status == "absent":
+        state["absent_predictions"] += 1
+        supported = bool(
+            extracted["inspection_complete"]
+            and {"visual", "audio"}.issubset(extracted["checked_modalities"])
         )
-        expected_non_title += len(case_expected_evidence)
-        matched_non_title += case_matched
-        claims: set[tuple[str, str]] = set()
-        if predicted_status == "present":
-            claims.add(("brand", "viltrox"))
-        claims.update(("product", key) for key in extracted["products"])
-        claims.update(("competitor", key) for key in extracted["competitors"])
-        for entity_type, entity_key in claims:
-            matching = [
-                item
-                for item in extracted["evidence"]
-                if item["entity_type"] == entity_type and item["entity_key"] == entity_key
-            ]
-            evidence_claim_count += 1
-            if any(
-                item["modality"] in EVIDENCE_MODALITIES and item["has_support_text"] is True
-                for item in matching
-            ):
-                modality_supported += 1
-            if any(
-                item["modality"] in EVIDENCE_MODALITIES
-                and item["timestamp_seconds"] is not None
-                and item["has_support_text"] is True
-                for item in matching
-            ):
-                timestamp_supported += 1
-        if predicted_status == "absent":
-            absent_predictions += 1
-            supported = bool(
-                extracted["inspection_complete"]
-                and {"visual", "audio"}.issubset(extracted["checked_modalities"])
-            )
-            if not supported:
-                unsupported_absent += 1
-        malformed_evidence += int(extracted["malformed_evidence_count"])
-        case_reports.append(
-            {
-                "case_id": case_id,
-                "provenance_valid": not errors,
-                "errors": errors,
-                "brand_expected": actual_status,
-                "brand_predicted": predicted_status,
-                "products": case_product_counts,
-                "competitors": case_competitor_counts,
-                "non_title_evidence_expected": len(case_expected_evidence),
-                "non_title_evidence_matched": case_matched,
-                "schema_fields_present": present,
-                "schema_fields_required": len(REQUIRED_OUTPUT_SHAPES),
-                "schema_missing_or_invalid": missing_paths,
-            }
-        )
+        if not supported:
+            state["unsupported_absent"] += 1
+    state["malformed_evidence"] += int(extracted["malformed_evidence_count"])
+    state["case_reports"].append(
+        {
+            "case_id": case_id,
+            "provenance_valid": not errors,
+            "errors": errors,
+            "brand_expected": actual_status,
+            "brand_predicted": predicted_status,
+            "products": case_product_counts,
+            "competitors": case_competitor_counts,
+            "non_title_evidence_expected": expected_evidence_count,
+            "non_title_evidence_matched": case_matched,
+            "schema_fields_present": present,
+            "schema_fields_required": len(REQUIRED_OUTPUT_SHAPES),
+            "schema_missing_or_invalid": missing_paths,
+        }
+    )
+
+
+def _build_report(gold_manifest: dict[str, Any], prediction_manifest: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    schema_total = len(REQUIRED_OUTPUT_SHAPES) * len(state["gold_case_ids"])
     metrics = {
-        "brand_status": _brand_metrics(brand_matrix, len(gold_case_ids)),
+        "brand_status": _brand_metrics(state["brand_matrix"], len(state["gold_case_ids"])),
         "non_title_evidence": {
-            "expected_count": expected_non_title,
-            "matched_count": matched_non_title,
-            "recall": _ratio(matched_non_title, expected_non_title),
+            "expected_count": state["expected_non_title"],
+            "matched_count": state["matched_non_title"],
+            "recall": _ratio(state["matched_non_title"], state["expected_non_title"]),
             "title_fields_read_as_evidence": 0,
         },
-        "products": _set_metrics(product_counts, include_hallucination=True),
-        "competitors": _set_metrics(competitor_counts),
+        "products": _set_metrics(state["product_counts"], include_hallucination=True),
+        "competitors": _set_metrics(state["competitor_counts"]),
         "evidence_support": {
-            "claim_count": evidence_claim_count,
-            "modality_supported_count": modality_supported,
-            "modality_support_rate": _ratio(modality_supported, evidence_claim_count),
-            "timestamp_supported_count": timestamp_supported,
-            "timestamp_support_rate": _ratio(timestamp_supported, evidence_claim_count),
-            "absent_prediction_count": absent_predictions,
-            "unsupported_absent_count": unsupported_absent,
+            "claim_count": state["evidence_claim_count"],
+            "modality_supported_count": state["modality_supported"],
+            "modality_support_rate": _ratio(state["modality_supported"], state["evidence_claim_count"]),
+            "timestamp_supported_count": state["timestamp_supported"],
+            "timestamp_support_rate": _ratio(state["timestamp_supported"], state["evidence_claim_count"]),
+            "absent_prediction_count": state["absent_predictions"],
+            "unsupported_absent_count": state["unsupported_absent"],
             "supported_absent_rate": _ratio(
-                absent_predictions - unsupported_absent,
-                absent_predictions,
+                state["absent_predictions"] - state["unsupported_absent"],
+                state["absent_predictions"],
             ),
-            "malformed_structured_evidence_count": malformed_evidence,
+            "malformed_structured_evidence_count": state["malformed_evidence"],
         },
         "schema_coverage": {
-            "fields_present": schema_present,
+            "fields_present": state["schema_present"],
             "fields_required": schema_total,
-            "coverage": _ratio(schema_present, schema_total, empty=0.0),
+            "coverage": _ratio(state["schema_present"], schema_total, empty=0.0),
         },
     }
     checks = _metric_checks(metrics, gold_manifest.get("metric_thresholds") or {})
-    metric_pass = all(item["passed"] for item in checks) and not input_errors and not unexpected_case_ids
+    metric_pass = (
+        all(item["passed"] for item in checks)
+        and not state["input_errors"]
+        and not state["unexpected_case_ids"]
+    )
     execution = prediction_manifest.get("execution")
     execution = execution if isinstance(execution, dict) else {}
     accuracy_reason = (
@@ -722,10 +744,10 @@ def evaluate_final_v1_quality(gold: Any, predictions: Any) -> dict[str, Any]:
         "dataset": {
             "dataset_id": gold_manifest.get("dataset_id"),
             "dataset_kind": gold_manifest.get("dataset_kind"),
-            "case_count": len(gold_case_ids),
+            "case_count": len(state["gold_case_ids"]),
             "gold_fingerprint": _fingerprint(gold_manifest),
             "predictions_fingerprint": _fingerprint(prediction_manifest),
-            "timestamp_tolerance_seconds": tolerance,
+            "timestamp_tolerance_seconds": state["tolerance"],
         },
         "accuracy_claim": {
             "allowed": False,
@@ -740,12 +762,12 @@ def evaluate_final_v1_quality(gold: Any, predictions: Any) -> dict[str, Any]:
         },
         "metrics": metrics,
         "input_integrity": {
-            "expected_case_count": len(gold_case_ids),
-            "prediction_count": len(prediction_records),
-            "missing_or_drifted": sorted(input_errors),
-            "unexpected_case_ids": unexpected_case_ids,
+            "expected_case_count": len(state["gold_case_ids"]),
+            "prediction_count": len(state["prediction_records"]),
+            "missing_or_drifted": sorted(state["input_errors"]),
+            "unexpected_case_ids": state["unexpected_case_ids"],
         },
-        "cases": case_reports,
+        "cases": state["case_reports"],
         "diagnostics": {
             "provider_calls_during_evaluation": False,
             "llm_calls_during_evaluation": False,
@@ -754,6 +776,19 @@ def evaluate_final_v1_quality(gold: Any, predictions: Any) -> dict[str, Any]:
             "title_fields_used_as_evidence": False,
         },
     }
+
+
+def evaluate_final_v1_quality(gold: Any, predictions: Any) -> dict[str, Any]:
+    """Evaluate saved outputs without calling Gemini, another provider, or a DB."""
+
+    gold_manifest = validate_gold(gold)
+    prediction_manifest = validate_predictions(predictions)
+    if prediction_manifest.get("dataset_id") != gold_manifest.get("dataset_id"):
+        raise FinalV1QualityInputError("prediction_dataset_id_mismatch")
+    state = _new_eval_state(gold_manifest, prediction_manifest)
+    for gold_case in gold_manifest.get("cases") or []:
+        _accumulate_case(state, gold_case)
+    return _build_report(gold_manifest, prediction_manifest, state)
 
 
 __all__ = [

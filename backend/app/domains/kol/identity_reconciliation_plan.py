@@ -333,21 +333,11 @@ def _candidate_alias_plan(
     }
 
 
-def build_identity_reconciliation_plan(
-    *,
-    pool_rows: list[dict[str, Any]],
-    alias_rows: list[dict[str, Any]],
-    session_items: list[dict[str, Any]],
-    generated_at: str,
-    source_label: str = "local_production_snapshot",
-) -> dict[str, Any]:
-    """Build a deterministic, evidence-only plan from already-read rows."""
-    rows = [dict(row) for row in pool_rows]
-    aliases = [dict(row) for row in alias_rows]
-    sessions = [dict(item) for item in session_items]
-    active = [row for row in rows if not row.get("duplicate_of_id")]
-    active_ids = {int(row["id"]) for row in active}
-
+def _pool_alias_index(
+    active: list[dict[str, Any]],
+    aliases: list[dict[str, Any]],
+    active_ids: set[int],
+) -> dict[int, set[str]]:
     aliases_by_pool = {
         int(row["id"]): canonical_creator_aliases(_pool_probe(row))
         for row in active
@@ -356,7 +346,13 @@ def build_identity_reconciliation_plan(
         pool_id = int(alias_row.get("kol_pool_id") or 0)
         if pool_id in active_ids:
             aliases_by_pool[pool_id].update(canonical_creator_aliases(alias_row))
-    components = _union_components(active, aliases_by_pool)
+    return aliases_by_pool
+
+
+def _duplicate_group_details(
+    components: list[list[dict[str, Any]]],
+    aliases_by_pool: dict[int, set[str]],
+) -> tuple[list[list[dict[str, Any]]], list[dict[str, Any]]]:
     duplicate_groups = [group for group in components if len(group) > 1]
     canonical_group_details: list[dict[str, Any]] = []
     for group in duplicate_groups:
@@ -371,7 +367,12 @@ def build_identity_reconciliation_plan(
                 "action": "manual_review_only",
             }
         )
+    return duplicate_groups, canonical_group_details
 
+
+def _folded_session_stats(
+    sessions: list[dict[str, Any]],
+) -> tuple[dict[int, list[dict[str, Any]]], list[dict[str, int]]]:
     session_by_id: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for item in sessions:
         session_by_id[int(item.get("session_id") or 0)].append(item)
@@ -393,7 +394,12 @@ def build_identity_reconciliation_plan(
                     "folded_cards": raw_count - folded_count,
                 }
             )
+    return session_by_id, folded_sessions
 
+
+def _session_official_scan(
+    sessions: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     session_avatar_rows: list[dict[str, Any]] = []
     session_official_rows: list[dict[str, Any]] = []
     for item in sessions:
@@ -415,7 +421,10 @@ def build_identity_reconciliation_plan(
                     "planned_read_action": "hide_from_discovery_projection_keep_evidence_row",
                 }
             )
+    return session_avatar_rows, session_official_rows
 
+
+def _pool_official_plan(active: list[dict[str, Any]]) -> list[dict[str, Any]]:
     pool_official_rows: list[dict[str, Any]] = []
     for row in active:
         verdict = discovery_account_gate_verdict(_pool_probe(row))
@@ -440,7 +449,128 @@ def build_identity_reconciliation_plan(
                 },
             }
         )
+    return pool_official_rows
 
+
+def _pool_section(
+    *,
+    rows: list[dict[str, Any]],
+    active: list[dict[str, Any]],
+    aliases_by_pool: dict[int, set[str]],
+    components: list[list[dict[str, Any]]],
+    duplicate_groups: list[list[dict[str, Any]]],
+    canonical_group_details: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "physical_rows": len(rows),
+        "currently_visible_master_rows": len(active),
+        "already_soft_folded_rows": len(rows) - len(active),
+        "rows_with_canonical_alias": sum(bool(value) for value in aliases_by_pool.values()),
+        "canonical_duplicate_group_count": len(duplicate_groups),
+        "canonical_extra_visible_rows": sum(len(group) - 1 for group in duplicate_groups),
+        "canonical_projection_unique_rows": len(components),
+        "duplicate_groups": sorted(
+            canonical_group_details,
+            key=lambda item: int(item["pool_rows"][0]["id"]),
+        ),
+    }
+
+
+def _session_projection_section(
+    session_by_id: dict[int, list[dict[str, Any]]],
+    sessions: list[dict[str, Any]],
+    folded_sessions: list[dict[str, int]],
+) -> dict[str, Any]:
+    return {
+        "session_count": len(session_by_id),
+        "creator_item_count": sum(
+            str(item.get("item_type") or "") in CREATOR_ITEM_TYPES for item in sessions
+        ),
+        "sessions_with_canonical_folds": len(folded_sessions),
+        "creator_cards_folded": sum(item["folded_cards"] for item in folded_sessions),
+        "folded_sessions": sorted(folded_sessions, key=lambda item: item["session_id"]),
+    }
+
+
+def _official_isolation_section(
+    pool_official_rows: list[dict[str, Any]],
+    session_official_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "pool_confirmed_count": len(pool_official_rows),
+        "pool_plan": sorted(pool_official_rows, key=lambda item: int(item["id"])),
+        "session_confirmed_count": len(session_official_rows),
+        "session_unarchived_confirmed_count": sum(
+            not item["session_archived"] for item in session_official_rows
+        ),
+        "session_read_plan": sorted(
+            session_official_rows,
+            key=lambda item: (item["session_id"], item["item_id"]),
+        ),
+        "physical_history_delete_allowed": False,
+    }
+
+
+def _estimated_impact_section(
+    *,
+    rows: list[dict[str, Any]],
+    aliases: list[dict[str, Any]],
+    active: list[dict[str, Any]],
+    alias_plan: dict[str, Any],
+    session_official_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "before_release_snapshot": {
+            "pool_visible_master_rows": len(active),
+            "alias_table_rows": len(aliases),
+            "unarchived_confirmed_official_session_cards": sum(
+                not item["session_archived"] for item in session_official_rows
+            ),
+        },
+        "after_read_guard_release": {
+            "confirmed_official_session_cards_hidden": sum(
+                not item["session_archived"] for item in session_official_rows
+            ),
+            "history_rows_deleted": 0,
+            "pool_rows_deleted": 0,
+            "duplicate_pointer_rows_written": 0,
+        },
+        "after_separately_reviewed_alias_backfill": {
+            "status": "estimate_only_not_executed",
+            "expected_alias_table_rows_without_drift": (
+                len(aliases) + int(alias_plan["safe_alias_backfill_count"])
+            ),
+            "safe_uc_handle_bridge_groups": alias_plan["safe_bridge_group_count"],
+            "manual_bridge_groups_unchanged": alias_plan["manual_bridge_group_count"],
+            "pool_physical_rows_unchanged": len(rows),
+            "score_fields_unchanged": True,
+        },
+    }
+
+
+def build_identity_reconciliation_plan(
+    *,
+    pool_rows: list[dict[str, Any]],
+    alias_rows: list[dict[str, Any]],
+    session_items: list[dict[str, Any]],
+    generated_at: str,
+    source_label: str = "local_production_snapshot",
+) -> dict[str, Any]:
+    """Build a deterministic, evidence-only plan from already-read rows."""
+    rows = [dict(row) for row in pool_rows]
+    aliases = [dict(row) for row in alias_rows]
+    sessions = [dict(item) for item in session_items]
+    active = [row for row in rows if not row.get("duplicate_of_id")]
+    active_ids = {int(row["id"]) for row in active}
+
+    aliases_by_pool = _pool_alias_index(active, aliases, active_ids)
+    components = _union_components(active, aliases_by_pool)
+    duplicate_groups, canonical_group_details = _duplicate_group_details(
+        components, aliases_by_pool
+    )
+    session_by_id, folded_sessions = _folded_session_stats(sessions)
+    session_avatar_rows, session_official_rows = _session_official_scan(sessions)
+    pool_official_rows = _pool_official_plan(active)
     alias_plan = _candidate_alias_plan(
         pool_rows=rows,
         alias_rows=aliases,
@@ -454,74 +584,33 @@ def build_identity_reconciliation_plan(
         "mode": "dry_run",
         "claim_status": "descriptive_only",
         "writes_performed": 0,
-        "pool": {
-            "physical_rows": len(rows),
-            "currently_visible_master_rows": len(active),
-            "already_soft_folded_rows": len(rows) - len(active),
-            "rows_with_canonical_alias": sum(bool(value) for value in aliases_by_pool.values()),
-            "canonical_duplicate_group_count": len(duplicate_groups),
-            "canonical_extra_visible_rows": sum(len(group) - 1 for group in duplicate_groups),
-            "canonical_projection_unique_rows": len(components),
-            "duplicate_groups": sorted(
-                canonical_group_details,
-                key=lambda item: int(item["pool_rows"][0]["id"]),
-            ),
-        },
-        "session_read_projection": {
-            "session_count": len(session_by_id),
-            "creator_item_count": sum(
-                str(item.get("item_type") or "") in CREATOR_ITEM_TYPES for item in sessions
-            ),
-            "sessions_with_canonical_folds": len(folded_sessions),
-            "creator_cards_folded": sum(item["folded_cards"] for item in folded_sessions),
-            "folded_sessions": sorted(folded_sessions, key=lambda item: item["session_id"]),
-        },
+        "pool": _pool_section(
+            rows=rows,
+            active=active,
+            aliases_by_pool=aliases_by_pool,
+            components=components,
+            duplicate_groups=duplicate_groups,
+            canonical_group_details=canonical_group_details,
+        ),
+        "session_read_projection": _session_projection_section(
+            session_by_id, sessions, folded_sessions
+        ),
         "avatar_integrity": {
             "pool_visible_rows": _avatar_counts(active),
             "session_creator_items": _avatar_counts(session_avatar_rows),
             "network_probe_performed": False,
         },
         "identity_alias_backfill": alias_plan,
-        "official_isolation": {
-            "pool_confirmed_count": len(pool_official_rows),
-            "pool_plan": sorted(pool_official_rows, key=lambda item: int(item["id"])),
-            "session_confirmed_count": len(session_official_rows),
-            "session_unarchived_confirmed_count": sum(
-                not item["session_archived"] for item in session_official_rows
-            ),
-            "session_read_plan": sorted(
-                session_official_rows,
-                key=lambda item: (item["session_id"], item["item_id"]),
-            ),
-            "physical_history_delete_allowed": False,
-        },
-        "estimated_impact": {
-            "before_release_snapshot": {
-                "pool_visible_master_rows": len(active),
-                "alias_table_rows": len(aliases),
-                "unarchived_confirmed_official_session_cards": sum(
-                    not item["session_archived"] for item in session_official_rows
-                ),
-            },
-            "after_read_guard_release": {
-                "confirmed_official_session_cards_hidden": sum(
-                    not item["session_archived"] for item in session_official_rows
-                ),
-                "history_rows_deleted": 0,
-                "pool_rows_deleted": 0,
-                "duplicate_pointer_rows_written": 0,
-            },
-            "after_separately_reviewed_alias_backfill": {
-                "status": "estimate_only_not_executed",
-                "expected_alias_table_rows_without_drift": (
-                    len(aliases) + int(alias_plan["safe_alias_backfill_count"])
-                ),
-                "safe_uc_handle_bridge_groups": alias_plan["safe_bridge_group_count"],
-                "manual_bridge_groups_unchanged": alias_plan["manual_bridge_group_count"],
-                "pool_physical_rows_unchanged": len(rows),
-                "score_fields_unchanged": True,
-            },
-        },
+        "official_isolation": _official_isolation_section(
+            pool_official_rows, session_official_rows
+        ),
+        "estimated_impact": _estimated_impact_section(
+            rows=rows,
+            aliases=aliases,
+            active=active,
+            alias_plan=alias_plan,
+            session_official_rows=session_official_rows,
+        ),
     }
     digest_payload = json.dumps(body, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     body["plan_sha256"] = hashlib.sha256(digest_payload.encode("utf-8")).hexdigest()
