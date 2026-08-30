@@ -108,14 +108,14 @@ def test_filtered_search_returns_30_and_labels_relevance_backfill(
         "code_version": None,
         "dataset_snapshot_id": None,
         "filter_policy_version": "kol_search_hard_filters_and_lanes_v1",
-        "target_count": 360,
+        "target_count": 600,
         "labeled_count": 0,
-        "dual_review_target": 180,
+        "dual_review_target": 300,
         "dual_reviewed_count": 0,
         "disagreement_count": 0,
         "claim_status": "not_evaluated",
         "metrics": None,
-        "note": "检索排序分不是准确率；完成固定 6 类 Top-30 真人标注后才发布离线相关性指标。",
+        "note": "检索排序分不是准确率；完成固定 10 类 Top-30 真人标注后才发布离线相关性指标。",
     }
 
 

@@ -229,11 +229,11 @@ def build_runtime_evaluation_status(
         ),
         "metrics": flat_metrics,
         "note": (
-            "固定 6 类 Top-30 真人标注已通过离线相关性闸；不代表业务结果或线上预测准确率。"
+            "固定 10 类 Top-30 真人标注已通过离线相关性闸；不代表业务结果或线上预测准确率。"
             if state == "shareable"
             else "算法、过滤规则、代码或数据快照已变化；历史评测不可继续发布。"
             if state == "stale"
-            else "检索排序分不是准确率；完成固定 6 类 Top-30 真人标注后才发布离线相关性指标。"
+            else "检索排序分不是准确率；完成固定 10 类 Top-30 真人标注后才发布离线相关性指标。"
         ),
     }
 
