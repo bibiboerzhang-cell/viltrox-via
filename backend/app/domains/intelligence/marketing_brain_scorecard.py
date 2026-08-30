@@ -295,15 +295,8 @@ def _dimension(
     }
 
 
-def build_marketing_brain_scorecard(
-    staff: dict[str, Any] | None = None,
-    *,
-    ops_dir: str = "runtime/ops",
-) -> dict[str, Any]:
-    """Return a read-only 90+ scorecard for the AI Marketing Brain target."""
-    del staff
-    activity_contracts = _activity_evidence_contracts()
-    # 1. Evidence graph: installed ledger capability vs recent traced evidence.
+def _evidence_dimension(activity_contracts: dict[str, Any]) -> dict[str, Any]:
+    """1. Evidence graph: installed ledger capability vs recent traced evidence."""
     event_scope = "organization_id = 1"
     event_count = _count("vkpi_event_ledger", event_scope) or 0
     recent_events = _recent_count(
@@ -373,8 +366,32 @@ def build_marketing_brain_scorecard(
         + 0.25 * distinct_trace_cov
         + 0.25 * distinct_prov_cov
     )
+    return _dimension(
+        "evidence_graph", "证据图谱 / Trace", 18, evidence_capability, evidence_score,
+        facts={
+            "event_count": event_count,
+            "recent_7d": recent_events,
+            "recent_distinct_business_units_7d": recent_event_units,
+            "recent_distinct_traced_units_7d": recent_traced_event_units,
+            "recent_distinct_server_bound_units_7d": recent_provenance_event_units,
+            "recent_verified_units_7d": recent_verified_event_units,
+            # Raw row coverages remain descriptive diagnostics only.  The
+            # score uses the distinct coverages below so duplicate emits
+            # cannot lift it.
+            "trace_coverage": round(trace_cov, 3),
+            "provenance_coverage": round(prov_cov, 3),
+            "recent_trace_coverage": round(recent_trace_cov, 3),
+            "recent_provenance_coverage": round(recent_prov_cov, 3),
+            "distinct_trace_coverage": round(distinct_trace_cov, 3),
+            "distinct_server_bound_coverage": round(distinct_prov_cov, 3),
+        },
+        target="近7天>=80条带trace/provenance的事件,所有推荐可追溯。",
+        next_step="把 market/KOL/project/action 关键判断统一 emit 到 event_ledger,并带 trace_id/provenance。",
+    )
 
-    # 2. Durable workflow: tables/checkpoint contract vs recent completed runs.
+
+def _workflow_dimension(activity_contracts: dict[str, Any]) -> dict[str, Any]:
+    """2. Durable workflow: tables/checkpoint contract vs recent completed runs."""
     workflow_runs = _count("vkpi_workflow_runs") or 0
     workflow_steps = _count("vkpi_workflow_steps") or 0
     workflow_checkpoints = _count("vkpi_workflow_checkpoints") or 0
@@ -401,8 +418,21 @@ def build_marketing_brain_scorecard(
         if table_exists(table)
     ) / 3.0
     workflow_score = 0.70 * _ramp(recent_runs, 20) + 0.30 * recent_completed_cov
+    return _dimension(
+        "durable_workflow", "Durable Workflow", 18, workflow_capability, workflow_score,
+        facts={"runs": workflow_runs, "recent_7d": recent_runs, "steps": workflow_steps,
+               "checkpoints": workflow_checkpoints, "completed_runs": completed_runs,
+               "distinct_business_units": observed_workflow_units,
+               "server_bound_distinct_units": observed_workflow_units,
+               "recent_completed_7d": recent_completed_runs,
+               "historical_completion_coverage": round(completed_cov, 3)},
+        target="近7天>=20条真自动 run(搜索/建档/深析/履约/复盘都走 workflow),非手动 demo。",
+        next_step="把搜索/建档/深析/履约观察/复盘/action执行都接成 workflow,挂调度自动起。",
+    )
 
-    # 3. Recommendation contract: contract shape is capability; verified executions are evidence.
+
+def _recommendation_dimension() -> dict[str, Any]:
+    """3. Recommendation contract: contract shape is capability; verified executions are evidence."""
     action_contract = _action_contract_snapshot()
     contract_cov = float(action_contract.get("score") or 0.0)
     executed_total = _count("vkpi_action_inbox", "status IN ('executed', 'done')") or 0
@@ -429,21 +459,16 @@ def build_marketing_brain_scorecard(
     exec_cov = _ramp(executed_verified, 10)
     action_capability = contract_cov
     action_score = exec_cov
+    return _dimension(
+        "recommendation_contract", "推荐决策合约", 22, action_capability, action_score,
+        facts={**action_contract, "executed_total": executed_total, "executed_verified": executed_verified},
+        target="合约字段齐 + 执行后有真 result_checklist(before/after),>=10 条真验收。",
+        next_step="跑真 approve->execute 让 result_checklist 规模落地;拒绝无证据推荐。",
+    )
 
-    # 4. Learning loop: no effectiveness claim unless all three independent legs pass.
-    feedback_rows = _count("vkpi_memory_feedback") or 0
-    recommendation_feedback = _count("vkpi_recommendation_feedback") or 0
-    recommendation_outcomes = _count("vkpi_recommendation_outcomes") or 0
-    learning_readiness = build_learning_readiness()
-    learning_facts = learning_readiness.get("facts") or {}
-    real_feedback = int(learning_facts.get("real_human_feedback") or 0)
-    finalized_outcomes = int(learning_facts.get("evidence_backed_finalized_outcomes") or 0)
-    # Raw recommendation flags/cost fields are descriptive operational state,
-    # not a verified business outcome.  Only evidence-backed, human-finalized
-    # GTM outcomes may contribute to this observed leg.
-    real_outcomes = finalized_outcomes
-    prediction_evals = int(learning_facts.get("prediction_evals_with_actual") or 0)
-    outreach_coverage = learning_facts.get("outreach_prediction_coverage") or {}
+
+def _recent_prediction_evals_30d(outreach_coverage: dict[str, Any]) -> int:
+    """Distinct finalized outcomes with a verified prediction eval in 30 days."""
     outreach_claimable = bool(outreach_coverage.get("claimable"))
     outreach_recent_guard = (
         "" if outreach_claimable else
@@ -458,7 +483,7 @@ def build_marketing_brain_scorecard(
     # One finalized business outcome is one learning unit even when several
     # forecast runs are evaluated against it.  Counting eval rows here would
     # let duplicate runs inflate both the learning and eval-governance legs.
-    recent_prediction_evals = _distinct_count(
+    return _distinct_count(
         "vkpi_prediction_evals",
         "outcome_id",
         "actual_value IS NOT NULL AND outcome_id IS NOT NULL "
@@ -473,6 +498,29 @@ def build_marketing_brain_scorecard(
         f"AND ({outcome_sql}) "
         "AND o.decided_at >= NOW() - INTERVAL '30 days')",
     ) or 0
+
+
+def _learning_dimension() -> tuple[dict[str, Any], dict[str, Any], int, int]:
+    """4. Learning loop: no effectiveness claim unless all three independent legs pass.
+
+    Returns (dimension, learning_readiness, prediction_evals,
+    recent_prediction_evals) — the last three feed data-readiness and the
+    eval-governance leg without re-querying.
+    """
+    feedback_rows = _count("vkpi_memory_feedback") or 0
+    recommendation_feedback = _count("vkpi_recommendation_feedback") or 0
+    recommendation_outcomes = _count("vkpi_recommendation_outcomes") or 0
+    learning_readiness = build_learning_readiness()
+    learning_facts = learning_readiness.get("facts") or {}
+    real_feedback = int(learning_facts.get("real_human_feedback") or 0)
+    finalized_outcomes = int(learning_facts.get("evidence_backed_finalized_outcomes") or 0)
+    # Raw recommendation flags/cost fields are descriptive operational state,
+    # not a verified business outcome.  Only evidence-backed, human-finalized
+    # GTM outcomes may contribute to this observed leg.
+    real_outcomes = finalized_outcomes
+    prediction_evals = int(learning_facts.get("prediction_evals_with_actual") or 0)
+    outreach_coverage = learning_facts.get("outreach_prediction_coverage") or {}
+    recent_prediction_evals = _recent_prediction_evals_30d(outreach_coverage)
     learning_capability = sum(
         1.0
         for table in (
@@ -488,8 +536,32 @@ def build_marketing_brain_scorecard(
         + 0.35 * _ramp(finalized_outcomes, 20)
         + 0.35 * _ramp(recent_prediction_evals, 10)
     )
+    dimension = _dimension(
+        "learning_loop", "学习回写", 18, learning_capability, learning_score,
+        facts={
+            "memory_feedback": feedback_rows,
+            "recommendation_feedback": recommendation_feedback,
+            "real_feedback_nondemo": real_feedback,
+            "recommendation_outcomes": recommendation_outcomes,
+            "real_outcomes_with_label": real_outcomes,
+            "evidence_backed_finalized_gtm_outcomes": finalized_outcomes,
+            "prediction_evals_with_actual": prediction_evals,
+            "recent_prediction_evals_30d": recent_prediction_evals,
+            "outreach_prediction_coverage": outreach_coverage,
+            "data_readiness": learning_readiness,
+        },
+        target="真反馈>=20 + 真业务outcome>=20 + 有实际值的预测评估>=10 + 有证据人工finalized>=10。",
+        next_step="先积累真实 shortlist/reject、履约/订单结果、人工裁决与 prediction eval;三腿未齐只展示观察值。",
+    )
+    return dimension, learning_readiness, prediction_evals, recent_prediction_evals
 
-    # 5. Market intelligence: raw observations stay separate from promoted DB evidence.
+
+def _market_dimension(ops_dir: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """5. Market intelligence: raw observations stay separate from promoted DB evidence.
+
+    Returns (dimension, source_freshness, raw_market_source) so data-readiness
+    reuses the exact evaluated requirements.
+    """
     competitor_signals = _count("vkpi_competitor_signals") or 0
     fresh_signal_where = (
         "COALESCE(review_status, '') <> 'expired' "
@@ -541,8 +613,34 @@ def build_marketing_brain_scorecard(
         + 0.30 * market_mention_score
         + 0.30 * raw_market_source_score
     )
+    dimension = _dimension(
+        "market_intelligence", "市场/竞品智能", 14, market_capability, market_score,
+        facts={
+            "competitor_signals": competitor_signals,
+            "fresh_signals_nonexpired": fresh_signals,
+            "market_mentions": market_mentions,
+            "recent_mentions_7d": recent_mentions,
+            "latest_fresh_signal": latest_fresh_signal,
+            "latest_market_mention": latest_market_mention,
+            "source_freshness": source_freshness,
+            "raw_market_source": raw_market_source,
+            "observed_evidence_legs": {
+                "promoted_competitor_signals": round(promoted_signal_score, 3),
+                "market_mentions": round(market_mention_score, 3),
+                "raw_external_market_source": round(raw_market_source_score, 3),
+            },
+            "card_contract": market_contract,
+        },
+        target="近7天原始外部信号采集可验证,并有>=20条未过期 promoted signal / mention。",
+        next_step="保持 external_smoke 只读采集,经审核后再提升为 competitor signal / mention;原始工件不冒充入库信号。",
+    )
+    return dimension, source_freshness, raw_market_source
 
-    # 6. Eval governance: installed suites vs recent suites and real prediction evaluations.
+
+def _eval_dimension(
+    activity_contracts: dict[str, Any], prediction_evals: int, recent_prediction_evals: int
+) -> dict[str, Any]:
+    """6. Eval governance: installed suites vs recent suites and real prediction evaluations."""
     eval_runs = _count("vkpi_eval_runs") or 0
     eval_results = _count("vkpi_eval_results") or 0
     eval_contract = activity_contracts["eval"]
@@ -573,112 +671,36 @@ def build_marketing_brain_scorecard(
         0.50 * _ramp(recent_evals, 3)
         + 0.50 * _ramp(recent_prediction_evals, 10)
     )
+    return _dimension(
+        "eval_governance", "Evals 治理", 10, eval_capability, eval_score,
+        facts={"eval_runs": eval_runs, "eval_results": eval_results, "recent_runs_7d": recent_evals,
+               "fully_passed_runs": latest_passed,
+               "fully_passed_distinct_server_bound_suites": latest_passed,
+               "prediction_evals_with_actual": prediction_evals,
+               "recent_prediction_evals_30d": recent_prediction_evals},
+        target="近7天有评测套件运行,近30天有>=10条带真实 actual 的 prediction eval。",
+        next_step="把 scorecard 纳入 evals,并让真实结果持续回填 prediction_evals;历史通过不算近期证据。",
+    )
 
-    dimensions = [
-        _dimension(
-            "evidence_graph", "证据图谱 / Trace", 18, evidence_capability, evidence_score,
-            facts={
-                "event_count": event_count,
-                "recent_7d": recent_events,
-                "recent_distinct_business_units_7d": recent_event_units,
-                "recent_distinct_traced_units_7d": recent_traced_event_units,
-                "recent_distinct_server_bound_units_7d": recent_provenance_event_units,
-                "recent_verified_units_7d": recent_verified_event_units,
-                # Raw row coverages remain descriptive diagnostics only.  The
-                # score uses the distinct coverages below so duplicate emits
-                # cannot lift it.
-                "trace_coverage": round(trace_cov, 3),
-                "provenance_coverage": round(prov_cov, 3),
-                "recent_trace_coverage": round(recent_trace_cov, 3),
-                "recent_provenance_coverage": round(recent_prov_cov, 3),
-                "distinct_trace_coverage": round(distinct_trace_cov, 3),
-                "distinct_server_bound_coverage": round(distinct_prov_cov, 3),
-            },
-            target="近7天>=80条带trace/provenance的事件,所有推荐可追溯。",
-            next_step="把 market/KOL/project/action 关键判断统一 emit 到 event_ledger,并带 trace_id/provenance。",
-        ),
-        _dimension(
-            "durable_workflow", "Durable Workflow", 18, workflow_capability, workflow_score,
-            facts={"runs": workflow_runs, "recent_7d": recent_runs, "steps": workflow_steps,
-                   "checkpoints": workflow_checkpoints, "completed_runs": completed_runs,
-                   "distinct_business_units": observed_workflow_units,
-                   "server_bound_distinct_units": observed_workflow_units,
-                   "recent_completed_7d": recent_completed_runs,
-                   "historical_completion_coverage": round(completed_cov, 3)},
-            target="近7天>=20条真自动 run(搜索/建档/深析/履约/复盘都走 workflow),非手动 demo。",
-            next_step="把搜索/建档/深析/履约观察/复盘/action执行都接成 workflow,挂调度自动起。",
-        ),
-        _dimension(
-            "recommendation_contract", "推荐决策合约", 22, action_capability, action_score,
-            facts={**action_contract, "executed_total": executed_total, "executed_verified": executed_verified},
-            target="合约字段齐 + 执行后有真 result_checklist(before/after),>=10 条真验收。",
-            next_step="跑真 approve->execute 让 result_checklist 规模落地;拒绝无证据推荐。",
-        ),
-        _dimension(
-            "learning_loop", "学习回写", 18, learning_capability, learning_score,
-            facts={
-                "memory_feedback": feedback_rows,
-                "recommendation_feedback": recommendation_feedback,
-                "real_feedback_nondemo": real_feedback,
-                "recommendation_outcomes": recommendation_outcomes,
-                "real_outcomes_with_label": real_outcomes,
-                "evidence_backed_finalized_gtm_outcomes": finalized_outcomes,
-                "prediction_evals_with_actual": prediction_evals,
-                "recent_prediction_evals_30d": recent_prediction_evals,
-                "outreach_prediction_coverage": outreach_coverage,
-                "data_readiness": learning_readiness,
-            },
-            target="真反馈>=20 + 真业务outcome>=20 + 有实际值的预测评估>=10 + 有证据人工finalized>=10。",
-            next_step="先积累真实 shortlist/reject、履约/订单结果、人工裁决与 prediction eval;三腿未齐只展示观察值。",
-        ),
-        _dimension(
-            "market_intelligence", "市场/竞品智能", 14, market_capability, market_score,
-            facts={
-                "competitor_signals": competitor_signals,
-                "fresh_signals_nonexpired": fresh_signals,
-                "market_mentions": market_mentions,
-                "recent_mentions_7d": recent_mentions,
-                "latest_fresh_signal": latest_fresh_signal,
-                "latest_market_mention": latest_market_mention,
-                "source_freshness": source_freshness,
-                "raw_market_source": raw_market_source,
-                "observed_evidence_legs": {
-                    "promoted_competitor_signals": round(promoted_signal_score, 3),
-                    "market_mentions": round(market_mention_score, 3),
-                    "raw_external_market_source": round(raw_market_source_score, 3),
-                },
-                "card_contract": market_contract,
-            },
-            target="近7天原始外部信号采集可验证,并有>=20条未过期 promoted signal / mention。",
-            next_step="保持 external_smoke 只读采集,经审核后再提升为 competitor signal / mention;原始工件不冒充入库信号。",
-        ),
-        _dimension(
-            "eval_governance", "Evals 治理", 10, eval_capability, eval_score,
-            facts={"eval_runs": eval_runs, "eval_results": eval_results, "recent_runs_7d": recent_evals,
-                   "fully_passed_runs": latest_passed,
-                   "fully_passed_distinct_server_bound_suites": latest_passed,
-                   "prediction_evals_with_actual": prediction_evals,
-                   "recent_prediction_evals_30d": recent_prediction_evals},
-            target="近7天有评测套件运行,近30天有>=10条带真实 actual 的 prediction eval。",
-            next_step="把 scorecard 纳入 evals,并让真实结果持续回填 prediction_evals;历史通过不算近期证据。",
-        ),
-    ]
 
-    score = round(sum(float(item["observed_evidence_weighted_score"]) for item in dimensions), 1)
-    capability_score = round(sum(float(item["capability_weighted_score"]) for item in dimensions), 1)
-    weakest = sorted(dimensions, key=lambda item: (float(item["score"]), -int(item["weight"])))[:3]
+def _grade_for(value: float) -> str:
+    if value >= 90:
+        return "90+ ready"
+    if value >= 80:
+        return "near_90"
+    if value >= 65:
+        return "internal_ai_platform"
+    if value >= 45:
+        return "capability_stack"
+    return "module_collection"
 
-    def grade_for(value: float) -> str:
-        if value >= 90:
-            return "90+ ready"
-        if value >= 80:
-            return "near_90"
-        if value >= 65:
-            return "internal_ai_platform"
-        if value >= 45:
-            return "capability_stack"
-        return "module_collection"
 
+def _data_readiness_block(
+    learning_readiness: dict[str, Any],
+    source_freshness: dict[str, Any],
+    raw_market_source: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Merge learning + source readiness; effectiveness claims stay fail-closed."""
     overall_claimable = bool(learning_readiness.get("claimable")) and bool(source_freshness.get("claimable"))
     data_readiness = {
         **learning_readiness,
@@ -698,7 +720,34 @@ def build_marketing_brain_scorecard(
             "raw_market_source_does_not_clear_db_or_outcome_blockers": True,
         },
     }
-    grade = grade_for(score)
+    return data_readiness, overall_claimable
+
+
+def build_marketing_brain_scorecard(
+    staff: dict[str, Any] | None = None,
+    *,
+    ops_dir: str = "runtime/ops",
+) -> dict[str, Any]:
+    """Return a read-only 90+ scorecard for the AI Marketing Brain target."""
+    del staff
+    activity_contracts = _activity_evidence_contracts()
+    evidence_dim = _evidence_dimension(activity_contracts)
+    workflow_dim = _workflow_dimension(activity_contracts)
+    action_dim = _recommendation_dimension()
+    learning_dim, learning_readiness, prediction_evals, recent_prediction_evals = (
+        _learning_dimension()
+    )
+    market_dim, source_freshness, raw_market_source = _market_dimension(ops_dir)
+    eval_dim = _eval_dimension(activity_contracts, prediction_evals, recent_prediction_evals)
+    dimensions = [evidence_dim, workflow_dim, action_dim, learning_dim, market_dim, eval_dim]
+
+    score = round(sum(float(item["observed_evidence_weighted_score"]) for item in dimensions), 1)
+    capability_score = round(sum(float(item["capability_weighted_score"]) for item in dimensions), 1)
+    weakest = sorted(dimensions, key=lambda item: (float(item["score"]), -int(item["weight"])))[:3]
+    data_readiness, overall_claimable = _data_readiness_block(
+        learning_readiness, source_freshness, raw_market_source
+    )
+    grade = _grade_for(score)
     if grade == "90+ ready" and not overall_claimable:
         grade = "90+ observed_but_unvalidated"
     return {
@@ -715,7 +764,7 @@ def build_marketing_brain_scorecard(
         },
         "target_score": 90,
         "grade": grade,
-        "capability_grade": grade_for(capability_score),
+        "capability_grade": _grade_for(capability_score),
         "claim_status": "validated" if overall_claimable else "descriptive_only",
         "data_readiness": data_readiness,
         "dimensions": dimensions,

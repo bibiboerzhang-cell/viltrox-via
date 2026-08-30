@@ -248,66 +248,45 @@ def _write_demo_ledger(action: dict[str, Any], staff: dict[str, Any] | None, *, 
         return None
 
 
-# ── 整链串跑 ─────────────────────────────────────────────────────────
+# ── 整链串跑:六步各自的落点构建器 ───────────────────────────────────
 
 
-def run_demo_loop(dry_run: bool = True, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    """整链六步串跑一遍并留痕。返回每步真实落点表与行 id(证明链路通)。
+def _empty_inbox_result(dry: bool) -> dict[str, Any]:
+    """inbox 无可串建议时的诚实空结果(dry 与否给不同原因)。"""
+    reason = (
+        "白名单类(零外部副作用)当前无 suggested 建议,或候选均未过执行前置校验"
+        "(如实体已不存在的 stale 建议),dry_run=False 诚实拒跑"
+        if not dry
+        else "inbox 当前无 suggested 建议(先跑每日生成或等 producer 产出)"
+    )
+    return {
+        "status": "empty",
+        "dry_run": dry,
+        "reason": reason,
+        "whitelist": list(_ZERO_SIDE_EFFECT_CATEGORIES),
+        "steps": [],
+        "chain_ok": False,
+        "generated_at": _now_iso(),
+    }
 
-    dry_run=True(默认):模拟批准 + demo ledger 行,不真执行、不改 inbox 状态。
-    dry_run=False:仅放行零外部副作用白名单类(受理留痕型 executor),真批准 + 真执行。
-    任何单步失败不抛:该步 ok=False 带原因,chain_ok 如实为 False。
-    """
-    from app.db.connection import table_exists
 
-    dry = bool(dry_run)
-    if not table_exists(_INBOX):
-        return {
-            "status": "empty",
-            "dry_run": dry,
-            "reason": "vkpi_action_inbox 未建(迁移141未 apply),无建议可串",
-            "steps": [],
-            "chain_ok": False,
-            "generated_at": _now_iso(),
-        }
-
-    # ① 取一条真实 suggested 建议。
-    action = _pick_suggested_action(whitelist_only=not dry)
-    if action is None:
-        reason = (
-            "白名单类(零外部副作用)当前无 suggested 建议,或候选均未过执行前置校验"
-            "(如实体已不存在的 stale 建议),dry_run=False 诚实拒跑"
-            if not dry
-            else "inbox 当前无 suggested 建议(先跑每日生成或等 producer 产出)"
-        )
-        return {
-            "status": "empty",
-            "dry_run": dry,
-            "reason": reason,
-            "whitelist": list(_ZERO_SIDE_EFFECT_CATEGORIES),
-            "steps": [],
-            "chain_ok": False,
-            "generated_at": _now_iso(),
-        }
-
-    action_id = int(action.get("id") or 0)
-    category = str(action.get("category") or "")
-    steps: list[dict[str, Any]] = []
-    steps.append(
-        _step(
-            1,
-            "inbox_pick",
-            "取建议",
-            _INBOX,
-            "read",
-            row_id=action_id,
-            ok=True,
-            summary=f"取到真实 suggested 建议 #{action_id}({category}):{str(action.get('title') or '')[:80]}",
-            detail={"priority": action.get("priority"), "dedupe_key": action.get("dedupe_key")},
-        )
+def _pick_step(action: dict[str, Any], action_id: int, category: str) -> dict[str, Any]:
+    """步① 取建议的落点行。"""
+    return _step(
+        1,
+        "inbox_pick",
+        "取建议",
+        _INBOX,
+        "read",
+        row_id=action_id,
+        ok=True,
+        summary=f"取到真实 suggested 建议 #{action_id}({category}):{str(action.get('title') or '')[:80]}",
+        detail={"priority": action.get("priority"), "dedupe_key": action.get("dedupe_key")},
     )
 
-    # ② 驾照 current_level 判权限(L0/L1 → 需人审)。
+
+def _license_step(category: str) -> tuple[dict[str, Any], int, bool]:
+    """步② 驾照 current_level 判权限(L0/L1 → 需人审)。"""
     from app.domains.agents import autonomy_license
 
     license_type = _LICENSE_FAMILY.get(category, category)
@@ -320,46 +299,59 @@ def run_demo_loop(dry_run: bool = True, staff: dict[str, Any] | None = None) -> 
     needs_review = level <= _HUMAN_REVIEW_MAX_LEVEL
     lic_row_id = _license_row_id(license_type)
     lic_status = str(lic.get("status") or "")
-    steps.append(
-        _step(
-            2,
-            "license_check",
-            "验驾照",
-            _LICENSES,
-            "read",
-            row_id=lic_row_id,
-            ok=True,
-            summary=(
-                f"驾照 {license_type} = L{level} {str(lic.get('level_label') or '')}"
-                +("(需人审:该级只许建议,执行须人批)" if needs_review else "(级别足以内部执行)")
-                + ("" if lic_status == "ready" else f";驾照读数 {lic_status}:{str(lic.get('reason') or '')[:80]}")
-            ),
-            detail={
-                "license_action_type": license_type,
-                "mapped_from_category": category,
-                "level": level,
-                "needs_human_review": needs_review,
-                "license_status": lic_status,
-            },
-        )
+    step = _step(
+        2,
+        "license_check",
+        "验驾照",
+        _LICENSES,
+        "read",
+        row_id=lic_row_id,
+        ok=True,
+        summary=(
+            f"驾照 {license_type} = L{level} {str(lic.get('level_label') or '')}"
+            +("(需人审:该级只许建议,执行须人批)" if needs_review else "(级别足以内部执行)")
+            + ("" if lic_status == "ready" else f";驾照读数 {lic_status}:{str(lic.get('reason') or '')[:80]}")
+        ),
+        detail={
+            "license_action_type": license_type,
+            "mapped_from_category": category,
+            "level": level,
+            "needs_human_review": needs_review,
+            "license_status": lic_status,
+        },
     )
+    return step, level, needs_review
 
-    # ③ 批准:dry_run=模拟批准留 approve 信号行;dry_run=False 走真 approve_action。
-    from app.domains.memory import agent_memory_writer
+
+def _real_approve(action_id: int, staff: dict[str, Any] | None) -> tuple[bool, str]:
+    """dry_run=False 的真批准:approve_action 结果与失败原因如实带回。"""
+    from app.domains.actions import inbox as action_inbox
 
     real_approved = False
-    approve_note = ""
-    if not dry:
-        from app.domains.actions import inbox as action_inbox
+    try:
+        ap = action_inbox.approve_action(
+            action_id, staff, reason="demo_loop:白名单零外部副作用动作,整链验证真批准"
+        )
+        real_approved = bool(isinstance(ap, dict) and ap.get("ok"))
+        approve_note = "" if real_approved else f"approve_action 未成功:{str((ap or {}).get('reason') or '')[:120]}"
+    except Exception as exc:  # noqa: BLE001 — 批准失败如实记录,后续步骤诚实降级
+        approve_note = f"approve_action 异常:{str(exc)[:120]}"
+    return real_approved, approve_note
 
-        try:
-            ap = action_inbox.approve_action(
-                action_id, staff, reason="demo_loop:白名单零外部副作用动作,整链验证真批准"
-            )
-            real_approved = bool(isinstance(ap, dict) and ap.get("ok"))
-            approve_note = "" if real_approved else f"approve_action 未成功:{str((ap or {}).get('reason') or '')[:120]}"
-        except Exception as exc:  # noqa: BLE001 — 批准失败如实记录,后续步骤诚实降级
-            approve_note = f"approve_action 异常:{str(exc)[:120]}"
+
+def _approval_step(
+    action_id: int,
+    category: str,
+    dry: bool,
+    staff: dict[str, Any] | None,
+    level: int,
+    needs_review: bool,
+    real_approved: bool,
+    approve_note: str,
+) -> dict[str, Any]:
+    """步③ 批准信号留痕(dry=模拟批准不改 inbox;真批准结果由调用方传入)。"""
+    from app.domains.memory import agent_memory_writer
+
     signal_id = agent_memory_writer.record_signal(
         action_kind="approve",
         entity_type="action",
@@ -378,25 +370,27 @@ def run_demo_loop(dry_run: bool = True, staff: dict[str, Any] | None = None) -> 
         },
     )
     approve_ok = signal_id is not None and (dry or real_approved)
-    steps.append(
-        _step(
-            3,
-            "approval",
-            "批准",
-            _AGENT_ACTIONS,
-            "write",
-            row_id=signal_id,
-            ok=approve_ok,
-            summary=(
-                ("真批准成功(inbox 行状态 → approved)+ approve 信号留痕" if real_approved else "模拟批准留痕(dry_run:inbox 状态原样不动)")
-                if approve_ok
-                else (approve_note or "approve 信号行写入失败(表缺或写库异常)")
-            ),
-            detail={"real_approved": real_approved, "note": approve_note},
-        )
+    return _step(
+        3,
+        "approval",
+        "批准",
+        _AGENT_ACTIONS,
+        "write",
+        row_id=signal_id,
+        ok=approve_ok,
+        summary=(
+            ("真批准成功(inbox 行状态 → approved)+ approve 信号留痕" if real_approved else "模拟批准留痕(dry_run:inbox 状态原样不动)")
+            if approve_ok
+            else (approve_note or "approve 信号行写入失败(表缺或写库异常)")
+        ),
+        detail={"real_approved": real_approved, "note": approve_note},
     )
 
-    # ④ 执行留痕:dry_run=demo ledger 行(零执行);dry_run=False=真 executor(双闸守门)。
+
+def _execution_step(
+    action: dict[str, Any], action_id: int, dry: bool, staff: dict[str, Any] | None
+) -> tuple[dict[str, Any], str, int | None]:
+    """步④ 执行留痕:dry_run=demo ledger 行(零执行);dry_run=False=真 executor(双闸守门)。"""
     exec_outcome = "success"
     ledger_id: int | None = None
     exec_detail: dict[str, Any] = {}
@@ -424,21 +418,31 @@ def run_demo_loop(dry_run: bool = True, staff: dict[str, Any] | None = None) -> 
             if exec_ok
             else f"执行未成功:outcome={exec_outcome} {str(res.get('reason') or '')[:120]}"
         )
-    steps.append(
-        _step(
-            4,
-            "execute_ledger",
-            "执行留痕",
-            _LEDGER,
-            "write",
-            row_id=ledger_id,
-            ok=exec_ok,
-            summary=exec_summary,
-            detail={"mode": "dry_run" if dry else "executed", **exec_detail},
-        )
+    step = _step(
+        4,
+        "execute_ledger",
+        "执行留痕",
+        _LEDGER,
+        "write",
+        row_id=ledger_id,
+        ok=exec_ok,
+        summary=exec_summary,
+        detail={"mode": "dry_run" if dry else "executed", **exec_detail},
     )
+    return step, exec_outcome, ledger_id
 
-    # ⑤ 结果登记 → vkpi_agent_outcome_evaluations(喂学习闭环)。
+
+def _outcome_step(
+    action: dict[str, Any],
+    action_id: int,
+    dry: bool,
+    exec_outcome: str,
+    ledger_id: int | None,
+    category: str,
+) -> dict[str, Any]:
+    """步⑤ 结果登记 → vkpi_agent_outcome_evaluations(喂学习闭环)。"""
+    from app.domains.memory import agent_memory_writer
+
     outcome_word = "success" if (dry or exec_outcome == "success") else ("fail" if exec_outcome == "failed" else "partial")
     outcome_id = agent_memory_writer.record_outcome(
         entity_type=str(action.get("entity_type") or "") or "action",
@@ -452,25 +456,34 @@ def run_demo_loop(dry_run: bool = True, staff: dict[str, Any] | None = None) -> 
             "category": category,
         },
     )
-    steps.append(
-        _step(
-            5,
-            "outcome_register",
-            "结果登记",
-            _OUTCOMES,
-            "write",
-            row_id=outcome_id,
-            ok=outcome_id is not None,
-            summary=(
-                f"结果 {outcome_word} 登记入学习闭环(evidence 带 demo_loop 标记)"
-                if outcome_id is not None
-                else "结果登记失败(表缺或写库异常)"
-            ),
-            detail={"outcome": outcome_word},
-        )
+    return _step(
+        5,
+        "outcome_register",
+        "结果登记",
+        _OUTCOMES,
+        "write",
+        row_id=outcome_id,
+        ok=outcome_id is not None,
+        summary=(
+            f"结果 {outcome_word} 登记入学习闭环(evidence 带 demo_loop 标记)"
+            if outcome_id is not None
+            else "结果登记失败(表缺或写库异常)"
+        ),
+        detail={"outcome": outcome_word},
     )
 
-    # ⑥ record_signal 入记忆:detail 存整链落点表 → trace 端点由此回读。
+
+def _memory_step(
+    steps: list[dict[str, Any]],
+    action: dict[str, Any],
+    action_id: int,
+    category: str,
+    dry: bool,
+    staff: dict[str, Any] | None,
+) -> tuple[dict[str, Any], int | None]:
+    """步⑥ record_signal 入记忆:detail 存整链落点表 → trace 端点由此回读。"""
+    from app.domains.memory import agent_memory_writer
+
     chain_ok_so_far = all(bool(s.get("ok")) for s in steps)
     trace_steps = [dict(s) for s in steps]
     trace_steps.append(
@@ -507,23 +520,75 @@ def run_demo_loop(dry_run: bool = True, staff: dict[str, Any] | None = None) -> 
         },
     )
     memory_ok = trace_id is not None
-    steps.append(
-        _step(
-            6,
-            "memory",
-            "入记忆",
-            _AGENT_ACTIONS,
-            "write",
-            row_id=trace_id,
-            ok=memory_ok,
-            summary=(
-                f"整链复盘信号入记忆(trace_id={trace_id},detail 存六步落点表)"
-                if memory_ok
-                else "记忆信号写入失败(表缺或写库异常)"
-            ),
-            detail={"trace_entity_type": TRACE_ENTITY_TYPE},
-        )
+    step = _step(
+        6,
+        "memory",
+        "入记忆",
+        _AGENT_ACTIONS,
+        "write",
+        row_id=trace_id,
+        ok=memory_ok,
+        summary=(
+            f"整链复盘信号入记忆(trace_id={trace_id},detail 存六步落点表)"
+            if memory_ok
+            else "记忆信号写入失败(表缺或写库异常)"
+        ),
+        detail={"trace_entity_type": TRACE_ENTITY_TYPE},
     )
+    return step, trace_id
+
+
+# ── 整链串跑 ─────────────────────────────────────────────────────────
+
+
+def run_demo_loop(dry_run: bool = True, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    """整链六步串跑一遍并留痕。返回每步真实落点表与行 id(证明链路通)。
+
+    dry_run=True(默认):模拟批准 + demo ledger 行,不真执行、不改 inbox 状态。
+    dry_run=False:仅放行零外部副作用白名单类(受理留痕型 executor),真批准 + 真执行。
+    任何单步失败不抛:该步 ok=False 带原因,chain_ok 如实为 False。
+    """
+    from app.db.connection import table_exists
+
+    dry = bool(dry_run)
+    if not table_exists(_INBOX):
+        return {
+            "status": "empty",
+            "dry_run": dry,
+            "reason": "vkpi_action_inbox 未建(迁移141未 apply),无建议可串",
+            "steps": [],
+            "chain_ok": False,
+            "generated_at": _now_iso(),
+        }
+
+    # ① 取一条真实 suggested 建议。
+    action = _pick_suggested_action(whitelist_only=not dry)
+    if action is None:
+        return _empty_inbox_result(dry)
+
+    action_id = int(action.get("id") or 0)
+    category = str(action.get("category") or "")
+    steps: list[dict[str, Any]] = [_pick_step(action, action_id, category)]
+
+    # ② 驾照 current_level 判权限(L0/L1 → 需人审)。
+    license_step, level, needs_review = _license_step(category)
+    steps.append(license_step)
+
+    # ③ 批准:dry_run=模拟批准留 approve 信号行;dry_run=False 走真 approve_action。
+    real_approved = False
+    approve_note = ""
+    if not dry:
+        real_approved, approve_note = _real_approve(action_id, staff)
+    steps.append(
+        _approval_step(action_id, category, dry, staff, level, needs_review, real_approved, approve_note)
+    )
+
+    # ④ 执行留痕 → ⑤ 结果登记 → ⑥ 入记忆(循环推进/退出条件与原实现逐字一致)。
+    execution_step, exec_outcome, ledger_id = _execution_step(action, action_id, dry, staff)
+    steps.append(execution_step)
+    steps.append(_outcome_step(action, action_id, dry, exec_outcome, ledger_id, category))
+    memory_step, trace_id = _memory_step(steps, action, action_id, category, dry, staff)
+    steps.append(memory_step)
 
     chain_ok = all(bool(s.get("ok")) for s in steps)
     return {

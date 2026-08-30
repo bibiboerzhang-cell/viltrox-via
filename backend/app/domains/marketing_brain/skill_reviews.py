@@ -136,6 +136,247 @@ def get_skill_review_candidate(run_id: int) -> dict[str, Any]:
     }
 
 
+def _normalized_hashes(
+    expected_input_sha256: str, expected_output_sha256: str
+) -> tuple[str, str] | None:
+    """Lowercase both expected digests; None unless each is 64-char hex."""
+    expected_input_hash = str(expected_input_sha256 or "").strip().lower()
+    expected_hash = str(expected_output_sha256 or "").strip().lower()
+    if any(
+        len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
+        for value in (expected_input_hash, expected_hash)
+    ):
+        return None
+    return expected_input_hash, expected_hash
+
+
+def _validated_review_request(
+    run_id: int,
+    staff: dict[str, Any] | None,
+    accepted: bool,
+    human_score: float,
+    business_result: str,
+    evidence: list[dict[str, Any]],
+    correlation_id: str,
+    expected_input_sha256: str,
+    expected_output_sha256: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """Fail-closed request validation; (request, None) or (None, error) in the
+    exact original rejection order."""
+    try:
+        rid = int(run_id)
+        score = float(human_score)
+    except (TypeError, ValueError):
+        return None, {"ok": False, "reason": "invalid_review_identity_or_score"}
+    reviewer = review_contract.reviewer_context(staff)
+    if reviewer is None:
+        return None, {"ok": False, "reason": "review_scope_unavailable"}
+    actor_id, organization_id = reviewer
+    result_text = review_contract.normalize_review_text(business_result, max_length=1000)
+    correlation = review_contract.normalize_correlation(correlation_id)
+    evidence_rows = review_contract.normalize_evidence(evidence)
+    hashes = _normalized_hashes(expected_input_sha256, expected_output_sha256)
+    if rid <= 0:
+        return None, {"ok": False, "reason": "invalid_review_identity_or_score"}
+    if not 0.0 <= score <= 5.0:
+        return None, {"ok": False, "reason": "human_score_out_of_range"}
+    if result_text is None:
+        return None, {"ok": False, "reason": "business_result_required"}
+    if evidence_rows is None:
+        return None, {"ok": False, "reason": "review_evidence_required"}
+    if correlation is None:
+        return None, {"ok": False, "reason": "review_correlation_required"}
+    if hashes is None:
+        return None, {"ok": False, "reason": "review_candidate_required"}
+    if not table_exists(_RUNS) or not table_exists(_EVENTS):
+        return None, {"ok": False, "reason": "review_ledger_unavailable"}
+    expected_input_hash, expected_hash = hashes
+    return {
+        "rid": rid,
+        "score": score,
+        "accepted": accepted,
+        "actor_id": actor_id,
+        "organization_id": organization_id,
+        "result_text": result_text,
+        "correlation": correlation,
+        "evidence_rows": evidence_rows,
+        "expected_input_hash": expected_input_hash,
+        "expected_hash": expected_hash,
+    }, None
+
+
+def _production_review_guard(run: dict[str, Any]) -> tuple[str | None, dict[str, Any]]:
+    """Reject non-production runs and non-reviewable output (reason, output)."""
+    skill_name = str(run.get("skill_name") or "").strip()
+    marker = skill_name.lower()
+    existing_business = str(run.get("business_result") or "").strip().lower()
+    if marker.startswith("test") or "smoke" in marker or existing_business in {
+        "pytest", "test", "demo", "dry_run", "smoke",
+    }:
+        return "nonproduction_skill_run", {}
+    output = _loads(run.get("output"))
+    if not output or not _usable_production_output(skill_name, output):
+        return "skill_run_output_not_reviewable", output
+    return None, output
+
+
+def _event_matches_review(payload: dict[str, Any], event: dict[str, Any], req: dict[str, Any]) -> bool:
+    """Field-by-field idempotency comparison against the stored review event."""
+    return (
+        bool(payload.get("accepted")) is bool(req["accepted"])
+        and float(payload.get("human_score")) == req["score"]
+        and str(payload.get("business_result") or "") == req["result_text"]
+        and payload.get("evidence") == req["evidence_rows"]
+        and str(event.get("actor_id") or "") == str(req["actor_id"])
+        and str(payload.get("output_sha256") or "") == req["expected_hash"]
+        and str(payload.get("input_sha256") or "") == req["expected_input_hash"]
+    )
+
+
+def _correlated_event_verdict(
+    events: list[dict[str, Any]], req: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Idempotent replay / conflict verdict for an existing correlation id."""
+    for event in events:
+        payload = _loads(event.get("payload_json"))
+        if str(payload.get("correlation_id") or "") != req["correlation"]:
+            continue
+        if not _event_matches_review(payload, event, req):
+            return {"ok": False, "reason": "review_correlation_conflict"}
+        return {
+            "ok": True,
+            "run_id": req["rid"],
+            "event_id": int(event["id"]),
+            "accepted": bool(req["accepted"]),
+            "human_score": req["score"],
+            "idempotent": True,
+        }
+    return None
+
+
+def _already_reviewed(events: list[dict[str, Any]], run: dict[str, Any]) -> bool:
+    return bool(events) or any(
+        run.get(key) is not None for key in ("accepted", "human_score", "business_result")
+    )
+
+
+def _persist_review(
+    conn: Any,
+    run: dict[str, Any],
+    req: dict[str, Any],
+    *,
+    input_sha256: str,
+    output_sha256: str,
+) -> dict[str, Any]:
+    """Guarded UPDATE plus the exact reviewer event, in one transaction."""
+    rid = req["rid"]
+    cursor = conn.execute(
+        f"""
+        UPDATE {_RUNS}
+        SET accepted = ?, human_score = ?, business_result = ?
+        WHERE id = ?
+          AND accepted IS NULL
+          AND human_score IS NULL
+          AND business_result IS NULL
+        """,
+        (bool(req["accepted"]), req["score"], req["result_text"], rid),
+    )
+    if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+        conn.rollback()
+        return {"ok": False, "reason": "skill_review_state_changed"}
+
+    reviewed_at = datetime.now(timezone.utc).isoformat()
+    event_id = event_ledger.insert_required(
+        conn,
+        "skill_run_accepted" if req["accepted"] else "skill_run_rejected",
+        entity_type="skill_run",
+        entity_id=rid,
+        actor_type="staff",
+        actor_id=req["actor_id"],
+        source=_SOURCE,
+        payload={
+            "accepted": bool(req["accepted"]),
+            "human_score": req["score"],
+            "business_result": req["result_text"],
+            "evidence": req["evidence_rows"],
+            "correlation_id": req["correlation"],
+            "reviewed_at": reviewed_at,
+            "output_sha256": output_sha256,
+            "input_sha256": input_sha256,
+        },
+        trace_id=event_ledger.new_trace_id("skill_run", rid),
+        provenance={
+            "kind": "human_review",
+            "source": "skill_studio",
+            "evidence_count": len(req["evidence_rows"]),
+            "evidence_verification": "staff_attestation_bound_to_skill_run",
+            "server_bound_run_id": rid,
+            "server_bound_output_sha256": output_sha256,
+            "server_bound_input_sha256": input_sha256,
+            "skill_version": str(run.get("skill_version") or ""),
+            "model_used": str(run.get("model_used") or ""),
+            "prompt_version": str(run.get("prompt_version") or ""),
+            "review_eligibility": "usable_production_output",
+        },
+        organization_id=req["organization_id"],
+    )
+    conn.commit()
+    return {
+        "ok": True,
+        "run_id": rid,
+        "event_id": event_id,
+        "accepted": bool(req["accepted"]),
+        "human_score": req["score"],
+        "idempotent": False,
+    }
+
+
+def _reviewed_run_response(conn: Any, req: dict[str, Any]) -> dict[str, Any]:
+    """Locked-row review pipeline (the original try-body, boundaries untouched)."""
+    rid = req["rid"]
+    if not is_postgres_runtime() and not bool(getattr(conn, "in_transaction", False)):
+        conn.execute("BEGIN IMMEDIATE")
+    lock_clause = " FOR UPDATE" if is_postgres_runtime() else ""
+    row = conn.execute(
+        f"""
+        SELECT id, skill_name, skill_version, input_schema, model_used,
+               prompt_version, accepted, human_score, business_result, output
+        FROM {_RUNS}
+        WHERE id = ?{lock_clause}
+        """,
+        (rid,),
+    ).fetchone()
+    if row is None:
+        conn.rollback()
+        return {"ok": False, "reason": "skill_run_not_found"}
+    run = dict(row)
+    guard_reason, output = _production_review_guard(run)
+    if guard_reason is not None:
+        conn.rollback()
+        return {"ok": False, "reason": guard_reason}
+    input_snapshot, input_sha256 = _safe_snapshot(run.get("input_schema"))
+    _output_snapshot, output_sha256 = _safe_snapshot(output)
+    if not hmac.compare_digest(input_sha256, req["expected_input_hash"]) or not hmac.compare_digest(
+        output_sha256, req["expected_hash"],
+    ):
+        conn.rollback()
+        return {"ok": False, "reason": "skill_review_candidate_changed"}
+
+    events = _review_events(conn, rid)
+    verdict = _correlated_event_verdict(events, req)
+    if verdict is not None:
+        conn.rollback()
+        return verdict
+
+    if _already_reviewed(events, run):
+        conn.rollback()
+        return {"ok": False, "reason": "skill_run_already_reviewed"}
+
+    return _persist_review(
+        conn, run, req, input_sha256=input_sha256, output_sha256=output_sha256
+    )
+
+
 def review_skill_run(
     run_id: int,
     *,
@@ -149,167 +390,23 @@ def review_skill_run(
     expected_output_sha256: str,
 ) -> dict[str, Any]:
     """Review one production skill run exactly once with auditable evidence."""
-    try:
-        rid = int(run_id)
-        score = float(human_score)
-    except (TypeError, ValueError):
-        return {"ok": False, "reason": "invalid_review_identity_or_score"}
-    reviewer = review_contract.reviewer_context(staff)
-    if reviewer is None:
-        return {"ok": False, "reason": "review_scope_unavailable"}
-    actor_id, organization_id = reviewer
-    result_text = review_contract.normalize_review_text(business_result, max_length=1000)
-    correlation = review_contract.normalize_correlation(correlation_id)
-    evidence_rows = review_contract.normalize_evidence(evidence)
-    expected_input_hash = str(expected_input_sha256 or "").strip().lower()
-    expected_hash = str(expected_output_sha256 or "").strip().lower()
-    if rid <= 0:
-        return {"ok": False, "reason": "invalid_review_identity_or_score"}
-    if not 0.0 <= score <= 5.0:
-        return {"ok": False, "reason": "human_score_out_of_range"}
-    if result_text is None:
-        return {"ok": False, "reason": "business_result_required"}
-    if evidence_rows is None:
-        return {"ok": False, "reason": "review_evidence_required"}
-    if correlation is None:
-        return {"ok": False, "reason": "review_correlation_required"}
-    if any(
-        len(value) != 64 or any(char not in "0123456789abcdef" for char in value)
-        for value in (expected_input_hash, expected_hash)
-    ):
-        return {"ok": False, "reason": "review_candidate_required"}
-    if not table_exists(_RUNS) or not table_exists(_EVENTS):
-        return {"ok": False, "reason": "review_ledger_unavailable"}
+    req, error = _validated_review_request(
+        run_id,
+        staff,
+        accepted,
+        human_score,
+        business_result,
+        evidence,
+        correlation_id,
+        expected_input_sha256,
+        expected_output_sha256,
+    )
+    if error is not None:
+        return error
 
     conn = get_conn()
     try:
-        if not is_postgres_runtime() and not bool(getattr(conn, "in_transaction", False)):
-            conn.execute("BEGIN IMMEDIATE")
-        lock_clause = " FOR UPDATE" if is_postgres_runtime() else ""
-        row = conn.execute(
-            f"""
-            SELECT id, skill_name, skill_version, input_schema, model_used,
-                   prompt_version, accepted, human_score, business_result, output
-            FROM {_RUNS}
-            WHERE id = ?{lock_clause}
-            """,
-            (rid,),
-        ).fetchone()
-        if row is None:
-            conn.rollback()
-            return {"ok": False, "reason": "skill_run_not_found"}
-        run = dict(row)
-        skill_name = str(run.get("skill_name") or "").strip()
-        marker = skill_name.lower()
-        existing_business = str(run.get("business_result") or "").strip().lower()
-        if marker.startswith("test") or "smoke" in marker or existing_business in {
-            "pytest", "test", "demo", "dry_run", "smoke",
-        }:
-            conn.rollback()
-            return {"ok": False, "reason": "nonproduction_skill_run"}
-        output = _loads(run.get("output"))
-        if not output or not _usable_production_output(skill_name, output):
-            conn.rollback()
-            return {"ok": False, "reason": "skill_run_output_not_reviewable"}
-        input_snapshot, input_sha256 = _safe_snapshot(run.get("input_schema"))
-        _output_snapshot, output_sha256 = _safe_snapshot(output)
-        if not hmac.compare_digest(input_sha256, expected_input_hash) or not hmac.compare_digest(
-            output_sha256, expected_hash,
-        ):
-            conn.rollback()
-            return {"ok": False, "reason": "skill_review_candidate_changed"}
-
-        events = _review_events(conn, rid)
-        for event in events:
-            payload = _loads(event.get("payload_json"))
-            if str(payload.get("correlation_id") or "") != correlation:
-                continue
-            same = (
-                bool(payload.get("accepted")) is bool(accepted)
-                and float(payload.get("human_score")) == score
-                and str(payload.get("business_result") or "") == result_text
-                and payload.get("evidence") == evidence_rows
-                and str(event.get("actor_id") or "") == str(actor_id)
-                and str(payload.get("output_sha256") or "") == expected_hash
-                and str(payload.get("input_sha256") or "") == expected_input_hash
-            )
-            conn.rollback()
-            if not same:
-                return {"ok": False, "reason": "review_correlation_conflict"}
-            return {
-                "ok": True,
-                "run_id": rid,
-                "event_id": int(event["id"]),
-                "accepted": bool(accepted),
-                "human_score": score,
-                "idempotent": True,
-            }
-
-        if events or any(
-            run.get(key) is not None for key in ("accepted", "human_score", "business_result")
-        ):
-            conn.rollback()
-            return {"ok": False, "reason": "skill_run_already_reviewed"}
-
-        cursor = conn.execute(
-            f"""
-            UPDATE {_RUNS}
-            SET accepted = ?, human_score = ?, business_result = ?
-            WHERE id = ?
-              AND accepted IS NULL
-              AND human_score IS NULL
-              AND business_result IS NULL
-            """,
-            (bool(accepted), score, result_text, rid),
-        )
-        if int(getattr(cursor, "rowcount", 0) or 0) != 1:
-            conn.rollback()
-            return {"ok": False, "reason": "skill_review_state_changed"}
-
-        reviewed_at = datetime.now(timezone.utc).isoformat()
-        event_id = event_ledger.insert_required(
-            conn,
-            "skill_run_accepted" if accepted else "skill_run_rejected",
-            entity_type="skill_run",
-            entity_id=rid,
-            actor_type="staff",
-            actor_id=actor_id,
-            source=_SOURCE,
-            payload={
-                "accepted": bool(accepted),
-                "human_score": score,
-                "business_result": result_text,
-                "evidence": evidence_rows,
-                "correlation_id": correlation,
-                "reviewed_at": reviewed_at,
-                "output_sha256": output_sha256,
-                "input_sha256": input_sha256,
-            },
-            trace_id=event_ledger.new_trace_id("skill_run", rid),
-            provenance={
-                "kind": "human_review",
-                "source": "skill_studio",
-                "evidence_count": len(evidence_rows),
-                "evidence_verification": "staff_attestation_bound_to_skill_run",
-                "server_bound_run_id": rid,
-                "server_bound_output_sha256": output_sha256,
-                "server_bound_input_sha256": input_sha256,
-                "skill_version": str(run.get("skill_version") or ""),
-                "model_used": str(run.get("model_used") or ""),
-                "prompt_version": str(run.get("prompt_version") or ""),
-                "review_eligibility": "usable_production_output",
-            },
-            organization_id=organization_id,
-        )
-        conn.commit()
-        return {
-            "ok": True,
-            "run_id": rid,
-            "event_id": event_id,
-            "accepted": bool(accepted),
-            "human_score": score,
-            "idempotent": False,
-        }
+        return _reviewed_run_response(conn, req)
     except Exception:
         try:
             conn.rollback()
