@@ -41,6 +41,10 @@ from typing import Any
 from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
 from app.platform.apify_lifecycle import close_apify_client
 
+# NOTE: facebook_crawler_support is imported lazily inside methods on purpose —
+# a module-level sibling import would join the industry_crawlers __init__
+# re-export cycle (import-time cycle ratchet, tests/test_cycle_ratchet.py).
+
 
 DEFAULT_PAGES_ACTOR = "apify~facebook-pages-scraper"
 DEFAULT_POSTS_ACTOR = "apify~facebook-posts-scraper"
@@ -223,52 +227,6 @@ class FacebookCrawler:
         finally:
             close_apify_client(client)
 
-    def _crawl_brand_mentions_via_apify(
-        self, query: str, limit: int
-    ) -> dict[str, Any]:
-        """
-        Apify path: brand mention search.
-        
-        Note: Facebook search via Apify is limited. Most actors don't support
-        full-text search across all of Facebook (privacy/ToS). This method
-        attempts a best-effort approach using a search-targeted actor if
-        configured, otherwise returns 'not_supported'.
-        """
-        # Facebook search is not well-supported by public Apify actors
-        # P1.2 returns optimistic placeholder - team can extend if needed
-        return {
-            "items": [],
-            "provider_status": "not_supported",
-            "sync_status": "skip",
-            "provider": "apify",
-            "error": (
-                "Facebook brand mention search not supported in P1.2. "
-                "Use Page profile monitoring instead. "
-                "Team: consider Meta Graph API for proper search (long-term)."
-            ),
-            "query": query,
-        }
-
-    # ─── Meta Graph API (long-term, not used in P1.2) ───────────
-
-    def _crawl_page_profile_via_meta_graph(
-        self, page_url: str, max_posts: int
-    ) -> dict[str, Any]:
-        """
-        Meta Graph API path - reserved for long-term migration.
-        Not implemented in P1.2.
-        """
-        return {
-            "items": [],
-            "provider_status": "not_implemented",
-            "sync_status": "skip",
-            "provider": "meta_graph",
-            "error": (
-                "Meta Graph API not implemented in P1.2. "
-                "Reserved for long-term migration after Viltrox Meta App Review."
-            ),
-        }
-
     # ─── Public API (V-KPI compatible) ──────────────────────────
 
     def crawl_page_profile(
@@ -290,7 +248,9 @@ class FacebookCrawler:
         if path == "apify":
             return self._crawl_page_profile_via_apify(page_url, max_posts)
         elif path == "meta_graph":
-            return self._crawl_page_profile_via_meta_graph(page_url, max_posts)
+            from app.platform.industry_crawlers import facebook_crawler_support as _support
+
+            return _support.page_profile_via_meta_graph(page_url, max_posts)
         else:
             return {
                 "items": [],
@@ -313,7 +273,9 @@ class FacebookCrawler:
 
         path = self.primary_path
         if path == "apify":
-            return self._crawl_brand_mentions_via_apify(query, limit)
+            from app.platform.industry_crawlers import facebook_crawler_support as _support
+
+            return _support.brand_mentions_not_supported(query, limit)
         else:
             return {
                 "items": [],
@@ -430,37 +392,25 @@ class FacebookCrawler:
         finally:
             close_apify_client(client)
 
-    # ─── Helpers ────────────────────────────────────────────────
+    # ─── Helpers (verbatim in facebook_crawler_support) ─────────
 
     @staticmethod
     def _normalize_page_url(url_or_handle: str) -> str:
         """Convert handle/page name/URL to canonical Facebook Page URL."""
-        s = url_or_handle.strip().rstrip("/")
-        if not s:
-            return ""
-        if s.startswith("https://") or s.startswith("http://"):
-            return s
-        if s.startswith("facebook.com/"):
-            return f"https://www.{s}"
-        if s.startswith("www.facebook.com/"):
-            return f"https://{s}"
-        # Assume it's a Page handle/name
-        return f"https://www.facebook.com/{s.lstrip('@/')}"
+        from app.platform.industry_crawlers import facebook_crawler_support as _support
+
+        return _support.normalize_page_url(url_or_handle)
 
     @staticmethod
     def _handle_to_page_url(handle: str, channel_id: str = "") -> str:
         """V-KPI handle → Facebook Page URL."""
-        if channel_id and channel_id.strip():
-            # Channel ID treated as Page handle
-            return FacebookCrawler._normalize_page_url(channel_id)
-        return FacebookCrawler._normalize_page_url(handle)
+        from app.platform.industry_crawlers import facebook_crawler_support as _support
+
+        return _support.handle_to_page_url(handle, channel_id)
 
     @staticmethod
     def _normalize_post_url(url_or_id: str) -> str:
         """Normalize Facebook post URL/id for comment actor input."""
-        raw = str(url_or_id or "").strip()
-        if not raw:
-            return ""
-        if raw.startswith("http://") or raw.startswith("https://"):
-            return raw
-        return f"https://www.facebook.com/posts/{raw.strip('/')}"
+        from app.platform.industry_crawlers import facebook_crawler_support as _support
+
+        return _support.normalize_post_url(url_or_id)

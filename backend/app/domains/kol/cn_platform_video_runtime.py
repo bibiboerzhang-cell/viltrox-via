@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from app.core.logging import get_logger
+from app.domains.kol import cn_platform_video_terminals as _terminals
 from app.domains.kol.provider_job_access import ProviderJobAccessError
 from app.domains.kol.url_deep_crawl_helpers import CN_VIDEO_ANALYSIS_PLATFORMS
 
@@ -93,7 +94,7 @@ class _CNPlatformVideoRuntime:
 
     def run(self) -> dict[str, Any]:
         replay = self._begin_resolution()
-        cached_result = self._pre_provider_replay_result(replay)
+        cached_result = _terminals.pre_provider_replay_result(self, replay)
         if cached_result is not None:
             return cached_result
 
@@ -103,7 +104,7 @@ class _CNPlatformVideoRuntime:
         if official_result is not None:
             return official_result
 
-        cached_result = self._post_provider_replay_result()
+        cached_result = _terminals.post_provider_replay_result(self)
         if cached_result is not None:
             return cached_result
 
@@ -131,53 +132,6 @@ class _CNPlatformVideoRuntime:
         except Exception:
             logger.debug("cn video cached url lookup failed", exc_info=True)
             return None
-
-    def _pre_provider_replay_result(
-        self,
-        replay: dict[str, Any] | None,
-    ) -> dict[str, Any] | None:
-        if not replay:
-            return None
-        shaped = replay.get("result") or {}
-        cached_meta = shaped.get("video_metadata") if isinstance(shaped.get("video_metadata"), dict) else {}
-        cached_creator = (
-            shaped.get("creator_identity")
-            if isinstance(shaped.get("creator_identity"), dict)
-            else {}
-        )
-        replay_video_url = self._cached_media_url(self.canonical_id)
-        self.emit_progress("resolve_video", "ready", reason="cached_analysis")
-        self.emit_progress("identify_creator", "ready")
-        self.current = self.hooks.progress(
-            self.current,
-            "cache_media",
-            "ready" if replay_video_url else "skipped",
-            reason="" if replay_video_url else "media_cache_not_ready",
-        )
-        self.hooks.emit(self.progress_callback, self.current)
-        self.current = self.hooks.progress(
-            self.current,
-            "ai_analysis",
-            "ready",
-            overall="ready",
-            base_status="ready",
-            reason="cached_analysis",
-        )
-        self.hooks.emit(self.progress_callback, self.current)
-        self.checkpoint()
-        return self.hooks.terminal_result(
-            platform=self.platform,
-            video_id=self.canonical_id,
-            metadata=cached_meta or None,
-            creator=cached_creator or None,
-            cached_video_url=replay_video_url,
-            ai_analysis=self.hooks.ai_state("ready", "cached_analysis", allowed=False),
-            cn_analysis=self.hooks.compact_analysis(shaped),
-            resolution_progress=self.current,
-            provider_calls_performed=False,
-            llm_calls_performed=False,
-            analysis_cache_id=self.hooks.int_or_none(replay.get("cache_id")),
-        )
 
     def _scrape_provider(self) -> None:
         scraped = self.hooks.scrape_cn_platform_video(self.platform, self.source_url)
@@ -216,7 +170,7 @@ class _CNPlatformVideoRuntime:
             )
             self.hooks.emit(self.progress_callback, self.current)
             self.checkpoint()
-            return self._official_terminal(official)
+            return _terminals.official_terminal(self, official)
         creator_status = "ready" if self.hooks.text(self.creator.get("display_name")) else "skipped"
         self.emit_progress(
             "identify_creator",
@@ -224,65 +178,6 @@ class _CNPlatformVideoRuntime:
             reason="" if creator_status == "ready" else "creator_display_unavailable",
         )
         return None
-
-    def _official_terminal(self, official: Any) -> dict[str, Any]:
-        return {
-            "status": "official_channel_video",
-            "operation": "cn_platform_video_analysis",
-            "official_channel": official,
-            "creator_identity": self.creator,
-            "video_metadata": self.metadata,
-            "video_flow": {
-                "status": "official_channel_video",
-                "operation": "cn_platform_video_analysis",
-                "message": "官方自有账号的视频：不建人选档案，也不做深度分析，仅保留视频基础数据。",
-                "viltrox_fit_score_untouched": True,
-            },
-            "ai_analysis": self.hooks.ai_state("skipped", "official_channel_video"),
-            "resolution_progress": self.current,
-            "provider_calls_performed": True,
-            "llm_calls_performed": False,
-            "viltrox_fit_score_untouched": True,
-        }
-
-    def _post_provider_replay_result(self) -> dict[str, Any] | None:
-        cached_analysis = self.hooks.load_ready_analysis(self.platform, self.video_id)
-        self.cached_video_url = self._cached_media_url(self.video_id)
-        if not cached_analysis:
-            return None
-        shaped = cached_analysis.get("result") or {}
-        self.current = self.hooks.progress(
-            self.current,
-            "cache_media",
-            "ready" if self.cached_video_url else "skipped",
-            reason="" if self.cached_video_url else "media_cache_not_ready",
-        )
-        self.hooks.emit(self.progress_callback, self.current)
-        self.current = self.hooks.progress(
-            self.current,
-            "ai_analysis",
-            "ready",
-            overall="ready",
-            base_status="ready",
-            reason="cached_analysis",
-        )
-        self.hooks.emit(self.progress_callback, self.current)
-        self.checkpoint()
-        cached_metadata = shaped.get("video_metadata") if isinstance(shaped.get("video_metadata"), dict) else None
-        cached_creator = shaped.get("creator_identity") if isinstance(shaped.get("creator_identity"), dict) else None
-        return self.hooks.terminal_result(
-            platform=self.platform,
-            video_id=self.video_id,
-            metadata=self.metadata or cached_metadata,
-            creator=self.creator or cached_creator,
-            cached_video_url=self.cached_video_url,
-            ai_analysis=self.hooks.ai_state("ready", "cached_analysis", allowed=False),
-            cn_analysis=self.hooks.compact_analysis(shaped),
-            resolution_progress=self.current,
-            provider_calls_performed=True,
-            llm_calls_performed=False,
-            analysis_cache_id=self.hooks.int_or_none(cached_analysis.get("cache_id")),
-        )
 
     def _begin_media_cache(self) -> dict[str, Any] | None:
         self.emit_progress("cache_media", "running")
@@ -293,34 +188,7 @@ class _CNPlatformVideoRuntime:
             if self.hooks.text(self.metadata.get("media_kind")) == "image"
             else "actor_returned_no_video_url"
         )
-        return self._media_degraded_result(reason)
-
-    def _media_degraded_result(self, reason: str) -> dict[str, Any]:
-        self.current = self.hooks.progress(self.current, "cache_media", "failed", reason=reason[:200])
-        self.hooks.emit(self.progress_callback, self.current)
-        self.current = self.hooks.progress(
-            self.current,
-            "ai_analysis",
-            "skipped",
-            overall="partial",
-            base_status="ready",
-            reason="media_unavailable_metadata_only",
-        )
-        self.hooks.emit(self.progress_callback, self.current)
-        return self.hooks.terminal_result(
-            platform=self.platform,
-            video_id=self.video_id,
-            metadata=self.metadata,
-            creator=self.creator,
-            cached_video_url=None,
-            ai_analysis=self.hooks.ai_state("skipped", "media_unavailable_metadata_only"),
-            cn_analysis=None,
-            resolution_progress=self.current,
-            provider_calls_performed=True,
-            llm_calls_performed=False,
-            media_degraded=True,
-            media_degraded_reason=reason[:240],
-        )
+        return _terminals.media_degraded_result(self, reason)
 
     def _download(self, tmpdir: str) -> dict[str, Any]:
         from app.services.media.video_download import download_direct_video_url
@@ -383,7 +251,7 @@ class _CNPlatformVideoRuntime:
             download = self._download(tmpdir)
             if not download.get("success") or not download.get("path"):
                 reason = self.hooks.text(download.get("error")) or f"direct_video_download_failed:{self.platform}"
-                return self._media_degraded_result(reason)
+                return _terminals.media_degraded_result(self, reason)
             self._warm_media_cache(str(download["path"]))
             self.emit_progress(
                 "cache_media",
@@ -393,7 +261,7 @@ class _CNPlatformVideoRuntime:
             self.emit_progress("ai_analysis", "running")
             self.checkpoint()
             budget = self.hooks.budget_gate(self.platform, self.video_id)
-            blocked_result = self._budget_blocked_result(budget)
+            blocked_result = _terminals.budget_blocked_result(self, budget)
             if blocked_result is not None:
                 return blocked_result
             self.checkpoint()
@@ -406,103 +274,7 @@ class _CNPlatformVideoRuntime:
                 triggered_by=self.triggered_by,
             )
             self.checkpoint()
-        return self._finalize_analysis(raw)
-
-    def _budget_blocked_result(self, budget: dict[str, Any]) -> dict[str, Any] | None:
-        if budget.get("allowed"):
-            return None
-        gate_reason = self.hooks.text(budget.get("reason")) or "provider_calls_blocked"
-        self.current = self.hooks.progress(
-            self.current,
-            "ai_analysis",
-            "skipped",
-            overall="ready",
-            base_status="ready",
-            reason="ai_disabled",
-        )
-        self.hooks.emit(self.progress_callback, self.current)
-        return self.hooks.terminal_result(
-            platform=self.platform,
-            video_id=self.video_id,
-            metadata=self.metadata,
-            creator=self.creator,
-            cached_video_url=self.cached_video_url,
-            ai_analysis=self.hooks.ai_state(
-                "not_requested",
-                "ai_disabled",
-                gate_reason=gate_reason,
-            ),
-            cn_analysis=None,
-            resolution_progress=self.current,
-            provider_calls_performed=True,
-            llm_calls_performed=False,
-        )
-
-    def _finalize_analysis(self, raw: Any) -> dict[str, Any]:
-        if not isinstance(raw, dict) or not raw.get("analyzed"):
-            reason = self.hooks.text((raw or {}).get("error")) or "gemini_not_analyzed"
-            self.current = self.hooks.progress(
-                self.current,
-                "ai_analysis",
-                "failed",
-                overall="partial",
-                base_status="ready",
-                reason=reason[:200],
-            )
-            self.hooks.emit(self.progress_callback, self.current)
-            return self.hooks.terminal_result(
-                platform=self.platform,
-                video_id=self.video_id,
-                metadata=self.metadata,
-                creator=self.creator,
-                cached_video_url=self.cached_video_url,
-                ai_analysis=self.hooks.ai_state("failed", reason[:200], allowed=True),
-                cn_analysis=None,
-                resolution_progress=self.current,
-                provider_calls_performed=True,
-                llm_calls_performed=True,
-            )
-        return self._store_successful_analysis(raw)
-
-    def _store_successful_analysis(self, raw: dict[str, Any]) -> dict[str, Any]:
-        shaped = self.hooks.shape_final_v1(
-            raw=raw,
-            platform=self.platform,
-            video_id=self.video_id,
-            content_url=self.content_url,
-            metadata=self.metadata,
-            creator=self.creator,
-        )
-        self.checkpoint()
-        cache_id = self.hooks.store_analysis(
-            platform=self.platform,
-            video_id=self.video_id,
-            shaped=shaped,
-            model=self.hooks.text(raw.get("model") or raw.get("method")),
-            triggered_by=self.triggered_by,
-        )
-        self.current = self.hooks.progress(
-            self.current,
-            "ai_analysis",
-            "ready",
-            overall="ready",
-            base_status="ready",
-            reason="",
-        )
-        self.hooks.emit(self.progress_callback, self.current)
-        return self.hooks.terminal_result(
-            platform=self.platform,
-            video_id=self.video_id,
-            metadata=self.metadata,
-            creator=self.creator,
-            cached_video_url=self.cached_video_url,
-            ai_analysis=self.hooks.ai_state("ready", "cn_platform_video_analysis", allowed=True),
-            cn_analysis=self.hooks.compact_analysis(shaped),
-            resolution_progress=self.current,
-            provider_calls_performed=True,
-            llm_calls_performed=True,
-            analysis_cache_id=cache_id,
-        )
+        return _terminals.finalize_analysis(self, raw)
 
 
 def execute_cn_platform_video(
