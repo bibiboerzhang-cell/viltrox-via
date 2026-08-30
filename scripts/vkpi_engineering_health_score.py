@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 import subprocess
 import sys
@@ -19,10 +20,12 @@ from typing import Any
 
 try:
     from scripts import vkpi_engineering_health_coverage as coverage_evidence
+    from scripts import vkpi_engineering_health_score_delivery as delivery_receipt_channel
     from scripts import vkpi_engineering_health_score_evolution as evolution_receipt
     from scripts.stdout_utils import out as stdout_out
 except ModuleNotFoundError:  # Direct execution: scripts/ is sys.path[0].
     import vkpi_engineering_health_coverage as coverage_evidence
+    import vkpi_engineering_health_score_delivery as delivery_receipt_channel
     import vkpi_engineering_health_score_evolution as evolution_receipt
     from stdout_utils import out as stdout_out
 
@@ -63,7 +66,10 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _number(value: Any, *, label: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ContractError(f"{label} must be numeric")
-    return float(value)
+    result = float(value)
+    if not math.isfinite(result):
+        raise ContractError(f"{label} must be finite")
+    return result
 
 
 def validate_contract(contract: dict[str, Any]) -> None:
@@ -131,7 +137,16 @@ def _observed_metric(entry: Any, rule: dict[str, Any]) -> tuple[float, float] | 
             return None
         if float(sample_count) < float(minimum_samples):
             return None
-    value = _number(entry["value"], label="evidence value")
+    raw_value = entry["value"]
+    if (
+        not isinstance(raw_value, bool)
+        and isinstance(raw_value, (int, float))
+        and not math.isfinite(float(raw_value))
+    ):
+        # -inf/+inf/nan evidence must never score (e.g. -inf on a "max"
+        # metric would otherwise take the value<=target branch to 100).
+        return None
+    value = _number(raw_value, label="evidence value")
     return value, round(_metric_score(value, rule), 4)
 
 
@@ -545,6 +560,21 @@ def merge_evolution_receipt(
         raise ContractError(str(exc)) from exc
 
 
+def merge_delivery_receipt(
+    contract: dict[str, Any],
+    evidence: dict[str, Any],
+    receipt_path: Path,
+    receipt: dict[str, Any],
+) -> None:
+    """Attach only format-valid, HEAD-bound delivery metrics (collector owns values)."""
+    try:
+        delivery_receipt_channel.merge_delivery_receipt(
+            contract, evidence, receipt_path, receipt
+        )
+    except delivery_receipt_channel.DeliveryReceiptError as exc:
+        raise ContractError(str(exc)) from exc
+
+
 def render_markdown(report: dict[str, Any]) -> str:
     score = "UNRATED" if report["formal_score"] is None else f"{report['formal_score']:.2f}"
     lines = [
@@ -584,6 +614,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--canonical-receipt", action="append", default=[])
     parser.add_argument("--coverage-receipt", default="")
     parser.add_argument("--evolution-receipt", default="")
+    parser.add_argument("--delivery-receipt", default="")
     parser.add_argument("--capture-static", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--json-out", default="")
@@ -608,8 +639,10 @@ def main(argv: list[str] | None = None) -> int:
     if bool(args.template) == bool(args.evidence):
         raise ContractError("select exactly one of --template or --evidence")
     if args.template:
-        if args.coverage_receipt or args.evolution_receipt:
-            raise ContractError("coverage/evolution receipt requires collected --evidence")
+        if args.coverage_receipt or args.evolution_receipt or args.delivery_receipt:
+            raise ContractError(
+                "coverage/evolution/delivery receipt requires collected --evidence"
+            )
         payload = evidence_template(contract)
         if args.capture_static:
             capture_static_metrics(payload)
@@ -628,6 +661,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.evolution_receipt:
         evolution_path = Path(args.evolution_receipt)
         merge_evolution_receipt(evidence, evolution_path, _load_json(evolution_path))
+    if args.delivery_receipt:
+        delivery_path = Path(args.delivery_receipt)
+        merge_delivery_receipt(contract, evidence, delivery_path, _load_json(delivery_path))
     report = score_evidence(contract, evidence)
     json_output = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     markdown = render_markdown(report)
