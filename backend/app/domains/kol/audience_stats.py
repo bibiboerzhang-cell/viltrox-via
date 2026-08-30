@@ -28,7 +28,6 @@ YTDLP_PROXY 导出),没配则在错误里提示。
 """
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
@@ -204,6 +203,7 @@ def refresh_audience_stats(
     红线:只写 audience_estimated_json + updated_at,绝不触 viltrox_fit_score、不碰 rule_v0。
     """
     from app.db.connection import get_conn
+    from app.domains.kol import audience_stats_refresh as steps
 
     started = time.time()
     conn = get_conn()
@@ -216,69 +216,11 @@ def refresh_audience_stats(
     rec = dict(row)
     platform = str(rec.get("platform") or "").strip().lower()
 
-    if platform == "youtube":
-        ref = _youtube_channel_ref(rec)
-        if not ref:
-            return {"status": "skipped", "reason": "no_channel_reference", "kol_pool_id": int(kol_pool_id)}
-        sample = sample_youtube_commenters(ref, max_comments=max_comments)
-        if sample.get("status") != "ok":
-            return {**sample, "kol_pool_id": int(kol_pool_id)}
-    elif platform in ("instagram", "tiktok"):
-        sample = sample_local_commenters(int(kol_pool_id), conn=conn)
-        if int(sample.get("comments_scanned") or 0) < MIN_LOCAL_COMMENTS:
-            # 无帖可采就别入队:evidence 为空时采集 job 会 1 秒空转"done",
-            # 用户按"已入队稍后刷新"的提示等不到任何结果 —— 诚实返回 no_posts 让 UI 引导先跑账号分析。
-            ev_n = 0
-            try:
-                ev_row = conn.execute(
-                    "SELECT COUNT(*) AS n FROM vkpi_kol_video_evidence WHERE kol_pool_id=?",
-                    (int(kol_pool_id),),
-                ).fetchone()
-                ev_n = int(dict(ev_row).get("n") or 0) if ev_row else 0
-            except Exception:
-                ev_n = 0
-            if ev_n <= 0:
-                return {
-                    "status": "no_posts",
-                    "kol_pool_id": int(kol_pool_id),
-                    "platform": platform,
-                    "comments_found": int(sample.get("comments_scanned") or 0),
-                    "min_required": MIN_LOCAL_COMMENTS,
-                    "enqueued": False,
-                    "reason": "池内暂无该 KOL 的帖子记录,先对该 KOL 跑一次账号/视频分析再生成受众统计",
-                }
-            enqueued = False
-            enqueue_status = ""
-            if enqueue_if_missing:
-                try:
-                    from app.domains.comments.collector import enqueue_kol_pool_comments_job
-
-                    result = enqueue_kol_pool_comments_job(int(kol_pool_id), queue_lane="batch")
-                    enqueue_status = str(result.get("status") or "")
-                    enqueued = enqueue_status in ("queued", "already_queued")
-                except Exception as exc:
-                    enqueue_status = f"enqueue_failed: {exc}"[:200]
-            return {
-                "status": "pending_comments" if enqueued else "partial",
-                "kol_pool_id": int(kol_pool_id),
-                "platform": platform,
-                "comments_found": int(sample.get("comments_scanned") or 0),
-                "min_required": MIN_LOCAL_COMMENTS,
-                "enqueued": enqueued,
-                "enqueue_status": enqueue_status,
-                "reason": (
-                    "本地评论不足,已入队抓评论,稍后再刷新"
-                    if enqueued
-                    else (
-                        "comment_collection_enqueue_failed"
-                        if enqueue_status.startswith("enqueue_failed:")
-                        else "local_comments_insufficient"
-                    )
-                ),
-            }
-    else:
-        return {"status": "unsupported_platform", "platform": platform, "kol_pool_id": int(kol_pool_id),
-                "reason": "P0 支持 youtube/instagram/tiktok"}
+    sample, early_return = steps._collect_sample(
+        conn, int(kol_pool_id), rec, platform, max_comments, enqueue_if_missing
+    )
+    if early_return is not None:
+        return early_return
 
     commenters = list(sample.get("commenters") or [])
     if not commenters:
@@ -286,97 +228,11 @@ def refresh_audience_stats(
                 "comments_scanned": int(sample.get("comments_scanned") or 0),
                 "reason": "no_commenter_identities_in_sample"}
     inferred, cache_stats = _infer_with_cache(conn, platform, commenters)
-    # v2:年龄 ABC 三路融合(失败不阻断主流程,coverage 里诚实标注)。
-    age_stats: dict[str, Any] = {"llm": {"status": "skipped", "calls": 0}, "m3": "unavailable", "counts": {}}
-    try:
-        age_stats = _age_ensemble(
-            conn,
-            platform,
-            inferred,
-            llm_max_batches=llm_max_batches,
-            allow_avatar_provider=bool(allow_avatar_provider),
-        )
-    except Exception as exc:
-        logger.warning("audience_stats age ensemble failed kol=%s: %s", kol_pool_id, exc)
-        age_stats["error"] = str(exc)[:200]
-    payload = aggregate_audience(int(kol_pool_id), inferred, conn=conn, platform=platform)
-    payload["generated_at"] = _utcnow_iso()
-    payload["comments_scanned"] = int(sample.get("comments_scanned") or 0)
-    payload["cache"] = cache_stats
-    payload["age_coverage"] = age_stats
-    if platform == "youtube":
-        payload["channel_id"] = str(sample.get("channel_id") or "")
-    # v2:评论情报(纯词表/直方零成本)。YT 用本次 API 抽样带回的评论;IG/TT 读 vkpi_comments。
-    try:
-        from app.domains.kol import comment_intel as ci
-
-        api_comments = list(sample.get("comments") or [])
-        if api_comments:
-            intel = ci.analyze_comments(api_comments)
-            intel["source"] = "youtube_api_sample"
-            reply_total = int(sample.get("reply_total") or 0)
-            if reply_total and isinstance(intel.get("engagement"), dict):
-                # API 只抓 top-level:回复占比按 thread 的 totalReplyCount 口径补算。
-                top_n = int(intel.get("sample_size") or 0)
-                intel["engagement"]["reply_pct"] = _pct(reply_total, top_n + reply_total)
-                intel["engagement"]["reply_basis"] = "thread_total_reply_count"
-        else:
-            intel = ci.comment_intel_for_kol(int(kol_pool_id), conn=conn)
-        payload["comment_intel"] = intel
-    except Exception as exc:
-        logger.warning("comment_intel failed kol=%s: %s", kol_pool_id, exc)
-        payload["comment_intel"] = {"sample_size": 0, "error": str(exc)[:200]}
-    # v2:共同粉丝(audience overlap)—— 矩阵投放去重用(重叠高的 KOL 不必都投)。
-    try:
-        from app.domains.kol.comment_intel import compute_audience_overlap
-
-        payload["overlap"] = compute_audience_overlap(int(kol_pool_id), conn=conn)
-    except Exception as exc:
-        logger.warning("audience overlap failed kol=%s: %s", kol_pool_id, exc)
-        payload["overlap"] = {"items": [], "error": str(exc)[:200]}
-    # v4:画像抽样、评论情报、重叠桥各自声明来源。YouTube 的画像/评论情报来自
-    # 本次 Data API 抽样，不与本地 durable 评论桥混算；overlap 永远只读本地桥。
-    payload["source_contract"] = _audience_source_contract(platform, sample, payload)
-    # v3:关注图谱 v0(仅 YT;评论者=频道 id 可直接查公开订阅)。失败不阻断主流程。
-    if platform == "youtube":
-        try:
-            _cids = [str(c.get("author_key") or "") for c in (sample.get("commenters") or [])]
-            payload["audience_affinity"] = _yt_audience_affinity(_cids, str(sample.get("channel_id") or ""))
-        except Exception as exc:
-            logger.warning("audience affinity failed kol=%s: %s", kol_pool_id, exc)
-            payload["audience_affinity"] = {"items": [], "error": str(exc)[:200]}
-    conn.execute(
-        "UPDATE vkpi_kol_pool SET audience_estimated_json=?, updated_at=? WHERE id=?",
-        (json.dumps(payload, ensure_ascii=False), _utcnow_iso(), int(kol_pool_id)),
+    age_stats = steps._age_stats_for(
+        conn, platform, inferred, llm_max_batches, bool(allow_avatar_provider), int(kol_pool_id)
     )
-    conn.commit()
-    llm_stats = age_stats.get("llm") if isinstance(age_stats.get("llm"), dict) else {}
-    llm_degraded = bool(
-        age_stats.get("error")
-        or (
-            int(llm_stats.get("people_in") or 0) > 0
-            and str(llm_stats.get("status") or "") in {"failed", "partial"}
-        )
+    payload = steps._build_audience_payload(
+        conn, int(kol_pool_id), platform, sample, inferred, cache_stats, age_stats
     )
-    sample_degraded = bool(sample.get("partial"))
-    result = {
-        "status": "partial" if llm_degraded or sample_degraded else "ok",
-        "kol_pool_id": int(kol_pool_id),
-        "platform": platform,
-        "sample_size": payload.get("sample_size"),
-        "confidence": payload.get("confidence"),
-        "audience": payload,
-        "elapsed_sec": round(time.time() - started, 2),
-    }
-    partial_components: list[str] = []
-    reasons: list[str] = []
-    if sample_degraded:
-        partial_components.append("comment_sample")
-        reasons.append(str(sample.get("reason") or "comment_sample_partial"))
-    if llm_degraded:
-        partial_components.append("age_llm")
-        reasons.append(str(llm_stats.get("reason") or "age_inference_unavailable"))
-    if partial_components:
-        result["reason"] = ",".join(reasons)
-        result["partial_components"] = partial_components
-    return result
+    steps._store_audience_payload(conn, int(kol_pool_id), payload)
+    return steps._refresh_result(int(kol_pool_id), platform, sample, age_stats, payload, started)

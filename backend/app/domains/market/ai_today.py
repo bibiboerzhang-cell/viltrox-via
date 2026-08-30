@@ -67,6 +67,7 @@ from app.domains.market.ai_today_evidence import (
     _video_content_origin,
     recent_recommended_lines as _recent_recommended_lines,
 )
+from app.domains.market import ai_today_read
 from app.domains.market.ai_today_json_guard import (
     extract_json_object,
     generate_json_with_parse_retry,
@@ -822,7 +823,11 @@ def _attach_latest_attempt(payload: dict[str, Any], attempt: dict[str, Any]) -> 
 
 
 def get_ai_today_hot() -> dict[str, Any]:
-    """读最新有直接 grounding citation 的 AI Today，并只读附加市场/视频证据。"""
+    """读最新有直接 grounding citation 的 AI Today，并只读附加市场/视频证据。
+
+    选行 / 不可用元数据 / 就绪装配三段提在 ai_today_read(行为不变;
+    协作符号经门面回读,monkeypatch 兼容)。
+    """
     try:
         _ensure_schema()
         conn = get_conn()
@@ -840,154 +845,12 @@ def get_ai_today_hot() -> dict[str, Any]:
                 "reason": "not_generated_yet",
             }, latest_attempt)
 
-        selected: tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]] | None = None
-        legacy: tuple[dict[str, Any], dict[str, Any], dict[str, Any], list[dict[str, Any]]] | None = None
-        newest: tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]] | None = None
-        skipped_newer_errors: list[str] = []
-        for raw_row in rows:
-            d = dict(raw_row)
-            try:
-                content = json.loads(d.get("content_json") or "{}")
-            except (TypeError, ValueError):
-                content = {}
-            content = content if isinstance(content, dict) else {}
-            contract = _validate_ai_today_content(content)
-            source_contract = _validate_grounding_sources(content.get("sources"))
-            if newest is None:
-                newest = (d, content, contract, source_contract)
-            grounding_sources = list(source_contract.get("value") or [])
-            if contract.get("status") == "ready" and source_contract.get("status") == "ready":
-                # Codex 清单 D 组:读端只把「完整两阶段 pipeline v1」快照当 ready;
-                # 旧单阶段(无 pipeline 标记)快照最多作 stale/degraded 展示,绝不冒充今日就绪。
-                provenance = content.get("provenance") if isinstance(content.get("provenance"), dict) else {}
-                if str(provenance.get("pipeline") or "") == _AI_TODAY_PIPELINE_VERSION:
-                    selected = (d, content, contract, grounding_sources)
-                    break
-                if legacy is None:
-                    legacy = (d, content, contract, grounding_sources)
-                    skipped_newer_errors.append("legacy_snapshot:pipeline_v1_required")
-                continue
-            if legacy is None:
-                # 只累计「比可展示行更新」的拒绝原因;legacy 兜底行之下的陈年错误不进门面。
-                skipped_newer_errors.extend(
-                    [
-                        *list(contract.get("errors") or []),
-                        *list(source_contract.get("errors") or []),
-                    ]
-                )
-
-        legacy_fallback = False
-        if selected is None and legacy is not None:
-            # 没有任何 pipeline v1 快照时,用最新的旧单阶段 grounded 快照兜底展示,
-            # 但强制 degraded(is_ready=False),门面口径「历史快照」而非今日结论。
-            selected = legacy
-            legacy_fallback = True
-
+        selected, legacy_fallback, newest, skipped_newer_errors = ai_today_read.select_snapshot(rows)
         if selected is None:
-            d, content, contract, source_contract = newest or (
-                {},
-                {},
-                _contract_result("invalid", {}, ["result:missing"]),
-                _contract_result("degraded", [], ["sources:missing"]),
-            )
-            generated_at = _iso_utc(
-                content.get("generated_at") or d.get("created_at") or d.get("snapshot_date")
-            )
-            freshness = _freshness_payload(generated_at)
-            snapshot_date = str(d.get("snapshot_date") or "")
-            contract_status = str(contract.get("status") or "invalid")
-            source_status = str(source_contract.get("status") or "degraded")
-            result_status = "invalid" if "invalid" in {contract_status, source_status} else "degraded"
-            reason = "invalid_result_contract" if result_status == "invalid" else "no_grounded_latest"
-            validation_errors = [
-                *list(contract.get("errors") or []),
-                *list(source_contract.get("errors") or []),
-            ]
-            metadata = {
-                "status": result_status,
-                "result_status": result_status,
-                "contract_status": contract_status,
-                "contract_version": _RESULT_CONTRACT_VERSION,
-                "is_ready": False,
-                "grounding_status": "ungrounded",
-                "generated_at": generated_at,
-                "snapshot_date": snapshot_date,
-                "sources": [],
-                "evidence": [],
-                "validation_errors": validation_errors,
-                "provenance": content.get("provenance") if isinstance(content.get("provenance"), dict) else {},
-                **freshness,
-            }
-            return _attach_latest_attempt({
-                "available": False,
-                "reason": reason,
-                "model": d.get("model"),
-                **metadata,
-                "content": metadata,
-            }, latest_attempt)
-
-        d, content, contract, grounding_sources = selected
-        stored_sources = list(grounding_sources)
-        source_urls = {str(source.get("url") or "") for source in stored_sources if isinstance(source, dict)}
-        for source in _market_sources(content.get("hot_brands")):
-            if source["url"] not in source_urls:
-                stored_sources.append(source)
-                source_urls.add(source["url"])
-        generated_at = _iso_utc(content.get("generated_at") or d.get("created_at") or d.get("snapshot_date"))
-        freshness = _freshness_payload(generated_at)
-        evidence_contract = _validate_video_evidence(
-            _rank_video_candidates(_recommended_video_rows(), dict(contract.get("value") or {}))
+            return _attach_latest_attempt(ai_today_read.unavailable_payload(newest), latest_attempt)
+        return _attach_latest_attempt(
+            ai_today_read.ready_payload(selected, legacy_fallback, skipped_newer_errors), latest_attempt
         )
-        contract_status = (
-            "invalid" if evidence_contract.get("status") == "invalid" else str(contract.get("status") or "invalid")
-        )
-        if (legacy_fallback or skipped_newer_errors) and contract_status == "ready":
-            contract_status = "degraded"
-        result_status = _result_status(
-            contract_status,
-            str(freshness.get("freshness_status") or "unknown"),
-            grounded=True,
-        )
-        normalized_content = dict(contract.get("value") or {})
-        enriched = {
-            **content,
-            **normalized_content,
-            **freshness,
-            "status": result_status,
-            "result_status": result_status,
-            "contract_status": contract_status,
-            "contract_version": _RESULT_CONTRACT_VERSION,
-            "is_ready": result_status == "ready",
-            "snapshot_date": str(d.get("snapshot_date") or ""),
-            "generated_at": generated_at,
-            "grounding_status": "grounded",
-            "sources": stored_sources,
-            "evidence": grounding_sources,
-            "recommended_videos": list(evidence_contract.get("value") or []),
-            "validation_errors": [
-                *list(evidence_contract.get("errors") or []),
-                *(["newer_rows_rejected"] if skipped_newer_errors else []),
-                *skipped_newer_errors,
-            ],
-            "provenance": content.get("provenance") if isinstance(content.get("provenance"), dict) else {},
-            **({"reason": "legacy_snapshot_pre_pipeline_v1"} if legacy_fallback else {}),
-        }
-        return _attach_latest_attempt({
-            "available": True,
-            "status": result_status,
-            "result_status": result_status,
-            "contract_status": contract_status,
-            "contract_version": _RESULT_CONTRACT_VERSION,
-            "is_ready": result_status == "ready",
-            "model": d.get("model"),
-            "snapshot_date": enriched["snapshot_date"],
-            "generated_at": generated_at,
-            "grounding_status": "grounded",
-            "sources": stored_sources,
-            **freshness,
-            **({"reason": "legacy_snapshot_pre_pipeline_v1"} if legacy_fallback else {}),
-            "content": enriched,
-        }, latest_attempt)
     except Exception:
         logger.debug("ai_today.get_failed", exc_info=True)
         return {

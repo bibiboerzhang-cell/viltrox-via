@@ -284,6 +284,159 @@ def _brand_payload(
     }
 
 
+# ── 词表命中 + 逐行累计(从 get_brand_pulse 提出,行为不变) ─────
+
+
+def _match_any(match: Any, text: str, keywords: Any) -> bool:
+    return any(match(text, kw) for kw in keywords)
+
+
+def _row_hits(
+    title_blob: str,
+    deep_blob: str,
+    vocab: dict[str, dict[str, Any]],
+    viltrox_terms: list[str],
+    match: Any,
+) -> dict[str, str]:
+    """单视频的品牌命中表:brand key → matched_via(标题优先于深析文本)。"""
+    hits: dict[str, str] = {}
+    if _match_any(match, title_blob, viltrox_terms):
+        hits["viltrox"] = "title"
+    elif deep_blob and _match_any(match, deep_blob, viltrox_terms):
+        hits["viltrox"] = "deep_analysis"
+    for brand, meta in vocab.items():
+        keywords = meta.get("keywords") or []
+        if _match_any(match, title_blob, keywords):
+            hits[brand] = "title"
+        elif deep_blob and _match_any(match, deep_blob, keywords):
+            hits[brand] = "deep_analysis"
+    return hits
+
+
+def _record_hits(state: dict[str, Any], row: dict[str, Any], day: date, week: date, hits: dict[str, str]) -> None:
+    try:
+        kol_id = int(row.get("kol_pool_id") or 0)
+    except (TypeError, ValueError):
+        kol_id = 0
+    example = {
+        "evidence_id": row.get("evidence_id"),
+        "title": (str(row.get("video_title") or "") or str(row.get("title_alt") or ""))[:160],
+        "content_url": str(row.get("content_url") or ""),
+        "platform": str(row.get("platform") or ""),
+        "posted_at": day.isoformat(),
+        "view_count": row.get("view_count"),
+        "kol_pool_id": kol_id or None,
+        "kol_name": str(row.get("kol_name") or ""),
+    }
+    for brand, via in hits.items():
+        counts = state["brand_weekly"].setdefault(brand, {})
+        counts[week] = counts.get(week, 0) + 1
+        if kol_id:
+            state["brand_kols"].setdefault(brand, set()).add(kol_id)
+        state["brand_examples"].setdefault(brand, []).append({**example, "matched_via": via})
+
+
+def _title_blob(row: dict[str, Any]) -> str:
+    return " ".join(
+        part for part in (str(row.get("video_title") or ""), str(row.get("title_alt") or "")) if part.strip()
+    )
+
+
+def _scan_evidence(
+    rows: list[dict[str, Any]],
+    deep_texts: dict[int, str],
+    vocab: dict[str, dict[str, Any]],
+    viltrox_terms: list[str],
+    match: Any,
+    start_day: date,
+    today: date,
+) -> dict[str, Any]:
+    """窗口内证据逐行扫描 → 计数器 + 周分桶 + 每品牌周计数/KOL 集/例证。"""
+    state: dict[str, Any] = {
+        "videos_scanned": 0,
+        "videos_with_text": 0,
+        "week_totals": {},
+        "week_brand_videos": {},
+        "brand_weekly": {},
+        "brand_kols": {},
+        "brand_examples": {},
+    }
+    for row in rows:
+        day = _parse_day(row.get("pub_day"))
+        if day is None or day < start_day or day > today:
+            continue
+        week = _monday(day)
+        state["videos_scanned"] += 1
+        state["week_totals"][week] = state["week_totals"].get(week, 0) + 1
+
+        title_blob = _title_blob(row)
+        deep_blob = deep_texts.get(int(row.get("evidence_id") or 0), "")
+        if not title_blob.strip() and not deep_blob.strip():
+            continue
+        state["videos_with_text"] += 1
+
+        hits = _row_hits(title_blob, deep_blob, vocab, viltrox_terms, match)
+        if not hits:
+            continue
+        state["week_brand_videos"][week] = state["week_brand_videos"].get(week, 0) + 1
+        _record_hits(state, row, day, week, hits)
+    return state
+
+
+def _viltrox_position(viltrox: dict[str, Any], competitor_payloads: list[dict[str, Any]]) -> int:
+    """Viltrox 相对位置:rank 按窗口内提及视频数(含自家)排;SoV 与 #51 视频×品牌口径同源。"""
+    all_totals = sorted(
+        [int(viltrox["total_videos"]), *(int(item["total_videos"]) for item in competitor_payloads)],
+        reverse=True,
+    )
+    viltrox_rank = (all_totals.index(int(viltrox["total_videos"])) + 1) if int(viltrox["total_videos"]) > 0 else None
+    competitor_total = sum(int(item["total_videos"]) for item in competitor_payloads)
+    voice_total = int(viltrox["total_videos"]) + competitor_total
+    share_of_voice = round(int(viltrox["total_videos"]) / voice_total, 3) if voice_total > 0 else None
+    viltrox["share_of_voice"] = share_of_voice
+    viltrox["rank"] = viltrox_rank
+    viltrox["brand_count_ranked"] = len(all_totals)
+    return voice_total
+
+
+def _trend_groups(competitor_payloads: list[dict[str, Any]]) -> dict[str, list[str]]:
+    return {
+        "rising": [item["key"] for item in competitor_payloads if item["trend"] == "rising"],
+        "falling": [item["key"] for item in competitor_payloads if item["trend"] == "falling"],
+        "stable": [item["key"] for item in competitor_payloads if item["trend"] == "stable"],
+    }
+
+
+def _week_buckets(
+    weeks: list[date], week_totals: dict[date, int], week_brand_videos: dict[date, int]
+) -> tuple[list[dict[str, Any]], int]:
+    """窗口逐周桶;没数据的周输出空桶并标 sparse=true,诚实不填数。"""
+    week_buckets: list[dict[str, Any]] = []
+    sparse_weeks = 0
+    for week in weeks:
+        scanned = int(week_totals.get(week, 0))
+        sparse = scanned == 0
+        if sparse:
+            sparse_weeks += 1
+        week_buckets.append(
+            {
+                "week_start": week.isoformat(),
+                "videos_scanned": scanned,
+                "brand_videos": int(week_brand_videos.get(week, 0)),
+                "sparse": sparse,
+            }
+        )
+    return week_buckets, sparse_weeks
+
+
+def _pulse_status(videos_scanned: int, voice_total: int) -> str:
+    if videos_scanned == 0:
+        return "no_data_in_window"
+    if voice_total == 0:
+        return "no_brand_signal"
+    return "ok"
+
+
 # ── 对外入口 ─────────────────────────────────────────────────────
 
 
@@ -300,68 +453,9 @@ def get_brand_pulse(window_days: int = DEFAULT_WINDOW_DAYS) -> dict[str, Any]:
     rows = _evidence_rows(conn, start_str)
     deep_texts = _deep_texts(conn, start_str)
     vocab = _competitor_vocab()
-    viltrox_terms = _viltrox_terms()
-    match = _matcher()
-
-    videos_scanned = 0
-    videos_with_text = 0
-    week_totals: dict[date, int] = {}
-    week_brand_videos: dict[date, int] = {}
-    brand_weekly: dict[str, dict[date, int]] = {}
-    brand_kols: dict[str, set[int]] = {}
-    brand_examples: dict[str, list[dict[str, Any]]] = {}
-
-    for row in rows:
-        day = _parse_day(row.get("pub_day"))
-        if day is None or day < start_day or day > today:
-            continue
-        week = _monday(day)
-        videos_scanned += 1
-        week_totals[week] = week_totals.get(week, 0) + 1
-
-        title_blob = " ".join(
-            part for part in (str(row.get("video_title") or ""), str(row.get("title_alt") or "")) if part.strip()
-        )
-        deep_blob = deep_texts.get(int(row.get("evidence_id") or 0), "")
-        if not title_blob.strip() and not deep_blob.strip():
-            continue
-        videos_with_text += 1
-
-        hits: dict[str, str] = {}  # brand key → matched_via
-        if any(match(title_blob, term) for term in viltrox_terms):
-            hits["viltrox"] = "title"
-        elif deep_blob and any(match(deep_blob, term) for term in viltrox_terms):
-            hits["viltrox"] = "deep_analysis"
-        for brand, meta in vocab.items():
-            keywords = meta.get("keywords") or []
-            if any(match(title_blob, kw) for kw in keywords):
-                hits[brand] = "title"
-            elif deep_blob and any(match(deep_blob, kw) for kw in keywords):
-                hits[brand] = "deep_analysis"
-
-        if not hits:
-            continue
-        week_brand_videos[week] = week_brand_videos.get(week, 0) + 1
-        try:
-            kol_id = int(row.get("kol_pool_id") or 0)
-        except (TypeError, ValueError):
-            kol_id = 0
-        example = {
-            "evidence_id": row.get("evidence_id"),
-            "title": (str(row.get("video_title") or "") or str(row.get("title_alt") or ""))[:160],
-            "content_url": str(row.get("content_url") or ""),
-            "platform": str(row.get("platform") or ""),
-            "posted_at": day.isoformat(),
-            "view_count": row.get("view_count"),
-            "kol_pool_id": kol_id or None,
-            "kol_name": str(row.get("kol_name") or ""),
-        }
-        for brand, via in hits.items():
-            counts = brand_weekly.setdefault(brand, {})
-            counts[week] = counts.get(week, 0) + 1
-            if kol_id:
-                brand_kols.setdefault(brand, set()).add(kol_id)
-            brand_examples.setdefault(brand, []).append({**example, "matched_via": via})
+    state = _scan_evidence(rows, deep_texts, vocab, _viltrox_terms(), _matcher(), start_day, today)
+    week_totals: dict[date, int] = state["week_totals"]
+    brand_weekly: dict[str, dict[date, int]] = state["brand_weekly"]
 
     # ── Viltrox 单列 + 竞品榜(趋势按半窗扫描量归一,校正采集密度差) ──
     prev_scanned = sum(int(week_totals.get(week, 0)) for week in weeks[:mid])
@@ -371,8 +465,8 @@ def get_brand_pulse(window_days: int = DEFAULT_WINDOW_DAYS) -> dict[str, Any]:
         "viltrox",
         viltrox_meta,
         brand_weekly.get("viltrox", {}),
-        brand_kols.get("viltrox", set()),
-        brand_examples.get("viltrox", []),
+        state["brand_kols"].get("viltrox", set()),
+        state["brand_examples"].get("viltrox", []),
         weeks,
         mid,
         prev_scanned,
@@ -384,8 +478,8 @@ def get_brand_pulse(window_days: int = DEFAULT_WINDOW_DAYS) -> dict[str, Any]:
             key,
             vocab.get(key, {}),
             brand_weekly[key],
-            brand_kols.get(key, set()),
-            brand_examples.get(key, []),
+            state["brand_kols"].get(key, set()),
+            state["brand_examples"].get(key, []),
             weeks,
             mid,
             prev_scanned,
@@ -397,47 +491,10 @@ def get_brand_pulse(window_days: int = DEFAULT_WINDOW_DAYS) -> dict[str, Any]:
     competitor_payloads.sort(key=lambda item: (-int(item["total_videos"]), str(item["key"])))
     competitor_payloads = competitor_payloads[:TOP_BRANDS]
 
-    # Viltrox 相对位置:rank 按窗口内提及视频数(含自家)排;SoV 与 #51 视频×品牌口径同源。
-    all_totals = sorted(
-        [int(viltrox["total_videos"]), *(int(item["total_videos"]) for item in competitor_payloads)],
-        reverse=True,
-    )
-    viltrox_rank = (all_totals.index(int(viltrox["total_videos"])) + 1) if int(viltrox["total_videos"]) > 0 else None
-    competitor_total = sum(int(item["total_videos"]) for item in competitor_payloads)
-    voice_total = int(viltrox["total_videos"]) + competitor_total
-    share_of_voice = round(int(viltrox["total_videos"]) / voice_total, 3) if voice_total > 0 else None
-    viltrox["share_of_voice"] = share_of_voice
-    viltrox["rank"] = viltrox_rank
-    viltrox["brand_count_ranked"] = len(all_totals)
-
-    groups = {
-        "rising": [item["key"] for item in competitor_payloads if item["trend"] == "rising"],
-        "falling": [item["key"] for item in competitor_payloads if item["trend"] == "falling"],
-        "stable": [item["key"] for item in competitor_payloads if item["trend"] == "stable"],
-    }
-
-    week_buckets = []
-    sparse_weeks = 0
-    for week in weeks:
-        scanned = int(week_totals.get(week, 0))
-        sparse = scanned == 0
-        if sparse:
-            sparse_weeks += 1
-        week_buckets.append(
-            {
-                "week_start": week.isoformat(),
-                "videos_scanned": scanned,
-                "brand_videos": int(week_brand_videos.get(week, 0)),
-                "sparse": sparse,
-            }
-        )
-
-    if videos_scanned == 0:
-        status = "no_data_in_window"
-    elif voice_total == 0:
-        status = "no_brand_signal"
-    else:
-        status = "ok"
+    voice_total = _viltrox_position(viltrox, competitor_payloads)
+    groups = _trend_groups(competitor_payloads)
+    week_buckets, sparse_weeks = _week_buckets(weeks, week_totals, state["week_brand_videos"])
+    status = _pulse_status(state["videos_scanned"], voice_total)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -450,12 +507,12 @@ def get_brand_pulse(window_days: int = DEFAULT_WINDOW_DAYS) -> dict[str, Any]:
         "brands": competitor_payloads,
         "groups": groups,
         "coverage": {
-            "videos_scanned": videos_scanned,
+            "videos_scanned": state["videos_scanned"],
             "prev_half_scanned": prev_scanned,
             "recent_half_scanned": recent_scanned,
-            "videos_with_text": videos_with_text,
+            "videos_with_text": state["videos_with_text"],
             "deep_analyzed_in_window": len(deep_texts),
-            "brand_hit_videos": sum(week_brand_videos.values()),
+            "brand_hit_videos": sum(state["week_brand_videos"].values()),
             "sparse_weeks": sparse_weeks,
             "vocab_brands": len(vocab),
         },
