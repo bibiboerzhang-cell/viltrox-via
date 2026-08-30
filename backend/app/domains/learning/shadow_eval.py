@@ -188,23 +188,18 @@ def _band_metrics(records: list[dict[str, Any]], which: str, pf: Any) -> dict[st
     }
 
 
-def _run_forecast_backtest(*, conn: Any = None) -> dict[str, Any]:
-    """留一回测:挑战者(分位数法)vs 对照组(全局中位数),双赢才建议上线。"""
-    from app.db.connection import get_conn
+def _unavailable_payload() -> dict[str, Any]:
+    """诚实态:performance_forecast 模块不可用 → 本轮评测不出结论。"""
+    return {
+        "status": "unavailable",
+        "eval": "forecast_backtest",
+        "reason": "performance_forecast 模块不可用,分位数口径无从复算 — 本轮评测不出结论。",
+        "generated_at": _utcnow_iso(),
+    }
 
-    pf = _forecast_tools()
-    if pf is None:
-        return {
-            "status": "unavailable",
-            "eval": "forecast_backtest",
-            "reason": "performance_forecast 模块不可用,分位数口径无从复算 — 本轮评测不出结论。",
-            "generated_at": _utcnow_iso(),
-        }
 
-    db = conn or get_conn()
-    candidates = _load_sample_candidates(db)
-
-    # Python 侧过滤:is_active 宽容判真 + 必须有真实播放数;按 evidence_id 去重(cache 可能多行)。
+def _select_samples(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Python 侧过滤:is_active 宽容判真 + 必须有真实播放数;按 evidence_id 去重(cache 可能多行)。"""
     samples: list[dict[str, Any]] = []
     seen: set[int] = set()
     for row in candidates:
@@ -227,24 +222,29 @@ def _run_forecast_backtest(*, conn: Any = None) -> dict[str, Any]:
         })
         if len(samples) >= MAX_SAMPLES:
             break
+    return samples
 
-    if not samples:
-        return {
-            "status": "empty",
-            "eval": "forecast_backtest",
-            "reason": (
-                f"扫描 {len(candidates)} 条 final_v1 深析记录,没有一条同时满足"
-                "「evidence 有效 + 有真实播放数」— 等抓取回填 view_count 后再评。"
-            ),
-            "samples": {"candidates_scanned": len(candidates), "eligible": 0},
-            "generated_at": _utcnow_iso(),
-        }
 
-    kol_ids = sorted({s["kol_pool_id"] for s in samples})
-    histories = _load_histories(db, kol_ids)
-    handles = _load_handles(db, kol_ids)
+def _empty_no_eligible_payload(candidates_scanned: int) -> dict[str, Any]:
+    """诚实态:扫描后没有任何「evidence 有效 + 有真实播放数」的样本。"""
+    return {
+        "status": "empty",
+        "eval": "forecast_backtest",
+        "reason": (
+            f"扫描 {candidates_scanned} 条 final_v1 深析记录,没有一条同时满足"
+            "「evidence 有效 + 有真实播放数」— 等抓取回填 view_count 后再评。"
+        ),
+        "samples": {"candidates_scanned": candidates_scanned, "eligible": 0},
+        "generated_at": _utcnow_iso(),
+    }
 
-    # 逐样本留一回测(决定性:samples 已按 evidence_id ASC 排好)。
+
+def _backtest_records(
+    samples: list[dict[str, Any]],
+    histories: dict[int, list[tuple[int, float]]],
+    pf: Any,
+) -> tuple[list[dict[str, Any]], int]:
+    """逐样本留一回测(决定性:samples 已按 evidence_id ASC 排好);返回 (records, 跳过数)。"""
     records: list[dict[str, Any]] = []
     skipped = 0
     all_actuals = [s["actual_views"] for s in samples]
@@ -286,65 +286,101 @@ def _run_forecast_backtest(*, conn: Any = None) -> dict[str, Any]:
                 "rel_error": abs(actual - b_p50) / actual,
             },
         })
+    return records, skipped
 
-    if not records:
-        return {
-            "status": "empty",
-            "eval": "forecast_backtest",
-            "reason": (
-                f"{len(samples)} 条合格样本全部因「留一后 KOL 历史有播放样本 <{MIN_HISTORY}」被跳过,"
-                "分位数回测无从谈起 — 等各 KOL 证据量长起来再评。"
-            ),
-            "samples": {
-                "candidates_scanned": len(candidates),
-                "eligible": len(samples),
-                "evaluated": 0,
-                "skipped_insufficient_history": skipped,
-            },
-            "generated_at": _utcnow_iso(),
-        }
 
-    challenger = _band_metrics(records, "challenger", pf)
-    baseline = _band_metrics(records, "baseline", pf)
+def _empty_all_skipped_payload(candidates_scanned: int, eligible: int, skipped: int) -> dict[str, Any]:
+    """诚实态:合格样本全部因留一后历史不足被跳过。"""
+    return {
+        "status": "empty",
+        "eval": "forecast_backtest",
+        "reason": (
+            f"{eligible} 条合格样本全部因「留一后 KOL 历史有播放样本 <{MIN_HISTORY}」被跳过,"
+            "分位数回测无从谈起 — 等各 KOL 证据量长起来再评。"
+        ),
+        "samples": {
+            "candidates_scanned": candidates_scanned,
+            "eligible": eligible,
+            "evaluated": 0,
+            "skipped_insufficient_history": skipped,
+        },
+        "generated_at": _utcnow_iso(),
+    }
 
-    # ── verdict:带内率与误差双赢(≥/≤ 且至少一项严格更优)才建议上线 ──
+
+def _verdict_metrics(
+    challenger: dict[str, Any], baseline: dict[str, Any]
+) -> tuple[float, float, float, float]:
+    """verdict 输入指标:带内率缺省 0.0;中位误差缺省 +inf(误差算不出即视为最差)。"""
     c_hit, b_hit = challenger["band_hit_rate"] or 0.0, baseline["band_hit_rate"] or 0.0
     c_err = challenger["median_rel_error"] if challenger["median_rel_error"] is not None else float("inf")
     b_err = baseline["median_rel_error"] if baseline["median_rel_error"] is not None else float("inf")
+    return c_hit, b_hit, c_err, b_err
+
+
+def _verdict_label(c_hit: float, b_hit: float, c_err: float, b_err: float) -> tuple[str, str]:
+    """verdict:带内率与误差双赢(≥/≤ 且至少一项严格更优)才建议上线。"""
     hit_better, hit_worse = c_hit > b_hit, c_hit < b_hit
     err_better, err_worse = c_err < b_err, c_err > b_err
     if not hit_worse and not err_worse and (hit_better or err_better):
-        verdict = "challenger_wins"
-        recommendation = "建议上线:分位数法带内率与中位相对误差双赢全局中位数对照组(影子结论,仍需人工确认切换)。"
-    elif not hit_better and not err_better and (hit_worse or err_worse):
-        verdict = "baseline_wins"
-        recommendation = "维持旧版:对照组两项指标均不差于挑战者,分位数法没有拿出胜绩。"
-    else:
-        verdict = "mixed"
-        recommendation = "维持旧版:两项指标各有胜负,未达「双赢才上线」门槛 — 不建议切换。"
+        return (
+            "challenger_wins",
+            "建议上线:分位数法带内率与中位相对误差双赢全局中位数对照组(影子结论,仍需人工确认切换)。",
+        )
+    if not hit_better and not err_better and (hit_worse or err_worse):
+        return "baseline_wins", "维持旧版:对照组两项指标均不差于挑战者,分位数法没有拿出胜绩。"
+    return "mixed", "维持旧版:两项指标各有胜负,未达「双赢才上线」门槛 — 不建议切换。"
 
-    # 分 KOL 明细(决定性排序:样本数降序 → kol_pool_id 升序)。
+
+def _per_kol_row(
+    kol_id: int, recs: list[dict[str, Any]], handles: dict[int, str], pf: Any
+) -> dict[str, Any]:
+    """单 KOL 明细行(与原聚合算式逐位一致)。"""
+    c_errors = sorted(r["challenger"]["rel_error"] for r in recs)
+    b_errors = sorted(r["baseline"]["rel_error"] for r in recs)
+    return {
+        "kol_pool_id": kol_id,
+        "handle": handles.get(kol_id) or None,
+        "sample_count": len(recs),
+        "challenger_hits": sum(1 for r in recs if r["challenger"]["hit"]),
+        "baseline_hits": sum(1 for r in recs if r["baseline"]["hit"]),
+        "challenger_band_hit_rate": _round4(sum(1 for r in recs if r["challenger"]["hit"]) / len(recs)),
+        "baseline_band_hit_rate": _round4(sum(1 for r in recs if r["baseline"]["hit"]) / len(recs)),
+        "challenger_median_rel_error": _round4(pf._quantile(c_errors, 0.5)),
+        "baseline_median_rel_error": _round4(pf._quantile(b_errors, 0.5)),
+    }
+
+
+def _per_kol_details(
+    records: list[dict[str, Any]], handles: dict[int, str], pf: Any
+) -> list[dict[str, Any]]:
+    """分 KOL 明细(决定性排序:样本数降序 → kol_pool_id 升序)。"""
     by_kol: dict[int, list[dict[str, Any]]] = {}
     for record in records:
         by_kol.setdefault(record["kol_pool_id"], []).append(record)
-    per_kol: list[dict[str, Any]] = []
-    for kol_id, recs in by_kol.items():
-        c_errors = sorted(r["challenger"]["rel_error"] for r in recs)
-        b_errors = sorted(r["baseline"]["rel_error"] for r in recs)
-        per_kol.append({
-            "kol_pool_id": kol_id,
-            "handle": handles.get(kol_id) or None,
-            "sample_count": len(recs),
-            "challenger_hits": sum(1 for r in recs if r["challenger"]["hit"]),
-            "baseline_hits": sum(1 for r in recs if r["baseline"]["hit"]),
-            "challenger_band_hit_rate": _round4(sum(1 for r in recs if r["challenger"]["hit"]) / len(recs)),
-            "baseline_band_hit_rate": _round4(sum(1 for r in recs if r["baseline"]["hit"]) / len(recs)),
-            "challenger_median_rel_error": _round4(pf._quantile(c_errors, 0.5)),
-            "baseline_median_rel_error": _round4(pf._quantile(b_errors, 0.5)),
-        })
+    per_kol = [_per_kol_row(kol_id, recs, handles, pf) for kol_id, recs in by_kol.items()]
     per_kol.sort(key=lambda item: (-item["sample_count"], item["kol_pool_id"]))
+    return per_kol
 
-    result: dict[str, Any] = {
+
+def _ready_payload(
+    *,
+    verdict: str,
+    recommendation: str,
+    challenger: dict[str, Any],
+    baseline: dict[str, Any],
+    c_hit: float,
+    b_hit: float,
+    c_err: float,
+    b_err: float,
+    candidates_scanned: int,
+    eligible: int,
+    evaluated: int,
+    skipped: int,
+    per_kol: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """ready 全量证据 payload(键序与文案逐字保持;fingerprint 由调用方补)。"""
+    return {
         "status": "ready",
         "eval": "forecast_backtest",
         "method": "loo_backtest_v1",
@@ -360,9 +396,9 @@ def _run_forecast_backtest(*, conn: Any = None) -> dict[str, Any]:
             "win_rule": "挑战者带内率≥对照组 且 中位相对误差≤对照组,且至少一项严格更优,才判 challenger_wins。",
         },
         "samples": {
-            "candidates_scanned": len(candidates),
-            "eligible": len(samples),
-            "evaluated": len(records),
+            "candidates_scanned": candidates_scanned,
+            "eligible": eligible,
+            "evaluated": evaluated,
             "skipped_insufficient_history": skipped,
             "kol_count": len(per_kol),
             "cap": MAX_SAMPLES,
@@ -376,6 +412,48 @@ def _run_forecast_backtest(*, conn: Any = None) -> dict[str, Any]:
         ),
         "generated_at": _utcnow_iso(),
     }
+
+
+def _run_forecast_backtest(*, conn: Any = None) -> dict[str, Any]:
+    """留一回测:挑战者(分位数法)vs 对照组(全局中位数),双赢才建议上线。"""
+    from app.db.connection import get_conn
+
+    pf = _forecast_tools()
+    if pf is None:
+        return _unavailable_payload()
+
+    db = conn or get_conn()
+    candidates = _load_sample_candidates(db)
+    samples = _select_samples(candidates)
+    if not samples:
+        return _empty_no_eligible_payload(len(candidates))
+
+    kol_ids = sorted({s["kol_pool_id"] for s in samples})
+    histories = _load_histories(db, kol_ids)
+    handles = _load_handles(db, kol_ids)
+    records, skipped = _backtest_records(samples, histories, pf)
+    if not records:
+        return _empty_all_skipped_payload(len(candidates), len(samples), skipped)
+
+    challenger = _band_metrics(records, "challenger", pf)
+    baseline = _band_metrics(records, "baseline", pf)
+    c_hit, b_hit, c_err, b_err = _verdict_metrics(challenger, baseline)
+    verdict, recommendation = _verdict_label(c_hit, b_hit, c_err, b_err)
+    result = _ready_payload(
+        verdict=verdict,
+        recommendation=recommendation,
+        challenger=challenger,
+        baseline=baseline,
+        c_hit=c_hit,
+        b_hit=b_hit,
+        c_err=c_err,
+        b_err=b_err,
+        candidates_scanned=len(candidates),
+        eligible=len(samples),
+        evaluated=len(records),
+        skipped=skipped,
+        per_kol=_per_kol_details(records, handles, pf),
+    )
     result["fingerprint"] = _fingerprint(result)
     return result
 

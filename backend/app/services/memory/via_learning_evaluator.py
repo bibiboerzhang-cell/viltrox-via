@@ -10,7 +10,220 @@ from app.services.memory.via_learning_summaries import (
     _summarize_shadow_rollout_readiness,
 )
 
+def _retrieval_tuning_proposals(
+    metrics: dict[str, Any], retrieval_evidence: dict[str, Any], window_days: int
+) -> list[dict[str, Any]]:
+    """memory_required 高频 + 向量命中率 <0.45 → 建议混合检索。"""
+    required = int(metrics.get("memory_required_count") or 0)
+    hit_rate = float(metrics.get("vector_hit_rate") or 0.0)
+    if not (required >= 8 and hit_rate < 0.45):
+        return []
+    return [
+        {
+            "proposal_key": f"retrieval-{window_days}-{required}",
+            "proposal_type": "retrieval_tuning",
+            "policy_key": "via.retrieval.selective",
+            "status": "proposed",
+            "confidence": 0.78,
+            "impact_score": 0.72,
+            "evidence": {
+                "memory_required_count": required,
+                "vector_hit_rate": hit_rate,
+                "retrieval_evidence": {
+                    "avg_score": float(retrieval_evidence.get("avg_score") or 0.0),
+                    "score_drift": str(retrieval_evidence.get("score_drift") or "stable"),
+                    "source_mix": retrieval_evidence.get("source_mix") or {},
+                },
+            },
+            "proposal": {
+                "summary": "Memory-required turns are outrunning useful vector hits. Add hybrid retrieval and trigger-based fallback ordering.",
+                "actions": [
+                    "prioritize hybrid retrieval when memory_required and vector_hit_rate < 0.45",
+                    "log retrieval score spread to support later rerank learning",
+                ],
+                "candidate_config": {
+                    "policy_version": f"{VIA_EVALUATOR_VERSION}.retrieval.hybrid",
+                    "retrieval_mode": "hybrid_vector_seed",
+                    "vector_hit_threshold": 0.45,
+                    "fallback_order": ["bundle_memory", "vector_memory", "seed_knowledge"],
+                },
+            },
+            "window_days": window_days,
+        }
+    ]
+
+
+def _rollout_provider_candidates(observed_providers: list[str]) -> list[str]:
+    """已观测 provider 打头,默认三家(openai/gemini/claude)去重补位。"""
+    if len(observed_providers) > 1:
+        return observed_providers
+    head = [observed_providers[0]] if observed_providers else []
+    return head + [item for item in ["openai", "gemini", "claude"] if item not in observed_providers]
+
+
+def _routing_exploration_proposals(
+    metrics: dict[str, Any],
+    providers: dict[str, Any],
+    routing_learner: dict[str, Any],
+    window_days: int,
+) -> list[dict[str, Any]]:
+    """路由流量够大但仍单 provider → 建议 bandit 探索(空键不算 provider)。"""
+    choice_count = int(metrics.get("model_choice_count") or 0)
+    observed_providers = [key for key in providers.keys() if key]
+    if not (choice_count >= 6 and len(observed_providers) <= 1):
+        return []
+    rollout_providers = _rollout_provider_candidates(observed_providers)
+    return [
+        {
+            "proposal_key": f"routing-{window_days}-{choice_count}",
+            "proposal_type": "routing_exploration",
+            "policy_key": "via.model.route",
+            "status": "proposed",
+            "confidence": 0.74,
+            "impact_score": 0.63,
+            "evidence": {
+                "model_choice_count": choice_count,
+                "providers": providers,
+                "routing_learner": {
+                    "provider_count": int(routing_learner.get("provider_count") or 0),
+                    "providers": routing_learner.get("providers") or {},
+                },
+            },
+            "proposal": {
+                "summary": "Model routing has enough traffic to start exploration. Introduce bandit-style provider sampling before hard-coding one route.",
+                "actions": [
+                    "sample secondary provider on 10-15% of eligible dialogue turns",
+                    "compare reward_score, latency_ms, and cost_estimate by provider",
+                ],
+                "candidate_config": {
+                    "policy_version": f"{VIA_EVALUATOR_VERSION}.routing.explore",
+                    "execution_mode": "bandit_explore",
+                    "exploration_ratio": 0.12,
+                    "providers": rollout_providers[:3] or ["openai", "gemini", "claude"],
+                },
+            },
+            "window_days": window_days,
+        }
+    ]
+
+
+def _fallback_reduction_proposals(
+    reply_modes: dict[str, Any], window_days: int
+) -> list[dict[str, Any]]:
+    """fallback 回复 ≥3 次 → 建议更好的优雅降级。"""
+    fallback_count = int(reply_modes.get("fallback") or 0)
+    if not (fallback_count >= 3):
+        return []
+    return [
+        {
+            "proposal_key": f"fallback-{window_days}-{fallback_count}",
+            "proposal_type": "fallback_reduction",
+            "policy_key": "via.reply.mode",
+            "status": "proposed",
+            "confidence": 0.69,
+            "impact_score": 0.57,
+            "evidence": {
+                "fallback_count": fallback_count,
+                "reply_modes": reply_modes,
+            },
+            "proposal": {
+                "summary": "Fallback replies are still showing up often enough to justify better graceful degradation.",
+                "actions": [
+                    "add deterministic lightweight fallback copy for empty AI returns",
+                    "capture provider-level error reasons into decision ledger",
+                ],
+                "candidate_config": {
+                    "policy_version": f"{VIA_EVALUATOR_VERSION}.reply.fallback",
+                    "fallback_mode": "deterministic_soft_landing",
+                    "capture_provider_error_reason": True,
+                },
+            },
+            "window_days": window_days,
+        }
+    ]
+
+
+def _memory_promotion_proposals(
+    promotion_tiers: dict[str, Any], memory_retention: dict[str, Any], window_days: int
+) -> list[dict[str, Any]]:
+    """episodic 充足但 semantic 提升不足(≤ max(1, episodic//4))→ 建议放宽晋升。"""
+    episodic = int(promotion_tiers.get("episodic") or 0)
+    semantic = int(promotion_tiers.get("semantic") or 0)
+    if not (episodic >= 6 and semantic <= max(1, episodic // 4)):
+        return []
+    return [
+        {
+            "proposal_key": f"memory-{window_days}-{episodic}-{semantic}",
+            "proposal_type": "memory_promotion_tuning",
+            "policy_key": "via.memory.promotion",
+            "status": "proposed",
+            "confidence": 0.76,
+            "impact_score": 0.68,
+            "evidence": {
+                "episodic": episodic,
+                "semantic": semantic,
+                "promotion_tiers": promotion_tiers,
+                "memory_retention": {
+                    "tracked": int(memory_retention.get("tracked") or 0),
+                    "decaying": int(memory_retention.get("decaying") or 0),
+                    "confirmed_hits": int(memory_retention.get("confirmed_hits") or 0),
+                },
+            },
+            "proposal": {
+                "summary": "The system is storing plenty of episodes but not promoting enough stable traits into semantic memory.",
+                "actions": [
+                    "promote repeated traits after two confirmed hits instead of waiting for three",
+                    "track semantic retention hit rate in the next evaluation window",
+                ],
+                "candidate_config": {
+                    "policy_version": f"{VIA_EVALUATOR_VERSION}.memory.semantic",
+                    "semantic_confirmed_hit_threshold": 2,
+                    "track_semantic_retention": True,
+                },
+            },
+            "window_days": window_days,
+        }
+    ]
+
+
+def _risk_review_proposals(
+    metrics: dict[str, Any], control_summary: dict[str, Any], window_days: int
+) -> list[dict[str, Any]]:
+    """被护栏流量 >8% → 建议复查敏感触发词与前置教育文案。"""
+    abuse_rate = float(metrics.get("abuse_rate") or 0.0)
+    if not (abuse_rate > 0.08):
+        return []
+    return [
+        {
+            "proposal_key": f"risk-{window_days}-{int((metrics.get('abuse_rate') or 0)*1000)}",
+            "proposal_type": "risk_review",
+            "policy_key": "via.guard.policy",
+            "status": "proposed",
+            "confidence": 0.67,
+            "impact_score": 0.61,
+            "evidence": {
+                "abuse_rate": abuse_rate,
+                "triggers": control_summary.get("triggers") or {},
+            },
+            "proposal": {
+                "summary": "Guarded traffic is high enough to review sensitive-trigger phrasing and pre-guard education.",
+                "actions": [
+                    "cluster top guarded prompts by trigger_type",
+                    "add softer public-safe redirect copy for the most frequent guard buckets",
+                ],
+                "candidate_config": {
+                    "policy_version": f"{VIA_EVALUATOR_VERSION}.risk.redirect",
+                    "guard_copy_mode": "softer_public_redirect",
+                    "cluster_guard_buckets": True,
+                },
+            },
+            "window_days": window_days,
+        }
+    ]
+
+
 def _build_policy_proposals(control_summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """五类提案按固定顺序生成:retrieval → routing → fallback → memory → risk。"""
     metrics = dict(control_summary.get("metrics") or {})
     proposals: list[dict[str, Any]] = []
     window_days = int(control_summary.get("window_days") or 14)
@@ -21,172 +234,11 @@ def _build_policy_proposals(control_summary: dict[str, Any]) -> list[dict[str, A
     routing_learner = dict(control_summary.get("routing_learner") or {})
     memory_retention = dict(control_summary.get("memory_retention") or {})
 
-    if int(metrics.get("memory_required_count") or 0) >= 8 and float(metrics.get("vector_hit_rate") or 0.0) < 0.45:
-        proposals.append(
-            {
-                "proposal_key": f"retrieval-{window_days}-{int(metrics.get('memory_required_count') or 0)}",
-                "proposal_type": "retrieval_tuning",
-                "policy_key": "via.retrieval.selective",
-                "status": "proposed",
-                "confidence": 0.78,
-                "impact_score": 0.72,
-                "evidence": {
-                    "memory_required_count": int(metrics.get("memory_required_count") or 0),
-                    "vector_hit_rate": float(metrics.get("vector_hit_rate") or 0.0),
-                    "retrieval_evidence": {
-                        "avg_score": float(retrieval_evidence.get("avg_score") or 0.0),
-                        "score_drift": str(retrieval_evidence.get("score_drift") or "stable"),
-                        "source_mix": retrieval_evidence.get("source_mix") or {},
-                    },
-                },
-                "proposal": {
-                    "summary": "Memory-required turns are outrunning useful vector hits. Add hybrid retrieval and trigger-based fallback ordering.",
-                    "actions": [
-                        "prioritize hybrid retrieval when memory_required and vector_hit_rate < 0.45",
-                        "log retrieval score spread to support later rerank learning",
-                    ],
-                    "candidate_config": {
-                        "policy_version": f"{VIA_EVALUATOR_VERSION}.retrieval.hybrid",
-                        "retrieval_mode": "hybrid_vector_seed",
-                        "vector_hit_threshold": 0.45,
-                        "fallback_order": ["bundle_memory", "vector_memory", "seed_knowledge"],
-                    },
-                },
-                "window_days": window_days,
-            }
-        )
-
-    if int(metrics.get("model_choice_count") or 0) >= 6 and len([key for key in providers.keys() if key]) <= 1:
-        observed_providers = [key for key in providers.keys() if key]
-        rollout_providers = observed_providers if len(observed_providers) > 1 else ([observed_providers[0]] if observed_providers else []) + [item for item in ["openai", "gemini", "claude"] if item not in observed_providers]
-        proposals.append(
-            {
-                "proposal_key": f"routing-{window_days}-{int(metrics.get('model_choice_count') or 0)}",
-                "proposal_type": "routing_exploration",
-                "policy_key": "via.model.route",
-                "status": "proposed",
-                "confidence": 0.74,
-                "impact_score": 0.63,
-                "evidence": {
-                    "model_choice_count": int(metrics.get("model_choice_count") or 0),
-                    "providers": providers,
-                    "routing_learner": {
-                        "provider_count": int(routing_learner.get("provider_count") or 0),
-                        "providers": routing_learner.get("providers") or {},
-                    },
-                },
-                "proposal": {
-                    "summary": "Model routing has enough traffic to start exploration. Introduce bandit-style provider sampling before hard-coding one route.",
-                    "actions": [
-                        "sample secondary provider on 10-15% of eligible dialogue turns",
-                        "compare reward_score, latency_ms, and cost_estimate by provider",
-                    ],
-                    "candidate_config": {
-                        "policy_version": f"{VIA_EVALUATOR_VERSION}.routing.explore",
-                        "execution_mode": "bandit_explore",
-                        "exploration_ratio": 0.12,
-                        "providers": rollout_providers[:3] or ["openai", "gemini", "claude"],
-                    },
-                },
-                "window_days": window_days,
-            }
-        )
-
-    if int(reply_modes.get("fallback") or 0) >= 3:
-        proposals.append(
-            {
-                "proposal_key": f"fallback-{window_days}-{int(reply_modes.get('fallback') or 0)}",
-                "proposal_type": "fallback_reduction",
-                "policy_key": "via.reply.mode",
-                "status": "proposed",
-                "confidence": 0.69,
-                "impact_score": 0.57,
-                "evidence": {
-                    "fallback_count": int(reply_modes.get("fallback") or 0),
-                    "reply_modes": reply_modes,
-                },
-                "proposal": {
-                    "summary": "Fallback replies are still showing up often enough to justify better graceful degradation.",
-                    "actions": [
-                        "add deterministic lightweight fallback copy for empty AI returns",
-                        "capture provider-level error reasons into decision ledger",
-                    ],
-                    "candidate_config": {
-                        "policy_version": f"{VIA_EVALUATOR_VERSION}.reply.fallback",
-                        "fallback_mode": "deterministic_soft_landing",
-                        "capture_provider_error_reason": True,
-                    },
-                },
-                "window_days": window_days,
-            }
-        )
-
-    episodic = int(promotion_tiers.get("episodic") or 0)
-    semantic = int(promotion_tiers.get("semantic") or 0)
-    if episodic >= 6 and semantic <= max(1, episodic // 4):
-        proposals.append(
-            {
-                "proposal_key": f"memory-{window_days}-{episodic}-{semantic}",
-                "proposal_type": "memory_promotion_tuning",
-                "policy_key": "via.memory.promotion",
-                "status": "proposed",
-                "confidence": 0.76,
-                "impact_score": 0.68,
-                "evidence": {
-                    "episodic": episodic,
-                    "semantic": semantic,
-                    "promotion_tiers": promotion_tiers,
-                    "memory_retention": {
-                        "tracked": int(memory_retention.get("tracked") or 0),
-                        "decaying": int(memory_retention.get("decaying") or 0),
-                        "confirmed_hits": int(memory_retention.get("confirmed_hits") or 0),
-                    },
-                },
-                "proposal": {
-                    "summary": "The system is storing plenty of episodes but not promoting enough stable traits into semantic memory.",
-                    "actions": [
-                        "promote repeated traits after two confirmed hits instead of waiting for three",
-                        "track semantic retention hit rate in the next evaluation window",
-                    ],
-                    "candidate_config": {
-                        "policy_version": f"{VIA_EVALUATOR_VERSION}.memory.semantic",
-                        "semantic_confirmed_hit_threshold": 2,
-                        "track_semantic_retention": True,
-                    },
-                },
-                "window_days": window_days,
-            }
-        )
-
-    if float(metrics.get("abuse_rate") or 0.0) > 0.08:
-        proposals.append(
-            {
-                "proposal_key": f"risk-{window_days}-{int((metrics.get('abuse_rate') or 0)*1000)}",
-                "proposal_type": "risk_review",
-                "policy_key": "via.guard.policy",
-                "status": "proposed",
-                "confidence": 0.67,
-                "impact_score": 0.61,
-                "evidence": {
-                    "abuse_rate": float(metrics.get("abuse_rate") or 0.0),
-                    "triggers": control_summary.get("triggers") or {},
-                },
-                "proposal": {
-                    "summary": "Guarded traffic is high enough to review sensitive-trigger phrasing and pre-guard education.",
-                    "actions": [
-                        "cluster top guarded prompts by trigger_type",
-                        "add softer public-safe redirect copy for the most frequent guard buckets",
-                    ],
-                    "candidate_config": {
-                        "policy_version": f"{VIA_EVALUATOR_VERSION}.risk.redirect",
-                        "guard_copy_mode": "softer_public_redirect",
-                        "cluster_guard_buckets": True,
-                    },
-                },
-                "window_days": window_days,
-            }
-        )
-
+    proposals.extend(_retrieval_tuning_proposals(metrics, retrieval_evidence, window_days))
+    proposals.extend(_routing_exploration_proposals(metrics, providers, routing_learner, window_days))
+    proposals.extend(_fallback_reduction_proposals(reply_modes, window_days))
+    proposals.extend(_memory_promotion_proposals(promotion_tiers, memory_retention, window_days))
+    proposals.extend(_risk_review_proposals(metrics, control_summary, window_days))
     return proposals
 
 
