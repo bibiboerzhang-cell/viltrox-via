@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.config import CLAUDE_MODEL, GEMINI_MODEL
@@ -184,7 +184,48 @@ def _report_text(data: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _build_prompt(report_text: str, handle: str, platform: str, language: str) -> str:
+def _yesterday_suggestions(conn: Any, channel_id: int, report_date: str) -> tuple[str, list[str]]:
+    """纯 SELECT 读自身昨日报告行的 suggestions;缺行/坏数据 → ("", [])(回看段整体省略)。"""
+    try:
+        yday = (date.fromisoformat(str(report_date)) - timedelta(days=1)).isoformat()
+    except ValueError:
+        logger.debug("official_daily_report.yday_review_bad_date | report_date=%s", report_date)
+        return "", []
+    row = conn.execute(
+        "SELECT report_json FROM vkpi_official_account_daily_report "
+        "WHERE channel_id = ? AND report_date = ? ORDER BY updated_at DESC LIMIT 1",
+        (int(channel_id), yday),
+    ).fetchone()
+    if not row:
+        return "", []
+    try:
+        payload = json.loads(dict(row).get("report_json") or "{}")
+    except (TypeError, ValueError):
+        logger.debug("official_daily_report.yday_review_bad_json | channel_id=%s", channel_id, exc_info=True)
+        return "", []
+    sug = (payload.get("analysis") or {}).get("suggestions") if isinstance(payload, dict) else None
+    if not isinstance(sug, list):
+        return yday, []
+    return yday, [str(x).strip() for x in sug if str(x).strip()][:6]
+
+
+def _yesterday_review_block(conn: Any, channel_id: int, report_date: str) -> str:
+    """「昨日建议回看」prompt 段;昨日无报告/无建议返回 ""(prompt 与旧版逐字节一致)。"""
+    yday, suggestions = _yesterday_suggestions(conn, channel_id, report_date)
+    if not suggestions:
+        return ""
+    lines = [f"【昨日({yday})建议回看】昨日报告曾给出以下建议:"]
+    for i, s in enumerate(suggestions, 1):
+        lines.append(f"  {i}. {s[:160]}")
+    lines.append(
+        "请先用下方本日真实数据逐条回看:能对上数的(播放/粉丝/互动 delta、对应帖表现)如实对数说明是否见效;"
+        "对不上数的如实写 unverifiable,不要硬编。回看结论并入现有输出字段(不新增字段):"
+        "suggestions 里延续有效建议、修正或放弃无效建议,让建议逐日收敛。"
+    )
+    return "\n".join(lines) + "\n\n"
+
+
+def _build_prompt(report_text: str, handle: str, platform: str, language: str, yesterday_review: str = "") -> str:
     lang_line = "用中文输出。" if language != "en" else "Output in English."
     return (
         f"你是 Viltrox(唯卓仕)的官方社媒运营负责人。下面是官号 {platform}:{handle} 的真实绩效数据。\n"
@@ -197,6 +238,7 @@ def _build_prompt(report_text: str, handle: str, platform: str, language: str) -
         "- 提升建议:基于本号近况给 3-5 条可执行建议(发什么内容 / 哪类帖该多发 / 怎么回应评论诉求 / 互动率怎么提)。\n"
         "- 每个文本字段控制在 3-4 句精炼输出,别长篇大论(护成本 + 防截断)。\n"
         f"- {lang_line}\n\n"
+        f"{yesterday_review}"
         "账号数据:\n"
         '"""\n'
         f"{report_text}\n"
@@ -333,7 +375,8 @@ def generate_one(channel: dict[str, Any], *, report_date: str, round_key: str = 
         logger.info("official_daily_report.budget_blocked", extra={"scope": _BUDGET_SCOPE, "channel_id": channel.get("id")})
         return {"channel_id": int(channel["id"]), "status": "budget_blocked"}
     text = _report_text(data)
-    raw, model_used = _generate(_build_prompt(text, str(channel.get("account_handle") or ""), str(channel.get("platform") or ""), language))
+    review = _yesterday_review_block(conn, int(channel["id"]), report_date)  # 纯 SELECT 读自身历史;无昨日报告 → "" → prompt 零变化
+    raw, model_used = _generate(_build_prompt(text, str(channel.get("account_handle") or ""), str(channel.get("platform") or ""), language, yesterday_review=review))
     analysis = _normalize(_parse_json(raw))
     if not analysis["play_performance"] and not analysis["suggestions"] and not analysis["headline"]:
         return {"channel_id": int(channel["id"]), "status": "analysis_unavailable"}
