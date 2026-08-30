@@ -495,7 +495,8 @@ def test_fixed_timestamp_and_source_snapshot_are_byte_reproducible(tmp_path: Pat
     assert first["candidate"]["source_content_sha256"] == second["candidate"]["source_content_sha256"]
     assert first["contract_sha256"] == collector.health_score.contract_sha256(CONTRACT)
     assert first["metrics"]["code"]["max_cc"]["status"] == "observed"
-    assert first["metrics"]["code"]["cognitive_le_15_ratio"]["status"] == "unknown"
+    # cognitive1 采集器落地后(2026-08-30)本指标随 max_cc 同分支实测,不再是占位 unknown。
+    assert first["metrics"]["code"]["cognitive_le_15_ratio"]["status"] == "observed"
     assert first["metrics"]["architecture"]["class_loc_max"]["value"] == 0
     assert first["metrics"]["architecture"]["reverse_dependency_count"]["value"] == 0
     assert first["metrics"]["architecture"]["main_sequence_distance_p90"]["status"] == "observed"

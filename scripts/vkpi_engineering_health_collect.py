@@ -19,12 +19,14 @@ from typing import Any, Callable, Sequence
 
 try:
     from scripts import vkpi_engineering_health_architecture as architecture_tools
+    from scripts import vkpi_engineering_health_cognitive as cognitive_tools
     from scripts import vkpi_engineering_health_score as health_score
     from scripts import vkpi_engineering_health_graph as graph_tools
     from scripts import vkpi_engineering_health_snapshot as snapshot
     from scripts.stdout_utils import out as stdout_out
 except ModuleNotFoundError:  # Direct execution: scripts/ is sys.path[0].
     import vkpi_engineering_health_architecture as architecture_tools
+    import vkpi_engineering_health_cognitive as cognitive_tools
     import vkpi_engineering_health_score as health_score
     import vkpi_engineering_health_graph as graph_tools
     import vkpi_engineering_health_snapshot as snapshot
@@ -34,7 +36,7 @@ except ModuleNotFoundError:  # Direct execution: scripts/ is sys.path[0].
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = ROOT / "docs/vkpi/engineering-health-score-contract-v1.json"
 SCHEMA_VERSION = "vkpi_engineering_health_collector_v1"
-ALGORITHM_VERSION = "python-ast-cc2-finite-dynamic-import2-tarjan2-architecture1-snapshot2-lineguard1"
+ALGORITHM_VERSION = "python-ast-cc2-finite-dynamic-import2-tarjan2-architecture1-snapshot2-lineguard1-cognitive1"
 LINE_LIMIT = 800
 SOURCE_SUFFIXES = {".py", ".ts", ".tsx", ".css"}
 PYTHON_ROOTS = ("backend/app",)
@@ -58,6 +60,7 @@ class FunctionComplexity:
     end_line: int
     loc: int
     cc: int
+    cognitive: int
 
 
 @dataclass(frozen=True)
@@ -188,6 +191,7 @@ class _FunctionCollector(ast.NodeVisitor):
                 end_line=end_line,
                 loc=end_line - int(node.lineno) + 1,
                 cc=1 + counter.decisions,
+                cognitive=cognitive_tools.cognitive_complexity(node),
             )
         )
         self.scope.append(node.name)
@@ -212,6 +216,7 @@ class _FunctionCollector(ast.NodeVisitor):
                 end_line=end_line,
                 loc=end_line - int(node.lineno) + 1,
                 cc=1 + counter.decisions,
+                cognitive=cognitive_tools.cognitive_complexity(node),
             )
         )
         self.scope.append(f"<lambda@{node.lineno}:{node.col_offset}>")
@@ -328,6 +333,7 @@ def collect_observations(
         "21_to_50": sum(21 <= item.cc <= 50 for item in complexity_rows),
         "gt_50": sum(item.cc > 50 for item in complexity_rows),
     }
+    cognitive_buckets = cognitive_tools.distribution(item.cognitive for item in complexity_rows)
     python_loc = sum(item.physical_lines for item in python_files)
     complete_ast = captured.complete and not parse_failures and bool(python_files)
     complete_python = captured.complete and not parse_failures and bool(python_files) and bool(complexity_rows)
@@ -363,6 +369,21 @@ def collect_observations(
                 round(cc_buckets["le_10"] / len(complexity_rows), 8) if complete_python else None
             ),
             "max_cc": complexity_rows[0].cc if complete_python else None,
+            "cognitive_algorithm": (
+                "cognitive1 deterministic subset of Sonar Cognitive Complexity, base 0; "
+                "structural +1+depth for if/for/while/except-handler/IfExp; flat +1 for "
+                "elif/else, each BoolOp node (one per operator alternation), each extra "
+                "with item, each match case, and each direct same-name recursive call; "
+                "if/for/while/except bodies enter one nesting level, def/class reset it; "
+                "full wording is the vkpi_engineering_health_cognitive module docstring"
+            ),
+            "cognitive_distribution": cognitive_buckets,
+            "cognitive_le_15_ratio": (
+                round(cognitive_buckets["le_15"] / len(complexity_rows), 8) if complete_python else None
+            ),
+            "max_cognitive": (
+                max(item.cognitive for item in complexity_rows) if complete_python else None
+            ),
             "top_functions": [asdict(item) for item in complexity_rows[:TOP_COMPLEX_FUNCTIONS]],
             "parse_errors": [asdict(item) for item in parse_failures],
         },
@@ -548,10 +569,22 @@ def build_evidence(
             sample_count=complexity["function_count"],
             details={"top_functions": complexity["top_functions"]},
         )
+        code_metrics["cognitive_le_15_ratio"] = _observed(
+            complexity["cognitive_le_15_ratio"],
+            observed_at,
+            "collector://vkpi-engineering-health/v1/python-ast-cognitive",
+            sample_count=complexity["function_count"],
+            details={
+                "algorithm": complexity["cognitive_algorithm"],
+                "distribution": complexity["cognitive_distribution"],
+                "max_cognitive": complexity["max_cognitive"],
+            },
+        )
     else:
         reason = missing_reason if not stable else "one or more production Python files could not be parsed"
         code_metrics["cc_le_10_ratio"] = _unknown(observed_at, reason)
         code_metrics["max_cc"] = _unknown(observed_at, reason)
+        code_metrics["cognitive_le_15_ratio"] = _unknown(observed_at, reason)
 
     architecture = evidence["metrics"]["architecture"]
     line_guard = observations["line_guard"]
@@ -676,7 +709,7 @@ def build_evidence(
     evidence["notes"] = [
         "Unknown metrics are not replaced with neutral values or estimates.",
         "This receipt does not assert canonical, security, functional, provenance, runtime, provider, cloud, or business-outcome gates.",
-        "CC is a documented AST metric; cognitive complexity remains unknown.",
+        "CC and cognitive complexity are documented deterministic AST metrics; the cognitive1 methodology is fixed in the vkpi_engineering_health_cognitive docstring.",
         "Class span, layering direction, and Main Sequence evidence are documented static metrics, not runtime behavior.",
         "A drifting source or Git status invalidates every score metric from that collection.",
     ]
