@@ -21,11 +21,13 @@ from typing import Any
 try:
     from scripts import vkpi_engineering_health_coverage as coverage_evidence
     from scripts import vkpi_engineering_health_score_delivery as delivery_receipt_channel
+    from scripts import vkpi_engineering_health_score_mutation as mutation_receipt_channel
     from scripts import vkpi_engineering_health_score_evolution as evolution_receipt
     from scripts.stdout_utils import out as stdout_out
 except ModuleNotFoundError:  # Direct execution: scripts/ is sys.path[0].
     import vkpi_engineering_health_coverage as coverage_evidence
     import vkpi_engineering_health_score_delivery as delivery_receipt_channel
+    import vkpi_engineering_health_score_mutation as mutation_receipt_channel
     import vkpi_engineering_health_score_evolution as evolution_receipt
     from stdout_utils import out as stdout_out
 
@@ -546,6 +548,39 @@ def merge_coverage_receipt(
             "num_statements": observed["num_statements"],
         },
     }
+    if observed["core_path_coverage"] is not None:
+        code["core_path_coverage"] = {
+            "status": "observed",
+            "value": observed["core_path_coverage"],
+            "source": source,
+            "observed_at": observed["observed_at"],
+            "sample_count": observed["core_path_num_statements"],
+            "details": {
+                **common_details,
+                "covered_lines": observed["core_path_covered_lines"],
+                "num_statements": observed["core_path_num_statements"],
+                "core_path_file_count": observed["core_path_file_count"],
+                "core_scope": "contract v1.1 core_scope_groups path prefixes",
+            },
+        }
+    if observed["change_coverage"] is not None:
+        code["change_coverage"] = {
+            "status": "observed",
+            "value": observed["change_coverage"],
+            "source": source,
+            "observed_at": observed["observed_at"],
+            "sample_count": observed["change_num_statements"],
+            "details": {
+                **common_details,
+                "covered_lines": observed["change_covered_lines"],
+                "num_statements": observed["change_num_statements"],
+                "change_file_count": observed["change_file_count"],
+                "change_base": observed["change_base"],
+                "change_window_days": observed["change_window_days"],
+                "method": observed["change_coverage_method"],
+                "reason": observed["change_coverage_reason"],
+            },
+        }
 
 
 def merge_evolution_receipt(
@@ -572,6 +607,21 @@ def merge_delivery_receipt(
             contract, evidence, receipt_path, receipt
         )
     except delivery_receipt_channel.DeliveryReceiptError as exc:
+        raise ContractError(str(exc)) from exc
+
+
+def merge_mutation_receipt(
+    contract: dict[str, Any],
+    evidence: dict[str, Any],
+    receipt_path: Path,
+    receipt: dict[str, Any],
+) -> None:
+    """Attach only format-valid, candidate-bound mutation metrics (runner owns values)."""
+    try:
+        mutation_receipt_channel.merge_mutation_receipt(
+            contract, evidence, receipt_path, receipt
+        )
+    except mutation_receipt_channel.MutationReceiptError as exc:
         raise ContractError(str(exc)) from exc
 
 
@@ -615,6 +665,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--coverage-receipt", default="")
     parser.add_argument("--evolution-receipt", default="")
     parser.add_argument("--delivery-receipt", default="")
+    parser.add_argument("--mutation-receipt", default="")
     parser.add_argument("--capture-static", action="store_true")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--json-out", default="")
@@ -639,9 +690,9 @@ def main(argv: list[str] | None = None) -> int:
     if bool(args.template) == bool(args.evidence):
         raise ContractError("select exactly one of --template or --evidence")
     if args.template:
-        if args.coverage_receipt or args.evolution_receipt or args.delivery_receipt:
+        if args.coverage_receipt or args.evolution_receipt or args.delivery_receipt or args.mutation_receipt:
             raise ContractError(
-                "coverage/evolution/delivery receipt requires collected --evidence"
+                "coverage/evolution/delivery/mutation receipt requires collected --evidence"
             )
         payload = evidence_template(contract)
         if args.capture_static:
@@ -664,6 +715,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.delivery_receipt:
         delivery_path = Path(args.delivery_receipt)
         merge_delivery_receipt(contract, evidence, delivery_path, _load_json(delivery_path))
+    if args.mutation_receipt:
+        mutation_path = Path(args.mutation_receipt)
+        merge_mutation_receipt(contract, evidence, mutation_path, _load_json(mutation_path))
     report = score_evidence(contract, evidence)
     json_output = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
     markdown = render_markdown(report)

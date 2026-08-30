@@ -61,6 +61,23 @@ CANONICAL_TEST_COMMAND = (
 )
 MAX_RECEIPT_AGE = timedelta(hours=24)
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
+# Contract v1.1 code_evidence_methodology.core_mutation_score.core_scope_groups.
+CORE_PATH_PREFIXES = (
+    "backend/app/domains/discovery/",
+    "backend/app/domains/kol/",
+    "backend/app/domains/launch/",
+    "backend/app/domains/projects/",
+    "backend/app/domains/search/",
+    "backend/app/services/ai/",
+)
+CHANGE_WINDOW_DAYS = 30
+_HUNK_RE = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+_SCOPE_METRIC_FIELDS = (
+    "core_path_coverage", "core_path_covered_lines", "core_path_num_statements",
+    "core_path_file_count", "change_coverage", "change_covered_lines",
+    "change_num_statements", "change_file_count", "change_base",
+    "change_window_days", "change_coverage_method", "change_coverage_reason",
+)
 
 
 class CoverageReceiptError(ValueError):
@@ -68,10 +85,7 @@ class CoverageReceiptError(ValueError):
 
 
 def _utc_now() -> str:
-    return datetime.now(UTC).replace(microsecond=0).isoformat().replace(
-        "+00:00",
-        "Z",
-    )
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _parse_timestamp(value: Any, *, label: str) -> datetime:
@@ -89,22 +103,15 @@ def _sha256(data: bytes) -> str:
 
 
 def command_sha256(command: Sequence[str]) -> str:
-    payload = json.dumps(
-        list(command),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return _sha256(payload)
+    payload = json.dumps(list(command), ensure_ascii=False, separators=(",", ":"))
+    return _sha256(payload.encode("utf-8"))
 
 
 def source_snapshot(root: Path) -> snapshot.SourceSnapshot:
     """Use exactly the production-source scope used by the static collector."""
 
     return snapshot.snapshot_sources(
-        root,
-        SOURCE_ROOTS,
-        SOURCE_SUFFIXES,
-        skip_parts=SKIP_PARTS,
+        root, SOURCE_ROOTS, SOURCE_SUFFIXES, skip_parts=SKIP_PARTS,
         test_directory_names=TEST_DIRECTORY_NAMES,
         test_filename_markers=TEST_FILENAME_MARKERS,
     )
@@ -128,17 +135,153 @@ def _nonnegative_int(value: Any, *, label: str) -> int:
 
 def _relative_source_path(root: Path, value: str) -> str:
     candidate = Path(value)
-    resolved = (
-        candidate.resolve()
-        if candidate.is_absolute()
-        else (root / candidate).resolve()
-    )
+    resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
     try:
         return resolved.relative_to(root.resolve()).as_posix()
     except ValueError as exc:
-        raise CoverageReceiptError(
-            f"coverage source escapes repository: {value}"
-        ) from exc
+        raise CoverageReceiptError(f"coverage source escapes repository: {value}") from exc
+
+
+def _git_read(root: Path, *args: str) -> str:
+    try:
+        return snapshot._git(root, snapshot._trusted_git_binary(), *args)  # noqa: SLF001
+    except snapshot.SnapshotError as exc:
+        raise CoverageReceiptError(f"change-window git command failed: {args[0]}") from exc
+
+
+def _hunk_added_lines(line: str) -> range:
+    match = _HUNK_RE.match(line)
+    if match is None:
+        raise CoverageReceiptError(f"unparseable diff hunk header: {line[:80]}")
+    start, count = int(match.group(1)), int(match.group(2) or "1")
+    return range(start, start + count)
+
+
+def _changed_head_lines(root: Path) -> tuple[str, dict[str, set[int]]]:
+    """Added/changed HEAD line numbers per backend file over the 30-day window.
+
+    The window is anchored at the HEAD committer date so that build-time and
+    validation-time recomputation see the identical diff; the base is the
+    newest HEAD ancestor at or before HEAD-30d (the empty tree when history is
+    younger than the window, i.e. every current line counts as changed).
+    """
+    head_epoch = _git_read(root, "log", "-1", "--format=%ct", "HEAD")
+    if not head_epoch.isdigit():
+        raise CoverageReceiptError("HEAD committer timestamp is unavailable")
+    boundary = int(head_epoch) - CHANGE_WINDOW_DAYS * 86400
+    stamp = datetime.fromtimestamp(boundary, UTC).strftime("%Y-%m-%d %H:%M:%S +0000")
+    base = _git_read(root, "rev-list", "-1", f"--before={stamp}", "HEAD")
+    diff_base = base or _git_read(root, "hash-object", "-t", "tree", os.devnull)
+    diff = _git_read(
+        root, "-c", "core.quotepath=false", "diff", "--unified=0", "--no-renames",
+        diff_base, "HEAD", "--", "backend/app",
+    )
+    changed: dict[str, set[int]] = {}
+    current: set[int] | None = None
+    for line in diff.splitlines():
+        if line.startswith("+++ "):
+            target = line[4:].split("\t", 1)[0]
+            if target == "/dev/null":
+                current = None
+            elif target.startswith("b/"):
+                current = changed.setdefault(target[2:], set())
+            else:
+                raise CoverageReceiptError(f"unparseable diff target: {line[:80]}")
+        elif line.startswith("@@ ") and current is not None:
+            current.update(_hunk_added_lines(line))
+    return base or "empty_tree", changed
+
+
+def _line_number_set(row: dict[str, Any], field: str, path: str) -> set[int] | None:
+    raw = row.get(field)
+    if not isinstance(raw, list):
+        return None
+    lines: set[int] = set()
+    for item in raw:
+        if isinstance(item, bool) or not isinstance(item, int) or item < 1:
+            raise CoverageReceiptError(f"{path}.{field} must hold positive line numbers")
+        lines.add(item)
+    return lines
+
+
+def _measured_line_sets(
+    scoped: dict[str, set[int]], per_file: dict[str, dict[str, Any]]
+) -> dict[str, tuple[set[int], set[int]]] | None:
+    sets: dict[str, tuple[set[int], set[int]]] = {}
+    for path in scoped:
+        executed = _line_number_set(per_file[path]["row"], "executed_lines", path)
+        missing = _line_number_set(per_file[path]["row"], "missing_lines", path)
+        if executed is None or missing is None:
+            return None
+        if executed & missing:
+            raise CoverageReceiptError(f"executed/missing line overlap: {path}")
+        sets[path] = (executed, executed | missing)
+    return sets
+
+
+def _summary_line_totals(
+    per_file: dict[str, dict[str, Any]], paths: Sequence[str]
+) -> tuple[int, int]:
+    covered = sum(per_file[path]["covered_lines"] for path in paths)
+    statements = sum(per_file[path]["num_statements"] for path in paths)
+    return covered, statements
+
+
+def _changed_hit_totals(
+    scoped: dict[str, set[int]], line_sets: dict[str, tuple[set[int], set[int]]]
+) -> tuple[int, int]:
+    covered = sum(len(scoped[path] & hits) for path, (hits, _) in line_sets.items())
+    statements = sum(len(scoped[path] & full) for path, (_, full) in line_sets.items())
+    return covered, statements
+
+
+def _core_path_metrics(per_file: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    chosen = sorted(path for path in per_file if path.startswith(CORE_PATH_PREFIXES))
+    covered, statements = _summary_line_totals(per_file, chosen)
+    return {
+        "core_path_file_count": len(chosen),
+        "core_path_covered_lines": covered,
+        "core_path_num_statements": statements,
+        "core_path_coverage": covered / statements if statements else None,
+    }
+
+
+def _change_metrics(root: Path, per_file: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    base, changed = _changed_head_lines(root)
+    scoped = {
+        path: lines
+        for path, lines in sorted(changed.items())
+        if path in per_file and lines
+    }
+    line_sets = _measured_line_sets(scoped, per_file)
+    if line_sets is None:
+        method = "changed_file_line_coverage_approx"
+        reason = (
+            "口径近似:coverage JSON 无逐行 executed/missing 上下文,"
+            "以近30天改动文件的整文件行覆盖聚合近似改动行覆盖(窗口锚定 HEAD 提交时间)"
+        )
+        covered, statements = _summary_line_totals(per_file, sorted(scoped))
+    else:
+        method = "coverage_line_hits_x_git_diff_30d"
+        reason = (
+            "coverage 逐行 executed/missing 集合 × git diff 近30天改动行集"
+            "(窗口锚定 HEAD 提交时间)"
+        )
+        covered, statements = _changed_hit_totals(scoped, line_sets)
+    if not scoped:
+        method, reason = "none", "no_measured_backend_changes_in_window"
+    elif statements == 0:
+        reason = f"{reason};no_changed_statement_lines_in_window"
+    return {
+        "change_window_days": CHANGE_WINDOW_DAYS,
+        "change_base": base,
+        "change_file_count": len(scoped),
+        "change_covered_lines": covered,
+        "change_num_statements": statements,
+        "change_coverage": covered / statements if statements else None,
+        "change_coverage_method": method,
+        "change_coverage_reason": reason,
+    }
 
 
 def parse_coverage_json(
@@ -166,17 +309,11 @@ def parse_coverage_json(
     production_sources = {
         item.relative_path
         for item in captured_source.files
-        if item.relative_path.startswith("backend/app/")
-        and item.relative_path.endswith(".py")
+        if item.relative_path.startswith("backend/app/") and item.relative_path.endswith(".py")
     }
     measured: list[str] = []
-    measured_seen: set[str] = set()
-    sums = {
-        "covered_lines": 0,
-        "num_statements": 0,
-        "covered_branches": 0,
-        "num_branches": 0,
-    }
+    per_file: dict[str, dict[str, Any]] = {}
+    sums = {"covered_lines": 0, "num_statements": 0, "covered_branches": 0, "num_branches": 0}
     for raw_path, row in sorted(files.items()):
         if not isinstance(raw_path, str) or not isinstance(row, dict):
             raise CoverageReceiptError("coverage file entries must be objects")
@@ -185,19 +322,18 @@ def parse_coverage_json(
             raise CoverageReceiptError(
                 f"coverage file is outside captured backend sources: {raw_path}"
             )
-        if relative in measured_seen:
-            raise CoverageReceiptError(
-                f"coverage source appears more than once: {relative}"
-            )
-        measured_seen.add(relative)
+        if relative in per_file:
+            raise CoverageReceiptError(f"coverage source appears more than once: {relative}")
         summary = row.get("summary")
         if not isinstance(summary, dict):
             raise CoverageReceiptError(f"coverage summary missing: {raw_path}")
-        for field in sums:
-            sums[field] += _nonnegative_int(
-                summary.get(field),
-                label=f"{raw_path}.{field}",
-            )
+        counts = {
+            field: _nonnegative_int(summary.get(field), label=f"{raw_path}.{field}")
+            for field in sums
+        }
+        for field, count in counts.items():
+            sums[field] += count
+        per_file[relative] = {"row": row, **counts}
         measured.append(relative)
 
     measured_sources = set(measured)
@@ -215,10 +351,7 @@ def parse_coverage_json(
         )
 
     for field, observed in sums.items():
-        reported = _nonnegative_int(
-            totals.get(field),
-            label=f"totals.{field}",
-        )
+        reported = _nonnegative_int(totals.get(field), label=f"totals.{field}")
         if reported != observed:
             raise CoverageReceiptError(
                 f"coverage totals mismatch for {field}: {reported} != {observed}"
@@ -236,11 +369,11 @@ def parse_coverage_json(
         "line_coverage": sums["covered_lines"] / sums["num_statements"],
         "branch_coverage": sums["covered_branches"] / sums["num_branches"],
         "measured_file_count": len(measured),
-        "measured_files_sha256": _sha256(
-            ("\n".join(measured) + "\n").encode("utf-8")
-        ),
+        "measured_files_sha256": _sha256(("\n".join(measured) + "\n").encode("utf-8")),
         "coverage_format": meta.get("format"),
         "coverage_version": str(meta.get("version") or ""),
+        **_core_path_metrics(per_file),
+        **_change_metrics(root, per_file),
     }
 
 
@@ -273,42 +406,27 @@ def _resolve_artifact(root: Path, value: Any, *, label: str) -> Path:
 
 
 def _artifact_entry(
-    root: Path,
-    source_path: Path,
-    receipt_path: Path,
-    *,
-    label: str,
+    root: Path, source_path: Path, receipt_path: Path, *, label: str
 ) -> tuple[dict[str, Any], bytes]:
     content = _stable_bytes(source_path, label=label)
-    return (
-        {
-            "path": _artifact_label(root, receipt_path),
-            "sha256": _sha256(content),
-            "byte_count": len(content),
-        },
-        content,
-    )
+    entry = {
+        "path": _artifact_label(root, receipt_path),
+        "sha256": _sha256(content),
+        "byte_count": len(content),
+    }
+    return entry, content
 
 
 def build_coverage_receipt(
     *,
     root: Path,
-    coverage_data_source: Path,
-    coverage_json_source: Path,
-    coverage_data_receipt_path: Path,
-    coverage_json_receipt_path: Path,
-    command: Sequence[str],
-    exit_code: int,
-    started_at: str,
-    finished_at: str,
-    source_before: snapshot.SourceSnapshot,
-    source_after: snapshot.SourceSnapshot,
-    git_before: dict[str, Any],
-    git_after: dict[str, Any],
-    fresh_workspace_nonce: str,
-    artifacts_existed_before: bool,
-    stdout_sha256: str = "",
-    stderr_sha256: str = "",
+    coverage_data_source: Path, coverage_json_source: Path,
+    coverage_data_receipt_path: Path, coverage_json_receipt_path: Path,
+    command: Sequence[str], exit_code: int, started_at: str, finished_at: str,
+    source_before: snapshot.SourceSnapshot, source_after: snapshot.SourceSnapshot,
+    git_before: dict[str, Any], git_after: dict[str, Any],
+    fresh_workspace_nonce: str, artifacts_existed_before: bool,
+    stdout_sha256: str = "", stderr_sha256: str = "",
 ) -> dict[str, Any]:
     if tuple(command) != CANONICAL_TEST_COMMAND:
         raise CoverageReceiptError("non-canonical coverage test command")
@@ -334,22 +452,12 @@ def build_coverage_receipt(
         raise CoverageReceiptError("Git status drifted during coverage run")
 
     data_entry, _ = _artifact_entry(
-        root,
-        coverage_data_source,
-        coverage_data_receipt_path,
-        label="coverage data",
+        root, coverage_data_source, coverage_data_receipt_path, label="coverage data"
     )
     json_entry, json_bytes = _artifact_entry(
-        root,
-        coverage_json_source,
-        coverage_json_receipt_path,
-        label="coverage JSON",
+        root, coverage_json_source, coverage_json_receipt_path, label="coverage JSON"
     )
-    coverage = parse_coverage_json(
-        json_bytes,
-        root=root,
-        captured_source=source_before,
-    )
+    coverage = parse_coverage_json(json_bytes, root=root, captured_source=source_before)
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": finished_at,
@@ -360,24 +468,16 @@ def build_coverage_receipt(
             "source_file_count": len(source_before.files),
             "source_start": source_before.identity(),
             "source_end": source_after.identity(),
-            "git_start": start_git,
-            "git_end": end_git,
+            "git_start": start_git, "git_end": end_git,
         },
         "test": {
-            "command": list(command),
-            "command_sha256": command_sha256(command),
-            "exit_code": exit_code,
-            "started_at": started_at,
-            "finished_at": finished_at,
+            "command": list(command), "command_sha256": command_sha256(command),
+            "exit_code": exit_code, "started_at": started_at, "finished_at": finished_at,
             "fresh_workspace_nonce": fresh_workspace_nonce,
             "artifacts_existed_before": False,
-            "stdout_sha256": stdout_sha256,
-            "stderr_sha256": stderr_sha256,
+            "stdout_sha256": stdout_sha256, "stderr_sha256": stderr_sha256,
         },
-        "artifacts": {
-            "coverage_data": data_entry,
-            "coverage_json": json_entry,
-        },
+        "artifacts": {"coverage_data": data_entry, "coverage_json": json_entry},
         "coverage": coverage,
     }
 
@@ -387,9 +487,7 @@ def _validate_command(receipt: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(test, dict):
         raise CoverageReceiptError("coverage receipt test object is required")
     command = test.get("command")
-    if not isinstance(command, list) or not all(
-        isinstance(item, str) for item in command
-    ):
+    if not isinstance(command, list) or not all(isinstance(item, str) for item in command):
         raise CoverageReceiptError("coverage test command must be a string array")
     if tuple(command) != CANONICAL_TEST_COMMAND:
         raise CoverageReceiptError("coverage receipt command is not canonical")
@@ -407,15 +505,11 @@ def _validate_command(receipt: dict[str, Any]) -> dict[str, Any]:
 
 
 def _candidate_binding(
-    evidence: dict[str, Any],
-    receipt: dict[str, Any],
+    evidence: dict[str, Any], receipt: dict[str, Any]
 ) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     evidence_candidate = evidence.get("candidate")
     receipt_candidate = receipt.get("candidate")
-    if not isinstance(evidence_candidate, dict) or not isinstance(
-        receipt_candidate,
-        dict,
-    ):
+    if not isinstance(evidence_candidate, dict) or not isinstance(receipt_candidate, dict):
         raise CoverageReceiptError("coverage candidate binding is required")
     if evidence_candidate.get("source_and_status_stable") is not True:
         raise CoverageReceiptError("engineering evidence source/status is not stable")
@@ -430,49 +524,26 @@ def _candidate_binding(
         raise CoverageReceiptError("coverage source_content_sha256 is required")
     if source_hash != str(evidence_candidate.get("source_content_sha256") or ""):
         raise CoverageReceiptError("coverage source content mismatch")
-    start_git = _validated_git_state(
-        receipt_candidate.get("git_start"),
-        label="git_start",
-    )
-    end_git = _validated_git_state(
-        receipt_candidate.get("git_end"),
-        label="git_end",
-    )
+    start_git = _validated_git_state(receipt_candidate.get("git_start"), label="git_start")
+    end_git = _validated_git_state(receipt_candidate.get("git_end"), label="git_end")
     if start_git != end_git:
         raise CoverageReceiptError("coverage receipt Git start/end mismatch")
-    for evidence_name, git_name in (
-        ("head", "head"),
-        ("branch", "branch"),
-        ("status_sha256", "status_sha256"),
-    ):
+    for evidence_name in ("head", "branch", "status_sha256"):
         if str(evidence_candidate.get(evidence_name) or "") != str(
-            start_git.get(git_name) or ""
+            start_git.get(evidence_name) or ""
         ):
-            raise CoverageReceiptError(
-                f"coverage candidate {evidence_name} mismatch"
-            )
+            raise CoverageReceiptError(f"coverage candidate {evidence_name} mismatch")
     return root, evidence_candidate, receipt_candidate
 
 
-def _validate_artifact(
-    root: Path,
-    entry: Any,
-    *,
-    label: str,
-) -> bytes:
+def _validate_artifact(root: Path, entry: Any, *, label: str) -> bytes:
     if not isinstance(entry, dict):
         raise CoverageReceiptError(f"{label} artifact entry is required")
     declared_hash = entry.get("sha256")
     declared_size = entry.get("byte_count")
-    if not isinstance(declared_hash, str) or not _SHA256_RE.fullmatch(
-        declared_hash
-    ):
+    if not isinstance(declared_hash, str) or not _SHA256_RE.fullmatch(declared_hash):
         raise CoverageReceiptError(f"{label} artifact sha256 is invalid")
-    if (
-        isinstance(declared_size, bool)
-        or not isinstance(declared_size, int)
-        or declared_size <= 0
-    ):
+    if isinstance(declared_size, bool) or not isinstance(declared_size, int) or declared_size <= 0:
         raise CoverageReceiptError(f"{label} artifact byte_count is invalid")
     path = _resolve_artifact(root, entry.get("path"), label=label)
     content = _stable_bytes(path, label=label)
@@ -498,9 +569,7 @@ def validate_coverage_receipt(
     finished = _parse_timestamp(test.get("finished_at"), label="test.finished_at")
     if finished < started:
         raise CoverageReceiptError("coverage test timestamps are reversed")
-    if str(receipt.get("generated_at") or "") != str(
-        test.get("finished_at") or ""
-    ):
+    if str(receipt.get("generated_at") or "") != str(test.get("finished_at") or ""):
         raise CoverageReceiptError("coverage receipt generated_at mismatch")
     current_time = (now or datetime.now(UTC)).astimezone(UTC)
     if finished > current_time + timedelta(minutes=5):
@@ -524,21 +593,9 @@ def validate_coverage_receipt(
     artifacts = receipt.get("artifacts")
     if not isinstance(artifacts, dict):
         raise CoverageReceiptError("coverage receipt artifacts are required")
-    _validate_artifact(
-        root,
-        artifacts.get("coverage_data"),
-        label="coverage data",
-    )
-    json_bytes = _validate_artifact(
-        root,
-        artifacts.get("coverage_json"),
-        label="coverage JSON",
-    )
-    parsed = parse_coverage_json(
-        json_bytes,
-        root=root,
-        captured_source=source_before,
-    )
+    _validate_artifact(root, artifacts.get("coverage_data"), label="coverage data")
+    json_bytes = _validate_artifact(root, artifacts.get("coverage_json"), label="coverage JSON")
+    parsed = parse_coverage_json(json_bytes, root=root, captured_source=source_before)
     if parsed != receipt.get("coverage"):
         raise CoverageReceiptError("coverage metrics do not match coverage JSON")
 
@@ -562,6 +619,7 @@ def validate_coverage_receipt(
         "command_sha256": command_sha256(CANONICAL_TEST_COMMAND),
         "coverage_data_sha256": artifacts["coverage_data"]["sha256"],
         "coverage_json_sha256": artifacts["coverage_json"]["sha256"],
+        **{field: parsed[field] for field in _SCOPE_METRIC_FIELDS},
     }
 
 
@@ -604,23 +662,13 @@ def run_fresh_coverage(
     if not (root / ".git").exists():
         raise CoverageReceiptError("repository root with .git is required")
     receipt_path = _validate_output_path(root, receipt_path, suffix=".json")
-    coverage_data_path = _validate_output_path(
-        root,
-        coverage_data_path,
-        suffix=".coverage",
-    )
-    coverage_json_path = _validate_output_path(
-        root,
-        coverage_json_path,
-        suffix=".json",
-    )
+    coverage_data_path = _validate_output_path(root, coverage_data_path, suffix=".coverage")
+    coverage_json_path = _validate_output_path(root, coverage_json_path, suffix=".json")
     if len({receipt_path, coverage_data_path, coverage_json_path}) != 3:
         raise CoverageReceiptError("coverage receipt and artifact paths must be distinct")
     command_executable = root / CANONICAL_TEST_COMMAND[0]
     if not command_executable.is_file():
-        raise CoverageReceiptError(
-            f"canonical test interpreter is unavailable: {command_executable}"
-        )
+        raise CoverageReceiptError(f"canonical test interpreter is unavailable: {command_executable}")
 
     source_before = source_snapshot(root)
     git_before = snapshot.trusted_git_state(root)
@@ -640,13 +688,8 @@ def run_fresh_coverage(
         started_at = _utc_now()
         with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
             completed = subprocess.run(
-                list(CANONICAL_TEST_COMMAND),
-                cwd=root,
-                env=environment,
-                stdin=subprocess.DEVNULL,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                check=False,
+                list(CANONICAL_TEST_COMMAND), cwd=root, env=environment,
+                stdin=subprocess.DEVNULL, stdout=stdout_file, stderr=stderr_file, check=False,
             )
         finished_at = _utc_now()
         stdout_bytes = stdout_path.read_bytes()
@@ -664,21 +707,11 @@ def run_fresh_coverage(
             raise CoverageReceiptError("fresh coverage data was not produced")
         json_completed = subprocess.run(
             [
-                str(command_executable),
-                "-m",
-                "coverage",
-                "json",
-                "--data-file",
-                str(data_source),
-                "-o",
-                str(json_source),
-                "--pretty-print",
+                str(command_executable), "-m", "coverage", "json",
+                "--data-file", str(data_source), "-o", str(json_source), "--pretty-print",
             ],
-            cwd=root,
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            check=False,
+            cwd=root, env=environment, stdin=subprocess.DEVNULL,
+            capture_output=True, check=False,
         )
         if json_completed.returncode != 0 or not json_source.is_file():
             raise CoverageReceiptError("coverage JSON generation failed")
@@ -686,56 +719,39 @@ def run_fresh_coverage(
         git_after = snapshot.trusted_git_state(root)
         receipt = build_coverage_receipt(
             root=root,
-            coverage_data_source=data_source,
-            coverage_json_source=json_source,
+            coverage_data_source=data_source, coverage_json_source=json_source,
             coverage_data_receipt_path=coverage_data_path,
             coverage_json_receipt_path=coverage_json_path,
-            command=CANONICAL_TEST_COMMAND,
-            exit_code=completed.returncode,
-            started_at=started_at,
-            finished_at=finished_at,
-            source_before=source_before,
-            source_after=source_after,
-            git_before=git_before,
-            git_after=git_after,
-            fresh_workspace_nonce=nonce,
-            artifacts_existed_before=existed_before,
-            stdout_sha256=_sha256(stdout_bytes),
-            stderr_sha256=_sha256(stderr_bytes),
+            command=CANONICAL_TEST_COMMAND, exit_code=completed.returncode,
+            started_at=started_at, finished_at=finished_at,
+            source_before=source_before, source_after=source_after,
+            git_before=git_before, git_after=git_after,
+            fresh_workspace_nonce=nonce, artifacts_existed_before=existed_before,
+            stdout_sha256=_sha256(stdout_bytes), stderr_sha256=_sha256(stderr_bytes),
         )
         _atomic_write(coverage_data_path, data_source.read_bytes())
         _atomic_write(coverage_json_path, json_source.read_bytes())
-        _atomic_write(
-            receipt_path,
-            (
-                json.dumps(
-                    receipt,
-                    ensure_ascii=False,
-                    indent=2,
-                    sort_keys=True,
-                )
-                + "\n"
-            ).encode("utf-8"),
-        )
+        serialized = json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        _atomic_write(receipt_path, serialized.encode("utf-8"))
         return receipt
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=str(ROOT))
+    parser.add_argument("--receipt", default="runtime/engineering-health/coverage/receipt.json")
     parser.add_argument(
-        "--receipt",
-        default="runtime/engineering-health/coverage/receipt.json",
+        "--coverage-data", default="runtime/engineering-health/coverage/fresh.coverage"
     )
     parser.add_argument(
-        "--coverage-data",
-        default="runtime/engineering-health/coverage/fresh.coverage",
-    )
-    parser.add_argument(
-        "--coverage-json",
-        default="runtime/engineering-health/coverage/fresh-coverage.json",
+        "--coverage-json", default="runtime/engineering-health/coverage/fresh-coverage.json"
     )
     return parser.parse_args(argv)
+
+
+def _absolute_output(root: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else root / path
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -743,17 +759,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     root = Path(args.root).resolve()
     receipt = run_fresh_coverage(
         root=root,
-        receipt_path=(root / args.receipt if not Path(args.receipt).is_absolute() else Path(args.receipt)),
-        coverage_data_path=(
-            root / args.coverage_data
-            if not Path(args.coverage_data).is_absolute()
-            else Path(args.coverage_data)
-        ),
-        coverage_json_path=(
-            root / args.coverage_json
-            if not Path(args.coverage_json).is_absolute()
-            else Path(args.coverage_json)
-        ),
+        receipt_path=_absolute_output(root, args.receipt),
+        coverage_data_path=_absolute_output(root, args.coverage_data),
+        coverage_json_path=_absolute_output(root, args.coverage_json),
     )
     stdout_out(json.dumps(receipt, ensure_ascii=False, indent=2) + "\n", end="")
     return 0

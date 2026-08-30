@@ -142,6 +142,18 @@ def test_fresh_receipt_merges_branch_and_line_counts(tmp_path: Path) -> None:
     assert code["line_coverage"]["details"]["command"] == list(
         coverage.CANONICAL_TEST_COMMAND
     )
+    # No core-prefix files in this fixture: the metric stays missing, never neutral.
+    assert receipt["coverage"]["core_path_coverage"] is None
+    assert "core_path_coverage" not in code
+    # Younger-than-window history: every line is in the 30-day change set, and a
+    # summary-only coverage JSON takes the changed-file approximation lane.
+    assert receipt["coverage"]["change_base"] == "empty_tree"
+    assert (
+        receipt["coverage"]["change_coverage_method"] == "changed_file_line_coverage_approx"
+    )
+    assert code["change_coverage"]["status"] == "observed"
+    assert code["change_coverage"]["value"] == 0.8
+    assert code["change_coverage"]["sample_count"] == 10
 
 
 @pytest.mark.parametrize("field", ["source_content_sha256", "status_sha256"])
