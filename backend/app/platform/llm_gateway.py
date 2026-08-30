@@ -127,43 +127,17 @@ _EXECUTION_CLASSES = {
 _LOCAL_EVALUATION_ENABLED_ENV = "VKPI_LLM_LOCAL_EVALUATION_ENABLED"
 _LOCAL_EVALUATION_MODELS_ENV = "VKPI_LLM_LOCAL_EVALUATION_MODELS"
 _READINESS_OPERATOR_ACK_ENV = "VKPI_LLM_READINESS_OPERATOR_ACK"
-# 2026-08-22 模型升级刀:provider 默认模型与分/百万价必须与
-# platform/models/registry.py ModelSpec 和 platform/models/runtime._EXACT_CATALOG 一致
-# (tests/test_model_registry_defaults.py 比对)。env 覆盖优先于代码默认——prod .env
-# 不随部署 rsync,切换需 E 车道手改。
-PROVIDER_CONFIG: dict[str, dict[str, Any]] = {
-    "openai": {
-        # gpt-5.6-luna $0.20/$1.20;调用须 reasoning.effort='none'。
-        "model": os.getenv("VKPI_OPENAI_MODEL", os.getenv("OPENAI_MODEL", "gpt-5.6-luna")),
-        "endpoint": "https://api.openai.com/v1/responses",
-        "input_cents_per_million": 20,
-        "output_cents_per_million": 120,
-        "timeout": int(os.getenv("VKPI_LLM_HTTP_TIMEOUT", "90") or 90),
-    },
-    "google": {
-        # W-L1 止血:prod env 曾配浮动别名 gemini-flash-latest(现已漂到 3.7,禁用),
-        # 默认路由在入口就映射成精确名(VKPI_GEMINI_MODEL_EXACT 可覆盖),台账只记精确名。
-        # gemini-3.6-flash $0.75/$3.75 促销价至 2026-12-31。
-        "model": _resolve_model_alias(
-            "google",
-            os.getenv("VKPI_GEMINI_MODEL", os.getenv("GEMINI_MODEL", "gemini-3.6-flash")),
-        ),
-        "endpoint": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-        "input_cents_per_million": 75,
-        "output_cents_per_million": 375,
-        "timeout": int(os.getenv("VKPI_LLM_HTTP_TIMEOUT", "90") or 90),
-    },
-    "anthropic": {
-        # 模型继承 config.CLAUDE_MODEL(默认 claude-sonnet-5 $2/$10);
-        # env 优先级 VKPI_CLAUDE_MODEL > VKPI_WEEKLY_SUMMARY_MODEL > CLAUDE_MODEL 不变。
-        "model": os.getenv("VKPI_CLAUDE_MODEL", os.getenv("VKPI_WEEKLY_SUMMARY_MODEL", CLAUDE_MODEL)),
-        "endpoint": "https://api.anthropic.com/v1/messages",
-        "input_cents_per_million": 200,
-        "output_cents_per_million": 1000,
-        # 2026-07-18 事故修:官号日报长文生成 >30s 全超时→熔断锁死 LLM 面板。
-        "timeout": int(os.getenv("VKPI_LLM_HTTP_TIMEOUT", "90") or 90),
-    },
-}
+# PROVIDER_CONFIG 与 key/成本原语已下沉 llm_gateway_common 叶子模块
+# (拆 providers↔gateway import 期真活环,2026-08-30);此处原位 re-export,
+# monkeypatch 路径与既有 import 点(app.platform.llm_gateway.<name>)逐字不变。
+from app.platform.llm_gateway_common import (  # noqa: E402,F401 — 原位 re-export
+    PROVIDER_CONFIG,
+    _get_api_key,
+    _micro_usd_to_cents,
+    _pooled_api_key,
+    _read_env_key,
+    _truthy_env,
+)
 
 
 def _utcnow() -> str:
@@ -186,23 +160,7 @@ def _existing_staff_id(conn: Any, sid: Any) -> int | None:
         return None
 
 
-def _read_env_key(name: str) -> str:
-    """Read a key from process env or local .env without exposing the value."""
-    value = os.environ.get(name, "")
-    if value:
-        return value.strip()
-    try:
-        for line in Path(".env").read_text(errors="ignore").splitlines():
-            stripped = line.strip()
-            if stripped.startswith(name + "="):
-                return stripped.split("=", 1)[1].strip().strip('"').strip("'")
-    except Exception as exc:
-        logger.warning("vkpi llm gateway env key lookup failed for %s: %s", name, exc)
-    return ""
-
-
-def _truthy_env(name: str) -> bool:
-    return str(os.environ.get(name) or "").strip().lower() in {"1", "true", "yes", "on"}
+# _read_env_key/_truthy_env 已下沉 llm_gateway_common(顶部 re-export,行为不变)。
 
 
 def _execution_class(value: str | None) -> str:
@@ -258,47 +216,7 @@ def _readiness_operator_ack_bindings() -> set[str]:
     return bindings
 
 
-# B1 key broker:gateway provider → key 池 provider 名(google→gemini)。
-_POOL_PROVIDER = {"openai": "openai", "google": "gemini", "anthropic": "anthropic"}
-
-
-def _pooled_api_key(provider: str) -> str:
-    """B1 key broker(Fabric 增量3):从 vkpi_api_key_pool 取一个启用 key(解密明文仅运行时内存)。
-
-    只在配置了 VKPI_KEY_POOL_FERNET_KEY 时咨询 key 池(否则池里只有不可逆占位、decrypt 必 None,
-    白跑一次 DB 查询)——未配置直接回退 env,零开销、零行为变更。任何异常吞掉回 env。
-    绝不记录 key 明文。account_name 仅供后续按 key 计量(本刀只接 key 解析)。
-    """
-    pool_provider = _POOL_PROVIDER.get(provider)
-    if not pool_provider:
-        return ""
-    if not os.environ.get("VKPI_KEY_POOL_FERNET_KEY"):
-        return ""
-    try:
-        from app.domains.settings import api_key_pool
-
-        picked = api_key_pool.pick_active_key(pool_provider)
-        if picked and picked.get("key"):
-            return str(picked["key"]).strip()
-    except Exception as exc:  # noqa: BLE001 — 池任何异常都回退 env,绝不打断 LLM 调用
-        logger.warning("vkpi llm gateway key pool lookup failed for %s (fallback to env): %s", provider, exc)
-    return ""
-
-
-def _get_api_key(provider: str) -> str:
-    if _truthy_env("VKPI_LLM_GATEWAY_FORCE_OFFLINE"):
-        return ""
-    # B1:先咨询 key 池(配了 Fernet 才查;支持多账号轮转/分发),空/未配 → 回退 env(现状=纯 env)。
-    pooled = _pooled_api_key(provider)
-    if pooled:
-        return pooled
-    if provider == "openai":
-        return _read_env_key("OPENAI_API_KEY")
-    if provider == "google":
-        return _read_env_key("GEMINI_API_KEY") or _read_env_key("GOOGLE_API_KEY")
-    if provider == "anthropic":
-        return _read_env_key("ANTHROPIC_API_KEY")
-    return ""
+# _POOL_PROVIDER/_pooled_api_key/_get_api_key 已下沉 llm_gateway_common(顶部 re-export,行为不变)。
 
 
 def _is_provider_configured(provider: str) -> bool:
@@ -400,96 +318,9 @@ def _budget_remaining_cents() -> int:
     return max(0, _monthly_budget_cents() - _current_month_spent_cents())
 
 
-# 精度修复:旧 _estimate_cost_cents 用整除 // 1_000_000 算 cents,任意 token 量都被截断归零
-# (如 google 1000 input tok x 7 cents/M = 7000//1_000_000 = 0),cost_cents 恒 0、月度预算闸
-# SUM 永读 $0 失效。新口径以「微美元」(micro_usd,$1 = 1_000_000 micro_usd)为精度源:
-#   micro_usd = tokens x cents_per_million / 100   (1 cent = 10_000 micro_usd,故 /1_000_000 x 10_000)
-# 用浮点累计再 round 成整数 micro_usd,避免整除归零;cost_cents 从 micro_usd 四舍五入派生
-# (真实亚分调用仍可诚实落 0,但精度由 cost_micro_usd 保住,不再把成本钉死在 0)。
-def _resolve_gateway_binding(provider: str, model_id: str = "") -> ResolvedModelBinding:
-    """Resolve a model through the shared contract, retaining legacy defaults."""
-    config = PROVIDER_CONFIG.get(str(provider or "").strip().lower()) or {}
-    resolved_model = str(model_id or config.get("model") or "").strip()
-    # 显式 model_override / model_fallbacks 里的 *-latest 别名同样映射成精确名,
-    # 就绪闸、定价、响应模型比对与台账全部按精确名走。
-    resolved_model = _resolve_model_alias(provider, resolved_model)
-    binding = resolve_model_binding(provider, resolved_model, gateway_config=config)
-    if binding.pricing_known or resolved_model != str(config.get("model") or "").strip():
-        return binding
-    # Some legacy configured defaults are selectable in the broad core registry
-    # but absent from the priced router registry. Keep the existing configured
-    # default usable (only after the runtime hard gate) with its explicit gateway
-    # rates; exact overrides still require model-specific catalog pricing.
-    input_rate = config.get("input_cents_per_million")
-    output_rate = config.get("output_cents_per_million")
-    if input_rate is None or output_rate is None:
-        return binding
-    return ResolvedModelBinding(
-        provider=binding.provider,
-        model_id=binding.model_id,
-        model_key=binding.model_key,
-        endpoint_family=binding.endpoint_family,
-        input_cents_per_million=float(input_rate),
-        output_cents_per_million=float(output_rate),
-        transport_ready=binding.transport_ready,
-        registered=binding.registered,
-        runtime_availability=binding.runtime_availability,
-        runtime_evidence_source=binding.runtime_evidence_source,
-        registry_source=f"{binding.registry_source}+gateway_default_pricing",
-        pricing_version="legacy_provider_default",
-    )
-
-
-def _estimate_cost_micro_usd(
-    provider: str,
-    input_tokens: int,
-    output_tokens: int,
-    *,
-    model_id: str | None = None,
-    binding: ResolvedModelBinding | None = None,
-) -> int:
-    resolved = binding or _resolve_gateway_binding(provider, str(model_id or ""))
-    # Low-level adapter calls made outside invoke() retain the old provider-rate
-    # fallback. Strict exact-model gateway calls are rejected before this point
-    # when their catalog price is unknown.
-    config = PROVIDER_CONFIG.get(provider) or {}
-    in_rate = (
-        float(resolved.input_cents_per_million)
-        if resolved.input_cents_per_million is not None
-        else float(config.get("input_cents_per_million") or 0)
-    )
-    out_rate = (
-        float(resolved.output_cents_per_million)
-        if resolved.output_cents_per_million is not None
-        else float(config.get("output_cents_per_million") or 0)
-    )
-    micro = (int(input_tokens or 0) * in_rate + int(output_tokens or 0) * out_rate) / 100.0
-    return int(round(micro))
-
-
-def _micro_usd_to_cents(micro_usd: int) -> int:
-    # 1 cent = 10_000 micro_usd; 四舍五入而非截断(亚分仍可为 0,但不再因 // 系统性归零)。
-    return int(round(int(micro_usd or 0) / 10000.0))
-
-
-def _estimate_cost_cents(
-    provider: str,
-    input_tokens: int,
-    output_tokens: int,
-    *,
-    model_id: str | None = None,
-    binding: ResolvedModelBinding | None = None,
-) -> int:
-    # 向后兼容:返回整数 cents,但改由精度 micro_usd 派生(四舍五入),不再用整除直接归零。
-    return _micro_usd_to_cents(
-        _estimate_cost_micro_usd(
-            provider,
-            input_tokens,
-            output_tokens,
-            model_id=model_id,
-            binding=binding,
-        )
-    )
+# _resolve_gateway_binding/_estimate_cost_micro_usd/_estimate_cost_cents 已搬到
+# llm_gateway_providers(唯一真调用簇;_micro_usd_to_cents 在 llm_gateway_common),
+# 底部统一 re-export——monkeypatch 路径与 namespace 契约(preflight/invoke deps)逐字不变。
 
 
 def _estimate_prompt_tokens(prompt: str) -> int:
@@ -911,7 +742,10 @@ from app.platform.llm_gateway_providers import (  # noqa: E402
     _call_anthropic,
     _call_google,
     _call_openai,
+    _estimate_cost_cents,
+    _estimate_cost_micro_usd,
     _request_json,
+    _resolve_gateway_binding,
 )
 from app.platform.llm_gateway_json import (  # noqa: E402
     DEFAULT_DEADLINE_SECONDS,

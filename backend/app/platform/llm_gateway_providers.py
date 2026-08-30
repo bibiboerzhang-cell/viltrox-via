@@ -1,9 +1,11 @@
 """Provider HTTP adapters for the LLM gateway (extracted, behavior-unchanged).
 
 Holds the per-provider request/response parsing (openai / google / anthropic),
-the shared JSON POST helper, and the provider→caller registry. Imports the
-shared config/key/cost helpers from llm_gateway to avoid duplication; the main
-module re-exports these names so existing call sites keep working.
+the shared JSON POST helper, and the provider→caller registry. The shared
+config/key helpers now live in the ``llm_gateway_common`` leaf (2026-08-30 拆
+import 期真活环:本模块不再反向 import llm_gateway);the cost estimators are
+defined here (their only real call cluster). ``llm_gateway`` re-exports every
+one of these names so existing call sites keep working.
 """
 from __future__ import annotations
 
@@ -18,15 +20,103 @@ from typing import Any, Callable
 
 import httpx
 
-from app.platform.llm_gateway import (
+from app.platform.llm_gateway_common import (
     PROVIDER_CONFIG,
-    _estimate_cost_cents,
-    _estimate_cost_micro_usd,
     _get_api_key,
+    _micro_usd_to_cents,
 )
+from app.platform.llm_gateway_model_alias import resolve_model_alias as _resolve_model_alias
+from app.platform.models.runtime import ResolvedModelBinding, resolve_model_binding
 
 
 logger = logging.getLogger(__name__)
+
+
+# 精度修复:旧 _estimate_cost_cents 用整除 // 1_000_000 算 cents,任意 token 量都被截断归零
+# (如 google 1000 input tok x 7 cents/M = 7000//1_000_000 = 0),cost_cents 恒 0、月度预算闸
+# SUM 永读 $0 失效。新口径以「微美元」(micro_usd,$1 = 1_000_000 micro_usd)为精度源:
+#   micro_usd = tokens x cents_per_million / 100   (1 cent = 10_000 micro_usd,故 /1_000_000 x 10_000)
+# 用浮点累计再 round 成整数 micro_usd,避免整除归零;cost_cents 从 micro_usd 四舍五入派生
+# (真实亚分调用仍可诚实落 0,但精度由 cost_micro_usd 保住,不再把成本钉死在 0)。
+def _resolve_gateway_binding(provider: str, model_id: str = "") -> ResolvedModelBinding:
+    """Resolve a model through the shared contract, retaining legacy defaults."""
+    config = PROVIDER_CONFIG.get(str(provider or "").strip().lower()) or {}
+    resolved_model = str(model_id or config.get("model") or "").strip()
+    # 显式 model_override / model_fallbacks 里的 *-latest 别名同样映射成精确名,
+    # 就绪闸、定价、响应模型比对与台账全部按精确名走。
+    resolved_model = _resolve_model_alias(provider, resolved_model)
+    binding = resolve_model_binding(provider, resolved_model, gateway_config=config)
+    if binding.pricing_known or resolved_model != str(config.get("model") or "").strip():
+        return binding
+    # Some legacy configured defaults are selectable in the broad core registry
+    # but absent from the priced router registry. Keep the existing configured
+    # default usable (only after the runtime hard gate) with its explicit gateway
+    # rates; exact overrides still require model-specific catalog pricing.
+    input_rate = config.get("input_cents_per_million")
+    output_rate = config.get("output_cents_per_million")
+    if input_rate is None or output_rate is None:
+        return binding
+    return ResolvedModelBinding(
+        provider=binding.provider,
+        model_id=binding.model_id,
+        model_key=binding.model_key,
+        endpoint_family=binding.endpoint_family,
+        input_cents_per_million=float(input_rate),
+        output_cents_per_million=float(output_rate),
+        transport_ready=binding.transport_ready,
+        registered=binding.registered,
+        runtime_availability=binding.runtime_availability,
+        runtime_evidence_source=binding.runtime_evidence_source,
+        registry_source=f"{binding.registry_source}+gateway_default_pricing",
+        pricing_version="legacy_provider_default",
+    )
+
+
+def _estimate_cost_micro_usd(
+    provider: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    model_id: str | None = None,
+    binding: ResolvedModelBinding | None = None,
+) -> int:
+    resolved = binding or _resolve_gateway_binding(provider, str(model_id or ""))
+    # Low-level adapter calls made outside invoke() retain the old provider-rate
+    # fallback. Strict exact-model gateway calls are rejected before this point
+    # when their catalog price is unknown.
+    config = PROVIDER_CONFIG.get(provider) or {}
+    in_rate = (
+        float(resolved.input_cents_per_million)
+        if resolved.input_cents_per_million is not None
+        else float(config.get("input_cents_per_million") or 0)
+    )
+    out_rate = (
+        float(resolved.output_cents_per_million)
+        if resolved.output_cents_per_million is not None
+        else float(config.get("output_cents_per_million") or 0)
+    )
+    micro = (int(input_tokens or 0) * in_rate + int(output_tokens or 0) * out_rate) / 100.0
+    return int(round(micro))
+
+
+def _estimate_cost_cents(
+    provider: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    model_id: str | None = None,
+    binding: ResolvedModelBinding | None = None,
+) -> int:
+    # 向后兼容:返回整数 cents,但改由精度 micro_usd 派生(四舍五入),不再用整除直接归零。
+    return _micro_usd_to_cents(
+        _estimate_cost_micro_usd(
+            provider,
+            input_tokens,
+            output_tokens,
+            model_id=model_id,
+            binding=binding,
+        )
+    )
 
 
 _HTTP_CLIENT: httpx.Client | None = None
