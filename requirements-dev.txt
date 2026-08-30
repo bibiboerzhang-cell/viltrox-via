@@ -1,0 +1,7 @@
+# Dev-only tooling. NOT installed in production; deploy uses requirements.txt only.
+# Install into the project venv:  .venv/bin/pip install -r requirements-dev.txt
+
+# Mutation-testing receipt channel (scripts/vkpi_engineering_health_mutation.py).
+# Pinned hard: the runner's exit-code -> mutant-status map is copied from this
+# exact mutmut release; bumping the pin requires re-verifying that map.
+mutmut==3.7.0
