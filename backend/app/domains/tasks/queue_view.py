@@ -102,9 +102,42 @@ def _as_datetime(value: Any) -> datetime | None:
     return None
 
 
-def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any = None) -> str:
+# _infer_kind 有序分类规则表(顺序即优先级,逐字保持原 if/elif 链语义)。
+# 每行 = (job_type 精确匹配值(None=不按 job_type 匹配), 是否仅限 source=="llm_calls",
+#         haystack 子串元组(任一命中即成立), 分类结果)。
+_KIND_RULES: tuple[tuple[str | None, bool, tuple[str, ...], str], ...] = (
+    ("kol_lookup", False, ("kol_lookup",), "KOL查找"),
+    ("smart_search_profile_advance", False, ("kol_smart_search_profile_advance",), "智能查找"),
+    ("session_advance", False, (), "资料补全"),
+    ("account_dossier_extract", False, ("kol_account_dossier_extract",), "账号沉淀"),
+    ("project_contract_extract", False, ("project_contract_extract",), "合同提取"),
+    ("contract_invoice_extract", False, ("contract_invoice_extract",), "发票提取"),
+    ("contract_polish", False, ("contract_polish",), "合同润色"),
+    ("project_retrospective_aggregate", False, ("project_retrospective",), "复盘聚合"),
+    ("video_url_resolve", False, (), "视频解析"),
+    ("kol_profile_deep_crawl", False, ("kol_profile_deep_crawl",), "账号分析"),
+    ("kol_pool_comments_collect", False, ("kol_pool_comments_collect",), "评论采集"),
+    ("kol_audience_stats_refresh", False, ("audience_stats", "audience_age"), "受众分析"),
+    ("kol_content_fit_analysis", False, ("kol_content_fit_analysis", "content_fit_v1"), "内容契合"),
+    ("kol_outreach_draft", False, ("kol_outreach_draft",), "联系草稿"),
+    ("logistics_track_sync", False, ("logistics_track_sync",), "物流同步"),
+    (None, False, ("keyframe_qa", "video_qa"), "视频QA"),
+    (None, False, ("marketing_advisor", "advisor"), "营销顾问"),
+    (None, True, ("sentiment", "comment_reply", "comment_intel"), "评论分析"),
+    (None, True, ("recall_rerank", "query_plan", "discovery_localize"), "智能查找"),
+    (None, False, ("final_v1", "video_analysis", "video"), "video深析"),
+    (None, False, ("url", "profile", "crawl", "scan", "resolve", "download", "ingest", "sync"), "搜索/抓取"),
+    (None, False, ("report", "brief", "summary"), "报告生成"),
+    (None, False, ("cache_extract", "deep_result", "post_process", "backfill"), "总结沉淀"),
+)
+
+# 表全 miss 后的 LLM 兜底提示词(source=="llm_calls" 或任一命中 → "LLM分析",否则 "任务")。
+_LLM_HINT_WORDS = ("gemini", "claude", "openai", "llm", "score")
+
+
+def _kind_haystack(source: str, job_type: str, purpose: str, payload: Any) -> str:
     data = payload if isinstance(payload, dict) else {}
-    haystack = " ".join(
+    return " ".join(
         [
             source,
             job_type,
@@ -115,53 +148,18 @@ def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any
             _text(data.get("script")),
         ]
     ).lower()
-    if _text(job_type).lower() == "kol_lookup" or "kol_lookup" in haystack:
-        return "KOL查找"
-    if _text(job_type).lower() == "smart_search_profile_advance" or "kol_smart_search_profile_advance" in haystack:
-        return "智能查找"
-    if _text(job_type).lower() == "session_advance":
-        return "资料补全"
-    if _text(job_type).lower() == "account_dossier_extract" or "kol_account_dossier_extract" in haystack:
-        return "账号沉淀"
-    if _text(job_type).lower() == "project_contract_extract" or "project_contract_extract" in haystack:
-        return "合同提取"
-    if _text(job_type).lower() == "contract_invoice_extract" or "contract_invoice_extract" in haystack:
-        return "发票提取"
-    if _text(job_type).lower() == "contract_polish" or "contract_polish" in haystack:
-        return "合同润色"
-    if _text(job_type).lower() == "project_retrospective_aggregate" or "project_retrospective" in haystack:
-        return "复盘聚合"
-    if _text(job_type).lower() == "video_url_resolve":
-        return "视频解析"
-    if _text(job_type).lower() == "kol_profile_deep_crawl" or "kol_profile_deep_crawl" in haystack:
-        return "账号分析"
-    if _text(job_type).lower() == "kol_pool_comments_collect" or "kol_pool_comments_collect" in haystack:
-        return "评论采集"
-    if _text(job_type).lower() == "kol_audience_stats_refresh" or "audience_stats" in haystack or "audience_age" in haystack:
-        return "受众分析"
-    if _text(job_type).lower() == "kol_content_fit_analysis" or "kol_content_fit_analysis" in haystack or "content_fit_v1" in haystack:
-        return "内容契合"
-    if _text(job_type).lower() == "kol_outreach_draft" or "kol_outreach_draft" in haystack:
-        return "联系草稿"
-    if _text(job_type).lower() == "logistics_track_sync" or "logistics_track_sync" in haystack:
-        return "物流同步"
-    if "keyframe_qa" in haystack or "video_qa" in haystack:
-        return "视频QA"
-    if "marketing_advisor" in haystack or "advisor" in haystack:
-        return "营销顾问"
-    if source == "llm_calls" and any(word in haystack for word in ("sentiment", "comment_reply", "comment_intel")):
-        return "评论分析"
-    if source == "llm_calls" and any(word in haystack for word in ("recall_rerank", "query_plan", "discovery_localize")):
-        return "智能查找"
-    if "final_v1" in haystack or "video_analysis" in haystack or "video" in haystack:
-        return "video深析"
-    if any(word in haystack for word in ("url", "profile", "crawl", "scan", "resolve", "download", "ingest", "sync")):
-        return "搜索/抓取"
-    if any(word in haystack for word in ("report", "brief", "summary")):
-        return "报告生成"
-    if any(word in haystack for word in ("cache_extract", "deep_result", "post_process", "backfill")):
-        return "总结沉淀"
-    if source == "llm_calls" or any(word in haystack for word in ("gemini", "claude", "openai", "llm", "score")):
+
+
+def _infer_kind(source: str, job_type: str = "", purpose: str = "", payload: Any = None) -> str:
+    haystack = _kind_haystack(source, job_type, purpose, payload)
+    jt = _text(job_type).lower()
+    llm_source = source == "llm_calls"
+    for exact_job_type, llm_source_only, tokens, kind in _KIND_RULES:
+        if llm_source_only and not llm_source:
+            continue
+        if jt == exact_job_type or any(token in haystack for token in tokens):
+            return kind
+    if llm_source or any(word in haystack for word in _LLM_HINT_WORDS):
         return "LLM分析"
     return "任务"
 
