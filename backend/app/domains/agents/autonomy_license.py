@@ -510,3 +510,134 @@ def manual_override(
     result["override"] = True
     result["previous_level"] = previous_level
     return result
+
+
+def license_status_snapshot() -> dict[str, Any]:
+    """纯读驾照现状快照(2026-08-30 点火件③,日报/面板消费):每张驾照
+    level/sample_count/hit_rate + 离晋升门槛还差多少(样本差/命中率差/封顶原因)。
+
+    只读不写、零 LLM、永不 raise;台账读数守卫(list_licenses 内已带),数据缺席诚实
+    None 绝不编数。promotion_ready=True 也只意味着「每日评估会产建议」——晋升永远走人审。
+    """
+    try:
+        listing = list_licenses()
+    except Exception as exc:  # noqa: BLE001 — 契约:永不 raise
+        logger.warning("license_status_snapshot failed: %s", exc)
+        return {"status": "error", "reason": str(exc)[:300], "items": []}
+
+    items: list[dict[str, Any]] = []
+    for raw in listing.get("items") or []:
+        ledger = raw.get("ledger") if isinstance(raw.get("ledger"), dict) else {}
+        hit_rate = _float_or_none(ledger.get("hit_rate"))
+        sample = _int_or_none(ledger.get("sample_count")) or 0
+        level = _clamp_level(raw.get("level"))
+        samples_needed = max(0, PROMOTE_MIN_SAMPLE - sample)
+        hit_rate_gap = None if hit_rate is None else round(max(0.0, PROMOTE_HIT_RATE - hit_rate), 4)
+        if level >= AUTO_PROMOTE_CEILING:
+            blocked = f"已到自动晋升封顶 L{AUTO_PROMOTE_CEILING},L4 仅人工 override"
+        elif str(ledger.get("status") or "") != "ok" or hit_rate is None:
+            blocked = f"台账无可用命中率读数(status={str(ledger.get('status') or 'unavailable')}),按 hold"
+        elif samples_needed > 0:
+            blocked = f"样本还差 {samples_needed} 个(现 {sample}/{PROMOTE_MIN_SAMPLE})"
+        elif hit_rate < PROMOTE_HIT_RATE:
+            blocked = f"命中率还差 {hit_rate_gap:.4f}(现 {hit_rate:.4f}/晋升线 {PROMOTE_HIT_RATE})"
+        else:
+            blocked = ""  # 门槛已达标:等每日评估产 inbox 建议 → 人审 → override 端点执行
+        items.append(
+            {
+                "action_type": str(raw.get("action_type") or ""),
+                "level": level,
+                "level_label": LEVEL_LABELS.get(level, str(level)),
+                "sample_count": sample,
+                "hit_rate": hit_rate,
+                "ledger_status": str(ledger.get("status") or ""),
+                "promotion_gap": {
+                    "samples_needed": samples_needed,
+                    "hit_rate_gap": hit_rate_gap,
+                    "threshold": {"hit_rate": PROMOTE_HIT_RATE, "min_sample": PROMOTE_MIN_SAMPLE},
+                },
+                "promotion_blocked_reason": blocked,
+                "promotion_ready": blocked == "",
+            }
+        )
+    return {
+        "status": str(listing.get("status") or "ready"),
+        "reason": str(listing.get("reason") or "") or None,
+        "items": items,
+        "rules": _rules_block(),
+        "note": "纯读快照;晋升永远走人审(inbox 建议→人批→override 端点),绝无自我提权;影响评分维度永久禁止。",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def run_license_promotion_scan() -> dict[str, Any]:
+    """每日驾照晋升评估 job 入口(2026-08-30 点火件②;注册与 env 闸见
+    services/scheduler/jobs_license_promotion.py,默认 OFF)。
+
+    恒 dry_run=True:evaluate_promotions 只出建议、本函数绝不落库改级;promote/demote
+    建议幂等写 vkpi_action_inbox(category=license_promotion,dedupe_key 含级别迁移,
+    人工 dismissed/snoozed/approved 的行绝不复活),人审通过后由既有端点
+    POST /api/admin/vkpi/autonomy/licenses/{action_type}/override 执行。
+    红线:晋升永远走人审,绝无自我提权;L4 永不自动授予;零 LLM;失败诚实回报不炸调度器。
+    """
+    report = evaluate_promotions(dry_run=True)
+    items = (report.get("items") or []) if isinstance(report, dict) else []
+    proposals = [it for it in items if isinstance(it, dict) and it.get("decision") in ("promote", "demote")]
+    persisted = 0
+    persist_error = ""
+    if proposals:
+        try:
+            from app.domains.actions.inbox import persist_suggestions
+            from app.domains.actions.producers import make_suggestion
+
+            suggestions: list[dict[str, Any]] = []
+            for it in proposals:
+                action = str(it.get("action_type") or "").strip()
+                if not action:
+                    continue
+                verb = "晋升" if it.get("decision") == "promote" else "降级"
+                cur = _clamp_level(it.get("current_level"))
+                proposed = _clamp_level(it.get("proposed_level"))
+                suggestions.append(
+                    make_suggestion(
+                        category="license_promotion",
+                        dedupe_key=f"license_promotion:{action}:L{cur}toL{proposed}",
+                        title=f"驾照{verb}建议:{action} L{cur}→L{proposed}",
+                        detail=str(it.get("reason") or "")[:500],
+                        reason=(
+                            f"prediction_ledger 纯规则判定(hit_rate={it.get('hit_rate')}, "
+                            f"sample={it.get('sample_count')}, miss_streak={it.get('miss_streak')});"
+                            "人审通过才执行,绝无自我提权"
+                        ),
+                        priority="medium",
+                        entity_type="autonomy_license",
+                        entity_id=action,
+                        suggested_endpoint=f"/api/admin/vkpi/autonomy/licenses/{action}/override",
+                        requires_approval=True,
+                        payload={
+                            "decision": it.get("decision"),
+                            "current_level": cur,
+                            "proposed_level": proposed,
+                            "hit_rate": it.get("hit_rate"),
+                            "sample_count": it.get("sample_count"),
+                            "miss_streak": it.get("miss_streak"),
+                            "evaluated_at": report.get("evaluated_at"),
+                        },
+                    )
+                )
+            persisted = persist_suggestions(suggestions)
+        except Exception as exc:  # noqa: BLE001 — 建议落格失败只记账,不拖垮调度器
+            logger.warning("license promotion suggestions persist failed: %s", exc)
+            persist_error = str(exc)[:200]
+    result: dict[str, Any] = {
+        "status": str(report.get("status") or "error") if isinstance(report, dict) else "error",
+        "dry_run": True,
+        "evaluated": len(items),
+        "proposals": len(proposals),
+        "persisted": persisted,
+        "inbox_category": "license_promotion",
+        "note": "晋升永远走人审:建议进 vkpi_action_inbox,人批后经 override 端点执行;本 job 绝不改级。",
+    }
+    if persist_error:
+        result["persist_error"] = persist_error
+    return result

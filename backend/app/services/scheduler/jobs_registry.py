@@ -79,6 +79,7 @@ from app.services.scheduler.jobs import (
     scheduler_fire_recovery_interval_seconds,
 )
 from app.services.scheduler.jobs_forecast_batch import job_vkpi_forecast_batch_issue
+from app.services.scheduler.jobs_license_promotion import register_license_promotion_job
 from app.services.scheduler.jobs_registry_gated import gated_daily_job as _gated_daily_job
 from app.services.scheduler.jobs_tasks_intel import (
     job_vkpi_competitor_radar_catchup,
@@ -692,6 +693,10 @@ def _register_fulfillment_autoops_jobs(_scheduler: Any) -> None:
         max_instances=1,
         coalesce=True,
     )
+
+    # ── 驾照晋升每日评估(2026-08-30 点火;env 闸 VKPI_LICENSE_PROMOTION_SCAN_ENABLED 默认 OFF)──
+    # 恒 dry-run,promote/demote 建议写 vkpi_action_inbox 走人审,绝无自我提权;详见 jobs_license_promotion.py。
+    register_license_promotion_job(_scheduler)
 
 
 def _register_observability_cost_jobs(_scheduler: Any) -> None:

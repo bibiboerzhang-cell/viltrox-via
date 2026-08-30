@@ -365,15 +365,44 @@ def _collect_performance_forecast(_conn: Any, window: int) -> dict[str, Any]:
     }
 
 
+def _license_family_members(action_type: str) -> list[str]:
+    """驾照家族成员展开(单一真源=loop_runner._LICENSE_FAMILY,懒 import 防环)。
+
+    驾照按「家族」发(如 kol_profile/discovery_enroll/deep_missing 共用 pool_enrich 驾照),
+    但执行台账按字面 category 记行;查家族驾照命中率必须把成员 category 一并计入,
+    否则家族成员的 executed/success 样本永远算不进家族驾照命中率(2026-08-30 点火修的断接 bug)。
+    传入家族名 → [家族名 + 全部映到它的成员 category];传入非家族名 → [原名]。
+    映射表缺席/异常回退 [原名](行为退回逐字口径),绝不拖垮台账。
+    """
+    key = str(action_type or "").strip().lower()
+    members = [key]
+    try:
+        # 懒 import 防环:loop_runner 顶层零 agents 兄弟依赖(只 stdlib+logging),不成 import 环。
+        from app.domains.agents.loop_runner import _LICENSE_FAMILY
+
+        for member, family in _LICENSE_FAMILY.items():
+            member_key = str(member).strip().lower()
+            if str(family).strip().lower() == key and member_key not in members:
+                members.append(member_key)
+    except Exception as exc:  # noqa: BLE001 — 映射不可得按字面回退,诚实降级不炸
+        logger.warning("prediction_ledger license family mapping unavailable, literal fallback: %s", exc)
+    return members
+
+
 def _collect_auto_ops_category(conn: Any, category: str, window: int) -> dict[str, Any] | None:
-    """auto_ops 动态兜底:action_type 匹配 vkpi_action_execution_ledger.category。
+    """auto_ops 动态兜底:action_type 按驾照家族聚合匹配 vkpi_action_execution_ledger.category
+    (家族名查询计入全部成员 category 的行;非家族名仍逐字匹配,行为不变)。
 
     只认 mode=executed 的真实执行(dry_run 是演练、skipped 是闸门拒绝,都不是预测裁决,剔除);
     outcome success=命中,failed/error=未命中。该表 0 行匹配 → 返回 None(调用方给 unknown)。
     """
+    members = _license_family_members(category)
+    placeholders = ", ".join("?" for _ in members)
     rows = conn.execute(
-        "SELECT mode, outcome, created_at FROM vkpi_action_execution_ledger WHERE category = ? ORDER BY id DESC LIMIT ?",
-        (str(category), SCAN_LIMIT),
+        "SELECT mode, outcome, created_at FROM vkpi_action_execution_ledger WHERE category IN ("
+        + placeholders
+        + ") ORDER BY id DESC LIMIT ?",
+        (*members, SCAN_LIMIT),
     ).fetchall()
     if not rows:
         return None
@@ -402,7 +431,8 @@ def _collect_auto_ops_category(conn: Any, category: str, window: int) -> dict[st
             "miss_definition": "mode=executed 且 outcome=failed/error",
             "pending_definition": "dry_run 演练与 skipped 闸门拒绝剔除,不进分母",
             "excluded": excluded,
-            "note": "执行可靠率口径(该 category 无预测-结果对,退而用真实执行成败)",
+            "family_members": members,
+            "note": "执行可靠率口径(该 category 无预测-结果对,退而用真实执行成败);家族名按 _LICENSE_FAMILY 聚合成员 category 回读",
         },
     )
 
