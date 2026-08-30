@@ -287,7 +287,9 @@ def heavy(rows):
     assert metric["details"]["max_cognitive"] == 21
     observations = first["collector"]["observations"]["python_complexity"]
     assert observations["cognitive_le_15_ratio"] == 0.5
-    assert first["collector"]["algorithm_version"].endswith("-cognitive1")
+    # importtime-cycles1(合同 v1.1)追加在版本串尾部后 cognitive1 不再是终段;
+    # 本断言的意图是「cognitive1 口径在版本串里」,改为包含判定。
+    assert "-cognitive1" in first["collector"]["algorithm_version"]
 
 
 def test_parse_failure_keeps_cognitive_unknown(tmp_path: Path) -> None:

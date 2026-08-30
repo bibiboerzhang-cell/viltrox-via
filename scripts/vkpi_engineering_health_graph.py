@@ -4,7 +4,7 @@ from __future__ import annotations
 import ast
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, Iterator, Sequence
 
 try:
     from scripts import vkpi_engineering_health_dynamic_imports as dynamic_imports
@@ -15,6 +15,7 @@ except ModuleNotFoundError:  # direct script execution adds scripts/, not reposi
 @dataclass(frozen=True)
 class ImportGraphBuild:
     graph: dict[str, set[str]]
+    import_time_graph: dict[str, set[str]]
     module_paths: dict[str, str]
     collisions: list[str]
     edge_evidence: dict[tuple[str, str], list[dict[str, Any]]]
@@ -83,7 +84,60 @@ def _resolve_import_targets(
     return targets
 
 
-def build_backend_import_graph(trees: dict[str, ast.Module]) -> ImportGraphBuild:
+def _is_type_checking_test(test: ast.expr) -> bool:
+    """Bare-name ``TYPE_CHECKING`` or an attribute whose terminal segment is it."""
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+
+
+def _field_nodes(value: object) -> Iterator[ast.AST]:
+    if isinstance(value, ast.AST):
+        yield value
+        return
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, ast.AST):
+                yield item
+
+
+def _child_import_time_flags(node: ast.AST, import_time: bool) -> Iterator[tuple[ast.AST, bool]]:
+    """Yield children keeping the flag True only where they execute at import time.
+
+    Function and lambda *bodies* never execute at import time (decorators,
+    defaults, and annotations do); the body of an ``if TYPE_CHECKING`` guard
+    never does either, while its ``orelse`` branch still does.
+    """
+    if isinstance(node, ast.If) and _is_type_checking_test(node.test):
+        yield node.test, import_time
+        yield from ((child, False) for child in node.body)
+        yield from ((child, import_time) for child in node.orelse)
+        return
+    function_like = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
+    for field, value in ast.iter_fields(node):
+        flag = import_time and not (function_like and field == "body")
+        yield from ((child, flag) for child in _field_nodes(value))
+
+
+def _scan_import_time(
+    tree: ast.Module,
+) -> tuple[list[tuple[ast.Import | ast.ImportFrom, bool]], set[tuple[int, int]]]:
+    """Collect every import statement plus the call sites executing at import time."""
+    imports: list[tuple[ast.Import | ast.ImportFrom, bool]] = []
+    calls: set[tuple[int, int]] = set()
+    stack: list[tuple[ast.AST, bool]] = [(tree, True)]
+    while stack:
+        node, import_time = stack.pop()
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            imports.append((node, import_time))
+            continue
+        if import_time and isinstance(node, ast.Call):
+            calls.add((int(node.lineno), int(node.col_offset)))
+        stack.extend(_child_import_time_flags(node, import_time))
+    return imports, calls
+
+
+def _index_backend_modules(trees: dict[str, ast.Module]) -> tuple[dict[str, str], list[str]]:
     module_paths: dict[str, str] = {}
     collisions: list[str] = []
     for path in sorted(trees):
@@ -94,19 +148,23 @@ def build_backend_import_graph(trees: dict[str, ast.Module]) -> ImportGraphBuild
             collisions.append(module)
         else:
             module_paths[module] = path
+    return module_paths, sorted(set(collisions))
+
+
+def _collect_static_import_edges(
+    trees: dict[str, ast.Module],
+    module_paths: dict[str, str],
+    graph: dict[str, set[str]],
+    import_time_graph: dict[str, set[str]],
+    evidence: dict[tuple[str, str], list[dict[str, Any]]],
+) -> dict[str, set[tuple[int, int]]]:
     known = set(module_paths)
-    graph: dict[str, set[str]] = {module: set() for module in sorted(known)}
-    evidence: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    unresolved: list[dict[str, Any]] = []
-    resolved_constant = 0
-    resolved_finite = 0
-    resolved_rows: list[dict[str, Any]] = []
+    import_time_calls: dict[str, set[tuple[int, int]]] = {}
     for module in sorted(known):
         path = module_paths[module]
         is_package = path.endswith("/__init__.py") or path == "backend/app/__init__.py"
-        for node in ast.walk(trees[path]):
-            if not isinstance(node, (ast.Import, ast.ImportFrom)):
-                continue
+        scanned_imports, import_time_calls[path] = _scan_import_time(trees[path])
+        for node, at_import_time in scanned_imports:
             targets = _resolve_import_targets(
                 node,
                 module=module,
@@ -115,6 +173,8 @@ def build_backend_import_graph(trees: dict[str, ast.Module]) -> ImportGraphBuild
             )
             kind = type(node).__name__
             graph[module].update(targets)
+            if at_import_time:
+                import_time_graph[module].update(targets)
             for target in sorted(targets):
                 evidence.setdefault((module, target), []).append(
                     {
@@ -124,6 +184,22 @@ def build_backend_import_graph(trees: dict[str, ast.Module]) -> ImportGraphBuild
                         "kind": kind,
                     }
                 )
+    return import_time_calls
+
+
+def _collect_dynamic_import_edges(
+    trees: dict[str, ast.Module],
+    module_paths: dict[str, str],
+    graph: dict[str, set[str]],
+    import_time_graph: dict[str, set[str]],
+    evidence: dict[tuple[str, str], list[dict[str, Any]]],
+    import_time_calls: dict[str, set[tuple[int, int]]],
+) -> tuple[list[dict[str, Any]], int, int, list[dict[str, Any]]]:
+    known = set(module_paths)
+    unresolved: list[dict[str, Any]] = []
+    resolved_constant = 0
+    resolved_finite = 0
+    resolved_rows: list[dict[str, Any]] = []
     for finding in dynamic_imports.analyze_dynamic_imports(trees, module_paths):
         module = _module_name(finding.path)
         if module is None:
@@ -132,6 +208,8 @@ def build_backend_import_graph(trees: dict[str, ast.Module]) -> ImportGraphBuild
         for name in finding.targets:
             targets.update(_known_module_chain(name, known))
         graph[module].update(targets)
+        if (finding.line, finding.column) in import_time_calls.get(finding.path, set()):
+            import_time_graph[module].update(targets)
         for target in sorted(targets):
             evidence.setdefault((module, target), []).append(
                 {
@@ -170,12 +248,27 @@ def build_backend_import_graph(trees: dict[str, ast.Module]) -> ImportGraphBuild
                 "targets": list(finding.targets),
             }
         )
+    return unresolved, resolved_constant, resolved_finite, resolved_rows
+
+
+def build_backend_import_graph(trees: dict[str, ast.Module]) -> ImportGraphBuild:
+    module_paths, collisions = _index_backend_modules(trees)
+    graph: dict[str, set[str]] = {module: set() for module in sorted(module_paths)}
+    import_time_graph: dict[str, set[str]] = {module: set() for module in sorted(module_paths)}
+    evidence: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    import_time_calls = _collect_static_import_edges(
+        trees, module_paths, graph, import_time_graph, evidence
+    )
+    unresolved, resolved_constant, resolved_finite, resolved_rows = _collect_dynamic_import_edges(
+        trees, module_paths, graph, import_time_graph, evidence, import_time_calls
+    )
     for rows in evidence.values():
         rows.sort(key=lambda item: (item["line"], item["kind"], item["to_path"]))
     return ImportGraphBuild(
         graph=graph,
+        import_time_graph=import_time_graph,
         module_paths=module_paths,
-        collisions=sorted(set(collisions)),
+        collisions=collisions,
         edge_evidence=evidence,
         unresolved_dynamic_imports=sorted(
             unresolved,
@@ -226,6 +319,36 @@ def strongly_connected_components(graph: dict[str, set[str]]) -> list[list[str]]
 
 def is_cycle(component: Sequence[str], graph: dict[str, set[str]]) -> bool:
     return len(component) > 1 or (bool(component) and component[0] in graph.get(component[0], set()))
+
+
+IMPORT_TIME_EDGE_RULE = (
+    "package_cycle_count companion subgraph (contract v1.1): an import contributes an "
+    "edge only when it executes at module import time — Import/ImportFrom whose nearest "
+    "enclosing lexical scope is the module or a class body, never inside a FunctionDef/"
+    "AsyncFunctionDef/Lambda body and never inside the body of an if-TYPE_CHECKING guard "
+    "(imports in the orelse branch still count); statically resolved dynamic imports and "
+    "implicit parent-package initialization edges follow the same lexical rule"
+)
+
+
+def import_time_cycle_summary(
+    import_time_graph: dict[str, set[str]], *, valid: bool
+) -> dict[str, Any]:
+    """Observation block for the contract v1.1 import-time cycle subgraph."""
+    cyclic = [
+        component
+        for component in strongly_connected_components(import_time_graph)
+        if is_cycle(component, import_time_graph)
+    ]
+    return {
+        "definition": IMPORT_TIME_EDGE_RULE,
+        "edge_count": sum(len(targets) for targets in import_time_graph.values()),
+        "cycle_scc_count": len(cyclic) if valid else None,
+        "cyclic_module_count": sum(len(component) for component in cyclic) if valid else None,
+        "cyclic_sccs": [
+            {"size": len(component), "members": list(component)} for component in cyclic
+        ],
+    }
 
 
 def architecture_owner(module: str) -> str | None:

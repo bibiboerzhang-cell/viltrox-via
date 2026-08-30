@@ -36,7 +36,10 @@ except ModuleNotFoundError:  # Direct execution: scripts/ is sys.path[0].
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = ROOT / "docs/vkpi/engineering-health-score-contract-v1.json"
 SCHEMA_VERSION = "vkpi_engineering_health_collector_v1"
-ALGORITHM_VERSION = "python-ast-cc2-finite-dynamic-import2-tarjan2-architecture1-snapshot2-lineguard1-cognitive1"
+ALGORITHM_VERSION = (
+    "python-ast-cc2-finite-dynamic-import2-tarjan2-architecture1-snapshot2-lineguard1-cognitive1"
+    "-importtime-cycles1"
+)
 LINE_LIMIT = 800
 SOURCE_SUFFIXES = {".py", ".ts", ".tsx", ".css"}
 PYTHON_ROOTS = ("backend/app",)
@@ -339,6 +342,9 @@ def collect_observations(
     complete_python = captured.complete and not parse_failures and bool(python_files) and bool(complexity_rows)
     valid_static_graph = captured.complete and not backend_failures and not collisions and bool(graph)
     complete_graph = valid_static_graph and not graph_build.unresolved_dynamic_imports
+    import_time_subgraph = graph_tools.import_time_cycle_summary(
+        graph_build.import_time_graph, valid=valid_static_graph
+    )
 
     return {
         "status": "observed" if complete_python and complete_graph and max_module is not None else "partial",
@@ -440,6 +446,7 @@ def collect_observations(
             "cross_core_scc_count": len(cross_core) if valid_static_graph else None,
             "internal_fan_out_max": max_fan_out if valid_static_graph else None,
             "max_fan_out_modules": max_fan_out_modules if valid_static_graph else [],
+            "import_time_subgraph": import_time_subgraph,
             "module_paths": module_paths,
             "cyclic_sccs": scc_rows,
             "parse_errors": [asdict(item) for item in backend_failures],
@@ -632,12 +639,16 @@ def build_evidence(
     import_graph = observations["backend_import_graph"]
     if stable and import_graph["status"] == "observed":
         graph_source = "collector://vkpi-engineering-health/v1/backend-static-import-scc"
+        import_time_subgraph = import_graph["import_time_subgraph"]
         architecture["package_cycle_count"] = _observed(
-            import_graph["cycle_scc_count"],
+            import_time_subgraph["cycle_scc_count"],
             observed_at,
             graph_source,
             sample_count=import_graph["module_count"],
-            details={"cyclic_module_count": import_graph["cyclic_module_count"]},
+            details={
+                "cyclic_module_count": import_time_subgraph["cyclic_module_count"],
+                "edge_rule": import_time_subgraph["definition"],
+            },
         )
         architecture["cross_core_scc_count"] = _observed(
             import_graph["cross_core_scc_count"],
