@@ -60,6 +60,160 @@ def _attach_ledger_error(conn: Any, gateway: Any, call_uid: str, metadata: Any, 
         gateway.logger.warning("vkpi.llm_gateway.ledger_error_note_failed", exc_info=True)
 
 
+def _resolve_ledger_model(
+    provider: str, model: str, metadata: dict[str, Any] | None
+) -> tuple[str, dict[str, Any] | None]:
+    """台账只记精确名:上游漏网的 *-latest 别名在这里兜底映射,原别名进 metadata 留痕。"""
+    requested_model = str(model or "").strip()
+    resolved = resolve_model_alias(provider, requested_model)
+    if resolved != requested_model:
+        metadata = {**(metadata or {}), "model_alias": requested_model}
+    return resolved, metadata
+
+
+def _ledger_amounts(
+    gateway: Any, cost_cents: int, cost_micro_usd: int | None
+) -> tuple[int, int]:
+    """(micro_usd, cents):micro 显式给了以它为准换算 cents,否则由 cents 推 micro。"""
+    micro = (
+        int(cost_micro_usd)
+        if cost_micro_usd is not None
+        else int(round(int(cost_cents or 0) * 10000))
+    )
+    final_cents = (
+        gateway._micro_usd_to_cents(micro)
+        if cost_micro_usd is not None
+        else int(cost_cents or 0)
+    )
+    return micro, final_cents
+
+
+def _latency_ms_param(metadata: Any) -> int | None:
+    return (
+        int((metadata or {}).get("latency_ms") or 0)
+        if isinstance(metadata, dict)
+        and (metadata or {}).get("latency_ms") is not None
+        else None
+    )
+
+
+def _insert_call_row(
+    gateway: Any,
+    conn: Any,
+    *,
+    uid: str,
+    provider: str,
+    model: str,
+    purpose: str,
+    prompt_hash: str,
+    input_tokens: int,
+    output_tokens: int,
+    final_cents: int,
+    micro: int,
+    status: str,
+    fallback_used: bool,
+    actor_staff_id: int | None,
+    metadata: dict[str, Any] | None,
+) -> None:
+    """vkpi_llm_calls 落一行并 commit(成本账唯一真源之一,参数口径逐字节保持)。"""
+    conn.execute(
+        """
+        INSERT INTO vkpi_llm_calls
+            (call_uid, provider, model, purpose, prompt_hash, input_tokens, output_tokens, cost_cents,
+             cost_micro_usd, latency_ms, status, fallback_used, created_by_staff_id, created_at, metadata_json)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            uid,
+            provider or "unknown",
+            model or "",
+            purpose or "",
+            prompt_hash,
+            int(input_tokens or 0),
+            int(output_tokens or 0),
+            int(final_cents or 0),
+            int(micro or 0),
+            _latency_ms_param(metadata),
+            status or "not_configured",
+            bool(fallback_used),
+            actor_staff_id,
+            gateway._utcnow(),
+            gateway._json(metadata),
+        ),
+    )
+    conn.commit()
+
+
+def _should_write_cost_ledger(
+    cost_tag: str | None, force_cost_ledger: bool, status: str, micro: int
+) -> bool:
+    return bool(cost_tag) and (
+        bool(force_cost_ledger) or status == "success" or int(micro or 0) > 0
+    )
+
+
+def _validate_forced_ledger(cost_ledger: Any, micro: int) -> None:
+    if not isinstance(cost_ledger, dict) or not bool(cost_ledger.get("recorded")):
+        raise RuntimeError("forced_ai_cost_ledger_write_unconfirmed")
+    if int(cost_ledger.get("ledger_id") or 0) <= 0:
+        raise RuntimeError("forced_ai_cost_ledger_id_missing")
+    if int(cost_ledger.get("cost_micro_usd") or 0) != int(micro or 0):
+        raise RuntimeError("forced_ai_cost_ledger_amount_mismatch")
+
+
+def _write_cost_ledger(
+    gateway: Any,
+    *,
+    uid: str,
+    provider: str,
+    model: str,
+    purpose: str,
+    status: str,
+    fallback_used: bool,
+    cost_tag: str,
+    micro: int,
+    input_tokens: int,
+    output_tokens: int,
+    actor_staff_id: int | None,
+    metadata: dict[str, Any] | None,
+    triggered_by: Any,
+    staff: dict[str, Any] | None,
+    update_budget_scopes: bool,
+    force_cost_ledger: bool,
+) -> dict[str, Any] | None:
+    """budget_guard.record_cost 一笔;forced 模式写后即验,不合格立刻抛。"""
+    provider_scope = gateway._provider_budget_scope(provider)
+    cumulative_scopes = [
+        scope for scope in ("monthly_total", provider_scope) if scope
+    ]
+    cost_ledger = gateway._budget_guard().record_cost(
+        scope=cost_tag,
+        cron_task=purpose,
+        ai_provider=provider or "unknown",
+        model_name=model or "",
+        cost_usd=float(micro or 0) / 1_000_000,
+        tokens_in=int(input_tokens or 0),
+        tokens_out=int(output_tokens or 0),
+        staff_id=actor_staff_id,
+        metadata={
+            **(metadata or {}),
+            "llm_call_uid": uid,
+            "purpose": purpose,
+            "status": status,
+            "fallback_used": bool(fallback_used),
+        },
+        triggered_by=triggered_by if triggered_by is not None else staff,
+        extra_scopes=cumulative_scopes,
+        optional_scopes=(
+            [cost_tag, *cumulative_scopes] if not force_cost_ledger else ()
+        ),
+        update_budget_scopes=bool(update_budget_scopes),
+    )
+    if force_cost_ledger:
+        _validate_forced_ledger(cost_ledger, micro)
+    return cost_ledger
+
+
 def record_call(
     *,
     provider: str,
@@ -82,97 +236,53 @@ def record_call(
     gateway = _gateway_module()
     if force_cost_ledger and not str(cost_tag or "").strip():
         raise RuntimeError("forced_ai_cost_ledger_scope_missing")
-    # 台账只记精确名:上游漏网的 *-latest 别名在这里兜底映射,原别名进 metadata 留痕。
-    requested_model = str(model or "").strip()
-    model = resolve_model_alias(provider, requested_model)
-    if model != requested_model:
-        metadata = {**(metadata or {}), "model_alias": requested_model}
+    model, metadata = _resolve_ledger_model(provider, model, metadata)
     gateway.ensure_vkpi_product_industry_schema()
     uid = f"llm-{secrets.token_hex(8)}"
     prompt_hash = hashlib.sha256(prompt.encode("utf-8")).hexdigest() if prompt else ""
-    micro = (
-        int(cost_micro_usd)
-        if cost_micro_usd is not None
-        else int(round(int(cost_cents or 0) * 10000))
-    )
-    final_cents = (
-        gateway._micro_usd_to_cents(micro)
-        if cost_micro_usd is not None
-        else int(cost_cents or 0)
-    )
+    micro, final_cents = _ledger_amounts(gateway, cost_cents, cost_micro_usd)
     conn = gateway.get_conn()
     actor_staff_id = _actor_staff_id(conn=conn, gateway=gateway, staff=staff, triggered_by=triggered_by)
-    conn.execute(
-        """
-        INSERT INTO vkpi_llm_calls
-            (call_uid, provider, model, purpose, prompt_hash, input_tokens, output_tokens, cost_cents,
-             cost_micro_usd, latency_ms, status, fallback_used, created_by_staff_id, created_at, metadata_json)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            uid,
-            provider or "unknown",
-            model or "",
-            purpose or "",
-            prompt_hash,
-            int(input_tokens or 0),
-            int(output_tokens or 0),
-            int(final_cents or 0),
-            int(micro or 0),
-            int((metadata or {}).get("latency_ms") or 0)
-            if isinstance(metadata, dict)
-            and (metadata or {}).get("latency_ms") is not None
-            else None,
-            status or "not_configured",
-            bool(fallback_used),
-            actor_staff_id,
-            gateway._utcnow(),
-            gateway._json(metadata),
-        ),
+    _insert_call_row(
+        gateway,
+        conn,
+        uid=uid,
+        provider=provider,
+        model=model,
+        purpose=purpose,
+        prompt_hash=prompt_hash,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        final_cents=final_cents,
+        micro=micro,
+        status=status,
+        fallback_used=fallback_used,
+        actor_staff_id=actor_staff_id,
+        metadata=metadata,
     )
-    conn.commit()
     cost_ledger: dict[str, Any] | None = None
     cost_ledger_error: str | None = None
-    if cost_tag and (
-        bool(force_cost_ledger) or status == "success" or int(micro or 0) > 0
-    ):
+    if _should_write_cost_ledger(cost_tag, force_cost_ledger, status, micro):
         try:
-            provider_scope = gateway._provider_budget_scope(provider)
-            cumulative_scopes = [
-                scope for scope in ("monthly_total", provider_scope) if scope
-            ]
-            cost_ledger = gateway._budget_guard().record_cost(
-                scope=cost_tag,
-                cron_task=purpose,
-                ai_provider=provider or "unknown",
-                model_name=model or "",
-                cost_usd=float(micro or 0) / 1_000_000,
-                tokens_in=int(input_tokens or 0),
-                tokens_out=int(output_tokens or 0),
-                staff_id=actor_staff_id,
-                metadata={
-                    **(metadata or {}),
-                    "llm_call_uid": uid,
-                    "purpose": purpose,
-                    "status": status,
-                    "fallback_used": bool(fallback_used),
-                },
-                triggered_by=triggered_by if triggered_by is not None else staff,
-                extra_scopes=cumulative_scopes,
-                optional_scopes=(
-                    [cost_tag, *cumulative_scopes] if not force_cost_ledger else ()
-                ),
-                update_budget_scopes=bool(update_budget_scopes),
+            cost_ledger = _write_cost_ledger(
+                gateway,
+                uid=uid,
+                provider=provider,
+                model=model,
+                purpose=purpose,
+                status=status,
+                fallback_used=fallback_used,
+                cost_tag=cost_tag,
+                micro=micro,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                actor_staff_id=actor_staff_id,
+                metadata=metadata,
+                triggered_by=triggered_by,
+                staff=staff,
+                update_budget_scopes=update_budget_scopes,
+                force_cost_ledger=force_cost_ledger,
             )
-            if force_cost_ledger:
-                if not isinstance(cost_ledger, dict) or not bool(
-                    cost_ledger.get("recorded")
-                ):
-                    raise RuntimeError("forced_ai_cost_ledger_write_unconfirmed")
-                if int(cost_ledger.get("ledger_id") or 0) <= 0:
-                    raise RuntimeError("forced_ai_cost_ledger_id_missing")
-                if int(cost_ledger.get("cost_micro_usd") or 0) != int(micro or 0):
-                    raise RuntimeError("forced_ai_cost_ledger_amount_mismatch")
         except Exception as exc:
             # 台账异常透明(C1):根因类名 + 首行(脱敏)进日志、进调用行 metadata、进异常信息。
             # 此前只有一句 forced_ai_cost_ledger_write_failed,ForeignKeyViolation(staff_id 不存在)

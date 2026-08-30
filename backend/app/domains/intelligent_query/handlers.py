@@ -13,6 +13,7 @@ from app.domains.intelligent_query.common import (
     localized as _localized,
     missing as _missing,
 )
+from app.domains.intelligent_query import handlers_pool_overview
 from app.domains.intelligent_query.contracts import NormalizedRequest, empty_response
 from app.domains.intelligent_query.intent import extract_project_keyword, extract_video_topic
 from app.domains.intelligent_query.repository import (
@@ -35,314 +36,32 @@ def kol_pool_overview(
     *,
     now: datetime,
 ) -> dict[str, Any]:
+    """KOL Pool 总览壳:守卫两类诚实错误后,聚合装配交给 handlers_pool_overview(行为不变)。"""
     scope_context = actual_scope_context(request, staff)
     response = empty_response(request, intent="kol.pool.overview", scope=scope_context)
     pool_columns = table_columns(conn, "vkpi_kol_pool")
     if not pool_columns:
-        response.update(
-            {
-                "status": "error",
-                "answer": "KOL Pool data source is unavailable." if _is_en(request) else "KOL Pool 数据源不可用。",
-                "degraded_reason": "kol_pool_source_unavailable",
-            }
-        )
-        response["coverage"].update(
-            status="unknown",
-            notes=[_localized(request, "vkpi_kol_pool 数据源不可用。", "vkpi_kol_pool is unavailable.")],
-        )
-        response["missing_fields"].append(
-            _missing(
-                request,
-                "vkpi_kol_pool",
-                "数据源表不可用",
-                "source table is unavailable",
-                "无法核验 KOL 数量",
-                "KOL counts cannot be verified",
-            )
-        )
-        return response
+        return handlers_pool_overview.pool_source_unavailable(response, request)
 
     clauses, params, missing = pool_predicates(conn, request, staff, alias="p")
     unavailable_filters = [
         item for item in missing if str(item.get("field") or "").startswith("filters.")
     ]
     if unavailable_filters:
-        response.update(
-            {
-                "status": "error",
-                "answer": _localized(
-                    request,
-                    "请求的 KOL 筛选字段不可用，本次未返回宽范围或零值结论。",
-                    "A requested KOL filter is unavailable; no broad or zero-valued result was returned.",
-                ),
-                "degraded_reason": "requested_filter_unavailable",
-            }
+        return handlers_pool_overview.requested_filter_unavailable(
+            response, request, unavailable_filters
         )
-        response["missing_fields"] = unavailable_filters
-        response["coverage"].update(
-            status="unknown",
-            notes=[
-                _localized(
-                    request,
-                    "筛选条件未被静默忽略。",
-                    "The requested filter was not silently ignored.",
-                )
-            ],
-        )
-        return response
-    has_duplicate_column = "duplicate_of_id" in pool_columns
-    canonical_count_expr = "COUNT(*)"
-    duplicate_expr = "0"
-    if has_duplicate_column:
-        # pool_predicates has already restricted rows to canonical records.  A
-        # separate raw count below keeps the duplicate fact auditable.
-        duplicate_expr = "(SELECT COUNT(*) FROM vkpi_kol_pool WHERE duplicate_of_id IS NOT NULL)"
-    updated_expr = "MAX(p.updated_at)" if "updated_at" in pool_columns else "NULL"
-    pool_row = as_dict(
-        conn.execute(
-            f"SELECT {canonical_count_expr} AS total_kols, {duplicate_expr} AS duplicate_rows, "
-            f"{updated_expr} AS data_updated_at FROM vkpi_kol_pool p{where_sql(clauses)}",
-            tuple(params),
-        ).fetchone()
+    return handlers_pool_overview.assemble_overview(
+        conn,
+        request,
+        response,
+        scope_context=scope_context,
+        pool_columns=pool_columns,
+        clauses=clauses,
+        params=params,
+        missing=missing,
+        now=now,
     )
-    total_kols = int0(pool_row.get("total_kols"))
-
-    video_kols = 0
-    video_rows = 0
-    video_updated_at: Any = None
-    has_video_source = table_present(conn, "vkpi_kol_video_evidence")
-    if has_video_source:
-        evidence_columns = table_columns(conn, "vkpi_kol_video_evidence")
-        video_clauses = list(clauses)
-        if "is_active" in evidence_columns:
-            video_clauses.append("e.is_active IS NOT FALSE")
-        video_updated_expr = (
-            "MAX(COALESCE(e.scraped_at, e.updated_at, e.created_at))"
-            if {"scraped_at", "updated_at", "created_at"}.issubset(evidence_columns)
-            else ("MAX(e.updated_at)" if "updated_at" in evidence_columns else "NULL")
-        )
-        video_row = as_dict(
-            conn.execute(
-                "SELECT COUNT(DISTINCT e.kol_pool_id) AS video_kols, COUNT(DISTINCT e.id) AS video_rows, "
-                f"{video_updated_expr} AS data_updated_at "
-                "FROM vkpi_kol_video_evidence e JOIN vkpi_kol_pool p ON p.id=e.kol_pool_id"
-                + where_sql(video_clauses),
-                tuple(params),
-            ).fetchone()
-        )
-        video_kols = int0(video_row.get("video_kols"))
-        video_rows = int0(video_row.get("video_rows"))
-        video_updated_at = video_row.get("data_updated_at")
-    else:
-        missing.append(
-            _missing(
-                request,
-                "video_evidence",
-                "视频证据表不可用",
-                "video evidence table is unavailable",
-                "视频覆盖率未知",
-                "video coverage is unknown",
-            )
-        )
-
-    deep_kols: int | None = None
-    if table_present(conn, "vkpi_kol_llm_deep_analysis_results"):
-        deep_clauses = list(clauses) + ["d.status = ?"]
-        deep_row = as_dict(
-            conn.execute(
-                "SELECT COUNT(DISTINCT d.kol_pool_id) AS deep_kols "
-                "FROM vkpi_kol_llm_deep_analysis_results d "
-                "JOIN vkpi_kol_pool p ON p.id=d.kol_pool_id"
-                + where_sql(deep_clauses),
-                (*params, "ready"),
-            ).fetchone()
-        )
-        deep_kols = int0(deep_row.get("deep_kols"))
-    else:
-        missing.append(
-            _missing(
-                request,
-                "deep_analysis",
-                "深度分析表不可用",
-                "deep-analysis table is unavailable",
-                "深度分析覆盖率未知",
-                "deep-analysis coverage is unknown",
-            )
-        )
-
-    response["facts"] = [
-        _fact(
-            "kol.total" if has_duplicate_column else "kol.raw_records",
-            "有效去重 KOL" if has_duplicate_column else "原始 KOL 记录",
-            "Canonical KOLs" if has_duplicate_column else "Raw KOL records",
-            total_kols,
-            request=request,
-            basis=(
-                (
-                    "按请求筛选后，统计 vkpi_kol_pool 中 duplicate_of_id 为空的主记录"
-                    if has_duplicate_column
-                    else "按请求范围统计原始 vkpi_kol_pool 记录；当前无法核验主从去重"
-                ),
-                (
-                    "COUNT(vkpi_kol_pool WHERE duplicate_of_id IS NULL + request filters)"
-                    if has_duplicate_column
-                    else "raw COUNT(vkpi_kol_pool + request filters); canonical column unavailable"
-                ),
-            ),
-            confidence="high" if has_duplicate_column else "medium",
-        )
-    ]
-    if has_video_source:
-        response["facts"].extend(
-            [
-                _fact(
-                    "kol.with_video_evidence",
-                    "有视频证据的 KOL",
-                    "KOLs with video evidence",
-                    video_kols,
-                    request=request,
-                    basis=(
-                        "统计有效视频证据覆盖的 KOL",
-                        "COUNT(DISTINCT active vkpi_kol_video_evidence.kol_pool_id)",
-                    ),
-                ),
-                _fact(
-                    "video.evidence_rows",
-                    "有效视频证据",
-                    "Active video evidence",
-                    video_rows,
-                    request=request,
-                    basis=(
-                        "统计有效且去重的视频证据记录",
-                        "COUNT(DISTINCT active vkpi_kol_video_evidence.id)",
-                    ),
-                ),
-            ]
-        )
-    if deep_kols is not None:
-        response["facts"].append(
-            _fact(
-                "kol.deep_analyzed",
-                "完成深度分析的 KOL",
-                "Deep-analyzed KOLs",
-                deep_kols,
-                request=request,
-                basis=(
-                    "统计完成态深度分析覆盖的去重 KOL",
-                    "COUNT(DISTINCT ready vkpi_kol_llm_deep_analysis_results.kol_pool_id)",
-                ),
-            )
-        )
-    if (
-        scope_context.get("applied_mode") in {"auto", "all", "team"}
-        and not any(request.filters.get(key) for key in ("platform", "country"))
-        and has_duplicate_column
-    ):
-        response["facts"].append(
-            _fact(
-                "kol.merged_duplicates",
-                "已归并重复行",
-                "Merged duplicate rows",
-                int0(pool_row.get("duplicate_rows")),
-                request=request,
-                basis=(
-                    "统计 vkpi_kol_pool 中已归并的重复从记录",
-                    "COUNT(vkpi_kol_pool WHERE duplicate_of_id IS NOT NULL)",
-                ),
-            )
-        )
-
-    coverage_ratio = (
-        round(video_kols / total_kols, 4) if has_video_source and total_kols else None
-    )
-    response["coverage"].update(
-        {
-            "status": "partial" if missing else "complete",
-            "matched_entities": total_kols,
-            "evidence_count": video_rows if has_video_source else 0,
-            "total_scope": total_kols,
-            "analyzed_count": deep_kols,
-            "ratio": coverage_ratio,
-            "notes": [
-                (
-                    "KOL total excludes rows already merged through duplicate_of_id."
-                    if _is_en(request)
-                    else "KOL 总数排除 duplicate_of_id 已归并从行。"
-                )
-                if has_duplicate_column
-                else _localized(
-                    request,
-                    "当前仅能提供原始记录数；主从去重口径不可用。",
-                    "Only a raw record count is available; canonical deduplication is unavailable.",
-                )
-            ],
-        }
-    )
-    response["missing_fields"] = missing
-    response["status"] = "partial" if missing else ("empty" if total_kols == 0 else "ready")
-    if _is_en(request):
-        answer_parts = [
-            (
-                f"There are {total_kols:,} canonical KOLs"
-                if has_duplicate_column
-                else f"There are {total_kols:,} raw KOL records; canonical deduplication is unavailable"
-            )
-        ]
-        if has_video_source:
-            answer_parts.append(f"{video_kols:,} have active video evidence")
-        if deep_kols is not None:
-            answer_parts.append(f"{deep_kols:,} have ready deep analysis")
-        response["answer"] = "; ".join(answer_parts) + "."
-    else:
-        answer_parts = [
-            (
-                f"当前有效去重 KOL 共 {total_kols:,} 个"
-                if has_duplicate_column
-                else f"当前原始 KOL 记录共 {total_kols:,} 条；主从去重口径不可用"
-            )
-        ]
-        if has_video_source:
-            answer_parts.append(f"{video_kols:,} 个已有有效视频证据")
-        if deep_kols is not None:
-            answer_parts.append(f"{deep_kols:,} 个已有完成态深度分析")
-        response["answer"] = "；".join(answer_parts) + "。"
-    response["evidence"] = [
-        {
-            "id": "kol-pool-aggregate",
-            "kind": "aggregate",
-            "source": "vkpi_kol_pool",
-            "title": _localized(
-                request,
-                "KOL Pool 去重汇总" if has_duplicate_column else "KOL Pool 原始记录汇总",
-                "KOL Pool canonical aggregate" if has_duplicate_column else "KOL Pool raw-record aggregate",
-            ),
-            "observed_at": str(pool_row.get("data_updated_at") or "") or None,
-            "confidence": "high" if has_duplicate_column else "medium",
-        }
-    ]
-    if has_video_source:
-        response["evidence"].append(
-            {
-                "id": "kol-video-aggregate",
-                "kind": "aggregate",
-                "source": "vkpi_kol_video_evidence",
-                "title": _localized(request, "有效视频证据覆盖", "Active video evidence coverage"),
-                "observed_at": str(video_updated_at or "") or None,
-                "confidence": "high",
-            }
-        )
-    newest = video_updated_at or pool_row.get("data_updated_at")
-    _freshness(response, request, now=now, updated_at=newest)
-    response["actions"] = [
-        {
-            "type": "navigate",
-            "label": "Open KOL Pool" if _is_en(request) else "打开 KOL Pool",
-            "route": "kol-pool",
-            "params": {"scope": scope_context.get("applied_mode")},
-            "requires_approval": False,
-        }
-    ]
-    return response
 
 
 def _product_topic_terms(conn: Any, topic: str) -> list[str]:

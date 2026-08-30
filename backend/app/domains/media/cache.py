@@ -291,59 +291,29 @@ def cache_video_for_item(
     progress_callback: Any | None = None,
     cancel_check: Any | None = None,
 ) -> dict[str, Any]:
-    platform_key = str(platform or "").strip().lower()
-    video_key = str(video_id or "").strip()
-    if not platform_key or not video_key:
-        return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": "platform_video_id_required"}
-    if platform_key == "youtube":
-        return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "youtube_embed_ok", "platform": platform_key, "video_id": video_key}
-    if platform_key not in ITEM_VIDEO_CACHE_PLATFORMS:
-        return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "platform_not_supported", "platform": platform_key, "video_id": video_key}
+    """单条视频缓存壳:守卫 → 命中 → 失败态 → ytdlp/直链分流 → 抓取(装配在 cache_video_item,行为不变)。"""
+    # lazy import:cache_video_item 顶层引 cache_core 会触发包 __init__ 回环(cycle 棘轮)。
+    from app.domains.media import cache_video_item
 
-    def _maybe_cancel() -> None:
-        if cancel_check is not None and cancel_check():
-            raise VideoCacheCancelled("video cache cancelled")
+    platform_key, video_key = cache_video_item.item_keys(platform, video_id)
+    guard = cache_video_item.guard_payload(platform_key, video_key)
+    if guard is not None:
+        return guard
 
-    def _maybe_progress(pct: int, text: str) -> None:
-        if progress_callback is not None:
-            progress_callback(max(0, min(100, int(pct))), text)
-
-    _maybe_cancel()
+    cache_video_item.cancel_guard(cancel_check)
     existing = cached_video_url_for_item(platform_key, video_key)
     sidecar_path = _video_item_sidecar_path(platform_key, video_key)
     if existing and not force_refresh:
-        sidecar = _read_json_file(sidecar_path) or {}
-        return {
-            "status": "cached",
-            "cached": True,
-            "platform": platform_key,
-            "video_id": video_key,
-            "cached_url": existing,
-            "size_bytes": int(sidecar.get("size_bytes") or 0),
-            "digest": _text(sidecar.get("digest")),
-            "storage_backend": _text(sidecar.get("storage_backend")) or "local",
-            "r2_key": _text(sidecar.get("r2_key")),
-        }
+        return cache_video_item.existing_hit_payload(platform_key, video_key, existing, sidecar_path)
     if not force_refresh:
-        previous_state = video_cache_item_state(platform_key, video_key)
-        if previous_state.get("blocked"):
-            return {
-                "status": "skipped",
-                "cached": False,
-                "skipped": True,
-                "platform": platform_key,
-                "video_id": video_key,
-                "skip_reason": previous_state.get("skip_reason") or "recent_failed_source",
-                "reason": previous_state.get("reason") or "recent_failed_source",
-                "error": previous_state.get("error") or "",
-                "resolver": previous_state.get("resolver") or "",
-                "retry_after_seconds": previous_state.get("retry_after_seconds") or 0,
-            }
+        blocked = cache_video_item.blocked_payload(platform_key, video_key)
+        if blocked is not None:
+            return blocked
 
     normalized = _normalize_video_url(url)
     page_url = _public_video_page_url(url, platform_key) if not normalized else ""
     if page_url:
-        ytdlp_result = _cache_video_for_item_via_ytdlp(
+        return _cache_video_for_item_via_ytdlp(
             platform_key=platform_key,
             video_key=video_key,
             page_url=page_url,
@@ -352,212 +322,18 @@ def cache_video_for_item(
             progress_callback=progress_callback,
             cancel_check=cancel_check,
         )
-        return ytdlp_result
     if not normalized:
         return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "not_allowlisted", "platform": platform_key, "video_id": video_key}
-    normalized_url, host = normalized
-    digest, cache_path, content_type_path = _video_cache_paths(normalized_url)
-    max_file_bytes = _video_max_file_bytes()
-    timeout = max(1, int(timeout or 30))
-    _maybe_progress(10, "视频缓存预检查")
-
-    content_length, head_content_type = _head_content_length(normalized_url, host, timeout=timeout)
-    if content_length and content_length > max_file_bytes:
-        _video_item_failure_sidecar(
-            platform_key=platform_key,
-            video_key=video_key,
-            source_url=normalized_url,
-            status="skipped",
-            reason="too_large",
-            retryable=False,
-            metadata={"content_length": content_length, "max_file_bytes": max_file_bytes},
-        )
-        return {
-            "status": "skipped",
-            "cached": False,
-            "skipped": True,
-            "skip_reason": "too_large",
-            "platform": platform_key,
-            "video_id": video_key,
-            "content_length": content_length,
-        }
-
-    target_free = max(VIDEO_CACHE_GC_RESERVE_BYTES, content_length or max_file_bytes)
-    gc_result = run_video_cache_gc(target_free_bytes=target_free)
-    if gc_result.get("free_bytes", 0) < (content_length or min(max_file_bytes, VIDEO_CACHE_GC_RESERVE_BYTES)):
-        return {
-            "status": "skipped",
-            "cached": False,
-            "skipped": True,
-            "skip_reason": "global_cache_full",
-            "platform": platform_key,
-            "video_id": video_key,
-            "gc": gc_result,
-        }
-
-    if cache_path.exists() and content_type_path.exists() and not force_refresh:
-        content_type = content_type_path.read_text(encoding="utf-8").strip() or "video/mp4"
-        size_bytes = cache_path.stat().st_size
-        cache_url = f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
-        r2_result = _upload_to_r2_if_enabled(
-            media_kind="video",
-            digest=digest,
-            cache_path=cache_path,
-            content_type=content_type,
-            source_url=normalized_url,
-            platform=platform_key,
-            external_id=video_key,
-        )
-        if r2_result.get("cache_url"):
-            cache_url = str(r2_result["cache_url"])
-        sidecar = {
-            "platform": platform_key,
-            "video_id": video_key,
-            "source_url": normalized_url,
-            "digest": digest,
-            "cached_url": cache_url,
-            "content_type": content_type,
-            "size_bytes": size_bytes,
-            "storage_backend": r2_result.get("storage_backend") or "local",
-            "r2_key": r2_result.get("r2_key") or "",
-            "updated_at": _utcnow(),
-        }
-        _record_media_cache_asset(
-            {
-                "media_kind": "video",
-                "platform": platform_key,
-                "external_id": video_key,
-                "source_url": normalized_url,
-                "digest": digest,
-                "checksum": _sha256_file(cache_path),
-                "content_type": content_type,
-                "size_bytes": size_bytes,
-                "storage_backend": sidecar["storage_backend"],
-                "local_path": str(cache_path),
-                "r2_key": sidecar["r2_key"],
-                "cache_url": cache_url,
-                "status": "cached",
-                "metadata": {"gc": gc_result, "r2_status": r2_result.get("r2_status"), "r2_error": r2_result.get("r2_error")},
-            }
-        )
-        _atomic_write_json(sidecar_path, sidecar)
-        return {"status": "cached", "cached": True, **sidecar, "gc": gc_result}
-
-    request = urllib.request.Request(
-        normalized_url,
-        headers={
-            "Accept": "video/mp4,video/*,*/*;q=0.8",
-            "Referer": f"https://{host.split('.', 1)[-1]}/",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
-        },
+    return cache_video_item.fetch_and_cache(
+        platform_key=platform_key,
+        video_key=video_key,
+        normalized=normalized,
+        sidecar_path=sidecar_path,
+        force_refresh=force_refresh,
+        timeout=timeout,
+        progress_callback=progress_callback,
+        cancel_check=cancel_check,
     )
-    tmp_path = cache_path.with_suffix(".part")
-    try:
-        _maybe_cancel()
-        _maybe_progress(30, "下载视频缓存")
-        with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec B310 - host allowlist above.
-            content_type = str(response.headers.get("content-type") or head_content_type or "video/mp4").split(";", 1)[0].strip().lower()
-            if not content_type.startswith("video/") and content_type != "application/octet-stream":
-                _video_item_failure_sidecar(
-                    platform_key=platform_key,
-                    video_key=video_key,
-                    source_url=normalized_url,
-                    status="failed",
-                    reason="not_video",
-                    retryable=False,
-                    metadata={"content_type": content_type},
-                )
-                return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": "not_video"}
-            response_length = int(str(response.headers.get("content-length") or "0") or 0)
-            if response_length and response_length > max_file_bytes:
-                _video_item_failure_sidecar(
-                    platform_key=platform_key,
-                    video_key=video_key,
-                    source_url=normalized_url,
-                    status="skipped",
-                    reason="too_large",
-                    retryable=False,
-                    metadata={"content_length": response_length, "max_file_bytes": max_file_bytes},
-                )
-                return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "too_large", "platform": platform_key, "video_id": video_key, "content_length": response_length}
-            total = 0
-            with tmp_path.open("wb") as handle:
-                while True:
-                    _maybe_cancel()
-                    chunk = response.read(VIDEO_CACHE_CHUNK_BYTES)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > max_file_bytes:
-                        tmp_path.unlink(missing_ok=True)
-                        _video_item_failure_sidecar(
-                            platform_key=platform_key,
-                            video_key=video_key,
-                            source_url=normalized_url,
-                            status="skipped",
-                            reason="too_large",
-                            retryable=False,
-                            metadata={"content_length": total, "max_file_bytes": max_file_bytes},
-                        )
-                        return {"status": "skipped", "cached": False, "skipped": True, "skip_reason": "too_large", "platform": platform_key, "video_id": video_key, "content_length": total}
-                    handle.write(chunk)
-        _maybe_cancel()
-        tmp_path.replace(cache_path)
-        content_type = content_type if content_type.startswith("video/") else "video/mp4"
-        _atomic_write_text(content_type_path, content_type)
-        cache_url = f"{PUBLIC_VIDEO_CACHE_PREFIX}/{digest}"
-        r2_result = _upload_to_r2_if_enabled(
-            media_kind="video",
-            digest=digest,
-            cache_path=cache_path,
-            content_type=content_type,
-            source_url=normalized_url,
-            platform=platform_key,
-            external_id=video_key,
-        )
-        if r2_result.get("cache_url"):
-            cache_url = str(r2_result["cache_url"])
-        sidecar = {
-            "platform": platform_key,
-            "video_id": video_key,
-            "source_url": normalized_url,
-            "digest": digest,
-            "cached_url": cache_url,
-            "content_type": content_type,
-            "size_bytes": cache_path.stat().st_size,
-            "storage_backend": r2_result.get("storage_backend") or "local",
-            "r2_key": r2_result.get("r2_key") or "",
-            "updated_at": _utcnow(),
-        }
-        _record_media_cache_asset(
-            {
-                "media_kind": "video",
-                "platform": platform_key,
-                "external_id": video_key,
-                "source_url": normalized_url,
-                "digest": digest,
-                "checksum": _sha256_file(cache_path),
-                "content_type": content_type,
-                "size_bytes": cache_path.stat().st_size,
-                "storage_backend": sidecar["storage_backend"],
-                "local_path": str(cache_path),
-                "r2_key": sidecar["r2_key"],
-                "cache_url": cache_url,
-                "status": "cached",
-                "metadata": {"gc": gc_result, "r2_status": r2_result.get("r2_status"), "r2_error": r2_result.get("r2_error")},
-            }
-        )
-        _maybe_progress(80, "写入视频 sidecar")
-        _atomic_write_json(sidecar_path, sidecar)
-        return {"status": "cached", "cached": True, **sidecar, "gc": gc_result}
-    except VideoCacheCancelled:
-        tmp_path.unlink(missing_ok=True)
-        sidecar_path.with_suffix(sidecar_path.suffix + ".tmp").unlink(missing_ok=True)
-        raise
-    except Exception as exc:
-        tmp_path.unlink(missing_ok=True)
-        sidecar_path.with_suffix(sidecar_path.suffix + ".tmp").unlink(missing_ok=True)
-        return {"status": "failed", "cached": False, "platform": platform_key, "video_id": video_key, "reason": exc.__class__.__name__, "error": str(exc)[:300]}
 
 
 def cache_local_video_file(

@@ -180,23 +180,20 @@ def _unique(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(str(value) for value in values if str(value)))
 
 
-def evaluate_report_model_policy(
-    data_readiness: DataReadiness | Mapping[str, Any],
-    sources: Iterable[ReportSourceSample | Mapping[str, Any]],
-    *,
-    runtime_availability: Mapping[str, Any] | None = None,
-    readiness_evidence: Mapping[str, Any] | None = None,
-    evidence_as_of: Any = None,
-    allow_runtime_probe: bool = False,
-) -> ReportModelDecision:
-    """Select report model roles only after every evidence gate passes.
+def _note_readiness_blockers(
+    readiness_passed: bool, readiness_blockers: list[str], blockers: list[str]
+) -> None:
+    if not readiness_passed:
+        if readiness_blockers:
+            blockers.extend(f"data_readiness:{item}" for item in readiness_blockers)
+        else:
+            blockers.append("data_readiness:not_ready_or_claimable")
 
-    The function is pure and never invokes a provider. Callers must treat
-    ``provider_calls_allowed`` as the mandatory precondition for any high-order
-    model call.
-    """
-    blockers: list[str] = []
 
+def _data_readiness_gate(
+    data_readiness: DataReadiness | Mapping[str, Any], blockers: list[str]
+) -> tuple[dict[str, Any], bool]:
+    """Readiness gate: returns (checks fragment, passed); appends blockers in order."""
     data_readiness_payload = _readiness_payload(data_readiness)
     readiness_status = _status_value(data_readiness_payload.get("status"))
     readiness_ready = data_readiness_payload.get("ready") is True
@@ -215,12 +212,22 @@ def evaluate_report_model_policy(
     ):
         blockers.append("data_readiness:blockers_invalid")
         readiness_passed = False
-    if not readiness_passed:
-        if readiness_blockers:
-            blockers.extend(f"data_readiness:{item}" for item in readiness_blockers)
-        else:
-            blockers.append("data_readiness:not_ready_or_claimable")
+    _note_readiness_blockers(readiness_passed, readiness_blockers, blockers)
+    check = {
+        "passed": readiness_passed,
+        "status": readiness_status or "missing",
+        "ready": readiness_ready,
+        "claimable": readiness_claimable,
+        "claim_level": str(data_readiness_payload.get("claim_level") or ""),
+        "blockers": readiness_blockers,
+    }
+    return check, readiness_passed
 
+
+def _sources_gate(
+    sources: Iterable[ReportSourceSample | Mapping[str, Any]], blockers: list[str]
+) -> tuple[list[dict[str, Any]], int, bool]:
+    """Source provenance + sample gate: (items, required_count, passed)."""
     source_items: list[dict[str, Any]] = []
     source_keys: set[str] = set()
     if isinstance(sources, (list, tuple)):
@@ -247,10 +254,13 @@ def evaluate_report_model_policy(
         if not check["sample_ready"]:
             blockers.append(f"samples:{source.key}:observed<{source.minimum}")
         source_items.append(check)
-
     sources_passed = bool(source_items) and all(
         item.get("status") == "ready" for item in source_items
     )
+    return source_items, len(raw_sources), sources_passed
+
+
+def _registry_gate(blockers: list[str]) -> tuple[dict[str, bool], bool]:
     registry_items = {
         REPORT_PRIMARY_MODEL: is_selectable_model(REPORT_PRIMARY_MODEL),
         REPORT_CHALLENGER_MODEL: is_selectable_model(REPORT_CHALLENGER_MODEL),
@@ -258,69 +268,147 @@ def evaluate_report_model_policy(
     for binding, selectable in registry_items.items():
         if not selectable:
             blockers.append(f"model_registry:{binding}:not_selectable")
-    registry_passed = all(registry_items.values())
+    return registry_items, all(registry_items.values())
 
-    environment_evidence, evidence_source = readiness_evidence_from_environment()
-    evidence_map = readiness_evidence if readiness_evidence is not None else environment_evidence
+
+def _runtime_item(
+    exact_binding: str,
+    *,
+    runtime_availability: Mapping[str, Any] | None,
+    configured_providers: Mapping[str, Any],
+    evidence_map: Mapping[str, Any] | None,
+    evidence_as_of: Any,
+) -> tuple[dict[str, Any], str, str, dict[str, Any]]:
+    """One exact binding: (runtime item, static_gate_reason, readiness_gate_reason, readiness)."""
+    provider, model_id = split_binding(exact_binding)
+    resolved = resolve_model_binding(
+        provider,
+        model_id,
+        runtime_availability=runtime_availability,
+    )
+    static_gate_reason = resolved.blocker(
+        require_registered=True,
+        require_runtime_verified=False,
+        require_pricing=True,
+    )
+    model_readiness = assess_model_readiness(
+        resolved,
+        configured=bool(configured_providers.get(provider)),
+        evidence=(evidence_map or {}).get(exact_binding)
+        if isinstance(evidence_map, Mapping)
+        else None,
+        as_of=evidence_as_of,
+    )
+    readiness_gate_reason = (
+        ""
+        if model_readiness["production_ready"]
+        else "readiness_not_production_ready"
+    )
+    gate_reason = static_gate_reason or readiness_gate_reason
+    resolved_payload = resolved.to_dict()
+    resolved_payload.pop("runtime_availability", None)
+    resolved_payload.pop("runtime_evidence_source", None)
+    legacy_execution_state = {
+        "verified": "operator_allowlisted",
+        "unavailable": "operator_blocklisted",
+        "not_checked": "not_configured",
+    }.get(resolved.runtime_availability, "not_configured")
+    item = {
+        **resolved_payload,
+        "legacy_runtime_execution_gate": legacy_execution_state,
+        "legacy_runtime_availability_is_production_evidence": False,
+        "readiness": model_readiness,
+        "configured": model_readiness["configured"],
+        "probed": model_readiness["probed"],
+        "evaluated": model_readiness["evaluated"],
+        "production_ready": model_readiness["production_ready"],
+        "availability": model_readiness["availability"],
+        "claim_status": model_readiness["claim_status"],
+        "gate_reason": gate_reason or "ready",
+        "passed": not gate_reason,
+        "runtime_probe_ready": not static_gate_reason,
+    }
+    return item, static_gate_reason, readiness_gate_reason, model_readiness
+
+
+def _runtime_gate(
+    blockers: list[str],
+    *,
+    runtime_availability: Mapping[str, Any] | None,
+    evidence_map: Mapping[str, Any] | None,
+    evidence_as_of: Any,
+    allow_runtime_probe: bool,
+) -> tuple[dict[str, dict[str, Any]], bool, bool]:
+    """Runtime gate over both report bindings: (items, probe_ready, passed)."""
     configured_providers = configured_providers_from_environment()
     runtime_items: dict[str, dict[str, Any]] = {}
     runtime_probe_ready = True
     for exact_binding in (REPORT_PRIMARY_MODEL, REPORT_CHALLENGER_MODEL):
-        provider, model_id = split_binding(exact_binding)
-        resolved = resolve_model_binding(
-            provider,
-            model_id,
+        item, static_gate_reason, readiness_gate_reason, model_readiness = _runtime_item(
+            exact_binding,
             runtime_availability=runtime_availability,
+            configured_providers=configured_providers,
+            evidence_map=evidence_map,
+            evidence_as_of=evidence_as_of,
         )
-        static_gate_reason = resolved.blocker(
-            require_registered=True,
-            require_runtime_verified=False,
-            require_pricing=True,
-        )
-        model_readiness = assess_model_readiness(
-            resolved,
-            configured=bool(configured_providers.get(provider)),
-            evidence=(evidence_map or {}).get(exact_binding)
-            if isinstance(evidence_map, Mapping)
-            else None,
-            as_of=evidence_as_of,
-        )
-        readiness_gate_reason = (
-            ""
-            if model_readiness["production_ready"]
-            else "readiness_not_production_ready"
-        )
-        gate_reason = static_gate_reason or readiness_gate_reason
-        resolved_payload = resolved.to_dict()
-        resolved_payload.pop("runtime_availability", None)
-        resolved_payload.pop("runtime_evidence_source", None)
-        legacy_execution_state = {
-            "verified": "operator_allowlisted",
-            "unavailable": "operator_blocklisted",
-            "not_checked": "not_configured",
-        }.get(resolved.runtime_availability, "not_configured")
-        runtime_items[exact_binding] = {
-            **resolved_payload,
-            "legacy_runtime_execution_gate": legacy_execution_state,
-            "legacy_runtime_availability_is_production_evidence": False,
-            "readiness": model_readiness,
-            "configured": model_readiness["configured"],
-            "probed": model_readiness["probed"],
-            "evaluated": model_readiness["evaluated"],
-            "production_ready": model_readiness["production_ready"],
-            "availability": model_readiness["availability"],
-            "claim_status": model_readiness["claim_status"],
-            "gate_reason": gate_reason or "ready",
-            "passed": not gate_reason,
-            "runtime_probe_ready": not static_gate_reason,
-        }
+        runtime_items[exact_binding] = item
         if static_gate_reason:
             runtime_probe_ready = False
-            blockers.append(f"model_runtime:{exact_binding}:{gate_reason}")
+            blockers.append(f"model_runtime:{exact_binding}:{item['gate_reason']}")
         elif readiness_gate_reason and not allow_runtime_probe:
             detail = ",".join(model_readiness["failure_reasons"]) or readiness_gate_reason
             blockers.append(f"model_readiness:{exact_binding}:{detail}")
     runtime_passed = all(bool(item.get("passed")) for item in runtime_items.values())
+    return runtime_items, runtime_probe_ready, runtime_passed
+
+
+def _role_selection(allowed: bool, runtime_passed: bool) -> dict[str, Any]:
+    return {
+        "mode": ADVANCED_MODEL_MODE if allowed else DETERMINISTIC_DESCRIPTIVE_MODE,
+        "claim_level": (
+            "validated_analysis"
+            if allowed and runtime_passed
+            else "runtime_verification_pending"
+            if allowed
+            else "descriptive_only"
+        ),
+        "primary_model": REPORT_PRIMARY_MODEL if allowed else None,
+        "challenger_model": REPORT_CHALLENGER_MODEL if allowed else None,
+        "judge_candidates": REPORT_JUDGE_CANDIDATES if allowed else (),
+        "selected_models": (
+            (REPORT_PRIMARY_MODEL, REPORT_CHALLENGER_MODEL) if allowed else ()
+        ),
+    }
+
+
+def evaluate_report_model_policy(
+    data_readiness: DataReadiness | Mapping[str, Any],
+    sources: Iterable[ReportSourceSample | Mapping[str, Any]],
+    *,
+    runtime_availability: Mapping[str, Any] | None = None,
+    readiness_evidence: Mapping[str, Any] | None = None,
+    evidence_as_of: Any = None,
+    allow_runtime_probe: bool = False,
+) -> ReportModelDecision:
+    """Select report model roles only after every evidence gate passes.
+
+    The function is pure and never invokes a provider. Callers must treat
+    ``provider_calls_allowed`` as the mandatory precondition for any high-order
+    model call.
+    """
+    blockers: list[str] = []
+    readiness_check, readiness_passed = _data_readiness_gate(data_readiness, blockers)
+    source_items, required_count, sources_passed = _sources_gate(sources, blockers)
+    registry_items, registry_passed = _registry_gate(blockers)
+    environment_evidence, evidence_source = readiness_evidence_from_environment()
+    evidence_map = readiness_evidence if readiness_evidence is not None else environment_evidence
+    runtime_items, runtime_probe_ready, runtime_passed = _runtime_gate(
+        blockers,
+        runtime_availability=runtime_availability,
+        evidence_map=evidence_map,
+        evidence_as_of=evidence_as_of,
+        allow_runtime_probe=allow_runtime_probe,
+    )
 
     blocker_tuple = _unique(blockers)
     base_allowed = readiness_passed and sources_passed and registry_passed
@@ -332,23 +420,15 @@ def evaluate_report_model_policy(
         and runtime_gate_passed
         and not blocker_tuple
     )
-    selected_models = (
-        (REPORT_PRIMARY_MODEL, REPORT_CHALLENGER_MODEL) if allowed else ()
-    )
+    roles = _role_selection(allowed, runtime_passed)
     return ReportModelDecision(
-        mode=ADVANCED_MODEL_MODE if allowed else DETERMINISTIC_DESCRIPTIVE_MODE,
+        mode=roles["mode"],
         provider_calls_allowed=allowed,
-        claim_level=(
-            "validated_analysis"
-            if allowed and runtime_passed
-            else "runtime_verification_pending"
-            if allowed
-            else "descriptive_only"
-        ),
-        primary_model=REPORT_PRIMARY_MODEL if allowed else None,
-        challenger_model=REPORT_CHALLENGER_MODEL if allowed else None,
-        judge_candidates=REPORT_JUDGE_CANDIDATES if allowed else (),
-        selected_models=selected_models,
+        claim_level=roles["claim_level"],
+        primary_model=roles["primary_model"],
+        challenger_model=roles["challenger_model"],
+        judge_candidates=roles["judge_candidates"],
+        selected_models=roles["selected_models"],
         blockers=blocker_tuple,
         checks={
             "evaluation_order": [
@@ -359,17 +439,10 @@ def evaluate_report_model_policy(
                 "model_runtime",
                 "model_evaluation",
             ],
-            "data_readiness": {
-                "passed": readiness_passed,
-                "status": readiness_status or "missing",
-                "ready": readiness_ready,
-                "claimable": readiness_claimable,
-                "claim_level": str(data_readiness_payload.get("claim_level") or ""),
-                "blockers": readiness_blockers,
-            },
+            "data_readiness": readiness_check,
             "sources": {
                 "passed": sources_passed,
-                "required_count": len(raw_sources),
+                "required_count": required_count,
                 "items": source_items,
             },
             "model_registry": {

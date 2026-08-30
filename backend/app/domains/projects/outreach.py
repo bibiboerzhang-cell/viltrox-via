@@ -173,20 +173,7 @@ def _template_sow(positioning: str, persona: str, creator_count: int) -> dict[st
     }
 
 
-def generate_outreach(
-    kol_pool_ids: list[Any],
-    *,
-    brief: dict[str, Any] | None = None,
-    product: dict[str, Any] | None = None,
-    staff: dict[str, Any] | None = None,
-    preferred_provider: str | None = None,
-) -> dict[str, Any]:
-    """生成 N 封合作话术 + SOW 草案。预算闸内置于 gateway;rule_v0 回退则给确定性模板。"""
-    brief = brief or {}
-    product = product or {}
-    positioning = _text(brief.get("product_positioning")) or _text(product.get("product_name"))
-    persona = _text(brief.get("target_persona")) or _text(brief.get("query_text"))
-
+def _dedupe_requested_ids(kol_pool_ids: list[Any]) -> list[int]:
     ids: list[int] = []
     seen: set[int] = set()
     for value in kol_pool_ids or []:
@@ -194,21 +181,10 @@ def generate_outreach(
         if kid and kid not in seen:
             seen.add(kid)
             ids.append(kid)
+    return ids
 
-    truncated = len(ids) > _MAX_CREATORS
-    capped_ids = ids[:_MAX_CREATORS]
-    creators, missing = _load_creators(capped_ids)
-    if not creators:
-        return {
-            "ok": False,
-            "reason": "no_resolvable_creators",
-            "llm_used": False,
-            "messages": [],
-            "sow_draft": {},
-            "missing_kol_pool_ids": missing,
-            "truncated": truncated,
-        }
 
+def _outreach_prompt(creators: list[dict[str, Any]], positioning: str, persona: str) -> str:
     creator_lines = "\n".join(
         f"- id={c.get('id')} | {_creator_label(c)} | platform={_text(c.get('platform')) or 'unknown'} "
         f"| topic={_text(c.get('primary_topic')) or 'n/a'} | followers={c.get('followers') if c.get('followers') is not None else 'n/a'}"
@@ -233,9 +209,20 @@ Return JSON with keys:
   sow_draft: {{ "scope": string, "deliverables": string[], "timeline": string, "usage_rights": string, "compensation": string }}
 For compensation, output a neutral placeholder like "to be discussed" — never commit a number.
 """
+    return prompt
 
-    provider, model = _outreach_binding(preferred_provider)
-    expected_ids = {int(c["id"]) for c in creators}
+
+def _request_outreach_json(
+    prompt: str,
+    *,
+    provider: str,
+    model: str,
+    creators: list[dict[str, Any]],
+    expected_ids: set[int],
+    brief: dict[str, Any],
+    positioning: str,
+    staff: dict[str, Any] | None,
+) -> dict[str, Any]:
     try:
         response = llm_production.generate_json(
             prompt,
@@ -267,6 +254,13 @@ For compensation, output a neutral placeholder like "to be discussed" — never 
         response = {"status": "unavailable", "provider": "rule_v0", "model": "", "reason": "provider_exception"}
     if not isinstance(response, dict):
         response = {"status": "unavailable", "provider": "rule_v0", "model": "", "reason": "invalid_gateway_response"}
+    return response
+
+
+def _accepted_llm_payload(
+    response: dict[str, Any], provider: str, model: str, expected_ids: set[int]
+) -> tuple[str, str, bool, dict[str, Any]]:
+    """(response_provider, response_model, llm_candidate, parsed):只信精确 provider+model 的合格 JSON。"""
     response_provider = _text(response.get("provider")).lower()
     response_model = _text(response.get("model"))
     candidate = response.get("json") if isinstance(response, dict) else None
@@ -277,34 +271,58 @@ For compensation, output a neutral placeholder like "to be discussed" — never 
         and _valid_outreach_payload(candidate, expected_ids)
     )
     parsed = candidate if llm_candidate and isinstance(candidate, dict) else {}
+    return response_provider, response_model, llm_candidate, parsed
 
+
+def _llm_message(raw: Any, by_id: dict[Any, dict[str, Any]]) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    kid = _int_or_none(raw.get("kol_pool_id"))
+    c = by_id.get(kid) if kid else None
+    subject = _text(raw.get("subject"))
+    bodytext = _text(raw.get("body"))
+    if not bodytext:
+        return None
+    return {
+        "kol_pool_id": kid,
+        "handle": _text((c or {}).get("handle")),
+        "display_name": _creator_label(c) if c else "",
+        "platform": _text((c or {}).get("platform")),
+        "subject": subject or f"Viltrox collaboration invite",
+        "body": bodytext,
+        "personalized": True,
+    }
+
+
+def _assemble_messages(
+    parsed: dict[str, Any],
+    llm_candidate: bool,
+    creators: list[dict[str, Any]],
+    positioning: str,
+    persona: str,
+) -> list[dict[str, Any]]:
     by_id = {c["id"]: c for c in creators}
     messages: list[dict[str, Any]] = []
     if llm_candidate and isinstance(parsed.get("messages"), list):
         for raw in parsed["messages"]:
-            if not isinstance(raw, dict):
-                continue
-            kid = _int_or_none(raw.get("kol_pool_id"))
-            c = by_id.get(kid) if kid else None
-            subject = _text(raw.get("subject"))
-            bodytext = _text(raw.get("body"))
-            if not bodytext:
-                continue
-            messages.append({
-                "kol_pool_id": kid,
-                "handle": _text((c or {}).get("handle")),
-                "display_name": _creator_label(c) if c else "",
-                "platform": _text((c or {}).get("platform")),
-                "subject": subject or f"Viltrox collaboration invite",
-                "body": bodytext,
-                "personalized": True,
-            })
+            message = _llm_message(raw, by_id)
+            if message is not None:
+                messages.append(message)
     # LLM 缺漏的创作者(或整体 fallback)→ 用确定性模板补齐,保证每个 KOL 都有话术。
     covered = {m["kol_pool_id"] for m in messages if m.get("kol_pool_id")}
     for c in creators:
         if c["id"] not in covered:
             messages.append(_template_message(c, positioning, persona))
+    return messages
 
+
+def _assemble_sow(
+    parsed: dict[str, Any],
+    llm_candidate: bool,
+    positioning: str,
+    persona: str,
+    creator_count: int,
+) -> dict[str, Any]:
     sow_draft: dict[str, Any] = {}
     if llm_candidate and isinstance(parsed.get("sow_draft"), dict):
         s = parsed["sow_draft"]
@@ -318,11 +336,64 @@ For compensation, output a neutral placeholder like "to be discussed" — never 
             "is_draft": True,
         }
     if not sow_draft.get("scope"):
-        sow_draft = _template_sow(positioning, persona, len(creators))
+        sow_draft = _template_sow(positioning, persona, creator_count)
+    return sow_draft
 
-    llm_used = any(bool(message.get("personalized")) for message in messages) or bool(
+
+def _llm_actually_used(
+    messages: list[dict[str, Any]], llm_candidate: bool, parsed: dict[str, Any]
+) -> bool:
+    return any(bool(message.get("personalized")) for message in messages) or bool(
         llm_candidate and isinstance(parsed.get("sow_draft"), dict) and _text(parsed["sow_draft"].get("scope"))
     )
+
+
+def generate_outreach(
+    kol_pool_ids: list[Any],
+    *,
+    brief: dict[str, Any] | None = None,
+    product: dict[str, Any] | None = None,
+    staff: dict[str, Any] | None = None,
+    preferred_provider: str | None = None,
+) -> dict[str, Any]:
+    """生成 N 封合作话术 + SOW 草案。预算闸内置于 gateway;rule_v0 回退则给确定性模板。"""
+    brief = brief or {}
+    product = product or {}
+    positioning = _text(brief.get("product_positioning")) or _text(product.get("product_name"))
+    persona = _text(brief.get("target_persona")) or _text(brief.get("query_text"))
+
+    ids = _dedupe_requested_ids(kol_pool_ids)
+    truncated = len(ids) > _MAX_CREATORS
+    creators, missing = _load_creators(ids[:_MAX_CREATORS])
+    if not creators:
+        return {
+            "ok": False,
+            "reason": "no_resolvable_creators",
+            "llm_used": False,
+            "messages": [],
+            "sow_draft": {},
+            "missing_kol_pool_ids": missing,
+            "truncated": truncated,
+        }
+
+    provider, model = _outreach_binding(preferred_provider)
+    expected_ids = {int(c["id"]) for c in creators}
+    response = _request_outreach_json(
+        _outreach_prompt(creators, positioning, persona),
+        provider=provider,
+        model=model,
+        creators=creators,
+        expected_ids=expected_ids,
+        brief=brief,
+        positioning=positioning,
+        staff=staff,
+    )
+    response_provider, response_model, llm_candidate, parsed = _accepted_llm_payload(
+        response, provider, model, expected_ids
+    )
+    messages = _assemble_messages(parsed, llm_candidate, creators, positioning, persona)
+    sow_draft = _assemble_sow(parsed, llm_candidate, positioning, persona, len(creators))
+    llm_used = _llm_actually_used(messages, llm_candidate, parsed)
 
     return {
         "ok": True,
