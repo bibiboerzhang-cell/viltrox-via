@@ -13,10 +13,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import re
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
@@ -658,7 +656,18 @@ def validate_human_labels(
     *,
     manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Validate label provenance, domain values, uniqueness, and manifest ties."""
+    """Validate label provenance, domain values, uniqueness, and manifest ties.
+
+    Row-level rules live in :mod:`search_relevance_label_checks` as a check
+    registry; each check owns its error codes and the registry order matches
+    the historical issue order (imported lazily to avoid a module cycle).
+    """
+
+    from app.domains.kol.search_relevance_label_checks import (
+        LABEL_ROW_CHECKS,
+        build_label_row_context,
+        normalized_label_row,
+    )
 
     manifest_index, issues = _manifest_index(manifest)
     normalized: list[dict[str, Any]] = []
@@ -671,129 +680,17 @@ def validate_human_labels(
         if _text(raw.get("label_status")) == "unlabeled_template":
             unlabeled_templates += 1
             continue
-        query = _safe_mapping(raw.get("query"))
-        candidate = _safe_mapping(raw.get("candidate"))
-        query_id = _text(query.get("id"))
-        candidate_id = _text(candidate.get("id"))
-        key = (query_id, candidate_id)
-        review_role = _text(raw.get("review_role")).lower()
-        review_slot = _text(raw.get("review_slot"))
-        slot_key = (query_id, candidate_id, review_role, review_slot)
-        row_issues: list[str] = []
-        if _text(raw.get("schema_version")) != LABEL_SCHEMA_VERSION:
-            row_issues.append("invalid_label_schema_version")
-        if _text(raw.get("label_status")) != "reviewed":
-            row_issues.append("label_status_not_reviewed")
-        if _text(raw.get("label_source")) != HUMAN_LABEL_SOURCE:
-            row_issues.append("label_source_not_human_review")
-        labeler = _text(raw.get("labeler"))
-        if not labeler:
-            row_issues.append("missing_labeler")
-        elif not re.fullmatch(r"human:[a-z0-9][a-z0-9._-]{2,63}", labeler, flags=re.IGNORECASE):
-            row_issues.append("labeler_must_use_human_reviewer_id")
-        elif any(
-            token in PROHIBITED_LABELERS
-            for token in re.findall(r"[a-z0-9]+", labeler.casefold())
-        ):
-            row_issues.append("non_human_labeler_forbidden")
-        reviewed_at = _text(raw.get("reviewed_at"))
-        try:
-            reviewed_at_value = datetime.fromisoformat(reviewed_at.replace("Z", "+00:00"))
-        except ValueError:
-            reviewed_at_value = None
-        if reviewed_at_value is None or reviewed_at_value.tzinfo is None:
-            row_issues.append("reviewed_at_must_be_timezone_iso8601")
-        if not query_id:
-            row_issues.append("missing_query_id")
-        if not candidate_id:
-            row_issues.append("missing_candidate_id")
-        if review_role not in {"independent", "adjudication"}:
-            row_issues.append("invalid_review_role")
-        elif review_role == "independent" and review_slot not in {"A", "B"}:
-            row_issues.append("independent_review_slot_must_be_a_or_b")
-        elif review_role == "adjudication" and review_slot != "adjudication":
-            row_issues.append("adjudication_review_slot_invalid")
-        if slot_key in seen_slots:
-            row_issues.append("duplicate_candidate_review_slot")
-        seen_slots.add(slot_key)
-        expected = manifest_index.get(key)
-        if expected is None:
-            row_issues.append("candidate_not_in_manifest")
-        if _text(query.get("suite_version")) != _text(manifest.get("query_suite_version")):
-            row_issues.append("query_suite_version_mismatch")
-        expected_query = next(
-            (
-                row
-                for row in manifest.get("queries") or []
-                if isinstance(row, Mapping) and _text(row.get("query_id")) == query_id
-            ),
-            {},
+        context = build_label_row_context(
+            raw,
+            manifest=manifest,
+            manifest_index=manifest_index,
+            seen_slots=seen_slots,
         )
-        if _text(query.get("text")) != _text(expected_query.get("query_text")):
-            row_issues.append("query_text_mismatch")
-        if expected is not None:
-            try:
-                candidate_rank = int(candidate.get("rank"))
-            except (TypeError, ValueError):
-                candidate_rank = 0
-            if candidate_rank != int(expected.get("rank") or 0):
-                row_issues.append("candidate_rank_mismatch")
-            if _text(candidate.get("match_tier")) != _text(expected.get("match_tier")):
-                row_issues.append("candidate_match_tier_mismatch")
-            if _text(candidate.get("manifest_fingerprint")) != _text(
-                manifest.get("manifest_fingerprint")
-            ):
-                row_issues.append("manifest_fingerprint_mismatch")
-        unable_to_judge = raw.get("unable_to_judge")
-        if not isinstance(unable_to_judge, bool):
-            row_issues.append("unable_to_judge_must_be_boolean")
-            unable_to_judge = False
-        relevance = raw.get("relevance")
-        vertical_fit = raw.get("vertical_fit")
-        evidence_sufficient = raw.get("evidence_sufficient")
-        if unable_to_judge:
-            if any(value is not None for value in (relevance, vertical_fit, evidence_sufficient)):
-                row_issues.append("unable_to_judge_requires_null_judgments")
-        else:
-            if (
-                isinstance(relevance, bool)
-                or not isinstance(relevance, int)
-                or relevance not in {0, 1, 2, 3}
-            ):
-                row_issues.append("relevance_must_be_integer_0_to_3")
-            if not isinstance(vertical_fit, bool):
-                row_issues.append("vertical_fit_must_be_boolean")
-            if not isinstance(evidence_sufficient, bool):
-                row_issues.append("evidence_sufficient_must_be_boolean")
-        notes = raw.get("notes")
-        if notes is None:
-            notes = ""
-        if not isinstance(notes, str):
-            row_issues.append("notes_must_be_string")
-        elif len(notes) > 4000:
-            row_issues.append("notes_too_long")
-        if unable_to_judge and not _text(notes):
-            row_issues.append("notes_required_when_unable_to_judge")
+        row_issues = [code for check in LABEL_ROW_CHECKS for code in check(context)]
         if row_issues:
             issues.extend(_issue(code, row=row_number) for code in row_issues)
             continue
-        normalized.append(
-            {
-                "query_id": query_id,
-                "candidate_id": candidate_id,
-                "rank": int(candidate.get("rank")),
-                "match_tier": _text(candidate.get("match_tier")),
-                "labeler": labeler,
-                "reviewed_at": reviewed_at,
-                "review_role": review_role,
-                "review_slot": review_slot,
-                "unable_to_judge": bool(unable_to_judge),
-                "relevance": None if unable_to_judge else int(relevance),
-                "vertical_fit": None if unable_to_judge else bool(vertical_fit),
-                "evidence_sufficient": None if unable_to_judge else bool(evidence_sufficient),
-                "notes": notes,
-            }
-        )
+        normalized.append(normalized_label_row(context))
     return {
         "valid_labels": normalized,
         "issues": issues,

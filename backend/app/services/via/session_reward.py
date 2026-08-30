@@ -268,6 +268,209 @@ async def _record_shadow_eval(
     )
 
 
+def _resolve_reward_event_value(event_value: float | None, trace_payload: dict[str, Any]) -> float:
+    try:
+        return float(
+            event_value
+            if event_value is not None
+            else trace_payload.get("value")
+            or trace_payload.get("order_total")
+            or trace_payload.get("revenue_total")
+            or 0.0
+        )
+    except Exception:
+        return 0.0
+
+
+async def _deduped_reward_trace_response(
+    *,
+    session_key: str,
+    session: dict[str, Any],
+    trace_source: dict[str, Any],
+    raw_event_type: str,
+    target_decision_id: str,
+) -> dict[str, Any] | None:
+    if not trace_source["idempotency_key"] or raw_event_type not in _REWARD_TRACE_DEDUPE_EVENTS:
+        return None
+    existing = await asyncio.to_thread(
+        get_via_reward_trace_by_idempotency,
+        session_key,
+        trace_source["idempotency_key"],
+    )
+    if not existing:
+        return None
+    resolved_decision_id = target_decision_id or str(existing.get("decision_id") or "")
+    decision_traces = await asyncio.to_thread(
+        list_via_reward_traces,
+        session_key,
+        decision_id=resolved_decision_id,
+        limit=64,
+    )
+    trace_summary = summarize_via_reward_traces(decision_traces)
+    latest_outcome = await asyncio.to_thread(
+        get_latest_via_outcome_record,
+        session_key,
+        resolved_decision_id,
+    )
+    return {
+        "trace": existing,
+        "summary": trace_summary,
+        "decision_id": resolved_decision_id,
+        "outcome": latest_outcome,
+        "session": session,
+        "deduped": True,
+    }
+
+
+async def _insert_session_reward_trace(
+    *,
+    session_key: str,
+    session: dict[str, Any],
+    target_decision_id: str,
+    raw_event_type: str,
+    trace_source: dict[str, Any],
+    resolved_value: float,
+    trace_payload: dict[str, Any],
+) -> dict[str, Any]:
+    return await asyncio.to_thread(
+        insert_via_reward_trace,
+        session_key=session_key,
+        decision_id=target_decision_id,
+        user_id=int(session.get("user_id") or 0),
+        event_type=raw_event_type,
+        surface=trace_source["surface"],
+        source=trace_source["source"],
+        origin=trace_source["origin"],
+        product_key=trace_source["product_key"],
+        event_value=resolved_value,
+        idempotency_key=trace_source["idempotency_key"],
+        event_payload=trace_payload,
+    )
+
+
+async def _apply_reward_outcome_merge(
+    latest_outcome: dict[str, Any] | None,
+    trace_summary: dict[str, Any],
+) -> dict[str, Any]:
+    if not latest_outcome:
+        return {}
+    merged = merge_via_reward_trace_summary(
+        outcome=latest_outcome,
+        reward_trace_summary=trace_summary,
+    )
+    return await asyncio.to_thread(
+        update_via_outcome_record,
+        str(latest_outcome.get("outcome_id") or ""),
+        clicked_product=bool(merged.get("clicked_product")),
+        added_to_cart=bool(merged.get("added_to_cart")),
+        purchased=bool(merged.get("purchased")),
+        thumb_feedback=int(merged.get("thumb_feedback") or 0),
+        reward_score=float(merged.get("reward_score") or 0.0),
+        outcome_payload=merged.get("outcome_payload") or {},
+    )
+
+
+def _resolve_reward_decision_stats(
+    decisions: list[dict[str, Any]],
+    *,
+    target_decision_id: str,
+    trace_source: dict[str, Any],
+    current_surface: str,
+    session: dict[str, Any],
+) -> tuple[str, float, float, str]:
+    for candidate in decisions:
+        if str(candidate.get("decision_id") or "") != target_decision_id:
+            continue
+        chosen = dict(candidate.get("chosen_action") or {})
+        provider = str(chosen.get("provider") or "").strip().lower()
+        latency_ms = float(candidate.get("latency_ms") or 0.0)
+        cost_estimate = float(candidate.get("cost_estimate") or 0.0)
+        route_bucket = _routing_bucket_key(candidate.get("state_snapshot") or {}, trace_source["surface"] or current_surface or str(session.get("current_surface") or "upload"))
+        return provider, latency_ms, cost_estimate, route_bucket
+    return "", 0.0, 0.0, ""
+
+
+async def _upsert_reward_routing_stat(
+    *,
+    provider: str,
+    route_bucket: str,
+    raw_event_type: str,
+    trace: dict[str, Any],
+    trace_source: dict[str, Any],
+    trace_summary: dict[str, Any],
+    updated_outcome: dict[str, Any],
+    latest_outcome: dict[str, Any] | None,
+    latency_ms: float,
+    cost_estimate: float,
+) -> None:
+    if not provider or not route_bucket:
+        return
+    reward_score = float((updated_outcome or latest_outcome or {}).get("reward_score") or trace_summary.get("reward_delta") or 0.0)
+    positive_signal = 1 if raw_event_type in {"click", "link_click", "open_link", "compare", "compare_open", "add_to_cart", "cart_add", "purchase", "checkout_success", "affiliate_order", "shopify_order", "thumb_up"} else 0
+    guard_fail = 1 if raw_event_type == "thumb_down" else 0
+    await asyncio.to_thread(
+        upsert_via_routing_provider_stat,
+        bucket_key=route_bucket,
+        provider=provider,
+        exposure_increment=1 if raw_event_type == "click" else 0,
+        success_increment=positive_signal,
+        reward_delta=reward_score,
+        guard_fail_increment=guard_fail,
+        latency_ms=latency_ms,
+        cost_estimate=cost_estimate,
+        last_outcome_at=str(trace.get("created_at") or ""),
+        metrics={"event_type": raw_event_type, "surface": trace_source["surface"], "origin": trace_source["origin"]},
+    )
+
+
+def _record_reward_feedback_signal(
+    *,
+    session_key: str,
+    session: dict[str, Any],
+    raw_event_type: str,
+    target_decision_id: str,
+    resolved_value: float,
+    trace_source: dict[str, Any],
+    trace_summary: dict[str, Any],
+) -> None:
+    record_feedback_signal(
+        source_type="via_reward_trace",
+        source_id=session_key,
+        event_type=f"reward_{raw_event_type}",
+        actor_role="user",
+        user_id=int(session.get("user_id") or 0),
+        payload={
+            "decision_id": target_decision_id,
+            "event_type": raw_event_type,
+            "event_value": resolved_value,
+            "product_key": trace_source["product_key"],
+            "trace_summary": trace_summary,
+        },
+    )
+
+
+async def _touch_reward_trace_session(
+    *,
+    session_key: str,
+    session: dict[str, Any],
+    raw_event_type: str,
+    trace: dict[str, Any],
+    trace_summary: dict[str, Any],
+    trace_source: dict[str, Any],
+    current_surface: str,
+) -> dict[str, Any]:
+    session_state = dict(session.get("state") or {})
+    session_state["last_reward_trace_type"] = raw_event_type
+    session_state["last_reward_trace_at"] = trace.get("created_at") or ""
+    session_state["last_reward_trace_summary"] = trace_summary
+    return await asyncio.to_thread(
+        touch_via_session,
+        session_key,
+        current_surface=(trace_source["surface"] or current_surface)[:60] or (session.get("current_surface") or "upload"),
+        session_state=session_state,
+    )
+
+
 async def record_via_reward_trace_for_session(
     *,
     session_key: str,
@@ -303,58 +506,24 @@ async def record_via_reward_trace_for_session(
     decisions = await asyncio.to_thread(list_via_decision_records, session_key, 24)
     target_decision = _pick_reward_trace_decision(decisions, decision_id)
     target_decision_id = str(target_decision.get("decision_id") or decision_id or "").strip()
-    resolved_value = 0.0
-    try:
-        resolved_value = float(
-            event_value
-            if event_value is not None
-            else trace_payload.get("value")
-            or trace_payload.get("order_total")
-            or trace_payload.get("revenue_total")
-            or 0.0
-        )
-    except Exception:
-        resolved_value = 0.0
-    if trace_source["idempotency_key"] and raw_event_type in _REWARD_TRACE_DEDUPE_EVENTS:
-        existing = await asyncio.to_thread(
-            get_via_reward_trace_by_idempotency,
-            session_key,
-            trace_source["idempotency_key"],
-        )
-        if existing:
-            decision_traces = await asyncio.to_thread(
-                list_via_reward_traces,
-                session_key,
-                decision_id=target_decision_id or str(existing.get("decision_id") or ""),
-                limit=64,
-            )
-            trace_summary = summarize_via_reward_traces(decision_traces)
-            latest_outcome = await asyncio.to_thread(
-                get_latest_via_outcome_record,
-                session_key,
-                target_decision_id or str(existing.get("decision_id") or ""),
-            )
-            return {
-                "trace": existing,
-                "summary": trace_summary,
-                "decision_id": target_decision_id or str(existing.get("decision_id") or ""),
-                "outcome": latest_outcome,
-                "session": session,
-                "deduped": True,
-            }
-    trace = await asyncio.to_thread(
-        insert_via_reward_trace,
+    resolved_value = _resolve_reward_event_value(event_value, trace_payload)
+    deduped = await _deduped_reward_trace_response(
         session_key=session_key,
-        decision_id=target_decision_id,
-        user_id=int(session.get("user_id") or 0),
-        event_type=raw_event_type,
-        surface=trace_source["surface"],
-        source=trace_source["source"],
-        origin=trace_source["origin"],
-        product_key=trace_source["product_key"],
-        event_value=resolved_value,
-        idempotency_key=trace_source["idempotency_key"],
-        event_payload=trace_payload,
+        session=session,
+        trace_source=trace_source,
+        raw_event_type=raw_event_type,
+        target_decision_id=target_decision_id,
+    )
+    if deduped is not None:
+        return deduped
+    trace = await _insert_session_reward_trace(
+        session_key=session_key,
+        session=session,
+        target_decision_id=target_decision_id,
+        raw_event_type=raw_event_type,
+        trace_source=trace_source,
+        resolved_value=resolved_value,
+        trace_payload=trace_payload,
     )
     decision_traces = await asyncio.to_thread(
         list_via_reward_traces,
@@ -368,74 +537,43 @@ async def record_via_reward_trace_for_session(
         session_key,
         target_decision_id,
     )
-    updated_outcome: dict[str, Any] = {}
-    if latest_outcome:
-        merged = merge_via_reward_trace_summary(
-            outcome=latest_outcome,
-            reward_trace_summary=trace_summary,
-        )
-        updated_outcome = await asyncio.to_thread(
-            update_via_outcome_record,
-            str(latest_outcome.get("outcome_id") or ""),
-            clicked_product=bool(merged.get("clicked_product")),
-            added_to_cart=bool(merged.get("added_to_cart")),
-            purchased=bool(merged.get("purchased")),
-            thumb_feedback=int(merged.get("thumb_feedback") or 0),
-            reward_score=float(merged.get("reward_score") or 0.0),
-            outcome_payload=merged.get("outcome_payload") or {},
-        )
-    provider = ""
-    latency_ms = 0.0
-    cost_estimate = 0.0
-    route_bucket = ""
-    for candidate in decisions:
-        if str(candidate.get("decision_id") or "") == target_decision_id:
-            chosen = dict(candidate.get("chosen_action") or {})
-            provider = str(chosen.get("provider") or "").strip().lower()
-            latency_ms = float(candidate.get("latency_ms") or 0.0)
-            cost_estimate = float(candidate.get("cost_estimate") or 0.0)
-            route_bucket = _routing_bucket_key(candidate.get("state_snapshot") or {}, trace_source["surface"] or current_surface or str(session.get("current_surface") or "upload"))
-            break
-    if provider and route_bucket:
-        reward_score = float((updated_outcome or latest_outcome or {}).get("reward_score") or trace_summary.get("reward_delta") or 0.0)
-        positive_signal = 1 if raw_event_type in {"click", "link_click", "open_link", "compare", "compare_open", "add_to_cart", "cart_add", "purchase", "checkout_success", "affiliate_order", "shopify_order", "thumb_up"} else 0
-        guard_fail = 1 if raw_event_type == "thumb_down" else 0
-        await asyncio.to_thread(
-            upsert_via_routing_provider_stat,
-            bucket_key=route_bucket,
-            provider=provider,
-            exposure_increment=1 if raw_event_type == "click" else 0,
-            success_increment=positive_signal,
-            reward_delta=reward_score,
-            guard_fail_increment=guard_fail,
-            latency_ms=latency_ms,
-            cost_estimate=cost_estimate,
-            last_outcome_at=str(trace.get("created_at") or ""),
-            metrics={"event_type": raw_event_type, "surface": trace_source["surface"], "origin": trace_source["origin"]},
-        )
-    record_feedback_signal(
-        source_type="via_reward_trace",
-        source_id=session_key,
-        event_type=f"reward_{raw_event_type}",
-        actor_role="user",
-        user_id=int(session.get("user_id") or 0),
-        payload={
-            "decision_id": target_decision_id,
-            "event_type": raw_event_type,
-            "event_value": resolved_value,
-            "product_key": trace_source["product_key"],
-            "trace_summary": trace_summary,
-        },
+    updated_outcome = await _apply_reward_outcome_merge(latest_outcome, trace_summary)
+    provider, latency_ms, cost_estimate, route_bucket = _resolve_reward_decision_stats(
+        decisions,
+        target_decision_id=target_decision_id,
+        trace_source=trace_source,
+        current_surface=current_surface,
+        session=session,
     )
-    session_state = dict(session.get("state") or {})
-    session_state["last_reward_trace_type"] = raw_event_type
-    session_state["last_reward_trace_at"] = trace.get("created_at") or ""
-    session_state["last_reward_trace_summary"] = trace_summary
-    updated_session = await asyncio.to_thread(
-        touch_via_session,
-        session_key,
-        current_surface=(trace_source["surface"] or current_surface)[:60] or (session.get("current_surface") or "upload"),
-        session_state=session_state,
+    await _upsert_reward_routing_stat(
+        provider=provider,
+        route_bucket=route_bucket,
+        raw_event_type=raw_event_type,
+        trace=trace,
+        trace_source=trace_source,
+        trace_summary=trace_summary,
+        updated_outcome=updated_outcome,
+        latest_outcome=latest_outcome,
+        latency_ms=latency_ms,
+        cost_estimate=cost_estimate,
+    )
+    _record_reward_feedback_signal(
+        session_key=session_key,
+        session=session,
+        raw_event_type=raw_event_type,
+        target_decision_id=target_decision_id,
+        resolved_value=resolved_value,
+        trace_source=trace_source,
+        trace_summary=trace_summary,
+    )
+    updated_session = await _touch_reward_trace_session(
+        session_key=session_key,
+        session=session,
+        raw_event_type=raw_event_type,
+        trace=trace,
+        trace_summary=trace_summary,
+        trace_source=trace_source,
+        current_surface=current_surface,
     )
     return {
         "trace": trace,
