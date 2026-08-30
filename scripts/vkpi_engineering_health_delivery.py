@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
 """Collect the read-only delivery-health receipt (``vkpi_delivery_receipt_v1``).
 
-Inputs (read-only; no mutation, service, or network call):
-* ``runtime/ops/post-deploy/`` — one dir per production deployment, named
-  ``<UTC timestamp>-<sha12>``, optionally carrying an ``outcome.json`` written
-  by ``scripts/ops/train.sh`` (``{"result": "success"|"rolled_back"|"failed",
-  "rollback": {started_at, completed_at}|null, "hotfix_of": sha12|null}``).
-* ``runtime/ops/incidents.jsonl`` — the incidents ledger; format and semantics
-  in ``docs/vkpi/incidents-ledger-runbook.md``. The first ``ledger_opened``
-  line anchors ``ledger_covered_days``.
-* a directory of canonical-gate receipts written by ``scripts/verify.sh`` via
-  ``VKPI_VERIFY_JSON_OUT`` (payloads carrying ``duration_seconds``).
+Read-only inputs: ``runtime/ops/post-deploy/`` (``<UTC>-<sha12>`` dirs, optional
+``outcome.json`` from ``scripts/ops/train.sh``: result/rollback/hotfix_of);
+``runtime/ops/incidents.jsonl`` (semantics: ``docs/vkpi/incidents-ledger-runbook.md``,
+first ``ledger_opened`` line anchors ``ledger_covered_days``); verify.sh receipts
+carrying ``duration_seconds`` (via ``VKPI_VERIFY_JSON_OUT``).
 
-Honesty rules: a metric lacking samples or a source is reported
-``missing_or_insufficient`` with a reason — values are never invented. The
-empty-ledger at-target semantics (zero incidents over a covered period) follow
-the runbook and are formally carried by contract v1.1. This collector is the
-only party computing delivery numbers; the scorer merges but never recomputes
-(see ``scripts/vkpi_engineering_health_score_delivery.py``).
+Honesty: missing samples/sources report ``missing_or_insufficient`` + reason —
+values are never invented. Empty-ledger at-target semantics are carried by
+contract v1.1. This collector is the only party computing delivery numbers; the
+scorer merges but never recomputes (``vkpi_engineering_health_score_delivery.py``).
 """
 from __future__ import annotations
 
@@ -438,11 +431,8 @@ def _rollback_metric(deployments: Sequence[Deployment], minimum: float | None) -
     reason = f"untimed_rollback_count_{untimed}" if untimed else None
     if not minutes:
         if untimed:
-            # 有回滚但观察哨没打上时戳:绝不猜时长,如实缺证。
-            return _metric("missing_or_insufficient", None, 0, reason)
-        # 零回滚是好状态不是缺证据(runbook / 合同 v1.1 empty_sample_at_target,与
-        # MTTR/SLA 同语义):按合同 target 15.0 记 observed,样本 = 有 outcome.json
-        # 覆盖的部署数;零覆盖 = 零暴露,无法诚实观测。
+            return _metric("missing_or_insufficient", None, 0, reason)  # 有回滚但没时戳:不猜
+        # 零回滚=好状态非缺证据(合同 v1.1 empty_sample_at_target);样本=outcome 覆盖的部署数。
         exposure = sum(1 for item in deployments if item.outcome is not None)
         if exposure < 1:
             return _metric("missing_or_insufficient", None, 0, "no_outcome_coverage")
@@ -471,7 +461,7 @@ def _ledger_gate(
         return None
     if exposure < 1:
         return _metric("missing_or_insufficient", None, 0, "ledger_covered_zero_deployments")
-    # 合同 v1.1:台账类指标 sample_unit=ledger_days(30 天地板防起账首日白拿分)。
+    # v1.1 sample_unit=ledger_days(30 天地板防起账首日白拿分)。
     return _observed_or_insufficient(at_target, int(ledger_covered_days), minimum, EMPTY_SAMPLE_AT_TARGET)
 
 
