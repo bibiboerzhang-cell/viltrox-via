@@ -1,8 +1,8 @@
 """媒体解析 / 子进程分析器 / R2 回灌簇,从 apify_jobs_worker.py 整簇 move 出来。
 
 函数体逐字不变 → 行为必然不变;原文件 re-export 兜住所有调用点。
-依赖原文件的超时常量(GEMINI_CALL_*/MEDIA_RESOLVE_*)在本模块**底部** import
-(避免循环导入;调用点均在函数体内运行期解析)。红线:本簇零 fit 写。
+超时常量(GEMINI_CALL_*/MEDIA_RESOLVE_*)从 config 叶子顶部 import
+(2026-08-30 拆 import 期环:原底部回环 import 已删,worker 只 re-export)。红线:本簇零 fit 写。
 """
 from __future__ import annotations
 
@@ -36,6 +36,12 @@ from app.workers.apify_jobs_worker_helpers import (
     _url_host,
 )
 from app.workers.apify_jobs_worker_media_resolver import resolve_video_media
+# 超时常量来自 config 叶子(原 worker 底部回环 import 转正到顶部,2026-08-30 拆环)。
+from app.workers.apify_jobs_worker_config import (
+    GEMINI_CALL_TERMINATE_GRACE_SECONDS,
+    GEMINI_CALL_TIMEOUT_SECONDS,
+    MEDIA_RESOLVE_TIMEOUT_SECONDS,
+)
 
 
 logger = get_logger(__name__)
@@ -722,11 +728,3 @@ def _resolve_video_media(evidence: dict[str, Any]) -> dict[str, Any]:
         apify_configured=bool(os.environ.get("APIFY_TOKEN", "").strip()),
         scrape_with_timeout=_scrape_with_apify_timeout,
     )
-
-
-# 原文件留下的超时常量:放模块底部 import(避免循环导入;均在函数体内运行期解析)。
-from app.workers.apify_jobs_worker import (  # noqa: E402
-    GEMINI_CALL_TERMINATE_GRACE_SECONDS,
-    GEMINI_CALL_TIMEOUT_SECONDS,
-    MEDIA_RESOLVE_TIMEOUT_SECONDS,
-)

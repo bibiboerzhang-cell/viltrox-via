@@ -1,8 +1,9 @@
 """失败领养 / 陈旧 running 回收的运维簇,从 apify_jobs_worker.py 整簇 move 出来。
 
 函数体逐字不变 → 行为必然不变;原文件 re-export 兜住所有调用点。
-原文件留下的重试常量与 _provider_retry_delay_seconds 在本模块**底部** import
-(避免循环导入;均在函数体内运行期解析)。红线:本簇零 fit 写。
+重试常量从 config 叶子顶部 import(2026-08-30 拆 import 期环:原底部回环 import 已删);
+_provider_retry_delay_seconds 仍钉在 worker(测试按 worker globals patch 重试常量),
+本模块以底部 call-time 委派壳引用,不建 import 期环边。红线:本簇零 fit 写。
 """
 from __future__ import annotations
 
@@ -20,6 +21,13 @@ from app.workers.apify_jobs_worker_helpers import (
     _provider_retry_reason,
 )
 from app.workers.apify_jobs_worker_session import _sync_search_session_job
+# 重试常量来自 config 叶子(原 worker 底部回环 import 转正到顶部,2026-08-30 拆环)。
+from app.workers.apify_jobs_worker_config import (
+    MAX_JOB_ATTEMPTS,
+    PROVIDER_RETRY_ADOPT_WINDOW_MINUTES,
+    PROVIDER_RETRY_MAX_ATTEMPTS,
+    STALE_RECLAIM_SECONDS,
+)
 
 
 logger = get_logger(__name__)
@@ -428,12 +436,8 @@ def _adopt_recent_provider_pressure_failures(conn: psycopg.Connection[Any]) -> l
     return adopted
 
 
+def _provider_retry_delay_seconds(next_attempt: int) -> int:
+    # 钉在 worker(测试按 worker globals patch PROVIDER_RETRY_* 常量);call-time 委派,不建 import 期环边。
+    from app.workers.apify_jobs_worker import _provider_retry_delay_seconds as _impl
 
-# 原文件留下的重试常量 + _provider_retry_delay_seconds:放底部 import(避免循环导入)。
-from app.workers.apify_jobs_worker import (  # noqa: E402
-    MAX_JOB_ATTEMPTS,
-    PROVIDER_RETRY_ADOPT_WINDOW_MINUTES,
-    PROVIDER_RETRY_MAX_ATTEMPTS,
-    STALE_RECLAIM_SECONDS,
-    _provider_retry_delay_seconds,
-)
+    return _impl(next_attempt)

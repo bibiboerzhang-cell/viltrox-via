@@ -1,8 +1,8 @@
 """LLM 预算 preflight 簇 + keyframe 抽帧/Gemini override 簇,从 apify_jobs_worker.py 整簇 move 出来。
 
 函数体逐字不变 → 行为必然不变;原文件 re-export 兜住所有调用点(含下划线私有名)。
-原文件留下的常量(LLM_MAX_OUTPUT_TOKENS / LLM_BUDGET_SCOPE / WORKER_GEMINI_MODEL)在本模块
-**底部** import(避免循环导入;均在函数体内运行期解析)。红线:本簇零 fit 写。
+共享常量(LLM_MAX_OUTPUT_TOKENS / LLM_BUDGET_SCOPE / WORKER_GEMINI_MODEL 等)从 config 叶子
+顶部 import(2026-08-30 拆 import 期环:原底部回环 import 已删)。红线:本簇零 fit 写。
 """
 from __future__ import annotations
 
@@ -36,6 +36,15 @@ from app.workers.apify_jobs_worker_helpers import (
     _truthy,
 )
 from app.workers.apify_jobs_video_context import _select_keyframe_requests
+# 共享常量来自 config 叶子(原 worker 底部回环 import 转正到顶部,2026-08-30 拆环)。
+from app.workers.apify_jobs_worker_config import (
+    FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+    FINAL_V1_KEYFRAME_QA_MODEL,
+    LLM_BUDGET_SCOPE,
+    LLM_MAX_OUTPUT_TOKENS,
+    WORKER_GEMINI_MODEL,
+    WORKER_LLM_EXECUTION_CLASS,
+)
 
 
 logger = get_logger(__name__)
@@ -439,14 +448,3 @@ def _gemini_worker_overrides(payload: dict[str, Any]):
 
             stack.enter_context(patch.object(gemini_video_analyzer.gemini_client.models, "generate_content", _forced_generate_content))
         yield model_override
-
-
-# 原文件留下的常量在本模块底部 import(避免循环导入;函数体内运行期解析)。
-from app.workers.apify_jobs_worker import (  # noqa: E402
-    FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
-    FINAL_V1_KEYFRAME_QA_MODEL,
-    LLM_BUDGET_SCOPE,
-    LLM_MAX_OUTPUT_TOKENS,
-    WORKER_GEMINI_MODEL,
-    WORKER_LLM_EXECUTION_CLASS,
-)

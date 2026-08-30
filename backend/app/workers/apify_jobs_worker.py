@@ -22,7 +22,6 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.core.config import DB_RUNTIME_URL
-from app.core.gemini_models import DEFAULT_GEMINI_JUDGE_MODEL, DEFAULT_VIDEO_GEMINI_MODEL
 from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
 from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
@@ -34,7 +33,8 @@ from app.domains.kol.final_v1_extract import upsert_deep_analysis_from_final_v1_
 from app.domains.kol import profile_discovery as kol_profile_discovery
 from app.domains.kol import search_sessions as kol_search_sessions
 from app.domains.local_workers.registry import SAFE_TASK_TYPES as LOCAL_EXCLUSIVE_JOB_TYPES
-from app.platform import llm_gateway
+# llm_gateway 本文件已无直接属性访问,但 runtime 按 namespace['llm_gateway'] 取用(namespace 契约),不可删。
+from app.platform import llm_gateway  # noqa: F401
 from app.platform.apify_budget import (
     ApifyBudgetBlocked,
     ApifyExecutionClaimBlocked,
@@ -52,7 +52,6 @@ from app.platform.llm_local_evaluation import (
 from app.services.media.video_download import download_direct_video_url
 from app.domains.media.cache import cache_local_video_file
 from app.domains.kol.url_deep_crawl_helpers import _video_id as _content_url_video_id
-from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 from .apify_job_lane import (
     claim_lane_sql,
     normalize_claim_lane,
@@ -90,14 +89,31 @@ from .apify_jobs_worker_helpers import (
     _target,
     _url_host,
 )
+# 共享常量已收编到 config 叶子(2026-08-30 拆 import 期环):子模块直接 import 叶子,
+# 本模块保留同名 re-export——既有 import 点与 monkeypatch 路径
+# (app.workers.apify_jobs_worker.<NAME>)逐字不变;env 读取/默认值/推导关系在叶子里原样保留。
+from .apify_jobs_worker_config import (  # noqa: F401  部分名仅作同名 re-export
+    FINAL_V1_GEMINI_MODELS,
+    FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+    FINAL_V1_KEYFRAME_QA_MODEL,
+    GEMINI_CALL_TERMINATE_GRACE_SECONDS,
+    GEMINI_CALL_TIMEOUT_SECONDS,
+    GEMINI_VIDEO_FINAL_DERIVE_METHODS,
+    GEMINI_VIDEO_V2_DERIVE_METHODS,
+    LLM_BUDGET_SCOPE,
+    LLM_MAX_OUTPUT_TOKENS,
+    MAX_JOB_ATTEMPTS,
+    MEDIA_RESOLVE_TIMEOUT_SECONDS,
+    PROVIDER_RETRY_ADOPT_WINDOW_MINUTES,
+    PROVIDER_RETRY_MAX_ATTEMPTS,
+    STALE_RECLAIM_SECONDS,
+    STALE_RUNNING_MINUTES,
+    WORKER_GEMINI_MODEL,
+    WORKER_LLM_EXECUTION_CLASS,
+)
 
 logger = get_logger(__name__)
 POLL_SECONDS = float(os.environ.get("APIFY_WORKER_POLL_SECONDS", "2"))
-MEDIA_RESOLVE_TIMEOUT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_MEDIA_RESOLVE_TIMEOUT_SEC", "90")))
-GEMINI_CALL_TIMEOUT_SECONDS = max(30, int(os.environ.get("APIFY_WORKER_GEMINI_CALL_TIMEOUT_SEC", "1200")))
-GEMINI_CALL_TERMINATE_GRACE_SECONDS = max(1, int(os.environ.get("APIFY_WORKER_GEMINI_CALL_TERMINATE_GRACE_SEC", "5")))
-STALE_RUNNING_MINUTES = max(1, int(os.environ.get("APIFY_WORKER_STALE_RUNNING_MINUTES", "10")))
-STALE_RECLAIM_SECONDS = STALE_RUNNING_MINUTES * 60
 STALE_RECLAIM_POLL_SECONDS = max(30, int(os.environ.get("APIFY_WORKER_STALE_RECLAIM_POLL_SECONDS", "60")))
 RUNNING_HEARTBEAT_SECONDS = max(10, int(os.environ.get("APIFY_WORKER_RUNNING_HEARTBEAT_SECONDS", "30")))
 # DB 连接瞬断后重连前等待秒数。治 6/23 那次:连接丢失 → 未捕获 → worker 永久死 3.5 天。
@@ -157,20 +173,14 @@ CLAIM_LANE_STEAL_ENABLED = (
 )
 CLAIM_SELECT_SQL_STEAL = CLAIM_SELECT_SQL.replace(CLAIM_LANE_SQL, "") if CLAIM_LANE_SQL else CLAIM_SELECT_SQL
 
-MAX_JOB_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_MAX_ATTEMPTS", "2")))
-PROVIDER_RETRY_MAX_ATTEMPTS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_MAX_ATTEMPTS", "5")))
 PROVIDER_RETRY_BASE_SECONDS = max(1, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_BASE_SECONDS", "60")))
 PROVIDER_RETRY_MAX_DELAY_SECONDS = max(
     PROVIDER_RETRY_BASE_SECONDS,
     int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_MAX_DELAY_SECONDS", "960")),
 )
 PROVIDER_RETRY_JITTER_RATIO = max(0.0, min(0.5, float(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_JITTER_RATIO", "0.20"))))
-PROVIDER_RETRY_ADOPT_WINDOW_MINUTES = max(0, int(os.environ.get("APIFY_WORKER_PROVIDER_RETRY_ADOPT_WINDOW_MINUTES", "1440")))
-LLM_BUDGET_SCOPE = os.environ.get("APIFY_WORKER_LLM_BUDGET_SCOPE", "cron:vkpi_analysis_worker")
 # 旧 min(6) 硬钳是预算安全时代产物;预算闸/台账已成熟,上限交给 env(全 fleet 同值,advisory lock 库级全局)。
 LLM_CONCURRENCY_LIMIT = max(1, int(os.environ.get("APIFY_WORKER_LLM_CONCURRENCY", "2")))
-# 1200 会截断六层 final_v1(分镜只剩前 ~35s);4096 容纳整段分镜时间线,可 env 覆盖。
-LLM_MAX_OUTPUT_TOKENS = int(os.environ.get("APIFY_WORKER_LLM_MAX_OUTPUT_TOKENS", "4096"))
 # 0.05 是免费层口径(每条 job 前最多干等 20s,250 条批量净耗 ~83 分钟);付费层 RPM 数百,0.5 仍留 60 倍余量。
 GEMINI_QPS_LIMIT = max(0.0, float(os.environ.get("APIFY_WORKER_GEMINI_QPS", "0.5")))
 GEMINI_MIN_INTERVAL_SECONDS = max(
@@ -178,27 +188,8 @@ GEMINI_MIN_INTERVAL_SECONDS = max(
     float(os.environ.get("APIFY_WORKER_GEMINI_MIN_INTERVAL_SEC", str((1.0 / GEMINI_QPS_LIMIT) if GEMINI_QPS_LIMIT > 0 else 0.0))),
 )
 LLM_TARGET_TYPES = {"video", "contract"}
-GEMINI_VIDEO_V2_DERIVE_METHODS = {
-    "gemini_video_v2",
-    "gemini_video_v2_pro_single",
-    "gemini_video_v2_flash_pro_judge",
-    "gemini_video_v2_flash_gpt55_judge",
-    "gemini_video_v2_flash_claude_judge",
-}
-FINAL_V1_KEYFRAME_QA_DERIVE_METHOD = "video_analysis_final_v1_keyframe_qa"
-GEMINI_VIDEO_FINAL_DERIVE_METHODS = {"video_analysis_final_v1", FINAL_V1_KEYFRAME_QA_DERIVE_METHOD}
+# GEMINI_VIDEO_*_DERIVE_METHODS/WORKER_*/FINAL_V1_* 均由 config 叶子 re-export(定义与注释见叶子)。
 GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS, *GEMINI_VIDEO_FINAL_DERIVE_METHODS}
-WORKER_GEMINI_MODEL = DEFAULT_VIDEO_GEMINI_MODEL  # env APIFY_WORKER_GEMINI_MODEL(core/gemini_models 唯一默认)
-# Worker processes are always production by default.  A persisted, server-
-# signed job capability is the only mechanism that can authorize the narrow
-# local evaluation branch for one job; an environment flag cannot reinterpret
-# an old queue.
-WORKER_LLM_EXECUTION_CLASS = llm_gateway.PRODUCTION_EXECUTION_CLASS
-# One exact worker model is both preflighted and executed.  The former default
-# fallback list (3-flash-preview -> 2.5-flash) let a preflight for one binding
-# authorize a different provider request.
-FINAL_V1_GEMINI_MODELS = gemini_video_analyzer.final_v1_gemini_models([WORKER_GEMINI_MODEL])
-FINAL_V1_KEYFRAME_QA_MODEL = DEFAULT_GEMINI_JUDGE_MODEL  # env GEMINI_FINAL_V1_QA_MODEL
 _stop_event = threading.Event()
 _gemini_qps_lock = threading.Lock()
 _last_gemini_call_started_at = 0.0
@@ -292,8 +283,8 @@ def _respect_gemini_qps(conn: psycopg.Connection[Any]) -> None:
 
 
 # 媒体解析 / 子进程分析器 / R2 回灌簇整簇已抽到 apify_jobs_worker_media.py
-# (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。本 import 必须在
-# 上面超时常量(GEMINI_CALL_*/MEDIA_RESOLVE_*)定义之后(它们在 media 模块底部被 import)。
+# (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。
+# 2026-08-30 拆环后 media 从 config 叶子取超时常量,本 import 已无顺序约束。
 from app.workers.apify_jobs_worker_media import (  # noqa: E402
     _gemini_analyzer_child_code,
     _mock_result,
@@ -448,9 +439,8 @@ TARGET_FALLBACK_JOB_TYPES = frozenset({"video"})
 
 
 # LLM 预算 preflight 簇 + keyframe 抽帧/Gemini override 簇整簇已抽到 apify_jobs_worker_prep.py
-# (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。本 import 必须放在
-# 上面常量(LLM_MAX_OUTPUT_TOKENS/LLM_BUDGET_SCOPE/WORKER_GEMINI_MODEL)定义之后
-# (它们在 prep 模块底部被 import)。
+# (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。
+# 2026-08-30 拆环后 prep 从 config 叶子取常量,本 import 已无顺序约束。
 from app.workers.apify_jobs_worker_prep import (  # noqa: E402
     _download_youtube_for_keyframes,
     _extract_keyframes_for_qa,
@@ -487,8 +477,9 @@ from app.workers.apify_jobs_video_context import (  # noqa: F401,E402
 
 
 # Gemini 视频分析处理簇 + 成本入账 + 结果塑形/落库整簇已抽到 apify_jobs_worker_gemini.py
-# (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。本 import 必须放在
-# 上面所有被 gemini 模块依赖的常量/小工具定义之后(它们在 gemini 模块底部被 import)。
+# (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。
+# 2026-08-30 拆环后 gemini 从 config 叶子/prep/media 取依赖(_block_job 走 call-time 委派),
+# 本 import 已无顺序约束。
 from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
     _final_v1_scope_checkpoint,
     _process_gemini_video,
@@ -792,7 +783,8 @@ def _execute_claimed_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> 
 
 
 # 失败领养 / 陈旧 running 回收运维簇整簇已抽到 apify_jobs_worker_maintenance.py
-# (函数体逐字不变,re-export 兜住所有调用点)。本 import 在上面重试常量定义之后。
+# (函数体逐字不变,re-export 兜住所有调用点)。
+# 2026-08-30 拆环后 maintenance 从 config 叶子取重试常量,本 import 已无顺序约束。
 from app.workers.apify_jobs_worker_maintenance import (  # noqa: E402
     _adopt_recent_provider_pressure_failures,
     _reconcile_terminal_search_session_jobs,

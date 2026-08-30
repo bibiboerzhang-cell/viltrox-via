@@ -2,9 +2,9 @@
 
 公共入口保持不变；长流程由注入式 runtime 分阶段编排。原文件用
 `from app.workers.apify_jobs_worker_gemini import (...)` re-export 兜住所有调用点。
-依赖原文件的常量/小工具(_block_job/_load_video_evidence/...)在本模块**底部**
-lazy 形式 import(放底部避免循环导入:此时本模块所有函数已定义,原文件所需名也已先于
-其 re-export 行绑定)。红线:本簇零 fit 写;LLM 绝不写 viltrox_fit_score。
+2026-08-30 拆 import 期环:共享常量改从 config 叶子顶部 import,prep/media 小工具改从
+真源模块顶部 import(原 worker 底部回环 import 已删);_block_job 钉在 worker(源码守卫),
+本模块以 call-time 委派壳保住同名 monkeypatch 面。红线:本簇零 fit 写;LLM 绝不写 viltrox_fit_score。
 """
 from __future__ import annotations
 
@@ -73,6 +73,32 @@ from app.workers.apify_jobs_worker_session import (
     _search_session_analysis_summary_from_result,
     _sync_deep_analysis_result_from_cache,
     _sync_search_session_job,
+)
+# 共享常量来自 config 叶子;prep/media 小工具改从真源模块 import
+# (原 worker 底部回环 import 转正到顶部,2026-08-30 拆环;名字仍是本模块可 monkeypatch 的全局)。
+from app.workers.apify_jobs_worker_config import (  # noqa: F401  部分名仅作本模块同名 re-export
+    FINAL_V1_GEMINI_MODELS,
+    FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+    FINAL_V1_KEYFRAME_QA_MODEL,
+    GEMINI_VIDEO_FINAL_DERIVE_METHODS,
+    GEMINI_VIDEO_V2_DERIVE_METHODS,
+    LLM_BUDGET_SCOPE,
+    WORKER_GEMINI_MODEL,
+    WORKER_LLM_EXECUTION_CLASS,
+)
+from app.workers.apify_jobs_worker_prep import (  # noqa: F401  部分名仅作本模块同名 re-export
+    _extract_keyframes_for_qa,
+    _gemini_worker_overrides,
+    _load_video_evidence,
+    _log_budget_preflight_record_only,
+    _provider_allowed,
+    _provider_budget_preflight,
+)
+from app.workers.apify_jobs_worker_media import (  # noqa: F401  部分名仅作本模块同名 re-export
+    _resolve_cached_or_provider_video,
+    _resolve_video_media,
+    _run_gemini_analyzer_with_timeout,
+    _warm_video_to_r2_from_local,
 )
 
 
@@ -425,8 +451,8 @@ def _write_gemini_cache(
 
 # Gemini 视频多 pass 评审处理簇(keyframe QA / flash+pro/gpt55/claude judge)整簇已抽到
 # apify_jobs_worker_gemini_judges.py(函数体逐字不变;re-export 兜住所有调用点,含下划线私有名)。
-# 本 import 放在 _record_*_cost / _write_gemini_cache 定义之后:judges 模块底部回引这几个名,
-# 此刻它们已绑定,故无循环导入死锁。
+# 2026-08-30 拆环后 judges 不再 import 期回引本模块(_record_gemini_cost/_write_gemini_cache
+# 由 judges 侧 call-time 委派壳引用),本 import 已无顺序约束。
 from app.workers.apify_jobs_worker_gemini_judges import (  # noqa: E402
     _process_gemini_video_final_v1_keyframe_qa,
     _process_gemini_video_flash_claude_judge,
@@ -536,25 +562,9 @@ def _process_gemini_video(
         dependencies=_gemini_video_runtime_dependencies(),
     )
 
-# 原文件留下的常量/小工具:放模块底部 import(避免循环导入;调用点均在函数体内、运行期才解析)。
-from app.workers.apify_jobs_worker import (  # noqa: E402
-    FINAL_V1_GEMINI_MODELS,
-    FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
-    FINAL_V1_KEYFRAME_QA_MODEL,
-    GEMINI_VIDEO_FINAL_DERIVE_METHODS,
-    GEMINI_VIDEO_V2_DERIVE_METHODS,
-    LLM_BUDGET_SCOPE,
-    WORKER_GEMINI_MODEL,
-    WORKER_LLM_EXECUTION_CLASS,
-    _block_job,
-    _extract_keyframes_for_qa,
-    _gemini_worker_overrides,
-    _load_video_evidence,
-    _log_budget_preflight_record_only,
-    _provider_allowed,
-    _provider_budget_preflight,
-    _resolve_cached_or_provider_video,
-    _resolve_video_media,
-    _run_gemini_analyzer_with_timeout,
-    _warm_video_to_r2_from_local,
-)
+
+def _block_job(conn: psycopg.Connection[Any], job_id: int, reason: str, detail: dict[str, Any] | None = None) -> None:
+    # _block_job 钉在 worker(源码守卫/namespace 契约);call-time 委派保住本模块 monkeypatch 面,不建 import 期环边。
+    from app.workers.apify_jobs_worker import _block_job as _worker_block_job
+
+    return _worker_block_job(conn, job_id, reason, detail)

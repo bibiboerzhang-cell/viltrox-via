@@ -1,4 +1,6 @@
-"""Gemini 视频多 pass 评审簇；零 fit 写，provider 落库依赖在底部延迟导入以避免循环。"""
+"""Gemini 视频多 pass 评审簇;零 fit 写。2026-08-30 拆 import 期环:常量走 config 叶子、
+小工具走真源模块顶部 import;worker/gemini 钉住的 _block_job/_finish_skipped/
+_record_gemini_cost/_write_gemini_cache 以底部 call-time 委派壳保住同名 monkeypatch 面。"""
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +29,10 @@ from app.workers.apify_jobs_video_context import (
     _video_final_context,
     _video_performance_context,
 )
+# 2026-08-30 拆环:常量来自 config 叶子,小工具/成本写手改从真源模块 import(原底部回环 import 转正)。
+from app.workers.apify_jobs_worker_config import FINAL_V1_KEYFRAME_QA_DERIVE_METHOD, FINAL_V1_KEYFRAME_QA_MODEL, LLM_BUDGET_SCOPE
+from app.workers.apify_jobs_worker_prep import _extract_keyframes_for_qa, _gemini_worker_overrides, _log_budget_preflight_record_only, _provider_allowed, _provider_budget_preflight
+from app.workers.apify_jobs_worker_gemini_cost import _record_anthropic_cost, _record_openai_cost
 
 logger = get_logger(__name__)
 
@@ -775,24 +781,19 @@ def _process_gemini_video_flash_claude_judge(
     )
 
 
-# 成本落库仍归 gemini 主模块；底部导入避免循环。
-from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
-    _record_anthropic_cost,
-    _record_gemini_cost,
-    _record_openai_cost,
-    _write_gemini_cache,
-)
+# 2026-08-30 拆环:worker/gemini 钉住的四个名改 call-time 委派壳(同名模块全局保留,monkeypatch 路径逐字不变),不再 import 期回引。
+def _block_job(*args: Any, **kwargs: Any) -> None:
+    from app.workers.apify_jobs_worker import _block_job as _impl  # 钉在 worker(源码守卫)
+    return _impl(*args, **kwargs)
 
-# 原 worker 留下的常量/小工具:放模块底部 import(避免循环导入;调用点均在函数体内、运行期才解析)。
-from app.workers.apify_jobs_worker import (  # noqa: E402
-    FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
-    FINAL_V1_KEYFRAME_QA_MODEL,
-    LLM_BUDGET_SCOPE,
-    _block_job,
-    _finish_skipped,
-    _extract_keyframes_for_qa,
-    _gemini_worker_overrides,
-    _log_budget_preflight_record_only,
-    _provider_allowed,
-    _provider_budget_preflight,
-)
+def _finish_skipped(*args: Any, **kwargs: Any) -> None:
+    from app.workers.apify_jobs_worker import _finish_skipped as _impl  # 钉在 worker(namespace=globals() 契约)
+    return _impl(*args, **kwargs)
+
+def _record_gemini_cost(**kwargs: Any) -> dict[str, Any]:
+    from app.workers.apify_jobs_worker_gemini import _record_gemini_cost as _impl  # 成本落库归 gemini 主模块
+    return _impl(**kwargs)
+
+def _write_gemini_cache(conn: psycopg.Connection[Any], **kwargs: Any) -> None:
+    from app.workers.apify_jobs_worker_gemini import _write_gemini_cache as _impl  # 缓存落库归 gemini 主模块
+    return _impl(conn, **kwargs)
