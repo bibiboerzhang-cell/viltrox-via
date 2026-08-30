@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-EVOLUTION_ALGORITHM_VERSION = "vkpi-evolution-git-v4"
+EVOLUTION_ALGORITHM_VERSION = "vkpi-evolution-git-v5"
 EVOLUTION_QUALIFICATION_SCHEMA_VERSION = "vkpi_maintainer_qualification_receipt_v1"
 EVOLUTION_BUS_FACTOR_SHARE = 0.50
 EVOLUTION_QUALIFIED_CONTRIBUTION_SHARE = 0.90
@@ -22,10 +22,16 @@ EVOLUTION_CORE_DOMAINS = {
     "authentication", "tenant_boundary", "kol", "database_migrations",
     "workers", "frontend_delivery",
 }
+# Metrics mapped to a sample count of None have no minimum_samples in the
+# contract (v1.1 hotspot metrics): they may be observed before the 180-day
+# window completes, and sample_count records the actually covered days
+# (0..180) instead of a fixed requirement.
 EXPECTED_SAMPLES = {
     "core_domain_bus_factor_min": (180, "days"),
     "temporal_coupling_p95": (180, "days"),
     "qualified_maintainer_domain_ratio": (len(EVOLUTION_CORE_DOMAINS), "core_domains"),
+    "unhealthy_hotspot_count": (None, "days"),
+    "hotspot_cc_mean": (None, "days"),
 }
 ALLOWED_COMPLETE_UNKNOWN_REASONS = {
     "author_identity_ambiguity_requires_mailmap",
@@ -33,6 +39,7 @@ ALLOWED_COMPLETE_UNKNOWN_REASONS = {
     "maintainer_qualification_evidence_missing",
     "maintainer_qualification_incomplete",
     "insufficient_qualified_pairs",
+    "no_hotspot_functions",
     "metric_not_computable",
 }
 
@@ -257,16 +264,29 @@ def _validate_observed_bus(context: dict[str, Any]) -> None:
     _validate_bus_summary(context, factors)
 
 
+def _validate_observed_samples(
+    entry: dict[str, Any], name: str, expected_count: int | None, expected_unit: str
+) -> None:
+    if entry.get("sample_unit") != expected_unit:
+        raise EvolutionReceiptError(f"evolution receipt {name} has invalid samples")
+    if expected_count is None:
+        # No contract minimum_samples: sample_count is the covered day count.
+        covered = _number(entry.get("sample_count"), label=f"evolution receipt {name}.sample_count")
+        if not 0 <= covered <= 180:
+            raise EvolutionReceiptError(f"evolution receipt {name} has invalid samples")
+    elif entry.get("sample_count") != expected_count:
+        raise EvolutionReceiptError(f"evolution receipt {name} has invalid samples")
+
+
 def _merge_metrics(context: dict[str, Any]) -> None:
     metrics = context["metrics"]
     for name, (expected_count, expected_unit) in EXPECTED_SAMPLES.items():
         entry = metrics.get(name) if isinstance(metrics.get(name), dict) else {}
         observed = entry.get("status") == "observed"
-        if observed and not context["complete"]:
+        if observed and not context["complete"] and expected_count is not None:
             raise EvolutionReceiptError(f"evolution receipt {name} observed before 180 days")
         if observed:
-            if entry.get("sample_count") != expected_count or entry.get("sample_unit") != expected_unit:
-                raise EvolutionReceiptError(f"evolution receipt {name} has invalid samples")
+            _validate_observed_samples(entry, name, expected_count, expected_unit)
             _number(entry.get("value"), label=f"evolution receipt {name}.value")
             context["destination"][name] = {**entry, "source": context["source"]}
             continue

@@ -7,6 +7,7 @@ full 180-day history window.  Working-tree content is never an input.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import itertools
 import json
@@ -42,6 +43,7 @@ try:
         _reference_list,
     )
     from scripts.stdout_utils import out as stdout_out
+    from scripts.vkpi_engineering_health_collect import _DecisionCounter
 except ModuleNotFoundError:  # Direct execution: scripts/ is sys.path[0].
     from vkpi_engineering_health_evolution_people import (
         BUS_FACTOR_SHARE,
@@ -66,13 +68,17 @@ except ModuleNotFoundError:  # Direct execution: scripts/ is sys.path[0].
         _reference_list,
     )
     from stdout_utils import out as stdout_out
+    from vkpi_engineering_health_collect import _DecisionCounter
 
 
-ALGORITHM_VERSION = "vkpi-evolution-git-v4"
+ALGORITHM_VERSION = "vkpi-evolution-git-v5"
 WINDOW_DAYS = 180
 TOP_PAIR_LIMIT = 20
 MIN_PAIR_UNION_COMMITS = 10
 MIN_PAIR_COCHANGE_COMMITS = 3
+HOTSPOT_MIN_WINDOW_COMMITS = 10
+HOTSPOT_UNHEALTHY_MEAN_CC = 12.0
+HOTSPOT_PRODUCTION_ROOTS = ("backend/app/", "frontend/src/")
 
 
 class EvolutionEvidenceError(ValueError):
@@ -313,6 +319,166 @@ def _temporal_coupling(commits: Iterable[Commit]) -> dict[str, Any]:
     }
 
 
+def _hotspot_production_file(path: str) -> bool:
+    return path.startswith(HOTSPOT_PRODUCTION_ROOTS) and _eligible_source(path)
+
+
+def _hotspot_churn(commits: Iterable[Commit]) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    for commit in commits:
+        touched = {
+            change.path
+            for change in commit.changes
+            if _hotspot_production_file(change.path)
+        }
+        for path in touched:
+            counts[path] += 1
+    return counts
+
+
+def _head_production_paths(root: Path) -> frozenset[str]:
+    raw = _git(
+        root, "ls-tree", "-r", "--name-only", "-z", "HEAD", "--",
+        *(prefix.rstrip("/") for prefix in HOTSPOT_PRODUCTION_ROOTS),
+    )
+    return frozenset(part for part in raw.split("\x00") if part)
+
+
+def _head_function_ccs(root: Path, path: str) -> tuple[list[int] | None, str | None]:
+    """Return per-function CC values from the HEAD blob, or a parse failure."""
+    completed = subprocess.run(
+        ["git", "show", f"HEAD:{path}"], cwd=root, capture_output=True, check=False
+    )
+    if completed.returncode:
+        raise EvolutionEvidenceError(
+            f"cannot read HEAD blob for hotspot file {path}: "
+            f"{completed.stderr.decode('utf-8', 'replace').strip()[:240]}"
+        )
+    try:
+        tree = ast.parse(completed.stdout.decode("utf-8"), filename=path)
+    except (UnicodeDecodeError, SyntaxError, ValueError) as exc:
+        return None, f"{type(exc).__name__}: {str(exc)[:160]}"
+    ccs: list[int] = []
+    for node in ast.walk(tree):
+        counter = _DecisionCounter()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for statement in node.body:
+                counter.visit(statement)
+        elif isinstance(node, ast.Lambda):
+            counter.visit(node.body)
+        else:
+            continue
+        ccs.append(1 + counter.decisions)
+    return ccs, None
+
+
+def _hotspot_rows(
+    root: Path, hot: list[tuple[str, int]]
+) -> tuple[list[dict[str, Any]], list[int], list[dict[str, str]]]:
+    rows: list[dict[str, Any]] = []
+    cc_pool: list[int] = []
+    failures: list[dict[str, str]] = []
+    for path, window_commits in hot:
+        row: dict[str, Any] = {
+            "path": path, "window_commits": window_commits,
+            "function_count": None, "cc_mean": None, "cc_max": None,
+            "unhealthy": False, "cc_status": "non_python_no_cc",
+        }
+        if path.endswith(".py"):
+            ccs, failure = _head_function_ccs(root, path)
+            if failure is not None:
+                row["cc_status"] = "parse_failed"
+                failures.append({"path": path, "error": failure})
+            elif not ccs:
+                row.update({"function_count": 0, "cc_status": "no_functions"})
+            else:
+                mean = sum(ccs) / len(ccs)
+                row.update({
+                    "function_count": len(ccs), "cc_mean": round(mean, 2),
+                    "cc_max": max(ccs),
+                    "unhealthy": mean > HOTSPOT_UNHEALTHY_MEAN_CC,
+                    "cc_status": "computed",
+                })
+                cc_pool.extend(ccs)
+        rows.append(row)
+    return rows, cc_pool, failures
+
+
+def _hotspot_analysis(root: Path, commits: Iterable[Commit]) -> dict[str, Any]:
+    """Hotspot 口径甲(已拍板,逐字进合同 v1.1):
+
+    - 热度:180 天窗内(与既有 bus/temporal 同一窗口机制)非 merge 提交次数 ≥10 的
+      生产文件(backend/app/ 与 frontend/src/ 下源文件;排除 scripts/ 与 tests/);
+    - unhealthy_hotspot_count = 热度命中 ∩ 文件内函数 CC 均值 >12 的文件数(CC 用
+      collector 同款 _DecisionCounter 口径——从 vkpi_engineering_health_collect 导入
+      复用,不自己再实现一份);
+    - hotspot_cc_mean = 全部热点文件(热度命中,不管健康与否)内所有函数 CC 的均值,
+      保留 2 位。
+
+    实现补注(不改变口径):
+    - 提交总体 = 窗口内全部非 merge 提交(与 bus/temporal 共用 ``_history`` 的
+      HEAD-bound 窗口切片);源文件判定复用 ``_eligible_source``(排除测试文件与
+      tests/dist/generated 等目录),scripts/ 由生产根前缀天然排除;
+    - 热点文件必须仍存在于 HEAD(窗口内被删除的热文件单列于
+      ``hot_paths_missing_from_head``,不计入两项指标);
+    - CC 仅对 .py 文件可算(AST 口径);非 Python 热点文件计入热度命中与
+      hot_file_count,但没有函数样本,既不进 CC 池也不可能进 unhealthy 交集;
+    - 函数 CC 读 HEAD blob(git show HEAD:path),工作树永不作为输入;
+    - 合同 v1.1 对这两项不设 minimum_samples,窗口不足 180 天不阻塞 observed,
+      sample_count 记实际覆盖天数。
+    """
+    churn = _hotspot_churn(commits)
+    head_paths = _head_production_paths(root)
+    hot = sorted(
+        (
+            (path, count)
+            for path, count in churn.items()
+            if count >= HOTSPOT_MIN_WINDOW_COMMITS and path in head_paths
+        ),
+        key=lambda item: (-item[1], item[0]),
+    )
+    deleted_hot = sorted(
+        path for path, count in churn.items()
+        if count >= HOTSPOT_MIN_WINDOW_COMMITS and path not in head_paths
+    )
+    rows, cc_pool, failures = _hotspot_rows(root, hot)
+    unhealthy_count = sum(1 for row in rows if row["unhealthy"])
+    cc_mean = round(sum(cc_pool) / len(cc_pool), 2) if cc_pool else None
+    return {
+        "unhealthy_hotspot_count": unhealthy_count,
+        "hotspot_cc_mean": cc_mean,
+        "details": {
+            "formula": (
+                "hot = production files (backend/app/, frontend/src/; _eligible_source; "
+                f"present at HEAD) touched by >= {HOTSPOT_MIN_WINDOW_COMMITS} non-merge "
+                "commits in the window; unhealthy_hotspot_count = hot files whose mean "
+                f"function CC > {HOTSPOT_UNHEALTHY_MEAN_CC}; hotspot_cc_mean = mean CC of "
+                "all functions across all hot files, rounded to 2 decimals"
+            ),
+            "thresholds": {
+                "minimum_window_commits": HOTSPOT_MIN_WINDOW_COMMITS,
+                "unhealthy_mean_cc_exclusive": HOTSPOT_UNHEALTHY_MEAN_CC,
+            },
+            "production_roots": list(HOTSPOT_PRODUCTION_ROOTS),
+            "commit_population": (
+                "all non-merge commits in the 180-day window (same _history slice as "
+                "bus factor and temporal coupling)"
+            ),
+            "cc_definition": (
+                "1 + vkpi_engineering_health_collect._DecisionCounter decisions per "
+                "function/lambda, parsed from the HEAD blob (worktree is not an input)"
+            ),
+            "hot_file_count": len(rows),
+            "unhealthy_hotspot_count": unhealthy_count,
+            "hotspot_cc_mean": cc_mean,
+            "cc_function_count": len(cc_pool),
+            "python_parse_failures": failures,
+            "hot_paths_missing_from_head": deleted_hot,
+            "files": rows,
+        },
+    }
+
+
 def _base_context(root: Path) -> dict[str, Any]:
     root = root.resolve()
     head = _git(root, "rev-parse", "HEAD")
@@ -387,6 +553,7 @@ def _analyze_context(
         "qualified_bus_factor": qualified_bus_factor,
         "qualified_domain_ratio": len(ready_domains) / len(CORE_DOMAINS),
         "coupling": _temporal_coupling(context["human_commits"]),
+        "hotspot": _hotspot_analysis(context["root"], context["reachable"]),
         "observed_at": _iso(context["head_time"]),
         "source": (
             f"git-history://{context['head']}?window_days={WINDOW_DAYS}"
@@ -452,8 +619,29 @@ def _history_payload(context: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _hotspot_metric(
+    context: dict[str, Any], value: Any, *, computable: bool,
+    unavailable_reason: str = "metric_not_computable",
+) -> dict[str, Any]:
+    # Contract v1.1 registers the hotspot metrics without minimum_samples, so
+    # an incomplete history window shrinks sample_count instead of blocking
+    # the observed status (unlike the 180-day-gated metrics above).
+    sample_count = (
+        WINDOW_DAYS if context["complete_window"]
+        else math.floor(context["coverage_days"])
+    )
+    entry = {
+        "source": context["source"], "observed_at": context["observed_at"],
+        "sample_count": sample_count, "sample_unit": "days",
+    }
+    if computable:
+        return {"status": "observed", "value": value, **entry}
+    return {"status": "unknown", "value": None, **entry, "reason": unavailable_reason}
+
+
 def _metrics_payload(context: dict[str, Any]) -> dict[str, Any]:
     identity_ready = context["mailmap_ready"] and not context["identity_ambiguities"]
+    hotspot = context["hotspot"]
     return {
         "core_domain_bus_factor_min": _metric(
             context, context["qualified_bus_factor"],
@@ -473,6 +661,14 @@ def _metrics_payload(context: dict[str, Any]) -> dict[str, Any]:
             computable=context["qualified_by_domain"] is not None and identity_ready,
             unavailable_reason=context["people_unavailable_reason"],
             sample_count=len(CORE_DOMAINS), sample_unit="core_domains",
+        ),
+        "unhealthy_hotspot_count": _hotspot_metric(
+            context, hotspot["unhealthy_hotspot_count"], computable=True
+        ),
+        "hotspot_cc_mean": _hotspot_metric(
+            context, hotspot["hotspot_cc_mean"],
+            computable=hotspot["hotspot_cc_mean"] is not None,
+            unavailable_reason="no_hotspot_functions",
         ),
     }
 
@@ -497,6 +693,7 @@ def _details_payload(context: dict[str, Any]) -> dict[str, Any]:
             "domains": context["bus_domains"],
         },
         "temporal_coupling": context["coupling"],
+        "hotspot": context["hotspot"]["details"],
     }
 
 
