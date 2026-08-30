@@ -8,7 +8,7 @@ from app.core.logging import get_logger
 from app.api.routers.kol_ops_helpers import (
     _clean_creator_name,
     _content_rollup_sql,
-    _persist_search_candidates,
+    _persist_platform_search_result,
     _log_kol_system_action,
     _country_filter_variants,
     _dict,
@@ -42,6 +42,9 @@ from app.services.kol.account_dossier import (
 )
 from app.services.kol.content_analyzer import analyze_kol_url_standalone
 from app.services.kol.metrics import cpv, engagement_rate, roi
+from app.services.kol.platform_search_workflow import (
+    execute_platform_search as _execute_platform_search_workflow,
+)
 from app.domains.access import scope
 from app.domains.kol import history_match as kol_history_match
 from app.domains.kol import profile_discovery as _kol_discovery  # P0-6 地区排除判据复用
@@ -163,78 +166,16 @@ def list_kols(
 
 
 async def _execute_platform_search(body: dict, *, staff: dict) -> dict:
-    query = str(body.get("query") or "").strip()
-    platform = str(body.get("platform") or "youtube").strip().lower()
-    market = str(body.get("market") or "").strip().upper()
-    if not query:
-        raise HTTPException(status_code=400, detail="query is required")
-    # P0-6:同步发现入口此前旁路了发现侧过滤。① douyin 已从发现支持平台硬移除,直接 422。
-    if platform == "douyin":
-        # P0-6:douyin 已硬移除出发现平台;优雅空返回(覆盖所有调用方,不抛 422)。
-        return {
-            "status": "unsupported_platform",
-            "items": [],
-            "candidate_ids": [],
-            "saved_candidates": 0,
-            "message": "douyin is not a supported discovery platform",
-            "platform": platform,
-        }
-    # ② 默认排除 {中国大陆 CN / 香港 HK / 台湾 TW} 三地区(exclude_chinese 默认 True,语义=排除三地区);
-    #    同步入口无 per-item country,地区信号来自搜索 market;market 命中三地区则整批不落库。
-    exclude_region = bool(body.get("exclude_chinese", True))
-    if exclude_region and _kol_discovery._country_in_excluded_region(market):
-        return {
-            "status": "excluded_region",
-            "items": [],
-            "candidate_ids": [],
-            "saved_candidates": 0,
-            "message": "market is in excluded region {CN/HK/TW}; no candidates persisted",
-            "market": market,
-        }
-    try:
-        result = await search_platform_content(
-            platform,
-            query,
-            market=market,
-            max_results=_int(body.get("max_results"), 25),
-        )
-    except Exception as exc:  # noqa: BLE001 - provider faults are a retryable route state
-        logger.warning("kol platform search provider failed platform=%s", platform, exc_info=True)
-        raise _provider_unavailable("platform_search_unavailable", "platform_search") from exc
-    result_items = [dict(item or {}) for item in (result.get("items", []) or [])]
-    enriched_items = await db_write(lambda: kol_history_match.annotate_platform_items(result_items, platform=platform))
-    # ③ 写入前再按 item 上可能出现的 country/region 兜底过滤(默认开),海外中文号放行。
-    if exclude_region:
-        enriched_items = [
-            item for item in enriched_items
-            if not _kol_discovery._country_in_excluded_region(
-                market, item.get("country"), item.get("region")
-            )
-        ]
-    result["items"] = enriched_items
-    candidate_ids = await db_write(lambda: _persist_search_candidates(enriched_items, body, platform, market))
-    await db_write(
-        lambda: _log_activity_commit(
-            staff,
-            "platform_search",
-            query=query,
-            platform=platform,
-            market=market,
-            api_provider=str(result.get("provider") or result.get("source") or platform),
-            api_calls=1,
-            result_count=len(enriched_items),
-            metadata={
-                "saved_candidates": len(candidate_ids),
-                "history_matches": sum(1 for item in enriched_items if item.get("historical_match")),
-                "niche": body.get("niche", ""),
-            },
-        )
+    return await _execute_platform_search_workflow(
+        body,
+        staff=staff,
+        search_content=search_platform_content,
+        annotate_items=kol_history_match.annotate_platform_items,
+        db_write_fn=db_write,
+        persist_result=_persist_platform_search_result,
+        country_in_excluded_region=_kol_discovery._country_in_excluded_region,
+        unavailable_error=_provider_unavailable,
     )
-    return {
-        **result,
-        "candidate_ids": candidate_ids,
-        "saved_candidates": len(candidate_ids),
-    }
 
 
 @router.post("/search/platform")

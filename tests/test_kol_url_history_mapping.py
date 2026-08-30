@@ -96,16 +96,15 @@ def test_terminal_video_job_is_replayed_after_late_session_attach(
     monkeypatch: pytest.MonkeyPatch,
     terminal_status: str,
 ) -> None:
-    from app.domains.kol import search_sessions_attach
+    from app.domains.kol import search_session_job_sync, search_sessions_attach
     from app.domains.tasks.search_session_lineage import search_session_lineages
-    from app.workers import apify_jobs_worker_session
 
     conn = _LinkConn(terminal_status)
     synced: list[dict[str, Any]] = []
     monkeypatch.setattr(search_sessions_attach, "get_conn", lambda: conn)
     monkeypatch.setattr(
-        apify_jobs_worker_session,
-        "_sync_search_session_job",
+        search_session_job_sync,
+        "sync_search_session_job",
         lambda raw_conn, job_id, **kwargs: synced.append(
             {"conn": raw_conn, "job_id": job_id, **kwargs}
         ) or True,
@@ -143,15 +142,14 @@ def test_terminal_video_job_is_replayed_after_late_session_attach(
 def test_terminal_transition_during_lineage_commit_is_replayed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.domains.kol import search_sessions_attach
-    from app.workers import apify_jobs_worker_session
+    from app.domains.kol import search_session_job_sync, search_sessions_attach
 
     conn = _LinkConn("running", terminal_after_lineage_commit="done")
     synced: list[dict[str, Any]] = []
     monkeypatch.setattr(search_sessions_attach, "get_conn", lambda: conn)
     monkeypatch.setattr(
-        apify_jobs_worker_session,
-        "_sync_search_session_job",
+        search_session_job_sync,
+        "sync_search_session_job",
         lambda raw_conn, job_id, **kwargs: synced.append(
             {"conn": raw_conn, "job_id": job_id, **kwargs}
         ) or True,
@@ -213,11 +211,14 @@ def test_postgres_link_merge_takes_job_row_lock(monkeypatch: pytest.MonkeyPatch)
 def test_terminal_replay_failure_is_observable_and_not_committed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.domains.kol import search_sessions_attach
-    from app.workers import apify_jobs_worker_session
+    from app.domains.kol import search_session_job_sync, search_sessions_attach
 
     conn = _LinkConn("done")
-    monkeypatch.setattr(apify_jobs_worker_session, "_sync_search_session_job", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        search_session_job_sync,
+        "sync_search_session_job",
+        lambda *_a, **_k: False,
+    )
 
     replayed = search_sessions_attach._sync_linked_terminal_job(
         conn,
@@ -266,6 +267,28 @@ def test_worker_sync_wrapper_reports_no_lineage_as_not_applied(
             raw_status="done",
         )
         is False
+    )
+
+
+def test_worker_sync_compatibility_facade_uses_domain_owned_impl() -> None:
+    from app.domains.kol import search_session_job_analysis
+    from app.domains.kol import search_session_job_lineage
+    from app.domains.kol import search_session_job_sync
+    from app.workers import apify_jobs_worker_lineage
+    from app.workers import apify_jobs_worker_session
+    from app.workers import apify_jobs_worker_session_cache
+
+    assert (
+        apify_jobs_worker_session._sync_search_session_job_impl
+        is search_session_job_sync.sync_search_session_job_impl
+    )
+    assert (
+        apify_jobs_worker_lineage._lineage_item_state
+        is search_session_job_lineage.lineage_item_state
+    )
+    assert (
+        apify_jobs_worker_session_cache.search_session_analysis_summary_from_ready_cache
+        is search_session_job_analysis.search_session_analysis_summary_from_ready_cache
     )
 
 

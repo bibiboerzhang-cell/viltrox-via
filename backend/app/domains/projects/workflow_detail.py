@@ -9,11 +9,12 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains import business_truth
 from app.domains.access import scope
+from app.domains.projects import workflow_detail_assignments as assignment_stages
+from app.domains.projects import workflow_detail_sections as detail_sections
+from app.domains.projects.stage_canonical import stage_label_zh, to_canonical
 from app.domains.projects.workflow_projects import _enrich_project_card_fields
-from app.domains.projects.stage_canonical import to_canonical, stage_label_zh
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_audit import ensure_vkpi_audit_schema
-from app.domains.projects.workflow_common import _int
 
 logger = get_logger(__name__)
 
@@ -47,6 +48,133 @@ def _decode_assignment_cursor(project_id: int, cursor: str) -> tuple[int, str, i
         raise ValueError("invalid assignment cursor") from exc
 
 
+def _assignment_page_state(
+    project_id: int,
+    assignment_rows: list[dict[str, Any]],
+    assignment_limit: int | None,
+) -> tuple[list[dict[str, Any]], bool, str | None]:
+    """Capture the next cursor before normalization removes its sort keys."""
+    assignment_has_more = bool(
+        assignment_limit is not None and len(assignment_rows) > assignment_limit
+    )
+    next_cursor = None
+    if assignment_has_more and assignment_limit:
+        next_cursor = _encode_assignment_cursor(project_id, assignment_rows[assignment_limit - 1])
+    participating_kols, normalized_has_more = assignment_stages.prepare_assignment_page(
+        assignment_rows,
+        assignment_limit,
+        to_canonical=to_canonical,
+        stage_label_zh=stage_label_zh,
+    )
+    return participating_kols, normalized_has_more, next_cursor
+
+
+def _load_assignments(
+    conn: Any,
+    project_id: int,
+    *,
+    assignment_limit: int | None,
+    assignment_cursor: str | None,
+) -> tuple[list[dict[str, Any]], bool, str | None]:
+    cursor_values = None
+    if assignment_limit is not None and assignment_cursor:
+        cursor_values = _decode_assignment_cursor(project_id, assignment_cursor)
+    assignment_rows = assignment_stages.fetch_assignment_rows(
+        conn,
+        project_id,
+        assignment_limit=assignment_limit,
+        cursor_values=cursor_values,
+    )
+    return _assignment_page_state(project_id, assignment_rows, assignment_limit)
+
+
+def _load_audit_events(
+    conn: Any,
+    project_id: int,
+    staff: dict[str, Any] | None,
+    *,
+    raw_costs: list[dict[str, Any]],
+    content: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if not scope.can_view_all(staff, domain="audit"):
+        return []
+    ensure_vkpi_audit_schema()
+    return detail_sections.fetch_audit_events(
+        conn,
+        project_id,
+        raw_costs=raw_costs,
+        messages=content["messages"],
+        content_posts=content["content_posts"],
+        deliverables=content["deliverables"],
+        shipments=content["shipments"],
+        samples=content["samples"],
+    )
+
+
+def _base_result(
+    *,
+    project: dict[str, Any],
+    events: list[dict[str, Any]],
+    links: list[dict[str, Any]],
+    link_clicks: list[dict[str, Any]],
+    link_orders: list[dict[str, Any]],
+    sales: list[dict[str, Any]],
+    costs: list[dict[str, Any]],
+    content: dict[str, Any],
+    audit_events: list[dict[str, Any]],
+    raw_costs: list[dict[str, Any]],
+    show_financials: bool,
+) -> dict[str, Any]:
+    return {
+        "project": project,
+        "events": events,
+        "links": links,
+        "link_clicks": link_clicks,
+        "link_orders": link_orders,
+        "link_summary": detail_sections.build_link_summary(links, link_clicks, link_orders),
+        "sales_attributions": sales,
+        "costs": costs,
+        "messages": content["messages"],
+        "content_posts": content["content_posts"],
+        "content_assets": content["content_assets"],
+        "terms": content["terms"],
+        "deliverables": content["deliverables"],
+        "samples": content["samples"],
+        "shipments": content["shipments"],
+        "audit_events": audit_events,
+        "roi": detail_sections.build_roi(
+            sales,
+            raw_costs,
+            costs,
+            show_financials=show_financials,
+        ),
+    }
+
+
+def _attach_assignment_contract(
+    result: dict[str, Any],
+    project: dict[str, Any],
+    participating_kols: list[dict[str, Any]],
+    *,
+    assignment_limit: int | None,
+    assignment_has_more: bool,
+    assignment_next_cursor: str | None,
+) -> None:
+    if assignment_limit is None:
+        result["participating_kols"] = participating_kols
+        result["project_kol_assignments"] = participating_kols
+        return
+    result["project_kol_assignments"] = participating_kols
+    result["assignment_page"] = {
+        "mode": "summary",
+        "limit": int(assignment_limit),
+        "count": len(participating_kols),
+        "total": int(project.get("assignment_count") or 0),
+        "has_more": assignment_has_more,
+        "next_cursor": assignment_next_cursor,
+    }
+
+
 def project_detail(
     project_id: int,
     *,
@@ -54,620 +182,79 @@ def project_detail(
     assignment_limit: int | None = None,
     assignment_cursor: str | None = None,
 ) -> dict[str, Any]:
-    """Return full legacy detail, or a bounded assignment summary page.
-
-    ``assignment_limit=None`` is the historical full response.  Supplying a
-    limit activates the additive summary contract: assignments are keyset
-    paged and only the canonical ``project_kol_assignments`` field is emitted,
-    avoiding the historical duplicate array in ``participating_kols``.
-    """
+    """Return full legacy detail, or a bounded assignment summary page."""
     if assignment_limit is not None:
         assignment_limit = max(1, min(int(assignment_limit), 100))
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff)
     conn = get_conn()
-    row = conn.execute(
-        """
-        SELECT p.*,
-               CASE
-                   WHEN COALESCE(pa.kol_count, 0) > 1 THEN CAST(pa.kol_count AS TEXT) || ' KOL'
-                   ELSE COALESCE(pk.display_name, '')
-               END AS kol_name,
-               CASE
-                   WHEN COALESCE(pa.kol_count, 0) > 1 THEN 'multi'
-                   ELSE COALESCE(pk.platform, '')
-               END AS kol_platform,
-               pk.handle AS handle,
-               pk.avatar_url AS kol_avatar,
-               pa.primary_kol_pool_id AS kol_pool_id,
-               COALESCE(pa.kol_count, 0) AS kol_count,
-               COALESCE(pa.assignment_count, 0) AS assignment_count,
-               COALESCE(pa.kol_with_evidence, 0) AS kol_with_evidence,
-               COALESCE(ev.evidence_count, 0) AS evidence_count,
-               COALESCE(ev.evidence_kol_count, 0) AS evidence_kol_count,
-               COALESCE(ev.total_views, 0) AS total_views,
-               COALESCE(s.name, assignment_owner.name) AS staff_name
-        FROM vkpi_projects p
-        LEFT JOIN (
-            SELECT
-                a.project_id,
-                COUNT(*) AS assignment_count,
-                COUNT(DISTINCT a.kol_pool_id) AS kol_count,
-                COUNT(DISTINCT CASE WHEN kp.has_video_evidence THEN a.kol_pool_id END) AS kol_with_evidence,
-                MIN(a.kol_pool_id) AS primary_kol_pool_id
-            FROM vkpi_project_kol_assignments a
-            LEFT JOIN vkpi_kol_pool kp ON kp.id = a.kol_pool_id
-            WHERE a.project_id=?
-            GROUP BY a.project_id
-        ) pa ON pa.project_id = p.id
-        LEFT JOIN (
-            SELECT project_id, assigned_staff_id
-            FROM (
-                SELECT
-                    project_id,
-                    assigned_staff_id,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY project_id
-                        ORDER BY COUNT(*) DESC, assigned_staff_id ASC
-                    ) AS rn
-                FROM vkpi_project_kol_assignments
-                WHERE project_id=? AND assigned_staff_id IS NOT NULL
-                GROUP BY project_id, assigned_staff_id
-            ) ranked_assignment_staff
-            WHERE rn = 1
-        ) assignment_owner_pick ON assignment_owner_pick.project_id = p.id
-        LEFT JOIN vkpi_kol_pool pk ON pk.id = pa.primary_kol_pool_id
-        LEFT JOIN (
-            SELECT
-                project_id,
-                COUNT(*) AS evidence_count,
-                COUNT(DISTINCT kol_pool_id) AS evidence_kol_count,
-                COALESCE(SUM(COALESCE(view_count, 0)), 0) AS total_views
-            FROM vkpi_kol_video_evidence
-            WHERE project_id=?
-            GROUP BY project_id
-        ) ev ON ev.project_id = p.id
-        LEFT JOIN staff st ON st.id = p.assigned_staff_id
-        LEFT JOIN users s ON s.id = st.user_id
-        LEFT JOIN staff assignment_st ON assignment_st.id = assignment_owner_pick.assigned_staff_id
-        LEFT JOIN users assignment_owner ON assignment_owner.id = assignment_st.user_id
-        WHERE p.id=?
-        """,
-        (int(project_id), int(project_id), int(project_id), int(project_id)),
-    ).fetchone()
+    row = assignment_stages.fetch_project_row(conn, project_id)
     if not row:
         raise LookupError("project not found")
-    assignment_stage_rank_sql = """
-        CASE a.stage
-            WHEN 'reviewed' THEN 1
-            WHEN 'measured' THEN 1
-            WHEN 'content_posted' THEN 2
-            WHEN 'published' THEN 2
-            WHEN 'device_sent' THEN 3
-            WHEN 'shipped' THEN 3
-            WHEN 'received' THEN 3
-            WHEN 'agreed' THEN 4
-            WHEN 'replied' THEN 5
-            WHEN 'contacted' THEN 6
-            WHEN 'discovered' THEN 7
-            WHEN 'churned' THEN 8
-            ELSE 9
-        END
-    """
-    assignment_sort_name_sql = "COALESCE(kp.display_name, '')"
-    assignment_cursor_sql = ""
-    assignment_params: list[Any] = [int(project_id), int(project_id), int(project_id), int(project_id)]
-    if assignment_limit is not None and assignment_cursor:
-        cursor_rank, cursor_name, cursor_id = _decode_assignment_cursor(project_id, assignment_cursor)
-        assignment_cursor_sql = f"""
-            AND (
-                ({assignment_stage_rank_sql}) > ?
-                OR (({assignment_stage_rank_sql}) = ? AND (
-                    ({assignment_sort_name_sql}) > ?
-                    OR (({assignment_sort_name_sql}) = ? AND a.id > ?)
-                ))
-            )
-        """
-        assignment_params.extend([cursor_rank, cursor_rank, cursor_name, cursor_name, cursor_id])
-    assignment_limit_sql = ""
-    if assignment_limit is not None:
-        assignment_limit_sql = "LIMIT ?"
-        assignment_params.append(assignment_limit + 1)
-
-    assignment_rows = [
-        dict(item)
-        for item in conn.execute(
-            f"""
-            SELECT
-                a.id AS assignment_id,
-                a.project_id,
-                a.kol_pool_id,
-                a.stage,
-                a.stage_status,
-                a.assigned_staff_id,
-                a.tracking_number,
-                a.is_placeholder_tracking,
-                a.source,
-                a.source_ref,
-                a.excel_progress,
-                a.metadata_json,
-                a.created_at,
-                a.updated_at,
-                assigned_user.name AS assigned_staff_name,
-                assigned_user.email AS assigned_staff_email,
-                kp.handle,
-                kp.display_name AS kol_name,
-                kp.display_name,
-                kp.platform AS kol_platform,
-                kp.platform,
-                kp.profile_url,
-                kp.avatar_url,
-                kp.country,
-                kp.followers,
-                kp.dashboard_account_type,
-                kp.dashboard_tier,
-                kp.has_video_evidence,
-                kp.video_evidence_count,
-                COALESCE(ev.evidence_count, 0) AS evidence_count,
-                COALESCE(ev.total_views, 0) AS total_views,
-                COALESCE(ev.total_likes, 0) AS total_likes,
-                COALESCE(ev.total_comments, 0) AS total_comments,
-                ev.latest_publish_date,
-                top_ev.content_url AS evidence_url,
-                top_ev.content_url AS video_url,
-                COALESCE(top_ev.title, top_ev.video_title, top_ev.content_url) AS evidence_title,
-                top_ev.thumbnail_url AS evidence_thumbnail_url,
-                top_ev.publish_date AS evidence_publish_date,
-                latest_ev.content_url AS latest_evidence_url,
-                latest_ev.content_url AS latest_video_url,
-                COALESCE(latest_ev.title, latest_ev.video_title, latest_ev.content_url) AS latest_evidence_title,
-                latest_ev.thumbnail_url AS latest_evidence_thumbnail_url,
-                latest_ev.publish_date AS latest_evidence_publish_date,
-                ({assignment_stage_rank_sql}) AS assignment_stage_rank,
-                ({assignment_sort_name_sql}) AS assignment_sort_name
-            FROM vkpi_project_kol_assignments a
-            LEFT JOIN vkpi_kol_pool kp ON kp.id = a.kol_pool_id
-            LEFT JOIN staff assigned_staff ON assigned_staff.id = a.assigned_staff_id
-            LEFT JOIN users assigned_user ON assigned_user.id = assigned_staff.user_id
-            LEFT JOIN (
-                SELECT
-                    project_id,
-                    kol_pool_id,
-                    COUNT(*) AS evidence_count,
-                    COALESCE(SUM(COALESCE(view_count, 0)), 0) AS total_views,
-                    COALESCE(SUM(COALESCE(like_count, 0)), 0) AS total_likes,
-                    COALESCE(SUM(COALESCE(comment_count, 0)), 0) AS total_comments,
-                    MAX(publish_date) AS latest_publish_date
-                FROM vkpi_kol_video_evidence
-                WHERE project_id=?
-                GROUP BY project_id, kol_pool_id
-            ) ev ON ev.project_id = a.project_id AND ev.kol_pool_id = a.kol_pool_id
-            LEFT JOIN (
-                SELECT DISTINCT ON (project_id, kol_pool_id)
-                    project_id,
-                    kol_pool_id,
-                    content_url,
-                    title,
-                    video_title,
-                    thumbnail_url,
-                    view_count,
-                    publish_date,
-                    id
-                FROM vkpi_kol_video_evidence
-                WHERE project_id=? AND COALESCE(evidence_type, 'video') = 'video'
-                ORDER BY
-                    project_id,
-                    kol_pool_id,
-                    COALESCE(view_count, 0) DESC,
-                    publish_date DESC NULLS LAST,
-                    id DESC
-            ) top_ev ON top_ev.project_id = a.project_id AND top_ev.kol_pool_id = a.kol_pool_id
-            LEFT JOIN (
-                SELECT DISTINCT ON (project_id, kol_pool_id)
-                    project_id,
-                    kol_pool_id,
-                    content_url,
-                    title,
-                    video_title,
-                    thumbnail_url,
-                    publish_date,
-                    id
-                FROM vkpi_kol_video_evidence
-                WHERE project_id=? AND COALESCE(evidence_type, 'video') = 'video'
-                ORDER BY
-                    project_id,
-                    kol_pool_id,
-                    publish_date DESC NULLS LAST,
-                    id DESC
-            ) latest_ev ON latest_ev.project_id = a.project_id AND latest_ev.kol_pool_id = a.kol_pool_id
-            WHERE a.project_id=?
-            {assignment_cursor_sql}
-            ORDER BY
-                ({assignment_stage_rank_sql}) ASC,
-                ({assignment_sort_name_sql}) ASC,
-                a.id ASC
-            {assignment_limit_sql}
-            """,
-            tuple(assignment_params),
-        ).fetchall()
-    ]
-    assignment_has_more = bool(assignment_limit is not None and len(assignment_rows) > assignment_limit)
-    participating_kols = assignment_rows[:assignment_limit] if assignment_limit is not None else assignment_rows
-    assignment_next_cursor = (
-        _encode_assignment_cursor(project_id, participating_kols[-1])
-        if assignment_has_more and participating_kols
-        else None
+    participating_kols, assignment_has_more, assignment_next_cursor = _load_assignments(
+        conn,
+        project_id,
+        assignment_limit=assignment_limit,
+        assignment_cursor=assignment_cursor,
     )
-    for item in participating_kols:
-        item.pop("assignment_stage_rank", None)
-        item.pop("assignment_sort_name", None)
-        for key in (
-            "assignment_id",
-            "project_id",
-            "kol_pool_id",
-            "assigned_staff_id",
-            "followers",
-            "video_evidence_count",
-            "evidence_count",
-            "total_views",
-            "total_likes",
-            "total_comments",
-        ):
-            item[key] = int(item.get(key) or 0)
-        item["has_video_evidence"] = bool(item.get("has_video_evidence"))
-        # Additive canonical-stage lens for the UI (raw `stage`/`stage_status` untouched).
-        item["canonical_stage"] = to_canonical(item.get("stage"), item.get("stage_status", ""))
-        item["canonical_stage_label"] = stage_label_zh(item["canonical_stage"])
     project = dict(row)
-    if assignment_limit is None and participating_kols:
-        project["kol_count"] = len({int(item.get("kol_pool_id") or 0) for item in participating_kols if int(item.get("kol_pool_id") or 0)})
-        project["kol_with_evidence"] = sum(1 for item in participating_kols if bool(item.get("has_video_evidence")))
-        project["evidence_count"] = sum(int(item.get("evidence_count") or 0) for item in participating_kols)
-        project["total_views"] = sum(int(item.get("total_views") or 0) for item in participating_kols)
-        if project["kol_count"] > 1:
-            project["kol_name"] = f"{project['kol_count']} KOL"
-            project["kol_platform"] = "multi"
-        else:
-            only = participating_kols[0]
-            project["kol_name"] = only.get("kol_name") or project.get("kol_name") or ""
-            project["kol_platform"] = only.get("kol_platform") or project.get("kol_platform") or ""
-    _enrich_project_card_fields(conn, [project])
-    events = [
-        dict(item)
-        for item in conn.execute(
-            "SELECT * FROM vkpi_project_stage_events WHERE project_id=? ORDER BY effective_at DESC, id DESC",
-            (int(project_id),),
-        ).fetchall()
-    ]
-    links = [
-        dict(item)
-        for item in conn.execute(
-            "SELECT * FROM vkpi_links WHERE project_id=? ORDER BY created_at DESC, id DESC",
-            (int(project_id),),
-        ).fetchall()
-    ]
-    link_ids = [int(item.get("id") or 0) for item in links if int(item.get("id") or 0)]
-    link_clicks: list[dict[str, Any]] = []
-    link_orders: list[dict[str, Any]] = []
-    if link_ids:
-        placeholders = ",".join("?" for _ in link_ids)
-        link_clicks = [
-            dict(item)
-            for item in conn.execute(
-                f"""
-                SELECT c.*, l.slug, l.destination_url AS link_destination_url
-                FROM vkpi_link_clicks c
-                LEFT JOIN vkpi_links l ON l.id = c.link_id
-                WHERE c.link_id IN ({placeholders})
-                ORDER BY c.clicked_at DESC, c.id DESC
-                LIMIT 100
-                """,
-                link_ids,
-            ).fetchall()
-        ]
-        link_orders = [
-            dict(item)
-            for item in conn.execute(
-                f"""
-                SELECT sa.id AS attribution_id,
-                       sa.source_platform,
-                       sa.source_ref,
-                       sa.link_id,
-                       sa.project_id,
-                       sa.kol_id,
-                       sa.staff_id,
-                       sa.revenue_cents,
-                       sa.currency,
-                       sa.confidence,
-                       sa.occurred_at,
-                       l.slug,
-                       os.id AS shopify_order_snapshot_id,
-                       os.shopify_order_id,
-                       os.order_name,
-                       os.order_number,
-                       os.processed_at,
-                       os.financial_status,
-                       os.fulfillment_status,
-                       os.refund_status,
-                       os.total_cents,
-                       os.landing_site,
-                       os.raw_payload_hash,
-                       CASE WHEN {business_truth.verified_shopify_attribution_sql('sa')}
-                            THEN 1 ELSE 0 END AS is_verified_business_truth
-                FROM vkpi_sales_attributions sa
-                LEFT JOIN vkpi_links l ON l.id = sa.link_id
-                LEFT JOIN vkpi_shopify_order_snapshots os ON os.id = sa.shopify_order_snapshot_id
-                WHERE sa.project_id=? AND sa.link_id IN ({placeholders})
-                ORDER BY sa.occurred_at DESC, sa.id DESC
-                LIMIT 100
-                """,
-                [int(project_id), *link_ids],
-            ).fetchall()
-        ]
-        for item in link_orders:
-            item["business_truth_status"] = (
-                "provider_verified"
-                if int(item.get("is_verified_business_truth") or 0) == 1
-                else "reference_only"
-            )
-    sales: list[dict[str, Any]] = []
-    for item in conn.execute(
-        f"""
-        SELECT sa.*,
-               CASE WHEN {business_truth.verified_shopify_attribution_sql('sa')}
-                    THEN 1 ELSE 0 END AS is_verified_business_truth,
-               os.shopify_order_id,
-               os.order_name AS shopify_order_name,
-               os.order_number AS shopify_order_number,
-               os.processed_at AS shopify_processed_at,
-               os.financial_status AS shopify_financial_status,
-               os.fulfillment_status AS shopify_fulfillment_status,
-               os.refund_status AS shopify_refund_status,
-               os.total_cents AS shopify_total_cents,
-               os.currency AS shopify_currency,
-               os.landing_site AS shopify_landing_site,
-               os.discount_codes_json AS shopify_discount_codes_json,
-               os.line_items_json AS shopify_line_items_json,
-               os.raw_payload_hash AS shopify_raw_payload_hash
-        FROM vkpi_sales_attributions sa
-        LEFT JOIN vkpi_shopify_order_snapshots os ON os.id = sa.shopify_order_snapshot_id
-        WHERE sa.project_id=?
-        ORDER BY sa.occurred_at DESC, sa.id DESC
-        """,
-        (int(project_id),),
-    ).fetchall():
-        row_data = dict(item)
-        row_data["business_truth_status"] = (
-            "provider_verified"
-            if int(row_data.get("is_verified_business_truth") or 0) == 1
-            else "reference_only"
-        )
-        if row_data.get("shopify_order_snapshot_id"):
-            row_data["order_snapshot"] = {
-                "id": row_data.get("shopify_order_snapshot_id"),
-                "shopify_order_id": row_data.get("shopify_order_id"),
-                "order_name": row_data.get("shopify_order_name"),
-                "order_number": row_data.get("shopify_order_number"),
-                "processed_at": row_data.get("shopify_processed_at"),
-                "financial_status": row_data.get("shopify_financial_status"),
-                "fulfillment_status": row_data.get("shopify_fulfillment_status"),
-                "refund_status": row_data.get("shopify_refund_status"),
-                "total_cents": row_data.get("shopify_total_cents"),
-                "currency": row_data.get("shopify_currency"),
-                "landing_site": row_data.get("shopify_landing_site"),
-                "discount_codes_json": row_data.get("shopify_discount_codes_json"),
-                "line_items_json": row_data.get("shopify_line_items_json"),
-                "raw_payload_hash": row_data.get("shopify_raw_payload_hash"),
-            }
-        sales.append(row_data)
-    show_financials = scope.can_view_all(staff, domain="cost")
-    raw_costs = [
-        dict(item)
-        for item in conn.execute(
-            f"""
-            SELECT c.*,
-                   CASE WHEN {business_truth.approved_actual_cost_sql('c')}
-                        THEN 1 ELSE 0 END AS is_approved_actual
-            FROM vkpi_cost_ledger c
-            WHERE c.project_id=?
-            ORDER BY c.incurred_at DESC, c.id DESC
-            """,
-            (int(project_id),),
-        ).fetchall()
-    ]
-    for item in raw_costs:
-        item["business_truth_status"] = (
-            "approved_actual"
-            if int(item.get("is_approved_actual") or 0) == 1
-            else "reference_only"
-        )
-    if show_financials:
-        costs = raw_costs
-    else:
-        # Operators can record shipping/cash fees, but internal lens/sample cost
-        # and ROI basis must not be exposed through the detail API.
-        costs = [item for item in raw_costs if str(item.get("cost_type") or "") in {"shipping", "cash_fee"}]
-    messages = [
-        dict(item)
-        for item in conn.execute(
-            "SELECT * FROM vkpi_messages WHERE project_id=? ORDER BY captured_at DESC, id DESC",
-            (int(project_id),),
-        ).fetchall()
-    ]
-    content_posts = [
-        dict(item)
-        for item in conn.execute(
-            "SELECT * FROM vkpi_content_posts WHERE project_id=? ORDER BY published_at DESC, id DESC",
-            (int(project_id),),
-        ).fetchall()
-    ]
-    content_assets = [
-        dict(item)
-        for item in conn.execute(
-            "SELECT * FROM vkpi_content_assets WHERE project_id=? ORDER BY created_at DESC, id DESC",
-            (int(project_id),),
-        ).fetchall()
-    ]
-    terms = conn.execute("SELECT * FROM vkpi_project_terms WHERE project_id=?", (int(project_id),)).fetchone()
-    deliverables = [
-        dict(item)
-        for item in conn.execute(
-            "SELECT * FROM vkpi_project_deliverables WHERE project_id=? ORDER BY due_at ASC, id ASC",
-            (int(project_id),),
-        ).fetchall()
-    ]
-    terms_dict = dict(terms) if terms else {}
-    if not deliverables and terms_dict.get("deliverables_json"):
-        try:
-            raw_deliverables = json.loads(str(terms_dict.get("deliverables_json") or "[]"))
-        except Exception as exc:
-            # P2:不再静默吞——terms.deliverables_json 解析失败要可观测,降级为空列表继续。
-            logger.warning(
-                "vkpi.project_terms_deliverables_json_parse_failed",
-                extra={"project_id": int(project_id), "error": str(exc)},
-            )
-            raw_deliverables = []
-        if isinstance(raw_deliverables, list):
-            deliverables = [
-                {
-                    **item,
-                    "id": f"terms-{index + 1}",
-                    "status": item.get("status") or "planned",
-                    "source": "terms.deliverables_json",
-                }
-                for index, item in enumerate(raw_deliverables)
-                if isinstance(item, dict)
-            ]
-    samples = [
-        dict(item)
-        for item in conn.execute(
-            "SELECT * FROM vkpi_sample_assets WHERE project_id=? ORDER BY created_at DESC, id DESC",
-            (int(project_id),),
-        ).fetchall()
-    ]
-    if not show_financials:
-        for sample in samples:
-            sample["sample_cost_cents"] = None
-    shipments = [
-        dict(item)
-        for item in conn.execute(
-            "SELECT * FROM vkpi_shipments WHERE project_id=? ORDER BY created_at DESC, id DESC",
-            (int(project_id),),
-        ).fetchall()
-    ]
-    verified_sales = [
-        item for item in sales
-        if int(item.get("is_verified_business_truth") or 0) == 1
-    ]
-    approved_costs = [
-        item for item in raw_costs
-        if int(item.get("is_approved_actual") or 0) == 1
-    ]
-    visible_approved_costs = [
-        item for item in costs
-        if int(item.get("is_approved_actual") or 0) == 1
-    ]
-    verified_link_orders = [
-        item for item in link_orders
-        if int(item.get("is_verified_business_truth") or 0) == 1
-    ]
-    revenue_cents = sum(int(item.get("revenue_cents") or 0) for item in verified_sales)
-    cost_cents = sum(int(item.get("amount_cents") or 0) for item in approved_costs)
-    visible_cost_cents = sum(int(item.get("amount_cents") or 0) for item in visible_approved_costs)
-    link_summary = {
-        "link_count": len(links),
-        "click_count": sum(int(item.get("click_count") or 0) for item in links),
-        "valid_click_count": sum(int(item.get("valid_click_count") or 0) for item in links),
-        "bot_click_count": sum(int(item.get("bot_click_count") or 0) for item in links),
-        "unique_click_count": sum(1 for item in link_clicks if int(item.get("is_unique") or 0)),
-        "order_count": len({str(item.get("source_ref") or item.get("shopify_order_id") or item.get("attribution_id")) for item in verified_link_orders}),
-        "attribution_count": len(link_orders),
-        "verified_attribution_count": len(verified_link_orders),
-        "revenue_cents": sum(int(item.get("revenue_cents") or 0) for item in verified_link_orders),
-    }
-    audit_events: list[dict[str, Any]] = []
-    if scope.can_view_all(staff, domain="audit"):
-        ensure_vkpi_audit_schema()
-
-        def row_ids(rows: list[dict[str, Any]]) -> list[str]:
-            return [str(_int(item.get("id"))) for item in rows if _int(item.get("id"))]
-
-        audit_clauses: list[str] = ["(target_type=? AND target_id=?)"]
-        audit_params: list[Any] = ["project", str(int(project_id))]
-
-        def add_target_ids(target_type: str, ids: list[str]) -> None:
-            clean = [item for item in ids if item and item != "0"]
-            if not clean:
-                return
-            placeholders = ",".join("?" for _ in clean)
-            audit_clauses.append(f"(target_type=? AND target_id IN ({placeholders}))")
-            audit_params.extend([target_type, *clean])
-
-        add_target_ids("cost", row_ids(raw_costs))
-        add_target_ids("message", row_ids(messages))
-        add_target_ids("content_post", row_ids(content_posts))
-        add_target_ids("deliverable", row_ids([item for item in deliverables if isinstance(item.get("id"), int)]))
-        add_target_ids("shipment", row_ids(shipments))
-        add_target_ids("sample", row_ids(samples))
-        audit_clauses.extend(["metadata_json LIKE ?", "metadata_json LIKE ?"])
-        audit_params.extend([f'%"project_id": {int(project_id)}%', f'%"project_id":"{int(project_id)}"%'])
-        audit_events = [
-            dict(item)
-            for item in conn.execute(
-                f"""
-                SELECT ba.*, s.name AS staff_name, u.email AS staff_email
-                FROM vkpi_business_audit_logs ba
-                LEFT JOIN staff st ON st.id = ba.staff_id
-                LEFT JOIN users s ON s.id = st.user_id
-                LEFT JOIN users u ON u.id = st.user_id
-                WHERE {" OR ".join(audit_clauses)}
-                ORDER BY ba.created_at DESC, ba.id DESC
-                LIMIT 100
-                """,
-                audit_params,
-            ).fetchall()
-        ]
-    result = {
-        "project": project,
-        "events": events,
-        "links": links,
-        "link_clicks": link_clicks,
-        "link_orders": link_orders,
-        "link_summary": link_summary,
-        "sales_attributions": sales,
-        "costs": costs,
-        "messages": messages,
-        "content_posts": content_posts,
-        "content_assets": content_assets,
-        "terms": terms_dict,
-        "deliverables": deliverables,
-        "samples": samples,
-        "shipments": shipments,
-        "audit_events": audit_events,
-        "roi": {
-            "revenue_cents": revenue_cents,
-            "cost_cents": cost_cents if show_financials else visible_cost_cents if visible_cost_cents else None,
-            "net_contribution_cents": revenue_cents - cost_cents if show_financials else None,
-            "roi": round(revenue_cents / cost_cents, 4) if show_financials and cost_cents else None,
-            "net_roi": round((revenue_cents - cost_cents) / cost_cents, 4) if show_financials and cost_cents else None,
-            "financials_hidden": not show_financials,
-        },
-    }
     if assignment_limit is None:
-        # Historical default remains byte-for-byte shape compatible.
-        result["participating_kols"] = participating_kols
-        result["project_kol_assignments"] = participating_kols
-    else:
-        # Summary mode emits one canonical array, rather than serializing the
-        # same assignment rows twice as the legacy response does.
-        assignment_total = int(project.get("assignment_count") or 0)
-        result["project_kol_assignments"] = participating_kols
-        result["assignment_page"] = {
-            "mode": "summary",
-            "limit": int(assignment_limit),
-            "count": len(participating_kols),
-            "total": assignment_total,
-            "has_more": assignment_has_more,
-            "next_cursor": assignment_next_cursor,
-        }
+        assignment_stages.apply_full_assignment_summary(project, participating_kols)
+    _enrich_project_card_fields(conn, [project])
+
+    events = detail_sections.fetch_events(conn, project_id)
+    verified_attribution_predicate = business_truth.verified_shopify_attribution_sql("sa")
+    links, link_clicks, link_orders = detail_sections.fetch_link_context(
+        conn,
+        project_id,
+        verified_attribution_predicate=verified_attribution_predicate,
+    )
+    sales = detail_sections.fetch_sales_attributions(
+        conn,
+        project_id,
+        verified_attribution_predicate=verified_attribution_predicate,
+    )
+    show_financials = scope.can_view_all(staff, domain="cost")
+    raw_costs, costs = detail_sections.fetch_cost_context(
+        conn,
+        project_id,
+        show_financials=show_financials,
+        approved_actual_predicate=business_truth.approved_actual_cost_sql("c"),
+    )
+    content = detail_sections.fetch_content_context(conn, project_id)
+    content["deliverables"] = detail_sections.resolve_deliverables(
+        content["deliverables"],
+        content["terms"],
+        project_id=project_id,
+        logger=logger,
+    )
+    detail_sections.redact_sample_costs(content["samples"], show_financials=show_financials)
+    audit_events = _load_audit_events(
+        conn,
+        project_id,
+        staff,
+        raw_costs=raw_costs,
+        content=content,
+    )
+    result = _base_result(
+        project=project,
+        events=events,
+        links=links,
+        link_clicks=link_clicks,
+        link_orders=link_orders,
+        sales=sales,
+        costs=costs,
+        content=content,
+        audit_events=audit_events,
+        raw_costs=raw_costs,
+        show_financials=show_financials,
+    )
+    _attach_assignment_contract(
+        result,
+        project,
+        participating_kols,
+        assignment_limit=assignment_limit,
+        assignment_has_more=assignment_has_more,
+        assignment_next_cursor=assignment_next_cursor,
+    )
     return result

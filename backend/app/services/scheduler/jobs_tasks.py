@@ -320,13 +320,15 @@ async def job_vkpi_weekly_report():
 
 async def job_vkpi_channels_sync():
     """Mark employee platform channels for sync; no fake metrics are written."""
-    try:
-        from app.domains.sync import cron
-
-        result = await cron.run_job("channels_sync", {})
-        logger.info("scheduler.vkpi_channels_sync", extra={"synced": result.get("synced")})
-    except Exception:
-        logger.exception("scheduler.vkpi_channels_sync_failed")
+    from app.domains.sync import cron
+    result = await cron.run_job("channels_sync", {})
+    logger.info(
+        "scheduler.vkpi_channels_sync",
+        extra={
+            "status": result.get("status"), "channels_enqueued": result.get("channels_enqueued"),
+        },
+    )
+    return result
 
 
 async def job_vkpi_morning_sync():
@@ -341,20 +343,19 @@ async def job_vkpi_morning_sync():
             },
         )
         return
-    try:
-        from app.domains.sync import cron
-
-        result = await cron.run_job("morning_sync", {"limit": 100, "max_videos": 50, "period_days": 1})
-        logger.info(
-            "scheduler.vkpi_morning_sync",
-            extra={
-                "channels_synced": result.get("channels_synced"),
-                "monitor_runs": result.get("monitor_runs"),
-                "digest": result.get("digest", {}).get("items_per_staff"),
-            },
-        )
-    except Exception:
-        logger.exception("scheduler.vkpi_morning_sync_failed")
+    from app.domains.sync import cron
+    result = await cron.run_job("morning_sync", {"limit": 100, "max_videos": 50, "period_days": 1})
+    logger.info(
+        "scheduler.vkpi_morning_sync",
+        extra={
+            "status": result.get("status"),
+            "channels_enqueued": result.get("channels_enqueued"),
+            "industry_accounts_enqueued": result.get("industry_accounts_enqueued"),
+            "monitor_runs": result.get("monitor_runs"),
+            "digest": result.get("digest", {}).get("items_per_staff"),
+        },
+    )
+    return result
 
 
 async def job_vkpi_goaffpro_metrics_sync():

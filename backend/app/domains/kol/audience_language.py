@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from app.shared.comment_collection_port import CommentCollectionCommand
+
 # 各语言高频停用词(小写、去标点后按空格切词匹配)。只需区分主流受众语系,不求学术精确。
 _STOPWORDS: dict[str, set[str]] = {
     "en": {"the", "and", "this", "for", "you", "your", "is", "it", "my", "love", "thank", "thanks", "great", "nice", "will", "can", "get", "best", "so", "of", "to", "with", "have", "what", "when", "where", "how", "please", "amazing", "video", "really"},
@@ -135,14 +137,17 @@ def audience_language_for_kol(kol_pool_id: int, *, conn: Any = None, limit: int 
 
 
 def enqueue_audience_comments_for_high_value(
-    *, min_fit: float = 75.0, limit: int | None = 40, staff: Any = None
+    *,
+    min_fit: float = 75.0,
+    limit: int | None = 40,
+    staff: Any = None,
+    comment_command: CommentCollectionCommand,
 ) -> dict[str, Any]:
     """给「高价值 / AI 看好」的 KOL 抓评论 —— 这样受众语言分布才对你实际评估的人生效。
     高价值口径:viltrox_fit_score >= min_fit 或 已入主表(linked_main_kol_id 非空);且有视频证据、
     且暂无评论(有则跳过,幂等)。逐个走现成 enqueue_kol_pool_comments_job(泳道可见、幂等)。
     读 fit 仅用于筛选,绝不写 viltrox_fit_score。抓取有 Apify 成本,故默认 limit=40、只挑高价值。"""
     from app.db.connection import get_conn
-    from app.domains.comments.collector import enqueue_kol_pool_comments_job
 
     db = get_conn()
     sql = (
@@ -160,7 +165,11 @@ def enqueue_audience_comments_for_high_value(
             has_comments += 1
             continue
         try:
-            res = enqueue_kol_pool_comments_job(kid, staff=staff, queue_lane="batch")
+            res = comment_command.enqueue(
+                kid,
+                staff=staff,
+                queue_lane="batch",
+            )
             if str(res.get("status")) in ("queued", "already_queued"):
                 enqueued += 1
             else:

@@ -56,6 +56,7 @@ def test_canonical_gate_contains_the_union_of_all_reviewed_checks() -> None:
     required_in_order = (
         "release_candidate_worktree",
         "generate_frontend_contracts.py\" --check",
+        "npm audit --omit=dev --audit-level=moderate",
         "check_silent_exception_baseline.py",
         "check_repo_hardening.py",
         "--warning-baseline",
@@ -180,23 +181,35 @@ def test_strict_runtime_gate_supports_a_rotating_multi_worker_fleet() -> None:
     assert '--worker-not-before "$VKPI_WORKER_NOT_BEFORE"' in strict_block
 
 
-def test_strict_runtime_health_uses_private_probe_and_optional_mode_keeps_legacy_curl() -> None:
+def test_strict_runtime_health_uses_private_probe_and_static_mode_never_fetches() -> None:
     gate = _read("scripts/verify.sh")
     runtime_at = gate.index("runtime_sha_aligned()")
-    body_check_at = gate.index('if [ -z "$body" ]; then', runtime_at)
-    fetch_block = gate[runtime_at:body_check_at]
-    strict_at = fetch_block.index(
-        'if truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}"; then'
+    run_at = gate.index('run_step "$RUNTIME_STEP_NAME" runtime_sha_aligned', runtime_at)
+    runtime_block = gate[runtime_at:run_at]
+    not_requested_at = runtime_block.index(
+        'RUNTIME_VERIFICATION_STATE="not_requested"'
     )
-    optional_at = fetch_block.index("else\n", strict_at)
-    strict_block = fetch_block[strict_at:optional_at]
-    optional_block = fetch_block[optional_at:]
+    early_return_at = runtime_block.index("return 0", not_requested_at)
+    fetch_at = runtime_block.index("scripts/ops/fetch_runtime_health.py")
 
-    assert "scripts/ops/fetch_runtime_health.py" in strict_block
-    assert "VKPI_HEALTH_ENV_FILE" in strict_block
-    assert '--env-file "$VKPI_HEALTH_ENV_FILE"' in strict_block
-    assert "curl " not in strict_block
-    assert 'curl -s --max-time 3 "$url"' in optional_block
+    assert not_requested_at < early_return_at < fetch_at
+    assert "scripts/ops/fetch_runtime_health.py" in runtime_block
+    assert "VKPI_HEALTH_ENV_FILE" in runtime_block
+    assert '--env-file "$VKPI_HEALTH_ENV_FILE"' in runtime_block
+    assert "curl " not in runtime_block
+    assert '--expected-migration "$latest_migration"' in runtime_block
+    assert "--require-worker" in runtime_block
+
+
+def test_static_gate_runtime_step_is_deterministic_by_default() -> None:
+    gate = _read("scripts/verify.sh")
+    runtime_at = gate.index("runtime_sha_aligned()")
+    run_at = gate.index('run_step "$RUNTIME_STEP_NAME" runtime_sha_aligned', runtime_at)
+    block = gate[runtime_at:run_at]
+
+    assert 'RUNTIME_STEP_NAME="runtime trust (not requested static-gate mode)"' in block
+    assert 'RUNTIME_VERIFICATION_STATE="not_requested"' in block
+    assert "静态门禁未请求运行态探测" in block
 
 
 def test_cloud_deploy_requires_explicit_local_health_secret_source() -> None:

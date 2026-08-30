@@ -2,6 +2,7 @@ import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domai
 
 import { asRecord, cleanText, type Row, providerGateReasonOf, providerUnavailableLabel } from "./SmartKolInputPanel.helpers";
 import { resolveLanguageProvenance, type LanguageProvenance } from "./LanguageProvenance";
+import { candidateGrowthSummary } from "./SmartKolInputPanel.CandidateEvidence";
 
 export const LOCAL_QUALIFIED_TARGET = 30;
 export const LOCAL_QUALIFICATION_SPEC = Object.freeze({
@@ -258,6 +259,15 @@ function rowFromItem(item: VkpiKolRecallItem, fallbackRank: number): LocalQualif
   );
   const whyFit = cleanText(firstValue(records, ["why_fit", "recall_reason", "evidence", "sample_title"]));
   const activityUnknown = activityUnknownFor(qualification, root, source);
+  const growth = candidateGrowthSummary(item);
+  const baseStrictQualified = strictV2QualificationState(qualification) === "qualified";
+  const marketActivationStatus = cleanText(firstValue([root, source], ["market_activation_status"]));
+  const localQualification = qualificationFor(qualification, activityUnknown);
+  const combinedQualification = growth.active && baseStrictQualified && !growth.strictGatePassed
+    ? marketActivationStatus === "below_floor"
+      ? { qualification: "rejected" as const, qualificationLabel: "市场活性未达门槛" }
+      : { qualification: "pending" as const, qualificationLabel: "增长证据待补" }
+    : localQualification;
   return {
     identity: identityFor(item),
     activityUnknown,
@@ -275,8 +285,8 @@ function rowFromItem(item: VkpiKolRecallItem, fallbackRank: number): LocalQualif
     whyFit,
     contactStatus: statusLabel(contactStatus, "contact"),
     analysisStatus: statusLabel(analysisStatus, "analysis"),
-    strictQualified: !activityUnknown && strictV2QualificationState(qualification) === "qualified",
-    ...qualificationFor(qualification, activityUnknown),
+    strictQualified: !activityUnknown && combinedQualification.qualification === "qualified",
+    ...combinedQualification,
   };
 }
 

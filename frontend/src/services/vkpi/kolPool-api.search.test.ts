@@ -38,6 +38,7 @@ describe("KOL local qualification request contract", () => {
 
     const body = JSON.parse(String(mockedFetch.mock.calls[0][1]?.body));
     expect(body).toMatchObject({
+      objective: "prospective_growth",
       candidate_limit: 500,
       limit: 30,
       creator_quota: 15,
@@ -55,6 +56,7 @@ describe("KOL local qualification request contract", () => {
     const spec = { target_count: 30, unknown_policy: "pending_not_counted" };
     const onlineSpec = { version: "online_net_new_30_v1", target_count: 30 };
     await smartKolSearchProfileAdvanceJob("token", "portrait creators", {
+      objective: "existing_evidence",
       candidateLimit: 500,
       limit: 30,
       creatorQuota: 16,
@@ -69,6 +71,7 @@ describe("KOL local qualification request contract", () => {
 
     const body = JSON.parse(String(mockedFetch.mock.calls[0][1]?.body));
     expect(body).toMatchObject({
+      objective: "existing_evidence",
       candidate_limit: 500,
       limit: 30,
       creator_quota: 16,
@@ -80,6 +83,22 @@ describe("KOL local qualification request contract", () => {
       online_qualification_spec: onlineSpec,
       session_id: 701,
     });
+  });
+
+  it("can disable online discovery for an unsupported-platform-only selection without inventing other platforms", async () => {
+    await smartKolSearchProfileAdvanceJob("token", "facebook food creators", {
+      filters: { platforms: ["facebook"] },
+      includeNewDiscovery: false,
+      newDiscoveryPlatforms: [],
+    });
+
+    const body = JSON.parse(String(mockedFetch.mock.calls[0][1]?.body));
+    expect(body).toMatchObject({
+      objective: "prospective_growth",
+      filters: { platforms: ["facebook"] },
+      include_new_discovery: false,
+    });
+    expect(body).not.toHaveProperty("new_discovery_platforms");
   });
 });
 

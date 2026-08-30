@@ -107,6 +107,15 @@ def test_weekly_pulse_apify_failure_does_not_log_token(
     assert secret not in captured_output.err
 
 
+def test_weekly_pulse_refuses_enqueue_only_or_deprecated_refresh_receipt() -> None:
+    with pytest.raises(RuntimeError, match="durable worker completion evidence"):
+        weekly_pulse.require_completed_refresh({"status": "durable_queue_required"})
+    with pytest.raises(RuntimeError, match="status=missing"):
+        weekly_pulse.require_completed_refresh({})
+
+    weekly_pulse.require_completed_refresh({"status": "completed"})
+
+
 def test_youtube_evidence_key_uses_google_header(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

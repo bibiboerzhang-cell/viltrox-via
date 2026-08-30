@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+import ctypes
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,76 @@ from pathlib import Path
 
 SCHEMA = "vkpi.local-worktree-candidate/v1"
 MAX_SOURCE_FILE_BYTES = 256 * 1024 * 1024
+
+
+def path_identity(path: Path) -> tuple[int, int]:
+    info = path.lstat()
+    return info.st_dev, info.st_ino
+
+
+def remove_owned_path(path: Path, identity: tuple[int, int]) -> None:
+    import shutil
+    if path_identity(path) != identity or path.is_symlink():
+        raise FreezeError(f"refusing cleanup after path identity changed: {path}")
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def precreate_owned_file(path: Path) -> tuple[int, int]:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    os.close(descriptor)
+    return path_identity(path)
+
+
+def write_owned_file_exclusive(path: Path, data: bytes) -> tuple[int, int]:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    opened = os.fstat(descriptor); identity = (opened.st_dev, opened.st_ino)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise FreezeError(f"exclusive write made no progress: {path}")
+            view = view[written:]
+        os.fsync(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        try:
+            if path_identity(path) == identity and not path.is_symlink(): path.unlink()
+        except FileNotFoundError: pass
+        raise
+    finally:
+        try: os.close(descriptor)
+        except OSError: pass
+    if path_identity(path) != identity: raise FreezeError(f"exclusive write identity changed: {path}")
+    return identity
+
+
+def cleanup_owned_paths(created: dict[Path, tuple[int, int]]) -> None:
+    errors = []
+    for path, identity in reversed(created.items()):
+        if not path.exists() and not path.is_symlink():
+            continue
+        try:
+            remove_owned_path(path, identity)
+        except Exception as exc:
+            errors.append(str(exc))
+    if errors:
+        raise FreezeError("candidate cleanup failed closed: " + "; ".join(errors))
+
+
+def rename_exclusive(source: Path, target: Path) -> None:
+    """Publish without replacing a concurrently-created target (macOS)."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    function = getattr(libc, "renameatx_np", None)
+    if function is None:
+        raise FreezeError("exclusive candidate publish is unavailable")
+    result = function(-2, os.fsencode(source), -2, os.fsencode(target), 0x00000004)
+    if result != 0:
+        error = ctypes.get_errno()
+        raise FreezeError(f"exclusive candidate publish failed: errno={error}")
 
 FORBIDDEN_COMPONENTS = {
     ".git",

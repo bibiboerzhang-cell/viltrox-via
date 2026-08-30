@@ -853,7 +853,7 @@ class AcceptanceRunner:
                         "failed_endpoint_ids": [item["id"] for item in failed], "data_states": states, "latency_p95_ms": round(p95, 1),
                         "deadline_exhausted": self.deadline_exhausted},
             "coverage": {"required_board_families": wanted, "represented_board_families": sorted(set(wanted) & represented), "missing_board_families": missing},
-            "families": families, "trust_observed": self.observed, "endpoints": results,
+            "families": families, "trust_observed": self.observed, "endpoints": results, "strict_runtime_binding": {"nonce": os.getenv("VKPI_STRICT_RUN_NONCE", ""), "ports": os.getenv("VKPI_STRICT_RUNTIME_PORTS", ""), "candidate_sha256": os.getenv("VKPI_STRICT_CANDIDATE_SHA256", "")},
         }
 
 

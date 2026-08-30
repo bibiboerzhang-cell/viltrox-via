@@ -19,7 +19,13 @@ SUPERVISOR = ROOT / "scripts" / "ops" / "local_stack_supervisor.sh"
 
 def _stubbed_copy(target_root: Path) -> Path:
     source = SUPERVISOR.read_text(encoding="utf-8")
-    for ensure in ("ensure_admin_web", "ensure_apify_pool", "ensure_scheduler", "ensure_worker_main"):
+    for ensure in (
+        "ensure_admin_web",
+        "ensure_apify_pool",
+        "ensure_scheduler",
+        "ensure_redis",
+        "ensure_worker_main",
+    ):
         assert f"\n  {ensure}\n" in source
         source = source.replace(f"\n  {ensure}\n", "\n  :\n", 1)
     assert "\n  sleep 60\n" in source
@@ -49,7 +55,26 @@ def test_supervisor_source_declares_self_sha_reload() -> None:
     assert 'bash -n "$SELF_PATH"' in reload_body
     loop = source.split("\nwhile true; do\n", 1)[1]
     assert loop.index('reload_if_self_changed "$@"') < loop.index("ensure_admin_web")
+    assert loop.index("ensure_redis") < loop.index("ensure_worker_main")
     assert subprocess.run(["bash", "-n", str(SUPERVISOR)], check=False).returncode == 0
+
+
+def test_supervisor_recovers_redis_before_admitting_worker_with_bounded_backoff() -> None:
+    source = SUPERVISOR.read_text(encoding="utf-8")
+    redis_body = source.split("ensure_redis() {", 1)[1].split("\n}\n", 1)[0]
+    worker_body = source.split("ensure_worker_main() {", 1)[1].split("\n}\n", 1)[0]
+
+    assert 'bash "$ROOT/scripts/start_redis_local.sh"' in redis_body
+    assert 'REDIS_AUTORECOVER_ENABLED" != "1"' in redis_body
+    assert "VKPI_SUPERVISOR_REDIS_AUTORECOVER=1" in redis_body
+    assert "REDIS_NEXT_RETRY_EPOCH" in redis_body
+    assert "REDIS_RETRY_MAX_SECONDS" in redis_body
+    assert "REDIS_RETRY_DELAY_SECONDS * 2" in redis_body
+    assert "return 1" in redis_body
+    assert "if ! redis_ready; then" in worker_body
+    assert worker_body.index("if ! redis_ready; then") < worker_body.index(
+        'pgrep -f "app.workers.worker_main"'
+    )
 
 
 def test_supervisor_execs_itself_when_its_file_changes(tmp_path: Path) -> None:

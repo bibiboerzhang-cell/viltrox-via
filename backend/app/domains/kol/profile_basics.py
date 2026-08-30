@@ -260,56 +260,17 @@ def write_kol_profile_basics(
             _rollback(db)
             raise RuntimeError(f"viltrox_fit_score changed unexpectedly: {changed_ids}")
 
-        _record_creator_identity_alias(
+        avatar_landing = _finalize_profile_write(
             db,
-            target_id,
-            requested_identity,
+            target_id=target_id,
+            requested_identity=requested_identity,
             canonical_match=bool(canonical_match_id),
+            commit_write=commit_write,
+            planned_values=planned_values,
+            normalized=normalized,
+            existing=row,
+            avatar_landing_budget=avatar_landing_budget,
         )
-        if commit_write:
-            _commit(db)
-        # 第二道闸(2026-07-12 两粉号案):本次写入含 followers(深爬回填/发现入库都走此口)
-        # → 立即重过触达门槛,命中打 low_reach 标(只写 raw_platform_data;推荐面据此不展示)。
-        # best-effort 绝不阻断写主流程;懒 import 防循环;零触 viltrox_fit_score。
-        if commit_write and "followers" in planned_values and target_id:
-            try:
-                from app.domains.kol.reach_floor_regate import reapply_reach_floor
-
-                reapply_reach_floor(int(target_id), conn=db)
-            except Exception:
-                logger.warning("reach floor regate skipped kol=%s", target_id, exc_info=True)
-        # 头像落地(2026-08-25 车道 2):池表里只存一根会过期的签名外链是病根
-        # (实测 927 行签名型 CDN,过期抽样 12/12 全死)。凡本次真写了 avatar_url,
-        # 就在主写入提交之后把图片复制进我们自己的媒体缓存,并打诚实标记。
-        # 全程 best-effort:抓不到/传不上只降级为 external,绝不害建档失败。
-        avatar_landing: dict[str, Any] = {}
-        if target_id and "avatar_url" in planned_values:
-            avatar_landing = _land_profile_avatar(
-                db,
-                int(target_id),
-                planned_values.get("avatar_url"),
-                platform=str(normalized.get("platform") or (row or {}).get("platform") or ""),
-                external_id=str(normalized.get("handle") or (row or {}).get("handle") or ""),
-                budget=avatar_landing_budget,
-                commit=commit_write,
-            )
-        # Both URL materialization and deep-crawl writes converge here.  Queue
-        # the persisted profile for a later provider-free L0 pass only; never
-        # extract, crawl or send inside the profile write transaction.
-        if target_id:
-            try:
-                from app.domains.kol.contact_acquisition_queue import enqueue_contact_acquisition
-
-                enqueue_contact_acquisition(
-                    int(target_id),
-                    trigger_source="profile_materialization",
-                    conn=db,
-                )
-            except Exception:
-                logger.warning(
-                    "contact acquisition enqueue unavailable after profile materialization kol=%s",
-                    target_id,
-                )
         return {
             "ok": True,
             "dry_run": False,
@@ -330,6 +291,63 @@ def write_kol_profile_basics(
     except Exception:
         _rollback(db)
         raise
+
+
+def _finalize_profile_write(
+    db: Any,
+    *,
+    target_id: int,
+    requested_identity: dict[str, Any],
+    canonical_match: bool,
+    commit_write: bool,
+    planned_values: dict[str, Any],
+    normalized: dict[str, Any],
+    existing: dict[str, Any] | None,
+    avatar_landing_budget: Any | None,
+) -> dict[str, Any]:
+    """Commit one safe profile write, then run bounded best-effort projections."""
+    _record_creator_identity_alias(
+        db,
+        target_id,
+        requested_identity,
+        canonical_match=canonical_match,
+    )
+    if commit_write:
+        _commit(db)
+    if commit_write and "followers" in planned_values and target_id:
+        try:
+            from app.domains.kol.reach_floor_regate import reapply_reach_floor
+
+            reapply_reach_floor(int(target_id), conn=db)
+        except Exception:
+            logger.warning("reach floor regate skipped kol=%s", target_id, exc_info=True)
+
+    avatar_landing: dict[str, Any] = {}
+    if target_id and "avatar_url" in planned_values:
+        avatar_landing = _land_profile_avatar(
+            db,
+            int(target_id),
+            planned_values.get("avatar_url"),
+            platform=str(normalized.get("platform") or (existing or {}).get("platform") or ""),
+            external_id=str(normalized.get("handle") or (existing or {}).get("handle") or ""),
+            budget=avatar_landing_budget,
+            commit=commit_write,
+        )
+    if target_id:
+        try:
+            from app.domains.kol.contact_acquisition_queue import enqueue_contact_acquisition
+
+            enqueue_contact_acquisition(
+                int(target_id),
+                trigger_source="profile_materialization",
+                conn=db,
+            )
+        except Exception:
+            logger.warning(
+                "contact acquisition enqueue unavailable after profile materialization kol=%s",
+                target_id,
+            )
+    return avatar_landing
 
 
 def _land_profile_avatar(

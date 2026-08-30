@@ -15,12 +15,18 @@ import type { SearchFeedbackSource } from "../../../../services/vkpi/searchFeedb
 import { SearchFeedbackControl } from "./SearchFeedbackControl";
 
 import {
+  asRecord,
   cleanText,
   display,
   numberLabel,
   type Row,
 } from "./SmartKolInputPanel.helpers";
-import { candidateEvidenceSummary, candidateRankSummary, candidateVerticalTags } from "./SmartKolInputPanel.CandidateEvidence";
+import {
+  candidateEvidenceSummary,
+  candidateGrowthSummary,
+  candidateRankSummary,
+  candidateVerticalTags,
+} from "./SmartKolInputPanel.CandidateEvidence";
 import { CandidateVerticalChips } from "./SmartKolInputPanel.VerticalChips";
 import { resultOriginBadge } from "./SmartKolInputPanel.sessionProjection";
 import { kolHumanDisplayName, kolHumanProfileLinkLabel, kolHumanPublicHandle } from "../lib/kolIdentity";
@@ -104,6 +110,13 @@ function searchHistoryArchiveEligible(item: VkpiKolSearchHistoryItem): boolean {
 function candidateText(value: unknown): string {
   const normalized = cleanText(value);
   return EMPTY_CANDIDATE_TEXT.has(normalized.toLowerCase()) ? "" : normalized;
+}
+
+const INTERNAL_SEARCH_DETAIL_RE = /(?:provider|apify|gemini|openai|anthropic|qdrant|bm25|rrf|worker|pipeline)/i;
+
+function publicBusinessText(value: unknown): string {
+  const normalized = candidateText(value);
+  return normalized && !INTERNAL_SEARCH_DETAIL_RE.test(normalized) ? normalized : "";
 }
 
 function positiveMetric(value: unknown): number | null {
@@ -370,6 +383,7 @@ export function RecallMiniItem({
   // expired signed avatar with a refreshed URL without remounting the card.
   const showImg = Boolean(avatar) && failedAvatar !== avatar;
   const evidence = candidateEvidenceSummary(item);
+  const growth = candidateGrowthSummary(item);
   // 三引擎产出·候选卡展示信号(全部纯只读透传,绝不触评分):
   const itemRow = item as unknown as Row;
   const fitSrc = (item.source_fields && typeof item.source_fields === "object" ? item.source_fields : {}) as Row;
@@ -422,7 +436,7 @@ export function RecallMiniItem({
     })
     .filter((entry): entry is { key: string; url: string; title: string; metricLabel: string } => Boolean(entry))
     .slice(0, 3);
-  const sourceLabel = candidateText(
+  const sourceLabel = publicBusinessText(
     itemRow.source_label
       ?? itemRow.source_type
       ?? fitSrc.source_label
@@ -453,6 +467,7 @@ export function RecallMiniItem({
     ? (fitSrc.relevance_hits as unknown[]).map(cleanText).filter(Boolean).slice(0, 4)
     : [];
   const hasOptionalDetails = evidence.grade !== "missing"
+    || growth.active
     || rank.score != null
     || Boolean(sourceLabel)
     || Boolean(updatedLabel)
@@ -531,6 +546,27 @@ export function RecallMiniItem({
               {observedMetrics.map((metric) => (
                 <span key={metric.key}><span className="text-slate-600">{metric.label}</span> {metric.value}</span>
               ))}
+            </span>
+          ) : null}
+          {growth.active ? (
+            <span
+              data-testid="candidate-growth-overview"
+              className="mt-1 block rounded-md border border-emerald-300/20 bg-emerald-400/[0.055] px-1.5 py-1 text-[9px] leading-4 text-emerald-50/90"
+            >
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-medium">
+                <span>增长候选分 {growth.score == null ? "待补证" : growth.score.toFixed(1).replace(/\.0$/, "")}</span>
+                <span>证据置信度 {growth.evidenceConfidence == null ? "待补证" : `${growth.evidenceConfidence.toFixed(1).replace(/\.0$/, "")}/100`}</span>
+              </span>
+              <span data-testid="candidate-growth-dimensions" className="mt-0.5 grid grid-cols-2 gap-x-2 text-[8.5px] text-slate-300 sm:grid-cols-4">
+                {growth.dimensions.map((dimension) => (
+                  <span key={dimension.key} className={dimension.score == null ? "text-amber-200/90" : ""}>
+                    {dimension.label} {dimension.displayValue}
+                  </span>
+                ))}
+              </span>
+              {growth.disclaimer ? (
+                <span data-testid="candidate-growth-disclaimer" className="mt-0.5 block text-[8px] text-slate-400">{growth.disclaimer}</span>
+              ) : null}
             </span>
           ) : null}
           {representativeEvidence.length ? (
@@ -612,7 +648,7 @@ export function RecallMiniItem({
 }
 
 export function PlanPills({ plan }: { plan: Row }) {
-  const searchQuery = display(plan.search_query);
+  const searchQuery = publicBusinessText(plan.search_query);
   const clarification = plan.clarification && typeof plan.clarification === "object" ? plan.clarification as Row : {};
   const suggestions = Array.isArray(clarification.suggestions) ? clarification.suggestions.slice(0, 6) as Row[] : [];
   if (cleanText(plan.status) === "needs_clarification") {
@@ -639,13 +675,38 @@ export function PlanPills({ plan }: { plan: Row }) {
   const persona = display(plan.target_persona, "");
   const focus = Array.isArray(plan.product_focus) ? plan.product_focus.map(cleanText).filter(Boolean).slice(0, 4) : [];
   const avoid = Array.isArray(plan.avoid_types) ? plan.avoid_types.map(cleanText).filter(Boolean).slice(0, 4) : [];
+  const searchBrief = asRecord(plan.search_brief);
+  const objective = cleanText(searchBrief.objective || plan.objective);
+  const objectiveLabel = objective === "prospective_growth"
+    ? "寻找会用产品并能推动市场的创作者"
+    : objective === "existing_evidence"
+      ? "核查已有品牌 / 型号公开证据"
+      : "待服务端确认";
+  const rawQueryCells = Array.isArray(searchBrief.query_cells)
+    ? searchBrief.query_cells
+    : Array.isArray(plan.query_cells)
+      ? plan.query_cells
+      : [];
+  const queryCells = rawQueryCells
+    .map((value) => asRecord(value))
+    .map((cell) => ({
+      id: cleanText(cell.query_cell_id),
+      scene: publicBusinessText(cell.segment_label || cell.segment),
+      query: publicBusinessText(cell.primary_query),
+    }))
+    .filter((cell) => Boolean(cell.scene || cell.query))
+    .slice(0, 6);
   return (
     <div className="mb-2 rounded-md border border-cyan-300/12 bg-cyan-400/[0.045] px-2.5 py-2">
+      <div data-testid="search-objective-summary" className="flex flex-wrap items-center gap-1.5 text-[10px] text-emerald-100/90">
+        <span className="rounded border border-emerald-300/20 bg-emerald-400/[0.07] px-1.5 py-0.5">本轮目标</span>
+        <span>{objectiveLabel}</span>
+      </div>
       {/* 产品定位:这是什么产品、价位、给谁的(说人话,不暴露 SKU 技术腔) */}
       {positioning ? (
-        <div className="text-[10.5px] leading-relaxed text-slate-200">{positioning}</div>
+        <div className="mt-1 text-[10.5px] leading-relaxed text-slate-200">{positioning}</div>
       ) : null}
-      {searchQuery ? <div className="mt-1 truncate text-[10px] text-slate-500">检索词:{searchQuery}</div> : null}
+      {searchQuery ? <div className="mt-1 truncate text-[10px] text-slate-500">需求摘要：{searchQuery}</div> : null}
       {persona && persona !== positioning ? (
         <div className="mt-0.5 truncate text-[9.5px] text-slate-600">{persona}</div>
       ) : null}
@@ -656,6 +717,18 @@ export function PlanPills({ plan }: { plan: Row }) {
             <span key={item} className="rounded border border-emerald-300/15 bg-emerald-400/[0.07] px-1.5 py-0.5 text-[9.5px] text-emerald-100/80">
               {item}
             </span>
+          ))}
+        </div>
+      ) : null}
+      {queryCells.length ? (
+        <div data-testid="query-cell-summary" className="mt-1.5 space-y-1 border-t border-cyan-300/10 pt-1.5">
+          <div className="text-[9px] text-cyan-200/70">第一轮按目标场景分别查找</div>
+          {queryCells.map((cell, index) => (
+            <div key={cell.id || `${cell.scene}-${cell.query}-${index}`} className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[9.5px] leading-relaxed text-slate-400">
+              <span className="shrink-0 text-slate-500">场景 {index + 1}</span>
+              {cell.scene ? <span className="font-medium text-slate-300">{cell.scene}</span> : null}
+              {cell.query ? <span className="min-w-0 truncate">· 首轮查询：{cell.query}</span> : null}
+            </div>
           ))}
         </div>
       ) : null}

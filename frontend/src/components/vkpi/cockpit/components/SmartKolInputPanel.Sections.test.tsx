@@ -23,6 +23,38 @@ describe("SmartKolInputPanel search quality surfaces", () => {
     expect(screen.queryByText(/检索词:/)).toBeNull();
   });
 
+  it("shows the business objective and independent first-round scene queries without provider details", () => {
+    render(
+      <PlanPills
+        plan={{
+          objective: "prospective_growth",
+          search_brief: {
+            objective: "prospective_growth",
+            query_cells: [
+              {
+                query_cell_id: "segment_1_motorsport",
+                segment_label: "赛车拍摄",
+                primary_query: "motorsport camera creator fast autofocus",
+                segment_source: "provider_internal",
+              },
+              {
+                query_cell_id: "segment_2_food",
+                segment_label: "厨师餐饮",
+                primary_query: "chef restaurant video creator low light",
+                segment_source: "apify",
+              },
+            ],
+          },
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("search-objective-summary")).toHaveTextContent("寻找会用产品并能推动市场的创作者");
+    expect(screen.getByTestId("query-cell-summary")).toHaveTextContent("场景 1赛车拍摄· 首轮查询：motorsport camera creator fast autofocus");
+    expect(screen.getByTestId("query-cell-summary")).toHaveTextContent("场景 2厨师餐饮· 首轮查询：chef restaurant video creator low light");
+    expect(screen.queryByText(/provider_internal|apify/i)).toBeNull();
+  });
+
   it("shows contact and audience readiness on a candidate card", () => {
     render(
       <RecallMiniItem

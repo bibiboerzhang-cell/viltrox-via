@@ -10,6 +10,7 @@ from app.domains.access import scope
 from app.domains.ops import health_sentinel, scheduler_registry
 from app.domains.settings import api_key_pool
 from app.domains.settings import business_integrations
+from app.domains.sync.qualified_refresh_planner_adapter import qualified_refresh_planner
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-settings"])
 
@@ -74,7 +75,7 @@ def update_budget_settings(body: dict, staff=Depends(require_tab("vkpi", "admin"
 @router.get("/settings/control-status")
 def control_status(staff=Depends(require_tab("vkpi", "read"))):
     _require_manager_staff(staff)
-    return settings_domain.control_status()
+    return settings_domain.control_status(refresh_planner=qualified_refresh_planner)
 
 
 @router.get("/settings/comment-alerts")

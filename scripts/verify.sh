@@ -33,6 +33,9 @@ VENV_PY="$PYTHON_BIN"
 
 # ---- 记账:哪些步骤失败 ----
 FAILED_STEPS=()
+STEP_NAMES=()
+STEP_RESULTS=()
+STEP_EXIT_CODES=()
 STEP_NO=0
 RUNTIME_VERIFICATION_STATE="not_run"
 ACCEPTANCE_VERIFICATION_STATE="not_run"
@@ -78,9 +81,15 @@ run_step() {
   echo "[verify] STEP ${STEP_NO}: ${name}"
   echo "=========================================================="
   if "$@"; then
+    STEP_NAMES+=("$name")
+    STEP_RESULTS+=("passed")
+    STEP_EXIT_CODES+=("0")
     echo "[verify] OK   <- ${name}"
   else
     local rc=$?
+    STEP_NAMES+=("$name")
+    STEP_RESULTS+=("failed")
+    STEP_EXIT_CODES+=("$rc")
     echo "[verify] FAIL <- ${name} (exit=${rc})"
     append_failed_step_once "${name}"
   fi
@@ -132,6 +141,32 @@ frontend_i18n_contract() {
   ( cd "$ROOT/frontend" && npm run check:i18n )
 }
 run_step "frontend i18n dictionary + missing-English ratchet" frontend_i18n_contract
+
+# ---- Production dependency security gate ----
+# Audit only packages that ship in the frontend production artifact.  npm exits
+# non-zero both for moderate-or-higher advisories and for registry/network
+# failures; keep that exit code intact so an unavailable audit cannot become a
+# green security receipt.  The canonical gate never mutates dependencies.
+frontend_production_dependency_audit() {
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "[verify] npm 缺失，无法审计前端生产依赖。" >&2
+    return 1
+  fi
+  if [ ! -f "$ROOT/frontend/package-lock.json" ] \
+    || [ -L "$ROOT/frontend/package-lock.json" ]; then
+    echo "[verify] frontend/package-lock.json 缺失或为符号链接，拒绝不可复现的依赖审计。" >&2
+    return 1
+  fi
+  if [ -n "${VKPI_TRUSTED_NPM_AUDIT_RECEIPT:-}" ]; then
+    "$PYTHON_BIN" -I -B "$ROOT/scripts/verify_static_gate_helpers.py" \
+      npm-audit-receipt "$VKPI_TRUSTED_NPM_AUDIT_RECEIPT" \
+      "$ROOT/frontend/package-lock.json"
+    return $?
+  fi
+  ( cd "$ROOT/frontend" && npm audit --omit=dev --audit-level=moderate )
+}
+run_step "frontend production dependency security audit (moderate+)" \
+  frontend_production_dependency_audit
 
 silent_exception_baseline() {
   PYTHONPATH="$ROOT/scripts:$ROOT/backend" "$PYTHON_BIN" \
@@ -270,129 +305,83 @@ run_step "redline grep (viltrox_fit_score write)" redline_fit_score
 # 复用 scripts/check_line_guard.py 的扫描口径(backend/app frontend/src scripts tests,
 # 含 .py/.ts/.tsx/.css,剔除 node_modules/dist/.venv 等)。
 # 白名单 = 2026-07-07 立门时既有的 5 个巨文件,当前共 5 个,只出不进。
-# 另一个历史违规 backend/app/main.py 已在 F2 路由注册收敛中降到 1000 行内,不再豁免。
-# 【还债计划】白名单只出不进,新文件零豁免;按体量从大到小逐个拆(与 god-object
-# 瘦身同套路:AST 对照保行为不变),拆完一个就从名单删一行:
-#   1740 backend/app/domains/kol/audience_stats.py          (受众链主模块,拆 stats/geo/rollup 三层)
-#   1232 frontend/src/components/vkpi/pages/projects/styles/project-detail-drawer.css (按抽屉分区拆分文件)
-#   1186 backend/app/domains/projects/observation_windows.py (开窗/匹配/复盘三段拆)
-#   1116 frontend/src/components/vkpi/pages/myKol/MyKolPage.Sections.tsx (按 Section 组件拆)
-#   1110 scripts/etl_excel_to_vkpi.py                        (历史一次性 ETL,择机归档或拆 reader/writer)
+# 历史 >1000 行白名单已全部还清；新旧文件一律零豁免。
 line_guard_1000() {
   if ! python_available; then
     echo "[verify] Python 解释器缺失:$PYTHON_BIN"
     return 1
   fi
-  PYTHONPATH="$ROOT/scripts" "$VENV_PY" - "$ROOT" <<'PY'
-import json
-import subprocess
-import sys
-
-root = sys.argv[1]
-allow = {
-    "backend/app/domains/kol/audience_stats.py",
-    "frontend/src/components/vkpi/pages/projects/styles/project-detail-drawer.css",
-    "backend/app/domains/projects/observation_windows.py",
-    "frontend/src/components/vkpi/pages/myKol/MyKolPage.Sections.tsx",
-    "scripts/etl_excel_to_vkpi.py",
+  # Temp-file-free wrapper; delegates the scan to check_line_guard.py.
+  PYTHONPATH="$ROOT/scripts" "$VENV_PY" -I -B \
+    "$ROOT/scripts/verify_static_gate_helpers.py" line-guard "$ROOT"
 }
-proc = subprocess.run(
-    [sys.executable, f"{root}/scripts/check_line_guard.py", "--limit", "1000", "--json"],
-    cwd=root,
-    capture_output=True,
-    text=True,
-)
-if proc.returncode != 0 or not proc.stdout.strip():
-    print("[verify] check_line_guard.py 执行失败:")
-    print(proc.stdout)
-    print(proc.stderr)
-    raise SystemExit(1)
-payload = json.loads(proc.stdout)
-violations = [v for v in payload.get("violations", []) if v["path"] not in allow]
-exempted = [v for v in payload.get("violations", []) if v["path"] in allow]
-for item in exempted:
-    print(f"[verify] 千行卫兵(白名单豁免,待还债): {item['lines']:>5} {item['path']}")
-if violations:
-    print("[verify] 千行卫兵 FAIL:以下文件 >1000 行且不在既有债白名单(新文件零豁免):")
-    for item in violations:
-        print(f"[verify]   {item['lines']:>5} {item['path']}")
-    raise SystemExit(1)
-print(f"[verify] 千行卫兵 OK:无新增 >1000 行文件(白名单剩余 {len(exempted)} 个待还)。")
-PY
-}
-run_step "line guard >1000 (whitelist=legacy 5)" line_guard_1000
+run_step "line guard >1000 (zero allowlist)" line_guard_1000
 
 # ---- STEP 6: 运行态 trust ----
-# 默认模式允许无服务的静态 CI 跳过,但明确输出 STATIC GREEN,不得当作发布验收。
-# VKPI_VERIFY_REQUIRE_RUNTIME=1 时,服务不可达、SHA/migration 不一致、Worker 不在线或
-# heartbeat/scheduler 不可信都会失败；部署入口强制启用该模式。
+# 默认静态模式不探测本机服务,避免“碰巧有一个旧/降级服务在线”让同一提交的
+# 静态结果不确定；明确输出 STATIC GREEN,且不得当作发布验收。
+# VKPI_VERIFY_REQUIRE_RUNTIME=1 时,服务不可达、SHA/migration 不一致、Worker
+# 不在线或 heartbeat/scheduler 不可信都会失败；部署入口强制启用该严格模式。
 runtime_sha_aligned() {
   local url="${VKPI_HEALTH_URL:-http://localhost:8102/health}"
   local body=""
-  if truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}"; then
-    # Strict runtime evidence is private in production.  Keep the token out of
-    # argv/stdout and delegate its protected-file/inherited-env handling to the
-    # reviewed loopback-only probe.  The probe fails closed when neither source
-    # is explicitly available.
-    local health_fetch_args=(
-      "$ROOT/scripts/ops/fetch_runtime_health.py"
-      --url "$url"
-      --timeout-seconds 3
-    )
-    if [ -n "${VKPI_HEALTH_ENV_FILE:-}" ]; then
-      health_fetch_args+=(--env-file "$VKPI_HEALTH_ENV_FILE")
-    fi
-    if ! body="$("$PYTHON_BIN" "${health_fetch_args[@]}")"; then
-      RUNTIME_VERIFICATION_STATE="failed"
-      echo "[verify] ${url} 私有运行态读取失败，严格运行态门禁失败。" >&2
-      return 1
-    fi
-  else
-    # Development/static compatibility: an optional local service may still
-    # expose the historical unauthenticated health contract.
-    body="$(curl -s --max-time 3 "$url" 2>/dev/null || true)"
+  if ! truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}"; then
+    RUNTIME_VERIFICATION_STATE="not_requested"
+    echo "[verify] 静态门禁未请求运行态探测；本次结果不得称为运行态或发布验收。"
+    return 0
+  fi
+
+  # Strict runtime evidence is private in production.  Keep the token out of
+  # argv/stdout and delegate its protected-file/inherited-env handling to the
+  # reviewed loopback-only probe.  The probe fails closed when neither source
+  # is explicitly available.
+  local health_fetch_args=(
+    "$ROOT/scripts/ops/fetch_runtime_health.py"
+    --url "$url"
+    --timeout-seconds 3
+  )
+  if [ -n "${VKPI_HEALTH_ENV_FILE:-}" ]; then
+    health_fetch_args+=(--env-file "$VKPI_HEALTH_ENV_FILE")
+  fi
+  if ! body="$("$PYTHON_BIN" "${health_fetch_args[@]}")"; then
+    RUNTIME_VERIFICATION_STATE="failed"
+    echo "[verify] ${url} 私有运行态读取失败，严格运行态门禁失败。" >&2
+    return 1
   fi
   if [ -z "$body" ]; then
-    RUNTIME_VERIFICATION_STATE="unavailable"
-    if truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}"; then
-      echo "[verify] ${url} 未响应,严格运行态门禁失败。" >&2
-      return 1
-    fi
-    RUNTIME_VERIFICATION_STATE="skipped"
-    echo "[verify] ${url} 未响应,仅完成静态门禁；本次结果不得称为运行态或发布验收。"
-    return 0
+    RUNTIME_VERIFICATION_STATE="failed"
+    echo "[verify] ${url} 未响应,严格运行态门禁失败。" >&2
+    return 1
   fi
   local args=(
     "$ROOT/scripts/verify_runtime_health.py"
     --expected-head "$(release_head)"
   )
-  if truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}"; then
-    local latest_migration
-    latest_migration="$(find "$ROOT/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | tail -n 1)"
+  local latest_migration
+  latest_migration="$(find "$ROOT/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | tail -n 1)"
+  args+=(
+    --expected-migration "$latest_migration"
+    --require-worker
+    --max-worker-age-seconds "${VKPI_VERIFY_MAX_WORKER_AGE_SECONDS:-180}"
+  )
+  if truthy_env "${VKPI_VERIFY_STRICT_POST_RESTART:-0}"; then
+    if [ -z "${VKPI_WORKER_NOT_BEFORE:-}" ] \
+      || { [ -z "${VKPI_EXPECTED_WORKER_COUNT:-}" ] \
+        && [ -z "${VKPI_EXPECTED_WORKER_BOOT_NONCE_SHA256:-}" ]; }; then
+      echo "[verify] strict post-restart requires not-before plus worker count or boot nonce." >&2
+      RUNTIME_VERIFICATION_STATE="failed"
+      return 1
+    fi
     args+=(
-      --expected-migration "$latest_migration"
-      --require-worker
-      --max-worker-age-seconds "${VKPI_VERIFY_MAX_WORKER_AGE_SECONDS:-180}"
+      --worker-not-before "$VKPI_WORKER_NOT_BEFORE"
+      --strict-deploy
     )
-    if truthy_env "${VKPI_VERIFY_STRICT_POST_RESTART:-0}"; then
-      if [ -z "${VKPI_WORKER_NOT_BEFORE:-}" ] \
-        || { [ -z "${VKPI_EXPECTED_WORKER_COUNT:-}" ] \
-          && [ -z "${VKPI_EXPECTED_WORKER_BOOT_NONCE_SHA256:-}" ]; }; then
-        echo "[verify] strict post-restart requires not-before plus worker count or boot nonce." >&2
-        RUNTIME_VERIFICATION_STATE="failed"
-        return 1
-      fi
+    if [ -n "${VKPI_EXPECTED_WORKER_COUNT:-}" ]; then
+      args+=(--expected-worker-count "$VKPI_EXPECTED_WORKER_COUNT")
+    else
       args+=(
-        --worker-not-before "$VKPI_WORKER_NOT_BEFORE"
-        --strict-deploy
+        --expected-worker-boot-nonce-sha256 "$VKPI_EXPECTED_WORKER_BOOT_NONCE_SHA256"
       )
-      if [ -n "${VKPI_EXPECTED_WORKER_COUNT:-}" ]; then
-        args+=(--expected-worker-count "$VKPI_EXPECTED_WORKER_COUNT")
-      else
-        args+=(
-          --expected-worker-boot-nonce-sha256 "$VKPI_EXPECTED_WORKER_BOOT_NONCE_SHA256"
-        )
-      fi
     fi
   fi
   if printf '%s' "$body" | "$VENV_PY" "${args[@]}"; then
@@ -428,7 +417,7 @@ runtime_sha_aligned() {
 if truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}"; then
   RUNTIME_STEP_NAME="runtime trust (required)"
 else
-  RUNTIME_STEP_NAME="runtime trust (optional static-gate mode)"
+  RUNTIME_STEP_NAME="runtime trust (not requested static-gate mode)"
 fi
 run_step "$RUNTIME_STEP_NAME" runtime_sha_aligned
 
@@ -897,6 +886,132 @@ run_step "$RUNTIME_LOG_CANARY_STEP_NAME" runtime_log_canary_gate
 if truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY:-0}" \
   && [ "$RUNTIME_LOG_CANARY_STATE" != "verified" ]; then
   append_failed_step_once "$RUNTIME_LOG_CANARY_STEP_NAME"
+fi
+
+# Optional machine-readable receipt for the exact canonical invocation.  The
+# gate remains the single source of truth: the receipt is written only after
+# every step has run, and a requested receipt that cannot be written fails the
+# gate rather than leaving a stale green artifact behind.
+write_verify_receipt() {
+  local out_path="${VKPI_VERIFY_JSON_OUT:-}"
+  if [ -z "$out_path" ]; then
+    return 0
+  fi
+  local final_pass="1"
+  if [ "${#FAILED_STEPS[@]}" -ne 0 ]; then
+    final_pass="0"
+  fi
+  local parent
+  parent="$(dirname "$out_path")"
+  mkdir -p -- "$parent" || return 1
+  if [ -L "$out_path" ]; then
+    echo "[verify] refusing symlink canonical receipt path: $out_path" >&2
+    return 1
+  fi
+  rm -f -- "$out_path" || return 1
+  local -a step_args=()
+  local index
+  for ((index = 0; index < ${#STEP_NAMES[@]}; index++)); do
+    step_args+=("${STEP_NAMES[$index]}" "${STEP_RESULTS[$index]}" "${STEP_EXIT_CODES[$index]}")
+  done
+  "$PYTHON_BIN" - \
+    "$out_path" \
+    "$final_pass" \
+    "$(release_head)" \
+    "$(git rev-parse HEAD)" \
+    "$(git branch --show-current)" \
+    "$RUNTIME_VERIFICATION_STATE" \
+    "$ACCEPTANCE_VERIFICATION_STATE" \
+    "$BROWSER_CONSOLE_VERIFICATION_STATE" \
+    "$RUNTIME_LOG_CANARY_STATE" \
+    "${step_args[@]}" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+import sys
+from datetime import UTC, datetime
+
+(
+    out_path,
+    final_pass,
+    release_head,
+    git_head,
+    branch,
+    runtime_state,
+    acceptance_state,
+    browser_state,
+    log_state,
+    *step_args,
+) = sys.argv[1:]
+if len(step_args) % 3:
+    raise SystemExit("canonical step receipt arguments are incomplete")
+status = subprocess.check_output(
+    [
+        "git",
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        "--no-renames",
+    ],
+    stderr=subprocess.PIPE,
+).decode("utf-8", "strict").strip()
+sys.path.insert(0, str(pathlib.Path.cwd() / "scripts"))
+import vkpi_engineering_health_collect as health_collect
+
+source_snapshot = health_collect._take_source_snapshot(pathlib.Path.cwd())
+if not source_snapshot.complete:
+    raise SystemExit("canonical receipt source snapshot is incomplete")
+steps = []
+for offset in range(0, len(step_args), 3):
+    name, result, exit_code = step_args[offset : offset + 3]
+    steps.append(
+        {
+            "index": len(steps) + 1,
+            "name": name,
+            "status": result,
+            "exit_code": int(exit_code),
+        }
+    )
+payload = {
+    "schema_version": "vkpi_canonical_gate_receipt_v1",
+    "generated_at": datetime.now(UTC).isoformat(),
+    "passed": final_pass == "1",
+    "candidate": {
+        "release_head": release_head,
+        "git_head": git_head,
+        "branch": branch,
+        "clean_worktree": not bool(status),
+        "dirty_path_count": len([line for line in status.splitlines() if line]),
+        "status_sha256": hashlib.sha256(status.encode("utf-8")).hexdigest(),
+        "source_content_sha256": source_snapshot.content_sha256,
+        "source_file_count": len(source_snapshot.files),
+    },
+    "verification": {
+        "runtime": runtime_state,
+        "acceptance": acceptance_state,
+        "browser_console": browser_state,
+        "runtime_log_canary": log_state,
+    },
+    "steps": steps,
+    "failed_steps": [item["name"] for item in steps if item["status"] == "failed"],
+    "strict_runtime_binding": {
+        "nonce": os.environ.get("VKPI_STRICT_RUN_NONCE", ""),
+        "ports": os.environ.get("VKPI_STRICT_RUNTIME_PORTS", ""),
+        "candidate_sha256": os.environ.get("VKPI_STRICT_CANDIDATE_SHA256", ""),
+    },
+}
+target = pathlib.Path(out_path)
+temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+temporary.replace(target)
+PY
+}
+
+if ! write_verify_receipt; then
+  echo "[verify] requested canonical gate receipt could not be written." >&2
+  append_failed_step_once "canonical gate receipt"
 fi
 
 # ---- 汇总 ----

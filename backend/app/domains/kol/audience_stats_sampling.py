@@ -96,6 +96,180 @@ def _resolve_channel_id(channel_id_or_handle: str) -> str:
     return ""
 
 
+def _consume_comment_threads(
+    items: list[Any],
+    *,
+    by_author: dict[str, dict[str, Any]],
+    comments: list[dict[str, Any]],
+) -> tuple[int, int]:
+    comments_scanned = 0
+    reply_total = 0
+    for thread in items:
+        thread_snippet = (thread or {}).get("snippet") or {}
+        snippet = (thread_snippet.get("topLevelComment") or {}).get("snippet", {})
+        if not isinstance(snippet, dict):
+            continue
+        comments_scanned += 1
+        reply_total += int(thread_snippet.get("totalReplyCount") or 0)
+        text = str(snippet.get("textOriginal") or snippet.get("textDisplay") or "")
+        display_name = str(snippet.get("authorDisplayName") or "").strip()
+        comments.append(
+            {
+                "text": text[:500],
+                "author": display_name,
+                "created_at": str(snippet.get("publishedAt") or ""),
+                "like_count": int(snippet.get("likeCount") or 0),
+                "is_reply": False,
+                "video_key": str(
+                    snippet.get("videoId") or thread_snippet.get("videoId") or ""
+                ),
+            }
+        )
+        author_id = str(
+            ((snippet.get("authorChannelId") or {}).get("value")) or ""
+        ).strip()
+        if not author_id:
+            continue
+        entry = by_author.setdefault(
+            author_id,
+            {
+                "platform": "youtube",
+                "author_key": author_id,
+                "display_name": display_name,
+                "comment_text": "",
+                "declared_country": "",
+                "bio": "",
+                "channel_created_at": "",
+                "subscriber_count": None,
+                "video_count": None,
+            },
+        )
+        if text and str(entry["comment_text"]).count(" || ") < 2:
+            entry["comment_text"] = (
+                f"{entry['comment_text']} || {text[:160]}"
+                if entry["comment_text"]
+                else text[:200]
+            )[:500]
+    return comments_scanned, reply_total
+
+
+def _collect_youtube_comments(
+    channel_id: str,
+    *,
+    max_comments: int,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], int, int, int, str]:
+    by_author: dict[str, dict[str, Any]] = {}
+    comments: list[dict[str, Any]] = []
+    comments_scanned = 0
+    reply_total = 0
+    api_calls = 0
+    page_token = ""
+    partial_reason = ""
+    try:
+        while comments_scanned < int(max_comments or 400):
+            payload = _live("_yt_get")(
+                "commentThreads",
+                {
+                    "part": "snippet",
+                    "allThreadsRelatedToChannelId": channel_id,
+                    "textFormat": "plainText",
+                    "maxResults": min(100, int(max_comments) - comments_scanned),
+                    "pageToken": page_token or None,
+                },
+            )
+            api_calls += 1
+            items = payload.get("items") or []
+            page_scanned, page_replies = _consume_comment_threads(
+                items,
+                by_author=by_author,
+                comments=comments,
+            )
+            comments_scanned += page_scanned
+            reply_total += page_replies
+            page_token = str(payload.get("nextPageToken") or "")
+            if not page_token or not items:
+                break
+    except RuntimeError as exc:
+        if not by_author:
+            raise
+        logger.warning("audience_stats yt comment paging partial: %s", exc)
+        partial_reason = "youtube_comment_paging_unavailable"
+    return (
+        by_author,
+        comments,
+        comments_scanned,
+        reply_total,
+        api_calls,
+        partial_reason,
+    )
+
+
+def _apply_youtube_profile(
+    item: dict[str, Any],
+    *,
+    by_author: dict[str, dict[str, Any]],
+) -> int:
+    cid = str(item.get("id") or "")
+    if cid not in by_author:
+        return 0
+    snippet = item.get("snippet") or {}
+    stats = item.get("statistics") or {}
+    entry = by_author[cid]
+    country = str(snippet.get("country") or "").strip().upper()
+    if country:
+        entry["declared_country"] = country
+    entry["bio"] = str(snippet.get("description") or "").strip()[:500]
+    entry["channel_created_at"] = str(snippet.get("publishedAt") or "").strip()
+    try:
+        thumbs = snippet.get("thumbnails") or {}
+        entry["avatar_url"] = str(
+            (thumbs.get("default") or {}).get("url")
+            or (thumbs.get("medium") or {}).get("url")
+            or ""
+        ).strip()
+    except Exception:
+        entry["avatar_url"] = ""
+    try:
+        if not stats.get("hiddenSubscriberCount"):
+            entry["subscriber_count"] = int(stats.get("subscriberCount"))
+    except (TypeError, ValueError):
+        pass
+    try:
+        entry["video_count"] = int(stats.get("videoCount"))
+    except (TypeError, ValueError):
+        pass
+    return 1 if country else 0
+
+
+def _enrich_youtube_profiles(
+    by_author: dict[str, dict[str, Any]],
+) -> tuple[int, int, int]:
+    author_ids = list(by_author.keys())
+    declared_hits = 0
+    profile_batches_failed = 0
+    api_calls = 0
+    for index in range(0, len(author_ids), 50):
+        chunk = author_ids[index : index + 50]
+        try:
+            payload = _live("_yt_get")(
+                "channels",
+                {
+                    "part": "snippet,statistics",
+                    "id": ",".join(chunk),
+                    "maxResults": 50,
+                },
+            )
+            api_calls += 1
+        except RuntimeError as exc:
+            logger.warning("audience_stats yt channels.list batch failed: %s", exc)
+            profile_batches_failed += 1
+            continue
+        for item in payload.get("items") or []:
+            if isinstance(item, dict):
+                declared_hits += _apply_youtube_profile(item, by_author=by_author)
+    return declared_hits, profile_batches_failed, api_calls
+
+
 def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400) -> dict[str, Any]:
     """YouTube 免费 Data API 抽评论者:commentThreads(全频道) -> channels.list 批量补档案。
 
@@ -117,123 +291,24 @@ def sample_youtube_commenters(channel_id_or_handle: str, max_comments: int = 400
     if not channel_id:
         return {"status": "channel_not_found", "reason": f"cannot resolve channel from {channel_id_or_handle!r}"}
 
-    by_author: dict[str, dict[str, Any]] = {}
-    comments: list[dict[str, Any]] = []
-    comments_scanned = 0
-    reply_total = 0
-    page_token = ""
-    partial_reason = ""
     try:
-        while comments_scanned < int(max_comments or 400):
-            payload = _live("_yt_get")(
-                "commentThreads",
-                {
-                    "part": "snippet",
-                    "allThreadsRelatedToChannelId": channel_id,
-                    "textFormat": "plainText",
-                    "maxResults": min(100, int(max_comments) - comments_scanned),
-                    "pageToken": page_token or None,
-                },
-            )
-            api_calls += 1
-            items = payload.get("items") or []
-            for thread in items:
-                thread_snippet = (thread or {}).get("snippet") or {}
-                snippet = (thread_snippet.get("topLevelComment") or {}).get("snippet", {})
-                if not isinstance(snippet, dict):
-                    continue
-                comments_scanned += 1
-                reply_total += int(thread_snippet.get("totalReplyCount") or 0)
-                text = str(snippet.get("textOriginal") or snippet.get("textDisplay") or "")
-                display_name = str(snippet.get("authorDisplayName") or "").strip()
-                comments.append(
-                    {
-                        "text": text[:500],
-                        "author": display_name,
-                        "created_at": str(snippet.get("publishedAt") or ""),
-                        "like_count": int(snippet.get("likeCount") or 0),
-                        "is_reply": False,
-                        "video_key": str(snippet.get("videoId") or thread_snippet.get("videoId") or ""),
-                    }
-                )
-                author_id = str(((snippet.get("authorChannelId") or {}).get("value")) or "").strip()
-                if not author_id:
-                    continue
-                entry = by_author.setdefault(
-                    author_id,
-                    {
-                        "platform": "youtube",
-                        "author_key": author_id,
-                        "display_name": display_name,
-                        "comment_text": "",
-                        "declared_country": "",
-                        "bio": "",
-                        "channel_created_at": "",
-                        "subscriber_count": None,
-                        "video_count": None,
-                    },
-                )
-                # 同一评论者最多攒 3 条评论合喂(2026-07-02:单条判不出年龄,多条口吻/话题互证)。
-                if text and str(entry["comment_text"]).count(" || ") < 2:
-                    entry["comment_text"] = (
-                        f"{entry['comment_text']} || {text[:160]}" if entry["comment_text"] else text[:200]
-                    )[:500]
-            page_token = str(payload.get("nextPageToken") or "")
-            if not page_token or not items:
-                break
+        (
+            by_author,
+            comments,
+            comments_scanned,
+            reply_total,
+            page_api_calls,
+            partial_reason,
+        ) = _collect_youtube_comments(channel_id, max_comments=max_comments)
+        api_calls += page_api_calls
     except RuntimeError as exc:
-        if not by_author:
-            return {"status": "network_error", "reason": str(exc)[:400]}
-        logger.warning("audience_stats yt comment paging partial: %s", exc)
-        partial_reason = "youtube_comment_paging_unavailable"
+        return {"status": "network_error", "reason": str(exc)[:400]}
 
     # 批量 channels.list(part=snippet,statistics, 50/批):自报 country(强信号 .9)+ 白捡档案字段。
-    author_ids = list(by_author.keys())
-    declared_hits = 0
-    profile_batches_failed = 0
-    for index in range(0, len(author_ids), 50):
-        chunk = author_ids[index : index + 50]
-        try:
-            payload = _live("_yt_get")(
-                "channels", {"part": "snippet,statistics", "id": ",".join(chunk), "maxResults": 50}
-            )
-            api_calls += 1
-        except RuntimeError as exc:
-            logger.warning("audience_stats yt channels.list batch failed: %s", exc)
-            profile_batches_failed += 1
-            continue
-        for item in payload.get("items") or []:
-            if not isinstance(item, dict):
-                continue
-            cid = str(item.get("id") or "")
-            if cid not in by_author:
-                continue
-            snippet = item.get("snippet") or {}
-            stats = item.get("statistics") or {}
-            entry = by_author[cid]
-            country = str(snippet.get("country") or "").strip().upper()
-            if country:
-                entry["declared_country"] = country
-                declared_hits += 1
-            entry["bio"] = str(snippet.get("description") or "").strip()[:500]
-            entry["channel_created_at"] = str(snippet.get("publishedAt") or "").strip()
-            # E 路头像视觉用:同一批白捡头像缩略图 URL(不落库,仅本次刷新内存用)。
-            try:
-                thumbs = snippet.get("thumbnails") or {}
-                entry["avatar_url"] = str(
-                    (thumbs.get("default") or {}).get("url") or (thumbs.get("medium") or {}).get("url") or ""
-                ).strip()
-            except Exception:
-                entry["avatar_url"] = ""
-            try:
-                if not stats.get("hiddenSubscriberCount"):
-                    entry["subscriber_count"] = int(stats.get("subscriberCount"))
-            except (TypeError, ValueError):
-                pass
-            try:
-                entry["video_count"] = int(stats.get("videoCount"))
-            except (TypeError, ValueError):
-                pass
+    declared_hits, profile_batches_failed, profile_api_calls = (
+        _enrich_youtube_profiles(by_author)
+    )
+    api_calls += profile_api_calls
     result = {
         "status": "ok",
         "channel_id": channel_id,
@@ -429,5 +504,4 @@ def _yt_audience_affinity(commenter_channel_ids: list[str], self_channel_id: str
         "method": "yt_public_subscriptions_v0",
         "note": "受众公开订阅抽样(约两三成用户订阅公开);shared=共同关注人数",
     }
-
 

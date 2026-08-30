@@ -14,6 +14,8 @@ from app.platform import llm_gateway
 from app.domains.kol import product_resolver
 from app.domains.kol import smart_query_facets
 from app.domains.kol import smart_query_intent
+from app.domains.kol import smart_query_planner_prompt
+from app.domains.kol import targeted_search_contract
 
 from app.core.logging import get_logger
 
@@ -21,7 +23,7 @@ logger = get_logger(__name__)
 
 
 SUPPORTED_PLATFORMS = ("youtube", "instagram", "tiktok")
-PLAN_DERIVE_METHOD = "smart_query_plan_v2_catalog_guard"
+PLAN_DERIVE_METHOD = "smart_query_plan_v3_targeted_growth"
 
 # 第一轮产品深度分析的首选 provider。可被 body.llm_provider 覆盖。
 # 注:本环境实测 api.anthropic.com 直连被对端关闭、api.openai.com 直连 SSL 握手失败,
@@ -80,7 +82,13 @@ def _extract_json(text: str) -> dict[str, Any]:
         return {}
 
 
-def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, Any]:
+def _fallback_plan(
+    query: str,
+    *,
+    reason: str = "rule_fallback",
+    body: dict[str, Any] | None = None,
+    product: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     query_text = _text(query)
     lowered = query_text.lower()
     platforms: list[str] = []
@@ -150,9 +158,13 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
     # 再自标 rule_v0/fallback_used=true 会在运维面/会话史里读成「LLM 全灭」假警报。
     provider_free_designed = str(reason).startswith("provider_free")
     plan_label = "provider_free" if provider_free_designed else "rule_v0"
-    # 车道A/A3+A4:规则路径与 LLM 路径产出同一套结构(多条短 query + 受众规模档位)。
-    # 未解析到产品 → 空锚,短 query 退化为纯题材短句,绝不编造品牌/型号词。
-    anchor = smart_query_intent.product_anchor(None)
+    # 默认 prospective_growth 只按产品能力/使用场景搜潜在用户;只有显式
+    # existing_evidence 才把品牌/型号锚带进检索词。
+    objective = targeted_search_contract.normalize_objective(body)
+    anchor = smart_query_intent.product_anchor(
+        product if objective == targeted_search_contract.EXISTING_EVIDENCE else None,
+        query_text=query_text,
+    )
     search_queries = smart_query_intent.build_search_queries(anchor, keywords or [search_query])
     audience = smart_query_intent.normalise_audience_scale(
         None, None, detected=smart_query_intent.detect_audience_scale(query_text)
@@ -162,6 +174,7 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
         "original_query": query_text,
         "search_query": search_query or query_text,
         "search_queries": search_queries or [search_query or query_text],
+        "objective": objective,
         **audience,
         "product_focus": keywords[:6],
         "target_persona": query_text,
@@ -180,16 +193,28 @@ def _fallback_plan(query: str, *, reason: str = "rule_fallback") -> dict[str, An
     # 车道「模型提议筛选」:规则路径也要给出五项筛选提议(全部标成推断项),
     # 否则操作员在降级时又回到「自己勾一堆最后 0 个人」。零成本、纯字符串规则。
     plan["filter_proposal"] = smart_query_facets.propose_facets(query_text, plan)
-    return plan
+    return targeted_search_contract.apply_targeted_contract(
+        plan,
+        query=query_text,
+        body=body,
+        product=product,
+    )
 
 
-def _clarification_plan(query: str, clarification: dict[str, Any]) -> dict[str, Any]:
+def _clarification_plan(
+    query: str,
+    clarification: dict[str, Any],
+    *,
+    body: dict[str, Any] | None = None,
+    product: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Stop an explicit but unresolved product request before any provider call."""
-    return {
+    plan = {
         "status": "needs_clarification",
         "original_query": _text(query),
         "search_query": "",
         "search_queries": [],
+        "query_cells": [],
         "audience_scale": "",
         "min_followers_hint": None,
         "audience_scale_source": "unspecified",
@@ -210,6 +235,12 @@ def _clarification_plan(query: str, clarification: dict[str, Any]) -> dict[str, 
         "provider_calls_performed": False,
         "clarification": clarification,
     }
+    return targeted_search_contract.apply_targeted_contract(
+        plan,
+        query=query,
+        body=body,
+        product=product,
+    )
 
 
 def _require_evidence_anchor(plan: dict[str, Any]) -> dict[str, Any]:
@@ -231,6 +262,7 @@ def _require_evidence_anchor(plan: dict[str, Any]) -> dict[str, Any]:
         "status": "needs_clarification",
         "search_query": "",
         "search_queries": [],
+        "query_cells": [],
         "creator_quota": 0,
         "reviewer_quota": 0,
         "include_new_discovery": False,
@@ -324,8 +356,9 @@ def _normalise_plan(
     raw_plan: dict[str, Any],
     response: dict[str, Any],
     product: dict[str, Any] | None = None,
+    body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    fallback = _fallback_plan(query)
+    fallback = _fallback_plan(query, body=body, product=product)
     # LLM 没给可用 search_query 时:已解析到产品 → 用产品派生英文检索词;否则回退 rule。
     product_terms = _product_search_terms(product)
     llm_search_query = _text(raw_plan.get("search_query") or raw_plan.get("query"))
@@ -357,21 +390,21 @@ def _normalise_plan(
         or product_positioning
         or fallback["target_persona"]
     )
-    # ── 车道A(2026-08-25)意图契约 ─────────────────────────────────────────────
-    # A2:检索词必须携带产品锚。证据闸的 intent 腿(≥2 非泛词)与产品腿此前吃两套完全
-    #     分开的词表,人为造成跨词表 AND。prod a05e48dd3 只读复验(vkpi_kol_pool 全量
-    #     2034 人 + 代表作标题,产品腿按 55mm F1.8 EVO 要求):无锚 70 人过闸、带锚 88 人
-    #     过闸(1.26×,零人掉队——锚词只进 intent 词池,过闸集合是严格超集)。
-    # A3:一条长 query 同时服务向量召回 / YT 搜索 / IG 标签 → 拆成 2-4 条 ≤6 词短 query,
-    #     search_query 保留为合并串供未改造的下游消费(向后兼容)。
-    # A1:受众规模落成档位 + 粉丝下限**建议值**,绝不再被译成题材词。
+    # 双目标意图契约:默认按「产品能力 + 使用场景」找潜在使用者;只有
+    # existing_evidence 保留品牌/型号锚。操作员明确行业由 V2 QueryCell 再次锁定。
     anchor = smart_query_intent.product_anchor(product, query_text=query)
+    objective = targeted_search_contract.normalize_objective(body, raw_plan)
+    query_anchor = (
+        anchor
+        if objective == targeted_search_contract.EXISTING_EVIDENCE
+        else smart_query_intent.product_anchor(None)
+    )
     angles = smart_query_intent.angle_terms(
         [*_as_list(raw_plan.get("search_queries")), *product_focus, search_query], anchor
     )
-    search_queries = smart_query_intent.build_search_queries(anchor, angles)
+    search_queries = smart_query_intent.build_search_queries(query_anchor, angles)
     compat_query = smart_query_intent.compat_search_query(
-        search_queries, anchor, extra_terms=[search_query, *product_focus]
+        search_queries, query_anchor, extra_terms=angles
     )
     audience = smart_query_intent.normalise_audience_scale(
         raw_plan.get("audience_scale"),
@@ -383,6 +416,7 @@ def _normalise_plan(
         "original_query": _text(query),
         "search_query": compat_query or search_query,
         "search_queries": search_queries or [compat_query or search_query],
+        "objective": objective,
         **audience,
         "product_anchor": anchor["prefix"],
         "product_focus": product_focus[:10],
@@ -418,7 +452,12 @@ def _normalise_plan(
     # 模型的 filter_proposal 只提供**取值**;「是不是操作员明确要求的」由原话规则判定,
     # 模型无权自封 —— 否则自动松绑车道会被它一句话冻死。
     plan["filter_proposal"] = smart_query_facets.propose_facets(query, plan, raw_plan=raw_plan)
-    return plan
+    return targeted_search_contract.apply_targeted_contract(
+        plan,
+        query=query,
+        body=body,
+        product=product,
+    )
 
 
 def _plan_from_product_persona(
@@ -457,23 +496,30 @@ def _plan_from_product_persona(
     target_persona = ideal_persona or _text(query)
     product_positioning = what_is or _text(product.get("specs_line"))
 
-    # 车道A:persona 路径与 LLM 路径共用同一套锚/短 query/受众规模契约。
+    # persona 只提供潜在人群方向;默认目标不把品牌/型号塞回查询。
     anchor = smart_query_intent.product_anchor(product, query_text=query)
+    objective = targeted_search_contract.normalize_objective(body)
+    query_anchor = (
+        anchor
+        if objective == targeted_search_contract.EXISTING_EVIDENCE
+        else smart_query_intent.product_anchor(None)
+    )
     angles = smart_query_intent.angle_terms(focus, anchor)
-    search_queries = smart_query_intent.build_search_queries(anchor, angles)
+    search_queries = smart_query_intent.build_search_queries(query_anchor, angles)
     search_query = smart_query_intent.compat_search_query(
-        search_queries, anchor, extra_terms=focus
+        search_queries, query_anchor, extra_terms=angles
     ) or " ".join(focus).strip()
     audience = smart_query_intent.normalise_audience_scale(
         None, None, detected=smart_query_intent.detect_audience_scale(query)
     )
 
-    fallback = _fallback_plan(query)
+    fallback = _fallback_plan(query, body=body, product=product)
     plan = {
         "status": "ready",
         "original_query": _text(query),
         "search_query": search_query or fallback["search_query"],
         "search_queries": search_queries or [search_query or fallback["search_query"]],
+        "objective": objective,
         **audience,
         "product_anchor": anchor["prefix"],
         "product_focus": focus[:10],
@@ -505,7 +551,12 @@ def _plan_from_product_persona(
     # persona 路径同样给五项筛选提议:产品知识库只解决「找什么人」,
     # 「按什么筛」照旧全部标成推断项,人不够时由自动松绑车道先松这些。
     plan["filter_proposal"] = smart_query_facets.propose_facets(query, plan)
-    return plan
+    return targeted_search_contract.apply_targeted_contract(
+        plan,
+        query=query,
+        body=body,
+        product=product,
+    )
 
 
 def plan_text_query_provider_free(
@@ -524,13 +575,22 @@ def plan_text_query_provider_free(
     body = body or {}
     query_text = _text(query)
     if not query_text:
-        return _require_evidence_anchor(_fallback_plan(query_text, reason="empty_query"))
+        return _require_evidence_anchor(
+            _fallback_plan(query_text, reason="empty_query", body=body)
+        )
 
     resolved_product, clarification = _resolve_requested_product(query_text, body)
     if clarification:
-        return _clarification_plan(query_text, clarification)
+        return _clarification_plan(
+            query_text,
+            clarification,
+            body=body,
+            product=resolved_product,
+        )
     if not resolved_product:
-        return _require_evidence_anchor(_fallback_plan(query_text, reason="provider_free_initial"))
+        return _require_evidence_anchor(
+            _fallback_plan(query_text, reason="provider_free_initial", body=body)
+        )
 
     persona_plan = _plan_from_product_persona(query_text, resolved_product, body)
     if persona_plan is not None:
@@ -547,6 +607,7 @@ def plan_text_query_provider_free(
         {},
         {"provider": "rule_v0", "model": "rule_v0", "status": "fallback"},
         resolved_product,
+        body,
     )
     # 2026-08-24 R1/F8(verify 补刀):本分支与 _fallback_plan 的 provider_free_* 同理——
     # 设计好的首屏免调用路径(产品已解析、persona 未填充),不是 LLM 降级事故;
@@ -575,16 +636,21 @@ def _plan_text_query_impl(
     body = body or {}
     query_text = _text(query)
     if not query_text:
-        return _fallback_plan(query_text, reason="empty_query")
+        return _fallback_plan(query_text, reason="empty_query", body=body)
     if str(body.get("use_llm_planner", "true")).strip().lower() in {"0", "false", "no", "off"}:
-        return _fallback_plan(query_text, reason="llm_planner_disabled")
+        return _fallback_plan(query_text, reason="llm_planner_disabled", body=body)
 
     # 第一轮:把 query 里提到的产品(epic 65macro / 550pro / Z1pro / SKU…)模糊匹配到
     # 真实 vkpi_products,取真 SKU + 营销名 + 类别 + 价格 + 描述。匹配到就注入 LLM prompt,
     # 让第一轮 LLM 据真实 specs 深度分析产品定位与人群,而非对着裸 query 产泛词。读取失败不崩。
     resolved_product, clarification = _resolve_requested_product(query_text, body)
     if clarification:
-        return _clarification_plan(query_text, clarification)
+        return _clarification_plan(
+            query_text,
+            clarification,
+            body=body,
+            product=resolved_product,
+        )
 
     # 收口路①-1:解析到 SKU 后,优先读已填充的产品知识库 persona(地基A)。命中即直接拿
     # ideal_persona / avoid_types / ideal_creator_types / verticals,跳过 on-the-fly LLM(更稳更快、
@@ -595,69 +661,11 @@ def _plan_text_query_impl(
         if persona_plan is not None:
             return persona_plan
 
-    if resolved_product:
-        # 焦段家族(操作员只说了「135」)没有唯一 SKU、也没有唯一价格。这两行必须如实写
-        # "not specified",绝不能渲染成空 SKU 或 "None USD" —— 那会让模型把空值当成事实。
-        _sku_line = _text(resolved_product.get("sku")) or "not a single SKU — the operator named a focal length family, not one model"
-        _price = _as_float_or_none(resolved_product.get("price_usd"))
-        _price_line = f"{_price} USD" if _price else "not specified (family spans several price points)"
-        product_block = f"""
-Resolved Viltrox product (matched from the operator text against the live product catalog — TRUST THIS over the raw text):
-- SKU: {_sku_line}
-- Name: {resolved_product.get('marketing_name') or resolved_product.get('model_name')}
-- Category: {resolved_product.get('category_main')} / {resolved_product.get('series')}
-- Price: {_price_line}
-- Specs: {resolved_product.get('specs_line')}
-First DEEPLY analyse THIS specific product (what it is, its price tier, its professional level, who actually buys it), then plan the creator search. Do NOT treat it as a generic camera accessory.
-"""
-    else:
-        product_block = "\nNo specific catalog product was matched from the text; infer the product family from the words and plan a sensible creator search.\n"
-
-    # 车道A/A2:锚串由目录真值推导后喂进 prompt,LLM 不必自己拼品牌/型号(拼错就没锚)。
-    _anchor = smart_query_intent.product_anchor(resolved_product, query_text=query_text)
-    anchor_hint = _anchor["prefix"] or "the product name the operator named"
-
-    prompt = f"""
-You are a V-KPI KOL search planner for Viltrox marketing.
-Convert the operator request into ONE JSON object only. Output ONLY the JSON object — no markdown fences, no prose, no thinking, no explanation before or after.
-
-Operator request:
-{query_text}
-{product_block}
-Rules:
-- FIRST analyse the resolved product's true positioning (what it is, price tier, professional level). A $4000+ PL-mount anamorphic CINE / macro lens is a high-end professional cinema tool bought by DPs, cinematographers and filmmakers shooting commercial / product / food / MV / narrative work — NOT by generic gear-review channels, still-only photographers or phone vloggers. A camera monitor is bought by filmmakers/videographers across verticals. A retro on-camera flash is bought by wedding/portrait/studio shooters.
-- Produce avoid_types: the mismatched creator types to EXCLUDE for this exact product (e.g. for a cine lens: "generic gear reviewer", "still-photography-only photographer", "phone vlogger", "camera store unboxing channel").
-- Produce product_positioning: one plain-language sentence stating what this product is, its price tier and who it is for (this is shown to a human operator — speak plainly, no SKU codes).
-- OUTPUT MUST BE IN ENGLISH. Translate any Chinese / non-English request into English creator search terms. search_query and product_focus MUST be English keywords — never the raw Chinese text.
-- Recognize Viltrox products and map to English creator terms: monitor / 监视器 / 550pro / 550 pro / 外接屏 / screen → camera monitor / field monitor / on-camera monitor / filmmaker gear; flash / 闪光灯 / 灯 → lighting / flash / strobe; lens / 镜头 → photographer / videographer.
-- FIRST analyze WHO actually uses/buys this product, then BROADEN the search — do NOT narrow to only literal product-name matches. A camera monitor is used by filmmakers, videographers, photographers and content creators ACROSS many verticals (automotive/racing, food/culinary, weddings & events, travel, commercial/ad, sports, real-estate, music video, documentary). product_focus should mix creator-type terms (videographer, filmmaker, cinematographer, content creator, DP) with a few representative verticals; write target_persona as one sentence describing this buyer group broadly.
-- Target the ENGLISH-speaking market. Set market to "US" unless the user explicitly names another English region (UK/CA/AU/EU). Exclude Chinese-language creators.
-- Preserve the original intent but expand it into searchable English creator terms.
-{smart_query_intent.AUDIENCE_SCALE_PROMPT_RULE}
-{smart_query_facets.FACET_PROMPT_RULE}
-- PRODUCT ANCHOR IS MANDATORY. Every entry of search_queries, and search_query itself, MUST start with the resolved product anchor "{anchor_hint}" (brand + model, plus the mount where it fits). A search term set that never names the product cannot prove product relevance downstream.
-- OUTPUT SHORT QUERIES, NOT ONE LONG SENTENCE. search_queries must hold 2-4 entries, each at most 6 words, each carrying the product anchor, and each covering a DIFFERENT angle (product + mount / product + genre / product + use case / product + category). Do not restate the same angle with synonyms.
-- If the request mentions flash, lighting, strobe, LED, Godox, or price/value, include lighting/flash creator terms.
-- Prefer a balanced 15 creator / 15 reviewer search unless the user says otherwise.
-- Platforms must be from: youtube, instagram, tiktok.
-- Return JSON keys:
-  search_queries: string[] (2-4 entries, each <= 6 words, each starting with the product anchor, each a different angle)
-  search_query: string (the single merged fallback line; it MUST also start with the product anchor)
-  audience_scale: string (one of micro / mid / large / mega, or "" when the operator said nothing about reach)
-  min_followers_hint: number (follower floor implied by audience_scale; 0 when unspecified — it is only a HINT, the operator's own filter always wins)
-  product_focus: string[] (precise creator-type + vertical terms for this product's buyers)
-  target_persona: string (one English sentence describing the ideal creator/buyer for this exact product)
-  avoid_types: string[] (mismatched creator types to exclude for this exact product)
-  product_positioning: string (one plain-language sentence: what it is, price tier, who it is for)
-  platforms: string[]
-  filter_proposal: object (countries / languages / verticals / min_followers / platforms — the operator's filter picks)
-  market: string
-  creator_quota: number
-  reviewer_quota: number
-  include_new_discovery: boolean
-  new_discovery_limit: number
-  reason: string
-"""
+    prompt = smart_query_planner_prompt.build_prompt(
+        query_text,
+        resolved_product=resolved_product,
+        body=body,
+    )
     response = llm_gateway.invoke(
         prompt,
         purpose="kol_smart_search_query_plan",
@@ -675,7 +683,7 @@ Rules:
         staff=staff,
     )
     parsed = _extract_json(_text(response.get("text")))
-    return _normalise_plan(query_text, parsed, response, resolved_product)
+    return _normalise_plan(query_text, parsed, response, resolved_product, body)
 
 
 # ── Wave2-#4 规划缓存(2026-07-02):同 query 7 天内直接回缓存,检索同步段 8s -> <0.1s。
@@ -692,8 +700,24 @@ def plan_text_query(
     from datetime import datetime as _dt, timezone as _tz
 
     body = body or {}
+    _filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
+    _cache_contract = {
+        "product_sku": _text(body.get("product_sku") or body.get("productSku")).lower(),
+        "objective": targeted_search_contract.normalize_objective(body),
+        "segments": [item["key"] for item in targeted_search_contract.extract_explicit_segments(query, body)],
+        "follower_filter": targeted_search_contract.parse_follower_range(query, body),
+        "platforms": body.get("platforms") or _filters.get("platforms") or [],
+        "countries": body.get("countries") or _filters.get("countries") or [],
+        "languages": body.get("languages") or _filters.get("languages") or [],
+        "use_product_persona": body.get("use_product_persona", "true"),
+        "use_llm_planner": body.get("use_llm_planner", "true"),
+        "llm_provider": body.get("llm_provider") or "",
+    }
     cache_identity = "|".join(
-        (_text(query).strip().lower(), _text(body.get("product_sku") or body.get("productSku")).lower())
+        (
+            _text(query).strip().lower(),
+            _pj.dumps(_cache_contract, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        )
     )
     _qkey = _hl.md5(cache_identity.encode("utf-8")).hexdigest()
     try:
@@ -709,6 +733,12 @@ def plan_text_query(
                 _res = _e.get("result")
                 _plan = _pj.loads(_res) if isinstance(_res, str) else _res
                 if isinstance(_plan, dict) and _plan.get("search_query"):
+                    _plan = targeted_search_contract.apply_targeted_contract(
+                        _plan,
+                        query=query,
+                        body=body,
+                        product=_plan.get("resolved_product"),
+                    )
                     _plan["plan_cache"] = "hit"
                     # 本车道之前落盘的计划没有 filter_proposal。不 bump derive_method 去
                     # 强制重算(那等于把 7 天缓存全作废、白烧一轮钱);缺了就地按规则补一份

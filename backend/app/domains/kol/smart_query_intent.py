@@ -6,9 +6,9 @@
    过去被 planner 译成 lifestyle/street/portrait 这类题材词,把用户的话理解错了。
    :func:`detect_audience_scale` 把这类表述落成档位 + 粉丝数下限**建议值**;
    :func:`resolve_audience_scale` 规定操作员自己填的 followers_min 永远优先。
-2. **每条检索词必须携带产品锚**。证据闸要求 intent 腿(≥2 个非泛词)与产品腿各自命中;
-   产品词同时出现在检索词里时,一次命中可同时满足两条腿。:func:`product_anchor` /
-   :func:`build_search_queries` 保证每条 query 都以 `{brand} {model}` 开头。
+2. **产品锚只服务 existing_evidence**。默认 prospective_growth 按产品能力与使用场景
+   找潜在用户,不要求品牌/型号;显式查「已经提到/使用 Viltrox」时仍可用
+   :func:`product_anchor` / :func:`build_search_queries` 生成带锚查询。
 3. **多条短查询取代一条长句**。一条长 query 同时服务向量召回 / YouTube 搜索 / IG 标签,
    对向量是稀释、对平台搜索过长。这里产出 2-4 条 ≤6 词、角度互不重复的短 query。
 

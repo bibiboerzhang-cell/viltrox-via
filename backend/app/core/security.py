@@ -7,7 +7,6 @@ import asyncio
 import hashlib as _hashlib
 import hmac as _hmac_mod
 import base64 as _b64
-import secrets as _secrets_mod
 import time as _time_mod
 from typing import Optional
 from urllib.parse import parse_qsl as _parse_qsl, urlencode as _urlencode
@@ -17,15 +16,20 @@ from fastapi import Request, Response
 
 from app.core.config import IS_PRODUCTION, JWT_EXPIRES_DAYS, JWT_SECRET, JWT_SECRET_PREVIOUS, USER_CACHE_TTL_SEC
 from app.core.logging import get_logger
+from app.core.passwords import (
+    PASSWORD_HASH_VERSION,
+    PBKDF2_V1_ITERATIONS,
+    PBKDF2_V2_ITERATIONS,
+    hash_password,
+    needs_password_rehash,
+    verify_password,
+)
 from app.core.staff_avatars import serialize_staff_avatar_url
 from app.db.connection import db_connection_sync_reusing_scope, get_conn
 from app.services.cache import cache_clear, cache_get, cache_set
 
 logger = get_logger(__name__)
 
-PBKDF2_V1_ITERATIONS = 100_000
-PBKDF2_V2_ITERATIONS = 600_000
-PASSWORD_HASH_VERSION = "v2"
 JWT_ISSUER = "viltrox-vos"
 JWT_AUDIENCE = "vos-app"
 AUTH_COOKIE_NAME = "via_token"
@@ -44,43 +48,6 @@ def user_status_allows_auth(status: object, *, production: bool | None = None) -
 
 
 # ── Password ──────────────────────────────
-def _pbkdf2_hex(password: str, salt: bytes, iterations: int) -> str:
-    return _hashlib.pbkdf2_hmac("sha256", password.encode(), salt, int(iterations)).hex()
-
-
-def hash_password(password: str, salt_hex: str = None) -> str:
-    if salt_hex is None:
-        salt_hex = _secrets_mod.token_hex(16)
-    salt = bytes.fromhex(str(salt_hex))
-    h = _pbkdf2_hex(password, salt, PBKDF2_V2_ITERATIONS)
-    return f"{PASSWORD_HASH_VERSION}:{salt_hex}:{h}"
-
-
-def needs_password_rehash(stored: str) -> bool:
-    return not str(stored or "").startswith(f"{PASSWORD_HASH_VERSION}:")
-
-
-def verify_password(password: str, stored: str) -> bool:
-    normalized = str(stored or "").strip()
-    if not normalized:
-        return False
-    try:
-        if normalized.startswith(f"{PASSWORD_HASH_VERSION}:"):
-            _, salt_hex, _ = normalized.split(":", 2)
-            salt = bytes.fromhex(salt_hex)
-            expected = f"{PASSWORD_HASH_VERSION}:{salt_hex}:{_pbkdf2_hex(password, salt, PBKDF2_V2_ITERATIONS)}"
-            return _hmac_mod.compare_digest(expected, normalized)
-        if ":" in normalized:
-            salt_hex, _ = normalized.split(":", 1)
-            salt = bytes.fromhex(salt_hex)
-            expected = f"{salt_hex}:{_pbkdf2_hex(password, salt, PBKDF2_V1_ITERATIONS)}"
-            return _hmac_mod.compare_digest(expected, normalized)
-    except Exception:
-        logger.warning("security.verify_password_failed", exc_info=True)
-        return False
-    return False
-
-
 # ── JWT Token ──────────────────────────────
 def make_token(user_id: int, role: str) -> str:
     now = int(_time_mod.time())

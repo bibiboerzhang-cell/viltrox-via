@@ -21,9 +21,10 @@ const ONLINE_SOURCE = "platform_discovery_strict";
 const FINGERPRINT_RE = /^[a-f0-9]{64}$/;
 
 export function strictOnlineDiscoveryPlatforms(values: readonly string[]): string[] {
-  const supported = Array.from(new Set(values.map(cleanText).map((value) => value.toLowerCase())))
+  const requested = Array.from(new Set(values.map(cleanText).map((value) => value.toLowerCase()).filter(Boolean)));
+  if (!requested.length) return [...STRICT_ONLINE_PLATFORMS];
+  return requested
     .filter((value) => STRICT_ONLINE_PLATFORMS.includes(value));
-  return supported.length ? supported : [...STRICT_ONLINE_PLATFORMS];
 }
 
 export type OnlineQualifiedSummary = LocalQualifiedSummary & {
@@ -41,6 +42,8 @@ export type OnlineQualifiedSummary = LocalQualifiedSummary & {
   candidateBudgetUsed: number;
   exhausted: boolean;
   selectionReady: boolean;
+  pendingContentEvidence: number;
+  contentEvidenceFollowupStatus: string;
 };
 
 function count(value: unknown): number | null {
@@ -163,6 +166,7 @@ const REASON_LABELS: Record<string, string> = {
   provider_round_budget_exhausted: "供应商轮次已用尽",
   candidate_exhausted: "可核验候选已耗尽",
   enrollment_failed: "合格候选入库失败",
+  pending_content_evidence: "缺正文/字幕证据",
 };
 
 function reasonLabels(contract: Row, shortfall: number): string[] {
@@ -203,6 +207,7 @@ export function onlineQualifiedSummaryFromSession(session: VkpiKolSearchHistoryI
   const accepted = contractValid ? Math.min(acceptedClaim || 0, returnedClaim || 0, strictRows.length) : 0;
   const rowPending = rows.filter((row) => row.qualification === "pending").length;
   const rowRejected = rows.filter((row) => row.qualification === "rejected").length;
+  const contentEvidenceFollowup = asRecord(contract.content_evidence_followup);
   const target = LOCAL_QUALIFIED_TARGET;
   const shortfall = Math.max(target - accepted, contractValid ? count(contract.shortfall) || 0 : target);
   const pending = (contractValid ? count(contract.pending_count) || 0 : 0) + rowPending;
@@ -219,7 +224,7 @@ export function onlineQualifiedSummaryFromSession(session: VkpiKolSearchHistoryI
     uniqueQualified: accepted,
     pending,
     rejected,
-    // 联网车道对「没有视频证据」是硬拒绝(陌生人零历史),没有待补抓这一桶。
+    // 联网车道不复用本地「从未抓到视频」桶；缺正文/字幕由下方独立字段诚实展示且不计入目标。
     activityUnknown: 0,
     shortfall,
     shortfallReasons: contractValid
@@ -236,5 +241,7 @@ export function onlineQualifiedSummaryFromSession(session: VkpiKolSearchHistoryI
     candidateBudgetUsed: contractValid ? count(contract.candidate_budget_used) || 0 : 0,
     exhausted: contractValid && contract.exhausted === true,
     selectionReady: contractValid && contract.terminal === true && contract.snapshot_complete === true,
+    pendingContentEvidence: contractValid ? count(contract.pending_content_evidence_count) || 0 : 0,
+    contentEvidenceFollowupStatus: contractValid ? cleanText(contentEvidenceFollowup.status) : "",
   };
 }

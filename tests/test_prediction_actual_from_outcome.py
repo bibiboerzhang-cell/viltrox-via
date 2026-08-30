@@ -1,17 +1,21 @@
 """Hermetic truth binding for prediction actuals resolved from finalized outcomes."""
 from __future__ import annotations
 
+import ast
 import json
+from pathlib import Path
 import sqlite3
 
 import pytest
 
 from app.db import connection
-from app.domains.market_brain import data_readiness, prediction_ledger
+from app.domains.market_brain import data_readiness, prediction_ledger, prediction_reviews
 from app.domains.platform import event_ledger
+from scripts.vkpi_engineering_health_collect import collect_complexity
 
 
 STAFF = {"id": 31, "organization_id": 1, "organization_scope_status": "resolved"}
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _db(*, metric_value=1.0, run_market: str = "US") -> sqlite3.Connection:
@@ -395,3 +399,80 @@ def test_legacy_eval_writer_cannot_poison_outcome_bound_key(monkeypatch):
     }
     assert same == expected
     assert changed == expected
+
+
+def test_prediction_actual_preserves_binding_metrics_and_writer_patch_points(monkeypatch):
+    conn = _db()
+    _wire(monkeypatch, conn)
+    events = []
+    original_binding = prediction_ledger._verified_outcome_actual_binding
+
+    def binding(*args, **kwargs):
+        events.append("binding")
+        return original_binding(*args, **kwargs)
+
+    metrics = {
+        "error_abs": 0.25,
+        "error_pct": 0.5,
+        "interval_hit": False,
+        "direction_hit": None,
+    }
+
+    def compute(*args, **kwargs):
+        del args, kwargs
+        events.append("metrics")
+        return metrics
+
+    captured = {}
+
+    def write(_conn, **kwargs):
+        events.append("writer")
+        captured.update(kwargs)
+        return {"ok": True, "id": 901, "deduped": False, **kwargs["metrics"]}
+
+    monkeypatch.setattr(prediction_ledger, "_verified_outcome_actual_binding", binding)
+    monkeypatch.setattr(prediction_ledger, "compute_eval_metrics", compute)
+    monkeypatch.setattr(prediction_reviews, "record_verified_eval", write)
+
+    result = _resolve()
+
+    assert events == ["binding", "metrics", "writer"]
+    assert result["id"] == 901
+    assert captured["metrics"] is metrics
+    assert captured["actual_json"]["binding_status"] == "verified_against_outcome"
+    assert captured["actual_json"]["outcome_id"] == 51
+    assert captured["run_snapshot"]["run_id"] == "run-51"
+
+
+def test_prediction_actual_binding_failure_fails_closed_before_writer(monkeypatch):
+    conn = _db()
+    _wire(monkeypatch, conn)
+
+    monkeypatch.setattr(
+        prediction_ledger,
+        "_verified_outcome_actual_binding",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def forbidden(*args, **kwargs):
+        del args, kwargs
+        pytest.fail("failed binding must not reach the atomic eval/event writer")
+
+    monkeypatch.setattr(prediction_reviews, "record_verified_eval", forbidden)
+
+    assert _resolve()["reason"] == "actual_evidence_binding_required"
+
+
+def test_prediction_actual_refactor_stays_below_complexity_and_line_ratchetes():
+    ledger = ROOT / "backend/app/domains/market_brain/prediction_ledger.py"
+    helper = ROOT / "backend/app/domains/market_brain/prediction_ledger_outcome_eval.py"
+    ledger_source = ledger.read_text(encoding="utf-8")
+    helper_source = helper.read_text(encoding="utf-8")
+    rows = collect_complexity({str(ledger): ast.parse(ledger_source)})
+    focal = next(row for row in rows if row.qualified_name == "record_eval_from_finalized_outcome")
+
+    assert focal.cc <= 30
+    assert len(ledger_source.splitlines()) <= 976
+    assert len(helper_source.splitlines()) < 800
+    helper_rows = collect_complexity({str(helper): ast.parse(helper_source)})
+    assert max(row.loc for row in helper_rows) <= 50

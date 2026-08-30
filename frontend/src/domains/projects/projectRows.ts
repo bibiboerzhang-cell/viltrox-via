@@ -10,9 +10,11 @@ import {
   durationLabel,
   numberValue,
   objectValue,
+} from '../dashboard/dashboardFormat';
+import {
   platformLabel,
   stageValue,
-} from '../dashboard';
+} from '../dashboard/dashboardPlatform';
 
 type Row = Record<string, unknown>;
 

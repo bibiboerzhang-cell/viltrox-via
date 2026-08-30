@@ -28,6 +28,7 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.access import scope
 from app.domains.kol import search_sessions
+from app.shared.vkpi_utils import utcnow_iso
 
 logger = get_logger(__name__)
 
@@ -38,12 +39,6 @@ SESSION_SOURCE = "kol_lookup"
 STAGE_SEARCH = "search"
 STAGE_THINKING = "thinking"
 STAGE_SUMMARIZING = "summarizing"
-
-
-def _utcnow() -> str:
-    from app.services.jobs.queue_common import utcnow
-
-    return utcnow()
 
 
 def _json(value: Any) -> str:
@@ -205,7 +200,7 @@ class LookupTracker:
             "staff_id": _int(scope.actor_staff_id(self._staff)),
             "created_by_user_id": self._user_id,
         }
-        now = _utcnow()
+        now = utcnow_iso()
         try:
             conn = get_conn()
             conn.execute(
@@ -247,7 +242,7 @@ class LookupTracker:
                 SET status=?, stage=?, updated_at=?
                 WHERE task_id=?
                 """,
-                (status, stage, _utcnow(), self.task_id),
+                (status, stage, utcnow_iso(), self.task_id),
             )
             conn.commit()
         except Exception as exc:
@@ -263,7 +258,7 @@ class LookupTracker:
     ) -> None:
         if not self._ledger_open:
             return
-        now = _utcnow()
+        now = utcnow_iso()
         final_stage = STAGE_SUMMARIZING if status in {"done", "partial_done"} else self._stage
         # 只回写本 lookup 真产物,绝不含 viltrox_fit_score。
         result_payload = {

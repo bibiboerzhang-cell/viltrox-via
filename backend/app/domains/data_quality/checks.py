@@ -57,14 +57,9 @@ def _parse_date(value: Any) -> datetime | None:
     return None
 
 
-def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    ensure_vkpi_schema()
-    ensure_vkpi_lineage_schema()
-    ensure_vkpi_reconciliation_schema()
-    conn = get_conn()
-    max_items = max(1, min(500, int(limit or 100)))
-    issues: list[dict[str, Any]] = []
-
+def _append_reconciliation_queue_issues(
+    *, conn: Any, issues: list[dict[str, Any]], staff: dict[str, Any] | None, max_items: int
+) -> None:
     # 1. Pending reconciliation queue rows: sales exist but are not yet mapped to project/KOL/staff.
     queue_staff_sql, queue_staff_params = _staff_clause("rq.assigned_to_staff_id", staff)
     rows = _safe_rows(
@@ -94,6 +89,10 @@ def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dic
             evidence=item,
         )
 
+
+def _append_sales_attribution_issues(
+    *, conn: Any, issues: list[dict[str, Any]], staff: dict[str, Any] | None, max_items: int
+) -> None:
     # 2. Sales attribution rows that cannot be tied to the operating chain.
     staff_sql, staff_params = _staff_clause("sa.staff_id", staff)
     rows = _safe_rows(
@@ -231,6 +230,10 @@ def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dic
             evidence=item,
         )
 
+
+def _append_amazon_attribution_issues(
+    *, conn: Any, issues: list[dict[str, Any]], staff: dict[str, Any] | None, max_items: int
+) -> None:
     # 6. Amazon attribution rows missing report-level evidence needed for reconciliation.
     amazon_staff_sql, amazon_staff_params = _staff_clause("sa.staff_id", staff)
     rows = _safe_rows(
@@ -301,6 +304,30 @@ def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dic
                 evidence={**item, "normalized": normalized, "report_date": report_date},
             )
 
+
+def _append_reconciliation_and_attribution_issues(
+    *,
+    conn: Any,
+    issues: list[dict[str, Any]],
+    staff: dict[str, Any] | None,
+    max_items: int,
+) -> None:
+    _append_reconciliation_queue_issues(
+        conn=conn, issues=issues, staff=staff, max_items=max_items
+    )
+
+    _append_sales_attribution_issues(
+        conn=conn, issues=issues, staff=staff, max_items=max_items
+    )
+
+    _append_amazon_attribution_issues(
+        conn=conn, issues=issues, staff=staff, max_items=max_items
+    )
+
+
+def _append_link_issues(
+    *, conn: Any, issues: list[dict[str, Any]], staff: dict[str, Any] | None, max_items: int
+) -> None:
     # 7. Broken / blocked short links.
     staff_sql, staff_params = _staff_clause("l.staff_id", staff)
     rows = _safe_rows(
@@ -372,6 +399,10 @@ def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dic
             evidence=item,
         )
 
+
+def _append_project_issues(
+    *, conn: Any, issues: list[dict[str, Any]], staff: dict[str, Any] | None, max_items: int
+) -> None:
     # 8. Published projects without content URL / evidence ref.
     project_sql, project_params = _project_clause("p", staff)
     rows = _safe_rows(
@@ -443,6 +474,10 @@ def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dic
             evidence=item,
         )
 
+
+def _append_integrity_issues(
+    *, conn: Any, issues: list[dict[str, Any]], staff: dict[str, Any] | None, max_items: int
+) -> None:
     # 10. Manual attribution without evidence.
     staff_sql, staff_params = _staff_clause("sa.staff_id", staff)
     rows = _safe_rows(
@@ -536,6 +571,10 @@ def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dic
             evidence=item,
         )
 
+
+def _append_duplicate_kol_issues(
+    *, conn: Any, issues: list[dict[str, Any]], staff: dict[str, Any] | None, max_items: int
+) -> None:
     # 13. Duplicate KOL candidates caused by same platform URL/handle/email.
     kol_where = ""
     kol_params: list[Any] = []
@@ -597,8 +636,10 @@ def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dic
         if len(seen_duplicate_sets) >= max_items:
             break
 
-    append_operational_quality_issues(conn=conn, issues=issues, staff=staff, max_items=max_items)
 
+def _finalize_issues(
+    *, conn: Any, issues: list[dict[str, Any]], max_items: int
+) -> dict[str, Any]:
     action_rows = conn.execute(
         """
         SELECT issue_id, action
@@ -635,3 +676,30 @@ def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dic
             "info": sum(1 for item in issues if item.get("severity") == "info"),
         },
     }
+
+
+def list_issues(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+    ensure_vkpi_schema()
+    ensure_vkpi_lineage_schema()
+    ensure_vkpi_reconciliation_schema()
+    conn = get_conn()
+    max_items = max(1, min(500, int(limit or 100)))
+    issues: list[dict[str, Any]] = []
+
+    _append_reconciliation_and_attribution_issues(
+        conn=conn, issues=issues, staff=staff, max_items=max_items
+    )
+
+    _append_link_issues(conn=conn, issues=issues, staff=staff, max_items=max_items)
+
+    _append_project_issues(conn=conn, issues=issues, staff=staff, max_items=max_items)
+
+    _append_integrity_issues(conn=conn, issues=issues, staff=staff, max_items=max_items)
+
+    _append_duplicate_kol_issues(
+        conn=conn, issues=issues, staff=staff, max_items=max_items
+    )
+
+    append_operational_quality_issues(conn=conn, issues=issues, staff=staff, max_items=max_items)
+
+    return _finalize_issues(conn=conn, issues=issues, max_items=max_items)

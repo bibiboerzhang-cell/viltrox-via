@@ -366,6 +366,232 @@ def _insert_posts(account: dict[str, Any], raw_data: dict[str, Any], *, limit: i
     return count
 
 
+def _authorization_checkpoint(callback: Callable[[], Any] | None) -> None:
+    if callback is not None:
+        callback()
+
+
+def _start_provider_call(
+    authorization_checkpoint: Callable[[], Any] | None,
+    provider_call_started: Callable[[], None] | None,
+) -> None:
+    _authorization_checkpoint(authorization_checkpoint)
+    if provider_call_started is not None:
+        provider_call_started()
+
+
+def _scope_authorization_checkpoint(
+    authorization_checkpoint: Callable[[], Any] | None,
+    authorization_scope_checkpoint: Callable[[], Any] | None,
+) -> None:
+    if authorization_scope_checkpoint is not None:
+        authorization_scope_checkpoint()
+    else:
+        _authorization_checkpoint(authorization_checkpoint)
+
+
+def _gate_rejection_records_platform_status(gate: dict[str, Any]) -> bool:
+    provider_status = str(gate.get("provider_status") or "").strip().lower()
+    message = str(gate.get("message") or "")
+    return provider_status == "not_configured" and any(
+        token in message for token in ("API", "TOKEN", "crawler", "适配器", "未配置")
+    )
+
+
+def _finish_gate_rejection(
+    conn: Any,
+    account_id: int,
+    account: dict[str, Any],
+    platform: str,
+    gate: dict[str, Any],
+    authorization_checkpoint: Callable[[], Any] | None,
+) -> dict[str, Any]:
+    if _gate_rejection_records_platform_status(gate):
+        _authorization_checkpoint(authorization_checkpoint)
+        _record_platform_test_status(
+            platform,
+            "not_configured",
+            {"last_gate_message": str(gate.get("message") or ""), "account_id": int(account_id)},
+        )
+    _authorization_checkpoint(authorization_checkpoint)
+    conn.execute(
+        "UPDATE vkpi_industry_accounts SET sync_status=?, last_crawled_at=?, crawl_error_count=crawl_error_count+1 WHERE id=?",
+        (gate.get("sync_status") or "not_configured", _utcnow(), int(account_id)),
+    )
+    conn.commit()
+    return {"account": account, **gate}
+
+
+def _crawl_profile(
+    crawler: Any,
+    platform: str,
+    handle_or_url: str,
+    platform_user_id: str,
+    max_posts: int,
+    authorization_checkpoint: Callable[[], Any] | None,
+    provider_call_started: Callable[[], None] | None,
+) -> dict[str, Any]:
+    if not hasattr(crawler, "crawl_channel_profile"):
+        return {}
+    _start_provider_call(authorization_checkpoint, provider_call_started)
+    if platform == "youtube":
+        return crawler.crawl_channel_profile(handle_or_url, channel_id=platform_user_id)
+    return crawler.crawl_channel_profile(
+        handle_or_url,
+        channel_id=platform_user_id,
+        max_posts=max_posts,
+    )
+
+
+def _profile_channel_id(platform: str, platform_user_id: str, profile_items: list[Any]) -> str:
+    if platform == "youtube":
+        return str((profile_items[0] or {}).get("id") or "") if profile_items else ""
+    return platform_user_id or (str(profile_items[0].get("username", "")) if profile_items else "")
+
+
+def _crawl_videos(
+    crawler: Any,
+    platform: str,
+    channel_id: str,
+    profile_payload: dict[str, Any],
+    profile_items: list[Any],
+    max_posts: int,
+    authorization_checkpoint: Callable[[], Any] | None,
+    provider_call_started: Callable[[], None] | None,
+) -> tuple[list[Any], dict[str, Any] | None]:
+    videos_items: list[Any] = []
+    videos_payload: dict[str, Any] | None = None
+    if platform == "youtube" and channel_id:
+        _start_provider_call(authorization_checkpoint, provider_call_started)
+        videos_payload = crawler.crawl_channel_videos(channel_id, max_results=max_posts)
+        videos_items = videos_payload.get("items") or []
+        if not videos_items and isinstance(profile_payload.get("videos"), list):
+            videos_items = profile_payload.get("videos") or []
+        return videos_items, videos_payload
+    if profile_items:
+        first_profile = profile_items[0] or {}
+        videos_items = first_profile.get("latestPosts") or first_profile.get("posts") or first_profile.get("videos") or []
+    if not videos_items and isinstance(profile_payload.get("videos"), list):
+        videos_items = profile_payload.get("videos") or []
+    return videos_items, videos_payload
+
+
+def _build_crawler_payload(
+    platform: str,
+    profile_payload: dict[str, Any],
+    videos_items: list[Any],
+    videos_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    raw_data = {
+        "source": f"{platform}_crawler",
+        "profile": profile_payload,
+        "videos": videos_items,
+        "kpi_status": profile_payload.get("sync_status") or profile_payload.get("provider_status"),
+    }
+    if platform != "youtube":
+        return raw_data
+    raw_data["youtube_kpi_status"] = raw_data["kpi_status"]
+    youtube_source = str(
+        profile_payload.get("provider_source")
+        or (videos_payload.get("provider_source") if isinstance(videos_payload, dict) else "")
+        or ""
+    ).strip()
+    raw_data["source"] = "youtube_apify" if youtube_source == "apify" else "youtube_api"
+    raw_data["youtube_provider_source"] = youtube_source or "youtube_api"
+    youtube_fallback_from = profile_payload.get("fallback_from") or (
+        videos_payload.get("fallback_from") if isinstance(videos_payload, dict) else ""
+    )
+    if youtube_fallback_from:
+        raw_data["youtube_fallback_from"] = youtube_fallback_from
+    return raw_data
+
+
+def _collect_live_raw_data(
+    account: dict[str, Any],
+    platform: str,
+    authorization_checkpoint: Callable[[], Any] | None,
+    provider_call_started: Callable[[], None] | None,
+) -> dict[str, Any]:
+    from app.platform.industry_crawlers import get_crawler
+
+    crawler = get_crawler(platform)
+    if crawler is None:
+        return {"source": "unsupported", "platform": platform, "message": f"{platform} 适配器未注册"}
+    handle_or_url = str(account.get("profile_url") or account.get("handle") or "")
+    platform_user_id = str(account.get("platform_user_id") or "")
+    max_posts = max(1, int(_platform_config(platform).get("posts_per_account") or 25))
+    profile_payload = _crawl_profile(
+        crawler, platform, handle_or_url, platform_user_id, max_posts,
+        authorization_checkpoint, provider_call_started,
+    )
+    profile_items = profile_payload.get("items") or []
+    channel_id = _profile_channel_id(platform, platform_user_id, profile_items)
+    videos_items, videos_payload = _crawl_videos(
+        crawler, platform, channel_id, profile_payload, profile_items, max_posts,
+        authorization_checkpoint, provider_call_started,
+    )
+    return _build_crawler_payload(platform, profile_payload, videos_items, videos_payload)
+
+
+def _record_live_platform_status(
+    account_id: int,
+    platform: str,
+    raw_data: dict[str, Any],
+    authorization_checkpoint: Callable[[], Any] | None,
+) -> None:
+    raw_status = str(
+        (raw_data or {}).get("kpi_status")
+        or (raw_data or {}).get("provider_status")
+        or (raw_data or {}).get("youtube_kpi_status")
+        or ""
+    ).strip().lower()
+    if raw_status not in {"ok", "configured", "synced", "success"}:
+        return
+    _authorization_checkpoint(authorization_checkpoint)
+    _record_platform_test_status(
+        platform,
+        "synced",
+        {"last_live_account_id": int(account_id), "last_live_source": (raw_data or {}).get("source") or ""},
+    )
+
+
+def _persist_account_snapshot(
+    conn: Any,
+    account_id: int,
+    account: dict[str, Any],
+    platform: str,
+    raw_data: dict[str, Any],
+    staff: dict[str, Any] | None,
+    authorization_checkpoint: Callable[[], Any] | None,
+    authorization_scope_checkpoint: Callable[[], Any] | None,
+) -> dict[str, Any]:
+    kpis = calculate_kpis(raw_data or {})
+    kpis["snapshot_date"] = str((raw_data or {}).get("snapshot_date") or _today())
+    _authorization_checkpoint(authorization_checkpoint)
+    snapshot = _insert_snapshot(int(account_id), kpis)
+    _authorization_checkpoint(authorization_checkpoint)
+    posts_written = _insert_posts(
+        account, raw_data or {},
+        limit=int(_platform_config(platform).get("posts_per_account") or 100),
+    )
+    _authorization_checkpoint(authorization_checkpoint)
+    account = _sync_account_profile_fields(account, raw_data or {})
+    _scope_authorization_checkpoint(authorization_checkpoint, authorization_scope_checkpoint)
+    conn.execute(
+        "UPDATE vkpi_industry_accounts SET sync_status=?, last_crawled_at=?, last_successful_at=?, crawl_error_count=0, raw_platform_data=? WHERE id=?",
+        ("synced", _utcnow(), _utcnow(), _json(raw_data), int(account_id)),
+    )
+    conn.commit()
+    return {
+        "account": {**account, "sync_status": "synced"},
+        "provider_status": str(kpis.get("youtube_kpi_status") or "synced"),
+        "sync_status": "synced",
+        "snapshot": snapshot,
+        "posts_written": posts_written,
+        "updated_by_staff_id": resolve_staff_id(staff),
+    }
+
+
 def collect_account_snapshot(
     account_id: int,
     *,
@@ -383,145 +609,20 @@ def collect_account_snapshot(
         raise LookupError("industry account not found")
     account = dict(row)
     platform = str(account.get("platform") or "other").strip().lower()
-
-    def checkpoint() -> None:
-        if authorization_checkpoint is not None:
-            authorization_checkpoint()
-
-    def start_provider_call() -> None:
-        checkpoint()
-        if provider_call_started is not None:
-            provider_call_started()
-
-    def scope_checkpoint() -> None:
-        if authorization_scope_checkpoint is not None:
-            authorization_scope_checkpoint()
-        else:
-            checkpoint()
-
     if raw_data is None:
         gate = provider_gate(account, force=force_local)
         if not gate.get("allowed"):
-            provider_status = str(gate.get("provider_status") or "").strip().lower()
-            message = str(gate.get("message") or "")
-            if provider_status == "not_configured" and any(
-                token in message
-                for token in ("API", "TOKEN", "crawler", "适配器", "未配置")
-            ):
-                checkpoint()
-                _record_platform_test_status(
-                    platform,
-                    "not_configured",
-                    {"last_gate_message": message, "account_id": int(account_id)},
-                )
-            checkpoint()
-            conn.execute(
-                "UPDATE vkpi_industry_accounts SET sync_status=?, last_crawled_at=?, crawl_error_count=crawl_error_count+1 WHERE id=?",
-                (gate.get("sync_status") or "not_configured", _utcnow(), int(account_id)),
+            return _finish_gate_rejection(
+                conn, account_id, account, platform, gate, authorization_checkpoint,
             )
-            conn.commit()
-            return {"account": account, **gate}
-        # R-Phase2-A: 多平台 dispatch
-        from app.platform.industry_crawlers import get_crawler
-        crawler = get_crawler(platform)
-        if crawler is None:
-            raw_data = {"source": "unsupported", "platform": platform, "message": f"{platform} 适配器未注册"}
-        else:
-            handle_or_url = str(account.get("profile_url") or account.get("handle") or "")
-            platform_user_id = str(account.get("platform_user_id") or "")
-            max_posts = max(1, int(_platform_config(platform).get("posts_per_account") or 25))
-            if platform == "youtube":
-                if hasattr(crawler, "crawl_channel_profile"):
-                    start_provider_call()
-                    profile_payload = crawler.crawl_channel_profile(
-                        handle_or_url,
-                        channel_id=platform_user_id,
-                    )
-                else:
-                    profile_payload = {}
-            else:
-                if hasattr(crawler, "crawl_channel_profile"):
-                    start_provider_call()
-                    profile_payload = crawler.crawl_channel_profile(
-                        handle_or_url,
-                        channel_id=platform_user_id,
-                        max_posts=max_posts,
-                    )
-                else:
-                    profile_payload = {}
-            profile_items = profile_payload.get("items") or []
-            channel_id = ""
-            if platform == "youtube":
-                channel_id = str((profile_items[0] or {}).get("id") or "") if profile_items else ""
-            else:
-                channel_id = platform_user_id or (str(profile_items[0].get("username", "")) if profile_items else "")
-            videos_items = []
-            if platform == "youtube" and channel_id:
-                start_provider_call()
-                videos_payload = crawler.crawl_channel_videos(channel_id, max_results=max_posts)
-                videos_items = videos_payload.get("items") or []
-                if not videos_items and isinstance(profile_payload.get("videos"), list):
-                    videos_items = profile_payload.get("videos") or []
-            else:
-                if profile_items:
-                    first_profile = profile_items[0] or {}
-                    videos_items = first_profile.get("latestPosts") or first_profile.get("posts") or first_profile.get("videos") or []
-                if not videos_items and isinstance(profile_payload.get("videos"), list):
-                    videos_items = profile_payload.get("videos") or []
-            raw_data = {
-                "source": f"{platform}_crawler",
-                "profile": profile_payload,
-                "videos": videos_items,
-                "kpi_status": profile_payload.get("sync_status") or profile_payload.get("provider_status"),
-            }
-            if platform == "youtube":
-                raw_data["youtube_kpi_status"] = raw_data["kpi_status"]
-                youtube_source = str(profile_payload.get("provider_source") or (videos_payload.get("provider_source") if "videos_payload" in locals() and isinstance(videos_payload, dict) else "") or "").strip()
-                raw_data["source"] = "youtube_apify" if youtube_source == "apify" else "youtube_api"
-                raw_data["youtube_provider_source"] = youtube_source or "youtube_api"
-                youtube_fallback_from = profile_payload.get("fallback_from") or (videos_payload.get("fallback_from") if "videos_payload" in locals() and isinstance(videos_payload, dict) else "")
-                if youtube_fallback_from:
-                    raw_data["youtube_fallback_from"] = youtube_fallback_from
-
-    raw_status = str(
-        (raw_data or {}).get("kpi_status")
-        or (raw_data or {}).get("provider_status")
-        or (raw_data or {}).get("youtube_kpi_status")
-        or ""
-    ).strip().lower()
-    if raw_status in {"ok", "configured", "synced", "success"}:
-        checkpoint()
-        _record_platform_test_status(
-            platform,
-            "synced",
-            {"last_live_account_id": int(account_id), "last_live_source": (raw_data or {}).get("source") or ""},
+        raw_data = _collect_live_raw_data(
+            account, platform, authorization_checkpoint, provider_call_started,
         )
-
-    kpis = calculate_kpis(raw_data or {})
-    kpis["snapshot_date"] = str((raw_data or {}).get("snapshot_date") or _today())
-    checkpoint()
-    snapshot = _insert_snapshot(int(account_id), kpis)
-    checkpoint()
-    posts_written = _insert_posts(account, raw_data or {}, limit=int(_platform_config(platform).get("posts_per_account") or 100))
-    checkpoint()
-    account = _sync_account_profile_fields(account, raw_data or {})
-    # The authorized refresh may itself normalize profile_url/avatar/display
-    # fields.  Recheck live actor/project/account membership here without
-    # treating that expected self-write as an external provider-target drift.
-    scope_checkpoint()
-    conn.execute(
-        "UPDATE vkpi_industry_accounts SET sync_status=?, last_crawled_at=?, last_successful_at=?, crawl_error_count=0, raw_platform_data=? WHERE id=?",
-        ("synced", _utcnow(), _utcnow(), _json(raw_data), int(account_id)),
+    _record_live_platform_status(account_id, platform, raw_data, authorization_checkpoint)
+    return _persist_account_snapshot(
+        conn, account_id, account, platform, raw_data, staff,
+        authorization_checkpoint, authorization_scope_checkpoint,
     )
-    conn.commit()
-    return {
-        "account": {**account, "sync_status": "synced"},
-        "provider_status": str(kpis.get("youtube_kpi_status") or "synced"),
-        "sync_status": "synced",
-        "snapshot": snapshot,
-        "posts_written": posts_written,
-        "updated_by_staff_id": resolve_staff_id(staff),
-    }
 
 
 def sync_enabled_accounts(*, limit: int = 100, staff: dict[str, Any] | None = None) -> dict[str, Any]:

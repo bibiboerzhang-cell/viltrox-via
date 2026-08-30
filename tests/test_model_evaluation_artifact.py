@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -11,6 +14,7 @@ from app.platform.models.evaluation_artifact import (
     canonical_sha256,
     verify_model_evaluation_artifact,
 )
+from scripts.vkpi_engineering_health_collect import collect_complexity
 from tests.model_evidence_signing import (
     install_test_trust_roots,
     public_key_b64,
@@ -345,3 +349,155 @@ def test_naive_evaluation_timestamps_are_not_serialized_as_trusted_time() -> Non
     assert result["valid"] is False
     assert "evaluation_artifact_as_of_missing" in result["failure_reasons"]
     assert "evaluation_dataset_as_of_missing" in result["failure_reasons"]
+
+
+def test_verifier_reads_rotated_trust_roots_at_call_time(monkeypatch) -> None:
+    from app.platform.models import evaluation_artifact as artifact_module
+
+    artifact = _artifact()
+    monkeypatch.setattr(
+        artifact_module, "TRUSTED_EVALUATION_ED25519_PUBLIC_KEYS", {}
+    )
+    assert verify_model_evaluation_artifact(
+        artifact, expected_binding=BINDING
+    )["attestation_verified"] is False
+
+    monkeypatch.setattr(
+        artifact_module,
+        "TRUSTED_EVALUATION_ED25519_PUBLIC_KEYS",
+        dict(PUBLIC_KEYS),
+    )
+    assert verify_model_evaluation_artifact(
+        artifact, expected_binding=BINDING
+    )["attestation_verified"] is True
+
+
+def test_multi_fault_result_keeps_reason_order_and_safe_projection() -> None:
+    artifact = _artifact()
+    artifact["unexpected"] = "discard"
+    artifact["benchmark_version"] = "bad benchmark"
+    artifact["as_of"] = "2026-07-13"
+    artifact["dataset"].update(
+        {
+            "actual": False,
+            "synthetic": True,
+            "case_count": True,
+            "provenance": "unsafe provenance",
+        }
+    )
+    artifact["samples"][0].update(
+        {
+            "task": "bad task",
+            "response_model": "bad model",
+            "evidence_origin": "fixture",
+            "request_sent": False,
+            "schema_passed": None,
+            "latency_ms": -1,
+            "response_sha256": "bad",
+            "failure_reasons": ["BAD"],
+            "status": "pending",
+            "raw_response": "secret",
+        }
+    )
+    artifact["summary"] = {"extra": "x"}
+
+    result = verify_model_evaluation_artifact(
+        artifact,
+        expected_binding=BINDING,
+        expected_tasks=["task-a"],
+    )
+
+    assert result == {
+        "valid": False,
+        "integrity_verified": False,
+        "attestation_verified": False,
+        "attestation_key_id": KEY_ID,
+        "attestation_role": "evaluation",
+        "attestation_public_key_sha256": None,
+        "failure_reasons": [
+            "evaluation_artifact_unsupported_fields",
+            "evaluation_artifact_benchmark_version_missing",
+            "evaluation_artifact_as_of_missing",
+            "evaluation_artifact_integrity_mismatch",
+            "evaluation_artifact_attestation_unverified",
+            "evaluation_dataset_provenance_missing",
+            "evaluation_dataset_not_actual",
+            "evaluation_artifact_id_mismatch",
+            "evaluation_dataset_case_count_mismatch",
+            "evaluation_sample_0_unsupported_fields",
+            "evaluation_sample_0_task_invalid",
+            "evaluation_sample_0_response_model_invalid",
+            "evaluation_sample_0_response_model_mismatch",
+            "evaluation_sample_0_not_provider_live",
+            "evaluation_sample_0_transport_not_observed",
+            "evaluation_sample_0_schema_passed_invalid",
+            "evaluation_sample_0_latency_invalid",
+            "evaluation_sample_0_response_sha256_invalid",
+            "evaluation_sample_0_failure_reasons_invalid",
+            "evaluation_sample_0_status_invalid",
+            "evaluation_task_coverage_incomplete",
+            "evaluation_summary_unsupported_fields",
+            "evaluation_summary_mismatch",
+        ],
+        "summary": {
+            "sample_count": 1,
+            "success_count": 0,
+            "structured_valid_count": 0,
+            "factual_valid_count": 1,
+            "source_valid_count": 1,
+            "safety_valid_count": 1,
+            "model_version": None,
+            "latency_ms": {"p50": None, "p95": None, "p99": None},
+            "failure_reasons": ["sample_status:invalid"],
+        },
+        "task_sample_counts": {},
+        "dataset": {
+            "version": None,
+            "sha256": "d91f35cce64912d371d4737ddca81c3c1d697e17e3397f65321d91dbe4360581",
+            "as_of": None,
+            "provenance_sha256": "28c224232c3e97d63fe962e75d6db89f2216576019d8e69f3af89f0f6ce973b9",
+            "actual": False,
+            "synthetic": True,
+            "case_count": None,
+            "case_ids_sha256": "889da7f9efa8b13f96cf761dde0d18d3df83275ea3b3f573588e1c7719778f96",
+        },
+        "evaluation_id": None,
+        "benchmark_version": None,
+        "as_of": None,
+        "provenance_sha256": "6bcc74332a102a78df04c49d46d07d142db12057ffc3e2525c1be7559252a99d",
+        "artifact_sha256": "e686cc2e0207be40f8289c914ee325fd06f982d70894dd3481b6c6fd7b8488ab",
+    }
+    assert "secret" not in json.dumps(result)
+
+
+def test_verifier_public_signature_complexity_and_modules_stay_bounded() -> None:
+    signature = inspect.signature(verify_model_evaluation_artifact)
+    assert list(signature.parameters) == [
+        "artifact",
+        "expected_binding",
+        "expected_tasks",
+    ]
+    assert signature.parameters["expected_binding"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert signature.parameters["expected_tasks"].default is None
+
+    root = Path(__file__).resolve().parents[1]
+    module_paths = sorted(
+        (root / "backend/app/platform/models").glob("evaluation_artifact*.py")
+    )
+    trees = {
+        str(path.relative_to(root)): ast.parse(path.read_text(encoding="utf-8"))
+        for path in module_paths
+    }
+    rows = collect_complexity(trees)
+    wrapper = next(
+        row
+        for row in rows
+        if row.qualified_name == "verify_model_evaluation_artifact"
+    )
+
+    assert wrapper.cc <= 30
+    assert max(row.cc for row in rows) <= 30
+    assert all(
+        len(path.read_text(encoding="utf-8").splitlines()) <= 800
+        for path in module_paths
+    )

@@ -13,14 +13,28 @@ YouTube Data API 快路径(多路短词 + channels.list 富化)、IG 号主收�
 from __future__ import annotations
 
 import asyncio
-import os
-import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any, Dict, List
 
 from app.core.logging import get_logger
 from app.services.intelligence.account_scan_helpers import *  # noqa: F403
+from app.services.intelligence.account_search_content_runtime import (
+    ContentRuntimeDependencies,
+    build_actor_plan,
+    build_actor_result,
+    normalize_actor_items,
+    prepare_actor_items,
+)
+from app.services.intelligence.account_search_youtube_strict_runtime import (
+    build_strict_search_plan,
+    build_strict_search_result,
+    enrich_strict_search_rows,
+    merge_strict_page_state,
+    normalize_strict_search_rows,
+    run_strict_search_pages,
+)
+from app.services.intelligence.account_search_youtube_metrics import _youtube_channel_statistics, youtube_activation_coverage, youtube_channel_activation_summary, youtube_exact_query_failure, youtube_quota_metadata, youtube_sample_video_ids, youtube_video_statistics
 
 # IG 腿的检索词/收敛/富化已拆到 account_search_instagram.py(800 软棘轮:本文件在
 # 快照里锁死 843 行)。原名 re-export —— account_scan_service 的 re-export 链与
@@ -60,56 +74,33 @@ def _scan_service():
     return _scan
 
 
-def _youtube_channel_statistics(crawler: Any, channel_ids: List[str]) -> Dict[str, Dict[str, Any]]:
-    """channels.list part=snippet,statistics(≤50 id/次,1 quota unit/次)→ 发现即知真粉丝数。
+def _content_runtime_dependencies() -> ContentRuntimeDependencies:
+    """Bind compatibility helpers at call time so monkeypatch points survive."""
 
-    治「新面孔全折叠成分析中」根因之一:search.list snippet 不带统计,followers 未知 →
-    会话读端第二道闸把全部 YT 新人折叠成「分析中」,面上只剩库内已有的人。这里花 1 个
-    配额单位批量补齐 subscriberCount(隐藏订阅数诚实置 0=未知)/customUrl(真 @handle,
-    治 channel_id 当 handle 的池内去重错配)/country(喂 _detect_excluded_region 真地区信号)。
-    任一批失败只跳过该批;无 key → {}(诚实降级,行为退回旧版 followers 未知)。"""
-    ids = [str(cid or "").strip() for cid in channel_ids if str(cid or "").strip()]
-    if not ids or not getattr(crawler, "api_key", ""):
-        return {}
-    out: Dict[str, Dict[str, Any]] = {}
-    for start in range(0, len(ids), 50):
-        batch = ids[start:start + 50]
-        payload = crawler._request(
-            "channels",
-            {"part": "snippet,statistics", "id": ",".join(batch), "maxResults": 50},
-        )
-        if str(payload.get("provider_status") or "") != "ok":
-            continue
-        for row in payload.get("items") or []:
-            if not isinstance(row, dict):
-                continue
-            cid = str(row.get("id") or "").strip()
-            if not cid:
-                continue
-            snippet = row.get("snippet") if isinstance(row.get("snippet"), dict) else {}
-            stats = row.get("statistics") if isinstance(row.get("statistics"), dict) else {}
-            thumbs = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
-            avatar_url, avatar_url_status = _avatar_url_policy(
-                ((thumbs.get("high") or thumbs.get("medium") or thumbs.get("default")) or {}).get("url")
-            )
-            hidden = bool(stats.get("hiddenSubscriberCount"))
-            out[cid] = {
-                # 隐藏订阅数 → 0(=未知,读端归「分析中」),绝不杜撰。
-                "subscribers": 0 if hidden else _normalize_int(stats.get("subscriberCount")),
-                "hidden_subscribers": hidden,
-                "video_count": _normalize_int(stats.get("videoCount")),
-                "view_count": _normalize_int(stats.get("viewCount")),
-                "custom_url": str(snippet.get("customUrl") or "").strip(),
-                "country": str(snippet.get("country") or "").strip(),
-                "description": str(snippet.get("description") or "").strip(),
-                "default_language": str(snippet.get("defaultLanguage") or "").strip(),
-                "avatar_url": avatar_url,
-                "avatar_url_status": avatar_url_status,
-            }
-    return out
+    return ContentRuntimeDependencies(
+        avatar_url_policy=_avatar_url_policy,
+        candidate_identity_key=_candidate_identity_key,
+        clean_url=_clean_url,
+        douyin_actor_id=_douyin_actor_id,
+        douyin_search_payload=_douyin_search_payload,
+        known_text=_known_text,
+        normalize_douyin_item=_normalize_douyin_item,
+        normalize_int=_normalize_int,
+        published_value=_published_value,
+        source_key=_source_key,
+        instagram_collapse_owner_posts=_instagram_collapse_owner_posts,
+        instagram_hashtags=_instagram_hashtags,
+        instagram_enrich_min_budget_seconds=instagram_enrich_min_budget_seconds,
+        instagram_enrich_targets=instagram_enrich_targets,
+        short_search_queries=_short_search_queries,
+        tiktok_collapse_author_videos=_tiktok_collapse_author_videos,
+    )
 
 
-async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_limit: int = 25, relevance_language: str = "en") -> Dict[str, Any] | None:
+async def _youtube_data_api_search(
+    search_query: str, *, market: str = "", safe_limit: int = 25,
+    relevance_language: str = "en", exact_query: bool = False,
+) -> Dict[str, Any] | None:
     """YouTube Data API fast path (search.list type=channel, ~1s). None => fall back to Apify.
 
     K2 扩量刀(2026-07-21):旧版单次整句 search.list,长 persona 句实测只回 0-1 条
@@ -120,15 +111,21 @@ async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_
       新面孔发现即知粉丝数,不再全员折叠成「分析中」。
     None is returned when: no API key, quota exhausted, or every variant errored — the
     caller then runs the existing Apify youtube-scraper branch unchanged.
-    Quota: search.list = 100 units/variant(≤3)+ channels.list 1 unit ≈ ≤301 units/discovery
-    (daily default 10000).
+    Quota accounting v2 keeps two official buckets separate: one Search Query
+    call per issued ``search.list`` and one combined unit for ``channels.list``.
     """
     from app.platform.industry_crawlers.youtube_crawler import YouTubeCrawler
 
     crawler = YouTubeCrawler()
     if not crawler.api_key:
         return None
-    variants = _youtube_search_query_variants(search_query)
+    # Targeted Search V2 owns its QueryCell expression.  Expanding that exact
+    # expression back into the legacy brand/category ladder would silently
+    # undo the operator's segment (for example motorsport -> Viltrox flash
+    # review), so an exact cell is sent once, byte-for-byte after whitespace
+    # normalization.  Legacy callers retain the existing bounded variants.
+    normalized_exact = " ".join(str(search_query or "").split())
+    variants = [normalized_exact] if exact_query and normalized_exact else _youtube_search_query_variants(search_query)
     if not variants:
         return None
     merge_cap = min(50, max(1, int(safe_limit or 25)) * 2)
@@ -149,12 +146,14 @@ async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_
             return None
         return payload
 
-    def go() -> tuple[List[Dict[str, Any]], List[str], bool]:
+    def go() -> tuple[List[Dict[str, Any]], List[str], bool, int]:
         merged: List[Dict[str, Any]] = []
         seen_ids: set[str] = set()
         used_queries: List[str] = []
         any_ok = False
+        search_calls = 0
         for q in variants:
+            search_calls += 1
             payload = _channel_search(q)
             if payload is None:
                 continue  # 该变体配额/错误 → 跳过;全灭才降级 Apify
@@ -170,16 +169,17 @@ async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_
                 merged.append(raw)
             if len(merged) >= merge_cap:
                 break
-        return merged[:merge_cap], used_queries, any_ok
+        return merged[:merge_cap], used_queries, any_ok, search_calls
 
     try:
-        raw_items, used_queries, any_ok = await asyncio.to_thread(go)
+        raw_items, used_queries, any_ok, search_calls = await asyncio.to_thread(go)
     except Exception as exc:  # pragma: no cover - network only
         logger.warning("scanner.youtube_data_api_failed", extra={"error": str(exc)})
         return None
     if not any_ok:
-        return None
+        return youtube_exact_query_failure(query=search_query, market=market, actor_id="youtube-data-api/search.list", search_calls=search_calls) if exact_query else None
     stats_by_id: Dict[str, Dict[str, Any]] = {}
+    channels_list_calls = 1 if raw_items else 0
     if raw_items:
         try:
             stats_by_id = await asyncio.to_thread(
@@ -206,7 +206,11 @@ async def _youtube_data_api_search(search_query: str, *, market: str = "", safe_
             "requested": int(safe_limit or 25),
             "returned": len(items),
             "provider_queries": used_queries,
-            "quota_units": 100 * max(1, len(used_queries)) + (1 if stats_by_id else 0),
+            "query_mode": "exact_query_cell" if exact_query else "expanded_ladder",
+            **youtube_quota_metadata(
+                search_calls=search_calls,
+                channels_list_calls=channels_list_calls,
+            ),
             "channels_enriched": sum(1 for item in items if item.get("followers")),
             # 车道 2:非严格频道搜索路只服务 legacy 单轮发现,刻意没接分页(接了也没人翻)。
             "pagination_supported": False,
@@ -223,6 +227,7 @@ async def _youtube_data_api_strict_video_search(
     safe_limit: int = 25,
     relevance_language: str = "en",
     page_cursor: Any = None,
+    exact_query: bool = False,
 ) -> Dict[str, Any] | None:
     """Fetch real <=45-day videos, then batch-enrich their declared channels.
 
@@ -237,184 +242,119 @@ async def _youtube_data_api_strict_video_search(
     crawler = YouTubeCrawler()
     if not crawler.api_key:
         return None
-    variants = _youtube_search_query_variants(search_query, max_variants=PRECISION_TERMS_DEFAULT)
-    if not variants:
+    plan = build_strict_search_plan(
+        search_query,
+        safe_limit=safe_limit,
+        relevance_language=relevance_language,
+        page_cursor=page_cursor,
+        exact_query=exact_query,
+        query_variants=_youtube_search_query_variants,
+        anchor_index=term_anchor_index,
+        precision_terms_default=PRECISION_TERMS_DEFAULT,
+        exhausted_token=TERM_EXHAUSTED_TOKEN,
+    )
+    if plan is None:
         return None
-    anchors = term_anchor_index(search_query, max_terms=PRECISION_TERMS_DEFAULT)
-    result_limit = max(1, min(50, int(safe_limit or 25)))
-    page_tokens: Dict[str, str] = {}
-    if isinstance(page_cursor, dict):
-        page_tokens = {str(k): str(v).strip() for k, v in page_cursor.items() if str(v or "").strip()}
-    published_after = (
-        datetime.now(timezone.utc) - timedelta(days=45)
-    ).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-    def go() -> tuple[List[Dict[str, Any]], List[str], bool, Dict[str, str], List[Dict[str, Any]]]:
-        merged: List[Dict[str, Any]] = []
-        seen_channels: set[str] = set()
-        used_queries: List[str] = []
-        next_tokens: Dict[str, str] = {}
-        ledger: List[Dict[str, Any]] = []
-        any_ok = False
-        # 轮转(2026-08-27):候选池 merged 被全部变体共享、装满 result_limit 即停,而头部的
-        # 词只要还在回 nextPageToken 就永远排在最前 —— 实测 4 轮烧 804 配额,发出去的始终是
-        # 同两条词,tier 3/4/5 跨轮一次都轮不到。「5 条并联」从未在真实一轮里发生过。
-        # 改为**这一轮没发过的词优先**:page_tokens 里有没有该词就是「发过没有」的现成凭据,
-        # 不引入新状态、不多发一次请求(每轮仍是装满即停),只改谁先拿到配额。
-        ordered = sorted(variants, key=lambda q: 1 if page_tokens.get(q) else 0)
-        for query_variant in ordered:
-            # 抓干哨兵:上一轮这条词已经翻到官方不再给 nextPageToken —— 再发就是逐条
-            # 相同的第一页(实测同 query 重跑 3 次返回几乎逐条相同、0 产出)。跳过它、
-            # 把配额留给还没见底的词,这才是「识别重跑无效并换词」而不是原样重发。
-            if page_tokens.get(query_variant) == TERM_EXHAUSTED_TOKEN:
-                ledger.append(term_ledger_row(
-                    query_variant, anchors=anchors, quota_units=0,
-                    exhausted=True, skipped="exhausted_previous_round",
-                ))
-                continue
-            payload = crawler._request(
-                "search",
-                {
-                    "part": "snippet",
-                    "type": "video",
-                    "q": query_variant,
-                    "publishedAfter": published_after,
-                    "maxResults": result_limit,
-                    "relevanceLanguage": (relevance_language or "en").strip().lower() or "en",
-                    "safeSearch": "none",
-                    "pageToken": page_tokens.get(query_variant) or None,
-                },
-            )
-            if crawler._should_use_apify_fallback(payload) or str(payload.get("provider_status") or "") == "error":
-                ledger.append(term_ledger_row(
-                    query_variant, anchors=anchors, quota_units=0,
-                    provider_status=str(payload.get("provider_status") or "error"),
-                ))
-                continue
-            any_ok = True
-            used_queries.append(query_variant)
-            next_page = str(payload.get("nextPageToken") or "").strip()
-            # 没有 nextPageToken = 官方说这条词的语料翻完了(型号级窄词实测一页见底)。
-            # 落哨兵而不是留空:留空的话下一轮会被当成「没查过」再发一次第一页。
-            next_tokens[query_variant] = next_page or TERM_EXHAUSTED_TOKEN
-            fresh = 0
-            for raw in payload.get("items") or []:
-                if not isinstance(raw, dict):
-                    continue
-                snippet = raw.get("snippet") if isinstance(raw.get("snippet"), dict) else {}
-                channel_id = str(snippet.get("channelId") or "").strip()
-                video_id = str(((raw.get("id") or {}).get("videoId")) or "").strip()
-                if not channel_id or not video_id or channel_id in seen_channels:
-                    continue
-                seen_channels.add(channel_id)
-                # 证据埋点(2026-08-27):这条候选是**哪条检索词**捞回来的。一轮发多条变体、
-                # 按 channelId 合并之后就再也分不清了,归因必须在这里当场记下。
-                # 消费端:app.domains.kol.profile_discovery_evidence.CANDIDATE_TERM_KEY。
-                raw["_discovery_query_variant"] = query_variant
-                merged.append(raw)
-                fresh += 1
-                if len(merged) >= result_limit:
-                    break
-            ledger.append(term_ledger_row(
-                query_variant, anchors=anchors, page_token_in=page_tokens.get(query_variant) or "",
-                channels_new=fresh, exhausted=not next_page,
-            ))
-            if len(merged) >= result_limit:
-                break
-        return merged, used_queries, any_ok, next_tokens, ledger
 
     try:
-        raw_items, used_queries, any_ok, next_tokens, term_ledger = await asyncio.to_thread(go)
+        page_result = await asyncio.to_thread(
+            run_strict_search_pages,
+            crawler,
+            plan,
+            ledger_row=term_ledger_row,
+        )
     except Exception as exc:  # pragma: no cover - network only
         logger.warning("scanner.youtube_strict_video_search_failed", extra={"error": str(exc)})
         return None
-    if not any_ok:
-        return None
-    # 还有下一页的两种真凭据:某个变体回了 nextPageToken;或本轮装满提前 break、
-    # 还有变体一次都没查过(它们下一轮从第一页开始)。两者都不成立 = 真的翻完了。
-    unvisited = [
-        item for item in variants
-        if item not in used_queries and page_tokens.get(item) != TERM_EXHAUSTED_TOKEN
-    ]
-    for stale in unvisited:
-        if page_tokens.get(stale):
-            next_tokens.setdefault(stale, page_tokens[stale])
-    for done in variants:  # 抓干判定必须跨轮存活,否则下一轮又从第一页重发
-        if page_tokens.get(done) == TERM_EXHAUSTED_TOKEN:
-            next_tokens.setdefault(done, TERM_EXHAUSTED_TOKEN)
-    live_tokens = {k: v for k, v in next_tokens.items() if v != TERM_EXHAUSTED_TOKEN}
-    channel_ids = [
-        str(((raw.get("snippet") or {}).get("channelId")) or "").strip()
-        for raw in raw_items
-    ]
-    try:
-        stats_by_id = await asyncio.to_thread(_youtube_channel_statistics, crawler, channel_ids)
-    except Exception as exc:  # pragma: no cover - network only
-        logger.warning("scanner.youtube_strict_channel_stats_failed", extra={"error": str(exc)})
-        stats_by_id = {}
+    if not page_result.any_ok:
+        return (
+            youtube_exact_query_failure(
+                query=search_query,
+                market=market,
+                actor_id="youtube-data-api/search.list:video",
+                search_calls=page_result.search_calls,
+            )
+            if exact_query
+            else None
+        )
+    page_state = merge_strict_page_state(plan, page_result)
+    enrichment = await enrich_strict_search_rows(
+        crawler,
+        page_result.raw_items,
+        channel_statistics=_youtube_channel_statistics,
+        sample_video_ids=youtube_sample_video_ids,
+        video_statistics=youtube_video_statistics,
+        logger=logger,
+    )
 
-    items: List[Dict[str, Any]] = []
-    for raw in raw_items:
-        snippet = raw.get("snippet") if isinstance(raw.get("snippet"), dict) else {}
-        channel_id = str(snippet.get("channelId") or "").strip()
-        video_id = str(((raw.get("id") or {}).get("videoId")) or "").strip()
-        stats = stats_by_id.get(channel_id) or {}
-        custom_handle = str(stats.get("custom_url") or "").lstrip("@").strip()
-        handle = custom_handle or channel_id
-        followers = _normalize_int(stats.get("subscribers"))
-        country = str(stats.get("country") or "").strip()
-        language = str(stats.get("default_language") or snippet.get("defaultAudioLanguage") or "").strip()
-        thumbnail = (((snippet.get("thumbnails") or {}).get("high") or (snippet.get("thumbnails") or {}).get("default") or {}).get("url") or "")
-        items.append({
-            "platform": "youtube",
-            "channel_id": channel_id,
-            "channel_name": str(snippet.get("channelTitle") or "Unknown creator").strip(),
-            "handle": handle,
-            "channel_url": f"https://www.youtube.com/channel/{channel_id}",
-            "source_url": f"https://www.youtube.com/watch?v={video_id}",
-            "content_url": f"https://www.youtube.com/watch?v={video_id}",
-            "video_id": video_id,
-            "sample_title": str(snippet.get("title") or "")[:300],
-            "published": str(snippet.get("publishedAt") or "").strip(),
-            # search.list(type=video) thumbnails are content covers, never creator avatars.
-            "avatar_url": str(stats.get("avatar_url") or "").strip(),
-            "avatar_url_status": str(stats.get("avatar_url_status") or "missing"),
-            "thumbnail_url": str(thumbnail).strip(),
-            "bio": str(stats.get("description") or "")[:500],
-            "provider_actor": "youtube-data-api/search.list:video",
-            # 逐条检索词溯源(证据埋点):没有它就答不出「哪条词产出了这个人」。
-            "discovery_query": str(raw.get("_discovery_query_variant") or "").strip(),
-            **({"followers": followers} if followers > 0 else {}),
-            **({"country": country, "country_source": "platform_profile"} if country else {}),
-            **({"language": language, "language_source": "platform_profile"} if language else {}),
-        })
-    return {
-        "status": "done",
+    items = normalize_strict_search_rows(
+        page_result.raw_items,
+        enrichment,
+        exact_query=exact_query,
+        activation_summary_fn=youtube_channel_activation_summary,
+        normalize_int=_normalize_int,
+    )
+    return build_strict_search_result(
+        plan=plan,
+        page_result=page_result,
+        page_state=page_state,
+        enrichment=enrichment,
+        items=items,
+        market=market,
+        quota_metadata=youtube_quota_metadata,
+        activation_coverage=youtube_activation_coverage,
+        query_anchor_signals=query_anchor_signals,
+    )
+
+
+async def _youtube_fast_result(
+    normalized_platform: str,
+    search_query: str,
+    *,
+    market: str,
+    safe_limit: int,
+    relevance_language: str,
+    strict_evidence: bool,
+    page_cursor: Any,
+    exact_query: bool,
+) -> tuple[bool, Dict[str, Any] | None]:
+    """Run the existing YouTube fast path and report whether it is terminal."""
+
+    if normalized_platform != "youtube":
+        return False, None
+    fast = await (
+        _youtube_data_api_strict_video_search(
+            search_query,
+            market=market,
+            safe_limit=safe_limit,
+            relevance_language=relevance_language,
+            page_cursor=page_cursor,
+            exact_query=exact_query,
+        )
+        if strict_evidence
+        else _youtube_data_api_search(
+            search_query,
+            market=market,
+            safe_limit=safe_limit,
+            relevance_language=relevance_language,
+            exact_query=exact_query,
+        )
+    )
+    if fast is not None and (
+        exact_query or strict_evidence or len(fast.get("items") or []) >= min(3, safe_limit)
+    ):
+        return True, fast
+    if not exact_query:
+        return False, None
+    return True, {
+        "status": "provider_unavailable",
         "platform": "youtube",
-        "query": (search_query or "").strip(),
-        "market": (market or "").strip().upper(),
-        "items": items,
+        "items": [],
+        "message": "YouTube Data API unavailable; exact-query fallback is disabled",
         "metadata": {
-            "actor_id": "youtube-data-api/search.list:video",
-            "provider": "youtube_data_api",
-            "strict_video_evidence": True,
-            "requested": result_limit,
-            "returned": len(items),
-            "provider_queries": used_queries,
-            "published_after": published_after,
-            # 实发几条 search.list 就记几条 100 —— 旧式 max(1, ...) 会给「一条都没发成」
-            # 的轮次也记 100,是配额账本里的凭空多记。
-            "quota_units": 100 * len(used_queries) + (1 if stats_by_id else 0),
-            "channels_enriched": sum(1 for item in items if item.get("followers")),
-            # 逐词台账:哪条词、锚是什么、从哪一页起、烧多少配额、捞回几个新频道、
-            # 是否已抓干。落库后「泛词烧掉一半配额」这类事不必再靠猜。
-            "term_ledger": term_ledger,
-            "query_anchor_signals": query_anchor_signals(search_query),
-            # 车道 2·分页事实(只有这条腿是真分页;IG/TT actor 的输入 schema 里没有游标)。
-            "pagination_supported": True,
-            "next_page_cursor": dict(next_tokens),
-            "has_more": bool(live_tokens) or bool(unvisited),
-            "page_cursor_in": dict(page_tokens),
+            "query_mode": "exact_query_cell",
+            "fallback_policy": "disabled_unforecast_provider_switch",
+            "provider_calls": 0,
         },
     }
 
@@ -430,6 +370,7 @@ async def search_platform_content(
     enrich_prefilter: Any = None,
     deadline_seconds: float | None = None,
     page_cursor: Any = None,
+    exact_query: bool = False,
 ) -> Dict[str, Any]:
     """Search public platform content and normalize it into KOL candidates.
 
@@ -458,322 +399,72 @@ async def search_platform_content(
     if not normalized_query:
         return {"status": "invalid_query", "items": [], "message": "query is required"}
     search_query = _market_query(normalized_query, market)
-    provider_queries = [search_query]
 
     # YouTube Data API 快路不足三条时继续走 Apify 补深。
-    if normalized_platform == "youtube":
-        fast = await (
-            _youtube_data_api_strict_video_search(
-                search_query,
-                market=market,
-                safe_limit=safe_limit,
-                relevance_language=relevance_language,
-                page_cursor=page_cursor,
-            )
-            if strict_evidence
-            else _youtube_data_api_search(
-                search_query,
-                market=market,
-                safe_limit=safe_limit,
-                relevance_language=relevance_language,
-            )
-        )
-        if fast is not None and (
-            strict_evidence or len(fast.get("items") or []) >= min(3, safe_limit)
-        ):
-            return fast
+    fast_is_terminal, fast_result = await _youtube_fast_result(
+        normalized_platform,
+        search_query,
+        market=market,
+        safe_limit=safe_limit,
+        relevance_language=relevance_language,
+        strict_evidence=strict_evidence,
+        page_cursor=page_cursor,
+        exact_query=exact_query,
+    )
+    if fast_is_terminal:
+        return fast_result or {}
 
     if not _scan_service().provider_ready():
         return {"status": "provider_unavailable", "items": [], "message": "APIFY_TOKEN is not configured"}
 
-    actor_id = ""
-    payload: Dict[str, Any] = {}
-    timeout = 240
-    if normalized_platform == "youtube":
-        actor_id = "streamers/youtube-scraper"
-        payload = {
-            "searchQueries": [search_query],
-            "maxResults": safe_limit,
-            "maxResultsShorts": 0,
-            "maxResultStreams": 0,
-        }
-    elif normalized_platform == "tiktok":
-        actor_id = "clockworks/free-tiktok-scraper"
-        provider_queries = _short_search_queries(search_query)
-        payload = {
-            "searchQueries": provider_queries,
-            "resultsPerPage": max(3, (safe_limit + len(provider_queries) - 1) // len(provider_queries)),
-            "shouldDownloadVideos": False,
-            "shouldDownloadCovers": False,
-        }
-    elif normalized_platform == "instagram":
-        actor_id = "apify/instagram-hashtag-scraper"
-        # 多词 query 拆成多个 hashtag，与 YouTube/TikTok 召回意图对齐。
-        hashtags = _instagram_hashtags(search_query)
-        if not hashtags:
-            return {"status": "invalid_query", "items": [], "message": "instagram hashtag query is empty after normalization"}
-        # 多抓帖子后按号主收敛，最终候选上限仍是 safe_limit。
-        payload = {
-            "hashtags": hashtags,
-            "resultsLimit": min(max(1, safe_limit) * 3, 100),
-            "resultsType": "posts",
-        }
-        timeout = 300
-    elif normalized_platform == "facebook":
-        # 关键词搜索使用支持 searchQueries 的 Facebook actor；env 可替换。
-        actor_id = (os.getenv("APIFY_FACEBOOK_SEARCH_ACTOR_ID") or "apify/facebook-search-scraper").strip()
-        payload = {
-            "searchQueries": [search_query],
-            "searchType": "posts",
-            "resultsLimit": safe_limit,
-        }
-        timeout = 300
-    elif normalized_platform == "douyin":
-        actor_id = _douyin_actor_id("search")
-        if not actor_id:
-            return {
-                "status": "actor_not_configured",
-                "platform": "douyin",
-                "items": [],
-                "message": "APIFY_DOUYIN_SEARCH_ACTOR_ID or APIFY_DOUYIN_ACTOR_ID is not configured",
-            }
-        payload = _douyin_search_payload(search_query, safe_limit)
-        timeout = 360
-    else:
-        return {
-            "status": "unsupported_platform",
-            "items": [],
-            "message": f"{normalized_platform} platform search is not configured",
-        }
+    runtime_deps = _content_runtime_dependencies()
+    plan, plan_error = build_actor_plan(
+        normalized_platform,
+        search_query,
+        safe_limit,
+        exact_query=exact_query,
+        deps=runtime_deps,
+    )
+    if plan_error is not None:
+        return plan_error
+    if plan is None:  # defensive only; build_actor_plan pairs every miss with an error
+        return {"status": "unsupported_platform", "items": []}
 
     started_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    raw_items = await _scan_service()._run_actor(actor_id, payload, timeout=timeout)
-    ig_profiles: Dict[str, Dict[str, Any]] = {}
-    ig_raw_posts = len(raw_items)
-    ig_enrich_note = ""  # "" = 照常富化;非空 = 诚实记录本轮富化为什么没做满
-    ig_enrich_prefiltered = 0
-    ig_enrich_requested = 0
-    if normalized_platform == "tiktok" and raw_items:
-        # 重复卡修:视频流先按号主收敛(每号主一条),再截 safe_limit——否则同号主多视频/
-        # 多路检索变体重复项既吃槽位又重复上墙(sky_vanya 案)。
-        raw_items = _tiktok_collapse_author_videos(raw_items, safe_limit)
-    if normalized_platform == "instagram" and raw_items:
-        # K2:帖→号主收敛(每号主一帖)+ 批量档案富化(followers/bio/真名/头像)。
-        # 富化失败诚实降级:候选照常返回,只是 followers 未知(读端归「分析中」)。
-        raw_items = _instagram_collapse_owner_posts(raw_items, safe_limit)
-        # A2「富化后置」:先用 hashtag 帖已有的信息过**单调闸**,只把存活者送去富化。
-        # 被前置闸判死的候选照旧留在 raw_items 里走完下游同一条闸(结果集合逐条等价),
-        # 只是不再为它花一次 profile-scraper 配额。
-        ig_targets, ig_enrich_prefiltered = instagram_enrich_targets(raw_items, enrich_prefilter)
-        ig_enrich_requested = len(ig_targets)
-        _enrich_budget = (
-            None if deadline_seconds is None
-            else float(deadline_seconds) - (time.monotonic() - leg_started_monotonic)
-        )
-        if not ig_targets:
-            ig_enrich_note = "no_target" if ig_enrich_prefiltered else ""
-        elif _enrich_budget is not None and _enrich_budget < instagram_enrich_min_budget_seconds():
-            # 预算不够就别发:发了也会被腿级 deadline 砍掉,钱花了结果拿不到。
-            ig_enrich_note = "deadline_budget_exhausted"
-            logger.info(
-                "scanner.instagram_profile_enrich_skipped budget_left=%.1fs targets=%d",
-                _enrich_budget, len(ig_targets),
-            )
-        else:
-            try:
-                if _enrich_budget is None:
-                    ig_profiles = await _instagram_owner_profiles(ig_targets)
-                else:
-                    ig_profiles = await asyncio.wait_for(
-                        _instagram_owner_profiles(ig_targets), timeout=_enrich_budget
-                    )
-            except asyncio.TimeoutError:
-                # actor 线程仍会跑完并照常计费(asyncio 取消不了 to_thread);这里只是不再等它。
-                ig_enrich_note = "deadline_timeout"
-                logger.warning("scanner.instagram_profile_enrich_timeout budget=%.1fs", _enrich_budget)
-                ig_profiles = {}
-            except Exception as exc:
-                ig_enrich_note = "actor_failed"
-                logger.warning("scanner.instagram_profile_enrich_failed", extra={"error": str(exc)[:300]})
-                ig_profiles = {}
-    items: List[Dict[str, Any]] = []
-    seen_identities: set[str] = set()  # 聚合层兜底去重:(platform, handle 小写) 每号主一条
-    for item in raw_items[:safe_limit]:
-        handle = ""
-        avatar_url = ""
-        avatar_url_status = "missing"
-        thumbnail_url = ""
-        bio = ""  # instagram(档案富化)/其余平台留空;有值才随 item 透出
-        followers = 0  # facebook/tiktok/instagram(富化后)可能填上;>0 才随 item 透出,其余输出不变
-        channel_id = ""
-        content_language = ""
-        if normalized_platform == "youtube":
-            channel_name = _source_key(item, "channelName", "channelTitle", "author")
-            channel_url = _source_key(item, "channelUrl", "channelURL")
-            channel_id = _source_key(item, "channelId", "channel.id")
-            if not channel_id:
-                match = re.search(r"(?:youtube\.com)/(?:channel)/([^/?#]+)", channel_url, re.IGNORECASE)
-                channel_id = str(match.group(1) if match else "").strip()
-            # Never use display-name/author text as a strict account handle.
-            handle = _source_key(item, "channelHandle", "channelUsername", "handle") or channel_id
-            avatar_url, avatar_url_status = _avatar_url_policy(_source_key(item, "channelAvatar", "channelThumbnail", "channelImage", "avatarUrl", "authorThumbnail"))
-            thumbnail_url = _clean_url(_source_key(item, "thumbnailUrl", "thumbnail", "image", "cover"))
-            source_url = _source_key(item, "url", "link")
-            title = _source_key(item, "title", "text")
-            views = _normalize_int(item.get("viewCount") or item.get("views"))
-            likes = _normalize_int(item.get("likes"))
-            comments = _normalize_int(item.get("commentsCount") or item.get("comments"))
-            followers = _normalize_int(
-                item.get("numberOfSubscribers")
-                or item.get("subscriberCount")
-                or item.get("subscribers")
-                or 0
-            )
-            content_language = _source_key(item, "videoLanguage", "defaultAudioLanguage", "language")
-        elif normalized_platform == "tiktok":
-            author = item.get("authorMeta") if isinstance(item.get("authorMeta"), dict) else {}
-            channel_name = _source_key(author, "nickName", "name") or _source_key(item, "authorName", "author")
-            handle = _source_key(author, "name") or _source_key(item, "author")
-            channel_url = f"https://www.tiktok.com/@{handle}" if handle else ""
-            avatar_url, avatar_url_status = _avatar_url_policy(_source_key(author, "avatar", "avatarThumb", "avatarMedium", "avatarLarger", "profilePicture"))
-            thumbnail_url = _clean_url(_source_key(item, "videoMeta.coverUrl", "cover", "coverUrl", "thumbnail"))
-            source_url = _source_key(item, "webVideoUrl", "url")
-            title = _source_key(item, "text", "desc", "title")
-            stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
-            views = _normalize_int(item.get("playCount") or stats.get("playCount"))
-            likes = _normalize_int(item.get("diggCount") or stats.get("diggCount"))
-            comments = _normalize_int(item.get("commentCount") or stats.get("commentCount"))
-            # K2:actor 的 authorMeta 本就带粉丝数(fans),旧版白白丢弃 → TT 新面孔
-            # followers 未知全折叠成「分析中」。字段多版本防御,没有保持 0(不杜撰)。
-            followers = _normalize_int(
-                author.get("fans") or author.get("followers") or author.get("followerCount") or 0
-            )
-        elif normalized_platform == "facebook":
-            # facebook-search-scraper 帖文项映射:发帖主页名→channel_name/display_name,
-            # 主页 URL→channel_url,帖文文本→sample_title。字段名多版本防御,
-            # 数字口径与本文件 scan_facebook_account 对齐(text/message、likesCount/reactionsCount)。
-            channel_name = _source_key(item, "pageName", "user.name", "authorName", "pageTitle", "name")
-            channel_url = _clean_url(_source_key(item, "pageUrl", "user.profileUrl", "facebookUrl", "topLevelUrl"))
-            handle = _source_key(item, "pageHandle", "username", "user.username", "pageUsername")
-            if not handle and "facebook.com/" in channel_url:
-                # 主页 URL 的 vanity slug 当 handle(facebook.com/<slug>);系统路径不算 handle。
-                _slug = channel_url.split("facebook.com/", 1)[1].strip("/").split("/", 1)[0].split("?", 1)[0]
-                if _slug and _slug.lower() not in {"profile.php", "people", "pages", "groups", "watch", "reel", "reels", "search"}:
-                    handle = _slug
-            if not channel_url and handle:
-                channel_url = f"https://www.facebook.com/{handle}"
-            avatar_url, avatar_url_status = _avatar_url_policy(_source_key(item, "user.profilePic", "pageProfilePic", "profilePic", "avatar"))
-            thumbnail_url = _clean_url(_source_key(item, "thumbnail", "imageUrl", "image"))
-            source_url = _source_key(item, "url", "postUrl", "topLevelUrl")
-            title = _source_key(item, "text", "message", "title")
-            views = _normalize_int(item.get("viewsCount") or item.get("views"))
-            likes = _normalize_int(item.get("likesCount") or item.get("reactionsCount") or item.get("likes"))
-            comments = _normalize_int(item.get("commentsCount") or item.get("comments"))
-            # 粉丝数:posts 搜索项通常不带;字段有就带上,没有保持 0(不杜撰)。
-            followers = _normalize_int(_source_key(item, "followers", "followersCount", "pageFollowers", "user.followers") or 0)
-        elif normalized_platform == "douyin":
-            post = _normalize_douyin_item(item)
-            channel_name = str(post.get("channel") or "Unknown creator")
-            handle = str(post.get("handle") or channel_name)
-            channel_url = str(post.get("channel_url") or "")
-            avatar_url, avatar_url_status = _avatar_url_policy(post.get("avatar_url"))
-            thumbnail_url = str(post.get("thumbnail") or "")
-            source_url = str(post.get("url") or "")
-            title = str(post.get("title") or "")
-            views = _normalize_int(post.get("views"))
-            likes = _normalize_int(post.get("likes"))
-            comments = _normalize_int(post.get("comments"))
-        else:
-            channel_name = _source_key(item, "ownerUsername", "username", "ownerFullName")
-            handle = _source_key(item, "ownerUsername", "username")
-            channel_url = f"https://www.instagram.com/{channel_name}/" if channel_name else _source_key(item, "ownerProfileUrl")
-            avatar_url, avatar_url_status = _avatar_url_policy(_source_key(item, "ownerProfilePicUrl", "profilePicUrl", "profilePictureUrl", "displayProfilePicUrl", "avatarUrl"))
-            thumbnail_url = _clean_url(_source_key(item, "displayUrl", "imageUrl", "thumbnailUrl", "thumbnail", "image"))
-            source_url = _source_key(item, "url", "shortCode")
-            title = _source_key(item, "caption", "title", "text")
-            views = _normalize_int(item.get("videoViewCount") or item.get("videoPlayCount"))
-            likes = _normalize_int(item.get("likesCount"))
-            comments = _normalize_int(item.get("commentsCount"))
-            # K2:档案富化合入(真粉丝数/真名/bio/高清头像)。富化缺席时全部保持旧值。
-            profile = ig_profiles.get(str(handle or channel_name or "").strip().lower())
-            if isinstance(profile, dict):
-                followers = _normalize_int(profile.get("followersCount") or profile.get("followers") or 0)
-                channel_name = _source_key(profile, "fullName") or channel_name
-                refreshed_avatar, refreshed_status = _avatar_url_policy(_source_key(profile, "profilePicUrlHD", "profilePicUrl"))
-                if refreshed_avatar:
-                    avatar_url, avatar_url_status = refreshed_avatar, refreshed_status
-                elif not avatar_url and refreshed_status != "missing":
-                    avatar_url_status = refreshed_status
-                bio = str(profile.get("biography") or "").strip()[:500]
+    raw_items = await _scan_service()._run_actor(
+        plan.actor_id,
+        plan.payload,
+        timeout=plan.timeout,
+    )
+    prepared = await prepare_actor_items(
+        normalized_platform,
+        raw_items,
+        safe_limit=safe_limit,
+        enrich_prefilter=enrich_prefilter,
+        deadline_seconds=deadline_seconds,
+        leg_started_monotonic=leg_started_monotonic,
+        owner_profiles=_instagram_owner_profiles,
+        logger=logger,
+        deps=runtime_deps,
+    )
+    items = normalize_actor_items(
+        normalized_platform,
+        prepared.raw_items,
+        safe_limit=safe_limit,
+        market=market,
+        normalized_query=normalized_query,
+        actor_id=plan.actor_id,
+        instagram_profiles=prepared.instagram_profiles,
+        deps=runtime_deps,
+    )
 
-        # 修 query-as-handle bug:去掉 normalized_query 兜底——无真 handle/name 时不再把整句查询
-        # 当成创作者(此前造出 youtube.com/@整句 的假号混入发现结果)。
-        clean_channel_name = _known_text(channel_name, handle) or "Unknown creator"
-        candidate = {
-                "platform": normalized_platform,
-                "channel_name": clean_channel_name,
-                "handle": _known_text(handle, channel_name),
-                # Avatar and content cover are distinct evidence. Never persist a post/video
-                # thumbnail as creator identity when the provider omitted a profile avatar.
-                "avatar_url": avatar_url,
-                "avatar_url_status": avatar_url_status,
-                "thumbnail_url": thumbnail_url,
-                "channel_url": channel_url,
-                "source_url": source_url,
-                "sample_title": title[:300],
-                "views": views,
-                "likes": likes,
-                "comments": comments,
-                "avg_views": views,
-                "published": _published_value(item),
-                "market": (market or "").strip().upper(),
-                "search_query": normalized_query,
-                "provider_actor": actor_id,
-                # followers/bio 仅在真有值时透出(facebook/tiktok/instagram 富化),其余平台 item 结构不变。
-                **({"followers": followers} if followers > 0 else {}),
-                **({"bio": bio} if bio else {}),
-                **({"channel_id": channel_id} if channel_id else {}),
-                **({
-                    "language": content_language,
-                    "language_source": "platform_content_metadata",
-                } if content_language else {}),
-            }
-        # 重复卡修·聚合层兜底去重:同平台同 handle(小写去 @)只出一条(多路检索变体/
-        # 同号主多帖会产重复候选);键为空放行(不误杀)。首条保留=保 actor 相关度序。
-        identity_key = _candidate_identity_key(candidate)
-        if identity_key and identity_key in seen_identities:
-            continue
-        if identity_key:
-            seen_identities.add(identity_key)
-        items.append(candidate)
-
-    return {
-        "status": "done",
-        "platform": normalized_platform,
-        "query": normalized_query,
-        "market": (market or "").strip().upper(),
-        "items": items,
-        "metadata": {
-            "actor_id": actor_id,
-            "requested": safe_limit,
-            "returned": len(items),
-            "provider_queries": provider_queries,
-            "searched_at": started_at,
-            # 车道 2:走到这里的都是 Apify actor 路径。这些 actor 的输入 schema 里没有
-            # offset/cursor/page/skip —— 如实上报「本腿不支持分页」,不伪造下一页。
-            "pagination_supported": False,
-            "pagination_unsupported_reason": "actor_input_schema_has_no_cursor",
-            "has_more": False,
-            # K2 可观测(仅 instagram 有意义):原始帖量/号主收敛后量/档案富化命中数。
-            # A2 补三个诚实计数:前置闸挡掉几个(省下的富化配额)、实际请求富化几个、
-            # 以及富化没做满时的原因(空=正常做满)。
-            **({
-                "raw_posts": ig_raw_posts,
-                "unique_owners": len(items),
-                "profile_enriched": len(ig_profiles),
-                "profile_enrich_prefiltered": ig_enrich_prefiltered,
-                "profile_enrich_requested": ig_enrich_requested,
-                **({"profile_enrich_degraded": ig_enrich_note} if ig_enrich_note else {}),
-            } if normalized_platform == "instagram" else {}),
-        },
-    }
+    return build_actor_result(
+        normalized_platform=normalized_platform,
+        normalized_query=normalized_query,
+        market=market,
+        safe_limit=safe_limit,
+        items=items,
+        plan=plan,
+        searched_at=started_at,
+        prepared=prepared,
+    )

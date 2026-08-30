@@ -510,99 +510,6 @@ def close_standalone_conn(conn: Any) -> None:
         _db_local.conn = None
 
 
-def _bootstrap_sqlite_runtime() -> None:
-    from app.db import migrations as sqlite_migrations
-
-    sqlite_migrations.init_db()
-
-
-def _run_runtime_seeders() -> None:
-    from app.db.repositories.users import backfill_user_social_verified_flags
-    from app.services.runtime_seed import ensure_runtime_seed_data
-
-    try:
-        ensure_runtime_seed_data()
-        backfill_user_social_verified_flags()
-    finally:
-        local_conn = getattr(_db_local, "conn", None)
-        if local_conn is not None:
-            try:
-                local_conn.close()
-            except Exception as exc:
-                logger.debug("runtime seeder local connection close skipped: %s", exc)
-            _db_local.conn = None
-
-
-async def init_db_runtime(*, skip_non_migration_writes: bool = False) -> None:
-    mode = _resolve_db_startup_mode()
-    backend = "postgres" if is_postgres_runtime() else "sqlite"
-    _reset_db_startup_status(mode=mode, backend=backend)
-    logger.info("db.startup.mode_selected | mode=%s | backend=%s", mode, backend)
-
-    if not is_postgres_runtime():
-        if skip_non_migration_writes:
-            _update_db_startup_status(
-                state="failed",
-                failed_stage="mode_validation",
-                error_type="RuntimeError",
-            )
-            raise RuntimeError(
-                "Release-validation startup requires Postgres because the SQLite "
-                "schema bootstrap includes non-migration writes"
-            )
-        if mode == _DB_STARTUP_MODE_MIGRATIONS_ONLY:
-            _update_db_startup_status(
-                state="failed",
-                failed_stage="mode_validation",
-                error_type="RuntimeError",
-            )
-            raise RuntimeError(
-                f"{_DB_STARTUP_MODE_ENV}={_DB_STARTUP_MODE_MIGRATIONS_ONLY!r} requires the Postgres runtime; "
-                "the SQLite schema bootstrap also performs non-migration default-admin writes"
-            )
-        await _run_db_startup_stage("schema_migrations", _bootstrap_sqlite_runtime)
-        _update_db_startup_status(default_admin_bootstrap="included_in_sqlite_bootstrap")
-        await _run_db_startup_stage("runtime_seeders", _run_runtime_seeders)
-        _update_db_startup_status(
-            state="completed",
-            non_migration_startup_writes="executed",
-            completed_at=_utc_timestamp(),
-        )
-        return
-
-    _get_pg_pool()
-    await _run_db_startup_stage("schema_migrations", _run_postgres_migrations)
-
-    if mode == _DB_STARTUP_MODE_MIGRATIONS_ONLY or skip_non_migration_writes:
-        skip_status = (
-            "skipped_release_validation"
-            if skip_non_migration_writes
-            else "skipped_explicitly"
-        )
-        _update_db_startup_status(
-            state="completed",
-            default_admin_bootstrap=skip_status,
-            runtime_seeders=skip_status,
-            non_migration_startup_writes=skip_status,
-            completed_at=_utc_timestamp(),
-        )
-        logger.warning(
-            "db.startup.non_migration_writes_skipped | mode=%s | release_validation=%s | "
-            "default_admin_bootstrap=skipped | runtime_seeders=skipped",
-            mode,
-            bool(skip_non_migration_writes),
-        )
-        return
-
-    await _run_db_startup_stage("default_admin_bootstrap", _bootstrap_default_admin)
-    await _run_db_startup_stage("runtime_seeders", _run_runtime_seeders)
-    _update_db_startup_status(
-        state="completed",
-        non_migration_startup_writes="executed",
-        completed_at=_utc_timestamp(),
-    )
-
-
 def close_db_runtime_sync() -> None:
     global _PG_POOL
     scoped = _scoped_conn.get()
@@ -681,7 +588,7 @@ def _read_env_override(key: str) -> str:
 
 
 def _bootstrap_default_admin() -> None:
-    from app.core.security import hash_password
+    from app.core.passwords import hash_password
 
     pool = _get_pg_pool()
     if pool is None:
@@ -859,15 +766,6 @@ def table_exists(table_name: str) -> bool:
     return bool(row)
 
 
-async def start_db_actor() -> None:
-    if is_postgres_runtime():
-        await init_db_runtime()
-        logger.info("Postgres pooled runtime initialized")
-        return
-    backend = "sqlite"
-    logger.info("Single-writer DB actor started (%s)", backend)
-
-
 async def stop_db_actor() -> None:
     if is_postgres_runtime():
         await close_db_runtime()
@@ -957,12 +855,10 @@ __all__ = [
     "get_conn",
     "get_db_actor_stats",
     "get_db_startup_status",
-    "init_db_runtime",
     "close_db_runtime",
     "close_db_runtime_sync",
     "is_postgres_runtime",
     "probe_postgres_connectivity",
-    "start_db_actor",
     "stop_db_actor",
     "table_exists",
 ]

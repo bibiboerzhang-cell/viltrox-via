@@ -895,12 +895,20 @@ def test_migrations_only_runner_sets_one_shot_role_and_writes_nothing_to_release
     target = staging_db_clone.clone_name_for_release("readonly-migration-runner")
     release = tmp_path / "release"
     connection_module = release / "backend" / "app" / "db" / "connection.py"
+    startup_module = release / "backend" / "app" / "db" / "startup.py"
     connection_module.parent.mkdir(parents=True)
     (release / "backend" / "app" / "__init__.py").write_text("", encoding="utf-8")
     (release / "backend" / "app" / "db" / "__init__.py").write_text("", encoding="utf-8")
     (release / "migrations").mkdir()
     capture = tmp_path / "runner-capture.json"
     connection_module.write_text(
+        """
+def close_db_runtime_sync():
+    return None
+""",
+        encoding="utf-8",
+    )
+    startup_module.write_text(
         """
 import json
 import os
@@ -915,9 +923,6 @@ async def init_db_runtime():
         "scheduler": os.environ.get("ENABLE_SCHEDULER"),
         "cleanup": os.environ.get("ENABLE_UPLOAD_CLEANUP"),
     }), encoding="utf-8")
-
-def close_db_runtime_sync():
-    return None
 """,
         encoding="utf-8",
     )

@@ -8,6 +8,9 @@ from fastapi import HTTPException
 from app.api.routers import vkpi_activity, vkpi_kol_pool_search
 from app.domains.kol import lookup_recovery, search_sessions, unified_search
 from app.domains.projects import workflow_projects
+from app.services.projects.creator_lifecycle_adapters import (
+    DEFAULT_SEARCH_SESSION_DRAFT_PORT,
+)
 
 
 class _Cursor:
@@ -201,7 +204,12 @@ def test_project_draft_reads_only_owned_search_session(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(search_sessions, "get_session", get_session)
     with pytest.raises(ValueError, match="no approved KOLs"):
-        workflow_projects.create_project_draft_from_session(51, {}, staff={"id": 7})
+        workflow_projects.create_project_draft_from_session(
+            51,
+            {},
+            staff={"id": 7},
+            search_session_port=DEFAULT_SEARCH_SESSION_DRAFT_PORT,
+        )
 
     assert captured == {
         "session_id": 51,

@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from argparse import Namespace
@@ -15,12 +16,34 @@ import pytest
 from scripts.ops.freeze_worktree_candidate import (
     FreezeError,
     _assert_frontend_dist_reproducible,
+    _remove_owned_phase_sandbox,
     _regular_tree_inventory,
     freeze_candidate,
     run_deploy_gate,
     verify_deploy_source,
     verify_manifest,
 )
+
+
+def test_phase_sandbox_cleanup_handles_readonly_tree_without_following_links(
+    tmp_path: Path,
+) -> None:
+    root = Path(
+        tempfile.mkdtemp(prefix="vkpi-phase-a-seatbelt.", dir="/tmp")
+    ).resolve()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("keep\n", encoding="utf-8")
+    readonly = root / "readonly"
+    readonly.mkdir()
+    (readonly / "payload").write_text("fixture\n", encoding="utf-8")
+    (readonly / "outside-link").symlink_to(outside)
+    (readonly / "payload").chmod(0o400)
+    readonly.chmod(0o500)
+
+    _remove_owned_phase_sandbox(root)
+
+    assert not root.exists()
+    assert outside.read_text(encoding="utf-8") == "keep\n"
 
 
 def test_frozen_verifier_support_modules_import_under_isolated_python(
@@ -30,6 +53,7 @@ def test_frozen_verifier_support_modules_import_under_isolated_python(
     for relative in (
         "scripts/ops/deploy_gate_runtime.py",
         "scripts/ops/freeze_git_bridge.py",
+        "scripts/ops/freeze_phase_runtime.py",
         "scripts/ops/freeze_worktree_candidate.py",
         "scripts/ops/freeze_worktree_contract.py",
     ):
@@ -58,6 +82,7 @@ def test_frozen_verifier_support_modules_import_under_isolated_python(
         "scripts/ops",
         "scripts/ops/deploy_gate_runtime.py",
         "scripts/ops/freeze_git_bridge.py",
+        "scripts/ops/freeze_phase_runtime.py",
         "scripts/ops/freeze_worktree_candidate.py",
         "scripts/ops/freeze_worktree_contract.py",
     ]
@@ -239,7 +264,15 @@ payload = {
 """,
     )
     os.chmod(fake_npm, 0o755)
+    _write(fake_npm.with_name("npx-cli.js"), "#!/bin/sh\nexit 0\n")
+    os.chmod(fake_npm.with_name("npx-cli.js"), 0o755)
+    fake_node = fake_bin / "node"
+    _write(fake_node, "#!/bin/sh\nexec \"$@\"\n")
+    os.chmod(fake_node, 0o755)
     monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ["PATH"])
+    from scripts.ops import trusted_npm_audit
+    monkeypatch.setattr(trusted_npm_audit, "TRUSTED_NPM_CANDIDATES", (fake_npm,))
+    monkeypatch.setattr(trusted_npm_audit, "TRUSTED_NODE_CANDIDATES", (fake_node,))
 
 
 def _commit_fixture(root: Path, message: str) -> None:
@@ -307,6 +340,8 @@ def _deploy_gate_args(
 ) -> Namespace:
     source = payload["source"]
     assert isinstance(source, dict)
+    runtime_root = output.parent / f".{output.name}-strict-runtime"
+    runtime_root.mkdir(mode=0o700)
     return Namespace(
         manifest=str(output.with_suffix(".manifest.json")),
         snapshot=str(output),
@@ -314,6 +349,12 @@ def _deploy_gate_args(
         expected_branch=str(source["branch"]),
         source=str(root),
         python=str(venv_python),
+        runtime_root=str(runtime_root),
+        health_url="http://127.0.0.1:18103/health",
+        base_url="http://127.0.0.1:18103/",
+        verify_json_out=str(runtime_root / "receipts" / "verify.json"),
+        acceptance_json_out=str(runtime_root / "receipts" / "acceptance.json"),
+        fixture_allow_test_hooks=True,
     )
 
 
@@ -382,35 +423,12 @@ def test_build_and_static_verify_share_exact_snapshot_identity(
             encoding="utf-8"
         )
     )
-    verify_env = json.loads(
-        (output / "verify-env.json").read_text(encoding="utf-8")
-    )
     assert build_info["gitSha"] == identity["git_sha"]
     assert build_info["gitShortSha"] == identity["git_sha"][:8]
     assert build_info["gitBranch"] == identity["git_branch"]
     assert build_info["builtAt"] == identity["build_time"]
     assert build_info["ambientVite"] == []
-    assert verify_env == {
-        "GIT_DIR": None,
-        "GIT_OPTIONAL_LOCKS": None,
-        "GIT_WORK_TREE": None,
-        "VKPI_FREEZE_GIT_BRIDGE": "readonly-path-wrapper",
-        "VITE_APP_BUILD_TIME": identity["build_time"],
-        "VITE_APP_GIT_BRANCH": identity["git_branch"],
-        "VITE_APP_GIT_SHA": identity["git_sha"],
-        "VITE_API_BASE": None,
-        "VITE_BROWSER_ASSIST": None,
-        "VITE_EXPERIMENTAL_NAV": None,
-        "VKPI_VERIFY_FRONTEND_OUT_DIR": None,
-        "blocked_snapshot_mutation_rc": 126,
-        "blocked_symbolic_ref_rc": 126,
-        "git_head": identity["git_sha"],
-        "git_status": "",
-        "git_toplevel": str(root),
-        "nested_fixture_commit_ok": True,
-        "nested_fixture_config_isolated": True,
-        "nested_fixture_toplevel_ok": True,
-    }
+    assert not (output / "verify-env.json").exists()
     assert not (output / ".git").exists()
     assert not (output / ".git").is_symlink()
     common_worktree_after = subprocess.run(
@@ -560,11 +578,10 @@ PY
     args.skip_archive = True
     args.skip_verify = False
 
-    with pytest.raises(
-        FreezeError, match="worktree drifted during candidate build and verification"
-    ):
+    with pytest.raises(FreezeError, match="command failed"):
         freeze_candidate(args)
     assert not output.exists()
+    assert output.with_suffix(".verify.log").is_file()
 
 
 def test_offline_verify_detects_candidate_tamper(tmp_path: Path) -> None:
@@ -670,16 +687,7 @@ sleep 0.5
     mutator.start()
     try:
         with pytest.raises(FreezeError, match="digest mismatch"):
-            run_deploy_gate(
-                Namespace(
-                    manifest=str(output.with_suffix(".manifest.json")),
-                    snapshot=str(output),
-                    expected_head=str(payload["source"]["head"]),
-                    expected_branch=str(payload["source"]["branch"]),
-                    source=str(root),
-                    python=str(venv_python),
-                )
-            )
+            run_deploy_gate(_deploy_gate_args(root, output, payload, venv_python))
     finally:
         mutator.join(timeout=5)
     assert not (output / ".venv").exists()
@@ -733,6 +741,10 @@ Path(os.environ["VKPI_TEST_GATE_REPORT"]).write_text(json.dumps({
     "vite_api_base": os.environ.get("VITE_API_BASE"),
     "vite_browser_assist": os.environ.get("VITE_BROWSER_ASSIST"),
     "vite_experimental_nav": os.environ.get("VITE_EXPERIMENTAL_NAV"),
+    "health_url": os.environ.get("VKPI_HEALTH_URL"),
+    "base_url": os.environ.get("VKPI_LOCAL_BASE_URL"),
+    "verify_json_out": os.environ.get("VKPI_VERIFY_JSON_OUT"),
+    "acceptance_json_out": os.environ.get("VKPI_VERIFY_ACCEPTANCE_JSON_OUT"),
 }, sort_keys=True), encoding="utf-8")
 runtime_root.joinpath("probe").write_text("isolated\\n")
 PY
@@ -783,23 +795,20 @@ PY
     monkeypatch.setenv("VITE_API_BASE", "https://hostile.invalid/api")
     monkeypatch.setenv("VITE_BROWSER_ASSIST", "1")
     monkeypatch.setenv("VITE_EXPERIMENTAL_NAV", "1")
+    monkeypatch.setenv("VKPI_HEALTH_URL", "http://127.0.0.1:8102/health")
+    monkeypatch.setenv("VKPI_LOCAL_BASE_URL", "http://127.0.0.1:8102/")
+    monkeypatch.setenv("VKPI_VERIFY_JSON_OUT", "/tmp/ambient-verify.json")
+    monkeypatch.setenv("VKPI_VERIFY_ACCEPTANCE_JSON_OUT", "/tmp/ambient-acceptance.json")
 
-    result = run_deploy_gate(
-        Namespace(
-            manifest=str(output.with_suffix(".manifest.json")),
-            snapshot=str(output),
-            expected_head=str(payload["source"]["head"]),
-            expected_branch=str(payload["source"]["branch"]),
-            source=str(root),
-            python=str(venv_python),
-        )
-    )
+    result = run_deploy_gate(_deploy_gate_args(root, output, payload, venv_python))
 
     assert result["canonical_deploy_gate"] is True
     observed = json.loads(report.read_text(encoding="utf-8"))
     expected_head = str(payload["source"]["head"])
     assert observed == {
         "app_git_sha": expected_head,
+        "acceptance_json_out": str(Path(observed["runtime_root"]) / "receipts/acceptance.json"),
+        "base_url": "http://127.0.0.1:18103/",
         "database_pool_url": None,
         "database_url": None,
         "db_runtime_backend": "postgres",
@@ -809,6 +818,7 @@ PY
         "effective_gid": os.getegid(),
         "effective_uid": os.geteuid(),
         "home": str(Path(observed["runtime_root"]) / "home"),
+        "health_url": "http://127.0.0.1:18103/health",
         "jwt_secret": None,
         "keep_db_url": "0",
         "keep_inherited_jwt": "0",
@@ -823,15 +833,22 @@ PY
         "runtime_gid": os.getegid(),
         "runtime_root": observed["runtime_root"],
         "runtime_uid": os.geteuid(),
-        "tmpdir": observed["runtime_root"],
+        "tmpdir": str(Path(observed["runtime_root"]) / "tmp"),
         "vite_api_base": None,
         "vite_app_git_sha": expected_head,
         "vite_browser_assist": None,
         "vite_experimental_nav": None,
+        "verify_json_out": str(Path(observed["runtime_root"]) / "receipts/verify.json"),
         "xdg_cache_home": str(Path(observed["runtime_root"]) / "cache"),
-    }
+        }
     isolated_runtime = Path(observed["runtime_root"])
-    assert not isolated_runtime.exists()
+    assert isolated_runtime.exists()
+    assert result["candidate_browser_runtime_postgres"] == [{
+        "root": str(isolated_runtime),
+        "status": "controller_registry_cleanup_required",
+        "destructive_cleanup_performed": False,
+    }]
+    shutil.rmtree(isolated_runtime)
     assert root not in isolated_runtime.parents
     assert output not in isolated_runtime.parents
     assert runtime_sentinel.read_text(encoding="utf-8") == "unchanged\n"
@@ -846,18 +863,11 @@ def test_deploy_gate_rejects_relative_python_path(tmp_path: Path) -> None:
     _create_test_venv(root)
     output = tmp_path / "candidate"
     payload = freeze_candidate(_freeze_args(root, output))
+    deploy_args = _deploy_gate_args(root, output, payload, root / ".venv/bin/python")
+    deploy_args.python = "python3"
 
     with pytest.raises(FreezeError, match="must be absolute"):
-        run_deploy_gate(
-            Namespace(
-                manifest=str(output.with_suffix(".manifest.json")),
-                snapshot=str(output),
-                expected_head=str(payload["source"]["head"]),
-                expected_branch=str(payload["source"]["branch"]),
-                source=str(root),
-                python="python3",
-            )
-        )
+        run_deploy_gate(deploy_args)
 
 
 def test_deploy_gate_rejects_absolute_non_source_venv_python(
@@ -868,18 +878,11 @@ def test_deploy_gate_rejects_absolute_non_source_venv_python(
     _create_test_venv(root)
     output = tmp_path / "candidate"
     payload = freeze_candidate(_freeze_args(root, output))
+    deploy_args = _deploy_gate_args(root, output, payload, root / ".venv/bin/python")
+    deploy_args.python = str(Path(sys.executable).resolve())
 
     with pytest.raises(FreezeError, match="must equal source"):
-        run_deploy_gate(
-            Namespace(
-                manifest=str(output.with_suffix(".manifest.json")),
-                snapshot=str(output),
-                expected_head=str(payload["source"]["head"]),
-                expected_branch=str(payload["source"]["branch"]),
-                source=str(root),
-                python=str(Path(sys.executable).resolve()),
-            )
-        )
+        run_deploy_gate(deploy_args)
 
 
 def test_deploy_source_fails_closed_on_special_file_inside_excluded_cache(

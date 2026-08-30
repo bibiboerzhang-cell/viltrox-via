@@ -40,7 +40,9 @@ from scripts.ops.vkpi_stage1_model_canary_reporting import (  # noqa: E402
     AUTHORIZATION_ENV,
     CANARY_EXPECTED_RESPONSE,
     CANARY_VERSION,
+    GEMINI_25_PRO_CANARY_MIN_OUTPUT_TOKENS,
     base_report as _base_report,
+    binding_output_token_limit as _binding_output_token_limit,
     result_row as _result_row,
     sha256_text as _sha256_text,
 )
@@ -72,10 +74,8 @@ DEFAULT_MAX_COST_USD = Decimal("0.01")
 CANARY_COST_SCOPE = "cron:vkpi_stage1_model_canary"
 CANARY_PURPOSE = "vkpi_stage1_model_canary"
 _SINGLE_CALL_SCOPE = "single_call"
-CANARY_PROMPT = (
-    "V-KPI exact-model connectivity canary. Reply with exactly "
+CANARY_PROMPT = "V-KPI exact-model connectivity canary. Reply with exactly " \
     "VKPI_STAGE1_CANARY_OK and nothing else."
-)
 _SAFE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$")
 _SAFE_PROVIDER_STATUSES = frozenset(
     {
@@ -255,7 +255,7 @@ def build_plan(
                 llm_gateway._estimated_cost_usd(
                     provider,
                     prompt=CANARY_PROMPT,
-                    max_output_tokens=int(max_output_tokens),
+                    max_output_tokens=_binding_output_token_limit(provider, model, max_output_tokens),
                     binding=resolved,
                 )
             )
@@ -743,7 +743,7 @@ def run_canary(
             raw = invoke(
                 row.binding,
                 CANARY_PROMPT,
-                plan.max_output_tokens,
+                _binding_output_token_limit(row.provider, row.model, plan.max_output_tokens),
                 call_timeout,
             )
         except Exception:  # do not expose exception values or provider secrets

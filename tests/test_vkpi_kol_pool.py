@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from app.api.routers import kol_ops_schema
 from app.db import connection as db_connection
 from app.db.connection import get_conn
 from app.domains.discovery import enroll, federation
 from app.domains.kol import pool as kol_pool
 from app.domains.kol.pool_common import _country_code, _country_name
 from app.platform.db import schema_product_industry as product_industry_schema
+from app.platform.db import schema_kol_ops as kol_ops_schema
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema
 
 

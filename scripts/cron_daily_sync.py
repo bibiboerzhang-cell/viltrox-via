@@ -56,23 +56,122 @@ def emit_event(event: str, **payload: object) -> None:
     out(json.dumps({"event": event, "at": utcnow(), **payload}, ensure_ascii=False, default=str), flush=True)
 
 
+def _result_body(result: dict[str, object]) -> dict[str, object]:
+    nested = result.get("result") if isinstance(result, dict) else None
+    return nested if isinstance(nested, dict) else result
+
+
+def _value(mapping: dict[str, object], primary: str, fallback: str = "") -> object:
+    if primary in mapping:
+        return mapping.get(primary)
+    return mapping.get(fallback) if fallback else None
+
+
 def result_summary(result: dict[str, object]) -> dict[str, object]:
-    inner = result.get("result") if isinstance(result, dict) else {}
-    if not isinstance(inner, dict):
-        return {}
+    inner = _result_body(result)
     official = inner.get("official") if isinstance(inner.get("official"), dict) else {}
     kol = inner.get("kol_pool_light") if isinstance(inner.get("kol_pool_light"), dict) else {}
     return {
-        "official_requested": official.get("requested"),
+        "status": inner.get("status"),
+        "dry_run": bool(inner.get("dry_run")),
+        "official_requested": _value(official, "requested", "channels_requested"),
+        "official_enqueued": _value(official, "enqueued", "channels_enqueued"),
         "official_synced": official.get("synced"),
-        "official_failed": official.get("failed"),
+        "official_failed": _value(official, "failed", "channels_failed_to_enqueue"),
         "kol_requested": kol.get("requested"),
+        "kol_enqueued": kol.get("enqueued"),
         "kol_refreshed": kol.get("refreshed"),
         "kol_partial": kol.get("partial"),
-        "kol_errors": kol.get("errors"),
+        "kol_errors": _value(kol, "errors", "failed_to_enqueue"),
         "started_at": inner.get("started_at"),
-        "finished_at": inner.get("finished_at"),
+        "finished_at": inner.get("finished_at") or inner.get("ran_at"),
     }
+
+
+def post_sync_maintenance_decision(
+    result: dict[str, object],
+    *,
+    requested_dry_run: bool,
+) -> tuple[bool, str]:
+    """Run write maintenance only after a completed sync, never after planning/enqueue."""
+    inner = _result_body(result)
+    if requested_dry_run or bool(inner.get("dry_run")):
+        return False, "dry_run"
+    status = str(inner.get("status") or "unknown").strip().lower()
+    if status not in {"ok", "completed", "succeeded", "success"}:
+        return False, f"job_not_completed:{status}"
+    return True, "completed_sync"
+
+
+def result_exit_code(result: dict[str, object]) -> int:
+    """Map the honest orchestration receipt to the systemd oneshot exit code."""
+    inner = _result_body(result)
+    status = str(inner.get("status") or "").strip().lower()
+    if status in {"failed", "interrupted", "blocked", "error"}:
+        return int(inner.get("exit_code") or 2)
+
+    official = inner.get("official") if isinstance(inner.get("official"), dict) else {}
+    kol = inner.get("kol_pool_light") if isinstance(inner.get("kol_pool_light"), dict) else {}
+    if status == "queued":
+        enqueue_failures = int(
+            _value(official, "channels_failed_to_enqueue", "failed_to_enqueue") or 0
+        ) + int(kol.get("failed_to_enqueue") or 0)
+        return 2 if enqueue_failures else 0
+
+    health = inner.get("health") if isinstance(inner.get("health"), dict) else {}
+    if bool(health.get("blocked_next_run")):
+        return 2
+    rate = health.get("failure_rate")
+    threshold = health.get("failure_rate_threshold")
+    if isinstance(rate, (int, float)) and isinstance(threshold, (int, float)):
+        return 2 if float(rate) > float(threshold) else 0
+    if int(official.get("failed") or 0) or int(kol.get("errors") or 0):
+        return 2
+    return 0
+
+
+def run_post_sync_maintenance() -> None:
+    """Run maintenance that depends on already-persisted sync results."""
+    try:
+        from app.db.connection import get_conn
+        from app.domains.channels.metrics_gapfill import backfill_filled_table
+
+        gap_result = backfill_filled_table(get_conn())
+        emit_event("cron_daily_sync_gapfill", summary=gap_result)
+    except Exception as exc:
+        emit_event(
+            "cron_daily_sync_gapfill_failed",
+            error=f"{type(exc).__name__}: {str(exc)[:200]}",
+        )
+
+    try:
+        import subprocess
+
+        repo = str(Path(__file__).resolve().parents[1])
+        for script, command in (
+            ("scripts/expand_kol_profile_index.py", "write-and-validate"),
+            ("scripts/classify_kol_profile_type.py", "write"),
+        ):
+            process = subprocess.run(
+                [sys.executable, str(Path(repo) / script), command],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                timeout=1800,
+            )
+            if process.returncode != 0:
+                emit_event(
+                    "cron_daily_sync_index_maint_failed",
+                    script=script,
+                    code=process.returncode,
+                    err=str(process.stderr)[-300:],
+                )
+        emit_event("cron_daily_sync_index_maint_done")
+    except Exception as exc:
+        emit_event(
+            "cron_daily_sync_index_maint_failed",
+            error=f"{type(exc).__name__}: {str(exc)[:200]}",
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -146,63 +245,19 @@ async def main() -> int:
         )
         result = await run_job("daily_incremental_sync", payload)
         emit_event("cron_daily_sync_finished", summary=result_summary(result))
-        # 同步成功后重建 vkpi_channel_metrics_filled(公司账号 30d 成熟度依赖它;
-        # 无定时维护会掉回「累积中」)。只写隔离 filled 表,失败不影响同步退出码。
-        try:
-            from app.db.connection import get_conn
-            from app.domains.channels.metrics_gapfill import backfill_filled_table
-
-            _gap_res = backfill_filled_table(get_conn())
-            emit_event("cron_daily_sync_gapfill", summary=_gap_res)
-        except Exception as _gap_exc:
-            emit_event("cron_daily_sync_gapfill_failed", error=f"{type(_gap_exc).__name__}: {str(_gap_exc)[:200]}")
-        # 同步成功后增量维护 KOL 向量召回索引(2026-07-02:索引表空表导致文本搜索
-        # 静默归零的事故复盘产物)。expand 只补未入索引的新 KOL(embedding 花费分级别),
-        # classify 补分型;子进程跑、双闸超时,失败只记事件不影响同步退出码。
-        try:
-            import subprocess
-            from pathlib import Path
-
-            _repo = str(Path(__file__).resolve().parents[1])
-            for _script, _cmd in (
-                ("scripts/expand_kol_profile_index.py", "write-and-validate"),
-                ("scripts/classify_kol_profile_type.py", "write"),
-            ):
-                _proc = subprocess.run(
-                    [sys.executable, str(Path(_repo) / _script), _cmd],
-                    cwd=_repo, capture_output=True, text=True, timeout=1800,
-                )
-                if _proc.returncode != 0:
-                    emit_event(
-                        "cron_daily_sync_index_maint_failed",
-                        script=_script, code=_proc.returncode, err=str(_proc.stderr)[-300:],
-                    )
-            emit_event("cron_daily_sync_index_maint_done")
-        except Exception as _idx_exc:
-            emit_event("cron_daily_sync_index_maint_failed", error=f"{type(_idx_exc).__name__}: {str(_idx_exc)[:200]}")
+        run_maintenance, maintenance_reason = post_sync_maintenance_decision(
+            result,
+            requested_dry_run=bool(payload["dry_run"]),
+        )
+        if run_maintenance:
+            run_post_sync_maintenance()
+        else:
+            emit_event(
+                "cron_daily_sync_post_maintenance_skipped",
+                reason=maintenance_reason,
+            )
         out(json.dumps(result, ensure_ascii=False, default=str, indent=2))
-        inner = result.get("result") if isinstance(result, dict) else {}
-        if isinstance(inner, dict):
-            # 退出码与 health 阈值对齐(2026-07-03):此前「任意 1 个官号失败就 exit 2」,
-            # 18 官号里 1 个 Apify actor 偶发超时(失败率 0.9%,远低于 10% 阈值)也会把
-            # systemd 服务打成 failed 并触发 OnFailure 告警,狼来了掩盖真故障。
-            # 现在:blocked_next_run 或失败率超过 health 自己的阈值才 exit 2;
-            # 低于阈值的零星失败已在 health/failures 字段里如实记录,退出 0。
-            health = inner.get("health") if isinstance(inner.get("health"), dict) else {}
-            if bool(health.get("blocked_next_run")):
-                return 2
-            rate = health.get("failure_rate")
-            threshold = health.get("failure_rate_threshold")
-            if isinstance(rate, (int, float)) and isinstance(threshold, (int, float)):
-                if float(rate) > float(threshold):
-                    return 2
-                return 0
-            # health 块缺失时回退旧口径(任何失败即 2),不放过未知状态
-            official = inner.get("official") if isinstance(inner.get("official"), dict) else {}
-            kol = inner.get("kol_pool_light") if isinstance(inner.get("kol_pool_light"), dict) else {}
-            if int(official.get("failed") or 0) or int(kol.get("errors") or 0):
-                return 2
-        return 0
+        return result_exit_code(result)
     except SyncFailFast as exc:
         emit_event(
             "cron_daily_sync_interrupted",

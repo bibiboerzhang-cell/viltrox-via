@@ -148,9 +148,18 @@ def test_worker_write_paths_use_shared_upsert(monkeypatch: pytest.MonkeyPatch) -
     import app.workers.apify_jobs_worker  # noqa: F401  入口先加载(gemini 子模块底部回灌 import)
     from app.workers import apify_jobs_worker_gemini as worker_gemini
 
-    source = Path(worker_gemini.__file__).read_text(encoding="utf-8")
+    worker_dir = Path(worker_gemini.__file__).resolve().parent
+    source = "\n".join(
+        worker_dir.joinpath(name).read_text(encoding="utf-8")
+        for name in (
+            "apify_jobs_worker_gemini.py",
+            "apify_jobs_worker_gemini_persistence_runtime.py",
+        )
+    )
     assert "INSERT INTO vkpi_analysis_cache" not in source
-    assert source.count("cache_id = upsert_video_analysis_cache(") == 2  # 两条写路径同一入口
+    assert source.count("cache_id = upsert_video_analysis_cache(") == 1
+    assert "cache_id = dependencies.upsert_cache(" in source
+    assert "upsert_cache=upsert_video_analysis_cache" in source
     assert worker_gemini._cache_prompt_version("video_analysis_final_v1") == "final_v1_pure_video_evidence_v2"
     assert worker_gemini._cache_prompt_version("video_analysis_final_v1_keyframe_qa") == "final_v1_pure_video_evidence_v2"
     assert worker_gemini._cache_prompt_version("gemini_video_v2") is None

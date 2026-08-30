@@ -35,6 +35,7 @@ from app.domains.kol.search_sessions_serde import (
     _int_or_none,
     _normalize_status,
 )
+from app.domains.kol import search_sessions_team_status_builder
 
 
 TEAM_STATUS_SCHEMA = "kol_search_team_status_v1"
@@ -389,269 +390,38 @@ def build_team_search_status(
     max_scan_sessions: int = MAX_TEAM_STATUS_SCAN_SESSIONS,
     max_scan_items: int = MAX_TEAM_STATUS_SCAN_ITEMS,
 ) -> dict[str, Any]:
-    """Return a bounded, PII-free aggregate over unarchived search sessions.
-
-    The effective terminal decision comes from ``project_search_progress`` and
-    its ``requested_tasks_terminal`` flag, not from the stored session status.
-    This keeps the manager view aligned with employee history/detail views when
-    a durable queue row has advanced beyond a stale stored snapshot.
-    """
+    """Return a bounded, PII-free aggregate over unarchived search sessions."""
 
     safe_limit = _safe_limit(limit)
-    query_batch_size = _query_batch_size(safe_limit)
-    scan_cap = _safe_scan_cap(max_scan_sessions)
-    item_scan_cap = _safe_item_scan_cap(max_scan_items)
     conn = (get_conn_fn or get_conn)()
     _begin_team_status_snapshot(conn)
     organization_id = int(organization_guard_fn(staff, conn))
-    population_row = conn.execute(
-        """
-        SELECT COUNT(*) AS session_count,
-               COUNT(DISTINCT created_by) AS staff_count,
-               MAX(id) AS max_session_id
-        FROM vkpi_kol_search_sessions
-        WHERE archived_at IS NULL
-        """
-    ).fetchone()
-    population = _safe_int(dict(population_row or {}).get("session_count"))
-    staff_population = _safe_int(dict(population_row or {}).get("staff_count"))
-    snapshot_max_id = _safe_int(dict(population_row or {}).get("max_session_id"))
-    item_population_row = conn.execute(
-        """
-        SELECT COUNT(*) AS item_count,
-               MAX(item.id) AS max_item_id
-        FROM vkpi_kol_search_session_items AS item
-        JOIN vkpi_kol_search_sessions AS session ON session.id = item.session_id
-        WHERE session.archived_at IS NULL
-          AND session.id <= ?
-        """,
-        (snapshot_max_id,),
-    ).fetchone()
-    item_population = _safe_int(dict(item_population_row or {}).get("item_count"))
-    snapshot_max_item_id = _safe_int(
-        dict(item_population_row or {}).get("max_item_id")
+    return search_sessions_team_status_builder.build_team_search_status(
+        conn=conn,
+        organization_id=organization_id,
+        safe_limit=safe_limit,
+        query_batch_size=_query_batch_size(safe_limit),
+        scan_cap=_safe_scan_cap(max_scan_sessions),
+        item_scan_cap=_safe_item_scan_cap(max_scan_items),
+        project_progress_fn=project_progress_fn,
+        observe_worker_fn=observe_worker_fn,
+        refresh_queue_states_fn=refresh_queue_states_fn,
+        hydrate_progress_fn=hydrate_progress_fn,
+        canonicalize_items_fn=canonicalize_items_fn,
+        runtime=search_sessions_team_status_builder.TeamStatusRuntime(
+            safe_int=_safe_int,
+            int_or_none=_int_or_none,
+            normalize_status=_normalize_status,
+            iso_now=_iso_now,
+            release_evidence=_release_evidence,
+            session_batch=_session_batch,
+            item_counts_by_session=_item_counts_by_session,
+            items_by_session=_items_by_session,
+            schema=TEAM_STATUS_SCHEMA,
+            effective_states=_EFFECTIVE_STATES,
+            stored_statuses=_STORED_STATUSES,
+        ),
     )
-    worker = observe_worker_fn(conn)
-    by_effective_state = {state: 0 for state in _EFFECTIVE_STATES}
-    nonterminal_by_effective_state = {state: 0 for state in _EFFECTIVE_STATES}
-    by_stored_status = {status: 0 for status in _STORED_STATUSES}
-    terminal_count = 0
-    nonterminal_count = 0
-    blocked_count = 0
-    orchestration_pending_count = 0
-    full_analysis_complete_count = 0
-    nonterminal_staff_ids: set[int] = set()
-    evaluated = 0
-    evaluated_items = 0
-    batches = 0
-    before_id: int | None = None
-    scan_target = min(population, scan_cap)
-    item_budget_exhausted = False
-
-    while evaluated < scan_target:
-        requested_batch = min(query_batch_size, scan_target - evaluated)
-        sessions = _session_batch(
-            conn,
-            snapshot_max_id=snapshot_max_id,
-            before_id=before_id,
-            batch_size=requested_batch,
-        )
-        if not sessions:
-            break
-        session_ids = [
-            int(session_id)
-            for session_id in (
-                _int_or_none(session.get("id")) for session in sessions
-            )
-            if session_id
-        ]
-        if (
-            len(session_ids) != len(sessions)
-            or len(session_ids) != len(set(session_ids))
-            or session_ids != sorted(session_ids, reverse=True)
-            or (before_id is not None and session_ids[0] >= before_id)
-        ):
-            raise RuntimeError("KOL search team status keyset contract violated")
-
-        item_counts = _item_counts_by_session(
-            conn,
-            session_ids,
-            snapshot_max_item_id=snapshot_max_item_id,
-        )
-        eligible_count = 0
-        batch_item_count = 0
-        for session_id in session_ids:
-            next_item_count = item_counts.get(session_id, 0)
-            if evaluated_items + batch_item_count + next_item_count > item_scan_cap:
-                item_budget_exhausted = True
-                break
-            eligible_count += 1
-            batch_item_count += next_item_count
-        if eligible_count <= 0:
-            break
-        if eligible_count < len(sessions):
-            sessions = sessions[:eligible_count]
-            session_ids = session_ids[:eligible_count]
-
-        grouped = _items_by_session(
-            conn,
-            session_ids,
-            snapshot_max_item_id=snapshot_max_item_id,
-        )
-        all_items = [item for items in grouped.values() for item in items]
-        if evaluated_items + len(all_items) > item_scan_cap:
-            raise RuntimeError("KOL search team status item scan budget violated")
-        if all_items:
-            refresh_queue_states_fn(conn, all_items)
-            hydrate_progress_fn(conn, all_items)
-
-        for session in sessions:
-            session_id = _int_or_none(session.get("id")) or 0
-            items = canonicalize_items_fn(grouped.get(session_id, []))
-            progress = project_progress_fn(session, items, worker_health=worker)
-            effective_state = str(progress.get("state") or "unknown").strip().lower()
-            if effective_state not in by_effective_state:
-                effective_state = "unknown"
-            by_effective_state[effective_state] += 1
-
-            stored_status = _normalize_status(session.get("status"))
-            stored_bucket = stored_status if stored_status in by_stored_status else "planned"
-            by_stored_status[stored_bucket] += 1
-
-            is_terminal = progress.get("requested_tasks_terminal") is True
-            if is_terminal:
-                terminal_count += 1
-            else:
-                nonterminal_count += 1
-                nonterminal_by_effective_state[effective_state] += 1
-                created_by = _int_or_none(session.get("created_by"))
-                if created_by:
-                    nonterminal_staff_ids.add(int(created_by))
-            if progress.get("blocked_by_worker") is True:
-                blocked_count += 1
-            if progress.get("orchestration_pending") is True:
-                orchestration_pending_count += 1
-            if progress.get("full_analysis_complete") is True:
-                full_analysis_complete_count += 1
-
-        evaluated += len(sessions)
-        evaluated_items += len(all_items)
-        batches += 1
-        next_before_id = session_ids[-1]
-        if next_before_id <= 0 or next_before_id == before_id:
-            raise RuntimeError("KOL search team status keyset did not advance")
-        before_id = next_before_id
-        if item_budget_exhausted or len(sessions) < requested_batch:
-            break
-
-    # READ COMMITTED can otherwise let an archive/restore race change the
-    # active membership between the opening COUNT and the final keyset page.
-    # Re-read both membership fences and fail closed instead of claiming that
-    # every *current* session is terminal from a mixed population snapshot.
-    final_population_row = conn.execute(
-        """
-        SELECT COUNT(*) AS session_count,
-               COUNT(DISTINCT created_by) AS staff_count,
-               MAX(id) AS max_session_id
-        FROM vkpi_kol_search_sessions
-        WHERE archived_at IS NULL
-        """
-    ).fetchone()
-    final_item_population_row = conn.execute(
-        """
-        SELECT COUNT(*) AS item_count,
-               MAX(item.id) AS max_item_id
-        FROM vkpi_kol_search_session_items AS item
-        JOIN vkpi_kol_search_sessions AS session ON session.id = item.session_id
-        WHERE session.archived_at IS NULL
-          AND session.id <= ?
-        """,
-        (snapshot_max_id,),
-    ).fetchone()
-    snapshot_consistent = (
-        _safe_int(dict(final_population_row or {}).get("session_count")) == population
-        and _safe_int(dict(final_population_row or {}).get("staff_count"))
-        == staff_population
-        and _safe_int(dict(final_population_row or {}).get("max_session_id"))
-        == snapshot_max_id
-        and _safe_int(dict(final_item_population_row or {}).get("item_count"))
-        == item_population
-        and _safe_int(dict(final_item_population_row or {}).get("max_item_id"))
-        == snapshot_max_item_id
-    )
-    session_coverage_complete = evaluated == population and snapshot_consistent
-    item_coverage_complete = evaluated_items == item_population and snapshot_consistent
-    coverage_complete = session_coverage_complete and item_coverage_complete
-    observed_at = str(worker.get("observed_at") or _iso_now())
-    nonzero_effective = {key: value for key, value in by_effective_state.items() if value}
-    nonzero_stored = {key: value for key, value in by_stored_status.items() if value}
-    nonzero_nonterminal = {
-        key: value
-        for key, value in nonterminal_by_effective_state.items()
-        if value
-    }
-
-    return {
-        "schema": TEAM_STATUS_SCHEMA,
-        "status": "ready" if coverage_complete else "partial",
-        "claim_status": "observed_read_only",
-        "scope": {
-            "mode": "all_staff_in_organization",
-            "organization_id": organization_id,
-            "management_only": True,
-            "archived_sessions_included": False,
-        },
-        "coverage": {
-            "population": population,
-            "evaluated": evaluated,
-            "session_population": population,
-            "staff_population": staff_population,
-            "evaluated_sessions": evaluated,
-            "unevaluated_sessions": max(0, population - evaluated),
-            "session_complete": session_coverage_complete,
-            "session_truncated": not session_coverage_complete,
-            "item_population": item_population,
-            "evaluated_items": evaluated_items,
-            "unevaluated_items": max(0, item_population - evaluated_items),
-            "item_scan_cap": item_scan_cap,
-            "items_complete": item_coverage_complete,
-            "items_truncated": not item_coverage_complete,
-            "limit": safe_limit,
-            "batch_size": query_batch_size,
-            "batches": batches,
-            "scan_cap": scan_cap,
-            "snapshot_consistent": snapshot_consistent,
-            "complete": coverage_complete,
-            "truncated": not coverage_complete,
-        },
-        "counts": {
-            "sessions_evaluated": evaluated,
-            "requested_tasks_terminal": terminal_count,
-            "requested_tasks_nonterminal": nonterminal_count,
-            "staff_with_observed_nonterminal_sessions": len(nonterminal_staff_ids),
-            "blocked_by_worker": blocked_count,
-            "orchestration_pending": orchestration_pending_count,
-            "full_analysis_complete": full_analysis_complete_count,
-            "by_effective_state": nonzero_effective,
-            "by_stored_status": nonzero_stored,
-        },
-        "nonterminal": {
-            "observed_count": nonterminal_count,
-            "by_effective_state": nonzero_nonterminal,
-            "all_current_sessions_terminal": (
-                nonterminal_count == 0 if coverage_complete else None
-            ),
-        },
-        "release_evidence": _release_evidence(worker),
-        "observed_at": observed_at,
-        "sources": [
-            "vkpi_kol_search_sessions",
-            "vkpi_kol_search_session_items",
-            "vkpi_kol_pool",
-            "apify_jobs",
-            "vkpi_worker_heartbeat",
-        ],
-    }
 
 
 __all__ = [

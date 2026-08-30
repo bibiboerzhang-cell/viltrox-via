@@ -10,7 +10,7 @@ job_type × last_error_category 分桶,标注「可回收 vs 永久死」,并提
 
 设计口径(复用 worker 现有重试语义,不另造表、不碰红线 viltrox_fit_score):
 
-- 分类词表完全沿用 app.workers.apify_jobs_worker_helpers._error_category 的输出
+- 分类词表完全沿用 app.platform.provider_error_category.error_category 的输出
   族(provider_pressure / timeout / media_resolve / download / content_restricted /
   content_blocked / content_unavailable / permanent / stale_running / code_error /
   unknown)。本模块**不重新发明**类别,只把这些类别映射到「能否回收」。
@@ -41,7 +41,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.workers.apify_jobs_worker_helpers import _error_category
+from app.platform.provider_error_category import error_category
 
 
 logger = get_logger(__name__)
@@ -148,7 +148,7 @@ def _effective_category(stored_category: Any, last_error: Any) -> str:
     否则回退到持久化的 last_error_category(再不行落 'unknown')。
     """
     text = str(last_error or "")
-    derived = _error_category(text) if text else "unknown"
+    derived = error_category(text) if text else "unknown"
     if derived and derived != "unknown":
         return derived
     stored = str(stored_category or "").strip()

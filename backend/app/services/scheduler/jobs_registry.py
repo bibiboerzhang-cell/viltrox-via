@@ -19,6 +19,8 @@ from apscheduler.triggers.interval import IntervalTrigger
 # jobs.py 只在 _start_scheduler_local 内懒 import 本模块,因此这里 import jobs 无循环。
 from app.services.scheduler.jobs import (
     CHINA_TZ,
+    UTC_TZ,
+    US_EASTERN_TZ,
     US_PACIFIC_TZ,
     job_bh_daily_snapshot,
     job_cache_cleanup,
@@ -207,7 +209,7 @@ def _register_core_maintenance_jobs(_scheduler: Any) -> None:
         coalesce=True,
     )
     
-    # ── Job 6: B&H weekly snapshot(默认停用)──
+    # ── Job 6: B&H weekly snapshot(每周一 03:00 UTC,默认停用)──
     # 用户令 2026-07-02:search actor(powerai/bhphotovideo-product-search-scraper,~$2/次 x 6 类目)
     # 抓的产品列表与库内数据 100% 重复零增量,search 停;竞品口碑改走 reviews actor
     # (bh_scraper.fetch_bh_reviews,手动脚本触发,不接 cron)。
@@ -215,7 +217,7 @@ def _register_core_maintenance_jobs(_scheduler: Any) -> None:
     if __import__("os").environ.get("BH_SNAPSHOT_ENABLED", "0").strip().lower() not in {"0", "false", "no", ""}:
         _scheduler.add_job(
             job_bh_daily_snapshot,
-            trigger=CronTrigger(day_of_week="mon", hour=3, minute=0),
+            trigger=CronTrigger(day_of_week="mon", hour=3, minute=0, timezone=UTC_TZ),
             id="bh_daily_snapshot",
             name="Fetch B&H Viltrox products daily",
             max_instances=1,
@@ -366,7 +368,7 @@ def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
     )
     _scheduler.add_job(
         job_vkpi_kpi_rollup,
-        trigger=CronTrigger(hour=1, minute=20),
+        trigger=CronTrigger(hour=1, minute=20, timezone=US_EASTERN_TZ),
         id="vkpi_kpi_rollup",
         name="V-KPI daily KPI/workload rollup",
         max_instances=1,
@@ -386,7 +388,7 @@ def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
     # 改成固定 cron 偶数小时 :20(节奏仍每 2h),脱离启动偏移;其它任务时刻不动。
     _scheduler.add_job(
         job_logistics_track_sync,
-        trigger=CronTrigger(hour="*/2", minute=20),
+        trigger=CronTrigger(hour="*/2", minute=20, timezone=US_EASTERN_TZ),
         id="logistics_track_sync",
         name="17track logistics auto-sync (active shipments)",
         max_instances=1,
@@ -404,7 +406,7 @@ def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
     # ── I1 token broker 每日配额复位(常开)──
     _scheduler.add_job(
         job_token_broker_reset_daily,
-        trigger=CronTrigger(hour=0, minute=5),
+        trigger=CronTrigger(hour=0, minute=5, timezone=US_EASTERN_TZ),
         id="token_broker_reset_daily",
         name="token broker daily quota reset",
         max_instances=1,
@@ -442,7 +444,7 @@ def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
     )
     _scheduler.add_job(
         job_vkpi_weekly_report,
-        trigger=CronTrigger(day_of_week="mon", hour=2, minute=0),
+        trigger=CronTrigger(day_of_week="mon", hour=2, minute=0, timezone=US_EASTERN_TZ),
         id="vkpi_weekly_report",
         name="V-KPI weekly manager report",
         max_instances=1,
@@ -456,7 +458,7 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
     # ── VoC 评论情感每日刷新(config-gate,默认 OFF)──
     _scheduler.add_job(
         job_vkpi_comment_sentiment_refresh,
-        trigger=CronTrigger(hour=5, minute=0),
+        trigger=CronTrigger(hour=5, minute=0, timezone=US_EASTERN_TZ),
         id="vkpi_comment_sentiment_refresh",
         name="Daily VoC comment sentiment refresh (own + competitor)",
         max_instances=1,
@@ -466,7 +468,7 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
     # 排在 04:40,先把存量 sentiment_id 补上,05:00 的 comment_sentiment_refresh 再管当天新增。
     _scheduler.add_job(
         job_sentiment_annotate,
-        trigger=CronTrigger(hour=4, minute=40),
+        trigger=CronTrigger(hour=4, minute=40, timezone=US_EASTERN_TZ),
         id="vkpi_sentiment_annotate",
         name="V0g packed comment sentiment annotate (config-gated OFF, <=200/run)",
         max_instances=1,
@@ -476,7 +478,7 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
     # 排在 04:50,与 04:40 的评论批注错峰共用同一模型绑定。
     _scheduler.add_job(
         job_market_mention_sentiment,
-        trigger=CronTrigger(hour=4, minute=50),
+        trigger=CronTrigger(hour=4, minute=50, timezone=US_EASTERN_TZ),
         id="vkpi_market_mention_sentiment",
         name="Market mention sentiment annotate (config-gated OFF, <=200/run)",
         max_instances=1,
@@ -502,7 +504,7 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
     )
     _scheduler.add_job(
         job_vkpi_content_fit_batch_refresh,
-        trigger=CronTrigger(hour=2, minute=30),
+        trigger=CronTrigger(hour=2, minute=30, timezone=US_EASTERN_TZ),
         id="vkpi_content_fit_batch_refresh",
         name="Submit nightly content_fit refresh as Anthropic Batch (50% off)",
         max_instances=1,
@@ -522,7 +524,7 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
     # ── V6 Fit Top 每日快照(只读,算 Top Movers)── config-gate(scheduler_tasks.vkpi_fit_snapshot)。
     _scheduler.add_job(
         job_vkpi_fit_snapshot,
-        trigger=CronTrigger(hour=3, minute=30),
+        trigger=CronTrigger(hour=3, minute=30, timezone=US_EASTERN_TZ),
         id="vkpi_fit_snapshot",
         name="V6 Fit daily snapshot (read-only, for Top Movers)",
         max_instances=1,
@@ -531,7 +533,7 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
     # ── AI Today 简报 Agent 每日刷新(确定性,无 LLM)── config-gate(scheduler_tasks.vkpi_brief_agent)。
     _scheduler.add_job(
         job_vkpi_brief_agent,
-        trigger=CronTrigger(hour=3, minute=45),
+        trigger=CronTrigger(hour=3, minute=45, timezone=US_EASTERN_TZ),
         id="vkpi_brief_agent",
         name="AI Today brief agent daily refresh (deterministic, no LLM)",
         max_instances=1,
@@ -571,7 +573,7 @@ def _register_intel_content_jobs(_scheduler: Any) -> None:
     # 2026-08-23 错峰(同 logistics_track_sync 注释):每 2h 改固定偶数小时 :35,避开启动偏移的整点齐发。
     _scheduler.add_job(
         job_market_voice_alerts,
-        trigger=CronTrigger(hour="*/2", minute=35),
+        trigger=CronTrigger(hour="*/2", minute=35, timezone=US_EASTERN_TZ),
         id="market_voice_alerts",
         name="Market voice volume alerts (8h window x complaint category, owned x2, default-off)",
         max_instances=1,
@@ -637,7 +639,7 @@ def _register_fulfillment_autoops_jobs(_scheduler: Any) -> None:
     # (扫窗先、回填后,保持 scan→backfill 先后),节奏仍每 2h,与偶数小时的物流/声量告警互不叠加。
     _scheduler.add_job(
         job_fulfillment_content_scan,
-        trigger=CronTrigger(hour="1-23/2", minute=20),
+        trigger=CronTrigger(hour="1-23/2", minute=20, timezone=US_EASTERN_TZ),
         id="fulfillment_content_scan",
         name="Fulfillment: scan due windows for KOL Viltrox content → candidates",
         max_instances=1,
@@ -646,7 +648,7 @@ def _register_fulfillment_autoops_jobs(_scheduler: Any) -> None:
     # ── 履约后半链:把已落库候选回填到活动观察窗口 matched_content_post_id(window→post 回链)──
     _scheduler.add_job(
         job_fulfillment_window_backfill,
-        trigger=CronTrigger(hour="1-23/2", minute=35),
+        trigger=CronTrigger(hour="1-23/2", minute=35, timezone=US_EASTERN_TZ),
         id="fulfillment_window_backfill",
         name="Fulfillment: backfill matched_content_post_id onto active observation windows",
         max_instances=1,
@@ -654,7 +656,7 @@ def _register_fulfillment_autoops_jobs(_scheduler: Any) -> None:
     )
     _scheduler.add_job(
         job_fulfillment_retrospective_enqueue,
-        trigger=CronTrigger(hour=2, minute=30),
+        trigger=CronTrigger(hour=2, minute=30, timezone=US_EASTERN_TZ),
         id="fulfillment_retrospective_enqueue",
         name="Fulfillment: enqueue retrospective for measured/closed projects (no LLM)",
         max_instances=1,
@@ -663,7 +665,7 @@ def _register_fulfillment_autoops_jobs(_scheduler: Any) -> None:
     # R10:履约到期未发布扫描(7/14/21 天 → content_due 待办)── config-gate(fulfillment_due_scan,默认 OFF)。
     _scheduler.add_job(
         job_fulfillment_due_scan,
-        trigger=CronTrigger(hour=2, minute=45),
+        trigger=CronTrigger(hour=2, minute=45, timezone=US_EASTERN_TZ),
         id="fulfillment_due_scan",
         name="Fulfillment: scan delivered-but-no-content into content_due tasks (7/14/21d)",
         max_instances=1,

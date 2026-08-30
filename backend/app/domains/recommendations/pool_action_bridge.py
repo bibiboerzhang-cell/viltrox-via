@@ -22,6 +22,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.recommendations import actions as rec_actions
+from app.domains.recommendations import outcome_sync
 
 logger = get_logger(__name__)
 
@@ -56,8 +58,6 @@ def bridge_pool_action(
     if pool_id <= 0:
         return {"linked": False, "reason": "no_pool_id", "action": str(action or "")}
     try:
-        from app.domains.recommendations import actions as rec_actions
-
         return rec_actions.record_pool_action_feedback(pool_id, action, staff=staff, note=note, payload=merged)
     except Exception:
         logger.warning(
@@ -88,8 +88,6 @@ def bridge_message_outreach(
     if clean_direction in {"inbound", "in", "reply", "received"}:
         return []
     try:
-        from app.domains.recommendations import outcome_sync
-
         conn = get_conn()
         pool_ids = outcome_sync._pool_ids_for_kol(conn, int(kol_id or 0))
         if not pool_ids:

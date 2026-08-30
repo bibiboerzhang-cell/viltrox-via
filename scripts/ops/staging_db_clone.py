@@ -607,8 +607,8 @@ def run_migrations_only(
 
     try:
         import asyncio
-
-        from app.db.connection import close_db_runtime_sync, init_db_runtime
+        from app.db.connection import close_db_runtime_sync
+        from app.db.startup import init_db_runtime
 
         asyncio.run(init_db_runtime())
         close_db_runtime_sync()

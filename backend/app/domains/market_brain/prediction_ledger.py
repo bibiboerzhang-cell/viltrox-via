@@ -526,7 +526,7 @@ def record_eval(
         return {"ok": False, "id": None, "deduped": False, "reason": "db_error"}
 
 
-def record_eval_from_finalized_outcome(
+def _normalized_outcome_eval_request(
     run_id: str,
     *,
     staff: dict[str, Any] | None,
@@ -534,15 +534,9 @@ def record_eval_from_finalized_outcome(
     evidence_field: str,
     metric_path: str,
     correlation_id: str,
-    organization_id: str = DEFAULT_ORG,
-    notes: str | None = None,
-) -> dict[str, Any]:
-    """Resolve an actual from server-side outcome evidence, then record eval.
-
-    The caller never supplies ``actual_value``.  The numeric truth is read from
-    one finalized GTM outcome and is re-verified by :func:`record_eval` before
-    the eval is committed.
-    """
+    organization_id: str,
+    notes: str | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
     rid = _text_or_none(run_id, 200)
     oid = _int_or_none(outcome_id)
     field = _text_or_none(evidence_field, 40)
@@ -554,17 +548,68 @@ def record_eval_from_finalized_outcome(
         review_contract.normalize_review_text(notes, max_length=1000)
         if notes is not None else None
     )
-    if not rid or oid is None or oid <= 0 or field not in {
-        "actual_result", "window_7d", "window_14d", "window_28d",
-    } or not path or re.fullmatch(r"[A-Za-z0-9_.-]+", path) is None:
-        return {"ok": False, "id": None, "deduped": False, "reason": "invalid_actual_binding"}
+    valid_field = field in {"actual_result", "window_7d", "window_14d", "window_28d"}
+    if (
+        not rid
+        or oid is None
+        or oid <= 0
+        or not valid_field
+        or not path
+        or re.fullmatch(r"[A-Za-z0-9_.-]+", path) is None
+    ):
+        return None, {
+            "ok": False, "id": None, "deduped": False, "reason": "invalid_actual_binding",
+        }
     if reviewer is None or org != DEFAULT_ORG:
-        return {"ok": False, "id": None, "deduped": False, "reason": "actual_scope_unavailable"}
+        return None, {
+            "ok": False, "id": None, "deduped": False, "reason": "actual_scope_unavailable",
+        }
     if correlation is None:
-        return {"ok": False, "id": None, "deduped": False, "reason": "actual_correlation_required"}
+        return None, {
+            "ok": False, "id": None, "deduped": False, "reason": "actual_correlation_required",
+        }
     if notes is not None and normalized_notes is None:
-        return {"ok": False, "id": None, "deduped": False, "reason": "actual_notes_invalid"}
+        return None, {
+            "ok": False, "id": None, "deduped": False, "reason": "actual_notes_invalid",
+        }
     actor_id, _organization_id = reviewer
+    return {
+        "run_id": rid,
+        "outcome_id": oid,
+        "evidence_field": field,
+        "metric_path": path,
+        "organization_id": org,
+        "actor_id": actor_id,
+        "correlation_id": correlation,
+        "notes": normalized_notes,
+    }, None
+
+
+def record_eval_from_finalized_outcome(
+    run_id: str,
+    *,
+    staff: dict[str, Any] | None,
+    outcome_id: int,
+    evidence_field: str,
+    metric_path: str,
+    correlation_id: str,
+    organization_id: str = DEFAULT_ORG,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Resolve an actual from finalized evidence and atomically record its eval."""
+    request, error = _normalized_outcome_eval_request(
+        run_id,
+        staff=staff,
+        outcome_id=outcome_id,
+        evidence_field=evidence_field,
+        metric_path=metric_path,
+        correlation_id=correlation_id,
+        organization_id=organization_id,
+        notes=notes,
+    )
+    if error is not None:
+        return error
+
     conn = None
     try:
         from app.db.connection import get_conn, table_exists
@@ -575,202 +620,26 @@ def record_eval_from_finalized_outcome(
             or not table_exists(EVALS_TABLE)
             or not table_exists("vkpi_event_ledger")
         ):
-            return {"ok": False, "id": None, "deduped": False, "reason": "outcome_table_missing"}
+            return {
+                "ok": False, "id": None, "deduped": False, "reason": "outcome_table_missing",
+            }
         conn = get_conn()
-        row = conn.execute(
-            """
-            SELECT decision, decided_at, decided_by, action_type, action_inbox_id,
-                   product_sku, market, channel,
-                   actual_result, window_7d, window_14d, window_28d
-            FROM vkpi_gtm_outcomes
-            WHERE id = ?
-            """,
-            (oid,),
-        ).fetchone()
-        if row is None:
-            return {"ok": False, "id": None, "deduped": False, "reason": "outcome_not_found"}
-        outcome = dict(row)
-        if (
-            _text_or_none(outcome.get("decision"), 20) in (None, "open")
-            or outcome.get("decided_at") is None
-            or (_int_or_none(outcome.get("decided_by")) or 0) <= 0
-        ):
-            return {"ok": False, "id": None, "deduped": False, "reason": "outcome_not_finalized"}
-        from app.domains.market_brain.data_readiness import (
-            has_observed_outcome_evidence,
-            has_verified_outcome_evidence,
+        from app.domains.market_brain.prediction_ledger_outcome_eval import (
+            OutcomeEvalDependencies,
+            resolve_finalized_outcome_eval,
         )
 
-        selected_evidence = {
-            "actual_result": {}, "window_7d": {}, "window_14d": {}, "window_28d": {},
-            str(field): outcome.get(str(field)),
-        }
-        if not has_observed_outcome_evidence(selected_evidence):
-            return {
-                "ok": False, "id": None, "deduped": False,
-                "reason": "outcome_missing_observed_evidence",
-            }
-        if not has_verified_outcome_evidence(
-            conn,
-            {**outcome, "id": oid},
-            evidence_field=str(field),
-        ):
-            return {
-                "ok": False, "id": None, "deduped": False,
-                "reason": "outcome_missing_observed_evidence",
-            }
-        run_row = conn.execute(
-            f"""
-            SELECT model_name, model_version, task_type, product_sku, market, channel,
-                   horizon_days, input_fingerprint, input_summary, prediction,
-                   p10, p50, p90, created_at,
-                   (created_at < ?) AS chronology_valid
-            FROM {RUNS_TABLE}
-            WHERE organization_id = ? AND run_id = ?
-            """,
-            (outcome.get("decided_at"), org, rid),
-        ).fetchone()
-        if run_row is None:
-            return {"ok": False, "id": None, "deduped": False, "reason": "run_not_found"}
-        run = dict(run_row)
-        contract = prediction_truth.parse_evaluation_contract(run)
-        if contract is None:
-            return {
-                "ok": False, "id": None, "deduped": False,
-                "reason": "prediction_evaluation_contract_missing",
-            }
-        if int(contract["target_action_inbox_id"]) != (_int_or_none(outcome.get("action_inbox_id")) or 0):
-            return {"ok": False, "id": None, "deduped": False, "reason": "actual_outcome_mismatch"}
-        if str(contract["task_type"]) != str(run.get("task_type") or ""):
-            return {"ok": False, "id": None, "deduped": False, "reason": "actual_task_mismatch"}
-        if str(contract["outcome_action_type"]) != str(outcome.get("action_type") or ""):
-            return {"ok": False, "id": None, "deduped": False, "reason": "actual_action_mismatch"}
-        if (
-            str(contract["evidence_field"]) != str(field)
-            or str(contract["metric_path"]) != str(path)
-            or str(contract["metric_key"]) != str(path).split(".")[-1]
-        ):
-            return {"ok": False, "id": None, "deduped": False, "reason": "actual_metric_contract_mismatch"}
-        for dimension in ("product_sku", "market", "channel"):
-            run_value = _text_or_none(run.get(dimension), 120)
-            outcome_value = _text_or_none(outcome.get(dimension), 120)
-            if not run_value or not outcome_value or run_value.casefold() != outcome_value.casefold():
-                return {
-                    "ok": False, "id": None, "deduped": False,
-                    "reason": f"actual_{dimension}_mismatch",
-                }
-        expected_horizon = {"window_7d": 7, "window_14d": 14, "window_28d": 28}.get(str(field))
-        run_horizon = _int_or_none(run.get("horizon_days"))
-        if run_horizon is None or run_horizon <= 0 or (
-            expected_horizon is not None and run_horizon != expected_horizon
-        ) or run_horizon != int(contract["horizon_days"]):
-            return {"ok": False, "id": None, "deduped": False, "reason": "actual_horizon_mismatch"}
-        if _bool_or_none(run.get("chronology_valid")) is not True:
-            return {"ok": False, "id": None, "deduped": False, "reason": "actual_chronology_invalid"}
-        if prediction_truth.parse_iso_datetime(contract.get("observation_start_at")) != (
-            prediction_truth.parse_iso_datetime(run.get("created_at"))
-        ):
-            return {
-                "ok": False, "id": None, "deduped": False,
-                "reason": "actual_observation_anchor_invalid",
-            }
-        if not prediction_truth.outcome_evidence_is_closed(
-            outcome.get(str(field)),
-            evidence_field=str(field),
-            horizon_days=run_horizon,
-            run_created_at=run.get("created_at"),
-            outcome_decided_at=outcome.get("decided_at"),
-            observation_start_at=contract.get("observation_start_at"),
-        ):
-            return {"ok": False, "id": None, "deduped": False, "reason": "actual_window_not_closed"}
-        node: Any = _json_object(outcome.get(field))
-        for segment in path.split("."):
-            if not segment or not isinstance(node, dict) or segment not in node:
-                return {
-                    "ok": False, "id": None, "deduped": False,
-                    "reason": "actual_metric_not_found",
-                }
-            node = node[segment]
-        actual = _float_or_none(node)
-        if actual is None:
-            return {
-                "ok": False, "id": None, "deduped": False,
-                "reason": "actual_metric_not_numeric",
-            }
-        run_snapshot = {
-            "run_id": rid,
-            "model_name": str(run.get("model_name") or ""),
-            "model_version": str(run.get("model_version") or ""),
-            "task_type": str(run.get("task_type") or ""),
-            "input_fingerprint": str(run.get("input_fingerprint") or ""),
-            "product_sku": run.get("product_sku"),
-            "market": run.get("market"),
-            "channel": run.get("channel"),
-            "horizon_days": run_horizon,
-            "p10": _float_or_none(run.get("p10")),
-            "p50": _float_or_none(run.get("p50")),
-            "p90": _float_or_none(run.get("p90")),
-            "created_at": str(run.get("created_at") or ""),
-            "prediction": prediction_truth.json_value(run.get("prediction"), empty={}),
-        }
-        run_snapshot["sha256"] = hashlib.sha256(
-            json.dumps(
-                run_snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
-            ).encode("utf-8")
-        ).hexdigest()
-        binding = _verified_outcome_actual_binding(
-            {
-                "outcome_id": oid,
-                "evidence_field": field,
-                "metric_path": path,
-                "metric_key": contract["metric_key"],
-                "unit": contract["unit"],
-                "task_type": contract["task_type"],
-                "evaluation_contract_schema": contract["schema"],
-                "evaluation_registry_key": contract["registry_key"],
-                "observation_start_at": contract["observation_start_at"],
-                "value": actual,
-                "source": "server_resolved_finalized_outcome",
-                "reviewed_by_staff_id": actor_id,
-                "outcome_decided_by_staff_id": int(outcome["decided_by"]),
-                "correlation_id": correlation,
-                "run_snapshot_sha256": run_snapshot["sha256"],
-            },
-            outcome_row=outcome,
-            outcome_id=oid,
-            actual_value=actual,
+        dependencies = OutcomeEvalDependencies(
+            text_or_none=_text_or_none,
+            int_or_none=_int_or_none,
+            bool_or_none=_bool_or_none,
+            json_object=_json_object,
+            float_or_none=_float_or_none,
+            verified_binding=_verified_outcome_actual_binding,
+            compute_metrics=compute_eval_metrics,
+            truth=prediction_truth,
         )
-        if binding is None:
-            return {"ok": False, "id": None, "deduped": False, "reason": "actual_evidence_binding_required"}
-        binding["outcome_evidence_sha256"] = hashlib.sha256(
-            json.dumps(
-                prediction_truth.json_value(outcome.get(str(field)), empty={}),
-                ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
-            ).encode("utf-8")
-        ).hexdigest()
-        binding["binding_sha256"] = hashlib.sha256(
-            json.dumps(
-                binding, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
-            ).encode("utf-8")
-        ).hexdigest()
-        from app.domains.market_brain import prediction_reviews
-
-        metrics = compute_eval_metrics(
-            run.get("p10"), run.get("p50"), run.get("p90"), actual, None,
-        )
-        return prediction_reviews.record_verified_eval(
-            conn,
-            organization_id=org,
-            run_id=rid,
-            outcome_id=oid,
-            actual_value=actual,
-            actual_json=binding,
-            metrics=metrics,
-            notes=normalized_notes,
-            actor_id=actor_id,
-            correlation_id=correlation,
-            run_snapshot=run_snapshot,
-        )
+        return resolve_finalized_outcome_eval(conn, request=request, deps=dependencies)
     except Exception:
         try:
             if conn is not None:
@@ -779,8 +648,8 @@ def record_eval_from_finalized_outcome(
             logger.debug("prediction actual verification rollback failed", exc_info=True)
         logger.warning(
             "prediction_ledger.record_eval_from_finalized_outcome failed run_id=%s outcome_id=%s",
-            rid,
-            oid,
+            request["run_id"],
+            request["outcome_id"],
             exc_info=True,
         )
         return {"ok": False, "id": None, "deduped": False, "reason": "db_error"}

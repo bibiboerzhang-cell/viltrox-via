@@ -9,7 +9,11 @@ import type { VkpiKolRecallItem, VkpiKolRecallResponse, VkpiKolSearchHistoryItem
 import { asRecord, cleanText, display, type Row } from "./SmartKolInputPanel.helpers";
 import { recallDistributionView } from "./SmartKolInputPanel.evidence";
 import { localQualifiedSummary } from "./SmartKolInputPanel.LocalQualified";
-import { LocalQualifiedList, StrictQualifiedList } from "./SmartKolInputPanel.LocalQualifiedList";
+import {
+  LocalQualifiedList,
+  OnlineContentEvidenceNotice,
+  StrictQualifiedList,
+} from "./SmartKolInputPanel.LocalQualifiedList";
 import { onlineQualifiedSummaryFromSession } from "./SmartKolInputPanel.OnlineQualified";
 import {
   resultOriginBadgeOfKind,
@@ -24,6 +28,7 @@ import { recallTopItems, type SearchSessionProgress } from "./SmartKolInputPanel
 import { ProgressiveSearchStageCard } from "./SmartKolInputPanel.Progress";
 import { kolHumanDisplayName } from "../lib/kolIdentity";
 import { useSearchFeedbackLabeledCount } from "../../../../services/vkpi/searchFeedback-api";
+import { candidateGrowthSummary } from "./SmartKolInputPanel.CandidateEvidence";
 
 type SessionBanner = {
   tone: string;
@@ -225,7 +230,13 @@ function evaluationPercent(value: unknown): string {
   return `${percent.toFixed(1).replace(/\.0$/, "")}%`;
 }
 
-export function SearchEvaluationStatus({ evaluation }: { evaluation: Row }) {
+export function SearchEvaluationStatus({
+  evaluation,
+  rankingMode = "retrieval",
+}: {
+  evaluation: Row;
+  rankingMode?: "growth" | "retrieval";
+}) {
   const state = evaluationState(evaluation.state);
   const target = optionalCount(evaluation.target_count) ?? 180;
   // F4:本会话 👍/👎 最小标注计数(服务端回 labeled_count 优先,否则本地已保存条数)。
@@ -235,6 +246,7 @@ export function SearchEvaluationStatus({ evaluation }: { evaluation: Row }) {
   const dualReviewed = optionalCount(evaluation.dual_reviewed_count);
   const metrics = state === "shareable" ? asRecord(evaluation.metrics) : {};
   const version = cleanText(evaluation.gold_set_id ?? evaluation.dataset_version);
+  const currentSignalLabel = rankingMode === "growth" ? "增长候选分和证据置信度" : "检索相关度";
   const copy = state === "labeling"
     ? `人工标注 ${labeled}/${target}${dualTarget != null && dualReviewed != null ? ` · 双人复核 ${dualReviewed}/${dualTarget}` : ""}；完成前不发布准确率`
     : state === "shareable"
@@ -242,8 +254,8 @@ export function SearchEvaluationStatus({ evaluation }: { evaluation: Row }) {
       : state === "stale"
         ? "算法或数据版本已变化；历史评测需重跑，当前不发布准确率"
         : quickLabeled > 0
-          ? `已标注 ${quickLabeled} 条（卡片 👍/👎）；未达 Gold Set 门槛前只显示检索相关度，不发布准确率`
-          : "尚无真人标注；可在结果卡上用 👍/👎 标注，当前只显示检索相关度，不发布准确率";
+          ? `已标注 ${quickLabeled} 条（卡片 👍/👎）；未达 Gold Set 门槛前只显示${currentSignalLabel}，不发布准确率`
+          : `尚无真人标注；可在结果卡上用 👍/👎 标注，当前只显示${currentSignalLabel}，不发布准确率`;
   const tone = state === "shareable"
     ? "border-emerald-300/20 bg-emerald-400/[0.055] text-emerald-100"
     : state === "stale"
@@ -490,6 +502,11 @@ export function TextResultSection({
   const distribution = recallDistributionView(recallResult.candidate_set_distribution);
   const localStrict = localQualifiedSummary(recallResult);
   const onlineStrict = onlineQualifiedSummaryFromSession(searchSession);
+  const growthRankingActive = [
+    ...recallItems,
+    ...onlineStrict.rows.map((row) => row.item),
+    ...discoveryItems,
+  ].some((item) => candidateGrowthSummary(item as VkpiKolRecallItem).active);
   const totalStrictUnique = Math.min(60, localStrict.uniqueQualified + onlineStrict.uniqueQualified);
   const onlineStats = [
     onlineStrict.contractValid ? `${onlineStrict.selectionReady ? "终态" : "增量中"} r${onlineStrict.snapshotRevision}` : "",
@@ -593,7 +610,10 @@ export function TextResultSection({
           </div>
         ) : null}
         <SearchFilterDiagnostics diagnostics={(recallResult.diagnostics || {}) as Row} />
-        <SearchEvaluationStatus evaluation={asRecord(recallResult.evaluation_status)} />
+        <SearchEvaluationStatus
+          evaluation={asRecord(recallResult.evaluation_status)}
+          rankingMode={growthRankingActive ? "growth" : "retrieval"}
+        />
         <LocalQualifiedList
           result={recallResult}
           onOpen={openProductScopedItem}
@@ -608,9 +628,15 @@ export function TextResultSection({
           onFavorite={favoriteOne}
         />
         <div className="my-2 border-t border-emerald-300/10 pt-2 text-[10px] font-medium text-emerald-100">联网严格净新增名单</div>
+        <OnlineContentEvidenceNotice
+          count={onlineStrict.pendingContentEvidence}
+          followupStatus={onlineStrict.contentEvidenceFollowupStatus}
+          target={onlineStrict.target}
+        />
         <StrictQualifiedList
           summary={onlineStrict}
           lane="online"
+          terminal={onlineStrict.terminal}
           extraStats={onlineStats}
           onOpen={openProductScopedItem}
           selectedIds={pickedIds}

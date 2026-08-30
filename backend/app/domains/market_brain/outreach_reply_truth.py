@@ -15,6 +15,9 @@ from urllib.parse import urlsplit
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.market_brain import outreach_truth_bridge as bridge
+from app.domains.market_brain.outreach_reply_receipt_validation import (
+    verified_receipt_matches_binding,
+)
 from app.domains.platform import event_ledger, review_contract
 from app.domains.staff import is_manager_staff
 
@@ -23,7 +26,6 @@ EVENT_TYPE = "action_outreach_reply_verified"
 EVENT_SOURCE = "gtm.outreach_reply_truth"
 _REQUIRED_TABLES = (TABLE, bridge.TABLE, "vkpi_messages", "vkpi_event_ledger")
 CANDIDATE_TTL_SECONDS = 900
-
 logger = get_logger(__name__)
 
 
@@ -730,67 +732,12 @@ def verified_receipt_for_binding(
         receipt = _load_receipt(conn, "binding_id=?", (int(binding["id"]),))
         if receipt is None or not _receipt_proof_valid(conn, receipt):
             return None
-        first = bridge._dt(binding.get("first_outbound_at"))
-        end = bridge._dt(binding.get("observation_end_at"))
-        verified = bridge._dt(receipt.get("verified_at"))
-        candidate_observed = bridge._dt(receipt.get("candidate_observed_at"))
-        if (
-            str(receipt.get("binding_fingerprint") or "")
-            != str(binding.get("binding_fingerprint") or "")
-            or bridge._dt(receipt.get("first_outbound_at")) != first
-            or bridge._dt(receipt.get("observation_end_at")) != end
-            or first is None or end is None or verified is None or candidate_observed is None
-            or not end <= candidate_observed <= verified
-            or len(str(receipt.get("review_candidate_sha256") or "")) != 64
+        if not verified_receipt_matches_binding(
+            receipt,
+            binding,
+            dt=bridge._dt,
+            channel=bridge._channel,
         ):
-            return None
-        candidate = _loads(receipt.get("review_candidate_json"))
-        candidate_first = candidate.get("first_outbound")
-        if (
-            int(candidate.get("action_inbox_id") or 0)
-            != int(binding.get("action_inbox_id") or 0)
-            or str(candidate.get("prediction_run_id") or "")
-            != str(binding.get("prediction_run_id") or "")
-            or int(candidate.get("project_id") or 0) != int(binding.get("project_id") or 0)
-            or int(candidate.get("kol_pool_id") or 0)
-            != int(binding.get("kol_pool_id") or 0)
-            or int(candidate.get("kol_id") or 0) != int(binding.get("kol_id") or 0)
-            or str(candidate.get("product_sku") or "")
-            != str(binding.get("product_sku") or "")
-            or bridge._channel(candidate.get("channel"))
-            != bridge._channel(binding.get("channel"))
-            or str(candidate.get("approval_snapshot_sha256") or "")
-            != str(binding.get("approval_snapshot_sha256") or "")
-            or bridge._dt(candidate.get("action_approved_at"))
-            != bridge._dt(binding.get("action_approved_at"))
-            or bridge._dt(candidate.get("observation_start_at"))
-            != bridge._dt(binding.get("observation_start_at"))
-            or not isinstance(candidate_first, dict)
-            or int(candidate_first.get("message_id") or 0)
-            != int(binding.get("first_outbound_message_id") or 0)
-            or bridge._dt(candidate_first.get("created_at"))
-            != bridge._dt(binding.get("first_outbound_created_at"))
-        ):
-            return None
-        outcome = str(receipt.get("outcome") or "")
-        captured = bridge._dt(receipt.get("inbound_captured_at"))
-        created = bridge._dt(receipt.get("inbound_created_at"))
-        if outcome == "replied":
-            if (
-                receipt.get("inbound_message_id") is None
-                or captured is None or created is None
-                or not first < captured <= created <= end
-                or created > verified
-            ):
-                return None
-        elif outcome == "no_reply":
-            if (
-                receipt.get("inbound_message_id") is not None
-                or captured is not None or created is not None
-                or verified < end
-            ):
-                return None
-        else:
             return None
         return receipt
     except Exception:

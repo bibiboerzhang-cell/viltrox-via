@@ -1,8 +1,14 @@
+import json
+from datetime import datetime, timezone
+
 import pytest
 
-from app.domains.kol import lookup as lookup_domain
 from app.domains.access import scope
 from app.domains.audit import service as audit_service
+from app.domains.kol import lookup as lookup_domain
+from app.domains.kol import lookup_tracking
+from app.services.jobs import queue_common
+from app.shared import vkpi_utils
 
 
 @pytest.fixture(autouse=True)
@@ -27,6 +33,158 @@ def isolate_lookup_tracking(monkeypatch):
             return None
 
     monkeypatch.setattr(lookup_domain, "LookupTracker", NoopLookupTracker)
+
+
+def test_shared_utcnow_iso_matches_queue_timestamp_contract(monkeypatch):
+    """The lower-layer helper preserves the queue timestamp's exact wire format."""
+
+    class FrozenDateTime:
+        @classmethod
+        def now(cls, tz):
+            assert tz is timezone.utc
+            return datetime(2026, 8, 29, 12, 34, 56, 987654, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(queue_common, "datetime", FrozenDateTime)
+    monkeypatch.setattr(vkpi_utils, "datetime", FrozenDateTime)
+
+    expected = "2026-08-29T12:34:56Z"
+    assert queue_common.utcnow() == expected
+    assert vkpi_utils.utcnow_iso() == expected
+
+
+def test_lookup_tracker_preserves_session_and_ledger_timestamp_outputs(monkeypatch):
+    timestamps = iter(
+        (
+            "2026-08-29T12:00:01Z",
+            "2026-08-29T12:00:02Z",
+            "2026-08-29T12:00:03Z",
+        )
+    )
+    executions: list[tuple[str, tuple]] = []
+    session_creates: list[dict] = []
+    session_updates: list[dict] = []
+
+    class RecordingConnection:
+        commits = 0
+
+        def execute(self, sql, params):
+            executions.append((" ".join(sql.split()), tuple(params)))
+            return self
+
+        def commit(self):
+            self.commits += 1
+
+    connection = RecordingConnection()
+    staff = {"id": 7, "staff_id": 7, "user_id": 11}
+    body = {
+        "platform": "instagram",
+        "handle": "creator",
+        "scan_account": True,
+        "product_sku": "AF35",
+    }
+
+    monkeypatch.setattr(lookup_tracking, "utcnow_iso", lambda: next(timestamps))
+    monkeypatch.setattr(lookup_tracking, "get_conn", lambda: connection)
+    monkeypatch.setattr(
+        lookup_tracking.search_sessions,
+        "create_session",
+        lambda **kwargs: session_creates.append(kwargs) or {"id": 73},
+    )
+    monkeypatch.setattr(
+        lookup_tracking.search_sessions,
+        "update_session_result_summary",
+        lambda session_id, **kwargs: session_updates.append({"session_id": session_id, **kwargs}),
+    )
+
+    tracker = lookup_tracking.LookupTracker(body=body, staff=staff)
+    tracker.task_id = "kol_lookup_characterization"
+
+    assert tracker.open() == 73
+    tracker.stage(lookup_tracking.STAGE_THINKING)
+    tracker.finish(
+        status="ready",
+        result={
+            "kol": {"id": 19},
+            "scan_result": {"content_count": 2},
+            "analysis_result": {"status": "ready"},
+        },
+    )
+
+    assert session_creates == [
+        {
+            "query_text": "instagram/creator",
+            "query_type": "text_recall",
+            "source": "kol_lookup",
+            "input_payload": {
+                "platform": "instagram",
+                "handle": "creator",
+                "scan_account": True,
+                "product_sku": "AF35",
+                "task_id": "kol_lookup_characterization",
+            },
+            "status": "running",
+            "staff": staff,
+        }
+    ]
+    assert session_updates == [
+        {
+            "session_id": 73,
+            "status": "ready",
+            "summary_patch": {
+                "kind": "kol_lookup",
+                "task_id": "kol_lookup_characterization",
+            },
+        }
+    ]
+    assert connection.commits == 3
+
+    insert_params = executions[0][1]
+    assert insert_params[:5] == (
+        "kol_lookup_characterization",
+        "kol_lookup",
+        0,
+        11,
+        "processing",
+    )
+    assert json.loads(insert_params[5]) == {
+        "source": "vkpi",
+        "search_session_id": "73",
+        "search_session_stage": "search",
+        "query_type": "text_recall",
+        "platform": "instagram",
+        "handle": "creator",
+        "user_id": 11,
+        "staff_id": 7,
+        "created_by_user_id": 11,
+    }
+    assert insert_params[6:] == (
+        0,
+        "search",
+        "instagram/creator",
+        "2026-08-29T12:00:01Z",
+        "2026-08-29T12:00:01Z",
+        "2026-08-29T12:00:01Z",
+    )
+
+    assert executions[1][1] == (
+        "processing",
+        "thinking",
+        "2026-08-29T12:00:02Z",
+        "kol_lookup_characterization",
+    )
+    close_params = executions[2][1]
+    assert close_params[:4] == ("done", "summarizing", "kol_lookup", "")
+    assert json.loads(close_params[4]) == {
+        "session_id": 73,
+        "scan_result": {"content_count": 2},
+        "analysis_result": {"status": "ready"},
+        "kol_id": 19,
+    }
+    assert close_params[5:] == (
+        "2026-08-29T12:00:03Z",
+        "2026-08-29T12:00:03Z",
+        "kol_lookup_characterization",
+    )
 
 
 @pytest.mark.anyio

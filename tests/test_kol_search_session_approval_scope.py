@@ -10,6 +10,9 @@ from app.domains.kol import search_sessions
 from app.domains.kol.search_sessions_approval import _strict_gate_passed
 from app.domains.kol.search_sessions_attach import _safe_gate_evidence
 from app.domains.projects import workflow_projects
+from app.services.projects.creator_lifecycle_adapters import (
+    DEFAULT_SEARCH_SESSION_DRAFT_PORT,
+)
 
 
 class _Cursor:
@@ -265,6 +268,7 @@ def test_project_draft_ignores_request_body_candidate_override(
         51,
         {"kol_pool_ids": [999]},
         staff={"id": 7},
+        search_session_port=DEFAULT_SEARCH_SESSION_DRAFT_PORT,
     )
 
     assert attached["kol_pool_ids"] == [11]

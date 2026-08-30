@@ -387,12 +387,25 @@ def _is_bio_irrelevant(item: dict[str, Any]) -> bool:
 
 
 def _candidate_blob(item: dict[str, Any]) -> str:
-    """候选自身内容拼接(sample_title + channel_name + handle + bio),小写。绝不含 search_query(查询词会自命中)。
+    """候选自身公开内容拼接后转小写。绝不含 search_query(查询词会自命中)。
 
     bio 为 K2 富化新增(YT channels.list 频道简介 / IG profile-scraper biography):真摄影师
-    的 bio 几乎必含 photographer/filmmaker 等信号,判据文本更真实;无 bio 的 item 行为不变。"""
+    的 bio 几乎必含 photographer/filmmaker 等信号。provider 已返回的简介/字幕/视觉摘要
+    也是候选自己的内容证据,标题没有关键词时不能在前置闸被误丢;字段缺失时行为不变。"""
     return " ".join(
-        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle", "bio")
+        str(item.get(k) or "")
+        for k in (
+            "sample_title",
+            "channel_name",
+            "handle",
+            "bio",
+            "sample_description",
+            "sample_caption",
+            "sample_transcript",
+            "subtitle",
+            "subtitles",
+            "visual_summary",
+        )
     ).lower()
 
 

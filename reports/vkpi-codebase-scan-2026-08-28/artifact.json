@@ -1,0 +1,431 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "V-KPI 全仓代码、算法与自学习成熟度扫描报告",
+    "description": "当前工作树的结构、规模、算法关系、并行化机会、自学习可用性及 L1–L7 路线审计。",
+    "generatedAt": "2026-08-29T02:39:56Z",
+    "sources": [
+      {
+        "id": "worktree_scan",
+        "label": "Current worktree static scan",
+        "path": "reports/vkpi-codebase-scan-2026-08-28/worktree_scan_snapshot.sql",
+        "query": {
+          "engine": "git + CPython AST",
+          "language": "Python/Shell",
+          "description": "Inventory tracked and relevant untracked source, count physical lines and UTF-8 characters, parse Python ASTs, and build internal import graphs.",
+          "executed_at": "2026-08-29T02:39:56Z",
+          "filters": [
+            "Exclude dependencies, build output, caches, runtime output, reports, media, uploads, exports, backups, and temporary files",
+            "Keep ignored auxiliary prototypes separate from the main-engineering headline",
+            "Current worktree including uncommitted changes"
+          ],
+          "metric_definitions": [
+            "Physical lines use splitlines()",
+            "Characters are UTF-8 Unicode code points including line breaks",
+            "Algorithm families are independent business decisions or transformations, not function count",
+            "Complexity proxy is not formal cyclomatic complexity"
+          ]
+        }
+      },
+      {
+        "id": "architecture_contract",
+        "label": "Repository architecture contract",
+        "path": "docs/vkpi/domain-os-architecture.md",
+        "query": {
+          "engine": "filesystem",
+          "language": "Markdown",
+          "description": "Review intended backend domain/platform boundaries and frontend thin-shell rules.",
+          "executed_at": "2026-08-29T02:39:56Z"
+        }
+      },
+      {
+        "id": "learning_tests",
+        "label": "Targeted learning and model contract tests",
+        "path": "reports/vkpi-codebase-scan-2026-08-28/learning_tests_snapshot.sql",
+        "query": {
+          "engine": "pytest",
+          "language": "Shell",
+          "description": "Run 13 targeted test modules covering search relevance evaluation, recommendation learning, rerank holdout, point-in-time export, vertical scoring, and Gemini final-v1 quality boundaries.",
+          "executed_at": "2026-08-29T02:39:56Z",
+          "filters": ["Live PostgreSQL tests disabled by default"],
+          "metric_definitions": ["Pass count proves local code contracts only; it does not prove live data quality or business outcomes"]
+        }
+      },
+      {
+        "id": "prod_learning_snapshot",
+        "label": "Production-sync learning snapshot 20260828T173053Z",
+        "path": "reports/vkpi-codebase-scan-2026-08-28/prod_learning_snapshot.sql",
+        "query": {
+          "engine": "PostgreSQL pg_restore read-only inspection",
+          "language": "SQL",
+          "description": "Count recommendation, outcome, feedback, rerank, model, evaluation, experiment, skill-review, and VIA learning rows from the point-in-time production-sync dump.",
+          "executed_at": "2026-08-29T02:39:56Z",
+          "tables_used": [
+            "public.vkpi_kol_recommendations",
+            "public.vkpi_recommendation_outcomes",
+            "public.vkpi_recommendation_feedback",
+            "public.vkpi_recommendation_feature_snapshot",
+            "public.vkpi_recommendation_rerank_model",
+            "public.vkpi_training_exports",
+            "public.vkpi_gtm_outcomes",
+            "public.vkpi_eval_runs",
+            "public.vkpi_eval_results",
+            "public.vkpi_model_registry",
+            "public.vkpi_scoring_experiments",
+            "public.vkpi_bandit_arms",
+            "public.vkpi_skill_runs"
+          ],
+          "metric_definitions": ["Counts are point-in-time snapshot observations; recommendation rows are not training labels"]
+        }
+      }
+    ],
+    "cards": [
+      {
+        "id": "scale_card",
+        "description": "正式主工程规模及字符数",
+        "dataset": "summary_metrics",
+        "sourceId": "worktree_scan",
+        "metrics": [
+          {"label": "主工程文件", "field": "main_files", "format": "compact"},
+          {"label": "主工程物理行", "field": "main_lines", "format": "compact"},
+          {"label": "UTF-8 字符", "field": "main_characters", "format": "compact"},
+          {"label": "词元代理数", "field": "token_proxy", "format": "compact"}
+        ]
+      },
+      {
+        "id": "algorithm_card",
+        "description": "算法族、循环依赖及复杂度风险",
+        "dataset": "summary_metrics",
+        "sourceId": "worktree_scan",
+        "metrics": [
+          {"label": "算法族", "field": "algorithm_families", "format": "number"},
+          {"label": "后端循环 SCC", "field": "backend_cycles", "format": "number"},
+          {"label": "前端循环 SCC", "field": "frontend_cycles", "format": "number"},
+          {"label": "复杂度代理≥50", "field": "functions_complexity_50", "format": "number"}
+        ]
+      },
+      {
+        "id": "learning_card",
+        "description": "当前自学习成熟度",
+        "dataset": "summary_metrics",
+        "sourceId": "prod_learning_snapshot",
+        "metrics": [
+          {"label": "结构成熟度", "field": "learning_structure_level", "format": "number"},
+          {"label": "数据成熟度", "field": "learning_data_level", "format": "number"}
+        ]
+      },
+      {
+        "id": "test_card",
+        "description": "定向学习/模型契约验证",
+        "dataset": "summary_metrics",
+        "sourceId": "learning_tests",
+        "metrics": [
+          {"label": "定向测试通过", "field": "targeted_tests_passed", "format": "number"},
+          {"label": "跳过", "field": "targeted_tests_skipped", "format": "number"},
+          {"label": "警告", "field": "targeted_tests_warning", "format": "number"}
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "code_area_chart",
+        "title": "可执行与测试源码行数分布",
+        "subtitle": "后端、测试、前端和运维脚本合计占该口径 97.4%，优化应集中在这四处。",
+        "intent": "comparison",
+        "question": "当前工作树的源码量主要集中在哪些区域？",
+        "rationale": "分类柱状图最直接展示各工程区域的物理行数差异。",
+        "type": "bar",
+        "dataset": "code_by_area",
+        "sourceId": "worktree_scan",
+        "encodings": {
+          "x": {"field": "area", "type": "nominal", "label": "工程区域"},
+          "y": {"field": "lines", "type": "quantitative", "label": "物理行", "format": "compact"},
+          "tooltip": [
+            {"field": "files", "type": "quantitative", "label": "文件数"},
+            {"field": "share_pct", "type": "quantitative", "label": "行数占比", "format": "percent"}
+          ]
+        },
+        "valueFormat": "compact",
+        "layout": "full",
+        "maxRows": 6,
+        "compatibleTypes": ["bar", "leaderboard"],
+        "surface": {"palette": {"kind": "singleRoot", "name": "blue"}}
+      }
+    ],
+    "tables": [
+      {
+        "id": "language_table",
+        "title": "语言规模",
+        "subtitle": "可执行、测试、样式和 schema 口径；JSON/YAML 配置另算。",
+        "dataset": "language_breakdown",
+        "sourceId": "worktree_scan",
+        "layout": "full",
+        "density": "dense",
+        "defaultSort": {"field": "lines", "direction": "desc"},
+        "columns": [
+          {"field": "language", "label": "语言", "type": "text"},
+          {"field": "files", "label": "文件", "format": "number"},
+          {"field": "lines", "label": "物理行", "format": "compact"},
+          {"field": "characters", "label": "UTF-8 字符", "format": "compact"},
+          {"field": "share_pct", "label": "行数占比", "format": "percent"}
+        ]
+      },
+      {
+        "id": "algorithm_table",
+        "title": "44 个算法族与优化方向",
+        "subtitle": "数量是独立业务决策/数据变换族，不是函数数量。",
+        "dataset": "algorithm_categories",
+        "sourceId": "worktree_scan",
+        "layout": "full",
+        "density": "spacious",
+        "defaultSort": {"field": "count", "direction": "desc"},
+        "columns": [
+          {"field": "category", "label": "类别", "type": "text"},
+          {"field": "count", "label": "数量", "format": "number"},
+          {"field": "current_examples", "label": "当前主要能力", "type": "text"},
+          {"field": "upgrade_direction", "label": "更强的方向", "type": "text"}
+        ]
+      },
+      {
+        "id": "optimization_table",
+        "title": "算法与结构优化清单",
+        "subtitle": "P0 先修精准度和可证性，P1 再做速度、成本和共用内核。",
+        "dataset": "optimization_priorities",
+        "sourceId": "worktree_scan",
+        "layout": "full",
+        "density": "spacious",
+        "defaultSort": {"field": "rank", "direction": "asc"},
+        "columns": [
+          {"field": "rank", "label": "顺序", "format": "number"},
+          {"field": "priority", "label": "级别", "type": "text"},
+          {"field": "problem", "label": "当前问题", "type": "text"},
+          {"field": "solution", "label": "目标方案", "type": "text"},
+          {"field": "impact", "label": "直接价值", "type": "text"},
+          {"field": "parallelizable", "label": "可并行", "type": "text"}
+        ]
+      },
+      {
+        "id": "coupling_table",
+        "title": "串行、并行与循环依赖",
+        "subtitle": "语法和 import 图是静态风险代理，实施前还要用 trace/profile 确认。",
+        "dataset": "coupling_summary",
+        "sourceId": "worktree_scan",
+        "layout": "full",
+        "density": "spacious",
+        "defaultSort": {"field": "rank", "direction": "asc"},
+        "columns": [
+          {"field": "rank", "label": "顺序", "format": "number"},
+          {"field": "scope", "label": "范围", "type": "text"},
+          {"field": "evidence", "label": "静态证据", "type": "text"},
+          {"field": "judgement", "label": "判断", "type": "text"},
+          {"field": "action", "label": "处置", "type": "text"}
+        ]
+      },
+      {
+        "id": "learning_state_table",
+        "title": "自学习现状：代码骨架已有，真实标签未起量",
+        "subtitle": "2026-08-28 生产同步快照的只读观测；不代表快照之后的线上状态。",
+        "dataset": "learning_state",
+        "sourceId": "prod_learning_snapshot",
+        "layout": "full",
+        "density": "spacious",
+        "defaultSort": {"field": "rank", "direction": "asc"},
+        "columns": [
+          {"field": "rank", "label": "顺序", "format": "number"},
+          {"field": "chain", "label": "学习链", "type": "text"},
+          {"field": "observed", "label": "快照观测", "type": "text"},
+          {"field": "status", "label": "判断", "type": "text"},
+          {"field": "gate", "label": "下一道闸", "type": "text"}
+        ]
+      },
+      {
+        "id": "roadmap_table",
+        "title": "L1–L7 发展路线",
+        "subtitle": "当前定位：L2 代码骨架 / L1.5 数据成熟度；可建 L3 Shadow，不可进 L4 Treatment。",
+        "dataset": "learning_roadmap",
+        "sourceId": "prod_learning_snapshot",
+        "layout": "full",
+        "density": "spacious",
+        "defaultSort": {"field": "level", "direction": "asc"},
+        "columns": [
+          {"field": "level", "label": "等级", "type": "text"},
+          {"field": "name", "label": "名称", "type": "text"},
+          {"field": "entry", "label": "进入条件", "type": "text"},
+          {"field": "capability", "label": "核心能力", "type": "text"},
+          {"field": "exit_gate", "label": "升级闸", "type": "text"},
+          {"field": "current", "label": "当前", "type": "text"}
+        ]
+      }
+    ],
+    "blocks": [
+      {"id": "title", "type": "markdown", "body": "# V-KPI 全仓代码、算法与自学习成熟度扫描报告"},
+      {
+        "id": "technical_summary",
+        "type": "markdown",
+        "body": "## 技术摘要\n\nV-KPI 已是一个大型模块化单体，不是一个简单搜人工具。正式主工程共 **4,699 个文件、1,142,341 行、44,775,674 个 UTF-8 字符**；算法审计归并为 **44 个算法族**。最大的风险不是算法数量不够，而是判定、去重、词表、评分和模型治理的分散，以及高复杂函数和循环依赖已开始抵消开发速度。\n\n自学习建议定位为 **L2 代码骨架 / L1.5 数据成熟度**：可以启动只读 Shadow Learning，但不能自动修改线上排序、资格闸、模型路由或外联决策。"
+      },
+      {"id": "metric_strip", "type": "metric-strip", "cardIds": ["scale_card", "algorithm_card", "learning_card", "test_card"]},
+      {
+        "id": "scope",
+        "type": "markdown",
+        "sourceId": "worktree_scan",
+        "body": "## 口径与边界\n\n报告同时保留两个口径：**主工程**用于向管理者报告正式规模；**可执行/测试/样式/schema** 口径用于算法和复杂度比较，不含 JSON/YAML 数据与配置。另有 `.integration` 和 `video-production-platform` 共 15 个文件、6,251 行被 Git 忽略，本报告只将其视为辅助原型，不视为已进入产品链。\n\n本轮是当前脏工作树快照：它包含未提交和未跟踪源码，因此最接近你现在正在做的版本，但不等于已提交、已部署或已线上验收。"
+      },
+      {"id": "area_chart_block", "type": "chart", "chartId": "code_area_chart"},
+      {"id": "language_table_block", "type": "table", "tableId": "language_table"},
+      {
+        "id": "structure",
+        "type": "markdown",
+        "sourceId": "worktree_scan",
+        "body": "## 完整代码结构\n\n核心是 **FastAPI + React/Vite + PostgreSQL + Redis Streams/Worker + Qdrant + 多 LLM/Gemini Provider** 的模块化单体。后端有 58 个业务域包、26 个 service 包、180 个 router 模块和 50 个 worker 模块；前端有 45 个页面组件、494 个组件模块和 92 个 service 模块；数据演进含 518 个 SQL 迁移文件。\n\n```text\nV-KPI\n├─ backend/app  → domains / services / api / platform / workers / db\n│  └─ domains/kol  → 280 files, 109,356 lines; largest business domain\n├─ frontend/src → components / services / domains / routes\n│  └─ cockpit + pages → 198,023 lines; 78.0% of frontend/src\n├─ tests        → 1,039 files, 271,776 lines across root/backend/frontend\n├─ scripts      → 139,361 lines; deployment script peaks at 5,091 lines\n├─ migrations   → 518 SQL files, 18,775 lines\n└─ auxiliary    → ignored .integration + video-production-platform\n```\n\nKOL 域和前端 cockpit/pages 是业务结构优化的主战场；13.9 万行脚本表明运维链路也是正式产品风险，不能只看前后端。"
+      },
+      {"id": "algorithm_table_block", "type": "table", "tableId": "algorithm_table"},
+      {
+        "id": "pipeline",
+        "type": "markdown",
+        "sourceId": "worktree_scan",
+        "body": "## 算法如何串联\n\n主决策链是：**产品/SKU 防串词 → QueryCell 规划与校验 → 本地/在线召回 → 词法+向量 RRF 融合 → 证据补齐 → 严格资格闸 → 规范身份去重 → 排序/配额 → 持久化**。这条决策链不能整体并行；可以并行的是独立 QueryCell、平台/查询变体、候选人视频补数、字幕预筛和多 SKU 离线评测。\n\n当前本地 QueryCell 仍会逐格重跑 recall，词法召回与远程 embedding/Qdrant 也主要串行；这是第一批可靠的速度收益点。但供应商多轮游标/预算链、Gemini 上传→ACTIVE→生成→校验→缓存链、最终去重/配额/事务写入必须保持有序。"
+      },
+      {"id": "optimization_table_block", "type": "table", "tableId": "optimization_table"},
+      {"id": "coupling_table_block", "type": "table", "tableId": "coupling_table"},
+      {
+        "id": "architecture_risk",
+        "type": "markdown",
+        "sourceId": "architecture_contract",
+        "body": "## 架构风险\n\n预期边界是「业务行为归 domains、平台能力归 platform，platform 不依赖业务域；前端 page shell 保持薄」。实际静态图中，后端已有 29 个循环 SCC、111 个模块参与循环，最大循环横跨 auth/security/identity/runtime；KOL 视频分析、Apify worker、成本/项目/预算和调度也有循环。前端有 6 个循环 SCC、28 个模块参与循环。\n\n约 113 个源码文件超过 900 行，并且密集出现 998/999/1000 行文件，这可能表示当前 line guard 促成了「切文件」，但没有真正「切责任」。建议将行数规则升级为依赖边界、函数复杂度、公共内核重复和契约测试的组合闸。"
+      },
+      {
+        "id": "learning_tests_summary",
+        "type": "markdown",
+        "sourceId": "learning_tests",
+        "body": "## 自学习代码验证\n\n定向回归覆盖搜索相关性评测、推荐 outcome、rerank holdout、PIT 训练导出、vertical scoring 和 Gemini final-v1 质量边界，结果为 **163 passed, 6 skipped, 1 warning**。跳过项是默认禁用的真 PostgreSQL/实时服务测试；警告来自 Google GenAI 在 Python 3.14 下的弃用 API。\n\n这证明 feature snapshot、outcome ledger、PIT export、holdout、shadow gate 和 rule_v0 回退的代码契约存在，不证明真实训练数据、模型提升、云端任务或业务结果已通过。"
+      },
+      {"id": "learning_state_block", "type": "table", "tableId": "learning_state_table"},
+      {
+        "id": "go_no_go",
+        "type": "markdown",
+        "sourceId": "prod_learning_snapshot",
+        "body": "## 自学习 Go / No-Go\n\n**GO：**收集真实员工反馈，产生 challenger rank，进行时间+创作者分组 holdout，在管理端展示「如果采用新模型会怎样」，但不改变员工实际看到的顺序。\n\n**NO-GO：**自动 activated、线上 treatment、bandit 调权、LLM 自选模型、自动外联/花费/改项目状态，以及将「评估任务运行成功」当成「算法质量通过」。\n\n下一阶段不需要先换更大的模型；需要先补展示事件、分层标签、真实 Gold Set、时间+实体分组 holdout、审批/回滚治理和多切片评估。"
+      },
+      {"id": "roadmap_table_block", "type": "table", "tableId": "roadmap_table"},
+      {
+        "id": "missing",
+        "type": "markdown",
+        "sourceId": "worktree_scan",
+        "body": "## 你还缺的东西\n\n1. **不可变展示事件**：记录 session/query cell/SKU/市场/排名/证据层/算法版本，否则没动作不能当负例。\n2. **统一 QualificationVerdict 内核**：本地和在线的市场、语言、粉丝、活跃、产品场景和市场推进判定不再各写一套。\n3. **pending evidence 生命周期**：缺证→补字幕/正文/真实近期视频→重判→版本差异。\n4. **规范创作者/视频身份**：持久化唯一索引，解决跨平台、分页和内容墙重复。\n5. **真实近期内容样本**：市场推进能力不能只用“搜索命中的视频”代替该 KOL 真实近期发布。\n6. **模型统一注册和回滚**：candidate/shadow/canary/live/retired、审核人、数据/特征/代码 hash、champion/previous 指针和 kill switch。\n7. **可量化性能基线**：每阶段耗时、缓存命中、provider 错误、单合格候选人成本、p95 延迟和队列等待。\n\n这七项比「换更大模型」更能直接提高搜索精准度、速度、结果可信度和后续自学习的上限。"
+      },
+      {
+        "id": "next_steps",
+        "type": "markdown",
+        "sourceId": "worktree_scan",
+        "body": "## 下一轮执行顺序\n\n**第 1 批（可立即开始）：**冻结 6–8 个真实业务 QueryCell Gold Set；补展示事件与 pending-evidence 任务；统一 QualificationVerdict、canonical identity 和 score provenance；将市场推进样本切换为候选人真实近期 3–5 条内容。\n\n**第 2 批（性能收益）：**本地 QueryCell 共享候选池；批量 embedding/Qdrant；词法召回与远程向量召回安全并行；只对歧义/高价值候选人升级 Gemini；用真实 stage timing 而不是固定常量调并发。\n\n**第 3 批（自学习）：**满足 ≥200 条真实反馈、正负各 ≥50、≥5 SKU、≥3 平台/粉丝段后，仅启 Shadow；连续 4 周且 ≥500 次真实展示，P@10/nDCG@10 不低于 rule baseline、strict violation=0、p95 延迟增幅≤10% 后，才申请 L4 Canary。"
+      },
+      {
+        "id": "limitations",
+        "type": "markdown",
+        "sourceId": "worktree_scan",
+        "body": "## 验证边界\n\n本轮没有运行全仓测试、覆盖率、变异测试、负载测试、云端部署或浏览器验收。静态循环、复杂度和串行 await 是定位候选点的证据，不是已经证明的线上瓶颈。生产学习数据是点时快照，不是当前云端状态的持续证明。\n\n因此报告能回答「代码现在长什么样、风险和升级顺序是什么」，不代表「新算法已上线」或「员工反馈已全部完成」。"
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## 还需回答的问题\n\n- 现有 113 个超 900 行大文件中，哪些是产品热路径，哪些只是冷门管理/种子数据？\n- 52 个 loop-await 站点中，哪些在真实请求中占 p95 时间？\n- 员工是否真的看到并操作过候选人，还是“没动作”只是未曝光？\n- 多 SKU Gold Set 中，精准度、首个合格人用时、成本和重复率相比旧搜索到底改善多少？\n- `.integration` 和视频原型是否要成为正式产品？如果是，需要明确版本控制、CI、安全和部署边界。"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-29T02:39:56Z",
+    "status": "ready",
+    "datasets": {
+      "summary_metrics": [
+        {
+          "main_files": 4699,
+          "main_lines": 1142341,
+          "main_characters": 44775674,
+          "token_proxy": 4342254,
+          "executable_files": 4572,
+          "executable_lines": 1092211,
+          "algorithm_families": 44,
+          "backend_cycles": 29,
+          "frontend_cycles": 6,
+          "functions_complexity_50": 115,
+          "learning_structure_level": 2,
+          "learning_data_level": 1.5,
+          "targeted_tests_passed": 163,
+          "targeted_tests_skipped": 6,
+          "targeted_tests_warning": 1
+        }
+      ],
+      "code_by_area": [
+        {"area": "后端产品", "files": 1536, "lines": 444271, "share_pct": 0.4068, "scope": "executable/test/style/schema"},
+        {"area": "测试", "files": 1030, "lines": 271414, "share_pct": 0.2485, "scope": "executable/test/style/schema"},
+        {"area": "前端产品", "files": 928, "lines": 210366, "share_pct": 0.1926, "scope": "executable/test/style/schema"},
+        {"area": "运维脚本", "files": 513, "lines": 138123, "share_pct": 0.1265, "scope": "executable/test/style/schema"},
+        {"area": "SQL 迁移", "files": 518, "lines": 18775, "share_pct": 0.0172, "scope": "executable/test/style/schema"},
+        {"area": "其他/工具", "files": 47, "lines": 9262, "share_pct": 0.0085, "scope": "executable/test/style/schema"}
+      ],
+      "language_breakdown": [
+        {"language": "Python", "files": 2813, "lines": 802514, "characters": 31097828, "share_pct": 0.7348},
+        {"language": "TSX", "files": 667, "lines": 161405, "characters": 7031429, "share_pct": 0.1478},
+        {"language": "TypeScript", "files": 410, "lines": 60666, "characters": 2287475, "share_pct": 0.0555},
+        {"language": "CSS", "files": 83, "lines": 31964, "characters": 875210, "share_pct": 0.0293},
+        {"language": "SQL", "files": 519, "lines": 19228, "characters": 859128, "share_pct": 0.0176},
+        {"language": "Shell", "files": 59, "lines": 12304, "characters": 508784, "share_pct": 0.0113},
+        {"language": "JavaScript", "files": 12, "lines": 3467, "characters": 174688, "share_pct": 0.0032},
+        {"language": "HTML", "files": 4, "lines": 433, "characters": 65493, "share_pct": 0.0004},
+        {"language": "Rust", "files": 2, "lines": 165, "characters": 5070, "share_pct": 0.0002},
+        {"language": "Build files", "files": 3, "lines": 65, "characters": 1799, "share_pct": 0.0001}
+      ],
+      "algorithm_categories": [
+        {"category": "确定性/可复现", "count": 18, "current_examples": "QueryCell 合约、词法/向量召回、RRF、证据聚合、严格资格、去重、排序、趋势差值", "upgrade_direction": "共用 QualificationVerdict、canonical identity、feature registry 和 score provenance"},
+        {"category": "启发式/规则", "count": 11, "current_examples": "SKU/场景词表、查询模板、角色规则、阈值、adoption boost、配额和抓取上限", "upgrade_direction": "版本化 ontology registry；保持资格硬闸确定性，只对软排序做学习"},
+        {"category": "并发/调度/控制", "count": 8, "current_examples": "QueryCell fan-out、YouTube 补数、字幕线程、模型容错、幂等队列、刷新调度、预算/授权", "upgrade_direction": "批量 embedding/Qdrant、动态并发、stage timing、成本/健康度联合调度"},
+        {"category": "模型/LLM/可训练", "count": 7, "current_examples": "LLM 规划、Embedding、LLM 重排、Gemini 视频、关键帧交叉判断、GPT 预筛、Logistic rerank", "upgrade_direction": "不确定性路由、时间+实体 holdout、shadow/canary 治理，再考虑 two-tower/cross-encoder"}
+      ],
+      "optimization_priorities": [
+        {"rank": 1, "priority": "P0", "problem": "市场推进能力使用搜索命中样本，存在搜索偏差", "solution": "头部候选人独立拉取 3–5 条真实近期内容再评估", "impact": "精准度/可信度", "parallelizable": "候选人间可"},
+        {"rank": 2, "priority": "P0", "problem": "缺证候选人没有统一补证→重判生命周期", "solution": "pending_evidence 任务、证据版本和 verdict diff", "impact": "召回/判定完整性", "parallelizable": "补证可，重判顺序化"},
+        {"rank": 3, "priority": "P0", "problem": "训练集内 log-loss 可以影响模型 activated", "solution": "temporal+creator holdout → signed eval → 人审 → shadow → canary", "impact": "模型安全", "parallelizable": "离线评测可"},
+        {"rank": 4, "priority": "P0", "problem": "缺少多 SKU 真人盲标 Gold Set", "solution": "6–8 个真实 QueryCell × Top30 × 两人标注，处理分歧", "impact": "可重复比较新旧搜索", "parallelizable": "标注/多 SKU 可"},
+        {"rank": 5, "priority": "P1", "problem": "本地 QueryCell 逐格重跑 recall，词法和向量主要串行", "solution": "共享候选池、批量 embedding/Qdrant、安全并行召回后统一 RRF", "impact": "首屏速度/成本", "parallelizable": "可"},
+        {"rank": 6, "priority": "P1", "problem": "去重、词表、百分位、缺失值评分和多层 score 分散", "solution": "canonical identity + ontology registry + common scoring kernel + feature layer ownership", "impact": "一致性/可维护性", "parallelizable": "可分域，合并需顺序"},
+        {"rank": 7, "priority": "P1", "problem": "Gemini 分析容易对全量视频使用高成本路径", "solution": "标题/正文/字幕预筛 → 歧义/高价值才升级全视频 → 争议样本关键帧交叉验证", "impact": "质量/速度/成本", "parallelizable": "候选人间可"}
+      ],
+      "coupling_summary": [
+        {"rank": 1, "scope": "后端 import 图", "evidence": "1,550 modules / 5,193 edges / 29 cyclic SCCs / 111 cyclic modules", "judgement": "业务、平台、授权和 worker 边界已出现侵蚀", "action": "先拆最大 15/12/9 节点循环，用 ports/contracts 单向化"},
+        {"rank": 2, "scope": "前端 relative import 图", "evidence": "845 modules / 2,319 edges / 6 cyclic SCCs / 28 cyclic modules", "judgement": "domain index/dashboard/services 与项目详情组件耦合", "action": "薄 page shell，禁止 barrel 反向依赖"},
+        {"rank": 3, "scope": "后端生产并发", "evidence": "1,215 await / 21 gather / 22 create_task / 12 semaphore / 52 loop-await", "judgement": "已有并发基础，仍有值得 profile 的串行循环", "action": "按 stage timing 选热点，不做全局盲目 gather"},
+        {"rank": 4, "scope": "前端生产并发", "evidence": "809 await / 31 Promise.all / 19 Promise.allSettled", "judgement": "前端多请求已有聚合能力，需优先减少重复 fetch 和大列表重算", "action": "request coalescing、稳定 cache key、虚拟化与 abortable fetch"},
+        {"rank": 5, "scope": "复杂函数", "evidence": "13,878 backend functions; 115 complexity proxy >=50; 18 >=100", "judgement": "编排、资格、audit、readiness 函数承担过多责任", "action": "拆纯函数内核 + typed verdict + orchestration shell + contract tests"},
+        {"rank": 6, "scope": "运维链", "evidence": "139,361 script lines; deploy_local_to_cloud.sh = 5,091 lines", "judgement": "发布和验收逻辑集中在巨型脚本", "action": "拆阶段、明确输入/输出、幂等检查和独立回滚"}
+      ],
+      "learning_state": [
+        {"rank": 1, "chain": "推荐底座", "observed": "9,896 recommendations / 9,992 outcome rows", "status": "量多但多数不是真实学习标签", "gate": "展示事件+分层 outcome"},
+        {"rank": 2, "chain": "员工动作", "observed": "shortlisted 2 / claimed 4 / feedback 4 / published 0 / order 0", "status": "业务漏斗未起量", "gate": "≥200 真实反馈，正负各≥50"},
+        {"rank": 3, "chain": "Rerank 快照", "observed": "1,000 feature snapshots; all arm=off; labels=0", "status": "可观测骨架有，无可训练标签", "gate": "PIT export + time/creator holdout"},
+        {"rank": 4, "chain": "Rerank 模型", "observed": "1 model row; sample_count=0; activated=false", "status": "未线上应用", "gate": "candidate/shadow/canary/live registry + approval/rollback"},
+        {"rank": 5, "chain": "评估", "observed": "2 eval runs / 11 results; rerank holdout n=0/30", "status": "任务可运行，不代表质量通过", "gate": "最小样本、CI、切片和护栏"},
+        {"rank": 6, "chain": "实验/技能学习", "observed": "experiments 0 / bandit arms 0 / skill runs 50 / skill reviews 0", "status": "没有可证明的在线学习", "gate": "先做人工复核和只读 shadow"},
+        {"rank": 7, "chain": "VIA 学习", "observed": "decision/outcome/reward/policy rows = 0", "status": "治理代码存在，数据未启动", "gate": "只复用 rollout/rollback 机制，不宣称已学习"}
+      ],
+      "learning_roadmap": [
+        {"level_no": 1, "level": "L1", "name": "可观测", "entry": "查询、候选人、证据和版本可关联", "capability": "不可变 lineage，分阶段耗时/成本", "exit_gate": "关键字段≥95%，身份去重稳定", "current": "部分完成"},
+        {"level_no": 2, "level": "L2", "name": "可反馈", "entry": "L1 稳定", "capability": "相关性、考虑、触达、合作、业务 outcome 分层", "exit_gate": "Gold Set v2；≥200 真实反馈", "current": "代码骨架在此，真实数据未达"},
+        {"level_no": 3, "level": "L3", "name": "离线 Shadow", "entry": "L2 数据闸满足", "capability": "PIT 数据集、group+time holdout、model card、shadow rank", "exit_gate": "连续 4 周不劣于 baseline，CI/切片/漂移通过", "current": "可开始建设，不得改线上顺序"},
+        {"level_no": 4, "level": "L4", "name": "有限 Canary", "entry": "L3 通过+人审签字", "capability": "5%→15% 内部流量，最大±2位，kill switch 和即时回滚", "exit_gate": "SRM、质量、延迟、成本护栏无退化", "current": "No-Go"},
+        {"level_no": 5, "level": "L5", "name": "Outcome-aware", "entry": "有足量 reply/content/order 真结果", "capability": "多任务学习相关性、回复、合作、内容与净 GMV", "exit_gate": "跨 SKU 前瞻实验提升，延迟归因可控", "current": "未达"},
+        {"level_no": 6, "level": "L6", "name": "Contextual Bandit", "entry": "L5 稳定+可控探索预算", "capability": "只探索 QueryCell、证据深度和 provider 路由，保存 propensity", "exit_gate": "regret/风险有界，off-policy eval 可复现", "current": "未达"},
+        {"level_no": 7, "level": "L7", "name": "Continual Growth Brain", "entry": "L6 多周期稳定+治理齐全", "capability": "统一 dataset/model/prompt registry，漂移再训、自动 shadow/晋级/回滚", "exit_gate": "定期人审、隐私/删除、灾备演练，高风险动作保留审批", "current": "未达"}
+      ]
+    }
+  },
+  "sources": [
+    {"id": "worktree_scan", "label": "Current worktree static scan", "path": "reports/vkpi-codebase-scan-2026-08-28/worktree_scan_snapshot.sql"},
+    {"id": "architecture_contract", "label": "Repository architecture contract", "path": "docs/vkpi/domain-os-architecture.md"},
+    {"id": "learning_tests", "label": "Targeted learning and model contract tests", "path": "reports/vkpi-codebase-scan-2026-08-28/learning_tests_snapshot.sql"},
+    {"id": "prod_learning_snapshot", "label": "Production-sync learning snapshot 20260828T173053Z", "path": "reports/vkpi-codebase-scan-2026-08-28/prod_learning_snapshot.sql"}
+  ]
+}

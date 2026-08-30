@@ -341,6 +341,145 @@ def _revalidate_before_provider(
         raise LogisticsAccessError("logistics_assignment_scope_drifted")
 
 
+def _metadata_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _write_shipping_metadata(
+    conn: Any,
+    row: dict[str, Any],
+    *,
+    shipping: dict[str, Any],
+    now: str,
+) -> None:
+    metadata = _metadata_object(row.get("metadata_json"))
+    current = metadata.get("shipping")
+    current = current if isinstance(current, dict) else {}
+    current.update(shipping)
+    metadata["shipping"] = current
+    conn.execute(
+        "UPDATE vkpi_project_kol_assignments SET metadata_json=?, updated_at=? WHERE id=?",
+        (json.dumps(metadata, ensure_ascii=False), now, int(row["id"])),
+    )
+
+
+def _tracking_events(track: dict[str, Any]) -> list[dict[str, str]]:
+    providers = (track.get("tracking") or {}).get("providers") or []
+    events: list[dict[str, str]] = []
+    for provider in providers[:1]:
+        for event in (provider.get("events") or [])[:5]:
+            events.append(
+                {
+                    "time": str(event.get("time_iso") or event.get("time_utc") or ""),
+                    "desc": str(event.get("description") or "")[:160],
+                    "location": str(event.get("location") or "")[:80],
+                }
+            )
+    return events
+
+
+def _record_delivered_result(
+    result: dict[str, Any],
+    *,
+    row: dict[str, Any],
+    number: str,
+    latest_status: str,
+    latest_event: dict[str, Any],
+    now: str,
+) -> None:
+    if latest_status != "Delivered":
+        return
+    delivered_ts = str(latest_event.get("time_iso") or "") or now
+    try:
+        signal = record_delivered_signal(
+            project_id=int(row["project_id"]),
+            assignment_id=int(row["id"]),
+            tracking_number=number,
+            carrier="17track",
+            raw_status=latest_status,
+            delivered_at=delivered_ts,
+            last_checked_at=now,
+            kol_pool_id=row.get("kol_pool_id"),
+        )
+        result["delivered_signal"] = {
+            "shipment_action": signal.get("shipment_action"),
+            "stage_action": signal.get("stage_action"),
+        }
+    except Exception as exc:
+        logger.warning("delivered signal write failed assignment=%s: %s", row["id"], exc)
+        result["delivered_signal"] = {"error": exc.__class__.__name__}
+
+
+def _sync_tracking_rows(
+    conn: Any,
+    rows: list[dict[str, Any]],
+    *,
+    accepted: dict[str, dict[str, Any]],
+    rejected_invalid: dict[str, str],
+    now: str,
+) -> tuple[int, list[dict[str, Any]]]:
+    synced = 0
+    results: list[dict[str, Any]] = []
+    for row in rows:
+        number = str(row["tracking_number"]).strip()
+        if number in rejected_invalid:
+            _write_shipping_metadata(
+                conn,
+                row,
+                shipping={
+                    "status": "单号无法识别",
+                    "status_raw": "Rejected",
+                    "provider": "17track",
+                    "synced_at": now,
+                    "reject_reason": rejected_invalid[number],
+                },
+                now=now,
+            )
+            results.append({"number": number, "status": "rejected_invalid"})
+            continue
+        item = accepted.get(number)
+        if not item:
+            results.append({"number": number, "status": "not_returned"})
+            continue
+        track = item.get("track_info") or {}
+        latest_status = ((track.get("latest_status") or {}).get("status")) or "NotFound"
+        latest_event = track.get("latest_event") or {}
+        _write_shipping_metadata(
+            conn,
+            row,
+            shipping={
+                "status": STATUS_CN.get(latest_status, latest_status),
+                "status_raw": latest_status,
+                "latest_event": {
+                    "time": str(latest_event.get("time_iso") or ""),
+                    "desc": str(latest_event.get("description") or "")[:160],
+                    "location": str(latest_event.get("location") or "")[:80],
+                },
+                "events": _tracking_events(track),
+                "provider": "17track",
+                "synced_at": now,
+            },
+            now=now,
+        )
+        synced += 1
+        result = {"number": number, "status": latest_status}
+        results.append(result)
+        _record_delivered_result(
+            result,
+            row=row,
+            number=number,
+            latest_status=latest_status,
+            latest_event=latest_event,
+            now=now,
+        )
+    return synced, results
+
+
 def run_logistics_sync_for_job(payload: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """worker 入口:注册(幂等)+ 拉取轨迹 → 写回 shipping 元数据。"""
     del staff
@@ -390,101 +529,14 @@ def run_logistics_sync_for_job(payload: dict[str, Any], *, staff: dict[str, Any]
     except Exception as exc:
         return {"status": f"failed:gettrackinfo_{exc.__class__.__name__}", "provider_calls_performed": True}
     accepted = {str(item.get("number") or ""): item for item in (info.get("data") or {}).get("accepted") or []}
-    synced = 0
-    results = []
     now = _utcnow()
-    for row in rows:
-        number = str(row["tracking_number"]).strip()
-        # 拒收回写(2026-06-12 首跑发现):无法识别的单号在 UI 明示,不再静默跳过
-        if number in rejected_invalid:
-            metadata = row.get("metadata_json")
-            if isinstance(metadata, str):
-                try:
-                    metadata = json.loads(metadata)
-                except Exception:
-                    metadata = {}
-            metadata = metadata if isinstance(metadata, dict) else {}
-            shipping = metadata.get("shipping") if isinstance(metadata.get("shipping"), dict) else {}
-            shipping.update({
-                "status": "单号无法识别",
-                "status_raw": "Rejected",
-                "provider": "17track",
-                "synced_at": now,
-                "reject_reason": rejected_invalid[number],
-            })
-            metadata["shipping"] = shipping
-            conn.execute(
-                "UPDATE vkpi_project_kol_assignments SET metadata_json=?, updated_at=? WHERE id=?",
-                (json.dumps(metadata, ensure_ascii=False), now, int(row["id"])),
-            )
-            results.append({"number": number, "status": "rejected_invalid"})
-            continue
-        item = accepted.get(number)
-        if not item:
-            results.append({"number": number, "status": "not_returned"})
-            continue
-        track = item.get("track_info") or {}
-        latest_status = ((track.get("latest_status") or {}).get("status")) or "NotFound"
-        latest_event = track.get("latest_event") or {}
-        providers = (track.get("tracking") or {}).get("providers") or []
-        events = []
-        for provider in providers[:1]:
-            for event in (provider.get("events") or [])[:5]:
-                events.append({
-                    "time": str(event.get("time_iso") or event.get("time_utc") or ""),
-                    "desc": str(event.get("description") or "")[:160],
-                    "location": str(event.get("location") or "")[:80],
-                })
-        metadata = row.get("metadata_json")
-        if isinstance(metadata, str):
-            try:
-                metadata = json.loads(metadata)
-            except Exception:
-                metadata = {}
-        metadata = metadata if isinstance(metadata, dict) else {}
-        shipping = metadata.get("shipping") if isinstance(metadata.get("shipping"), dict) else {}
-        shipping.update({
-            "status": STATUS_CN.get(latest_status, latest_status),
-            "status_raw": latest_status,
-            "latest_event": {
-                "time": str(latest_event.get("time_iso") or ""),
-                "desc": str(latest_event.get("description") or "")[:160],
-                "location": str(latest_event.get("location") or "")[:80],
-            },
-            "events": events,
-            "provider": "17track",
-            "synced_at": now,
-        })
-        metadata["shipping"] = shipping
-        conn.execute(
-            "UPDATE vkpi_project_kol_assignments SET metadata_json=?, updated_at=? WHERE id=?",
-            (json.dumps(metadata, ensure_ascii=False), now, int(row["id"])),
-        )
-        synced += 1
-        results.append({"number": number, "status": latest_status})
-        # 点4 履约交付信号:仅在【真实已签收】时落 vkpi_shipments.delivered_at + 把派单
-        # 推进到 canonical delivered(走 service 路径,不裸 UPDATE 绕校验)。非 delivered
-        # 事件不进此分支——绝不误写。失败不影响 shipping 元数据已写成功的主流程。
-        if latest_status == "Delivered":
-            delivered_ts = str(latest_event.get("time_iso") or "") or now
-            try:
-                signal = record_delivered_signal(
-                    project_id=int(row["project_id"]),
-                    assignment_id=int(row["id"]),
-                    tracking_number=number,
-                    carrier="17track",
-                    raw_status=latest_status,
-                    delivered_at=delivered_ts,
-                    last_checked_at=now,
-                    kol_pool_id=row.get("kol_pool_id"),
-                )
-                results[-1]["delivered_signal"] = {
-                    "shipment_action": signal.get("shipment_action"),
-                    "stage_action": signal.get("stage_action"),
-                }
-            except Exception as exc:
-                logger.warning("delivered signal write failed assignment=%s: %s", row["id"], exc)
-                results[-1]["delivered_signal"] = {"error": exc.__class__.__name__}
+    synced, results = _sync_tracking_rows(
+        conn,
+        rows,
+        accepted=accepted,
+        rejected_invalid=rejected_invalid,
+        now=now,
+    )
     conn.commit()
     return {
         "status": "ready",

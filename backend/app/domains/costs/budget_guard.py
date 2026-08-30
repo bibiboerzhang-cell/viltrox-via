@@ -20,7 +20,8 @@ from app.domains.costs.budget_guard_persistence import (
     money_db_param as _persistence_money_db_param,
     micro_usd as _micro_usd,
 )
-from app.domains.projects.workflow import staff_id as resolve_staff_id
+from app.shared.staff_identity import staff_id as resolve_staff_id
+from app.shared.apify_reservation_ledger import settle_apify_reservation
 
 logger = get_logger(__name__)
 
@@ -676,8 +677,6 @@ def record_apify_run(
         ensure_budget_schema()
         reservation_settlement: dict[str, Any] = {}
         if reservation_key:
-            from app.platform.apify_budget import settle_apify_reservation
-
             reservation_settlement = settle_apify_reservation(reservation_key, cost_usd)
         if run_id and _apify_run_already_recorded(get_conn(), run_id):
             return {"recorded": False, "reason": "duplicate_run", "apify_run_id": run_id}

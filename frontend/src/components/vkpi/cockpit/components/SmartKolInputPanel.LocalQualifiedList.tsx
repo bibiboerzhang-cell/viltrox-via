@@ -10,8 +10,35 @@ import {
 } from "./SmartKolInputPanel.LocalQualified";
 import { languageOriginCounts, languageOriginSummaryLabel } from "./LanguageProvenance";
 import { LanguageProvenanceCell } from "./LanguageProvenanceChip";
+import { candidateGrowthSummary, candidateRankSummary } from "./SmartKolInputPanel.CandidateEvidence";
 
 const EMPTY_SELECTION: ReadonlySet<number> = new Set<number>();
+
+export function OnlineContentEvidenceNotice({
+  count,
+  followupStatus,
+  target = 30,
+}: {
+  count: number;
+  followupStatus: string;
+  target?: number;
+}) {
+  if (count <= 0) return null;
+  const followupLabel = followupStatus === "not_scheduled"
+    ? "本轮未安排补抓"
+    : followupStatus === "queued" || followupStatus === "running"
+      ? "已安排补抓，完成前"
+      : "补证状态待确认，当前";
+  return (
+    <div
+      data-testid="online-content-evidence-pending"
+      className="flex items-start gap-1.5 rounded-md border border-amber-300/20 bg-amber-400/[0.06] px-2.5 py-2 text-[11px] leading-[18px] text-amber-100"
+    >
+      <Clock3 size={11} className="mt-0.5 shrink-0" />
+      <span>缺正文/字幕 {count} 人 · {followupLabel} · 不计入联网严格 {target} 人目标</span>
+    </div>
+  );
+}
 
 function compactNumber(value: number | null): string {
   if (value == null) return "待核验";
@@ -64,6 +91,7 @@ export function StrictQualifiedList({
   onFavorite,
   lane = "local",
   extraStats = [],
+  terminal = false,
 }: {
   summary: LocalQualifiedSummary;
   onOpen?: (item: VkpiKolRecallItem) => void;
@@ -79,15 +107,17 @@ export function StrictQualifiedList({
   onFavorite?: (kolPoolId: number) => void;
   lane?: "local" | "online";
   extraStats?: string[];
+  terminal?: boolean;
 }) {
   const online = lane === "online";
   const laneLabel = online ? "联网净新增" : "本地合格";
+  const hasGrowthRows = summary.rows.some((row) => candidateGrowthSummary(row.item).active);
   const selectableIds = summary.rows
     .filter((row) => row.strictQualified && Number(row.item.kol_pool_id) > 0)
     .map((row) => Number(row.item.kol_pool_id));
   // 活跃度未知的人不进「全选」——他们不计入 30 人目标,要一个个主动确认。
   const activityUnknownSelectable = summary.rows
-    .filter((row) => row.activityUnknown && Number(row.item.kol_pool_id) > 0).length;
+    .filter((row) => row.activityUnknown && !candidateGrowthSummary(row.item).active && Number(row.item.kol_pool_id) > 0).length;
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
   // 语言口径的分布:全是自报时不显示,免得跟旁边的「活跃度未知」挤成一片。
   //
@@ -152,10 +182,10 @@ export function StrictQualifiedList({
           {summary.activityUnknown > 0 ? (
             <span
               data-testid={`${lane}-activity-unknown-count`}
-              title="这些人其他条件都合格，但我们一次都没抓到过他们的视频，所以还不知道他们最近有没有更新。不计入 30 人，可以单独勾选先收着。"
+              title="这些人还没有可审计的视频活跃证据，不计入 30 人；增长候选必须补齐严格证据后才能选择。"
               className="inline-flex items-center gap-1 rounded border border-sky-300/20 bg-sky-400/[0.06] px-1.5 py-0.5 text-[10.5px] leading-4 text-sky-100"
             >
-              <Clock3 size={9} /> 从没抓到过视频 {summary.activityUnknown}（不计入 {summary.target} 人，可单独勾选）
+              <Clock3 size={9} /> 从没抓到过视频 {summary.activityUnknown}（不计入 {summary.target} 人；增长候选先补证）
             </span>
           ) : null}
           {extraStats.map((label) => (
@@ -195,7 +225,7 @@ export function StrictQualifiedList({
 
       {summary.rows.length ? (
         <div className="overflow-x-auto rounded-lg border border-white/[0.07]">
-          <table className="min-w-[1180px] w-full border-collapse text-left text-[11px] leading-[18px]">
+          <table className={`${hasGrowthRows ? "min-w-[1510px]" : "min-w-[1180px]"} w-full border-collapse text-left text-[11px] leading-[18px]`}>
             <thead className="bg-white/[0.035] text-[10.5px] text-[var(--ds-text-meta)]">
               <tr>
                 <th className="w-14 px-2 py-2 font-medium">
@@ -220,7 +250,12 @@ export function StrictQualifiedList({
                 <th className="min-w-36 px-2 py-2 font-medium">市场证据</th>
                 <th className="w-28 px-2 py-2 font-medium" title="这一格分四档。「自报」是他在平台资料里自己填的，值正常显示、不带角标；「推断」是平台资料没填、由我们照他发的东西倒推出来的，值旁边带「推断」角标；「来源不明」是资料里有这个值、但看不出是不是他自己填的，值旁边带「来源不明」角标；「未知」有两种来路：一种是我们这里没有他的语言，另一种是照他发的东西试着判断过，但他发的文字互相印证不够、我们把握不够，没当结论。这两种都只显示「未知」，不显示语言值，也不带「推断」角标。">语言</th>
                 <th className="w-24 px-2 py-2 font-medium">KOL 类型</th>
-                <th className="min-w-52 px-2 py-2 font-medium">为什么匹配</th>
+                <th className="min-w-52 px-2 py-2 font-medium" title="这里只解释为何被检索命中；是否值得联系由右侧严格证据与增长判断决定。">为何被找到</th>
+                {hasGrowthRows ? (
+                  <th className="min-w-80 px-2 py-2 font-medium" title="增长候选分按产品适配、市场推进、受众适配、内容执行汇总；严格证据未通过时仍只是候选，缺失维度不按 0 分。">
+                    为什么值得联系 / 还缺什么
+                  </th>
+                ) : null}
                 <th className="w-24 px-2 py-2 font-medium">联系方式</th>
                 <th className="w-24 px-2 py-2 font-medium">分析</th>
                 <th className="w-28 px-2 py-2 font-medium">硬闸</th>
@@ -229,14 +264,14 @@ export function StrictQualifiedList({
             <tbody>
               {summary.rows.map((row) => {
                 const poolId = Number(row.item.kol_pool_id) || 0;
-                // 返回给操作员的行必须点得动:活跃度未知的人不计入 30 人目标,
-                // 但同样可以勾选入库——看得见却点不动才是最坏的一种。
-                const selectable = (row.strictQualified || row.activityUnknown) && poolId > 0;
+                const growth = candidateGrowthSummary(row.item);
+                const selectable = (row.strictQualified || (row.activityUnknown && !growth.active)) && poolId > 0;
                 const favorited = favoriteIds.has(poolId);
                 const favoriteBusy = favoriteBusyIds.has(poolId);
                 const favoriteResult = favoriteResults.get(poolId) || "";
                 const favoriteError = favoriteErrors.get(poolId) || "";
                 const favoriteAllowed = selectable && selectionReady && !selectionDisabled && Boolean(onFavorite);
+                const legacyRank = growth.active ? null : candidateRankSummary(row.item);
                 return (
                   <tr
                     key={row.identity}
@@ -314,6 +349,41 @@ export function StrictQualifiedList({
                   <td className="max-w-72 truncate px-2 py-2" title={row.whyFit || "待补充匹配依据"}>
                     {row.whyFit || "待补充"}
                   </td>
+                  {hasGrowthRows ? (
+                    <td className="px-2 py-2" data-testid={`${lane}-growth-${poolId || row.rank}`}>
+                      {growth.active ? (
+                        <div className="min-w-72 space-y-1">
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] font-medium text-emerald-100">
+                            <span>增长候选分 {growth.score == null ? "待补证" : growth.score.toFixed(1).replace(/\.0$/, "")}</span>
+                            <span>证据置信度 {growth.evidenceConfidence == null ? "待补证" : `${growth.evidenceConfidence.toFixed(1).replace(/\.0$/, "")}/100`}</span>
+                          </div>
+                          <div className={growth.strictGatePassed ? "text-[10px] leading-4 text-emerald-200" : "text-[10px] leading-4 text-amber-200"}>
+                            {growth.decisionLabel}
+                          </div>
+                          {growth.whyToFind.length ? (
+                            <div className="text-[9.5px] leading-4 text-slate-300" title={growth.whyToFind.join("；")}>
+                              为什么找：{growth.whyToFind.slice(0, 2).join("；")}
+                            </div>
+                          ) : null}
+                          <div className="grid grid-cols-2 gap-x-2 text-[9.5px] leading-4 text-slate-400">
+                            {growth.dimensions.map((dimension) => (
+                              <span key={dimension.key} className={dimension.score == null ? "text-amber-200/90" : ""}>
+                                {dimension.label} {dimension.displayValue}
+                              </span>
+                            ))}
+                          </div>
+                          {growth.nextAction ? (
+                            <div className="text-[9.5px] leading-4 text-amber-200">下一步：{growth.nextAction}</div>
+                          ) : null}
+                          {growth.disclaimer ? <div className="text-[9px] leading-4 text-slate-500">{growth.disclaimer}</div> : null}
+                        </div>
+                      ) : legacyRank?.score != null ? (
+                        <span className="text-[10px] text-slate-400">{legacyRank.scoreLabel} {legacyRank.score.toFixed(2)}</span>
+                      ) : (
+                        <span className="text-[10px] text-slate-500">旧结果 · 未投影增长评分</span>
+                      )}
+                    </td>
+                  ) : null}
                   <td className={`px-2 py-2 ${statusTone(row.contactStatus)}`}>{row.contactStatus}</td>
                   <td className={`px-2 py-2 ${statusTone(row.analysisStatus)}`}>{row.analysisStatus}</td>
                   <td className="px-2 py-2">
@@ -332,7 +402,11 @@ export function StrictQualifiedList({
         </div>
       ) : (
         <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-4 text-center text-[11px] leading-[18px] text-[var(--ds-text-meta)]">
-          {online ? "联网严格候选正在进入服务端排名流，首批 accepted 到达后会立即显示。" : "本地候选正在进入服务端排名流，首批到达后会立即显示。"}
+          {online
+            ? terminal
+              ? "本轮已结束，没有已通过联网严格验收的候选。"
+              : "联网严格候选正在进入服务端排名流，首批通过验收后会立即显示。"
+            : "本地候选正在进入服务端排名流，首批到达后会立即显示。"}
         </div>
       )}
     </div>

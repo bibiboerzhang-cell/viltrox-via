@@ -1,7 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { LocalQualifiedList, StrictQualifiedList } from "./SmartKolInputPanel.LocalQualifiedList";
+import {
+  LocalQualifiedList,
+  OnlineContentEvidenceNotice,
+  StrictQualifiedList,
+} from "./SmartKolInputPanel.LocalQualifiedList";
 import { localQualifiedSummary } from "./SmartKolInputPanel.LocalQualified";
 import { readPersistedSearchDisplay, sanitizeSearchDisplayForCache } from "./SmartKolInputPanel.derivers";
 
@@ -162,6 +166,21 @@ describe("local qualified first-list contract", () => {
     expect((screen.getByRole("checkbox", { name: "全选联网净新增 KOL" }) as HTMLInputElement).disabled).toBe(true);
   });
 
+  it("does not promise incoming accepted rows after an empty online lane is terminal", () => {
+    render(<StrictQualifiedList summary={localQualifiedSummary(result([]))} lane="online" terminal />);
+
+    expect(screen.getByText("本轮已结束，没有已通过联网严格验收的候选。")).toBeTruthy();
+    expect(screen.queryByText(/首批通过验收后/)).toBeNull();
+  });
+
+  it("states that missing body or subtitles are unscheduled and excluded from the target", () => {
+    render(<OnlineContentEvidenceNotice count={3} followupStatus="not_scheduled" target={30} />);
+
+    expect(screen.getByTestId("online-content-evidence-pending")).toHaveTextContent(
+      "缺正文/字幕 3 人 · 本轮未安排补抓 · 不计入联网严格 30 人目标",
+    );
+  });
+
   it("shows existing, in-progress, retry, and direct follow states on strict rows", () => {
     const onFavorite = vi.fn();
     const summary = localQualifiedSummary(result([
@@ -252,6 +271,55 @@ describe("local qualified first-list contract", () => {
     expect(screen.getByText("可联系")).toBeTruthy();
     expect(screen.getByText("分析中")).toBeTruthy();
     expect(screen.queryByText("private@example.com")).toBeNull();
+  });
+
+  it("shows growth score, confidence, four dimensions and honest missing evidence in the strict list", () => {
+    const onSelectionChange = vi.fn();
+    const onFavorite = vi.fn();
+    render(<LocalQualifiedList result={result([{
+      kol_pool_id: 18,
+      handle: "growth-eighteen",
+      platform: "youtube",
+      qualification_evidence: strictProof(),
+      source_fields: {
+        growth_candidate_score: 74.5,
+        product_use_fit: 90,
+        market_activation: 72,
+        audience_fit: null,
+        content_execution: 58,
+        evidence_confidence: 61,
+        claim_status: "descriptive_only",
+        growth_qualification_pass: false,
+        market_activation_pass: false,
+        market_activation_status: "insufficient_sample",
+        selection_rationale: {
+          schema: "prospective_candidate_rationale_v1",
+          claim_status: "descriptive_only",
+          decision_readiness: "decision_support_ready",
+          strict_gate_status: "blocked",
+          why_find_this_creator: ["公开内容同时支持产品用途和使用场景。"],
+          next_action: { code: "fetch_recent_3_5_video_metrics", label: "补齐近 45 天至少 3 条视频及观看、点赞、评论数据。" },
+        },
+        growth_candidate_scoring: { objective: "prospective_growth", claim_status: "descriptive_only" },
+      },
+    }])} onSelectionChange={onSelectionChange} onFavorite={onFavorite} />);
+
+    const growth = screen.getByTestId("local-growth-18");
+    expect(growth).toHaveTextContent("增长候选分 74.5");
+    expect(growth).toHaveTextContent("证据置信度 61/100");
+    expect(growth).toHaveTextContent("产品适配 90");
+    expect(growth).toHaveTextContent("市场推进 72");
+    expect(growth).toHaveTextContent("受众适配 待补证");
+    expect(growth).toHaveTextContent("内容执行 58");
+    expect(growth).toHaveTextContent("仅候选 · 待补证");
+    expect(growth).toHaveTextContent("为什么找：公开内容同时支持产品用途和使用场景");
+    expect(growth).toHaveTextContent("下一步：补齐近 45 天至少 3 条视频");
+    expect(growth).toHaveTextContent("描述性决策支持，不代表转化");
+    expect(growth).not.toHaveTextContent("值得人工复核");
+    expect(growth).not.toHaveTextContent("检索相关度");
+    expect(screen.getByText("本地合格 0/30")).toBeTruthy();
+    expect((screen.getByRole("checkbox", { name: "选择本地 KOL growth-eighteen" }) as HTMLInputElement).disabled).toBe(true);
+    expect(screen.getByText("过闸后可关注")).toBeTruthy();
   });
 
   // 门面上的说明只要与实际行为对不上,就是在替系统说一句没验证过的话。这两句过去
@@ -562,7 +630,7 @@ describe("activity-unknown bucket stays honest and stays clickable", () => {
     expect([...onSelectionChange.mock.calls[1][0]]).toEqual([1]);
 
     expect(screen.getByTestId("local-activity-unknown-count").textContent)
-      .toContain("从没抓到过视频 1（不计入 30 人，可单独勾选）");
+      .toContain("从没抓到过视频 1（不计入 30 人；增长候选先补证）");
     expect(screen.getByText("从没抓到过")).toBeTruthy();
     expect(screen.getByText("还缺 29 人", { exact: false })).toBeTruthy();
     expect(screen.queryByText("未通过", { exact: false })).toBeNull();

@@ -402,6 +402,62 @@ def test_complete_human_labels_compute_rank_metrics_strata_ci_and_sample_sizes()
     assert stale["metrics"] is None
 
 
+def test_label_input_order_does_not_change_ranked_metrics_or_blocker_order():
+    manifest = _manifest()
+    labels = _completed_labels(manifest)
+
+    ordered = evaluate_search_relevance(labels, manifest=manifest)
+    reversed_input = evaluate_search_relevance(
+        list(reversed(labels)),
+        manifest=manifest,
+    )
+
+    assert reversed_input == ordered
+    assert ordered["metrics"]["aggregate"]["precision_at_10"][
+        "candidate_sample_size"
+    ] == 60
+    assert ordered["metrics"]["aggregate"]["precision_at_30"][
+        "candidate_sample_size"
+    ] == 180
+
+
+def test_profile_facets_remain_metadata_and_do_not_shrink_offline_denominators():
+    countries = ("US", "GB", "PH")
+    follower_bands = (1_500, 75_000, 2_500_000)
+
+    def faceted_search(**kwargs):
+        result = _fake_search(**kwargs)
+        for index, item in enumerate(result["items"]):
+            item["country"] = countries[index % len(countries)]
+            item["language"] = "en"
+            item["followers"] = follower_bands[index % len(follower_bands)]
+        return result
+
+    manifest = build_candidate_manifest(faceted_search, **BUILD_CONTEXT)
+    report = evaluate_search_relevance(
+        _completed_labels(manifest),
+        manifest=manifest,
+    )
+
+    assert report["evaluation_status"] == "evaluated"
+    assert report["metrics"]["aggregate"]["candidate_sample_size"] == 180
+    assert {row["country"] for row in manifest["candidates"]} == set(countries)
+    assert {row["followers"] for row in manifest["candidates"]} == set(
+        follower_bands
+    )
+    assert {row["platform"] for row in manifest["candidates"]} == {
+        "instagram",
+        "youtube",
+    }
+    assert any(row["filters"] for row in manifest["queries"])
+    assert {
+        "product_scene_platform",
+        "product_user_fit",
+        "content_format_platform",
+        "product_scene_fit",
+    }.issubset({row["category"] for row in manifest["queries"]})
+
+
 def test_cli_evaluate_runs_without_caller_pythonpath(tmp_path):
     root = Path(__file__).resolve().parents[1]
     labels_path = tmp_path / "labels.json"
@@ -448,7 +504,16 @@ def test_cli_source_version_covers_split_metrics_implementation(tmp_path):
     before = source_version()
     metrics_path = tmp_path / "backend/app/domains/kol/search_relevance_metrics.py"
     metrics_path.write_text("changed metrics implementation", encoding="utf-8")
-    after = source_version()
+    after_metrics_change = source_version()
+    metrics_path.write_text(
+        "backend/app/domains/kol/search_relevance_metrics.py",
+        encoding="utf-8",
+    )
+    statistics_path = (
+        tmp_path / "backend/app/domains/kol/search_relevance_statistics.py"
+    )
+    statistics_path.write_text("changed statistical formula", encoding="utf-8")
+    after_statistics_change = source_version()
 
     assert {
         "backend/app/domains/kol/profile_recall_contract.py",
@@ -456,5 +521,7 @@ def test_cli_source_version_covers_split_metrics_implementation(tmp_path):
         "backend/app/domains/kol/profile_recall_relevance.py",
         "backend/app/domains/kol/profile_recall_storage.py",
         "backend/app/domains/kol/search_relevance_metrics.py",
+        "backend/app/domains/kol/search_relevance_statistics.py",
     }.issubset(source_files)
-    assert before != after
+    assert before != after_metrics_change
+    assert before != after_statistics_change

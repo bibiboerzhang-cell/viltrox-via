@@ -22,7 +22,7 @@ from app.domains.costs.common import (
 from app.domains.costs.product_catalog import ensure_product_catalog_schema, list_product_catalog
 from app.platform.db.schema import ensure_vkpi_schema
 from app.platform.db.schema_audit import ensure_vkpi_audit_schema
-from app.domains.projects.workflow import staff_id
+from app.shared.staff_identity import staff_id
 
 
 class ProductCostVerificationConflict(ValueError):

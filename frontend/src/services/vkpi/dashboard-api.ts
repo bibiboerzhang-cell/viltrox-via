@@ -14,26 +14,28 @@ import {
   buildWeeklySummary,
   emptyEvidence,
   hasAnyDashboardData,
+} from "../../domains/dashboard/dashboardDataModels";
+import {
   rangeLabel,
   staffWindow,
   windowDays,
-} from "../../domains/dashboard";
+} from "../../domains/dashboard/dashboardFormat";
 import {
   buildKolOptions,
   buildSelectedKol,
   emptyKol,
-} from "../../domains/kol";
-import { buildStaffMembers } from "../../domains/settings";
-import { buildDashboardProjects } from "../../domains/projects";
+} from "../../domains/kol/kolModels";
+import { buildStaffMembers } from "../../domains/settings/staffModel";
+import { buildDashboardProjects } from "../../domains/projects/projectRows";
 import {
   buildProductCosts,
   buildProductLaunchOptions,
-} from "../../domains/products";
+} from "../../domains/products/productModels";
 import {
   buildAttributions,
   buildCosts,
   buildLinks,
-} from "../../domains/attribution";
+} from "../../domains/attribution/attributionModels";
 
 type Row = Record<string, unknown>;
 

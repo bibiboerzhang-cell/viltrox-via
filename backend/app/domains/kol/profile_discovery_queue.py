@@ -14,6 +14,7 @@ from app.domains.kol import (
     profile_recall_qualification,
     search_sessions,
     search_sessions_online,
+    targeted_search_contract,
 )
 from app.domains.kol.discovery_filters import _int, _staff_user_id, _text
 from app.domains.kol.profile_discovery_supply import sanitize_platform_limits
@@ -355,21 +356,15 @@ def cancel_search_session_advance(
     }
 
 
-def enqueue_smart_search_profile_advance(
-    *,
-    query_text: str,
-    body: dict[str, Any] | None = None,
-    staff: dict[str, Any] | None = None,
-    server_owned_capability: ServerOwnedProviderCapability | None = None,
-) -> dict[str, Any]:
-    """Queue the full text-search -> discovery -> profile-advance pipeline."""
-
-    body = body or {}
-    query = _text(query_text)
-    if not query:
-        raise ValueError("query_text is required")
+def _smart_profile_policy(
+    query: str,
+    body: dict[str, Any],
+) -> tuple[bool, bool]:
     smart_local_30 = _requests_smart_local_30(body)
     smart_online_30 = _requests_smart_online_30(body)
+    follower_filter = targeted_search_contract.parse_follower_range(query, body)
+    if not follower_filter.get("valid", True):
+        raise ValueError(_text(follower_filter.get("error")) or "invalid follower range")
     if smart_online_30:
         # Reject unsupported strict platforms before creating a session/job or
         # spending provider budget. Legacy discovery keeps its wider surface.
@@ -386,10 +381,25 @@ def enqueue_smart_search_profile_advance(
             languages=body.get("languages") or body.get("content_languages"),
             profile_types=body.get("profile_types") or body.get("kol_types"),
             exclude_chinese=bool(body.get("exclude_chinese", True)),
+            followers_min=follower_filter.get("followers_min"),
+            followers_max=follower_filter.get("followers_max"),
+            source=follower_filter.get("source") or "not_requested",
+            unknown_policy="pending",
         )
+    return smart_local_30, smart_online_30
+
+
+def _ensure_smart_profile_session(
+    *,
+    query: str,
+    body: dict[str, Any],
+    staff: dict[str, Any] | None,
+) -> dict[str, Any]:
     raw_session_id = body.get("session_id") or body.get("search_session_id")
     try:
-        requested_session_id = int(raw_session_id) if raw_session_id not in (None, "") else None
+        requested_session_id = (
+            int(raw_session_id) if raw_session_id not in (None, "") else None
+        )
     except (TypeError, ValueError):
         raise ValueError("session_id must be an integer") from None
     session = search_sessions.ensure_session_for_result(
@@ -407,20 +417,32 @@ def enqueue_smart_search_profile_advance(
         raise ValueError("session query does not match profile-advance query")
     if requested_session_id and _text(session.get("query_type")) != "text_recall":
         raise ValueError("session is not a text-recall session")
-    session_id = int(session["id"])
-    triggered_by_user_id = _staff_user_id(staff)
+    return session
+
+
+def _smart_profile_recall_filters(body: dict[str, Any]) -> dict[str, Any]:
     if body.get("filters") not in (None, "") and not isinstance(body.get("filters"), dict):
         raise ValueError("filters must be an object")
     recall_filters = dict(body.get("filters") or {})
     if body.get("platforms") and not recall_filters.get("platforms"):
         recall_filters["platforms"] = body.get("platforms")
     for filter_key in (
-        "countries", "languages", "followers_min", "followers_max",
-        "follower_min", "follower_max", "verticals", "gear_content",
+        "countries",
+        "languages",
+        "followers_min",
+        "followers_max",
+        "follower_min",
+        "follower_max",
+        "verticals",
+        "gear_content",
     ):
         if body.get(filter_key) not in (None, "") and filter_key not in recall_filters:
             recall_filters[filter_key] = body.get(filter_key)
-    result_limit = max(
+    return recall_filters
+
+
+def _smart_profile_result_limit(body: dict[str, Any]) -> int:
+    return max(
         1,
         min(
             _int(
@@ -430,7 +452,21 @@ def enqueue_smart_search_profile_advance(
             50,
         ),
     )
-    payload = {
+
+
+def _smart_profile_payload(
+    *,
+    query: str,
+    body: dict[str, Any],
+    staff: dict[str, Any] | None,
+    session_id: int,
+    recall_filters: dict[str, Any],
+    smart_local_30: bool,
+    smart_online_30: bool,
+    triggered_by_user_id: int | None,
+) -> dict[str, Any]:
+    result_limit = _smart_profile_result_limit(body)
+    return {
         "queue_lane": "interactive",
         "target_type": "search_session",
         "target_id": str(session_id),
@@ -438,10 +474,13 @@ def enqueue_smart_search_profile_advance(
         "search_session_id": session_id,
         "query_text": query,
         "product_sku": _text(body.get("product_sku")),
-        # The browser may submit a previous preview plan, but a durable worker
-        # must derive product/persona identity again from the operator query
-        # and explicit SKU.  Never promote client-supplied plan fields into a
-        # trusted queued payload.
+        # Worker rebuilds the authoritative SearchBrief/QueryCells server-side.
+        "objective": targeted_search_contract.normalize_objective(body),
+        "segments": body.get("segments"),
+        "industries": body.get("industries"),
+        "industry": body.get("industry"),
+        "use_cases": body.get("use_cases") or body.get("useCases"),
+        "first_round_raw_limit": body.get("first_round_raw_limit"),
         "product_focus": None,
         "target_persona": "",
         "candidate_limit": max(1, min(_int(body.get("candidate_limit"), 100), 500)),
@@ -452,12 +491,17 @@ def enqueue_smart_search_profile_advance(
         "ratio_policy": _text(body.get("ratio_policy") or "soft"),
         "mixed_policy": _text(body.get("mixed_policy") or "dominant"),
         "dedupe": bool(body.get("dedupe", True)),
-        "vector_weight": body.get("vector_weight") if body.get("vector_weight") is not None else profile_recall_qualification.SMART_LOCAL_VECTOR_WEIGHT,
-        "type_weight": body.get("type_weight") if body.get("type_weight") is not None else profile_recall_qualification.SMART_LOCAL_TYPE_WEIGHT,
+        "vector_weight": (
+            body.get("vector_weight")
+            if body.get("vector_weight") is not None
+            else profile_recall_qualification.SMART_LOCAL_VECTOR_WEIGHT
+        ),
+        "type_weight": (
+            body.get("type_weight")
+            if body.get("type_weight") is not None
+            else profile_recall_qualification.SMART_LOCAL_TYPE_WEIGHT
+        ),
         "type_boost_enabled": bool(body.get("type_boost_enabled", True)),
-        # 接线补漏(2026-07-02 验收):前端「排除 中国/港/台 地区」开关一直随 body 传到这里,但此前
-        # payload 漏透传 → worker 的 execute_smart_search_profile_advance_pipeline 只能吃默认 True,
-        # 用户取消勾选形同虚设。补上后与同步(非队列)路径的 recall exclude_chinese 语义一致。
         "exclude_chinese": bool(body.get("exclude_chinese", True)),
         "filters": recall_filters,
         "search_strategy": _text(body.get("search_strategy") or "balanced"),
@@ -470,31 +514,51 @@ def enqueue_smart_search_profile_advance(
         ),
         "allow_backfill": bool(body.get("allow_backfill", True)),
         "include_new_discovery": bool(body.get("include_new_discovery", True)),
-        # 收口路①-2:内容契合入队控量旋钮(默认开,top N=6);worker→pipeline 透传。
         "include_content_fit": bool(body.get("include_content_fit", True)),
         "content_fit_top_n": max(1, min(_int(body.get("content_fit_top_n"), 6), 12)),
-        "new_discovery_limit": max(1, min(_int(body.get("new_discovery_limit") or body.get("discovery_limit"), 50 if smart_online_30 else 15), 50)),
-        "new_discovery_per_platform_limit": max(1, min(_int(body.get("new_discovery_per_platform_limit") or body.get("new_discovery_limit") or body.get("discovery_limit"), 50 if smart_online_30 else 15), 50)),
-        # B3 每平台上限覆盖({平台: 上限})。YouTube 那条腿走 YouTube Data API,
-        # search.list 无论 maxResults 取 1 还是 50 都恒定 100 quota units、仍是一次往返
-        # → 提到 50 配额不变、延迟不变、零 Apify 花费;IG/TT 是按结果计费的 Apify actor
-        # (prod 14 天实测 IG hashtag 一家吃掉发现总花费的 93.7%),所以本批保持 20 不动。
-        # 服务端只做归一(小写平台名、夹到 1..50),不替 operator 决定值。
-        "new_discovery_per_platform_limits": sanitize_platform_limits(
-            body.get("new_discovery_per_platform_limits") or body.get("newDiscoveryPerPlatformLimits")
+        "include_lazy_video_backfill": (
+            body.get("include_lazy_video_backfill", True) is not False
         ),
-        "new_discovery_platforms": body.get("new_discovery_platforms") or body.get("discovery_platforms"),
+        "include_field_topup": body.get("include_field_topup", True) is not False,
+        "new_discovery_limit": max(
+            1,
+            min(
+                _int(
+                    body.get("new_discovery_limit") or body.get("discovery_limit"),
+                    50 if smart_online_30 else 15,
+                ),
+                50,
+            ),
+        ),
+        "new_discovery_per_platform_limit": max(
+            1,
+            min(
+                _int(
+                    body.get("new_discovery_per_platform_limit")
+                    or body.get("new_discovery_limit")
+                    or body.get("discovery_limit"),
+                    50 if smart_online_30 else 15,
+                ),
+                50,
+            ),
+        ),
+        "new_discovery_per_platform_limits": sanitize_platform_limits(
+            body.get("new_discovery_per_platform_limits")
+            or body.get("newDiscoveryPerPlatformLimits")
+        ),
+        "new_discovery_platforms": body.get("new_discovery_platforms")
+        or body.get("discovery_platforms"),
         "platform": _text(body.get("platform")),
         "market": _text(body.get("market") or body.get("country")),
-        # Explicit operator filters are re-normalized by the worker's
-        # server-owned qualification policy. Keep raw bounded request values;
-        # an invalid value must fail closed instead of silently widening.
         "languages": body.get("languages") or body.get("content_languages"),
         "profile_types": body.get("profile_types") or body.get("kol_types"),
         "advance_limit": max(
             1,
             min(
-                _int(body.get("advance_limit") or body.get("profile_advance_limit"), 30 if smart_local_30 else 15),
+                _int(
+                    body.get("advance_limit") or body.get("profile_advance_limit"),
+                    30 if smart_local_30 else 15,
+                ),
                 30 if smart_local_30 else 15,
             ),
         ),
@@ -503,7 +567,8 @@ def enqueue_smart_search_profile_advance(
         "max_posts": max(1, min(_int(body.get("max_posts"), 12), 12)),
         "advance_mode": _text(body.get("advance_mode") or body.get("mode") or "account_deep"),
         "representative_video_limit": body.get("representative_video_limit"),
-        "item_types": body.get("item_types") or ["new_creator", "existing_kol", "recall_candidate"],
+        "item_types": body.get("item_types")
+        or ["new_creator", "existing_kol", "recall_candidate"],
         "include_completed": bool(body.get("include_completed")),
         "_async_enrichment": True,
         "prompt": f"smart profile advance · {query[:120]}",
@@ -512,20 +577,17 @@ def enqueue_smart_search_profile_advance(
         "staff_id": (staff or {}).get("staff_id") or (staff or {}).get("id"),
         "viltrox_fit_score_untouched": True,
     }
-    payload[PROVIDER_JOB_FENCE_KEY] = build_search_session_provider_fence(
-        action=SMART_SEARCH_PROFILE_ADVANCE,
-        session=session,
-        payload=payload,
-        staff=staff,
-        fallback_query_text=query,
-        fallback_query_type="text_recall",
-        fallback_input_payload={
-            key: value for key, value in body.items() if key != "api_token"
-        },
-        server_owned_capability=server_owned_capability,
-    )
+
+
+def _enqueue_smart_profile_payload(
+    payload: dict[str, Any],
+    session_id: int,
+) -> tuple[dict[str, Any], bool]:
     conn = get_conn()
-    idempotency_key = active_job_idempotency_key("search_session_profile_advance", session_id)
+    idempotency_key = active_job_idempotency_key(
+        "search_session_profile_advance",
+        session_id,
+    )
     row = conn.execute(
         """
         INSERT INTO apify_jobs (job_type, payload, idempotency_key, status, created_at, updated_at)
@@ -548,6 +610,18 @@ def enqueue_smart_search_profile_advance(
         ).fetchone()
     job = dict(row) if row else {}
     conn.commit()
+    return job, inserted
+
+
+def _record_smart_profile_queue(
+    *,
+    session_id: int,
+    query: str,
+    payload: dict[str, Any],
+    smart_online_30: bool,
+    job: dict[str, Any],
+    inserted: bool,
+) -> None:
     queued_total = int(payload["advance_limit"])
     queued_contract = completion_contract(
         base_count=0,
@@ -572,9 +646,15 @@ def enqueue_smart_search_profile_advance(
                 **queued_contract,
             },
             **queued_contract,
-            **({
-                "online_qualification": search_sessions_online.queued_online_qualification()
-            } if smart_online_30 else {}),
+            **(
+                {
+                    "online_qualification": (
+                        search_sessions_online.queued_online_qualification()
+                    )
+                }
+                if smart_online_30
+                else {}
+            ),
             "smart_search_profile_advance_job": {
                 "status": "queued" if inserted else "already_queued",
                 "job_id": job.get("id"),
@@ -585,8 +665,60 @@ def enqueue_smart_search_profile_advance(
                 "representative_video_limit": payload["representative_video_limit"] or 1,
                 "enrichment": _pending_enrichment(),
                 "viltrox_fit_score_untouched": True,
-            }
+            },
         },
+    )
+
+
+def enqueue_smart_search_profile_advance(
+    *,
+    query_text: str,
+    body: dict[str, Any] | None = None,
+    staff: dict[str, Any] | None = None,
+    server_owned_capability: ServerOwnedProviderCapability | None = None,
+) -> dict[str, Any]:
+    """Queue the full text-search -> discovery -> profile-advance pipeline."""
+    body = body or {}
+    query = _text(query_text)
+    if not query:
+        raise ValueError("query_text is required")
+    smart_local_30, smart_online_30 = _smart_profile_policy(query, body)
+    session = _ensure_smart_profile_session(query=query, body=body, staff=staff)
+    session_id = int(session["id"])
+    triggered_by_user_id = _staff_user_id(staff)
+    recall_filters = _smart_profile_recall_filters(body)
+    payload = _smart_profile_payload(
+        query=query,
+        body=body,
+        staff=staff,
+        session_id=session_id,
+        recall_filters=recall_filters,
+        smart_local_30=smart_local_30,
+        smart_online_30=smart_online_30,
+        triggered_by_user_id=triggered_by_user_id,
+    )
+    payload[PROVIDER_JOB_FENCE_KEY] = build_search_session_provider_fence(
+        action=SMART_SEARCH_PROFILE_ADVANCE,
+        session=session,
+        payload=payload,
+        staff=staff,
+        fallback_query_text=query,
+        fallback_query_type="text_recall",
+        fallback_input_payload={
+            key: value for key, value in body.items() if key != "api_token"
+        },
+        server_owned_capability=server_owned_capability,
+    )
+    # The helper keeps this high-volume path DB-backed with
+    # ON CONFLICT (idempotency_key), rather than a process-local lock.
+    job, inserted = _enqueue_smart_profile_payload(payload, session_id)
+    _record_smart_profile_queue(
+        session_id=session_id,
+        query=query,
+        payload=payload,
+        smart_online_30=smart_online_30,
+        job=job,
+        inserted=inserted,
     )
     return {
         "status": "queued" if inserted else "already_queued",

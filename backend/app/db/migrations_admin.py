@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from app.core.config import IS_PRODUCTION
 from app.core.logging import get_logger
-from app.core.security import hash_password
+from app.core.passwords import hash_password
 
 logger = get_logger(__name__)
 

@@ -19,6 +19,10 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.services.projects.creator_lifecycle_adapters import (  # noqa: E402
+    DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
+)
+
 
 # ── 假连接:按 SQL 关键字路由返回行;记录 commit/rollback 次数 ──────────────
 class _Result:
@@ -162,7 +166,12 @@ def test_add_project_kols_bridges_touch_and_favorite_after_commit(monkeypatch, b
     wf = _project_kols_env(monkeypatch, conn)
     rec = bridge_env(conn, fail=fail)
     with caplog.at_level(logging.WARNING):
-        out = wf.add_project_kols(1, {"kol_pool_ids": [11, 12]}, staff={"id": 5, "role": "staff"})
+        out = wf.add_project_kols(
+            1,
+            {"kol_pool_ids": [11, 12]},
+            staff={"id": 5, "role": "staff"},
+            feedback_sink=DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
+        )
     assert out["inserted"] == 2  # 主写结果与桥成败无关
     assert conn.commits == 1
     assert all(c["commits_at_call"] == 1 for c in rec.calls)  # 全部在业务事务提交之后
@@ -240,7 +249,13 @@ def test_advance_assignment_to_contacted_bridges_contact(monkeypatch, bridge_env
     wf = _evidence_env(monkeypatch, conn)
     rec = bridge_env(conn, fail=fail)
     with caplog.at_level(logging.WARNING):
-        out = wf.advance_project_kol_assignment(3, 55, {"to_stage": "contacted"}, staff={"id": 4})
+        out = wf.advance_project_kol_assignment(
+            3,
+            55,
+            {"to_stage": "contacted"},
+            staff={"id": 4},
+            feedback_sink=DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
+        )
     assert out["assignment"]["stage"] == "contacted"
     assert conn.commits == 1
     assert [(c["kol_pool_id"], c["action"], c["commits_at_call"]) for c in rec.calls] == [(31, "contact", 1)]
@@ -299,7 +314,12 @@ def test_add_project_message_bridges_outbound_outreach(monkeypatch, bridge_env, 
     monkeypatch.setattr(pw.audit, "log_business_event", lambda **_k: None)
     rec = bridge_env(conn, fail=fail)
     with caplog.at_level(logging.WARNING):
-        item = pw.add_project_message(5, {"body": "hello"}, staff={"id": 2})
+        item = pw.add_project_message(
+            5,
+            {"body": "hello"},
+            staff={"id": 2},
+            feedback_sink=DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
+        )
     assert item["id"] == 900 and conn.commits == 1
     assert [(c["kol_pool_id"], c["action"], c["commits_at_call"]) for c in rec.calls] == [(61, "outreach", 1)]
     assert rec.calls[0]["payload"]["source"] == "project_message"

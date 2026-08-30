@@ -10,10 +10,11 @@ SQL 红线(契约测试静态审查):全参数化 ? 占位;零字面 percent、�
 from __future__ import annotations
 
 from app.domains.kol.video_evidence_projection import FINAL_V1_MODALITIES_PG_EXPR
+from app.shared.brand_identity import VILTROX_BRAND_TOKEN
 
 BOARD_METHOD = "my_kol_board_ext_v1"
 # 标题只是中等强度证据；英文与两个中文品牌词统一参数化匹配。
-VILTROX_TOKEN = "viltrox"          # 保留单词常量供旧调用方引用
+VILTROX_TOKEN = VILTROX_BRAND_TOKEN  # 保留单词常量供旧调用方引用
 VILTROX_TITLE_TOKENS: tuple[str, ...] = ("viltrox", "唯卓仕", "唯卓")
 
 # ── 护栏常量(测试直接断言;全部 SQL LIMIT ? + Python 层二次封顶双保险)──

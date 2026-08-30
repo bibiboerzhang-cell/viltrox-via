@@ -14,6 +14,10 @@ from app.core.logging import get_logger
 from app.domains.kol import profile_recall_projection as _projection
 from app.domains.kol.profile_recall_contract import RecallHit, _clean_text
 from app.domains.kol.profile_recall_precision import HYBRID_METHOD
+from app.domains.kol.profile_recall_cached_content import (
+    PRIVATE_CONTENT_TARGETS_KEY,
+    attach_private_content_evidence,
+)
 from app.domains.kol.profile_recall_projection import (
     _evidence_score,
     _extract_lenses,
@@ -22,6 +26,36 @@ from app.domains.kol.profile_recall_projection import (
 
 
 logger = get_logger(__name__)
+
+
+def smart_local_candidate_limit(
+    *,
+    smart_local_enabled: bool,
+    requested_candidate_limit: int,
+    result_limit: int,
+    server_override: Any,
+    max_candidate_limit: int,
+    smart_local_default: int,
+) -> tuple[int, int | None]:
+    """Resolve the internal multi-QueryCell cap without changing legacy callers."""
+
+    override: int | None = None
+    if smart_local_enabled and server_override is not None:
+        try:
+            parsed = int(server_override)
+        except (TypeError, ValueError):
+            parsed = 0
+        if parsed > 0:
+            override = max(
+                result_limit,
+                min(max_candidate_limit, smart_local_default, parsed),
+            )
+    candidate_limit = (
+        override
+        if override is not None
+        else smart_local_default if smart_local_enabled else requested_candidate_limit
+    )
+    return max(result_limit, candidate_limit), override
 
 
 def openai_client(
@@ -380,6 +414,7 @@ def smart_local_evidence_summaries(
     rows = get_connection().execute(
         f"""
         SELECT e.kol_pool_id,
+               e.id AS evidence_id,
                COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), NULLIF(e.content_url, '')) AS title,
                e.content_url,
                e.thumbnail_url,
@@ -411,6 +446,7 @@ def smart_local_evidence_summaries(
     for kol_id, evidence_rows in by_id.items():
         ranked = sorted(evidence_rows, key=_evidence_score, reverse=True)
         representative: list[dict[str, Any]] = []
+        content_targets: list[dict[str, Any]] = []
         for row in ranked:
             title = _clean_text(row.get("title"), 220)
             url = _clean_text(row.get("content_url"), 500)
@@ -423,6 +459,12 @@ def smart_local_evidence_summaries(
                     "thumbnail_url": _clean_text(row.get("thumbnail_url"), 500),
                     "view_count": row.get("view_count"),
                     "like_count": row.get("like_count"),
+                }
+            )
+            content_targets.append(
+                {
+                    "evidence_id": row.get("evidence_id"),
+                    "content_url": url,
                 }
             )
             if len(representative) >= 3:
@@ -453,6 +495,7 @@ def smart_local_evidence_summaries(
         )
         summaries[kol_id] = {
             "representative_evidence": representative,
+            PRIVATE_CONTENT_TARGETS_KEY: content_targets,
             "evidence_titles": evidence_titles[:12],
             "used_lenses": _extract_lenses(*texts),
             "reason_labels": _reason_labels(
@@ -494,6 +537,7 @@ def smart_local_qualification_context(
         return row_context, evidence_context
 
     placeholders = ",".join(["?"] * len(kol_pool_ids))
+    conn: Any | None = None
     try:
         conn = get_connection()
         pool_columns = table_columns(conn, "vkpi_kol_pool")
@@ -518,68 +562,105 @@ def smart_local_qualification_context(
     try:
         conn = get_connection()
         evidence_columns = table_columns(conn, "vkpi_kol_video_evidence")
-        if "posted_at" not in evidence_columns:
-            return row_context, evidence_context
-        evidence_type_select = (
-            "COALESCE(NULLIF(evidence_type, ''), 'video') AS evidence_type"
-            if "evidence_type" in evidence_columns
-            else "'video' AS evidence_type"
-        )
-        if "title" in evidence_columns and "video_title" in evidence_columns:
-            title_select = (
-                "COALESCE(NULLIF(title, ''), NULLIF(video_title, ''), "
-                "NULLIF(content_url, '')) AS title"
-                if "content_url" in evidence_columns
-                else "COALESCE(NULLIF(title, ''), NULLIF(video_title, '')) AS title"
+        if "posted_at" in evidence_columns:
+            evidence_type_select = (
+                "COALESCE(NULLIF(evidence_type, ''), 'video') AS evidence_type"
+                if "evidence_type" in evidence_columns
+                else "'video' AS evidence_type"
             )
-        elif "title" in evidence_columns:
-            title_select = "NULLIF(title, '') AS title"
-        elif "video_title" in evidence_columns:
-            title_select = "NULLIF(video_title, '') AS title"
-        else:
-            title_select = "'' AS title"
-        content_url_select = (
-            "content_url" if "content_url" in evidence_columns else "'' AS content_url"
-        )
-        active_select = (
-            "is_active" if "is_active" in evidence_columns else "TRUE AS is_active"
-        )
-        active_clause = "AND is_active IS NOT FALSE" if "is_active" in evidence_columns else ""
-        type_clause = (
-            "AND (evidence_type IS NULL OR LOWER(TRIM(evidence_type)) = 'video')"
-            if "evidence_type" in evidence_columns
-            else ""
-        )
-        rows = conn.execute(
-            f"""
-            SELECT kol_pool_id, posted_at, {evidence_type_select},
-                   {content_url_select}, {title_select}, {active_select}
-            FROM vkpi_kol_video_evidence
-            WHERE kol_pool_id IN ({placeholders})
-              AND posted_at IS NOT NULL
-              {active_clause}
-              {type_clause}
-            ORDER BY kol_pool_id, posted_at DESC NULLS LAST, id DESC
-            """,
-            tuple(kol_pool_ids),
-        ).fetchall()
-        seen: set[int] = set()
-        for raw in rows:
-            row = dict(raw)
-            kol_id = int(row.get("kol_pool_id") or 0)
-            if kol_id <= 0 or kol_id in seen:
-                continue
-            seen.add(kol_id)
-            evidence_context.setdefault(kol_id, {})["latest_real_video"] = {
-                "posted_at": row.get("posted_at"),
-                "evidence_type": row.get("evidence_type") or "video",
-                "content_url": _clean_text(row.get("content_url"), 500),
-                "title": _clean_text(row.get("title"), 220),
-                "is_active": row.get("is_active") is not False,
-                "source": "vkpi_kol_video_evidence.posted_at",
-            }
+            if "title" in evidence_columns and "video_title" in evidence_columns:
+                title_select = (
+                    "COALESCE(NULLIF(title, ''), NULLIF(video_title, ''), "
+                    "NULLIF(content_url, '')) AS title"
+                    if "content_url" in evidence_columns
+                    else "COALESCE(NULLIF(title, ''), NULLIF(video_title, '')) AS title"
+                )
+            elif "title" in evidence_columns:
+                title_select = "NULLIF(title, '') AS title"
+            elif "video_title" in evidence_columns:
+                title_select = "NULLIF(video_title, '') AS title"
+            else:
+                title_select = "'' AS title"
+            content_url_select = (
+                "content_url" if "content_url" in evidence_columns else "'' AS content_url"
+            )
+            active_select = (
+                "is_active" if "is_active" in evidence_columns else "TRUE AS is_active"
+            )
+            active_clause = "AND is_active IS NOT FALSE" if "is_active" in evidence_columns else ""
+            type_clause = (
+                "AND (evidence_type IS NULL OR LOWER(TRIM(evidence_type)) = 'video')"
+                if "evidence_type" in evidence_columns
+                else ""
+            )
+            rows = conn.execute(
+                f"""
+                SELECT kol_pool_id, posted_at, {evidence_type_select},
+                       {content_url_select}, {title_select}, {active_select}
+                FROM vkpi_kol_video_evidence
+                WHERE kol_pool_id IN ({placeholders})
+                  AND posted_at IS NOT NULL
+                  {active_clause}
+                  {type_clause}
+                ORDER BY kol_pool_id, posted_at DESC NULLS LAST, id DESC
+                """,
+                tuple(kol_pool_ids),
+            ).fetchall()
+            seen: set[int] = set()
+            for raw in rows:
+                row = dict(raw)
+                kol_id = int(row.get("kol_pool_id") or 0)
+                if kol_id <= 0 or kol_id in seen:
+                    continue
+                seen.add(kol_id)
+                evidence_context.setdefault(kol_id, {})["latest_real_video"] = {
+                    "posted_at": row.get("posted_at"),
+                    "evidence_type": row.get("evidence_type") or "video",
+                    "content_url": _clean_text(row.get("content_url"), 500),
+                    "title": _clean_text(row.get("title"), 220),
+                    "is_active": row.get("is_active") is not False,
+                    "source": "vkpi_kol_video_evidence.posted_at",
+                }
     except Exception:
         logger.warning("smart_local latest-video context unavailable", exc_info=True)
+
+    # Exact-video cached prose is a private, request-local proof surface.  The
+    # raw Pool payload has already been loaded above, so cached description /
+    # caption / transcript evidence costs no additional provider call.  The
+    # only extra DB read is one bounded batch for the at-most-three
+    # representative evidence ids per candidate; the shared classifier then
+    # rejects every non-canonical final-v1 row.
+    target_ids: list[int] = []
+    for evidence in evidence_context.values():
+        for target in evidence.get(PRIVATE_CONTENT_TARGETS_KEY) or []:
+            if not isinstance(target, dict):
+                continue
+            try:
+                evidence_id = int(target.get("evidence_id") or 0)
+            except (TypeError, ValueError):
+                evidence_id = 0
+            if evidence_id > 0 and evidence_id not in target_ids:
+                target_ids.append(evidence_id)
+    canonical_cache_rows: dict[int, dict[str, Any]] = {}
+    if target_ids:
+        try:
+            from app.domains.kol.my_kol_video_cache_truth import analysis_caches_for_evidence
+
+            if conn is None:
+                conn = get_connection()
+            canonical_cache_rows = analysis_caches_for_evidence(conn, target_ids)
+        except Exception:
+            # Missing migration/legacy snapshots are evidence absence.  They
+            # stay pending and never become permission to trust a ``ready``
+            # row or call a provider.
+            logger.warning("smart_local canonical content cache unavailable", exc_info=True)
+    for kol_id, evidence in list(evidence_context.items()):
+        row = row_context.get(kol_id) or {}
+        evidence_context[kol_id] = attach_private_content_evidence(
+            evidence,
+            raw_platform_data=row.get("raw_platform_data"),
+            cache_rows_by_evidence_id=canonical_cache_rows,
+        )
     return row_context, evidence_context
 
 

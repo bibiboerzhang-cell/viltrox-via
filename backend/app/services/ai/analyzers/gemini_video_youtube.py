@@ -15,7 +15,6 @@ _generate_json_with_recovery）仍住 gemini_video.py，本模块用函数内 la
 """
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 import subprocess
@@ -49,6 +48,11 @@ from app.services.ai.analyzers.gemini_video_prompts import (
     _video_v2_prompt,
 )
 from app.services.ai.analyzers.gemini_video_legacy_prompt import _video_legacy_prompt
+from app.services.ai.analyzers.gemini_video_youtube_runtime import (
+    YouTubeAnalysisRuntime,
+    YouTubeRuntimeHooks,
+    new_youtube_result,
+)
 
 logger = get_logger(__name__)
 
@@ -260,19 +264,12 @@ async def analyze_youtube_with_gemini(
     llm_context: dict[str, Any] | None = None,
     authorization_checkpoint: Callable[[str], None] | None = None,
 ) -> dict:
-    """
-    Gemini YouTube analysis:
-    0. Subtitles via yt-dlp in a parallel daemon thread (bounded wait, never blocks)
-    1. FAST PATH: YouTube URL straight into Gemini (file_uri), model chain per C4
-    2. SLOW PATH: yt-dlp download + File API upload + same chain
-    3. Delete file from Gemini
+    """Analyze a YouTube video through the direct URI and File API paths.
 
-    ``authorization_checkpoint(stage)`` runs before subtitles, before every
-    direct-URL attempt, before the slow download, before the File API upload
-    and before every File API attempt.  ``AnalysisScopeRevoked`` stops the
-    chain: the result carries ``scope_revoked`` and no later stage runs.
+    Public module dependencies are captured at call time so existing worker
+    patches for provider availability, subtitles, yt-dlp, files and path
+    probes remain authoritative.
     """
-    # lazy import 避免循环依赖（gemini_video.py 加载时 re-export 本函数）
     from app.services.ai.analyzers.gemini_video import (
         ProviderPressureExhausted,
         _final_v1_cache_config,
@@ -287,19 +284,7 @@ async def analyze_youtube_with_gemini(
         final_v1_gemini_models,
     )
 
-    result = {
-        "analyzed": False, "method": "gemini_youtube",
-        "content_summary": "", "content_genre": "", "content_topic": "",
-        "timestamps": [], "competitor_mentions": [],
-        "why_compelling": "", "hook_analysis": "",
-        "target_audience": "", "production_quality": "",
-        "camera_body": None, "viltrox_lens": None, "other_lens": None,
-        "viltrox_detected": False, "viltrox_products_all": [],
-        "marketing_potential": "", "marketing_notes": "",
-        "llm_attempts": [],
-        "cost_authority": "llm_production_google_generate_content_v1",
-        "error": None,
-    }
+    result = new_youtube_result()
     if not GEMINI_AVAILABLE or not gemini_client:
         result["error"] = "Gemini not available"
         return result
@@ -311,476 +296,70 @@ async def analyze_youtube_with_gemini(
     if creator_handle:
         profile = get_creator_profile(creator_handle)
         if profile.get("viltrox_lenses"):
-            profile_ctx = f"\n创作者历史使用过: {', '.join(profile['viltrox_lenses'][:3])}"
+            profile_ctx = (
+                f"\n创作者历史使用过: {', '.join(profile['viltrox_lenses'][:3])}"
+            )
 
     scope_passes = _scope_guard(result, authorization_checkpoint)
-    # ── F2:字幕抓取并行启动(守护线程),生成前有界等待,晚到不等 ──
     if not scope_passes("youtube_subtitles"):
         return result
     subtitles = _SubtitleFetch(url)
-    subtitle_raw = ""
-    diagnostics: dict[str, Any] = result.setdefault("diagnostics", {})
-
-    def _collect_subtitles(timeout_seconds: float) -> str:
-        nonlocal subtitle_raw
-        if not subtitles.done:
-            wait_started = time.monotonic()
-            subtitle_raw = subtitles.collect(timeout_seconds)
-            _stage_add(result, "subtitles", wait_started)
-        else:
-            subtitle_raw = subtitles.text
-        result["subtitle_chars"] = len(subtitle_raw or "")
-        return subtitle_raw
-
-    def _finish_subtitle_diagnostics() -> None:
-        timings = result.get("stage_timings_ms") if isinstance(result.get("stage_timings_ms"), dict) else {}
-        if subtitles.done:
-            timings["subtitles"] = max(int(timings.get("subtitles") or 0), int(subtitles.elapsed_ms))
-            result["stage_timings_ms"] = timings
-        elif "subtitles" not in timings:
-            timings["subtitles"] = 0
-            result["stage_timings_ms"] = timings
-        result["subtitle_chars"] = len(subtitle_raw or "")
-        diagnostics["subtitles"] = subtitles.diagnostics(used=bool(subtitle_raw))
-
     schema_key = str(schema_version or "").strip().lower()
-    is_v2 = schema_key == "v2"
     is_final_v1 = schema_key == "final_v1"
-
-    def _prompts() -> tuple[str, str]:
-        return _build_prompts(
-            schema_key,
-            title=title,
-            profile_ctx=profile_ctx,
-            subtitle_raw=subtitle_raw,
-            performance_context=performance_context,
-        )
-
-    def _apply_parsed(parsed: dict[str, Any], usage_metadata: dict[str, Any], *, method_prefix: str, model_name: str) -> None:
-        method = f"{method_prefix}_{model_name}"
-        _stamp_analyzer_model_identity(result, GEMINI_MODELS, model_name, diagnostics)
-        if is_final_v1:
-            _apply_final_v1_result(
-                result, parsed, method=method, model=model_name,
-                usage_metadata=usage_metadata, subtitle_used=bool(subtitle_raw),
-            )
-            logger.info(
-                f"{method_prefix}_final_v1_success",
-                extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
-            )
-            return
-        if is_v2:
-            _apply_v2_result(
-                result, parsed, method=method, model=model_name,
-                usage_metadata=usage_metadata, subtitle_used=bool(subtitle_raw),
-            )
-            logger.info(
-                f"{method_prefix}_v2_success",
-                extra={"model": model_name, "timestamps": len(result.get("timestamps") or [])},
-            )
-            return
-        scored = _apply_legacy_result(result, parsed, method=method, model=model_name, usage_metadata=usage_metadata)
-        logger.info(
-            f"{method_prefix}_success",
-            extra={
-                "model": model_name,
-                "genre": scored["genre"],
-                "vertical": scored["vertical"],
-                "timestamps": len(result["timestamps"]),
-                "brand_score": scored["ws"]["brand_exposure_score"],
-                "story_score": scored["ws"]["storytelling_score"],
-            },
-        )
-
-    gemini_file = None
-    tmp_path = None
-
-    # ── Model list(C4):默认链 core/gemini_models.DEFAULT_FINAL_V1_CHAIN,只在
-    # 提供方压力/代理错时换下一节;worker 通过 models / gemini_final_v1_models 钉单模型。
-    GEMINI_MODELS = [DEFAULT_VIDEO_GEMINI_MODEL]
+    gemini_models = [DEFAULT_VIDEO_GEMINI_MODEL]
     if models is not None:
-        GEMINI_MODELS = final_v1_gemini_models(models)
+        gemini_models = final_v1_gemini_models(models)
     elif is_final_v1:
-        GEMINI_MODELS = final_v1_gemini_models(final_v1_models)
-    attempt_total = len(GEMINI_MODELS) * (
+        gemini_models = final_v1_gemini_models(final_v1_models)
+    attempt_total = len(gemini_models) * (
         2 if "youtu.be" in url or "youtube.com" in url else 1
     )
 
-    # ===== FAST PATH: YouTube direct URL (no download, no upload) =====
-    _active_file_name = None  # tracks File API resource for cleanup in finally
-
-    if "youtu.be" in url or "youtube.com" in url:
-        # 直链诊断(零成本):每次模型尝试的错误原文落 result,剖面脚本据此统计直链命中率与降级真因。
-        # 刀①:直链只喂规范化 watch?v= 链接(带 &t=/&pp=/?si= 的原链是直链秒拒的头号真因)。
-        direct_url, direct_video_id = canonical_youtube_url(url)
-        direct_diag: dict[str, Any] = {
-            "attempted": True,
-            "success": False,
-            "attempts": [],
-            "fallback_reason": "",
-            "url": direct_url,
-            "url_canonicalized": bool(direct_video_id) and direct_url != url,
-        }
-        result["youtube_direct"] = direct_diag
-        try:
-            logger.info(
-                "gemini_fast_path_start",
-                extra={"url": direct_url, "canonicalized": direct_diag["url_canonicalized"]},
-            )
-            _fast_path_success = False
-            _fast_path_err = None
-
-            direct_plan = list(enumerate(GEMINI_MODELS, start=1))
-            direct_cache_retried: set[str] = set()
-            direct_pos = 0
-            while direct_pos < len(direct_plan):
-                attempt_index, model_name = direct_plan[direct_pos]
-                direct_pos += 1
-                if not scope_passes("youtube_direct_attempt"):
-                    _finish_subtitle_diagnostics()
-                    return result
-                attempt_started = time.monotonic()
-                cache_info: dict[str, Any] = {}
-                try:
-                    cache_config = None
-                    if is_final_v1:
-                        cache_setup_started = time.monotonic()
-                        cache_config, cache_info = _final_v1_cache_config(model_name)
-                        _stage_add(result, "cache_setup", cache_setup_started)
-                    # 字幕:首次尝试最多等到 grace 截止,之后的尝试只取已到的
-                    _collect_subtitles(GEMINI_VIDEO_SUBTITLE_GRACE_SECONDS)
-                    prompt, final_full_prompt = _prompts()
-                    request_prompt = final_full_prompt if (is_final_v1 and not cache_config) else prompt
-                    request_config = _video_generate_config(model_name, cache_config)
-
-                    def _analyze_direct(m=model_name, u=direct_url, rp=request_prompt, rc=request_config):
-                        kwargs: dict[str, Any] = {
-                            "model": m,
-                            "contents": [
-                                genai_types.Part(file_data=genai_types.FileData(file_uri=u)),
-                                rp,
-                            ],
-                        }
-                        if rc:
-                            kwargs["config"] = rc
-                        return _generate_json_with_recovery(
-                            model_name=m,
-                            contents=kwargs["contents"],
-                            config=kwargs.get("config"),
-                            prompt=rp,
-                            performance_context=performance_context,
-                            llm_context=llm_context,
-                            subphase="youtube_uri_fast_generation",
-                            attempt_index=attempt_index,
-                            attempt_total=attempt_total,
-                            attempt_log=result["llm_attempts"],
-                            diagnostics=diagnostics,
-                        )
-
-                    parsed, usage_metadata = await asyncio.to_thread(_analyze_direct)
-                    direct_diag["attempts"].append(
-                        {
-                            "model": model_name,
-                            "ok": True,
-                            "error": "",
-                            "elapsed_ms": _stage_add(result, "youtube_direct", attempt_started),
-                        }
-                    )
-                    _apply_parsed(parsed, usage_metadata, method_prefix="gemini_direct", model_name=model_name)
-                    if is_final_v1:
-                        result["context_cache"] = cache_info
-                    _fast_path_success = True
-                    break
-                except Exception as e:
-                    _mark_attempt_failed(diagnostics)
-                    _fast_path_err = str(e)[:200]
-                    last_attempt = direct_diag["attempts"][-1] if direct_diag["attempts"] else None
-                    if last_attempt and last_attempt.get("model") == model_name and last_attempt.get("ok"):
-                        # 响应已回但 JSON/结构校验抛错:沿用已计的耗时,改标失败(不重复累加阶段时间)
-                        last_attempt["ok"] = False
-                        last_attempt["error"] = _fast_path_err
-                    else:
-                        direct_diag["attempts"].append(
-                            {
-                                "model": model_name,
-                                "ok": False,
-                                "error": _fast_path_err,
-                                "elapsed_ms": _stage_add(result, "youtube_direct", attempt_started),
-                            }
-                        )
-                    logger.warning(
-                        "gemini_fast_path_model_failed",
-                        extra={"model": model_name, "error": _fast_path_err[:80]},
-                    )
-                    if _retry_after_context_cache_error(e, cache_info, model_name, direct_cache_retried):
-                        direct_plan.insert(direct_pos, (attempt_index, model_name))
-                        continue
-                    if not should_switch_model(e):
-                        # C4:JSON/契约/4xx 不换模型——直接走慢路(换透传方式而非换模型)
-                        direct_diag["chain_stop_reason"] = f"{type(e).__name__}: {_fast_path_err[:120]}"
-                        break
-                    continue
-
-            if _fast_path_success:
-                direct_diag["success"] = True
-                _finish_subtitle_diagnostics()
-                return result  # Done! Skip slow path entirely.
-            elif _fast_path_err and _is_provider_pressure_error(_fast_path_err):
-                direct_diag["fallback_reason"] = f"provider_pressure: {_fast_path_err}"
-                logger.warning(
-                    "gemini_fast_path_provider_pressure_abort",
-                    extra={"error": _fast_path_err[:120]},
-                )
-                raise ProviderPressureExhausted(
-                    f"provider_pressure(all models tried): {_fast_path_err}"
-                )
-            else:
-                direct_diag["fallback_reason"] = _fast_path_err or "no_model_succeeded"
-                logger.warning("gemini_fast_path_fallback_to_download")
-                # Fall through to slow path below
-        except ProviderPressureExhausted:
-            _finish_subtitle_diagnostics()
-            raise
-        except Exception as fast_err:
-            direct_diag["fallback_reason"] = f"fast_path_exception: {str(fast_err)[:200]}"
-            logger.warning("gemini_fast_path_exception", extra={"error": str(fast_err)})
-            # Fall through to slow path
-
-    # ===== SLOW PATH: yt-dlp download + File API upload =====
-    try:
-        # Step 1: Download FULL video at 720p. Keep this below the worker
-        # subprocess timeout so failures report as a download timeout, not a
-        # generic Gemini child-process kill.
-        import tempfile
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmp_path = os.path.join(tmpdir, "gemini_video.mp4")
-            if not scope_passes("youtube_download"):
-                return result
-            logger.info("gemini_fileapi_download_start", extra={"url": url})
-
-            download_max_height = _ytdlp_max_height()
-            dl_cmd = [
-                sys.executable,
-                "-m",
-                "yt_dlp",
-                "-f", _ytdlp_download_format(download_max_height),
-                "--merge-output-format", "mp4",
-                "-o", tmp_path,
-                "--no-playlist",
-                "--quiet",
-            ]
-            if YTDLP_PROXY:
-                dl_cmd += ["--proxy", YTDLP_PROXY]
-            dl_cmd += _ytdlp_cookies_args()
-            dl_cmd.append(url)
-            download_started = time.monotonic()
-            dl_proc = await asyncio.to_thread(
-                lambda: subprocess.run(
-                    dl_cmd,
-                    capture_output=True,
-                    timeout=GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
-                )
-            )
-            download_ms = _stage_add(result, "download", download_started)
-            downloaded_bytes = int(os.path.getsize(tmp_path)) if os.path.exists(tmp_path) else 0
-            # 下载诊断(零成本):returncode + stderr 尾巴落 result,区分 bot 验证/地区限制/代理断流。
-            _stderr_raw = getattr(dl_proc, "stderr", b"") if dl_proc is not None else b""
-            if isinstance(_stderr_raw, bytes):
-                _stderr_text = _stderr_raw.decode("utf-8", errors="ignore")
-            else:
-                _stderr_text = str(_stderr_raw or "")
-            _stderr_text = redact_secrets(_stderr_text, limit=600)
-            result["download_diagnostics"] = {
-                "tool": "yt-dlp",
-                "returncode": getattr(dl_proc, "returncode", None) if dl_proc is not None else None,
-                "elapsed_ms": download_ms,
-                "bytes": downloaded_bytes,
-                "proxy": bool(YTDLP_PROXY),
-                "max_height": download_max_height,
-                "cookies": "--cookies" in dl_cmd,
-                "stderr_tail": _stderr_text,
-            }
-            if downloaded_bytes < 1000:
-                result["error"] = "yt-dlp video download failed for Gemini analysis"
-                logger.warning(
-                    "gemini_fileapi_download_failed",
-                    extra={"url": url, "stderr_tail": _stderr_text[-300:]},
-                )
-                return result
-
-            file_size_mb = downloaded_bytes / 1024 / 1024
-            logger.info("gemini_fileapi_upload_start", extra={"size_mb": round(file_size_mb, 1)})
-
-            # Step 2: Upload to Gemini File API
-            if not scope_passes("file_api_upload"):
-                return result
-            upload_started = time.monotonic()
-            try:
-                def _upload():
-                    return gemini_client.files.upload(
-                        file=tmp_path,
-                        config={"mime_type": "video/mp4"}
-                    )
-                gemini_file = await asyncio.to_thread(_upload)
-            except Exception as upload_err:
-                _stage_add(result, "upload", upload_started)
-                result["error"] = f"Gemini File API upload failed: {upload_err}"
-                logger.warning("gemini_fileapi_upload_failed", extra={"error": str(upload_err)})
-                return result
-            _stage_add(result, "upload", upload_started)
-
-            if not gemini_file or not getattr(gemini_file, "name", None):
-                result["error"] = "Gemini upload returned empty file object"
-                logger.warning("gemini_fileapi_upload_invalid_file", extra={"file": str(gemini_file)})
-                return result
-
-            logger.info(
-                "gemini_fileapi_upload_complete",
-                extra={"file_name": gemini_file.name, "uri": gemini_file.uri},
-            )
-
-            # Step 3: Wait for file to be ACTIVE (usually 5-60 seconds for video)
-            active_wait_started = time.monotonic()
-            for poll_attempt in range(30):   # max 90s (30 × 3s)
-                try:
-                    def _check(name=gemini_file.name):
-                        return gemini_client.files.get(name=name)
-                    polled = await asyncio.to_thread(_check)
-                    gemini_file = polled
-                except Exception as poll_err:
-                    _stage_add(result, "file_active_wait", active_wait_started)
-                    result["error"] = f"files.get() 404 during polling — upload may have failed: {poll_err}"
-                    logger.warning(
-                        "gemini_fileapi_poll_error",
-                        extra={"attempt": poll_attempt, "error": str(poll_err)},
-                    )
-                    return result
-
-                state = getattr(gemini_file.state, "name", str(gemini_file.state))
-                logger.info("gemini_fileapi_poll", extra={"attempt": poll_attempt + 1, "state": state})
-
-                if state == "ACTIVE":
-                    break
-                if state == "FAILED":
-                    _stage_add(result, "file_active_wait", active_wait_started)
-                    result["error"] = f"Gemini file processing FAILED (state={state}). Try re-uploading."
-                    logger.warning(
-                        "gemini_fileapi_processing_failed",
-                        extra={"attempt": poll_attempt + 1, "state": state},
-                    )
-                    return result
-                await asyncio.sleep(3)
-            else:
-                _stage_add(result, "file_active_wait", active_wait_started)
-                result["error"] = f"Gemini file ACTIVE timeout after 90s (final state={state})"
-                logger.warning("gemini_fileapi_poll_timeout", extra={"state": state})
-                return result
-            _stage_add(result, "file_active_wait", active_wait_started)
-
-            logger.info("gemini_fileapi_active", extra={"uri": gemini_file.uri})
-
-            if not getattr(gemini_file, "uri", None):
-                result["error"] = "Gemini file ACTIVE but uri is empty — cannot call generate_content"
-                logger.warning("gemini_fileapi_empty_uri", extra={"file_name": gemini_file.name})
-                return result
-
-            # Step 4: Analyze with Gemini — same chain, same C4 switch rule
-            _active_file_name = gemini_file.name
-            MODELS = GEMINI_MODELS
-            last_err = ""
-            file_plan = list(enumerate(MODELS, start=1))
-            file_cache_retried: set[str] = set()
-            file_pos = 0
-            # 慢路已经很慢,字幕几乎必到;仍设上限防 yt-dlp 卡死
-            _collect_subtitles(GEMINI_VIDEO_SUBTITLE_SLOW_PATH_WAIT_SECONDS)
-            while file_pos < len(file_plan):
-                model_offset, model_name = file_plan[file_pos]
-                file_pos += 1
-                if not scope_passes("file_api_attempt"):
-                    return result
-                attempt_started = time.monotonic()
-                cache_info = {}
-                try:
-                    cache_config = None
-                    if is_final_v1:
-                        cache_setup_started = time.monotonic()
-                        cache_config, cache_info = _final_v1_cache_config(model_name)
-                        _stage_add(result, "cache_setup", cache_setup_started)
-                    prompt, final_full_prompt = _prompts()
-                    request_prompt = final_full_prompt if (is_final_v1 and not cache_config) else prompt
-                    request_config = _video_generate_config(model_name, cache_config)
-
-                    def _analyze(m=model_name, f=gemini_file, rp=request_prompt, rc=request_config):
-                        kwargs: dict[str, Any] = {
-                            "model": m,
-                            "contents": [
-                                genai_types.Part.from_uri(file_uri=f.uri, mime_type="video/mp4"),
-                                rp,
-                            ],
-                        }
-                        if rc:
-                            kwargs["config"] = rc
-                        return _generate_json_with_recovery(
-                            model_name=m,
-                            contents=kwargs["contents"],
-                            config=kwargs.get("config"),
-                            prompt=rp,
-                            performance_context=performance_context,
-                            llm_context=llm_context,
-                            subphase="youtube_file_fallback_generation",
-                            attempt_index=len(GEMINI_MODELS) + model_offset,
-                            attempt_total=attempt_total,
-                            attempt_log=result["llm_attempts"],
-                            diagnostics=diagnostics,
-                        )
-
-                    parsed, usage_metadata = await asyncio.to_thread(_analyze)
-                    _stage_add(result, "generation", attempt_started)
-                    _apply_parsed(parsed, usage_metadata, method_prefix="gemini_fileapi", model_name=model_name)
-                    if is_final_v1:
-                        result["context_cache"] = cache_info
-                    break
-                except Exception as e:
-                    import traceback
-                    _stage_add(result, "generation", attempt_started)
-                    _mark_attempt_failed(diagnostics)
-                    last_err = str(e)
-                    logger.warning(
-                        "gemini_fileapi_model_failed",
-                        extra={
-                            "model": model_name,
-                            "error": str(e)[:80],
-                            "traceback_tail": traceback.format_exc()[-500:],
-                        },
-                    )
-                    if _retry_after_context_cache_error(e, cache_info, model_name, file_cache_retried):
-                        file_plan.insert(file_pos, (model_offset, model_name))
-                        continue
-                    if not should_switch_model(e):
-                        diagnostics["chain_stop_reason"] = f"{type(e).__name__}: {last_err[:120]}"
-                        break
-                    continue
-
-            if not result["analyzed"]:
-                result["error"] = last_err
-
-    except Exception as e:
-        result["error"] = str(e)
-        logger.exception("gemini_analysis_failed")
-    finally:
-        _finish_subtitle_diagnostics()
-        # Step 5: Always delete file from Gemini File API to avoid storage charges.
-        _file_to_delete = getattr(gemini_file, "name", None) if gemini_file else None
-        if _file_to_delete:
-            cleanup_started = time.monotonic()
-            try:
-                def _delete(name=_file_to_delete):
-                    gemini_client.files.delete(name=name)
-                await asyncio.to_thread(_delete)
-                logger.info("gemini_fileapi_deleted", extra={"file_name": _file_to_delete})
-            except Exception as del_err:
-                # 404 here is harmless — file was already gone or never fully created
-                logger.warning("gemini_fileapi_delete_skipped", extra={"error": str(del_err)})
-            _stage_add(result, "cleanup", cleanup_started)
-
-    return result
+    hooks = YouTubeRuntimeHooks(
+        client=gemini_client,
+        genai_types=genai_types,
+        logger=logger,
+        provider_pressure_exhausted=ProviderPressureExhausted,
+        final_v1_cache_config=_final_v1_cache_config,
+        generate_json_with_recovery=_generate_json_with_recovery,
+        is_provider_pressure_error=_is_provider_pressure_error,
+        mark_attempt_failed=_mark_attempt_failed,
+        retry_after_context_cache_error=_retry_after_context_cache_error,
+        stamp_analyzer_model_identity=_stamp_analyzer_model_identity,
+        stage_add=_stage_add,
+        video_generate_config=_video_generate_config,
+        apply_final_v1_result=_apply_final_v1_result,
+        apply_v2_result=_apply_v2_result,
+        apply_legacy_result=_apply_legacy_result,
+        should_switch_model=should_switch_model,
+        build_prompts=_build_prompts,
+        canonical_youtube_url=canonical_youtube_url,
+        redact_secrets=redact_secrets,
+        subprocess_run=subprocess.run,
+        path_exists=os.path.exists,
+        path_getsize=os.path.getsize,
+        path_join=os.path.join,
+        sys_executable=sys.executable,
+        ytdlp_proxy=YTDLP_PROXY,
+        ytdlp_max_height=_ytdlp_max_height,
+        ytdlp_download_format=_ytdlp_download_format,
+        ytdlp_cookies_args=_ytdlp_cookies_args,
+        download_timeout_seconds=GEMINI_VIDEO_YTDLP_DOWNLOAD_TIMEOUT_SECONDS,
+        subtitle_grace_seconds=GEMINI_VIDEO_SUBTITLE_GRACE_SECONDS,
+        subtitle_slow_path_wait_seconds=GEMINI_VIDEO_SUBTITLE_SLOW_PATH_WAIT_SECONDS,
+    )
+    runtime = YouTubeAnalysisRuntime(
+        result=result,
+        url=url,
+        title=title,
+        profile_ctx=profile_ctx,
+        schema_key=schema_key,
+        performance_context=performance_context,
+        llm_context=llm_context,
+        models=gemini_models,
+        attempt_total=attempt_total,
+        scope_passes=scope_passes,
+        subtitles=subtitles,
+        hooks=hooks,
+    )
+    return await runtime.run()

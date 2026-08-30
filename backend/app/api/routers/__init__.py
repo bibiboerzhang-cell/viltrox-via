@@ -1,4 +1,9 @@
-from app.api.routers import activities, auth, admin, audit, creator, uploads, sse, leaderboard, platform_ingest, media, via, student_identity, vkpi, vkpi_attribution_metrics, vkpi_comment_intelligence, vkpi_audit, vkpi_comments, vkpi_costs, vkpi_dashboard_staff, vkpi_data_quality, vkpi_evidence_assets, vkpi_feedback, vkpi_firewall, vkpi_industry_automation, vkpi_kol_links, vkpi_kol_pool, vkpi_memory, vkpi_operations, vkpi_pillars, vkpi_product_analysis, vkpi_projects, vkpi_reconciliation, vkpi_reports, vkpi_settings, vkpi_sentiment, vkpi_sync, vkpi_weekly_reports, vkpi_workflow_assets
+"""Router package registry.
+
+Submodules intentionally remain lazy.  Python's package import semantics keep
+``from app.api.routers import <submodule>`` compatible without importing every
+router when callers only need the registry below.
+"""
 
 __all__ = ["activities", "auth", "admin", "audit", "creator", "uploads", "sse", "leaderboard", "platform_ingest", "media", "via", "student_identity", "vkpi", "vkpi_attribution_metrics", "vkpi_comment_intelligence", "vkpi_audit", "vkpi_comments", "vkpi_costs", "vkpi_dashboard_staff", "vkpi_data_quality", "vkpi_evidence_assets", "vkpi_feedback", "vkpi_firewall", "vkpi_industry_automation", "vkpi_kol_links", "vkpi_kol_pool", "vkpi_memory", "vkpi_operations", "vkpi_pillars", "vkpi_product_analysis", "vkpi_projects", "vkpi_reconciliation", "vkpi_reports", "vkpi_settings", "vkpi_sentiment", "vkpi_sync", "vkpi_weekly_reports", "vkpi_workflow_assets", "ADMIN_ROUTER_MODULES"]
 

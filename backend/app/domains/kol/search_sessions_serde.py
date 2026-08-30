@@ -1,11 +1,7 @@
-"""Pure serialization/normalization helpers for KOL search sessions.
+"""Pure KOL search-session serialization and normalization helpers.
 
-Behavior-preserving move out of ``search_sessions.py``. These are all pure
-functions (no DB access) covering JSON (de)serialization, value coercion,
-status/query-type normalization, row→dict mappers, item counting, and flow
-compaction. Re-exported by ``search_sessions`` to keep all call sites stable.
-
-This module never writes ``viltrox_fit_score`` (no fit writes whatsoever).
+The module has no DB access, remains re-export compatible with
+``search_sessions``, and never writes ``viltrox_fit_score``.
 """
 from __future__ import annotations
 
@@ -23,6 +19,7 @@ from app.domains.kol.search_sessions_schema import (
     SESSION_QUERY_TYPES,
     SESSION_STATUSES,
 )
+from app.domains.kol.search_sessions_targeted import project_targeted_session_input
 
 
 def _int_or_none(value: Any) -> int | None:
@@ -654,10 +651,10 @@ _SESSION_INPUT_FIELDS = {
     "creator_quota", "dedupe", "defer_to_queue", "discovery_platforms", "execute",
     "exclude_chinese", "force_full_history", "handle", "handle_or_url", "include_discovery",
     "include_new_discovery", "input", "kol_types", "languages", "limit", "local_evaluation",
-    "local_qualification_spec", "market", "max_posts", "mixed_policy", "mode",
+    "local_qualification_spec", "online_qualification_spec", "market", "max_posts", "mixed_policy", "mode", "result_limit",
     "new_discovery_limit", "new_discovery_per_platform_limit", "new_discovery_per_platform_limits", "new_discovery_platforms",
-    "platform", "platforms", "product_sku", "profile_types", "query_text", "queue_pipeline",
-    "ratio_policy", "representative_video_limit", "reviewer_quota", "scan_account",
+    "platform", "platforms", "product_sku", "profile_types", "query_text", "queue_pipeline", "search_strategy",
+    "bucket_policy", "ratio_policy", "representative_video_limit", "reviewer_quota", "scan_account",
     "search_session_id", "session_id", "source", "task_id", "type_boost_enabled",
     "type_weight", "url", "vector_weight",
 }
@@ -667,6 +664,8 @@ def _sanitize_session_input_payload(value: Any) -> dict[str, Any]:
     """Allowlist durable operator inputs, then apply the recursive contact scrubber."""
     raw = _dict(value)
     bounded = {key: raw[key] for key in _SESSION_INPUT_FIELDS if key in raw}
+    # Persist operator intent, but never a client-supplied execution plan.
+    bounded.update(project_targeted_session_input(raw))
     return _sanitize_session_payload(bounded)
 
 

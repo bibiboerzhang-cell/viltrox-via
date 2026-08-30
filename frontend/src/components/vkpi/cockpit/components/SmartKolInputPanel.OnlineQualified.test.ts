@@ -6,6 +6,7 @@ import {
   onlineQualifiedSummaryFromSession,
   strictOnlineDiscoveryPlatforms,
 } from "./SmartKolInputPanel.OnlineQualified";
+import { candidateGrowthSummary } from "./SmartKolInputPanel.CandidateEvidence";
 
 function proof(overrides: Record<string, unknown> = {}) {
   return {
@@ -62,7 +63,7 @@ function onlineItem(id: number, serverRank: number, proofValue = proof()) {
   };
 }
 
-function session(items: unknown[]): VkpiKolSearchHistoryItem {
+function session(items: unknown[], contractOverrides: Record<string, unknown> = {}): VkpiKolSearchHistoryItem {
   return {
     id: 7,
     status: "partial",
@@ -95,6 +96,7 @@ function session(items: unknown[]): VkpiKolSearchHistoryItem {
         candidate_budget_used: 44,
         shortfall: 28,
         shortfall_reasons: { market_mismatch: 8, duplicate_local: 2 },
+        ...contractOverrides,
       },
     },
   };
@@ -103,7 +105,27 @@ function session(items: unknown[]): VkpiKolSearchHistoryItem {
 describe("SmartKolInputPanel online strict lane", () => {
   it("never sends unsupported Facebook into the strict-online provider lane", () => {
     expect(strictOnlineDiscoveryPlatforms(["facebook", "youtube", "youtube"])).toEqual(["youtube"]);
-    expect(strictOnlineDiscoveryPlatforms(["facebook"])).toEqual(["youtube", "instagram", "tiktok"]);
+    expect(strictOnlineDiscoveryPlatforms(["facebook"])).toEqual([]);
+    expect(strictOnlineDiscoveryPlatforms([])).toEqual(["youtube", "instagram", "tiktok"]);
+  });
+
+  it("projects missing body/subtitle evidence and its unscheduled follow-up honestly", () => {
+    const summary = onlineQualifiedSummaryFromSession(session([], {
+      net_new_accepted_count: 0,
+      returned_count: 0,
+      strict_qualified_count: 0,
+      pending_content_evidence_count: 2,
+      content_evidence_followup: {
+        status: "not_scheduled",
+        candidate_count: 2,
+        counts_toward_target: false,
+      },
+    }));
+
+    expect(summary.pendingContentEvidence).toBe(2);
+    expect(summary.contentEvidenceFollowupStatus).toBe("not_scheduled");
+    expect(summary.qualified).toBe(0);
+    expect(summary.terminal).toBe(true);
   });
 
   it("counts only exact accepted v1 rows with complete strict-v2 proof and orders by server rank", () => {
@@ -126,6 +148,34 @@ describe("SmartKolInputPanel online strict lane", () => {
     expect(summary.duplicateOnline).toBe(3);
     expect(summary.duplicateLocalInventory).toBe(1);
     expect(summary.shortfallReasons).toEqual(["不符合目标市场 8", "与本地名单重复 2"]);
+  });
+
+  it("preserves the safe online growth projection for the shared candidate UI", () => {
+    const item = onlineItem(21, 1);
+    Object.assign(item.payload, {
+      growth_candidate_score: 82,
+      product_use_fit: 94,
+      market_activation: 78,
+      audience_fit: 71,
+      content_execution: null,
+      evidence_confidence: 69,
+      claim_status: "descriptive_only",
+      growth_candidate_scoring: { objective: "prospective_growth", claim_status: "descriptive_only" },
+    });
+
+    const summary = onlineQualifiedSummaryFromSession(session([item]));
+    const growth = candidateGrowthSummary(summary.rows[0].item);
+
+    expect(growth.active).toBe(true);
+    expect(growth.score).toBe(82);
+    expect(growth.evidenceConfidence).toBe(69);
+    expect(growth.dimensions.map((dimension) => [dimension.label, dimension.displayValue])).toEqual([
+      ["产品适配", "94"],
+      ["市场推进", "78"],
+      ["受众适配", "71"],
+      ["内容执行", "待补证"],
+    ]);
+    expect(growth.disclaimer).toBe("描述性决策支持，不代表转化");
   });
 
   it("fails closed when the aggregate contract is absent or a row revision does not match", () => {

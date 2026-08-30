@@ -25,14 +25,25 @@ _LONG_QUERY = "young creators shooting portraits with the Viltrox AF 135mm f1.8 
 
 
 # ── 埋点四样:轮次观测 / 锚 / 字段普查 / 逐词归因 ─────────────────────────────
-def _leg(platform: str, terms: list[str], *, quota: int = 0, actor: str = "", **extra: Any) -> dict[str, Any]:
+def _leg(
+    platform: str, terms: list[str], *, quota: int = 0, actor: str = "",
+    combined_units: int | None = None, **extra: Any,
+) -> dict[str, Any]:
+    searches = max(0, (quota - 1) // 100) if quota else 0
+    combined = (2 if quota and platform == "youtube" else 0) if combined_units is None else combined_units
     return {
         "platform": platform,
         "status": "done",
         "metadata": {
             "actor_id": actor or "youtube-data-api/search.list:video",
             "provider_queries": terms,
-            **({"quota_units": quota} if quota else {}),
+            **({
+                "youtube_search_calls": searches,
+                "youtube_combined_quota_units": combined,
+                "youtube_api_calls": searches + combined,
+                "quota_units": combined,
+                "quota_units_deprecated": True,
+            } if quota else {}),
             **extra,
         },
     }
@@ -69,8 +80,11 @@ def test_observe_round_records_terms_quota_and_per_term_candidates() -> None:
     )
     youtube = next(leg for leg in observation["legs"] if leg["platform"] == "youtube")
     assert youtube["terms"] == ["Viltrox lens review", "young creators shooting"]
-    assert youtube["quota_units_actual"] == 201
-    assert youtube["quota_overhead_units"] == 1        # channels.list 那 1 个单位
+    assert youtube["youtube_search_calls_actual"] == 2
+    assert youtube["youtube_combined_quota_units_actual"] == 2
+    assert youtube["youtube_api_calls_actual"] == 4
+    assert youtube["quota_units_actual"] == 2
+    assert youtube["quota_overhead_units"] == 2
     assert youtube["apify_actor_runs"] == 0            # Data API 快路径零 Apify run
     assert youtube["candidates_by_term"] == {"Viltrox lens review": 2, "young creators shooting": 1}
     assert youtube["attribution"] == "per_item"
@@ -78,7 +92,9 @@ def test_observe_round_records_terms_quota_and_per_term_candidates() -> None:
     assert instagram["quota_units_actual"] == 0        # IG 不吃 YouTube 配额
     assert instagram["apify_actor_runs"] == 2          # hashtag + profile 富化
     assert instagram["attribution"] == "shared_round"  # actor 不下发逐条溯源,如实标
-    assert observation["quota_units_actual"] == 201
+    assert observation["youtube_search_calls_actual"] == 2
+    assert observation["youtube_combined_quota_units_actual"] == 2
+    assert observation["youtube_api_calls_actual"] == 4
     assert observation["candidates_returned"] == 4
 
 
@@ -205,7 +221,9 @@ def test_build_term_evidence_attributes_qualified_newcomers_per_term() -> None:
     record = ev.build_term_evidence(
         lane="online_strict", anchor=anchor, rounds=[observation],
         observed_candidates=candidates, accepted_items=accepted,
-        quota_forecast_units=301,
+        youtube_search_calls_forecast=3,
+        youtube_combined_quota_units_forecast=2,
+        youtube_api_calls_forecast=5,
     )
     assert record["schema"] == ev.TERM_EVIDENCE_SCHEMA
     by_term = {row["term"]: row for row in record["terms"]}
@@ -218,9 +236,12 @@ def test_build_term_evidence_attributes_qualified_newcomers_per_term() -> None:
     assert record["unanchored_terms"] == [generic_term]
     # 泛词烧掉多少配额 —— 此前只能翻日志反查,现在是个真数。
     assert record["quota"]["unanchored_units"] == 100
-    assert record["quota"]["youtube_units_actual"] == 201
-    assert record["quota"]["youtube_units_forecast"] == 301
-    assert record["quota"]["forecast_delta_units"] == 100
+    assert record["quota"]["youtube_search_calls_actual"] == 2
+    assert record["quota"]["youtube_combined_quota_units_actual"] == 2
+    assert record["quota"]["youtube_api_calls_actual"] == 4
+    assert record["quota"]["youtube_units_actual"] == 2
+    assert record["quota"]["youtube_units_forecast"] == 2
+    assert record["quota"]["forecast_delta_units"] == 0
     assert record["qualified_new_total"] == 2
     assert record["qualified_unattributed_count"] == 0
     assert record["field_census"]["candidates"] == 3
@@ -281,7 +302,7 @@ def test_evidence_record_survives_the_session_payload_sanitizer() -> None:
     survived = _sanitize_session_payload({ev.TERM_EVIDENCE_KEY: record})[ev.TERM_EVIDENCE_KEY]
     assert survived["terms"][0]["term"] == term
     assert survived["terms"][0]["qualified_new"] == 1
-    assert survived["quota"]["youtube_units_actual"] == 101
+    assert survived["quota"]["youtube_units_actual"] == 2
     assert survived["field_census"]["candidates"] == 1
 
 
@@ -405,15 +426,18 @@ def test_strict_online_pipeline_persists_all_four_evidence_facts(
     assert terms[anchored_term]["qualified_new"] == 2
     assert terms[generic_term]["qualified_new"] == 0
     assert terms[anchored_term]["quota_units"] == terms[generic_term]["quota_units"] == 100
-    assert evidence["quota"]["youtube_units_actual"] == 201
+    assert evidence["quota"]["youtube_search_calls_actual"] == 2
+    assert evidence["quota"]["youtube_combined_quota_units_actual"] == 2
+    assert evidence["quota"]["youtube_api_calls_actual"] == 4
     assert evidence["unanchored_terms"] == [generic_term]
     assert evidence["quota"]["unanchored_units"] == 100
     assert evidence["qualified_unattributed_count"] == 0
 
     # 轮次账本同时被对账:预报(按真实变体数)与实际并列可查。
     plan = patch["discovery_round_plan"]
-    assert plan["youtube_quota_units_actual"] == 201
-    assert plan["youtube_quota_units_total"] == plan["quota_forecast_delta_units"] + 201
+    assert plan["youtube_combined_quota_units_actual"] == 2
+    assert plan["youtube_combined_quota_units_total"] == 2
+    assert plan["youtube_quota_units_deprecated"] is True
     assert plan["apify_runs_actual"] == 0
     # 既有漏斗留痕不受影响(本车道只加不减)。
     assert patch[pipeline.search_session_diagnostics.DISCOVERY_FUNNEL_KEY]["lane"] == "online_strict"
@@ -470,7 +494,7 @@ def test_legacy_discovery_lane_records_the_same_four_facts(
             "new_creators": [dict(row) for row in candidates],
             "existing_matches": [],
             "counts": {"new_creators": 2, "existing_matches": 0},
-            "platform_results": [_leg("youtube", [term], quota=101)],
+                "platform_results": [_leg("youtube", [term], quota=101, combined_units=1)],
             "platforms": ["youtube"],
         }
 
@@ -494,7 +518,7 @@ def test_legacy_discovery_lane_records_the_same_four_facts(
     assert evidence["lane"] == "legacy_discovery"
     assert [row["term"] for row in evidence["terms"]] == [term]
     assert evidence["terms"][0]["qualified_new"] == 2
-    assert evidence["quota"]["youtube_units_actual"] == 101
+    assert evidence["quota"]["youtube_units_actual"] == 1
     assert evidence["quota"]["youtube_units_forecast"] is None
     assert evidence["quota"]["forecast_delta_units"] is None
     assert evidence["field_census"]["candidates"] == 2

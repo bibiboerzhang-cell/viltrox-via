@@ -151,6 +151,9 @@ def test_default_is_repeatable_zero_call_dry_run() -> None:
     assert first["safety_limits"]["unique_task_bindings"] == canary.EXPECTED_UNIQUE_BINDINGS == 7
     assert len(first["results"]) == 7
     assert {row["status"] for row in first["results"]} == {"dry_run"}
+    limits = first["safety_limits"]["binding_output_token_limits"]
+    assert limits["google/gemini-2.5-pro"] == 128
+    assert limits["google/gemini-3.6-flash"] == canary.DEFAULT_MAX_OUTPUT_TOKENS
     expected_row_keys = {
         "binding",
         "requested_model",
@@ -201,6 +204,37 @@ def test_authorization_is_invalidated_when_any_plan_limit_changes() -> None:
     assert {row["status"] for row in report["results"]} == {
         "authorization_blocked"
     }
+
+
+def test_gemini_25_pro_receives_its_nonempty_response_floor() -> None:
+    target = "google/gemini-2.5-pro"
+    plan = canary.build_plan(max_calls=1, only_bindings=(target,))
+    observed: list[int] = []
+
+    def invoke(binding, prompt, max_output_tokens, timeout_seconds):
+        observed.append(max_output_tokens)
+        return _success_invoker(
+            binding,
+            prompt,
+            max_output_tokens,
+            timeout_seconds,
+        )
+
+    report = canary.run_canary(
+        live=True,
+        max_calls=1,
+        only_bindings=(target,),
+        environment=_authorized_environment(plan),
+        live_invoker=invoke,
+        provider_configured=lambda _provider: True,
+        budget_checker=lambda _row: True,
+        reservation_manager=_FakeReservations(),
+        ledger_recorder=_ledger_collector([]),
+        is_production=False,
+    )
+
+    assert observed == [canary.GEMINI_25_PRO_CANARY_MIN_OUTPUT_TOKENS]
+    assert report["all_selected_bindings_succeeded"] is True
 
 
 @pytest.mark.parametrize(

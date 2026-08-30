@@ -41,6 +41,7 @@ SOURCE_VERSION_FILES = (
     "backend/app/domains/kol/profile_recall_storage.py",
     "backend/app/domains/kol/search_relevance_eval.py",
     "backend/app/domains/kol/search_relevance_metrics.py",
+    "backend/app/domains/kol/search_relevance_statistics.py",
 )
 
 # This CLI is intentionally runnable as ``python scripts/...`` without a

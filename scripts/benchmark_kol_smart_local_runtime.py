@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Reproducible Smart-local runtime benchmark against a disposable loopback DB.
+"""Reproducible legacy Smart-local compatibility benchmark on loopback.
 
-Unlike the SQL supply benchmark, this executes the current ``kol-smart-search``
-route and its provider-free recall/qualification engine.  Fixture construction
+Unlike the SQL supply benchmark, this executes the ``kol-smart-search`` route
+and its provider-free legacy recall/qualification engine.  It deliberately
+does not exercise prospective QueryCells: their precise per-cell quotas and
+honest shortfalls have separate targeted contract tests.  Fixture construction
 happens in a disposable PostgreSQL database; every measured route call runs in
 one READ ONLY transaction with provider and session-write tripwires enabled.
 
@@ -40,7 +42,7 @@ sys.path.insert(0, str(ROOT))
 from app.api.routers import vkpi_kol_pool_search  # noqa: E402
 from app.db.connection import PostgresCompatConnection  # noqa: E402
 from app.domains.costs import product_catalog  # noqa: E402
-from app.domains.kol import profile_recall, search_sessions  # noqa: E402
+from app.domains.kol import profile_recall, search_sessions, targeted_search_runtime  # noqa: E402
 from app.platform import llm_gateway  # noqa: E402
 from scripts.stdout_utils import out_json  # noqa: E402
 
@@ -298,6 +300,11 @@ def _tripwire(label: str):
 
 @contextmanager
 def _runtime_barriers(conn: ReadOnlyAuditConnection) -> Iterator[None]:
+    def execute_legacy_local_search(*, recall_kwargs, recall, **_kwargs):
+        """Harness-only compatibility lane; never changes production defaults."""
+
+        return recall(**recall_kwargs)
+
     patches = [
         (profile_recall, "get_conn", lambda: conn),
         (product_catalog, "get_conn", lambda: conn),
@@ -307,6 +314,7 @@ def _runtime_barriers(conn: ReadOnlyAuditConnection) -> Iterator[None]:
         (llm_gateway, "invoke", _tripwire("llm_gateway")),
         (search_sessions, "create_session", _tripwire("session_create")),
         (search_sessions, "attach_recall_result", _tripwire("session_attach")),
+        (targeted_search_runtime, "execute_local_search", execute_legacy_local_search),
     ]
     previous = [(module, name, getattr(module, name)) for module, name, _value in patches]
     old_rerank = os.environ.get("RECALL_LLM_RERANK_ENABLED")
@@ -329,6 +337,10 @@ async def _run_once(query: dict[str, Any]) -> dict[str, Any]:
     response = await vkpi_kol_pool_search.smart_kol_search(
         {
             "input": query["query"],
+            # These generic golden queries predate prospective product search.
+            # Pin their objective and execution lane so this throughput check
+            # can never be mistaken for a QueryCell precision acceptance.
+            "objective": "existing_evidence",
             "market": query["market"],
             "platforms": query["platforms"],
             "create_session": False,
@@ -539,9 +551,11 @@ def run_benchmark(*, admin_dsn: str, golden_path: Path, rounds: int) -> dict[str
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "claim_status": "runtime_algorithm_only",
+        "claim_status": "runtime_algorithm_legacy_compatibility_only",
         "scope": {
-            "current_smart_route_and_engine_executed": True,
+            "smart_search_route_entry_executed": True,
+            "legacy_smart_local_compatibility_executed": True,
+            "prospective_targeted_query_cells_tested": False,
             "provider_free": True,
             "isolated_loopback_fixture_database": True,
             "measured_transaction_read_only": bool(read_only["transaction_read_only"]),
@@ -581,7 +595,8 @@ def run_benchmark(*, admin_dsn: str, golden_path: Path, rounds: int) -> dict[str
             "Direct Python route invocation; production HTTP middleware and UI rendering were not tested.",
             "create_session=false; session persistence/attach behavior was not tested.",
             "Deep analysis, contact enrichment, online discovery and provider execution were not tested.",
-            "Counts and timings validate only the current provider-free Smart-local runtime contract.",
+            "Counts and timings validate only legacy provider-free Smart-local compatibility.",
+            "Prospective QueryCell precision, per-cell quotas and honest shortfalls are tested separately.",
         ],
     }
 

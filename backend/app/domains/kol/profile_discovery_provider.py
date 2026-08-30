@@ -1,12 +1,14 @@
 """Provider-backed creator discovery and enrollment orchestration."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
 from app.db.connection import get_conn
-from app.domains.kol import history_match
+from app.domains.kol import (
+    history_match,
+    profile_discovery_provider_flow as provider_flow,
+)
 from app.domains.kol.brand_official_gate import BRAND_OFFICIAL_SKIP_REASON, discovery_wall_verdict
 from app.domains.kol.discovery_enroll_intake import (
     enroll_profile_payload,
@@ -386,414 +388,111 @@ async def discover_new_creators(
     auto_enroll: bool = True,
     exclude_chinese: bool = True,
     page_cursors: Any = None,
+    exact_query: bool = False,
 ) -> dict[str, Any]:
-    """Search platforms for creator candidates and mark existing KOL matches.
+    """Search providers, gate candidates, and project the compatibility response.
 
-    发现精准修:search_query_en(英文平台检索词,优先于中文 query_text 用于实际平台搜索,治
-    中文 query 捞中文圈);product_focus/ideal_creator_types/verticals/avoid_types 供 per-item
-    persona 启发式相关度打分(纯本地字符串比对,零 LLM/零 Apify,无需预算闸)。全 default,既有调用不破坏。
-
-    车道 2·分页:``page_cursors``={平台: 上一轮游标},缺省=各腿第一页(旧行为逐字不变);返回体新增
-    ``next_page_cursors``/``next_cursor``/``has_more``,口径见 profile_discovery_rounds 模块头。"""
-    query = _text(search_query_en) or _text(query_text)
-    # 区域语言本地化:目标市场非英语区 → 英文检索词翻成该区语言搜平台(捞本地达人),relevanceLanguage 同步。
-    # 英语区/空 market → search_term=query、relevance_language='en',与现状完全一致(零回归)。
-    _relevance_language, _region_code = _market_to_language(market)
-    search_term = _localize_search_terms(query, _relevance_language)
-    # K2 兜底(session 1089 案):localize 走 LLM,LLM 全灭时中文 query 原样搜 YT/IG →
-    # 捞中文圈 → 再被 CN/HK/TW 区域闸清空,全网新发现近乎归零。确定性零 LLM 兜底:
-    # 目标语言是英文而检索词仍含 CJK → 用 persona 英文正词(product_focus/ideal_types/
-    # verticals,KB 词天然英文)拼检索词;persona 也无英文词才保留原样(诚实降级,绝不杜撰)。
-    if _relevance_language == "en" and _has_cjk(search_term):
-        _en_fallback = [
-            t for t in _persona_positive_terms(product_focus, ideal_creator_types, verticals, "")
-            if not _has_cjk(t)
-        ]
-        if _en_fallback:
-            search_term = " ".join(_en_fallback[:8])
-    # Strict online mode is provider-internal and never auto-enrolls raw rows.
-    # It may retain the concurrent 3×50 platform supply for downstream hard
-    # qualification; legacy callers keep the historical 50 cap.
-    safe_limit_cap = 150 if not auto_enroll else 50
-    safe_limit = max(1, min(_int(limit, 15), safe_limit_cap))
-    safe_per_platform = max(1, min(_int(per_platform_limit, 15), 50))
-    # B3 每平台上限:operator 显式的 {平台: 上限} 覆盖标量默认;缺/垃圾值 → 全平台沿用
-    # safe_per_platform(旧行为逐字不变)。为什么只提 YouTube:见 profile_discovery_supply 模块头。
-    _platform_limits = sanitize_platform_limits(per_platform_limits)
-    resolved_platforms = _strict_discovery_platforms(platforms, fallback=platform_hint)
-    if not query:
-        return {
-            "status": "invalid_query",
-            "query": query,
-            "platforms": resolved_platforms,
-            "items": [],
-            "new_creators": [],
-            "existing_matches": [],
-            "provider_calls": False,
-            "message": "query is required",
-        }
-    if not resolved_platforms:
-        return {
-            "status": "invalid_platform",
-            "query": query,
-            "platforms": [],
-            "items": [],
-            "new_creators": [],
-            "existing_matches": [],
-            "provider_calls": False,
-            "message": "no supported discovery platform was selected",
-        }
-    _leg_limits = {
-        p: resolve_platform_limit(p, safe_per_platform, _platform_limits) for p in resolved_platforms
-    }
-    # 车道 2:每条腿的分页游标(缺 = 第一页)。游标只透传给 provider 层,不参与任何判据。
-    _leg_cursors = leg_cursors(page_cursors)
-
-    new_creators: list[dict[str, Any]] = []
-    survivors: list[dict[str, Any]] = []  # 全部通过去重/garbage/地区过滤的存活候选,待 relevance 排序后再 top-N 截断
-    existing_matches: list[dict[str, Any]] = []
-    platform_results: list[dict[str, Any]] = []
-    seen_keys: set[str] = set()
-    seen_aliases: set[str] = set()
-    # persona 检索词原料(英文优先;avoid 命中重扣)。helper 内做泛词过滤与归一,空表零影响。
-    _pos_terms = _persona_positive_terms(product_focus, ideal_creator_types, verticals, search_query_en or query_text)
-    _neg_terms = _persona_avoid_terms(avoid_types)
-    errors: list[dict[str, Any]] = []
-    # 闸门丢弃计数(可观测,用于调参):brand_official=品牌官号总数(lexicon=词表快路命中/
-    # dynamic=零词表动态判据命中,两子计数只供排障),bio_irrelevant=bio 自述明显非视觉职业
-    # 且自身零相机信号(askmonitorofficial 类)。
-    # persona_avoid_penalized 不是丢弃计数(不进 _total_dropped):A1 修后 persona 的
-    # avoid_types 只做排序扣分,这里记「有多少候选因负词被扣分但仍留在结果里」——负词从
-    # 静默杀人改成看得见的扣分,扣分量必须同样看得见。
-    _gate_dropped = {
-        "hard_avoid": 0, "no_camera_signal": 0, "low_reach": 0, "brand_official": 0,
-        "brand_official_lexicon": 0, "brand_official_dynamic": 0, "bio_irrelevant": 0,
-        "persona_avoid_penalized": 0,
-    }
-
-    # A2 富化前置闸(单调闸,只决定花不花钱、从不删候选;口径与下方主环同源)。
-    _enrich_doom_gate = build_enrich_doom_gate(
-        exclude_chinese=exclude_chinese, neg_terms=_neg_terms
+    The public signature stays aligned with the profile_discovery facade.  The
+    flow module receives live module bindings so facade and direct monkeypatches
+    keep affecting provider calls, enrollment, triage, and cache warming.
+    """
+    plan = provider_flow.prepare_discovery_plan(
+        query_text=query_text,
+        platforms=platforms,
+        platform_hint=platform_hint,
+        market=market,
+        limit=limit,
+        per_platform_limit=per_platform_limit,
+        per_platform_limits=per_platform_limits,
+        search_query_en=search_query_en,
+        product_focus=product_focus,
+        ideal_creator_types=ideal_creator_types,
+        verticals=verticals,
+        auto_enroll=auto_enroll,
+        exclude_chinese=exclude_chinese,
+        page_cursors=page_cursors,
+        exact_query=exact_query,
+        text_value=_text,
+        int_value=_int,
+        market_to_language=_market_to_language,
+        localize_search_terms=_localize_search_terms,
+        has_cjk=_has_cjk,
+        persona_positive_terms=_persona_positive_terms,
+        strict_platforms=_strict_discovery_platforms,
+        sanitize_limits=sanitize_platform_limits,
+        resolve_limit=resolve_platform_limit,
+        normalize_leg_cursors=leg_cursors,
     )
+    invalid_response = provider_flow.invalid_plan_response(plan)
+    if invalid_response is not None:
+        return invalid_response
 
-    async def _search_one_platform(platform: str) -> dict[str, Any]:
-        """Run one platform search with error isolation; returns annotated items + meta.
-
-        每平台并发(asyncio.gather)。单平台失败在此捕获、绝不传播,其余平台照常返回。
-        """
-        try:
-            result = await search_platform_content(
-                platform,
-                search_term,
-                market=_text(market).upper(),
-                max_results=_leg_limits.get(platform, safe_per_platform),
-                relevance_language=_relevance_language,
-                strict_evidence=not auto_enroll,
-                enrich_prefilter=_enrich_doom_gate,
-                deadline_seconds=leg_deadline_seconds(platform),
-                page_cursor=_leg_cursors.get(platform),
-            )
-        except Exception as exc:
-            logger.warning("profile discovery provider failed platform=%s", platform, exc_info=True)
-            return {
-                "platform": platform,
-                "status": "failed",
-                "message": "platform_search_unavailable",
-                "annotated": [],
-                "error": True,
-            }
-        raw_items = [dict(item or {}) for item in (result.get("items") or [])]
-        strict_items: list[dict[str, Any]] = []
-        platform_mismatches = 0
-        for item in raw_items:
-            platform_signals = _candidate_platform_signals(item)
-            if platform_signals and platform_signals != {platform}:
-                platform_mismatches += 1
-                continue
-            item["platform"] = platform
-            strict_items.append(item)
-        annotated = history_match.annotate_platform_items(strict_items, platform=platform)
-        annotated = _canonicalize_provider_candidates(annotated, platform=platform)
-        return {
-            "platform": platform,
-            "status": result.get("status"),
-            "message": result.get("message"),
-            "metadata": result.get("metadata") or {},
-            "annotated": annotated,
-            "filtered_platform_mismatch": platform_mismatches,
-            "error": result.get("status") not in {"done", "ready"} and not annotated,
-        }
-
-    # 并行化:YT/IG/TikTok 同时发,替代旧串行 for(一个接一个 await)。
-    # return_exceptions=True 双保险——_search_one_platform 已内部捕获,这里再兜一层防御。
-    # A3:每条腿再包一层 deadline;超时的腿诚实降级为「本轮该平台无供给」并进 errors,
-    # 不影响其余腿。口径与实测依据见 profile_discovery_supply.run_all_legs。
-    platform_outcomes = await run_all_legs(resolved_platforms, _search_one_platform)
-
-    # 按 resolved_platforms 原顺序合并(gather 保序),保留确定性的去重/limit 语义。
-    for platform, outcome in zip(resolved_platforms, platform_outcomes):
-        if isinstance(outcome, BaseException):
-            errors.append({"platform": platform, "status": "failed", "message": str(outcome)[:500]})
-            platform_results.append({"platform": platform, "status": "failed", "returned": 0, "metadata": {}, "message": str(outcome)[:500]})
-            continue
-        annotated = outcome.get("annotated") or []
-        platform_results.append(
-            {
-                "platform": platform,
-                "status": outcome.get("status"),
-                "returned": len(annotated),
-                "metadata": outcome.get("metadata") or {},
-                "message": outcome.get("message"),
-                "filtered_platform_mismatch": int(outcome.get("filtered_platform_mismatch") or 0),
-                # A3/B3 记账:这条腿是不是被 deadline 砍掉的,以及本轮实际要了多少条。
-                **leg_accounting(outcome),
-                "requested_limit": _leg_limits.get(platform, safe_per_platform),
-            }
-        )
-        if outcome.get("error"):
-            errors.append({"platform": platform, "status": outcome.get("status"), "message": outcome.get("message")})
-        for item in annotated:
-            identity_probe = {**item, "platform": platform}
-            aliases = canonical_creator_aliases(identity_probe)
-            fallback_key = _candidate_key(item, platform)
-            if aliases:
-                if aliases.intersection(seen_aliases):
-                    continue
-                seen_aliases.update(aliases)
-            elif fallback_key in seen_keys:
-                continue
-            seen_keys.add(fallback_key)
-            # 品牌官号闸(FEELWORLD 官号混入案 + Panavision/DZOFilm/Thypoch 漏网案):
-            # 词表快路 = competitor_brands.json 命中身份字段**并发**官号信号才拦;词表外品牌
-            # 走动态判据(官号形态 + bio 企业自述口吻并发,bio 缺=证据不足放行)。两路都
-            # 不自动入库、不上新发现墙;「我评测了 FEELWORLD」类正常达人只在标题/内容提品牌,
-            # 不命中。库内已有的官号(existing_match)同口径拦,防经发现面回流。
-            _brand_gate = discovery_wall_verdict(item)
-            if _brand_gate:
-                _gate_dropped["brand_official"] += 1
-                _sub = f"brand_official_{_brand_gate}"
-                _gate_dropped[_sub] = _gate_dropped.get(_sub, 0) + 1
-                logger.debug(
-                    "discovery_brand_official_excluded handle=%r platform=%s via=%s",
-                    item.get("handle"), platform, _brand_gate,
-                )
-                continue
-            if item.get("historical_match") or item.get("history_kol_pool_id"):
-                existing_matches.append(item)
-                continue
-            # P0-6 修:地区排除判据改扫**真正带地区信号的文本字段**(sample_title/channel_name/handle);
-            # 发现 item 无 per-item country、market 恒=搜索市场 US,旧判据三参全空 → 形同虚设。
-            # 口径保留海外华人(马六甲=马来西亚/新加坡/海外华人摄影师不排,只排 CN大陆/HK/TW 强信号)。
-            _region = _detect_excluded_region(item) if exclude_chinese else ""
-            if _is_discovery_garbage(item) or _region:
-                continue
-            # 品牌自有账号闸(用户硬要求:Viltrox 官方号不进发现结果)——handle 归一后以 viltrox 打头
-            # 即 Viltrox 品牌自营(viltrox.official/viltrox_id/viltrox.global/viltrox.usa/viltrox.cee 等),
-            # 官号数据另有专线(vkpi_employee_channels),绝不当外部 KOL 发现。只丢,不入池、不杜撰。
-            if _is_own_brand_account(item):
-                _gate_dropped["own_brand"] = _gate_dropped.get("own_brand", 0) + 1
-                continue
-            # 相机/视觉创作者闸门(用户硬要求:得有相机、得需要拍摄)。全新发现(无库内历史匹配,
-            # 上方 existing_matches 已先行 continue)零相机信号 → 真丢弃。red line:只丢,绝不杜撰分。
-            if _is_hard_avoid(item, _neg_terms):
-                _gate_dropped["hard_avoid"] += 1
-                continue
-            if not _has_camera_signal(item):
-                _gate_dropped["no_camera_signal"] += 1
-                continue
-            # bio 明显无关补强(askmonitorofficial 案):bio 自述非视觉职业 + 自身身份零相机信号
-            # 双条件并发才丢(sample_title 是查询词回声不算自证);bio 缺/短 → 证据不足放行,不误杀。
-            if _is_bio_irrelevant(item):
-                _gate_dropped["bio_irrelevant"] += 1
-                logger.debug(
-                    "discovery_bio_irrelevant_excluded handle=%r platform=%s",
-                    item.get("handle"), platform,
-                )
-                continue
-            # 召回触达门槛(用户裁决 2026-07-11):followers 明确 < 门槛(默认 1000,env 可调)
-            # 或互动信号实测全零(views/comments 实测都 0)→ 不进「全网新发现」结果流。
-            # 与地区/相机闸同层的候选 FILTER;字段缺 / fast_path 填充 0 一律放行(不误杀);
-            # 只挡本入口不删数据。red line:零触 viltrox_fit_score / rule_v0。
-            _reach_reason = _reach_floor_reason(item)
-            if _reach_reason:
-                _gate_dropped["low_reach"] += 1
-                logger.debug(
-                    "discovery_reach_floor_filtered handle=%r platform=%s reason=%s",
-                    item.get("handle"), platform, _reach_reason,
-                )
-                continue
-            # persona 启发式相关度(纯本地零 LLM):写 item['score']/relevance_score/relevance_tier;
-            # 先全收集到 survivors,循环外按 relevance 降序排序再 top-N 截断(否则按到达顺序砍掉高相关项)。
-            item.update(_persona_relevance(item, pos_terms=_pos_terms, neg_terms=_neg_terms))
-            if item.get("persona_avoid_hits"):
-                _gate_dropped["persona_avoid_penalized"] += 1
-            survivors.append(item)
-
-    # 闸门可观测:单行 INFO,丢弃明细(诚实——被丢=结果中静默缺席,非杜撰分)。便于调参。
-    _total_dropped = (
-        _gate_dropped["hard_avoid"] + _gate_dropped["no_camera_signal"] + _gate_dropped["low_reach"]
-        + _gate_dropped["brand_official"] + _gate_dropped["bio_irrelevant"]
+    plan.pos_terms = _persona_positive_terms(
+        product_focus,
+        ideal_creator_types,
+        verticals,
+        search_query_en or query_text,
     )
-    if _total_dropped or _gate_dropped["persona_avoid_penalized"]:
-        logger.info(
-            "camera_relevance_gate dropped=%d hard_avoid=%d no_camera_signal=%d low_reach=%d brand_official=%d bio_irrelevant=%d persona_avoid_penalized=%d survivors=%d query=%r",
-            _total_dropped, _gate_dropped["hard_avoid"], _gate_dropped["no_camera_signal"],
-            _gate_dropped["low_reach"], _gate_dropped["brand_official"], _gate_dropped["bio_irrelevant"],
-            _gate_dropped["persona_avoid_penalized"], len(survivors), query,
-        )
-    # relevance 降序排序 → top-N 截断。red line:relevance 是独立展示信号,绝不并入 viltrox_fit_score / rule_v0。
-    # Relevance remains primary. When candidates tie, prefer rows with observed
-    # engagement so the first 15 profile advances are less likely to be tiny or
-    # empty accounts that only reveal their low reach after deep crawl.
-    survivors.sort(
-        key=lambda it: (
-            float(it.get("relevance_score") or 0.0),
-            _int(it.get("avg_views") or it.get("views")),
-            _int(it.get("comments")),
-            _int(it.get("likes")),
-        ),
-        reverse=True,
+    plan.neg_terms = _persona_avoid_terms(avoid_types)
+    enrich_prefilter = build_enrich_doom_gate(
+        exclude_chinese=exclude_chinese,
+        neg_terms=plan.neg_terms,
     )
-    # 平台轮转截断(platform_round_robin,2026-07-02 用户令):此前全局 relevance 排序取 top-N,
-    # YouTube 元数据富、分普遍更高 → 单平台屠榜。现按平台分组(组内保持 relevance 降序),
-    # YT/IG/TT 轮流各取一个直到装满;某平台弹尽由其余平台自然补位。
-    # red line 不变:relevance 是独立展示信号,绝不并入 viltrox_fit_score / rule_v0。
-    _by_platform: dict[str, list[dict[str, Any]]] = {}
-    for item in survivors:
-        _by_platform.setdefault(_text(item.get("platform")).lower(), []).append(item)
-    _order = [p for p in resolved_platforms if _by_platform.get(p)]
-    for _extra in _by_platform:
-        if _extra not in _order:
-            _order.append(_extra)
-    _cursor = {p: 0 for p in _order}
-    while len(new_creators) < safe_limit and _order:
-        _progressed = False
-        for _p in _order:
-            if len(new_creators) >= safe_limit:
-                break
-            _lst = _by_platform.get(_p) or []
-            if _cursor[_p] < len(_lst):
-                new_creators.append(_lst[_cursor[_p]])
-                _cursor[_p] += 1
-                _progressed = True
-        if not _progressed:
-            break
-
-    # 第二道闸·读端三态(用户裁决 2026-07-12「分析后再 po」):followers 已知达标 → 直接展示;
-    # 未知 → 保留在结果里(照样入库+点火补全)但标 reach_status=analyzing,由会话读端
-    # (search_sessions 展示闸)折叠为「分析中 ×N」,补全回填达标后自动放出;已知低于门槛
-    # 在上方闸门已丢(filtered_low_reach)。红线:落库≠推荐,标注不动任何评分。
-    _analyzing_new = 0
-    for item in new_creators:
-        _state = _reach_display_state(item)
-        if _state == "unknown":
-            item["reach_status"] = "analyzing"
-            _analyzing_new += 1
-        else:
-            item["reach_status"] = "ok"
-
-    # 「库内已有」同口径分诊(12297 两粉号正是从这条免检通道回流):low_reach 丢 + 计数;
-    # followers 未知折叠为分析中并补点火 enrichment;达标保留。
-    if auto_enroll:
-        existing_matches, _existing_reach = _triage_existing_matches_reach(existing_matches)
-    else:
-        # Strict online net-new mode is qualification-only until an accepted
-        # row is materialized. Existing inventory cannot take quota and must
-        # not ignite reach/profile buildout as a side effect of read-only
-        # discovery.
-        _existing_reach = {"low_reach": 0, "analyzing": 0}
-    _gate_dropped["low_reach"] += _existing_reach["low_reach"]
-    _analyzing_total = _analyzing_new + _existing_reach["analyzing"]
-
-    # B 去重根治:把本次全网新发现即时轻量入库,下次同/近似搜索归「库内已有」、不再重复
-    # (用户口径:「抓到自动入库就不会再出现这个状况」)。best-effort 同步小写,失败不阻断发现。
-    # K3 正账(2026-07-03):接住返回值(此前被丢弃)记进 counts.auto_enrolled,
-    # attach_new_discovery_result 会把 counts 原样透传进会话 result_summary → 前端显示真实入库数。
-    # 注意:reach_status=analyzing 的项也照样入库+buildout 点火(「发现→自动入库→补全→过闸→再 po」)。
-    auto_enrolled_count = 0
-    if auto_enroll:
-        try:
-            auto_enrolled_count = _auto_enroll_discoveries(new_creators)
-        except Exception as exc:
-            logger.info("auto_enroll_discovery batch skipped: %s", str(exc)[:200])
-
-    # 新面孔头像预热(后台线程 best-effort):让首屏卡片命中 image-proxy 磁盘缓存,
-    # 与库内卡同一条成功通路;失败静默,绝不阻断发现。
-    if auto_enroll:
-        try:
-            _warm_discovery_avatar_cache(new_creators)
-        except Exception:
-            logger.debug("discovery avatar warmup call skipped", exc_info=True)
-
-    # 建档闸的诚实计数(2026-08-25):被拦的项自带 auto_enroll_skipped 原因标。
-    _enroll_skips = enroll_skip_counts(new_creators)
-
-    status = "ready" if new_creators or existing_matches else "empty"
-    if errors and (new_creators or existing_matches):
-        status = "partial"
-    elif errors:
-        status = "failed"
-    # 车道 2:收每条腿 metadata 里的分页事实。has_more 只可能来自 provider 真给的游标。
-    _pagination = pagination_state(platform_results)
-    return {
-        "status": status,
-        "query": query,
-        "platforms": resolved_platforms,
-        "market": _text(market).upper(),
-        "limit": safe_limit,
-        "per_platform_limit": safe_per_platform,
-        # B3:每平台真实生效上限,让「YT 要了 50、IG/TT 要了 20」在返回体里可查。
-        "per_platform_limits": _leg_limits,
-        "items": [*existing_matches, *new_creators],
-        "new_creators": new_creators,
-        "existing_matches": existing_matches,
-        "counts": {
-            "new_creators": len(new_creators),
-            "existing_matches": len(existing_matches),
-            # K3:本次真实自动入库条数(_auto_enroll_discoveries 逐条 upsert 的成功数;
-            # 缺 handle/入库失败/已在库的项不计)。前端据此显示真数,不再拿发现数冒充入库数。
-            "auto_enrolled": auto_enrolled_count,
-            # 建档闸(2026-08-25):写端两道闸(discovery_account_gate_verdict 抛错拦人 /
-            # brand_official_gate 返回 skip)拦下、没进池的条数。0 = 本次真的一条没拦
-            # (诚实计数,不藏);逐原因明细另挂 enroll_skipped_by_reason,不汇总掉任何一档。
-            "enroll_skipped_brand_official": int(_enroll_skips.get(BRAND_OFFICIAL_SKIP_REASON) or 0),
-            "enroll_skipped_by_reason": _enroll_skips,
-            # 召回触达门槛命中数(诚实可见,非静默;明细见 debug 日志 discovery_reach_floor_filtered)。
-            "filtered_low_reach": _gate_dropped["low_reach"],
-            # 品牌官号排除数(诚实可见;门面文案只说「品牌官方账号已排除」,不暴露词表/判据)。
-            # 子计数 lexicon(词表快路)/dynamic(零词表动态判据)只供排障,不进门面文案。
-            "excluded_brand_official": _gate_dropped["brand_official"],
-            "excluded_brand_official_lexicon": _gate_dropped["brand_official_lexicon"],
-            "excluded_brand_official_dynamic": _gate_dropped["brand_official_dynamic"],
-            # bio 明显无关排除数(askmonitorofficial 类;双条件并发才丢,防误杀)。
-            "excluded_bio_irrelevant": _gate_dropped["bio_irrelevant"],
-            # persona 负词(avoid_types)扣分数 —— **不是**排除数:A1 修后负词只扣排序分、
-            # 人仍在结果里(明细见每项 persona_avoid_hits)。放这里是为了让「负词到底起没起
-            # 作用」有个可查的真数,而不是只能从会滚掉的日志里反查。
-            "persona_avoid_penalized": _gate_dropped["persona_avoid_penalized"],
-            # 「分析后再 po」折叠计数:followers 未知、已入库并点火补全的候选(会话读端不展示,
-            # 前端据此显示「分析中 ×N」;补全回填达标后自动放出)。
-            "analyzing": _analyzing_total,
-            "platforms": len(resolved_platforms),
-            "errors": len(errors),
-            # A3 记账:本轮有几条腿因超时降级成「无供给」。>0 时整体 status 已经是
-            # partial/failed(超时进 errors),这里给的是可直接上门面的真数。
-            "deadline_exceeded_platforms": sum(
-                1 for row in platform_results if row.get("deadline_exceeded")
-            ),
-        },
-        "platform_results": platform_results,
-        # 车道 2·分页事实(下一轮的游标 / 还有没有下一页 / 每条腿到底支不支持分页)。
-        "next_page_cursors": _pagination["next_page_cursors"],
-        "next_cursor": _pagination["next_cursor"],
-        "has_more": _pagination["has_more"],
-        # A7 可观测:本次调用的闸门漏斗切片(平台原始给量 → 逐闸丢弃 → 存活 → top-N 截断)。
-        # 纯记账零行为改动;严格在线模式由 pipeline 逐轮收走落库,那段坍缩不再零痕迹。
-        "discovery_funnel": provider_gate_funnel(
-            platform_results=platform_results, gate_dropped=_gate_dropped,
-            survivors=len(survivors), returned_new_creators=len(new_creators),
-            existing_matched=len(existing_matches),
-        ),
-        "errors": errors,
-        "provider_calls": True,
-    }
+    outcomes = await provider_flow.search_provider_legs(
+        plan,
+        enrich_prefilter=enrich_prefilter,
+        search_platform=search_platform_content,
+        annotate_platform_items=history_match.annotate_platform_items,
+        canonicalize_candidates=_canonicalize_provider_candidates,
+        platform_signals=_candidate_platform_signals,
+        run_legs=run_all_legs,
+        deadline_seconds=leg_deadline_seconds,
+        logger=logger,
+    )
+    state = provider_flow.collect_discovery_state(
+        plan,
+        outcomes,
+        account_leg=leg_accounting,
+        creator_aliases=canonical_creator_aliases,
+        candidate_key=_candidate_key,
+        brand_gate=discovery_wall_verdict,
+        detect_excluded_region=_detect_excluded_region,
+        is_garbage=_is_discovery_garbage,
+        is_own_brand=_is_own_brand_account,
+        is_hard_avoid=_is_hard_avoid,
+        has_camera_signal=_has_camera_signal,
+        is_bio_irrelevant=_is_bio_irrelevant,
+        reach_floor_reason=_reach_floor_reason,
+        persona_relevance=_persona_relevance,
+        logger=logger,
+    )
+    provider_flow.log_gate_summary(state, query=plan.query, logger=logger)
+    new_creators = provider_flow.select_new_creators(
+        state.survivors,
+        platforms=plan.resolved_platforms,
+        limit=plan.safe_limit,
+        text_value=_text,
+        int_value=_int,
+    )
+    effects = provider_flow.apply_discovery_effects(
+        plan,
+        state,
+        new_creators,
+        reach_state=_reach_display_state,
+        triage_existing=_triage_existing_matches_reach,
+        auto_enroll_discoveries=_auto_enroll_discoveries,
+        warm_avatar_cache=_warm_discovery_avatar_cache,
+        logger=logger,
+    )
+    enroll_skips = enroll_skip_counts(new_creators)
+    pagination = pagination_state(state.platform_results)
+    return provider_flow.project_discovery_response(
+        plan,
+        state,
+        new_creators,
+        effects,
+        enroll_skips=enroll_skips,
+        brand_official_skip_reason=BRAND_OFFICIAL_SKIP_REASON,
+        pagination=pagination,
+        build_funnel=provider_gate_funnel,
+    )

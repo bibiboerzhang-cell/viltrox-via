@@ -151,6 +151,7 @@ describe("KOL 候选精准度透明层", () => {
           vector_score: 0.99,
           robust_rank_score: 0.73,
           robust_rank_method: "provider_free_pool_text",
+          source_fields: { source: "provider_internal" },
           profile_type: "reviewer",
           type_label: "测评号",
           creator_type_score: 10,
@@ -162,9 +163,58 @@ describe("KOL 候选精准度透明层", () => {
     const signal = screen.getByTestId("candidate-rank-signal");
     expect(signal.textContent).toBe("本地词项相关度 0.73");
     expect(signal.getAttribute("title")).toContain("本地词项排序");
+    expect(signal.getAttribute("title")).not.toContain("provider_free_pool_text");
+    expect(screen.getByTestId("candidate-secondary-details")).not.toHaveTextContent("provider_internal");
     expect(signal.getAttribute("title")).not.toContain("0.990");
     expect(screen.queryByText(/向量相似度/)).toBeNull();
     expect(screen.queryByText(/准确率/)).toBeNull();
+  });
+
+  it("增长目标只展示增长候选分、证据置信度和四维证据，不再冒充检索相关度", () => {
+    render(
+      <RecallMiniItem
+        index={7}
+        item={{
+          kol_pool_id: 17,
+          bucket: "creator",
+          handle: "growth_creator",
+          display_name: "Growth Creator",
+          platform: "youtube",
+          profile_type: "creator",
+          type_label: "创作者",
+          creator_type_score: 88,
+          reviewer_type_score: 12,
+          retrieval_score: 0.99,
+          retrieval_method: "hybrid_rrf_v1",
+          growth_candidate_score: 78.4,
+          product_use_fit: 92,
+          market_activation: 81.5,
+          audience_fit: null,
+          content_execution: 66,
+          evidence_confidence: 63.2,
+          claim_status: "descriptive_only",
+          growth_candidate_scoring: { objective: "prospective_growth", claim_status: "descriptive_only" },
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("candidate-growth-overview")).toHaveTextContent("增长候选分 78.4");
+    expect(screen.getByTestId("candidate-growth-overview")).toHaveTextContent("证据置信度 63.2/100");
+    expect(screen.getByTestId("candidate-growth-dimensions")).toHaveTextContent("产品适配 92");
+    expect(screen.getByTestId("candidate-growth-dimensions")).toHaveTextContent("市场推进 81.5");
+    expect(screen.getByTestId("candidate-growth-dimensions")).toHaveTextContent("受众适配 待补证");
+    expect(screen.getByTestId("candidate-growth-dimensions")).toHaveTextContent("内容执行 66");
+    expect(screen.getByTestId("candidate-growth-disclaimer")).toHaveTextContent("描述性决策支持，不代表转化");
+    expect(screen.getByTestId("candidate-rank-signal")).toHaveTextContent("增长候选分 78.40");
+    expect(screen.queryByText(/检索相关度/)).toBeNull();
+    expect(screen.queryByText(/准确率/)).toBeNull();
+  });
+
+  it("增长排序的未评测说明不再写成检索相关度", () => {
+    render(<SearchEvaluationStatus evaluation={{ state: "not_evaluated" }} rankingMode="growth" />);
+
+    expect(screen.getByTestId("search-evaluation-status")).toHaveTextContent("当前只显示增长候选分和证据置信度");
+    expect(screen.queryByText(/检索相关度/)).toBeNull();
   });
 
   it("兼容后端证据等级与覆盖字段，但不把置信值改写成准确率", () => {

@@ -3,6 +3,8 @@
 
 This smoke must not call external LLM providers. It forces offline mode and
 verifies fallback, ledger writes, stats fields, and score compatibility.
+Monthly environment budget warnings are record-only in the current gateway;
+the dedicated budget tests own hard-stop semantics.
 """
 from __future__ import annotations
 from stdout_utils import out as stdout_out
@@ -22,8 +24,18 @@ os.environ["VKPI_LLM_GATEWAY_FORCE_OFFLINE"] = "1"
 os.environ["LLM_MONTHLY_BUDGET_USD"] = "0"
 
 from app.db.connection import close_db_runtime, get_conn  # noqa: E402
+from app.core.model_registry import current_task_model_binding  # noqa: E402
 from app.services.vkpi.schema_product_industry import ensure_vkpi_product_industry_schema  # noqa: E402
 from app.platform import llm_gateway  # noqa: E402
+
+
+# This smoke isolates budget/offline fallback semantics.  Readiness has its own
+# fail-closed contract tests, so acknowledge only the exact current bindings in
+# this disposable process; force-offline remains enabled and provider I/O is
+# still impossible.  The acknowledgement does not alter signed readiness.
+os.environ["VKPI_LLM_READINESS_OPERATOR_ACK"] = ",".join(
+    sorted(set(current_task_model_binding().values()))
+)
 
 
 MARKER = f"vkpi-llm-gateway-smoke-{int(time.time())}"
@@ -53,15 +65,32 @@ def main() -> None:
     providers = llm_gateway.configured_providers()
     _assert(providers == ["rule_v0"], "offline mode should expose only rule_v0", providers)
 
-    budget_result = llm_gateway.invoke(
+    offline_with_zero_budget = llm_gateway.invoke(
         "Summarize this smoke test.",
         purpose=f"{MARKER}-budget",
         max_output_tokens=50,
         cost_tag="cron:p4_recommendation_reasons",
     )
-    _assert(budget_result.get("provider") == "rule_v0", "budget fallback provider", budget_result)
-    _assert(budget_result.get("reason") == "budget_disabled", "budget fallback reason", budget_result)
-    _assert(budget_result.get("fallback_used") is True, "budget fallback flag", budget_result)
+    _assert(
+        offline_with_zero_budget.get("provider") == "rule_v0",
+        "offline zero-budget fallback provider",
+        offline_with_zero_budget,
+    )
+    _assert(
+        offline_with_zero_budget.get("reason") == "all_providers_failed",
+        "offline zero-budget fallback reason",
+        offline_with_zero_budget,
+    )
+    _assert(
+        offline_with_zero_budget.get("fallback_used") is True,
+        "offline zero-budget fallback flag",
+        offline_with_zero_budget,
+    )
+    _assert(
+        all((item or {}).get("status") == "not_configured" for item in offline_with_zero_budget.get("errors") or []),
+        "force-offline candidates must stay unconfigured",
+        offline_with_zero_budget,
+    )
 
     forced_offline = llm_gateway.invoke(
         "Try all providers but stay offline.",
@@ -81,7 +110,13 @@ def main() -> None:
     after = _count_marker()
     _assert(after == before + 1, "record_call should increase marker count", {"before": before, "after": after})
 
-    score = llm_gateway.score({"followers": 10, "views": 100}, staff=None)
+    score = llm_gateway.score(
+        {"followers": 10, "views": 100},
+        purpose=f"{MARKER}-score",
+        triggered_by="system:vkpi_llm_gateway_smoke",
+        metadata={"marker": MARKER},
+        staff=None,
+    )
     _assert(score.get("fallback") == "rule_v0" and score.get("status") == "not_configured", "score compatibility", score)
 
     stats = llm_gateway.stats(limit=5)

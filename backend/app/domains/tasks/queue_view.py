@@ -32,7 +32,7 @@ from app.domains.tasks.queue_llm_reservations import (
 )
 from app.domains.tasks.queue_llm_calls import query_llm_calls
 from app.services.cache import cache_get, cache_set
-from app.workers.apify_job_lane import queue_priority_sql_expression, queue_service_priority_sql_expression
+from app.domains.tasks.queue_lane_policy import queue_priority_sql_expression, queue_service_priority_sql_expression
 
 from app.core.logging import get_logger
 

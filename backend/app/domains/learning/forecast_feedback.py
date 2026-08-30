@@ -329,7 +329,7 @@ def forecast_log_summary(*, recent_limit: int = 10, conn: Any = None) -> dict[st
             """,
         ).fetchone()
         latest_actual = dict(latest_actual_row or {}).get("freshest_at")
-        from app.domains.market_brain.data_readiness import build_source_readiness
+        from app.shared.data_readiness_policy import build_source_readiness
 
         readiness = build_source_readiness(
             "forecast_evaluations",

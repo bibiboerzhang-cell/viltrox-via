@@ -8,7 +8,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.domains.kol.profile_recall_match_evidence import why_fit_from_match_evidence
+from app.domains.kol.profile_recall_match_evidence import (
+    CAPABILITY_USE_EVIDENCE_SOURCE,
+    CONTROLLED_ALIAS_EVIDENCE_SOURCE,
+    why_fit_from_match_evidence,
+)
 
 
 _SMART_LOCAL_PRIVATE_ITEM_FIELDS = {
@@ -28,6 +32,8 @@ _SMART_LOCAL_PRIVATE_ITEM_FIELDS = {
     "contact_channels",
     "contact_details",
     "contact_methods",
+    "_targeted_content_evidence",
+    "_targeted_content_targets",
     "wechat",
     "whatsapp",
     "telegram",
@@ -51,8 +57,24 @@ _SMART_LOCAL_EVIDENCE_FIELDS = {
     "profile_text",
     "type_reason",
     "representative_evidence.title",
+    "representative_evidence.description",
+    "representative_evidence.caption",
+    "representative_evidence.transcript",
+    "representative_evidence.subtitle",
+    "representative_evidence.subtitles",
+    "representative_evidence.visual_summary",
 }
-_SMART_LOCAL_EVIDENCE_SOURCES = {"server_profile_evidence"}
+_SMART_LOCAL_EVIDENCE_SOURCES = {
+    "server_profile_evidence",
+    CONTROLLED_ALIAS_EVIDENCE_SOURCE,
+    CAPABILITY_USE_EVIDENCE_SOURCE,
+    "cached_pool_video.description",
+    "cached_pool_video.caption",
+    "cached_pool_video.transcript",
+    "canonical_final_v1.content_summary",
+    "canonical_final_v1.product_presence",
+    "canonical_final_v1.scene_timeline",
+}
 _CONTACT_TERM_RE = re.compile(r"@|(?:^|\D)\+?\d(?:[\s().-]*\d){6,}(?:\D|$)")
 
 
@@ -94,9 +116,32 @@ def _project_match_evidence(value: Any) -> list[dict[str, str]]:
             or (source and source not in _SMART_LOCAL_EVIDENCE_SOURCES)
         ):
             continue
+        controlled = source in {
+            CONTROLLED_ALIAS_EVIDENCE_SOURCE,
+            CAPABILITY_USE_EVIDENCE_SOURCE,
+        }
         evidence = {"field": field, "term": term}
         if source:
             evidence["source"] = source
+        if controlled:
+            canonical = str(raw.get("canonical_term") or "").strip()[:120]
+            observed = str(raw.get("observed_term") or "").strip()[:120]
+            evidence_group = str(raw.get("evidence_group") or "").strip()[:80]
+            relation = str(raw.get("evidence_relation") or "").strip()[:80]
+            if (
+                not canonical
+                or not observed
+                or evidence_group not in {"product_use_fit", "segment_use_case"}
+                or _CONTACT_TERM_RE.search(canonical)
+                or _CONTACT_TERM_RE.search(observed)
+            ):
+                continue
+            evidence.update({
+                "canonical_term": canonical,
+                "observed_term": observed,
+                "evidence_group": evidence_group,
+                "evidence_relation": relation,
+            })
         projected.append(evidence)
     return projected[:12]
 

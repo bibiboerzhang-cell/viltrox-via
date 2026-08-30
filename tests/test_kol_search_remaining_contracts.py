@@ -201,6 +201,31 @@ def test_resolved_dc_550_accepts_representative_work_with_model_evidence() -> No
     }
 
 
+def test_representative_description_can_prove_relevance_when_title_does_not() -> None:
+    evidence = match_evidence.build_match_evidence(
+        {
+            **_dc_550_candidate(),
+            "bio": "Independent creator",
+            "primary_topic": "",
+            "content_style": "",
+            "profile_text": "",
+        },
+        {
+            "representative_evidence": [
+                {
+                    "title": "A day on location",
+                    "description": "How I use a field monitor during a wedding film production",
+                },
+            ],
+        },
+        "field monitor wedding filmmaker",
+        min_intent_terms=1,
+    )
+
+    assert "representative_evidence.description" in {item["field"] for item in evidence}
+    assert {item["term"] for item in evidence} >= {"field", "monitor", "wedding"}
+
+
 @pytest.mark.parametrize(
     ("product", "query", "profile_text", "attribute_only_title", "identity_title", "identity_terms"),
     [
@@ -269,8 +294,14 @@ def test_product_attributes_cannot_replace_resolved_product_identity(
     assert identity_terms <= {item["term"] for item in identity_proven}
 
 
-def test_smart_preview_passes_resolved_product_anchor_to_the_evidence_gate(
+@pytest.mark.parametrize(
+    ("objective", "expects_product_anchor"),
+    [("prospective_growth", False), ("existing_evidence", True)],
+)
+def test_smart_preview_uses_product_anchor_only_for_existing_evidence(
     monkeypatch: pytest.MonkeyPatch,
+    objective: str,
+    expects_product_anchor: bool,
 ) -> None:
     resolved_product = {
         "sku": "DC-550",
@@ -289,6 +320,7 @@ def test_smart_preview_passes_resolved_product_anchor_to_the_evidence_gate(
             "product_focus": ["professional", "wedding", "videographer"],
             "target_persona": "Professional wedding filmmakers",
             "resolved_product": resolved_product,
+            "objective": objective,
         },
     )
 
@@ -323,14 +355,18 @@ def test_smart_preview_passes_resolved_product_anchor_to_the_evidence_gate(
         )
     )
 
-    anchors = match_evidence.product_evidence_terms(
-        captured["required_product_evidence_terms"]
-    )
-    assert "dc-550" in anchors
+    anchors = match_evidence.product_evidence_terms(captured["required_product_evidence_terms"])
+    assert ("dc-550" in anchors) is expects_product_anchor
 
 
-def test_worker_passes_resolved_product_anchor_to_the_evidence_gate(
+@pytest.mark.parametrize(
+    ("objective", "expects_product_anchor"),
+    [("prospective_growth", False), ("existing_evidence", True)],
+)
+def test_worker_uses_product_anchor_only_for_existing_evidence(
     monkeypatch: pytest.MonkeyPatch,
+    objective: str,
+    expects_product_anchor: bool,
 ) -> None:
     resolved_product = {
         "sku": "DC-550",
@@ -362,15 +398,14 @@ def test_worker_passes_resolved_product_anchor_to_the_evidence_gate(
                     "query_text": "professional wedding videographer",
                     "_worker_planned": True,
                     "resolved_product": resolved_product,
+                    "objective": objective,
                     "include_new_discovery": False,
                 },
             )
         )
 
-    anchors = match_evidence.product_evidence_terms(
-        captured["required_product_evidence_terms"]
-    )
-    assert "dc-550" in anchors
+    anchors = match_evidence.product_evidence_terms(captured["required_product_evidence_terms"])
+    assert ("dc-550" in anchors) is expects_product_anchor
 
 
 @pytest.mark.parametrize(
@@ -588,8 +623,14 @@ def test_unknown_or_conflicting_explicit_product_sku_fails_closed(
     assert conflict["reason"] == "conflicting_product_constraints"
 
 
-def test_smart_preview_uses_the_explicit_sku_as_required_evidence(
+@pytest.mark.parametrize(
+    ("objective", "expects_product_anchor"),
+    [("prospective_growth", False), ("existing_evidence", True)],
+)
+def test_explicit_sku_is_resolved_but_only_existing_evidence_requires_brand_history(
     monkeypatch: pytest.MonkeyPatch,
+    objective: str,
+    expects_product_anchor: bool,
 ) -> None:
     captured: dict[str, Any] = {}
     product = _explicit_product()
@@ -614,6 +655,7 @@ def test_smart_preview_uses_the_explicit_sku_as_required_evidence(
             {
                 "input": "wedding filmmakers",
                 "product_sku": "DC-550",
+                "objective": objective,
                 "create_session": False,
             },
             staff={"id": 42},
@@ -621,4 +663,5 @@ def test_smart_preview_uses_the_explicit_sku_as_required_evidence(
     )
 
     assert result["llm_query_plan"]["resolved_product"]["sku"] == "DC-550"
-    assert "dc-550" in match_evidence.product_evidence_terms(captured["required_product_evidence_terms"])
+    anchors = match_evidence.product_evidence_terms(captured["required_product_evidence_terms"])
+    assert ("dc-550" in anchors) is expects_product_anchor

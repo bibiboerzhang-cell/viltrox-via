@@ -752,6 +752,3 @@ def init_db():
         logger.info("trust perf indexes ready")
     except Exception:
         logger.exception("trust perf indexes failed (non-fatal)")
-
-
-init_db()

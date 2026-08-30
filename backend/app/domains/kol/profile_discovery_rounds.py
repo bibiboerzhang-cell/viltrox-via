@@ -91,36 +91,49 @@ MEASURED_ROUND_COST_USD: dict[str, float] = {
     "tiktok": 0.032,
     "youtube": 0.0,
 }
-# YouTube 腿每轮的 API 调用面(检索词变体各一次 search.list + 1 次 channels.list)。
+# YouTube 2026-06-01 v2:search.list 走独立 Search Queries 桶；channels/videos
+# 各走 combined quota。两个桶不可相加成一个伪总数。
 # ``YOUTUBE_MAX_QUERY_VARIANTS`` 只是**不知道真实变体数时**的兜底(旧的 ≤3 词块口径);
-# 检索词车道的精准词梯会发更多条,所以传进来的真实数只受 ``CEILING`` 约束 —— 按 3 封顶
-# 会把 4~5 条词的轮次**低估**成 301,那是预算闸最不能接受的失败方向。
+# 精准词梯可能发更多条,所以 Search Queries 预报只受 ``CEILING`` 约束。
 YOUTUBE_MAX_QUERY_VARIANTS = 3
 YOUTUBE_QUERY_VARIANTS_CEILING = 8
-YOUTUBE_SEARCH_UNITS_PER_QUERY = 100
-YOUTUBE_CHANNELS_LIST_UNITS = 1
-YOUTUBE_API_CALLS_PER_ROUND = YOUTUBE_MAX_QUERY_VARIANTS + 1
-YOUTUBE_QUOTA_UNITS_PER_ROUND = (
-    YOUTUBE_SEARCH_UNITS_PER_QUERY * YOUTUBE_MAX_QUERY_VARIANTS + YOUTUBE_CHANNELS_LIST_UNITS
-)
+YOUTUBE_SEARCH_CALLS_PER_QUERY = 1
+YOUTUBE_COMBINED_UNITS_PER_METADATA_CALL = 1
+YOUTUBE_METADATA_CALLS_PER_STRICT_ROUND = 2  # channels.list + videos.list
+YOUTUBE_API_CALLS_PER_ROUND = YOUTUBE_MAX_QUERY_VARIANTS + YOUTUBE_METADATA_CALLS_PER_STRICT_ROUND
+YOUTUBE_COMBINED_QUOTA_UNITS_PER_ROUND = YOUTUBE_METADATA_CALLS_PER_STRICT_ROUND
+# Deprecated compatibility alias; it means combined units only, never search calls.
+YOUTUBE_QUOTA_UNITS_PER_ROUND = YOUTUBE_COMBINED_QUOTA_UNITS_PER_ROUND
 
 
 def youtube_quota_units(query_variants: Any = None) -> int:
-    """这一轮 YouTube 腿要吃多少配额单位:search.list 100/变体 + channels.list 1。
+    """Deprecated: strict round combined units (channels + videos) only.
 
-    **2026-08-27 修「每轮固定按 301 预报、实际 201」的 50% 高估**:预报此前写死 3 条变体,
-    真发出去的常常只有 2 条(候选装满提前 break)。虚高的账会让轮次守门按不存在的消耗
-    提前收手、少跑轮次。调用方知道真实/计划变体数就传进来;不知道才退回旧上限
-    (失败方向:高估,不会低估)。
+    ``query_variants`` is accepted for source compatibility but cannot change
+    the combined bucket.  Use ``youtube_usage_forecast`` for both buckets.
     """
+    del query_variants
+    return YOUTUBE_COMBINED_QUOTA_UNITS_PER_ROUND
+
+
+def _youtube_query_count(query_variants: Any = None) -> int:
     try:
         variants = int(query_variants)
     except (TypeError, ValueError):
         variants = 0
     if variants <= 0:
         variants = YOUTUBE_MAX_QUERY_VARIANTS
-    variants = min(variants, YOUTUBE_QUERY_VARIANTS_CEILING)
-    return YOUTUBE_SEARCH_UNITS_PER_QUERY * variants + YOUTUBE_CHANNELS_LIST_UNITS
+    return min(variants, YOUTUBE_QUERY_VARIANTS_CEILING)
+
+
+def youtube_usage_forecast(query_variants: Any = None) -> dict[str, int]:
+    searches = _youtube_query_count(query_variants)
+    combined = YOUTUBE_COMBINED_QUOTA_UNITS_PER_ROUND
+    return {
+        "youtube_search_calls": searches,
+        "youtube_combined_quota_units": combined,
+        "youtube_api_calls": searches + combined,
+    }
 
 
 def _text(value: Any) -> str:
@@ -249,39 +262,48 @@ def round_cost_forecast(
     按 prod 实测单价线性外推的美元数。IG 的 resultsLimit 按 tag 计,线性外推正确;
     TT 的 resultsPerPage 会被检索词变体摊薄,线性外推是**高估**——失败方向安全。
 
-    ``youtube_query_variants``:这一轮 YouTube 腿真会发几条检索词变体。传了就按它算配额
-    (治「固定 301」的 50% 高估);不传退回旧上限,行为逐字不变。
+    ``youtube_query_variants``:这一轮真会发几次 search.list；combined quota
+    始终单列 channels.list + videos.list 两次，不和 Search Queries 相加。
     """
     legs = [_code(item) for item in (platforms or []) if _code(item)]
     by_platform: dict[str, dict[str, Any]] = {}
     apify_runs = 0
+    search_calls = 0
     api_calls = 0
-    quota_units = 0
+    combined_units = 0
     estimated_usd = 0.0
     for platform in legs:
         limit = resolve_platform_limit(platform, int(per_platform_limit or MEASURED_BASELINE_LIMIT), per_platform_limits)
         runs = len(DISCOVERY_ACTORS.get(platform, ()))
         unit = MEASURED_ROUND_COST_USD.get(platform, 0.0)
         usd = round(unit * limit / float(MEASURED_BASELINE_LIMIT), 4)
-        units = youtube_quota_units(youtube_query_variants) if platform == "youtube" else 0
-        calls = (units - YOUTUBE_CHANNELS_LIST_UNITS) // YOUTUBE_SEARCH_UNITS_PER_QUERY + 1 if units else 0
+        usage = youtube_usage_forecast(youtube_query_variants) if platform == "youtube" else {
+            "youtube_search_calls": 0,
+            "youtube_combined_quota_units": 0,
+            "youtube_api_calls": 0,
+        }
         by_platform[platform] = {
             "requested_limit": limit,
             "apify_runs": runs,
-            "youtube_api_calls": calls,
-            "youtube_quota_units": units,
+            **usage,
+            "youtube_quota_units": usage["youtube_combined_quota_units"],
+            "youtube_quota_units_deprecated": True,
             "estimated_usd": usd,
         }
         apify_runs += runs
-        api_calls += calls
-        quota_units += units
+        search_calls += usage["youtube_search_calls"]
+        api_calls += usage["youtube_api_calls"]
+        combined_units += usage["youtube_combined_quota_units"]
         estimated_usd += usd
     return {
         "round_no": max(1, int(round_no or 1)),
         "platforms": legs,
         "apify_runs": apify_runs,
+        "youtube_search_calls": search_calls,
+        "youtube_combined_quota_units": combined_units,
         "youtube_api_calls": api_calls,
-        "youtube_quota_units": quota_units,
+        "youtube_quota_units": combined_units,
+        "youtube_quota_units_deprecated": True,
         "estimated_usd": round(estimated_usd, 4),
         "by_platform": by_platform,
     }
@@ -292,7 +314,9 @@ def forecast_line(forecast: dict[str, Any]) -> str:
     data = forecast if isinstance(forecast, dict) else {}
     return (
         f"round={data.get('round_no')} platforms={','.join(data.get('platforms') or []) or '-'} "
-        f"apify_runs={data.get('apify_runs')} youtube_api_calls={data.get('youtube_api_calls')} "
+        f"apify_runs={data.get('apify_runs')} youtube_search_calls={data.get('youtube_search_calls')} "
+        f"youtube_combined_quota_units={data.get('youtube_combined_quota_units')} "
+        f"youtube_api_calls={data.get('youtube_api_calls')} "
         f"estimated_usd={data.get('estimated_usd')}"
     )
 
@@ -306,6 +330,9 @@ def round_plan_record(
     round_gate: Any = None,
     provider_rounds: Any = None,
     actual_quota_units: Any = None,
+    actual_search_calls: Any = None,
+    actual_combined_quota_units: Any = None,
+    actual_youtube_api_calls: Any = None,
     actual_apify_runs: Any = None,
 ) -> dict[str, Any]:
     """落库用的「这次搜索到底花了几次抓取」记录。纯记账,零判定。
@@ -318,18 +345,34 @@ def round_plan_record(
     """
     rows = [dict(item) for item in (forecasts or []) if isinstance(item, dict)]
     gate = round_gate if isinstance(round_gate, dict) else {}
-    forecast_units = sum(int(row.get("youtube_quota_units") or 0) for row in rows)
-    actual_units = None if actual_quota_units is None else max(0, int(actual_quota_units))
+    forecast_searches = sum(int(row.get("youtube_search_calls") or 0) for row in rows)
+    forecast_combined = sum(int(row.get("youtube_combined_quota_units") or 0) for row in rows)
+    forecast_api_calls = sum(int(row.get("youtube_api_calls") or 0) for row in rows)
+    combined_input = actual_combined_quota_units
+    if combined_input is None:
+        combined_input = actual_quota_units
+    actual_combined = None if combined_input is None else max(0, int(combined_input))
+    actual_searches = None if actual_search_calls is None else max(0, int(actual_search_calls))
+    actual_api_calls = None if actual_youtube_api_calls is None else max(0, int(actual_youtube_api_calls))
     return {
         "schema": ROUND_PLAN_SCHEMA,
         "rounds": rows,
         "provider_rounds": max(0, int(provider_rounds or 0)),
         "apify_runs_total": sum(int(row.get("apify_runs") or 0) for row in rows),
-        "youtube_api_calls_total": sum(int(row.get("youtube_api_calls") or 0) for row in rows),
-        "youtube_quota_units_total": forecast_units,
-        # 真实消耗与预报误差(None = 本次没有可对账的实际值,不拿预报冒充实际)。
-        "youtube_quota_units_actual": actual_units,
-        "quota_forecast_delta_units": None if actual_units is None else forecast_units - actual_units,
+        "youtube_search_calls_total": forecast_searches,
+        "youtube_combined_quota_units_total": forecast_combined,
+        "youtube_api_calls_total": forecast_api_calls,
+        "youtube_search_calls_actual": actual_searches,
+        "youtube_combined_quota_units_actual": actual_combined,
+        "youtube_api_calls_actual": actual_api_calls,
+        "search_calls_forecast_delta": None if actual_searches is None else forecast_searches - actual_searches,
+        "combined_quota_forecast_delta_units": None if actual_combined is None else forecast_combined - actual_combined,
+        "api_calls_forecast_delta": None if actual_api_calls is None else forecast_api_calls - actual_api_calls,
+        # Deprecated compatibility aliases: combined quota only.
+        "youtube_quota_units_total": forecast_combined,
+        "youtube_quota_units_actual": actual_combined,
+        "quota_forecast_delta_units": None if actual_combined is None else forecast_combined - actual_combined,
+        "youtube_quota_units_deprecated": True,
         "apify_runs_actual": None if actual_apify_runs is None else max(0, int(actual_apify_runs)),
         "estimated_usd_total": round(sum(float(row.get("estimated_usd") or 0.0) for row in rows), 4),
         "daily_budget_usd": round(daily_budget_usd(), 4),

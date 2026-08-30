@@ -99,6 +99,53 @@ def is_failure_line(line: str) -> bool:
     return False
 
 
+def structured_event(line: str) -> dict:
+    """Return one JSON event from the mixed human/JSON sync log."""
+    start = line.find("{")
+    if start < 0:
+        return {}
+    try:
+        payload = json.loads(line[start:])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def latest_finished_receipt(lines: list[str]) -> dict:
+    """Classify orchestration completion without promoting enqueue to provider success."""
+    finished: dict = {}
+    for line in lines:
+        payload = structured_event(line)
+        if payload.get("event") == "cron_daily_sync_finished":
+            finished = payload
+    summary = finished.get("summary") if isinstance(finished.get("summary"), dict) else {}
+    orchestration_status = str(summary.get("status") or "").strip().lower()
+    if orchestration_status == "queued":
+        completion_scope = "enqueue_only"
+        provider_completion = "unknown"
+    elif orchestration_status in {"ok", "completed", "succeeded", "success"}:
+        # Compatibility for the former synchronous implementation: only its
+        # trusted structured completion receipt can authorize post-sync work.
+        completion_scope = "provider_completion"
+        provider_completion = "completed"
+    elif orchestration_status in {"failed", "interrupted", "blocked", "error"}:
+        completion_scope = "provider_completion"
+        provider_completion = "failed"
+    elif orchestration_status == "planned" or bool(summary.get("dry_run")):
+        completion_scope = "plan_only"
+        provider_completion = "not_run"
+    else:
+        completion_scope = "unknown"
+        provider_completion = "unknown"
+    return {
+        "orchestration_status": orchestration_status or "unknown",
+        "completion_scope": completion_scope,
+        "provider_completion": provider_completion,
+        "finished_event_at": str(finished.get("at") or ""),
+        "finished_summary": summary,
+    }
+
+
 service = os.environ.get("SYNC_SERVICE") or "vkpi-sync-daily.service"
 log_path = Path(os.environ.get("LOG_PATH") or "/var/log/vkpi/sync_daily.log")
 lines = tail_lines(log_path)
@@ -118,6 +165,7 @@ progress_lines = [
     if any(pattern in line for pattern in marker_patterns)
 ]
 apify = apify_summary(lines)
+receipt = latest_finished_receipt(lines)
 failure_lines = [
     line for line in lines
     if is_failure_line(line)
@@ -128,13 +176,29 @@ if apify.get("last_platform"):
 elif apify.get("last_actor"):
     inferred_stage = f"{apify['last_actor']} provider sync"
 
+service_state = run(["systemctl", "is-active", service]) or "unknown"
+active_state = run(["systemctl", "show", service, "-p", "ActiveState", "--value"]) or "unknown"
+sub_state = run(["systemctl", "show", service, "-p", "SubState", "--value"]) or "unknown"
+service_result = run(["systemctl", "show", service, "-p", "Result", "--value"]) or "unknown"
+exec_main_status = run(["systemctl", "show", service, "-p", "ExecMainStatus", "--value"]) or "unknown"
+post_sync_safe = (
+    service_state not in {"active", "activating"}
+    and active_state not in {"active", "activating"}
+    and service_result == "success"
+    and exec_main_status == "0"
+    and receipt["provider_completion"] == "completed"
+    and not failure_lines
+)
+
 status = {
     "service": service,
-    "service_state": run(["systemctl", "is-active", service]) or "unknown",
-    "active_state": run(["systemctl", "show", service, "-p", "ActiveState", "--value"]) or "unknown",
-    "sub_state": run(["systemctl", "show", service, "-p", "SubState", "--value"]) or "unknown",
-    "result": run(["systemctl", "show", service, "-p", "Result", "--value"]) or "unknown",
-    "exec_main_status": run(["systemctl", "show", service, "-p", "ExecMainStatus", "--value"]) or "unknown",
+    "service_state": service_state,
+    "active_state": active_state,
+    "sub_state": sub_state,
+    "result": service_result,
+    "exec_main_status": exec_main_status,
+    **receipt,
+    "post_sync_safe": post_sync_safe,
     "log_path": str(log_path),
     "log_exists": log_path.exists(),
     "log_size_bytes": log_path.stat().st_size if log_path.exists() else 0,

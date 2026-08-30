@@ -15,9 +15,14 @@ import app.domains.kol.search_sessions_online as kol_search_sessions_online
 import app.domains.kol.smart_query_planner as kol_smart_query_planner
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
 from app.domains.kol import profile_discovery as kol_profile_discovery
+from app.domains.kol import targeted_search_runtime as kol_targeted_search_runtime
 from app.domains.projects import workflow as project_workflow
 from app.domains.projects import cost_estimate as project_cost_estimate
 from app.domains.projects import outreach as project_outreach
+from app.services.projects.creator_lifecycle_adapters import (
+    DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
+    DEFAULT_SEARCH_SESSION_DRAFT_PORT,
+)
 
 from app.api.routers.vkpi_kol_pool_helpers import (
     _attach_smart_recall_session,
@@ -32,10 +37,15 @@ from app.api.routers.vkpi_kol_pool_search_responses import (
     _text_response_status,
     _url_response_status,
 )
+from app.api.routers.vkpi_kol_pool_smart_search_helpers import (
+    smart_local_recall_kwargs,
+    smart_url_search_response,
+)
 from app.api.routers.vkpi_kol_pool_search_scope import (
     _approved_session_kol_ids, _owned_search_session_or_http,
     _prepare_video_resolver_session_item, _reused_video_session_lineage,
 )
+from app.api.routers.vkpi_kol_pool_url_crawl_orchestration import run_url_deep_crawl
 from app.api.routers.vkpi_kol_pool_recall_route import (
     recall_kol_profiles,
     router as kol_recall_router,
@@ -52,162 +62,21 @@ def _run_url_deep_crawl(
     default_create_session: bool,
     default_source: str,
 ) -> dict:
-    if body.get("local_evaluation") is True:
-        raise ValueError("local_evaluation_http_forbidden")
-    session_id = body.get("session_id")
-    try:
-        session_id_int = int(session_id) if session_id else None
-    except (TypeError, ValueError):
-        raise ValueError("session_id must be an integer") from None
-
-    execute = _body_bool(body, "execute")
-    del default_defer_profile  # all provider-capable execute paths are now durable
-    classified = kol_url_deep_crawl.classify_url(str(body.get("url") or "")) if execute else None
-    defer_provider = bool(
-        classified
-        and (
-            (
-                classified.url_type in {"profile", "video"}
-                and classified.platform in kol_url_deep_crawl.SUPPORTED_PLATFORMS
-            )
-            # 中国平台只支持视频链接:同样走 durable 队列(仅内容分析,不建档)。
-            or (
-                classified.url_type == "video"
-                and classified.platform in kol_url_deep_crawl.CN_VIDEO_ANALYSIS_PLATFORMS
-            )
-        )
-    )
-    crawl_body = {**body, "execute": False} if defer_provider else body
-    result = kol_url_deep_crawl.dry_run_url_deep_crawl(crawl_body)
-
-    session = kol_search_sessions.ensure_session_for_result(
-        session_id=session_id_int,
-        create=_body_bool(body, "create_session", default=default_create_session),
-        query_text=str(body.get("url") or ""),
-        query_type=(
-            "url_video"
-            if result.get("url_type") == "video"
-            else "url_profile"
-            if result.get("url_type") == "profile"
-            else "unknown"
-        ),
-        source=str(body.get("source") or default_source),
-        input_payload={key: value for key, value in body.items() if key != "api_token"},
+    del default_defer_profile  # provider-capable HTTP paths are always durable
+    return run_url_deep_crawl(
+        body,
         staff=staff,
+        default_create_session=default_create_session,
+        default_source=default_source,
+        url_deep_crawl=kol_url_deep_crawl,
+        search_sessions=kol_search_sessions,
+        body_bool=_body_bool,
+        int_or_none=_int_or_none,
+        reused_video_session_lineage=_reused_video_session_lineage,
+        prepare_video_resolver_session_item=_prepare_video_resolver_session_item,
+        pending_enrichment_state=_pending_enrichment_state,
+        url_response_status=_url_response_status,
     )
-    if defer_provider:
-        matched_kol_pool_id = _int_or_none(result.get("matched_kol_pool_id"))
-        is_profile = bool(classified and classified.url_type == "profile")
-        video_flow = result.get("video_flow") if isinstance(result.get("video_flow"), dict) else {}
-        stored_evidence_id = _int_or_none(video_flow.get("evidence_id"))
-        reused_stored_video = bool(not is_profile and matched_kol_pool_id and stored_evidence_id)
-        if reused_stored_video:
-            session, search_session_item_id = _reused_video_session_lineage(
-                session,
-                result,
-                body=body,
-                staff=staff,
-                default_source=default_source,
-                kol_pool_id=int(matched_kol_pool_id),
-                evidence_id=int(stored_evidence_id),
-            )
-            queued = kol_url_deep_crawl.enqueue_stored_video_analysis_job(
-                kol_pool_id=int(matched_kol_pool_id),
-                evidence_id=int(stored_evidence_id),
-                staff=staff,
-                search_session_id=_int_or_none(session.get("id")),
-                search_session_item_id=search_session_item_id,
-                source=str(body.get("source") or f"{default_source}_existing_video"),
-                local_evaluation=False,
-            )
-        elif is_profile and kol_url_deep_crawl.profile_deep_crawl_is_fresh(matched_kol_pool_id):
-            queued = {"status": "already_fresh", "job_id": None}
-        elif not is_profile:
-            # Unseen videos use a dedicated fenced resolver; only its worker
-            # may create evidence and reach the gated final_v1 enqueue.
-            resolver_item_id = _prepare_video_resolver_session_item(session, result)
-            queued = kol_url_deep_crawl.enqueue_video_url_resolve_job(
-                str(body.get("url") or ""),
-                staff=staff,
-                search_session_id=_int_or_none((session or {}).get("id")),
-                search_session_item_id=resolver_item_id,
-                source=str(body.get("source") or f"{default_source}_video_resolve"),
-                max_posts=int(body.get("max_posts") or 3),
-                local_evaluation=False,
-            )
-        else:
-            queued = kol_url_deep_crawl.enqueue_profile_deep_crawl_job(
-                str(body.get("url") or ""),
-                kol_pool_id=matched_kol_pool_id,
-                max_posts=int(body.get("max_posts") or 3),
-                mode=str(body.get("mode") or "account_deep"),
-                representative_video_limit=int(body.get("representative_video_limit") or 1),
-                staff=staff,
-                search_session_id=_int_or_none((session or {}).get("id")),
-                source=str(body.get("source") or f"{default_source}_deferred"),
-            )
-        flow_key = "profile_flow" if is_profile else "video_flow"
-        profile_flow = result.get(flow_key) if isinstance(result.get(flow_key), dict) else {}
-        already_fresh = queued.get("status") == "already_fresh"
-        queue_active = queued.get("status") in {"queued", "already_queued"}
-        video_resolver_queued = bool(not is_profile and not reused_stored_video)
-        enrichment = (
-            None
-            if already_fresh or reused_stored_video or video_resolver_queued
-            else _pending_enrichment_state()
-        )
-        direct_video_ai = queued.get("ai_analysis") if isinstance(queued.get("ai_analysis"), dict) else None
-        direct_video_status = str(queued.get("status") or "") if not is_profile else ""
-        result.update(
-            {
-                "dry_run": False,
-                "execute": True,
-                "deferred_to_queue": queue_active,
-                "writes_performed": bool(queued.get("write_db")) if reused_stored_video else queue_active,
-                "provider_calls_performed": False,
-                "worker_touched": queue_active,
-                "enrichment": enrichment,
-                flow_key: {
-                    **profile_flow,
-                    "status": "ready" if already_fresh else direct_video_status or str(queued.get("status") or "queued"),
-                    "operation": (
-                        "reuse_recent_profile"
-                        if already_fresh
-                        else "existing_creator_video_analysis"
-                        if reused_stored_video
-                        else "profile_deep_crawl_queue"
-                        if is_profile
-                        else "video_url_resolve_queue"
-                    ),
-                    "job_id": queued.get("job_id"),
-                    "evidence_id": stored_evidence_id or profile_flow.get("evidence_id"),
-                    "enqueue_result": queued if not is_profile else profile_flow.get("enqueue_result"),
-                    "resolution_progress": queued.get("resolution_progress") if video_resolver_queued else profile_flow.get("resolution_progress"),
-                    "ai_analysis": direct_video_ai or profile_flow.get("ai_analysis"),
-                    "enrichment": enrichment,
-                    "message": (
-                        "账号资料在 24 小时内已更新，直接复用现有档案。"
-                        if already_fresh
-                        else "已复用本地视频证据并排入 final_v1 深析。"
-                        if reused_stored_video and queue_active
-                        else "已复用本地视频证据；AI 深析当前未启用，本轮没有创建模型任务。"
-                        if reused_stored_video and direct_video_status in {"ai_disabled", "not_requested"}
-                        else "已复用本地视频证据与现有分析。"
-                        if reused_stored_video
-                        else "已进入视频 URL 专用队列；将按解析视频、识别作者、缓存媒体、AI 分析分阶段回填。"
-                        if video_resolver_queued
-                        else "已进入后台队列；抓取、联系方式、受众和视频分析结果会分阶段回填。"
-                    ),
-                    "crawl_performed": False,
-                    "business_tables_written": bool(queued.get("write_db")) if reused_stored_video else False,
-                    "worker_touched": queue_active,
-                },
-            }
-        )
-    result["status"] = _url_response_status(result)
-    if session:
-        result["search_session"] = kol_search_sessions.attach_url_result(int(session["id"]), result)
-    return result
 
 
 @router.post("/kol-search-sessions")
@@ -380,6 +249,8 @@ def create_project_draft_from_kol_search_session(
             int(session_id),
             body or {},
             staff=staff,
+            search_session_port=DEFAULT_SEARCH_SESSION_DRAFT_PORT,
+            feedback_sink=DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -583,17 +454,251 @@ def cancel_kol_search_session_advance(
         raise _service_unavailable("profile_advance_cancel_unavailable", "profile_advance_cancel") from exc
 
 
-@router.post("/kol-smart-search")
-async def smart_kol_search(
-    body: dict = Body(...),
-    staff=Depends(require_tab("vkpi", "write")),
-) -> dict:
-    """Unified smart input endpoint.
+async def _smart_search_session_body(body: dict, recall_query: str, staff: dict) -> dict:
+    """Persist the visible session before any local recall work."""
+    initial_session: dict | None = None
+    if _body_bool(body, "create_session", default=True):
+        initial_session = await run_in_threadpool(
+            kol_search_sessions.ensure_session_for_result,
+            session_id=_int_or_none(body.get("session_id")),
+            create=True,
+            query_text=recall_query,
+            query_type="text_recall",
+            source=str(body.get("source") or "kol_smart_search"),
+            input_payload={key: value for key, value in body.items() if key != "api_token"},
+            staff=staff,
+        )
+    initial_session_id = _int_or_none((initial_session or {}).get("id"))
+    return {
+        **body,
+        **(
+            {"session_id": initial_session_id, "create_session": False}
+            if initial_session_id
+            else {}
+        ),
+    }
 
-    Auto-dispatches pasted URLs to the URL workflow and plain text to profile
-    recall. It records orchestration state in search sessions only and never
-    touches vkpi_kol_pool scoring fields.
-    """
+
+def _smart_clarification_response(*, body: dict, plan: dict, recall_query: str, staff: dict) -> dict:
+    empty_result = {
+        "method": "product_catalog_guard",
+        "items": [],
+        "buckets": {"creator": [], "reviewer": []},
+        "diagnostics": {"candidate_count": 0, "returned_count": 0},
+        "llm_query_plan": plan,
+        "original_query_text": recall_query,
+        "effective_query_text": "",
+    }
+    empty_result = _attach_smart_recall_session(
+        body=body,
+        result=empty_result,
+        query_text=recall_query,
+        staff=staff,
+    )
+    return {
+        "status": "needs_clarification",
+        "mode": "text",
+        "query_type": "text_recall",
+        "branch": "product_catalog_guard",
+        "result": empty_result,
+        "search_session": empty_result.get("search_session"),
+        "provider_calls": False,
+        "provider_note": "explicit product did not match the catalog; no LLM or discovery provider was called",
+        "llm_query_plan": plan,
+        "new_discovery": None,
+        "viltrox_fit_score_untouched": True,
+        "new_discovery_status": "not_requested",
+    }
+
+
+async def _smart_local_recall(
+    *, body: dict, plan: dict, recall_query: str, session_body: dict,
+    explicit_market: str | None, explicit_platforms: object, staff: dict,
+) -> tuple[dict, str]:
+    effective_query = str(plan.get("search_query") or recall_query).strip()
+    explicit_query_platforms = kol_profile_recall.explicit_platforms_from_query(recall_query)
+    # Auto-relax remains fail-safe off until estimate and silent-auto-filter
+    # symmetry are independently repaired and reviewed.
+    auto_body = dict(body)
+    auto_body.setdefault("auto_relax", False)
+    auto_body.setdefault(kol_search_auto_relax.BODY_AUTO_FILTERS_KEY, False)
+    recall_filters, auto_relax_ledger = await run_in_threadpool(
+        kol_search_auto_relax.run_auto_relax,
+        auto_body,
+        plan,
+        query_platforms=explicit_query_platforms,
+        target=_int_or_none(body.get("result_limit")) or kol_search_auto_relax.DEFAULT_TARGET,
+    )
+    targeted_context = kol_targeted_search_runtime.prepare_local_search(
+        plan=plan,
+        body=body,
+        recall_filters=recall_filters,
+        market=explicit_market,
+        platforms=explicit_platforms,
+    )
+    recall_filters = targeted_context["recall_filters"]
+    resolved_product = targeted_context["resolved_product"]
+    recall_kwargs = smart_local_recall_kwargs(
+        body=body,
+        plan=plan,
+        context=targeted_context,
+        recall_filters=recall_filters,
+        effective_query=effective_query,
+        recall_query=recall_query,
+        resolved_product=resolved_product,
+    )
+    result = await run_in_threadpool(
+        kol_targeted_search_runtime.execute_local_search,
+        context=targeted_context,
+        recall_kwargs=recall_kwargs,
+        recall=kol_profile_recall.recall_kol_profiles,
+    )
+    result = kol_profile_discovery.filter_recall_result_platforms(
+        result,
+        recall_filters.get("platforms"),
+    )
+    result = kol_profile_discovery.filter_recall_result_market(result, explicit_market)
+    result.setdefault("query", {})["explicit_operator_platforms"] = explicit_query_platforms
+    result = kol_profile_recall_qualification.project_smart_local_result(result)
+    result["llm_query_plan"] = plan
+    result["original_query_text"] = recall_query
+    result["effective_query_text"] = effective_query
+    result = _attach_smart_recall_session(
+        body=session_body,
+        result=result,
+        query_text=recall_query,
+        staff=staff,
+    )
+    if str(body.get("response_projection") or "").strip() == "smart_local_compact_v1":
+        result = kol_profile_recall_response.compact_smart_local_api_result(result)
+    result["auto_relax"] = auto_relax_ledger
+    return result, effective_query
+
+
+def _smart_discovery_payload(
+    *, body: dict, recall_query: str, effective_query: str, explicit_platforms: object, staff: dict,
+) -> dict | None:
+    discovery_payload: dict | None = None
+    include_new_discovery = bool(
+        body.get("include_new_discovery") or body.get("include_discovery")
+    )
+    execute_new_discovery = bool(body.get("execute_new_discovery"))
+    if include_new_discovery:
+        online_spec = body.get("online_qualification_spec")
+        strict_online_30 = bool(
+            isinstance(online_spec, dict)
+            and str(online_spec.get("version") or "") == "online_net_new_30_v1"
+            and str(online_spec.get("target_count") or "") == "30"
+        )
+        discovery_limit = int(body.get("new_discovery_limit") or body.get("discovery_limit") or 15)
+        discovery_platforms = (
+            body.get("new_discovery_platforms")
+            or body.get("discovery_platforms")
+            or body.get("platforms")
+            or explicit_platforms
+        )
+        platform_hint = str(body.get("platform") or "")
+        if execute_new_discovery:
+            queued = kol_profile_discovery.enqueue_smart_search_profile_advance(
+                query_text=recall_query,
+                body={
+                    **body,
+                    "original_query_text": recall_query,
+                    "include_new_discovery": True,
+                    "new_discovery_limit": discovery_limit,
+                    "new_discovery_platforms": discovery_platforms,
+                    "platform": platform_hint,
+                },
+                staff=staff,
+            )
+            discovery_payload = {
+                "status": queued.get("status") or "queued",
+                "deferred_to_queue": True,
+                "job_id": queued.get("job_id") or (queued.get("job") or {}).get("id"),
+                "progressive": True,
+                "provider_calls_performed": False,
+                **(
+                    {
+                        "online_qualification": kol_search_sessions_online.queued_online_qualification(
+                            queued.get("status") or "queued"
+                        )
+                    }
+                    if strict_online_30
+                    else {}
+                ),
+            }
+        else:
+            discovery_payload = kol_profile_discovery.discovery_plan(
+                query_text=effective_query,
+                platforms=discovery_platforms,
+                platform_hint=platform_hint,
+                limit=discovery_limit,
+            )
+    return discovery_payload
+
+
+async def _smart_text_search(body: dict, query_text: str, staff: dict) -> dict:
+    recall_query = str(body.get("query_text") or query_text).strip()
+    explicit_market = kol_profile_discovery.resolve_market_constraint(
+        recall_query,
+        body.get("market") or body.get("country"),
+    )
+    query_platforms = kol_profile_discovery.explicit_platforms_from_query(recall_query)
+    explicit_platforms = (
+        query_platforms
+        or body.get("platforms")
+        or body.get("new_discovery_platforms")
+        or body.get("discovery_platforms")
+        or body.get("platform")
+    )
+    session_body = await _smart_search_session_body(body, recall_query, staff)
+    plan = await run_in_threadpool(
+        kol_smart_query_planner.plan_text_query_provider_free,
+        recall_query,
+        body=body,
+    )
+    if str(plan.get("status") or "") == "needs_clarification":
+        return _smart_clarification_response(
+            body=session_body,
+            plan=plan,
+            recall_query=recall_query,
+            staff=staff,
+        )
+    result, effective_query = await _smart_local_recall(
+        body=body,
+        plan=plan,
+        recall_query=recall_query,
+        session_body=session_body,
+        explicit_market=explicit_market,
+        explicit_platforms=explicit_platforms,
+        staff=staff,
+    )
+    discovery_payload = _smart_discovery_payload(
+        body=body,
+        recall_query=recall_query,
+        effective_query=effective_query,
+        explicit_platforms=explicit_platforms,
+        staff=staff,
+    )
+    return {
+        "status": _text_response_status(result, discovery_payload),
+        "mode": "text",
+        "query_type": "text_recall",
+        "branch": "kol_recall",
+        "result": result,
+        "search_session": result.get("search_session"),
+        "provider_calls": False,
+        "provider_note": "initial recall is provider-free; full LLM planning and vector/provider stages run in the queued worker",
+        "llm_query_plan": plan,
+        "new_discovery": discovery_payload,
+        "viltrox_fit_score_untouched": True,
+        "new_discovery_status": (discovery_payload or {}).get("status") if discovery_payload else "not_requested",
+    }
+
+
+@router.post("/kol-smart-search")
+async def smart_kol_search(body: dict = Body(...), staff=Depends(require_tab("vkpi", "write"))) -> dict:
+    """Dispatch a URL or provider-free first-round text search."""
     query_text = str(body.get("input") or body.get("query") or body.get("query_text") or body.get("url") or "").strip()
     if not query_text:
         raise HTTPException(status_code=400, detail="input is required")
@@ -603,265 +708,15 @@ async def smart_kol_search(
     branch = "url" if mode == "url" or (mode == "auto" and _looks_like_url(query_text)) else "recall"
     if mode == "text":
         branch = "recall"
-
     try:
         if branch == "url":
-            result = _run_url_deep_crawl(
-                {
-                    **body,
-                    "url": query_text,
-                },
-                staff=staff,
-                default_defer_profile=True,
-                default_create_session=True,
-                default_source="kol_smart_search",
+            return smart_url_search_response(
+                body, query_text, staff,
+                run_url_deep_crawl=_run_url_deep_crawl,
+                url_response_status=_url_response_status,
+                smart_query_type=_smart_query_type,
             )
-            return {
-                "status": _url_response_status(result),
-                "mode": "url",
-                "query_type": _smart_query_type(branch="url", result=result),
-                "branch": "kol_url_deep_crawl",
-                "result": result,
-                "search_session": result.get("search_session"),
-                "provider_calls": bool(
-                    result.get("provider_calls_performed") or result.get("llm_calls_performed")
-                ),
-                "viltrox_fit_score_untouched": result.get("viltrox_fit_score_untouched"),
-            }
-
-        recall_query = str(body.get("query_text") or query_text).strip()
-        # Reject malformed/conflicting operator filters before creating a
-        # durable session or performing any recall work.
-        explicit_market = kol_profile_discovery.resolve_market_constraint(
-            recall_query,
-            body.get("market") or body.get("country"),
-        )
-        query_platforms = kol_profile_discovery.explicit_platforms_from_query(recall_query)
-        explicit_platforms = (
-            query_platforms
-            or body.get("platforms")
-            or body.get("new_discovery_platforms")
-            or body.get("discovery_platforms")
-            or body.get("platform")
-        )
-        # 先持久化可见会话,再做任何基础召回。前端紧接着调用
-        # profile-advance-job 创建后台任务;worker 中才跑完整 plan_text_query。
-        # 这里只用产品知识库/规则初始计划 + 本地 pool 文本召回,请求侧
-        # 不再触发 LLM、embedding 或 LLM rerank。
-        initial_session: dict | None = None
-        if _body_bool(body, "create_session", default=True):
-            initial_session = await run_in_threadpool(
-                kol_search_sessions.ensure_session_for_result,
-                session_id=_int_or_none(body.get("session_id")),
-                create=True,
-                query_text=recall_query,
-                query_type="text_recall",
-                source=str(body.get("source") or "kol_smart_search"),
-                input_payload={key: value for key, value in body.items() if key != "api_token"},
-                staff=staff,
-            )
-        initial_session_id = _int_or_none((initial_session or {}).get("id"))
-        session_body = {
-            **body,
-            **(
-                {"session_id": initial_session_id, "create_session": False}
-                if initial_session_id
-                else {}
-            ),
-        }
-        llm_query_plan = await run_in_threadpool(
-            kol_smart_query_planner.plan_text_query_provider_free,
-            recall_query,
-            body=body,
-        )
-        if str(llm_query_plan.get("status") or "") == "needs_clarification":
-            empty_result = {
-                "method": "product_catalog_guard",
-                "items": [],
-                "buckets": {"creator": [], "reviewer": []},
-                "diagnostics": {"candidate_count": 0, "returned_count": 0},
-                "llm_query_plan": llm_query_plan,
-                "original_query_text": recall_query,
-                "effective_query_text": "",
-            }
-            empty_result = _attach_smart_recall_session(
-                body=session_body,
-                result=empty_result,
-                query_text=recall_query,
-                staff=staff,
-            )
-            return {
-                "status": "needs_clarification",
-                "mode": "text",
-                "query_type": "text_recall",
-                "branch": "product_catalog_guard",
-                "result": empty_result,
-                "search_session": empty_result.get("search_session"),
-                "provider_calls": False,
-                "provider_note": "explicit product did not match the catalog; no LLM or discovery provider was called",
-                "llm_query_plan": llm_query_plan,
-                "new_discovery": None,
-                "viltrox_fit_score_untouched": True,
-                "new_discovery_status": "not_requested",
-            }
-        effective_query = str(llm_query_plan.get("search_query") or recall_query).strip()
-        explicit_query_platforms = kol_profile_recall.explicit_platforms_from_query(recall_query)
-        # 筛选拼装 + 自动放宽(app/domains/kol/search_auto_relax.py):
-        # 模型只提议,人数由零成本 SQL COUNT 定夺;不够 30 人就按「代价最小」的顺序
-        # 放宽**模型推断的**筛选(操作员亲手勾的和质量合格线一格都不动),
-        # 松了哪一项、松之前松之后各多少人,全部原样进 result["auto_relax"] 回给操作员。
-        # 产量预估是同步 SQL COUNT,必须离开事件循环再跑。
-        # 上线默认关(2026-08-26):对抗复核坐实两条尚未修完的缺陷——①预估数与召回腿
-        # 未逐字对齐(「含未知」那一格的增益召回腿结构上取不到人、国家同义词两套口径、
-        # 未计合格线),用不准的数驱动自动放宽比不放宽更糟;②系统「自动加筛选」这半边
-        # 完全静默,能悄悄替操作员加上他从没说过的条件。两条修完并复核通过后删掉这两行,
-        # 默认即恢复为开。函数自身的默认值刻意保持不变,单测口径不受影响。
-        auto_body = dict(body)
-        auto_body.setdefault("auto_relax", False)
-        auto_body.setdefault(kol_search_auto_relax.BODY_AUTO_FILTERS_KEY, False)
-        recall_filters, auto_relax_ledger = await run_in_threadpool(
-            kol_search_auto_relax.run_auto_relax,
-            auto_body,
-            llm_query_plan,
-            query_platforms=explicit_query_platforms,
-            target=_int_or_none(body.get("result_limit")) or kol_search_auto_relax.DEFAULT_TARGET,
-        )
-        resolved_product = (
-            llm_query_plan.get("resolved_product")
-            if isinstance(llm_query_plan.get("resolved_product"), dict)
-            else {}
-        )
-        result = await run_in_threadpool(
-            kol_profile_recall.recall_kol_profiles,
-            query_text=effective_query,
-            product_sku=str(body.get("product_sku") or ""),
-            candidate_limit=kol_profile_recall_qualification.SMART_LOCAL_CANDIDATE_LIMIT,
-            limit=kol_profile_recall_qualification.SMART_LOCAL_TARGET,
-            creator_quota=int(body.get("creator_quota") or llm_query_plan.get("creator_quota") or 15),
-            reviewer_quota=int(body.get("reviewer_quota") or llm_query_plan.get("reviewer_quota") or 15),
-            ratio_policy=str(body.get("ratio_policy") or "soft"),
-            mixed_policy=str(body.get("mixed_policy") or "dominant"),
-            # User-visible evidence results are canonical units. A request
-            # flag must not duplicate one KOL or corrupt the distribution.
-            dedupe=True,
-            vector_weight=float(body.get("vector_weight") if body.get("vector_weight") is not None else kol_profile_recall_qualification.SMART_LOCAL_VECTOR_WEIGHT),
-            type_weight=float(body.get("type_weight") if body.get("type_weight") is not None else kol_profile_recall_qualification.SMART_LOCAL_TYPE_WEIGHT),
-            type_boost_enabled=bool(body.get("type_boost_enabled", True)),
-            exclude_chinese=bool(body.get("exclude_chinese", True)),
-            product_focus=llm_query_plan.get("product_focus"),
-            target_persona=str(llm_query_plan.get("target_persona") or ""),
-            provider_free=True,
-            filters=recall_filters,
-            search_strategy=str(body.get("search_strategy") or "balanced"),
-            bucket_policy=(
-                body.get("bucket_policy")
-                if isinstance(body.get("bucket_policy"), dict)
-                else body.get("bucketPolicy")
-                if isinstance(body.get("bucketPolicy"), dict)
-                else None
-            ),
-            # Explainable search is evidence-gated: broad popularity backfill
-            # cannot satisfy a user-visible match without field evidence.
-            allow_backfill=False,
-            operator_query_text=recall_query,
-            required_product_evidence_terms=resolved_product,
-            local_qualification_policy=kol_profile_recall_qualification.smart_local_policy(
-                market=explicit_market,
-                platforms=explicit_platforms,
-                languages=body.get("languages") or body.get("content_languages"),
-                profile_types=body.get("profile_types") or body.get("kol_types"),
-            ),
-        )
-        result = kol_profile_discovery.filter_recall_result_platforms(
-            result,
-            recall_filters.get("platforms"),
-        )
-        result = kol_profile_discovery.filter_recall_result_market(
-            result,
-            explicit_market,
-        )
-        result.setdefault("query", {})["explicit_operator_platforms"] = explicit_query_platforms
-        result = kol_profile_recall_qualification.project_smart_local_result(result)
-        result["llm_query_plan"] = llm_query_plan
-        result["original_query_text"] = recall_query
-        result["effective_query_text"] = effective_query
-        result = _attach_smart_recall_session(
-            body=session_body,
-            result=result,
-            query_text=recall_query,
-            staff=staff,
-        )
-        # Session attachment above receives the complete rich bucket result so
-        # durable replay and the legacy /kol-recall contract do not change.
-        # Only version-negotiated Smart clients receive the compact wire shape.
-        if str(body.get("response_projection") or "").strip() == "smart_local_compact_v1":
-            result = kol_profile_recall_response.compact_smart_local_api_result(result)
-        # 紧凑投影之后再挂:自动放宽的台账在任何投影下都必须到得了操作员眼前(绝不静默)。
-        result["auto_relax"] = auto_relax_ledger
-        discovery_payload: dict | None = None
-        include_new_discovery = bool(body.get("include_new_discovery") or body.get("include_discovery"))
-        execute_new_discovery = bool(body.get("execute_new_discovery"))
-        if include_new_discovery:
-            online_spec = body.get("online_qualification_spec")
-            strict_online_30 = bool(
-                isinstance(online_spec, dict)
-                and str(online_spec.get("version") or "") == "online_net_new_30_v1"
-                and str(online_spec.get("target_count") or "") == "30"
-            )
-            discovery_limit = int(body.get("new_discovery_limit") or body.get("discovery_limit") or 15)
-            discovery_platforms = (
-                body.get("new_discovery_platforms")
-                or body.get("discovery_platforms")
-                or body.get("platforms")
-                or explicit_platforms
-            )
-            platform_hint = str(body.get("platform") or "")
-            if execute_new_discovery:
-                queued = kol_profile_discovery.enqueue_smart_search_profile_advance(
-                    query_text=recall_query,
-                    body={
-                        **body,
-                        "original_query_text": recall_query,
-                        "include_new_discovery": True,
-                        "new_discovery_limit": discovery_limit,
-                        "new_discovery_platforms": discovery_platforms,
-                        "platform": platform_hint,
-                    },
-                    staff=staff,
-                )
-                discovery_payload = {
-                    "status": queued.get("status") or "queued",
-                    "deferred_to_queue": True,
-                    "job_id": queued.get("job_id") or (queued.get("job") or {}).get("id"),
-                    "progressive": True,
-                    "provider_calls_performed": False,
-                    **({
-                        "online_qualification": kol_search_sessions_online.queued_online_qualification(
-                            queued.get("status") or "queued"
-                        )
-                    } if strict_online_30 else {}),
-                }
-            else:
-                discovery_payload = kol_profile_discovery.discovery_plan(
-                    query_text=effective_query,
-                    platforms=discovery_platforms,  # 2026-07-02:仅认用户显式选择;缺省交 _platforms 三平台兜底(不再被 LLM 规划锁两平台)
-                    platform_hint=platform_hint,
-                    limit=discovery_limit,
-                )
-        return {
-            "status": _text_response_status(result, discovery_payload),
-            "mode": "text",
-            "query_type": "text_recall",
-            "branch": "kol_recall",
-            "result": result,
-            "search_session": result.get("search_session"),
-            "provider_calls": False,
-            "provider_note": "initial recall is provider-free; full LLM planning and vector/provider stages run in the queued worker",
-            "llm_query_plan": llm_query_plan,
-            "new_discovery": discovery_payload,
-            "viltrox_fit_score_untouched": True,
-            "new_discovery_status": (discovery_payload or {}).get("status") if discovery_payload else "not_requested",
-        }
+        return await _smart_text_search(body, query_text, staff)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except LookupError as exc:

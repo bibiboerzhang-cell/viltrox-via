@@ -16,6 +16,116 @@ from app.workers.apify_jobs_video_context import _low_scores, _video_performance
 from app.workers.apify_jobs_worker_gemini_stages import merged_stage_timings
 
 
+def _clean_model_chain(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [str(model).strip() for model in raw if str(model).strip()]
+
+
+def _execution_model_chains(
+    value: dict[str, Any],
+    *,
+    selected_model: str,
+) -> tuple[list[str], list[str], list[str]]:
+    requested = _clean_model_chain(value.get("requested_model_chain"))
+    ready = _clean_model_chain(value.get("ready_model_chain"))
+    model_chain = _clean_model_chain(value.get("model_chain"))
+    if not model_chain:
+        model_chain = list(ready or requested)
+    if not requested:
+        requested = list(model_chain or [selected_model])
+    if not ready:
+        ready = list(model_chain or [selected_model])
+    if not model_chain:
+        model_chain = list(ready or requested)
+    return requested, ready, model_chain
+
+
+def _default_execution_snapshot(
+    *,
+    evaluation_only: bool,
+    production_authorized: bool,
+) -> dict[str, Any]:
+    authorized = bool(production_authorized or evaluation_only)
+    if production_authorized:
+        status = "operationally_authorized"
+        source = "legacy_runtime_policy"
+    elif evaluation_only:
+        status = "evaluation_only_authorized"
+        source = "local_evaluation"
+    else:
+        status = "blocked"
+        source = "blocked"
+    return {
+        "scope": "execution_time_snapshot",
+        "authorized": authorized,
+        "production_authorized": production_authorized,
+        "evaluation_only": evaluation_only,
+        "status": status,
+        "source": source,
+        "temporary": False,
+    }
+
+
+def _authorization_snapshots(
+    value: dict[str, Any],
+    *,
+    evaluation_only: bool,
+) -> tuple[bool, bool, dict[str, Any], dict[str, Any]]:
+    recorded_execution = isinstance(value.get("execution_authorization_at_run"), dict)
+    recorded_signed = isinstance(value.get("signed_readiness_at_run"), dict)
+    declared_match = value.get("authorization_snapshot_match")
+    if isinstance(declared_match, bool):
+        snapshot_match = declared_match
+    else:
+        snapshot_match = bool(recorded_execution and recorded_signed)
+    production_authorized = bool(
+        value.get("production_authorized")
+        and not evaluation_only
+        and snapshot_match
+    )
+    if recorded_execution:
+        execution_snapshot = deepcopy(value["execution_authorization_at_run"])
+    else:
+        execution_snapshot = _default_execution_snapshot(
+            evaluation_only=evaluation_only,
+            production_authorized=production_authorized,
+        )
+    if recorded_signed:
+        signed_snapshot = deepcopy(value["signed_readiness_at_run"])
+    else:
+        signed_snapshot = {
+            "scope": "execution_time_snapshot",
+            "production_ready": False,
+            "status": "not_production_ready",
+            "claim_status": "descriptive_only",
+            "evidence_source": "not_recorded",
+        }
+    return (
+        snapshot_match,
+        production_authorized,
+        execution_snapshot,
+        signed_snapshot,
+    )
+
+
+def _model_readiness_status(
+    value: dict[str, Any],
+    *,
+    snapshot_match: bool,
+    evaluation_only: bool,
+    signed_snapshot: dict[str, Any],
+) -> str:
+    if not snapshot_match:
+        return "not_production_ready"
+    declared_status = value.get("model_readiness_status")
+    if declared_status:
+        return str(declared_status)
+    if evaluation_only:
+        return "evaluation_only_not_production_ready"
+    return str(signed_snapshot.get("status") or "not_ready")
+
+
 def llm_execution_metadata(
     raw: dict[str, Any],
     *,
@@ -38,89 +148,49 @@ def llm_execution_metadata(
         or raw.get("provider_reported_model")
         or ""
     ).strip()
-    requested_model_chain = [
-        str(model).strip()
-        for model in value.get("requested_model_chain", [])
-        if str(model).strip()
-    ] if isinstance(value.get("requested_model_chain"), list) else []
-    ready_model_chain = [
-        str(model).strip()
-        for model in value.get("ready_model_chain", [])
-        if str(model).strip()
-    ] if isinstance(value.get("ready_model_chain"), list) else []
-    model_chain = [
-        str(model).strip()
-        for model in value.get("model_chain", [])
-        if str(model).strip()
-    ] if isinstance(value.get("model_chain"), list) else []
-    if not model_chain:
-        model_chain = list(ready_model_chain or requested_model_chain)
-    if not requested_model_chain:
-        requested_model_chain = list(model_chain or [selected_model])
-    if not ready_model_chain:
-        ready_model_chain = list(model_chain or [selected_model])
-    if not model_chain:
-        model_chain = list(ready_model_chain or requested_model_chain)
-    recorded_execution_snapshot = isinstance(
-        value.get("execution_authorization_at_run"), dict
+    requested_model_chain, ready_model_chain, model_chain = _execution_model_chains(
+        value,
+        selected_model=selected_model,
     )
-    recorded_signed_snapshot = isinstance(value.get("signed_readiness_at_run"), dict)
-    declared_snapshot_match = value.get("authorization_snapshot_match")
-    authorization_snapshot_match = (
-        bool(declared_snapshot_match)
-        if isinstance(declared_snapshot_match, bool)
-        else bool(recorded_execution_snapshot and recorded_signed_snapshot)
-    )
-    production_authorized = (
-        bool(value.get("production_authorized"))
-        and not evaluation_only
-        and authorization_snapshot_match
-    )
-    execution_snapshot = (
-        deepcopy(value.get("execution_authorization_at_run"))
-        if recorded_execution_snapshot
-        else {
-            "scope": "execution_time_snapshot",
-            "authorized": bool(production_authorized or evaluation_only),
-            "production_authorized": production_authorized,
-            "evaluation_only": evaluation_only,
-            "status": (
-                "operationally_authorized"
-                if production_authorized
-                else "evaluation_only_authorized"
-                if evaluation_only
-                else "blocked"
-            ),
-            "source": (
-                "legacy_runtime_policy"
-                if production_authorized
-                else "local_evaluation"
-                if evaluation_only
-                else "blocked"
-            ),
-            "temporary": False,
-        }
-    )
-    signed_snapshot = (
-        deepcopy(value.get("signed_readiness_at_run"))
-        if recorded_signed_snapshot
-        else {
-            "scope": "execution_time_snapshot",
-            # Legacy execution authorization is not evidence of signed readiness.
-            "production_ready": False,
-            "status": "not_production_ready",
-            "claim_status": "descriptive_only",
-            "evidence_source": "not_recorded",
-        }
+    (
+        authorization_snapshot_match,
+        production_authorized,
+        execution_snapshot,
+        signed_snapshot,
+    ) = _authorization_snapshots(
+        value,
+        evaluation_only=evaluation_only,
     )
     provider_model_match = (
         response_model_matches(selected_model, provider_reported_model)
         if provider_reported_model
         else None
     )
-    fallback_used = bool(value.get("fallback_used")) if "fallback_used" in value else bool(
-        requested_model_chain and selected_model != requested_model_chain[0]
+    if "fallback_used" in value:
+        fallback_used = bool(value.get("fallback_used"))
+    else:
+        fallback_used = bool(
+            requested_model_chain and selected_model != requested_model_chain[0]
+        )
+    if evaluation_only:
+        authorization_scope = "evaluation_only"
+    elif production_authorized:
+        authorization_scope = "production"
+    else:
+        authorization_scope = str(value.get("authorization_scope") or "blocked")
+    model_readiness_status = _model_readiness_status(
+        value,
+        snapshot_match=authorization_snapshot_match,
+        evaluation_only=evaluation_only,
+        signed_snapshot=signed_snapshot,
     )
+    base_derive_method = str(
+        value.get("base_derive_method") or "video_analysis_final_v1"
+    )
+    if evaluation_only:
+        cache_derive_default = "video_analysis_final_v1__local_eval"
+    else:
+        cache_derive_default = base_derive_method
     return {
         "binding": str(value.get("binding") or f"google/{selected_model}"),
         "model": selected_model,
@@ -153,13 +223,7 @@ def llm_execution_metadata(
             else {}
         ),
         "execution_class": execution_class,
-        "authorization_scope": (
-            "evaluation_only"
-            if evaluation_only
-            else "production"
-            if production_authorized
-            else str(value.get("authorization_scope") or "blocked")
-        ),
+        "authorization_scope": authorization_scope,
         "evaluation_only": evaluation_only,
         "production_authorized": production_authorized,
         "execution_authorization_at_run": execution_snapshot,
@@ -167,28 +231,10 @@ def llm_execution_metadata(
         # Model readiness and content claims are orthogonal. No model result
         # promotes a descriptive content claim to a validated business claim.
         "claim_status": "descriptive_only",
-        "model_readiness_status": str(
-            "not_production_ready"
-            if not authorization_snapshot_match
-            else value.get("model_readiness_status")
-            or (
-                "evaluation_only_not_production_ready"
-                if evaluation_only
-                else signed_snapshot.get("status")
-                or "not_ready"
-            )
-        ),
-        "base_derive_method": str(
-            value.get("base_derive_method") or "video_analysis_final_v1"
-        ),
+        "model_readiness_status": model_readiness_status,
+        "base_derive_method": base_derive_method,
         "cache_derive_method": str(
-            value.get("cache_derive_method")
-            or (
-                "video_analysis_final_v1__local_eval"
-                if evaluation_only
-                else value.get("base_derive_method")
-                or "video_analysis_final_v1"
-            )
+            value.get("cache_derive_method") or cache_derive_default
         ),
     }
 

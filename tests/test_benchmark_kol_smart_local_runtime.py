@@ -106,6 +106,9 @@ def test_hermetic_runtime_fixture_returns_30_for_every_golden_query() -> None:
     assert all(query["shortfall"]["max"] == 0 for query in report["queries"])
     assert report["read_only_receipt"]["application_write_statement_count"] == 0
     assert report["read_only_receipt"]["disposable_database_dropped"] is True
+    assert report["claim_status"] == "runtime_algorithm_legacy_compatibility_only"
+    assert report["scope"]["legacy_smart_local_compatibility_executed"] is True
+    assert report["scope"]["prospective_targeted_query_cells_tested"] is False
 
 
 @pytest.mark.parametrize(

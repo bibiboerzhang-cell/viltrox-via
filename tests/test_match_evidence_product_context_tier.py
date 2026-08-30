@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.domains.kol import profile_recall_match_evidence as me
+from app.domains.kol.profile_query_cell_evidence import build_query_cell_match_evidence
 
 QUERY = "photographer videographer portrait photographer filmmaker"
 PRODUCT_TERMS = ["af-26mm-f28-evo-fe", "viltrox", "26mm", "f2.8", "evo", "full-frame", "sony", "e-mount"]
@@ -34,8 +35,29 @@ def test_intent_still_required_even_with_context():
 
 
 def test_recall_evidence_gate_uses_persona_terms():
-    """profile_recall 证据闸必须用 检索词∪人群词(evidence_query_text),否则泛角色词被剔光整池判无证据。"""
-    from pathlib import Path
-    src = Path(__file__).resolve().parents[1].joinpath("backend/app/domains/kol/profile_recall.py").read_text(encoding="utf-8")
-    assert 'evidence_query_text = f"{resolved_text} {persona_text}"' in src
-    assert "build_match_evidence(row, evidence, evidence_query_text" in src and "build_match_evidence(row, evidence, resolved_text" in src
+    """检索词本身无证据时，人群词兜底必须真实改变证据闸结果。"""
+    row = _row("Sony E-mount food portrait photographer based in Lisbon")
+    row.update({
+        "display_name": "Food Portrait Studio",
+        "primary_topic": "food portrait",
+        "profile_text": "Sony E-mount food portrait photographer based in Lisbon",
+    })
+
+    direct = build_query_cell_match_evidence(
+        row,
+        {},
+        "cinema workflow",
+        required_product_terms=PRODUCT_TERMS,
+    )
+    fallback = build_query_cell_match_evidence(
+        row,
+        {},
+        "cinema workflow",
+        required_product_terms=PRODUCT_TERMS,
+        fallback_query_text="cinema workflow food portrait",
+    )
+
+    assert direct == []
+    assert fallback
+    assert {item["term"] for item in fallback} >= {"food", "portrait"}
+    assert {item["term"] for item in fallback} & {"sony", "e-mount"}

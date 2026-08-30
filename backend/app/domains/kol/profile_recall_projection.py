@@ -21,6 +21,7 @@ from app.domains.kol.profile_recall_filter_modes import (
     tri_state_outcome, unknown_field_candidates,
 )
 from app.domains.kol.profile_recall_country_gate import country_match_key
+from app.domains.kol.profile_recall_content_projection import public_content_evidence_status
 from app.domains.kol.profile_recall_language_gate import resolve_language_match_key
 from app.domains.kol.profile_recall_precision import missingness_aware_weighted_score
 from app.domains.kol.profile_recall_product_queries import PRODUCT_LINE_PERSONAS
@@ -269,6 +270,7 @@ def _evidence_summaries(
     rows = get_connection().execute(
         f"""
         SELECT e.kol_pool_id,
+               e.id AS evidence_id,
                COALESCE(NULLIF(e.title, ''), NULLIF(e.video_title, ''), NULLIF(e.content_url, '')) AS title,
                e.content_url,
                e.thumbnail_url,
@@ -315,6 +317,7 @@ def _evidence_summaries(
             )
         )
         representative: list[dict[str, Any]] = []
+        content_targets: list[dict[str, Any]] = []
         for item in ranked:
             title = _clean_text(item.get("title"), 220)
             url = _clean_text(item.get("content_url"), 500)
@@ -330,6 +333,12 @@ def _evidence_summaries(
                     "comment_count": item.get("comment_count"),
                     "share_count": item.get("share_count"),
                     "data_truth": item.get("data_truth"),
+                }
+            )
+            content_targets.append(
+                {
+                    "evidence_id": item.get("evidence_id"),
+                    "content_url": url,
                 }
             )
             if len(representative) >= 3:
@@ -353,6 +362,10 @@ def _evidence_summaries(
             )
         summaries[kol_id] = {
             "representative_evidence": representative,
+            # Private, request-local identity coordinates.  Smart-local may
+            # use them to read the exact cached post/final-v1 row; they are
+            # never copied into a returned candidate.
+            "_targeted_content_targets": content_targets,
             "evidence_titles": evidence_titles[:12],
             "used_lenses": _extract_lenses(*texts),
             "reason_labels": _reason_labels(
@@ -941,6 +954,8 @@ def _format_item(
     representative = list(evidence.get("representative_evidence") or [])
     if representative:
         item["representative_evidence"] = representative
+    if content_status := public_content_evidence_status(evidence.get("targeted_content_evidence_status")):
+        item["content_evidence_status"] = content_status
     used_lenses = list(evidence.get("used_lenses") or [])
     if used_lenses:
         item["used_lenses"] = used_lenses

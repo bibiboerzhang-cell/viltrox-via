@@ -39,6 +39,9 @@ DEFAULT_EXCLUDE_GLOBS = (
     "*/fixtures/*",
 )
 
+TEST_DIRECTORY_NAMES = {"test", "tests", "__tests__"}
+TEST_FILENAME_MARKERS = (".test.", ".spec.")
+
 
 @dataclass(frozen=True)
 class Violation:
@@ -79,6 +82,19 @@ def should_skip(path: Path) -> bool:
     return any(fnmatch.fnmatch(text, pattern) for pattern in DEFAULT_EXCLUDE_GLOBS)
 
 
+def is_test_source(path: Path) -> bool:
+    """Return true for dedicated and co-located test source files."""
+    if any(part.lower() in TEST_DIRECTORY_NAMES for part in path.parts):
+        return True
+    name = path.name.lower()
+    stem = path.stem.lower()
+    return (
+        name.startswith("test_")
+        or stem.endswith("_test")
+        or any(marker in name for marker in TEST_FILENAME_MARKERS)
+    )
+
+
 def iter_source_files(roots: Iterable[str], *, no_tests: bool = False) -> Iterable[Path]:
     for root_text in roots:
         root = Path(root_text)
@@ -88,7 +104,7 @@ def iter_source_files(roots: Iterable[str], *, no_tests: bool = False) -> Iterab
         for path in candidates:
             if not path.is_file() or path.suffix not in SOURCE_SUFFIXES:
                 continue
-            if no_tests and (path.parts[0] == "tests" or "/tests/" in path.as_posix()):
+            if no_tests and is_test_source(path):
                 continue
             if should_skip(path):
                 continue

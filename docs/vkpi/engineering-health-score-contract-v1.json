@@ -1,0 +1,110 @@
+{
+  "schema_version": "vkpi_engineering_health_contract_v1",
+  "static_evidence_methodology": {
+    "version": "architecture-static-v1",
+    "class_loc_max": {
+      "scope": "production Python under backend/app",
+      "span": "AST ClassDef.lineno through ClassDef.end_lineno inclusive",
+      "nesting": "every ClassDef is an independent sample, including classes nested in classes, sync functions, and async functions",
+      "boundary": "decorator lines and trailing comments are outside the span; nested definitions remain inside their enclosing class span"
+    },
+    "reverse_dependency_count": {
+      "scope": "production Python under backend/app",
+      "deduplication": "unique (path, imported forbidden module) pairs",
+      "rules": {
+        "domains": ["app.workers", "app.api"],
+        "services": ["app.api"]
+      },
+      "imports": "absolute Import and ImportFrom nodes at any AST depth; relative imports are not matches for these absolute forbidden prefixes"
+    },
+    "main_sequence_distance_p90": {
+      "formula": "D=abs(A+I-1); I=Ce/(Ca+Ce)",
+      "unit": "first two package directories below backend/app, for example domains/kol becomes app.domains.kol; shallower paths use their available directories and root files become app",
+      "coupling": "Ca and Ce count unique non-self internal unit dependencies from the same complete static import graph",
+      "abstractness": "A is syntactically abstract ClassDef count divided by all ClassDef count in the unit; no classes means A=0",
+      "abstract_class": "base terminal ABC/Protocol, metaclass terminal ABCMeta, or direct sync/async method decorator terminal abstractmethod/abstractclassmethod/abstractstaticmethod",
+      "zero_denominator": "Ca+Ce=0 sets I=0 and retains the unit in the distribution",
+      "percentile": "nearest-rank p90 at sorted rank ceil(0.90*N)"
+    }
+  },
+  "formal_target": 85.0,
+  "stable_target": 87.0,
+  "minimum_floor": 80.0,
+  "minimum_evidence_coverage": 0.95,
+  "minimum_dimension_evidence_coverage": 0.9,
+  "dimensions": {
+    "code": {
+      "target": 88.0,
+      "metrics": {
+        "cc_le_10_ratio": {"weight": 0.2, "direction": "min", "target": 0.9, "floor": 0.7},
+        "cognitive_le_15_ratio": {"weight": 0.15, "direction": "min", "target": 0.9, "floor": 0.7},
+        "max_cc": {"weight": 0.15, "direction": "max", "target": 50.0, "ceiling": 100.0},
+        "branch_coverage": {"weight": 0.12, "direction": "min", "target": 0.7, "floor": 0.4},
+        "line_coverage": {"weight": 0.1, "direction": "min", "target": 0.7, "floor": 0.4},
+        "core_path_coverage": {"weight": 0.1, "direction": "min", "target": 0.9, "floor": 0.6},
+        "change_coverage": {"weight": 0.08, "direction": "min", "target": 0.9, "floor": 0.6},
+        "duplication_rate": {"weight": 0.05, "direction": "max", "target": 0.03, "ceiling": 0.1},
+        "core_mutation_score": {"weight": 0.05, "direction": "min", "target": 0.6, "floor": 0.3}
+      }
+    },
+    "architecture": {
+      "target": 82.0,
+      "metrics": {
+        "cross_core_scc_count": {"weight": 0.25, "direction": "max", "target": 0.0, "ceiling": 1.0},
+        "package_cycle_count": {"weight": 0.1, "direction": "max", "target": 3.0, "ceiling": 10.0},
+        "main_sequence_distance_p90": {"weight": 0.15, "direction": "max", "target": 0.3, "ceiling": 0.7},
+        "module_loc_max": {"weight": 0.15, "direction": "max", "target": 800.0, "ceiling": 1600.0},
+        "class_loc_max": {"weight": 0.1, "direction": "max", "target": 400.0, "ceiling": 800.0},
+        "internal_fan_out_max": {"weight": 0.1, "direction": "max", "target": 20.0, "ceiling": 40.0},
+        "reverse_dependency_count": {"weight": 0.15, "direction": "max", "target": 0.0, "ceiling": 3.0}
+      }
+    },
+    "evolution": {
+      "target": 80.0,
+      "metrics": {
+        "core_domain_bus_factor_min": {"weight": 0.25, "direction": "min", "target": 3.0, "floor": 1.0, "minimum_samples": 180, "sample_unit": "days"},
+        "temporal_coupling_p95": {"weight": 0.2, "direction": "max", "target": 0.175, "ceiling": 0.35, "minimum_samples": 180, "sample_unit": "days"},
+        "unhealthy_hotspot_count": {"weight": 0.2, "direction": "max", "target": 3.0, "ceiling": 10.0},
+        "hotspot_cc_mean": {"weight": 0.15, "direction": "max", "target": 12.0, "ceiling": 30.0},
+        "qualified_maintainer_domain_ratio": {"weight": 0.2, "direction": "min", "target": 1.0, "floor": 0.5}
+      }
+    },
+    "delivery": {
+      "target": 92.0,
+      "metrics": {
+        "build_test_p95_minutes": {"weight": 0.15, "direction": "max", "target": 10.0, "ceiling": 20.0, "minimum_samples": 50, "sample_unit": "runs"},
+        "overdue_critical_count": {"weight": 0.15, "direction": "max", "target": 0.0, "ceiling": 1.0},
+        "p1_p2_sla_rate": {"weight": 0.1, "direction": "min", "target": 0.98, "floor": 0.9},
+        "change_failure_rate": {"weight": 0.15, "direction": "max", "target": 0.08, "ceiling": 0.2, "minimum_samples": 20, "sample_unit": "production_deployments"},
+        "rollback_p95_minutes": {"weight": 0.1, "direction": "max", "target": 15.0, "ceiling": 60.0, "minimum_samples": 20, "sample_unit": "production_deployments"},
+        "mttr_p50_minutes": {"weight": 0.1, "direction": "max", "target": 60.0, "ceiling": 240.0, "minimum_samples": 20, "sample_unit": "production_deployments"},
+        "mttr_p90_minutes": {"weight": 0.05, "direction": "max", "target": 240.0, "ceiling": 720.0, "minimum_samples": 20, "sample_unit": "production_deployments"},
+        "deployment_frequency_per_week": {"weight": 0.05, "direction": "min", "target": 1.0, "floor": 0.25, "minimum_samples": 8, "sample_unit": "weeks"},
+        "lead_time_p50_hours": {"weight": 0.05, "direction": "max", "target": 24.0, "ceiling": 168.0, "minimum_samples": 20, "sample_unit": "production_deployments"},
+        "canonical_gate_pass_rate": {"weight": 0.1, "direction": "min", "target": 1.0, "floor": 0.9, "minimum_samples": 3, "sample_unit": "consecutive_runs"}
+      }
+    }
+  },
+  "hard_gates": {
+    "cross_core_cycles_zero": {"metric": "architecture.cross_core_scc_count", "operator": "le", "threshold": 0.0},
+    "max_production_cc_le_50": {"metric": "code.max_cc", "operator": "le", "threshold": 50.0},
+    "core_domain_bus_factor_ge_3": {"metric": "evolution.core_domain_bus_factor_min", "operator": "ge", "threshold": 3.0}
+  },
+  "release_gates": [
+    "canonical_gate_pass",
+    "security_gate_pass",
+    "functional_gate_pass",
+    "artifact_provenance_pass"
+  ],
+  "grade_cap_on_hard_gate_failure": 79.9,
+  "evidence_policy": {
+    "required_status": "observed",
+    "required_fields": ["value", "source", "observed_at"],
+    "unknown_is_neutral_score": false,
+    "exclude_missing_from_denominator": false,
+    "production_complexity_excludes": ["tests", "migrations", "generated"],
+    "temporal_window_days": 180,
+    "delivery_window_days": 90,
+    "build_window_days": 30
+  }
+}

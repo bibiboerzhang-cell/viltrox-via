@@ -20,26 +20,27 @@ from app.domains.kol.profile_recall_activity_gate import (
     UNKNOWN_ACTIVITY_DEFER,
     UNKNOWN_ACTIVITY_POLICY_KEY,
     UNKNOWN_ACTIVITY_REASON,
-    activity_gate_evidence,
-    evaluate_activity,
-    mark_deferred_item,
     select_deferred_backfill,
-    should_defer_activity,
     unknown_activity_mode,
 )
-from app.domains.kol.profile_recall_language_gate import (
-    SELF_REPORTED_SOURCE as LANGUAGE_SELF_REPORTED_SOURCE,
-    language_gate_evidence,
-    resolve_candidate_language,
+from app.domains.kol.profile_recall_candidate_pipeline import (
+    CandidateGateHooks,
+    CandidateGatePolicy,
+    evaluate_candidate_pool,
 )
 from app.domains.kol.profile_recall_qualification_projection import (
     _project_gate_evidence,
     _project_smart_local_item,
     _strip_private_smart_local_values,
 )
+from app.domains.kol.profile_follower_filter import (
+    FOLLOWERS_UNKNOWN_ALLOW,
+    FOLLOWERS_UNKNOWN_PENDING,
+    FOLLOWERS_UNKNOWN_REJECT,
+    effective_follower_filter,
+    follower_filter_policy,
+)
 from app.domains.kol.profile_recall_search_spec import (
-    normalize_operator_languages,
-    normalize_operator_profile_types,
     operator_filter_spec,
 )
 
@@ -84,6 +85,10 @@ _APPROVED_AUDIENCE_MARKET_SOURCES = {
     "audience_ensemble_v1",
     "audience_comments_sample_v1",
 }
+
+
+def _effective_follower_filter(policy: dict[str, Any]) -> dict[str, Any]:
+    return effective_follower_filter(policy, legacy_minimum=SMART_LOCAL_MIN_FOLLOWERS)
 
 
 def smart_local_policy(
@@ -466,6 +471,7 @@ def qualify_local_candidates(
     target_platforms = set(policy.get("platforms") or [])
     target_languages = set(policy.get("languages") or [])
     target_profile_types = set(policy.get("profile_types") or [])
+    follower_filter = _effective_follower_filter(policy)
     operator_filters = policy.get("operator_filters") if isinstance(policy.get("operator_filters"), dict) else {}
     language_filter = (
         operator_filters.get("languages")
@@ -486,347 +492,48 @@ def qualify_local_candidates(
         if isinstance(policy.get("evidence_sources"), dict)
         else {}
     )
-    funnel = {
-        "candidates_evaluated": 0,
-        "evidence_relevant": 0,
-        "canonical_unique": 0,
-        "account_quality_pass": 0,
-        "followers_pass": 0,
-        "fresh_video_pass": 0,
-        "activity_unknown_deferred": 0,
-        "activity_stage_pass": 0,
-        "market_pass": 0,
-        "language_pass": 0,
-        "profile_type_pass": 0,
-        "platform_pass": 0,
-        "qualified": 0,
-        "deferred_available": 0,
-        "deferred_returned": 0,
-        "returned": 0,
-    }
     unknown_activity = unknown_activity_mode(policy)
-    rejected_by_reason: dict[str, int] = {}
-    audit: list[dict[str, Any]] = []
-    qualified: dict[str, list[dict[str, Any]]] = {"creator": [], "reviewer": []}
-    deferred: dict[str, list[dict[str, Any]]] = {"creator": [], "reviewer": []}
-    seen_identities: set[str] = set()
-    qualified_identity_aliases: set[str] = set()
-    deferred_identity_aliases: set[str] = set()
-    account_quality_identities: set[str] = set()
-    followers_identities: set[str] = set()
-    fresh_video_identities: set[str] = set()
-    deferred_activity_identities: set[str] = set()
-    activity_stage_identities: set[str] = set()
-    market_identities: set[str] = set()
-    language_identities: set[str] = set()
-    profile_type_identities: set[str] = set()
-    platform_identities: set[str] = set()
-
-    candidates = [*buckets.get("creator", []), *buckets.get("reviewer", [])]
-    funnel["candidates_evaluated"] = len(candidates)
-    for item in candidates:
-        kol_id = int(item.get("kol_pool_id") or 0)
-        row = rows_by_id.get(kol_id, {})
-        evidence = evidence_by_id.get(kol_id, {})
-        reasons: list[str] = []
-        canonical = _canonical_key(item)
-        identity_aliases = (
-            set(identity_aliases_fn(item))
-            if callable(identity_aliases_fn)
-            else canonical_creator_aliases(item)
-        ) or {canonical}
-        relevance_pass = bool(item.get("match_evidence"))
-        if relevance_pass:
-            funnel["evidence_relevant"] += 1
-        if not relevance_pass:
-            reasons.append("low_relevance")
-        canonical_first_seen = relevance_pass and _claim_identity_aliases(
-            seen_identities, identity_aliases
-        )
-        if canonical_first_seen:
-            funnel["canonical_unique"] += 1
-
-        account_verdict = _account_quality_verdict(item, row)
-        account_quality_pass = not account_verdict
-        if relevance_pass and account_quality_pass and _claim_identity_aliases(
-            account_quality_identities, identity_aliases
-        ):
-            funnel["account_quality_pass"] += 1
-        if not account_quality_pass:
-            reasons.append(f"account_{account_verdict}")
-
-        followers_raw = row.get("followers", item.get("followers"))
-        try:
-            followers = (
-                int(followers_raw)
-                if followers_raw is not None and not isinstance(followers_raw, bool)
-                else None
-            )
-        except (TypeError, ValueError):
-            followers = None
-        followers_pass = followers is not None and followers >= SMART_LOCAL_MIN_FOLLOWERS
-        if relevance_pass and account_quality_pass and followers_pass and _claim_identity_aliases(
-            followers_identities, identity_aliases
-        ):
-            funnel["followers_pass"] += 1
-        if not followers_pass:
-            reasons.append("followers_unknown" if followers is None else "followers_below_3000")
-
-        activity = evaluate_activity(
-            latest=evidence.get("latest_real_video"),
-            now=now,
-            max_video_age_days=SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
-            fresh_priority_days=SMART_LOCAL_FRESH_DAYS,
-        )
-        activity_pass = bool(activity["passed"])
-        # "We never crawled this creator" is a data gap, not a stale verdict.
-        # It leaves the hard-rejection path and waits in the deferred bucket;
-        # every other activity failure still fails closed below.
-        activity_deferred = should_defer_activity(activity, unknown_activity)
-        # Downstream stage counters describe "still in the running", which now
-        # includes the deferred bucket.  ``fresh_video_pass`` keeps its exact
-        # old meaning so the freshness number can never be read as widened.
-        activity_stage_pass = activity_pass or activity_deferred
-        if (
-            account_quality_pass
-            and relevance_pass
-            and followers_pass
-            and activity_pass
-            and _claim_identity_aliases(fresh_video_identities, identity_aliases)
-        ):
-            funnel["fresh_video_pass"] += 1
-        if (
-            account_quality_pass
-            and relevance_pass
-            and followers_pass
-            and activity_deferred
-            and _claim_identity_aliases(deferred_activity_identities, identity_aliases)
-        ):
-            funnel["activity_unknown_deferred"] += 1
-        if (
-            account_quality_pass
-            and relevance_pass
-            and followers_pass
-            and activity_stage_pass
-            and _claim_identity_aliases(activity_stage_identities, identity_aliases)
-        ):
-            funnel["activity_stage_pass"] += 1
-        if not activity_stage_pass:
-            reasons.append(activity["reason"])
-
-        market = _market_resolution(row)
-        market_value = str(market.get("market") or "")
-        market_method = str(market.get("method") or "unknown")
-        require_trusted_market = policy.get("require_trusted_market") is True
-        market_pass = bool(market_value) if require_trusted_market else True
-        if target_market:
-            market_pass = bool(market_value and market_value == target_market)
-        if (
-            account_quality_pass
-            and relevance_pass
-            and followers_pass
-            and activity_stage_pass
-            and market_pass
-            and _claim_identity_aliases(market_identities, identity_aliases)
-        ):
-            funnel["market_pass"] += 1
-        if not market_pass:
-            reasons.append(
-                "market_untrusted_source"
-                if market.get("rejected_source")
-                else "market_unknown"
-                if not market_value
-                else "market_mismatch"
-            )
-
-        # 自报优先 -> 推断兜底 -> 未知。推断值住在**另一列**,永不冒充自报值;
-        # 推断不出来的人回到「未知」档,由既有三态(缺省 require)决定拦不拦 ——
-        # 与新鲜闸拆桶同口径:未知 != 不合格。判定门槛本身一条不动。
-        language_resolution = resolve_candidate_language(
-            row, item, normalize=normalize_operator_languages,
-        )
-        candidate_languages = list(language_resolution["values"])
-        language_pass = (
-            not invalid_languages
-            and (
-                not language_requested
-                or bool(target_languages.intersection(candidate_languages))
-            )
-        )
-        if (
-            account_quality_pass
-            and relevance_pass
-            and followers_pass
-            and activity_stage_pass
-            and market_pass
-            and language_pass
-            and _claim_identity_aliases(language_identities, identity_aliases)
-        ):
-            funnel["language_pass"] += 1
-        if not language_pass:
-            reasons.append(
-                "language_filter_invalid"
-                if invalid_languages
-                else "language_unknown"
-                if not candidate_languages
-                else "language_mismatch"
-            )
-
-        candidate_profile_types = normalize_operator_profile_types(
-            row.get("profile_type")
-            or item.get("profile_type")
-            or (
-                item.get("candidate_facets", {}).get("profile_type")
-                if isinstance(item.get("candidate_facets"), dict)
-                else None
-            )
-        )
-        profile_type_pass = (
-            not invalid_profile_types
-            and (
-                not profile_type_requested
-                or bool(target_profile_types.intersection(candidate_profile_types))
-            )
-        )
-        if (
-            account_quality_pass
-            and relevance_pass
-            and followers_pass
-            and activity_stage_pass
-            and market_pass
-            and language_pass
-            and profile_type_pass
-            and _claim_identity_aliases(profile_type_identities, identity_aliases)
-        ):
-            funnel["profile_type_pass"] += 1
-        if not profile_type_pass:
-            reasons.append(
-                "profile_type_filter_invalid"
-                if invalid_profile_types
-                else "profile_type_unknown"
-                if not candidate_profile_types
-                else "profile_type_mismatch"
-            )
-
-        platform = str(item.get("platform") or row.get("platform") or "").strip().lower()
-        platform_pass = bool(platform) and (not target_platforms or platform in target_platforms)
-        if (
-            account_quality_pass
-            and relevance_pass
-            and followers_pass
-            and activity_stage_pass
-            and market_pass
-            and language_pass
-            and profile_type_pass
-            and platform_pass
-            and _claim_identity_aliases(platform_identities, identity_aliases)
-        ):
-            funnel["platform_pass"] += 1
-        if not platform_pass:
-            reasons.append("platform_unknown" if not platform else "platform_mismatch")
-
-        # An invalid duplicate must not reserve the identity and hide a later
-        # valid row for the same account.  Only a candidate that passed every
-        # non-identity gate claims the canonical key.
-        # A deferred row must never reserve the canonical key ahead of a fully
-        # qualified row for the same creator, so the two claims use separate
-        # alias registers and the deferred bucket is filtered against the
-        # qualified register once the whole pass is done.
-        if not reasons:
-            if identity_aliases.intersection(excluded_identities):
-                reasons.append(excluded_identity_reason)
-            elif activity_deferred:
-                if identity_aliases.intersection(deferred_identity_aliases):
-                    reasons.append("duplicate_canonical_identity")
-                else:
-                    deferred_identity_aliases.update(identity_aliases)
-            elif identity_aliases.intersection(qualified_identity_aliases):
-                reasons.append("duplicate_canonical_identity")
-            else:
-                qualified_identity_aliases.update(identity_aliases)
-
-        gate_evidence = {
-            "schema": SMART_LOCAL_GATE_SCHEMA,
-            "kol_pool_id": kol_id,
-            "canonical_key": canonical,
-            "canonical_aliases": sorted(identity_aliases),
-            "passed": not reasons and not activity_deferred,
-            "deferred": activity_deferred,
-            "deferred_reason": activity["reason"] if activity_deferred else None,
-            "rejection_reasons": reasons,
-            "account_quality": {
-                "verdict": account_verdict or "eligible_creator_account",
-                "excluded_types": list(policy.get("excluded_account_types") or []),
-                "passed": account_quality_pass,
-                "source": "existing_discovery_classifiers",
-            },
-            "followers": {
-                "value": followers,
-                "minimum": SMART_LOCAL_MIN_FOLLOWERS,
-                "known": followers is not None,
-                "passed": followers_pass,
-                "source": evidence_sources.get("followers") or "vkpi_kol_pool.followers",
-            },
-            "activity": activity_gate_evidence(
-                activity,
-                maximum_age_days=SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
-                deferred=activity_deferred,
-            ),
-            "market": {
-                "value": market_value or None,
-                "target": target_market or None,
-                "method": market_method,
-                "confidence": market.get("confidence"),
-                "source": market.get("source"),
-                **(
-                    {"rejected_source": market.get("rejected_source")}
-                    if market.get("rejected_source")
-                    else {}
-                ),
-                "passed": market_pass,
-            },
-            "language": language_gate_evidence(
-                language_resolution,
-                targets=sorted(target_languages),
-                filter_requested=language_requested,
-                invalid_targets=invalid_languages,
-                passed=language_pass,
-                self_source=(
-                    evidence_sources.get("language") or LANGUAGE_SELF_REPORTED_SOURCE
-                ),
-            ),
-            "profile_type": {
-                "values": candidate_profile_types,
-                "targets": sorted(target_profile_types),
-                "filter_requested": profile_type_requested,
-                "invalid_targets": invalid_profile_types,
-                "passed": profile_type_pass,
-                "source": evidence_sources.get("profile_type") or "vkpi_kol_profile_embeddings.profile_type",
-            },
-            "platform": {
-                "value": platform or None,
-                "targets": sorted(target_platforms),
-                "passed": platform_pass,
-                "source": evidence_sources.get("platform") or "vkpi_kol_pool.platform",
-            },
-            "relevance": {
-                "passed": relevance_pass,
-                "evidence": list(item.get("match_evidence") or []),
-                "source": "field_level_match_evidence",
-            },
-        }
-        item["qualification_evidence"] = gate_evidence
-        audit.append(gate_evidence)
-        if reasons:
-            for reason in set(reasons):
-                rejected_by_reason[reason] = rejected_by_reason.get(reason, 0) + 1
-            continue
-        bucket = "reviewer" if item.get("bucket") == "reviewer" else "creator"
-        if activity_deferred:
-            deferred[bucket].append(mark_deferred_item(item))
-        else:
-            qualified[bucket].append(item)
-
+    gate_policy = CandidateGatePolicy(
+        now=now,
+        target_market=target_market,
+        target_platforms=frozenset(target_platforms),
+        target_languages=frozenset(target_languages),
+        target_profile_types=frozenset(target_profile_types),
+        follower_filter=dict(follower_filter),
+        language_requested=language_requested,
+        profile_type_requested=profile_type_requested,
+        invalid_languages=tuple(invalid_languages),
+        invalid_profile_types=tuple(invalid_profile_types),
+        evidence_sources=dict(evidence_sources),
+        unknown_activity=unknown_activity,
+        excluded_identities=frozenset(excluded_identities),
+        excluded_identity_reason=excluded_identity_reason,
+        excluded_account_types=tuple(policy.get("excluded_account_types") or []),
+        require_trusted_market=policy.get("require_trusted_market") is True,
+        max_video_age_days=SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
+        fresh_priority_days=SMART_LOCAL_FRESH_DAYS,
+        gate_schema=SMART_LOCAL_GATE_SCHEMA,
+    )
+    gate_result = evaluate_candidate_pool(
+        buckets=buckets,
+        rows_by_id=rows_by_id,
+        evidence_by_id=evidence_by_id,
+        policy=gate_policy,
+        hooks=CandidateGateHooks(
+            canonical_key=_canonical_key,
+            canonical_aliases=canonical_creator_aliases,
+            account_quality_verdict=_account_quality_verdict,
+            market_resolution=_market_resolution,
+            identity_aliases=identity_aliases_fn if callable(identity_aliases_fn) else None,
+        ),
+        legacy_minimum_followers=SMART_LOCAL_MIN_FOLLOWERS,
+    )
+    funnel = gate_result.funnel
+    rejected_by_reason = gate_result.rejected_by_reason
+    audit = gate_result.audit
+    qualified = gate_result.qualified
+    deferred = gate_result.deferred
+    qualified_identity_aliases = gate_result.qualified_identity_aliases
     for values in qualified.values():
         values.sort(key=_score_key, reverse=True)
     funnel["qualified"] = len(qualified["creator"]) + len(qualified["reviewer"])

@@ -18,14 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import tempfile
 import urllib.request
 from typing import Any, Callable
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.domains.kol.provider_job_access import ProviderJobAccessError
 from app.domains.kol.url_deep_crawl_helpers import (
     CN_SHORT_LINK_HOSTS,
     CN_VIDEO_ANALYSIS_PLATFORMS,
@@ -389,11 +386,12 @@ def run_cn_platform_video_for_job(
     progress_callback: Callable[[dict[str, Any]], None] | None = None,
     authorization_checkpoint: Callable[[], Any] | None = None,
 ) -> dict[str, Any]:
-    """CN 平台视频的 durable worker 主链:取数 → 缓存 → 就地 final_v1。
+    """CN 平台视频 durable worker 门面；副作用顺序由 runtime 显式编排。"""
 
-    永远不写 KOL 池/evidence;失败路径全部 raise(worker 落 failed + 真因),
-    元数据成功但媒体不可下载时诚实降级为元数据态(media_degraded)。
-    """
+    from app.domains.kol.cn_platform_video_runtime import (
+        CNPlatformVideoHooks,
+        execute_cn_platform_video,
+    )
     from app.domains.kol.url_deep_crawl import classify_url
     from app.domains.kol.video_url_resolver import (
         _emit,
@@ -404,333 +402,30 @@ def run_cn_platform_video_for_job(
     from app.platform.apify_budget import current_apify_execution_context
     from app.services.scraping.apify_cn import scrape_cn_platform_video
 
-    classified = classify_url(_text(payload.get("url") or payload.get("source_url")))
-    if classified.url_type != "video" or classified.platform not in CN_VIDEO_ANALYSIS_PLATFORMS:
-        raise ValueError("cn_platform_video requires a recognized CN platform video URL")
-    if current_apify_execution_context() is None:
-        raise RuntimeError("durable_execution_context_required")
-
-    platform = classified.platform
-    triggered_by = (staff or {}).get("user_id") or payload.get("triggered_by_user_id")
-    current = payload.get("video_url_resolution")
-    current = current if isinstance(current, dict) else initial_video_url_resolution_progress()
-
-    def checkpoint() -> None:
-        if authorization_checkpoint:
-            authorization_checkpoint()
-
-    # ① 解析视频:短链先展开(小红书要活 xsec_token);已分析过的视频直接吃
-    # 缓存回放(零 provider 零 LLM 花费),元数据/创作者用缓存里的存档。
-    current = _emit(progress_callback, _progress(current, "resolve_video", "running"))
-    checkpoint()
-    source_url = _expand_cn_short_link(classified.normalized_url)
-    checkpoint()
-    canonical_id = classified.video_id
-    if source_url != classified.normalized_url:
-        expanded = classify_url(source_url)
-        if expanded.platform == platform and expanded.video_id:
-            canonical_id = expanded.video_id
-    replay = _load_ready_cn_analysis(platform, canonical_id)
-    if replay:
-        shaped = replay.get("result") or {}
-        cached_meta = shaped.get("video_metadata") if isinstance(shaped.get("video_metadata"), dict) else {}
-        cached_creator = shaped.get("creator_identity") if isinstance(shaped.get("creator_identity"), dict) else {}
-        replay_video_url: str | None = None
-        try:
-            from app.domains.media.cache import cached_video_url_for_item
-
-            replay_video_url = _text(cached_video_url_for_item(platform, canonical_id)) or None
-        except Exception:
-            logger.debug("cn video cached url lookup failed", exc_info=True)
-        current = _emit(progress_callback, _progress(current, "resolve_video", "ready", reason="cached_analysis"))
-        current = _emit(progress_callback, _progress(current, "identify_creator", "ready"))
-        current = _progress(current, "cache_media", "ready" if replay_video_url else "skipped",
-                            reason="" if replay_video_url else "media_cache_not_ready")
-        _emit(progress_callback, current)
-        current = _progress(current, "ai_analysis", "ready", overall="ready", base_status="ready", reason="cached_analysis")
-        _emit(progress_callback, current)
-        checkpoint()
-        return _terminal_result(
-            platform=platform,
-            video_id=canonical_id,
-            metadata=cached_meta or None,
-            creator=cached_creator or None,
-            cached_video_url=replay_video_url,
-            ai_analysis=_ai_state("ready", "cached_analysis", allowed=False),
-            cn_analysis=_compact_cn_analysis(shaped),
-            resolution_progress=current,
-            provider_calls_performed=False,
-            llm_calls_performed=False,
-            analysis_cache_id=_int_or_none(replay.get("cache_id")),
-        )
-    checkpoint()
-    scraped = scrape_cn_platform_video(platform, source_url)
-    # A revoke while Apify was in flight must stop every later download, LLM,
-    # cache write, and successful terminal projection.
-    checkpoint()
-    if not scraped.get("ok"):
-        raise RuntimeError(
-            f"cn_video_resolve_failed:{_text(scraped.get('provider_status'))}:{_text(scraped.get('error'))[:160]}"
-        )
-    metadata = scraped.get("metadata") if isinstance(scraped.get("metadata"), dict) else {}
-    creator = scraped.get("creator") if isinstance(scraped.get("creator"), dict) else {}
-    video_id = _text(scraped.get("native_video_id")) or classified.video_id
-    direct_video_url = _text(scraped.get("direct_video_url"))
-    content_url = _text(metadata.get("content_url")) or source_url
-    current = _emit(progress_callback, _progress(current, "resolve_video", "ready"))
-
-    # ② 识别作者:仅展示。官方自有账号兜底闸照走(公司在 CN 平台也有官号)。
-    current = _emit(progress_callback, _progress(current, "identify_creator", "running"))
-    official = find_official_channel_match(creator)
-    if official:
-        current = _progress(current, "cache_media", "skipped", reason="official_channel_video")
-        _emit(progress_callback, current)
-        current = _progress(
-            current, "ai_analysis", "skipped",
-            overall="ready", base_status="ready", reason="official_channel_video",
-        )
-        _emit(progress_callback, current)
-        checkpoint()
-        return {
-            "status": "official_channel_video",
-            "operation": "cn_platform_video_analysis",
-            "official_channel": official,
-            "creator_identity": creator,
-            "video_metadata": metadata,
-            "video_flow": {
-                "status": "official_channel_video",
-                "operation": "cn_platform_video_analysis",
-                "message": "官方自有账号的视频：不建人选档案，也不做深度分析，仅保留视频基础数据。",
-                "viltrox_fit_score_untouched": True,
-            },
-            "ai_analysis": _ai_state("skipped", "official_channel_video"),
-            "resolution_progress": current,
-            "provider_calls_performed": True,
-            "llm_calls_performed": False,
-            "viltrox_fit_score_untouched": True,
-        }
-    creator_status = "ready" if _text(creator.get("display_name")) else "skipped"
-    current = _emit(
-        progress_callback,
-        _progress(
-            current, "identify_creator", creator_status,
-            reason="" if creator_status == "ready" else "creator_display_unavailable",
-        ),
+    hooks = CNPlatformVideoHooks(
+        classify_url=classify_url,
+        emit=_emit,
+        progress=_progress,
+        find_official_channel_match=find_official_channel_match,
+        initial_progress=initial_video_url_resolution_progress,
+        current_apify_execution_context=current_apify_execution_context,
+        scrape_cn_platform_video=scrape_cn_platform_video,
+        expand_short_link=_expand_cn_short_link,
+        load_ready_analysis=_load_ready_cn_analysis,
+        store_analysis=_store_cn_analysis,
+        budget_gate=_cn_budget_gate,
+        run_gemini=_run_cn_gemini_final_v1,
+        shape_final_v1=_shape_cn_final_v1,
+        compact_analysis=_compact_cn_analysis,
+        terminal_result=_terminal_result,
+        ai_state=_ai_state,
+        int_or_none=_int_or_none,
+        text=_text,
     )
-
-    # 命中既有分析缓存:同一视频重复粘贴零花费直接回放。
-    cached_analysis = _load_ready_cn_analysis(platform, video_id)
-    cached_video_url: str | None = None
-    try:
-        from app.domains.media.cache import cached_video_url_for_item
-
-        cached_video_url = _text(cached_video_url_for_item(platform, video_id)) or None
-    except Exception:
-        logger.debug("cn video cached url lookup failed", exc_info=True)
-    if cached_analysis:
-        shaped = cached_analysis.get("result") or {}
-        current = _progress(current, "cache_media", "ready" if cached_video_url else "skipped",
-                            reason="" if cached_video_url else "media_cache_not_ready")
-        _emit(progress_callback, current)
-        current = _progress(
-            current, "ai_analysis", "ready",
-            overall="ready", base_status="ready", reason="cached_analysis",
-        )
-        _emit(progress_callback, current)
-        checkpoint()
-        return _terminal_result(
-            platform=platform,
-            video_id=video_id,
-            metadata=metadata or (shaped.get("video_metadata") if isinstance(shaped.get("video_metadata"), dict) else None),
-            creator=creator or (shaped.get("creator_identity") if isinstance(shaped.get("creator_identity"), dict) else None),
-            cached_video_url=cached_video_url,
-            ai_analysis=_ai_state("ready", "cached_analysis", allowed=False),
-            cn_analysis=_compact_cn_analysis(shaped),
-            resolution_progress=current,
-            provider_calls_performed=True,
-            llm_calls_performed=False,
-            analysis_cache_id=_int_or_none(cached_analysis.get("cache_id")),
-        )
-
-    # ③ 缓存媒体:CDN 直链下载(带 Referer)→ R2 登记;失败=诚实降级元数据态。
-    current = _emit(progress_callback, _progress(current, "cache_media", "running"))
-    if not direct_video_url:
-        reason = (
-            "note_has_no_video_image_only"
-            if _text(metadata.get("media_kind")) == "image"
-            else "actor_returned_no_video_url"
-        )
-        current = _progress(current, "cache_media", "failed", reason=reason)
-        _emit(progress_callback, current)
-        current = _progress(
-            current, "ai_analysis", "skipped",
-            overall="partial", base_status="ready", reason="media_unavailable_metadata_only",
-        )
-        _emit(progress_callback, current)
-        return _terminal_result(
-            platform=platform,
-            video_id=video_id,
-            metadata=metadata,
-            creator=creator,
-            cached_video_url=None,
-            ai_analysis=_ai_state("skipped", "media_unavailable_metadata_only"),
-            cn_analysis=None,
-            resolution_progress=current,
-            provider_calls_performed=True,
-            llm_calls_performed=False,
-            media_degraded=True,
-            media_degraded_reason=reason,
-        )
-
-    from app.services.media.video_download import download_direct_video_url
-
-    llm_called = False
-    # CN CDN 对海外机房限速严重(prod 实测 read timeout):住宅代理优先、直连兜底,
-    # 超时放宽(读 60s/总 300s,env 可覆盖);200MB 帽由下载器默认沿用。
-    cn_proxy = (os.getenv("VKPI_CN_MEDIA_PROXY") or os.getenv("YTDLP_PROXY") or "").strip()
-    cn_socket = int(os.getenv("VKPI_CN_MEDIA_SOCKET_TIMEOUT_SEC", "60"))
-    cn_total = int(os.getenv("VKPI_CN_MEDIA_TOTAL_TIMEOUT_SEC", "300"))
-    with tempfile.TemporaryDirectory(prefix="vkpi-cn-video-") as tmpdir:
-        checkpoint()
-        download = download_direct_video_url(
-            direct_video_url, tmpdir, referer=content_url,
-            socket_timeout_sec=cn_socket, total_timeout_sec=cn_total, proxy_url=cn_proxy,
-        )
-        checkpoint()
-        if (not download.get("success")) and cn_proxy:
-            checkpoint()
-            download = download_direct_video_url(
-                direct_video_url, tmpdir, referer=content_url,
-                socket_timeout_sec=cn_socket, total_timeout_sec=cn_total,
-            )
-            checkpoint()
-        if not download.get("success") or not download.get("path"):
-            reason = _text(download.get("error")) or f"direct_video_download_failed:{platform}"
-            current = _progress(current, "cache_media", "failed", reason=reason[:200])
-            _emit(progress_callback, current)
-            current = _progress(
-                current, "ai_analysis", "skipped",
-                overall="partial", base_status="ready", reason="media_unavailable_metadata_only",
-            )
-            _emit(progress_callback, current)
-            return _terminal_result(
-                platform=platform,
-                video_id=video_id,
-                metadata=metadata,
-                creator=creator,
-                cached_video_url=None,
-                ai_analysis=_ai_state("skipped", "media_unavailable_metadata_only"),
-                cn_analysis=None,
-                resolution_progress=current,
-                provider_calls_performed=True,
-                llm_calls_performed=False,
-                media_degraded=True,
-                media_degraded_reason=reason[:240],
-            )
-        try:
-            from app.domains.media.cache import cache_local_video_file, cached_video_url_for_item
-
-            checkpoint()
-            warm = cache_local_video_file(platform, video_id, str(download["path"]), source_url=content_url)
-            checkpoint()
-            if warm.get("cached") or warm.get("status") == "cached":
-                cached_video_url = _text(cached_video_url_for_item(platform, video_id)) or _text(warm.get("cached_url")) or None
-        except ProviderJobAccessError:
-            raise
-        except Exception:
-            logger.warning("cn video r2 warm failed platform=%s id=%s", platform, video_id, exc_info=True)
-        current = _emit(
-            progress_callback,
-            _progress(current, "cache_media", "ready" if cached_video_url else "skipped",
-                      reason="" if cached_video_url else "media_cache_not_ready"),
-        )
-
-        # ④ AI 分析:预算闸 → Gemini final_v1 就地深析(official_visual 同款 inline)。
-        current = _emit(progress_callback, _progress(current, "ai_analysis", "running"))
-        checkpoint()
-        budget = _cn_budget_gate(platform, video_id)
-        if not budget.get("allowed"):
-            gate_reason = _text(budget.get("reason")) or "provider_calls_blocked"
-            current = _progress(
-                current, "ai_analysis", "skipped",
-                overall="ready", base_status="ready", reason="ai_disabled",
-            )
-            _emit(progress_callback, current)
-            return _terminal_result(
-                platform=platform,
-                video_id=video_id,
-                metadata=metadata,
-                creator=creator,
-                cached_video_url=cached_video_url,
-                ai_analysis=_ai_state("not_requested", "ai_disabled", gate_reason=gate_reason),
-                cn_analysis=None,
-                resolution_progress=current,
-                provider_calls_performed=True,
-                llm_calls_performed=False,
-            )
-        llm_called = True
-        checkpoint()
-        raw = _run_cn_gemini_final_v1(
-            video_path=str(download["path"]),
-            title=_text(metadata.get("title")),
-            creator_name=_text(creator.get("display_name")),
-            platform=platform,
-            video_id=video_id,
-            triggered_by=triggered_by,
-        )
-        checkpoint()
-
-    if not isinstance(raw, dict) or not raw.get("analyzed"):
-        reason = _text((raw or {}).get("error")) or "gemini_not_analyzed"
-        current = _progress(
-            current, "ai_analysis", "failed",
-            overall="partial", base_status="ready", reason=reason[:200],
-        )
-        _emit(progress_callback, current)
-        return _terminal_result(
-            platform=platform,
-            video_id=video_id,
-            metadata=metadata,
-            creator=creator,
-            cached_video_url=cached_video_url,
-            ai_analysis=_ai_state("failed", reason[:200], allowed=True),
-            cn_analysis=None,
-            resolution_progress=current,
-            provider_calls_performed=True,
-            llm_calls_performed=True,
-        )
-
-    shaped = _shape_cn_final_v1(
-        raw=raw,
-        platform=platform,
-        video_id=video_id,
-        content_url=content_url,
-        metadata=metadata,
-        creator=creator,
-    )
-    checkpoint()
-    cache_id = _store_cn_analysis(
-        platform=platform,
-        video_id=video_id,
-        shaped=shaped,
-        model=_text(raw.get("model") or raw.get("method")),
-        triggered_by=triggered_by,
-    )
-    current = _progress(
-        current, "ai_analysis", "ready",
-        overall="ready", base_status="ready", reason="",
-    )
-    _emit(progress_callback, current)
-    return _terminal_result(
-        platform=platform,
-        video_id=video_id,
-        metadata=metadata,
-        creator=creator,
-        cached_video_url=cached_video_url,
-        ai_analysis=_ai_state("ready", "cn_platform_video_analysis", allowed=True),
-        cn_analysis=_compact_cn_analysis(shaped),
-        resolution_progress=current,
-        provider_calls_performed=True,
-        llm_calls_performed=llm_called,
-        analysis_cache_id=cache_id,
+    return execute_cn_platform_video(
+        payload,
+        staff=staff,
+        progress_callback=progress_callback,
+        authorization_checkpoint=authorization_checkpoint,
+        hooks=hooks,
     )

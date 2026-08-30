@@ -478,16 +478,22 @@ def test_topup_never_calls_a_provider_inline() -> None:
 
 
 def test_pipeline_consumes_topup_after_the_results_are_assembled() -> None:
-    """位置即契约:补齐必须排在结果装配之后,绝不能挪到首屏前面去等它。"""
+    """位置即契约:统一召回(含 fallback)完成后才 advance,最后才补齐。"""
     from pathlib import Path
 
     from app.domains.kol import profile_discovery_pipeline
 
     source = Path(profile_discovery_pipeline.__file__).read_text(encoding="utf-8")
-    recall_at = source.index("recall_result = profile_recall.recall_kol_profiles(")
+    recall_at = source.index(
+        "recall_result = targeted_search_runtime.execute_local_search("
+    )
+    fallback_at = source.index(
+        "recall=profile_recall.recall_kol_profiles,",
+        recall_at,
+    )
     advance_at = source.index("advance_result = advance_search_session_items(")
     topup_at = source.index("enqueue_field_topup_for_candidates(")
-    assert recall_at < advance_at < topup_at
+    assert recall_at < fallback_at < advance_at < topup_at
 
 
 def test_ledger_marks_do_not_change_the_pass_set() -> None:

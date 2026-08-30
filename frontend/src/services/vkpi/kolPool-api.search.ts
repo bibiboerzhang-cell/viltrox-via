@@ -49,6 +49,7 @@ export async function smartKolSearch(
   input: string,
   params: {
     mode?: "auto" | "url" | "text" | "recall" | string;
+    objective?: "prospective_growth" | "existing_evidence";
     execute?: boolean;
     maxPosts?: number;
     candidateLimit?: number;
@@ -89,6 +90,7 @@ export async function smartKolSearch(
   const body: Row = {
     input,
     mode: params.mode || "auto",
+    objective: params.objective === "existing_evidence" ? "existing_evidence" : "prospective_growth",
     create_session: params.createSession ?? true,
     response_projection: "smart_local_compact_v1",
   };
@@ -132,6 +134,7 @@ export async function smartKolSearchProfileAdvanceJob(
   token: string,
   input: string,
   params: {
+    objective?: "prospective_growth" | "existing_evidence";
     candidateLimit?: number;
     limit?: number;
     creatorQuota?: number;
@@ -170,6 +173,7 @@ export async function smartKolSearchProfileAdvanceJob(
 ): Promise<VkpiKolSmartSearchProfileAdvanceResponse> {
   const body: Row = {
     input,
+    objective: params.objective === "existing_evidence" ? "existing_evidence" : "prospective_growth",
     queue_pipeline: true,
     include_new_discovery: params.includeNewDiscovery ?? true,
   };

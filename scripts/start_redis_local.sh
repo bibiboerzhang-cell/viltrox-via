@@ -12,6 +12,13 @@ if [ ! -x "$REDIS_SERVER_BIN" ]; then
   exit 1
 fi
 
+REDIS_START_TIMEOUT_SECONDS="${VKPI_REDIS_START_TIMEOUT_SECONDS:-15}"
+if [[ ! "$REDIS_START_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]] \
+  || [ "$REDIS_START_TIMEOUT_SECONDS" -gt 120 ]; then
+  echo "VKPI_REDIS_START_TIMEOUT_SECONDS must be an integer in [1,120]" >&2
+  exit 2
+fi
+
 mkdir -p "$REDIS_DATA_DIR" "$(dirname "$REDIS_LOG_FILE")"
 
 cat >"$REDIS_CONF_FILE" <<EOF
@@ -31,7 +38,27 @@ if [ -f "$REDIS_PID_FILE" ] && kill -0 "$(cat "$REDIS_PID_FILE")" 2>/dev/null; t
   echo "Redis already running on port $REDIS_PORT"
 else
   rm -f "$REDIS_PID_FILE"
-  "$REDIS_SERVER_BIN" "$REDIS_CONF_FILE"
+  "$REDIS_SERVER_BIN" "$REDIS_CONF_FILE" &
+  redis_bootstrap_pid=$!
+  redis_ready=0
+  redis_attempts=$((REDIS_START_TIMEOUT_SECONDS * 10))
+  for ((attempt = 0; attempt < redis_attempts; attempt++)); do
+    if [ -x "$REDIS_CLI_BIN" ] \
+      && [ "$("$REDIS_CLI_BIN" -h "$REDIS_HOST" -p "$REDIS_PORT" ping 2>/dev/null || true)" = "PONG" ]; then
+      redis_ready=1
+      break
+    fi
+    sleep 0.1
+  done
+  if [ "$redis_ready" != "1" ]; then
+    if kill -0 "$redis_bootstrap_pid" 2>/dev/null; then
+      kill "$redis_bootstrap_pid" 2>/dev/null || true
+    fi
+    wait "$redis_bootstrap_pid" 2>/dev/null || true
+    echo "Redis failed to become ready within ${REDIS_START_TIMEOUT_SECONDS}s" >&2
+    exit 1
+  fi
+  wait "$redis_bootstrap_pid" 2>/dev/null || true
 fi
 
 if [ -x "$REDIS_CLI_BIN" ]; then
@@ -39,4 +66,3 @@ if [ -x "$REDIS_CLI_BIN" ]; then
 fi
 
 echo "Redis ready: $LOCAL_REDIS_URL"
-

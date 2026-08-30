@@ -8,7 +8,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
-from app.domains.products import product_aliases
+from app.shared.product_alias_normalization import normalize_product_alias
 
 
 logger = get_logger(__name__)
@@ -68,7 +68,7 @@ def _table_exists(table_name: str) -> bool:
 
 
 def _norm(value: Any) -> str:
-    return product_aliases.normalize_alias(value)
+    return normalize_product_alias(value)
 
 
 def _compact_text(value: Any) -> str:

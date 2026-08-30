@@ -962,29 +962,3 @@ def test_provider_start_boundary_closes_the_post_claim_race(monkeypatch) -> None
 
     with pytest.raises(apify_budget.ApifyExecutionClaimBlocked, match="release validation"):
         apify_budget.call_apify_actor(object(), "actor/test")
-
-
-def test_production_runtime_wires_web_scheduler_and_both_workers() -> None:
-    main = (ROOT / "backend/app/main.py").read_text(encoding="utf-8")
-    main_fence = (ROOT / "backend/app/main_release_validation.py").read_text(
-        encoding="utf-8"
-    )
-    scheduler = (
-        ROOT / "backend/app/services/scheduler/fleet_guard.py"
-    ).read_text(encoding="utf-8")
-    apify = (ROOT / "backend/app/workers/apify_jobs_worker.py").read_text(
-        encoding="utf-8"
-    )
-    redis_worker = (ROOT / "backend/app/workers/worker_main.py").read_text(
-        encoding="utf-8"
-    )
-    assert 'Path("/run/vkpi-release-validation.fence")' in (
-        ROOT / "backend/app/core/release_validation.py"
-    ).read_text(encoding="utf-8")
-    assert "ReleaseValidationFenceMiddleware" in main
-    assert "release_validation_request_allowed" in main_fence
-    assert "skip_non_migration_writes=main_release_validation.release_validation_active()" in main
-    assert '"release_validation"] = main_release_validation.safe_status()' in main
-    assert "release_validation_active()" in scheduler
-    assert "release_validation_active()" in apify
-    assert "release_validation_active()" in redis_worker

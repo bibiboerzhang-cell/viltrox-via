@@ -3,6 +3,242 @@ from __future__ import annotations
 
 from app.services.memory.via_learning_common import *
 
+
+def __snapshot_customer_profile(
+    subject_key: str,
+    user_id: int,
+    creator_handle: str,
+) -> dict[str, Any]:
+    return {
+        "subject_key": subject_key,
+        "user_id": user_id,
+        "creator_handle": creator_handle,
+        "submission_count": 0,
+        "total_views": 0,
+        "total_likes": 0,
+        "total_comments": 0,
+        "total_shares": 0,
+        "platforms": set(),
+        "latest_at": "",
+        "products": set(),
+        "verified_accounts": [],
+    }
+
+
+def __snapshot_submission_identity(row: dict[str, Any]) -> tuple[int, str, str, str]:
+    user_id = int(row.get("user_id") or 0)
+    creator_handle = str(row.get("extracted_handle") or "").strip()
+    platform = str(row.get("platform") or "unknown").strip() or "unknown"
+    subject_key = creator_handle or (f"user:{user_id}" if user_id else f"submission:{row.get('id')}")
+    return user_id, creator_handle, platform, subject_key
+
+
+def __snapshot_apply_submission_metrics(
+    profile: dict[str, Any],
+    row: dict[str, Any],
+    platform: str,
+) -> None:
+    profile["submission_count"] += 1
+    profile["total_views"] += int(row.get("views") or 0)
+    profile["total_likes"] += int(row.get("likes") or 0)
+    profile["total_comments"] += int(row.get("comments") or 0)
+    profile["total_shares"] += int(row.get("shares") or 0)
+    profile["platforms"].add(platform)
+    if row.get("created_at"):
+        profile["latest_at"] = max(str(profile.get("latest_at") or ""), str(row.get("created_at") or ""))
+
+
+def __snapshot_product_cluster(product_label: str) -> dict[str, Any]:
+    return {
+        "label": product_label,
+        "product_key": _slugify(product_label),
+        "submission_count": 0,
+        "total_views": 0,
+        "total_likes": 0,
+        "platforms": set(),
+        "alias_terms": set([product_label]),
+    }
+
+
+def __snapshot_apply_product_metrics(
+    product: dict[str, Any],
+    row: dict[str, Any],
+    platform: str,
+) -> None:
+    product["submission_count"] += 1
+    product["total_views"] += int(row.get("views") or 0)
+    product["total_likes"] += int(row.get("likes") or 0)
+    product["platforms"].add(platform)
+    product["alias_terms"].add(str(row.get("product_series") or "").strip())
+    product["alias_terms"].add(str(row.get("product_label") or "").strip())
+
+
+def __snapshot_accumulate_submission(
+    customer_profiles: dict[str, dict[str, Any]],
+    product_clusters: dict[str, dict[str, Any]],
+    row: dict[str, Any],
+) -> None:
+    user_id, creator_handle, platform, subject_key = __snapshot_submission_identity(row)
+    profile = customer_profiles.setdefault(
+        subject_key,
+        __snapshot_customer_profile(subject_key, user_id, creator_handle),
+    )
+    __snapshot_apply_submission_metrics(profile, row, platform)
+    product_label = str(row.get("product_label") or row.get("product_series") or "").strip()
+    if product_label:
+        profile["products"].add(product_label)
+        product = product_clusters.setdefault(product_label, __snapshot_product_cluster(product_label))
+        __snapshot_apply_product_metrics(product, row, platform)
+
+
+def __snapshot_verified_identity(row: dict[str, Any]) -> tuple[int, str, str]:
+    user_id = int(row.get("user_id") or 0)
+    creator_handle = str(row.get("handle") or "").strip()
+    subject_key = creator_handle or (f"user:{user_id}" if user_id else f"verified:{row.get('id')}")
+    return user_id, creator_handle, subject_key
+
+
+def __snapshot_accumulate_verified_account(
+    customer_profiles: dict[str, dict[str, Any]],
+    row: dict[str, Any],
+) -> None:
+    user_id, creator_handle, subject_key = __snapshot_verified_identity(row)
+    profile = customer_profiles.setdefault(
+        subject_key,
+        __snapshot_customer_profile(subject_key, user_id, creator_handle),
+    )
+    verified_account = {
+        "platform": str(row.get("platform") or "").strip(),
+        "handle": creator_handle,
+        "verified_at": str(row.get("verified_at") or "").strip(),
+    }
+    if verified_account not in profile["verified_accounts"]:
+        profile["verified_accounts"].append(verified_account)
+    if verified_account["platform"]:
+        profile["platforms"].add(verified_account["platform"])
+
+
+def __snapshot_accumulate_address(
+    region_clusters: dict[tuple[str, str, str], dict[str, Any]],
+    row: dict[str, Any],
+) -> None:
+    country = str(row.get("country") or "UNKNOWN").strip() or "UNKNOWN"
+    state = str(row.get("state") or "").strip()
+    city = str(row.get("city") or "").strip()
+    region_key = (country, state, city)
+    cluster = region_clusters.setdefault(
+        region_key,
+        {
+            "region_code": country,
+            "region_level": "city" if city else ("state" if state else "country"),
+            "country": country,
+            "state": state,
+            "city": city,
+            "address_count": 0,
+            "default_count": 0,
+            "users": set(),
+        },
+    )
+    cluster["address_count"] += 1
+    cluster["default_count"] += 1 if int(row.get("is_default") or 0) else 0
+    if int(row.get("user_id") or 0):
+        cluster["users"].add(int(row.get("user_id") or 0))
+
+
+def __snapshot_accumulate_ingest_event(
+    ingest_clusters: dict[str, dict[str, Any]],
+    row: dict[str, Any],
+) -> None:
+    platform = str(row.get("source_platform") or "unknown").strip() or "unknown"
+    cluster = ingest_clusters.setdefault(
+        platform,
+        {
+            "platform": platform,
+            "event_count": 0,
+            "event_types": set(),
+            "entity_types": set(),
+            "region_codes": set(),
+            "creator_handles": set(),
+            "latest_at": "",
+        },
+    )
+    cluster["event_count"] += 1
+    cluster["event_types"].add(str(row.get("event_type") or "").strip())
+    cluster["entity_types"].add(str(row.get("entity_type") or "").strip())
+    cluster["region_codes"].add(str(row.get("region_code") or "").strip())
+    cluster["creator_handles"].add(str(row.get("creator_handle") or "").strip())
+    if row.get("created_at"):
+        cluster["latest_at"] = max(str(cluster.get("latest_at") or ""), str(row.get("created_at") or ""))
+
+
+def __snapshot_nonempty_sorted(values: set[Any]) -> list[Any]:
+    return sorted(value for value in values if value)
+
+
+def __snapshot_customer_items(customer_profiles: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    items = [
+        {
+            **item,
+            "platforms": __snapshot_nonempty_sorted(item["platforms"]),
+            "products": __snapshot_nonempty_sorted(item["products"]),
+        }
+        for item in customer_profiles.values()
+    ]
+    items.sort(key=lambda item: (-item["submission_count"], -item["total_views"], item["subject_key"]))
+    return items
+
+
+def __snapshot_product_items(product_clusters: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    items = [
+        {
+            **item,
+            "platforms": __snapshot_nonempty_sorted(item["platforms"]),
+            "alias_terms": __snapshot_nonempty_sorted(item["alias_terms"]),
+        }
+        for item in product_clusters.values()
+    ]
+    items.sort(key=lambda item: (-item["submission_count"], -item["total_views"], item["label"]))
+    return items
+
+
+def __snapshot_region_items(
+    region_clusters: dict[tuple[str, str, str], dict[str, Any]],
+) -> list[dict[str, Any]]:
+    items = [
+        {
+            **item,
+            "users": sorted(item["users"]),
+            "user_count": len(item["users"]),
+        }
+        for item in region_clusters.values()
+    ]
+    items.sort(
+        key=lambda item: (
+            -item["address_count"],
+            -item["user_count"],
+            item["country"],
+            item["state"],
+            item["city"],
+        )
+    )
+    return items
+
+
+def __snapshot_ingest_items(ingest_clusters: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    items = [
+        {
+            **item,
+            "event_types": __snapshot_nonempty_sorted(item["event_types"]),
+            "entity_types": __snapshot_nonempty_sorted(item["entity_types"]),
+            "region_codes": __snapshot_nonempty_sorted(item["region_codes"]),
+            "creator_handles": __snapshot_nonempty_sorted(item["creator_handles"]),
+        }
+        for item in ingest_clusters.values()
+    ]
+    items.sort(key=lambda item: (-item["event_count"], item["platform"]))
+    return items
+
+
 def _build_internal_learning_snapshot(
     submissions: list[dict[str, Any]],
     ingest_events: list[dict[str, Any]],
@@ -15,178 +251,21 @@ def _build_internal_learning_snapshot(
     ingest_clusters: dict[str, dict[str, Any]] = {}
 
     for row in submissions:
-        user_id = int(row.get("user_id") or 0)
-        creator_handle = str(row.get("extracted_handle") or "").strip()
-        platform = str(row.get("platform") or "unknown").strip() or "unknown"
-        subject_key = creator_handle or (f"user:{user_id}" if user_id else f"submission:{row.get('id')}")
-        profile = customer_profiles.setdefault(
-            subject_key,
-            {
-                "subject_key": subject_key,
-                "user_id": user_id,
-                "creator_handle": creator_handle,
-                "submission_count": 0,
-                "total_views": 0,
-                "total_likes": 0,
-                "total_comments": 0,
-                "total_shares": 0,
-                "platforms": set(),
-                "latest_at": "",
-                "products": set(),
-                "verified_accounts": [],
-            },
-        )
-        profile["submission_count"] += 1
-        profile["total_views"] += int(row.get("views") or 0)
-        profile["total_likes"] += int(row.get("likes") or 0)
-        profile["total_comments"] += int(row.get("comments") or 0)
-        profile["total_shares"] += int(row.get("shares") or 0)
-        profile["platforms"].add(platform)
-        if row.get("created_at"):
-            profile["latest_at"] = max(str(profile.get("latest_at") or ""), str(row.get("created_at") or ""))
-        product_label = str(row.get("product_label") or row.get("product_series") or "").strip()
-        if product_label:
-            profile["products"].add(product_label)
-            product = product_clusters.setdefault(
-                product_label,
-                {
-                    "label": product_label,
-                    "product_key": _slugify(product_label),
-                    "submission_count": 0,
-                    "total_views": 0,
-                    "total_likes": 0,
-                    "platforms": set(),
-                    "alias_terms": set([product_label]),
-                },
-            )
-            product["submission_count"] += 1
-            product["total_views"] += int(row.get("views") or 0)
-            product["total_likes"] += int(row.get("likes") or 0)
-            product["platforms"].add(platform)
-            product["alias_terms"].add(str(row.get("product_series") or "").strip())
-            product["alias_terms"].add(str(row.get("product_label") or "").strip())
+        __snapshot_accumulate_submission(customer_profiles, product_clusters, row)
 
     for row in verified_social_accounts:
-        user_id = int(row.get("user_id") or 0)
-        creator_handle = str(row.get("handle") or "").strip()
-        subject_key = creator_handle or (f"user:{user_id}" if user_id else f"verified:{row.get('id')}")
-        profile = customer_profiles.setdefault(
-            subject_key,
-            {
-                "subject_key": subject_key,
-                "user_id": user_id,
-                "creator_handle": creator_handle,
-                "submission_count": 0,
-                "total_views": 0,
-                "total_likes": 0,
-                "total_comments": 0,
-                "total_shares": 0,
-                "platforms": set(),
-                "latest_at": "",
-                "products": set(),
-                "verified_accounts": [],
-            },
-        )
-        verified_account = {
-            "platform": str(row.get("platform") or "").strip(),
-            "handle": creator_handle,
-            "verified_at": str(row.get("verified_at") or "").strip(),
-        }
-        if verified_account not in profile["verified_accounts"]:
-            profile["verified_accounts"].append(verified_account)
-        if verified_account["platform"]:
-            profile["platforms"].add(verified_account["platform"])
+        __snapshot_accumulate_verified_account(customer_profiles, row)
 
     for row in addresses:
-        country = str(row.get("country") or "UNKNOWN").strip() or "UNKNOWN"
-        state = str(row.get("state") or "").strip()
-        city = str(row.get("city") or "").strip()
-        region_key = (country, state, city)
-        cluster = region_clusters.setdefault(
-            region_key,
-            {
-                "region_code": country,
-                "region_level": "city" if city else ("state" if state else "country"),
-                "country": country,
-                "state": state,
-                "city": city,
-                "address_count": 0,
-                "default_count": 0,
-                "users": set(),
-            },
-        )
-        cluster["address_count"] += 1
-        cluster["default_count"] += 1 if int(row.get("is_default") or 0) else 0
-        if int(row.get("user_id") or 0):
-            cluster["users"].add(int(row.get("user_id") or 0))
+        __snapshot_accumulate_address(region_clusters, row)
 
     for row in ingest_events:
-        platform = str(row.get("source_platform") or "unknown").strip() or "unknown"
-        cluster = ingest_clusters.setdefault(
-            platform,
-            {
-                "platform": platform,
-                "event_count": 0,
-                "event_types": set(),
-                "entity_types": set(),
-                "region_codes": set(),
-                "creator_handles": set(),
-                "latest_at": "",
-            },
-        )
-        cluster["event_count"] += 1
-        cluster["event_types"].add(str(row.get("event_type") or "").strip())
-        cluster["entity_types"].add(str(row.get("entity_type") or "").strip())
-        cluster["region_codes"].add(str(row.get("region_code") or "").strip())
-        cluster["creator_handles"].add(str(row.get("creator_handle") or "").strip())
-        if row.get("created_at"):
-            cluster["latest_at"] = max(str(cluster.get("latest_at") or ""), str(row.get("created_at") or ""))
+        __snapshot_accumulate_ingest_event(ingest_clusters, row)
 
-    customer_items = []
-    for item in customer_profiles.values():
-        customer_items.append(
-            {
-                **item,
-                "platforms": sorted(value for value in item["platforms"] if value),
-                "products": sorted(value for value in item["products"] if value),
-            }
-        )
-    customer_items.sort(key=lambda item: (-item["submission_count"], -item["total_views"], item["subject_key"]))
-
-    product_items = []
-    for item in product_clusters.values():
-        product_items.append(
-            {
-                **item,
-                "platforms": sorted(value for value in item["platforms"] if value),
-                "alias_terms": sorted(value for value in item["alias_terms"] if value),
-            }
-        )
-    product_items.sort(key=lambda item: (-item["submission_count"], -item["total_views"], item["label"]))
-
-    region_items = []
-    for item in region_clusters.values():
-        region_items.append(
-            {
-                **item,
-                "users": sorted(item["users"]),
-                "user_count": len(item["users"]),
-            }
-        )
-    region_items.sort(key=lambda item: (-item["address_count"], -item["user_count"], item["country"], item["state"], item["city"]))
-
-    ingest_items = []
-    for item in ingest_clusters.values():
-        ingest_items.append(
-            {
-                **item,
-                "event_types": sorted(value for value in item["event_types"] if value),
-                "entity_types": sorted(value for value in item["entity_types"] if value),
-                "region_codes": sorted(value for value in item["region_codes"] if value),
-                "creator_handles": sorted(value for value in item["creator_handles"] if value),
-            }
-        )
-    ingest_items.sort(key=lambda item: (-item["event_count"], item["platform"]))
+    customer_items = __snapshot_customer_items(customer_profiles)
+    product_items = __snapshot_product_items(product_clusters)
+    region_items = __snapshot_region_items(region_clusters)
+    ingest_items = __snapshot_ingest_items(ingest_clusters)
 
     return {
         "customer_learning": {

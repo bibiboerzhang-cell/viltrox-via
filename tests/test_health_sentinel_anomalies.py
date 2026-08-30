@@ -1,6 +1,7 @@
 """哨兵统计异常 5 检:每项一正一负 + 数据不足态 + 与主模块/出站的接线(sqlite 夹具)。"""
 from __future__ import annotations
 
+import importlib
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -74,6 +75,18 @@ def _llm_calls(conn: sqlite3.Connection, ok: int, degraded: int, *, fallback_onl
 
 
 # ── 13 LLM 降级率 ──
+
+
+def test_llm_degrade_candidates_are_real_callable_internal_targets() -> None:
+    resolved = []
+    for module_name, attr in anomalies._DEGRADE_FN_CANDIDATES:
+        module = importlib.import_module(module_name)
+        fn = getattr(module, attr)
+        assert callable(fn)
+        resolved.append(fn)
+
+    assert len(resolved) == 1
+    assert anomalies._resolve_degrade_fn() is resolved[0]
 
 
 def test_llm_degrade_rate_fail_when_above_threshold(db: sqlite3.Connection) -> None:

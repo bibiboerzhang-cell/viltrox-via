@@ -8,8 +8,8 @@ import {
   compact,
   numberValue,
   parseContactLinks,
-  platformLabel,
-} from '../dashboard';
+} from '../dashboard/dashboardFormat';
+import { platformLabel } from '../dashboard/dashboardPlatform';
 
 type Row = Record<string, unknown>;
 

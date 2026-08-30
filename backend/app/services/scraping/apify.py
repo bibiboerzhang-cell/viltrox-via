@@ -15,6 +15,7 @@ from typing import Any, Dict
 from app.core.logging import get_logger
 from app.platform.apify_budget import call_apify_actor
 from app.platform.apify_lifecycle import register_apify_client_shutdown
+from app.services.scraping.apify_douyin_projection import project_douyin_result
 
 try:
     from apify_client import ApifyClient
@@ -682,11 +683,6 @@ async def scrape_douyin(url: str) -> Dict[str, Any]:
         item = items[0]
         if isinstance(item.get("result"), dict):
             item = item["result"]
-        author = item.get("author") if isinstance(item.get("author"), dict) else {}
-        stats = item.get("statistics") if isinstance(item.get("statistics"), dict) else {}
-        if isinstance(item.get("stats"), dict):
-            stats = {**stats, **item["stats"]}
-        title = str(item.get("desc") or item.get("description") or item.get("text") or item.get("title") or "")
         views = _first_nested_int(item, ("playCount", "play_count", "viewCount", "view_count", "views", "play", "plays"))
         likes = _first_nested_int(item, ("diggCount", "likeCount", "like_count", "likes", "digg_count"))
         comments = _first_nested_int(item, ("commentCount", "comment_count", "comments"))
@@ -699,7 +695,6 @@ async def scrape_douyin(url: str) -> Dict[str, Any]:
             comments = detail_metrics.get("comments") or comments
             shares = detail_metrics.get("shares") or shares
             favorites = detail_metrics.get("favorites") or favorites
-        video = item.get("video") if isinstance(item.get("video"), dict) else {}
         visible_comments = item.get("comments") if isinstance(item.get("comments"), list) else []
         if not visible_comments:
             visible_comments = await _fetch_douyin_comments(url, max_comments=20)
@@ -710,45 +705,17 @@ async def scrape_douyin(url: str) -> Dict[str, Any]:
                 if isinstance(media, dict) and str(media.get("type") or "").lower() == "video" and media.get("url"):
                     video_url = str(media.get("url") or "")
                     break
-        owner_username = str(item.get("unique_id") or item.get("authorUniqueId") or author.get("uniqueId") or author.get("secUid") or author.get("uid") or "")
-        owner_full_name = str(
-            item.get("nickname")
-            or item.get("nickName")
-            or item.get("authorName")
-            or item.get("authorNickname")
-            or author.get("nickname")
-            or author.get("nickName")
-            or author.get("name")
-            or ""
+        return project_douyin_result(
+            item,
+            views=views,
+            likes=likes,
+            comments=comments,
+            shares=shares,
+            favorites=favorites,
+            visible_comments=visible_comments,
+            video_url=video_url,
+            first_nested_int=_first_nested_int,
         )
-        owner_url = f"https://www.douyin.com/user/{owner_username}" if owner_username else ""
-        return {
-            "scraped_ok": True,
-            "title": title[:200],
-            "caption": title,
-            "scraped_text": title,
-            "og_image": str(item.get("thumbnail") or item.get("cover") or item.get("coverUrl") or item.get("dynamicCover") or ""),
-            "metrics": {"views": views, "likes": likes, "comments": comments, "shares": shares, "favorites": favorites},
-            "metrics_available": {"views": views > 0, "likes": likes > 0, "comments": comments > 0, "shares": shares > 0, "favorites": favorites > 0},
-            "visible_comments": visible_comments,
-            "published_at": item.get("createTime") or item.get("create_time") or None,
-            "video_url": video_url,
-            "owner_username": owner_username,
-            "owner_full_name": owner_full_name,
-            "owner": owner_full_name,
-            "author": owner_full_name,
-            "channel_name": owner_full_name,
-            "channel_url": owner_url,
-            "owner_url": owner_url,
-            "avatar_url": str(item.get("avatarUri") or item.get("avatarUrl") or author.get("avatarThumb") or ""),
-            "follower_count": _first_nested_int(item, ("followerCount", "follower_count", "followers", "fansCount")),
-            "total_favorited": _first_nested_int(item, ("totalFavorited", "total_favorited")),
-            "duration": item.get("duration") or video.get("duration") or 0,
-            "hashtags": item.get("hashtags") if isinstance(item.get("hashtags"), list) else [],
-            "error": None,
-            "scraper": "apify_douyin",
-            "metrics_source": {"views": "apify_douyin" if views > 0 else "unavailable"},
-        }
     except Exception as e:
         logger.warning("apify.scrape_douyin.failed | url=%s | error=%s", url, e)
         return _empty_result(f"apify Douyin error: {e}")

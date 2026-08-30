@@ -10,6 +10,7 @@ from app.domains.access import scope
 from app.domains.kol import lookup_recovery
 from app.domains.kol.claim_access import assert_kol_access
 from app.services.kol.account_dossier import list_kol_comments, list_kol_posts
+from app.services.kol.account_dossier_adapter import DEFAULT_ACCOUNT_DOSSIER_ADAPTER
 
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-links"])
 
@@ -41,7 +42,11 @@ async def lookup_kol(request: Request, body: dict, staff=Depends(require_tab("vk
         if scan_requested:
             payload["scan_account"] = False
             payload["scan_if_missing"] = False
-        result = await kol_domain.lookup_with_context(payload, staff=staff)
+        result = await kol_domain.lookup_with_context(
+            payload,
+            staff=staff,
+            dossier_port=DEFAULT_ACCOUNT_DOSSIER_ADAPTER,
+        )
         kol = result.get("kol") if isinstance(result.get("kol"), dict) else {}
         kol_id = int(kol.get("id") or 0)
         if scan_requested and kol_id:
@@ -93,7 +98,11 @@ def list_kols(
 @router.get("/kols/{kol_id}/dossier")
 def kol_dossier(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        return kol_domain.dossier_for_request(int(kol_id), staff=staff)
+        return kol_domain.dossier_for_request(
+            int(kol_id),
+            staff=staff,
+            dossier_port=DEFAULT_ACCOUNT_DOSSIER_ADAPTER,
+        )
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc
     except ValueError as exc:
@@ -136,7 +145,11 @@ def kol_comments(
 @router.get("/kols/{kol_id}/profile")
 def kol_profile(kol_id: int, staff=Depends(require_tab("vkpi", "read"))):
     try:
-        return kol_domain.profile_with_dossier(int(kol_id), staff=staff)
+        return kol_domain.profile_with_dossier(
+            int(kol_id),
+            staff=staff,
+            dossier_port=DEFAULT_ACCOUNT_DOSSIER_ADAPTER,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:
@@ -243,6 +256,7 @@ async def analyze_kol(kol_id: int, body: dict | None = None, staff=Depends(requi
             product_sku=str(payload.get("product_sku") or ""),
             snapshot_id=payload.get("snapshot_id"),
             staff=staff,
+            dossier_port=DEFAULT_ACCOUNT_DOSSIER_ADAPTER,
         )
     except scope.ScopeDenied as exc:
         raise _scope_403(exc) from exc

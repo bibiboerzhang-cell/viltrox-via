@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from app.core.logging import get_logger
+from app.domains.kol import search_session_job_sync
 from app.domains.tasks.search_session_lineage import with_search_session_lineage
 
 
@@ -216,13 +217,11 @@ def sync_linked_terminal_job(
     """Replay an already-terminal job after lineage attach, without providers."""
 
     try:
-        # Lazy import avoids search_sessions -> search_sessions_attach -> worker
-        # module import cycles.  The compat connection wraps the same psycopg
-        # connection; the worker synchronizer needs the raw cursor API.
-        from app.workers.apify_jobs_worker_session import _sync_search_session_job
-
+        # The compat connection wraps the same psycopg connection; the
+        # domain-owned synchronizer needs the raw cursor API.  Workers import
+        # the same implementation through a compatibility facade.
         sync_conn = getattr(conn, "_raw", conn)
-        synced = _sync_search_session_job(
+        synced = search_session_job_sync.sync_search_session_job(
             sync_conn,
             int(job_id),
             raw_status=str(status or "").strip().lower(),

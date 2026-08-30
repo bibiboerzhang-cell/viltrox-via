@@ -5,7 +5,7 @@
 required_terms / 器材证据 / 粉丝下限 / 检测器阈值),不写 viltrox_fit_score,不碰 rule_v0。
 
 ■ 为什么要有这个模块(今晚三次「修好了但生产链路够不着」的解药)
-    今天的落库只有 ``discovery_round_plan`` 的**预报常量**(每轮固定 301 配额单位),
+    历史落库只有 ``discovery_round_plan`` 的单一配额伪总数,
     既不落「实际用了哪几条检索词」,也不落「哪条词产出了哪个合格新人」。于是
     「泛词烧掉一半配额」这件事在库里没有任何痕迹——只能靠会滚掉的 INFO 日志反查。
     本模块把四样落成事实,让「新东西有没有被生产路径调用」变成一条 SELECT 能回答的问题:
@@ -22,10 +22,10 @@ required_terms / 器材证据 / 粉丝下限 / 检测器阈值),不写 viltrox_f
     合格新人回连用 ``canonical_creator_aliases``(与去重同一套身份口径),连不上的老实记
     ``qualified_unattributed_count``。
 
-■ 配额口径(与 profile_discovery_rounds 的预报对账)
-    search.list = 100 单位/变体;channels.list = 1 单位/轮。实际值直接读 provider metadata 的
-    ``quota_units``(它已经按真发出去的变体数算);``overhead_units`` = 实际 − 100×变体数,
-    正是那 1 个 channels.list。Apify 腿不吃 YouTube 配额,per-term 配额如实记 ``None``。
+■ 配额口径(2026-06-01 v2)
+    search.list 走独立 Search Queries 桶；channels.list/videos.list 各 1 combined unit。
+    证据分别记录 search calls / combined units / API calls，旧 quota_units 仅作 deprecated
+    combined-unit 兼容别名，绝不把两个桶相加。
 """
 from __future__ import annotations
 
@@ -35,14 +35,14 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-TERM_EVIDENCE_SCHEMA = "discovery_term_evidence_v1"
+TERM_EVIDENCE_SCHEMA = "discovery_term_evidence_v2"
 TERM_EVIDENCE_KEY = "discovery_term_evidence"
 
 # provider 逐条候选的检索词溯源标(account_search_discovery 的 YouTube 严格视频路写入)。
 # 契约由 tests/test_discovery_term_evidence.py 钉住:写端改键名 = 测试红。
 CANDIDATE_TERM_KEY = "discovery_query"
 
-# YouTube Data API 计价(官方 quota cost):search.list=100,channels.list=1。
+# Legacy pre-2026-06-01 unit used only to decode historical metadata.
 YOUTUBE_SEARCH_UNITS = 100
 
 _MAX_TERMS = 24
@@ -51,13 +51,16 @@ _MAX_TERM_LEN = 160
 
 # 「相关性判定时手里有几个字段」的点名清单。每项 = (字段名, 候选上的别名们)。
 # 这就是 profile_online_qualification._candidate_row 真正能填的那批字段:在线腿
-# 常年只有 handle/display_name/bio/sample_title 有内容,其余恒空——普查把这件事
-# 从「读代码才知道」变成「SELECT 一下就知道」。
+# 基础腿常见 handle/display_name/bio/sample_title；provider 若带公开描述、字幕或
+# caption，也必须独立计入，避免把“标题没写”误报成“没有内容证据”。
 JUDGMENT_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("handle", ("handle", "channel_id", "username")),
     ("display_name", ("display_name", "channel_name", "name")),
     ("bio", ("bio", "description")),
     ("sample_title", ("sample_title", "latest_video_title", "title")),
+    ("sample_description", ("sample_description", "content_description")),
+    ("sample_caption", ("sample_caption", "caption")),
+    ("sample_transcript", ("sample_transcript", "transcript", "subtitles")),
     ("followers", ("followers", "subscriber_count", "follower_count")),
     ("country", ("country",)),
     ("language", ("language",)),
@@ -144,6 +147,12 @@ def normalize_term_ledger(value: Any) -> list[dict[str, Any]]:
             "anchor": _term(row.get("anchor")),
             "anchor_source": _code(row.get("anchor_source")),
             "quota_units": _int(row.get("quota_units")),
+            "quota_units_deprecated": True,
+            "youtube_search_calls": (
+                _int(row.get("youtube_search_calls"))
+                if row.get("youtube_search_calls") is not None
+                else (1 if _int(row.get("quota_units")) > 0 else 0)
+            ),
             "channels_new": _int(row.get("channels_new")),
             "exhausted": bool(row.get("exhausted")),
         }
@@ -175,7 +184,24 @@ def observe_round(
             continue
         meta = _dict(entry.get("metadata"))
         terms = [_term(item) for item in (meta.get("provider_queries") or []) if _term(item)]
-        quota_actual = _int(meta.get("quota_units"))
+        legacy_quota = _int(meta.get("quota_units"))
+        search_actual = 0 if platform != "youtube" else (
+            _int(meta.get("youtube_search_calls"))
+            if meta.get("youtube_search_calls") is not None else len(terms)
+        )
+        if platform != "youtube":
+            combined_actual = 0
+        elif meta.get("youtube_combined_quota_units") is not None:
+            combined_actual = _int(meta.get("youtube_combined_quota_units"))
+        elif meta.get("quota_units_deprecated"):
+            combined_actual = legacy_quota
+        else:
+            combined_actual = max(0, legacy_quota - YOUTUBE_SEARCH_UNITS * len(terms))
+        api_actual = (
+            _int(meta.get("youtube_api_calls"))
+            if meta.get("youtube_api_calls") is not None
+            else search_actual + combined_actual
+        )
         actor_runs = _leg_actor_runs(platform, meta)
         leg_rows = by_platform.get(platform) or []
         tagged: dict[str, int] = {}
@@ -195,9 +221,12 @@ def observe_round(
             # 有逐词台账就一并落库(锚/锚来源/逐词配额/抓干与否),没有则空表。
             "term_ledger": ledger,
             # 实际配额直接来自 provider metadata;Apify 腿不吃 YouTube 配额 → 0。
-            "quota_units_actual": quota_actual,
-            # 实际 − 100×变体数 = channels.list 那 1 个单位(诚实余项,不硬塞进某条词)。
-            "quota_overhead_units": max(0, quota_actual - YOUTUBE_SEARCH_UNITS * len(terms)),
+            "youtube_search_calls_actual": search_actual,
+            "youtube_combined_quota_units_actual": combined_actual,
+            "youtube_api_calls_actual": api_actual,
+            "quota_units_actual": combined_actual,
+            "quota_units_deprecated": True,
+            "quota_overhead_units": combined_actual,
             "apify_actor_runs": actor_runs,
             "candidates_returned": len(leg_rows),
             "candidates_by_term": dict(sorted(tagged.items())),
@@ -210,7 +239,13 @@ def observe_round(
         "round_no": max(1, _int(round_no) or 1),
         "platforms": sorted({row["platform"] for row in legs}),
         "legs": legs,
-        "quota_units_actual": sum(row["quota_units_actual"] for row in legs),
+        "youtube_search_calls_actual": sum(row["youtube_search_calls_actual"] for row in legs),
+        "youtube_combined_quota_units_actual": sum(
+            row["youtube_combined_quota_units_actual"] for row in legs
+        ),
+        "youtube_api_calls_actual": sum(row["youtube_api_calls_actual"] for row in legs),
+        "quota_units_actual": sum(row["youtube_combined_quota_units_actual"] for row in legs),
+        "quota_units_deprecated": True,
         "apify_actor_runs": sum(row["apify_actor_runs"] for row in legs),
         "candidates_returned": len(rows),
         # 本轮到手候选的字段普查(③)。逐轮存,便于看「翻页越深字段越稀」。
@@ -401,6 +436,9 @@ def build_term_evidence(
     observed_candidates: Any,
     accepted_items: Any = None,
     quota_forecast_units: Any = None,
+    youtube_search_calls_forecast: Any = None,
+    youtube_combined_quota_units_forecast: Any = None,
+    youtube_api_calls_forecast: Any = None,
 ) -> dict[str, Any]:
     """把四样拼成一条可落库记录。纯函数零 IO,失败方向:宁可空态也不杜撰。"""
     anchor_face = _dict(anchor)
@@ -420,7 +458,9 @@ def build_term_evidence(
             per_item = _code(leg.get("attribution")) == "per_item"
             by_term = _dict(leg.get("candidates_by_term"))
             ledger = {row["term"]: row for row in normalize_term_ledger(leg.get("term_ledger"))}
-            for term in (leg.get("terms") or [])[:_MAX_TERMS]:
+            term_order = list(leg.get("terms") or [])
+            term_order.extend(term for term in ledger if term not in term_order)
+            for term in term_order[:_MAX_TERMS]:
                 key = (platform, _term(term))
                 booked = ledger.get(key[1])
                 row = terms.setdefault(key, {
@@ -435,13 +475,19 @@ def build_term_evidence(
                        if booked else {}),
                     "rounds": [],
                     "search_calls": 0,
+                    "youtube_search_calls": 0,
                     "quota_units": 0,
+                    "quota_units_deprecated": True,
                     "apify_actor_runs": 0,
                     "candidates_returned": 0,
                     "attribution": "per_item" if per_item else "shared_round",
                 })
                 row["rounds"].append(round_no)
                 row["search_calls"] += 1
+                row["youtube_search_calls"] += (
+                    _int(booked.get("youtube_search_calls"))
+                    if booked else (1 if platform == "youtube" else 0)
+                )
                 # 逐词台账的配额优先(它知道这条词到底发没发出去);否则每条已发变体记 100,
                 # Apify 腿不吃 YouTube 配额 → 0。
                 row["quota_units"] += (
@@ -464,7 +510,9 @@ def build_term_evidence(
                 "anchored": term_is_anchored(key[1], anchor_terms),
                 "rounds": [],
                 "search_calls": 0,
+                "youtube_search_calls": 0,
                 "quota_units": 0,
+                "quota_units_deprecated": True,
                 "apify_actor_runs": 0,
                 "candidates_returned": 0,
                 "attribution": "per_item",
@@ -483,8 +531,23 @@ def build_term_evidence(
     )
     term_rows = term_rows[:_MAX_TERMS]
 
-    quota_actual = sum(_int(entry.get("quota_units_actual")) for entry in round_rows)
-    forecast = _int(quota_forecast_units) if quota_forecast_units is not None else None
+    search_actual = sum(_int(entry.get("youtube_search_calls_actual")) for entry in round_rows)
+    combined_actual = sum(
+        _int(entry.get("youtube_combined_quota_units_actual")) for entry in round_rows
+    )
+    api_actual = sum(_int(entry.get("youtube_api_calls_actual")) for entry in round_rows)
+    combined_input = youtube_combined_quota_units_forecast
+    if combined_input is None:
+        combined_input = quota_forecast_units
+    search_forecast = (
+        _int(youtube_search_calls_forecast)
+        if youtube_search_calls_forecast is not None else None
+    )
+    combined_forecast = _int(combined_input) if combined_input is not None else None
+    api_forecast = (
+        _int(youtube_api_calls_forecast)
+        if youtube_api_calls_forecast is not None else None
+    )
     return {
         "schema": TERM_EVIDENCE_SCHEMA,
         "lane": _code(lane) or "unknown",
@@ -496,13 +559,34 @@ def build_term_evidence(
         "rounds": round_rows,
         "provider_rounds": len(round_rows),
         "quota": {
-            "youtube_units_actual": quota_actual,
-            "youtube_units_forecast": forecast,
-            "forecast_delta_units": (forecast - quota_actual) if forecast is not None else None,
+            "youtube_search_calls_actual": search_actual,
+            "youtube_search_calls_forecast": search_forecast,
+            "youtube_search_calls_forecast_delta": (
+                search_forecast - search_actual if search_forecast is not None else None
+            ),
+            "youtube_combined_quota_units_actual": combined_actual,
+            "youtube_combined_quota_units_forecast": combined_forecast,
+            "youtube_combined_quota_forecast_delta_units": (
+                combined_forecast - combined_actual if combined_forecast is not None else None
+            ),
+            "youtube_api_calls_actual": api_actual,
+            "youtube_api_calls_forecast": api_forecast,
+            "youtube_api_calls_forecast_delta": (
+                api_forecast - api_actual if api_forecast is not None else None
+            ),
+            "youtube_units_actual": combined_actual,
+            "youtube_units_forecast": combined_forecast,
+            "forecast_delta_units": (
+                combined_forecast - combined_actual if combined_forecast is not None else None
+            ),
+            "youtube_units_deprecated": True,
             "apify_actor_runs_actual": sum(_int(entry.get("apify_actor_runs")) for entry in round_rows),
             # 无锚词烧掉的配额——「泛词烧掉一半配额」这件事从此有真数,不用翻日志。
             "unanchored_units": sum(
                 _int(row.get("quota_units")) for row in term_rows if not row["anchored"]
+            ),
+            "unanchored_search_calls": sum(
+                _int(row.get("youtube_search_calls")) for row in term_rows if not row["anchored"]
             ),
         },
         "candidates_returned": sum(_int(entry.get("candidates_returned")) for entry in round_rows),
@@ -514,11 +598,7 @@ def build_term_evidence(
 
 
 def planned_youtube_variants(query: Any) -> int:
-    """这次搜索 YouTube 腿**打算**发几条变体(确定性纯函数,零 IO、零花费)。
-
-    只服务配额预报:此前预报写死 3 条(301 单位),而真发出去常常只有 2 条(201)——
-    50% 高估会让轮次守门按虚高的账提前收手。读不到就退回 1(下限,绝不虚报)。
-    """
+    """计划发几次 search.list；确定性纯函数，零 IO、零 provider。"""
     text = _term(query)
     if not text:
         return 0

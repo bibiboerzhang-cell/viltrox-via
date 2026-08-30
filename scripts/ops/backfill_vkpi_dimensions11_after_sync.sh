@@ -30,6 +30,10 @@ values = {
     "result": str(payload.get("result") or ""),
     "exec_main_status": str(payload.get("exec_main_status") or ""),
     "failure_count": str(len(payload.get("failure_tail") or [])),
+    "post_sync_safe": "1" if payload.get("post_sync_safe") is True else "0",
+    "completion_scope": str(payload.get("completion_scope") or "unknown"),
+    "provider_completion": str(payload.get("provider_completion") or "unknown"),
+    "orchestration_status": str(payload.get("orchestration_status") or "unknown"),
 }
 for key, value in values.items():
     print(f"{key}={shlex.quote(value)}")
@@ -39,6 +43,11 @@ PY
 if [ "${service_state}" = "active" ] || [ "${service_state}" = "activating" ]; then
   echo "{\"skipped\":true,\"reason\":\"vkpi-sync-daily.service is ${service_state}; dimensions11 backfill deferred\"}"
   exit 0
+fi
+
+if [ "${post_sync_safe}" != "1" ]; then
+  echo "Refusing dimensions11 backfill: daily sync has no verified provider completion (orchestration=${orchestration_status}, scope=${completion_scope}, provider=${provider_completion})" >&2
+  exit 2
 fi
 
 if [ "${failure_count}" != "0" ]; then

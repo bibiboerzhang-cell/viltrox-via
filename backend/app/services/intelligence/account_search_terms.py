@@ -341,6 +341,7 @@ def term_ledger_row(
     page_token_in: str = "",
     channels_new: int = 0,
     quota_units: int = 100,
+    youtube_search_calls: int | None = None,
     exhausted: bool = False,
     skipped: str = "",
     provider_status: str = "",
@@ -351,12 +352,19 @@ def term_ledger_row(
     而不是缺省值:回落到旧 5 词块时正是这个值,于是「这次到底发没发泛词」变成一条
     SELECT 能回答的问题(实测无锚泛词 21 人过相关闸、0 人过 8 道严格闸)。纯函数零 IO。"""
     anchor_source, anchor = (anchors or {}).get(term, ("", ""))
+    search_calls = (
+        max(0, int(youtube_search_calls))
+        if youtube_search_calls is not None
+        else (1 if int(quota_units) > 0 else 0)
+    )
     row: Dict[str, Any] = {
         "term": term,
         "anchor": anchor,
         "anchor_source": anchor_source or "unanchored_legacy_chunk",
         "page_token_in": page_token_in,
         "quota_units": int(quota_units),
+        "quota_units_deprecated": True,
+        "youtube_search_calls": search_calls,
         "channels_new": int(channels_new),
         "exhausted": bool(exhausted),
     }

@@ -262,8 +262,9 @@ layer5 必须给合作建议、素材买断/授权建议、下一轮 brief 调�
 layer6 必须给 risk_flags、content_quality_score、viewer_heart_score、channel_value_score、asset_reuse_score、product_proof_score、marketing_value_score、final_verdict、key_hook。
 
 固定输出 schema 细则：
-layer1_visual_content = content_summary / scene_timeline[{timestamp, what, why_it_matters}] / product_presence / brand_exposure / competitor_presence / production_observations / evidence{timestamps, subtitle_used}。
-其中 brand_product_evidence 是必填的受控真值块：viltrox_status=present|absent|unknown / inspection_complete / checked_modalities / viltrox_evidence / viltrox_products[{name,sku,confidence,evidence}] / competitors[{brand,products,confidence,evidence}]。present 必须有 visual/subtitle/audio 结构化证据，metadata 单独不算；absent 必须完整检查 visual+audio；其余一律 unknown。不得从自由文本或产品名猜品牌。
+layer1_visual_content = content_summary / scene_timeline[{timestamp, what, why_it_matters}] / product_presence / brand_exposure / brand_product_evidence / competitor_presence / production_observations / evidence{timestamps, subtitle_used}。
+brand_product_evidence 是 layer1_visual_content 的一级直属字段（JSON Pointer: /layer1_visual_content/brand_product_evidence），必须与 evidence 同级，严禁放入 evidence 内。evidence 只允许承载 timestamps 与 subtitle_used。
+brand_product_evidence 是必填的受控真值块：viltrox_status=present|absent|unknown / inspection_complete / checked_modalities / viltrox_evidence / viltrox_products[{name,sku,confidence,evidence}] / competitors[{brand,products,confidence,evidence}]。viltrox_evidence 以及每个产品/竞品的 evidence 都必须是对象数组，每个对象包含 modality、timestamp、detail、confidence，禁止用一个字符串代替数组。present 必须有 visual/subtitle/audio 结构化证据，metadata 单独不算；absent 必须完整检查 visual+audio；其余一律 unknown。不得从自由文本或产品名猜品牌。
 performance_context.product_context 只含创作者身份与 brand_lexicon（品牌/产品线识别词表，brand_lexicon_is_evidence=false，project_scope=none）；品牌/产品出现只能由带时间戳的画面/字幕/口播证明。
 layer2_viewer_emotion = first_three_seconds_feeling / viewer_heart_score / dislike_or_resistance / memorable_points / purchase_or_interest_trigger / one_sentence_viewer_reaction / data_alignment。必须说明真实观众是否会想继续看、收藏、点赞、下单或反感。
 layer3_three_values = channel_value / asset_value / product_proof_value。channel_value 只评渠道投放值；asset_value 只评素材买断/复用；product_proof_value 只评是否证明 Viltrox 产品能力。
@@ -292,7 +293,11 @@ def _video_final_v1_dynamic_prompt(
 {metrics}
 
 必须输出的 JSON 顶层键：
-layer1_visual_content, layer2_viewer_emotion, layer3_three_values, layer4_attribution, layer5_recommendations, layer6_flags_and_scores。"""
+layer1_visual_content, layer2_viewer_emotion, layer3_three_values, layer4_attribution, layer5_recommendations, layer6_flags_and_scores。
+
+再次校验品牌证据的唯一合法位置：/layer1_visual_content/brand_product_evidence。
+它必须与 /layer1_visual_content/evidence 同级，严禁嵌套到 evidence 中；evidence 只能含 timestamps 与 subtitle_used。
+viltrox_evidence、viltrox_products[*].evidence、competitors[*].evidence 都必须是结构化对象数组，数组项必须含 modality、timestamp、detail、confidence，禁止返回单个字符串。"""
 
 
 

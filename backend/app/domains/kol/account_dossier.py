@@ -210,6 +210,189 @@ def _event_items(
     return sorted(events, key=lambda item: _text(item.get("occurred_at")), reverse=True)
 
 
+def _load_dossier_video_rows(conn: Any, kol_pool_id: int, limit: int) -> list[Any]:
+    return conn.execute(
+        """
+        SELECT id AS evidence_id, id, kol_pool_id, content_url, platform,
+          COALESCE(NULLIF(title, ''), NULLIF(video_title, ''), content_url) AS title,
+          video_title, thumbnail_url, view_count, like_count, comment_count,
+          share_count, duration_seconds, publish_date, posted_at, channel_id,
+          channel_name, scrape_status, scrape_source, scraped_at,
+          metrics_scraped_at, metrics_source, created_at, updated_at
+        FROM vkpi_kol_video_evidence
+        WHERE kol_pool_id=? AND is_active IS NOT FALSE
+          AND COALESCE(evidence_type, 'video')='video'
+        ORDER BY COALESCE(publish_date, posted_at, updated_at, created_at) DESC NULLS LAST,
+                 COALESCE(view_count, 0) DESC, id DESC
+        LIMIT ?
+        """,
+        (int(kol_pool_id), limit),
+    ).fetchall()
+
+
+def _project_dossier_video(
+    row: Any, final_by_evidence: dict[int, dict[str, Any]], qa_by_evidence: dict[int, dict[str, Any]],
+) -> dict[str, Any]:
+    video = _jsonable(dict(row))
+    evidence_id = _int(video.get("evidence_id") or video.get("id"))
+    final_entry = final_by_evidence.get(evidence_id)
+    qa_entry = qa_by_evidence.get(evidence_id)
+    final_result = _as_dict((final_entry or {}).get("result"))
+    qa_result = _as_dict((qa_entry or {}).get("result"))
+    youtube_id = _youtube_video_id(video.get("content_url")) if _text(video.get("platform")).lower() == "youtube" else ""
+    video["youtube_video_id"] = youtube_id
+    video["best_thumbnail"] = _text(video.get("thumbnail_url")) or (
+        f"https://img.youtube.com/vi/{youtube_id}/hqdefault.jpg" if youtube_id else ""
+    )
+    video["analysis"] = {
+        "has_final_v1": bool(final_entry and final_entry.get("status") == "ready"),
+        "has_qa": bool(qa_entry and qa_entry.get("status") == "ready"),
+        "final_cache_id": (final_entry or {}).get("id"), "qa_cache_id": (qa_entry or {}).get("id"),
+        "scores": _score_payload(final_result) if final_result else {},
+        "qa": _qa_payload(qa_result) if qa_result else {},
+    }
+    return video
+
+
+def _project_dossier_videos(
+    rows: list[Any], final_by_evidence: dict[int, dict[str, Any]], qa_by_evidence: dict[int, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    videos: list[dict[str, Any]] = []
+    platforms: Counter[str] = Counter()
+    for row in rows:
+        video = _project_dossier_video(row, final_by_evidence, qa_by_evidence)
+        platforms[_text(video.get("platform")).lower() or "unknown"] += 1
+        videos.append(video)
+    return videos, platforms
+
+
+def _load_dossier_crawl_runs(conn: Any, kol_pool_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """SELECT id, kol_pool_id, source_url, url_type, mode, status, dry_run,
+                  result_summary_json, created_at
+           FROM vkpi_kol_url_deep_crawl_runs
+           WHERE kol_pool_id=? ORDER BY created_at DESC, id DESC LIMIT 30""",
+        (int(kol_pool_id),),
+    ).fetchall()
+    runs: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        item["result_summary_json"] = _loads(item.get("result_summary_json"), {})
+        runs.append(_jsonable(item))
+    return runs
+
+
+def _latest_dossier_video_at(videos: list[dict[str, Any]]) -> Any:
+    latest = None
+    for video in videos:
+        candidate = video.get("publish_date") or video.get("posted_at")
+        if candidate and (latest is None or _text(candidate) > _text(latest)):
+            latest = candidate
+    return latest
+
+
+def _dossier_score_values(videos: list[dict[str, Any]], score_name: str) -> list[float]:
+    values: list[float] = []
+    for video in videos:
+        scores = _as_dict(_as_dict(video.get("analysis")).get("scores"))
+        raw = scores.get(score_name)
+        parsed = _num(_as_dict(raw).get("score") if isinstance(raw, dict) else raw)
+        if parsed is not None:
+            values.append(parsed)
+    return values
+
+
+def _dossier_verdict(
+    primary_deep: dict[str, Any], content_scores: list[float], marketing_scores: list[float], analyzed_count: int,
+) -> str:
+    recommendations = _deep_recommendations(primary_deep)
+    verdict = ""
+    if isinstance(recommendations, str):
+        verdict = recommendations.strip()
+    elif isinstance(recommendations, list) and recommendations:
+        verdict = str(recommendations[0]).strip()
+    verdict = verdict[:160]
+    if verdict or not (content_scores or marketing_scores):
+        return verdict
+    parts: list[str] = []
+    if content_scores:
+        parts.append(f"内容质量均分 {round(sum(content_scores) / len(content_scores))}")
+    if marketing_scores:
+        parts.append(f"投放价值均分 {round(sum(marketing_scores) / len(marketing_scores))}")
+    if analyzed_count:
+        parts.append(f"已深析 {analyzed_count} 条")
+    return " · ".join(parts)
+
+
+def _dossier_gaps(
+    *, crawl_runs: list[dict[str, Any]], videos: list[dict[str, Any]], analyzed_count: int,
+    qa_count: int, deep: dict[str, Any],
+) -> list[str]:
+    gaps: list[str] = []
+    if not crawl_runs:
+        gaps.append("profile_crawl_history_missing")
+    if not videos:
+        gaps.append("video_evidence_missing")
+    if videos and analyzed_count == 0:
+        gaps.append("final_v1_analysis_missing")
+    if analyzed_count and not qa_count:
+        gaps.append("keyframe_qa_missing")
+    if deep.get("status") != "ready":
+        gaps.append("llm_deep_result_missing")
+    return gaps
+
+
+def _dossier_profile(kol: dict[str, Any]) -> dict[str, Any]:
+    keys = (
+        "id", "platform", "handle", "display_name", "profile_url", "avatar_url", "bio",
+        "followers", "avg_views", "engagement_rate", "country_code", "profile_type",
+        "candidate_kind", "viltrox_fit_score", "viltrox_fit_reason", "profile_backfilled_at",
+        "last_video_at", "updated_at",
+    )
+    return {key: kol.get(key) for key in keys}
+
+
+def _dossier_coverage(
+    *, videos: list[dict[str, Any]], crawl_runs: list[dict[str, Any]], deep: dict[str, Any],
+    platforms: Counter[str], analyzed_count: int, qa_count: int, last_crawl_at: Any,
+    last_video_at: Any, marketing_scores: list[float], content_scores: list[float],
+) -> dict[str, Any]:
+    return {
+        "video_evidence_count": len(videos), "video_evidence_returned": len(videos),
+        "analyzed_final_v1_count": analyzed_count, "qa_count": qa_count,
+        "deep_result_count": deep.get("count") or 0, "crawl_run_count": len(crawl_runs),
+        "platform_counts": dict(platforms), "last_crawl_at": last_crawl_at, "last_video_at": last_video_at,
+        "marketing_value_score_avg": round(sum(marketing_scores) / len(marketing_scores), 3) if marketing_scores else None,
+        "marketing_value_score_max": max(marketing_scores) if marketing_scores else None,
+        "content_quality_score_avg": round(sum(content_scores) / len(content_scores), 3) if content_scores else None,
+        "content_quality_score_max": max(content_scores) if content_scores else None,
+    }
+
+
+def _dossier_payload(
+    *, kol_pool_id: int, kol: dict[str, Any], coverage: dict[str, Any], primary_deep: dict[str, Any],
+    verdict: str, videos: list[dict[str, Any]], deep: dict[str, Any], crawl_runs: list[dict[str, Any]],
+    events: list[dict[str, Any]], gaps: list[str],
+) -> dict[str, Any]:
+    return {
+        "status": "ready", "method": "kol_account_dossier_read_v1", "kol_pool_id": int(kol_pool_id),
+        "profile": _dossier_profile(kol), "coverage": coverage,
+        "judgment": {
+            "primary_llm_v6_fit": primary_deep.get("llm_v6_fit"),
+            "primary_source_evidence_id": primary_deep.get("source_evidence_id"),
+            "recommendations": _deep_recommendations(primary_deep),
+            "risk": _deep_risk(primary_deep), "one_line_verdict": verdict,
+        },
+        "videos": videos, "llm_deep_analysis": deep, "crawl_history": crawl_runs,
+        "events": events, "gaps": gaps,
+        "diagnostics": {
+            "source": "vkpi_kol_pool + vkpi_kol_video_evidence + vkpi_analysis_cache + vkpi_kol_llm_deep_analysis_results + vkpi_kol_url_deep_crawl_runs",
+            "provider_calls": False, "llm_calls": False, "worker_touched": False,
+            "write_db": False, "viltrox_fit_score_write": False,
+        },
+    }
+
+
 def get_kol_account_dossier(
     kol_pool_id: int,
     *,
@@ -231,202 +414,33 @@ def get_kol_account_dossier(
     safe_event_limit = max(1, min(int(event_limit or 80), 300))
     safe_deep_limit = max(1, min(int(deep_limit or 20), 50))
 
-    video_rows = conn.execute(
-        """
-        SELECT
-          id AS evidence_id,
-          id,
-          kol_pool_id,
-          content_url,
-          platform,
-          COALESCE(NULLIF(title, ''), NULLIF(video_title, ''), content_url) AS title,
-          video_title,
-          thumbnail_url,
-          view_count,
-          like_count,
-          comment_count,
-          share_count,
-          duration_seconds,
-          publish_date,
-          posted_at,
-          channel_id,
-          channel_name,
-          scrape_status,
-          scrape_source,
-          scraped_at,
-          metrics_scraped_at,
-          metrics_source,
-          created_at,
-          updated_at
-        FROM vkpi_kol_video_evidence
-        WHERE kol_pool_id=?
-          AND is_active IS NOT FALSE
-          AND COALESCE(evidence_type, 'video')='video'
-        ORDER BY COALESCE(publish_date, posted_at, updated_at, created_at) DESC NULLS LAST,
-                 COALESCE(view_count, 0) DESC,
-                 id DESC
-        LIMIT ?
-        """,
-        (int(kol_pool_id), safe_video_limit),
-    ).fetchall()
+    video_rows = _load_dossier_video_rows(conn, int(kol_pool_id), safe_video_limit)
     final_by_evidence, qa_by_evidence = _video_cache_maps(int(kol_pool_id))
-    videos: list[dict[str, Any]] = []
-    platforms = Counter()
-    for row in video_rows:
-        video = _jsonable(dict(row))
-        evidence_id = _int(video.get("evidence_id") or video.get("id"))
-        final_entry = final_by_evidence.get(evidence_id)
-        qa_entry = qa_by_evidence.get(evidence_id)
-        final_result = _as_dict((final_entry or {}).get("result"))
-        qa_result = _as_dict((qa_entry or {}).get("result"))
-        youtube_id = _youtube_video_id(video.get("content_url")) if _text(video.get("platform")).lower() == "youtube" else ""
-        video["youtube_video_id"] = youtube_id
-        video["best_thumbnail"] = _text(video.get("thumbnail_url")) or (f"https://img.youtube.com/vi/{youtube_id}/hqdefault.jpg" if youtube_id else "")
-        video["analysis"] = {
-            "has_final_v1": bool(final_entry and final_entry.get("status") == "ready"),
-            "has_qa": bool(qa_entry and qa_entry.get("status") == "ready"),
-            "final_cache_id": (final_entry or {}).get("id"),
-            "qa_cache_id": (qa_entry or {}).get("id"),
-            "scores": _score_payload(final_result) if final_result else {},
-            "qa": _qa_payload(qa_result) if qa_result else {},
-        }
-        platforms[_text(video.get("platform")).lower() or "unknown"] += 1
-        videos.append(video)
-
-    crawl_rows = conn.execute(
-        """
-        SELECT id, kol_pool_id, source_url, url_type, mode, status, dry_run,
-               result_summary_json, created_at
-        FROM vkpi_kol_url_deep_crawl_runs
-        WHERE kol_pool_id=?
-        ORDER BY created_at DESC, id DESC
-        LIMIT 30
-        """,
-        (int(kol_pool_id),),
-    ).fetchall()
-    crawl_runs = []
-    for row in crawl_rows:
-        item = dict(row)
-        item["result_summary_json"] = _loads(item.get("result_summary_json"), {})
-        crawl_runs.append(_jsonable(item))
-
+    videos, platforms = _project_dossier_videos(video_rows, final_by_evidence, qa_by_evidence)
+    crawl_runs = _load_dossier_crawl_runs(conn, int(kol_pool_id))
     deep = get_kol_llm_deep_analysis(int(kol_pool_id), limit=safe_deep_limit)
     deep_items = _as_list(deep.get("items"))
     primary_deep = _as_dict(deep.get("primary_result"))
     last_crawl_at = crawl_runs[0].get("created_at") if crawl_runs else kol.get("profile_backfilled_at")
-    last_video_at = None
-    for video in videos:
-        candidate = video.get("publish_date") or video.get("posted_at")
-        if candidate and (last_video_at is None or _text(candidate) > _text(last_video_at)):
-            last_video_at = candidate
-
+    last_video_at = _latest_dossier_video_at(videos)
     analyzed_count = sum(1 for video in videos if video.get("analysis", {}).get("has_final_v1"))
     qa_count = sum(1 for video in videos if video.get("analysis", {}).get("has_qa"))
-    scores = [
-        _num(_as_dict(video.get("analysis", {})).get("scores", {}).get("marketing_value_score", {}).get("score")
-             if isinstance(_as_dict(video.get("analysis", {})).get("scores", {}).get("marketing_value_score"), dict)
-             else _as_dict(video.get("analysis", {})).get("scores", {}).get("marketing_value_score"))
-        for video in videos
-    ]
-    marketing_scores = [score for score in scores if score is not None]
-    # C3(2026-06-16):内容质量均分/峰值,供 KOL 详情「精准分析度」头部一眼看懂(原只聚合了投放价值)。
-    cq_raw = [
-        _num(_as_dict(video.get("analysis", {})).get("scores", {}).get("content_quality_score", {}).get("score")
-             if isinstance(_as_dict(video.get("analysis", {})).get("scores", {}).get("content_quality_score"), dict)
-             else _as_dict(video.get("analysis", {})).get("scores", {}).get("content_quality_score"))
-        for video in videos
-    ]
-    content_quality_scores = [score for score in cq_raw if score is not None]
-    # 一句话总评:取主深析的建议首句(已有 _deep_recommendations,零 LLM 成本)。
-    _rec = _deep_recommendations(primary_deep)
-    one_line_verdict = ""
-    if isinstance(_rec, str):
-        one_line_verdict = _rec.strip()
-    elif isinstance(_rec, list) and _rec:
-        one_line_verdict = str(_rec[0]).strip()
-    one_line_verdict = one_line_verdict[:160]
-    # 兜底:无建议文案时用分数合成精准一句话(始终有值,符合「精准分析度」)。
-    if not one_line_verdict and (content_quality_scores or marketing_scores):
-        _parts = []
-        if content_quality_scores:
-            _parts.append(f"内容质量均分 {round(sum(content_quality_scores) / len(content_quality_scores))}")
-        if marketing_scores:
-            _parts.append(f"投放价值均分 {round(sum(marketing_scores) / len(marketing_scores))}")
-        if analyzed_count:
-            _parts.append(f"已深析 {analyzed_count} 条")
-        one_line_verdict = " · ".join(_parts)
+    marketing_scores = _dossier_score_values(videos, "marketing_value_score")
+    content_quality_scores = _dossier_score_values(videos, "content_quality_score")
+    one_line_verdict = _dossier_verdict(primary_deep, content_quality_scores, marketing_scores, analyzed_count)
     events = _event_items(videos=videos, crawl_runs=crawl_runs, deep_items=deep_items)[:safe_event_limit]
-    gaps = []
-    if not crawl_runs:
-        gaps.append("profile_crawl_history_missing")
-    if not videos:
-        gaps.append("video_evidence_missing")
-    if videos and analyzed_count == 0:
-        gaps.append("final_v1_analysis_missing")
-    if analyzed_count and not qa_count:
-        gaps.append("keyframe_qa_missing")
-    if deep.get("status") != "ready":
-        gaps.append("llm_deep_result_missing")
-
-    return _jsonable(
-        {
-            "status": "ready",
-            "method": "kol_account_dossier_read_v1",
-            "kol_pool_id": int(kol_pool_id),
-            "profile": {
-                "id": kol.get("id"),
-                "platform": kol.get("platform"),
-                "handle": kol.get("handle"),
-                "display_name": kol.get("display_name"),
-                "profile_url": kol.get("profile_url"),
-                "avatar_url": kol.get("avatar_url"),
-                "bio": kol.get("bio"),
-                "followers": kol.get("followers"),
-                "avg_views": kol.get("avg_views"),
-                "engagement_rate": kol.get("engagement_rate"),
-                "country_code": kol.get("country_code"),
-                "profile_type": kol.get("profile_type"),
-                "candidate_kind": kol.get("candidate_kind"),
-                "viltrox_fit_score": kol.get("viltrox_fit_score"),
-                "viltrox_fit_reason": kol.get("viltrox_fit_reason"),
-                "profile_backfilled_at": kol.get("profile_backfilled_at"),
-                "last_video_at": kol.get("last_video_at"),
-                "updated_at": kol.get("updated_at"),
-            },
-            "coverage": {
-                "video_evidence_count": len(videos),
-                "video_evidence_returned": len(videos),
-                "analyzed_final_v1_count": analyzed_count,
-                "qa_count": qa_count,
-                "deep_result_count": deep.get("count") or 0,
-                "crawl_run_count": len(crawl_runs),
-                "platform_counts": dict(platforms),
-                "last_crawl_at": last_crawl_at,
-                "last_video_at": last_video_at,
-                "marketing_value_score_avg": round(sum(marketing_scores) / len(marketing_scores), 3) if marketing_scores else None,
-                "marketing_value_score_max": max(marketing_scores) if marketing_scores else None,
-                "content_quality_score_avg": round(sum(content_quality_scores) / len(content_quality_scores), 3) if content_quality_scores else None,
-                "content_quality_score_max": max(content_quality_scores) if content_quality_scores else None,
-            },
-            "judgment": {
-                "primary_llm_v6_fit": primary_deep.get("llm_v6_fit"),
-                "primary_source_evidence_id": primary_deep.get("source_evidence_id"),
-                "recommendations": _deep_recommendations(primary_deep),
-                "risk": _deep_risk(primary_deep),
-                "one_line_verdict": one_line_verdict,
-            },
-            "videos": videos,
-            "llm_deep_analysis": deep,
-            "crawl_history": crawl_runs,
-            "events": events,
-            "gaps": gaps,
-            "diagnostics": {
-                "source": "vkpi_kol_pool + vkpi_kol_video_evidence + vkpi_analysis_cache + vkpi_kol_llm_deep_analysis_results + vkpi_kol_url_deep_crawl_runs",
-                "provider_calls": False,
-                "llm_calls": False,
-                "worker_touched": False,
-                "write_db": False,
-                "viltrox_fit_score_write": False,
-            },
-        }
+    gaps = _dossier_gaps(
+        crawl_runs=crawl_runs, videos=videos, analyzed_count=analyzed_count,
+        qa_count=qa_count, deep=deep,
     )
+    coverage = _dossier_coverage(
+        videos=videos, crawl_runs=crawl_runs, deep=deep, platforms=platforms,
+        analyzed_count=analyzed_count, qa_count=qa_count, last_crawl_at=last_crawl_at,
+        last_video_at=last_video_at, marketing_scores=marketing_scores,
+        content_scores=content_quality_scores,
+    )
+    return _jsonable(_dossier_payload(
+        kol_pool_id=int(kol_pool_id), kol=kol, coverage=coverage, primary_deep=primary_deep,
+        verdict=one_line_verdict, videos=videos, deep=deep, crawl_runs=crawl_runs,
+        events=events, gaps=gaps,
+    ))

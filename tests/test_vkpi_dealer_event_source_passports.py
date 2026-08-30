@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import sys
 from copy import deepcopy
@@ -17,7 +18,9 @@ from app.domains.source_passport_quality import (
     build_source_passport_quality_audit,
     canonical_source_url,
 )
+from app.domains.source_passport_core import canonical_json_sha256
 from event_radar_audit_common import load_reviewed_dealer_candidates
+from scripts.vkpi_engineering_health_collect import collect_complexity
 
 
 AS_OF = datetime(2026, 7, 14, 12, tzinfo=timezone.utc)
@@ -421,3 +424,140 @@ def test_stale_after_days_must_be_positive_integer(stale_after_days):
             as_of=AS_OF,
             stale_after_days=stale_after_days,
         )
+
+
+def test_complete_report_golden_digests_cover_ready_invalid_bundled_and_coerced_inputs():
+    invalid_catalog = _catalog()
+    duplicate_source = deepcopy(invalid_catalog["sources"][0])
+    duplicate_source["canonical_url"] += "?utm_source=duplicate"
+    invalid_catalog["sources"].extend([None, duplicate_source])
+    invalid_catalog["opportunities"].append("invalid-opportunity-row")
+    invalid_dealers = [_dealer(), deepcopy(_dealer()), None]
+    bundled_catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    bundled_dealers = load_reviewed_dealer_candidates(DEALER_SOURCE_PATH)
+
+    reports = {
+        "ready": build_source_passport_quality_audit(
+            _catalog(),
+            [_dealer()],
+            as_of=AS_OF,
+        ),
+        "mixed_invalid": build_source_passport_quality_audit(
+            invalid_catalog,
+            invalid_dealers,
+            as_of=AS_OF,
+        ),
+        "bundled": build_source_passport_quality_audit(
+            bundled_catalog,
+            bundled_dealers,
+            as_of=AS_OF,
+        ),
+        "coerced_empty": build_source_passport_quality_audit(
+            [],
+            {},
+            as_of=AS_OF,
+        ),
+    }
+
+    assert {name: canonical_json_sha256(report) for name, report in reports.items()} == {
+        "ready": "0f63bb6b37f08c3532d5bbd9a001a4f9f78ae7d7703aaffc599671b41059898f",
+        "mixed_invalid": "05777d45112a9a52949b6de6f04d4154140886e2844390fd45fb5dd8288b37ba",
+        "bundled": "99395f504b689e13e68f10964220fb7ffb3f9dec2364abb0a62cf59de6833f36",
+        "coerced_empty": "23fab0183f0ef8c5de696de5e72b592f57f501bf867854360714151d05d1a232",
+    }
+    for report in reports.values():
+        assert report["issues"] == sorted(
+            report["issues"],
+            key=lambda item: (item["severity"], item["code"], item["path"]),
+        )
+
+
+def test_quality_audit_does_not_mutate_inputs_and_keeps_read_only_claims():
+    catalog = _catalog()
+    dealers = [_dealer()]
+    original_catalog = deepcopy(catalog)
+    original_dealers = deepcopy(dealers)
+
+    report = build_source_passport_quality_audit(catalog, dealers, as_of=AS_OF)
+
+    assert catalog == original_catalog
+    assert dealers == original_dealers
+    assert report["contract"] == {
+        "id": "vkpi.dealer_event.source_passport_quality",
+        "version": 1,
+        "generated_at": "2026-07-14T12:00:00+00:00",
+        "read_only": True,
+        "network_accessed": False,
+        "database_accessed": False,
+        "business_rows_written": 0,
+    }
+
+
+def test_verified_secondary_source_is_counted_without_runtime_name_error():
+    catalog = _catalog()
+    source = catalog["sources"][0]
+    source["publisher_tier"] = "platform_hosted_profile"
+    source["publisher_identity_evidence"][
+        "publisher_tier"
+    ] = "platform_hosted_profile"
+
+    report = build_source_passport_quality_audit(
+        catalog,
+        [_dealer()],
+        as_of=AS_OF,
+    )
+
+    assert report["event_sources"]["counts"]["publisher_identity_verified"] == 1
+    assert report["event_sources"]["counts"]["verified_primary_publishers"] == 0
+    assert report["event_sources"]["counts"]["verified_secondary_publishers"] == 1
+
+
+def test_source_passport_quality_family_has_no_external_io_imports():
+    forbidden_roots = {
+        "anthropic",
+        "google",
+        "httpx",
+        "openai",
+        "psycopg",
+        "requests",
+        "socket",
+        "sqlalchemy",
+        "subprocess",
+    }
+    violations: list[tuple[str, str]] = []
+    for path in sorted((REPO_ROOT / "backend/app/domains").glob("source_passport_quality*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                roots = [alias.name.split(".", 1)[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                roots = [(node.module or "").split(".", 1)[0]]
+            else:
+                continue
+            violations.extend(
+                (path.name, root) for root in roots if root in forbidden_roots
+            )
+    assert violations == []
+
+
+def test_source_passport_quality_family_stays_below_complexity_and_line_guards():
+    paths = sorted((REPO_ROOT / "backend/app/domains").glob("source_passport_quality*.py"))
+    trees = {
+        path.relative_to(REPO_ROOT).as_posix(): ast.parse(
+            path.read_text(encoding="utf-8"),
+            filename=str(path),
+        )
+        for path in paths
+    }
+    complexity = collect_complexity(trees)
+    main = next(
+        row
+        for row in complexity
+        if row.path.endswith("source_passport_quality.py")
+        and row.qualified_name == "build_source_passport_quality_audit"
+    )
+
+    assert main.cc <= 30
+    assert max(row.cc for row in complexity) <= 30
+    line_counts = {path.name: len(path.read_bytes().splitlines()) for path in paths}
+    assert max(line_counts.values()) <= 800

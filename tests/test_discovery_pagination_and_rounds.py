@@ -215,7 +215,9 @@ def test_cost_forecast_reports_how_many_fetches_this_round_costs() -> None:
         per_platform_limits={"youtube": 50, "instagram": 20, "tiktok": 20},
     )
     assert forecast["apify_runs"] == 3          # IG hashtag + IG profile + TT
-    assert forecast["youtube_api_calls"] == 4   # ≤3 个 search.list 变体 + 1 次 channels.list
+    assert forecast["youtube_search_calls"] == 3
+    assert forecast["youtube_combined_quota_units"] == 2
+    assert forecast["youtube_api_calls"] == 5   # 3 search + channels + videos
     # prod 只读复测(2026-08-25):IG $0.571+$0.049、TT $0.032、YT $0 → 单轮 ≈ $0.65
     assert forecast["estimated_usd"] == pytest.approx(0.652, abs=0.01)
     assert forecast["by_platform"]["youtube"]["requested_limit"] == 50

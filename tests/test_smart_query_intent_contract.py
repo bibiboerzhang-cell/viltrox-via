@@ -94,6 +94,7 @@ def _llm_plan(**overrides: Any) -> dict[str, Any]:
         raw,
         {"provider": "google", "model": "gemini-2.5-flash", "status": "success"},
         _LENS_PRODUCT,
+        {"objective": "existing_evidence"},
     )
 
 
@@ -222,7 +223,8 @@ def test_anchor_is_never_fabricated_without_a_resolved_product() -> None:
 
 def test_provider_free_product_path_also_carries_the_anchor(lens_catalog: None) -> None:
     plan = smart_query_planner.plan_text_query_provider_free(
-        "55mm f1.8 evo 索尼口 找人像摄影师", body={}
+        "55mm f1.8 evo 索尼口 找人像摄影师",
+        body={"objective": "existing_evidence"},
     )
     assert plan["status"] != "needs_clarification"
     assert plan["resolved_product"]["sku"] == "AF-55MM-F18-EVO-FE"

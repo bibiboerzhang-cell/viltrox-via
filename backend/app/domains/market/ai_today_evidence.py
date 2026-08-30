@@ -3,13 +3,16 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import re
 from datetime import datetime, timezone
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+
+from app.domains.market.ai_today_video_ranking import (
+    rank_video_candidates as _rank_video_candidates_runtime,
+)
 
 _MAX_RECOMMENDED_VIDEOS = 4
 
@@ -305,160 +308,17 @@ def _rank_video_candidates(
     max_recommended_videos: int = _MAX_RECOMMENDED_VIDEOS,
     topic_terms: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = _TOPIC_TERMS,
 ) -> list[dict[str, Any]]:
-    brief_text = " ".join(
-        [str(content.get("headline") or "")]
-        + [str(value) for value in (content.get("shooting_plans") or [])]
-        + [str(value) for value in (content.get("hot_topics") or [])]
-    ).lower()
-    desired: set[str] = set()
-    for triggers, terms in topic_terms:
-        if any(trigger in brief_text for trigger in triggers):
-            desired.update(terms)
-    if not desired:
-        desired.update(("lens", "camera", "photography", "video", "镜头", "摄影"))
-
-    external_rows = [row for row in rows if _video_content_origin(row) == "external"]
-    media_rows = [
-        row
-        for row in external_rows
-        if row.get("cached_thumbnail_url") or row.get("thumbnail_url") or row.get("cached_video_url")
-    ]
-    if len(media_rows) >= max_recommended_videos:
-        rows = media_rows
-    else:
-        rows = external_rows
-
-    scored: list[tuple[float, dict[str, Any], dict[str, str]]] = []
-    for row in rows:
-        analysis = {
-            key: _analysis_value(row.get("analysis_result"), key)
-            for key in ("content_summary", "content_topic", "why_compelling", "marketing_notes", "marketing_potential", "viltrox_detected")
-        }
-        searchable = " ".join(
-            str(value or "")
-            for value in (
-                row.get("title"),
-                row.get("channel_name"),
-                row.get("handle"),
-                *analysis.values(),
-            )
-        ).lower()
-        matches = sorted(term for term in desired if term and term in searchable)
-        views = max(0, int(row.get("view_count") or 0))
-        fit = float(row.get("llm_v6_fit") or row.get("viltrox_fit_score") or 0)
-        platform_name = str(row.get("platform") or "").lower()
-        media_bonus = (
-            40
-            if row.get("cached_video_url")
-            else 32
-            if row.get("cached_thumbnail_url")
-            else 22
-            if row.get("thumbnail_url") and "youtube" in platform_name
-            else 6
-            if row.get("thumbnail_url")
-            else 0
-        )
-        # 2026-07-19:时间衰减项——确定性排序此前让旧高分片天天霸榜;
-        # 每 9 天扣 1 分封顶 20,同分时新片自然胜出(采样池另有 90 天硬闸)。
-        freshness_penalty = 0.0
-        published_ref = row.get("publish_date") or row.get("posted_at")
-        if published_ref is not None:
-            try:
-                if isinstance(published_ref, str):
-                    published_dt = datetime.fromisoformat(published_ref.replace("Z", "+00:00"))
-                else:
-                    published_dt = published_ref
-                if published_dt.tzinfo is None:
-                    published_dt = published_dt.replace(tzinfo=timezone.utc)
-                age_days = max(0.0, (datetime.now(timezone.utc) - published_dt).total_seconds() / 86400)
-                freshness_penalty = min(20.0, age_days / 9.0)
-            except (TypeError, ValueError):
-                freshness_penalty = 0.0
-        score = (
-            len(matches) * 14
-            + (12 if row.get("deep_result_id") else 0)
-            + (8 if row.get("analysis_cache_id") else 0)
-            + media_bonus
-            + (8 if analysis["viltrox_detected"].lower() not in ("", "false", "none", "null", "0") else 0)
-            + min(16, math.log10(views + 1) * 3)
-            + min(10, max(0, fit) / 10)
-            - freshness_penalty
-        )
-        scored.append((score, row, analysis | {"matches": " / ".join(matches[:3])}))
-
-    results: list[dict[str, Any]] = []
-    used_creators: set[str] = set()
-    for score, row, analysis in sorted(scored, key=lambda item: (item[0], int(item[1].get("view_count") or 0)), reverse=True):
-        creator_key = str(row.get("kol_pool_id") or row.get("handle") or row.get("channel_name") or "")
-        if creator_key and creator_key in used_creators:
-            continue
-        url = str(row.get("content_url") or "").strip()
-        if not url.startswith(("http://", "https://")):
-            continue
-        if creator_key:
-            used_creators.add(creator_key)
-        fit = row.get("llm_v6_fit") if row.get("llm_v6_fit") is not None else row.get("viltrox_fit_score")
-        platform_video_id = _platform_video_id(row.get("platform"), url)
-        thumbnail_url = str(row.get("cached_thumbnail_url") or row.get("thumbnail_url") or "")
-        if not thumbnail_url and platform_video_id and "youtube" in str(row.get("platform") or "").lower():
-            thumbnail_url = f"https://img.youtube.com/vi/{platform_video_id}/hqdefault.jpg"
-        reason = analysis.get("marketing_notes") or analysis.get("why_compelling") or analysis.get("content_summary")
-        if not reason:
-            facts = ["已完成视频深析"]
-            if fit is not None:
-                facts.append(f"Fit {float(fit):.1f}")
-            if row.get("view_count") is not None:
-                facts.append(f"播放 {int(row.get('view_count') or 0):,}")
-            reason = " · ".join(facts)
-        playback_url = str(row.get("cached_video_url") or "")
-        storage_backend = str(row.get("video_storage_backend") or "").strip().lower()
-        playback_source = ""
-        if playback_url:
-            if storage_backend == "r2" or str(row.get("video_r2_key") or "").strip():
-                playback_source = "r2"
-            elif playback_url.startswith("/api/vkpi-media/"):
-                playback_source = "local_cache"
-            else:
-                playback_source = "media_cache"
-        results.append(
-            {
-                "evidence_id": row.get("evidence_id"),
-                "kol_pool_id": row.get("kol_pool_id"),
-                "analysis_cache_id": row.get("analysis_cache_id"),
-                "deep_result_id": row.get("deep_result_id"),
-                "platform": str(row.get("platform") or ""),
-                "platform_video_id": platform_video_id,
-                "title": str(row.get("title") or "未命名视频")[:240],
-                "creator_handle": str(row.get("handle") or row.get("channel_name") or ""),
-                "creator_name": str(row.get("display_name") or row.get("channel_name") or row.get("handle") or ""),
-                "content_url": url,
-                "source_url": url,
-                "source_platform": str(row.get("platform") or "").strip().lower(),
-                "content_origin": "external",
-                "thumbnail_url": thumbnail_url,
-                "playback_url": playback_url,
-                "playback_source": playback_source,
-                "view_count": row.get("view_count"),
-                "like_count": row.get("like_count"),
-                "comment_count": row.get("comment_count"),
-                "duration_seconds": row.get("duration_seconds"),
-                "published_at": row.get("publish_date") or row.get("posted_at"),
-                "fit_score": fit,
-                "match_terms": [part for part in str(analysis.get("matches") or "").split(" / ") if part],
-                "why_recommended": str(reason)[:500],
-                "content_summary": analysis.get("content_summary") or "",
-                "content_topic": analysis.get("content_topic") or "",
-                "rank_score": round(score, 2),
-                "source_refs": [
-                    {"table": "vkpi_kol_video_evidence", "id": row.get("evidence_id")},
-                    *([{"table": "vkpi_analysis_cache", "id": row.get("analysis_cache_id")}] if row.get("analysis_cache_id") else []),
-                    *([{"table": "vkpi_kol_llm_deep_analysis_results", "id": row.get("deep_result_id")}] if row.get("deep_result_id") else []),
-                ],
-            }
-        )
-        if len(results) >= max_recommended_videos:
-            break
-    return results
+    return _rank_video_candidates_runtime(
+        rows,
+        content,
+        max_recommended_videos=max_recommended_videos,
+        topic_terms=topic_terms,
+        video_content_origin=_video_content_origin,
+        analysis_value=_analysis_value,
+        platform_video_id_for=_platform_video_id,
+        datetime_type=datetime,
+        timezone_value=timezone,
+    )
 
 
 def _market_sources(

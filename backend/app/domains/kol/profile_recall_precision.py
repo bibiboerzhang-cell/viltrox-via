@@ -16,6 +16,7 @@ from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.kol.pool_common import _table_columns
 from app.domains.kol.profile_recall_country_gate import country_hard_filter
 from app.domains.kol.profile_recall_language_gate import language_hard_filter
+from app.domains.kol import profile_recall_lexical
 
 
 logger = logging.getLogger(__name__)
@@ -304,244 +305,42 @@ def lexical_recall_candidates(
 ) -> dict[str, Any]:
     """Run a bounded, set-oriented lexical recall over factual and soft sources."""
 
-    terms = build_lexical_terms(effective_query, operator_query)
-    if not terms:
-        return {"items": [], "terms": [], "method": LEXICAL_METHOD, "query_count": 0}
-    active_conn = conn or get_conn()
-    row_limit = max(100, min(MAX_QUERY_ROWS, int(candidate_limit or 100) * 12))
-    documents: dict[int, dict[str, list[str]]] = {}
-    query_count = 0
-    filters = hard_filters if isinstance(hard_filters, dict) else {}
-    hard_clauses: list[str] = []
-    hard_params: list[Any] = []
-    platforms = [str(value).strip().lower() for value in filters.get("platforms") or [] if str(value).strip()]
-    if platforms:
-        hard_clauses.append("LOWER(COALESCE(p.platform, '')) IN (" + ",".join("?" for _ in platforms) + ")")
-        hard_params.extend(platforms)
-    if filters.get("followers_min") not in (None, ""):
-        hard_clauses.append("p.followers IS NOT NULL AND p.followers >= ?")
-        hard_params.append(int(filters["followers_min"]))
-    if filters.get("followers_max") not in (None, ""):
-        hard_clauses.append("p.followers IS NOT NULL AND p.followers <= ?")
-        hard_params.append(int(filters["followers_max"]))
-    # 国家下推走归一化闭包(见 profile_recall_country_gate.country_hard_filter):
-    # 闸判的是国家码(USA / 美国 / America / U.S. → US),取数腿此前只认原值字面量,
-    # 于是操作员点「美国」时,库里 country 写作「美国」的人在闸之前就被整批剔掉了。
-    country_clause, country_params = country_hard_filter(filters)
-    if country_clause:
-        hard_clauses.append(country_clause)
-        hard_params.extend(country_params)
-    # 语言下推同时认「自报」与「推断」两列 —— 这一腿是线上唯一的取数腿,
-    # 只按 p.language 筛等于在闸之前就把 language 为空的人整批剔掉(推断值永远到不了闸)。
-    language_clause, language_params = language_hard_filter(filters, active_conn, _table_columns)
-    if language_clause:
-        hard_clauses.append(language_clause)
-        hard_params.extend(language_params)
-    hard_sql = "".join(f" AND {clause}" for clause in hard_clauses)
+    # Keep these calls and the SQL prefix in the public compatibility facade:
+    # yield-estimation parity tests inspect this exact function source.
+    def apply_country_filter(filters: dict[str, Any]) -> tuple[str, list[Any]]:
+        return country_hard_filter(filters)
 
-    pool_expression = _text_expression(
-        ("p.platform", "p.handle", "p.display_name", "p.bio", "p.primary_topic", "p.content_style")
-    )
-    _collect_rows(
-        active_conn,
-        source="pool",
-        sql_prefix=(
-            f"SELECT p.id AS kol_pool_id, {pool_expression} AS search_text "
-            f"FROM vkpi_kol_pool p WHERE p.duplicate_of_id IS NULL{hard_sql}"
+    def apply_language_filter(
+        filters: dict[str, Any],
+        active_conn: Any,
+        columns_fn: Any,
+    ) -> tuple[str, list[Any]]:
+        return language_hard_filter(filters, active_conn, columns_fn)
+
+    return profile_recall_lexical.lexical_recall_candidates(
+        effective_query,
+        operator_query=operator_query,
+        candidate_limit=candidate_limit,
+        conn=conn,
+        hard_filters=hard_filters,
+        runtime=profile_recall_lexical.LexicalRuntime(
+            build_terms=build_lexical_terms,
+            get_conn=get_conn,
+            country_hard_filter=apply_country_filter,
+            language_hard_filter=apply_language_filter,
+            table_columns=_table_columns,
+            is_postgres_runtime=is_postgres_runtime,
+            text_expression=_text_expression,
+            collect_rows=_collect_rows,
+            query_anchor_groups=_query_anchor_groups,
+            term_in_blob=_term_in_blob,
+            platform_predicate_prefix="LOWER(COALESCE(p.platform, '')) IN (",
+            lexical_method=LEXICAL_METHOD,
+            max_query_rows=MAX_QUERY_ROWS,
+            source_weights=_SOURCE_WEIGHTS,
+            factual_sources=_FACTUAL_SOURCES,
         ),
-        expression=pool_expression,
-        sql_suffix="ORDER BY p.id DESC",
-        prefix_params=tuple(hard_params),
-        terms=terms,
-        limit=row_limit,
-        documents=documents,
     )
-    query_count += 1
-
-    profile_expression = _text_expression(("e.profile_text", "e.type_reason"))
-    _collect_rows(
-        active_conn,
-        source="profile",
-        sql_prefix=(
-            f"SELECT e.kol_pool_id, {profile_expression} AS search_text "
-            "FROM vkpi_kol_profile_index_entries e "
-            "JOIN vkpi_kol_pool p ON p.id=e.kol_pool_id "
-            f"WHERE p.duplicate_of_id IS NULL{hard_sql} "
-            "AND e.collection_name=? AND e.method=? AND e.status='ready'"
-        ),
-        expression=profile_expression,
-        sql_suffix="ORDER BY e.kol_pool_id DESC",
-        prefix_params=(*hard_params, "vkpi_kol_profile_index_v1", "vector_recall"),
-        terms=terms,
-        limit=row_limit,
-        documents=documents,
-    )
-    query_count += 1
-
-    evidence_expression = _text_expression(("e.title", "e.video_title", "e.content_url"))
-    active_predicate = "e.is_active IS NOT FALSE" if is_postgres_runtime() else "COALESCE(e.is_active, 1) != 0"
-    _collect_rows(
-        active_conn,
-        source="evidence",
-        sql_prefix=(
-            f"SELECT e.kol_pool_id, {evidence_expression} AS search_text "
-            "FROM vkpi_kol_video_evidence e "
-            "JOIN vkpi_kol_pool p ON p.id=e.kol_pool_id "
-            f"WHERE p.duplicate_of_id IS NULL{hard_sql} AND {active_predicate}"
-        ),
-        expression=evidence_expression,
-        sql_suffix="ORDER BY e.kol_pool_id DESC, e.id DESC",
-        prefix_params=tuple(hard_params),
-        terms=terms,
-        limit=row_limit,
-        documents=documents,
-    )
-    query_count += 1
-
-    if is_postgres_runtime():
-        analysis_expression = _text_expression(
-            (
-                "c.result #>> '{layer1_visual_content,content_summary}'",
-                "c.result #>> '{layer1_visual_content,product_presence}'",
-                "c.result #>> '{layer1_visual_content,brand_exposure}'",
-                "c.result #>> '{raw_gemini_video,viltrox_products_all}'",
-            )
-        )
-    else:
-        analysis_expression = "CAST(c.result AS TEXT)"
-    # final_v1 is a factual video-analysis source.  Keep this query bounded to
-    # anchor/scene terms so generic planner terms cannot scan the whole cache.
-    analysis_terms = [term for term in terms if term.category in {"anchor", "scene"}]
-    if analysis_terms:
-        _collect_rows(
-            active_conn,
-            source="analysis",
-            sql_prefix=(
-                f"SELECT e.kol_pool_id, {analysis_expression} AS search_text "
-                "FROM vkpi_analysis_cache c "
-                "JOIN vkpi_kol_video_evidence e ON c.target_type='video' AND c.target_id="
-                + ("e.id::text " if is_postgres_runtime() else "CAST(e.id AS TEXT) ")
-                + "JOIN vkpi_kol_pool p ON p.id=e.kol_pool_id "
-                f"WHERE p.duplicate_of_id IS NULL{hard_sql} "
-                "AND c.derive_method='video_analysis_final_v1' "
-                "AND c.status='ready'"
-            ),
-            expression=analysis_expression,
-            sql_suffix="ORDER BY e.kol_pool_id DESC, e.id DESC",
-            prefix_params=tuple(hard_params),
-            terms=analysis_terms,
-            limit=row_limit,
-            documents=documents,
-        )
-        query_count += 1
-
-    if not documents:
-        return {
-            "items": [],
-            "terms": [term.__dict__ for term in terms],
-            "method": LEXICAL_METHOD,
-            "query_count": query_count,
-        }
-
-    doc_tokens: dict[int, dict[str, set[str]]] = {}
-    document_frequency = {term.token: 0 for term in terms}
-    for kol_pool_id, source_texts in documents.items():
-        doc_tokens[kol_pool_id] = {}
-        all_matched: set[str] = set()
-        for source, texts in source_texts.items():
-            blob = " ".join(texts)
-            matched = {term.token for term in terms if _term_in_blob(term.token, blob)}
-            doc_tokens[kol_pool_id][source] = matched
-            all_matched.update(matched)
-        for token in all_matched:
-            document_frequency[token] += 1
-
-    population = len(documents)
-    idf = {
-        token: math.log((population + 1.0) / (frequency + 0.5)) + 1.0
-        for token, frequency in document_frequency.items()
-    }
-    denominator = sum(idf[term.token] * term.weight for term in terms if term.category != "platform") or 1.0
-    term_by_token = {term.token: term for term in terms}
-    anchor_groups = _query_anchor_groups(effective_query, operator_query)
-    anchor_tokens = set().union(*anchor_groups) if anchor_groups else set()
-    scene_tokens = {term.token for term in terms if term.category == "scene"}
-    items: list[dict[str, Any]] = []
-    for kol_pool_id, source_matches in doc_tokens.items():
-        source_scores: dict[str, float] = {}
-        factual_matched: set[str] = set()
-        all_matched: set[str] = set()
-        available_source_weight = 0.0
-        weighted_score = 0.0
-        for source, matched in source_matches.items():
-            if not matched:
-                continue
-            source_coverage = sum(idf[token] * term_by_token[token].weight for token in matched) / denominator
-            source_score = min(1.0, source_coverage)
-            source_scores[source] = round(source_score, 6)
-            source_weight = _SOURCE_WEIGHTS[source]
-            weighted_score += source_weight * source_score
-            available_source_weight += source_weight
-            all_matched.update(matched)
-            if source in _FACTUAL_SOURCES:
-                factual_matched.update(matched)
-        # Keep absolute source caps.  In particular, a profile-only match stays
-        # capped near 0.05 instead of renormalising its soft source to 1.0.
-        source_weight_total = sum(_SOURCE_WEIGHTS.values()) or 1.0
-        lexical_score = weighted_score / source_weight_total if available_source_weight else None
-        if lexical_score is None:
-            continue
-        factual_anchor = sorted(anchor_tokens & factual_matched)
-        factual_scene = sorted(scene_tokens & factual_matched)
-        if anchor_groups:
-            factual_anchor_gate = all(group & factual_matched for group in anchor_groups)
-            strict = bool(factual_anchor_gate and (not scene_tokens or factual_scene))
-            relaxed_reason = "missing_factual_anchor_or_scene" if not strict else ""
-        else:
-            factual_non_platform = {
-                token for token in factual_matched if term_by_token[token].category != "platform"
-            }
-            strict = bool(factual_scene and len(factual_non_platform) >= 2)
-            relaxed_reason = "derived_or_single_factual_term_only" if not strict else ""
-        items.append(
-            {
-                "kol_pool_id": kol_pool_id,
-                "lexical_score": round(float(lexical_score), 6),
-                "retrieval_method": LEXICAL_METHOD,
-                "retrieval_tier": "strict" if strict else "relaxed",
-                "relaxed_reason": relaxed_reason,
-                "matched_terms": sorted(all_matched),
-                "factual_matched_terms": sorted(factual_matched),
-                "factual_anchor_terms": factual_anchor,
-                "required_factual_anchor_groups": [sorted(group) for group in anchor_groups],
-                "factual_scene_terms": factual_scene,
-                "matched_term_sources": {
-                    token: list(term_by_token[token].sources) for token in sorted(all_matched)
-                },
-                "source_scores": source_scores,
-                "derived_profile_strict_eligible": False,
-            }
-        )
-    items.sort(
-        key=lambda item: (
-            item["retrieval_tier"] == "strict",
-            float(item["lexical_score"]),
-            len(item["factual_matched_terms"]),
-            -int(item["kol_pool_id"]),
-        ),
-        reverse=True,
-    )
-    return {
-        "items": items[: max(1, min(500, int(candidate_limit or 100)))],
-        "terms": [term.__dict__ for term in terms],
-        "method": LEXICAL_METHOD,
-        "query_count": query_count,
-        "idf_scope": "bounded_candidate_documents",
-        "derived_profile_weight": _SOURCE_WEIGHTS["profile"],
-        "strict_anchor_sources": sorted(_FACTUAL_SOURCES),
-    }
-
-
 def _number(value: Any, *, minimum: float | None = None) -> float | None:
     if value in (None, ""):
         return None

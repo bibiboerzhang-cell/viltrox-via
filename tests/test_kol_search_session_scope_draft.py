@@ -11,6 +11,9 @@ from app.api.routers import vkpi_kol_pool_search
 from app.domains.kol import search_sessions
 from app.domains.projects import cost_estimate
 from app.domains.projects import workflow_projects
+from app.services.projects.creator_lifecycle_adapters import (
+    DEFAULT_SEARCH_SESSION_DRAFT_PORT,
+)
 
 
 class _Result:
@@ -184,7 +187,12 @@ def test_project_draft_rejects_cross_user_and_ignores_body_candidate_ids(monkeyp
 
     monkeypatch.setattr(search_sessions, "get_session", _deny)
     with pytest.raises(LookupError):
-        workflow_projects.create_project_draft_from_session(44, {}, staff={"id": 7})
+        workflow_projects.create_project_draft_from_session(
+            44,
+            {},
+            staff={"id": 7},
+            search_session_port=DEFAULT_SEARCH_SESSION_DRAFT_PORT,
+        )
 
     monkeypatch.setattr(search_sessions, "get_session", lambda *_a, **_k: _owned_session())
     class _Conn:
@@ -213,6 +221,7 @@ def test_project_draft_rejects_cross_user_and_ignores_body_candidate_ids(monkeyp
         44,
         {"kol_pool_ids": [101, 999]},
         staff={"id": 7},
+        search_session_port=DEFAULT_SEARCH_SESSION_DRAFT_PORT,
     )
 
     assert attached["kol_pool_ids"] == [101, 202]
@@ -267,7 +276,12 @@ def test_repeated_project_draft_submission_reuses_existing_project(monkeypatch: 
         lambda *args, **kwargs: updates.append({"args": args, **kwargs}) or {},
     )
 
-    result = workflow_projects.create_project_draft_from_session(44, {}, staff={"id": 7})
+    result = workflow_projects.create_project_draft_from_session(
+        44,
+        {},
+        staff={"id": 7},
+        search_session_port=DEFAULT_SEARCH_SESSION_DRAFT_PORT,
+    )
 
     assert result["project_id"] == 9001
     assert result["reused"] is True
@@ -311,7 +325,12 @@ def test_retry_recovers_project_when_previous_session_summary_write_failed(monke
     )
     monkeypatch.setattr(search_sessions, "update_session_result_summary", lambda *_a, **_k: {})
 
-    result = workflow_projects.create_project_draft_from_session(44, {}, staff={"id": 7})
+    result = workflow_projects.create_project_draft_from_session(
+        44,
+        {},
+        staff={"id": 7},
+        search_session_port=DEFAULT_SEARCH_SESSION_DRAFT_PORT,
+    )
 
     assert result["project_id"] == 9003
     assert result["reused"] is True
@@ -345,6 +364,7 @@ def test_new_smart_draft_forces_truthful_source_metadata(monkeypatch: pytest.Mon
         44,
         {"source_type": "manual", "kol_pool_ids": [202]},
         staff={"id": 7},
+        search_session_port=DEFAULT_SEARCH_SESSION_DRAFT_PORT,
     )
 
     assert result["reused"] is False
@@ -400,7 +420,12 @@ def test_new_smart_draft_counts_concurrent_existing_and_reports_missing(monkeypa
         lambda *args, **kwargs: updates.append({"args": args, **kwargs}) or {},
     )
 
-    result = workflow_projects.create_project_draft_from_session(44, {}, staff={"id": 7})
+    result = workflow_projects.create_project_draft_from_session(
+        44,
+        {},
+        staff={"id": 7},
+        search_session_port=DEFAULT_SEARCH_SESSION_DRAFT_PORT,
+    )
 
     assert result["attached_kol_count"] == 1
     assert result["requested_kol_count"] == 2

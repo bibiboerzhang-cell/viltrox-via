@@ -147,191 +147,210 @@ def _bulk_assignment_coverage(
     return {kid: found.get(kid, _coverage_shape(0, 0, available=False)) for kid in kids}
 
 
-def _bulk_high_value_signals(
+def _apply_cost_signals(
     conn: Any,
-    kids: list[int],
     *,
-    project_scope_sql: str = "",
-    project_scope_params: list[Any] | None = None,
-    include_global_learning_signals: bool = True,
-) -> dict[int, dict[str, Any]]:
-    """Return ROI and learning signals for a candidate set with constant queries.
+    eligible_kids: list[int],
+    signals: dict[int, dict[str, Any]],
+    project_scope_clause: str,
+    scoped_params: list[Any],
+) -> None:
+    if not eligible_kids or not table_exists("vkpi_cost_ledger"):
+        return
+    try:
+        eligible_placeholders = ",".join("?" for _ in eligible_kids)
+        for kid in eligible_kids:
+            signals[kid]["cost_cents"] = 0
+        rows = conn.execute(
+            f"""
+            SELECT pka.kol_pool_id, COALESCE(SUM(c.amount_cents), 0) AS cost_cents
+            FROM vkpi_project_kol_assignments pka
+            JOIN vkpi_projects p ON p.id = pka.project_id
+            JOIN (
+              SELECT project_id FROM vkpi_project_kol_assignments
+              GROUP BY project_id HAVING COUNT(*) = 1
+            ) one_assignment ON one_assignment.project_id = pka.project_id
+            JOIN vkpi_cost_ledger c ON c.project_id = pka.project_id
+            WHERE pka.kol_pool_id IN ({eligible_placeholders})
+              {project_scope_clause}
+              AND c.status='actual' AND c.approved_at IS NOT NULL
+            GROUP BY pka.kol_pool_id
+            """,
+            (*eligible_kids, *scoped_params),
+        ).fetchall()
+        for row in rows:
+            data = dict(row)
+            signals[int(data["kol_pool_id"])]["cost_cents"] = int(
+                data.get("cost_cents") or 0
+            )
+    except Exception:
+        logger.debug("roi.high_value_cost_batch_failed", exc_info=True)
+        for kid in eligible_kids:
+            signals[kid]["cost_cents"] = None
 
-    This is deliberately private to the leaderboard.  The single-KOL public
-    functions keep their established contracts, while a 50-row leaderboard no
-    longer fans out into hundreds of table checks and reads.
-    """
-    if not kids:
-        return {}
-    placeholders = ",".join("?" for _ in kids)
-    signals: dict[int, dict[str, Any]] = {
-        kid: {"cost_cents": None, "revenue_cents": None, "funnel_weight": None, "outcome_weight": None}
-        for kid in kids
-    }
-    scoped_params = list(project_scope_params or [])
-    project_scope_clause = f"AND {project_scope_sql}" if project_scope_sql else ""
-    coverage = _bulk_assignment_coverage(
-        conn,
-        kids,
-        project_scope_sql=project_scope_sql,
-        project_scope_params=scoped_params,
-    )
-    eligible_kids = [kid for kid in kids if coverage.get(kid, {}).get("complete")]
-    for kid in kids:
-        signals[kid]["attribution_coverage"] = coverage.get(kid, _coverage_shape(0, 0, available=False))
 
-    if eligible_kids and table_exists("vkpi_cost_ledger"):
-        try:
-            eligible_placeholders = ",".join("?" for _ in eligible_kids)
-            for kid in eligible_kids:
-                signals[kid]["cost_cents"] = 0
-            rows = conn.execute(
-                f"""
-                SELECT pka.kol_pool_id, COALESCE(SUM(c.amount_cents), 0) AS cost_cents
-                FROM vkpi_project_kol_assignments pka
-                JOIN vkpi_projects p ON p.id = pka.project_id
-                JOIN (
-                  SELECT project_id FROM vkpi_project_kol_assignments
-                  GROUP BY project_id HAVING COUNT(*) = 1
-                ) one_assignment ON one_assignment.project_id = pka.project_id
-                JOIN vkpi_cost_ledger c ON c.project_id = pka.project_id
-                WHERE pka.kol_pool_id IN ({eligible_placeholders})
-                  {project_scope_clause}
-                  AND c.status='actual' AND c.approved_at IS NOT NULL
-                GROUP BY pka.kol_pool_id
-                """,
-                (*eligible_kids, *scoped_params),
-            ).fetchall()
-            for row in rows:
-                data = dict(row)
-                signals[int(data["kol_pool_id"])]["cost_cents"] = int(data.get("cost_cents") or 0)
-        except Exception:
-            logger.debug("roi.high_value_cost_batch_failed", exc_info=True)
-            for kid in eligible_kids:
-                signals[kid]["cost_cents"] = None
+def _apply_revenue_signals(
+    conn: Any,
+    *,
+    eligible_kids: list[int],
+    signals: dict[int, dict[str, Any]],
+    project_scope_clause: str,
+    scoped_params: list[Any],
+) -> None:
+    if not eligible_kids or not table_exists("vkpi_sales_attributions"):
+        return
+    try:
+        eligible_placeholders = ",".join("?" for _ in eligible_kids)
+        for kid in eligible_kids:
+            signals[kid].update(
+                {"revenue_cents": 0, "commission_cents": 0, "orders": 0}
+            )
+        rows = conn.execute(
+            f"""
+            SELECT pka.kol_pool_id,
+                   COALESCE(NULLIF(s.currency, ''), 'USD') AS currency,
+                   COALESCE(SUM(s.revenue_cents), 0) AS revenue_cents,
+                   COALESCE(SUM(s.commission_cents), 0) AS commission_cents,
+                   COUNT(*) AS orders
+            FROM vkpi_project_kol_assignments pka
+            JOIN vkpi_projects p ON p.id = pka.project_id
+            JOIN (
+              SELECT project_id FROM vkpi_project_kol_assignments
+              GROUP BY project_id HAVING COUNT(*) = 1
+            ) one_assignment ON one_assignment.project_id = pka.project_id
+            JOIN vkpi_sales_attributions s ON s.project_id = pka.project_id
+            WHERE pka.kol_pool_id IN ({eligible_placeholders})
+              {project_scope_clause}
+              AND {business_truth.verified_shopify_attribution_sql('s')}
+            GROUP BY pka.kol_pool_id, COALESCE(NULLIF(s.currency, ''), 'USD')
+            """,
+            (*eligible_kids, *scoped_params),
+        ).fetchall()
+        currencies: dict[int, list[dict[str, Any]]] = {
+            kid: [] for kid in eligible_kids
+        }
+        for row in rows:
+            data = dict(row)
+            currencies[int(data["kol_pool_id"])].append(data)
+        for kid, buckets in currencies.items():
+            if not buckets:
+                continue
+            primary = max(
+                buckets,
+                key=lambda value: (
+                    int(value.get("revenue_cents") or 0),
+                    int(value.get("orders") or 0),
+                ),
+            )
+            signals[kid].update(
+                {
+                    "revenue_cents": int(primary.get("revenue_cents") or 0),
+                    "commission_cents": int(primary.get("commission_cents") or 0),
+                    "orders": int(primary.get("orders") or 0),
+                    "currency": str(primary.get("currency") or "USD"),
+                    "mixed_currency": len(buckets) > 1,
+                }
+            )
+    except Exception:
+        logger.debug("roi.high_value_revenue_batch_failed", exc_info=True)
+        for kid in eligible_kids:
+            signals[kid].update(
+                {"revenue_cents": None, "commission_cents": None, "orders": None}
+            )
 
-    if eligible_kids and table_exists("vkpi_sales_attributions"):
-        try:
-            eligible_placeholders = ",".join("?" for _ in eligible_kids)
-            for kid in eligible_kids:
-                signals[kid].update({"revenue_cents": 0, "commission_cents": 0, "orders": 0})
-            rows = conn.execute(
-                f"""
-                SELECT pka.kol_pool_id,
-                       COALESCE(NULLIF(s.currency, ''), 'USD') AS currency,
-                       COALESCE(SUM(s.revenue_cents), 0) AS revenue_cents,
-                       COALESCE(SUM(s.commission_cents), 0) AS commission_cents,
-                       COUNT(*) AS orders
-                FROM vkpi_project_kol_assignments pka
-                JOIN vkpi_projects p ON p.id = pka.project_id
-                JOIN (
-                  SELECT project_id FROM vkpi_project_kol_assignments
-                  GROUP BY project_id HAVING COUNT(*) = 1
-                ) one_assignment ON one_assignment.project_id = pka.project_id
-                JOIN vkpi_sales_attributions s ON s.project_id = pka.project_id
-                WHERE pka.kol_pool_id IN ({eligible_placeholders})
-                  {project_scope_clause}
-                  AND {business_truth.verified_shopify_attribution_sql('s')}
-                GROUP BY pka.kol_pool_id, COALESCE(NULLIF(s.currency, ''), 'USD')
-                """,
-                (*eligible_kids, *scoped_params),
-            ).fetchall()
-            currencies: dict[int, list[dict[str, Any]]] = {kid: [] for kid in eligible_kids}
-            for row in rows:
-                data = dict(row)
-                currencies[int(data["kol_pool_id"])].append(data)
-            for kid, buckets in currencies.items():
-                if not buckets:
-                    continue
-                primary = max(
-                    buckets,
-                    key=lambda value: (int(value.get("revenue_cents") or 0), int(value.get("orders") or 0)),
+
+def _apply_funnel_signals(
+    conn: Any,
+    *,
+    kids: list[int],
+    signals: dict[int, dict[str, Any]],
+) -> None:
+    if not table_exists("vkpi_recommendation_outcomes"):
+        return
+    try:
+        placeholders = ",".join("?" for _ in kids)
+        rows = conn.execute(
+            f"""
+            WITH ranked AS (
+              SELECT kol_pool_id, was_claimed, agreement_reached, content_published,
+                     ROW_NUMBER() OVER (PARTITION BY kol_pool_id ORDER BY id DESC) AS rn
+              FROM vkpi_recommendation_outcomes
+              WHERE kol_pool_id IN ({placeholders})
+            )
+            SELECT kol_pool_id, COUNT(*) AS total,
+                   SUM(CASE WHEN was_claimed THEN 1 ELSE 0 END) AS claimed,
+                   SUM(CASE WHEN agreement_reached THEN 1 ELSE 0 END) AS agreed,
+                   SUM(CASE WHEN content_published THEN 1 ELSE 0 END) AS published
+            FROM ranked WHERE rn <= 50 GROUP BY kol_pool_id
+            """,
+            tuple(kids),
+        ).fetchall()
+        for row in rows:
+            data = dict(row)
+            total = int(data.get("total") or 0)
+            if total:
+                signals[int(data["kol_pool_id"])]["funnel_weight"] = min(
+                    1.0,
+                    max(
+                        0.0,
+                        (
+                            0.2 * int(data.get("claimed") or 0)
+                            + 0.3 * int(data.get("agreed") or 0)
+                            + 0.5 * int(data.get("published") or 0)
+                        )
+                        / total,
+                    ),
                 )
-                signals[kid].update(
-                    {
-                        "revenue_cents": int(primary.get("revenue_cents") or 0),
-                        "commission_cents": int(primary.get("commission_cents") or 0),
-                        "orders": int(primary.get("orders") or 0),
-                        "currency": str(primary.get("currency") or "USD"),
-                        "mixed_currency": len(buckets) > 1,
-                    }
-                )
-        except Exception:
-            logger.debug("roi.high_value_revenue_batch_failed", exc_info=True)
-            for kid in eligible_kids:
-                signals[kid].update({"revenue_cents": None, "commission_cents": None, "orders": None})
+    except Exception:
+        logger.debug("roi.high_value_funnel_batch_failed", exc_info=True)
 
-    if include_global_learning_signals and table_exists("vkpi_recommendation_outcomes"):
-        try:
-            rows = conn.execute(
-                f"""
-                WITH ranked AS (
-                  SELECT kol_pool_id, was_claimed, agreement_reached, content_published,
-                         ROW_NUMBER() OVER (PARTITION BY kol_pool_id ORDER BY id DESC) AS rn
-                  FROM vkpi_recommendation_outcomes
-                  WHERE kol_pool_id IN ({placeholders})
-                )
-                SELECT kol_pool_id, COUNT(*) AS total,
-                       SUM(CASE WHEN was_claimed THEN 1 ELSE 0 END) AS claimed,
-                       SUM(CASE WHEN agreement_reached THEN 1 ELSE 0 END) AS agreed,
-                       SUM(CASE WHEN content_published THEN 1 ELSE 0 END) AS published
-                FROM ranked WHERE rn <= 50 GROUP BY kol_pool_id
-                """,
-                tuple(kids),
-            ).fetchall()
-            for row in rows:
-                data = dict(row)
-                total = int(data.get("total") or 0)
-                if total:
-                    signals[int(data["kol_pool_id"])]["funnel_weight"] = min(
-                        1.0,
-                        max(
-                            0.0,
-                            (
-                                0.2 * int(data.get("claimed") or 0)
-                                + 0.3 * int(data.get("agreed") or 0)
-                                + 0.5 * int(data.get("published") or 0)
-                            )
-                            / total,
-                        ),
-                    )
-        except Exception:
-            logger.debug("roi.high_value_funnel_batch_failed", exc_info=True)
 
-    if include_global_learning_signals and table_exists("vkpi_agent_outcome_evaluations"):
-        try:
-            string_kids = [str(kid) for kid in kids]
-            string_placeholders = ",".join("?" for _ in string_kids)
-            rows = conn.execute(
-                f"""
-                WITH ranked AS (
-                  SELECT entity_id, success,
-                         ROW_NUMBER() OVER (PARTITION BY entity_id ORDER BY id DESC) AS rn
-                  FROM vkpi_agent_outcome_evaluations
-                  WHERE entity_type='kol' AND entity_id IN ({string_placeholders})
-                )
-                SELECT entity_id, COUNT(*) AS total,
-                       SUM(CASE WHEN success IS TRUE THEN 1 ELSE 0 END) AS successes,
-                       SUM(CASE WHEN success IS FALSE THEN 1 ELSE 0 END) AS failures
-                FROM ranked WHERE rn <= 20 GROUP BY entity_id
-                """,
-                tuple(string_kids),
-            ).fetchall()
-            for row in rows:
-                data = dict(row)
-                successes = int(data.get("successes") or 0)
-                failures = int(data.get("failures") or 0)
-                decided = successes + failures
-                if decided:
-                    signals[int(data["entity_id"])]["outcome_weight"] = successes / decided
-        except Exception:
-            logger.debug("roi.high_value_outcome_batch_failed", exc_info=True)
+def _apply_outcome_signals(
+    conn: Any,
+    *,
+    kids: list[int],
+    signals: dict[int, dict[str, Any]],
+) -> None:
+    if not table_exists("vkpi_agent_outcome_evaluations"):
+        return
+    try:
+        string_kids = [str(kid) for kid in kids]
+        string_placeholders = ",".join("?" for _ in string_kids)
+        rows = conn.execute(
+            f"""
+            WITH ranked AS (
+              SELECT entity_id, success,
+                     ROW_NUMBER() OVER (PARTITION BY entity_id ORDER BY id DESC) AS rn
+              FROM vkpi_agent_outcome_evaluations
+              WHERE entity_type='kol' AND entity_id IN ({string_placeholders})
+            )
+            SELECT entity_id, COUNT(*) AS total,
+                   SUM(CASE WHEN success IS TRUE THEN 1 ELSE 0 END) AS successes,
+                   SUM(CASE WHEN success IS FALSE THEN 1 ELSE 0 END) AS failures
+            FROM ranked WHERE rn <= 20 GROUP BY entity_id
+            """,
+            tuple(string_kids),
+        ).fetchall()
+        for row in rows:
+            data = dict(row)
+            successes = int(data.get("successes") or 0)
+            failures = int(data.get("failures") or 0)
+            decided = successes + failures
+            if decided:
+                signals[int(data["entity_id"])]["outcome_weight"] = successes / decided
+    except Exception:
+        logger.debug("roi.high_value_outcome_batch_failed", exc_info=True)
 
+
+def _finalize_high_value_signals(signals: dict[int, dict[str, Any]]) -> None:
     for signal in signals.values():
         funnel_weight = signal.pop("funnel_weight", None)
         outcome_weight = signal.pop("outcome_weight", None)
         if funnel_weight is not None and outcome_weight is not None:
-            signal["recommendation_weight"] = round(0.6 * funnel_weight + 0.4 * outcome_weight, 4)
+            signal["recommendation_weight"] = round(
+                0.6 * funnel_weight + 0.4 * outcome_weight,
+                4,
+            )
         elif funnel_weight is not None:
             signal["recommendation_weight"] = round(funnel_weight, 4)
         elif outcome_weight is not None:
@@ -358,12 +377,64 @@ def _bulk_high_value_signals(
             continue
         revenue = signal.get("revenue_cents")
         cost = signal.get("cost_cents")
-        signal["roi"] = (
-            round((int(revenue) - int(cost)) / int(cost), 4)
-            if isinstance(revenue, int) and isinstance(cost, int) and cost > 0
-            else None
+        if isinstance(revenue, int) and isinstance(cost, int) and cost > 0:
+            signal["roi"] = round((revenue - cost) / cost, 4)
+        else:
+            signal["roi"] = None
+        signal["status"] = (
+            "ready" if isinstance(revenue, int) and revenue > 0 else "awaiting_m5"
         )
-        signal["status"] = "ready" if isinstance(revenue, int) and revenue > 0 else "awaiting_m5"
+
+
+def _bulk_high_value_signals(
+    conn: Any,
+    kids: list[int],
+    *,
+    project_scope_sql: str = "",
+    project_scope_params: list[Any] | None = None,
+    include_global_learning_signals: bool = True,
+) -> dict[int, dict[str, Any]]:
+    """Return ROI and learning signals for a candidate set with constant queries.
+
+    This is deliberately private to the leaderboard.  The single-KOL public
+    functions keep their established contracts, while a 50-row leaderboard no
+    longer fans out into hundreds of table checks and reads.
+    """
+    if not kids:
+        return {}
+    signals: dict[int, dict[str, Any]] = {
+        kid: {"cost_cents": None, "revenue_cents": None, "funnel_weight": None, "outcome_weight": None}
+        for kid in kids
+    }
+    scoped_params = list(project_scope_params or [])
+    project_scope_clause = f"AND {project_scope_sql}" if project_scope_sql else ""
+    coverage = _bulk_assignment_coverage(
+        conn,
+        kids,
+        project_scope_sql=project_scope_sql,
+        project_scope_params=scoped_params,
+    )
+    eligible_kids = [kid for kid in kids if coverage.get(kid, {}).get("complete")]
+    for kid in kids:
+        signals[kid]["attribution_coverage"] = coverage.get(kid, _coverage_shape(0, 0, available=False))
+    _apply_cost_signals(
+        conn,
+        eligible_kids=eligible_kids,
+        signals=signals,
+        project_scope_clause=project_scope_clause,
+        scoped_params=scoped_params,
+    )
+    _apply_revenue_signals(
+        conn,
+        eligible_kids=eligible_kids,
+        signals=signals,
+        project_scope_clause=project_scope_clause,
+        scoped_params=scoped_params,
+    )
+    if include_global_learning_signals:
+        _apply_funnel_signals(conn, kids=kids, signals=signals)
+        _apply_outcome_signals(conn, kids=kids, signals=signals)
+    _finalize_high_value_signals(signals)
     return signals
 
 

@@ -450,6 +450,27 @@ def test_smart_preview_response_strips_raw_contact_values_and_explanation_marker
     assert item["candidate_facets"]["contact_available"] == "yes"
 
 
+def test_smart_local_projection_preserves_bounded_controlled_capability_coordinates() -> None:
+    result = _leaking_smart_result()
+    controlled = {
+        "field": "bio",
+        "term": "motorsport photographer",
+        "source": "server_capability_use_map",
+        "canonical_term": "on-camera flash",
+        "observed_term": "motorsport photographer",
+        "evidence_group": "product_use_fit",
+        "evidence_relation": "capability_use_suitability",
+    }
+    result["items"][0]["match_evidence"].append(controlled)
+    result["items"][0]["qualification_evidence"]["relevance"]["evidence"].append(controlled)
+
+    projected = profile_recall_qualification.project_smart_local_result(result)
+
+    assert controlled in projected["items"][0]["match_evidence"]
+    assert controlled in projected["items"][0]["qualification_evidence"]["relevance"]["evidence"]
+    assert "motorsport photographer" in projected["items"][0]["why_fit"]
+
+
 @pytest.mark.parametrize(
     ("response_projection", "expect_compact"),
     [(None, False), ("smart_local_compact_v1", True)],
@@ -585,12 +606,19 @@ def test_smart_preview_owns_30_target_and_filter_policy(
     assert captured["candidate_limit"] == 500
     assert captured["allow_backfill"] is False
     assert captured["dedupe"] is True
-    assert captured["local_qualification_policy"] == profile_recall_qualification.smart_local_policy(
+    expected_policy = profile_recall_qualification.smart_local_policy(
         market="us",
         platforms=["youtube"],
         languages=["English"],
         profile_types=["gear reviewer"],
     )
+    expected_policy["followers_filter"] = profile_recall_qualification.follower_filter_policy(
+        followers_min=None,
+        followers_max=None,
+        source="unspecified",
+        unknown_policy=profile_recall_qualification.FOLLOWERS_UNKNOWN_PENDING,
+    )
+    assert captured["local_qualification_policy"] == expected_policy
 
 
 def test_smart_worker_owns_same_local_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -673,12 +701,19 @@ def test_smart_worker_owns_same_local_contract(monkeypatch: pytest.MonkeyPatch) 
     assert captured["candidate_limit"] == 500
     assert captured["allow_backfill"] is False
     assert captured["dedupe"] is True
-    assert captured["local_qualification_policy"] == profile_recall_qualification.smart_local_policy(
+    expected_policy = profile_recall_qualification.smart_local_policy(
         market="us",
         platforms=["youtube"],
         languages=["en", "Japanese"],
         profile_types=["creator", "mixed"],
     )
+    expected_policy["followers_filter"] = profile_recall_qualification.follower_filter_policy(
+        followers_min=None,
+        followers_max=None,
+        source="unspecified",
+        unknown_policy=profile_recall_qualification.FOLLOWERS_UNKNOWN_PENDING,
+    )
+    assert captured["local_qualification_policy"] == expected_policy
     assert advance_call["smart_local_contract"] is True
     assert advance_call["body"]["limit"] == 30
     assert result["recall"]["local_qualification"] is local_contract

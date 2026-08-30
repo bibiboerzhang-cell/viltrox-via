@@ -9,6 +9,11 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
+from app.shared.social_identity import (
+    detect_platform_from_profile_url,
+    extract_handle_from_profile_url,
+    normalize_claimed_handle,
+)
 
 
 logger = get_logger(__name__)
@@ -59,12 +64,6 @@ def get_user_by_email(email: str):
 
 
 def sanitize_social_identity(platform: str, handle: str) -> tuple[str, str, bool]:
-    from app.services.verification.viltrox_official import (
-        detect_platform_from_profile_url,
-        extract_handle_from_profile_url,
-        normalize_claimed_handle,
-    )
-
     normalized_platform = str(platform or "").strip().lower()
     raw_handle = str(handle or "").strip()
     if not normalized_platform or not raw_handle:

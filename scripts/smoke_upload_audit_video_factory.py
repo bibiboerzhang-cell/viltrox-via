@@ -25,7 +25,8 @@ from runtime_env import apply_runtime_env  # noqa: E402
 apply_runtime_env()
 
 from smoke_auth_social_student import BASE_URL, assert_ok, create_student_session, http_json  # noqa: E402
-from app.db.connection import close_db_runtime, get_conn, init_db_runtime  # noqa: E402
+from app.db.connection import close_db_runtime, get_conn  # noqa: E402
+from app.db.startup import init_db_runtime  # noqa: E402
 
 
 def _sample_video_path() -> Path:

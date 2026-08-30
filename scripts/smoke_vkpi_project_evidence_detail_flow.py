@@ -21,6 +21,9 @@ os.environ.setdefault("ENVIRONMENT", "local")
 from _smoke_seed import cleanup_admin, seed_admin
 from app.db.connection import get_conn
 from app.domains.projects import workflow
+from app.services.projects.creator_lifecycle_adapters import (
+    DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
+)
 from app.services.vkpi.schema import ensure_vkpi_schema
 
 
@@ -181,6 +184,7 @@ class Smoke:
                 "metadata": {"marker": self.marker},
             },
             staff=self.staff,
+            feedback_sink=DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
         )
         workflow.add_project_content(
             self.project_id,

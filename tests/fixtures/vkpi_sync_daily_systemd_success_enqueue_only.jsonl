@@ -1,0 +1,3 @@
+{"event":"cron_daily_sync_started","at":"2026-08-30T04:00:00Z","dry_run":false,"skip_official":false,"skip_kol":false}
+{"event":"cron_daily_sync_finished","at":"2026-08-30T04:00:03Z","summary":{"status":"queued","dry_run":false,"official_requested":18,"official_enqueued":18,"official_failed":0,"kol_requested":9,"kol_enqueued":9,"kol_errors":0,"finished_at":"2026-08-30T04:00:03Z"}}
+{"event":"cron_daily_sync_post_maintenance_skipped","at":"2026-08-30T04:00:03Z","reason":"job_not_completed:queued"}

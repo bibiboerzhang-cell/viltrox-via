@@ -441,276 +441,360 @@ async def run_manual_job(job_name: str, payload: dict[str, Any] | None = None, *
         raise
 
 
-async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue: Any | None = None) -> dict[str, Any]:
-    payload = payload or {}
-    name = normalize_job_name(job_name)
-    if name == "lineage_snapshot":
-        from app.domains import lineage as metric_lineage
+async def _run_lineage_snapshot(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
+    del queue
+    from app.domains import lineage as metric_lineage
 
-        result = await asyncio.to_thread(metric_lineage.generate_run, period_days=int(payload.get("period_days") or 7), scope_type=str(payload.get("scope_type") or "all"), trigger_source="scheduler_lineage_snapshot", metadata={"source": "cron.run_now"})
-        return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
-    if name == "kpi_rollup":
-        from app.domains.staff import kpi_ledger
+    result = await asyncio.to_thread(
+        metric_lineage.generate_run,
+        period_days=int(payload.get("period_days") or 7),
+        scope_type=str(payload.get("scope_type") or "all"),
+        trigger_source="scheduler_lineage_snapshot",
+        metadata={"source": "cron.run_now"},
+    )
+    return {"job": "lineage_snapshot", "status": "ok", "result": result, "ran_at": _stamp()}
 
-        result = await asyncio.to_thread(kpi_ledger.generate_daily_rollup, payload.get("ledger_date"))
-        return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
-    if name == "alerts":
-        from app.domains import alerts
 
-        result = await asyncio.to_thread(alerts.generate_alerts)
-        return {"job": name, "status": "ok", "result": result, "ran_at": _stamp()}
-    if name == "weekly_report":
-        from app.domains import reports
+async def _run_kpi_rollup(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
+    del queue
+    from app.domains.staff import kpi_ledger
 
-        result = await asyncio.to_thread(reports.generate_weekly_report, period_days=int(payload.get("period_days") or 7), staff=payload.get("staff"), filters=payload)
-        return {"job": name, "status": "ok", "result": {k: v for k, v in result.items() if k != "context"}, "ran_at": _stamp()}
-    if name == "analytics_monitor":
-        from app.domains import analytics
+    result = await asyncio.to_thread(kpi_ledger.generate_daily_rollup, payload.get("ledger_date"))
+    return {"job": "kpi_rollup", "status": "ok", "result": result, "ran_at": _stamp()}
 
-        products = analytics.list_monitored_products(limit=50).get("products") or []
-        jobs: list[dict[str, Any]] = []
-        for product in products:
-            if str(product.get("enabled") or "1") in {"0", "false"}:
-                continue
-            platforms = product.get("monitor_platforms_json") or "[]"
-            try:
-                import json
 
-                platform_list = json.loads(platforms) if isinstance(platforms, str) else platforms
-            except Exception:
-                platform_list = ["youtube"]
-            for platform in (platform_list or ["youtube"]):
-                body = {
-                    "product_sku": product.get("product_sku"),
-                    "platform": platform,
-                    "max_videos": int(payload.get("max_videos") or 20),
-                }
-                jobs.append(
-                    {
-                        "job_type": "vkpi_analytics_monitor",
-                        "payload": {"body": body, "staff": dict(payload.get("staff") or {})},
-                        "lock_key": f"vkpi_analytics_monitor:{body['product_sku']}:{platform}",
-                        "timeout_seconds": 1200,
-                    }
-                )
-        queued = await _queue_provider_jobs(jobs, queue=queue)
-        return {"job": name, "status": "queued", "runs": queued["enqueued"], **queued, "ran_at": _stamp()}
-    if name == "channels_sync":
-        from app.domains import channels
+async def _run_alerts(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
+    del payload, queue
+    from app.domains import alerts
 
-        rows = channels.list_channels(staff={}, limit=300).get("channels") or []
-        max_posts = int(payload.get("channel_max_posts") or payload.get("max_posts") or 12)
-        queued = await _queue_channel_syncs(
-            rows,
-            payload={**payload, "max_posts": max_posts},
-            staff=payload.get("staff"),
-            queue=queue,
-        )
-        return {"job": name, "status": "queued", **queued, "ran_at": _stamp()}
-    if name == "official_full_baseline":
-        from app.domains import channels
+    result = await asyncio.to_thread(alerts.generate_alerts)
+    return {"job": "alerts", "status": "ok", "result": result, "ran_at": _stamp()}
 
-        platform_limits = {
-            "youtube": 1000,
-            "instagram": 1000,
-            "tiktok": 300,
-            "facebook": 250,
-            "reddit": 150,
-            "x": 200,
-        }
-        requested_platforms = payload.get("platforms")
-        if isinstance(requested_platforms, str):
-            platform_filter = {item.strip().lower() for item in requested_platforms.split(",") if item.strip()}
-        elif isinstance(requested_platforms, list):
-            platform_filter = {str(item).strip().lower() for item in requested_platforms if str(item).strip()}
-        else:
-            platform_filter = set(platform_limits)
-        rows = [
-            row for row in channels.list_channels(staff={}, limit=300).get("channels") or []
-            if str(row.get("platform") or "").lower() in platform_filter
-        ]
-        max_override = int(payload.get("max_posts") or 0)
-        queued_rows: list[dict[str, Any]] = []
-        for row in rows:
-            platform_key = str(row.get("platform") or "").lower()
-            max_posts = max_override or platform_limits.get(platform_key, 100)
-            queued_rows.append({**row, "_requested_max_posts": max_posts})
-        queued = await _queue_channel_syncs(
-            queued_rows,
-            payload={**payload, "max_posts": max_override or 100},
-            staff=payload.get("staff"),
-            queue=queue,
-        )
-        return {
-            "job": name,
-            "status": "queued",
-            **queued,
-            "platforms": sorted(platform_filter),
-            "limits": {key: platform_limits[key] for key in sorted(platform_limits) if key in platform_filter},
-            "ran_at": _stamp(),
-        }
-    if name == "daily_incremental_sync":
-        from app.domains.sync import daily_sync
-        from app.domains.sync import refresh_tier
 
-        daily_sync.check_daily_sync_guard(payload)
-        official: dict[str, Any] = {"skipped": True}
-        if not daily_sync._bool(payload.get("skip_official")):
-            from app.domains import channels
+async def _run_weekly_report(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
+    del queue
+    from app.domains import reports
 
-            rows = channels.list_channels(staff={}, limit=300).get("channels") or []
-            official = await _queue_channel_syncs(
-                rows,
-                payload={
-                    **payload,
-                    "max_posts": int(payload.get("official_max_posts") or payload.get("channel_max_posts") or payload.get("max_posts") or 50),
-                },
-                staff=payload.get("staff"),
-                queue=queue,
-            )
+    result = await asyncio.to_thread(
+        reports.generate_weekly_report,
+        period_days=int(payload.get("period_days") or 7),
+        staff=payload.get("staff"),
+        filters=payload,
+    )
+    return {"job": "weekly_report", "status": "ok", "result": {key: value for key, value in result.items() if key != "context"}, "ran_at": _stamp()}
 
-        kol_result: dict[str, Any] = {"skipped": True}
-        selector = daily_sync._kol_refresh_selector(payload)
-        allow_legacy = daily_sync._bool(payload.get("allow_legacy_kol_full_refresh")) or daily_sync._bool(payload.get("include_legacy_kol"))
-        allow_qualified = daily_sync._bool(payload.get("allow_qualified_kol_refresh")) or daily_sync._bool(payload.get("include_qualified_kol"))
-        if not daily_sync._bool(payload.get("skip_kol")) and ((selector == "qualified" and allow_qualified) or (selector != "qualified" and allow_legacy)):
-            limit = max(1, min(1200, int(payload.get("kol_limit") or 1200)))
-            platforms = daily_sync._platform_filter(payload.get("kol_platforms") or payload.get("platforms"))
-            if selector == "qualified":
-                rows = refresh_tier.qualified_refresh_rows(
-                    limit=limit,
-                    offset=max(0, int(payload.get("kol_offset") or 0)),
-                    stale_before=str(payload.get("kol_stale_before") or ""),
-                    platforms=platforms,
-                    tiers=daily_sync._tier_filter(payload.get("kol_tiers") or payload.get("refresh_tiers")),
-                )
-            else:
-                rows = daily_sync._kol_light_rows(
-                    limit=limit,
-                    offset=max(0, int(payload.get("kol_offset") or 0)),
-                    stale_before=str(payload.get("kol_stale_before") or ""),
-                    platforms=platforms,
-                    source_type=str(payload.get("kol_source_type") or "legacy_excel_p2d"),
-                )
-            kol_result = await _queue_kol_refreshes(
-                rows,
-                payload=payload,
-                staff=payload.get("staff"),
-                queue=queue,
-            )
-        return {
-            "job": name,
-            "status": "queued",
-            "official": official,
-            "kol_pool_light": kol_result,
-            "ran_at": _stamp(),
-        }
-    if name == "daily_outreach_digest_only":
-        from app.domains import analytics
 
-        digest = analytics.generate_daily_staff_outreach_digest(
-            target_date=payload.get("date"),
-            limit=int(payload.get("limit") or 100),
-            staff=payload.get("staff"),
-            product_sku=str(payload.get("product_sku") or ""),
-        )
-        return {"job": name, "status": "ok", "digest": digest, "ran_at": _stamp()}
-    if name == "morning_sync":
-        from app.domains import analytics
-        from app.domains import channels
-        from app.domains import industry as industry_domain
-        from app.domains.industry import access as industry_access
+def _monitor_provider_jobs(
+    products: list[dict[str, Any]],
+    payload: dict[str, Any],
+    *,
+    default_max_videos: int,
+    period_days: int | None = None,
+    normalize_enabled: bool = False,
+) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    for product in products:
+        enabled = str(product.get("enabled") or "1")
+        disabled = enabled.lower() in {"0", "false", "no"} if normalize_enabled else enabled in {"0", "false"}
+        if disabled:
+            continue
+        platforms = product.get("monitor_platforms_json") or "[]"
+        try:
+            import json
 
-        channel_rows = channels.list_channels(staff={}, limit=300).get("channels") or []
-        channel_enqueue: dict[str, Any] = {}
-        channel_max_posts = int(payload.get("channel_max_posts") or payload.get("max_posts") or 12)
-        channel_enqueue = await _queue_channel_syncs(
-            channel_rows,
-            payload={**payload, "max_posts": channel_max_posts},
-            staff=payload.get("staff"),
-            queue=queue,
-        )
-
-        industry_rows = [
-            row
-            for row in industry_domain.list_accounts(
-                limit=int(payload.get("industry_account_limit") or 100)
-            ).get("accounts")
-            or []
-            if bool(row.get("crawl_enabled"))
-        ]
-        industry_jobs: list[dict[str, Any]] = []
-        for row in industry_rows:
-            account_id = int(row.get("id") or 0)
-            project_id = int(row.get("project_id") or 0)
-            if account_id <= 0 or project_id <= 0:
-                continue
-            capability = industry_access.issue_server_refresh_capability(
-                account_id=account_id,
-                project_id=project_id,
-            )
-            industry_jobs.append(
+            platform_list = json.loads(platforms) if isinstance(platforms, str) else platforms
+        except Exception:
+            platform_list = ["youtube"]
+        for platform in (platform_list or ["youtube"]):
+            body = {
+                "product_sku": product.get("product_sku"),
+                "platform": platform,
+                "max_videos": int(payload.get("max_videos") or default_max_videos),
+            }
+            if period_days is not None:
+                body["period_days"] = int(payload.get("period_days") or period_days)
+            jobs.append(
                 {
-                    "job_type": "industry_account_refresh",
-                    "payload": industry_access.build_refresh_payload(
-                        account_id,
-                        server_capability=capability,
-                    ),
-                    "lock_key": f"industry_account_refresh:{account_id}",
+                    "job_type": "vkpi_analytics_monitor",
+                    "payload": {"body": body, "staff": dict(payload.get("staff") or {})},
+                    "lock_key": f"vkpi_analytics_monitor:{body['product_sku']}:{platform}",
                     "timeout_seconds": 1200,
                 }
             )
-        industry_sync = await _queue_provider_jobs(industry_jobs, queue=queue)
+    return jobs
 
-        products = analytics.list_monitored_products(limit=100).get("products") or []
-        monitor_jobs: list[dict[str, Any]] = []
-        for product in products:
-            if str(product.get("enabled") or "1").lower() in {"0", "false", "no"}:
-                continue
-            platforms = product.get("monitor_platforms_json") or "[]"
-            try:
-                import json
 
-                platform_list = json.loads(platforms) if isinstance(platforms, str) else platforms
-            except Exception:
-                platform_list = ["youtube"]
-            for platform in (platform_list or ["youtube"]):
-                body = {
-                    "product_sku": product.get("product_sku"),
-                    "platform": platform,
-                    "max_videos": int(payload.get("max_videos") or 50),
-                    "period_days": int(payload.get("period_days") or 1),
-                }
-                monitor_jobs.append(
-                    {
-                        "job_type": "vkpi_analytics_monitor",
-                        "payload": {"body": body, "staff": dict(payload.get("staff") or {})},
-                        "lock_key": f"vkpi_analytics_monitor:{body['product_sku']}:{platform}",
-                        "timeout_seconds": 1200,
-                    }
-                )
-        monitor_runs = await _queue_provider_jobs(monitor_jobs, queue=queue)
+async def _run_analytics_monitor(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
+    from app.domains import analytics
 
-        digest = analytics.generate_daily_staff_outreach_digest(
-            target_date=payload.get("date"),
-            limit=int(payload.get("limit") or 100),
-            staff=payload.get("staff"),
-            product_sku=str(payload.get("product_sku") or ""),
-        )
-        return {
-            "job": name,
-            "status": "queued",
-            "channels_synced": 0,
-            "channels_enqueued": channel_enqueue.get("channels_enqueued", 0),
-            "channels_failed_to_enqueue": channel_enqueue.get("channels_failed_to_enqueue", 0),
-            "channel_task_ids": channel_enqueue.get("task_ids", []),
-            "industry_accounts_synced": 0,
-            "industry_accounts_enqueued": industry_sync.get("enqueued", 0),
-            "industry_accounts_skipped": 0,
-            "industry_accounts_failed": industry_sync.get("failed_to_enqueue", 0),
-            "industry_sync": industry_sync,
-            "monitor_runs": monitor_runs.get("enqueued", 0),
-            "digest": digest,
-            "ran_at": _stamp(),
+    products = analytics.list_monitored_products(limit=50).get("products") or []
+    jobs = _monitor_provider_jobs(products, payload, default_max_videos=20)
+    queued = await _queue_provider_jobs(jobs, queue=queue)
+    return {"job": "analytics_monitor", "status": "queued", "runs": queued["enqueued"], **queued, "ran_at": _stamp()}
+
+
+async def _run_channels_sync(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
+    from app.domains import channels
+
+    rows = channels.list_channels(staff={}, limit=300).get("channels") or []
+    max_posts = int(payload.get("channel_max_posts") or payload.get("max_posts") or 12)
+    queued = await _queue_channel_syncs(
+        rows,
+        payload={**payload, "max_posts": max_posts},
+        staff=payload.get("staff"),
+        queue=queue,
+    )
+    return {"job": "channels_sync", "status": "queued", **queued, "ran_at": _stamp()}
+
+
+def _platform_filter(value: Any, defaults: dict[str, int]) -> set[str]:
+    if isinstance(value, str):
+        return {item.strip().lower() for item in value.split(",") if item.strip()}
+    if isinstance(value, list):
+        return {str(item).strip().lower() for item in value if str(item).strip()}
+    return set(defaults)
+
+
+async def _run_official_full_baseline(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
+    from app.domains import channels
+
+    platform_limits = {
+        "youtube": 1000,
+        "instagram": 1000,
+        "tiktok": 300,
+        "facebook": 250,
+        "reddit": 150,
+        "x": 200,
+    }
+    platform_filter = _platform_filter(payload.get("platforms"), platform_limits)
+    rows = [
+        row
+        for row in channels.list_channels(staff={}, limit=300).get("channels") or []
+        if str(row.get("platform") or "").lower() in platform_filter
+    ]
+    max_override = int(payload.get("max_posts") or 0)
+    queued_rows = [
+        {
+            **row,
+            "_requested_max_posts": max_override
+            or platform_limits.get(str(row.get("platform") or "").lower(), 100),
         }
-    raise ValueError("unsupported V-KPI cron job")
+        for row in rows
+    ]
+    queued = await _queue_channel_syncs(
+        queued_rows,
+        payload={**payload, "max_posts": max_override or 100},
+        staff=payload.get("staff"),
+        queue=queue,
+    )
+    return {
+        "job": "official_full_baseline",
+        "status": "queued",
+        **queued,
+        "platforms": sorted(platform_filter),
+        "limits": {key: platform_limits[key] for key in sorted(platform_limits) if key in platform_filter},
+        "ran_at": _stamp(),
+    }
+
+
+def _daily_kol_refresh_allowed(
+    daily_sync: Any,
+    payload: dict[str, Any],
+    selector: str,
+) -> bool:
+    allow_legacy = daily_sync._bool(payload.get("allow_legacy_kol_full_refresh")) or daily_sync._bool(payload.get("include_legacy_kol"))
+    allow_qualified = daily_sync._bool(payload.get("allow_qualified_kol_refresh")) or daily_sync._bool(payload.get("include_qualified_kol"))
+    return not daily_sync._bool(payload.get("skip_kol")) and (
+        (selector == "qualified" and allow_qualified)
+        or (selector != "qualified" and allow_legacy)
+    )
+
+
+def _daily_kol_rows(
+    daily_sync: Any,
+    refresh_tier: Any,
+    payload: dict[str, Any],
+    selector: str,
+) -> list[dict[str, Any]]:
+    limit = max(1, min(1200, int(payload.get("kol_limit") or 1200)))
+    platforms = daily_sync._platform_filter(payload.get("kol_platforms") or payload.get("platforms"))
+    common = {
+        "limit": limit,
+        "offset": max(0, int(payload.get("kol_offset") or 0)),
+        "stale_before": str(payload.get("kol_stale_before") or ""),
+        "platforms": platforms,
+    }
+    if selector == "qualified":
+        return refresh_tier.qualified_refresh_rows(
+            **common,
+            tiers=daily_sync._tier_filter(payload.get("kol_tiers") or payload.get("refresh_tiers")),
+        )
+    return daily_sync._kol_light_rows(
+        **common,
+        source_type=str(payload.get("kol_source_type") or "legacy_excel_p2d"),
+    )
+
+async def _run_daily_incremental_sync(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
+    from app.domains.sync import daily_sync, refresh_tier
+    if daily_sync._bool(payload.get("dry_run")):
+        plan = daily_sync.run_daily_incremental({**payload, "dry_run": True})
+        return {
+            "job": "daily_incremental_sync", "status": "planned",
+            "dry_run": True, "run_id": plan.get("run_id"),
+            "official": plan.get("official") or {"skipped": True},
+            "kol_pool_light": plan.get("kol_pool_light") or {"skipped": True},
+            "health": plan.get("health") or {}, "ran_at": _stamp(),
+        }
+    daily_sync.check_daily_sync_guard(payload)
+    official: dict[str, Any] = {"skipped": True}
+    if not daily_sync._bool(payload.get("skip_official")):
+        from app.domains import channels
+
+        rows = channels.list_channels(staff={}, limit=300).get("channels") or []
+        official = await _queue_channel_syncs(
+            rows,
+            payload={
+                **payload,
+                "max_posts": int(
+                    payload.get("official_max_posts")
+                    or payload.get("channel_max_posts")
+                    or payload.get("max_posts")
+                    or 50
+                ),
+            },
+            staff=payload.get("staff"),
+            queue=queue,
+        )
+    kol_result: dict[str, Any] = {"skipped": True}
+    selector = daily_sync._kol_refresh_selector(payload)
+    if _daily_kol_refresh_allowed(daily_sync, payload, selector):
+        rows = _daily_kol_rows(daily_sync, refresh_tier, payload, selector)
+        kol_result = await _queue_kol_refreshes(
+            rows,
+            payload=payload,
+            staff=payload.get("staff"),
+            queue=queue,
+        )
+    return {"job": "daily_incremental_sync", "status": "queued", "official": official, "kol_pool_light": kol_result, "ran_at": _stamp()}
+
+
+async def _run_daily_outreach_digest_only(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
+    del queue
+    from app.domains import analytics
+
+    digest = analytics.generate_daily_staff_outreach_digest(
+        target_date=payload.get("date"),
+        limit=int(payload.get("limit") or 100),
+        staff=payload.get("staff"),
+        product_sku=str(payload.get("product_sku") or ""),
+    )
+    return {"job": "daily_outreach_digest_only", "status": "ok", "digest": digest, "ran_at": _stamp()}
+
+
+def _industry_refresh_jobs(
+    rows: list[dict[str, Any]],
+    industry_access: Any,
+) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    for row in rows:
+        account_id = int(row.get("id") or 0)
+        project_id = int(row.get("project_id") or 0)
+        if account_id <= 0 or project_id <= 0:
+            continue
+        capability = industry_access.issue_server_refresh_capability(
+            account_id=account_id,
+            project_id=project_id,
+        )
+        jobs.append(
+            {
+                "job_type": "industry_account_refresh",
+                "payload": industry_access.build_refresh_payload(
+                    account_id,
+                    server_capability=capability,
+                ),
+                "lock_key": f"industry_account_refresh:{account_id}",
+                "timeout_seconds": 1200,
+            }
+        )
+    return jobs
+
+
+async def _run_morning_sync(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
+    from app.domains import analytics, channels
+    from app.domains import industry as industry_domain
+    from app.domains.industry import access as industry_access
+
+    channel_rows = channels.list_channels(staff={}, limit=300).get("channels") or []
+    channel_max_posts = int(
+        payload.get("channel_max_posts") or payload.get("max_posts") or 12
+    )
+    channel_enqueue = await _queue_channel_syncs(
+        channel_rows,
+        payload={**payload, "max_posts": channel_max_posts},
+        staff=payload.get("staff"),
+        queue=queue,
+    )
+    industry_rows = [
+        row
+        for row in industry_domain.list_accounts(
+            limit=int(payload.get("industry_account_limit") or 100)
+        ).get("accounts")
+        or []
+        if bool(row.get("crawl_enabled"))
+    ]
+    industry_jobs = _industry_refresh_jobs(industry_rows, industry_access)
+    industry_sync = await _queue_provider_jobs(industry_jobs, queue=queue)
+    products = analytics.list_monitored_products(limit=100).get("products") or []
+    monitor_jobs = _monitor_provider_jobs(
+        products,
+        payload,
+        default_max_videos=50,
+        period_days=1,
+        normalize_enabled=True,
+    )
+    monitor_runs = await _queue_provider_jobs(monitor_jobs, queue=queue)
+    digest = analytics.generate_daily_staff_outreach_digest(
+        target_date=payload.get("date"),
+        limit=int(payload.get("limit") or 100),
+        staff=payload.get("staff"),
+        product_sku=str(payload.get("product_sku") or ""),
+    )
+    return {
+        "job": "morning_sync",
+        "status": "queued",
+        "channels_synced": 0,
+        "channels_enqueued": channel_enqueue.get("channels_enqueued", 0),
+        "channels_failed_to_enqueue": channel_enqueue.get("channels_failed_to_enqueue", 0),
+        "channel_task_ids": channel_enqueue.get("task_ids", []),
+        "industry_accounts_synced": 0,
+        "industry_accounts_enqueued": industry_sync.get("enqueued", 0),
+        "industry_accounts_skipped": 0,
+        "industry_accounts_failed": industry_sync.get("failed_to_enqueue", 0),
+        "industry_sync": industry_sync,
+        "monitor_runs": monitor_runs.get("enqueued", 0),
+        "digest": digest,
+        "ran_at": _stamp(),
+    }
+
+
+_JOB_HANDLERS = {
+    "lineage_snapshot": _run_lineage_snapshot,
+    "kpi_rollup": _run_kpi_rollup,
+    "alerts": _run_alerts,
+    "weekly_report": _run_weekly_report,
+    "analytics_monitor": _run_analytics_monitor,
+    "channels_sync": _run_channels_sync,
+    "official_full_baseline": _run_official_full_baseline,
+    "daily_incremental_sync": _run_daily_incremental_sync,
+    "daily_outreach_digest_only": _run_daily_outreach_digest_only,
+    "morning_sync": _run_morning_sync,
+}
+
+
+async def run_job(job_name: str, payload: dict[str, Any] | None = None, *, queue: Any | None = None) -> dict[str, Any]:
+    payload = payload or {}
+    name = normalize_job_name(job_name)
+    handler = _JOB_HANDLERS.get(name)
+    if handler is None:
+        raise ValueError("unsupported V-KPI cron job")
+    return await handler(payload, queue)

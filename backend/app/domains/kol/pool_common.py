@@ -907,11 +907,11 @@ def _table_columns(conn, table_name: str) -> set[str]:
 
 def _ensure_main_kol_schema() -> None:
     try:
-        from app.api.routers.kol_ops_schema import ensure_kol_schema
+        from app.platform.db.schema_kol_ops import ensure_kol_schema
 
         ensure_kol_schema()
     except Exception as exc:
-        logger.warning("vkpi main kol schema guard failed: %s", exc)
+        logger.warning("vkpi main kol schema guard failed exception_type=%s", type(exc).__name__)
 
 
 def _safe_like(value: str) -> str:

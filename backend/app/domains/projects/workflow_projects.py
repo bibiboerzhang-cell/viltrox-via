@@ -19,6 +19,11 @@ from app.domains.projects.workflow_common import (
     staff_id,
     utcnow,
 )
+from app.shared.project_creator_lifecycle_ports import (
+    ClaimLifecyclePort,
+    RecommendationFeedbackSink,
+    SearchSessionDraftPort,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -351,281 +356,43 @@ def create_project_draft_from_session(
     body: dict[str, Any] | None = None,
     *,
     staff: dict[str, Any] | None = None,
+    search_session_port: SearchSessionDraftPort | None = None,
+    feedback_sink: RecommendationFeedbackSink | None = None,
 ) -> dict[str, Any]:
-    """R2:从已批准的 smart-search 会话一键建项目草案(discovery 阶段)+ 挂选中 KOL。
+    """Create or reuse a smart-search project draft from approved session KOLs."""
+    if search_session_port is None:
+        raise RuntimeError(
+            "SearchSessionDraftPort is required at the composition boundary"
+        )
+    from app.domains.projects import cost_estimate as cost_estimate_engine
+    from app.domains.projects.workflow_project_draft import (
+        DraftOperations,
+        create_project_draft_from_session as create_draft,
+    )
 
-    选人来源只取会话 approved_kol_ids(R1 锁定),请求体不得覆盖。
-    brief:用 planner 的 product_positioning / target_persona(优先 body,次 会话内可得,
-    末 query_text 兜底)写进 project.metadata.brief(表无 brief 列,落 metadata_json)。
-    复用 create_project + add_project_kols;占用冲突(KOL 被他人认领)诚实降级为 warning,
-    草案照建(已 commit),KOL 可在项目详情再加。绝不触 viltrox_fit_score / rule_v0。
-    """
-    body = body or {}
-    # 懒导入:避免 projects ←→ kol 模块装载期相互牵连。
-    from app.domains.kol import search_sessions as kol_search_sessions
-
-    session = kol_search_sessions.get_session(
+    return create_draft(
         int(session_id),
+        body,
         staff=staff,
-        scope_to_staff=True,
-    )  # 缺失/越权统一 → LookupError
-
-    approved_ids: list[int] = []
-    approved_seen: set[int] = set()
-    for value in session.get("approved_kol_ids") or []:
-        kid = _int(value)
-        if kid and kid not in approved_seen:
-            approved_seen.add(kid)
-            approved_ids.append(kid)
-
-    # 服务端审批集是唯一候选来源,避免请求体注入任意/跨会话 KOL。
-    raw_ids = approved_ids
-    kol_pool_ids: list[int] = []
-    seen: set[int] = set()
-    for value in raw_ids:
-        kid = _int(value)
-        if kid and kid not in seen:
-            seen.add(kid)
-            kol_pool_ids.append(kid)
-    if not kol_pool_ids:
-        raise ValueError("no approved KOLs on this session; approve candidates first")
-    unapproved_ids = [kid for kid in kol_pool_ids if kid not in approved_seen]
-    if unapproved_ids:
-        raise ValueError(
-            "kol_pool_ids must be a subset of approved session candidates: "
-            + ",".join(str(kid) for kid in unapproved_ids)
-        )
-
-    # planner 定位/人设:body 优先 → 会话内可得 → query_text 兜底。
-    # 不在此同步跑 LLM(沿用搜索流「planner 推迟到 worker」的决策;前端建草案时已带上 plan)。
-    input_payload = session.get("input_payload") if isinstance(session.get("input_payload"), dict) else {}
-    result_summary = session.get("result_summary") if isinstance(session.get("result_summary"), dict) else {}
-    session_plan: dict[str, Any] = {}
-    for src in (result_summary.get("llm_query_plan"), input_payload.get("llm_query_plan"), input_payload):
-        if isinstance(src, dict) and (src.get("product_positioning") or src.get("target_persona")):
-            session_plan = src
-            break
-    query_text = str(session.get("query_text") or "").strip()
-    positioning = str(body.get("product_positioning") or session_plan.get("product_positioning") or "").strip()
-    persona = str(body.get("target_persona") or session_plan.get("target_persona") or query_text).strip()
-
-    # 项目名:body 优先 → 产品名/query 派生。
-    product_name = str(body.get("product_name") or "").strip()
-    project_name = str(body.get("project_name") or "").strip()
-    if not project_name:
-        base = product_name or query_text or f"Smart Search #{int(session_id)}"
-        project_name = f"{base} · 合作草案"[:200]
-
-    brief = {
-        "product_positioning": positioning,
-        "target_persona": persona,
-        "query_text": query_text,
-        "source": "smart_search",
-        "search_session_id": int(session_id),
-        "approved_kol_count": len(kol_pool_ids),
-    }
-
-    # 幂等恢复:优先复用会话已记录的草案;若上次在“项目已提交、会话未回写”间失败,
-    # 再按不可伪造的 metadata.search_session_id + 当前项目 owner 找回。无 schema 迁移。
-    actor_staff_id = staff_id(staff)
-    session_owner_id = _int(session.get("created_by"))
-    if not actor_staff_id or (
-        session_owner_id and session_owner_id != actor_staff_id
-    ):
-        raise LookupError(f"search session not found: {session_id}")
-    # get_session(..., scope_to_staff=True) is the primary owner boundary.
-    # Persisted rows include created_by and therefore take the row-lock/
-    # idempotency path below.  Keeping the projection tolerant of an omitted
-    # created_by supports older DTOs and isolated callers without trusting a
-    # body-supplied owner or candidate set.
-    conn = get_conn() if session_owner_id else None
-    # PostgreSQL:同一 owner/session 的并发请求在这里排队。首请求随后通过
-    # create_project 在同一 request-scoped connection 上提交项目并释放行锁;
-    # 第二请求醒来后才执行下方复用查询,因此会找到并复用首个项目。
-    if conn is not None and session_owner_id:
-        _lock_owned_search_session_for_draft(
-            conn,
-            session_id=int(session_id),
-            owner_id=session_owner_id,
-        )
-    draft_summary = result_summary.get("draft_project") if isinstance(result_summary.get("draft_project"), dict) else {}
-    recorded_project_id = _int(draft_summary.get("project_id"))
-    reusable_row = None
-    if recorded_project_id and actor_staff_id and conn is not None:
-        reusable_row = conn.execute(
-            """
-            SELECT * FROM vkpi_projects
-            WHERE id=? AND stage_status <> 'deleted' AND source_type='smart_search'
-              AND (created_by_staff_id=? OR assigned_staff_id=?)
-            """,
-            (recorded_project_id, actor_staff_id, actor_staff_id),
-        ).fetchone()
-    if not reusable_row and actor_staff_id and conn is not None:
-        reusable_row = conn.execute(
-            """
-            SELECT * FROM vkpi_projects
-            WHERE stage_status <> 'deleted' AND source_type='smart_search'
-              AND metadata_json->>'search_session_id'=?
-              AND (created_by_staff_id=? OR assigned_staff_id=?)
-            ORDER BY id ASC
-            LIMIT 1
-            """,
-            (str(int(session_id)), actor_staff_id, actor_staff_id),
-        ).fetchone()
-    if reusable_row:
-        reusable = dict(reusable_row)
-        project_id = _int(reusable.get("id"))
-        metadata = _loads(reusable.get("metadata_json"))
-        if not isinstance(metadata, dict) or _int(metadata.get("search_session_id")) != int(session_id):
-            reusable = {}
-        else:
-            attached = 0
-            kol_attach_warning = ""
-            missing_kol_pool_ids: list[int] = []
-            try:
-                attach_result = add_project_kols(
-                    project_id,
-                    {"kol_pool_ids": kol_pool_ids},
-                    staff=staff,
-                )
-                attached = _int(attach_result.get("inserted")) + _int(attach_result.get("skipped_existing"))
-                missing_kol_pool_ids = [
-                    _int(value)
-                    for value in attach_result.get("missing_kol_pool_ids") or []
-                    if _int(value)
-                ]
-                if missing_kol_pool_ids:
-                    kol_attach_warning = (
-                        "KOL pool items no longer exist: "
-                        + ",".join(str(value) for value in missing_kol_pool_ids)
-                    )
-            except ValueError as exc:
-                kol_attach_warning = str(exc)
-            kol_search_sessions.update_session_result_summary(
-                int(session_id),
-                status=str(session.get("status") or "ready"),
-                summary_patch={
-                    "draft_project": {
-                        "project_id": project_id,
-                        "project_uid": reusable.get("project_uid"),
-                        "attached_kol_count": attached,
-                        "requested_kol_count": len(kol_pool_ids),
-                        "missing_kol_pool_ids": missing_kol_pool_ids,
-                        "kol_attach_warning": kol_attach_warning,
-                        "reused": True,
-                    }
-                },
-            )
-            return {
-                "ok": True,
-                "reused": True,
-                "project_id": project_id,
-                "project_uid": reusable.get("project_uid"),
-                "project_name": reusable.get("project_name"),
-                "stage": reusable.get("stage"),
-                "attached_kol_count": attached,
-                "requested_kol_count": len(kol_pool_ids),
-                "missing_kol_pool_ids": missing_kol_pool_ids,
-                "kol_attach_warning": kol_attach_warning,
-                "brief": metadata.get("brief") if isinstance(metadata.get("brief"), dict) else brief,
-                "cost_estimate": metadata.get("cost_estimate") if isinstance(metadata.get("cost_estimate"), dict) else {},
-            }
-
-    # R3:成本估算 + 风险合成(确定性,零 LLM,零触 fit_score)→ 写进草案 metadata,草案即带预算。
-    cost_estimate: dict[str, Any] = {}
-    try:
-        from app.domains.projects import cost_estimate as cost_estimate_engine
-
-        cost_estimate = cost_estimate_engine.estimate_cost_for_kols(kol_pool_ids, staff=staff)
-    except Exception:
-        logger.warning("create_project_draft: cost estimate skipped", exc_info=True)
-        cost_estimate = {}
-
-    create_body = {
-        "project_name": project_name,
-        "stage": "discovery",
-        # 来源是系统事实,不可由请求 body 改写成 manual/excel 后躲过来源追溯。
-        "source_type": "smart_search",
-        "product_sku": body.get("product_sku") or session_plan.get("product_sku") or "",
-        "product_name": product_name,
-        "platform": str(body.get("platform") or ""),
-        "metadata": {
-            "brief": brief,
-            "search_session_id": int(session_id),
-            "cost_estimate": cost_estimate,
-            "source": {
-                "type": "smart_search_session",
-                "search_session_id": int(session_id),
-                "session_owner_id": session_owner_id or actor_staff_id,
-                "query_type": session.get("query_type"),
-                "query_text": query_text,
-                "approved_kol_pool_ids": kol_pool_ids,
-            },
-        },
-        "note": "draft from smart-search session",
-    }
-    created = create_project(create_body, staff=staff)
-    project_id = _int(created.get("id"))
-
-    attached = 0
-    kol_attach_warning = ""
-    missing_kol_pool_ids: list[int] = []
-    if project_id:
-        try:
-            res = add_project_kols(project_id, {"kol_pool_ids": kol_pool_ids}, staff=staff)
-            if isinstance(res, dict):
-                # A concurrent retry may have attached the same KOLs after
-                # create_project committed and released the session row lock.
-                # Existing assignments still count as truthfully attached.
-                attached = _int(res.get("inserted")) + _int(res.get("skipped_existing"))
-                missing_kol_pool_ids = [
-                    _int(value)
-                    for value in res.get("missing_kol_pool_ids") or []
-                    if _int(value)
-                ]
-                if missing_kol_pool_ids:
-                    kol_attach_warning = (
-                        "KOL pool items no longer exist: "
-                        + ",".join(str(value) for value in missing_kol_pool_ids)
-                    )
-        except ValueError as exc:
-            # 占用冲突等 → 诚实降级:草案已建,KOL 未挂,带回原因供前端提示。
-            kol_attach_warning = str(exc)
-
-    # 回写会话:链到草案项目(让会话显示已转草案);沿用既有 summary 合并,会话状态不动。
-    try:
-        kol_search_sessions.update_session_result_summary(
-            int(session_id),
-            status=str(session.get("status") or "ready"),
-            summary_patch={
-                "draft_project": {
-                    "project_id": project_id,
-                    "project_uid": created.get("project_uid"),
-                    "attached_kol_count": attached,
-                    "requested_kol_count": len(kol_pool_ids),
-                    "missing_kol_pool_ids": missing_kol_pool_ids,
-                    "kol_attach_warning": kol_attach_warning,
-                }
-            },
-        )
-    except Exception:
-        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-        pass
-
-    return {
-        "ok": bool(project_id),
-        "reused": False,
-        "project_id": project_id,
-        "project_uid": created.get("project_uid"),
-        "project_name": project_name,
-        "stage": created.get("stage"),
-        "attached_kol_count": attached,
-        "requested_kol_count": len(kol_pool_ids),
-        "missing_kol_pool_ids": missing_kol_pool_ids,
-        "kol_attach_warning": kol_attach_warning,
-        "brief": brief,
-        "cost_estimate": cost_estimate,
-    }
+        ops=DraftOperations(
+            get_session=search_session_port.get_session,
+            update_session_result_summary=search_session_port.update_result_summary,
+            to_int=_int,
+            staff_id=staff_id,
+            loads=_loads,
+            get_conn=get_conn,
+            lock_owned_session=_lock_owned_search_session_for_draft,
+            create_project=create_project,
+            add_project_kols=lambda project_id, payload, **kwargs: add_project_kols(
+                project_id,
+                payload,
+                feedback_sink=feedback_sink,
+                **kwargs,
+            ),
+            estimate_cost_for_kols=cost_estimate_engine.estimate_cost_for_kols,
+            warning=logger.warning,
+        ),
+    )
 
 
 def update_project(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -737,7 +504,13 @@ from app.domains.projects.workflow_projects_kols import (  # noqa: E402
 )
 
 
-def transition_project(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def transition_project(
+    project_id: int,
+    body: dict[str, Any],
+    *,
+    staff: dict[str, Any] | None = None,
+    claim_lifecycle: ClaimLifecyclePort | None = None,
+) -> dict[str, Any]:
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
     to_stage = normalize_stage(str(body.get("to_stage") or body.get("stage") or ""))
@@ -802,11 +575,13 @@ def transition_project(project_id: int, body: dict[str, Any], *, staff: dict[str
     claim_auto_release: dict[str, Any] | None = None
     if to_stage in TERMINAL_STAGES:
         try:
-            from app.domains.kol import claims as kol_claims
-
-            claim_auto_release = kol_claims.auto_release_claims_for_project(
+            if claim_lifecycle is None:
+                raise RuntimeError(
+                    "ClaimLifecyclePort is required at the composition boundary"
+                )
+            claim_auto_release = dict(claim_lifecycle.auto_release_for_project(
                 int(project_id), to_stage=to_stage, actor_staff_id=actor_staff_id
-            )
+            ))
         except Exception as exc:  # claim release must not block workflow progress
             logger.warning("vkpi.claim_auto_release_failed", extra={"project_id": project_id, "error": str(exc)})
             claim_auto_release = {"status": "error", "reason": str(exc)}
@@ -836,7 +611,13 @@ def transition_project(project_id: int, body: dict[str, Any], *, staff: dict[str
         "claim_auto_release": claim_auto_release,
     }
 
-def delete_project(project_id: int, body: dict[str, Any] | None = None, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def delete_project(
+    project_id: int,
+    body: dict[str, Any] | None = None,
+    *,
+    staff: dict[str, Any] | None = None,
+    claim_lifecycle: ClaimLifecyclePort | None = None,
+) -> dict[str, Any]:
     """Soft-delete a project while preserving attribution, cost, and audit history."""
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
@@ -898,11 +679,13 @@ def delete_project(project_id: int, body: dict[str, Any] | None = None, *, staff
     # 乙案④:软删=进 cancelled 终态,同样触发认领自动释放(失败不阻塞删除)。
     claim_auto_release: dict[str, Any] | None = None
     try:
-        from app.domains.kol import claims as kol_claims
-
-        claim_auto_release = kol_claims.auto_release_claims_for_project(
+        if claim_lifecycle is None:
+            raise RuntimeError(
+                "ClaimLifecyclePort is required at the composition boundary"
+            )
+        claim_auto_release = dict(claim_lifecycle.auto_release_for_project(
             int(project_id), to_stage="cancelled", actor_staff_id=actor_staff_id
-        )
+        ))
     except Exception as exc:
         logger.warning("vkpi.claim_auto_release_failed", extra={"project_id": project_id, "error": str(exc)})
         claim_auto_release = {"status": "error", "reason": str(exc)}

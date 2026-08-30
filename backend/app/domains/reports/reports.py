@@ -16,6 +16,7 @@ from app.domains.access import scope
 from app.domains.projects import workflow
 from app.domains.reports import pdf_renderer
 from app.domains.reports import render_recovery
+from app.domains.reports import weekly_context as __weekly_context
 from app.domains.reports.contracts import (
     DataStatus,
     ReportContractError,
@@ -206,329 +207,40 @@ def build_weekly_context(
     filters: dict[str, Any] | None = None,
     report_uid: str = "",
 ) -> dict[str, Any]:
-    ensure_vkpi_schema()
-    raw_filters = dict(filters or {})
-    if "period_days" not in raw_filters and period_days is not None:
-        raw_filters["period_days"] = period_days
-    filters = sanitize_report_filters(raw_filters)
-    period_days = int(filters["period_days"])
-    language = str(filters["language"])
-    selected_sections = set(filters["sections"])
-    report_spec = report_spec_for(str(filters["report_type"]))
-    start, end = _period(
+    return __weekly_context.build_weekly_context_impl(
         period_days,
-        date_from=str(filters["date_from"]),
-        date_to=str(filters["date_to"]),
-    )
-    window_start = _parse_moment(start)
-    window_end = _parse_moment(end)
-    scoped_staff_id = _report_scope_id(filters, staff)
-    current_window = _is_current_report_date(filters["date_to"])
-
-    dashboard = (
-        decision_dashboard.dashboard(window_days=period_days)
-        if current_window and not scoped_staff_id
-        else {"summary": {}}
-    )
-    summary = dashboard.get("summary") or {}
-    staff_window = "7d" if period_days == 7 else "30d" if period_days == 30 else ""
-    staff_window_supported = current_window and bool(staff_window)
-    staff_kpi = (
-        decision_staff.staff_kpi(window=staff_window, staff_id=scoped_staff_id)
-        if staff_window_supported
-        else {"rows": []}
-    )
-    project_rows = workflow.list_projects(
-        limit=200,
         staff=staff,
-        staff_id_filter=scoped_staff_id,
-    ).get("projects") or []
-    attr_rows = [
-        row
-        for row in (
-            attribution.list_attributions(
-                limit=500,
-                staff_id=scoped_staff_id,
-                staff=staff,
-            ).get("attributions")
-            or []
-        )
-        if _in_window(row.get("occurred_at"), window_start, window_end)
-        and int(row.get("is_verified_business_truth") or 0) == 1
-    ]
-    cost_rows = [
-        row
-        for row in (
-            costs.list_costs(
-                limit=500,
-                staff_id=scoped_staff_id,
-                staff=staff,
-            ).get("costs")
-            or []
-        )
-        if _in_window(row.get("incurred_at"), window_start, window_end)
-        and int(row.get("is_approved_actual") or 0) == 1
-    ]
-    alert_rows = alerts.list_alerts(
-        status="open",
-        limit=100,
-        staff=staff,
-        staff_id=scoped_staff_id,
-    ).get("alerts") or []
-
-    project_id = _int_or_none(filters.get("project_id"))
-    if project_id:
-        scope.assert_project_access(project_id, staff)
-        project_rows = [row for row in project_rows if _int_or_none(row.get("id")) == project_id]
-        attr_rows = [row for row in attr_rows if _int_or_none(row.get("project_id")) == project_id]
-        cost_rows = [row for row in cost_rows if _int_or_none(row.get("project_id")) == project_id]
-
-    sales_by_project: dict[int, int] = {}
-    for row in attr_rows:
-        pid = int(row.get("project_id") or 0)
-        sales_by_project[pid] = sales_by_project.get(pid, 0) + int(row.get("revenue_cents") or 0)
-    cost_by_project: dict[int, int] = {}
-    for row in cost_rows:
-        pid = int(row.get("project_id") or 0)
-        cost_by_project[pid] = cost_by_project.get(pid, 0) + int(row.get("amount_cents") or 0)
-
-    total_sales = sum(int(row.get("revenue_cents") or 0) for row in attr_rows)
-    approved_actual_cost_rows = list(cost_rows)
-    total_cost = sum(int(row.get("amount_cents") or 0) for row in approved_actual_cost_rows)
-    staff_kpi_rows = staff_kpi.get("rows") if isinstance(staff_kpi.get("rows"), list) else []
-    total_views = _first_int(summary, ("total_views", "views", "impressions"))
-    views_status = DataStatus.REAL if total_views is not None else DataStatus.AWAITING_SOURCE
-    views_source_count: int | None = None
-    if scoped_staff_id and staff_window_supported:
-        if not staff_kpi_rows:
-            total_views = 0
-            views_status = DataStatus.REAL
-            views_source_count = 0
-        else:
-            view_values = [
-                value
-                for row in staff_kpi_rows
-                if (value := _int_or_none(row.get("content_views"))) is not None
-            ]
-            views_source_count = len(view_values)
-            if view_values:
-                total_views = sum(view_values)
-                views_status = (
-                    DataStatus.REAL
-                    if len(view_values) == len(staff_kpi_rows)
-                    else DataStatus.PARTIAL
-                )
-            else:
-                total_views = None
-                views_status = DataStatus.AWAITING_SOURCE
-    elif not current_window:
-        total_views = None
-        views_status = DataStatus.AWAITING_SOURCE
-
-    if staff_window_supported:
-        new_kol: int | None = sum(int(row.get("kol_claims") or 0) for row in staff_kpi_rows)
-        published: int | None = sum(int(row.get("published") or 0) for row in staff_kpi_rows)
-        staff_metric_status = DataStatus.REAL
-        staff_source_count: int | None = len(staff_kpi_rows)
-    else:
-        new_kol = None
-        published = None
-        staff_metric_status = DataStatus.AWAITING_SOURCE
-        staff_source_count = None
-
-    active_projects = len(
-        [
-            row
-            for row in project_rows
-            if str(row.get("stage") or "") not in {"closed", "cancelled", "lost", "released"}
-        ]
+        filters=filters,
+        report_uid=report_uid,
+        deps=__weekly_context.WeeklyContextDependencies(
+            ensure_schema=ensure_vkpi_schema,
+            sanitize_filters=sanitize_report_filters,
+            report_spec_for=report_spec_for,
+            period=_period,
+            parse_moment=_parse_moment,
+            report_scope_id=_report_scope_id,
+            is_current_report_date=_is_current_report_date,
+            dashboard=decision_dashboard.dashboard,
+            staff_kpi=decision_staff.staff_kpi,
+            list_projects=workflow.list_projects,
+            list_attributions=attribution.list_attributions,
+            list_costs=costs.list_costs,
+            list_alerts=alerts.list_alerts,
+            assert_project_access=scope.assert_project_access,
+            in_window=_in_window,
+            int_or_none=_int_or_none,
+            first_int=_first_int,
+            localized=_localized,
+            money_cents=_money_cents,
+            metric_payload=_metric_payload,
+            kpi_source_appendix=_kpi_source_appendix,
+            utcnow=_utcnow,
+            staff_name=_staff_name,
+            metric_value_factory=ReportMetricValue,
+            report_data_status=report_data_status,
+            data_status=DataStatus,
+        ),
     )
-    funnel_counts: dict[str, int] = {}
-    for row in project_rows:
-        stage = str(row.get("stage") or "unknown")
-        funnel_counts[stage] = funnel_counts.get(stage, 0) + 1
-
-    staff_rows = []
-    for row in staff_kpi_rows:
-        staff_sales = _first_int(row, ("gmv_cents", "revenue_cents"))
-        staff_cost = _int_or_none(row.get("cost_cents"))
-        staff_rows.append({
-            "name": str(
-                row.get("staff_name")
-                or row.get("name")
-                or row.get("staff_id")
-                or _localized(language, "员工", "Staff")
-            ),
-            "kol_claims": int(row.get("kol_claims") or 0),
-            "published": int(row.get("published") or 0),
-            "sales": _money_cents(staff_sales, language=language),
-            "cost": _money_cents(staff_cost, language=language),
-            "projects": int(row.get("active_projects") or row.get("project_count") or 0),
-        })
-    project_context = []
-    for row in project_rows[:80]:
-        pid = int(row.get("id") or 0)
-        project_context.append({
-            "project_name": str(
-                row.get("project_name")
-                or row.get("project_uid")
-                or _localized(language, "项目", "Project")
-            ),
-            "kol_name": str(row.get("kol_name") or row.get("kol_id") or "-"),
-            "stage": str(row.get("stage") or "-"),
-            "staff_name": str(row.get("staff_name") or row.get("assigned_staff_id") or "-"),
-            "sales": _money_cents(sales_by_project.get(pid, 0), language=language),
-            "cost": _money_cents(cost_by_project.get(pid, 0), language=language),
-            "updated_at": str(row.get("updated_at") or "-"),
-        })
-
-    metric_values = [
-        ReportMetricValue(
-            report_spec.metric("views"),
-            total_views,
-            views_status,
-            source_count=views_source_count,
-            note=_localized(
-                language,
-                "已抓取内容统计" if total_views is not None else "等待可靠播放量来源",
-                "Captured content statistics" if total_views is not None else "Awaiting a reliable views source",
-            ),
-        ),
-        ReportMetricValue(
-            report_spec.metric("sales_cents"),
-            total_sales,
-            DataStatus.REAL,
-            source_count=len(attr_rows),
-            note=_localized(language, "Shopify/Amazon 归因", "Shopify/Amazon attribution"),
-        ),
-        ReportMetricValue(
-            report_spec.metric("cost_cents"),
-            total_cost,
-            DataStatus.REAL,
-            source_count=len(approved_actual_cost_rows),
-            note=_localized(language, "已审批实际成本", "Approved actual costs"),
-        ),
-        ReportMetricValue(
-            report_spec.metric("new_kol"),
-            new_kol,
-            staff_metric_status,
-            source_count=staff_source_count,
-            note=_localized(
-                language,
-                "Claim 统计" if new_kol is not None else "所选日期范围暂无可用聚合",
-                "Claim aggregation" if new_kol is not None else "Aggregation unavailable for the selected dates",
-            ),
-        ),
-        ReportMetricValue(
-            report_spec.metric("published_content"),
-            published,
-            staff_metric_status,
-            source_count=staff_source_count,
-            note=_localized(
-                language,
-                "项目阶段事件" if published is not None else "所选日期范围暂无可用聚合",
-                "Project stage events" if published is not None else "Aggregation unavailable for the selected dates",
-            ),
-        ),
-        ReportMetricValue(
-            report_spec.metric("active_projects"),
-            active_projects,
-            DataStatus.REAL,
-            source_count=len(project_rows),
-            note=_localized(language, "未关闭项目", "Current non-closed projects"),
-        ),
-    ]
-    kpis = [_metric_payload(metric, language=language) for metric in metric_values]
-    unknown = _localized(language, "未知", "Unknown")
-    views_text = unknown if total_views is None else f"{total_views:,}"
-    new_kol_text = unknown if new_kol is None else f"{new_kol:,}"
-    published_text = unknown if published is None else f"{published:,}"
-    if language == "en":
-        summary_text = (
-            f"Verified sales are {_money_cents(total_sales, language=language)} and cost is "
-            f"{_money_cents(total_cost, language=language)} for the selected period. "
-            f"Captured views: {views_text}; new KOLs: {new_kol_text}; published content: "
-            f"{published_text}; active projects: {active_projects}. Unknown values remain unknown."
-        )
-        period_label = f"{filters['date_from']} to {filters['date_to']}"
-    else:
-        summary_text = (
-            f"当前周期确认销售额为 {_money_cents(total_sales)}，成本为 {_money_cents(total_cost)}，"
-            f"已抓取播放量为 {views_text}。新增 KOL {new_kol_text} 个，"
-            f"已发布内容 {published_text} 条，进行中项目 {active_projects} 个。"
-            "成本口径为：发货自动计入镜头成本，员工只登记快递费和推广费用。"
-        )
-        period_label = f"{filters['date_from']} 至 {filters['date_to']}"
-
-    include_summary = "summary" in selected_sections
-    include_kpis = "kpiOverview" in selected_sections
-    include_projects = "projects" in selected_sections
-    include_ledger = "ledger" in selected_sections
-    include_risks = "risks" in selected_sections
-    totals = {
-        "sales_cents": total_sales,
-        "cost_cents": total_cost,
-        "views": total_views,
-        "new_kol": new_kol,
-        "published": published,
-        "active_projects": active_projects,
-    }
-    return {
-        "title": report_spec.title_for(language),
-        "report_type": report_spec.report_type,
-        "report_spec": report_spec.as_dict(language=language),
-        "data_status": report_data_status(metric_values).value,
-        "metric_statuses": {metric.spec.key: metric.data_status.value for metric in metric_values},
-        "report_uid": report_uid,
-        "period_label": period_label,
-        "period_days": period_days,
-        "period_start": start,
-        "period_end": end,
-        "generated_at": _utcnow(),
-        "watermark_user": _staff_name(staff),
-        "language": language,
-        "format": filters["format"],
-        "sections": list(filters["sections"]),
-        "scope": "staff" if scoped_staff_id else "all",
-        "scope_id": scoped_staff_id,
-        "summary_text": summary_text if include_summary else "",
-        "kpis": kpis if include_kpis else [],
-        "funnel": (
-            [{"stage": key, "count": value} for key, value in sorted(funnel_counts.items())]
-            if include_projects
-            else []
-        ),
-        "staff_rows": staff_rows if include_ledger else [],
-        "projects": project_context if include_projects else [],
-        "alerts": (
-            [
-                {
-                    "title": str(
-                        row.get("title")
-                        or row.get("alert_type")
-                        or _localized(language, "提醒", "Alert")
-                    ),
-                    "description": str(row.get("description") or row.get("message") or ""),
-                }
-                for row in alert_rows
-            ]
-            if include_risks
-            else []
-        ),
-        "kpi_appendix": (
-            _kpi_source_appendix(
-                str(filters["date_from"]),
-                str(filters["date_to"]),
-                scoped_staff_id=scoped_staff_id,
-            )
-            if include_ledger
-            else {}
-        ),
-        "metric_run_id": None,
-        "filters": dict(filters),
-        "request": dict(filters),
-        "totals": totals if include_summary or include_kpis else {},
-    }
 
 
 def generate_weekly_report(

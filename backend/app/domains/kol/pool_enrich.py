@@ -53,6 +53,182 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _unconfigured_enrich_result(conn: Any, kol_pool_id: int, item: dict[str, Any], platform: str) -> dict[str, Any]:
+    now = _utcnow()
+    conn.execute(
+        "UPDATE vkpi_kol_pool SET sync_status=?, updated_at=? WHERE id=?",
+        ("not_configured", now, int(kol_pool_id)),
+    )
+    conn.commit()
+    _clear_kol_pool_read_cache()
+    updated = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
+    return {
+        "item": dict(updated) if updated else item,
+        "sync_status": "not_configured",
+        "provider_status": "not_configured",
+        "message": f"{platform} API or crawler is not configured",
+    }
+
+
+def _crawl_enrich_payload(
+    crawler: Any, platform: str, handle_or_url: str, max_posts: int,
+) -> tuple[Any, dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+    if platform == "youtube":
+        profile_payload = crawler.crawl_channel_profile(handle_or_url, channel_id="")
+    else:
+        profile_payload = crawler.crawl_channel_profile(handle_or_url, channel_id="", max_posts=max_posts)
+    profile_items = profile_payload.get("items") if isinstance(profile_payload, dict) else []
+    profile = profile_items[0] if isinstance(profile_items, list) and profile_items and isinstance(profile_items[0], dict) else {}
+    channel_id = str(profile.get("id") or "") if platform == "youtube" else str(
+        _first_present(profile.get("username"), profile.get("handle"), profile.get("screen_name")) or ""
+    )
+    videos_payload: dict[str, Any] = {}
+    videos_items: list[dict[str, Any]] = []
+    if platform == "youtube" and channel_id and hasattr(crawler, "crawl_channel_videos"):
+        videos_payload = crawler.crawl_channel_videos(channel_id, max_results=max_posts)
+        videos = videos_payload.get("items") if isinstance(videos_payload, dict) else []
+        videos_items = [video for video in videos if isinstance(video, dict)] if isinstance(videos, list) else []
+        if not videos_items and isinstance(profile_payload, dict):
+            fallback_videos = profile_payload.get("videos")
+            if isinstance(fallback_videos, list):
+                videos_items = [video for video in fallback_videos if isinstance(video, dict)]
+    elif isinstance(profile_payload, dict):
+        payload_items = _content_items_from_payload(profile_payload)
+        if payload_items and _looks_like_content_item(payload_items[0]):
+            videos_items = payload_items
+        elif profile:
+            videos_items = _content_items_from_payload(profile)
+    return profile_payload, profile, videos_payload, videos_items
+
+
+def _enrich_raw_data(
+    *, platform: str, kol_pool_id: int, profile_payload: dict[str, Any],
+    videos_payload: dict[str, Any], videos_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    raw_data = {
+        "source": f"{platform}_crawler", "profile": profile_payload, "videos": videos_items,
+        "kpi_status": profile_payload.get("sync_status") or profile_payload.get("provider_status") or "synced",
+        "source_ref": f"kol_pool:{kol_pool_id}",
+    }
+    if platform != "youtube":
+        return raw_data
+    youtube_source = str(profile_payload.get("provider_source") or videos_payload.get("provider_source") or "").strip()
+    raw_data["source"] = "youtube_apify" if youtube_source == "apify" else "youtube_api"
+    raw_data["youtube_provider_source"] = youtube_source or "youtube_api"
+    youtube_fallback_from = profile_payload.get("fallback_from") or videos_payload.get("fallback_from")
+    if youtube_fallback_from:
+        raw_data["youtube_fallback_from"] = youtube_fallback_from
+    raw_data["youtube_kpi_status"] = raw_data["kpi_status"]
+    return raw_data
+
+
+def _enrich_values(
+    item: dict[str, Any], platform: str, raw_data: dict[str, Any], videos_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    kpis = calculate_kpis(raw_data)
+    profile = _profile_item(raw_data)
+    stats = _profile_stats(profile)
+    followers = _int_or_none(_first_present(kpis.get("followers"), item.get("followers")))
+    posts_count = _int_or_none(_first_present(kpis.get("posts"), item.get("posts_count")))
+    avg_views = _int_or_none(_first_present(kpis.get("avg_views"), item.get("avg_views")))
+    sample_count = len(videos_items) or int(posts_count or 0)
+    engagement_ratio = _float_or_none(kpis.get("engagement_rate"))
+    return {
+        "profile_url": _profile_url(platform, profile, str(item.get("handle") or ""), str(item.get("profile_url") or "")),
+        "display_name": _display_name(profile, str(item.get("display_name") or item.get("handle") or "")),
+        "avatar_url": _thumb_url(profile) or str(item.get("avatar_url") or ""),
+        "bio": _bio(profile) or str(item.get("bio") or ""), "followers": followers,
+        "following": _int_or_none(_first_present(stats.get("following"), stats.get("followingCount"), stats.get("followsCount"), item.get("following"))),
+        "posts_count": posts_count, "avg_views": avg_views,
+        "avg_likes": _average_from_total(kpis.get("likes"), sample_count, item.get("avg_likes")),
+        "avg_comments": _average_from_total(kpis.get("comments"), sample_count, item.get("avg_comments")),
+        "engagement_ratio": engagement_ratio,
+        "engagement_rate": (engagement_ratio * 100.0) if engagement_ratio is not None and engagement_ratio <= 1 else engagement_ratio,
+        "sync_status": _normalize_sync_status(raw_data.get("kpi_status")),
+    }
+
+
+def _score_enrichment(item: dict[str, Any], platform: str, values: dict[str, Any]) -> Any:
+    return ScoringRegistry.get("rule_v0").score(
+        {
+            "platform": platform, "followers": values["followers"], "posts_count": values["posts_count"],
+            "avg_views": values["avg_views"], "engagement_rate": values["engagement_ratio"],
+            "primary_topic": item.get("primary_topic") or values["bio"], "sync_status": values["sync_status"],
+        },
+        {"product_name": "Viltrox lens", "category": "camera lens", "target_platforms": [platform]},
+    )
+
+
+def _write_enriched_item(
+    conn: Any, kol_pool_id: int, values: dict[str, Any], raw_data: dict[str, Any], scoring: Any,
+) -> None:
+    now = _utcnow()
+    conn.execute(
+        """
+        UPDATE vkpi_kol_pool
+        SET profile_url=?, display_name=?, avatar_url=?, bio=?, followers=?, following=?,
+            posts_count=?, avg_views=?, avg_likes=?, avg_comments=?, engagement_rate=?,
+            viltrox_fit_score=?, viltrox_fit_reason=?, sync_status=?, raw_platform_data=?,
+            last_seen_at=?, updated_at=?
+        WHERE id=?
+        """,
+        (
+            values["profile_url"], values["display_name"], values["avatar_url"], values["bio"],
+            values["followers"], values["following"], values["posts_count"], values["avg_views"],
+            values["avg_likes"], values["avg_comments"], values["engagement_rate"], float(scoring.score),
+            "; ".join([*scoring.strengths, *scoring.concerns])[:1000], values["sync_status"],
+            _json(raw_data), now, now, int(kol_pool_id),
+        ),
+    )
+    conn.commit()
+
+
+def _rollback_enrich_step(conn: Any) -> None:
+    try:
+        conn.rollback()
+    except Exception:
+        logger.debug("回滚失败(best-effort)", exc_info=True)
+
+
+def _apply_enrich_raw_fields(conn: Any, kol_pool_id: int, raw_data: dict[str, Any], platform: str) -> None:
+    try:
+        apply_raw_fields(conn, int(kol_pool_id), raw_data, platform=platform)
+    except Exception:
+        _rollback_enrich_step(conn)
+        logger.warning("raw fields extract skipped kol=%s", kol_pool_id, exc_info=True)
+
+
+def _derive_enrich_topic(
+    conn: Any, kol_pool_id: int, item: dict[str, Any], values: dict[str, Any], raw_data: dict[str, Any],
+) -> None:
+    try:
+        from app.domains.kol.eleven_dimensions import derive_primary_topic
+
+        topic, secondary = derive_primary_topic({
+            "display_name": values["display_name"], "handle": item.get("handle"),
+            "bio": values["bio"], "raw_platform_data": raw_data,
+        })
+        if topic:
+            conn.execute(
+                """UPDATE vkpi_kol_pool SET primary_topic=?, secondary_topics_json=?
+                   WHERE id=? AND (primary_topic IS NULL OR TRIM(primary_topic) = '')""",
+                (topic, _json(secondary), int(kol_pool_id)),
+            )
+            conn.commit()
+    except Exception:
+        _rollback_enrich_step(conn)
+        logger.warning("primary_topic derive skipped kol=%s", kol_pool_id, exc_info=True)
+
+
+def _regate_enriched_item(conn: Any, kol_pool_id: int) -> None:
+    try:
+        from app.domains.kol.reach_floor_regate import reapply_reach_floor
+
+        reapply_reach_floor(int(kol_pool_id), conn=conn)
+    except Exception:
+        logger.warning("reach floor regate skipped kol=%s", kol_pool_id, exc_info=True)
+
+
 def enrich_item(
     kol_pool_id: int,
     *,
@@ -77,220 +253,32 @@ def enrich_item(
     if crawler is None:
         return {"item": item, "sync_status": "unsupported", "provider_status": "unsupported", "message": f"{platform} crawler not registered"}
     if not getattr(crawler, "configured", False):
-        now = _utcnow()
-        conn.execute(
-            "UPDATE vkpi_kol_pool SET sync_status=?, updated_at=? WHERE id=?",
-            ("not_configured", now, int(kol_pool_id)),
-        )
-        conn.commit()
-        _clear_kol_pool_read_cache()
-        updated = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
-        return {
-            "item": dict(updated) if updated else item,
-            "sync_status": "not_configured",
-            "provider_status": "not_configured",
-            "message": f"{platform} API or crawler is not configured",
-        }
-
+        return _unconfigured_enrich_result(conn, int(kol_pool_id), item, platform)
     handle_or_url = str(item.get("profile_url") or item.get("handle") or "")
     max_posts_i = max(1, min(50, int(max_posts or 12)))
-    if platform == "youtube":
-        profile_payload = crawler.crawl_channel_profile(handle_or_url, channel_id="")
-    else:
-        profile_payload = crawler.crawl_channel_profile(handle_or_url, channel_id="", max_posts=max_posts_i)
-
-    profile_items = profile_payload.get("items") if isinstance(profile_payload, dict) else []
-    profile = profile_items[0] if isinstance(profile_items, list) and profile_items and isinstance(profile_items[0], dict) else {}
-    channel_id = ""
-    if platform == "youtube":
-        channel_id = str(profile.get("id") or "")
-    else:
-        channel_id = str(
-            _first_present(
-                profile.get("username"),
-                profile.get("handle"),
-                profile.get("screen_name"),
-                item.get("handle"),
-            )
-            or ""
-        )
-
-    videos_payload: dict[str, Any] = {}
-    videos_items: list[dict[str, Any]] = []
-    if platform == "youtube" and channel_id and hasattr(crawler, "crawl_channel_videos"):
-        videos_payload = crawler.crawl_channel_videos(channel_id, max_results=max_posts_i)
-        videos = videos_payload.get("items") if isinstance(videos_payload, dict) else []
-        videos_items = [video for video in videos if isinstance(video, dict)] if isinstance(videos, list) else []
-        if not videos_items and isinstance(profile_payload, dict):
-            fallback_videos = profile_payload.get("videos")
-            if isinstance(fallback_videos, list):
-                videos_items = [video for video in fallback_videos if isinstance(video, dict)]
-    elif isinstance(profile_payload, dict):
-        payload_items = _content_items_from_payload(profile_payload)
-        if payload_items and _looks_like_content_item(payload_items[0]):
-            videos_items = payload_items
-        elif profile:
-            videos_items = _content_items_from_payload(profile)
-
-    raw_data = {
-        "source": f"{platform}_crawler",
-        "profile": profile_payload,
-        "videos": videos_items,
-        "kpi_status": profile_payload.get("sync_status") or profile_payload.get("provider_status") or "synced",
-        "source_ref": f"kol_pool:{kol_pool_id}",
-    }
-    if platform == "youtube":
-        youtube_source = str(profile_payload.get("provider_source") or videos_payload.get("provider_source") or "").strip()
-        raw_data["source"] = "youtube_apify" if youtube_source == "apify" else "youtube_api"
-        raw_data["youtube_provider_source"] = youtube_source or "youtube_api"
-        youtube_fallback_from = profile_payload.get("fallback_from") or videos_payload.get("fallback_from")
-        if youtube_fallback_from:
-            raw_data["youtube_fallback_from"] = youtube_fallback_from
-        raw_data["youtube_kpi_status"] = raw_data["kpi_status"]
-
-    kpis = calculate_kpis(raw_data)
-    profile = _profile_item(raw_data)
-    stats = _profile_stats(profile)
-    followers = _int_or_none(_first_present(kpis.get("followers"), item.get("followers")))
-    posts_count = _int_or_none(_first_present(kpis.get("posts"), item.get("posts_count")))
-    avg_views = _int_or_none(_first_present(kpis.get("avg_views"), item.get("avg_views")))
-    sample_count = len(videos_items) or int(posts_count or 0)
-    avg_likes = _average_from_total(kpis.get("likes"), sample_count, item.get("avg_likes"))
-    avg_comments = _average_from_total(kpis.get("comments"), sample_count, item.get("avg_comments"))
-    engagement_ratio = _float_or_none(kpis.get("engagement_rate"))
-    engagement_rate = (engagement_ratio * 100.0) if engagement_ratio is not None and engagement_ratio <= 1 else engagement_ratio
-    display_name = _display_name(profile, str(item.get("display_name") or item.get("handle") or ""))
-    avatar_url = _thumb_url(profile) or str(item.get("avatar_url") or "")
-    bio = _bio(profile) or str(item.get("bio") or "")
-    profile_url = _profile_url(platform, profile, str(item.get("handle") or ""), str(item.get("profile_url") or ""))
-    sync_status = _normalize_sync_status(raw_data.get("kpi_status"))
-
-    scoring = ScoringRegistry.get("rule_v0").score(
-        {
-            "platform": platform,
-            "followers": followers,
-            "posts_count": posts_count,
-            "avg_views": avg_views,
-            "engagement_rate": engagement_ratio,
-            "primary_topic": item.get("primary_topic") or bio,
-            "sync_status": sync_status,
-        },
-        {"product_name": "Viltrox lens", "category": "camera lens", "target_platforms": [platform]},
+    profile_payload, _profile, videos_payload, videos_items = _crawl_enrich_payload(
+        crawler, platform, handle_or_url, max_posts_i,
     )
-    # 头像落地(2026-08-25 车道 2):富化写 avatar_url 的同一条路径上,把图片复制进
-    # 我们自己的媒体缓存。本函数是整列覆写 raw_platform_data,所以诚实标记必须随这份
-    # payload 一起写,否则刚打的标记会被自己抹掉。落地失败只降级成 external 标记,
-    # 绝不影响富化落库。
+    raw_data = _enrich_raw_data(
+        platform=platform, kol_pool_id=int(kol_pool_id), profile_payload=profile_payload,
+        videos_payload=videos_payload, videos_items=videos_items,
+    )
+    values = _enrich_values(item, platform, raw_data, videos_items)
+    scoring = _score_enrichment(item, platform, values)
     _stamp_enrich_avatar(
-        raw_data,
-        avatar_url,
-        platform=platform,
-        external_id=str(item.get("handle") or ""),
-        budget=avatar_landing_budget,
-        conn=conn,
+        raw_data, values["avatar_url"], platform=platform, external_id=str(item.get("handle") or ""),
+        budget=avatar_landing_budget, conn=conn,
     )
-    now = _utcnow()
-    conn.execute(
-        """
-        UPDATE vkpi_kol_pool
-        SET profile_url=?,
-            display_name=?,
-            avatar_url=?,
-            bio=?,
-            followers=?,
-            following=?,
-            posts_count=?,
-            avg_views=?,
-            avg_likes=?,
-            avg_comments=?,
-            engagement_rate=?,
-            viltrox_fit_score=?,
-            viltrox_fit_reason=?,
-            sync_status=?,
-            raw_platform_data=?,
-            last_seen_at=?,
-            updated_at=?
-        WHERE id=?
-        """,
-        (
-            profile_url,
-            display_name,
-            avatar_url,
-            bio,
-            followers,
-            _int_or_none(_first_present(stats.get("following"), stats.get("followingCount"), stats.get("followsCount"), item.get("following"))),
-            posts_count,
-            avg_views,
-            avg_likes,
-            avg_comments,
-            engagement_rate,
-            float(scoring.score),
-            "; ".join([*scoring.strengths, *scoring.concerns])[:1000],
-            sync_status,
-            _json(raw_data),
-            now,
-            now,
-            int(kol_pool_id),
-        ),
-    )
-    conn.commit()
-    # C6 零新抓提列 + 291 raw 字段提列:K8 商单/认证标记(authorMeta.verified/ttSeller/
-    # commerceUserInfo.commerceUser)与主题/被标记品牌从同一份 raw 顺手提列。独立 UPDATE +
-    # 独立提交:列未迁移(旧布局)或解析异常一律静默跳过,绝不影响主富化。
-    # 红线:只写派生标记列,不触 viltrox_fit_score / rule_v0。
-    try:
-        apply_raw_fields(conn, int(kol_pool_id), raw_data, platform=platform)
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            logger.debug("回滚失败(best-effort)", exc_info=True)
-        logger.warning("raw fields extract skipped kol=%s", kol_pool_id, exc_info=True)
-    # primary_topic 前向填充(2026-07-19 挂账刀②):同一份 raw 规则分类,只填空不覆盖
-    # (含未来人工填写);存量由 backfill_primary_topic.py 清偿。独立 UPDATE + 独立提交,
-    # 异常静默跳过。红线:纯数据列,零触 viltrox_fit_score / rule_v0 公式。
-    try:
-        from app.domains.kol.eleven_dimensions import derive_primary_topic
-
-        topic, secondary = derive_primary_topic(
-            {
-                "display_name": display_name,
-                "handle": item.get("handle"),
-                "bio": bio,
-                "raw_platform_data": raw_data,
-            }
-        )
-        if topic:
-            conn.execute(
-                """
-                UPDATE vkpi_kol_pool
-                SET primary_topic=?, secondary_topics_json=?
-                WHERE id=? AND (primary_topic IS NULL OR TRIM(primary_topic) = '')
-                """,
-                (topic, _json(secondary), int(kol_pool_id)),
-            )
-            conn.commit()
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            logger.debug("回滚失败(best-effort)", exc_info=True)
-        logger.warning("primary_topic derive skipped kol=%s", kol_pool_id, exc_info=True)
-    # 第二道闸(2026-07-12 两粉号案):followers 已回填真值 → 立即重过触达门槛,
-    # 命中给 raw_platform_data 打 low_reach 标(推荐/发现/召回三出口据此不展示;行保留)。
-    # best-effort 绝不阻断富化;判据复用 discovery_filters 单一真源;零触 viltrox_fit_score。
-    try:
-        from app.domains.kol.reach_floor_regate import reapply_reach_floor
-
-        reapply_reach_floor(int(kol_pool_id), conn=conn)
-    except Exception:
-        logger.warning("reach floor regate skipped kol=%s", kol_pool_id, exc_info=True)
+    _write_enriched_item(conn, int(kol_pool_id), values, raw_data, scoring)
+    _apply_enrich_raw_fields(conn, int(kol_pool_id), raw_data, platform)
+    _derive_enrich_topic(conn, int(kol_pool_id), item, values, raw_data)
+    _regate_enriched_item(conn, int(kol_pool_id))
     _clear_kol_pool_read_cache()
     updated = conn.execute("SELECT * FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)).fetchone()
     return {
         "item": dict(updated) if updated else {},
-        "sync_status": sync_status,
-        "provider_status": profile_payload.get("provider_status") or sync_status,
+        "sync_status": values["sync_status"],
+        "provider_status": profile_payload.get("provider_status") or values["sync_status"],
         "posts_sampled": len(videos_items),
         "score_breakdown": scoring.breakdown,
     }

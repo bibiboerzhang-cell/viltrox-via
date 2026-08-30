@@ -301,6 +301,70 @@ def _platform_from_url(value: Any) -> str:
     return ""
 
 
+def _youtube_url_identity(host: str, parts: list[str]) -> tuple[set[str], str]:
+    aliases: set[str] = set()
+    if (
+        host != "youtu.be"
+        and len(parts) in {2, 3}
+        and parts[0].casefold() == "channel"
+        and (len(parts) == 2 or parts[2].casefold() in _YOUTUBE_PROFILE_TABS)
+    ):
+        native_id = _identity_text(parts[1])
+        if YOUTUBE_CHANNEL_ID_RE.fullmatch(parts[1]):
+            aliases.add(f"youtube:id:{native_id}")
+            return aliases, f"/channel/{native_id}"
+        return aliases, ""
+    if host == "youtu.be" or not parts:
+        return aliases, ""
+    first = parts[0]
+    is_profile_root_or_tab = len(parts) == 1 or (
+        len(parts) == 2 and parts[1].casefold() in _YOUTUBE_PROFILE_TABS
+    )
+    if first.startswith("@") and is_profile_root_or_tab:
+        handle = _identity_handle(first)
+        if handle:
+            aliases.add(f"youtube:handle:{handle}")
+            return aliases, f"/@{handle}"
+    is_legacy_locator = (
+        len(parts) in {2, 3}
+        and first.casefold() in {"c", "user"}
+        and (len(parts) == 2 or parts[2].casefold() in _YOUTUBE_PROFILE_TABS)
+    )
+    if is_legacy_locator:
+        locator = _identity_handle(parts[1])
+        if locator:
+            route = first.casefold()
+            aliases.add(f"youtube:locator:{route}:{locator}")
+            return aliases, f"/{route}/{locator}"
+    return aliases, ""
+
+
+def _handle_url_identity(
+    platform: str,
+    parts: list[str],
+    *,
+    reserved_roots: set[str],
+    require_at: bool = False,
+    reject_php: bool = False,
+) -> tuple[set[str], str]:
+    if len(parts) != 1:
+        return set(), ""
+    first = parts[0]
+    handle = _identity_handle(first)
+    route = _identity_text(first)
+    invalid = (
+        not handle
+        or route in reserved_roots
+        or "%" in first
+        or (require_at and not first.startswith("@"))
+        or (reject_php and route.endswith(".php"))
+    )
+    if invalid:
+        return set(), ""
+    prefix = "@" if require_at else ""
+    return {f"{platform}:handle:{handle}"}, f"/{prefix}{handle}"
+
+
 def _url_identity_aliases(value: Any, platform_hint: str = "") -> set[str]:
     raw = str(value or "").strip()
     if not raw:
@@ -329,69 +393,37 @@ def _url_identity_aliases(value: Any, platform_hint: str = "") -> set[str]:
         if host.startswith(prefix):
             host = host[len(prefix):]
     parts = [part for part in parsed.path.split("/") if part]
-    aliases: set[str] = set()
-    profile_path = ""
-    if (
-        platform == "youtube"
-        and host != "youtu.be"
-        and len(parts) in {2, 3}
-        and parts[0].casefold() == "channel"
-        and (len(parts) == 2 or parts[2].casefold() in _YOUTUBE_PROFILE_TABS)
-    ):
-        native_id = _identity_text(parts[1])
-        if YOUTUBE_CHANNEL_ID_RE.fullmatch(parts[1]):
-            aliases.add(f"youtube:id:{native_id}")
-            profile_path = f"/channel/{native_id}"
-    elif platform == "youtube" and host != "youtu.be" and parts:
-        first = parts[0]
-        is_profile_root_or_tab = len(parts) == 1 or (
-            len(parts) == 2 and parts[1].casefold() in _YOUTUBE_PROFILE_TABS
+    if platform == "youtube":
+        aliases, profile_path = _youtube_url_identity(host, parts)
+    elif platform == "instagram":
+        aliases, profile_path = _handle_url_identity(
+            platform,
+            parts,
+            reserved_roots=_INSTAGRAM_RESERVED_ROOTS,
         )
-        if first.startswith("@") and is_profile_root_or_tab:
-            handle = _identity_handle(first)
-            if handle:
-                aliases.add(f"youtube:handle:{handle}")
-                profile_path = f"/@{handle}"
-        elif (
-            len(parts) in {2, 3}
-            and first.casefold() in {"c", "user"}
-            and (len(parts) == 2 or parts[2].casefold() in _YOUTUBE_PROFILE_TABS)
-        ):
-            locator = _identity_handle(parts[1])
-            if locator:
-                aliases.add(f"youtube:locator:{first.casefold()}:{locator}")
-                profile_path = f"/{first.casefold()}/{locator}"
-    elif platform == "instagram" and len(parts) == 1:
-        first = parts[0]
-        handle = _identity_handle(first)
-        if handle and handle not in _INSTAGRAM_RESERVED_ROOTS and "%" not in first:
-            aliases.add(f"instagram:handle:{handle}")
-            profile_path = f"/{handle}"
-    elif platform == "tiktok" and len(parts) == 1:
-        first = parts[0]
-        handle = _identity_handle(first)
-        if first.startswith("@") and handle and "%" not in first:
-            aliases.add(f"tiktok:handle:{handle}")
-            profile_path = f"/@{handle}"
-    elif platform == "facebook" and len(parts) == 1:
-        first = parts[0]
-        handle = _identity_handle(first)
-        route = _identity_text(first)
-        if (
-            handle
-            and route not in _FACEBOOK_RESERVED_ROOTS
-            and not route.endswith(".php")
-            and "%" not in first
-        ):
-            aliases.add(f"facebook:handle:{handle}")
-            profile_path = f"/{handle}"
-    elif platform == "twitter" and len(parts) == 1:
-        first = parts[0]
-        handle = _identity_handle(first)
-        if handle and handle not in _TWITTER_RESERVED_ROOTS and "%" not in first:
-            aliases.add(f"twitter:handle:{handle}")
-            profile_path = f"/{handle}"
-    elif platform == "website":
+    elif platform == "tiktok":
+        aliases, profile_path = _handle_url_identity(
+            platform,
+            parts,
+            reserved_roots=set(),
+            require_at=True,
+        )
+    elif platform == "facebook":
+        aliases, profile_path = _handle_url_identity(
+            platform,
+            parts,
+            reserved_roots=_FACEBOOK_RESERVED_ROOTS,
+            reject_php=True,
+        )
+    elif platform == "twitter":
+        aliases, profile_path = _handle_url_identity(
+            platform,
+            parts,
+            reserved_roots=_TWITTER_RESERVED_ROOTS,
+        )
+    else:
+        aliases, profile_path = set(), ""
+    if platform == "website":
         # Custom websites are the intentional host-hint exception. Preserve
         # their path contract while still dropping query/fragment trackers.
         profile_path = unicodedata.normalize("NFKC", parsed.path).rstrip("/").casefold() or "/"

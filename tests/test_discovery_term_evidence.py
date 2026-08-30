@@ -25,51 +25,61 @@ from app.domains.kol import profile_discovery_rounds as rounds
 from app.services.intelligence import account_search_discovery
 
 
-# ── 配额记账:301 的 50% 高估 ──────────────────────────────────────────────────
-def test_quota_units_follow_the_real_variant_count_not_a_fixed_301() -> None:
-    """search.list 100/变体 + channels.list 1。真发 2 条就是 201,不许恒报 301。"""
-    assert rounds.youtube_quota_units(1) == 101
-    assert rounds.youtube_quota_units(2) == 201
-    assert rounds.youtube_quota_units(3) == 301
-    # 不知道变体数才退回上限(失败方向:高估,不会低估)。
-    assert rounds.youtube_quota_units(None) == rounds.YOUTUBE_QUOTA_UNITS_PER_ROUND == 301
-    assert rounds.youtube_quota_units(0) == 301
-    assert rounds.youtube_quota_units("garbage") == 301
-    # 检索词车道的精准词梯会发 4~5 条 —— 传进来的真实数必须照记,按 3 封顶会**低估**
-    # 配额(预算闸最不能接受的失败方向)。只有一个防呆天花板兜住离谱输入。
-    assert rounds.youtube_quota_units(5) == 501
-    assert rounds.youtube_quota_units(99) == 100 * rounds.YOUTUBE_QUERY_VARIANTS_CEILING + 1
+# ── 配额记账 v2:独立 Search Queries + combined quota ────────────────────────
+def test_youtube_usage_keeps_search_and_combined_quota_separate() -> None:
+    one = rounds.youtube_usage_forecast(1)
+    assert one == {
+        "youtube_search_calls": 1,
+        "youtube_combined_quota_units": 2,
+        "youtube_api_calls": 3,
+    }
+    five = rounds.youtube_usage_forecast(5)
+    assert five["youtube_search_calls"] == 5
+    assert five["youtube_combined_quota_units"] == 2
+    assert five["youtube_api_calls"] == 7
+    assert rounds.youtube_usage_forecast(99)["youtube_search_calls"] == rounds.YOUTUBE_QUERY_VARIANTS_CEILING
+    assert rounds.youtube_quota_units(1) == 2
+    assert rounds.YOUTUBE_QUOTA_UNITS_PER_ROUND == 2
 
 
 def test_forecast_uses_the_variant_count_so_the_round_gate_reads_a_real_number() -> None:
     two = rounds.round_cost_forecast(["youtube"], round_no=2, youtube_query_variants=2)
-    assert two["youtube_quota_units"] == 201
-    assert two["youtube_api_calls"] == 3          # 2 次 search.list + 1 次 channels.list
+    assert two["youtube_search_calls"] == 2
+    assert two["youtube_combined_quota_units"] == 2
+    assert two["youtube_quota_units"] == 2
+    assert two["youtube_quota_units_deprecated"] is True
+    assert two["youtube_api_calls"] == 4
     assert two["estimated_usd"] == 0.0            # YouTube 腿零 Apify 花费,口径不变
     # 不传变体数 = 旧行为逐字不变(三条腿全上的既有账不许被这刀改动)。
     legacy = rounds.round_cost_forecast(
         ["youtube", "instagram", "tiktok"], round_no=1,
         per_platform_limits={"youtube": 50, "instagram": 20, "tiktok": 20},
     )
-    assert legacy["youtube_quota_units"] == 301
-    assert legacy["youtube_api_calls"] == 4
+    assert legacy["youtube_search_calls"] == 3
+    assert legacy["youtube_combined_quota_units"] == 2
+    assert legacy["youtube_api_calls"] == 5
     assert legacy["apify_runs"] == 3
     assert legacy["estimated_usd"] == pytest.approx(0.652, abs=0.01)
 
 
-def test_round_plan_record_reports_actual_spend_against_the_forecast() -> None:
-    """预报 903 / 实际 603 这种事必须能一条 SELECT 读出来,而不是只有预报。"""
+def test_round_plan_record_reports_both_actual_buckets_against_forecast() -> None:
     forecasts = [
         rounds.round_cost_forecast(["youtube"], round_no=index, youtube_query_variants=3)
         for index in (1, 2, 3)
     ]
     record = rounds.round_plan_record(
         forecasts=forecasts, provider_rounds=3,
-        actual_quota_units=603, actual_apify_runs=0,
+        actual_search_calls=6, actual_combined_quota_units=6,
+        actual_youtube_api_calls=12, actual_apify_runs=0,
     )
-    assert record["youtube_quota_units_total"] == 903
-    assert record["youtube_quota_units_actual"] == 603
-    assert record["quota_forecast_delta_units"] == 300
+    assert record["youtube_search_calls_total"] == 9
+    assert record["youtube_search_calls_actual"] == 6
+    assert record["youtube_combined_quota_units_total"] == 6
+    assert record["youtube_combined_quota_units_actual"] == 6
+    assert record["youtube_api_calls_total"] == 15
+    assert record["youtube_api_calls_actual"] == 12
+    assert record["youtube_quota_units_total"] == 6
+    assert record["youtube_quota_units_deprecated"] is True
     assert record["apify_runs_actual"] == 0
     # 没有实际值时不拿预报冒充实际(诚实空态,读端能分辨)。
     blind = rounds.round_plan_record(forecasts=forecasts, provider_rounds=3)
@@ -86,12 +96,12 @@ def test_forecast_tracks_whatever_the_term_builder_actually_plans() -> None:
     for query in ("Viltrox lens review", "Viltrox AF 135mm f1.8 LAB review Sony E mount portrait"):
         planned = ev.planned_youtube_variants(query)
         assert 1 <= planned <= rounds.YOUTUBE_QUERY_VARIANTS_CEILING
-        assert rounds.youtube_quota_units(planned) == 100 * planned + 1
         forecast = rounds.round_cost_forecast(
             ["youtube"], round_no=1, youtube_query_variants=planned,
         )
-        assert forecast["youtube_quota_units"] == 100 * planned + 1
-        assert forecast["youtube_api_calls"] == planned + 1
+        assert forecast["youtube_search_calls"] == planned
+        assert forecast["youtube_combined_quota_units"] == 2
+        assert forecast["youtube_api_calls"] == planned + 2
     assert ev.planned_youtube_variants("") == 0
 
 
@@ -175,7 +185,10 @@ def test_reported_quota_matches_the_calls_actually_made(monkeypatch: pytest.Monk
     search_calls = [row for row in calls if "q" in row]
     used = result["metadata"]["provider_queries"]
     assert len(search_calls) == len(used) == 2, "装满 2 条就该停,第 3 条变体不该发"
-    assert result["metadata"]["quota_units"] == 100 * len(used) + 1 == 201
+    assert result["metadata"]["youtube_search_calls"] == len(used) == 2
+    assert result["metadata"]["youtube_combined_quota_units"] == 2
+    assert result["metadata"]["youtube_api_calls"] == 4
+    assert result["metadata"]["quota_units_deprecated"] is True
 
 
 def test_real_provider_path_keeps_the_term_tag_all_the_way_to_the_pipeline(
@@ -238,7 +251,8 @@ def test_real_provider_path_keeps_the_term_tag_all_the_way_to_the_pipeline(
     assert leg["candidates_untagged"] == 0
     assert sum(leg["candidates_by_term"].values()) == len(result["new_creators"])
     assert set(leg["candidates_by_term"]) <= set(leg["terms"])
-    # 配额与真实发出去的变体数对得上(100/条 + channels.list 1)。
-    assert leg["quota_units_actual"] == 100 * leg["term_count"] + 1
+    assert leg["youtube_search_calls_actual"] == leg["term_count"]
+    assert leg["youtube_combined_quota_units_actual"] == 2
+    assert leg["youtube_api_calls_actual"] == leg["term_count"] + 2
     # 落库的用词是**真发出去的**那几条(带市场后缀),不是 payload 里的原句。
     assert _LONG_QUERY not in leg["terms"]

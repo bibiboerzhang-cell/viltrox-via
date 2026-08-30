@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone
 
 from app.core.config import ENABLE_RUNTIME_PREVIEW_DATA, IS_PRODUCTION
-from app.core.security import hash_password
+from app.core.passwords import hash_password
 from app.db.connection import get_conn
 from app.services.runtime_seed_data import (
     LEADERBOARD_CREATOR_SEEDS,
@@ -18,7 +18,7 @@ from app.services.runtime_seed_data import (
     RUNTIME_SEED_MEMO_PREFIX,
 )
 from app.services.runtime_seed_submissions import seed_leaderboard_submission_rows, seed_preview_submission_rows
-from app.services.student_identity import ensure_student_identity_registry_defaults
+from app.services.student_identity_defaults import ensure_student_identity_registry_defaults
 
 
 def _utcnow() -> str:

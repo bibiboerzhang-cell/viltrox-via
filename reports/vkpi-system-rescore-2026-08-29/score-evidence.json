@@ -1,0 +1,263 @@
+{
+  "schema_version": "vkpi_system_rescore_evidence_v1",
+  "generated_at": "2026-08-30T00:06:57Z",
+  "assessment_date_local": "2026-08-29",
+  "candidate": {
+    "repo": "/Users/bibiboer/Documents/V-KPI——marketing",
+    "branch": "codex/optimization-v1-local",
+    "head": "7c2c5837af71092a29b989b66d7b3d34dc3e4740",
+    "tracked_modified": 221,
+    "untracked_files": 234,
+    "staged": 0,
+    "status_entry_count": 455,
+    "stable_during_gate_and_coverage": true,
+    "fingerprints": {
+      "status_sha256": "dbeffa5dfe32f9627d21301728b028fd23f77d53b5842fc782f9fd4045dbfc67",
+      "tracked_delta_sha256": "ab3585ab6164792d941f0ad59aea83638feb8461f039903b3896086b5bd6fb4c",
+      "untracked_manifest_sha256": "daa7551990ff624ff04f1838e3fd983855a71b3496ff7c4cb26835ae96cf7e8a",
+      "static_source_sha256": "dcac65deea177f2cf4db3efff9ca4ac016c09e18cb08c4d8279efa731fc174ca"
+    },
+    "static_scope": {
+      "files": 3041,
+      "physical_lines": 807797
+    }
+  },
+  "rubric": {
+    "name": "User attachment technical due diligence engine V1",
+    "formula": "0.25*code + 0.25*architecture + 0.25*evolution + 0.25*delivery - penalties",
+    "expanded_grade": "D+",
+    "engine_grade": "D",
+    "comparability_policy": {
+      "purpose": "Preserve comparison with the 2026-08-28 estimate",
+      "critical_fix_rate_metric_score": 50,
+      "change_failure_rate_metric_score": 50,
+      "quality_gate_enabled_assumption": true,
+      "warning": "The two 50-point values and quality-gate enablement are comparability assumptions, not observed DORA or branch-protection evidence."
+    }
+  },
+  "v1_score": {
+    "total": 43.7584,
+    "previous_total": 40.44,
+    "delta": 3.3184,
+    "grade": "D+",
+    "dimensions": {
+      "code_health": {
+        "score": 75.0214,
+        "inputs": {
+          "cc_le_10_ratio": 0.82916025,
+          "max_cc": 67,
+          "cognitive_le_15_proxy_ratio": 0.88995891,
+          "max_cognitive_proxy": 110,
+          "max_nesting_depth": 6,
+          "duplication_proxy_rate": 0.02966635,
+          "combined_branch_coverage": 0.55583863
+        },
+        "metric_scores": {
+          "cyclomatic_complexity": 71.6641,
+          "cognitive_complexity_proxy": 95.9836,
+          "duplication_proxy": 100,
+          "coverage": 51.1677
+        }
+      },
+      "architecture": {
+        "score": 47.612,
+        "inputs": {
+          "full_system_cross_module_cycles": 1,
+          "backend_package_cycles": 72,
+          "frontend_relative_import_cycles": 6,
+          "frontend_cross_domain_service_cycles": 1,
+          "package_local_cycles_used": 77,
+          "average_main_sequence_distance": 0.41776,
+          "main_sequence_distance_p90": 0.82857143,
+          "max_class_loc": 782,
+          "max_internal_fan_out": 185
+        },
+        "metric_scores": {
+          "cycles": 40,
+          "main_sequence_distance": 56.448,
+          "god_class_combined": 50
+        }
+      },
+      "evolution": {
+        "score": 47.4,
+        "inputs": {
+          "available_history_days": 120.448,
+          "required_history_days": 180,
+          "hotspot_average_cc_proxy": 4.4129,
+          "unhealthy_hotspot_ratio_proxy": 0.1,
+          "temporal_coupling_p95_proxy": 0.33333333,
+          "bus_factor_people_normalized": 1,
+          "bus_factor_raw_email_identity": 2
+        },
+        "metric_scores": {
+          "hotspots": 83.5,
+          "temporal_coupling": 40,
+          "bus_factor": 0
+        }
+      },
+      "delivery": {
+        "score": 65,
+        "inputs": {
+          "canonical_gate_minutes": 4.885,
+          "critical_fix_rate": null,
+          "change_failure_rate": null,
+          "branch_protection_required_gate": null
+        },
+        "metric_scores": {
+          "build_time": 100,
+          "critical_fix_or_quality_gate_comparability_proxy": 50,
+          "change_failure_rate_comparability_proxy": 50
+        }
+      }
+    },
+    "hard_penalties": [
+      {"reason": "full-system cross-module cycle remains", "points": 5},
+      {"reason": "max cyclomatic complexity 67 is greater than 50", "points": 5},
+      {"reason": "people-normalized Bus Factor equals 1", "points": 5}
+    ],
+    "sensitivity": [
+      {"case": "Recommended comparable full-system estimate", "score": 43.7584},
+      {"case": "Current gate failure maps quality metric to zero; CFR stays neutral", "score": 40.0084},
+      {"case": "All missing delivery metrics map to zero", "score": 35.0084},
+      {"case": "Unproven enforced quality gate also triggers a five-point penalty", "score": 30.0084},
+      {"case": "Raw email identities used as separate maintainers", "score": 52.5084},
+      {"case": "Backend-only cross-core-cycle boundary", "score": 52.7584}
+    ]
+  },
+  "formal_contract": {
+    "status": "UNRATED",
+    "latest_static_evidence_coverage": 0.3375,
+    "coverage_if_fresh_coverage_receipt_is_bound_and_merged": 0.3925,
+    "required_overall_evidence_coverage": 0.95,
+    "required_dimension_evidence_coverage": 0.9,
+    "observed_static_scores": {
+      "code": 22.816,
+      "architecture": 51.6625
+    },
+    "hard_gates": {
+      "backend_cross_core_scc_zero": "pass",
+      "max_cc_le_50": "fail",
+      "core_domain_bus_factor_ge_3": "unknown"
+    },
+    "grade_cap": 79.9,
+    "release_eligible": false
+  },
+  "canonical_gate": {
+    "command": "ENVIRONMENT=test VKPI_SKIP_DOTENV=1 /usr/bin/time -p bash scripts/verify.sh",
+    "exit_code": 1,
+    "elapsed_seconds": 293.1,
+    "steps": 18,
+    "failed_steps": ["backend pytest", "line guard >1000"],
+    "backend_tests": {
+      "passed": 9178,
+      "failed": 4,
+      "skipped": 867,
+      "warnings": 207,
+      "subtests": 51
+    },
+    "frontend_tests": {
+      "files_passed": 232,
+      "tests_passed": 2055
+    },
+    "frontend_build": {
+      "passed": true,
+      "chunks": 136,
+      "max_chunk_kb": 308.1,
+      "max_chunk_budget_kb": 600,
+      "largest_entry_gzip_bytes": 93809,
+      "largest_entry_gzip_budget_bytes": 94208
+    },
+    "line_guard": {
+      "over_1000": [
+        {"path": "backend/app/api/routers/vkpi_kol_pool_search.py", "lines": 1002}
+      ]
+    },
+    "additional_coverage_order_failure": "tests/test_via_learning_summaries_characterization.py::test_control_window_complete_return_contract_matches_legacy"
+  },
+  "coverage": {
+    "backend": {
+      "covered_lines": 110327,
+      "total_lines": 185518,
+      "line_rate": 0.594697,
+      "covered_branches": 27853,
+      "total_branches": 58640,
+      "branch_rate": 0.474983
+    },
+    "frontend": {
+      "covered_lines": 77080,
+      "total_lines": 143905,
+      "line_rate": 0.5356,
+      "covered_branches": 22327,
+      "total_branches": 31638,
+      "branch_rate": 0.7057,
+      "covered_functions": 3341,
+      "total_functions": 5774,
+      "function_rate": 0.5786
+    },
+    "combined": {
+      "covered_lines": 187407,
+      "total_lines": 329423,
+      "line_rate": 0.568895,
+      "covered_branches": 50180,
+      "total_branches": 90278,
+      "branch_rate": 0.555839
+    }
+  },
+  "runtime_and_functional": {
+    "health_http_status": 200,
+    "server_client_sha_aligned": true,
+    "database_online": true,
+    "redis_online": true,
+    "worker_fleet_online_count": 16,
+    "local_read_only_acceptance": {
+      "passed": 53,
+      "required": 53,
+      "p95_ms": 1244.9,
+      "strict_runtime_binding_present": false
+    },
+    "cockpit": {
+      "navigation_entries": 29,
+      "mounted_boards": 21,
+      "v2_placeholders": 8,
+      "code_mount_rate": 0.72413793
+    },
+    "release_validation": {
+      "active": false,
+      "valid": true,
+      "source": "not_configured"
+    },
+    "browser_console_gate": "not_run",
+    "cloud_acceptance": "not_run",
+    "runtime_log_canary": "not_run"
+  },
+  "security": {
+    "frontend_production_dependencies": {
+      "audited_dependencies": 31,
+      "vulnerabilities": 0
+    },
+    "backend": {
+      "audited_dependencies": 123,
+      "affected_packages": 13,
+      "advisory_instances": 104,
+      "unique_advisory_ids": 81,
+      "severity_breakdown": null
+    },
+    "gitleaks": {
+      "dirty_candidate_config_history_findings": 0,
+      "committed_head_config_history_findings": 7,
+      "worktree_directory_findings": 2,
+      "confirmed_real_secrets": 0,
+      "note": "Candidate allowlist is uncommitted; two worktree findings were one ignored local environment file and one rule-like identifier. No secret content was retained."
+    },
+    "missing_root_governance_files": ["LICENSE", "NOTICE", "SECURITY", "CODEOWNERS", "CONTRIBUTING"],
+    "missing_ci_gates": ["backend dependency audit", "SAST", "SBOM", "license compliance"]
+  },
+  "evidence_boundaries": [
+    "The 43.76 score is a provisional comparability estimate, not a release certification.",
+    "Cognitive complexity, duplication, hotspot, and temporal coupling are documented proxies rather than SonarQube metrics.",
+    "Git evolution history covers 120.45 of the required 180 days; formal Bus Factor and temporal coupling remain unknown.",
+    "Local 53/53 acceptance proves the current running loopback stack only; it does not prove browser, cloud, deployment, provider, financial, or business outcomes.",
+    "The candidate remained byte/status stable during the gate and coverage run, but it is not immutable because it contains 455 uncommitted paths.",
+    "Revenue, retention, customer concentration, proprietary-data rights, compliance certification, DORA, CFR, MTTR, and commercial outcomes were not scored."
+  ]
+}

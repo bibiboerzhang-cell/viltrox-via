@@ -7,10 +7,8 @@ comes from Git's tracked plus non-ignored untracked paths, while the bytes come
 from the working tree.  A before/copy/after digest check fails closed when the
 source changes during the freeze.
 
-The default workflow rebuilds ``frontend/dist`` inside the snapshot, runs the
-canonical static gate against the snapshot, creates a deterministic tar, and
-writes an adjacent secret-free manifest.  Dependencies are borrowed through
-temporary symlinks and are never copied into the candidate.
+The default rebuilds ``frontend/dist``, runs the static gate, and emits a
+deterministic tar plus manifest without copying borrowed dependencies.
 """
 
 from __future__ import annotations
@@ -18,7 +16,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import logging
 import os
 import re
 import shutil
@@ -40,7 +37,16 @@ from scripts.ops.freeze_git_bridge import (  # noqa: E402
     GitBridgeError,
     readonly_snapshot_git_environment as _readonly_snapshot_git_environment,
 )
-from scripts.ops.deploy_gate_runtime import DeployGateRuntimeError, bound_deploy_gate_runtime  # noqa: E402
+from scripts.ops.deploy_gate_runtime import (  # noqa: E402
+    DeployGateRuntimeError,
+    bound_deploy_gate_runtime,
+)
+from scripts.ops.freeze_phase_runtime import (  # noqa: E402
+    physical_special_paths as _physical_special_paths,
+    publish_owned_log as _publish_owned_log,
+    remove_owned_phase_sandbox as _remove_owned_phase_sandbox,
+    run_logged as _run_logged,
+)
 from scripts.ops.freeze_worktree_contract import (  # noqa: E402
     FORBIDDEN_COMPONENTS,
     FORBIDDEN_NAMES,
@@ -52,6 +58,11 @@ from scripts.ops.freeze_worktree_contract import (  # noqa: E402
     BuildIdentity,
     FileEntry,
     FreezeError,
+    cleanup_owned_paths,
+    path_identity,
+    precreate_owned_file,
+    rename_exclusive,
+    write_owned_file_exclusive,
     assert_frontend_dist_reproducible as _check_frontend_dist_reproducible,
     _regular_tree_inventory as _contract_regular_tree_inventory,
 )
@@ -64,29 +75,23 @@ def _canonical_bytes(value: object) -> bytes:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-
-
 def _sha256_path(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
 def _run_git_bytes(root: Path, *args: str) -> bytes:
+    from scripts.ops.trusted_git import git_env, trusted_git_executable
     try:
         return subprocess.check_output(
-            ["git", *args], cwd=root, stderr=subprocess.PIPE
+            [trusted_git_executable(), *args], cwd=root, stderr=subprocess.PIPE,
+            env=git_env(),
         )
     except (OSError, subprocess.CalledProcessError) as exc:
         raise FreezeError(f"git command failed: {' '.join(args)}") from exc
-
-
 def _run_git_text(root: Path, *args: str) -> str:
     return _run_git_bytes(root, *args).decode("utf-8", "strict").strip()
-
-
 def _safe_relative(raw: str) -> str:
     path = PurePosixPath(raw)
     if path.is_absolute() or not path.parts:
@@ -94,8 +99,6 @@ def _safe_relative(raw: str) -> str:
     if any(part in {"", ".", ".."} for part in path.parts):
         raise FreezeError(f"unsafe source path: {raw!r}")
     return path.as_posix()
-
-
 def is_excluded(path: str, *, source_phase: bool) -> bool:
     pure = PurePosixPath(_safe_relative(path))
     lower_parts = tuple(part.lower() for part in pure.parts)
@@ -113,8 +116,6 @@ def is_excluded(path: str, *, source_phase: bool) -> bool:
     if lower_name.endswith(FORBIDDEN_SUFFIXES):
         return True
     return False
-
-
 def _git_worktree_paths(root: Path) -> list[str]:
     raw = _run_git_bytes(
         root,
@@ -145,14 +146,10 @@ def _git_worktree_paths(root: Path) -> list[str]:
             continue
         paths.append(path)
     return sorted(paths)
-
-
 def _check_secret(path: str, data: bytes) -> None:
     for pattern in HIGH_CONFIDENCE_SECRET_PATTERNS:
         if pattern.search(data):
             raise FreezeError(f"high-confidence secret detected: {path}")
-
-
 def _read_entry(root: Path, path: str) -> tuple[FileEntry, bytes]:
     absolute = root / path
     before = absolute.lstat()
@@ -176,18 +173,12 @@ def _read_entry(root: Path, path: str) -> tuple[FileEntry, bytes]:
         sha256=hashlib.sha256(data).hexdigest(),
     )
     return entry, data
-
-
 def _inventory_source(root: Path) -> list[FileEntry]:
     return [_read_entry(root, path)[0] for path in _git_worktree_paths(root)]
-
-
 def _inventory_digest(entries: Sequence[FileEntry]) -> str:
     return hashlib.sha256(
         _canonical_bytes([entry.payload() for entry in entries])
     ).hexdigest()
-
-
 def _copy_inventory(root: Path, destination: Path, entries: Sequence[FileEntry]) -> None:
     for expected in entries:
         current, data = _read_entry(root, expected.path)
@@ -197,8 +188,6 @@ def _copy_inventory(root: Path, destination: Path, entries: Sequence[FileEntry])
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         os.chmod(target, expected.mode)
-
-
 def _candidate_paths(root: Path) -> list[str]:
     result: list[str] = []
     for directory, names, files in os.walk(root, topdown=True, followlinks=False):
@@ -235,30 +224,6 @@ def _inventory_candidate(root: Path) -> list[FileEntry]:
     return entries
 
 
-def _physical_special_paths(root: Path) -> list[str]:
-    """List unsupported physical nodes without following candidate symlinks."""
-
-    special: list[str] = []
-    pending = [root]
-    while pending:
-        directory = pending.pop()
-        try:
-            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
-        except OSError as exc:
-            raise FreezeError(f"candidate physical tree cannot be scanned: {directory}") from exc
-        for entry in entries:
-            path = Path(entry.path)
-            try:
-                info = entry.stat(follow_symlinks=False)
-            except OSError as exc:
-                raise FreezeError(f"candidate physical node cannot be inspected: {path}") from exc
-            if stat.S_ISDIR(info.st_mode):
-                pending.append(path)
-            elif not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
-                special.append(path.relative_to(root).as_posix())
-    return sorted(special)
-
-
 @contextmanager
 def _borrow_dependencies(snapshot: Path, source: Path) -> Iterator[None]:
     links = (
@@ -279,31 +244,6 @@ def _borrow_dependencies(snapshot: Path, source: Path) -> Iterator[None]:
     finally:
         for link in reversed(created):
             link.unlink(missing_ok=True)
-
-
-def _run_logged(
-    command: Sequence[str],
-    *,
-    cwd: Path,
-    env: dict[str, str],
-    log_path: Path,
-) -> None:
-    with log_path.open("wb") as log:
-        proc = subprocess.run(
-            list(command),
-            cwd=cwd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-    if proc.returncode != 0:
-        raise FreezeError(
-            f"command failed with exit {proc.returncode}; inspect {log_path}"
-        )
-
-
 def _write_build_stamps(snapshot: Path, identity: BuildIdentity) -> None:
     stamps = {
         "BUILD_GIT_SHA": identity.git_sha,
@@ -343,49 +283,79 @@ def _validate_frontend_build_info(
             + json.dumps(mismatches, sort_keys=True)
         )
     return payload
-
-
 def _build_frontend(
     snapshot: Path,
     source: Path,
     log_path: Path,
+    log_identity: tuple[int, int],
     identity: BuildIdentity,
 ) -> dict[str, object]:
-    env = os.environ.copy()
-    for name in tuple(env):
-        if name.startswith("VITE_"):
-            env.pop(name, None)
+    from scripts.ops.deploy_gate_runtime import assert_provider_free_environment, build_provider_free_subprocess_environment
+    env = build_provider_free_subprocess_environment(
+        os.environ, home=log_path.parent, tmpdir=log_path.parent,
+    )
     env.update({"CI": "1", "NODE_ENV": "production"})
     env.update(identity.vite_environment())
-    with _borrow_dependencies(snapshot, source):
+    assert_provider_free_environment(env)
+    from scripts.ops.strict_runtime_seatbelt import candidate_profile, sandboxed
+    from scripts.ops.trusted_npm_audit import _trusted_node, _trusted_npm
+    npm, node = _trusted_npm(), _trusted_node()
+    sandbox_root = Path(tempfile.mkdtemp(prefix="vkpi-phase-a-seatbelt.", dir="/tmp"))
+    sandbox_root.chmod(0o700)
+    for child in ("home", "tmp", "cache"):
+        (sandbox_root / child).mkdir(mode=0o700)
+    env.update(
+        {
+            "HOME": str(sandbox_root / "home"),
+            "TMPDIR": str(sandbox_root / "tmp"),
+            "XDG_CACHE_HOME": str(sandbox_root / "cache"),
+        }
+    )
+    assert_provider_free_environment(env)
+    sandbox_log = sandbox_root / "candidate-build.log"
+    try:
         dist = snapshot / "frontend" / "dist"
-        if dist.exists():
-            shutil.rmtree(dist)
-        _run_logged(
-            ["npm", "run", "build", "--", "--outDir", str(dist), "--emptyOutDir"],
-            cwd=snapshot / "frontend",
-            env=env,
-            log_path=log_path,
-        )
+        profile = candidate_profile(candidate=snapshot, clean_source=snapshot,
+            venv=source / ".venv", node_modules=source / "frontend/node_modules",
+            runtime_root=sandbox_root, allowed_ports=(), writable_paths=(dist,),
+            protect_clean_source=False,
+            executable_paths=(npm, node),
+            # Some dependency tools resolve their owning package.json from
+            # the physical node_modules path.  Permit that one immutable
+            # package descriptor, not the source frontend tree.
+            readable_paths=(npm.parent.parent, source / "frontend/package.json"))
+        with _borrow_dependencies(snapshot, source):
+            if dist.exists():
+                shutil.rmtree(dist)
+            _run_logged(
+                sandboxed([str(node), str(npm), "run", "build", "--", "--outDir", str(dist),
+                           "--emptyOutDir"], profile), cwd=snapshot / "frontend",
+                env=env, log_path=sandbox_log, error_log_path=log_path,
+            )
+    finally:
+        try:
+            if sandbox_log.is_file() and not sandbox_log.is_symlink():
+                _publish_owned_log(sandbox_log, log_path, log_identity)
+        finally:
+            _remove_owned_phase_sandbox(sandbox_root)
     if not (snapshot / "frontend" / "dist" / "index.html").is_file():
         raise FreezeError("frontend build did not create dist/index.html")
     return _validate_frontend_build_info(snapshot, identity)
-
-
 def _run_static_verify(
     snapshot: Path,
     source: Path,
     log_path: Path,
+    log_identity: tuple[int, int],
     identity: BuildIdentity,
 ) -> None:
     source_top = Path(_run_git_text(source, "rev-parse", "--show-toplevel")).resolve()
     if source_top != source:
         raise FreezeError("source Git worktree binding does not match freeze root")
 
-    env = os.environ.copy()
-    for name in tuple(env):
-        if name.startswith("VITE_"):
-            env.pop(name, None)
+    from scripts.ops.deploy_gate_runtime import assert_provider_free_environment, build_provider_free_subprocess_environment
+    env = build_provider_free_subprocess_environment(
+        os.environ, home=log_path.parent, tmpdir=log_path.parent,
+    )
     # This output path is reserved for the later canonical deploy gate.  A
     # caller must not be able to redirect an ordinary freeze-time verifier to
     # an arbitrary path or make the frozen snapshot appear reproducible by
@@ -408,17 +378,53 @@ def _run_static_verify(
         }
     )
     env.update(identity.vite_environment())
-    with _readonly_snapshot_git_environment(snapshot, source) as git_environment:
-        env.update(git_environment)
-        with _borrow_dependencies(snapshot, source):
-            _run_logged(
-                ["bash", "scripts/verify.sh"],
-                cwd=snapshot,
-                env=env,
-                log_path=log_path,
-            )
-
-
+    assert_provider_free_environment(env)
+    from scripts.ops.strict_runtime_seatbelt import candidate_profile, sandboxed
+    from scripts.ops.trusted_npm_audit import _trusted_node, _trusted_npm, _trusted_npx, run_trusted_npm_audit
+    npm, node = _trusted_npm(), _trusted_node()
+    npx = _trusted_npx(npm)
+    sandbox_root = Path(tempfile.mkdtemp(prefix="vkpi-phase-a-seatbelt.", dir="/tmp"))
+    sandbox_root.chmod(0o700)
+    for child in ("home", "tmp", "cache"):
+        (sandbox_root / child).mkdir(mode=0o700)
+    env.update(
+        {
+            "HOME": str(sandbox_root / "home"),
+            "PYTEST_ADDOPTS": "-p no:cacheprovider",
+            "TMPDIR": str(sandbox_root / "tmp"),
+            "VKPI_RUNTIME_DATA_DIR": str(sandbox_root / "runtime-data"),
+            "XDG_CACHE_HOME": str(sandbox_root / "cache"),
+        }
+    )
+    (sandbox_root / "runtime-data").mkdir(mode=0o700)
+    assert_provider_free_environment(env)
+    audit_receipt = sandbox_root / "npm-audit.json"
+    bridge_parent = sandbox_root / "controller"
+    bridge_parent.mkdir(mode=0o700)
+    if (snapshot / "frontend/package-lock.json").is_file():
+        run_trusted_npm_audit(snapshot / "frontend", audit_receipt)
+        env["VKPI_TRUSTED_NPM_AUDIT_RECEIPT"] = str(audit_receipt)
+    profile = candidate_profile(candidate=snapshot, clean_source=snapshot,
+        venv=source / ".venv", node_modules=source / "frontend/node_modules",
+        runtime_root=sandbox_root, allowed_ports=(), protect_clean_source=False,
+        executable_paths=(node, npm, npx, Path("/bin/bash")), executable_dirs=(bridge_parent,),
+        readable_paths=(npm.parent.parent, source / "frontend/package.json"))
+    sandbox_log = sandbox_root / "candidate-verify.log"
+    try:
+        with _readonly_snapshot_git_environment(
+            snapshot, source, bridge_parent=bridge_parent,
+        ) as git_environment:
+            env.update(git_environment)
+            with _borrow_dependencies(snapshot, source):
+                _run_logged(sandboxed(["/bin/bash", "scripts/verify.sh"], profile),
+                            cwd=snapshot, env=env, log_path=sandbox_log,
+                            error_log_path=log_path)
+    finally:
+        try:
+            if sandbox_log.is_file() and not sandbox_log.is_symlink():
+                _publish_owned_log(sandbox_log, log_path, log_identity)
+        finally:
+            _remove_owned_phase_sandbox(sandbox_root)
 def _regular_tree_inventory(root: Path) -> list[tuple[str, str, int, str]]:
     """Backward-compatible wrapper around the shared strict tree inventory."""
 
@@ -490,21 +496,10 @@ def _deterministic_tar(
                 bundle.addfile(info, handle)
 
 
-def _atomic_json(path: Path, payload: object) -> None:
+def _atomic_json(path: Path, payload: object) -> tuple[int, int]:
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    data = (json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode()
+    return write_owned_file_exclusive(path, data)
 
 
 def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
@@ -552,7 +547,12 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
     verify_log = output.with_suffix(output.suffix + ".verify.log")
     archive = output.with_suffix(output.suffix + ".tar")
     manifest_path = output.with_suffix(output.suffix + ".manifest.json")
+    created: dict[Path, tuple[int, int]] = {temporary: path_identity(temporary)}
     try:
+        for log_path, enabled in ((build_log, not args.skip_build),
+                                  (verify_log, not args.skip_verify)):
+            if enabled:
+                created[log_path] = precreate_owned_file(log_path)
         _copy_inventory(source, temporary, entries_before)
         _assert_source_state_unchanged(
             source,
@@ -571,7 +571,7 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
 
         if not args.skip_build:
             frontend_build_info = _build_frontend(
-                temporary, source, build_log, identity
+                temporary, source, build_log, created[build_log], identity
             )
         else:
             frontend_build_info = None
@@ -580,7 +580,9 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
                 shutil.rmtree(copied_dist)
 
         if not args.skip_verify:
-            _run_static_verify(temporary, source, verify_log, identity)
+            _run_static_verify(
+                temporary, source, verify_log, created[verify_log], identity
+            )
             if frontend_build_info is not None:
                 # The static gate builds into an isolated output directory and
                 # must not rewrite the candidate dist identity.
@@ -594,6 +596,7 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
         candidate_digest = _inventory_digest(candidate_entries)
         if not args.skip_archive:
             _deterministic_tar(temporary, archive, candidate_entries)
+            created[archive] = path_identity(archive)
             archive_payload: dict[str, object] | None = {
                 "bytes": archive.stat().st_size,
                 "path": str(archive),
@@ -614,7 +617,8 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
             phase="candidate build and verification",
         )
 
-        os.replace(temporary, output)
+        rename_exclusive(temporary, output)
+        created.pop(temporary); created[output] = path_identity(output)
         payload: dict[str, object] = {
             "archive": archive_payload,
             "build": {
@@ -648,7 +652,8 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
                 "suffixes": list(FORBIDDEN_SUFFIXES),
             },
             "safety": {
-                "cloud_contacted": False,
+                "provider_network_contacted": False,
+                "external_registry_network": "npm_audit_may_attempt",
                 "commit_created": False,
                 "deployment_performed": False,
                 "push_performed": False,
@@ -672,18 +677,33 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
                 "runtime_intentionally_unreachable": not args.skip_verify,
             },
         }
-        _atomic_json(manifest_path, payload)
+        created[manifest_path] = _atomic_json(manifest_path, payload)
         manifest_sha = _sha256_path(manifest_path)
-        manifest_path.with_suffix(manifest_path.suffix + ".sha256").write_text(
-            f"{manifest_sha}  {manifest_path.name}\n", encoding="utf-8"
+        sidecar = manifest_path.with_suffix(manifest_path.suffix + ".sha256")
+        created[sidecar] = write_owned_file_exclusive(
+            sidecar, f"{manifest_sha}  {manifest_path.name}\n".encode()
         )
         return payload
     except Exception:
-        shutil.rmtree(temporary, ignore_errors=True)
-        if output.exists():
-            shutil.rmtree(output, ignore_errors=True)
-        if archive.exists():
-            archive.unlink()
+        # `_run_logged` deliberately points callers at these files.  Keep a
+        # non-empty log only when it is still the exact inode pre-created by
+        # this process; otherwise the generic owned-path cleanup remains
+        # fail-closed and will never delete a replacement path.
+        for failure_log in (build_log, verify_log):
+            expected_identity = created.get(failure_log)
+            if expected_identity is None:
+                continue
+            try:
+                if (
+                    not failure_log.is_symlink()
+                    and failure_log.is_file()
+                    and path_identity(failure_log) == expected_identity
+                    and failure_log.stat().st_size > 0
+                ):
+                    created.pop(failure_log)
+            except OSError:
+                pass
+        cleanup_owned_paths(created)
         raise
 
 
@@ -810,67 +830,17 @@ def verify_deploy_source(args: argparse.Namespace) -> dict[str, object]:
     return result
 
 
-_CANDIDATE_RUNTIME_PARENT, _CANDIDATE_RUNTIME_PREFIX = Path("/tmp"), "vkpi-candidate-browser-runtime."
-_PG_CTL_FALLBACKS = ("/opt/homebrew/opt/postgresql@16/bin/pg_ctl", "/opt/homebrew/bin/pg_ctl", "/usr/local/bin/pg_ctl", "/usr/lib/postgresql/16/bin/pg_ctl")
-_log = logging.getLogger("vkpi.freeze_worktree_candidate")
-
-
-def _live_postmaster(pid_file: Path) -> int | None:
-    try:
-        pid = int(pid_file.read_text(encoding="utf-8").splitlines()[0].strip())
-        os.kill(pid, 0)  # raises when the postmaster is gone
-        return pid if pid > 1 else None
-    except (OSError, UnicodeDecodeError, IndexError, ValueError):
-        return None
-
-
-def stop_candidate_browser_runtime_postgres(runtime_roots: Sequence[Path] | None = None) -> list[dict[str, object]]:
-    """O2: ``pg_ctl stop -m fast`` every live temporary Postgres under /tmp/vkpi-candidate-browser-runtime.*.
-
-    Such a hand-rooted stack inherits port 54329 and outlives the gate (rmtree then rips its data dir from
-    under the postmaster, which holds the port for hours).  Only the reviewed glob owned by this uid is
-    touched, never the worktree database.  Never raises: every outcome is logged and receipted."""
-    receipts: list[dict[str, object]] = []
-    roots = [Path(r) for r in runtime_roots] if runtime_roots is not None else sorted(_CANDIDATE_RUNTIME_PARENT.glob(f"{_CANDIDATE_RUNTIME_PREFIX}*"))
-    names = [Path(os.environ.get("POSTGRES_BIN") or "/nonexistent") / "pg_ctl", *map(Path, _PG_CTL_FALLBACKS), *map(Path, filter(None, [shutil.which("pg_ctl")]))]
-    pg_ctl = next((c for c in names if c.is_file() and os.access(c, os.X_OK)), None)
-    for root in roots:
-        data_dir, pid_file, receipt = root / "runtime" / "data" / "postgres", root / "runtime" / "data" / "postgres" / "postmaster.pid", {"root": str(root)}
-        try:
-            info = root.lstat()
-            safe = root.parent == _CANDIDATE_RUNTIME_PARENT and root.name.startswith(_CANDIDATE_RUNTIME_PREFIX) and stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
-        except OSError:
-            continue
-        if not safe:
-            receipts.append({**receipt, "status": "unsafe_root_skipped"})
-            continue
-        pid = _live_postmaster(pid_file) if pid_file.is_file() else None
-        if pid is None:
-            receipts.extend([{**receipt, "status": "stale_pidfile"}] if pid_file.is_file() else [])
-            continue
-        if pg_ctl is None:
-            _log.error("candidate browser runtime postgres pid=%s live under %s but pg_ctl unavailable", pid, data_dir)
-            receipts.append({**receipt, "status": "pg_ctl_missing", "pid": pid})
-            continue
-        try:
-            done = subprocess.run([str(pg_ctl), "-D", str(data_dir), "stop", "-m", "fast", "-t", "30"],
-                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60, check=False)
-            rc, detail = done.returncode, (done.stderr or done.stdout or "").strip()[:240]
-        except (OSError, subprocess.SubprocessError) as exc:
-            rc, detail = -1, f"{type(exc).__name__}: {exc}"[:240]
-        if rc == 0 and _live_postmaster(pid_file) is None:
-            _log.info("candidate browser runtime postgres stopped: pid=%s data=%s", pid, data_dir)
-            receipts.append({**receipt, "status": "stopped", "pid": pid})
-        else:
-            _log.error("candidate browser runtime postgres stop FAILED pid=%s rc=%s data=%s: %s (port 54329 may stay held)",
-                       pid, rc, data_dir, detail)
-            receipts.append({**receipt, "status": "stop_failed", "pid": pid, "returncode": rc, "detail": detail})
-    return receipts
-
-
 def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
     """Run the canonical gate from candidate bytes, then reverify the candidate."""
 
+    try:
+        runtime_root = str(args.runtime_root)
+        health_url = str(args.health_url)
+        base_url = str(args.base_url)
+        verify_json_out = str(args.verify_json_out)
+        acceptance_json_out = str(args.acceptance_json_out)
+    except AttributeError as exc:
+        raise FreezeError("deploy gate strict runtime bindings are required") from exc
     before = verify_deploy_source(args)
     snapshot = Path(str(before["snapshot"])).resolve()
     source = Path(args.source).resolve()
@@ -892,13 +862,21 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
     try:
         try:
             with bound_deploy_gate_runtime(
-                os.environ, source=source, requested_python=args.python
+                os.environ,
+                source=source,
+                requested_python=args.python,
+                runtime_root=runtime_root,
+                health_url=health_url,
+                base_url=base_url,
+                verify_json_out=verify_json_out,
+                acceptance_json_out=acceptance_json_out,
+                allow_test_hooks=bool(getattr(args, "fixture_allow_test_hooks", False)),
             ) as (python_bin, environment):
                 for name in GIT_REPOSITORY_BINDING_ENV:
                     environment.pop(name, None)
                 build_time = str(manifest["build"]["identity"]["build_time"])
                 rebuilt_frontend = (
-                    Path(environment["RUNTIME_ROOT"]) / "frontend-dist-rebuild"
+                        Path(environment["RUNTIME_ROOT"]) / "controller/frontend-dist-rebuild"
                 )
                 environment.update(
                     {
@@ -915,19 +893,33 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
                         "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE": "1",
                         "VKPI_VERIFY_REQUIRE_RUNTIME": "1",
                         "VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY": "0",
+                        "VKPI_STRICT_RUN_NONCE": str(getattr(args, "runtime_nonce", "")),
+                        "VKPI_STRICT_RUNTIME_PORTS": str(getattr(args, "runtime_ports", "")),
+                        "VKPI_STRICT_CANDIDATE_SHA256": str(getattr(args, "candidate_digest", "")),
                     }
                 )
+                from scripts.ops.trusted_npm_audit import run_trusted_npm_audit
+                strict_audit = Path(runtime_root) / "controller/npm-audit.json"
+                strict_audit.parent.mkdir(parents=True, exist_ok=True)
+                if (snapshot / "frontend/package-lock.json").is_file():
+                    run_trusted_npm_audit(snapshot / "frontend", strict_audit)
+                    environment["VKPI_TRUSTED_NPM_AUDIT_RECEIPT"] = str(strict_audit)
+                from scripts.ops.deploy_gate_runtime import assert_provider_free_environment
+                assert_provider_free_environment(environment)
                 with _readonly_snapshot_git_environment(
-                    snapshot, source
+                    snapshot, source, bridge_parent=Path(runtime_root) / "controller",
                 ) as git_environment:
                     environment.update(git_environment)
                     with _borrow_dependencies(snapshot, source):
-                        completed = subprocess.run(
-                            ["bash", "scripts/verify.sh"],
+                        from scripts.ops.controlled_candidate_process import run_controlled_candidate
+                        completed = run_controlled_candidate(
+                            (["/usr/bin/sandbox-exec", "-p", str(args.seatbelt_profile)]
+                             if getattr(args, "seatbelt_profile", None) else [])
+                            + ["/bin/bash", "scripts/verify.sh"],
                             cwd=snapshot,
                             env=environment,
                             stdin=subprocess.DEVNULL,
-                            check=False,
+                            timeout=1800,
                         )
                 if completed.returncode == 0 and require_reproducible_frontend:
                     _assert_frontend_dist_reproducible(
@@ -938,8 +930,11 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
         except (DeployGateRuntimeError, KeyError, TypeError) as exc:
             raise FreezeError(str(exc)) from exc
     finally:
-        # O2: whatever happened above, no temporary Postgres may survive under a candidate browser runtime.
-        candidate_postgres_receipts = stop_candidate_browser_runtime_postgres()
+        candidate_postgres_receipts = [{
+            "root": runtime_root,
+            "status": "controller_registry_cleanup_required",
+            "destructive_cleanup_performed": False,
+        }]
         after = verify_deploy_source(args)
     if completed is None or completed.returncode != 0:
         code = completed.returncode if completed is not None else "unavailable"
@@ -981,6 +976,11 @@ def parser() -> argparse.ArgumentParser:
     deploy_gate.add_argument("--expected-branch", required=True)
     deploy_gate.add_argument("--source", required=True)
     deploy_gate.add_argument("--python", required=True)
+    deploy_gate.add_argument("--runtime-root", required=True)
+    deploy_gate.add_argument("--health-url", required=True)
+    deploy_gate.add_argument("--base-url", required=True)
+    deploy_gate.add_argument("--verify-json-out", required=True)
+    deploy_gate.add_argument("--acceptance-json-out", required=True)
     deploy_gate.set_defaults(action=run_deploy_gate)
     return result
 

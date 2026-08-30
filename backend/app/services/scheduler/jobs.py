@@ -160,6 +160,10 @@ _fleet_controller: SchedulerFleetController | None = None
 _fleet_monitor_task: asyncio.Task[Any] | None = None
 CHINA_TZ = ZoneInfo("Asia/Shanghai")
 US_PACIFIC_TZ = ZoneInfo("America/Los_Angeles")  # 每日官号报告第二轮(美西早6点,自动随 PDT/PST 切换)
+UTC_TZ = ZoneInfo("UTC")
+# 旧 CronTrigger 未声明时区时依赖当前运行环境 America/New_York。
+# 语义不足以改到中国/美西/UTC 的任务显式锁定这一旧口径，防止换宿主后静默漂移。
+US_EASTERN_TZ = ZoneInfo("America/New_York")
 
 
 # ──────────────────────────────────────────────
@@ -261,7 +265,7 @@ def _register_learning_workflow_jobs(_scheduler: Any) -> None:
     if VIA_ENABLE_DAILY_LEARNING:
         _scheduler.add_job(
             job_via_daily_learning,
-            trigger=CronTrigger(hour=4, minute=15),
+            trigger=CronTrigger(hour=4, minute=15, timezone=US_EASTERN_TZ),
             id="via_daily_learning",
             name="Run Via daily learning sync",
             max_instances=1,
@@ -314,10 +318,10 @@ def _register_learning_workflow_jobs(_scheduler: Any) -> None:
         coalesce=True,
     )
 
-    # ── Job 7b: 学习闭环·推荐 outcome 业务标签回填(每日) ──
+    # ── Job 7b: 学习闭环·推荐 outcome 业务标签回填(每日 04:40 中国) ──
     _scheduler.add_job(
         job_vkpi_recommendation_outcomes,
-        trigger=CronTrigger(hour=4, minute=40),
+        trigger=CronTrigger(hour=4, minute=40, timezone=CHINA_TZ),
         id="vkpi_recommendation_outcomes",
         name="Refresh recommendation outcome business labels daily",
         max_instances=1,
@@ -343,7 +347,7 @@ def _register_learning_workflow_jobs(_scheduler: Any) -> None:
     if workflow_scheduled_execution_enabled():
         _scheduler.add_job(
             job_vkpi_fulfillment_sweep,
-            trigger=CronTrigger(hour=5, minute=10),
+            trigger=CronTrigger(hour=5, minute=10, timezone=US_EASTERN_TZ),
             id="vkpi_fulfillment_sweep",
             name="Daily durable fulfillment sweep (workflow_runs)",
             max_instances=1,

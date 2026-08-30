@@ -192,16 +192,23 @@ def test_wiring_source_contract():
     assert "needs_secondary_video_probe(resolved)" in media
     assert 'reason.endswith("scraped_no_downloadable_url")' not in media
     assert "scrape_empty_or_blocked" not in media.split("yt-dlp 兜底")[1].split("return resolved")[0]
-    gemini = workers.joinpath("apify_jobs_worker_gemini.py").read_text(encoding="utf-8")
+    gemini = "\n".join(
+        workers.joinpath(name).read_text(encoding="utf-8")
+        for name in (
+            "apify_jobs_worker_gemini.py",
+            "apify_jobs_worker_gemini_runtime.py",
+        )
+    )
     assert 'resolved.get("cache_hit") or resolved.get("local_path_ready")' in gemini
     # 复审 HIGH 契约:media_kind 图章只盖 yt-dlp 定论,IG 老口径 blocked 不落章。
     assert 'resolved.get("confirmed_non_video") is True' in gemini
-    assert '_persist_image_post_verdict(conn, evidence)' in gemini
+    assert 'dependencies.persist_image_post_verdict(conn, evidence)' in gemini
     assert 'resolved.get("scraped_ok")' not in gemini.split('if not resolved.get("ok"):', 1)[1].split('if resolved.get("cache_hit")', 1)[0]
 
 
 def test_worker_keeps_generic_instagram_no_formats_in_retry_flow(monkeypatch):
     """通用 no-formats 不是图文定论：调用方必须抛回既有重试/triage，不落 blocked。"""
+    import app.workers.apify_jobs_worker  # noqa: F401
     from app.workers import apify_jobs_worker_gemini as gemini
 
     blocked: list[tuple[Any, ...]] = []
@@ -237,6 +244,7 @@ def test_worker_keeps_generic_instagram_no_formats_in_retry_flow(monkeypatch):
 
 
 def test_worker_terminal_blocks_only_confirmed_image_post(monkeypatch):
+    import app.workers.apify_jobs_worker  # noqa: F401
     from app.workers import apify_jobs_worker_gemini as gemini
 
     blocked: list[tuple[Any, ...]] = []

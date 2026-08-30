@@ -30,6 +30,67 @@ READ_ONLY_POST_PATHS = frozenset({
     "/api/admin/vkpi/intelligent/query",
 })
 
+_ADMIN_PERMISSION_EXEMPT_PATHS = frozenset({
+    "/api/admin/staff/accept-invite",
+    "/api/admin/staff/invite/status",
+})
+_FIXED_PERMISSION_RULES: tuple[tuple[tuple[str, ...], str, str | None, bool], ...] = (
+    (("/api/admin/system/keys",), "system.api_keys", "write", True),
+    (("/api/admin/system/restart",), "system.restart", "write", True),
+    (("/api/admin/system/providers",), "system.api_keys", "read", True),
+    (("/api/admin/system/models",), "system.models", None, True),
+    (("/api/admin/staff/api-tokens",), "system.api_keys", None, True),
+)
+_LEVEL_PERMISSION_RULES: tuple[tuple[tuple[str, ...], str, bool], ...] = (
+    (("/api/admin/runtime", "/api/admin/integrations"), "runtime", False),
+    (("/api/admin/trust",), "command", False),
+    (("/api/admin/kol",), "kol_ops", False),
+    (("/api/admin/deepsight",), "deepsight", False),
+    (("/api/admin/activities", "/api/public/event"), "activities", False),
+    (("/api/admin/dashboard",), "vkpi", False),
+    (("/api/admin/vkpi", "/api/marketing"), "vkpi", False),
+    (("/api/admin/insights/",), "insights", False),
+    (("/api/admin/intel/student",), "student", False),
+    (("/api/admin/intel/via",), "via", False),
+    (("/api/admin/intel/system",), "runtime", False),
+    (("/api/intelligence/market", "/api/intelligence/brand"), "analytics", False),
+    (("/api/admin/intel", "/api/intelligence"), "intelligence", False),
+    (("/api/admin/analytics", "/api/admin/benchmarks", "/api/admin/learning"), "analytics", False),
+    ((
+        "/api/admin/orders",
+        "/api/admin/payouts",
+        "/api/admin/attribution",
+        "/api/admin/webhook-events",
+        "/api/admin/affiliate",
+    ), "operations", False),
+    ((
+        "/api/admin/rewards",
+        "/api/admin/product_catalog",
+        "/api/admin/creator-public/shop-heroes",
+        "/api/admin/upload/reward-image",
+    ), "products", False),
+    (("/api/admin/creator", "/api/admin/creators"), "creators", False),
+)
+_USER_COMMAND_SUFFIXES = ("/block", "/unblock", "/flag", "/clear-flag", "/adjust-score")
+_OPERATIONS_PREFIXES = (
+    "/api/admin/users",
+    "/api/admin/social-accounts",
+    "/api/admin/verifications",
+    "/api/admin/submissions",
+    "/api/admin/approve",
+    "/api/admin/reject",
+    "/api/admin/reanalyze",
+    "/api/admin/redemptions",
+    "/api/verify/queue",
+    "/api/verify/admin",
+)
+_OPERATIONS_SUFFIXES = ("/scan", "/approve", "/reject")
+_TAIL_PERMISSION_RULES: tuple[tuple[tuple[str, ...], str, bool], ...] = (
+    (("/api/admin/student", "/api/student/admin"), "student", False),
+    (("/api/vios",), "analytics", False),
+    (("/api/admin",), "overview", False),
+)
+
 
 def db_request_admission_limiter() -> asyncio.BoundedSemaphore:
     """Return a limiter bound to the current process and asyncio loop."""
@@ -72,113 +133,55 @@ def db_admission_unavailable_response(timeout_seconds: float) -> JSONResponse:
     )
 
 
+def _fixed_permission_for_path(path: str, level: str) -> tuple[str, str, bool] | None:
+    for prefixes, permission, fixed_level, system_namespace in _FIXED_PERMISSION_RULES:
+        if path.startswith(prefixes):
+            return (permission, fixed_level or level, system_namespace)
+    return None
+
+
+def _level_permission_for_path(
+    path: str,
+    level: str,
+    rules: tuple[tuple[tuple[str, ...], str, bool], ...],
+) -> tuple[str, str, bool] | None:
+    for prefixes, permission, system_namespace in rules:
+        if path.startswith(prefixes):
+            return (permission, level, system_namespace)
+    return None
+
+
+def _is_user_command_path(path: str) -> bool:
+    return path.startswith("/api/admin/users/") and path.endswith(_USER_COMMAND_SUFFIXES)
+
+
 def admin_permission_for_request(path: str, method: str) -> tuple[str, str, bool] | None:
     """Map a protected route to tab/system permission, level and namespace."""
-    if method.upper() == "OPTIONS":
-        return None
-    if path in {"/api/admin/staff/accept-invite", "/api/admin/staff/invite/status"}:
+    normalized_method = method.upper()
+    if normalized_method == "OPTIONS" or path in _ADMIN_PERMISSION_EXEMPT_PATHS:
         return None
     mutating = (
-        method.upper() in {"POST", "PUT", "PATCH", "DELETE"}
+        normalized_method in {"POST", "PUT", "PATCH", "DELETE"}
         and path not in READ_ONLY_POST_PATHS
     )
     level = "write" if mutating else "read"
     if path.startswith(PRIVATE_INTERNAL_UPLOAD_PREFIXES):
         return ("vkpi", "read", False)
-    if path.startswith("/api/admin/system/keys"):
-        return ("system.api_keys", "write", True)
-    if path.startswith("/api/admin/system/restart"):
-        return ("system.restart", "write", True)
-    if path.startswith("/api/admin/system/providers"):
-        return ("system.api_keys", "read", True)
-    if path.startswith("/api/admin/system/models"):
-        return ("system.models", level, True)
-    if path.startswith("/api/admin/staff/api-tokens"):
-        return ("system.api_keys", level, True)
+    fixed = _fixed_permission_for_path(path, level)
+    if fixed is not None:
+        return fixed
     if path.startswith("/api/admin/staff"):
         if mutating:
             return ("system.members", "write", True)
         return ("system", "read", False)
-    if path.startswith("/api/admin/runtime") or path.startswith("/api/admin/integrations"):
-        return ("runtime", level, False)
-    if path.startswith("/api/admin/trust"):
+    mapped = _level_permission_for_path(path, level, _LEVEL_PERMISSION_RULES)
+    if mapped is not None:
+        return mapped
+    if _is_user_command_path(path):
         return ("command", level, False)
-    if path.startswith("/api/admin/kol"):
-        return ("kol_ops", level, False)
-    if path.startswith("/api/admin/deepsight"):
-        return ("deepsight", level, False)
-    if path.startswith("/api/admin/activities") or path.startswith("/api/public/event"):
-        return ("activities", level, False)
-    if path.startswith("/api/admin/dashboard"):
-        return ("vkpi", level, False)
-    if path.startswith("/api/admin/vkpi") or path.startswith("/api/marketing"):
-        return ("vkpi", level, False)
-    if path.startswith("/api/admin/insights/"):
-        return ("insights", level, False)
-    if path.startswith("/api/admin/intel/student"):
-        return ("student", level, False)
-    if path.startswith("/api/admin/intel/via"):
-        return ("via", level, False)
-    if path.startswith("/api/admin/intel/system"):
-        return ("runtime", level, False)
-    if path.startswith("/api/intelligence/market") or path.startswith("/api/intelligence/brand"):
-        return ("analytics", level, False)
-    if path.startswith("/api/admin/intel") or path.startswith("/api/intelligence"):
-        return ("intelligence", level, False)
-    if (
-        path.startswith("/api/admin/analytics")
-        or path.startswith("/api/admin/benchmarks")
-        or path.startswith("/api/admin/learning")
-    ):
-        return ("analytics", level, False)
-    if (
-        path.startswith("/api/admin/orders")
-        or path.startswith("/api/admin/payouts")
-        or path.startswith("/api/admin/attribution")
-        or path.startswith("/api/admin/webhook-events")
-        or path.startswith("/api/admin/affiliate")
-    ):
+    if path.startswith(_OPERATIONS_PREFIXES) or path.endswith(_OPERATIONS_SUFFIXES):
         return ("operations", level, False)
-    if (
-        path.startswith("/api/admin/rewards")
-        or path.startswith("/api/admin/product_catalog")
-        or path.startswith("/api/admin/creator-public/shop-heroes")
-        or path.startswith("/api/admin/upload/reward-image")
-    ):
-        return ("products", level, False)
-    if path.startswith("/api/admin/creator") or path.startswith("/api/admin/creators"):
-        return ("creators", level, False)
-    if path.startswith("/api/admin/users/") and (
-        path.endswith("/block")
-        or path.endswith("/unblock")
-        or path.endswith("/flag")
-        or path.endswith("/clear-flag")
-        or path.endswith("/adjust-score")
-    ):
-        return ("command", level, False)
-    if (
-        path.startswith("/api/admin/users")
-        or path.startswith("/api/admin/social-accounts")
-        or path.startswith("/api/admin/verifications")
-        or path.startswith("/api/admin/submissions")
-        or path.startswith("/api/admin/approve")
-        or path.startswith("/api/admin/reject")
-        or path.startswith("/api/admin/reanalyze")
-        or path.startswith("/api/admin/redemptions")
-        or path.startswith("/api/verify/queue")
-        or path.startswith("/api/verify/admin")
-        or path.endswith("/scan")
-        or path.endswith("/approve")
-        or path.endswith("/reject")
-    ):
-        return ("operations", level, False)
-    if path.startswith("/api/admin/student") or path.startswith("/api/student/admin"):
-        return ("student", level, False)
-    if path.startswith("/api/vios"):
-        return ("analytics", level, False)
-    if path.startswith("/api/admin"):
-        return ("overview", level, False)
-    return None
+    return _level_permission_for_path(path, level, _TAIL_PERMISSION_RULES)
 
 
 # ── board.* 板块可见性映射(2026-07-18 权限双洞修)─────────────────────────

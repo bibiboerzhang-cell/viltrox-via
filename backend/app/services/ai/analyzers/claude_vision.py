@@ -15,6 +15,7 @@ from app.core.constants import VILTROX_CATALOG_PROMPT
 from app.core.config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 from app.core.logging import get_logger
 from app.platform import llm_production
+from app.services.ai.analyzers import claude_vision_smart as _smart_runtime
 from app.services.ai.analyzers.anthropic_response_text import text_blocks_joined
 from app.services.scoring.creator import get_creator_profile
 from app.services.scoring.core import compute_weighted_scores
@@ -39,6 +40,107 @@ from app.services.ai.analyzers.claude_vision_merge import _merge_analysis
 FRAMES_DIR = Path("uploads")
 logger = get_logger(__name__)
 # LOCAL_FILE_GEMINI_MODEL 现由 claude_vision_local_gemini 持有(上面 import 即 re-export,保旧引用)。
+
+
+def _apply_video_analysis_result(
+    result: dict,
+    analysis: dict,
+    *,
+    frames_b64: list,
+    video_path: str,
+) -> None:
+    result["analyzed"] = True
+    result["method"] = "claude_vision"
+    result["viltrox_detected"] = bool(analysis.get("viltrox_detected", False))
+    result["confidence"] = analysis.get("confidence", "none")
+    result["logo_visible"] = bool(analysis.get("logo_visible", False))
+    result["product_visible"] = bool(analysis.get("product_visible", False))
+    result["camera_gear_present"] = bool(
+        analysis.get("camera_gear_present", False)
+    )
+    result["camera_body"] = analysis.get("camera_body")
+    result["camera_brand"] = analysis.get("camera_brand")
+    result["viltrox_lens"] = analysis.get("viltrox_lens")
+    result["other_lens"] = analysis.get("other_lens")
+    result["flash"] = analysis.get("flash")
+    result["adapter"] = analysis.get("adapter")
+    result["accessories"] = analysis.get("accessories", [])
+    result["gear_combo"] = analysis.get("gear_combo", "")
+    result["brand_elements"] = analysis.get("brand_elements", [])
+    result["products_detected"] = analysis.get("products_detected", [])
+    result["viltrox_products_all"] = analysis.get("viltrox_products_all", [])
+    result["competitor_products"] = analysis.get("competitor_products", [])
+    result["brand_integration_depth"] = analysis.get(
+        "brand_integration_depth", "incidental"
+    )
+    result["content_genre"] = analysis.get("content_genre", "")
+    result["content_topic"] = analysis.get("content_topic", "")
+    result["content_summary"] = analysis.get("content_summary", "")
+    result["production_quality"] = analysis.get("production_quality", "")
+    result["editing_style"] = analysis.get("editing_style", "")
+    result["audience_fit"] = analysis.get("audience_fit", "")
+    result["originality"] = analysis.get("originality", "original")
+    result["competitor_brands"] = analysis.get("competitor_brands", [])
+    result["negative_signals"] = analysis.get("negative_signals", [])
+    result["shooting_style"] = analysis.get("shooting_style")
+    result["content_types"] = analysis.get("content_types", [])
+    result["needs_manual_review"] = bool(
+        analysis.get("needs_manual_review", False)
+    )
+    result["manual_review_reason"] = analysis.get("manual_review_reason")
+    result["notes"] = analysis.get("notes", "")
+    result["quality_scores"] = analysis.get("quality_scores", {})
+    result["quality_overall"] = analysis.get("quality_overall", 0)
+    result["quality_summary"] = analysis.get("quality_summary", "")
+    result["reference_value"] = analysis.get("reference_value", "")
+    result["reference_reasons"] = analysis.get("reference_reasons", [])
+    result["improvements"] = analysis.get("improvements", [])
+    result["marketing_potential"] = analysis.get("marketing_potential", "")
+    result["marketing_notes"] = analysis.get("marketing_notes", "")
+    weighted = compute_weighted_scores(
+        result.get("quality_scores", {}),
+        result.get("content_genre", ""),
+    )
+    result["tech_score"] = weighted["tech_score"]
+    result["marketing_score"] = weighted["marketing_score"]
+    result["quality_overall"] = weighted.get(
+        "quality_overall", weighted.get("weighted_overall", 0)
+    )
+    result["timestamps"] = analysis.get("timestamps", [])
+    if result["originality"] in (
+        "likely-repost",
+        "compilation",
+        "screen-recording",
+    ):
+        result["needs_manual_review"] = True
+        result["manual_review_reason"] = f"Originality: {result['originality']}"
+    if result["negative_signals"]:
+        result["needs_manual_review"] = True
+        result["manual_review_reason"] = (
+            (result["manual_review_reason"] or "")
+            + f" | Negative: {', '.join(result['negative_signals'][:3])}"
+        )
+    if not result["viltrox_detected"]:
+        return
+    bonus = {"high": 45, "medium": 28, "low": 12}.get(
+        result["confidence"], 0
+    )
+    if result["logo_visible"]:
+        bonus += 10
+    if result["product_visible"]:
+        bonus += 8
+    if result["brand_integration_depth"] == "central":
+        bonus += 15
+    if result["brand_integration_depth"] == "exclusive":
+        bonus += 25
+    result["brand_score_bonus"] = bonus
+    if frames_b64:
+        try:
+            result["best_frame_path"] = save_best_frame(
+                frames_b64[0], video_path, FRAMES_DIR
+            )
+        except Exception as exc:
+            logger.warning("frame save error: %s", exc)
 
 
 def analyze_video_with_claude(video_path: str, filename: str, creator_handle: str = "") -> dict:
@@ -311,85 +413,46 @@ def analyze_video_with_claude(video_path: str, filename: str, creator_handle: st
         if not analysis:
             raise ValueError("All Claude Vision passes failed")
     
-        result["analyzed"] = True
-        result["method"] = "claude_vision"
-        result["viltrox_detected"]         = bool(analysis.get("viltrox_detected", False))
-        result["confidence"]               = analysis.get("confidence", "none")
-        result["logo_visible"]             = bool(analysis.get("logo_visible", False))
-        result["product_visible"]          = bool(analysis.get("product_visible", False))
-        result["camera_gear_present"]      = bool(analysis.get("camera_gear_present", False))
-        result["camera_body"]              = analysis.get("camera_body")
-        result["camera_brand"]             = analysis.get("camera_brand")
-        result["viltrox_lens"]             = analysis.get("viltrox_lens")
-        result["other_lens"]               = analysis.get("other_lens")
-        result["flash"]                    = analysis.get("flash")
-        result["adapter"]                  = analysis.get("adapter")
-        result["accessories"]              = analysis.get("accessories", [])
-        result["gear_combo"]               = analysis.get("gear_combo", "")
-        result["brand_elements"]           = analysis.get("brand_elements", [])
-        result["products_detected"]        = analysis.get("products_detected", [])
-        result["viltrox_products_all"]     = analysis.get("viltrox_products_all", [])
-        result["competitor_products"]      = analysis.get("competitor_products", [])
-        result["brand_integration_depth"]  = analysis.get("brand_integration_depth", "incidental")
-        result["content_genre"]            = analysis.get("content_genre", "")
-        result["content_topic"]            = analysis.get("content_topic", "")
-        result["content_summary"]          = analysis.get("content_summary", "")
-        result["production_quality"]       = analysis.get("production_quality", "")
-        result["editing_style"]            = analysis.get("editing_style", "")
-        result["audience_fit"]             = analysis.get("audience_fit", "")
-        result["originality"]              = analysis.get("originality", "original")
-        result["competitor_brands"]        = analysis.get("competitor_brands", [])
-        result["negative_signals"]         = analysis.get("negative_signals", [])
-        result["shooting_style"]           = analysis.get("shooting_style")
-        result["content_types"]            = analysis.get("content_types", [])
-        result["needs_manual_review"]      = bool(analysis.get("needs_manual_review", False))
-        result["manual_review_reason"]     = analysis.get("manual_review_reason")
-        result["notes"]                    = analysis.get("notes", "")
-        result["quality_scores"]           = analysis.get("quality_scores", {})
-        result["quality_overall"]          = analysis.get("quality_overall", 0)
-        result["quality_summary"]          = analysis.get("quality_summary", "")
-        result["reference_value"]          = analysis.get("reference_value", "")
-        result["reference_reasons"]        = analysis.get("reference_reasons", [])
-        result["improvements"]             = analysis.get("improvements", [])
-        result["marketing_potential"]      = analysis.get("marketing_potential", "")
-        result["marketing_notes"]          = analysis.get("marketing_notes", "")
-        # ── Compute weighted scores by genre ──
-        ws = compute_weighted_scores(
-            result.get("quality_scores", {}),
-            result.get("content_genre", "")
+        _apply_video_analysis_result(
+            result,
+            analysis,
+            frames_b64=frames_b64,
+            video_path=video_path,
         )
-        result["tech_score"]      = ws["tech_score"]
-        result["marketing_score"] = ws["marketing_score"]
-        result["quality_overall"] = ws.get("quality_overall", ws.get("weighted_overall", 0))
-        result["timestamps"]               = analysis.get("timestamps", [])
-    
-        if result["originality"] in ("likely-repost", "compilation", "screen-recording"):
-            result["needs_manual_review"] = True
-            result["manual_review_reason"] = f"Originality: {result['originality']}"
-        if result["negative_signals"]:
-            result["needs_manual_review"] = True
-            result["manual_review_reason"] = (result["manual_review_reason"] or "") +             f" | Negative: {', '.join(result['negative_signals'][:3])}"
-    
-        if result["viltrox_detected"]:
-            bonus = {"high": 45, "medium": 28, "low": 12}.get(result["confidence"], 0)
-            if result["logo_visible"]:    bonus += 10
-            if result["product_visible"]: bonus += 8
-            if result["brand_integration_depth"] == "central":  bonus += 15
-            if result["brand_integration_depth"] == "exclusive": bonus += 25
-            result["brand_score_bonus"] = bonus
-
-            # ── Save best frame (Viltrox visible) for thumbnail display ──
-            # Pick the first frame with product detected (usually opening b-roll)
-            if frames_b64:
-                try:
-                    result["best_frame_path"] = save_best_frame(frames_b64[0], video_path, FRAMES_DIR)
-                except Exception as fe:
-                    logger.warning("frame save error: %s", fe)
-    
     except Exception as e:
         logger.exception("vision analysis failed: %s", e)
 
     return result
+
+
+def _smart_analysis_dependencies() -> _smart_runtime.SmartAnalysisDependencies:
+    return _smart_runtime.SmartAnalysisDependencies(
+        anthropic_available=ANTHROPIC_AVAILABLE,
+        gemini_available=GEMINI_AVAILABLE,
+        openai_available=OPENAI_AVAILABLE,
+        ytdlp_available=YTDLP_AVAILABLE,
+        initial_smart_result=initial_smart_result,
+        get_creator_profile=get_creator_profile,
+        gpt_prefilter_caption=gpt_prefilter_caption,
+        analyze_youtube_with_gemini=analyze_youtube_with_gemini,
+        fetch_all_images_from_post=fetch_all_images_from_post,
+        analyze_images_batch=_analyze_images_batch,
+        merge_analysis=_merge_analysis,
+        temporary_directory=tempfile.TemporaryDirectory,
+        download_direct_video_url=_download_direct_video_url,
+        download_video_ytdlp=download_video_ytdlp,
+        analyze_local_video_with_gemini_file_api=(
+            analyze_local_video_with_gemini_file_api
+        ),
+        analyze_video_with_claude=analyze_video_with_claude,
+        unlink=os.unlink,
+        parse_gear_from_caption=parse_gear_from_caption,
+        analyze_text_content=analyze_text_content,
+        compute_weighted_scores=compute_weighted_scores,
+        logger=logger,
+    )
+
+
 async def analyze_url_content_smart(
     url: str, title: str, caption: str,
     scraped_text: str, og_image: str, platform: str,
@@ -403,240 +466,14 @@ async def analyze_url_content_smart(
     Layer 3: Text fallback
     Returns merged analysis result.
     """
-    result = initial_smart_result()
-
-    if not ANTHROPIC_AVAILABLE and not GEMINI_AVAILABLE:
-        return result
-
-    # ── Get creator profile for context ──
-    profile = get_creator_profile(creator_handle) if creator_handle else {}
-    profile_hint = ""
-    if profile.get("cameras"):
-        profile_hint = f"\nCREATOR HISTORY: Known to use {', '.join(profile['cameras'][:2])}. "
-    if profile.get("viltrox_lenses"):
-        profile_hint += f"Known Viltrox lenses: {', '.join(profile['viltrox_lenses'][:3])}."
-
-    # ── GPT Pre-filter (runs first, extremely cheap) ──
-    gpt_result = {}
-    if OPENAI_AVAILABLE:
-        logger.info("smart analysis | GPT pre-filter caption analysis")
-        gpt_result = gpt_prefilter_caption(title, caption, platform)
-        # GPT fills in gear hints but NEVER skips full analysis
-        # Content summary / quality scores / improvements always need Claude/Gemini
-        if gpt_result.get("camera_body"):
-            result["camera_body"] = gpt_result["camera_body"]
-        if gpt_result.get("viltrox_lens") and not result.get("viltrox_lens"):
-            result["viltrox_lens"] = gpt_result["viltrox_lens"]
-            result["analyzed"] = True
-            result["brand_elements"].append(f"GPT caption: {result['viltrox_lens']}")
-        if gpt_result.get("other_lens") and not result.get("other_lens"):
-            result["other_lens"] = gpt_result["other_lens"]
-        if gpt_result.get("content_genre") and not result.get("content_genre"):
-            result["content_genre"] = gpt_result["content_genre"]
-        result["layers_used"].append("gpt_prefilter")
-        logger.info(
-            "smart analysis | GPT hint | viltrox=%s | confidence=%s",
-            gpt_result.get("viltrox_lens"),
-            gpt_result.get("confidence"),
-        )
-
-    # ── Gemini Layer 0: YouTube direct read (fastest, no download) ──
-    if platform == "YouTube" and GEMINI_AVAILABLE and url:
-        logger.info("smart analysis | Gemini layer 0 — YouTube direct read")
-        gemini_result = await analyze_youtube_with_gemini(url, title, creator_handle)
-        if gemini_result.get("analyzed"):
-            result["layers_used"].append("gemini_youtube")
-            _merge_analysis(result, gemini_result)
-            result["analyzed"] = True
-            result["method"] = "gemini_youtube"
-            if gemini_result.get("timestamps"):
-                result["timestamps"] = gemini_result["timestamps"]
-            # If Gemini got full gear + content, skip yt-dlp download only
-            # but ALWAYS continue to Claude for quality scores + improvements
-            if result.get("viltrox_lens") and result.get("camera_body"):
-                logger.info("smart analysis | Gemini got full gear — skipping yt-dlp, running Claude scoring")
-            else:
-                logger.info("smart analysis | Gemini partial — continuing to Claude for gear confirmation")
-
-    # ── Layer 1: Fetch all images from post ──
-    logger.info("smart analysis | layer 1 image fetch | platform=%s", platform)
-    all_images = fetch_all_images_from_post(url, og_image)
-    logger.info("smart analysis | got %s images", len(all_images))
-
-    if all_images:
-        result["layers_used"].append(f"images({len(all_images)})")
-        # Analyze all images with Vision
-        img_analysis = _analyze_images_batch(all_images, title, platform, profile_hint)
-        if img_analysis:
-            _merge_analysis(result, img_analysis)
-            result["analyzed"] = True
-            result["method"] = f"image_vision_{len(all_images)}imgs"
-
-    # ── Layer 2: yt-dlp video download ──
-    # For non-YouTube platforms with video content (Instagram/TikTok/Facebook/etc),
-    # ALWAYS download and analyze video frames. Text/image analysis is too unreliable
-    # for accurate gear identification. Only skip if Layer 0 (Gemini YouTube) already
-    # got a definitive read.
-    has_video_platform = platform in (
-        "Instagram", "TikTok", "Douyin", "Facebook", "Bilibili", "Xiaohongshu", "Reddit", "Unknown"
+    return await _smart_runtime.analyze_url_content_smart_impl(
+        url,
+        title,
+        caption,
+        scraped_text,
+        og_image,
+        platform,
+        creator_handle,
+        direct_video_url,
+        dependencies=_smart_analysis_dependencies(),
     )
-    gemini_youtube_complete = (
-        platform == "YouTube"
-        and result.get("viltrox_lens")
-        and result.get("camera_body")
-        and result.get("quality_scores")
-    )
-    should_download = (
-        YTDLP_AVAILABLE
-        and not gemini_youtube_complete
-        and (
-            has_video_platform
-            or not result.get("viltrox_lens")
-            or not result.get("camera_body")
-            or not result.get("quality_scores")
-            or result.get("confidence") in ("low", "none", None)
-        )
-    )
-
-    if should_download:
-        logger.info("smart analysis | layer 2 yt-dlp | platform=%s", platform)
-        with tempfile.TemporaryDirectory() as tmpdir:
-            dl = _download_direct_video_url(direct_video_url, tmpdir) if direct_video_url else {"success": False, "path": None, "duration": 0, "error": "direct video url missing"}
-            if dl.get("success"):
-                result["video_source"] = "direct_url"
-                logger.info("smart analysis | layer 2 direct video url | platform=%s", platform)
-            else:
-                if direct_video_url:
-                    logger.warning("smart analysis | direct video failed: %s", dl.get("error"))
-                    result["layers_used"].append("direct_video_failed")
-                dl = download_video_ytdlp(url, tmpdir)
-                if dl.get("success"):
-                    result["video_source"] = "ytdlp"
-            if dl["success"] and dl["path"]:
-                result["layers_used"].append(f"video({dl['duration']:.0f}s)")
-                video_path = dl["path"]
-
-                # ── Route: Gemini File API (preferred for all platforms) ──
-                # 2026-08-23 C3:本地文件梯子抽到 claude_vision_local_gemini,并经
-                # llm_production 严格边界(任务绑定 local_file_video)。
-                gemini_ok = False
-                if GEMINI_AVAILABLE:
-                    gemini_ok = await analyze_local_video_with_gemini_file_api(
-                        video_path=video_path,
-                        url=url,
-                        title=title,
-                        platform=platform,
-                        creator_handle=creator_handle,
-                        duration_seconds=dl.get("duration"),
-                        result=result,
-                    )
-
-                # ── Fallback: Claude frame analysis if Gemini failed ──
-                if not gemini_ok:
-                    logger.info("smart analysis | layer 2 Claude frame fallback")
-                    video_analysis = analyze_video_with_claude(
-                        video_path, title or url, creator_handle=creator_handle
-                    )
-                    if video_analysis and video_analysis.get("analyzed"):
-                        _merge_analysis(result, video_analysis)
-                        result["analyzed"] = True
-                        result["method"] = f"ytdlp_claude_{platform}"
-
-                try:
-                    os.unlink(video_path)
-                except OSError as exc:
-                    logger.debug("temporary video cleanup failed: %s", exc)
-            else:
-                logger.warning("smart analysis | yt-dlp failed: %s", dl.get("error"))
-                result["layers_used"].append("ytdlp_failed")
-
-    # ── Layer 3: Text analysis — always run for quality scores ──
-    needs_gear = not result.get("camera_body") or not result.get("viltrox_lens")
-    needs_content = not result.get("content_summary") or not result.get("content_genre")
-    needs_quality = True  # Always generate quality scores on first submission
-
-    if needs_gear or needs_content or needs_quality:
-        logger.info(
-            "smart analysis | layer 3 text parse | gear=%s | content=%s | quality=%s",
-            needs_gear,
-            needs_content,
-            needs_quality,
-        )
-
-        # Fast caption parser first (no API call)
-        all_caption_text = " ".join(filter(None, [title, caption, scraped_text]))
-        caption_gear = parse_gear_from_caption(all_caption_text)
-        if not isinstance(caption_gear, dict):
-            caption_gear = {}
-        if isinstance(caption_gear, dict) and caption_gear.get("camera_body") and isinstance(result, dict) and not result.get("camera_body"):
-            result["camera_body"] = caption_gear["camera_body"]
-            result["camera_brand"] = caption_gear["camera_brand"]
-            result["layers_used"].append("caption_parser")
-            logger.info("caption parse | camera=%s", result["camera_body"])
-        if caption_gear.get("viltrox_lens") and not result.get("viltrox_lens"):
-            result["viltrox_lens"] = caption_gear["viltrox_lens"]
-            result["analyzed"] = True
-            if caption_gear["viltrox_lens"] not in result.get("brand_elements", []):
-                result.setdefault("brand_elements", []).append(f"Caption: {caption_gear['viltrox_lens']}")
-            logger.info("caption parse | viltrox_lens=%s", result["viltrox_lens"])
-        if caption_gear.get("other_lens") and not result.get("other_lens"):
-            result["other_lens"] = caption_gear["other_lens"]
-        if caption_gear.get("gear_combo") and not result.get("gear_combo"):
-            result["gear_combo"] = caption_gear["gear_combo"]
-
-        # Claude text analysis — always run if quality scores or improvements missing
-        if needs_content or needs_quality or (needs_gear and not caption_gear.get("viltrox_lens")):
-            text_result = analyze_text_content(
-                title, caption, url, platform, scraped_text, og_image=""
-            )
-            if text_result:
-                result["layers_used"].append("text_claude")
-                for field in ["camera_body", "camera_brand", "viltrox_lens",
-                              "other_lens", "flash", "adapter", "gear_combo"]:
-                    if not result.get(field) and text_result.get(field):
-                        result[field] = text_result[field]
-                for field in ["content_genre", "content_topic", "content_summary",
-                              "production_quality", "audience_fit", "content_types", "notes"]:
-                    if not result.get(field) and text_result.get(field):
-                        result[field] = text_result[field]
-                # Quality fields: only fill if Gemini didn't already provide them
-                for field in ["quality_scores", "quality_overall", "quality_summary",
-                              "reference_value", "reference_reasons",
-                              "improvements", "marketing_potential", "marketing_notes"]:
-                    if not result.get(field) and text_result.get(field):
-                        result[field] = text_result[field]
-                    elif field == "improvements" and not result.get(field):
-                        result[field] = text_result.get(field, [])
-                # If text analysis gave better/more quality_scores, use them
-                ts_qs = text_result.get("quality_scores", {})
-                rs_qs = result.get("quality_scores", {})
-                if ts_qs and len(ts_qs) > len(rs_qs):
-                    result["quality_scores"] = ts_qs
-                # Recompute weighted scores after all layers merged
-                if result.get("quality_scores"):
-                    ws = compute_weighted_scores(
-                        result["quality_scores"],
-                        result.get("content_genre", "")
-                    )
-                    result["tech_score"]      = ws["tech_score"]
-                    result["marketing_score"] = ws["marketing_score"]
-                    result["quality_overall"] = ws.get("quality_overall", ws.get("weighted_overall", 0)) or result.get("quality_overall", 0)
-                for field in ["competitor_brands", "competitor_products", "brand_elements"]:
-                    src = text_result.get(field, [])
-                    if isinstance(src, list):
-                        existing = result.get(field, [])
-                        for item in src:
-                            if item and item not in existing:
-                                existing.append(item)
-                        result[field] = existing
-
-    logger.info(
-        "smart analysis done | layers=%s | viltrox=%s | camera=%s | qs=%s | tech=%s | mkt=%s",
-        result["layers_used"],
-        result.get("viltrox_lens"),
-        result.get("camera_body"),
-        f"yes({len(result.get('quality_scores', {}))}dims)" if result.get("quality_scores") else "MISSING",
-        result.get("tech_score", 0),
-        result.get("marketing_score", 0),
-    )
-    return result

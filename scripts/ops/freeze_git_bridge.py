@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 from contextlib import contextmanager
 from pathlib import Path
@@ -31,6 +32,7 @@ def _readonly_git_wrapper_source(
     real_git: Path,
     snapshot: Path,
     source: Path,
+    python_bin: Path,
 ) -> str:
     """Return a Git shim that exposes source identity without sharing Git env."""
 
@@ -57,7 +59,7 @@ def _readonly_git_wrapper_source(
         "show-ref",
         "status",
     )
-    return f"""#!/usr/bin/env python3
+    return f"""#!{python_bin}
 from __future__ import annotations
 
 import os
@@ -229,33 +231,44 @@ if __name__ == "__main__":
 def readonly_snapshot_git_environment(
     snapshot: Path,
     source: Path,
+    *, bridge_parent: Path | None = None,
 ) -> Iterator[dict[str, str]]:
     """Install a temporary PATH shim for snapshot-only read access to source Git."""
 
-    raw_real_git = shutil.which("git")
-    if not raw_real_git:
-        raise GitBridgeError("Git executable is unavailable for snapshot verification")
-    real_git = Path(raw_real_git).resolve()
+    real_git = Path("/usr/bin/git").resolve(strict=True)
+    python_bin = Path(sys.executable).resolve(strict=True)
     if not real_git.is_file() or not os.access(real_git, os.X_OK):
         raise GitBridgeError("Git executable is unsafe for snapshot verification")
 
-    bridge_root = Path(tempfile.mkdtemp(prefix="vkpi-freeze-git-bridge."))
+    if bridge_parent is not None:
+        bridge_parent.mkdir(parents=True, exist_ok=True)
+    bridge_root = Path(tempfile.mkdtemp(prefix="vkpi-freeze-git-bridge.", dir=bridge_parent))
     wrapper = bridge_root / "git"
     try:
+        from scripts.ops.trusted_npm_audit import _trusted_node, _trusted_npm, _trusted_npx
+        node, npm_cli = _trusted_node(), _trusted_npm()
+        npx_cli = _trusted_npx(npm_cli)
         wrapper.write_text(
             _readonly_git_wrapper_source(
                 real_git=real_git,
                 snapshot=snapshot,
                 source=source,
+                python_bin=python_bin,
             ),
             encoding="utf-8",
         )
         os.chmod(wrapper, 0o500)
+        for name, cli in (("npm", npm_cli), ("npx", npx_cli)):
+            tool = bridge_root / name
+            tool.write_text(f'#!/bin/sh\nexec {node} {cli} "$@"\n', encoding="utf-8")
+            os.chmod(tool, 0o500)
+        node_tool = bridge_root / "node"
+        node_tool.write_text(f'#!/bin/sh\nexec {node} "$@"\n', encoding="utf-8")
+        os.chmod(node_tool, 0o500)
         yield {
-            "PATH": str(bridge_root)
-            + os.pathsep
-            + os.environ.get("PATH", os.defpath),
+            "PATH": str(bridge_root) + os.pathsep + "/usr/bin:/bin",
             "VKPI_FREEZE_GIT_BRIDGE": "readonly-path-wrapper",
+            "VKPI_FREEZE_GIT_WRAPPER": str(wrapper),
         }
     finally:
         shutil.rmtree(bridge_root, ignore_errors=True)

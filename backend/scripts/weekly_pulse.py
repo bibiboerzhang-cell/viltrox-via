@@ -1,8 +1,8 @@
-"""周脉冲(裁决① 2026-06-12 钉死):系统 crontab 直调,ENABLE_SCHEDULER 保持 0。
+"""Legacy weekly-pulse entrypoint retained only as a fail-closed cron guard.
 
-每周一次 qualified 25 行带闸刷新(stale_before=7d);每次运行=一起合法漂移,
-自动出账:前后指纹 + 逐行归因 + Apify 成本一行,追加 docs/KOL-Pool-pulse-log.md。
-E6 真游标落地即停(届时删除 crontab 行 + 本脚本归档)。
+The former synchronous refresh now returns ``durable_queue_required`` and no
+longer proves provider completion.  Until a parent batch receipt aggregates
+worker terminal states, this script exits before writing a success pulse.
 """
 from __future__ import annotations
 
@@ -65,6 +65,16 @@ def apify_usage_recent(window_sec: float) -> float:
         return -1.0
 
 
+def require_completed_refresh(result: dict) -> None:
+    """Refuse to publish a pulse receipt for an enqueue-only/deprecated caller."""
+    status = str(result.get("status") or "").strip().lower()
+    if status not in {"ok", "completed", "succeeded", "success"}:
+        raise RuntimeError(
+            f"weekly pulse refresh is not complete (status={status or 'missing'}); "
+            "durable worker completion evidence is required"
+        )
+
+
 def main() -> None:
     stale_before = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
     with db_connection_sync_scope():
@@ -81,6 +91,7 @@ def main() -> None:
             "kol_tiers": ["hot", "warm"],
             "kol_stale_before": stale_before,
         })
+    require_completed_refresh(result)
     elapsed = round(time.time() - t0, 1)
     usd = apify_usage_recent(elapsed)
     with db_connection_sync_scope():

@@ -50,16 +50,20 @@ def score(
     features: dict[str, Any],
     model_version: str = "latest",
     *,
+    purpose: str = "score",
+    triggered_by: Any = None,
+    metadata: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     gateway = _gateway_module()
     gateway.record_call(
         provider="internal_ml",
         model=model_version,
-        purpose="score",
+        purpose=str(purpose or "score"),
         status="not_configured",
         fallback_used=True,
-        metadata={"feature_count": len(features or {})},
+        triggered_by=triggered_by,
+        metadata={**(metadata or {}), "feature_count": len(features or {})},
         staff=staff,
     )
     return {

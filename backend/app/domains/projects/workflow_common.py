@@ -5,6 +5,8 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
+from app.shared.staff_identity import staff_id
+
 PROJECT_STAGES = [
     "discovery",
     "claimed",
@@ -187,11 +189,6 @@ def _validate_transition(from_stage: str, to_stage: str, body: dict[str, Any]) -
             missing.append(field)
     if missing:
         raise ValueError(f"missing required stage field: {', '.join(missing)}")
-
-def staff_id(staff: dict[str, Any] | None) -> int:
-    if not staff:
-        return 0
-    return _int(staff.get("id") or staff.get("staff_id") or staff.get("user_id"))
 
 def stage_config() -> dict[str, Any]:
     return {

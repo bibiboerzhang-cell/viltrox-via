@@ -77,7 +77,8 @@ def test_intel_job_records_non_ok_result_without_advancing_success(monkeypatch) 
         },
     )
 
-    asyncio.run(jobs_tasks_intel.job_vkpi_ai_today_hot())
+    with pytest.raises(RuntimeError, match="non-ok result"):
+        asyncio.run(jobs_tasks_intel.job_vkpi_ai_today_hot())
 
     assert len(recorded) == 1
     task_key, ok, raw_error = recorded[0]
@@ -94,6 +95,26 @@ def test_intel_job_records_non_ok_result_without_advancing_success(monkeypatch) 
         "providers_attempted": ["google", "anthropic"],
         "generated_at": "2026-07-16T12:00:00Z",
     }
+
+
+def test_ai_today_exception_is_recorded_and_propagated(monkeypatch) -> None:
+    recorded: list[tuple[str, bool, str]] = []
+    monkeypatch.setattr(jobs_tasks_intel, "_scheduler_task_enabled", lambda _key: True)
+    monkeypatch.setattr(
+        jobs_tasks_intel,
+        "_record_scheduler_run",
+        lambda key, *, ok, error="": recorded.append((key, ok, error)),
+    )
+
+    def fail() -> dict[str, str]:
+        raise RuntimeError("discovery unavailable")
+
+    monkeypatch.setattr(ai_today, "generate_ai_today_hot", fail)
+
+    with pytest.raises(RuntimeError, match="discovery unavailable"):
+        asyncio.run(jobs_tasks_intel.job_vkpi_ai_today_hot())
+
+    assert recorded == [("vkpi_ai_today_hot", False, "discovery unavailable")]
 
 
 def test_intel_job_records_exception_text(monkeypatch) -> None:

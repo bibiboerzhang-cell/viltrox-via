@@ -7,14 +7,17 @@ workflow_evidence.py 搬来,函数体逐字未变 → 行为必然不变。workf
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from app.db.connection import get_conn
 from app.domains import audit
 from app.domains.access import scope
-from app.domains.recommendations import pool_action_bridge
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow_common import _amount_cents, _int, _json, staff_id, utcnow
+from app.shared.project_creator_lifecycle_ports import RecommendationFeedbackSink
+
+logger = logging.getLogger(__name__)
 
 
 def _db_bool(value: Any) -> bool | int:
@@ -24,7 +27,13 @@ def _db_bool(value: Any) -> bool | int:
     return bool(value) if is_postgres_runtime() else (1 if value else 0)
 
 
-def add_project_message(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def add_project_message(
+    project_id: int,
+    body: dict[str, Any],
+    *,
+    staff: dict[str, Any] | None = None,
+    feedback_sink: RecommendationFeedbackSink | None = None,
+) -> dict[str, Any]:
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
     conn = get_conn()
@@ -72,14 +81,27 @@ def add_project_message(project_id: int, body: dict[str, Any], *, staff: dict[st
         )
         # C4 写口插桩(2026-08-23):项目级外联消息即时桥——outbound → outreach_sent
         # (L 车道 sync_message_outcomes 同口径);主写已提交,桥失败只告警。
-        pool_action_bridge.bridge_message_outreach(
-            message_id=item.get("id"),
-            project_id=int(project_id),
-            kol_id=_int(project["kol_id"]),
-            direction=item.get("direction"),
-            staff=staff,
-            source="project_message",
-        )
+        if feedback_sink is None:
+            logger.warning(
+                "project.feedback_sink_missing project_id=%s source=project_message",
+                project_id,
+            )
+        else:
+            try:
+                feedback_sink.record_message_outreach(
+                    message_id=item.get("id"),
+                    project_id=int(project_id),
+                    kol_id=_int(project["kol_id"]),
+                    direction=item.get("direction"),
+                    staff=staff,
+                    source="project_message",
+                )
+            except Exception:
+                logger.warning(
+                    "project.feedback_sink_failed project_id=%s source=project_message",
+                    project_id,
+                    exc_info=True,
+                )
     return item
 
 def add_project_content(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:

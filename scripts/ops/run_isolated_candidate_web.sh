@@ -420,7 +420,7 @@ export PYTHONPATH="${CANDIDATE_ROOT}/backend"
 # from the frozen candidate; runtime-only directories live under the private
 # temporary root and disappear with the candidate process group.
 cd "${CANDIDATE_RUNTIME}"
-exec "${PROJECT_ROOT}/.venv/bin/python" -B -m gunicorn app.main:app \
+exec "${CANDIDATE_PYTHON_BIN:-${PROJECT_ROOT}/.venv/bin/python}" -B -m gunicorn app.main:app \
   -c "${CANDIDATE_ROOT}/deploy/gunicorn_config.py" \
   --pythonpath "${CANDIDATE_ROOT}/backend" \
   --access-logfile - \

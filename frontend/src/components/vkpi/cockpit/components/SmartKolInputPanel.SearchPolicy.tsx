@@ -7,10 +7,26 @@ import {
   SMART_KOL_LANGUAGE_OPTIONS,
   SMART_KOL_MAX_LANGUAGES,
 } from "./SmartKolInputPanel.QualityFilters";
+import { parseKolFollowerCount } from "./SmartKolInputPanel.searchState";
 
 export const KOL_SEARCH_RESULT_LIMIT = 30;
 
 export type KolSearchStrategy = "vertical" | "balanced" | "expansion";
+export type KolSearchObjective = "prospective_growth" | "existing_evidence";
+
+export const KOL_SEARCH_OBJECTIVES: Readonly<Record<KolSearchObjective, {
+  label: string;
+  description: string;
+}>> = Object.freeze({
+  prospective_growth: {
+    label: "找潜在使用者",
+    description: "默认按真实使用场景、受众和市场推动能力找人，不要求已经提到 Viltrox。",
+  },
+  existing_evidence: {
+    label: "查已有品牌证据",
+    description: "只用于核查已经公开提到品牌或型号的创作者。",
+  },
+});
 
 /**
  * 每平台在线发现上限。YouTube 那条腿走 YouTube Data API search.list：
@@ -124,10 +140,20 @@ export function strategyFromLegacyMode(mode: string): KolSearchStrategy {
   return "balanced";
 }
 
-function positiveNumber(raw: string): number | undefined {
-  if (!String(raw || "").trim()) return undefined;
-  const value = Number(raw);
-  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+export function normalizeKolFollowerInput(raw: string): string {
+  const parsed = parseKolFollowerCount(raw);
+  return parsed.state === "invalid" ? String(raw || "").trim() : parsed.normalized;
+}
+
+export function validateKolFollowerRange(state: Pick<KolSearchFilterState, "followersMin" | "followersMax">): string | null {
+  const min = parseKolFollowerCount(state.followersMin);
+  const max = parseKolFollowerCount(state.followersMax);
+  if (min.state === "invalid") return "最低粉丝数格式无效，请输入数字、5万、50k 或 1m";
+  if (max.state === "invalid") return "最高粉丝数格式无效，请输入数字、5万、50k 或 1m";
+  if (min.state === "valid" && max.state === "valid" && min.value > max.value) {
+    return "最低粉丝数不能高于最高粉丝数";
+  }
+  return null;
 }
 
 const SMART_KOL_LANGUAGE_CODES = new Set(SMART_KOL_LANGUAGE_OPTIONS.map((option) => option.value));
@@ -145,8 +171,10 @@ export function toKolSearchApiFilters(
   platforms: string[],
   languages: readonly string[] = [],
 ): KolSearchApiFilters {
-  const followersMin = positiveNumber(state.followersMin);
-  const followersMax = positiveNumber(state.followersMax);
+  const parsedFollowersMin = parseKolFollowerCount(state.followersMin);
+  const parsedFollowersMax = parseKolFollowerCount(state.followersMax);
+  const followersMin = parsedFollowersMin.state === "valid" ? parsedFollowersMin.value : undefined;
+  const followersMax = parsedFollowersMax.state === "valid" ? parsedFollowersMax.value : undefined;
   const canonicalLanguages = normalizeKolSearchLanguages(languages);
   return {
     ...(platforms.length ? { platforms } : {}),
@@ -164,10 +192,12 @@ export function activeKolSearchFilterCount(
   platforms: string[],
   languages: readonly string[] = [],
 ): number {
+  const followersMin = parseKolFollowerCount(state.followersMin);
+  const followersMax = parseKolFollowerCount(state.followersMax);
   return Number(platforms.length > 0)
     + Number(Boolean(state.country))
     + Number(normalizeKolSearchLanguages(languages).length > 0)
-    + Number(Boolean(state.followersMin || state.followersMax))
+    + Number(followersMin.state !== "empty" || followersMax.state !== "empty")
     + Number(Boolean(state.vertical))
     + Number(state.gearContent !== "any");
 }
@@ -195,6 +225,8 @@ const VERTICAL_OPTIONS = [
 export function KolSearchPolicyPanel({
   open,
   onToggleOpen,
+  objective = "prospective_growth",
+  onObjectiveChange,
   strategy,
   onStrategyChange,
   platforms,
@@ -211,6 +243,8 @@ export function KolSearchPolicyPanel({
 }: {
   open: boolean;
   onToggleOpen: () => void;
+  objective?: KolSearchObjective;
+  onObjectiveChange?: (objective: KolSearchObjective) => void;
   strategy: KolSearchStrategy;
   onStrategyChange: (strategy: KolSearchStrategy) => void;
   platforms: string[];
@@ -231,12 +265,38 @@ export function KolSearchPolicyPanel({
   const canonicalLanguages = normalizeKolSearchLanguages(languages);
   const languageSelectValue = canonicalLanguages.length > 1 ? "__multiple__" : canonicalLanguages[0] || "";
   const activeCount = activeKolSearchFilterCount(filters, platforms, canonicalLanguages);
+  const followerRangeError = validateKolFollowerRange(filters);
   const update = <K extends keyof KolSearchFilterState>(key: K, value: KolSearchFilterState[K]) => {
     onFiltersChange({ ...filters, [key]: value });
+  };
+  const normalizeFollowerField = (key: "followersMin" | "followersMax") => {
+    const normalized = normalizeKolFollowerInput(filters[key]);
+    if (normalized !== filters[key]) update(key, normalized);
   };
 
   return (
     <div className="mt-2 rounded-lg border border-white/[0.065] bg-white/[0.018] p-2.5" data-testid="kol-search-policy-panel">
+      <div className="mb-2 flex flex-wrap items-center gap-1.5" data-testid="kol-search-objective-selector">
+        <span className="mr-0.5 text-[10px] text-slate-500">搜索目标</span>
+        {(Object.entries(KOL_SEARCH_OBJECTIVES) as Array<[KolSearchObjective, (typeof KOL_SEARCH_OBJECTIVES)[KolSearchObjective]]>).map(([key, item]) => {
+          const selected = key === objective;
+          return (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={selected}
+              title={item.description}
+              onClick={() => onObjectiveChange?.(key)}
+              className={`rounded-md border px-2 py-1 text-[10px] transition-colors ${selected
+                ? "border-emerald-300/35 bg-emerald-400/[0.12] text-emerald-100"
+                : "border-white/[0.08] bg-black/10 text-slate-500 hover:border-white/[0.16] hover:text-slate-300"}`}
+            >
+              {item.label}{key === "prospective_growth" ? <span className="ml-1 text-[8.5px] opacity-70">· 默认</span> : null}
+            </button>
+          );
+        })}
+        <span className="text-[9px] text-slate-600">{KOL_SEARCH_OBJECTIVES[objective].description}</span>
+      </div>
       <div className="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <span className="mr-0.5 text-[10px] text-slate-500">搜索策略</span>
@@ -356,26 +416,33 @@ export function KolSearchPolicyPanel({
               <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1">
                 <input
                   aria-label="最低粉丝数"
-                  inputMode="numeric"
-                  min={0}
-                  type="number"
+                  aria-describedby="kol-follower-range-help"
+                  aria-invalid={Boolean(followerRangeError)}
+                  inputMode="decimal"
+                  type="text"
                   value={filters.followersMin}
                   onChange={(event) => update("followersMin", event.target.value)}
-                  placeholder="最低"
+                  onBlur={() => normalizeFollowerField("followersMin")}
+                  placeholder="最低，如 5万"
                   className="min-w-0 rounded-md border border-white/[0.08] bg-black/30 px-2 py-1.5 text-[10px] text-slate-200 outline-none placeholder-slate-600 focus:border-cyan-300/35"
                 />
                 <span className="text-slate-700">–</span>
                 <input
                   aria-label="最高粉丝数"
-                  inputMode="numeric"
-                  min={0}
-                  type="number"
+                  aria-describedby="kol-follower-range-help"
+                  aria-invalid={Boolean(followerRangeError)}
+                  inputMode="decimal"
+                  type="text"
                   value={filters.followersMax}
                   onChange={(event) => update("followersMax", event.target.value)}
-                  placeholder="最高"
+                  onBlur={() => normalizeFollowerField("followersMax")}
+                  placeholder="最高，如 1m"
                   className="min-w-0 rounded-md border border-white/[0.08] bg-black/30 px-2 py-1.5 text-[10px] text-slate-200 outline-none placeholder-slate-600 focus:border-cyan-300/35"
                 />
               </div>
+              <span id="kol-follower-range-help" className={followerRangeError ? "block text-rose-300" : "block text-slate-600"} role={followerRangeError ? "alert" : undefined}>
+                {followerRangeError || "支持 5万 / 50k / 1m；留空或输入 0 均表示不限"}
+              </span>
             </div>
           </div>
 

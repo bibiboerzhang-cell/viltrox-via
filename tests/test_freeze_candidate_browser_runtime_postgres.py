@@ -18,13 +18,13 @@ def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def _freeze_module():
+def _runtime_module():
     import importlib
     import sys
 
     if str(ROOT) not in sys.path:
         sys.path.insert(0, str(ROOT))
-    return importlib.import_module("scripts.ops.freeze_worktree_candidate")
+    return importlib.import_module("scripts.ops.deploy_gate_runtime")
 
 
 def _pg_bin() -> Path | None:
@@ -40,44 +40,48 @@ def _pg_bin() -> Path | None:
 
 def test_freeze_deploy_gate_stops_candidate_browser_runtime_postgres_in_finally() -> None:
     freeze = _read("scripts/ops/freeze_worktree_candidate.py")
+    runtime = _read("scripts/ops/deploy_gate_runtime.py")
     gate = freeze.split("def run_deploy_gate(", 1)[1]
     finally_block = gate.split("    finally:\n", 1)[1].split("    if completed is None", 1)[0]
-    assert "candidate_postgres_receipts = stop_candidate_browser_runtime_postgres()" in finally_block
+    assert '"status": "controller_registry_cleanup_required"' in finally_block
+    assert '"destructive_cleanup_performed": False' in finally_block
+    assert "runtime_root" in finally_block
+    assert "runtime_root = str(args.runtime_root)" in gate
     assert 'after["candidate_browser_runtime_postgres"] = candidate_postgres_receipts' in gate
-    helper = freeze.split("def stop_candidate_browser_runtime_postgres(", 1)[1].split("\ndef run_deploy_gate(", 1)[0]
+    helper = runtime.split("def stop_candidate_browser_runtime_postgres(", 1)[1]
     assert '"stop", "-m", "fast"' in helper
     assert '"status": "stop_failed"' in helper and "_log.error(" in helper
-    assert 'vkpi-candidate-browser-runtime.' in freeze
+    assert ".glob(" not in helper
     assert "print(" not in helper
 
 
 def test_candidate_browser_runtime_postgres_cleanup_refuses_unsafe_roots_and_reports_stale(tmp_path: Path, monkeypatch) -> None:
-    freeze = _freeze_module()
-    # Outside the reviewed /tmp glob: never touched even with a live-looking pidfile.
+    import pytest
+
+    runtime = _runtime_module()
     outside = tmp_path / "vkpi-candidate-browser-runtime.outside"
     (outside / "runtime" / "data" / "postgres").mkdir(parents=True)
     (outside / "runtime" / "data" / "postgres" / "postmaster.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
-    assert freeze.stop_candidate_browser_runtime_postgres([outside]) == [
-        {"root": str(outside), "status": "unsafe_root_skipped"}
-    ]
+    with pytest.raises(runtime.DeployGateRuntimeError, match="0700"):
+        runtime.stop_candidate_browser_runtime_postgres(outside)
 
     import tempfile
 
     with tempfile.TemporaryDirectory(prefix="vkpi-candidate-browser-runtime.", dir="/tmp") as raw_root:
         root = Path(raw_root)
-        assert freeze.stop_candidate_browser_runtime_postgres([root]) == []  # no postgres at all
+        assert runtime.stop_candidate_browser_runtime_postgres(root) == []
         data_dir = root / "runtime" / "data" / "postgres"
         data_dir.mkdir(parents=True)
         (data_dir / "postmaster.pid").write_text("999999999\n", encoding="utf-8")
-        assert freeze.stop_candidate_browser_runtime_postgres([root]) == [
+        assert runtime.stop_candidate_browser_runtime_postgres(root) == [
             {"root": str(root), "status": "stale_pidfile"}
         ]
         # Live pid but no pg_ctl anywhere: reported, never silently dropped.
         (data_dir / "postmaster.pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
         monkeypatch.setenv("POSTGRES_BIN", str(tmp_path / "no-bin"))
-        monkeypatch.setattr(freeze, "_PG_CTL_FALLBACKS", ())
-        monkeypatch.setattr(freeze.shutil, "which", lambda _name: None)
-        receipts = freeze.stop_candidate_browser_runtime_postgres([root])
+        monkeypatch.setattr(runtime, "_PG_CTL_FALLBACKS", ())
+        monkeypatch.setattr(runtime.shutil, "which", lambda _name: None)
+        receipts = runtime.stop_candidate_browser_runtime_postgres(root)
         assert receipts == [{"root": str(root), "status": "pg_ctl_missing", "pid": os.getpid()}]
 
 
@@ -90,7 +94,7 @@ def test_candidate_browser_runtime_postgres_cleanup_stops_a_real_postmaster() ->
         import pytest
 
         pytest.skip("postgres binaries unavailable")
-    freeze = _freeze_module()
+    runtime = _runtime_module()
     # initdb rejects the operator's CJK locale (memory: dev PG 启动要 LC_ALL);
     # pin C for the fixture's own initdb/start, the helper inherits os.environ.
     pg_env = {**os.environ, "LC_ALL": "C", "LANG": "C"}
@@ -114,13 +118,13 @@ def test_candidate_browser_runtime_postgres_cleanup_stops_a_real_postmaster() ->
             check=True, capture_output=True, env=pg_env,
         )
         try:
-            assert freeze._live_postmaster(data_dir / "postmaster.pid") is not None
+            assert runtime._live_postmaster(data_dir / "postmaster.pid") is not None
             os.environ["POSTGRES_BIN"] = str(pg_bin)
-            receipts = freeze.stop_candidate_browser_runtime_postgres([root])
+            receipts = runtime.stop_candidate_browser_runtime_postgres(root)
             assert len(receipts) == 1 and receipts[0]["status"] == "stopped", receipts
             assert not (data_dir / "postmaster.pid").exists()
             # Idempotent: a second pass finds nothing to do.
-            assert freeze.stop_candidate_browser_runtime_postgres([root]) == []
+            assert runtime.stop_candidate_browser_runtime_postgres(root) == []
         finally:
             os.environ.pop("POSTGRES_BIN", None)
             subprocess.run(

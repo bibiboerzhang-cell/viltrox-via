@@ -8,6 +8,9 @@ import {
   KolSearchPolicyPanel,
   normalizeKolSearchLanguages,
   toKolSearchApiFilters,
+  validateKolFollowerRange,
+  type KolSearchFilterState,
+  type KolSearchObjective,
 } from "./SmartKolInputPanel.SearchPolicy";
 import { nextRequiredPlatformSelection } from "./SmartKolInputPanel.TextResult";
 
@@ -38,7 +41,55 @@ function SharedLanguageSurfaces() {
   );
 }
 
+function FollowerRangeSurface() {
+  const [filters, setFilters] = useState<KolSearchFilterState>(EMPTY_KOL_SEARCH_FILTERS);
+  return (
+    <KolSearchPolicyPanel
+      open
+      onToggleOpen={vi.fn()}
+      strategy="balanced"
+      onStrategyChange={vi.fn()}
+      platforms={["youtube"]}
+      onPlatformsChange={vi.fn()}
+      languages={[]}
+      onLanguagesChange={vi.fn()}
+      filters={filters}
+      onFiltersChange={setFilters}
+    />
+  );
+}
+
+function SearchObjectiveSurface() {
+  const [objective, setObjective] = useState<KolSearchObjective>("prospective_growth");
+  return (
+    <KolSearchPolicyPanel
+      open
+      onToggleOpen={vi.fn()}
+      objective={objective}
+      onObjectiveChange={setObjective}
+      strategy="balanced"
+      onStrategyChange={vi.fn()}
+      platforms={["youtube"]}
+      onPlatformsChange={vi.fn()}
+      languages={[]}
+      onLanguagesChange={vi.fn()}
+      filters={EMPTY_KOL_SEARCH_FILTERS}
+      onFiltersChange={vi.fn()}
+    />
+  );
+}
+
 describe("SmartKolQualityFilters", () => {
+  it("defaults to prospective growth and allows an explicit existing-evidence objective", () => {
+    render(<SearchObjectiveSurface />);
+
+    expect(screen.getByRole("button", { name: /找潜在使用者/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/不要求已经提到 Viltrox/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "查已有品牌证据" }));
+    expect(screen.getByRole("button", { name: "查已有品牌证据" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText(/公开提到品牌或型号/)).toBeTruthy();
+  });
+
   it("emits explicit language and type selections without browser-side qualification", () => {
     const onLanguagesChange = vi.fn();
     const onProfileTypesChange = vi.fn();
@@ -130,5 +181,45 @@ describe("SmartKolQualityFilters", () => {
       ["youtube"],
       ["JA", "en", "ja"],
     )).toEqual({ platforms: ["youtube"], countries: ["JP"], languages: ["en", "ja"] });
+  });
+
+  it("normalizes shorthand follower ranges and serializes canonical integers", () => {
+    expect(toKolSearchApiFilters(
+      { ...EMPTY_KOL_SEARCH_FILTERS, followersMin: "5万", followersMax: "1m" },
+      ["youtube"],
+    )).toEqual({ platforms: ["youtube"], followers_min: 50_000, followers_max: 1_000_000 });
+    expect(toKolSearchApiFilters(
+      { ...EMPTY_KOL_SEARCH_FILTERS, followersMin: "50k", followersMax: "0" },
+      ["youtube"],
+    )).toEqual({ platforms: ["youtube"], followers_min: 50_000 });
+  });
+
+  it("rejects invalid or reversed follower ranges instead of silently dropping them", () => {
+    expect(validateKolFollowerRange({ followersMin: "五万", followersMax: "1m" })).toMatch(/格式无效/);
+    expect(validateKolFollowerRange({ followersMin: "100k", followersMax: "5万" })).toBe("最低粉丝数不能高于最高粉丝数");
+    expect(validateKolFollowerRange({ followersMin: "0", followersMax: "" })).toBeNull();
+  });
+
+  it("accepts 5万/50k/1m in the UI, canonicalizes on blur, and explains zero", () => {
+    render(<FollowerRangeSurface />);
+    const min = screen.getByLabelText("最低粉丝数");
+    const max = screen.getByLabelText("最高粉丝数");
+
+    fireEvent.change(min, { target: { value: "5万" } });
+    fireEvent.blur(min);
+    expect(min).toHaveValue("50000");
+
+    fireEvent.change(max, { target: { value: "50k" } });
+    fireEvent.blur(max);
+    expect(max).toHaveValue("50000");
+    expect(screen.getByText(/留空或输入 0 均表示不限/)).toBeTruthy();
+
+    fireEvent.change(max, { target: { value: "4万" } });
+    expect(screen.getByRole("alert")).toHaveTextContent("最低粉丝数不能高于最高粉丝数");
+    expect(max).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(max, { target: { value: "0" } });
+    fireEvent.blur(max);
+    expect(max).toHaveValue("");
   });
 });

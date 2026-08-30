@@ -64,8 +64,19 @@ def test_analyzer_child_revalidates_durable_row_payload_not_execution_superset()
     assert "SELECT payload FROM apify_jobs WHERE id=?" in media_src
     assert "fence_durable_payload_unavailable" in media_src
     assert "fence_job_identity_missing" in media_src
-    gemini_src = workers.joinpath("apify_jobs_worker_gemini.py").read_text(encoding="utf-8")
-    assert '"job_id": int(job["id"])' in gemini_src
+    # The public worker facade delegates the long-running analysis path to the
+    # runtime module.  Keep the fence assertion attached to the executable
+    # implementation instead of the facade so a behavior-preserving module
+    # split cannot silently delete this guard or leave the test checking dead
+    # source.
+    gemini_facade_src = workers.joinpath("apify_jobs_worker_gemini.py").read_text(
+        encoding="utf-8"
+    )
+    gemini_runtime_src = workers.joinpath(
+        "apify_jobs_worker_gemini_runtime.py"
+    ).read_text(encoding="utf-8")
+    assert "process_gemini_video(" in gemini_facade_src
+    assert '"job_id": int(job["id"])' in gemini_runtime_src
 
 
 def test_profile_videos_enqueue_uses_session_creator_staff():

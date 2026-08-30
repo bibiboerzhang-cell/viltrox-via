@@ -19,11 +19,19 @@ from app.core.config import (
     TRUST_SCORE_STALE_SEC,
 )
 from app.core.logging import get_logger
-from app.core.security import invalidate_user_cache
 from app.db.connection import db_connection_sync_scope, get_conn
-from app.services.security.rate_limiter import check_rate_limit
+from app.services.cache import cache_clear
+from app.platform.rate_limit_store import check_rate_limit
 
 logger = get_logger(__name__)
+
+
+def invalidate_user_cache(user_id: int | None = None) -> None:
+    """Invalidate auth cache without importing the auth/DB orchestration module."""
+    if user_id is None:
+        cache_clear(prefix="auth:user:")
+        return
+    cache_clear(prefix=f"auth:user:{int(user_id)}:")
 
 
 TRUST_POSITIVE_FEEDBACK_EVENTS = {

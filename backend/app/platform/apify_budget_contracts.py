@@ -10,8 +10,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterator, Mapping
 
+from app.shared.apify_reservation_ledger import APIFY_BUDGET_SCOPE
 
-APIFY_BUDGET_SCOPE = "provider:apify"
 APIFY_BUDGET_BLOCK_CODE = "apify_budget_hard_stop"
 _execution_context: ContextVar[tuple[str, int] | None] = ContextVar(
     "vkpi_apify_execution_context", default=None

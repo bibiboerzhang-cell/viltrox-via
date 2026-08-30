@@ -9,7 +9,7 @@ import {
   numberValue,
   objectValue,
   parseJsonValue,
-} from '../dashboard';
+} from '../dashboard/dashboardFormat';
 
 type Row = Record<string, unknown>;
 

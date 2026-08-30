@@ -1,6 +1,6 @@
 """Gemini 视频分析处理簇 + 成本入账 + 结果塑形/落库,从 apify_jobs_worker.py 整簇 move 出来。
 
-函数体逐字不变 → 行为必然不变。原文件用
+公共入口保持不变；长流程由注入式 runtime 分阶段编排。原文件用
 `from app.workers.apify_jobs_worker_gemini import (...)` re-export 兜住所有调用点。
 依赖原文件的常量/小工具(_block_job/_load_video_evidence/...)在本模块**底部**
 lazy 形式 import(放底部避免循环导入:此时本模块所有函数已定义,原文件所需名也已先于
@@ -52,6 +52,10 @@ from app.workers.apify_jobs_worker_gemini_cost import (  # noqa: F401
 from app.workers.apify_jobs_worker_gemini_stages import (
     StageClock,
     record_final_v1_outcome_diagnostics,
+)
+from app.workers.apify_jobs_worker_gemini_runtime import (
+    GeminiVideoRuntimeDependencies,
+    process_gemini_video,
 )
 from app.workers.apify_jobs_worker_gemini_result import (
     bind_execution_authorization_to_selected_model,
@@ -460,416 +464,77 @@ def _final_v1_scope_checkpoint(
     )
 
 
+def _gemini_video_runtime_dependencies() -> GeminiVideoRuntimeDependencies:
+    """Bind the worker's live seams so test monkeypatches remain authoritative."""
+
+    return GeminiVideoRuntimeDependencies(
+        target=_target,
+        derive_method=_derive_method,
+        block_job=_block_job,
+        load_video_evidence=_load_video_evidence,
+        platform_from_content_url=_platform_from_content_url,
+        url_host=_url_host,
+        process_keyframe_qa=_process_gemini_video_final_v1_keyframe_qa,
+        process_flash_pro_judge=_process_gemini_video_flash_pro_judge,
+        process_flash_gpt55_judge=_process_gemini_video_flash_gpt55_judge,
+        process_flash_claude_judge=_process_gemini_video_flash_claude_judge,
+        logger=logger,
+        monotonic=time.monotonic,
+        stage_clock_factory=StageClock,
+        temporary_directory=tempfile.TemporaryDirectory,
+        gemini_analyzer_payload=_gemini_analyzer_payload,
+        resolve_cached_or_provider_video=_resolve_cached_or_provider_video,
+        persist_image_post_verdict=_persist_image_post_verdict,
+        download_direct_video_url=download_direct_video_url,
+        scope_checkpoint=_final_v1_scope_checkpoint,
+        video_final_context=_video_final_context,
+        video_performance_context=_video_performance_context,
+        run_analyzer=_run_gemini_analyzer_with_timeout,
+        warm_video_to_r2=_warm_video_to_r2_from_local,
+        bind_execution_authorization=bind_execution_authorization_to_selected_model,
+        mark_authorization_snapshot_missing=_mark_authorization_snapshot_missing,
+        ensure_final_v1_result_cacheable=ensure_final_v1_result_cacheable,
+        invalid_final_v1_error=InvalidFinalV1ResultError,
+        authoritative_cost=_authoritative_gemini_cost,
+        record_cost=_record_gemini_cost,
+        record_diagnostics=record_final_v1_outcome_diagnostics,
+        int_or_none=_int_or_none,
+        shape_result=_shape_gemini_result,
+        execution_metadata=_llm_execution_metadata,
+        quality_triage_target_type=quality_triage_target_type,
+        upsert_cache=upsert_video_analysis_cache,
+        json_dump=_json,
+        cache_prompt_version=_cache_prompt_version,
+        finish_cache_job=_finish_cache_job,
+        quality_incomplete_reason=_quality_incomplete_reason,
+        sync_search_session_job=_sync_search_session_job,
+        sync_deep_result=_sync_deep_analysis_result_from_cache,
+        enqueue_account=_enqueue_account_dossier_extract_after_final_v1,
+        enqueue_content_fit=_enqueue_content_fit_after_final_v1,
+        extract_lens=extract_lens_evidence_after_final_v1,
+        search_session_summary=_search_session_analysis_summary_from_result,
+        final_v1_keyframe_qa_derive_method=FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
+        final_derive_methods=frozenset(GEMINI_VIDEO_FINAL_DERIVE_METHODS),
+        v2_derive_methods=frozenset(GEMINI_VIDEO_V2_DERIVE_METHODS),
+        llm_budget_scope=LLM_BUDGET_SCOPE,
+        worker_model=WORKER_GEMINI_MODEL,
+        worker_execution_class=WORKER_LLM_EXECUTION_CLASS,
+    )
+
+
 def _process_gemini_video(
     conn: psycopg.Connection[Any],
     job: dict[str, Any],
     payload: dict[str, Any],
     preflight_cost: float,
 ) -> None:
-    target_type, target_id = _target(payload)
-    derive_method = _derive_method(payload)
-    if target_type != "video":
-        _block_job(conn, int(job["id"]), "unsupported_gemini_target_type", {"target_type": target_type})
-        return
-    evidence = _load_video_evidence(conn, target_id)
-    platform = _platform_from_content_url(str(evidence.get("content_url") or ""))
-    if platform == "unsupported":
-        _block_job(conn, int(job["id"]), "unsupported_platform", {"source_url_host": _url_host(str(evidence.get("content_url") or ""))})
-        return
-    if (
-        platform in {"instagram", "tiktok"}
-        and derive_method not in GEMINI_VIDEO_V2_DERIVE_METHODS
-        and derive_method not in GEMINI_VIDEO_FINAL_DERIVE_METHODS
-    ):
-        _block_job(conn, int(job["id"]), "unsupported_media_derive_method", {"platform": platform, "derive_method": derive_method})
-        return
-    if derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD:
-        _process_gemini_video_final_v1_keyframe_qa(conn, job, payload, evidence, preflight_cost)
-        return
-    if derive_method == "gemini_video_v2_flash_pro_judge":
-        _process_gemini_video_flash_pro_judge(conn, job, payload, evidence, preflight_cost)
-        return
-    if derive_method == "gemini_video_v2_flash_gpt55_judge":
-        _process_gemini_video_flash_gpt55_judge(conn, job, payload, evidence, preflight_cost)
-        return
-    if derive_method == "gemini_video_v2_flash_claude_judge":
-        _process_gemini_video_flash_claude_judge(conn, job, payload, evidence, preflight_cost)
-        return
-    logger.info(
-        "apify_jobs gemini video start | job_id=%s target_id=%s url=%s",
-        job.get("id"),
-        target_id,
-        str(evidence.get("content_url") or "")[:120],
-    )
-    started = time.monotonic()
-    clock = StageClock()
-    # 子进程按 analyzer_payload 的链逐节尝试(只在提供方压力时换节);post-hoc 闸认链成员。job_id 供子进程按落库 payload 复验围栏。
-    analyzer_payload = {**_gemini_analyzer_payload(payload, derive_method), "job_id": int(job["id"])}
-    model_chain = list(analyzer_payload.get("gemini_models") or [WORKER_GEMINI_MODEL])
-    authorization = (
-        payload.get("_llm_execution")
-        if isinstance(payload.get("_llm_execution"), dict)
-        else {}
-    )
-    analyzer_payload["llm_context"] = {
-        "purpose": "audit_video_analysis",
-        "cost_tag": LLM_BUDGET_SCOPE,
-        # 台账 staff 外键要的是 staff id;triggered_by_user_id 是 user id(owner staff 40 ↔ user 1),
-        # 混传曾让 owner 从 UI 点的深析全部记账外键炸。优先 payload.staff_id,没有才退 user id。
-        "triggered_by": payload.get("staff_id")
-        or payload.get("triggered_by_user_id", payload.get("user_id")),
-        "execution_class": str(
-            authorization.get("execution_class") or WORKER_LLM_EXECUTION_CLASS
-        ),
-        "metadata": {
-            "surface": "apify_jobs_worker",
-            "task_binding": "audit_video_analysis",
-            "parent_job_id": job.get("id"),
-            "target_type": target_type,
-            "target_id": target_id,
-            "platform": platform,
-            "phase": "video_analysis",
-            "target_label": f"video:{target_id}",
-        },
-    }
-    if platform in {"instagram", "tiktok"}:
-        with tempfile.TemporaryDirectory(prefix="vkpi-analysis-video-") as tmpdir:
-            with clock.stage("media_resolve"):
-                resolved = _resolve_cached_or_provider_video(conn, evidence, tmpdir)
-            if str(resolved.get("status") or "") == "blocked":
-                _block_job(conn, int(job["id"]), str(resolved.get("reason") or "media_resolve_blocked"), resolved)
-                return
-            if not resolved.get("ok"):
-                resolve_reason = str(resolved.get("reason") or "")
-                # 仅提取器明确证明图文/轮播才终态；剥链/无格式继续重试且不落图章。
-                if (
-                    resolved.get("confirmed_non_video") is True
-                    or resolved.get("no_video_confirmed") is True
-                ):
-                    _persist_image_post_verdict(conn, evidence)
-                    _block_job(conn, int(job["id"]), "image_post_no_video", resolved)
-                    return
-                raise RuntimeError(resolve_reason or f"media_resolve_failed:{platform}")
-            if resolved.get("cache_hit") or resolved.get("local_path_ready"):
-                download = {
-                    "success": True,
-                    "path": str(resolved.get("path") or ""),
-                    "bytes": int(resolved.get("bytes") or 0),
-                    "error": None,
-                    "cache_hit": True,
-                }
-            else:
-                with clock.stage("worker_download"):
-                    download = download_direct_video_url(
-                        str(resolved.get("direct_video_url") or ""),
-                        tmpdir,
-                        referer=str(evidence.get("content_url") or ""),
-                    )
-            if not download.get("success") or not download.get("path"):
-                # Point 8: a terminal precheck verdict (404/403/410/451) means the
-                # direct URL is confidently unavailable. Re-raise its bare reason —
-                # which carries a content_* marker — instead of the
-                # "direct_video_download_failed:" prefix, so _error_category routes
-                # it to content_unavailable/_restricted/_blocked (a terminal,
-                # non-retried bucket) rather than the retryable "download" bucket.
-                if download.get("precheck_terminal"):
-                    raise RuntimeError(str(download.get("error") or f"content unavailable: {platform}"))
-                raise RuntimeError(f"direct_video_download_failed: {download.get('error') or platform}")
-            media_provider_called = bool(resolved.get("provider_calls_performed"))
-            if not _final_v1_scope_checkpoint(
-                conn, job, payload, derive_method, provider_calls_performed=media_provider_called
-            ):
-                return
-            local_schema = "final_v1" if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else "v2"
-            analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
-            analyzer_started = time.monotonic()
-            raw = _run_gemini_analyzer_with_timeout(
-                {
-                    **analyzer_payload,
-                    "mode": "local",
-                    "video_path": str(download["path"]),
-                    "title": str(evidence.get("title") or ""),
-                    "creator_handle": str(evidence.get("creator_handle") or ""),
-                    "schema_version": local_schema,
-                    "performance_context": analysis_context,
-                },
-                job_id=job.get("id"),
-                target_id=target_id,
-                platform=platform,
-            )
-            clock.add("analyzer_subprocess", analyzer_started)
-            # File API upload / per-model retries inside the child carry their own
-            # stage gates; a child-reported revocation terminalizes here too.
-            if not _final_v1_scope_checkpoint(
-                conn, job, payload, derive_method, provider_calls_performed=True, raw=raw
-            ):
-                return
-            raw["media_resolution"] = {
-                "contract": resolved.get("media_resolution_contract"),
-                "state": resolved.get("media_resolution_state"),
-                "platform": platform,
-                "source_url_host": _url_host(str(evidence.get("content_url") or "")),
-                "direct_video_url_host": resolved.get("direct_video_url_host"),
-                "status": resolved.get("status"),
-                "scrape_success": bool(resolved.get("scrape_success")),
-                "media_resolved": bool(resolved.get("media_resolved")),
-                "downloadable": bool(resolved.get("downloadable")),
-                "confirmed_non_video": bool(resolved.get("confirmed_non_video")),
-                "cache_hit": bool(resolved.get("cache_hit")),
-                "cache_source": resolved.get("cache_source"),
-                "cache_asset_id": resolved.get("cache_asset_id"),
-                "cache_lookup_reason": resolved.get("cache_lookup_reason"),
-            }
-            raw["local_video_input"] = {
-                "download_bytes": int(download.get("bytes") or 0),
-                "temporary_files_cleaned": True,
-                "download_error": download.get("error"),
-            }
-            if not resolved.get("cache_hit"):
-                # C3:临时目录删除前,把这份已下载、已被 Gemini 分析的字节登记进视频缓存(传 R2),
-                # 令 KOL 详情页 cached_video_url 有值、视频可播。已命中缓存时不重复上传。
-                with clock.stage("r2_warm"):
-                    _warm_video_to_r2_from_local(
-                        job_id=job.get("id"),
-                        platform=platform,
-                        content_url=str(evidence.get("content_url") or ""),
-                        direct_video_url=str(resolved.get("direct_video_url") or ""),
-                        local_path=str(download.get("path") or ""),
-                    )
-    else:
-        analysis_context = _video_final_context(evidence) if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS else _video_performance_context(evidence)
-        analyzer_started = time.monotonic()
-        raw = _run_gemini_analyzer_with_timeout(
-            {
-                **analyzer_payload,
-                "mode": "youtube",
-                "url": str(evidence.get("content_url") or ""),
-                "title": str(evidence.get("title") or ""),
-                "creator_handle": str(evidence.get("creator_handle") or ""),
-                "schema_version": "final_v1"
-                if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
-                else ("v2" if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS else "legacy"),
-                "performance_context": analysis_context
-                if derive_method in GEMINI_VIDEO_V2_DERIVE_METHODS or derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS
-                else None,
-            },
-            job_id=job.get("id"),
-            target_id=target_id,
-            platform=platform,
-        )
-        clock.add("analyzer_subprocess", analyzer_started)
-    latency_ms = int((time.monotonic() - started) * 1000)
-    selected_model = str(raw.get("selected_model") or raw.get("model") or "").strip()
-    provider_reported_model = str(raw.get("provider_reported_model") or "").strip()
-    raw["selected_model"] = selected_model or None
-    raw["provider_reported_model"] = provider_reported_model or None
-    # YouTube children gate subtitles / direct attempts / download / File API
-    # themselves and report ``scope_revoked``; the parent re-checks before writes.
-    if not _final_v1_scope_checkpoint(
-        conn, job, payload, derive_method, provider_calls_performed=True, raw=raw
-    ):
-        return
-    raw["llm_execution"] = bind_execution_authorization_to_selected_model(
-        authorization,
-        selected_model=selected_model,
-        provider_reported_model=provider_reported_model,
-        model_chain=model_chain,
-        worker_execution_class=WORKER_LLM_EXECUTION_CLASS,
-        worker_gemini_model=WORKER_GEMINI_MODEL,
-    )
-    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS:
-        _mark_authorization_snapshot_missing(raw)
-    logger.info(
-        "apify_jobs gemini video returned | job_id=%s analyzed=%s method=%s latency_ms=%s",
-        job.get("id"),
-        bool(raw.get("analyzed")),
-        raw.get("method"),
-        latency_ms,
-    )
-    validation_error: InvalidFinalV1ResultError | None = None
-    cache_status = "ready"
-    if derive_method in GEMINI_VIDEO_FINAL_DERIVE_METHODS and raw.get("analyzed"):
-        try:
-            cache_status = ensure_final_v1_result_cacheable(raw) or "ready"
-        except InvalidFinalV1ResultError as exc:
-            validation_error = exc
-    cost, cost_basis, tokens_in, tokens_out = _authoritative_gemini_cost(
-        raw,
+    process_gemini_video(
+        conn,
+        job,
+        payload,
         preflight_cost,
+        dependencies=_gemini_video_runtime_dependencies(),
     )
-    with clock.stage("cost_record"):
-        ledger = _record_gemini_cost(
-            job=job,
-            payload=payload,
-            raw=raw,
-            cost=cost,
-            cost_basis=cost_basis,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            latency_ms=latency_ms,
-            preflight_cost=preflight_cost,
-        )
-    # worker 侧阶段(媒体解析/下载/子进程/R2/记账)并入 raw → 随 raw_gemini_video 与 cost.stage_timings_ms 落库
-    raw["worker_stage_timings_ms"] = dict(clock.timings)
-    if validation_error is not None:
-        # 契约校验失败(含截断续写后仍不完整)也要把 truncation / retries / 直链诊断落库,否则查不到真因
-        record_final_v1_outcome_diagnostics(
-            conn, job_id=int(job["id"]), raw=raw, clock=clock, platform=platform, error=str(validation_error)
-        )
-        raise validation_error
-    if not raw.get("analyzed"):
-        raw_error = str(raw.get("error") or "not_analyzed")
-        # 失败也落阶段耗时 + 直链/下载诊断(payload.diagnostics),否则 raw 随异常丢失、失败原因永远查不到
-        record_final_v1_outcome_diagnostics(conn, job_id=int(job["id"]), raw=raw, clock=clock, platform=platform, error=raw_error)
-        if raw_error == "gemini_call_timeout":
-            raise RuntimeError("gemini_call_timeout")
-        raise RuntimeError(f"Gemini video analysis failed: {raw_error}")
-    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
-    triggered_by_user_id = _int_or_none(triggered_by)
-    shaped = _shape_gemini_result(
-        job=job,
-        evidence=evidence,
-        raw={**raw, "ledger": ledger},
-        cost=cost,
-        cost_basis=cost_basis,
-        preflight_cost=preflight_cost,
-        latency_ms=latency_ms,
-        derive_method=derive_method,
-    )
-    execution = _llm_execution_metadata(raw)
-    cache_derive_method = (
-        execution["cache_derive_method"]
-        if execution["evaluation_only"]
-        else derive_method
-    )
-    cache_target_type = (
-        quality_triage_target_type(target_type)
-        if cache_status == "quality_incomplete"
-        else target_type
-    )
-    persist_started = time.monotonic()
-    with conn.transaction():
-        with conn.cursor() as cur:
-            cache_id = upsert_video_analysis_cache(
-                cur,
-                target_type=cache_target_type,
-                target_id=target_id,
-                model=str(raw.get("model") or raw.get("method") or "gemini_video"),
-                derive_method=cache_derive_method,
-                result_json=_json(shaped),
-                cost=cost,
-                triggered_by_user_id=triggered_by_user_id,
-                prompt_version=_cache_prompt_version(derive_method),
-                status=cache_status,
-            )
-            _finish_cache_job(
-                cur,
-                job_id=int(job["id"]),
-                cache_status=cache_status,
-                raw=raw,
-            )
-    clock.add("persist", persist_started)
-    if cache_status == "quality_incomplete":
-        reason = _quality_incomplete_reason(raw)
-        _sync_search_session_job(
-            conn,
-            int(job["id"]),
-            raw_status="triage",
-            reason=str(reason["reason"]),
-            analysis_summary={
-                "status": "quality_incomplete",
-                "cache_id": cache_id,
-                "derive_method": cache_derive_method,
-                "target_type": target_type,
-                "cache_target_type": cache_target_type,
-                "target_id": target_id,
-                "quality_issues": reason["quality_issues"],
-            },
-        )
-        record_final_v1_outcome_diagnostics(
-            conn,
-            job_id=int(job["id"]),
-            raw=raw,
-            clock=clock,
-            platform=platform,
-            error=str(reason["reason"]),
-        )
-        return
-    followups_started = time.monotonic()
-    if execution["evaluation_only"]:
-        # Local evidence is physically/logically isolated from production
-        # final_v1 and never seeds deep-result, dossier, fit, QA or judge
-        # follow-ups.  The URL session receives only a labelled pointer so the
-        # UI can show the result without promoting it into production facts.
-        _sync_search_session_job(
-            conn,
-            int(job["id"]),
-            raw_status="done",
-            analysis_summary={
-                "cache_id": cache_id,
-                "derive_method": cache_derive_method,
-                "base_derive_method": derive_method,
-                "target_type": target_type,
-                "target_id": target_id,
-                "evaluation_only": True,
-                "production_authorized": False,
-                "claim_status": "descriptive_only",
-                "model_readiness_status": execution["model_readiness_status"],
-            },
-        )
-        return
-    deep_result = _sync_deep_analysis_result_from_cache(
-        conn,
-        cache_id=cache_id,
-        derive_method=derive_method,
-        job_id=int(job["id"]),
-    )
-    account_extract_job = None
-    content_fit_job = None
-    try:
-        account_extract_job = _enqueue_account_dossier_extract_after_final_v1(
-            conn,
-            job_id=int(job["id"]),
-            deep_result=deep_result,
-        )
-        # QA P0 修:主成功路径补内容契合链式入队(此前只接在 cache-skip 路径,主路径漏接 → 发现的新人
-        # 首次 final_v1 完成拿不到内容契合)。QA P1 修:连同 account_dossier 一并兜进 try/except,
-        # 入队异常仅 warning、绝不冒泡把 final_v1 标 failed(『失败不阻断 final_v1』)。
-        content_fit_job = _enqueue_content_fit_after_final_v1(
-            conn,
-            job_id=int(job["id"]),
-            deep_result=deep_result,
-            source_payload=payload,
-        )
-    except Exception as exc:
-        logger.warning(
-            "final_v1 followup enqueue failed (non-fatal) | job_id=%s exception_type=%s",
-            job.get("id"),
-            type(exc).__name__,
-        )
-    extract_lens_evidence_after_final_v1(cache_id=cache_id, derive_method=derive_method, job_id=job.get("id"))
-    analysis_summary = _search_session_analysis_summary_from_result(
-        cache_id=cache_id,
-        derive_method=derive_method,
-        target_type=target_type,
-        target_id=target_id,
-        evidence=evidence,
-        result=shaped,
-        cost=cost,
-    )
-    if analysis_summary and deep_result:
-        analysis_summary["deep_result"] = deep_result
-    if analysis_summary and account_extract_job:
-        analysis_summary["account_dossier_extract_job"] = account_extract_job
-    _sync_search_session_job(
-        conn,
-        int(job["id"]),
-        raw_status="done",
-        analysis_summary=analysis_summary,
-    )
-    clock.add("followups", followups_started)
-    record_final_v1_outcome_diagnostics(conn, job_id=int(job["id"]), raw=raw, clock=clock, platform=platform)
-
 
 # 原文件留下的常量/小工具:放模块底部 import(避免循环导入;调用点均在函数体内、运行期才解析)。
 from app.workers.apify_jobs_worker import (  # noqa: E402

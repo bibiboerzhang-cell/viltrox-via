@@ -28,7 +28,6 @@ from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.costs import budget_guard
-from app.domains.kol.my_kol_board_ext_sql import VILTROX_TOKEN
 from app.domains.market.ai_today_contracts import (
     _FRESH_HOURS,
     _RESULT_CONTRACT_VERSION,
@@ -72,6 +71,7 @@ from app.domains.market.ai_today_json_guard import (
     extract_json_object,
     generate_json_with_parse_retry,
 )
+from app.shared.brand_identity import VILTROX_BRAND_TOKEN as VILTROX_TOKEN
 
 logger = get_logger(__name__)
 

@@ -5,10 +5,8 @@ This module owns metric computation and the final fail-closed evaluation gate.
 """
 from __future__ import annotations
 
-import math
-import random
 from collections import Counter, defaultdict
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
 from app.domains.kol.search_relevance_eval import (
@@ -21,174 +19,74 @@ from app.domains.kol.search_relevance_eval import (
     build_runtime_evaluation_status,
     validate_human_labels,
 )
+from app.domains.kol.search_relevance_statistics import (
+    bootstrap_mean_interval as _bootstrap_mean_interval,
+    cohen_kappa as _cohen_kappa,
+    judgments_disagree as _judgments_disagree,
+    ndcg as _ndcg,
+    ratio as _ratio,
+    tier_report as _tier_report,
+    wilson_interval as _wilson_interval,
+)
 
 
-def _ratio(numerator: int | float, denominator: int | float) -> float | None:
-    if denominator <= 0:
-        return None
-    return round(float(numerator) / float(denominator), 4)
+@dataclass(frozen=True)
+class _EvaluationContext:
+    policy: SearchEvaluationPolicy
+    raw_labels: list[Any]
+    validation: dict[str, Any]
+    valid_labels: list[dict[str, Any]]
+    independent_labels: list[dict[str, Any]]
+    adjudication_labels: list[dict[str, Any]]
+    manifest_queries: list[Mapping[str, Any]]
+    manifest_candidates: list[Mapping[str, Any]]
+    expected_query_ids: list[str]
+    expected_candidates: int
+    expected_independent_reviews: int
 
 
-def _wilson_interval(
-    successes: int,
-    sample_size: int,
-    z: float = 1.959963984540054,
-) -> dict[str, Any]:
-    if sample_size <= 0:
-        return {"method": "wilson_95", "low": None, "high": None, "sample_size": 0}
-    probability = successes / sample_size
-    denominator = 1 + z * z / sample_size
-    centre = (probability + z * z / (2 * sample_size)) / denominator
-    margin = (
-        z
-        * math.sqrt(
-            (probability * (1 - probability) + z * z / (4 * sample_size))
-            / sample_size
-        )
-        / denominator
-    )
-    return {
-        "method": "wilson_95",
-        "low": round(max(0.0, centre - margin), 4),
-        "high": round(min(1.0, centre + margin), 4),
-        "sample_size": sample_size,
-    }
+@dataclass(frozen=True)
+class _CandidateResolution:
+    final_label: dict[str, Any] | None = None
+    dual_pair: tuple[Mapping[str, Any], Mapping[str, Any]] | None = None
+    disagreement: bool = False
+    unable_to_judge: bool = False
+    adjudicated: bool = False
+    unresolved: bool = False
+    duplicate_reviewer: bool = False
+    unadjudicated: bool = False
 
 
-def _bootstrap_mean_interval(
-    values: Sequence[float],
-    *,
-    iterations: int,
-    seed: int,
-) -> dict[str, Any]:
-    if not values:
-        return {
-            "method": "query_bootstrap_percentile_95",
-            "low": None,
-            "high": None,
-            "sample_size": 0,
-            "iterations": iterations,
-        }
-    generator = random.Random(seed)
-    count = len(values)
-    samples = sorted(
-        sum(values[generator.randrange(count)] for _ in range(count)) / count
-        for _ in range(max(200, iterations))
-    )
-    low_index = max(0, int(0.025 * (len(samples) - 1)))
-    high_index = min(len(samples) - 1, int(0.975 * (len(samples) - 1)))
-    return {
-        "method": "query_bootstrap_percentile_95",
-        "low": round(samples[low_index], 4),
-        "high": round(samples[high_index], 4),
-        "sample_size": count,
-        "iterations": len(samples),
-        "seed": seed,
-    }
+@dataclass(frozen=True)
+class _ResolutionSummary:
+    final_labels: list[dict[str, Any]]
+    final_labels_by_query: dict[str, list[dict[str, Any]]]
+    dual_pairs: list[tuple[Mapping[str, Any], Mapping[str, Any]]]
+    dual_reviewed_candidates: int
+    disagreement_candidates: int
+    adjudicated_candidates: int
+    unable_to_judge_pairs: int
+    duplicate_reviewer_candidates: list[str]
+    unresolved_candidates: list[str]
+    unadjudicated_candidates: list[str]
 
 
-def _dcg(grades: Sequence[int], cutoff: int) -> float:
-    total = 0.0
-    for index, grade in enumerate(grades[:cutoff], start=1):
-        total += ((2**grade) - 1) / math.log2(index + 1)
-    return total
-
-
-def _ndcg(grades: Sequence[int], cutoff: int) -> float:
-    actual = _dcg(grades, cutoff)
-    ideal = _dcg(sorted(grades[:cutoff], reverse=True), cutoff)
-    return round(actual / ideal, 6) if ideal > 0 else 0.0
-
-
-def _tier_report(rows: Sequence[Mapping[str, Any]], *, threshold: int) -> dict[str, Any]:
-    sample_size = len(rows)
-    relevant = sum(int(row["relevance"]) >= threshold for row in rows)
-    vertical = sum(bool(row["vertical_fit"]) for row in rows)
-    evidence = sum(bool(row["evidence_sufficient"]) for row in rows)
-    return {
-        "sample_size": sample_size,
-        "relevance_hits": relevant,
-        "relevance_hit_rate": _ratio(relevant, sample_size),
-        "relevance_hit_rate_ci95": _wilson_interval(relevant, sample_size),
-        "vertical_fit_hits": vertical,
-        "vertical_fit_rate": _ratio(vertical, sample_size),
-        "vertical_fit_rate_ci95": _wilson_interval(vertical, sample_size),
-        "evidence_sufficient_count": evidence,
-        "evidence_sufficient_rate": _ratio(evidence, sample_size),
-        "evidence_sufficient_rate_ci95": _wilson_interval(evidence, sample_size),
-    }
-
-
-def _judgments_disagree(left: Mapping[str, Any], right: Mapping[str, Any]) -> bool:
-    if bool(left.get("unable_to_judge")) or bool(right.get("unable_to_judge")):
-        return True
-    return any(
-        left.get(field) != right.get(field)
-        for field in ("relevance", "vertical_fit", "evidence_sufficient")
-    )
-
-
-def _cohen_kappa(
-    pairs: Sequence[tuple[Mapping[str, Any], Mapping[str, Any]]],
-    *,
-    threshold: int,
-) -> dict[str, Any]:
-    judgeable = [
-        (left, right)
-        for left, right in pairs
-        if not left.get("unable_to_judge") and not right.get("unable_to_judge")
-    ]
-    if not judgeable:
-        return {
-            "method": "cohen_kappa_binary_relevance_v1",
-            "value": None,
-            "sample_size": 0,
-            "excluded_unable_to_judge_pairs": len(pairs),
-            "observed_agreement": None,
-        }
-    binary_pairs = [
-        (
-            int(left["relevance"]) >= threshold,
-            int(right["relevance"]) >= threshold,
-        )
-        for left, right in judgeable
-    ]
-    sample_size = len(binary_pairs)
-    observed = sum(left == right for left, right in binary_pairs) / sample_size
-    left_positive = sum(left for left, _right in binary_pairs) / sample_size
-    right_positive = sum(right for _left, right in binary_pairs) / sample_size
-    expected = (
-        left_positive * right_positive
-        + (1 - left_positive) * (1 - right_positive)
-    )
-    if math.isclose(expected, 1.0):
-        value = 1.0 if math.isclose(observed, 1.0) else 0.0
-    else:
-        value = (observed - expected) / (1 - expected)
-    return {
-        "method": "cohen_kappa_binary_relevance_v1",
-        "value": round(value, 4),
-        "sample_size": sample_size,
-        "excluded_unable_to_judge_pairs": len(pairs) - sample_size,
-        "observed_agreement": round(observed, 4),
-    }
-
-
-def evaluate_search_relevance(
+def _prepare_evaluation(
     labels: Iterable[Mapping[str, Any]],
     *,
     manifest: Mapping[str, Any],
-    policy: SearchEvaluationPolicy | None = None,
-) -> dict[str, Any]:
-    """Evaluate a fixed suite only after dual review and adjudication."""
-
+    policy: SearchEvaluationPolicy | None,
+) -> _EvaluationContext:
     active_policy = policy or SearchEvaluationPolicy()
     raw_labels = list(labels)
     validation = validate_human_labels(raw_labels, manifest=manifest)
     valid_labels = validation["valid_labels"]
-    independent_labels = [row for row in valid_labels if row["review_role"] == "independent"]
-    adjudication_labels = [row for row in valid_labels if row["review_role"] == "adjudication"]
-
+    independent_labels = [
+        row for row in valid_labels if row["review_role"] == "independent"
+    ]
+    adjudication_labels = [
+        row for row in valid_labels if row["review_role"] == "adjudication"
+    ]
     manifest_queries = [
         row for row in manifest.get("queries") or [] if isinstance(row, Mapping)
     ]
@@ -196,155 +94,302 @@ def evaluate_search_relevance(
         row for row in manifest.get("candidates") or [] if isinstance(row, Mapping)
     ]
     expected_query_ids = [_text(row.get("query_id")) for row in manifest_queries]
-    expected_candidates = active_policy.required_query_count * active_policy.required_candidates_per_query
-    expected_independent_reviews = (
-        expected_candidates * active_policy.required_independent_reviews_per_candidate
+    expected_candidates = (
+        active_policy.required_query_count
+        * active_policy.required_candidates_per_query
+    )
+    return _EvaluationContext(
+        policy=active_policy,
+        raw_labels=raw_labels,
+        validation=validation,
+        valid_labels=valid_labels,
+        independent_labels=independent_labels,
+        adjudication_labels=adjudication_labels,
+        manifest_queries=manifest_queries,
+        manifest_candidates=manifest_candidates,
+        expected_query_ids=expected_query_ids,
+        expected_candidates=expected_candidates,
+        expected_independent_reviews=(
+            expected_candidates
+            * active_policy.required_independent_reviews_per_candidate
+        ),
     )
 
-    reviews_by_candidate: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    adjudications_by_candidate: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
-    for row in independent_labels:
-        reviews_by_candidate[(row["query_id"], row["candidate_id"])].append(row)
-    for row in adjudication_labels:
-        adjudications_by_candidate[(row["query_id"], row["candidate_id"])].append(row)
 
-    ordered_manifest_keys = [
-        (_text(row.get("query_id")), _text(row.get("candidate_id")))
-        for row in manifest_candidates
-    ]
+def _index_reviews(
+    rows: Sequence[dict[str, Any]],
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    indexed: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        indexed[(row["query_id"], row["candidate_id"])].append(row)
+    return indexed
+
+
+def _resolve_candidate(
+    reviews: Sequence[dict[str, Any]],
+    adjudications: Sequence[dict[str, Any]],
+    *,
+    policy: SearchEvaluationPolicy,
+) -> _CandidateResolution:
+    ordered_reviews = sorted(reviews, key=lambda row: row["review_slot"])
+    if len(ordered_reviews) != policy.required_independent_reviews_per_candidate:
+        return _CandidateResolution(unresolved=True)
+    if {row["review_slot"] for row in ordered_reviews} != {"A", "B"}:
+        return _CandidateResolution(unresolved=True)
+    if len({row["labeler"] for row in ordered_reviews}) != 2:
+        return _CandidateResolution(duplicate_reviewer=True)
+    pair = (ordered_reviews[0], ordered_reviews[1])
+    unable_to_judge = any(row["unable_to_judge"] for row in ordered_reviews)
+    if not _judgments_disagree(*pair):
+        return _CandidateResolution(
+            final_label=dict(ordered_reviews[0]),
+            dual_pair=pair,
+            unable_to_judge=unable_to_judge,
+        )
+    invalid_adjudication = (
+        len(adjudications) != 1
+        or adjudications[0]["unable_to_judge"]
+        or adjudications[0]["labeler"]
+        in {row["labeler"] for row in ordered_reviews}
+    )
+    if invalid_adjudication:
+        return _CandidateResolution(
+            dual_pair=pair,
+            disagreement=True,
+            unable_to_judge=unable_to_judge,
+            unresolved=True,
+            unadjudicated=True,
+        )
+    return _CandidateResolution(
+        final_label=dict(adjudications[0]),
+        dual_pair=pair,
+        disagreement=True,
+        unable_to_judge=unable_to_judge,
+        adjudicated=True,
+    )
+
+
+def _group_final_labels(
+    rows: Sequence[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[row["query_id"]].append(row)
+    for query_rows in grouped.values():
+        query_rows.sort(key=lambda row: (row["rank"], row["candidate_id"]))
+    return grouped
+
+
+def _resolve_reviews(context: _EvaluationContext) -> _ResolutionSummary:
+    reviews_by_candidate = _index_reviews(context.independent_labels)
+    adjudications_by_candidate = _index_reviews(context.adjudication_labels)
     final_labels: list[dict[str, Any]] = []
     dual_pairs: list[tuple[Mapping[str, Any], Mapping[str, Any]]] = []
-    dual_reviewed_candidates = 0
-    disagreement_candidates = 0
-    adjudicated_candidates = 0
-    unable_to_judge_pairs = 0
-    duplicate_reviewer_candidates: list[str] = []
-    unresolved_candidates: list[str] = []
-    unadjudicated_candidates: list[str] = []
-    for key in ordered_manifest_keys:
-        reviews = sorted(reviews_by_candidate.get(key, []), key=lambda row: row["review_slot"])
-        if len(reviews) != active_policy.required_independent_reviews_per_candidate:
-            unresolved_candidates.append(f"{key[0]}:{key[1]}")
-            continue
-        if {row["review_slot"] for row in reviews} != {"A", "B"}:
-            unresolved_candidates.append(f"{key[0]}:{key[1]}")
-            continue
-        if len({row["labeler"] for row in reviews}) != 2:
-            duplicate_reviewer_candidates.append(f"{key[0]}:{key[1]}")
-            continue
-        dual_reviewed_candidates += 1
-        dual_pairs.append((reviews[0], reviews[1]))
-        if any(row["unable_to_judge"] for row in reviews):
-            unable_to_judge_pairs += 1
-        disagreement = _judgments_disagree(reviews[0], reviews[1])
-        if not disagreement:
-            final_labels.append(dict(reviews[0]))
-            continue
-        disagreement_candidates += 1
-        adjudications = adjudications_by_candidate.get(key, [])
-        if (
-            len(adjudications) != 1
-            or adjudications[0]["unable_to_judge"]
-            or adjudications[0]["labeler"] in {row["labeler"] for row in reviews}
-        ):
-            unresolved_key = f"{key[0]}:{key[1]}"
-            unresolved_candidates.append(unresolved_key)
-            unadjudicated_candidates.append(unresolved_key)
-            continue
-        adjudicated_candidates += 1
-        final_labels.append(dict(adjudications[0]))
+    duplicate_reviewers: list[str] = []
+    unresolved: list[str] = []
+    unadjudicated: list[str] = []
+    dual_count = disagreement_count = adjudicated_count = unable_count = 0
+    for row in context.manifest_candidates:
+        key = (_text(row.get("query_id")), _text(row.get("candidate_id")))
+        outcome = _resolve_candidate(
+            reviews_by_candidate.get(key, []),
+            adjudications_by_candidate.get(key, []),
+            policy=context.policy,
+        )
+        key_text = f"{key[0]}:{key[1]}"
+        if outcome.dual_pair is not None:
+            dual_pairs.append(outcome.dual_pair)
+            dual_count += 1
+        if outcome.unable_to_judge:
+            unable_count += 1
+        if outcome.disagreement:
+            disagreement_count += 1
+        if outcome.adjudicated:
+            adjudicated_count += 1
+        if outcome.duplicate_reviewer:
+            duplicate_reviewers.append(key_text)
+        if outcome.unresolved:
+            unresolved.append(key_text)
+        if outcome.unadjudicated:
+            unadjudicated.append(key_text)
+        if outcome.final_label is not None:
+            final_labels.append(outcome.final_label)
+    return _ResolutionSummary(
+        final_labels=final_labels,
+        final_labels_by_query=_group_final_labels(final_labels),
+        dual_pairs=dual_pairs,
+        dual_reviewed_candidates=dual_count,
+        disagreement_candidates=disagreement_count,
+        adjudicated_candidates=adjudicated_count,
+        unable_to_judge_pairs=unable_count,
+        duplicate_reviewer_candidates=duplicate_reviewers,
+        unresolved_candidates=unresolved,
+        unadjudicated_candidates=unadjudicated,
+    )
 
-    final_labels_by_query: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for row in final_labels:
-        final_labels_by_query[row["query_id"]].append(row)
-    for rows in final_labels_by_query.values():
-        rows.sort(key=lambda row: (row["rank"], row["candidate_id"]))
 
+def _manifest_metadata_blockers(
+    context: _EvaluationContext,
+    manifest: Mapping[str, Any],
+) -> list[str]:
     blockers: list[str] = []
-    if not raw_labels or validation["unlabeled_template_count"] == len(raw_labels):
-        blockers.append("no_human_labels")
-    if validation["issues"]:
-        blockers.append("label_validation_failed")
     if _text(manifest.get("truth_status")) != "candidate_export_not_gold_truth":
         blockers.append("manifest_truth_status_invalid")
     if not bool(manifest.get("candidate_export_complete")):
         blockers.append("candidate_export_incomplete")
-    query_integrity_failures = [
-        _text(row.get("query_id"))
-        for row in manifest_queries
-        if not _diagnostic_integrity_valid(
+    integrity_failed = any(
+        not _diagnostic_integrity_valid(
             row.get("diagnostics"),
-            expected=active_policy.required_candidates_per_query,
+            expected=context.policy.required_candidates_per_query,
         )
-    ]
-    if query_integrity_failures:
+        for row in context.manifest_queries
+    )
+    if integrity_failed:
         blockers.append("one_or_more_query_integrity_contracts_failed")
     manifest_algorithm_version = _text(manifest.get("algorithm_version"))
     query_algorithm_versions = {
         _text(_safe_mapping(row.get("diagnostics")).get("algorithm_version"))
-        for row in manifest_queries
+        for row in context.manifest_queries
     }
-    if query_algorithm_versions != {manifest_algorithm_version} or not manifest_algorithm_version:
+    if (
+        query_algorithm_versions != {manifest_algorithm_version}
+        or not manifest_algorithm_version
+    ):
         blockers.append("algorithm_version_context_mismatch")
-    if len(expected_query_ids) != active_policy.required_query_count:
+    if len(context.expected_query_ids) != context.policy.required_query_count:
         blockers.append("required_query_count_not_met")
-    if int(manifest.get("candidates_per_query") or 0) != active_policy.required_candidates_per_query:
+    if (
+        int(manifest.get("candidates_per_query") or 0)
+        != context.policy.required_candidates_per_query
+    ):
         blockers.append("manifest_candidates_per_query_mismatch")
-    if len(manifest_candidates) != expected_candidates:
+    if len(context.manifest_candidates) != context.expected_candidates:
         blockers.append("manifest_candidate_count_not_exact")
-    manifest_ranks_by_query: dict[str, set[int]] = defaultdict(set)
-    for row in manifest_candidates:
-        try:
-            manifest_rank = int(row.get("rank"))
-        except (TypeError, ValueError):
-            manifest_rank = 0
-        manifest_ranks_by_query[_text(row.get("query_id"))].add(manifest_rank)
-    exact_ranks = set(range(1, active_policy.required_candidates_per_query + 1))
-    if any(manifest_ranks_by_query.get(query_id, set()) != exact_ranks for query_id in expected_query_ids):
-        blockers.append("manifest_query_rank_contract_not_met")
-    if len(independent_labels) != expected_independent_reviews:
-        blockers.append("independent_review_count_below_required")
-    independent_labelers = sorted(
-        {_text(row.get("labeler")) for row in independent_labels if row.get("labeler")}
-    )
-    if len(independent_labelers) < active_policy.minimum_distinct_labelers:
-        blockers.append("minimum_distinct_human_labelers_not_met")
-    if dual_reviewed_candidates != expected_candidates:
-        blockers.append("one_or_more_candidates_not_dual_reviewed")
-    if duplicate_reviewer_candidates:
-        blockers.append("same_reviewer_used_twice_for_candidate")
-    if unadjudicated_candidates:
-        blockers.append("one_or_more_disagreements_unadjudicated")
+    return blockers
 
-    incomplete_queries: dict[str, int] = {}
-    for query_id in expected_query_ids:
-        rows = final_labels_by_query.get(query_id, [])
+
+def _manifest_rank_blockers(
+    context: _EvaluationContext,
+    exact_ranks: set[int],
+) -> list[str]:
+    ranks_by_query: dict[str, set[int]] = defaultdict(set)
+    for row in context.manifest_candidates:
+        try:
+            rank = int(row.get("rank"))
+        except (TypeError, ValueError):
+            rank = 0
+        ranks_by_query[_text(row.get("query_id"))].add(rank)
+    valid = all(
+        ranks_by_query.get(query_id, set()) == exact_ranks
+        for query_id in context.expected_query_ids
+    )
+    return [] if valid else ["manifest_query_rank_contract_not_met"]
+
+
+def _review_contract_blockers(
+    context: _EvaluationContext,
+    resolution: _ResolutionSummary,
+    independent_labelers: Sequence[str],
+) -> list[str]:
+    blockers: list[str] = []
+    if len(context.independent_labels) != context.expected_independent_reviews:
+        blockers.append("independent_review_count_below_required")
+    if len(independent_labelers) < context.policy.minimum_distinct_labelers:
+        blockers.append("minimum_distinct_human_labelers_not_met")
+    if resolution.dual_reviewed_candidates != context.expected_candidates:
+        blockers.append("one_or_more_candidates_not_dual_reviewed")
+    if resolution.duplicate_reviewer_candidates:
+        blockers.append("same_reviewer_used_twice_for_candidate")
+    if resolution.unadjudicated_candidates:
+        blockers.append("one_or_more_disagreements_unadjudicated")
+    return blockers
+
+
+def _incomplete_queries(
+    context: _EvaluationContext,
+    resolution: _ResolutionSummary,
+    exact_ranks: set[int],
+) -> dict[str, int]:
+    incomplete: dict[str, int] = {}
+    for query_id in context.expected_query_ids:
+        rows = resolution.final_labels_by_query.get(query_id, [])
         actual_ranks = {int(row["rank"]) for row in rows}
-        if len(rows) != active_policy.required_candidates_per_query or actual_ranks != exact_ranks:
-            incomplete_queries[query_id] = max(
+        if (
+            len(rows) != context.policy.required_candidates_per_query
+            or actual_ranks != exact_ranks
+        ):
+            incomplete[query_id] = max(
                 0,
-                active_policy.required_candidates_per_query - len(rows),
+                context.policy.required_candidates_per_query - len(rows),
             )
+    return incomplete
+
+
+def _evaluation_blockers(
+    context: _EvaluationContext,
+    resolution: _ResolutionSummary,
+    manifest: Mapping[str, Any],
+    independent_labelers: Sequence[str],
+    incomplete_queries: Mapping[str, int],
+    exact_ranks: set[int],
+) -> list[str]:
+    blockers: list[str] = []
+    if (
+        not context.raw_labels
+        or context.validation["unlabeled_template_count"] == len(context.raw_labels)
+    ):
+        blockers.append("no_human_labels")
+    if context.validation["issues"]:
+        blockers.append("label_validation_failed")
+    blockers.extend(_manifest_metadata_blockers(context, manifest))
+    blockers.extend(_manifest_rank_blockers(context, exact_ranks))
+    blockers.extend(
+        _review_contract_blockers(context, resolution, independent_labelers)
+    )
     if incomplete_queries:
         blockers.append("one_or_more_queries_incompletely_resolved")
+    return list(dict.fromkeys(blockers))
 
-    inter_rater = _cohen_kappa(
-        dual_pairs,
-        threshold=active_policy.relevance_threshold,
+
+def _inter_rater_report(
+    context: _EvaluationContext,
+    resolution: _ResolutionSummary,
+) -> dict[str, Any]:
+    report = _cohen_kappa(
+        resolution.dual_pairs,
+        threshold=context.policy.relevance_threshold,
     )
-    inter_rater.update(
+    report.update(
         {
-            "dual_reviewed_candidates": dual_reviewed_candidates,
-            "disagreement_candidates": disagreement_candidates,
-            "disagreement_rate": _ratio(disagreement_candidates, dual_reviewed_candidates),
-            "unable_to_judge_pairs": unable_to_judge_pairs,
-            "adjudicated_candidates": adjudicated_candidates,
-            "unresolved_candidates": len(set(unresolved_candidates)),
-            "unadjudicated_candidates": len(set(unadjudicated_candidates)),
+            "dual_reviewed_candidates": resolution.dual_reviewed_candidates,
+            "disagreement_candidates": resolution.disagreement_candidates,
+            "disagreement_rate": _ratio(
+                resolution.disagreement_candidates,
+                resolution.dual_reviewed_candidates,
+            ),
+            "unable_to_judge_pairs": resolution.unable_to_judge_pairs,
+            "adjudicated_candidates": resolution.adjudicated_candidates,
+            "unresolved_candidates": len(set(resolution.unresolved_candidates)),
+            "unadjudicated_candidates": len(
+                set(resolution.unadjudicated_candidates)
+            ),
         }
     )
+    return report
 
-    base = {
+
+def _base_report(
+    context: _EvaluationContext,
+    resolution: _ResolutionSummary,
+    *,
+    manifest: Mapping[str, Any],
+    blockers: Sequence[str],
+    independent_labelers: Sequence[str],
+    incomplete_queries: Mapping[str, int],
+) -> dict[str, Any]:
+    blocked = bool(blockers)
+    validation = context.validation
+    return {
         "schema_version": EVALUATION_SCHEMA_VERSION,
         "query_suite_version": _text(manifest.get("query_suite_version")),
         "manifest_fingerprint": _text(manifest.get("manifest_fingerprint")),
@@ -352,26 +397,23 @@ def evaluate_search_relevance(
         "filter_policy_version": _text(manifest.get("filter_policy_version")),
         "code_version": _text(manifest.get("code_version")),
         "dataset_snapshot_id": _text(manifest.get("dataset_snapshot_id")),
-        "evaluation_status": "not_evaluated" if blockers else "evaluated",
-        "gate_status": "blocked" if blockers else "passed",
+        "evaluation_status": "not_evaluated" if blocked else "evaluated",
+        "gate_status": "blocked" if blocked else "passed",
         "claim_status": (
-            "not_evaluated"
-            if blockers
-            else "offline_human_label_evaluation_only"
+            "not_evaluated" if blocked else "offline_human_label_evaluation_only"
         ),
-        # A complete label set makes the listed offline relevance metrics
-        # reportable. It still cannot establish general business accuracy,
-        # campaign performance, ROI, or online production quality.
-        "offline_relevance_metrics_claimable": not blockers,
+        # Offline human labels make only these relevance metrics reportable;
+        # they do not prove general accuracy, campaign ROI, or business outcome.
+        "offline_relevance_metrics_claimable": not blocked,
         "accuracy_claimable": False,
         "business_outcome_claimable": False,
-        "blockers": list(dict.fromkeys(blockers)),
-        "policy": asdict(active_policy),
+        "blockers": list(blockers),
+        "policy": asdict(context.policy),
         "label_validation": {
-            "input_rows": len(raw_labels),
-            "valid_human_review_records": len(valid_labels),
-            "valid_independent_reviews": len(independent_labels),
-            "valid_adjudications": len(adjudication_labels),
+            "input_rows": len(context.raw_labels),
+            "valid_human_review_records": len(context.valid_labels),
+            "valid_independent_reviews": len(context.independent_labels),
+            "valid_adjudications": len(context.adjudication_labels),
             "unlabeled_template_count": validation["unlabeled_template_count"],
             "issue_count": len(validation["issues"]),
             "issue_counts": validation["issue_counts"],
@@ -379,22 +421,26 @@ def evaluate_search_relevance(
             "issues_truncated": len(validation["issues"]) > 100,
         },
         "coverage": {
-            "required_query_count": active_policy.required_query_count,
-            "manifest_query_count": len(expected_query_ids),
-            "required_candidates": expected_candidates,
-            "required_independent_reviews": expected_independent_reviews,
-            "valid_independent_reviews": len(independent_labels),
-            "dual_reviewed_candidates": dual_reviewed_candidates,
-            "resolved_candidates": len(final_labels),
-            "disagreement_candidates": disagreement_candidates,
-            "adjudicated_candidates": adjudicated_candidates,
-            "unresolved_candidates": len(set(unresolved_candidates)),
-            "unadjudicated_candidates": len(set(unadjudicated_candidates)),
+            "required_query_count": context.policy.required_query_count,
+            "manifest_query_count": len(context.expected_query_ids),
+            "required_candidates": context.expected_candidates,
+            "required_independent_reviews": context.expected_independent_reviews,
+            "valid_independent_reviews": len(context.independent_labels),
+            "dual_reviewed_candidates": resolution.dual_reviewed_candidates,
+            "resolved_candidates": len(resolution.final_labels),
+            "disagreement_candidates": resolution.disagreement_candidates,
+            "adjudicated_candidates": resolution.adjudicated_candidates,
+            "unresolved_candidates": len(set(resolution.unresolved_candidates)),
+            "unadjudicated_candidates": len(
+                set(resolution.unadjudicated_candidates)
+            ),
             "resolved_candidates_by_query": {
-                query_id: len(final_labels_by_query.get(query_id, []))
-                for query_id in expected_query_ids
+                query_id: len(
+                    resolution.final_labels_by_query.get(query_id, [])
+                )
+                for query_id in context.expected_query_ids
             },
-            "incomplete_queries": incomplete_queries,
+            "incomplete_queries": dict(incomplete_queries),
             "distinct_human_labelers": len(independent_labelers),
         },
         "diagnostics": {
@@ -409,111 +455,172 @@ def evaluate_search_relevance(
             "Cohen kappa is reported for binary relevance agreement and never replaced by model labels",
         ],
     }
-    if blockers:
-        report = {
-            **base,
-            "metrics": None,
-            "metrics_not_computed_reason": "complete_valid_human_labels_required",
-        }
-        report["runtime_evaluation_status"] = build_runtime_evaluation_status(
-            algorithm_version=_text(manifest.get("algorithm_version")),
-            code_version=_text(manifest.get("code_version")),
-            dataset_snapshot_id=_text(manifest.get("dataset_snapshot_id")),
-            filter_policy_version=_text(manifest.get("filter_policy_version")),
-            report=report,
-        )
-        return report
 
-    per_query: dict[str, dict[str, Any]] = {}
-    precision_values: dict[int, list[float]] = {
-        cutoff: [] for cutoff in active_policy.precision_cutoffs
+
+def _query_metric_report(
+    rows: Sequence[dict[str, Any]],
+    *,
+    policy: SearchEvaluationPolicy,
+) -> tuple[dict[str, Any], dict[int, float], float]:
+    grades = [int(row["relevance"]) for row in rows]
+    report: dict[str, Any] = {
+        "sample_size": len(rows),
+        "relevance_grade_counts": dict(sorted(Counter(grades).items())),
+    }
+    precision: dict[int, float] = {}
+    for cutoff in policy.precision_cutoffs:
+        top = rows[:cutoff]
+        relevant = sum(
+            int(row["relevance"]) >= policy.relevance_threshold for row in top
+        )
+        value = relevant / cutoff
+        precision[cutoff] = value
+        report[f"precision_at_{cutoff}"] = round(value, 4)
+        report[f"precision_at_{cutoff}_sample_size"] = len(top)
+    query_ndcg = _ndcg(grades, policy.ndcg_cutoff)
+    report[f"ndcg_at_{policy.ndcg_cutoff}"] = query_ndcg
+    return report, precision, query_ndcg
+
+
+def _per_query_metrics(
+    context: _EvaluationContext,
+    resolution: _ResolutionSummary,
+) -> tuple[dict[str, dict[str, Any]], dict[int, list[float]], list[float]]:
+    reports: dict[str, dict[str, Any]] = {}
+    precision_values = {
+        cutoff: [] for cutoff in context.policy.precision_cutoffs
     }
     ndcg_values: list[float] = []
-    for query_id in expected_query_ids:
-        rows = final_labels_by_query[query_id]
-        grades = [int(row["relevance"]) for row in rows]
-        query_metrics: dict[str, Any] = {
-            "sample_size": len(rows),
-            "relevance_grade_counts": dict(sorted(Counter(grades).items())),
-        }
-        for cutoff in active_policy.precision_cutoffs:
-            top = rows[:cutoff]
-            relevant = sum(
-                int(row["relevance"]) >= active_policy.relevance_threshold
-                for row in top
-            )
-            value = relevant / cutoff
+    for query_id in context.expected_query_ids:
+        report, precision, ndcg = _query_metric_report(
+            resolution.final_labels_by_query[query_id],
+            policy=context.policy,
+        )
+        reports[query_id] = report
+        for cutoff, value in precision.items():
             precision_values[cutoff].append(value)
-            query_metrics[f"precision_at_{cutoff}"] = round(value, 4)
-            query_metrics[f"precision_at_{cutoff}_sample_size"] = len(top)
-        query_ndcg = _ndcg(grades, active_policy.ndcg_cutoff)
-        ndcg_values.append(query_ndcg)
-        query_metrics[f"ndcg_at_{active_policy.ndcg_cutoff}"] = query_ndcg
-        per_query[query_id] = query_metrics
+        ndcg_values.append(ndcg)
+    return reports, precision_values, ndcg_values
 
+
+def _precision_aggregate(
+    context: _EvaluationContext,
+    resolution: _ResolutionSummary,
+    *,
+    cutoff: int,
+    values: Sequence[float],
+) -> dict[str, Any]:
+    relevant = sum(
+        int(row["relevance"]) >= context.policy.relevance_threshold
+        for rows in resolution.final_labels_by_query.values()
+        for row in rows[:cutoff]
+    )
+    candidate_count = len(context.expected_query_ids) * cutoff
+    return {
+        "macro_mean": round(sum(values) / len(values), 4),
+        "query_level_ci95": _bootstrap_mean_interval(
+            values,
+            iterations=context.policy.bootstrap_iterations,
+            seed=context.policy.bootstrap_seed + cutoff,
+        ),
+        "micro_rate": _ratio(relevant, candidate_count),
+        "candidate_level_ci95": _wilson_interval(relevant, candidate_count),
+        "query_sample_size": len(values),
+        "candidate_sample_size": candidate_count,
+    }
+
+
+def _aggregate_metrics(
+    context: _EvaluationContext,
+    resolution: _ResolutionSummary,
+    precision_values: Mapping[int, Sequence[float]],
+    ndcg_values: Sequence[float],
+) -> dict[str, Any]:
     aggregate: dict[str, Any] = {
-        "query_sample_size": len(expected_query_ids),
-        "candidate_sample_size": len(final_labels),
+        "query_sample_size": len(context.expected_query_ids),
+        "candidate_sample_size": len(resolution.final_labels),
     }
     for cutoff, values in precision_values.items():
-        relevant = sum(
-            int(row["relevance"]) >= active_policy.relevance_threshold
-            for rows in final_labels_by_query.values()
-            for row in rows[:cutoff]
+        aggregate[f"precision_at_{cutoff}"] = _precision_aggregate(
+            context,
+            resolution,
+            cutoff=cutoff,
+            values=values,
         )
-        candidate_n = len(expected_query_ids) * cutoff
-        aggregate[f"precision_at_{cutoff}"] = {
-            "macro_mean": round(sum(values) / len(values), 4),
-            "query_level_ci95": _bootstrap_mean_interval(
-                values,
-                iterations=active_policy.bootstrap_iterations,
-                seed=active_policy.bootstrap_seed + cutoff,
-            ),
-            "micro_rate": _ratio(relevant, candidate_n),
-            "candidate_level_ci95": _wilson_interval(relevant, candidate_n),
-            "query_sample_size": len(values),
-            "candidate_sample_size": candidate_n,
-        }
-    aggregate[f"ndcg_at_{active_policy.ndcg_cutoff}"] = {
+    cutoff = context.policy.ndcg_cutoff
+    aggregate[f"ndcg_at_{cutoff}"] = {
         "macro_mean": round(sum(ndcg_values) / len(ndcg_values), 4),
         "query_level_ci95": _bootstrap_mean_interval(
             ndcg_values,
-            iterations=active_policy.bootstrap_iterations,
-            seed=active_policy.bootstrap_seed + active_policy.ndcg_cutoff,
+            iterations=context.policy.bootstrap_iterations,
+            seed=context.policy.bootstrap_seed + cutoff,
         ),
         "query_sample_size": len(ndcg_values),
     }
-    by_tier = {
+    return aggregate
+
+
+def _tier_metrics(
+    rows: Sequence[dict[str, Any]],
+    *,
+    threshold: int,
+) -> dict[str, Any]:
+    reports = {
         tier: _tier_report(
-            [row for row in final_labels if row["match_tier"] == tier],
-            threshold=active_policy.relevance_threshold,
+            [row for row in rows if row["match_tier"] == tier],
+            threshold=threshold,
         )
         for tier in RETRIEVAL_TIERS
     }
     unknown_tiers = sorted(
-        {row["match_tier"] for row in final_labels} - set(RETRIEVAL_TIERS)
+        {row["match_tier"] for row in rows} - set(RETRIEVAL_TIERS)
     )
     if unknown_tiers:
-        by_tier["other"] = _tier_report(
-            [row for row in final_labels if row["match_tier"] in unknown_tiers],
-            threshold=active_policy.relevance_threshold,
+        reports["other"] = _tier_report(
+            [row for row in rows if row["match_tier"] in unknown_tiers],
+            threshold=threshold,
         )
-    report = {
-        **base,
-        "metrics": {
-            "relevance_threshold": active_policy.relevance_threshold,
-            "aggregate": aggregate,
-            "by_query": per_query,
-            "by_match_tier": by_tier,
-            "inter_rater": inter_rater,
-            "hard_filter_violation_rate": 0.0,
-            "lane_contract_pass_rate": 1.0,
-            "overall": _tier_report(
-                final_labels,
-                threshold=active_policy.relevance_threshold,
-            ),
-        },
+    return reports
+
+
+def _evaluated_metrics(
+    context: _EvaluationContext,
+    resolution: _ResolutionSummary,
+    inter_rater: Mapping[str, Any],
+) -> dict[str, Any]:
+    per_query, precision_values, ndcg_values = _per_query_metrics(
+        context,
+        resolution,
+    )
+    threshold = context.policy.relevance_threshold
+    return {
+        "relevance_threshold": threshold,
+        "aggregate": _aggregate_metrics(
+            context,
+            resolution,
+            precision_values,
+            ndcg_values,
+        ),
+        "by_query": per_query,
+        "by_match_tier": _tier_metrics(
+            resolution.final_labels,
+            threshold=threshold,
+        ),
+        "inter_rater": dict(inter_rater),
+        "hard_filter_violation_rate": 0.0,
+        "lane_contract_pass_rate": 1.0,
+        "overall": _tier_report(
+            resolution.final_labels,
+            threshold=threshold,
+        ),
     }
+
+
+def _attach_runtime_status(
+    report: dict[str, Any],
+    *,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
     report["runtime_evaluation_status"] = build_runtime_evaluation_status(
         algorithm_version=_text(manifest.get("algorithm_version")),
         code_version=_text(manifest.get("code_version")),
@@ -522,6 +629,60 @@ def evaluate_search_relevance(
         report=report,
     )
     return report
+
+
+def evaluate_search_relevance(
+    labels: Iterable[Mapping[str, Any]],
+    *,
+    manifest: Mapping[str, Any],
+    policy: SearchEvaluationPolicy | None = None,
+) -> dict[str, Any]:
+    """Evaluate a fixed suite only after dual review and adjudication."""
+
+    context = _prepare_evaluation(labels, manifest=manifest, policy=policy)
+    resolution = _resolve_reviews(context)
+    independent_labelers = sorted(
+        {
+            _text(row.get("labeler"))
+            for row in context.independent_labels
+            if row.get("labeler")
+        }
+    )
+    exact_ranks = set(range(1, context.policy.required_candidates_per_query + 1))
+    incomplete_queries = _incomplete_queries(context, resolution, exact_ranks)
+    blockers = _evaluation_blockers(
+        context,
+        resolution,
+        manifest,
+        independent_labelers,
+        incomplete_queries,
+        exact_ranks,
+    )
+    inter_rater = _inter_rater_report(context, resolution)
+    report = _base_report(
+        context,
+        resolution,
+        manifest=manifest,
+        blockers=blockers,
+        independent_labelers=independent_labelers,
+        incomplete_queries=incomplete_queries,
+    )
+    if blockers:
+        report.update(
+            {
+                "metrics": None,
+                "metrics_not_computed_reason": (
+                    "complete_valid_human_labels_required"
+                ),
+            }
+        )
+    else:
+        report["metrics"] = _evaluated_metrics(
+            context,
+            resolution,
+            inter_rater,
+        )
+    return _attach_runtime_status(report, manifest=manifest)
 
 
 __all__ = ["evaluate_search_relevance"]

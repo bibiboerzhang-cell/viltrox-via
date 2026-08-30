@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 本地全栈监督器(launchd 常驻):每 60s 巡检五件套,缺谁补谁,daily 更新不断档。
+# 本地全栈监督器(launchd 常驻):每 60s 巡检六件套,缺谁补谁,daily 更新不断档。
 # 由 ~/Library/LaunchAgents/com.vkpi.stack-supervisor.plist 以 KeepAlive 拉起;
 # 各 start 脚本自带防重复守卫(pidfile/端口/refusing mixed topology),巡检幂等。
 # 烧钱红线:scheduler 永远带任务白名单起(只放 daily 刷新类;kol_auto_poll、
@@ -14,6 +14,15 @@ mkdir -p "$ROOT/runtime/logs"
 # 本地与云端统一采用「1 条 interactive + 15 条 batch」的审定拓扑。把容量目标
 # 显式传给 web/worker 健康与 KOL 进度合同；只负责报告期望值，不会因此放宽费用闸。
 export APIFY_WORKER_EXPECTED_INSTANCES="${APIFY_WORKER_EXPECTED_INSTANCES:-16}"
+
+# Redis 是通用异步 Worker 的硬前置。失败重试采用有界指数退避，避免 Redis
+# 停机时 supervisor 每分钟重拉 worker_main 并无限放大 traceback 日志。
+REDIS_RETRY_BASE_SECONDS="${VKPI_SUPERVISOR_REDIS_RETRY_BASE_SECONDS:-60}"
+REDIS_RETRY_MAX_SECONDS="${VKPI_SUPERVISOR_REDIS_RETRY_MAX_SECONDS:-900}"
+REDIS_RETRY_DELAY_SECONDS="$REDIS_RETRY_BASE_SECONDS"
+REDIS_NEXT_RETRY_EPOCH=0
+REDIS_AUTORECOVER_ENABLED="${VKPI_SUPERVISOR_REDIS_AUTORECOVER:-0}"
+REDIS_AUTORECOVER_NOTICE_EMITTED=0
 
 # 日志自限长:超 5MB 截断,防再造一个 452MB 事故
 if [[ -f "$LOG" && $(stat -f%z "$LOG" 2>/dev/null || echo 0) -gt 5242880 ]]; then
@@ -86,7 +95,63 @@ ensure_scheduler() {
   fi
 }
 
+redis_ready() (
+  RUNTIME_ENV_QUIET=1
+  source "$ROOT/scripts/runtime_env.sh" > /dev/null 2>&1 || return 1
+  local redis_cli="$REDIS_BIN_DIR/redis-cli"
+  [[ -x "$redis_cli" ]] || return 1
+  [[ "$("$redis_cli" -h "$REDIS_HOST" -p "$REDIS_PORT" ping 2>/dev/null)" == "PONG" ]]
+)
+
+ensure_redis() {
+  if redis_ready; then
+    REDIS_RETRY_DELAY_SECONDS="$REDIS_RETRY_BASE_SECONDS"
+    REDIS_NEXT_RETRY_EPOCH=0
+    REDIS_AUTORECOVER_NOTICE_EMITTED=0
+    return 0
+  fi
+
+  # Starting the durable AOF-backed instance changes local runtime state.  The
+  # supervisor may detect and report an outage by default, but an operator must
+  # explicitly authorize automatic recovery after reviewing the state split.
+  if [[ "$REDIS_AUTORECOVER_ENABLED" != "1" ]]; then
+    if [[ "$REDIS_AUTORECOVER_NOTICE_EMITTED" != "1" ]]; then
+      log "仓库 Redis 不可用;自动恢复未授权(VKPI_SUPERVISOR_REDIS_AUTORECOVER=1)"
+      REDIS_AUTORECOVER_NOTICE_EMITTED=1
+    fi
+    return 1
+  fi
+
+  local now next_delay
+  now="$(date +%s)"
+  if [[ "$now" -lt "$REDIS_NEXT_RETRY_EPOCH" ]]; then
+    return 1
+  fi
+
+  log "仓库 Redis 不可用,尝试按 runtime contract 恢复"
+  if RUNTIME_ENV_QUIET=1 bash "$ROOT/scripts/start_redis_local.sh" >> "$LOG" 2>&1 \
+    && redis_ready; then
+    REDIS_RETRY_DELAY_SECONDS="$REDIS_RETRY_BASE_SECONDS"
+    REDIS_NEXT_RETRY_EPOCH=0
+    REDIS_AUTORECOVER_NOTICE_EMITTED=0
+    log "仓库 Redis 已恢复"
+    return 0
+  fi
+
+  REDIS_NEXT_RETRY_EPOCH=$((now + REDIS_RETRY_DELAY_SECONDS))
+  next_delay=$((REDIS_RETRY_DELAY_SECONDS * 2))
+  if [[ "$next_delay" -gt "$REDIS_RETRY_MAX_SECONDS" ]]; then
+    next_delay="$REDIS_RETRY_MAX_SECONDS"
+  fi
+  log "仓库 Redis 恢复失败,${REDIS_RETRY_DELAY_SECONDS}s 后再试"
+  REDIS_RETRY_DELAY_SECONDS="$next_delay"
+  return 1
+}
+
 ensure_worker_main() {
+  if ! redis_ready; then
+    return 0
+  fi
   if ! pgrep -f "app.workers.worker_main" > /dev/null 2>&1; then
     log "worker_main 不在,拉起(consumers=2)"
     (
@@ -103,6 +168,7 @@ while true; do
   ensure_admin_web
   ensure_apify_pool
   ensure_scheduler
+  ensure_redis
   ensure_worker_main
   sleep 60
 done

@@ -7,13 +7,11 @@ from app.domains.staff import decision_staff as decision_engine
 from app.domains import audit
 from app.domains.access import scope
 from app.domains.projects.workflow import staff_id as resolve_staff_id
+from app.shared import staff_role_policy
 
 
 def is_manager_staff(staff: dict[str, Any]) -> bool:
-    role = str(staff.get("role") or "").strip().lower()
-    if int(staff.get("is_owner") or 0) == 1:
-        return True
-    return role in {"admin", "manager", "lead", "marketing_lead", "marketing_manager", "marketing-manager"}
+    return staff_role_policy.has_manager_staff_role(staff)
 
 
 def staff_directory() -> dict[str, Any]:

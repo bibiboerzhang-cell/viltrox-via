@@ -7,6 +7,16 @@ import importlib
 platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
 
 
+class FakeRefreshPlanner:
+    def __init__(self, result: dict[str, Any] | None = None) -> None:
+        self.result = result or {}
+        self.calls: list[dict[str, Any]] = []
+
+    def plan(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(kwargs)
+        return dict(self.result)
+
+
 class FakeConn:
     def execute(self, sql: str, params: tuple[Any, ...] = ()):
         if "COUNT(*) AS n FROM vkpi_kol_pool" in sql:
@@ -40,25 +50,23 @@ def test_kol_refresh_status_reports_tier_and_task_gate(monkeypatch) -> None:
     monkeypatch.delenv("VKPI_KOL_ON_DEMAND_REFRESH_ENABLED", raising=False)
     monkeypatch.setattr(platform_crawl_settings, "_table_exists", lambda table: True)
     monkeypatch.setattr(platform_crawl_settings, "get_conn", lambda: FakeConn())
-    monkeypatch.setattr(
-        platform_crawl_settings.apify_batch_refresh,
-        "qualified_apify_batch_plan",
-        lambda **kwargs: {
+    planner = FakeRefreshPlanner(
+        {
             "mode": "plan_only",
             "execution_enabled": False,
             "reason": "apify_batch_execution_not_enabled",
             "selector_ready": True,
             "stale_before": "2026-05-22T00:00:00Z",
-            "max_posts": kwargs["max_posts"],
-            "max_concurrent_runs": kwargs["max_concurrent"],
+            "max_posts": 1,
+            "max_concurrent_runs": 2,
             "source_total": 92,
             "total_targets": 7,
             "batch_count": 2,
             "platforms": {"youtube": 5, "instagram": 2},
-        },
+        }
     )
 
-    status = platform_crawl_settings._kol_refresh_status()
+    status = platform_crawl_settings._kol_refresh_status(refresh_planner=planner)
 
     assert status["mode"] == "searchable_records_only"
     assert status["provider_gate_enabled"] is False
@@ -76,14 +84,40 @@ def test_kol_refresh_status_reports_tier_and_task_gate(monkeypatch) -> None:
     assert status["apify_batch_plan"]["batch_count"] == 2
     assert status["apify_batch_plan"]["max_concurrent_runs"] == 2
     assert status["apify_batch_plan"]["platforms"] == {"youtube": 5, "instagram": 2}
+    assert planner.calls == [
+        {
+            "limit": 200,
+            "stale_days": 1,
+            "tiers": {"hot"},
+            "max_posts": 1,
+            "max_concurrent": 2,
+        }
+    ]
 
 
 def test_kol_refresh_status_exposes_enabled_mode(monkeypatch) -> None:
     monkeypatch.setenv("VKPI_KOL_ON_DEMAND_REFRESH_ENABLED", "1")
     monkeypatch.setattr(platform_crawl_settings, "_table_exists", lambda table: False)
 
-    status = platform_crawl_settings._kol_refresh_status()
+    planner = FakeRefreshPlanner()
+    status = platform_crawl_settings._kol_refresh_status(refresh_planner=planner)
 
     assert status["mode"] == "stale_while_revalidate_enabled"
     assert status["provider_gate_enabled"] is True
     assert status["provider_calls_default"] is True
+    assert planner.calls == []
+
+
+def test_kol_refresh_status_keeps_planner_failure_in_status(monkeypatch) -> None:
+    class FailingPlanner:
+        def plan(self, **kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError("planner unavailable")
+
+    monkeypatch.setattr(platform_crawl_settings, "_table_exists", lambda table: True)
+    monkeypatch.setattr(platform_crawl_settings, "get_conn", lambda: FakeConn())
+
+    status = platform_crawl_settings._kol_refresh_status(refresh_planner=FailingPlanner())
+
+    assert status["error"] == "RuntimeError: planner unavailable"
+    assert status["apify_batch_plan"]["mode"] == "plan_only"
+    assert status["apify_batch_plan"]["execution_enabled"] is False

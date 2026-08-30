@@ -18,6 +18,10 @@ INSECURE_LOCAL_JWT_SECRET="viltrox2-local-dev-secret-change-me"
 INSECURE_LOCAL_ADMIN_PASSWORD="AdminPass123!"
 LOCAL_ENV_FILE="${LOCAL_ENV_FILE:-$ROOT/.env}"
 ENVIRONMENT="${ENVIRONMENT:-local}"
+# Bind local-operator authorization to the launcher-selected scope before any
+# dotenv overlay is parsed.  A writable or stale .env.production must not turn
+# a production launch into a consumer of runtime/local_operator_env.sh.
+_RUNTIME_ENV_OPERATOR_SCOPE="$ENVIRONMENT"
 ENV_FILE="${ENV_FILE:-}"
 LEGACY_TOOLS_BIN="${LEGACY_TOOLS_BIN:-$(cd "$ROOT/.." && pwd)/viltrox-test/_tools/bin}"
 RUNTIME_ROOT="${RUNTIME_ROOT:-$ROOT/runtime}"
@@ -91,12 +95,89 @@ fi
 if [[ -n "$ENV_FILE" ]]; then
   load_env_file "$ENV_FILE" 1
 fi
-# 可选本地操作员覆盖(gitignored,不入库、不随部署):放非密钥类操作员开关,
+# Environment selects which overlay may be read; an overlay cannot select a
+# different runtime mode.  Restore the launcher-bound value before any auth or
+# local-operator decision observes it.
+export ENVIRONMENT="$_RUNTIME_ENV_OPERATOR_SCOPE"
+# 可选本地操作员覆盖(gitignored,不入库、不随部署):放非密钥类 VKPI_ 开关,
 # 例如 VKPI_LLM_READINESS_OPERATOR_ACK。密钥仍只属于 .env,别写进这里。
-if [[ -f "$ROOT/runtime/local_operator_env.sh" ]]; then
-  # shellcheck disable=SC1091
-  source "$ROOT/runtime/local_operator_env.sh"
-fi
+#
+# 这个文件在 runtime/ 下，服务运行账号通常可写该目录。因此不能把它
+# 当 shell 程序 source，也绝不能在 production/staging 加载；否则一次 runtime 写入
+# 就可在下次启动执行任意命令或绕过已评审的 EnvironmentFile。
+load_local_operator_env_file() {
+  local file_path="$1"
+  local line key value seen_keys="|"
+  if [[ -L "$file_path" || ! -f "$file_path" ]]; then
+    printf '%s\n' 'runtime_env: local operator environment file is unsafe' >&2
+    return 1
+  fi
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="${line#export}"
+      line="${line#"${line%%[![:space:]]*}"}"
+    fi
+    if [[ "$line" != *=* ]]; then
+      printf '%s\n' 'runtime_env: local operator environment contains non-assignment content' >&2
+      return 1
+    fi
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    case "$key" in
+      VKPI_LLM_READINESS_OPERATOR_ACK|\
+      VKPI_FORUM_COLLECT_ENABLED|\
+      VKPI_X_COLLECT_ENABLED|\
+      VKPI_FORUM_APIFY_FALLBACK_ENABLED|\
+      VKPI_ADVISOR_EXTERNAL_AI_ENABLED) ;;
+      *)
+      printf '%s\n' 'runtime_env: local operator environment contains a forbidden key' >&2
+      return 1
+      ;;
+    esac
+    if [[ "$seen_keys" == *"|$key|"* ]]; then
+      printf '%s\n' 'runtime_env: local operator environment contains a duplicate key' >&2
+      return 1
+    fi
+    seen_keys="${seen_keys}${key}|"
+    if [[ ${#value} -ge 2 && ( "${value:0:1}" == '"' || "${value:0:1}" == "'" ) ]]; then
+      if [[ "${value: -1}" != "${value:0:1}" ]]; then
+        printf '%s\n' 'runtime_env: local operator environment contains an unmatched quote' >&2
+        return 1
+      fi
+      value="${value:1:${#value}-2}"
+    fi
+    if [[ "$value" =~ [[:cntrl:]] ]]; then
+      printf '%s\n' 'runtime_env: local operator environment contains control data' >&2
+      return 1
+    fi
+    export "$key=$value"
+  done < "$file_path"
+}
+
+LOCAL_OPERATOR_ENV_FILE="$ROOT/runtime/local_operator_env.sh"
+case "$(printf '%s' "$_RUNTIME_ENV_OPERATOR_SCOPE" | tr '[:upper:]' '[:lower:]')" in
+  local)
+    if [[ -e "$LOCAL_OPERATOR_ENV_FILE" || -L "$LOCAL_OPERATOR_ENV_FILE" ]]; then
+      if ! load_local_operator_env_file "$LOCAL_OPERATOR_ENV_FILE"; then
+        return 1 2>/dev/null || exit 1
+      fi
+      export VKPI_LOCAL_OPERATOR_ENV_STATUS=loaded
+    else
+      export VKPI_LOCAL_OPERATOR_ENV_STATUS=absent
+    fi
+    ;;
+  *)
+    # Production/staging authorization belongs to the reviewed service
+    # EnvironmentFile.  A writable runtime file is never an authorization root.
+    export VKPI_LOCAL_OPERATOR_ENV_STATUS=ignored_nonlocal
+    ;;
+esac
 
 # Public development credentials are allowed only for the local stack.  A
 # production-like launcher must provide both values through its reviewed

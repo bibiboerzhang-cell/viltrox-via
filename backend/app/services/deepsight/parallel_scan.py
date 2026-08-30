@@ -6,7 +6,11 @@ from typing import Any
 from app.services.deepsight.constants import OFFICIAL_MATRIX
 
 try:
-    from app.api.routers.account_scanner import SCANNERS as ACCOUNT_SCANNERS
+    # Scanner implementations belong to the provider-facing service layer.
+    # Keeping this compatibility registry here avoids making DeepSight depend
+    # on FastAPI router assembly while preserving the historical import-failure
+    # fallback used by constrained/offline runtimes.
+    from app.services.intelligence.account_scan_service import SCANNERS as ACCOUNT_SCANNERS
 except Exception:
     ACCOUNT_SCANNERS = {}
 

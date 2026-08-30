@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from app.domains.sync import cron
 from app.services.scheduler import jobs_tasks
 
@@ -70,15 +72,46 @@ def test_composite_morning_sync_requires_both_explicit_gates(monkeypatch) -> Non
     monkeypatch.setattr(jobs_tasks, "_scheduler_task_enabled", registry_gate)
     monkeypatch.setattr(cron, "run_job", fake_run_job)
 
-    asyncio.run(jobs_tasks.job_vkpi_morning_sync())
+    result = asyncio.run(jobs_tasks.job_vkpi_morning_sync())
 
     assert registry_keys == ["vkpi_morning_sync"]
+    assert result == {"status": "queued"}
     assert calls == [
         (
             "morning_sync",
             {"limit": 100, "max_videos": 50, "period_days": 1},
         )
     ]
+
+
+def test_composite_morning_sync_propagates_failure_to_scheduler(monkeypatch) -> None:
+    async def fake_run_job(_name: str, _payload: dict):
+        raise RuntimeError("enqueue failed")
+
+    monkeypatch.setenv(jobs_tasks.COMPOSITE_MORNING_SYNC_ENV, "true")
+    monkeypatch.setattr(jobs_tasks, "_scheduler_task_enabled", lambda _key: True)
+    monkeypatch.setattr(cron, "run_job", fake_run_job)
+
+    with pytest.raises(RuntimeError, match="enqueue failed"):
+        asyncio.run(jobs_tasks.job_vkpi_morning_sync())
+
+
+def test_channels_sync_returns_receipt_and_propagates_failure(monkeypatch) -> None:
+    receipt = {"status": "queued", "channels_enqueued": 7}
+
+    async def fake_success(name: str, payload: dict):
+        assert (name, payload) == ("channels_sync", {})
+        return receipt
+
+    monkeypatch.setattr(cron, "run_job", fake_success)
+    assert asyncio.run(jobs_tasks.job_vkpi_channels_sync()) is receipt
+
+    async def fake_failure(_name: str, _payload: dict):
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(cron, "run_job", fake_failure)
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        asyncio.run(jobs_tasks.job_vkpi_channels_sync())
 
 
 def test_migration_264_registers_only_a_default_off_high_risk_task() -> None:

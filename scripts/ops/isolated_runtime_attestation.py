@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""Controller-owned identity, receipt, and local-attestation helpers."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import re
+from pathlib import Path
+from typing import Mapping
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from scripts.ops.freeze_worktree_candidate import verify_manifest
+
+
+class StrictRuntimeGateError(RuntimeError):
+    """Fail-closed isolated runtime controller error."""
+
+
+def sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def phase_candidate_identity(candidate: Path, phase: Mapping[str, object]) -> dict[str, object]:
+    record, bridge = phase.get("candidate"), phase.get("provenance_bridge")
+    if not isinstance(record, Mapping) or not isinstance(bridge, Mapping):
+        raise StrictRuntimeGateError("Phase A candidate identity evidence is missing")
+    manifest = candidate.with_suffix(candidate.suffix + ".manifest.json")
+    verified = verify_manifest(argparse.Namespace(manifest=str(manifest), snapshot=str(candidate)))
+    expected = {
+        "content_sha256": record.get("candidate_content_sha256"),
+        "file_count": record.get("candidate_file_count"),
+        "manifest_sha256": record.get("manifest_sha256"),
+        "snapshot_path": record.get("snapshot_path"), "git_head": bridge.get("git_head"),
+        "git_tree": bridge.get("git_tree"), "branch": bridge.get("branch"),
+        "capsule_digest": bridge.get("capsule_content_bridge_sha256"),
+    }
+    if (verified.get("content_sha256") != expected["content_sha256"]
+            or verified.get("file_count") != expected["file_count"]
+            or sha256_path(manifest) != expected["manifest_sha256"]
+            or str(candidate.resolve()) != str(Path(str(expected["snapshot_path"])).resolve())
+            or any(not value for value in expected.values())):
+        raise StrictRuntimeGateError("candidate differs from Phase A identity")
+    return expected
+
+
+def expected_receipt_plan(root: Path) -> tuple[list[str], list[str]]:
+    verify_source = (root / "scripts/verify.sh").read_text(encoding="utf-8")
+    steps = re.findall(r'^run_step "([^"]+)"', verify_source, flags=re.MULTILINE)
+    dynamic = {
+        "$RUNTIME_STEP_NAME": "runtime trust (required)",
+        "$ACCEPTANCE_STEP_NAME": "local release acceptance (all required GETs)",
+        "$BROWSER_CONSOLE_STEP_NAME": "browser console live extension-free release gate (not requested)",
+        "$RUNTIME_LOG_CANARY_STEP_NAME": "post-restart runtime log leak canary (not requested)",
+    }
+    steps = [dynamic.get(name, name) for name in steps]
+    acceptance_source = (root / "scripts/local_release_acceptance.py").read_text(encoding="utf-8")
+    endpoints = re.findall(r'\bE\("([^"]+)"', acceptance_source)
+    if len(steps) < 10 or len(endpoints) < 10 or len(set(steps)) != len(steps) \
+            or len(set(endpoints)) != len(endpoints):
+        raise StrictRuntimeGateError("controller receipt plan is incomplete or ambiguous")
+    return steps, endpoints
+
+
+def validate_bound_receipts(*, verify_path: Path, acceptance_path: Path,
+                            expected_head: str, expected_branch: str, base_url: str,
+                            expected_steps: list[str], expected_endpoints: list[str],
+                            runtime_nonce: str, runtime_ports: str,
+                            candidate_digest: str) -> dict[str, str]:
+    try:
+        verify = json.loads(verify_path.read_text(encoding="utf-8"))
+        acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StrictRuntimeGateError("strict runtime receipt is unreadable") from exc
+    candidate, verification, steps = (verify.get(name) for name in
+                                      ("candidate", "verification", "steps"))
+    if (verify.get("schema_version") != "vkpi_canonical_gate_receipt_v1"
+            or verify.get("passed") is not True or not isinstance(candidate, dict)
+            or candidate.get("release_head") != expected_head
+            or candidate.get("git_head") != expected_head
+            or candidate.get("branch") != expected_branch
+            or candidate.get("clean_worktree") is not True
+            or candidate.get("dirty_path_count") != 0
+            or not isinstance(verification, dict)
+            or verification.get("runtime") != "verified"
+            or verification.get("acceptance") != "verified"
+            or not isinstance(steps, list)
+            or [item.get("name") for item in steps if isinstance(item, dict)] != expected_steps
+            or any(not isinstance(item, dict) or item.get("index") != index
+                   or item.get("status") != "passed" or item.get("exit_code") != 0
+                   for index, item in enumerate(steps, 1))
+            or verify.get("failed_steps") != []):
+        raise StrictRuntimeGateError("canonical verify receipt is not strict-green")
+    binding = {"nonce": runtime_nonce, "ports": runtime_ports,
+               "candidate_sha256": candidate_digest}
+    if verify.get("strict_runtime_binding") != binding:
+        raise StrictRuntimeGateError("canonical verify receipt runtime binding mismatch")
+    overall, safety, coverage, endpoints = (acceptance.get(name) for name in
+                                             ("overall", "safety", "coverage", "endpoints"))
+    required = [item for item in endpoints or [] if isinstance(item, dict) and item.get("required")]
+    if (acceptance.get("schema_version") != "vkpi.local-release-acceptance.v1"
+            or acceptance.get("base_url") != base_url.rstrip("/")
+            or not isinstance(acceptance.get("repo"), dict)
+            or acceptance["repo"].get("head") != expected_head
+            or not isinstance(overall, dict) or overall.get("pass") is not True
+            or not isinstance(overall.get("required_total"), int)
+            or overall.get("required_total", 0) <= 0
+            or overall.get("required_passed") != overall.get("required_total")
+            or overall.get("failed_endpoint_ids") != []
+            or overall.get("deadline_exhausted") is not False
+            or not isinstance(coverage, dict) or coverage.get("missing_board_families") != []
+            or not isinstance(safety, dict) or safety.get("loopback_only") is not True
+            or safety.get("paid_provider_calls") is not False
+            or safety.get("business_record_mutations") is not False
+            or safety.get("deadline_exhausted") is not False
+            or len(required) != overall.get("required_total")
+            or [item.get("id") for item in required] != expected_endpoints
+            or any(item.get("pass") is not True for item in required)):
+        raise StrictRuntimeGateError("acceptance receipt is not bound strict-green")
+    if acceptance.get("strict_runtime_binding") != binding:
+        raise StrictRuntimeGateError("acceptance receipt runtime binding mismatch")
+    return {"verify_sha256": sha256_path(verify_path),
+            "acceptance_sha256": sha256_path(acceptance_path)}
+
+
+def copy_receipt_nofollow(source: Path, target: Path, expected: str) -> None:
+    source_fd = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        before = os.fstat(source_fd)
+        if not __import__("stat").S_ISREG(before.st_mode):
+            raise StrictRuntimeGateError("receipt source is not a regular file")
+        chunks = []
+        while True:
+            chunk = os.read(source_fd, 1024 * 1024)
+            if not chunk: break
+            chunks.append(chunk)
+        after = os.fstat(source_fd)
+    finally:
+        os.close(source_fd)
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != \
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+        raise StrictRuntimeGateError("receipt source changed while being copied")
+    data = b"".join(chunks)
+    if hashlib.sha256(data).hexdigest() != expected:
+        raise StrictRuntimeGateError("receipt changed before evidence copy")
+    descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    opened = os.fstat(descriptor); target_identity = (opened.st_dev, opened.st_ino)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0: raise StrictRuntimeGateError("receipt copy made no progress")
+            view = view[written:]
+        os.fsync(descriptor)
+    except BaseException:
+        os.close(descriptor)
+        try:
+            info = target.lstat()
+            if not target.is_symlink() and (info.st_dev, info.st_ino) == target_identity: target.unlink()
+        except FileNotFoundError: pass
+        raise
+    finally:
+        try: os.close(descriptor)
+        except OSError: pass
+    info = target.lstat()
+    if target.is_symlink() or (info.st_dev, info.st_ino) != target_identity:
+        raise StrictRuntimeGateError("copied receipt target identity changed")
+    if sha256_path(target) != expected:
+        raise StrictRuntimeGateError("copied receipt hash mismatch")
+
+
+def control_plane_digest(root: Path) -> dict[str, object]:
+    roots = ("backend", "tests", "scripts", "frontend/src")
+    explicit = ("frontend/package.json", "frontend/package-lock.json", "frontend/vite.config.ts",
+                "frontend/vitest.config.ts", "pytest.ini", "requirements.txt")
+    excluded = {".git", ".venv", "__pycache__", "node_modules", "runtime", "dist"}
+    paths = [path for name in roots for path in (root / name).rglob("*")
+             if path.is_file() and not excluded.intersection(path.parts)
+             and path.suffix not in {".pyc", ".pyo"}]
+    paths += [root / name for name in explicit if (root / name).is_file()]
+    entries = []
+    for path in sorted(set(paths)):
+        if path.is_symlink():
+            raise StrictRuntimeGateError("control-plane contains a symlink")
+        entries.append((path.relative_to(root).as_posix(), sha256_path(path)))
+    encoded = json.dumps(entries, separators=(",", ":"), ensure_ascii=True).encode()
+    return {"sha256": hashlib.sha256(encoded).hexdigest(), "file_count": len(entries),
+            "roots": [*roots, *explicit]}
+
+
+def sign_attestation(payload: Mapping[str, object], target: Path) -> dict[str, object]:
+    private = Ed25519PrivateKey.generate()
+    message = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    public = private.public_key().public_bytes(
+        serialization.Encoding.Raw, serialization.PublicFormat.Raw
+    )
+    record = {"schema": "vkpi.operator-reviewed-local-attestation/v1", "payload": payload,
+              "algorithm": "Ed25519", "public_key_b64": base64.b64encode(public).decode(),
+              "signature_b64": base64.b64encode(private.sign(message)).decode(),
+              "trust_boundary": "operator-reviewed controller at invocation; not external CI or supply-chain signing"}
+    target.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return {"path": str(target), "sha256": sha256_path(target), "public_key_b64": record["public_key_b64"]}

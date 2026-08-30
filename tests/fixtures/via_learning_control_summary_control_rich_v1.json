@@ -1,0 +1,307 @@
+{
+  "schema_version": "via_learning_control_summary_golden_v1",
+  "baseline": {
+    "git_head": "7c2c5837af71092a29b989b66d7b3d34dc3e4740",
+    "source_path": "backend/app/services/memory/via_learning_summaries.py",
+    "source_sha256": "5a6e4b2d71a3a10c0c8e90cb9e55a942863ad8194f635121453ca60a1fc49e67"
+  },
+  "input": {
+    "clock_utc": "2026-08-29T00:00:00Z",
+    "sha256": "84d6ab06cb9b42dc8c268e4e309f1a9edb730959b55f0f15a63f88487ea681c7",
+    "window_days": 14
+  },
+  "output": {
+    "sha256": "bebcba19e928661d554fd55234508f8c02cc7edcc1048436b4d930d24ab68ed9",
+    "value": {
+      "decision_types": {
+        "intent_route": 1,
+        "memory_promotion": 1,
+        "model_choice": 1,
+        "reply_mode": 3,
+        "retrieval_plan": 1,
+        "shadow_eval": 1,
+        "unknown": 1
+      },
+      "memory_retention": {
+        "active": 1,
+        "avg_cumulative_reward": 2.0,
+        "confirmed_hits": 3,
+        "decaying": 0,
+        "inactive": 0,
+        "recent": [
+          {
+            "age_days": -355141,
+            "confirmed_hits": 3,
+            "cumulative_reward": 2.0,
+            "decay_state": "fresh",
+            "last_hit_at": "2999-01-01T00:00:00Z",
+            "memory_tier": "semantic",
+            "reinforcement_count": 4,
+            "status": "active"
+          }
+        ],
+        "reinforcement_count": 4,
+        "tiers": {
+          "semantic": 1
+        },
+        "tracked": 1
+      },
+      "metrics": {
+        "abuse_rate": 0.5,
+        "accepted_count": 1,
+        "accepted_rate": 0.5,
+        "add_to_cart_rate": 0.5,
+        "affiliate_order_trace_count": 0,
+        "ai_dialogue_count": 1,
+        "avg_latency_ms": 33.33,
+        "avg_reward": 0.5,
+        "cart_trace_count": 0,
+        "clicked_product_rate": 0.5,
+        "compare_trace_count": 1,
+        "decision_count": 9,
+        "estimated_cost_total": 0.3,
+        "fallback_count": 1,
+        "fast_brain_count": 1,
+        "memory_required_count": 1,
+        "memory_retention_tracked": 1,
+        "model_choice_count": 1,
+        "outcome_count": 2,
+        "purchase_rate": 0.5,
+        "purchase_trace_count": 1,
+        "retrieval_evidence_count": 1,
+        "reward_trace_commission_total": 2.25,
+        "reward_trace_count": 2,
+        "reward_trace_value_total": 10.5,
+        "routing_provider_count": 1,
+        "shadow_change_count": 1,
+        "shadow_eval_count": 1,
+        "vector_hit_count": 1,
+        "vector_hit_rate": 1.0
+      },
+      "policies": {
+        "p.intent": 1,
+        "p.memory": 1,
+        "p.model": 1,
+        "p.reply": 3,
+        "p.retrieve": 1,
+        "p.shadow": 1,
+        "unknown": 1
+      },
+      "promotion_tiers": {
+        "semantic": 1
+      },
+      "providers": {
+        "gemini": 2,
+        "openai": 1
+      },
+      "recent_decisions": [
+        {
+          "chosen_action": {
+            "mode": "fallback",
+            "provider": "openai"
+          },
+          "cost_estimate": 0.1,
+          "decision_id": "d1",
+          "decision_type": "reply_mode",
+          "latency_ms": 100,
+          "policy_key": "p.reply",
+          "trigger_type": "conversation"
+        },
+        {
+          "chosen_action": {
+            "mode": "ai_dialogue",
+            "provider": "gemini"
+          },
+          "cost_estimate": 0.2,
+          "decision_id": "d2",
+          "decision_type": "reply_mode",
+          "latency_ms": 200,
+          "policy_key": "p.reply",
+          "trigger_type": "conversation"
+        },
+        {
+          "chosen_action": {
+            "mode": "fast_brain"
+          },
+          "cost_estimate": 0,
+          "decision_id": "d3",
+          "decision_type": "reply_mode",
+          "latency_ms": 0,
+          "policy_key": "p.reply",
+          "trigger_type": "conversation"
+        },
+        {
+          "chosen_action": {
+            "needs_memory": true
+          },
+          "decision_id": "d4",
+          "decision_type": "intent_route",
+          "policy_key": "p.intent",
+          "trigger_type": "product"
+        },
+        {
+          "chosen_action": {
+            "plan": "vector_memory"
+          },
+          "decision_id": "d5",
+          "decision_type": "retrieval_plan",
+          "policy_key": "p.retrieve",
+          "trigger_type": "product"
+        },
+        {
+          "chosen_action": {
+            "provider": "gemini"
+          },
+          "decision_id": "d6",
+          "decision_type": "model_choice",
+          "policy_key": "p.model",
+          "trigger_type": "route"
+        },
+        {
+          "chosen_action": {
+            "tier": "semantic"
+          },
+          "decision_id": "d7",
+          "decision_type": "memory_promotion",
+          "policy_key": "p.memory",
+          "trigger_type": "memory"
+        },
+        {
+          "chosen_action": {
+            "target": "retrieval_plan",
+            "would_change": true
+          },
+          "decision_id": "d8",
+          "decision_type": "shadow_eval",
+          "policy_key": "p.shadow",
+          "trigger_type": "fallback-target"
+        },
+        {
+          "chosen_action": {},
+          "decision_id": "",
+          "decision_type": "",
+          "policy_key": "",
+          "trigger_type": ""
+        }
+      ],
+      "recent_outcomes": [
+        {
+          "abuse_flag": 1,
+          "accepted": true,
+          "added_to_cart": true,
+          "clicked_product": true,
+          "decision_id": "d1",
+          "decision_type": "reply_mode",
+          "marker": "linked",
+          "policy_key": "p.reply",
+          "purchased": true,
+          "reward_score": 0.9,
+          "trigger_type": "conversation"
+        },
+        {
+          "abuse_flag": 0,
+          "accepted": false,
+          "added_to_cart": false,
+          "clicked_product": false,
+          "decision_id": "missing",
+          "decision_type": "",
+          "marker": "unlinked",
+          "policy_key": "",
+          "purchased": false,
+          "reward_score": 0.1,
+          "trigger_type": ""
+        }
+      ],
+      "recent_reward_traces": [
+        {
+          "event_payload": {
+            "estimated_commission": 2.25
+          },
+          "event_type": "compare",
+          "event_value": 3.5
+        },
+        {
+          "event_payload": {},
+          "event_type": "purchase",
+          "event_value": 7
+        }
+      ],
+      "reply_modes": {
+        "ai_dialogue": 1,
+        "fallback": 1,
+        "fast_brain": 1
+      },
+      "retrieval_evidence": {
+        "avg_score": 0.5,
+        "avg_score_spread": 0.2,
+        "avg_top_score": 0.9,
+        "evidence_count": 1,
+        "recent": [
+          {
+            "avg_score": 0.5,
+            "rerank_applied": true,
+            "retrieval_mode": "hybrid",
+            "score_spread": 0.2,
+            "selected_sources": [
+              "video",
+              "video"
+            ],
+            "top_score": 0.9
+          }
+        ],
+        "rerank_rate": 1.0,
+        "retrieval_modes": {
+          "hybrid": 1
+        },
+        "score_drift": "stable",
+        "source_mix": {
+          "video": 2
+        }
+      },
+      "reward_trace_types": {
+        "compare": 1,
+        "purchase": 1
+      },
+      "routing_learner": {
+        "bucket_count": 1,
+        "buckets": {
+          "b1": {
+            "avg_reward": 0.75,
+            "exposure_count": 2
+          }
+        },
+        "provider_count": 1,
+        "providers": {
+          "gemini": {
+            "avg_reward": 0.75,
+            "exposure_count": 2,
+            "guard_fail_rate": 0.5,
+            "success_rate": 0.5
+          }
+        },
+        "recent": [
+          {
+            "bucket_key": "b1",
+            "exposure_count": 2,
+            "guard_fail_count": 1,
+            "provider": "gemini",
+            "reward_sum": 1.5,
+            "success_count": 1
+          }
+        ]
+      },
+      "shadow_targets": {
+        "retrieval_plan": 1
+      },
+      "triggers": {
+        "conversation": 3,
+        "fallback-target": 1,
+        "memory": 1,
+        "product": 2,
+        "route": 1,
+        "unknown": 1
+      },
+      "window_days": 14
+    }
+  }
+}

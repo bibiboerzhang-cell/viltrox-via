@@ -5,7 +5,11 @@ from app.domains.settings import use_cases as settings_use_cases
 
 
 def test_settings_domain_manager_helpers(monkeypatch):
-    monkeypatch.setattr(settings_use_cases.staff_domain, "is_manager_staff", lambda staff: staff.get("role") == "manager")
+    monkeypatch.setattr(
+        settings_use_cases.staff_role_policy,
+        "has_manager_staff_role",
+        lambda staff: staff.get("role") == "manager",
+    )
     monkeypatch.setattr(settings_use_cases.scope, "can_view_all", lambda staff: staff.get("all") is True)
 
     assert settings_domain.is_manager_staff({"role": "manager"}) is True

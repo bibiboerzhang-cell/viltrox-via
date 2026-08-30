@@ -1,12 +1,12 @@
 """Settings domain use cases."""
 from __future__ import annotations
 
+import importlib
 from typing import Any
 
-from app.domains import staff as staff_domain
-import importlib
-
 from app.domains.access import scope
+from app.shared import staff_role_policy
+from app.shared.qualified_refresh_planner import QualifiedRefreshPlannerPort
 
 notification_settings = importlib.import_module("app.domains.settings.notifications")
 platform_crawl_settings = importlib.import_module("app.domains.settings.platform_crawl")
@@ -15,7 +15,7 @@ vkpi_settings = importlib.import_module("app.domains.settings.provider")
 
 
 def is_manager_staff(staff: dict[str, Any]) -> bool:
-    return staff_domain.is_manager_staff(staff)
+    return staff_role_policy.has_manager_staff_role(staff)
 
 
 def can_view_all(staff: dict[str, Any]) -> bool:
@@ -54,8 +54,8 @@ def update_budget_settings(body: dict[str, Any], *, staff: dict[str, Any]) -> di
     return platform_crawl_settings.update_budget_settings(body, staff=staff)
 
 
-def control_status() -> dict[str, Any]:
-    return platform_crawl_settings.control_status()
+def control_status(*, refresh_planner: QualifiedRefreshPlannerPort) -> dict[str, Any]:
+    return platform_crawl_settings.control_status(refresh_planner=refresh_planner)
 
 
 def comment_alert_settings() -> dict[str, Any]:

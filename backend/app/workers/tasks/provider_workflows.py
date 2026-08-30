@@ -182,11 +182,13 @@ async def process_apify_batch_refresh_job(queue: Any, raw_job: dict[str, Any]) -
 async def process_kol_dossier_scan_job(queue: Any, raw_job: dict[str, Any]) -> None:
     async def operation(payload: dict[str, Any]) -> dict[str, Any]:
         from app.domains.kol import account as account_domain
+        from app.services.kol.account_dossier_adapter import DEFAULT_ACCOUNT_DOSSIER_ADAPTER
 
         return await account_domain.scan_account_for_request(
             int(payload.get("kol_id") or 0),
             max_posts=max(1, min(500, int(payload.get("max_posts") or 50))),
             staff=payload.get("staff") if isinstance(payload.get("staff"), dict) else {},
+            dossier_port=DEFAULT_ACCOUNT_DOSSIER_ADAPTER,
         )
 
     await _run(queue, raw_job, operation, summary=lambda r: f"posts={r.get('content_count', 0)}")
@@ -194,9 +196,9 @@ async def process_kol_dossier_scan_job(queue: Any, raw_job: dict[str, Any]) -> N
 
 async def process_kol_platform_search_job(queue: Any, raw_job: dict[str, Any]) -> None:
     async def operation(payload: dict[str, Any]) -> dict[str, Any]:
-        from app.api.routers.kol_ops import _execute_platform_search
+        from app.services.kol.platform_search_workflow import execute_platform_search
 
-        return await _execute_platform_search(
+        return await execute_platform_search(
             payload.get("body") if isinstance(payload.get("body"), dict) else {},
             staff=payload.get("staff") if isinstance(payload.get("staff"), dict) else {},
         )

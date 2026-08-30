@@ -1,0 +1,1391 @@
+{
+  "surface": "report",
+  "manifest": {
+    "version": 1,
+    "surface": "report",
+    "title": "V-KPI 精准 KOL 搜索：旧版、新版与 GitHub 多组实测报告",
+    "description": "对历史搜索、本地多 SKU A/B、官方 YouTube 受控金丝雀、当前 GitHub 状态与可吸收开源方案的证据分层复盘。",
+    "generatedAt": "2026-08-29T01:26:58Z",
+    "cards": [
+      {
+        "id": "online_strict",
+        "dataset": "online_summary",
+        "sourceId": "current_online_ab",
+        "description": "本轮官方 YouTube 受控金丝雀的最终资格结果及调用边界。",
+        "metrics": [
+          {
+            "label": "本轮联网 Strict 合格",
+            "field": "strict_total",
+            "format": "number"
+          },
+          {
+            "label": "联网测试臂",
+            "field": "arms",
+            "format": "number"
+          },
+          {
+            "label": "API 调用",
+            "field": "api_calls",
+            "format": "number"
+          }
+        ]
+      },
+      {
+        "id": "freshness",
+        "dataset": "freshness_summary",
+        "sourceId": "freshness_audit",
+        "description": "按当前 45 天活动硬闸仍有最新有效视频的 KOL 数。",
+        "metrics": [
+          {
+            "label": "45 天内活跃 KOL",
+            "field": "fresh_kol_45d",
+            "format": "number"
+          },
+          {
+            "label": "活动证据行",
+            "field": "active_evidence_rows",
+            "format": "compact"
+          },
+          {
+            "label": "闸口可用视频行",
+            "field": "gate_eligible_video_rows",
+            "format": "compact"
+          }
+        ]
+      },
+      {
+        "id": "tests",
+        "dataset": "tests_summary",
+        "sourceId": "regression_tests",
+        "description": "当前 P0 本地收口：后端精准搜索合同、前端候选状态与 TypeScript 静态检查。",
+        "metrics": [
+          {
+            "label": "后端聚焦回归通过",
+            "field": "largest_suite_passed",
+            "format": "number"
+          },
+          {
+            "label": "前端聚焦回归通过",
+            "field": "local_subset_passed",
+            "format": "number"
+          },
+          {
+            "label": "TypeScript 错误",
+            "field": "typescript_errors",
+            "format": "number"
+          }
+        ]
+      },
+      {
+        "id": "git_gap",
+        "dataset": "git_summary",
+        "sourceId": "git_audit",
+        "description": "本地相对 GitHub 远端分支的领先提交数；新搜索文件仍未跟踪。",
+        "metrics": [
+          {
+            "label": "本地领先远端提交",
+            "field": "ahead_commits",
+            "format": "number"
+          },
+          {
+            "label": "未跟踪文件",
+            "field": "untracked_files",
+            "format": "number"
+          },
+          {
+            "label": "已跟踪改动",
+            "field": "tracked_changed",
+            "format": "number"
+          }
+        ]
+      }
+    ],
+    "charts": [
+      {
+        "id": "local_evidence_chart",
+        "title": "本地旧/新查询证据幸存数",
+        "subtitle": "新版在 DC-A1、EPIC 65mm、Z1 Pro 改善，55mm 持平，9mm 退化；该指标不是精准率。",
+        "type": "bar",
+        "dataset": "local_ab",
+        "sourceId": "current_local_ab",
+        "encodings": {
+          "x": {
+            "field": "sku",
+            "type": "nominal",
+            "label": "SKU"
+          },
+          "y": {
+            "field": "evidence_survivors",
+            "type": "quantitative",
+            "label": "证据幸存数"
+          },
+          "color": {
+            "field": "arm",
+            "type": "nominal",
+            "label": "查询版本"
+          }
+        },
+        "valueFormat": "number",
+        "layout": "full"
+      },
+      {
+        "id": "online_survivor_chart",
+        "title": "联网旧/新查询 Provider survivor",
+        "subtitle": "55mm 持平；DC-A1 与 EPIC 65mm 的新版长查询均降为零召回，且所有臂 Strict 都为零。",
+        "type": "bar",
+        "dataset": "online_ab",
+        "sourceId": "current_online_ab",
+        "encodings": {
+          "x": {
+            "field": "sku",
+            "type": "nominal",
+            "label": "SKU"
+          },
+          "y": {
+            "field": "provider_survivors",
+            "type": "quantitative",
+            "label": "Provider survivor"
+          },
+          "color": {
+            "field": "arm",
+            "type": "nominal",
+            "label": "查询版本"
+          }
+        },
+        "valueFormat": "number",
+        "layout": "full"
+      }
+    ],
+    "tables": [
+      {
+        "id": "planner_table",
+        "title": "当前 5 SKU 首轮 QueryCell",
+        "subtitle": "五个 SKU 的能力词都未进入第一轮；9mm 还残留中文画像词。",
+        "dataset": "planner_baseline",
+        "sourceId": "planner_audit",
+        "defaultSort": {
+          "field": "order_id",
+          "direction": "asc"
+        },
+        "density": "dense",
+        "columns": [
+          {
+            "field": "order_id",
+            "label": "序号",
+            "type": "number"
+          },
+          {
+            "field": "sku",
+            "label": "SKU",
+            "type": "text"
+          },
+          {
+            "field": "planner_status",
+            "label": "状态",
+            "type": "text"
+          },
+          {
+            "field": "persona_source",
+            "label": "画像来源",
+            "type": "text"
+          },
+          {
+            "field": "first_round_queries",
+            "label": "现行首轮查询",
+            "type": "text"
+          },
+          {
+            "field": "capability",
+            "label": "产品能力",
+            "type": "text"
+          },
+          {
+            "field": "capability_in_primary_query",
+            "label": "能力进入首搜",
+            "type": "text"
+          },
+          {
+            "field": "issue",
+            "label": "问题",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "local_ab_table",
+        "title": "本地 5 SKU 旧/新对照明细",
+        "subtitle": "真实 smart_kol_search，每臂 3 轮；最终 Strict 全为零。",
+        "dataset": "local_ab",
+        "sourceId": "current_local_ab",
+        "defaultSort": {
+          "field": "order_id",
+          "direction": "asc"
+        },
+        "density": "dense",
+        "columns": [
+          {
+            "field": "order_id",
+            "label": "序号",
+            "type": "number"
+          },
+          {
+            "field": "sku",
+            "label": "SKU",
+            "type": "text"
+          },
+          {
+            "field": "arm",
+            "label": "版本",
+            "type": "text"
+          },
+          {
+            "field": "query",
+            "label": "查询",
+            "type": "text"
+          },
+          {
+            "field": "after_favorite_candidates",
+            "label": "收藏排除后",
+            "type": "number"
+          },
+          {
+            "field": "evidence_survivors",
+            "label": "证据幸存",
+            "type": "number"
+          },
+          {
+            "field": "pre_activity_strict_usable",
+            "label": "活动闸前严格可用",
+            "type": "number"
+          },
+          {
+            "field": "final_strict_qualified",
+            "label": "最终 Strict",
+            "type": "number"
+          },
+          {
+            "field": "p50_ms",
+            "label": "p50",
+            "type": "number",
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "id": "online_ab_table",
+        "title": "官方 YouTube 多 SKU 受控对照明细",
+        "subtitle": "Top 5、首屏、无回退；当前 provider 路由仍为 type=channel。",
+        "dataset": "online_ab",
+        "sourceId": "current_online_ab",
+        "defaultSort": {
+          "field": "order_id",
+          "direction": "asc"
+        },
+        "density": "dense",
+        "columns": [
+          {
+            "field": "order_id",
+            "label": "序号",
+            "type": "number"
+          },
+          {
+            "field": "sku",
+            "label": "SKU",
+            "type": "text"
+          },
+          {
+            "field": "arm",
+            "label": "版本",
+            "type": "text"
+          },
+          {
+            "field": "query",
+            "label": "实际查询",
+            "type": "text"
+          },
+          {
+            "field": "resource_type",
+            "label": "首搜资源",
+            "type": "text"
+          },
+          {
+            "field": "provider_survivors",
+            "label": "Provider survivor",
+            "type": "number"
+          },
+          {
+            "field": "strict_qualified",
+            "label": "Strict",
+            "type": "number"
+          },
+          {
+            "field": "followers_50k_500k",
+            "label": "50k–500k",
+            "type": "number"
+          },
+          {
+            "field": "latency_s",
+            "label": "耗时",
+            "type": "number",
+            "unit": "s"
+          },
+          {
+            "field": "note",
+            "label": "观察",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "historical_table",
+        "title": "历史 5 臂人审快照",
+        "subtitle": "2026-08-27 的 5 次搜索/15 次 API 请求；与本轮资格闸口径不同，不直接合并。",
+        "dataset": "historical",
+        "sourceId": "historical_canary",
+        "defaultSort": {
+          "field": "order_id",
+          "direction": "asc"
+        },
+        "density": "dense",
+        "columns": [
+          {
+            "field": "order_id",
+            "label": "序号",
+            "type": "number"
+          },
+          {
+            "field": "scenario",
+            "label": "场景",
+            "type": "text"
+          },
+          {
+            "field": "strategy",
+            "label": "策略",
+            "type": "text"
+          },
+          {
+            "field": "returned",
+            "label": "返回",
+            "type": "number"
+          },
+          {
+            "field": "clear_relevant",
+            "label": "明确相关",
+            "type": "number"
+          },
+          {
+            "field": "clear_relevant_rate",
+            "label": "明确相关率",
+            "format": "percent"
+          },
+          {
+            "field": "pending",
+            "label": "待补证",
+            "type": "number"
+          },
+          {
+            "field": "irrelevant",
+            "label": "不相关",
+            "type": "number"
+          },
+          {
+            "field": "official",
+            "label": "官号",
+            "type": "number"
+          },
+          {
+            "field": "strict_accepted",
+            "label": "Strict",
+            "type": "number"
+          }
+        ]
+      },
+      {
+        "id": "github_table",
+        "title": "GitHub 当前状态与可吸收方案",
+        "subtitle": "先修查询契约、证据和评测，再考虑新框架或新模型。",
+        "dataset": "github_review",
+        "sourceId": "github_primary",
+        "defaultSort": {
+          "field": "priority",
+          "direction": "asc"
+        },
+        "density": "dense",
+        "columns": [
+          {
+            "field": "priority",
+            "label": "优先级",
+            "type": "number"
+          },
+          {
+            "field": "category",
+            "label": "阶段",
+            "type": "text"
+          },
+          {
+            "field": "item",
+            "label": "项目",
+            "type": "text"
+          },
+          {
+            "field": "license",
+            "label": "许可证",
+            "type": "text"
+          },
+          {
+            "field": "current_state",
+            "label": "当前状态",
+            "type": "text"
+          },
+          {
+            "field": "recommendation",
+            "label": "建议",
+            "type": "text"
+          },
+          {
+            "field": "url",
+            "label": "官方链接",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "p0_live_query_table",
+        "title": "P0 精确查询真实金丝雀",
+        "subtitle": "同一官方 YouTube 视频检索链，45 天窗口、每臂 Top 12；人工观察仅作方向判断，未做盲标 Precision。",
+        "dataset": "p0_live_query_canary",
+        "sourceId": "p0_live_query_canary_source",
+        "defaultSort": {
+          "field": "order_id",
+          "direction": "asc"
+        },
+        "density": "dense",
+        "columns": [
+          {
+            "field": "order_id",
+            "label": "序号",
+            "type": "number"
+          },
+          {
+            "field": "strategy",
+            "label": "首搜策略",
+            "type": "text"
+          },
+          {
+            "field": "query",
+            "label": "精确查询",
+            "type": "text"
+          },
+          {
+            "field": "returned",
+            "label": "返回",
+            "type": "number"
+          },
+          {
+            "field": "samples_observed",
+            "label": "视频样本",
+            "type": "number"
+          },
+          {
+            "field": "multi_sample_candidates",
+            "label": "满 3 样本候选",
+            "type": "number"
+          },
+          {
+            "field": "elapsed_s",
+            "label": "耗时（秒）",
+            "type": "number"
+          },
+          {
+            "field": "directional_read",
+            "label": "方向性观察",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "id": "current_local_ab",
+        "label": "V-KPI 本地 smart_kol_search 旧/新对照",
+        "path": "tests/runtime-output/local-old-new-2026-08-28"
+      },
+      {
+        "id": "current_online_ab",
+        "label": "受控 YouTube Data API 多 SKU 金丝雀",
+        "href": "https://developers.google.com/youtube/v3/docs/search/list"
+      },
+      {
+        "id": "freshness_audit",
+        "label": "本地视频证据新鲜度只读审计",
+        "path": "public.vkpi_kol_video_evidence"
+      },
+      {
+        "id": "planner_audit",
+        "label": "当前 provider-free QueryCell 规划器审计",
+        "path": "backend/app/domains/kol/targeted_search_cell.py"
+      },
+      {
+        "id": "historical_canary",
+        "label": "2026-08-27 历史搜索对照报告",
+        "path": "vkpi-query-ab-2026-08-27/report.html"
+      },
+      {
+        "id": "regression_tests",
+        "label": "精准搜索相关回归测试",
+        "path": "tests/"
+      },
+      {
+        "id": "p0_live_query_canary_source",
+        "label": "P0 官方 YouTube 精确查询金丝雀",
+        "path": "backend/app/services/intelligence/account_search_discovery.py"
+      },
+      {
+        "id": "git_audit",
+        "label": "Git 与 GitHub 只读状态审计",
+        "href": "https://github.com/bibiboerzhang-cell/viltrox-via/actions/runs/29803642999"
+      },
+      {
+        "id": "github_primary",
+        "label": "GitHub 主仓库与官方项目页审计",
+        "href": "https://github.com/beir-cellar/beir"
+      }
+    ],
+    "blocks": [
+      {
+        "id": "title",
+        "type": "markdown",
+        "body": "# V-KPI 精准 KOL 搜索：旧版、新版与 GitHub 多组实测报告"
+      },
+      {
+        "id": "executive_summary",
+        "type": "markdown",
+        "body": "## Executive Summary\n\n**原结论仍成立：此前“新版长查询”不能上线；但本地 P0 已经前进一步。** 当前工作树已把精准臂改为 45 天 `type=video` 内容发现、频道与视频并发富化、同视频去重、逐指标样本数严格闸，并把“为何被找到”“为什么值得联系”“还缺什么”拆开。后端 222 项、前端 44 项聚焦回归和 TypeScript 静态检查通过。\n\n**真实金丝雀说明速度已不是第一阻塞，查询语义和补证才是。** 5 个精确查询单臂耗时 0.410–0.892 秒；把 `flash/speedlight` 强塞进赛车摄影首搜得到零召回或游戏/AI 噪声，而只用“赛车摄影师 + 赛道/幕后场景”返回 8–11 个候选，并出现真实赛车摄影工作流。该观察未盲标，不能称 Precision 提升。\n\n**正确方向是两阶段：先找对职业与场景，再证明他会需要产品。** 产品能力不从资格中删除，而是移到标题、描述、字幕/转录和必要时 Gemini 视觉补证；市场活性另用创作者真实最近 3–5 条 uploads，不能把精确查询命中视频当作无偏的频道近期表现。\n\n**发布闸仍未通过。** 当前改动未提交、未推 GitHub、未部署云端，实时应用数据库不可用；pending 候选尚无可续跑证据账本，真实最近 uploads 与员工验收也未完成。"
+      },
+      {
+        "id": "metrics",
+        "type": "metric-strip",
+        "cardIds": [
+          "online_strict",
+          "freshness",
+          "tests",
+          "git_gap"
+        ]
+      },
+      {
+        "id": "version_definition",
+        "type": "markdown",
+        "body": "## 旧版、当前版、目标版不是同一套搜索\n\n- **GitHub 旧版**：多短词 fan-out，先用 YouTube `type=channel` 找一批频道再筛，偏向扩量。\n- **当前本地 QueryCell**：固定为 `<segment> tutorial camera gear`，并明确 `capability_in_primary_query=False`；产品能力和使用场景没有进入首搜。\n- **本轮“新版”测试**：只替换查询措辞，provider 路由仍然是 `type=channel`，因此不是完整目标架构。\n- **目标架构**：角色/场景 + 一个能力 + 一个市场动作的短查询，优先 `type=video` 找内容，再提取稳定 `channelId`、补频道档案与近期内容并严格资格判定。\n\nGoogle 的官方文档说明 `search.list` 的 `type` 参数会把结果限制为指定资源类型；当前代码固定 `channel`，所以标题、描述、教程、幕后等内容意图没有成为首轮资源检索对象。参见 [YouTube Search API](https://developers.google.com/youtube/v3/docs/search/list)。"
+      },
+      {
+        "id": "planner_table_block",
+        "type": "table",
+        "tableId": "planner_table",
+        "layout": "full"
+      },
+      {
+        "id": "local_section",
+        "type": "markdown",
+        "body": "## 本地多 SKU A/B：证据覆盖有改善，但质量没有闭环\n\n新版在 5 个 SKU 中有 3 个提高证据幸存、1 个持平、1 个退化。DC-A1 在活动闸前各有 1 个严格可用候选，但最终仍被活动/增长资格清空。由于本地 lexical 多词采用 OR 语义，加入更多“精准词”可能扩大而不是收紧召回，因此下图只能说明机械覆盖，不能当作 Precision@K。\n\n生产收藏排除仍开启，每个 Top 60 另有 35–52 人被排除；关闭收藏排除的 harness-only 诊断仍全为 0，说明主阻塞不是收藏，而是证据新鲜度和资格闸。"
+      },
+      {
+        "id": "local_chart_block",
+        "type": "chart",
+        "chartId": "local_evidence_chart",
+        "layout": "full"
+      },
+      {
+        "id": "local_table_block",
+        "type": "table",
+        "tableId": "local_ab_table",
+        "layout": "full"
+      },
+      {
+        "id": "online_section",
+        "type": "markdown",
+        "body": "## 联网多 SKU A/B：长查询改善 55mm 表面精度，却压垮另外两类召回\n\n本轮只允许官方 YouTube Data API：6 次 `search.list`、10 个频道/视频联合富化单位，共 16 次 API 调用，19.514 秒；Top 5、首屏、无分页、无 fallback，Apify、LLM、Gemini 全禁用，六张关键表前后均为零变化。\n\n55mm 新臂返回的标题更接近人像焦段比较和低光评测，但 3 个候选仍全部被 `low_relevance` 拒绝。DC-A1 与 EPIC 65mm 新臂因查询过长变为零召回。图中的 Provider survivor 只是基础过滤后的代理量，不是正式 Relaxed 合格。"
+      },
+      {
+        "id": "online_chart_block",
+        "type": "chart",
+        "chartId": "online_survivor_chart",
+        "layout": "full"
+      },
+      {
+        "id": "online_table_block",
+        "type": "table",
+        "tableId": "online_ab_table",
+        "layout": "full"
+      },
+      {
+        "id": "historical_section",
+        "type": "markdown",
+        "body": "## 与上一版搜索报告对照\n\n上一版 5 个联网臂显示：工作流短查询在人审“明确相关率”上可以优于泛查询，但关键词堆叠最差；所有历史 Strict 仍为 0。另一次 55mm/DC-A1/EPIC 65mm 的 P2/P4 六组 Top 10 金丝雀同样全部 Strict=0。\n\n历史结果使用频道名、粉丝数和一条代表内容做人工线索标注，本轮使用当前严格资格闸；样本、查询和判定口径不同，因此只能做方向性复盘，不能把百分比与本轮 Provider survivor 直接比较。"
+      },
+      {
+        "id": "historical_table_block",
+        "type": "table",
+        "tableId": "historical_table",
+        "layout": "full"
+      },
+      {
+        "id": "root_causes",
+        "type": "markdown",
+        "body": "## 根因排序：两个 P0 已修，本质瓶颈转向两阶段证据链\n\n1. **内容检索盲区已在本地修复**：精确 QueryCell 现在调用 `search.list(type=video, publishedAfter=45d)`，再并发补频道与视频指标；但同查询命中最多 3 条仍有选择偏差，不能替代频道真实最近 uploads。\n2. **查询合同仍需多 SKU 盲标**：能力词强塞首搜会过窄或产生多义词噪声；本轮赛车摄影对照支持“角色/场景短查询 → 产品用途后验补证”，但样本非随机，不能直接推广到全部 SKU。\n3. **本地证据新鲜度尚未实时复核**：旧快照有 3,321 条未停用证据、3,158 条活动闸可用视频，最新只到 2026-07-14；本轮应用数据库端口不可连接，不能把旧快照冒充当前云端状态。\n4. **资格正确性已在本地修复**：严格入选显式要求产品/场景与 `market_activation_pass` 同时为真；单视频、重复视频、逐指标有效样本不足均不得过闸，低于门槛也不会继续误触发补抓。\n5. **pending 生命周期仍缺失**：当前待补证候选不会稳定跨轮累积 1+1+1 条证据，也没有自动 top-up → 重判；这是得到优质最终名单的主要剩余工程缺口。\n6. **本地 OR 语义仍需 Gold Set 约束**：词越多不一定越精准；最终必须用盲标 Precision@5/10、Strict Qualified@5、官号/重复泄漏和每个有效候选成本评价。"
+      },
+      {
+        "id": "p0_update",
+        "type": "markdown",
+        "sourceId": "regression_tests",
+        "body": "## 本轮 P0：速度、结果诚实度和数据完整性一起推进\n\n- **速度**：频道资料与视频指标由串行改为并发，测试锁定两条富化会同时启动；真实单臂 0.410–0.892 秒只是本轮官方 YouTube 小样本，不代表 Instagram/TikTok 或完整任务终态。\n- **质量**：同一视频跨多个查询词只计一次；50 条视频预算先给每个候选一条，再把剩余预算补齐排名靠前候选至 3 条，避免头部吃满、尾部完全无证据。\n- **数据**：每个严格门槛现在同时检查该指标自身的有效样本数 ≥3；代表视频的 ID、标题、URL 和指标保持同一条，富化失败显示 provider error，不再伪装成普通待补证。\n- **员工动作**：增长严格闸未通过的行不再显示为可关注、不可勾选；历史回放即使 `decision_readiness` 与 strict 状态冲突，也保守显示“仅候选 · 待补证”。"
+      },
+      {
+        "id": "p0_live_query_section",
+        "type": "markdown",
+        "body": "## 赛车摄影真实金丝雀：首搜应找工作场景，不应要求标题先写产品能力\n\n五个精确查询使用同一 45 天窗口、官方 YouTube API、Top 12、无 Apify/LLM/Gemini、无业务写入。三条“角色 + 闪光灯能力”查询返回 0–5 个频道，标题观察以游戏、AI 和新闻历史为主；两条“角色 + 赛道/幕后场景”查询返回 8 和 11 个频道，出现真实赛车摄影师、赛道工作流、夜间拍摄和 F1 摄影内容。\n\n这只支持下一轮实验方向，不支持精准率结论：应将角色/场景作为平台召回，产品需求由正文、字幕/转录和视觉证据核实；再对入围者补真实最近 3–5 条上传判断持续传播活性。"
+      },
+      {
+        "id": "p0_live_query_table_block",
+        "type": "table",
+        "tableId": "p0_live_query_table",
+        "layout": "full"
+      },
+      {
+        "id": "github_section",
+        "type": "markdown",
+        "body": "## GitHub 审计：新方案仍未进入可审查状态\n\n本地 HEAD 为 `7c2c5837`，本地远端引用 `codex/optimization-v1-local` 为 `59cb1693`；本地 0 behind / 282 ahead，另有 52 个已跟踪改动和 35 个未跟踪文件。新的 `targeted_search_*`、QueryCell、canary 与测试仍未跟踪，GitHub 看不到。本轮未执行 fetch，远端提交、PR 和 Actions 状态沿用前一轮只读审计快照。\n\n因此当前只能说“本地正在推进”，不能说“GitHub 已完成”或“云端已上线”。[远端提交快照](https://github.com/bibiboerzhang-cell/viltrox-via/commit/59cb1693e9db66cdb5c459baf5d7736fb053fb98) · [Actions 快照](https://github.com/bibiboerzhang-cell/viltrox-via/actions/runs/29803642999)"
+      },
+      {
+        "id": "github_table_block",
+        "type": "table",
+        "tableId": "github_table",
+        "layout": "full"
+      },
+      {
+        "id": "recommendations",
+        "type": "markdown",
+        "body": "## 推荐实施顺序\n\n1. **P0.5 可续跑证据账本**：用 canonical creator/video ID 持久化 pending、已取证字段、失败原因与下一动作；下一轮只补缺口，不重复全量抓取。\n2. **P0.5 真实近期上传**：平台首搜只负责“角色 + 场景”召回；对入围候选另取无偏的最近 3–5 条 uploads，逐指标满足 `n≥3` 才允许市场活性过闸。精确查询命中视频只算产品/场景证据。\n3. **P1 多 SKU 受控实验**：55mm、DC-A1、Z1 Pro、EPIC 65mm 分别比较“角色/场景短查询”与“能力词塞入首搜”，统一候选并集、双人盲标和停止条件，报告 Precision@5/10、Strict Qualified@5、官号/重复率、证据覆盖、延迟、调用量与每个有效候选成本。\n4. **P1 条件式大模型补证**：先用标题、描述、字幕/转录做便宜闸；只有仍歧义的前 1–2 条视频进入 Gemini 视觉分析。Gemini 输出证据片段与置信度，不替代平台检索，也不直接宣称转化能力。\n5. **P1 速度工程**：补全 `search → channel enrich → video enrich → qualify` 分段耗时、TTL 缓存和增量返回；以命中缓存后的 p50/p95、API 调用量和有效候选成本作为速度 KPI。\n6. **P2 发布闸**：建议 Verified P@10 ≥ 70%、官号/无关泄漏 ≤ 10%、零 Relaxed 冒充完成；通过本地盲标、云端只读验收和员工流程验收后再发布。门槛仍是拟议值，当前未达到。"
+      },
+      {
+        "id": "further_questions",
+        "type": "markdown",
+        "body": "## Further Questions\n\n- “市场推进能力”最终以品牌合作证据、商业 CTA/联盟链接、平均播放、评论质量还是已验证转化为主？需要固定主指标与辅助指标。\n- 粉丝 50k–500k 应作为默认可选 facet 还是最终 shortlist 条件？本轮过早硬筛后 6 个联网臂均为 0。\n- Top 5 是每个 QueryCell 独立 Top 5，还是一个 SKU 合并去重后的 Top 5？这会直接改变调用预算和多场景覆盖。"
+      },
+      {
+        "id": "caveats",
+        "type": "markdown",
+        "body": "## Caveats and Assumptions\n\n- 本轮修改了本地业务代码与测试，但没有提交、没有推 GitHub、没有部署云端、没有写业务库；应用数据库 `127.0.0.1:54329` 不可用，所以没有进行当前数据的端到端页面验收。\n- 新增联网金丝雀只覆盖 YouTube、1 个赛车摄影场景、5 个非随机精确查询、合计 13 次 API 调用；未使用 Apify、LLM 或 Gemini，平台排序会变化，不能外推到 Instagram/TikTok 或全部 SKU。\n- 新金丝雀的标题观察是方向性阅读，不是盲标 Precision；旧报告的 `provider_survivors` 同样只是过程代理，不是业务可用候选。\n- 3,321 是旧快照的所有未停用证据行；严格活动闸可用的视频行是 3,158，且最新日期只到 2026-07-14。两种口径不可混用，也不能当作当前云端事实。\n- 后端 222 项、前端 44 项和 TypeScript 检查通过只证明相关代码路径回归，不证明 KOL 质量或员工诉求已验收。\n- GitHub 开源项目只能提供工程与评测方法，不能替代 V-KPI 的业务 Gold Set 和人工验收。"
+      }
+    ]
+  },
+  "snapshot": {
+    "version": 1,
+    "generatedAt": "2026-08-29T01:26:58Z",
+    "status": "ready",
+    "datasets": {
+      "online_summary": [
+        {
+          "strict_total": 0,
+          "arms": 6,
+          "api_calls": 16,
+          "search_calls": 6,
+          "enrichment_units": 10,
+          "wall_time_s": 19.514
+        }
+      ],
+      "freshness_summary": [
+        {
+          "active_evidence_rows": 3321,
+          "gate_eligible_video_rows": 3158,
+          "latest_video_date": "2026-07-14",
+          "fresh_kol_7d": 0,
+          "fresh_kol_15d": 0,
+          "fresh_kol_30d": 0,
+          "fresh_kol_45d": 0
+        }
+      ],
+      "tests_summary": [
+        {
+          "largest_suite_passed": 222,
+          "local_subset_passed": 44,
+          "typescript_errors": 0,
+          "overlap": false
+        }
+      ],
+      "p0_live_query_canary": [
+        {
+          "order_id": 1,
+          "strategy": "能力词塞入首搜",
+          "query": "motorsport photographer on-camera flash workflow",
+          "returned": 5,
+          "samples_observed": 6,
+          "multi_sample_candidates": 0,
+          "elapsed_s": 0.658,
+          "api_calls": 3,
+          "directional_read": "游戏、AI 与新闻历史噪声为主"
+        },
+        {
+          "order_id": 2,
+          "strategy": "能力词塞入首搜",
+          "query": "motorsport photographer speedlight trackside lighting",
+          "returned": 0,
+          "samples_observed": 0,
+          "multi_sample_candidates": 0,
+          "elapsed_s": 0.41,
+          "api_calls": 1,
+          "directional_read": "零召回"
+        },
+        {
+          "order_id": 3,
+          "strategy": "能力词塞入首搜",
+          "query": "race car photographer off camera lighting speedlight",
+          "returned": 2,
+          "samples_observed": 2,
+          "multi_sample_candidates": 0,
+          "elapsed_s": 0.524,
+          "api_calls": 3,
+          "directional_read": "游戏与 AI 噪声为主"
+        },
+        {
+          "order_id": 4,
+          "strategy": "角色 + 场景首搜",
+          "query": "motorsport photographer trackside",
+          "returned": 8,
+          "samples_observed": 11,
+          "multi_sample_candidates": 1,
+          "elapsed_s": 0.774,
+          "api_calls": 3,
+          "directional_read": "出现真实赛车摄影工作流，仍有噪声"
+        },
+        {
+          "order_id": 5,
+          "strategy": "角色 + 场景首搜",
+          "query": "race photographer behind the scenes",
+          "returned": 11,
+          "samples_observed": 12,
+          "multi_sample_candidates": 0,
+          "elapsed_s": 0.892,
+          "api_calls": 3,
+          "directional_read": "出现赛车摄影、夜拍与幕后内容，仍有噪声"
+        }
+      ],
+      "git_summary": [
+        {
+          "local_head": "7c2c5837",
+          "remote_head": "59cb1693",
+          "ahead_commits": 282,
+          "behind_commits": 0,
+          "tracked_changed": 52,
+          "untracked_files": 35,
+          "open_prs": 0,
+          "remote_verify_status": "failure"
+        }
+      ],
+      "planner_baseline": [
+        {
+          "order_id": 1,
+          "sku": "55mm",
+          "planner_status": "ready",
+          "persona_source": "product_persona_kb",
+          "first_round_queries": "wedding photographer tutorial camera gear | portrait photographer tutorial camera gear",
+          "capability": "portrait lens",
+          "capability_in_primary_query": false,
+          "issue": "产品能力只留到后筛"
+        },
+        {
+          "order_id": 2,
+          "sku": "DC-A1",
+          "planner_status": "ready",
+          "persona_source": "product_persona_kb",
+          "first_round_queries": "motorsport photographer tutorial camera gear | wedding photographer tutorial camera gear",
+          "capability": "camera monitor",
+          "capability_in_primary_query": false,
+          "issue": "监视器能力未进入首搜"
+        },
+        {
+          "order_id": 3,
+          "sku": "EPIC 65mm",
+          "planner_status": "ready",
+          "persona_source": "product_persona_kb",
+          "first_round_queries": "commercial photographer tutorial camera gear",
+          "capability": "macro cinema lens",
+          "capability_in_primary_query": false,
+          "issue": "微距/变形宽银幕能力未进入首搜"
+        },
+        {
+          "order_id": 4,
+          "sku": "9mm",
+          "planner_status": "ready",
+          "persona_source": "product_persona_kb",
+          "first_round_queries": "旅行vlog创作者 tutorial camera gear | 室内空间/建筑记录创作者 tutorial camera gear | 城市街拍创作者 tutorial camera gear",
+          "capability": "ultra-wide lens",
+          "capability_in_primary_query": false,
+          "issue": "英文平台查询残留中文画像词"
+        },
+        {
+          "order_id": 5,
+          "sku": "Z1 Pro",
+          "planner_status": "fallback",
+          "persona_source": "provider_free_product_fallback",
+          "first_round_queries": "motorsport photographer tutorial camera gear | food photographer tutorial camera gear | wedding photographer tutorial camera gear",
+          "capability": "on-camera flash",
+          "capability_in_primary_query": false,
+          "issue": "画像 KB 缺失且闪光能力未进入首搜"
+        }
+      ],
+      "local_ab": [
+        {
+          "order_id": 1,
+          "sku": "55mm",
+          "arm": "旧版",
+          "query": "portrait tutorial camera gear",
+          "after_favorite_candidates": 8,
+          "evidence_survivors": 1,
+          "pre_activity_strict_usable": 0,
+          "final_strict_qualified": 0,
+          "p50_ms": 469.117,
+          "repeats": 3,
+          "provider_calls": false
+        },
+        {
+          "order_id": 2,
+          "sku": "55mm",
+          "arm": "新版",
+          "query": "portrait photographer prime lens review tutorial",
+          "after_favorite_candidates": 10,
+          "evidence_survivors": 1,
+          "pre_activity_strict_usable": 0,
+          "final_strict_qualified": 0,
+          "p50_ms": 504.755,
+          "repeats": 3,
+          "provider_calls": false
+        },
+        {
+          "order_id": 3,
+          "sku": "DC-A1",
+          "arm": "旧版",
+          "query": "motorsport photographer tutorial camera gear",
+          "after_favorite_candidates": 15,
+          "evidence_survivors": 2,
+          "pre_activity_strict_usable": 1,
+          "final_strict_qualified": 0,
+          "p50_ms": 894.78,
+          "repeats": 3,
+          "provider_calls": false
+        },
+        {
+          "order_id": 4,
+          "sku": "DC-A1",
+          "arm": "新版",
+          "query": "motorsport filmmaker camera monitor rig review",
+          "after_favorite_candidates": 17,
+          "evidence_survivors": 4,
+          "pre_activity_strict_usable": 1,
+          "final_strict_qualified": 0,
+          "p50_ms": 676.432,
+          "repeats": 3,
+          "provider_calls": false
+        },
+        {
+          "order_id": 5,
+          "sku": "EPIC 65mm",
+          "arm": "旧版",
+          "query": "commercial photographer tutorial camera gear",
+          "after_favorite_candidates": 25,
+          "evidence_survivors": 5,
+          "pre_activity_strict_usable": 0,
+          "final_strict_qualified": 0,
+          "p50_ms": 634.504,
+          "repeats": 3,
+          "provider_calls": false
+        },
+        {
+          "order_id": 6,
+          "sku": "EPIC 65mm",
+          "arm": "新版",
+          "query": "product filmmaker macro anamorphic cinematography breakdown",
+          "after_favorite_candidates": 33,
+          "evidence_survivors": 7,
+          "pre_activity_strict_usable": 0,
+          "final_strict_qualified": 0,
+          "p50_ms": 363.732,
+          "repeats": 3,
+          "provider_calls": false
+        },
+        {
+          "order_id": 7,
+          "sku": "9mm",
+          "arm": "旧版",
+          "query": "real estate photographer tutorial camera gear",
+          "after_favorite_candidates": 20,
+          "evidence_survivors": 7,
+          "pre_activity_strict_usable": 0,
+          "final_strict_qualified": 0,
+          "p50_ms": 579.308,
+          "repeats": 3,
+          "provider_calls": false
+        },
+        {
+          "order_id": 8,
+          "sku": "9mm",
+          "arm": "新版",
+          "query": "real estate filmmaker ultra wide interior lens tutorial",
+          "after_favorite_candidates": 17,
+          "evidence_survivors": 5,
+          "pre_activity_strict_usable": 0,
+          "final_strict_qualified": 0,
+          "p50_ms": 483.657,
+          "repeats": 3,
+          "provider_calls": false
+        },
+        {
+          "order_id": 9,
+          "sku": "Z1 Pro",
+          "arm": "旧版",
+          "query": "food photographer tutorial camera gear / motorsport photographer tutorial camera gear",
+          "after_favorite_candidates": 17,
+          "evidence_survivors": 13,
+          "pre_activity_strict_usable": 0,
+          "final_strict_qualified": 0,
+          "p50_ms": 1640.472,
+          "repeats": 3,
+          "provider_calls": false
+        },
+        {
+          "order_id": 10,
+          "sku": "Z1 Pro",
+          "arm": "新版",
+          "query": "food photographer flash restaurant lighting setup tutorial / motorsport photographer flash race paddock lighting tutorial",
+          "after_favorite_candidates": 24,
+          "evidence_survivors": 18,
+          "pre_activity_strict_usable": 0,
+          "final_strict_qualified": 0,
+          "p50_ms": 1574.041,
+          "repeats": 3,
+          "provider_calls": false
+        }
+      ],
+      "online_ab": [
+        {
+          "order_id": 1,
+          "sku": "55mm",
+          "arm": "旧版",
+          "query": "portrait photographer tutorial camera gear",
+          "resource_type": "channel",
+          "latency_s": 5.324,
+          "provider_survivors": 3,
+          "strict_qualified": 0,
+          "followers_50k_500k": 0,
+          "low_relevance_rejections": 2,
+          "note": "泛化；有返回但证据不足"
+        },
+        {
+          "order_id": 2,
+          "sku": "55mm",
+          "arm": "新版",
+          "query": "portrait photographer low light prime lens tutorial comparison",
+          "resource_type": "channel",
+          "latency_s": 2.976,
+          "provider_survivors": 3,
+          "strict_qualified": 0,
+          "followers_50k_500k": 0,
+          "low_relevance_rejections": 3,
+          "note": "标题更贴近人像/低光，但仍全拒"
+        },
+        {
+          "order_id": 3,
+          "sku": "DC-A1",
+          "arm": "旧版",
+          "query": "motorsport photographer tutorial camera gear",
+          "resource_type": "channel",
+          "latency_s": 3.187,
+          "provider_survivors": 5,
+          "strict_qualified": 0,
+          "followers_50k_500k": 0,
+          "low_relevance_rejections": 5,
+          "note": "多数是赛车摄影，不含监视器使用证据"
+        },
+        {
+          "order_id": 4,
+          "sku": "DC-A1",
+          "arm": "新版",
+          "query": "motorsport videographer daylight field monitor camera rig tutorial",
+          "resource_type": "channel",
+          "latency_s": 1.434,
+          "provider_survivors": 0,
+          "strict_qualified": 0,
+          "followers_50k_500k": 0,
+          "low_relevance_rejections": 0,
+          "note": "长查询导致零召回"
+        },
+        {
+          "order_id": 5,
+          "sku": "EPIC 65mm",
+          "arm": "旧版",
+          "query": "commercial photographer tutorial camera gear",
+          "resource_type": "channel",
+          "latency_s": 3.175,
+          "provider_survivors": 4,
+          "strict_qualified": 0,
+          "followers_50k_500k": 0,
+          "low_relevance_rejections": 4,
+          "note": "旅行/体育/野生动物等泛器材噪声"
+        },
+        {
+          "order_id": 6,
+          "sku": "EPIC 65mm",
+          "arm": "新版",
+          "query": "commercial cinematographer macro anamorphic lens product shoot BTS",
+          "resource_type": "channel",
+          "latency_s": 3.416,
+          "provider_survivors": 0,
+          "strict_qualified": 0,
+          "followers_50k_500k": 0,
+          "low_relevance_rejections": 0,
+          "note": "长查询导致零召回"
+        }
+      ],
+      "historical": [
+        {
+          "order_id": 1,
+          "phase": "2026-08-27 历史",
+          "scenario": "餐饮",
+          "strategy": "泛查询",
+          "returned": 8,
+          "clear_relevant": 2,
+          "pending": 4,
+          "irrelevant": 1,
+          "official": 1,
+          "clear_relevant_rate": 0.25,
+          "follower_band_raw": 0,
+          "strict_accepted": 0
+        },
+        {
+          "order_id": 2,
+          "phase": "2026-08-27 历史",
+          "scenario": "餐饮",
+          "strategy": "关键词堆叠",
+          "returned": 6,
+          "clear_relevant": 0,
+          "pending": 0,
+          "irrelevant": 5,
+          "official": 1,
+          "clear_relevant_rate": 0,
+          "follower_band_raw": 1,
+          "strict_accepted": 0
+        },
+        {
+          "order_id": 3,
+          "phase": "2026-08-27 历史",
+          "scenario": "餐饮",
+          "strategy": "工作流查询",
+          "returned": 8,
+          "clear_relevant": 3,
+          "pending": 3,
+          "irrelevant": 0,
+          "official": 2,
+          "clear_relevant_rate": 0.375,
+          "follower_band_raw": 0,
+          "strict_accepted": 0
+        },
+        {
+          "order_id": 4,
+          "phase": "2026-08-27 历史",
+          "scenario": "赛车",
+          "strategy": "泛查询",
+          "returned": 8,
+          "clear_relevant": 2,
+          "pending": 2,
+          "irrelevant": 4,
+          "official": 0,
+          "clear_relevant_rate": 0.25,
+          "follower_band_raw": 1,
+          "strict_accepted": 0
+        },
+        {
+          "order_id": 5,
+          "phase": "2026-08-27 历史",
+          "scenario": "汽车邻接",
+          "strategy": "工作流查询",
+          "returned": 9,
+          "clear_relevant": 6,
+          "pending": 2,
+          "irrelevant": 1,
+          "official": 0,
+          "clear_relevant_rate": 0.666667,
+          "follower_band_raw": 0,
+          "strict_accepted": 0
+        }
+      ],
+      "github_review": [
+        {
+          "priority": 1,
+          "category": "当前仓库",
+          "item": "viltrox-via 远端分支",
+          "license": "项目自身",
+          "current_state": "远端 59cb1693；本地 ahead 282；新 QueryCell 未跟踪；远端 verify 失败",
+          "recommendation": "先确定 canonical base、形成可审查提交、修 CI；不能把本地状态当成 GitHub 已完成",
+          "url": "https://github.com/bibiboerzhang-cell/viltrox-via/commit/59cb1693e9db66cdb5c459baf5d7736fb053fb98"
+        },
+        {
+          "priority": 2,
+          "category": "立即吸收",
+          "item": "Pydantic",
+          "license": "MIT",
+          "current_state": "项目已安装 2.12.5",
+          "recommendation": "把裸 dict QueryCell 改成严格 schema，无需新增依赖",
+          "url": "https://github.com/pydantic/pydantic"
+        },
+        {
+          "priority": 3,
+          "category": "立即吸收",
+          "item": "BEIR 评测口径",
+          "license": "Apache-2.0",
+          "current_state": "尚无 V-KPI Gold Set",
+          "recommendation": "吸收 Precision@K、Recall@K、nDCG、MRR；先建自有盲标集",
+          "url": "https://github.com/beir-cellar/beir"
+        },
+        {
+          "priority": 4,
+          "category": "保留现状",
+          "item": "Qdrant",
+          "license": "Apache-2.0",
+          "current_state": "项目已有 qdrant-client 与 Python weighted RRF",
+          "recommendation": "先修查询和证据合同，不迁移新向量基础设施",
+          "url": "https://github.com/qdrant/qdrant"
+        },
+        {
+          "priority": 5,
+          "category": "后续吸收",
+          "item": "Splink",
+          "license": "MIT",
+          "current_state": "已有确定性平台 ID/别名合并",
+          "recommendation": "用于跨平台疑似同人的概率实体解析；中间置信区人工复核",
+          "url": "https://github.com/moj-analytical-services/splink"
+        },
+        {
+          "priority": 6,
+          "category": "Gold Set 后",
+          "item": "DSPy",
+          "license": "MIT",
+          "current_state": "当前无可优化的稳定评价函数",
+          "recommendation": "只做离线 QueryCell prompt 优化，不先接生产运行时",
+          "url": "https://github.com/stanfordnlp/dspy"
+        },
+        {
+          "priority": 7,
+          "category": "Gold Set 后",
+          "item": "FlagEmbedding / BGE-M3",
+          "license": "MIT",
+          "current_state": "可用于已取得证据的多语种检索",
+          "recommendation": "用于候选证据重排，不能改善平台搜索本身",
+          "url": "https://github.com/FlagOpen/FlagEmbedding"
+        }
+      ]
+    }
+  },
+  "sources": [
+    {
+      "id": "current_local_ab",
+      "label": "V-KPI 本地 smart_kol_search 旧/新对照",
+      "path": "tests/runtime-output/local-old-new-2026-08-28",
+      "query": {
+        "engine": "postgresql_values_snapshot",
+        "language": "sql",
+        "executed_at": "2026-08-28T23:40:40Z",
+        "description": "5 个 SKU、旧/新各一臂、每臂 3 轮；生产收藏排除开启，provider_calls=false，create_session=false，数据库只读。",
+        "filters": [
+          "5 SKUs",
+          "2 arms per SKU",
+          "3 repeats per arm",
+          "provider_calls=false",
+          "create_session=false",
+          "team favorite exclusion enabled"
+        ],
+        "metric_definitions": [
+          "after_favorite_candidates = 首轮召回后排除团队已收藏 KOL 的候选数",
+          "evidence_survivors = 进入证据判定后的候选数，仅为覆盖代理，不是精准率",
+          "final_strict_qualified = 通过全部严格证据和活动闸的候选数",
+          "p50_ms = 同一臂三轮运行时中位数"
+        ],
+        "sql": "SELECT * FROM (VALUES\n(1,'55mm','旧版','portrait tutorial camera gear',8,1,0,0,469.117,3),\n(2,'55mm','新版','portrait photographer prime lens review tutorial',10,1,0,0,504.755,3),\n(3,'DC-A1','旧版','motorsport photographer tutorial camera gear',15,2,1,0,894.780,3),\n(4,'DC-A1','新版','motorsport filmmaker camera monitor rig review',17,4,1,0,676.432,3),\n(5,'EPIC 65mm','旧版','commercial photographer tutorial camera gear',25,5,0,0,634.504,3),\n(6,'EPIC 65mm','新版','product filmmaker macro anamorphic cinematography breakdown',33,7,0,0,363.732,3),\n(7,'9mm','旧版','real estate photographer tutorial camera gear',20,7,0,0,579.308,3),\n(8,'9mm','新版','real estate filmmaker ultra wide interior lens tutorial',17,5,0,0,483.657,3),\n(9,'Z1 Pro','旧版','food/motorsport photographer tutorial camera gear',17,13,0,0,1640.472,3),\n(10,'Z1 Pro','新版','food photographer flash restaurant lighting setup tutorial / motorsport photographer flash race paddock lighting tutorial',24,18,0,0,1574.041,3)\n) AS reviewed_local_ab(order_id,sku,arm,query,after_favorite_candidates,evidence_survivors,pre_activity_strict_usable,final_strict_qualified,p50_ms,repeats)"
+      }
+    },
+    {
+      "id": "current_online_ab",
+      "label": "受控 YouTube Data API 多 SKU 金丝雀",
+      "href": "https://developers.google.com/youtube/v3/docs/search/list",
+      "query": {
+        "engine": "youtube_data_api_values_snapshot",
+        "language": "sql",
+        "executed_at": "2026-08-28T23:40:40Z",
+        "description": "3 个 SKU × 旧/新 6 臂，Top 5、首屏、无分页/回退；当前实现仍用 search.list(type=channel)，随后做频道/视频富化。",
+        "filters": [
+          "Top 5",
+          "first page only",
+          "type=channel",
+          "no pagination",
+          "no fallback",
+          "Apify/LLM/Gemini disabled",
+          "auto_enroll=false",
+          "PostgreSQL READ ONLY"
+        ],
+        "metric_definitions": [
+          "provider_survivors = provider 与基础过滤后留下的候选，仅为 Relaxed 代理，不是正式 Relaxed 合格",
+          "strict_qualified = 通过严格产品场景、市场激活、粉丝与活动证据闸的候选数",
+          "followers_50k_500k = 原始候选中落入 50k–500k 粉丝带的数量"
+        ],
+        "sql": "SELECT * FROM (VALUES\n(1,'55mm','旧版','portrait photographer tutorial camera gear','channel',5.324,3,0,0,2),\n(2,'55mm','新版','portrait photographer low light prime lens tutorial comparison','channel',2.976,3,0,0,3),\n(3,'DC-A1','旧版','motorsport photographer tutorial camera gear','channel',3.187,5,0,0,5),\n(4,'DC-A1','新版','motorsport videographer daylight field monitor camera rig tutorial','channel',1.434,0,0,0,0),\n(5,'EPIC 65mm','旧版','commercial photographer tutorial camera gear','channel',3.175,4,0,0,4),\n(6,'EPIC 65mm','新版','commercial cinematographer macro anamorphic lens product shoot BTS','channel',3.416,0,0,0,0)\n) AS reviewed_online_ab(order_id,sku,arm,query,resource_type,latency_s,provider_survivors,strict_qualified,followers_50k_500k,low_relevance_rejections)"
+      }
+    },
+    {
+      "id": "freshness_audit",
+      "label": "本地视频证据新鲜度只读审计",
+      "path": "public.vkpi_kol_video_evidence",
+      "query": {
+        "engine": "postgresql",
+        "language": "sql",
+        "executed_at": "2026-08-28T23:40:40Z",
+        "description": "按当前严格活动闸口径核对有效视频证据、最新发布日期以及 7/15/30/45 天 KOL 覆盖。",
+        "tables_used": [
+          "public.vkpi_kol_video_evidence"
+        ],
+        "filters": [
+          "is_active IS NOT FALSE",
+          "posted_at IS NOT NULL",
+          "evidence_type is null or video",
+          "as of 2026-08-28"
+        ],
+        "metric_definitions": [
+          "active_evidence_rows = 所有未标为 inactive 的证据行，包括非视频证据",
+          "gate_eligible_video_rows = 具有 posted_at 且类型为 video 的活动闸可用行",
+          "fresh_kol_45d = 每个 KOL 最新有效视频在 45 天内的 KOL 数"
+        ],
+        "sql": "WITH active AS (\n  SELECT * FROM public.vkpi_kol_video_evidence WHERE is_active IS NOT FALSE\n), valid_video AS (\n  SELECT kol_pool_id, posted_at\n  FROM active\n  WHERE posted_at IS NOT NULL\n    AND (evidence_type IS NULL OR LOWER(TRIM(evidence_type))='video')\n), latest AS (\n  SELECT kol_pool_id, MAX(posted_at) AS latest_posted_at\n  FROM valid_video GROUP BY kol_pool_id\n)\nSELECT\n  (SELECT COUNT(*) FROM active) AS active_evidence_rows,\n  (SELECT COUNT(*) FROM valid_video) AS gate_eligible_video_rows,\n  (SELECT MAX(posted_at) FROM valid_video) AS latest_video_date,\n  COUNT(*) FILTER (WHERE latest_posted_at >= TIMESTAMP '2026-08-21') AS fresh_kol_7d,\n  COUNT(*) FILTER (WHERE latest_posted_at >= TIMESTAMP '2026-08-13') AS fresh_kol_15d,\n  COUNT(*) FILTER (WHERE latest_posted_at >= TIMESTAMP '2026-07-29') AS fresh_kol_30d,\n  COUNT(*) FILTER (WHERE latest_posted_at > TIMESTAMP '2026-07-14 23:59:59') AS fresh_kol_45d\nFROM latest"
+      }
+    },
+    {
+      "id": "planner_audit",
+      "label": "当前 provider-free QueryCell 规划器审计",
+      "path": "backend/app/domains/kol/targeted_search_cell.py",
+      "query": {
+        "engine": "python_runtime_values_snapshot",
+        "language": "sql",
+        "executed_at": "2026-08-28T23:40:40Z",
+        "description": "在本地 PostgreSQL 启动后对 55mm、DC-A1、EPIC 65mm、9mm、Z1 Pro 精确 SKU 运行 provider-free planner。",
+        "filters": [
+          "provider-free",
+          "exact SKU resolution",
+          "no persistent writes"
+        ],
+        "metric_definitions": [
+          "capability_in_primary_query = 产品能力是否进入首轮平台查询"
+        ],
+        "sql": "SELECT * FROM (VALUES\n(1,'55mm','ready','product_persona_kb','wedding photographer tutorial camera gear | portrait photographer tutorial camera gear','portrait lens',FALSE),\n(2,'DC-A1','ready','product_persona_kb','motorsport photographer tutorial camera gear | wedding photographer tutorial camera gear','camera monitor',FALSE),\n(3,'EPIC 65mm','ready','product_persona_kb','commercial photographer tutorial camera gear','macro cinema lens',FALSE),\n(4,'9mm','ready','product_persona_kb','旅行vlog创作者 tutorial camera gear | 室内空间/建筑记录创作者 tutorial camera gear | 城市街拍创作者 tutorial camera gear','ultra-wide lens',FALSE),\n(5,'Z1 Pro','fallback','provider_free_product_fallback','motorsport photographer tutorial camera gear | food photographer tutorial camera gear | wedding photographer tutorial camera gear','on-camera flash',FALSE)\n) AS reviewed_planner(order_id,sku,planner_status,persona_source,first_round_queries,capability,capability_in_primary_query)"
+      }
+    },
+    {
+      "id": "historical_canary",
+      "label": "2026-08-27 历史搜索对照报告",
+      "path": "vkpi-query-ab-2026-08-27/report.html",
+      "query": {
+        "engine": "reviewed_values_snapshot",
+        "language": "sql",
+        "executed_at": "2026-08-28T00:58:20Z",
+        "description": "历史 5 次 YouTube 搜索、15 次 API 请求的人审快照；与本轮严格资格结果分开，不直接混算。",
+        "filters": [
+          "5 non-random queries",
+          "15 API requests",
+          "single representative content clue per candidate",
+          "no Apify/LLM/Gemini"
+        ],
+        "metric_definitions": [
+          "clear_relevant_rate = 人工判为明确相关 / 该臂返回数",
+          "strict_accepted = 历史严格闸最终通过数"
+        ],
+        "sql": "SELECT * FROM (VALUES\n(1,'餐饮','泛查询',8,2,4,1,1,0.25,0,0),\n(2,'餐饮','关键词堆叠',6,0,0,5,1,0.0,1,0),\n(3,'餐饮','工作流查询',8,3,3,0,2,0.375,0,0),\n(4,'赛车','泛查询',8,2,2,4,0,0.25,1,0),\n(5,'汽车邻接','工作流查询',9,6,2,1,0,0.666667,0,0)\n) AS reviewed_historical(order_id,scenario,strategy,returned,clear_relevant,pending,irrelevant,official,clear_relevant_rate,follower_band_raw,strict_accepted)"
+      }
+    },
+    {
+      "id": "regression_tests",
+      "label": "精准搜索相关回归测试",
+      "path": "tests/",
+      "query": {
+        "engine": "pytest_values_snapshot",
+        "language": "sql",
+        "executed_at": "2026-08-29T01:26:58Z",
+        "description": "本轮最终本地验证：后端精准检索与证据合同 222 项、前端候选状态 44 项、TypeScript noEmit 静态检查；三种检查口径不同，不相加。",
+        "filters": [
+          "local only",
+          "no business writes"
+        ],
+        "metric_definitions": [
+          "passed = 各自工具报告的通过项；pytest、vitest 与 TypeScript 不相加"
+        ],
+        "sql": "SELECT * FROM (VALUES\n('backend_precision_and_evidence_contracts',222,0,1,2.92),\n('frontend_candidate_state',44,0,0,0.248),\n('typescript_noemit',1,0,0,14.546)\n) AS reviewed_tests(suite,passed,failed,warnings,seconds)"
+      }
+    },
+    {
+      "id": "p0_live_query_canary_source",
+      "label": "P0 官方 YouTube 精确查询金丝雀",
+      "path": "backend/app/services/intelligence/account_search_discovery.py",
+      "query": {
+        "engine": "youtube_api_reviewed_values_snapshot",
+        "language": "sql",
+        "executed_at": "2026-08-29T01:10:00Z",
+        "description": "同一官方 YouTube type=video 检索链的 5 个小样本精确查询；只做方向性标题观察，未进行盲标 Precision。",
+        "filters": [
+          "US and English",
+          "published within 45 days",
+          "safe_limit=12",
+          "exact query",
+          "13 API calls total",
+          "no Apify/LLM/Gemini",
+          "no persistent business writes"
+        ],
+        "metric_definitions": [
+          "returned = 聚合后的候选频道数",
+          "samples_observed = 去重后取得的视频证据数",
+          "multi_sample_candidates = 在该单臂已取得至少 3 条视频样本的候选数",
+          "directional_read = 非盲标人工标题观察，不是 Precision"
+        ],
+        "sql": "SELECT * FROM (VALUES\n(1,'能力词塞入首搜','motorsport photographer on-camera flash workflow',5,6,0,0.658,3,'游戏、AI 与新闻历史噪声为主'),\n(2,'能力词塞入首搜','motorsport photographer speedlight trackside lighting',0,0,0,0.410,1,'零召回'),\n(3,'能力词塞入首搜','race car photographer off camera lighting speedlight',2,2,0,0.524,3,'游戏与 AI 噪声为主'),\n(4,'角色 + 场景首搜','motorsport photographer trackside',8,11,1,0.774,3,'出现真实赛车摄影工作流，仍有噪声'),\n(5,'角色 + 场景首搜','race photographer behind the scenes',11,12,0,0.892,3,'出现赛车摄影、夜拍与幕后内容，仍有噪声')\n) AS reviewed_live_queries(order_id,strategy,query,returned,samples_observed,multi_sample_candidates,elapsed_s,api_calls,directional_read)"
+      }
+    },
+    {
+      "id": "git_audit",
+      "label": "Git 与 GitHub 只读状态审计",
+      "href": "https://github.com/bibiboerzhang-cell/viltrox-via/actions/runs/29803642999",
+      "query": {
+        "engine": "git_github_values_snapshot",
+        "language": "sql",
+        "executed_at": "2026-08-29T01:26:58Z",
+        "description": "本地 HEAD 与工作树在本轮刷新；远端提交、PR 与 Actions 沿用前一轮只读审计快照，本轮未 fetch。",
+        "filters": [
+          "read-only",
+          "no fetch/merge/push"
+        ],
+        "metric_definitions": [
+          "ahead_commits = 本地 HEAD 相对 origin/codex/optimization-v1-local 的领先提交数"
+        ],
+        "sql": "SELECT * FROM (VALUES\n('7c2c5837af71092a29b989b66d7b3d34dc3e4740','59cb1693e9db66cdb5c459baf5d7736fb053fb98',282,0,52,35,0,'failure')\n) AS reviewed_git(local_head,remote_head,ahead_commits,behind_commits,tracked_changed,untracked_files,open_prs,remote_verify_status)"
+      }
+    },
+    {
+      "id": "github_primary",
+      "label": "GitHub 主仓库与官方项目页审计",
+      "href": "https://github.com/beir-cellar/beir",
+      "query": {
+        "engine": "github_primary_sources_values_snapshot",
+        "language": "sql",
+        "executed_at": "2026-08-28T23:40:40Z",
+        "description": "审阅 V-KPI 当前仓库以及 QueryCell 合同、检索评测、向量检索、实体解析和 LLM 优化相关项目的主仓库。",
+        "filters": [
+          "primary GitHub repositories only",
+          "read-only"
+        ],
+        "sql": "SELECT * FROM (VALUES\n(1,'当前仓库','viltrox-via 远端分支','项目自身','先形成可审查提交并修复 CI'),\n(2,'立即吸收','Pydantic','MIT','QueryCell 严格 schema'),\n(3,'立即吸收','BEIR','Apache-2.0','吸收检索评测口径'),\n(4,'保留现状','Qdrant','Apache-2.0','先不迁移向量基础设施'),\n(5,'后续吸收','Splink','MIT','跨平台概率实体解析'),\n(6,'Gold Set 后','DSPy','MIT','离线 QueryCell 优化'),\n(7,'Gold Set 后','FlagEmbedding/BGE-M3','MIT','已取得证据的多语种重排')\n) AS reviewed_github(priority,category,item,license,recommendation)"
+      }
+    }
+  ]
+}

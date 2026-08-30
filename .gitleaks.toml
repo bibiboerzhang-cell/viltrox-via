@@ -11,5 +11,8 @@ regexes = [
   '''^apscheduler_leader_v1$''',
   '''^xb-sku360-catalog$''',
   '''^263_vkpi_inventory_quantity_provenance\.sql$''',
+  '''^(266_vkpi_llm_fleet_breaker|275_vkpi_llm_cost_precision|287_vkpi_kol_lens_evidence)\.sql$''',
+  '''^health-sentinel-2026-08-22$''',
+  '''^kol_outreach_reply_outcome_7d$''',
   '''^dealer_loc_(samys20260801|12345678)$''',
 ]

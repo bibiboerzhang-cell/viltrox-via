@@ -25,6 +25,8 @@ from html.parser import HTMLParser
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import urljoin, urlsplit
 
+from app.domains.commerce import dealer_candidate_quarantine_builder
+
 
 CONTRACT_ID = "vkpi.us_dealer.technical_candidate_quarantine"
 CONTRACT_VERSION = 1
@@ -602,285 +604,25 @@ def build_quarantine(
     registry_sha256: str,
 ) -> dict[str, Any]:
     """Capture and extract an evidence-only quarantine, never a business row."""
-    eligible, excluded = eligible_preflight_sources(preflight)
-    registry_by_id = {
-        str(row.get("id") or ""): row
-        for row in registry.get("dealer_discovery_sources") or []
-        if isinstance(row, Mapping)
-    }
-    source_results: list[dict[str, Any]] = []
-    all_candidates: list[dict[str, Any]] = []
-    called_ids: list[str] = []
-    for preflight_row in eligible:
-        source_id = str(preflight_row.get("source_registry_id") or "")
-        canonical_url = str(preflight_row.get("canonical_url") or "")
-        registry_row = registry_by_id.get(source_id) or {}
-        source = {
-            **dict(registry_row),
-            "source_registry_id": source_id,
-            "publisher": preflight_row.get("publisher") or registry_row.get("publisher"),
-            "source_kind": preflight_row.get("source_kind") or registry_row.get("source_kind"),
-        }
-        called_ids.append(source_id)
-        try:
-            response = dict(fetch(canonical_url))
-        except Exception as exc:
-            source_results.append(
-                {
-                    "source_registry_id": source_id,
-                    "publisher": source.get("publisher"),
-                    "source_kind": source.get("source_kind"),
-                    "canonical_url": canonical_url,
-                    "status": "capture_failed",
-                    "error": f"{exc.__class__.__name__}: {str(exc)[:240]}",
-                    "candidate_count": 0,
-                    "page_contains_public_physical_store_data": False,
-                    "legal_approval": False,
-                    "source_activation": False,
-                    "business_rows_written": 0,
-                }
-            )
-            continue
-        status_code = int(response.get("status_code") or 0)
-        final_url = str(response.get("final_url") or canonical_url)
-        content_type = str(response.get("content_type") or "")
-        content = bytes(response.get("content") or b"")
-        bounded = content[:MAX_CAPTURE_BYTES]
-        capture_sha256 = hashlib.sha256(bounded).hexdigest()
-        preflight_snapshot = (
-            preflight_row.get("snapshot")
-            if isinstance(preflight_row.get("snapshot"), Mapping)
-            else {}
-        )
-        issues: list[str] = []
-        if not (200 <= status_code < 400):
-            issues.append("capture_http_status_not_successful")
-        if not _publisher_host_bound(canonical_url, final_url):
-            issues.append("final_url_not_publisher_host_bound")
-        candidates: list[dict[str, Any]] = []
-        if not issues:
-            candidates, extraction_issues = extract_document_candidates(
-                source=source,
-                content=bounded,
-                content_type=content_type,
-                captured_at=captured_at,
-                final_url=final_url,
-            )
-            issues.extend(extraction_issues)
-        source_result = {
-            "source_registry_id": source_id,
-            "publisher": source.get("publisher"),
-            "source_kind": source.get("source_kind"),
-            "canonical_url": canonical_url,
-            "preflight_gate": {
-                "technical_status": preflight_row.get("technical_status"),
-                "robots_status": (
-                    preflight_row.get("robots", {}).get("status")
-                    if isinstance(preflight_row.get("robots"), Mapping)
-                    else None
-                ),
-                "robots_fetch_allowed": (
-                    preflight_row.get("robots", {}).get("fetch_allowed") is True
-                    if isinstance(preflight_row.get("robots"), Mapping)
-                    else False
-                ),
-                "robots_reason": (
-                    preflight_row.get("robots", {}).get("reason")
-                    if isinstance(preflight_row.get("robots"), Mapping)
-                    else None
-                ),
-                "robots_sha256": (
-                    preflight_row.get("robots", {}).get("sha256")
-                    if isinstance(preflight_row.get("robots"), Mapping)
-                    else None
-                ),
-                "terms_legal_approval": False,
-            },
-            "status": (
-                "quarantined_candidates_extracted"
-                if candidates
-                else "no_complete_public_us_address_detected"
-                if not issues
-                else "capture_not_extractable"
-            ),
-            "candidate_count": len(candidates),
-            "page_contains_public_physical_store_data": bool(candidates),
-            "snapshot": {
-                "captured_at": captured_at,
-                "http_status": status_code,
-                "final_url": final_url,
-                "content_type": content_type.split(";", 1)[0].strip().casefold() or None,
-                "response_bytes": len(content),
-                "captured_bytes": len(bounded),
-                "truncated": len(content) > MAX_CAPTURE_BYTES,
-                "sha256": capture_sha256,
-                "hash_scope": "prefix" if len(content) > MAX_CAPTURE_BYTES else "complete_response",
-                "preflight_sha256": preflight_snapshot.get("sha256"),
-                "preflight_hash_match": capture_sha256 == preflight_snapshot.get("sha256"),
-            },
-            "issues": sorted(set(issues)),
-            "candidates": candidates,
-            "legal_approval": False,
-            "source_activation": False,
-            "business_rows_written": 0,
-            "claim_status": CLAIM_STATUS,
-        }
-        source_results.append(source_result)
-        all_candidates.extend(candidates)
 
-    source_results.sort(key=lambda item: str(item.get("source_registry_id") or ""))
-    all_candidates.sort(
-        key=lambda item: (str(item.get("cross_source_dedupe_key")), str(item.get("source_entity_key")))
-    )
-    groups: dict[str, list[str]] = {}
-    for candidate in all_candidates:
-        groups.setdefault(str(candidate["cross_source_dedupe_key"]), []).append(
-            str(candidate["source_entity_key"])
-        )
-    duplicate_groups = [
-        {"cross_source_dedupe_key": key, "source_entity_keys": values, "count": len(values)}
-        for key, values in sorted(groups.items())
-        if len(values) > 1
-    ]
-    near_groups: dict[str, list[dict[str, str]]] = {}
-    for candidate in all_candidates:
-        address = candidate["address"]
-        house_match = re.match(r"^([0-9]{1,6})\b", str(address.get("line1") or ""))
-        if not house_match:
-            continue
-        material = {
-            "house_number": house_match.group(1),
-            "city": re.sub(r"[^a-z0-9]", "", str(address.get("city") or "").casefold()),
-            "state": str(address.get("state") or ""),
-            "postal_code": str(address.get("postal_code") or "")[:5],
-        }
-        key = "us_address_review." + _canonical_json_sha256(material)[:24]
-        near_groups.setdefault(key, []).append(
-            {
-                "source_entity_key": str(candidate["source_entity_key"]),
-                "formatted_address": str(address.get("formatted") or ""),
-            }
-        )
-    possible_near_duplicates = [
-        {"review_key": key, "count": len(values), "candidates": values}
-        for key, values in sorted(near_groups.items())
-        if len(values) > 1
-        and len({item["formatted_address"] for item in values}) > 1
-    ]
-    candidate_source_ids = sorted(
-        {
-            str(row["source_registry_id"])
-            for row in source_results
-            if int(row.get("candidate_count") or 0) > 0
-        }
-    )
-    state_codes = sorted(
-        {str(candidate["address"]["state"]) for candidate in all_candidates}
-    )
-    phone_count = sum(bool(row["contact"].get("phone")) for row in all_candidates)
-    email_count = sum(bool(row["contact"].get("email")) for row in all_candidates)
-    coordinate_count = sum(row["map_fields"].get("latitude") is not None for row in all_candidates)
-    website_count = sum(bool(row["contact"].get("website")) for row in all_candidates)
-    contact_any_count = sum(
-        bool(row["contact"].get("phone") or row["contact"].get("email"))
-        for row in all_candidates
-    )
-    manufacturer_scope_count = sum(
-        bool(row["truth_dimensions"].get("manufacturer_authorization_scope"))
-        for row in all_candidates
-    )
-    hash_match_count = sum(
-        row.get("snapshot", {}).get("preflight_hash_match") is True
-        for row in source_results
-        if isinstance(row.get("snapshot"), Mapping)
-    )
-    blocked_ids = {
-        str(row.get("source_registry_id") or "")
-        for row in excluded
-        if "robots_path_not_allowed" in set(row.get("reasons") or [])
-    }
-    blocked_source_calls = sorted(blocked_ids & set(called_ids))
-    candidate_count = len(all_candidates)
-
-    def coverage_rate(count: int) -> float:
-        return round(count / candidate_count, 6) if candidate_count else 0.0
-
-    payload = {
-        "contract": {
-            "id": CONTRACT_ID,
-            "version": CONTRACT_VERSION,
-            "read_only": True,
-            "technical_quarantine_only": True,
-            "database_accessed": False,
-            "candidate_rows_written": 0,
-            "business_rows_written": 0,
-            "direct_import_available": False,
-            "geocoding_performed": False,
-            "legal_approval": False,
-            "source_activation": False,
-        },
-        "generated_at": captured_at,
-        "registry_version": registry.get("registry_version"),
-        "input_provenance": {
-            "technical_preflight_sha256": preflight_sha256,
-            "source_registry_sha256": registry_sha256,
-        },
-        "summary": {
-            "registered_source_count": len(registry_by_id),
-            "preflight_source_count": len(preflight.get("sources") or []),
-            "eligible_source_count": len(eligible),
-            "excluded_source_count": len(excluded),
-            "fetched_source_count": len(called_ids),
-            "sources_with_candidates": len(candidate_source_ids),
-            "source_candidate_coverage_rate": (
-                round(len(candidate_source_ids) / len(eligible), 6) if eligible else 0.0
-            ),
-            "candidate_count": len(all_candidates),
-            "entity_candidate_count": len(all_candidates),
-            "complete_address_count": len(all_candidates),
-            "unique_address_count": len(groups),
-            "cross_source_duplicate_group_count": len(duplicate_groups),
-            "possible_near_duplicate_group_count": len(possible_near_duplicates),
-            "state_coverage_count": len(state_codes),
-            "state_codes": state_codes,
-            "phone_coverage_count": phone_count,
-            "phone_coverage_rate": coverage_rate(phone_count),
-            "email_coverage_count": email_count,
-            "email_coverage_rate": coverage_rate(email_count),
-            "website_coverage_count": website_count,
-            "website_coverage_rate": coverage_rate(website_count),
-            "phone_or_email_coverage_count": contact_any_count,
-            "phone_or_email_coverage_rate": coverage_rate(contact_any_count),
-            "publisher_coordinate_count": coordinate_count,
-            "publisher_coordinate_coverage_rate": coverage_rate(coordinate_count),
-            "manufacturer_authorization_scope_field_count": manufacturer_scope_count,
-            "manufacturer_authorization_scope_field_rate": coverage_rate(
-                manufacturer_scope_count
-            ),
-            "viltrox_authorization_evidence_count": 0,
-            "viltrox_product_presence_evidence_count": 0,
-            "preflight_snapshot_hash_match_count": hash_match_count,
-            "blocked_source_call_count": len(blocked_source_calls),
-            "legal_approval_count": 0,
-            "source_activation_count": 0,
-            "business_rows_written": 0,
-        },
-        "called_source_ids": called_ids,
-        "blocked_source_calls": blocked_source_calls,
-        "excluded_sources": excluded,
-        "candidate_source_ids": candidate_source_ids,
-        "cross_source_duplicate_groups": duplicate_groups,
-        "possible_near_duplicate_groups": possible_near_duplicates,
-        "sources": source_results,
-        "claim_status": CLAIM_STATUS,
-        "truth_note": (
-            "Rows are read-only, evidence-bound quarantine candidates. They do not prove "
-            "Viltrox authorization, Viltrox product presence, inventory, local impact, legal "
-            "approval, source activation, or a Dealer business-table write."
+    return dealer_candidate_quarantine_builder.build_quarantine(
+        preflight=preflight,
+        registry=registry,
+        captured_at=captured_at,
+        fetch=fetch,
+        preflight_sha256=preflight_sha256,
+        registry_sha256=registry_sha256,
+        runtime=dealer_candidate_quarantine_builder.QuarantineRuntime(
+            eligible_sources=eligible_preflight_sources,
+            extract_candidates=extract_document_candidates,
+            publisher_host_bound=_publisher_host_bound,
+            canonical_hash=_canonical_json_sha256,
+            contract_id=CONTRACT_ID,
+            contract_version=CONTRACT_VERSION,
+            claim_status=CLAIM_STATUS,
+            max_capture_bytes=MAX_CAPTURE_BYTES,
         ),
-    }
-    payload["artifact_content_sha256"] = _canonical_json_sha256(payload)
-    return payload
+    )
 
 
 __all__ = [

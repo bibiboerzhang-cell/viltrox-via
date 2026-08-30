@@ -212,7 +212,7 @@ def _record_scheduler_run(task_key: str, *, ok: bool, error: str = "", status: s
         logger.debug("scheduler.intel_record_run_failed", extra={"task": task_key}, exc_info=True)
 
 
-def _record_scheduler_result(task_key: str, result: Any) -> None:
+def _record_scheduler_result(task_key: str, result: Any) -> bool:
     payload = result if isinstance(result, dict) else {}
     status = str(payload.get("status") or "").strip().lower()
     ok = status == "ok"
@@ -223,6 +223,7 @@ def _record_scheduler_result(task_key: str, result: Any) -> None:
         else:
             error = str(payload.get("error") or payload.get("reason") or f"status={status or 'missing'}")[:240]
     _record_scheduler_run(task_key, ok=ok, error=error)
+    return ok
 
 
 async def job_vkpi_fit_snapshot():
@@ -360,11 +361,14 @@ async def job_vkpi_ai_today_hot():
         from app.domains.market import ai_today
 
         result = await asyncio.to_thread(ai_today.generate_ai_today_hot)
-        logger.info("scheduler.vkpi_ai_today_hot", extra={"result": result})
-        _record_scheduler_result("vkpi_ai_today_hot", result)
     except Exception as exc:
         logger.exception("scheduler.vkpi_ai_today_hot_failed")
         _record_scheduler_run("vkpi_ai_today_hot", ok=False, error=str(exc)[:240])
+        raise
+    logger.info("scheduler.vkpi_ai_today_hot", extra={"result": result})
+    if not _record_scheduler_result("vkpi_ai_today_hot", result):
+        raise RuntimeError("vkpi_ai_today_hot returned a non-ok result")
+    return result
 
 
 async def job_vkpi_official_daily_report(round_key: str = "daily"):

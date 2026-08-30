@@ -10,6 +10,8 @@ from collections import Counter
 import re
 from typing import Any, Iterable
 
+from app.domains.kol.targeted_search_contract import project_locked_term_groups
+
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+(?:[-_.+][a-z0-9]+)*|[\u4e00-\u9fff]{2,}", re.IGNORECASE)
 _GENERIC_TERMS = frozenset(
@@ -55,6 +57,18 @@ _MATCH_FIELDS = (
     "profile_text",
     "type_reason",
 )
+REPRESENTATIVE_CONTENT_EVIDENCE_FIELDS = (
+    "title",
+    "description",
+    "caption",
+    "transcript",
+    "subtitle",
+    "subtitles",
+    "visual_summary",
+)
+_PRIVATE_CONTENT_EVIDENCE_KEY = "_targeted_content_evidence"
+CONTROLLED_ALIAS_EVIDENCE_SOURCE = "server_allowlisted_alias_evidence"
+CAPABILITY_USE_EVIDENCE_SOURCE = "server_capability_use_map"
 
 
 _COUNTRY_NORMALIZATION = {
@@ -455,18 +469,34 @@ def build_match_evidence(
     matched: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
 
-    def add(field: str, value: Any) -> None:
+    def add(field: str, value: Any, *, source: str = "server_profile_evidence") -> None:
         for term in all_terms:
             key = (field, term)
             if key not in seen and _contains_term(value, term):
                 seen.add(key)
-                matched.append({"field": field, "term": term, "source": "server_profile_evidence"})
+                matched.append({"field": field, "term": term, "source": source})
 
     for field in _MATCH_FIELDS:
         add(field, row.get(field))
     for item in list(evidence.get("representative_evidence") or [])[:5]:
         if isinstance(item, dict):
-            add("representative_evidence.title", item.get("title"))
+            for content_field in REPRESENTATIVE_CONTENT_EVIDENCE_FIELDS:
+                add(f"representative_evidence.{content_field}", item.get(content_field))
+    # Local cached prose stays private: only the matched term, factual field,
+    # and explicit source coordinate may leave this gate.  The full text is
+    # never copied into a recall item/session.
+    for record in list(evidence.get(_PRIVATE_CONTENT_EVIDENCE_KEY) or [])[:18]:
+        if not isinstance(record, dict):
+            continue
+        content_field = str(record.get("field") or "").strip()
+        source = str(record.get("source") or "").strip()
+        if content_field not in REPRESENTATIVE_CONTENT_EVIDENCE_FIELDS or not source:
+            continue
+        add(
+            f"representative_evidence.{content_field}",
+            record.get("text"),
+            source=source,
+        )
     distinct_terms = {item["term"] for item in matched}
     # Count the words the query can prove at all, not the tokens it produced:
     # 摄影师 tiles into two bigrams but is still one word, and demanding two
@@ -525,6 +555,102 @@ def build_match_evidence(
     for item in matched:
         append(item)
     return selected
+
+
+def build_controlled_alias_evidence(
+    row: dict[str, Any],
+    evidence: dict[str, Any],
+    locked_term_groups: Any,
+) -> list[dict[str, str]]:
+    """Match only aliases from a validated server-owned QueryCell contract.
+
+    The returned rows contain coordinates and the canonical/observed terms,
+    never the source profile/content text.  Supplied aliases are rebuilt by
+    :func:`project_locked_term_groups`, so an unknown model/client expansion
+    cannot enter this hard-evidence path.
+    """
+
+    locked = project_locked_term_groups(locked_term_groups)
+    if not locked:
+        return []
+    fields: list[tuple[str, Any]] = [
+        (field, row.get(field)) for field in _MATCH_FIELDS
+    ]
+    for item in list(evidence.get("representative_evidence") or [])[:5]:
+        if not isinstance(item, dict):
+            continue
+        fields.extend(
+            (f"representative_evidence.{content_field}", item.get(content_field))
+            for content_field in REPRESENTATIVE_CONTENT_EVIDENCE_FIELDS
+        )
+    for record in list(evidence.get(_PRIVATE_CONTENT_EVIDENCE_KEY) or [])[:18]:
+        if not isinstance(record, dict):
+            continue
+        content_field = str(record.get("field") or "").strip()
+        if content_field not in REPRESENTATIVE_CONTENT_EVIDENCE_FIELDS:
+            continue
+        fields.append((
+            f"representative_evidence.{content_field}",
+            record.get("text"),
+        ))
+
+    output: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for group in locked.get("groups") or []:
+        if not isinstance(group, dict):
+            continue
+        canonical = str(group.get("canonical_term") or "").strip()
+        evidence_group = str(group.get("evidence_group") or "").strip()
+        if not canonical or evidence_group not in {"product_use_fit", "segment_use_case"}:
+            continue
+        group_match_count = 0
+        match_sets = [
+            (
+                group.get("aliases") if isinstance(group.get("aliases"), list) else [],
+                CONTROLLED_ALIAS_EVIDENCE_SOURCE,
+                "direct_capability_or_scene_alias",
+            ),
+        ]
+        if evidence_group == "product_use_fit":
+            match_sets.append((
+                group.get("use_suitability_terms")
+                if isinstance(group.get("use_suitability_terms"), list)
+                else [],
+                CAPABILITY_USE_EVIDENCE_SOURCE,
+                "capability_use_suitability",
+            ))
+        for terms, source, relation in match_sets:
+            for field, value in fields:
+                observed = next(
+                    (
+                        str(term).strip()
+                        for term in terms
+                        if str(term or "").strip()
+                        and _contains_term(value, str(term).strip().lower())
+                    ),
+                    "",
+                )
+                key = (field, canonical.casefold(), f"{source}:{observed.casefold()}")
+                if not observed or key in seen:
+                    continue
+                seen.add(key)
+                output.append({
+                    "field": field,
+                    "term": observed,
+                    "canonical_term": canonical,
+                    "observed_term": observed,
+                    "evidence_group": evidence_group,
+                    "evidence_relation": relation,
+                    "source": source,
+                })
+                group_match_count += 1
+                if len(output) >= 12:
+                    return output
+                if group_match_count >= 4:
+                    break
+            if group_match_count >= 4:
+                break
+    return output
 
 
 def why_fit_from_match_evidence(match_evidence: Iterable[dict[str, Any]]) -> str:

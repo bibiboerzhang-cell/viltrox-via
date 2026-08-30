@@ -24,6 +24,10 @@ from app.domains.projects import contract_assist
 from app.domains.projects import contracts
 from app.domains.projects import retrospective_aggregate
 from app.domains.projects import workflow
+from app.services.projects.creator_lifecycle_adapters import (
+    DEFAULT_CLAIM_LIFECYCLE_PORT,
+    DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
+)
 from app.api.routers.vkpi_projects_helpers import (
     _material_row_to_item,
 )
@@ -520,7 +524,12 @@ def extract_project_contract(project_id: int, contract_id: int, staff=Depends(re
 @router.post("/projects/{project_id}/kols")
 def add_project_kols(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return workflow.add_project_kols(project_id, body, staff=staff)
+        return workflow.add_project_kols(
+            project_id,
+            body,
+            staff=staff,
+            feedback_sink=DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -532,7 +541,13 @@ def add_project_kols(project_id: int, body: dict, staff=Depends(require_tab("vkp
 @router.post("/projects/{project_id}/kols/{kol_ref}/advance")
 def advance_project_kol(project_id: int, kol_ref: str, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return workflow.advance_project_kol_assignment(project_id, kol_ref, body, staff=staff)
+        return workflow.advance_project_kol_assignment(
+            project_id,
+            kol_ref,
+            body,
+            staff=staff,
+            feedback_sink=DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -692,52 +707,13 @@ def update_project_star(project_id: int, body: dict, request: Request, staff=Dep
         raise _scope_403(exc) from exc
 
 
-@router.post("/projects/{project_id}/stage")
-def transition_project(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
-    try:
-        return workflow.transition_project(project_id, body, staff=staff)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except scope.ScopeDenied as exc:
-        raise _scope_403(exc) from exc
+from app.api.routers import vkpi_projects_lifecycle_routes as _lifecycle_sub  # noqa: E402
 
-
-@router.delete("/projects/{project_id}")
-def delete_project(project_id: int, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
-    try:
-        return workflow.delete_project(project_id, body or {}, staff=staff)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except scope.ScopeDenied as exc:
-        raise _scope_403(exc) from exc
-
-
-@router.post("/projects/{project_id}/ship")
-def ship_project(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
-    payload = {**body, "to_stage": "shipped", "event_type": "ship"}
-    try:
-        return workflow.transition_project(project_id, payload, staff=staff)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except scope.ScopeDenied as exc:
-        raise _scope_403(exc) from exc
-
-
-@router.post("/projects/{project_id}/publish")
-def publish_project(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
-    payload = {**body, "to_stage": "published", "event_type": "publish"}
-    try:
-        return workflow.transition_project(project_id, payload, staff=staff)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except scope.ScopeDenied as exc:
-        raise _scope_403(exc) from exc
+router.include_router(_lifecycle_sub.router)
+transition_project = _lifecycle_sub.transition_project
+delete_project = _lifecycle_sub.delete_project
+ship_project = _lifecycle_sub.ship_project
+publish_project = _lifecycle_sub.publish_project
 
 
 @router.post("/projects/{project_id}/costs")
@@ -766,7 +742,12 @@ def add_project_cost(project_id: int, body: dict, staff=Depends(_require_manager
 @router.post("/projects/{project_id}/messages")
 def add_project_message(project_id: int, body: dict, staff=Depends(require_tab("vkpi", "write"))):
     try:
-        return workflow.add_project_message(project_id, body, staff=staff)
+        return workflow.add_project_message(
+            project_id,
+            body,
+            staff=staff,
+            feedback_sink=DEFAULT_RECOMMENDATION_FEEDBACK_SINK,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except scope.ScopeDenied as exc:

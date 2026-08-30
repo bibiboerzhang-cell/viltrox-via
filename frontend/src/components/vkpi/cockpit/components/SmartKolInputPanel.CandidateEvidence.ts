@@ -4,12 +4,36 @@ type EvidenceGrade = "strong" | "basic" | "missing";
 
 export type CandidateRankSummary = {
   score: number | null;
-  scoreLabel: "本地词项相关度" | "混合相关度" | "向量相关度" | "检索相关度";
-  methodLabel: "本地词项排序" | "混合排序" | "向量排序" | "检索排序";
-  kind: "lexical" | "hybrid" | "vector" | "retrieval";
+  scoreLabel: "增长候选分" | "本地词项相关度" | "混合相关度" | "向量相关度" | "检索相关度";
+  methodLabel: "增长候选排序" | "本地词项排序" | "混合排序" | "向量排序" | "检索排序";
+  kind: "growth" | "lexical" | "hybrid" | "vector" | "retrieval";
   sourceField: string | null;
   rawMethod: string;
   detail: string;
+};
+
+export type CandidateGrowthDimension = {
+  key: "product_use_fit" | "market_activation" | "audience_fit" | "content_execution";
+  label: "产品适配" | "市场推进" | "受众适配" | "内容执行";
+  weight: 40 | 30 | 15;
+  score: number | null;
+  displayValue: string;
+};
+
+export type CandidateGrowthSummary = {
+  active: boolean;
+  objective: string;
+  score: number | null;
+  evidenceConfidence: number | null;
+  claimStatus: string;
+  dimensions: CandidateGrowthDimension[];
+  missingLabels: string[];
+  decisionReadiness: string;
+  decisionLabel: string;
+  strictGatePassed: boolean;
+  whyToFind: string[];
+  nextAction: string;
+  disclaimer: string;
 };
 
 export type CandidateEvidenceSummary = {
@@ -62,10 +86,95 @@ function record(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
+function textList(value: unknown, limit = 4): string[] {
+  return Array.isArray(value)
+    ? Array.from(new Set(value.map(text).filter(Boolean))).slice(0, limit)
+    : [];
+}
+
 function finiteScore(value: unknown): number | null {
   if (value == null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function boundedGrowthScore(value: unknown): number | null {
+  const parsed = finiteScore(value);
+  return parsed != null && parsed >= 0 && parsed <= 100 ? parsed : null;
+}
+
+function growthDisplayValue(value: number | null): string {
+  if (value == null) return "待补证";
+  return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "");
+}
+
+/**
+ * 统一读取本地实时召回与联网会话投影中的增长候选评分。联网结果把安全投影放在
+ * source_fields 中，本地结果通常直接放在 item 顶层；两条车道必须使用同一套门面口径。
+ * 缺失维度永远显示“待补证”，不按 0 分处理。
+ */
+export function candidateGrowthSummary(item: VkpiKolRecallItem): CandidateGrowthSummary {
+  const root = item as unknown as Record<string, unknown>;
+  const source = sourceRecord(item);
+  const scoring = record(root.growth_candidate_scoring ?? source.growth_candidate_scoring);
+  const rationale = record(
+    root.selection_rationale
+      ?? source.selection_rationale
+      ?? scoring.selection_rationale,
+  );
+  const objective = text(root.objective ?? source.objective ?? scoring.objective).toLowerCase();
+  const score = boundedGrowthScore(root.growth_candidate_score ?? source.growth_candidate_score);
+  const projected = score != null || objective === "prospective_growth" || Object.keys(scoring).length > 0;
+  const dimensionSpecs = [
+    ["product_use_fit", "产品适配", 40],
+    ["market_activation", "市场推进", 30],
+    ["audience_fit", "受众适配", 15],
+    ["content_execution", "内容执行", 15],
+  ] as const;
+  const dimensions = dimensionSpecs.map(([key, label, weight]): CandidateGrowthDimension => {
+    const value = boundedGrowthScore(root[key] ?? source[key]);
+    return { key, label, weight, score: value, displayValue: growthDisplayValue(value) };
+  });
+  const evidenceConfidence = boundedGrowthScore(root.evidence_confidence ?? source.evidence_confidence);
+  const claimStatus = text(root.claim_status ?? source.claim_status ?? scoring.claim_status).toLowerCase();
+  const decisionReadiness = text(rationale.decision_readiness).toLowerCase();
+  const strictGatePassed = (
+    root.growth_qualification_pass === true
+    || source.growth_qualification_pass === true
+    || text(rationale.strict_gate_status).toLowerCase() === "passed"
+  );
+  const reasonCards = Array.isArray(rationale.reason_cards) ? rationale.reason_cards : [];
+  const whyToFind = textList(rationale.why_find_this_creator);
+  if (!whyToFind.length) {
+    reasonCards.forEach((value) => {
+      const card = record(value);
+      const summary = text(card.summary);
+      if (text(card.status) === "observed" && summary && !whyToFind.includes(summary) && whyToFind.length < 4) {
+        whyToFind.push(summary);
+      }
+    });
+  }
+  const nextAction = text(record(rationale.next_action).label);
+  const decisionLabel = strictGatePassed && decisionReadiness === "decision_support_ready"
+    ? "严格证据已就绪 · 值得人工复核"
+    : strictGatePassed && decisionReadiness === "strict_gate_passed_needs_review"
+      ? "已过严格证据 · 仍需补全决策信息"
+      : "仅候选 · 待补证";
+  return {
+    active: projected,
+    objective,
+    score,
+    evidenceConfidence,
+    claimStatus,
+    dimensions,
+    missingLabels: dimensions.filter((dimension) => dimension.score == null).map((dimension) => dimension.label),
+    decisionReadiness,
+    decisionLabel,
+    strictGatePassed,
+    whyToFind,
+    nextAction,
+    disclaimer: claimStatus === "descriptive_only" ? "描述性决策支持，不代表转化" : "",
+  };
 }
 
 /**
@@ -75,6 +184,22 @@ function finiteScore(value: unknown): number | null {
 export function candidateRankSummary(item: VkpiKolRecallItem): CandidateRankSummary {
   const itemRecord = item as unknown as Record<string, unknown>;
   const source = sourceRecord(item);
+  const growth = candidateGrowthSummary(item);
+  if (growth.active) {
+    const missing = growth.missingLabels.length ? `；待补证：${growth.missingLabels.join("、")}` : "";
+    const detail = growth.score == null
+      ? `增长候选分待补证${missing}`
+      : `增长候选分 ${growthDisplayValue(growth.score)} · 增长候选排序${missing}${growth.disclaimer ? `；${growth.disclaimer}` : ""}`;
+    return {
+      score: growth.score,
+      scoreLabel: "增长候选分",
+      methodLabel: "增长候选排序",
+      kind: "growth",
+      sourceField: growth.score == null ? null : "growth_candidate_score",
+      rawMethod: "",
+      detail,
+    };
+  }
   const scoreFields = [
     "robust_rank_score",
     "precision_rank_score",
@@ -132,7 +257,7 @@ export function candidateRankSummary(item: VkpiKolRecallItem): CandidateRankSumm
         : "检索排序";
   const detail = score == null
     ? `${scoreLabel}待返回；不以 0 代替`
-    : `${scoreLabel} ${score.toFixed(3)} · ${methodLabel}${rawMethod ? `（${rawMethod}）` : "（方法标识未返回）"}；仅用于本次候选排序，不代表业务结果`;
+    : `${scoreLabel} ${score.toFixed(3)} · ${methodLabel}；仅用于本次候选排序，不代表业务结果`;
 
   return { score, scoreLabel, methodLabel, kind, sourceField, rawMethod, detail };
 }

@@ -11,6 +11,8 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
+from app.platform.provider_error_category import _error_category
+
 
 def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
@@ -54,115 +56,6 @@ def _redact_sensitive_text(value: Any, *, limit: int = 2000) -> str:
     text = _SENSITIVE_BEARER_RE.sub("Bearer ***", text)
     text = _SENSITIVE_KV_RE.sub(lambda match: f"{match.group(1)}{match.group(2)}***", text)
     return text[:limit]
-
-
-def _error_category(message: str) -> str:
-    text = str(message or "").lower()
-    if any(marker in text for marker in ("429", "resource_exhausted", "rate limit", "quota exceeded")):
-        return "provider_pressure"
-    if any(
-        marker in text
-        for marker in (
-            "500",
-            "502",
-            "503",
-            "504",
-            "5xx",
-            "internal server error",
-            "server error",
-            "unavailable",
-            "service unavailable",
-            "high demand",
-            "temporarily overloaded",
-        )
-    ):
-        return "provider_pressure"
-    if "gemini_call_timeout" in text:
-        return "timeout"
-    if "media_resolve_failed" in text or "media_resolve" in text:
-        return "media_resolve"
-    if "yt-dlp" in text or "yt_dlp" in text or "direct_video_download_failed" in text or "download_failed" in text:
-        return "download"
-    # content_restricted:内容存在但被门禁挡住(私密/年龄限制/登录/会员/订阅),需要凭证而非重试。
-    # 放在 download 之后,避免吞掉 yt-dlp 下载失败(那是 download);"sign in to confirm" 这类
-    # 是 YouTube 风控登录墙,归门禁。
-    if any(
-        marker in text
-        for marker in (
-            "age restricted",
-            "age-restricted",
-            "private video",
-            "login required",
-            "sign in to confirm",
-            "members-only",
-            "subscriber-only",
-            "this video is private",
-            "account is private",
-            "requires authentication",
-        )
-    ):
-        return "content_restricted"
-    # content_blocked:内容被地域/版权/平台强制下架(geo/DMCA/removed/terminated),不可恢复。
-    # "video unavailable" 是歧义词:明确"has been removed"/版权/封号的归 blocked,纯泛化 404/not_found 归
-    # content_unavailable(见下)。这里只收明确下架信号。
-    if any(
-        marker in text
-        for marker in (
-            "not available in your country",
-            "geoblock",
-            "geo",
-            "blocked in",
-            "copyright",
-            "dmca",
-            "has been removed",
-            "account terminated",
-            "content warning",
-        )
-    ):
-        return "content_blocked"
-    # content_unavailable:泛化的找不到/已删除,既不是明确门禁也不是明确下架。
-    # "video unavailable" 在缺乏更强信号时落这里(歧义安全网)。
-    if any(
-        marker in text
-        for marker in (
-            "video unavailable",
-            "not_found",
-            "not found",
-            "404",
-            "does not exist",
-            "deleted",
-        )
-    ):
-        return "content_unavailable"
-    if "unsupported" in text or "invalid_video_url" in text or "not_video" in text or "bad url" in text:
-        return "permanent"
-    if "stale_running_reclaimed" in text:
-        return "stale_running"
-    # 代码级错误(缺依赖/异常类型)——和"天气问题"(provider_pressure/download)区分,
-    # 这类要改代码而非重试。放在 transient 判据之后,避免吞掉 yt-dlp/429 等真瞬时态。
-    if any(
-        marker in text
-        for marker in (
-            "modulenotfounderror",
-            "importerror",
-            "nameerror",
-            "attributeerror",
-            "typeerror",
-            "keyerror",
-            # ValueError:确定性永久校验错(如 kol_auto_poll 早期"payload must include
-            # target_type and target_id"),归 code_error 永久死,绝不当瞬时类回收重试。
-            "valueerror",
-            "indexerror",
-            "syntaxerror",
-            "unboundlocalerror",
-            "traceback (most recent call last)",
-            # 运行期消息形态(无类名前缀):ModuleNotFoundError/ImportError 的裸文本
-            "no module named",
-            "cannot import name",
-        )
-    ):
-        return "code_error"
-    return "unknown"
 
 
 def _provider_retry_reason(message: str, *, next_retry_at: Any | None = None) -> str:

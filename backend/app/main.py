@@ -43,10 +43,10 @@ from app.db.connection import (
     db_connection_sync_scope,
     get_conn,
     get_db_startup_status,
-    init_db_runtime,
     is_postgres_runtime,
     open_standalone_conn,
 )
+from app.db.startup import init_db_runtime
 from app.services.jobs.queue import build_job_queue
 from app.services.monitoring.runtime import record_request_metric
 from app.services.security.admin_access import apply_admin_security_headers, get_admin_security_response
@@ -54,7 +54,13 @@ from app.services.via import build_via_event_bus
 from app.core.logging import get_logger
 from app.core.security import AUTH_COOKIE_NAME, get_current_user
 from app.core.permissions import check_system_permission, check_tab_permission, staff_context_for_user
-from app.main_health import build_deep_health_payload
+from app.main_health import (
+    RUNTIME_TRUST_TIMEOUT_SECONDS,
+    bounded_runtime_trust,
+    build_deep_health_payload,
+    build_runtime_trust,
+    runtime_trust_service_status,
+)
 from app.main_request_guards import (
     DB_REQUEST_ADMISSION_TIMEOUT_SEC as _DB_REQUEST_ADMISSION_TIMEOUT_SEC,
     PRIVATE_INTERNAL_UPLOAD_PREFIXES as _PRIVATE_INTERNAL_UPLOAD_PREFIXES,
@@ -227,70 +233,21 @@ def _trust_worker_sha() -> dict[str, str | None]:
 
 
 def _runtime_trust() -> dict[str, object]:
-    """Additive runtime-trust block for /health. Never raises; each field guarded."""
-    trust: dict[str, object] = {}
-    try:
-        trust["db_startup"] = get_db_startup_status()
-    except Exception:
-        trust["db_startup"] = {"state": "unknown"}
-    try:
-        migration_max = _trust_db_migration_max()
-        trust["db_migration_max"] = migration_max
-        trust["db_migration_source"] = (
-            "schema_migrations" if migration_max else "unavailable"
-        )
-    except Exception:
-        trust["db_migration_max"] = None
-        trust["db_migration_source"] = "unavailable"
-    try:
-        worker_trust = _trust_worker()
-        trust.update(worker_trust)
-    except Exception:
-        trust["worker_heartbeat"] = None
-        trust["worker_online"] = None
-        trust["worker_sha"] = None
-        trust["worker_sha_source"] = "unavailable"
-        trust["worker_heartbeat_source"] = "unavailable"
-    try:
-        from app.workers.redis_worker_health import redis_worker_fleet_health
+    """Build the observable trust contract; the HTTP caller owns its deadline."""
+    from app.workers.redis_worker_health import redis_worker_fleet_health
 
-        trust["redis_worker_fleet"] = redis_worker_fleet_health(APP_GIT_SHA)
-    except Exception:
-        logger.debug("health: redis worker heartbeat read failed", exc_info=True)
-        trust["redis_worker_fleet"] = {
-            "online": False,
-            "online_count": 0,
-            "expected_count": None,
-            "workers": [],
-        }
-    try:
-        trust["scheduler_status"] = _trust_scheduler()
-    except Exception:
-        trust["scheduler_status"] = "not_configured"
-    trust["release_validation"] = main_release_validation.safe_status()
-    # Compatibility hook for isolated legacy tests only.  Production
-    # _trust_worker always returns an explicit worker_sha key and therefore can
-    # never fall back to the server build or a stale filesystem assumption.
-    if "worker_sha" not in trust:
-        try:
-            trust.update(_trust_worker_sha())
-        except Exception:
-            trust["worker_sha"] = None
-            trust["worker_sha_source"] = "unavailable"
-    try:
-        _server_sha = (APP_GIT_SHA or None)
-        _client_sha = (_read_frontend_build_sha() or None)
-        trust["server_git_sha"] = _server_sha
-        trust["client_git_sha"] = _client_sha
-        if _server_sha is None or _client_sha is None:
-            trust["sha_aligned"] = None
-        else:
-            trust["sha_aligned"] = bool(_server_sha == _client_sha)
-    except Exception:
-        trust["server_git_sha"] = (APP_GIT_SHA or None)
-        trust["client_git_sha"] = None
-        trust["sha_aligned"] = None
-    return trust
+    return build_runtime_trust(
+        db_startup_probe=get_db_startup_status,
+        release_validation_probe=main_release_validation.safe_status,
+        client_git_sha_probe=_read_frontend_build_sha,
+        db_migration_probe=_trust_db_migration_max,
+        worker_probe=_trust_worker,
+        redis_worker_probe=lambda: redis_worker_fleet_health(APP_GIT_SHA),
+        scheduler_probe=_trust_scheduler,
+        worker_sha_fallback_probe=_trust_worker_sha,
+        server_git_sha=APP_GIT_SHA,
+        postgres_runtime=is_postgres_runtime(),
+    )
 
 
 def _is_https_request(request) -> bool:
@@ -861,27 +818,25 @@ if IS_ADMIN_APP:
 @app.get("/health")
 async def health_check(request: Request, deep: bool = False):
     build = _build_info(str(request.query_params.get("client_build", "") or ""))
-    try:
-        # Runtime trust performs synchronous Postgres/Redis heartbeat reads.
-        # A saturated small DB pool must never make that work block the sole
-        # asyncio event loop, otherwise in-flight requests cannot finish and
-        # return the very leases /health is waiting for.
-        trust = await asyncio.to_thread(_runtime_trust)
-    except Exception:
-        logger.debug("health: runtime_trust block failed", exc_info=True)
-        trust = {}
-    if not deep and (not IS_PRODUCTION or _can_read_deep_health(request)):
+    can_read_trust = not IS_PRODUCTION or _can_read_deep_health(request)
+    if not deep and not can_read_trust:
+        return {"status": "ok", "service": APP_ROLE, "version": APP_VERSION}
+    if deep and not can_read_trust:
+        raise HTTPException(status_code=403, detail="Deep health requires admin or ops token")
+    trust = await bounded_runtime_trust(
+        _runtime_trust,
+        server_git_sha=APP_GIT_SHA,
+        client_git_sha=_read_frontend_build_sha(),
+        timeout_seconds=RUNTIME_TRUST_TIMEOUT_SECONDS,
+    )
+    if not deep:
         return {
-            "status": "ok",
+            "status": runtime_trust_service_status(trust),
             "service": APP_ROLE,
             "version": APP_VERSION,
             "build": build,
             "trust": trust,
         }
-    if not deep:
-        return {"status": "ok", "service": APP_ROLE, "version": APP_VERSION}
-    if not _can_read_deep_health(request):
-        raise HTTPException(status_code=403, detail="Deep health requires admin or ops token")
     return await build_deep_health_payload(
         app,
         app_version=APP_VERSION,

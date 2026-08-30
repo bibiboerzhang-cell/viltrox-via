@@ -16,6 +16,7 @@ from app.services.ai.analyzers.gemini_video_results import (
     validate_final_v1_result,
 )
 from app.services.ai.analyzers.gemini_video_prompts import (
+    _video_final_v1_dynamic_prompt,
     _video_final_v1_prompt,
     _video_final_v1_static_prompt,
 )
@@ -276,6 +277,22 @@ def test_brand_truth_prompt_requires_tri_state_and_timed_non_metadata_evidence()
         assert "brand_product_evidence" in prompt
         assert "present" in prompt and "absent" in prompt and "unknown" in prompt
         assert "metadata" in prompt and "visual" in prompt and "audio" in prompt
+
+
+def test_cached_and_dynamic_prompts_pin_brand_evidence_to_its_canonical_path():
+    dynamic = _video_final_v1_dynamic_prompt(
+        title="Autofocus comparison",
+        profile_ctx="",
+        subtitle_ctx="",
+        subtitle_used=False,
+        performance_context={},
+    )
+    static = _video_final_v1_static_prompt()
+
+    for prompt in (dynamic, static):
+        assert "/layer1_visual_content/brand_product_evidence" in prompt
+        assert "evidence 同级" in prompt
+        assert "对象数组" in prompt
 
 
 @pytest.mark.parametrize(

@@ -1,37 +1,13 @@
-"""
-services/intelligence — 商品 / 竞品 / 市场情报系统
+"""Product, competitor, market, and official-matrix intelligence services.
 
-子模块:
-  - bh_scraper:    B&H Photo Video Apify 抓取
-  - bh_repository: B&H 数据存储与查询
-
-未来可扩展:
-  - amazon_scraper
-  - adorama_scraper
-  - competitor_monitor (Sigma/Tamron)
+The package facade stays lazy so importing an individual scanner service does
+not eagerly assemble the official-matrix path back through DeepSight.
 """
-from app.services.intelligence.bh_scraper import (
-    fetch_bh_viltrox_products,
-    fetch_bh_product_reviews,
-    fetch_bh_reviews,
-    normalize_bh_product,
-    normalize_bh_review,
-)
-from app.services.intelligence.bh_repository import (
-    save_bh_snapshot,
-    get_latest_bh_products,
-    get_bh_summary,
-    get_bh_price_history,
-    get_bh_reviews_summary,
-    get_bh_top_rated,
-    select_bh_review_targets,
-    upsert_bh_reviews,
-)
-from app.services.intelligence.viltrox_matrix import (
-    build_viltrox_overview,
-    reset_viltrox_official_roster,
-    scan_viltrox_official_matrix_now,
-)
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
 
 __all__ = [
     "fetch_bh_viltrox_products",
@@ -51,3 +27,33 @@ __all__ = [
     "reset_viltrox_official_roster",
     "scan_viltrox_official_matrix_now",
 ]
+
+_EXPORTS = {
+    "fetch_bh_viltrox_products": "app.services.intelligence.bh_scraper",
+    "fetch_bh_product_reviews": "app.services.intelligence.bh_scraper",
+    "fetch_bh_reviews": "app.services.intelligence.bh_scraper",
+    "normalize_bh_product": "app.services.intelligence.bh_scraper",
+    "normalize_bh_review": "app.services.intelligence.bh_scraper",
+    "save_bh_snapshot": "app.services.intelligence.bh_repository",
+    "get_latest_bh_products": "app.services.intelligence.bh_repository",
+    "get_bh_summary": "app.services.intelligence.bh_repository",
+    "get_bh_price_history": "app.services.intelligence.bh_repository",
+    "get_bh_reviews_summary": "app.services.intelligence.bh_repository",
+    "get_bh_top_rated": "app.services.intelligence.bh_repository",
+    "select_bh_review_targets": "app.services.intelligence.bh_repository",
+    "upsert_bh_reviews": "app.services.intelligence.bh_repository",
+    "build_viltrox_overview": "app.services.intelligence.viltrox_matrix",
+    "reset_viltrox_official_roster": "app.services.intelligence.viltrox_matrix",
+    "scan_viltrox_official_matrix_now": "app.services.intelligence.viltrox_matrix",
+}
+
+
+def __getattr__(name: str) -> Any:
+    if name not in _EXPORTS:
+        raise AttributeError(name)
+    module = import_module(_EXPORTS[name])
+    return getattr(module, name)
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__))

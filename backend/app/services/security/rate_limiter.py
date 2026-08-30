@@ -3,7 +3,6 @@ services/security/rate_limiter.py — Redis-backed tiered rate limiting
 """
 from __future__ import annotations
 
-import time
 import asyncio
 import inspect
 from functools import wraps
@@ -11,21 +10,30 @@ from typing import Callable
 
 from fastapi import HTTPException, Request
 
-from app.core.config import REDIS_RATE_LIMIT_PREFIX, REDIS_URL
 from app.core.contracts import ACTOR_TIERS, normalize_actor_tier
+from app.platform import rate_limit_store as _rate_limit_store
 
-try:
-    from redis import Redis
-except Exception:
-    Redis = None
 
-_stats = {
-    "checks": 0,
-    "blocks": 0,
-    "backend": "memory",
-}
-_redis_client = None
-_memory_windows: dict[str, tuple[int, float]] = {}
+# Compatibility injection point retained for tests and legacy callers that
+# replace the Redis resolver on this facade.
+_get_redis = _rate_limit_store._get_redis
+cleanup_old_buckets = _rate_limit_store.cleanup_old_buckets
+get_rate_limit_stats = _rate_limit_store.get_rate_limit_stats
+
+
+def check_rate_limit(
+    bucket: str,
+    client_id: str,
+    max_requests: int,
+    window_sec: int,
+) -> tuple[bool, int]:
+    return _rate_limit_store.check_rate_limit(
+        bucket,
+        client_id,
+        max_requests,
+        window_sec,
+        redis_getter=_get_redis,
+    )
 
 TIER_LIMITS = {
     "login_register": {
@@ -83,17 +91,6 @@ TIER_LIMITS = {
 }
 
 
-def _get_redis():
-    global _redis_client
-    if _redis_client is not None:
-        return _redis_client
-    if not REDIS_URL or Redis is None:
-        return None
-    _redis_client = Redis.from_url(REDIS_URL, decode_responses=True)
-    _stats["backend"] = "redis"
-    return _redis_client
-
-
 def get_client_ip(request: Request) -> str:
     headers = request.headers
     cf_ip = headers.get("cf-connecting-ip", "")
@@ -144,40 +141,6 @@ def _resolve_limits(bucket: str, tier: str, max_requests: int, window_sec: int) 
     if not table:
         return max_requests, window_sec
     return table.get(tier) or table.get("*") or (max_requests, window_sec)
-
-
-def _counter_key(bucket: str, actor_key: str) -> str:
-    return f"{REDIS_RATE_LIMIT_PREFIX}:{bucket}:{actor_key}"
-
-
-def check_rate_limit(
-    bucket: str,
-    client_id: str,
-    max_requests: int,
-    window_sec: int,
-) -> tuple[bool, int]:
-    key = _counter_key(bucket, client_id)
-    _stats["checks"] += 1
-    client = _get_redis()
-    if client is not None:
-        current = int(client.incr(key))
-        if current == 1:
-            client.expire(key, window_sec)
-        if current > max_requests:
-            _stats["blocks"] += 1
-            return False, 0
-        return True, max_requests - current
-
-    now = time.time()
-    current, expires_at = _memory_windows.get(key, (0, now + window_sec))
-    if expires_at < now:
-        current, expires_at = 0, now + window_sec
-    current += 1
-    _memory_windows[key] = (current, expires_at)
-    if current > max_requests:
-        _stats["blocks"] += 1
-        return False, 0
-    return True, max_requests - current
 
 
 def rate_limit(bucket: str, max_requests: int = 60, window_sec: int = 60):
@@ -240,35 +203,3 @@ def rate_limit(bucket: str, max_requests: int = 60, window_sec: int = 60):
         return sync_wrapper
 
     return decorator
-
-
-def get_rate_limit_stats() -> dict:
-    client = _get_redis()
-    total = _stats["checks"]
-    block_rate = _stats["blocks"] / total if total else 0
-    data = {
-        **_stats,
-        "block_rate": round(block_rate, 3),
-        "prefix": REDIS_RATE_LIMIT_PREFIX,
-    }
-    if client is not None:
-        try:
-            data["redis_keys"] = sum(1 for _ in client.scan_iter(match=f"{REDIS_RATE_LIMIT_PREFIX}:*"))
-        except Exception:
-            data["redis_keys"] = None
-    else:
-        data["active_windows"] = len(_memory_windows)
-    return data
-
-
-def cleanup_old_buckets(max_age_sec: int = 3600) -> int:
-    client = _get_redis()
-    if client is not None:
-        return 0
-    cutoff = time.time() - max_age_sec
-    deleted = 0
-    for key, (_, expires_at) in list(_memory_windows.items()):
-        if expires_at < cutoff:
-            _memory_windows.pop(key, None)
-            deleted += 1
-    return deleted

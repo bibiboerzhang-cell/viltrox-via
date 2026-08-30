@@ -9,6 +9,11 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol import search_sessions, url_deep_crawl
 from app.domains.kol.discovery_filters import _int, _text
+from app.domains.kol.profile_discovery_session_advance import (
+    AdvanceDependencies,
+    advance_session_items,
+    build_advance_options,
+)
 from app.domains.kol.search_progress_contract import completion_contract
 
 
@@ -423,268 +428,31 @@ def advance_search_session_items(
     writes V6 Fit fields directly.
     """
 
-    body = body or {}
-    execute = bool(body.get("execute"))
-    pipeline_running = bool(body.get("_pipeline_running"))
-    limit_cap = 30 if smart_local_contract else 15
-    limit = max(1, min(_int(body.get("limit"), 5), limit_cap))
-    max_posts = max(1, min(_int(body.get("max_posts"), 12), 12))
-    mode = _text(body.get("mode") or "profile_only")
-    if mode not in {"profile_only", "auto", "profile_with_video", "account_deep"}:
-        mode = "profile_only"
-    include_completed = bool(body.get("include_completed"))
-    item_ids_raw = body.get("item_ids")
-    item_ids = {
-        _int(value)
-        for value in (item_ids_raw if isinstance(item_ids_raw, list) else [])
-        if _int(value) > 0
-    }
-    allowed_types_raw = body.get("item_types")
-    allowed_types = {
-        _text(value)
-        for value in (allowed_types_raw if isinstance(allowed_types_raw, list) else [])
-        if _text(value)
-    } or {"new_creator", "existing_kol", "recall_candidate", "online_qualified_candidate"}
-
-    session = search_sessions.get_session(int(session_id))
-    approved_pool_ids = {
-        _int(value)
-        for value in (session.get("approved_kol_ids") or [])
-        if _int(value) > 0
-    }
-    candidates: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    terminal_statuses = {"ready", "queued", "running", "already_queued", "already_analyzed"}
-    for item in session.get("items") or []:
-        item_id = _int(item.get("id"))
-        item_type = _text(item.get("item_type"))
-        item_status = _text(item.get("status"))
-        if item_ids and item_id not in item_ids:
-            continue
-        if item_type not in allowed_types:
-            continue
-        if item_type not in {"new_creator", "existing_kol", "recall_candidate", "online_qualified_candidate"}:
-            skipped.append({"item_id": item_id, "status": "skipped", "reason": "unsupported_item_type", "item_type": item_type})
-            continue
-        if item_type == "online_qualified_candidate" and _int(item.get("kol_pool_id")) not in approved_pool_ids:
-            skipped.append({
-                "item_id": item_id,
-                "status": "skipped",
-                "reason": "approval_required",
-                "item_type": item_type,
-            })
-            continue
-        if smart_local_contract and item_type != "recall_candidate":
-            skipped.append({
-                "item_id": item_id,
-                "status": "skipped",
-                "reason": "reserved_for_online_lane",
-                "item_type": item_type,
-            })
-            continue
-        if not include_completed and item_status in terminal_statuses:
-            skipped.append({"item_id": item_id, "status": "skipped", "reason": "already_terminal", "item_status": item_status})
-            continue
-        profile_url = _profile_url_from_item(item)
-        if not profile_url:
-            skipped.append({"item_id": item_id, "status": "skipped", "reason": "missing_profile_url", "item_status": item_status})
-            continue
-        candidates.append(item)
-
-    selected = candidates[:limit]
-    overflow = max(0, len(candidates) - len(selected))
-    items: list[dict[str, Any]] = []
-    counts: dict[str, int] = {"planned": 0, "executed": 0, "ready": 0, "partial": 0, "failed": 0, "skipped": len(skipped), "errors": 0}
-    profile_ready = 0
-    profile_failed = 0
-    changed_ids: list[int] = []
-    stage_started_at = _utc_progress_time()
-    stage_started_monotonic = time.monotonic()
-    last_current_item: dict[str, Any] = {}
-    last_timing: dict[str, Any] = {
-        "stage_started_at": stage_started_at,
-        "stage_updated_at": stage_started_at,
-        "stage_finished_at": None,
-        "stage_elapsed_ms": 0,
-        "current_item_started_at": None,
-        "current_item_finished_at": None,
-        "current_item_elapsed_ms": 0,
-    }
-
-    for item in selected:
-        item_id = _int(item.get("id"))
-        item_started_at = _utc_progress_time()
-        item_started_monotonic = time.monotonic()
-        status = "unknown"
-        profile_status = "unknown"
-        try:
-            if not execute:
-                plan = profile_crawl_plan_for_session_item(
-                    session_id=int(session_id),
-                    item_id=item_id,
-                    max_posts=max_posts,
-                    mode=mode,
-                )
-                counts["planned"] += 1
-                items.append({"item_id": item_id, "status": "planned", "plan": plan})
-                continue
-
-            result = execute_profile_crawl_for_session_item(
-                session_id=int(session_id),
-                item_id=item_id,
-                body={**body, "execute": True, "max_posts": max_posts, "mode": mode},
-            )
-            counts["executed"] += 1
-            status = _text(result.get("status")).lower() or "unknown"
-            profile_status = _text(result.get("profile_status") or status).lower()
-            if profile_status in {"ready", "already_analyzed"}:
-                profile_ready += 1
-            elif "failed" in profile_status or profile_status == "error":
-                profile_failed += 1
-            if status == "ready":
-                counts["ready"] += 1
-            elif status in {"failed", "crawl_failed", "profile_crawl_failed"} or "failed" in status:
-                counts["failed"] += 1
-            else:
-                counts["partial"] += 1
-            for changed_id in result.get("viltrox_fit_score_changed_ids") or []:
-                parsed = _int(changed_id)
-                if parsed > 0 and parsed not in changed_ids:
-                    changed_ids.append(parsed)
-            items.append({"item_id": item_id, "status": status, "result": result})
-        except Exception:
-            counts["errors"] += 1
-            profile_failed += 1
-            status = "error"
-            profile_status = "failed"
-            items.append({"item_id": item_id, "status": "error", "reason": "profile_crawl_failed"})
-        if execute:
-            item_finished_at = _utc_progress_time()
-            last_current_item = _profile_progress_item(
-                item,
-                item_id=item_id,
-                status=status,
-                profile_status=profile_status,
-            )
-            last_timing = _profile_stage_timing(
-                stage_started_at=stage_started_at,
-                stage_started_monotonic=stage_started_monotonic,
-                item_started_at=item_started_at,
-                item_started_monotonic=item_started_monotonic,
-                item_finished_at=item_finished_at,
-            )
-            _persist_incremental_profile_progress(
-                session_id=int(session_id),
-                mode=mode,
-                limit=limit,
-                base_count=len(candidates),
-                selected_count=len(selected),
-                overflow=overflow,
-                counts=counts,
-                completed_count=len(items),
-                profile_ready=profile_ready,
-                profile_failed=profile_failed,
-                current_item=last_current_item,
-                timing=last_timing,
-                pipeline_running=pipeline_running,
-            )
-
-    skipped.extend(
-        {
-            "item_id": _int(item.get("id")),
-            "status": "skipped",
-            "reason": "over_limit",
-            "item_status": _text(item.get("status")),
-        }
-        for item in candidates[limit:]
+    options = build_advance_options(
+        session_id=session_id,
+        body=body,
+        smart_local_contract=smart_local_contract,
+        int_value=_int,
+        text_value=_text,
     )
-    counts["skipped"] = len(skipped)
-
-    batch_status = "planned"
-    if execute:
-        if not selected:
-            batch_status = "partial"
-        elif counts["failed"] or counts["errors"]:
-            batch_status = "partial" if counts["ready"] or counts["partial"] else "failed"
-        elif counts["partial"]:
-            batch_status = "partial"
-        elif counts["ready"] != len(selected):
-            batch_status = "partial"
-        else:
-            batch_status = "ready"
-        finished_at = _utc_progress_time()
-        last_timing = {
-            **last_timing,
-            "stage_updated_at": finished_at,
-            "stage_finished_at": finished_at,
-            "stage_elapsed_ms": max(0, int((time.monotonic() - stage_started_monotonic) * 1000)),
-        }
-        contract = completion_contract(
-            base_count=len(candidates),
-            total=len(selected),
-            terminal_count=len(items),
-            ready_count=profile_ready,
-            profile_failed=profile_failed,
-            active_tasks=0,
-            stage_progress=None,
-            requested_tasks_terminal=False if pipeline_running else None,
-        )
-        search_sessions.update_session_result_summary(
-            int(session_id),
-            status="running" if pipeline_running else batch_status,
-            summary_patch={
-                "phase": "profile" if pipeline_running else ("complete" if batch_status == "ready" else "partial"),
-                "progress": {
-                    "base": len(candidates),
-                    "total": len(selected),
-                    "profile_ready": profile_ready,
-                    "profile_failed": profile_failed,
-                    "profile_completed": len(items),
-                    "profile_succeeded": max(0, len(items) - profile_failed),
-                    "profile_remaining": max(0, len(selected) - len(items)),
-                    "complete_ready": int(counts.get("ready") or 0),
-                    "complete_partial": int(counts.get("partial") or 0),
-                    "current_item": dict(last_current_item),
-                    "stage_timing": dict(last_timing),
-                    **contract,
-                },
-                **contract,
-                "profile_batch_advance": {
-                    "status": batch_status,
-                    "mode": mode,
-                    "limit": limit,
-                    "selected": len(selected),
-                    "overflow": overflow,
-                    "completed": len(items),
-                    "succeeded": max(0, len(items) - profile_failed),
-                    "failed": profile_failed,
-                    "counts": dict(counts),
-                    "current_item": dict(last_current_item),
-                    "timing": dict(last_timing),
-                    "viltrox_fit_score_changed_ids": changed_ids,
-                    "viltrox_fit_score_untouched": not changed_ids,
-                }
-            },
-        )
-
-    return {
-        "status": batch_status,
-        "execute": execute,
-        "session_id": int(session_id),
-        "mode": mode,
-        "limit": limit,
-        "selected": len(selected),
-        "eligible": len(candidates),
-        "overflow": overflow,
-        "counts": counts,
-        "items": items,
-        "skipped": skipped[: max(0, 50 - len(items))],
-        "viltrox_fit_score_changed_ids": changed_ids,
-        "viltrox_fit_score_untouched": not changed_ids,
-        "provider_calls_performed": execute and bool(selected),
-        "write_db": execute and bool(selected),
-        "writes": ["vkpi_kol_pool", "vkpi_kol_url_deep_crawl_runs", "vkpi_kol_search_sessions", "vkpi_kol_search_session_items"] if execute and selected else [],
-    }
+    dependencies = AdvanceDependencies(
+        session_store=search_sessions,
+        profile_url_from_item=_profile_url_from_item,
+        plan_profile=profile_crawl_plan_for_session_item,
+        execute_profile=execute_profile_crawl_for_session_item,
+        utc_progress_time=_utc_progress_time,
+        profile_progress_item=_profile_progress_item,
+        profile_stage_timing=_profile_stage_timing,
+        persist_progress=_persist_incremental_profile_progress,
+        completion_contract=completion_contract,
+        monotonic=time.monotonic,
+    )
+    return advance_session_items(
+        options=options,
+        dependencies=dependencies,
+        int_value=_int,
+        text_value=_text,
+    )
 
 
 def _profile_advance_pipeline_status(

@@ -11,12 +11,17 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from typing import Any
 
 import pytest
 
 from app.services.intelligence import account_search_discovery as discovery
 from app.services.intelligence import account_search_terms as terms
+from app.services.intelligence.account_search_youtube_metrics import (
+    youtube_sample_video_ids,
+    youtube_video_statistics,
+)
 
 PERSONA = "young content creators Sony E-mount 135mm portrait prime lens review photography video"
 MODEL_QUERY = "Viltrox AF 135mm f1.8 LAB Sony E mount portrait creators"
@@ -110,6 +115,15 @@ class _FakeCrawler:
 
     def _request(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((endpoint, dict(params)))
+        if endpoint == "videos":
+            return {"provider_status": "ok", "items": [
+                {
+                    "id": video_id,
+                    "statistics": {"viewCount": "1200", "likeCount": "40"},
+                    "contentDetails": {"duration": "PT1M30S"},
+                }
+                for video_id in str(params.get("id") or "").split(",") if video_id
+            ]}
         if endpoint == "channels":
             return {"provider_status": "ok", "items": [
                 {"id": cid, "snippet": {"title": "creator", "customUrl": f"@{cid[-4:]}"},
@@ -122,7 +136,11 @@ class _FakeCrawler:
             "nextPageToken": self.pages.get(query) or "",
             "items": [{
                 "id": {"videoId": f"vid-{query[:6]}-{len(self.calls)}"},
-                "snippet": {"channelId": f"UC-{query[:8]}-{len(self.calls)}", "channelTitle": "creator"},
+                "snippet": {
+                    "channelId": f"UC-{query[:8]}-{len(self.calls)}",
+                    "channelTitle": "creator",
+                    "description": "on-camera flash setup for motorsport photography",
+                },
             }],
         }
 
@@ -159,10 +177,14 @@ def test_term_ledger_records_anchor_quota_and_exhaustion(fake_crawler) -> None:
     assert ledger[0]["anchor_source"] == "peer_brand_category"
     assert ledger[0]["exhausted"] is False
     assert ledger[1]["exhausted"] is True  # 假 crawler 只给第一条词发了 nextPageToken
-    # 实发几次 search.list 就记几个 100(旧式 max(1, ...) 会给零调用的轮次凭空记 100)。
+    # v2 keeps Search Queries and combined quota in separate buckets.
     searches = sum(1 for endpoint, _ in crawler.calls if endpoint == "search")
-    assert meta["quota_units"] == 100 * searches + 1
-    assert sum(row["quota_units"] for row in ledger) == 100 * searches
+    assert meta["youtube_search_calls"] == searches
+    assert meta["youtube_combined_quota_units"] == 2
+    assert meta["youtube_api_calls"] == searches + 2
+    assert meta["quota_units"] == 2
+    assert meta["quota_units_deprecated"] is True
+    assert sum(row["youtube_search_calls"] for row in ledger) == searches
     assert meta["query_anchor_signals"]["category"] == "lens"
 
 
@@ -196,3 +218,438 @@ def test_has_more_is_false_once_every_term_is_exhausted(fake_crawler) -> None:
     meta = _run(safe_limit=50)["metadata"]
     assert meta["has_more"] is False
     assert set(meta["next_page_cursor"].values()) == {terms.TERM_EXHAUSTED_TOKEN}
+
+
+def test_targeted_query_cell_is_sent_exactly_once_without_brand_ladder(fake_crawler) -> None:
+    """Prospective-growth cells belong to the planner, not the legacy term expander."""
+
+    exact = "motorsport photographer on-camera flash tutorial"
+    crawler = fake_crawler({exact: "NEXT"})
+    result = asyncio.run(
+        discovery._youtube_data_api_strict_video_search(
+            exact,
+            safe_limit=12,
+            exact_query=True,
+        )
+    )
+
+    issued = [params.get("q") for endpoint, params in crawler.calls if endpoint == "search"]
+    assert issued == [exact]
+    assert all("viltrox" not in str(query).lower() for query in issued)
+    assert result["metadata"]["query_mode"] == "exact_query_cell"
+    assert result["metadata"]["term_ledger"][0]["anchor_source"] == "query_cell_exact"
+    assert result["items"][0]["sample_description"] == "on-camera flash setup for motorsport photography"
+
+
+def test_strict_youtube_keeps_lifetime_scale_display_only_and_enriches_exact_video(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    class MetricsCrawler:
+        api_key = "test-key"
+
+        def _request(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
+            calls.append((endpoint, dict(params)))
+            if endpoint == "search":
+                return {
+                    "provider_status": "ok",
+                    "items": [{
+                        "id": {"videoId": "video-1"},
+                        "snippet": {
+                            "channelId": "UC-metrics",
+                            "channelTitle": "Race Photographer",
+                            "title": "Race-day speedlight workflow",
+                            "description": "motorsport photography with an on-camera flash",
+                            "publishedAt": "2026-08-20T12:00:00Z",
+                        },
+                    }],
+                }
+            if endpoint == "videos":
+                assert params["part"] == "statistics,contentDetails"
+                assert params["id"] == "video-1"
+                return {
+                    "provider_status": "ok",
+                    "items": [{
+                        "id": "video-1",
+                        "statistics": {"viewCount": "42000", "likeCount": "2100"},
+                        "contentDetails": {"duration": "PT2M5S"},
+                    }],
+                }
+            assert endpoint == "channels"
+            return {
+                "provider_status": "ok",
+                "items": [{
+                    "id": "UC-metrics",
+                    "snippet": {"customUrl": "@racephotographer"},
+                    "statistics": {
+                        "subscriberCount": "50000",
+                        "videoCount": "200",
+                        "viewCount": "5000000",
+                    },
+                }],
+            }
+
+        @staticmethod
+        def _should_use_apify_fallback(_payload: dict[str, Any]) -> bool:
+            return False
+
+    import app.platform.industry_crawlers.youtube_crawler as yt
+
+    monkeypatch.setattr(yt, "YouTubeCrawler", MetricsCrawler)
+    result = asyncio.run(discovery._youtube_data_api_strict_video_search(
+        "motorsport photographer on-camera flash",
+        safe_limit=10,
+        exact_query=True,
+    ))
+
+    assert calls[0][0] == "search"
+    assert {endpoint for endpoint, _params in calls[1:]} == {"channels", "videos"}
+    item = result["items"][0]
+    assert "avg_views" not in item
+    assert item["channel_lifetime_views"] == 5_000_000
+    assert item["channel_public_video_count"] == 200
+    assert item["channel_lifetime_views_per_public_video"] == 25_000
+    assert item["representative_video_views"] == 42_000
+    assert item["representative_video_likes"] == 2_100
+    assert "representative_video_comments" not in item
+    assert item["representative_video_published_at"] == "2026-08-20T12:00:00Z"
+    assert item["representative_video_duration"] == "PT2M5S"
+    assert item["representative_video_duration_seconds"] == 125
+    assert item["activation_sample_count"] == 1
+    assert item["activation_metrics_source"] == "youtube_data_api.videos.list"
+    assert item["activation_metrics_scope"] == "exact_query_hit_45d"
+    assert item["claim_status"] == "descriptive_only"
+    assert result["metadata"]["youtube_search_calls"] == 1
+    assert result["metadata"]["youtube_combined_quota_units"] == 2
+    assert result["metadata"]["youtube_api_calls"] == 3
+
+
+def test_repeated_channel_hits_become_three_sample_activation_without_extra_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class MultiVideoCrawler:
+        api_key = "test-key"
+
+        def _request(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
+            calls.append(endpoint)
+            if endpoint == "search":
+                return {
+                    "provider_status": "ok",
+                    "items": [
+                        {
+                            "id": {"videoId": f"v{index}"},
+                            "snippet": {
+                                "channelId": "UC-same",
+                                "channelTitle": "Working Creator",
+                                "title": f"Flash workflow {index}",
+                                "description": "motorsport photographer speedlight tutorial",
+                                "publishedAt": f"2026-08-2{index}T12:00:00Z",
+                            },
+                        }
+                        for index in range(1, 4)
+                    ],
+                }
+            if endpoint == "channels":
+                return {
+                    "provider_status": "ok",
+                    "items": [{
+                        "id": "UC-same",
+                        "snippet": {"customUrl": "@workingcreator"},
+                        "statistics": {"subscriberCount": "100000"},
+                    }],
+                }
+            ids = str(params["id"]).split(",")
+            return {
+                "provider_status": "ok",
+                "items": [
+                    {
+                        "id": video_id,
+                        "statistics": {
+                            "viewCount": str(10_000 * index),
+                            "likeCount": str(500 * index),
+                            "commentCount": str(50 * index),
+                        },
+                        "contentDetails": {"duration": "PT2M"},
+                    }
+                    for index, video_id in enumerate(ids, start=1)
+                ],
+            }
+
+        @staticmethod
+        def _should_use_apify_fallback(_payload: dict[str, Any]) -> bool:
+            return False
+
+    import app.platform.industry_crawlers.youtube_crawler as yt
+
+    monkeypatch.setattr(yt, "YouTubeCrawler", MultiVideoCrawler)
+    result = asyncio.run(discovery._youtube_data_api_strict_video_search(
+        "motorsport photographer speedlight tutorial", exact_query=True,
+    ))
+
+    assert len(result["items"]) == 1
+    item = result["items"][0]
+    assert item["activation_sample_count"] == 3
+    assert item["activation_metrics_scope"] == "exact_query_hits_45d_aggregate"
+    assert item["activation_evidence_status"] == "observed_multi_sample"
+    assert item["avg_views"] == 20_000
+    assert item["avg_likes"] == 1_000
+    assert item["avg_comments"] == 100
+    assert item["views_per_follower"] == pytest.approx(0.2)
+    assert item["activation_metric_sample_counts"] == {
+        "avg_views": 3,
+        "engagement": 3,
+        "views_per_follower": 3,
+        "comments_per_follower": 3,
+    }
+    assert len(item["recent_videos"]) == 3
+    assert calls.count("search") == calls.count("channels") == calls.count("videos") == 1
+    assert result["metadata"]["youtube_api_calls"] == 3
+    assert result["metadata"]["activation_multi_sample_candidates"] == 1
+    assert result["metadata"]["activation_pending_candidates"] == 0
+
+
+def test_expanded_variants_cannot_count_the_same_video_three_times(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class DuplicateVideoCrawler:
+        api_key = "test-key"
+
+        def _request(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
+            calls.append(endpoint)
+            if endpoint == "search":
+                return {"provider_status": "ok", "items": [{
+                    "id": {"videoId": "v-same"},
+                    "snippet": {
+                        "channelId": "UC-same",
+                        "channelTitle": "Creator",
+                        "title": f"Result for {params['q']}",
+                        "publishedAt": "2026-08-20T00:00:00Z",
+                    },
+                }]}
+            if endpoint == "channels":
+                return {"provider_status": "ok", "items": [{
+                    "id": "UC-same", "snippet": {},
+                    "statistics": {"subscriberCount": "100000"},
+                }]}
+            return {"provider_status": "ok", "items": [{
+                "id": "v-same",
+                "statistics": {"viewCount": "50000", "likeCount": "1000", "commentCount": "50"},
+                "contentDetails": {},
+            }]}
+
+        @staticmethod
+        def _should_use_apify_fallback(_payload: dict[str, Any]) -> bool:
+            return False
+
+    import app.platform.industry_crawlers.youtube_crawler as yt
+
+    monkeypatch.setattr(yt, "YouTubeCrawler", DuplicateVideoCrawler)
+    monkeypatch.setattr(discovery, "_youtube_search_query_variants", lambda *_args, **_kwargs: ["q1", "q2", "q3"])
+    result = asyncio.run(discovery._youtube_data_api_strict_video_search(
+        "motorsport flash", exact_query=False,
+    ))
+
+    item = result["items"][0]
+    assert calls.count("search") == 3
+    assert item["activation_sample_count"] == 1
+    assert item["activation_metrics_scope"] == "expanded_query_hit_45d"
+    assert item["activation_query_mode"] == "expanded_ladder"
+    assert item["recent_videos"][0]["video_id"] == "v-same"
+
+
+def test_representative_identity_follows_the_first_video_with_observed_stats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class PartialStatsCrawler:
+        api_key = "test-key"
+
+        def _request(self, endpoint: str, _params: dict[str, Any]) -> dict[str, Any]:
+            if endpoint == "search":
+                return {"provider_status": "ok", "items": [
+                    {"id": {"videoId": "v-missing"}, "snippet": {
+                        "channelId": "UC1", "channelTitle": "Creator", "title": "Missing stats",
+                    }},
+                    {"id": {"videoId": "v-observed"}, "snippet": {
+                        "channelId": "UC1", "channelTitle": "Creator", "title": "Observed stats",
+                        "description": "real workflow", "publishedAt": "2026-08-22T00:00:00Z",
+                    }},
+                ]}
+            if endpoint == "channels":
+                return {"provider_status": "ok", "items": [{
+                    "id": "UC1", "snippet": {}, "statistics": {"subscriberCount": "90000"},
+                }]}
+            return {"provider_status": "ok", "items": [{
+                "id": "v-observed", "statistics": {"viewCount": "8000"}, "contentDetails": {},
+            }]}
+
+        @staticmethod
+        def _should_use_apify_fallback(_payload: dict[str, Any]) -> bool:
+            return False
+
+    import app.platform.industry_crawlers.youtube_crawler as yt
+
+    monkeypatch.setattr(yt, "YouTubeCrawler", PartialStatsCrawler)
+    result = asyncio.run(discovery._youtube_data_api_strict_video_search("camera workflow", exact_query=True))
+    item = result["items"][0]
+    assert item["video_id"] == "v-observed"
+    assert item["source_url"].endswith("v-observed")
+    assert item["sample_title"] == "Observed stats"
+    assert item["representative_video_views"] == 8000
+
+
+def test_channel_and_video_enrichment_start_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    barrier = threading.Barrier(2)
+
+    class SearchCrawler:
+        api_key = "test-key"
+
+        def _request(self, endpoint: str, _params: dict[str, Any]) -> dict[str, Any]:
+            assert endpoint == "search"
+            return {
+                "provider_status": "ok",
+                "items": [{
+                    "id": {"videoId": "v1"},
+                    "snippet": {"channelId": "UC1", "channelTitle": "Creator"},
+                }],
+            }
+
+        @staticmethod
+        def _should_use_apify_fallback(_payload: dict[str, Any]) -> bool:
+            return False
+
+    def channel_enrich(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        barrier.wait(timeout=1)
+        return {"UC1": {"subscribers": 50_000}}
+
+    def video_enrich(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        barrier.wait(timeout=1)
+        return {"v1": {"representative_video_views": 5_000}}
+
+    import app.platform.industry_crawlers.youtube_crawler as yt
+
+    monkeypatch.setattr(yt, "YouTubeCrawler", SearchCrawler)
+    monkeypatch.setattr(discovery, "_youtube_channel_statistics", channel_enrich)
+    monkeypatch.setattr(discovery, "youtube_video_statistics", video_enrich)
+
+    result = asyncio.run(discovery._youtube_data_api_strict_video_search(
+        "food photographer camera gear", exact_query=True,
+    ))
+    assert result["items"][0]["followers"] == 50_000
+    assert result["items"][0]["representative_video_views"] == 5_000
+
+
+def test_videos_list_failure_keeps_candidate_pending_without_query_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FailingVideoCrawler:
+        api_key = "test-key"
+
+        def _request(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
+            calls.append(endpoint)
+            if endpoint == "search":
+                return {"provider_status": "ok", "items": [{
+                    "id": {"videoId": "v1"},
+                    "snippet": {"channelId": "UC1", "channelTitle": "Creator"},
+                }]}
+            if endpoint == "channels":
+                return {"provider_status": "ok", "items": [{
+                    "id": "UC1", "snippet": {}, "statistics": {"subscriberCount": "70000"},
+                }]}
+            return {"provider_status": "error", "items": []}
+
+        @staticmethod
+        def _should_use_apify_fallback(_payload: dict[str, Any]) -> bool:
+            return False
+
+    import app.platform.industry_crawlers.youtube_crawler as yt
+
+    monkeypatch.setattr(yt, "YouTubeCrawler", FailingVideoCrawler)
+    result = asyncio.run(discovery._youtube_data_api_strict_video_search(
+        "motorsport photographer on-camera flash", exact_query=True,
+    ))
+    assert calls[0] == "search"
+    assert set(calls[1:]) == {"channels", "videos"}
+    assert len(result["items"]) == 1
+    assert result["items"][0]["activation_evidence_status"] == "provider_error"
+    assert "representative_video_views" not in result["items"][0]
+    assert result["metadata"]["video_enrichment_status"] == "provider_error"
+
+
+def test_video_statistics_caps_fifty_ids_in_one_batch_and_keeps_missing_null() -> None:
+    calls: list[dict[str, Any]] = []
+
+    class BatchCrawler:
+        api_key = "test-key"
+
+        def _request(self, endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
+            assert endpoint == "videos"
+            calls.append(dict(params))
+            ids = str(params["id"]).split(",")
+            return {"provider_status": "ok", "items": [{
+                "id": video_id,
+                "statistics": {"viewCount": "0"},
+                "contentDetails": {},
+            } for video_id in ids]}
+
+    result = youtube_video_statistics(BatchCrawler(), [f"v{i}" for i in range(70)])
+    assert len(calls) == 1
+    assert len(calls[0]["id"].split(",")) == 50
+    assert len(result) == 50
+    assert result["v0"]["representative_video_views"] == 0
+    assert "representative_video_likes" not in result["v0"]
+    assert "representative_video_comments" not in result["v0"]
+
+
+def test_fifty_id_budget_gives_every_channel_one_then_completes_top_ranked() -> None:
+    rows = [
+        {
+            "_channel_video_samples": [
+                {"id": {"videoId": f"c{channel}-v{video}"}}
+                for video in range(1, 4)
+            ]
+        }
+        for channel in range(1, 26)
+    ]
+
+    ids = youtube_sample_video_ids(rows, limit=50)
+
+    assert len(ids) == 50
+    assert all(f"c{channel}-v1" in ids for channel in range(1, 26))
+    assert all(f"c{channel}-v3" in ids for channel in range(1, 13))
+    assert "c13-v3" not in ids
+
+
+def test_exact_query_never_silently_falls_back_to_paid_apify(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class NoKeyCrawler:
+        api_key = ""
+
+    class ScanService:
+        @staticmethod
+        def provider_ready() -> bool:
+            return True
+
+        @staticmethod
+        async def _run_actor(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            raise AssertionError("exact QueryCell must not reach Apify")
+
+    import app.platform.industry_crawlers.youtube_crawler as yt
+
+    monkeypatch.setattr(yt, "YouTubeCrawler", NoKeyCrawler)
+    monkeypatch.setattr(discovery, "_scan_service", lambda: ScanService)
+    result = asyncio.run(discovery.search_platform_content(
+        "youtube", "food photographer on-camera flash",
+        strict_evidence=True, exact_query=True,
+    ))
+    assert result["status"] == "provider_unavailable"
+    assert result["metadata"]["fallback_policy"] == "disabled_unforecast_provider_switch"

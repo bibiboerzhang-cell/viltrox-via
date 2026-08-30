@@ -18,24 +18,20 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "backend" / "app"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-LAYER_RULES: dict[str, tuple[str, ...]] = {
-    "domains": ("app.workers", "app.api"),
-    "services": ("app.api",),
-}
+from scripts.vkpi_engineering_health_architecture import (  # noqa: E402
+    LAYER_RULES,
+    banned_import,
+)
 
 # path(相对 backend/app) -> 被禁 import 的模块名(排序)。只许减少。
-LAYERING_WHITELIST: dict[str, tuple[str, ...]] = {
-    "domains/kol/failed_pool_triage.py": ("app.workers.apify_jobs_worker_helpers",),
-    "domains/kol/pool_common.py": ("app.api.routers.kol_ops_schema",),
-    "domains/kol/search_sessions_attach_jobs.py": ("app.workers.apify_jobs_worker_session",),
-    "domains/tasks/queue_view.py": ("app.workers.apify_job_lane",),
-    "services/deepsight/parallel_scan.py": ("app.api.routers.account_scanner",),
-}
+LAYERING_WHITELIST: dict[str, tuple[str, ...]] = {}
 
 
 def _banned(module: str, banned_prefixes: tuple[str, ...]) -> bool:
-    return any(module == prefix or module.startswith(prefix + ".") for prefix in banned_prefixes)
+    return banned_import(module, banned_prefixes)
 
 
 def _scan() -> dict[str, tuple[str, ...]]:

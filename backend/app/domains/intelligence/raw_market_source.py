@@ -131,19 +131,11 @@ def _is_demo_artifact(payload: dict[str, Any], path: Path | None) -> bool:
     return False
 
 
-def validate_raw_market_source_artifact(
-    payload: Any,
-    *,
-    artifact_path: str | Path | None = None,
-    now: datetime | None = None,
-    max_age_days: int = MAX_AGE_DAYS,
-) -> dict[str, Any]:
-    """Validate one artifact without mutating the artifact or any database."""
-    path = Path(artifact_path) if artifact_path else None
-    if not isinstance(payload, dict):
-        return _empty_observation("rejected", ["payload_not_object"], artifact_path=path)
-
-    blockers: list[str] = []
+def _append_contract_blockers(
+    payload: dict[str, Any],
+    path: Path | None,
+    blockers: list[str],
+) -> None:
     if payload.get("mode") != ARTIFACT_MODE:
         blockers.append("contract:mode")
     if payload.get("passed") is not True:
@@ -164,7 +156,13 @@ def validate_raw_market_source_artifact(
     if payload.get("errors") not in (None, []):
         blockers.append("contract:errors_present")
 
-    current = _now(now)
+
+def _timestamp_observation(
+    payload: dict[str, Any],
+    current: datetime,
+    max_age_days: int,
+    blockers: list[str],
+) -> tuple[datetime | None, float | None]:
     generated_at = _parse_timestamp(payload.get("generated_at"))
     age_days: float | None = None
     if generated_at is None:
@@ -176,7 +174,13 @@ def validate_raw_market_source_artifact(
             blockers.append("generated_at:future")
         elif age_seconds > max(0, int(max_age_days)) * 86400:
             blockers.append(f"generated_at:stale>{max(0, int(max_age_days))}d")
+    return generated_at, age_days
 
+
+def _summary_counts(
+    payload: dict[str, Any],
+    blockers: list[str],
+) -> tuple[int, int, int]:
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
     sources_requested = _integer(summary.get("sources_requested"))
     sources_fetched = _integer(summary.get("sources_fetched"))
@@ -192,19 +196,36 @@ def validate_raw_market_source_artifact(
     items_loaded = max(0, int(items_loaded or 0))
     if sources_fetched > sources_requested:
         blockers.append("sources_fetched:exceeds_requested")
+    return sources_requested, sources_fetched, items_loaded
 
-    source_statuses = payload.get("source_statuses")
-    source_rows = source_statuses if isinstance(source_statuses, list) else []
-    if not isinstance(source_statuses, list) or any(not isinstance(row, dict) for row in source_rows):
-        blockers.append("source_statuses:malformed")
-        source_rows = [row for row in source_rows if isinstance(row, dict)]
-    items = payload.get("items")
-    item_rows = items if isinstance(items, list) else []
-    if not isinstance(items, list) or any(not isinstance(row, dict) for row in item_rows):
-        blockers.append("items:malformed")
-        item_rows = [row for row in item_rows if isinstance(row, dict)]
 
-    fetched_rows = [row for row in source_rows if str(row.get("status") or "").lower() == "fetched"]
+def _dict_rows(
+    payload: dict[str, Any],
+    field: str,
+    malformed_blocker: str,
+    blockers: list[str],
+) -> list[dict[str, Any]]:
+    value = payload.get(field)
+    rows = value if isinstance(value, list) else []
+    if not isinstance(value, list) or any(not isinstance(row, dict) for row in rows):
+        blockers.append(malformed_blocker)
+        rows = [row for row in rows if isinstance(row, dict)]
+    return rows
+
+
+def _fetched_source_rows(source_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [row for row in source_rows if str(row.get("status") or "").lower() == "fetched"]
+
+
+def _append_row_count_blockers(
+    source_rows: list[dict[str, Any]],
+    fetched_rows: list[dict[str, Any]],
+    item_rows: list[dict[str, Any]],
+    sources_requested: int,
+    sources_fetched: int,
+    items_loaded: int,
+    blockers: list[str],
+) -> None:
     if len(source_rows) != sources_requested:
         blockers.append("source_statuses:count_mismatch")
     if len(fetched_rows) != sources_fetched:
@@ -212,6 +233,11 @@ def validate_raw_market_source_artifact(
     if len(item_rows) != items_loaded:
         blockers.append("items:count_mismatch")
 
+
+def _source_evidence(
+    fetched_rows: list[dict[str, Any]],
+    blockers: list[str],
+) -> tuple[set[str], int, int]:
     source_keys = [str(row.get("source_key") or "").strip() for row in fetched_rows]
     known_source_keys = {key for key in source_keys if key}
     if len(known_source_keys) != len(fetched_rows):
@@ -225,6 +251,14 @@ def validate_raw_market_source_artifact(
         and _has_text(row.get("source_type"))
         and row.get("allowlisted") is True
     )
+    return known_source_keys, source_url_count, source_provenance_count
+
+
+def _item_evidence(
+    item_rows: list[dict[str, Any]],
+    known_source_keys: set[str],
+    blockers: list[str],
+) -> tuple[int, int]:
     item_url_count = sum(1 for row in item_rows if _is_http_url(row.get("source_url")))
     item_provenance_count = sum(
         1
@@ -237,7 +271,20 @@ def validate_raw_market_source_artifact(
     item_uids = {str(row.get("source_uid") or "").strip() for row in item_rows if _has_text(row.get("source_uid"))}
     if len(item_uids) != len(item_rows):
         blockers.append("items:source_uid_not_unique")
+    return item_url_count, item_provenance_count
 
+
+def _coverage_observation(
+    sources_fetched: int,
+    sources_requested: int,
+    fetched_rows: list[dict[str, Any]],
+    item_rows: list[dict[str, Any]],
+    source_url_count: int,
+    source_provenance_count: int,
+    item_url_count: int,
+    item_provenance_count: int,
+    blockers: list[str],
+) -> tuple[float, float, float, float, float]:
     source_fetch_coverage = _coverage(sources_fetched, sources_requested)
     source_url_coverage = _coverage(source_url_count, len(fetched_rows))
     source_provenance_coverage = _coverage(source_provenance_count, len(fetched_rows))
@@ -251,7 +298,22 @@ def validate_raw_market_source_artifact(
     ):
         if value < 1.0:
             blockers.append(f"coverage:{field}<1")
+    return (
+        source_fetch_coverage,
+        source_url_coverage,
+        source_provenance_coverage,
+        item_url_coverage,
+        item_provenance_coverage,
+    )
 
+
+def _validation_summary(
+    blockers: list[str],
+    sources_fetched: int,
+    items_loaded: int,
+    source_fetch_coverage: float,
+    max_age_days: int,
+) -> tuple[str, bool, float]:
     validated = not blockers
     evidence_score = 0.0
     if validated:
@@ -263,7 +325,28 @@ def validate_raw_market_source_artifact(
     status = "validated" if validated else "rejected"
     if not validated and blockers == [f"generated_at:stale>{max(0, int(max_age_days))}d"]:
         status = "stale"
+    return status, validated, evidence_score
 
+
+def _artifact_observation(
+    *,
+    status: str,
+    validated: bool,
+    evidence_score: float,
+    path: Path | None,
+    generated_at: datetime | None,
+    age_days: float | None,
+    max_age_days: int,
+    sources_requested: int,
+    sources_fetched: int,
+    items_loaded: int,
+    source_fetch_coverage: float,
+    source_url_coverage: float,
+    source_provenance_coverage: float,
+    item_url_coverage: float,
+    item_provenance_coverage: float,
+    blockers: list[str],
+) -> dict[str, Any]:
     return {
         "status": status,
         "validated": validated,
@@ -284,6 +367,83 @@ def validate_raw_market_source_artifact(
         "blockers": blockers,
         "policy": dict(_POLICY),
     }
+
+
+def validate_raw_market_source_artifact(
+    payload: Any,
+    *,
+    artifact_path: str | Path | None = None,
+    now: datetime | None = None,
+    max_age_days: int = MAX_AGE_DAYS,
+) -> dict[str, Any]:
+    """Validate one artifact without mutating the artifact or any database."""
+    path = Path(artifact_path) if artifact_path else None
+    if not isinstance(payload, dict):
+        return _empty_observation("rejected", ["payload_not_object"], artifact_path=path)
+
+    blockers: list[str] = []
+    _append_contract_blockers(payload, path, blockers)
+    generated_at, age_days = _timestamp_observation(payload, _now(now), max_age_days, blockers)
+    sources_requested, sources_fetched, items_loaded = _summary_counts(payload, blockers)
+    source_rows = _dict_rows(payload, "source_statuses", "source_statuses:malformed", blockers)
+    item_rows = _dict_rows(payload, "items", "items:malformed", blockers)
+    fetched_rows = _fetched_source_rows(source_rows)
+    _append_row_count_blockers(
+        source_rows,
+        fetched_rows,
+        item_rows,
+        sources_requested,
+        sources_fetched,
+        items_loaded,
+        blockers,
+    )
+    known_source_keys, source_url_count, source_provenance_count = _source_evidence(
+        fetched_rows,
+        blockers,
+    )
+    item_url_count, item_provenance_count = _item_evidence(item_rows, known_source_keys, blockers)
+    (
+        source_fetch_coverage,
+        source_url_coverage,
+        source_provenance_coverage,
+        item_url_coverage,
+        item_provenance_coverage,
+    ) = _coverage_observation(
+        sources_fetched,
+        sources_requested,
+        fetched_rows,
+        item_rows,
+        source_url_count,
+        source_provenance_count,
+        item_url_count,
+        item_provenance_count,
+        blockers,
+    )
+    status, validated, evidence_score = _validation_summary(
+        blockers,
+        sources_fetched,
+        items_loaded,
+        source_fetch_coverage,
+        max_age_days,
+    )
+    return _artifact_observation(
+        status=status,
+        validated=validated,
+        evidence_score=evidence_score,
+        path=path,
+        generated_at=generated_at,
+        age_days=age_days,
+        max_age_days=max_age_days,
+        sources_requested=sources_requested,
+        sources_fetched=sources_fetched,
+        items_loaded=items_loaded,
+        source_fetch_coverage=source_fetch_coverage,
+        source_url_coverage=source_url_coverage,
+        source_provenance_coverage=source_provenance_coverage,
+        item_url_coverage=item_url_coverage,
+        item_provenance_coverage=item_provenance_coverage,
+        blockers=blockers,
+    )
 
 
 def latest_raw_market_source_observation(

@@ -213,44 +213,66 @@ def _candidate_platform_signals(item: dict[str, Any]) -> set[str]:
     return signals
 
 
-def filter_recall_result_platforms(result: dict[str, Any], value: Any) -> dict[str, Any]:
-    """Apply the explicit UI platform allowlist to local recall rows and buckets."""
+_PLATFORM_FILTER_LANES = ("core_vertical", "expansion", "exploration")
+
+
+def _platform_filter_requested(value: Any) -> set[str]:
     raw_values = value if isinstance(value, list) else [value]
-    requested = {
+    return {
         _normalize_discovery_platform(raw)
         for raw in raw_values
         if _text(raw) and _text(raw).lower() not in {"all", "*"}
     }
-    if not requested:
-        return result
 
-    def _keep(item: Any) -> bool:
-        if not isinstance(item, dict):
-            return False
-        payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
-        platform = _normalize_discovery_platform(item.get("platform") or payload.get("platform"))
-        return bool(platform and platform in requested)
 
+def _platform_filter_keep(item: Any, requested: set[str]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+    platform = _normalize_discovery_platform(item.get("platform") or payload.get("platform"))
+    return bool(platform and platform in requested)
+
+
+def _platform_filter_bucket_rows(
+    buckets: dict[Any, Any],
+    requested: set[str],
+) -> dict[Any, list[Any]]:
+    return {
+        key: [item for item in items if _platform_filter_keep(item, requested)]
+        for key, items in buckets.items()
+        if isinstance(items, list)
+    }
+
+
+def _platform_filter_collections(
+    result: dict[str, Any],
+    requested: set[str],
+) -> tuple[dict[str, Any], list[Any] | None, dict[Any, Any] | None]:
     filtered = dict(result)
     original_items = result.get("items") if isinstance(result.get("items"), list) else None
     if original_items is not None:
-        filtered["items"] = [item for item in original_items if _keep(item)]
+        filtered["items"] = [
+            item for item in original_items if _platform_filter_keep(item, requested)
+        ]
     original_buckets = result.get("buckets") if isinstance(result.get("buckets"), dict) else None
     if original_buckets is not None:
-        filtered["buckets"] = {
-            key: [item for item in items if _keep(item)]
-            for key, items in original_buckets.items()
-            if isinstance(items, list)
-        }
+        filtered["buckets"] = _platform_filter_bucket_rows(original_buckets, requested)
     original_business_buckets = (
         result.get("business_buckets") if isinstance(result.get("business_buckets"), dict) else None
     )
     if original_business_buckets is not None:
-        filtered["business_buckets"] = {
-            key: [item for item in items if _keep(item)]
-            for key, items in original_business_buckets.items()
-            if isinstance(items, list)
-        }
+        filtered["business_buckets"] = _platform_filter_bucket_rows(
+            original_business_buckets,
+            requested,
+        )
+    return filtered, original_items, original_buckets
+
+
+def _platform_filter_counts(
+    filtered: dict[str, Any],
+    original_items: list[Any] | None,
+    original_buckets: dict[Any, Any] | None,
+) -> tuple[int, int]:
     before_item_count = len(original_items or [])
     before_bucket_count = sum(
         len(items) for items in (original_buckets or {}).values() if isinstance(items, list)
@@ -259,30 +281,52 @@ def filter_recall_result_platforms(result: dict[str, Any], value: Any) -> dict[s
     after_bucket_count = sum(
         len(items) for items in (filtered.get("buckets") or {}).values() if isinstance(items, list)
     )
+    return before_item_count or before_bucket_count, after_item_count or after_bucket_count
+
+
+def _platform_filter_views(
+    filtered: dict[str, Any],
+) -> tuple[dict[Any, Any], dict[Any, Any]]:
     filtered_buckets = filtered.get("buckets") if isinstance(filtered.get("buckets"), dict) else {}
     filtered_business_buckets = (
         filtered.get("business_buckets")
         if isinstance(filtered.get("business_buckets"), dict)
         else {}
     )
-    before_count = before_item_count or before_bucket_count
-    after_count = after_item_count or after_bucket_count
-    diagnostics = dict(result.get("diagnostics")) if isinstance(result.get("diagnostics"), dict) else {}
+    return filtered_buckets, filtered_business_buckets
+
+
+def _platform_filter_contract(
+    diagnostics: dict[str, Any],
+    after_count: int,
+) -> tuple[int, int]:
     requested_count = int(diagnostics.get("requested_count") or after_count)
     final_count = after_count
     shortfall = max(0, requested_count - final_count)
-    filtered_items = filtered.get("items") if isinstance(filtered.get("items"), list) else []
-    lane_order = ("core_vertical", "expansion", "exploration")
+    return final_count, shortfall
+
+
+def _platform_filter_lane_data(
+    filtered_items: list[Any],
+    filtered_business_buckets: dict[Any, Any],
+    diagnostics: dict[str, Any],
+) -> tuple[
+    dict[str, int],
+    dict[str, Any],
+    dict[str, int],
+    dict[str, int],
+    dict[str, int],
+]:
     lane_selected = {
         lane: len(filtered_business_buckets.get(lane) or [])
-        for lane in lane_order
+        for lane in _PLATFORM_FILTER_LANES
     }
     # Older callers may not return business_buckets. In that case the final
     # item list remains authoritative for selected-lane counts.
     if not any(lane_selected.values()) and filtered_items:
         lane_selected = {
             lane: sum(1 for item in filtered_items if item.get("candidate_bucket") == lane)
-            for lane in lane_order
+            for lane in _PLATFORM_FILTER_LANES
         }
     original_lane_selection = (
         diagnostics.get("lane_selection")
@@ -294,15 +338,39 @@ def filter_recall_result_platforms(result: dict[str, Any], value: Any) -> dict[s
         if isinstance(original_lane_selection.get("lane_targets"), dict)
         else {}
     )
-    lane_targets = {lane: max(0, int(original_targets.get(lane) or 0)) for lane in lane_order}
+    lane_targets = {
+        lane: max(0, int(original_targets.get(lane) or 0))
+        for lane in _PLATFORM_FILTER_LANES
+    }
     lane_shortfalls = {
         lane: max(0, lane_targets[lane] - min(lane_selected[lane], lane_targets[lane]))
-        for lane in lane_order
+        for lane in _PLATFORM_FILTER_LANES
     }
     lane_refills = {
         lane: max(0, lane_selected[lane] - lane_targets[lane])
-        for lane in lane_order
+        for lane in _PLATFORM_FILTER_LANES
     }
+    return (
+        lane_selected,
+        original_lane_selection,
+        lane_targets,
+        lane_shortfalls,
+        lane_refills,
+    )
+
+
+def _platform_filter_reconciled_lanes(
+    *,
+    before_count: int,
+    after_count: int,
+    filtered_buckets: dict[Any, Any],
+    diagnostics: dict[str, Any],
+    lane_selected: dict[str, int],
+    original_lane_selection: dict[str, Any],
+    lane_targets: dict[str, int],
+    lane_shortfalls: dict[str, int],
+    lane_refills: dict[str, int],
+) -> tuple[dict[str, Any], Any]:
     profile_counts = {
         "creator": len(filtered_buckets.get("creator") or []),
         "reviewer": len(filtered_buckets.get("reviewer") or []),
@@ -334,6 +402,22 @@ def filter_recall_result_platforms(result: dict[str, Any], value: Any) -> dict[s
         if not filter_changed_result and isinstance(original_business_counts, dict)
         else lane_selected
     )
+    return reconciled_lane_selection, reconciled_business_counts
+
+
+def _platform_filter_update_diagnostics(
+    *,
+    diagnostics: dict[str, Any],
+    before_count: int,
+    after_count: int,
+    filtered_buckets: dict[Any, Any],
+    filtered_items: list[Any],
+    requested: set[str],
+    final_count: int,
+    shortfall: int,
+    reconciled_business_counts: Any,
+    reconciled_lane_selection: dict[str, Any],
+) -> None:
     diagnostics.update(
         {
             "returned_count": after_count,
@@ -353,16 +437,87 @@ def filter_recall_result_platforms(result: dict[str, Any], value: Any) -> dict[s
             "post_filter_counts_reconciled": True,
         }
     )
+
+
+def _platform_filter_reconcile_evidence(
+    filtered: dict[str, Any],
+    diagnostics: dict[str, Any],
+    *,
+    before_count: int,
+    after_count: int,
+) -> None:
+    if not diagnostics.get("evidence_gate_enabled"):
+        return
+    filtered["match_status"] = "matched" if after_count else "empty"
+    if after_count:
+        diagnostics["empty_reason"] = ""
+    elif before_count > 0:
+        diagnostics["empty_reason"] = "no_platform_evidence_match"
+    filtered["candidate_set_distribution"] = candidate_set_distribution_from_items(
+        list(filtered.get("items") or [])
+    )
+
+
+def filter_recall_result_platforms(result: dict[str, Any], value: Any) -> dict[str, Any]:
+    """Apply the explicit UI platform allowlist to local recall rows and buckets."""
+    requested = _platform_filter_requested(value)
+    if not requested:
+        return result
+
+    filtered, original_items, original_buckets = _platform_filter_collections(result, requested)
+    before_count, after_count = _platform_filter_counts(
+        filtered,
+        original_items,
+        original_buckets,
+    )
+    filtered_buckets, filtered_business_buckets = _platform_filter_views(filtered)
+    diagnostics = dict(result.get("diagnostics")) if isinstance(result.get("diagnostics"), dict) else {}
+    final_count, shortfall = _platform_filter_contract(
+        diagnostics,
+        after_count,
+    )
+    filtered_items = filtered.get("items") if isinstance(filtered.get("items"), list) else []
+    (
+        lane_selected,
+        original_lane_selection,
+        lane_targets,
+        lane_shortfalls,
+        lane_refills,
+    ) = _platform_filter_lane_data(
+        filtered_items,
+        filtered_business_buckets,
+        diagnostics,
+    )
+    reconciled_lane_selection, reconciled_business_counts = _platform_filter_reconciled_lanes(
+        before_count=before_count,
+        after_count=after_count,
+        filtered_buckets=filtered_buckets,
+        diagnostics=diagnostics,
+        lane_selected=lane_selected,
+        original_lane_selection=original_lane_selection,
+        lane_targets=lane_targets,
+        lane_shortfalls=lane_shortfalls,
+        lane_refills=lane_refills,
+    )
+    _platform_filter_update_diagnostics(
+        diagnostics=diagnostics,
+        before_count=before_count,
+        after_count=after_count,
+        filtered_buckets=filtered_buckets,
+        filtered_items=filtered_items,
+        requested=requested,
+        final_count=final_count,
+        shortfall=shortfall,
+        reconciled_business_counts=reconciled_business_counts,
+        reconciled_lane_selection=reconciled_lane_selection,
+    )
     filtered["diagnostics"] = diagnostics
-    if diagnostics.get("evidence_gate_enabled"):
-        filtered["match_status"] = "matched" if after_count else "empty"
-        if after_count:
-            diagnostics["empty_reason"] = ""
-        elif before_count > 0:
-            diagnostics["empty_reason"] = "no_platform_evidence_match"
-        filtered["candidate_set_distribution"] = candidate_set_distribution_from_items(
-            list(filtered.get("items") or [])
-        )
+    _platform_filter_reconcile_evidence(
+        filtered,
+        diagnostics,
+        before_count=before_count,
+        after_count=after_count,
+    )
     filtered["platform_filter"] = {
         "applied": True,
         "requested": sorted(requested),

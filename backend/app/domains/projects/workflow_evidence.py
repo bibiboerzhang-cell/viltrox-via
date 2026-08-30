@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any
@@ -11,7 +12,11 @@ from app.domains import audit, content_metric_snapshots
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects import stage_canonical
+from app.domains.projects.workflow_assignment_feedback import record_contact_feedback
 from app.domains.projects.workflow_common import SIDE_STAGES, _amount_cents, _int, _json, _loads, normalize_stage, staff_id, utcnow
+from app.shared.project_creator_lifecycle_ports import RecommendationFeedbackSink
+
+logger = logging.getLogger(__name__)
 
 # 行为不变搬迁:视频元数据抓取内聚簇移至 sibling 模块,这里 re-export 兜住全部调用点
 # (含下划线私有名)。函数体逐字未变 → 行为必然不变。
@@ -20,8 +25,6 @@ from app.domains.projects.workflow_evidence_video_metadata import (  # noqa: F40
     _published_pair, _youtube_api_metadata, _apify_actor_for, _apify_input, _apify_item_metadata,
     _apify_metadata, _fetch_video_metadata,
 )
-from app.domains.recommendations import pool_action_bridge
-
 # 批B #5(2026-06-12):assignment 阶段受控集合 = assignment 词表 + side stages。
 # normalize_stage 是单跳别名表,delivered→received / posted→published 落在项目词表,
 # 这里二跳归一到 assignment 词表后再校验,词表外一律拒收。
@@ -73,7 +76,7 @@ def _assignment_row(conn, project_id: int, kol_ref: str | int):
     ).fetchone()
 
 
-def advance_project_kol_assignment(project_id: int, kol_ref: str | int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def advance_project_kol_assignment(project_id: int, kol_ref: str | int, body: dict[str, Any], *, staff: dict[str, Any] | None = None, feedback_sink: RecommendationFeedbackSink | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
     scope.assert_project_access(project_id, staff, write=True)
     conn = get_conn()
@@ -117,10 +120,8 @@ def advance_project_kol_assignment(project_id: int, kol_ref: str | int, body: di
     )
     # C4 写口插桩(2026-08-23):派单推进到 contacted = 已外联信号,即时进推荐反馈;主写已提交,桥失败只告警。
     if to_stage == "contacted":
-        pool_action_bridge.bridge_pool_action(
-            updated.get("kol_pool_id"), "contact", staff=staff,
-            payload={"stage": to_stage, "project_id": int(project_id), "assignment_id": updated.get("id")},
-            source="assignment_stage",
+        record_contact_feedback(
+            feedback_sink, updated, project_id=int(project_id), staff=staff, logger=logger
         )
     return {"assignment": updated}
 

@@ -129,10 +129,23 @@ def _persona_relevance(item: dict[str, Any], *, pos_terms: list[str], neg_terms:
     persona_avoid_hits —— 负词已从「直接丢弃」降级为这里的扣分,扣分理由必须是可见的,
     不能像旧丢弃那样在结果里静默缺席。正词匹配口径**故意不动**(命中是加分不是杀人,
     失败方向本就安全,不在本刀射程内)。"""
-    # 只看候选**自身内容**(标题/频道名/handle/bio);绝不含 search_query —— 那是查询词本身,会自命中致全 1.0。
-    # bio 为 K2 富化新增(频道简介/IG biography),真摄影师的自述是最诚实的相关度证据;无 bio 行为不变。
+    # 只看候选**自身内容**;绝不含 search_query —— 那是查询词本身,会自命中致全 1.0。
+    # provider 已返回的简介/字幕/视觉摘要同属候选内容证据,标题没有关键词时仍应能命中;
+    # 字段缺失时行为不变。
     blob = " ".join(
-        str(item.get(k) or "") for k in ("sample_title", "channel_name", "handle", "bio")
+        str(item.get(k) or "")
+        for k in (
+            "sample_title",
+            "channel_name",
+            "handle",
+            "bio",
+            "sample_description",
+            "sample_caption",
+            "sample_transcript",
+            "subtitle",
+            "subtitles",
+            "visual_summary",
+        )
     ).lower()
     if not pos_terms and not neg_terms:
         return {

@@ -42,12 +42,11 @@ _APIFY_BUDGET_SCOPE = "provider:apify"
 _SNAPSHOT_TABLE = "vkpi_content_metric_snapshots"
 _LEDGER_SCAN_LIMIT = 20000
 
-# L1 车道承诺的纯函数落点(按顺序试 import;都没有 → 本地口径兜底)。
-# TODO(L1): llm_degrade_rate(days) 落地后,本地兜底 _local_degrade_rate 退役,只认 L1。
+# L1 的纯函数已落到 llm_gateway_ledger。候选表只保留仓库中真实存在的
+# 内部模块；列出不存在的历史设想会让运行时兼容逻辑掩盖静态依赖缺口。
+# 本地口径仍保留为调用异常时的 fail-soft 兜底，而不是模块缺失兼容层。
 _DEGRADE_FN_CANDIDATES = (
     ("app.platform.llm_gateway_ledger", "llm_degrade_rate"),
-    ("app.platform.llm_gateway_ledger_stats", "llm_degrade_rate"),
-    ("app.platform.llm_gateway_ledger_metrics", "llm_degrade_rate"),
 )
 
 

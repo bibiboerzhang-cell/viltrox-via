@@ -17,6 +17,11 @@ from app.domains.kol.search_sessions_attach import (
     _safe_public_code,
 )
 from app.domains.kol.search_sessions_serde import _dict, _int_or_none, _list, _text
+from app.domains.kol.search_sessions_targeted import (
+    project_candidate_query_context,
+    project_growth_candidate_context,
+    project_targeted_search_summary,
+)
 
 
 ONLINE_SCHEMA = "smart_online_net_new_qualified_v1"
@@ -81,7 +86,9 @@ def safe_online_qualification(value: Any) -> dict[str, Any]:
     if status in {"ready", "shortfall"}:
         output["status"] = status
     for key in (
-        "snapshot_revision", "evaluated_count", "strict_qualified_count",
+        "snapshot_revision", "evaluated_count", "unique_evaluated_count",
+        "cell_evaluation_count", "qualified_cell_count", "multi_cell_candidate_count",
+        "strict_qualified_count",
         "net_new_accepted_count", "returned_count", "pending_count", "rejected_count",
         "qualified_overflow_count", "duplicate_local_count", "duplicate_local_inventory_count",
         "duplicate_online_count", "provider_rounds", "provider_calls", "candidate_budget",
@@ -103,6 +110,16 @@ def safe_online_qualification(value: Any) -> dict[str, Any]:
             if safe_key and count is not None:
                 counts[safe_key] = count
         output[source_key] = counts
+    pending_content_count = int(
+        _dict(output.get("rejected_by_reason")).get("pending_content_evidence") or 0
+    )
+    output["pending_content_evidence_count"] = pending_content_count
+    output["content_evidence_followup"] = {
+        "status": "not_scheduled" if pending_content_count else "not_needed",
+        "candidate_count": pending_content_count,
+        "counts_toward_target": False,
+        "inline_provider_or_llm_calls": False,
+    }
     timing: dict[str, float] = {}
     for key, value in list(_dict(raw.get("stage_timing")).items())[:8]:
         safe_key = _safe_public_code(key, limit=80)
@@ -111,11 +128,23 @@ def safe_online_qualification(value: Any) -> dict[str, Any]:
             timing[safe_key] = number
     if timing:
         output["stage_timing"] = timing
+    targeted_search = project_targeted_search_summary(raw.get("targeted_search"))
+    if targeted_search:
+        output["targeted_search"] = targeted_search
     policy = _dict(raw.get("policy"))
+    follower_filter = _dict(policy.get("followers_filter"))
     output["policy"] = {
         "policy_version": 1,
         "target_count": ONLINE_TARGET,
         "min_followers": _safe_non_negative_int(policy.get("min_followers"), maximum=5_000_000_000),
+        "max_followers": _safe_non_negative_int(policy.get("max_followers"), maximum=5_000_000_000),
+        "followers_filter": {
+            "requested": follower_filter.get("requested") is True,
+            "minimum": _safe_non_negative_int(follower_filter.get("minimum"), maximum=5_000_000_000),
+            "maximum": _safe_non_negative_int(follower_filter.get("maximum"), maximum=5_000_000_000),
+            "source": _safe_public_code(follower_filter.get("source"), limit=80),
+            "unknown_policy": _safe_public_code(follower_filter.get("unknown_policy"), limit=40),
+        },
         "max_video_age_days": _safe_non_negative_int(policy.get("max_video_age_days"), maximum=3650),
         "market": _safe_public_code(policy.get("market"), limit=40),
         "platforms": [_safe_public_code(item, limit=40) for item in _list(policy.get("platforms"))[:3] if _safe_public_code(item, limit=40)],
@@ -203,11 +232,17 @@ def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> d
     for raw in _list(result.get("items")):
         if not isinstance(raw, dict):
             continue
+        query_context = project_candidate_query_context(raw)
+        growth_context = project_growth_candidate_context(raw)
+        item_allowed_terms = set(allowed_terms)
+        item_allowed_terms.update(query_evidence_terms(query_context.get("query_cell_query")))
+        for cell in _list(query_context.get("matched_query_cells")):
+            item_allowed_terms.update(query_evidence_terms(_dict(cell).get("primary_query")))
         bound = _strict_bound_item(
             raw,
             incoming_snapshot_id=contract["snapshot_id"],
             incoming_revision=incoming_revision,
-            allowed_terms=allowed_terms,
+            allowed_terms=item_allowed_terms,
         )
         if not bound:
             continue
@@ -249,7 +284,7 @@ def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> d
             "profile_url": source_url,
             "avatar_url": raw.get("avatar_url"),
             "candidate_facets": _safe_candidate_facets(raw.get("candidate_facets")),
-            "match_evidence": _safe_match_evidence(raw.get("match_evidence"), allowed_terms=allowed_terms),
+            "match_evidence": _safe_match_evidence(raw.get("match_evidence"), allowed_terms=item_allowed_terms),
             "why_fit": why_fit_from_match_evidence(relevance.get("evidence") or []),
             "qualification_evidence": proof,
             "contact_preview": {
@@ -262,6 +297,8 @@ def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> d
                 "async": analysis.get("async") is True,
                 **({"job_id": _int_or_none(analysis.get("job_id"))} if _int_or_none(analysis.get("job_id")) else {}),
             },
+            **query_context,
+            **growth_context,
         }
         items.append({
             "dedupe_key": f"online:{bound['canonical_fingerprint']}",
@@ -269,7 +306,11 @@ def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> d
             "status": "ready",
             "stage": "qualified",
             "rank": bound["server_rank"],
-            "score": _safe_non_negative_float(raw.get("display_rank_score") or raw.get("recall_rank_score")),
+            "score": _safe_non_negative_float(
+                raw.get("growth_candidate_score")
+                if raw.get("growth_candidate_score") is not None
+                else raw.get("display_rank_score") or raw.get("recall_rank_score")
+            ),
             "kol_pool_id": bound["kol_pool_id"],
             "source_url": source_url,
             "payload": payload,

@@ -16,9 +16,65 @@ from app.domains.projects.workflow_projects_occupancy import (
     _pool_claim_occupancy,
     _staff_display_names,
 )
-from app.domains.recommendations import pool_action_bridge
+from app.domains.projects import workflow_projects_kols_add
+from app.shared.project_creator_lifecycle_ports import RecommendationFeedbackSink
 
 logger = logging.getLogger(__name__)
+
+
+def _record_feedback_best_effort(
+    feedback_sink: RecommendationFeedbackSink | None,
+    kol_pool_id: int,
+    action: str,
+    *,
+    staff: dict[str, Any] | None,
+    payload: dict[str, Any],
+    source: str,
+) -> None:
+    if feedback_sink is None:
+        logger.warning(
+            "project.feedback_sink_missing kol_pool_id=%s source=%s",
+            kol_pool_id,
+            source,
+        )
+        return
+    try:
+        feedback_sink.record_pool_action(
+            kol_pool_id,
+            action,
+            staff=staff,
+            payload=payload,
+            source=source,
+        )
+    except Exception:
+        logger.warning(
+            "project.feedback_sink_failed kol_pool_id=%s source=%s",
+            kol_pool_id,
+            source,
+            exc_info=True,
+        )
+
+
+def _record_agent_signals_best_effort(
+    kol_pool_ids: list[int],
+    project_id: int,
+    staff: dict[str, Any] | None,
+) -> None:
+    if not kol_pool_ids:
+        return
+    try:
+        from app.domains.memory import agent_memory_writer
+
+        for kol_pool_id in kol_pool_ids:
+            agent_memory_writer.record_kol_signal(
+                kol_pool_id,
+                "add_to_project",
+                staff=staff,
+                reason="added_to_project",
+                detail={"project_id": int(project_id)},
+            )
+    except Exception:
+        logger.debug("add_project_kols.agent_signal_skipped", exc_info=True)
 
 
 def _require_project_for_kol_write(conn: Any, project_id: int) -> dict[str, Any]:
@@ -196,234 +252,35 @@ def list_available_project_kols(
     }
 
 
-def add_project_kols(project_id: int, body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
+def add_project_kols(
+    project_id: int,
+    body: dict[str, Any],
+    *,
+    staff: dict[str, Any] | None = None,
+    feedback_sink: RecommendationFeedbackSink | None = None,
+) -> dict[str, Any]:
     """Attach existing kol_pool rows to a project as discovered assignments."""
-    ensure_vkpi_schema()
-    scope.assert_project_access(project_id, staff, write=True)
-    conn = get_conn()
-    _require_project_for_kol_write(conn, int(project_id))
-    ids = body.get("kol_pool_ids") or body.get("kolPoolIds") or body.get("kol_ids") or body.get("kolIds") or []
-    if not isinstance(ids, list):
-        raise ValueError("kol_pool_ids must be a list")
-    kol_pool_ids = []
-    seen: set[int] = set()
-    for value in ids:
-        kol_pool_id = _int(value)
-        if kol_pool_id and kol_pool_id not in seen:
-            seen.add(kol_pool_id)
-            kol_pool_ids.append(kol_pool_id)
-    if not kol_pool_ids:
-        raise ValueError("kol_pool_ids required")
-    existing_pool_ids = {
-        int(row["id"])
-        for row in conn.execute(
-            f"SELECT id FROM vkpi_kol_pool WHERE id IN ({','.join('?' for _ in kol_pool_ids)})",
-            kol_pool_ids,
-        ).fetchall()
-    }
-    missing = [kol_pool_id for kol_pool_id in kol_pool_ids if kol_pool_id not in existing_pool_ids]
-    actor_staff_id = staff_id(staff)
-    requested_staff_id = _int(body.get("assigned_staff_id") or body.get("assignedStaffId"))
-    # 负责人归属(用户拍板):每个 KOL 的负责人 = 其 active claim owner(vkpi_kol_claims),
-    # 未认领 → can_view_all 且显式传了 requested_staff_id 则用之,否则归添加者 actor_staff_id;
-    # 绝不再默认项目负责人。fallback 为「无 claim 时」的兜底,真正归属在写入循环里 per-KOL 计算。
-    fallback_staff_id = requested_staff_id if scope.can_view_all(staff) and requested_staff_id else actor_staff_id
-    # claim 主键经 vkpi_kol_pool.linked_main_kol_id 关联 vkpi_kol_claims.kol_id(非 kol_pool_id),
-    # 与 _pool_claim_occupancy 的 claim 口径同源,只取 status='active' 的认领人。
-    claim_owner_by_pool: dict[int, int] = {}
-    if existing_pool_ids:
-        _claim_ph = ",".join("?" for _ in sorted(existing_pool_ids))
-        for _row in conn.execute(
-            f"""
-            SELECT p.id AS kol_pool_id, c.staff_id AS staff_id
-            FROM vkpi_kol_pool p
-            JOIN vkpi_kol_claims c ON c.kol_id = p.linked_main_kol_id AND c.status = 'active'
-            WHERE p.id IN ({_claim_ph})
-            ORDER BY c.id ASC
-            """,
-            sorted(existing_pool_ids),
-        ).fetchall():
-            _data = dict(_row)
-            _pool_id = _int(_data.get("kol_pool_id"))
-            _owner = _int(_data.get("staff_id"))
-            if _pool_id and _owner and _pool_id not in claim_owner_by_pool:
-                claim_owner_by_pool[_pool_id] = _owner
-    # 乙案②(写入侧防绕过):与选择器同口径校验——被他人认领/在役跟进的 KOL 拒绝写入,
-    # ValueError 带占用人姓名(路由已映 400);admin 可 body.force=true 强制,audit 留痕。
-    occupancy = _locked_pool_claim_occupancy(conn, existing_pool_ids)
-    blocked = {
-        pool_id: occ
-        for pool_id, occ in occupancy.items()
-        if _int(occ.get("staff_id")) and _int(occ.get("staff_id")) != actor_staff_id
-    }
-    force = bool(body.get("force"))
-    forced_conflicts: list[dict[str, Any]] = []
-    if blocked:
-        owner_names = _staff_display_names(conn, [occ["staff_id"] for occ in blocked.values()])
-        if force and scope.can_view_all(staff):
-            forced_conflicts = [
-                {
-                    "kol_pool_id": pool_id,
-                    "occupied_by_staff_id": _int(occ.get("staff_id")),
-                    "occupied_by_name": owner_names.get(_int(occ.get("staff_id")), ""),
-                    "claim_source": str(occ.get("source") or ""),
-                    "claim_id": occ.get("claim_id"),
-                    "occupied_project_id": occ.get("project_id"),
-                }
-                for pool_id, occ in sorted(blocked.items())
-            ]
-        else:
-            blocked_ids = sorted(blocked)
-            placeholders = ",".join("?" for _ in blocked_ids)
-            label_rows = conn.execute(
-                f"SELECT id, COALESCE(display_name, handle, '') AS label FROM vkpi_kol_pool WHERE id IN ({placeholders})",
-                blocked_ids,
-            ).fetchall()
-            labels = {_int(dict(row).get("id")): str(dict(row).get("label") or "").strip() for row in label_rows}
-            parts = []
-            for pool_id, occ in sorted(blocked.items()):
-                kol_label = labels.get(pool_id) or f"KOL #{pool_id}"
-                owner_staff_id = _int(occ.get("staff_id"))
-                owner_label = owner_names.get(owner_staff_id) or f"员工#{owner_staff_id}"
-                parts.append(f"「{kol_label}」已被 {owner_label} 跟进")
-            raise ValueError(
-                "以下 KOL 已被他人认领/跟进,未写入:" + ";".join(parts) + "。如确需加入,请管理员携 force=true 重试。"
-            )
-    now = utcnow()
-    inserted = 0
-    skipped_existing = 0
-    inserted_pool_ids: list[int] = []
-    for kol_pool_id in kol_pool_ids:
-        if kol_pool_id not in existing_pool_ids:
-            continue
-        # per-KOL 负责人:命中 active claim → claim owner;否则兜底 fallback。
-        assigned_staff_id = claim_owner_by_pool.get(kol_pool_id) or fallback_staff_id
-        row = conn.execute(
-            """
-            INSERT INTO vkpi_project_kol_assignments (
-                project_id, kol_pool_id, stage, stage_status, assigned_staff_id,
-                source, source_ref, metadata_json, created_at, updated_at
-            ) VALUES (?, ?, 'discovered', 'active', ?, 'manual', ?, ?, ?, ?)
-            ON CONFLICT (project_id, kol_pool_id) DO NOTHING
-            RETURNING id
-            """,
-            (
-                int(project_id),
-                int(kol_pool_id),
-                assigned_staff_id or None,
-                f"ui:add_kol:{project_id}",
-                _json({"source": "project_detail_add_kol", "actor_staff_id": actor_staff_id}),
-                now,
-                now,
-            ),
-        ).fetchone()
-        if row:
-            inserted += 1
-            inserted_pool_ids.append(int(kol_pool_id))
-            # P0-4 触达历史回流:加入项目=一次明确触达(谁/何时/经哪个项目)。最薄记录,
-            # ON CONFLICT 幂等(同人同项目同 channel 不重复堆);失败旁路不阻断 assignment 主写。
-            conn.execute("SAVEPOINT vkpi_project_touch")
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO vkpi_kol_pool_touches
-                        (kol_pool_id, staff_id, channel, project_id, note, touched_at, created_at)
-                    VALUES (?, ?, 'project_assignment', ?, ?, ?, ?)
-                    ON CONFLICT (kol_pool_id, channel, project_id) DO UPDATE SET
-                        staff_id=excluded.staff_id,
-                        touched_at=excluded.touched_at
-                    """,
-                    (
-                        int(kol_pool_id),
-                        assigned_staff_id or actor_staff_id or None,
-                        int(project_id),
-                        "added to project",
-                        now,
-                        now,
-                    ),
-                )
-                conn.execute("RELEASE SAVEPOINT vkpi_project_touch")
-            except Exception:
-                # PostgreSQL 中任意 SQL 错误都会令当前事务进入 aborted；仅 catch 不足以
-                # “旁路”。回滚到 savepoint 后主 assignment 才能继续安全提交。
-                try:
-                    conn.execute("ROLLBACK TO SAVEPOINT vkpi_project_touch")
-                    conn.execute("RELEASE SAVEPOINT vkpi_project_touch")
-                except Exception:
-                    logger.exception("kol_pool touch savepoint recovery failed")
-                    raise
-                logger.warning("kol_pool touch log skipped for pool_id=%s project_id=%s", kol_pool_id, project_id, exc_info=True)
-        else:
-            skipped_existing += 1
-    if inserted:
-        conn.execute("UPDATE vkpi_projects SET updated_at=?, last_activity_at=? WHERE id=?", (now, now, int(project_id)))
-    # 裁决「查到的人先入收藏再可选」:加入项目=本人跟进=应在本人收藏内(幂等;含全池逃生门添加)。
-    attached_ids = [kid for kid in kol_pool_ids if kid in existing_pool_ids]
-    if actor_staff_id and attached_ids:
-        for kid in attached_ids:
-            conn.execute(
-                """
-                INSERT INTO vkpi_kol_pool_favorites (kol_pool_id, staff_id, note)
-                VALUES (?, ?, ?)
-                ON CONFLICT (kol_pool_id, staff_id) DO NOTHING
-                """,
-                (int(kid), int(actor_staff_id), "项目添加自动收藏"),
-            )
-    conn.commit()
-    # 学习信号刻意放在业务事务提交之后。record_kol_signal 使用请求作用域连接并会
-    # 自行 commit；若在循环中调用，会把 assignment 提前提交，破坏 assignment +
-    # touch + auto-favorite 的原子性。学习账本仍是 best-effort，绝不反向阻断业务写入。
-    if inserted_pool_ids:
-        try:
-            from app.domains.memory import agent_memory_writer
-
-            for kol_pool_id in inserted_pool_ids:
-                agent_memory_writer.record_kol_signal(
-                    kol_pool_id,
-                    "add_to_project",
-                    staff=staff,
-                    reason="added_to_project",
-                    detail={"project_id": int(project_id)},
-                )
-        except Exception:
-            logger.debug("add_project_kols.agent_signal_skipped", exc_info=True)
-    # C4 写口插桩(2026-08-23):加入项目=触达、项目自动收藏=收藏,两者即时进推荐反馈
-    # (训练信号),不再等每日 outcome_sync 回填。主写已提交;桥 best-effort,失败只告警。
-    for kol_pool_id in inserted_pool_ids:
-        pool_action_bridge.bridge_pool_action(
-            kol_pool_id, "touch", staff=staff,
-            payload={"project_id": int(project_id), "channel": "project_assignment"},
-            source="project_assignment",
-        )
-    if actor_staff_id:
-        for kid in attached_ids:
-            pool_action_bridge.bridge_pool_action(
-                kid, "favorite", staff=staff,
-                payload={"project_id": int(project_id)},
-                source="project_auto_favorite",
-            )
-    if inserted:
-        _log_project_audit(
-            staff=staff,
-            action_type="project_add_kols",
-            project_id=int(project_id),
-            detail=f"added {inserted} KOL assignments" + (f" (admin force, {len(forced_conflicts)} 个越过他人占用)" if forced_conflicts else ""),
-            metadata={
-                "kol_pool_ids": [kol_pool_id for kol_pool_id in kol_pool_ids if kol_pool_id in existing_pool_ids],
-                # per-KOL 归属后,单一 assigned_staff_id 已无意义;记录无 claim 时的兜底 + 命中 claim 的明细。
-                "assigned_staff_id_fallback": fallback_staff_id or None,
-                "claim_owner_by_pool": {str(k): v for k, v in claim_owner_by_pool.items()},
-                "missing_kol_pool_ids": missing,
-                "skipped_existing": skipped_existing,
-                "force": bool(forced_conflicts),
-                "forced_claim_conflicts": forced_conflicts,
-            },
-        )
-    return {
-        "project_id": int(project_id),
-        "requested": len(kol_pool_ids),
-        "inserted": inserted,
-        "skipped_existing": skipped_existing,
-        "missing_kol_pool_ids": missing,
-        "forced_claim_conflicts": forced_conflicts,
-    }
+    runtime = workflow_projects_kols_add.AddProjectKolsRuntime(
+        ensure_schema=ensure_vkpi_schema,
+        assert_project_access=scope.assert_project_access,
+        get_conn=get_conn,
+        require_project=_require_project_for_kol_write,
+        to_int=_int,
+        to_json=_json,
+        staff_id=staff_id,
+        utcnow=utcnow,
+        can_view_all=scope.can_view_all,
+        locked_occupancy=_locked_pool_claim_occupancy,
+        staff_names=_staff_display_names,
+        record_agent_signals=_record_agent_signals_best_effort,
+        record_feedback=_record_feedback_best_effort,
+        log_audit=_log_project_audit,
+        logger=logger,
+    )
+    return workflow_projects_kols_add.execute_add_project_kols(
+        project_id,
+        body,
+        staff=staff,
+        feedback_sink=feedback_sink,
+        runtime=runtime,
+    )

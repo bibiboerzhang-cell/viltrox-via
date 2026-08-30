@@ -16,16 +16,40 @@ from time import perf_counter
 from typing import Any
 
 from app.domains.kol import (
-    profile_online_facets,
     profile_online_identity,
     profile_online_inventory,
     profile_recall_qualification,
 )
-from app.domains.kol.profile_recall_match_evidence import (
-    build_match_evidence,
-    candidate_facets,
+from app.domains.kol.profile_online_evidence import (
+    _CONTENT_EVIDENCE_LIMITS,
+    _MAX_MATCHED_QUERY_CELLS,
+    _ONLINE_PUBLIC_EVIDENCE_FIELDS,
+    _PRIVATE_EVIDENCE_TERM_RE,
+    _bounded_content_text,
+    _candidate_query_cells,
+    _candidate_row,
+    _latest_video_evidence,
+    _looks_like_video_url,
+    _merge_match_evidence,
+    _profile_url,
+    _project_online_match_evidence,
+    _representative_content_evidence,
+    _safe_query_cell,
+    _text,
+    adapt_candidates as _adapt_candidates_impl,
+    identity_probe as _identity_probe,
 )
-from app.domains.kol.search_sessions_serde import project_public_asset_url, project_public_profile_text
+from app.domains.kol.profile_query_cell_evidence import build_query_cell_match_evidence
+from app.domains.kol.profile_online_growth import (
+    _GROWTH_OUTPUT_FIELDS,
+    _apply_prospective_growth_cell_scoring,
+    _growth_cell_summary,
+    activation_calibration_ids,
+    surface_growth_gate_reasons,
+)
+from app.domains.kol.profile_recall_match_evidence import (
+    why_fit_from_match_evidence,
+)
 
 
 ONLINE_TARGET = 30
@@ -46,6 +70,9 @@ _PENDING_REASONS = frozenset({
     "language_unknown",
     "profile_type_unknown",
     "platform_unknown",
+    "pending_content_evidence",
+    "market_activation_missing",
+    "insufficient_sample",
 })
 
 FetchBatch = Callable[..., Awaitable[dict[str, Any]] | dict[str, Any]]
@@ -59,6 +86,10 @@ def online_policy(
     languages: Any = None,
     profile_types: Any = None,
     exclude_chinese: bool = True,
+    followers_min: Any = None,
+    followers_max: Any = None,
+    source: Any = "operator",
+    unknown_policy: Any = profile_recall_qualification.FOLLOWERS_UNKNOWN_PENDING,
 ) -> dict[str, Any]:
     """Build the immutable online policy by extending the local strict policy."""
     policy = profile_recall_qualification.smart_local_policy(
@@ -70,6 +101,12 @@ def online_policy(
     unsupported = sorted(set(policy.get("platforms") or []) - ONLINE_SUPPORTED_PLATFORMS)
     if unsupported:
         raise ValueError(f"unsupported strict online platforms: {', '.join(unsupported)}")
+    follower_filter = profile_recall_qualification.follower_filter_policy(
+        followers_min=followers_min,
+        followers_max=followers_max,
+        source=source,
+        unknown_policy=unknown_policy,
+    )
     policy.update({
         "origin_lane": ONLINE_ORIGIN_LANE,
         "online_schema": ONLINE_SCHEMA,
@@ -78,6 +115,12 @@ def online_policy(
         "require_trusted_market": bool(policy.get("market")),
         "supported_platforms": sorted(ONLINE_SUPPORTED_PLATFORMS),
         "exclude_chinese_regions": bool(exclude_chinese),
+        # Online discovery has no implicit reach floor.  A follower gate exists
+        # only when the operator/planner supplies an explicit bound.
+        "followers_filter": follower_filter,
+        "min_followers": follower_filter["minimum"],
+        "max_followers": follower_filter["maximum"],
+        "allow_unknown_followers": not follower_filter["requested"],
         "evidence_sources": {
             "followers": "online_provider.followers",
             "language": "online_provider.language",
@@ -88,141 +131,50 @@ def online_policy(
     return policy
 
 
-def _text(value: Any) -> str:
-    return str(value or "").strip()
-
-
 def _positive_int(value: Any) -> int | None:
     try:
         parsed = int(value)
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
-
-
-def _profile_url(raw: dict[str, Any]) -> str:
-    return _text(profile_online_identity.stable_creator_identity(raw).get("profile_url"))
-
-
-def _looks_like_video_url(value: Any) -> bool:
-    for platform in ("youtube", "instagram", "tiktok"):
-        if profile_online_identity.is_platform_video_url(value, platform=platform):
-            return True
-    return False
-
-
-def _latest_video_evidence(raw: dict[str, Any]) -> dict[str, Any]:
-    return profile_online_identity.latest_video_evidence(raw)
-
-
-def _candidate_row(raw: dict[str, Any]) -> dict[str, Any]:
-    identity = profile_online_identity.stable_creator_identity(raw)
-    platform = _text(identity.get("platform"))
-    handle = _text(identity.get("handle"))
-    display_name = project_public_profile_text(
-        raw.get("display_name") or raw.get("channel_name") or raw.get("name"),
-        limit=240,
+def _cell_match_evidence(
+    row: dict[str, Any],
+    evidence: dict[str, Any],
+    *,
+    query_text: str,
+    query_cell: dict[str, Any],
+) -> list[dict[str, str]]:
+    return build_query_cell_match_evidence(
+        row,
+        evidence,
+        query_text,
+        query_cell=query_cell,
+        min_intent_terms=1,
     )
-    country = raw.get("country")
-    country_source = _text(raw.get("country_source") or raw.get("market_source")).lower()
-    # An online provider's bare country label is not equivalent to the pool's
-    # legacy declared-country column.  Mark its missing provenance untrusted.
-    if country and not country_source:
-        country_source = "online_provider_unverified"
-    language_evidence = profile_online_facets.adapt_language(raw)
-    profile_type_evidence = profile_online_facets.adapt_profile_type(raw)
-    return {
-        "platform": platform,
-        "handle": handle,
-        "display_name": display_name,
-        "profile_url": identity.get("profile_url"),
-        "avatar_url": project_public_asset_url(raw.get("avatar_url") or raw.get("avatar")),
-        "followers": raw.get("followers") or raw.get("subscriber_count") or raw.get("follower_count"),
-        "country": country,
-        "country_source": country_source,
-        "language": language_evidence.get("value"),
-        "language_source": language_evidence.get("source"),
-        "profile_type": profile_type_evidence.get("value"),
-        "profile_type_source": profile_type_evidence.get("source"),
-        "facet_evidence": {
-            "language": language_evidence,
-            "profile_type": profile_type_evidence,
-        },
-        "bio": _text(raw.get("bio") or raw.get("description"))[:1000],
-        "primary_topic": _text(raw.get("primary_topic"))[:300],
-        "content_style": _text(raw.get("content_style"))[:300],
-        "secondary_topics_json": raw.get("secondary_topics_json") or [],
-        "profile_text": _text(raw.get("profile_text"))[:1000],
-        "type_reason": _text(raw.get("type_reason"))[:300],
-        # Never feed arbitrary provider blobs into market qualification.
-        "raw_platform_data": "{}",
-        "identity_projection_passed": identity.get("passed") is True,
-    }
 
 
 def _adapt_candidates(
     candidates: list[dict[str, Any]],
     *,
     query_text: str,
-) -> tuple[list[dict[str, Any]], dict[int, dict[str, Any]], dict[int, dict[str, Any]], dict[int, dict[str, Any]]]:
-    adapted: list[dict[str, Any]] = []
-    rows_by_id: dict[int, dict[str, Any]] = {}
-    evidence_by_id: dict[int, dict[str, Any]] = {}
-    source_by_id: dict[int, dict[str, Any]] = {}
-    for index, raw in enumerate(candidates):
-        synthetic_id = 2_000_000_000 + index
-        row = _candidate_row(raw)
-        native_ids = profile_online_identity.safe_native_identity(raw, platform=row.get("platform"))
-        latest = _latest_video_evidence(raw)
-        representative = [{"title": latest.get("title")}] if latest.get("title") else []
-        evidence = {
-            "latest_real_video": latest,
-            "representative_evidence": representative,
-        }
-        # 在线腿把意图门槛降到 1(2026-08-25)。上面的 _candidate_row(:134-159)只填得出
-        # handle / display_name / bio 和最新视频标题;primary_topic / content_style /
-        # profile_text / type_reason 取自 provider 从不下发的键,恒为空串,
-        # secondary_topics_json 恒为 []。8 个可举证字段里在线只有 3 个有内容,
-        # 要它凑 2 个意图词是要求它证明一件它没资料证明的事。本地车道字段丰富,
-        # 继续走默认的 2(profile_recall.py:681-682 不传此参数)。
-        # 产品腿在线侧仍不传 required_product_terms —— 那是另一个缺口,本处不动。
-        match_evidence = build_match_evidence(row, evidence, query_text, min_intent_terms=1)
-        profile_type = _text(row.get("profile_type")).lower()
-        item = {
-            "kol_pool_id": synthetic_id,
-            "platform": row.get("platform"),
-            "handle": row.get("handle"),
-            "display_name": row.get("display_name"),
-            "profile_url": row.get("profile_url"),
-            "avatar_url": row.get("avatar_url"),
-            "followers": row.get("followers"),
-            "language": row.get("language"),
-            "profile_type": row.get("profile_type"),
-            "country": row.get("country"),
-            **native_ids,
-            "facet_evidence": row.get("facet_evidence"),
-            "bucket": "reviewer" if profile_type == "reviewer" else "creator",
-            "match_evidence": match_evidence,
-            "candidate_facets": candidate_facets(row, evidence),
-            "display_rank_score": raw.get("display_rank_score") or raw.get("relevance_score") or raw.get("score"),
-            "recall_rank_score": raw.get("recall_rank_score") or raw.get("relevance_score") or raw.get("score"),
-        }
-        adapted.append(item)
-        rows_by_id[synthetic_id] = row
-        evidence_by_id[synthetic_id] = evidence
-        source_by_id[synthetic_id] = raw
-    return adapted, rows_by_id, evidence_by_id, source_by_id
+) -> tuple[
+    list[dict[str, Any]],
+    dict[int, dict[str, Any]],
+    dict[int, dict[str, Any]],
+    dict[int, dict[str, Any]],
+    dict[int, list[dict[str, Any]]],
+]:
+    """Preserve the original adapter contract around the local evidence callback."""
 
-
-def _identity_probe(raw: dict[str, Any]) -> dict[str, Any]:
-    row = _candidate_row(raw)
-    return {
-        **row,
-        **profile_online_identity.safe_native_identity(raw, platform=row.get("platform")),
-    }
+    return _adapt_candidates_impl(
+        candidates,
+        query_text=query_text,
+        cell_match_evidence=_cell_match_evidence,
+    )
 
 
 def _project_online_item(item: dict[str, Any]) -> dict[str, Any]:
+    safe_match_evidence = _project_online_match_evidence(item.get("match_evidence"))
     projected = profile_recall_qualification.project_smart_local_result({
         "items": [item],
         "buckets": {},
@@ -233,8 +185,16 @@ def _project_online_item(item: dict[str, Any]) -> dict[str, Any]:
     projected["qualification_status"] = "accepted"
     projected["canonical_fingerprint"] = profile_online_identity.canonical_fingerprint(item)
     projected["kol_pool_id"] = None
+    projected["match_evidence"] = safe_match_evidence
+    projected["why_fit"] = why_fit_from_match_evidence(safe_match_evidence)
     proof = dict(projected.get("qualification_evidence") or {})
     proof.pop("kol_pool_id", None)
+    relevance = proof.get("relevance") if isinstance(proof.get("relevance"), dict) else {}
+    proof["relevance"] = {
+        **relevance,
+        "passed": bool(safe_match_evidence),
+        "evidence": safe_match_evidence,
+    }
     projected["qualification_evidence"] = proof
     return projected
 
@@ -246,9 +206,49 @@ def _qualify_online_candidates_internal(
     policy: dict[str, Any],
     local_canonical_keys: set[str],
     remaining: int,
+    search_brief: dict[str, Any] | None = None,
     as_of: datetime | None = None,
 ) -> dict[str, Any]:
-    adapted, rows, evidence, sources = _adapt_candidates(candidates, query_text=query_text)
+    adapted, rows, evidence, sources, cell_inputs = _adapt_candidates(
+        candidates,
+        query_text=query_text,
+    )
+    brief = search_brief if isinstance(search_brief, dict) else {}
+    objective = _text(brief.get("objective"))
+    if not objective:
+        objective = next(
+            (
+                _text((entry.get("query_cell") or {}).get("objective"))
+                for entries in cell_inputs.values()
+                for entry in entries
+                if isinstance(entry.get("query_cell"), dict)
+                and _text((entry.get("query_cell") or {}).get("objective"))
+            ),
+            "",
+        )
+    qualification_stats = {
+        "unique_candidate_count": len(adapted),
+        "cell_evaluation_count": 0,
+        "qualified_cell_count": 0,
+        "candidate_with_qualified_cell_count": 0,
+        "multi_cell_candidate_count": 0,
+    }
+    if objective == "prospective_growth":
+        calibration_ids = activation_calibration_ids(
+            adapted,
+            rows=rows,
+            evidence=evidence,
+            policy=policy,
+            local_canonical_keys=local_canonical_keys,
+            as_of=as_of,
+            target_count=ONLINE_TARGET,
+        )
+        qualification_stats = _apply_prospective_growth_cell_scoring(
+            adapted,
+            cell_inputs_by_id=cell_inputs,
+            search_brief=brief,
+            activation_calibration_ids=calibration_ids,
+        )
     selected, _, strict_contract = profile_recall_qualification.qualify_local_candidates(
         buckets={
             "creator": [item for item in adapted if item.get("bucket") != "reviewer"],
@@ -265,6 +265,41 @@ def _qualify_online_candidates_internal(
         excluded_identity_reason="duplicate_local_identity",
         as_of=as_of,
     )
+    pending_content_ids: set[int] = set()
+    for item in adapted:
+        if item.get("prospective_content_evidence_pending") is not True:
+            continue
+        proof = item.get("qualification_evidence")
+        if not isinstance(proof, dict):
+            continue
+        reasons = list(proof.get("rejection_reasons") or [])
+        if "low_relevance" not in reasons:
+            continue
+        proof["rejection_reasons"] = [
+            "pending_content_evidence" if reason == "low_relevance" else reason
+            for reason in reasons
+        ]
+        relevance = proof.get("relevance") if isinstance(proof.get("relevance"), dict) else {}
+        proof["relevance"] = {
+            **relevance,
+            "passed": False,
+            "status": "pending_content_evidence",
+            "pending": True,
+            "reason": "content_locator_present_but_description_caption_transcript_missing",
+        }
+        pending_content_ids.add(int(item.get("kol_pool_id") or 0))
+    if pending_content_ids:
+        rejected = strict_contract.get("rejected_by_reason")
+        if isinstance(rejected, dict):
+            low_count = max(0, int(rejected.get("low_relevance") or 0) - len(pending_content_ids))
+            if low_count:
+                rejected["low_relevance"] = low_count
+            else:
+                rejected.pop("low_relevance", None)
+            rejected["pending_content_evidence"] = (
+                int(rejected.get("pending_content_evidence") or 0) + len(pending_content_ids)
+            )
+    surface_growth_gate_reasons(adapted, strict_contract)
     selected_ids = {int(item.get("kol_pool_id") or 0) for item in selected}
     outcomes: list[dict[str, Any]] = []
     for item in adapted:
@@ -298,7 +333,11 @@ def _qualify_online_candidates_internal(
             "item": _project_online_item(item) if status in {"selected", "qualified_overflow"} else None,
             "source": sources.get(synthetic_id) if status in {"selected", "qualified_overflow"} else None,
         })
-    return {"outcomes": outcomes, "strict_contract": strict_contract}
+    return {
+        "outcomes": outcomes,
+        "strict_contract": strict_contract,
+        "qualification_stats": qualification_stats,
+    }
 
 
 def qualify_online_candidates(
@@ -307,6 +346,7 @@ def qualify_online_candidates(
     query_text: str,
     policy: dict[str, Any],
     local_canonical_keys: set[str] | None = None,
+    search_brief: dict[str, Any] | None = None,
     as_of: datetime | None = None,
 ) -> dict[str, Any]:
     """Provider-free strict qualification helper used by tests and orchestration."""
@@ -316,6 +356,7 @@ def qualify_online_candidates(
         policy=policy,
         local_canonical_keys=set(local_canonical_keys or set()),
         remaining=ONLINE_TARGET,
+        search_brief=search_brief,
         as_of=as_of,
     )
     outcomes = result["outcomes"]
@@ -323,12 +364,16 @@ def qualify_online_candidates(
     counts: dict[str, int] = {}
     for outcome in outcomes:
         counts[outcome["status"]] = counts.get(outcome["status"], 0) + 1
+    qualification_stats = dict(result.get("qualification_stats") or {})
     return {
         "schema": ONLINE_SCHEMA,
         "origin_lane": ONLINE_ORIGIN_LANE,
         "accepted": accepted,
         "counts": counts,
         "rejected_by_reason": dict(result["strict_contract"].get("rejected_by_reason") or {}),
+        "qualification_stats": qualification_stats,
+        "unique_candidate_count": int(qualification_stats.get("unique_candidate_count") or 0),
+        "cell_evaluation_count": int(qualification_stats.get("cell_evaluation_count") or 0),
     }
 
 
@@ -396,14 +441,10 @@ async def collect_strict_online_candidates(
     max_provider_rounds: int = ONLINE_MAX_PROVIDER_ROUNDS,
     round_gate: Callable[[int], dict[str, Any]] | None = None,
     exhaustion_reason: str = "bounded_provider_batch_exhausted",
+    search_brief: dict[str, Any] | None = None,
     as_of: datetime | None = None,
 ) -> dict[str, Any]:
-    """Collect 30 pool-backed, cross-lane-unique strict candidates or shortfall.
-
-    车道 2·``round_gate``:第 2 轮起、发 provider 之前的准入闸(时间/钱/是否还有下一页)。
-    被闸拦下与「真的翻完了」必须分得开 —— 拦下时 ``has_more`` 原样保留(于是
-    ``exhausted`` 仍为 False),终止原因用闸给的机器码,绝不冒充「已耗尽」。
-    """
+    """Collect 30 strict candidates; a denied later-round gate never implies exhaustion."""
     started = perf_counter()
     budget = max(ONLINE_TARGET, min(int(candidate_budget or ONLINE_CANDIDATE_BUDGET), 500))
     max_rounds = max(1, min(int(max_provider_rounds or 1), 10))
@@ -411,48 +452,52 @@ async def collect_strict_online_candidates(
     accepted_aliases: set[str] = set()
     inventory_alias_set = set(inventory_aliases or set())
     local_rank_base = (
-        max(0, min(int(local_unique_count), ONLINE_TARGET))
-        if local_unique_count is not None
+        max(0, min(int(local_unique_count), ONLINE_TARGET)) if local_unique_count is not None
         else min(ONLINE_TARGET, len(local_canonical_keys))
     )
     rejected_by_reason: dict[str, int] = {}
     status_counts: dict[str, int] = {}
-    provider_rounds = 0
-    provider_calls = 0
-    evaluated = 0
-    budget_used = 0
-    materialization_db_reads = 0
+    provider_rounds = provider_calls = evaluated = 0
+    unique_evaluated_keys: set[str] = set()
+    multi_cell_evaluated_keys: set[str] = set()
+    cell_evaluation_count = qualified_cell_count = budget_used = materialization_db_reads = 0
     cursor: Any = None
-    provider_failed = False
-    has_more = True
+    provider_failed, has_more = False, True
     seen_batch_fingerprints: set[str] = set()
     gate_verdicts: list[dict[str, Any]] = []
     gate_stop_reason = ""
 
-    while len(accepted) < ONLINE_TARGET and has_more and provider_rounds < max_rounds and budget_used < budget:
-        if provider_rounds >= 1 and round_gate is not None:
-            verdict = round_gate(provider_rounds + 1)
-            verdict = verdict if isinstance(verdict, dict) else {}
-            gate_verdicts.append(verdict)
-            if verdict.get("allowed") is not True:
-                # 拦下 ≠ 翻完了:has_more 保持上一轮的真值,exhausted 因此仍诚实为 False。
-                gate_stop_reason = _text(verdict.get("reason")) or "round_gate_denied"
-                break
+    def _round_allowed() -> bool:
+        nonlocal gate_stop_reason
+        if provider_rounds < 1 or round_gate is None:
+            return True
+        verdict = round_gate(provider_rounds + 1)
+        verdict = verdict if isinstance(verdict, dict) else {}
+        gate_verdicts.append(verdict)
+        if verdict.get("allowed") is True:
+            return True
+        gate_stop_reason = _text(verdict.get("reason")) or "round_gate_denied"
+        return False
+
+    async def _fetch_round() -> tuple[dict[str, Any], list[dict[str, Any]]] | None:
+        nonlocal budget_used, evaluated, has_more, provider_calls, provider_failed, provider_rounds
         provider_rounds += 1
         request_limit = min(150, budget - budget_used)
         try:
             provider_result = await _maybe_await(fetch_batch(
-                round_no=provider_rounds,
-                limit=request_limit,
-                cursor=cursor,
+                round_no=provider_rounds, limit=request_limit, cursor=cursor,
             ))
         except Exception:
             provider_failed = True
             status_counts["provider_failed"] = status_counts.get("provider_failed", 0) + 1
-            break
+            return None
         provider_result = provider_result if isinstance(provider_result, dict) else {}
         if provider_result.get("provider_calls") is not False:
-            provider_calls += 1
+            try:
+                reported_calls = int(provider_result.get("provider_call_count") or 1)
+            except (TypeError, ValueError):
+                reported_calls = 1
+            provider_calls += max(1, min(reported_calls, 100))
         batch = _provider_candidates(provider_result)[:request_limit]
         budget_used += len(batch)
         evaluated += len(batch)
@@ -462,10 +507,12 @@ async def collect_strict_online_candidates(
         if fingerprint in seen_batch_fingerprints:
             status_counts["duplicate_batch"] = status_counts.get("duplicate_batch", 0) + len(batch)
             has_more = False
-            break
+            return None
         seen_batch_fingerprints.add(fingerprint)
+        return provider_result, batch
 
-        fresh_batch: list[dict[str, Any]] = []
+    def _fresh_candidates(batch: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        fresh: list[dict[str, Any]] = []
         for raw in batch:
             if _inventory_match(raw):
                 status_counts["duplicate_local_inventory"] = status_counts.get("duplicate_local_inventory", 0) + 1
@@ -476,18 +523,74 @@ async def collect_strict_online_candidates(
             elif aliases.intersection(inventory_alias_set) and not aliases.intersection(local_canonical_keys):
                 status_counts["duplicate_local_inventory"] = status_counts.get("duplicate_local_inventory", 0) + 1
             else:
-                fresh_batch.append(raw)
-        qualified = _qualify_online_candidates_internal(
-            fresh_batch,
-            query_text=query_text,
-            policy=policy,
-            local_canonical_keys=local_canonical_keys,
-            remaining=max(1, ONLINE_TARGET - len(accepted)),
-            as_of=as_of,
-        )
+                fresh.append(raw)
+        return fresh
+
+    def _record_qualification(qualified: dict[str, Any], fresh: list[dict[str, Any]]) -> None:
+        nonlocal cell_evaluation_count, qualified_cell_count
+        qualification_stats = qualified.get("qualification_stats") or {}
+        cell_evaluation_count += int(qualification_stats.get("cell_evaluation_count") or 0)
+        qualified_cell_count += int(qualification_stats.get("qualified_cell_count") or 0)
+        for raw in fresh:
+            canonical = profile_recall_qualification.canonical_creator_key(_identity_probe(raw))
+            if canonical:
+                unique_evaluated_keys.add(canonical)
+                if len(_candidate_query_cells(raw, query_text=query_text)) > 1:
+                    multi_cell_evaluated_keys.add(canonical)
         for reason, count in (qualified["strict_contract"].get("rejected_by_reason") or {}).items():
             rejected_by_reason[str(reason)] = rejected_by_reason.get(str(reason), 0) + int(count or 0)
-        for outcome in qualified["outcomes"]:
+
+    async def _materialize_outcome(outcome: dict[str, Any]) -> None:
+        nonlocal materialization_db_reads
+        source = outcome.get("source") if isinstance(outcome.get("source"), dict) else {}
+        try:
+            materialized = await _maybe_await(enroll_candidate(source))
+        except Exception:
+            status_counts["rejected"] = status_counts.get("rejected", 0) + 1
+            rejected_by_reason["enrollment_failed"] = rejected_by_reason.get("enrollment_failed", 0) + 1
+            return
+        if isinstance(materialized, dict):
+            materialization_db_reads += max(0, int(materialized.get("db_reads") or 0))
+        if isinstance(materialized, dict) and (
+            materialized.get("duplicate_local_inventory") is True
+            or materialized.get("matched_existing") is True
+        ):
+            status_counts["duplicate_local_inventory"] = status_counts.get("duplicate_local_inventory", 0) + 1
+            return
+        kol_pool_id = _enrolled_pool_id(materialized)
+        if not kol_pool_id:
+            status_counts["rejected"] = status_counts.get("rejected", 0) + 1
+            rejected_by_reason["enrollment_failed"] = rejected_by_reason.get("enrollment_failed", 0) + 1
+            return
+        item = dict(outcome["item"] or {})
+        proof = dict(item.get("qualification_evidence") or {})
+        identity_fingerprint = _text(item.get("canonical_fingerprint"))
+        if not re.fullmatch(r"[0-9a-f]{64}", identity_fingerprint):
+            status_counts["rejected"] = status_counts.get("rejected", 0) + 1
+            rejected_by_reason["identity_fingerprint_missing"] = (
+                rejected_by_reason.get("identity_fingerprint_missing", 0) + 1
+            )
+            return
+        proof.update({"kol_pool_id": kol_pool_id, "canonical_fingerprint": identity_fingerprint})
+        item.update({
+            "kol_pool_id": kol_pool_id,
+            "qualification_evidence": proof,
+            "server_rank": len(accepted) + 1,
+            "global_unique_rank": local_rank_base + len(accepted) + 1,
+            "duplicate_of_lane": None,
+            "contact_preview": {"status": "not_enriched", "channel_count": 0},
+            "analysis_preview": {"status": "not_enriched", "async": False},
+        })
+        aliases = profile_recall_qualification.canonical_creator_aliases(item)
+        if aliases.intersection(accepted_aliases):
+            status_counts["duplicate_online"] = status_counts.get("duplicate_online", 0) + 1
+            return
+        accepted_aliases.update(aliases)
+        accepted.append(item)
+        status_counts["accepted"] = status_counts.get("accepted", 0) + 1
+
+    async def _consume_outcomes(outcomes: list[dict[str, Any]]) -> None:
+        for outcome in outcomes:
             outcome_status = str(outcome["status"])
             if outcome_status not in {"selected", "qualified_overflow"}:
                 status_counts[outcome_status] = status_counts.get(outcome_status, 0) + 1
@@ -495,58 +598,12 @@ async def collect_strict_online_candidates(
             if len(accepted) >= ONLINE_TARGET:
                 status_counts["qualified_overflow"] = status_counts.get("qualified_overflow", 0) + 1
                 continue
-            source = outcome.get("source") if isinstance(outcome.get("source"), dict) else {}
-            try:
-                materialized = await _maybe_await(enroll_candidate(source))
-            except Exception:
-                status_counts["rejected"] = status_counts.get("rejected", 0) + 1
-                rejected_by_reason["enrollment_failed"] = rejected_by_reason.get("enrollment_failed", 0) + 1
-                continue
-            if isinstance(materialized, dict):
-                materialization_db_reads += max(0, int(materialized.get("db_reads") or 0))
-            if isinstance(materialized, dict) and (
-                materialized.get("duplicate_local_inventory") is True
-                or materialized.get("matched_existing") is True
-            ):
-                status_counts["duplicate_local_inventory"] = status_counts.get("duplicate_local_inventory", 0) + 1
-                continue
-            kol_pool_id = _enrolled_pool_id(materialized)
-            if not kol_pool_id:
-                status_counts["rejected"] = status_counts.get("rejected", 0) + 1
-                rejected_by_reason["enrollment_failed"] = rejected_by_reason.get("enrollment_failed", 0) + 1
-                continue
-            item = dict(outcome["item"] or {})
-            proof = dict(item.get("qualification_evidence") or {})
-            identity_fingerprint = _text(item.get("canonical_fingerprint"))
-            if not re.fullmatch(r"[0-9a-f]{64}", identity_fingerprint):
-                status_counts["rejected"] = status_counts.get("rejected", 0) + 1
-                rejected_by_reason["identity_fingerprint_missing"] = (
-                    rejected_by_reason.get("identity_fingerprint_missing", 0) + 1
-                )
-                continue
-            proof.update({
-                "kol_pool_id": kol_pool_id,
-                "canonical_fingerprint": identity_fingerprint,
-            })
-            item.update({
-                "kol_pool_id": kol_pool_id,
-                "qualification_evidence": proof,
-                "server_rank": len(accepted) + 1,
-                "global_unique_rank": local_rank_base + len(accepted) + 1,
-                "duplicate_of_lane": None,
-                "contact_preview": {"status": "not_enriched", "channel_count": 0},
-                "analysis_preview": {"status": "not_enriched", "async": False},
-            })
-            aliases = profile_recall_qualification.canonical_creator_aliases(item)
-            if aliases.intersection(accepted_aliases):
-                status_counts["duplicate_online"] = status_counts.get("duplicate_online", 0) + 1
-                continue
-            accepted_aliases.update(aliases)
-            accepted.append(item)
-            status_counts["accepted"] = status_counts.get("accepted", 0) + 1
+            await _materialize_outcome(outcome)
             if len(accepted) >= ONLINE_TARGET:
                 break
 
+    def _finish_round(provider_result: dict[str, Any], batch: list[dict[str, Any]]) -> None:
+        nonlocal cursor, has_more, provider_failed
         cursor = provider_result.get("next_cursor")
         has_more = bool(provider_result.get("has_more") and cursor)
         if provider_result.get("status") == "failed" and not batch:
@@ -554,119 +611,132 @@ async def collect_strict_online_candidates(
             status_counts["provider_failed"] = status_counts.get("provider_failed", 0) + 1
             has_more = False
 
-    shortfall = max(0, ONLINE_TARGET - len(accepted))
-    shortfall_reasons = dict(rejected_by_reason)
-    for reason in (
-        "pending", "rejected", "duplicate_local", "duplicate_local_inventory",
-        "duplicate_online", "duplicate_batch",
-    ):
-        count = status_counts.get(reason, 0)
-        if count:
-            shortfall_reasons[reason] = shortfall_reasons.get(reason, 0) + count
-    if shortfall:
-        terminal_reason = (
-            "provider_failed" if provider_failed
-            else gate_stop_reason if gate_stop_reason
-            else "candidate_budget_exhausted" if budget_used >= budget
-            else "provider_round_budget_exhausted" if has_more and provider_rounds >= max_rounds
-            else _text(exhaustion_reason) or "bounded_provider_batch_exhausted"
+    while len(accepted) < ONLINE_TARGET and has_more and provider_rounds < max_rounds and budget_used < budget:
+        if not _round_allowed():
+            break
+        fetched = await _fetch_round()
+        if fetched is None:
+            break
+        provider_result, batch = fetched
+        fresh_batch = _fresh_candidates(batch)
+        qualified = _qualify_online_candidates_internal(
+            fresh_batch,
+            query_text=query_text,
+            policy=policy,
+            local_canonical_keys=local_canonical_keys,
+            remaining=max(1, ONLINE_TARGET - len(accepted)),
+            search_brief=search_brief,
+            as_of=as_of,
         )
-        shortfall_reasons[terminal_reason] = shortfall_reasons.get(terminal_reason, 0) + shortfall
+        _record_qualification(qualified, fresh_batch)
+        await _consume_outcomes(qualified["outcomes"])
+        _finish_round(provider_result, batch)
 
-    core_counts = {
-        "target_count": ONLINE_TARGET,
-        "evaluated_count": evaluated,
-        "returned_count": len(accepted),
-        "shortfall": shortfall,
-        "provider_rounds": provider_rounds,
-        "candidate_budget_used": budget_used,
-        "inventory_snapshot_rows": max(0, int(inventory_snapshot_rows or 0)),
-        "inventory_db_reads": max(0, int(inventory_db_reads or 0)),
-        "materialization_db_reads": materialization_db_reads,
-    }
-    snapshot_id = _snapshot_id(
-        accepted,
-        core_counts,
-        query_text=query_text,
-        policy=policy,
-    )
-    for item in accepted:
-        item["snapshot_revision"] = provider_rounds
-        item["snapshot_id"] = snapshot_id
-        proof = dict(item.get("qualification_evidence") or {})
-        proof.update({
-            "snapshot_revision": provider_rounds,
-            "snapshot_id": snapshot_id,
-            "server_rank": item.get("server_rank"),
-            "global_unique_rank": item.get("global_unique_rank"),
-        })
-        item["qualification_evidence"] = proof
-    return {
-        "schema": ONLINE_SCHEMA,
-        "policy_version": ONLINE_POLICY_VERSION,
-        "server_owned": True,
-        "origin_lane": ONLINE_ORIGIN_LANE,
-        "source": ONLINE_SOURCE,
-        "policy": {
+    def _shortfall_details() -> tuple[int, dict[str, int]]:
+        shortfall = max(0, ONLINE_TARGET - len(accepted))
+        shortfall_reasons = dict(rejected_by_reason)
+        reasons = (
+            "pending", "rejected", "duplicate_local", "duplicate_local_inventory",
+            "duplicate_online", "duplicate_batch",
+        )
+        for reason in reasons:
+            count = status_counts.get(reason, 0)
+            if count:
+                shortfall_reasons[reason] = shortfall_reasons.get(reason, 0) + count
+        if shortfall:
+            terminal_reason = (
+                "provider_failed" if provider_failed
+                else gate_stop_reason if gate_stop_reason
+                else "candidate_budget_exhausted" if budget_used >= budget
+                else "provider_round_budget_exhausted" if has_more and provider_rounds >= max_rounds
+                else _text(exhaustion_reason) or "bounded_provider_batch_exhausted"
+            )
+            shortfall_reasons[terminal_reason] = shortfall_reasons.get(terminal_reason, 0) + shortfall
+        return shortfall, shortfall_reasons
+
+    def _finalize() -> dict[str, Any]:
+        shortfall, shortfall_reasons = _shortfall_details()
+        core_counts = {
+            "target_count": ONLINE_TARGET, "evaluated_count": evaluated,
+            "unique_evaluated_count": len(unique_evaluated_keys),
+            "cell_evaluation_count": cell_evaluation_count, "returned_count": len(accepted),
+            "shortfall": shortfall, "provider_rounds": provider_rounds,
+            "candidate_budget_used": budget_used,
+            "inventory_snapshot_rows": max(0, int(inventory_snapshot_rows or 0)),
+            "inventory_db_reads": max(0, int(inventory_db_reads or 0)),
+            "materialization_db_reads": materialization_db_reads,
+        }
+        snapshot_id = _snapshot_id(accepted, core_counts, query_text=query_text, policy=policy)
+        for item in accepted:
+            item["snapshot_revision"] = provider_rounds
+            item["snapshot_id"] = snapshot_id
+            proof = dict(item.get("qualification_evidence") or {})
+            proof.update({
+                "snapshot_revision": provider_rounds, "snapshot_id": snapshot_id,
+                "server_rank": item.get("server_rank"),
+                "global_unique_rank": item.get("global_unique_rank"),
+            })
+            item["qualification_evidence"] = proof
+        return {
+            "schema": ONLINE_SCHEMA,
             "policy_version": ONLINE_POLICY_VERSION,
+            "server_owned": True,
+            "origin_lane": ONLINE_ORIGIN_LANE,
+            "source": ONLINE_SOURCE,
+            "policy": {
+                "policy_version": ONLINE_POLICY_VERSION, "target_count": ONLINE_TARGET,
+                "min_followers": policy.get("min_followers"),
+                "max_followers": policy.get("max_followers"),
+                "followers_filter": dict(policy.get("followers_filter") or {}),
+                "max_video_age_days": policy.get("max_video_age_days"),
+                "market": policy.get("market"),
+                "platforms": list(policy.get("platforms") or []),
+                "languages": list(policy.get("languages") or []),
+                "profile_types": list(policy.get("profile_types") or []),
+                "supported_platforms": sorted(ONLINE_SUPPORTED_PLATFORMS),
+                "exclude_chinese_regions": policy.get("exclude_chinese_regions") is True,
+            },
+            "query": {"query_text": _text(query_text)[:500], "source": "server_effective_query"},
+            "status": "ready" if not shortfall else "shortfall",
+            "terminal": True,
+            "snapshot_complete": True,
+            "snapshot_revision": max(1, provider_rounds),
+            "snapshot_id": snapshot_id,
             "target_count": ONLINE_TARGET,
-            "min_followers": policy.get("min_followers"),
-            "max_video_age_days": policy.get("max_video_age_days"),
-            "market": policy.get("market"),
-            "platforms": list(policy.get("platforms") or []),
-            "languages": list(policy.get("languages") or []),
-            "profile_types": list(policy.get("profile_types") or []),
-            "supported_platforms": sorted(ONLINE_SUPPORTED_PLATFORMS),
-            "exclude_chinese_regions": policy.get("exclude_chinese_regions") is True,
-        },
-        "query": {
-            "query_text": _text(query_text)[:500],
-            "source": "server_effective_query",
-        },
-        "status": "ready" if not shortfall else "shortfall",
-        "terminal": True,
-        "snapshot_complete": True,
-        "snapshot_revision": max(1, provider_rounds),
-        "snapshot_id": snapshot_id,
-        "target_count": ONLINE_TARGET,
-        "evaluated_count": evaluated,
-        "strict_qualified_count": (
-            status_counts.get("accepted", 0)
-            + status_counts.get("qualified_overflow", 0)
-            + status_counts.get("duplicate_local", 0)
-            + status_counts.get("duplicate_online", 0)
-        ),
-        "net_new_accepted_count": len(accepted),
-        "returned_count": len(accepted),
-        "pending_count": status_counts.get("pending", 0),
-        "rejected_count": status_counts.get("rejected", 0),
-        "qualified_overflow_count": status_counts.get("qualified_overflow", 0),
-        "duplicate_local_count": status_counts.get("duplicate_local", 0),
-        "duplicate_local_inventory_count": status_counts.get("duplicate_local_inventory", 0),
-        "duplicate_online_count": status_counts.get("duplicate_online", 0) + status_counts.get("duplicate_batch", 0),
-        "provider_rounds": provider_rounds,
-        "provider_calls": provider_calls,
-        "candidate_budget": budget,
-        "candidate_budget_used": budget_used,
-        "inventory_snapshot_rows": max(0, int(inventory_snapshot_rows or 0)),
-        "inventory_db_reads": max(0, int(inventory_db_reads or 0)),
-        "materialization_db_reads": materialization_db_reads,
-        "total_identity_db_reads": max(0, int(inventory_db_reads or 0)) + materialization_db_reads,
-        # 「真的没有下一页」才叫 exhausted。被轮次闸(时间/钱)拦下时 has_more 仍为 True,
-        # 这里就诚实说没耗尽 —— 差多少人由 shortfall_reasons 里的闸原因交代。
-        "exhausted": not has_more,
-        "round_gate": {
-            "stopped_by": gate_stop_reason or None,
-            "verdicts": gate_verdicts,
-        },
-        "shortfall": shortfall,
-        "shortfall_reasons": shortfall_reasons,
-        "rejected_by_reason": rejected_by_reason,
-        "stage_timing": {"online_qualification_ms": round((perf_counter() - started) * 1000.0, 3)},
-        "items": accepted,
-        "provider_calls_performed": provider_calls > 0,
-        "viltrox_fit_score_untouched": True,
-    }
+            "evaluated_count": evaluated,
+            "unique_evaluated_count": len(unique_evaluated_keys),
+            "cell_evaluation_count": cell_evaluation_count,
+            "qualified_cell_count": qualified_cell_count,
+            "multi_cell_candidate_count": len(multi_cell_evaluated_keys),
+            "strict_qualified_count": sum(status_counts.get(key, 0) for key in (
+                "accepted", "qualified_overflow", "duplicate_local", "duplicate_online",
+            )),
+            "net_new_accepted_count": len(accepted),
+            "returned_count": len(accepted),
+            "pending_count": status_counts.get("pending", 0),
+            "rejected_count": status_counts.get("rejected", 0),
+            "qualified_overflow_count": status_counts.get("qualified_overflow", 0),
+            "duplicate_local_count": status_counts.get("duplicate_local", 0),
+            "duplicate_local_inventory_count": status_counts.get("duplicate_local_inventory", 0),
+            "duplicate_online_count": status_counts.get("duplicate_online", 0) + status_counts.get("duplicate_batch", 0),
+            "provider_rounds": provider_rounds, "provider_calls": provider_calls,
+            "candidate_budget": budget, "candidate_budget_used": budget_used,
+            "inventory_snapshot_rows": max(0, int(inventory_snapshot_rows or 0)),
+            "inventory_db_reads": max(0, int(inventory_db_reads or 0)),
+            "materialization_db_reads": materialization_db_reads,
+            "total_identity_db_reads": max(0, int(inventory_db_reads or 0)) + materialization_db_reads,
+            "exhausted": not has_more,
+            "round_gate": {"stopped_by": gate_stop_reason or None, "verdicts": gate_verdicts},
+            "shortfall": shortfall,
+            "shortfall_reasons": shortfall_reasons,
+            "rejected_by_reason": rejected_by_reason,
+            "stage_timing": {"online_qualification_ms": round((perf_counter() - started) * 1000.0, 3)},
+            "items": accepted,
+            "provider_calls_performed": provider_calls > 0,
+            "viltrox_fit_score_untouched": True,
+        }
+
+    return _finalize()
 
 
 local_identity_snapshot_for_session = profile_online_inventory.local_identity_snapshot_for_session
@@ -686,6 +756,7 @@ async def collect_strict_online_for_session(
     max_provider_rounds: int = ONLINE_MAX_PROVIDER_ROUNDS,
     round_gate: Callable[[int], dict[str, Any]] | None = None,
     exhaustion_reason: str = "bounded_provider_batch_exhausted",
+    search_brief: dict[str, Any] | None = None,
     as_of: datetime | None = None,
 ) -> dict[str, Any]:
     """Session-safe entry point: local dedupe keys always come from the DB."""
@@ -707,5 +778,6 @@ async def collect_strict_online_for_session(
         max_provider_rounds=max_provider_rounds,
         round_gate=round_gate,
         exhaustion_reason=exhaustion_reason,
+        search_brief=search_brief,
         as_of=as_of,
     )

@@ -23,6 +23,15 @@ from app.domains.kol.profile_recall_activity_gate import (
 )
 from app.domains.kol.profile_recall_match_evidence import query_evidence_terms, why_fit_from_match_evidence
 from app.domains.kol import search_sessions_attach_jobs as _attach_jobs
+from app.domains.kol.search_session_evidence_projection import (
+    _looks_like_contact_value,
+    _safe_match_evidence,
+)
+from app.domains.kol.search_sessions_targeted import (
+    project_candidate_query_context,
+    project_growth_candidate_context,
+    project_targeted_plan,
+)
 
 from app.domains.kol.search_sessions_serde import (
     _compact_flow,
@@ -42,41 +51,9 @@ logger = get_logger(__name__)
 # Confirmed from the real apify_jobs table.  Keep this contract narrow so an
 # unknown future state cannot accidentally terminalize a live search session.
 _TERMINAL_LINKED_JOB_STATUSES = frozenset({"done", "failed", "blocked", "triage"})
-_MATCH_EVIDENCE_FIELDS = frozenset({
-    "handle", "display_name", "bio", "primary_topic", "content_style",
-    "secondary_topics_json", "profile_text", "type_reason", "representative_evidence.title",
-})
 _FACET_NAMES = ("platform", "country", "language", "profile_type", "contact_available", "video_evidence")
 _PLAN_STATUS_VALUES = frozenset({"ready", "fallback", "needs_clarification"})
 _PLAN_CODE_RE = re.compile(r"^[a-zA-Z0-9_.:/-]{1,120}$")
-
-
-def _looks_like_contact_value(value: str) -> bool:
-    text = str(value or "").strip()
-    phone_like = re.search(r"(?<!\w)(?:\+?\d[\d().\s-]{5,}\d)(?!\w)", text)
-    return bool(
-        re.search(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}", text, flags=re.IGNORECASE)
-        or re.search(r"(?:https?://|www\.)", text, flags=re.IGNORECASE)
-        or (phone_like and len(re.sub(r"\D", "", phone_like.group(0))) >= 7)
-    )
-
-
-def _safe_match_evidence(value: Any, *, allowed_terms: set[str]) -> list[dict[str, str]]:
-    output: list[dict[str, str]] = []
-    for raw in _list(value)[:12]:
-        if not isinstance(raw, dict):
-            continue
-        field = _text(raw.get("field"))[:48]
-        term = _text(raw.get("term")).lower()[:80]
-        source = _text(raw.get("source"))
-        if (
-            field in _MATCH_EVIDENCE_FIELDS
-            and term in allowed_terms
-            and not _looks_like_contact_value(term)
-            and source == "server_profile_evidence"
-        ):
-            output.append({"field": field, "term": term, "source": source})
-    return output
 
 
 def _safe_candidate_facets(value: Any) -> dict[str, str]:
@@ -112,7 +89,12 @@ def _safe_public_code(value: Any, *, limit: int = 160) -> str:
     return text if _PLAN_CODE_RE.fullmatch(text) else ""
 
 
-def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any]:
+def _safe_gate_evidence(
+    value: Any,
+    *,
+    allowed_terms: set[str],
+    controlled_specs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Persist the Smart-local proof, never arbitrary/contact-bearing payload fields."""
     raw = _dict(value)
     if _text(raw.get("schema")) != "smart_local_gate_evidence_v2":
@@ -163,10 +145,17 @@ def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any
     followers = _dict(raw.get("followers"))
     follower_value = _safe_non_negative_int(followers.get("value"), maximum=5_000_000_000)
     follower_minimum = _safe_non_negative_int(followers.get("minimum"), maximum=5_000_000_000)
+    follower_maximum = _safe_non_negative_int(followers.get("maximum"), maximum=5_000_000_000)
     output["followers"] = {
         "value": follower_value,
         "minimum": follower_minimum,
+        "maximum": follower_maximum,
         "known": followers.get("known") is True,
+        "filter_requested": followers.get("filter_requested") is True,
+        "filter_source": _safe_public_code(followers.get("filter_source"), limit=80),
+        "unknown_policy": _safe_public_code(followers.get("unknown_policy"), limit=40),
+        "status": _safe_public_code(followers.get("status"), limit=40),
+        "reason": _safe_public_code(followers.get("reason"), limit=80) or None,
         "passed": followers.get("passed") is True,
         "source": _safe_public_code(followers.get("source")),
     }
@@ -239,7 +228,9 @@ def _safe_gate_evidence(value: Any, *, allowed_terms: set[str]) -> dict[str, Any
 
     relevance = _dict(raw.get("relevance"))
     safe_relevance_evidence = _safe_match_evidence(
-        relevance.get("evidence"), allowed_terms=allowed_terms
+        relevance.get("evidence"),
+        allowed_terms=allowed_terms,
+        controlled_specs=controlled_specs,
     )
     relevance_passed = relevance.get("passed") is True and bool(safe_relevance_evidence)
     output["relevance"] = {
@@ -279,6 +270,8 @@ def _safe_local_qualification(value: Any) -> dict[str, Any]:
         "qualified_returned_count",
         "shortfall",
         "evaluated_count",
+        "unique_evaluated",
+        "unique_qualified",
     ):
         number = _safe_non_negative_int(raw.get(key), maximum=100_000)
         if number is not None:
@@ -286,6 +279,20 @@ def _safe_local_qualification(value: Any) -> dict[str, Any]:
     reason = _safe_public_code(raw.get("shortfall_reason"), limit=120)
     if reason:
         output["shortfall_reason"] = reason
+    funnel_scope = _safe_public_code(raw.get("funnel_scope"), limit=80)
+    if funnel_scope == "cell_candidate_evaluations":
+        output["funnel_scope"] = funnel_scope
+    unique_scope = _safe_public_code(raw.get("unique_evaluated_scope"), limit=120)
+    if unique_scope:
+        output["unique_evaluated_scope"] = unique_scope
+    deferred = _dict(raw.get("deferred_activity"))
+    if deferred:
+        output["deferred_activity"] = {
+            "available": _safe_non_negative_int(deferred.get("available"), maximum=100_000) or 0,
+            "returned": _safe_non_negative_int(deferred.get("returned"), maximum=100_000) or 0,
+            "counts_toward_target": False,
+            "selectable": deferred.get("selectable") is True,
+        }
 
     policy = _dict(raw.get("policy"))
     safe_policy: dict[str, Any] = {}
@@ -296,6 +303,15 @@ def _safe_local_qualification(value: Any) -> dict[str, Any]:
     for key in ("server_owned", "allow_unknown_followers", "allow_unknown_market", "allow_unknown_language", "allow_unknown_profile_type", "allow_low_quality_backfill", "canonical_dedupe"):
         if isinstance(policy.get(key), bool):
             safe_policy[key] = policy[key]
+    follower_filter = _dict(policy.get("followers_filter"))
+    if follower_filter:
+        safe_policy["followers_filter"] = {
+            "requested": follower_filter.get("requested") is True,
+            "minimum": _safe_non_negative_int(follower_filter.get("minimum"), maximum=5_000_000_000),
+            "maximum": _safe_non_negative_int(follower_filter.get("maximum"), maximum=5_000_000_000),
+            "source": _safe_public_code(follower_filter.get("source"), limit=80),
+            "unknown_policy": _safe_public_code(follower_filter.get("unknown_policy"), limit=40),
+        }
     # 活跃度未知旋钮是 defer/reject 的字符串,不是布尔:上一版白名单还留着已被
     # 删掉的 allow_unknown_or_stale_video,新旋钮却一个字都存不下,会话历史里
     # 因此查不到「这批人为什么被拆到待补抓桶」的出处。
@@ -431,7 +447,7 @@ def _safe_llm_query_plan(value: Any) -> dict[str, Any]:
     raw = _dict(value)
     if not raw:
         return {}
-    output: dict[str, Any] = {}
+    output: dict[str, Any] = project_targeted_plan(raw)
     status = _text(raw.get("status")).lower()
     if status in _PLAN_STATUS_VALUES:
         output["status"] = status
@@ -594,6 +610,8 @@ def _recall_session_payload(
     }
     if safe_source_fields:
         payload["source_fields"] = safe_source_fields
+    payload.update(project_candidate_query_context(raw))
+    payload.update(project_growth_candidate_context(raw))
     payload.update(
         {
             "bucket": bucket,
@@ -678,14 +696,27 @@ def attach_recall_result(session_id: int, result: dict[str, Any]) -> dict[str, A
         # evidence stored beside it; never persist a free-form upstream reason.
         legacy_why_fit = payload.pop("why_fit", None)
         payload.pop("evidence", None)
+        query_context = project_candidate_query_context(raw)
+        item_allowed_terms = set(allowed_terms)
+        item_allowed_terms.update(query_evidence_terms(query_context.get("query_cell_query")))
+        for cell in _list(query_context.get("matched_query_cells")):
+            item_allowed_terms.update(query_evidence_terms(_dict(cell).get("primary_query")))
+        controlled_specs = [
+            spec
+            for cell in _list(query_context.get("matched_query_cells"))
+            if isinstance(cell, dict)
+            and isinstance((spec := cell.get("locked_term_groups")), dict)
+        ]
         match_evidence = _safe_match_evidence(
             raw.get("match_evidence"),
-            allowed_terms=allowed_terms,
+            allowed_terms=item_allowed_terms,
+            controlled_specs=controlled_specs,
         )
         candidate_facets = _safe_candidate_facets(raw.get("candidate_facets"))
         qualification_evidence = _safe_gate_evidence(
             raw.get("qualification_evidence"),
-            allowed_terms=allowed_terms,
+            allowed_terms=item_allowed_terms,
+            controlled_specs=controlled_specs,
         )
         payload["server_rank"] = server_rank
         payload["global_rank"] = server_rank

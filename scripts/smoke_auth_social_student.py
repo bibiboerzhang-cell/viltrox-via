@@ -28,8 +28,8 @@ BACKEND_ROOT = ROOT / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.db.connection import close_db_runtime, init_db_runtime  # noqa: E402
-from app.db.connection import get_conn  # noqa: E402
+from app.db.connection import close_db_runtime, get_conn  # noqa: E402
+from app.db.startup import init_db_runtime  # noqa: E402
 from app.services.student_identity import create_student_qr_batch, ensure_student_school_defaults  # noqa: E402
 
 

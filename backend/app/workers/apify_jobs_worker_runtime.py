@@ -83,7 +83,472 @@ def _finish_cache_hit(
     return True
 
 
-def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespace: Mapping[str, Any]) -> None:
+_SPECIAL_JOB_HANDLERS = {
+    "session_advance": "_process_session_advance",
+    "smart_search_profile_advance": "_process_smart_search_profile_advance",
+    "kol_content_fit_analysis": "_process_kol_content_fit_analysis",
+    "account_dossier_extract": "_process_account_dossier_extract",
+    "project_contract_extract": "_process_project_contract_extract",
+    "project_retrospective_aggregate": "_process_project_retrospective",
+    "video_url_resolve": "_process_video_url_resolve",
+    "kol_profile_deep_crawl": "_process_kol_profile_deep_crawl",
+    "kol_pool_comments_collect": "_process_kol_pool_comments_collect",
+    "kol_video_metric_refresh": "_process_kol_video_metric_refresh",
+    "kol_audience_stats_refresh": "_process_kol_audience_stats_refresh",
+    "official_channel_comments_collect": "_process_official_channel_comments_collect",
+    "kol_outreach_draft": "_process_kol_outreach_draft",
+    "contract_invoice_extract": "_process_contract_invoice_extract",
+    "contract_polish": "_process_contract_polish",
+    "logistics_track_sync": "_process_logistics_track_sync",
+    "kol_auto_poll": "_process_kol_auto_poll",
+}
+
+
+def _dispatch_special_job(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    deps: Mapping[str, Any],
+) -> bool:
+    handler_name = _SPECIAL_JOB_HANDLERS.get(
+        str(job.get("job_type") or "").strip().lower()
+    )
+    if handler_name is None:
+        return False
+    deps[handler_name](conn, job, payload)
+    return True
+
+
+def _prepare_llm_context(
+    conn: psycopg.Connection[Any],
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    target_type: str,
+    target_id: str,
+    derive_method: str,
+    deps: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if target_type not in deps["LLM_TARGET_TYPES"]:
+        deps["_block_job"](
+            conn,
+            int(job["id"]),
+            "unsupported_llm_target_type",
+            {"target_type": target_type},
+        )
+        return None
+    job_authorization = deps["verify_job_local_evaluation_capability"](
+        payload,
+        job_id=int(job["id"]),
+    )
+    if job_authorization.get("requested") and not job_authorization.get("valid"):
+        deps["_block_job"](
+            conn,
+            int(job["id"]),
+            "local_evaluation_capability_blocked",
+            {"reason_detail": job_authorization.get("reason")},
+        )
+        return None
+    execution_class = str(
+        job_authorization.get("execution_class")
+        or deps["llm_gateway"].PRODUCTION_EXECUTION_CLASS
+    )
+    cache_derive_method = str(
+        job_authorization.get("cache_derive_method") or derive_method
+    )
+    if execution_class == deps["LOCAL_EVALUATION_EXECUTION_CLASS"] and (
+        derive_method != deps["LOCAL_EVALUATION_DERIVE_METHOD"]
+        or cache_derive_method != deps["LOCAL_EVALUATION_CACHE_DERIVE_METHOD"]
+    ):
+        deps["_block_job"](
+            conn,
+            int(job["id"]),
+            "local_evaluation_derive_blocked",
+            {"derive_method": derive_method},
+        )
+        return None
+    cache_state = _cache_reuse_state(
+        conn,
+        target_type=target_type,
+        target_id=target_id,
+        derive_method=cache_derive_method,
+        payload=payload,
+        keyframe_derive_method=deps["FINAL_V1_KEYFRAME_QA_DERIVE_METHOD"],
+        keyframe_lookup=deps["_keyframe_qa_cache_reuse_state_for_source"],
+        reuse_lookup=deps["_analysis_cache_reuse_decision"],
+        legacy_lookup=deps["_analysis_cache_exists"],
+    )
+    if _finish_cache_hit(
+        conn,
+        job=job,
+        payload=payload,
+        derive_method=derive_method,
+        cache_state=cache_state,
+        evaluation_only=execution_class
+        == deps["LOCAL_EVALUATION_EXECUTION_CLASS"],
+        scope_checkpoint=deps["_final_v1_scope_checkpoint"],
+        finish_skipped=deps["_finish_skipped"],
+    ):
+        return None
+    return {
+        "job_authorization": job_authorization,
+        "execution_class": execution_class,
+        "cache_derive_method": cache_derive_method,
+    }
+
+
+def _preflight_state(
+    preflight: dict[str, Any], deps: Mapping[str, Any]
+) -> dict[str, Any]:
+    execution_plan = (
+        preflight.get("worker_model_execution")
+        if isinstance(preflight.get("worker_model_execution"), dict)
+        else {}
+    )
+    ready_models = [
+        str(model).strip()
+        for model in execution_plan.get("ready_models", [])
+        if str(model).strip()
+    ]
+    if execution_plan:
+        allowed = bool(ready_models)
+        blocked_models = (
+            execution_plan.get("blocked_models")
+            if isinstance(execution_plan.get("blocked_models"), dict)
+            else {}
+        )
+        reason = str(
+            preflight.get("provider_gate_reason")
+            or next(iter(blocked_models.values()), "")
+            or ("provider_calls_allowed" if allowed else "provider_calls_blocked")
+        )
+        estimated_cost = float(execution_plan.get("estimated_cost_usd") or 0.0)
+    else:
+        allowed, reason, estimated_cost = deps["_google_allowed"](preflight)
+    return {
+        "execution_plan": execution_plan,
+        "ready_models": ready_models,
+        "allowed": allowed,
+        "reason": reason,
+        "estimated_cost": estimated_cost,
+    }
+
+
+def _expected_model(
+    payload: dict[str, Any],
+    derive_method: str,
+    ready_models: list[str],
+    deps: Mapping[str, Any],
+) -> str:
+    if ready_models:
+        return ready_models[0]
+    if derive_method == deps["FINAL_V1_KEYFRAME_QA_DERIVE_METHOD"]:
+        return str(
+            payload.get("final_v1_qa_model")
+            or deps["FINAL_V1_KEYFRAME_QA_MODEL"]
+        ).strip()
+    return deps["WORKER_GEMINI_MODEL"]
+
+
+def _authorized_execution_payload(
+    conn: psycopg.Connection[Any],
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    derive_method: str,
+    preflight: dict[str, Any],
+    state: dict[str, Any],
+    context: dict[str, Any],
+    deps: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if not state["allowed"]:
+        deps["_block_job"](
+            conn,
+            int(job["id"]),
+            "budget_guard_blocked",
+            {
+                "provider": "google",
+                "stage": derive_method,
+                "reason_detail": state["reason"],
+                "estimated_cost_usd": state["estimated_cost"],
+            },
+        )
+        return None
+    execution_plan = state["execution_plan"]
+    ready_models = state["ready_models"]
+    authorizations_by_model = (
+        execution_plan.get("authorizations_by_model")
+        if isinstance(execution_plan.get("authorizations_by_model"), dict)
+        else {}
+    )
+    authorizations_by_binding = (
+        execution_plan.get("authorizations_by_binding")
+        if isinstance(execution_plan.get("authorizations_by_binding"), dict)
+        else {}
+    )
+    expected_model = _expected_model(payload, derive_method, ready_models, deps)
+    model_authorization = authorizations_by_model.get(expected_model)
+    authorization = (
+        model_authorization
+        if isinstance(model_authorization, dict)
+        else deps["_google_execution_authorization"](preflight)
+    )
+    expected_binding = f"google/{expected_model}"
+    if authorization.get("binding") != expected_binding:
+        deps["_block_job"](
+            conn,
+            int(job["id"]),
+            "model_binding_mismatch",
+            {
+                "expected_binding": expected_binding,
+                "authorized_binding": authorization.get("binding"),
+                "execution_class": authorization.get("execution_class"),
+            },
+        )
+        return None
+    execution_class = context["execution_class"]
+    if authorization.get("execution_class") != execution_class:
+        deps["_block_job"](
+            conn,
+            int(job["id"]),
+            "execution_class_mismatch",
+            {
+                "expected_execution_class": execution_class,
+                "authorized_execution_class": authorization.get("execution_class"),
+            },
+        )
+        return None
+    return {
+        **payload,
+        **(
+            {"gemini_final_v1_models": list(ready_models)}
+            if derive_method == "video_analysis_final_v1" and ready_models
+            else {}
+        ),
+        "_llm_execution": {
+            **authorization,
+            "requested_model_chain": list(
+                execution_plan.get("requested_models") or ready_models
+            ),
+            "ready_model_chain": list(ready_models or [expected_model]),
+            "execution_authorizations_by_model": authorizations_by_model,
+            "execution_authorizations_by_binding": authorizations_by_binding,
+            **(
+                context["job_authorization"]
+                if execution_class == deps["LOCAL_EVALUATION_EXECUTION_CLASS"]
+                else {}
+            ),
+        },
+    }
+
+
+def _run_locked_llm(
+    conn: psycopg.Connection[Any],
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    target_type: str,
+    target_id: str,
+    derive_method: str,
+    target_lock: str,
+    context: dict[str, Any],
+    deps: Mapping[str, Any],
+) -> None:
+    slot = None
+    try:
+        cache_state = _cache_reuse_state(
+            conn,
+            target_type=target_type,
+            target_id=target_id,
+            derive_method=context["cache_derive_method"],
+            payload=payload,
+            keyframe_derive_method=deps["FINAL_V1_KEYFRAME_QA_DERIVE_METHOD"],
+            keyframe_lookup=deps["_keyframe_qa_cache_reuse_state_for_source"],
+            reuse_lookup=deps["_analysis_cache_reuse_decision"],
+            legacy_lookup=deps["_analysis_cache_exists"],
+        )
+        if _finish_cache_hit(
+            conn,
+            job=job,
+            payload=payload,
+            derive_method=derive_method,
+            cache_state=cache_state,
+            evaluation_only=context["execution_class"]
+            == deps["LOCAL_EVALUATION_EXECUTION_CLASS"],
+            scope_checkpoint=deps["_final_v1_scope_checkpoint"],
+            finish_skipped=deps["_finish_skipped"],
+        ):
+            return
+        slot = deps["_acquire_llm_slot"](conn)
+        if slot is None:
+            deps["_requeue_job"](
+                conn,
+                int(job["id"]),
+                "llm concurrency limit reached",
+                retry_delay_seconds=deps["random"].uniform(5.0, 10.0),
+            )
+            return
+        preflight = deps["_llm_budget_preflight"](
+            job,
+            payload,
+            execution_class=context["execution_class"],
+        )
+        state = _preflight_state(preflight, deps)
+        deps["_log_budget_preflight_record_only"](
+            job=job,
+            provider="google",
+            allowed=state["allowed"],
+            reason=state["reason"],
+            estimated_cost=state["estimated_cost"],
+            stage=derive_method,
+        )
+        authorized_payload = _authorized_execution_payload(
+            conn,
+            job=job,
+            payload=payload,
+            derive_method=derive_method,
+            preflight=preflight,
+            state=state,
+            context=context,
+            deps=deps,
+        )
+        if authorized_payload is None:
+            return
+        if derive_method in deps["GEMINI_VIDEO_DERIVE_METHODS"]:
+            deps["_respect_gemini_qps"](conn)
+            deps["_process_gemini_video"](
+                conn,
+                job,
+                authorized_payload,
+                state["estimated_cost"],
+            )
+            return
+        deps["_block_job"](
+            conn,
+            int(job["id"]),
+            "unsupported_llm_derive_method",
+            {"derive_method": derive_method},
+        )
+    finally:
+        if slot is not None:
+            deps["_advisory_unlock"](
+                conn, "vkpi_analysis_worker_llm_slot", slot
+            )
+        deps["_advisory_unlock"](
+            conn, "vkpi_analysis_worker_target", target_lock
+        )
+
+
+def _process_llm_job(
+    conn: psycopg.Connection[Any],
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    target_type: str,
+    target_id: str,
+    derive_method: str,
+    deps: Mapping[str, Any],
+) -> None:
+    context = _prepare_llm_context(
+        conn,
+        job=job,
+        payload=payload,
+        target_type=target_type,
+        target_id=target_id,
+        derive_method=derive_method,
+        deps=deps,
+    )
+    if context is None:
+        return
+    target_lock = f"{target_type}:{target_id}:{derive_method}"
+    if not deps["_advisory_lock"](
+        conn, "vkpi_analysis_worker_target", target_lock
+    ):
+        deps["_requeue_job"](
+            conn,
+            int(job["id"]),
+            "analysis target already in progress",
+            retry_delay_seconds=deps["random"].uniform(2.0, 5.0),
+        )
+        return
+    _run_locked_llm(
+        conn,
+        job=job,
+        payload=payload,
+        target_type=target_type,
+        target_id=target_id,
+        derive_method=derive_method,
+        target_lock=target_lock,
+        context=context,
+        deps=deps,
+    )
+
+
+def _process_mock_job(
+    conn: psycopg.Connection[Any],
+    *,
+    job: dict[str, Any],
+    payload: dict[str, Any],
+    target_type: str,
+    target_id: str,
+    derive_method: str,
+    deps: Mapping[str, Any],
+) -> None:
+    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
+    triggered_by_user_id = int(triggered_by) if triggered_by not in (None, "") else None
+    result = deps["_mock_result"](job, payload)
+    with conn.transaction():
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO vkpi_analysis_cache (
+                  target_type, target_id, model, derive_method, result, cost,
+                  status, triggered_by_user_id, created_at, updated_at
+                )
+                VALUES (%s, %s, 'mock', 'mock', %s::jsonb, 0, 'ready', %s, NOW(), NOW())
+                ON CONFLICT (target_type, target_id, derive_method)
+                DO UPDATE SET
+                  model = EXCLUDED.model,
+                  result = EXCLUDED.result,
+                  cost = EXCLUDED.cost,
+                  status = 'ready',
+                  triggered_by_user_id = EXCLUDED.triggered_by_user_id,
+                  updated_at = NOW()
+                RETURNING id
+                """,
+                (target_type, target_id, deps["_json"](result), triggered_by_user_id),
+            )
+            cache_row = cur.fetchone()
+            cache_id = int(cache_row[0]) if cache_row else None
+            cur.execute(
+                """
+                UPDATE apify_jobs
+                SET status='done',
+                    last_error=NULL,
+                    last_error_category=NULL,
+                    next_retry_at=NULL,
+                    updated_at=NOW()
+                WHERE id=%s
+                """,
+                (job["id"],),
+            )
+    deps["_sync_search_session_job"](
+        conn,
+        int(job["id"]),
+        raw_status="done",
+        analysis_summary=deps["_search_session_analysis_summary_from_result"](
+            cache_id=cache_id,
+            derive_method=derive_method,
+            target_type=target_type,
+            target_id=target_id,
+            evidence={"id": target_id},
+            result=result,
+            cost=0.0,
+        ),
+    )
+
+
+def _runtime_dependencies(namespace: Mapping[str, Any]) -> dict[str, Any]:
     GEMINI_VIDEO_DERIVE_METHODS = namespace['GEMINI_VIDEO_DERIVE_METHODS']
     FINAL_V1_KEYFRAME_QA_DERIVE_METHOD = namespace['FINAL_V1_KEYFRAME_QA_DERIVE_METHOD']
     FINAL_V1_KEYFRAME_QA_MODEL = namespace['FINAL_V1_KEYFRAME_QA_MODEL']
@@ -138,352 +603,50 @@ def process_job_impl(conn: psycopg.Connection[Any], job: dict[str, Any], namespa
     llm_gateway = namespace['llm_gateway']
     random = namespace['random']
     verify_job_local_evaluation_capability = namespace['verify_job_local_evaluation_capability']
+    return locals()
 
+
+def process_job_impl(
+    conn: psycopg.Connection[Any],
+    job: dict[str, Any],
+    namespace: Mapping[str, Any],
+) -> None:
+    deps = _runtime_dependencies(namespace)
     payload = job.get("payload") if isinstance(job.get("payload"), dict) else {}
-    if str(job.get("job_type") or "").strip().lower() == "session_advance":
-        _process_session_advance(conn, job, payload)
+    if _dispatch_special_job(conn, job, payload, deps):
         return
-    if str(job.get("job_type") or "").strip().lower() == "smart_search_profile_advance":
-        _process_smart_search_profile_advance(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "kol_content_fit_analysis":
-        _process_kol_content_fit_analysis(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "account_dossier_extract":
-        _process_account_dossier_extract(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "project_contract_extract":
-        _process_project_contract_extract(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "project_retrospective_aggregate":
-        _process_project_retrospective(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "video_url_resolve":
-        _process_video_url_resolve(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "kol_profile_deep_crawl":
-        _process_kol_profile_deep_crawl(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "kol_pool_comments_collect":
-        _process_kol_pool_comments_collect(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "kol_video_metric_refresh":
-        _process_kol_video_metric_refresh(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "kol_audience_stats_refresh":
-        _process_kol_audience_stats_refresh(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "official_channel_comments_collect":
-        _process_official_channel_comments_collect(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "kol_outreach_draft":
-        _process_kol_outreach_draft(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "contract_invoice_extract":
-        _process_contract_invoice_extract(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "contract_polish":
-        _process_contract_polish(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "logistics_track_sync":
-        _process_logistics_track_sync(conn, job, payload)
-        return
-    if str(job.get("job_type") or "").strip().lower() == "kol_auto_poll":
-        _process_kol_auto_poll(conn, job, payload)
-        return
-    # 未知 job_type 防线(2026-07-11):显式分支簇没接住、又不是合法兜底类型('video')的,
-    # 一律 blocked 而非滑进下方 derive_method='mock' 的假成功路径(写 mock cache + done)。
     job_type = str(job.get("job_type") or "").strip().lower()
-    if job_type not in TARGET_FALLBACK_JOB_TYPES:
-        _block_job(conn, int(job["id"]), "unknown_job_type", {"job_type": job_type})
+    if job_type not in deps["TARGET_FALLBACK_JOB_TYPES"]:
+        deps["_block_job"](
+            conn,
+            int(job["id"]),
+            "unknown_job_type",
+            {"job_type": job_type},
+        )
         return
-    target_type, target_id = _target(payload)
+    target_type, target_id = deps["_target"](payload)
     if not target_type or not target_id:
         raise ValueError("payload must include target_type and target_id")
-    derive_method = _derive_method(payload)
+    derive_method = deps["_derive_method"](payload)
     if derive_method != "mock":
-        if target_type not in LLM_TARGET_TYPES:
-            _block_job(conn, int(job["id"]), "unsupported_llm_target_type", {"target_type": target_type})
-            return
-        job_authorization = verify_job_local_evaluation_capability(
-            payload,
-            job_id=int(job["id"]),
-        )
-        if job_authorization.get("requested") and not job_authorization.get("valid"):
-            _block_job(
-                conn,
-                int(job["id"]),
-                "local_evaluation_capability_blocked",
-                {"reason_detail": job_authorization.get("reason")},
-            )
-            return
-        execution_class = str(
-            job_authorization.get("execution_class")
-            or llm_gateway.PRODUCTION_EXECUTION_CLASS
-        )
-        cache_derive_method = str(
-            job_authorization.get("cache_derive_method") or derive_method
-        )
-        if execution_class == LOCAL_EVALUATION_EXECUTION_CLASS and (
-            derive_method != LOCAL_EVALUATION_DERIVE_METHOD
-            or cache_derive_method != LOCAL_EVALUATION_CACHE_DERIVE_METHOD
-        ):
-            _block_job(
-                conn,
-                int(job["id"]),
-                "local_evaluation_derive_blocked",
-                {"derive_method": derive_method},
-            )
-            return
-        cache_state = _cache_reuse_state(
-            conn,
-            target_type=target_type,
-            target_id=target_id,
-            derive_method=cache_derive_method,
-            payload=payload,
-            keyframe_derive_method=FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
-            keyframe_lookup=_keyframe_qa_cache_reuse_state_for_source,
-            reuse_lookup=_analysis_cache_reuse_decision,
-            legacy_lookup=_analysis_cache_exists,
-        )
-        if _finish_cache_hit(
+        _process_llm_job(
             conn,
             job=job,
             payload=payload,
-            derive_method=derive_method,
-            cache_state=cache_state,
-            evaluation_only=execution_class == LOCAL_EVALUATION_EXECUTION_CLASS,
-            scope_checkpoint=_final_v1_scope_checkpoint,
-            finish_skipped=_finish_skipped,
-        ):
-            return
-        target_lock = f"{target_type}:{target_id}:{derive_method}"
-        if not _advisory_lock(conn, "vkpi_analysis_worker_target", target_lock):
-            _requeue_job(conn, int(job["id"]), "analysis target already in progress", retry_delay_seconds=random.uniform(2.0, 5.0))
-            return
-        slot = None
-        try:
-            cache_state = _cache_reuse_state(
-                conn,
-                target_type=target_type,
-                target_id=target_id,
-                derive_method=cache_derive_method,
-                payload=payload,
-                keyframe_derive_method=FINAL_V1_KEYFRAME_QA_DERIVE_METHOD,
-                keyframe_lookup=_keyframe_qa_cache_reuse_state_for_source,
-                reuse_lookup=_analysis_cache_reuse_decision,
-                legacy_lookup=_analysis_cache_exists,
-            )
-            if _finish_cache_hit(
-                conn,
-                job=job,
-                payload=payload,
-                derive_method=derive_method,
-                cache_state=cache_state,
-                evaluation_only=execution_class == LOCAL_EVALUATION_EXECUTION_CLASS,
-                scope_checkpoint=_final_v1_scope_checkpoint,
-                finish_skipped=_finish_skipped,
-            ):
-                return
-            slot = _acquire_llm_slot(conn)
-            if slot is None:
-                _requeue_job(conn, int(job["id"]), "llm concurrency limit reached", retry_delay_seconds=random.uniform(5.0, 10.0))
-                return
-            preflight = _llm_budget_preflight(
-                job,
-                payload,
-                execution_class=execution_class,
-            )
-            execution_plan = (
-                preflight.get("worker_model_execution")
-                if isinstance(preflight.get("worker_model_execution"), dict)
-                else {}
-            )
-            ready_models = [
-                str(model).strip()
-                for model in execution_plan.get("ready_models", [])
-                if str(model).strip()
-            ]
-            if execution_plan:
-                allowed = bool(ready_models)
-                blocked_models = (
-                    execution_plan.get("blocked_models")
-                    if isinstance(execution_plan.get("blocked_models"), dict)
-                    else {}
-                )
-                reason = str(
-                    preflight.get("provider_gate_reason")
-                    or next(iter(blocked_models.values()), "")
-                    or (
-                        "provider_calls_allowed"
-                        if allowed
-                        else "provider_calls_blocked"
-                    )
-                )
-                estimated_cost = float(
-                    execution_plan.get("estimated_cost_usd") or 0.0
-                )
-            else:
-                # Compatibility for narrow unit/operational shims that still
-                # return the legacy single-provider preflight shape.
-                allowed, reason, estimated_cost = _google_allowed(preflight)
-            _log_budget_preflight_record_only(
-                job=job,
-                provider="google",
-                allowed=allowed,
-                reason=reason,
-                estimated_cost=estimated_cost,
-                stage=derive_method,
-            )
-            if not allowed:
-                # 护栏② 主线 enforce:撞 cap 拦在 _process_gemini_video 之前(finally 正常释放 slot/lock)
-                _block_job(
-                    conn,
-                    int(job["id"]),
-                    "budget_guard_blocked",
-                    {
-                        "provider": "google",
-                        "stage": derive_method,
-                        "reason_detail": reason,
-                        "estimated_cost_usd": estimated_cost,
-                    },
-                )
-                return
-            authorizations_by_model = (
-                execution_plan.get("authorizations_by_model")
-                if isinstance(execution_plan.get("authorizations_by_model"), dict)
-                else {}
-            )
-            authorizations_by_binding = (
-                execution_plan.get("authorizations_by_binding")
-                if isinstance(execution_plan.get("authorizations_by_binding"), dict)
-                else {}
-            )
-            expected_model = (
-                ready_models[0]
-                if ready_models
-                else str(
-                    payload.get("final_v1_qa_model")
-                    or FINAL_V1_KEYFRAME_QA_MODEL
-                ).strip()
-                if derive_method == FINAL_V1_KEYFRAME_QA_DERIVE_METHOD
-                else WORKER_GEMINI_MODEL
-            )
-            authorization = (
-                authorizations_by_model.get(expected_model)
-                if isinstance(authorizations_by_model.get(expected_model), dict)
-                else _google_execution_authorization(preflight)
-            )
-            expected_binding = f"google/{expected_model}"
-            if authorization.get("binding") != expected_binding:
-                _block_job(
-                    conn,
-                    int(job["id"]),
-                    "model_binding_mismatch",
-                    {
-                        "expected_binding": expected_binding,
-                        "authorized_binding": authorization.get("binding"),
-                        "execution_class": authorization.get("execution_class"),
-                    },
-                )
-                return
-            if authorization.get("execution_class") != execution_class:
-                _block_job(
-                    conn,
-                    int(job["id"]),
-                    "execution_class_mismatch",
-                    {
-                        "expected_execution_class": execution_class,
-                        "authorized_execution_class": authorization.get("execution_class"),
-                    },
-                )
-                return
-            # Capability metadata wins for evaluation identity/cache scope;
-            # provider preflight contributes exact binding/readiness/budget.
-            payload = {
-                **payload,
-                **(
-                    {"gemini_final_v1_models": list(ready_models)}
-                    if derive_method == "video_analysis_final_v1"
-                    and ready_models
-                    else {}
-                ),
-                "_llm_execution": {
-                    **authorization,
-                    "requested_model_chain": list(
-                        execution_plan.get("requested_models") or ready_models
-                    ),
-                    "ready_model_chain": list(ready_models or [expected_model]),
-                    "execution_authorizations_by_model": authorizations_by_model,
-                    "execution_authorizations_by_binding": authorizations_by_binding,
-                    **(
-                        job_authorization
-                        if execution_class == LOCAL_EVALUATION_EXECUTION_CLASS
-                        else {}
-                    ),
-                },
-            }
-            if derive_method in GEMINI_VIDEO_DERIVE_METHODS:
-                _respect_gemini_qps(conn)
-                _process_gemini_video(conn, job, payload, estimated_cost)
-                return
-            _block_job(conn, int(job["id"]), "unsupported_llm_derive_method", {"derive_method": derive_method})
-            return
-        finally:
-            if slot is not None:
-                _advisory_unlock(conn, "vkpi_analysis_worker_llm_slot", slot)
-            _advisory_unlock(conn, "vkpi_analysis_worker_target", target_lock)
-    triggered_by = payload.get("triggered_by_user_id", payload.get("user_id"))
-    triggered_by_user_id = int(triggered_by) if triggered_by not in (None, "") else None
-    result = _mock_result(job, payload)
-    with conn.transaction():
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO vkpi_analysis_cache (
-                  target_type, target_id, model, derive_method, result, cost,
-                  status, triggered_by_user_id, created_at, updated_at
-                )
-                VALUES (%s, %s, 'mock', 'mock', %s::jsonb, 0, 'ready', %s, NOW(), NOW())
-                ON CONFLICT (target_type, target_id, derive_method)
-                DO UPDATE SET
-                  model = EXCLUDED.model,
-                  result = EXCLUDED.result,
-                  cost = EXCLUDED.cost,
-                  status = 'ready',
-                  triggered_by_user_id = EXCLUDED.triggered_by_user_id,
-                  updated_at = NOW()
-                RETURNING id
-                """,
-                (target_type, target_id, _json(result), triggered_by_user_id),
-            )
-            cache_row = cur.fetchone()
-            cache_id = int(cache_row[0]) if cache_row else None
-            cur.execute(
-                """
-                UPDATE apify_jobs
-                SET status='done',
-                    last_error=NULL,
-                    last_error_category=NULL,
-                    next_retry_at=NULL,
-                    updated_at=NOW()
-                WHERE id=%s
-                """,
-                (job["id"],),
-            )
-    _sync_search_session_job(
-        conn,
-        int(job["id"]),
-        raw_status="done",
-        analysis_summary=_search_session_analysis_summary_from_result(
-            cache_id=cache_id,
-            derive_method=derive_method,
             target_type=target_type,
             target_id=target_id,
-            evidence={"id": target_id},
-            result=result,
-            cost=0.0,
-        ),
+            derive_method=derive_method,
+            deps=deps,
+        )
+        return
+    _process_mock_job(
+        conn,
+        job=job,
+        payload=payload,
+        target_type=target_type,
+        target_id=target_id,
+        derive_method=derive_method,
+        deps=deps,
     )
 
 def fail_job_impl(conn: psycopg.Connection[Any], job_id: int, exc: Exception, namespace: Mapping[str, Any]) -> None:

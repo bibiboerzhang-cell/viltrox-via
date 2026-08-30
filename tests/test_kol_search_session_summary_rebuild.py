@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1] / "backend"
@@ -16,14 +17,16 @@ from app.workers import apify_jobs_worker as worker  # noqa: E402
 
 
 class _FakeCursor:
-    def __init__(self, *, current_summary: dict[str, Any], items: list[dict[str, Any]]) -> None:
+    def __init__(self, *, current_summary: Any, items: list[dict[str, Any]]) -> None:
         self.current_summary = current_summary
         self.items = items
         self.last_sql = ""
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
         self.update_params: tuple[Any, ...] | None = None
 
     def execute(self, sql: str, params: tuple[Any, ...] = ()) -> None:
         self.last_sql = sql
+        self.calls.append((" ".join(str(sql).split()), tuple(params)))
         if "UPDATE vkpi_kol_search_sessions" in sql:
             self.update_params = params
 
@@ -36,6 +39,12 @@ class _FakeCursor:
         if "FROM vkpi_kol_search_session_items" in self.last_sql:
             return self.items
         return []
+
+
+class _FrozenDatetime:
+    @classmethod
+    def now(cls, tz: Any = None) -> datetime:
+        return datetime(2026, 8, 29, 12, 34, 56, tzinfo=tz)
 
 
 class KolSearchSessionSummaryRebuildTests(unittest.TestCase):
@@ -159,6 +168,84 @@ class KolSearchSessionSummaryRebuildTests(unittest.TestCase):
         self.assertTrue(summary["progress"]["full_analysis_complete"] is False)
         self.assertTrue(summary["progress"]["decision_eligible"] is False)
         self.assertNotIn("terminal_synced_at", summary)
+
+    def test_rebuild_sql_order_scalar_summary_empty_items_and_none_return(self) -> None:
+        from app.domains.kol import search_session_job_analysis
+
+        cursor = _FakeCursor(current_summary=["legacy-scalar"], items=[])
+        with patch.object(search_session_job_analysis, "datetime", _FrozenDatetime):
+            result = worker._rebuild_search_session_summary(
+                cursor,
+                session_id=47,
+                session_status="failed",
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(len(cursor.calls), 3)
+        self.assertTrue(cursor.calls[0][0].startswith("SELECT result_summary_json"))
+        self.assertEqual(cursor.calls[0][1], (47,))
+        self.assertIn("ORDER BY rank NULLS LAST, id", cursor.calls[1][0])
+        self.assertEqual(cursor.calls[1][1], (47,))
+        self.assertTrue(cursor.calls[2][0].startswith("UPDATE vkpi_kol_search_sessions"))
+        assert cursor.update_params is not None
+        status, raw_summary, session_id = cursor.update_params
+        summary = json.loads(raw_summary)
+        self.assertEqual((status, session_id), ("failed", 47))
+        self.assertEqual(summary["phase"], "partial")
+        self.assertEqual(summary["counts"]["by_status"], {})
+        self.assertEqual(summary["items_written"], 0)
+        self.assertEqual(summary["terminal_synced_at"], "2026-08-29T12:34:56+00:00")
+
+    def test_rebuild_prefers_later_url_item_and_decodes_json_payload(self) -> None:
+        cursor = _FakeCursor(
+            current_summary={"query": {"query_text": "lens creator"}},
+            items=[
+                {
+                    "id": 1,
+                    "item_type": "candidate",
+                    "status": "partial",
+                    "stage": "profile",
+                    "payload_json": {"job_status": "blocked"},
+                },
+                {
+                    "id": 2,
+                    "item_type": "url_video",
+                    "status": "ready",
+                    "stage": "summary",
+                    "payload_json": json.dumps(
+                        {
+                            "job_status": "done",
+                            "job_last_error": "",
+                            "analysis": {"cache_id": 91, "status": "ready"},
+                            "profile_execute": {"status": "ready"},
+                        }
+                    ),
+                },
+            ],
+        )
+
+        worker._rebuild_search_session_summary(
+            cursor,
+            session_id=48,
+            session_status="ready",
+        )
+
+        assert cursor.update_params is not None
+        summary = json.loads(cursor.update_params[1])
+        self.assertEqual(summary["query"], {"query_text": "lens creator"})
+        self.assertEqual(summary["item_status"], "ready")
+        self.assertEqual(summary["job_status"], "done")
+        self.assertEqual(summary["job_last_error"], "")
+        self.assertEqual(summary["analysis"], {"cache_id": 91, "status": "ready"})
+
+    def test_worker_rebuild_symbol_is_the_domain_facade(self) -> None:
+        from app.domains.kol import search_session_job_sync
+        from app.workers import apify_jobs_worker_session
+
+        self.assertIs(
+            apify_jobs_worker_session._rebuild_search_session_summary,
+            search_session_job_sync.rebuild_search_session_summary,
+        )
 
     def test_session_status_from_items_keeps_running_until_queue_drains(self) -> None:
         self.assertEqual(worker._search_session_status_from_items([{"status": "ready"}]), "ready")

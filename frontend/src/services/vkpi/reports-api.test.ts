@@ -158,9 +158,12 @@ describe('reports API request contract', () => {
 
 describe('reports API download and errors', () => {
   it('downloads through an authenticated request instead of opening a bare URL', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(new Blob(['pdf']), {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(new Uint8Array([0x25, 0x50, 0x44, 0x46]), {
       status: 200,
-      headers: { 'Content-Disposition': 'attachment; filename="weekly-42.pdf"' },
+      headers: {
+        'Content-Disposition': 'attachment; filename="weekly-42.pdf"',
+        'Content-Type': 'application/pdf',
+      },
     }));
     const createObjectURL = vi.fn(() => 'blob:report');
     const revokeObjectURL = vi.fn();

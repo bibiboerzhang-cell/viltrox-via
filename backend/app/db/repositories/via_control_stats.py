@@ -15,6 +15,10 @@ from app.db.repositories.via_control_common import (
     _table_columns,
     _utcnow,
 )
+from app.db.repositories.via_memory_retention_writer import (
+    MemoryRetentionDependencies,
+    upsert_via_memory_retention_stat as _upsert_via_memory_retention_stat,
+)
 
 def upsert_via_rollout_alert(
     *,
@@ -244,208 +248,35 @@ def upsert_via_memory_retention_stat(
     status: str = "",
     metrics: Any = None,
 ) -> dict[str, Any]:
-    conn = get_conn()
-    key = str(retention_key or memory_key or "").strip()
-    now = _utcnow()
-    source_ref_value = str(source_ref or "").strip()
-    if not source_ref_value and (str(target_type or "").strip() or str(target_id or "").strip()):
-        source_ref_value = ":".join(
-            part for part in (str(target_type or "").strip(), str(target_id or "").strip()) if part
-        )
-    existing = conn.execute(
-        "SELECT * FROM via_memory_retention_stats WHERE retention_key=?",
-        (key,),
-    ).fetchone() if "retention_key" in _table_columns(conn, "via_memory_retention_stats") else conn.execute(
-        """
-        SELECT * FROM via_memory_retention_stats
-        WHERE memory_key=? AND target_type=? AND target_id=?
-        """,
-        (
-            key,
-            str(target_type or "").strip(),
-            str(target_id or "").strip(),
+    return _upsert_via_memory_retention_stat(
+        deps=MemoryRetentionDependencies(
+            get_conn=get_conn,
+            utcnow=_utcnow,
+            table_columns=_table_columns,
+            load_json=_load_json,
+            dump_json=_json,
+            nullable_timestamp=_nullable_timestamp,
+            row_mapper=_memory_retention_from_row,
         ),
-    ).fetchone()
-    if existing:
-        merged_metrics = dict(_load_json(existing["metrics_json"], {}))
-        if isinstance(metrics, dict):
-            merged_metrics.update(metrics)
-        if str(target_type or "").strip():
-            merged_metrics["target_type"] = str(target_type).strip()
-        if str(target_id or "").strip():
-            merged_metrics["target_id"] = str(target_id).strip()
-        columns = _table_columns(conn, "via_memory_retention_stats")
-        if "retention_key" in columns:
-            conn.execute(
-                """
-                UPDATE via_memory_retention_stats
-                SET user_id=?, session_key=?, memory_tier=?, memory_kind=?, fact_key=?, source_ref=?,
-                    confirmed_hits=?, reinforcement_count=?, cumulative_reward=?, last_hit_at=?,
-                    last_promoted_at=?, decay_state=?, status=?, metrics_json=?, updated_at=?
-                WHERE retention_key=?
-                """,
-                (
-                    int(user_id or existing["user_id"] or 0),
-                    str(session_key or existing["session_key"] or ""),
-                    str(memory_tier or existing["memory_tier"] or ""),
-                    str(memory_kind or existing["memory_kind"] or ""),
-                    str(fact_key or existing["fact_key"] or ""),
-                    str(source_ref_value or existing["source_ref"] or ""),
-                    int(existing["confirmed_hits"] or 0) + int(confirmed_hit_increment or 0),
-                    int(existing["reinforcement_count"] or 0) + int(reinforcement_increment or 0),
-                    float(existing["cumulative_reward"] or 0.0) + float(reward_delta or 0.0),
-                    _nullable_timestamp(last_hit_at or existing["last_hit_at"]),
-                    _nullable_timestamp(last_promoted_at or existing["last_promoted_at"]),
-                    str(decay_state or existing["decay_state"] or "fresh"),
-                    str(status or existing["status"] or "active"),
-                    _json(merged_metrics, {}),
-                    now,
-                    key,
-                ),
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE via_memory_retention_stats
-                SET memory_kind=?, memory_tier=?, target_type=?, target_id=?, status=?,
-                    confirmed_hits=?, reinforcement_count=?, cumulative_reward=?, last_hit_at=?,
-                    last_promoted_at=?, metrics_json=?, updated_at=?
-                WHERE memory_key=? AND target_type=? AND target_id=?
-                """,
-                (
-                    str(memory_kind or existing["memory_kind"] or ""),
-                    str(memory_tier or existing["memory_tier"] or ""),
-                    str(target_type or existing["target_type"] or ""),
-                    str(target_id or existing["target_id"] or ""),
-                    str(status or existing["status"] or "active"),
-                    int(existing["confirmed_hits"] or 0) + int(confirmed_hit_increment or 0),
-                    int(existing["reinforcement_count"] or 0) + int(reinforcement_increment or 0),
-                    float(existing["cumulative_reward"] or 0.0) + float(reward_delta or 0.0),
-                    _nullable_timestamp(last_hit_at or existing["last_hit_at"]),
-                    _nullable_timestamp(last_promoted_at or existing["last_promoted_at"]),
-                    _json(merged_metrics, {}),
-                    now,
-                    key,
-                    str(existing["target_type"] or ""),
-                    str(existing["target_id"] or ""),
-                ),
-            )
-    else:
-        insert_metrics = dict(metrics) if isinstance(metrics, dict) else {}
-        if str(target_type or "").strip():
-            insert_metrics["target_type"] = str(target_type).strip()
-        if str(target_id or "").strip():
-            insert_metrics["target_id"] = str(target_id).strip()
-        columns = _table_columns(conn, "via_memory_retention_stats")
-        if "retention_key" in columns:
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO via_memory_retention_stats (
-                        retention_key, user_id, session_key, memory_tier, memory_kind, fact_key,
-                        source_ref, confirmed_hits, reinforcement_count, cumulative_reward,
-                        last_hit_at, last_promoted_at, decay_state, status, metrics_json, updated_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        key,
-                        int(user_id or 0),
-                        str(session_key or "").strip(),
-                        str(memory_tier or "").strip(),
-                        str(memory_kind or "").strip(),
-                        str(fact_key or "").strip(),
-                        source_ref_value,
-                        int(confirmed_hit_increment or 0),
-                        int(reinforcement_increment or 0),
-                        float(reward_delta or 0.0),
-                        _nullable_timestamp(last_hit_at),
-                        _nullable_timestamp(last_promoted_at or now),
-                        str(decay_state or "fresh"),
-                        str(status or "active"),
-                        _json(insert_metrics, {}),
-                        now,
-                    ),
-                )
-            except Exception as exc:
-                text = str(exc).lower()
-                if "duplicate key" not in text and "unique" not in text:
-                    raise
-                existing = conn.execute(
-                    "SELECT * FROM via_memory_retention_stats WHERE retention_key=?",
-                    (key,),
-                ).fetchone()
-                if not existing:
-                    raise
-                merged_metrics = dict(_load_json(existing["metrics_json"], {}))
-                merged_metrics.update(insert_metrics)
-                conn.execute(
-                    """
-                    UPDATE via_memory_retention_stats
-                    SET user_id=?, session_key=?, memory_tier=?, memory_kind=?, fact_key=?, source_ref=?,
-                        confirmed_hits=?, reinforcement_count=?, cumulative_reward=?, last_hit_at=?,
-                        last_promoted_at=?, decay_state=?, status=?, metrics_json=?, updated_at=?
-                    WHERE retention_key=?
-                    """,
-                    (
-                        int(user_id or existing["user_id"] or 0),
-                        str(session_key or existing["session_key"] or ""),
-                        str(memory_tier or existing["memory_tier"] or ""),
-                        str(memory_kind or existing["memory_kind"] or ""),
-                        str(fact_key or existing["fact_key"] or ""),
-                        str(source_ref_value or existing["source_ref"] or ""),
-                        int(existing["confirmed_hits"] or 0) + int(confirmed_hit_increment or 0),
-                        int(existing["reinforcement_count"] or 0) + int(reinforcement_increment or 0),
-                        float(existing["cumulative_reward"] or 0.0) + float(reward_delta or 0.0),
-                        _nullable_timestamp(last_hit_at or existing["last_hit_at"]),
-                        _nullable_timestamp(last_promoted_at or existing["last_promoted_at"] or now),
-                        str(decay_state or existing["decay_state"] or "fresh"),
-                        str(status or existing["status"] or "active"),
-                        _json(merged_metrics, {}),
-                        now,
-                        key,
-                    ),
-                )
-        else:
-            conn.execute(
-                """
-                INSERT INTO via_memory_retention_stats (
-                    memory_key, memory_kind, memory_tier, target_type, target_id, status,
-                    confirmed_hits, reinforcement_count, cumulative_reward, last_hit_at,
-                    last_promoted_at, metrics_json, updated_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    key,
-                    str(memory_kind or "").strip(),
-                    str(memory_tier or "").strip(),
-                    str(target_type or "").strip(),
-                    str(target_id or "").strip(),
-                    str(status or "active"),
-                    int(confirmed_hit_increment or 0),
-                    int(reinforcement_increment or 0),
-                    float(reward_delta or 0.0),
-                    _nullable_timestamp(last_hit_at),
-                    _nullable_timestamp(last_promoted_at or now),
-                    _json(insert_metrics, {}),
-                    now,
-                ),
-            )
-    row = conn.execute(
-        "SELECT * FROM via_memory_retention_stats WHERE retention_key=?",
-        (key,),
-    ).fetchone() if "retention_key" in _table_columns(conn, "via_memory_retention_stats") else conn.execute(
-        """
-        SELECT * FROM via_memory_retention_stats
-        WHERE memory_key=? AND target_type=? AND target_id=?
-        """,
-        (
-            key,
-            str(target_type or "").strip(),
-            str(target_id or "").strip(),
-        ),
-    ).fetchone()
-    conn.commit()
-    return _memory_retention_from_row(row)
+        retention_key=retention_key,
+        memory_key=memory_key,
+        user_id=user_id,
+        session_key=session_key,
+        memory_tier=memory_tier,
+        memory_kind=memory_kind,
+        fact_key=fact_key,
+        source_ref=source_ref,
+        target_type=target_type,
+        target_id=target_id,
+        confirmed_hit_increment=confirmed_hit_increment,
+        reinforcement_increment=reinforcement_increment,
+        reward_delta=reward_delta,
+        last_hit_at=last_hit_at,
+        last_promoted_at=last_promoted_at,
+        decay_state=decay_state,
+        status=status,
+        metrics=metrics,
+    )
 
 def list_via_memory_retention_stats(limit: int = 120, memory_tier: str = "", status: str = "") -> list[dict[str, Any]]:
     conn = get_conn()

@@ -186,11 +186,20 @@ export default defineConfig(({ command }) => {
             }
             // 详情抽屉只在用户点开某个 KOL 后需要。它与找达人首屏共用少量
             // analysis-core 纯函数，但自身面板很多；单独保留为异步块，避免空闲时
-            // 把整套抽屉代码计入 KOL Pool 首屏。
+            // 把整套抽屉代码计入 KOL Pool 首屏。以下 dossier 面板只由抽屉引用，
+            // 必须跟随抽屉归组，不能反向挤进 vkpi-kol-workbench 的搜索首屏。
             if (
               id.includes("/src/components/vkpi/cockpit/components/KOLDetailDrawer") ||
               id.includes("/src/components/vkpi/cockpit/components/KOLDrawer") ||
-              id.includes("/src/components/vkpi/cockpit/components/useKOLDrawerViewerContext")
+              id.includes("/src/components/vkpi/cockpit/components/useKOLDrawerViewerContext") ||
+              id.includes("/src/components/vkpi/cockpit/components/SignaturePanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/AudienceGeoPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/CommerceSignalsPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/QualityCompliancePanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/SimilarVideosPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/RateCardPanel") ||
+              id.includes("/src/components/vkpi/cockpit/components/OutreachCriticSignalCard") ||
+              id.includes("/src/components/vkpi/cockpit/components/SafetyAuthenticityPanel")
             ) {
               return "vkpi-kol-detail";
             }
@@ -227,15 +236,7 @@ export default defineConfig(({ command }) => {
               id.includes("/src/components/vkpi/cockpit/components/AudienceTypeChip") ||
               id.includes("/src/components/vkpi/cockpit/components/CandidateKindChip") ||
               id.includes("/src/components/vkpi/cockpit/components/GeoTierChip") ||
-              id.includes("/src/components/vkpi/cockpit/components/PlatformPill") ||
-              id.includes("/src/components/vkpi/cockpit/components/SignaturePanel") ||
-              id.includes("/src/components/vkpi/cockpit/components/AudienceGeoPanel") ||
-              id.includes("/src/components/vkpi/cockpit/components/CommerceSignalsPanel") ||
-              id.includes("/src/components/vkpi/cockpit/components/QualityCompliancePanel") ||
-              id.includes("/src/components/vkpi/cockpit/components/SimilarVideosPanel") ||
-              id.includes("/src/components/vkpi/cockpit/components/RateCardPanel") ||
-              id.includes("/src/components/vkpi/cockpit/components/OutreachCriticSignalCard") ||
-              id.includes("/src/components/vkpi/cockpit/components/SafetyAuthenticityPanel")
+              id.includes("/src/components/vkpi/cockpit/components/PlatformPill")
             ) {
               return "vkpi-kol-workbench";
             }

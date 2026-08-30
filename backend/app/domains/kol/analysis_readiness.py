@@ -11,20 +11,16 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from app.db.connection import get_conn, is_postgres_runtime
+from app.domains.kol.analysis_readiness_scopes import (
+    THRESHOLDS,
+    brand_scope_result as _brand_scope_result,
+    content_scope_result as _content_scope_result,
+    overall_gaps as _overall_gaps,
+    overall_scope_result as _overall_scope_result,
+)
 
 
 VERSION = "kol_analysis_readiness_v1"
-THRESHOLDS = {
-    "overall_min_video_samples": 5,
-    "overall_min_view_count_ratio": 0.8,
-    "overall_min_deep_ready": 3,
-    "overall_min_deep_ratio": 0.5,
-    "minimum_usable_video_samples": 3,
-    "minimum_usable_view_count_ratio": 0.5,
-    "fresh_max_age_days": 90,
-    "stale_after_days": 180,
-    "content_fit_min_full_video_proven": 1,
-}
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -249,8 +245,8 @@ def _full_video_receipt(entry: dict[str, Any], video: dict[str, Any]) -> tuple[b
         for container in coverage_containers
         for key in ("analyzed_duration_seconds", "covered_duration_seconds")
     ]
-    source_duration = next((_number(value) for value in source_durations if _number(value) is not None), None)
-    analyzed_duration = next((_number(value) for value in analyzed_durations if _number(value) is not None), None)
+    source_duration = _first_number(source_durations)
+    analyzed_duration = _first_number(analyzed_durations)
     if source_duration and analyzed_duration and source_duration > 0 and analyzed_duration / source_duration >= 0.95:
         return True, "duration_coverage_at_least_95pct"
 
@@ -271,6 +267,14 @@ def _number(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _first_number(values: Iterable[Any]) -> float | None:
+    for value in values:
+        parsed = _number(value)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _contains_viltrox(value: Any, *, depth: int = 0) -> bool:
@@ -356,59 +360,17 @@ def _has_brand_signal(video: dict[str, Any], result: dict[str, Any]) -> bool:
     return any(_truthy(value) for value in detected) or any(bool(value) for value in products) or explicit_presence
 
 
-def _gap(code: str, *, severity: str, message: str, observed: Any, required: Any) -> dict[str, Any]:
-    return {
-        "code": code,
-        "severity": severity,
-        "message": message,
-        "observed": observed,
-        "required": required,
-    }
-
-
-def _scope(
-    *,
-    level: str,
-    blockers: list[dict[str, Any]],
-    warnings: list[dict[str, Any]],
-) -> dict[str, Any]:
-    if blockers:
-        decision_mode = "abstain"
-        recommendation_status = "abstain"
-    elif level == "decision_ready":
-        decision_mode = "human_decision_support"
-        recommendation_status = "decision_support_ready"
-    else:
-        decision_mode = "human_review_required"
-        recommendation_status = "provisional"
-    return {
-        "level": level,
-        "status": level,
-        "claim_status": "descriptive_only",
-        "decision_mode": decision_mode,
-        "recommendation_status": recommendation_status,
-        "blocking_gaps": blockers,
-        "warnings": warnings,
-    }
-
-
-def build_analysis_readiness(
-    *,
-    item: dict[str, Any],
-    videos: list[dict[str, Any]],
-    analysis_items: list[dict[str, Any]],
-    llm_deep: dict[str, Any],
-    now: datetime | None = None,
-    sample_scope: str = "provided_video_evidence",
-    sample_limit: int | None = None,
-    sample_truncated: bool = False,
-) -> dict[str, Any]:
-    """Build an evidence-only contract without provider calls or writes."""
+def _normalized_current(now: datetime | None) -> datetime:
     current = now or datetime.now(timezone.utc)
     if current.tzinfo is None:
         current = current.replace(tzinfo=timezone.utc)
-    current = current.astimezone(timezone.utc)
+    return current.astimezone(timezone.utc)
 
+
+def _analysis_population(
+    videos: list[dict[str, Any]],
+    analysis_items: list[dict[str, Any]],
+) -> dict[str, Any]:
     video_rows = [video for video in videos if _is_video_evidence(video)]
     video_ids = {evidence_id for video in video_rows if (evidence_id := _evidence_id(video))}
     analysis_by_id = {
@@ -426,25 +388,52 @@ def build_analysis_readiness(
         for evidence_id, entry in analysis_by_id.items()
         if evidence_id in video_ids and _as_dict(entry.get("qa_entry")).get("status") == "ready"
     }
-    view_known = sum(1 for video in video_rows if video.get("view_count") not in (None, ""))
-    video_total = len(video_rows)
-    deep_ready = len(deep_ready_ids)
-    qa_ready = len(qa_ready_ids)
+    return {
+        "video_rows": video_rows,
+        "video_ids": video_ids,
+        "analysis_by_id": analysis_by_id,
+        "deep_ready_ids": deep_ready_ids,
+        "qa_ready_ids": qa_ready_ids,
+        "view_known": sum(
+            1 for video in video_rows if video.get("view_count") not in (None, "")
+        ),
+    }
 
-    full_video_receipts: list[dict[str, Any]] = []
-    full_video_unproven: list[dict[str, Any]] = []
+
+def _full_video_coverage(
+    deep_ready_ids: set[int],
+    analysis_by_id: dict[int, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    receipts: list[dict[str, Any]] = []
+    unproven: list[dict[str, Any]] = []
     for evidence_id in sorted(deep_ready_ids):
         entry = analysis_by_id[evidence_id]
         video = _as_dict(entry.get("video"))
         proven, basis = _full_video_receipt(_as_dict(entry.get("final_entry")), video)
-        target = full_video_receipts if proven else full_video_unproven
+        target = receipts if proven else unproven
         target.append({"evidence_id": evidence_id, "basis": basis})
+    return receipts, unproven
 
-    structured_collaborations = _as_list(item.get("brand_collaborations_json"))
+
+def _strongest_brand_type(brand_counts: dict[str, int]) -> str:
+    if brand_counts["model_detected_with_timestamp_context"]:
+        return "model_detected_with_timestamp_context"
+    if brand_counts["structured_collaboration_record"]:
+        return "structured_collaboration_record"
+    if brand_counts["model_detected_without_timestamp"]:
+        return "model_detected_without_timestamp"
+    return "none"
+
+
+def _brand_summary(
+    item: dict[str, Any],
+    deep_ready_ids: set[int],
+    analysis_by_id: dict[int, dict[str, Any]],
+) -> tuple[dict[str, int], list[str], str]:
     brand_counts = {
         "model_detected_with_timestamp_context": 0,
         "model_detected_without_timestamp": 0,
-        "structured_collaboration_record": len(structured_collaborations),
+        "structured_collaboration_record": len(_as_list(item.get("brand_collaborations_json"))),
     }
     for evidence_id in sorted(deep_ready_ids):
         entry = analysis_by_id[evidence_id]
@@ -459,15 +448,18 @@ def build_analysis_readiness(
         )
         brand_counts[key] += 1
     brand_types = [key for key, count in brand_counts.items() if count > 0]
-    if brand_counts["model_detected_with_timestamp_context"]:
-        strongest_brand_type = "model_detected_with_timestamp_context"
-    elif brand_counts["structured_collaboration_record"]:
-        strongest_brand_type = "structured_collaboration_record"
-    elif brand_counts["model_detected_without_timestamp"]:
-        strongest_brand_type = "model_detected_without_timestamp"
-    else:
-        strongest_brand_type = "none"
+    return brand_counts, brand_types, _strongest_brand_type(brand_counts)
 
+
+def _freshness_summary(
+    *,
+    item: dict[str, Any],
+    video_rows: list[dict[str, Any]],
+    analysis_items: list[dict[str, Any]],
+    video_ids: set[int],
+    llm_deep: dict[str, Any],
+    current: datetime,
+) -> dict[str, Any]:
     profile_latest = _latest(
         item.get(key) for key in ("profile_backfilled_at", "last_seen_at", "updated_at", "created_at")
     )
@@ -486,13 +478,21 @@ def build_analysis_readiness(
             _as_dict(analysis.get("qa_entry")).get("updated_at"),
             _as_dict(analysis.get("qa_entry")).get("created_at"),
         )
-    ) or _latest(entry.get("created_at") for entry in _as_list(llm_deep.get("items")) if isinstance(entry, dict))
+    ) or _latest(
+        entry.get("created_at")
+        for entry in _as_list(llm_deep.get("items"))
+        if isinstance(entry, dict)
+    )
     freshness_ages = {
         "profile": _age_days(profile_latest, current),
         "evidence": _age_days(evidence_latest, current),
         "analysis": _age_days(analysis_latest, current),
     }
-    required_ages = [freshness_ages[key] for key in ("evidence", "analysis") if freshness_ages[key] is not None]
+    required_ages = [
+        freshness_ages[key]
+        for key in ("evidence", "analysis")
+        if freshness_ages[key] is not None
+    ]
     decision_age_days = max(required_ages) if len(required_ages) == 2 else None
     if decision_age_days is None:
         freshness_status = "unknown"
@@ -502,134 +502,96 @@ def build_analysis_readiness(
         freshness_status = "aging"
     else:
         freshness_status = "stale"
+    return {
+        "status": freshness_status,
+        "profile_latest_at": _iso(profile_latest),
+        "evidence_latest_at": _iso(evidence_latest),
+        "analysis_latest_at": _iso(analysis_latest),
+        "age_days": freshness_ages,
+        "decision_age_days": decision_age_days,
+        "basis": "max_age_of_latest_evidence_and_latest_analysis",
+    }
+
+
+def build_analysis_readiness(
+    *,
+    item: dict[str, Any],
+    videos: list[dict[str, Any]],
+    analysis_items: list[dict[str, Any]],
+    llm_deep: dict[str, Any],
+    now: datetime | None = None,
+    sample_scope: str = "provided_video_evidence",
+    sample_limit: int | None = None,
+    sample_truncated: bool = False,
+) -> dict[str, Any]:
+    """Build an evidence-only contract without provider calls or writes."""
+    current = _normalized_current(now)
+    population = _analysis_population(videos, analysis_items)
+    video_rows = population["video_rows"]
+    video_ids = population["video_ids"]
+    analysis_by_id = population["analysis_by_id"]
+    deep_ready_ids = population["deep_ready_ids"]
+    qa_ready_ids = population["qa_ready_ids"]
+    view_known = population["view_known"]
+    video_total = len(video_rows)
+    deep_ready = len(deep_ready_ids)
+    qa_ready = len(qa_ready_ids)
+
+    full_video_receipts, full_video_unproven = _full_video_coverage(
+        deep_ready_ids, analysis_by_id
+    )
+    brand_counts, brand_types, strongest_brand_type = _brand_summary(
+        item, deep_ready_ids, analysis_by_id
+    )
+
+    freshness = _freshness_summary(
+        item=item,
+        video_rows=video_rows,
+        analysis_items=analysis_items,
+        video_ids=video_ids,
+        llm_deep=llm_deep,
+        current=current,
+    )
+    freshness_status = freshness["status"]
+    decision_age_days = freshness["decision_age_days"]
 
     deep_ratio = _ratio(deep_ready, video_total)
     view_ratio = _ratio(view_known, video_total)
-    overall_blockers: list[dict[str, Any]] = []
-    overall_warnings: list[dict[str, Any]] = []
-    if video_total < THRESHOLDS["minimum_usable_video_samples"]:
-        overall_blockers.append(_gap(
-            "video_sample_insufficient", severity="blocking",
-            message="视频证据样本不足，停止输出总体合作结论。",
-            observed=video_total, required=THRESHOLDS["minimum_usable_video_samples"],
-        ))
-    elif video_total < THRESHOLDS["overall_min_video_samples"]:
-        overall_warnings.append(_gap(
-            "video_sample_below_decision_target", severity="warning",
-            message="样本可作描述，但不足以达到决策支持门槛。",
-            observed=video_total, required=THRESHOLDS["overall_min_video_samples"],
-        ))
-    if view_ratio is None or view_ratio < THRESHOLDS["minimum_usable_view_count_ratio"]:
-        overall_blockers.append(_gap(
-            "view_count_coverage_insufficient", severity="blocking",
-            message="播放量字段覆盖不足，不能可靠比较内容表现。",
-            observed=view_ratio, required=THRESHOLDS["minimum_usable_view_count_ratio"],
-        ))
-    elif view_ratio < THRESHOLDS["overall_min_view_count_ratio"]:
-        overall_warnings.append(_gap(
-            "view_count_coverage_below_decision_target", severity="warning",
-            message="播放量覆盖只够临时判断。",
-            observed=view_ratio, required=THRESHOLDS["overall_min_view_count_ratio"],
-        ))
-    if deep_ready == 0:
-        overall_blockers.append(_gap(
-            "deep_analysis_missing", severity="blocking",
-            message="没有 ready 的 final_v1 深析，必须放弃内容质量结论。",
-            observed=0, required=1,
-        ))
-    elif deep_ready < THRESHOLDS["overall_min_deep_ready"] or (deep_ratio or 0) < THRESHOLDS["overall_min_deep_ratio"]:
-        overall_warnings.append(_gap(
-            "deep_analysis_coverage_below_decision_target", severity="warning",
-            message="深析覆盖可作描述，但不足以支撑稳定决策。",
-            observed={"ready": deep_ready, "ratio": deep_ratio},
-            required={"ready": THRESHOLDS["overall_min_deep_ready"], "ratio": THRESHOLDS["overall_min_deep_ratio"]},
-        ))
-    if freshness_status == "stale":
-        overall_blockers.append(_gap(
-            "evidence_stale", severity="blocking",
-            message="证据或深析已过期，停止输出当前合作建议。",
-            observed=decision_age_days, required=f"<= {THRESHOLDS['stale_after_days']} days",
-        ))
-    elif freshness_status != "fresh":
-        overall_warnings.append(_gap(
-            "freshness_not_decision_ready", severity="warning",
-            message="证据时效不足或无法确认。",
-            observed=freshness_status, required=f"<= {THRESHOLDS['fresh_max_age_days']} days",
-        ))
-    if qa_ready == 0 and deep_ready:
-        overall_warnings.append(_gap(
-            "qa_missing", severity="warning",
-            message="深析结果尚无独立关键帧 QA。",
-            observed=0, required=1,
-        ))
-    if sample_truncated:
-        overall_warnings.append(_gap(
-            "evidence_sample_truncated_at_limit", severity="warning",
-            message=(
-                "活跃视频证据超过分析读取上限，当前比率只代表已披露的前 200 条样本。"
-            ),
-            observed={"sample_count": video_total, "limit": sample_limit},
-            required="complete_active_video_evidence_population",
-        ))
-
-    overall_ready = bool(
-        not overall_blockers
-        and video_total >= THRESHOLDS["overall_min_video_samples"]
-        and (view_ratio or 0) >= THRESHOLDS["overall_min_view_count_ratio"]
-        and deep_ready >= THRESHOLDS["overall_min_deep_ready"]
-        and (deep_ratio or 0) >= THRESHOLDS["overall_min_deep_ratio"]
-        and freshness_status == "fresh"
-        and qa_ready >= 1
-        and not sample_truncated
+    overall_blockers, overall_warnings = _overall_gaps(
+        video_total=video_total,
+        view_ratio=view_ratio,
+        deep_ready=deep_ready,
+        deep_ratio=deep_ratio,
+        qa_ready=qa_ready,
+        freshness_status=freshness_status,
+        decision_age_days=decision_age_days,
+        sample_limit=sample_limit,
+        sample_truncated=sample_truncated,
     )
-    overall_level = "insufficient" if overall_blockers else "decision_ready" if overall_ready else "provisional"
-    overall_scope = _scope(level=overall_level, blockers=overall_blockers, warnings=overall_warnings)
-
-    content_blockers = list(overall_blockers)
-    content_warnings = list(overall_warnings)
-    if len(full_video_receipts) < THRESHOLDS["content_fit_min_full_video_proven"]:
-        content_blockers.append(_gap(
-            "full_video_coverage_unproven", severity="blocking",
-            message=(
-                "final_v1 已有结果，但缺少原视频全时长覆盖凭证；"
-                "内容契合结论必须 abstain。"
-            ),
-            observed=len(full_video_receipts), required=THRESHOLDS["content_fit_min_full_video_proven"],
-        ))
-    content_level = (
-        "insufficient" if overall_level == "insufficient"
-        else "decision_ready" if overall_level == "decision_ready" and not content_blockers
-        else "provisional"
+    overall_level, overall_scope = _overall_scope_result(
+        blockers=overall_blockers,
+        warnings=overall_warnings,
+        video_total=video_total,
+        view_ratio=view_ratio,
+        deep_ready=deep_ready,
+        deep_ratio=deep_ratio,
+        qa_ready=qa_ready,
+        freshness_status=freshness_status,
+        sample_truncated=sample_truncated,
     )
-    content_scope = _scope(level=content_level, blockers=content_blockers, warnings=content_warnings)
 
-    brand_blockers: list[dict[str, Any]] = []
-    brand_warnings: list[dict[str, Any]] = []
-    timestamped_brand_count = brand_counts["model_detected_with_timestamp_context"]
-    if not brand_types:
-        brand_blockers.append(_gap(
-            "brand_history_evidence_missing", severity="blocking",
-            message=(
-                "未发现品牌历史证据；这不降低新创作者总体可用性，"
-                "但品牌历史结论必须 abstain。"
-            ),
-            observed=0, required=1,
-        ))
-    elif timestamped_brand_count == 0:
-        brand_warnings.append(_gap(
-            "brand_history_not_timestamp_grounded", severity="warning",
-            message="品牌记录可作描述，但缺少视频时间戳语境。",
-            observed=brand_types, required="model_detected_with_timestamp_context",
-        ))
-    if timestamped_brand_count and not full_video_receipts:
-        brand_warnings.append(_gap(
-            "brand_video_source_completeness_unproven", severity="warning",
-            message="品牌检测有时间戳语境，但原视频完整性仍未证明。",
-            observed=0, required=1,
-        ))
-    brand_ready = bool(timestamped_brand_count and full_video_receipts and freshness_status == "fresh")
-    brand_level = "insufficient" if brand_blockers else "decision_ready" if brand_ready else "provisional"
-    brand_scope = _scope(level=brand_level, blockers=brand_blockers, warnings=brand_warnings)
+    content_scope = _content_scope_result(
+        overall_level=overall_level,
+        overall_blockers=overall_blockers,
+        overall_warnings=overall_warnings,
+        full_video_receipts=full_video_receipts,
+    )
+    brand_ready, brand_scope = _brand_scope_result(
+        brand_counts=brand_counts,
+        brand_types=brand_types,
+        full_video_receipts=full_video_receipts,
+        freshness_status=freshness_status,
+    )
 
     evidence_coverage = {
         "video_total": video_total,
@@ -645,15 +607,6 @@ def build_analysis_readiness(
         "full_video_ratio": _ratio(len(full_video_receipts), video_total),
         "full_video_receipts": full_video_receipts,
         "full_video_unproven": full_video_unproven,
-    }
-    freshness = {
-        "status": freshness_status,
-        "profile_latest_at": _iso(profile_latest),
-        "evidence_latest_at": _iso(evidence_latest),
-        "analysis_latest_at": _iso(analysis_latest),
-        "age_days": freshness_ages,
-        "decision_age_days": decision_age_days,
-        "basis": "max_age_of_latest_evidence_and_latest_analysis",
     }
     brand_evidence = {
         "types": brand_types,

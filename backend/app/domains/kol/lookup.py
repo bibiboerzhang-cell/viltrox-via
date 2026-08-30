@@ -12,9 +12,15 @@ from app.domains.kol.lookup_tracking import (
     LookupTracker,
 )
 from app.domains.access import scope
+from app.shared.account_dossier_port import AccountDossierPort
 
 
-async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) -> dict[str, Any]:
+async def lookup_with_context(
+    body: dict[str, Any],
+    *,
+    staff: dict[str, Any],
+    dossier_port: AccountDossierPort | None = None,
+) -> dict[str, Any]:
     """Resolve a KOL and optionally scan/analyze their account.
 
     The whole run is recorded as a trackable, recoverable task: a
@@ -83,12 +89,30 @@ async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) ->
             # thinking stage: 抓取并理解账号内容
             tracker.stage(STAGE_THINKING)
             max_posts = max(1, min(int(body.get("max_posts") or 24), 80))
-            scan_result = await account_domain.scan_account(kol_id, max_posts=max_posts)
+            if dossier_port is None:
+                scan_result = await account_domain.scan_account(
+                    kol_id,
+                    max_posts=max_posts,
+                )
+            else:
+                scan_result = await account_domain.scan_account(
+                    kol_id,
+                    max_posts=max_posts,
+                    dossier_port=dossier_port,
+                )
             content_count = int((scan_result or {}).get("content_count") or 0)
             if content_count > 0:
-                analysis_result = await account_domain.analyze_account(
-                    kol_id, product_sku=str(body.get("product_sku") or "")
-                )
+                if dossier_port is None:
+                    analysis_result = await account_domain.analyze_account(
+                        kol_id,
+                        product_sku=str(body.get("product_sku") or ""),
+                    )
+                else:
+                    analysis_result = await account_domain.analyze_account(
+                        kol_id,
+                        product_sku=str(body.get("product_sku") or ""),
+                        dossier_port=dossier_port,
+                    )
             else:
                 # 抓到 0 条内容:查询成功但产物不完整 → partial,留可读原因。
                 terminal_status = "partial"
@@ -96,7 +120,14 @@ async def lookup_with_context(body: dict[str, Any], *, staff: dict[str, Any]) ->
 
         # summarizing stage: 沉淀 dossier
         tracker.stage(STAGE_SUMMARIZING)
-        result["dossier"] = account_domain.get_dossier(kol_id)
+        result["dossier"] = (
+            account_domain.get_dossier(kol_id)
+            if dossier_port is None
+            else account_domain.get_dossier(
+                kol_id,
+                dossier_port=dossier_port,
+            )
+        )
     except Exception as exc:
         result["dossier"] = result.get("dossier") or {}
         if scan_result is not None:

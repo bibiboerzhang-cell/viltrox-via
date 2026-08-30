@@ -6,13 +6,10 @@
 from __future__ import annotations
 
 import inspect
-from pathlib import Path
 
 from app.domains.kol import profile_recall_match_evidence as me
 from app.domains.kol import profile_online_qualification as online
-
-
-ROOT = Path(__file__).resolve().parents[1]
+from app.domains.kol import profile_query_cell_evidence as query_cell_evidence
 
 # 8 个可举证字段全有内容 —— 本地池行的形状。
 LOCAL_ROW = {
@@ -112,31 +109,45 @@ def test_single_provable_word_query_is_unaffected_by_the_knob():
             me.build_match_evidence(LOCAL_ROW, {}, "摄影师")
 
 
-def test_only_the_online_lane_passes_the_knob_in_the_whole_backend():
-    mentions, passers = [], []
-    for path in (ROOT / "backend" / "app").rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        rel = path.relative_to(ROOT).as_posix()
-        if "min_intent_terms" in text:
-            mentions.append(rel)
-        if "min_intent_terms=" in text:
-            passers.append(rel)
-    assert sorted(mentions) == [
-        "backend/app/domains/kol/profile_online_qualification.py",
-        "backend/app/domains/kol/profile_recall_match_evidence.py",
-    ]
-    # 全后端只有在线腿真的把这个参数传出去。
-    assert sorted(passers) == ["backend/app/domains/kol/profile_online_qualification.py"]
-    online_src = (ROOT / "backend/app/domains/kol/profile_online_qualification.py").read_text(encoding="utf-8")
-    assert "build_match_evidence(row, evidence, query_text, min_intent_terms=1)" in online_src
-    # 本地车道两处调用都不得出现这个参数。
-    local_src = (ROOT / "backend/app/domains/kol/profile_recall.py").read_text(encoding="utf-8")
-    assert "min_intent_terms" not in local_src
-    assert "build_match_evidence(row, evidence, resolved_text" in local_src
+def test_only_the_online_entrypoint_lowers_the_shared_builder_threshold(
+    monkeypatch,
+):
+    """重构可移动源码；契约只关心入口实际传给共享证据构建器的阈值。"""
+    calls = []
+
+    def capture(*args, **kwargs):
+        calls.append({"args": args, "kwargs": kwargs})
+        return []
+
+    monkeypatch.setattr(online, "build_query_cell_match_evidence", capture)
+    online._cell_match_evidence(
+        ONLINE_ROW,
+        {},
+        query_text=QUERY_TWO_INTENT_WORDS,
+        query_cell={},
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["kwargs"]["min_intent_terms"] == 1
+    assert inspect.signature(
+        query_cell_evidence.build_query_cell_match_evidence
+    ).parameters["min_intent_terms"].default == me.INTENT_TERMS_DEFAULT
 
 
-def test_online_lane_still_withholds_the_product_anchor_this_wave():
-    # 产品腿在线侧仍不传 required_product_terms(另一个缺口,本波不动)——钉住现状,
-    # 免得后来者以为已经修过。
-    src = (ROOT / "backend/app/domains/kol/profile_online_qualification.py").read_text(encoding="utf-8")
-    assert "required_product_terms=" not in src
+def test_online_lane_still_withholds_the_product_anchor_this_wave(monkeypatch):
+    # 在线入口不会凭客户端产品词制造证据；共享构建器只接收服务端锁定 QueryCell。
+    observed = []
+
+    def capture(*args, **kwargs):
+        observed.append(kwargs)
+        return []
+
+    monkeypatch.setattr(online, "build_query_cell_match_evidence", capture)
+    online._cell_match_evidence(
+        ONLINE_ROW,
+        {},
+        query_text=QUERY_TWO_INTENT_WORDS,
+        query_cell={},
+    )
+
+    assert "required_product_terms" not in observed[0]

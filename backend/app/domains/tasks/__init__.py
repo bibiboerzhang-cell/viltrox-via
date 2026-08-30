@@ -1,5 +1,6 @@
-"""Async task domain facade."""
+"""Async task domain package.
 
-from app.domains.tasks import enqueue
-
-__all__ = ["enqueue"]
+Import concrete task adapters explicitly (for example,
+``app.domains.tasks.enqueue``).  Keeping package initialization inert prevents
+an import of the domain namespace from binding database-backed implementations.
+"""

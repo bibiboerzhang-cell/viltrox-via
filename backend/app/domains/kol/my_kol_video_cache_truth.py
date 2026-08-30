@@ -12,6 +12,22 @@ from app.core.video_analysis_contract import FINAL_V1_DERIVE_METHOD
 from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse
 
 
+_CACHE_REQUIRED_COLUMNS = frozenset(
+    {"target_type", "target_id", "derive_method", "status", "result"}
+)
+_CACHE_PROJECTION = (
+    "id",
+    "target_type",
+    "target_id",
+    "derive_method",
+    "model",
+    "prompt_version",
+    "status",
+    "result",
+    "updated_at",
+)
+
+
 def _int(value: Any) -> int:
     try:
         return int(value or 0)
@@ -53,6 +69,42 @@ def _classified_rows(rows: Iterable[Any], *, derive_method: str) -> dict[int, di
     return classified
 
 
+def _analysis_cache_columns(conn: Any) -> set[str]:
+    """Return the real cache schema without speculatively selecting columns.
+
+    A zero-row SELECT exposes cursor metadata in SQLite, Postgres, and the
+    compatibility connection without a backend-specific PRAGMA or a failing
+    speculative projection.  Errors are intentionally not caught here: a
+    broken connection or denied schema read is operational failure, not
+    evidence that optional columns are absent.
+    """
+
+    cursor = conn.execute("SELECT * FROM vkpi_analysis_cache WHERE 1=0")
+    description = getattr(cursor, "description", None) or []
+    columns = {
+        str(column[0] if isinstance(column, (tuple, list)) else getattr(column, "name", ""))
+        for column in description
+    }
+    if not columns:
+        raise RuntimeError("vkpi_analysis_cache_schema_unavailable")
+    return {column for column in columns if column}
+
+
+def _cache_projection(columns: set[str]) -> str:
+    """Prefer production columns; project absent legacy fields as NULL."""
+
+    missing_required = sorted(_CACHE_REQUIRED_COLUMNS.difference(columns))
+    if missing_required:
+        raise RuntimeError(
+            "vkpi_analysis_cache_missing_required_columns:"
+            + ",".join(missing_required)
+        )
+    return ", ".join(
+        column if column in columns else f"NULL AS {column}"
+        for column in _CACHE_PROJECTION
+    )
+
+
 def analysis_caches_for_evidence(
     conn: Any,
     evidence_ids: Iterable[int],
@@ -63,16 +115,22 @@ def analysis_caches_for_evidence(
     ids = list(dict.fromkeys(_int(value) for value in evidence_ids if _int(value) > 0))
     if not ids:
         return {}
+    columns = _analysis_cache_columns(conn)
+    projection = _cache_projection(columns)
     placeholders = ",".join("?" for _ in ids)
+    order_by = [
+        f"{column} ASC"
+        for column in ("updated_at", "id")
+        if column in columns
+    ] or ["target_id ASC"]
     rows = conn.execute(
         f"""
-        SELECT id, target_type, target_id, derive_method, model, prompt_version,
-               status, result, updated_at
+        SELECT {projection}
         FROM vkpi_analysis_cache
         WHERE target_type='video'
           AND target_id IN ({placeholders})
           AND derive_method=?
-        ORDER BY updated_at ASC, id ASC
+        ORDER BY {", ".join(order_by)}
         """,
         (*(str(value) for value in ids), str(derive_method)),
     ).fetchall()

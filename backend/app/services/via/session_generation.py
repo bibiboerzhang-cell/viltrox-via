@@ -8,6 +8,7 @@ import re
 import secrets
 import time
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from typing import Any
 
 from app.db.repositories.via_control import (
@@ -96,23 +97,23 @@ from app.services.via.session_guidance import (
 )
 from app.services.via.session_memory import _memory_prompt_lines, _memory_teaser
 
-async def _generate_via_reply_with_ai(
-    bundle: dict[str, Any],
-    user_text: str,
-    *,
-    current_surface: str = "upload",
-    route_info: dict[str, Any] | None = None,
-    model_policy: dict[str, Any] | None = None,
-    reply_payload: dict[str, Any] | None = None,
-) -> dict[str, Any] | None:
-    persona = bundle.get("persona") or {}
-    session = bundle.get("session") or {}
-    memory_lines = _memory_prompt_lines(bundle)
-    profile_context = compact_via_profile_context(persona.get("profile") or {})
-    route_info = dict(route_info or {})
-    model_policy = dict(model_policy or {})
-    reply_payload = dict(reply_payload or {})
-    model_plan = get_via_model_plan(policy=model_policy or None, route_info=route_info)
+@dataclass(frozen=True)
+class _AiDialogueRequest:
+    system_prompt: str
+    user_prompt: dict[str, Any]
+    dialogue_routes: list[dict[str, Any]]
+    use_collab: bool
+    max_tokens: int
+
+
+def _dialogue_route_plan(
+    route_info: dict[str, Any],
+    model_policy: dict[str, Any],
+) -> tuple[list[dict[str, Any]], bool]:
+    model_plan = get_via_model_plan(
+        policy=model_policy or None,
+        route_info=route_info,
+    )
     dialogue_plan = dict(model_plan.get("dialogue") or {})
     dialogue_routes = list(dialogue_plan.get("routes") or [])
     if model_policy:
@@ -121,6 +122,10 @@ async def _generate_via_reply_with_ai(
         use_collab = _should_use_dialogue_collab(route_info)
         if not use_collab and dialogue_routes:
             dialogue_routes = dialogue_routes[:1]
+    return dialogue_routes, use_collab
+
+
+def _dialogue_system_prompt(*, helper_mode: str) -> str:
     system_prompt = (
         "You are Via, Viltrox's cat-like intelligent avatar. "
         "Sound warm, observant, a little playful, but still genuinely useful. "
@@ -150,7 +155,29 @@ async def _generate_via_reply_with_ai(
     prompt_injection = get_external_system_prompt_injection()
     if prompt_injection:
         system_prompt = f"{system_prompt}\n\n{prompt_injection}"
-    user_prompt = {
+    if helper_mode == "product_line_guide":
+        system_prompt += (
+            " When product_line_records are present, answer like a photography advisor, not a catalog export. "
+            "Lead with creative feel, shooting use, and who each family suits. "
+            "Only bring in representative models if they make the answer clearer. "
+            "Never repeat raw field labels like summary, models, or notes."
+        )
+    return system_prompt
+
+
+def _dialogue_user_prompt(
+    bundle: dict[str, Any],
+    user_text: str,
+    *,
+    current_surface: str,
+    route_info: dict[str, Any],
+    reply_payload: dict[str, Any],
+) -> dict[str, Any]:
+    persona = bundle.get("persona") or {}
+    session = bundle.get("session") or {}
+    memory_lines = _memory_prompt_lines(bundle)
+    profile_context = compact_via_profile_context(persona.get("profile") or {})
+    return {
         "surface": current_surface,
         "intent": route_info.get("intent") or "quick_chat",
         "brain": route_info.get("brain") or "dialogue",
@@ -179,56 +206,96 @@ async def _generate_via_reply_with_ai(
             session_state=session.get("state") or {},
         ),
     }
-    helper_mode = str(reply_payload.get("helper_mode") or "").strip().lower()
-    if helper_mode == "product_line_guide":
-        system_prompt += (
-            " When product_line_records are present, answer like a photography advisor, not a catalog export. "
-            "Lead with creative feel, shooting use, and who each family suits. "
-            "Only bring in representative models if they make the answer clearer. "
-            "Never repeat raw field labels like summary, models, or notes."
-        )
-    max_tokens = 220 if use_collab else 180
-    if use_collab:
-        route_result = await generate_json_with_collab(
+
+
+def _build_ai_dialogue_request(
+    bundle: dict[str, Any],
+    user_text: str,
+    *,
+    current_surface: str,
+    route_info: dict[str, Any] | None,
+    model_policy: dict[str, Any] | None,
+    reply_payload: dict[str, Any] | None,
+) -> _AiDialogueRequest:
+    safe_route_info = dict(route_info or {})
+    safe_model_policy = dict(model_policy or {})
+    safe_reply_payload = dict(reply_payload or {})
+    dialogue_routes, use_collab = _dialogue_route_plan(
+        safe_route_info,
+        safe_model_policy,
+    )
+    helper_mode = str(safe_reply_payload.get("helper_mode") or "").strip().lower()
+    return _AiDialogueRequest(
+        system_prompt=_dialogue_system_prompt(helper_mode=helper_mode),
+        user_prompt=_dialogue_user_prompt(
+            bundle,
+            user_text,
+            current_surface=current_surface,
+            route_info=safe_route_info,
+            reply_payload=safe_reply_payload,
+        ),
+        dialogue_routes=dialogue_routes,
+        use_collab=use_collab,
+        max_tokens=220 if use_collab else 180,
+    )
+
+
+async def _execute_ai_dialogue(
+    request: _AiDialogueRequest,
+) -> dict[str, Any] | None:
+    if request.use_collab:
+        return await generate_json_with_collab(
             purpose="dialogue",
-            system_prompt=system_prompt,
-            payload=user_prompt,
-            max_tokens=max_tokens,
-            routes_override=dialogue_routes or None,
+            system_prompt=request.system_prompt,
+            payload=request.user_prompt,
+            max_tokens=request.max_tokens,
+            routes_override=request.dialogue_routes or None,
             allow_text_fallback=True,
         )
-    else:
-        single_result = await generate_json_with_route(
-            purpose="dialogue",
-            system_prompt=system_prompt,
-            payload=user_prompt,
-            max_tokens=max_tokens,
-            route_override=dict(dialogue_routes[0] or {}) if dialogue_routes else None,
-            allow_text_fallback=True,
-        )
-        route_result = None
-        if single_result:
-            route_result = {
-                **single_result,
-                "providers": [single_result.get("provider")] if single_result.get("provider") else [],
-                "models": [single_result.get("model")] if single_result.get("model") else [],
-                "strategy": "single",
-            }
-        else:
-            fallback_routes = preview_via_routes("dialogue", limit=3)
-            collab_result = await generate_json_with_collab(
-                purpose="dialogue",
-                system_prompt=system_prompt,
-                payload=user_prompt,
-                max_tokens=max_tokens,
-                routes_override=fallback_routes or None,
-                allow_text_fallback=True,
-            )
-            if collab_result:
-                route_result = {
-                    **collab_result,
-                    "strategy": "single_then_collab",
-                }
+    single_result = await generate_json_with_route(
+        purpose="dialogue",
+        system_prompt=request.system_prompt,
+        payload=request.user_prompt,
+        max_tokens=request.max_tokens,
+        route_override=(
+            dict(request.dialogue_routes[0] or {})
+            if request.dialogue_routes
+            else None
+        ),
+        allow_text_fallback=True,
+    )
+    if single_result:
+        return {
+            **single_result,
+            "providers": (
+                [single_result.get("provider")]
+                if single_result.get("provider")
+                else []
+            ),
+            "models": (
+                [single_result.get("model")]
+                if single_result.get("model")
+                else []
+            ),
+            "strategy": "single",
+        }
+    fallback_routes = preview_via_routes("dialogue", limit=3)
+    collab_result = await generate_json_with_collab(
+        purpose="dialogue",
+        system_prompt=request.system_prompt,
+        payload=request.user_prompt,
+        max_tokens=request.max_tokens,
+        routes_override=fallback_routes or None,
+        allow_text_fallback=True,
+    )
+    if not collab_result:
+        return None
+    return {**collab_result, "strategy": "single_then_collab"}
+
+
+def _normalized_ai_reply(
+    route_result: dict[str, Any] | None,
+) -> dict[str, Any] | None:
     if not route_result:
         return None
     data = route_result["data"]
@@ -250,6 +317,26 @@ async def _generate_via_reply_with_ai(
         "models": route_result.get("models") or [],
         "strategy": route_result.get("strategy") or "",
     }
+
+
+async def _generate_via_reply_with_ai(
+    bundle: dict[str, Any],
+    user_text: str,
+    *,
+    current_surface: str = "upload",
+    route_info: dict[str, Any] | None = None,
+    model_policy: dict[str, Any] | None = None,
+    reply_payload: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    request = _build_ai_dialogue_request(
+        bundle,
+        user_text,
+        current_surface=current_surface,
+        route_info=route_info,
+        model_policy=model_policy,
+        reply_payload=reply_payload,
+    )
+    return _normalized_ai_reply(await _execute_ai_dialogue(request))
 
 
 def _resolve_retrieval_execution(
@@ -294,6 +381,338 @@ def _resolve_retrieval_execution(
     }
 
 
+@dataclass(frozen=True)
+class _ViaReplyContext:
+    bundle: dict[str, Any]
+    user_text: str
+    current_surface: str
+    session: dict[str, Any]
+    persona: dict[str, Any]
+    name: str
+    temperament: str
+    talk_style: str
+    memory_count: int
+    teaser: str
+    lower: str
+    route_intent: str
+    profile_context: dict[str, Any]
+    default_quick_actions: list[str]
+
+
+def _reply_context(
+    bundle: dict[str, Any],
+    user_text: str,
+    *,
+    current_surface: str,
+    route_info: dict[str, Any] | None,
+) -> _ViaReplyContext:
+    session = bundle.get("session") or {}
+    persona = bundle.get("persona") or {}
+    safe_route_info = dict(route_info or {})
+    return _ViaReplyContext(
+        bundle=bundle,
+        user_text=user_text,
+        current_surface=current_surface,
+        session=session,
+        persona=persona,
+        name=str(persona.get("display_name") or "Via").strip() or "Via",
+        temperament=str(persona.get("temperament") or "balanced").strip(),
+        talk_style=str(persona.get("talk_style") or "warm").strip(),
+        memory_count=len(bundle.get("memory_refs", [])),
+        teaser=_memory_teaser(bundle),
+        lower=str(user_text or "").strip().lower(),
+        route_intent=str(safe_route_info.get("intent") or "").strip().lower(),
+        profile_context=compact_via_profile_context(persona.get("profile") or {}),
+        default_quick_actions=["Upload critique", "Trend signal", "Account help"],
+    )
+
+
+def _persona_payload(context: _ViaReplyContext) -> dict[str, Any]:
+    return {
+        "display_name": context.name,
+        "temperament": context.temperament,
+        "talk_style": context.talk_style,
+        "outfit_code": str(
+            context.persona.get("outfit_code") or "viltrox_core_black"
+        ),
+        "affinity_points": int(context.persona.get("affinity_points") or 0),
+        "wardrobe_points": int(context.persona.get("wardrobe_points") or 0),
+    }
+
+
+def _quick_actions(
+    values: Any,
+    *,
+    fallback: list[str],
+) -> list[str]:
+    actions = [
+        str(item).strip()[:40]
+        for item in (values or [])
+        if str(item).strip()
+    ][:3]
+    return actions or fallback
+
+
+def _base_reply_payload(
+    context: _ViaReplyContext,
+    quick_actions: list[str],
+) -> dict[str, Any]:
+    return {
+        "persona": _persona_payload(context),
+        "memory_ref_count": context.memory_count,
+        "quick_actions": quick_actions,
+        "surface": context.current_surface,
+    }
+
+
+def _complete_reply(
+    context: _ViaReplyContext,
+    *,
+    title: str,
+    text: str,
+    payload: dict[str, Any],
+    activity_fields: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload["activity_state"] = resolve_via_activity_state(
+        user_text=context.user_text,
+        title=title,
+        text=text,
+        current_surface=context.current_surface,
+        **dict(activity_fields or {}),
+    )
+    return {"title": title, "text": text[:500], "payload": payload}
+
+
+def _business_template_reply(
+    context: _ViaReplyContext,
+) -> dict[str, Any] | None:
+    if context.route_intent != "business_support":
+        return None
+    reply = get_via_business_reply(
+        context.user_text,
+        profile_context=context.profile_context,
+        session_state=context.session.get("state") or {},
+    )
+    if not reply:
+        return None
+    title = str(reply.get("title") or "官方入口").strip()[:40] or "官方入口"
+    text = str(reply.get("text") or "").strip()
+    quick_actions = _quick_actions(
+        reply.get("quick_actions"),
+        fallback=context.default_quick_actions,
+    )
+    payload = {
+        **_base_reply_payload(context, quick_actions),
+        "business_mode": True,
+        "business_subintent": str(
+            reply.get("business_subintent") or "business_contact"
+        ),
+        "behavior_mode": str(reply.get("behavior_mode") or "gear"),
+        "lock_ai_override": bool(reply.get("lock_ai_override")),
+        "business_state_patch": reply.get("session_state_patch") or {},
+        "business_context": build_business_context(
+            context.user_text,
+            profile_context=context.profile_context,
+            session_state=context.session.get("state") or {},
+        ),
+    }
+    return _complete_reply(
+        context,
+        title=title,
+        text=text,
+        payload=payload,
+        activity_fields={
+            "behavior_mode": payload.get("behavior_mode") or "",
+            "business_subintent": payload.get("business_subintent") or "",
+        },
+    )
+
+
+def _product_template_reply(
+    context: _ViaReplyContext,
+) -> dict[str, Any] | None:
+    if context.route_intent != "product":
+        return None
+    reply = get_via_product_reply(
+        context.user_text,
+        profile_context=context.profile_context,
+        session_state=context.session.get("state") or {},
+    )
+    if not reply:
+        return None
+    title = (
+        str(reply.get("title") or "Viltrox picks").strip()[:40]
+        or "Viltrox picks"
+    )
+    text = str(reply.get("text") or "").strip()
+    quick_actions = _quick_actions(
+        reply.get("quick_actions"),
+        fallback=context.default_quick_actions,
+    )
+    payload = {
+        **_base_reply_payload(context, quick_actions),
+        "product_mode": True,
+        "product_subintent": str(
+            reply.get("product_subintent") or "recommendation"
+        ),
+        "behavior_mode": str(reply.get("behavior_mode") or "gear"),
+        "lock_ai_override": bool(reply.get("lock_ai_override")),
+        "product_state_patch": reply.get("session_state_patch") or {},
+    }
+    return _complete_reply(
+        context,
+        title=title,
+        text=text,
+        payload=payload,
+        activity_fields={
+            "behavior_mode": payload.get("behavior_mode") or "",
+            "product_subintent": payload.get("product_subintent") or "",
+        },
+    )
+
+
+def _helper_template_reply(
+    context: _ViaReplyContext,
+) -> dict[str, Any] | None:
+    reply = (
+        _product_line_guide_reply(context.bundle, context.user_text)
+        or _software_guide_reply(context.bundle, context.user_text)
+        or _photography_guide_reply(context.bundle, context.user_text)
+        or _casual_companion_reply(
+            context.bundle,
+            context.user_text,
+            current_surface=context.current_surface,
+        )
+    )
+    if not reply:
+        return None
+    title = str(reply.get("title") or "Via").strip()[:40] or "Via"
+    text = str(reply.get("text") or "").strip()
+    quick_actions = _quick_actions(
+        reply.get("quick_actions"),
+        fallback=context.default_quick_actions,
+    )
+    payload = {
+        **_base_reply_payload(context, quick_actions),
+        "helper_mode": str(reply.get("helper_mode") or ""),
+        "lock_ai_override": bool(reply.get("lock_ai_override")),
+        "software_context": list(reply.get("software_context") or []),
+        "product_line_context": list(reply.get("product_line_context") or []),
+        "product_line_records": list(reply.get("product_line_records") or []),
+        "guide_draft": dict(reply.get("guide_draft") or {}),
+    }
+    return _complete_reply(
+        context,
+        title=title,
+        text=text,
+        payload=payload,
+    )
+
+
+def _fallback_topic(lower: str) -> str:
+    if any(token in lower for token in ("vip", "tier", "level", "等级")):
+        return "tier"
+    if any(
+        token in lower
+        for token in ("affiliate", "commission", "shopify", "订单", "佣金")
+    ):
+        return "affiliate"
+    if any(token in lower for token in ("memory", "remember", "记得", "上次")):
+        return "memory"
+    if any(token in lower for token in ("outfit", "wear", "clothes", "衣服", "换装")):
+        return "wardrobe"
+    if any(
+        token in lower
+        for token in ("stock", "inventory", "instock", "sku", "产品", "库存", "镜头")
+    ):
+        return "stock"
+    if any(
+        token in lower
+        for token in ("upload", "video", "score", "improve", "分析", "投稿")
+    ):
+        return "upload"
+    return "default"
+
+
+def _fallback_copy(
+    context: _ViaReplyContext,
+    topic: str,
+) -> tuple[str, str, list[str]]:
+    if topic == "tier":
+        return (
+            "Tier track",
+            f"{context.name} is watching your creator track. "
+            "Open your account panel and I will translate the current tier, multiplier, and next unlock into one clear path.",
+            ["Show VIP status", "Show affiliate link", "What unlocks next?"],
+        )
+    if topic == "affiliate":
+        return (
+            "Affiliate lane",
+            f"{context.name} can follow your affiliate lane too. "
+            "Your creator link lives beside your Creator ID now, and the first Shopify signals can be folded back into this session.",
+            ["Copy my link", "Show order signals", "How commission works"],
+        )
+    if topic == "memory":
+        memory_line = (
+            f"One thing still standing out: {context.teaser}"
+            if context.teaser
+            else "If you want, I can refresh the shelf and pull the strongest signals back up."
+        )
+        return (
+            "Memory check",
+            f"{context.name} is keeping the useful parts of this lane in view. "
+            + memory_line,
+            ["Refresh memory", "What do you know about me?", "Show market signals"],
+        )
+    if topic == "wardrobe":
+        return (
+            "Wardrobe",
+            f"{context.name} can switch outfits and tone without losing memory. "
+            "Use the chips below to move between calm studio, field runner, and the Catographer line.",
+            ["Switch outfit", "Be more playful", "Stay coach mode"],
+        )
+    if topic == "stock":
+        return (
+            "Stock watch",
+            f"{context.name} can keep one eye on live Viltrox stock too. "
+            "I can surface the latest in-stock products from the market watch lane while keeping this session focused on your uploads and creator path.",
+            ["Show stock watch", "What is in stock?", "Track one lens"],
+        )
+    if topic == "upload":
+        teaser = (
+            f"I already have this in mind: {context.teaser}. "
+            if context.teaser
+            else ""
+        )
+        return (
+            "Upload coach",
+            f"{context.name} is in {context.current_surface} mode right now. "
+            + teaser
+            + "Give me one finished analysis and I will turn it into concrete next-step notes instead of a cold score.",
+            ["Critique my last upload", "Tell me the first fix", "Open submissions"],
+        )
+    text = (
+        "I am here. Drop in your video or send me a link, "
+        "and I will keep watch from the nest."
+        if context.current_surface == "upload"
+        else "I am here. Ask one thing, and I will stay with you through it."
+    )
+    return "Via", text, context.default_quick_actions
+
+
+def _fallback_reply(context: _ViaReplyContext) -> dict[str, Any]:
+    title, text, quick_actions = _fallback_copy(
+        context,
+        _fallback_topic(context.lower),
+    )
+    return _complete_reply(
+        context,
+        title=title,
+        text=text,
+        payload=_base_reply_payload(context, quick_actions),
+    )
+
+
 def compose_via_reply(
     bundle: dict[str, Any],
     user_text: str,
@@ -301,213 +720,17 @@ def compose_via_reply(
     current_surface: str = "upload",
     route_info: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    session = bundle.get("session") or {}
-    persona = bundle.get("persona") or {}
-    name = str(persona.get("display_name") or "Via").strip() or "Via"
-    temperament = str(persona.get("temperament") or "balanced").strip()
-    talk_style = str(persona.get("talk_style") or "warm").strip()
-    memory_count = len(bundle.get("memory_refs", []))
-    teaser = _memory_teaser(bundle)
-    lower = str(user_text or "").strip().lower()
-    route_info = dict(route_info or {})
-    route_intent = str(route_info.get("intent") or "").strip().lower()
-    allow_business_template = route_intent in {"business_support"}
-    allow_product_template = route_intent in {"product"}
-
-    title = "Via reply"
-    quick_actions = ["Upload critique", "Trend signal", "Account help"]
-    profile_context = compact_via_profile_context(persona.get("profile") or {})
-    business_reply = (
-        get_via_business_reply(
-            user_text,
-            profile_context=profile_context,
-            session_state=session.get("state") or {},
-        )
-        if allow_business_template
-        else None
-    )
-    product_reply = (
-        get_via_product_reply(
-            user_text,
-            profile_context=profile_context,
-            session_state=session.get("state") or {},
-        )
-        if allow_product_template
-        else None
-    )
-
-    if business_reply:
-        title = str(business_reply.get("title") or "官方入口").strip()[:40] or "官方入口"
-        text = str(business_reply.get("text") or "").strip()
-        quick_actions = [str(item).strip()[:40] for item in (business_reply.get("quick_actions") or []) if str(item).strip()][:3] or quick_actions
-        payload = {
-            "persona": {
-                "display_name": name,
-                "temperament": temperament,
-                "talk_style": talk_style,
-                "outfit_code": str(persona.get("outfit_code") or "viltrox_core_black"),
-                "affinity_points": int(persona.get("affinity_points") or 0),
-                "wardrobe_points": int(persona.get("wardrobe_points") or 0),
-            },
-            "memory_ref_count": memory_count,
-            "quick_actions": quick_actions,
-            "surface": current_surface,
-            "business_mode": True,
-            "business_subintent": str(business_reply.get("business_subintent") or "business_contact"),
-            "behavior_mode": str(business_reply.get("behavior_mode") or "gear"),
-            "lock_ai_override": bool(business_reply.get("lock_ai_override")),
-            "business_state_patch": business_reply.get("session_state_patch") or {},
-            "business_context": build_business_context(
-                user_text,
-                profile_context=profile_context,
-                session_state=session.get("state") or {},
-            ),
-        }
-        payload["activity_state"] = resolve_via_activity_state(
-            user_text=user_text,
-            title=title,
-            text=text,
-            current_surface=current_surface,
-            behavior_mode=payload.get("behavior_mode") or "",
-            business_subintent=payload.get("business_subintent") or "",
-        )
-        return {"title": title, "text": text[:500], "payload": payload}
-    if product_reply:
-        title = str(product_reply.get("title") or "Viltrox picks").strip()[:40] or "Viltrox picks"
-        text = str(product_reply.get("text") or "").strip()
-        quick_actions = [str(item).strip()[:40] for item in (product_reply.get("quick_actions") or []) if str(item).strip()][:3] or quick_actions
-        payload = {
-            "persona": {
-                "display_name": name,
-                "temperament": temperament,
-                "talk_style": talk_style,
-                "outfit_code": str(persona.get("outfit_code") or "viltrox_core_black"),
-                "affinity_points": int(persona.get("affinity_points") or 0),
-                "wardrobe_points": int(persona.get("wardrobe_points") or 0),
-            },
-            "memory_ref_count": memory_count,
-            "quick_actions": quick_actions,
-            "surface": current_surface,
-            "product_mode": True,
-            "product_subintent": str(product_reply.get("product_subintent") or "recommendation"),
-            "behavior_mode": str(product_reply.get("behavior_mode") or "gear"),
-            "lock_ai_override": bool(product_reply.get("lock_ai_override")),
-            "product_state_patch": product_reply.get("session_state_patch") or {},
-        }
-        payload["activity_state"] = resolve_via_activity_state(
-            user_text=user_text,
-            title=title,
-            text=text,
-            current_surface=current_surface,
-            behavior_mode=payload.get("behavior_mode") or "",
-            product_subintent=payload.get("product_subintent") or "",
-        )
-        return {"title": title, "text": text[:500], "payload": payload}
-    helper_reply = (
-        _product_line_guide_reply(bundle, user_text)
-        or _software_guide_reply(bundle, user_text)
-        or _photography_guide_reply(bundle, user_text)
-        or _casual_companion_reply(bundle, user_text, current_surface=current_surface)
-    )
-    if helper_reply:
-        title = str(helper_reply.get("title") or "Via").strip()[:40] or "Via"
-        text = str(helper_reply.get("text") or "").strip()
-        quick_actions = [str(item).strip()[:40] for item in (helper_reply.get("quick_actions") or []) if str(item).strip()][:3] or quick_actions
-        payload = {
-            "persona": {
-                "display_name": name,
-                "temperament": temperament,
-                "talk_style": talk_style,
-                "outfit_code": str(persona.get("outfit_code") or "viltrox_core_black"),
-                "affinity_points": int(persona.get("affinity_points") or 0),
-                "wardrobe_points": int(persona.get("wardrobe_points") or 0),
-            },
-            "memory_ref_count": memory_count,
-            "quick_actions": quick_actions,
-            "surface": current_surface,
-            "helper_mode": str(helper_reply.get("helper_mode") or ""),
-            "lock_ai_override": bool(helper_reply.get("lock_ai_override")),
-            "software_context": list(helper_reply.get("software_context") or []),
-            "product_line_context": list(helper_reply.get("product_line_context") or []),
-            "product_line_records": list(helper_reply.get("product_line_records") or []),
-            "guide_draft": dict(helper_reply.get("guide_draft") or {}),
-        }
-        payload["activity_state"] = resolve_via_activity_state(
-            user_text=user_text,
-            title=title,
-            text=text,
-            current_surface=current_surface,
-        )
-        return {"title": title, "text": text[:500], "payload": payload}
-    if any(token in lower for token in ("vip", "tier", "level", "等级")):
-        title = "Tier track"
-        text = (
-            f"{name} is watching your creator track. "
-            "Open your account panel and I will translate the current tier, multiplier, and next unlock into one clear path."
-        )
-        quick_actions = ["Show VIP status", "Show affiliate link", "What unlocks next?"]
-    elif any(token in lower for token in ("affiliate", "commission", "shopify", "订单", "佣金")):
-        title = "Affiliate lane"
-        text = (
-            f"{name} can follow your affiliate lane too. "
-            "Your creator link lives beside your Creator ID now, and the first Shopify signals can be folded back into this session."
-        )
-        quick_actions = ["Copy my link", "Show order signals", "How commission works"]
-    elif any(token in lower for token in ("memory", "remember", "记得", "上次")):
-        title = "Memory check"
-        text = (
-            f"{name} is keeping the useful parts of this lane in view. "
-            + (f"One thing still standing out: {teaser}" if teaser else "If you want, I can refresh the shelf and pull the strongest signals back up.")
-        )
-        quick_actions = ["Refresh memory", "What do you know about me?", "Show market signals"]
-    elif any(token in lower for token in ("outfit", "wear", "clothes", "衣服", "换装")):
-        title = "Wardrobe"
-        text = (
-            f"{name} can switch outfits and tone without losing memory. "
-            "Use the chips below to move between calm studio, field runner, and the Catographer line."
-        )
-        quick_actions = ["Switch outfit", "Be more playful", "Stay coach mode"]
-    elif any(token in lower for token in ("stock", "inventory", "instock", "sku", "产品", "库存", "镜头")):
-        title = "Stock watch"
-        text = (
-            f"{name} can keep one eye on live Viltrox stock too. "
-            "I can surface the latest in-stock products from the market watch lane while keeping this session focused on your uploads and creator path."
-        )
-        quick_actions = ["Show stock watch", "What is in stock?", "Track one lens"]
-    elif any(token in lower for token in ("upload", "video", "score", "improve", "分析", "投稿")):
-        title = "Upload coach"
-        text = (
-            f"{name} is in {current_surface} mode right now. "
-            + (f"I already have this in mind: {teaser}. " if teaser else "")
-            + "Give me one finished analysis and I will turn it into concrete next-step notes instead of a cold score."
-        )
-        quick_actions = ["Critique my last upload", "Tell me the first fix", "Open submissions"]
-    else:
-        title = "Via"
-        if current_surface == "upload":
-            text = (
-                "I am here. Drop in your video or send me a link, "
-                "and I will keep watch from the nest."
-            )
-        else:
-            text = "I am here. Ask one thing, and I will stay with you through it."
-    payload = {
-        "persona": {
-            "display_name": name,
-            "temperament": temperament,
-            "talk_style": talk_style,
-            "outfit_code": str(persona.get("outfit_code") or "viltrox_core_black"),
-            "affinity_points": int(persona.get("affinity_points") or 0),
-            "wardrobe_points": int(persona.get("wardrobe_points") or 0),
-        },
-        "memory_ref_count": memory_count,
-        "quick_actions": quick_actions,
-        "surface": current_surface,
-    }
-    payload["activity_state"] = resolve_via_activity_state(
-        user_text=user_text,
-        title=title,
-        text=text,
+    context = _reply_context(
+        bundle,
+        user_text,
         current_surface=current_surface,
+        route_info=route_info,
     )
-    return {"title": title, "text": text[:500], "payload": payload}
+    for builder in (
+        _business_template_reply,
+        _product_template_reply,
+        _helper_template_reply,
+    ):
+        if reply := builder(context):
+            return reply
+    return _fallback_reply(context)

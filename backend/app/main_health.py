@@ -2,7 +2,12 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import math
+import os
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from threading import Lock
+from typing import Any, Callable, Mapping
 
 from app.core.config import (
     APP_ROLE,
@@ -23,6 +28,345 @@ from app.db.connection import get_db_actor_stats, probe_postgres_connectivity
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+_RUNTIME_TRUST_STAGE_NAMES = (
+    "db_startup",
+    "release_validation",
+    "release_identity",
+    "db_migration",
+    "worker_heartbeat",
+    "redis_worker",
+    "scheduler",
+)
+
+
+def _runtime_trust_timeout_seconds() -> float:
+    """Keep the public trust projection inside the caller's three-second SLA."""
+
+    raw = str(os.getenv("VKPI_RUNTIME_TRUST_TIMEOUT_SECONDS", "1.0") or "1.0").strip()
+    try:
+        parsed = float(raw)
+    except ValueError:
+        parsed = 1.0
+    if not math.isfinite(parsed):
+        parsed = 1.0
+    return min(2.0, max(0.1, parsed))
+
+
+RUNTIME_TRUST_TIMEOUT_SECONDS = _runtime_trust_timeout_seconds()
+
+
+class _RuntimeTrustCoordinator:
+    """Single-flight executor plus observable progress for sync trust probes.
+
+    A database pool acquisition can remain blocked after the HTTP deadline.
+    Reusing one in-flight Future prevents repeated health calls from filling the
+    default executor with identical blocked probes.
+    """
+
+    def __init__(self) -> None:
+        self._lock = Lock()
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="runtime-trust")
+        self._future: Future[dict[str, object]] | None = None
+        self._started_at: float | None = None
+        self._stages: dict[str, dict[str, Any]] = {}
+
+    def submit(self, probe: Callable[[], dict[str, object]]) -> Future[dict[str, object]]:
+        with self._lock:
+            if self._future is None or self._future.done():
+                self._future = self._executor.submit(probe)
+            return self._future
+
+    def begin(self) -> None:
+        now = time.perf_counter()
+        with self._lock:
+            self._started_at = now
+            self._stages = {
+                name: {"status": "pending", "duration_ms": None}
+                for name in _RUNTIME_TRUST_STAGE_NAMES
+            }
+
+    def stage_started(self, name: str) -> float:
+        started = time.perf_counter()
+        with self._lock:
+            self._stages[name] = {
+                "status": "running",
+                "duration_ms": None,
+                "_started_at": started,
+            }
+        return started
+
+    def stage_finished(self, name: str, started: float, *, error_type: str | None = None) -> None:
+        stage: dict[str, Any] = {
+            "status": "error" if error_type else "completed",
+            "duration_ms": round((time.perf_counter() - started) * 1000, 2),
+        }
+        if error_type:
+            stage["error_type"] = error_type
+        with self._lock:
+            self._stages[name] = stage
+
+    def stage_skipped(self, name: str, reason: str) -> None:
+        with self._lock:
+            self._stages[name] = {
+                "status": "skipped",
+                "duration_ms": 0.0,
+                "reason": str(reason),
+            }
+
+    def snapshot(self, status: str, *, timeout_seconds: float | None = None) -> dict[str, Any]:
+        now = time.perf_counter()
+        with self._lock:
+            started_at = self._started_at
+            stages: dict[str, dict[str, Any]] = {}
+            for name, raw in self._stages.items():
+                stage = {key: value for key, value in raw.items() if not key.startswith("_")}
+                if raw.get("status") == "running" and raw.get("_started_at") is not None:
+                    stage["duration_ms"] = round((now - float(raw["_started_at"])) * 1000, 2)
+                stages[name] = stage
+        payload: dict[str, Any] = {
+            "status": status,
+            "duration_ms": round((now - started_at) * 1000, 2) if started_at else 0.0,
+            "stages": stages,
+        }
+        if timeout_seconds is not None:
+            payload["timeout_ms"] = round(float(timeout_seconds) * 1000, 2)
+            payload["in_flight"] = True
+        return payload
+
+
+_RUNTIME_TRUST_COORDINATOR = _RuntimeTrustCoordinator()
+
+
+def begin_runtime_trust_probe() -> None:
+    _RUNTIME_TRUST_COORDINATOR.begin()
+
+
+def run_runtime_trust_stage(
+    name: str,
+    probe: Callable[[], Any],
+    fallback: Any,
+) -> Any:
+    started = _RUNTIME_TRUST_COORDINATOR.stage_started(name)
+    try:
+        value = probe()
+    except Exception as exc:
+        _RUNTIME_TRUST_COORDINATOR.stage_finished(
+            name,
+            started,
+            error_type=type(exc).__name__,
+        )
+        logger.debug("health: runtime trust stage %s failed", name, exc_info=True)
+        return fallback() if callable(fallback) else fallback
+    _RUNTIME_TRUST_COORDINATOR.stage_finished(name, started)
+    return value
+
+
+def skip_runtime_trust_stage(name: str, reason: str) -> None:
+    _RUNTIME_TRUST_COORDINATOR.stage_skipped(name, reason)
+
+
+def finish_runtime_trust_probe(trust: Mapping[str, object]) -> dict[str, Any]:
+    probe = _RUNTIME_TRUST_COORDINATOR.snapshot("ok")
+    reasons: list[str] = []
+    stages = probe.get("stages") if isinstance(probe.get("stages"), Mapping) else {}
+    if any(
+        isinstance(stage, Mapping) and stage.get("status") == "error"
+        for stage in stages.values()
+    ):
+        reasons.append("stage_error")
+    db_startup = trust.get("db_startup")
+    if not isinstance(db_startup, Mapping) or db_startup.get("state") != "completed":
+        reasons.append("db_startup_unready")
+    if trust.get("db_migration_source") != "schema_migrations":
+        reasons.append("db_migration_unavailable")
+    if trust.get("worker_online") is not True or trust.get("worker_heartbeat_source") != "db_heartbeat":
+        reasons.append("worker_unavailable")
+    redis_fleet = trust.get("redis_worker_fleet")
+    if isinstance(redis_fleet, Mapping) and redis_fleet.get("expected_count") not in (None, 0):
+        if redis_fleet.get("online") is not True:
+            reasons.append("redis_worker_unavailable")
+    release_validation = trust.get("release_validation")
+    if not isinstance(release_validation, Mapping) or release_validation.get("valid") is not True:
+        reasons.append("release_validation_untrusted")
+    if trust.get("sha_aligned") is not True:
+        reasons.append("release_sha_unaligned")
+    if reasons:
+        probe["status"] = "degraded"
+        probe["failure_reasons"] = reasons
+    return probe
+
+
+def build_runtime_trust(
+    *,
+    db_startup_probe: Callable[[], object],
+    release_validation_probe: Callable[[], object],
+    client_git_sha_probe: Callable[[], str],
+    db_migration_probe: Callable[[], object],
+    worker_probe: Callable[[], dict[str, object]],
+    redis_worker_probe: Callable[[], dict[str, object]],
+    scheduler_probe: Callable[[], object],
+    worker_sha_fallback_probe: Callable[[], dict[str, object]],
+    server_git_sha: str,
+    postgres_runtime: bool,
+) -> dict[str, object]:
+    """Run the synchronous trust stages once and preserve their evidence."""
+
+    begin_runtime_trust_probe()
+    trust: dict[str, object] = {
+        "db_startup": run_runtime_trust_stage(
+            "db_startup", db_startup_probe, {"state": "unknown"}
+        ),
+        "release_validation": run_runtime_trust_stage(
+            "release_validation",
+            release_validation_probe,
+            {"active": True, "valid": False, "source": "status_error"},
+        ),
+    }
+    server_sha, client_sha = run_runtime_trust_stage(
+        "release_identity",
+        lambda: (server_git_sha or None, client_git_sha_probe() or None),
+        (server_git_sha or None, None),
+    )
+    trust.update(
+        {
+            "server_git_sha": server_sha,
+            "client_git_sha": client_sha,
+            "sha_aligned": bool(server_sha == client_sha) if server_sha and client_sha else None,
+        }
+    )
+    migration_max = run_runtime_trust_stage("db_migration", db_migration_probe, None)
+    trust["db_migration_max"] = migration_max
+    trust["db_migration_source"] = "schema_migrations" if migration_max else "unavailable"
+    worker_unavailable = {
+        "worker_heartbeat": None,
+        "worker_online": None,
+        "worker_sha": None,
+        "worker_sha_source": "unavailable",
+        "worker_heartbeat_source": "unavailable",
+    }
+    redis_unavailable = {
+        "online": False,
+        "online_count": 0,
+        "expected_count": None,
+        "workers": [],
+    }
+    if postgres_runtime and not migration_max:
+        for stage in ("worker_heartbeat", "redis_worker", "scheduler"):
+            skip_runtime_trust_stage(stage, "db_migration_unavailable")
+        trust.update(worker_unavailable)
+        trust["redis_worker_fleet"] = redis_unavailable
+        trust["scheduler_status"] = "unavailable"
+    else:
+        trust.update(
+            run_runtime_trust_stage("worker_heartbeat", worker_probe, worker_unavailable)
+        )
+        trust["redis_worker_fleet"] = run_runtime_trust_stage(
+            "redis_worker", redis_worker_probe, redis_unavailable
+        )
+        trust["scheduler_status"] = run_runtime_trust_stage(
+            "scheduler", scheduler_probe, "not_configured"
+        )
+    if "worker_sha" not in trust:
+        try:
+            trust.update(worker_sha_fallback_probe())
+        except Exception:
+            trust["worker_sha"] = None
+            trust["worker_sha_source"] = "unavailable"
+    trust["probe"] = finish_runtime_trust_probe(trust)
+    return trust
+
+
+def _runtime_trust_failure_payload(
+    *,
+    server_git_sha: str,
+    client_git_sha: str,
+    probe: Mapping[str, Any],
+) -> dict[str, object]:
+    """Return a schema-compatible, fail-closed trust body after timeout/error."""
+
+    return {
+        "db_startup": {"state": "unknown"},
+        "db_migration_max": None,
+        "db_migration_source": "probe_unavailable",
+        "worker_heartbeat": None,
+        "worker_online": None,
+        "worker_name": None,
+        "worker_pid": None,
+        "worker_sha": None,
+        "worker_sha_source": "probe_unavailable",
+        "worker_boot_nonce_sha256": None,
+        "worker_started_at": None,
+        "worker_heartbeat_source": "probe_unavailable",
+        "worker_fleet": {
+            "online_count": 0,
+            "expected_count": None,
+            "total_heartbeat_rows": 0,
+            "all_worker_sha_aligned": False,
+            "lane_coverage": [],
+            "workers": [],
+        },
+        "redis_worker_fleet": {
+            "online": False,
+            "online_count": 0,
+            "expected_count": None,
+            "workers": [],
+        },
+        "scheduler_status": "unavailable",
+        "release_validation": {"active": True, "valid": False, "source": "probe_unavailable"},
+        "server_git_sha": str(server_git_sha or "").strip() or None,
+        "client_git_sha": str(client_git_sha or "").strip() or None,
+        "sha_aligned": None,
+        "probe": dict(probe),
+    }
+
+
+async def bounded_runtime_trust(
+    probe: Callable[[], dict[str, object]],
+    *,
+    server_git_sha: str,
+    client_git_sha: str,
+    timeout_seconds: float = RUNTIME_TRUST_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+    timeout = min(2.0, max(0.1, float(timeout_seconds)))
+    future = _RUNTIME_TRUST_COORDINATOR.submit(probe)
+    try:
+        result = await asyncio.wait_for(
+            asyncio.shield(asyncio.wrap_future(future)),
+            timeout=timeout,
+        )
+    except TimeoutError:
+        snapshot = _RUNTIME_TRUST_COORDINATOR.snapshot("timeout", timeout_seconds=timeout)
+        return _runtime_trust_failure_payload(
+            server_git_sha=server_git_sha,
+            client_git_sha=client_git_sha,
+            probe=snapshot,
+        )
+    except Exception as exc:
+        snapshot = _RUNTIME_TRUST_COORDINATOR.snapshot("error")
+        snapshot["error_type"] = type(exc).__name__
+        return _runtime_trust_failure_payload(
+            server_git_sha=server_git_sha,
+            client_git_sha=client_git_sha,
+            probe=snapshot,
+        )
+    if not isinstance(result, dict):
+        snapshot = _RUNTIME_TRUST_COORDINATOR.snapshot("error")
+        snapshot["error_type"] = "InvalidProbeResult"
+        return _runtime_trust_failure_payload(
+            server_git_sha=server_git_sha,
+            client_git_sha=client_git_sha,
+            probe=snapshot,
+        )
+    return result
+
+
+def runtime_trust_service_status(trust: Mapping[str, object]) -> str:
+    probe = trust.get("probe")
+    if isinstance(probe, Mapping) and probe.get("status") != "ok":
+        return "degraded"
+    return "ok"
 
 
 def _probe_redis() -> dict[str, Any]:

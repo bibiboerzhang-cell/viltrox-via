@@ -460,7 +460,20 @@ export interface VkpiKolRecallItem {
     view_count?: number | null;
     like_count?: number | null;
   }>;
+  /** 面向 prospective_growth 目标的描述性候选排序；0-100，不能解释为转化预测。 */
+  product_use_fit?: number | null;
+  market_activation?: number | null;
+  product_scene_evidence_pass?: boolean;
+  market_activation_pass?: boolean;
+  market_activation_status?: string;
+  growth_qualification_pass?: boolean;
+  audience_fit?: number | null;
+  content_execution?: number | null;
+  growth_candidate_score?: number | null;
   evidence_confidence?: number | string | null;
+  claim_status?: "descriptive_only" | string | null;
+  growth_candidate_scoring?: Row | null;
+  selection_rationale?: Row | null;
   evidence_quality?: VkpiKolEvidenceQuality | (Row & { coverage?: unknown }) | null;
   ranking_confidence?: Row | null;
   platform_calibration?: Row | null;

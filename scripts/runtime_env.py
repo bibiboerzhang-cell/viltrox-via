@@ -13,6 +13,15 @@ LEGACY_TOOLS_BIN = Path(os.getenv("LEGACY_TOOLS_BIN") or str(ROOT.parent / "vilt
 INSECURE_LOCAL_JWT_SECRET = "viltrox2-local-dev-secret-change-me"
 INSECURE_LOCAL_ADMIN_PASSWORD = "AdminPass123!"
 PRODUCTION_ENVIRONMENTS = frozenset({"prod", "production", "stage", "staging"})
+LOCAL_OPERATOR_ENV_KEYS = frozenset(
+    {
+        "VKPI_LLM_READINESS_OPERATOR_ACK",
+        "VKPI_FORUM_COLLECT_ENABLED",
+        "VKPI_X_COLLECT_ENABLED",
+        "VKPI_FORUM_APIFY_FALLBACK_ENABLED",
+        "VKPI_ADVISOR_EXTERNAL_AI_ENABLED",
+    }
+)
 
 POSTGRES_PORT = os.getenv("POSTGRES_PORT") or "54329"
 POSTGRES_USER = os.getenv("POSTGRES_USER") or "postgres"
@@ -105,6 +114,94 @@ def _load_local_env() -> None:
         _load_env_file(Path(explicit_path), override=True)
 
 
+def _load_local_operator_env(*, launcher_environment: str) -> None:
+    """Load the local non-secret operator switches as inert data.
+
+    This deliberately does not use ``source`` or ``exec``.  The runtime
+    directory is writable by the local service account, so it is not a valid
+    production authorization root and must not become a shell-code hook.
+    """
+
+    if launcher_environment.strip().lower() != "local":
+        os.environ["VKPI_LOCAL_OPERATOR_ENV_STATUS"] = "ignored_nonlocal"
+        return
+    path = ROOT / "runtime/local_operator_env.sh"
+    try:
+        initial = path.lstat()
+    except FileNotFoundError:
+        os.environ["VKPI_LOCAL_OPERATOR_ENV_STATUS"] = "absent"
+        return
+    except OSError as exc:
+        raise RuntimeError("local operator environment stat failed") from exc
+
+    import stat
+
+    if (
+        not stat.S_ISREG(initial.st_mode)
+        or initial.st_uid != os.geteuid()
+        or stat.S_IMODE(initial.st_mode) & 0o022
+        or initial.st_size > 65536
+    ):
+        raise RuntimeError("local operator environment file is unsafe")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError("local operator environment open failed") from exc
+    try:
+        observed = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(observed.st_mode)
+            or (observed.st_dev, observed.st_ino, observed.st_size, observed.st_mtime_ns)
+            != (initial.st_dev, initial.st_ino, initial.st_size, initial.st_mtime_ns)
+        ):
+            raise RuntimeError("local operator environment identity changed")
+        payload = bytearray()
+        while len(payload) <= 65536:
+            chunk = os.read(descriptor, min(65536 - len(payload) + 1, 65536))
+            if not chunk:
+                break
+            payload.extend(chunk)
+        after = os.fstat(descriptor)
+        if (
+            len(payload) != initial.st_size
+            or len(payload) > 65536
+            or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            != (initial.st_dev, initial.st_ino, initial.st_size, initial.st_mtime_ns)
+        ):
+            raise RuntimeError("local operator environment changed while reading")
+    finally:
+        os.close(descriptor)
+
+    try:
+        text = bytes(payload).decode("utf-8", "strict")
+    except UnicodeError as exc:
+        raise RuntimeError("local operator environment encoding is invalid") from exc
+    values: dict[str, str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export") and line[6:7].isspace():
+            line = line[7:].lstrip()
+        if "=" not in line:
+            raise RuntimeError("local operator environment contains non-assignment content")
+        key, value = (item.strip() for item in line.split("=", 1))
+        if key not in LOCAL_OPERATOR_ENV_KEYS:
+            raise RuntimeError("local operator environment contains a forbidden key")
+        if key in values:
+            raise RuntimeError("local operator environment contains a duplicate key")
+        if len(value) >= 2 and value[0] in {"'", '"'}:
+            if value[-1] != value[0]:
+                raise RuntimeError("local operator environment contains an unmatched quote")
+            value = value[1:-1]
+        if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+            raise RuntimeError("local operator environment contains control data")
+        values[key] = value
+    os.environ.update(values)
+    os.environ["VKPI_LOCAL_OPERATOR_ENV_STATUS"] = "loaded"
+
+
 def _apply_auth_contract() -> None:
     environment = os.environ.get("ENVIRONMENT", "local").strip().lower()
     if environment in PRODUCTION_ENVIRONMENTS:
@@ -130,8 +227,8 @@ def apply_runtime_env() -> None:
     # ``runtime_env.sh`` (`${ENVIRONMENT:-local}`): a stale ENVIRONMENT entry
     # inside .env must not silently turn a local smoke/load tool into a
     # production-mode client.  Production launchers pass the mode explicitly.
-    if not os.environ.get("ENVIRONMENT", "").strip():
-        os.environ["ENVIRONMENT"] = "local"
+    launcher_environment = os.environ.get("ENVIRONMENT", "").strip() or "local"
+    os.environ["ENVIRONMENT"] = launcher_environment
     # runtime_env.sh resolves these defaults before loading the base .env, so
     # a stale LOCAL_* URL in that file cannot redirect a local tool.  Reviewed
     # .env.<environment>/ENV_FILE overlays still use override semantics.
@@ -140,6 +237,10 @@ def apply_runtime_env() -> None:
     os.environ["LOCAL_ENV_FILE"] = os.environ.get("LOCAL_ENV_FILE") or str(ROOT / ".env")
     os.environ.setdefault("ENV_FILE", "")
     _load_local_env()
+    # Dotenv overlays provide settings for the selected mode; they cannot
+    # change the launcher-selected trust mode itself.
+    os.environ["ENVIRONMENT"] = launcher_environment
+    _load_local_operator_env(launcher_environment=launcher_environment)
     # Fail before filesystem setup or application imports can observe a public
     # development credential in a production-like runtime.
     _apply_auth_contract()

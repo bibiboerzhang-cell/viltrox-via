@@ -8,10 +8,10 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime
-import app.domains.sync.apify_batch_refresh as apify_batch_refresh
 from app.domains import audit
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 from app.domains.projects.workflow import staff_id as resolve_staff_id
+from app.shared.qualified_refresh_planner import QualifiedRefreshPlannerPort
 
 DEFAULT_FLAGS = {
     "product_analysis": "产品分析入口",
@@ -149,7 +149,7 @@ def _env_enabled(*names: str) -> bool:
     return False
 
 
-def _kol_refresh_status() -> dict[str, Any]:
+def _kol_refresh_status(*, refresh_planner: QualifiedRefreshPlannerPort) -> dict[str, Any]:
     provider_gate_enabled = _env_enabled("VKPI_KOL_ON_DEMAND_REFRESH_ENABLED", "VKPI_ENABLE_KOL_ON_DEMAND_REFRESH")
     status: dict[str, Any] = {
         "mode": "searchable_records_only" if not provider_gate_enabled else "stale_while_revalidate_enabled",
@@ -231,7 +231,7 @@ def _kol_refresh_status() -> dict[str, Any]:
             status["status_counts"] = counts
             status["active_on_demand_tasks"] = sum(counts.get(item, 0) for item in ACTIVE_TASK_STATUSES)
         if status["tables"]["vkpi_kol_refresh_tier"]:
-            plan = apify_batch_refresh.qualified_apify_batch_plan(
+            plan = refresh_planner.plan(
                 limit=200,
                 stale_days=1,
                 tiers={"hot"},
@@ -561,7 +561,7 @@ def crawl_budget_gate(platform: str) -> dict[str, Any]:
     return {"allowed": True, "reason": "passed", "message": "预算闸门通过。"}
 
 
-def control_status() -> dict[str, Any]:
+def control_status(*, refresh_planner: QualifiedRefreshPlannerPort) -> dict[str, Any]:
     """Return the management control summary for high-cost automation.
 
     This endpoint is intentionally read-only: it lets management verify which
@@ -635,7 +635,7 @@ def control_status() -> dict[str, Any]:
             "last_test_status": youtube_row.get("last_test_status") or "not_configured",
             "source": "reserved_slot",
         },
-        "kol_refresh": _kol_refresh_status(),
+        "kol_refresh": _kol_refresh_status(refresh_planner=refresh_planner),
         "budgets": budgets,
     }
 
