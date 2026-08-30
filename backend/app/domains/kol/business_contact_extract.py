@@ -140,6 +140,30 @@ def _text_blobs(
     return [(field, blob) for field, blob in blobs if blob]
 
 
+def _iter_raw_strings(node: Any) -> list[str]:
+    """深度遍历 raw 结构,收集全部字符串叶子(含 dict key),供兜底扫描直接吃原文。
+
+    绝不可用 json.dumps(raw) 的文本喂 _EMAIL_RE:dumps 会把真实换行/制表符
+    转义成字面两字符序列(\\n、\\t),邮箱正则本地部分含字母不含反斜杠,
+    「换行+邮箱」会被吞成 n/t 前缀假地址(\\nfoo@bar.com -> nfoo@bar.com),
+    外联就往错地址发。原始字符串里真实换行不在字符类内,天然是边界。
+    """
+    out: list[str] = []
+    stack: list[Any] = [node]
+    while stack:
+        cur = stack.pop()
+        if isinstance(cur, str):
+            out.append(cur)
+        elif isinstance(cur, dict):
+            for k, v in cur.items():
+                if isinstance(k, str):
+                    out.append(k)
+                stack.append(v)
+        elif isinstance(cur, (list, tuple)):
+            stack.extend(cur)
+    return out
+
+
 def _email_confidence(email: str, blob: str) -> tuple[float, str]:
     """按上下文给置信度 + 取证片段:所在行/全文有商务锚点 → 0.9,否则裸 raw → 0.55。"""
     low = blob.lower()
@@ -255,8 +279,9 @@ def extract_contacts_multi_source(
     # 全 raw 兜底扫描:邮箱常在帖文案/嵌套字段里,结构化字段扫不到。创作者档案 raw 绝大多数是
     # 其自有内容,故兜底扫到的邮箱多为本人。低置信(0.45)+ 独立来源标签,与结构化高置信条目区分;
     # 已见的不重复(结构化先跑,高置信保留)。仍只吃已抓回的公开 raw,不做全网爬。
+    # 注意:必须扫原始字符串叶子而非 json.dumps 文本(转义换行会腐蚀出 n 前缀假邮箱,见 _iter_raw_strings)。
     try:
-        full_raw = json.dumps(raw_platform_data, ensure_ascii=False)
+        full_raw = "\n".join(_iter_raw_strings(raw_platform_data))
     except Exception:
         full_raw = "\n".join(blob for _field, blob in blobs)
     for m in _EMAIL_RE.findall(full_raw):
