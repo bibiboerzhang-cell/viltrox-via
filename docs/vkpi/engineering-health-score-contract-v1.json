@@ -1,7 +1,9 @@
 {
   "schema_version": "vkpi_engineering_health_contract_v1",
+  "version": "1.1.0",
+  "version_notes": "v1.1 calibration (2026-08-30): six-item single-batch update — package-cycle graph rule, composition-root fan-out exemption, main-sequence weight reallocation, hotspot + cognitive methodologies, delivery ledger semantics, temporal-coupling qualification parameters — plus pre-registered duplication-rate and core-mutation methodologies. This contract is FROZEN from the moment its sha256 binds evidence until the first formal score; any further methodology issue accumulates for v1.2. Metric targets, floors, ceilings, hard gates, grade cap, and evidence policy are unchanged from v1.",
   "static_evidence_methodology": {
-    "version": "architecture-static-v1",
+    "version": "architecture-static-v1.1",
     "class_loc_max": {
       "scope": "production Python under backend/app",
       "span": "AST ClassDef.lineno through ClassDef.end_lineno inclusive",
@@ -12,8 +14,13 @@
       "scope": "production Python under backend/app",
       "deduplication": "unique (path, imported forbidden module) pairs",
       "rules": {
-        "domains": ["app.workers", "app.api"],
-        "services": ["app.api"]
+        "domains": [
+          "app.workers",
+          "app.api"
+        ],
+        "services": [
+          "app.api"
+        ]
       },
       "imports": "absolute Import and ImportFrom nodes at any AST depth; relative imports are not matches for these absolute forbidden prefixes"
     },
@@ -24,8 +31,154 @@
       "abstractness": "A is syntactically abstract ClassDef count divided by all ClassDef count in the unit; no classes means A=0",
       "abstract_class": "base terminal ABC/Protocol, metaclass terminal ABCMeta, or direct sync/async method decorator terminal abstractmethod/abstractclassmethod/abstractstaticmethod",
       "zero_denominator": "Ca+Ce=0 sets I=0 and retains the unit in the distribution",
-      "percentile": "nearest-rank p90 at sorted rank ceil(0.90*N)"
+      "percentile": "nearest-rank p90 at sorted rank ceil(0.90*N)",
+      "v1_1_weight_note": "全仓零抽象类语境下 D 口径失真,v1.2 复盘。With zero syntactically abstract classes repository-wide, A=0 for every unit and D=|A+I-1| degenerates to |I-1| (pure instability), so the p90 cannot express the intended abstractness signal. v1.1 therefore reallocates this metric's weight 0.15 -> 0.05 (the released 0.10 goes to cross_core_scc_count +0.05 and module_loc_max +0.05). Formula, unit, target, and ceiling are unchanged; the D methodology itself is revisited in v1.2."
+    },
+    "package_cycle_count": {
+      "graph": "same module universe as v1: production Python under backend/app, one graph node per module, Tarjan strongly connected components; a cyclic SCC has size >= 2 or a self-edge",
+      "edge_rule": "an import contributes an edge only when it executes at module import time: Import/ImportFrom nodes whose nearest enclosing lexical scope is the module or a class body — never inside a FunctionDef, AsyncFunctionDef, or Lambda body — and never inside the body of an if-TYPE_CHECKING guard (a test that is the bare name TYPE_CHECKING or an attribute whose terminal segment is TYPE_CHECKING; imports in the orelse branch of such an if still count). Statically resolved importlib.import_module/__import__ edges and implicit parent-package initialization edges follow the same lexical import-time rule; unresolved dynamic imports still mark the graph partial exactly as in v1",
+      "excluded": "TYPE_CHECKING-guarded imports and function-level lazy imports cannot participate in an import-time cycle and are excluded from this count only",
+      "scope_of_change": "this refined edge rule applies to package_cycle_count (and its companion ratchet cyclic_module_count) exclusively; cross_core_scc_count, internal_fan_out_max, and the main-sequence Ca/Ce coupling keep the complete conservative v1 graph with imports at any AST depth, so the cross_core_cycles_zero hard gate is unaffected"
+    },
+    "internal_fan_out_max": {
+      "graph": "complete conservative v1 import graph (imports at any AST depth), unchanged",
+      "composition_roots": [
+        "app.main"
+      ],
+      "rule": "the formal internal_fan_out_max is the maximum unique-target fan-out over modules NOT listed in composition_roots; every exempted module and its fan-out must still be reported in the evidence details",
+      "rationale": "a composition root wires the whole application together at startup and violates any fan-out bound by definition; the exemption list is explicit and closed — adding an entry requires a contract revision and a new contract hash"
     }
+  },
+  "code_evidence_methodology": {
+    "version": "code-evidence-v1.1",
+    "cognitive_le_15_ratio": {
+      "methodology_id": "cognitive1",
+      "threshold": 15,
+      "canonical_source": "scripts/vkpi_engineering_health_cognitive.py module docstring (verbatim)",
+      "canonical_text": "Deterministic cognitive-complexity counter for the engineering-health collector.\n\nMethodology ``cognitive1`` (fixed subset in the spirit of Sonar Cognitive\nComplexity; this docstring is the canonical contract-v1.1 wording):\n\nBase value is 0 per function. Nested ``def``/``class``/``lambda`` bodies are\nexcluded from the enclosing function and analysed independently with nesting\ndepth reset to 0 (nested functions and lambdas receive their own rows).\n\nStructural increments, worth ``+1 + current nesting depth`` at the point of\noccurrence:\n\n- ``if`` (the head of a chain only),\n- ``for`` / ``async for``,\n- ``while``,\n- each ``except`` / ``except*`` handler,\n- the ternary ``IfExp``.\n\nFlat ``+1`` increments that never receive the nesting penalty:\n\n- each ``elif`` branch and each ``else`` branch of an ``if`` chain (an\n  ``else`` whose body is exactly one ``if`` statement is indistinguishable\n  from ``elif`` in the Python AST and is treated as ``elif``),\n- each boolean-operator run: every ``ast.BoolOp`` node counts 1, which equals\n  one increment per operator alternation (``a and b and c`` = 1,\n  ``a and b or c`` = 2, ``a and b or c and d`` = 3),\n- each additional context manager beyond the first in one\n  ``with`` / ``async with`` statement,\n- each ``case`` clause of a ``match`` statement (wildcard case included,\n  guards are not counted separately, case bodies add no nesting),\n- each direct recursive call site: the callee is a bare name equal to the\n  enclosing function's name, or ``self.<name>`` / ``cls.<name>`` with that\n  name; named functions only — lambdas never count recursion.\n\nNesting depth: the bodies of ``if``/``elif``/``else``, ``for``/``async for``,\n``while``, and ``except`` handlers are one level deeper than their parent;\nan ``elif`` continues its chain at the chain's own level. ``with``, ``match``\ncases, ``try`` bodies, ``else`` of ``try``, ``finally``, and loop ``else``\nclauses do not change depth. ``def``/``class`` reset depth. ``IfExp`` earns\nthe structural increment but does not itself increase depth.\n\nNot counted at all: sequential statements, ``return``, ``assert``, ``raise``,\n``break``/``continue`` (Python has no labeled jump targets), ``try`` itself,\n``finally``, ``else`` of ``try``, loop ``else`` clauses, a single-item\n``with``, and comprehension generator/filter clauses — although boolean\noperator runs, ternaries, and recursive calls inside any of those expressions\nstill count at the current depth.\n\nDeterminism: the value is a pure function of the parsed AST; identical source\nbytes always produce identical counts.",
+      "scope": "same production function rows as cc_le_10_ratio: production Python under backend/app from the architecture-static collector snapshot; nested functions and lambdas receive independent rows"
+    },
+    "duplication_rate": {
+      "methodology_id": "stdlib-tokenize-w-shingling-50-v1",
+      "scope": "production Python under backend/app from the architecture-static collector snapshot (tests, migrations, generated code excluded by construction)",
+      "token_stream": "stdlib tokenize per file; every token kind is kept except COMMENT, NL, NEWLINE, INDENT, DEDENT, ENCODING, and ENDMARKER; token identity is the exact (type, string) pair — no identifier, literal, or whitespace normalization (type-1 exact clones only)",
+      "shingle": "sliding window of 50 consecutive kept tokens, stride 1, never crossing a file boundary; files with fewer than 50 kept tokens produce no shingles but their tokens stay in the denominator",
+      "duplicate": "a shingle is duplicated when its exact token sequence occurs at two or more distinct (file, start-offset) positions corpus-wide; occurrences may overlap and same-file repeats count",
+      "rate": "duplication_rate = kept tokens covered by at least one duplicated shingle / total kept tokens in the corpus",
+      "determinism": "exact sequence comparison (or a collision-checked cryptographic hash of the serialized shingle); no probabilistic sketching; identical snapshot bytes produce identical rates"
+    },
+    "core_mutation_score": {
+      "methodology_id": "core-mutation-v1",
+      "core_scope_groups": {
+        "kol_search": [
+          "backend/app/domains/kol/",
+          "backend/app/domains/discovery/",
+          "backend/app/domains/search/"
+        ],
+        "gemini_video_analysis": [
+          "backend/app/services/ai/"
+        ],
+        "collaboration_followup": [
+          "backend/app/domains/projects/",
+          "backend/app/domains/launch/"
+        ]
+      },
+      "definition": "mutation testing runs against production modules whose repository path starts with one of the listed prefixes; core_mutation_score = killed / (killed + survived) pooled across the whole core scope; timed-out mutants count as killed, suspicious and skipped mutants are excluded from both numerator and denominator",
+      "runner": "mutation runs execute against an isolated database and never against production state; the receipt binds the scored HEAD like the coverage receipt"
+    }
+  },
+  "evolution_evidence_methodology": {
+    "version": "vkpi-evolution-git-v5",
+    "hotspot": {
+      "methodology_id": "hotspot-methodology-jia-v1",
+      "canonical_source": "scripts/vkpi_engineering_health_evolution.py _hotspot_analysis docstring (verbatim)",
+      "canonical_text": "Hotspot 口径甲(已拍板,逐字进合同 v1.1):\n\n- 热度:180 天窗内(与既有 bus/temporal 同一窗口机制)非 merge 提交次数 ≥10 的\n  生产文件(backend/app/ 与 frontend/src/ 下源文件;排除 scripts/ 与 tests/);\n- unhealthy_hotspot_count = 热度命中 ∩ 文件内函数 CC 均值 >12 的文件数(CC 用\n  collector 同款 _DecisionCounter 口径——从 vkpi_engineering_health_collect 导入\n  复用,不自己再实现一份);\n- hotspot_cc_mean = 全部热点文件(热度命中,不管健康与否)内所有函数 CC 的均值,\n  保留 2 位。\n\n实现补注(不改变口径):\n- 提交总体 = 窗口内全部非 merge 提交(与 bus/temporal 共用 ``_history`` 的\n  HEAD-bound 窗口切片);源文件判定复用 ``_eligible_source``(排除测试文件与\n  tests/dist/generated 等目录),scripts/ 由生产根前缀天然排除;\n- 热点文件必须仍存在于 HEAD(窗口内被删除的热文件单列于\n  ``hot_paths_missing_from_head``,不计入两项指标);\n- CC 仅对 .py 文件可算(AST 口径);非 Python 热点文件计入热度命中与\n  hot_file_count,但没有函数样本,既不进 CC 池也不可能进 unhealthy 交集;\n- 函数 CC 读 HEAD blob(git show HEAD:path),工作树永不作为输入;\n- 合同 v1.1 对这两项不设 minimum_samples,窗口不足 180 天不阻塞 observed,\n  sample_count 记实际覆盖天数。",
+      "thresholds": {
+        "minimum_window_commits": 10,
+        "unhealthy_mean_cc_exclusive": 12.0
+      },
+      "production_roots": [
+        "backend/app/",
+        "frontend/src/"
+      ],
+      "minimum_samples_note": "unhealthy_hotspot_count and hotspot_cc_mean carry no minimum_samples: an incomplete history window shrinks sample_count (actual covered days, 0..180) instead of blocking the observed status"
+    },
+    "temporal_coupling_p95": {
+      "formula": "same_non_merge_commits / commits_changing_either_file (Jaccard)",
+      "commit_population": "non-merge human commits in the 180-day window anchored at the HEAD committer date, commit inclusion by author date; bot and shared-account identities are excluded after HEAD:.mailmap normalization; the working tree is never an input",
+      "pair_eligibility": "a file participates when it passes the evolution production-source filter (production source suffixes, not a test file, no excluded path part) and maps to at least one canonical core domain",
+      "qualification_parameters": {
+        "window_days": 180,
+        "minimum_union_change_commits": 10,
+        "minimum_cochange_commits": 3,
+        "percentile": 0.95
+      },
+      "percentile_rule": "nearest-rank p95 at sorted rank ceil(0.95*N) over QUALIFIED pairs only: a pair qualifies when union_change_commits >= 10 AND cochange_commits >= 3",
+      "qualification_reason": "exclude one-off and low-support 100% pairs from the formal percentile",
+      "fail_closed": "zero qualified pairs yields status unknown with reason insufficient_qualified_pairs; the filter parameters are contract-bound — changing any of them is a contract revision with a new hash, never a silent collector edit"
+    }
+  },
+  "delivery_evidence_methodology": {
+    "version": "delivery-ledger-v1.1",
+    "ledger_path": "runtime/ops/incidents.jsonl",
+    "ledger_opened": "2026-08-30",
+    "ledger_backfill": "forbidden — the ledger is append-only and history before ledger_opened is never backfilled or reconstructed",
+    "runbook": "docs/vkpi/incidents-ledger-runbook.md (口径 section is this same text; the runbook carries field-level recording discipline)",
+    "semantics_zh": [
+      "什么算事故:生产环境用户可见的功能失效或数据错误,且需要人工干预恢复。预算闸拦截、限流、单次重试即愈的抖动不算(参照发车失败三判别器口径)。",
+      "CFR(change failure rate):某次部署后触发回滚、或 24h 内为其打 hotfix,该部署计 failure;分母 = 窗口内生产部署次数(`post-deploy/` 目录数,去重后)。",
+      "MTTR:`resolved_at - detected_at`,分钟;p50/p90 按窗口内已 resolved 的事故算。",
+      "空样本语义:窗口内零事故 → MTTR 两项与 SLA 按 at-target 记 observed(无事故是好状态,不是无证据;overdue_critical_count=0 同理)。此语义由合同 v1.1 正式承载。"
+    ],
+    "change_failure_rate": "a production deployment counts as a failure when it triggered a rollback, or a hotfix deployment was made for it within 24 hours (ledger field hotfix_of); the denominator is the deduplicated count of production deployments in the 90-day delivery window (runtime/ops/post-deploy/ directories); failure attribution starts at ledger_opened",
+    "mttr": "resolved_at minus detected_at in minutes; p50/p90 over incidents resolved inside the 90-day delivery window",
+    "empty_sample_at_target": "a window with zero qualifying incidents records mttr_p50_minutes, mttr_p90_minutes, and p1_p2_sla_rate as observed AT THE CONTRACT TARGET VALUE (reason no_incidents_at_target), and overdue_critical_count as observed 0 — the absence of incidents is a good state, not missing evidence; this semantic requires the ledger_days sample floor below",
+    "sample_units": {
+      "ledger_days": "floor of the day-overlap between the 90-day delivery window and the ledger active period starting at ledger_opened 2026-08-30T00:00:00Z; the at-target empty-sample semantics is only trusted once this floor is met",
+      "production_deployments": "deduplicated runtime/ops/post-deploy/ directories inside the 90-day delivery window",
+      "runs": "timed verify.sh executions inside the 30-day build window",
+      "weeks": "calendar weeks of deployment history inside the observation window",
+      "consecutive_runs": "consecutive canonical-gate receipts bound to the scored HEAD"
+    },
+    "minimum_samples_by_metric": {
+      "build_test_p95_minutes": {
+        "minimum_samples": 50,
+        "sample_unit": "runs"
+      },
+      "overdue_critical_count": {
+        "minimum_samples": 30,
+        "sample_unit": "ledger_days"
+      },
+      "p1_p2_sla_rate": {
+        "minimum_samples": 30,
+        "sample_unit": "ledger_days"
+      },
+      "change_failure_rate": {
+        "minimum_samples": 20,
+        "sample_unit": "production_deployments"
+      },
+      "rollback_p95_minutes": {
+        "minimum_samples": 20,
+        "sample_unit": "production_deployments"
+      },
+      "mttr_p50_minutes": {
+        "minimum_samples": 30,
+        "sample_unit": "ledger_days"
+      },
+      "mttr_p90_minutes": {
+        "minimum_samples": 30,
+        "sample_unit": "ledger_days"
+      },
+      "deployment_frequency_per_week": {
+        "minimum_samples": 8,
+        "sample_unit": "weeks"
+      },
+      "lead_time_p50_hours": {
+        "minimum_samples": 20,
+        "sample_unit": "production_deployments"
+      }
+    },
+    "minimum_samples_rationale": "v1 gated the incident metrics on 20 production_deployments, a unit unrelated to incidents; v1.1 gates the four ledger metrics on 30 ledger_days so that zero-incident at-target observations are only trusted after a month of live ledger discipline. canonical_gate_pass_rate keeps its own channel (3 consecutive_runs) and is not collector-owned"
   },
   "formal_target": 85.0,
   "stable_target": 87.0,
@@ -36,59 +189,250 @@
     "code": {
       "target": 88.0,
       "metrics": {
-        "cc_le_10_ratio": {"weight": 0.2, "direction": "min", "target": 0.9, "floor": 0.7},
-        "cognitive_le_15_ratio": {"weight": 0.15, "direction": "min", "target": 0.9, "floor": 0.7},
-        "max_cc": {"weight": 0.15, "direction": "max", "target": 50.0, "ceiling": 100.0},
-        "branch_coverage": {"weight": 0.12, "direction": "min", "target": 0.7, "floor": 0.4},
-        "line_coverage": {"weight": 0.1, "direction": "min", "target": 0.7, "floor": 0.4},
-        "core_path_coverage": {"weight": 0.1, "direction": "min", "target": 0.9, "floor": 0.6},
-        "change_coverage": {"weight": 0.08, "direction": "min", "target": 0.9, "floor": 0.6},
-        "duplication_rate": {"weight": 0.05, "direction": "max", "target": 0.03, "ceiling": 0.1},
-        "core_mutation_score": {"weight": 0.05, "direction": "min", "target": 0.6, "floor": 0.3}
+        "cc_le_10_ratio": {
+          "weight": 0.2,
+          "direction": "min",
+          "target": 0.9,
+          "floor": 0.7
+        },
+        "cognitive_le_15_ratio": {
+          "weight": 0.15,
+          "direction": "min",
+          "target": 0.9,
+          "floor": 0.7
+        },
+        "max_cc": {
+          "weight": 0.15,
+          "direction": "max",
+          "target": 50.0,
+          "ceiling": 100.0
+        },
+        "branch_coverage": {
+          "weight": 0.12,
+          "direction": "min",
+          "target": 0.7,
+          "floor": 0.4
+        },
+        "line_coverage": {
+          "weight": 0.1,
+          "direction": "min",
+          "target": 0.7,
+          "floor": 0.4
+        },
+        "core_path_coverage": {
+          "weight": 0.1,
+          "direction": "min",
+          "target": 0.9,
+          "floor": 0.6
+        },
+        "change_coverage": {
+          "weight": 0.08,
+          "direction": "min",
+          "target": 0.9,
+          "floor": 0.6
+        },
+        "duplication_rate": {
+          "weight": 0.05,
+          "direction": "max",
+          "target": 0.03,
+          "ceiling": 0.1
+        },
+        "core_mutation_score": {
+          "weight": 0.05,
+          "direction": "min",
+          "target": 0.6,
+          "floor": 0.3
+        }
       }
     },
     "architecture": {
       "target": 82.0,
       "metrics": {
-        "cross_core_scc_count": {"weight": 0.25, "direction": "max", "target": 0.0, "ceiling": 1.0},
-        "package_cycle_count": {"weight": 0.1, "direction": "max", "target": 3.0, "ceiling": 10.0},
-        "main_sequence_distance_p90": {"weight": 0.15, "direction": "max", "target": 0.3, "ceiling": 0.7},
-        "module_loc_max": {"weight": 0.15, "direction": "max", "target": 800.0, "ceiling": 1600.0},
-        "class_loc_max": {"weight": 0.1, "direction": "max", "target": 400.0, "ceiling": 800.0},
-        "internal_fan_out_max": {"weight": 0.1, "direction": "max", "target": 20.0, "ceiling": 40.0},
-        "reverse_dependency_count": {"weight": 0.15, "direction": "max", "target": 0.0, "ceiling": 3.0}
+        "cross_core_scc_count": {
+          "weight": 0.3,
+          "direction": "max",
+          "target": 0.0,
+          "ceiling": 1.0
+        },
+        "package_cycle_count": {
+          "weight": 0.1,
+          "direction": "max",
+          "target": 3.0,
+          "ceiling": 10.0
+        },
+        "main_sequence_distance_p90": {
+          "weight": 0.05,
+          "direction": "max",
+          "target": 0.3,
+          "ceiling": 0.7
+        },
+        "module_loc_max": {
+          "weight": 0.2,
+          "direction": "max",
+          "target": 800.0,
+          "ceiling": 1600.0
+        },
+        "class_loc_max": {
+          "weight": 0.1,
+          "direction": "max",
+          "target": 400.0,
+          "ceiling": 800.0
+        },
+        "internal_fan_out_max": {
+          "weight": 0.1,
+          "direction": "max",
+          "target": 20.0,
+          "ceiling": 40.0
+        },
+        "reverse_dependency_count": {
+          "weight": 0.15,
+          "direction": "max",
+          "target": 0.0,
+          "ceiling": 3.0
+        }
       }
     },
     "evolution": {
       "target": 80.0,
       "metrics": {
-        "core_domain_bus_factor_min": {"weight": 0.25, "direction": "min", "target": 3.0, "floor": 1.0, "minimum_samples": 180, "sample_unit": "days"},
-        "temporal_coupling_p95": {"weight": 0.2, "direction": "max", "target": 0.175, "ceiling": 0.35, "minimum_samples": 180, "sample_unit": "days"},
-        "unhealthy_hotspot_count": {"weight": 0.2, "direction": "max", "target": 3.0, "ceiling": 10.0},
-        "hotspot_cc_mean": {"weight": 0.15, "direction": "max", "target": 12.0, "ceiling": 30.0},
-        "qualified_maintainer_domain_ratio": {"weight": 0.2, "direction": "min", "target": 1.0, "floor": 0.5}
+        "core_domain_bus_factor_min": {
+          "weight": 0.25,
+          "direction": "min",
+          "target": 3.0,
+          "floor": 1.0,
+          "minimum_samples": 180,
+          "sample_unit": "days"
+        },
+        "temporal_coupling_p95": {
+          "weight": 0.2,
+          "direction": "max",
+          "target": 0.175,
+          "ceiling": 0.35,
+          "minimum_samples": 180,
+          "sample_unit": "days"
+        },
+        "unhealthy_hotspot_count": {
+          "weight": 0.2,
+          "direction": "max",
+          "target": 3.0,
+          "ceiling": 10.0
+        },
+        "hotspot_cc_mean": {
+          "weight": 0.15,
+          "direction": "max",
+          "target": 12.0,
+          "ceiling": 30.0
+        },
+        "qualified_maintainer_domain_ratio": {
+          "weight": 0.2,
+          "direction": "min",
+          "target": 1.0,
+          "floor": 0.5
+        }
       }
     },
     "delivery": {
       "target": 92.0,
       "metrics": {
-        "build_test_p95_minutes": {"weight": 0.15, "direction": "max", "target": 10.0, "ceiling": 20.0, "minimum_samples": 50, "sample_unit": "runs"},
-        "overdue_critical_count": {"weight": 0.15, "direction": "max", "target": 0.0, "ceiling": 1.0},
-        "p1_p2_sla_rate": {"weight": 0.1, "direction": "min", "target": 0.98, "floor": 0.9},
-        "change_failure_rate": {"weight": 0.15, "direction": "max", "target": 0.08, "ceiling": 0.2, "minimum_samples": 20, "sample_unit": "production_deployments"},
-        "rollback_p95_minutes": {"weight": 0.1, "direction": "max", "target": 15.0, "ceiling": 60.0, "minimum_samples": 20, "sample_unit": "production_deployments"},
-        "mttr_p50_minutes": {"weight": 0.1, "direction": "max", "target": 60.0, "ceiling": 240.0, "minimum_samples": 20, "sample_unit": "production_deployments"},
-        "mttr_p90_minutes": {"weight": 0.05, "direction": "max", "target": 240.0, "ceiling": 720.0, "minimum_samples": 20, "sample_unit": "production_deployments"},
-        "deployment_frequency_per_week": {"weight": 0.05, "direction": "min", "target": 1.0, "floor": 0.25, "minimum_samples": 8, "sample_unit": "weeks"},
-        "lead_time_p50_hours": {"weight": 0.05, "direction": "max", "target": 24.0, "ceiling": 168.0, "minimum_samples": 20, "sample_unit": "production_deployments"},
-        "canonical_gate_pass_rate": {"weight": 0.1, "direction": "min", "target": 1.0, "floor": 0.9, "minimum_samples": 3, "sample_unit": "consecutive_runs"}
+        "build_test_p95_minutes": {
+          "weight": 0.15,
+          "direction": "max",
+          "target": 10.0,
+          "ceiling": 20.0,
+          "minimum_samples": 50,
+          "sample_unit": "runs"
+        },
+        "overdue_critical_count": {
+          "weight": 0.15,
+          "direction": "max",
+          "target": 0.0,
+          "ceiling": 1.0,
+          "minimum_samples": 30,
+          "sample_unit": "ledger_days"
+        },
+        "p1_p2_sla_rate": {
+          "weight": 0.1,
+          "direction": "min",
+          "target": 0.98,
+          "floor": 0.9,
+          "minimum_samples": 30,
+          "sample_unit": "ledger_days"
+        },
+        "change_failure_rate": {
+          "weight": 0.15,
+          "direction": "max",
+          "target": 0.08,
+          "ceiling": 0.2,
+          "minimum_samples": 20,
+          "sample_unit": "production_deployments"
+        },
+        "rollback_p95_minutes": {
+          "weight": 0.1,
+          "direction": "max",
+          "target": 15.0,
+          "ceiling": 60.0,
+          "minimum_samples": 20,
+          "sample_unit": "production_deployments"
+        },
+        "mttr_p50_minutes": {
+          "weight": 0.1,
+          "direction": "max",
+          "target": 60.0,
+          "ceiling": 240.0,
+          "minimum_samples": 30,
+          "sample_unit": "ledger_days"
+        },
+        "mttr_p90_minutes": {
+          "weight": 0.05,
+          "direction": "max",
+          "target": 240.0,
+          "ceiling": 720.0,
+          "minimum_samples": 30,
+          "sample_unit": "ledger_days"
+        },
+        "deployment_frequency_per_week": {
+          "weight": 0.05,
+          "direction": "min",
+          "target": 1.0,
+          "floor": 0.25,
+          "minimum_samples": 8,
+          "sample_unit": "weeks"
+        },
+        "lead_time_p50_hours": {
+          "weight": 0.05,
+          "direction": "max",
+          "target": 24.0,
+          "ceiling": 168.0,
+          "minimum_samples": 20,
+          "sample_unit": "production_deployments"
+        },
+        "canonical_gate_pass_rate": {
+          "weight": 0.1,
+          "direction": "min",
+          "target": 1.0,
+          "floor": 0.9,
+          "minimum_samples": 3,
+          "sample_unit": "consecutive_runs"
+        }
       }
     }
   },
   "hard_gates": {
-    "cross_core_cycles_zero": {"metric": "architecture.cross_core_scc_count", "operator": "le", "threshold": 0.0},
-    "max_production_cc_le_50": {"metric": "code.max_cc", "operator": "le", "threshold": 50.0},
-    "core_domain_bus_factor_ge_3": {"metric": "evolution.core_domain_bus_factor_min", "operator": "ge", "threshold": 3.0}
+    "cross_core_cycles_zero": {
+      "metric": "architecture.cross_core_scc_count",
+      "operator": "le",
+      "threshold": 0.0
+    },
+    "max_production_cc_le_50": {
+      "metric": "code.max_cc",
+      "operator": "le",
+      "threshold": 50.0
+    },
+    "core_domain_bus_factor_ge_3": {
+      "metric": "evolution.core_domain_bus_factor_min",
+      "operator": "ge",
+      "threshold": 3.0
+    }
   },
   "release_gates": [
     "canonical_gate_pass",
@@ -99,10 +443,18 @@
   "grade_cap_on_hard_gate_failure": 79.9,
   "evidence_policy": {
     "required_status": "observed",
-    "required_fields": ["value", "source", "observed_at"],
+    "required_fields": [
+      "value",
+      "source",
+      "observed_at"
+    ],
     "unknown_is_neutral_score": false,
     "exclude_missing_from_denominator": false,
-    "production_complexity_excludes": ["tests", "migrations", "generated"],
+    "production_complexity_excludes": [
+      "tests",
+      "migrations",
+      "generated"
+    ],
     "temporal_window_days": 180,
     "delivery_window_days": 90,
     "build_window_days": 30
