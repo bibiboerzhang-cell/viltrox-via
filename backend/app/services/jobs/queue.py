@@ -1,13 +1,23 @@
 """
 services/jobs/queue.py — Redis Streams job queue + Postgres job ledger
+
+class-LOC 棘轮拆分(2026-08-30):RedisJobQueue 保薄门面,重活按职责搬到三个
+兄弟协作模块(行为逐字不变):
+
+- queue_claim:抢单/补抓(pop_job/_claim_stale/死信)——worker 公平性宪法条款;
+- queue_heartbeat:就绪探针/事件发布/订阅心跳/运行时统计;
+- queue_maintenance:台账读写/超时清扫/队列汇总。
+
+monkeypatch 面:本模块级符号(get_conn/db_connection_scope/常量/工具函数)全部
+保留原名,协作模块经惰性 import 回读本模块命名空间,所以对本模块打的补丁在
+协作模块内同样生效;实例级补丁(get_status/set_status 等)经 ``queue.<attr>``
+调用同样生效。
 """
 from __future__ import annotations
 
 import asyncio
 import json
-import time
 import uuid
-from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from app.core.config import (
@@ -26,6 +36,7 @@ from app.core.config import (
 from app.core.logging import get_logger
 from app.db.connection import db_connection_scope, get_conn
 from app.services.ai.orchestrator import TaskStatus, VideoJobInput
+from app.services.jobs import queue_claim, queue_heartbeat, queue_maintenance
 from app.services.jobs.queue_common import (
     BaseJobQueue,
     TERMINAL_JOB_STATUSES,
@@ -43,7 +54,6 @@ except Exception:
     redis_from_url = None
 
 logger = get_logger(__name__)
-
 
 
 class RedisJobQueue(BaseJobQueue):
@@ -74,50 +84,7 @@ class RedisJobQueue(BaseJobQueue):
         self._ready = True
 
     async def worker_readiness(self, consumer_names: list[str]) -> Dict[str, Any]:
-        """Prove Redis/group/consumer readiness without consuming a message.
-
-        Release health must not be inferred from a Postgres heartbeat written
-        before Redis is usable.  This probe creates the idempotent consumer
-        registrations, confirms the expected group on the expected stream, and
-        pings Redis.  It deliberately never calls XREADGROUP/XCLAIM/XACK.
-        """
-
-        names = [str(name or "").strip() for name in consumer_names if str(name or "").strip()]
-        if not names or len(names) != len(set(names)):
-            raise RuntimeError("redis worker readiness requires unique consumer names")
-        await self._ensure_ready()
-        pong = await self._client.ping()
-        if pong is not True and str(pong).strip().upper() != "PONG":
-            raise RuntimeError("redis ping did not return PONG")
-        groups = await self._client.xinfo_groups(REDIS_JOB_STREAM_KEY)
-        group_names = {
-            str((item or {}).get("name") or "")
-            for item in (groups or [])
-            if isinstance(item, dict)
-        }
-        if self._group not in group_names:
-            raise RuntimeError("redis stream consumer group is not visible")
-        for name in names:
-            await self._client.xgroup_createconsumer(
-                REDIS_JOB_STREAM_KEY,
-                self._group,
-                name,
-            )
-        consumers = await self._client.xinfo_consumers(REDIS_JOB_STREAM_KEY, self._group)
-        registered = {
-            str((item or {}).get("name") or "")
-            for item in (consumers or [])
-            if isinstance(item, dict)
-        }
-        missing = [name for name in names if name not in registered]
-        if missing:
-            raise RuntimeError("redis consumer registration is incomplete")
-        return {
-            "redis_ready": True,
-            "redis_stream_key": REDIS_JOB_STREAM_KEY,
-            "redis_group_name": self._group,
-            "redis_consumer_count": len(names),
-        }
+        return await queue_heartbeat.worker_readiness(self, consumer_names)
 
     def _task_channel(self, task_id: str) -> str:
         return f"{REDIS_JOB_EVENT_PREFIX}:task:{task_id}"
@@ -126,406 +93,37 @@ class RedisJobQueue(BaseJobQueue):
         return f"{REDIS_JOB_EVENT_PREFIX}:user:{user_id}"
 
     def _status_row_to_dict(self, row: Any) -> Dict[str, Any]:
-        if row is None:
-            return {}
-        data = dict(row)
-        extra = _decode_json(data.get("extra_json"), {})
-        payload = _decode_json(data.get("payload_json"), {})
-        if payload:
-            data["payload_json"] = json.dumps(payload, ensure_ascii=False)
-        for key, value in extra.items():
-            data.setdefault(key, value)
-        return {key: ("" if value is None else str(value) if isinstance(value, (int, float)) and key.endswith("_id") else value) for key, value in data.items()}
+        return queue_maintenance.status_row_to_dict(row)
 
     def _find_active_lock_job(self, lock_key: str) -> Optional[str]:
-        lock_key = str(lock_key or "").strip()
-        if not lock_key:
-            return None
-        conn = get_conn()
-        row = conn.execute(
-            """
-            SELECT task_id
-            FROM job_execution_ledger
-            WHERE lock_key=?
-              AND status IN ('queued', 'retrying', 'processing', 'running')
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (lock_key,),
-        ).fetchone()
-        return str(row["task_id"]) if row else None
+        return queue_maintenance.find_active_lock_job(lock_key)
 
     def _insert_job_ledger(self, job: Dict[str, Any]) -> None:
-        conn = get_conn()
-        now = _utcnow()
-        payload_json = json.dumps(job["payload"], ensure_ascii=False)
-        user_id = int(job["payload"].get("user_id") or 0)
-        # R21 留痕:谁触发(payload.staff_id 优先,回退 user_id)+ 任务链上下文(为什么)。
-        triggered_by = int(job["payload"].get("staff_id") or user_id or 0) or None
-        task_chain_json = json.dumps(
-            {
-                "job_type": job["job_type"],
-                "reason": job["payload"].get("reason"),
-                "category": job["payload"].get("category"),
-                "endpoint": job["payload"].get("endpoint"),
-            },
-            ensure_ascii=False,
-            default=str,
-        )
-        columns = [
-            "task_id",
-            "job_type",
-            "submission_id",
-            "user_id",
-            "status",
-            "payload_json",
-            "retry_count",
-            "created_at",
-            "updated_at",
-            "stage",
-            "extra_json",
-            "triggered_by_staff_id",
-            "task_chain_json",
-        ]
-        values: list[Any] = [
-            job["task_id"],
-            job["job_type"],
-            int(job.get("submission_id") or 0),
-            user_id,
-            TaskStatus.QUEUED.value,
-            payload_json,
-            0,
-            now,
-            now,
-            "ingest",
-            json.dumps({}, ensure_ascii=False),
-            triggered_by,
-            task_chain_json,
-        ]
-        if job.get("priority") is not None:
-            columns.append("priority")
-            values.append(int(job.get("priority") or 5))
-        if job.get("lock_key"):
-            columns.append("lock_key")
-            values.append(str(job.get("lock_key") or ""))
-        if job.get("timeout_seconds") is not None:
-            columns.append("timeout_seconds")
-            values.append(int(job.get("timeout_seconds") or 300))
-        placeholders = ", ".join("?" for _ in columns)
-        conn.execute(
-            f"""
-            INSERT INTO job_execution_ledger ({", ".join(columns)})
-            VALUES ({placeholders})
-            """,
-            tuple(values),
-        )
-        conn.commit()
+        queue_maintenance.insert_job_ledger(job)
 
     def _rollback_job_ledger_insert(self) -> None:
-        try:
-            get_conn().rollback()
-        except Exception as exc:
-            logger.warning("job ledger rollback failed: %s", exc)
+        queue_maintenance.rollback_job_ledger_insert()
 
     def _update_job_ledger(self, task_id: str, status: str, **extra: Any) -> Optional[Dict[str, Any]]:
-        conn = get_conn()
-        row = conn.execute(
-            """
-            SELECT task_id, user_id, status, extra_json, retry_count, result_json, stats_json
-            FROM job_execution_ledger
-            WHERE task_id=?
-            """,
-            (task_id,),
-        ).fetchone()
-        if row is None:
-            return None
-        current_status = str(row["status"] or "").lower()
-        incoming_status = str(status or "").lower()
-        if current_status in TERMINAL_JOB_STATUSES and incoming_status != current_status:
-            metadata_updates = []
-            metadata_params = []
-            if extra.get("stream_id"):
-                metadata_updates.append("stream_id=COALESCE(stream_id, ?)")
-                metadata_params.append(extra.get("stream_id"))
-            if extra.get("consumer_name"):
-                metadata_updates.append("consumer_name=COALESCE(consumer_name, ?)")
-                metadata_params.append(extra.get("consumer_name"))
-            if metadata_updates:
-                conn.execute(
-                    f"UPDATE job_execution_ledger SET {', '.join(metadata_updates)} WHERE task_id=?",
-                    (*metadata_params, task_id),
-                )
-                conn.commit()
-            updated = conn.execute("SELECT * FROM job_execution_ledger WHERE task_id=?", (task_id,)).fetchone()
-            snapshot = self._status_row_to_dict(updated)
-            snapshot["_stale_status_ignored"] = True
-            return snapshot
-        extra_json = _decode_json(row["extra_json"], {})
-        for key, value in extra.items():
-            if key in {"result_json", "stats_json", "summary", "error_message", "result_path", "detection_status", "stage", "stream_id", "consumer_name"}:
-                continue
-            extra_json[key] = value
-        retry_count = int(extra.get("retry_count", row["retry_count"] or 0) or 0)
-        now = _utcnow()
-        conn.execute(
-            """
-            UPDATE job_execution_ledger
-            SET status=?,
-                updated_at=?,
-                started_at=CASE WHEN ?='processing' AND started_at IS NULL THEN ? ELSE started_at END,
-                finished_at=CASE WHEN ? IN ('done','partial_done','failed','prefilter_rejected','cancelled','timeout') THEN ? ELSE finished_at END,
-                retry_count=?,
-                error_message=?,
-                summary=?,
-                detection_status=?,
-                result_path=?,
-                result_json=?,
-                stats_json=?,
-                stage=?,
-                stream_id=COALESCE(?, stream_id),
-                consumer_name=COALESCE(?, consumer_name),
-                extra_json=?
-            WHERE task_id=?
-            """,
-            (
-                status,
-                now,
-                status,
-                now,
-                status,
-                now,
-                retry_count,
-                str(extra.get("error_message") or ""),
-                str(extra.get("summary") or ""),
-                str(extra.get("detection_status") or ""),
-                str(extra.get("result_path") or ""),
-                json.dumps(extra.get("result_json") or _decode_json(row["result_json"], {}), ensure_ascii=False),
-                json.dumps(extra.get("stats_json") or _decode_json(row["stats_json"], {}), ensure_ascii=False),
-                str(extra.get("stage") or extra_json.get("stage") or ""),
-                extra.get("stream_id"),
-                extra.get("consumer_name"),
-                json.dumps(extra_json, ensure_ascii=False),
-                task_id,
-            ),
-        )
-        conn.commit()
-        updated = conn.execute("SELECT * FROM job_execution_ledger WHERE task_id=?", (task_id,)).fetchone()
-        return self._status_row_to_dict(updated)
+        return queue_maintenance.update_job_ledger(self, task_id, status, **extra)
 
     def _get_job_status(self, task_id: str) -> Optional[Dict[str, Any]]:
-        conn = get_conn()
-        row = conn.execute("SELECT * FROM job_execution_ledger WHERE task_id=?", (task_id,)).fetchone()
-        return self._status_row_to_dict(row) if row else None
+        return queue_maintenance.get_job_status(self, task_id)
 
     def _provider_execution_claim_is_live(self, task_id: str) -> bool:
-        """Fail closed while a paid-provider fence still owns this task.
-
-        Redis pending-idle time is not an execution lease.  A second consumer
-        must not XCLAIM and terminalize work merely because the first consumer
-        has spent 60 seconds inside a legitimate provider call.
-        """
-
-        clean_task = str(task_id or "").strip()
-        if not clean_task:
-            return False
-        try:
-            row = get_conn().execute(
-                """
-                SELECT 1 AS live
-                FROM vkpi_provider_execution_claims
-                WHERE task_id=? AND state='active' AND lease_expires_at>NOW()
-                LIMIT 1
-                """,
-                (clean_task,),
-            ).fetchone()
-            return bool(row)
-        except Exception:
-            # Migration 254 is a startup prerequisite for the dedicated
-            # worker.  If its state cannot be proved, skipping reclamation is
-            # safer than double-running a paid provider operation.
-            logger.error(
-                "redis stale-claim provider fence check failed closed | task_id=%s",
-                clean_task,
-                exc_info=True,
-            )
-            return True
+        return queue_claim.provider_execution_claim_is_live(task_id)
 
     def _find_active_submission_job(self, job_type: str, submission_id: int) -> Optional[str]:
-        if not submission_id:
-            return None
-        conn = get_conn()
-        row = conn.execute(
-            """
-            SELECT task_id
-            FROM job_execution_ledger
-            WHERE job_type=?
-              AND submission_id=?
-              AND status IN ('queued', 'retrying', 'processing', 'running')
-            ORDER BY id DESC
-            LIMIT 1
-            """,
-            (job_type, submission_id),
-        ).fetchone()
-        return str(row["task_id"]) if row else None
+        return queue_maintenance.find_active_submission_job(job_type, submission_id)
 
     def _ledger_queue_summary(self) -> Dict[str, Any]:
-        conn = get_conn()
-        waiting_statuses = {TaskStatus.QUEUED.value, TaskStatus.RETRYING.value}
-        processing_statuses = {TaskStatus.PROCESSING.value, "running"}
-        failed_statuses = {TaskStatus.FAILED.value}
-        completed_statuses = {TaskStatus.DONE.value, TaskStatus.PARTIAL.value, "cancelled", "timeout", "prefilter_rejected"}
-        counts = {"waiting": 0, "processing": 0, "failed": 0, "completed": 0}
-        by_type: Dict[str, Dict[str, int]] = {}
-        oldest_waiting_age: Optional[int] = None
-        now = datetime.now(timezone.utc)
-
-        try:
-            aggregate_rows = conn.execute(
-                """
-                SELECT job_type, status, COUNT(*) AS n, MIN(created_at) AS oldest
-                FROM job_execution_ledger
-                WHERE status IN ('queued', 'retrying', 'processing', 'running', 'failed')
-                GROUP BY job_type, status
-                """
-            ).fetchall()
-            rows = conn.execute(
-                """
-                SELECT task_id, job_type, status, created_at, updated_at, started_at, finished_at
-                FROM job_execution_ledger
-                ORDER BY id DESC
-                LIMIT ?
-                """,
-                (1000,),
-            ).fetchall()
-        except Exception:
-            return {
-                "waiting": 0,
-                "processing": 0,
-                "failed": 0,
-                "avg_duration_seconds": None,
-                "eta_wait_seconds": None,
-                "configured_concurrency": WORKER_CONFIGURED_CONCURRENCY,
-                "worker_processes": WORKER_SERVICE_PROCESSES,
-                "worker_async_consumers": WORKER_ASYNC_CONSUMERS,
-                "note": "job_execution_ledger unavailable",
-            }
-
-        for row in aggregate_rows:
-            status = str(row["status"] or "").lower()
-            job_type = str(row["job_type"] or "unknown")
-            n = int(row["n"] or 0)
-            bucket = by_type.setdefault(job_type, {"waiting": 0, "processing": 0, "failed": 0, "completed": 0})
-            if status in waiting_statuses:
-                counts["waiting"] += n
-                bucket["waiting"] += n
-                created_at = _parse_ts(row["oldest"])
-                if created_at:
-                    age = int(max(0, (now - created_at).total_seconds()))
-                    oldest_waiting_age = age if oldest_waiting_age is None else max(oldest_waiting_age, age)
-            elif status in processing_statuses:
-                counts["processing"] += n
-                bucket["processing"] += n
-            elif status in failed_statuses:
-                counts["failed"] += n
-                bucket["failed"] += n
-
-        durations: list[float] = []
-        completed_last_hour = 0
-
-        for row in rows:
-            status = str(row["status"] or "").lower()
-            job_type = str(row["job_type"] or "unknown")
-            bucket = by_type.setdefault(job_type, {"waiting": 0, "processing": 0, "failed": 0, "completed": 0})
-            if status in completed_statuses:
-                counts["completed"] += 1
-                bucket["completed"] += 1
-                duration = _seconds_between(row["started_at"] or row["created_at"], row["finished_at"] or row["updated_at"])
-                if duration is not None:
-                    durations.append(duration)
-                finished_at = _parse_ts(row["finished_at"] or row["updated_at"])
-                if finished_at and (now - finished_at).total_seconds() <= 3600:
-                    completed_last_hour += 1
-
-        avg_duration = round(sum(durations) / len(durations), 1) if durations else None
-        eta_wait_seconds = None
-        if counts["waiting"] > 0:
-            if completed_last_hour > 0:
-                eta_wait_seconds = int(counts["waiting"] / max(completed_last_hour / 3600, 0.001))
-            elif avg_duration:
-                eta_wait_seconds = int(counts["waiting"] * avg_duration / max(WORKER_CONFIGURED_CONCURRENCY, 1))
-
-        return {
-            "waiting": counts["waiting"],
-            "processing": counts["processing"],
-            "failed": counts["failed"],
-            "completed_recent_sample": counts["completed"],
-            "completed_last_hour": completed_last_hour,
-            "avg_duration_seconds": avg_duration,
-            "eta_wait_seconds": eta_wait_seconds,
-            "oldest_waiting_age_seconds": oldest_waiting_age,
-            "configured_concurrency": WORKER_CONFIGURED_CONCURRENCY,
-            "worker_processes": WORKER_SERVICE_PROCESSES,
-            "worker_async_consumers": WORKER_ASYNC_CONSUMERS,
-            "by_job_type": by_type,
-            "sample_size": len(rows),
-        }
+        return queue_maintenance.ledger_queue_summary()
 
     async def _publish_event(self, task_id: str, payload: Dict[str, Any], user_id: int = 0) -> None:
-        await self._client.publish(self._task_channel(task_id), json.dumps(payload, ensure_ascii=False))
-        if user_id:
-            await self._client.publish(self._user_channel(user_id), json.dumps(payload, ensure_ascii=False))
+        await queue_heartbeat.publish_event(self, task_id, payload, user_id=user_id)
 
     def _mark_timed_out_jobs(self, limit: int = 100) -> int:
-        conn = get_conn()
-        try:
-            rows = conn.execute(
-                """
-                SELECT task_id, created_at, started_at, timeout_seconds
-                FROM job_execution_ledger
-                WHERE status IN ('queued', 'retrying', 'processing', 'running')
-                  AND job_type LIKE ?
-                  AND COALESCE(timeout_seconds, 0) > 0
-                ORDER BY id ASC
-                LIMIT ?
-                """,
-                ("vkpi_%", max(1, min(500, int(limit or 100)))),
-            ).fetchall()
-        except Exception:
-            return 0
-        now = datetime.now(timezone.utc)
-        timed_out = 0
-        for row in rows:
-            baseline = _parse_ts(row["started_at"] or row["created_at"])
-            if not baseline:
-                continue
-            timeout_seconds = int(row["timeout_seconds"] or 0)
-            if timeout_seconds <= 0:
-                continue
-            if (now - baseline).total_seconds() <= timeout_seconds:
-                continue
-            self._update_job_ledger(
-                str(row["task_id"]),
-                "timeout",
-                error_message=f"job exceeded timeout_seconds={timeout_seconds}",
-                stage="timeout",
-            )
-            try:
-                conn.execute(
-                    """
-                    UPDATE vkpi_async_task_items
-                    SET status='failed',
-                        error=?,
-                        updated_at=?
-                    WHERE task_id=?
-                      AND status IN ('pending', 'running')
-                    """,
-                    (f"job exceeded timeout_seconds={timeout_seconds}", _utcnow(), str(row["task_id"])),
-                )
-                conn.commit()
-            except Exception as exc:
-                logger.warning("failed to mark timed-out async task %s: %s", row["task_id"], exc)
-            timed_out += 1
-        return timed_out
+        return queue_maintenance.mark_timed_out_jobs(self, limit=limit)
 
     async def enqueue(
         self,
@@ -604,152 +202,13 @@ class RedisJobQueue(BaseJobQueue):
             return await asyncio.to_thread(self._get_job_status, task_id)
 
     async def set_status(self, task_id: str, status: str, **extra: Any) -> None:
-        async with db_connection_scope():
-            snapshot = await asyncio.to_thread(self._update_job_ledger, task_id, status, **extra)
-        if not snapshot:
-            return
-        if snapshot.get("_stale_status_ignored"):
-            return
-        user_id = int(snapshot.get("user_id") or extra.get("user_id") or 0)
-        effective_status = str(snapshot.get("status") or status)
-        event_type = extra.get("event_type") or (
-            "result_ready"
-            if effective_status in {TaskStatus.DONE.value, TaskStatus.PARTIAL.value}
-            else effective_status
-        )
-        payload = {
-            "event_type": event_type,
-            "task_id": task_id,
-            "status": effective_status,
-            "created_at": _utcnow(),
-            "submission_id": snapshot.get("submission_id") or "",
-            "retry_count": snapshot.get("retry_count") or "0",
-            "stage": snapshot.get("stage") or extra.get("stage") or "",
-        }
-        for key in ("summary", "error_message", "result_path", "detection_status"):
-            value = snapshot.get(key) or extra.get(key)
-            if value:
-                payload[key] = value
-        await self._publish_event(task_id, payload, user_id=user_id)
+        await queue_heartbeat.set_status(self, task_id, status, **extra)
 
     async def _claim_stale(self, consumer_name: str, count: int = 5) -> list[Dict[str, Any]]:
-        claimed: list[Dict[str, Any]] = []
-        pending = await self._client.xpending_range(
-            REDIS_JOB_STREAM_KEY,
-            self._group,
-            min="-",
-            max="+",
-            count=count,
-            idle=REDIS_JOB_CLAIM_IDLE_MS,
-        )
-        now = datetime.now(timezone.utc)
-        message_ids = []
-        for entry in pending:
-            if entry.get("time_since_delivered", 0) < REDIS_JOB_CLAIM_IDLE_MS:
-                continue
-            message_id = entry["message_id"]
-            stream_rows = await self._client.xrange(REDIS_JOB_STREAM_KEY, min=message_id, max=message_id, count=1)
-            if not stream_rows:
-                continue
-            _, fields = stream_rows[0]
-            task_id = str(fields.get("task_id") or "")
-            job_type = str(fields.get("job_type") or "")
-            current = await self.get_status(task_id)
-            current_status = str((current or {}).get("status") or "").lower()
-            if current_status in TERMINAL_JOB_STATUSES:
-                await self._client.xack(REDIS_JOB_STREAM_KEY, self._group, message_id)
-                continue
-            # Queue status can be changed to ``retrying`` by a contender that
-            # observed the live fence.  Therefore the durable paid-provider
-            # lease must gate *every* non-terminal stale message, not only the
-            # nominal processing/running states.
-            async with db_connection_scope():
-                provider_claim_live = await asyncio.to_thread(
-                    self._provider_execution_claim_is_live,
-                    task_id,
-                )
-            if provider_claim_live:
-                continue
-            if current_status in {"processing", "running"}:
-                started = _parse_ts((current or {}).get("started_at") or (current or {}).get("updated_at") or (current or {}).get("created_at"))
-                timeout_seconds = int((current or {}).get("timeout_seconds") or 0)
-                if started and timeout_seconds > 0 and (now - started).total_seconds() < timeout_seconds:
-                    continue
-            message_ids.append(message_id)
-        if not message_ids:
-            return claimed
-        batches = await self._client.xclaim(
-            REDIS_JOB_STREAM_KEY,
-            self._group,
-            consumer_name,
-            min_idle_time=REDIS_JOB_CLAIM_IDLE_MS,
-            message_ids=message_ids,
-        )
-        for stream_id, fields in batches:
-            raw_job = {
-                "_stream_id": stream_id,
-                "_consumer_name": consumer_name,
-                "task_id": fields.get("task_id", ""),
-                "job_type": fields.get("job_type", ""),
-                "submission_id": int(fields.get("submission_id") or 0),
-                "payload": _decode_json(fields.get("payload_json"), {}),
-            }
-            current = await self.get_status(raw_job["task_id"])
-            if str((current or {}).get("status") or "").lower() in TERMINAL_JOB_STATUSES:
-                await self.ack(raw_job)
-                continue
-            await self.set_status(
-                raw_job["task_id"],
-                TaskStatus.RETRYING.value,
-                event_type="retrying",
-                stream_id=str(stream_id),
-                consumer_name=consumer_name,
-                retry_count=int((await self.get_status(raw_job["task_id"]) or {}).get("retry_count") or 0) + 1,
-            )
-            current = await self.get_status(raw_job["task_id"])
-            if str((current or {}).get("status") or "").lower() in TERMINAL_JOB_STATUSES:
-                await self.ack(raw_job)
-                continue
-            claimed.append(raw_job)
-        return claimed
+        return await queue_claim.claim_stale(self, consumer_name, count=count)
 
     async def pop_job(self, consumer_name: str, timeout: int = 5) -> Optional[Dict[str, Any]]:
-        await self._ensure_ready()
-        async with db_connection_scope():
-            await asyncio.to_thread(self._mark_timed_out_jobs)
-        batches = await self._client.xreadgroup(
-            self._group,
-            consumer_name,
-            {REDIS_JOB_STREAM_KEY: ">"},
-            count=1,
-            block=max(timeout * 1000, REDIS_JOB_BLOCK_MS),
-        )
-        if not batches:
-            claimed = await self._claim_stale(consumer_name, count=1)
-            return claimed[0] if claimed else None
-        _, entries = batches[0]
-        stream_id, fields = entries[0]
-        raw_job = {
-            "_stream_id": stream_id,
-            "_consumer_name": consumer_name,
-            "task_id": fields.get("task_id", ""),
-            "job_type": fields.get("job_type", ""),
-            "submission_id": int(fields.get("submission_id") or 0),
-            "payload": _decode_json(fields.get("payload_json"), {}),
-        }
-        await self.set_status(
-            raw_job["task_id"],
-            TaskStatus.PROCESSING.value,
-            event_type="processing",
-            stage="processing",
-            stream_id=str(stream_id),
-            consumer_name=consumer_name,
-        )
-        current = await self.get_status(raw_job["task_id"])
-        if str((current or {}).get("status") or "").lower() in TERMINAL_JOB_STATUSES:
-            await self.ack(raw_job)
-            return None
-        return raw_job
+        return await queue_claim.pop_job(self, consumer_name, timeout=timeout)
 
     async def ack(self, raw_job: Dict[str, Any]) -> None:
         stream_id = raw_job.get("_stream_id")
@@ -757,47 +216,11 @@ class RedisJobQueue(BaseJobQueue):
             await self._client.xack(REDIS_JOB_STREAM_KEY, self._group, stream_id)
 
     async def move_to_dead_letter(self, raw_job: Dict[str, Any], reason: str) -> None:
-        await self._client.xadd(
-            REDIS_JOB_DEAD_STREAM_KEY,
-            {
-                "task_id": raw_job.get("task_id", ""),
-                "job_type": raw_job.get("job_type", ""),
-                "reason": reason,
-                "payload_json": json.dumps(raw_job.get("payload") or {}, ensure_ascii=False),
-                "moved_at": _utcnow(),
-            },
-        )
-        await self.set_status(
-            raw_job.get("task_id", ""),
-            TaskStatus.FAILED.value,
-            event_type="failed",
-            error_message=reason,
-            stage="dead_letter",
-        )
-        await self.ack(raw_job)
+        await queue_claim.move_to_dead_letter(self, raw_job, reason)
 
     async def subscribe_task_events(self, task_id: str):
-        pubsub = self._client.pubsub()
-        await pubsub.subscribe(self._task_channel(task_id))
-        try:
-            while True:
-                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=5.0)
-                if message is None:
-                    yield {
-                        "event_type": "heartbeat",
-                        "task_id": task_id,
-                        "created_at": _utcnow(),
-                    }
-                    continue
-                data = message.get("data")
-                if isinstance(data, bytes):
-                    data = data.decode("utf-8", errors="ignore")
-                yield _decode_json(data, {"event_type": "message", "task_id": task_id})
-        finally:
-            await pubsub.unsubscribe(self._task_channel(task_id))
-            close_fn = getattr(pubsub, "aclose", None)
-            if close_fn is not None:
-                await close_fn()
+        async for event in queue_heartbeat.subscribe_task_events(self, task_id):
+            yield event
 
     async def close(self) -> None:
         close_fn = getattr(self._client, "aclose", None)
@@ -811,23 +234,7 @@ class RedisJobQueue(BaseJobQueue):
                 await maybe
 
     async def runtime_stats(self) -> Dict[str, Any]:
-        await self._ensure_ready()
-        queue_depth = await self._client.xlen(REDIS_JOB_STREAM_KEY)
-        async with db_connection_scope():
-            summary = await asyncio.to_thread(self._ledger_queue_summary)
-        try:
-            groups = await self._client.xinfo_groups(REDIS_JOB_STREAM_KEY)
-        except Exception:
-            groups = []
-        return {
-            "backend": self.backend_name,
-            "stream_key": REDIS_JOB_STREAM_KEY,
-            "group": self._group,
-            "queue_depth": int(queue_depth or 0),
-            "summary": summary,
-            "groups": groups,
-            "dead_letter_stream": REDIS_JOB_DEAD_STREAM_KEY,
-        }
+        return await queue_heartbeat.runtime_stats(self)
 
 
 def build_job_queue(orchestrator: Any = None) -> Optional[BaseJobQueue]:
