@@ -17,6 +17,8 @@
 #   VKPI_TRAIN_REUSE_CANDIDATE=1  候选包已存在且 manifest 校验通过时复用(浏览器闸误杀重试省一次 freeze)
 #   VKPI_TRAIN_SKIP_RESTART=1     本地栈已经是 HEAD 时跳过 kill/等待(仍会核对 /health 对齐)
 #   VKPI_DEPLOY_ALLOW_NON_ANCESTOR 透传给部署脚本的祖先硬检查覆盖口(默认关)
+#   VKPI_TRAIN_HOTFIX_OF          本次发车是为哪次部署打 hotfix(12-40 位 hex sha;
+#                                  取前 12 位记入 outcome.json,交付采集器 CFR 判定用)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,6 +44,11 @@ die() { printf '[train] FATAL: %s\n' "$*" >&2; exit 1; }
 [ -f "${HEALTH_ENV_FILE}" ] || die "本地 /health 私有令牌文件缺失:${HEALTH_ENV_FILE}(VKPI_TRAIN_HEALTH_ENV_FILE)"
 [[ "${MIN_WORKERS}" =~ ^[1-9][0-9]*$ ]] || die "VKPI_TRAIN_MIN_WORKERS 必须是正整数"
 [[ "${WAIT_SECONDS}" =~ ^[1-9][0-9]*$ ]] || die "VKPI_TRAIN_WAIT_SECONDS 必须是正整数"
+HOTFIX_OF="${VKPI_TRAIN_HOTFIX_OF:-}"
+if [ -n "${HOTFIX_OF}" ]; then
+  [[ "${HOTFIX_OF}" =~ ^[0-9a-fA-F]{12,40}$ ]] || die "VKPI_TRAIN_HOTFIX_OF 必须是 12-40 位 hex sha(被 hotfix 的那次部署)"
+  HOTFIX_OF="$(printf '%.12s' "${HOTFIX_OF}" | tr '[:upper:]' '[:lower:]')"
+fi
 
 # ── 1. 脏树检查(多代理并行施工会撞脏树;部署脚本自己也拒脏树,这里是第一道)──
 assert_clean_tree() {
@@ -255,6 +262,37 @@ else
 fi
 wait_for_alignment
 
+# ── 6b. 回滚标记观察哨:deploy 日志行没有时间戳,这里在标记行首次出现时落 UTC 时刻 ──
+# 只读轮询 DEPLOY_LOG,不碰部署流程;outcome.json 的 rollback{started_at,completed_at} 用。
+# 观察哨没抓到的时刻落 null,绝不编时间;交付采集器会把缺时刻的样本剔出 rollback_p95。
+ROLLBACK_MARK_START="acceptance failed; restoring previous application release"
+ROLLBACK_MARK_DONE="rollback accepted: app="
+DEPLOY_EVENTS_FILE="${DEPLOY_LOG}.events"
+DEPLOY_WATCH_STOP="${DEPLOY_LOG}.watch-stop"
+watch_rollback_markers() {
+  local seen_start=0 seen_done=0 stopping=0
+  while :; do
+    # 先记停机信号再扫一轮:stop 出现后仍保证做完最后一次全量匹配,标记行不漏。
+    [ -e "${DEPLOY_WATCH_STOP}" ] && stopping=1
+    if [ "${seen_start}" -eq 0 ] && grep -qF -- "${ROLLBACK_MARK_START}" "${DEPLOY_LOG}" 2>/dev/null; then
+      seen_start=1
+      printf 'rollback_started_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${DEPLOY_EVENTS_FILE}"
+    fi
+    if [ "${seen_done}" -eq 0 ] && grep -qF -- "${ROLLBACK_MARK_DONE}" "${DEPLOY_LOG}" 2>/dev/null; then
+      seen_done=1
+      printf 'rollback_completed_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${DEPLOY_EVENTS_FILE}"
+    fi
+    [ "${stopping}" -eq 1 ] && return 0
+    # 班车本体没了就自行退出,不留孤儿轮询($$ 在后台子 shell 里仍是父进程 pid)。
+    kill -0 "$$" 2>/dev/null || return 0
+    sleep 2
+  done
+}
+rm -f -- "${DEPLOY_EVENTS_FILE}" "${DEPLOY_WATCH_STOP}"
+: > "${DEPLOY_EVENTS_FILE}"
+watch_rollback_markers &
+DEPLOY_WATCH_PID=$!
+
 # ── 7. deploy(祖先硬检查/远端互斥/quiesce/rsync/激活/验收/回滚都在部署脚本内)──
 log "deploy 开始 → ${DEPLOY_LOG}"
 set +e
@@ -268,6 +306,88 @@ env \
 DEPLOY_RC=$?
 set -e
 
+# 观察哨收工(stop 信号后哨兵还会补扫最后一轮,再退出)。
+touch "${DEPLOY_WATCH_STOP}"
+wait "${DEPLOY_WATCH_PID}" 2>/dev/null || true
+rm -f -- "${DEPLOY_WATCH_STOP}"
+
+# ── 7b. 落 outcome.json:发车结果三态 + 回滚时段 + hotfix 指向(交付采集器只读消费)──
+# 只追加,不改既有流程;写失败只告警,不改变班车退出码。
+train_outcome_result() {
+  if [ "${DEPLOY_RC}" -eq 0 ]; then
+    printf 'success'
+  elif grep -qF -- "${ROLLBACK_MARK_DONE}" "${DEPLOY_LOG}" 2>/dev/null; then
+    printf 'rolled_back'
+  else
+    printf 'failed'
+  fi
+}
+resolve_outcome_dir() {
+  # 找本次班车启动之后、以本 sha12 结尾的最新 post-deploy 证据目录;
+  # 一个都没有(deploy 在证据落盘前就挂了)则新建同规格目录只装 outcome.json。
+  local d base ts best_ts="" best=""
+  for d in "${OPS_DIR}/post-deploy/"*"-${SHA:0:12}"; do
+    [ -d "${d}" ] || continue
+    base="${d##*/}"
+    [[ "${base}" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}$ ]] || continue
+    ts="${base%%-*}"
+    [[ "${ts}" < "${TRAIN_STARTED_AT}" ]] && continue
+    if [ -z "${best_ts}" ] || [[ "${ts}" > "${best_ts}" ]]; then
+      best_ts="${ts}"
+      best="${d}"
+    fi
+  done
+  if [ -z "${best}" ]; then
+    best="${OPS_DIR}/post-deploy/${TRAIN_STARTED_AT}-${SHA:0:12}"
+    mkdir -p -- "${best}" || return 1
+  fi
+  printf '%s' "${best}"
+}
+OUTCOME_PATH=""
+write_train_outcome() {
+  local dir result
+  result="$(train_outcome_result)" || return 1
+  dir="$(resolve_outcome_dir)" || return 1
+  OUTCOME_PATH="${dir}/outcome.json"
+  VKPI_TRAIN_OUTCOME_RESULT="${result}" \
+  VKPI_TRAIN_OUTCOME_HOTFIX_OF="${HOTFIX_OF}" \
+  VKPI_TRAIN_OUTCOME_EVENTS_FILE="${DEPLOY_EVENTS_FILE}" \
+  "${PYTHON_BIN}" -B - "${OUTCOME_PATH}" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+out_path = Path(sys.argv[1])
+result = os.environ["VKPI_TRAIN_OUTCOME_RESULT"]
+if result not in {"success", "rolled_back", "failed"}:
+    raise SystemExit(f"unsupported outcome result: {result}")
+rollback = None
+if result == "rolled_back":
+    events: dict[str, str] = {}
+    events_file = Path(os.environ.get("VKPI_TRAIN_OUTCOME_EVENTS_FILE") or "")
+    if events_file.is_file():
+        for line in events_file.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep and value.strip():
+                events.setdefault(key.strip(), value.strip())
+    rollback = {
+        "started_at": events.get("rollback_started_at"),
+        "completed_at": events.get("rollback_completed_at"),
+    }
+hotfix_of = os.environ.get("VKPI_TRAIN_OUTCOME_HOTFIX_OF") or None
+payload = {"result": result, "rollback": rollback, "hotfix_of": hotfix_of}
+tmp = out_path.with_name(f".{out_path.name}.{os.getpid()}.tmp")
+tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+tmp.replace(out_path)
+PY
+}
+if write_train_outcome; then
+  log "outcome.json 已落:${OUTCOME_PATH}"
+else
+  log "WARNING: outcome.json 写入失败(不改变班车退出码;交付台账缺这一笔,请按 runbook 手补)"
+fi
+
 # ── 8. 结果 ──
 echo
 echo "================ 班车结果 ================"
@@ -276,6 +396,7 @@ echo "  branch     ${BRANCH}"
 echo "  candidate  ${CANDIDATE_DIR}"
 echo "  deploy log ${DEPLOY_LOG}"
 echo "  train log  ${TRAIN_LOG}"
+echo "  outcome    ${OUTCOME_PATH:-未写入}"
 if [ "${DEPLOY_RC}" -eq 0 ]; then
   echo "  result     已上线(deploy rc=0)"
   latest_evidence="$(ls -1dt "${ROOT}"/runtime/ops/post-deploy/*/ 2>/dev/null | head -n 1 || true)"

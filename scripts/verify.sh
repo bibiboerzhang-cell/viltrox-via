@@ -31,6 +31,10 @@ fi
 # Compatibility name for the already-reviewed runtime/line-guard helpers below.
 VENV_PY="$PYTHON_BIN"
 
+# ---- 回执计时:只记录本次 canonical 调用的起点与总耗时,不参与任何门禁判定 ----
+VERIFY_STARTED_EPOCH="$(date +%s)"
+VERIFY_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 # ---- 记账:哪些步骤失败 ----
 FAILED_STEPS=()
 STEP_NAMES=()
@@ -914,6 +918,7 @@ write_verify_receipt() {
   for ((index = 0; index < ${#STEP_NAMES[@]}; index++)); do
     step_args+=("${STEP_NAMES[$index]}" "${STEP_RESULTS[$index]}" "${STEP_EXIT_CODES[$index]}")
   done
+  local duration_seconds=$(( $(date +%s) - VERIFY_STARTED_EPOCH ))
   "$PYTHON_BIN" - \
     "$out_path" \
     "$final_pass" \
@@ -924,6 +929,8 @@ write_verify_receipt() {
     "$ACCEPTANCE_VERIFICATION_STATE" \
     "$BROWSER_CONSOLE_VERIFICATION_STATE" \
     "$RUNTIME_LOG_CANARY_STATE" \
+    "$VERIFY_STARTED_AT" \
+    "$duration_seconds" \
     "${step_args[@]}" <<'PY'
 import hashlib
 import json
@@ -943,6 +950,8 @@ from datetime import UTC, datetime
     acceptance_state,
     browser_state,
     log_state,
+    started_at,
+    duration_seconds,
     *step_args,
 ) = sys.argv[1:]
 if len(step_args) % 3:
@@ -977,6 +986,8 @@ for offset in range(0, len(step_args), 3):
 payload = {
     "schema_version": "vkpi_canonical_gate_receipt_v1",
     "generated_at": datetime.now(UTC).isoformat(),
+    "started_at": started_at,
+    "duration_seconds": int(duration_seconds),
     "passed": final_pass == "1",
     "candidate": {
         "release_head": release_head,
