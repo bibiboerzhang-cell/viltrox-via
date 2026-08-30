@@ -269,6 +269,132 @@ def _insert_snapshot(account_id: int, payload: dict[str, Any]) -> dict[str, Any]
     return dict(row) if row else {}
 
 
+# 帖子指标字段规格表:每列 = 各平台原始 payload 里按优先级排列的候选键。
+# 语义与原 or 链逐字一致:0/"" 等 falsy 值被跳过,全 falsy 时取最后一个候选键的原值。
+_POST_STAT_KEYS: dict[str, tuple[str, ...]] = {
+    "views": (
+        "viewCount", "views", "view", "view_count", "play", "playCount",
+        "videoViewCount", "videoPlayCount", "impression_count",
+    ),
+    "likes": ("likeCount", "likes", "like_count", "likesCount", "likedCount", "diggCount"),
+    "comments": ("commentCount", "comments", "commentsCount", "reply_count", "comment_count"),
+    "shares": ("shareCount", "shares", "sharesCount", "share_count", "retweet_count", "repostCount"),
+    "saves": ("saveCount", "saves", "savedCount", "collectCount", "bookmark_count"),
+}
+
+_POST_VIDEO_URL_KEYS: tuple[str, ...] = (
+    "video_url",
+    "videoUrl",
+    "videoDownloadUrl",
+    "downloadUrl",
+    "downloadAddr",
+    "playUrl",
+    "play_url",
+    "mediaUrl",
+    "media_url",
+    "url_to_video",
+    "video_url_no_watermark",
+)
+
+_INSERT_POST_SQL = """
+    INSERT INTO vkpi_industry_posts
+        (post_uid, account_id, platform, platform_post_id, post_url, thumbnail_url,
+         video_url, media_type, duration_seconds, video_source,
+         title, caption, published_at, views, likes, comments, shares, saves,
+         hashtags_json, mentions_json, detected_products_json, content_pillar,
+         sentiment, raw_platform_data, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ON CONFLICT(post_uid) DO UPDATE SET
+        post_url=excluded.post_url,
+        thumbnail_url=excluded.thumbnail_url,
+        video_url=excluded.video_url,
+        media_type=excluded.media_type,
+        duration_seconds=excluded.duration_seconds,
+        video_source=excluded.video_source,
+        title=excluded.title,
+        caption=excluded.caption,
+        published_at=excluded.published_at,
+        views=excluded.views,
+        likes=excluded.likes,
+        comments=excluded.comments,
+        shares=excluded.shares,
+        saves=excluded.saves,
+        raw_platform_data=excluded.raw_platform_data
+    """
+
+
+def _coalesce(*values: Any) -> Any:
+    """`a or b or ...` 的显式版本:取第一个 truthy 值,全 falsy 时返回最后一个操作数。"""
+    for value in values[:-1]:
+        if value:
+            return value
+    return values[-1]
+
+
+def _stat_int(stats: dict[str, Any], metric: str) -> int | None:
+    return _int(_coalesce(*(stats.get(key) for key in _POST_STAT_KEYS[metric])))
+
+
+def _post_identity(video: dict[str, Any], platform: str, account_id: int) -> tuple[str, str, str]:
+    platform_post_id = str(((video.get("id") if not isinstance(video.get("id"), dict) else video.get("id", {}).get("videoId")) or video.get("videoId") or "")).strip()
+    if not platform_post_id:
+        platform_post_id = secrets.token_hex(8)
+    post_url = str(video.get("post_url") or video.get("url") or (f"https://www.youtube.com/watch?v={platform_post_id}" if platform == "youtube" else ""))
+    uid = f"post-{platform}-{account_id}-{platform_post_id}"
+    return platform_post_id, post_url, uid
+
+
+def _post_thumbnail_url(video: dict[str, Any], snippet: dict[str, Any]) -> str:
+    thumbnails = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
+    return str(video.get("thumbnail_url") or video.get("displayUrl") or (((thumbnails.get("high") or thumbnails.get("medium") or thumbnails.get("default") or {}) or {}).get("url") if thumbnails else ""))
+
+
+def _post_media_fields(video: dict[str, Any], thumbnail_url: str) -> tuple[str, str, int | None, str]:
+    video_url = _first_media_url(video, *_POST_VIDEO_URL_KEYS)
+    media_type = _media_type(video, video_url=video_url, thumbnail_url=thumbnail_url)
+    duration_seconds = _duration_seconds(_post_duration_value(video))
+    video_source = str(video.get("video_source") or ("apify_cdn" if video_url else "")).strip()
+    return video_url, media_type, duration_seconds, video_source
+
+
+def _post_row_params(video: dict[str, Any], platform: str, account_id: int) -> tuple[Any, ...]:
+    """Assemble one vkpi_industry_posts row in the exact insert column order."""
+    stats = _stats(video)
+    snippet = _snippet(video)
+    platform_post_id, post_url, uid = _post_identity(video, platform, account_id)
+    title = str(_coalesce(snippet.get("title"), video.get("title"), ""))
+    caption = str(_coalesce(snippet.get("description"), video.get("caption"), ""))
+    thumbnail_url = _post_thumbnail_url(video, snippet)
+    video_url, media_type, duration_seconds, video_source = _post_media_fields(video, thumbnail_url)
+    return (
+        uid,
+        account_id,
+        platform,
+        platform_post_id,
+        post_url,
+        thumbnail_url,
+        video_url,
+        media_type,
+        duration_seconds,
+        video_source,
+        title,
+        caption,
+        _coalesce(snippet.get("publishedAt"), video.get("published_at"), video.get("timestamp"), ""),
+        _stat_int(stats, "views"),
+        _stat_int(stats, "likes"),
+        _stat_int(stats, "comments"),
+        _stat_int(stats, "shares"),
+        _stat_int(stats, "saves"),
+        _json(re.findall(r"#[\\w\\-\\u4e00-\\u9fff]+", f"{title} {caption}")),
+        _json([]),
+        _json([]),
+        "",
+        "",
+        _json(video),
+        _utcnow(),
+    )
+
+
 def _insert_posts(account: dict[str, Any], raw_data: dict[str, Any], *, limit: int = 100) -> int:
     videos = _video_items(raw_data)[: max(0, min(200, int(limit or 100)))]
     if not videos:
@@ -279,88 +405,7 @@ def _insert_posts(account: dict[str, Any], raw_data: dict[str, Any], *, limit: i
     _ensure_post_media_columns(conn)
     count = 0
     for video in videos:
-        stats = _stats(video)
-        snippet = _snippet(video)
-        platform_post_id = str(((video.get("id") if not isinstance(video.get("id"), dict) else video.get("id", {}).get("videoId")) or video.get("videoId") or "")).strip()
-        if not platform_post_id:
-            platform_post_id = secrets.token_hex(8)
-        post_url = str(video.get("post_url") or video.get("url") or (f"https://www.youtube.com/watch?v={platform_post_id}" if platform == "youtube" else ""))
-        title = str(snippet.get("title") or video.get("title") or "")
-        caption = str(snippet.get("description") or video.get("caption") or "")
-        thumbnails = snippet.get("thumbnails") if isinstance(snippet.get("thumbnails"), dict) else {}
-        thumbnail_url = str(video.get("thumbnail_url") or video.get("displayUrl") or (((thumbnails.get("high") or thumbnails.get("medium") or thumbnails.get("default") or {}) or {}).get("url") if thumbnails else ""))
-        video_url = _first_media_url(
-            video,
-            "video_url",
-            "videoUrl",
-            "videoDownloadUrl",
-            "downloadUrl",
-            "downloadAddr",
-            "playUrl",
-            "play_url",
-            "mediaUrl",
-            "media_url",
-            "url_to_video",
-            "video_url_no_watermark",
-        )
-        media_type = _media_type(video, video_url=video_url, thumbnail_url=thumbnail_url)
-        duration_seconds = _duration_seconds(_post_duration_value(video))
-        video_source = str(video.get("video_source") or ("apify_cdn" if video_url else "")).strip()
-        uid = f"post-{platform}-{account_id}-{platform_post_id}"
-        conn.execute(
-            """
-            INSERT INTO vkpi_industry_posts
-                (post_uid, account_id, platform, platform_post_id, post_url, thumbnail_url,
-                 video_url, media_type, duration_seconds, video_source,
-                 title, caption, published_at, views, likes, comments, shares, saves,
-                 hashtags_json, mentions_json, detected_products_json, content_pillar,
-                 sentiment, raw_platform_data, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(post_uid) DO UPDATE SET
-                post_url=excluded.post_url,
-                thumbnail_url=excluded.thumbnail_url,
-                video_url=excluded.video_url,
-                media_type=excluded.media_type,
-                duration_seconds=excluded.duration_seconds,
-                video_source=excluded.video_source,
-                title=excluded.title,
-                caption=excluded.caption,
-                published_at=excluded.published_at,
-                views=excluded.views,
-                likes=excluded.likes,
-                comments=excluded.comments,
-                shares=excluded.shares,
-                saves=excluded.saves,
-                raw_platform_data=excluded.raw_platform_data
-            """,
-            (
-                uid,
-                account_id,
-                platform,
-                platform_post_id,
-                post_url,
-                thumbnail_url,
-                video_url,
-                media_type,
-                duration_seconds,
-                video_source,
-                title,
-                caption,
-                snippet.get("publishedAt") or video.get("published_at") or video.get("timestamp") or "",
-                _int(stats.get("viewCount") or stats.get("views") or stats.get("view") or stats.get("view_count") or stats.get("play") or stats.get("playCount") or stats.get("videoViewCount") or stats.get("videoPlayCount") or stats.get("impression_count")),
-                _int(stats.get("likeCount") or stats.get("likes") or stats.get("like_count") or stats.get("likesCount") or stats.get("likedCount") or stats.get("diggCount")),
-                _int(stats.get("commentCount") or stats.get("comments") or stats.get("commentsCount") or stats.get("reply_count") or stats.get("comment_count")),
-                _int(stats.get("shareCount") or stats.get("shares") or stats.get("sharesCount") or stats.get("share_count") or stats.get("retweet_count") or stats.get("repostCount")),
-                _int(stats.get("saveCount") or stats.get("saves") or stats.get("savedCount") or stats.get("collectCount") or stats.get("bookmark_count")),
-                _json(re.findall(r"#[\\w\\-\\u4e00-\\u9fff]+", f"{title} {caption}")),
-                _json([]),
-                _json([]),
-                "",
-                "",
-                _json(video),
-                _utcnow(),
-            ),
-        )
+        conn.execute(_INSERT_POST_SQL, _post_row_params(video, platform, account_id))
         count += 1
     conn.commit()
     return count

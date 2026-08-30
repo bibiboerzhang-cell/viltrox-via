@@ -282,46 +282,54 @@ def enqueue_project_retrospective(
     }
 
 
-def run_project_retrospective(
-    project_id: int,
-    *,
-    staff: dict[str, Any] | None = None,
-    access_payload: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Worker entry: aggregate ready final_v1 analyses into a project retrospective.
+def _fence_blocked(
+    access_payload: dict[str, Any] | None, *, provider_called: bool = False
+) -> dict[str, Any] | None:
+    """Revalidate the job fence in place; return the blocked result dict or None."""
+    if access_payload is None:
+        return None
+    try:
+        ai_job_access.revalidate_job_fence(
+            access_payload, action=ai_job_access.PROJECT_RETROSPECTIVE
+        )
+    except ai_job_access.ProjectAiAccessError as exc:
+        return ai_job_access.blocked_result(exc, provider_called=provider_called)
+    return None
 
-    Uses this module's own get_conn() (sqlite-compat '?'); the worker wraps the call in
-    db_connection_sync_scope(). Reads cache(video) via cache_repo; writes cache(project)
-    ONLY on LLM success. Failure/empty returns a status dict and writes nothing to cache
-    (status CHECK red line). Never touches vkpi_kol_pool / fit_score.
-    """
-    if access_payload is not None:
-        if _int(access_payload.get("project_id") or access_payload.get("target_id")) != int(project_id):
-            return ai_job_access.blocked_result(
-                ai_job_access.ProjectAiAccessError("project_ai_target_drifted", 409)
-            )
-        try:
-            ai_job_access.revalidate_job_fence(
-                access_payload, action=ai_job_access.PROJECT_RETROSPECTIVE
-            )
-        except ai_job_access.ProjectAiAccessError as exc:
-            return ai_job_access.blocked_result(exc)
-    conn = get_conn()
-    data = cache_repo.list_project_video_analysis_cache(project_id, derive_method=SOURCE_DERIVE_METHOD, conn=conn)
-    ready = [it for it in (data.get("items") or []) if it.get("state") == "ready" and it.get("entry")]
 
+def _initial_access_blocked(
+    access_payload: dict[str, Any] | None, project_id: int
+) -> dict[str, Any] | None:
+    """First gate: target drift check + fence revalidation, before any read."""
+    if access_payload is None:
+        return None
+    if _int(access_payload.get("project_id") or access_payload.get("target_id")) != int(project_id):
+        return ai_job_access.blocked_result(
+            ai_job_access.ProjectAiAccessError("project_ai_target_drifted", 409)
+        )
+    return _fence_blocked(access_payload)
+
+
+def _fetch_matched_posts(conn: Any, project_id: int) -> tuple[list[dict[str, Any]], str]:
     # 复盘口径诚实化:除 final_v1 视频证据外,也纳入「人工已确认匹配」的履约内容帖。
     # 二者都计入,避免在 0 帖 0 窗口的项目上凭空产复盘而高估履约成熟度。
     from app.domains.projects import observation_windows
 
-    matched_posts_status = "ready"
     try:
         matched_posts = observation_windows.matched_content_posts_for_retrospective(int(project_id), conn=conn)
     except Exception:
         logger.warning("matched content posts fetch failed (additive, suppressed)", exc_info=True)
-        matched_posts = []
-        matched_posts_status = "error"
+        return [], "error"
+    return matched_posts, "ready"
 
+
+def _collect_retrospective_inputs(
+    conn: Any, project_id: int
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Gather final_v1 + matched-post evidence and assemble the diagnostics dict."""
+    data = cache_repo.list_project_video_analysis_cache(project_id, derive_method=SOURCE_DERIVE_METHOD, conn=conn)
+    ready = [it for it in (data.get("items") or []) if it.get("state") == "ready" and it.get("entry")]
+    matched_posts, matched_posts_status = _fetch_matched_posts(conn, project_id)
     reconciled = reconcile_retrospective_content(ready, matched_posts)
     content_items = list(reconciled.get("items") or [])
     diagnostics = dict(reconciled.get("diagnostics") or {})
@@ -335,104 +343,114 @@ def run_project_retrospective(
         or matched_posts_status != "ready"
         or diagnostics["selection_truncated"]
     )
+    return content_items, diagnostics
 
-    if not content_items:
-        # 两侧都空才诚实跳过(原来只看视频证据,会漏掉「有履约内容但无视频深析」的项目;
-        # 反过来也保证「无任何证据」时不再凭空生成复盘)。
-        return {
-            "status": "skipped",
-            "reason": "no_evidence_and_no_matched_content",
-            "project_id": int(project_id),
-            "diagnostics": diagnostics,
-        }
 
+def _selected_id_lists(selected: list[dict[str, Any]]) -> tuple[list[int], list[int]]:
+    evidence_ids = sorted({eid for item in selected for eid in (item.get("evidence_ids") or [])})
+    post_ids = sorted({pid for item in selected for pid in (item.get("post_ids") or [])})
+    return evidence_ids, post_ids
+
+
+def _selected_source_counts(selected: list[dict[str, Any]]) -> tuple[int, int]:
+    final_count = sum(1 for item in selected if "final_v1" in (item.get("source_kinds") or []))
+    post_count = sum(1 for item in selected if "matched_content_post" in (item.get("source_kinds") or []))
+    return final_count, post_count
+
+
+def _apply_selection(content_items: list[dict[str, Any]], diagnostics: dict[str, Any]) -> dict[str, Any]:
     # reconcile_retrospective_content 已按实测曝光优先 + 身份稳定排序。
     selected = content_items[:TOP_N_VIDEOS]
     diagnostics["selected_content_count"] = len(selected)
     diagnostics["selected_metrics"] = summarize_content_metrics(selected)
-    evidence_ids = sorted({eid for item in selected for eid in (item.get("evidence_ids") or [])})
-    post_ids = sorted({pid for item in selected for pid in (item.get("post_ids") or [])})
-    selected_final_count = sum(1 for item in selected if "final_v1" in (item.get("source_kinds") or []))
-    selected_post_count = sum(1 for item in selected if "matched_content_post" in (item.get("source_kinds") or []))
+    evidence_ids, post_ids = _selected_id_lists(selected)
+    selected_final_count, selected_post_count = _selected_source_counts(selected)
     selected_metrics = diagnostics["selected_metrics"]
-    totals = {
-        "views": (selected_metrics.get("view_count") or {}).get("total"),
-        "engagement": (selected_metrics.get("engagement") or {}).get("total"),
+    return {
+        "selected": selected,
+        "evidence_ids": evidence_ids,
+        "post_ids": post_ids,
+        "final_count": selected_final_count,
+        "post_count": selected_post_count,
+        "totals": {
+            "views": (selected_metrics.get("view_count") or {}).get("total"),
+            "engagement": (selected_metrics.get("engagement") or {}).get("total"),
+        },
     }
 
-    prompt_items, redacted_count = project_retrospective_items_for_llm(selected)
-    prompt = _build_prompt(int(project_id), prompt_items, diagnostics)
-    if access_payload is not None:
-        try:
-            ai_job_access.revalidate_job_fence(
-                access_payload, action=ai_job_access.PROJECT_RETROSPECTIVE
-            )
-        except ai_job_access.ProjectAiAccessError as exc:
-            return ai_job_access.blocked_result(exc)
-    try:
-        resp = llm_production.generate_json(
-            prompt,
-            provider="openai",
-            model=OPENAI_MODEL,
-            purpose="vkpi_project_retrospective",
-            max_output_tokens=MAX_OUTPUT_TOKENS,
-            cost_tag=BUDGET_SCOPE,
-            # 身份类型化:传 staff dict(台账/预留按 staff_id 解析),user_id 只进 triggered_by_user_id 列。
-            triggered_by=staff or "projects.retrospective",
-            staff=staff or {},
-            required_keys=("insight_text", "highlights", "risks", "next_steps"),
-            validator=_valid_retrospective_payload,
-            deadline_seconds=90.0,
-            metadata={
-                "project_id": int(project_id),
-                "content_count": len(selected),
-                "video_count": selected_final_count,
-                "matched_post_count": selected_post_count,
-                "partial": bool(diagnostics.get("partial")),
-                "phase": "project_retrospective",
-                "subphase": "aggregate_evidence",
-                "attempt_index": 1,
-                "total": 1,
-                "target_label": f"project:{int(project_id)}",
-            },
-        )
-    except Exception as exc:  # AI-off/readiness/provider failure: never write cache
-        logger.warning("project retrospective strict LLM unavailable", exc_info=True)
-        resp = {"status": "failed", "reason": str(exc)[:120] or type(exc).__name__}
-    if access_payload is not None:
-        try:
-            ai_job_access.revalidate_job_fence(
-                access_payload, action=ai_job_access.PROJECT_RETROSPECTIVE
-            )
-        except ai_job_access.ProjectAiAccessError as exc:
-            return ai_job_access.blocked_result(exc, provider_called=True)
-    parsed = resp.get("json") if isinstance(resp, dict) else None
-    if not (
+
+def _call_retrospective_llm(
+    prompt: str,
+    staff: dict[str, Any] | None,
+    project_id: int,
+    selection: dict[str, Any],
+    diagnostics: dict[str, Any],
+) -> Any:
+    """Body of the strict LLM try: the shell's try/except boundary stays put."""
+    return llm_production.generate_json(
+        prompt,
+        provider="openai",
+        model=OPENAI_MODEL,
+        purpose="vkpi_project_retrospective",
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        cost_tag=BUDGET_SCOPE,
+        # 身份类型化:传 staff dict(台账/预留按 staff_id 解析),user_id 只进 triggered_by_user_id 列。
+        triggered_by=staff or "projects.retrospective",
+        staff=staff or {},
+        required_keys=("insight_text", "highlights", "risks", "next_steps"),
+        validator=_valid_retrospective_payload,
+        deadline_seconds=90.0,
+        metadata={
+            "project_id": int(project_id),
+            "content_count": len(selection["selected"]),
+            "video_count": selection["final_count"],
+            "matched_post_count": selection["post_count"],
+            "partial": bool(diagnostics.get("partial")),
+            "phase": "project_retrospective",
+            "subphase": "aggregate_evidence",
+            "attempt_index": 1,
+            "total": 1,
+            "target_label": f"project:{int(project_id)}",
+        },
+    )
+
+
+def _parsed_payload(resp: Any) -> Any:
+    return resp.get("json") if isinstance(resp, dict) else None
+
+
+def _acceptable_llm_response(resp: Any, parsed: Any) -> bool:
+    return bool(
         resp.get("status") == "success"
         and str(resp.get("provider") or "").strip().lower() == "openai"
         and str(resp.get("model") or "").strip().startswith(OPENAI_MODEL)
         and _valid_retrospective_payload(parsed)
-    ):
-        # 失败/兜底:不写 cache,只反映在 apify_jobs.status
-        return {
-            "status": "failed",
-            "reason": _failure_code(resp),
-            "project_id": int(project_id),
-            "provider": resp.get("provider"),
-            "diagnostics": diagnostics,
-        }
+    )
+
+
+def _clean_str_list(values: Any) -> list[str]:
+    return [str(x) for x in (values or []) if str(x).strip()][:6]
+
+
+def _build_retrospective_result(
+    parsed: dict[str, Any],
+    resp: dict[str, Any],
+    selection: dict[str, Any],
+    redacted_count: int,
+    diagnostics: dict[str, Any],
+) -> dict[str, Any]:
     insight = str(parsed.get("insight_text") or "").strip()
-    result = {
+    return {
         "insight_text": insight,
-        "highlights": [str(x) for x in (parsed.get("highlights") or []) if str(x).strip()][:6],
-        "risks": [str(x) for x in (parsed.get("risks") or []) if str(x).strip()][:6],
-        "next_steps": [str(x) for x in (parsed.get("next_steps") or []) if str(x).strip()][:6],
+        "highlights": _clean_str_list(parsed.get("highlights")),
+        "risks": _clean_str_list(parsed.get("risks")),
+        "next_steps": _clean_str_list(parsed.get("next_steps")),
         "provenance": {
-            "content_count": len(selected),
-            "video_count": selected_final_count,
-            "evidence_ids": evidence_ids,
-            "matched_post_count": selected_post_count,
-            "matched_post_ids": post_ids,
+            "content_count": len(selection["selected"]),
+            "video_count": selection["final_count"],
+            "evidence_ids": selection["evidence_ids"],
+            "matched_post_count": selection["post_count"],
+            "matched_post_ids": selection["post_ids"],
             "selection": "dedupe_evidence_id_then_canonical_url;measured_views_desc_then_identity",
             "top_n": TOP_N_VIDEOS,
             "source_derive_method": SOURCE_DERIVE_METHOD,
@@ -440,11 +458,21 @@ def run_project_retrospective(
             "model": resp.get("model"),
             "provider": resp.get("provider"),
             "generated_at": utcnow(),
-            "totals": totals,
+            "totals": selection["totals"],
             "redacted_count": redacted_count,
             "diagnostics": diagnostics,
         },
     }
+
+
+def _write_retrospective_cache(
+    conn: Any,
+    project_id: int,
+    staff: dict[str, Any] | None,
+    resp: dict[str, Any],
+    result: dict[str, Any],
+) -> None:
+    """Single cache(project) upsert + immediate commit, reached ONLY on LLM success."""
     now = utcnow()
     conn.execute(
         """
@@ -468,4 +496,59 @@ def run_project_retrospective(
         ),
     )
     conn.commit()
+
+
+def run_project_retrospective(
+    project_id: int,
+    *,
+    staff: dict[str, Any] | None = None,
+    access_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Worker entry: aggregate ready final_v1 analyses into a project retrospective.
+
+    Uses this module's own get_conn() (sqlite-compat '?'); the worker wraps the call in
+    db_connection_sync_scope(). Reads cache(video) via cache_repo; writes cache(project)
+    ONLY on LLM success. Failure/empty returns a status dict and writes nothing to cache
+    (status CHECK red line). Never touches vkpi_kol_pool / fit_score.
+    """
+    blocked = _initial_access_blocked(access_payload, project_id)
+    if blocked is not None:
+        return blocked
+    conn = get_conn()
+    content_items, diagnostics = _collect_retrospective_inputs(conn, project_id)
+    if not content_items:
+        # 两侧都空才诚实跳过(原来只看视频证据,会漏掉「有履约内容但无视频深析」的项目;
+        # 反过来也保证「无任何证据」时不再凭空生成复盘)。
+        return {
+            "status": "skipped",
+            "reason": "no_evidence_and_no_matched_content",
+            "project_id": int(project_id),
+            "diagnostics": diagnostics,
+        }
+    selection = _apply_selection(content_items, diagnostics)
+    prompt_items, redacted_count = project_retrospective_items_for_llm(selection["selected"])
+    prompt = _build_prompt(int(project_id), prompt_items, diagnostics)
+    blocked = _fence_blocked(access_payload)
+    if blocked is not None:
+        return blocked
+    try:
+        resp = _call_retrospective_llm(prompt, staff, project_id, selection, diagnostics)
+    except Exception as exc:  # AI-off/readiness/provider failure: never write cache
+        logger.warning("project retrospective strict LLM unavailable", exc_info=True)
+        resp = {"status": "failed", "reason": str(exc)[:120] or type(exc).__name__}
+    blocked = _fence_blocked(access_payload, provider_called=True)
+    if blocked is not None:
+        return blocked
+    parsed = _parsed_payload(resp)
+    if not _acceptable_llm_response(resp, parsed):
+        # 失败/兜底:不写 cache,只反映在 apify_jobs.status
+        return {
+            "status": "failed",
+            "reason": _failure_code(resp),
+            "project_id": int(project_id),
+            "provider": resp.get("provider"),
+            "diagnostics": diagnostics,
+        }
+    result = _build_retrospective_result(parsed, resp, selection, redacted_count, diagnostics)
+    _write_retrospective_cache(conn, project_id, staff, resp, result)
     return {"status": "ready", "project_id": int(project_id), "result": result}
