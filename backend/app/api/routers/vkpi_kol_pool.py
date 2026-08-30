@@ -18,41 +18,18 @@ R59: 独立 KOL Pool 路由 + 防火墙 + 审计装饰器集成示范.
 """
 from __future__ import annotations
 
-import os
-from urllib.parse import urlparse
-
 from app.core.logging import get_logger
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response
-from fastapi.concurrency import run_in_threadpool
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 
 from app.api.dependencies.manager_guard import require_manager_staff, require_manager_tab
 from app.api.dependencies.perms import require_tab
-from app.api.routers.vkpi_kol_contact_projection import PRIVATE_CONTACT_HEADERS
 from app.api.routers.vkpi_kol_paid_scope import assert_paid_target_writable, build_paid_target_fence
 from app.core.release_validation import release_validation_active
 from app.domains.kol import competitor_detector as kol_competitor_detector
-from app.domains.kol import account_dossier as kol_account_dossier
-from app.domains.kol import account_dossier_extract as kol_account_dossier_extract
-from app.domains.kol import eleven_dimensions
-from app.domains.kol import intelligence_card as kol_intelligence_card
-from app.domains.kol import history_match as kol_history_match
-from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
 from app.domains.kol import pool as kol_pool
 from app.domains.kol.pool_common import CONTACT_VISIBILITY_MASKED
-from app.domains.kol import profile_discovery as kol_profile_discovery
-import app.domains.kol.profile_recall as kol_profile_recall
-import app.domains.kol.search_sessions as kol_search_sessions
-import app.domains.kol.smart_query_planner as kol_smart_query_planner
-import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
 import app.domains.kol.video_analysis_enqueue as kol_video_analysis_enqueue
 import app.domains.kol.video_keyframe_qa_enqueue as kol_video_keyframe_qa_enqueue
-from app.domains.intelligence import gemini_single_kol_preflight
-import app.domains.intelligence.ai_brief as ai_brief
-import app.domains.evidence.summary as evidence_summary
-from app.domains.projects import workflow as project_workflow
-from app.domains.projects import cost_estimate as project_cost_estimate
-from app.domains.projects import outreach as project_outreach
-import app.domains.sync.refresh_tier as refresh_tier
 import app.domains.tasks.enqueue as task_enqueue
 from app.domains.audit.decorator import audit_action
 from app.domains.access.firewall import firewall_check
@@ -78,30 +55,6 @@ def _sanitize_batch_enqueue_result(result: dict) -> dict:
     return {**result, "items": sanitized}
 
 
-def _record_pool_feedback_signal(
-    kol_pool_id: int,
-    action: str,
-    *,
-    staff: dict | None = None,
-    note: str = "",
-) -> None:
-    """L7: bridge a real board action (favorite/promote/unfavorite) into
-    recommendation feedback so the learning corpus grows from real operator
-    behavior. Best-effort — never breaks the primary board action, and never
-    touches viltrox_fit_score."""
-    try:
-        from app.domains.recommendations import actions as rec_actions
-
-        rec_actions.record_pool_action_feedback(
-            int(kol_pool_id),
-            action,
-            staff=staff,
-            note=note,
-        )
-    except Exception:
-        logger.debug("kol_pool.feedback_bridge_failed", exc_info=True)
-
-
 router = APIRouter(prefix="/api/admin/vkpi", tags=["vkpi-kol-pool"])
 
 # task-queue 端点已抽到 vkpi_task_queue.py(无 prefix);include 后继承本 router 的 /api/admin/vkpi,路径不变。
@@ -123,6 +76,7 @@ from app.api.routers.vkpi_kol_pool_helpers import (  # noqa: E402
     _maybe_enqueue_refresh,
     _kol_operation_error,
     _on_demand_refresh_enabled,
+    _record_pool_feedback_signal,
     _smart_query_type,
 )
 
@@ -215,151 +169,18 @@ def get_pool_workspace(
     )
 
 
-@router.get("/kol-pool/{kol_pool_id}/recommendation-card")
-def kol_recommendation_card(
-    kol_pool_id: int,
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """KOL 推荐卡:数据完整度档(A-D)+ 为什么推荐 + 展示信号(只读;档位非 fit)。"""
-    from app.domains.kol import recommendation_card
+# ── 发现子域端点簇(推荐卡/统一搜索/联邦发现读+刷新/建档与落池 Workflow/富集读)
+#    行为不变迁出 → vkpi_kol_pool_discovery.py;无 prefix 子 router include。
+#    端点顺序 = 拆分前注册顺序逐条照抄;含单段静态 GET /kol-pool/unified-search,
+#    必须先于下方 /{kol_pool_id} 注册。kol_pool_federated_search_refresh /
+#    kol_onboarding_sweep 在此 re-export 兜住既有测试的直呼调用点。──
+from app.api.routers.vkpi_kol_pool_discovery import (  # noqa: E402
+    router as _kol_pool_discovery_router,
+    kol_onboarding_sweep,
+    kol_pool_federated_search_refresh,
+)
 
-    return recommendation_card.get_recommendation_card(int(kol_pool_id), staff=staff)
-
-
-@router.get("/kol-pool/unified-search")
-def kol_unified_search(
-    q: str = Query(..., min_length=1, max_length=256),
-    external: bool = False,
-    limit: int = Query(default=20, ge=1, le=100),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """段2 · 统一搜索响应模型:source/status/cost_gate/provider_status/candidate_ids/history_match 一个形。"""
-    from app.domains.kol import unified_search
-
-    return unified_search.unified_search(q, include_external=bool(external), limit=int(limit), staff=staff)
-
-
-@router.get("/kol-pool/discovery/providers")
-def kol_pool_discovery_providers(staff=Depends(require_tab("vkpi", "read"))) -> dict:
-    """联邦发现:源注册表(自有 internal_pool 就绪;商业源 modash/hypeauditor/蝉妈妈 待 key+适配器)。"""
-    from app.domains.discovery import federation
-
-    return {"providers": federation.list_providers()}
-
-
-@router.get("/kol-pool/discovery/federated-search")
-def kol_pool_federated_search(
-    q: str = Query(..., min_length=1, max_length=256),
-    limit: int = Query(default=20, ge=1, le=100),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """联邦发现即时预览。
-
-    读路径只查自有/已物化数据；付费外部源返回
-    ``background_refresh_required``，由 refresh 写路径持久化排队。
-    """
-    from app.domains.discovery import federation
-
-    result = federation.federated_search(q, limit=int(limit), staff=staff)
-    result["execution_mode"] = "preview_only"
-    return result
-
-
-@router.post("/kol-pool/discovery/federated-search/refresh")
-async def kol_pool_federated_search_refresh(
-    request: Request,
-    q: str = Query(..., min_length=1, max_length=256),
-    limit: int = Query(default=20, ge=1, le=100),
-    staff=Depends(require_manager_tab("vkpi", "write")),
-) -> dict:
-    """持久化刷新联邦外部源；结果由通用任务进度/结果端点读取。"""
-    query = str(q or "").strip()
-    if not query:
-        raise HTTPException(status_code=400, detail="q required")
-    queue = getattr(request.app.state, "job_queue", None)
-    if queue is None:
-        raise HTTPException(status_code=503, detail="durable job queue unavailable")
-    if str(getattr(queue, "backend_name", "")) == "inprocess":
-        raise HTTPException(
-            status_code=503,
-            detail="durable_queue_required:inprocess_queue_has_no_provider_execution_fence",
-        )
-    safe_limit = max(1, min(int(limit or 20), 100))
-    try:
-        task_id = await queue.enqueue(
-            "discovery_federated_search",
-            {"query": query, "limit": safe_limit, "staff": dict(staff or {})},
-            lock_key=f"discovery_federated_search:{query.casefold()}:{safe_limit}",
-            timeout_seconds=1200,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    if not str(task_id or "").strip():
-        raise HTTPException(status_code=503, detail="durable job queue returned no job id")
-    return {
-        "status": "queued",
-        "job_id": task_id,
-        "progressive": True,
-        "initial_stage": "queued",
-    }
-
-
-@router.post("/kol-pool/onboarding-sweep")
-async def kol_onboarding_sweep(
-    request: Request,
-    q: str = Query(..., min_length=1, max_length=256),
-    staff=Depends(require_manager_tab("vkpi", "write")),
-) -> dict:
-    """阶段②·KOL 建档 Durable Workflow:联邦发现+落库→富集→记忆(可恢复,串起 Apify 线)。"""
-    from app.domains.kol import onboarding_workflow
-
-    query = str(q or "").strip()
-    if not query:
-        raise HTTPException(status_code=400, detail="q required")
-    try:
-        result = await onboarding_workflow.enqueue_kol_onboarding(
-            getattr(request.app.state, "job_queue", None),
-            query,
-            staff=staff,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {
-        **result,
-        "progressive": True,
-        "initial_stage": "queued",
-    }
-
-
-@router.post("/kol-pool/discovery/enroll")
-async def kol_pool_discovery_enroll(
-    request: Request,
-    q: str = Query(..., min_length=1, max_length=256),
-    limit: int = Query(default=20, ge=1, le=100),
-    staff=Depends(require_manager_tab("vkpi", "write")),
-) -> dict:
-    """链1 KOL 自增长:排入有预算与执行闸的发现→落池 Workflow。"""
-    from app.domains.kol import onboarding_workflow
-
-    try:
-        return await onboarding_workflow.enqueue_kol_onboarding(
-            getattr(request.app.state, "job_queue", None),
-            q,
-            limit=int(limit),
-            staff=staff,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-
-@router.get("/kol-pool/{kol_pool_id}/enrichment")
-def kol_pool_enrichment(kol_pool_id: int, staff=Depends(require_tab("vkpi", "read"))) -> dict:
-    """KOL 外部富集证据(受众/刷粉/画像/历史;独立展示,绝不并入 viltrox_fit_score)。"""
-    from app.domains.discovery import enrichment
-
-    return enrichment.get_enrichment(int(kol_pool_id))
+router.include_router(_kol_pool_discovery_router)
 
 
 @router.post("/kol-pool/{kol_pool_id}/enrich-via-apify")
@@ -386,51 +207,12 @@ async def kol_pool_enrich_via_apify(
     return {"status": "queued", "job_id": task_id, "progressive": True, "initial_stage": "queued"}
 
 
-@router.get("/kol-pool/auto-poll/status")
-def kol_pool_auto_poll_status(staff=Depends(require_tab("vkpi", "read"))) -> dict:
-    """D3 · 关注 KOL 自动轮询状态:应轮询候选数 + 队列可用性(只读,全容错)。"""
-    from app.domains.kol import auto_poll
+# ── 画像/候选子域端点簇(自动轮询状态/数字孪生/项目可选名单)行为不变迁出
+#    → vkpi_kol_pool_profile.py;无 prefix 子 router include。端点顺序 = 拆分前注册
+#    顺序逐条照抄;含单段静态 GET /kol-pool/available,必须先于下方 /{kol_pool_id} 注册。──
+from app.api.routers.vkpi_kol_pool_profile import router as _kol_pool_profile_router  # noqa: E402
 
-    return auto_poll.auto_poll_status()
-
-
-@router.get("/kol-pool/{kol_pool_id}/twin")
-def kol_twin(
-    kol_pool_id: int,
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """C3 · KOL 数字孪生:合作判断档案(身份+为什么记住+数据等级+历史表现+学习信号+合作建议)。"""
-    from app.domains.kol import twin
-
-    return twin.get_kol_twin(int(kol_pool_id), staff=staff)
-
-
-@router.get("/kol-pool/available")
-def list_available_for_project(
-    project_id: int = Query(..., ge=1),
-    query: str = Query(default=""),
-    limit: int = Query(default=200, ge=1, le=500),
-    scope: str = Query(default="favorites"),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """KOL Pool candidates not yet assigned to the project.
-
-    scope=favorites(默认)只返本人收藏子集;scope=all 显式逃生门返全池(诊断 P0-2 裁决)。
-    """
-    try:
-        return project_workflow.list_available_project_kols(
-            project_id,
-            query=query,
-            limit=limit,
-            scope_mode=scope,
-            staff=staff,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:
-        if exc.__class__.__name__ == "ScopeDenied":
-            raise HTTPException(status_code=403, detail=str(exc) or "scope denied") from exc
-        raise
+router.include_router(_kol_pool_profile_router)
 
 
 # ── 竞品只读 + 批量富集/深爬/评论采集/联系草稿/外联优化 端点簇行为不变迁出 → vkpi_kol_pool_jobs.py;无 prefix 子 router include ──
@@ -469,119 +251,18 @@ def list_kol_pool_needs_analysis(
         raise _kol_operation_error("needs_analysis", exc) from exc
 
 
-@router.get("/kol-pool/resolve")
-def resolve_kol_pool(
-    handle: str = Query(default=""),
-    platform: str = Query(default=""),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """#17 按 handle(可选 platform)解析到 vkpi 主池记录。
+# ── 单项检索/档案子域端点簇(handle 解析/单项读/详情抽屉 bundle/账号 dossier 读+
+#    本地物化入队)行为不变迁出 → vkpi_kol_pool_item.py;无 prefix 子 router include。
+#    端点顺序 = 拆分前注册顺序逐条照抄;含单段静态 GET /kol-pool/resolve,必须先于
+#    子文件内 /{kol_pool_id} 注册。get_item / get_item_detail_bundle 在此 re-export
+#    兜住既有测试的直呼调用点。──
+from app.api.routers.vkpi_kol_pool_item import (  # noqa: E402
+    router as _kol_pool_item_router,
+    get_item,
+    get_item_detail_bundle,
+)
 
-    供 mover 预览弹窗(#5)/ KOLDetailModal 真指标(#22):用 handle 拿真 kol_pool_id +
-    真 followers/avg_views/合作摘要。命中返回 history_match 全量 payload;未命中诚实
-    返回 matched=False(前端据此走「先入库」或显空,不再编造假指标)。
-
-    注册在 /{kol_pool_id} 动态路由之前:FastAPI 按声明顺序匹配,静态 /resolve 若排在
-    /{kol_pool_id} 之后会被当 int 解析 → 永久 422(与 needs-analysis 同款吞路由陷阱)。
-    """
-    h = (handle or "").strip()
-    plat = (platform or "").strip()
-    if not h:
-        return {"matched": False, "reason": "handle required"}
-    item = {"handle": h, "display_name": h, "platform": plat}
-    payload = kol_history_match.find_history_match(item, platform=plat)
-    if not payload:
-        return {"matched": False, "handle": h, "platform": plat}
-    return payload
-
-
-@router.get("/kol-pool/{kol_pool_id}")
-async def get_item(
-    request: Request,
-    response: Response,
-    kol_pool_id: int,
-    refresh_if_stale: bool = Query(default=True),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """获取单个 KOL Pool 项；GET 不写搜索标记、不排队，刷新仅走显式 POST。"""
-    del request, refresh_if_stale, staff
-    response.headers.update(PRIVATE_CONTACT_HEADERS)
-    try:
-        result = kol_pool.get_item(
-            int(kol_pool_id),
-            contact_visibility=CONTACT_VISIBILITY_MASKED,
-        )
-        result["contact_projection_reason"] = "summary_only"
-        return result
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail="kol pool item not found", headers=PRIVATE_CONTACT_HEADERS) from exc
-
-
-@router.get("/kol-pool/{kol_pool_id}/detail-bundle")
-def get_item_detail_bundle(
-    request: Request,
-    response: Response,
-    kol_pool_id: int,
-    # P9:此前 default=3/max=10 把账号详情抽屉钉死在"前 4 条";底层 evidence 早已物化全量,
-    # 抬到 default=24/max=200,让单账号详情默认展示该账号(基本)全部视频,前端可按需再加载。
-    # 这是 READ-ONLY 物化展示口径(便宜),不触发新的 Gemini 深析(那是另一条限量+预算闸的链)。
-    video_limit: int = Query(default=24, ge=1, le=200),
-    llm_limit: int = Query(default=20, ge=1, le=50),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """Read-only detail drawer bundle; does not refresh providers or touch V6 Fit."""
-    response.headers.update(PRIVATE_CONTACT_HEADERS)
-    try:
-        result = kol_pool.detail_bundle(
-            int(kol_pool_id),
-            video_limit=video_limit,
-            llm_limit=llm_limit,
-            contact_visibility=CONTACT_VISIBILITY_MASKED,
-        )
-        result["contact_projection_reason"] = "summary_only"
-        return result
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail="kol pool item not found", headers=PRIVATE_CONTACT_HEADERS) from exc
-
-
-@router.get("/kol-pool/{kol_pool_id}/account-dossier")
-def get_pool_item_account_dossier(
-    kol_pool_id: int,
-    video_limit: int = Query(default=50, ge=1, le=200),
-    event_limit: int = Query(default=80, ge=1, le=300),
-    deep_limit: int = Query(default=20, ge=1, le=50),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """Read-only KOL account dossier; aggregates local state without providers."""
-    del staff
-    try:
-        return kol_account_dossier.get_kol_account_dossier(
-            int(kol_pool_id),
-            video_limit=video_limit,
-            event_limit=event_limit,
-            deep_limit=deep_limit,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.post("/kol-pool/{kol_pool_id}/account-dossier-extract-job")
-def enqueue_pool_item_account_dossier_extract(
-    kol_pool_id: int,
-    body: dict = Body(default_factory=dict),
-    staff=Depends(require_tab("vkpi", "write")),
-) -> dict:
-    """Queue local account dossier materialization into independent profile_llm results."""
-    try:
-        return kol_account_dossier_extract.enqueue_account_dossier_extract_job(
-            int(kol_pool_id),
-            body=body or {},
-            staff=staff,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+router.include_router(_kol_pool_item_router)
 
 
 @router.post("/kol-pool/{kol_pool_id}/refresh")

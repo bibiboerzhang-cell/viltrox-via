@@ -69,6 +69,30 @@ def _kol_operation_error(operation: str, exc: Exception) -> HTTPException:
     )
 
 
+def _record_pool_feedback_signal(
+    kol_pool_id: int,
+    action: str,
+    *,
+    staff: dict | None = None,
+    note: str = "",
+) -> None:
+    """L7: bridge a real board action (favorite/promote/unfavorite) into
+    recommendation feedback so the learning corpus grows from real operator
+    behavior. Best-effort — never breaks the primary board action, and never
+    touches viltrox_fit_score."""
+    try:
+        from app.domains.recommendations import actions as rec_actions
+
+        rec_actions.record_pool_action_feedback(
+            int(kol_pool_id),
+            action,
+            staff=staff,
+            note=note,
+        )
+    except Exception:
+        logger.debug("kol_pool.feedback_bridge_failed", exc_info=True)
+
+
 def _on_demand_refresh_enabled() -> bool:
     """Runtime provider gate for P1.X.C stale-while-revalidate.
 
