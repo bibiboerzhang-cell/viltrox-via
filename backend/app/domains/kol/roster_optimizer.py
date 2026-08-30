@@ -339,14 +339,8 @@ def _selection_reason(prof: dict[str, Any], rank: int, gain: float, detail: dict
     return ";".join(parts) if parts else "边际增益最大"
 
 
-def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, Any]:
-    """覆盖最大化组合(契约入口):候选 id 列表 → 去重触达最大的 ≤ max_size 人 roster。
-
-    返回键:status / method / selected / dropped_overlap / coverage / basis / confidence。
-    决定性(同输入同输出)、零 LLM、纯读不写库;缺数据逐层诚实降级,绝不杜撰。
-    """
-    from app.db.connection import get_conn
-
+def _clean_candidate_ids(candidate_ids: list[int]) -> tuple[list[int], list[Any]]:
+    """id 清洗:非 int 记入 invalid;非正数与重复静默丢弃(与原行为逐字一致)。"""
     clean_ids: list[int] = []
     invalid: list[Any] = []
     for raw in candidate_ids or []:
@@ -357,50 +351,58 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
             continue
         if kid > 0 and kid not in clean_ids:
             clean_ids.append(kid)
-    if not clean_ids:
-        return {
-            "status": "empty",
-            "method": METHOD,
-            "reason": "候选列表为空(或全部非法 id),无从优化",
-            "invalid_ids": invalid[:10],
-            "selected": [],
-            "dropped_overlap": [],
-            "coverage": {"total_dedup_reach": 0, "by_geo": [], "by_platform": []},
-            "confidence": "low",
-        }
-    if len(clean_ids) > MAX_CANDIDATES:
-        return {
-            "status": "too_many_candidates",
-            "method": METHOD,
-            "reason": f"候选 {len(clean_ids)} 个超过上限 {MAX_CANDIDATES},请先粗筛再进组合优化",
-            "selected": [],
-            "dropped_overlap": [],
-            "coverage": {"total_dedup_reach": 0, "by_geo": [], "by_platform": []},
-            "confidence": "low",
-        }
-    size_cap = max(1, min(int(max_size or 8), MAX_ROSTER_SIZE))
+    return clean_ids, invalid
 
-    db = get_conn()
-    profiles, missing_ids = _load_profiles(db, clean_ids)
-    if not profiles:
-        return {
-            "status": "no_candidates",
-            "method": METHOD,
-            "reason": "候选 id 在 vkpi_kol_pool 全部查无此人",
-            "missing_ids": missing_ids,
-            "selected": [],
-            "dropped_overlap": [],
-            "coverage": {"total_dedup_reach": 0, "by_geo": [], "by_platform": []},
-            "confidence": "low",
-        }
 
+def _degraded_payload(status: str, reason: str, **extra: Any) -> dict[str, Any]:
+    """早退共用壳(empty / too_many_candidates / no_candidates),键序与原实现一致。"""
+    return {
+        "status": status,
+        "method": METHOD,
+        "reason": reason,
+        **extra,
+        "selected": [],
+        "dropped_overlap": [],
+        "coverage": {"total_dedup_reach": 0, "by_geo": [], "by_platform": []},
+        "confidence": "low",
+    }
+
+
+def _measured_overlaps(
+    db: Any, profiles: dict[int, dict[str, Any]],
+) -> tuple[dict[tuple[int, int], float], int, dict[tuple[int, int], float], str]:
+    """实测重叠合并:存量 + 现算取大;返回 (measured, 存量对数, 现算对, 现算说明)。"""
     measured = _stored_pair_jaccard(profiles)
     stored_pairs_n = len(measured)
     live_pairs, live_note = _live_pair_jaccard(db, sorted(profiles.keys()))
     for key, jac in live_pairs.items():
         measured[key] = max(measured.get(key, 0.0), jac)
+    return measured, stored_pairs_n, live_pairs, live_note
 
-    # ── 贪心主循环(决定性:候选按 id 升序评估,tie-break 取小 id)──
+
+def _absorb_covered_units(
+    covered_units: dict[tuple[str, str], float],
+    best_id: int,
+    selected_ids: list[int],
+    profiles: dict[int, dict[str, Any]],
+    measured: dict[tuple[int, int], float],
+) -> None:
+    """累计覆盖(与增益同一口径:同单元按最强重叠折减后入账);须在 best_id 入选前调用。"""
+    for unit, reach in profiles[best_id]["units"].items():
+        discount = 0.0
+        for sid in selected_ids:
+            if unit in profiles[sid]["units"]:
+                score, _m = _pair_overlap(best_id, sid, profiles, measured)
+                discount = max(discount, score)
+        covered_units[unit] = covered_units.get(unit, 0.0) + reach * (1.0 - min(discount, OVERLAP_DISCOUNT_CAP))
+
+
+def _greedy_select(
+    profiles: dict[int, dict[str, Any]],
+    measured: dict[tuple[int, int], float],
+    size_cap: int,
+) -> tuple[list[int], list[dict[str, Any]], dict[tuple[str, str], float]]:
+    """贪心主循环(决定性:候选按 id 升序评估,tie-break 取小 id)。"""
     ordered_ids = sorted(profiles.keys())
     selected_ids: list[int] = []
     selected_entries: list[dict[str, Any]] = []
@@ -418,14 +420,7 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
         if best_id is None or best_gain <= 0:
             break
         prof = profiles[best_id]
-        # 累计覆盖(与增益同一口径:同单元按最强重叠折减后入账)
-        for unit, reach in prof["units"].items():
-            discount = 0.0
-            for sid in selected_ids:
-                if unit in profiles[sid]["units"]:
-                    score, _m = _pair_overlap(best_id, sid, profiles, measured)
-                    discount = max(discount, score)
-            covered_units[unit] = covered_units.get(unit, 0.0) + reach * (1.0 - min(discount, OVERLAP_DISCOUNT_CAP))
+        _absorb_covered_units(covered_units, best_id, selected_ids, profiles, measured)
         selected_ids.append(best_id)
         rank = len(selected_ids)
         selected_entries.append({
@@ -444,10 +439,18 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
             ],
             "reason": _selection_reason(prof, rank, best_gain, best_detail),
         })
+    return selected_ids, selected_entries, covered_units
 
-    # ── 落选归因:相对最终已选集合的边际与重叠明细 ──
+
+def _dropped_candidates(
+    selected_ids: list[int],
+    profiles: dict[int, dict[str, Any]],
+    measured: dict[tuple[int, int], float],
+    size_cap: int,
+) -> list[dict[str, Any]]:
+    """落选归因:相对最终已选集合的边际与重叠明细。"""
     dropped: list[dict[str, Any]] = []
-    for cid in ordered_ids:
+    for cid in sorted(profiles.keys()):
         if cid in selected_ids:
             continue
         prof = profiles[cid]
@@ -478,8 +481,15 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
             "reason": reason,
         })
     dropped.sort(key=lambda x: (-x["marginal_reach_if_added"], x["kol_pool_id"]))
+    return dropped
 
-    # ── 覆盖汇总(地理桶 / 平台;unknown:{kol_id} 独立桶展示层折回 UNKNOWN)──
+
+def _coverage_summary(
+    covered_units: dict[tuple[str, str], float],
+    profiles: dict[int, dict[str, Any]],
+    selected_ids: list[int],
+) -> dict[str, Any]:
+    """覆盖汇总(地理桶 / 平台;unknown:{kol_id} 独立桶展示层折回 UNKNOWN)。"""
     by_geo_map: dict[str, float] = {}
     by_platform_map: dict[str, float] = {}
     for (platform, bucket), reach in covered_units.items():
@@ -499,11 +509,32 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
         for platform, reach in sorted(by_platform_map.items(), key=lambda x: (-x[1], x[0]))
     ]
     unknown_pct = next((g["pct"] for g in by_geo if g["bucket"] == UNKNOWN_BUCKET), 0.0)
+    return {
+        "total_dedup_reach": round(total, 2),
+        "raw_reach_sum": round(raw_total, 2),
+        "dedup_saved_pct": round((raw_total - total) * 100.0 / raw_total, 2) if raw_total > 0 else 0.0,
+        "by_geo": by_geo,
+        "by_platform": by_platform,
+        "unknown_geo_pct": unknown_pct,
+    }
 
-    # ── 可追溯 basis + 诚实置信度 ──
-    geo_real = sum(1 for p in profiles.values() if p["geo_source"] == "audience_ensemble_v1")
-    geo_proxy = sum(1 for p in profiles.values() if p["geo_source"] == "creator_country_proxy")
-    geo_none = sum(1 for p in profiles.values() if p["geo_source"] == "none")
+
+def _count_by(profiles: dict[int, dict[str, Any]], field: str, value: str) -> int:
+    return sum(1 for p in profiles.values() if p[field] == value)
+
+
+def _optimizer_basis(
+    clean_ids: list[int],
+    invalid: list[Any],
+    profiles: dict[int, dict[str, Any]],
+    missing_ids: list[int],
+    measured: dict[tuple[int, int], float],
+    stored_pairs_n: int,
+    live_pairs: dict[tuple[int, int], float],
+    live_note: str,
+) -> tuple[dict[str, Any], str]:
+    """可追溯 basis + 诚实置信度。"""
+    geo_real = _count_by(profiles, "geo_source", "audience_ensemble_v1")
     basis = {
         "candidates_in": len(clean_ids),
         "candidates_found": len(profiles),
@@ -511,13 +542,13 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
         "invalid_ids": invalid[:10],
         "geo_source_counts": {
             "audience_ensemble_v1": geo_real,
-            "creator_country_proxy": geo_proxy,
-            "unknown": geo_none,
+            "creator_country_proxy": _count_by(profiles, "geo_source", "creator_country_proxy"),
+            "unknown": _count_by(profiles, "geo_source", "none"),
         },
         "reach_basis_counts": {
-            "followers": sum(1 for p in profiles.values() if p["reach_basis"] == "followers"),
-            "avg_views": sum(1 for p in profiles.values() if p["reach_basis"] == "avg_views"),
-            "none": sum(1 for p in profiles.values() if p["reach_basis"] == "none"),
+            "followers": _count_by(profiles, "reach_basis", "followers"),
+            "avg_views": _count_by(profiles, "reach_basis", "avg_views"),
+            "none": _count_by(profiles, "reach_basis", "none"),
         },
         "overlap_pairs_measured": len(measured),
         "overlap_pairs_stored": stored_pairs_n,
@@ -531,9 +562,43 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
         },
     }
     if geo_real >= max(1, len(profiles) // 2) and len(measured) > 0:
-        confidence = "medium"
-    else:
-        confidence = "low"
+        return basis, "medium"
+    return basis, "low"
+
+
+def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, Any]:
+    """覆盖最大化组合(契约入口):候选 id 列表 → 去重触达最大的 ≤ max_size 人 roster。
+
+    返回键:status / method / selected / dropped_overlap / coverage / basis / confidence。
+    决定性(同输入同输出)、零 LLM、纯读不写库;缺数据逐层诚实降级,绝不杜撰。
+    """
+    from app.db.connection import get_conn
+
+    clean_ids, invalid = _clean_candidate_ids(candidate_ids)
+    if not clean_ids:
+        return _degraded_payload(
+            "empty", "候选列表为空(或全部非法 id),无从优化", invalid_ids=invalid[:10],
+        )
+    if len(clean_ids) > MAX_CANDIDATES:
+        return _degraded_payload(
+            "too_many_candidates",
+            f"候选 {len(clean_ids)} 个超过上限 {MAX_CANDIDATES},请先粗筛再进组合优化",
+        )
+    size_cap = max(1, min(int(max_size or 8), MAX_ROSTER_SIZE))
+
+    db = get_conn()
+    profiles, missing_ids = _load_profiles(db, clean_ids)
+    if not profiles:
+        return _degraded_payload(
+            "no_candidates", "候选 id 在 vkpi_kol_pool 全部查无此人", missing_ids=missing_ids,
+        )
+
+    measured, stored_pairs_n, live_pairs, live_note = _measured_overlaps(db, profiles)
+    selected_ids, selected_entries, covered_units = _greedy_select(profiles, measured, size_cap)
+    dropped = _dropped_candidates(selected_ids, profiles, measured, size_cap)
+    basis, confidence = _optimizer_basis(
+        clean_ids, invalid, profiles, missing_ids, measured, stored_pairs_n, live_pairs, live_note,
+    )
 
     payload: dict[str, Any] = {
         "status": "ok" if selected_entries else "no_reach_basis",
@@ -541,14 +606,7 @@ def optimize_roster(candidate_ids: list[int], max_size: int = 8) -> dict[str, An
         "max_size": size_cap,
         "selected": selected_entries,
         "dropped_overlap": dropped,
-        "coverage": {
-            "total_dedup_reach": round(total, 2),
-            "raw_reach_sum": round(raw_total, 2),
-            "dedup_saved_pct": round((raw_total - total) * 100.0 / raw_total, 2) if raw_total > 0 else 0.0,
-            "by_geo": by_geo,
-            "by_platform": by_platform,
-            "unknown_geo_pct": unknown_pct,
-        },
+        "coverage": _coverage_summary(covered_units, profiles, selected_ids),
         "basis": basis,
         "confidence": confidence,
         "note": (

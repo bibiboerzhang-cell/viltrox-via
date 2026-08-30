@@ -237,120 +237,186 @@ def price_fit(price: float | None, ceiling: float) -> tuple[int, str]:
     return -30, "outlier"
 
 
-def product_opportunities(
-    products: list[dict[str, Any]],
+def _opportunity_gate(
+    row: dict[str, Any],
+    gap_focals: set[str],
+    creator_mount: str,
+    lane: str,
+    *,
+    product_line_of: Callable[[dict[str, Any]], str],
+    product_focals: Callable[[dict[str, Any], str], set[str]],
+) -> tuple[str, str, str] | None:
+    """The candidate filter chain; returns (line, focal, mount) or None when the row is out."""
+    if _text(row.get("status"), 30).lower() != "official":
+        return None
+    line = product_line_of(row)
+    if line not in {"af_lens", "mf_lens", "cine"}:
+        return None
+    focals = product_focals(row, line)
+    if len(focals) != 1:
+        return None
+    focal = next(iter(focals))
+    if focal not in gap_focals:
+        return None
+    mount = effective_product_mount(row)
+    if creator_mount and not mount:
+        return None
+    if creator_mount and mount and creator_mount != mount:
+        return None
+    if line == "cine" and lane not in {"cinema", "hybrid"}:
+        return None
+    return line, focal, mount
+
+
+def _mount_score(creator_mount: str, mount: str) -> tuple[int, str]:
+    if creator_mount and mount == creator_mount:
+        return 30, f"与推断卡口 {creator_mount} 匹配"
+    if not creator_mount:
+        return -5, "机身/卡口未识别,下单前必须人工核验"
+    return -8, "产品卡口缺失,需人工核验"
+
+
+def _content_score(line: str, lane: str) -> tuple[int, str]:
+    if line == "cine":
+        return 12, "视频/电影创作语境与 Cine 产品线匹配"
+    if lane in {"cinema", "hybrid"}:
+        return 8, "自动对焦单品适合视频/混合创作"
+    if lane == "photography":
+        return 12, "摄影内容与自动对焦镜头匹配"
+    return 5, "创作类型证据不足,仅按焦段补位"
+
+
+def _series_score(series_key: str, ceiling: float) -> int:
+    if ceiling >= 1500:
+        series_scores = {"lab": 12, "pro": 11, "evo": 9, "air": 5, "cine": 6, "epic": 4}
+    elif ceiling >= 900:
+        series_scores = {"pro": 12, "evo": 11, "lab": 9, "air": 7, "cine": 5, "epic": 3}
+    else:
+        series_scores = {"evo": 12, "air": 11, "pro": 8, "lab": 5, "cine": 4, "epic": 2}
+    return series_scores.get(series_key, 6)
+
+
+def _score_opportunity(
+    line: str,
+    mount: str,
+    series: str,
+    price: float | None,
+    context: dict[str, Any],
+    creator_mount: str,
+    lane: str,
+    ceiling: float,
+) -> tuple[dict[str, int], list[str], str]:
+    """Score parts + ordered reasons + price-fit label, byte-identical to the inline original."""
+    score_parts = {"base": 40, "mount": 0, "content": 0, "series": 0, "price": 0, "evidence": 0}
+    reasons: list[str] = []
+    score_parts["mount"], mount_reason = _mount_score(creator_mount, mount)
+    reasons.append(mount_reason)
+    score_parts["content"], content_reason = _content_score(line, lane)
+    reasons.append(content_reason)
+    score_parts["series"] = _series_score(series.lower(), ceiling)
+    reasons.append(f"{series} 系列参与多样化候选")
+    price_score, price_fit_value = price_fit(price, ceiling)
+    score_parts["price"] = price_score
+    if price is not None:
+        reasons.append(f"目录价 USD {price:,.0f} · 价格带 {price_fit_value}")
+    if context.get("camera_body"):
+        score_parts["evidence"] += 3
+    if context.get("lens_brands"):
+        score_parts["evidence"] += 2
+        reasons.append("已识别常用镜头品牌: " + "/".join(context["lens_brands"][:3]))
+    return score_parts, reasons, price_fit_value
+
+
+def _opportunity_confidence(matched: bool, context: dict[str, Any]) -> str:
+    if matched and context.get("camera_body"):
+        return "high"
+    if matched:
+        return "medium"
+    return "low"
+
+
+def _opportunity_payload(
+    row: dict[str, Any],
+    focal: str,
+    line: str,
+    mount: str,
+    series: str,
+    price: float | None,
+    score_parts: dict[str, int],
+    reasons: list[str],
+    price_fit_value: str,
+    context: dict[str, Any],
+    creator_mount: str,
+    ceiling: float,
+    *,
+    focal_sort_mm: Callable[[str], float],
+    line_labels: dict[str, str],
+) -> dict[str, Any]:
+    matched = bool(creator_mount and mount == creator_mount)
+    name = _text(row.get("marketing_name"), 220) or _text(row.get("model_name"), 220)
+    return {
+        "focal": focal,
+        "mm": focal_sort_mm(focal),
+        "sku": _text(row.get("sku"), 160),
+        "product_name": name or _text(row.get("sku"), 160),
+        "flagship": name or _text(row.get("sku"), 160),
+        "series": [series],
+        "line": line_labels.get(line, line),
+        "lines": [line_labels.get(line, line)],
+        "mount": mount or None,
+        "price_usd": price,
+        "max_price_usd": price,
+        "product_url": _text(row.get("product_url"), 500) or None,
+        "official_catalog_product_id": _text(row.get("official_catalog_product_id"), 100) or None,
+        "sku_count": 1,
+        "official_sku_count": 1,
+        "value_usd": price or 0.0,
+        "recommendation_score": sum(score_parts.values()),
+        "score_breakdown": score_parts,
+        "compatibility_status": "compatible" if matched else "mount_unknown",
+        "confidence": _opportunity_confidence(matched, context),
+        "price_fit": price_fit_value,
+        "price_distance": abs((price or ceiling) - ceiling * 0.65),
+        "reasons": reasons[:5],
+    }
+
+
+def _opportunity_candidate(
+    row: dict[str, Any],
     gap_focals: set[str],
     context: dict[str, Any],
+    creator_mount: str,
+    lane: str,
+    ceiling: float,
     *,
     product_line_of: Callable[[dict[str, Any]], str],
     product_focals: Callable[[dict[str, Any], str], set[str]],
     focal_sort_mm: Callable[[str], float],
     line_labels: dict[str, str],
-    limit: int = 12,
-) -> list[dict[str, Any]]:
-    creator_mount = _text(context.get("mount"), 40)
-    lane = _text(context.get("content_lane"), 20) or "unknown"
-    ceiling = _float_or_none(context.get("catalog_price_ceiling_proxy_usd"))
-    candidates: list[dict[str, Any]] = []
-    if not creator_mount or ceiling is None:
-        return []
+) -> dict[str, Any] | None:
+    gate = _opportunity_gate(
+        row, gap_focals, creator_mount, lane,
+        product_line_of=product_line_of, product_focals=product_focals,
+    )
+    if gate is None:
+        return None
+    line, focal, mount = gate
+    price = _float_or_none(row.get("price_usd"))
+    series = product_series(row)
+    score_parts, reasons, price_fit_value = _score_opportunity(
+        line, mount, series, price, context, creator_mount, lane, ceiling,
+    )
+    if price_fit_value == "outlier" and line == "cine" and creator_mount != "PL-mount":
+        return None
+    return _opportunity_payload(
+        row, focal, line, mount, series, price, score_parts, reasons, price_fit_value,
+        context, creator_mount, ceiling,
+        focal_sort_mm=focal_sort_mm, line_labels=line_labels,
+    )
 
-    for row in products:
-        if _text(row.get("status"), 30).lower() != "official":
-            continue
-        line = product_line_of(row)
-        if line not in {"af_lens", "mf_lens", "cine"}:
-            continue
-        focals = product_focals(row, line)
-        if len(focals) != 1:
-            continue
-        focal = next(iter(focals))
-        if focal not in gap_focals:
-            continue
-        mount = effective_product_mount(row)
-        if creator_mount and not mount:
-            continue
-        if creator_mount and mount and creator_mount != mount:
-            continue
-        if line == "cine" and lane not in {"cinema", "hybrid"}:
-            continue
 
-        price = _float_or_none(row.get("price_usd"))
-        series = product_series(row)
-        score_parts = {"base": 40, "mount": 0, "content": 0, "series": 0, "price": 0, "evidence": 0}
-        reasons: list[str] = []
-        if creator_mount and mount == creator_mount:
-            score_parts["mount"] = 30
-            reasons.append(f"与推断卡口 {creator_mount} 匹配")
-        elif not creator_mount:
-            score_parts["mount"] = -5
-            reasons.append("机身/卡口未识别,下单前必须人工核验")
-        else:
-            score_parts["mount"] = -8
-            reasons.append("产品卡口缺失,需人工核验")
-
-        if line == "cine":
-            score_parts["content"] = 12
-            reasons.append("视频/电影创作语境与 Cine 产品线匹配")
-        elif lane in {"cinema", "hybrid"}:
-            score_parts["content"] = 8
-            reasons.append("自动对焦单品适合视频/混合创作")
-        elif lane == "photography":
-            score_parts["content"] = 12
-            reasons.append("摄影内容与自动对焦镜头匹配")
-        else:
-            score_parts["content"] = 5
-            reasons.append("创作类型证据不足,仅按焦段补位")
-
-        series_key = series.lower()
-        if ceiling >= 1500:
-            series_scores = {"lab": 12, "pro": 11, "evo": 9, "air": 5, "cine": 6, "epic": 4}
-        elif ceiling >= 900:
-            series_scores = {"pro": 12, "evo": 11, "lab": 9, "air": 7, "cine": 5, "epic": 3}
-        else:
-            series_scores = {"evo": 12, "air": 11, "pro": 8, "lab": 5, "cine": 4, "epic": 2}
-        score_parts["series"] = series_scores.get(series_key, 6)
-        reasons.append(f"{series} 系列参与多样化候选")
-        price_score, price_fit_value = price_fit(price, ceiling)
-        score_parts["price"] = price_score
-        if price is not None:
-            reasons.append(f"目录价 USD {price:,.0f} · 价格带 {price_fit_value}")
-        if context.get("camera_body"):
-            score_parts["evidence"] += 3
-        if context.get("lens_brands"):
-            score_parts["evidence"] += 2
-            reasons.append("已识别常用镜头品牌: " + "/".join(context["lens_brands"][:3]))
-
-        score = sum(score_parts.values())
-        if price_fit_value == "outlier" and line == "cine" and creator_mount != "PL-mount":
-            continue
-        name = _text(row.get("marketing_name"), 220) or _text(row.get("model_name"), 220)
-        candidates.append({
-            "focal": focal,
-            "mm": focal_sort_mm(focal),
-            "sku": _text(row.get("sku"), 160),
-            "product_name": name or _text(row.get("sku"), 160),
-            "flagship": name or _text(row.get("sku"), 160),
-            "series": [series],
-            "line": line_labels.get(line, line),
-            "lines": [line_labels.get(line, line)],
-            "mount": mount or None,
-            "price_usd": price,
-            "max_price_usd": price,
-            "product_url": _text(row.get("product_url"), 500) or None,
-            "official_catalog_product_id": _text(row.get("official_catalog_product_id"), 100) or None,
-            "sku_count": 1,
-            "official_sku_count": 1,
-            "value_usd": price or 0.0,
-            "recommendation_score": score,
-            "score_breakdown": score_parts,
-            "compatibility_status": "compatible" if creator_mount and mount == creator_mount else "mount_unknown",
-            "confidence": "high" if creator_mount and mount == creator_mount and context.get("camera_body") else "medium" if creator_mount and mount == creator_mount else "low",
-            "price_fit": price_fit_value,
-            "price_distance": abs((price or ceiling) - ceiling * 0.65),
-            "reasons": reasons[:5],
-        })
-
+def _select_diversified(candidates: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Score-descending sort, then two passes: series-diverse first, family-deduped fill second."""
     candidates.sort(key=lambda item: (
         item["recommendation_score"],
         1 if item["compatibility_status"] == "compatible" else 0,
@@ -375,3 +441,32 @@ def product_opportunities(
             if len(selected) >= limit:
                 return selected
     return selected
+
+
+def product_opportunities(
+    products: list[dict[str, Any]],
+    gap_focals: set[str],
+    context: dict[str, Any],
+    *,
+    product_line_of: Callable[[dict[str, Any]], str],
+    product_focals: Callable[[dict[str, Any], str], set[str]],
+    focal_sort_mm: Callable[[str], float],
+    line_labels: dict[str, str],
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    creator_mount = _text(context.get("mount"), 40)
+    lane = _text(context.get("content_lane"), 20) or "unknown"
+    ceiling = _float_or_none(context.get("catalog_price_ceiling_proxy_usd"))
+    if not creator_mount or ceiling is None:
+        return []
+    candidates: list[dict[str, Any]] = []
+    for row in products:
+        candidate = _opportunity_candidate(
+            row, gap_focals, context, creator_mount, lane, ceiling,
+            product_line_of=product_line_of, product_focals=product_focals,
+            focal_sort_mm=focal_sort_mm, line_labels=line_labels,
+        )
+        if candidate is None:
+            continue
+        candidates.append(candidate)
+    return _select_diversified(candidates, limit)
