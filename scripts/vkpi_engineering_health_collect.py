@@ -20,6 +20,7 @@ from typing import Any, Callable, Sequence
 try:
     from scripts import vkpi_engineering_health_architecture as architecture_tools
     from scripts import vkpi_engineering_health_cognitive as cognitive_tools
+    from scripts import vkpi_engineering_health_duplication as duplication_tools
     from scripts import vkpi_engineering_health_score as health_score
     from scripts import vkpi_engineering_health_graph as graph_tools
     from scripts import vkpi_engineering_health_snapshot as snapshot
@@ -27,6 +28,7 @@ try:
 except ModuleNotFoundError:  # Direct execution: scripts/ is sys.path[0].
     import vkpi_engineering_health_architecture as architecture_tools
     import vkpi_engineering_health_cognitive as cognitive_tools
+    import vkpi_engineering_health_duplication as duplication_tools
     import vkpi_engineering_health_score as health_score
     import vkpi_engineering_health_graph as graph_tools
     import vkpi_engineering_health_snapshot as snapshot
@@ -38,11 +40,14 @@ DEFAULT_CONTRACT = ROOT / "docs/vkpi/engineering-health-score-contract-v1.json"
 SCHEMA_VERSION = "vkpi_engineering_health_collector_v1"
 ALGORITHM_VERSION = (
     "python-ast-cc2-finite-dynamic-import2-tarjan2-architecture1-snapshot2-lineguard1-cognitive1"
-    "-importtime-cycles1"
+    "-importtime-cycles1-fanout-roots1-dup1"
 )
 LINE_LIMIT = 800
 SOURCE_SUFFIXES = {".py", ".ts", ".tsx", ".css"}
 PYTHON_ROOTS = ("backend/app",)
+# Contract v1.1 static_evidence_methodology.internal_fan_out_max.composition_roots — a closed
+# list; extending it requires a contract revision and a new contract hash.
+COMPOSITION_ROOTS = ("app.main",)
 LINE_ROOTS = ("backend/app", "frontend/src", "scripts")
 SKIP_PARTS = {
     ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", "__pycache__",
@@ -326,8 +331,14 @@ def collect_observations(
         )
     cross_core = [item for item in scc_rows if item["cross_core"]]
     edge_count = sum(len(targets) for targets in graph.values())
-    max_fan_out = max((len(targets) for targets in graph.values()), default=0)
-    max_fan_out_modules = sorted(module for module, targets in graph.items() if len(targets) == max_fan_out)
+    fan_out_by_module = {module: len(targets) for module, targets in graph.items()}
+    internal_fan_out = {m: c for m, c in fan_out_by_module.items() if m not in COMPOSITION_ROOTS}
+    max_fan_out = max(internal_fan_out.values(), default=0)
+    max_fan_out_modules = sorted(m for m, count in internal_fan_out.items() if count == max_fan_out)
+    fan_out_exemptions = [
+        {"module": m, "fan_out": fan_out_by_module[m]}
+        for m in sorted(COMPOSITION_ROOTS) if m in fan_out_by_module
+    ]
     main_sequence = architecture_tools.collect_main_sequence(trees, graph, module_paths)
 
     cc_buckets = {
@@ -345,9 +356,14 @@ def collect_observations(
     import_time_subgraph = graph_tools.import_time_cycle_summary(
         graph_build.import_time_graph, valid=valid_static_graph
     )
+    duplication_observation = duplication_tools.observation(
+        python_files, snapshot_complete=captured.complete, top_limit=TOP_COMPLEX_FUNCTIONS
+    )
+    fully_observed = (complete_python and complete_graph and max_module is not None
+                      and duplication_observation["status"] == "observed")
 
     return {
-        "status": "observed" if complete_python and complete_graph and max_module is not None else "partial",
+        "status": "observed" if fully_observed else "partial",
         "observed_at": observed_at,
         "scope": {
             "python_roots": list(PYTHON_ROOTS),
@@ -393,6 +409,7 @@ def collect_observations(
             "top_functions": [asdict(item) for item in complexity_rows[:TOP_COMPLEX_FUNCTIONS]],
             "parse_errors": [asdict(item) for item in parse_failures],
         },
+        "python_duplication": duplication_observation,
         "python_classes": {
             "status": "observed" if complete_ast else "unknown",
             "definition": (
@@ -446,6 +463,9 @@ def collect_observations(
             "cross_core_scc_count": len(cross_core) if valid_static_graph else None,
             "internal_fan_out_max": max_fan_out if valid_static_graph else None,
             "max_fan_out_modules": max_fan_out_modules if valid_static_graph else [],
+            "composition_roots": list(COMPOSITION_ROOTS),
+            "composition_root_exemptions": fan_out_exemptions if valid_static_graph else [],
+            "raw_fan_out_max": max(fan_out_by_module.values(), default=0) if valid_static_graph else None,
             "import_time_subgraph": import_time_subgraph,
             "module_paths": module_paths,
             "cyclic_sccs": scc_rows,
@@ -592,6 +612,10 @@ def build_evidence(
         code_metrics["cc_le_10_ratio"] = _unknown(observed_at, reason)
         code_metrics["max_cc"] = _unknown(observed_at, reason)
         code_metrics["cognitive_le_15_ratio"] = _unknown(observed_at, reason)
+    code_metrics["duplication_rate"] = duplication_tools.score_metric(
+        observations["python_duplication"], observed_at=observed_at, stable=stable,
+        drift_reason=missing_reason, observed=_observed, unknown=_unknown,
+    )
 
     architecture = evidence["metrics"]["architecture"]
     line_guard = observations["line_guard"]
@@ -662,7 +686,9 @@ def build_evidence(
             observed_at,
             graph_source,
             sample_count=import_graph["module_count"],
-            details={"modules": import_graph["max_fan_out_modules"]},
+            details={key: import_graph[key] for key in (
+                "max_fan_out_modules", "composition_roots", "composition_root_exemptions", "raw_fan_out_max",
+            )},
         )
         main_sequence_observation = architecture_static["main_sequence"]
         architecture["main_sequence_distance_p90"] = _observed(

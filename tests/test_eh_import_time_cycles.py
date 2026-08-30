@@ -221,4 +221,6 @@ def test_import_time_subgraph_feeds_package_cycle_count_and_its_ratchet(tmp_path
     assert metric["status"] == "observed"
     assert metric["value"] == 1
     assert metric["details"]["cyclic_module_count"] == 2
-    assert evidence["collector"]["algorithm_version"].endswith("-importtime-cycles1")
+    # fanout-roots1 + dup1(合同 v1.1 第二批落地)追加在版本串尾部后
+    # importtime-cycles1 不再是终段;仍断言其在版本串中在册。
+    assert "-importtime-cycles1" in evidence["collector"]["algorithm_version"]
