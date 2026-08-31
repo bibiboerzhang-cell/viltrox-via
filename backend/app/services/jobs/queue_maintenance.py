@@ -575,8 +575,14 @@ def mark_timed_out_jobs(queue: Any, limit: int = 100) -> int:
         except Exception as exc:
             try:
                 conn.rollback()
-            except Exception:
-                pass
+            except Exception as rollback_exc:
+                qm.logger.warning(
+                    "failed to rollback timed-out job transaction %s after %s: %s",
+                    task_id,
+                    type(exc).__name__,
+                    rollback_exc,
+                    exc_info=True,
+                )
             qm.logger.warning("failed to commit timed-out job transaction %s: %s", task_id, exc)
             continue
         timed_out += 1

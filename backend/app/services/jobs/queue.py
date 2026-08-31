@@ -153,6 +153,266 @@ class RedisJobQueue(BaseJobQueue):
     def _mark_timed_out_jobs(self, limit: int = 100) -> int:
         return queue_maintenance.mark_timed_out_jobs(self, limit=limit)
 
+    async def _find_enqueue_duplicate(
+        self,
+        job_type: str,
+        submission_id: int,
+        lock_key: str,
+    ) -> Optional[str]:
+        if job_type == "audit_submission" and submission_id:
+            async with db_connection_scope():
+                existing_task_id = await asyncio.to_thread(
+                    self._find_active_submission_job,
+                    job_type,
+                    submission_id,
+                )
+            if existing_task_id:
+                return existing_task_id
+        if not lock_key:
+            return None
+        async with db_connection_scope():
+            return await asyncio.to_thread(self._find_active_lock_job, lock_key)
+
+    async def _persist_enqueue_ledger(
+        self,
+        job: Dict[str, Any],
+        lock_key: str,
+    ) -> Optional[str]:
+        async with db_connection_scope():
+            try:
+                await asyncio.to_thread(self._insert_job_ledger, job)
+            except Exception:
+                if not lock_key:
+                    raise
+                await asyncio.to_thread(self._rollback_job_ledger_insert)
+                existing_task_id = await asyncio.to_thread(
+                    self._find_active_lock_job,
+                    lock_key,
+                )
+                if existing_task_id:
+                    return existing_task_id
+                raise
+        return None
+
+    @staticmethod
+    def _enqueue_error_message(prefix: str, exc: BaseException) -> str:
+        detail = str(exc).strip().replace("\n", " ")[:400]
+        if detail:
+            return f"{prefix}: {type(exc).__name__}: {detail}"
+        return f"{prefix}: {type(exc).__name__}"
+
+    async def _terminalize_xadd_failure(
+        self,
+        task_id: str,
+        stream_exc: BaseException,
+    ) -> None:
+        error_message = self._enqueue_error_message("redis xadd failed", stream_exc)
+        try:
+            async with db_connection_scope():
+                snapshot = await asyncio.to_thread(
+                    self._update_job_ledger,
+                    task_id,
+                    TaskStatus.FAILED.value,
+                    error_message=error_message,
+                    stage="enqueue_failed",
+                )
+        except Exception:
+            logger.exception(
+                "redis xadd failed and ledger terminalization also failed | task_id=%s",
+                task_id,
+            )
+            raise RuntimeError(
+                "redis xadd failed and job ledger could not be terminalized"
+            ) from stream_exc
+        if not snapshot:
+            logger.error(
+                "redis xadd failed but ledger disappeared | task_id=%s",
+                task_id,
+            )
+            raise RuntimeError(
+                "redis xadd failed and job ledger did not reach failed"
+            ) from stream_exc
+        if str(snapshot.get("status") or "").lower() != TaskStatus.FAILED.value:
+            logger.error(
+                "redis xadd failed but ledger did not reach failed | task_id=%s status=%s",
+                task_id,
+                snapshot.get("status"),
+            )
+            raise RuntimeError(
+                "redis xadd failed and job ledger did not reach failed"
+            ) from stream_exc
+
+    async def _append_enqueue_stream(
+        self,
+        job: Dict[str, Any],
+        user_id: int,
+    ) -> str:
+        try:
+            stream_id = await self._client.xadd(
+                REDIS_JOB_STREAM_KEY,
+                {
+                    "task_id": job["task_id"],
+                    "job_type": job["job_type"],
+                    "submission_id": str(job["submission_id"]),
+                    "payload_json": json.dumps(job["payload"], ensure_ascii=False),
+                    "user_id": str(user_id),
+                    "created_at": _utcnow(),
+                },
+            )
+        except Exception as stream_exc:
+            # Keep the inserted ledger as audit evidence, but terminalize it so
+            # a failed Redis append cannot retain the active dedupe lock.
+            await self._terminalize_xadd_failure(job["task_id"], stream_exc)
+            raise
+        return str(stream_id)
+
+    @staticmethod
+    def _stream_binding_is_invalid(
+        snapshot: Optional[Dict[str, Any]],
+        stream_id: str,
+    ) -> bool:
+        if not snapshot:
+            return True
+        if snapshot.get("_stream_bind_conflict"):
+            return True
+        return str(snapshot.get("stream_id") or "") != stream_id
+
+    async def _try_fail_unbound_stream(
+        self,
+        task_id: str,
+        stream_id: str,
+        error_message: str,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            async with db_connection_scope():
+                return await asyncio.to_thread(
+                    self._fail_unbound_stream_job,
+                    task_id,
+                    expected_stream_id=stream_id,
+                    error_message=error_message,
+                )
+        except Exception:
+            logger.exception(
+                "stream binding failed and ledger terminalization also failed | task_id=%s",
+                task_id,
+            )
+            return None
+
+    @staticmethod
+    def _stream_containment_state(
+        snapshot: Optional[Dict[str, Any]],
+    ) -> tuple[str, bool, bool]:
+        if not snapshot:
+            return "", False, False
+        failed_status = str(snapshot.get("status") or "").lower()
+        containment_applied = bool(snapshot.get("_stream_bind_failed_applied"))
+        ledger_failed = (
+            containment_applied
+            and failed_status == TaskStatus.FAILED.value
+            and str(snapshot.get("stage") or "") == "stream_bind_failed"
+        )
+        durable_stream_won = (
+            not containment_applied and bool(snapshot.get("_durable_stream_won"))
+        )
+        return failed_status, ledger_failed, durable_stream_won
+
+    async def _delete_contained_stream(self, task_id: str, stream_id: str) -> None:
+        try:
+            await self._client.xdel(REDIS_JOB_STREAM_KEY, stream_id)
+        except Exception:
+            logger.exception(
+                "stream binding failed and redis message deletion also failed | task_id=%s stream_id=%s",
+                task_id,
+                stream_id,
+            )
+
+    async def _recover_enqueue_stream_binding(
+        self,
+        task_id: str,
+        stream_id: str,
+        bind_exc: BaseException,
+    ) -> Dict[str, Any]:
+        error_message = self._enqueue_error_message(
+            "redis stream ledger binding failed",
+            bind_exc,
+        )
+        failed_snapshot = await self._try_fail_unbound_stream(
+            task_id,
+            stream_id,
+            error_message,
+        )
+        failed_status, ledger_failed, durable_stream_won = (
+            self._stream_containment_state(failed_snapshot)
+        )
+        if ledger_failed:
+            await self._delete_contained_stream(task_id, stream_id)
+        if durable_stream_won:
+            logger.warning(
+                "producer stream bind lost to durable ledger state | task_id=%s stream_id=%s status=%s",
+                task_id,
+                stream_id,
+                failed_status,
+            )
+            return failed_snapshot or {}
+        if ledger_failed:
+            raise RuntimeError(
+                "redis stream ledger binding failed after xadd"
+            ) from bind_exc
+        raise RuntimeError(
+            "redis stream ledger binding failed and containment is unverified"
+        ) from bind_exc
+
+    async def _bind_enqueue_stream(
+        self,
+        task_id: str,
+        stream_id: str,
+    ) -> tuple[Dict[str, Any], bool]:
+        try:
+            async with db_connection_scope():
+                snapshot = await asyncio.to_thread(
+                    self._bind_job_stream,
+                    task_id,
+                    stream_id,
+                )
+            if self._stream_binding_is_invalid(snapshot, stream_id):
+                raise RuntimeError("job ledger stream binding was not durable")
+            return snapshot or {}, False
+        except Exception as bind_exc:
+            recovered = await self._recover_enqueue_stream_binding(
+                task_id,
+                stream_id,
+                bind_exc,
+            )
+            return recovered, True
+
+    async def _publish_queued_enqueue_event(
+        self,
+        task_id: str,
+        stream_id: str,
+        snapshot: Dict[str, Any],
+        user_id: int,
+    ) -> None:
+        if str(snapshot.get("status") or "").lower() != TaskStatus.QUEUED.value:
+            return
+        event = {
+            "event_type": TaskStatus.QUEUED.value,
+            "task_id": task_id,
+            "status": TaskStatus.QUEUED.value,
+            "created_at": _utcnow(),
+            "submission_id": snapshot.get("submission_id") or "",
+            "retry_count": snapshot.get("retry_count") or "0",
+            "stage": snapshot.get("stage") or "ingest",
+        }
+        try:
+            await self._publish_event(task_id, event, user_id=user_id)
+        except Exception:
+            logger.warning(
+                "queued event publish failed after durable enqueue | task_id=%s stream_id=%s",
+                task_id,
+                stream_id,
+                exc_info=True,
+            )
+
     async def enqueue(
         self,
         job_type: str,
@@ -166,22 +426,17 @@ class RedisJobQueue(BaseJobQueue):
         await self._ensure_ready()
         payload_dict = _normalize_payload(payload)
         user_id = int(payload_dict.get("user_id") or 0)
-        effective_submission_id = int(submission_id or payload_dict.get("submission_id") or 0)
+        effective_submission_id = int(
+            submission_id or payload_dict.get("submission_id") or 0
+        )
         normalized_lock_key = str(lock_key or "").strip()
-        if job_type == "audit_submission" and effective_submission_id:
-            async with db_connection_scope():
-                existing_task_id = await asyncio.to_thread(
-                    self._find_active_submission_job,
-                    job_type,
-                    effective_submission_id,
-                )
-            if existing_task_id:
-                return existing_task_id
-        if normalized_lock_key:
-            async with db_connection_scope():
-                existing_task_id = await asyncio.to_thread(self._find_active_lock_job, normalized_lock_key)
-            if existing_task_id:
-                return existing_task_id
+        existing_task_id = await self._find_enqueue_duplicate(
+            job_type,
+            effective_submission_id,
+            normalized_lock_key,
+        )
+        if existing_task_id:
+            return existing_task_id
 
         task_id = str(uuid.uuid4())
         job = {
@@ -193,167 +448,23 @@ class RedisJobQueue(BaseJobQueue):
             "lock_key": normalized_lock_key,
             "timeout_seconds": timeout_seconds,
         }
-        async with db_connection_scope():
-            try:
-                await asyncio.to_thread(self._insert_job_ledger, job)
-            except Exception:
-                if not normalized_lock_key:
-                    raise
-                await asyncio.to_thread(self._rollback_job_ledger_insert)
-                existing_task_id = await asyncio.to_thread(self._find_active_lock_job, normalized_lock_key)
-                if existing_task_id:
-                    return existing_task_id
-                raise
-        try:
-            stream_id = await self._client.xadd(
-                REDIS_JOB_STREAM_KEY,
-                {
-                    "task_id": task_id,
-                    "job_type": job_type,
-                    "submission_id": str(job["submission_id"]),
-                    "payload_json": json.dumps(payload_dict, ensure_ascii=False),
-                    "user_id": str(user_id),
-                    "created_at": _utcnow(),
-                },
-            )
-        except Exception as stream_exc:
-            # The ledger insert is intentionally durable audit evidence.  If
-            # Redis never accepted the message, terminalize that exact row so
-            # it cannot remain an active lock/dedupe orphan.  Do not call
-            # set_status here: publishing its event would depend on Redis too.
-            detail = str(stream_exc).strip().replace("\n", " ")[:400]
-            error_message = f"redis xadd failed: {type(stream_exc).__name__}"
-            if detail:
-                error_message = f"{error_message}: {detail}"
-            try:
-                async with db_connection_scope():
-                    snapshot = await asyncio.to_thread(
-                        self._update_job_ledger,
-                        task_id,
-                        TaskStatus.FAILED.value,
-                        error_message=error_message,
-                        stage="enqueue_failed",
-                    )
-            except Exception:
-                logger.exception(
-                    "redis xadd failed and ledger terminalization also failed | task_id=%s",
-                    task_id,
-                )
-                raise RuntimeError(
-                    "redis xadd failed and job ledger could not be terminalized"
-                ) from stream_exc
-            if not snapshot or str(snapshot.get("status") or "").lower() != TaskStatus.FAILED.value:
-                logger.error(
-                    "redis xadd failed but ledger did not reach failed | task_id=%s status=%s",
-                    task_id,
-                    (snapshot or {}).get("status"),
-                )
-                raise RuntimeError(
-                    "redis xadd failed and job ledger did not reach failed"
-                ) from stream_exc
-            raise
-        try:
-            async with db_connection_scope():
-                snapshot = await asyncio.to_thread(
-                    self._bind_job_stream,
-                    task_id,
-                    str(stream_id),
-                )
-            if (
-                not snapshot
-                or snapshot.get("_stream_bind_conflict")
-                or str(snapshot.get("stream_id") or "") != str(stream_id)
-            ):
-                raise RuntimeError("job ledger stream binding was not durable")
-        except Exception as bind_exc:
-            detail = str(bind_exc).strip().replace("\n", " ")[:400]
-            error_message = f"redis stream ledger binding failed: {type(bind_exc).__name__}"
-            if detail:
-                error_message = f"{error_message}: {detail}"
-            failed_snapshot: Optional[Dict[str, Any]] = None
-            try:
-                async with db_connection_scope():
-                    failed_snapshot = await asyncio.to_thread(
-                        self._fail_unbound_stream_job,
-                        task_id,
-                        expected_stream_id=str(stream_id),
-                        error_message=error_message,
-                    )
-            except Exception:
-                logger.exception(
-                    "stream binding failed and ledger terminalization also failed | task_id=%s",
-                    task_id,
-                )
-            failed_status = str((failed_snapshot or {}).get("status") or "").lower()
-            containment_applied = bool(
-                (failed_snapshot or {}).get("_stream_bind_failed_applied")
-            )
-            ledger_failed = (
-                containment_applied
-                and failed_status == TaskStatus.FAILED.value
-                and str((failed_snapshot or {}).get("stage") or "")
-                == "stream_bind_failed"
-            )
-            durable_stream_won = (
-                not containment_applied
-                and bool((failed_snapshot or {}).get("_durable_stream_won"))
-            )
-            # Delete only after the failed ledger terminal is durable.  If the
-            # same stream is already persisted, its PEL payload must remain
-            # for dispatch or stale recovery.
-            if ledger_failed:
-                try:
-                    await self._client.xdel(REDIS_JOB_STREAM_KEY, stream_id)
-                except Exception:
-                    logger.exception(
-                        "stream binding failed and redis message deletion also failed | task_id=%s stream_id=%s",
-                        task_id,
-                        stream_id,
-                    )
-            # A fast worker may have durably bound this exact stream and moved
-            # it to execution (or even terminal) before the producer observed
-            # its own bind error.  That is a successful enqueue, not a failed
-            # one: retain the stream/PEL and report the real durable outcome.
-            if durable_stream_won:
-                logger.warning(
-                    "producer stream bind lost to durable ledger state | task_id=%s stream_id=%s status=%s",
-                    task_id,
-                    stream_id,
-                    failed_status,
-                )
-                return task_id
-            # XDEL cannot release the partial unique active-lock index.  A
-            # durable failed ledger state is therefore mandatory containment.
-            if not ledger_failed:
-                raise RuntimeError(
-                    "redis stream ledger binding failed and containment is unverified"
-                ) from bind_exc
-            raise RuntimeError(
-                "redis stream ledger binding failed after xadd"
-            ) from bind_exc
+        insert_winner = await self._persist_enqueue_ledger(
+            job,
+            normalized_lock_key,
+        )
+        if insert_winner:
+            return insert_winner
 
-        # Pub/Sub is notification only.  The durable stream + ledger binding
-        # above is the enqueue contract.  A fast worker may already have moved
-        # the row to processing/done; never publish a stale queued projection.
-        if str(snapshot.get("status") or "").lower() == TaskStatus.QUEUED.value:
-            event = {
-                "event_type": TaskStatus.QUEUED.value,
-                "task_id": task_id,
-                "status": TaskStatus.QUEUED.value,
-                "created_at": _utcnow(),
-                "submission_id": snapshot.get("submission_id") or "",
-                "retry_count": snapshot.get("retry_count") or "0",
-                "stage": snapshot.get("stage") or "ingest",
-            }
-            try:
-                await self._publish_event(task_id, event, user_id=user_id)
-            except Exception:
-                logger.warning(
-                    "queued event publish failed after durable enqueue | task_id=%s stream_id=%s",
-                    task_id,
-                    stream_id,
-                    exc_info=True,
-                )
+        stream_id = await self._append_enqueue_stream(job, user_id)
+        snapshot, recovered = await self._bind_enqueue_stream(task_id, stream_id)
+        if recovered:
+            return task_id
+        await self._publish_queued_enqueue_event(
+            task_id,
+            stream_id,
+            snapshot,
+            user_id,
+        )
         return task_id
 
     async def get_status(self, task_id: str) -> Optional[Dict[str, Any]]:

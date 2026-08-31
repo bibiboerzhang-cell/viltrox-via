@@ -371,6 +371,44 @@ def test_reconcile_recent_planned_parent_waits_then_fails_stale_parent() -> None
     assert writes[0][1][1] == "orchestration_failed"
 
 
+def test_reconcile_accepts_generator_loader() -> None:
+    result = asyncio.run(
+        daily_batch.reconcile_recent_parents(
+            DurableQueue(),
+            load=lambda: iter(()),
+        )
+    )
+
+    assert result == {"checked": 0, "reconciled": 0, "pending": 0, "failed": 0}
+
+
+def test_reconcile_streams_generator_before_late_loader_failure() -> None:
+    writes: list[tuple[str, tuple[Any, ...]]] = []
+    now = datetime(2026, 8, 31, 12, tzinfo=timezone.utc)
+
+    def rows():
+        yield {
+            "run_id": "stale-before-loader-error",
+            "started_at": now - timedelta(hours=1),
+            "updated_at": now - timedelta(minutes=16),
+            "summary_json": json.dumps({"phase": "planned"}),
+        }
+        raise RuntimeError("loader interrupted")
+
+    with pytest.raises(RuntimeError, match="loader interrupted"):
+        asyncio.run(
+            daily_batch.reconcile_recent_parents(
+                DurableQueue(),
+                load=rows,
+                write=lambda sql, params: writes.append((sql, params)) or 1,
+                now=now,
+            )
+        )
+
+    assert len(writes) == 1
+    assert "status='failed'" in writes[0][0]
+
+
 @pytest.mark.parametrize(
     "summary_json",
     [

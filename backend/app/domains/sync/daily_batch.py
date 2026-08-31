@@ -408,6 +408,125 @@ def load_running_parents(limit: int = 20) -> list[dict[str, Any]]:
         close_standalone_conn(conn)
 
 
+def _validated_parent_receipt(row: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    try:
+        summary = json.loads(str(row.get("summary_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid_parent_summary") from exc
+    if not isinstance(summary, dict):
+        raise ValueError("invalid_parent_summary_shape")
+    batch = summary.get("batch") if isinstance(summary.get("batch"), dict) else {}
+    raw_task_ids = batch.get("task_ids") or []
+    if not isinstance(raw_task_ids, list):
+        raise ValueError("invalid_parent_task_ids_shape")
+    if any(not isinstance(item, str) or not item.strip() for item in raw_task_ids):
+        raise ValueError("invalid_parent_task_id")
+    return summary, list(dict.fromkeys(item.strip() for item in raw_task_ids))
+
+
+def _parent_age_seconds(row: dict[str, Any], anchor: datetime, default: float) -> float:
+    refreshed_at = row.get("updated_at") or row.get("started_at")
+    if isinstance(refreshed_at, str):
+        try:
+            refreshed_at = datetime.fromisoformat(refreshed_at.replace("Z", "+00:00"))
+        except ValueError:
+            refreshed_at = None
+    if not isinstance(refreshed_at, datetime):
+        return float(default)
+    if refreshed_at.tzinfo is None:
+        refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
+    return max(0.0, (anchor - refreshed_at.astimezone(timezone.utc)).total_seconds())
+
+
+def _mark_parent_failed(
+    run_id: str,
+    exc: BaseException,
+    *,
+    write: Any | None,
+    read: Any | None,
+) -> str:
+    fail_parent(run_id, exc, write=write, read=read)
+    return "failed"
+
+
+def _apply_reconciled_completion(summary: dict[str, Any], completion: dict[str, Any]) -> str:
+    summary["completion"] = completion
+    status = result_status(
+        completion, enqueue_failures=int(summary.get("enqueue_failures") or 0)
+    )
+    summary.update({
+        "status": status, "completion_scope": completion["completion_scope"],
+        "provider_completion": completion["provider_completion"],
+    })
+    return status
+
+
+async def _read_child_completion(queue: Any, task_ids: list[str]) -> dict[str, Any]:
+    statuses: dict[str, str] = {}
+    for task_id in task_ids:
+        try:
+            status_row = await queue.get_status(task_id)
+            statuses[task_id] = str((status_row or {}).get("status") or "unknown").lower()
+        except Exception:
+            statuses[task_id] = "lookup_error"
+    scope = (
+        "provider_terminal"
+        if all(value in TERMINAL_STATUSES for value in statuses.values())
+        else "reconcile_pending"
+    )
+    return completion_snapshot(
+        task_ids, statuses, wait_seconds=0, poll_seconds=0,
+        scope=scope, sla_expired=False,
+    )
+
+
+async def _reconcile_parent(
+    row: dict[str, Any],
+    queue: Any,
+    *,
+    write: Any | None,
+    read: Any | None,
+    anchor: datetime,
+    planned_stale_seconds: float,
+    detached_max_seconds: float,
+) -> str:
+    run_id = str(row.get("run_id") or "")
+    try:
+        summary, task_ids = _validated_parent_receipt(row)
+    except ValueError as exc:
+        return _mark_parent_failed(run_id, exc, write=write, read=read)
+    phase = str(summary.get("phase") or "")
+    if phase in {"planned", "enqueueing"}:
+        age = _parent_age_seconds(row, anchor, planned_stale_seconds)
+        if age < max(0.0, float(planned_stale_seconds)):
+            return "pending"
+        message = "enqueue_progress_interrupted" if phase == "enqueueing" else "planned_parent_checkpoint_missing"
+        return _mark_parent_failed(run_id, TimeoutError(message), write=write, read=read)
+    if phase != "children_enqueued":
+        return _mark_parent_failed(run_id, ValueError("invalid_parent_phase"), write=write, read=read)
+    if not task_ids:
+        completion = completion_snapshot(
+            [], {}, wait_seconds=0, poll_seconds=0,
+            scope="no_work", sla_expired=False,
+        )
+        completion.update({"complete": True, "provider_completion": "not_run"})
+        status = _apply_reconciled_completion(summary, completion)
+        finish_parent(run_id, status, summary, write=write, read=read)
+        return "reconciled"
+    completion = await _read_child_completion(queue, task_ids)
+    if not completion["complete"]:
+        age = _parent_age_seconds(row, anchor, detached_max_seconds)
+        if age >= max(0.0, float(detached_max_seconds)):
+            return _mark_parent_failed(
+                run_id, TimeoutError("child_completion_lifecycle_exceeded"),
+                write=write, read=read,
+            )
+        return "pending"
+    status = _apply_reconciled_completion(summary, completion)
+    finish_parent(run_id, status, summary, write=write, read=read)
+    return "reconciled"
+
+
 async def reconcile_recent_parents(
     queue: Any,
     *,
@@ -420,115 +539,22 @@ async def reconcile_recent_parents(
 ) -> dict[str, int]:
     """Finish detached parents once every linked child has reached a terminal state."""
     rows = (load or load_running_parents)()
-    reconciled = checked = pending = failed = 0
     anchor = now or datetime.now(timezone.utc)
+    outcomes = Counter()
+    checked = 0
     for row in rows:
         checked += 1
-        run_id = str(row.get("run_id") or "")
-        try:
-            summary = json.loads(str(row.get("summary_json") or "{}"))
-        except (TypeError, ValueError, json.JSONDecodeError):
-            fail_parent(run_id, ValueError("invalid_parent_summary"), write=write, read=read)
-            failed += 1
-            continue
-        if not isinstance(summary, dict):
-            fail_parent(run_id, ValueError("invalid_parent_summary_shape"), write=write, read=read)
-            failed += 1
-            continue
-        phase = str(summary.get("phase") or "")
-        batch = summary.get("batch") if isinstance(summary.get("batch"), dict) else {}
-        raw_task_ids = batch.get("task_ids") or []
-        if not isinstance(raw_task_ids, list):
-            fail_parent(run_id, ValueError("invalid_parent_task_ids_shape"), write=write, read=read)
-            failed += 1
-            continue
-        if any(not isinstance(item, str) or not item.strip() for item in raw_task_ids):
-            fail_parent(run_id, ValueError("invalid_parent_task_id"), write=write, read=read)
-            failed += 1
-            continue
-        task_ids = list(dict.fromkeys(item.strip() for item in raw_task_ids))
-        if phase in {"planned", "enqueueing"}:
-            refreshed_at = row.get("updated_at") or row.get("started_at")
-            if isinstance(refreshed_at, str):
-                try:
-                    refreshed_at = datetime.fromisoformat(refreshed_at.replace("Z", "+00:00"))
-                except ValueError:
-                    refreshed_at = None
-            if isinstance(refreshed_at, datetime):
-                if refreshed_at.tzinfo is None:
-                    refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
-                age_seconds = max(0.0, (anchor - refreshed_at.astimezone(timezone.utc)).total_seconds())
-            else:
-                age_seconds = float(planned_stale_seconds)
-            if age_seconds < max(0.0, float(planned_stale_seconds)):
-                pending += 1
-                continue
-            message = "enqueue_progress_interrupted" if phase == "enqueueing" else "planned_parent_checkpoint_missing"
-            fail_parent(run_id, TimeoutError(message), write=write, read=read)
-            failed += 1
-            continue
-        if phase != "children_enqueued":
-            fail_parent(run_id, ValueError("invalid_parent_phase"), write=write, read=read)
-            failed += 1
-            continue
-        if not task_ids:
-            completion = completion_snapshot(
-                [], {}, wait_seconds=0, poll_seconds=0,
-                scope="no_work", sla_expired=False,
-            )
-            completion.update({"complete": True, "provider_completion": "not_run"})
-            summary["completion"] = completion
-            status = result_status(
-                completion, enqueue_failures=int(summary.get("enqueue_failures") or 0)
-            )
-            summary.update({
-                "status": status, "completion_scope": completion["completion_scope"],
-                "provider_completion": completion["provider_completion"],
-            })
-            finish_parent(run_id, status, summary, write=write, read=read)
-            reconciled += 1
-            continue
-        statuses: dict[str, str] = {}
-        for task_id in task_ids:
-            try:
-                status_row = await queue.get_status(str(task_id))
-                statuses[str(task_id)] = str((status_row or {}).get("status") or "unknown").lower()
-            except Exception:
-                statuses[str(task_id)] = "lookup_error"
-        completion = completion_snapshot(
-            task_ids, statuses, wait_seconds=0, poll_seconds=0,
-            scope="provider_terminal" if all(value in TERMINAL_STATUSES for value in statuses.values()) else "reconcile_pending",
-            sla_expired=False,
-        )
-        if not completion["complete"]:
-            refreshed_at = row.get("updated_at") or row.get("started_at")
-            if isinstance(refreshed_at, str):
-                try:
-                    refreshed_at = datetime.fromisoformat(refreshed_at.replace("Z", "+00:00"))
-                except ValueError:
-                    refreshed_at = None
-            if isinstance(refreshed_at, datetime):
-                if refreshed_at.tzinfo is None:
-                    refreshed_at = refreshed_at.replace(tzinfo=timezone.utc)
-                detached_age = max(0.0, (anchor - refreshed_at.astimezone(timezone.utc)).total_seconds())
-            else:
-                detached_age = float(detached_max_seconds)
-            if detached_age >= max(0.0, float(detached_max_seconds)):
-                fail_parent(run_id, TimeoutError("child_completion_lifecycle_exceeded"), write=write, read=read)
-                failed += 1
-                continue
-            pending += 1
-            continue
-        summary["completion"] = completion
-        enqueue_failures = int(summary.get("enqueue_failures") or 0)
-        status = result_status(completion, enqueue_failures=enqueue_failures)
-        summary.update({
-            "status": status, "completion_scope": completion["completion_scope"],
-            "provider_completion": completion["provider_completion"],
-        })
-        finish_parent(run_id, status, summary, write=write, read=read)
-        reconciled += 1
-    return {"checked": checked, "reconciled": reconciled, "pending": pending, "failed": failed}
+        outcomes[await _reconcile_parent(
+            row, queue, write=write, read=read, anchor=anchor,
+            planned_stale_seconds=planned_stale_seconds,
+            detached_max_seconds=detached_max_seconds,
+        )] += 1
+    return {
+        "checked": checked,
+        "reconciled": outcomes["reconciled"],
+        "pending": outcomes["pending"],
+        "failed": outcomes["failed"],
+    }
 
 
 def insert_parent(

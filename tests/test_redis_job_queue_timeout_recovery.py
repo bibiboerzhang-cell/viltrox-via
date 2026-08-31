@@ -248,6 +248,66 @@ def test_timeout_transaction_rolls_back_ledger_when_item_update_fails(
     assert item["error"] == ""
 
 
+def test_timeout_rollback_failure_is_logged_without_escaping_primary_failure(
+    queue,
+    ledger_conn,
+    monkeypatch,
+):
+    old = "2000-01-01T00:00:00Z"
+    seed(
+        ledger_conn,
+        "rollback-report-fails",
+        status="processing",
+        started_at=old,
+        timeout_seconds=1,
+    )
+    ledger_conn.execute(
+        "INSERT INTO vkpi_async_task_items (task_id, status, error, updated_at) VALUES (?, 'pending', '', ?)",
+        ("rollback-report-fails", old),
+    )
+    ledger_conn.commit()
+
+    class RollbackReportsFailure:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def execute(self, sql, params=()):
+            compact = " ".join(str(sql).split())
+            if compact.startswith("UPDATE vkpi_async_task_items"):
+                raise sqlite3.OperationalError("primary item update failure")
+            return self.inner.execute(sql, params)
+
+        def commit(self):
+            return self.inner.commit()
+
+        def rollback(self):
+            self.inner.rollback()
+            raise RuntimeError("rollback telemetry failure")
+
+    class RecordingLogger:
+        def __init__(self):
+            self.warnings: list[str] = []
+
+        def warning(self, message, *args, **kwargs):
+            self.warnings.append(message % args)
+
+    recording_logger = RecordingLogger()
+    monkeypatch.setattr(
+        queue_mod,
+        "get_conn",
+        lambda: RollbackReportsFailure(ledger_conn),
+    )
+    monkeypatch.setattr(queue_mod, "logger", recording_logger)
+
+    assert queue._mark_timed_out_jobs() == 0
+    assert any("failed to rollback timed-out job transaction" in item for item in recording_logger.warnings)
+    assert any("primary item update failure" in item for item in recording_logger.warnings)
+    row = ledger_conn.execute(
+        "SELECT status FROM job_execution_ledger WHERE task_id='rollback-report-fails'"
+    ).fetchone()
+    assert row["status"] == "processing"
+
+
 @pytest.mark.parametrize("affected_rows", [0, 1])
 def test_postgres_compat_update_cursor_preserves_rowcount(affected_rows):
     class RawCursor:
