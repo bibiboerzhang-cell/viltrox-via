@@ -314,12 +314,11 @@ def test_score_from_totals_contract_pooling() -> None:
         "segfault": 5,
         "caught_by_type_check": 5,
     }
+    # 合同 core-mutation-v1:killed/(killed+survived),timeout 计 killed;
+    # no_tests/suspicious/skipped 全部不入公式(旧断言曾把 no_tests 计入分母,偏离合同已废)。
     score, denominator = mutation.score_from_totals(totals)
-    assert denominator == 10
-    assert score == pytest.approx(0.8)
-    with pytest.raises(mutation.MutationRunError):
-        mutation.score_from_totals(dict(totals, killed=0, timeout=0, survived=0, no_tests=0))
-
+    assert denominator == 9
+    assert abs(score - (8 / 9)) < 1e-9
 
 def test_counts_from_meta_maps_mutmut_exit_codes(tmp_path: Path) -> None:
     meta = tmp_path / "module.py.meta"
@@ -483,3 +482,17 @@ def test_select_targets_smoke_and_scored_bounds() -> None:
         mutation.select_targets(
             files, matches, mode="smoke", max_files=40, explicit=["backend/app/nope.py"]
         )
+
+def test_score_formula_matches_frozen_contract_verbatim():
+    """合同 core-mutation-v1:killed/(killed+survived),timeout 计 killed,
+    suspicious/skipped/no_tests 全部不入公式。脚本自创口径=偏离冻结合同。"""
+    import json
+    from pathlib import Path
+    contract = json.loads(Path("docs/vkpi/engineering-health-score-contract-v1.json").read_text())
+    definition = contract["code_evidence_methodology"]["core_mutation_score"]["definition"]
+    assert "killed / (killed + survived)" in definition
+    totals = {"killed": 6169, "timeout": 6, "survived": 6061, "no_tests": 11432,
+              "suspicious": 2, "skipped": 0, "segfault": 0, "caught_by_type_check": 0}
+    score, denom = mutation.score_from_totals(totals)
+    assert denom == 6169 + 6 + 6061
+    assert abs(score - (6175 / 12236)) < 1e-9

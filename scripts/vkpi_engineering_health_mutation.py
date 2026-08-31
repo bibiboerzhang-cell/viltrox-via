@@ -402,9 +402,12 @@ def collect_results(
 
 
 def score_from_totals(totals: dict[str, int]) -> tuple[float, int]:
-    """Contract pooling: (killed+timeout) / (killed+timeout+survived+no_tests)."""
+    """合同 core-mutation-v1 逐字:score = killed/(killed+survived),
+    timeout 计入 killed,suspicious/skipped 双侧剔除,**no_tests 不入公式**
+    (docstring 曾自创把 no_tests 计入分母 —— 合同已冻结,脚本服从合同)。
+    no_tests 的缺口由覆盖率指标度量,不在这里二次惩罚;总量照记回执供审计。"""
     killed_pool = totals["killed"] + totals["timeout"]
-    denominator = killed_pool + totals["survived"] + totals["no_tests"]
+    denominator = killed_pool + totals["survived"]
     if denominator <= 0:
         raise MutationRunError("mutation score denominator must be positive")
     return killed_pool / denominator, denominator
