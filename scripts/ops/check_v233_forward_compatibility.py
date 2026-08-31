@@ -21,6 +21,19 @@ from typing import Any, Iterable
 
 import psycopg
 
+if __package__:
+    from .atomic_release_shared import (
+        FORWARD_COMPATIBILITY_POLICY_ID,
+        _forward_compatibility_evidence,
+    )
+    from .atomic_release_units import LayoutError
+else:
+    from atomic_release_shared import (  # type: ignore[no-redef]
+        FORWARD_COMPATIBILITY_POLICY_ID,
+        _forward_compatibility_evidence,
+    )
+    from atomic_release_units import LayoutError  # type: ignore[no-redef]
+
 
 ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = ROOT / "migrations"
@@ -95,6 +108,16 @@ POLICY: dict[str, dict[str, Any]] = {
     "256_vkpi_financial_artifact_invalidation.sql": {
         "rollback": "incompatible",
         "reason": "v233 can restore or download financial artifacts withdrawn by the current truth contract",
+    },
+    "305_vkpi_kol_pool_language_inferred.sql": {
+        "rollback": "compatible",
+        "structural_policy": FORWARD_COMPATIBILITY_POLICY_ID,
+        "reason": "only reviewed nullable/defaultless inferred-language columns are added",
+    },
+    "306_vkpi_product_persona_term_performance.sql": {
+        "rollback": "compatible",
+        "structural_policy": FORWARD_COMPATIBILITY_POLICY_ID,
+        "reason": "only the reviewed nullable/defaultless persona evidence column is added",
     },
 }
 
@@ -241,6 +264,16 @@ def evaluate(
             row["verdict"] = "blocked"
             row["reason"] = "forward_file_contains_transaction_control"
             safe = False
+        elif policy.get("structural_policy"):
+            try:
+                evidence = _forward_compatibility_evidence(name)
+            except LayoutError:
+                row["verdict"] = "blocked"
+                row["reason"] = "forward_structural_policy_failed"
+                safe = False
+            else:
+                row["verdict"] = "compatible"
+                row["structural_evidence"] = evidence
         elif policy["rollback"] == "incompatible":
             row["verdict"] = "blocked"
             safe = False

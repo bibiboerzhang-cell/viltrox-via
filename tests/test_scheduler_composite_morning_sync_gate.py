@@ -143,10 +143,12 @@ def test_dedicated_daily_sync_path_does_not_use_composite_scheduler_task() -> No
 
     assert "scripts/cron_daily_sync.py" in unit
     assert "WorkingDirectory=/opt/viltrox-2.0/current" in unit
+    assert "EnvironmentFile=/opt/viltrox-2.0/.env" in unit
     assert "Environment=PYTHONPATH=/opt/viltrox-2.0/current/backend" in unit
     assert "Environment=PYTHONDONTWRITEBYTECODE=1" in unit
     assert (
-        "env PYTHONDONTWRITEBYTECODE=1 "
+        "/usr/bin/env VKPI_SKIP_DOTENV=1 PYTHONDONTWRITEBYTECODE=1 "
+        "PYTHONPATH=/opt/viltrox-2.0/current/backend "
         "/opt/viltrox-2.0/.venv/bin/python -B scripts/cron_daily_sync.py"
     ) in unit
     assert ".venv/bin/python scripts/cron_daily_sync.py" not in unit
@@ -160,13 +162,17 @@ def test_daily_timer_installer_keeps_both_remote_python_paths_bytecode_free() ->
         encoding="utf-8"
     )
 
-    assert installer.count("WorkingDirectory=${REMOTE_ROOT}/current") == 2
+    # Primary and qualified syncs plus the alert and deadman watchdogs all use
+    # the immutable current release as their working directory.
+    assert installer.count("WorkingDirectory=${REMOTE_ROOT}/current") == 4
     assert installer.count(
         "Environment=PYTHONPATH=${REMOTE_ROOT}/current/backend"
     ) == 2
     assert installer.count("Environment=PYTHONDONTWRITEBYTECODE=1") == 2
     assert installer.count(
-        "env PYTHONDONTWRITEBYTECODE=1 ${REMOTE_ROOT}/.venv/bin/python -B "
+        "/usr/bin/env VKPI_SKIP_DOTENV=1 PYTHONDONTWRITEBYTECODE=1 "
+        "PYTHONPATH=${REMOTE_ROOT}/current/backend "
+        "${REMOTE_ROOT}/.venv/bin/python -B "
         "scripts/cron_daily_sync.py"
     ) == 2
     assert (

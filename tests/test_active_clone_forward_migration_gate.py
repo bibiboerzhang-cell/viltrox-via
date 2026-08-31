@@ -13,7 +13,14 @@ OPS = ROOT / "scripts" / "ops"
 sys.path.insert(0, str(OPS))
 
 import atomic_release_layout  # noqa: E402
+import atomic_release_shared  # noqa: E402
 import staging_db_clone  # noqa: E402
+
+
+FORWARD_MIGRATIONS = (
+    "305_vkpi_kol_pool_language_inferred.sql",
+    "306_vkpi_product_persona_term_performance.sql",
+)
 
 
 def _database_url(database: str) -> str:
@@ -165,7 +172,7 @@ def test_clone_reuse_seal_rejects_missing_or_mismatched_declaration(
 
 def test_clone_reuse_seal_accepts_exact_declaration_and_preserves_owner() -> None:
     database = staging_db_clone.clone_name_for_release("database-owner")
-    migrations = "296.sql,297.sql"
+    migrations = ",".join(FORWARD_MIGRATIONS)
     metadata = atomic_release_layout._database_release_metadata(
         strategy="reuse-active-clone",
         source_database="",
@@ -175,6 +182,7 @@ def test_clone_reuse_seal_accepts_exact_declaration_and_preserves_owner() -> Non
         compatibility_declaration=migrations,
         database_owner_release_id="database-owner",
     )
+    evidence = metadata.pop("forward_compatibility_evidence")
     assert metadata == {
         "database_strategy": "reuse-active-clone",
         "source_database": None,
@@ -182,6 +190,51 @@ def test_clone_reuse_seal_accepts_exact_declaration_and_preserves_owner() -> Non
         "env_fingerprint_before": "a" * 64,
         "database_owner_release_id": "database-owner",
     }
+    assert evidence["policy_id"] == "vkpi-additive-nullable-defaultless-v1"
+    assert evidence["guarantees"] == [
+        "additive_columns_only",
+        "nullable_columns",
+        "defaultless_columns",
+        "no_row_writes",
+    ]
+    assert [row["name"] for row in evidence["migrations"]] == list(
+        FORWARD_MIGRATIONS
+    )
+    assert all(len(row["sha256"]) == 64 for row in evidence["migrations"])
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("JSONB NULL", "JSONB NOT NULL"),
+        ("JSONB NULL", "JSONB NULL DEFAULT '{}'::jsonb"),
+        (
+            "COMMENT ON COLUMN vkpi_product_persona.term_performance_json",
+            "UPDATE vkpi_product_persona SET term_performance_json='{}'::jsonb;\n"
+            "COMMENT ON COLUMN vkpi_product_persona.term_performance_json",
+        ),
+    ],
+)
+def test_forward_policy_rejects_non_nullable_defaulted_or_row_writing_drift(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    name = FORWARD_MIGRATIONS[1]
+    source = (ROOT / "migrations" / name).read_text(encoding="utf-8")
+    assert old in source
+    (tmp_path / name).write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    with pytest.raises(atomic_release_layout.LayoutError, match="forward-compatible"):
+        atomic_release_shared._forward_compatibility_evidence(
+            name,
+            migrations_dir=tmp_path,
+        )
+
+
+def test_forward_policy_fails_closed_for_unreviewed_migration() -> None:
+    with pytest.raises(atomic_release_layout.LayoutError, match="not reviewed by policy"):
+        atomic_release_shared._forward_compatibility_evidence("307_unreviewed.sql")
 
 
 def test_deploy_exception_is_bounded_by_lineage_declaration_and_backup() -> None:

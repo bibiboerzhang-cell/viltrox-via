@@ -1,0 +1,11 @@
+{
+  "schema_version": "vkpi-post-sync-baseline/v1",
+  "legacy_excel_p2d_minimum": 1011,
+  "observed_at": "2026-08-10T15:28:28Z",
+  "evidence": {
+    "path": "evidence/prod-state-audit-20260810.json",
+    "sha256": "30b39adb4e2a515621d24241315430f5c5af926c9fe67133ef2b515546fa95c4",
+    "field": "kol_pool.legacy_excel_p2d"
+  },
+  "note": "Versioned lower-bound policy. Raise only with a reviewed production evidence receipt; never infer it from UI copy."
+}

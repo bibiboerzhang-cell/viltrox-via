@@ -60,6 +60,7 @@ PYTHON_ENTRYPOINTS = (
     "scripts/ops/audit_vkpi_post_sync_state.py",
     "scripts/ops/check_vkpi_r2_readiness.py",
     "scripts/ops/legacy_to_atomic_preflight_transport.py",
+    "scripts/ops/vkpi_sync_watchdog.py",
 )
 
 
@@ -142,7 +143,9 @@ def test_python_generated_remote_commands_have_both_guards() -> None:
 
     assert audit.count(
         "env PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -B -"
-    ) == 2
+    ) == 1
+    assert "audit_remote(args.remote, args.remote_root, args.sync_log_path, expected_invocation)" in audit
+    assert "audit_local(args.remote_root, args.sync_log_path, expected_invocation)" in audit
     assert "env PYTHONDONTWRITEBYTECODE=1 python3 -B -" in readiness
     assert '"PYTHONDONTWRITEBYTECODE=1"' in transport
     assert 'python_path,\n        "-B",\n        "-",' in transport

@@ -308,6 +308,20 @@ def test_migration_305_up_up_down_up_on_real_postgres(pg_dsn: str) -> None:
                 "SELECT COUNT(*) AS n FROM vkpi_kol_pool WHERE language_inferred IS NOT NULL"
             ).fetchone()[0] == 0
 
+            # A pre-305 writer names only the columns it knew.  The additive,
+            # nullable, defaultless columns must not make that old write fail.
+            conn.execute(
+                "INSERT INTO vkpi_kol_pool(handle, language) VALUES "
+                "('legacy-writer-after-305', 'fr')"
+            )
+            assert conn.execute(
+                "SELECT language_inferred, language_inferred_confidence, "
+                "language_inferred_source, language_inferred_sample_n, "
+                "language_inferred_at, language_inferred_method "
+                "FROM vkpi_kol_pool WHERE handle='legacy-writer-after-305'"
+            ).fetchone() == (None, None, None, None, None, None)
+            baseline_rows = self_reported_rows()
+
             # 写入推断值之后,自报列依旧一动不动:这就是「分列」的全部意义。
             conn.execute(
                 "UPDATE vkpi_kol_pool "

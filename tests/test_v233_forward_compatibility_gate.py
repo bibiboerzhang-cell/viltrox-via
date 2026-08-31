@@ -6,7 +6,13 @@ from scripts.ops import check_v233_forward_compatibility as gate
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PENDING = sorted(gate.POLICY)
+PENDING = sorted(
+    name for name in gate.POLICY if 234 <= int(name[:3]) <= 256
+)
+STRUCTURAL_FORWARD = [
+    "305_vkpi_kol_pool_language_inferred.sql",
+    "306_vkpi_product_persona_term_performance.sql",
+]
 ZERO_FACTS = {
     "executing_actions": 0,
     "archived_search_sessions": 0,
@@ -29,6 +35,18 @@ def test_policy_exactly_covers_forward_migrations_234_through_256():
         and 234 <= int(path.name[:3]) <= 256
     )
     assert PENDING == discovered
+
+
+def test_operator_policy_and_deploy_policy_share_305_306_structural_evidence():
+    assert sorted(set(gate.POLICY) - set(PENDING)) == STRUCTURAL_FORWARD
+    report = gate.evaluate(STRUCTURAL_FORWARD, facts=ZERO_FACTS, phase="predeploy")
+    assert report["decision"]["safe_to_declare_forward_compatible"] is True
+    for row in report["migrations"]:
+        evidence = row["structural_evidence"]
+        assert evidence["policy_id"] == "vkpi-additive-nullable-defaultless-v1"
+        assert [item["name"] for item in evidence["migrations"]] == [
+            row["migration"]
+        ]
 
 
 def test_all_policy_files_leave_transaction_to_runner():

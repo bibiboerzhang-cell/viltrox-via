@@ -48,6 +48,190 @@ RELEASE_SHARED_ALIASES = {
     *SHARED_OPTIONAL,
 }
 MAX_ROLLBACK_FILE_BYTES = 1024 * 1024
+FORWARD_COMPATIBILITY_POLICY_ID = "vkpi-additive-nullable-defaultless-v1"
+FORWARD_COMPATIBILITY_POLICY = {
+    "305_vkpi_kol_pool_language_inferred.sql": {
+        "table": "vkpi_kol_pool",
+        "columns": (
+            ("language_inferred", "TEXT"),
+            ("language_inferred_confidence", "TEXT"),
+            ("language_inferred_source", "TEXT"),
+            ("language_inferred_sample_n", "INTEGER"),
+            ("language_inferred_at", "TIMESTAMPTZ"),
+            ("language_inferred_method", "TEXT"),
+        ),
+        "indexes": (
+            (
+                "idx_vkpi_kol_pool_language_inferred",
+                "language_inferred",
+            ),
+        ),
+    },
+    "306_vkpi_product_persona_term_performance.sql": {
+        "table": "vkpi_product_persona",
+        "columns": (("term_performance_json", "JSONB"),),
+        "indexes": (),
+    },
+}
+_ADD_COLUMN_RE = re.compile(
+    r"^ALTER\s+TABLE\s+([a-zA-Z0-9_]+)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+"
+    r"([a-zA-Z0-9_]+)\s+(.+)$",
+    re.IGNORECASE | re.DOTALL,
+)
+_COMMENT_COLUMN_RE = re.compile(
+    r"^COMMENT\s+ON\s+COLUMN\s+([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s+"
+    r"IS\s+'(?:[^']|'')*'$",
+    re.IGNORECASE | re.DOTALL,
+)
+_CREATE_INDEX_RE = re.compile(
+    r"^CREATE\s+INDEX\s+IF\s+NOT\s+EXISTS\s+([a-zA-Z0-9_]+)\s+"
+    r"ON\s+([a-zA-Z0-9_]+)\s*\(\s*([a-zA-Z0-9_]+)\s*\)$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _forward_sql_statements(source: str) -> tuple[str, ...]:
+    """Split reviewed DDL while ignoring line comments and quoted semicolons."""
+
+    statements: list[str] = []
+    current: list[str] = []
+    index = 0
+    quoted = False
+    while index < len(source):
+        char = source[index]
+        next_char = source[index + 1] if index + 1 < len(source) else ""
+        if not quoted and char == "-" and next_char == "-":
+            newline = source.find("\n", index + 2)
+            index = len(source) if newline < 0 else newline + 1
+            current.append(" ")
+            continue
+        if char == "'":
+            current.append(char)
+            if quoted and next_char == "'":
+                current.append(next_char)
+                index += 2
+                continue
+            quoted = not quoted
+            index += 1
+            continue
+        if char == ";" and not quoted:
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    if quoted:
+        raise LayoutError("forward-compatible migration has an unterminated string literal")
+    trailing = "".join(current).strip()
+    if trailing:
+        raise LayoutError("forward-compatible migration must terminate every statement")
+    return tuple(statements)
+
+
+def _validate_forward_migration(
+    name: str,
+    *,
+    migrations_dir: Path,
+) -> dict[str, object]:
+    policy = FORWARD_COMPATIBILITY_POLICY.get(name)
+    if policy is None:
+        raise LayoutError(f"forward-compatible migration is not reviewed by policy: {name}")
+    path = migrations_dir / name
+    payload, _info = _read_regular_single_link(
+        path,
+        label=f"forward-compatible migration {name}",
+        max_bytes=MAX_ROLLBACK_FILE_BYTES,
+    )
+    try:
+        source = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise LayoutError(f"forward-compatible migration is not UTF-8: {name}") from exc
+
+    table = str(policy["table"])
+    expected_columns = tuple(policy["columns"])
+    expected_indexes = tuple(policy["indexes"])
+    columns: list[tuple[str, str]] = []
+    comments: list[str] = []
+    indexes: list[tuple[str, str]] = []
+    for statement in _forward_sql_statements(source):
+        if match := _ADD_COLUMN_RE.fullmatch(statement):
+            observed_table, column, definition = match.groups()
+            normalized_definition = " ".join(definition.upper().split())
+            expected_type = dict(expected_columns).get(column)
+            if (
+                observed_table != table
+                or expected_type is None
+                or normalized_definition not in {expected_type, f"{expected_type} NULL"}
+            ):
+                raise LayoutError(
+                    f"forward-compatible migration changes an unreviewed column shape: {name}"
+                )
+            columns.append((column, expected_type))
+            continue
+        if match := _COMMENT_COLUMN_RE.fullmatch(statement):
+            observed_table, column = match.groups()
+            if observed_table != table or column not in dict(expected_columns):
+                raise LayoutError(
+                    f"forward-compatible migration comments an unreviewed column: {name}"
+                )
+            comments.append(column)
+            continue
+        if match := _CREATE_INDEX_RE.fullmatch(statement):
+            index_name, observed_table, column = match.groups()
+            if observed_table != table:
+                raise LayoutError(
+                    f"forward-compatible migration indexes an unreviewed table: {name}"
+                )
+            indexes.append((index_name, column))
+            continue
+        raise LayoutError(
+            f"forward-compatible migration contains non-additive SQL: {name}"
+        )
+
+    expected_column_names = tuple(column for column, _type in expected_columns)
+    if tuple(columns) != expected_columns or tuple(comments) != expected_column_names:
+        raise LayoutError(
+            f"forward-compatible migration column set differs from policy: {name}"
+        )
+    if tuple(indexes) != expected_indexes:
+        raise LayoutError(
+            f"forward-compatible migration index set differs from policy: {name}"
+        )
+    return {
+        "name": name,
+        "sha256": hashlib.sha256(payload).hexdigest(),
+        "table": table,
+        "columns": [column for column, _type in expected_columns],
+    }
+
+
+def _forward_compatibility_evidence(
+    declaration: str,
+    *,
+    migrations_dir: Path | None = None,
+) -> dict[str, object] | None:
+    if not declaration:
+        return None
+    names = tuple(declaration.split(","))
+    if any(not name or name.strip() != name for name in names) or len(set(names)) != len(names):
+        raise LayoutError("forward-compatibility declaration must be ordered and unique")
+    directory = migrations_dir or Path(__file__).resolve().parents[2] / "migrations"
+    migrations = [
+        _validate_forward_migration(name, migrations_dir=directory) for name in names
+    ]
+    return {
+        "policy_id": FORWARD_COMPATIBILITY_POLICY_ID,
+        "guarantees": [
+            "additive_columns_only",
+            "nullable_columns",
+            "defaultless_columns",
+            "no_row_writes",
+        ],
+        "migrations": migrations,
+    }
 
 
 def _read_regular_single_link(
@@ -443,7 +627,7 @@ def _database_release_metadata(
     pending_migrations: str,
     compatibility_declaration: str,
     database_owner_release_id: str = "",
-) -> dict[str, str | None]:
+) -> dict[str, object]:
     if strategy == "in-place":
         if (
             source_database
@@ -474,13 +658,17 @@ def _database_release_metadata(
             raise LayoutError(
                 "clone-reuse migrations require an exact forward-compatibility declaration"
             )
-        return {
+        metadata: dict[str, object] = {
             "database_strategy": "reuse-active-clone",
             "source_database": None,
             "target_database": target_database,
             "env_fingerprint_before": env_fingerprint_before,
             "database_owner_release_id": database_owner_release_id,
         }
+        evidence = _forward_compatibility_evidence(compatibility_declaration)
+        if evidence is not None:
+            metadata["forward_compatibility_evidence"] = evidence
+        return metadata
     if strategy != "staging-clone":
         raise LayoutError(f"unsupported database release strategy: {strategy!r}")
     if database_owner_release_id:

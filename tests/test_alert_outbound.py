@@ -229,6 +229,67 @@ def test_url_never_leaks_into_logs_or_results(db: sqlite3.Connection, monkeypatc
     assert alert_outbound._redact(f"boom {FAKE_URL}") == "boom <webhook-url>"
 
 
+def test_stateless_failure_notifier_never_touches_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(alert_outbound.ENV_WEBHOOK_URL, FAKE_URL)
+    monkeypatch.setattr(alert_outbound, "load_state", lambda key: pytest.fail("stateless path read DB state"))
+    monkeypatch.setattr(alert_outbound, "save_state", lambda key, state: pytest.fail("stateless path wrote DB state"))
+    capture = _Capture()
+
+    result = alert_outbound.notify_stateless(
+        key="systemd-failure:vkpi-sync-daily.service",
+        title="daily sync failed",
+        body="inspect journal",
+        transport=capture,
+    )
+
+    assert result == {
+        "configured": True,
+        "kind": "generic",
+        "key": "systemd-failure:vkpi-sync-daily.service",
+        "sent": True,
+        "reason": "sent",
+        "status": 200,
+    }
+    assert capture.payloads[0]["rule_key"] is None
+
+
+def test_stateless_failure_notifier_is_honest_when_channel_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(alert_outbound.ENV_WEBHOOK_URL, raising=False)
+    capture = _Capture()
+
+    result = alert_outbound.notify_stateless(key="daily-sync-deadman", title="failed", transport=capture)
+
+    assert result == {
+        "configured": False,
+        "kind": "generic",
+        "key": "daily-sync-deadman",
+        "sent": False,
+        "reason": "not_configured",
+    }
+    assert capture.payloads == []
+
+
+def test_stateless_failure_notifier_does_not_leak_url_on_delivery_error(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setenv(alert_outbound.ENV_WEBHOOK_URL, FAKE_URL)
+
+    def explode(payload: dict[str, Any], timeout_s: float) -> tuple[int, str]:
+        raise ConnectionError(f"failed {FAKE_URL}")
+
+    with caplog.at_level(logging.DEBUG, logger="viltrox"):
+        result = alert_outbound.notify_stateless(
+            key="daily-sync-deadman",
+            title="failed",
+            transport=explode,
+        )
+
+    assert result["reason"] == "delivery_error"
+    assert FAKE_URL not in str(result)
+    assert FAKE_URL not in caplog.text
+
+
 # ── 每日摘要 ──
 
 

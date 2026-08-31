@@ -443,7 +443,10 @@ def test_forward_compatible_clone_reuse_retains_schema3_rollback_lineage(
         Path("releases") / owner_release_id,
         target_is_directory=True,
     )
-    pending = "296.sql,297.sql"
+    pending = (
+        "305_vkpi_kol_pool_language_inferred.sql,"
+        "306_vkpi_product_persona_term_performance.sql"
+    )
     release = _release(
         root,
         release_id,
@@ -495,8 +498,19 @@ def test_forward_compatible_clone_reuse_retains_schema3_rollback_lineage(
         assert payload["database_owner_release_id"] == owner_release_id
         assert payload["target_database"] == database
         assert payload["env_fingerprint_before"] == fingerprint
-        assert payload["pending_migrations"] == ["296.sql", "297.sql"]
-        assert payload["forward_compatible_migrations"] == ["296.sql", "297.sql"]
+        assert payload["pending_migrations"] == [
+            "305_vkpi_kol_pool_language_inferred.sql",
+            "306_vkpi_product_persona_term_performance.sql",
+        ]
+        assert payload["forward_compatible_migrations"] == [
+            "305_vkpi_kol_pool_language_inferred.sql",
+            "306_vkpi_product_persona_term_performance.sql",
+        ]
+        evidence = payload["forward_compatibility_evidence"]
+        assert evidence["policy_id"] == "vkpi-additive-nullable-defaultless-v1"
+        assert [row["name"] for row in evidence["migrations"]] == payload[
+            "pending_migrations"
+        ]
     assert rollback["schema"] == 3
     assert rollback["database_rollback"] == "restore-captured-env-on-reused-database"
     assert rollback["schema_retained_on_app_rollback"] is True

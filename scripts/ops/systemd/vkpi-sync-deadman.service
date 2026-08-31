@@ -1,0 +1,28 @@
+[Unit]
+Description=Require strict V-KPI daily sync post-run acceptance
+Wants=network-online.target
+After=network-online.target vkpi-sync-daily.service
+
+[Service]
+Type=oneshot
+User=viltrox
+Group=viltrox
+UMask=0077
+WorkingDirectory=/opt/viltrox-2.0/current
+EnvironmentFile=/opt/viltrox-2.0/.env
+ExecStart=/usr/bin/env VKPI_SKIP_DOTENV=1 PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/opt/viltrox-2.0/current/backend /opt/viltrox-2.0/.venv/bin/python -B scripts/ops/vkpi_sync_watchdog.py deadman --remote-root /opt/viltrox-2.0
+TimeoutStartSec=5m
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

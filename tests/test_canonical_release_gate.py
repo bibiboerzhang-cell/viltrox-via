@@ -40,9 +40,17 @@ def test_every_release_entrypoint_delegates_to_the_canonical_gate() -> None:
     ]
     assert "bash ./scripts/verify_repo.sh" in workflow
     assert makefile.split("verify:\n", 1)[1].strip() == "@bash scripts/verify.sh"
-    assert "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1" in deploy
     assert '"${TRUSTED_CANDIDATE_VERIFIER}" run-deploy-gate' in deploy
     assert '--snapshot "${DEPLOY_CANDIDATE_DIR}"' in deploy
+    for binding in (
+        '--runtime-root "${runtime_root}"',
+        '--health-env-file "${LOCAL_HEALTH_ENV_FILE}"',
+        '--health-url "${health_url}"',
+        '--base-url "${base_url}"',
+        '--verify-json-out "${verify_receipt}"',
+        '--acceptance-json-out "${acceptance_receipt}"',
+    ):
+        assert binding in deploy
     # BSD chmod (the local deployment controller runs on macOS) does not
     # accept GNU-style ``--`` after the mode and would abort before upload.
     assert "chmod 700 --" not in deploy
@@ -215,16 +223,17 @@ def test_static_gate_runtime_step_is_deterministic_by_default() -> None:
 def test_cloud_deploy_requires_explicit_local_health_secret_source() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
     source_guard_at = deploy.index('LOCAL_HEALTH_ENV_FILE="${VKPI_HEALTH_ENV_FILE:-}"')
-    gate_at = deploy.index(
-        "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1"
-    )
+    gate_at = deploy.index("\nrun_predeploy_embedded_browser_gate\n")
     assert source_guard_at < gate_at
     source_guard = deploy[source_guard_at:gate_at]
     assert 'if [ -z "${LOCAL_HEALTH_ENV_FILE}" ]; then' in source_guard
     assert "must explicitly name the protected local health-token dotenv" in source_guard
 
-    gate_block = deploy[gate_at:deploy.index("SSH_TARGET=", gate_at)]
-    assert 'OPS_HEALTH_TOKEN= VKPI_HEALTH_ENV_FILE="${LOCAL_HEALTH_ENV_FILE}"' in gate_block
+    gate_block = deploy.split("run_predeploy_canonical_gate() {", 1)[1].split(
+        "\n}\n\nrun_predeploy_final_runtime_gate() {", 1
+    )[0]
+    assert '--health-env-file "${LOCAL_HEALTH_ENV_FILE}"' in gate_block
+    assert "OPS_HEALTH_TOKEN" not in gate_block
     assert "x-ops-token" not in gate_block
 
 
@@ -260,26 +269,25 @@ def test_reviewed_warning_ratchet_is_fail_closed_and_not_raised_to_current_debt(
         check_repo_hardening._load_warning_baseline(tmp_path / "missing.json")
 
 
-def test_deploy_runs_canonical_gate_before_any_build_backup_or_remote_command() -> None:
+def test_deploy_runs_canonical_gate_before_remote_transport_or_mutation() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
-    gate_at = deploy.index(
-        "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1"
+    browser_gate = deploy.split("run_predeploy_embedded_browser_gate() {", 1)[1].split(
+        "\n}\n\ncapture_remote_sync_unit_state() {", 1
+    )[0]
+    assert browser_gate.index("start_local_candidate_browser_runtime") < browser_gate.index(
+        "run_predeploy_canonical_gate"
+    ) < browser_gate.index("cleanup_local_candidate_browser_runtime")
+    assert "run_predeploy_embedded_browser_gate\nsetup_deploy_ssh_transport" in deploy
+    top_level = deploy.split("\nrun_predeploy_embedded_browser_gate\n", 1)[1]
+    assert top_level.index("setup_deploy_ssh_transport") < top_level.index(
+        "acquire_remote_deploy_lock"
     )
-    mutations = (
-        '"${SCRIPT_DIR}/backup_prod_vkpi.sh"',
-        '\nssh "${SSH_TARGET}"',
-        "\nrsync -az",
-    )
-    for marker in mutations:
-        assert gate_at < deploy.index(marker)
 
 
 def test_deploy_requires_embedded_production_browser_gate_before_remote_state() -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
     helper = _read("scripts/ops/run_isolated_candidate_web.sh")
-    canonical_at = deploy.index(
-        "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1"
-    )
+    canonical_at = deploy.index("run_predeploy_canonical_gate()")
     function_at = deploy.index("run_predeploy_embedded_browser_gate()")
     call_at = deploy.index("\nrun_predeploy_embedded_browser_gate\n", function_at)
     remote_state_at = deploy.index("\ncapture_remote_sync_unit_state\n", call_at)
@@ -344,10 +352,11 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
         assert required in helper
     assert 'cd "${PROJECT_ROOT}"' not in helper
     start_at = deploy.index("start_local_candidate_browser_runtime", function_at)
+    canonical_call_at = deploy.index("run_predeploy_canonical_gate", start_at)
     capture_at = deploy.index("scripts/capture_browser_console_cdp.mjs", start_at)
     cleanup_at = deploy.index("cleanup_local_candidate_browser_runtime", capture_at)
     ssh_setup_at = deploy.index("\nsetup_deploy_ssh_transport\n", cleanup_at)
-    assert function_at < start_at < capture_at < cleanup_at < ssh_setup_at
+    assert function_at < start_at < canonical_call_at < capture_at < cleanup_at < ssh_setup_at
     assert 'npm --prefix frontend run build' not in deploy
     mint = block.split('if ! token="$(' , 1)[1].split(')"; then', 1)[0]
     assert "env -i" in mint

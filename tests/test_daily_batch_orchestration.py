@@ -74,6 +74,7 @@ def test_parent_insert_is_insert_only_sanitized_and_rowcount_checked() -> None:
     sql, params = calls[0]
     persisted = json.loads(str(params[7]))
     assert "ON CONFLICT" not in sql.upper()
+    assert params[1:3] == ("daily_incremental_sync", "durable_batch")
     assert persisted == {
         "parameters": {"completion_wait_seconds": 10, "official_max_posts": 50},
         "official_target_ids": [1],

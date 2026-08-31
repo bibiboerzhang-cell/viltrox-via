@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import logging
@@ -68,6 +69,7 @@ _SCRUBBED_ENV_NAMES = {
     "V2_PRODUCTION_MODE",
     "VIRTUAL_ENV",
     "VKPI_SKIP_DOTENV",
+    "VKPI_HEALTH_ENV_FILE",
     "VKPI_HEALTH_URL",
     "VKPI_LOCAL_BASE_URL",
     "VKPI_LOCAL_WEB_PGBOUNCER",
@@ -102,13 +104,18 @@ class _PathIdentity:
     resolved_inode: tuple[int, int]
     resolved_mode: int
     resolved_mtime_ns: int
+    resolved_ctime_ns: int
     resolved_size: int
     resolved_uid: int
+    resolved_gid: int
+    resolved_nlink: int
+    resolved_sha256: str | None
 
 
 @dataclass(frozen=True)
 class StrictGateBinding:
     runtime_root: Path
+    health_env_file: Path
     health_url: str
     base_url: str
     verify_json_out: Path
@@ -116,6 +123,7 @@ class StrictGateBinding:
 
     def environment(self) -> dict[str, str]:
         return {
+            "VKPI_HEALTH_ENV_FILE": str(self.health_env_file),
             "VKPI_HEALTH_URL": self.health_url,
             "VKPI_LOCAL_BASE_URL": self.base_url,
             "VKPI_VERIFY_JSON_OUT": str(self.verify_json_out),
@@ -136,6 +144,24 @@ def _path_identity(path: Path) -> _PathIdentity:
     lexical = path.lstat()
     resolved = path.resolve(strict=True)
     physical = resolved.stat()
+    content_sha256: str | None = None
+    if stat.S_ISREG(physical.st_mode):
+        digest = hashlib.sha256()
+        with resolved.open("rb") as handle:
+            opened = os.fstat(handle.fileno())
+            if (opened.st_dev, opened.st_ino) != (physical.st_dev, physical.st_ino):
+                raise OSError("path identity changed before content hashing")
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+            after = os.fstat(handle.fileno())
+        stable_fields = (
+            "st_dev", "st_ino", "st_mode", "st_uid", "st_gid", "st_nlink",
+            "st_size", "st_mtime_ns", "st_ctime_ns",
+        )
+        if any(getattr(opened, name) != getattr(after, name) for name in stable_fields):
+            raise OSError("path identity changed during content hashing")
+        physical = after
+        content_sha256 = digest.hexdigest()
     return _PathIdentity(
         lexical_kind=stat.S_IFMT(lexical.st_mode),
         lexical_inode=(lexical.st_dev, lexical.st_ino),
@@ -144,8 +170,12 @@ def _path_identity(path: Path) -> _PathIdentity:
         resolved_inode=(physical.st_dev, physical.st_ino),
         resolved_mode=stat.S_IMODE(physical.st_mode),
         resolved_mtime_ns=physical.st_mtime_ns,
+        resolved_ctime_ns=physical.st_ctime_ns,
         resolved_size=physical.st_size,
         resolved_uid=physical.st_uid,
+        resolved_gid=physical.st_gid,
+        resolved_nlink=physical.st_nlink,
+        resolved_sha256=content_sha256,
     )
 
 
@@ -210,6 +240,53 @@ def _loopback_origin(raw: str, *, label: str) -> tuple[str, int]:
     return address.compressed, port
 
 
+def validate_health_env_file(value: str | os.PathLike[str]) -> Path:
+    """Bind the gate to one protected token file without reading its secret."""
+
+    path = Path(value)
+    if not path.is_absolute():
+        raise DeployGateRuntimeError(
+            "deploy gate health environment file must be absolute"
+        )
+    path = Path(os.path.abspath(os.fspath(path)))
+    try:
+        lexical = path.lstat()
+        resolved = path.resolve(strict=True)
+        physical = resolved.stat()
+    except (OSError, RuntimeError) as exc:
+        raise DeployGateRuntimeError(
+            "deploy gate health environment file is unavailable"
+        ) from exc
+    effective_uid = os.geteuid()
+    effective_gid = os.getegid()
+    trusted_groups = {effective_gid, *os.getgroups()}
+    mode = stat.S_IMODE(physical.st_mode)
+    if physical.st_uid == effective_uid:
+        access_shape_is_trusted = mode in {0o400, 0o600}
+    else:
+        access_shape_is_trusted = (
+            physical.st_uid == 0
+            and mode in {0o440, 0o640}
+            and physical.st_gid in trusted_groups
+            and bool(mode & stat.S_IRGRP)
+        )
+    if (
+        not stat.S_ISREG(lexical.st_mode)
+        or stat.S_ISLNK(lexical.st_mode)
+        or not stat.S_ISREG(physical.st_mode)
+        or (lexical.st_dev, lexical.st_ino)
+        != (physical.st_dev, physical.st_ino)
+        or not access_shape_is_trusted
+        or physical.st_nlink != 1
+        or physical.st_size > 64 * 1024
+    ):
+        raise DeployGateRuntimeError(
+            "deploy gate health environment file must be protected, "
+            "single-link, and regular"
+        )
+    return resolved
+
+
 def _bound_output_path(root: Path, raw: str | os.PathLike[str], *, label: str) -> Path:
     target = _absolute_without_resolving(raw)
     try:
@@ -246,12 +323,18 @@ def _bound_output_path(root: Path, raw: str | os.PathLike[str], *, label: str) -
 def validate_strict_gate_binding(
     *,
     runtime_root: str | os.PathLike[str],
+    health_env_file: str | os.PathLike[str],
     health_url: str,
     base_url: str,
     verify_json_out: str | os.PathLike[str],
     acceptance_json_out: str | os.PathLike[str],
 ) -> StrictGateBinding:
     root = validate_runtime_root(runtime_root)
+    protected_health_env = validate_health_env_file(health_env_file)
+    if protected_health_env == root or root in protected_health_env.parents:
+        raise DeployGateRuntimeError(
+            "deploy gate health environment file must be outside runtime root"
+        )
     health_origin = _loopback_origin(health_url, label="health URL")
     base_origin = _loopback_origin(base_url, label="base URL")
     health = urlsplit(health_url)
@@ -270,6 +353,7 @@ def validate_strict_gate_binding(
         raise DeployGateRuntimeError("deploy gate output paths must be distinct")
     return StrictGateBinding(
         runtime_root=root,
+        health_env_file=protected_health_env,
         health_url=str(health_url),
         base_url=str(base_url),
         verify_json_out=verify_out,
@@ -430,6 +514,7 @@ def bound_deploy_gate_runtime(
     inherited: Mapping[str, str], *, source: Path,
     requested_python: str | os.PathLike[str],
     runtime_root: str | os.PathLike[str],
+    health_env_file: str | os.PathLike[str],
     health_url: str,
     base_url: str,
     verify_json_out: str | os.PathLike[str],
@@ -449,11 +534,18 @@ def bound_deploy_gate_runtime(
     python_bin = validate_source_venv_python(source, requested_python)
     binding = validate_strict_gate_binding(
         runtime_root=runtime_root,
+        health_env_file=health_env_file,
         health_url=health_url,
         base_url=base_url,
         verify_json_out=verify_json_out,
         acceptance_json_out=acceptance_json_out,
     )
+    try:
+        health_env_before = _path_identity(binding.health_env_file)
+    except (OSError, RuntimeError) as exc:
+        raise DeployGateRuntimeError(
+            "deploy gate health environment file is unavailable"
+        ) from exc
     for name in ("home", "cache", "tmp", "controller"):
         path = binding.runtime_root / name
         path.mkdir(mode=0o700, exist_ok=True)
@@ -482,12 +574,13 @@ def bound_deploy_gate_runtime(
                 and _path_identity(source / ".venv") == venv_before
                 and _path_identity(source / ".venv" / "bin" / "python")
                 == python_before
+                and _path_identity(binding.health_env_file) == health_env_before
             )
         except (OSError, RuntimeError):
             stable = False
         if not stable:
             raise DeployGateRuntimeError(
-                "deploy gate runtime inputs changed during verification"
+                "deploy gate runtime or health-token inputs changed during verification"
             )
 
 

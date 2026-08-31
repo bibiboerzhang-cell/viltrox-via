@@ -19,6 +19,8 @@ ProgressCallback = Callable[[int, str], None]
 CancelCheck = Callable[[], bool]
 logger = get_logger(__name__)
 _BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
+_EXECUTION_PROVENANCE_SCHEMA = "vkpi-sync-execution-provenance/v1"
+_EXECUTION_PROVENANCE_ID_LIMIT = 128
 
 
 class CancelledException(Exception):
@@ -77,6 +79,30 @@ def _text(*values: Any) -> str:
         if text:
             return text
     return ""
+
+
+def _execution_provenance(value: Any) -> dict[str, str]:
+    """Return the minimal trusted receipt that may be persisted with a snapshot."""
+
+    if not isinstance(value, dict):
+        return {}
+    task_id = _text(value.get("task_id"))
+    batch_id = _text(value.get("orchestration_batch_id"))
+    lane = _text(value.get("orchestration_lane")).lower()
+    if (
+        not task_id
+        or not batch_id
+        or lane != "official"
+        or len(task_id) > _EXECUTION_PROVENANCE_ID_LIMIT
+        or len(batch_id) > _EXECUTION_PROVENANCE_ID_LIMIT
+    ):
+        return {}
+    return {
+        "schema_version": _EXECUTION_PROVENANCE_SCHEMA,
+        "task_id": task_id,
+        "orchestration_batch_id": batch_id,
+        "orchestration_lane": lane,
+    }
 
 
 def _clear_channel_read_cache() -> None:
@@ -228,6 +254,12 @@ def _write_snapshot(channel: dict[str, Any], metrics: dict[str, Any], raw_payloa
     now = _utcnow()
     snapshot_date = _today()
     raw_payload = dict(raw_payload or {})
+    # Provider payloads are not allowed to self-assert scheduler identity.  Only
+    # the sanitized worker receipt carried on the private channel copy is used.
+    raw_payload.pop("execution_provenance", None)
+    execution_provenance = _execution_provenance(channel.get("_execution_provenance"))
+    if execution_provenance:
+        raw_payload["execution_provenance"] = execution_provenance
     raw_payload["media_cache"] = prewarm_official_media_cache(metrics, raw_payload)
     conn = get_conn()
     channel_id = int(channel.get("id") or 0)
@@ -691,10 +723,16 @@ def sync_channel_snapshot(
     *,
     staff: dict[str, Any] | None = None,
     max_posts: int = 12,
+    execution_provenance: dict[str, Any] | None = None,
     progress_callback: ProgressCallback | None = None,
     cancel_check: CancelCheck | None = None,
 ) -> dict[str, Any]:
     ensure_vkpi_channels_schema()
+    channel = dict(channel)
+    channel.pop("_execution_provenance", None)
+    trusted_provenance = _execution_provenance(execution_provenance)
+    if trusted_provenance:
+        channel["_execution_provenance"] = trusted_provenance
     platform = str(channel.get("platform") or "").lower()
     _check_cancel(cancel_check)
     _progress(progress_callback, 0, "开始同步官方账号")

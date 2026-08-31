@@ -832,7 +832,6 @@ def verify_deploy_source(args: argparse.Namespace) -> dict[str, object]:
 
 def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
     """Run the canonical gate from candidate bytes, then reverify the candidate."""
-
     try:
         runtime_root = str(args.runtime_root)
         health_url = str(args.health_url)
@@ -866,6 +865,7 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
                 source=source,
                 requested_python=args.python,
                 runtime_root=runtime_root,
+                health_env_file=getattr(args, "health_env_file", ""),
                 health_url=health_url,
                 base_url=base_url,
                 verify_json_out=verify_json_out,
@@ -948,7 +948,6 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
     )
     return after
 
-
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     subparsers = result.add_subparsers(dest="command", required=True)
@@ -977,6 +976,7 @@ def parser() -> argparse.ArgumentParser:
     deploy_gate.add_argument("--source", required=True)
     deploy_gate.add_argument("--python", required=True)
     deploy_gate.add_argument("--runtime-root", required=True)
+    deploy_gate.add_argument("--health-env-file", required=True)
     deploy_gate.add_argument("--health-url", required=True)
     deploy_gate.add_argument("--base-url", required=True)
     deploy_gate.add_argument("--verify-json-out", required=True)

@@ -13,6 +13,7 @@ from stdout_utils import out
 import argparse
 import asyncio
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -47,6 +48,11 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def systemd_invocation_id() -> str:
+    value = str(os.environ.get("INVOCATION_ID") or "").strip().lower()
+    return value if len(value) == 32 and all(char in "0123456789abcdef" for char in value) else ""
+
+
 def compute_kol_stale_before(raw_value: str = "", stale_days: int = 0, *, now: datetime | None = None) -> str:
     """Return the KOL stale cutoff for periodic qualified refreshes.
 
@@ -68,7 +74,12 @@ def compute_kol_stale_before(raw_value: str = "", stale_days: int = 0, *, now: d
 
 
 def emit_event(event: str, **payload: object) -> None:
-    out(json.dumps({"event": event, "at": utcnow(), **payload}, ensure_ascii=False, default=str), flush=True)
+    out(json.dumps({
+        "event": event,
+        "at": utcnow(),
+        **payload,
+        "invocation_id": systemd_invocation_id(),
+    }, ensure_ascii=False, default=str), flush=True)
 
 
 def emit_batch_queued_receipt(receipt: dict[str, object]) -> None:
@@ -193,17 +204,19 @@ def result_exit_code(result: dict[str, object]) -> int:
     return 2
 
 
-def run_post_sync_maintenance() -> None:
+def run_post_sync_maintenance(*, batch_id: str) -> None:
     """Run maintenance that depends on already-persisted sync results."""
+    batch_id = str(batch_id or "").strip()[:128]
     try:
         from app.db.connection import get_conn
         from app.domains.channels.metrics_gapfill import backfill_filled_table
 
         gap_result = backfill_filled_table(get_conn())
-        emit_event("cron_daily_sync_gapfill", summary=gap_result)
+        emit_event("cron_daily_sync_gapfill", batch_id=batch_id, summary=gap_result)
     except Exception as exc:
         emit_event(
             "cron_daily_sync_gapfill_failed",
+            batch_id=batch_id,
             error=f"{type(exc).__name__}: {str(exc)[:200]}",
         )
 
@@ -225,14 +238,16 @@ def run_post_sync_maintenance() -> None:
             if process.returncode != 0:
                 emit_event(
                     "cron_daily_sync_index_maint_failed",
+                    batch_id=batch_id,
                     script=script,
                     code=process.returncode,
                     err=str(process.stderr)[-300:],
                 )
-        emit_event("cron_daily_sync_index_maint_done")
+        emit_event("cron_daily_sync_index_maint_done", batch_id=batch_id)
     except Exception as exc:
         emit_event(
             "cron_daily_sync_index_maint_failed",
+            batch_id=batch_id,
             error=f"{type(exc).__name__}: {str(exc)[:200]}",
         )
 
@@ -351,16 +366,18 @@ async def main() -> int:
             child_timeout_seconds=payload["child_timeout_seconds"],
         )
         result = await run_job("daily_incremental_sync", payload)
-        emit_event("cron_daily_sync_finished", summary=result_summary(result))
+        summary = result_summary(result)
+        emit_event("cron_daily_sync_finished", summary=summary)
         run_maintenance, maintenance_reason = post_sync_maintenance_decision(
             result,
             requested_dry_run=bool(payload["dry_run"]),
         )
         if run_maintenance:
-            run_post_sync_maintenance()
+            run_post_sync_maintenance(batch_id=str(summary.get("batch_id") or ""))
         else:
             emit_event(
                 "cron_daily_sync_post_maintenance_skipped",
+                batch_id=str(summary.get("batch_id") or ""),
                 reason=maintenance_reason,
             )
         out(json.dumps(result, ensure_ascii=False, default=str, indent=2))

@@ -419,9 +419,11 @@ def test_strict_deploy_cli_fails_closed_when_key_expectation_is_missing(
 def test_cloud_deploy_requires_clean_source_and_post_restart_strict_verification() -> None:
     deploy = (SCRIPTS / "ops" / "deploy_local_to_cloud.sh").read_text(encoding="utf-8")
 
-    assert "VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1" in deploy
     assert '"${TRUSTED_CANDIDATE_VERIFIER}" run-deploy-gate' in deploy
     assert '--snapshot "${DEPLOY_CANDIDATE_DIR}"' in deploy
+    assert '--health-env-file "${LOCAL_HEALTH_ENV_FILE}"' in deploy
+    assert '--health-url "${health_url}"' in deploy
+    assert '--base-url "${base_url}"' in deploy
     assert "ALLOW_DIRTY_DEPLOY" not in deploy
     assert "git status --porcelain=v1 --untracked-files=all" in deploy
     assert deploy.count("assert_deploy_source_unchanged") >= 3

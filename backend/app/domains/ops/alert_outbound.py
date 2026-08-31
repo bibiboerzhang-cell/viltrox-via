@@ -18,43 +18,34 @@
 """
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
 import json
 import os
-import re
-import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
-from urllib import error as urllib_error
-from urllib import request as urllib_request
+from typing import Any
 
+from app.core import stateless_alert as _stateless_alert
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
 
 logger = get_logger(__name__)
 
-ENV_WEBHOOK_URL = "VKPI_ALERT_WEBHOOK_URL"
-ENV_WEBHOOK_KIND = "VKPI_ALERT_WEBHOOK_KIND"
-ENV_WEBHOOK_SECRET = "VKPI_ALERT_WEBHOOK_SECRET"
-ENV_WEBHOOK_TIMEOUT_S = "VKPI_ALERT_WEBHOOK_TIMEOUT_S"
+ENV_WEBHOOK_URL = _stateless_alert.ENV_WEBHOOK_URL
+ENV_WEBHOOK_KIND = _stateless_alert.ENV_WEBHOOK_KIND
+ENV_WEBHOOK_SECRET = _stateless_alert.ENV_WEBHOOK_SECRET
+ENV_WEBHOOK_TIMEOUT_S = _stateless_alert.ENV_WEBHOOK_TIMEOUT_S
 ENV_DEDUPE_HOURS = "VKPI_ALERT_DEDUPE_HOURS"
 ENV_ESCALATE_AFTER = "VKPI_ALERT_ESCALATE_AFTER"
-ENV_SILENCE_KEYS = "VKPI_ALERT_SILENCE_KEYS"
+ENV_SILENCE_KEYS = _stateless_alert.ENV_SILENCE_KEYS
 ENV_NOTIFY_RECOVERY = "VKPI_ALERT_NOTIFY_RECOVERY"
 
-KINDS = ("feishu", "slack", "generic")
-_DEFAULT_KIND = "generic"
+KINDS = _stateless_alert.KINDS
 _DEFAULT_DEDUPE_HOURS = 6.0
 _DEFAULT_ESCALATE_AFTER = 3
-_DEFAULT_TIMEOUT_S = 5.0
 _STATE_KEY_PREFIX = "vkpi:alert_outbound:state:"
 _STATE_TTL_DAYS = 30
-_TEXT_LIMIT = 3500
 
 # 透传签名:transport(payload_dict, timeout_s) -> (http_status:int, reason:str)。
-Transport = Callable[[dict[str, Any], float], tuple[int, str]]
+Transport = _stateless_alert.Transport
 
 
 # ──────────────────────────────────────────────
@@ -86,12 +77,11 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 def _webhook_url() -> str:
-    return os.environ.get(ENV_WEBHOOK_URL, "").strip()
+    return _stateless_alert._webhook_url()
 
 
 def webhook_kind() -> str:
-    raw = os.environ.get(ENV_WEBHOOK_KIND, "").strip().lower()
-    return raw if raw in KINDS else _DEFAULT_KIND
+    return _stateless_alert.webhook_kind()
 
 
 def dedupe_window() -> timedelta:
@@ -103,18 +93,15 @@ def escalate_after() -> int:
 
 
 def silenced_keys() -> frozenset[str]:
-    raw = os.environ.get(ENV_SILENCE_KEYS, "")
-    return frozenset(part.strip() for part in raw.split(",") if part.strip())
+    return _stateless_alert.silenced_keys()
 
 
 def outbound_status() -> dict[str, Any]:
     """给设置页/哨兵结果用的诚实状态:只有 configured + kind,永不带 URL。"""
     return {
-        "configured": bool(_webhook_url()),
-        "kind": webhook_kind(),
+        **_stateless_alert.outbound_status(),
         "dedupe_hours": dedupe_window().total_seconds() / 3600.0,
         "escalate_after": escalate_after(),
-        "signed": bool(os.environ.get(ENV_WEBHOOK_SECRET, "").strip()),
     }
 
 
@@ -143,32 +130,9 @@ def _parse_dt(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _clip(text: Any, limit: int = _TEXT_LIMIT) -> str:
-    value = str(text or "")
-    return value if len(value) <= limit else value[: limit - 1] + "…"
-
-
 def _redact(message: str) -> str:
     """异常文本里若夹带 URL/host,整体打码——日志永不泄露出站地址。"""
-    url = _webhook_url()
-    text = str(message or "")
-    if url:
-        text = text.replace(url, "<webhook-url>")
-        host = re.sub(r"^[a-z]+://", "", url).split("/", 1)[0]
-        if host:
-            text = text.replace(host, "<webhook-host>")
-    return re.sub(r"https?://\S+", "<url>", text)[:300]
-
-
-_SEVERITY_ICON = {"danger": "🔴", "warning": "🟠", "info": "🔵"}
-
-
-def _headline(event: dict[str, Any]) -> str:
-    icon = _SEVERITY_ICON.get(str(event.get("severity") or "info"), "🔵")
-    prefix = "[升级] " if event.get("escalated") else ""
-    if event.get("event") == "recovery":
-        icon, prefix = "🟢", "[恢复] "
-    return f"{icon} {prefix}{event.get('title') or event.get('key') or 'vkpi alert'}"
+    return _stateless_alert.redact(message)
 
 
 # ──────────────────────────────────────────────
@@ -178,45 +142,7 @@ def _headline(event: dict[str, Any]) -> str:
 
 def build_payload(kind: str, event: dict[str, Any], *, secret: str = "", now_ts: int | None = None) -> dict[str, Any]:
     """按渠道拼 payload。event 至少含 key/title/body/severity;可含 escalated/consecutive/alert_key/rule_key。"""
-    kind = kind if kind in KINDS else _DEFAULT_KIND
-    headline = _headline(event)
-    body = _clip(event.get("body"))
-    meta_line = f"key={event.get('key')} severity={event.get('severity') or 'info'}"
-    if event.get("consecutive"):
-        meta_line += f" consecutive={int(event.get('consecutive') or 0)}"
-    if event.get("alert_key"):
-        meta_line += f" alert={event.get('alert_key')}"
-    text = f"{headline}\n{body}\n{meta_line}".strip()
-    if kind == "feishu":
-        payload: dict[str, Any] = {"msg_type": "text", "content": {"text": text}}
-        if secret:
-            ts = int(now_ts if now_ts is not None else time.time())
-            string_to_sign = f"{ts}\n{secret}"
-            digest = hmac.new(string_to_sign.encode("utf-8"), b"", digestmod=hashlib.sha256).digest()
-            payload["timestamp"] = str(ts)
-            payload["sign"] = base64.b64encode(digest).decode("utf-8")
-        return payload
-    if kind == "slack":
-        return {
-            "text": headline,
-            "blocks": [
-                {"type": "section", "text": {"type": "mrkdwn", "text": f"*{headline}*\n{body}"}},
-                {"type": "context", "elements": [{"type": "mrkdwn", "text": meta_line}]},
-            ],
-        }
-    return {
-        "source": "vkpi",
-        "event": str(event.get("event") or "alert"),
-        "key": str(event.get("key") or ""),
-        "alert_key": event.get("alert_key"),
-        "rule_key": event.get("rule_key"),
-        "severity": str(event.get("severity") or "info"),
-        "title": str(event.get("title") or ""),
-        "body": body,
-        "escalated": bool(event.get("escalated")),
-        "consecutive": int(event.get("consecutive") or 0),
-        "sent_at": _iso(_utcnow()),
-    }
+    return _stateless_alert.build_payload(kind, event, secret=secret, now_ts=now_ts)
 
 
 # ──────────────────────────────────────────────
@@ -225,28 +151,11 @@ def build_payload(kind: str, event: dict[str, Any], *, secret: str = "", now_ts:
 
 
 def _http_transport(payload: dict[str, Any], timeout_s: float) -> tuple[int, str]:
-    url = _webhook_url()
-    data = json.dumps(payload, ensure_ascii=False, default=str).encode("utf-8")
-    req = urllib_request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
-    with urllib_request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310 - URL 仅来自 env
-        return int(getattr(resp, "status", 200) or 200), "ok"
+    return _stateless_alert.http_transport(payload, timeout_s)
 
 
 def _deliver(payload: dict[str, Any], transport: Transport | None) -> dict[str, Any]:
-    timeout_s = max(1.0, _env_float(ENV_WEBHOOK_TIMEOUT_S, _DEFAULT_TIMEOUT_S))
-    send = transport or _http_transport
-    try:
-        status, reason = send(payload, timeout_s)
-    except urllib_error.HTTPError as exc:
-        logger.warning("alert_outbound: webhook http error status=%s", getattr(exc, "code", "?"))
-        return {"sent": False, "reason": "http_error", "status": int(getattr(exc, "code", 0) or 0)}
-    except Exception as exc:
-        logger.warning("alert_outbound: webhook delivery failed %s: %s", type(exc).__name__, _redact(str(exc)))
-        return {"sent": False, "reason": "delivery_error", "error": type(exc).__name__}
-    if 200 <= int(status) < 300:
-        return {"sent": True, "reason": "sent", "status": int(status)}
-    logger.warning("alert_outbound: webhook non-2xx status=%s reason=%s", status, _redact(reason))
-    return {"sent": False, "reason": "http_error", "status": int(status)}
+    return _stateless_alert.deliver(payload, transport or _http_transport)
 
 
 # ──────────────────────────────────────────────
@@ -347,6 +256,31 @@ def _mark_alert_escalated(alert_key: str, consecutive: int) -> bool:
 # ──────────────────────────────────────────────
 
 
+def notify_stateless(
+    *,
+    key: str,
+    title: str,
+    body: str = "",
+    severity: str = "danger",
+    rule_key: str | None = None,
+    transport: Transport | None = None,
+) -> dict[str, Any]:
+    """Send an alert without DB state so database failures remain observable.
+
+    There is intentionally no dedupe state: the systemd/timer cadence is the
+    retry boundary.  The result never contains the webhook URL or secret.
+    """
+
+    return _stateless_alert.notify_stateless(
+        key=key,
+        title=title,
+        body=body,
+        severity=severity,
+        rule_key=rule_key,
+        transport=transport,
+    )
+
+
 def notify(
     *,
     key: str,
@@ -437,5 +371,6 @@ def send_digest(*, markdown: str, title: str, day: str, transport: Transport | N
 
 __all__ = [
     "KINDS", "Transport", "build_payload", "clear", "clear_state", "dedupe_window", "escalate_after",
-    "load_state", "notify", "outbound_status", "save_state", "send_digest", "silenced_keys", "webhook_kind",
+    "load_state", "notify", "notify_stateless", "outbound_status", "save_state", "send_digest",
+    "silenced_keys", "webhook_kind",
 ]

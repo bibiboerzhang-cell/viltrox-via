@@ -1,0 +1,68 @@
+{
+  "official_channels": {
+    "total": 18,
+    "active": 18
+  },
+  "kol_pool": {
+    "total": 1618,
+    "legacy_excel_p2d": 1011,
+    "needs_human_review": 19,
+    "imported": 652
+  },
+  "active_jobs": {
+    "ledger": 0,
+    "items": 0
+  },
+  "latest_channel_metric_dates": [
+    {
+      "snapshot_date": "2026-08-10",
+      "n": 4,
+      "followers": 705899,
+      "posts": 5511,
+      "views": "72675760",
+      "followers_delta": 595,
+      "posts_delta": 7,
+      "views_delta": "54583"
+    },
+    {
+      "snapshot_date": "2026-08-09",
+      "n": 4,
+      "followers": 705304,
+      "posts": 5509,
+      "views": "72675760",
+      "followers_delta": 744,
+      "posts_delta": 6,
+      "views_delta": "48317"
+    },
+    {
+      "snapshot_date": "2026-08-08",
+      "n": 4,
+      "followers": 704560,
+      "posts": 5503,
+      "views": "72675760",
+      "followers_delta": 746,
+      "posts_delta": 10,
+      "views_delta": "72870"
+    },
+    {
+      "snapshot_date": "2026-08-07",
+      "n": 3,
+      "followers": 618373,
+      "posts": 4713,
+      "views": "62190260",
+      "followers_delta": 292,
+      "posts_delta": 5,
+      "views_delta": "24582"
+    },
+    {
+      "snapshot_date": "2026-08-06",
+      "n": 4,
+      "followers": 703522,
+      "posts": 5489,
+      "views": "72675760",
+      "followers_delta": 113,
+      "posts_delta": 6,
+      "views_delta": "52775"
+    }
+  ]
+}

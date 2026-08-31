@@ -245,6 +245,12 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
     snapshot_loaded = bool(snapshot.get("loaded"))
     latest_snapshot = snapshot.get("latest_snapshot") if isinstance(snapshot.get("latest_snapshot"), dict) else {}
     acceptance = audit.get("acceptance") if isinstance(audit.get("acceptance"), dict) else {}
+    acceptance_baseline = (
+        audit.get("acceptance_baseline")
+        if isinstance(audit.get("acceptance_baseline"), dict)
+        else {}
+    )
+    kol_pool = audit.get("kol_pool") if isinstance(audit.get("kol_pool"), dict) else {}
     competitor_summary = audit.get("competitor_relation_summary") if isinstance(audit.get("competitor_relation_summary"), dict) else {}
     brand_signal_summary = audit.get("brand_signal_summary") if isinstance(audit.get("brand_signal_summary"), dict) else {}
     dimensions_runtime = dimensions11_runtime_status()
@@ -413,8 +419,9 @@ def build_items(sync: dict[str, Any], r2: dict[str, Any], snapshot: dict[str, An
             [
                 "search progress exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "SearchProgress") else "progress missing",
                 "search history exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "搜索历史") else "history missing",
-                "1012 history merge exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "1012 历史合作池") else "history merge missing",
-                f"legacy_1012_present={acceptance.get('legacy_1012_present', '-')}",
+                "history merge UI exists" if contains("frontend/src/components/vkpi/pages/DiscoverPage.tsx", "历史合作池") else "history merge missing",
+                f"legacy_baseline_met={acceptance.get('legacy_baseline_met', '-')}",
+                f"legacy_actual={kol_pool.get('legacy_excel_p2d', '-')} minimum={acceptance_baseline.get('legacy_excel_p2d_minimum', '-')}",
             ],
             "部署后用真实关键词复测头像、候选逐条出现和最近内容回填。",
         ),

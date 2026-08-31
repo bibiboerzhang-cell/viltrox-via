@@ -1,0 +1,11 @@
+[Unit]
+Description=Check V-KPI daily sync acceptance after the 04:00 UTC run budget
+
+[Timer]
+OnCalendar=*-*-* 10:15:00 UTC
+Persistent=true
+AccuracySec=1m
+Unit=vkpi-sync-deadman.service
+
+[Install]
+WantedBy=timers.target

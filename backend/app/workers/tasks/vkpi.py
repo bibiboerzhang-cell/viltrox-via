@@ -141,6 +141,11 @@ async def process_vkpi_official_channel_sync_job(queue, raw_job: dict) -> None:
             channel,
             staff=staff,
             max_posts=max_posts,
+            execution_provenance={
+                "task_id": task_id,
+                "orchestration_batch_id": str(payload.get("orchestration_batch_id") or ""),
+                "orchestration_lane": str(payload.get("orchestration_lane") or ""),
+            },
             progress_callback=progress_callback,
             cancel_check=cancel_check,
         )

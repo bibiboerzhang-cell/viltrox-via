@@ -342,6 +342,9 @@ def _deploy_gate_args(
     assert isinstance(source, dict)
     runtime_root = output.parent / f".{output.name}-strict-runtime"
     runtime_root.mkdir(mode=0o700)
+    health_env_file = output.parent / f".{output.name}-health.env"
+    health_env_file.write_text("OPS_HEALTH_TOKEN=fixture\n", encoding="utf-8")
+    health_env_file.chmod(0o600)
     return Namespace(
         manifest=str(output.with_suffix(".manifest.json")),
         snapshot=str(output),
@@ -350,6 +353,7 @@ def _deploy_gate_args(
         source=str(root),
         python=str(venv_python),
         runtime_root=str(runtime_root),
+        health_env_file=str(health_env_file),
         health_url="http://127.0.0.1:18103/health",
         base_url="http://127.0.0.1:18103/",
         verify_json_out=str(runtime_root / "receipts" / "verify.json"),
@@ -742,6 +746,7 @@ Path(os.environ["VKPI_TEST_GATE_REPORT"]).write_text(json.dumps({
     "vite_browser_assist": os.environ.get("VITE_BROWSER_ASSIST"),
     "vite_experimental_nav": os.environ.get("VITE_EXPERIMENTAL_NAV"),
     "health_url": os.environ.get("VKPI_HEALTH_URL"),
+    "health_env_file": os.environ.get("VKPI_HEALTH_ENV_FILE"),
     "base_url": os.environ.get("VKPI_LOCAL_BASE_URL"),
     "verify_json_out": os.environ.get("VKPI_VERIFY_JSON_OUT"),
     "acceptance_json_out": os.environ.get("VKPI_VERIFY_ACCEPTANCE_JSON_OUT"),
@@ -786,6 +791,7 @@ PY
     monkeypatch.setenv("REDIS_URL", "redis://hostile.invalid/0")
     monkeypatch.setenv("JWT_SECRET", "hostile-secret")
     monkeypatch.setenv("OPS_HEALTH_TOKEN", "hostile-health")
+    monkeypatch.setenv("VKPI_HEALTH_ENV_FILE", "/tmp/hostile-health.env")
     monkeypatch.setenv("DB_RUNTIME_BACKEND", "sqlite")
     monkeypatch.setenv("DB_USE_PGBOUNCER", "1")
     monkeypatch.setenv("LOCAL_RUNTIME_FORCE_STACK", "0")
@@ -819,6 +825,7 @@ PY
         "effective_uid": os.geteuid(),
         "home": str(Path(observed["runtime_root"]) / "home"),
         "health_url": "http://127.0.0.1:18103/health",
+        "health_env_file": str(output.parent / f".{output.name}-health.env"),
         "jwt_secret": None,
         "keep_db_url": "0",
         "keep_inherited_jwt": "0",

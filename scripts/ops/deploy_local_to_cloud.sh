@@ -198,13 +198,16 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 paths = {
+    Path("scripts/ops/controlled_candidate_process.py"): 0o400,
     Path("scripts/ops/deploy_gate_runtime.py"): 0o400,
     Path("scripts/ops/freeze_worktree_candidate.py"): 0o500,
     Path("scripts/ops/freeze_worktree_contract.py"): 0o400,
     Path("scripts/ops/freeze_git_bridge.py"): 0o400,
+    Path("scripts/ops/freeze_phase_runtime.py"): 0o400,
     Path("scripts/ops/legacy_to_atomic_preflight.py"): 0o500,
     Path("scripts/ops/legacy_to_atomic_preflight_report.py"): 0o400,
     Path("scripts/ops/legacy_to_atomic_preflight_transport.py"): 0o400,
+    Path("scripts/ops/trusted_npm_audit.py"): 0o400,
     Path("scripts/ops/verify_legacy_bootstrap_anchor.py"): 0o500,
     Path("scripts/stdout_utils.py"): 0o400,
     Path("scripts/verify_redis_worker_health.py"): 0o500,
@@ -244,13 +247,16 @@ seal_deploy_verifier_bundle() {
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops"
   for relative in \
+    scripts/ops/controlled_candidate_process.py \
     scripts/ops/deploy_gate_runtime.py \
     scripts/ops/freeze_worktree_candidate.py \
     scripts/ops/freeze_worktree_contract.py \
     scripts/ops/freeze_git_bridge.py \
+    scripts/ops/freeze_phase_runtime.py \
     scripts/ops/legacy_to_atomic_preflight.py \
     scripts/ops/legacy_to_atomic_preflight_report.py \
     scripts/ops/legacy_to_atomic_preflight_transport.py \
+    scripts/ops/trusted_npm_audit.py \
     scripts/ops/verify_legacy_bootstrap_anchor.py \
     scripts/stdout_utils.py \
     scripts/verify_redis_worker_health.py \
@@ -264,7 +270,7 @@ seal_deploy_verifier_bundle() {
       return 1
     fi
     case "${relative}" in
-      scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_git_bridge.py|scripts/ops/freeze_worktree_contract.py|scripts/ops/legacy_to_atomic_preflight_report.py|scripts/ops/legacy_to_atomic_preflight_transport.py|scripts/stdout_utils.py)
+      scripts/ops/controlled_candidate_process.py|scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_git_bridge.py|scripts/ops/freeze_phase_runtime.py|scripts/ops/freeze_worktree_contract.py|scripts/ops/legacy_to_atomic_preflight_report.py|scripts/ops/legacy_to_atomic_preflight_transport.py|scripts/ops/trusted_npm_audit.py|scripts/stdout_utils.py)
         install -m 0400 "${source}" "${target}"
         ;;
       *)
@@ -286,13 +292,16 @@ from pathlib import Path
 root = Path(sys.argv[1])
 digest = hashlib.sha256()
 for relative in (
+    Path("scripts/ops/controlled_candidate_process.py"),
     Path("scripts/ops/deploy_gate_runtime.py"),
     Path("scripts/ops/freeze_git_bridge.py"),
+    Path("scripts/ops/freeze_phase_runtime.py"),
     Path("scripts/ops/freeze_worktree_candidate.py"),
     Path("scripts/ops/freeze_worktree_contract.py"),
     Path("scripts/ops/legacy_to_atomic_preflight.py"),
     Path("scripts/ops/legacy_to_atomic_preflight_report.py"),
     Path("scripts/ops/legacy_to_atomic_preflight_transport.py"),
+    Path("scripts/ops/trusted_npm_audit.py"),
     Path("scripts/ops/verify_legacy_bootstrap_anchor.py"),
     Path("scripts/stdout_utils.py"),
     Path("scripts/verify_redis_worker_health.py"),
@@ -313,13 +322,16 @@ cleanup_deploy_verifier_bundle() {
     return 0
   fi
   for path in \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/controlled_candidate_process.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/deploy_gate_runtime.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_candidate.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_contract.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_git_bridge.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_phase_runtime.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight_report.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight_transport.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/trusted_npm_audit.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/stdout_utils.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_redis_worker_health.py" \
@@ -640,25 +652,8 @@ assert_deploy_source_unchanged() {
 }
 
 # ---- F2 发布门:verify 全绿才允许出海(强制,非零即中止,无跳过开关)----
-# 覆盖:后端 pytest + 前端 tsc/build + dist 分包护栏 + 仓库硬化 + 红线 grep
-#       + 千行卫兵 + 运行态 sha 对齐。任何一步失败都不允许 rsync 上云。
-verify_deploy_candidate
-assert_deploy_source_unchanged
-echo "[deploy] gate: frozen candidate strict code + runtime trust verification(全绿才继续)..."
-if ! VKPI_VERIFY_REQUIRE_RUNTIME=1 VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE=1 \
-  OPS_HEALTH_TOKEN= VKPI_HEALTH_ENV_FILE="${LOCAL_HEALTH_ENV_FILE}" \
-  VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE=0 VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY=0 \
-  PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B \
-  "${TRUSTED_CANDIDATE_VERIFIER}" run-deploy-gate \
-  --manifest "${DEPLOY_CANDIDATE_MANIFEST}" \
-  --snapshot "${DEPLOY_CANDIDATE_DIR}" \
-  --expected-head "${LOCAL_GIT_SHA}" \
-  --expected-branch "${LOCAL_GIT_BRANCH}" \
-  --source "${PROJECT_ROOT}" \
-  --python "${PROJECT_ROOT}/.venv/bin/python"; then
-  echo "[deploy] verify.sh 非零退出 —— 部署中止。先把 verify 修绿再出海。" >&2
-  exit 1
-fi
+# 此处先固化候选与源绑定。强运行门必须等候选的非 8102 回环 runtime
+# 真实就绪后执行，由 run_predeploy_embedded_browser_gate 在第一个 SSH 之前闭合。
 verify_deploy_candidate
 assert_deploy_source_unchanged
 
@@ -1755,6 +1750,121 @@ PY
   chmod 600 "${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-runtime-verdict.txt"
 }
 
+run_predeploy_canonical_gate() {
+  local runtime_root="${LOCAL_CANDIDATE_WEB_RUNTIME}"
+  local health_url="${PREDEPLOY_BROWSER_URL}health"
+  local base_url="${PREDEPLOY_BROWSER_URL}"
+  local verify_receipt="${runtime_root}/controller/canonical-verify.json"
+  local acceptance_receipt="${runtime_root}/controller/canonical-acceptance.json"
+  local retained_verify="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/canonical-verify.json"
+  local retained_acceptance="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/canonical-acceptance.json"
+
+  case "${runtime_root}" in
+    /tmp/vkpi-candidate-browser-runtime.*) ;;
+    *)
+      echo "Canonical deploy gate runtime root is not controller-owned." >&2
+      return 1
+      ;;
+  esac
+  if [ -z "${LOCAL_CANDIDATE_WEB_PID}" ] \
+    || [ -z "${LOCAL_CANDIDATE_WEB_PGID}" ] \
+    || [ "${LOCAL_CANDIDATE_WEB_PID}" != "${LOCAL_CANDIDATE_WEB_PGID}" ] \
+    || [ ! -d "${runtime_root}" ] \
+    || [ -L "${runtime_root}" ]; then
+    echo "Canonical deploy gate requires the live controlled candidate runtime." >&2
+    return 1
+  fi
+
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
+  echo "[deploy] gate: frozen candidate strict code + runtime trust verification(全绿才继续)..."
+  if ! PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+    "${TRUSTED_CANDIDATE_VERIFIER}" run-deploy-gate \
+    --manifest "${DEPLOY_CANDIDATE_MANIFEST}" \
+    --snapshot "${DEPLOY_CANDIDATE_DIR}" \
+    --expected-head "${LOCAL_GIT_SHA}" \
+    --expected-branch "${LOCAL_GIT_BRANCH}" \
+    --source "${PROJECT_ROOT}" \
+    --python "${PROJECT_ROOT}/.venv/bin/python" \
+    --runtime-root "${runtime_root}" \
+    --health-env-file "${LOCAL_HEALTH_ENV_FILE}" \
+    --health-url "${health_url}" \
+    --base-url "${base_url}" \
+    --verify-json-out "${verify_receipt}" \
+    --acceptance-json-out "${acceptance_receipt}"; then
+    echo "[deploy] verify.sh 非零退出 —— 部署中止，未产生远端变更。" >&2
+    return 1
+  fi
+
+  if [ ! -f "${verify_receipt}" ] || [ -L "${verify_receipt}" ] \
+    || [ ! -f "${acceptance_receipt}" ] || [ -L "${acceptance_receipt}" ]; then
+    echo "Canonical deploy gate did not produce safe bound receipts." >&2
+    return 1
+  fi
+
+  install -m 0600 "${verify_receipt}" "${retained_verify}"
+  install -m 0600 "${acceptance_receipt}" "${retained_acceptance}"
+  cmp -s "${verify_receipt}" "${retained_verify}"
+  cmp -s "${acceptance_receipt}" "${retained_acceptance}"
+  verify_deploy_candidate
+  assert_deploy_source_unchanged
+}
+
+run_predeploy_final_runtime_gate() {
+  local health_tmp=""
+  local health_path="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-final-health.json"
+  local runtime_verdict="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-final-runtime-verdict.txt"
+  local redis_verdict="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-final-redis-verdict.txt"
+
+  health_tmp="$(
+    mktemp "${PREDEPLOY_BROWSER_EVIDENCE_DIR}/.candidate-final-health.XXXXXX"
+  )"
+  chmod 600 "${health_tmp}"
+  if ! env -i \
+    PATH="${BROWSER_GATE_CONTROLLER_PATH}" \
+    HOME=/tmp \
+    TMPDIR=/tmp \
+    LANG=C.UTF-8 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+    "${DEPLOY_CANDIDATE_DIR}/scripts/ops/fetch_runtime_health.py" \
+    --url "${PREDEPLOY_BROWSER_URL}health" \
+    --env-file "${LOCAL_HEALTH_ENV_FILE}" \
+    --timeout-seconds 3 >"${health_tmp}"; then
+    rm -f -- "${health_tmp}"
+    echo "Final authenticated candidate health fetch failed; no remote change was made." >&2
+    return 1
+  fi
+  rm -f -- "${health_path}"
+  mv -- "${health_tmp}" "${health_path}"
+  chmod 600 "${health_path}"
+  rm -f -- "${runtime_verdict}" "${redis_verdict}"
+  : >"${runtime_verdict}"
+  : >"${redis_verdict}"
+  chmod 600 "${runtime_verdict}" "${redis_verdict}"
+
+  if ! "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+    "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py" \
+    --expected-head "${LOCAL_GIT_SHA}" \
+    --expected-migration "${LATEST_MIGRATION}" \
+    --require-worker \
+    --expected-worker-count "${EXPECTED_WORKER_COUNT}" \
+    --max-worker-age-seconds 180 \
+    <"${health_path}" >"${runtime_verdict}"; then
+    echo "Final candidate 16-worker runtime contract failed; no remote change was made." >&2
+    return 1
+  fi
+  if ! "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+    "${DEPLOY_CANDIDATE_DIR}/scripts/verify_redis_worker_health.py" \
+    --expected-head "${LOCAL_GIT_SHA}" \
+    --expected-count 1 \
+    --max-age-seconds 180 \
+    <"${health_path}" >"${redis_verdict}"; then
+    echo "Final candidate Redis-worker runtime contract failed; no remote change was made." >&2
+    return 1
+  fi
+}
+
 run_predeploy_embedded_browser_gate() {
   local token=""
   local capture_status=0
@@ -1769,6 +1879,7 @@ run_predeploy_embedded_browser_gate() {
   rm -f -- "${capture_path}" "${report_path}"
 
   start_local_candidate_browser_runtime
+  run_predeploy_canonical_gate
 
   if ! token="$(
     env -i \
@@ -1856,6 +1967,7 @@ if (
     raise SystemExit("local embedded-production browser receipt is incomplete")
 PY
   chmod 600 "${capture_path}" "${report_path}"
+  run_predeploy_final_runtime_gate
 
   # The candidate process and its loopback listener must be gone before the
   # first SSH call. Browser execution must also not race a source edit or swap

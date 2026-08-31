@@ -197,6 +197,19 @@ def test_migration_306_up_up_down_up_on_real_postgres(pg_dsn: str) -> None:
                 "WHERE term_performance_json IS NOT NULL"
             ).fetchone()[0] == 0  # 迁移没替任何 SKU 填过账
 
+            # A pre-306 writer continues to name only the columns it knew.
+            # The new nullable/defaultless column must stay transparent to it.
+            conn.execute(
+                "INSERT INTO vkpi_product_persona"
+                "(product_sku, what_is, ideal_persona) VALUES "
+                "('LEGACY-WRITER', 'legacy lens', 'legacy creators')"
+            )
+            assert conn.execute(
+                "SELECT term_performance_json FROM vkpi_product_persona "
+                "WHERE product_sku='LEGACY-WRITER'"
+            ).fetchone()[0] is None
+            baseline = body_rows()
+
             comment = conn.execute(
                 "SELECT col_description('vkpi_product_persona'::regclass, attnum) "
                 "FROM pg_attribute WHERE attrelid='vkpi_product_persona'::regclass "

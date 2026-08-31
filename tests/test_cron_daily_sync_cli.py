@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -7,6 +9,20 @@ from scripts import cron_daily_sync
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_emit_event_binds_valid_systemd_invocation_id(monkeypatch) -> None:
+    lines: list[str] = []
+    invocation_id = "a" * 32
+    monkeypatch.setenv("INVOCATION_ID", invocation_id)
+    monkeypatch.setattr(cron_daily_sync, "out", lambda value, **_kwargs: lines.append(value))
+
+    cron_daily_sync.emit_event("cron_daily_sync_started", dry_run=False)
+
+    assert json.loads(lines[-1])["invocation_id"] == invocation_id
+    monkeypatch.setenv("INVOCATION_ID", "not-systemd")
+    cron_daily_sync.emit_event("cron_daily_sync_failed")
+    assert json.loads(lines[-1])["invocation_id"] == ""
 
 
 def test_default_completion_sla_fits_hard_capped_daily_capacity_and_primary_systemd_budget() -> None:
@@ -254,3 +270,67 @@ def test_immediate_batch_receipt_is_emitted_before_terminal_observation(monkeypa
             {"summary": {"batch_id": "daily-1", "task_ids": ["task-1"], "parent_persisted": True}},
         )
     ]
+
+
+def test_candidate_cli_emits_nonempty_terminal_batch_receipt_before_maintenance(
+    monkeypatch,
+) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+    maintenance: list[str] = []
+    task_ids = [f"official-{index}" for index in range(18)]
+
+    async def run_job(_name: str, _payload: dict[str, object]) -> dict[str, object]:
+        return {
+            "status": "completed",
+            "batch_id": "daily-20260831",
+            "task_ids": task_ids,
+            "completion_scope": "provider_terminal",
+            "provider_completion": "completed",
+            "completion": {
+                "complete": True,
+                "completion_scope": "provider_terminal",
+                "provider_completion": "completed",
+                "tasks_total": 18,
+                "tasks_terminal": 18,
+                "tasks_succeeded": 18,
+                "tasks_partial": 0,
+                "tasks_failed": 0,
+                "tasks_pending": 0,
+                "sla_expired": False,
+            },
+            "official": {
+                "channels_requested": 18,
+                "channels_enqueued": 18,
+                "channels_failed_to_enqueue": 0,
+            },
+            "kol_pool_light": {"skipped": True},
+        }
+
+    async def close_db() -> None:
+        return None
+
+    monkeypatch.setattr(cron_daily_sync, "run_job", run_job)
+    monkeypatch.setattr(cron_daily_sync, "close_db_runtime", close_db)
+    monkeypatch.setattr(
+        cron_daily_sync,
+        "emit_event",
+        lambda event, **payload: events.append((event, payload)),
+    )
+    monkeypatch.setattr(
+        cron_daily_sync,
+        "run_post_sync_maintenance",
+        lambda *, batch_id: maintenance.append(batch_id),
+    )
+    monkeypatch.setattr("sys.argv", ["cron_daily_sync.py"])
+
+    assert asyncio.run(cron_daily_sync.main()) == 0
+    finished = next(payload["summary"] for event, payload in events if event == "cron_daily_sync_finished")
+    assert finished["batch_id"] == "daily-20260831"
+    assert finished["task_ids"] == task_ids
+    assert finished["completion_scope"] == "provider_terminal"
+    assert finished["provider_completion"] == "completed"
+    assert finished["tasks_terminal"] == 18
+    assert finished["tasks_pending"] == 0
+    assert finished["official_requested"] == 18
+    assert finished["official_enqueued"] == 18
+    assert maintenance == ["daily-20260831"]
