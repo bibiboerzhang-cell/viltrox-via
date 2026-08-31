@@ -335,13 +335,155 @@ def aggregate_term_yield(conn: Any = None, *, days: int = DEFAULT_WINDOW_DAYS) -
     }
 
 
+# ── 按 SKU 的词效台账(persona 知识库回填,迁移 306 的唯一数据源)────────────────
+PER_SKU_TERM_PERFORMANCE_SCHEMA = "persona_term_performance_v1"
+
+#: 高产词最多取 5 条(persona 载荷是知识摘要,不是全量台账)。
+PER_SKU_TOP_TERMS = 5
+
+_MAX_EXHAUSTED_TERMS = 50
+
+# 与 _SESSIONS_SQL 同一套兼容层规矩(? 占位 / jsonb_exists / 表达式列带 AS);
+# 差别只有一条:按 product_anchor.sku 精确匹配该 SKU 相关会话。
+_SKU_SESSIONS_SQL = """
+SELECT id AS session_id,
+       created_at AS created_at,
+       result_summary_json -> 'discovery_term_evidence' AS term_evidence
+  FROM vkpi_kol_search_sessions
+ WHERE jsonb_exists(result_summary_json, 'discovery_term_evidence')
+   AND (result_summary_json -> 'discovery_term_evidence' -> 'product_anchor' ->> 'sku') = ?
+   AND created_at >= NOW() - make_interval(days => ?)
+ ORDER BY created_at ASC, id ASC
+"""
+
+
+def _fold_sku_sessions(
+    rows: Any,
+) -> tuple[dict[tuple[str, str, str], dict[str, Any]], dict[str, int]]:
+    """把该 SKU 会话行折进 (platform, anchor_source, term) 台账,复用 v1/v2 shim。"""
+    terms: dict[tuple[str, str, str], dict[str, Any]] = {}
+    counters = {"sessions_scanned": 0, "sessions_used": 0, "sessions_unparseable": 0}
+    for raw in rows:
+        row = dict(raw)
+        counters["sessions_scanned"] += 1
+        evidence = _loads(row.get("term_evidence"))
+        term_rows = evidence.get("terms") if isinstance(evidence, dict) else None
+        if not isinstance(term_rows, list):
+            counters["sessions_unparseable"] += 1
+            continue
+        counters["sessions_used"] += 1
+        seen_at = _iso(row.get("created_at"))
+        for term_row in term_rows:
+            norm = normalize_term_row(term_row)
+            if norm is None:
+                continue
+            key = (norm["platform"], norm["anchor_source"], norm["term"])
+            _fold_term(terms.setdefault(key, _new_term_acc(norm)), norm, seen_at)
+    return terms, counters
+
+
+def _top_terms(accs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """高产词 top5:只收真换回过合格新人的词,按人数降序、效率降序。
+
+    ``qualified_per_100_units`` 为 None(没烧配额)的词排在有效率数字之后——
+    行内原始数字全保留,消费端可自行复核这个排序取舍。
+    """
+    productive = [acc for acc in accs if acc["qualified_new"] > 0]
+    productive.sort(
+        key=lambda acc: (
+            -acc["qualified_new"],
+            -(acc["qualified_per_100_units"] or 0.0),
+            acc["term"],
+            acc["platform"],
+        )
+    )
+    return productive[:PER_SKU_TOP_TERMS]
+
+
+def _exhausted_terms(accs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """已抓干词清单:任一会话标过 exhausted 的词,供改写端避开再烧配额。"""
+    drained = [acc for acc in accs if acc["exhausted_sessions"] > 0]
+    drained.sort(key=lambda acc: (acc["platform"], acc["term"]))
+    return [
+        {
+            "term": acc["term"],
+            "platform": acc["platform"],
+            "anchor_source": acc["anchor_source"],
+            "exhausted_sessions": acc["exhausted_sessions"],
+            "qualified_new": acc["qualified_new"],
+            "last_seen": acc["last_seen"],
+        }
+        for acc in drained[:_MAX_EXHAUSTED_TERMS]
+    ]
+
+
+def per_sku_term_performance(
+    sku: Any, conn: Any = None, *, days: int = MAX_WINDOW_DAYS
+) -> dict[str, Any]:
+    """该 SKU 相关搜索会话的词效摘要:高产词 top5 + 已抓干词清单。纯读、零 LLM。
+
+    persona 知识库回填(迁移 306 的 ``term_performance_json``)的唯一数据源;
+    默认窗口取满一年——persona 知识长命,窄窗会把老 SKU 饿成假空账。
+    失败方向与 :func:`aggregate_term_yield` 同款:读不出 → ``status='probe_failed'``,
+    样本荒 → ``low_sample=True``,绝不伪装成一份可信的零产出台账。
+    """
+    window = max(1, min(_int(days, MAX_WINDOW_DAYS), MAX_WINDOW_DAYS))
+    sku_text = _text(sku)
+    base = {
+        "schema": PER_SKU_TERM_PERFORMANCE_SCHEMA,
+        "sku": sku_text,
+        "window_days": window,
+        "note": (
+            "该 SKU 相关会话的逐词供给侧摘要(discovery_term_evidence 纯 SQL 聚合)。"
+            "qualified_per_100_units 为 None = 该词没烧过配额,不是零产出。"
+            "low_sample=True 时样本不足,别当结论用。"
+        ),
+    }
+    if not sku_text:
+        return {**base, "status": "no_sku", "reason": "empty_sku"}
+    try:
+        rows = (conn if conn is not None else get_conn()).execute(
+            _SKU_SESSIONS_SQL, (sku_text, window)
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(
+            "per_sku_term_performance_probe_failed sku=%s window_days=%s reason=%s",
+            sku_text, window, str(exc)[:200], exc_info=True,
+        )
+        return {**base, "status": "probe_failed", "reason": "term_performance_probe_failed"}
+    terms, counters = _fold_sku_sessions(rows)
+    accs = list(terms.values())
+    for acc in accs:
+        acc["qualified_per_100_units"] = _per_100_units(acc["qualified_new"], acc["quota_units"])
+    total_units = sum(acc["quota_units"] for acc in accs)
+    total_qualified = sum(acc["qualified_new"] for acc in accs)
+    return {
+        **base,
+        "status": "ok",
+        **counters,
+        "low_sample": counters["sessions_used"] < LOW_SAMPLE_SESSIONS,
+        "low_sample_threshold": LOW_SAMPLE_SESSIONS,
+        "terms_count": len(accs),
+        "top_terms": _top_terms(accs),
+        "exhausted_terms": _exhausted_terms(accs),
+        "totals": {
+            "quota_units": total_units,
+            "qualified_new": total_qualified,
+            "qualified_per_100_units": _per_100_units(total_qualified, total_units),
+        },
+    }
+
+
 __all__ = [
     "DEFAULT_WINDOW_DAYS",
     "LOW_SAMPLE_SESSIONS",
     "MAX_WINDOW_DAYS",
+    "PER_SKU_TERM_PERFORMANCE_SCHEMA",
+    "PER_SKU_TOP_TERMS",
     "TERM_EVIDENCE_KEY",
     "TERM_YIELD_SCHEMA",
     "UNLABELED_ANCHOR_SOURCE",
     "aggregate_term_yield",
     "normalize_term_row",
+    "per_sku_term_performance",
 ]

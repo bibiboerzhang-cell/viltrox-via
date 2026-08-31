@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db.connection import db_connection_sync_scope, get_conn  # noqa: E402
 from app.domains.costs import product_persona as persona_helper  # noqa: E402
+from app.domains.kol.discovery_term_yield import per_sku_term_performance  # noqa: E402
 from app.platform import llm_gateway  # noqa: E402
 
 PERSONA_SOURCE = "llm_persona_v1"
@@ -235,6 +236,25 @@ def _upsert(conn: Any, sku: str, category: str, persona: dict[str, Any], model: 
             model or "",
             PERSONA_SOURCE,
         ),
+    )
+    conn.commit()
+    # 重放路径顺带回填词效知识(迁移 306 列)。persona 已独立 commit 落库在前:
+    # 词效回填失败只损失知识列,persona 正文不回滚——两者生命周期本就不同。
+    _write_term_performance(conn, sku)
+
+
+def _write_term_performance(conn: Any, sku: str) -> None:
+    """把该 SKU 的词效摘要写进 vkpi_product_persona.term_performance_json(迁移 306)。
+
+    纯 SQL 聚合、零 LLM、只在重放(--execute)路径被 _upsert 调用,无任何自动触发。
+    聚合器读不出会返回 status='probe_failed' 的载荷——原样落库让消费端看见
+    「没读出来」,绝不静默吞掉;本函数自身的写失败向上抛,由 main 的单 SKU
+    容错打印 ERR(persona 正文此刻已落库,不受影响)。
+    """
+    payload = per_sku_term_performance(sku, conn=conn)
+    conn.execute(
+        "UPDATE vkpi_product_persona SET term_performance_json = ? WHERE product_sku = ?",
+        (json.dumps(payload, ensure_ascii=False, default=str), sku),
     )
     conn.commit()
 
