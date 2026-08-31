@@ -87,7 +87,7 @@ def _receipt(*, mode: str = "scored", file_count: int = 30) -> dict[str, object]
         for field in mutation.COUNT_FIELDS
     }
     killed_pool = totals["killed"] + totals["timeout"]
-    denominator = killed_pool + totals["survived"] + totals["no_tests"]
+    denominator = killed_pool + totals["survived"]  # 合同公式:no_tests 不入分母
     identity = {"file_count": 3, "content_sha256": "2" * 64}
     return {
         "schema_version": mutation.SCHEMA_VERSION,
@@ -165,8 +165,8 @@ def test_valid_scored_receipt_is_accepted() -> None:
     assert observed["mode"] == "scored"
     assert observed["scope_partial"] is True
     assert observed["target_file_count"] == 30
-    assert observed["scored_mutants"] == 30 * 10
-    assert observed["core_mutation_score"] == pytest.approx(0.7)
+    assert observed["scored_mutants"] == 30 * 9  # 合同分母:7杀+2存,无 no_tests
+    assert observed["core_mutation_score"] == pytest.approx(7 / 9)
 
 
 def test_merge_attaches_observed_metric_with_required_fields() -> None:
@@ -176,10 +176,10 @@ def test_merge_attaches_observed_metric_with_required_fields() -> None:
     )
     entry = evidence["metrics"]["code"]["core_mutation_score"]
     assert entry["status"] == "observed"
-    assert entry["value"] == pytest.approx(0.7)
+    assert entry["value"] == pytest.approx(7 / 9)
     assert entry["source"].startswith("receipt://")
     assert entry["observed_at"] == "2026-08-30T11:00:00Z"
-    assert entry["sample_count"] == 300
+    assert entry["sample_count"] == 270  # 合同分母
     assert entry["details"]["scope_groups"] == ["kol_search"]
     assert entry["details"]["scope_partial"] is True
 
@@ -196,7 +196,7 @@ def test_merge_downgrades_smoke_receipt() -> None:
     entry = evidence["metrics"]["code"]["core_mutation_score"]
     assert entry["status"] == "missing_or_insufficient"
     assert entry["reason"] == score_mutation.SMOKE_REASON
-    assert entry["value"] == pytest.approx(0.7)
+    assert entry["value"] == pytest.approx(7 / 9)
 
 
 def test_merge_downgrades_below_file_floor() -> None:
