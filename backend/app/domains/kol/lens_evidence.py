@@ -17,6 +17,8 @@ v_relevance 三态只读投影(v_relevance_for):
   * likely    —— 提及但未归一 / 仅系列 / 归一了但无明确 modality / 只出现在建议性字段;
   * none      —— 整条深析零提及(视频级,由扫描账本给出)。
 红线:纯读;绝不写 viltrox_fit_score / 不触 rule_v0。
+截取/规格/家族/目录零件的实现住在 lens_evidence_parts.py(CC 战役 2026-08-30 平移,
+行为逐字节不变);本模块保留抽取编排、目录索引与全部历史名字。
 """
 from __future__ import annotations
 
@@ -25,13 +27,25 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable
 
+from app.domains.kol import lens_evidence_parts as parts
+from app.domains.kol.lens_evidence_parts import (  # noqa: F401  (历史名字保留给调用方/测试)
+    CatalogProduct,
+    _clip,
+    _looks_like_product,
+    _mount_code,
+    _mount_hint,
+    _normkey,
+    _text,
+    canonical_text,
+    family_name,
+    parse_spec,
+    split_slash_list,
+)
 from app.domains.products.product_aliases import generated_aliases_for_product, normalize_alias
 from app.domains.products.product_aliases_lens import (
     ALIAS_TABLE_VERSION,
     lookup_lens_alias,
-    rewrite_mount_phrases,
     series_label,
-    series_only_codes,
 )
 
 
@@ -54,39 +68,7 @@ _BRAND_RE = re.compile(
     r"(?:viltrox|唯卓仕|唯卓|维卓仕|维卓)\s*(?:的|品牌的|品牌|全新|新品|新款|这款|这支|那支|那款|出品的)*[\s:：,，]*",
     re.IGNORECASE,
 )
-# 型号 token:规格词 / 系列词 / 卡口词 / 含数字的型号码;其余词(如 is / 镜头)即截止。
-_TOKEN_RE = re.compile(
-    r"^(?:af|mf|fe|ef|dc|dg|tc|pl|rf|xf|z|x|l|e|s|m43|ii|iii|iv|pro|air|evo|lab|chip|epics?|vintage|cine|macro|"
-    r"anamorphic|maestro|memento|nexusfocus|nexus|spark|sprite|ninja|retro|mini|plus|kit|max|ultra|"
-    r"full-?frame|aps-?c|apsc|"
-    r"(?:fe|e|z|xf|x|l|rf|ef|pl|m43)-?mount|"
-    r"\d[\w.\-/+]*|[a-z]{1,3}-(?:[a-z]?\d[\w.\-/+]*|[a-z]{1,2})|[a-z]{1,3}\d[\w.\-/+]*|f/?\d(?:\.\d)?|t/?\d(?:\.\d)?)$",
-    re.IGNORECASE,
-)
-_TRAILING_DROP = {"full-frame", "fullframe", "full", "frame", "aps-c", "apsc", "kit", "mount"}
-_LEADING_DROP = {"ii", "iii", "iv", "chip", "mini", "plus", "max", "ultra", "kit", "full-frame", "fullframe", "aps-c", "apsc"}
-# 「Viltrox Pro 75mm F1.2」:系列词在前不是丢掉,挪到尾部(系列是硬约束,丢了会错归家族)。
-_LEADING_SERIES = {"pro", "air", "evo", "lab"}
-_SERIES_SLASH_RE = re.compile(r"\b(pro|lab|evo|air|epics?)\s*/\s*(pro|lab|evo|air|epics?)\b", re.IGNORECASE)
-_SLASH_LIST_RE = re.compile(r"^([A-Za-z]{1,3}-)?([A-Za-z]?\d[\w.]*(?:\s*/\s*[A-Za-z]?\d[\w.]*)+)(.*)$")
 _SENTENCE_SPLIT_RE = re.compile(r"[。；;！？!?\n]+|(?<=[a-z0-9\)])\.\s+")
-_FOCAL_RE = re.compile(r"(?<![\d.])(\d{1,3})\s*mm\b", re.IGNORECASE)
-_ZOOM_RE = re.compile(r"(?<![\d.])(\d{1,3})\s*[-–~]\s*(\d{1,3})\s*mm\b", re.IGNORECASE)
-# 截止符:CJK 全角区 / 括号 / 标点(品牌词后的型号串到这里为止)。
-_CLIP_STOP_RE = re.compile("[\u3000-\u9fff\uff00-\uffef()\\[\\]{}<>,;!\"'|]")
-_MOUNT_TOKEN_RE = re.compile(r"^(?:fe|e|z|xf|x|l|rf|ef|pl|m43)(?:-?mount)?$", re.IGNORECASE)
-_HYPHEN_CODE_RE = re.compile(r"\b[A-Za-z]{1,3}-[A-Za-z]{1,2}\b")
-_SERIES_WORDS = ("lab", "evo", "pro", "air", "chip", "epic", "vintage", "macro", "cine", "anamorphic")
-_MOUNT_PATTERNS: tuple[tuple[str, str], ...] = (
-    ("PL-mount", r"\bpl(?:[- ]?mount)?\b"),
-    ("RF-mount", r"\brf(?:[- ]?mount)?\b"),
-    ("EF-mount", r"\bef(?:[- ]?mount)?\b"),
-    ("X-mount", r"\b(?:xf|x)(?:[- ]?mount)?\b|富士|fuji"),
-    ("FE-mount", r"\b(?:fe|e)(?:[- ]?mount)?\b|索尼|sony"),
-    ("Z-mount", r"\bz(?:[- ]?mount)?\b|尼康|nikon"),
-    ("L-mount", r"\bl(?:[- ]?mount)?\b"),
-    ("M43", r"m4/?3|松下|panasonic|olympus"),
-)
 _MODALITY_CUES: dict[str, re.Pattern[str]] = {
     "text": re.compile(
         r"字幕|标题|文字|标注|标明|标识|标示|水印|\bui\b|文本|简介|贴纸|角标|左下角|右下角|caption|subtitle|title|overlay|on-?screen text|watermark|description|label",
@@ -102,10 +84,6 @@ _MODALITY_CUES: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
 }
-
-
-def _text(value: Any) -> str:
-    return str(value or "").strip()
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -193,130 +171,11 @@ def source_texts(result: Any) -> list[tuple[str, str]]:
     return pairs
 
 
-# ── 提及截取 ────────────────────────────────────────────────────────────────
-
-
-def _clip(after_brand: str) -> tuple[str, list[str]]:
-    """品牌词之后逐 token 吃型号词,遇到非型号词 / CJK / 标点即停。
-
-    返回 (型号正文, 仅系列码列表):正文非空 = 型号提及;正文空但系列码非空 = 仅系列提及
-    (「Viltrox Pro 系列」「Viltrox Epics」);两者皆空 = 没点名产品。
-    """
-
-    window = rewrite_mount_phrases(after_brand)
-    window = _SERIES_SLASH_RE.sub(r"\1 \2", window)
-    head = _CLIP_STOP_RE.split(window, maxsplit=1)[0]
-    words = head.split()
-    tokens: list[str] = []
-    consumed = 0
-    for raw_token in words:
-        token = raw_token.strip(".,;:-/")
-        if not token or not _TOKEN_RE.match(token):
-            break
-        tokens.append(token)
-        consumed += 1
-        if len(tokens) >= 8:
-            break
-    # 「... for Sony E-mount」写法:卡口在 for 之后,补成一个卡口 token(只认品牌/卡口词)。
-    rest = " ".join(words[consumed:consumed + 4]).lower()
-    if tokens and rest.startswith("for "):
-        mount_hint = _mount_hint(rest)
-        if mount_hint and not any(_MOUNT_TOKEN_RE.match(tok) for tok in tokens):
-            tokens.append(mount_hint)
-    while tokens and tokens[-1].lower() in _TRAILING_DROP:
-        tokens.pop()
-    while tokens and tokens[0].lower() in _LEADING_DROP:
-        tokens.pop(0)
-    # 仅系列:截出来的全是系列词(Pro / LAB / Epics …),没有任何型号码。
-    series_codes = series_only_codes(" ".join(tokens)) if tokens else []
-    if series_codes and not any(any(ch.isdigit() for ch in tok) for tok in tokens):
-        return "", series_codes
-    # 「Viltrox Pro 75mm F1.2」:前置系列词挪到尾部。
-    leading_series: list[str] = []
-    while tokens and tokens[0].lower() in _LEADING_SERIES:
-        leading_series.append(tokens.pop(0))
-    tokens.extend(leading_series)
-    # 「DC-A1 7英寸」截出的尾部裸整数不是型号(但「35 1.8」这种焦段+光圈口语保留给 canonical)。
-    while len(tokens) > 1 and re.fullmatch(r"\d{1,4}", tokens[-1]) and not re.fullmatch(r"\d\.\d", tokens[-1]):
-        if len(tokens) == 2 and re.fullmatch(r"\d{1,3}", tokens[0]):
-            break
-        # 「Z-mount 85」「Pro 85」:其余 token 都不带数字时,裸整数就是焦段。
-        if not any(any(ch.isdigit() for ch in tok) for tok in tokens[:-1]) and 5 <= int(tokens[-1]) <= 400:
-            tokens[-1] = f"{tokens[-1]}mm"
-            break
-        tokens.pop()
-    body = canonical_text(" ".join(tokens))
-    if not _looks_like_product(body):
-        return "", []
-    return body[:80], []
+# ── 提及截取(实现在 lens_evidence_parts,老名字顶部引入)────────────────────
 
 
 def _clip_body(after_brand: str) -> str:
     return _clip(after_brand)[0]
-
-
-def split_slash_list(body: str) -> list[str]:
-    """「13mm/23mm/27mm/75mm Pro」→ 四条;「DC-X2/X3」→ DC-X2 / DC-X3;非列表原样单条。"""
-
-    match = _SLASH_LIST_RE.match(_text(body))
-    if not match:
-        return [body]
-    prefix, group, suffix = match.group(1) or "", match.group(2), match.group(3) or ""
-    items = [item.strip() for item in re.split(r"\s*/\s*", group) if item.strip()]
-    if len(items) < 2:
-        return [body]
-    out: list[str] = []
-    for item in items:
-        piece = f"{prefix}{item}{suffix}".strip()
-        if piece and piece not in out:
-            out.append(piece)
-    return out[:6] or [body]
-
-
-def canonical_text(value: str) -> str:
-    """把口语/旧目录写法统一到「75mm F1.8」形态(不改系列/卡口词)。"""
-
-    text = _text(value)
-    text = re.sub(r"\bm\s*4\s*/\s*3\b", "M43", text, flags=re.IGNORECASE)
-    text = re.sub(r"(?<![\d.])(\d{1,3})\s*/\s*(\d(?:\.\d)?)(?![\d])", r"\1mm F\2", text)
-    text = re.sub(r"(?<![\d.])(\d{1,3})\s+(\d\.\d)(?![\d])", lambda m: f"{m.group(1)}mm F{m.group(2)}" if 5 <= int(m.group(1)) <= 400 else m.group(0), text)
-    text = re.sub(r"(\d{1,3})\s*mm\s+(\d\.\d)(?![\d])", r"\1mm F\2", text, flags=re.IGNORECASE)
-    text = re.sub(r"(?<![\d.])(\d{2,3})\s+(pro|air|evo|lab|ii)\b", r"\1mm \2", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b([ft])\s*/\s*(\d)", r"\1\2", text, flags=re.IGNORECASE)
-    text = re.sub(r"\b([ft])(\d)(?![\d.])", r"\1\2.0", text, flags=re.IGNORECASE)
-    text = re.sub(r"(\d)\s*mm\b", r"\1mm", text, flags=re.IGNORECASE)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _looks_like_product(body: str) -> bool:
-    if not body:
-        return False
-    if re.search(r"\d{1,3}mm\b", body, re.IGNORECASE):
-        return True
-    if _HYPHEN_CODE_RE.search(body):
-        return True
-    # 字母+数字型号码(K60 / Z1 / S05 / DC-A1),纯光圈(F1.4)或裸数字不算产品。
-    stripped = re.sub(r"\b[ft]\d(?:\.\d)?\b", "", body, flags=re.IGNORECASE)
-    return bool(re.search(r"\b[A-Za-z]{1,3}-?[A-Za-z]?\d", stripped))
-
-
-def _mount_hint(text: str) -> str:
-    low = text.lower()
-    if "sony" in low or "e-mount" in low or " e mount" in low:
-        return "FE"
-    if "nikon" in low or "z-mount" in low:
-        return "Z"
-    if "fuji" in low or "x-mount" in low:
-        return "X"
-    if "leica" in low or "l-mount" in low:
-        return "L"
-    if "canon" in low and "rf" in low:
-        return "RF"
-    if "canon" in low and "ef" in low:
-        return "EF"
-    if "m43" in low or "m4/3" in low or "panasonic" in low or "olympus" in low:
-        return "M43"
-    return ""
 
 
 def normalize_mention(value: str) -> str:
@@ -378,23 +237,26 @@ def extract_mentions(result: Any) -> list[Mention]:
         item.source_fields.add(field_name)
         item.count += 1
 
+    def handle_match(field_name: str, text: str, match: re.Match) -> None:
+        body, series_codes = _clip(text[match.end():match.end() + 120])
+        if not body and not series_codes:
+            return
+        context = text if field_name in _CONTEXT_WHOLE_FIELDS else _sentence_for(text, match.start(), match.end() + len(body or "") + 8)
+        if not body:
+            if field_name not in SERIES_SOURCE_FIELDS:
+                return
+            for code in series_codes:
+                record(f"{SERIES_KEY_PREFIX}{code.lower()}", series_label(code), context, field_name, series=code)
+            return
+        pieces = split_slash_list(body)
+        for piece in pieces:
+            norm = normalize_mention(piece)
+            if norm:
+                record(norm, piece, context, field_name, from_list=len(pieces) > 1)
+
     for field_name, text in source_texts(result):
         for match in _BRAND_RE.finditer(text):
-            body, series_codes = _clip(text[match.end():match.end() + 120])
-            if not body and not series_codes:
-                continue
-            context = text if field_name in _CONTEXT_WHOLE_FIELDS else _sentence_for(text, match.start(), match.end() + len(body or "") + 8)
-            if not body:
-                if field_name not in SERIES_SOURCE_FIELDS:
-                    continue
-                for code in series_codes:
-                    record(f"{SERIES_KEY_PREFIX}{code.lower()}", series_label(code), context, field_name, series=code)
-                continue
-            pieces = split_slash_list(body)
-            for piece in pieces:
-                norm = normalize_mention(piece)
-                if norm:
-                    record(norm, piece, context, field_name, from_list=len(pieces) > 1)
+            handle_match(field_name, text, match)
             if len(found) >= MAX_MENTIONS_PER_CACHE * 2:
                 break
     for item in found.values():
@@ -406,106 +268,6 @@ def extract_mentions(result: Any) -> list[Mention]:
 # ── 目录归一 ────────────────────────────────────────────────────────────────
 
 
-def _normkey(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]", "", _text(value).lower())
-
-
-def parse_spec(value: str) -> dict[str, Any]:
-    text = canonical_text(_text(value))
-    low = text.lower()
-    zoom = _ZOOM_RE.search(low)
-    if zoom:
-        focal = sorted({int(zoom.group(1)), int(zoom.group(2))})
-    else:
-        focal = sorted({int(m) for m in _FOCAL_RE.findall(low)})
-    aperture = ""
-    aperture_kind = ""
-    ap = re.search(r"\b([ft])\s*/?\s*(\d(?:\.\d)?)\b", low)
-    if ap:
-        aperture = ap.group(2)
-        aperture_kind = ap.group(1)
-    elif focal:
-        bare = re.search(r"\d{1,3}\s*mm\s+(\d\.\d)\b", low)
-        if bare:
-            aperture = bare.group(1)
-    if aperture and "." not in aperture:
-        aperture = f"{aperture}.0"
-    series = [word for word in _SERIES_WORDS if re.search(rf"(?<![a-z]){word}(?![a-z])", low)]
-    mount = ""
-    for code, pattern in _MOUNT_PATTERNS:
-        if re.search(pattern, low):
-            mount = code
-            break
-    return {"focal": focal, "aperture": aperture, "aperture_kind": aperture_kind, "series": series, "mount": mount}
-
-
-_FAMILY_SERIES_SUFFIX = {"pro", "ii", "iii", "plus", "max", "ultra", "air", "evo", "lab"}
-_FAMILY_MOUNT_TAIL_RE = re.compile(r"\s+(?:FE|E|Z|XF|X|EF|RF|L|DL|PL|M43|M)$")
-
-
-def family_name(model_name: str) -> str:
-    """型号名 → 家族展示名:镜头去卡口/画幅后缀(AF 75mm F1.8 EVO);
-    非镜头取到首个带数字的型号码为止(Vintage Z2 / DC-A1 / K60),吸收 Pro/II 等后缀。"""
-
-    text = _text(model_name)
-    text = re.sub(r"\([^)]*\)", " ", text)
-    text = re.sub(r"\bviltrox\b", "", text, flags=re.IGNORECASE)
-    text = canonical_text(text)
-    if re.search(r"\d{1,3}mm\b", text, re.IGNORECASE):
-        text = re.sub(r"\bfor\b.*$", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"full-?\s*frame|aps-?c|\blens\b|\bcamera\b|\bset\b", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s+", " ", text).strip(" -,")
-        while True:
-            trimmed = _FAMILY_MOUNT_TAIL_RE.sub("", text)
-            if trimmed == text:
-                break
-            text = trimmed
-        return text[:80]
-    words = text.split()
-    kept: list[str] = []
-    seen_code = False
-    for word in words:
-        if seen_code:
-            if word.lower().strip("-") in _FAMILY_SERIES_SUFFIX:
-                kept.append(word)
-                continue
-            break
-        kept.append(word)
-        if any(ch.isdigit() for ch in word):
-            seen_code = True
-    if not seen_code:
-        kept = words
-    family = " ".join(kept).strip(" -,")
-    family = re.sub(r"[\s\-]+[A-Za-z]$", "", family) if len(kept) > 1 and seen_code else family
-    return family[:80]
-
-
-def _mount_code(mount: str) -> str:
-    norm = _text(mount).lower()
-    if not norm:
-        return ""
-    for code, _pattern in _MOUNT_PATTERNS:
-        if norm.startswith(code.lower().split("-")[0]):
-            return code
-    if "fe" in norm or norm.startswith("e"):
-        return "FE-mount"
-    return _text(mount)
-
-
-@dataclass
-class CatalogProduct:
-    sku: str
-    model_name: str
-    marketing_name: str
-    category_main: str
-    series: str
-    mount: str
-    family: str
-    family_key: str
-    spec: dict[str, Any]
-    token_key: str
-
-
 class CatalogIndex:
     """一次装目录(vkpi_products + 别名),内存里反复归一。"""
 
@@ -513,36 +275,28 @@ class CatalogIndex:
         self.products: dict[str, CatalogProduct] = {}
         self.alias_map: dict[str, set[str]] = {}
         for row in products:
-            sku = _text(row.get("sku")).upper()
-            if not sku or sku.startswith("IMAGE-AWARDS"):
+            product = parts.catalog_product(row)
+            if product is None:
                 continue
-            model_name = _text(row.get("model_name"))
-            family = family_name(model_name) or sku
-            product = CatalogProduct(
-                sku=sku,
-                model_name=model_name,
-                marketing_name=_text(row.get("marketing_name")),
-                category_main=_text(row.get("category_main")),
-                series=_text(row.get("series")),
-                mount=_mount_code(_text(row.get("mount"))),
-                family=family,
-                family_key=_normkey(family),
-                spec=parse_spec(f"{model_name} {row.get('mount') or ''}"),
-                token_key=_normkey(model_name),
-            )
-            self.products[sku] = product
-            self.alias_map.setdefault(_normkey(sku), set()).add(sku)
-            self.alias_map.setdefault(_normkey(model_name), set()).add(sku)
-            self.alias_map.setdefault(_normkey(family), set()).add(sku)
-        alias_rows = list(aliases) if aliases is not None else []
-        if not alias_rows:
-            for row in products:
-                alias_rows.extend(generated_aliases_for_product(dict(row)))
-        for row in alias_rows:
+            self.products[product.sku] = product
+            self.alias_map.setdefault(_normkey(product.sku), set()).add(product.sku)
+            self.alias_map.setdefault(_normkey(product.model_name), set()).add(product.sku)
+            self.alias_map.setdefault(_normkey(product.family), set()).add(product.sku)
+        for row in self._alias_rows(products, aliases):
             sku = _text(row.get("sku")).upper()
             key = _normkey(row.get("alias_norm") or normalize_alias(row.get("alias")))
             if sku in self.products and key:
                 self.alias_map.setdefault(key, set()).add(sku)
+
+    @staticmethod
+    def _alias_rows(
+        products: Iterable[dict[str, Any]], aliases: Iterable[dict[str, Any]] | None
+    ) -> list[dict[str, Any]]:
+        alias_rows = list(aliases) if aliases is not None else []
+        if not alias_rows:
+            for row in products:
+                alias_rows.extend(generated_aliases_for_product(dict(row)))
+        return alias_rows
 
     def _outcome(self, skus: set[str], mention: str, *, force_family: bool = False, note: str = "") -> dict[str, Any]:
         # 旧成本目录(VL-xxx)是官方目录的重复登记(无系列/卡口);两边都命中时只认官方行。
@@ -592,30 +346,12 @@ class CatalogIndex:
         return pool, True
 
     def _resolve_spec(self, mention_text: str, spec: dict[str, Any], hit: set[str]) -> dict[str, Any]:
-        pool = [p for p in self.products.values() if p.spec["focal"] == spec["focal"]]
-        # 别名命中的同焦段行并入候选池,再统一过硬约束(别名不能绕过光圈/系列/卡口)。
-        seen = {p.sku for p in pool}
-        pool.extend(
-            self.products[sku]
-            for sku in sorted(hit)
-            if sku in self.products and sku not in seen and self.products[sku].spec["focal"] == spec["focal"]
-        )
-        if spec["aperture"]:
-            pool = [p for p in pool if p.spec["aperture"] == spec["aperture"]]
-            # F 光圈(摄影镜头)与 T 光圈(电影镜头)不互认。
-            if spec["aperture_kind"]:
-                pool = [p for p in pool if not p.spec["aperture_kind"] or p.spec["aperture_kind"] == spec["aperture_kind"]]
-        for word in spec["series"]:
-            pool = [p for p in pool if word in p.spec["series"]]
+        pool = parts.focal_pool(self.products, hit, spec)
+        pool = parts.narrow_by_aperture(pool, spec)
+        pool = parts.narrow_by_series(pool, spec)
         pool, mount_unmatched = self._apply_mount(pool, spec["mount"])
-        official = [p for p in pool if not p.sku.startswith("VL-")]
-        if official:
-            pool = official
-        if not spec["series"] and len({p.family_key for p in pool}) > 1:
-            # 提及没写系列时,只认无系列后缀的家族(28mm F4.5 vs 28mm F4.5 Chip 不乱猜)。
-            plain = [p for p in pool if not p.spec["series"]]
-            if plain and len({p.family_key for p in plain}) == 1:
-                pool = plain
+        pool = parts.prefer_official(pool)
+        pool = parts.prefer_plain_family(pool, spec)
         return self._outcome({p.sku for p in pool}, mention_text, force_family=mount_unmatched, note="mount_unmatched" if mount_unmatched else "")
 
     def _resolve_alias(self, mention_text: str, canonical: str, spec: dict[str, Any]) -> dict[str, Any]:
@@ -634,8 +370,19 @@ class CatalogIndex:
                 return self._outcome(set(), mention_text)
             canonical_spec["mount"] = mount
             outcome = self._resolve_spec(mention_text, canonical_spec, set())
-        outcome["note"] = ";".join(part for part in (outcome.get("note"), "alias_table") if part)
+        outcome["note"] = parts.merged_note(outcome.get("note"), "alias_table")
         return outcome
+
+    def _resolve_token_probe(self, probe: str, mention_text: str) -> dict[str, Any] | None:
+        """非镜头型号码(DC-A1 / Z1 Pro / K60):型号 token 子串命中。"""
+        pool = [p for p in self.products.values() if parts.probe_hits(p, probe)]
+        if not pool:
+            return None
+        exact = [p for p in pool if parts.probe_exact(p, probe)]
+        return self._outcome({p.sku for p in (exact or pool)}, mention_text)
+
+    def _exact_alias_hit(self, mention_text: str, key: str) -> set[str]:
+        return set(self.alias_map.get(key) or self.alias_map.get(_normkey(normalize_alias(mention_text))) or ())
 
     def resolve(self, mention: str) -> dict[str, Any]:
         mention_text = _text(mention)
@@ -643,7 +390,7 @@ class CatalogIndex:
             return self._outcome(set(), mention_text)
         # 1. 别名 / 家族名精确命中(镜头还要并上规格匹配,别让旧目录别名抢先定案)
         key = _normkey(mention_text)
-        hit = set(self.alias_map.get(key) or self.alias_map.get(_normkey(normalize_alias(mention_text))) or ())
+        hit = self._exact_alias_hit(mention_text, key)
         spec = parse_spec(mention_text)
         if hit and not spec["focal"]:
             return self._outcome(hit, mention_text)
@@ -656,13 +403,11 @@ class CatalogIndex:
         # 3. 镜头规格匹配:焦段必须全等;光圈 / 系列 / 卡口有就当硬约束
         if spec["focal"]:
             return self._resolve_spec(mention_text, spec, hit)
-        # 4. 非镜头型号码(DC-A1 / Z1 Pro / K60):型号 token 子串命中
-        probe = key
-        if len(probe) >= 3:
-            pool = [p for p in self.products.values() if probe and (probe in p.token_key or probe == _normkey(p.sku))]
-            if pool:
-                exact = [p for p in pool if p.token_key == probe or _normkey(p.sku) == probe]
-                return self._outcome({p.sku for p in (exact or pool)}, mention_text)
+        # 4. 非镜头型号码:型号 token 子串命中
+        if len(key) >= 3:
+            probed = self._resolve_token_probe(key, mention_text)
+            if probed is not None:
+                return probed
         return self._outcome(set(), mention_text)
 
 
@@ -680,64 +425,67 @@ def load_catalog_index(conn: Any) -> CatalogIndex:
     return CatalogIndex(products, aliases or None)
 
 
-def extract_resolved(result: Any, index: CatalogIndex) -> list[dict[str, Any]]:
-    """抽取 + 归一;同家族 / 同 SKU 的多次提及合并成一行(unresolved 按原文去重)。"""
+def _retry_without_list_suffix(index: CatalogIndex, mention: Mention, outcome: dict[str, Any]) -> dict[str, Any]:
+    # 「13mm/23mm/27mm/75mm Pro」:列表尾巴的系列词未必属于每一项,去掉再试一次(仍过目录)。
+    bare = re.sub(r"\b(?:pro|air|evo|lab|ii)\b", " ", mention.text, flags=re.IGNORECASE).strip()
+    if not bare or bare == mention.text:
+        return outcome
+    retry = index.resolve(canonical_text(bare))
+    if retry["resolution"] == "unresolved":
+        return outcome
+    retry["note"] = parts.merged_note(retry.get("note"), "list_suffix_dropped")
+    return retry
 
-    merged: dict[str, dict[str, Any]] = {}
-    for mention in extract_mentions(result):
-        outcome = index.series_outcome(mention.series) if mention.series else index.resolve(mention.text)
-        if outcome["resolution"] == "unresolved" and mention.from_list:
-            # 「13mm/23mm/27mm/75mm Pro」:列表尾巴的系列词未必属于每一项,去掉再试一次(仍过目录)。
-            bare = re.sub(r"\b(?:pro|air|evo|lab|ii)\b", " ", mention.text, flags=re.IGNORECASE).strip()
-            if bare and bare != mention.text:
-                retry = index.resolve(canonical_text(bare))
-                if retry["resolution"] != "unresolved":
-                    outcome = retry
-                    outcome["note"] = ";".join(part for part in (outcome.get("note"), "list_suffix_dropped") if part)
-        group_key = (
-            f"sku:{outcome['product_sku']}" if outcome["resolution"] == "sku"
-            else f"family:{outcome['lens_key']}" if outcome["resolution"] == "family"
-            else f"raw:{mention.norm}"
-        )
-        row = merged.get(group_key)
-        if row is None:
-            row = {
-                "mention_text": mention.text,
-                "mention_norm": mention.norm,
-                "resolution": outcome["resolution"],
-                "product_sku": outcome["product_sku"],
-                "lens_key": outcome["lens_key"],
-                "display_name": outcome["display_name"],
-                "category_main": outcome["category_main"],
-                "candidate_skus": list(outcome["candidate_skus"]),
-                "modalities": set(),
-                "source_fields": set(),
-                "mention_count": 0,
-                "note": _text(outcome.get("note")),
-            }
-            merged[group_key] = row
-        row["modalities"].update(mention.modalities)
-        row["source_fields"].update(mention.source_fields)
-        row["mention_count"] += mention.count
-        if len(merged) >= MAX_MENTIONS_PER_CACHE:
-            break
-    # 同一条结果里「85mm」「Z2」这类残缺提及,若已有同焦段 / 同型号码的归一行,并进去。
+
+def _group_key(outcome: dict[str, Any], mention: Mention) -> str:
+    return (
+        f"sku:{outcome['product_sku']}" if outcome["resolution"] == "sku"
+        else f"family:{outcome['lens_key']}" if outcome["resolution"] == "family"
+        else f"raw:{mention.norm}"
+    )
+
+
+def _new_merged_row(mention: Mention, outcome: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mention_text": mention.text,
+        "mention_norm": mention.norm,
+        "resolution": outcome["resolution"],
+        "product_sku": outcome["product_sku"],
+        "lens_key": outcome["lens_key"],
+        "display_name": outcome["display_name"],
+        "category_main": outcome["category_main"],
+        "candidate_skus": list(outcome["candidate_skus"]),
+        "modalities": set(),
+        "source_fields": set(),
+        "mention_count": 0,
+        "note": _text(outcome.get("note")),
+    }
+
+
+def _host_for(row: dict[str, Any], resolved_rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    tokens = set(row["mention_norm"].split())
+    for candidate in resolved_rows:
+        host_tokens = set(normalize_mention(candidate["display_name"]).split()) | set(candidate["mention_norm"].split())
+        if tokens and tokens <= host_tokens:
+            return candidate
+    return None
+
+
+def _absorb_unresolved(merged: dict[str, dict[str, Any]]) -> None:
+    """同一条结果里「85mm」「Z2」这类残缺提及,若已有同焦段 / 同型号码的归一行,并进去。"""
     resolved_rows = [row for row in merged.values() if row["resolution"] != "unresolved"]
     for key in [k for k in merged if k.startswith("raw:")]:
         row = merged[key]
-        tokens = set(row["mention_norm"].split())
-        host = None
-        for candidate in resolved_rows:
-            host_tokens = set(normalize_mention(candidate["display_name"]).split()) | set(candidate["mention_norm"].split())
-            if tokens and tokens <= host_tokens:
-                host = candidate
-                break
+        host = _host_for(row, resolved_rows)
         if host is None:
             continue
         host["modalities"].update(row["modalities"])
         host["source_fields"].update(row["source_fields"])
         host["mention_count"] += row["mention_count"]
         del merged[key]
+
+
+def _finalize_rows(merged: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for row in merged.values():
         modalities = {m for m in row["modalities"] if m in MODALITIES}
@@ -750,7 +498,37 @@ def extract_resolved(result: Any, index: CatalogIndex) -> list[dict[str, Any]]:
     return out
 
 
+def extract_resolved(result: Any, index: CatalogIndex) -> list[dict[str, Any]]:
+    """抽取 + 归一;同家族 / 同 SKU 的多次提及合并成一行(unresolved 按原文去重)。"""
+
+    merged: dict[str, dict[str, Any]] = {}
+    for mention in extract_mentions(result):
+        outcome = index.series_outcome(mention.series) if mention.series else index.resolve(mention.text)
+        if outcome["resolution"] == "unresolved" and mention.from_list:
+            outcome = _retry_without_list_suffix(index, mention, outcome)
+        group_key = _group_key(outcome, mention)
+        row = merged.get(group_key)
+        if row is None:
+            row = _new_merged_row(mention, outcome)
+            merged[group_key] = row
+        row["modalities"].update(mention.modalities)
+        row["source_fields"].update(mention.source_fields)
+        row["mention_count"] += mention.count
+        if len(merged) >= MAX_MENTIONS_PER_CACHE:
+            break
+    _absorb_unresolved(merged)
+    return _finalize_rows(merged)
+
+
 # ── v_relevance 三态投影(纯函数,读侧 / 回填共用) ────────────────────────────
+
+
+def _v_relevance_inputs(row: dict[str, Any]) -> tuple[str, str, set[str], set[str]]:
+    resolution = _text(row.get("resolution"))
+    lens_key = _text(row.get("lens_key"))
+    modalities = {m for m in (row.get("modalities") or []) if m in MODALITIES}
+    sources = {item for item in (row.get("source_fields") or []) if item}
+    return resolution, lens_key, modalities, sources
 
 
 def v_relevance_for(row: dict[str, Any]) -> tuple[str, str]:
@@ -758,10 +536,7 @@ def v_relevance_for(row: dict[str, Any]) -> tuple[str, str]:
     source_fields),回填统计与读侧端点共用同一口径;目录无该卡口退回家族级(note=mount_unmatched)
     仍按家族归一计。"""
 
-    resolution = _text(row.get("resolution"))
-    lens_key = _text(row.get("lens_key"))
-    modalities = {m for m in (row.get("modalities") or []) if m in MODALITIES}
-    sources = {item for item in (row.get("source_fields") or []) if item}
+    resolution, lens_key, modalities, sources = _v_relevance_inputs(row)
     if lens_key.startswith(SERIES_KEY_PREFIX):
         return "likely", "series_only"
     if resolution not in {"sku", "family"}:

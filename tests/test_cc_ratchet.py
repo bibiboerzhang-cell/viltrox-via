@@ -74,7 +74,6 @@ CC_WHITELIST: dict[str, int] = {
     "backend/app/domains/kol/profile_basics.py::write_kol_profile_basics": 50,
     "backend/app/domains/kol/profile_discovery_evidence.py::build_term_evidence": 49,
     "backend/app/domains/kol/profile_online_qualification.py::_qualify_online_candidates_internal": 44,
-    "backend/app/domains/kol/profile_recall_projection.py::_format_item": 42,
     "backend/app/domains/kol/profile_recall_qualification.py::qualify_local_candidates": 43,
     "backend/app/domains/kol/search_session_job_sync.py::sync_search_session_job_impl": 44,
     "backend/app/domains/kol/search_sessions_attach.py::_safe_local_qualification": 41,

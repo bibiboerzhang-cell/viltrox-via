@@ -17,15 +17,18 @@ from app.domains.kol.profile_recall_contract import (
     _clean_text,
 )
 from app.domains.kol.profile_recall_filter_modes import (
-    CandidateFilterVerdict, TRI_STATE_FILTER_FIELDS, normalize_tri_state_filter,
-    tri_state_outcome, unknown_field_candidates,
+    CandidateFilterVerdict, tri_state_outcome, unknown_field_candidates,
 )
 from app.domains.kol.profile_recall_country_gate import country_match_key
 from app.domains.kol.profile_recall_content_projection import public_content_evidence_status
 from app.domains.kol.profile_recall_language_gate import resolve_language_match_key
 from app.domains.kol.profile_recall_precision import missingness_aware_weighted_score
-from app.domains.kol.profile_recall_product_queries import PRODUCT_LINE_PERSONAS
-from app.domains.kol.profile_recall_relevance import WHY_FIT_RULES, _relevance_signals
+from app.domains.kol.profile_recall_relevance import _relevance_signals
+from app.domains.kol.profile_recall_projection_helpers import (
+    _float,
+    _optional_float,
+)
+from app.domains.kol import profile_recall_projection_helpers as fmt
 from app.domains.kol.profile_vertical_signals import VerticalReading, vertical_filter_outcome
 
 
@@ -51,18 +54,7 @@ def _adoption_profile(
     except Exception:
         logger.debug("偏好画像读取失败,返回空画像(best-effort)", exc_info=True)
         return {}
-    platforms: dict[str, int] = {}
-    topic_words: dict[str, int] = {}
-    n = 0
-    for r in rows:
-        d = dict(r)
-        n += 1
-        p = str(d.get("platform") or "").lower()
-        if p:
-            platforms[p] = platforms.get(p, 0) + 1
-        blob = f"{d.get('primary_topic') or ''} {d.get('bio') or ''}".lower()
-        for w in re.findall(r"[a-z]{4,}", blob)[:20]:
-            topic_words[w] = topic_words.get(w, 0) + 1
+    n, platforms, topic_words = fmt.adoption_counters(rows)
     if n < 5:
         return {}
     top_words = {w for w, c in sorted(topic_words.items(), key=lambda kv: -kv[1])[:15] if c >= 2}
@@ -93,9 +85,7 @@ def _llm_rerank_buckets(buckets: dict[str, list], query_text: str, persona_text:
     except Exception:
         logger.debug("KOL recall production LLM boundary unavailable", exc_info=True)
         return "production_boundary_unavailable"
-    cands: list[dict[str, Any]] = []
-    for bucket in ("creator", "reviewer"):
-        cands.extend((buckets.get(bucket) or [])[:12])
+    cands = fmt.rerank_candidates(buckets)
     if len(cands) < 4:
         return "too_few_candidates"
     from app.domains.kol.contact_system import sanitize_contact_values_for_external_processing
@@ -108,24 +98,8 @@ def _llm_rerank_buckets(buckets: dict[str, list], query_text: str, persona_text:
             "product_label": product_label,
         }
     )
-    cands = list(safe_context.get("candidates") or [])
-    query_text = str(safe_context.get("query_text") or "")
-    persona_text = str(safe_context.get("persona_text") or "")
-    product_label = str(safe_context.get("product_label") or "")
-    lines = []
-    for i, it in enumerate(cands):
-        blurb = " ".join(
-            str(x) for x in (it.get("why_fit") or "", it.get("recall_reason") or "", it.get("bio") or "")
-        ).replace("\n", " ")[:200]
-        lines.append(f"{i + 1}. handle={str(it.get('handle'))[:30]} :: {blurb}")
-    prompt = (
-        "Task: rerank creator candidates for a marketing search.\nQuery: " + str(query_text)[:200]
-        + ("\nTarget persona: " + str(persona_text)[:200] if persona_text else "")
-        + ("\nProduct: " + str(product_label)[:80] if product_label else "")
-        + "\nFor EACH numbered candidate output one object {\"i\": number, \"s\": relevance 0-100}."
-        + " Output STRICTLY one JSON array, no prose, reply starts with [\n\n"
-        + "\n".join(lines)
-    )
+    cands, query_text, persona_text, product_label = fmt.sanitized_rerank_args(safe_context)
+    prompt = fmt.rerank_prompt(cands, query_text, persona_text, product_label)
     try:
         provider, model = split_binding(
             current_task_model_binding().get("kol_content_fit_analysis", "")
@@ -146,7 +120,7 @@ def _llm_rerank_buckets(buckets: dict[str, list], query_text: str, persona_text:
     except Exception:
         logger.debug("KOL recall production rerank unavailable", exc_info=True)
         return "llm_unavailable"
-    if str(resp.get("model") or "") == "rule_v0" or str(resp.get("status") or "") != "success":
+    if fmt.rerank_response_unusable(resp):
         return "llm_unusable"
     text = str(resp.get("text") or "")
     # 截断救援:thinking 模型思考 token 吃掉输出预算是常态,复用 audience_stats 的
@@ -159,18 +133,7 @@ def _llm_rerank_buckets(buckets: dict[str, list], query_text: str, persona_text:
         arr = []
     if not arr:
         return "parse_failed"
-    hits = 0
-    for obj in arr if isinstance(arr, list) else []:
-        try:
-            idx = int(obj.get("i")) - 1
-            score = max(0.0, min(100.0, float(obj.get("s"))))
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if 0 <= idx < len(cands):
-            cands[idx]["display_rank_score"] = round(_float(cands[idx].get("display_rank_score")) + 0.15 * (score / 100.0), 6)
-            cands[idx]["llm_rerank_score"] = score
-            hits += 1
-    return f"ok:{hits}"
+    return f"ok:{fmt.apply_rerank_scores(cands, arr)}"
 
 
 _EXCLUDED_REGION_RE = re.compile(
@@ -302,104 +265,41 @@ def _evidence_summaries(
     for row in rows:
         item = project_evidence_item_truth(dict(row))
         by_id.setdefault(int(item["kol_pool_id"]), []).append(item)
+    return {kol_id: _evidence_summary(items) for kol_id, items in by_id.items()}
 
-    summaries: dict[int, dict[str, Any]] = {}
-    for kol_id, items in by_id.items():
-        ranked = sorted(items, key=_evidence_score, reverse=True)
-        video_evidence_count = len(items)
-        with_view_count = sum(1 for item in items if item.get("view_count") not in (None, ""))
-        deep_analysis_count = sum(
-            1
-            for item in items
-            if any(
-                _clean_text(item.get(key), 20)
-                for key in ("content_summary", "product_presence", "brand_exposure")
-            )
-        )
-        representative: list[dict[str, Any]] = []
-        content_targets: list[dict[str, Any]] = []
-        for item in ranked:
-            title = _clean_text(item.get("title"), 220)
-            url = _clean_text(item.get("content_url"), 500)
-            if not title and not url:
-                continue
-            representative.append(
-                {
-                    "title": title or url,
-                    "content_url": url,
-                    "thumbnail_url": _clean_text(item.get("thumbnail_url"), 500),
-                    "view_count": item.get("view_count"),
-                    "like_count": item.get("like_count"),
-                    "comment_count": item.get("comment_count"),
-                    "share_count": item.get("share_count"),
-                    "data_truth": item.get("data_truth"),
-                }
-            )
-            content_targets.append(
-                {
-                    "evidence_id": item.get("evidence_id"),
-                    "content_url": url,
-                }
-            )
-            if len(representative) >= 3:
-                break
 
-        # 垂类多路取证要读的标题窗口(展示用 representative 仍只留 3 条,互不干扰)。
-        evidence_titles: list[str] = []
-        for item in ranked[:20]:
-            title = _clean_text(item.get("title"), 220)
-            if title and title not in evidence_titles:
-                evidence_titles.append(title)
-
-        texts: list[str] = []
-        for item in ranked[:6]:
-            texts.extend(
-                [
-                    _clean_text(item.get("title"), 500),
-                    _clean_text(item.get("product_presence"), 500),
-                    _clean_text(item.get("brand_exposure"), 500),
-                ]
-            )
-        summaries[kol_id] = {
-            "representative_evidence": representative,
-            # Private, request-local identity coordinates.  Smart-local may
-            # use them to read the exact cached post/final-v1 row; they are
-            # never copied into a returned candidate.
-            "_targeted_content_targets": content_targets,
-            "evidence_titles": evidence_titles[:12],
-            "used_lenses": _extract_lenses(*texts),
-            "reason_labels": _reason_labels(
-                *(texts + [_clean_text(item.get("content_summary"), 500) for item in ranked[:3]])
-            ),
-            "video_evidence_count": video_evidence_count,
-            "with_view_count": with_view_count,
-            "deep_analysis_count": deep_analysis_count,
-            "view_count_coverage_ratio": round(with_view_count / video_evidence_count, 4)
-            if video_evidence_count
-            else None,
-            "coverage_note": "证据覆盖计数，不代表分析准确率或合作结果。",
-        }
-    return summaries
+def _evidence_summary(items: list[dict[str, Any]]) -> dict[str, Any]:
+    ranked = sorted(items, key=_evidence_score, reverse=True)
+    video_evidence_count = len(items)
+    with_view_count, deep_analysis_count = fmt.summary_counters(items)
+    representative, content_targets = fmt.representative_and_targets(ranked)
+    texts = fmt.summary_texts(ranked)
+    return {
+        "representative_evidence": representative,
+        # Private, request-local identity coordinates.  Smart-local may
+        # use them to read the exact cached post/final-v1 row; they are
+        # never copied into a returned candidate.
+        "_targeted_content_targets": content_targets,
+        "evidence_titles": fmt.evidence_titles_of(ranked)[:12],
+        "used_lenses": _extract_lenses(*texts),
+        "reason_labels": _reason_labels(
+            *(texts + [_clean_text(item.get("content_summary"), 500) for item in ranked[:3]])
+        ),
+        "video_evidence_count": video_evidence_count,
+        "with_view_count": with_view_count,
+        "deep_analysis_count": deep_analysis_count,
+        "view_count_coverage_ratio": round(with_view_count / video_evidence_count, 4)
+        if video_evidence_count
+        else None,
+        "coverage_note": "证据覆盖计数，不代表分析准确率或合作结果。",
+    }
 
 
 def _persona_text_for_query(query_meta: dict[str, Any], product_focus: Any, target_persona: Any) -> str:
     """拼出"本次 query 面向的人群"文本(供 why-fit 人群侧关键词匹配)。
     优先级:planner 的 product_focus/target_persona + 产品线 persona/label + 原始 query_text。
     纯展示用文本,绝不参与评分。"""
-    parts: list[str] = []
-    profile_key = str((query_meta or {}).get("query_profile") or "")
-    persona_meta = PRODUCT_LINE_PERSONAS.get(profile_key) or {}
-    if persona_meta:
-        parts.append(str(persona_meta.get("persona") or ""))
-        parts.append(str(persona_meta.get("label") or ""))
-    if isinstance(product_focus, (list, tuple)):
-        parts.extend(str(item) for item in product_focus if item)
-    elif product_focus:
-        parts.append(str(product_focus))
-    if target_persona:
-        parts.append(str(target_persona))
-    if (query_meta or {}).get("query_text_provided"):
-        parts.append(str((query_meta or {}).get("query_text") or ""))
+    parts = fmt.persona_parts(query_meta, product_focus, target_persona)
     return _clean_text(" ".join(p for p in parts if p), 600).lower()
 
 
@@ -411,31 +311,7 @@ def _why_fit(
 ) -> str:
     """一句话「为何这个人适合本次产品/人群」:把 ① 本次 query 人群 与 ② KOL 真实信号做规则匹配。
     命中即拼可读理由(无 LLM 也有理由);纯展示文本,绝不写/影响 viltrox_fit_score。"""
-    persona_blob = str(persona_text or "")
-    # KOL 真实信号 blob:画像文本 / 类型理由 / 已用器材 / 垂类标签 / bio。
-    kol_blob = " ".join(
-        _clean_text(value, 600).lower()
-        for value in (
-            row.get("profile_text"),
-            row.get("type_reason"),
-            row.get("bio"),
-            " ".join(str(lens) for lens in (evidence.get("used_lenses") or [])),
-            " ".join(str(label) for label in (evidence.get("reason_labels") or [])),
-        )
-        if value
-    )
-    matched: list[str] = []
-    seen: set[str] = set()
-    for _persona_key, persona_words, kol_words, phrase in WHY_FIT_RULES:
-        if phrase in seen:
-            continue
-        persona_hit = (not persona_blob) or any(word.lower() in persona_blob for word in persona_words)
-        kol_hit = any(word.lower() in kol_blob for word in kol_words)
-        if persona_hit and kol_hit:
-            matched.append(phrase)
-            seen.add(phrase)
-        if len(matched) >= 2:
-            break
+    matched = fmt.why_fit_matches(str(persona_text or ""), fmt.why_fit_kol_blob(row, evidence))
     target = str(product_label or "").strip()
     if matched:
         signal = " + ".join(matched)
@@ -463,30 +339,8 @@ def _recall_reason(row: dict[str, Any], evidence: dict[str, Any]) -> str:
     return f"画像匹配:{profile_part}内容画像与产品 query 相近"
 
 
-def _float(value: Any) -> float:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _optional_float(value: Any) -> float | None:
-    if value in (None, ""):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _filter_values(value: Any) -> list[str]:
-    raw = value if isinstance(value, (list, tuple, set)) else [value]
-    values: list[str] = []
-    for item in raw:
-        text = " ".join(str(item or "").split()).strip()
-        if text and text.lower() not in {"all", "*", "any"} and text not in values:
-            values.append(text)
-    return values
+# 实现平移到 profile_recall_projection_helpers.filter_values(逐字节不变);老名字保留。
+_filter_values = fmt.filter_values
 
 
 def _country_match_key(value: Any) -> str:
@@ -531,40 +385,9 @@ def _normalize_recall_filters(value: Any) -> tuple[dict[str, Any], list[str]]:
         raise ValueError("filters must be an object")
     unsupported = sorted(str(key) for key in value if str(key) not in SUPPORTED_RECALL_FILTERS)
     normalized: dict[str, Any] = {}
-    for key in ("platforms", "countries", "languages", "verticals"):
-        source, mode, invalid_mode = normalize_tri_state_filter(value.get(key))
-        values = _filter_values(source)
-        if values:
-            normalized[key] = values
-        if values and mode != "require" and key in TRI_STATE_FILTER_FIELDS:
-            normalized[f"{key}_mode"] = mode
-        elif invalid_mode or mode != "require":
-            unsupported.append(f"{key}_mode")
-    for canonical, aliases in (
-        ("followers_min", ("followers_min", "follower_min")),
-        ("followers_max", ("followers_max", "follower_max")),
-    ):
-        raw = next((value.get(alias) for alias in aliases if value.get(alias) not in (None, "")), None)
-        if raw is None:
-            continue
-        try:
-            parsed = max(0, int(float(raw)))
-        except (TypeError, ValueError):
-            unsupported.append(canonical)
-            continue
-        normalized[canonical] = parsed
-    gear_content = str(value.get("gear_content") or "any").strip().lower()
-    if gear_content in {"yes", "true", "1"}:
-        normalized["gear_content"] = "yes"
-    elif gear_content in {"", "any", "all", "*"}:
-        pass
-    elif gear_content in {"no", "false", "0"}:
-        # Absence of captured gear evidence is not proof that a creator has no
-        # gear content.  Ignoring this negative filter is safer than returning
-        # false negatives; the response says it was unsupported.
-        unsupported.append("gear_content:no_negative_evidence")
-    else:
-        unsupported.append("gear_content")
+    fmt.tri_state_normalized(value, normalized, unsupported)
+    fmt.follower_bounds_normalized(value, normalized, unsupported)
+    fmt.gear_content_normalized(value, normalized, unsupported)
     return normalized, sorted(set(unsupported))
 
 
@@ -576,20 +399,16 @@ _GEAR_CONTENT_TERMS = (
 def _factual_candidate_signal_blob(row: dict[str, Any], evidence: dict[str, Any]) -> str:
     """Pool facts + persisted content evidence; never derived profile prose."""
 
-    representative = evidence.get("representative_evidence") or []
-    return " ".join(
-        _clean_text(value, 800).lower()
-        for value in (
-            row.get("bio"),
-            row.get("primary_topic"),
-            row.get("content_style"),
-            row.get("secondary_topics_json"),
-            " ".join(str(item.get("title") or "") for item in representative if isinstance(item, dict)),
-            " ".join(str(value) for value in evidence.get("used_lenses") or []),
-            " ".join(str(value) for value in evidence.get("reason_labels") or []),
-        )
-        if value
+    values = (
+        row.get("bio"),
+        row.get("primary_topic"),
+        row.get("content_style"),
+        row.get("secondary_topics_json"),
+        fmt.joined_titles(evidence.get("representative_evidence") or []),
+        fmt.joined_strs(evidence.get("used_lenses") or []),
+        fmt.joined_strs(evidence.get("reason_labels") or []),
     )
+    return " ".join(_clean_text(value, 800).lower() for value in values if value)
 
 
 def _candidate_filter_verdict(
@@ -607,14 +426,7 @@ def _candidate_filter_verdict(
     reasons: dict[str, str] = {}
     unknown: list[str] = []
 
-    platform = str(row.get("platform") or "").strip().lower()
-    requested_platforms = {str(item).strip().lower() for item in filters.get("platforms") or []}
-    if requested_platforms:
-        if not platform:
-            unknown.append("platform")
-            reasons["platforms"] = "unknown"
-        elif platform not in requested_platforms:
-            reasons["platforms"] = "mismatch"
+    fmt.platform_filter_reason(row, filters, reasons, unknown)
 
     country = _country_match_key(row.get("country"))
     # 自报优先 -> 推断兜底 -> 都没有才是未知。推断值住在另一列(迁移 305),永不冒充自报值;
@@ -630,30 +442,34 @@ def _candidate_filter_verdict(
         if outcome:
             reasons[filter_key] = outcome
 
-    followers_raw = row.get("followers")
-    followers_known = followers_raw not in (None, "")
-    followers = 0
-    if followers_known:
-        try:
-            followers = max(0, int(float(followers_raw)))
-        except (TypeError, ValueError):
-            followers_known = False
-    if "followers_min" in filters:
-        if not followers_known:
-            unknown.append("followers")
-            reasons["followers_min"] = "unknown"
-        elif followers < int(filters["followers_min"]):
-            reasons["followers_min"] = "mismatch"
-    if "followers_max" in filters:
-        if not followers_known:
-            unknown.append("followers")
-            reasons["followers_max"] = "unknown"
-        elif followers > int(filters["followers_max"]):
-            reasons["followers_max"] = "mismatch"
+    followers, followers_known = fmt.followers_state(row)
+    fmt.followers_filter_reasons(filters, followers, followers_known, reasons, unknown)
 
     # gear_content 闸继续吃它原来的语料(逐字节不动);垂类改走多路取证,两者刻意分家——
     # 垂类语料变宽绝不允许顺带把器材证据要求放宽(用户红线)。
     vertical_blob = _factual_candidate_signal_blob(row, evidence)
+    vertical_reading = _vertical_filter_reasons(row, evidence, filters, vertical_reading, reasons, unknown)
+
+    used_lenses = list(evidence.get("used_lenses") or [])
+    gear_signal = bool(used_lenses) or any(term in vertical_blob for term in _GEAR_CONTENT_TERMS)
+    fmt.gear_filter_reason(filters, used_lenses, vertical_blob, gear_signal, reasons)
+
+    unknown.extend(fmt.missing_field_flags(
+        country=country, language=language, followers_known=followers_known,
+        vertical_unknown=vertical_reading.is_unknown,
+        used_lenses=used_lenses, gear_signal=gear_signal,
+    ))
+    return CandidateFilterVerdict(reasons, unknown, unknown_field_candidates(row, reasons))
+
+
+def _vertical_filter_reasons(
+    row: dict[str, Any],
+    evidence: dict[str, Any],
+    filters: dict[str, Any],
+    vertical_reading: VerticalReading | None,
+    reasons: dict[str, str],
+    unknown: list[str],
+) -> VerticalReading:
     vertical_outcome, vertical_reading, _vertical_hits = vertical_filter_outcome(
         row, evidence, filters.get("verticals") or [], reading=vertical_reading,
     )
@@ -661,21 +477,7 @@ def _candidate_filter_verdict(
         reasons["verticals"] = vertical_outcome
         if vertical_outcome == "unknown":
             unknown.append("verticals")
-
-    used_lenses = list(evidence.get("used_lenses") or [])
-    gear_signal = bool(used_lenses) or any(term in vertical_blob for term in _GEAR_CONTENT_TERMS)
-    if filters.get("gear_content") == "yes" and not gear_signal:
-        reasons["gear_content"] = "unknown" if not vertical_blob and not used_lenses else "mismatch"
-
-    # These fields are useful UI honesty signals even when no filter targets
-    # them.  Missing does not become a numeric zero or a negative claim.
-    # 三态放行(include_unknown / exclude)也照旧走这里 —— 放行 != 假装知道。
-    unknown.extend(field for field, missing in (
-        ("country", not country), ("language", not language), ("followers", not followers_known),
-        ("verticals", vertical_reading.is_unknown),
-        ("gear_content", not used_lenses and not gear_signal),
-    ) if missing)
-    return CandidateFilterVerdict(reasons, unknown, unknown_field_candidates(row, reasons))
+    return vertical_reading
 
 
 def _normalize_bucket_policy(
@@ -719,26 +521,10 @@ _CORE_VERTICAL_TERMS = (
 def _natural_business_lane(item: dict[str, Any]) -> tuple[str, str]:
     if _is_relevance_backfill(item):
         return "exploration", "仅放宽查询相关性后的显式补位"
-    retrieval_meta = (
-        (item.get("source_fields") or {}).get("retrieval_meta") or {}
-        if isinstance(item.get("source_fields"), dict)
-        else {}
-    )
-    factual_anchors = retrieval_meta.get("factual_anchor_terms") or []
+    factual_anchors = fmt.lane_retrieval_meta(item).get("factual_anchor_terms") or []
     if item.get("match_tier") == "strict" and factual_anchors:
         return "core_vertical", "事实字段或内容证据满足全部产品锚点"
-    representative = item.get("representative_evidence") or []
-    blob = " ".join(
-        str(value or "").lower()
-        for value in (
-            item.get("primary_topic"),
-            item.get("bio"),
-            " ".join(str(value) for value in item.get("used_lenses") or []),
-            " ".join(
-                str(row.get("title") or "") for row in representative if isinstance(row, dict)
-            ),
-        )
-    )
+    blob = fmt.lane_blob(item)
     if item.get("match_tier") == "strict" and any(term in blob for term in _CORE_VERTICAL_TERMS):
         return "core_vertical", "事实池字段或内容证据命中垂类"
     if item.get("match_tier") == "relaxed":
@@ -855,13 +641,7 @@ def _format_item(
     # but never increase search relevance as if they were observed facts.
     row["brand_collaborations_json"] = row.get("brand_collaborations_factual_json") or []
     type_rank_score = _type_score_for_bucket(row, bucket)
-    retrieval_score = (
-        hit.retrieval_score
-        if hit.retrieval_score is not None
-        else hit.lexical_score
-        if hit.lexical_score is not None
-        else hit.vector_score
-    )
+    retrieval_score = fmt.retrieval_score_of(hit)
     rank_score = _recall_rank_score(
         vector_score=retrieval_score,
         type_score=type_rank_score,
@@ -877,87 +657,60 @@ def _format_item(
     if relevance_notes:
         why_fit_text = f"{why_fit_text}({';'.join(relevance_notes)})"
     provisional_lane, provisional_lane_source = _provisional_profile_lane(row)
-    evidence_quality = {
-        "video_evidence_count": int(evidence.get("video_evidence_count") or 0),
-        "with_view_count": int(evidence.get("with_view_count") or 0),
-        "deep_analysis_count": int(evidence.get("deep_analysis_count") or 0),
-        "view_count_coverage_ratio": evidence.get("view_count_coverage_ratio"),
-        "claim_status": "coverage_only_not_accuracy",
-        "note": evidence.get("coverage_note") or "证据覆盖计数，不代表分析准确率或合作结果。",
-    }
+    evidence_quality = fmt.evidence_quality_of(evidence)
+    data_truth = row.get("data_truth") or {}
     item = {
         "kol_pool_id": int(row.get("kol_pool_id") or hit.kol_pool_id),
-        "handle": row.get("handle") or "",
-        "display_name": row.get("display_name") or "",
-        "platform": row.get("platform") or "",
-        "profile_url": row.get("profile_url") or "",
-        "avatar_url": row.get("avatar_url") or "",
-        "followers": row.get("followers"),
-        "avg_views": row.get("avg_views"),
-        "avg_likes": row.get("avg_likes"),
-        "avg_comments": row.get("avg_comments"),
-        "engagement_rate": row.get("engagement_rate"),
-        "real_er": row.get("real_er"),
-        "real_er_sample_n": row.get("real_er_sample_n"),
-        "real_er_computed_at": row.get("real_er_computed_at"),
-        "real_er_method": row.get("real_er_method"),
-        "data_truth": row.get("data_truth"),
-        "source_type": (row.get("data_truth") or {}).get("source_type"),
-        "source_ref": (row.get("data_truth") or {}).get("source_ref"),
-        "metric_observed_at": (row.get("data_truth") or {}).get("metric_observed_at"),
-        "metric_recorded_at": (row.get("data_truth") or {}).get("metric_recorded_at"),
+        **{key: fmt.str_field(row, key) for key in ("handle", "display_name", "platform", "profile_url", "avatar_url")},
+        **{key: row.get(key) for key in (
+            "followers", "avg_views", "avg_likes", "avg_comments", "engagement_rate",
+            "real_er", "real_er_sample_n", "real_er_computed_at", "real_er_method", "data_truth",
+        )},
+        **{key: data_truth.get(key) for key in (
+            "source_type", "source_ref", "metric_observed_at", "metric_recorded_at",
+        )},
         "last_seen_at": row.get("last_seen_at"),
         "updated_at": row.get("updated_at"),
-        "country": row.get("country") or "",
-        "language": row.get("language") or "",
-        "primary_topic": row.get("primary_topic") or "",
-        "bio": row.get("bio") or "",
-        "vector_score": round(float(hit.vector_score), 6) if hit.vector_score is not None else None,
-        "lexical_score": round(float(hit.lexical_score), 6) if hit.lexical_score is not None else None,
+        **{key: fmt.str_field(row, key) for key in ("country", "language", "primary_topic", "bio")},
+        "vector_score": fmt.round_opt(hit.vector_score, 6),
+        "lexical_score": fmt.round_opt(hit.lexical_score, 6),
         "hybrid_rrf_score": hit.hybrid_rrf_score,
-        "retrieval_score": round(float(retrieval_score), 6) if retrieval_score is not None else None,
+        "retrieval_score": fmt.round_opt(retrieval_score, 6),
         "retrieval_method": hit.retrieval_method,
-        "type_rank_score": round(type_rank_score, 1) if type_rank_score is not None else None,
-        "recall_rank_score": round(rank_score, 6) if rank_score is not None else None,
+        "type_rank_score": fmt.round_opt(type_rank_score, 1),
+        "recall_rank_score": fmt.round_opt(rank_score, 6),
         "recall_rank_score_method": "missingness_aware_retrieval_type_v1",
         # 独立展示分:= recall_rank_score + 展示用 adjust;仅供前端展示排序/分档,
         # 绝不回写任何评分字段(recall_rank_score 原值不变,供审计)。
-        "display_rank_score": round(rank_score + relevance_adjust, 6) if rank_score is not None else None,
+        "display_rank_score": fmt.display_rank_score(rank_score, relevance_adjust),
         "display_relevance_adjust": round(relevance_adjust, 6),
         "relevance_flags": relevance_flags,
         "relevance_tier_hint": tier_hint,
-        "profile_type": row.get("profile_type") or "",
+        "profile_type": fmt.str_field(row, "profile_type"),
         "bucket": bucket,
-        "provisional_profile_lane": provisional_lane if bucket == "unknown" else bucket,
-        "provisional_profile_lane_source": provisional_lane_source if bucket == "unknown" else "profile_index",
-        "profile_type_confidence": "low" if bucket == "unknown" else "indexed",
+        **fmt.provisional_lane_fields(bucket, provisional_lane, provisional_lane_source),
         "type_label": _type_label(row),
         "creator_type_score": _optional_float(row.get("creator_type_score")),
         "reviewer_type_score": _optional_float(row.get("reviewer_type_score")),
-        "type_reason": row.get("type_reason") or "",
-        "type_method": row.get("type_method") or "",
+        "type_reason": fmt.str_field(row, "type_reason"),
+        "type_method": fmt.str_field(row, "type_method"),
         "recall_reason": _recall_reason(row, evidence),
         "why_fit": why_fit_text,
         "source_fields": {
             "vector_method": METHOD,
-            "type_method": row.get("type_method") or "",
+            "type_method": fmt.str_field(row, "type_method"),
             "qdrant_point_id": hit.qdrant_point_id,
             "retrieval_method": hit.retrieval_method,
             "retrieval_tier": hit.retrieval_tier,
             "retrieval_meta": hit.retrieval_meta,
-            "sufficiency": row.get("sufficiency") or "",
+            "sufficiency": fmt.str_field(row, "sufficiency"),
             "ranking_method": "missingness_aware_retrieval_type_v1",
             "evidence_coverage": evidence_quality,
         },
         "evidence_quality": evidence_quality,
     }
-    representative = list(evidence.get("representative_evidence") or [])
-    if representative:
-        item["representative_evidence"] = representative
-    if content_status := public_content_evidence_status(evidence.get("targeted_content_evidence_status")):
-        item["content_evidence_status"] = content_status
-    used_lenses = list(evidence.get("used_lenses") or [])
-    if used_lenses:
-        item["used_lenses"] = used_lenses
-        item["used_lenses_note"] = "从作品标题和视频分析中提取的镜头提及,不是确证拥有"
+    fmt.attach_optional_evidence(
+        item, evidence,
+        public_content_evidence_status(evidence.get("targeted_content_evidence_status")),
+    )
     return item

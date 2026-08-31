@@ -1,0 +1,1657 @@
+{
+ "events_service": {
+  "due_date": {
+   "": null,
+   "01/05/2026": "2026-01-05",
+   "06/21": "2026-06-21",
+   "1-5": "2026-01-05",
+   "13/45": null,
+   "2026-01-05": "2026-01-05",
+   "2026.1.5": "2026-01-05",
+   "2026/1/5": "2026-01-05",
+   "TBD": null,
+   "待定": null
+  },
+  "event_row": {
+   "budget_json": {
+    "a": 1
+   },
+   "id": "e1",
+   "invited_kols_json": [],
+   "related_project_ids": [],
+   "team_ids": [
+    1,
+    2
+   ],
+   "title": "t"
+  },
+  "task_row": {
+   "checklist": [],
+   "collaborators": [
+    3
+   ],
+   "details": {
+    "k": "v"
+   },
+   "id": "t1"
+  },
+  "validate_errors": [
+   "health_score out of range [0, 100]",
+   "budget_total out of range [0, 2147483647]",
+   "roi out of range [-99999999.99, 99999999.99]",
+   "location_lat out of range [-90.0, 90.0]",
+   "leads must be an integer",
+   "roi must be a number"
+  ]
+ },
+ "lens_evidence": {
+  "clip": {
+   "13mm/23mm/27mm/75mm Pro briefly.": [
+    "13mm/23mm/27mm/75mm Pro",
+    []
+   ],
+   "85 1.4 mentioned": [
+    "85mm F1.4",
+    []
+   ],
+   "AF 85mm F1.4 Pro FE lens appears": [
+    "AF 85mm F1.4 Pro FE",
+    []
+   ],
+   "DC-A1 7英寸 monitor": [
+    "DC-A1",
+    []
+   ],
+   "Pro 75mm F1.2 shots": [
+    "75mm F1.2 Pro",
+    []
+   ],
+   "Pro 系列 logo visible": [
+    "",
+    [
+     "Pro"
+    ]
+   ],
+   "Z-mount 85 test": [
+    "Z-mount 85mm",
+    []
+   ],
+   "the new lens for Sony E-mount is great": [
+    "",
+    []
+   ]
+  },
+  "family_name": {
+   "AF 75mm F1.8 EVO FE": "AF 75mm F1.8 EVO",
+   "K60 RGB Light Stick": "K60",
+   "Viltrox AF 85mm F1.4 Pro Full-Frame Lens for Sony E-Mount": "AF 85mm F1.4 Pro",
+   "Viltrox DC-A1 2800 Nits 7-Inch Camera Monitor": "DC-A1",
+   "Viltrox Vintage Z1 Pro TTL Retro On-Camera Flash": "Vintage Z1 Pro",
+   "Vintage Z2-S": "Vintage Z2"
+  },
+  "lens_explain_anchors": [
+   {
+    "after": "AF 85mm F1.4 Pro FE lens appears in close-ups throughout. 字幕",
+    "body": "AF 85mm F1.4 Pro FE",
+    "field": "product_presence",
+    "pieces": [
+     "AF 85mm F1.4 Pro FE"
+    ],
+    "series": []
+   },
+   {
+    "after": "135mm F1.8 LAB。",
+    "body": "135mm F1.8 LAB",
+    "field": "product_presence",
+    "pieces": [
+     "135mm F1.8 LAB"
+    ],
+    "series": []
+   },
+   {
+    "after": "Pro 系列 logo visible; also mentions Viltrox 13mm/23mm/27mm/75",
+    "body": "",
+    "field": "brand_exposure",
+    "pieces": [],
+    "series": [
+     "Pro"
+    ]
+   },
+   {
+    "after": "13mm/23mm/27mm/75mm Pro briefly.",
+    "body": "13mm/23mm/27mm/75mm Pro",
+    "field": "brand_exposure",
+    "pieces": [
+     "13mm Pro",
+     "23mm Pro",
+     "27mm Pro",
+     "75mm Pro"
+    ],
+    "series": []
+   },
+   {
+    "after": "DC-A1 7英寸 monitor and the Viltrox EF-E II adapter.",
+    "body": "DC-A1",
+    "field": "content_summary",
+    "pieces": [
+     "DC-A1"
+    ],
+    "series": []
+   },
+   {
+    "after": "EF-E II adapter.",
+    "body": "EF-E II",
+    "field": "content_summary",
+    "pieces": [
+     "EF-E II"
+    ],
+    "series": []
+   },
+   {
+    "after": "85mm f/1.4 for Sony E-mount",
+    "body": "85mm f1.4 FE-mount",
+    "field": "scene_timeline",
+    "pieces": [
+     "85mm f1.4 FE-mount"
+    ],
+    "series": []
+   },
+   {
+    "after": "50mm F2.0 Air 是性价比之选",
+    "body": "50mm F2.0 Air",
+    "field": "product_contribution",
+    "pieces": [
+     "50mm F2.0 Air"
+    ],
+    "series": []
+   },
+   {
+    "after": "K60 light stick",
+    "body": "K60",
+    "field": "attribution_breakdown",
+    "pieces": [
+     "K60"
+    ],
+    "series": []
+   },
+   {
+    "after": "85 1.4 mentioned by voice",
+    "body": "85mm F1.4",
+    "field": "product_proof_score",
+    "pieces": [
+     "85mm F1.4"
+    ],
+    "series": []
+   },
+   {
+    "after": "EVO 系列",
+    "body": "",
+    "field": "key_hook",
+    "pieces": [],
+    "series": [
+     "EVO"
+    ]
+   },
+   {
+    "after": "Pro series",
+    "body": "",
+    "field": "final_verdict",
+    "pieces": [],
+    "series": [
+     "Pro"
+    ]
+   }
+  ],
+  "lens_rows": [
+   {
+    "candidate_skus": [
+     "AF-85MM-F14-PRO-FE"
+    ],
+    "category_main": "Lens",
+    "display_name": "AF 85mm F1.4 Pro",
+    "lens_key": "af85mmf14pro",
+    "mention_count": 2,
+    "mention_norm": "85mm f1.4 pro fe",
+    "mention_text": "AF 85mm F1.4 Pro FE",
+    "modalities": [
+     "text",
+     "visual"
+    ],
+    "note": "",
+    "product_sku": "AF-85MM-F14-PRO-FE",
+    "resolution": "sku",
+    "source_fields": [
+     "product_presence",
+     "scene_timeline"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   },
+   {
+    "candidate_skus": [
+     "AF-135MM-F18-LAB-FE",
+     "AF-135MM-F18-LAB-Z"
+    ],
+    "category_main": "Lens",
+    "display_name": "AF 135mm F1.8 LAB",
+    "lens_key": "af135mmf18lab",
+    "mention_count": 1,
+    "mention_norm": "135mm f1.8 lab",
+    "mention_text": "135mm F1.8 LAB",
+    "modalities": [
+     "text",
+     "visual"
+    ],
+    "note": "alias_table",
+    "product_sku": null,
+    "resolution": "family",
+    "source_fields": [
+     "product_presence"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   },
+   {
+    "candidate_skus": [
+     "AF-27MM-F12-PRO-X",
+     "AF-27MM-F12-PRO-Z",
+     "AF-50MM-F14-PRO-FE",
+     "AF-56MM-F12-PRO-X",
+     "AF-75MM-F12-PRO-FE",
+     "AF-75MM-F12-PRO-X",
+     "AF-85MM-F14-PRO-FE",
+     "AF-85MM-F14-PRO-Z",
+     "VINTAGE-Z1-PRO-TTL-RETRO-ON-CAMERA-FLASH"
+    ],
+    "category_main": "",
+    "display_name": "Pro 系列",
+    "lens_key": "series:pro",
+    "mention_count": 1,
+    "mention_norm": "series:pro",
+    "mention_text": "Pro 系列",
+    "modalities": [
+     "visual"
+    ],
+    "note": "series_only",
+    "product_sku": null,
+    "resolution": "family",
+    "source_fields": [
+     "brand_exposure"
+    ],
+    "v_reason": "series_only",
+    "v_relevance": "likely"
+   },
+   {
+    "candidate_skus": [
+     "AF-13MM-F14-X"
+    ],
+    "category_main": "Lens",
+    "display_name": "AF 13mm F1.4",
+    "lens_key": "af13mmf14",
+    "mention_count": 1,
+    "mention_norm": "13mm pro",
+    "mention_text": "13mm Pro",
+    "modalities": [
+     "visual"
+    ],
+    "note": "list_suffix_dropped",
+    "product_sku": "AF-13MM-F14-X",
+    "resolution": "sku",
+    "source_fields": [
+     "brand_exposure"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   },
+   {
+    "candidate_skus": [
+     "AF-23MM-F14-X",
+     "AF-23MM-F14-Z"
+    ],
+    "category_main": "Lens",
+    "display_name": "AF 23mm F1.4",
+    "lens_key": "af23mmf14",
+    "mention_count": 1,
+    "mention_norm": "23mm pro",
+    "mention_text": "23mm Pro",
+    "modalities": [
+     "visual"
+    ],
+    "note": "list_suffix_dropped",
+    "product_sku": null,
+    "resolution": "family",
+    "source_fields": [
+     "brand_exposure"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   },
+   {
+    "candidate_skus": [
+     "AF-27MM-F12-PRO-X",
+     "AF-27MM-F12-PRO-Z"
+    ],
+    "category_main": "Lens",
+    "display_name": "AF 27mm F1.2 Pro",
+    "lens_key": "af27mmf12pro",
+    "mention_count": 1,
+    "mention_norm": "27mm pro",
+    "mention_text": "27mm Pro",
+    "modalities": [
+     "visual"
+    ],
+    "note": "",
+    "product_sku": null,
+    "resolution": "family",
+    "source_fields": [
+     "brand_exposure"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   },
+   {
+    "candidate_skus": [
+     "AF-75MM-F12-PRO-FE",
+     "AF-75MM-F12-PRO-X"
+    ],
+    "category_main": "Lens",
+    "display_name": "AF 75mm F1.2 Pro",
+    "lens_key": "af75mmf12pro",
+    "mention_count": 1,
+    "mention_norm": "75mm pro",
+    "mention_text": "75mm Pro",
+    "modalities": [
+     "visual"
+    ],
+    "note": "",
+    "product_sku": null,
+    "resolution": "family",
+    "source_fields": [
+     "brand_exposure"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   },
+   {
+    "candidate_skus": [
+     "DC-A1-2800-NITS-7-INCH-CAMERA-MONITOR"
+    ],
+    "category_main": "Monitor",
+    "display_name": "DC-A1",
+    "lens_key": "dca1",
+    "mention_count": 1,
+    "mention_norm": "dc a1",
+    "mention_text": "DC-A1",
+    "modalities": [
+     "voice"
+    ],
+    "note": "",
+    "product_sku": "DC-A1-2800-NITS-7-INCH-CAMERA-MONITOR",
+    "resolution": "sku",
+    "source_fields": [
+     "content_summary"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   },
+   {
+    "candidate_skus": [
+     "VL-ADP005"
+    ],
+    "category_main": "Adapter",
+    "display_name": "EF-E II",
+    "lens_key": "efeii",
+    "mention_count": 1,
+    "mention_norm": "ef e ii",
+    "mention_text": "EF-E II",
+    "modalities": [
+     "voice"
+    ],
+    "note": "",
+    "product_sku": "VL-ADP005",
+    "resolution": "sku",
+    "source_fields": [
+     "content_summary"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   },
+   {
+    "candidate_skus": [
+     "AF-50MM-F20-AIR-FE",
+     "AF-50MM-F20-AIR-Z"
+    ],
+    "category_main": "Lens",
+    "display_name": "AF 50mm F2.0 Air",
+    "lens_key": "af50mmf20air",
+    "mention_count": 1,
+    "mention_norm": "50mm f2.0 air",
+    "mention_text": "50mm F2.0 Air",
+    "modalities": [
+     "voice"
+    ],
+    "note": "",
+    "product_sku": null,
+    "resolution": "family",
+    "source_fields": [
+     "product_contribution"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   },
+   {
+    "candidate_skus": [
+     "K60-RGB-LIGHT-STICK"
+    ],
+    "category_main": "Lighting",
+    "display_name": "K60",
+    "lens_key": "k60",
+    "mention_count": 1,
+    "mention_norm": "k60",
+    "mention_text": "K60",
+    "modalities": [
+     "text"
+    ],
+    "note": "",
+    "product_sku": "K60-RGB-LIGHT-STICK",
+    "resolution": "sku",
+    "source_fields": [
+     "attribution_breakdown"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   },
+   {
+    "candidate_skus": [
+     "AF-85MM-F14-PRO-FE",
+     "AF-85MM-F14-PRO-Z"
+    ],
+    "category_main": "Lens",
+    "display_name": "AF 85mm F1.4 Pro",
+    "lens_key": "af85mmf14pro",
+    "mention_count": 1,
+    "mention_norm": "85mm f1.4",
+    "mention_text": "85mm F1.4",
+    "modalities": [
+     "voice"
+    ],
+    "note": "alias_table",
+    "product_sku": null,
+    "resolution": "family",
+    "source_fields": [
+     "product_proof_score"
+    ],
+    "v_reason": "catalog_match_explicit_modality",
+    "v_relevance": "confirmed"
+   }
+  ],
+  "mount_hint": {
+   "for canon ef": "EF",
+   "for canon rf": "RF",
+   "for fuji x": "X",
+   "for leica l": "L",
+   "for m43 panasonic": "M43",
+   "for nikon z": "Z",
+   "for pentax": "",
+   "for sony e-mount": "FE"
+  },
+  "parse_spec": {
+   "16-35mm f2.8 Z": {
+    "aperture": "2.8",
+    "aperture_kind": "f",
+    "focal": [
+     16,
+     35
+    ],
+    "mount": "Z-mount",
+    "series": []
+   },
+   "35 1.8": {
+    "aperture": "1.8",
+    "aperture_kind": "f",
+    "focal": [
+     35
+    ],
+    "mount": "",
+    "series": []
+   },
+   "AF 85mm F1.4 Pro FE": {
+    "aperture": "1.4",
+    "aperture_kind": "f",
+    "focal": [
+     85
+    ],
+    "mount": "FE-mount",
+    "series": [
+     "pro"
+    ]
+   },
+   "DC-A1": {
+    "aperture": "",
+    "aperture_kind": "",
+    "focal": [],
+    "mount": "",
+    "series": []
+   },
+   "EPIC 50mm T2.0 PL": {
+    "aperture": "2.0",
+    "aperture_kind": "t",
+    "focal": [
+     50
+    ],
+    "mount": "PL-mount",
+    "series": [
+     "epic"
+    ]
+   }
+  },
+  "split_slash": {
+   "13mm/23mm/27mm/75mm Pro": [
+    "13mm Pro",
+    "23mm Pro",
+    "27mm Pro",
+    "75mm Pro"
+   ],
+   "85mm F1.4": [
+    "85mm F1.4"
+   ],
+   "DC-X2/X3": [
+    "DC-X2",
+    "DC-X3"
+   ]
+  },
+  "v_rel": [
+   [
+    "confirmed",
+    "catalog_match_explicit_modality"
+   ],
+   [
+    "likely",
+    "series_only"
+   ],
+   [
+    "likely",
+    "unresolved_mention"
+   ],
+   [
+    "likely",
+    "advisory_field_only"
+   ],
+   [
+    "likely",
+    "catalog_match_modality_unspecified"
+   ]
+  ]
+ },
+ "metric_truth": {
+  "evidence_truth": [
+   {
+    "comment_count": null,
+    "content_url": "https://a",
+    "data_truth": {
+     "claim_status": "descriptive_only",
+     "fields": {
+      "comment_count": {
+       "displayable": false,
+       "factual": false,
+       "observed_at": "2026-08-01",
+       "reason": "metric_missing_or_invalid",
+       "source": "apify",
+       "status": "unknown",
+       "zero_verified": false
+      },
+      "like_count": {
+       "displayable": true,
+       "factual": true,
+       "observed_at": "2026-08-01",
+       "reason": "scrape_receipt_explicitly_persisted_zero",
+       "source": "apify",
+       "status": "observed_zero",
+       "zero_verified": true
+      },
+      "share_count": {
+       "displayable": false,
+       "factual": false,
+       "observed_at": "2026-08-01",
+       "reason": "metric_missing_or_invalid",
+       "source": "apify",
+       "status": "unknown",
+       "zero_verified": false
+      },
+      "view_count": {
+       "displayable": true,
+       "factual": true,
+       "observed_at": "2026-08-01",
+       "reason": "scrape_receipt_present",
+       "source": "apify",
+       "status": "observed",
+       "zero_verified": false
+      }
+     },
+     "rule": "evidence zero requires a metric scrape receipt",
+     "suppressed_fields": [
+      "comment_count",
+      "share_count"
+     ],
+     "version": "kol_metric_truth_v1"
+    },
+    "id": 1,
+    "like_count": 0,
+    "metrics_scraped_at": "2026-08-01",
+    "metrics_source": "apify",
+    "scrape_status": "ok",
+    "share_count": null,
+    "view_count": 10
+   },
+   {
+    "comment_count": 2,
+    "content_url": "https://b",
+    "data_truth": {
+     "claim_status": "descriptive_only",
+     "fields": {
+      "comment_count": {
+       "displayable": true,
+       "factual": false,
+       "observed_at": null,
+       "reason": "persisted_nonzero_evidence_without_metric_timestamp",
+       "source": null,
+       "status": "declared",
+       "zero_verified": false
+      },
+      "like_count": {
+       "displayable": true,
+       "factual": false,
+       "observed_at": null,
+       "reason": "persisted_nonzero_evidence_without_metric_timestamp",
+       "source": null,
+       "status": "declared",
+       "zero_verified": false
+      },
+      "share_count": {
+       "displayable": true,
+       "factual": false,
+       "observed_at": null,
+       "reason": "persisted_nonzero_evidence_without_metric_timestamp",
+       "source": null,
+       "status": "declared",
+       "zero_verified": false
+      },
+      "view_count": {
+       "displayable": false,
+       "factual": false,
+       "observed_at": null,
+       "reason": "evidence_zero_requires_metrics_scraped_at_or_successful_metrics_source",
+       "source": null,
+       "status": "zero_sentinel_suppressed",
+       "zero_verified": false
+      }
+     },
+     "rule": "evidence zero requires a metric scrape receipt",
+     "suppressed_fields": [
+      "view_count"
+     ],
+     "version": "kol_metric_truth_v1"
+    },
+    "id": 2,
+    "like_count": 5,
+    "metrics_scraped_at": "",
+    "metrics_source": "",
+    "scrape_status": "",
+    "share_count": 1,
+    "view_count": null
+   },
+   {
+    "comment_count": null,
+    "content_url": "",
+    "data_truth": {
+     "claim_status": "descriptive_only",
+     "fields": {
+      "comment_count": {
+       "displayable": false,
+       "factual": false,
+       "observed_at": null,
+       "reason": "no_evidence_source",
+       "source": null,
+       "status": "unverified_suppressed",
+       "zero_verified": false
+      },
+      "like_count": {
+       "displayable": false,
+       "factual": false,
+       "observed_at": null,
+       "reason": "no_evidence_source",
+       "source": null,
+       "status": "unverified_suppressed",
+       "zero_verified": false
+      },
+      "share_count": {
+       "displayable": false,
+       "factual": false,
+       "observed_at": null,
+       "reason": "no_evidence_source",
+       "source": null,
+       "status": "unverified_suppressed",
+       "zero_verified": false
+      },
+      "view_count": {
+       "displayable": false,
+       "factual": false,
+       "observed_at": null,
+       "reason": "no_evidence_source",
+       "source": null,
+       "status": "unverified_suppressed",
+       "zero_verified": false
+      }
+     },
+     "rule": "evidence zero requires a metric scrape receipt",
+     "suppressed_fields": [
+      "comment_count",
+      "like_count",
+      "share_count",
+      "view_count"
+     ],
+     "version": "kol_metric_truth_v1"
+    },
+    "id": null,
+    "like_count": null,
+    "metrics_scraped_at": "",
+    "metrics_source": "",
+    "scrape_status": "",
+    "share_count": null,
+    "view_count": null
+   }
+  ],
+  "pool_declared": {
+   "audience_estimated_json": null,
+   "avg_comments": null,
+   "avg_likes": null,
+   "avg_views": null,
+   "brand_collaborations_factual_json": [],
+   "brand_collaborations_json": [],
+   "data_truth": {
+    "claim_status": "descriptive_only",
+    "fields": {
+     "audience_estimated": {
+      "displayable": false,
+      "factual": false,
+      "reason": "audience_payload_missing_or_invalid",
+      "source": null,
+      "status": "unknown"
+     },
+     "avg_comments": {
+      "displayable": false,
+      "factual": false,
+      "reason": "missing_or_invalid_numeric_value",
+      "recorded_at": null,
+      "source": "roster.csv",
+      "status": "unknown",
+      "zero_verified": false
+     },
+     "avg_likes": {
+      "displayable": false,
+      "factual": false,
+      "reason": "missing_or_invalid_numeric_value",
+      "recorded_at": null,
+      "source": "roster.csv",
+      "status": "unknown",
+      "zero_verified": false
+     },
+     "avg_views": {
+      "displayable": false,
+      "factual": false,
+      "reason": "missing_or_invalid_numeric_value",
+      "recorded_at": null,
+      "source": "roster.csv",
+      "status": "unknown",
+      "zero_verified": false
+     },
+     "brand_collaborations": {
+      "declared_count": 0,
+      "displayable": false,
+      "factual": false,
+      "observed_count": 0,
+      "reason": "confirmed_records_are_factual; sourced_legacy_claims_remain_declared_only",
+      "source": "roster.csv",
+      "status": "unknown",
+      "suppressed_unverified_or_planned_count": 0
+     },
+     "engagement_rate": {
+      "displayable": false,
+      "factual": false,
+      "metric_identity": "legacy_engagement_rate",
+      "not_equivalent_to": "real_er",
+      "reason": "missing_or_invalid_numeric_value",
+      "recorded_at": null,
+      "source": "roster.csv",
+      "status": "unknown",
+      "verified_real_er": false,
+      "zero_verified": false
+     },
+     "followers": {
+      "displayable": true,
+      "factual": false,
+      "reason": "stored_nonzero_with_pool_source_but_without_field_level_raw_receipt",
+      "recorded_at": null,
+      "source": "roster.csv",
+      "status": "declared",
+      "zero_verified": false
+     },
+     "real_er": {
+      "computed_at": null,
+      "denominator": "views",
+      "displayable": false,
+      "factual": false,
+      "method": null,
+      "metric_identity": "real_er",
+      "observed_at": null,
+      "reason": "real_er_missing_or_invalid",
+      "sample_n": null,
+      "source": null,
+      "status": "unknown",
+      "zero_verified": false
+     }
+    },
+    "metric_observed_at": null,
+    "metric_recorded_at": null,
+    "rule": "zero_requires_field_level_observation; missing/default/estimated/planned values never become factual",
+    "source_ref": "roster.csv",
+    "source_type": "csv_import",
+    "suppressed_fields": [
+     "audience_estimated",
+     "avg_comments",
+     "avg_likes",
+     "avg_views",
+     "brand_collaborations",
+     "engagement_rate",
+     "real_er"
+    ],
+    "version": "kol_metric_truth_v1"
+   },
+   "engagement_rate": null,
+   "followers": 500,
+   "kol_pool_id": 2,
+   "raw_platform_data": null,
+   "real_er": null,
+   "source_ref": "roster.csv",
+   "source_type": "csv_import"
+  },
+  "pool_truth": {
+   "audience_estimated_json": "{\"method\": \"ensemble_v1\", \"sample_size\": 40, \"confidence\": 0.7, \"geo\": {\"US\": 0.5}}",
+   "avg_comments": 20,
+   "avg_likes": 200,
+   "avg_views": 2000,
+   "brand_collaborations_factual_json": [
+    {
+     "brand": "Sony",
+     "evidence_url": "https://x.com/v",
+     "status": "published"
+    }
+   ],
+   "brand_collaborations_json": "[{\"brand\": \"Sony\", \"status\": \"published\", \"evidence_url\": \"https://x.com/v\"}, {\"brand\": \"Sigma\"}, \"Tamron\"]",
+   "data_truth": {
+    "claim_status": "descriptive_only",
+    "fields": {
+     "audience_estimated": {
+      "confidence": 0.7,
+      "displayable": true,
+      "factual": false,
+      "reason": "sample_backed_estimate_not_platform_official_audience_fact",
+      "sample_size": 40,
+      "source": "audience_estimated_json:ensemble_v1",
+      "status": "estimated"
+     },
+     "avg_comments": {
+      "displayable": true,
+      "factual": true,
+      "observed_at": "2026-08-01T00:00:00Z",
+      "raw_sample_n": 2,
+      "reason": "successful_raw_source_contains_field_evidence",
+      "recorded_at": "2026-08-02T00:00:00Z",
+      "source": "apify_youtube_profile_crawl",
+      "status": "observed",
+      "verification_basis": "raw_content_sample_mean",
+      "zero_verified": false
+     },
+     "avg_likes": {
+      "displayable": true,
+      "factual": true,
+      "observed_at": "2026-08-01T00:00:00Z",
+      "raw_sample_n": 2,
+      "reason": "successful_raw_source_contains_field_evidence",
+      "recorded_at": "2026-08-02T00:00:00Z",
+      "source": "apify_youtube_profile_crawl",
+      "status": "observed",
+      "verification_basis": "raw_content_sample_mean",
+      "zero_verified": false
+     },
+     "avg_views": {
+      "displayable": true,
+      "factual": true,
+      "observed_at": "2026-08-01T00:00:00Z",
+      "raw_sample_n": 2,
+      "reason": "successful_raw_source_contains_field_evidence",
+      "recorded_at": "2026-08-02T00:00:00Z",
+      "source": "apify_youtube_profile_crawl",
+      "status": "observed",
+      "verification_basis": "raw_content_sample_mean",
+      "zero_verified": false
+     },
+     "brand_collaborations": {
+      "declared_count": 2,
+      "displayable": true,
+      "factual": false,
+      "observed_count": 1,
+      "reason": "confirmed_records_are_factual; sourced_legacy_claims_remain_declared_only",
+      "source": "https://youtube.com/@x",
+      "status": "mixed",
+      "suppressed_unverified_or_planned_count": 1
+     },
+     "engagement_rate": {
+      "displayable": true,
+      "factual": true,
+      "metric_identity": "legacy_engagement_rate",
+      "not_equivalent_to": "real_er",
+      "observed_at": "2026-08-01T00:00:00Z",
+      "raw_sample_n": 1,
+      "reason": "successful_raw_source_contains_field_evidence",
+      "recorded_at": "2026-08-02T00:00:00Z",
+      "source": "apify_youtube_profile_crawl",
+      "status": "observed",
+      "verification_basis": "raw_explicit_engagement_rate",
+      "verified_real_er": false,
+      "zero_verified": false
+     },
+     "followers": {
+      "displayable": true,
+      "factual": true,
+      "observed_at": "2026-08-01T00:00:00Z",
+      "raw_sample_n": 1,
+      "reason": "successful_raw_source_contains_field_evidence",
+      "recorded_at": "2026-08-02T00:00:00Z",
+      "source": "apify_youtube_profile_crawl",
+      "status": "observed",
+      "verification_basis": "raw_profile_value",
+      "zero_verified": false
+     },
+     "real_er": {
+      "computed_at": "2026-08-01",
+      "confidence": "sample_backed",
+      "denominator": "views",
+      "displayable": true,
+      "factual": true,
+      "method": "views_v1",
+      "metric_identity": "real_er",
+      "observed_at": "2026-08-01",
+      "reason": "sample_backed_view_denominator_real_er_receipt",
+      "sample_n": 8,
+      "source": "views_v1",
+      "status": "observed",
+      "zero_verified": false
+     }
+    },
+    "metric_observed_at": "2026-08-01T00:00:00Z",
+    "metric_recorded_at": "2026-08-02T00:00:00Z",
+    "rule": "zero_requires_field_level_observation; missing/default/estimated/planned values never become factual",
+    "source_ref": "https://youtube.com/@x",
+    "source_type": "apify",
+    "suppressed_fields": [],
+    "version": "kol_metric_truth_v1"
+   },
+   "engagement_rate": 4.5,
+   "followers": 12000,
+   "kol_pool_id": 7,
+   "last_seen_at": "2026-08-02T00:00:00Z",
+   "raw_platform_data": "{\"source\": \"apify_youtube_profile_crawl\", \"sync_status\": \"ok\", \"metrics_scraped_at\": \"2026-08-01T00:00:00Z\", \"followersCount\": 12000, \"engagement_rate\": 4.5, \"items\": [{\"type\": \"video\", \"id\": \"v1\", \"title\": \"t1\", \"viewCount\": 1000, \"likeCount\": 100, \"commentCount\": 10}, {\"type\": \"video\", \"id\": \"v2\", \"title\": \"t2\", \"viewCount\": 3000, \"likeCount\": 300, \"commentCount\": 30}]}",
+   "real_er": 3.2,
+   "real_er_computed_at": "2026-08-01",
+   "real_er_method": "views_v1",
+   "real_er_sample_n": 8,
+   "source_ref": "https://youtube.com/@x?token=abc",
+   "source_type": "apify"
+  },
+  "pool_zero": {
+   "audience_estimated_json": null,
+   "avg_comments": null,
+   "avg_likes": null,
+   "avg_views": null,
+   "brand_collaborations_factual_json": [],
+   "brand_collaborations_json": [],
+   "data_truth": {
+    "claim_status": "descriptive_only",
+    "fields": {
+     "audience_estimated": {
+      "displayable": false,
+      "factual": false,
+      "reason": "audience_payload_missing_or_invalid",
+      "source": null,
+      "status": "unknown"
+     },
+     "avg_comments": {
+      "displayable": false,
+      "factual": false,
+      "reason": "missing_or_invalid_numeric_value",
+      "recorded_at": null,
+      "source": "manual",
+      "status": "unknown",
+      "zero_verified": false
+     },
+     "avg_likes": {
+      "displayable": false,
+      "factual": false,
+      "reason": "missing_or_invalid_numeric_value",
+      "recorded_at": null,
+      "source": "manual",
+      "status": "unknown",
+      "zero_verified": false
+     },
+     "avg_views": {
+      "displayable": false,
+      "factual": false,
+      "reason": "missing_or_invalid_numeric_value",
+      "recorded_at": null,
+      "source": "manual",
+      "status": "unknown",
+      "zero_verified": false
+     },
+     "brand_collaborations": {
+      "declared_count": 0,
+      "displayable": false,
+      "factual": false,
+      "observed_count": 0,
+      "reason": "confirmed_records_are_factual; sourced_legacy_claims_remain_declared_only",
+      "source": "manual",
+      "status": "unknown",
+      "suppressed_unverified_or_planned_count": 0
+     },
+     "engagement_rate": {
+      "displayable": false,
+      "factual": false,
+      "metric_identity": "legacy_engagement_rate",
+      "not_equivalent_to": "real_er",
+      "reason": "missing_or_invalid_numeric_value",
+      "recorded_at": null,
+      "source": "manual",
+      "status": "unknown",
+      "verified_real_er": false,
+      "zero_verified": false
+     },
+     "followers": {
+      "displayable": false,
+      "factual": false,
+      "reason": "stored_zero_without_matching_successful_raw_observation",
+      "recorded_at": null,
+      "source": "manual",
+      "status": "zero_sentinel_suppressed",
+      "zero_verified": false
+     },
+     "real_er": {
+      "computed_at": null,
+      "denominator": "views",
+      "displayable": false,
+      "factual": false,
+      "method": null,
+      "metric_identity": "real_er",
+      "observed_at": null,
+      "reason": "real_er_missing_or_invalid",
+      "sample_n": null,
+      "source": null,
+      "status": "unknown",
+      "zero_verified": false
+     }
+    },
+    "metric_observed_at": null,
+    "metric_recorded_at": null,
+    "rule": "zero_requires_field_level_observation; missing/default/estimated/planned values never become factual",
+    "source_ref": null,
+    "source_type": "manual",
+    "suppressed_fields": [
+     "audience_estimated",
+     "avg_comments",
+     "avg_likes",
+     "avg_views",
+     "brand_collaborations",
+     "engagement_rate",
+     "followers",
+     "real_er"
+    ],
+    "version": "kol_metric_truth_v1"
+   },
+   "engagement_rate": null,
+   "followers": null,
+   "kol_pool_id": 1,
+   "raw_platform_data": "{}",
+   "real_er": null,
+   "source_ref": "",
+   "source_type": "manual"
+  },
+  "raw_match": [
+   [
+    true,
+    "raw_profile_value",
+    1
+   ],
+   [
+    true,
+    "raw_explicit_engagement_rate",
+    1
+   ],
+   [
+    true,
+    "raw_content_sample_mean",
+    2
+   ],
+   [
+    false,
+    null,
+    2
+   ]
+  ],
+  "source_ref": {
+   "": null,
+   "/home/x/secret_token.json": "redacted_source_ref",
+   "https://user:pw@youtube.com:8443/watch?v=1": "https://youtube.com:8443/watch",
+   "https://youtube.com/path/token_abc": "https://youtube.com",
+   "roster.csv": "roster.csv",
+   "unknown": null
+  },
+  "source_state": {
+   "hidden_followers": false,
+   "observed_at": "2026-08-01T00:00:00Z",
+   "present": true,
+   "source": "apify_youtube_profile_crawl",
+   "statuses": [
+    "ok"
+   ],
+   "successful": true
+  }
+ },
+ "profile_recall_projection": {
+  "adoption_boost": 0.04,
+  "filter_verdict": [
+   [
+    [
+     false,
+     [
+      "followers_min",
+      "platforms"
+     ],
+     [
+      "gear_content",
+      "verticals"
+     ]
+    ],
+    [
+     "followers_min",
+     "platforms"
+    ],
+    []
+   ],
+   [
+    [
+     false,
+     [
+      "countries",
+      "followers_max",
+      "platforms"
+     ],
+     [
+      "country",
+      "followers",
+      "gear_content",
+      "language",
+      "platform",
+      "verticals"
+     ]
+    ],
+    [],
+    [
+     "countries",
+     "followers_max",
+     "platforms"
+    ]
+   ],
+   [
+    [
+     true,
+     [],
+     []
+    ],
+    [],
+    []
+   ]
+  ],
+  "format_item": {
+   "avatar_url": "",
+   "avg_comments": 40,
+   "avg_likes": 400,
+   "avg_views": 8000,
+   "bio": "Photographer reviewing lenses and cameras",
+   "bucket": "reviewer",
+   "country": "US",
+   "creator_type_score": 40.0,
+   "data_truth": {
+    "claim_status": "descriptive_only",
+    "fields": {
+     "audience_estimated": {
+      "displayable": false,
+      "factual": false,
+      "reason": "audience_payload_missing_or_invalid",
+      "source": null,
+      "status": "unknown"
+     },
+     "avg_comments": {
+      "displayable": true,
+      "factual": false,
+      "reason": "stored_nonzero_with_pool_source_but_without_field_level_raw_receipt",
+      "recorded_at": "2026-08-20",
+      "source": "apify_youtube_profile_crawl",
+      "status": "declared",
+      "zero_verified": false
+     },
+     "avg_likes": {
+      "displayable": true,
+      "factual": false,
+      "reason": "stored_nonzero_with_pool_source_but_without_field_level_raw_receipt",
+      "recorded_at": "2026-08-20",
+      "source": "apify_youtube_profile_crawl",
+      "status": "declared",
+      "zero_verified": false
+     },
+     "avg_views": {
+      "displayable": true,
+      "factual": false,
+      "reason": "stored_nonzero_with_pool_source_but_without_field_level_raw_receipt",
+      "recorded_at": "2026-08-20",
+      "source": "apify_youtube_profile_crawl",
+      "status": "declared",
+      "zero_verified": false
+     },
+     "brand_collaborations": {
+      "declared_count": 0,
+      "displayable": true,
+      "factual": true,
+      "observed_count": 1,
+      "reason": "confirmed_records_are_factual; sourced_legacy_claims_remain_declared_only",
+      "source": "https://youtube.com/@lensguy",
+      "status": "observed",
+      "suppressed_unverified_or_planned_count": 0
+     },
+     "engagement_rate": {
+      "displayable": true,
+      "factual": false,
+      "metric_identity": "legacy_engagement_rate",
+      "not_equivalent_to": "real_er",
+      "reason": "stored_nonzero_with_pool_source_but_without_field_level_raw_receipt",
+      "recorded_at": "2026-08-20",
+      "source": "apify_youtube_profile_crawl",
+      "status": "declared",
+      "verified_real_er": false,
+      "zero_verified": false
+     },
+     "followers": {
+      "displayable": true,
+      "factual": true,
+      "observed_at": "2026-08-20",
+      "raw_sample_n": 1,
+      "reason": "successful_raw_source_contains_field_evidence",
+      "recorded_at": "2026-08-20",
+      "source": "apify_youtube_profile_crawl",
+      "status": "observed",
+      "verification_basis": "raw_profile_value",
+      "zero_verified": false
+     },
+     "real_er": {
+      "computed_at": "2026-08-01",
+      "confidence": "sample_backed",
+      "denominator": "views",
+      "displayable": true,
+      "factual": true,
+      "method": "views_v1",
+      "metric_identity": "real_er",
+      "observed_at": "2026-08-01",
+      "reason": "sample_backed_view_denominator_real_er_receipt",
+      "sample_n": 12,
+      "source": "views_v1",
+      "status": "observed",
+      "zero_verified": false
+     }
+    },
+    "metric_observed_at": "2026-08-20",
+    "metric_recorded_at": "2026-08-20",
+    "rule": "zero_requires_field_level_observation; missing/default/estimated/planned values never become factual",
+    "source_ref": "https://youtube.com/@lensguy",
+    "source_type": "apify",
+    "suppressed_fields": [
+     "audience_estimated"
+    ],
+    "version": "kol_metric_truth_v1"
+   },
+   "display_name": "Lens Guy",
+   "display_rank_score": 0.55,
+   "display_relevance_adjust": -0.12,
+   "engagement_rate": 5.1,
+   "evidence_quality": {
+    "claim_status": "coverage_only_not_accuracy",
+    "deep_analysis_count": 3,
+    "note": "证据覆盖计数，不代表分析准确率或合作结果。",
+    "video_evidence_count": 9,
+    "view_count_coverage_ratio": 0.7778,
+    "with_view_count": 7
+   },
+   "followers": 52000,
+   "handle": "lensguy",
+   "hybrid_rrf_score": 0.9,
+   "kol_pool_id": 42,
+   "language": "en",
+   "last_seen_at": "2026-08-20",
+   "lexical_score": 0.5,
+   "metric_observed_at": "2026-08-20",
+   "metric_recorded_at": "2026-08-20",
+   "platform": "youtube",
+   "primary_topic": "camera gear reviews",
+   "profile_type": "reviewer",
+   "profile_type_confidence": "indexed",
+   "profile_url": "https://youtube.com/@lensguy",
+   "provisional_profile_lane": "reviewer",
+   "provisional_profile_lane_source": "profile_index",
+   "real_er": 2.4,
+   "real_er_computed_at": "2026-08-01",
+   "real_er_method": "views_v1",
+   "real_er_sample_n": 12,
+   "recall_rank_score": 0.67,
+   "recall_rank_score_method": "missingness_aware_retrieval_type_v1",
+   "recall_reason": "作品证据:Viltrox AF 85mm F1.4 Pro相关内容 + 镜头评测画像匹配",
+   "relevance_flags": [
+    "平面为主"
+   ],
+   "relevance_tier_hint": "demote",
+   "representative_evidence": [
+    {
+     "comment_count": 500,
+     "content_url": "https://youtu.be/1",
+     "data_truth": {
+      "x": 1
+     },
+     "like_count": 8000,
+     "share_count": null,
+     "thumbnail_url": "",
+     "title": "Viltrox AF 85mm F1.4 Pro review",
+     "view_count": 120000
+    }
+   ],
+   "retrieval_method": "hybrid_v1",
+   "retrieval_score": 0.58,
+   "reviewer_type_score": 88.0,
+   "source_fields": {
+    "evidence_coverage": {
+     "claim_status": "coverage_only_not_accuracy",
+     "deep_analysis_count": 3,
+     "note": "证据覆盖计数，不代表分析准确率或合作结果。",
+     "video_evidence_count": 9,
+     "view_count_coverage_ratio": 0.7778,
+     "with_view_count": 7
+    },
+    "qdrant_point_id": "pt-1",
+    "ranking_method": "missingness_aware_retrieval_type_v1",
+    "retrieval_meta": {
+     "factual_anchor_terms": [
+      "85mm"
+     ]
+    },
+    "retrieval_method": "hybrid_v1",
+    "retrieval_tier": "strict",
+    "sufficiency": "rich",
+    "type_method": "profile_index_v2",
+    "vector_method": "vector_recall"
+   },
+   "source_ref": "https://youtube.com/@lensguy",
+   "source_type": "apify",
+   "type_label": "测评号",
+   "type_method": "profile_index_v2",
+   "type_rank_score": 88.0,
+   "type_reason": "review-heavy uploads",
+   "updated_at": "2026-08-21",
+   "used_lenses": [
+    "Viltrox AF 85mm F1.4 Pro"
+   ],
+   "used_lenses_note": "从作品标题和视频分析中提取的镜头提及,不是确证拥有",
+   "vector_score": 0.61,
+   "why_fit": "做人像/肖像内容 → 适合AF 85mm F1.4 Pro(以平面摄影为主,与视频/监视器人群契合一般)"
+  },
+  "format_item_unknown_bucket": {
+   "avatar_url": "",
+   "avg_comments": 40,
+   "avg_likes": 400,
+   "avg_views": 8000,
+   "bio": "Photographer reviewing lenses and cameras",
+   "bucket": "unknown",
+   "country": "US",
+   "creator_type_score": null,
+   "data_truth": {
+    "claim_status": "descriptive_only",
+    "fields": {
+     "audience_estimated": {
+      "displayable": false,
+      "factual": false,
+      "reason": "audience_payload_missing_or_invalid",
+      "source": null,
+      "status": "unknown"
+     },
+     "avg_comments": {
+      "displayable": true,
+      "factual": false,
+      "reason": "stored_nonzero_with_pool_source_but_without_field_level_raw_receipt",
+      "recorded_at": "2026-08-20",
+      "source": "apify_youtube_profile_crawl",
+      "status": "declared",
+      "zero_verified": false
+     },
+     "avg_likes": {
+      "displayable": true,
+      "factual": false,
+      "reason": "stored_nonzero_with_pool_source_but_without_field_level_raw_receipt",
+      "recorded_at": "2026-08-20",
+      "source": "apify_youtube_profile_crawl",
+      "status": "declared",
+      "zero_verified": false
+     },
+     "avg_views": {
+      "displayable": true,
+      "factual": false,
+      "reason": "stored_nonzero_with_pool_source_but_without_field_level_raw_receipt",
+      "recorded_at": "2026-08-20",
+      "source": "apify_youtube_profile_crawl",
+      "status": "declared",
+      "zero_verified": false
+     },
+     "brand_collaborations": {
+      "declared_count": 0,
+      "displayable": true,
+      "factual": true,
+      "observed_count": 1,
+      "reason": "confirmed_records_are_factual; sourced_legacy_claims_remain_declared_only",
+      "source": "https://youtube.com/@lensguy",
+      "status": "observed",
+      "suppressed_unverified_or_planned_count": 0
+     },
+     "engagement_rate": {
+      "displayable": true,
+      "factual": false,
+      "metric_identity": "legacy_engagement_rate",
+      "not_equivalent_to": "real_er",
+      "reason": "stored_nonzero_with_pool_source_but_without_field_level_raw_receipt",
+      "recorded_at": "2026-08-20",
+      "source": "apify_youtube_profile_crawl",
+      "status": "declared",
+      "verified_real_er": false,
+      "zero_verified": false
+     },
+     "followers": {
+      "displayable": true,
+      "factual": true,
+      "observed_at": "2026-08-20",
+      "raw_sample_n": 1,
+      "reason": "successful_raw_source_contains_field_evidence",
+      "recorded_at": "2026-08-20",
+      "source": "apify_youtube_profile_crawl",
+      "status": "observed",
+      "verification_basis": "raw_profile_value",
+      "zero_verified": false
+     },
+     "real_er": {
+      "computed_at": "2026-08-01",
+      "confidence": "sample_backed",
+      "denominator": "views",
+      "displayable": true,
+      "factual": true,
+      "method": "views_v1",
+      "metric_identity": "real_er",
+      "observed_at": "2026-08-01",
+      "reason": "sample_backed_view_denominator_real_er_receipt",
+      "sample_n": 12,
+      "source": "views_v1",
+      "status": "observed",
+      "zero_verified": false
+     }
+    },
+    "metric_observed_at": "2026-08-20",
+    "metric_recorded_at": "2026-08-20",
+    "rule": "zero_requires_field_level_observation; missing/default/estimated/planned values never become factual",
+    "source_ref": "https://youtube.com/@lensguy",
+    "source_type": "apify",
+    "suppressed_fields": [
+     "audience_estimated"
+    ],
+    "version": "kol_metric_truth_v1"
+   },
+   "display_name": "Lens Guy",
+   "display_rank_score": null,
+   "display_relevance_adjust": 0.0,
+   "engagement_rate": 5.1,
+   "evidence_quality": {
+    "claim_status": "coverage_only_not_accuracy",
+    "deep_analysis_count": 0,
+    "note": "证据覆盖计数，不代表分析准确率或合作结果。",
+    "video_evidence_count": 0,
+    "view_count_coverage_ratio": null,
+    "with_view_count": 0
+   },
+   "followers": 52000,
+   "handle": "lensguy",
+   "hybrid_rrf_score": null,
+   "kol_pool_id": 42,
+   "language": "en",
+   "last_seen_at": "2026-08-20",
+   "lexical_score": null,
+   "metric_observed_at": "2026-08-20",
+   "metric_recorded_at": "2026-08-20",
+   "platform": "youtube",
+   "primary_topic": "camera gear reviews",
+   "profile_type": "",
+   "profile_type_confidence": "low",
+   "profile_url": "https://youtube.com/@lensguy",
+   "provisional_profile_lane": "reviewer",
+   "provisional_profile_lane_source": "factual_pool_content_terms",
+   "real_er": 2.4,
+   "real_er_computed_at": "2026-08-01",
+   "real_er_method": "views_v1",
+   "real_er_sample_n": 12,
+   "recall_rank_score": null,
+   "recall_rank_score_method": "missingness_aware_retrieval_type_v1",
+   "recall_reason": "画像匹配:人像/测评内容画像与产品 query 相近",
+   "relevance_flags": [],
+   "relevance_tier_hint": "",
+   "retrieval_method": "vector_v1",
+   "retrieval_score": null,
+   "reviewer_type_score": null,
+   "source_fields": {
+    "evidence_coverage": {
+     "claim_status": "coverage_only_not_accuracy",
+     "deep_analysis_count": 0,
+     "note": "证据覆盖计数，不代表分析准确率或合作结果。",
+     "video_evidence_count": 0,
+     "view_count_coverage_ratio": null,
+     "with_view_count": 0
+    },
+    "qdrant_point_id": "",
+    "ranking_method": "missingness_aware_retrieval_type_v1",
+    "retrieval_meta": {},
+    "retrieval_method": "vector_v1",
+    "retrieval_tier": "relaxed",
+    "sufficiency": "rich",
+    "type_method": "profile_index_v2",
+    "vector_method": "vector_recall"
+   },
+   "source_ref": "https://youtube.com/@lensguy",
+   "source_type": "apify",
+   "type_label": "未分类",
+   "type_method": "profile_index_v2",
+   "type_rank_score": null,
+   "type_reason": "review-heavy uploads",
+   "updated_at": "2026-08-21",
+   "vector_score": null,
+   "why_fit": "适合理由:做人像/肖像内容 + 做器材测评/对比"
+  },
+  "natural_lane": [
+   [
+    "exploration",
+    "仅放宽查询相关性后的显式补位"
+   ],
+   [
+    "core_vertical",
+    "事实字段或内容证据满足全部产品锚点"
+   ],
+   [
+    "core_vertical",
+    "事实池字段或内容证据命中垂类"
+   ],
+   [
+    "expansion",
+    "仅部分事实检索信号，需人工复核"
+   ],
+   [
+    "expansion",
+    "查询相关但缺少强垂直器材证据"
+   ]
+  ],
+  "normalize_filters": [
+   [
+    {},
+    []
+   ],
+   [
+    {
+     "countries": [
+      "US"
+     ],
+     "countries_mode": "include_unknown",
+     "followers_min": 1000,
+     "gear_content": "yes",
+     "languages": [
+      "english"
+     ],
+     "platforms": [
+      "YouTube"
+     ]
+    },
+    [
+     "followers_max",
+     "languages_mode",
+     "unknown_key"
+    ]
+   ],
+   [
+    {
+     "verticals": [
+      "photo"
+     ]
+    },
+    [
+     "gear_content:no_negative_evidence"
+    ]
+   ]
+  ],
+  "persona_text": "85mm portrait wedding shooters portrait lens",
+  "why_fit": "做人像/肖像内容 → 适合AF 85mm F1.4 Pro"
+ }
+}

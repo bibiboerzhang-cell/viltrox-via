@@ -7,12 +7,21 @@ id 用 VARCHAR(前端 evt_/tsk_ 串生成)。DB 走 get_conn(? 占位)应用路�
 """
 from __future__ import annotations
 
-import json
 from datetime import date, datetime, timezone
 from typing import Any
 
 from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.access import scope
+from app.domains.events import service_helpers as helpers
+from app.domains.events.service_helpers import (
+    EVENT_FLOAT_BOUNDS as _EVENT_FLOAT_BOUNDS,
+    EVENT_INT_BOUNDS as _EVENT_INT_BOUNDS,
+    EVENT_JSON_FIELDS as _EVENT_JSON_FIELDS,
+    EVENT_UPDATABLE as _EVENT_UPDATABLE,
+    dumps_json as _dumps,
+    loads_json as _loads,
+    normalize_due_date as _normalize_due_date,
+)
 from app.domains.events.service_rows import (
     material_row as _material_row,
     product_row as _product_row,
@@ -54,21 +63,6 @@ def _gen_id(prefix: str) -> str:
     import uuid
 
     return f"{prefix}_{int(_now().timestamp() * 1000)}_{uuid.uuid4().hex[:6]}"
-
-
-def _loads(value: Any, default: Any) -> Any:
-    if value in (None, ""):
-        return default
-    if isinstance(value, (dict, list)):
-        return value
-    try:
-        return json.loads(value)
-    except Exception:
-        return default
-
-
-def _dumps(value: Any) -> str:
-    return json.dumps(value if value is not None else None, default=str, ensure_ascii=False)
 
 
 def _event_row(r: Any) -> dict[str, Any]:
@@ -126,50 +120,16 @@ def _event_visibility_sql() -> str:
     )
 
 
-# 数值列范围:越界会直撞 INTEGER / NUMERIC(p,s) 列上限触发 PG 原生 500(并把整行/DETAIL
-# 泄露给客户端),故写前先把越界收敛成 ValueError → 路由 _guard 映射 400。
-_INT32_MAX = 2_147_483_647
-_EVENT_INT_BOUNDS: dict[str, tuple[int, int]] = {
-    "health_score": (0, 100),
-    "budget_total": (0, _INT32_MAX),
-    "leads": (0, _INT32_MAX),
-    "videos": (0, _INT32_MAX),
-    # 子资源 INTEGER 列:expense.amount / material.qty / product.qty(均 int32),
-    # 越界直入撞列上限触发 PG 500,故收敛成 400。事件主体 payload 不带这些键 → 校验时跳过。
-    "amount": (0, _INT32_MAX),
-    "qty": (0, _INT32_MAX),
-}
 # 子资源(task/expense/kol/material/product)主键 id 列为 VARCHAR(64)。超长 id 直入会触发
 # StringDataRightTruncation 500,写前校验长度收敛成 400。自动生成 id(_gen_id)远短于此界。
 _MAX_ID_LEN = 64
-_EVENT_FLOAT_BOUNDS: dict[str, tuple[float, float]] = {
-    "roi": (-99_999_999.99, 99_999_999.99),  # NUMERIC(10,2)
-    "location_lat": (-90.0, 90.0),           # NUMERIC(10,6),纬度物理界
-    "location_lng": (-180.0, 180.0),         # NUMERIC(10,6),经度物理界
-}
 
 
 def _validate_event_numeric(payload: dict[str, Any]) -> None:
     """写前校验数值列范围;越界抛 ValueError(→ 400),不让坏值撞列上限触发 PG 500。
     只校验 payload 显式给了且非 None 的键(None = 置空,可空列放行)。"""
-    for key, (lo, hi) in _EVENT_INT_BOUNDS.items():
-        if key not in payload or payload[key] is None:
-            continue
-        try:
-            v = int(payload[key])
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{key} must be an integer") from exc
-        if v < lo or v > hi:
-            raise ValueError(f"{key} out of range [{lo}, {hi}]")
-    for key, (flo, fhi) in _EVENT_FLOAT_BOUNDS.items():
-        if key not in payload or payload[key] is None:
-            continue
-        try:
-            fv = float(payload[key])
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{key} must be a number") from exc
-        if fv < flo or fv > fhi:
-            raise ValueError(f"{key} out of range [{flo}, {fhi}]")
+    helpers.validate_int_bounds(payload, _EVENT_INT_BOUNDS)
+    helpers.validate_float_bounds(payload, _EVENT_FLOAT_BOUNDS)
 
 
 def _assert_event_exists(
@@ -202,6 +162,33 @@ def _validate_id_len(value: str) -> str:
     if len(value) > _MAX_ID_LEN:
         raise ValueError(f"id exceeds max length {_MAX_ID_LEN}")
     return value
+
+
+def _fetch_event_row(
+    conn: Any,
+    event_id: str,
+    organization_id: int,
+    organization_scoped: bool,
+    *,
+    columns: str = "*",
+    lock: str = "",
+) -> Any:
+    """组织内取单条活动行;两分支 SQL 与老实现逐字节一致(只是收拢到一处)。"""
+    if organization_scoped:
+        return conn.execute(
+            f"SELECT {columns} FROM vkpi_events WHERE id = ? AND organization_id = ?" + lock,
+            (str(event_id), organization_id),
+        ).fetchone()
+    return conn.execute(
+        f"SELECT {columns} FROM vkpi_events WHERE id = ?" + lock, (str(event_id),)
+    ).fetchone()
+
+
+def _event_item_response(
+    conn: Any, event_id: str, organization_id: int, organization_scoped: bool
+) -> dict[str, Any]:
+    row = _fetch_event_row(conn, event_id, organization_id, organization_scoped)
+    return {"item": _event_row(row) if row else None}
 
 
 # ── Events ────────────────────────────────────────────────────────────────
@@ -253,24 +240,9 @@ def list_events(
     """
     conn = get_conn()
     organization_id, organization_scoped = scope.event_organization_context(staff, conn)
-    safe_limit = max(1, min(int(limit or 200), 500))
-    try:
-        safe_offset = int(offset or 0)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("offset must be a non-negative integer") from exc
-    if safe_offset < 0:
-        raise ValueError("offset must be a non-negative integer")
-    normalized_status = str(status or "").strip().casefold() or None
-    normalized_owner_id: int | None = None
-    if owner_id not in (None, ""):
-        if isinstance(owner_id, bool):
-            raise ValueError("owner_id must be a positive integer")
-        try:
-            normalized_owner_id = int(owner_id)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("owner_id must be a positive integer") from exc
-        if normalized_owner_id <= 0:
-            raise ValueError("owner_id must be a positive integer")
+    safe_limit, safe_offset = helpers.normalize_page_args(limit, offset, default_limit=200, max_limit=500)
+    normalized_status = helpers.normalized_status_filter(status)
+    normalized_owner_id = helpers.normalized_owner_filter(owner_id)
 
     clauses: list[str] = []
     params: list[Any] = []
@@ -300,7 +272,7 @@ def list_events(
         "SELECT COUNT(*) AS n FROM vkpi_events" + where_sql,
         tuple(params),
     ).fetchone()
-    total_count = int((dict(total_row) if total_row is not None else {}).get("n") or 0)
+    total_count = helpers.total_count_scalar(total_row)
     rows = conn.execute(
         "SELECT * FROM vkpi_events" + where_sql + " "
         "ORDER BY start_date DESC, created_at DESC, id DESC LIMIT ? OFFSET ?",
@@ -309,22 +281,9 @@ def list_events(
     items = [_event_row(r) for r in rows]
     for it in items:
         it["invited_kols_json"] = _merge_invited_kols(conn, it.get("id"), it.get("invited_kols_json"))
-    next_offset = safe_offset + len(items)
-    has_more = next_offset < total_count
-    return {
-        "items": items,
-        "count": len(items),
-        "total_count": total_count,
-        "offset": safe_offset,
-        "limit": safe_limit,
-        "page": {
-            "limit": safe_limit,
-            "offset": safe_offset,
-            "returned": len(items),
-            "next_offset": next_offset if has_more else None,
-            "has_more": has_more,
-        },
-    }
+    return helpers.page_envelope(
+        items, total_count=total_count, safe_offset=safe_offset, safe_limit=safe_limit
+    )
 
 
 def list_upcoming_events(
@@ -360,24 +319,7 @@ def list_upcoming_events(
         "ORDER BY start_date ASC, created_at ASC, id ASC LIMIT ?",
         (*params, safe_limit),
     ).fetchall()
-    items: list[dict[str, Any]] = []
-    for r in rows:
-        row = _event_row(r)
-        items.append({
-            "id": row.get("id"),
-            "title": row.get("title"),
-            "type_key": row.get("type_key"),
-            "status": row.get("status"),
-            "health_score": row.get("health_score"),
-            "start_date": str(row.get("start_date") or ""),
-            "end_date": str(row.get("end_date") or ""),
-            "location_name": row.get("location_name") or "",
-            "location_city": row.get("location_city") or "",
-            "location_country": row.get("location_country") or "",
-            "location_lat": row.get("location_lat"),
-            "location_lng": row.get("location_lng"),
-            "budget_total": row.get("budget_total") or 0,
-        })
+    items = [helpers.upcoming_event_item(_event_row(r)) for r in rows]
     return {
         "items": items,
         "count": len(items),
@@ -426,56 +368,29 @@ def get_event_detail(event_id: str, staff: dict[str, Any] | None) -> dict[str, A
     }
 
 
-def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
-    _validate_event_numeric(payload)  # health_score/budget_total/location_lat/lng 越界 → 400,不撞列上限 500
-    conn = get_conn()
-    organization_id, organization_scoped = scope.event_organization_context(staff, conn)
-    eid = _validate_id_len(str(payload.get("id") or _gen_id("evt")))  # VARCHAR(64) 超长 → 400
-    owner_id = payload.get("owner_id") or _staff_id(staff)
+def _validated_owner_id(conn: Any, owner_id: Any, organization_id: int) -> int:
     # owner_id → staff(id) 外键。给了却不存在会撞 FK 违约 500 + DETAIL 泄露;写前校验 → 400。
-    # None 放行(列可空 ON DELETE SET NULL);非数字/不存在 → ValueError(→400)。
-    if owner_id is not None:
-        try:
-            owner_id_int = int(owner_id)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("owner_id must be an integer") from exc
-        if conn.execute("SELECT 1 FROM staff WHERE id = ?", (owner_id_int,)).fetchone() is None:
-            raise ValueError("owner_id not found")
-        if not scope.staff_belongs_to_event_organization(conn, owner_id_int, organization_id):
-            raise ValueError("owner_id organization mismatch")
-        owner_id = owner_id_int
-    team_ids = payload.get("team_ids") or ([owner_id] if owner_id else [])
+    # None 放行(列可空 ON DELETE SET NULL,由调用方处理);非数字/不存在 → ValueError(→400)。
+    try:
+        owner_id_int = int(owner_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("owner_id must be an integer") from exc
+    if conn.execute("SELECT 1 FROM staff WHERE id = ?", (owner_id_int,)).fetchone() is None:
+        raise ValueError("owner_id not found")
+    if not scope.staff_belongs_to_event_organization(conn, owner_id_int, organization_id):
+        raise ValueError("owner_id organization mismatch")
+    return owner_id_int
+
+
+def _validate_team_ids(conn: Any, team_ids: Any, organization_id: int) -> None:
     if not isinstance(team_ids, list):
         raise ValueError("team_ids must be a list")
     for team_staff_id in team_ids:
         if not scope.staff_belongs_to_event_organization(conn, team_staff_id, organization_id):
             raise ValueError("team member organization mismatch")
-    values = (
-            eid,
-            str(payload.get("title") or "未命名活动"),
-            str(payload.get("type_key") or "other"),
-            str(payload.get("status") or "planning"),
-            # Unknown is not perfect: only persist a health score when the caller
-            # explicitly provides one. Existing rows are intentionally untouched.
-            int(payload["health_score"]) if payload.get("health_score") is not None else None,
-            str(payload.get("note") or ""),
-            _normalize_due_date(payload.get("start_date")) or str(_now().date()),
-            _normalize_due_date(payload.get("end_date")) or str(_now().date()),
-            str(payload.get("location_name") or ""),
-            str(payload.get("location_city") or ""),
-            str(payload.get("location_country") or ""),
-            payload.get("location_lat"),
-            payload.get("location_lng"),
-            int(payload.get("budget_total") or 0),
-            _dumps(payload.get("budget_json") or {}),
-            owner_id,
-            _dumps(team_ids),
-            _dumps(payload.get("related_project_ids") or []),
-            _dumps(payload.get("invited_kols_json") or []),
-            str(payload.get("product_sku") or ""),
-            str(payload.get("product_name") or ""),
-            str(payload.get("retrospective") or ""),
-        )
+
+
+def _insert_event(conn: Any, values: tuple, organization_id: int, organization_scoped: bool) -> None:
     if organization_scoped:
         conn.execute(
             """
@@ -500,24 +415,25 @@ def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[
             """,
             values,
         )
+
+
+def create_event(payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
+    _validate_event_numeric(payload)  # health_score/budget_total/location_lat/lng 越界 → 400,不撞列上限 500
+    conn = get_conn()
+    organization_id, organization_scoped = scope.event_organization_context(staff, conn)
+    eid = _validate_id_len(str(payload.get("id") or _gen_id("evt")))  # VARCHAR(64) 超长 → 400
+    owner_id = payload.get("owner_id") or _staff_id(staff)
+    if owner_id is not None:
+        owner_id = _validated_owner_id(conn, owner_id, organization_id)
+    team_ids = payload.get("team_ids") or ([owner_id] if owner_id else [])
+    _validate_team_ids(conn, team_ids, organization_id)
+    values = helpers.event_insert_values(
+        payload, eid=eid, owner_id=owner_id, team_ids=team_ids, today=str(_now().date())
+    )
+    _insert_event(conn, values, organization_id, organization_scoped)
     conn.commit()
-    if organization_scoped:
-        row = conn.execute(
-            "SELECT * FROM vkpi_events WHERE id = ? AND organization_id = ?", (eid, organization_id)
-        ).fetchone()
-    else:
-        row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (eid,)).fetchone()
+    row = _fetch_event_row(conn, eid, organization_id, organization_scoped)
     return {"item": _event_row(row)}
-
-
-_EVENT_UPDATABLE = {
-    "title": str, "type_key": str, "status": str, "health_score": int, "note": str,
-    "start_date": None, "end_date": None, "location_name": str, "location_city": str,
-    "location_country": str, "location_lat": None, "location_lng": None,
-    "budget_total": int, "retrospective": str, "roi": None, "leads": None, "videos": None,
-    "product_sku": str, "product_name": str,
-}
-_EVENT_JSON_FIELDS = {"budget_json", "team_ids", "related_project_ids", "invited_kols_json"}
 
 
 def update_event(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
@@ -526,41 +442,13 @@ def update_event(event_id: str, payload: dict[str, Any], staff: dict[str, Any] |
     organization_id, organization_scoped = _assert_event_exists(conn, event_id, staff)
     sets: list[str] = []
     vals: list[Any] = []
-    for key, caster in _EVENT_UPDATABLE.items():
-        if key not in payload:
-            continue
-        v = payload[key]
-        if key in ("start_date", "end_date"):
-            # start_date/end_date 是 NOT NULL DATE 列。坏/空日期经 _normalize_due_date 归一为
-            # None 后绝不能 SET NULL —— 那会违反 NOT NULL 触发 PG 500 且 DETAIL 泄露整行。
-            # 显式给了却解析不出 → 400(而非静默跳过,避免「以为改了其实没改」)。
-            normalized = _normalize_due_date(v)
-            if normalized is None:
-                raise ValueError(f"{key} must be a valid date (YYYY-MM-DD)")
-            sets.append(f"{key} = ?")
-            vals.append(normalized)
-        else:
-            sets.append(f"{key} = ?")
-            vals.append(caster(v) if (caster and v is not None) else v)
-    for key in _EVENT_JSON_FIELDS:
-        if key in payload:
-            if key == "team_ids":
-                if not isinstance(payload[key], list):
-                    raise ValueError("team_ids must be a list")
-                for team_staff_id in payload[key]:
-                    if not scope.staff_belongs_to_event_organization(conn, team_staff_id, organization_id):
-                        raise ValueError("team member organization mismatch")
-            sets.append(f"{key} = ?::jsonb")
-            vals.append(_dumps(payload[key]))
+    helpers.event_scalar_update_sets(payload, sets, vals)
+    helpers.event_json_update_sets(
+        payload, sets, vals,
+        validate_team=lambda team: _validate_team_ids(conn, team, organization_id),
+    )
     if not sets:
-        if organization_scoped:
-            row = conn.execute(
-                "SELECT * FROM vkpi_events WHERE id = ? AND organization_id = ?",
-                (str(event_id), organization_id),
-            ).fetchone()
-        else:
-            row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
-        return {"item": _event_row(row) if row else None}
+        return _event_item_response(conn, event_id, organization_id, organization_scoped)
     sets.append("updated_at = NOW()")
     if organization_scoped:
         vals.extend([str(event_id), organization_id])
@@ -571,14 +459,7 @@ def update_event(event_id: str, payload: dict[str, Any], staff: dict[str, Any] |
         vals.append(str(event_id))
         conn.execute(f"UPDATE vkpi_events SET {', '.join(sets)} WHERE id = ?", tuple(vals))
     conn.commit()
-    if organization_scoped:
-        row = conn.execute(
-            "SELECT * FROM vkpi_events WHERE id = ? AND organization_id = ?",
-            (str(event_id), organization_id),
-        ).fetchone()
-    else:
-        row = conn.execute("SELECT * FROM vkpi_events WHERE id = ?", (str(event_id),)).fetchone()
-    return {"item": _event_row(row) if row else None}
+    return _event_item_response(conn, event_id, organization_id, organization_scoped)
 
 
 def delete_event(event_id: str, staff: dict[str, Any] | None) -> dict[str, Any]:
@@ -665,31 +546,7 @@ def remove_member(event_id: str, user_id: Any, staff: dict[str, Any] | None) -> 
 
 
 # ── Tasks(含 collaborators / done_by 多人协作)──────────────────────────────
-def _normalize_due_date(raw: Any) -> str | None:
-    """各种来路的日期 → ISO YYYY-MM-DD;TBD/空/无法解析 → None(绝不把坏值塞进 DATE 列)。
-
-    修因:前端曾把 due_date 传成 "06/21"(MM/DD)直进 Postgres DATE → invalid input syntax。
-    """
-    import re
-    from datetime import datetime, timezone
-
-    s = str(raw or "").strip()
-    if not s or s.upper() in {"TBD", "TBA", "N/A", "NULL"} or s in {"待定", "未定"}:
-        return None
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
-        return s
-    cur_year = datetime.now(timezone.utc).year
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y", "%Y.%m.%d", "%m/%d", "%m-%d"):
-        try:
-            dt = datetime.strptime(s, fmt)
-            if fmt in ("%m/%d", "%m-%d"):
-                dt = dt.replace(year=cur_year)
-            return dt.strftime("%Y-%m-%d")
-        except Exception:
-            continue
-    return None
-
-
+# _normalize_due_date 实现已平移到 service_helpers.normalize_due_date(顶部按老名字引入)。
 def add_task(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
     _assert_event_exists(conn, event_id, staff)  # 父活动必须属于当前组织
@@ -715,24 +572,7 @@ def add_task(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | Non
 def update_task(event_id: str, task_id: str, payload: dict[str, Any], staff: dict[str, Any] | None) -> dict[str, Any]:
     conn = get_conn()
     _assert_event_exists(conn, event_id, staff)
-    sets: list[str] = []
-    vals: list[Any] = []
-    for key in ("title", "phase", "owner", "due_date", "kind"):
-        if key in payload:
-            sets.append(f"{key} = ?")
-            vals.append(_normalize_due_date(payload[key]) if key == "due_date" else payload[key])
-    if "done" in payload:
-        sets.append("done = ?")
-        vals.append(bool(payload["done"]))
-        sets.append("done_at = ?")
-        vals.append(_now() if payload["done"] else None)
-        if "done_by" in payload:
-            sets.append("done_by = ?")
-            vals.append(str(payload.get("done_by") or ""))
-    for key in ("collaborators", "checklist", "details"):
-        if key in payload:
-            sets.append(f"{key} = ?::jsonb")
-            vals.append(_dumps(payload[key]))
+    sets, vals = helpers.task_update_sets(payload, _now())
     if not sets:
         return {"ok": True}
     sets.append("updated_at = NOW()")
@@ -825,13 +665,7 @@ def add_material(event_id: str, payload: dict[str, Any], staff: dict[str, Any] |
           (id, event_id, name, category, source, qty, status, owner, note, tracking_no, file_url, alert, created_at, updated_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())
         """,
-        (
-            mid, str(event_id), str(payload.get("name") or ""), str(payload.get("category") or "display"),
-            str(payload.get("source") or "ship"), int(payload.get("qty") or 1),
-            str(payload.get("status") or "pending"), str(payload.get("owner") or ""),
-            str(payload.get("note") or ""), str(payload.get("trackingNo") or payload.get("tracking_no") or ""),
-            str(payload.get("fileUrl") or payload.get("file_url") or ""), str(payload.get("alert") or ""),
-        ),
+        helpers.material_insert_values(payload, mid=mid, event_id=event_id),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM vkpi_event_materials WHERE id = ?", (mid,)).fetchone()
@@ -842,21 +676,7 @@ def update_material(event_id: str, material_id: str, payload: dict[str, Any], st
     _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
     conn = get_conn()
     _assert_event_exists(conn, event_id, staff)
-    sets: list[str] = []
-    vals: list[Any] = []
-    for key in ("name", "category", "source", "status", "owner", "note", "alert"):
-        if key in payload:
-            sets.append(f"{key} = ?")
-            vals.append(str(payload[key]) if payload[key] is not None else "")
-    if "qty" in payload:
-        sets.append("qty = ?")
-        vals.append(int(payload.get("qty") or 0))
-    if "trackingNo" in payload or "tracking_no" in payload:
-        sets.append("tracking_no = ?")
-        vals.append(str(payload.get("trackingNo") or payload.get("tracking_no") or ""))
-    if "fileUrl" in payload or "file_url" in payload:
-        sets.append("file_url = ?")
-        vals.append(str(payload.get("fileUrl") or payload.get("file_url") or ""))
+    sets, vals = helpers.material_update_sets(payload)
     if not sets:
         row = conn.execute(
             "SELECT * FROM vkpi_event_materials WHERE id = ? AND event_id = ?", (str(material_id), str(event_id))
@@ -887,22 +707,13 @@ def add_product(event_id: str, payload: dict[str, Any], staff: dict[str, Any] | 
     _assert_event_exists(conn, event_id, staff)  # 父活动必须属于当前组织
     _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
     pid = _validate_id_len(str(payload.get("id") or _gen_id("pp")))  # VARCHAR(64) 超长 → 400
-    ra = payload.get("returnAfter")
-    if ra is None:
-        ra = payload.get("return_after")
     conn.execute(
         """
         INSERT INTO vkpi_event_products
           (id, event_id, name, category, source, qty, status, owner, note, tracking_no, arrive_by, return_after, created_at, updated_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?, NOW(), NOW())
         """,
-        (
-            pid, str(event_id), str(payload.get("name") or ""), str(payload.get("category") or "lens"),
-            str(payload.get("source") or "new_purchase"), int(payload.get("qty") or 1),
-            str(payload.get("status") or "ordered"), str(payload.get("owner") or ""),
-            str(payload.get("note") or ""), str(payload.get("trackingNo") or payload.get("tracking_no") or ""),
-            _normalize_due_date(payload.get("arriveBy") or payload.get("arrive_by")) or "", bool(ra or False),
-        ),
+        helpers.product_insert_values(payload, pid=pid, event_id=event_id),
     )
     conn.commit()
     row = conn.execute("SELECT * FROM vkpi_event_products WHERE id = ?", (pid,)).fetchone()
@@ -913,27 +724,7 @@ def update_product(event_id: str, product_id: str, payload: dict[str, Any], staf
     _validate_event_numeric(payload)  # qty 越界 → 400,不撞 int32 列上限 500
     conn = get_conn()
     _assert_event_exists(conn, event_id, staff)
-    sets: list[str] = []
-    vals: list[Any] = []
-    for key in ("name", "category", "source", "status", "owner", "note"):
-        if key in payload:
-            sets.append(f"{key} = ?")
-            vals.append(str(payload[key]) if payload[key] is not None else "")
-    if "qty" in payload:
-        sets.append("qty = ?")
-        vals.append(int(payload.get("qty") or 0))
-    if "trackingNo" in payload or "tracking_no" in payload:
-        sets.append("tracking_no = ?")
-        vals.append(str(payload.get("trackingNo") or payload.get("tracking_no") or ""))
-    if "arriveBy" in payload or "arrive_by" in payload:
-        sets.append("arrive_by = ?")
-        vals.append(_normalize_due_date(payload.get("arriveBy") or payload.get("arrive_by")) or "")
-    if "returnAfter" in payload or "return_after" in payload:
-        ra = payload.get("returnAfter")
-        if ra is None:
-            ra = payload.get("return_after")
-        sets.append("return_after = ?")
-        vals.append(bool(ra or False))
+    sets, vals = helpers.product_update_sets(payload)
     if not sets:
         row = conn.execute(
             "SELECT * FROM vkpi_event_products WHERE id = ? AND event_id = ?", (str(product_id), str(event_id))
