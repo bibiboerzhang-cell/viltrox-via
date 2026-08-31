@@ -39,12 +39,45 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 sys.path.insert(0, str(ROOT))
 
-from app.api.routers import vkpi_kol_pool_search  # noqa: E402
-from app.db.connection import PostgresCompatConnection  # noqa: E402
-from app.domains.costs import product_catalog  # noqa: E402
-from app.domains.kol import profile_recall, search_sessions, targeted_search_runtime  # noqa: E402
-from app.platform import llm_gateway  # noqa: E402
 from scripts.stdout_utils import out_json  # noqa: E402
+
+
+# Importing the complete route/application graph takes materially longer than
+# validating CLI arguments.  Keep these dependencies lazy so a rejected output
+# symlink or invalid rounds value fails before any application module, provider
+# client, or database runtime can be imported.
+_RUNTIME_DEPENDENCIES_LOADED = False
+
+
+def _load_runtime_dependencies() -> None:
+    global _RUNTIME_DEPENDENCIES_LOADED
+    global PostgresCompatConnection
+    global llm_gateway
+    global product_catalog
+    global profile_recall
+    global search_sessions
+    global targeted_search_runtime
+    global vkpi_kol_pool_search
+
+    if _RUNTIME_DEPENDENCIES_LOADED:
+        return
+
+    from app.api.routers import vkpi_kol_pool_search as route_module
+    from app.db.connection import PostgresCompatConnection as compat_connection
+    from app.domains.costs import product_catalog as catalog_module
+    from app.domains.kol import profile_recall as recall_module
+    from app.domains.kol import search_sessions as sessions_module
+    from app.domains.kol import targeted_search_runtime as targeted_runtime_module
+    from app.platform import llm_gateway as gateway_module
+
+    PostgresCompatConnection = compat_connection
+    llm_gateway = gateway_module
+    product_catalog = catalog_module
+    profile_recall = recall_module
+    search_sessions = sessions_module
+    targeted_search_runtime = targeted_runtime_module
+    vkpi_kol_pool_search = route_module
+    _RUNTIME_DEPENDENCIES_LOADED = True
 
 
 SCHEMA_VERSION = "vkpi_kol_smart_local_runtime_v1"
@@ -521,6 +554,7 @@ async def _benchmark_read_only(
 def run_benchmark(*, admin_dsn: str, golden_path: Path, rounds: int) -> dict[str, Any]:
     golden = load_golden(golden_path)
     rounds = validate_rounds(rounds)
+    _load_runtime_dependencies()
     database_name = f"vkpi_smart_runtime_{os.getpid()}_{secrets.token_hex(4)}"
     admin = psycopg.connect(admin_dsn, autocommit=True)
     _assert_loopback(admin)

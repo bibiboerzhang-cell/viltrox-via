@@ -177,3 +177,20 @@ def test_daily_timer_installer_keeps_both_remote_python_paths_bytecode_free() ->
     assert "WorkingDirectory=${REMOTE_ROOT}\n" not in installer
     assert "Environment=PYTHONPATH=backend" not in installer
     assert " .venv/bin/python" not in installer
+    assert installer.count("TimeoutStartSec=6h") == 2
+    assert "TimeoutStartSec=2h" not in installer
+    assert "Exit 75 raises OnFailure but is not auto-restarted" in installer
+    assert "\nRestart=" not in installer
+
+
+def test_qualified_timer_checks_primary_activity_at_0500_without_after_wait() -> None:
+    installer = (ROOT / "scripts/ops/install_vkpi_daily_timers.sh").read_text(encoding="utf-8")
+    qualified = installer.split("install_remote_qualified_kol_units()", 1)[1].split(
+        "install_local_units()", 1
+    )[0]
+
+    assert "OnCalendar=*-*-* 05:00:00 UTC" in qualified
+    assert "After=network-online.target viltrox-2.0-test.service\n" in qualified
+    assert "After=network-online.target viltrox-2.0-test.service vkpi-sync-daily.service" not in qualified
+    assert "systemctl is-active --quiet vkpi-sync-daily.service" in qualified
+    assert "must observe a still-running primary and skip" in qualified

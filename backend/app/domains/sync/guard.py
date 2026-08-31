@@ -113,6 +113,12 @@ def _int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _error_count(value: Any) -> int:
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value)
+    return _int(value)
+
+
 def _bool(value: Any, default: bool = False) -> bool:
     if value in (None, ""):
         return default
@@ -309,12 +315,18 @@ def _sync_health_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
     """Classify sync summary health for alerts and next-run guard decisions."""
     official = summary.get("official") if isinstance(summary.get("official"), dict) else {}
     kol = summary.get("kol_pool_light") if isinstance(summary.get("kol_pool_light"), dict) else summary
-    official_requested = _int(official.get("requested"))
-    official_failed = _int(official.get("failed"))
+    completion = summary.get("completion") if isinstance(summary.get("completion"), dict) else {}
+    official_requested = _int(official.get("requested") if "requested" in official else official.get("channels_requested"))
+    official_failed = _error_count(
+        official.get("channels_failed_to_enqueue")
+        if "channels_failed_to_enqueue" in official
+        else official.get("failed")
+    )
     kol_requested = _int(kol.get("requested"))
-    kol_errors = _int(kol.get("errors"))
+    kol_errors = _error_count(kol.get("errors") if "errors" in kol else kol.get("failed_to_enqueue"))
+    provider_errors = _int(completion.get("tasks_failed")) + _int(completion.get("tasks_partial"))
     total_requested = official_requested + kol_requested
-    total_errors = official_failed + kol_errors
+    total_errors = official_failed + kol_errors + provider_errors
     failure_rate = (float(total_errors) / float(total_requested)) if total_requested > 0 else 0.0
     threshold_exceeded = total_requested > 0 and failure_rate > SYNC_FAILURE_RATE_THRESHOLD
     return {
@@ -322,6 +334,7 @@ def _sync_health_from_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "official_failed": official_failed,
         "kol_requested": kol_requested,
         "kol_errors": kol_errors,
+        "provider_errors": provider_errors,
         "total_requested": total_requested,
         "total_errors": total_errors,
         "failure_rate": round(failure_rate, 6),
@@ -336,11 +349,31 @@ def _row_after_ack(row: dict[str, Any], ack: dict[str, Any] | None) -> bool:
     if not ack:
         return True
     target_run_id = str(ack.get("target_run_id") or "")
-    if target_run_id and target_run_id == str(row.get("run_id") or ""):
-        return False
-    ack_at = str(ack.get("acknowledged_at") or "")
-    started_at = str(row.get("started_at") or "")
-    return bool(started_at and ack_at and started_at > ack_at)
+    if target_run_id and target_run_id != str(row.get("run_id") or ""):
+        return True
+
+    def parsed(value: Any) -> datetime | None:
+        if isinstance(value, datetime):
+            parsed_value = value
+        else:
+            text = str(value or "").strip()
+            if not text:
+                return None
+            try:
+                parsed_value = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        if parsed_value.tzinfo is None:
+            parsed_value = parsed_value.replace(tzinfo=timezone.utc)
+        return parsed_value.astimezone(timezone.utc)
+
+    ack_at = parsed(ack.get("acknowledged_at"))
+    events = [parsed(row.get(key)) for key in ("started_at", "finished_at", "updated_at")]
+    event_at = max((value for value in events if value is not None), default=None)
+    # Sync ledger timestamps currently have second precision. Equality is
+    # ambiguous: the failure may have committed after the ACK in that same
+    # second. Fail closed instead of hiding a potentially newer failure.
+    return True if ack_at is None or event_at is None else event_at >= ack_at
 
 
 def _latest_sync_ack(scope: str = "daily_incremental_sync") -> dict[str, Any] | None:
@@ -367,7 +400,7 @@ def _blocking_sync_run(scope: str = "daily_incremental_sync") -> dict[str, Any] 
     try:
         rows = get_conn().execute(
             """
-            SELECT run_id, job_name, stage, started_at, finished_at, status, reason,
+            SELECT run_id, job_name, stage, started_at, finished_at, updated_at, status, reason,
                    error_type, error_class, error_message, summary_json
             FROM vkpi_sync_runs
             WHERE job_name=?
@@ -395,6 +428,7 @@ def _blocking_sync_run(scope: str = "daily_incremental_sync") -> dict[str, Any] 
                 "status": status,
                 "started_at": row.get("started_at"),
                 "finished_at": row.get("finished_at"),
+                "updated_at": row.get("updated_at"),
                 "reason": row.get("reason") or health.get("block_reason") or "sync_guard_blocked",
                 "error_type": error_type,
                 "error_class": row.get("error_class"),
@@ -464,6 +498,7 @@ def _upsert_sync_health_alert(*, run_id: str, health: dict[str, Any], summary: d
         body = (
             f"official_failed={health.get('official_failed')} "
             f"kol_errors={health.get('kol_errors')} "
+            f"provider_errors={health.get('provider_errors')} "
             f"failure_rate={health.get('failure_rate')}"
         )
         alerts.upsert_alert(

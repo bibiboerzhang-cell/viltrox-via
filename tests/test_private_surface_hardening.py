@@ -158,28 +158,45 @@ def test_application_sends_noindex_on_success_and_error_responses() -> None:
         _assert_full_robots_header(response.headers.get("x-robots-tag", ""))
 
 
-def test_admin_root_serves_spa_without_dropping_cockpit_query() -> None:
+def test_admin_root_serves_spa_without_dropping_cockpit_query(tmp_path: Path) -> None:
+    # frontend/dist is a generated, ignored release artifact.  Exercise the
+    # route against a fresh synthetic build output so a developer's stale dist
+    # cannot make this test green and a clean clone does not make it red.
+    frontend_index = tmp_path / "fresh-dist" / "index.html"
+    frontend_index.parent.mkdir()
+    frontend_index.write_text(
+        "<!doctype html><title>fresh private fixture</title><div id='root'></div>",
+        encoding="utf-8",
+    )
     client = TestClient(main.app, raise_server_exceptions=False)
     with mock.patch.object(main, "IS_ADMIN_APP", True), mock.patch.object(
         main, "IS_PUBLIC_APP", False
-    ):
+    ), mock.patch.object(main, "FRONTEND_INDEX", frontend_index):
         response = client.get("/?cockpit=dealers", follow_redirects=False)
     assert response.status_code == 200
+    assert "fresh private fixture" in response.text
     assert "location" not in response.headers
     _assert_full_robots_header(response.headers.get("x-robots-tag", ""))
 
 
-def test_frontend_favicons_are_served_without_console_404s() -> None:
+def test_frontend_favicons_are_served_without_console_404s(tmp_path: Path) -> None:
+    frontend_dist = tmp_path / "fresh-dist"
+    frontend_dist.mkdir()
+    (frontend_dist / "favicon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"/>', encoding="utf-8"
+    )
+    (frontend_dist / "favicon.ico").write_bytes(b"fresh-ico-fixture")
     client = TestClient(main.app, raise_server_exceptions=False)
-    for path, content_type in (
-        ("/favicon.svg", "image/svg+xml"),
-        ("/favicon.ico", "image/x-icon"),
-    ):
-        response = client.get(path, follow_redirects=False)
-        assert response.status_code == 200
-        assert response.headers.get("content-type", "").startswith(content_type)
-        assert response.headers.get("cache-control") == "public, max-age=3600"
-        _assert_full_robots_header(response.headers.get("x-robots-tag", ""))
+    with mock.patch.object(main, "FRONTEND_DIST_DIR", frontend_dist):
+        for path, content_type in (
+            ("/favicon.svg", "image/svg+xml"),
+            ("/favicon.ico", "image/x-icon"),
+        ):
+            response = client.get(path, follow_redirects=False)
+            assert response.status_code == 200
+            assert response.headers.get("content-type", "").startswith(content_type)
+            assert response.headers.get("cache-control") == "public, max-age=3600"
+            _assert_full_robots_header(response.headers.get("x-robots-tag", ""))
 
 
 def test_application_closes_api_schema_and_keeps_noindex_discoverable() -> None:

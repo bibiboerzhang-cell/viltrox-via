@@ -52,7 +52,8 @@ jobs:
           python - <<'PY'
           import asyncio
 
-          from app.db.connection import close_db_runtime, init_db_runtime
+          from app.db.connection import close_db_runtime
+          from app.db.startup import init_db_runtime
 
           async def main() -> None:
               await init_db_runtime()
@@ -103,7 +104,8 @@ jobs:
           python - <<'PY'
           import asyncio
 
-          from app.db.connection import close_db_runtime, init_db_runtime
+          from app.db.connection import close_db_runtime
+          from app.db.startup import init_db_runtime
 
           async def main() -> None:
               await init_db_runtime()

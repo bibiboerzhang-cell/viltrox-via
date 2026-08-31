@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,12 @@ from scripts.ops.run_isolated_worktree_gate import (
     IsolatedWorktreeGateError, _assert_source_unchanged, _capture_source_state,
     _source_git_text,
 )
-from scripts.ops.strict_runtime_seatbelt import candidate_profile, run_preflight, sandboxed
+from scripts.ops.strict_runtime_seatbelt import (
+    SeatbeltError,
+    candidate_profile,
+    run_preflight,
+    sandboxed,
+)
 from scripts.ops import trusted_npm_audit
 from scripts.ops.controlled_candidate_process import run_controlled_candidate
 from scripts.ops.freeze_git_bridge import readonly_snapshot_git_environment
@@ -101,10 +107,42 @@ def test_controller_attestation_is_offline_verifiable_ed25519(tmp_path: Path) ->
     )
 
 
-def test_seatbelt_positive_and_negative_preflight() -> None:
-    result = run_preflight(Path.cwd())
+def test_seatbelt_positive_and_negative_preflight(tmp_path: Path) -> None:
+    # The checked-out .venv is deliberately not part of Git and clean-clone
+    # harnesses often reuse one through a root symlink.  Build the smallest
+    # physical interpreter root this unit needs instead: candidate_profile must
+    # continue rejecting a symlink at any trusted root, while an executable
+    # symlink *inside* that physical root is resolved to the already trusted
+    # host interpreter before sandbox-exec runs it.
+    source = tmp_path / "source"
+    venv_bin = source / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").symlink_to(Path(sys.executable).resolve())
+
+    result = run_preflight(source)
     assert result["pass"] is True
     assert all(result["checks"].values())
+
+
+def test_candidate_profile_still_rejects_raw_symlink_roots(tmp_path: Path) -> None:
+    roots = {
+        name: tmp_path / name
+        for name in ("candidate", "clean", "venv", "node_modules", "runtime")
+    }
+    for path in roots.values():
+        path.mkdir()
+    linked_candidate = tmp_path / "linked-candidate"
+    linked_candidate.symlink_to(roots["candidate"], target_is_directory=True)
+
+    with pytest.raises(SeatbeltError, match="physical non-symlink paths"):
+        candidate_profile(
+            candidate=linked_candidate,
+            clean_source=roots["clean"],
+            venv=roots["venv"],
+            node_modules=roots["node_modules"],
+            runtime_root=roots["runtime"],
+            allowed_ports=(18103, 15432, 16379),
+        )
 
 
 def test_process_identity_allows_command_exec_transition(

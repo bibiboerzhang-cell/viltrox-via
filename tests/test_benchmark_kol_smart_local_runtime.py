@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 import subprocess
@@ -14,6 +16,27 @@ SPEC = importlib.util.spec_from_file_location("benchmark_kol_smart_local_runtime
 assert SPEC is not None and SPEC.loader is not None
 benchmark = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(benchmark)
+
+
+def test_cli_preflights_arguments_before_loading_application_graph() -> None:
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    top_level_app_imports = [
+        node.module
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and str(node.module or "").startswith("app.")
+    ]
+    assert top_level_app_imports == []
+
+    main_source = inspect.getsource(benchmark.main)
+    assert main_source.index("parser.parse_args()") < main_source.index(
+        "validate_output_path(args.output)"
+    ) < main_source.index("run_benchmark(")
+
+    benchmark_source = inspect.getsource(benchmark.run_benchmark)
+    assert benchmark_source.index("load_golden(golden_path)") < benchmark_source.index(
+        "validate_rounds(rounds)"
+    ) < benchmark_source.index("_load_runtime_dependencies()")
 
 
 def test_runtime_golden_is_fixed_at_five_queries() -> None:

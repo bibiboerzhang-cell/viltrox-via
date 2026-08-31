@@ -875,6 +875,12 @@ def test_systemd_contract_survives_stale_env_and_emits_no_runtime_urls(tmp_path:
             "ENV_FILE": str(stale_env),
             "DATABASE_URL": database_url,
             "REDIS_URL": redis_url,
+            # Production-like runtime_env intentionally has no checked-in
+            # credential fallback.  The fixture must model the reviewed
+            # EnvironmentFile explicitly instead of borrowing a developer
+            # .env that is absent in a fresh clone.
+            "JWT_SECRET": "synthetic-systemd-production-jwt-secret",
+            "ADMIN_PASSWORD": "synthetic-systemd-production-admin-password",
             # Model stale values that can arrive from a legacy production env.
             "APP_ROLE": "all",
             "ENVIRONMENT": "local",
@@ -943,6 +949,8 @@ def test_systemd_contract_honours_vkpi_web_concurrency_override(tmp_path: Path) 
             "ENV_FILE": str(stale_env),
             "DATABASE_URL": "postgresql://cloud_user:db-secret@db.internal:5432/vkpi",
             "REDIS_URL": "redis://:redis-secret@redis.internal:6379/0",
+            "JWT_SECRET": "synthetic-systemd-production-jwt-secret",
+            "ADMIN_PASSWORD": "synthetic-systemd-production-admin-password",
             "RUNTIME_ENV_QUIET": "1",
             "VKPI_WEB_CONCURRENCY": "6",
             "VKPI_WEB_POOL_MAX_SIZE": "12",

@@ -23,6 +23,13 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
+# With no pre-existing backlog, 18 official + 91 qualified KOL tasks, two
+# consumers, and handlers bounded to 300 seconds give the planning upper bound
+# ceil(109 / 2) * 300 = 16,500 seconds. The timeout ledger cannot interrupt a
+# stuck handler, so this is a capacity budget, not a completion guarantee.
+# 4h45m leaves 75 minutes in the primary 6h unit for maintenance and shutdown.
+DEFAULT_COMPLETION_WAIT_SECONDS = 17_100.0
+
 from app.db.connection import close_db_runtime  # noqa: E402
 from app.domains.sync.cron import run_job  # noqa: E402
 from app.domains.sync.daily_sync import SyncFailFast, SyncGuardBlocked  # noqa: E402
@@ -56,6 +63,11 @@ def emit_event(event: str, **payload: object) -> None:
     out(json.dumps({"event": event, "at": utcnow(), **payload}, ensure_ascii=False, default=str), flush=True)
 
 
+def emit_batch_queued_receipt(receipt: dict[str, object]) -> None:
+    """Persist the recoverable enqueue receipt to the service's append-only log."""
+    emit_event("cron_daily_sync_enqueued", summary=receipt)
+
+
 def _result_body(result: dict[str, object]) -> dict[str, object]:
     nested = result.get("result") if isinstance(result, dict) else None
     return nested if isinstance(nested, dict) else result
@@ -71,13 +83,27 @@ def result_summary(result: dict[str, object]) -> dict[str, object]:
     inner = _result_body(result)
     official = inner.get("official") if isinstance(inner.get("official"), dict) else {}
     kol = inner.get("kol_pool_light") if isinstance(inner.get("kol_pool_light"), dict) else {}
+    completion = inner.get("completion") if isinstance(inner.get("completion"), dict) else {}
+    task_ids = list(inner.get("task_ids") or []) if isinstance(inner.get("task_ids"), list) else []
     return {
         "status": inner.get("status"),
         "dry_run": bool(inner.get("dry_run")),
+        "batch_id": inner.get("batch_id"),
+        "task_ids": task_ids,
+        "completion_scope": inner.get("completion_scope") or completion.get("completion_scope"),
+        "provider_completion": inner.get("provider_completion") or completion.get("provider_completion"),
+        "completion_sla_expired": completion.get("sla_expired"),
+        "tasks_total": completion.get("tasks_total") if completion.get("tasks_total") is not None else len(task_ids),
+        "tasks_terminal": completion.get("tasks_terminal"),
+        "tasks_succeeded": completion.get("tasks_succeeded"),
+        "tasks_partial": completion.get("tasks_partial"),
+        "tasks_failed": completion.get("tasks_failed"),
+        "tasks_skipped_known": completion.get("tasks_skipped_known"),
+        "tasks_pending": completion.get("tasks_pending"),
         "official_requested": _value(official, "requested", "channels_requested"),
         "official_enqueued": _value(official, "enqueued", "channels_enqueued"),
         "official_synced": official.get("synced"),
-        "official_failed": _value(official, "failed", "channels_failed_to_enqueue"),
+        "official_failed": _value(official, "channels_failed_to_enqueue", "failed"),
         "kol_requested": kol.get("requested"),
         "kol_enqueued": kol.get("enqueued"),
         "kol_refreshed": kol.get("refreshed"),
@@ -100,6 +126,12 @@ def post_sync_maintenance_decision(
     status = str(inner.get("status") or "unknown").strip().lower()
     if status not in {"ok", "completed", "succeeded", "success"}:
         return False, f"job_not_completed:{status}"
+    completion = inner.get("completion") if isinstance(inner.get("completion"), dict) else {}
+    provider_completion = str(
+        inner.get("provider_completion") or completion.get("provider_completion") or ""
+    ).strip().lower()
+    if ("completion" in inner or "provider_completion" in inner) and provider_completion != "completed":
+        return False, f"provider_not_completed:{provider_completion or 'unknown'}"
     return True, "completed_sync"
 
 
@@ -107,7 +139,7 @@ def result_exit_code(result: dict[str, object]) -> int:
     """Map the honest orchestration receipt to the systemd oneshot exit code."""
     inner = _result_body(result)
     status = str(inner.get("status") or "").strip().lower()
-    if status in {"failed", "interrupted", "blocked", "error"}:
+    if status in {"failed", "partial", "interrupted", "blocked", "error"}:
         return int(inner.get("exit_code") or 2)
 
     official = inner.get("official") if isinstance(inner.get("official"), dict) else {}
@@ -116,7 +148,28 @@ def result_exit_code(result: dict[str, object]) -> int:
         enqueue_failures = int(
             _value(official, "channels_failed_to_enqueue", "failed_to_enqueue") or 0
         ) + int(kol.get("failed_to_enqueue") or 0)
-        return 2 if enqueue_failures else 0
+        # EX_TEMPFAIL: accepted by the queue, but provider completion is still
+        # unknown (or the bounded completion SLA expired).
+        return 2 if enqueue_failures else 75
+
+    if status in {"ok", "completed", "succeeded", "success"} and (
+        "completion" in inner or "provider_completion" in inner
+    ):
+        completion = inner.get("completion") if isinstance(inner.get("completion"), dict) else {}
+        provider_completion = str(
+            inner.get("provider_completion") or completion.get("provider_completion") or "unknown"
+        ).strip().lower()
+        if provider_completion != "completed":
+            scope = str(inner.get("completion_scope") or completion.get("completion_scope") or "").lower()
+            if (
+                provider_completion == "not_run"
+                and scope == "no_work"
+                and int(completion.get("tasks_total") or 0) == 0
+                and "enqueue_failures" in inner
+                and int(inner.get("enqueue_failures") or 0) == 0
+            ):
+                return 0
+            return 75 if provider_completion == "unknown" else 2
 
     health = inner.get("health") if isinstance(inner.get("health"), dict) else {}
     if bool(health.get("blocked_next_run")):
@@ -127,7 +180,9 @@ def result_exit_code(result: dict[str, object]) -> int:
         return 2 if float(rate) > float(threshold) else 0
     if int(official.get("failed") or 0) or int(kol.get("errors") or 0):
         return 2
-    return 0
+    if status in {"ok", "completed", "succeeded", "success", "planned"}:
+        return 0
+    return 2
 
 
 def run_post_sync_maintenance() -> None:
@@ -190,6 +245,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--kol-refresh-selector", default="qualified", choices=["qualified", "legacy"], help="KOL refresh selector to use when KOL refresh is explicitly included")
     parser.add_argument("--kol-tiers", default="hot", help="Comma-separated refresh tiers for qualified selector")
     parser.add_argument("--kol-source-type", default="legacy_excel_p2d", help="KOL pool source_type scope")
+    parser.add_argument(
+        "--completion-wait-seconds",
+        type=float,
+        default=DEFAULT_COMPLETION_WAIT_SECONDS,
+        help="Bounded SLA for read-only child-ledger polling before returning queued/partial (default: 4h45m)",
+    )
+    parser.add_argument(
+        "--completion-poll-seconds",
+        type=float,
+        default=10.0,
+        help="Seconds between read-only child-ledger polls",
+    )
     parser.add_argument("--skip-kol", action="store_true", help="Skip KOL pool lightweight refresh")
     parser.add_argument(
         "--include-legacy-kol",
@@ -222,11 +289,15 @@ async def main() -> int:
         "kol_refresh_selector": kol_selector,
         "kol_tiers": args.kol_tiers,
         "kol_source_type": args.kol_source_type,
+        "completion_wait_seconds": max(0.0, min(19_800.0, float(args.completion_wait_seconds or 0.0))),
+        "completion_poll_seconds": max(0.05, min(60.0, float(args.completion_poll_seconds or 10.0))),
         "skip_kol": bool(args.skip_kol) and not (bool(args.include_legacy_kol) or bool(args.include_qualified_kol)),
         "allow_legacy_kol_full_refresh": bool(args.include_legacy_kol),
         "allow_qualified_kol_refresh": bool(args.include_qualified_kol),
         "staff": {"id": 0, "staff_id": 0, "user_id": 0, "role": "admin", "is_owner": 1},
     }
+    if not payload["dry_run"]:
+        payload["_batch_receipt_callback"] = emit_batch_queued_receipt
     try:
         emit_event(
             "cron_daily_sync_started",
@@ -242,6 +313,8 @@ async def main() -> int:
             kol_refresh_selector=payload["kol_refresh_selector"],
             kol_tiers=payload["kol_tiers"],
             kol_source_type=payload["kol_source_type"],
+            completion_wait_seconds=payload["completion_wait_seconds"],
+            completion_poll_seconds=payload["completion_poll_seconds"],
         )
         result = await run_job("daily_incremental_sync", payload)
         emit_event("cron_daily_sync_finished", summary=result_summary(result))

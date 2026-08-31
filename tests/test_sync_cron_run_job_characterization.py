@@ -13,7 +13,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.domains.sync import cron  # noqa: E402
+from app.domains.sync import cron, daily_batch  # noqa: E402
 
 
 def _stable_runtime(monkeypatch: pytest.MonkeyPatch, events: list[Any]) -> None:
@@ -281,16 +281,53 @@ def test_daily_incremental_guard_and_queue_side_effect_order(
         lambda **kwargs: events.append(("legacy_rows", kwargs)) or [{"id": 41}],
     )
 
-    async def queue_channels(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        events.append(("official_queue", args, kwargs))
-        return {"channels_enqueued": 1}
+    async def queue_daily(
+        official_rows: list[dict[str, Any]],
+        kol_rows: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        events.append(("daily_queue", official_rows, kol_rows, kwargs))
+        return {
+            "official": {
+                "channels_enqueued": 1,
+                "channels_requested": 1,
+                "channels_failed_to_enqueue": 0,
+                "task_ids": ["official-1"],
+                "failed": [],
+            },
+            "kol_pool_light": {
+                "requested": 1,
+                "enqueued": 1,
+                "failed_to_enqueue": 0,
+                "task_ids": ["kol-31"],
+                "failed": [],
+            },
+            "task_ids": ["official-1", "kol-31"],
+            "task_links": [
+                {"task_id": "official-1", "lane": "official", "channel_id": 1},
+                {"task_id": "kol-31", "lane": "kol_pool_light", "kol_pool_id": 31},
+            ],
+            "scheduler": "round_robin_v1",
+        }
 
-    async def queue_kols(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        events.append(("kol_queue", args, kwargs))
-        return {"enqueued": 1}
+    monkeypatch.setattr(daily_batch, "queue_batch", queue_daily)
+    monkeypatch.setattr(daily_batch, "new_batch_id", lambda: "batch-1")
+    monkeypatch.setattr(daily_batch, "insert_parent", lambda *_args, **_kwargs: events.append("parent_insert"))
+    monkeypatch.setattr(daily_batch, "checkpoint_parent", lambda *_args, **_kwargs: events.append("parent_checkpoint"))
+    monkeypatch.setattr(daily_batch, "finish_parent", lambda *_args, **_kwargs: events.append("parent_finish"))
 
-    monkeypatch.setattr(cron, "_queue_channel_syncs", queue_channels)
-    monkeypatch.setattr(cron, "_queue_kol_refreshes", queue_kols)
+    async def reconcile(queue: Any) -> dict[str, int]:
+        events.append(("reconcile", queue))
+        return {"checked": 0, "reconciled": 0, "pending": 0, "failed": 0}
+
+    monkeypatch.setattr(daily_batch, "reconcile_recent_parents", reconcile)
+    real_observer = daily_batch.observe
+
+    async def observe(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        events.append("observe")
+        return await real_observer(*args, **kwargs)
+
+    monkeypatch.setattr(daily_batch, "observe", observe)
     payload = {
         "allow_qualified_kol_refresh": selector == "qualified",
         "allow_legacy_kol_full_refresh": selector == "legacy",
@@ -299,30 +336,249 @@ def test_daily_incremental_guard_and_queue_side_effect_order(
         "kol_platforms": "youtube",
         "kol_tiers": "A",
         "staff": {"id": 7},
+        "_batch_receipt_callback": lambda receipt: events.append(("batch_receipt", receipt)),
     }
 
-    result = asyncio.run(cron.run_job("vkpi-daily-incremental", payload, queue="QUEUE"))
+    class Queue:
+        backend_name = "redis-stream"
+
+        async def get_status(self, _task_id: str) -> dict[str, str]:
+            return {"status": "queued"}
+
+    queue = Queue()
+    result = asyncio.run(cron.run_job("vkpi-daily-incremental", payload, queue=queue))
 
     row_event = "qualified_rows" if selector == "qualified" else "legacy_rows"
     labels = [item[0] if isinstance(item, tuple) else item for item in events]
     assert labels == [
         "guard",
+        "reconcile",
+        "guard",
         "channels",
-        "official_queue",
         "selector",
         "platforms",
         *(["tiers"] if selector == "qualified" else []),
         row_event,
-        "kol_queue",
+        "parent_insert",
+        "daily_queue",
+        "parent_checkpoint",
+        "batch_receipt",
+        "observe",
         "stamp",
+        "parent_finish",
     ]
+    receipt = next(item[1] for item in events if isinstance(item, tuple) and item[0] == "batch_receipt")
+    assert receipt["batch_id"] == "batch-1"
+    assert receipt["task_ids"] == ["official-1", "kol-31"]
+    assert receipt["parent_persisted"] is True
+    assert receipt["phase"] == "children_enqueued"
+    assert receipt["enqueue_failures"] == 0
+    assert receipt["official"]["channels_enqueued"] == 1
+    assert receipt["kol_pool_light"]["enqueued"] == 1
     assert result == {
         "job": "daily_incremental_sync",
         "status": "queued",
-        "official": {"channels_enqueued": 1},
-        "kol_pool_light": {"enqueued": 1},
+        "batch_id": "batch-1",
+        "task_ids": ["official-1", "kol-31"],
+        "batch": {
+            "batch_id": "batch-1",
+            "parent_persisted": True,
+            "identity_scope": "durable_parent_and_task_links",
+            "scheduler": "round_robin_v1",
+            "requested": 2,
+            "enqueued": 2,
+            "task_ids": ["official-1", "kol-31"],
+            "task_links": [
+                {"task_id": "official-1", "lane": "official", "channel_id": 1},
+                {"task_id": "kol-31", "lane": "kol_pool_light", "kol_pool_id": 31},
+            ],
+        },
+        "completion_scope": "enqueue_only",
+        "provider_completion": "unknown",
+        "completion": {
+            "complete": False,
+            "completion_scope": "enqueue_only",
+            "provider_completion": "unknown",
+            "wait_seconds": 0.0,
+            "poll_seconds": 10.0,
+            "sla_expired": False,
+            "tasks_total": 2,
+            "tasks_terminal": 0,
+            "tasks_succeeded": 0,
+            "tasks_partial": 0,
+            "tasks_failed": 0,
+            "tasks_skipped_known": 0,
+            "tasks_pending": 2,
+            "status_counts": {"unobserved": 2},
+            "task_statuses": {"official-1": "unobserved", "kol-31": "unobserved"},
+            "lookup_errors": {},
+        },
+        "official": {
+            "channels_enqueued": 1,
+            "channels_requested": 1,
+            "channels_failed_to_enqueue": 0,
+            "task_ids": ["official-1"],
+            "failed": [],
+        },
+        "kol_pool_light": {
+            "requested": 1,
+            "enqueued": 1,
+            "failed_to_enqueue": 0,
+            "task_ids": ["kol-31"],
+            "failed": [],
+        },
+        "enqueue_failures": 0,
         "ran_at": "STAMP",
     }
+
+
+def test_daily_batch_round_robin_fairness_and_full_receipt_for_18_plus_91(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.domains.tasks.enqueue as task_enqueue
+
+    calls: list[tuple[str, dict[str, Any], dict[str, Any] | None, int | None]] = []
+
+    async def enqueue_task(
+        queue: Any,
+        task_type: str,
+        params: dict[str, Any],
+        *,
+        staff: dict[str, Any] | None,
+        priority: int | None,
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        assert queue is durable_queue
+        calls.append((task_type, dict(params), staff, priority))
+        target_id = params.get("channel_id") or params.get("kol_pool_id")
+        return {"task_id": f"task-{task_type}-{target_id}", "status": "queued"}
+
+    monkeypatch.setattr(task_enqueue, "enqueue_vkpi_task", enqueue_task)
+
+    class Queue:
+        backend_name = "redis-stream"
+
+    durable_queue = Queue()
+    official_rows = [{"id": index} for index in range(1, 19)]
+    kol_rows = [{"id": index} for index in range(1001, 1092)]
+    result = asyncio.run(
+        daily_batch.queue_batch(
+            official_rows,
+            kol_rows,
+            payload={"official_max_posts": 50, "kol_max_posts": 2},
+            staff={"id": 7},
+            queue=durable_queue,
+            batch_id="batch-fair",
+        )
+    )
+
+    lanes = [params["orchestration_lane"] for _task_type, params, _staff, _priority in calls]
+    assert lanes[:36] == ["official", "kol_pool_light"] * 18
+    assert lanes[36:] == ["kol_pool_light"] * 73
+    assert all(params["orchestration_batch_id"] == "batch-fair" for _, params, _, _ in calls)
+    assert all(priority == 5 for _, _, _, priority in calls)
+    assert len(result["task_ids"]) == 109
+    assert result["official"]["channels_enqueued"] == 18
+    assert result["kol_pool_light"]["enqueued"] == 91
+    assert result["scheduler"] == "round_robin_v1"
+
+
+def test_daily_batch_completion_poll_is_injectable_and_requires_all_terminal() -> None:
+    calls: dict[str, int] = {"official-1": 0, "kol-1": 0}
+    sleeps: list[float] = []
+
+    class Queue:
+        async def get_status(self, task_id: str) -> dict[str, str]:
+            calls[task_id] += 1
+            return {"status": "queued" if calls[task_id] == 1 else "done"}
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    completion = asyncio.run(
+        daily_batch.observe(
+            Queue(),
+            ["official-1", "kol-1"],
+            wait_seconds=30,
+            poll_seconds=2,
+            sleep=fake_sleep,
+            monotonic=lambda: 0.0,
+        )
+    )
+
+    assert sleeps == [2]
+    assert completion["complete"] is True
+    assert completion["completion_scope"] == "provider_terminal"
+    assert completion["provider_completion"] == "completed"
+    assert completion["tasks_succeeded"] == 2
+    assert daily_batch.result_status(completion, enqueue_failures=0) == "completed"
+
+
+def test_daily_batch_completion_sla_keeps_success_plus_pending_queued_without_real_wait() -> None:
+    clock = [0.0]
+
+    class Queue:
+        async def get_status(self, task_id: str) -> dict[str, str]:
+            return {"status": "done" if task_id == "official-1" else "queued"}
+
+    async def fake_sleep(seconds: float) -> None:
+        clock[0] += seconds
+
+    completion = asyncio.run(
+        daily_batch.observe(
+            Queue(),
+            ["official-1", "kol-1"],
+            wait_seconds=2,
+            poll_seconds=1,
+            sleep=fake_sleep,
+            monotonic=lambda: clock[0],
+        )
+    )
+
+    assert clock[0] == 2
+    assert completion["complete"] is False
+    assert completion["completion_scope"] == "bounded_observation"
+    assert completion["provider_completion"] == "unknown"
+    assert completion["sla_expired"] is True
+    assert completion["tasks_terminal"] == 1
+    assert completion["tasks_pending"] == 1
+    assert daily_batch.result_status(completion, enqueue_failures=0) == "queued"
+
+
+def test_daily_batch_malformed_target_is_an_enqueue_failure_not_completed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.domains.tasks.enqueue as task_enqueue
+
+    async def must_not_enqueue(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("invalid target reached enqueue")
+
+    monkeypatch.setattr(task_enqueue, "enqueue_vkpi_task", must_not_enqueue)
+
+    class Queue:
+        backend_name = "redis-stream"
+
+    queued = asyncio.run(
+        daily_batch.queue_batch(
+            [{"id": 0}],
+            [],
+            payload={},
+            staff=None,
+            queue=Queue(),
+            batch_id="batch-invalid",
+        )
+    )
+    completion = asyncio.run(
+        daily_batch.observe(Queue(), queued["task_ids"], wait_seconds=0, poll_seconds=1)
+    )
+
+    assert queued["official"]["channels_requested"] == 1
+    assert queued["official"]["channels_enqueued"] == 0
+    assert queued["official"]["channels_failed_to_enqueue"] == 1
+    assert queued["official"]["failed"] == [
+        {"channel_id": 0, "error": "ValueError: positive target id required"}
+    ]
+    assert daily_batch.result_status(completion, enqueue_failures=1) == "partial"
 
 
 def test_daily_incremental_dry_run_plans_without_queue_or_guard_writes(
@@ -362,10 +618,10 @@ def test_daily_incremental_dry_run_plans_without_queue_or_guard_writes(
         ),
     )
     monkeypatch.setattr(
-        cron,
-        "_queue_kol_refreshes",
+        daily_batch,
+        "queue_batch",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("dry-run enqueued KOL crawl work")
+            AssertionError("dry-run enqueued daily batch work")
         ),
     )
 

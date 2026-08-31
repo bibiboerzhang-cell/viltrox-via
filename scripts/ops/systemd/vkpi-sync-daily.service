@@ -6,6 +6,7 @@ OnFailure=vkpi-sync-daily-alert@%n.service
 
 [Service]
 Type=oneshot
+# Exit 75 raises OnFailure but is not auto-restarted; the next timer is the retry boundary.
 RestartPreventExitStatus=75 76
 WorkingDirectory=/opt/viltrox-2.0/current
 Environment=PYTHONPATH=/opt/viltrox-2.0/current/backend

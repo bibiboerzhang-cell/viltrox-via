@@ -132,6 +132,25 @@ async def _consumer_loop(
                 job_type=str(raw_job.get("job_type") or ""),
                 lease_seconds=_PROVIDER_CLAIM_LEASE_SECONDS,
             )
+            dispatch = await queue.authorize_provider_dispatch(
+                task_id,
+                str(raw_job.get("_stream_id") or ""),
+            )
+            if not dispatch.get("authorized"):
+                status = str(dispatch.get("status") or "").strip().lower()
+                await asyncio.to_thread(
+                    finalize_provider_execution_claim,
+                    task_id,
+                    fence,
+                    "completed" if status in _ACKABLE_HANDLER_STATUSES else "failed",
+                )
+                await queue.ack(raw_job)
+                logger.warning(
+                    "redis handler dispatch blocked by ledger state | task_id=%s status=%s",
+                    task_id,
+                    status or "missing",
+                )
+                continue
             with apify_execution_context(task_id, fence):
                 claim_renewal = asyncio.create_task(
                     _provider_claim_renew_loop(

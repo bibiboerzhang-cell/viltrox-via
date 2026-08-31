@@ -1,8 +1,26 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 from scripts import cron_daily_sync
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_default_completion_sla_fits_18_plus_91_capacity_and_primary_systemd_budget() -> None:
+    worst_case_child_seconds = ((109 + 2 - 1) // 2) * 300
+    assert worst_case_child_seconds == 16_500
+    assert cron_daily_sync.DEFAULT_COMPLETION_WAIT_SECONDS == 17_100.0
+    assert cron_daily_sync.DEFAULT_COMPLETION_WAIT_SECONDS >= worst_case_child_seconds + 600
+    assert cron_daily_sync.DEFAULT_COMPLETION_WAIT_SECONDS + 4_500 <= 6 * 60 * 60
+    unit = (ROOT / "scripts/ops/systemd/vkpi-sync-daily.service").read_text(encoding="utf-8")
+    assert "TimeoutStartSec=6h" in unit
+    assert "OnFailure=vkpi-sync-daily-alert@%n.service" in unit
+    assert "RestartPreventExitStatus=75 76" in unit
+    assert "\nRestart=" not in unit
+    assert "the next timer is the retry boundary" in unit
 
 
 def test_compute_kol_stale_before_prefers_explicit_timestamp() -> None:
@@ -53,6 +71,18 @@ def test_queued_result_summary_reports_enqueue_truth() -> None:
     assert summary == {
         "status": "queued",
         "dry_run": False,
+        "batch_id": None,
+        "task_ids": [],
+        "completion_scope": None,
+        "provider_completion": None,
+        "completion_sla_expired": None,
+        "tasks_total": 0,
+        "tasks_terminal": None,
+        "tasks_succeeded": None,
+        "tasks_partial": None,
+        "tasks_failed": None,
+        "tasks_skipped_known": None,
+        "tasks_pending": None,
         "official_requested": 18,
         "official_enqueued": 17,
         "official_synced": None,
@@ -80,9 +110,25 @@ def test_post_sync_maintenance_never_runs_for_dry_run_or_enqueue_receipt() -> No
         {"status": "ok", "dry_run": False},
         requested_dry_run=False,
     ) == (True, "completed_sync")
+    assert cron_daily_sync.post_sync_maintenance_decision(
+        {
+            "status": "completed",
+            "provider_completion": "completed",
+            "completion": {"completion_scope": "provider_terminal"},
+        },
+        requested_dry_run=False,
+    ) == (True, "completed_sync")
+    assert cron_daily_sync.post_sync_maintenance_decision(
+        {
+            "status": "completed",
+            "provider_completion": "unknown",
+            "completion": {"completion_scope": "bounded_observation", "sla_expired": True},
+        },
+        requested_dry_run=False,
+    ) == (False, "provider_not_completed:unknown")
 
 
-def test_enqueue_failures_fail_the_systemd_oneshot() -> None:
+def test_queued_or_partial_receipt_never_passes_the_systemd_oneshot() -> None:
     assert cron_daily_sync.result_exit_code(
         {
             "status": "queued",
@@ -96,4 +142,108 @@ def test_enqueue_failures_fail_the_systemd_oneshot() -> None:
             "official": {"channels_failed_to_enqueue": 0},
             "kol_pool_light": {"failed_to_enqueue": 0},
         }
+    ) == 75
+    assert cron_daily_sync.result_exit_code(
+        {
+            "status": "partial",
+            "provider_completion": "partial",
+            "completion": {"sla_expired": True, "tasks_pending": 4},
+        }
+    ) == 2
+    assert cron_daily_sync.result_exit_code(
+        {
+            "status": "completed",
+            "provider_completion": "completed",
+            "completion": {"sla_expired": False, "tasks_pending": 0},
+        }
     ) == 0
+
+
+def test_completed_result_summary_exposes_auditable_batch_and_terminal_counts() -> None:
+    summary = cron_daily_sync.result_summary(
+        {
+            "status": "completed",
+            "batch_id": "daily-1",
+            "task_ids": ["official-1", "kol-1"],
+            "completion_scope": "provider_terminal",
+            "provider_completion": "completed",
+            "completion": {
+                "sla_expired": False,
+                "tasks_terminal": 2,
+                "tasks_succeeded": 2,
+                "tasks_partial": 0,
+                "tasks_failed": 0,
+                "tasks_pending": 0,
+            },
+            "official": {
+                "channels_requested": 1,
+                "channels_enqueued": 1,
+                "channels_failed_to_enqueue": 0,
+                "failed": [],
+            },
+            "kol_pool_light": {"requested": 1, "enqueued": 1},
+            "ran_at": "2026-08-31T04:03:00Z",
+        }
+    )
+
+    assert summary["batch_id"] == "daily-1"
+    assert summary["task_ids"] == ["official-1", "kol-1"]
+    assert summary["completion_scope"] == "provider_terminal"
+    assert summary["provider_completion"] == "completed"
+    assert summary["official_failed"] == 0
+    assert summary["tasks_total"] == 2
+    assert summary["tasks_terminal"] == 2
+    assert summary["tasks_pending"] == 0
+    assert summary["completion_sla_expired"] is False
+
+
+def test_no_work_is_a_success_but_all_enqueue_failures_are_not() -> None:
+    no_work = {
+        "status": "completed",
+        "provider_completion": "not_run",
+        "completion_scope": "no_work",
+        "completion": {
+            "complete": True,
+            "provider_completion": "not_run",
+            "completion_scope": "no_work",
+            "tasks_total": 0,
+            "tasks_pending": 0,
+        },
+        "enqueue_failures": 0,
+    }
+    all_enqueue_failed = {
+        **no_work,
+        "status": "partial",
+        "enqueue_failures": 3,
+        "official": {"channels_failed_to_enqueue": 3},
+    }
+
+    assert cron_daily_sync.result_exit_code(no_work) == 0
+    assert cron_daily_sync.result_exit_code(
+        {key: value for key, value in no_work.items() if key != "enqueue_failures"}
+    ) == 2
+    assert cron_daily_sync.result_exit_code(all_enqueue_failed) == 2
+    assert cron_daily_sync.post_sync_maintenance_decision(
+        no_work,
+        requested_dry_run=False,
+    ) == (False, "provider_not_completed:not_run")
+
+
+def test_immediate_batch_receipt_is_emitted_before_terminal_observation(monkeypatch) -> None:
+    events: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        cron_daily_sync,
+        "emit_event",
+        lambda event, **payload: events.append((event, payload)),
+    )
+
+    cron_daily_sync.emit_batch_queued_receipt(
+        {"batch_id": "daily-1", "task_ids": ["task-1"], "parent_persisted": True}
+    )
+
+    assert events == [
+        (
+            "cron_daily_sync_enqueued",
+            {"summary": {"batch_id": "daily-1", "task_ids": ["task-1"], "parent_persisted": True}},
+        )
+    ]

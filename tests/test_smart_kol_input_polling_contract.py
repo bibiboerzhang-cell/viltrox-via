@@ -16,6 +16,9 @@ _COMPONENTS_DIR = (
 SMART_PANEL_SIBLINGS = sorted(_COMPONENTS_DIR.glob("SmartKolInputPanel*.ts")) + sorted(
     _COMPONENTS_DIR.glob("SmartKolInputPanel*.tsx")
 )
+POLLING_SOURCE = (_COMPONENTS_DIR / "SmartKolInputPanel.polling.ts").read_text(
+    encoding="utf-8"
+)
 
 
 class SmartKolInputPollingContractTests(unittest.TestCase):
@@ -51,15 +54,39 @@ class SmartKolInputPollingContractTests(unittest.TestCase):
         self.assertIn("完整分析 ${progress.deepReady}/${progress.target}", self.source)
 
     def test_polling_has_visibility_pause_timeout_and_cleanup(self) -> None:
-        self.assertIn("const maxPollMs = 12 * 60 * 1000;", self.source)
-        self.assertIn("let inFlight = false;", self.source)
-        self.assertIn("if (cancelled || inFlight) return;", self.source)
-        self.assertIn("inFlight = true;", self.source)
-        self.assertIn("inFlight = false;", self.source)
-        self.assertIn('document.visibilityState === "hidden"', self.source)
-        self.assertIn("window.setInterval", self.source)
-        self.assertIn("}, 2500);", self.source)
-        self.assertIn("window.clearInterval(timer);", self.source)
+        # Scope this contract to the polling hook itself.  Searching every
+        # SmartKol sibling let unrelated setInterval calls make the old fixed
+        # cadence contract pass after polling moved to adaptive setTimeout.
+        self.assertIn("const maxPollMs = 12 * 60 * 1000;", POLLING_SOURCE)
+        self.assertIn("let stopped = false;", POLLING_SOURCE)
+        self.assertIn("let inFlight = false;", POLLING_SOURCE)
+        self.assertIn(
+            "if (cancelled || stopped || inFlight) return;",
+            POLLING_SOURCE,
+        )
+        self.assertIn("inFlight = true;", POLLING_SOURCE)
+        self.assertIn("inFlight = false;", POLLING_SOURCE)
+        self.assertIn(
+            "SESSION_POLL_BACKOFF_MS = [2500, 2500, 5000, 5000, 10000]",
+            POLLING_SOURCE,
+        )
+        self.assertIn(
+            "window.setTimeout(tick, sessionPollDelayMs(idleSteps))",
+            POLLING_SOURCE,
+        )
+        self.assertIn("idleSteps += 1;", POLLING_SOURCE)
+        self.assertIn("idleSteps = 0;", POLLING_SOURCE)
+        self.assertIn('document.visibilityState === "hidden"', POLLING_SOURCE)
+        self.assertIn("window.clearTimeout(timer);", POLLING_SOURCE)
+        self.assertIn(
+            'document.addEventListener("visibilitychange", onVisibilityChange);',
+            POLLING_SOURCE,
+        )
+        self.assertIn(
+            'document.removeEventListener("visibilitychange", onVisibilityChange);',
+            POLLING_SOURCE,
+        )
+        self.assertNotIn("window.setInterval", POLLING_SOURCE)
 
     def test_terminal_detection_reads_session_and_summary_job_statuses(self) -> None:
         match = re.search(r"function isSearchSessionTerminal\(session: VkpiKolSearchHistoryItem\): boolean \{(?P<body>.*?)\n\}", self.source, re.S)

@@ -142,6 +142,9 @@ def _payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "skip_official",
         "industry_account_limit",
         "validate_only",
+        "batch_id",
+        "completion_wait_seconds",
+        "completion_poll_seconds",
     }
     return {key: payload.get(key) for key in sorted(allowed) if key in payload}
 
@@ -149,24 +152,23 @@ def _payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
 def _result_summary(result: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(result, dict):
         return {}
-    summary: dict[str, Any] = {}
-    for key in (
-        "job",
-        "status",
-        "ran_at",
-        "runs",
-        "synced",
-        "failed",
-        "channels_synced",
-        "channels_enqueued",
-        "industry_accounts_synced",
-        "industry_accounts_skipped",
-        "industry_accounts_failed",
-        "monitor_runs",
-        "count",
-    ):
-        if key in result:
-            summary[key] = result.get(key)
+    keys = (
+        "job", "status", "ran_at", "runs", "synced", "failed", "channels_synced",
+        "channels_enqueued", "industry_accounts_synced", "industry_accounts_skipped",
+        "industry_accounts_failed", "monitor_runs", "count", "batch_id",
+    )
+    summary = {key: result.get(key) for key in keys if key in result}
+    completion = result.get("completion") if isinstance(result.get("completion"), dict) else {}
+    for key in ("completion_scope", "provider_completion"):
+        if key in result or key in completion:
+            summary[key] = result.get(key) or completion.get(key)
+    summary.update({
+        key: completion.get(key)
+        for key in ("tasks_total", "tasks_terminal", "tasks_succeeded", "tasks_partial", "tasks_failed", "tasks_skipped_known", "tasks_pending", "sla_expired")
+        if key in completion
+    })
+    if "tasks_total" not in summary and isinstance(result.get("task_ids"), list):
+        summary["tasks_total"] = len(result["task_ids"])
     if isinstance(result.get("digest"), dict):
         digest = result["digest"]
         summary["digest"] = {
@@ -178,14 +180,7 @@ def _result_summary(result: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _system_staff() -> dict[str, Any]:
-    return {
-        "id": 0,
-        "staff_id": 0,
-        "user_id": 0,
-        "role": "admin",
-        "is_owner": 1,
-        "email": "",
-    }
+    return {"id": 0, "staff_id": 0, "user_id": 0, "role": "admin", "is_owner": 1, "email": ""}
 
 
 async def _queue_channel_syncs(
@@ -301,67 +296,6 @@ async def _queue_provider_jobs(
     }
 
 
-async def _queue_kol_refreshes(
-    rows: list[dict[str, Any]],
-    *,
-    payload: dict[str, Any],
-    staff: dict[str, Any] | None,
-    queue: Any | None,
-) -> dict[str, Any]:
-    owned_queue = None
-    effective_queue = queue
-    if effective_queue is None:
-        from app.services.jobs.queue import build_job_queue
-
-        owned_queue = build_job_queue()
-        effective_queue = owned_queue
-    if effective_queue is None:
-        raise RuntimeError("durable job queue unavailable")
-    if str(getattr(effective_queue, "backend_name", "")) == "inprocess":
-        raise RuntimeError("durable_queue_required:inprocess_queue_has_no_provider_execution_fence")
-    import app.domains.tasks.enqueue as task_enqueue
-
-    task_ids: list[str] = []
-    failed: list[dict[str, Any]] = []
-    max_posts = max(1, min(3, int(payload.get("kol_max_posts") or payload.get("max_posts") or 1)))
-    try:
-        for row in rows:
-            kol_pool_id = int(row.get("id") or 0)
-            if not kol_pool_id:
-                continue
-            try:
-                queued = await task_enqueue.enqueue_kol_pool_on_demand_refresh(
-                    effective_queue,
-                    kol_pool_id,
-                    reason="daily_incremental_sync",
-                    max_posts=max_posts,
-                    staff=staff or _system_staff(),
-                    priority=5,
-                )
-                task_ids.append(str(queued.get("task_id") or ""))
-            except Exception as exc:
-                failed.append(
-                    {
-                        "kol_pool_id": kol_pool_id,
-                        "error": f"{type(exc).__name__}: {str(exc)[:300]}",
-                    }
-                )
-    finally:
-        if owned_queue is not None:
-            close_fn = getattr(owned_queue, "close", None)
-            if close_fn is not None:
-                result = close_fn()
-                if hasattr(result, "__await__"):
-                    await result
-    return {
-        "requested": len(rows),
-        "enqueued": len([item for item in task_ids if item]),
-        "failed_to_enqueue": len(failed),
-        "task_ids": [item for item in task_ids if item][:50],
-        "failed": failed[:20],
-    }
-
-
 def _log_cron_audit(
     *,
     staff: dict[str, Any] | None,
@@ -398,11 +332,7 @@ async def run_manual_job(job_name: str, payload: dict[str, Any] | None = None, *
         raise ValueError(f"confirmation required: {required_confirm}")
 
     validate_only = bool(payload.get("validate_only"))
-    audit_metadata = {
-        "policy": policy,
-        "payload": _payload_summary(payload),
-        "validate_only": validate_only,
-    }
+    audit_metadata = {"policy": policy, "payload": _payload_summary(payload), "validate_only": validate_only}
     _log_cron_audit(
         staff=staff,
         action_type="cron_run_requested",
@@ -413,20 +343,36 @@ async def run_manual_job(job_name: str, payload: dict[str, Any] | None = None, *
     try:
         if validate_only:
             result = {
-                "job": canonical,
-                "status": "validated",
-                "ran": False,
-                "policy": policy,
-                "ran_at": _stamp(),
+                "job": canonical, "status": "validated", "ran": False,
+                "policy": policy, "ran_at": _stamp(),
             }
         else:
             payload["staff"] = staff
             result = await run_job(canonical, payload, queue=queue)
+        result_status = str(result.get("status") or "").strip().lower()
+        completion = result.get("completion") if isinstance(result.get("completion"), dict) else {}
+        provider = str(result.get("provider_completion") or completion.get("provider_completion") or "").lower()
+        has_provider_evidence = "completion" in result or "provider_completion" in result
+        provider_terminal = provider == "completed" and bool(completion.get("complete")) and completion.get("completion_scope") == "provider_terminal"
+        no_work_completed = (
+            result_status == "completed" and provider == "not_run"
+            and completion.get("completion_scope") == "no_work" and bool(completion.get("complete"))
+            and not int(completion.get("tasks_total") or 0) and "enqueue_failures" in result
+            and not int(result.get("enqueue_failures") or 0)
+        )
+        if validate_only or result_status in {"validated", "planned"}:
+            action_type, outcome = "cron_run_validated", "validated"
+        elif result_status in {"failed", "blocked", "interrupted", "error"}:
+            action_type, outcome = "cron_run_failed", "failed"
+        elif result_status in {"queued", "partial"} or (has_provider_evidence and not (provider_terminal or no_work_completed)):
+            action_type, outcome = "cron_run_accepted", "accepted"
+        else:
+            action_type, outcome = "cron_run_completed", "completed"
         _log_cron_audit(
             staff=staff,
-            action_type="cron_run_completed",
+            action_type=action_type,
             job_name=canonical,
-            detail=f"manual cron completed: {canonical}",
+            detail=f"manual cron {outcome}: {canonical}",
             metadata={**audit_metadata, "result": _result_summary(result)},
         )
         return result
@@ -597,45 +543,8 @@ async def _run_official_full_baseline(payload: dict[str, Any], queue: Any | None
     }
 
 
-def _daily_kol_refresh_allowed(
-    daily_sync: Any,
-    payload: dict[str, Any],
-    selector: str,
-) -> bool:
-    allow_legacy = daily_sync._bool(payload.get("allow_legacy_kol_full_refresh")) or daily_sync._bool(payload.get("include_legacy_kol"))
-    allow_qualified = daily_sync._bool(payload.get("allow_qualified_kol_refresh")) or daily_sync._bool(payload.get("include_qualified_kol"))
-    return not daily_sync._bool(payload.get("skip_kol")) and (
-        (selector == "qualified" and allow_qualified)
-        or (selector != "qualified" and allow_legacy)
-    )
-
-
-def _daily_kol_rows(
-    daily_sync: Any,
-    refresh_tier: Any,
-    payload: dict[str, Any],
-    selector: str,
-) -> list[dict[str, Any]]:
-    limit = max(1, min(1200, int(payload.get("kol_limit") or 1200)))
-    platforms = daily_sync._platform_filter(payload.get("kol_platforms") or payload.get("platforms"))
-    common = {
-        "limit": limit,
-        "offset": max(0, int(payload.get("kol_offset") or 0)),
-        "stale_before": str(payload.get("kol_stale_before") or ""),
-        "platforms": platforms,
-    }
-    if selector == "qualified":
-        return refresh_tier.qualified_refresh_rows(
-            **common,
-            tiers=daily_sync._tier_filter(payload.get("kol_tiers") or payload.get("refresh_tiers")),
-        )
-    return daily_sync._kol_light_rows(
-        **common,
-        source_type=str(payload.get("kol_source_type") or "legacy_excel_p2d"),
-    )
-
 async def _run_daily_incremental_sync(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
-    from app.domains.sync import daily_sync, refresh_tier
+    from app.domains.sync import daily_batch, daily_sync, refresh_tier
     if daily_sync._bool(payload.get("dry_run")):
         plan = daily_sync.run_daily_incremental({**payload, "dry_run": True})
         return {
@@ -646,36 +555,122 @@ async def _run_daily_incremental_sync(payload: dict[str, Any], queue: Any | None
             "health": plan.get("health") or {}, "ran_at": _stamp(),
         }
     daily_sync.check_daily_sync_guard(payload)
-    official: dict[str, Any] = {"skipped": True}
-    if not daily_sync._bool(payload.get("skip_official")):
-        from app.domains import channels
+    owned_queue = None
+    effective_queue = queue
+    batch_id = ""
+    parent_inserted = False
+    try:
+        if effective_queue is None:
+            from app.services.jobs.queue import build_job_queue
 
-        rows = channels.list_channels(staff={}, limit=300).get("channels") or []
-        official = await _queue_channel_syncs(
-            rows,
-            payload={
-                **payload,
-                "max_posts": int(
-                    payload.get("official_max_posts")
-                    or payload.get("channel_max_posts")
-                    or payload.get("max_posts")
-                    or 50
-                ),
-            },
-            staff=payload.get("staff"),
-            queue=queue,
+            owned_queue = build_job_queue()
+            effective_queue = owned_queue
+        if effective_queue is None:
+            raise RuntimeError("durable job queue unavailable")
+        if str(getattr(effective_queue, "backend_name", "")) == "inprocess":
+            raise RuntimeError("durable_queue_required:inprocess_queue_has_no_provider_execution_fence")
+        if not callable(getattr(effective_queue, "get_status", None)):
+            raise RuntimeError("durable_queue_status_reader_required")
+        reconciliation = await daily_batch.reconcile_recent_parents(effective_queue)
+        if int(reconciliation.get("pending") or 0):
+            raise daily_batch.ActiveDailyBatchError("daily_batch_parent_still_running")
+        daily_sync.check_daily_sync_guard(payload)
+        official_rows: list[dict[str, Any]] = []
+        official_skipped = daily_sync._bool(payload.get("skip_official"))
+        if not official_skipped:
+            from app.domains import channels
+
+            official_rows = channels.list_channels(staff={}, limit=300).get("channels") or []
+        selector = daily_sync._kol_refresh_selector(payload)
+        kol_allowed = daily_batch.kol_refresh_allowed(daily_sync, payload, selector)
+        kol_rows = daily_batch.kol_rows(daily_sync, refresh_tier, payload, selector) if kol_allowed else []
+        batch_id = str(payload.get("batch_id") or "").strip()[:128] or daily_batch.new_batch_id()
+        official: dict[str, Any] = {"skipped": True} if official_skipped else {
+            "channels_enqueued": 0, "channels_requested": 0, "channels_failed_to_enqueue": 0,
+            "task_ids": [], "failed": [],
+        }
+        kol_result: dict[str, Any] = (
+            {"skipped": True} if not kol_allowed
+            else {"requested": 0, "enqueued": 0, "failed_to_enqueue": 0, "task_ids": [], "failed": []}
         )
-    kol_result: dict[str, Any] = {"skipped": True}
-    selector = daily_sync._kol_refresh_selector(payload)
-    if _daily_kol_refresh_allowed(daily_sync, payload, selector):
-        rows = _daily_kol_rows(daily_sync, refresh_tier, payload, selector)
-        kol_result = await _queue_kol_refreshes(
-            rows,
-            payload=payload,
-            staff=payload.get("staff"),
-            queue=queue,
+        queued: dict[str, Any] = {
+            "official": official, "kol_pool_light": kol_result,
+            "task_ids": [], "task_links": [], "scheduler": "round_robin_v1",
+        }
+        requested = len(official_rows) + len(kol_rows)
+        wait_seconds = max(0.0, min(19_800.0, float(payload.get("completion_wait_seconds") or 0.0)))
+        poll_seconds = max(0.05, min(60.0, float(payload.get("completion_poll_seconds") or 10.0)))
+        daily_batch.insert_parent(batch_id, payload, official_rows, kol_rows)
+        parent_inserted = True
+        if requested:
+            def checkpoint_progress(snapshot: dict[str, Any]) -> None:
+                daily_batch.checkpoint_parent(
+                    batch_id,
+                    daily_batch.checkpoint_summary(
+                        batch_id, requested, snapshot,
+                        official_skipped=official_skipped, kol_skipped=not kol_allowed,
+                        phase="enqueueing",
+                    ),
+                )
+
+            queued = await daily_batch.queue_batch(
+                official_rows,
+                kol_rows,
+                payload=payload,
+                staff=payload.get("staff"),
+                queue=effective_queue,
+                batch_id=batch_id,
+                progress_callback=checkpoint_progress,
+            )
+        checkpoint = daily_batch.checkpoint_summary(
+            batch_id, requested, queued,
+            official_skipped=official_skipped, kol_skipped=not kol_allowed,
         )
-    return {"job": "daily_incremental_sync", "status": "queued", "official": official, "kol_pool_light": kol_result, "ran_at": _stamp()}
+        batch = checkpoint["batch"]
+        official, kol_result = checkpoint["official"], checkpoint["kol_pool_light"]
+        task_ids = list(batch["task_ids"])
+        enqueue_failures = int(checkpoint["enqueue_failures"])
+        daily_batch.checkpoint_parent(batch_id, checkpoint)
+        receipt_callback = payload.get("_batch_receipt_callback")
+        if callable(receipt_callback):
+            try:
+                callback_result = receipt_callback({**batch, "phase": "children_enqueued", "official": official, "kol_pool_light": kol_result, "enqueue_failures": enqueue_failures})
+                if hasattr(callback_result, "__await__"):
+                    await callback_result
+            except Exception:
+                logger.warning("daily batch enqueue receipt emission failed", exc_info=True)
+        completion = await daily_batch.observe(
+            effective_queue,
+            task_ids,
+            wait_seconds=wait_seconds,
+            poll_seconds=poll_seconds,
+        )
+        status = daily_batch.result_status(completion, enqueue_failures=enqueue_failures)
+        result = {
+            "job": "daily_incremental_sync", "status": status, "batch_id": batch_id,
+            "task_ids": task_ids, "batch": batch,
+            "completion_scope": completion.get("completion_scope"),
+            "provider_completion": completion.get("provider_completion"),
+            "completion": completion, "official": official, "kol_pool_light": kol_result,
+            "enqueue_failures": enqueue_failures, "ran_at": _stamp(),
+        }
+        parent_status = status if completion.get("complete") or not task_ids else "queued"
+        daily_batch.finish_parent(batch_id, parent_status, result)
+        return result
+    except Exception as exc:
+        if parent_inserted:
+            try:
+                daily_batch.fail_parent(batch_id, exc)
+            except Exception:
+                logger.warning("daily batch parent failure checkpoint failed", exc_info=True)
+        raise
+    finally:
+        if owned_queue is not None:
+            close_fn = getattr(owned_queue, "close", None)
+            if close_fn is not None:
+                close_result = close_fn()
+                if hasattr(close_result, "__await__"):
+                    await close_result
 
 
 async def _run_daily_outreach_digest_only(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:

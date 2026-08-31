@@ -8,6 +8,7 @@ import concurrent.futures
 import pytest
 
 from app.services.vkpi import daily_sync
+from app.domains.sync import guard as sync_guard
 
 
 def _rows(count: int) -> list[dict[str, object]]:
@@ -93,6 +94,59 @@ def test_sync_health_blocks_next_run_when_failure_rate_exceeds_threshold() -> No
     assert blocked["block_reason"] == "failure_rate_threshold_exceeded"
 
 
+def test_sync_health_reads_async_enqueue_and_provider_terminal_shapes() -> None:
+    health = daily_sync._sync_health_from_summary(
+        {
+            "official": {
+                "channels_requested": 18,
+                "channels_failed_to_enqueue": 1,
+                "failed": [],
+            },
+            "kol_pool_light": {"requested": 91, "failed_to_enqueue": 2},
+            "completion": {"tasks_failed": 3, "tasks_partial": 1},
+        }
+    )
+
+    assert health["official_requested"] == 18
+    assert health["official_failed"] == 1
+    assert health["kol_errors"] == 2
+    assert health["provider_errors"] == 4
+    assert health["total_requested"] == 109
+    assert health["total_errors"] == 7
+    assert health["failure_rate"] == round(7 / 109, 6)
+
+
+def test_ack_before_terminal_failure_does_not_hide_the_later_failure() -> None:
+    row = {
+        "run_id": "batch-1",
+        "started_at": "2026-08-31T10:00:00Z",
+        "finished_at": "2026-08-31T12:05:00Z",
+        "updated_at": "2026-08-31T12:05:00Z",
+    }
+
+    assert sync_guard._row_after_ack(
+        row,
+        {"target_run_id": "batch-1", "acknowledged_at": "2026-08-31T11:00:00Z"},
+    ) is True
+    assert sync_guard._row_after_ack(
+        row,
+        {"target_run_id": "batch-1", "acknowledged_at": "2026-08-31T12:06:00Z"},
+    ) is False
+    same_second_failure = {
+        **row,
+        "finished_at": "2026-08-31T12:06:00Z",
+        "updated_at": "2026-08-31T12:06:00Z",
+    }
+    assert sync_guard._row_after_ack(
+        same_second_failure,
+        {"target_run_id": "batch-1", "acknowledged_at": "2026-08-31T12:06:00Z"},
+    ) is True
+    assert sync_guard._row_after_ack(
+        row,
+        {"target_run_id": "different-batch", "acknowledged_at": "2026-08-31T13:00:00Z"},
+    ) is True
+
+
 def test_daily_sync_guard_blocks_after_unacked_failed_run(monkeypatch: pytest.MonkeyPatch) -> None:
     blocking = {
         "run_id": "daily-summary-bad",
@@ -129,6 +183,7 @@ def test_blocking_sync_run_uses_schema_safe_order(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(daily_sync, "get_conn", lambda: conn)
 
     assert daily_sync._blocking_sync_run("daily_incremental_sync") is None
+    assert "updated_at" in conn.queries[0]
     assert "ORDER BY started_at DESC NULLS LAST, created_at DESC NULLS LAST" in conn.queries[0]
 
 

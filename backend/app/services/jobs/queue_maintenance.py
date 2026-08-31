@@ -3,6 +3,9 @@
 class-LOC 棘轮拆分:行为逐字搬运自 queue.py::RedisJobQueue(台账读写、超时清扫、
 队列汇总),门面方法留在 RedisJobQueue 上做薄委托。
 
+执行 timeout 只从 worker 真正 claim 后写入的 ``started_at`` 起算。``queued`` /
+``retrying`` 的等待时间只由队列汇总暴露,不得被误标为执行超时。
+
 所有可 monkeypatch 的模块级符号(get_conn、logger、常量、工具函数)一律经
 ``_qm()`` 惰性解析到 queue 模块,保持 tests 对 queue 模块的补丁面不变
 (例:``patch.object(queue_mod, "get_conn", ...)`` 仍然生效)。
@@ -164,7 +167,8 @@ def update_job_ledger(queue: Any, task_id: str, status: str, **extra: Any) -> Op
     ).fetchone()
     if row is None:
         return None
-    current_status = str(row["status"] or "").lower()
+    persisted_status = str(row["status"] or "")
+    current_status = persisted_status.lower()
     incoming_status = str(status or "").lower()
     if current_status in qm.TERMINAL_JOB_STATUSES and incoming_status != current_status:
         metadata_updates = []
@@ -192,12 +196,17 @@ def update_job_ledger(queue: Any, task_id: str, status: str, **extra: Any) -> Op
         extra_json[key] = value
     retry_count = int(extra.get("retry_count", row["retry_count"] or 0) or 0)
     now = qm._utcnow()
-    conn.execute(
+    cursor = conn.execute(
         """
         UPDATE job_execution_ledger
         SET status=?,
             updated_at=?,
-            started_at=CASE WHEN ?='processing' AND started_at IS NULL THEN ? ELSE started_at END,
+            started_at=CASE
+                WHEN ? IN ('processing','running')
+                 AND (started_at IS NULL OR ? IN ('queued','retrying'))
+                THEN ?
+                ELSE started_at
+            END,
             finished_at=CASE WHEN ? IN ('done','partial_done','failed','prefilter_rejected','cancelled','timeout') THEN ? ELSE finished_at END,
             retry_count=?,
             error_message=?,
@@ -211,11 +220,13 @@ def update_job_ledger(queue: Any, task_id: str, status: str, **extra: Any) -> Op
             consumer_name=COALESCE(?, consumer_name),
             extra_json=?
         WHERE task_id=?
+          AND status=?
         """,
         (
             status,
             now,
             status,
+            current_status,
             now,
             status,
             now,
@@ -231,9 +242,19 @@ def update_job_ledger(queue: Any, task_id: str, status: str, **extra: Any) -> Op
             extra.get("consumer_name"),
             json.dumps(extra_json, ensure_ascii=False),
             task_id,
+            persisted_status,
         ),
     )
     conn.commit()
+    if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+        # Compare-and-set: another actor advanced the state after our SELECT.
+        # Never let a late handler or sweeper overwrite that newer state.
+        updated = conn.execute("SELECT * FROM job_execution_ledger WHERE task_id=?", (task_id,)).fetchone()
+        if updated is None:
+            return None
+        snapshot = queue._status_row_to_dict(updated)
+        snapshot["_stale_status_ignored"] = True
+        return snapshot
     updated = conn.execute("SELECT * FROM job_execution_ledger WHERE task_id=?", (task_id,)).fetchone()
     return queue._status_row_to_dict(updated)
 
@@ -243,6 +264,129 @@ def get_job_status(queue: Any, task_id: str) -> Optional[Dict[str, Any]]:
     conn = qm.get_conn()
     row = conn.execute("SELECT * FROM job_execution_ledger WHERE task_id=?", (task_id,)).fetchone()
     return queue._status_row_to_dict(row) if row else None
+
+
+def bind_job_stream(queue: Any, task_id: str, stream_id: str) -> Optional[Dict[str, Any]]:
+    """Bind the durable Redis message without moving the job state backward."""
+
+    qm = _qm()
+    clean_stream_id = str(stream_id or "").strip()
+    if not clean_stream_id:
+        raise ValueError("stream_id is required")
+    conn = qm.get_conn()
+    cursor = conn.execute(
+        """
+        UPDATE job_execution_ledger
+        SET stream_id=?
+        WHERE task_id=?
+          AND (stream_id IS NULL OR stream_id='' OR stream_id=?)
+        """,
+        (clean_stream_id, task_id, clean_stream_id),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM job_execution_ledger WHERE task_id=?", (task_id,)).fetchone()
+    if row is None:
+        return None
+    snapshot = queue._status_row_to_dict(row)
+    if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+        snapshot["_stream_bind_conflict"] = True
+    return snapshot
+
+
+def authorize_provider_dispatch(
+    queue: Any,
+    task_id: str,
+    stream_id: str,
+) -> Dict[str, Any]:
+    """Serialize the final ledger gate after acquiring the provider claim."""
+
+    qm = _qm()
+    conn = qm.get_conn()
+    now = qm._utcnow()
+    cursor = conn.execute(
+        """
+        UPDATE job_execution_ledger
+        SET status=CASE WHEN status='retrying' THEN 'processing' ELSE status END,
+            updated_at=CASE WHEN status='retrying' THEN ? ELSE updated_at END,
+            started_at=CASE WHEN status='retrying' THEN ? ELSE started_at END,
+            stage=CASE WHEN status='retrying' THEN 'processing' ELSE stage END
+        WHERE task_id=?
+          AND stream_id=?
+          AND status IN ('retrying', 'processing', 'running')
+        """,
+        (now, now, str(task_id or ""), str(stream_id or "")),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM job_execution_ledger WHERE task_id=?",
+        (str(task_id or ""),),
+    ).fetchone()
+    snapshot = queue._status_row_to_dict(row) if row else {}
+    snapshot["authorized"] = int(getattr(cursor, "rowcount", 0) or 0) == 1
+    return snapshot
+
+
+def fail_unbound_stream_job(
+    queue: Any,
+    task_id: str,
+    *,
+    expected_stream_id: str,
+    error_message: str,
+) -> Optional[Dict[str, Any]]:
+    """Fail only a ledger row that still has no durable stream binding.
+
+    ``stream_id`` is the row-local race marker shared by producer bind and
+    worker pop.  PostgreSQL EvalPlanQual rechecks this predicate after a row
+    lock wait, so a concurrently committed binding cannot be overwritten by a
+    statement snapshot that predates that commit.
+    """
+
+    qm = _qm()
+    clean_stream_id = str(expected_stream_id or "").strip()
+    if not clean_stream_id:
+        raise ValueError("expected_stream_id is required")
+    conn = qm.get_conn()
+    now = qm._utcnow()
+    cursor = conn.execute(
+        """
+        UPDATE job_execution_ledger
+        SET status='failed',
+            updated_at=?,
+            finished_at=?,
+            error_message=?,
+            stage='stream_bind_failed'
+        WHERE task_id=?
+          AND status IN ('queued', 'retrying', 'processing', 'running')
+          AND (stream_id IS NULL OR stream_id='')
+        """,
+        (now, now, str(error_message or ""), str(task_id or "")),
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM job_execution_ledger WHERE task_id=?",
+        (str(task_id or ""),),
+    ).fetchone()
+    if row is None:
+        return None
+    snapshot = queue._status_row_to_dict(row)
+    containment_applied = int(getattr(cursor, "rowcount", 0) or 0) == 1
+    snapshot["_stream_bind_failed_applied"] = containment_applied
+    if not containment_applied:
+        persisted_status = str(snapshot.get("status") or "").lower()
+        snapshot["_durable_stream_won"] = (
+            str(snapshot.get("stream_id") or "") == clean_stream_id
+            and (
+                persisted_status
+                in {
+                    qm.TaskStatus.QUEUED.value,
+                    qm.TaskStatus.RETRYING.value,
+                    qm.TaskStatus.PROCESSING.value,
+                    "running",
+                }
+                or persisted_status in qm.TERMINAL_JOB_STATUSES
+            )
+        )
+    return snapshot
 
 
 def ledger_queue_summary() -> Dict[str, Any]:
@@ -355,9 +499,10 @@ def mark_timed_out_jobs(queue: Any, limit: int = 100) -> int:
     try:
         rows = conn.execute(
             """
-            SELECT task_id, created_at, started_at, timeout_seconds
+            SELECT task_id, started_at, timeout_seconds
             FROM job_execution_ledger
-            WHERE status IN ('queued', 'retrying', 'processing', 'running')
+            WHERE status IN ('processing', 'running')
+              AND started_at IS NOT NULL
               AND job_type LIKE ?
               AND COALESCE(timeout_seconds, 0) > 0
             ORDER BY id ASC
@@ -370,7 +515,7 @@ def mark_timed_out_jobs(queue: Any, limit: int = 100) -> int:
     now = datetime.now(timezone.utc)
     timed_out = 0
     for row in rows:
-        baseline = qm._parse_ts(row["started_at"] or row["created_at"])
+        baseline = qm._parse_ts(row["started_at"])
         if not baseline:
             continue
         timeout_seconds = int(row["timeout_seconds"] or 0)
@@ -378,13 +523,43 @@ def mark_timed_out_jobs(queue: Any, limit: int = 100) -> int:
             continue
         if (now - baseline).total_seconds() <= timeout_seconds:
             continue
-        queue._update_job_ledger(
-            str(row["task_id"]),
-            "timeout",
-            error_message=f"job exceeded timeout_seconds={timeout_seconds}",
-            stage="timeout",
+        task_id = str(row["task_id"])
+        started_at = row["started_at"]
+        error_message = f"job execution exceeded timeout_seconds={timeout_seconds}"
+        finished_at = qm._utcnow()
+        started_at_match = (
+            "started_at=CAST(? AS timestamptz)"
+            if qm.is_postgres_runtime()
+            else "started_at=?"
         )
         try:
+            cursor = conn.execute(
+                f"""
+                UPDATE job_execution_ledger
+                SET status='timeout',
+                    updated_at=?,
+                    finished_at=?,
+                    error_message=?,
+                    stage='timeout'
+                WHERE task_id=?
+                  AND status IN ('processing', 'running')
+                  AND {started_at_match}
+                  AND COALESCE(timeout_seconds, 0)=?
+                """,
+                (
+                    finished_at,
+                    finished_at,
+                    error_message,
+                    task_id,
+                    started_at,
+                    timeout_seconds,
+                ),
+            )
+            # CAS also protects a retried execution whose started_at was reset
+            # after the candidate SELECT, not only a concurrent terminal state.
+            if int(getattr(cursor, "rowcount", 0) or 0) != 1:
+                conn.rollback()
+                continue
             conn.execute(
                 """
                 UPDATE vkpi_async_task_items
@@ -394,10 +569,15 @@ def mark_timed_out_jobs(queue: Any, limit: int = 100) -> int:
                 WHERE task_id=?
                   AND status IN ('pending', 'running')
                 """,
-                (f"job exceeded timeout_seconds={timeout_seconds}", qm._utcnow(), str(row["task_id"])),
+                (error_message, qm._utcnow(), task_id),
             )
             conn.commit()
         except Exception as exc:
-            qm.logger.warning("failed to mark timed-out async task %s: %s", row["task_id"], exc)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            qm.logger.warning("failed to commit timed-out job transaction %s: %s", task_id, exc)
+            continue
         timed_out += 1
     return timed_out

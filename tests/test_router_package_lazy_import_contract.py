@@ -78,7 +78,11 @@ EXPECTED_REGISTRY_COUNT = 120
 EXPECTED_REGISTRY_SHA256 = (
     "3124e9946a2ba14da4d3507ac02410d299b23b5ebd111681497dd57ffc6e1143"
 )
-EXPECTED_CURRENT_ROUTE_COUNT = 1262
+EXPECTED_CURRENT_ROUTE_COUNT_WITHOUT_FRONTEND_ASSETS = 1261
+EXPECTED_CURRENT_ROUTE_SHA256_WITHOUT_FRONTEND_ASSETS = (
+    "f617d5e3d84b3cbe8e62b6d54e85522f6d1a6ad101aaeb4aa2629b6a678b2454"
+)
+EXPECTED_CURRENT_ROUTE_COUNT_WITH_FRONTEND_ASSETS = 1262
 EXPECTED_CURRENT_ROUTE_SHA256_WITH_FRONTEND_ASSETS = (
     "7c49b4875b81e98d03467c94e1f6fd7b9de9bf42132d4223ca79c79833179308"
 )
@@ -226,14 +230,20 @@ print(json.dumps({{"missing": missing, "wrong_identity": wrong_identity}}, separ
 def test_main_route_signature_matches_legacy_eager_import_order(tmp_path: Path) -> None:
     legacy = _run_probe(_route_probe_source(legacy_eager_first=True), tmp_path)
     lazy = _run_probe(_route_probe_source(legacy_eager_first=False), tmp_path)
+    has_frontend_assets = (ROOT / "frontend" / "dist" / "assets").is_dir()
+    expected_route_count = (
+        EXPECTED_CURRENT_ROUTE_COUNT_WITH_FRONTEND_ASSETS
+        if has_frontend_assets
+        else EXPECTED_CURRENT_ROUTE_COUNT_WITHOUT_FRONTEND_ASSETS
+    )
+    expected_route_sha256 = (
+        EXPECTED_CURRENT_ROUTE_SHA256_WITH_FRONTEND_ASSETS
+        if has_frontend_assets
+        else EXPECTED_CURRENT_ROUTE_SHA256_WITHOUT_FRONTEND_ASSETS
+    )
 
     assert lazy["signature"] == legacy["signature"]
-    assert lazy["route_count"] == legacy["route_count"] == EXPECTED_CURRENT_ROUTE_COUNT
-    assert lazy["route_sha256"] == legacy["route_sha256"]
+    assert lazy["route_count"] == legacy["route_count"] == expected_route_count
+    assert lazy["route_sha256"] == legacy["route_sha256"] == expected_route_sha256
     assert lazy["registry_count"] == legacy["registry_count"] == EXPECTED_REGISTRY_COUNT
     assert lazy["registry_sha256"] == legacy["registry_sha256"] == EXPECTED_REGISTRY_SHA256
-
-    # frontend/dist is an optional build artifact.  When it is present, also
-    # pin the complete current route signature (including the /assets Mount).
-    if (ROOT / "frontend" / "dist" / "assets").is_dir():
-        assert lazy["route_sha256"] == EXPECTED_CURRENT_ROUTE_SHA256_WITH_FRONTEND_ASSETS

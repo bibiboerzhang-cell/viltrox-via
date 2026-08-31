@@ -8,6 +8,8 @@ class-LOC 棘轮拆刀(queue.py::RedisJobQueue 782 行 → 门面 + claim/heartb
 - pop_job:XREADGROUP 命中即 processing(带 stream_id/consumer),终态竞态 ack+None,
   空转回落 _claim_stale;
 - _claim_stale:processing 未超 timeout 窗不许抢,终态消息只 ack 不抢;
+- timeout sweep:只清理已有真实 started_at 的 processing/running,排队/重试等待
+  不消耗执行 timeout,且重试被重新 claim 时重置执行起点;
 - move_to_dead_letter:死信流 + failed 终态 + ack;
 - set_status:终态回退被吞时零事件;
 - subscribe_task_events:空消息心跳 + finally 退订;
@@ -21,10 +23,14 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import threading
+import time
+import uuid
 from contextlib import asynccontextmanager
 
 import pytest
 
+from app.db.connection import PostgresCompatConnection
 from app.services.jobs import queue as queue_mod
 
 
@@ -59,6 +65,11 @@ CREATE TABLE job_execution_ledger (
     task_chain_json TEXT
 );
 CREATE TABLE vkpi_async_task_items (task_id TEXT, status TEXT, error TEXT, updated_at TEXT);
+CREATE TABLE vkpi_provider_execution_claims (
+    task_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    lease_expires_at TEXT NOT NULL
+);
 """
 
 
@@ -67,6 +78,7 @@ class FakeRedis:
         self.xadds: list[tuple[str, dict]] = []
         self.published: list[tuple[str, dict]] = []
         self.acked: list[str] = []
+        self.deleted: list[str] = []
         self.xreadgroup_result: list = []
         self.xpending_result: list = []
         self.xrange_result: list = []
@@ -82,6 +94,10 @@ class FakeRedis:
 
     async def xack(self, stream, group, message_id):
         self.acked.append(str(message_id))
+
+    async def xdel(self, stream, message_id):
+        self.deleted.append(str(message_id))
+        return 1
 
     async def xreadgroup(self, group, consumer, streams, count=1, block=0):
         return self.xreadgroup_result

@@ -40,6 +40,7 @@ OnFailure=vkpi-sync-daily-alert@%n.service
 
 [Service]
 Type=oneshot
+# Exit 75 raises OnFailure but is not auto-restarted; the next timer is the retry boundary.
 RestartPreventExitStatus=75 76
 WorkingDirectory=${REMOTE_ROOT}/current
 Environment=PYTHONPATH=${REMOTE_ROOT}/current/backend
@@ -85,7 +86,10 @@ install_remote_qualified_kol_units() {
 [Unit]
 Description=V-KPI qualified hot KOL refresh
 Wants=network-online.target
-After=network-online.target viltrox-2.0-test.service vkpi-sync-daily.service
+# Do not order this after the long primary oneshot. At 05:00 UTC the ExecStart
+# is-active check must observe a still-running primary and skip, not wait for it
+# to finish and then start duplicate KOL work.
+After=network-online.target viltrox-2.0-test.service
 OnFailure=vkpi-sync-daily-alert@%n.service
 
 [Service]
@@ -95,7 +99,10 @@ WorkingDirectory=${REMOTE_ROOT}/current
 Environment=PYTHONPATH=${REMOTE_ROOT}/current/backend
 Environment=PYTHONDONTWRITEBYTECODE=1
 ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && if systemctl is-active --quiet vkpi-sync-daily.service; then printf '\''{"event":"qualified_kol_refresh_skipped","reason":"vkpi-sync-daily.service active","at":"%s"}\n'\'' "\$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)" >> /var/log/vkpi/qualified_kol_refresh_skip.log; exit 0; fi; env PYTHONDONTWRITEBYTECODE=1 ${REMOTE_ROOT}/.venv/bin/python -B scripts/cron_daily_sync.py --skip-official --include-qualified-kol --kol-tiers hot --kol-stale-days ${QUALIFIED_KOL_STALE_DAYS} --kol-limit ${QUALIFIED_KOL_LIMIT} --kol-max-posts 1 --kol-error-stop-threshold 3 >> /var/log/vkpi/qualified_kol_refresh_\$(date -u +%%Y%%m%%d).log 2>&1'
-TimeoutStartSec=2h
+# Qualified-only runs can enqueue up to 200 children. Keep the service budget
+# aligned with cron_daily_sync.py's bounded terminal observation window instead
+# of killing the observer while provider work is still legitimately running.
+TimeoutStartSec=6h
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
