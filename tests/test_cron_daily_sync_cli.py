@@ -9,16 +9,23 @@ from scripts import cron_daily_sync
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_default_completion_sla_fits_18_plus_91_capacity_and_primary_systemd_budget() -> None:
-    worst_case_child_seconds = ((109 + 2 - 1) // 2) * 300
-    assert worst_case_child_seconds == 16_500
+def test_default_completion_sla_fits_hard_capped_daily_capacity_and_primary_systemd_budget() -> None:
+    requested = 18 + cron_daily_sync.DEFAULT_DAILY_KOL_LIMIT
+    workers = cron_daily_sync.DEFAULT_DAILY_WORKER_COUNT
+    child_timeout = cron_daily_sync.DEFAULT_DAILY_CHILD_TIMEOUT_SECONDS
+    worst_case_child_seconds = ((requested + workers - 1) // workers) * child_timeout
+    assert cron_daily_sync.DEFAULT_DAILY_KOL_LIMIT == 90
+    assert worst_case_child_seconds == 16_200
     assert cron_daily_sync.DEFAULT_COMPLETION_WAIT_SECONDS == 17_100.0
-    assert cron_daily_sync.DEFAULT_COMPLETION_WAIT_SECONDS >= worst_case_child_seconds + 600
+    assert cron_daily_sync.DEFAULT_COMPLETION_WAIT_SECONDS >= worst_case_child_seconds + 900
     assert cron_daily_sync.DEFAULT_COMPLETION_WAIT_SECONDS + 4_500 <= 6 * 60 * 60
     unit = (ROOT / "scripts/ops/systemd/vkpi-sync-daily.service").read_text(encoding="utf-8")
     assert "TimeoutStartSec=6h" in unit
     assert "OnFailure=vkpi-sync-daily-alert@%n.service" in unit
     assert "RestartPreventExitStatus=75 76" in unit
+    assert "--kol-limit 90" in unit
+    assert "--worker-count 2" in unit
+    assert "--child-timeout-seconds 300" in unit
     assert "\nRestart=" not in unit
     assert "the next timer is the retry boundary" in unit
 

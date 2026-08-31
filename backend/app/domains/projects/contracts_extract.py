@@ -14,6 +14,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from app.domains.projects import contracts_extract_normalization
+
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains import audit
@@ -180,81 +182,15 @@ def _valid_evidence(value: Any) -> bool:
 
 
 def _normalized_business_field(field: str, value: Any) -> Any:
-    if field == "fee_amount":
-        if value is None:
-            return None
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError("must be a number or null")
-        amount = float(value)
-        if not math.isfinite(amount) or amount < 0:
-            raise ValueError("must be a finite non-negative number")
-        return amount
-
-    if field == "deliverable_count":
-        if value is None:
-            return None
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise TypeError("must be a non-negative integer or null")
-        return int(value)
-
-    if field in {"start_date", "end_date"}:
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise TypeError("must be an ISO date string or null")
-        if not value.strip():
-            return None
-        normalized = _date(value)
-        if not normalized:
-            raise ValueError("must contain an ISO date")
-        try:
-            date.fromisoformat(normalized)
-        except ValueError as exc:
-            raise ValueError("must contain a valid ISO date") from exc
-        return normalized
-
-    if field == "promised_publish_deadline":
-        if value is None:
-            return None
-        if not isinstance(value, str):
-            raise TypeError("must be an ISO date/time string or null")
-        normalized = value.strip()
-        if not normalized:
-            return None
-        try:
-            datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-        except ValueError as exc:
-            raise ValueError("must be a valid ISO date/time") from exc
-        return normalized
-
-    if field in CONTRACT_TEXT_FIELDS:
-        if not isinstance(value, str):
-            raise TypeError("must be a string")
-        return value.strip()
-
-    if field in {"platforms", "must_include"}:
-        if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
-            raise TypeError("must be a list of strings")
-        return [item.strip() for item in value if item.strip()]
-
-    if field == "deliverables":
-        if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
-            raise TypeError("must be a list of objects")
-        for item in value:
-            for text_field in ("platform", "content_type", "notes"):
-                if text_field in item and not isinstance(item[text_field], str):
-                    raise TypeError(f"{text_field} must be a string")
-            quantity = item.get("quantity")
-            if quantity is not None and (
-                isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 0
-            ):
-                raise TypeError("quantity must be a non-negative integer or null")
-            deadline = item.get("deadline")
-            if deadline is not None and not isinstance(deadline, str):
-                raise TypeError("deadline must be a string or null")
-        return value
-
-    raise KeyError(field)
+    return contracts_extract_normalization.normalized_business_field(
+        field,
+        value,
+        text_fields=CONTRACT_TEXT_FIELDS,
+        math_module=math,
+        date_type=date,
+        datetime_type=datetime,
+        date_parser=_date,
+    )
 
 
 def _validated_extraction_data(extraction: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, float]]:

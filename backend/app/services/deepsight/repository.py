@@ -60,91 +60,134 @@ def compute_campaign_like_score(item: dict) -> tuple[int, int, int]:
     return final_score, content_score, interaction_score
 
 
+def _submission_in_window(
+    item: dict[str, Any],
+    platform_set: set[str],
+    cutoff: datetime,
+) -> bool:
+    if platform_set and str(item.get("platform") or "").lower() not in platform_set:
+        return False
+    created = _parse_dt(item.get("created_at"))
+    return not (created and created < cutoff)
+
+
+def _campaign_score_input(
+    item: dict[str, Any],
+    video_analysis: dict[str, Any],
+    content_types: list[str],
+) -> dict[str, Any]:
+    return {
+        **item,
+        "product_label": item.get("product_label"),
+        "product_series": item.get("product_series"),
+        "viltrox_lens": video_analysis.get("viltrox_lens"),
+        "content_types": content_types,
+        "views": item.get("views"),
+        "likes": item.get("likes"),
+        "comments": item.get("comments"),
+        "shares": item.get("shares"),
+        "favorites": item.get("favorites"),
+        "title": item.get("title"),
+    }
+
+
+def _engagement_rate(item: dict[str, Any]) -> float:
+    views = float(item.get("views") or 0)
+    if views <= 0:
+        return 0.0
+    interactions = (
+        float(item.get("likes") or 0)
+        + float(item.get("comments") or 0)
+        + float(item.get("shares") or 0)
+        + float(item.get("favorites") or 0)
+    )
+    return interactions / views
+
+
+def _submission_projection(
+    item: dict[str, Any],
+    video_analysis: dict[str, Any],
+    content_types: list[str],
+    comment_insight: dict[str, Any],
+    scores: tuple[int, int, int],
+) -> dict[str, Any]:
+    score, content_score, interaction_score = scores
+    handle = str(item.get("extracted_handle") or "").strip()
+    return {
+        "id": item.get("id"),
+        "created_at": item.get("created_at"),
+        "platform": item.get("platform") or "unknown",
+        "handle": handle,
+        "channel": handle.lstrip("@") if handle else "",
+        "title": item.get("title") or "Untitled",
+        "url": item.get("url") or "",
+        "product_series": item.get("product_series") or "",
+        "product_label": item.get("product_label") or video_analysis.get("viltrox_lens") or "",
+        "content_types": content_types,
+        "content_topic": video_analysis.get("content_topic") or item.get("content_genre") or "",
+        "content_summary": video_analysis.get("content_summary") or item.get("recommendation") or "",
+        "quality_scores": video_analysis.get("quality_scores") or {},
+        "quality_overall": video_analysis.get("quality_overall") or item.get("final_score") or 0,
+        "views": int(item.get("views") or 0),
+        "likes": int(item.get("likes") or 0),
+        "comments": int(item.get("comments") or 0),
+        "shares": int(item.get("shares") or 0),
+        "favorites": int(item.get("favorites") or 0),
+        "engagement_rate": round(_engagement_rate(item), 4),
+        "campaign_score": score,
+        "content_score": content_score,
+        "interaction_score": interaction_score,
+        "risk_score": int(item.get("risk_score") or 0),
+        "tech_score": float(item.get("tech_score") or 0),
+        "marketing_score": float(item.get("marketing_score") or 0),
+        "brand_exposure_score": float(item.get("brand_exposure_score") or 0),
+        "product_showcase_score": float(item.get("product_showcase_score") or 0),
+        "storytelling_score": float(item.get("storytelling_score") or 0),
+        "detection_status": item.get("detection_status") or "unknown",
+        "competitor_brands": _parse_list(video_analysis.get("competitor_brands")),
+        "competitor_products": _parse_list(video_analysis.get("competitor_products")),
+        "comment_analysis": comment_insight,
+        "visible_comments": comment_insight.get("sample_comments", []),
+        "viltrox_lens": video_analysis.get("viltrox_lens"),
+        "other_lens": video_analysis.get("other_lens"),
+        "camera_body": video_analysis.get("camera_body"),
+        "brand_elements": _parse_list(video_analysis.get("brand_elements")),
+        "reference_reasons": _parse_list(video_analysis.get("reference_reasons")),
+        "improvements": video_analysis.get("improvements") or [],
+        "timestamps": video_analysis.get("timestamps") or [],
+    }
+
+
+def _normalize_submission(item: dict[str, Any]) -> dict[str, Any]:
+    video_analysis = _safe_json(item.get("video_analysis"))
+    comments = video_analysis.get("visible_comments") or []
+    content_types = _parse_list(
+        video_analysis.get("content_types") or item.get("content_types")
+    )
+    comment_insight = analyze_comments(comments)
+    scores = compute_campaign_like_score(
+        _campaign_score_input(item, video_analysis, content_types)
+    )
+    normalized = _submission_projection(
+        item,
+        video_analysis,
+        content_types,
+        comment_insight,
+        scores,
+    )
+    normalized.update(compute_visual_life_score({**normalized, **comment_insight}))
+    return normalized
+
+
 def fetch_submissions_window(days: int, platforms: list[str] | None = None) -> list[dict]:
-    conn = get_conn()
-    rows = conn.execute("SELECT * FROM submissions ORDER BY id DESC").fetchall()
+    rows = get_conn().execute("SELECT * FROM submissions ORDER BY id DESC").fetchall()
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    out: list[dict] = []
     platform_set = {p.lower() for p in (platforms or []) if p}
-    for row in rows:
-        item = dict(row)
-        if platform_set and str(item.get("platform") or "").lower() not in platform_set:
-            continue
-        created = _parse_dt(item.get("created_at"))
-        if created and created < cutoff:
-            continue
-        va = _safe_json(item.get("video_analysis"))
-        quality_scores = va.get("quality_scores") or {}
-        comments = va.get("visible_comments") or []
-        content_types = _parse_list(va.get("content_types") or item.get("content_types"))
-        handle = str(item.get("extracted_handle") or "").strip()
-        channel = handle.lstrip("@") if handle else ""
-        competitor_brands = _parse_list(va.get("competitor_brands"))
-        competitor_products = _parse_list(va.get("competitor_products"))
-        comment_insight = analyze_comments(comments)
-        score, content_score, interaction_score = compute_campaign_like_score({
-            **item,
-            "product_label": item.get("product_label"),
-            "product_series": item.get("product_series"),
-            "viltrox_lens": va.get("viltrox_lens"),
-            "content_types": content_types,
-            "views": item.get("views"),
-            "likes": item.get("likes"),
-            "comments": item.get("comments"),
-            "shares": item.get("shares"),
-            "favorites": item.get("favorites"),
-            "title": item.get("title"),
-        })
-        eng = 0.0
-        views = float(item.get("views") or 0)
-        if views > 0:
-            eng = (float(item.get("likes") or 0) + float(item.get("comments") or 0) + float(item.get("shares") or 0) + float(item.get("favorites") or 0)) / views
-        normalized = {
-            "id": item.get("id"),
-            "created_at": item.get("created_at"),
-            "platform": item.get("platform") or "unknown",
-            "handle": handle,
-            "channel": channel,
-            "title": item.get("title") or "Untitled",
-            "url": item.get("url") or "",
-            "product_series": item.get("product_series") or "",
-            "product_label": item.get("product_label") or va.get("viltrox_lens") or "",
-            "content_types": content_types,
-            "content_topic": va.get("content_topic") or item.get("content_genre") or "",
-            "content_summary": va.get("content_summary") or item.get("recommendation") or "",
-            "quality_scores": quality_scores,
-            "quality_overall": va.get("quality_overall") or item.get("final_score") or 0,
-            "views": int(item.get("views") or 0),
-            "likes": int(item.get("likes") or 0),
-            "comments": int(item.get("comments") or 0),
-            "shares": int(item.get("shares") or 0),
-            "favorites": int(item.get("favorites") or 0),
-            "engagement_rate": round(eng, 4),
-            "campaign_score": score,
-            "content_score": content_score,
-            "interaction_score": interaction_score,
-            "risk_score": int(item.get("risk_score") or 0),
-            "tech_score": float(item.get("tech_score") or 0),
-            "marketing_score": float(item.get("marketing_score") or 0),
-            "brand_exposure_score": float(item.get("brand_exposure_score") or 0),
-            "product_showcase_score": float(item.get("product_showcase_score") or 0),
-            "storytelling_score": float(item.get("storytelling_score") or 0),
-            "detection_status": item.get("detection_status") or "unknown",
-            "competitor_brands": competitor_brands,
-            "competitor_products": competitor_products,
-            "comment_analysis": comment_insight,
-            "visible_comments": comment_insight.get("sample_comments", []),
-            "viltrox_lens": va.get("viltrox_lens"),
-            "other_lens": va.get("other_lens"),
-            "camera_body": va.get("camera_body"),
-            "brand_elements": _parse_list(va.get("brand_elements")),
-            "reference_reasons": _parse_list(va.get("reference_reasons")),
-            "improvements": va.get("improvements") or [],
-            "timestamps": va.get("timestamps") or [],
-        }
-        normalized.update(compute_visual_life_score({**normalized, **comment_insight}))
-        out.append(normalized)
-    return out
+    return [
+        _normalize_submission(item)
+        for row in rows
+        if _submission_in_window((item := dict(row)), platform_set, cutoff)
+    ]
 
 
 def fetch_previous_submissions_window(days: int, previous_days: int, platforms: list[str] | None = None) -> list[dict]:

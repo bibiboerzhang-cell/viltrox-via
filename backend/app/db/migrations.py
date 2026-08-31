@@ -17,6 +17,14 @@ def _log_incremental_column_skip(table: str, column: str, exc: Exception) -> Non
     logger.debug("sqlite incremental column skipped | table=%s | column=%s | error=%s", table, column, exc)
 
 
+def _backfill_creator_codes(cursor) -> None:
+    rows = cursor.execute("SELECT id, creator_code, role FROM users ORDER BY id ASC").fetchall()
+    for row in rows:
+        if row["role"] == "creator" and not row["creator_code"]:
+            code = f"V_{int(row['id']):06d}"
+            cursor.execute("UPDATE users SET creator_code=? WHERE id=?", (code, row["id"]))
+
+
 def init_db():
     conn = get_conn()
     c = conn.cursor()
@@ -707,11 +715,7 @@ def init_db():
     # ─────────────────────────
     # Backfill creator_code for old creator users
     # ─────────────────────────
-    rows = c.execute("SELECT id, creator_code, role FROM users ORDER BY id ASC").fetchall()
-    for r in rows:
-        if r["role"] == "creator" and not r["creator_code"]:
-            code = f"V_{int(r['id']):06d}"
-            c.execute("UPDATE users SET creator_code=? WHERE id=?", (code, r["id"]))
+    _backfill_creator_codes(c)
 
     conn.commit()
 

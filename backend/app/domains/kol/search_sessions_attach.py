@@ -32,6 +32,7 @@ from app.domains.kol.search_sessions_targeted import (
     project_growth_candidate_context,
     project_targeted_plan,
 )
+from app.domains.kol.search_sessions_qualification_projection import project_local_qualification
 
 from app.domains.kol.search_sessions_serde import (
     _compact_flow,
@@ -257,134 +258,17 @@ def _safe_gate_evidence(
 
 def _safe_local_qualification(value: Any) -> dict[str, Any]:
     """Compact aggregate Smart-local contract for polling/history replay."""
-    raw = _dict(value)
-    if _text(raw.get("schema")) != "smart_local_qualified_v2":
-        return {}
-    output: dict[str, Any] = {"schema": "smart_local_qualified_v2"}
-    status = _text(raw.get("status")).lower()
-    if status in {"ready", "shortfall"}:
-        output["status"] = status
-    for key in (
-        "qualified_count",
-        "returned_count",
-        "qualified_returned_count",
-        "shortfall",
-        "evaluated_count",
-        "unique_evaluated",
-        "unique_qualified",
-    ):
-        number = _safe_non_negative_int(raw.get(key), maximum=100_000)
-        if number is not None:
-            output[key] = number
-    reason = _safe_public_code(raw.get("shortfall_reason"), limit=120)
-    if reason:
-        output["shortfall_reason"] = reason
-    funnel_scope = _safe_public_code(raw.get("funnel_scope"), limit=80)
-    if funnel_scope == "cell_candidate_evaluations":
-        output["funnel_scope"] = funnel_scope
-    unique_scope = _safe_public_code(raw.get("unique_evaluated_scope"), limit=120)
-    if unique_scope:
-        output["unique_evaluated_scope"] = unique_scope
-    deferred = _dict(raw.get("deferred_activity"))
-    if deferred:
-        output["deferred_activity"] = {
-            "available": _safe_non_negative_int(deferred.get("available"), maximum=100_000) or 0,
-            "returned": _safe_non_negative_int(deferred.get("returned"), maximum=100_000) or 0,
-            "counts_toward_target": False,
-            "selectable": deferred.get("selectable") is True,
-        }
-
-    policy = _dict(raw.get("policy"))
-    safe_policy: dict[str, Any] = {}
-    for key in ("policy_version", "target_count", "candidate_limit", "min_followers", "fresh_priority_days", "max_video_age_days"):
-        number = _safe_non_negative_int(policy.get(key), maximum=5_000_000_000)
-        if number is not None:
-            safe_policy[key] = number
-    for key in ("server_owned", "allow_unknown_followers", "allow_unknown_market", "allow_unknown_language", "allow_unknown_profile_type", "allow_low_quality_backfill", "canonical_dedupe"):
-        if isinstance(policy.get(key), bool):
-            safe_policy[key] = policy[key]
-    follower_filter = _dict(policy.get("followers_filter"))
-    if follower_filter:
-        safe_policy["followers_filter"] = {
-            "requested": follower_filter.get("requested") is True,
-            "minimum": _safe_non_negative_int(follower_filter.get("minimum"), maximum=5_000_000_000),
-            "maximum": _safe_non_negative_int(follower_filter.get("maximum"), maximum=5_000_000_000),
-            "source": _safe_public_code(follower_filter.get("source"), limit=80),
-            "unknown_policy": _safe_public_code(follower_filter.get("unknown_policy"), limit=40),
-        }
-    # 活跃度未知旋钮是 defer/reject 的字符串,不是布尔:上一版白名单还留着已被
-    # 删掉的 allow_unknown_or_stale_video,新旋钮却一个字都存不下,会话历史里
-    # 因此查不到「这批人为什么被拆到待补抓桶」的出处。
-    unknown_activity = _safe_public_code(policy.get(UNKNOWN_ACTIVITY_POLICY_KEY), limit=40)
-    if unknown_activity in UNKNOWN_ACTIVITY_MODES:
-        safe_policy[UNKNOWN_ACTIVITY_POLICY_KEY] = unknown_activity
-    safe_policy["market"] = _safe_public_code(policy.get("market"), limit=40)
-    safe_policy["platforms"] = [
-        platform
-        for entry in _list(policy.get("platforms"))[:8]
-        if (platform := _safe_public_code(entry, limit=40))
-    ]
-    for key in ("languages", "profile_types", "excluded_account_types"):
-        safe_policy[key] = [
-            item
-            for entry in _list(policy.get(key))[:16]
-            if (item := _safe_public_code(entry, limit=80))
-        ]
-    output["policy"] = safe_policy
-
-    deferred_activity = _dict(raw.get("deferred_activity"))
-    if deferred_activity:
-        safe_deferred: dict[str, Any] = {
-            "counts_toward_target": deferred_activity.get("counts_toward_target") is True,
-            "selectable": deferred_activity.get("selectable") is True,
-        }
-        mode = _safe_public_code(deferred_activity.get("policy"), limit=40)
-        if mode in UNKNOWN_ACTIVITY_MODES:
-            safe_deferred["policy"] = mode
-        for key in ("reason_code", "status"):
-            code = _safe_public_code(deferred_activity.get(key), limit=80)
-            if code:
-                safe_deferred[key] = code
-        for key in ("available", "returned", "max_video_age_days", "fresh_priority_days"):
-            number = _safe_non_negative_int(deferred_activity.get(key), maximum=100_000)
-            if number is not None:
-                safe_deferred[key] = number
-        output["deferred_activity"] = safe_deferred
-
-    for source_key in ("funnel", "rejected_by_reason"):
-        safe_counts: dict[str, int] = {}
-        for key, value in list(_dict(raw.get(source_key)).items())[:32]:
-            safe_key = _safe_public_code(key, limit=80)
-            number = _safe_non_negative_int(value, maximum=100_000)
-            if safe_key and number is not None:
-                safe_counts[safe_key] = number
-        output[source_key] = safe_counts
-
-    stage_timing = _dict(raw.get("stage_timing"))
-    safe_timing: dict[str, float] = {}
-    for key, value in list(stage_timing.items())[:16]:
-        safe_key = _safe_public_code(key, limit=80)
-        number = _safe_non_negative_float(value, maximum=86_400_000)
-        if safe_key and number is not None:
-            safe_timing[safe_key] = number
-    if safe_timing:
-        output["stage_timing"] = safe_timing
-
-    ratio = _dict(raw.get("ratio_policy"))
-    safe_ratio: dict[str, Any] = {}
-    policy_name = _safe_public_code(ratio.get("policy"), limit=40)
-    if policy_name:
-        safe_ratio["policy"] = policy_name
-    for key in ("creator_target", "reviewer_target", "unused_quota_backfilled"):
-        number = _safe_non_negative_int(ratio.get(key), maximum=100_000)
-        if number is not None:
-            safe_ratio[key] = number
-    if safe_ratio:
-        output["ratio_policy"] = safe_ratio
-    scope = _safe_public_code(raw.get("gate_evidence_scope"), limit=80)
-    if scope:
-        output["gate_evidence_scope"] = scope
-    return output
+    return project_local_qualification(
+        value,
+        text_value=_text,
+        dict_value=_dict,
+        list_value=_list,
+        safe_int=_safe_non_negative_int,
+        safe_float=_safe_non_negative_float,
+        safe_code=_safe_public_code,
+        unknown_policy_key=UNKNOWN_ACTIVITY_POLICY_KEY,
+        unknown_modes=UNKNOWN_ACTIVITY_MODES,
+    )
 
 
 def _safe_candidate_distribution(value: Any) -> dict[str, Any]:

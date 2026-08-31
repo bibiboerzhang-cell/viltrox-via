@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -145,6 +146,9 @@ def _payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "batch_id",
         "completion_wait_seconds",
         "completion_poll_seconds",
+        "capacity_window_seconds",
+        "worker_count",
+        "child_timeout_seconds",
     }
     return {key: payload.get(key) for key in sorted(allowed) if key in payload}
 
@@ -544,7 +548,7 @@ async def _run_official_full_baseline(payload: dict[str, Any], queue: Any | None
 
 
 async def _run_daily_incremental_sync(payload: dict[str, Any], queue: Any | None) -> dict[str, Any]:
-    from app.domains.sync import daily_batch, daily_sync, refresh_tier
+    from app.domains.sync import daily_batch, daily_batch_capacity, daily_sync, refresh_tier
     if daily_sync._bool(payload.get("dry_run")):
         plan = daily_sync.run_daily_incremental({**payload, "dry_run": True})
         return {
@@ -554,6 +558,8 @@ async def _run_daily_incremental_sync(payload: dict[str, Any], queue: Any | None
             "kol_pool_light": plan.get("kol_pool_light") or {"skipped": True},
             "health": plan.get("health") or {}, "ran_at": _stamp(),
         }
+    payload, wait_seconds, poll_seconds = daily_batch_capacity.normalize_runtime_payload(payload)
+    capacity_started = time.monotonic()
     daily_sync.check_daily_sync_guard(payload)
     owned_queue = None
     effective_queue = queue
@@ -562,7 +568,6 @@ async def _run_daily_incremental_sync(payload: dict[str, Any], queue: Any | None
     try:
         if effective_queue is None:
             from app.services.jobs.queue import build_job_queue
-
             owned_queue = build_job_queue()
             effective_queue = owned_queue
         if effective_queue is None:
@@ -579,40 +584,32 @@ async def _run_daily_incremental_sync(payload: dict[str, Any], queue: Any | None
         official_skipped = daily_sync._bool(payload.get("skip_official"))
         if not official_skipped:
             from app.domains import channels
-
             official_rows = channels.list_channels(staff={}, limit=300).get("channels") or []
         selector = daily_sync._kol_refresh_selector(payload)
         kol_allowed = daily_batch.kol_refresh_allowed(daily_sync, payload, selector)
         kol_rows = daily_batch.kol_rows(daily_sync, refresh_tier, payload, selector) if kol_allowed else []
         batch_id = str(payload.get("batch_id") or "").strip()[:128] or daily_batch.new_batch_id()
-        official: dict[str, Any] = {"skipped": True} if official_skipped else {
-            "channels_enqueued": 0, "channels_requested": 0, "channels_failed_to_enqueue": 0,
-            "task_ids": [], "failed": [],
-        }
-        kol_result: dict[str, Any] = (
-            {"skipped": True} if not kol_allowed
-            else {"requested": 0, "enqueued": 0, "failed_to_enqueue": 0, "task_ids": [], "failed": []}
+        queued = daily_batch_capacity.initial_queue_state(
+            official_skipped=official_skipped,
+            kol_allowed=kol_allowed,
         )
-        queued: dict[str, Any] = {
-            "official": official, "kol_pool_light": kol_result,
-            "task_ids": [], "task_links": [], "scheduler": "round_robin_v1",
-        }
         requested = len(official_rows) + len(kol_rows)
-        wait_seconds = max(0.0, min(19_800.0, float(payload.get("completion_wait_seconds") or 0.0)))
-        poll_seconds = max(0.05, min(60.0, float(payload.get("completion_poll_seconds") or 10.0)))
         daily_batch.insert_parent(batch_id, payload, official_rows, kol_rows)
         parent_inserted = True
+        admission = await daily_batch_capacity.reject_if_over_capacity(
+            daily_batch, batch_id, payload, official_rows, kol_rows, effective_queue
+        )
+        queued["admission"] = admission
         if requested:
             def checkpoint_progress(snapshot: dict[str, Any]) -> None:
                 daily_batch.checkpoint_parent(
                     batch_id,
                     daily_batch.checkpoint_summary(
-                        batch_id, requested, snapshot,
+                        batch_id, requested, {**snapshot, "admission": admission},
                         official_skipped=official_skipped, kol_skipped=not kol_allowed,
                         phase="enqueueing",
                     ),
                 )
-
             queued = await daily_batch.queue_batch(
                 official_rows,
                 kol_rows,
@@ -622,6 +619,7 @@ async def _run_daily_incremental_sync(payload: dict[str, Any], queue: Any | None
                 batch_id=batch_id,
                 progress_callback=checkpoint_progress,
             )
+            queued["admission"] = admission
         checkpoint = daily_batch.checkpoint_summary(
             batch_id, requested, queued,
             official_skipped=official_skipped, kol_skipped=not kol_allowed,
@@ -631,29 +629,36 @@ async def _run_daily_incremental_sync(payload: dict[str, Any], queue: Any | None
         task_ids = list(batch["task_ids"])
         enqueue_failures = int(checkpoint["enqueue_failures"])
         daily_batch.checkpoint_parent(batch_id, checkpoint)
-        receipt_callback = payload.get("_batch_receipt_callback")
-        if callable(receipt_callback):
-            try:
-                callback_result = receipt_callback({**batch, "phase": "children_enqueued", "official": official, "kol_pool_light": kol_result, "enqueue_failures": enqueue_failures})
-                if hasattr(callback_result, "__await__"):
-                    await callback_result
-            except Exception:
-                logger.warning("daily batch enqueue receipt emission failed", exc_info=True)
+        await daily_batch_capacity.emit_enqueue_receipt(
+            payload, batch, official, kol_result, enqueue_failures, logger=logger
+        )
+        loss_limit, stopped_before_enqueue, remaining_wait_seconds = (
+            daily_batch_capacity.completion_contract(
+                checkpoint, payload, wait_seconds, capacity_started
+            )
+        )
         completion = await daily_batch.observe(
             effective_queue,
             task_ids,
-            wait_seconds=wait_seconds,
+            wait_seconds=remaining_wait_seconds,
             poll_seconds=poll_seconds,
         )
-        status = daily_batch.result_status(completion, enqueue_failures=enqueue_failures)
+        status = daily_batch.result_status(
+            completion,
+            enqueue_failures=enqueue_failures,
+            stopped_before_enqueue=stopped_before_enqueue,
+        )
         result = {
             "job": "daily_incremental_sync", "status": status, "batch_id": batch_id,
             "task_ids": task_ids, "batch": batch,
             "completion_scope": completion.get("completion_scope"),
             "provider_completion": completion.get("provider_completion"),
             "completion": completion, "official": official, "kol_pool_light": kol_result,
-            "enqueue_failures": enqueue_failures, "ran_at": _stamp(),
+            "enqueue_failures": enqueue_failures, "admission": checkpoint.get("admission"),
+            "ran_at": _stamp(),
         }
+        if loss_limit:
+            result["loss_limit"] = loss_limit
         parent_status = status if completion.get("complete") or not task_ids else "queued"
         daily_batch.finish_parent(batch_id, parent_status, result)
         return result

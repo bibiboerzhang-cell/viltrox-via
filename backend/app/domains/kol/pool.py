@@ -89,6 +89,14 @@ from app.domains.kol.pool_read_projection_facets import pool_read_data_status_id
 from app.domains.kol.pool_workspace_bundle import workspace_aggregate_projection
 from app.domains.kol.pool_read_projection_evidence import project_pool_list_items
 from app.domains.kol.pool_read_cache_projection import restore_pool_response_cache_hit
+from app.domains.kol.pool_detail_bundle_helpers import (
+    apply_analysis_states as _apply_detail_analysis_states,
+    apply_audience_estimated as _apply_detail_audience_estimated,
+    apply_audience_language as _apply_detail_audience_language,
+    apply_creator_gear as _apply_detail_creator_gear,
+    detail_analysis_items as _detail_analysis_items,
+    readiness_and_summary as _detail_readiness_and_summary,
+)
 
 # detail_bundle 的 try/except 块此前引用 logger 却从未定义(潜伏 NameError);补齐模块级 logger。
 logger = get_logger(__name__)
@@ -671,141 +679,44 @@ def detail_bundle(
         "write_db": False,
     }
     llm_deep = get_kol_llm_deep_analysis(int(kol_pool_id), limit=safe_llm_limit)
-    analysis_items: list[dict[str, Any]] = []
-    analysis_states: dict[int, str] = {}
-    ready_count = 0
-    quality_incomplete_count = 0
-    legacy_unverified_count = 0
-    qa_ready_count = 0
-    for video in analysis_evidence:
-        evidence_id = _int_or_none(video.get("evidence_id") or video.get("id"))
-        if not evidence_id:
-            continue
-        final_cache_entry = analysis_cache.get((str(evidence_id), "video_analysis_final_v1"))
-        qa_entry = analysis_cache.get((str(evidence_id), "video_analysis_final_v1_keyframe_qa"))
-        final_entry, final_state, final_reason, final_projection = _final_analysis_cache_projection(final_cache_entry, target_id=str(evidence_id))
-        analysis_states[evidence_id] = final_state
-        if final_state == "ready":
-            ready_count += 1
-        elif final_state == "quality_incomplete":
-            quality_incomplete_count += 1
-        elif final_state == "legacy_unverified":
-            legacy_unverified_count += 1
-        if final_state == "ready" and qa_entry and qa_entry.get("status") == "ready":
-            qa_ready_count += 1
-        else:
-            qa_entry = None
-        projected_video = dict(video)
-        projected_video["has_final_v1_cache"] = final_state == "ready"
-        projected_video["analysis_cache_state"] = final_state
-        analysis_items.append(
-            {
-                "video": projected_video,
-                "final_entry": final_entry,
-                "raw_final_entry": final_cache_entry if final_state == "legacy_unverified" else None,
-                "qa_entry": qa_entry,
-                "state": final_state,
-                "reason": final_reason,
-                **({key: final_projection[key] for key in (
-                    "terminal", "revalidation_required", "claim_status", "cache_reuse_status", "cache_id", "reasons",
-                ) if key in final_projection} if final_state == "legacy_unverified" else {}),
-            }
-        )
-    for video in videos:
-        evidence_id = _int_or_none(video.get("evidence_id") or video.get("id"))
-        if evidence_id in analysis_states:
-            video["has_final_v1_cache"] = analysis_states[evidence_id] == "ready"
-            video["analysis_cache_state"] = analysis_states[evidence_id]
-    try:
-        import json as _gear_json
-
-        aggregate_creator_gear, gear_from_text = creator_gear_helpers()
-        _gear_results: list[dict[str, Any]] = []
-        for _a in analysis_items:
-            _fe = _a.get("final_entry")
-            if not _fe:
-                continue
-            _res = _fe.get("result")
-            if isinstance(_res, str):
-                try:
-                    _res = _gear_json.loads(_res)
-                except Exception:
-                    continue
-            if isinstance(_res, dict):
-                _gear_results.append(_res)
-        _gear = aggregate_creator_gear(_gear_results)
-        if not _gear.get("camera_body"):
-            # 兜底:没视频深析(或分析没提到设备)时扫 bio/raw —— 很多创作者简介里写机身。
-            _bg = gear_from_text(
-                str(item.get("bio") or "") + " " + str(raw_platform_data_for_derivation or "")
-            )
-            if _bg.get("camera_body"):
-                _bg["uses_viltrox"] = any("viltrox" in ln.lower() for ln in (_bg.get("lens_brands") or []))
-                _gear = _bg
-        if _gear.get("camera_body"):
-            item["device_primary"] = _gear["camera_body"]
-            item["device_lenses"] = _gear.get("lens_brands") or []
-            item["device_uses_viltrox"] = bool(_gear.get("uses_viltrox"))
-            item["upgrade_window"] = "low" if _gear.get("uses_viltrox") else ("high" if _gear.get("lens_brands") else "medium")
-    except Exception:
-        logger.warning("creator_gear extract failed kol=%s", kol_pool_id, exc_info=True)
+    analysis_items, analysis_states, analysis_counts = _detail_analysis_items(
+        analysis_evidence,
+        analysis_cache,
+        int_or_none=_int_or_none,
+        final_cache_projection=_final_analysis_cache_projection,
+    )
+    _apply_detail_analysis_states(videos, analysis_states, int_or_none=_int_or_none)
+    _apply_detail_creator_gear(
+        item,
+        analysis_items,
+        raw_platform_data_for_derivation,
+        creator_gear_helpers,
+        int(kol_pool_id),
+        logger=logger,
+    )
     # 受众语言估算(评论法):有评论出真语言分布(替代"创作者国@100%"假地理),无评论则 sample_size=0 诚实空。
     # 覆盖现实:目前仅有评论的账号出数(18 官号 + 已抓评论的 KOL);外部 KOL 需先抓评论。红线不触 fit。
-    try:
-        audience_language_for_kol = audience_language_reader()
-        item["audience_languages"] = audience_language_for_kol(int(kol_pool_id))
-    except Exception:
-        logger.warning("audience_language failed kol=%s", kol_pool_id, exc_info=True)
+    _apply_detail_audience_language(
+        item, audience_language_reader, int(kol_pool_id), logger=logger
+    )
     # 受众画像 ensemble_v1(P0):pool 行 audience_estimated_json 解析后透传给前端 Audience Stats 面板。
     # 只读透传(写入在 audience_stats.refresh_audience_stats);空/坏 JSON 诚实置 None。红线不触 fit。
-    try:
-        import json as _aud_json
-
-        _aud_raw = item.get("audience_estimated_json")
-        _aud = _aud_json.loads(_aud_raw) if isinstance(_aud_raw, str) and _aud_raw.strip() else (
-            _aud_raw if isinstance(_aud_raw, dict) else None
+    _apply_detail_audience_estimated(item)
+    analysis_readiness, evidence_quality, video_analysis_summary = (
+        _detail_readiness_and_summary(
+            kol_pool_id=int(kol_pool_id),
+            item=item,
+            analysis_evidence=analysis_evidence,
+            analysis_items=analysis_items,
+            llm_deep=llm_deep,
+            counts=analysis_counts,
+            build_analysis_readiness=build_analysis_readiness,
+            evidence_quality_projection=evidence_quality_projection,
+            load_readiness_video_evidence=load_readiness_video_evidence,
+            get_conn=get_conn,
+            int_or_none=_int_or_none,
         )
-        item["audience_estimated"] = _aud if isinstance(_aud, dict) and _aud else None
-    except Exception:
-        item["audience_estimated"] = None
-    readiness_sample = load_readiness_video_evidence(
-        int(kol_pool_id), limit=200, conn=get_conn()
     )
-    analysis_readiness = build_analysis_readiness(
-        item=item,
-        videos=list(readiness_sample.get("items") or []),
-        analysis_items=analysis_items,
-        llm_deep=llm_deep,
-        sample_scope=str(readiness_sample.get("sample_scope") or "active_video_evidence_up_to_200"),
-        sample_limit=_int_or_none(readiness_sample.get("limit")),
-        sample_truncated=bool(readiness_sample.get("truncated")),
-    )
-    evidence_quality = evidence_quality_projection(analysis_readiness)
-    video_analysis_summary = {
-        "evidence_count": len(analysis_evidence),
-        "ready_count": ready_count,
-        "pending_count": max(
-            0,
-            len(analysis_evidence) - ready_count - quality_incomplete_count - legacy_unverified_count,
-        ),
-        "quality_incomplete_count": quality_incomplete_count,
-        "legacy_unverified_count": legacy_unverified_count,
-        "qa_ready_count": qa_ready_count,
-        "source": "vkpi_analysis_cache",
-        "analysis_readiness": {
-            key: analysis_readiness.get(key)
-            for key in (
-                "level",
-                "status",
-                "claim_status",
-                "decision_mode",
-                "recommendation_status",
-                "key_sample_count",
-                "evidence_coverage",
-                "blocking_gaps",
-            )
-        },
-    }
     bundle = {
         "status": "ready",
         "method": "kol_pool_detail_bundle_v1",

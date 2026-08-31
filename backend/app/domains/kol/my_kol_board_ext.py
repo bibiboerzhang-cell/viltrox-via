@@ -76,7 +76,6 @@ viltrox_fit_score 原值 / avatar / raw_platform_data 等明文联系方式与�
 """
 from __future__ import annotations
 
-import json
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -85,6 +84,7 @@ from app.domains.kol import my_kol_video_recovery as recovery
 from app.domains.kol import my_kol_recent_filters as recent_filters
 from app.domains.kol import my_kol_recent_dedupe as recent_dedupe
 from app.domains.kol.video_evidence_projection import viltrox_modalities
+from app.domains.kol.my_kol_board_recent_projection import project_recent_video
 from app.domains.projects import stage_canonical
 
 logger = get_logger(__name__)
@@ -611,63 +611,19 @@ def _recent_videos(
         before=before,
         limit=RECENT_VIDEOS_LIMIT,
     )
-    items: list[dict[str, Any]] = []
-    for rec in rows:
-        view_count = rec.get("view_count")
-        like_count = rec.get("like_count")
-        project_id = rec.get("project_id")
-        brand_status = str(rec.get("llm_viltrox_status") or "").strip().lower()
-        if brand_status not in {"present", "absent", "unknown"}:
-            brand_status = ""
-        detected_text = str(rec.get("llm_viltrox_detected_text") or "").strip().lower()
-        detected = (detected_text == "true") if detected_text in {"true", "false"} else None
-        analysis_lists: dict[str, list[str] | None] = {}
-        for key in ("llm_viltrox_products", "llm_competitor_mentions"):
-            value = rec.get(key)
-            if isinstance(value, str):
-                try:
-                    value = json.loads(value)
-                except (TypeError, ValueError):
-                    value = None
-            analysis_lists[key] = [str(item) for item in value if item] if isinstance(value, list) else None
-        tier = str(rec.get("v_tier") or "").strip()
-        if tier not in {"cooperation", "analysis_confirmed", "title_mention", "not_related", "undetermined"}:
-            tier = classify_v_content(
-                project_id,
-                f"{rec.get('video_title') or ''} {rec.get('title') or ''}",
-                final_v1_brand_status=brand_status,
-                final_v1_detected=detected,
-                final_v1_products=analysis_lists["llm_viltrox_products"],
-            )
-        published_at = rec.get("published_at")
-        if published_at in (None, ""):
-            published_at = rec.get("publish_date") or rec.get("posted_at") or rec.get("created_at")
-        items.append({
-            "evidence_id": _int0(rec.get("evidence_id")),
-            "kol_pool_id": _int0(rec.get("kol_pool_id")),
-            "project_id": _int0(project_id) if project_id is not None else None,
-            "content_url": str(rec.get("content_url") or ""),
-            "platform": str(rec.get("platform") or ""),
-            "title": str(rec.get("title") or ""),
-            "video_title": str(rec.get("video_title") or ""),
-            "view_count": _int0(view_count) if view_count is not None else None,
-            "like_count": _int0(like_count) if like_count is not None else None,
-            "publish_date": _day_str(rec.get("publish_date")) or None,
-            "posted_at": _ts_str(rec.get("posted_at")) or None,
-            "collected_at": _ts_str(rec.get("created_at")) or None,
-            "published_at": _ts_str(published_at) or None,
-            "metrics_scraped_at": _ts_str(rec.get("metrics_scraped_at")) or None,
-            "evidence_type": str(rec.get("evidence_type") or "video"),
-            "kol_name": str(rec.get("kol_name") or ""),
-            "kol_handle": str(rec.get("kol_handle") or ""),
-            "has_final_v1_cache": _truthy_db(rec.get("has_final_v1_cache")),
-            "llm_viltrox_status": brand_status or None,
-            "llm_viltrox_detected": detected,
-            "viltrox_modalities": viltrox_modalities(rec.get("llm_viltrox_modalities")),
-            "v_tier": tier,
-            **analysis_lists,
-            **_thumbnail_fields(rec),
-        })
+    items = [
+        project_recent_video(
+            rec,
+            int_value=_int0,
+            day_value=_day_str,
+            timestamp_value=_ts_str,
+            truthy_value=_truthy_db,
+            classify_content=classify_v_content,
+            modality_values=viltrox_modalities,
+            thumbnail_fields=_thumbnail_fields,
+        )
+        for rec in rows
+    ]
     # 任务态统一投影(与 my-kol videos 端点同一实现);modality 以本组 CTE 投影为准,
     # attach 不再二次批查 analysis cache,只补 tasks / 规整 published_at。
     recovery.attach_task_states(conn, items, fetch_metric_trends=True, fetch_modalities=False)

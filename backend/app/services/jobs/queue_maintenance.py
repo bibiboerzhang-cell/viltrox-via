@@ -7,7 +7,7 @@ class-LOC 棘轮拆分:行为逐字搬运自 queue.py::RedisJobQueue(台账读�
 ``retrying`` 的等待时间只由队列汇总暴露,不得被误标为执行超时。
 
 所有可 monkeypatch 的模块级符号(get_conn、logger、常量、工具函数)一律经
-``_qm()`` 惰性解析到 queue 模块,保持 tests 对 queue 模块的补丁面不变
+``_qm()`` 读取已绑定的 queue 门面且不反向 import,保持 tests 对 queue 模块的补丁面不变
 (例:``patch.object(queue_mod, "get_conn", ...)`` 仍然生效)。
 """
 from __future__ import annotations
@@ -16,12 +16,12 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from app.services.jobs.queue_runtime import queue_facade
+
 
 def _qm():
-    """Resolve the queue module lazily so monkeypatches on it stay effective."""
-    from app.services.jobs import queue as queue_module
-
-    return queue_module
+    """Resolve the bound live facade so monkeypatches stay effective."""
+    return queue_facade()
 
 
 def status_row_to_dict(row: Any) -> Dict[str, Any]:

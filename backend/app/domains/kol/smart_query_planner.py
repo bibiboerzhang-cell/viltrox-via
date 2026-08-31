@@ -82,22 +82,17 @@ def _extract_json(text: str) -> dict[str, Any]:
         return {}
 
 
-def _fallback_plan(
-    query: str,
-    *,
-    reason: str = "rule_fallback",
-    body: dict[str, Any] | None = None,
-    product: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    query_text = _text(query)
-    lowered = query_text.lower()
+def _fallback_platforms(lowered: str) -> list[str]:
     platforms: list[str] = []
     for platform in SUPPORTED_PLATFORMS:
         if platform in lowered or (platform == "youtube" and "yt" in lowered):
             platforms.append(platform)
     if not platforms:
         platforms = ["youtube", "instagram", "tiktok"]
+    return platforms
 
+
+def _fallback_keywords(lowered: str) -> list[str]:
     keywords: list[str] = []
     is_lighting = any(term in lowered for term in ("flash", "strobe", "lighting", "light", "闪光", "灯", "补光"))
     if is_lighting:
@@ -144,6 +139,20 @@ def _fallback_plan(
         keywords.append("pet creator")
     if "旅拍" in lowered:
         keywords.append("travel videographer")
+    return keywords
+
+
+def _fallback_plan(
+    query: str,
+    *,
+    reason: str = "rule_fallback",
+    body: dict[str, Any] | None = None,
+    product: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    query_text = _text(query)
+    lowered = query_text.lower()
+    platforms = _fallback_platforms(lowered)
+    keywords = _fallback_keywords(lowered)
 
     # 规避问题A:中文 query 直接塞进 search_query 会让平台搜出中文号。
     # 有英文关键词→只用英文关键词;纯中文无匹配→给英文影视器材兜底;ASCII 原串才保留。

@@ -516,65 +516,64 @@ def _risk_level(issues: list[str]) -> str:
     return "low"
 
 
+def _audit_legacy_row(item: dict[str, Any]) -> dict[str, Any]:
+    raw = item["raw"]
+    mapped = _map_fields(raw)
+    raw_text = " ".join(_text(value) for value in raw.values())
+    profile_url = mapped.get("profile_url") or _first_url(raw_text)
+    platform = _normalize_platform(mapped.get("platform", ""), f"{profile_url} {raw_text}")
+    handle = _normalize_handle(mapped.get("handle", ""), platform) or _extract_handle_from_url(
+        profile_url, platform
+    )
+    email = mapped.get("email") or _find_email(raw_text)
+    phone = mapped.get("phone") or _find_phone(mapped.get("contact", "") or raw_text)
+    contact = email or phone or mapped.get("contact", "")
+    product = mapped.get("product", "")
+    project = mapped.get("project", "")
+    amount_raw = mapped.get("amount", "")
+    amount_value, amount_currency = _parse_amount(amount_raw)
+    currency = (mapped.get("currency") or amount_currency).upper()
+    issues: list[str] = []
+    if not platform:
+        issues.append("missing_platform")
+    if not handle:
+        issues.append("missing_handle")
+    if not contact:
+        issues.append("missing_contact")
+    if not product and not project:
+        issues.append("missing_product_project")
+    if amount_raw and amount_value is None:
+        issues.append("invalid_amount")
+    if amount_value is not None and amount_value < 0:
+        issues.append("negative_amount")
+    if amount_raw and amount_value is not None and not currency:
+        issues.append("missing_currency")
+    return {
+        "sheet": item.get("sheet", ""),
+        "row_number": item.get("row_number"),
+        "platform": platform,
+        "handle": handle,
+        "dedup_key": f"{platform}:{handle.lower()}" if platform and handle else "",
+        "profile_url": profile_url,
+        "contact": contact,
+        "email": email,
+        "product": product,
+        "project": project,
+        "owner": mapped.get("owner", ""),
+        "status": mapped.get("status", ""),
+        "amount_raw": amount_raw,
+        "amount_value": amount_value,
+        "currency": currency,
+        "issues": issues,
+        "raw_preview": _raw_preview(raw),
+    }
+
+
 def audit_legacy_file(path: str | Path, *, sheet_name: str = "", max_rows: int = 0) -> dict[str, Any]:
     source = Path(path).expanduser()
     source_stat = source.stat()
     legacy_rows = read_legacy_rows(source, sheet_name=sheet_name, max_rows=max_rows)
-    audited: list[dict[str, Any]] = []
-
-    for item in legacy_rows:
-        raw = item["raw"]
-        mapped = _map_fields(raw)
-        raw_text = " ".join(_text(value) for value in raw.values())
-        profile_url = mapped.get("profile_url") or _first_url(raw_text)
-        platform = _normalize_platform(mapped.get("platform", ""), f"{profile_url} {raw_text}")
-        handle = _normalize_handle(mapped.get("handle", ""), platform) or _extract_handle_from_url(profile_url, platform)
-        email = mapped.get("email") or _find_email(raw_text)
-        phone = mapped.get("phone") or _find_phone(mapped.get("contact", "") or raw_text)
-        contact = email or phone or mapped.get("contact", "")
-        product = mapped.get("product", "")
-        project = mapped.get("project", "")
-        amount_raw = mapped.get("amount", "")
-        amount_value, amount_currency = _parse_amount(amount_raw)
-        currency = (mapped.get("currency") or amount_currency).upper()
-        issues: list[str] = []
-
-        if not platform:
-            issues.append("missing_platform")
-        if not handle:
-            issues.append("missing_handle")
-        if not contact:
-            issues.append("missing_contact")
-        if not product and not project:
-            issues.append("missing_product_project")
-        if amount_raw and amount_value is None:
-            issues.append("invalid_amount")
-        if amount_value is not None and amount_value < 0:
-            issues.append("negative_amount")
-        if amount_raw and amount_value is not None and not currency:
-            issues.append("missing_currency")
-
-        audited.append(
-            {
-                "sheet": item.get("sheet", ""),
-                "row_number": item.get("row_number"),
-                "platform": platform,
-                "handle": handle,
-                "dedup_key": f"{platform}:{handle.lower()}" if platform and handle else "",
-                "profile_url": profile_url,
-                "contact": contact,
-                "email": email,
-                "product": product,
-                "project": project,
-                "owner": mapped.get("owner", ""),
-                "status": mapped.get("status", ""),
-                "amount_raw": amount_raw,
-                "amount_value": amount_value,
-                "currency": currency,
-                "issues": issues,
-                "raw_preview": _raw_preview(raw),
-            }
-        )
+    audited = [_audit_legacy_row(item) for item in legacy_rows]
 
     duplicates = Counter(row["dedup_key"] for row in audited if row.get("dedup_key"))
     for row in audited:

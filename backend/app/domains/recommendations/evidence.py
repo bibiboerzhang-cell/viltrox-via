@@ -80,6 +80,120 @@ def _source_row(source_type: str, source_id: Any, label: str, row: dict[str, Any
     }
 
 
+def _project_evidence_rows(
+    recommendation_id: int,
+    kol_id: int,
+) -> dict[str, list[dict[str, Any]]]:
+    projects = _safe_rows(
+        """
+        SELECT *
+        FROM vkpi_projects
+        WHERE COALESCE(stage_status, '') != 'deleted'
+          AND (
+            metadata_json LIKE ?
+            OR metadata_json LIKE ?
+            OR (? > 0 AND kol_id=?)
+          )
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 50
+        """,
+        (
+            f'%"recommendation_id": {recommendation_id}%',
+            f'%"recommendation_id":{recommendation_id}%',
+            kol_id,
+            kol_id,
+        ),
+    )
+    project_ids = [
+        int(row.get("id") or 0)
+        for row in projects
+        if int(row.get("id") or 0) > 0
+    ]
+    if not project_ids:
+        return {
+            "projects": projects,
+            "links": [],
+            "messages": [],
+            "content": [],
+            "costs": [],
+            "attribution": [],
+            "terms": [],
+            "deliverables": [],
+            "samples": [],
+            "shipments": [],
+        }
+    placeholders = ",".join("?" for _ in project_ids)
+    params = tuple(project_ids)
+    return {
+        "projects": projects,
+        "links": _safe_rows(f"SELECT * FROM vkpi_links WHERE project_id IN ({placeholders}) ORDER BY created_at DESC, id DESC LIMIT 50", params),
+        "messages": _safe_rows(f"SELECT * FROM vkpi_messages WHERE project_id IN ({placeholders}) ORDER BY captured_at DESC, id DESC LIMIT 50", params),
+        "content": _safe_rows(f"SELECT * FROM vkpi_content_posts WHERE project_id IN ({placeholders}) ORDER BY COALESCE(published_at, created_at) DESC, id DESC LIMIT 50", params),
+        "costs": _safe_rows(f"SELECT * FROM vkpi_cost_ledger WHERE project_id IN ({placeholders}) ORDER BY incurred_at DESC, id DESC LIMIT 50", params),
+        "attribution": _safe_rows(f"SELECT * FROM vkpi_sales_attributions WHERE project_id IN ({placeholders}) ORDER BY COALESCE(occurred_at, imported_at, created_at) DESC, id DESC LIMIT 50", params),
+        "terms": _safe_rows(f"SELECT * FROM vkpi_project_terms WHERE project_id IN ({placeholders}) ORDER BY updated_at DESC, id DESC LIMIT 20", params),
+        "deliverables": _safe_rows(f"SELECT * FROM vkpi_project_deliverables WHERE project_id IN ({placeholders}) ORDER BY updated_at DESC, id DESC LIMIT 50", params),
+        "samples": _safe_rows(f"SELECT * FROM vkpi_sample_assets WHERE project_id IN ({placeholders}) ORDER BY updated_at DESC, id DESC LIMIT 50", params),
+        "shipments": _safe_rows(f"SELECT * FROM vkpi_shipments WHERE project_id IN ({placeholders}) ORDER BY updated_at DESC, id DESC LIMIT 50", params),
+    }
+
+
+def _shopify_order_rows(attribution: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    snapshot_ids = [
+        int(row.get("shopify_order_snapshot_id") or 0)
+        for row in attribution
+        if int(row.get("shopify_order_snapshot_id") or 0) > 0
+    ]
+    if not snapshot_ids:
+        return []
+    placeholders = ",".join("?" for _ in snapshot_ids)
+    return _safe_rows(
+        f"SELECT * FROM vkpi_shopify_order_snapshots WHERE id IN ({placeholders}) ORDER BY processed_at DESC, id DESC LIMIT 50",
+        tuple(snapshot_ids),
+    )
+
+
+def _evidence_source_rows(
+    *,
+    recommendation_id: int,
+    rec: dict[str, Any],
+    pool: dict[str, Any],
+    launch: dict[str, Any],
+    outcome: dict[str, Any] | None,
+    run: dict[str, Any],
+    feature_snapshot: dict[str, Any],
+    scoring_breakdown: dict[str, Any],
+    explanations: list[dict[str, Any]],
+    feedback: list[dict[str, Any]],
+    assignments: list[dict[str, Any]],
+    row_groups: tuple[tuple[str, str, list[dict[str, Any]]], ...],
+) -> list[dict[str, Any]]:
+    rows = [
+        _source_row("recommendation", rec.get("id"), "推荐候选", rec, {"rank": rec.get("rank"), "score": rec.get("score")}),
+        _source_row("feature_snapshot", rec.get("id"), "推荐时刻冻结特征", feature_snapshot, {"frozen": True}),
+        _source_row("scoring_breakdown", rec.get("id"), "评分明细", scoring_breakdown, {"model_version": scoring_breakdown.get("strategy_version") or (outcome or {}).get("model_version") or "rule_v0"}),
+    ]
+    optional = (
+        (outcome, "outcome", (outcome or {}).get("id"), "Outcome 标签", {"recommendation_id": recommendation_id}),
+        (run, "recommendation_run", run.get("id"), "推荐运行", {"strategy_version": run.get("strategy_version")}),
+        (launch, "product_launch", launch.get("id"), "产品发布项目", {"launch_id": launch.get("id")}),
+        (pool, "kol_pool", pool.get("id"), "KOL 池账号", {"platform": pool.get("platform")}),
+    )
+    for present, source_type, source_id, label, evidence in optional:
+        if present:
+            rows.append(_source_row(source_type, source_id, label, present, evidence))
+    for item in explanations[:10]:
+        rows.append(_source_row("explanation", item.get("id"), "解释记录", item, {"model_version": item.get("model_version")}))
+    for item in feedback[:10]:
+        rows.append(_source_row("feedback", item.get("id"), "员工反馈", item, {"feedback_type": item.get("feedback_type")}))
+    for item in assignments[:10]:
+        rows.append(_source_row("assignment", item.get("id"), "AB/策略分流", item, {"variant": item.get("variant")}))
+    for source_type, label, source_items in row_groups:
+        for item in source_items[:20]:
+            rows.append(_source_row(source_type, item.get("id"), label, item))
+    return rows
+
+
 def get_recommendation_evidence(recommendation_id: int, *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """Return the frozen feature snapshot plus real downstream business evidence.
 
@@ -91,8 +205,9 @@ def get_recommendation_evidence(recommendation_id: int, *, staff: dict[str, Any]
     rec, pool, launch = _recommendation_context(int(recommendation_id))
     refreshed = outcome_collector.refresh_business_outcome(int(recommendation_id))
     outcome = (refreshed.get("outcome") if isinstance(refreshed, dict) else None) or outcome_collector.get_outcome(int(recommendation_id)).get("outcome")
-    conn = get_conn()
-
+    # Keep the historical connection acquisition side effect/order even though
+    # the evidence queries below deliberately use the compatibility helpers.
+    get_conn()
     explanations = _safe_rows(
         """
         SELECT *
@@ -125,44 +240,20 @@ def get_recommendation_evidence(recommendation_id: int, *, staff: dict[str, Any]
     )
     run = _safe_row("SELECT * FROM vkpi_kol_recommendation_runs WHERE id=?", (int(rec.get("run_id") or 0),))
 
-    kol_id = int(rec.get("linked_main_kol_id") or 0)
-    project_rows = _safe_rows(
-        """
-        SELECT *
-        FROM vkpi_projects
-        WHERE COALESCE(stage_status, '') != 'deleted'
-          AND (
-            metadata_json LIKE ?
-            OR metadata_json LIKE ?
-            OR (? > 0 AND kol_id=?)
-          )
-        ORDER BY updated_at DESC, id DESC
-        LIMIT 50
-        """,
-        (f'%"recommendation_id": {int(recommendation_id)}%', f'%"recommendation_id":{int(recommendation_id)}%', kol_id, kol_id),
+    project_evidence = _project_evidence_rows(
+        int(recommendation_id), int(rec.get("linked_main_kol_id") or 0)
     )
-    project_ids = [int(row.get("id") or 0) for row in project_rows if int(row.get("id") or 0) > 0]
-    project_placeholders = ",".join("?" for _ in project_ids)
-
-    if project_ids:
-        links = _safe_rows(f"SELECT * FROM vkpi_links WHERE project_id IN ({project_placeholders}) ORDER BY created_at DESC, id DESC LIMIT 50", tuple(project_ids))
-        messages = _safe_rows(f"SELECT * FROM vkpi_messages WHERE project_id IN ({project_placeholders}) ORDER BY captured_at DESC, id DESC LIMIT 50", tuple(project_ids))
-        content = _safe_rows(f"SELECT * FROM vkpi_content_posts WHERE project_id IN ({project_placeholders}) ORDER BY COALESCE(published_at, created_at) DESC, id DESC LIMIT 50", tuple(project_ids))
-        costs = _safe_rows(f"SELECT * FROM vkpi_cost_ledger WHERE project_id IN ({project_placeholders}) ORDER BY incurred_at DESC, id DESC LIMIT 50", tuple(project_ids))
-        attribution = _safe_rows(f"SELECT * FROM vkpi_sales_attributions WHERE project_id IN ({project_placeholders}) ORDER BY COALESCE(occurred_at, imported_at, created_at) DESC, id DESC LIMIT 50", tuple(project_ids))
-        terms = _safe_rows(f"SELECT * FROM vkpi_project_terms WHERE project_id IN ({project_placeholders}) ORDER BY updated_at DESC, id DESC LIMIT 20", tuple(project_ids))
-        deliverables = _safe_rows(f"SELECT * FROM vkpi_project_deliverables WHERE project_id IN ({project_placeholders}) ORDER BY updated_at DESC, id DESC LIMIT 50", tuple(project_ids))
-        samples = _safe_rows(f"SELECT * FROM vkpi_sample_assets WHERE project_id IN ({project_placeholders}) ORDER BY updated_at DESC, id DESC LIMIT 50", tuple(project_ids))
-        shipments = _safe_rows(f"SELECT * FROM vkpi_shipments WHERE project_id IN ({project_placeholders}) ORDER BY updated_at DESC, id DESC LIMIT 50", tuple(project_ids))
-    else:
-        links, messages, content, costs, attribution, terms, deliverables, samples, shipments = [], [], [], [], [], [], [], [], []
-
-    shopify_snapshot_ids = [int(row.get("shopify_order_snapshot_id") or 0) for row in attribution if int(row.get("shopify_order_snapshot_id") or 0) > 0]
-    if shopify_snapshot_ids:
-        placeholders = ",".join("?" for _ in shopify_snapshot_ids)
-        shopify_orders = _safe_rows(f"SELECT * FROM vkpi_shopify_order_snapshots WHERE id IN ({placeholders}) ORDER BY processed_at DESC, id DESC LIMIT 50", tuple(shopify_snapshot_ids))
-    else:
-        shopify_orders = []
+    project_rows = project_evidence["projects"]
+    links = project_evidence["links"]
+    messages = project_evidence["messages"]
+    content = project_evidence["content"]
+    costs = project_evidence["costs"]
+    attribution = project_evidence["attribution"]
+    terms = project_evidence["terms"]
+    deliverables = project_evidence["deliverables"]
+    samples = project_evidence["samples"]
+    shipments = project_evidence["shipments"]
+    shopify_orders = _shopify_order_rows(attribution)
 
     audit_rows = _safe_rows(
         """
@@ -180,26 +271,19 @@ def get_recommendation_evidence(recommendation_id: int, *, staff: dict[str, Any]
     scoring_breakdown = _loads(rec.get("scoring_breakdown_json"), {}) or _loads((outcome or {}).get("scoring_breakdown_json"), {}) or {}
     explanation = _loads(rec.get("explanation_json"), {}) or {}
 
-    source_rows: list[dict[str, Any]] = [
-        _source_row("recommendation", rec.get("id"), "推荐候选", rec, {"rank": rec.get("rank"), "score": rec.get("score")}),
-        _source_row("feature_snapshot", rec.get("id"), "推荐时刻冻结特征", feature_snapshot, {"frozen": True}),
-        _source_row("scoring_breakdown", rec.get("id"), "评分明细", scoring_breakdown, {"model_version": scoring_breakdown.get("strategy_version") or (outcome or {}).get("model_version") or "rule_v0"}),
-    ]
-    if outcome:
-        source_rows.append(_source_row("outcome", outcome.get("id"), "Outcome 标签", outcome, {"recommendation_id": recommendation_id}))
-    if run:
-        source_rows.append(_source_row("recommendation_run", run.get("id"), "推荐运行", run, {"strategy_version": run.get("strategy_version")}))
-    if launch:
-        source_rows.append(_source_row("product_launch", launch.get("id"), "产品发布项目", launch, {"launch_id": launch.get("id")}))
-    if pool:
-        source_rows.append(_source_row("kol_pool", pool.get("id"), "KOL 池账号", pool, {"platform": pool.get("platform")}))
-    for row in explanations[:10]:
-        source_rows.append(_source_row("explanation", row.get("id"), "解释记录", row, {"model_version": row.get("model_version")}))
-    for row in feedback[:10]:
-        source_rows.append(_source_row("feedback", row.get("id"), "员工反馈", row, {"feedback_type": row.get("feedback_type")}))
-    for row in assignments[:10]:
-        source_rows.append(_source_row("assignment", row.get("id"), "AB/策略分流", row, {"variant": row.get("variant")}))
-    for source_type, label, rows in (
+    source_rows = _evidence_source_rows(
+        recommendation_id=int(recommendation_id),
+        rec=rec,
+        pool=pool,
+        launch=launch,
+        outcome=outcome,
+        run=run,
+        feature_snapshot=feature_snapshot,
+        scoring_breakdown=scoring_breakdown,
+        explanations=explanations,
+        feedback=feedback,
+        assignments=assignments,
+        row_groups=(
         ("project", "项目", project_rows),
         ("message", "消息证据", messages),
         ("terms", "合作条款", terms),
@@ -212,9 +296,8 @@ def get_recommendation_evidence(recommendation_id: int, *, staff: dict[str, Any]
         ("shopify_order", "Shopify 订单快照", shopify_orders),
         ("cost", "成本", costs),
         ("audit", "业务审计", audit_rows),
-    ):
-        for row in rows[:20]:
-            source_rows.append(_source_row(source_type, row.get("id"), label, row))
+        ),
+    )
 
     audit.log_business_event(
         staff_id=resolve_staff_id(staff) or 0,

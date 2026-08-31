@@ -20,7 +20,7 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.actions import approval_evidence
 from app.domains.kol.identity import normalize_platform
-from app.domains.market_brain import prediction_truth
+from app.domains.market_brain import outreach_truth_coverage, prediction_truth
 from app.domains.platform import event_ledger, review_contract
 from app.domains.staff import is_manager_staff
 
@@ -877,110 +877,11 @@ def outreach_prediction_coverage(
             """,
             (PREDICTION_ORGANIZATION,),
         ).fetchall()
-        for raw in rows:
-            original = dict(raw)
-            created = _dt(original.get("created_at"))
-            if created is not None and current < created + timedelta(days=HORIZON_DAYS):
-                continue
-            result["registered_due"] += 1
-            run, _error = _validated_run(original)
-            if run is None:
-                result["invalid_due_contract"] += 1
-                result["unbound"] += 1
-                if len(result["invalid_run_ids"]) < 100:
-                    result["invalid_run_ids"].append(str(original.get("run_id") or ""))
-                continue
-            result["valid_registered_due"] += 1
-            action_id = int(run["action_inbox_id"])
-            binding = None
-            if table_exists(TABLE) and table_exists("vkpi_event_ledger"):
-                binding = _load_binding(
-                    db, "prediction_organization_id=? AND prediction_run_id=?",
-                    (PREDICTION_ORGANIZATION, str(run["run_id"])),
-                )
-            bridge_invalid = False
-            if binding is not None:
-                matches = bool(
-                    int(binding.get("action_inbox_id") or 0) == action_id
-                    and int(binding.get("kol_pool_id") or 0) == int(run["kol_pool_id"])
-                    and _sku(binding.get("product_sku")) == _sku(run.get("product_sku"))
-                    and _channel(binding.get("channel")) == _channel(run.get("channel"))
-                    and _dt(binding.get("observation_start_at"))
-                    == run["observation_start_at"]
-                    and _dt(binding.get("observation_end_at")) == run["observation_end_at"]
-                )
-                if matches and _binding_proof_valid(db, binding):
-                    result["verified_bound"] += 1
-                    from app.domains.market_brain import outreach_reply_truth
-
-                    if outreach_reply_truth.verified_receipt_for_binding(db, binding) is not None:
-                        result["verified_actual"] += 1
-                    else:
-                        result["missing_verified_actual"] += 1
-                    continue
-                bridge_invalid = True
-                result["invalid_bridge"] += 1
-
-            # A mutable-table absence is displayed only as an unverified censor
-            # and never raises coverage.  This classification is best effort;
-            # any failure remains unbound and therefore fail-closed.
-            if not bridge_invalid:
-                try:
-                    _action, approved_at, action_error = _verified_action(
-                        db, action_id, lock_for_update=False,
-                    )
-                    pool_raw = db.execute(
-                        "SELECT platform, linked_main_kol_id FROM vkpi_kol_pool WHERE id=?",
-                        (int(run["kol_pool_id"]),),
-                    ).fetchone()
-                    pool = dict(pool_raw) if pool_raw is not None else {}
-                    kol_id = _positive_int(pool.get("linked_main_kol_id"))
-                    projects = _exact_projects(
-                        db, kol_id=kol_id, product_sku=str(run["product_sku"]),
-                        channel=str(run["channel"]),
-                    ) if kol_id > 0 else []
-                    server_now = _server_now(db)
-                    if (
-                        action_error is None and approved_at is not None and server_now is not None
-                        and projects
-                    ):
-                        candidates, flags = _eligible_project_outbounds(
-                            db, projects=projects, kol_id=kol_id,
-                            start=run["observation_start_at"], end=run["observation_end_at"],
-                            approved_at=approved_at, server_now=server_now,
-                        )
-                        if not candidates and not flags["in_window"]:
-                            result["censored_no_outbound_unverified"] += 1
-                except Exception:
-                    logger.debug("outreach unverified censor classification failed", exc_info=True)
-            result["unbound"] += 1
-            if len(result["unbound_action_ids"]) < 100:
-                result["unbound_action_ids"].append(action_id)
-
-        due = int(result["registered_due"])
-        bound = int(result["verified_bound"])
-        actual = int(result["verified_actual"])
-        result["binding_coverage"] = round(bound / due, 4) if due else None
-        result["actual_coverage"] = round(actual / due, 4) if due else None
-        result["bound_actual_coverage"] = round(actual / bound, 4) if bound else None
-        binding_sample_ready = bool(
-            due > 0 and bound / due >= MIN_CLAIMABLE_COVERAGE
+        outreach_truth_coverage.process_coverage_rows(
+            db, rows, current, result, globals(),
         )
-        actual_sample_ready = bool(
-            due > 0
-            and actual >= MIN_CLAIMABLE_ACTUALS
-            and actual / due >= MIN_CLAIMABLE_COVERAGE
-        )
-        result["manager_attested_sample_ready"] = bool(
-            binding_sample_ready and actual_sample_ready
-            and int(result["invalid_due_contract"]) == 0
-            and int(result["invalid_bridge"]) == 0
-        )
+        outreach_truth_coverage.finalize_coverage(result, globals())
         # Mutable source messages lack a completeness watermark/late-arrival reconciliation.
-        result["binding_claimable"] = False
-        result["actual_claimable"] = False
-        result["claimable"] = False
-        result["claim_level"] = "descriptive_only"
         return result
     except Exception:
         logger.warning("outreach prediction coverage failed", exc_info=True)

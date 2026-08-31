@@ -202,22 +202,10 @@ def _observed_ints(rows: Iterable[Mapping[str, Any]], field: str) -> list[int]:
     ]
 
 
-def youtube_channel_activation_summary(
+def _activation_samples(
     raw: Mapping[str, Any],
     video_stats_by_id: Mapping[str, Mapping[str, Any]],
-    *,
-    followers: int | None = None,
-    query_mode: str = "exact_query_cell",
-) -> dict[str, Any]:
-    """Build a no-extra-call 1–3 video evidence bundle for one channel.
-
-    Repeated videos from the original exact-query page are retained as recent
-    content evidence instead of being thrown away during channel dedupe.  A
-    single sample keeps the historical representative-only contract.  Only a
-    multi-sample bundle receives aggregate ``avg_*`` fields, and strict market
-    activation still requires at least three observations downstream.
-    """
-
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     samples = raw.get("_channel_video_samples")
     if not isinstance(samples, list):
         samples = [raw]
@@ -237,20 +225,46 @@ def youtube_channel_activation_summary(
         snippet = sample.get("snippet") if isinstance(sample.get("snippet"), Mapping) else {}
         metrics = dict(video_stats_by_id.get(video_id) or {})
         observed.append(metrics)
-        public_samples.append({
-            "video_id": video_id,
-            "title": str(snippet.get("title") or "")[:500],
-            "description": str(snippet.get("description") or "")[:2_000],
-            "published": str(snippet.get("publishedAt") or "")[:80],
-            "content_url": f"https://www.youtube.com/watch?v={video_id}",
-            "discovery_query": str(sample.get("_discovery_query_variant") or "")[:500],
-            **metrics,
-        })
-    if not observed:
-        return {"activation_evidence_status": "pending_content_evidence"}
+        public_samples.append(
+            {
+                "video_id": video_id,
+                "title": str(snippet.get("title") or "")[:500],
+                "description": str(snippet.get("description") or "")[:2_000],
+                "published": str(snippet.get("publishedAt") or "")[:80],
+                "content_url": f"https://www.youtube.com/watch?v={video_id}",
+                "discovery_query": str(sample.get("_discovery_query_variant") or "")[:500],
+                **metrics,
+            }
+        )
+    return observed, public_samples
 
+
+def _activation_scope(query_mode: str, sample_count: int) -> str:
+    prefix = "exact_query" if query_mode == "exact_query_cell" else "expanded_query"
+    if sample_count == 1:
+        return f"{prefix}_hit_45d"
+    if sample_count < MAX_ACTIVATION_VIDEOS_PER_CHANNEL:
+        return f"{prefix}_hits_45d_provisional"
+    return f"{prefix}_hits_45d_aggregate"
+
+
+def _activation_status(sample_count: int) -> str:
+    if sample_count == 1:
+        return "observed_single_sample"
+    if sample_count < MAX_ACTIVATION_VIDEOS_PER_CHANNEL:
+        return "observed_insufficient_sample"
+    return "observed_multi_sample"
+
+
+def _activation_output(
+    observed: list[dict[str, Any]],
+    public_samples: list[dict[str, Any]],
+    *,
+    followers: int | None,
+    query_mode: str,
+) -> tuple[dict[str, Any], list[tuple[int, int, int]]]:
     first = public_samples[0]
-    output: dict[str, Any] = {
+    output = {
         key: first[key]
         for key in (
             "representative_video_views",
@@ -263,7 +277,6 @@ def youtube_channel_activation_summary(
     }
     sample_count = len(observed)
     view_values = _observed_ints(observed, "representative_video_views")
-    like_values = _observed_ints(observed, "representative_video_likes")
     comment_values = _observed_ints(observed, "representative_video_comments")
     engagement_rows = [
         (views, likes, comments)
@@ -273,48 +286,41 @@ def youtube_channel_activation_summary(
         and (likes := _optional_int(row.get("representative_video_likes"))) is not None
         and (comments := _optional_int(row.get("representative_video_comments"))) is not None
     ]
-    metric_sample_counts = {
-        "avg_views": len(view_values),
-        "engagement": len(engagement_rows),
-        "views_per_follower": len(view_values) if followers is not None and followers > 0 else 0,
-        "comments_per_follower": (
-            len(comment_values) if followers is not None and followers > 0 else 0
-        ),
-    }
-    scope_prefix = "exact_query" if query_mode == "exact_query_cell" else "expanded_query"
-    metrics_scope = (
-        f"{scope_prefix}_hit_45d"
-        if sample_count == 1
-        else f"{scope_prefix}_hits_45d_provisional"
-        if sample_count < MAX_ACTIVATION_VIDEOS_PER_CHANNEL
-        else f"{scope_prefix}_hits_45d_aggregate"
+    metrics_scope = _activation_scope(query_mode, sample_count)
+    output.update(
+        {
+            "representative_video_id": first.get("video_id"),
+            "representative_video_title": first.get("title"),
+            "representative_video_description": first.get("description"),
+            "representative_video_url": first.get("content_url"),
+            "representative_discovery_query": first.get("discovery_query"),
+            "representative_video_published_at": first.get("published") or None,
+            "recent_videos": public_samples,
+            "recent_video_sample_count": sample_count,
+            "activation_sample_count": sample_count,
+            "activation_metric_sample_counts": {
+                "avg_views": len(view_values),
+                "engagement": len(engagement_rows),
+                "views_per_follower": len(view_values) if followers is not None and followers > 0 else 0,
+                "comments_per_follower": len(comment_values) if followers is not None and followers > 0 else 0,
+            },
+            "activation_metrics_source": "youtube_data_api.videos.list",
+            "activation_query_mode": query_mode,
+            "activation_metrics_scope": metrics_scope,
+            "claim_status": "descriptive_only",
+            "activation_evidence_status": _activation_status(sample_count),
+        }
     )
-    output.update({
-        "representative_video_id": first.get("video_id"),
-        "representative_video_title": first.get("title"),
-        "representative_video_description": first.get("description"),
-        "representative_video_url": first.get("content_url"),
-        "representative_discovery_query": first.get("discovery_query"),
-        "representative_video_published_at": first.get("published") or None,
-        "recent_videos": public_samples,
-        "recent_video_sample_count": sample_count,
-        "activation_sample_count": sample_count,
-        "activation_metric_sample_counts": metric_sample_counts,
-        "activation_metrics_source": "youtube_data_api.videos.list",
-        "activation_query_mode": query_mode,
-        "activation_metrics_scope": metrics_scope,
-        "claim_status": "descriptive_only",
-        "activation_evidence_status": (
-            "observed_single_sample"
-            if sample_count == 1
-            else "observed_insufficient_sample"
-            if sample_count < MAX_ACTIVATION_VIDEOS_PER_CHANNEL
-            else "observed_multi_sample"
-        ),
-    })
-    if sample_count < 2:
-        return output
+    return output, engagement_rows
 
+
+def _append_activation_averages(
+    output: dict[str, Any],
+    observed: list[dict[str, Any]],
+    engagement_rows: list[tuple[int, int, int]],
+    *,
+    followers: int | None,
+) -> None:
     for source, destination in (
         ("representative_video_views", "avg_views"),
         ("representative_video_likes", "avg_likes"),
@@ -324,7 +330,6 @@ def youtube_channel_activation_summary(
         if value is not None:
             output[destination] = value
     avg_views = output.get("avg_views")
-    avg_likes = output.get("avg_likes")
     avg_comments = output.get("avg_comments")
     if engagement_rows:
         total_views = sum(row[0] for row in engagement_rows)
@@ -337,6 +342,42 @@ def youtube_channel_activation_summary(
             output["comments_per_follower"] = round(avg_comments / followers, 8)
     output["avg_views_source"] = "youtube_data_api.videos.list"
     output["avg_views_scope"] = output["activation_metrics_scope"]
+
+
+def youtube_channel_activation_summary(
+    raw: Mapping[str, Any],
+    video_stats_by_id: Mapping[str, Mapping[str, Any]],
+    *,
+    followers: int | None = None,
+    query_mode: str = "exact_query_cell",
+) -> dict[str, Any]:
+    """Build a no-extra-call 1–3 video evidence bundle for one channel.
+
+    Repeated videos from the original exact-query page are retained as recent
+    content evidence instead of being thrown away during channel dedupe.  A
+    single sample keeps the historical representative-only contract.  Only a
+    multi-sample bundle receives aggregate ``avg_*`` fields, and strict market
+    activation still requires at least three observations downstream.
+    """
+
+    observed, public_samples = _activation_samples(raw, video_stats_by_id)
+    if not observed:
+        return {"activation_evidence_status": "pending_content_evidence"}
+
+    output, engagement_rows = _activation_output(
+        observed,
+        public_samples,
+        followers=followers,
+        query_mode=query_mode,
+    )
+    if len(observed) < 2:
+        return output
+    _append_activation_averages(
+        output,
+        observed,
+        engagement_rows,
+        followers=followers,
+    )
     return output
 
 

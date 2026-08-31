@@ -10,6 +10,15 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
+from app.domains.sync.daily_batch_capacity import (
+    DEFAULT_DAILY_CAPACITY_WINDOW_SECONDS,
+    DEFAULT_DAILY_CHILD_TIMEOUT_SECONDS,
+    DEFAULT_DAILY_KOL_LIMIT,
+    DEFAULT_DAILY_WORKER_COUNT,
+    DailyBatchCapacityError,
+    capacity_admission,
+)
+
 
 SUCCESS_STATUSES = frozenset({"done", "completed", "succeeded", "success"})
 PARTIAL_STATUSES = frozenset({"partial", "partial_done"})
@@ -27,7 +36,8 @@ PARENT_PAYLOAD_KEYS = frozenset(
         "kol_limit", "kol_offset", "kol_stale_before", "kol_max_posts", "kol_error_stop_threshold",
         "kol_platforms", "kol_refresh_selector", "kol_source_type", "kol_tiers", "skip_kol",
         "allow_legacy_kol_full_refresh", "allow_qualified_kol_refresh",
-        "completion_wait_seconds", "completion_poll_seconds",
+        "completion_wait_seconds", "completion_poll_seconds", "capacity_window_seconds",
+        "worker_count", "child_timeout_seconds",
     }
 )
 
@@ -54,7 +64,7 @@ def kol_refresh_allowed(daily_sync: Any, payload: dict[str, Any], selector: str)
 
 def kol_rows(daily_sync: Any, refresh_tier: Any, payload: dict[str, Any], selector: str) -> list[dict[str, Any]]:
     common = {
-        "limit": max(1, min(1200, int(payload.get("kol_limit") or 1200))),
+        "limit": max(1, min(1200, int(payload.get("kol_limit") or DEFAULT_DAILY_KOL_LIMIT))),
         "offset": max(0, int(payload.get("kol_offset") or 0)),
         "stale_before": str(payload.get("kol_stale_before") or ""),
         "platforms": daily_sync._platform_filter(payload.get("kol_platforms") or payload.get("platforms")),
@@ -92,78 +102,19 @@ async def queue_batch(
     batch_id: str,
     progress_callback: Any | None = None,
 ) -> dict[str, Any]:
-    """Enqueue children in fair order; provider work remains worker-only."""
-    if queue is None:
-        raise RuntimeError("durable job queue unavailable")
-    if str(getattr(queue, "backend_name", "")) == "inprocess":
-        raise RuntimeError("durable_queue_required:inprocess_queue_has_no_provider_execution_fence")
-    import app.domains.tasks.enqueue as task_enqueue
+    from app.domains.sync import daily_batch_capacity
 
-    official_max = int(payload.get("official_max_posts") or payload.get("channel_max_posts") or payload.get("max_posts") or 50)
-    kol_max = max(1, min(3, int(payload.get("kol_max_posts") or payload.get("max_posts") or 1)))
-    enqueue_staff = staff or {"id": 0, "staff_id": 0, "user_id": 0, "role": "admin", "is_owner": 1, "email": ""}
-    ids: dict[str, list[str]] = {"official": [], "kol_pool_light": []}
-    failures: dict[str, list[dict[str, Any]]] = {"official": [], "kol_pool_light": []}
-    ordered_ids: list[str] = []
-    task_links: list[dict[str, Any]] = []
-    processed = 0
-
-    def receipt() -> dict[str, Any]:
-        official_ids = list(dict.fromkeys(ids["official"]))
-        kol_ids = list(dict.fromkeys(ids["kol_pool_light"]))
-        return {
-            "official": {
-                "channels_enqueued": len(official_ids), "channels_requested": len(official_rows),
-                "channels_failed_to_enqueue": len(failures["official"]), "task_ids": official_ids,
-                "failed": list(failures["official"][:20]),
-            },
-            "kol_pool_light": {
-                "requested": len(kol_rows), "enqueued": len(kol_ids),
-                "failed_to_enqueue": len(failures["kol_pool_light"]), "task_ids": kol_ids,
-                "failed": list(failures["kol_pool_light"][:20]),
-            },
-            "task_ids": list(dict.fromkeys(ordered_ids)),
-            "task_links": [dict(link) for link in task_links],
-            "scheduler": "round_robin_v1",
-            "processed": processed,
-            "total": len(official_rows) + len(kol_rows),
-        }
-
-    for target_index, (lane, row) in enumerate(schedule(official_rows, kol_rows)):
-        key = "channel_id" if lane == "official" else "kol_pool_id"
-        target_id = int(row.get("id") or 0)
-        if target_id <= 0:
-            failures[lane].append({key: target_id, "error": "ValueError: positive target id required"})
-        else:
-            if lane == "official":
-                task_type = task_enqueue.VKPI_OFFICIAL_CHANNEL_SYNC
-                params = {"channel_id": target_id, "max_posts": int(row.get("_requested_max_posts") or official_max)}
-            else:
-                task_type = task_enqueue.VKPI_KOL_POOL_ON_DEMAND_REFRESH
-                params = {"kol_pool_id": target_id, "reason": "daily_incremental_sync", "max_posts": kol_max}
-            try:
-                queued = await task_enqueue.enqueue_vkpi_task(
-                    queue,
-                    task_type,
-                    {**params, "orchestration_batch_id": batch_id, "orchestration_lane": lane},
-                    staff=enqueue_staff,
-                    priority=5,
-                )
-                task_id = str(queued.get("task_id") or "").strip()
-                if not task_id:
-                    raise RuntimeError("enqueue returned an empty task_id")
-                ids[lane].append(task_id)
-                ordered_ids.append(task_id)
-                task_links.append({"task_id": task_id, "lane": lane, key: target_id, "target_index": target_index})
-            except Exception as exc:
-                failures[lane].append({key: target_id, "error": f"{type(exc).__name__}: {str(exc)[:300]}"})
-        processed += 1
-        current = receipt()
-        if callable(progress_callback):
-            progress_result = progress_callback(current)
-            if hasattr(progress_result, "__await__"):
-                await progress_result
-    return receipt()
+    return await daily_batch_capacity.queue_batch(
+        official_rows,
+        kol_rows,
+        payload=payload,
+        staff=staff,
+        queue=queue,
+        batch_id=batch_id,
+        progress_callback=progress_callback,
+        schedule_rows=schedule,
+        observer=observe,
+    )
 
 
 def checkpoint_summary(
@@ -190,13 +141,18 @@ def checkpoint_summary(
     official = {"skipped": True} if official_skipped else queued.get("official") or {}
     kol = {"skipped": True} if kol_skipped else queued.get("kol_pool_light") or {}
     enqueue_failures = int(official.get("channels_failed_to_enqueue") or 0) + int(kol.get("failed_to_enqueue") or 0)
-    return {
+    summary = {
         "phase": phase,
         "processed": int(queued.get("processed") or (requested if phase == "children_enqueued" else 0)),
         "total": int(queued.get("total") or requested),
         "batch": batch, "official": official,
         "kol_pool_light": kol, "enqueue_failures": enqueue_failures,
     }
+    if isinstance(queued.get("loss_limit"), dict):
+        summary["loss_limit"] = dict(queued["loss_limit"])
+    if isinstance(queued.get("admission"), dict):
+        summary["admission"] = dict(queued["admission"])
+    return summary
 
 
 def completion_snapshot(
@@ -285,8 +241,18 @@ async def observe(
     return result
 
 
-def result_status(completion: dict[str, Any], *, enqueue_failures: int) -> str:
-    if enqueue_failures or int(completion.get("tasks_partial") or 0) or int(completion.get("tasks_failed") or 0):
+def result_status(
+    completion: dict[str, Any],
+    *,
+    enqueue_failures: int,
+    stopped_before_enqueue: int = 0,
+) -> str:
+    if (
+        enqueue_failures
+        or stopped_before_enqueue
+        or int(completion.get("tasks_partial") or 0)
+        or int(completion.get("tasks_failed") or 0)
+    ):
         return "partial"
     if not int(completion.get("tasks_total") or 0):
         return "completed"
@@ -452,7 +418,13 @@ def _mark_parent_failed(
 def _apply_reconciled_completion(summary: dict[str, Any], completion: dict[str, Any]) -> str:
     summary["completion"] = completion
     status = result_status(
-        completion, enqueue_failures=int(summary.get("enqueue_failures") or 0)
+        completion,
+        enqueue_failures=int(summary.get("enqueue_failures") or 0),
+        stopped_before_enqueue=int(
+            ((summary.get("kol_pool_light") or {}).get("stopped_before_enqueue") or 0)
+            if isinstance(summary.get("kol_pool_light"), dict)
+            else 0
+        ),
     )
     summary.update({
         "status": status, "completion_scope": completion["completion_scope"],
@@ -614,10 +586,19 @@ def fail_parent(
 ) -> None:
     """Fail an inserted parent when orchestration itself cannot continue."""
     now = utcnow()
+    capacity_rejected = isinstance(exc, DailyBatchCapacityError)
+    error_type = "capacity" if capacity_rejected else "other"
     changed = _execute(
-        """UPDATE vkpi_sync_runs SET finished_at=?, status='failed', reason=?, error_type='other',
+        f"""UPDATE vkpi_sync_runs SET finished_at=?, status='failed', reason=?, error_type='{error_type}',
            error_class=?, error_message=?, updated_at=? WHERE run_id=? AND status='running'""",
-        (now, "orchestration_failed", type(exc).__name__, str(exc)[:500], now, batch_id),
+        (
+            now,
+            "capacity_admission_rejected" if capacity_rejected else "orchestration_failed",
+            type(exc).__name__,
+            str(exc)[:500],
+            now,
+            batch_id,
+        ),
         write,
     )
     if changed != 1 and parent_status(batch_id, read=read) != "failed":
@@ -654,6 +635,7 @@ def finish_parent(
         errors = (
             int(official.get("channels_failed_to_enqueue") or 0)
             + int(kol.get("failed_to_enqueue") or 0)
+            + int(kol.get("stopped_before_enqueue") or 0)
             + int(completion.get("tasks_failed") or 0)
             + int(completion.get("tasks_partial") or 0)
         )

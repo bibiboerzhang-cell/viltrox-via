@@ -160,6 +160,107 @@ def contract_for_plan_step(
     return contract
 
 
+def _validate_action_gate(action: dict[str, Any]) -> None:
+    if str(action.get("category") or "").strip().lower() != "orchestrated_step":
+        _reject("not_orchestrated_step")
+    if str(action.get("status") or "") != "approved":
+        _reject("not_approved")
+    if not bool(action.get("requires_approval")):
+        _reject("approval_gate_missing")
+    if bool(action.get("touches_v6_fit")):
+        _reject("touches_v6_fit_violation")
+    if not table_exists(_PLAN_TABLE) or not table_exists(_TOOL_RUN_TABLE):
+        _reject("orchestration_ledger_unavailable")
+
+
+def _action_plan_pointer(action: dict[str, Any]) -> tuple[int, int]:
+    match = _DEDUPE_RE.fullmatch(str(action.get("dedupe_key") or ""))
+    if match is None:
+        _reject("dedupe_key_invalid")
+    return int(match.group(1)), int(match.group(2))
+
+
+def _load_action_plan(db: Any, plan_id: int, lock_plan: bool) -> dict[str, Any]:
+    lock_clause = " FOR UPDATE" if lock_plan and is_postgres_runtime() else ""
+    row = db.execute(
+        "SELECT id, plan_json, status, created_by_staff_id "
+        f"FROM {_PLAN_TABLE} WHERE id = ?{lock_clause}",
+        (plan_id,),
+    ).fetchone()
+    if row is None:
+        _reject("plan_not_found")
+    plan = dict(row)
+    if str(plan.get("status") or "") not in _RUNNABLE_PLAN_STATUSES:
+        _reject("plan_not_runnable")
+    return plan
+
+
+def _validated_plan_owner(
+    plan: dict[str, Any],
+    action: dict[str, Any],
+    actor: int,
+) -> int:
+    try:
+        owner = int(plan.get("created_by_staff_id") or 0)
+        action_owner = int(action.get("owner_staff_id") or 0)
+    except (TypeError, ValueError):
+        _reject("plan_owner_invalid")
+    # v1 deliberately requires creator, owner, and executor to be identical.
+    if owner <= 0 or action_owner != owner or actor != owner:
+        _reject("plan_owner_mismatch")
+    return owner
+
+
+def _validate_action_pointer(
+    action: dict[str, Any],
+    contract: dict[str, Any],
+    plan_id: int,
+    step_index: int,
+    tool_id: str,
+) -> None:
+    payload = action.get("payload_json")
+    if not isinstance(payload, dict):
+        _reject("action_pointer_invalid")
+    if _exact_int(payload.get("plan_id"), "action_pointer_invalid") != plan_id:
+        _reject("action_pointer_mismatch")
+    if _exact_int(payload.get("step_index"), "action_pointer_invalid") != step_index:
+        _reject("action_pointer_mismatch")
+    if str(payload.get("tool_id") or "") != tool_id:
+        _reject("action_pointer_mismatch")
+    if not hmac.compare_digest(
+        str(payload.get("contract_sha256") or ""), str(contract["fingerprint"]),
+    ):
+        _reject("approved_plan_contract_mismatch")
+
+
+def _validate_action_policy(
+    action: dict[str, Any],
+    contract: dict[str, Any],
+    tool: dict[str, Any],
+) -> None:
+    if str(action.get("suggested_endpoint") or "") != str(tool["endpoint"]):
+        _reject("action_endpoint_mismatch")
+    if bool(action.get("writes_business_data")) != bool(tool.get("writes_db")):
+        _reject("action_policy_mismatch")
+    if bool(action.get("uses_llm")) != bool(tool.get("uses_llm")):
+        _reject("action_policy_mismatch")
+    try:
+        action_cost = int(action.get("estimated_cost_cents"))
+    except (TypeError, ValueError):
+        _reject("action_cost_invalid")
+    if action_cost != 0:
+        _reject("action_cost_policy_mismatch")
+    entity_type = str(contract["entity_type"])
+    entity_id = str(contract["entity_id"])
+    if (
+        str(action.get("entity_type") or "") != entity_type
+        or str(action.get("entity_id") or "") != entity_id
+    ):
+        _reject("action_entity_mismatch")
+    if list(action.get("affected_tables_json") or []) != list(contract["affected_tables"]):
+        _reject("action_affected_tables_mismatch")
+
+
 def resolve_action_contract(
     action: dict[str, Any],
     staff: dict[str, Any] | None,
@@ -173,95 +274,23 @@ def resolve_action_contract(
     the Action CAS claim.  The caller keeps that transaction open through the
     local handler and receipt finalization.
     """
-    if str(action.get("category") or "").strip().lower() != "orchestrated_step":
-        _reject("not_orchestrated_step")
-    if str(action.get("status") or "") != "approved":
-        _reject("not_approved")
-    if not bool(action.get("requires_approval")):
-        _reject("approval_gate_missing")
-    if bool(action.get("touches_v6_fit")):
-        _reject("touches_v6_fit_violation")
-    if not table_exists(_PLAN_TABLE) or not table_exists(_TOOL_RUN_TABLE):
-        _reject("orchestration_ledger_unavailable")
-
-    match = _DEDUPE_RE.fullmatch(str(action.get("dedupe_key") or ""))
-    if match is None:
-        _reject("dedupe_key_invalid")
-    plan_id = int(match.group(1))
-    step_index = int(match.group(2))
-
+    _validate_action_gate(action)
+    plan_id, step_index = _action_plan_pointer(action)
     actor = int(scope.actor_staff_id(staff))
     if actor <= 0:
         _reject("actor_required")
     db = conn or get_conn()
-    lock_clause = " FOR UPDATE" if lock_plan and is_postgres_runtime() else ""
-    row = db.execute(
-        "SELECT id, plan_json, status, created_by_staff_id "
-        f"FROM {_PLAN_TABLE} WHERE id = ?{lock_clause}",
-        (plan_id,),
-    ).fetchone()
-    if row is None:
-        _reject("plan_not_found")
-    plan = dict(row)
-    if str(plan.get("status") or "") not in _RUNNABLE_PLAN_STATUSES:
-        _reject("plan_not_runnable")
-    try:
-        owner = int(plan.get("created_by_staff_id") or 0)
-        action_owner = int(action.get("owner_staff_id") or 0)
-    except (TypeError, ValueError):
-        _reject("plan_owner_invalid")
-    # v1 deliberately requires the creator, owner, approver/executor actor to
-    # be the same concrete staff identity.  Cross-manager delegation needs an
-    # explicit future delegation ledger, never an implicit can_view_all bypass.
-    if owner <= 0 or action_owner != owner or actor != owner:
-        _reject("plan_owner_mismatch")
-
+    plan = _load_action_plan(db, plan_id, lock_plan)
+    owner = _validated_plan_owner(plan, action, actor)
     steps = _loads_list(plan.get("plan_json"))
     contract = contract_for_plan_step(plan_id, owner, steps, step_index)
     tool_id = str(contract["tool_id"])
     tool = tool_registry.get_tool(tool_id) or {}
-    inputs = dict(contract["inputs"])
+    _inputs = dict(contract["inputs"])
     if bool(tool.get("requires_manager")) and not scope.can_view_all(staff):
         _reject("manager_execution_required")
-
-    payload = action.get("payload_json")
-    if not isinstance(payload, dict):
-        _reject("action_pointer_invalid")
-    if _exact_int(payload.get("plan_id"), "action_pointer_invalid") != plan_id:
-        _reject("action_pointer_mismatch")
-    if _exact_int(payload.get("step_index"), "action_pointer_invalid") != step_index:
-        _reject("action_pointer_mismatch")
-    # The payload tool id is only a redundant integrity assertion.  It never
-    # selects the handler and is compared to the locked plan value exactly.
-    if str(payload.get("tool_id") or "") != tool_id:
-        _reject("action_pointer_mismatch")
-    if not hmac.compare_digest(
-        str(payload.get("contract_sha256") or ""), str(contract["fingerprint"]),
-    ):
-        _reject("approved_plan_contract_mismatch")
-
-    endpoint = str(tool["endpoint"])
-    if str(action.get("suggested_endpoint") or "") != endpoint:
-        _reject("action_endpoint_mismatch")
-    if bool(action.get("writes_business_data")) != bool(tool.get("writes_db")):
-        _reject("action_policy_mismatch")
-    if bool(action.get("uses_llm")) != bool(tool.get("uses_llm")):
-        _reject("action_policy_mismatch")
-    try:
-        action_cost = int(action.get("estimated_cost_cents"))
-    except (TypeError, ValueError):
-        _reject("action_cost_invalid")
-    if action_cost != 0:
-        _reject("action_cost_policy_mismatch")
-
-    entity_type = str(contract["entity_type"])
-    entity_id = str(contract["entity_id"])
-    if str(action.get("entity_type") or "") != entity_type or str(action.get("entity_id") or "") != entity_id:
-        _reject("action_entity_mismatch")
-    affected_tables = list(contract["affected_tables"])
-    if list(action.get("affected_tables_json") or []) != affected_tables:
-        _reject("action_affected_tables_mismatch")
-
+    _validate_action_pointer(action, contract, plan_id, step_index, tool_id)
+    _validate_action_policy(action, contract, tool)
     return contract
 
 

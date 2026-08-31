@@ -24,6 +24,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from app.api.dependencies.manager_guard import require_manager_staff, require_manager_tab
 from app.api.dependencies.provider_mutation import manager_provider_mutation
 from app.api.dependencies.perms import require_tab
+from app.api.routers import vkpi_goaffpro_summary_helpers as summary_helpers
 from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, table_exists
 from app.domains.access import scope
@@ -846,45 +847,10 @@ def goaffpro_summary(
     conn = get_conn()
     project_kol_ids: set[int] | None = None
     if project_id is not None:
-        rows = conn.execute(
-            "SELECT DISTINCT kol_pool_id FROM vkpi_project_kol_assignments WHERE project_id = ?",
-            (project_id,),
-        ).fetchall()
-        project_kol_ids = {int(dict(r)["kol_pool_id"]) for r in rows if dict(r).get("kol_pool_id") is not None}
+        project_kol_ids = summary_helpers.project_kol_ids(conn, project_id)
         if not project_kol_ids:
             return {"ok": True, "items": [], "count": 0, "totals": _empty_totals(), "note": "该项目暂无派单 KOL"}
-    where = "COALESCE(l.affiliate_id, '') <> '' AND COALESCE(l.ref_code, '') <> ''"
-    sql_params: list = []
-    if not scope.can_view_all(staff):
-        actor_id = scope.actor_staff_id(staff)
-        if actor_id <= 0:
-            raise HTTPException(status_code=403, detail="staff_identity_required")
-        where += """
-            AND (
-                EXISTS (
-                    SELECT 1 FROM vkpi_kol_pool_favorites own_favorite
-                    WHERE own_favorite.kol_pool_id = l.kol_pool_id
-                      AND own_favorite.staff_id = ?
-                )
-                OR EXISTS (
-                    SELECT 1 FROM vkpi_kol_pool_members shared_member
-                    WHERE shared_member.kol_pool_id = l.kol_pool_id
-                      AND shared_member.staff_id = ?
-                )
-            )
-        """
-        sql_params.extend([int(actor_id), int(actor_id)])
-    if project_kol_ids is not None:
-        where += " AND l.kol_pool_id IN (" + ",".join(["?"] * len(project_kol_ids)) + ")"
-        sql_params.extend(sorted(project_kol_ids))
-    kw = str(search or "").strip().lower()
-    if kw:
-        like = f"%{kw}%"
-        where += (
-            " AND (LOWER(COALESCE(kp.display_name,'')) LIKE ? OR LOWER(COALESCE(kp.handle,'')) LIKE ?"
-            " OR LOWER(COALESCE(l.ref_code,'')) LIKE ? OR LOWER(COALESCE(l.coupon,'')) LIKE ?)"
-        )
-        sql_params.extend([like, like, like, like])
+    where, sql_params = summary_helpers.build_where(staff, project_kol_ids, search)
     sql_params.append(limit)
     # 单次 JOIN:links + kol_pool(名/头像/平台)+ metrics(缓存指标),按 GMV 降序。零逐行查询。
     links = conn.execute(
@@ -905,76 +871,16 @@ def goaffpro_summary(
         tuple(sql_params),
     ).fetchall()
 
-    items: list[dict] = []
-    partial_count = 0
-    stale_count = 0
-    last_synced_at = ""
-    for r in links:
-        d = dict(r)
-        aid = str(d.get("affiliate_id") or "")
-        if not aid:
-            continue
-        handle = str(d.get("handle") or "").strip()
-        nm = str(d.get("display_name") or "").strip() or handle
-        synced_at = d.get("m_synced_at")
-        stale = synced_at in (None, "")
-        if stale:
-            stale_count += 1
-        else:
-            sa = str(synced_at or "")
-            if sa > last_synced_at:
-                last_synced_at = sa
-        is_partial = bool(d.get("m_partial"))
-        if is_partial:
-            partial_count += 1
-        gmv_cents = int(d.get("m_gmv_cents") or 0)
-        comm_cents = int(d.get("m_commission_cents") or 0)
-        items.append(
-            {
-                "kol_pool_id": d.get("kol_pool_id"),
-                "kol_name": nm or f"KOL#{d.get('kol_pool_id')}",
-                "kol_handle": handle,
-                "kol_avatar": str(d.get("avatar_url") or ""),
-                "kol_platform": str(d.get("platform") or ""),
-                "affiliate_id": aid,
-                "ref_code": d.get("ref_code"),
-                "coupon": d.get("coupon"),
-                "commission_rate": str(d.get("m_commission_rate") or ""),
-                "status": str(d.get("m_status") or ""),
-                "tracking_url": d.get("tracking_url"),
-                "source_label": "GOAFFPRO",
-                "source_type": "goaffpro",
-                "product_sku": "—",
-                "clicks": int(d.get("m_clicks") or 0),
-                "orders": int(d.get("m_orders") or 0),
-                "gmv_usd": round(gmv_cents / 100, 2),
-                "commission_usd": round(comm_cents / 100, 2),
-                "currency": str(d.get("m_currency") or ""),
-                "partial": is_partial,
-                "stale": stale,
-            }
-        )
-    totals = {
-        "kol_count": len(items),
-        "clicks": sum(int(it.get("clicks") or 0) for it in items),
-        "orders": sum(int(it.get("orders") or 0) for it in items),
-        "gmv_usd": round(sum(float(it.get("gmv_usd") or 0) for it in items), 2),
-        "commission_usd": round(sum(float(it.get("commission_usd") or 0) for it in items), 2),
-    }
-    note = None if items else "尚无已建链的 KOL;在 KOL 详情或项目里生成追踪链后出现在此。"
-    if stale_count:
-        note = f"{stale_count} 个 KOL 刚建链还没同步,点「刷新」拉取最新数据。"
-    elif partial_count:
-        note = f"⚠️ {partial_count} 个 KOL 上次同步查询失败,显示值可能偏低(非真零)。"
+    items, partial_count, stale_count, last_synced_at = summary_helpers.summary_items(links)
     return {
         "ok": True,
         "items": items,
         "count": len(items),
-        "totals": totals,
+        "totals": summary_helpers.summary_totals(items),
         "partial_count": partial_count,
         "stale_count": stale_count,
         "last_synced_at": last_synced_at or None,
-        "note": note,
+        "note": summary_helpers.summary_note(items, stale_count, partial_count),
     }
 
 

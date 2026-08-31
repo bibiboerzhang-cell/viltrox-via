@@ -15,6 +15,65 @@ def _loads(value: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def prepare_reply_verification(
+    binding_id: int,
+    *,
+    outcome: str,
+    correlation_id: str,
+    expected_candidate_sha256: str,
+    candidate_observed_at: str,
+    staff: dict[str, Any] | None,
+    review_contract: Any,
+    bridge: Any,
+    manager_check: Callable[[dict[str, Any]], bool],
+    table_available: Callable[[str], bool],
+    required_tables: tuple[str, ...],
+    request_contract: Callable[..., dict[str, Any]],
+) -> dict[str, Any]:
+    """Normalize and fail closed before the caller opens its write transaction."""
+    reviewer = review_contract.reviewer_context(staff)
+    if reviewer is None or not manager_check(staff or {}):
+        return {"error": {"ok": False, "reason": "outreach_reply_scope_unavailable"}}
+    actor_id, organization_id = reviewer
+    binding_value = bridge._positive_int(binding_id)
+    normalized_outcome = str(outcome or "").strip().lower()
+    correlation = review_contract.normalize_correlation(correlation_id)
+    expected_hash = str(expected_candidate_sha256 or "").strip().lower()
+    expected_observed = bridge._dt(candidate_observed_at)
+    if organization_id != bridge.ORGANIZATION_ID:
+        return {"error": {"ok": False, "reason": "outreach_reply_scope_unavailable"}}
+    if binding_value <= 0:
+        return {"error": {"ok": False, "reason": "outreach_reply_binding_required"}}
+    if normalized_outcome not in {"replied", "no_reply"}:
+        return {"error": {"ok": False, "reason": "outreach_reply_outcome_invalid"}}
+    if correlation is None:
+        return {"error": {"ok": False, "reason": "outreach_reply_correlation_required"}}
+    if (
+        expected_observed is None
+        or len(expected_hash) != 64
+        or any(char not in "0123456789abcdef" for char in expected_hash)
+    ):
+        return {"error": {"ok": False, "reason": "outreach_reply_candidate_required"}}
+    if not all(table_available(name) for name in required_tables):
+        return {"error": {"ok": False, "reason": "outreach_reply_schema_unavailable"}}
+    request = request_contract(
+        binding_id=binding_value,
+        outcome=normalized_outcome,
+        actor_staff_id=actor_id,
+        expected_candidate_sha256=expected_hash,
+        candidate_observed_at=expected_observed.isoformat(),
+    )
+    return {
+        "actor_id": actor_id,
+        "binding_id": binding_value,
+        "outcome": normalized_outcome,
+        "correlation": correlation,
+        "expected_candidate_hash": expected_hash,
+        "expected_observed": expected_observed,
+        "request_fingerprint": bridge._sha256(request),
+    }
+
+
 def _snapshot_matches(
     receipt: dict[str, Any],
     binding: dict[str, Any],
@@ -151,4 +210,4 @@ def verified_receipt_matches_binding(
     )
 
 
-__all__ = ["verified_receipt_matches_binding"]
+__all__ = ["prepare_reply_verification", "verified_receipt_matches_binding"]

@@ -308,6 +308,78 @@ def search_affiliate(in_field: str, keyword: str) -> list[dict[str, Any]]:
     return _extract_list(result.get("data"), "affiliates", "data", "results")
 
 
+def _find_exact_affiliate(field: str, keyword: str, match_field: str) -> dict[str, Any]:
+    expected = _norm_match(keyword)
+    for row in search_affiliate(field, keyword):
+        if _norm_match(row.get(match_field)) == expected:
+            return row
+    return {}
+
+
+def _unresolved_affiliate(reason: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "reason": reason,
+        "affiliate_id": "",
+        "ref_code": "",
+        "coupon": "",
+        "status": "",
+    }
+
+
+def _create_failure(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "reason": result.get("reason") or "create_failed",
+        "error": result.get("error"),
+        "status_code": result.get("status_code"),
+        "raw": result.get("raw"),
+        "affiliate_id": "",
+        "ref_code": "",
+        "coupon": "",
+        "status": "",
+    }
+
+
+def _create_or_recover_affiliate(
+    name: str,
+    email: str,
+) -> tuple[dict[str, Any], bool, dict[str, Any] | None]:
+    result = create_affiliate(name, email or None, extra={"status": "approved"})
+    if not result.get("ok"):
+        error = str(result.get("error") or "").lower()
+        duplicate = "already" in error or "registered" in error or "exists" in error
+        recovered = _find_exact_affiliate("email", email, "email") if email and duplicate else {}
+        return recovered, False, None if recovered else _create_failure(result)
+    hit = result.get("affiliate") or {}
+    if not str(hit.get("id") or "").strip() and email:
+        hit = _find_exact_affiliate("email", email, "email") or hit
+    return hit, True, None
+
+
+def _affiliate_reference(
+    hit: dict[str, Any],
+) -> tuple[dict[str, Any], str, str, Any, str]:
+    affiliate_id = str(hit.get("id") or "").strip()
+    ref_code = _read_ref_code(hit)
+    coupon = coupon_for(hit)
+    status = str(hit.get("status") or "")
+    if not affiliate_id or ref_code:
+        return hit, affiliate_id, ref_code, coupon, status
+    for attempt in range(3):
+        result = get_affiliate(affiliate_id)
+        if result.get("ok") and result.get("ref_code"):
+            ref_code = str(result.get("ref_code"))
+            coupon = coupon or result.get("coupon") or ""
+            status = status or result.get("status") or ""
+            if result.get("affiliate"):
+                hit = result["affiliate"]
+            break
+        if attempt < 2:
+            time.sleep(0.6 * (attempt + 1))
+    return hit, affiliate_id, ref_code, coupon, status
+
+
 def resolve_affiliate(name: str, email: str | None = None, create: bool = False) -> dict[str, Any]:
     """确保 KOL 有 GOAFFPRO affiliate:先按 email 搜 → 按 name 搜 → (create=True 才)建+审批,
     然后 ?id= 回查拿 ref_code。返回 {ok, affiliate_id, ref_code, coupon, status, affiliate, created, reason?}。
@@ -318,72 +390,19 @@ def resolve_affiliate(name: str, email: str | None = None, create: bool = False)
     """
     nm = str(name or "").strip()
     em = str(email or "").strip()
-    hit: dict[str, Any] = {}
-    if em:
-        for r in search_affiliate("email", em):
-            if _norm_match(r.get("email")) == _norm_match(em):
-                hit = r
-                break
+    hit = _find_exact_affiliate("email", em, "email") if em else {}
     if not hit and nm:
-        for r in search_affiliate("name", nm):
-            if _norm_match(r.get("name")) == _norm_match(nm):
-                hit = r
-                break
+        hit = _find_exact_affiliate("name", nm, "name")
     created_flag = False
     if not hit:
         if not create:
-            return {"ok": False, "reason": "not_found", "affiliate_id": "", "ref_code": "", "coupon": "", "status": ""}
+            return _unresolved_affiliate("not_found")
         if not nm:
-            return {"ok": False, "reason": "no_name", "affiliate_id": "", "ref_code": "", "coupon": "", "status": ""}
-        cr = create_affiliate(nm, em or None, extra={"status": "approved"})
-        if not cr.get("ok"):
-            # 「already registered」= 号其实已存在(并发/邮箱去重)→ 按 email 找回,而不是报错。
-            err = str(cr.get("error") or "").lower()
-            if em and ("already" in err or "registered" in err or "exists" in err):
-                for r in search_affiliate("email", em):
-                    if _norm_match(r.get("email")) == _norm_match(em):
-                        hit = r
-                        break
-            if not hit:
-                return {
-                    "ok": False,
-                    "reason": cr.get("reason") or "create_failed",
-                    "error": cr.get("error"),
-                    "status_code": cr.get("status_code"),
-                    "raw": cr.get("raw"),
-                    "affiliate_id": "",
-                    "ref_code": "",
-                    "coupon": "",
-                    "status": "",
-                }
-        else:
-            created_flag = True
-            hit = cr.get("affiliate") or {}
-            # 建完响应可能不含 id/ref_code → 按 email 回查锁定真号。
-            if not str(hit.get("id") or "").strip() and em:
-                for r in search_affiliate("email", em):
-                    if _norm_match(r.get("email")) == _norm_match(em):
-                        hit = r
-                        break
-    aid = str(hit.get("id") or "").strip()
-    ref_code = _read_ref_code(hit)
-    coupon = coupon_for(hit)
-    status = str(hit.get("status") or "")
-    # ref_code 还空但有 id → ?id= 回查(建完当下响应常不含 ref_code)。
-    # 退避重试(修并发竞态):GOAFFPRO 异步分配 ref_code 有窗口,立即回查可能仍空 →
-    # 最多 3 次、0.6s/1.2s 退避,等它分配好,避免「建了但拿不到码 → 报失败 → 重复建」。
-    if aid and not ref_code:
-        for _attempt in range(3):
-            got = get_affiliate(aid)
-            if got.get("ok") and got.get("ref_code"):
-                ref_code = str(got.get("ref_code"))
-                coupon = coupon or got.get("coupon") or ""
-                status = status or got.get("status") or ""
-                if got.get("affiliate"):
-                    hit = got["affiliate"]
-                break
-            if _attempt < 2:
-                time.sleep(0.6 * (_attempt + 1))
+            return _unresolved_affiliate("no_name")
+        hit, created_flag, failure = _create_or_recover_affiliate(nm, em)
+        if failure is not None:
+            return failure
+    hit, aid, ref_code, coupon, status = _affiliate_reference(hit)
     ok = bool(aid and ref_code)
     out = {
         "ok": ok,

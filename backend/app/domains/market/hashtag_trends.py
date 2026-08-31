@@ -104,130 +104,165 @@ def _add_evidence(
         current["sample_refs"].append(ref)
 
 
-def build_hashtag_trends_v0(limit: int = 12, days: int = 14, platform: str = "") -> dict[str, Any]:
-    """Aggregate unique market terms across source-backed recent evidence."""
-    conn = get_conn()
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
-    agg: dict[str, dict[str, Any]] = {}
-    source_rows = {"industry_posts": 0, "market_observations": 0, "market_mentions": 0}
-
+def _industry_evidence_rows(
+    conn: Any,
+    agg: dict[str, dict[str, Any]],
+    *,
+    cutoff: str,
+    platform: str,
+) -> int:
+    if not table_exists("vkpi_industry_posts"):
+        return 0
     where = ["COALESCE(published_at, created_at) >= ?"]
     params: list[Any] = [cutoff]
-    plat = (platform or "").strip().lower()
-    if plat:
+    if platform:
         where.append("LOWER(COALESCE(platform,'')) = ?")
-        params.append(plat)
-    if table_exists("vkpi_industry_posts"):
-        rows = conn.execute(
-            f"""
-            SELECT id, LOWER(COALESCE(platform,'')) AS platform, hashtags_json,
-                   COALESCE(views,0) AS views, COALESCE(likes,0) AS likes,
-                   COALESCE(comments,0) AS comments, post_url,
-                   COALESCE(published_at, created_at) AS observed_at
-            FROM vkpi_industry_posts
-            WHERE {' AND '.join(where)}
-            """,
-            tuple(params),
-        ).fetchall()
-        source_rows["industry_posts"] = len(rows)
-        for row in rows:
-            data = _row_dict(row)
-            plat_v = str(data.get("platform") or "")
-            eng = int(data.get("views") or 0) + int(data.get("likes") or 0) + int(data.get("comments") or 0)
-            for tag in set(_parse_tags(data.get("hashtags_json"))):
-                _add_evidence(
-                    agg,
-                    term=tag,
-                    source="industry_posts",
-                    platform=plat_v,
-                    kind="hashtag",
-                    engagement=eng,
-                    observed_at=str(data.get("observed_at") or ""),
-                    ref={"table": "vkpi_industry_posts", "id": data.get("id"), "url": str(data.get("post_url") or "")},
-                )
+        params.append(platform)
+    rows = conn.execute(
+        f"""
+        SELECT id, LOWER(COALESCE(platform,'')) AS platform, hashtags_json,
+               COALESCE(views,0) AS views, COALESCE(likes,0) AS likes,
+               COALESCE(comments,0) AS comments, post_url,
+               COALESCE(published_at, created_at) AS observed_at
+        FROM vkpi_industry_posts
+        WHERE {' AND '.join(where)}
+        """,
+        tuple(params),
+    ).fetchall()
+    for row in rows:
+        data = _row_dict(row)
+        engagement = (
+            int(data.get("views") or 0)
+            + int(data.get("likes") or 0)
+            + int(data.get("comments") or 0)
+        )
+        for tag in set(_parse_tags(data.get("hashtags_json"))):
+            _add_evidence(
+                agg,
+                term=tag,
+                source="industry_posts",
+                platform=str(data.get("platform") or ""),
+                kind="hashtag",
+                engagement=engagement,
+                observed_at=str(data.get("observed_at") or ""),
+                ref={
+                    "table": "vkpi_industry_posts",
+                    "id": data.get("id"),
+                    "url": str(data.get("post_url") or ""),
+                },
+            )
+    return len(rows)
 
-    # ``platform`` filters raw social posts only. Market observations are a
-    # cross-platform learned evidence layer, so a requested platform must not
-    # silently mix them into a platform-specific result.
-    if not plat and table_exists("vkpi_market_observations"):
-        observation_rows = conn.execute(
-            """
-            SELECT id, topic, kind, source, evidence_refs, suggested_action,
-                   COALESCE(generated_at, updated_at) AS observed_at
-            FROM vkpi_market_observations
-            WHERE COALESCE(generated_at, updated_at) >= ?
-            """,
-            (cutoff,),
-        ).fetchall()
-        source_rows["market_observations"] = len(observation_rows)
-        for row in observation_rows:
-            data = _row_dict(row)
-            terms = keyword_hits(f"{data.get('topic') or ''} {data.get('suggested_action') or ''}")
-            for term in set(terms):
-                _add_evidence(
-                    agg,
-                    term=term,
-                    source="market_observations",
-                    platform="cross_platform",
-                    kind=str(data.get("kind") or "observation"),
-                    observed_at=str(data.get("observed_at") or ""),
-                    ref={
-                        "table": "vkpi_market_observations",
-                        "id": data.get("id"),
-                        "url": _evidence_url(data.get("evidence_refs")),
-                    },
-                )
 
-    # 市场监听帖(Reddit/X 采集,listening_executors 落表):标题+摘要过统一词表。
-    # mentions 行带 platform 列,请求平台过滤时按同口径参与(与行业帖一致)。
-    if table_exists("vkpi_market_mentions") and table_exists("vkpi_market_sources"):
-        mention_where = ["m.created_at >= ?"]
-        mention_params: list[Any] = [cutoff]
-        if plat:
-            mention_where.append("LOWER(COALESCE(m.platform,'')) = ?")
-            mention_params.append(plat)
-        mention_rows = conn.execute(
-            f"""
-            SELECT m.id, LOWER(COALESCE(m.platform,'')) AS platform, m.mention_text,
-                   m.metadata_json, m.created_at,
-                   COALESCE(s.source_url, '') AS source_url
-            FROM vkpi_market_mentions m
-            LEFT JOIN vkpi_market_sources s ON s.id = m.source_id
-            WHERE {' AND '.join(mention_where)}
-            """,
-            tuple(mention_params),
-        ).fetchall()
-        source_rows["market_mentions"] = len(mention_rows)
-        for row in mention_rows:
-            data = _row_dict(row)
-            meta: dict[str, Any] = {}
-            try:
-                raw_meta = data.get("metadata_json")
-                parsed = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
-                meta = parsed if isinstance(parsed, dict) else {}
-            except (TypeError, ValueError):
-                meta = {}
-            engagement = 0
-            for key in ("score", "num_comments", "likes", "retweets", "replies", "quotes"):
-                try:
-                    engagement += max(0, int(meta.get(key) or 0))
-                except (TypeError, ValueError):
-                    continue
-            observed = str(meta.get("published_at") or data.get("created_at") or "")
-            url = str(meta.get("url") or meta.get("source_url") or data.get("source_url") or "")
-            for term in set(keyword_hits(str(data.get("mention_text") or ""))):
-                _add_evidence(
-                    agg,
-                    term=term,
-                    source="market_mentions",
-                    platform=str(data.get("platform") or ""),
-                    kind="keyword",
-                    engagement=engagement,
-                    observed_at=observed,
-                    ref={"table": "vkpi_market_mentions", "id": data.get("id"), "url": url},
-                )
+def _observation_evidence_rows(
+    conn: Any,
+    agg: dict[str, dict[str, Any]],
+    *,
+    cutoff: str,
+    platform: str,
+) -> int:
+    # A requested platform must not silently mix in the cross-platform layer.
+    if platform or not table_exists("vkpi_market_observations"):
+        return 0
+    rows = conn.execute(
+        """
+        SELECT id, topic, kind, source, evidence_refs, suggested_action,
+               COALESCE(generated_at, updated_at) AS observed_at
+        FROM vkpi_market_observations
+        WHERE COALESCE(generated_at, updated_at) >= ?
+        """,
+        (cutoff,),
+    ).fetchall()
+    for row in rows:
+        data = _row_dict(row)
+        terms = keyword_hits(f"{data.get('topic') or ''} {data.get('suggested_action') or ''}")
+        for term in set(terms):
+            _add_evidence(
+                agg,
+                term=term,
+                source="market_observations",
+                platform="cross_platform",
+                kind=str(data.get("kind") or "observation"),
+                observed_at=str(data.get("observed_at") or ""),
+                ref={
+                    "table": "vkpi_market_observations",
+                    "id": data.get("id"),
+                    "url": _evidence_url(data.get("evidence_refs")),
+                },
+            )
+    return len(rows)
 
-    trends = []
+
+def _mention_metadata(data: dict[str, Any]) -> dict[str, Any]:
+    try:
+        raw_meta = data.get("metadata_json")
+        parsed = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
+        return parsed if isinstance(parsed, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _mention_engagement(metadata: dict[str, Any]) -> int:
+    engagement = 0
+    for key in ("score", "num_comments", "likes", "retweets", "replies", "quotes"):
+        try:
+            engagement += max(0, int(metadata.get(key) or 0))
+        except (TypeError, ValueError):
+            continue
+    return engagement
+
+
+def _mention_evidence_rows(
+    conn: Any,
+    agg: dict[str, dict[str, Any]],
+    *,
+    cutoff: str,
+    platform: str,
+) -> int:
+    if not table_exists("vkpi_market_mentions") or not table_exists("vkpi_market_sources"):
+        return 0
+    where = ["m.created_at >= ?"]
+    params: list[Any] = [cutoff]
+    if platform:
+        where.append("LOWER(COALESCE(m.platform,'')) = ?")
+        params.append(platform)
+    rows = conn.execute(
+        f"""
+        SELECT m.id, LOWER(COALESCE(m.platform,'')) AS platform, m.mention_text,
+               m.metadata_json, m.created_at,
+               COALESCE(s.source_url, '') AS source_url
+        FROM vkpi_market_mentions m
+        LEFT JOIN vkpi_market_sources s ON s.id = m.source_id
+        WHERE {' AND '.join(where)}
+        """,
+        tuple(params),
+    ).fetchall()
+    for row in rows:
+        data = _row_dict(row)
+        metadata = _mention_metadata(data)
+        observed = str(metadata.get("published_at") or data.get("created_at") or "")
+        url = str(
+            metadata.get("url")
+            or metadata.get("source_url")
+            or data.get("source_url")
+            or ""
+        )
+        for term in set(keyword_hits(str(data.get("mention_text") or ""))):
+            _add_evidence(
+                agg,
+                term=term,
+                source="market_mentions",
+                platform=str(data.get("platform") or ""),
+                kind="keyword",
+                engagement=_mention_engagement(metadata),
+                observed_at=observed,
+                ref={"table": "vkpi_market_mentions", "id": data.get("id"), "url": url},
+            )
+    return len(rows)
+
+
+def _trend_rows(agg: dict[str, dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    trends: list[dict[str, Any]] = []
     for term, value in agg.items():
         sources = sorted(value["sources"])
         platforms = sorted(value["platforms"])
@@ -257,8 +292,29 @@ def build_hashtag_trends_v0(limit: int = 12, days: int = 14, platform: str = "")
         reverse=True,
     )
     trends = trends[: max(1, min(50, int(limit)))]
-    for idx, t in enumerate(trends):
-        t["rank"] = idx + 1
+    for index, trend in enumerate(trends):
+        trend["rank"] = index + 1
+    return trends
+
+
+def build_hashtag_trends_v0(limit: int = 12, days: int = 14, platform: str = "") -> dict[str, Any]:
+    """Aggregate unique market terms across source-backed recent evidence."""
+    conn = get_conn()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).strftime("%Y-%m-%d")
+    agg: dict[str, dict[str, Any]] = {}
+    plat = (platform or "").strip().lower()
+    source_rows = {
+        "industry_posts": _industry_evidence_rows(
+            conn, agg, cutoff=cutoff, platform=plat,
+        ),
+        "market_observations": _observation_evidence_rows(
+            conn, agg, cutoff=cutoff, platform=plat,
+        ),
+        "market_mentions": _mention_evidence_rows(
+            conn, agg, cutoff=cutoff, platform=plat,
+        ),
+    }
+    trends = _trend_rows(agg, limit)
     active_sources = [source for source, count in source_rows.items() if count > 0]
     source_labels = {
         "industry_posts": "行业帖",

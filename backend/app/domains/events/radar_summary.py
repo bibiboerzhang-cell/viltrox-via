@@ -15,6 +15,89 @@ from app.shared.us_jurisdiction_coverage import (
 )
 
 
+def _source_rollup(
+    source_rows: list[Any], row: Callable[[Any], dict[str, Any]]
+) -> tuple[Counter[str], Counter[str], set[str]]:
+    source_status: Counter[str] = Counter()
+    source_kind: Counter[str] = Counter()
+    source_countries: set[str] = set()
+    for raw in source_rows:
+        item = row(raw)
+        source_status[str(item.get("status") or "unknown")] += int(item.get("n") or 0)
+        source_kind[str(item.get("source_kind") or "unknown")] += int(item.get("n") or 0)
+        if item.get("country_code"):
+            source_countries.add(str(item["country_code"]))
+    return source_status, source_kind, source_countries
+
+
+def _opportunity_rollup(
+    opportunity_rows: list[Any], row: Callable[[Any], dict[str, Any]]
+) -> tuple[Counter[str], Counter[str], Counter[str], Counter[str], dict[str, Any]]:
+    lanes: Counter[str] = Counter()
+    decisions: Counter[str] = Counter()
+    verification: Counter[str] = Counter()
+    evidence: Counter[str] = Counter()
+    us_opportunity_states: list[str] = []
+    us_opportunity_counts: Counter[str] = Counter()
+    us_verified_status_counts: Counter[str] = Counter()
+    for raw in opportunity_rows:
+        item = row(raw)
+        count = int(item.get("n") or 0)
+        lanes[str(item.get("lane") or "unknown")] += count
+        decisions[str(item.get("decision_status") or "unknown")] += count
+        verification[str(item.get("verification_status") or "unknown")] += count
+        evidence[str(item.get("evidence_grade") or "unknown")] += count
+        if str(item.get("country_code") or "").strip().upper() == "US":
+            region = str(item.get("region") or "").strip().upper()
+            us_opportunity_states.append(region)
+            if region in US_STATE_AND_DC_CODES:
+                us_opportunity_counts[region] += count
+                if str(item.get("verification_status") or "").strip().casefold() in {
+                    "verified",
+                    "current",
+                }:
+                    us_verified_status_counts[region] += count
+    jurisdiction = {
+        **registered_us_jurisdiction_matrix(us_opportunity_states),
+        # Organization-scoped opportunity rows are not a denominator for the
+        # US event market and do not claim venue-coordinate precision.
+        "opportunity_counts_by_state_dc": dict(sorted(us_opportunity_counts.items())),
+        "verification_marked_counts_by_state_dc": dict(
+            sorted(us_verified_status_counts.items())
+        ),
+        "opportunity_entity_count": sum(us_opportunity_counts.values()),
+        "map_precision": "state_dc_aggregate_not_venue_coordinates",
+    }
+    return lanes, decisions, verification, evidence, jurisdiction
+
+
+def _passport_rollup(
+    passport_rows: list[Any],
+    *,
+    row: Callable[[Any], dict[str, Any]],
+    passport_is_current: Callable[..., bool],
+    as_of: datetime,
+) -> dict[str, int]:
+    counts = {
+        "event_sources": 0,
+        "event_sources_verified_fresh": 0,
+        "event_opportunities": 0,
+        "event_opportunities_verified_fresh": 0,
+    }
+    for raw in passport_rows:
+        item = row(raw)
+        entity_type = str(item.get("entity_type") or "")
+        if entity_type == "event_source":
+            counts["event_sources"] += 1
+            if passport_is_current(item, as_of=as_of):
+                counts["event_sources_verified_fresh"] += 1
+        elif entity_type == "event_opportunity":
+            counts["event_opportunities"] += 1
+            if passport_is_current(item, as_of=as_of):
+                counts["event_opportunities_verified_fresh"] += 1
+    return counts
+
+
 def build_summary(
     conn: Any,
     *,
@@ -43,50 +126,10 @@ def build_summary(
     ).fetchall()
     source_total = sum(int(row(item).get("n") or 0) for item in source_rows)
     opportunity_total = sum(int(row(item).get("n") or 0) for item in opportunity_rows)
-    source_status = Counter()
-    source_kind = Counter()
-    source_countries: set[str] = set()
-    for raw in source_rows:
-        item = row(raw)
-        source_status[str(item.get("status") or "unknown")] += int(item.get("n") or 0)
-        source_kind[str(item.get("source_kind") or "unknown")] += int(item.get("n") or 0)
-        if item.get("country_code"):
-            source_countries.add(str(item["country_code"]))
-    lanes = Counter()
-    decisions = Counter()
-    verification = Counter()
-    evidence = Counter()
-    us_opportunity_states: list[str] = []
-    us_opportunity_counts: Counter[str] = Counter()
-    us_verified_status_counts: Counter[str] = Counter()
-    for raw in opportunity_rows:
-        item = row(raw)
-        count = int(item.get("n") or 0)
-        lanes[str(item.get("lane") or "unknown")] += count
-        decisions[str(item.get("decision_status") or "unknown")] += count
-        verification[str(item.get("verification_status") or "unknown")] += count
-        evidence[str(item.get("evidence_grade") or "unknown")] += count
-        if str(item.get("country_code") or "").strip().upper() == "US":
-            region = str(item.get("region") or "").strip().upper()
-            us_opportunity_states.append(region)
-            if region in US_STATE_AND_DC_CODES:
-                us_opportunity_counts[region] += count
-                if str(item.get("verification_status") or "").strip().casefold() in {
-                    "verified",
-                    "current",
-                }:
-                    us_verified_status_counts[region] += count
-    us_jurisdiction_matrix = {
-        **registered_us_jurisdiction_matrix(us_opportunity_states),
-        # These are organization-scoped Event Radar opportunity rows, not a
-        # denominator for the US event market and not venue coordinates.
-        "opportunity_counts_by_state_dc": dict(sorted(us_opportunity_counts.items())),
-        "verification_marked_counts_by_state_dc": dict(
-            sorted(us_verified_status_counts.items())
-        ),
-        "opportunity_entity_count": sum(us_opportunity_counts.values()),
-        "map_precision": "state_dc_aggregate_not_venue_coordinates",
-    }
+    source_status, source_kind, source_countries = _source_rollup(source_rows, row)
+    lanes, decisions, verification, evidence, us_jurisdiction_matrix = _opportunity_rollup(
+        opportunity_rows, row
+    )
     freshness_rows = conn.execute(
         """
         SELECT o.last_verified_at,o.source_checked_at
@@ -132,17 +175,12 @@ def build_summary(
             """,
             (organization_id, organization_id),
         ).fetchall()
-        for raw in passport_rows:
-            item = row(raw)
-            entity_type = str(item.get("entity_type") or "")
-            if entity_type == "event_source":
-                passport_counts["event_sources"] += 1
-                if passport_is_current(item, as_of=as_of):
-                    passport_counts["event_sources_verified_fresh"] += 1
-            elif entity_type == "event_opportunity":
-                passport_counts["event_opportunities"] += 1
-                if passport_is_current(item, as_of=as_of):
-                    passport_counts["event_opportunities_verified_fresh"] += 1
+        passport_counts = _passport_rollup(
+            passport_rows,
+            row=row,
+            passport_is_current=passport_is_current,
+            as_of=as_of,
+        )
     changed = int(row(conn.execute(
         "SELECT COUNT(*) AS n FROM vkpi_event_opportunity_changes WHERE organization_id=?", (organization_id,)
     ).fetchone()).get("n") or 0)

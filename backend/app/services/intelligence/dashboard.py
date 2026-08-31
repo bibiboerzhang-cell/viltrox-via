@@ -109,6 +109,49 @@ def focal_category(focal: int) -> str:
     return "Tele (135mm+)"
 
 
+def _price_distribution(products: list[dict]) -> list[dict]:
+    buckets: dict[str, list] = {}
+    for product in products:
+        buckets.setdefault(price_tier(product["price"]), []).append(product)
+    return [
+        {
+            "tier": tier,
+            "count": len(items),
+            "avg_rating": round(
+                sum(product["rating"] for product in items if product["rating"] > 0)
+                / max(1, sum(1 for product in items if product["rating"] > 0)),
+                2,
+            ),
+            "products": [product["title"][:50] for product in items[:3]],
+        }
+        for tier, items in sorted(buckets.items())
+    ]
+
+
+def _series_distribution(products: list[dict]) -> list[dict]:
+    buckets: dict[str, list] = {}
+    for product in products:
+        buckets.setdefault(detect_series(product["title"]), []).append(product)
+    return [
+        {
+            "series": series,
+            "count": len(items),
+            "min_price": (
+                min(product["price"] for product in items if product["price"] > 0)
+                if any(product["price"] > 0 for product in items)
+                else 0
+            ),
+            "max_price": max(product["price"] for product in items),
+            "avg_rating": round(
+                sum(product["rating"] for product in items if product["rating"] > 0)
+                / max(1, sum(1 for product in items if product["rating"] > 0)),
+                2,
+            ),
+        }
+        for series, items in sorted(buckets.items(), key=lambda item: -len(item[1]))
+    ]
+
+
 # ──────────────────────────────────────────────
 # 主 dashboard 聚合
 # ──────────────────────────────────────────────
@@ -165,37 +208,10 @@ def build_bh_dashboard() -> dict:
     top_rated.sort(key=lambda p: (p["rating"], p["review_count"]), reverse=True)
     
     # ── 价格分布 ──
-    price_buckets: dict[str, list] = {}
-    for p in products:
-        tier = price_tier(p["price"])
-        price_buckets.setdefault(tier, []).append(p)
-    
-    price_dist = [
-        {
-            "tier": tier,
-            "count": len(items),
-            "avg_rating": round(sum(p["rating"] for p in items if p["rating"] > 0) / max(1, sum(1 for p in items if p["rating"] > 0)), 2),
-            "products": [p["title"][:50] for p in items[:3]],
-        }
-        for tier, items in sorted(price_buckets.items())
-    ]
+    price_dist = _price_distribution(products)
     
     # ── 系列分布 ──
-    series_buckets: dict[str, list] = {}
-    for p in products:
-        s = detect_series(p["title"])
-        series_buckets.setdefault(s, []).append(p)
-    
-    series_dist = [
-        {
-            "series": s,
-            "count": len(items),
-            "min_price": min(p["price"] for p in items if p["price"] > 0) if any(p["price"] > 0 for p in items) else 0,
-            "max_price": max(p["price"] for p in items),
-            "avg_rating": round(sum(p["rating"] for p in items if p["rating"] > 0) / max(1, sum(1 for p in items if p["rating"] > 0)), 2),
-        }
-        for s, items in sorted(series_buckets.items(), key=lambda x: -len(x[1]))
-    ]
+    series_dist = _series_distribution(products)
     
     # ── 卡口分布 ──
     mount_buckets: dict[str, int] = {}

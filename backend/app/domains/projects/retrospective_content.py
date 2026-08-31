@@ -438,6 +438,26 @@ def summarize_content_metrics(items: list[dict[str, Any]]) -> dict[str, Any]:
     return metrics
 
 
+def _retrospective_rollup(
+    items: list[dict[str, Any]],
+    metrics: dict[str, Any],
+    identity_conflict_pairs: set[tuple[int, int]],
+) -> tuple[dict[str, int], int, int, bool]:
+    proof_counts = {
+        status: sum(1 for item in items if item.get("brand_proof") == status)
+        for status in ("confirmed", "negative", "unknown")
+    }
+    cross_source = sum(1 for item in items if len(item.get("source_kinds") or []) > 1)
+    conflicts = sum(1 for item in items if item.get("metric_conflicts"))
+    partial = bool(items) and (
+        any(metrics[field]["missing"] > 0 for field in METRIC_FIELDS)
+        or proof_counts["unknown"] > 0
+        or conflicts > 0
+        or bool(identity_conflict_pairs)
+    )
+    return proof_counts, cross_source, conflicts, partial
+
+
 def reconcile_retrospective_content(
     final_v1_items: list[dict[str, Any]],
     matched_posts: list[dict[str, Any]],
@@ -519,17 +539,8 @@ def reconcile_retrospective_content(
         )
     )
     metrics = summarize_content_metrics(items)
-    proof_counts = {
-        status: sum(1 for item in items if item.get("brand_proof") == status)
-        for status in ("confirmed", "negative", "unknown")
-    }
-    cross_source = sum(1 for item in items if len(item.get("source_kinds") or []) > 1)
-    conflicts = sum(1 for item in items if item.get("metric_conflicts"))
-    partial = bool(items) and (
-        any(metrics[field]["missing"] > 0 for field in METRIC_FIELDS)
-        or proof_counts["unknown"] > 0
-        or conflicts > 0
-        or bool(identity_conflict_pairs)
+    proof_counts, cross_source, conflicts, partial = _retrospective_rollup(
+        items, metrics, identity_conflict_pairs
     )
     return {
         "items": items,

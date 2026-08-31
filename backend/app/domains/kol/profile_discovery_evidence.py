@@ -428,6 +428,143 @@ def attribute_qualified(
 
 
 # ── 总装 ───────────────────────────────────────────────────────────────────────
+def _new_term_evidence_row(
+    key: tuple[str, str], anchor_terms: Any, *, per_item: bool, booked: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    return {
+        "term": key[1],
+        "platform": key[0],
+        "anchored": (
+            _code(booked.get("anchor_source")) not in ("", "unanchored_legacy_chunk")
+            if booked else term_is_anchored(key[1], anchor_terms)
+        ),
+        **(
+            {"anchor": booked.get("anchor"), "anchor_source": booked.get("anchor_source")}
+            if booked else {}
+        ),
+        "rounds": [],
+        "search_calls": 0,
+        "youtube_search_calls": 0,
+        "quota_units": 0,
+        "quota_units_deprecated": True,
+        "apify_actor_runs": 0,
+        "candidates_returned": 0,
+        "attribution": "per_item" if per_item else "shared_round",
+    }
+
+
+def _collect_round_terms(
+    round_rows: list[dict[str, Any]], anchor_terms: Any
+) -> dict[tuple[str, str], dict[str, Any]]:
+    terms: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in round_rows:
+        round_no = _int(entry.get("round_no")) or 1
+        for leg in _rows(entry.get("legs")):
+            platform = _code(leg.get("platform"))
+            per_item = _code(leg.get("attribution")) == "per_item"
+            by_term = _dict(leg.get("candidates_by_term"))
+            ledger = {row["term"]: row for row in normalize_term_ledger(leg.get("term_ledger"))}
+            term_order = list(leg.get("terms") or [])
+            term_order.extend(term for term in ledger if term not in term_order)
+            for term in term_order[:_MAX_TERMS]:
+                key = (platform, _term(term))
+                booked = ledger.get(key[1])
+                row = terms.setdefault(
+                    key,
+                    _new_term_evidence_row(key, anchor_terms, per_item=per_item, booked=booked),
+                )
+                row["rounds"].append(round_no)
+                row["search_calls"] += 1
+                row["youtube_search_calls"] += (
+                    _int(booked.get("youtube_search_calls"))
+                    if booked else (1 if platform == "youtube" else 0)
+                )
+                row["quota_units"] += (
+                    _int(booked.get("quota_units")) if booked
+                    else (YOUTUBE_SEARCH_UNITS if _int(leg.get("quota_units_actual")) else 0)
+                )
+                row["candidates_returned"] += _int(by_term.get(key[1]))
+                if booked:
+                    row["exhausted"] = bool(booked.get("exhausted"))
+                    if booked.get("skipped"):
+                        row["skipped"] = booked["skipped"]
+                if not per_item:
+                    row["attribution"] = "shared_round"
+    return terms
+
+
+def _merge_qualified_terms(
+    terms: dict[tuple[str, str], dict[str, Any]],
+    qualified_map: dict[tuple[str, str], int],
+    anchor_terms: Any,
+) -> None:
+    for key, count in qualified_map.items():
+        row = terms.get(key)
+        if row is None:
+            row = terms.setdefault(
+                key, _new_term_evidence_row(key, anchor_terms, per_item=True)
+            )
+        row["qualified_new"] = _int(row.get("qualified_new")) + count
+
+
+def _finalize_term_rows(terms: dict[tuple[str, str], dict[str, Any]]) -> list[dict[str, Any]]:
+    term_rows: list[dict[str, Any]] = []
+    for row in terms.values():
+        row["rounds"] = sorted(set(row["rounds"]))
+        row.setdefault("qualified_new", 0)
+        if row["attribution"] == "shared_round":
+            row["candidates_returned"] = None
+        term_rows.append(row)
+    term_rows.sort(
+        key=lambda row: (-_int(row.get("qualified_new")), -_int(row.get("quota_units")), row["term"])
+    )
+    return term_rows[:_MAX_TERMS]
+
+
+def _optional_int(value: Any) -> int | None:
+    return _int(value) if value is not None else None
+
+
+def _quota_evidence(
+    round_rows: list[dict[str, Any]],
+    term_rows: list[dict[str, Any]],
+    *,
+    quota_forecast_units: Any,
+    youtube_search_calls_forecast: Any,
+    youtube_combined_quota_units_forecast: Any,
+    youtube_api_calls_forecast: Any,
+) -> dict[str, Any]:
+    search_actual = sum(_int(entry.get("youtube_search_calls_actual")) for entry in round_rows)
+    combined_actual = sum(
+        _int(entry.get("youtube_combined_quota_units_actual")) for entry in round_rows
+    )
+    api_actual = sum(_int(entry.get("youtube_api_calls_actual")) for entry in round_rows)
+    combined_input = youtube_combined_quota_units_forecast
+    if combined_input is None:
+        combined_input = quota_forecast_units
+    search_forecast = _optional_int(youtube_search_calls_forecast)
+    combined_forecast = _optional_int(combined_input)
+    api_forecast = _optional_int(youtube_api_calls_forecast)
+    return {
+        "youtube_search_calls_actual": search_actual,
+        "youtube_search_calls_forecast": search_forecast,
+        "youtube_search_calls_forecast_delta": search_forecast - search_actual if search_forecast is not None else None,
+        "youtube_combined_quota_units_actual": combined_actual,
+        "youtube_combined_quota_units_forecast": combined_forecast,
+        "youtube_combined_quota_forecast_delta_units": combined_forecast - combined_actual if combined_forecast is not None else None,
+        "youtube_api_calls_actual": api_actual,
+        "youtube_api_calls_forecast": api_forecast,
+        "youtube_api_calls_forecast_delta": api_forecast - api_actual if api_forecast is not None else None,
+        "youtube_units_actual": combined_actual,
+        "youtube_units_forecast": combined_forecast,
+        "forecast_delta_units": combined_forecast - combined_actual if combined_forecast is not None else None,
+        "youtube_units_deprecated": True,
+        "apify_actor_runs_actual": sum(_int(entry.get("apify_actor_runs")) for entry in round_rows),
+        "unanchored_units": sum(_int(row.get("quota_units")) for row in term_rows if not row["anchored"]),
+        "unanchored_search_calls": sum(_int(row.get("youtube_search_calls")) for row in term_rows if not row["anchored"]),
+    }
+
+
 def build_term_evidence(
     *,
     lane: str,
@@ -450,104 +587,9 @@ def build_term_evidence(
     )
     qualified_map = attribution["qualified"]
 
-    terms: dict[tuple[str, str], dict[str, Any]] = {}
-    for entry in round_rows:
-        round_no = _int(entry.get("round_no")) or 1
-        for leg in _rows(entry.get("legs")):
-            platform = _code(leg.get("platform"))
-            per_item = _code(leg.get("attribution")) == "per_item"
-            by_term = _dict(leg.get("candidates_by_term"))
-            ledger = {row["term"]: row for row in normalize_term_ledger(leg.get("term_ledger"))}
-            term_order = list(leg.get("terms") or [])
-            term_order.extend(term for term in ledger if term not in term_order)
-            for term in term_order[:_MAX_TERMS]:
-                key = (platform, _term(term))
-                booked = ledger.get(key[1])
-                row = terms.setdefault(key, {
-                    "term": key[1],
-                    "platform": platform,
-                    # 有逐词台账就用它的锚判定(发词那一刻的真相);没有才回落词形比对。
-                    "anchored": (
-                        _code(booked.get("anchor_source")) not in ("", "unanchored_legacy_chunk")
-                        if booked else term_is_anchored(key[1], anchor_terms)
-                    ),
-                    **({"anchor": booked.get("anchor"), "anchor_source": booked.get("anchor_source")}
-                       if booked else {}),
-                    "rounds": [],
-                    "search_calls": 0,
-                    "youtube_search_calls": 0,
-                    "quota_units": 0,
-                    "quota_units_deprecated": True,
-                    "apify_actor_runs": 0,
-                    "candidates_returned": 0,
-                    "attribution": "per_item" if per_item else "shared_round",
-                })
-                row["rounds"].append(round_no)
-                row["search_calls"] += 1
-                row["youtube_search_calls"] += (
-                    _int(booked.get("youtube_search_calls"))
-                    if booked else (1 if platform == "youtube" else 0)
-                )
-                # 逐词台账的配额优先(它知道这条词到底发没发出去);否则每条已发变体记 100,
-                # Apify 腿不吃 YouTube 配额 → 0。
-                row["quota_units"] += (
-                    _int(booked.get("quota_units")) if booked
-                    else (YOUTUBE_SEARCH_UNITS if _int(leg.get("quota_units_actual")) else 0)
-                )
-                row["candidates_returned"] += _int(by_term.get(key[1]))
-                if booked:
-                    row["exhausted"] = bool(booked.get("exhausted"))
-                    if booked.get("skipped"):
-                        row["skipped"] = booked["skipped"]
-                if not per_item:
-                    row["attribution"] = "shared_round"
-    for key, count in qualified_map.items():
-        row = terms.get(key)
-        if row is None:
-            row = terms.setdefault(key, {
-                "term": key[1],
-                "platform": key[0],
-                "anchored": term_is_anchored(key[1], anchor_terms),
-                "rounds": [],
-                "search_calls": 0,
-                "youtube_search_calls": 0,
-                "quota_units": 0,
-                "quota_units_deprecated": True,
-                "apify_actor_runs": 0,
-                "candidates_returned": 0,
-                "attribution": "per_item",
-            })
-        row["qualified_new"] = _int(row.get("qualified_new")) + count
-    term_rows = []
-    for row in terms.values():
-        row["rounds"] = sorted(set(row["rounds"]))
-        row.setdefault("qualified_new", 0)
-        # shared_round 的腿无法逐词归因产出:老实写 None,不拿轮次总数冒充某条词的战绩。
-        if row["attribution"] == "shared_round":
-            row["candidates_returned"] = None
-        term_rows.append(row)
-    term_rows.sort(
-        key=lambda row: (-_int(row.get("qualified_new")), -_int(row.get("quota_units")), row["term"])
-    )
-    term_rows = term_rows[:_MAX_TERMS]
-
-    search_actual = sum(_int(entry.get("youtube_search_calls_actual")) for entry in round_rows)
-    combined_actual = sum(
-        _int(entry.get("youtube_combined_quota_units_actual")) for entry in round_rows
-    )
-    api_actual = sum(_int(entry.get("youtube_api_calls_actual")) for entry in round_rows)
-    combined_input = youtube_combined_quota_units_forecast
-    if combined_input is None:
-        combined_input = quota_forecast_units
-    search_forecast = (
-        _int(youtube_search_calls_forecast)
-        if youtube_search_calls_forecast is not None else None
-    )
-    combined_forecast = _int(combined_input) if combined_input is not None else None
-    api_forecast = (
-        _int(youtube_api_calls_forecast)
-        if youtube_api_calls_forecast is not None else None
-    )
+    terms = _collect_round_terms(round_rows, anchor_terms)
+    _merge_qualified_terms(terms, qualified_map, anchor_terms)
+    term_rows = _finalize_term_rows(terms)
     return {
         "schema": TERM_EVIDENCE_SCHEMA,
         "lane": _code(lane) or "unknown",
@@ -558,37 +600,14 @@ def build_term_evidence(
         "anchored_terms_count": sum(1 for row in term_rows if row["anchored"]),
         "rounds": round_rows,
         "provider_rounds": len(round_rows),
-        "quota": {
-            "youtube_search_calls_actual": search_actual,
-            "youtube_search_calls_forecast": search_forecast,
-            "youtube_search_calls_forecast_delta": (
-                search_forecast - search_actual if search_forecast is not None else None
-            ),
-            "youtube_combined_quota_units_actual": combined_actual,
-            "youtube_combined_quota_units_forecast": combined_forecast,
-            "youtube_combined_quota_forecast_delta_units": (
-                combined_forecast - combined_actual if combined_forecast is not None else None
-            ),
-            "youtube_api_calls_actual": api_actual,
-            "youtube_api_calls_forecast": api_forecast,
-            "youtube_api_calls_forecast_delta": (
-                api_forecast - api_actual if api_forecast is not None else None
-            ),
-            "youtube_units_actual": combined_actual,
-            "youtube_units_forecast": combined_forecast,
-            "forecast_delta_units": (
-                combined_forecast - combined_actual if combined_forecast is not None else None
-            ),
-            "youtube_units_deprecated": True,
-            "apify_actor_runs_actual": sum(_int(entry.get("apify_actor_runs")) for entry in round_rows),
-            # 无锚词烧掉的配额——「泛词烧掉一半配额」这件事从此有真数,不用翻日志。
-            "unanchored_units": sum(
-                _int(row.get("quota_units")) for row in term_rows if not row["anchored"]
-            ),
-            "unanchored_search_calls": sum(
-                _int(row.get("youtube_search_calls")) for row in term_rows if not row["anchored"]
-            ),
-        },
+        "quota": _quota_evidence(
+            round_rows,
+            term_rows,
+            quota_forecast_units=quota_forecast_units,
+            youtube_search_calls_forecast=youtube_search_calls_forecast,
+            youtube_combined_quota_units_forecast=youtube_combined_quota_units_forecast,
+            youtube_api_calls_forecast=youtube_api_calls_forecast,
+        ),
         "candidates_returned": sum(_int(entry.get("candidates_returned")) for entry in round_rows),
         "qualified_new_total": sum(_int(row.get("qualified_new")) for row in term_rows),
         "qualified_accepted_count": _int(attribution.get("accepted_count")),

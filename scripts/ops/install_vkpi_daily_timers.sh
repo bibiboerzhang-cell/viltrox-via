@@ -45,7 +45,7 @@ RestartPreventExitStatus=75 76
 WorkingDirectory=${REMOTE_ROOT}/current
 Environment=PYTHONPATH=${REMOTE_ROOT}/current/backend
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && env PYTHONDONTWRITEBYTECODE=1 ${REMOTE_ROOT}/.venv/bin/python -B scripts/cron_daily_sync.py --official-max-posts 50 --skip-kol --include-qualified-kol --kol-tiers hot --kol-stale-days 1 --kol-max-posts 2 >> /var/log/vkpi/sync_daily_\$(date -u +%%Y%%m%%d).log 2>&1'
+ExecStart=/bin/bash -lc 'mkdir -p /var/log/vkpi && env PYTHONDONTWRITEBYTECODE=1 ${REMOTE_ROOT}/.venv/bin/python -B scripts/cron_daily_sync.py --official-max-posts 50 --skip-kol --include-qualified-kol --kol-tiers hot --kol-stale-days 1 --kol-max-posts 2 --kol-limit 90 --worker-count 2 --child-timeout-seconds 300 >> /var/log/vkpi/sync_daily_\$(date -u +%%Y%%m%%d).log 2>&1'
 # Legacy KOL Pool refresh is intentionally excluded until P1.X.A tier selection replaces full-pool daily refresh.
 # TODO: Consider lowering to 2h after official-only runtime is observed for one week.
 TimeoutStartSec=6h

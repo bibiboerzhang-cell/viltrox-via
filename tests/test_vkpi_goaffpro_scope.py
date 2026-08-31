@@ -229,8 +229,9 @@ def test_out_of_scope_project_cannot_read_goaffpro_commerce(monkeypatch, endpoin
 
 
 class _SummaryConn:
-    def __init__(self, project_rows=None):
+    def __init__(self, project_rows=None, summary_rows=None):
         self.project_rows = project_rows or []
+        self.summary_rows = summary_rows or []
         self.summary_sql = ""
         self.summary_params = ()
 
@@ -241,7 +242,7 @@ class _SummaryConn:
         if "from vkpi_goaffpro_kol_links l" in normalized:
             self.summary_sql = normalized
             self.summary_params = tuple(params)
-            return _RowsCursor([])
+            return _RowsCursor(self.summary_rows)
         raise AssertionError(f"unexpected summary query: {normalized}")
 
 
@@ -301,6 +302,71 @@ def test_manager_summary_retains_full_cached_commerce_view(monkeypatch):
     assert "vkpi_kol_pool_favorites own_favorite" not in conn.summary_sql
     assert "vkpi_kol_pool_members shared_member" not in conn.summary_sql
     assert conn.summary_params == (200,)
+
+
+def test_summary_preserves_cached_item_totals_and_stale_note(monkeypatch):
+    conn = _SummaryConn(summary_rows=[
+        {
+            "kol_pool_id": 91,
+            "affiliate_id": "aff-91",
+            "ref_code": "ref91",
+            "coupon": "SAVE91",
+            "tracking_url": "https://example.test/ref91",
+            "display_name": "Creator",
+            "handle": "@creator",
+            "avatar_url": "avatar.jpg",
+            "platform": "youtube",
+            "m_clicks": 12,
+            "m_orders": 2,
+            "m_gmv_cents": 12345,
+            "m_commission_cents": 678,
+            "m_commission_rate": "10%",
+            "m_status": "approved",
+            "m_currency": "USD",
+            "m_partial": 1,
+            "m_synced_at": None,
+        },
+        {"kol_pool_id": 92, "affiliate_id": "", "ref_code": "ignored"},
+    ])
+    staff = {"id": 7, "role": "manager", "permissions": {"vkpi": "read"}}
+
+    result = _run_summary(monkeypatch, conn, staff)
+
+    assert result["count"] == 1
+    assert result["items"][0] == {
+        "kol_pool_id": 91,
+        "kol_name": "Creator",
+        "kol_handle": "@creator",
+        "kol_avatar": "avatar.jpg",
+        "kol_platform": "youtube",
+        "affiliate_id": "aff-91",
+        "ref_code": "ref91",
+        "coupon": "SAVE91",
+        "commission_rate": "10%",
+        "status": "approved",
+        "tracking_url": "https://example.test/ref91",
+        "source_label": "GOAFFPRO",
+        "source_type": "goaffpro",
+        "product_sku": "—",
+        "clicks": 12,
+        "orders": 2,
+        "gmv_usd": 123.45,
+        "commission_usd": 6.78,
+        "currency": "USD",
+        "partial": True,
+        "stale": True,
+    }
+    assert result["totals"] == {
+        "kol_count": 1,
+        "clicks": 12,
+        "orders": 2,
+        "gmv_usd": 123.45,
+        "commission_usd": 6.78,
+    }
+    assert result["partial_count"] == 1
+    assert result["stale_count"] == 1
+    assert result["last_synced_at"] is None
+    assert result["note"] == "1 个 KOL 刚建链还没同步,点「刷新」拉取最新数据。"
 
 
 @pytest.mark.parametrize(

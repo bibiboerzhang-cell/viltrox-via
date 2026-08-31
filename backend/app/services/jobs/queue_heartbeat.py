@@ -9,7 +9,8 @@ class-LOC 棘轮拆分:行为逐字搬运自 queue.py::RedisJobQueue:
 - runtime_stats:队列深度 + 台账汇总。
 
 所有可 monkeypatch 的模块级符号(db_connection_scope/常量/工具函数)一律经
-``_qm()`` 惰性解析到 queue 模块;实例侧一律走 ``queue.<attr>``,保持补丁面不变。
+``_qm()`` 读取已绑定的 queue 门面且不反向 import;实例侧一律走
+``queue.<attr>``,保持补丁面不变。
 """
 from __future__ import annotations
 
@@ -17,12 +18,12 @@ import asyncio
 import json
 from typing import Any, Dict
 
+from app.services.jobs.queue_runtime import queue_facade
+
 
 def _qm():
-    """Resolve the queue module lazily so monkeypatches on it stay effective."""
-    from app.services.jobs import queue as queue_module
-
-    return queue_module
+    """Resolve the bound live facade so monkeypatches stay effective."""
+    return queue_facade()
 
 
 async def worker_readiness(queue: Any, consumer_names: list[str]) -> Dict[str, Any]:

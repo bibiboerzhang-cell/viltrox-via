@@ -107,8 +107,7 @@ def _load_entity_fact_rows(entity_type: str) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _entity_backlog_item(entity: dict[str, Any], feedback_counts: dict[str, int]) -> dict[str, Any] | None:
-    facts = entity.get("facts") or {}
+def _backlog_signals(facts: dict[str, Any]) -> dict[str, Any]:
     risk_flags = facts.get("risk_flag") or []
     sync_status = _text((facts.get("sync_status") or [{}])[0].get("value") if facts.get("sync_status") else "")
     weak_label = _text((facts.get("weak_label") or [{}])[0].get("value") if facts.get("weak_label") else "")
@@ -116,6 +115,25 @@ def _entity_backlog_item(entity: dict[str, Any], feedback_counts: dict[str, int]
     contact_status = _text((facts.get("contact_status") or [{}])[0].get("value") if facts.get("contact_status") else "")
     evidence_values = [_int(item.get("value")) for item in facts.get("evidence_count") or []]
     evidence_count = max(evidence_values) if evidence_values else 0
+    return {
+        "sync_status": sync_status,
+        "weak_label": weak_label,
+        "review_state": review_state,
+        "contact_status": contact_status,
+        "risk_flags": risk_flags,
+        "evidence_count": evidence_count,
+    }
+
+
+def _backlog_suggestion(
+    signals: dict[str, Any], feedback_counts: dict[str, int]
+) -> dict[str, Any] | None:
+    risk_flags = signals["risk_flags"]
+    sync_status = signals["sync_status"]
+    weak_label = signals["weak_label"]
+    review_state = signals["review_state"]
+    contact_status = signals["contact_status"]
+    evidence_count = signals["evidence_count"]
     reasons: list[str] = []
     priority_score = 0
     suggested_action = ""
@@ -158,6 +176,22 @@ def _entity_backlog_item(entity: dict[str, Any], feedback_counts: dict[str, int]
     if severity == "low" and priority_score >= 80:
         severity = "medium"
     return {
+        "suggested_action": suggested_action,
+        "suggested_feedback_type": suggested_feedback_type,
+        "priority_score": priority_score,
+        "severity": severity,
+        "reasons": reasons,
+        "write_allowed": False,
+        "operator_note": "Create or resolve Memory feedback manually after reviewing the entity.",
+    }
+
+
+def _entity_backlog_item(entity: dict[str, Any], feedback_counts: dict[str, int]) -> dict[str, Any] | None:
+    signals = _backlog_signals(entity.get("facts") or {})
+    suggestion = _backlog_suggestion(signals, feedback_counts)
+    if suggestion is None:
+        return None
+    return {
         "entity_id": entity.get("entity_id"),
         "entity_uid": entity.get("entity_uid"),
         "entity_type": entity.get("entity_type"),
@@ -172,24 +206,9 @@ def _entity_backlog_item(entity: dict[str, Any], feedback_counts: dict[str, int]
             "source_id": entity.get("source_id") or "",
             "updated_at": entity.get("updated_at") or "",
         },
-        "signals": {
-            "sync_status": sync_status,
-            "weak_label": weak_label,
-            "review_state": review_state,
-            "contact_status": contact_status,
-            "risk_flags": risk_flags,
-            "evidence_count": evidence_count,
-        },
+        "signals": signals,
         "feedback": feedback_counts,
-        "suggestion": {
-            "suggested_action": suggested_action,
-            "suggested_feedback_type": suggested_feedback_type,
-            "priority_score": priority_score,
-            "severity": severity,
-            "reasons": reasons,
-            "write_allowed": False,
-            "operator_note": "Create or resolve Memory feedback manually after reviewing the entity.",
-        },
+        "suggestion": suggestion,
     }
 
 

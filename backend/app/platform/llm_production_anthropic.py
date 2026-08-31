@@ -27,6 +27,8 @@ from app.platform.llm_production_anthropic_helpers import (
     anthropic_create_kwargs as _anthropic_create_kwargs,
     anthropic_input_token_estimate as _anthropic_input_token_estimate,
     anthropic_messages_fingerprint as _anthropic_messages_fingerprint,
+    anthropic_preflight_candidate as _anthropic_preflight_candidate,
+    anthropic_provider_gate_reason as _anthropic_provider_gate_reason,
 )
 
 
@@ -84,26 +86,9 @@ def generate_anthropic_messages(
         cost_tag=cost_tag,
         require_configured=False,
     )
-    candidates = (
-        preflight.get("providers")
-        if isinstance(preflight.get("providers"), list)
-        else []
-    )
-    candidate = next(
-        (
-            item
-            for item in candidates
-            if str(item.get("binding") or "") == actual_binding
-        ),
-        {},
-    )
+    candidate = _anthropic_preflight_candidate(preflight, actual_binding)
     if not bool(candidate.get("provider_calls_allowed")):
-        reason = str(
-            candidate.get("binding_gate_reason")
-            or preflight.get("provider_gate_detail")
-            or preflight.get("provider_gate_reason")
-            or "provider_calls_blocked"
-        )
+        reason = _anthropic_provider_gate_reason(candidate, preflight)
         llm_gateway.record_call(
             provider=provider,
             model=exact_model,

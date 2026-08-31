@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.market_brain import weekly_answers_report
 
 logger = get_logger(__name__)
 
@@ -212,12 +213,7 @@ def weekly_report(days: int = _DEFAULT_DAYS) -> dict[str, Any]:
     period_days = _int0(days)
     if period_days <= 0:
         period_days = 0
-    empty_sections = {
-        "groups": {dim: [] for dim in GROUP_DIMS},
-        "what_worked": {"status": "empty", "items": [], "group_highlights": []},
-        "what_failed": {"status": "empty", "items": [], "group_highlights": []},
-        "what_to_change": {"status": "empty", "count": 0, "items": [], "effect_chain_note": ""},
-    }
+    empty_sections = weekly_answers_report.empty_sections(GROUP_DIMS)
     if not table_exists(TABLE):
         return {
             "status": "empty",
@@ -231,31 +227,13 @@ def weekly_report(days: int = _DEFAULT_DAYS) -> dict[str, Any]:
         }
 
     conn = get_conn()
-    decided_placeholders = ",".join("?" for _ in DECIDED_DECISIONS)
     try:
-        decided = [dict(r) for r in conn.execute(
-            f"""
-            SELECT id, gtm_plan_id, product_sku, market, segment, channel,
-                   action_type, content_angle, decision, lesson,
-                   next_weight_change, actual_result,
-                   window_7d, window_14d, window_28d,
-                   action_inbox_id, created_at, decided_at, decided_by
-            FROM {TABLE}
-            WHERE decision IN ({decided_placeholders})
-              AND decided_at IS NOT NULL
-              AND decided_by IS NOT NULL
-            ORDER BY id DESC
-            """,
-            tuple(DECIDED_DECISIONS),
-        ).fetchall()]
-        open_row = conn.execute(
-            f"""
-            SELECT COUNT(*) AS n FROM {TABLE}
-            WHERE decision IS NULL OR decision NOT IN ({decided_placeholders})
-            """,
-            tuple(DECIDED_DECISIONS),
-        ).fetchone()
-        open_total = _int0(dict(open_row).get("n")) if open_row else 0
+        decided, open_total = weekly_answers_report.load_rows(
+            conn,
+            table=TABLE,
+            decided_decisions=DECIDED_DECISIONS,
+            int0=_int0,
+        )
     except Exception as exc:  # noqa: BLE001 — 报告失败诚实回原因,不 500
         logger.warning("weekly_answers.load_failed: %s", exc)
         return {
@@ -265,65 +243,28 @@ def weekly_report(days: int = _DEFAULT_DAYS) -> dict[str, Any]:
         }
 
     since = (now - timedelta(days=period_days)) if period_days > 0 else None
-    if since is None:
-        period_rows = list(decided)
-    else:
-        period_rows = []
-        for row in decided:
-            decided_at = _parse_dt(row.get("decided_at"))
-            if decided_at is not None and decided_at >= since:
-                period_rows.append(row)
-
-    from app.domains.market_brain.data_readiness import (
-        build_learning_readiness,
-        has_verified_outcome_evidence,
+    period_rows = weekly_answers_report.period_rows(
+        decided,
+        since,
+        parse_dt=_parse_dt,
+    )
+    evidence_decided, evidence_period_rows, groups, readiness, claimable = (
+        weekly_answers_report.learning_groups(
+            conn,
+            decided,
+            period_rows,
+            now=now,
+            ops=globals(),
+        )
     )
 
-    for row in decided:
-        row["evidence_backed"] = has_verified_outcome_evidence(conn, row)
-    evidence_decided = [row for row in decided if row["evidence_backed"]]
-    evidence_period_rows = [row for row in period_rows if row.get("evidence_backed")]
-    groups = {dim: _group_stats(evidence_decided, dim) for dim in GROUP_DIMS}
-
-    readiness = build_learning_readiness(conn=conn, now=now)
-    claimable = bool(readiness.get("claimable"))
-    for entries in groups.values():
-        for group in entries:
-            group["observed_win_rate"] = group.get("win_rate")
-            group["claimable"] = claimable and not bool(group.get("insufficient"))
-            group["claim_status"] = "validated" if group["claimable"] else "descriptive_only"
-
     conclusion_rows = evidence_period_rows if claimable else period_rows
-    worked_items = [_bet_brief(r) for r in conclusion_rows if _text(r.get("decision"), 20) in WIN_DECISIONS]
-    failed_items = [_bet_brief(r) for r in conclusion_rows if _text(r.get("decision"), 20) in LOSS_DECISIONS]
-    what_worked = {
-        "status": "ready" if worked_items else "empty",
-        "items": worked_items[:_ITEM_CAP],
-        "group_highlights": _sufficient(groups, min_rate=0.6) if claimable else [],
-        "claimable": claimable,
-        "claim_status": "validated" if claimable else "human_verdicts_only",
-        "note": (
-            "对了什么=本期带真实窗口证据的 validated/escalate 裁决"
-            " + 样本≥5 且胜率≥60% 的组合。"
-            if claimable else
-            "保留人工裁决明细,但 finalized outcome / prediction eval / 真实反馈三项未齐,不输出有效组合。"
-        ),
-    }
-    what_failed = {
-        "status": "ready" if failed_items else "empty",
-        "items": failed_items[:_ITEM_CAP],
-        "group_highlights": _sufficient(groups, max_rate=0.4) if claimable else [],
-        "claimable": claimable,
-        "claim_status": "validated" if claimable else "human_verdicts_only",
-        "note": (
-            "错了什么=本期带真实窗口证据的 failed/retreat 裁决"
-            " + 样本≥5 且胜率≤40% 的组合;lesson 原话随行。"
-            if claimable else
-            "保留人工裁决明细,但 DataReadiness 未通过,不把小样本命名为稳定失败规律。"
-        ),
-    }
-    what_to_change = _build_what_to_change(conclusion_rows)
-    what_to_change["claimable"] = claimable
+    what_worked, what_failed, what_to_change = weekly_answers_report.conclusion_sections(
+        conclusion_rows,
+        groups,
+        claimable=claimable,
+        ops=globals(),
+    )
     headline = _build_headline(
         period_rows=evidence_period_rows, decided_total=len(evidence_decided), open_total=open_total,
         groups=groups, days=period_days or 0)

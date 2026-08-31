@@ -396,6 +396,18 @@ def _execution_age_seconds(value: Any) -> int | None:
     return max(0, int((datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()))
 
 
+def _matching_reconciliation(rows: list[Any], correlation_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    for candidate in rows:
+        candidate_row = dict(candidate)
+        candidate_detail = _loads(candidate_row.get("detail_json"))
+        if (
+            isinstance(candidate_detail, dict)
+            and str(candidate_detail.get("correlation_id") or "") == correlation_id
+        ):
+            return candidate_row, candidate_detail
+    return None
+
+
 def reconcile_executing_action(
     action_id: int,
     staff: dict[str, Any] | None,
@@ -480,22 +492,10 @@ def reconcile_executing_action(
             """,
             (int(action_id),),
         ).fetchall()
-        existing = None
-        for candidate in existing_rows:
-            candidate_row = dict(candidate)
-            candidate_detail = _loads(candidate_row.get("detail_json"))
-            if (
-                isinstance(candidate_detail, dict)
-                and str(candidate_detail.get("correlation_id") or "") == normalized_correlation
-            ):
-                existing = candidate_row
-                break
+        existing = _matching_reconciliation(list(existing_rows), normalized_correlation)
         if existing is not None:
-            existing_row = dict(existing)
-            existing_detail = _loads(existing_row.get("detail_json"))
-            existing_decision = str(
-                existing_detail.get("decision") if isinstance(existing_detail, dict) else ""
-            )
+            existing_row, existing_detail = existing
+            existing_decision = str(existing_detail.get("decision") or "")
             conn.rollback()
             existing_actor = int(_loads(existing_detail.get("actor")).get("staff_id") or 0)
             if not (

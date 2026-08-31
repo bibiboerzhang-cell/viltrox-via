@@ -12,6 +12,7 @@ from app.db.connection import db_write, get_conn, is_postgres_runtime
 from app.platform.llm_production import generate_text
 from app.services.intelligence.account_scan_service import SCANNERS, provider_ready
 from app.services.kol.metrics import engagement_rate
+from app.services.kol.account_dossier_persistence import persist_scan_posts
 from app.services.kol.account_dossier_rules import (
     COMPETITOR_TERMS,
     VILTROX_TERMS,
@@ -214,87 +215,22 @@ def _persist_scan(kol: dict[str, Any], result: dict[str, Any], status: str = "do
         ),
     )
     snapshot_id = _insert_id(conn, cur, "kol_account_snapshots")
-    for post in posts:
-        title = str(post.get("title") or "")[:500]
-        post_url = str(post.get("url") or "").strip()
-        if not post_url:
-            continue
-        thumbnail_url = _first_text(
-            post.get("thumbnail"),
-            post.get("thumbnail_url"),
-            post.get("thumbnailUrl"),
-            post.get("displayUrl"),
-            post.get("display_url"),
-            post.get("imageUrl"),
-            post.get("image_url"),
-            post.get("coverUrl"),
-            post.get("cover_url"),
-            post.get("videoThumbnail"),
-            post.get("video_thumbnail"),
-        )
-        brand_mentions = sorted(set(_mentions(title, VILTROX_TERMS)))
-        competitor_mentions = sorted(set(_mentions(title, COMPETITOR_TERMS)))
-        conn.execute(
-            """
-            INSERT INTO kol_posts
-                (kol_id, snapshot_id, platform, post_url, title, thumbnail_url,
-                 published_at, content_type, views, likes, comments, shares,
-                 brand_mentions_json, competitor_mentions_json, raw_json, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(kol_id, post_url) DO UPDATE SET
-                snapshot_id = excluded.snapshot_id,
-                title = excluded.title,
-                thumbnail_url = excluded.thumbnail_url,
-                views = excluded.views,
-                likes = excluded.likes,
-                comments = excluded.comments,
-                shares = excluded.shares,
-                brand_mentions_json = excluded.brand_mentions_json,
-                competitor_mentions_json = excluded.competitor_mentions_json,
-                raw_json = excluded.raw_json
-            """,
-            (
-                int(kol["id"]),
-                snapshot_id,
-                platform,
-                post_url,
-                title,
-                thumbnail_url,
-                _date(post.get("published")),
-                str(post.get("type") or ""),
-                _int(post.get("views")),
-                _int(post.get("likes")),
-                _int(post.get("comments")),
-                _int(post.get("shares")),
-                _json(brand_mentions),
-                _json(competitor_mentions),
-                _json(post),
-                _now(),
-            ),
-        )
-        post_row = conn.execute("SELECT id FROM kol_posts WHERE kol_id = ? AND post_url = ?", (int(kol["id"]), post_url)).fetchone()
-        post_id = int(post_row["id"]) if post_row else None
-        for comment in _comment_rows(post):
-            conn.execute(
-                """
-                INSERT INTO kol_comments
-                    (kol_id, post_id, platform, post_url, author_handle, comment_text,
-                     like_count, sentiment, intent_tags_json, created_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    int(kol["id"]),
-                    post_id,
-                    platform,
-                    post_url,
-                    comment["author_handle"],
-                    comment["comment_text"],
-                    comment["like_count"],
-                    comment["sentiment"],
-                    _json(comment["intent_tags"]),
-                    _now(),
-                ),
-            )
+    persist_scan_posts(
+        conn,
+        posts,
+        kol_id=int(kol["id"]),
+        snapshot_id=snapshot_id,
+        platform=platform,
+        first_text=_first_text,
+        mentions=_mentions,
+        comment_rows=_comment_rows,
+        date_value=_date,
+        int_value=_int,
+        json_value=_json,
+        now_value=_now,
+        viltrox_terms=VILTROX_TERMS,
+        competitor_terms=COMPETITOR_TERMS,
+    )
     next_follower_count = _int(result.get("follower_count") or profile.get("follower_count") or kol.get("follower_count"))
     next_avg_views = summary["avg_views"] if summary["content_count"] > 0 else _int(kol.get("avg_views"))
     conn.execute(

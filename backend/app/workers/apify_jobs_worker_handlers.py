@@ -29,6 +29,7 @@ from app.workers.apify_jobs_worker_helpers import (
     _int_or_none,
     _json,
 )
+from app.workers import apify_jobs_worker_deep_crawl as deep_crawl_worker
 
 
 logger = get_logger(__name__)
@@ -218,27 +219,13 @@ def _process_account_dossier_extract(conn: psycopg.Connection[Any], job: dict[st
 
 
 def _resolve_job_staff(conn: psycopg.Connection[Any], payload: dict[str, Any]) -> dict[str, Any]:
-    """Build a staff dict for worker-run domain calls.
-
-    payload carries triggered_by_user_id (a *users.id*), NOT a staff.id. Paths that hit
-    llm_gateway → vkpi_llm_calls.created_by_staff_id (FK → staff.id) need the real staff.id;
-    feeding the user_id there caused job 900's ForeignKeyViolation (user 108 → no staff.id 108;
-    the real staff.id is 84). Resolve user_id → staff.id here. Keep user_id for attribution
-    columns that legitimately store users.id (e.g. vkpi_analysis_cache.triggered_by_user_id).
-    Not-found (non-staff actor, shouldn't reach these endpoints): null out so the FK records NULL
-    rather than re-raising — `workflow.staff_id()` falls back to user_id, so we must drop it too.
-    """
-    user_id = _int_or_none(payload.get("triggered_by_user_id"))
-    resolved = _int_or_none(payload.get("staff_id"))
-    if resolved is None and user_id is not None:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute("SELECT id FROM staff WHERE user_id=%s ORDER BY id LIMIT 1", (user_id,))
-            row = cur.fetchone()
-        if row:
-            resolved = _int_or_none(row.get("id"))
-    if resolved is None:
-        return {"id": None, "staff_id": None, "user_id": None}
-    return {"id": resolved, "staff_id": resolved, "user_id": user_id}
+    """Build the FK-safe staff identity for worker-run domain calls."""
+    return deep_crawl_worker.resolve_job_staff(
+        conn,
+        payload,
+        int_or_none=_int_or_none,
+        row_factory=dict_row,
+    )
 
 
 def _process_project_contract_extract(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
@@ -277,114 +264,54 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
         # a transient provider failure.  Terminalize it as blocked so the
         # global worker retry path cannot spend later after permission or URL
         # state has already been revoked/drifted.
-        if (
-            isinstance(payload.get("target_write_fence"), dict)
-            and exc.code in url_deep_crawl_queue.TARGET_WRITE_FENCE_TERMINAL_CODES
+        if deep_crawl_worker.terminalize_write_fence_error(
+            conn,
+            job,
+            payload,
+            exc,
+            terminal_codes=url_deep_crawl_queue.TARGET_WRITE_FENCE_TERMINAL_CODES,
+            db_connection_sync_scope=db_connection_sync_scope,
+            json_dump=_json,
+            logger=logger,
         ):
-            with conn.transaction():
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        UPDATE apify_jobs
-                        SET status='blocked', last_error=%s, payload=%s::jsonb, updated_at=NOW()
-                        WHERE id=%s
-                        """,
-                        (str(exc.code)[:300], _json(payload), int(job["id"])),
-                    )
-            try:
-                with db_connection_sync_scope():
-                    from app.domains.kol import content_monitoring
-
-                    content_monitoring.record_monitor_job_terminal(
-                        payload,
-                        job_id=int(job["id"]),
-                        status="blocked",
-                    )
-            except Exception:
-                logger.warning("content monitor blocked receipt update failed job_id=%s", job.get("id"))
             return
         raise
-    status = str((result or {}).get("status") or "")
-    ok = status in ("", "ok", "ready", "done", "executed") or bool((result or {}).get("execution"))
-    # 诚实闸(job 926 案:35mmc.com 搜索页 URL 标 done 但什么都没干):
-    # 非 profile/video 的 URL 内核走 unsupported 短路,任务必须 blocked 而非 done。
-    flow_status = str(((result or {}).get("profile_flow") or {}).get("status") or "")
-    url_type = str((result or {}).get("url_type") or "")
-    if flow_status in {"crawl_failed", "profile_crawl_failed", "provider_error", "timeout"}:
-        crawl_status = str(((result or {}).get("profile_flow") or {}).get("crawl_status") or flow_status)
-        raise RuntimeError(f"profile_provider_unavailable:{crawl_status}")
-    if ok and flow_status in ("unsupported", "needs_human_choice") and not (result or {}).get("video_flow"):
-        ok = False
-        status = f"url_{url_type or 'unknown'}_{flow_status}"
+    ok, status = deep_crawl_worker.crawl_outcome(result)
     # search_session_id 回写 payload:queue_view 据此输出 search_session,
     # 泳道「最近完成」才会保留该任务并支持点开会话详情(一闪而过案)。
     session_id = _int_or_none((result or {}).get("search_session_id"))
     if session_id:
         payload["search_session_id"] = int(session_id)
-    with conn.transaction():
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE apify_jobs SET status=%s, last_error=%s, payload=%s::jsonb, updated_at=NOW() WHERE id=%s",
-                (
-                    "done" if ok else "blocked",
-                    None if ok else (status or "deep_crawl_not_executed")[:300],
-                    _json(payload),
-                    int(job["id"]),
-                ),
-            )
-    try:
-        with db_connection_sync_scope():
-            from app.domains.kol import content_monitoring
-
-            content_monitoring.record_monitor_job_terminal(
-                payload,
-                job_id=int(job["id"]),
-                status="done" if ok else "blocked",
-            )
-    except Exception:
-        logger.warning("content monitor terminal receipt update failed job_id=%s", job.get("id"))
+    deep_crawl_worker.persist_crawl_outcome(
+        conn,
+        job,
+        payload,
+        ok=ok,
+        status=status,
+        json_dump=_json,
+    )
+    deep_crawl_worker.record_monitor_terminal(
+        job,
+        payload,
+        ok=ok,
+        db_connection_sync_scope=db_connection_sync_scope,
+        logger=logger,
+    )
     # 账号深爬完成后只进入新 durable L0 编排。该编排读取已经落库的 raw/bio，绝不在
     # 此处追加 provider、网站抓取或发送；需要外部动作的状态交给后续人工授权流程。
-    kol_pool_id = _int_or_none(
-        payload.get("kol_pool_id")
-        or ((result or {}).get("profile_flow") or {}).get("kol_pool_id")
-        or (result or {}).get("matched_kol_pool_id")
+    kol_pool_id = deep_crawl_worker.crawl_kol_pool_id(
+        payload,
+        result,
+        int_or_none=_int_or_none,
     )
     if ok and kol_pool_id:
-        try:
-            from app.domains.sync import refresh_tier
-
-            refresh_tier.mark_kol_refreshed(int(kol_pool_id), status="ready")
-        except Exception:
-            logger.warning("profile refresh freshness ledger failed kol_pool_id=%s", kol_pool_id, exc_info=True)
-    if ok and kol_pool_id and payload.get("suppress_contact_followup") is not True:
-        try:
-            from app.domains.kol.contact_acquisition_queue import (
-                enqueue_contact_acquisition,
-                reconcile_contact_acquisition,
-            )
-
-            with db_connection_sync_scope():
-                enqueue_contact_acquisition(
-                    int(kol_pool_id),
-                    trigger_source="deep_crawl",
-                )
-            try:
-                organization_id = int((staff or {}).get("organization_id") or 0)
-            except (TypeError, ValueError):
-                organization_id = 0
-            if organization_id > 0:
-                with db_connection_sync_scope():
-                    reconcile_contact_acquisition(
-                        int(kol_pool_id),
-                        brand_scope=f"organization:{organization_id}",
-                    )
-        except Exception as exc:
-            logger.warning(
-                "provider-free contact L0 after deep_crawl failed (non-fatal) | kol_pool_id=%s error_type=%s",
-                kol_pool_id,
-                type(exc).__name__,
-            )
+        deep_crawl_worker.run_success_followups(
+            int(kol_pool_id),
+            payload,
+            staff,
+            db_connection_sync_scope=db_connection_sync_scope,
+            logger=logger,
+        )
 
 
 def _process_logistics_track_sync(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:

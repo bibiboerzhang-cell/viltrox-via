@@ -443,6 +443,24 @@ def _replay_response(replay: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _bridge_memory_used(bridged: dict[str, Any]) -> bool:
+    provider_context = bridged.get("provider_context")
+    return bool(
+        provider_context.get("memories") if isinstance(provider_context, dict) else False
+    )
+
+
+def _bridge_evidence_manifest(bridged: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "evidence_id": item.get("evidence_id"),
+            "kind": item.get("kind"),
+        }
+        for item in bridged.get("evidence") or []
+        if isinstance(item, dict) and item.get("evidence_id")
+    ][:32]
+
+
 def create_message_turn(
     scope: AdvisorScope,
     thread_uid: str,
@@ -532,11 +550,7 @@ def create_message_turn(
         "response_contract": "json_v1",
     }
     evidence_ids_used: list[str] = []
-    memory_used = bool(
-        (bridged.get("provider_context") or {}).get("memories")
-        if isinstance(bridged.get("provider_context"), dict)
-        else False
-    )
+    memory_used = _bridge_memory_used(bridged)
 
     if provider_allowed:
         provider, model, binding = _binding()
@@ -619,14 +633,7 @@ def create_message_turn(
             }
         )
 
-    evidence_manifest = [
-        {
-            "evidence_id": item.get("evidence_id"),
-            "kind": item.get("kind"),
-        }
-        for item in bridged.get("evidence") or []
-        if isinstance(item, dict) and item.get("evidence_id")
-    ][:32]
+    evidence_manifest = _bridge_evidence_manifest(bridged)
     turn = repository.create_degraded_turn(
         scope,
         thread_uid,

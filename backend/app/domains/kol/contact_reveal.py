@@ -132,6 +132,121 @@ def _canonical_contact_rows(conn: Any, kol_pool_id: int) -> list[dict[str, Any]]
     return [dict(row) for row in rows]
 
 
+def _contact_staff_id(staff: dict[str, Any] | None) -> int:
+    try:
+        return int((staff or {}).get("staff_id") or (staff or {}).get("id") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _eligible_contact_projection(
+    contact: dict[str, Any],
+    *,
+    kol_pool_id: int,
+    brand_scope: str,
+    conn: Any,
+    contact_eligibility: Any,
+) -> tuple[dict[str, Any] | None, str | None]:
+    contact_id = int(contact.get("id") or 0)
+    if not contact_id:
+        return None, "contact_not_found"
+    try:
+        verdict = contact_eligibility(
+            contact_id=contact_id,
+            kol_pool_id=int(kol_pool_id),
+            brand_scope=brand_scope,
+            conn=conn,
+        )
+    except Exception:
+        verdict = {
+            "status": "restricted",
+            "eligible": False,
+            "reason": "suppression_check_unavailable",
+        }
+    if not (
+        isinstance(verdict, dict)
+        and verdict.get("eligible") is True
+        and verdict.get("status") == "eligible"
+    ):
+        return None, str((verdict or {}).get("reason") or "verification_not_eligible")
+    value = str(contact.get("contact_value") or "").strip()
+    if not value:
+        return None, "contact_not_found"
+    channel = str(verdict.get("channel") or contact.get("contact_type") or "contact").strip().lower()
+    tier = _contact_tier(verdict)
+    item = {
+        "id": contact_id,
+        "channel": channel,
+        "contact_type": channel,
+        "value": value,
+        "tier": tier,
+        "verification_status": str(
+            verdict.get("verification_status")
+            or ("verified_public_business" if tier == CONTACT_TIER_VERIFIED else "observed")
+        ),
+    }
+    source = str(contact.get("contact_source") or "").strip().lower()
+    if source in _DISCLOSABLE_SOURCES:
+        item["source_type"] = source
+    if tier == CONTACT_TIER_VERIFIED and contact.get("verified_at"):
+        item["verified_at"] = str(contact.get("verified_at"))
+    return item, None
+
+
+def _eligible_contact_rows(
+    canonical_rows: list[dict[str, Any]],
+    *,
+    kol_pool_id: int,
+    brand_scope: str,
+    conn: Any,
+    contact_eligibility: Any,
+) -> tuple[list[dict[str, Any]], set[str]]:
+    eligible_contacts: list[dict[str, Any]] = []
+    restricted_reasons: set[str] = set()
+    for contact in canonical_rows:
+        item, reason = _eligible_contact_projection(
+            contact,
+            kol_pool_id=kol_pool_id,
+            brand_scope=brand_scope,
+            conn=conn,
+            contact_eligibility=contact_eligibility,
+        )
+        if item is not None:
+            eligible_contacts.append(item)
+        elif reason:
+            restricted_reasons.add(reason)
+    eligible_contacts.sort(key=lambda entry: _TIER_ORDER.get(str(entry.get("tier")), 1))
+    return eligible_contacts, restricted_reasons
+
+
+def _contact_guard_reason(restricted_reasons: set[str]) -> str:
+    if restricted_reasons == {"suppressed"}:
+        return "suppressed"
+    if restricted_reasons.intersection(_GUARD_UNAVAILABLE_REASONS):
+        return "contact_guard_unavailable"
+    if "verification_not_eligible" in restricted_reasons:
+        return "verification_required"
+    return "contact_guard_unavailable"
+
+
+def _record_contact_reveal(conn: Any, kol_pool_id: int, staff_id: int) -> None:
+    try:
+        _ensure_contact_audit_schema()
+        conn.execute(
+            """
+            UPDATE vkpi_kol_pool
+            SET contact_reveal_count = COALESCE(contact_reveal_count, 0) + 1,
+                contact_last_revealed_at = ?,
+                contact_last_revealed_by_staff_id = ?
+            WHERE id = ?
+            """,
+            (_utcnow(), staff_id or None, int(kol_pool_id)),
+        )
+        conn.commit()
+    except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
+
+
 def view_kol_contact(
     kol_pool_id: int,
     *,
@@ -151,10 +266,7 @@ def view_kol_contact(
 
     from app.core.permissions import check_kol_pool_employee_contact_permission
 
-    try:
-        staff_id = int((staff or {}).get("staff_id") or (staff or {}).get("id") or 0)
-    except (TypeError, ValueError):
-        staff_id = 0
+    staff_id = _contact_staff_id(staff)
     # Pure authorization comes first, but a plaintext audit is truthful only
     # after at least one canonical contact has passed verification and
     # organization-scoped suppression.  Empty/restricted/404 reads therefore
@@ -188,65 +300,16 @@ def view_kol_contact(
 
     from app.domains.kol.contact_suppression import contact_eligibility
 
-    brand_scope = _brand_scope(staff)
-    eligible_contacts: list[dict[str, Any]] = []
-    restricted_reasons: set[str] = set()
-    for contact in canonical_rows:
-        contact_id = int(contact.get("id") or 0)
-        if not contact_id:
-            restricted_reasons.add("contact_not_found")
-            continue
-        try:
-            verdict = contact_eligibility(
-                contact_id=contact_id,
-                kol_pool_id=int(kol_pool_id),
-                brand_scope=brand_scope,
-                conn=conn,
-            )
-        except Exception:
-            verdict = {
-                "status": "restricted",
-                "eligible": False,
-                "reason": "suppression_check_unavailable",
-            }
-        if not (isinstance(verdict, dict) and verdict.get("eligible") is True and verdict.get("status") == "eligible"):
-            restricted_reasons.add(str((verdict or {}).get("reason") or "verification_not_eligible"))
-            continue
-        value = str(contact.get("contact_value") or "").strip()
-        if not value:
-            restricted_reasons.add("contact_not_found")
-            continue
-        channel = str(verdict.get("channel") or contact.get("contact_type") or "contact").strip().lower()
-        tier = _contact_tier(verdict)
-        item = {
-            "id": contact_id,
-            "channel": channel,
-            "contact_type": channel,
-            "value": value,
-            "tier": tier,
-            "verification_status": str(
-                verdict.get("verification_status")
-                or ("verified_public_business" if tier == CONTACT_TIER_VERIFIED else "observed")
-            ),
-        }
-        source = str(contact.get("contact_source") or "").strip().lower()
-        if source in _DISCLOSABLE_SOURCES:
-            item["source_type"] = source
-        if tier == CONTACT_TIER_VERIFIED and contact.get("verified_at"):
-            item["verified_at"] = str(contact.get("verified_at"))
-        eligible_contacts.append(item)
-    eligible_contacts.sort(key=lambda entry: _TIER_ORDER.get(str(entry.get("tier")), 1))
+    eligible_contacts, restricted_reasons = _eligible_contact_rows(
+        canonical_rows,
+        kol_pool_id=int(kol_pool_id),
+        brand_scope=_brand_scope(staff),
+        conn=conn,
+        contact_eligibility=contact_eligibility,
+    )
 
     if not eligible_contacts:
-        if restricted_reasons == {"suppressed"}:
-            reason = "suppressed"
-        elif restricted_reasons.intersection(_GUARD_UNAVAILABLE_REASONS):
-            reason = "contact_guard_unavailable"
-        elif "verification_not_eligible" in restricted_reasons:
-            reason = "verification_required"
-        else:
-            reason = "contact_guard_unavailable"
-        return _restricted(int(kol_pool_id), reason)
+        return _restricted(int(kol_pool_id), _contact_guard_reason(restricted_reasons))
 
     from app.domains.kol.contact_access import authorize_plaintext_contacts
 
@@ -268,22 +331,7 @@ def view_kol_contact(
         return _restricted(int(kol_pool_id), "contact_audit_unavailable")
 
     # 更新展开计数留痕(118 列;SQLite 幂等建)。明文审计已成功，此处是辅助计数。
-    try:
-        _ensure_contact_audit_schema()
-        conn.execute(
-            """
-            UPDATE vkpi_kol_pool
-            SET contact_reveal_count = COALESCE(contact_reveal_count, 0) + 1,
-                contact_last_revealed_at = ?,
-                contact_last_revealed_by_staff_id = ?
-            WHERE id = ?
-            """,
-            (_utcnow(), staff_id or None, int(kol_pool_id)),
-        )
-        conn.commit()
-    except Exception:
-        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-        pass
+    _record_contact_reveal(conn, int(kol_pool_id), staff_id)
 
     return {
         "status": "full",

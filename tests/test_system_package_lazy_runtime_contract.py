@@ -63,6 +63,46 @@ print(json.dumps({
     }
 
 
+def test_system_package_cold_import_has_no_eager_service_graph(tmp_path: Path) -> None:
+    payload = _run_probe(
+        """
+import json
+import sys
+import app.services.system as package
+
+names = ["integrations", "runtime", "staff", "trust_admin"]
+print(json.dumps({
+    "loaded": [name for name in names if f"app.services.system.{name}" in sys.modules],
+    "exports": list(package.__all__),
+}, separators=(",", ":")))
+""",
+        tmp_path,
+    )
+
+    assert payload == {
+        "loaded": [],
+        "exports": ["integrations", "runtime", "staff", "trust_admin"],
+    }
+
+
+def test_system_package_attribute_access_remains_compatible(tmp_path: Path) -> None:
+    payload = _run_probe(
+        """
+import json
+import sys
+import app.services.system as package
+staff = package.staff
+print(json.dumps({
+    "identity": staff is sys.modules["app.services.system.staff"],
+    "runtime_loaded": "app.services.system.runtime" in sys.modules,
+}, separators=(",", ":")))
+""",
+        tmp_path,
+    )
+
+    assert payload == {"identity": True, "runtime_loaded": False}
+
+
 def test_explicit_runtime_import_is_compatible_in_either_order(tmp_path: Path) -> None:
     probe_template = """
 import importlib

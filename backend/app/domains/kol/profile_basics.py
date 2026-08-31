@@ -16,6 +16,12 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.domains.kol.pool_common import _garbage_handle_rule, _table_columns
+from app.domains.kol.profile_basics_write_helpers import (
+    execute_profile_values as _execute_profile_values,
+    prepare_profile_write as _prepare_profile_write,
+    profile_prewrite_response as _profile_prewrite_response,
+    resolve_profile_identity as _resolve_profile_identity,
+)
 
 logger = get_logger("viltrox.domains.kol.profile_basics")
 
@@ -120,55 +126,37 @@ def write_kol_profile_basics(
             raise ValueError(f"discovery_account_rejected:{gate_verdict}")
 
     requested_identity = dict(profile_data)
-    identity_write_locked = bool(not kol_pool_id and not dry_run)
-    canonical_match_id: int | None = None
-    if not kol_pool_id:
-        try:
-            if not dry_run:
-                _lock_creator_identity_write_boundary(db, requested_identity)
-            canonical_match_id = _canonical_existing_pool_id(db, requested_identity)
-        except Exception:
-            if not dry_run:
-                _rollback(db)
-            raise
-        if canonical_match_id:
-            kol_pool_id = canonical_match_id
-
+    kol_pool_id, identity_write_locked, canonical_match_id = _resolve_profile_identity(
+        db,
+        kol_pool_id,
+        requested_identity,
+        dry_run=dry_run,
+        lock_identity=_lock_creator_identity_write_boundary,
+        canonical_existing_id=_canonical_existing_pool_id,
+        rollback=_rollback,
+    )
     now = _utcnow()
-    try:
-        row = _load_pool_row(db, kol_pool_id) if kol_pool_id else None
-    except Exception:
-        if identity_write_locked:
-            _rollback(db)
-        raise
-    operation = "update" if row else "insert"
-    normalized_input = dict(profile_data)
-    if canonical_match_id and row:
-        # The incumbent handle remains the durable key.  The incoming handle
-        # is recorded as an alias below; rewriting the unique key here could
-        # collide with a legacy duplicate before its backfill is reconciled.
-        normalized_input.pop("platform", None)
-        normalized_input.pop("handle", None)
-    normalized = _normalise_profile_data(normalized_input, existing=row, now=now, method=method)
-    ignored_fields = sorted(set(profile_data) - PROFILE_BASICS_WHITELIST)
-
-    if operation == "insert":
-        if not normalized.get("platform") or not normalized.get("handle"):
-            if not dry_run:
-                _rollback(db)
-            raise ValueError("platform and handle are required for new KOL profile basics")
-        normalized.setdefault("pool_uid", f"url-profile-{secrets.token_hex(8)}")
-
-    write_fields = PROFILE_BASICS_UPDATE_FIELDS if operation == "update" else PROFILE_BASICS_INSERT_FIELDS
-    allowed_fields = [field for field in write_fields if field in columns]
-    missing_columns = sorted(set(write_fields) - set(allowed_fields) - {"pool_uid"})
-    planned_values = {
-        field: normalized[field]
-        for field in allowed_fields
-        if field in normalized and _should_write(field, normalized[field], operation=operation)
-    }
-    if operation == "insert" and "pool_uid" in columns:
-        planned_values["pool_uid"] = normalized["pool_uid"]
+    row, operation, normalized, ignored_fields, missing_columns, planned_values = (
+        _prepare_profile_write(
+            db,
+            kol_pool_id,
+            profile_data,
+            columns,
+            now=now,
+            dry_run=dry_run,
+            identity_write_locked=identity_write_locked,
+            canonical_match_id=canonical_match_id,
+            method=method,
+            whitelist=PROFILE_BASICS_WHITELIST,
+            update_fields=PROFILE_BASICS_UPDATE_FIELDS,
+            insert_fields=PROFILE_BASICS_INSERT_FIELDS,
+            load_pool_row=_load_pool_row,
+            normalise_profile_data=_normalise_profile_data,
+            should_write=_should_write,
+            rollback=_rollback,
+            token_hex=secrets.token_hex,
+        )
+    )
 
     try:
         before_scores = _score_snapshot(db, [int(kol_pool_id)]) if row else {}
@@ -181,80 +169,41 @@ def write_kol_profile_basics(
     brand_gate = _brand_official_insert_gate(
         db, operation, normalized, allow_brand_official=allow_brand_official
     )
-    if brand_gate and not dry_run:
-        # 上面若已取过身份写入边界锁,这里要先放掉——被闸拦下不是异常,但事务不能悬着。
-        if identity_write_locked:
-            _rollback(db)
-        logger.info(
-            "kol_pool brand-official enrollment skipped platform=%r handle=%r brand=%s field=%s",
-            normalized.get("platform"), str(normalized.get("handle") or "")[:60],
-            brand_gate.get("brand"), brand_gate.get("field"),
-        )
-        return {
-            "ok": True,
-            "dry_run": False,
-            "skipped": True,
-            "skip_reason": brand_gate.get("reason"),
-            "brand_official": brand_gate,
-            "operation": operation,
-            "kol_pool_id": None,
-            "fields_written": [],
-            "ignored_fields": ignored_fields,
-            "missing_columns": missing_columns,
-            "score_before": before_scores,
-            "score_after": before_scores,
-            "viltrox_fit_score_changed_ids": [],
-            "viltrox_fit_score_untouched": True,
-            "method": method,
-            "matched_existing": False,
-        }
-    if dry_run:
-        return {
-            "ok": True,
-            "dry_run": True,
-            "skipped": bool(brand_gate),
-            "skip_reason": brand_gate.get("reason") if brand_gate else "",
-            "operation": operation,
-            "kol_pool_id": int(kol_pool_id) if row else None,
-            "fields_to_write": sorted(planned_values),
-            "planned_values": planned_values,
-            "ignored_fields": ignored_fields,
-            "missing_columns": missing_columns,
-            "score_before": before_scores,
-            "score_after": before_scores,
-            "viltrox_fit_score_changed_ids": [],
-            "viltrox_fit_score_untouched": True,
-            "method": method,
-            "matched_existing": bool(row),
-        }
+    prewrite_response = _profile_prewrite_response(
+        db,
+        dry_run=dry_run,
+        identity_write_locked=identity_write_locked,
+        brand_gate=brand_gate,
+        operation=operation,
+        kol_pool_id=kol_pool_id,
+        row=row,
+        normalized=normalized,
+        planned_values=planned_values,
+        ignored_fields=ignored_fields,
+        missing_columns=missing_columns,
+        before_scores=before_scores,
+        method=method,
+        rollback=_rollback,
+        logger=logger,
+    )
+    if prewrite_response is not None:
+        return prewrite_response
 
-    changed_ids: list[int] = []
-    matched_existing = bool(row)
     try:
-        if operation == "update":
-            if not planned_values:
-                after_scores = before_scores
-                target_id = int(kol_pool_id or 0)
-            else:
-                target_id = int(kol_pool_id or 0)
-                _execute_update(db, target_id, planned_values)
-                after_scores = _score_snapshot(db, [target_id])
-                changed_ids = _changed_score_ids(before_scores, after_scores)
-        else:
-            # P0-4 修复 score 守卫误杀:ON CONFLICT DO UPDATE 可能落到已 enrich 的既有
-            # (platform,handle) 行,其 viltrox_fit_score 非空。旧码 _new_row_has_score 会把
-            # 『撞已评分行』误判为『新行被打分』→误回滚『二次贴 URL 刷新已评分 KOL』正常场景。
-            # 改法:INSERT 前按 (platform,handle) 快照既有 score;若冲突落到同一既有 id,
-            # 用 before==after 比对(仅 score 真变才回滚);若是真新行,保留旧守卫。
-            pre_id = _preexisting_pool_id(db, planned_values.get("platform"), planned_values.get("handle"))
-            matched_existing = pre_id is not None
-            insert_before_scores = _score_snapshot(db, [pre_id]) if pre_id else {}
-            target_id = _execute_insert(db, planned_values)
-            after_scores = _score_snapshot(db, [target_id])
-            if pre_id is not None and int(pre_id) == int(target_id):
-                changed_ids = _changed_score_ids(insert_before_scores, after_scores)
-            elif _new_row_has_score(after_scores.get(target_id, {})):
-                changed_ids = [target_id]
+        target_id, after_scores, changed_ids, matched_existing = _execute_profile_values(
+            db,
+            operation=operation,
+            kol_pool_id=kol_pool_id,
+            planned_values=planned_values,
+            before_scores=before_scores,
+            row=row,
+            execute_update=_execute_update,
+            execute_insert=_execute_insert,
+            score_snapshot=_score_snapshot,
+            changed_score_ids=_changed_score_ids,
+            preexisting_pool_id=_preexisting_pool_id,
+            new_row_has_score=_new_row_has_score,
+        )
 
         if changed_ids:
             _rollback(db)

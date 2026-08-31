@@ -65,6 +65,12 @@ from app.services.ai.orchestrator_analyzers import (
     VideoJobInput,
     VideoTask,
 )
+from app.services.ai.orchestrator_write_helpers import (
+    apply_weighted_scores,
+    merge_provider_payloads,
+    resolve_product_detection,
+    score_submission,
+)
 
 # ──────────────────────────────────────────────
 # 配置（全部可通过环境变量覆盖）
@@ -178,42 +184,25 @@ class DBWriter:
         submission_id = task.job.submission_id
 
         # ── 合并 Gemini + Claude 结果，优先用 Gemini（视频更准）──
-        vr: Dict[str, Any] = {}
-        for provider in ("gemini", "claude", "gpt_prefilter"):
-            r = task.results.get(provider, {})
-            if r.get("ok") and r.get("payload"):
-                for k, v in r["payload"].items():
-                    if v is not None and k not in vr:
-                        vr[k] = v
+        vr = merge_provider_payloads(task.results)
 
         if not vr:
             logger.warning("worker write skipped | submission_id=%s | reason=no_usable_payload", submission_id)
             return
 
         # ── 加权分数 ──
-        genre    = vr.get("content_genre", "")
-        vertical = vr.get("vertical_category", "")
-        v_key    = self._get_vertical(genre)
-        self._apply_learned(v_key)
-
-        ws  = self._compute_weighted(vr.get("quality_scores", {}), genre, vertical)
-        pct = {}
-        if genre and ws["tech_score"] > 0:
-            pct = self._update_benchmark(genre, ws["tech_score"], ws["marketing_score"])
-
-        brand_exp  = vr.get("brand_exposure_score", 0)
-        story_sc   = vr.get("storytelling_score", 0)
-        tech_stat  = ws["tech_status"]
-        tech_sc    = ws["tech_score"]
-        mkt_sc     = ws["marketing_score"]
-        q_overall  = ws["quality_overall"]
-
-        vr["brand_exposure_score"] = brand_exp
-        vr["storytelling_score"]   = story_sc
-        vr["tech_status"]          = tech_stat
-        vr["tech_score"]           = tech_sc
-        vr["marketing_score"]      = mkt_sc
-        vr["quality_overall"]      = q_overall
+        genre, vertical, ws, pct = apply_weighted_scores(
+            vr,
+            get_vertical=self._get_vertical,
+            apply_learned=self._apply_learned,
+            compute_weighted=self._compute_weighted,
+            update_benchmark=self._update_benchmark,
+        )
+        brand_exp = vr["brand_exposure_score"]
+        story_sc = vr["storytelling_score"]
+        tech_stat = ws["tech_status"]
+        tech_sc = ws["tech_score"]
+        mkt_sc = ws["marketing_score"]
 
         # ── 产品分类 + 检测状态 ──
         from app.services.audit.similarity import classify_product
@@ -221,93 +210,29 @@ class DBWriter:
             compute_campaign_score, compute_creator_score,
         )
 
-        # 从 AI 结果拼接全文用于产品匹配
-        full_text_parts = [
-            vr.get("notes", ""),
-            " ".join(vr.get("brand_elements", [])),
-            " ".join(vr.get("products_detected", [])),
-            " ".join(vr.get("viltrox_products_all", [])),
-            vr.get("viltrox_lens") or "",
-            vr.get("gear_combo") or "",
-            vr.get("content_topic") or "",
-        ]
-        full_text = " ".join(filter(None, full_text_parts))
-
-        product_match = classify_product(full_text)
-
-        # Cinema 相机交叉验证：ARRI/RED/Blackmagic + AIR/LAB → 强制改 EPIC/LUNA
-        camera_brand = (vr.get("camera_brand") or "").upper()
-        if camera_brand in ("ARRI", "RED", "BLACKMAGIC"):
-            if product_match.get("series", "") in ("AIR", "LAB", "PRO", ""):
-                all_prods = (vr.get("products_detected", [])
-                             + vr.get("viltrox_products_all", []))
-                for p in all_prods:
-                    if any(kw in p.lower() for kw in ("epic", "luna", "anamorphic", "zmove")):
-                        better = classify_product(p)
-                        if better.get("confidence") != "none":
-                            product_match = better
-                            break
-
-        # 检测状态
-        viltrox_detected = vr.get("viltrox_detected", False)
-        confidence = vr.get("confidence", "none")
-
-        if viltrox_detected and confidence in ("high", "medium"):
-            detection_status = "confirmed"
-        elif viltrox_detected:
-            detection_status = "suspected"
-        elif product_match.get("confidence") in ("high", "medium"):
-            detection_status = "confirmed"
-            viltrox_detected = True
-        else:
-            detection_status = "not_detected"
-
-        # ── 评分 ──
-        metrics = task.job.metrics or {}
-        views    = metrics.get("views", 0)
-        likes    = metrics.get("likes", 0)
-        comments = metrics.get("comments", 0)
-        shares   = metrics.get("shares", 0)
-        favorites = metrics.get("favorites", 0)
-
-        creator_score = compute_creator_score(views, likes, comments, shares)
-
-        content_score = 30 if detection_status == "confirmed" else 0
-        campaign = compute_campaign_score(
-            content_score, views, likes, comments, shares, favorites
+        product_match, viltrox_detected, detection_status = resolve_product_detection(
+            vr,
+            classify_product=classify_product,
         )
 
-        final_score = max(0, campaign["raw_score"]) if detection_status == "confirmed" else 0
-
-        # 上传视频 +50
-        if task.job.uploaded_video:
-            final_score = min(400, final_score + 50)
-
-        # Vision 检测 bonus
-        if viltrox_detected and vr.get("brand_score_bonus", 0):
-            final_score = min(400, final_score + vr["brand_score_bonus"])
-
-        # Hints bonus
-        hints = task.job.hints or {}
-        hint_bonus = sum([
-            15 if hints.get("logo") else 0,
-            12 if hints.get("product") else 0,
-            10 if hints.get("voice") else 0,
-            10 if hints.get("review") else 0,
-        ])
-        final_score = min(400, final_score + hint_bonus)
-
-        if detection_status == "confirmed":
-            overall_score = round((final_score / 4) * 0.7 + creator_score * 0.3)
-            recommendation = "Eligible for brand campaign pool"
-        elif detection_status == "suspected":
-            overall_score = creator_score
-            recommendation = "Pending manual review"
-        else:
-            final_score = 0
-            overall_score = 0
-            creator_score = 0
-            recommendation = "No Viltrox content detected"
+        # ── 评分 ──
+        scores = score_submission(
+            task,
+            vr,
+            detection_status=detection_status,
+            viltrox_detected=viltrox_detected,
+            compute_creator_score=compute_creator_score,
+            compute_campaign_score=compute_campaign_score,
+        )
+        views = scores["views"]
+        likes = scores["likes"]
+        comments = scores["comments"]
+        shares = scores["shares"]
+        favorites = scores["favorites"]
+        final_score = scores["final_score"]
+        creator_score = scores["creator_score"]
+        overall_score = scores["overall_score"]
+        recommendation = scores["recommendation"]
 
         risk_score = 0  # stub — risk.py 后续补真逻辑
 

@@ -10,13 +10,14 @@ class-LOC 棘轮拆分(2026-08-30):RedisJobQueue 保薄门面,重活按职责搬
 - queue_maintenance:台账读写/超时清扫/队列汇总。
 
 monkeypatch 面:本模块级符号(get_conn/db_connection_scope/常量/工具函数)全部
-保留原名,协作模块经惰性 import 回读本模块命名空间,所以对本模块打的补丁在
-协作模块内同样生效;实例级补丁(get_status/set_status 等)经 ``queue.<attr>``
-调用同样生效。
+保留原名,协作模块经无反向 import 的运行时绑定回读本模块命名空间,所以对本
+模块打的补丁在协作模块内同样生效;实例级补丁(get_status/set_status 等)经
+``queue.<attr>`` 调用同样生效。
 """
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import Any, Dict, Optional
 
 from app.core.config import (
@@ -35,7 +36,13 @@ from app.core.config import (
 from app.core.logging import get_logger
 from app.db.connection import db_connection_scope, get_conn, is_postgres_runtime
 from app.services.ai.orchestrator import TaskStatus, VideoJobInput
-from app.services.jobs import queue_claim, queue_enqueue, queue_heartbeat, queue_maintenance
+from app.services.jobs import (
+    queue_claim,
+    queue_enqueue,
+    queue_heartbeat,
+    queue_maintenance,
+    queue_runtime,
+)
 from app.services.jobs.queue_common import (
     BaseJobQueue,
     TERMINAL_JOB_STATUSES,
@@ -53,6 +60,7 @@ except Exception:
     redis_from_url = None
 
 logger = get_logger(__name__)
+queue_runtime.bind_queue_facade(sys.modules[__name__])
 
 
 class RedisJobQueue(BaseJobQueue):

@@ -1,4 +1,5 @@
 from app.api.routers import vkpi_dashboard_staff
+from app.db.repositories import viltrox_matrix
 from app.domains.dashboard import kol_distribution as dashboard_kol_distribution
 from app.domains.dashboard import recent_content as dashboard_recent_content
 
@@ -12,6 +13,96 @@ class _Rows:
 
     def fetchone(self):
         return self.rows[0] if self.rows else None
+
+
+def test_dashboard_official_content_prefers_matrix_and_preserves_shape(monkeypatch):
+    monkeypatch.setattr(
+        dashboard_recent_content.channels,
+        "official_account_matrix",
+        lambda limit: {
+            "platforms": [{
+                "platform": "youtube",
+                "accounts": [{
+                    "handle": "viltrox",
+                    "display_name": "Viltrox",
+                    "posts": [{
+                        "title": "New lens",
+                        "url": "https://example.test/new-lens",
+                        "posted_at": "2026-08-31T12:00:00Z",
+                        "views": "101.0",
+                        "like_count": "9",
+                        "comment_count": 3,
+                        "share_count": 2,
+                        "content_type": "video",
+                        "thumbnail": "https://example.test/thumb.jpg",
+                        "canonical_post_uid": "youtube:new-lens",
+                    }],
+                }],
+            }],
+        },
+    )
+    monkeypatch.setattr(
+        viltrox_matrix,
+        "get_latest_viltrox_scan_bundle",
+        lambda: (_ for _ in ()).throw(AssertionError("fallback must not run")),
+    )
+
+    rows = dashboard_recent_content._dashboard_recent_official_content(5)
+
+    assert rows == [{
+        "content_kind": "official",
+        "title": "New lens",
+        "url": "https://example.test/new-lens",
+        "platform": "youtube",
+        "account_handle": "viltrox",
+        "account_display_name": "Viltrox",
+        "posted_at": "2026-08-31T12:00:00Z",
+        "views": 101,
+        "likes": 9,
+        "comments": 3,
+        "shares": 2,
+        "media_type": "video",
+        "thumbnail_url": "https://example.test/thumb.jpg",
+        "source_table": "vkpi_employee_channel_metrics",
+        "source_id": "youtube:new-lens",
+    }]
+
+
+def test_dashboard_official_matrix_failure_discards_partial_rows_before_fallback(monkeypatch):
+    monkeypatch.setattr(
+        dashboard_recent_content.channels,
+        "official_account_matrix",
+        lambda limit: {
+            "platforms": [
+                {
+                    "platform": "youtube",
+                    "accounts": [{
+                        "handle": "partial",
+                        "posts": [{"title": "must be discarded", "url": "https://bad"}],
+                    }],
+                },
+                None,
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        viltrox_matrix,
+        "get_latest_viltrox_scan_bundle",
+        lambda: {
+            "posts": [{
+                "title": "Fallback",
+                "post_url": "https://example.test/fallback",
+                "platform": "instagram",
+                "handle": "viltrox",
+                "published_at": "2026-08-30T12:00:00Z",
+            }]
+        },
+    )
+
+    rows = dashboard_recent_content._dashboard_recent_official_content(5)
+
+    assert [row["title"] for row in rows] == ["Fallback"]
+    assert rows[0]["source_table"] == "viltrox_matrix_scan_posts"
 
 
 def test_dashboard_recent_content_returns_empty_payload(monkeypatch):

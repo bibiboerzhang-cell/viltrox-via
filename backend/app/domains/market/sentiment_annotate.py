@@ -371,6 +371,29 @@ def _chunked(items: list[dict[str, Any]], size: int) -> list[list[dict[str, Any]
     return [items[i : i + size] for i in range(0, len(items), max(1, int(size)))]
 
 
+def _resolved_sentiment_binding() -> tuple[str, str, str]:
+    try:
+        provider, model = _sentiment_binding()
+        return provider, model, ""
+    except ValueError as exc:
+        return (
+            str(os.environ.get(PROVIDER_ENV) or DEFAULT_PROVIDER).strip().lower(),
+            str(os.environ.get(MODEL_ENV) or "").strip(),
+            str(exc),
+        )
+
+
+def _link_cached_results(conn: Any, reuse_map: dict[int, int]) -> int:
+    linked = 0
+    for cid, result_id in reuse_map.items():
+        conn.execute(
+            "UPDATE vkpi_comments SET sentiment_id=? WHERE id=? AND sentiment_id IS NULL",
+            (int(result_id), int(cid)),
+        )
+        linked += 1
+    return linked
+
+
 def annotate_batch(
     batch_size: int = 50,
     *,
@@ -399,13 +422,7 @@ def annotate_batch(
 
     est_in = sum(_est_tokens(p) for p in prompts)
     est_out = len(llm_items) * OUTPUT_TOKENS_PER_COMMENT + len(chunks) * OUTPUT_TOKENS_SLACK
-    try:
-        provider_pref, model_pref = _sentiment_binding()
-        binding_error = ""
-    except ValueError as exc:
-        provider_pref = str(os.environ.get(PROVIDER_ENV) or DEFAULT_PROVIDER).strip().lower()
-        model_pref = str(os.environ.get(MODEL_ENV) or "").strip()
-        binding_error = str(exc)
+    provider_pref, model_pref, binding_error = _resolved_sentiment_binding()
     summary: dict[str, Any] = {
         "mode": "dry_run" if dry_run else "live",
         "prompt_version": PROMPT_VERSION,
@@ -430,19 +447,11 @@ def annotate_batch(
 
     # ── 真跑 ────────────────────────────────────────────────────────────
     annotated = 0
-    linked_from_cache = 0
+    linked_from_cache = _link_cached_results(conn, reuse_map)
     skipped_unparsed = 0
     halted_reason = ""
     providers_used: set[str] = set()
     aspect_counts: dict[str, int] = {}
-
-    # 结果缓存回链:已有结果行的评论直接补 sentiment_id,零 LLM。
-    for cid, result_id in reuse_map.items():
-        conn.execute(
-            "UPDATE vkpi_comments SET sentiment_id=? WHERE id=? AND sentiment_id IS NULL",
-            (int(result_id), int(cid)),
-        )
-        linked_from_cache += 1
 
     for attempt_index, (chunk, prompt) in enumerate(zip(chunks, prompts), start=1):
         expected = {int(it["id"]) for it in chunk}

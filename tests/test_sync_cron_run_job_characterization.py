@@ -13,7 +13,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1] / "backend"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.domains.sync import cron, daily_batch  # noqa: E402
+from app.domains.sync import cron, daily_batch, daily_batch_capacity  # noqa: E402
 
 
 def _stable_runtime(monkeypatch: pytest.MonkeyPatch, events: list[Any]) -> None:
@@ -259,7 +259,33 @@ def test_daily_incremental_guard_and_queue_side_effect_order(
     from app.domains.sync import daily_sync, refresh_tier
 
     events: list[Any] = []
+    parent_checkpoints: list[dict[str, Any]] = []
     _stable_runtime(monkeypatch, events)
+
+    runtime_proof = {
+        "proof_available": True,
+        "proof_source": "test-ledger+heartbeat",
+        "proof_at": "2026-08-31T12:00:00+00:00",
+        "requested_worker_count": 2,
+        "fresh_worker_processes": 1,
+        "fresh_consumer_count": 2,
+        "effective_worker_count": 2,
+        "minimum_ready_sequence": 2,
+        "release_sha": "a" * 40,
+        "waiting_tasks": 0,
+        "processing_tasks": 0,
+        "active_backlog_tasks": 0,
+        "backlog_policy": "reject_nonempty",
+        "stream_key": "vkpi:jobs",
+        "group": "vkpi-workers",
+    }
+
+    async def prove_capacity(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        return dict(runtime_proof)
+
+    monkeypatch.setattr(
+        daily_batch_capacity, "runtime_capacity_proof", prove_capacity
+    )
     monkeypatch.setattr(daily_sync, "check_daily_sync_guard", lambda payload: events.append("guard"))
     monkeypatch.setattr(daily_sync, "_bool", lambda value: bool(value))
     monkeypatch.setattr(daily_sync, "_kol_refresh_selector", lambda payload: events.append("selector") or selector)
@@ -313,7 +339,13 @@ def test_daily_incremental_guard_and_queue_side_effect_order(
     monkeypatch.setattr(daily_batch, "queue_batch", queue_daily)
     monkeypatch.setattr(daily_batch, "new_batch_id", lambda: "batch-1")
     monkeypatch.setattr(daily_batch, "insert_parent", lambda *_args, **_kwargs: events.append("parent_insert"))
-    monkeypatch.setattr(daily_batch, "checkpoint_parent", lambda *_args, **_kwargs: events.append("parent_checkpoint"))
+    monkeypatch.setattr(
+        daily_batch,
+        "checkpoint_parent",
+        lambda _batch_id, summary: (
+            events.append("parent_checkpoint"), parent_checkpoints.append(summary)
+        ),
+    )
     monkeypatch.setattr(daily_batch, "finish_parent", lambda *_args, **_kwargs: events.append("parent_finish"))
 
     async def reconcile(queue: Any) -> dict[str, int]:
@@ -375,6 +407,12 @@ def test_daily_incremental_guard_and_queue_side_effect_order(
     assert receipt["enqueue_failures"] == 0
     assert receipt["official"]["channels_enqueued"] == 1
     assert receipt["kol_pool_light"]["enqueued"] == 1
+    admission = result.pop("admission")
+    assert admission["admitted"] is True
+    assert admission["admission_reason"] == "within_verified_capacity"
+    assert admission["worker_count"] == 2
+    assert admission["runtime_proof"] == runtime_proof
+    assert parent_checkpoints[-1]["admission"] == admission
     assert result == {
         "job": "daily_incremental_sync",
         "status": "queued",

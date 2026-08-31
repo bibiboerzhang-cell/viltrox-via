@@ -13,71 +13,95 @@ from app.db.repositories.viltrox_matrix import (
 from app.services.deepsight.parallel_scan import scan_accounts_concurrently
 
 
+def _scan_post(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": str(row.get("title") or ""),
+        "url": str(row.get("post_url") or ""),
+        "thumbnail": str(row.get("thumbnail_url") or ""),
+        "views": int(row.get("views") or 0),
+        "likes": int(row.get("likes") or 0),
+        "comments": int(row.get("comments") or 0),
+        "shares": int(row.get("shares") or 0),
+        "published": str(row.get("published_at") or ""),
+        "type": str(row.get("content_type") or ""),
+    }
+
+
+def _posts_by_account(posts: list[dict[str, Any]]) -> dict[int, list[dict[str, Any]]]:
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for row in posts:
+        grouped.setdefault(int(row.get("account_id") or 0), []).append(_scan_post(row))
+    return grouped
+
+
+def _scan_account_result(
+    account: dict[str, Any],
+    scan_row: dict[str, Any],
+    account_posts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    account_id = int(account.get("id") or 0)
+    return {
+        "account": {
+            "id": account_id,
+            "name": str(account.get("name") or ""),
+            "platform": str(account.get("platform") or ""),
+            "handle": str(account.get("handle") or ""),
+        },
+        "data": {
+            "overview": {
+                "total_posts": int(scan_row.get("total_posts") or len(account_posts)),
+                "total_views": int(scan_row.get("total_views") or 0),
+                "total_likes": int(scan_row.get("total_likes") or 0),
+                "total_comments": int(scan_row.get("total_comments") or 0),
+            },
+            "posts": account_posts,
+            "error": str(scan_row.get("error_message") or "") or None,
+        },
+        "duration_sec": float(scan_row.get("duration_sec") or 0.0),
+    }
+
+
+def _scan_results(
+    accounts: list[dict[str, Any]],
+    scan_accounts: list[dict[str, Any]],
+    posts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped_posts = _posts_by_account(posts)
+    scan_rows = {int(row.get("account_id") or 0): row for row in scan_accounts}
+    # Preserve the historical eager account-id normalization before projection.
+    _account_lookup = {int(account.get("id") or 0): account for account in accounts}
+    return [
+        _scan_account_result(
+            account,
+            scan_rows.get(int(account.get("id") or 0)) or {},
+            grouped_posts.get(int(account.get("id") or 0), []),
+        )
+        for account in accounts
+    ]
+
+
+def _scan_aggregate(run: dict[str, Any]) -> dict[str, Any]:
+    aggregate = dict(run.get("aggregate") or {})
+    if aggregate:
+        return aggregate
+    return {
+        "total_posts": int(run.get("total_posts") or 0),
+        "total_views": int(run.get("total_views") or 0),
+        "total_likes": int(run.get("total_likes") or 0),
+        "total_comments": int(run.get("total_comments") or 0),
+    }
+
+
 def _build_scan_payload(bundle: dict[str, Any]) -> dict[str, Any] | None:
     run = bundle.get("run") or {}
     if not run:
         return None
     accounts = bundle.get("accounts") or []
-    scan_accounts = bundle.get("scan_accounts") or []
-    posts = bundle.get("posts") or []
-    posts_by_account: dict[int, list[dict[str, Any]]] = {}
-    for row in posts:
-        posts_by_account.setdefault(int(row.get("account_id") or 0), []).append(
-            {
-                "title": str(row.get("title") or ""),
-                "url": str(row.get("post_url") or ""),
-                "thumbnail": str(row.get("thumbnail_url") or ""),
-                "views": int(row.get("views") or 0),
-                "likes": int(row.get("likes") or 0),
-                "comments": int(row.get("comments") or 0),
-                "shares": int(row.get("shares") or 0),
-                "published": str(row.get("published_at") or ""),
-                "type": str(row.get("content_type") or ""),
-            }
-        )
-
-    scan_account_map = {
-        int(row.get("account_id") or 0): row
-        for row in scan_accounts
-    }
-    results: list[dict[str, Any]] = []
-    account_lookup: dict[int, dict[str, Any]] = {
-        int(account.get("id") or 0): account
-        for account in accounts
-    }
-    for account in accounts:
-        account_id = int(account.get("id") or 0)
-        scan_row = scan_account_map.get(account_id) or {}
-        account_posts = posts_by_account.get(account_id, [])
-        results.append(
-            {
-                "account": {
-                    "id": account_id,
-                    "name": str(account.get("name") or ""),
-                    "platform": str(account.get("platform") or ""),
-                    "handle": str(account.get("handle") or ""),
-                },
-                "data": {
-                    "overview": {
-                        "total_posts": int(scan_row.get("total_posts") or len(account_posts)),
-                        "total_views": int(scan_row.get("total_views") or 0),
-                        "total_likes": int(scan_row.get("total_likes") or 0),
-                        "total_comments": int(scan_row.get("total_comments") or 0),
-                    },
-                    "posts": account_posts,
-                    "error": str(scan_row.get("error_message") or "") or None,
-                },
-                "duration_sec": float(scan_row.get("duration_sec") or 0.0),
-            }
-        )
-    aggregate = dict(run.get("aggregate") or {})
-    if not aggregate:
-        aggregate = {
-            "total_posts": int(run.get("total_posts") or 0),
-            "total_views": int(run.get("total_views") or 0),
-            "total_likes": int(run.get("total_likes") or 0),
-            "total_comments": int(run.get("total_comments") or 0),
-        }
+    results = _scan_results(
+        accounts,
+        bundle.get("scan_accounts") or [],
+        bundle.get("posts") or [],
+    )
     return {
         "run_id": int(run.get("id") or 0),
         "run_key": str(run.get("run_key") or ""),
@@ -86,7 +110,7 @@ def _build_scan_payload(bundle: dict[str, Any]) -> dict[str, Any] | None:
         "results": results,
         "scanned": int(run.get("scanned_accounts") or len(results)),
         "total": int(run.get("total_accounts") or len(results)),
-        "aggregate": aggregate,
+        "aggregate": _scan_aggregate(run),
     }
 
 

@@ -13,10 +13,10 @@ import json
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
-from urllib.parse import urlsplit
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.kol.contact_acquisition_source import candidate_source as _candidate_source_impl
 
 
 logger = get_logger(__name__)
@@ -354,88 +354,17 @@ def seed_existing_contact_acquisition_queue(
 def _candidate_source(
     candidate: dict[str, Any], *, platform: Any = "", source_url: Any = ""
 ) -> tuple[str, bool, str]:
-    source = str(candidate.get("source_type") or "raw_full_scan").strip().lower()
-    platform_key = str(platform or "").strip().casefold()
-    contact_type = str(candidate.get("contact_type") or "").strip().lower()
-    try:
-        confidence = float(candidate.get("confidence") or 0.0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    evidence = str(candidate.get("evidence_text") or "")[:280].casefold()
-    value = str(candidate.get("contact_value") or "").strip().casefold()
-    raw_source_field = str(candidate.get("source_field") or "").strip()
-    source_field = (
-        raw_source_field
-        if _SOURCE_FIELD_RE.fullmatch(raw_source_field)
-        else "raw_platform_data"
+    return _candidate_source_impl(
+        candidate,
+        platform=platform,
+        source_url=source_url,
+        source_field_pattern=_SOURCE_FIELD_RE,
+        platform_hosts=_PLATFORM_PROFILE_HOSTS,
+        explicit_bio_anchors=_EXPLICIT_BIO_CONTACT_ANCHORS,
+        ig_public_fields=_IG_PUBLIC_BUSINESS_FIELDS,
+        youtube_public_fields=_YOUTUBE_PUBLIC_BUSINESS_FIELDS,
+        public_verification_sources=_PUBLIC_VERIFICATION_SOURCES,
     )
-    field_key = source_field.casefold()
-    try:
-        source_host = (urlsplit(str(source_url or "")).hostname or "").casefold().rstrip(".")
-    except ValueError:
-        source_host = ""
-    expected_hosts = _PLATFORM_PROFILE_HOSTS.get(platform_key, frozenset())
-    platform_host_matches = bool(
-        source_host
-        and expected_hosts
-        and any(source_host == host or source_host.endswith("." + host) for host in expected_hosts)
-    )
-    bounded_identity_proof = bool(
-        value
-        and value in evidence
-        and any(anchor in evidence for anchor in _EXPLICIT_BIO_CONTACT_ANCHORS)
-    )
-    field_identity_proof = bool(value and value in evidence)
-    public_bio_field = bool(
-        field_key in {
-            "profile.bio",
-            "profile.biography",
-            "profile.about",
-            "profile.description",
-            "profile.channel_description",
-            "profile.signature",
-            "profile.snippet.description",
-            "profile.items.0.snippet.description",
-        }
-        or field_key.endswith(
-            (".bio", ".biography", ".signature", ".description")
-        )
-    )
-    if source == "ig_business_profile" and not (
-        platform_key in {"instagram", "ig"}
-        and platform_host_matches
-        and field_key in _IG_PUBLIC_BUSINESS_FIELDS
-        and field_identity_proof
-    ):
-        source = "raw_bio_scan"
-    if source == "youtube_about_declared" and not (
-        platform_key in {"youtube", "yt"}
-        and platform_host_matches
-        and field_key in _YOUTUBE_PUBLIC_BUSINESS_FIELDS
-        and field_identity_proof
-    ):
-        source = "raw_bio_scan"
-    # A zero-provider L0 cycle cannot prove a website contact page, even if an
-    # untrusted candidate labels itself ``website_declared``.
-    if source == "website_declared":
-        source = "raw_bio_scan"
-    # ``_email_confidence`` historically raises the whole bio to .9 when an
-    # unrelated business word occurs far from an email.  Promotion therefore
-    # also requires bounded evidence containing both this exact email and an
-    # explicit nearby contact anchor.  Confidence alone is never identity proof.
-    if source == "raw_bio_scan" and platform_host_matches and public_bio_field and contact_type in {
-        "email", "business_email", "public_email", "contact_email"
-    } and confidence >= 0.85 and bounded_identity_proof:
-        source = "bio_explicit_contact"
-    if source == "bio_explicit_contact" and not (
-        platform_host_matches
-        and public_bio_field
-        and confidence >= 0.85
-        and bounded_identity_proof
-    ):
-        source = "raw_bio_scan"
-    public_declared = source in _PUBLIC_VERIFICATION_SOURCES and confidence >= 0.85
-    return source, public_declared, source_field
 
 
 def _queue_update(

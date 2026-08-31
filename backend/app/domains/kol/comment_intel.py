@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import json
 import re
-import statistics
-from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.kol.comment_intel_analysis import analyze_comments as _analyze_comments_impl
 
 logger = get_logger(__name__)
 
@@ -88,102 +87,14 @@ def analyze_comments(comments: list[dict[str, Any]]) -> dict[str, Any]:
 
     评论 dict 字段(全部可缺省):text, author, created_at, like_count, is_reply, video_key。
     """
-    rows = [c for c in (comments or []) if str((c or {}).get("text") or "").strip()]
-    n = len(rows)
-    if n == 0:
-        return {"sample_size": 0, "note": "无评论可分析(诚实空,不编造)"}
-
-    # ── 购买意向(带证据:最多 5 条原句样本,可下钻)──
-    intent_rows = [c for c in rows if _matches_any(str(c.get("text") or "").lower(), PURCHASE_INTENT_TERMS)]
-    intent_rows.sort(key=lambda c: int(c.get("like_count") or 0), reverse=True)
-    purchase_intent = {
-        "count": len(intent_rows),
-        "pct": round(100.0 * len(intent_rows) / n, 1),
-        "samples": [
-            {
-                "author_handle": str(c.get("author") or ""),
-                "text": _truncate(c.get("text"), 120),
-                "created_at": str(c.get("created_at") or "")[:19],
-            }
-            for c in intent_rows[:5]
-        ],
-    }
-
-    # ── 品牌提及(每品牌带最多 2 条样本证据)──
-    brand_counts: list[dict[str, Any]] = []
-    for brand, aliases in BRAND_TERMS.items():
-        matched = [c for c in rows if _matches_any(str(c.get("text") or "").lower(), aliases)]
-        if matched:
-            matched.sort(key=lambda c: int(c.get("like_count") or 0), reverse=True)
-            brand_counts.append(
-                {
-                    "brand": brand,
-                    "count": len(matched),
-                    "samples": [
-                        {"author_handle": str(c.get("author") or ""), "text": _truncate(c.get("text"), 120)}
-                        for c in matched[:2]
-                    ],
-                }
-            )
-    brand_counts.sort(key=lambda b: (-b["count"], b["brand"]))
-
-    # ── 活跃时段(UTC 24h 直方;附峰值时段评论数作证据)──
-    hist = [0] * 24
-    timed = 0
-    for c in rows:
-        hour = _parse_hour_utc(c.get("created_at"))
-        if hour is not None:
-            hist[hour] += 1
-            timed += 1
-    top_hours = [h for h, _cnt in sorted(enumerate(hist), key=lambda kv: (-kv[1], kv[0]))[:3] if hist[h] > 0]
-    suggestion = ""
-    if top_hours:
-        lead = top_hours[0]
-        suggestion = f"UTC {lead:02d}-{(lead + 2) % 24:02d}时"
-    active_hours = {
-        "hist": hist,
-        "timed_n": timed,
-        "top_hours": top_hours,
-        "peak_hour_comment_count": hist[top_hours[0]] if top_hours else 0,
-        "suggestion": suggestion,
-    }
-
-    # ── 互动质量 ──
-    video_keys = {str(c.get("video_key")) for c in rows if c.get("video_key") not in (None, "")}
-    replies = sum(1 for c in rows if bool(c.get("is_reply")))
-    likes = [int(c.get("like_count") or 0) for c in rows]
-    engagement = {
-        "comments_per_video": round(n / len(video_keys), 1) if video_keys else None,
-        "video_n": len(video_keys),
-        "reply_pct": round(100.0 * replies / n, 1),
-        "likes_median": int(statistics.median(likes)) if likes else 0,
-    }
-
-    # ── 铁粉(重复评论者)──
-    author_counter: Counter = Counter(
-        str(c.get("author") or "").strip() for c in rows if str(c.get("author") or "").strip()
+    return _analyze_comments_impl(
+        comments,
+        purchase_terms=PURCHASE_INTENT_TERMS,
+        brand_terms=BRAND_TERMS,
+        matches_any=_matches_any,
+        truncate=_truncate,
+        parse_hour=_parse_hour_utc,
     )
-    sample_by_author: dict[str, str] = {}
-    for c in rows:
-        author = str(c.get("author") or "").strip()
-        if author and author not in sample_by_author:
-            sample_by_author[author] = _truncate(c.get("text"), 60)
-    superfans = [
-        {"handle": author, "count": count, "sample": sample_by_author.get(author, "")}
-        for author, count in author_counter.most_common(10)
-        if count >= 2
-    ]
-
-    return {
-        "sample_size": n,
-        "purchase_intent": purchase_intent,
-        "brand_mentions": brand_counts,
-        "active_hours": active_hours,
-        "engagement": engagement,
-        "superfans": superfans,
-        "method": "comment_intel_v1",
-        "note": "评论集统计(词表/直方),零 LLM 零外调",
-    }
 
 
 def load_local_comments(kol_pool_id: int, *, conn: Any = None, limit: int = 1000) -> list[dict[str, Any]]:
@@ -387,6 +298,130 @@ def self_commenter_keys_for_kols(db: Any, kol_pool_ids: list[int]) -> dict[int, 
     return sets
 
 
+def _merge_overlap_rows(
+    peer_sets: dict[tuple[str, int], set[str]], rows: Any, *, kind: str
+) -> None:
+    for raw in rows:
+        rec = dict(raw)
+        key = _rescued_author_key(rec)
+        if key:
+            peer_sets.setdefault((kind, int(rec["peer_id"])), set()).add(key)
+
+
+def _merge_main_overlap_rows(
+    db: Any, kol_pool_id: int, peer_sets: dict[tuple[str, int], set[str]]
+) -> None:
+    if not _has_kol_comments(db):
+        return
+    self_linked = db.execute(
+        "SELECT linked_main_kol_id FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)
+    ).fetchone()
+    self_main = int(dict(self_linked or {}).get("linked_main_kol_id") or 0)
+    rows = db.execute(
+        "SELECT kol_id AS peer_id, platform, author_handle FROM kol_comments "
+        "WHERE author_handle IS NOT NULL AND author_handle<>''",
+        (),
+    ).fetchall()
+    for raw in rows:
+        rec = dict(raw)
+        peer_id = int(rec["peer_id"] or 0)
+        if not peer_id or peer_id == self_main:
+            continue
+        key = (
+            f"{str(rec.get('platform') or '').lower()}:"
+            f"{str(rec.get('author_handle') or '').strip().lower()}"
+        )
+        peer_sets.setdefault(("kol_main", peer_id), set()).add(key)
+
+
+def _score_overlap_peers(
+    self_keys: set[str], peer_sets: dict[tuple[str, int], set[str]], top_n: int
+) -> list[dict[str, Any]]:
+    scored: list[dict[str, Any]] = []
+    for (kind, peer_id), keys in peer_sets.items():
+        shared = len(self_keys & keys)
+        if shared < 2:
+            continue
+        union = len(self_keys | keys)
+        scored.append(
+            {
+                "kind": kind,
+                "peer_id": peer_id,
+                "shared_count": shared,
+                "jaccard": round(shared / union, 3) if union else 0.0,
+                "peer_commenters": len(keys),
+            }
+        )
+    scored.sort(key=lambda item: (-item["shared_count"], -item["jaccard"]))
+    return scored[: max(1, int(top_n))]
+
+
+def _overlap_names(db: Any, top: list[dict[str, Any]]) -> dict[tuple[str, int], dict[str, str]]:
+    names: dict[tuple[str, int], dict[str, str]] = {}
+    kol_ids = [item["peer_id"] for item in top if item["kind"] == "kol"]
+    official_ids = [item["peer_id"] for item in top if item["kind"] == "official"]
+    main_ids = [item["peer_id"] for item in top if item["kind"] == "kol_main"]
+    if kol_ids:
+        placeholders = ",".join(["?"] * len(kol_ids))
+        for raw in db.execute(
+            f"SELECT id, handle, display_name FROM vkpi_kol_pool WHERE id IN ({placeholders})",
+            tuple(kol_ids),
+        ).fetchall():
+            rec = dict(raw)
+            names[("kol", int(rec["id"]))] = {
+                "handle": str(rec.get("handle") or ""),
+                "display_name": str(rec.get("display_name") or ""),
+            }
+    if official_ids:
+        placeholders = ",".join(["?"] * len(official_ids))
+        for raw in db.execute(
+            f"SELECT id, account_handle, account_display_name FROM vkpi_employee_channels WHERE id IN ({placeholders})",
+            tuple(official_ids),
+        ).fetchall():
+            rec = dict(raw)
+            names[("official", int(rec["id"]))] = {
+                "handle": str(rec.get("account_handle") or ""),
+                "display_name": str(rec.get("account_display_name") or ""),
+            }
+    if main_ids:
+        _merge_main_overlap_names(db, main_ids, names)
+    return names
+
+
+def _merge_main_overlap_names(
+    db: Any, main_ids: list[int], names: dict[tuple[str, int], dict[str, str]]
+) -> None:
+    placeholders = ",".join(["?"] * len(main_ids))
+    for raw in db.execute(
+        f"SELECT id, channel_name FROM kols WHERE id IN ({placeholders})", tuple(main_ids)
+    ).fetchall():
+        rec = dict(raw)
+        names[("kol_main", int(rec["id"]))] = {
+            "handle": str(rec.get("channel_name") or ""),
+            "display_name": str(rec.get("channel_name") or ""),
+        }
+    for raw in db.execute(
+        f"SELECT id, handle, display_name, linked_main_kol_id FROM vkpi_kol_pool WHERE linked_main_kol_id IN ({placeholders})",
+        tuple(main_ids),
+    ).fetchall():
+        rec = dict(raw)
+        entry = names.setdefault(("kol_main", int(rec["linked_main_kol_id"])), {})
+        entry["handle"] = str(rec.get("handle") or entry.get("handle") or "")
+        entry["display_name"] = str(rec.get("display_name") or entry.get("display_name") or "")
+        entry["peer_kol_pool_id"] = str(rec.get("id") or "")
+
+
+def _decorate_overlap_names(
+    top: list[dict[str, Any]], names: dict[tuple[str, int], dict[str, str]]
+) -> None:
+    for item in top:
+        info = names.get((item["kind"], item["peer_id"])) or {}
+        item["handle"] = info.get("handle") or ""
+        item["display_name"] = info.get("display_name") or ""
+        if info.get("peer_kol_pool_id"):
+            item["peer_kol_pool_id"] = int(info["peer_kol_pool_id"])
+
+
 def compute_audience_overlap(kol_pool_id: int, *, conn: Any = None, top_n: int = 5) -> dict[str, Any]:
     """共同粉丝:该 KOL 评论者集合 vs 库内其他 KOL(evidence/account_id 桥)+ 官号(employee_channels 桥)。
 
@@ -412,11 +447,7 @@ def compute_audience_overlap(kol_pool_id: int, *, conn: Any = None, top_n: int =
         "WHERE e.kol_pool_id<>?",
         (int(kol_pool_id),),
     ).fetchall()
-    for r in rows:
-        rec = dict(r)
-        key = _rescued_author_key(rec)
-        if key:
-            peer_sets.setdefault(("kol", int(rec["peer_id"])), set()).add(key)
+    _merge_overlap_rows(peer_sets, rows, kind="kol")
     # 桥 2:account_id -> 其他 KOL(排除官号表口径)
     rows = db.execute(
         "SELECT c.account_id AS peer_id, c.platform, c.author_handle, c.author_id, c.raw_data_json FROM vkpi_comments c "
@@ -425,110 +456,20 @@ def compute_audience_overlap(kol_pool_id: int, *, conn: Any = None, top_n: int =
         "AND c.post_table IN ('evidence','vkpi_kol_video_evidence')",
         (int(kol_pool_id),),
     ).fetchall()
-    for r in rows:
-        rec = dict(r)
-        key = _rescued_author_key(rec)
-        if key:
-            peer_sets.setdefault(("kol", int(rec["peer_id"])), set()).add(key)
+    _merge_overlap_rows(peer_sets, rows, kind="kol")
     # 桥 3:官号(vkpi_employee_channels)
     rows = db.execute(
         "SELECT c.account_id AS peer_id, c.platform, c.author_handle, c.author_id, c.raw_data_json FROM vkpi_comments c "
         "WHERE c.post_table='vkpi_employee_channels' AND c.account_id IS NOT NULL",
         (),
     ).fetchall()
-    for r in rows:
-        rec = dict(r)
-        key = _rescued_author_key(rec)
-        if key:
-            peer_sets.setdefault(("official", int(rec["peer_id"])), set()).add(key)
+    _merge_overlap_rows(peer_sets, rows, kind="official")
     # 桥 4:kol_comments(account_dossier 评论仓,主表 kols.id 口径;排除自己 link 的主体)
-    if _has_kol_comments(db):
-        self_linked = db.execute(
-            "SELECT linked_main_kol_id FROM vkpi_kol_pool WHERE id=?", (int(kol_pool_id),)
-        ).fetchone()
-        self_main = int(dict(self_linked or {}).get("linked_main_kol_id") or 0)
-        rows = db.execute(
-            "SELECT kol_id AS peer_id, platform, author_handle FROM kol_comments "
-            "WHERE author_handle IS NOT NULL AND author_handle<>''",
-            (),
-        ).fetchall()
-        for r in rows:
-            rec = dict(r)
-            peer_id = int(rec["peer_id"] or 0)
-            if not peer_id or peer_id == self_main:
-                continue
-            key = f"{str(rec.get('platform') or '').lower()}:{str(rec.get('author_handle') or '').strip().lower()}"
-            peer_sets.setdefault(("kol_main", peer_id), set()).add(key)
+    _merge_main_overlap_rows(db, int(kol_pool_id), peer_sets)
 
-    scored: list[dict[str, Any]] = []
-    for (kind, peer_id), keys in peer_sets.items():
-        shared = len(self_keys & keys)
-        if shared < 2:
-            continue
-        union = len(self_keys | keys)
-        scored.append(
-            {
-                "kind": kind,
-                "peer_id": peer_id,
-                "shared_count": shared,
-                "jaccard": round(shared / union, 3) if union else 0.0,
-                "peer_commenters": len(keys),
-            }
-        )
-    scored.sort(key=lambda x: (-x["shared_count"], -x["jaccard"]))
-    top = scored[: max(1, int(top_n))]
+    top = _score_overlap_peers(self_keys, peer_sets, top_n)
     # 补名字(各表各查一次,不进循环)
-    kol_ids = [s["peer_id"] for s in top if s["kind"] == "kol"]
-    official_ids = [s["peer_id"] for s in top if s["kind"] == "official"]
-    main_ids = [s["peer_id"] for s in top if s["kind"] == "kol_main"]
-    names: dict[tuple[str, int], dict[str, str]] = {}
-    if kol_ids:
-        placeholders = ",".join(["?"] * len(kol_ids))
-        for r in db.execute(
-            f"SELECT id, handle, display_name FROM vkpi_kol_pool WHERE id IN ({placeholders})", tuple(kol_ids)
-        ).fetchall():
-            rec = dict(r)
-            names[("kol", int(rec["id"]))] = {
-                "handle": str(rec.get("handle") or ""),
-                "display_name": str(rec.get("display_name") or ""),
-            }
-    if official_ids:
-        placeholders = ",".join(["?"] * len(official_ids))
-        for r in db.execute(
-            f"SELECT id, account_handle, account_display_name FROM vkpi_employee_channels WHERE id IN ({placeholders})",
-            tuple(official_ids),
-        ).fetchall():
-            rec = dict(r)
-            names[("official", int(rec["id"]))] = {
-                "handle": str(rec.get("account_handle") or ""),
-                "display_name": str(rec.get("account_display_name") or ""),
-            }
-    if main_ids:
-        placeholders = ",".join(["?"] * len(main_ids))
-        # 主表 kols 的名字;若有池行 link 回来,优先池行 handle(前端可直接跳)。
-        for r in db.execute(
-            f"SELECT id, channel_name FROM kols WHERE id IN ({placeholders})", tuple(main_ids)
-        ).fetchall():
-            rec = dict(r)
-            names[("kol_main", int(rec["id"]))] = {
-                "handle": str(rec.get("channel_name") or ""),
-                "display_name": str(rec.get("channel_name") or ""),
-            }
-        for r in db.execute(
-            f"SELECT id, handle, display_name, linked_main_kol_id FROM vkpi_kol_pool WHERE linked_main_kol_id IN ({placeholders})",
-            tuple(main_ids),
-        ).fetchall():
-            rec = dict(r)
-            entry = names.setdefault(("kol_main", int(rec["linked_main_kol_id"])), {})
-            entry["handle"] = str(rec.get("handle") or entry.get("handle") or "")
-            entry["display_name"] = str(rec.get("display_name") or entry.get("display_name") or "")
-            entry["peer_kol_pool_id"] = str(rec.get("id") or "")
-    for s in top:
-        info = names.get((s["kind"], s["peer_id"])) or {}
-        s["handle"] = info.get("handle") or ""
-        s["display_name"] = info.get("display_name") or ""
-        if info.get("peer_kol_pool_id"):
-            s["peer_kol_pool_id"] = int(info["peer_kol_pool_id"])
+    _decorate_overlap_names(top, _overlap_names(db, top))
     return {
         "items": top,
         "self_commenters": len(self_keys),

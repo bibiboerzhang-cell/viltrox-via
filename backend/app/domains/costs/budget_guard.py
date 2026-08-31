@@ -11,6 +11,11 @@ from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.costs.budget_guard_errors import note_cost_ledger_failure
+from app.domains.costs.budget_guard_cost_helpers import (
+    configured_optional_cost_scopes as _configured_optional_cost_scopes,
+    cost_scopes_to_update as _cost_scopes_to_update,
+    normalized_cost_provider as _normalized_cost_provider,
+)
 from app.domains.costs.budget_windows import budget_window_kind
 from app.domains.costs.budget_window_roll import roll_budget_window
 from app.domains.costs.budget_guard_persistence import (
@@ -352,10 +357,8 @@ def record_cost(
     scope_key = _normalize_scope(scope)
     actor_staff_id = staff_id or _resolve_staff(triggered_by)
     cost = _cost_decimal(cost_usd)
-    provider = str(ai_provider or "unknown").strip().lower() or "unknown"
     # 供应商标签归一:llm_gateway 侧叫 google、视频侧叫 gemini,台账统一 gemini 防汇总分裂。
-    if provider == "google":
-        provider = "gemini"
+    provider = _normalized_cost_provider(ai_provider)
     now = _utcnow()
     conn = get_conn()
     # staff_id 是 staff 外键;调用方可能把 user id / 过期 staff id 当 staff 传进来(worker 的
@@ -365,11 +368,12 @@ def record_cost(
     actor_staff_id = _existing_staff_id(conn, unresolved_staff_id)
     if unresolved_staff_id and not actor_staff_id:
         metadata = {**(metadata or {}), "unresolved_staff_id": unresolved_staff_id}
-    optional_scope_keys = {_normalize_scope(item) for item in (optional_scopes or []) if item}
-    configured_optional_scopes = {
-        item for item in optional_scope_keys
-        if conn.execute("SELECT 1 FROM vkpi_provider_budget_caps WHERE scope=?", (item,)).fetchone()
-    } if update_budget_scopes else set()
+    optional_scope_keys, configured_optional_scopes = _configured_optional_cost_scopes(
+        conn,
+        optional_scopes=optional_scopes,
+        update_budget_scopes=update_budget_scopes,
+        normalize_scope=_normalize_scope,
+    )
     try:
         inserted = conn.execute(
             """
@@ -407,26 +411,18 @@ def record_cost(
         if persisted_cost != cost:
             raise RuntimeError("cost_ledger_readback_mismatch")
 
-        requested_scopes = [
-            scope
-            for scope in [
-                scope_key,
-                *(_normalize_scope(scope) for scope in (extra_scopes or [])),
-            ]
-            if scope and (scope not in optional_scope_keys or scope in configured_optional_scopes)
-        ]
+        scopes_to_update = _cost_scopes_to_update(
+            scope_key=scope_key,
+            extra_scopes=extra_scopes,
+            optional_scope_keys=optional_scope_keys,
+            configured_optional_scopes=configured_optional_scopes,
+            update_budget_scopes=update_budget_scopes,
+            normalize_scope=_normalize_scope,
+            is_single_call_ceiling_scope=_is_single_call_ceiling_scope,
+        )
         # single_call[_*] are per-request ceilings: never accumulate current_spend on
         # them or the shared row creeps past cap and hard-stops every later call
         # (the flapping bug). Cumulative accounting stays on monthly_total/provider:*/cron:*.
-        scopes_to_update = (
-            [
-                scope
-                for scope in dict.fromkeys(requested_scopes)
-                if not _is_single_call_ceiling_scope(scope)
-            ]
-            if update_budget_scopes
-            else []
-        )
         for budget_scope in sorted(scopes_to_update):
             budget_row = conn.execute(
                 "SELECT * FROM vkpi_provider_budget_caps WHERE scope=?"

@@ -130,6 +130,39 @@ def anthropic_messages_fingerprint(messages: list[dict[str, Any]]) -> str:
     return f"anthropic_messages_sha256:{digest}"
 
 
+def anthropic_preflight_candidate(
+    preflight: dict[str, Any],
+    actual_binding: str,
+) -> dict[str, Any]:
+    """Return the exact-binding candidate, preserving first-match precedence."""
+
+    candidates = (
+        preflight.get("providers")
+        if isinstance(preflight.get("providers"), list)
+        else []
+    )
+    return next(
+        (
+            item
+            for item in candidates
+            if str(item.get("binding") or "") == actual_binding
+        ),
+        {},
+    )
+
+
+def anthropic_provider_gate_reason(
+    candidate: dict[str, Any],
+    preflight: dict[str, Any],
+) -> str:
+    return str(
+        candidate.get("binding_gate_reason")
+        or preflight.get("provider_gate_detail")
+        or preflight.get("provider_gate_reason")
+        or "provider_calls_blocked"
+    )
+
+
 def _text_divisor(model: str) -> float:
     key = str(model or "").strip().lower()
     # claude-sonnet-5 / claude-opus-5 / claude-fable-5 share the 4.7+ tokenizer;
@@ -219,5 +252,7 @@ __all__ = [
     "anthropic_create_kwargs",
     "anthropic_input_token_estimate",
     "anthropic_messages_fingerprint",
+    "anthropic_preflight_candidate",
+    "anthropic_provider_gate_reason",
     "anthropic_thinking_policy",
 ]

@@ -37,6 +37,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.market import category_tracks_report
 from app.domains.market.category_tracks_matching import prepare_keyword_groups
 
 logger = get_logger(__name__)
@@ -679,99 +680,22 @@ def tracks(*, conn: Any = None) -> dict[str, Any]:
             "generated_at": now.isoformat(),
         }
 
-    # ── 品类维赛道 ──
-    category_items: list[dict[str, Any]] = []
-    for key, label, terms in _category_tracks_def():
-        track_docs = [d for d in docs if _matches_any(d["lower"], terms)]
-        track_evidence = [ev for ev in evidence if _matches_any(ev["blob"], terms)]
-        if key == "af_lens":
-            # focal_matrix / market_voice 同口径:提到具体焦段即视作镜头内容
-            track_docs = track_docs + [d for d in docs if d not in track_docs and d["focals"]]
-            track_evidence = track_evidence + [ev for ev in evidence if ev not in track_evidence and ev["focals"]]
-        sku_count = _catalog_line_sku_count(catalog, products, key)
-        item = {
-            "track_id": "cat:" + key,
-            "dimension": "category",
-            "key": key,
-            "label": label,
-            **_signals_for(track_docs, track_evidence, sku_count),
-        }
-        category_items.append(item)
-    _finalize_dimension(category_items)
-
-    # ── 焦段维赛道:目录焦段 ∪ 声量焦段(声音或证据里提到的)──
-    catalog_focals = set((catalog.get("focals") or {}).keys())
-    voiced_focals: set[str] = set()
-    for d in docs:
-        voiced_focals |= d["focals"]
-    for ev in evidence:
-        voiced_focals |= ev["focals"]
-    focal_items: list[dict[str, Any]] = []
-    for focal in sorted(catalog_focals | voiced_focals, key=_focal_mm):
-        track_docs = [d for d in docs if focal in d["focals"]]
-        track_evidence = [ev for ev in evidence if focal in ev["focals"]]
-        cat_slot = (catalog.get("focals") or {}).get(focal) or {}
-        sku_count = _int0(cat_slot.get("sku_count"))
-        if sku_count == 0 and not track_docs and not track_evidence:
-            continue  # 无目录也无声量的幽灵焦段不渲染
-        item = {
-            "track_id": "focal:" + focal,
-            "dimension": "focal",
-            "key": focal,
-            "label": focal + " 焦段",
-            "mm": _focal_mm(focal),
-            "in_catalog": sku_count > 0,
-            **_signals_for(track_docs, track_evidence, sku_count),
-        }
-        focal_items.append(item)
-    _finalize_dimension(focal_items)
+    category_items, focal_items = category_tracks_report.build_track_dimensions(
+        docs,
+        evidence,
+        catalog,
+        products,
+        globals(),
+    )
 
     # ── top 机会排序 +「不进」清单(诚实给理由)──
-    all_items = category_items + focal_items
-    opportunities: list[dict[str, Any]] = []
-    no_go: list[dict[str, Any]] = []
-    for item in all_items:
-        reason = _no_go_reason(item)
-        if reason is not None:
-            no_go.append({
-                "track_id": item["track_id"],
-                "dimension": item["dimension"],
-                "label": item["label"],
-                "reason": reason,
-                "demand_total": item["demand"]["total"],
-                "opportunity_score": item["opportunity"]["score"],
-            })
-            continue
-        if item["opportunity"]["score"] <= 0:
-            continue
-        opportunities.append({
-            "track_id": item["track_id"],
-            "dimension": item["dimension"],
-            "label": item["label"],
-            "opportunity": item["opportunity"],
-            "demand": {k: v for k, v in item["demand"].items() if k not in ("wish_quotes", "voice_quotes")},
-            "coverage": item["coverage"],
-            "competitors": {k: v for k, v in item["competitors"].items() if k != "example"},
-            "evidence": _evidence_bundle(item),
-        })
-    opportunities.sort(key=lambda it: (-it["opportunity"]["score"], -it["demand"]["total"], it["track_id"]))
-    no_go.sort(key=lambda it: (-it["demand_total"], it["track_id"]))
+    opportunities, no_go = category_tracks_report.rank_tracks(
+        category_items + focal_items,
+        globals(),
+    )
 
     # ── 卡口愿望信号(辅助块:wishlist 有 L 卡口这类信号;目录卡口口径未建,不硬算覆盖)──
-    mount_signals: list[dict[str, Any]] = []
-    if _MARKET_VOICE_AVAILABLE and _MV_MOUNT_RE is not None and _mv_mount_label is not None:
-        mount_buckets: dict[str, list[dict[str, Any]]] = {}
-        for d in docs:
-            if not d["is_wish"]:
-                continue
-            for m in _MV_MOUNT_RE.findall(d["lower"]):
-                label = _mv_mount_label(m if isinstance(m, str) else str(m))
-                if label:
-                    mount_buckets.setdefault(label, []).append(d)
-        mount_signals = [
-            {"mount": mnt, "wish_count": len(ds), "quotes": _top_quotes(ds)}
-            for mnt, ds in sorted(mount_buckets.items(), key=lambda kv: -len(kv[1]))
-        ]
+    mount_signals = category_tracks_report.mount_signals(docs, globals())
 
     return {
         "status": "ready",

@@ -12,6 +12,9 @@ from app.core.logging import get_logger
 from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
 from app.db.connection import get_conn
 from app.platform.llm_production import generate_text
+from app.services.intelligence.market_observation_projection import (
+    project_legacy_observations,
+)
 
 logger = get_logger(__name__)
 
@@ -112,26 +115,11 @@ def list_observations(
                 LIMIT ?""",
             [*params, limit],
         ).fetchall()
-        observations = []
-        for row in rows:
-            item = dict(row)
-            observations.append(
-                {
-                    "id": item["id"],
-                    "observed_at": item.get("observed_at") or "",
-                    "event_kind": item.get("observation_type") or "",
-                    "event_title": item.get("summary") or "",
-                    "impact": impact or "neutral",
-                    "source_url": "",
-                    "notes": item.get("summary") or "",
-                    "source_platform": item.get("source_platform") or "",
-                    "subject_type": item.get("subject_type") or "",
-                    "subject_key": item.get("subject_key") or "",
-                    "metrics": _decode_json(item.get("metrics_json"), {}),
-                    "evidence": _decode_json(item.get("evidence_json"), []),
-                    "region_code": item.get("region_code") or "",
-                }
-            )
+        observations = project_legacy_observations(
+            rows,
+            impact=impact,
+            decode_json=_decode_json,
+        )
         if impact:
             observations = [row for row in observations if row["impact"] == impact]
         return {"observations": observations}

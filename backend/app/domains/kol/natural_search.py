@@ -8,6 +8,7 @@ from app.domains.kol.claim_listing import list_kols
 from app.domains.kol import history_match
 
 from app.domains.kol.payload_utils import _clamp_score, _float, _int, _json_loads
+from app.domains.kol.natural_search_payload import natural_search_payload as _natural_search_payload_impl
 
 
 _PLATFORM_ALIASES = {
@@ -253,71 +254,21 @@ def _natural_match_score(row: dict[str, Any], parsed: dict[str, Any]) -> tuple[i
 
 
 def _natural_search_payload(body: dict[str, Any], staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    query = str(body.get("query") or body.get("q") or "").strip()
-    limit = max(1, min(200, _int(body.get("limit"), 100)))
-    parsed = _parse_natural_query(query, str(body.get("platform") or ""))
-    platform = str(parsed.get("platform") or "")
-    raw_rows = list_kols(search="", platform=platform, limit=500, staff=staff).get("kols") or []
-    rows: list[dict[str, Any]] = []
-    for raw in raw_rows:
-        row = dict(raw)
-        if platform and not _matches_platform(row, platform):
-            continue
-        text = _row_text(row)
-        followers = _int(row.get("snapshot_follower_count"), _int(row.get("follower_count")))
-        has_structured_filter = any(
-            parsed.get(key)
-            for key in ("platform", "country", "level", "requires_contact", "requires_low_risk", "requires_collaboration")
-        )
-        if parsed.get("requires_contact") and not _row_has_contact(row):
-            continue
-        level = str(parsed.get("level") or "")
-        if level and followers and _row_level(followers) != level:
-            continue
-        keywords = [str(keyword).lower() for keyword in parsed.get("keywords") or []]
-        if keywords and not has_structured_filter and not any(keyword in text for keyword in keywords):
-            continue
-        country = str(parsed.get("country") or "").upper()
-        row_country = str(row.get("country") or row.get("country_code") or "").upper()
-        if country and row_country and country != row_country and country.lower() not in text:
-            continue
-        score, reasons = _natural_match_score(row, parsed)
-        row["natural_match_score"] = score
-        row["natural_match_reasons"] = reasons
-        row["score"] = max(_clamp_score(row.get("score") or row.get("account_score") or row.get("product_fit")), score)
-        rows.append(row)
-    pool_rows = history_match.search_pool_for_natural(query, parsed, limit=limit)
-    seen_keys = {
-        (
-            str(row.get("platform") or "").lower(),
-            history_match.normalize_history_handle(row.get("handle") or row.get("channel_name") or ""),
-        )
-        for row in rows
-    }
-    for row in pool_rows:
-        if platform and not _matches_platform(row, platform):
-            continue
-        key = (
-            str(row.get("platform") or "").lower(),
-            history_match.normalize_history_handle(row.get("handle") or row.get("channel_name") or ""),
-        )
-        if key in seen_keys:
-            continue
-        rows.append(row)
-        seen_keys.add(key)
-    rows.sort(key=lambda item: (_int(item.get("natural_match_score")), _int(item.get("snapshot_follower_count"), _int(item.get("follower_count")))), reverse=True)
-    notes = ["规则解析版，复用现有 kols / snapshots / reports / vkpi_kol_pool 字段；未新增后端表。"]
-    if not rows:
-        notes.append("没有命中时不会伪造推荐，请先补候选池或放宽关键词。")
     from app.domains.kol.pool_common import mask_pool_item
 
-    return {
-        "query": query,
-        "parsed": parsed,
-        # Search is a bulk surface: expose contact availability, never the
-        # plaintext values. Single-KOL audited endpoints own disclosure.
-        "items": [mask_pool_item(item) for item in rows[:limit]],
-        "method": "local_natural_search_v1_existing_kols",
-        "degraded": True,
-        "notes": notes,
-    }
+    return _natural_search_payload_impl(
+        body,
+        staff,
+        parse_natural_query=_parse_natural_query,
+        list_kols=list_kols,
+        history_search=history_match.search_pool_for_natural,
+        normalize_history_handle=history_match.normalize_history_handle,
+        matches_platform=_matches_platform,
+        row_text=_row_text,
+        int_value=_int,
+        row_level=_row_level,
+        row_has_contact=_row_has_contact,
+        natural_match_score=_natural_match_score,
+        clamp_score=_clamp_score,
+        mask_pool_item=mask_pool_item,
+    )

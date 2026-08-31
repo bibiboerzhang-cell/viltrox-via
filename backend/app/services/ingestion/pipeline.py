@@ -26,57 +26,72 @@ def build_platform_job_type(source_platform: str) -> str:
     return JOB_TYPE_BY_SOURCE[source]
 
 
+def _first_truthy(payload: Dict[str, Any], *keys: str, default: Any = "") -> Any:
+    for key in keys:
+        value = payload.get(key)
+        if value:
+            return value
+    return default
+
+
 def normalize_ingest_payload(source_platform: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     source = (source_platform or "").strip().lower()
     if source not in JOB_TYPE_BY_SOURCE:
         raise ValueError(f"Unsupported ingest source: {source_platform}")
 
-    event_type = str(payload.get("event_type") or payload.get("topic") or payload.get("action") or "upsert").strip().lower()
-    entity_type = str(payload.get("entity_type") or payload.get("resource_type") or ("order" if source == "shopify" else "content")).strip().lower()
+    event_type = str(
+        _first_truthy(payload, "event_type", "topic", "action", default="upsert")
+    ).strip().lower()
+    default_entity = "order" if source == "shopify" else "content"
+    entity_type = str(
+        _first_truthy(payload, "entity_type", "resource_type", default=default_entity)
+    ).strip().lower()
     external_id = str(
-        payload.get("external_id")
-        or payload.get("id")
-        or payload.get("order_id")
-        or payload.get("post_id")
-        or payload.get("content_id")
-        or payload.get("sku")
-        or ""
+        _first_truthy(
+            payload,
+            "external_id",
+            "id",
+            "order_id",
+            "post_id",
+            "content_id",
+            "sku",
+        )
     ).strip()
     creator_handle = str(
-        payload.get("creator_handle")
-        or payload.get("handle")
-        or payload.get("username")
-        or payload.get("creator_code")
-        or ""
+        _first_truthy(
+            payload,
+            "creator_handle",
+            "handle",
+            "username",
+            "creator_code",
+        )
     ).strip()
     region_code = str(
-        payload.get("region_code")
-        or payload.get("country")
-        or payload.get("market")
-        or ""
+        _first_truthy(payload, "region_code", "country", "market")
     ).strip().upper()
-    observed_at = str(
-        payload.get("occurred_at")
-        or payload.get("observed_at")
-        or payload.get("published_at")
-        or payload.get("created_at")
-        or _now()
-    ).strip()
+    observed_value = _first_truthy(
+        payload,
+        "occurred_at",
+        "observed_at",
+        "published_at",
+        "created_at",
+    )
+    observed_at = str(observed_value or _now()).strip()
     product_key = str(
-        payload.get("product_key")
-        or payload.get("product_series")
-        or payload.get("sku")
-        or ""
+        _first_truthy(payload, "product_key", "product_series", "sku")
     ).strip()
     product_label = str(
-        payload.get("product_label")
-        or payload.get("product_name")
-        or product_key
-        or ""
+        _first_truthy(
+            payload,
+            "product_label",
+            "product_name",
+            default=product_key,
+        )
     ).strip()
+    identity = external_id or creator_handle or observed_at
+    default_dedupe_key = f"{source}:{event_type}:{entity_type}:{identity}"
     dedupe_key = str(
-        payload.get("dedupe_key")
-        or f"{source}:{event_type}:{entity_type}:{external_id or creator_handle or observed_at}"
+        _first_truthy(payload, "dedupe_key", default=default_dedupe_key)
     ).strip()
 
     metrics = payload.get("metrics")
@@ -88,7 +103,9 @@ def normalize_ingest_payload(source_platform: str, payload: Dict[str, Any]) -> D
         "event_type": event_type,
         "entity_type": entity_type,
         "external_id": external_id,
-        "source_url": str(payload.get("source_url") or payload.get("url") or external_id or "").strip(),
+        "source_url": str(
+            _first_truthy(payload, "source_url", "url", default=external_id)
+        ).strip(),
         "creator_handle": creator_handle,
         "user_id": int(payload.get("user_id") or 0),
         "submission_id": int(payload.get("submission_id") or 0),

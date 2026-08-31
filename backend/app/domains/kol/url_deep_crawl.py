@@ -56,6 +56,11 @@ from app.utils.handles import extract_handle_from_url
 # unchanged (behavior-preserving refactor — see that module's header).
 from app.domains.kol.url_deep_crawl_helpers import (  # noqa: F401
     CN_VIDEO_ANALYSIS_PLATFORMS,
+    PROFILE_GENERIC_SEGMENTS,
+    RAW_CHANNEL_KEYS,
+    RAW_HANDLE_KEYS,
+    RAW_URL_KEYS,
+    SUPPORTED_PLATFORMS,
     _all_raw_strings,
     _canonical_url,
     _channel_id_from_handle,
@@ -90,65 +95,12 @@ from app.domains.kol.url_deep_crawl_helpers import (  # noqa: F401
     _public_video_metadata,
     _raw_profile_backfilled_at,
     _raw_values,
+    _sync_flow_safety,
+    _url_crawl_safety,
     _video_execute_mode,
     _video_id,
     _video_metadata_date,
 )
-
-SUPPORTED_PLATFORMS = {"youtube", "instagram", "tiktok"}
-PROFILE_GENERIC_SEGMENTS = {
-    "",
-    "about",
-    "accounts",
-    "channel",
-    "direct",
-    "explore",
-    "feed",
-    "p",
-    "reel",
-    "shorts",
-    "stories",
-    "tagged",
-    "tv",
-    "user",
-    "watch",
-}
-RAW_CHANNEL_KEYS = {
-    "channel_id",
-    "channelid",
-    "channelId",
-    "youtube_channel_id",
-    "youtubeChannelId",
-    "channel_url",
-    "channelUrl",
-    "channel",
-    "external_id",
-    "externalId",
-}
-RAW_HANDLE_KEYS = {
-    "handle",
-    "username",
-    "user_name",
-    "userName",
-    "author_handle",
-    "authorHandle",
-    "platform_user_id",
-    "platformUserId",
-    "screen_name",
-    "screenName",
-}
-RAW_URL_KEYS = {
-    "url",
-    "profile_url",
-    "profileUrl",
-    "channel_url",
-    "channelUrl",
-    "account_url",
-    "accountUrl",
-    "web_url",
-    "webUrl",
-}
-
 
 @dataclass(frozen=True)
 class ClassifiedUrl:
@@ -162,27 +114,17 @@ class ClassifiedUrl:
     confidence: str
 
 
-def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
-    """Classify a user URL; optionally execute safe profile basics flow."""
-    execute = bool(body.get("execute", False))
-
-    url = str(body.get("url") or "").strip()
-    if not url:
-        raise ValueError("url is required")
-
-    classified = classify_url(url)
+def _url_crawl_plan(
+    classified: ClassifiedUrl, body: dict[str, Any], *, execute: bool
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None, dict[str, Any]]:
     matches = _match_pool(classified) if classified.platform in SUPPORTED_PLATFORMS else []
     video_flow: dict[str, Any] | None = None
     if classified.url_type == "video" and classified.platform in CN_VIDEO_ANALYSIS_PLATFORMS:
-        # 中国平台「仅视频分析」:不匹配 KOL 池、不建档;真实取数/下载/深析
-        # 全部发生在 durable worker(enqueue_video_url_resolve_job 队列)里。
         from app.domains.kol.cn_platform_video import cn_platform_video_flow_plan
 
         video_flow = cn_platform_video_flow_plan(classified)
     elif classified.url_type == "video" and classified.platform in SUPPORTED_PLATFORMS:
         video_flow, matches = _video_flow_plan(classified, matches)
-
-    matched_id = matches[0]["kol_pool_id"] if len(matches) == 1 else None
     profile_flow = _profile_flow_plan(classified, matches, body, execute=execute)
     if classified.url_type == "video" and not matches and video_flow and _video_creator_resolved(video_flow):
         profile_flow = {
@@ -193,41 +135,32 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
             "crawl_performed": False,
             "business_tables_written": False,
         }
-    safety = {
-        "crawl_performed": False,
-        "provider_calls_performed": bool(video_flow and video_flow.get("provider_calls_performed")),
-        "llm_calls_performed": False,
-        "worker_touched": False,
-        "viltrox_fit_touched": False,
-        "business_tables_written": False,
-    }
+    return matches, video_flow, profile_flow
 
+
+def _execute_url_crawl_plan(
+    classified: ClassifiedUrl,
+    matches: list[dict[str, Any]],
+    profile_flow: dict[str, Any],
+    video_flow: dict[str, Any] | None,
+    body: dict[str, Any],
+    safety: dict[str, bool],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     if classified.url_type == "video" and classified.platform in CN_VIDEO_ANALYSIS_PLATFORMS:
-        # CN 平台视频的 execute 全在 durable worker 队列里发生;HTTP 层永远只
-        # 返回既定计划(_run_url_deep_crawl 会另行 enqueue_video_url_resolve_job)。
-        pass
-    elif execute and classified.url_type == "profile" and profile_flow.get("status") == "ready_to_execute":
+        return profile_flow, video_flow
+    if classified.url_type == "profile" and profile_flow.get("status") == "ready_to_execute":
         profile_flow = _execute_profile_flow(classified, matches, body)
-        safety["crawl_performed"] = bool(profile_flow.get("crawl_performed"))
-        safety["business_tables_written"] = bool(profile_flow.get("business_tables_written"))
-        safety["worker_touched"] = bool(profile_flow.get("worker_touched"))
-        safety["viltrox_fit_touched"] = bool(profile_flow.get("viltrox_fit_score_changed_ids"))
-    elif execute and classified.url_type == "video" and len(matches) == 1:
+        _sync_flow_safety(safety, profile_flow, include_crawl=True)
+        return profile_flow, video_flow
+    if classified.url_type == "video" and len(matches) == 1:
         video_flow = _execute_existing_creator_video_flow(classified, matches, video_flow or {}, body)
-        safety["business_tables_written"] = bool(video_flow.get("business_tables_written"))
-        safety["worker_touched"] = bool(video_flow.get("worker_touched"))
-        safety["viltrox_fit_touched"] = bool(video_flow.get("viltrox_fit_score_changed_ids"))
-        safety["provider_calls_performed"] = safety["provider_calls_performed"] or bool(video_flow.get("provider_calls_performed"))
-    elif execute and classified.url_type == "video" and video_flow and _video_creator_resolved(video_flow):
+        _sync_flow_safety(safety, video_flow, include_crawl=False)
+    elif classified.url_type == "video" and video_flow and _video_creator_resolved(video_flow):
         video_flow = _execute_new_creator_video_flow(classified, video_flow, body)
         if isinstance(video_flow.get("profile_flow"), dict):
             profile_flow = video_flow["profile_flow"]
-        safety["crawl_performed"] = bool(video_flow.get("crawl_performed"))
-        safety["business_tables_written"] = bool(video_flow.get("business_tables_written"))
-        safety["worker_touched"] = bool(video_flow.get("worker_touched"))
-        safety["viltrox_fit_touched"] = bool(video_flow.get("viltrox_fit_score_changed_ids"))
-        safety["provider_calls_performed"] = safety["provider_calls_performed"] or bool(video_flow.get("provider_calls_performed"))
-    elif execute and classified.url_type == "video" and video_flow:
+        _sync_flow_safety(safety, video_flow, include_crawl=True)
+    elif classified.url_type == "video" and video_flow:
         video_flow = {
             **video_flow,
             "status": "execute_not_connected",
@@ -237,6 +170,30 @@ def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
             "viltrox_fit_score_changed_ids": [],
             "viltrox_fit_score_untouched": True,
         }
+    if video_flow:
+        safety["provider_calls_performed"] = safety["provider_calls_performed"] or bool(
+            video_flow.get("provider_calls_performed")
+        )
+    return profile_flow, video_flow
+
+
+def dry_run_url_deep_crawl(body: dict[str, Any]) -> dict[str, Any]:
+    """Classify a user URL; optionally execute safe profile basics flow."""
+    execute = bool(body.get("execute", False))
+
+    url = str(body.get("url") or "").strip()
+    if not url:
+        raise ValueError("url is required")
+
+    classified = classify_url(url)
+    matches, video_flow, profile_flow = _url_crawl_plan(classified, body, execute=execute)
+    matched_id = matches[0]["kol_pool_id"] if len(matches) == 1 else None
+    safety = _url_crawl_safety(video_flow)
+
+    if execute:
+        profile_flow, video_flow = _execute_url_crawl_plan(
+            classified, matches, profile_flow, video_flow, body, safety
+        )
     result_kol_pool_id = matched_id
     if execute and video_flow and video_flow.get("kol_pool_id"):
         result_kol_pool_id = int(video_flow["kol_pool_id"])

@@ -32,6 +32,10 @@ from app.services.via.knowledge_seed_external import (
     _external_product_line_catalog,
     _external_software_catalog,
 )
+from app.services.via.knowledge_seed_product_lines import (
+    looks_like_product_model,
+    parse_product_line_lines,
+)
 from app.services.via.product_brain import CATALOG, SERIES_OFFICIAL_URLS, STORE_URL
 
 _TAG_RE = re.compile(r"<[^>]+>")
@@ -310,19 +314,6 @@ def extract_workspace_docx_product_line_catalog() -> dict[str, dict[str, Any]]:
         "OTHER": {"OTHER", "Other"},
     }
 
-    def looks_like_model(line: str) -> bool:
-        text = str(line or "").strip()
-        if not text:
-            return False
-        if text.startswith("（") and text.endswith("）"):
-            return False
-        return bool(
-            re.search(r"\b(AF|EPIC|LUNA)\b", text, flags=re.IGNORECASE)
-            or re.search(r"\b\d{1,3}mm\b", text, flags=re.IGNORECASE)
-            or re.search(r"\bT\d", text, flags=re.IGNORECASE)
-            or "Chip" in text
-        )
-
     catalog: dict[str, dict[str, Any]] = _external_product_line_catalog()
     for path in _workspace_docx_candidates():
         try:
@@ -340,55 +331,12 @@ def extract_workspace_docx_product_line_catalog() -> dict[str, dict[str, Any]]:
         except Exception:
             logger.warning("via.knowledge_seed.product_line_catalog_failed", extra={"path": str(path)}, exc_info=True)
             continue
-        found: dict[str, dict[str, Any]] = {}
-        current_key = ""
-        current_model_index = -1
-        for line in lines:
-            clean = str(line or "").strip()
-            if not clean:
-                continue
-            matched_key = next(
-                (
-                    key
-                    for key, names in aliases.items()
-                    if any(clean.lower() == str(name).lower() for name in names)
-                ),
-                "",
-            )
-            if matched_key:
-                current_key = matched_key
-                current_model_index = -1
-                found.setdefault(
-                    current_key,
-                    {
-                        "name": clean,
-                        "summary": "",
-                        "models": [],
-                        "notes": [],
-                    },
-                )
-                continue
-            if _is_guide_heading(clean):
-                current_key = ""
-                current_model_index = -1
-                continue
-            if not current_key:
-                continue
-            entry = found[current_key]
-            if not entry.get("summary") and ("系列" in clean or "产品线" in clean or "镜头" in clean):
-                entry["summary"] = clean
-                continue
-            if looks_like_model(clean):
-                if clean not in entry["models"] and len(entry["models"]) < 18:
-                    entry["models"].append(clean)
-                    current_model_index = len(entry["models"]) - 1
-                continue
-            if clean.startswith("（") and clean.endswith("）") and 0 <= current_model_index < len(entry["models"]):
-                model = entry["models"][current_model_index]
-                entry["models"][current_model_index] = f"{model} {clean}"
-                continue
-            if len(entry["notes"]) < 8:
-                entry["notes"].append(clean)
+        found = parse_product_line_lines(
+            lines,
+            aliases,
+            is_guide_heading=_is_guide_heading,
+            looks_like_model=looks_like_product_model,
+        )
         _DOCX_PRODUCT_LINE_CACHE[cache_key] = {"mtime": float(stat.st_mtime), "catalog": dict(found)}
         for key, value in found.items():
             existing = dict(catalog.get(key) or {})

@@ -43,6 +43,7 @@ from app.domains.sync.guard import (
     record_sync_interrupt,
     start_sync_run,
 )
+from app.domains.sync.daily_batch import DEFAULT_DAILY_KOL_LIMIT
 import app.domains.sync.refresh_tier as refresh_tier
 from app.domains import channels
 
@@ -226,7 +227,7 @@ def run_kol_pool_light_refresh(payload: dict[str, Any]) -> dict[str, Any]:
     job_name = "daily_incremental_sync"
     stage = "kol_pool_light"
     dry_run = _bool(payload.get("dry_run"))
-    limit = max(1, min(1200, _int(payload.get("kol_limit"), 1200)))
+    limit = max(1, min(1200, _int(payload.get("kol_limit"), DEFAULT_DAILY_KOL_LIMIT)))
     offset = max(0, min(5000, _int(payload.get("kol_offset"), 0)))
     stale_before = str(payload.get("kol_stale_before") or "").strip()
     max_posts = max(1, min(3, _int(payload.get("kol_max_posts") or payload.get("max_posts"), 1)))

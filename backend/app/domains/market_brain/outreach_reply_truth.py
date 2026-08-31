@@ -16,6 +16,7 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.market_brain import outreach_truth_bridge as bridge
 from app.domains.market_brain.outreach_reply_receipt_validation import (
+    prepare_reply_verification,
     verified_receipt_matches_binding,
 )
 from app.domains.platform import event_ledger, review_contract
@@ -508,38 +509,29 @@ def verify_reply(
     _connection: Any = None,
 ) -> dict[str, Any]:
     """Append one immutable replied/no-reply receipt and required event."""
-    reviewer = review_contract.reviewer_context(staff)
-    if reviewer is None or not is_manager_staff(staff or {}):
-        return {"ok": False, "reason": "outreach_reply_scope_unavailable"}
-    actor_id, organization_id = reviewer
-    binding_id_value = bridge._positive_int(binding_id)
-    normalized_outcome = str(outcome or "").strip().lower()
-    correlation = review_contract.normalize_correlation(correlation_id)
-    expected_candidate_hash = str(expected_candidate_sha256 or "").strip().lower()
-    expected_observed = bridge._dt(candidate_observed_at)
-    if organization_id != bridge.ORGANIZATION_ID:
-        return {"ok": False, "reason": "outreach_reply_scope_unavailable"}
-    if binding_id_value <= 0:
-        return {"ok": False, "reason": "outreach_reply_binding_required"}
-    if normalized_outcome not in {"replied", "no_reply"}:
-        return {"ok": False, "reason": "outreach_reply_outcome_invalid"}
-    if correlation is None:
-        return {"ok": False, "reason": "outreach_reply_correlation_required"}
-    if (
-        expected_observed is None
-        or len(expected_candidate_hash) != 64
-        or any(char not in "0123456789abcdef" for char in expected_candidate_hash)
-    ):
-        return {"ok": False, "reason": "outreach_reply_candidate_required"}
-    if not all(table_exists(name) for name in _REQUIRED_TABLES):
-        return {"ok": False, "reason": "outreach_reply_schema_unavailable"}
-
-    request = _request_contract(
-        binding_id=binding_id_value, outcome=normalized_outcome, actor_staff_id=actor_id,
-        expected_candidate_sha256=expected_candidate_hash,
-        candidate_observed_at=expected_observed.isoformat(),
+    prepared = prepare_reply_verification(
+        binding_id,
+        outcome=outcome,
+        correlation_id=correlation_id,
+        expected_candidate_sha256=expected_candidate_sha256,
+        candidate_observed_at=candidate_observed_at,
+        staff=staff,
+        review_contract=review_contract,
+        bridge=bridge,
+        manager_check=is_manager_staff,
+        table_available=table_exists,
+        required_tables=_REQUIRED_TABLES,
+        request_contract=_request_contract,
     )
-    request_fingerprint = bridge._sha256(request)
+    if "error" in prepared:
+        return prepared["error"]
+    actor_id = int(prepared["actor_id"])
+    binding_id_value = int(prepared["binding_id"])
+    normalized_outcome = str(prepared["outcome"])
+    correlation = str(prepared["correlation"])
+    expected_candidate_hash = str(prepared["expected_candidate_hash"])
+    expected_observed = prepared["expected_observed"]
+    request_fingerprint = str(prepared["request_fingerprint"])
     conn = _connection or get_conn()
     try:
         if not is_postgres_runtime() and not bool(getattr(conn, "in_transaction", False)):

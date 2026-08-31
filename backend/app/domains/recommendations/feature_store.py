@@ -9,6 +9,9 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.recommendations.feature_store_history import (
+    historical_feature_candidate,
+)
 from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
 
 logger = get_logger(__name__)
@@ -302,56 +305,20 @@ def get_features_at_time(
     valid: list[tuple[datetime, datetime, int, dict[str, Any], str, str, str]] = []
     rejected = 0
     for row in rows:
-        item = dict(row)
-        snapshot = _loads(item.get("feature_snapshot_json"), {})
-        if not isinstance(snapshot, dict) or not snapshot:
-            rejected += 1
-            continue
-        try:
-            recorded_dt, recorded_at = _as_utc(item.get("created_at"), field="snapshot created_at")
-            snapshot_dt, snapshot_at = _as_utc(snapshot.get("snapshot_at"), field="feature snapshot_at")
-        except ValueError:
-            rejected += 1
-            continue
-        if recorded_dt > requested_dt or snapshot_dt > requested_dt or snapshot_dt > recorded_dt:
-            rejected += 1
-            continue
-        try:
-            snapshot_entity_id = int(snapshot.get("kol_pool_id") or 0)
-        except (TypeError, ValueError, OverflowError):
-            rejected += 1
-            continue
-        if snapshot_entity_id != entity_id:
-            rejected += 1
-            continue
-        if launch_scope:
-            try:
-                snapshot_launch_id = int(snapshot.get("launch_id") or 0)
-                row_launch_id = int(item.get("launch_id") or 0)
-            except (TypeError, ValueError, OverflowError):
-                rejected += 1
-                continue
-            if snapshot_launch_id != launch_scope or row_launch_id != launch_scope:
-                rejected += 1
-                continue
-        if not _STANDARD_KOL_FEATURE_KEYS.issubset(snapshot):
-            rejected += 1
-            continue
-        schema_version = str(snapshot.get("feature_schema_version") or "").strip()
-        if schema_version not in _COMPATIBLE_SCHEMA_VERSIONS:
-            rejected += 1
-            continue
-        valid.append(
-            (
-                snapshot_dt,
-                recorded_dt,
-                int(item["id"]),
-                snapshot,
-                recorded_at,
-                snapshot_at,
-                schema_version or "legacy_unversioned_standard",
-            )
+        candidate = historical_feature_candidate(
+            row,
+            requested_dt=requested_dt,
+            entity_id=entity_id,
+            launch_scope=launch_scope,
+            loads=_loads,
+            parse_utc=_as_utc,
+            standard_feature_keys=_STANDARD_KOL_FEATURE_KEYS,
+            compatible_schema_versions=_COMPATIBLE_SCHEMA_VERSIONS,
         )
+        if candidate is None:
+            rejected += 1
+            continue
+        valid.append(candidate)
 
     if not valid:
         raise HistoricalFeatureSnapshotUnavailable(

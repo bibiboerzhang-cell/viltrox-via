@@ -23,16 +23,24 @@ BACKEND = ROOT / "backend"
 if str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
-# With no pre-existing backlog, 18 official + 91 qualified KOL tasks, two
+# With no pre-existing backlog, 18 official + 90 qualified KOL tasks, two
 # consumers, and handlers bounded to 300 seconds give the planning upper bound
-# ceil(109 / 2) * 300 = 16,500 seconds. The timeout ledger cannot interrupt a
-# stuck handler, so this is a capacity budget, not a completion guarantee.
-# 4h45m leaves 75 minutes in the primary 6h unit for maintenance and shutdown.
-DEFAULT_COMPLETION_WAIT_SECONDS = 17_100.0
+# ceil(108 / 2) * 300 = 16,200 seconds. The worker enforces that same ledger
+# deadline on the live handler. 4h45m leaves 75 minutes in the primary 6h unit
+# for maintenance and shutdown.
 
 from app.db.connection import close_db_runtime  # noqa: E402
+from app.domains.sync.daily_batch import (  # noqa: E402
+    DEFAULT_DAILY_CHILD_TIMEOUT_SECONDS,
+    DEFAULT_DAILY_KOL_LIMIT,
+    DEFAULT_DAILY_WORKER_COUNT,
+    DEFAULT_DAILY_CAPACITY_WINDOW_SECONDS,
+)
 from app.domains.sync.cron import run_job  # noqa: E402
 from app.domains.sync.daily_sync import SyncFailFast, SyncGuardBlocked  # noqa: E402
+
+
+DEFAULT_COMPLETION_WAIT_SECONDS = DEFAULT_DAILY_CAPACITY_WINDOW_SECONDS
 
 
 def utcnow() -> str:
@@ -235,7 +243,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--official-max-posts", type=int, default=50, help="Recent posts per official account")
     parser.add_argument("--official-platforms", default="", help="Comma-separated official platforms to run")
     parser.add_argument("--skip-official", action="store_true", help="Skip 18 official-account refresh")
-    parser.add_argument("--kol-limit", type=int, default=1200, help="Max KOL pool rows to refresh")
+    parser.add_argument(
+        "--kol-limit",
+        type=int,
+        default=DEFAULT_DAILY_KOL_LIMIT,
+        help="Max KOL pool rows to refresh inside the reviewed daily capacity budget",
+    )
     parser.add_argument("--kol-offset", type=int, default=0, help="Skip the first N selected KOL rows for bounded retries")
     parser.add_argument("--kol-stale-before", default="", help="Only refresh selected KOL rows refreshed before this UTC timestamp")
     parser.add_argument("--kol-stale-days", type=int, default=0, help="Compute --kol-stale-before as now minus N days. Use 1 for daily hot refresh.")
@@ -256,6 +269,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=10.0,
         help="Seconds between read-only child-ledger polls",
+    )
+    parser.add_argument(
+        "--worker-count",
+        type=int,
+        default=DEFAULT_DAILY_WORKER_COUNT,
+        help="Reviewed Redis consumer count used by the capacity admission bound",
+    )
+    parser.add_argument(
+        "--child-timeout-seconds",
+        type=int,
+        default=DEFAULT_DAILY_CHILD_TIMEOUT_SECONDS,
+        help="Per-child ledger and live-handler deadline used by capacity admission",
     )
     parser.add_argument("--skip-kol", action="store_true", help="Skip KOL pool lightweight refresh")
     parser.add_argument(
@@ -280,7 +305,7 @@ async def main() -> int:
         "official_max_posts": max(1, min(100, int(args.official_max_posts or 50))),
         "official_platforms": args.official_platforms,
         "skip_official": bool(args.skip_official),
-        "kol_limit": max(1, min(1200, int(args.kol_limit or 1200))),
+        "kol_limit": max(1, min(1200, int(args.kol_limit or DEFAULT_DAILY_KOL_LIMIT))),
         "kol_offset": max(0, min(5000, int(args.kol_offset or 0))),
         "kol_stale_before": compute_kol_stale_before(args.kol_stale_before, args.kol_stale_days),
         "kol_max_posts": max(1, min(3, int(args.kol_max_posts or 1))),
@@ -291,6 +316,12 @@ async def main() -> int:
         "kol_source_type": args.kol_source_type,
         "completion_wait_seconds": max(0.0, min(19_800.0, float(args.completion_wait_seconds or 0.0))),
         "completion_poll_seconds": max(0.05, min(60.0, float(args.completion_poll_seconds or 10.0))),
+        "capacity_window_seconds": max(0.0, min(19_800.0, float(args.completion_wait_seconds or 0.0))),
+        "worker_count": max(1, min(4, int(args.worker_count or DEFAULT_DAILY_WORKER_COUNT))),
+        "child_timeout_seconds": max(
+            1,
+            min(86_400, int(args.child_timeout_seconds or DEFAULT_DAILY_CHILD_TIMEOUT_SECONDS)),
+        ),
         "skip_kol": bool(args.skip_kol) and not (bool(args.include_legacy_kol) or bool(args.include_qualified_kol)),
         "allow_legacy_kol_full_refresh": bool(args.include_legacy_kol),
         "allow_qualified_kol_refresh": bool(args.include_qualified_kol),
@@ -315,6 +346,9 @@ async def main() -> int:
             kol_source_type=payload["kol_source_type"],
             completion_wait_seconds=payload["completion_wait_seconds"],
             completion_poll_seconds=payload["completion_poll_seconds"],
+            capacity_window_seconds=payload["capacity_window_seconds"],
+            worker_count=payload["worker_count"],
+            child_timeout_seconds=payload["child_timeout_seconds"],
         )
         result = await run_job("daily_incremental_sync", payload)
         emit_event("cron_daily_sync_finished", summary=result_summary(result))

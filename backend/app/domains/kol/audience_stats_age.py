@@ -15,6 +15,8 @@ from collections import Counter
 from datetime import datetime, timezone
 from typing import Any
 
+from app.domains.kol.audience_stats_age_ensemble import apply_age_signals
+
 from app.core.logging import get_logger
 from app.domains.kol.audience_avatar_llm import (  # noqa: F401 — download_avatar/load_avatar_gemini 经 _live() 解析
     avatar_model,
@@ -542,44 +544,17 @@ def _age_ensemble(
         if p.get("age_bucket"):
             counts["cached"] += 1
             continue
-        key = str(p.get("author_key") or "")
-        signals: list[tuple[str, float]] = []
-        lp = llm_pred.get(key)
-        if lp and lp.get("age_bucket"):
-            signals.append((lp["age_bucket"], float(lp.get("conf") or 0.55)))
-            counts["llm"] += 1
-        mp = m3_pred.get(key)
-        if mp and mp.get("age_bucket"):
-            signals.append((mp["age_bucket"], float(mp.get("conf") or 0.5)))
-            counts["m3"] += 1
-        c_bucket, c_conf = _age_from_channel_created(p.get("channel_created_at"))
-        if c_bucket:
-            signals.append((c_bucket, c_conf))
-            counts["channel"] += 1
-        h_bucket, h_conf = _age_from_handle(p.get("author_key"), p.get("display_name"))
-        if h_bucket:
-            signals.append((h_bucket, h_conf))
-            counts["handle_year"] += 1
-        ap = avatar_pred.get(key)
-        if ap and ap.get("age_bucket"):
-            signals.append((ap["age_bucket"], float(ap.get("conf") or 0.5)))
-            counts["avatar"] += 1
-        changed = False
-        bucket, conf = _fuse_age(signals)
-        if bucket:
-            p["age_bucket"], p["age_conf"] = bucket, conf
-            counts["fused"] += 1
-            changed = True
-        # gender:LLM/头像 仅在新 conf 更高时覆盖(写缓存同一条 UPDATE 顺带)。
-        if lp and lp.get("gender") in ("male", "female") and float(lp.get("conf") or 0) > float(p.get("gender_conf") or 0):
-            p["gender"], p["gender_conf"] = lp["gender"], round(float(lp.get("conf") or 0), 2)
-            changed = True
-        if ap and ap.get("gender") in ("male", "female") and float(ap.get("conf") or 0) > float(p.get("gender_conf") or 0):
-            p["gender"], p["gender_conf"] = ap["gender"], round(float(ap.get("conf") or 0), 2)
-            changed = True
-        if changed:
+        if apply_age_signals(
+            p,
+            llm_predictions=llm_pred,
+            m3_predictions=m3_pred,
+            avatar_predictions=avatar_pred,
+            counts=counts,
+            channel_age=_age_from_channel_created,
+            handle_age=_age_from_handle,
+            fuse_age=_fuse_age,
+        ):
             updates.append(p)
     written = _update_age_cache(conn, updates) if updates else 0
     return {"llm": llm_stats, "m3": m3_status, "avatar": avatar_stats, "counts": counts, "cache_written": written}
-
 

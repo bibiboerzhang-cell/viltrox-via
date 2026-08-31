@@ -10,7 +10,8 @@ class-LOC 棘轮拆分:行为逐字搬运自 queue.py::RedisJobQueue。这里是
 - move_to_dead_letter:死信流 + failed 终态 + ack。
 
 所有可 monkeypatch 的模块级符号(get_conn/db_connection_scope/常量/工具函数)
-一律经 ``_qm()`` 惰性解析到 queue 模块,保持 tests 对 queue 模块的补丁面不变。
+一律经 ``_qm()`` 读取已绑定的 queue 门面,保持 tests 对 queue 模块的补丁面不变,
+同时不建立反向 import。
 实例侧一律走 ``queue.<attr>``,保持对实例打补丁(get_status/set_status/
 _provider_execution_claim_is_live 等)的面不变。
 """
@@ -21,12 +22,12 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from app.services.jobs.queue_runtime import queue_facade
+
 
 def _qm():
-    """Resolve the queue module lazily so monkeypatches on it stay effective."""
-    from app.services.jobs import queue as queue_module
-
-    return queue_module
+    """Resolve the bound live facade so monkeypatches stay effective."""
+    return queue_facade()
 
 
 def provider_execution_claim_is_live(task_id: str) -> bool:

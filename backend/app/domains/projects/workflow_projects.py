@@ -7,6 +7,7 @@ from typing import Any
 
 from app.db.connection import PostgresCompatConnection, get_conn
 from app.domains.access import scope
+from app.domains.projects import workflow_project_create
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow_common import (
     PROJECT_STAGES,
@@ -237,118 +238,50 @@ def _normalize_project_products(body: dict[str, Any]) -> list[dict[str, str]]:
 
 def create_project(body: dict[str, Any], *, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     ensure_vkpi_schema()
-    name = str(body.get("project_name") or body.get("name") or "").strip()
-    if not name:
-        raise ValueError("project_name required")
-    stage = normalize_stage(str(body.get("stage") or "discovery"))
-    if stage not in PROJECT_STAGES:
-        raise ValueError("unsupported stage")
-    actor_staff_id = staff_id(staff)
-    assigned_staff_id = _int(body.get("assigned_staff_id"), actor_staff_id)
-    if not scope.can_view_all(staff):
-        assigned_staff_id = actor_staff_id
-    now = utcnow()
-    project_uid = str(body.get("project_uid") or f"VKPI-{secrets.token_hex(5).upper()}").strip()
-    products = _normalize_project_products(body)
-    primary_product = products[0] if products else {}
-    metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
-    if products:
-        metadata = {**metadata, "products": products, "product_skus": [item["product_sku"] for item in products]}
-    conn = get_conn()
-    conn.execute(
-        """
-        INSERT INTO vkpi_projects (
-            project_uid, project_name, kol_id, assigned_staff_id, created_by_staff_id,
-            product_sku, product_name, platform, marketplace, stage, stage_status,
-            priority, source_type, shopify_discount_code, shopify_link, amazon_asin,
-            amazon_attribution_link, amazon_associates_link, sample_status, tracking_number,
-            target_post_date, due_at, started_at, last_activity_at, metadata_json,
-            created_at, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            project_uid,
-            name,
-            _int(body.get("kol_id")) or None,
-            assigned_staff_id or None,
-            actor_staff_id or None,
-            str(primary_product.get("product_sku") or body.get("product_sku") or ""),
-            str(primary_product.get("product_name") or body.get("product_name") or ""),
-            str(body.get("platform") or ""),
-            str(body.get("marketplace") or ""),
-            stage,
-            "closed" if stage in TERMINAL_STAGES else str(body.get("stage_status") or "active"),
-            str(body.get("priority") or "normal"),
-            str(body.get("source_type") or "manual"),
-            str(body.get("shopify_discount_code") or ""),
-            str(body.get("shopify_link") or ""),
-            str(body.get("amazon_asin") or ""),
-            str(body.get("amazon_attribution_link") or ""),
-            str(body.get("amazon_associates_link") or ""),
-            str(body.get("sample_status") or "not_required"),
-            str(body.get("tracking_number") or ""),
-            body.get("target_post_date"),
-            body.get("due_at"),
-            now,
-            now,
-            _json(metadata),
-            now,
-            now,
-        ),
+    prepared = workflow_project_create.prepare_project(
+        body,
+        staff,
+        normalize_stage=normalize_stage,
+        project_stages=PROJECT_STAGES,
+        staff_id=staff_id,
+        to_int=_int,
+        can_view_all=scope.can_view_all,
+        utcnow=utcnow,
+        token_hex=secrets.token_hex,
+        normalize_products=_normalize_project_products,
     )
-    row = conn.execute("SELECT id FROM vkpi_projects WHERE project_uid=?", (project_uid,)).fetchone()
-    project_id = int(row["id"]) if row else 0
-    if project_id:
-        conn.execute(
-            """
-            INSERT INTO vkpi_project_stage_events
-                (project_id, from_stage, to_stage, event_type, actor_staff_id, note, effective_at, metadata_json, created_at)
-            VALUES (?, '', ?, 'created', ?, ?, ?, '{}', ?)
-            """,
-            (project_id, stage, actor_staff_id or None, str(body.get("note") or ""), now, now),
-        )
-        if _int(body.get("kol_id")) and assigned_staff_id:
-            existing_claim = conn.execute(
-                "SELECT id FROM vkpi_kol_claims WHERE kol_id=? AND status='active' LIMIT 1",
-                (_int(body.get("kol_id")),),
-            ).fetchone()
-            if not existing_claim:
-                conn.execute(
-                    """
-                    INSERT INTO vkpi_kol_claims (
-                        kol_id, staff_id, project_id, status, claimed_at, last_effective_touch_at,
-                        metadata_json, created_at, updated_at
-                    ) VALUES (?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        _int(body.get("kol_id")),
-                        assigned_staff_id,
-                        project_id,
-                        "active",
-                        now,
-                        now,
-                        _json({"source": "project_create"}),
-                        now,
-                        now,
-                    ),
-                )
-    conn.commit()
+    conn = get_conn()
+    project_id = workflow_project_create.persist_project(
+        conn,
+        body,
+        prepared,
+        terminal_stages=TERMINAL_STAGES,
+        to_int=_int,
+        json_dump=_json,
+    )
     if project_id:
         _log_project_audit(
             staff=staff,
             action_type="project_create",
             project_id=project_id,
-            detail=name,
+            detail=prepared["name"],
             metadata={
-                "project_uid": project_uid,
-                "stage": stage,
+                "project_uid": prepared["project_uid"],
+                "stage": prepared["stage"],
                 "kol_id": _int(body.get("kol_id")) or None,
-                "assigned_staff_id": assigned_staff_id or None,
-                "product_skus": [item["product_sku"] for item in products],
+                "assigned_staff_id": prepared["assigned_staff_id"] or None,
+                "product_skus": [
+                    item["product_sku"] for item in prepared["products"]
+                ],
                 "source_type": str(body.get("source_type") or "manual"),
             },
         )
-    return {"id": project_id, "project_uid": project_uid, "project_name": name, "stage": stage}
+    return {
+        "id": project_id,
+        "project_uid": prepared["project_uid"],
+        "project_name": prepared["name"],
+        "stage": prepared["stage"],
+    }
 
 
 def create_project_draft_from_session(

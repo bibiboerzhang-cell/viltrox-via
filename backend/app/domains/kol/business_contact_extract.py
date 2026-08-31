@@ -19,6 +19,10 @@ from typing import Any
 
 from app.db.connection import get_conn
 from app.domains.costs.budget_guard import check_budget, record_cost
+from app.domains.kol.business_contact_about_helpers import (
+    about_profile_from_result as _about_profile_from_result,
+    record_about_scrape_cost as _record_about_scrape_cost,
+)
 
 from app.core.logging import get_logger
 
@@ -624,6 +628,34 @@ def _about_claim_task_id(kol_pool_id: int) -> str:
     return f"contact_about:{int(kol_pool_id)}"
 
 
+def _run_about_profile_crawl(
+    crawler: Any,
+    *,
+    profile_url: str,
+    handle: str,
+    task_id: str,
+    own_claim: bool,
+    fence: int,
+    apify_execution_context: Any,
+    finalize_provider_execution_claim: Any,
+) -> dict[str, Any] | None:
+    from contextlib import nullcontext
+
+    state = "failed"
+    try:
+        with (apify_execution_context(task_id, fence) if own_claim else nullcontext()):
+            result = crawler.crawl_channel_profile(profile_url or handle, max_posts=1)
+        status = str((result or {}).get("provider_status") or "") if isinstance(result, dict) else ""
+        state = "completed" if status in {"ok", "no_results"} else "failed"
+        return result
+    finally:
+        if own_claim:
+            try:
+                finalize_provider_execution_claim(task_id, fence, state)
+            except Exception:
+                logger.debug("about-scrape claim finalize failed task=%s", task_id, exc_info=True)
+
+
 def _apify_scrape_about(*, platform: str, handle: str, profile_url: str, kol_pool_id: int, staff: dict[str, Any] | None = None) -> tuple[dict[str, Any], str]:
     """Apify 专抓 about 页(默认仅 youtube 有现成 about 抓取链路;Jianbo 已授权)。
 
@@ -656,54 +688,30 @@ def _apify_scrape_about(*, platform: str, handle: str, profile_url: str, kol_poo
         fence = acquire_provider_execution_claim(
             task_id, "business_contact_extract", job_type="business_email_about_scrape", lease_seconds=900,
         ) if own_claim else 0
-        state = "failed"
-        try:
-            from contextlib import nullcontext
-            with (apify_execution_context(task_id, fence) if own_claim else nullcontext()):
-                result = crawler.crawl_channel_profile(profile_url or handle, max_posts=1)
-            status = str((result or {}).get("provider_status") or "") if isinstance(result, dict) else ""
-            # completed=已真实花钱(含 no_results 空频道);error/not_configured/quota → failed 允许重试
-            state = "completed" if status in {"ok", "no_results"} else "failed"
-        finally:
-            if own_claim:
-                try:
-                    finalize_provider_execution_claim(task_id, fence, state)
-                except Exception:
-                    logger.debug("about-scrape claim finalize failed task=%s", task_id, exc_info=True)
+        result = _run_about_profile_crawl(
+            crawler,
+            profile_url=profile_url,
+            handle=handle,
+            task_id=task_id,
+            own_claim=own_claim,
+            fence=fence,
+            apify_execution_context=apify_execution_context,
+            finalize_provider_execution_claim=finalize_provider_execution_claim,
+        )
         if not isinstance(result, dict) or str(result.get("provider_status") or "") != "ok":
             return {}, ""
-        items = result.get("items") or []
-        profile = items[0] if items and isinstance(items[0], dict) else {}
-        # streamers/youtube-scraper 把 about 页「链接区」放 channelDescriptionLinks(原始 actor item 保留在
-        # videos[0]),normalized profile 只带 channelDescription 文本 → 这里拼回 about blob 供抽取扫描。
-        vids = result.get("videos") if isinstance(result.get("videos"), list) else []
-        v0 = vids[0] if vids and isinstance(vids[0], dict) else {}
-        raw_links = v0.get("channelDescriptionLinks") or ((v0.get("aboutChannelInfo") or {}).get("channelDescriptionLinks")) or []
-        link_lines: list[str] = []
-        for lnk in raw_links if isinstance(raw_links, list) else []:
-            if not isinstance(lnk, dict):
-                continue
-            u = str(lnk.get("url") or "").strip()
-            if u and "://" not in u and "." in u and " " not in u:
-                u = "https://" + u  # about 链接区常存裸域名(Barrerastudios.com)
-            if u:
-                link_lines.append(f"{str(lnk.get('text') or '').strip()}: {u}".lstrip(": ").strip())
-        if link_lines:
-            profile = {**profile, "about": "\n".join(link_lines)}
+        profile = _about_profile_from_result(result)
         apify_run_ref = str(((result.get("raw") or {}).get("apify_run_id")) or result.get("apify_run_id") or "")
         # 补一条带 kol_pool_id + about 用途的归因记账(crawler 已记主成本,此处 cost_usd=0 仅留 ref)。
-        try:
-            record_cost(
-                scope=APIFY_BUDGET_SCOPE,
-                ai_provider="apify",
-                model_name="about_scrape",
-                cost_usd=0.0,
-                kol_pool_id=int(kol_pool_id),
-                staff_id=int((staff or {}).get("staff_id") or (staff or {}).get("user_id") or 0) or None,
-                metadata={"operation": "business_email_about_scrape", "apify_run_ref": apify_run_ref, "platform": platform},
-            )
-        except Exception:
-            logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
+        _record_about_scrape_cost(
+            kol_pool_id=kol_pool_id,
+            staff=staff,
+            apify_run_ref=apify_run_ref,
+            platform=platform,
+            budget_scope=APIFY_BUDGET_SCOPE,
+            record_cost=record_cost,
+            logger=logger,
+        )
         return ({"profile": profile}, apify_run_ref)
     except Exception:
         logger.warning("about-scrape failed kol=%s", kol_pool_id, exc_info=True)

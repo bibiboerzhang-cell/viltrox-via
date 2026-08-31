@@ -17,6 +17,13 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
+from app.domains.kol.data_completion_priority_item import (
+    anchor_coverage,
+    comment_evidence_status,
+    priority_actions,
+    priority_band,
+)
+
 from app.db.connection import get_conn, is_postgres_runtime
 
 
@@ -479,69 +486,26 @@ def _priority_item(row: Mapping[str, Any], specs: Sequence[AnchorSpec]) -> dict[
         "followers": followers_status,
     }
 
-    raw_anchor_hits = row.get("anchor_hits") if isinstance(row.get("anchor_hits"), Mapping) else {}
-    anchor_coverage: dict[str, dict[str, Any]] = {}
-    missing_anchors: list[str] = []
-    for spec in specs:
-        sources = raw_anchor_hits.get(spec.key) if isinstance(raw_anchor_hits, Mapping) else {}
-        source_status = {
-            "factual_profile": bool((sources or {}).get("factual_profile")),
-            "video_evidence": bool((sources or {}).get("video_evidence")),
-            "final_v1": bool((sources or {}).get("final_v1")),
-        }
-        observed = any(source_status.values())
-        anchor_coverage[spec.key] = {"observed": observed, "sources": source_status}
-        if not observed:
-            missing_anchors.append(spec.key)
-
-    actions: list[dict[str, Any]] = []
-    if field_status["platform"] != "known":
-        actions.append(_action("platform_missing", 24, "verify_platform_identity", "平台为空，平台硬筛无法判定。", "low", "critical", "hard_filter_eligibility", "恢复平台筛选资格判定"))
-    if field_status["country"] != "known":
-        actions.append(_action("country_missing", 18, "verify_creator_country", "国家/地区未知，会从地区硬筛中被诚实排除。", "low", "high", "hard_filter_eligibility", "恢复国家/地区筛选资格判定"))
-    if field_status["language"] != "known":
-        actions.append(_action("language_missing", 16, "verify_content_language", "内容语言未知，会从语言硬筛中被诚实排除。", "low", "high", "hard_filter_eligibility", "恢复语言筛选资格判定"))
-    if followers_status != "known":
-        reason = "粉丝量缺失，触达门槛无法判定。" if followers_status == "missing" else "粉丝量为零或非法，需核验是否为采集占位值。"
-        actions.append(_action("followers_unverified", 20, "refresh_profile_reach_metrics", reason, "low", "high", "hard_filter_eligibility", "恢复粉丝门槛与批量筛选资格判定"))
-
-    if specs and missing_anchors:
-        fraction = len(missing_anchors) / len(specs)
-        actions.append(
-            _action(
-                "required_product_anchor_missing",
-                30 * fraction,
-                "collect_product_specific_video_evidence",
-                f"必需产品锚点缺 {len(missing_anchors)}/{len(specs)}：{', '.join(missing_anchors)}。",
-                "medium",
-                "critical",
-                "relevance_gate",
-                "使严格产品匹配可以由事实/视频证据支持，而非依赖派生画像",
-            )
-        )
-    if evidence_count == 0:
-        actions.append(_action("video_evidence_missing", 24, "collect_representative_video_evidence", "没有可用视频证据，相关度与内容质量均无法核验。", "medium", "critical", "relevance_and_quality_gate", "建立产品锚点、场景和内容质量的事实底座"))
-    elif evidence_count < READINESS_VIDEO_TARGET:
-        gap = READINESS_VIDEO_TARGET - evidence_count
-        actions.append(_action("video_sample_insufficient", 10 * gap / READINESS_VIDEO_TARGET, "collect_more_representative_videos", f"视频样本 {evidence_count}/{READINESS_VIDEO_TARGET}，不足以达到既有就绪度样本门槛。", "medium", "medium", "analysis_readiness", "降低单条视频偶然性并扩大内容覆盖"))
-
-    if evidence_count > 0 and (view_ratio or 0) < READINESS_VIEW_RATIO:
-        shortfall = max(0.0, READINESS_VIEW_RATIO - (view_ratio or 0)) / READINESS_VIEW_RATIO
-        actions.append(_action("view_count_coverage_insufficient", 12 * shortfall, "refresh_video_view_counts", f"播放量已知 {view_known}/{evidence_count}，低于 {int(READINESS_VIEW_RATIO * 100)}% 就绪度门槛。", "low", "medium", "content_quality", "恢复代表作和表现质量判断的可比性"))
-
-    if evidence_bridge_comments <= 0 and direct_comments > 0:
-        actions.append(_action("comments_bridge_unverified", 4, "verify_comment_kol_identity_bridge", "评论仅通过 account_id 同号桥接，可能与 KOL Pool 主键碰撞，不能直接当作该创作者受众证据。", "low", "medium", "engagement_quality", "确认评论样本确实属于该创作者后再用于互动与受众判断"))
-    elif stored_comments <= 0 and comment_metric_known <= 0:
-        actions.append(_action("comments_missing", 8, "collect_representative_comments", "既无评论样本，也无视频评论量元数据。", "medium", "medium", "engagement_quality", "支持互动质量、受众意图与真实性复核"))
-    elif evidence_bridge_comments <= 0:
-        actions.append(_action("comment_text_missing", 4, "collect_representative_comments", "已有评论量元数据，但没有可审阅的评论样本。", "medium", "low", "engagement_quality", "从数量判断升级到评论内容与真实性判断"))
-
-    if audience["status"] != "ready":
-        actions.append(_action("audience_profile_missing", 10, "build_audience_ensemble", "缺少有样本的 ensemble_v1 受众画像。", "medium", "medium", "audience_fit", "支持受众地区、语言与目标市场匹配判断"))
-
-    if final_count < READINESS_FINAL_V1_TARGET:
-        gap = READINESS_FINAL_V1_TARGET - final_count
-        actions.append(_action("final_v1_insufficient", 15 * gap / READINESS_FINAL_V1_TARGET, "analyze_high_value_videos_after_evidence_review", f"ready final_v1 为 {final_count}/{READINESS_FINAL_V1_TARGET}；应先人工确认视频证据再进入高成本深析。", "high", "medium", "deep_content_quality", "支持完整内容、品牌提及和合作风险判断"))
+    product_anchor_coverage, missing_anchors = anchor_coverage(specs, row.get("anchor_hits"))
+    actions = priority_actions(
+        field_status=field_status,
+        followers_status=followers_status,
+        specs=specs,
+        missing_anchors=missing_anchors,
+        evidence_count=evidence_count,
+        view_known=view_known,
+        view_ratio=view_ratio,
+        evidence_bridge_comments=evidence_bridge_comments,
+        direct_comments=direct_comments,
+        stored_comments=stored_comments,
+        comment_metric_known=comment_metric_known,
+        audience=audience,
+        final_count=final_count,
+        video_target=READINESS_VIDEO_TARGET,
+        required_view_ratio=READINESS_VIEW_RATIO,
+        final_target=READINESS_FINAL_V1_TARGET,
+        action=_action,
+    )
 
     actions.sort(
         key=lambda item: (
@@ -552,14 +516,7 @@ def _priority_item(row: Mapping[str, Any], specs: Sequence[AnchorSpec]) -> dict[
     )
     raw_priority_score = round(sum(float(item["score_contribution"]) for item in actions), 2)
     priority_score = round(min(100.0, raw_priority_score), 2)
-    if priority_score >= 60:
-        band = "urgent"
-    elif priority_score >= 40:
-        band = "high"
-    elif priority_score >= 20:
-        band = "medium"
-    else:
-        band = "low"
+    band = priority_band(priority_score)
     top_action = actions[0] if actions else _action(
         "no_material_gap", 0, "keep_monitoring", "当前存量数据未发现需要优先补全的门槛性缺口。", "low", "low", "monitoring", "保持现状并等待业务复核"
     )
@@ -586,21 +543,17 @@ def _priority_item(row: Mapping[str, Any], specs: Sequence[AnchorSpec]) -> dict[
             "stored_comment_count": stored_comments,
             "direct_account_comment_count": direct_comments,
             "evidence_bridge_comment_count": evidence_bridge_comments,
-            "comment_evidence_status": (
-                "evidence_linked"
-                if evidence_bridge_comments > 0
-                else "account_bridge_unverified"
-                if direct_comments > 0
-                else "metrics_only"
-                if comment_metric_known > 0
-                else "missing"
+            "comment_evidence_status": comment_evidence_status(
+                evidence_bridge_comments,
+                direct_comments,
+                comment_metric_known,
             ),
             "final_v1_count": final_count,
             "final_v1_target": READINESS_FINAL_V1_TARGET,
             "audience": audience,
         },
         "required_product_anchors": [spec.key for spec in specs],
-        "product_anchor_coverage": anchor_coverage,
+        "product_anchor_coverage": product_anchor_coverage,
         "claim_status": CLAIM_STATUS,
     }
 

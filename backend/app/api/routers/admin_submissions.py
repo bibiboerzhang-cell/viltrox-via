@@ -512,11 +512,170 @@ def serve_best_frame(submission_id: int):
         raise HTTPException(status_code=404, detail="Submission not found")
     return resolve_poster_response(row)
 
+
+def _manual_approval_values(row: dict[str, Any], req: ManualApproveRequest) -> dict[str, Any]:
+    hint_bonus = sum(
+        (
+            15 if req.hints and req.hints.get("logo") else 0,
+            12 if req.hints and req.hints.get("product") else 0,
+            10 if req.hints and req.hints.get("voice") else 0,
+            10 if req.hints and req.hints.get("review") else 0,
+        )
+    )
+    campaign = min(
+        400,
+        req.campaign_score
+        if req.campaign_score is not None
+        else (row.get("final_score") or 0) + hint_bonus,
+    )
+    creator = req.creator_score if req.creator_score is not None else row.get("creator_score") or 0
+    overall = req.overall_score if req.overall_score is not None else round(campaign * 0.7 + creator * 0.3)
+    series = req.product_series if req.product_series else row.get("product_series") or "VILTROX"
+    label = req.product_label if req.product_label else row.get("product_label")
+    memo = row.get("memo") or ""
+    if hint_bonus > 0:
+        memo += f" [Manual hint bonus applied: +{hint_bonus}]"
+    if req.memo_append:
+        memo += f" [Admin note: {req.memo_append}]"
+    return {
+        "campaign": campaign,
+        "creator": creator,
+        "overall": overall,
+        "series": series,
+        "label": label,
+        "memo": memo,
+    }
+
+
+def _sync_manual_approval_scores(conn: Any, cursor: Any, submission_id: int) -> None:
+    try:
+        va_row = conn.execute(
+            "SELECT video_analysis, tech_score FROM submissions WHERE id=?",
+            (submission_id,),
+        ).fetchone()
+        if not va_row or va_row["tech_score"]:
+            return
+        va_data = json.loads(va_row["video_analysis"] or "{}") if va_row["video_analysis"] else {}
+        tech_score = va_data.get("tech_score", 0)
+        marketing_score = va_data.get("marketing_score", 0)
+        genre = va_data.get("content_genre", "")
+        if tech_score <= 0:
+            return
+        percentiles = update_genre_benchmark(genre, tech_score, marketing_score) if genre else {}
+        cursor.execute(
+            "UPDATE submissions SET tech_score=?, marketing_score=?, content_genre=?, percentile_tech=?, percentile_mkt=? WHERE id=?",
+            (
+                tech_score,
+                marketing_score,
+                genre,
+                percentiles.get("percentile_tech", 0),
+                percentiles.get("percentile_mkt", 0),
+                submission_id,
+            ),
+        )
+    except Exception:
+        logger.exception(
+            "admin.approve_score_sync_failed",
+            extra={"submission_id": submission_id},
+        )
+
+
+def _persist_manual_approval(
+    conn: Any,
+    cursor: Any,
+    submission_id: int,
+    row: dict[str, Any],
+    values: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        cursor.execute(
+            """UPDATE submissions
+               SET detection_status=?, recommendation=?, final_score=?, creator_score=?,
+                   overall_score=?, product_series=?, product_label=?, memo=?
+               WHERE id=?""",
+            (
+                "confirmed",
+                "Approved by admin review",
+                values["campaign"],
+                values["creator"],
+                values["overall"],
+                values["series"],
+                values["label"],
+                values["memo"],
+                submission_id,
+            ),
+        )
+        _sync_manual_approval_scores(conn, cursor, submission_id)
+        points = auto_award_points(
+            submission_id,
+            row.get("extracted_handle", ""),
+            values["campaign"],
+            conn=conn,
+            commit=False,
+        )
+        conn.commit()
+        return points
+    except Exception:
+        conn.rollback()
+        logger.exception(
+            "admin.manual_approve_failed",
+            extra={"submission_id": submission_id},
+        )
+        raise HTTPException(status_code=500, detail="Could not approve submission")
+
+
+def _record_manual_approval_learning(
+    submission_id: int,
+    row: dict[str, Any],
+    req: ManualApproveRequest,
+    values: dict[str, Any],
+) -> None:
+    try:
+        old_series = (row.get("product_series") or "").strip()
+        old_label = (row.get("product_label") or "").strip()
+        new_series = values["series"]
+        new_label = values["label"]
+        if not (
+            (new_series or new_label)
+            and (new_series != old_series or new_label != old_label)
+        ):
+            return
+        learned_text = " ".join(
+            filter(
+                None,
+                [
+                    row.get("title") or "",
+                    row.get("memo") or "",
+                    (
+                        json.loads(row.get("video_analysis") or "{}").get("notes", "")
+                        if row.get("video_analysis")
+                        else ""
+                    ),
+                ],
+            )
+        )
+        from app.services.audit.learning import record_correction
+
+        record_correction(
+            submission_id=submission_id,
+            url=row.get("url") or "",
+            correct_series=new_series or old_series,
+            correct_label=new_label or old_label,
+            learned_text=learned_text,
+            note=req.memo_append or "",
+        )
+    except Exception:
+        logger.exception(
+            "admin.approve_learning_sync_failed",
+            extra={"submission_id": submission_id},
+        )
+
 @router.post("/api/admin/approve/{submission_id}")
 @rate_limit("admin_mutation", max_requests=120, window_sec=60)
 def manual_approve(submission_id: int, request: Request, req: ManualApproveRequest = None):
     require_admin(request)
-    if req is None: req = ManualApproveRequest()
+    if req is None:
+        req = ManualApproveRequest()
     conn = get_conn()
     c = conn.cursor()
     row = c.execute("SELECT * FROM submissions WHERE id=?", (submission_id,)).fetchone()
@@ -524,85 +683,18 @@ def manual_approve(submission_id: int, request: Request, req: ManualApproveReque
         raise HTTPException(status_code=404, detail="Submission not found")
 
     r = dict(row)
-    hint_bonus = sum([15 if req.hints and req.hints.get("logo") else 0,
-                      12 if req.hints and req.hints.get("product") else 0,
-                      10 if req.hints and req.hints.get("voice") else 0,
-                      10 if req.hints and req.hints.get("review") else 0])
-
-    new_campaign = min(400, req.campaign_score if req.campaign_score is not None else (r.get("final_score") or 0) + hint_bonus)
-    new_creator  = req.creator_score  if req.creator_score  is not None else r.get("creator_score") or 0
-    new_overall  = req.overall_score  if req.overall_score  is not None else round(new_campaign * 0.7 + new_creator * 0.3)
-    new_series   = req.product_series if req.product_series else r.get("product_series") or "VILTROX"
-    new_label    = req.product_label  if req.product_label  else r.get("product_label")
-
-    memo = r.get("memo") or ""
-    if hint_bonus > 0: memo += f" [Manual hint bonus applied: +{hint_bonus}]"
-    if req.memo_append: memo += f" [Admin note: {req.memo_append}]"
-
-    try:
-        c.execute(
-            """UPDATE submissions
-               SET detection_status=?, recommendation=?, final_score=?, creator_score=?,
-                   overall_score=?, product_series=?, product_label=?, memo=?
-               WHERE id=?""",
-            ("confirmed", "Approved by admin review", new_campaign, new_creator, new_overall, new_series, new_label, memo, submission_id),
-        )
-
-        try:
-            va_row = conn.execute("SELECT video_analysis, tech_score FROM submissions WHERE id=?", (submission_id,)).fetchone()
-            if va_row and not va_row["tech_score"]:
-                va_data = json.loads(va_row["video_analysis"] or "{}") if va_row["video_analysis"] else {}
-                ts = va_data.get("tech_score", 0); ms = va_data.get("marketing_score", 0); genre = va_data.get("content_genre", "")
-                if ts > 0:
-                    pct = update_genre_benchmark(genre, ts, ms) if genre else {}
-                    c.execute(
-                        "UPDATE submissions SET tech_score=?, marketing_score=?, content_genre=?, percentile_tech=?, percentile_mkt=? WHERE id=?",
-                        (ts, ms, genre, pct.get("percentile_tech", 0), pct.get("percentile_mkt", 0), submission_id),
-                    )
-        except Exception:
-            logger.exception("admin.approve_score_sync_failed", extra={"submission_id": submission_id})
-
-        pts_result = auto_award_points(
-            submission_id,
-            r.get("extracted_handle", ""),
-            new_campaign,
-            conn=conn,
-            commit=False,
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        logger.exception("admin.manual_approve_failed", extra={"submission_id": submission_id})
-        raise HTTPException(status_code=500, detail="Could not approve submission")
+    values = _manual_approval_values(r, req)
+    pts_result = _persist_manual_approval(conn, c, submission_id, r, values)
 
     _refresh_user_points_state(pts_result.get("user_id"), reason="points_award")
-    try:
-        old_series = (r.get("product_series") or "").strip()
-        old_label = (r.get("product_label") or "").strip()
-        if (new_series or new_label) and (new_series != old_series or new_label != old_label):
-            learned_text = " ".join(
-                filter(
-                    None,
-                    [
-                        r.get("title") or "",
-                        r.get("memo") or "",
-                        (json.loads(r.get("video_analysis") or "{}").get("notes", "") if r.get("video_analysis") else ""),
-                    ],
-                )
-            )
-            from app.services.audit.learning import record_correction
-            record_correction(
-                submission_id=submission_id,
-                url=r.get("url") or "",
-                correct_series=new_series or old_series,
-                correct_label=new_label or old_label,
-                learned_text=learned_text,
-                note=req.memo_append or "",
-            )
-    except Exception as e:
-        logger.exception("admin.approve_learning_sync_failed", extra={"submission_id": submission_id})
+    _record_manual_approval_learning(submission_id, r, req, values)
     _invalidate_admin_cache()
-    return {"status": "approved", "id": submission_id, "campaign_score": new_campaign, "points_awarded": pts_result.get("points", 0)}
+    return {
+        "status": "approved",
+        "id": submission_id,
+        "campaign_score": values["campaign"],
+        "points_awarded": pts_result.get("points", 0),
+    }
 
 @router.post("/api/admin/reject/{submission_id}")
 @rate_limit("admin_mutation", max_requests=120, window_sec=60)

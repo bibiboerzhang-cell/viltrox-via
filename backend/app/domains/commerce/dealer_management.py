@@ -327,6 +327,198 @@ def dealer_filter_sql(
     return where_sql, params, normalized
 
 
+def _append_basic_dealer_fields(
+    changes: dict[str, Any], assignments: list[str], params: list[Any]
+) -> None:
+    basic_text_fields = {
+        "name": 240,
+        "address": 500,
+        "city": 160,
+        "state": 2,
+        "country": 2,
+        "source": 240,
+        "postal_code": 32,
+        "phone": 80,
+        "contact_email": 320,
+        "store_hours": 1000,
+        "public_services": 2000,
+        "verification_note": 2000,
+    }
+    for field, maximum in basic_text_fields.items():
+        if field not in changes:
+            continue
+        text = bounded_text(changes.get(field), field=field, maximum=maximum)
+        if field in {"name", "address"} and text is None:
+            raise ValueError(f"{field} is required")
+        if field in {"state", "country"} and text is not None:
+            text = text.upper()
+            if not re.fullmatch(r"[A-Z]{2}", text):
+                raise ValueError(f"{field} must be a two-letter code")
+        assignments.append(f"{field} = ?")
+        params.append(text)
+
+
+def _append_dealer_coordinates(
+    changes: dict[str, Any],
+    assignments: list[str],
+    params: list[Any],
+    *,
+    current: Any,
+    row_get: Callable[[Any, str, Any], Any],
+    clean_lat: Callable[[Any], float | None],
+    clean_lng: Callable[[Any], float | None],
+) -> None:
+    for field, cleaner in (("lat", clean_lat), ("lng", clean_lng)):
+        if field not in changes:
+            continue
+        raw_value = changes.get(field)
+        coordinate = cleaner(raw_value)
+        if raw_value not in (None, "") and coordinate is None:
+            raise ValueError(f"{field} is outside the valid coordinate range")
+        if row_get(current, "publication_status", None) == "published" and coordinate is None:
+            raise ValueError("unpublish the dealer before clearing map coordinates")
+        assignments.append(f"{field} = ?")
+        params.append(coordinate)
+
+
+def _append_dealer_links(
+    changes: dict[str, Any], assignments: list[str], params: list[Any]
+) -> None:
+    for field in ("location_source_url", "brand_listing_url"):
+        if field in changes:
+            assignments.append(f"{field} = ?")
+            params.append(http_url_or_none(changes.get(field), field=field))
+    if "website_url" in changes:
+        assignments.append("website_url = ?")
+        params.append(http_url_or_none(changes.get("website_url"), field="website_url"))
+    if "social_links" in changes:
+        assignments.append("social_links_json = ?::jsonb")
+        params.append(
+            json.dumps(
+                normalize_social_links(changes.get("social_links")),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+        )
+
+
+def _append_viltrox_deployment(
+    changes: dict[str, Any],
+    assignments: list[str],
+    params: list[Any],
+    *,
+    current: Any,
+    actor_ref: str,
+    row_get: Callable[[Any, str, Any], Any],
+) -> None:
+    if "viltrox_deployment" not in changes:
+        return
+    deployment = changes.get("viltrox_deployment")
+    if not isinstance(deployment, dict):
+        raise ValueError("viltrox_deployment must be an object")
+    status = (str_or_none(deployment.get("status")) or "not_deployed").lower()
+    if status not in VILTROX_DEPLOYMENT_STATUSES:
+        raise ValueError(
+            "viltrox_deployment.status must be one of: "
+            + ", ".join(sorted(VILTROX_DEPLOYMENT_STATUSES))
+        )
+    if status == "paused" and row_get(current, "viltrox_deployed_at", None) in (None, ""):
+        raise ValueError("viltrox_deployment cannot be paused before deployment")
+    note = bounded_text(
+        deployment.get("note"), field="viltrox_deployment.note", maximum=2000
+    ) or ""
+    assignments.extend(("viltrox_deployment_status = ?", "viltrox_deployment_note = ?"))
+    params.extend((status, note))
+    if status == "deployed":
+        assignments.extend(
+            (
+                "viltrox_deployed_at = COALESCE(viltrox_deployed_at, NOW())",
+                "viltrox_deployed_by = ?",
+            )
+        )
+        params.append(actor_ref)
+
+
+def _append_dealer_activity(
+    changes: dict[str, Any], assignments: list[str], params: list[Any]
+) -> None:
+    if "activity" not in changes:
+        return
+    activity = changes.get("activity")
+    if not isinstance(activity, dict):
+        raise ValueError("activity must be an object")
+    status = (str_or_none(activity.get("status")) or "unknown").lower()
+    if status not in ACTIVITY_STATUSES:
+        raise ValueError(
+            "activity.status must be one of: " + ", ".join(sorted(ACTIVITY_STATUSES))
+        )
+    page_url = http_url_or_none(activity.get("page_url"), field="activity.page_url")
+    checked_at = iso_datetime_or_none(
+        activity.get("checked_at"), field="activity.checked_at"
+    )
+    next_event_at = iso_datetime_or_none(
+        activity.get("next_event_at"), field="activity.next_event_at"
+    )
+    note = bounded_text(activity.get("note"), field="activity.note", maximum=2000) or ""
+    assignments.extend(
+        (
+            "activity_status = ?",
+            "activity_page_url = ?",
+            "activity_checked_at = ?",
+            "next_activity_at = ?",
+            "activity_note = ?",
+        )
+    )
+    params.extend((status, page_url, checked_at, next_event_at, note))
+
+
+def _persist_dealer_update(
+    conn: Any,
+    normalized_id: int,
+    assignments: list[str],
+    params: list[Any],
+    brands: list[dict[str, Any]] | None,
+    *,
+    commit: bool,
+) -> None:
+    assignments.append("updated_at = NOW()")
+    try:
+        conn.execute(
+            "UPDATE vkpi_dealers SET " + ", ".join(assignments) + " WHERE id = ?",
+            params + [normalized_id],
+        )
+        if brands is not None:
+            conn.execute(f"DELETE FROM {BRAND_TABLE} WHERE dealer_id = ?", (normalized_id,))
+            for relationship in brands:
+                conn.execute(
+                    f"""
+                    INSERT INTO {BRAND_TABLE}
+                      (dealer_id, brand_key, relationship_status,
+                       authorization_status, evidence_url, source_checked_at,
+                       reviewer_id, created_at, updated_at)
+                    VALUES (?,?,?,?,?,?,?, NOW(), NOW())
+                    """,
+                    (
+                        normalized_id,
+                        relationship["brand_key"],
+                        relationship["relationship_status"],
+                        relationship["authorization_status"],
+                        relationship["evidence_url"],
+                        relationship["source_checked_at"],
+                        relationship["reviewer_id"],
+                    ),
+                )
+        if commit:
+            conn.commit()
+    except Exception:
+        if commit:
+            rollback = getattr(conn, "rollback", None)
+            if callable(rollback):
+                rollback()
+        raise
+
+
 def update_dealer_impl(
     dealer_id: Any,
     changes: dict[str, Any],
@@ -365,155 +557,38 @@ def update_dealer_impl(
 
     assignments: list[str] = []
     params: list[Any] = []
-    basic_text_fields = {
-        "name": 240,
-        "address": 500,
-        "city": 160,
-        "state": 2,
-        "country": 2,
-        "source": 240,
-        "postal_code": 32,
-        "phone": 80,
-        "contact_email": 320,
-        "store_hours": 1000,
-        "public_services": 2000,
-        "verification_note": 2000,
-    }
-    for field, maximum in basic_text_fields.items():
-        if field not in changes:
-            continue
-        text = bounded_text(changes.get(field), field=field, maximum=maximum)
-        if field in {"name", "address"} and text is None:
-            raise ValueError(f"{field} is required")
-        if field in {"state", "country"} and text is not None:
-            text = text.upper()
-            if not re.fullmatch(r"[A-Z]{2}", text):
-                raise ValueError(f"{field} must be a two-letter code")
-        assignments.append(f"{field} = ?")
-        params.append(text)
-
-    for field, cleaner in (("lat", clean_lat), ("lng", clean_lng)):
-        if field not in changes:
-            continue
-        raw_value = changes.get(field)
-        coordinate = cleaner(raw_value)
-        if raw_value not in (None, "") and coordinate is None:
-            raise ValueError(f"{field} is outside the valid coordinate range")
-        if row_get(current, "publication_status", None) == "published" and coordinate is None:
-            raise ValueError("unpublish the dealer before clearing map coordinates")
-        assignments.append(f"{field} = ?")
-        params.append(coordinate)
-
-    for field in ("location_source_url", "brand_listing_url"):
-        if field in changes:
-            assignments.append(f"{field} = ?")
-            params.append(http_url_or_none(changes.get(field), field=field))
-    if "website_url" in changes:
-        assignments.append("website_url = ?")
-        params.append(http_url_or_none(changes.get("website_url"), field="website_url"))
-    if "social_links" in changes:
-        assignments.append("social_links_json = ?::jsonb")
-        params.append(
-            json.dumps(
-                normalize_social_links(changes.get("social_links")),
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-        )
-
-    if "viltrox_deployment" in changes:
-        deployment = changes.get("viltrox_deployment")
-        if not isinstance(deployment, dict):
-            raise ValueError("viltrox_deployment must be an object")
-        status = (str_or_none(deployment.get("status")) or "not_deployed").lower()
-        if status not in VILTROX_DEPLOYMENT_STATUSES:
-            raise ValueError(
-                "viltrox_deployment.status must be one of: "
-                + ", ".join(sorted(VILTROX_DEPLOYMENT_STATUSES))
-            )
-        if status == "paused" and row_get(current, "viltrox_deployed_at", None) in (None, ""):
-            raise ValueError("viltrox_deployment cannot be paused before deployment")
-        note = bounded_text(
-            deployment.get("note"), field="viltrox_deployment.note", maximum=2000
-        ) or ""
-        assignments.extend(("viltrox_deployment_status = ?", "viltrox_deployment_note = ?"))
-        params.extend((status, note))
-        if status == "deployed":
-            assignments.extend(
-                (
-                    "viltrox_deployed_at = COALESCE(viltrox_deployed_at, NOW())",
-                    "viltrox_deployed_by = ?",
-                )
-            )
-            params.append(actor_ref)
-
-    if "activity" in changes:
-        activity = changes.get("activity")
-        if not isinstance(activity, dict):
-            raise ValueError("activity must be an object")
-        status = (str_or_none(activity.get("status")) or "unknown").lower()
-        if status not in ACTIVITY_STATUSES:
-            raise ValueError(
-                "activity.status must be one of: " + ", ".join(sorted(ACTIVITY_STATUSES))
-            )
-        page_url = http_url_or_none(activity.get("page_url"), field="activity.page_url")
-        checked_at = iso_datetime_or_none(
-            activity.get("checked_at"), field="activity.checked_at"
-        )
-        next_event_at = iso_datetime_or_none(
-            activity.get("next_event_at"), field="activity.next_event_at"
-        )
-        note = bounded_text(activity.get("note"), field="activity.note", maximum=2000) or ""
-        assignments.extend(
-            (
-                "activity_status = ?",
-                "activity_page_url = ?",
-                "activity_checked_at = ?",
-                "next_activity_at = ?",
-                "activity_note = ?",
-            )
-        )
-        params.extend((status, page_url, checked_at, next_event_at, note))
+    _append_basic_dealer_fields(changes, assignments, params)
+    _append_dealer_coordinates(
+        changes,
+        assignments,
+        params,
+        current=current,
+        row_get=row_get,
+        clean_lat=clean_lat,
+        clean_lng=clean_lng,
+    )
+    _append_dealer_links(changes, assignments, params)
+    _append_viltrox_deployment(
+        changes,
+        assignments,
+        params,
+        current=current,
+        actor_ref=actor_ref,
+        row_get=row_get,
+    )
+    _append_dealer_activity(changes, assignments, params)
 
     brands = None
     if "brands" in changes:
         brands = normalize_brand_relationships(changes.get("brands"), actor_id=actor_id)
-    assignments.append("updated_at = NOW()")
-    try:
-        conn.execute(
-            "UPDATE vkpi_dealers SET " + ", ".join(assignments) + " WHERE id = ?",
-            params + [normalized_id],
-        )
-        if brands is not None:
-            conn.execute(f"DELETE FROM {BRAND_TABLE} WHERE dealer_id = ?", (normalized_id,))
-            for relationship in brands:
-                conn.execute(
-                    f"""
-                    INSERT INTO {BRAND_TABLE}
-                      (dealer_id, brand_key, relationship_status,
-                       authorization_status, evidence_url, source_checked_at,
-                       reviewer_id, created_at, updated_at)
-                    VALUES (?,?,?,?,?,?,?, NOW(), NOW())
-                    """,
-                    (
-                        normalized_id,
-                        relationship["brand_key"],
-                        relationship["relationship_status"],
-                        relationship["authorization_status"],
-                        relationship["evidence_url"],
-                        relationship["source_checked_at"],
-                        relationship["reviewer_id"],
-                    ),
-                )
-        if commit:
-            conn.commit()
-    except Exception:
-        if commit:
-            rollback = getattr(conn, "rollback", None)
-            if callable(rollback):
-                rollback()
-        raise
+    _persist_dealer_update(
+        conn,
+        normalized_id,
+        assignments,
+        params,
+        brands,
+        commit=commit,
+    )
     if return_entity:
         return get_dealer(normalized_id)
     return {"id": normalized_id}

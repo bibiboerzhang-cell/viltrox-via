@@ -281,6 +281,134 @@ def _exposure_potential(conn: Any, kol_pool_id: int, fit_confidence: float | Non
     }
 
 
+def _process_content_fit_candidates(
+    candidates: list[dict[str, Any]],
+    *,
+    conn: Any,
+    has_evidence: Any,
+    has_fit: set[int],
+    already_queued: set[int],
+    normalized_product_sku: str,
+    derive_method: str,
+    sid: int,
+    session: dict[str, Any],
+    provider_actor: dict[str, Any] | None,
+    triggered_by_user_id: int | None,
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    int,
+    int,
+    dict[str, Any] | None,
+]:
+    enqueued: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    exposure: list[dict[str, Any]] = []
+    ai_disabled_count = 0
+    legacy_by_id = getattr(has_evidence, "legacy_unverified", {})
+    legacy_count = 0
+    readiness: dict[str, Any] | None = None
+    for cand in candidates:
+        kid = _int(cand.get("kol_pool_id"))
+        fit_conf: float | None = None
+        legacy_gate = legacy_by_id.get(kid) if isinstance(legacy_by_id, dict) else None
+        if legacy_gate:
+            legacy_count += 1
+            skipped.append(
+                {
+                    "kol_pool_id": kid,
+                    "reason": "legacy_unverified",
+                    "revalidation_required": True,
+                    "claim_status": "descriptive_only",
+                    "cache_gate": legacy_gate,
+                }
+            )
+            exposure.append(_exposure_potential(conn, kid, None))
+            continue
+        if kid in has_fit:
+            try:
+                from app.domains.kol import content_fit_analysis as _cfa
+
+                cached = _cfa.get_content_fit(kid, normalized_product_sku)
+                fit_conf = _float_or_none(((cached or {}).get("result") or {}).get("confidence"))
+            except Exception:
+                fit_conf = None
+        exposure.append(_exposure_potential(conn, kid, fit_conf))
+        if kid in has_fit:
+            skipped.append({"kol_pool_id": kid, "reason": "content_fit_cache_exists"})
+            continue
+        if kid not in has_evidence:
+            skipped.append({"kol_pool_id": kid, "reason": "no_ready_video_analysis_evidence"})
+            continue
+        if kid in already_queued:
+            skipped.append({"kol_pool_id": kid, "reason": "already_queued_in_session"})
+            continue
+        if readiness is None:
+            readiness = _content_fit_ai_readiness()
+        if not readiness["allowed"]:
+            ai_disabled_count += 1
+            skipped.append(
+                {
+                    "kol_pool_id": kid,
+                    "reason": "ai_disabled",
+                    "provider_gate_reason": readiness["gate_reason"],
+                }
+            )
+            continue
+        payload = with_search_session_lineage(
+            {
+                "queue_lane": "batch",
+                "target_type": "kol",
+                "target_id": str(kid),
+                "derive_method": derive_method,
+                "search_session_id": sid,
+                "kol_pool_id": kid,
+                "product_sku": normalized_product_sku,
+                "handle": (cand.get("payload") or {}).get("handle") if isinstance(cand.get("payload"), dict) else None,
+                "platform": (cand.get("payload") or {}).get("platform") if isinstance(cand.get("payload"), dict) else None,
+                "prompt": f"content fit analysis · kol:{kid}",
+                "summary": f"内容契合深析 · KOL {kid}",
+                "triggered_by_user_id": _int((provider_actor or {}).get("user_id")) or triggered_by_user_id,
+                "staff_id": _int((provider_actor or {}).get("staff_id") or (provider_actor or {}).get("id")) or None,
+                "viltrox_fit_score_untouched": True,
+            },
+            search_session_id=sid,
+            search_session_item_id=_int(cand.get("id")) or None,
+            role="content_fit",
+        )
+        payload[PROVIDER_FENCE_KEY] = build_content_fit_provider_fence(
+            payload=payload, session=session, staff=provider_actor
+        )
+        try:
+            row, inserted = enqueue_active_apify_job(
+                conn,
+                job_type=CONTENT_FIT_JOB_TYPE,
+                payload=payload,
+                idempotency_key=active_job_idempotency_key(
+                    CONTENT_FIT_JOB_TYPE, "session", sid, kid, normalized_product_sku
+                ),
+            )
+            conn.commit()
+            if inserted:
+                enqueued.append({"kol_pool_id": kid, "job_id": row.get("id")})
+            else:
+                linked = attach_search_session_lineage_to_job(conn, row.get("id"), payload)
+                if linked:
+                    conn.commit()
+                skipped.append(
+                    {"kol_pool_id": kid, "job_id": row.get("id"), "reason": "already_queued_race"}
+                )
+        except Exception as exc:
+            logger.warning(
+                "vkpi.content_fit_enqueue.insert_failed kid=%s exception_type=%s",
+                kid,
+                type(exc).__name__,
+            )
+            skipped.append({"kol_pool_id": kid, "reason": "enqueue_failed"})
+    return enqueued, skipped, exposure, ai_disabled_count, legacy_count, readiness
+
+
 def enqueue_content_fit_for_session(
     *,
     session_id: int,
@@ -327,117 +455,21 @@ def enqueue_content_fit_for_session(
     else:
         has_fit = _ids_with_existing_fit(conn, pool_ids)
         already_queued = _already_queued_ids(conn, sid, pool_ids)
-    enqueued: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-    exposure: list[dict[str, Any]] = []
-    ai_disabled_count = 0
-    legacy_by_id = getattr(has_evidence, "legacy_unverified", {})
-    legacy_count = 0
-    readiness: dict[str, Any] | None = None
-
-    for cand in candidates:
-        kid = _int(cand.get("kol_pool_id"))
-        # content_fit confidence 取已 ready 的(若有);否则 exposure 用基线(不含 fit 因子)。
-        fit_conf: float | None = None
-        legacy_gate = legacy_by_id.get(kid) if isinstance(legacy_by_id, dict) else None
-        if legacy_gate:
-            legacy_count += 1
-            skipped.append({
-                "kol_pool_id": kid,
-                "reason": "legacy_unverified",
-                "revalidation_required": True,
-                "claim_status": "descriptive_only",
-                "cache_gate": legacy_gate,
-            })
-            exposure.append(_exposure_potential(conn, kid, None))
-            continue
-        if kid in has_fit:
-            try:
-                from app.domains.kol import content_fit_analysis as _cfa
-
-                cached = _cfa.get_content_fit(kid, normalized_product_sku)
-                fit_conf = _float_or_none(((cached or {}).get("result") or {}).get("confidence"))
-            except Exception:
-                fit_conf = None
-        exposure.append(_exposure_potential(conn, kid, fit_conf))
-
-        if kid in has_fit:
-            skipped.append({"kol_pool_id": kid, "reason": "content_fit_cache_exists"})
-            continue
-        if kid not in has_evidence:
-            skipped.append({"kol_pool_id": kid, "reason": "no_ready_video_analysis_evidence"})
-            continue
-        if kid in already_queued:
-            skipped.append({"kol_pool_id": kid, "reason": "already_queued_in_session"})
-            continue
-        if readiness is None:
-            readiness = _content_fit_ai_readiness()
-        if not readiness["allowed"]:
-            ai_disabled_count += 1
-            skipped.append(
-                {
-                    "kol_pool_id": kid,
-                    "reason": "ai_disabled",
-                    "provider_gate_reason": readiness["gate_reason"],
-                }
-            )
-            continue
-        payload = with_search_session_lineage({
-            "queue_lane": "batch",
-            "target_type": "kol",
-            "target_id": str(kid),
-            "derive_method": derive_method,
-            "search_session_id": sid,
-            "kol_pool_id": kid,
-            "product_sku": normalized_product_sku,
-            "handle": (cand.get("payload") or {}).get("handle") if isinstance(cand.get("payload"), dict) else None,
-            "platform": (cand.get("payload") or {}).get("platform") if isinstance(cand.get("payload"), dict) else None,
-            "prompt": f"content fit analysis · kol:{kid}",
-            "summary": f"内容契合深析 · KOL {kid}",
-            "triggered_by_user_id": (
-                _int((provider_actor or {}).get("user_id"))
-                or triggered_by_user_id
-            ),
-            "staff_id": _int((provider_actor or {}).get("staff_id") or (provider_actor or {}).get("id")) or None,
-            "viltrox_fit_score_untouched": True,
-        },
-            search_session_id=sid,
-            search_session_item_id=_int(cand.get("id")) or None,
-            role="content_fit",
-        )
-        payload[PROVIDER_FENCE_KEY] = build_content_fit_provider_fence(
-            payload=payload,
+    enqueued, skipped, exposure, ai_disabled_count, legacy_count, readiness = (
+        _process_content_fit_candidates(
+            candidates,
+            conn=conn,
+            has_evidence=has_evidence,
+            has_fit=has_fit,
+            already_queued=already_queued,
+            normalized_product_sku=normalized_product_sku,
+            derive_method=derive_method,
+            sid=sid,
             session=session,
-            staff=provider_actor,
+            provider_actor=provider_actor,
+            triggered_by_user_id=triggered_by_user_id,
         )
-        try:
-            row, inserted = enqueue_active_apify_job(
-                conn,
-                job_type=CONTENT_FIT_JOB_TYPE,
-                payload=payload,
-                idempotency_key=active_job_idempotency_key(
-                    CONTENT_FIT_JOB_TYPE,
-                    "session",
-                    sid,
-                    kid,
-                    normalized_product_sku,
-                ),
-            )
-            conn.commit()
-            if inserted:
-                enqueued.append({"kol_pool_id": kid, "job_id": row.get("id")})
-            else:
-                linked = attach_search_session_lineage_to_job(conn, row.get("id"), payload)
-                if linked:
-                    conn.commit()
-                skipped.append({"kol_pool_id": kid, "job_id": row.get("id"), "reason": "already_queued_race"})
-        except Exception as exc:
-            logger.warning(
-                "vkpi.content_fit_enqueue.insert_failed kid=%s exception_type=%s",
-                kid,
-                type(exc).__name__,
-            )
-            skipped.append({"kol_pool_id": kid, "reason": "enqueue_failed"})
+    )
 
     if readiness is None:
         readiness = {

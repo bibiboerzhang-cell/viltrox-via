@@ -102,6 +102,211 @@ def _candidate_readiness_and_authorization(
     }
 
 
+def _provider_preflight_item(
+    *,
+    index: int,
+    candidate: tuple[str, str, bool],
+    safe_prompt: str,
+    max_output_tokens: int,
+    cost_scope: str,
+    monthly_budget: int,
+    monthly_remaining: int,
+    forced_offline: bool,
+    skip_monthly_env_check: bool,
+    require_runtime_verified: bool,
+    require_configured: bool,
+    resolved_execution_class: str,
+    production_class: str,
+    evaluation_class: str,
+    namespace: Mapping[str, Any],
+) -> dict[str, Any]:
+    provider, model_id, explicit_model = candidate
+    binding = namespace["_resolve_gateway_binding"](provider, model_id)
+    blocker = namespace["_binding_call_blocker"](
+        binding,
+        explicit_model=explicit_model,
+        require_runtime_verified=require_runtime_verified,
+        execution_class=resolved_execution_class,
+    )
+    estimated_cost = namespace["_estimated_cost_usd"](
+        provider,
+        prompt=safe_prompt,
+        max_output_tokens=max_output_tokens,
+        binding=binding,
+    )
+    scopes = namespace["_budget_scopes_for_provider"](provider, cost_scope)
+    plan = namespace["_budget_guard"]().check_budget_scopes(
+        scopes, estimated_cost, require_configured=require_configured
+    )
+    env_allowed = bool(skip_monthly_env_check) or monthly_budget > 0 and monthly_remaining > 0
+    configured = namespace["_is_provider_configured"](provider)
+    provider_allowed = bool(
+        plan.get("allowed")
+        and configured
+        and env_allowed
+        and not forced_offline
+        and not blocker
+    )
+    readiness = _candidate_readiness_and_authorization(
+        binding=binding.binding,
+        provider_allowed=provider_allowed,
+        resolved_execution_class=resolved_execution_class,
+        production_class=production_class,
+        evaluation_class=evaluation_class,
+        namespace=namespace,
+    )
+    runtime_gate = namespace["_build_runtime_error"](
+        "model_binding_blocked" if blocker else "ready",
+        detail=blocker,
+        provider=provider,
+        model=binding.model_id,
+        binding=binding.binding,
+        failure_reasons=[blocker] if blocker else [],
+    )
+    return {
+        "provider": provider,
+        "model": binding.model_id,
+        "binding": binding.binding,
+        "binding_source": binding.registry_source,
+        "pricing_version": binding.pricing_version,
+        "input_cents_per_million": binding.input_cents_per_million,
+        "output_cents_per_million": binding.output_cents_per_million,
+        "pricing_known": binding.pricing_known,
+        "transport_ready": binding.transport_ready,
+        "runtime_availability": binding.runtime_availability,
+        "runtime_evidence_source": binding.runtime_evidence_source,
+        "binding_gate_reason": blocker or "ready",
+        "runtime_gate": runtime_gate,
+        "execution_class": resolved_execution_class,
+        "evaluation_only": resolved_execution_class == evaluation_class,
+        "production_authorized": bool(
+            provider_allowed and resolved_execution_class == production_class
+        ),
+        "authorization_scope": (
+            "evaluation_only"
+            if provider_allowed and resolved_execution_class == evaluation_class
+            else "production" if provider_allowed else "blocked"
+        ),
+        "claim_status": "descriptive_only",
+        "model_claim_status": "descriptive_only",
+        **readiness,
+        "explicit_model": explicit_model,
+        "model_fallback_index": index,
+        "configured": configured,
+        "estimated_cost_usd": estimated_cost,
+        "budget_allowed": bool(plan.get("allowed")),
+        "env_monthly_allowed": env_allowed,
+        "provider_calls_allowed": provider_allowed,
+        "scopes": scopes,
+        "checks": plan.get("checks") if isinstance(plan.get("checks"), list) else [],
+    }
+
+
+def _preflight_reason(
+    *,
+    providers: list[dict[str, Any]],
+    provider_calls_allowed: bool,
+    forced_offline: bool,
+    skip_monthly_env_check: bool,
+    monthly_budget: int,
+) -> str:
+    if forced_offline:
+        return "force_offline"
+    if not (bool(skip_monthly_env_check) or monthly_budget > 0):
+        return "monthly_env_budget_disabled"
+    if not providers:
+        return "no_provider_candidates"
+    if not any(item.get("binding_gate_reason") == "ready" for item in providers):
+        return "model_binding_blocked"
+    if not any(bool(item.get("configured")) for item in providers):
+        return "providers_not_configured"
+    if not any(bool(item.get("budget_allowed")) for item in providers):
+        return "budget_hard_stop"
+    if not provider_calls_allowed:
+        return "provider_calls_blocked"
+    return "provider_calls_allowed"
+
+
+def _preflight_provider_gate(
+    *,
+    providers: list[dict[str, Any]],
+    provider_calls_allowed: bool,
+    reason: str,
+    namespace: Mapping[str, Any],
+) -> dict[str, Any]:
+    blocked = [
+        item["runtime_gate"]
+        for item in providers
+        if not bool(item.get("provider_calls_allowed"))
+        and isinstance(item.get("runtime_gate"), dict)
+        and item["runtime_gate"].get("code") != "ready"
+    ]
+    if provider_calls_allowed:
+        return namespace["_build_runtime_error"]("ready")
+    if blocked:
+        return namespace["_summarise_runtime_errors"](
+            blocked, fallback_status=reason
+        )
+    return namespace["_build_runtime_error"](reason)
+
+
+def _preflight_response(
+    *,
+    providers: list[dict[str, Any]],
+    selected_provider: dict[str, Any],
+    provider_calls_allowed: bool,
+    provider_gate: dict[str, Any],
+    reason: str,
+    purpose: str,
+    cost_scope: str,
+    max_output_tokens: int,
+    safe_prompt: str,
+    monthly_budget: int,
+    monthly_remaining: int,
+    forced_offline: bool,
+    model_fallbacks: Iterable[tuple[str, str]] | None,
+    resolved_execution_class: str,
+    evaluation_class: str,
+    production_class: str,
+    namespace: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "mode": "llm_gateway_budget_preflight_v0",
+        "provider_calls_allowed": provider_calls_allowed,
+        "provider_gate_reason": reason,
+        "provider_gate_detail": provider_gate["code"],
+        "provider_gate": provider_gate,
+        "purpose": purpose,
+        "cost_scope": cost_scope,
+        "max_output_tokens": max(1, min(4000, int(max_output_tokens or 800))),
+        "prompt_tokens_estimate": namespace["_estimate_prompt_tokens"](safe_prompt),
+        "monthly_env_budget_usd": monthly_budget / 100,
+        "monthly_env_spent_usd": namespace["_current_month_spent_cents"]() / 100,
+        "monthly_env_remaining_usd": max(0, monthly_remaining) / 100,
+        "force_offline": forced_offline,
+        "single_call_scope": namespace["SINGLE_CALL_BUDGET_SCOPE"],
+        "model_level_fallback": bool(model_fallbacks),
+        "execution_class": resolved_execution_class,
+        "evaluation_only": resolved_execution_class == evaluation_class,
+        "production_authorized": bool(
+            provider_calls_allowed and resolved_execution_class == production_class
+        ),
+        "claim_status": "descriptive_only",
+        "model_readiness_status": str(selected_provider.get("model_readiness_status") or "not_ready"),
+        "signed_model_production_ready": bool(selected_provider.get("signed_model_production_ready")),
+        "signed_model_readiness_status": str(selected_provider.get("signed_model_readiness_status") or "not_production_ready"),
+        "signed_model_readiness_claim_status": str(selected_provider.get("signed_model_readiness_claim_status") or "descriptive_only"),
+        "signed_model_readiness_evidence_source": str(selected_provider.get("signed_model_readiness_evidence_source") or "not_configured"),
+        "operator_acknowledged": bool(selected_provider.get("operator_acknowledged")),
+        "operationally_authorized": bool(selected_provider.get("operationally_authorized")),
+        "operational_authorization_status": str(selected_provider.get("operational_authorization_status") or "blocked"),
+        "operational_authorization_source": str(selected_provider.get("operational_authorization_source") or "blocked"),
+        "operational_authorization_temporary": bool(selected_provider.get("operational_authorization_temporary")),
+        "require_runtime_verified": resolved_execution_class == production_class,
+        "providers": providers,
+    }
+
+
 def budget_preflight_impl(
     prompt: str,
     *,
@@ -128,184 +333,63 @@ def budget_preflight_impl(
     monthly_budget = namespace["_monthly_budget_cents"]()
     monthly_remaining = namespace["_budget_remaining_cents"]()
     forced_offline = namespace["_truthy_env"]("VKPI_LLM_GATEWAY_FORCE_OFFLINE")
-    providers: list[dict[str, Any]] = []
     candidates = namespace["_ordered_model_candidates"](
         preferred_provider, model_override, model_fallbacks
     )
-    for index, (provider, model_id, explicit_model) in enumerate(candidates):
-        binding = namespace["_resolve_gateway_binding"](provider, model_id)
-        binding_blocker = namespace["_binding_call_blocker"](
-            binding,
-            explicit_model=explicit_model,
-            require_runtime_verified=require_runtime_verified,
-            execution_class=resolved_execution_class,
-        )
-        estimated_cost = namespace["_estimated_cost_usd"](
-            provider,
-            prompt=safe_prompt,
+    providers = [
+        _provider_preflight_item(
+            index=index,
+            candidate=candidate,
+            safe_prompt=safe_prompt,
             max_output_tokens=max_output_tokens,
-            binding=binding,
-        )
-        scopes = namespace["_budget_scopes_for_provider"](provider, cost_scope)
-        plan = namespace["_budget_guard"]().check_budget_scopes(
-            scopes, estimated_cost, require_configured=require_configured
-        )
-        env_allowed = bool(skip_monthly_env_check) or monthly_budget > 0 and monthly_remaining > 0
-        configured = namespace["_is_provider_configured"](provider)
-        provider_allowed = (
-            bool(plan.get("allowed"))
-            and configured
-            and env_allowed
-            and not forced_offline
-            and not binding_blocker
-        )
-        readiness_authorization = _candidate_readiness_and_authorization(
-            binding=binding.binding,
-            provider_allowed=provider_allowed,
+            cost_scope=cost_scope,
+            monthly_budget=monthly_budget,
+            monthly_remaining=monthly_remaining,
+            forced_offline=forced_offline,
+            skip_monthly_env_check=skip_monthly_env_check,
+            require_runtime_verified=require_runtime_verified,
+            require_configured=require_configured,
             resolved_execution_class=resolved_execution_class,
             production_class=production_class,
             evaluation_class=evaluation_class,
             namespace=namespace,
         )
-        runtime_gate = namespace["_build_runtime_error"](
-            "model_binding_blocked" if binding_blocker else "ready",
-            detail=binding_blocker,
-            provider=provider,
-            model=binding.model_id,
-            binding=binding.binding,
-            failure_reasons=[binding_blocker] if binding_blocker else [],
-        )
-        providers.append(
-            {
-                "provider": provider,
-                "model": binding.model_id,
-                "binding": binding.binding,
-                "binding_source": binding.registry_source,
-                "pricing_version": binding.pricing_version,
-                "input_cents_per_million": binding.input_cents_per_million,
-                "output_cents_per_million": binding.output_cents_per_million,
-                "pricing_known": binding.pricing_known,
-                "transport_ready": binding.transport_ready,
-                "runtime_availability": binding.runtime_availability,
-                "runtime_evidence_source": binding.runtime_evidence_source,
-                "binding_gate_reason": binding_blocker or "ready",
-                "runtime_gate": runtime_gate,
-                "execution_class": resolved_execution_class,
-                "evaluation_only": resolved_execution_class == evaluation_class,
-                "production_authorized": bool(
-                    provider_allowed and resolved_execution_class == production_class
-                ),
-                "authorization_scope": (
-                    "evaluation_only"
-                    if provider_allowed and resolved_execution_class == evaluation_class
-                    else "production" if provider_allowed else "blocked"
-                ),
-                "claim_status": "descriptive_only",
-                "model_claim_status": "descriptive_only",
-                **readiness_authorization,
-                "explicit_model": explicit_model,
-                "model_fallback_index": index,
-                "configured": configured,
-                "estimated_cost_usd": estimated_cost,
-                "budget_allowed": bool(plan.get("allowed")),
-                "env_monthly_allowed": env_allowed,
-                "provider_calls_allowed": provider_allowed,
-                "scopes": scopes,
-                "checks": plan.get("checks") if isinstance(plan.get("checks"), list) else [],
-            }
-        )
+        for index, candidate in enumerate(candidates)
+    ]
     provider_calls_allowed = any(bool(item.get("provider_calls_allowed")) for item in providers)
     selected_provider = next(
         (item for item in providers if bool(item.get("provider_calls_allowed"))),
         providers[0] if providers else {},
     )
-    if forced_offline:
-        reason = "force_offline"
-    elif not (bool(skip_monthly_env_check) or monthly_budget > 0):
-        reason = "monthly_env_budget_disabled"
-    elif not providers:
-        reason = "no_provider_candidates"
-    elif not any(item.get("binding_gate_reason") == "ready" for item in providers):
-        reason = "model_binding_blocked"
-    elif not any(bool(item.get("configured")) for item in providers):
-        reason = "providers_not_configured"
-    elif not any(bool(item.get("budget_allowed")) for item in providers):
-        reason = "budget_hard_stop"
-    elif not provider_calls_allowed:
-        reason = "provider_calls_blocked"
-    else:
-        reason = "provider_calls_allowed"
-    blocked_gates = [
-        item["runtime_gate"]
-        for item in providers
-        if not bool(item.get("provider_calls_allowed"))
-        and isinstance(item.get("runtime_gate"), dict)
-        and item["runtime_gate"].get("code") != "ready"
-    ]
-    if provider_calls_allowed:
-        provider_gate = namespace["_build_runtime_error"]("ready")
-    elif blocked_gates:
-        provider_gate = namespace["_summarise_runtime_errors"](
-            blocked_gates, fallback_status=reason
-        )
-    else:
-        provider_gate = namespace["_build_runtime_error"](reason)
-    return {
-        "mode": "llm_gateway_budget_preflight_v0",
-        "provider_calls_allowed": provider_calls_allowed,
-        "provider_gate_reason": reason,
-        "provider_gate_detail": provider_gate["code"],
-        "provider_gate": provider_gate,
-        "purpose": purpose,
-        "cost_scope": cost_scope,
-        "max_output_tokens": max(1, min(4000, int(max_output_tokens or 800))),
-        "prompt_tokens_estimate": namespace["_estimate_prompt_tokens"](safe_prompt),
-        "monthly_env_budget_usd": monthly_budget / 100,
-        "monthly_env_spent_usd": namespace["_current_month_spent_cents"]() / 100,
-        "monthly_env_remaining_usd": max(0, monthly_remaining) / 100,
-        "force_offline": forced_offline,
-        "single_call_scope": namespace["SINGLE_CALL_BUDGET_SCOPE"],
-        # 如实口径:空的 fallback 链(绑定钉死)= 没有会被尝试的模型级后备胎。
-        "model_level_fallback": bool(model_fallbacks),
-        "execution_class": resolved_execution_class,
-        "evaluation_only": resolved_execution_class == evaluation_class,
-        "production_authorized": bool(
-            provider_calls_allowed and resolved_execution_class == production_class
-        ),
-        "claim_status": "descriptive_only",
-        "model_readiness_status": str(
-            selected_provider.get("model_readiness_status") or "not_ready"
-        ),
-        "signed_model_production_ready": bool(
-            selected_provider.get("signed_model_production_ready")
-        ),
-        "signed_model_readiness_status": str(
-            selected_provider.get("signed_model_readiness_status")
-            or "not_production_ready"
-        ),
-        "signed_model_readiness_claim_status": str(
-            selected_provider.get("signed_model_readiness_claim_status")
-            or "descriptive_only"
-        ),
-        "signed_model_readiness_evidence_source": str(
-            selected_provider.get("signed_model_readiness_evidence_source")
-            or "not_configured"
-        ),
-        "operator_acknowledged": bool(
-            selected_provider.get("operator_acknowledged")
-        ),
-        "operationally_authorized": bool(
-            selected_provider.get("operationally_authorized")
-        ),
-        "operational_authorization_status": str(
-            selected_provider.get("operational_authorization_status") or "blocked"
-        ),
-        "operational_authorization_source": str(
-            selected_provider.get("operational_authorization_source") or "blocked"
-        ),
-        "operational_authorization_temporary": bool(
-            selected_provider.get("operational_authorization_temporary")
-        ),
-        "require_runtime_verified": resolved_execution_class == production_class,
-        "providers": providers,
-    }
+    reason = _preflight_reason(
+        providers=providers,
+        provider_calls_allowed=provider_calls_allowed,
+        forced_offline=forced_offline,
+        skip_monthly_env_check=skip_monthly_env_check,
+        monthly_budget=monthly_budget,
+    )
+    provider_gate = _preflight_provider_gate(
+        providers=providers,
+        provider_calls_allowed=provider_calls_allowed,
+        reason=reason,
+        namespace=namespace,
+    )
+    return _preflight_response(
+        providers=providers,
+        selected_provider=selected_provider,
+        provider_calls_allowed=provider_calls_allowed,
+        provider_gate=provider_gate,
+        reason=reason,
+        purpose=purpose,
+        cost_scope=cost_scope,
+        max_output_tokens=max_output_tokens,
+        safe_prompt=safe_prompt,
+        monthly_budget=monthly_budget,
+        monthly_remaining=monthly_remaining,
+        forced_offline=forced_offline,
+        model_fallbacks=model_fallbacks,
+        resolved_execution_class=resolved_execution_class,
+        evaluation_class=evaluation_class,
+        production_class=production_class,
+        namespace=namespace,
+    )

@@ -21,17 +21,26 @@ class-LOC 棘轮拆刀(queue.py::RedisJobQueue 782 行 → 门面 + claim/heartb
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import sqlite3
 import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import pytest
 
 from app.db.connection import PostgresCompatConnection
-from app.services.jobs import queue as queue_mod
+from app.services.jobs import (
+    queue as queue_mod,
+    queue_claim,
+    queue_enqueue,
+    queue_heartbeat,
+    queue_maintenance,
+)
+from app.services.jobs.queue_runtime import queue_facade
 
 
 SCHEMA = """
@@ -71,6 +80,28 @@ CREATE TABLE vkpi_provider_execution_claims (
     lease_expires_at TEXT NOT NULL
 );
 """
+
+
+def test_queue_collaborators_share_live_facade_without_reverse_import():
+    assert queue_facade() is queue_mod
+    for collaborator in (
+        queue_claim,
+        queue_enqueue,
+        queue_heartbeat,
+        queue_maintenance,
+    ):
+        assert collaborator._qm() is queue_mod
+        source = Path(collaborator.__file__).read_text(encoding="utf-8")
+        assert "from app.services.jobs import queue as queue_module" not in source
+
+
+def test_queue_runtime_reload_keeps_existing_collaborators_bound():
+    from app.services.jobs import queue_runtime
+
+    importlib.reload(queue_runtime)
+    assert queue_runtime.queue_facade() is queue_mod
+    assert queue_claim._qm() is queue_mod
+    assert queue_enqueue._qm() is queue_mod
 
 
 class FakeRedis:

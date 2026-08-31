@@ -43,6 +43,10 @@ from app.domains.kol.profile_follower_filter import (
 from app.domains.kol.profile_recall_search_spec import (
     operator_filter_spec,
 )
+from app.domains.kol.profile_recall_gate_policy import (
+    build_gate_policy,
+    normalized_excluded_identities,
+)
 
 
 SMART_LOCAL_TARGET = 30
@@ -457,60 +461,19 @@ def qualify_local_candidates(
     started = perf_counter()
     now = (as_of or datetime.now(timezone.utc)).astimezone(timezone.utc)
     target = max(1, min(int(target_count or SMART_LOCAL_TARGET), SMART_LOCAL_TARGET))
-    excluded_identities = {
-        str(value or "").strip()
-        for value in (excluded_canonical_keys or set())
-        if str(value or "").strip()
-    }
-    excluded_identities.update({
-        str(value or "").strip()
-        for value in (excluded_identity_aliases or set())
-        if str(value or "").strip()
-    })
-    target_market = str(policy.get("market") or "")
-    target_platforms = set(policy.get("platforms") or [])
-    target_languages = set(policy.get("languages") or [])
-    target_profile_types = set(policy.get("profile_types") or [])
-    follower_filter = _effective_follower_filter(policy)
-    operator_filters = policy.get("operator_filters") if isinstance(policy.get("operator_filters"), dict) else {}
-    language_filter = (
-        operator_filters.get("languages")
-        if isinstance(operator_filters.get("languages"), dict)
-        else {}
+    excluded_identities = normalized_excluded_identities(
+        excluded_canonical_keys,
+        excluded_identity_aliases,
     )
-    profile_type_filter = (
-        operator_filters.get("profile_types")
-        if isinstance(operator_filters.get("profile_types"), dict)
-        else {}
-    )
-    language_requested = bool(language_filter.get("requested") or target_languages)
-    profile_type_requested = bool(profile_type_filter.get("requested") or target_profile_types)
-    invalid_languages = list(language_filter.get("invalid") or [])
-    invalid_profile_types = list(profile_type_filter.get("invalid") or [])
-    evidence_sources = (
-        policy.get("evidence_sources")
-        if isinstance(policy.get("evidence_sources"), dict)
-        else {}
-    )
-    unknown_activity = unknown_activity_mode(policy)
-    gate_policy = CandidateGatePolicy(
+    gate_policy, unknown_activity = build_gate_policy(
+        policy,
         now=now,
-        target_market=target_market,
-        target_platforms=frozenset(target_platforms),
-        target_languages=frozenset(target_languages),
-        target_profile_types=frozenset(target_profile_types),
-        follower_filter=dict(follower_filter),
-        language_requested=language_requested,
-        profile_type_requested=profile_type_requested,
-        invalid_languages=tuple(invalid_languages),
-        invalid_profile_types=tuple(invalid_profile_types),
-        evidence_sources=dict(evidence_sources),
-        unknown_activity=unknown_activity,
-        excluded_identities=frozenset(excluded_identities),
+        excluded_identities=excluded_identities,
         excluded_identity_reason=excluded_identity_reason,
-        excluded_account_types=tuple(policy.get("excluded_account_types") or []),
-        require_trusted_market=policy.get("require_trusted_market") is True,
-        max_video_age_days=SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
+        policy_factory=CandidateGatePolicy,
+        effective_follower_filter=_effective_follower_filter,
+        unknown_activity_mode=unknown_activity_mode,
+        maximum_video_age_days=SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
         fresh_priority_days=SMART_LOCAL_FRESH_DAYS,
         gate_schema=SMART_LOCAL_GATE_SCHEMA,
     )

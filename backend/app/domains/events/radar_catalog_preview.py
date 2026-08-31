@@ -10,17 +10,14 @@ from collections import Counter
 from typing import Any, Callable
 
 
-def build_preview(
-    data: dict[str, Any],
+def _catalog_validation_errors(
     *,
-    audit_event_catalog: Callable[[dict[str, Any]], dict[str, Any]],
-) -> dict[str, Any]:
-    """Validate and summarize a bundled reviewed catalog without writing DB."""
-    sources = data["sources"]
-    opportunities = data["opportunities"]
-    source_ids = [str(item.get("id") or "") for item in sources]
-    opportunity_ids = [str(item.get("id") or "") for item in opportunities]
-    canonical_keys = [str(item.get("canonical_key") or "") for item in opportunities]
+    opportunities: list[dict[str, Any]],
+    source_ids: list[str],
+    opportunity_ids: list[str],
+    canonical_keys: list[str],
+    source_by_id: dict[str, dict[str, Any]],
+) -> list[str]:
     errors: list[str] = []
     if any(not value for value in source_ids):
         errors.append("source id missing")
@@ -33,7 +30,6 @@ def build_preview(
     if len(canonical_keys) != len(set(canonical_keys)):
         errors.append("duplicate canonical key")
     source_set = set(source_ids)
-    source_by_id = {str(item.get("id") or ""): item for item in sources}
     for item in opportunities:
         source_id = str(item.get("source_id") or "")
         if source_id not in source_set:
@@ -46,6 +42,59 @@ def build_preview(
             errors.append(f"end before start for opportunity {item.get('id')}")
         if not str(item.get("official_url") or "").startswith("https://"):
             errors.append(f"official https url missing for opportunity {item.get('id')}")
+    return errors
+
+
+def _preview_item(
+    item: dict[str, Any],
+    *,
+    source_by_id: dict[str, dict[str, Any]],
+    preview_fields: tuple[str, ...],
+) -> dict[str, Any]:
+    source = source_by_id.get(str(item.get("source_id") or ""), {})
+    return {
+        "id": f"catalog-preview:{item.get('id')}",
+        "catalog_item_id": item.get("id"),
+        **{key: item.get(key) for key in preview_fields},
+        "decision_status": "needs_review",
+        # A catalog value can be descriptive evidence, but it is never
+        # upgraded to a current organization-scoped verification claim.
+        "catalog_verification_status": item.get("verification_status"),
+        "verification_status": "needs_review",
+        "freshness_status": "unverified",
+        "source_name": source.get("name"),
+        "source_kind": source.get("source_kind"),
+        "source_status": source.get("status") or "hold",
+        "source_enabled": False,
+        "source_requires_human_review": True,
+        "source_checked_at": None,
+        "viltrox_presence_status": item.get("viltrox_presence_status") or "unknown",
+        "preview_only": True,
+        "claim_status": "descriptive_only",
+        "database_accessed": False,
+        "business_rows_written": 0,
+    }
+
+
+def build_preview(
+    data: dict[str, Any],
+    *,
+    audit_event_catalog: Callable[[dict[str, Any]], dict[str, Any]],
+) -> dict[str, Any]:
+    """Validate and summarize a bundled reviewed catalog without writing DB."""
+    sources = data["sources"]
+    opportunities = data["opportunities"]
+    source_ids = [str(item.get("id") or "") for item in sources]
+    opportunity_ids = [str(item.get("id") or "") for item in opportunities]
+    canonical_keys = [str(item.get("canonical_key") or "") for item in opportunities]
+    source_by_id = {str(item.get("id") or ""): item for item in sources}
+    errors = _catalog_validation_errors(
+        opportunities=opportunities,
+        source_ids=source_ids,
+        opportunity_ids=opportunity_ids,
+        canonical_keys=canonical_keys,
+        source_by_id=source_by_id,
+    )
     quality_contract = audit_event_catalog(data)
     preview_fields = (
         "title", "lane", "organizer", "start_date", "end_date", "timezone",
@@ -53,33 +102,10 @@ def build_preview(
         "official_url", "registration_url", "event_status", "evidence_grade",
         "confidence", "relevance_score", "relevance_basis",
     )
-    preview_items: list[dict[str, Any]] = []
-    for item in opportunities:
-        source = source_by_id.get(str(item.get("source_id") or ""), {})
-        preview_items.append(
-            {
-                "id": f"catalog-preview:{item.get('id')}",
-                "catalog_item_id": item.get("id"),
-                **{key: item.get(key) for key in preview_fields},
-                "decision_status": "needs_review",
-                # A catalog value can be descriptive evidence, but it is never
-                # upgraded to a current organization-scoped verification claim.
-                "catalog_verification_status": item.get("verification_status"),
-                "verification_status": "needs_review",
-                "freshness_status": "unverified",
-                "source_name": source.get("name"),
-                "source_kind": source.get("source_kind"),
-                "source_status": source.get("status") or "hold",
-                "source_enabled": False,
-                "source_requires_human_review": True,
-                "source_checked_at": None,
-                "viltrox_presence_status": item.get("viltrox_presence_status") or "unknown",
-                "preview_only": True,
-                "claim_status": "descriptive_only",
-                "database_accessed": False,
-                "business_rows_written": 0,
-            }
-        )
+    preview_items = [
+        _preview_item(item, source_by_id=source_by_id, preview_fields=preview_fields)
+        for item in opportunities
+    ]
     return {
         "ok": not errors,
         "record_only": True,

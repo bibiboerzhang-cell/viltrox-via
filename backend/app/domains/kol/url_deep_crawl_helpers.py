@@ -23,6 +23,58 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 SUPPORTED_PLATFORMS = {"youtube", "instagram", "tiktok"}
+PROFILE_GENERIC_SEGMENTS = {
+    "",
+    "about",
+    "accounts",
+    "channel",
+    "direct",
+    "explore",
+    "feed",
+    "p",
+    "reel",
+    "shorts",
+    "stories",
+    "tagged",
+    "tv",
+    "user",
+    "watch",
+}
+RAW_CHANNEL_KEYS = {
+    "channel_id",
+    "channelid",
+    "channelId",
+    "youtube_channel_id",
+    "youtubeChannelId",
+    "channel_url",
+    "channelUrl",
+    "channel",
+    "external_id",
+    "externalId",
+}
+RAW_HANDLE_KEYS = {
+    "handle",
+    "username",
+    "user_name",
+    "userName",
+    "author_handle",
+    "authorHandle",
+    "platform_user_id",
+    "platformUserId",
+    "screen_name",
+    "screenName",
+}
+RAW_URL_KEYS = {
+    "url",
+    "profile_url",
+    "profileUrl",
+    "channel_url",
+    "channelUrl",
+    "account_url",
+    "accountUrl",
+    "web_url",
+    "webUrl",
+}
 
 # 中国平台「仅视频分析」通道:识别/取数/深析,但按地区规避红线绝不入 KOL 池。
 CN_VIDEO_ANALYSIS_PLATFORMS = {"bilibili", "douyin", "xiaohongshu"}
@@ -31,6 +83,27 @@ CN_SHORT_LINK_HOSTS = {
     "v.douyin.com": "douyin",
     "xhslink.com": "xiaohongshu",
 }
+
+
+def _url_crawl_safety(video_flow: dict[str, Any] | None) -> dict[str, bool]:
+    return {
+        "crawl_performed": False,
+        "provider_calls_performed": bool(video_flow and video_flow.get("provider_calls_performed")),
+        "llm_calls_performed": False,
+        "worker_touched": False,
+        "viltrox_fit_touched": False,
+        "business_tables_written": False,
+    }
+
+
+def _sync_flow_safety(
+    safety: dict[str, bool], flow: dict[str, Any], *, include_crawl: bool
+) -> None:
+    if include_crawl:
+        safety["crawl_performed"] = bool(flow.get("crawl_performed"))
+    safety["business_tables_written"] = bool(flow.get("business_tables_written"))
+    safety["worker_touched"] = bool(flow.get("worker_touched"))
+    safety["viltrox_fit_touched"] = bool(flow.get("viltrox_fit_score_changed_ids"))
 
 
 def _metadata_text(value: Any) -> str:

@@ -1,7 +1,7 @@
 """Redis enqueue transaction, stream binding, and failure containment.
 
-All queue-owned symbols are resolved lazily from :mod:`queue` so existing
-module-level monkeypatch contracts remain effective after this class-LOC split.
+All queue-owned symbols are resolved from the bound live facade so existing
+module-level monkeypatch contracts remain effective without a reverse import.
 """
 from __future__ import annotations
 
@@ -10,12 +10,12 @@ import json
 import uuid
 from typing import Any, Dict, Optional
 
+from app.services.jobs.queue_runtime import queue_facade
+
 
 def _qm():
-    """Resolve the queue facade lazily to preserve its monkeypatch surface."""
-    from app.services.jobs import queue as queue_module
-
-    return queue_module
+    """Resolve the bound live facade to preserve its monkeypatch surface."""
+    return queue_facade()
 
 
 async def _find_enqueue_duplicate(

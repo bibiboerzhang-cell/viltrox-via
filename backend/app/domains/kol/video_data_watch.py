@@ -30,6 +30,11 @@ from app.domains.kol.video_url_identity import (
     VideoUrlIdentityError,
     parse_supported_video_url,
 )
+from app.domains.kol.video_data_watch_provenance import (
+    existing_provenance as _existing_provenance,
+    link_metadata as _link_metadata,
+    sku_provenance as _sku_provenance,
+)
 
 
 MAX_CANDIDATES = 20
@@ -584,24 +589,17 @@ def data_watch(
                 else:
                     return _sku_required(conn, evidence, matches)
 
-    if sku_source == "confirmation":
-        link_relation_type = "confirmed"
-        link_source = DETECTED_CONFIRMATION_SOURCE
-        link_confidence = 1.0
-    elif sku_source == "auto":
-        link_relation_type = "detected"
-        link_source = detected_source or (
-            STRUCTURED_EVIDENCE_SOURCE if detected_detail else TITLE_ALIAS_SOURCE
-        )
-        link_confidence = (
-            _structured_confidence(detected_detail)
-            if detected_detail
-            else 0.55 if link_source == CACHED_CONTENT_SOURCE else 0.6
-        )
-    else:
-        link_relation_type = "manual"
-        link_source = video_tracking.TRACKING_SOURCE
-        link_confidence = 1.0
+    link_relation_type, link_source, link_confidence = _link_metadata(
+        sku_source,
+        detected_detail,
+        detected_source,
+        structured_evidence_source=STRUCTURED_EVIDENCE_SOURCE,
+        cached_content_source=CACHED_CONTENT_SOURCE,
+        title_alias_source=TITLE_ALIAS_SOURCE,
+        confirmation_source=DETECTED_CONFIRMATION_SOURCE,
+        tracking_source=video_tracking.TRACKING_SOURCE,
+        structured_confidence=_structured_confidence,
+    )
 
     # 关联已在库的不重复写;标题唯一命中只能落 detected,
     # 绝不得冒充员工手选的 manual/1.0 事实。
@@ -616,15 +614,7 @@ def data_watch(
         product_link_confidence=link_confidence,
     )
     if sku_source == "existing":
-        relation_types = {_text(item.get("relation_type")) for item in existing_detail}
-        detected_pending = any(_text(item.get("relation_type")) == "detected" for item in existing_detail)
-        existing_provenance: dict[str, Any] = {
-            "relation_type": next(iter(relation_types)) if len(relation_types) == 1 else "mixed",
-            "source": _text(existing_detail[0].get("source")) if len(existing_detail) == 1 else "existing_link",
-            "confidence": existing_detail[0].get("confidence") if len(existing_detail) == 1 else None,
-            "requires_human_confirmation": detected_pending,
-            "links": existing_detail,
-        }
+        existing_provenance = _existing_provenance(existing_detail, text=_text)
     else:
         existing_provenance = {}
 
@@ -634,43 +624,17 @@ def data_watch(
         "kol_pool_id": int(kol_pool_id),
         "skus": skus,
         "sku_source": sku_source,
-        "sku_provenance": (
-            {
-                "relation_type": "detected",
-                "source": link_source,
-                "confidence": link_confidence,
-                "requires_human_confirmation": True,
-                **(
-                    {
-                        "cache_id": _int(detected_detail.get("cache_id")),
-                        "modalities": list(detected_detail.get("modalities") or []),
-                        "source_fields": list(detected_detail.get("source_fields") or []),
-                        "evidence_excerpt": _text(detected_detail.get("evidence_excerpt"))[:200],
-                        "extractor_version": _text(detected_detail.get("extractor_version")),
-                    }
-                    if detected_detail
-                    else {}
-                ),
-            }
-            if sku_source == "auto"
-            else {
-                "relation_type": "confirmed",
-                "source": DETECTED_CONFIRMATION_SOURCE,
-                "confidence": 1.0,
-                "requires_human_confirmation": False,
-                "confirmed_from": {
-                    "relation_type": "detected",
-                    "source": _text((confirmed_detection or {}).get("source")),
-                    "confidence": (confirmed_detection or {}).get("confidence"),
-                },
-            }
-            if sku_source == "confirmation"
-            else existing_provenance if sku_source == "existing" else {
-                "relation_type": link_relation_type if sku_source == "manual" else "existing",
-                "source": link_source if sku_source == "manual" else "existing_link",
-                "confidence": link_confidence if sku_source == "manual" else None,
-                "requires_human_confirmation": False,
-            }
+        "sku_provenance": _sku_provenance(
+            sku_source=sku_source,
+            link_relation_type=link_relation_type,
+            link_source=link_source,
+            link_confidence=link_confidence,
+            detected_detail=detected_detail,
+            confirmed_detection=confirmed_detection,
+            existing=existing_provenance,
+            confirmation_source=DETECTED_CONFIRMATION_SOURCE,
+            int_value=_int,
+            text=_text,
         ),
         "tracking": _text(queued.get("metric_tracking_status")) or "active",
         "refresh": _text(queued.get("status")),

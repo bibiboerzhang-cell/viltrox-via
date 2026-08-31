@@ -103,6 +103,11 @@ from app.services.via.session_reward import (
     _reinforce_memory_retention,
     _routing_bucket_key,
 )
+from app.services.via.session_reply_outcome_helpers import (
+    record_promotion_controls,
+    record_routing_provider_stat,
+    reward_trace_target,
+)
 
 
 def _as_int(value: Any) -> int:
@@ -203,6 +208,7 @@ async def _load_turn_context(
         user_event_id=user_event_id,
         refreshed_bundle=refreshed_bundle,
         vector_refs=vector_refs,
+        bundle_memory_refs_before_vector=bundle_memory_refs_before_vector,
         retrieval_policy=retrieval_policy,
         retrieval_execution=retrieval_execution,
         retrieval_latency_ms=retrieval_latency_ms,
@@ -215,23 +221,17 @@ async def _load_turn_context(
     )
 
 
-async def _record_initial_decisions(state: SimpleNamespace) -> None:
+async def _record_intent_route_decision(state: SimpleNamespace) -> dict[str, Any]:
     session_key = state.session_key
     session = state.session
     persona = state.persona
     route = state.route
     route_latency_ms = state.route_latency_ms
     policy_route = state.policy_route
-    refreshed_bundle = state.refreshed_bundle
-    vector_refs = state.vector_refs
-    retrieval_policy = state.retrieval_policy
-    retrieval_execution = state.retrieval_execution
-    retrieval_latency_ms = state.retrieval_latency_ms
     trigger_snapshot = state.trigger_snapshot
     context_refs = state.context_refs
-    decision_records = state.decision_records
     intent_policy = get_via_policy("intent_route", route_info=policy_route)
-    intent_decision = await asyncio.to_thread(
+    return await asyncio.to_thread(
         insert_via_decision_record,
         session_key=session_key,
         session_id=_as_int(session.get("id")),
@@ -260,92 +260,107 @@ async def _record_initial_decisions(state: SimpleNamespace) -> None:
         context_refs=context_refs,
         latency_ms=route_latency_ms,
     )
-    decision_records.append(intent_decision)
-    retrieval_evidence_row: dict[str, Any] | None = None
 
-    if route.get("needs_memory"):
-        retrieval_evidence = _build_retrieval_evidence(
-            retrieval_execution=retrieval_execution,
-            retrieval_policy=retrieval_policy,
-            vector_refs=vector_refs,
-            bundle_memory_refs=bundle_memory_refs_before_vector,
-        )
-        retrieval_decision = await asyncio.to_thread(
-            insert_via_decision_record,
-            session_key=session_key,
-            session_id=int(session.get("id") or 0),
-            user_id=int(session.get("user_id") or 0),
-            persona_id=int(persona.get("id") or 0),
-            decision_type="retrieval_plan",
-            trigger_type="memory_required",
-            trigger_payload={"vector_ref_count": len(vector_refs)},
-            state_snapshot=trigger_snapshot.get("state_snapshot") or {},
-            candidates=build_decision_candidates(
-                "retrieval_plan",
-                route_info=policy_route,
-                vector_refs=vector_refs,
+
+async def _record_retrieval_plan_decisions(state: SimpleNamespace) -> dict[str, Any] | None:
+    if not state.route.get("needs_memory"):
+        return None
+    retrieval_evidence = _build_retrieval_evidence(
+        retrieval_execution=state.retrieval_execution,
+        retrieval_policy=state.retrieval_policy,
+        vector_refs=state.vector_refs,
+        bundle_memory_refs=state.bundle_memory_refs_before_vector,
+    )
+    retrieval_decision = await asyncio.to_thread(
+        insert_via_decision_record,
+        session_key=state.session_key,
+        session_id=int(state.session.get("id") or 0),
+        user_id=int(state.session.get("user_id") or 0),
+        persona_id=int(state.persona.get("id") or 0),
+        decision_type="retrieval_plan",
+        trigger_type="memory_required",
+        trigger_payload={"vector_ref_count": len(state.vector_refs)},
+        state_snapshot=state.trigger_snapshot.get("state_snapshot") or {},
+        candidates=build_decision_candidates(
+            "retrieval_plan",
+            route_info=state.policy_route,
+            vector_refs=state.vector_refs,
+        ),
+        chosen_action={
+            "plan": str(
+                state.retrieval_execution.get("plan")
+                or ("vector_memory" if state.vector_refs else "bundle_memory_only")
             ),
-            chosen_action={
-                "plan": str(retrieval_execution.get("plan") or ("vector_memory" if vector_refs else "bundle_memory_only")),
-                "vector_ref_count": len(vector_refs),
-                "vector_limit": int(retrieval_execution.get("vector_limit") or 0),
-                "retrieval_mode": str(retrieval_execution.get("retrieval_mode") or ""),
-                "candidate_sources": retrieval_evidence.get("candidate_sources") or [],
-                "selected_sources": retrieval_evidence.get("selected_sources") or [],
-                "bundle_hit_count": int(retrieval_evidence.get("bundle_hit_count") or 0),
-                "seed_hit_count": int(retrieval_evidence.get("seed_hit_count") or 0),
-                "top_score": float(retrieval_evidence.get("top_score") or 0.0),
-                "avg_score": float(retrieval_evidence.get("avg_score") or 0.0),
-                "score_spread": float(retrieval_evidence.get("score_spread") or 0.0),
-                "rerank_applied": bool(retrieval_evidence.get("rerank_applied")),
-            },
-            policy_key=str(retrieval_policy.get("policy_key") or ""),
-            policy_version=str(retrieval_policy.get("policy_version") or ""),
-            context_refs=context_refs,
-            latency_ms=retrieval_latency_ms,
-        )
-        decision_records.append(retrieval_decision)
-        retrieval_evidence_row = await asyncio.to_thread(
-            insert_via_retrieval_evidence,
-            session_key=session_key,
-            decision_id=str(retrieval_decision.get("decision_id") or ""),
-            policy_key=str(retrieval_policy.get("policy_key") or ""),
-            policy_version=str(retrieval_policy.get("policy_version") or ""),
-            retrieval_mode=str(retrieval_execution.get("retrieval_mode") or ""),
-            candidate_sources=retrieval_evidence.get("candidate_sources") or [],
-            selected_sources=retrieval_evidence.get("selected_sources") or [],
-            vector_hit_count=int(retrieval_evidence.get("vector_hit_count") or 0),
-            bundle_hit_count=int(retrieval_evidence.get("bundle_hit_count") or 0),
-            seed_hit_count=int(retrieval_evidence.get("seed_hit_count") or 0),
-            vector_limit=int(retrieval_evidence.get("vector_limit") or 0),
-            top_score=float(retrieval_evidence.get("top_score") or 0.0),
-            avg_score=float(retrieval_evidence.get("avg_score") or 0.0),
-            score_spread=float(retrieval_evidence.get("score_spread") or 0.0),
-            rerank_applied=bool(retrieval_evidence.get("rerank_applied")),
-            rerank_summary=retrieval_evidence.get("rerank_summary") or {},
-            evidence_payload=retrieval_evidence.get("evidence_payload") or {},
-        )
-        retrieval_shadow_policy = get_via_shadow_policy("retrieval_plan", route_info=policy_route)
-        retrieval_shadow_eval = evaluate_shadow_retrieval_plan(
-            route_info=policy_route,
-            live_policy=retrieval_policy,
-            shadow_policy=retrieval_shadow_policy,
-            vector_refs=vector_refs,
-            bundle_memory_count=len(list(refreshed_bundle.get("memory_refs") or [])),
-            live_evidence=retrieval_evidence,
-        )
-        retrieval_shadow_decision = await _record_shadow_eval(
-            session_key=session_key,
-            session=session,
-            persona=persona,
-            trigger_snapshot=trigger_snapshot,
-            context_refs=context_refs,
-            target="retrieval_plan",
-            shadow_eval=retrieval_shadow_eval,
-            candidates=build_decision_candidates("retrieval_plan", route_info=policy_route, vector_refs=vector_refs),
-        )
-        if retrieval_shadow_decision:
-            decision_records.append(retrieval_shadow_decision)
+            "vector_ref_count": len(state.vector_refs),
+            "vector_limit": int(state.retrieval_execution.get("vector_limit") or 0),
+            "retrieval_mode": str(state.retrieval_execution.get("retrieval_mode") or ""),
+            "candidate_sources": retrieval_evidence.get("candidate_sources") or [],
+            "selected_sources": retrieval_evidence.get("selected_sources") or [],
+            "bundle_hit_count": int(retrieval_evidence.get("bundle_hit_count") or 0),
+            "seed_hit_count": int(retrieval_evidence.get("seed_hit_count") or 0),
+            "top_score": float(retrieval_evidence.get("top_score") or 0.0),
+            "avg_score": float(retrieval_evidence.get("avg_score") or 0.0),
+            "score_spread": float(retrieval_evidence.get("score_spread") or 0.0),
+            "rerank_applied": bool(retrieval_evidence.get("rerank_applied")),
+        },
+        policy_key=str(state.retrieval_policy.get("policy_key") or ""),
+        policy_version=str(state.retrieval_policy.get("policy_version") or ""),
+        context_refs=state.context_refs,
+        latency_ms=state.retrieval_latency_ms,
+    )
+    state.decision_records.append(retrieval_decision)
+    retrieval_evidence_row = await asyncio.to_thread(
+        insert_via_retrieval_evidence,
+        session_key=state.session_key,
+        decision_id=str(retrieval_decision.get("decision_id") or ""),
+        policy_key=str(state.retrieval_policy.get("policy_key") or ""),
+        policy_version=str(state.retrieval_policy.get("policy_version") or ""),
+        retrieval_mode=str(state.retrieval_execution.get("retrieval_mode") or ""),
+        candidate_sources=retrieval_evidence.get("candidate_sources") or [],
+        selected_sources=retrieval_evidence.get("selected_sources") or [],
+        vector_hit_count=int(retrieval_evidence.get("vector_hit_count") or 0),
+        bundle_hit_count=int(retrieval_evidence.get("bundle_hit_count") or 0),
+        seed_hit_count=int(retrieval_evidence.get("seed_hit_count") or 0),
+        vector_limit=int(retrieval_evidence.get("vector_limit") or 0),
+        top_score=float(retrieval_evidence.get("top_score") or 0.0),
+        avg_score=float(retrieval_evidence.get("avg_score") or 0.0),
+        score_spread=float(retrieval_evidence.get("score_spread") or 0.0),
+        rerank_applied=bool(retrieval_evidence.get("rerank_applied")),
+        rerank_summary=retrieval_evidence.get("rerank_summary") or {},
+        evidence_payload=retrieval_evidence.get("evidence_payload") or {},
+    )
+    shadow_policy = get_via_shadow_policy("retrieval_plan", route_info=state.policy_route)
+    shadow_eval = evaluate_shadow_retrieval_plan(
+        route_info=state.policy_route,
+        live_policy=state.retrieval_policy,
+        shadow_policy=shadow_policy,
+        vector_refs=state.vector_refs,
+        bundle_memory_count=len(list(state.refreshed_bundle.get("memory_refs") or [])),
+        live_evidence=retrieval_evidence,
+    )
+    shadow_decision = await _record_shadow_eval(
+        session_key=state.session_key,
+        session=state.session,
+        persona=state.persona,
+        trigger_snapshot=state.trigger_snapshot,
+        context_refs=state.context_refs,
+        target="retrieval_plan",
+        shadow_eval=shadow_eval,
+        candidates=build_decision_candidates(
+            "retrieval_plan",
+            route_info=state.policy_route,
+            vector_refs=state.vector_refs,
+        ),
+    )
+    if shadow_decision:
+        state.decision_records.append(shadow_decision)
+    return retrieval_evidence_row
+
+
+async def _record_initial_decisions(state: SimpleNamespace) -> None:
+    intent_decision = await _record_intent_route_decision(state)
+    state.decision_records.append(intent_decision)
+    retrieval_evidence_row = await _record_retrieval_plan_decisions(state)
 
     state.intent_decision = intent_decision
     state.retrieval_evidence_row = retrieval_evidence_row
@@ -441,32 +456,21 @@ async def _record_learning_and_outcome(state: SimpleNamespace) -> None:
         outcome_payload=reply_outcome.get("outcome_payload") or {},
     )
     outcome_records.append(primary_outcome)
-    routing_provider = str(reply["payload"].get("provider") or "")
-    if routing_provider and routing_provider not in {"product_brain", "business_brain", "rule_brain", "identity", "policy"}:
-        await asyncio.to_thread(
-            upsert_via_routing_provider_stat,
-            bucket_key=_routing_bucket_key(route, surface),
-            provider=routing_provider,
-            exposure_increment=1,
-            success_increment=1 if bool(primary_outcome.get("accepted")) and int(primary_outcome.get("abuse_flag") or 0) <= 0 else 0,
-            reward_delta=float(primary_outcome.get("reward_score") or 0.0),
-            guard_fail_increment=1 if int(primary_outcome.get("abuse_flag") or 0) > 0 else 0,
-            latency_ms=float((reply_mode_decision or {}).get("latency_ms") or 0.0),
-            cost_estimate=float((reply_mode_decision or {}).get("cost_estimate") or 0.0),
-            last_outcome_at=str(primary_outcome.get("created_at") or ""),
-            metrics={
-                "intent": route.get("intent") or "",
-                "surface": surface,
-                "strategy": reply["payload"].get("provider_strategy") or "",
-                "policy_version": reply["payload"].get("model") or "",
-            },
-        )
-    reply["payload"]["reward_trace_target"] = {
-        "session_key": session_key,
-        "decision_id": str(reply_mode_decision.get("decision_id") or intent_decision.get("decision_id") or ""),
-        "policy_key": str(reply_mode_decision.get("policy_key") or intent_decision.get("policy_key") or ""),
-        "policy_version": str(reply_mode_decision.get("policy_version") or intent_decision.get("policy_version") or ""),
-    }
+    await record_routing_provider_stat(
+        reply=reply,
+        primary_outcome=primary_outcome,
+        reply_mode_decision=reply_mode_decision,
+        route=route,
+        surface=surface,
+        to_thread=asyncio.to_thread,
+        upsert_stat=upsert_via_routing_provider_stat,
+        routing_bucket_key=_routing_bucket_key,
+    )
+    reply["payload"]["reward_trace_target"] = reward_trace_target(
+        session_key,
+        reply_mode_decision,
+        intent_decision,
+    )
 
     state.persona = persona
     state.learning = learning
@@ -545,65 +549,26 @@ async def _promote_memory(state: SimpleNamespace) -> None:
                 "recent": retention_updates[:4],
             }
     for promotion in persisted_promotions:
-        retention_key = f"retain:{promotion.get('source_ref') or control_source_ref}:{promotion.get('fact_key') or promotion.get('memory_kind') or ''}"
-        await asyncio.to_thread(
-            upsert_via_memory_retention_stat,
-            retention_key=retention_key,
-            user_id=int(session.get("user_id") or 0),
+        await record_promotion_controls(
+            promotion,
             session_key=session_key,
-            memory_tier=str(promotion.get("tier") or ""),
-            memory_kind=str(promotion.get("memory_kind") or ""),
-            fact_key=str(promotion.get("fact_key") or ""),
-            source_ref=str(promotion.get("source_ref") or control_source_ref),
-            reinforcement_increment=1,
-            reward_delta=float(reply_outcome.get("reward_score") or 0.0),
-            last_promoted_at=str(primary_outcome.get("created_at") or ""),
-            metrics={"reason": promotion.get("reason") or "", "persisted_ref_id": int(promotion.get("persisted_ref_id") or 0)},
-        )
-        promotion_policy = get_via_policy("memory_promotion", route_info=policy_route)
-        promotion_decision = await asyncio.to_thread(
-            insert_via_decision_record,
-            session_key=session_key,
-            session_id=int(session.get("id") or 0),
-            user_id=int(session.get("user_id") or 0),
-            persona_id=int(persona.get("id") or 0),
-            decision_type="memory_promotion",
-            trigger_type=str(promotion.get("reason") or "learning_signal"),
-            trigger_payload={"tier": promotion.get("tier") or "", "reason": promotion.get("reason") or ""},
-            state_snapshot=trigger_snapshot.get("state_snapshot") or {},
-            candidates=build_decision_candidates("memory_promotion"),
-            chosen_action={
-                "tier": promotion.get("tier") or "",
-                "memory_kind": promotion.get("memory_kind") or "",
-                "fact_key": promotion.get("fact_key") or "",
-                "persisted_ref_id": int(promotion.get("persisted_ref_id") or 0),
-            },
-            policy_key=str(promotion_policy.get("policy_key") or ""),
-            policy_version=str(promotion_policy.get("policy_version") or ""),
+            session=session,
+            persona=persona,
+            policy_route=policy_route,
+            trigger_snapshot=trigger_snapshot,
             context_refs=context_refs,
-            cost_estimate=0.0,
+            reply_outcome=reply_outcome,
+            primary_outcome=primary_outcome,
+            control_source_ref=control_source_ref,
+            decision_records=decision_records,
+            outcome_records=outcome_records,
+            to_thread=asyncio.to_thread,
+            upsert_retention=upsert_via_memory_retention_stat,
+            get_policy=get_via_policy,
+            build_candidates=build_decision_candidates,
+            insert_decision=insert_via_decision_record,
+            insert_outcome=insert_via_outcome_record,
         )
-        decision_records.append(promotion_decision)
-        promotion_outcome = await asyncio.to_thread(
-            insert_via_outcome_record,
-            decision_id=str(promotion_decision.get("decision_id") or ""),
-            session_key=session_key,
-            accepted=bool(promotion.get("persisted_ref_id")),
-            followup_depth=int(reply_outcome.get("followup_depth") or 0),
-            rephrase_needed=False,
-            clicked_product=False,
-            added_to_cart=False,
-            purchased=False,
-            thumb_feedback=0,
-            abuse_flag=0,
-            reward_score=float(reply_outcome.get("reward_score") or 0.0),
-            outcome_payload={
-                "tier": promotion.get("tier") or "",
-                "memory_kind": promotion.get("memory_kind") or "",
-                "reason": promotion.get("reason") or "",
-            },
-        )
-        outcome_records.append(promotion_outcome)
 
     state.persisted_promotions = persisted_promotions
 

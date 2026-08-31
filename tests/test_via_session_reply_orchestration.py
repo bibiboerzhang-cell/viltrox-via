@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from types import SimpleNamespace
 from typing import Any
 
 from app.services.via import session_reply
@@ -144,3 +145,62 @@ def test_missing_bundle_short_circuits_without_publishing(monkeypatch) -> None:
     )
     assert result == {}
     assert calls == []
+
+
+def test_memory_retrieval_decision_uses_pre_vector_bundle_snapshot(monkeypatch) -> None:
+    bundle_refs = [{"memory_id": "bundle-1"}]
+    observed: dict[str, Any] = {}
+
+    def build_evidence(**kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return {
+            "candidate_sources": ["bundle_memory"],
+            "selected_sources": ["bundle_memory"],
+            "bundle_hit_count": 1,
+            "seed_hit_count": 0,
+            "top_score": 0.0,
+            "avg_score": 0.0,
+            "score_spread": 0.0,
+            "rerank_applied": False,
+        }
+
+    monkeypatch.setattr(orchestration, "_build_retrieval_evidence", build_evidence)
+    monkeypatch.setattr(orchestration, "build_decision_candidates", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        orchestration,
+        "insert_via_decision_record",
+        lambda **kwargs: {"decision_id": "retrieval-1", **kwargs},
+    )
+    monkeypatch.setattr(
+        orchestration,
+        "insert_via_retrieval_evidence",
+        lambda **kwargs: {"evidence_id": "evidence-1", **kwargs},
+    )
+    monkeypatch.setattr(orchestration, "get_via_shadow_policy", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(orchestration, "evaluate_shadow_retrieval_plan", lambda **_kwargs: {})
+
+    async def no_shadow(**_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(orchestration, "_record_shadow_eval", no_shadow)
+    state = SimpleNamespace(
+        route={"needs_memory": True},
+        retrieval_execution={"plan": "bundle_memory_only", "use_vector": False},
+        retrieval_policy={"policy_key": "retrieval_plan", "policy_version": "v1"},
+        vector_refs=[],
+        bundle_memory_refs_before_vector=bundle_refs,
+        session_key="session-memory",
+        session={"id": 7, "user_id": 9},
+        persona={"id": 11},
+        trigger_snapshot={"state_snapshot": {}},
+        policy_route={},
+        context_refs=[],
+        decision_records=[],
+        refreshed_bundle={"memory_refs": bundle_refs},
+        retrieval_latency_ms=1.25,
+    )
+
+    result = asyncio.run(orchestration._record_retrieval_plan_decisions(state))
+
+    assert result and result["decision_id"] == "retrieval-1"
+    assert observed["bundle_memory_refs"] is bundle_refs

@@ -14,6 +14,11 @@ from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping
 
+from app.domains.kol.analysis_precision_eval_reports import (
+    build_task_reports,
+    global_blockers,
+)
+
 
 CLAIM_STATUS = "descriptive_only"
 ABSTAIN_TOKENS = {"", "abstain", "insufficient", "not_ready", "unknown"}
@@ -224,65 +229,23 @@ def evaluate_analysis_precision(
         for platform in sorted(required_platforms)
         if platform_counts.get(platform, 0) < active_policy.minimum_per_platform
     }
-    blockers: list[str] = []
-    if overall["sample_size"] < active_policy.minimum_total:
-        blockers.append("sample_size_below_minimum")
-    if overall["positive_labels"] < active_policy.minimum_positive:
-        blockers.append("positive_labels_below_minimum")
-    if overall["negative_labels"] < active_policy.minimum_negative:
-        blockers.append("negative_labels_below_minimum")
-    if unqualified_review_count:
-        blockers.append("labels_not_human_reviewed")
-    if (dual_review_ratio or 0) < active_policy.minimum_dual_review_ratio:
-        blockers.append("dual_review_coverage_below_minimum")
-    if agreement["pair_count"] < active_policy.minimum_kappa_pairs:
-        blockers.append("kappa_pair_count_below_minimum")
-    elif agreement["cohen_kappa"] is None or agreement["cohen_kappa"] < active_policy.minimum_cohen_kappa:
-        blockers.append("cohen_kappa_below_minimum")
-    if platform_shortfalls:
-        blockers.append("required_platform_coverage_below_minimum")
-
-    task_reports: dict[str, dict[str, Any]] = {}
-    for task, task_rows in sorted(by_task_rows.items()):
-        metrics = _metrics(task_rows, calibration_bins=active_policy.calibration_bins)
-        task_review_counts = Counter(row["review_status"] for row in task_rows)
-        task_platform_counts = Counter(row["platform"] for row in task_rows)
-        task_agreement = _agreement(task_rows)
-        task_dual_count = sum(
-            row["review_status"] in {"dual_reviewed", "adjudicated"} or row["reviewer_pair"] is not None
-            for row in task_rows
-        )
-        task_dual_ratio = _safe_ratio(task_dual_count, len(task_rows))
-        task_blockers: list[str] = []
-        if metrics["sample_size"] < active_policy.minimum_per_task:
-            task_blockers.append("task_sample_size_below_minimum")
-        if metrics["positive_labels"] < active_policy.minimum_positive:
-            task_blockers.append("task_positive_labels_below_minimum")
-        if metrics["negative_labels"] < active_policy.minimum_negative:
-            task_blockers.append("task_negative_labels_below_minimum")
-        if any(status not in accepted_review for status in task_review_counts):
-            task_blockers.append("task_labels_not_human_reviewed")
-        if (task_dual_ratio or 0) < active_policy.minimum_dual_review_ratio:
-            task_blockers.append("task_dual_review_coverage_below_minimum")
-        if task_agreement["pair_count"] < active_policy.minimum_kappa_pairs:
-            task_blockers.append("task_kappa_pair_count_below_minimum")
-        elif task_agreement["cohen_kappa"] is None or task_agreement["cohen_kappa"] < active_policy.minimum_cohen_kappa:
-            task_blockers.append("task_cohen_kappa_below_minimum")
-        if any(
-            task_platform_counts.get(platform, 0) < active_policy.minimum_per_platform
-            for platform in required_platforms
-        ):
-            task_blockers.append("task_required_platform_coverage_below_minimum")
-        task_reports[task] = {
-            **metrics,
-            "accuracy_claimable": not task_blockers,
-            "blockers": task_blockers,
-            "review_status_counts": dict(sorted(task_review_counts.items())),
-            "dual_review_count": task_dual_count,
-            "dual_review_ratio": task_dual_ratio,
-            "agreement": task_agreement,
-            "platform_counts": dict(sorted(task_platform_counts.items())),
-        }
+    blockers = global_blockers(
+        overall=overall,
+        agreement=agreement,
+        platform_shortfalls=platform_shortfalls,
+        unqualified_review_count=unqualified_review_count,
+        dual_review_ratio=dual_review_ratio,
+        policy=active_policy,
+    )
+    task_reports = build_task_reports(
+        by_task_rows,
+        policy=active_policy,
+        accepted_review=accepted_review,
+        required_platforms=required_platforms,
+        metrics_fn=_metrics,
+        agreement_fn=_agreement,
+        safe_ratio_fn=_safe_ratio,
+    )
     if any(report["blockers"] for report in task_reports.values()):
         blockers.append("one_or_more_task_evaluation_gates_failed")
 

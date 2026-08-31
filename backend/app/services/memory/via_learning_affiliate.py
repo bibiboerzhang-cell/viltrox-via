@@ -54,6 +54,121 @@ def _extract_affiliate_order_candidates(row: Any, payload: dict[str, Any]) -> li
     return candidates
 
 
+def _affiliate_user_indexes(
+    rows: list[Any],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    by_code = {
+        _clean_affiliate_ref(row["creator_code"]): dict(row)
+        for row in rows
+        if _clean_affiliate_ref(row["creator_code"])
+    }
+    by_email = {
+        _clean_affiliate_ref(row["email"]): dict(row)
+        for row in rows
+        if _clean_affiliate_ref(row["email"])
+    }
+    return by_code, by_email
+
+
+def _latest_affiliate_decisions(limit: int) -> dict[int, dict[str, Any]]:
+    latest: dict[int, dict[str, Any]] = {}
+    for item in list_recent_via_decisions(max(160, int(limit) * 2)):
+        user_id = int(item.get("user_id") or 0)
+        if user_id > 0 and user_id not in latest:
+            latest[user_id] = item
+    return latest
+
+
+def _matched_affiliate_user(
+    row: Any,
+    payload: dict[str, Any],
+    user_by_code: dict[str, dict[str, Any]],
+    user_by_email: dict[str, dict[str, Any]],
+) -> tuple[list[str], dict[str, Any] | None]:
+    body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+    customer = body.get("customer") if isinstance(body.get("customer"), dict) else {}
+    candidates = _extract_affiliate_order_candidates(row, payload)
+    customer_email = _clean_affiliate_ref(customer.get("email"))
+    if customer_email and customer_email not in candidates:
+        candidates.append(customer_email)
+    for candidate in candidates:
+        matched = user_by_code.get(candidate) or user_by_email.get(candidate)
+        if matched:
+            return candidates, matched
+    return candidates, None
+
+
+def _affiliate_commission_rate(
+    matched_user: dict[str, Any] | None,
+    user_id: int,
+    program_cache: dict[int, dict[str, Any]],
+) -> float:
+    if not matched_user:
+        return 0.0
+    if user_id not in program_cache:
+        program_cache[user_id] = build_creator_program_snapshot(dict(matched_user))
+    return float(program_cache[user_id].get("effective_commission_rate") or 0.0)
+
+
+def _sync_affiliate_order_row(
+    row: Any,
+    *,
+    user_by_code: dict[str, dict[str, Any]],
+    user_by_email: dict[str, dict[str, Any]],
+    latest_decision_by_user: dict[int, dict[str, Any]],
+    program_cache: dict[int, dict[str, Any]],
+) -> tuple[int, int, int]:
+    payload = _load_json_doc(row["payload_json"], {})
+    body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+    candidates, matched_user = _matched_affiliate_user(
+        row, payload, user_by_code, user_by_email,
+    )
+    user_id = int((matched_user or {}).get("id") or 0)
+    matched_count = 1 if user_id > 0 else 0
+    creator_ref = (
+        next((candidate for candidate in candidates if candidate), "")
+        or _clean_affiliate_ref(row["creator_handle"])
+        or f"order-{int(row['id'])}"
+    )
+    latest_decision = latest_decision_by_user.get(user_id) if user_id > 0 else {}
+    session_key = str((latest_decision or {}).get("session_key") or f"affiliate:{creator_ref}")
+    order_id = str(
+        row["external_id"] or body.get("id") or body.get("order_number") or row["id"]
+    ).strip()
+    idempotency_key = f"shopify-order:{order_id}"
+    if get_via_reward_trace_by_idempotency_key(idempotency_key):
+        return 0, 1, matched_count
+
+    effective_rate = _affiliate_commission_rate(matched_user, user_id, program_cache)
+    order_total = float(
+        body.get("current_total_price")
+        or body.get("total_price")
+        or payload.get("order_total")
+        or 0.0
+    )
+    estimated_commission = round(order_total * effective_rate, 2) if effective_rate > 0 else 0.0
+    insert_via_reward_trace(
+        session_key=session_key,
+        decision_id=str((latest_decision or {}).get("decision_id") or ""),
+        user_id=user_id,
+        event_type="affiliate_order",
+        surface="affiliate",
+        source="shopify",
+        origin="platform_ingest",
+        product_key=creator_ref,
+        event_value=order_total,
+        event_payload={
+            "order_id": order_id,
+            "ref_code": creator_ref,
+            "financial_status": str(body.get("financial_status") or ""),
+            "ingest_status": str(row["ingest_status"] or ""),
+            "estimated_commission": estimated_commission,
+        },
+        idempotency_key=idempotency_key,
+    )
+    return 1, 0, matched_count
+
+
 def _sync_affiliate_order_reward_traces(limit: int = 400, window_days: int = 21) -> dict[str, Any]:
     conn = get_conn()
     try:
@@ -72,14 +187,9 @@ def _sync_affiliate_order_reward_traces(limit: int = 400, window_days: int = 21)
         return {"imported": 0, "skipped": 0, "matched_users": 0}
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(window_days or 1)))
-    user_by_code = {_clean_affiliate_ref(row["creator_code"]): dict(row) for row in user_rows if _clean_affiliate_ref(row["creator_code"])}
-    user_by_email = {_clean_affiliate_ref(row["email"]): dict(row) for row in user_rows if _clean_affiliate_ref(row["email"])}
-    latest_decision_by_user: dict[int, dict[str, Any]] = {}
+    user_by_code, user_by_email = _affiliate_user_indexes(user_rows)
+    latest_decision_by_user = _latest_affiliate_decisions(limit)
     program_cache: dict[int, dict[str, Any]] = {}
-    for item in list_recent_via_decisions(max(160, int(limit) * 2)):
-        user_id = int(item.get("user_id") or 0)
-        if user_id > 0 and user_id not in latest_decision_by_user:
-            latest_decision_by_user[user_id] = item
 
     imported = 0
     skipped = 0
@@ -88,57 +198,16 @@ def _sync_affiliate_order_reward_traces(limit: int = 400, window_days: int = 21)
         occurred_at = _parse_timestamp(row["occurred_at"] or row["processed_at"] or "")
         if occurred_at and occurred_at < cutoff:
             continue
-        payload = _load_json_doc(row["payload_json"], {})
-        body = payload.get("body") if isinstance(payload.get("body"), dict) else {}
-        customer = body.get("customer") if isinstance(body.get("customer"), dict) else {}
-        candidates = _extract_affiliate_order_candidates(row, payload)
-        customer_email = _clean_affiliate_ref(customer.get("email"))
-        if customer_email and customer_email not in candidates:
-            candidates.append(customer_email)
-        matched_user = None
-        for candidate in candidates:
-            matched_user = user_by_code.get(candidate) or user_by_email.get(candidate)
-            if matched_user:
-                break
-        user_id = int((matched_user or {}).get("id") or 0)
-        if user_id > 0:
-            matched_users += 1
-        creator_ref = next((candidate for candidate in candidates if candidate), "") or _clean_affiliate_ref(row["creator_handle"]) or f"order-{int(row['id'])}"
-        latest_decision = latest_decision_by_user.get(user_id) if user_id > 0 else {}
-        session_key = str((latest_decision or {}).get("session_key") or f"affiliate:{creator_ref}")
-        order_id = str(row["external_id"] or body.get("id") or body.get("order_number") or row["id"]).strip()
-        idempotency_key = f"shopify-order:{order_id}"
-        if get_via_reward_trace_by_idempotency_key(idempotency_key):
-            skipped += 1
-            continue
-        effective_rate = 0.0
-        if matched_user:
-            if user_id not in program_cache:
-                program_cache[user_id] = build_creator_program_snapshot(dict(matched_user))
-            program = program_cache[user_id]
-            effective_rate = float(program.get("effective_commission_rate") or 0.0)
-        order_total = float(body.get("current_total_price") or body.get("total_price") or payload.get("order_total") or 0.0)
-        estimated_commission = round(order_total * effective_rate, 2) if effective_rate > 0 else 0.0
-        insert_via_reward_trace(
-            session_key=session_key,
-            decision_id=str((latest_decision or {}).get("decision_id") or ""),
-            user_id=user_id,
-            event_type="affiliate_order",
-            surface="affiliate",
-            source="shopify",
-            origin="platform_ingest",
-            product_key=creator_ref,
-            event_value=order_total,
-            event_payload={
-                "order_id": order_id,
-                "ref_code": creator_ref,
-                "financial_status": str(body.get("financial_status") or ""),
-                "ingest_status": str(row["ingest_status"] or ""),
-                "estimated_commission": estimated_commission,
-            },
-            idempotency_key=idempotency_key,
+        imported_delta, skipped_delta, matched_delta = _sync_affiliate_order_row(
+            row,
+            user_by_code=user_by_code,
+            user_by_email=user_by_email,
+            latest_decision_by_user=latest_decision_by_user,
+            program_cache=program_cache,
         )
-        imported += 1
+        imported += imported_delta
+        skipped += skipped_delta
+        matched_users += matched_delta
     return {"imported": imported, "skipped": skipped, "matched_users": matched_users}
 
 

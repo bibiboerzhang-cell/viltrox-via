@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import app.domains.sync.refresh_tier as refresh_tier
+from app.domains.sync.apify_batch_summary import target_execution_outcome
 from app.platform.apify_lifecycle import close_apify_client
 
 
@@ -392,10 +393,83 @@ def map_dataset_items_to_targets(items: list[dict[str, Any]], targets: list[dict
     return {"matched": matched, "unmatched": unmatched, "matched_count": len(matched), "unmatched_count": len(unmatched)}
 
 
-def summarize_batch_execution(plan: dict[str, Any], results: list[dict[str, Any]], *, executed: bool) -> dict[str, Any]:
-    batches = [batch for batch in (plan.get("batches") or []) if isinstance(batch, dict)]
-    targets_by_batch = {str(batch.get("batch_key") or ""): [target for target in (batch.get("targets") or []) if isinstance(target, dict)] for batch in batches}
-    results_by_batch = {str(result.get("batch_key") or ""): result for result in results if isinstance(result, dict)}
+def _summarize_execution_batch(
+    batch: dict[str, Any],
+    targets: list[dict[str, Any]],
+    result: dict[str, Any],
+    *,
+    executed: bool,
+) -> tuple[list[dict[str, Any]], list[int], int, int]:
+    batch_key = str(batch.get("batch_key") or "")
+    platform = str(batch.get("platform") or "")
+    provider_status = str(
+        result.get("provider_status") or ("pending" if not executed else "unknown")
+    )
+    sync_status = str(
+        result.get("sync_status") or ("pending" if not executed else "unknown")
+    )
+    mapped = result.get("mapped") if isinstance(result.get("mapped"), dict) else {}
+    matched_ids = {
+        int(item.get("kol_pool_id") or 0)
+        for item in (mapped.get("matched") or [])
+        if int(item.get("kol_pool_id") or 0)
+    }
+    statuses: list[dict[str, Any]] = []
+    retry_ids: list[int] = []
+    for target in targets:
+        kol_pool_id = _int(target.get("kol_pool_id"))
+        if not kol_pool_id:
+            continue
+        status, retry, reason = target_execution_outcome(
+            executed=executed,
+            provider_status=provider_status,
+            sync_status=sync_status,
+            matched=kol_pool_id in matched_ids,
+            result=result,
+        )
+        if retry:
+            retry_ids.append(kol_pool_id)
+        statuses.append(
+            {
+                "kol_pool_id": kol_pool_id,
+                "batch_key": batch_key,
+                "platform": platform,
+                "status": status,
+                "provider_status": provider_status,
+                "sync_status": sync_status,
+                "reason": reason,
+            }
+        )
+    return (
+        statuses,
+        retry_ids,
+        _int(mapped.get("matched_count")),
+        _int(mapped.get("unmatched_count")),
+    )
+
+
+def summarize_batch_execution(
+    plan: dict[str, Any],
+    results: list[dict[str, Any]],
+    *,
+    executed: bool,
+) -> dict[str, Any]:
+    batches = [
+        batch for batch in (plan.get("batches") or []) if isinstance(batch, dict)
+    ]
+    targets_by_batch = {
+        str(batch.get("batch_key") or ""): [
+            target
+            for target in (batch.get("targets") or [])
+            if isinstance(target, dict)
+        ]
+        for batch in batches
+    }
+    results_by_batch = {
+        str(result.get("batch_key") or ""): result
+        for result in results
+        if isinstance(result, dict)
+    }
     kol_statuses: list[dict[str, Any]] = []
     retry_kol_pool_ids: list[int] = []
     matched_items = 0
@@ -403,53 +477,20 @@ def summarize_batch_execution(plan: dict[str, Any], results: list[dict[str, Any]
 
     for batch in batches:
         batch_key = str(batch.get("batch_key") or "")
-        platform = str(batch.get("platform") or "")
-        result = results_by_batch.get(batch_key, {})
-        provider_status = str(result.get("provider_status") or ("pending" if not executed else "unknown"))
-        sync_status = str(result.get("sync_status") or ("pending" if not executed else "unknown"))
-        mapped = result.get("mapped") if isinstance(result.get("mapped"), dict) else {}
-        matched_ids = {int(item.get("kol_pool_id") or 0) for item in (mapped.get("matched") or []) if int(item.get("kol_pool_id") or 0)}
-        matched_items += _int(mapped.get("matched_count"))
-        unmatched_items += _int(mapped.get("unmatched_count"))
-
-        for target in targets_by_batch.get(batch_key, []):
-            kol_pool_id = _int(target.get("kol_pool_id"))
-            if not kol_pool_id:
-                continue
-            if not executed:
-                status = "planned"
-                retry = False
-                reason = "not_executed"
-            elif provider_status == "ok" and kol_pool_id in matched_ids:
-                status = "matched"
-                retry = False
-                reason = sync_status or "synced"
-            elif provider_status == "ok":
-                status = "unmatched"
-                retry = True
-                reason = "dataset_item_not_mapped"
-            elif provider_status == "not_configured":
-                status = "not_configured"
-                retry = True
-                reason = "apify_not_configured"
-            else:
-                status = "error"
-                retry = True
-                reason = str(result.get("error") or sync_status or provider_status or "batch_error")[:500]
-            if retry:
-                retry_kol_pool_ids.append(kol_pool_id)
-            kol_statuses.append(
-                {
-                    "kol_pool_id": kol_pool_id,
-                    "batch_key": batch_key,
-                    "platform": platform,
-                    "status": status,
-                    "provider_status": provider_status,
-                    "sync_status": sync_status,
-                    "reason": reason,
-                }
+        statuses, retry_ids, matched_count, unmatched_count = (
+            _summarize_execution_batch(
+                batch,
+                targets_by_batch.get(batch_key, []),
+                results_by_batch.get(batch_key, {}),
+                executed=executed,
             )
+        )
+        kol_statuses.extend(statuses)
+        retry_kol_pool_ids.extend(retry_ids)
+        matched_items += matched_count
+        unmatched_items += unmatched_count
 
+    retry_set = set(retry_kol_pool_ids)
     return {
         "executed": bool(executed),
         "strategy": plan.get("strategy") or "apify_batch_first",
@@ -458,11 +499,23 @@ def summarize_batch_execution(plan: dict[str, Any], results: list[dict[str, Any]
         "result_count": len(results),
         "matched_items": matched_items,
         "unmatched_items": unmatched_items,
-        "failed_batches": sum(1 for item in results if str(item.get("provider_status") or "") == "error"),
-        "not_configured_batches": sum(1 for item in results if str(item.get("provider_status") or "") == "not_configured"),
-        "no_result_batches": sum(1 for item in results if str(item.get("sync_status") or "") == "no_results"),
-        "retry_kol_pool_ids": sorted(set(retry_kol_pool_ids)),
-        "retry_count": len(set(retry_kol_pool_ids)),
+        "failed_batches": sum(
+            1
+            for item in results
+            if str(item.get("provider_status") or "") == "error"
+        ),
+        "not_configured_batches": sum(
+            1
+            for item in results
+            if str(item.get("provider_status") or "") == "not_configured"
+        ),
+        "no_result_batches": sum(
+            1
+            for item in results
+            if str(item.get("sync_status") or "") == "no_results"
+        ),
+        "retry_kol_pool_ids": sorted(retry_set),
+        "retry_count": len(retry_set),
         "kol_statuses": kol_statuses,
     }
 

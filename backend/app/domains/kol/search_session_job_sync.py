@@ -23,6 +23,7 @@ from app.domains.kol.search_session_job_lineage import (
     lineage_jobs_for_item,
 )
 from app.domains.kol.search_session_job_support import as_dict, int_or_none, json_dumps, loads
+from app.domains.kol.search_session_job_sync_load import load_job_lineages, resolve_item_state
 from app.domains.tasks.search_session_lineage import search_session_lineages
 
 
@@ -174,35 +175,17 @@ def sync_search_session_job_impl(
     reason: str = "",
     analysis_summary: dict[str, Any] | None = None,
 ) -> int:
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(
-            "SELECT id, payload, last_error FROM apify_jobs WHERE id=%s",
-            (int(job_id),),
-        )
-        row = cur.fetchone()
-    if not row:
-        return 0
-    payload = (
-        row.get("payload")
-        if isinstance(row.get("payload"), dict)
-        else loads(row.get("payload"), {})
+    loaded = load_job_lineages(
+        conn,
+        job_id,
+        row_factory=dict_row,
+        loads=loads,
+        search_session_lineages=search_session_lineages,
+        int_or_none=int_or_none,
     )
-    if not isinstance(payload, dict):
+    if loaded is None:
         return 0
-    lineages = search_session_lineages(payload)
-    if not lineages:
-        return 0
-    unique_lineages: dict[tuple[int, int], set[str]] = {}
-    for entry in lineages:
-        session_id = int_or_none(entry.get("search_session_id"))
-        item_id = int_or_none(entry.get("search_session_item_id"))
-        if not session_id or not item_id:
-            continue
-        unique_lineages.setdefault((int(session_id), int(item_id)), set()).add(
-            str(entry.get("role") or "").strip().lower()
-        )
-    if not unique_lineages:
-        return 0
+    row, payload, unique_lineages = loaded
 
     synced_items: list[dict[str, Any]] = []
     current_analysis_summary = analysis_summary
@@ -236,37 +219,21 @@ def sync_search_session_job_impl(
         if not isinstance(existing_payload, dict):
             existing_payload = {}
         enrichment_error = session_url_enrichment_error(existing_payload)
-        progressive = any(roles)
-        downstream: dict[str, Any] | None = None
-        optional_gaps: dict[str, Any] | None = None
-        required_tasks_complete = False
-        if progressive:
-            state = lineage_item_state(
-                existing_payload,
-                lineage_jobs_for_item(
-                    conn,
-                    session_id=int(session_id),
-                    item_id=int(item_id),
-                ),
+        item_status, stage, downstream, optional_gaps, required_tasks_complete = (
+            resolve_item_state(
+                conn,
+                existing_payload=existing_payload,
+                roles=roles,
+                session_id=int(session_id),
+                item_id=int(item_id),
+                raw_status=raw_status,
+                reason=reason,
+                job_row=row,
+                lineage_jobs_for_item=lineage_jobs_for_item,
+                lineage_item_state=lineage_item_state,
+                search_session_job_state=search_session_job_state,
             )
-            item_status = str(state.get("item_status") or "partial")
-            stage = str(state.get("stage") or "analysis")
-            downstream = (
-                state.get("downstream")
-                if isinstance(state.get("downstream"), dict)
-                else {}
-            )
-            optional_gaps = (
-                state.get("optional_gaps")
-                if isinstance(state.get("optional_gaps"), dict)
-                else {}
-            )
-            required_tasks_complete = bool(state.get("required_tasks_complete"))
-        else:
-            item_status, stage = search_session_job_state(
-                raw_status,
-                reason or row.get("last_error") or "",
-            )
+        )
         if item_status in {"ready", "already_analyzed"} and enrichment_error:
             item_status = "partial"
             stage = "summary"

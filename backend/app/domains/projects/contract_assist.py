@@ -36,6 +36,7 @@ from app.domains.access import scope
 from app.domains.costs import budget_guard
 from app.domains.projects import ai_job_access
 from app.domains.projects import contracts as contracts_domain
+from app.domains.projects.contract_assist_invoice_fields import normalized_invoice_fields
 from app.domains.projects.workflow_common import _int, staff_id, utcnow
 from app.platform import llm_gateway, llm_production
 from app.services.ai.analyzers.claude_contract_extract import (
@@ -514,16 +515,7 @@ def run_invoice_extract_for_job(
         except ai_job_access.ProjectAiAccessError as exc:
             return ai_job_access.blocked_result(exc, provider_called=True)
     data = extraction.get("extracted") if isinstance(extraction.get("extracted"), dict) else {}
-    extracted: dict[str, Any] = {}
-    for field in INVOICE_FIELDS:
-        value = data.get(field)
-        if field == "amount":
-            try:
-                extracted[field] = float(value) if value not in (None, "") else None
-            except (TypeError, ValueError):
-                extracted[field] = None
-        else:
-            extracted[field] = str(value or "").strip()[:500]
+    extracted = normalized_invoice_fields(data, INVOICE_FIELDS)
     if not any(v not in (None, "") for v in extracted.values()):
         return {"status": "failed", "reason": "llm_empty_extraction"}
     try:

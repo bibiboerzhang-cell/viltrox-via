@@ -239,6 +239,94 @@ def llm_execution_metadata(
     }
 
 
+def _authorization_indexes(
+    authorization: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    by_model = authorization.get("execution_authorizations_by_model")
+    by_binding = authorization.get("execution_authorizations_by_binding")
+    return (
+        by_model if isinstance(by_model, dict) else {},
+        by_binding if isinstance(by_binding, dict) else {},
+    )
+
+
+def _selected_execution_authorization(
+    authorization: dict[str, Any],
+    *,
+    execution_model: str,
+    actual_binding: str,
+    by_model: dict[str, Any],
+    by_binding: dict[str, Any],
+) -> dict[str, Any] | None:
+    selected = by_model.get(execution_model)
+    if not isinstance(selected, dict):
+        selected = by_binding.get(actual_binding)
+    if isinstance(selected, dict):
+        selected_binding = str(selected.get("binding") or "").strip()
+        recorded_model = str(selected.get("model") or "").strip()
+        if selected_binding != actual_binding or recorded_model != execution_model:
+            selected = None
+    if isinstance(selected, dict):
+        return selected
+    base_binding = str(authorization.get("binding") or "").strip()
+    base_model = str(
+        authorization.get("selected_model") or authorization.get("model") or ""
+    ).strip()
+    if base_binding == actual_binding and base_model == execution_model:
+        return authorization
+    return None
+
+
+def _unverified_execution_authorization(
+    authorization: dict[str, Any],
+    *,
+    actual_binding: str,
+    execution_model: str,
+    worker_execution_class: str,
+    worker_gemini_model: str,
+) -> dict[str, Any]:
+    return {
+        "binding": actual_binding,
+        "model": execution_model or worker_gemini_model,
+        "execution_class": str(
+            authorization.get("execution_class") or worker_execution_class
+        ),
+        "authorization_scope": "unverified",
+        "evaluation_only": False,
+        "production_authorized": False,
+        "claim_status": "descriptive_only",
+        "model_readiness_status": "not_production_ready",
+        "execution_authorization_at_run": {
+            "scope": "execution_time_snapshot",
+            "authorized": False,
+            "production_authorized": False,
+            "evaluation_only": False,
+            "status": "authorization_not_recorded",
+            "source": "not_recorded",
+            "temporary": False,
+        },
+        "signed_readiness_at_run": {
+            "scope": "execution_time_snapshot",
+            "production_ready": False,
+            "status": "not_production_ready",
+            "claim_status": "descriptive_only",
+            "evidence_source": "not_recorded",
+        },
+    }
+
+
+def _authorization_chain(
+    authorization: dict[str, Any], key: str, fallback: list[str]
+) -> list[str]:
+    raw = authorization.get(key)
+    values = (
+        [str(model).strip() for model in raw if str(model).strip()]
+        if isinstance(raw, list)
+        else []
+    )
+    return values or list(fallback)
+
+
 def bind_execution_authorization_to_selected_model(
     authorization: dict[str, Any],
     *,
@@ -262,46 +350,15 @@ def bind_execution_authorization_to_selected_model(
     actual_binding = f"google/{execution_model or worker_gemini_model}"
     chain = [str(model).strip() for model in model_chain if str(model).strip()]
     selected_in_chain = bool(execution_model and execution_model in chain)
-    provider_model_match = (
-        response_model_matches(execution_model, provider_model)
-        if provider_model
-        else None
+    provider_model_match = response_model_matches(execution_model, provider_model) if provider_model else None
+    by_model, by_binding = _authorization_indexes(authorization)
+    selected = _selected_execution_authorization(
+        authorization,
+        execution_model=execution_model,
+        actual_binding=actual_binding,
+        by_model=by_model,
+        by_binding=by_binding,
     )
-    by_model = (
-        authorization.get("execution_authorizations_by_model")
-        if isinstance(authorization.get("execution_authorizations_by_model"), dict)
-        else {}
-    )
-    by_binding = (
-        authorization.get("execution_authorizations_by_binding")
-        if isinstance(
-            authorization.get("execution_authorizations_by_binding"), dict
-        )
-        else {}
-    )
-    selected = by_model.get(execution_model)
-    if not isinstance(selected, dict):
-        selected = by_binding.get(actual_binding)
-    if isinstance(selected, dict):
-        selected_binding = str(selected.get("binding") or "").strip()
-        selected_model = str(selected.get("model") or "").strip()
-        binding_mismatch = selected_binding != actual_binding
-        model_mismatch = selected_model != execution_model
-        if binding_mismatch or model_mismatch:
-            selected = None
-    if not isinstance(selected, dict):
-        base_binding = str(authorization.get("binding") or "").strip()
-        base_model = str(
-            authorization.get("selected_model")
-            or authorization.get("model")
-            or ""
-        ).strip()
-        selected = (
-            authorization
-            if base_binding == actual_binding and base_model == execution_model
-            else None
-        )
-
     snapshot_match = bool(
         isinstance(selected, dict)
         and isinstance(selected.get("execution_authorization_at_run"), dict)
@@ -309,51 +366,19 @@ def bind_execution_authorization_to_selected_model(
         and selected_in_chain
         and provider_model_match is not False
     )
-    if snapshot_match:
-        exact = dict(selected)
-    else:
-        exact = {
-            "binding": actual_binding,
-            "model": execution_model or worker_gemini_model,
-            "execution_class": str(
-                authorization.get("execution_class") or worker_execution_class
-            ),
-            "authorization_scope": "unverified",
-            "evaluation_only": False,
-            "production_authorized": False,
-            "claim_status": "descriptive_only",
-            "model_readiness_status": "not_production_ready",
-            "execution_authorization_at_run": {
-                "scope": "execution_time_snapshot",
-                "authorized": False,
-                "production_authorized": False,
-                "evaluation_only": False,
-                "status": "authorization_not_recorded",
-                "source": "not_recorded",
-                "temporary": False,
-            },
-            "signed_readiness_at_run": {
-                "scope": "execution_time_snapshot",
-                "production_ready": False,
-                "status": "not_production_ready",
-                "claim_status": "descriptive_only",
-                "evidence_source": "not_recorded",
-            },
-        }
-    requested_chain = [
-        str(model).strip()
-        for model in authorization.get("requested_model_chain", [])
-        if str(model).strip()
-    ] if isinstance(authorization.get("requested_model_chain"), list) else []
-    if not requested_chain:
-        requested_chain = list(chain)
-    ready_chain = [
-        str(model).strip()
-        for model in authorization.get("ready_model_chain", [])
-        if str(model).strip()
-    ] if isinstance(authorization.get("ready_model_chain"), list) else []
-    if not ready_chain:
-        ready_chain = list(chain)
+    exact = (
+        dict(selected)
+        if snapshot_match
+        else _unverified_execution_authorization(
+            authorization,
+            actual_binding=actual_binding,
+            execution_model=execution_model,
+            worker_execution_class=worker_execution_class,
+            worker_gemini_model=worker_gemini_model,
+        )
+    )
+    requested_chain = _authorization_chain(authorization, "requested_model_chain", chain)
+    ready_chain = _authorization_chain(authorization, "ready_model_chain", chain)
     return {
         **exact,
         "binding": actual_binding,

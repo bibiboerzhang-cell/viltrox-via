@@ -56,33 +56,62 @@ def _dashboard_official_matrix_summary(limit: int = 20) -> dict[str, Any]:
     }
 
 
-def _dashboard_recent_official_content(limit: int) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+def _official_matrix_post(
+    post: dict[str, Any],
+    account: dict[str, Any],
+    platform: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "content_kind": "official",
+        "title": post.get("title") or "官方内容",
+        "url": post.get("url") or post.get("canonical_url") or "",
+        "platform": post.get("platform") or account.get("platform") or platform.get("platform") or "",
+        "account_handle": account.get("handle") or "",
+        "account_display_name": account.get("display_name") or account.get("handle") or "",
+        "posted_at": post.get("posted_at") or post.get("published_at") or "",
+        "views": _dashboard_int(post.get("views") or post.get("total_views") or post.get("play_count")),
+        "likes": _dashboard_int(post.get("likes") or post.get("like_count")),
+        "comments": _dashboard_int(post.get("comments") or post.get("comment_count")),
+        "shares": _dashboard_int(post.get("shares") or post.get("share_count")),
+        "media_type": post.get("content_type") or post.get("media_type") or post.get("media_kind") or "",
+        "thumbnail_url": post.get("thumbnail_url") or post.get("thumbnail") or post.get("media_url") or "",
+        "source_table": "vkpi_employee_channel_metrics",
+        "source_id": post.get("canonical_post_uid") or post.get("provider_post_id") or post.get("id") or post.get("url") or "",
+    }
 
+
+def _official_matrix_rows(matrix: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for platform in matrix.get("platforms") or []:
+        for account in platform.get("accounts") or []:
+            for post in account.get("posts") or []:
+                rows.append(_official_matrix_post(post, account, platform))
+    return rows
+
+
+def _official_scan_post(post: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "content_kind": "official",
+        "title": post.get("title") or "官方内容",
+        "url": post.get("post_url") or "",
+        "platform": post.get("platform") or "",
+        "account_handle": post.get("handle") or "",
+        "account_display_name": post.get("name") or post.get("handle") or "",
+        "posted_at": post.get("published_at") or "",
+        "views": int(post.get("views") or 0),
+        "likes": int(post.get("likes") or 0),
+        "comments": int(post.get("comments") or 0),
+        "shares": int(post.get("shares") or 0),
+        "media_type": post.get("content_type") or "",
+        "source_table": "viltrox_matrix_scan_posts",
+        "source_id": post.get("post_url") or f"{post.get('account_id')}:{post.get('published_at')}",
+    }
+
+
+def _dashboard_recent_official_content(limit: int) -> list[dict[str, Any]]:
     try:
         matrix = channels.official_account_matrix(limit=limit)
-        for platform in matrix.get("platforms") or []:
-            for account in platform.get("accounts") or []:
-                for post in account.get("posts") or []:
-                    rows.append(
-                        {
-                            "content_kind": "official",
-                            "title": post.get("title") or "官方内容",
-                            "url": post.get("url") or post.get("canonical_url") or "",
-                            "platform": post.get("platform") or account.get("platform") or platform.get("platform") or "",
-                            "account_handle": account.get("handle") or "",
-                            "account_display_name": account.get("display_name") or account.get("handle") or "",
-                            "posted_at": post.get("posted_at") or post.get("published_at") or "",
-                            "views": _dashboard_int(post.get("views") or post.get("total_views") or post.get("play_count")),
-                            "likes": _dashboard_int(post.get("likes") or post.get("like_count")),
-                            "comments": _dashboard_int(post.get("comments") or post.get("comment_count")),
-                            "shares": _dashboard_int(post.get("shares") or post.get("share_count")),
-                            "media_type": post.get("content_type") or post.get("media_type") or post.get("media_kind") or "",
-                            "thumbnail_url": post.get("thumbnail_url") or post.get("thumbnail") or post.get("media_url") or "",
-                            "source_table": "vkpi_employee_channel_metrics",
-                            "source_id": post.get("canonical_post_uid") or post.get("provider_post_id") or post.get("id") or post.get("url") or "",
-                        }
-                    )
+        rows = _official_matrix_rows(matrix)
     except Exception:
         rows = []
 
@@ -93,24 +122,7 @@ def _dashboard_recent_official_content(limit: int) -> list[dict[str, Any]]:
 
     bundle = get_latest_viltrox_scan_bundle()
     for post in bundle.get("posts") or []:
-        rows.append(
-            {
-                "content_kind": "official",
-                "title": post.get("title") or "官方内容",
-                "url": post.get("post_url") or "",
-                "platform": post.get("platform") or "",
-                "account_handle": post.get("handle") or "",
-                "account_display_name": post.get("name") or post.get("handle") or "",
-                "posted_at": post.get("published_at") or "",
-                "views": int(post.get("views") or 0),
-                "likes": int(post.get("likes") or 0),
-                "comments": int(post.get("comments") or 0),
-                "shares": int(post.get("shares") or 0),
-                "media_type": post.get("content_type") or "",
-                "source_table": "viltrox_matrix_scan_posts",
-                "source_id": post.get("post_url") or f"{post.get('account_id')}:{post.get('published_at')}",
-            }
-        )
+        rows.append(_official_scan_post(post))
     return sorted(rows, key=_recent_content_sort_key, reverse=True)[:limit]
 
 

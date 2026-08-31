@@ -295,8 +295,72 @@ def _kol_row(conn: Any, kol_pool_id: int) -> dict[str, Any] | None:
 
 
 # ── 只读：该 KOL 全部视频的 final_v1 Gemini 深析(主依据) ────────────
+def _canonical_video_cache_decision(data: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return canonical_final_v1_cache_reuse(
+            data, target_type="video",
+            target_id=str(data.get("evidence_id") or data.get("target_id") or ""),
+            derive_method=VIDEO_DERIVE_METHOD,
+        )
+    except Exception:
+        logger.warning("vkpi.content_fit.video_cache_classifier_failed", exc_info=True)
+        return {"reusable": False, "cache_id": data.get("id"), "reasons": ["canonical_classifier_failed"]}
 
 
+def _project_video_analysis(data: dict[str, Any]) -> dict[str, Any] | None:
+    result = _loads(data.get("result")) or {}
+    if not isinstance(result, dict):
+        return None
+    layer1 = result.get("layer1_visual_content") or {}
+    layer2 = result.get("layer2_viewer_emotion") or {}
+    layer3 = result.get("layer3_three_values") or {}
+    layer5 = result.get("layer5_recommendations") or {}
+    layer6 = result.get("layer6_flags_and_scores") or {}
+    raw = result.get("raw_gemini_video") or {}
+    scene_timeline = layer1.get("scene_timeline") if isinstance(layer1, dict) else None
+    scenes = []
+    if isinstance(scene_timeline, list):
+        for scene in scene_timeline[:6]:
+            if isinstance(scene, dict):
+                scenes.append({
+                    "timestamp": _text(scene.get("timestamp"), 16),
+                    "what": _text(scene.get("what"), 200),
+                    "why_it_matters": _text(scene.get("why_it_matters"), 200),
+                })
+    scores = layer6.get("scores") if isinstance(layer6, dict) else None
+    return {
+        "evidence_id": data.get("evidence_id"), "title": _text(data.get("title"), 200),
+        "content_url": _text(data.get("content_url"), 300), "platform": _text(data.get("platform"), 40),
+        "view_count": data.get("view_count"),
+        "content_summary": _text((layer1 or {}).get("content_summary"), 600),
+        "brand_exposure": _text((layer1 or {}).get("brand_exposure"), 300),
+        "product_presence": _text((layer1 or {}).get("product_presence"), 300),
+        "competitor_presence": _text((layer1 or {}).get("competitor_presence"), 300),
+        "scene_timeline": scenes,
+        "viewer_reaction": _text((layer2 or {}).get("one_sentence_viewer_reaction"), 300),
+        "first_three_seconds": _text((layer2 or {}).get("first_three_seconds_feeling"), 300),
+        "three_values": layer3 if isinstance(layer3, dict) else {},
+        "scores": scores if isinstance(scores, dict) else {},
+        "key_hook": _text((layer6 or {}).get("key_hook"), 200),
+        "risk_flags": _text((layer6 or {}).get("risk_flags"), 200),
+        "final_verdict": _text((layer6 or {}).get("final_verdict"), 400),
+        "cooperation_recommendation": _text((layer5 or {}).get("cooperation_recommendation"), 400),
+        "content_genre": _text((raw or {}).get("content_genre"), 120), "content_topic": _text((raw or {}).get("content_topic"), 200),
+        "target_audience": _text((raw or {}).get("target_audience"), 300),
+        "viltrox_detected": bool((raw or {}).get("viltrox_detected")),
+        "viltrox_products_all": (raw or {}).get("viltrox_products_all") or [],
+        "competitor_mentions": (raw or {}).get("competitor_mentions") or [],
+    }
+def _legacy_video_cache_gate(legacy: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "status": "legacy_unverified",
+        "revalidation_required": True,
+        "claim_status": "descriptive_only",
+        "reasons": list(dict.fromkeys(
+            reason for item in legacy for reason in (item.get("reasons") or [])
+        )),
+        "cache_ids": [item.get("cache_id") for item in legacy if item.get("cache_id") is not None],
+    }
 def _video_analyses(conn: Any, kol_pool_id: int, *, limit: int = MAX_VIDEOS) -> list[dict[str, Any]]:
     """只读并返回全体 canonical final_v1；任一 legacy ready 行即整体拒绝。"""
     rows = conn.execute(
@@ -323,89 +387,24 @@ def _video_analyses(conn: Any, kol_pool_id: int, *, limit: int = MAX_VIDEOS) -> 
         (VIDEO_DERIVE_METHOD, int(kol_pool_id)),
     ).fetchall()
     analyses = _VideoAnalyses()
-    analyses.cache_gate = {
-        "status": "canonical", "revalidation_required": False,
+    analyses.cache_gate = {"status": "canonical", "revalidation_required": False,
         "claim_status": "descriptive_only", "reasons": [],
     }
     legacy: list[dict[str, Any]] = []
     for row in rows:
         data = dict(row)
-        try:
-            decision = canonical_final_v1_cache_reuse(
-                data,
-                target_type="video",
-                target_id=str(data.get("evidence_id") or data.get("target_id") or ""),
-                derive_method=VIDEO_DERIVE_METHOD,
-            )
-        except Exception:
-            logger.warning("vkpi.content_fit.video_cache_classifier_failed", exc_info=True)
-            decision = {"reusable": False, "cache_id": data.get("id"),
-                        "reasons": ["canonical_classifier_failed"]}
+        decision = _canonical_video_cache_decision(data)
         if not decision.get("reusable"):
             legacy.append(dict(decision))
             continue
         if len(analyses) >= int(limit):
             continue
-        result = _loads(data.get("result")) or {}
-        if not isinstance(result, dict):
-            continue
-        layer1 = result.get("layer1_visual_content") or {}
-        layer2 = result.get("layer2_viewer_emotion") or {}
-        layer3 = result.get("layer3_three_values") or {}
-        layer5 = result.get("layer5_recommendations") or {}
-        layer6 = result.get("layer6_flags_and_scores") or {}
-        raw = result.get("raw_gemini_video") or {}
-        scene_timeline = layer1.get("scene_timeline") if isinstance(layer1, dict) else None
-        scenes = []
-        if isinstance(scene_timeline, list):
-            for sc in scene_timeline[:6]:
-                if isinstance(sc, dict):
-                    scenes.append(
-                        {
-                            "timestamp": _text(sc.get("timestamp"), 16),
-                            "what": _text(sc.get("what"), 200),
-                            "why_it_matters": _text(sc.get("why_it_matters"), 200),
-                        }
-                    )
-        scores = layer6.get("scores") if isinstance(layer6, dict) else None
-        analyses.append(
-            {
-                "evidence_id": data.get("evidence_id"),
-                "title": _text(data.get("title"), 200),
-                "content_url": _text(data.get("content_url"), 300),
-                "platform": _text(data.get("platform"), 40),
-                "view_count": data.get("view_count"),
-                "content_summary": _text((layer1 or {}).get("content_summary"), 600),
-                "brand_exposure": _text((layer1 or {}).get("brand_exposure"), 300),
-                "product_presence": _text((layer1 or {}).get("product_presence"), 300),
-                "competitor_presence": _text((layer1 or {}).get("competitor_presence"), 300),
-                "scene_timeline": scenes,
-                "viewer_reaction": _text((layer2 or {}).get("one_sentence_viewer_reaction"), 300),
-                "first_three_seconds": _text((layer2 or {}).get("first_three_seconds_feeling"), 300),
-                "three_values": layer3 if isinstance(layer3, dict) else {},
-                "scores": scores if isinstance(scores, dict) else {},
-                "key_hook": _text((layer6 or {}).get("key_hook"), 200),
-                "risk_flags": _text((layer6 or {}).get("risk_flags"), 200),
-                "final_verdict": _text((layer6 or {}).get("final_verdict"), 400),
-                "cooperation_recommendation": _text((layer5 or {}).get("cooperation_recommendation"), 400),
-                "content_genre": _text((raw or {}).get("content_genre"), 120),
-                "content_topic": _text((raw or {}).get("content_topic"), 200),
-                "target_audience": _text((raw or {}).get("target_audience"), 300),
-                "viltrox_detected": bool((raw or {}).get("viltrox_detected")),
-                "viltrox_products_all": (raw or {}).get("viltrox_products_all") or [],
-                "competitor_mentions": (raw or {}).get("competitor_mentions") or [],
-            }
-        )
+        projected = _project_video_analysis(data)
+        if projected is not None:
+            analyses.append(projected)
     if legacy:
         analyses.clear()
-        analyses.cache_gate = {
-            "status": "legacy_unverified", "revalidation_required": True,
-            "claim_status": "descriptive_only",
-            "reasons": list(dict.fromkeys(
-                reason for item in legacy for reason in (item.get("reasons") or [])
-            )),
-            "cache_ids": [item.get("cache_id") for item in legacy if item.get("cache_id") is not None],
-        }
+        analyses.cache_gate = _legacy_video_cache_gate(legacy)
     return analyses
 
 

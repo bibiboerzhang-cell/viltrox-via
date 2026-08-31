@@ -139,16 +139,19 @@ def _reward_trace_source(body: dict[str, Any], payload: dict[str, Any], current_
     }
 
 
-def _build_retrieval_evidence(
-    *,
-    retrieval_execution: dict[str, Any],
-    retrieval_policy: dict[str, Any],
-    vector_refs: list[dict[str, Any]],
-    bundle_memory_refs: list[dict[str, Any]],
-) -> dict[str, Any]:
-    vector_scores = [float(item.get("score") or item.get("weight") or 0.0) for item in vector_refs]
-    bundle_sources = [str(item.get("source_ref") or "") for item in bundle_memory_refs if str(item.get("source_ref") or "")]
-    vector_sources = [str(item.get("source_ref") or "") for item in vector_refs if str(item.get("source_ref") or "")]
+def _retrieval_source_summary(
+    vector_refs: list[dict[str, Any]], bundle_memory_refs: list[dict[str, Any]]
+) -> tuple[list[str], list[str], list[str]]:
+    bundle_sources = [
+        str(item.get("source_ref") or "")
+        for item in bundle_memory_refs
+        if str(item.get("source_ref") or "")
+    ]
+    vector_sources = [
+        str(item.get("source_ref") or "")
+        for item in vector_refs
+        if str(item.get("source_ref") or "")
+    ]
     selected_sources: list[str] = []
     if bundle_sources:
         selected_sources.append("bundle_memory")
@@ -156,11 +159,13 @@ def _build_retrieval_evidence(
         selected_sources.append("vector_memory")
     if any(source.startswith("seed:") for source in bundle_sources + vector_sources):
         selected_sources.append("seed_knowledge")
-    candidate_sources = list(dict.fromkeys(list(retrieval_execution.get("fallback_order") or retrieval_policy.get("fallback_order") or ["bundle_memory", "vector_memory", "seed_knowledge"])))
-    avg_score = sum(vector_scores) / len(vector_scores) if vector_scores else 0.0
-    top_score = max(vector_scores) if vector_scores else 0.0
-    spread = (max(vector_scores) - min(vector_scores)) if len(vector_scores) > 1 else 0.0
-    rerank_summary = {
+    return bundle_sources, vector_sources, selected_sources
+
+
+def _retrieval_rerank_summary(
+    vector_refs: list[dict[str, Any]], vector_sources: list[str]
+) -> dict[str, Any]:
+    return {
         "top_refs": [
             {
                 "source_ref": str(item.get("source_ref") or ""),
@@ -172,9 +177,31 @@ def _build_retrieval_evidence(
         "vector_source_mix": {
             "seed": sum(1 for source in vector_sources if source.startswith("seed:")),
             "conversation": sum(1 for source in vector_sources if source.startswith("via-vector:")),
-            "memory": sum(1 for source in vector_sources if source and not source.startswith(("seed:", "via-vector:"))),
+            "memory": sum(
+                1
+                for source in vector_sources
+                if source and not source.startswith(("seed:", "via-vector:"))
+            ),
         },
     }
+
+
+def _build_retrieval_evidence(
+    *,
+    retrieval_execution: dict[str, Any],
+    retrieval_policy: dict[str, Any],
+    vector_refs: list[dict[str, Any]],
+    bundle_memory_refs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    vector_scores = [float(item.get("score") or item.get("weight") or 0.0) for item in vector_refs]
+    bundle_sources, vector_sources, selected_sources = _retrieval_source_summary(
+        vector_refs, bundle_memory_refs
+    )
+    candidate_sources = list(dict.fromkeys(list(retrieval_execution.get("fallback_order") or retrieval_policy.get("fallback_order") or ["bundle_memory", "vector_memory", "seed_knowledge"])))
+    avg_score = sum(vector_scores) / len(vector_scores) if vector_scores else 0.0
+    top_score = max(vector_scores) if vector_scores else 0.0
+    spread = (max(vector_scores) - min(vector_scores)) if len(vector_scores) > 1 else 0.0
+    rerank_summary = _retrieval_rerank_summary(vector_refs, vector_sources)
     return {
         "candidate_sources": candidate_sources,
         "selected_sources": selected_sources,

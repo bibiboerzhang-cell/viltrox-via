@@ -33,6 +33,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.domains.kol.focal_matrix_projection import (
+    build_coverage_blocks,
+    build_focal_cells,
+    build_line_cells,
+    matched_products_block,
+)
 
 logger = get_logger(__name__)
 
@@ -617,51 +623,21 @@ def focal_matrix(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
     creator_context = _creator_context(pool, videos)
 
     # ── 矩阵格子:目录焦段(covered / gap)+ 目录外但 KOL 拍过的焦段 ──
-    focal_cells: list[dict[str, Any]] = []
-    all_focals = sorted(set(catalog["focals"]) | set(focal_hits), key=_focal_sort_mm)
-    for focal in all_focals:
-        cat = catalog["focals"].get(focal)
-        hit = focal_hits.get(focal)
-        cell: dict[str, Any] = {
-            "focal": focal,
-            "mm": _focal_sort_mm(focal),
-            "in_catalog": bool(cat),
-            "covered": bool(hit),
-            "video_count": hit["video_count"] if hit else 0,
-            "avg_views": _avg(hit["views"]) if hit else None,
-            "title_hits": hit["title_hits"] if hit else 0,
-            "deep_hits": hit["deep_hits"] if hit else 0,
-            "top_example": hit["top"] if hit else None,
-        }
-        if cat:
-            cell["catalog"] = {
-                "sku_count": cat["sku_count"],
-                "official_sku_count": cat["official_sku_count"],
-                "value_usd": round(cat["value_usd"], 2),
-                "max_price_usd": cat["max_price_usd"],
-                "flagship": cat["flagship"] or None,
-                "series": sorted(cat["series"]),
-                "lines": sorted(_LINE_LABEL.get(ln, ln) for ln in cat["lines"]),
-            }
-        focal_cells.append(cell)
+    focal_cells = build_focal_cells(
+        catalog["focals"],
+        focal_hits,
+        focal_sort_mm=_focal_sort_mm,
+        average=_avg,
+        line_labels=_LINE_LABEL,
+    )
 
     # ── 产品线格子:目录有的线 covered / gap ──
-    line_cells: list[dict[str, Any]] = []
-    for key, label, _terms in PRODUCT_LINES:
-        cat_entry = catalog["lines"].get(key)
-        hit = line_hits.get(key)
-        if not cat_entry and not hit:
-            continue  # 目录没有、KOL 也没拍:不渲染幽灵线
-        line_cells.append({
-            "key": key,
-            "label": label,
-            "in_catalog": bool(cat_entry),
-            "catalog_sku_count": cat_entry["sku_count"] if cat_entry else 0,
-            "covered": bool(hit),
-            "video_count": hit["video_count"] if hit else 0,
-            "avg_views": _avg(hit["views"]) if hit else None,
-            "example_title": (hit["example"] or None) if hit else None,
-        })
+    line_cells = build_line_cells(
+        PRODUCT_LINES,
+        catalog["lines"],
+        line_hits,
+        average=_avg,
+    )
 
     # ── gaps:目录焦段空白 + 机身/卡口/创作类型/价格带/系列多样性后的具体产品 ──
     gap_focals = {
@@ -689,70 +665,19 @@ def focal_matrix(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
     line_gaps = [c for c in line_cells if c["in_catalog"] and not c["covered"]]
 
     covered_focals = [c for c in focal_cells if c["covered"]]
-    if not videos:
-        covered_block: dict[str, Any] = {
-            "status": "empty",
-            "reason": "该 KOL 暂无有效视频证据(vkpi_kol_video_evidence 空/全 inactive),焦段覆盖无从统计。",
-        }
-        gaps_block: dict[str, Any] = {
-            "status": "empty",
-            "reason": "没有任何视频证据时全目录皆是空白,排序无意义 — 先补充 evidence 再看可切入焦段。",
-            "items": [],
-            "recommendations": [],
-            "creator_context": creator_context,
-            "catalog_gap_count": len(gap_focals),
-            "recommendation_status": "insufficient_evidence",
-        }
-    elif not covered_focals:
-        covered_block = {
-            "status": "empty",
-            "reason": f"扫了 {len(videos)} 条视频(标题+深析文本),没提到任何具体焦段 — 词表/正则不硬猜。",
-        }
-        gaps_block = {
-            "status": "ready",
-            "items": catalog_gap_items,
-            "recommendations": recommendations,
-            "product_lines": line_gaps,
-            "creator_context": creator_context,
-            "catalog_gap_count": len(gap_focals),
-            "ranking_method": "mount_content_price_series_v2",
-            "recommendation_status": "ready" if recommendations else "insufficient_evidence" if gap_focals else "not_applicable",
-            **({
-                "recommendation_reason": "存在目录焦段空白,但机身/卡口/常用镜头证据不足或冲突;不生成伪 Top1。"
-            } if gap_focals and not recommendations else {}),
-        }
-    else:
-        covered_block = {
-            "status": "ready",
-            "focal_count": len(covered_focals),
-            "zoom_mentions": [
-                {"range_mm": k, "video_count": v}
-                for k, v in sorted(zoom_mentions.items(), key=lambda kv: kv[1], reverse=True)
-            ][:6],
-        }
-        gaps_block = {
-            "status": "ready",
-            "items": catalog_gap_items,
-            "recommendations": recommendations,
-            "product_lines": line_gaps,
-            "creator_context": creator_context,
-            "catalog_gap_count": len(gap_focals),
-            "ranking_method": "mount_content_price_series_v2",
-            "recommendation_status": "ready" if recommendations else "insufficient_evidence" if gap_focals else "not_applicable",
-            **({
-                "recommendation_reason": "存在目录焦段空白,但机身/卡口/常用镜头证据不足或冲突;不生成伪 Top1。"
-            } if gap_focals and not recommendations else {}),
-        }
+    covered_block, gaps_block = build_coverage_blocks(
+        videos=videos,
+        covered_focals=covered_focals,
+        zoom_mentions=zoom_mentions,
+        catalog_gap_items=catalog_gap_items,
+        recommendations=recommendations,
+        line_gaps=line_gaps,
+        creator_context=creator_context,
+        gap_focals=gap_focals,
+    )
 
     matched_items = _match_families(videos, catalog["families"]) if videos else []
-    matched_block: dict[str, Any] = (
-        {"status": "ready", "items": matched_items}
-        if matched_items
-        else {
-            "status": "empty",
-            "reason": "视频文本里没同时命中「焦段+系列/光圈+Viltrox 语境」,不硬贴我方 SKU。",
-        }
-    )
+    matched_block = matched_products_block(matched_items)
 
     return {
         "status": "ready",

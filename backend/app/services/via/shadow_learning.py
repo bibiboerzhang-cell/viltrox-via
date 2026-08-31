@@ -6,6 +6,11 @@ from __future__ import annotations
 from typing import Any
 
 from app.services.via.model_router import preview_via_routes
+from app.services.via.shadow_learning_model_choice import (
+    select_shadow_model_choice,
+    shadow_model_choice_changed,
+    shadow_provider_preferences,
+)
 
 
 def evaluate_shadow_retrieval_plan(
@@ -74,20 +79,14 @@ def evaluate_shadow_model_choice(
         return {}
     dialogue = dict(model_plan.get("dialogue") or {})
     execution_mode = str(shadow_policy.get("execution_mode") or "").strip() or "single_preferred"
-    providers = [str(item).strip().lower() for item in list(shadow_policy.get("providers") or []) if str(item).strip()]
-    if not providers:
-        providers = [
-            item.strip().lower()
-            for item in str(dialogue.get("consulted_providers") or "").split(",")
-            if item.strip()
-        ]
+    providers = shadow_provider_preferences(shadow_policy, dialogue)
     preview = preview_via_routes("dialogue", preferred_override=providers or None, limit=max(1, len(providers) or 1))
-    shadow_primary = dict(preview[0] or {}) if preview else {}
-    shadow_provider = str(shadow_primary.get("provider") or dialogue.get("primary_provider") or "")
-    shadow_model = str(shadow_primary.get("model") or dialogue.get("primary_model") or "")
-    shadow_strategy = "collab" if execution_mode in {"collab_preferred", "bandit_explore"} and len(preview) > 1 else "single"
-    if route_info.get("use_deep_reasoning") and execution_mode == "single_preferred":
-        shadow_strategy = "collab"
+    shadow_provider, shadow_model, shadow_strategy = select_shadow_model_choice(
+        preview,
+        dialogue,
+        execution_mode=execution_mode,
+        use_deep_reasoning=bool(route_info.get("use_deep_reasoning")),
+    )
     return {
         "target": "model_choice",
         "policy_key": str(shadow_policy.get("policy_key") or live_policy.get("policy_key") or ""),
@@ -102,10 +101,11 @@ def evaluate_shadow_model_choice(
         "execution_mode": execution_mode,
         "exploration_ratio": float(shadow_policy.get("exploration_ratio") or 0.0),
         "shadow_routes": preview,
-        "would_change": bool(
-            shadow_strategy != str(dialogue.get("mode") or "single")
-            or shadow_provider != str(dialogue.get("primary_provider") or "")
-            or shadow_model != str(dialogue.get("primary_model") or "")
+        "would_change": shadow_model_choice_changed(
+            dialogue,
+            shadow_provider=shadow_provider,
+            shadow_model=shadow_model,
+            shadow_strategy=shadow_strategy,
         ),
     }
 

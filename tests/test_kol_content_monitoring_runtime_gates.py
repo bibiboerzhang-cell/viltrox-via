@@ -258,5 +258,5 @@ def test_scheduler_callback_is_default_off_and_provider_free(
 
 
 def test_worker_contact_followup_is_explicitly_suppressed_for_monitor_jobs() -> None:
-    source = (ROOT / "backend/app/workers/apify_jobs_worker_handlers.py").read_text()
-    assert 'payload.get("suppress_contact_followup") is not True' in source
+    source = (ROOT / "backend/app/workers/apify_jobs_worker_deep_crawl.py").read_text()
+    assert 'if payload.get("suppress_contact_followup") is True:' in source

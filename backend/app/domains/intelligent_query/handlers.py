@@ -91,16 +91,12 @@ def _product_topic_terms(conn: Any, topic: str) -> list[str]:
     return terms[:9]
 
 
-def kol_video_topic_count(
+def _video_topic_preflight_failure(
     conn: Any,
     request: NormalizedRequest,
-    staff: dict[str, Any] | None,
-    *,
-    now: datetime,
-) -> dict[str, Any]:
-    scope_context = actual_scope_context(request, staff)
-    response = empty_response(request, intent="kol.video_topic.count", scope=scope_context)
-    topic = extract_video_topic(request.query, request.filters)
+    response: dict[str, Any],
+    topic: str,
+) -> dict[str, Any] | None:
     if not topic:
         response.update(
             {
@@ -125,14 +121,26 @@ def kol_video_topic_count(
         ]
         response["coverage"].update(
             status="unknown",
-            notes=[_localized(request, "缺少主题，未执行 SQL 查询。", "No topic; no SQL executed.")],
+            notes=[
+                _localized(
+                    request,
+                    "缺少主题，未执行 SQL 查询。",
+                    "No topic; no SQL executed.",
+                )
+            ],
         )
         return response
-    if not table_present(conn, "vkpi_kol_video_evidence") or not table_present(conn, "vkpi_kol_pool"):
+    if not table_present(conn, "vkpi_kol_video_evidence") or not table_present(
+        conn, "vkpi_kol_pool"
+    ):
         response.update(
             {
                 "status": "error",
-                "answer": "Video evidence data is unavailable." if _is_en(request) else "视频证据数据源不可用。",
+                "answer": (
+                    "Video evidence data is unavailable."
+                    if _is_en(request)
+                    else "视频证据数据源不可用。"
+                ),
                 "degraded_reason": "video_evidence_source_unavailable",
             }
         )
@@ -147,8 +155,17 @@ def kol_video_topic_count(
             )
         ]
         return response
+    return None
 
-    ecols = table_columns(conn, "vkpi_kol_video_evidence")
+
+def _video_topic_query_parts(
+    conn: Any,
+    request: NormalizedRequest,
+    staff: dict[str, Any] | None,
+    response: dict[str, Any],
+    topic: str,
+    evidence_columns: set[str],
+) -> tuple[list[str], list[Any], list[dict[str, Any]], list[str]] | None:
     clauses, params, missing = pool_predicates(conn, request, staff, alias="p")
     unavailable_filters = [
         item for item in missing if str(item.get("field") or "").startswith("filters.")
@@ -167,16 +184,22 @@ def kol_video_topic_count(
         )
         response["missing_fields"] = unavailable_filters
         response["coverage"].update(status="unknown")
-        return response
-    if "is_active" in ecols:
+        return None
+    if "is_active" in evidence_columns:
         clauses.append("e.is_active IS NOT FALSE")
     terms = _product_topic_terms(conn, topic)
-    searchable_columns = [column for column in ("video_title", "title") if column in ecols]
+    searchable_columns = [
+        column for column in ("video_title", "title") if column in evidence_columns
+    ]
     if not searchable_columns:
         response.update(
             {
                 "status": "error",
-                "answer": "Video title fields are unavailable." if _is_en(request) else "视频标题字段不可用。",
+                "answer": (
+                    "Video title fields are unavailable."
+                    if _is_en(request)
+                    else "视频标题字段不可用。"
+                ),
                 "degraded_reason": "video_title_fields_unavailable",
             }
         )
@@ -190,19 +213,15 @@ def kol_video_topic_count(
                 "topic matching cannot be verified",
             )
         ]
-        return response
-    # Keep this expression aligned with the proposed trigram functional index.
-    # NULL and empty legacy fields both fall through to the second title field.
+        return None
     title_search_expr = (
         "LOWER(COALESCE(e.video_title, '') || ' ' || COALESCE(e.title, ''))"
-        if {"video_title", "title"}.issubset(ecols)
+        if {"video_title", "title"}.issubset(evidence_columns)
         else f"LOWER(COALESCE(e.{searchable_columns[0]}, ''))"
     )
     topic_clauses: list[str] = []
     topic_params: list[Any] = []
     for term in terms:
-        # Percent/underscore are normalized away instead of being allowed to
-        # turn user text into LIKE wildcards.
         safe_term = " ".join(term.replace("%", " ").replace("_", " ").split())
         if not safe_term:
             continue
@@ -211,12 +230,40 @@ def kol_video_topic_count(
     if not topic_clauses:
         response.update(
             status="needs_clarification",
-            answer=_localized(request, "主题过于宽泛，请补充具体产品或内容关键词。", "Topic is too broad to search."),
+            answer=_localized(
+                request,
+                "主题过于宽泛，请补充具体产品或内容关键词。",
+                "Topic is too broad to search.",
+            ),
             degraded_reason="topic_not_searchable",
         )
-        return response
+        return None
     clauses.append("(" + " OR ".join(topic_clauses) + ")")
     params.extend(topic_params)
+    return clauses, params, missing, searchable_columns
+
+
+def kol_video_topic_count(
+    conn: Any,
+    request: NormalizedRequest,
+    staff: dict[str, Any] | None,
+    *,
+    now: datetime,
+) -> dict[str, Any]:
+    scope_context = actual_scope_context(request, staff)
+    response = empty_response(request, intent="kol.video_topic.count", scope=scope_context)
+    topic = extract_video_topic(request.query, request.filters)
+    failure = _video_topic_preflight_failure(conn, request, response, topic)
+    if failure is not None:
+        return failure
+
+    ecols = table_columns(conn, "vkpi_kol_video_evidence")
+    query_parts = _video_topic_query_parts(
+        conn, request, staff, response, topic, ecols,
+    )
+    if query_parts is None:
+        return response
+    clauses, params, missing, searchable_columns = query_parts
 
     deep_join = ""
     analyzed_expr = "NULL"

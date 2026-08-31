@@ -37,6 +37,7 @@ from app.services.scoring.creator import update_creator_profile
 from app.services.scoring.benchmark import update_genre_benchmark
 from app.services.ai.clients.gemini_client import GEMINI_AVAILABLE
 from app.services.ai.clients.claude_client import ANTHROPIC_AVAILABLE
+from app.workers.tasks.analyze_detection import apply_ai_detection_overrides
 
 logger = get_logger(__name__)
 
@@ -131,21 +132,12 @@ async def process_full_audit(job) -> Dict[str, Any]:
         gear_mentions = detect_gear_mentions(full_text)
         brand = detect_viltrox(full_text, {})
 
-        # Override with AI results
-        if vr.get("viltrox_detected"):
-            conf_map = {"high": "confirmed", "medium": "confirmed", "low": "suspected"}
-            forced_status = conf_map.get(vr.get("confidence", "low"), "suspected")
-            if brand["status"] != "confirmed":
-                brand["status"] = forced_status
-                brand["confirmed"] = (forced_status == "confirmed")
-            brand["evidence"] = list(set(brand["evidence"] + vr.get("brand_elements", [])))
-
-        if vr.get("products_detected") and product_match["confidence"] == "none":
-            for pd in vr["products_detected"]:
-                pm2 = classify_product(pd)
-                if pm2["confidence"] != "none":
-                    product_match = pm2
-                    break
+        product_match, brand = apply_ai_detection_overrides(
+            vr,
+            product_match,
+            brand,
+            classify_product=classify_product,
+        )
 
         comment_spam = analyze_comments_for_spam(scraped.get("visible_comments", []))
         risk = compute_risk(metrics, metrics_available, comment_spam)
