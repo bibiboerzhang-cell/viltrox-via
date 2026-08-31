@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 import json
+import math
 from typing import Any, Dict, List, Optional
 
 from app.core.constants import VILTROX_BRAND_KEYWORDS, PRODUCT_RULES, CAMERA_KEYWORDS, LENS_KEYWORDS, SPAM_COMMENT_KEYWORDS
