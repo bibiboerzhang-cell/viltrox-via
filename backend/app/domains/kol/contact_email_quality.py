@@ -61,7 +61,20 @@ EVIDENCE_SOURCE_TYPE = "email_quality_check"
 EMAIL_CONTACT_TYPES = ("email", "business_email")
 
 # 占位域名:出现即拒(reason=placeholder_domain)。子域一并命中(如 mail.example.com)。
-PLACEHOLDER_DOMAINS = frozenset({"example.com", "example.org", "example.net", "test.com"})
+PLACEHOLDER_DOMAINS = frozenset({
+    "example.com", "example.org", "example.net", "test.com",
+    # 2026-08-31 页面腿实测:文档/模板站的通用示例地址(example@domain.com)。
+    "domain.com", "yourdomain.com", "email.com", "yoursite.com", "mysite.com",
+})
+
+# 平台自身域名:页面抓取时抓到的是平台客服/条款邮箱,不是这位 KOL 的联系方式。
+# 2026-08-31 页面腿首批 50 个实测:18 个新邮箱里 3 个是这类(boosty.to/throne.com/
+# patreon.com),按「不是本人邮箱」拒收,与占位域名同级。
+PLATFORM_DOMAINS = frozenset({
+    "patreon.com", "boosty.to", "throne.com", "ko-fi.com", "buymeacoffee.com",
+    "linktr.ee", "beacons.ai", "stan.store", "gumroad.com", "substack.com",
+    "shopify.com", "wixsite.com", "squarespace.com", "sellfy.com", "redbubble.com",
+})
 
 # 角色邮箱(noreply 家族):标记 role=True 但不拒 —— 仲裁时垫到非角色之后。
 _ROLE_SQUASHED_PREFIXES = ("noreply", "donotreply")
@@ -112,6 +125,11 @@ def _is_placeholder_domain(domain: str) -> bool:
     return any(domain == d or domain.endswith("." + d) for d in PLACEHOLDER_DOMAINS)
 
 
+def _is_platform_domain(domain: str) -> bool:
+    """页面抓取抓到的平台客服/条款邮箱——不是这位 KOL 的联系方式,与占位域名同级拒收。"""
+    return any(domain == d or domain.endswith("." + d) for d in PLATFORM_DOMAINS)
+
+
 def _local_ok(local: str) -> bool:
     return 0 < len(local) <= 64 and bool(_LOCAL_RE.match(local))
 
@@ -146,6 +164,8 @@ def _syntax_reason(value: str) -> tuple[str, str]:
         return cleaned, "bad_domain"
     if _is_placeholder_domain(domain):
         return cleaned, "placeholder_domain"
+    if _is_platform_domain(domain):
+        return cleaned, "platform_domain"
     if not _valid_email(cleaned):
         # 复用既有闸:占位邮箱名单 / CDN 后缀 / 假 TLD(@提及式假命中)
         return cleaned, "bad_tld_or_placeholder"

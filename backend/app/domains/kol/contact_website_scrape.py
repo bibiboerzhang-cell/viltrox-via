@@ -76,11 +76,28 @@ def _fetch(url: str, *, timeout: int = 6) -> str:
         _FETCH_STATE["last_at"] = time.monotonic()
 
 
+def _decode_short_unicode_escapes(text: str) -> str:
+    """把残留的 \\uXXXX(含丢了反斜杠的 uXXXX)解成真字符,避免 > < 等被吞进 local 部分。"""
+    import re as _re
+
+    def _sub(match: "_re.Match[str]") -> str:
+        try:
+            return chr(int(match.group(1), 16))
+        except ValueError:
+            return match.group(0)
+
+    return _re.sub(r"\\?u00([0-9a-fA-F]{2})", _sub, text)
+
+
 def _normalize_page_text(html: str) -> str:
     """Linktree/beacons/carrd 类聚合页把邮箱埋在内嵌 JSON(\\u0040、\\/ 转义)或
     HTML 实体(&#64;)里;先做最小解转义再跑正则。零 JS 渲染,不改抓取逻辑。"""
     if "\\/" in html or "\\u00" in html:
         html = html.replace("\\/", "/").replace("\\u0040", "@").replace("\\u002e", ".").replace("\\u002E", ".")
+    # 2026-08-31 实测:内嵌 JSON 里 \u003e(>)等残留会被正则当成 local 部分前缀
+    # (u003eguidelines@patreon.com)。统一按 \uXXXX 解码,不只解 @ 和 .。
+    if "\\u00" in html or "u003" in html:
+        html = _decode_short_unicode_escapes(html)
     if "&" in html:
         html = _html_unescape(html)
     return html
@@ -154,6 +171,28 @@ def _gemini_extract_stub(html: str) -> list[dict[str, Any]]:
     return []
 
 
+def _filter_quality(found: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    """写库前过质检:占位/平台/畸形域名的邮箱一律不入表(2026-08-31 首批 50 个实测,
+    18 个新邮箱里 4 个是这类污染)。非邮箱联系方式原样放行。拒收项返回供台账留痕。"""
+    from app.domains.kol.contact_email_quality import validate_email_syntax
+
+    kept: list[dict[str, Any]] = []
+    rejected: list[dict[str, str]] = []
+    for item in found:
+        if str(item.get("contact_type") or "") != "email":
+            kept.append(item)
+            continue
+        verdict = validate_email_syntax(str(item.get("contact_value") or ""))
+        if verdict.get("ok"):
+            kept.append(item)
+        else:
+            rejected.append({
+                "value": str(item.get("contact_value") or ""),
+                "reason": str(verdict.get("reason") or "invalid"),
+            })
+    return kept, rejected
+
+
 def enrich_website_contacts_l1(kol_pool_id: int, *, conn: Any = None, allow_url: Any = None) -> dict[str, Any]:
     """L1:取该 KOL 已抽到的 website/link_hub 外链 -> 抓取 -> 落 vkpi_kol_pool_contacts + 回填 email。
     仅对已有外链的 KOL 生效(先跑 L0 抽外链)。有网络成本,按需/批量调。红线不触 fit。
@@ -179,6 +218,12 @@ def enrich_website_contacts_l1(kol_pool_id: int, *, conn: Any = None, allow_url:
         found += scrape_contacts_from_url(link)
     if not found:
         return {"status": "no_contacts_from_web", "kol_pool_id": int(kol_pool_id), "links_tried": len(links[:3])}
+    found, rejected = _filter_quality(found)
+    if not found:
+        return {
+            "status": "no_contacts_from_web", "kol_pool_id": int(kol_pool_id),
+            "links_tried": len(links[:3]), "quality_rejected": rejected,
+        }
     for c in found:
         db.execute(
             """

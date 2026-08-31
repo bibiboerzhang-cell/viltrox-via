@@ -180,3 +180,30 @@ def test_batch_hard_cap_is_100():
 ])
 def test_is_link_hub(url, is_hub):
     assert cws._is_link_hub(url) is is_hub
+
+
+def test_quality_filter_blocks_platform_and_placeholder_before_write():
+    """页面腿写库前必过质检——2026-08-31 首批 50 个实测:37 条 website_declared 邮箱里
+    10 条是平台客服/占位/转义残留污染(support@boosty.to、u003eguidelines@patreon.com、
+    example@domain.com…)。质检层与页面腿同日造出却没接线,污染直入外联可用池。"""
+    from app.domains.kol.contact_website_scrape import _filter_quality
+
+    found = [
+        {"contact_type": "email", "contact_value": "josh@joshsattin.com"},
+        {"contact_type": "email", "contact_value": "support@boosty.to"},
+        {"contact_type": "email", "contact_value": "u003eguidelines@patreon.com"},
+        {"contact_type": "email", "contact_value": "example@domain.com"},
+        {"contact_type": "website", "contact_value": "https://joshsattin.com"},
+    ]
+    kept, rejected = _filter_quality(found)
+    assert [k["contact_value"] for k in kept] == ["josh@joshsattin.com", "https://joshsattin.com"]
+    assert {r["reason"] for r in rejected} == {"platform_domain", "placeholder_domain"}
+    assert len(rejected) == 3
+
+
+def test_short_unicode_escapes_decoded_not_swallowed_into_local_part():
+    """内嵌 JSON 的 \\u003e(>)残留曾被正则吞成 local 前缀(u003eguidelines@…)。"""
+    from app.domains.kol.contact_website_scrape import _normalize_page_text
+
+    assert "@" in _normalize_page_text("x u003eguidelines@patreon.com")
+    assert "u003e" not in _normalize_page_text("x u003eguidelines@patreon.com")
