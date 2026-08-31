@@ -6,10 +6,12 @@
 from __future__ import annotations
 
 import re
+import time
 import urllib.request
+from html import unescape as _html_unescape
 from typing import Any
 
-from app.domains.kol.business_contact_extract import _valid_email, _SOCIAL_HOSTS
+from app.domains.kol.business_contact_extract import _LINK_HUBS, _valid_email, _SOCIAL_HOSTS
 
 _MAILTO_RE = re.compile(r"mailto:([^\"'?\s>]+)", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -21,13 +23,44 @@ _DENY_HOST_SUBSTR = (
     "youtube.com", "youtu.be", "facebook.com", "twitter.com", "x.com", "amazon.", "shopee.",
 )
 _UA = {"User-Agent": "Mozilla/5.0 (compatible; ViltroxContactEnrich/1.0)"}
+# 批跑器速率闸 + 抓取错误台账(供批跑器区分 超时/连接失败 与 页面确实无邮箱)。
+_FETCH_STATE: dict[str, float] = {"min_interval": 0.0, "last_at": 0.0}
+_FETCH_ERRORS: list[str] = []
+_FETCH_ERRORS_CAP = 200
+
+
+def set_fetch_throttle(seconds: float) -> None:
+    """全局抓取节流:两次 _fetch 之间至少间隔 seconds 秒(批跑器用,默认 0=不节流)。"""
+    _FETCH_STATE["min_interval"] = max(0.0, float(seconds))
+
+
+def pop_fetch_errors() -> list[str]:
+    """取走并清空自上次调用以来累计的抓取错误(`异常类型: 摘要 @url` 格式)。"""
+    errs = list(_FETCH_ERRORS)
+    _FETCH_ERRORS.clear()
+    return errs
 
 
 def _host(url: str) -> str:
     return url.lower().split("//", 1)[-1].split("/", 1)[0]
 
 
+def _is_link_hub(host: str) -> bool:
+    h = (host or "").removeprefix("www.")
+    return any(h == hub or h.endswith("." + hub) for hub in _LINK_HUBS)
+
+
+def _throttle_wait() -> None:
+    gap = float(_FETCH_STATE["min_interval"])
+    if gap <= 0:
+        return
+    wait = _FETCH_STATE["last_at"] + gap - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+
+
 def _fetch(url: str, *, timeout: int = 6) -> str:
+    _throttle_wait()
     try:
         req = urllib.request.Request(url, headers=_UA)
         with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 (公开页只读)
@@ -35,11 +68,26 @@ def _fetch(url: str, *, timeout: int = 6) -> str:
             if "html" not in ctype.lower() and "text" not in ctype.lower():
                 return ""
             return r.read(500_000).decode("utf-8", errors="ignore")
-    except Exception:
+    except Exception as exc:  # 不吞:登记错误台账供上层分类(超时/HTTP 4xx/连接失败)
+        if len(_FETCH_ERRORS) < _FETCH_ERRORS_CAP:
+            _FETCH_ERRORS.append(f"{type(exc).__name__}: {str(exc)[:120]} @{url[:160]}")
         return ""
+    finally:
+        _FETCH_STATE["last_at"] = time.monotonic()
+
+
+def _normalize_page_text(html: str) -> str:
+    """Linktree/beacons/carrd 类聚合页把邮箱埋在内嵌 JSON(\\u0040、\\/ 转义)或
+    HTML 实体(&#64;)里;先做最小解转义再跑正则。零 JS 渲染,不改抓取逻辑。"""
+    if "\\/" in html or "\\u00" in html:
+        html = html.replace("\\/", "/").replace("\\u0040", "@").replace("\\u002e", ".").replace("\\u002E", ".")
+    if "&" in html:
+        html = _html_unescape(html)
+    return html
 
 
 def _extract_from_html(html: str, source_url: str) -> list[dict[str, Any]]:
+    html = _normalize_page_text(html)
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
 
@@ -79,10 +127,11 @@ def scrape_contacts_from_url(url: str, *, max_pages: int = 4, timeout: int = 6) 
         return []
     base = "https://" + host
     pages = [url]
-    for sp in _SUBPAGES:
-        if len(pages) >= max_pages:
-            break
-        pages.append(base + sp)
+    if not _is_link_hub(host):  # 聚合页(Linktree 类)是单页档案,/contact 子页属平台自己,不爬
+        for sp in _SUBPAGES:
+            if len(pages) >= max_pages:
+                break
+            pages.append(base + sp)
     results: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for p in pages[:max_pages]:
@@ -105,9 +154,10 @@ def _gemini_extract_stub(html: str) -> list[dict[str, Any]]:
     return []
 
 
-def enrich_website_contacts_l1(kol_pool_id: int, *, conn: Any = None) -> dict[str, Any]:
+def enrich_website_contacts_l1(kol_pool_id: int, *, conn: Any = None, allow_url: Any = None) -> dict[str, Any]:
     """L1:取该 KOL 已抽到的 website/link_hub 外链 -> 抓取 -> 落 vkpi_kol_pool_contacts + 回填 email。
-    仅对已有外链的 KOL 生效(先跑 L0 抽外链)。有网络成本,按需/批量调。红线不触 fit。"""
+    仅对已有外链的 KOL 生效(先跑 L0 抽外链)。有网络成本,按需/批量调。红线不触 fit。
+    allow_url: 可选谓词(url)->bool,批跑器用来做 robots.txt 预检;返回 False 的链接跳过。"""
     import json
     from datetime import datetime, timezone
 
@@ -124,6 +174,8 @@ def enrich_website_contacts_l1(kol_pool_id: int, *, conn: Any = None) -> dict[st
     now = datetime.now(timezone.utc).isoformat()
     found: list[dict[str, Any]] = []
     for link in links[:3]:
+        if allow_url is not None and not allow_url(link):
+            continue
         found += scrape_contacts_from_url(link)
     if not found:
         return {"status": "no_contacts_from_web", "kol_pool_id": int(kol_pool_id), "links_tried": len(links[:3])}
