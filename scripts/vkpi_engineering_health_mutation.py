@@ -568,12 +568,12 @@ def run_fresh_mutation(
         kept_tests, excluded_tests = prune_uncollectable_tests(
             workspace, env, interpreter, list(plan["test_selection"])
         )
-        if excluded_tests:  # 诚实剔除:重写 setup.cfg 并把清单留进回执
-            config_hashes = build_workspace(
-                root, workspace,
-                workspace_targets=[to_workspace_relative(t) for t in targets],
-                test_selection=kept_tests,
+        if excluded_tests:  # 诚实剔除:只重写 setup.cfg(工作区已建,copytree 不可重入)
+            setup_cfg = render_setup_cfg(
+                [to_workspace_relative(t) for t in targets], kept_tests
             )
+            (workspace / "setup.cfg").write_text(setup_cfg, encoding="utf-8")
+            config_hashes["setup_cfg_sha256"] = _sha256(setup_cfg.encode("utf-8"))
         run = run_mutmut(workspace, env, interpreter)
         run["collection_excluded_tests"] = excluded_tests
         per_file, statuses = collect_results(workspace, targets, matches)
