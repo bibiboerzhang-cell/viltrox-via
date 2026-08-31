@@ -235,7 +235,9 @@ def _validate_score(
     results: dict[str, Any], recomputed: dict[str, int]
 ) -> tuple[float, int]:
     killed_pool = recomputed["killed"] + recomputed["timeout"]
-    denominator = killed_pool + recomputed["survived"] + recomputed["no_tests"]
+    # 合同 core-mutation-v1:killed/(killed+survived),no_tests 不入公式
+    # (与 mutation.py score_from_totals 同源对齐,2026-08-31 公式修正)。
+    denominator = killed_pool + recomputed["survived"]
     if denominator <= 0:
         raise MutationReceiptError("mutation score denominator must be positive")
     if results.get("scored_mutants") != denominator:
