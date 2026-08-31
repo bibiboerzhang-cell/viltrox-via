@@ -92,28 +92,37 @@ export function KolPoolPanel({ apiToken, onListPool, onGetItem, onGetIntelligenc
     setDetailLoading(true);
     setIntelligenceLoading(Boolean(onGetIntelligenceCard));
     setError('');
+    // M7(a):档案主体与情报卡是两条互不依赖的只读投影(情报卡只吃 item.id,不读主体返回值)。
+    // 原来是 await 主体 → 再 await 情报卡,抽屉首屏 = 两个 RTT 之和;改并行后 = 两者最大值。
+    // allSettled:任一路失败都不吞掉另一路的结果(主体失败照旧报错,情报卡失败照旧走诚实降级卡)。
+    // try/finally 原样保留:回调若同步抛(不返回 promise),loading 态也必须落回,否则抽屉转圈不停。
     try {
-      if (onGetItem) {
-        const result = await onGetItem(item.id);
-        if (result.item) {
+      const [itemResult, cardResult] = await Promise.allSettled([
+        onGetItem ? onGetItem(item.id) : Promise.resolve(null),
+        onGetIntelligenceCard ? onGetIntelligenceCard(item.id) : Promise.resolve(null),
+      ]);
+      if (itemResult.status === 'fulfilled') {
+        const result = itemResult.value;
+        if (result?.item) {
           setSelectedItem({
             ...result.item,
             freshness: result.freshness || result.refresh?.freshness,
             refresh: result.refresh,
           });
         }
-        if (result.refresh) {
+        if (result?.refresh) {
           setMessage(refreshStateLabel(result.refresh));
         }
+      } else {
+        setError((itemResult.reason as Error)?.message || '详情加载失败');
       }
       if (onGetIntelligenceCard) {
-        try {
-          const card = await onGetIntelligenceCard(item.id);
-          setIntelligenceCard(card);
-        } catch (cardError) {
+        if (cardResult.status === 'fulfilled') {
+          setIntelligenceCard(cardResult.value as KolPoolIntelligenceCard);
+        } else {
           setIntelligenceCard({
             decision_support: { readiness: 'partial', gaps: ['intelligence_card_unavailable'] },
-            dimensions11: { status: 'unavailable', error: (cardError as Error).message || '读取失败' },
+            dimensions11: { status: 'unavailable', error: (cardResult.reason as Error)?.message || '读取失败' },
           });
         }
       }

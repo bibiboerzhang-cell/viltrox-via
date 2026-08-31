@@ -24,6 +24,7 @@ vi.mock("../../../../services/http", async (importOriginal) => {
   return { ...actual, apiFetch: (...args: unknown[]) => apiFetchMock(...args) };
 });
 
+import { clearApiCache } from "../../../../lib/apiCache";
 import { KolProfileBoardPage } from "./KolProfileBoardPage";
 
 const ITEM = {
@@ -242,6 +243,10 @@ const renderBoard = (props: Record<string, unknown> = {}) =>
 beforeEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
+  // M7(c):详情只读投影(llm-deep-analysis / intelligence-card / competitors …)进了
+  // lib/apiCache 的 45s 内存缓存。本套用例共用 apiToken="t" + kol 101,不清缓存的话
+  // 下一条用例会吃到上一条的响应(比如「深析 0 记录」读到上一条的 DEEP_OK)。
+  clearApiCache();
   routeApi();
 });
 

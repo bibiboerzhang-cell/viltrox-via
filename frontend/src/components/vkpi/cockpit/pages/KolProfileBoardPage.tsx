@@ -276,6 +276,13 @@ export function KolProfileBoardPage({
 
   const enabled = Boolean(apiToken) && kolId > 0;
   const bundleDeps: React.DependencyList = [apiToken, kolId, reloadTick, enabled];
+  // M7(c):详情读缓存 45s(lib/apiCache)。手动刷新(reloadTick 递增)必须绕开读缓存,
+  // 否则刷新按钮在缓存窗内变成空点 —— 记住「已取过哪一号 tick」,只让新 tick 强制取新。
+  const loadedTickRef = React.useRef(0);
+  const forceRefresh = reloadTick !== loadedTickRef.current;
+  React.useEffect(() => {
+    loadedTickRef.current = reloadTick;
+  }, [reloadTick]);
 
   /* ---------- 六路 page 层加载(signature/audience/coop 时间线在 embeds 自取) ---------- */
   const bundleRequestRef = React.useRef<{
@@ -287,14 +294,16 @@ export function KolProfileBoardPage({
   const loadBundle = React.useCallback(() => {
     const cached = bundleRequestRef.current;
     if (cached && cached.token === apiToken && cached.kolId === kolId && cached.reloadTick === reloadTick) return cached.promise;
-    const promise = getKolPoolDetailBundle(apiToken, kolId);
+    // 本页不轮询 detail-bundle(只在换 KOL / 手动刷新时取),所以显式开 45s 读缓存:
+    // 抽屉 ↔ 档案页来回、板块重挂不再重发这条最重的聚合读。
+    const promise = getKolPoolDetailBundle(apiToken, kolId, { cacheTtlMs: 45_000, forceRefresh });
     bundleRequestRef.current = { token: apiToken, kolId, reloadTick, promise };
     const clear = () => {
       if (bundleRequestRef.current?.promise === promise) bundleRequestRef.current = null;
     };
     void promise.then(clear, clear);
     return promise;
-  }, [apiToken, kolId, reloadTick]);
+  }, [apiToken, kolId, reloadTick, forceRefresh]);
   const bundle = useRemote<VkpiKolPoolDetailBundleResponse>(enabled, loadBundle, bundleDeps);
   const bundleItemId = positiveIntegerId((bundle.data?.item as unknown as Row | undefined)?.id);
   const bundleResponseId = positiveIntegerId(bundle.data?.kol_pool_id);
@@ -325,8 +334,21 @@ export function KolProfileBoardPage({
   }, [bundle.error, bundle.status, clearPendingId, enabled, kolId, profileReady]);
 
   const cooperation = useRemote<Row>(profileReady, () => getKolCooperation(apiToken, kolId) as Promise<Row>, detailDeps);
-  const deep = useRemote<Row>(profileReady, () => getKolPoolLlmDeepAnalysis(apiToken, kolId, 20) as unknown as Promise<Row>, detailDeps);
-  const card = useRemote<Row>(profileReady, () => getKolPoolIntelligenceCard(apiToken, kolId) as unknown as Promise<Row>, detailDeps);
+  // M7(b) 未做,是刻意的:deep / card / kpiSeries 的入参确实只有 (apiToken, kolId),不读
+  // bundle 的返回内容 —— 但它们挂在 profileReady 上不是搭便车,而是「档案主体=唯一身份闸门」
+  // 这条既有契约(见上方注释),且有具名回归锁看着:smoke 用例「不存在的数字 ID 只失败一次:
+  // 不扇出模块请求」逐条断言坏 ID 下 /llm-deep-analysis、/intelligence-card、/board-series
+  // 都不许发。改成 enabled 会当场撞红。要打平这层瀑布得先动那条契约,不是本刀能单方面决定的。
+  const deep = useRemote<Row>(
+    profileReady,
+    () => getKolPoolLlmDeepAnalysis(apiToken, kolId, 20, { forceRefresh }) as unknown as Promise<Row>,
+    detailDeps,
+  );
+  const card = useRemote<Row>(
+    profileReady,
+    () => getKolPoolIntelligenceCard(apiToken, kolId, true, { forceRefresh }) as unknown as Promise<Row>,
+    detailDeps,
+  );
   const credit = useRemote<{ source: string; data: Row }>(
     profileReady,
     async () => {
@@ -334,7 +356,7 @@ export function KolProfileBoardPage({
         return { source: "competing-activity", data: (await getKolCompetingActivity(apiToken, kolId)) as Row };
       } catch {
         // 主源不可用 → 兜底已落库品牌关系(卡内如实标注兜底口径)
-        return { source: "competitors", data: (await getKolPoolCompetitors(apiToken, kolId)) as Row };
+        return { source: "competitors", data: (await getKolPoolCompetitors(apiToken, kolId, { forceRefresh })) as Row };
       }
     },
     detailDeps,
