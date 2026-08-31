@@ -10,6 +10,12 @@ from __future__ import annotations
 from typing import Any
 
 from app.domains.kol.profile_recall_orchestration_contract import RecallRequest
+from app.domains.kol.profile_recall_observability import (
+    elapsed_ms as _elapsed_ms,
+    recall_stage_timing as _recall_stage_timing,
+    register_embedding_call as _register_embedding_call,
+)
+
 
 def _prepare_context(request: RecallRequest, deps: Any) -> dict[str, Any]:
     resolved_text, query_meta = deps.resolve_query_text(
@@ -65,6 +71,12 @@ def _retrieve_candidates(
     pool_text_fallback_count = 0
     lexical_candidate_count = 0
     recall_degraded = ""
+    # 检索段占本地腿 93-94%,但此前整段只有一个 retrieve_ms 总数,拆不出到底是
+    # embedding、向量检索、词法还是兜底在吃时间——先装秤,再谈优化。
+    # 键名带 retrieve_ 前缀且值恒为数字:两个持久化白名单(会话摘要的
+    # stage_timing 只收 float、诊断块原样透传)都能原样接住,不用改别人的投影。
+    breakdown: dict[str, float] = {}
+    retrieve_started = deps.perf_counter()
     if request.provider_free:
         embedding_meta: dict[str, Any] = {"recall_mode": "provider_free_pool_text"}
         hits = deps._pool_text_fallback_hits(
@@ -74,19 +86,33 @@ def _retrieve_candidates(
             operator_query_text=request.operator_query_text,
             filters=request.retrieval_filters,
         )
+        breakdown["retrieve_pool_text_ms"] = _elapsed_ms(retrieve_started, deps)
         pool_text_fallback_count = len(hits)
         lexical_candidate_count = sum(
             1 for hit in hits if hit.retrieval_method == deps.LEXICAL_METHOD
         )
     else:
         lexical_hits = _lexical_hits(request, resolved_text, deps)
+        breakdown["retrieve_lexical_ms"] = _elapsed_ms(retrieve_started, deps)
         lexical_candidate_count = len(lexical_hits)
+        embed_started = deps.perf_counter()
         try:
             query_vector, embedding_meta = deps._embed_query(resolved_text)
+            breakdown["retrieve_embed_ms"] = _elapsed_ms(embed_started, deps)
+            _register_embedding_call(
+                query_text=resolved_text,
+                embedding_meta=embedding_meta,
+                latency_ms=breakdown["retrieve_embed_ms"],
+                status="success",
+                deps=deps,
+            )
+            vector_started = deps.perf_counter()
             vector_hits = deps._search_qdrant(
                 query_vector,
                 request.safe_candidate_limit,
             )
+            breakdown["retrieve_vector_search_ms"] = _elapsed_ms(vector_started, deps)
+            fuse_started = deps.perf_counter()
             hits = deps._hybrid_fuse_hits(
                 vector_hits,
                 lexical_hits,
@@ -96,8 +122,21 @@ def _retrieve_candidates(
                     request.operator_query_text,
                 ),
             )
+            breakdown["retrieve_fuse_ms"] = _elapsed_ms(fuse_started, deps)
         except Exception as exc:  # noqa: BLE001 - public recall degrades honestly.
             recall_degraded = deps._support.classify_recall_failure(exc)
+            # 只有 embedding 这一步自己炸了才补一行失败调用记录;向量检索/融合
+            # 炸掉时 embedding 已经成功登记过,不许重复登。
+            if "retrieve_embed_ms" not in breakdown:
+                breakdown["retrieve_embed_ms"] = _elapsed_ms(embed_started, deps)
+                _register_embedding_call(
+                    query_text=resolved_text,
+                    embedding_meta={},
+                    latency_ms=breakdown["retrieve_embed_ms"],
+                    status="provider_exception",
+                    failure_reason=recall_degraded,
+                    deps=deps,
+                )
             deps.logger.warning(
                 "recall_degraded reason=%s",
                 recall_degraded,
@@ -106,17 +145,21 @@ def _retrieve_candidates(
             embedding_meta = {}
             hits = lexical_hits
 
+    floor_started = deps.perf_counter()
     hits, fallback_count = _ensure_recall_floor(
         request,
         resolved_text,
         hits,
         deps,
     )
+    breakdown["retrieve_recall_floor_ms"] = _elapsed_ms(floor_started, deps)
     if fallback_count:
         pool_text_fallback_count = fallback_count
     hits = hits[: request.safe_candidate_limit]
     retrieved_hit_count = len(hits)
+    exclusion_started = deps.perf_counter()
     hits, favorite_exclusion = deps._favorite_exclusion.exclude_favorited_hits(hits)
+    breakdown["retrieve_favorite_exclusion_ms"] = _elapsed_ms(exclusion_started, deps)
     return {
         "hits": hits,
         "retrieved_hit_count": retrieved_hit_count,
@@ -126,6 +169,7 @@ def _retrieve_candidates(
         "lexical_candidate_count": lexical_candidate_count,
         "recall_degraded": recall_degraded,
         "embedding_meta": embedding_meta,
+        "stage_timing": breakdown,
     }
 
 
@@ -677,45 +721,16 @@ def _build_response(
 def _finalize_smart_local(
     response: dict[str, Any],
     request: RecallRequest,
-    context: dict[str, Any],
-    retrieval: dict[str, Any],
-    hydration: dict[str, Any],
-    ranking: dict[str, Any],
     selection: dict[str, Any],
+    timing: dict[str, float],
     deps: Any,
 ) -> dict[str, Any]:
     local_qualification = selection["local_qualification"]
     if local_qualification is None:
         deps._favorite_exclusion.annotate_shortfall(response["diagnostics"])
         return response
-    completed_at = deps.perf_counter()
-    total_ms = round((completed_at - request.recall_started) * 1000.0, 3)
-    local_qualification["stage_timing"].update(
-        {
-            "resolve_query_ms": round(
-                (context["resolved_at"] - request.recall_started) * 1000.0,
-                3,
-            ),
-            "retrieve_ms": round(
-                (retrieval["retrieved_at"] - context["resolved_at"]) * 1000.0,
-                3,
-            ),
-            "load_evidence_ms": round(
-                (hydration["evidence_loaded_at"] - retrieval["retrieved_at"]) * 1000.0,
-                3,
-            ),
-            "evidence_gate_ms": round(
-                (ranking["gated_at"] - hydration["evidence_loaded_at"]) * 1000.0,
-                3,
-            ),
-            "rank_and_select_ms": round(
-                (completed_at - ranking["gated_at"]) * 1000.0,
-                3,
-            ),
-            "total_ms": total_ms,
-        }
-    )
-    local_qualification["total_ms"] = total_ms
+    local_qualification["stage_timing"].update(timing)
+    local_qualification["total_ms"] = timing["total_ms"]
     response["local_qualification"] = local_qualification
     items = selection["items"]
     response["match_status"] = "matched" if items else "empty"
@@ -770,13 +785,9 @@ def run_recall_pipeline(request: RecallRequest, *, deps: Any) -> dict[str, Any]:
         metrics,
         deps,
     )
-    return _finalize_smart_local(
-        response,
-        request,
-        context,
-        retrieval,
-        hydration,
-        ranking,
-        selection,
-        deps,
-    )
+    # 秤放在 smart-local 收尾**之前**算,并且无条件挂进诊断块:非 smart 车道
+    # 没有 local_qualification 这个容器,诊断块是它唯一的落点,而诊断块是原样
+    # 透传进会话摘要的,所以「这次搜索每段花了多久」从此每条车道都查得到。
+    timing = _recall_stage_timing(request, context, retrieval, hydration, ranking, deps)
+    response["diagnostics"]["stage_timing"] = timing
+    return _finalize_smart_local(response, request, selection, timing, deps)

@@ -479,7 +479,9 @@ def _safe_llm_query_plan(value: Any) -> dict[str, Any]:
     for name in ("include_new_discovery", "fallback_used", "provider_calls_performed"):
         if isinstance(raw.get(name), bool):
             output[name] = raw[name]
-    for name in ("reason", "provider", "model", "persona_source"):
+    # plan_cache:规划器唯一的缓存留痕(命中 7 天缓存置 "hit",未命中不带此键)。
+    # 此前不在白名单里被整个丢掉,「plan 缓存命中过几次」在会话历史里答不出来。
+    for name in ("reason", "provider", "model", "persona_source", "plan_cache"):
         code = _safe_plan_code(raw.get(name))
         if code:
             output[name] = code

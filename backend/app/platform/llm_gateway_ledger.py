@@ -10,7 +10,10 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.core.logging import get_logger
 from app.platform.llm_gateway_model_alias import resolve_model_alias
+
+_logger = get_logger(__name__)
 
 
 def _gateway_module() -> Any:
@@ -311,6 +314,82 @@ def record_call(
     if cost_ledger_error:
         result["cost_ledger_error"] = cost_ledger_error
     return result
+
+
+EMBEDDING_CALL_KIND = "embedding"
+
+
+def record_embedding_call(
+    *,
+    provider: str,
+    model: str,
+    purpose: str,
+    latency_ms: float = 0.0,
+    input_tokens: int = 0,
+    cost_usd: float = 0.0,
+    status: str = "success",
+    prompt: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """把一次 embedding 调用登进 ``vkpi_llm_calls``(此前完全盲区)。
+
+    为什么单开一个入口而不是让调用方直接用 ``record_call``:
+
+    * **绝不重复记账**。embedding 的调用点(``profile_recall._embed_query``)已经
+      自己 ``budget_guard.record_cost`` 过一次。这里恒定 ``cost_tag=None`` +
+      ``update_budget_scopes=False``,``_should_write_cost_ledger`` 因此永远为
+      False —— 只补一行调用记录,一分钱都不会被算第二遍。
+    * **金额不许被整数列吃掉**。``cost_micro_usd`` 是 bigint,而一次查询向量约
+      4.4e-7 USD,四舍五入进 micro 就是 0。精确金额同时写进
+      ``metadata_json.cost_usd``,否则「embedding 一共花了多少」永远查不出来。
+    * **观测绝不反过来炸主流程**。任何异常都吞掉并返回 ``recorded=False``。
+
+    ``prompt`` 只用于算 sha256 指纹(``record_call`` 内),原文不落库。
+    """
+    try:
+        exact_latency = round(float(latency_ms or 0.0), 3)
+    except (TypeError, ValueError):
+        exact_latency = 0.0
+    try:
+        exact_cost = float(cost_usd or 0.0)
+    except (TypeError, ValueError):
+        exact_cost = 0.0
+    payload = {
+        **(metadata if isinstance(metadata, dict) else {}),
+        "call_kind": EMBEDDING_CALL_KIND,
+        # latency_ms 这个键名是 ``_latency_ms_param`` 读的列口径(整数毫秒);
+        # 亚毫秒精度另存 latency_ms_exact,两边都不丢。
+        "latency_ms": int(round(exact_latency)),
+        "latency_ms_exact": exact_latency,
+        "cost_usd": exact_cost,
+    }
+    try:
+        result = record_call(
+            provider=provider or "unknown",
+            model=model or "",
+            purpose=purpose or "",
+            prompt=prompt or "",
+            input_tokens=int(input_tokens or 0),
+            output_tokens=0,
+            cost_micro_usd=int(round(exact_cost * 1_000_000)),
+            status=status or "success",
+            fallback_used=False,
+            cost_tag=None,
+            update_budget_scopes=False,
+            metadata=payload,
+        )
+    except Exception as exc:  # noqa: BLE001 - 可见性辅助绝不反过来炸调用方
+        summary = _summarize_exception(exc)
+        # 用本模块自己的 logger,不绕道 _gateway_module():台账已经出事了,
+        # 再去做一次 import 只会给「记录失败」这条路径多加一个失败点。
+        _logger.warning(
+            "vkpi.llm_gateway.embedding_call_ledger_failed | purpose=%s | %s",
+            purpose,
+            summary,
+            exc_info=True,
+        )
+        return {"recorded": False, "error": summary}
+    return {"recorded": True, **result}
 
 
 _CACHE_HIT_NEEDLE = '"cache_hit": true'

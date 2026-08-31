@@ -735,7 +735,11 @@ def invoke(
 
 # Provider HTTP adapters moved to llm_gateway_providers (behavior-unchanged extraction).
 # Re-export at bottom so the shared helpers above are defined before the sibling imports them.
-from app.platform.llm_gateway_ledger import llm_degrade_rate, record_call  # noqa: E402
+from app.platform.llm_gateway_ledger import (  # noqa: E402
+    llm_degrade_rate,
+    record_call,
+    record_embedding_call,
+)
 from app.platform.llm_gateway_facade import chat, score, stats  # noqa: E402
 from app.platform.llm_gateway_providers import (  # noqa: E402
     _PROVIDER_CALLERS,
