@@ -7,8 +7,10 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn
 from app.services.cache import cache_get
-from app.platform.industry_crawlers import get_crawler
-from app.domains.industry.snapshot_kpis import calculate_kpis
+# 产品-行业侧适配器集中在 pool_industry_adapters(门面保名 re-export;见该文件文档)。
+from app.domains.kol.pool_industry_adapters import (
+    ScoringRegistry, calculate_kpis, ensure_vkpi_product_industry_schema, get_crawler,
+)
 from app.domains.kol.pool_common import (
     CONTACT_VISIBILITY_MASKED,
     ENRICHABLE_PLATFORMS,
@@ -46,8 +48,6 @@ from app.domains.kol.pool_common import (
     _utcnow,
 )
 from app.domains.kol.pool_main_linking import main_candidates, promote_to_main
-from app.platform.db.schema_product_industry import ensure_vkpi_product_industry_schema
-from app.domains.scoring import ScoringRegistry
 from app.domains.projects.workflow import staff_id as resolve_staff_id
 
 # Read-side detail/video projections moved to pool_detail.py (behavior-preserving).
@@ -621,14 +621,16 @@ def detail_bundle(
 ) -> dict[str, Any]:
     """Return the read-only detail drawer bundle without provider or worker side effects."""
 
-    from app.domains.analysis.cache_repo import get_analysis_cache_entries_for_targets
-    from app.domains.kol.analysis_readiness import (
-        build_analysis_readiness,
-        evidence_quality_projection,
-        load_readiness_video_evidence,
+    # 每个 reader 在调用时才 from-import 源模块,后期绑定与原逐个 lazy import 等价。
+    from app.domains.kol.pool_detail_sources import (
+        analysis_cache_reader, audience_language_reader, creator_gear_helpers,
+        dimensions_reader, llm_deep_reader, readiness_helpers,
     )
-    from app.domains.kol.eleven_dimensions import load_persisted_dimensions_11
-    from app.domains.kol.llm_deep_analysis import get_kol_llm_deep_analysis
+
+    get_analysis_cache_entries_for_targets = analysis_cache_reader()
+    build_analysis_readiness, evidence_quality_projection, load_readiness_video_evidence = readiness_helpers()
+    load_persisted_dimensions_11 = dimensions_reader()
+    get_kol_llm_deep_analysis = llm_deep_reader()
 
     safe_video_limit = max(1, min(200, int(video_limit or 3)))
     safe_llm_limit = max(1, min(50, int(llm_limit or 20)))
@@ -716,8 +718,8 @@ def detail_bundle(
             video["analysis_cache_state"] = analysis_states[evidence_id]
     try:
         import json as _gear_json
-        from app.domains.kol.creator_gear import aggregate_creator_gear
 
+        aggregate_creator_gear, gear_from_text = creator_gear_helpers()
         _gear_results: list[dict[str, Any]] = []
         for _a in analysis_items:
             _fe = _a.get("final_entry")
@@ -734,8 +736,6 @@ def detail_bundle(
         _gear = aggregate_creator_gear(_gear_results)
         if not _gear.get("camera_body"):
             # 兜底:没视频深析(或分析没提到设备)时扫 bio/raw —— 很多创作者简介里写机身。
-            from app.domains.kol.creator_gear import gear_from_text
-
             _bg = gear_from_text(
                 str(item.get("bio") or "") + " " + str(raw_platform_data_for_derivation or "")
             )
@@ -752,8 +752,7 @@ def detail_bundle(
     # 受众语言估算(评论法):有评论出真语言分布(替代"创作者国@100%"假地理),无评论则 sample_size=0 诚实空。
     # 覆盖现实:目前仅有评论的账号出数(18 官号 + 已抓评论的 KOL);外部 KOL 需先抓评论。红线不触 fit。
     try:
-        from app.domains.kol.audience_language import audience_language_for_kol
-
+        audience_language_for_kol = audience_language_reader()
         item["audience_languages"] = audience_language_for_kol(int(kol_pool_id))
     except Exception:
         logger.warning("audience_language failed kol=%s", kol_pool_id, exc_info=True)
