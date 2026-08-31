@@ -4,6 +4,14 @@
 AI Brief / Gemini preflight / bio 翻译」端点簇。本模块自带无 prefix 的 APIRouter,
 主 router(prefix=/api/admin/vkpi)include 它,路径逐字不变。
 
+2026-08-31 架构债:本模块模块级 fan-out 48(合同 internal_fan_out_max ceiling=40)。
+按资源子域静态下沉两个子 router,路径/方法/name 三元组与挂载顺序逐条不变:
+- 只读情报报表簇(11 维/情报卡/videos/竞品露出/证据摘要/AI Brief/Gemini 预检/批量预览)
+  → ``vkpi_kol_pool_intel_reports``;
+- 一键补全档案写端点 → ``vkpi_kol_pool_profile_build``。
+两处 ``include_router`` 都放在原端点定义所在的位置,因此 app.main 路由表顺序不变。
+被迁出的端点函数在本模块 re-export 保名,既有 import/monkeypatch 路径逐字可用。
+
 红线:零触 viltrox_fit_score;内容契合生成仅由显式 POST 入队,绝不写 fit。
 """
 from __future__ import annotations
@@ -22,16 +30,30 @@ from app.api.routers.vkpi_kol_contact_projection import (
     PRIVATE_CONTACT_HEADERS as _CONTACT_REVEAL_HEADERS,
     enforce_contact_read_rate_limit,
 )
+# 迁出端点的保名 re-export:FastAPI 只认子 router 上的注册,这些名字纯为既有
+# import / monkeypatch 路径逐字可用而保留在本模块命名空间里。
+from app.api.routers.vkpi_kol_pool_intel_reports import (  # noqa: F401
+    dimensions11_item_router as _intel_dimensions11_router,
+    router as _intel_reports_router,
+    get_pool_dimensions11_preview,
+    get_pool_item_ai_brief,
+    get_pool_item_competitor_exposure,
+    get_pool_item_dimensions11,
+    get_pool_item_evidence_summary,
+    get_pool_item_gemini_go_no_go,
+    get_pool_item_gemini_preflight,
+    get_pool_item_intelligence_card,
+    list_kol_pool_videos,
+)
+from app.api.routers.vkpi_kol_pool_profile_build import (  # noqa: F401
+    router as _profile_build_router,
+    build_full_profile_endpoint,
+)
 from app.core.logging import get_logger
 from app.core.permissions import check_kol_pool_employee_contact_permission, check_tab_permission
 from app.core.release_validation import release_validation_active
 from app.domains.audit.decorator import audit_action
-from app.domains.kol import eleven_dimensions
-from app.domains.kol import intelligence_card as kol_intelligence_card
 from app.domains.kol import llm_deep_analysis as kol_llm_deep_analysis
-import app.domains.intelligence.ai_brief as ai_brief
-import app.domains.evidence.summary as evidence_summary
-from app.domains.intelligence import gemini_single_kol_preflight
 from app.services.security.rate_limiter import get_client_ip
 
 router = APIRouter(tags=["vkpi-kol-pool"])
@@ -487,30 +509,9 @@ async def generate_kol_outreach_pack(
         }
 
 
-@router.get("/kol-pool/{kol_pool_id}/dimensions11")
-def get_pool_item_dimensions11(
-    kol_pool_id: int,
-    require_persisted: bool = Query(default=False),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """返回 KOL Pool 项的规则版 11 维画像；只读、不调 provider、不写库。"""
-    try:
-        if require_persisted:
-            payload = eleven_dimensions.load_persisted_dimensions_11(int(kol_pool_id))
-            if payload:
-                return payload
-            return {
-                "kol_pool_id": int(kol_pool_id),
-                "status": "missing",
-                "reason": "dimensions_11_json_missing",
-                "persisted": False,
-                "provider_calls": False,
-                "llm_calls": False,
-                "write_db": False,
-            }
-        return eleven_dimensions.compose_dimensions_11(int(kol_pool_id))
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+# GET /kol-pool/{kol_pool_id}/dimensions11 迁至 vkpi_kol_pool_intel_reports;
+# 在原定义位置挂载,保持 app.main 路由表顺序逐条不变。
+router.include_router(_intel_dimensions11_router)
 
 
 @router.get("/kol-pool/{kol_pool_id}/llm-deep-analysis")
@@ -662,145 +663,9 @@ async def analyze_pool_item_content_fit(
         ) from exc
 
 
-@router.get("/kol-pool/{kol_pool_id}/intelligence-card")
-def get_pool_item_intelligence_card(
-    kol_pool_id: int,
-    include_product_fit: bool = Query(default=True),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """Return one read-only P2 KOL decision card from existing evidence."""
-    del staff
-    try:
-        return kol_intelligence_card.build_kol_pool_intelligence_card(
-            int(kol_pool_id),
-            include_product_fit=bool(include_product_fit),
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/kol-pool/{kol_pool_id}/videos")
-def list_kol_pool_videos(
-    kol_pool_id: int,
-    limit: int = Query(default=50, ge=1, le=200),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """C4-full:MY KOL 库内容层(Pool 收藏行)读该 KOL 全部 evidence 视频(只读)。"""
-    from app.domains.kol.pool import _video_evidence_for_kol
-
-    items = _video_evidence_for_kol(int(kol_pool_id), limit=limit)
-    return {"items": items, "total": len(items), "kol_pool_id": int(kol_pool_id)}
-
-
-@router.get("/kol-pool/{kol_pool_id}/competitor-exposure")
-def get_pool_item_competitor_exposure(
-    kol_pool_id: int,
-    force: bool = Query(default=False),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """#51 百家饭指数(竞品露出率):聚合该 KOL 已深析(final_v1)evidence 的品牌提及 →
-    Viltrox vs 竞品露出比 + 专情指数(0-100,带样本量置信折扣)。纯读已有深析产物,
-    零新分析/零 LLM;结果当日缓存(vkpi_analysis_cache),force=true 才重算。
-    红线:零触 viltrox_fit_score、不动 rule_v0、不碰 KOL 归属判定。"""
-    del staff
-    from app.domains.kol import competitor_exposure
-
-    try:
-        return competitor_exposure.get_competitor_exposure(int(kol_pool_id), force=bool(force))
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001 — 聚合失败不该 500 裸炸,诚实回原因供前端展示
-        logger.warning("vkpi.competitor_exposure_read_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
-        return {"status": "error", "reason": "competitor_exposure_read_failed", "kol_pool_id": int(kol_pool_id)}
-
-
-@router.get("/kol-pool/{kol_pool_id}/evidence-summary")
-def get_pool_item_evidence_summary(
-    kol_pool_id: int,
-    include_product_fit: bool = Query(default=True),
-    ref_limit: int = Query(default=8, ge=1, le=25),
-    include_llm_preflight: bool = Query(default=True),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """Return traceable summaries derived only from existing IntelligenceCard evidence."""
-    del staff
-    try:
-        return evidence_summary.build_kol_pool_evidence_summary(
-            int(kol_pool_id),
-            include_product_fit=bool(include_product_fit),
-            ref_limit=int(ref_limit),
-            include_llm_preflight=bool(include_llm_preflight),
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/kol-pool/{kol_pool_id}/ai-brief")
-def get_pool_item_ai_brief(
-    kol_pool_id: int,
-    include_product_fit: bool = Query(default=True),
-    ref_limit: int = Query(default=8, ge=1, le=25),
-    max_items: int = Query(default=8, ge=1, le=12),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """Return read-only AI Brief v0 from existing evidence refs only."""
-    del staff
-    try:
-        return ai_brief.build_kol_pool_ai_brief(
-            int(kol_pool_id),
-            include_product_fit=bool(include_product_fit),
-            ref_limit=int(ref_limit),
-            max_items=int(max_items),
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/kol-pool/{kol_pool_id}/gemini-preflight")
-def get_pool_item_gemini_preflight(
-    kol_pool_id: int,
-    candidate_limit: int = Query(default=24, ge=1, le=100),
-    include_budget_preflight: bool = Query(default=True),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """Return P4.55 Gemini readiness from cached evidence only; no provider call."""
-    del staff
-    try:
-        return gemini_single_kol_preflight.build_kol_pool_gemini_preflight(
-            int(kol_pool_id),
-            candidate_limit=int(candidate_limit),
-            include_budget_preflight=bool(include_budget_preflight),
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/kol-pool/{kol_pool_id}/gemini-go-no-go")
-def get_pool_item_gemini_go_no_go(
-    kol_pool_id: int,
-    candidate_limit: int = Query(default=24, ge=1, le=100),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """Return P4.56 Gemini go/no-go report; read-only and no provider call."""
-    del staff
-    try:
-        return gemini_single_kol_preflight.build_kol_pool_gemini_go_no_go(
-            int(kol_pool_id),
-            candidate_limit=int(candidate_limit),
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-
-
-@router.get("/kol-pool-dimensions11/preview")
-def get_pool_dimensions11_preview(
-    limit: int = Query(default=20, ge=1, le=200),
-    source_type: str = Query(default="legacy_excel_p2d"),
-    staff=Depends(require_tab("vkpi", "read")),
-) -> dict:
-    """批量预览规则版 11 维画像；只读、不调 provider、不写库。"""
-    del staff
-    return eleven_dimensions.batch_preview_dimensions11(limit=limit, source_type=source_type)
+# 情报卡 / videos / 竞品露出 / 证据摘要 / AI Brief / Gemini 预检 / 11 维批量预览
+# 迁至 vkpi_kol_pool_intel_reports;在原定义位置挂载,顺序逐条不变。
+router.include_router(_intel_reports_router)
 
 
 _BIO_ZH_CACHE: dict[str, str] = {}
@@ -868,50 +733,6 @@ def translate_bio(body: dict = Body(default_factory=dict), staff=Depends(require
         }
 
 
-@router.post("/kol-pool/{kol_pool_id}/build-full-profile")
-def build_full_profile_endpoint(
-    kol_pool_id: int,
-    staff=Depends(require_tab("vkpi", "write")),
-):
-    """一键补全档案:强制 full 档点火(深爬 3 帖 + 评论采集;深析/受众/契合链自动跟进)。
-    幂等(下游入队各自去重),约 3-5 分钟数据陆续点亮,抽屉既有轮询自动接住。零触 fit。"""
-    from app.domains.discovery.buildout import build_full_profile
-    from app.domains.kol.my_kol_paid_action_access import MyKolPaidActionError
-    from app.domains.kol.video_tracking import VideoTrackingError
-
-    try:
-        result = build_full_profile(
-            int(kol_pool_id),
-            staff=staff if isinstance(staff, dict) else None,
-        )
-    except (MyKolPaidActionError, VideoTrackingError) as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.code) from exc
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("vkpi.build_full_profile_failed | kol_pool_id=%s", kol_pool_id, exc_info=True)
-        raise _write_service_error(
-            status_code=503,
-            status="unavailable",
-            reason="profile_build_enqueue_failed",
-            operation="build_full_profile",
-            kol_pool_id=kol_pool_id,
-        ) from exc
-    if not isinstance(result, dict):
-        raise _write_service_error(
-            status_code=503,
-            status="unavailable",
-            reason="invalid_profile_build_result",
-            operation="build_full_profile",
-            kol_pool_id=kol_pool_id,
-        )
-    out = dict(result)
-    tier = str(out.get("tier") or "")
-    if tier in {"full", "light"}:
-        out.setdefault("status", "queued")
-    elif str(out.get("reason") or "") == "error":
-        out["status"] = "partial"
-        out["reason"] = "profile_build_enqueue_partial"
-    else:
-        out.setdefault("status", "skipped")
-    return out
+# POST /kol-pool/{kol_pool_id}/build-full-profile 迁至 vkpi_kol_pool_profile_build;
+# 在原定义位置挂载,顺序逐条不变。
+router.include_router(_profile_build_router)
