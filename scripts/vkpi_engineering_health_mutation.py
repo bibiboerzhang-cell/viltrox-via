@@ -258,6 +258,35 @@ def mutmut_version(interpreter: Path) -> str:
     return version
 
 
+def prune_uncollectable_tests(
+    workspace: Path, env: dict[str, str], interpreter: Path, tests: list[str]
+) -> tuple[list[str], list[str]]:
+    """Drop test files that fail pytest collection inside the workspace.
+
+    The hermetic workspace hosts only the selected sources; a matched test may
+    read repo files that were never copied (collection-time FileNotFoundError).
+    Excluding it silently would hide coverage — so exclusions are returned and
+    recorded in the receipt. Prune only collection errors, never test failures."""
+    cmd = [str(interpreter), "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", *tests]
+    completed = subprocess.run(
+        cmd, cwd=workspace, env=env, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, check=False,
+    )
+    if completed.returncode == 0:
+        return tests, []
+    bad: set[str] = set()
+    for line in completed.stdout.splitlines():
+        if line.startswith("ERROR ") and "::" not in line:
+            bad.add(line.split()[1].strip())
+    kept = [t for t in tests if t not in bad]
+    if not bad or not kept:
+        raise MutationRunError(
+            "test selection failed collection and could not be pruned\n"
+            f"--- collect-only stdout tail ---\n{completed.stdout[-2500:]}"
+        )
+    return kept, sorted(bad)
+
+
 def run_mutmut(workspace: Path, env: dict[str, str], interpreter: Path) -> dict[str, Any]:
     """Execute the canonical run inside the workspace, capturing provenance."""
     if (workspace / "mutants").exists():
@@ -536,7 +565,17 @@ def run_fresh_mutation(
             test_selection=plan["test_selection"],
         )
         env, db_isolation = build_env(root, workspace, db_mode=db_mode, pg_dsn=pg_dsn)
+        kept_tests, excluded_tests = prune_uncollectable_tests(
+            workspace, env, interpreter, list(plan["test_selection"])
+        )
+        if excluded_tests:  # 诚实剔除:重写 setup.cfg 并把清单留进回执
+            config_hashes = build_workspace(
+                root, workspace,
+                workspace_targets=[to_workspace_relative(t) for t in targets],
+                test_selection=kept_tests,
+            )
         run = run_mutmut(workspace, env, interpreter)
+        run["collection_excluded_tests"] = excluded_tests
         per_file, statuses = collect_results(workspace, targets, matches)
     finally:
         if not keep_workspace:
