@@ -130,6 +130,22 @@ def _is_placeholder_domain(domain: str) -> bool:
     return any(domain == d or domain.endswith("." + d) for d in PLACEHOLDER_DOMAINS)
 
 
+# 机器令牌:local 部分是长 hex 的埋点/追踪地址(Wix 站点的 Sentry DSN 公钥
+# <32位hex>@sentry.wixpress.com 是典型),语法全合法、MX 全过,但根本不是人的邮箱。
+# 2026-08-31 页面腿实测:71 条 website_declared 里 25 条是这类,真实可用率
+# 97.2% → 62%。MX 层看不见这种污染,必须在语法层拦。
+_MACHINE_LOCAL_RE = re.compile(r"^[0-9a-f]{16,}$")
+MACHINE_TOKEN_DOMAINS = frozenset({
+    "sentry.io", "sentry.wixpress.com", "sentry-next.wixpress.com", "ingest.sentry.io",
+})
+
+
+def _is_machine_token(local: str, domain: str) -> bool:
+    if _MACHINE_LOCAL_RE.match(local):
+        return True
+    return any(domain == d or domain.endswith("." + d) for d in MACHINE_TOKEN_DOMAINS)
+
+
 def _is_platform_domain(domain: str) -> bool:
     """页面抓取抓到的平台客服/条款邮箱——不是这位 KOL 的联系方式,与占位域名同级拒收。"""
     return any(domain == d or domain.endswith("." + d) for d in PLATFORM_DOMAINS)
@@ -171,6 +187,8 @@ def _syntax_reason(value: str) -> tuple[str, str]:
         return cleaned, "placeholder_domain"
     if _is_platform_domain(domain):
         return cleaned, "platform_domain"
+    if _is_machine_token(local, domain):
+        return cleaned, "machine_token"
     if not _valid_email(cleaned):
         # 复用既有闸:占位邮箱名单 / CDN 后缀 / 假 TLD(@提及式假命中)
         return cleaned, "bad_tld_or_placeholder"
