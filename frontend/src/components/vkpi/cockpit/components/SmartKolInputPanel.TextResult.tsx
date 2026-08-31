@@ -2,9 +2,12 @@
 // 从 SmartKolInputPanel.tsx 抽出,行为不变:JSX 逐字保留,容器本体 + 全部 hooks 仍留 SmartKolInputPanel.tsx,
 // 这里只是「仅吃 props」的展示组件(无自身 hooks),容器把 state/派生值/回调透传进来,调用点不变。
 // 红线:纯展示,绝不写任何 viltrox_fit_score。
+// M2「治卡」:轮询驱动的一行进度已搬进自订阅的 SearchProgress 组件;本体套 React.memo,
+// 回调由 useStableTextResultCallbacks 稳定化,容器重渲不再无条件重画整棵结果树。
+import { memo } from "react";
 import { FolderPlus, Info, Loader2, MessageSquare, RefreshCw, Sparkles, UserPlus } from "lucide-react";
 
-import type { VkpiKolRecallItem, VkpiKolRecallResponse, VkpiKolSearchHistoryItem } from "../../../../domains/kol";
+import type { VkpiKolRecallItem, VkpiKolRecallResponse } from "../../../../domains/kol";
 
 import { asRecord, cleanText, display, type Row } from "./SmartKolInputPanel.helpers";
 import { recallDistributionView } from "./SmartKolInputPanel.evidence";
@@ -24,17 +27,17 @@ import {
 } from "./SmartKolInputPanel.sessionProjection";
 import { SmartKolQualityFilters } from "./SmartKolInputPanel.QualityFilters";
 import { PlanPills, RecallMiniItem } from "./SmartKolInputPanel.Sections";
-import { recallTopItems, type SearchSessionProgress } from "./SmartKolInputPanel.derivers";
+import { recallTopItems } from "./SmartKolInputPanel.derivers";
 import { ProgressiveSearchStageCard } from "./SmartKolInputPanel.Progress";
+import { LiveSessionStatusBanner } from "./SmartKolInputPanel.SearchProgress";
+import {
+  textResultPropsAreEqual,
+  useStableTextResultCallbacks,
+  type TextResultSectionProps,
+} from "./SmartKolInputPanel.TextResult.memo";
 import { kolHumanDisplayName } from "../lib/kolIdentity";
 import { useSearchFeedbackLabeledCount } from "../../../../services/vkpi/searchFeedback-api";
 import { candidateGrowthSummary } from "./SmartKolInputPanel.CandidateEvidence";
-
-type SessionBanner = {
-  tone: string;
-  label: string;
-  note: string;
-} | null;
 
 export type CandidateBusinessLane = "core" | "expansion" | "exploration";
 
@@ -358,7 +361,7 @@ export function nextRequiredPlatformSelection(current: readonly string[], platfo
   return [...current, platform];
 }
 
-export function TextResultSection({
+function TextResultSectionBody({
   recallResult,
   searchSession,
   llmPlan,
@@ -421,76 +424,7 @@ export function TextResultSection({
   sessionPollNotice,
   retrySearchSession,
   resumeSearchPolling,
-}: {
-  recallResult: VkpiKolRecallResponse;
-  searchSession: VkpiKolSearchHistoryItem | null;
-  llmPlan: Row;
-  discoveryItems: any[];
-  discoveryTotal?: number;
-  discoveryAutoEnrolled?: number | null;
-  /** 品牌官方账号排除数(诚实信息):>0 才渲染一行说明;旧后端无该键恒 0 静默。 */
-  discoveryBrandExcluded?: number;
-  /** 触达展示闸折叠计数(2026-07-12「分析后再 po」):lowReach=低触达不展示(已入库仅不推荐)、
-   *  analyzing=档案补全中,达标后自动放出;旧后端/无隐藏 → null 不渲染。 */
-  reachFloorDisplay?: {
-    discovery: { lowReach: number; analyzing: number; pendingFollowers: number };
-    recall: { lowReach: number; analyzing: number; pendingFollowers: number };
-  } | null;
-  input: string;
-  apiToken: string;
-  isBusy: boolean;
-  state: string;
-  plannerFellBack: boolean;
-  personaEditing: boolean;
-  personaDraft: string;
-  setPersonaEditing: (v: boolean) => void;
-  setPersonaDraft: (v: string) => void;
-  setInput: (v: string) => void;
-  run: (overrideQuery?: string) => void;
-  discoveryPlatforms: string[];
-  setDiscoveryPlatforms: (updater: (cur: string[]) => string[]) => void;
-  discoveryRegion: string;
-  setDiscoveryRegion: (v: string) => void;
-  contentLanguages: string[];
-  setContentLanguages: (v: string[]) => void;
-  kolProfileTypes: string[];
-  setKolProfileTypes: (v: string[]) => void;
-  excludeChinese: boolean;
-  setExcludeChinese: (v: boolean) => void;
-  queueTextAdvance: (overrideQuery?: string) => void;
-  pickedIds: Set<number>;
-  setPickedIds: (v: Set<number>) => void;
-  favNote: string;
-  favoriteIds: ReadonlySet<number>;
-  favoriteBusyIds: ReadonlySet<number>;
-  favoriteResults: ReadonlyMap<number, string>;
-  favoriteErrors: ReadonlyMap<number, string>;
-  favoritesSyncing: boolean;
-  favoritesLoadError: string;
-  draftNote: string;
-  outreachNote: string;
-  outreachResult: Record<string, any> | null;
-  addingFav: boolean;
-  draftBusy: boolean;
-  outreachBusy: boolean;
-  displayedSearchSessionId: number | null;
-  isSessionPolling: boolean;
-  isSessionPollPaused: boolean;
-  resultsStale: boolean;
-  approvalReady: boolean;
-  favoriteOne: (kolPoolId: number) => void;
-  addPickedToMyKol: () => void;
-  approveAndCreateDraft: () => void;
-  generateOutreachForPicked: () => void;
-  discoveryKey: (item: any) => string;
-  onOpenRecallItem?: (item: VkpiKolRecallItem) => void;
-  sessionBanner: SessionBanner;
-  sessionProgress: SearchSessionProgress;
-  activeSessionCounts: Record<string, any>;
-  sessionPollNotice: string;
-  retrySearchSession: () => void;
-  resumeSearchPolling: () => void;
-}) {
+}: TextResultSectionProps) {
   // 发现真总数 = 可见 + 被触达闸折叠(分析中/低触达):K3 入库反馈按真总数说话,
   // 否则「发现 3 人、入库 15 人」自相矛盾(隐藏项也都入了库)。纯派生,无 hooks。
   const hiddenDiscovery = reachFloorDisplay
@@ -526,6 +460,8 @@ export function TextResultSection({
   };
   return (
     <div className="mt-3 space-y-2.5">
+      {/* 阶段卡读的是 controller 合并后(keep-richer)的真值,不改口径:
+          稀疏的一拍不许把已显示的阶段数字刷回去。 */}
       <ProgressiveSearchStageCard progress={sessionProgress} />
 
       {/* 结果来源分布(用户点名要的:哪些是库里捞的、哪些是这次现场新找到的) */}
@@ -931,44 +867,28 @@ export function TextResultSection({
         ) : (
           <div className="rounded-md border border-dashed border-white/[0.08] px-3 py-3 text-center text-[10.5px] text-slate-500">全网发现恒开 · 搜索后自动从所选平台发现新号</div>
         )}
-        {sessionBanner ? (
-          // 诚实会话横幅:排队/查找中/已完成/部分完成/未完成 + 真原因;部分/已完成仍保留计数。
-          <div className={`mt-2 rounded-md border px-2.5 py-2 text-[10px] leading-relaxed ${
-            sessionBanner.tone === "error"
-              ? "border-rose-300/20 bg-rose-500/[0.07] text-rose-100"
-              : sessionBanner.tone === "warn"
-                ? "border-amber-300/20 bg-amber-400/[0.07] text-amber-100"
-                : sessionBanner.tone === "ok"
-                  ? "border-emerald-300/20 bg-emerald-400/[0.07] text-emerald-100"
-                  : "border-emerald-300/15 bg-black/15 text-emerald-100/75"
-          }`}>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {sessionBanner.tone === "info" && !isSessionPollPaused ? <Loader2 size={11} className="animate-spin" /> : null}
-              <span className="font-medium">{isSessionPollPaused ? "后台状态待继续同步" : sessionBanner.label}</span>
-              {Object.keys(activeSessionCounts).length ? (
-                <>
-                  <span className="rounded border border-white/[0.1] bg-black/15 px-1.5 py-0.5">已找到 {display(activeSessionCounts.ready, "0")}</span>
-                  <span className="rounded border border-white/[0.1] bg-black/15 px-1.5 py-0.5">已入库 {display(activeSessionCounts.executed, "0")}</span>
-                  {Number(activeSessionCounts.errors) > 0 || Number(activeSessionCounts.failed) > 0 ? (
-                    <span className="rounded border border-rose-300/20 bg-black/15 px-1.5 py-0.5 text-rose-200/80">未完成 {display(Number(activeSessionCounts.errors || 0) + Number(activeSessionCounts.failed || 0), "0")}</span>
-                  ) : null}
-                </>
-              ) : null}
-            </div>
-            <div className="mt-0.5 opacity-85">{sessionBanner.note}</div>
-            {sessionPollNotice ? <div className="mt-0.5 opacity-70">{sessionPollNotice}</div> : null}
-            {isSessionPollPaused ? (
-              <button
-                type="button"
-                onClick={resumeSearchPolling}
-                className="mt-1.5 inline-flex min-h-[26px] items-center justify-center gap-1.5 rounded-md border border-amber-300/25 px-2.5 text-[10px] font-medium text-amber-100 hover:bg-amber-400/[0.08]"
-              >
-                <RefreshCw size={11} /> 继续同步原任务
-              </button>
-            ) : null}
-          </div>
-        ) : null}
+        {/* 诚实会话横幅:排队/查找中/已完成/部分完成/未完成 + 真原因;部分/已完成仍保留计数。
+            轮询文案由横幅自订阅(每拍只重渲这一行),计数与横幅本体随结果树一起走 memo。 */}
+        <LiveSessionStatusBanner
+          banner={sessionBanner}
+          isSessionPollPaused={isSessionPollPaused}
+          counts={activeSessionCounts}
+          fallbackNotice={sessionPollNotice}
+          onResume={resumeSearchPolling}
+        />
       </div>
     </div>
   );
+}
+
+/**
+ * 对外入口。外壳只做两件事:把 controller 每渲染重建的回调换成身份恒定的稳定壳,
+ * 然后交给 memo 化的本体。外壳本身很轻(只有 ref + 一次 props 展开),
+ * 真正的 68 props 巨树由 textResultPropsAreEqual 决定要不要重画。
+ */
+const MemoizedTextResultSection = memo(TextResultSectionBody, textResultPropsAreEqual);
+
+export function TextResultSection(props: TextResultSectionProps) {
+  const stableCallbacks = useStableTextResultCallbacks(props);
+  return <MemoizedTextResultSection {...props} {...stableCallbacks} />;
 }
