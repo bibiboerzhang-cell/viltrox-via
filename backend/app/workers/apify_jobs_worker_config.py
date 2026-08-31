@@ -16,6 +16,10 @@ from __future__ import annotations
 import os
 
 from app.core.gemini_models import DEFAULT_GEMINI_JUDGE_MODEL, DEFAULT_VIDEO_GEMINI_MODEL
+# 本地算力 worker 专属 job_type 白名单。单一真源仍是 registry.SAFE_TASK_TYPES(别名 import 防漂移);
+# 2026-08-31 fan-out 刀把这一跳从 apify_jobs_worker.py 顶层搬进本叶子,worker 侧改成同名 re-export,
+# 抢单 SQL 的常量白名单拼装与取值逐字不变。
+from app.domains.local_workers.registry import SAFE_TASK_TYPES as LOCAL_EXCLUSIVE_JOB_TYPES  # noqa: F401
 from app.platform.llm_gateway import PRODUCTION_EXECUTION_CLASS
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 

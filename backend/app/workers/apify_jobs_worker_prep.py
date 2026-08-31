@@ -26,7 +26,27 @@ from app.core.video_model_chain import (
     ready_model_subchain,
 )
 from app.db.connection import db_connection_sync_scope
+# 预算/围栏/本地算力授权簇的三个叶子(2026-08-31 fan-out 刀从 apify_jobs_worker.py 顶层搬来)。
+# 本模块是该簇的内聚归口(_llm_budget_preflight / _provider_budget_preflight /
+# _google_execution_authorization / _google_allowed / _provider_allowed 都在这);
+# worker 侧改为同名 re-export,apify_jobs_worker_execution 与 apify_jobs_worker_runtime
+# 的 namespace["..."] / deps["..."] 取用路径与取到的对象逐字不变。
+from app.domains.costs import budget_guard  # noqa: F401  仅经 worker 同名 re-export 对外
 from app.platform import llm_gateway
+from app.platform.apify_budget import (  # noqa: F401  同上
+    ApifyBudgetBlocked,
+    ApifyExecutionClaimBlocked,
+    ApifyProviderReplayBlocked,
+    acquire_provider_execution_claim,
+    apify_execution_context,
+    finalize_provider_execution_claim,
+)
+from app.platform.llm_local_evaluation import (  # noqa: F401  同上
+    LOCAL_EVALUATION_CACHE_DERIVE_METHOD,
+    LOCAL_EVALUATION_DERIVE_METHOD,
+    LOCAL_EVALUATION_EXECUTION_CLASS,
+    verify_job_local_evaluation_capability,
+)
 from app.services.media.video_keyframes import temporary_keyframes
 from app.services.ai.analyzers import gemini_video as gemini_video_analyzer
 from app.workers.apify_jobs_worker_helpers import (

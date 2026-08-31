@@ -25,33 +25,11 @@ from app.core.config import DB_RUNTIME_URL
 from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
 from app.db.connection import close_db_runtime_sync, db_connection_sync_scope
-from app.domains.costs import budget_guard
-from app.domains.kol.account_dossier_extract import upsert_account_dossier_extract
-from app.domains.projects import contracts as project_contracts
-from app.domains.projects import retrospective_aggregate as project_retrospective
-from app.domains.kol.final_v1_extract import upsert_deep_analysis_from_final_v1_cache
-from app.domains.kol import profile_discovery as kol_profile_discovery
-from app.domains.kol import search_sessions as kol_search_sessions
-from app.domains.local_workers.registry import SAFE_TASK_TYPES as LOCAL_EXCLUSIVE_JOB_TYPES
-# llm_gateway 本文件已无直接属性访问,但 runtime 按 namespace['llm_gateway'] 取用(namespace 契约),不可删。
-from app.platform import llm_gateway  # noqa: F401
-from app.platform.apify_budget import (
-    ApifyBudgetBlocked,
-    ApifyExecutionClaimBlocked,
-    ApifyProviderReplayBlocked,
-    acquire_provider_execution_claim,
-    apify_execution_context,
-    finalize_provider_execution_claim,
-)
-from app.platform.llm_local_evaluation import (
-    LOCAL_EVALUATION_CACHE_DERIVE_METHOD,
-    LOCAL_EVALUATION_DERIVE_METHOD,
-    LOCAL_EVALUATION_EXECUTION_CLASS,
-    verify_job_local_evaluation_capability,
-)
-from app.services.media.video_download import download_direct_video_url
-from app.domains.media.cache import cache_local_video_file
-from app.domains.kol.url_deep_crawl_helpers import _video_id as _content_url_video_id
+# 编排层收窄(2026-08-31 fan-out 刀 50→27):本体只留编排直接依赖(core/db/家族兄弟)。原先直挂
+# 这里的 app.domains.* / app.platform.* / app.services.* 叶子,一律改由「本就在用它的那个兄弟」按
+# 内聚度转出:预算围栏+provider 认领+本地算力授权→prep;媒体缓存/内容 URL→media;直链下载→gemini
+# (唯一调用方);final_v1 深析写入→session;KOL/项目领域写入→handlers;本地专属 job_type 白名单→
+# config 叶子。全是同名 re-export 且绑定同一对象:属性路径/namespace=globals() 契约/monkeypatch 逐字不变。
 from .apify_job_lane import (
     claim_lane_sql,
     normalize_claim_lane,
@@ -102,6 +80,7 @@ from .apify_jobs_worker_config import (  # noqa: F401  部分名仅作同名 re-
     GEMINI_VIDEO_V2_DERIVE_METHODS,
     LLM_BUDGET_SCOPE,
     LLM_MAX_OUTPUT_TOKENS,
+    LOCAL_EXCLUSIVE_JOB_TYPES,
     MAX_JOB_ATTEMPTS,
     MEDIA_RESOLVE_TIMEOUT_SECONDS,
     PROVIDER_RETRY_ADOPT_WINDOW_MINUTES,
@@ -137,7 +116,7 @@ QUEUE_SERVICE_PRIORITY_SQL = queue_service_priority_sql_expression("job_type", "
 RESOURCE_SLOT_LIMITS = resource_slot_limits(os.environ)
 # 双认领毒化防护:本地算力 worker 只打 payload.local_lease_id 标记(registry.py),
 # 主 worker 两道过滤:①带 local_lease_id 的行不抢;②本地专属 job_type 不抢
-# (单一真源 registry.SAFE_TASK_TYPES,别名 import 防漂移);拼 SQL 全为常量白名单,无注入面。
+# (单一真源仍是 registry.SAFE_TASK_TYPES,别名不变,现经 config 叶子转一跳);拼 SQL 全常量,无注入面。
 _LOCAL_EXCLUSIVE_TYPES_SQL = ", ".join(f"'{t}'" for t in LOCAL_EXCLUSIVE_JOB_TYPES)
 CLAIM_LOCAL_GUARD_SQL = (
     "AND (payload->>'local_lease_id') IS NULL "
@@ -285,7 +264,8 @@ def _respect_gemini_qps(conn: psycopg.Connection[Any]) -> None:
 # 媒体解析 / 子进程分析器 / R2 回灌簇整簇已抽到 apify_jobs_worker_media.py
 # (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。
 # 2026-08-30 拆环后 media 从 config 叶子取超时常量,本 import 已无顺序约束。
-from app.workers.apify_jobs_worker_media import (  # noqa: E402
+from app.workers.apify_jobs_worker_media import (  # noqa: E402,F401  尾两名仅作同名 re-export
+    _content_url_video_id,
     _gemini_analyzer_child_code,
     _mock_result,
     _resolve_cached_or_provider_video,
@@ -293,6 +273,7 @@ from app.workers.apify_jobs_worker_media import (  # noqa: E402
     _run_gemini_analyzer_with_timeout,
     _scrape_with_apify_timeout,
     _warm_video_to_r2_from_local,
+    cache_local_video_file,
 )
 
 
@@ -343,6 +324,7 @@ from app.workers.apify_jobs_worker_session import (  # noqa: E402
     _sync_deep_analysis_result_from_cache,
     _sync_search_session_job,
     _sync_search_session_job_impl,
+    upsert_deep_analysis_from_final_v1_cache,
 )
 
 
@@ -410,7 +392,7 @@ def _requeue_job(conn: psycopg.Connection[Any], job_id: int, reason: str, *, ret
 
 # 单一 job_type 处理簇整簇已抽到 apify_jobs_worker_handlers.py
 # (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。
-from app.workers.apify_jobs_worker_handlers import (  # noqa: E402
+from app.workers.apify_jobs_worker_handlers import (  # noqa: E402,F401  尾五名仅作同名 re-export
     _process_account_dossier_extract,
     _process_contract_invoice_extract,
     _process_contract_polish,
@@ -428,6 +410,11 @@ from app.workers.apify_jobs_worker_handlers import (  # noqa: E402
     _process_session_advance,
     _process_smart_search_profile_advance,
     _resolve_job_staff,
+    kol_profile_discovery,
+    kol_search_sessions,
+    project_contracts,
+    project_retrospective,
+    upsert_account_dossier_extract,
 )
 from app.workers.apify_jobs_worker_video_url import _process_video_url_resolve  # noqa: E402
 # 2026-07-11 未知 job_type 防线:_process_job 显式分支簇之外,只有 'video' 一种 job_type
@@ -441,7 +428,13 @@ TARGET_FALLBACK_JOB_TYPES = frozenset({"video"})
 # LLM 预算 preflight 簇 + keyframe 抽帧/Gemini override 簇整簇已抽到 apify_jobs_worker_prep.py
 # (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。
 # 2026-08-30 拆环后 prep 从 config 叶子取常量,本 import 已无顺序约束。
-from app.workers.apify_jobs_worker_prep import (  # noqa: E402
+from app.workers.apify_jobs_worker_prep import (  # noqa: E402,F401  部分名仅 re-export 给 namespace/deps 契约
+    ApifyBudgetBlocked,
+    ApifyExecutionClaimBlocked,
+    ApifyProviderReplayBlocked,
+    LOCAL_EVALUATION_CACHE_DERIVE_METHOD,
+    LOCAL_EVALUATION_DERIVE_METHOD,
+    LOCAL_EVALUATION_EXECUTION_CLASS,
     _download_youtube_for_keyframes,
     _extract_keyframes_for_qa,
     _gemini_worker_overrides,
@@ -452,6 +445,12 @@ from app.workers.apify_jobs_worker_prep import (  # noqa: E402
     _log_budget_preflight_record_only,
     _provider_allowed,
     _provider_budget_preflight,
+    acquire_provider_execution_claim,
+    apify_execution_context,
+    budget_guard,
+    finalize_provider_execution_claim,
+    llm_gateway,
+    verify_job_local_evaluation_capability,
 )
 
 
@@ -480,7 +479,7 @@ from app.workers.apify_jobs_video_context import (  # noqa: F401,E402
 # (函数体逐字不变,re-export 兜住所有调用点;含下划线私有名)。
 # 2026-08-30 拆环后 gemini 从 config 叶子/prep/media 取依赖(_block_job 走 call-time 委派),
 # 本 import 已无顺序约束。
-from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
+from app.workers.apify_jobs_worker_gemini import (  # noqa: E402,F401  尾一名仅作同名 re-export
     _final_v1_scope_checkpoint,
     _process_gemini_video,
     _process_gemini_video_final_v1_keyframe_qa,
@@ -492,6 +491,7 @@ from app.workers.apify_jobs_worker_gemini import (  # noqa: E402
     _record_openai_cost,
     _shape_gemini_result,
     _write_gemini_cache,
+    download_direct_video_url,
 )
 from app.workers.apify_jobs_worker_execution import execute_claimed_job_impl  # noqa: E402
 
