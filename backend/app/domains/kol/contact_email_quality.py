@@ -74,6 +74,11 @@ PLATFORM_DOMAINS = frozenset({
     "patreon.com", "boosty.to", "throne.com", "ko-fi.com", "buymeacoffee.com",
     "linktr.ee", "beacons.ai", "stan.store", "gumroad.com", "substack.com",
     "shopify.com", "wixsite.com", "squarespace.com", "sellfy.com", "redbubble.com",
+    # 页面里嵌的第三方服务邮箱(条款/客服/API 支持),不是这位 KOL 的联系方式。
+    # 2026-08-31 第二批实测漏网:api-services-support@amazon.com。
+    "amazon.com", "google.com", "youtube.com", "facebook.com", "instagram.com",
+    "tiktok.com", "paypal.com", "stripe.com", "mailchimp.com", "wordpress.com",
+    "adobe.com", "apple.com", "microsoft.com", "cloudflare.com", "godaddy.com",
 })
 
 # 角色邮箱(noreply 家族):标记 role=True 但不拒 —— 仲裁时垫到非角色之后。
