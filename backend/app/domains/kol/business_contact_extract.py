@@ -59,7 +59,20 @@ _SOCIAL_HOSTS = {
     "linkedin.com": "linkedin", "twitch.tv": "twitch", "pinterest.com": "pinterest",
 }
 # 聚合页(Linktree 类)—— L1 优先跟进,常把邮箱+全套社媒列齐。
-_LINK_HUBS = ("linktr.ee", "beacons.ai", "carrd.co", "stan.store", "linkin.bio", "koji.to", "campsite.bio", "solo.to", "linkpop.com")
+# 页面腿(run_website_contact_batch)按 contact_type='link_hub' 排在 website 前、每 KOL 只取前 3 条,
+# 所以漏一个聚合页域名 = 把邮箱产出率最高的目标挤到随机个人站后面。名单只收「一页列全套链接的
+# link-in-bio 服务」,收录前逐个核过产品形态。
+# 刻意不收(2026-08-31 核过,是纯跳转短链/深链而非聚合页,收了会让页面腿去抓一个空转发页):
+#   tr.ee(Linktree 旗下通用短链,实测 tr.ee/0lE1CH 直跳 Shopee 商品页)、
+#   linktw.in(LinkTwin 深链短链)、flowcode.com(QR/企业跳转平台)。
+_LINK_HUBS = (
+    "linktr.ee", "beacons.ai", "carrd.co", "stan.store", "linkin.bio", "koji.to",
+    "campsite.bio", "solo.to", "linkpop.com",
+    # 2026-08-31 补:本地库 49 条外链原被误判成 'website'(bio.site 一家就 26 条)。
+    "bio.site", "bio.link", "link.me", "liinks.co", "taplink.cc", "hoo.be", "dott.bio",
+    "superprofile.bio", "allmylinks.com", "linkfly.to", "linkgenie.co", "lnk.bio",
+    "msha.ke", "milkshake.app", "shorby.com", "manylink.co",
+)
 _EMAIL_PLACEHOLDER = {"user@domain.com", "name@example.com", "email@example.com", "you@example.com", "your@email.com", "someone@example.com"}
 _EMAIL_BAD_SUFFIX = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".mp4")
 _URL_RE = re.compile(r"https?://[^\s\"'<>)\]]+")
@@ -79,6 +92,30 @@ _VALID_MULTICHAR_TLDS = {
     "photography", "film", "video", "social", "blog", "news", "photo", "pics",
     "asia", "eu", "cat", "tel",
 }
+
+
+def _url_host(url: str) -> str:
+    """URL/裸串 -> 小写 host(去 scheme、path、query、fragment、userinfo、端口、www. 前缀)。
+
+    取不到 host 返回 ''。口径与 scripts/backfill_social_bio_links.link_host 一致——两条腿
+    (L0 抽取 与 bio 外链回填)必须对同一个 URL 判出同一个 host,否则同一域名会一半 link_hub
+    一半 website。
+    """
+    rest = str(url or "").split("//", 1)[-1]
+    host = rest.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0]
+    host = host.rsplit("@", 1)[-1].split(":", 1)[0].strip().strip(".").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host if "." in host else ""
+
+
+def _host_matches(host: str, needle: str) -> bool:
+    """精确 host 匹配(== 或子域后缀)。
+
+    绝不能退回 substring:`jurjax.com` 含 "x.com" 会被误判成 twitter,
+    `example.com/linktr.ee` 这种 path 也会被误判成聚合页。
+    """
+    return host == needle or host.endswith("." + needle)
 
 
 def _valid_email(m: str) -> bool:
@@ -253,12 +290,12 @@ def extract_contacts_multi_source(
             low = url.lower()
             if any(junk in low for junk in _CDN_JUNK):
                 continue
-            host = low.split("//", 1)[-1].split("/", 1)[0]
+            host = _url_host(low)
             # 精确 host 匹配(== 或子域后缀),不能用 substring:jurjax.com 含 "x.com" 会误判 twitter
-            social = next((tag for h, tag in _SOCIAL_HOSTS.items() if host == h or host.endswith("." + h)), "")
+            social = next((tag for h, tag in _SOCIAL_HOSTS.items() if _host_matches(host, h)), "")
             if social:
                 _add(f"{social}_link", url, SOURCE_RAW_BIO, 0.6, url, source_field=source_field)
-            elif any(h in low for h in _LINK_HUBS):
+            elif any(_host_matches(host, hub) for hub in _LINK_HUBS):
                 _add("link_hub", url, SOURCE_RAW_BIO, 0.5, url, source_field=source_field)
             else:
                 _add("website", url, SOURCE_RAW_BIO, 0.45, url, source_field=source_field)

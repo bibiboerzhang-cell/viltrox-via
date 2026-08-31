@@ -177,6 +177,14 @@ def test_batch_hard_cap_is_100():
 @pytest.mark.parametrize("url,is_hub", [
     ("linktr.ee", True), ("www.linktr.ee", True), ("beacons.ai", True),
     ("my.carrd.co", True), ("dustinabbott.net", False), ("linktr.ee.evil.com", False),
+    # 2026-08-31 补名单后:这些 host 之前落进 'website',页面腿因此把邮箱产出率
+    # 最高的目标排到随机个人站后面(每 KOL 只抓前 3 条)。
+    ("bio.site", True), ("www.bio.site", True), ("liinks.co", True), ("taplink.cc", True),
+    ("hoo.be", True), ("msha.ke", True), ("lnk.bio", True), ("superprofile.bio", True),
+    # 纯跳转短链不算聚合页,收了只会让页面腿抓一个空转发页。
+    ("tr.ee", False), ("linktw.in", False), ("flowcode.com", False),
+    # host 剥法要吃掉端口/query,别把它们当成 host 的一部分。
+    ("bio.site:443", True), ("bio.site?utm=1", True),
 ])
 def test_is_link_hub(url, is_hub):
     assert cws._is_link_hub(url) is is_hub

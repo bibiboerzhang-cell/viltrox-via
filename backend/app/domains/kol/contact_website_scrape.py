@@ -11,7 +11,13 @@ import urllib.request
 from html import unescape as _html_unescape
 from typing import Any
 
-from app.domains.kol.business_contact_extract import _LINK_HUBS, _valid_email, _SOCIAL_HOSTS
+from app.domains.kol.business_contact_extract import (
+    _LINK_HUBS,
+    _SOCIAL_HOSTS,
+    _host_matches,
+    _url_host,
+    _valid_email,
+)
 
 _MAILTO_RE = re.compile(r"mailto:([^\"'?\s>]+)", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -46,8 +52,9 @@ def _host(url: str) -> str:
 
 
 def _is_link_hub(host: str) -> bool:
-    h = (host or "").removeprefix("www.")
-    return any(h == hub or h.endswith("." + hub) for hub in _LINK_HUBS)
+    """host 是否聚合页。判定口径与 L0 抽取腿共用一份(_url_host + _host_matches),
+    别在这里另抄一份 www/端口/query 的剥法——两腿一漂,同一域名就会一半 link_hub 一半 website。"""
+    return any(_host_matches(_url_host(host), hub) for hub in _LINK_HUBS)
 
 
 def _throttle_wait() -> None:
