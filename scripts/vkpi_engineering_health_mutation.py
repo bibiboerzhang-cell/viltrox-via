@@ -287,6 +287,37 @@ def prune_uncollectable_tests(
     return kept, sorted(bad)
 
 
+def prune_env_failing_tests(
+    workspace: Path, env: dict[str, str], interpreter: Path, tests: list[str]
+) -> tuple[list[str], list[str]]:
+    """Drop test FILES that fail a clean run inside the workspace (no mutants).
+
+    The workspace has no .git and hosts only selected sources; tests that shell
+    out to repo scripts or read repo state fail there while being green in the
+    repo (e.g. start_worker.sh identity refusal: rc 1 vs expected 2). A clean-run
+    failure before any mutation is an environment mismatch, not a caught mutant —
+    keeping it would abort mutmut's stats step. Exclusions are returned for the
+    receipt; the repo-level suite still runs these tests normally."""
+    cmd = [str(interpreter), "-m", "pytest", "-q", "-p", "no:cacheprovider", *tests]
+    completed = subprocess.run(
+        cmd, cwd=workspace, env=env, stdin=subprocess.DEVNULL,
+        capture_output=True, text=True, check=False,
+    )
+    if completed.returncode == 0:
+        return tests, []
+    bad = {
+        m.group(1)
+        for m in re.finditer(r"^(?:FAILED|ERROR) (tests/[^:\s]+)", completed.stdout, re.MULTILINE)
+    }
+    kept = [t for t in tests if t not in bad]
+    if not bad or not kept:
+        raise MutationRunError(
+            "clean workspace run failed and could not be pruned\n"
+            f"--- pytest stdout tail ---\n{completed.stdout[-2500:]}"
+        )
+    return kept, sorted(bad)
+
+
 def run_mutmut(workspace: Path, env: dict[str, str], interpreter: Path) -> dict[str, Any]:
     """Execute the canonical run inside the workspace, capturing provenance."""
     if (workspace / "mutants").exists():
@@ -565,9 +596,13 @@ def run_fresh_mutation(
             test_selection=plan["test_selection"],
         )
         env, db_isolation = build_env(root, workspace, db_mode=db_mode, pg_dsn=pg_dsn)
-        kept_tests, excluded_tests = prune_uncollectable_tests(
+        kept_tests, excluded_collect = prune_uncollectable_tests(
             workspace, env, interpreter, list(plan["test_selection"])
         )
+        kept_tests, excluded_envfail = prune_env_failing_tests(
+            workspace, env, interpreter, kept_tests
+        )
+        excluded_tests = sorted(set(excluded_collect) | set(excluded_envfail))
         if excluded_tests:  # 诚实剔除:只重写 setup.cfg(工作区已建,copytree 不可重入)
             setup_cfg = render_setup_cfg(
                 [to_workspace_relative(t) for t in targets], kept_tests
