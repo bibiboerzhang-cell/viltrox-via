@@ -30,10 +30,9 @@ def _truthy(value: Any) -> bool:
     return bool(value)
 
 
-def _require_legacy_agent_scope(staff: dict[str, Any], *, surface: str) -> None:
-    unavailable = legacy_system_admin_scope_guard(staff, surface=surface)
-    if unavailable is not None:
-        raise HTTPException(status_code=403, detail=unavailable)
+# 行为不变搬迁:_require_legacy_agent_scope 随 marketing-brain/skills 簇下沉到
+# vkpi_agents_brain.py(方向恒父→子,零环);此处 import 回来兜住本文件调用点。
+from app.api.routers.vkpi_agents_brain import _require_legacy_agent_scope  # noqa: E402
 
 
 @router.post("/plan")
@@ -126,12 +125,18 @@ def marketing_brain_scorecard(staff=Depends(require_tab("vkpi", "read"))) -> dic
     return scorecard.build_marketing_brain_scorecard(staff)
 
 
-@router.get("/data-catalog")
-def data_catalog(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
-    """Data Catalog:每个指标自报来源/真假(real|awaiting_source)/新鲜度——数字可追溯真假。"""
-    from app.domains.lineage import catalog
+# 行为不变搬迁:data-catalog + marketing-brain 日报/刷新 + skills 编排三端点整组
+# move 到 vkpi_agents_brain.py(子 router 无 prefix);此处原位 include_router 兜住,
+# 路径与响应契约逐字节不变。Python 导入面按 vkpi_projects analysis 簇同款 re-export。
+from app.api.routers import vkpi_agents_brain as _brain_sub  # noqa: E402
 
-    return catalog.build_data_catalog()
+router.include_router(_brain_sub.router)
+data_catalog = _brain_sub.data_catalog
+marketing_brain_daily = _brain_sub.marketing_brain_daily
+marketing_brain_refresh = _brain_sub.marketing_brain_refresh
+skills_orchestrate = _brain_sub.skills_orchestrate
+skills_plan = _brain_sub.skills_plan
+skills_evals = _brain_sub.skills_evals
 
 
 @router.post("/bets")
@@ -224,26 +229,6 @@ def bet_resolve(bet_id: int, body: dict = Body(default_factory=dict), staff=Depe
     b = body or {}
     return bet_ledger.resolve_bet(int(bet_id), str(b.get("outcome") or ""),
                                   realized_gain_cents=b.get("realized_gain_cents"), lesson=str(b.get("lesson") or ""), staff=staff)
-
-
-@router.get("/marketing-brain/daily")
-def marketing_brain_daily(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
-    """cut1 · Market Brain v1 日报:每日合成产品热/上升渠道/竞品动/机会窗/今日建议(只读)。"""
-    from app.domains.market import market_brain
-
-    return market_brain.build_daily_brief(staff, sweep_expired=False)
-
-
-@router.post("/marketing-brain/refresh")
-def marketing_brain_refresh(
-    staff=Depends(require_manager_tab("vkpi", "write")),
-) -> dict[str, Any]:
-    """cut1 · 活体化:治理过期信号 + 重出日报(运营手动刷;调度器每日自动跑)。"""
-    from app.domains.market import market_brain
-
-    expired = market_brain.mark_expired_signals()
-    brief = market_brain.build_daily_brief(staff, sweep_expired=False)
-    return {"status": "ok", "expired_swept": expired, "brief": brief}
 
 
 @router.post("/cycle/run")
@@ -382,32 +367,3 @@ def kol_provenance(
     from app.domains.memory import provenance
 
     return provenance.get_kol_provenance(int(kol_pool_id), staff=staff)
-
-
-@router.post("/skills/orchestrate")
-def skills_orchestrate(body: dict = Body(default_factory=dict), staff=Depends(require_manager_tab("vkpi", "write"))) -> dict[str, Any]:
-    """编排器侧接线:据 goal+context 选 skill 并经 registry 真调用(非仅人工 HTTP)。
-    body: {goal(必填), context?, dry_run?(默认 true)}。dry_run=true 走规则不烧 LLM;预算闸+gate 守门;零触 fit。"""
-    _require_legacy_agent_scope(staff, surface="Agent skill orchestration")
-    from app.domains.marketing_brain import skill_orchestrator
-    goal = str((body or {}).get("goal") or "").strip()
-    if not goal:
-        raise HTTPException(status_code=400, detail="goal required")
-    context = body.get("context") if isinstance(body.get("context"), dict) else {}
-    dry_run = body.get("dry_run", True)
-    dry_run = True if dry_run is None else bool(dry_run)
-    return skill_orchestrator.orchestrate_skills(goal, context=context, dry_run=dry_run, record=True, staff=staff)
-
-
-@router.get("/skills/plan")
-def skills_plan(goal: str, staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
-    """PLAN-ONLY 预览:编排器据 goal 会选哪些 skill + 各自 input(不执行)。"""
-    from app.domains.marketing_brain import skill_orchestrator
-    return skill_orchestrator.plan_skills(goal)
-
-
-@router.get("/skills/evals")
-def skills_evals(staff=Depends(require_tab("vkpi", "read"))) -> dict[str, Any]:
-    """跑全部 5 个 skill 的 evaluate(),返回诚实 per-skill hit_rate + 汇总(creator_match 默认 fixture 模式)。"""
-    from app.domains.marketing_brain import evals as mb_evals
-    return mb_evals.run_skill_evals()

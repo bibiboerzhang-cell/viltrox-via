@@ -39,101 +39,43 @@ def _composite_morning_sync_enabled() -> bool:
     return _scheduler_task_enabled("vkpi_morning_sync")
 
 
-async def _with_durable_queue(operation):
-    """Run a short queue operation and always release its Redis client."""
-    from app.services.jobs.queue import build_job_queue
+# ──────────────────────────────────────────────
+# durable 队列帮手 + 基建清扫/健康巡检/记账快照任务簇 → jobs_tasks_maintenance.py
+# (行为不变搬出,治 fan-out)。原文件 re-export 兜住所有调用点。
+# ──────────────────────────────────────────────
+from .jobs_tasks_maintenance import (  # noqa: E402,F401
+    _enqueue_provider_job,
+    _with_durable_queue,
+    job_cache_cleanup,
+    job_confirm_partial_awards,
+    job_pending_asset_cleanup,
+    job_provider_health_check,
+    job_rate_limit_cleanup,
+    job_token_broker_reset_daily,
+    job_verification_scan_check,
+    job_vkpi_apify_reconcile,
+    job_vkpi_cost_snapshot,
+    job_vkpi_goaffpro_metrics_sync,
+    job_vkpi_health_sentinel,
+    job_worker_lease_expire_stale,
+)
 
-    queue = build_job_queue()
-    if queue is None:
-        raise RuntimeError("durable job queue unavailable")
-    try:
-        return await operation(queue)
-    finally:
-        await queue.close()
-
-
-async def _enqueue_provider_job(
-    job_type: str,
-    payload: dict,
-    *,
-    lock_key: str,
-    timeout_seconds: int,
-) -> str:
-    async def operation(queue):
-        return await queue.enqueue(
-            job_type,
-            payload,
-            lock_key=lock_key,
-            timeout_seconds=timeout_seconds,
-        )
-
-    return await _with_durable_queue(operation)
+# ──────────────────────────────────────────────
+# 学习闭环 / 押注复盘 / workflow 续跑任务簇 → jobs_tasks_learning.py
+# (行为不变搬出,治 fan-out)。原文件 re-export 兜住所有调用点。
+# ──────────────────────────────────────────────
+from .jobs_tasks_learning import (  # noqa: E402,F401
+    job_vkpi_agent_cycle,
+    job_vkpi_bet_review_due,
+    job_vkpi_fulfillment_sweep,
+    job_vkpi_outcomes_refresh,
+    job_vkpi_recommendation_outcomes,
+)
 
 
 # ──────────────────────────────────────────────
 # 任务实现
 # ──────────────────────────────────────────────
-
-async def job_verification_scan_check():
-    """
-    每 5 分钟检查一次:
-      - pending >= 10 → 触发扫描
-      - oldest > 24h → 触发扫描
-      - 否则 skip
-    """
-    try:
-        from app.services.verification.scanner import cron_scan_check
-        result = await _with_durable_queue(cron_scan_check)
-        if result and result.get("queued"):
-            logger.info("scheduler.verification_scan", extra={"result": result})
-    except Exception:
-        logger.exception("scheduler.verification_scan_failed")
-
-
-async def job_cache_cleanup():
-    """每 30 分钟清理过期缓存"""
-    try:
-        from app.services.cache.memory_cache import _cleanup_expired
-        n = _cleanup_expired()
-        if n > 0:
-            logger.info("scheduler.cache_cleanup", extra={"expired": n})
-    except Exception:
-        logger.exception("scheduler.cache_cleanup_failed")
-
-
-async def job_pending_asset_cleanup():
-    """每 30 分钟软删除未绑定超过 30 分钟的 pending upload asset"""
-    try:
-        from app.db.repositories.assets import cleanup_stale_pending_assets
-
-        result = await asyncio.to_thread(cleanup_stale_pending_assets, 30)
-        if int(result.get("deleted", 0) or 0) > 0:
-            logger.info("scheduler.pending_asset_cleanup", extra={"result": result})
-    except Exception:
-        logger.exception("scheduler.pending_asset_cleanup_failed")
-
-
-async def job_rate_limit_cleanup():
-    """每 1 小时清理 rate limit 旧 bucket"""
-    try:
-        from app.services.security.rate_limiter import cleanup_old_buckets
-        n = cleanup_old_buckets()
-        if n > 0:
-            logger.info("scheduler.rate_limit_cleanup", extra={"stale": n})
-    except Exception:
-        logger.exception("scheduler.rate_limit_cleanup_failed")
-
-
-async def job_provider_health_check():
-    """每 5 分钟做 provider 最小 HTTP probe, 结果供 SystemTab 展示."""
-    try:
-        from app.services.system.provider_health import run_provider_health_check
-
-        result = await run_provider_health_check()
-        logger.info("scheduler.provider_health_check", extra={"ok": result.get("ok")})
-    except Exception:
-        logger.exception("scheduler.provider_health_check_failed")
-
 
 async def job_bh_daily_snapshot():
     """每天 03:00 UTC 抓一次 B&H Viltrox 商品快照"""
@@ -161,118 +103,6 @@ async def job_via_daily_learning():
         logger.info("scheduler.via_learning_queued", extra={"job_id": task_id})
     except Exception:
         logger.exception("scheduler.via_learning_failed")
-
-
-async def job_vkpi_bet_review_due():
-    """cut5 · Bet Ledger 校准回路:每日扫到期未结算押注(review_at<=now, outcome=open),
-
-    逐条发 bet.review_due 事件(逼出复盘)。让"押注下了就石沉大海"变成到期主动催复盘。
-    红线:只读扫描 + 发事件;outcome/lesson 仍人工结算,LLM 永不触 viltrox_fit_score。
-    """
-    try:
-        from app.domains.market import bet_ledger
-        from app.domains.platform import event_ledger
-
-        def _scan() -> int:
-            due = bet_ledger.scan_due_bets(limit=200).get("due", [])
-            for b in due:
-                try:
-                    event_ledger.emit("bet.review_due", entity_type="bet", entity_id=b.get("id"),
-                                      source="bet_review_due_scan", payload={"hypothesis": str(b.get("hypothesis") or "")[:120]})
-                except Exception:
-                    logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-                    pass
-            return len(due)
-
-        n = await asyncio.to_thread(_scan)
-        logger.info("scheduler.vkpi_bet_review_due", extra={"due": n})
-    except Exception:
-        logger.exception("scheduler.vkpi_bet_review_due_failed")
-
-
-async def job_vkpi_fulfillment_sweep():
-    """cut4 · workflow_runs 事实源:每日续跑未完成履约链，无时才新建。
-
-    17track同步→开观察窗→扫内容；优先对同一 run_id 取新 fence 续跑，
-    避免每个 cron tick 无条件新建。零触 viltrox_fit_score。
-    """
-    try:
-        from app.domains.platform import workflow_recovery
-
-        result = await asyncio.to_thread(
-            workflow_recovery.run_scheduled_workflow,
-            "fulfillment_sweep",
-            None,
-        )
-        logger.info("scheduler.vkpi_fulfillment_sweep",
-                    extra={"run_id": result.get("run_id"), "status": result.get("status"),
-                           "scheduled_action": result.get("scheduled_action")})
-    except Exception:
-        logger.exception("scheduler.vkpi_fulfillment_sweep_failed")
-
-
-async def job_vkpi_agent_cycle():
-    """cut4 · workflow_runs 事实源:每日续跑未完成 Agent 链，无时才新建。
-
-    生成今日建议→汇总→留痕；优先复用同一 run_id，执行仍需人审。
-    """
-    try:
-        from app.domains.platform import workflow_recovery
-
-        result = await asyncio.to_thread(
-            workflow_recovery.run_scheduled_workflow,
-            "agent_cycle",
-            None,
-        )
-        logger.info("scheduler.vkpi_agent_cycle",
-                    extra={"run_id": result.get("run_id"), "status": result.get("status"),
-                           "scheduled_action": result.get("scheduled_action")})
-    except Exception:
-        logger.exception("scheduler.vkpi_agent_cycle_failed")
-
-
-async def job_vkpi_recommendation_outcomes():
-    """学习闭环·结果段:周期性回填推荐 outcome 业务标签(published/order/roi)。
-
-    把"打分→动作→结果"的结果半边持续落地:从真实业务行(项目/消息/内容/销售/成本)促升标签,
-    供下次推荐学习。红线:只读真实业务行促升,绝不伪造平台数据,零触 viltrox_fit_score。
-    """
-    try:
-        from app.domains.recommendations import outcomes
-
-        result = await asyncio.to_thread(outcomes.refresh_open_outcomes, 500)
-        logger.info("scheduler.vkpi_recommendation_outcomes",
-                    extra={"refreshed": result.get("refreshed"), "promoted": result.get("promoted")})
-    except Exception:
-        logger.exception("scheduler.vkpi_recommendation_outcomes_failed")
-
-
-async def job_vkpi_outcomes_refresh():
-    """学习闭环·结果段(按 outcomes 表自身遍历):每日回流未 finalize 行的真实业务事件。
-
-    与 job_vkpi_recommendation_outcomes(按最近 500 条推荐行遍历)互补:本 job 遍历
-    outcome_finalized_at IS NULL 且 recommendation_id 非空的 outcome 行调 refresh_business_outcome,
-    覆盖「展示路径落了底座、但推荐行较老不在最近 N 条里」的行;单条异常吞掉不拖垮整批。
-    顺带把无 recommendation_id 的老行按严格唯一匹配回填连接键(反推不出保持原样,绝不删行)。
-    红线:只读真实业务行促升标签,绝不伪造平台数据,零触 viltrox_fit_score。
-    """
-    try:
-        from app.domains.recommendations import outcomes
-
-        backfill = await asyncio.to_thread(outcomes.backfill_missing_recommendation_ids, 200, dry_run=False)
-        result = await asyncio.to_thread(outcomes.refresh_unfinalized_outcomes, 500)
-        logger.info(
-            "scheduler.vkpi_outcomes_refresh",
-            extra={
-                "refreshed": result.get("refreshed"),
-                "failed": result.get("failed"),
-                "scanned": result.get("scanned"),
-                "backfilled": backfill.get("backfilled"),
-                "backfill_unresolved": backfill.get("unresolved"),
-            },
-        )
-    except Exception:
-        logger.exception("scheduler.vkpi_outcomes_refresh_failed")
 
 
 async def job_vkpi_lineage_snapshot():
@@ -356,26 +186,6 @@ async def job_vkpi_morning_sync():
         },
     )
     return result
-
-
-async def job_vkpi_goaffpro_metrics_sync():
-    """每 20 分钟刷新 GOAFFPRO 指标缓存(点击/订单/GMV/佣金/比例/状态)→ vkpi_goaffpro_kol_metrics。
-
-    页面(数据追踪/项目卡)读这张缓存表秒出,不再逐 KOL 实时打 GOAFFPRO(性能落库)。
-    阻塞 httpx 走线程池,不卡事件循环。no creds → 空跑即返回。
-    """
-    try:
-        import asyncio
-
-        from app.domains.integrations import goaffpro_connect
-
-        result = await asyncio.to_thread(goaffpro_connect.sync_kol_metrics)
-        logger.info(
-            "scheduler.vkpi_goaffpro_metrics_sync",
-            extra={"synced": result.get("synced"), "errors": result.get("errors"), "ok": result.get("ok")},
-        )
-    except Exception:
-        logger.exception("scheduler.vkpi_goaffpro_metrics_sync_failed")
 
 
 async def job_vkpi_market_intelligence_refresh():
@@ -473,18 +283,6 @@ from .jobs_tasks_gtm import (  # noqa: E402,F401
     job_vkpi_gtm_windows_refresh,
     job_vkpi_prediction_weekly_rollup,
 )
-
-
-async def job_confirm_partial_awards():
-    """每 10 分钟检查一次, 把过了 24h 的 partial 投稿补发剩余 60%"""
-    try:
-        from app.services.rewards.points import confirm_partial_awards
-        import asyncio
-        result = await asyncio.to_thread(confirm_partial_awards)
-        if result.get("confirmed", 0) > 0:
-            logger.info("scheduler.partial_awards_confirmed", extra={"result": result})
-    except Exception:
-        logger.exception("scheduler.partial_awards_failed")
 
 
 # ──────────────────────────────────────────────
@@ -688,31 +486,6 @@ async def job_logistics_track_sync():
         _record_scheduler_run("logistics_track_sync", ok=False, error=str(exc)[:240])
 
 
-async def job_worker_lease_expire_stale():
-    """I2 · 清扫过期 worker 租约(到期仍 leased → expired,供重派)。常开、空跑无害。"""
-    try:
-        import asyncio
-        from app.domains.platform import worker_lease
-
-        res = await asyncio.to_thread(worker_lease.expire_stale)
-        if int(res.get("expired") or 0):
-            logger.info("scheduler.worker_lease_expire", extra={"expired": res.get("expired")})
-    except Exception:
-        logger.warning("scheduler.worker_lease_expire_failed", exc_info=True)
-
-
-async def job_token_broker_reset_daily():
-    """I1 · 每日复位 token 配额用量/成本,清因耗尽的 health 态。常开、空跑无害。"""
-    try:
-        import asyncio
-        from app.domains.platform import token_broker
-
-        res = await asyncio.to_thread(token_broker.reset_daily)
-        logger.info("scheduler.token_broker_reset", extra={"reset": str(res)[:80]})
-    except Exception:
-        logger.warning("scheduler.token_broker_reset_failed", exc_info=True)
-
-
 async def job_kol_auto_poll():
     """D3 · 关注 KOL 自动轮询:对收藏/高价值/进项目且 metadata 超 24h 的 KOL 入队轻量刷新。
 
@@ -887,56 +660,6 @@ async def job_ops_threshold_alerts():
             logger.info("scheduler.ops_threshold_alerts", extra={"count": result.get("count")})
     except Exception:
         logger.exception("scheduler.ops_threshold_alerts_failed")
-
-
-async def job_vkpi_health_sentinel():
-    """C1 数据健康哨兵:每日 10 项黄金链路只读检查 → persistent_cache 落库 + fail 汇总告警。
-
-    常开(轻量纯 SELECT,空库也安全空跑);fail 项经既有 vkpi_alerts 通知 owner,
-    alert_key 带 UTC 日期 → 同天重复跑 upsert 同一行,当天幂等不重复发。零触 fit/rule_v0。
-    """
-    try:
-        from app.domains.ops import health_sentinel
-
-        result = await asyncio.to_thread(health_sentinel.run_health_sentinel, "scheduled")
-        logger.info("scheduler.vkpi_health_sentinel", extra={"sentinel_summary": result.get("summary")})
-    except Exception:
-        logger.exception("scheduler.vkpi_health_sentinel_failed")
-
-
-async def job_vkpi_apify_reconcile():
-    """Apify 记账对账:PPE 事件费结算滞后导致低记(实测 ~6x),每日用 API 结算现值
-    覆盖近 48h 台账行并回补预算 scope。只对账不拦截;无 token 温和空跑。"""
-    try:
-        from app.domains.costs import budget_guard
-
-        result = await asyncio.to_thread(budget_guard.reconcile_apify_costs, 48)
-        logger.info("scheduler.vkpi_apify_reconcile", extra={"result": result})
-    except Exception:
-        logger.exception("scheduler.vkpi_apify_reconcile_failed")
-
-
-async def job_vkpi_cost_snapshot():
-    """C5 成本记账收口:每日把昨日(UTC)vkpi_ai_cost_ledger 按 provider/actor 聚合成
-    快照落 persistent_cache(health_sentinel 同款模式,零新表零迁移)。
-
-    常开(轻量只读聚合 + 写缓存,空库安全空跑);同日重跑 delete+insert 幂等。
-    只记账可见,绝不预检拦截、绝不改预算闸/actor 调用行为。
-    """
-    try:
-        from app.domains.costs import budget_guard
-
-        result = await asyncio.to_thread(budget_guard.snapshot_daily_costs)
-        logger.info(
-            "scheduler.vkpi_cost_snapshot",
-            extra={
-                "snapshot_date": result.get("date"),
-                "snapshot_total_usd": (result.get("totals") or {}).get("total_usd"),
-                "snapshot_persisted": result.get("persisted"),
-            },
-        )
-    except Exception:
-        logger.exception("scheduler.vkpi_cost_snapshot_failed")
 
 
 # ──────────────────────────────────────────────
