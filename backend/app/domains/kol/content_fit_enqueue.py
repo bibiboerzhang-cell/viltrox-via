@@ -284,6 +284,7 @@ def _exposure_potential(conn: Any, kol_pool_id: int, fit_confidence: float | Non
 def _process_content_fit_candidates(
     candidates: list[dict[str, Any]],
     *,
+    target_identity: Any,
     conn: Any,
     has_evidence: Any,
     has_fit: set[int],
@@ -360,7 +361,7 @@ def _process_content_fit_candidates(
             {
                 "queue_lane": "batch",
                 "target_type": "kol",
-                "target_id": str(kid),
+                **target_identity(kid),
                 "derive_method": derive_method,
                 "search_session_id": sid,
                 "kol_pool_id": kid,
@@ -422,6 +423,9 @@ def enqueue_content_fit_for_session(
     幂等/控量:有视频证据 + 无 ready fit cache + 未在同 session 排队 → 才入队;至多 top_n 个。
     返回入队明细 + 每候选 exposure_potential(纯展示);零写 fit,零烧 LLM。
     """
+    def target_identity(kol_pool_id: int) -> dict[str, str]:
+        return {"target_id": str(kol_pool_id)}
+
     sid = int(session_id)
     normalized_product_sku = content_fit_analysis.normalize_product_sku(product_sku)
     derive_method = content_fit_analysis.content_fit_derive_method(normalized_product_sku)
@@ -458,6 +462,7 @@ def enqueue_content_fit_for_session(
     enqueued, skipped, exposure, ai_disabled_count, legacy_count, readiness = (
         _process_content_fit_candidates(
             candidates,
+            target_identity=target_identity,
             conn=conn,
             has_evidence=has_evidence,
             has_fit=has_fit,
