@@ -1,11 +1,28 @@
-import { BadgeCheck, Loader2, Search, Video } from "lucide-react";
+import { BadgeCheck, CheckCircle2, Loader2, Search, Video } from "lucide-react";
 import { cleanText } from "./SmartKolInputPanel.helpers";
 import { HistoryStrip, UrlSummary } from "./SmartKolInputPanel.Sections";
 import { TextResultSection } from "./SmartKolInputPanel.TextResult";
 import { SmartKolSearchEntry } from "./SmartKolInputPanel.Entry";
 import { KolSearchPolicyPanel } from "./SmartKolInputPanel.SearchPolicy";
+import { KolPoolSkeletonRows } from "../../panels/KolPoolPanel.listParts";
 import { type SmartKolInputPanelProps } from "./SmartKolInputPanel.runtime";
 import { useSmartKolInputPanelController } from "./SmartKolInputPanel.controller";
+
+// 等待本地结果的占位行。复用达人库列表已有的骨架行(同一种「一行一个人」的形状),
+// 只补一层暗面板容器 + 压低不透明度,让这套为浅色表格调过的骨架落在深色面板上不刺眼。
+function RecallLoadingSkeleton() {
+  return (
+    <div
+      data-testid="smart-kol-recall-skeleton"
+      aria-hidden="true"
+      className="mt-3 overflow-hidden rounded-lg border border-white/[0.06] bg-black/20 px-2 py-1.5"
+    >
+      <table className="w-full table-fixed opacity-[0.16]">
+        <tbody><KolPoolSkeletonRows /></tbody>
+      </table>
+    </div>
+  );
+}
 
 export function SmartKolInputPanel(props: SmartKolInputPanelProps) {
   const vm = useSmartKolInputPanelController(props);
@@ -80,7 +97,27 @@ export function SmartKolInputPanel(props: SmartKolInputPanelProps) {
         <div className="mt-3 rounded-lg border border-rose-300/20 bg-rose-500/[0.08] px-3 py-2 text-[11px] text-rose-200">{vm.error}</div>
       ) : null}
 
-      {vm.mode === "url" && vm.urlResult ? (
+      {vm.showRecallSkeleton ? <RecallLoadingSkeleton /> : null}
+
+      {/* 完成信号:本地那条腿一交出结果就在结果区抬头说清楚——数字只报「已经拿到手的人数」,
+          后台补充只说在跑,不报进度百分比,也不预告最终会有几人。 */}
+      {!vm.showRecallSkeleton && vm.mode === "text" && vm.recallResult && !vm.recallIsStale && vm.recallCount > 0 ? (
+        <div
+          data-testid="smart-kol-recall-ready"
+          className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-emerald-300/20 bg-emerald-400/[0.07] px-2.5 py-1.5 text-[10.5px] text-emerald-100"
+        >
+          <CheckCircle2 size={12} />
+          <span className="font-medium">库内已找到 {vm.recallCount} 人 · 现在就能看</span>
+          {vm.advanceBusy ? (
+            <span className="inline-flex items-center gap-1 text-slate-400">
+              <Loader2 size={10} className="animate-spin" />
+              后台继续补充新发现,不用等
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {!vm.showRecallSkeleton && vm.mode === "url" && vm.urlResult ? (
         <UrlSummary
           result={vm.urlResult}
           apiToken={vm.apiToken}
@@ -92,7 +129,7 @@ export function SmartKolInputPanel(props: SmartKolInputPanelProps) {
         />
       ) : null}
 
-      {vm.mode === "text" && vm.recallResult ? (
+      {!vm.showRecallSkeleton && vm.mode === "text" && vm.recallResult ? (
         <TextResultSection
           recallResult={vm.recallResult}
           searchSession={vm.activeSearchSession}
@@ -105,7 +142,9 @@ export function SmartKolInputPanel(props: SmartKolInputPanelProps) {
           input={vm.input}
           apiToken={vm.apiToken}
           isBusy={vm.isBusy}
-          state={vm.state}
+          // 结果区只用 state 判「现在还能不能再发起一次全网补充」(那两个按钮的转圈+禁用)。
+          // 忙碌信号就地留在触发它的按钮上,不再上浮到顶部搜索框。
+          state={vm.advanceBusy ? "executing" : vm.state}
           plannerFellBack={vm.plannerFellBack}
           personaEditing={vm.personaEditing}
           personaDraft={vm.personaDraft}

@@ -50,7 +50,13 @@ export function SmartKolSearchEntry({
           value={value}
           onChange={(event) => onInputChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") event.preventDefault();
+            if (event.key !== "Enter") return;
+            // 中文输入法用 Enter 上屏候选词,那一下不是「发起搜索」,直接放过不拦不触发。
+            if (event.nativeEvent.isComposing) return;
+            event.preventDefault();
+            // 裸 Enter 仍然不发起搜索(见下方裁定);⌘/Ctrl+Enter 是明确的「就是要搜」手势,
+            // 用与按钮完全相同的 disabled 口径:本地结果还没到手就不放行,到手即刻可再发一次。
+            if ((event.metaKey || event.ctrlKey) && !disabled) onRun();
           }}
           placeholder="粘贴 KOL 主页 / 视频 URL，或输入产品需求，例如: 35mm 低光人像 YouTube 摄影师"
           className="min-h-[40px] rounded-md border border-white/[0.075] bg-black/30 px-3 py-2 text-[11.5px] text-slate-200 outline-none placeholder-slate-600 focus:border-cyan-300/45"
@@ -60,6 +66,7 @@ export function SmartKolSearchEntry({
           type="button"
           onClick={onRun}
           disabled={disabled}
+          title="⌘/Ctrl + Enter 也可发起"
           className="inline-flex min-h-[40px] items-center justify-center gap-1.5 rounded-md border border-cyan-300/18 bg-cyan-500/[0.14] px-3 text-[11px] font-medium text-cyan-100 transition-colors hover:bg-cyan-500/[0.22] disabled:cursor-not-allowed disabled:opacity-55"
         >
           {busy ? <Loader2 size={13} className="animate-spin" /> : inferredMode === "url" ? <Link2 size={13} /> : <Search size={13} />}

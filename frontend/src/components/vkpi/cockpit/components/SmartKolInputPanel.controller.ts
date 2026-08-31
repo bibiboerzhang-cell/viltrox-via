@@ -89,6 +89,10 @@ export function useSmartKolInputPanelController({
   const [urlResult, setUrlResult] = useState<VkpiKolUrlDeepCrawlResponse | null>(() => persistedDisplay?.urlResult ?? null);
   const [recallResult, setRecallResult] = useState<VkpiKolRecallResponse | null>(() => persistedDisplay?.recallResult ?? null);
   const [advanceResult, setAdvanceResult] = useState<VkpiKolSmartSearchProfileAdvanceResponse | null>(null);
+  // M1·busy 信号解耦:全网补充(queueTextAdvance)是「本地结果已经交付之后」的后台腿,20-25s 才回。
+  // 它以前借用全局 state="executing" 记忙 → 本地 0.4s 已出结果,搜索按钮却继续转圈+禁用,用户被锁到
+  // 后台腿结束。改为独立的非阻塞忙标记:只用来渲染行内提示,绝不参与 isBusy / 按钮禁用。
+  const [advanceBusy, setAdvanceBusy] = useState(false);
   const [displayedSearchSessionId, setDisplayedSearchSessionId] = useState<number | null>(() => persistedDisplay?.activeSearchSessionId ?? null);
   const [pollingSearchSessionId, setPollingSearchSessionId] = useState<number | null>(() => {
     const persistedId = persistedDisplay?.activeSearchSessionId ?? null;
@@ -176,7 +180,10 @@ export function useSmartKolInputPanelController({
     discoveryKey, favoriteOne, addPickedToMyKol, approveAndCreateDraft, generateOutreachForPicked,
   } = useSmartKolSelection({ apiToken, displayedSearchSessionId, canApprove: approvalReady, canFavorite: !recallIsStale, currentSearchRequest, isCurrentSearchRequest });
   const inferredMode = useMemo(() => detectMode(input), [input]);
+  // advanceBusy 刻意不进 isBusy:后台补充腿在跑,不该锁住输入框和搜索按钮。
   const isBusy = state === "loading" || state === "executing" || batchBusy;
+  // M1·骨架:文字腿等待本地结果的那 0.3-0.4s(以及重开历史会话时)渲染占位行,不再整块白屏。
+  const showRecallSkeleton = state === "loading" && mode === "text";
   const urlCanExecute = canExecuteUrlResult(apiToken, urlResult, isBusy);
   const recallItems = useMemo(() => recallTopItems(recallResult), [recallResult]);
   const llmPlan = asRecord((recallResult as Row | null)?.llm_query_plan);
@@ -412,10 +419,10 @@ export function useSmartKolInputPanelController({
     setMode(nextMode);
     setState("loading");
     setError("");
-    setUrlResult(null);
-    setRecallResult(null);
-    setRecallFingerprint("");
     setAdvanceResult(null);
+    setAdvanceBusy(false);
+    // 会话身份必须在 await 之前就断:轮询若还挂在上一场搜索的 session 上,新结果会被旧会话的
+    // 发现项/计数污染。展示态(recallResult / urlResult / fingerprint)则不在这里清 —— 见下。
     setDisplayedSearchSessionId(null);
     setPollingSearchSessionId(null);
     setPollPausedSessionId(null);
@@ -460,6 +467,9 @@ export function useSmartKolInputPanelController({
       let autoVideo: VkpiKolUrlDeepCrawlResponse | null = null;
       if (!isText) {
         setMode("url");
+        // 清屏与上屏同一拍:旧展示态活到响应到达为止,中间那段由骨架接管,不再出现空白结果区。
+        setRecallResult(null);
+        setRecallFingerprint("");
         const urlPayload = response.result as VkpiKolUrlDeepCrawlResponse;
         setUrlResult(urlPayload);
         // 账号 URL 自动入库:识别为 profile 且后端 dry-run 就绪(dry_run_ready)→ 直接自动 execute
@@ -512,6 +522,7 @@ export function useSmartKolInputPanelController({
         }
       } else {
         setMode("text");
+        setUrlResult(null);
         setRecallResult(response.result as VkpiKolRecallResponse);
         setRecallFingerprint(requestFingerprint);
         if (needsProductClarification) {
@@ -534,6 +545,10 @@ export function useSmartKolInputPanelController({
       if (autoVideo) void runUrlExecute(autoVideo, { auto: true, requestEpoch });
     } catch (err) {
       if (!isCurrentSearchRequest(requestEpoch)) return;
+      // 失败也要清:输入框已经是新查询语了,把上一场搜索的人留在下面等于把 A 的结果挂在 B 的名下。
+      setRecallResult(null);
+      setRecallFingerprint("");
+      setUrlResult(null);
       setState("error");
       setError(err instanceof Error ? err.message : "请求失败，请重试");
     }
@@ -625,6 +640,9 @@ export function useSmartKolInputPanelController({
   const queueTextAdvance = async (overrideQuery?: string, parentEpoch?: SearchRequestEpoch, reuseSessionId?: number) => {
     const query = cleanText(overrideQuery ?? input);
     if (!apiToken || !query || state === "executing") return;
+    // 手动再发起的全网补充(结果区按钮 / 重试)在上一次还没回来前不重复排队;run() 链下来的那次
+    // 带 parentEpoch,已被 beginSearchRequest 顶掉旧的,不能被这道闸拦住。
+    if (parentEpoch == null && advanceBusy) return;
     const followerRangeError = validateKolFollowerRange(searchFilters);
     if (followerRangeError) {
       setSearchFiltersOpen(true);
@@ -657,7 +675,9 @@ export function useSmartKolInputPanelController({
       setPollPausedSessionId(null);
     }
     setRecallFingerprint(requestFingerprint);
-    setState("executing");
+    // 这里以前是 setState("executing") —— 它经 isBusy 直接锁死搜索按钮 20-25s。全网补充是后台腿,
+    // 本地结果已经在屏幕上了,用户此刻就该能发起下一次搜索;忙碌只用独立的 advanceBusy 记。
+    setAdvanceBusy(true);
     setError("");
     try {
       // 库内推荐与全网候选分开控量。全网先放宽候选,后端再按相关性/触达/账号类型过滤,
@@ -713,6 +733,9 @@ export function useSmartKolInputPanelController({
       if (!isCurrentSearchRequest(requestEpoch)) return;
       setState("ready");
       setError(err instanceof Error ? err.message : "全网查找启动失败，请重试");
+    } finally {
+      // 只有当次请求还是最新的才收忙标记;已被新一轮搜索顶掉时不许回头清掉新那轮的标记。
+      if (isCurrentSearchRequest(requestEpoch)) setAdvanceBusy(false);
     }
   };
 
@@ -746,7 +769,8 @@ export function useSmartKolInputPanelController({
 
   return {
     apiToken, input, setInput, state, mode, urlResult, recallResult, activeSearchSession,
-    inferredMode, isBusy, error, searchFiltersOpen, setSearchFiltersOpen,
+    inferredMode, isBusy, advanceBusy, showRecallSkeleton, recallCount: recallItems.length,
+    error, searchFiltersOpen, setSearchFiltersOpen,
     searchObjective, setSearchObjective, searchStrategy, setSearchStrategy,
     discoveryPlatforms, setDiscoveryPlatforms, contentLanguages, setContentLanguages,
     kolProfileTypes, setKolProfileTypes, discoveryRegion, setDiscoveryRegion,
