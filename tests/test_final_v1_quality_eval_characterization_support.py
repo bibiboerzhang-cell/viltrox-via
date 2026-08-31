@@ -1,22 +1,26 @@
-"""共享层 顶层(千行卫兵拆分)。"""
+"""共享层(千行卫兵拆分;单文件版,无 base 链)。"""
 from __future__ import annotations
 import json
 from pathlib import Path
-from tests.test_final_v1_quality_eval_characterization_support_base import (  # noqa: F401
-    Any,
+
+import copy
+from typing import Any
+
+import pytest
+
+from app.domains.kol.final_v1_quality_eval import (
     FinalV1QualityInputError,
-    MODEL,
-    PROMPT,
-    SHA_A,
-    SHA_B,
-    SHA_C,
-    SHA_D,
-    SHA_GHOST,
-    copy,
     evaluate_final_v1_quality,
-    json,
-    pytest,
 )
+
+
+SHA_A = "a" * 64
+SHA_B = "b" * 64
+SHA_C = "c" * 64
+SHA_D = "d" * 64
+SHA_GHOST = "e" * 64
+MODEL = "gemini-2.5-pro"
+PROMPT = "final_v1_p7"
 
 
 def _canonical(value: Any) -> str:
@@ -292,9 +296,7 @@ def _predictions_manifest_pass() -> dict[str, Any]:
             }
         ],
     }
-
-
-# GOLDEN_REPORT:369 行 golden 字面量抽至 fixture(千行卫兵),内容逐字节等价(json 往返)。
+# GOLDEN_REPORT:369 行 golden 抽至 fixture(千行卫兵),json 往返逐字节等价。
 GOLDEN_REPORT = json.loads((Path(__file__).parent / "fixtures" / "final_v1_quality_eval_golden_report.json").read_text())
 
 GOLDEN_REPORT_PASS = r"""{
