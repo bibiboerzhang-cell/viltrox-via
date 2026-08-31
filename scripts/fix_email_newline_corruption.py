@@ -24,11 +24,20 @@ n 前缀假地址(\\nfoo@bar.com -> nfoo@bar.com),外联往错地址发。正则
 from __future__ import annotations
 
 import argparse
+
+try:
+    from scripts.stdout_utils import out as stdout_out
+except ModuleNotFoundError:  # direct execution: scripts/ is sys.path[0]
+    from stdout_utils import out as stdout_out
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+def _out(*args: object) -> None:
+    stdout_out(" ".join(str(a) for a in args) + "\n", end="")
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 ENV_PATH = PROJECT_ROOT / ".env"
@@ -182,7 +191,7 @@ def main() -> int:
     now = datetime.now(timezone.utc).isoformat()
     db = get_conn()
 
-    print(f"== email 换行腐蚀清洗 == 模式:{mode} @ {now}")
+    _out(f"== email 换行腐蚀清洗 == 模式:{mode} @ {now}")
 
     # ---- 模式A:contacts 表内双写对 ----
     pairs = [_row_dict(r) for r in db.execute(_PAIR_SQL).fetchall()]
@@ -192,13 +201,13 @@ def main() -> int:
             fixable.append(p)
         else:
             skipped.append(p)
-    print(f"\n[模式A] contacts 双写对(腐蚀=n+干净):命中 {len(pairs)},可仲裁 {len(fixable)},"
+    _out(f"\n[模式A] contacts 双写对(腐蚀=n+干净):命中 {len(pairs)},可仲裁 {len(fixable)},"
           f"仲裁源不足跳过 {len(skipped)}")
     a_applied = 0
     for p in fixable:
         already = str(p["bad_status"] or "") == "invalid"
         action = "已是 invalid,跳过" if already else ("置 invalid" if apply else "拟置 invalid")
-        print(f"  A kol={p['kol_pool_id']} 腐蚀行 id={p['bad_id']} '{p['bad_value']}'"
+        _out(f"  A kol={p['kol_pool_id']} 腐蚀行 id={p['bad_id']} '{p['bad_value']}'"
               f" ({p['bad_source']}) -> 保留 id={p['good_id']} '{p['good_value']}'"
               f" ({p['good_source']}) | before: status={p['bad_status']}"
               f" | after: status=invalid | {action}")
@@ -211,7 +220,7 @@ def main() -> int:
             )
             a_applied += 1
     for p in skipped:
-        print(f"  A-skip kol={p['kol_pool_id']} id={p['bad_id']} '{p['bad_value']}':"
+        _out(f"  A-skip kol={p['kol_pool_id']} id={p['bad_id']} '{p['bad_value']}':"
               f" 干净行来源 {p['good_source']} 置信低于 {p['bad_source']},不仲裁")
 
     # ---- 模式B:pool.email 是腐蚀值 ----
@@ -222,11 +231,11 @@ def main() -> int:
         pid = int(r["pool_id"])
         if pid not in best or _trust(r["good_source"]) > _trust(best[pid]["good_source"]):
             best[pid] = r
-    print(f"\n[模式B] pool.email 腐蚀且有干净孪生:命中 {len(best)} 行")
+    _out(f"\n[模式B] pool.email 腐蚀且有干净孪生:命中 {len(best)} 行")
     b_applied = 0
     for r in best.values():
         action = "改写" if apply else "拟改写"
-        print(f"  B pool_id={r['pool_id']} | before: email='{r['bad_email']}'"
+        _out(f"  B pool_id={r['pool_id']} | before: email='{r['bad_email']}'"
               f" | after: email='{r['good_value']}'(源 {r['good_source']})| {action}")
         if apply:
             db.execute(
@@ -237,17 +246,17 @@ def main() -> int:
 
     # ---- 模式C:无孪生嫌疑行(只报告) ----
     orphans = [_row_dict(r) for r in db.execute(_ORPHAN_SQL).fetchall()]
-    print(f"\n[模式C] raw_full_scan n 开头、无干净孪生(无仲裁源,只报告不动):{len(orphans)} 行")
+    _out(f"\n[模式C] raw_full_scan n 开头、无干净孪生(无仲裁源,只报告不动):{len(orphans)} 行")
     for r in orphans:
-        print(f"  C id={r['id']} kol={r['kol_pool_id']} '{r['contact_value']}'")
+        _out(f"  C id={r['id']} kol={r['kol_pool_id']} '{r['contact_value']}'")
 
     if apply:
         db.commit()
-        print(f"\n已写本地库:模式A 置 invalid {a_applied} 行,模式B 改写 pool.email {b_applied} 行。")
+        _out(f"\n已写本地库:模式A 置 invalid {a_applied} 行,模式B 改写 pool.email {b_applied} 行。")
     else:
-        print(f"\nDRY-RUN 汇总:模式A 可仲裁 {len(fixable)} 行 / 模式B {len(best)} 行 /"
+        _out(f"\nDRY-RUN 汇总:模式A 可仲裁 {len(fixable)} 行 / 模式B {len(best)} 行 /"
               f" 模式C 嫌疑 {len(orphans)} 行;未写任何数据。")
-        print(_PROD_SQL)
+        _out(_PROD_SQL)
     return 0
 
 
