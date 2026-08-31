@@ -8,7 +8,8 @@ as the Anthropic/Gemini siblings.  The caller keeps its own client (the
 proxy-aware ``services.ai.clients.openai_client``), retry and JSON parsing.
 
 调用方 / 测试只认门面 ``app.platform.llm_production``;本模块不得被业务代码直接
-import。任务绑定经门面解析(llm_production_common.expected_task_binding)。
+import。任务绑定链经门面解析(llm_production_common.allowed_task_bindings,
+主绑定仍走 expected_task_binding → 门面 current_task_model_binding)。
 请求形状与网关传输层一致:gpt-5 系不传 temperature/top_p;reasoning.effort 只按
 精确 id 表注入(gpt-5.5 保持 provider 默认)。
 """
@@ -22,7 +23,7 @@ from typing import Any
 from app.platform import llm_gateway
 from app.platform.llm_gateway_providers import _openai_reasoning_effort
 from app.platform.llm_production_common import (
-    expected_task_binding as _expected_task_binding,
+    assert_chain_bound_binding as _assert_chain_bound_binding,
     progress_metadata as _progress_metadata,
     sdk_failure as _sdk_failure,
 )
@@ -153,20 +154,16 @@ def generate_openai_responses(
         exact_purpose, metadata, phase="multimodal_generation"
     )
     task_binding = str(progress_metadata.get("task_binding") or "").strip()
-    expected_binding = _expected_task_binding(task_binding)
     actual_binding = f"{provider}/{exact_model}"
-    if not task_binding or expected_binding != actual_binding:
-        raise _sdk_failure(
-            "task_binding_model_mismatch",
-            provider=provider,
-            model=exact_model,
-            purpose=exact_purpose,
-            details={
-                "task_binding": task_binding,
-                "expected_binding": expected_binding,
-                "actual_binding": actual_binding,
-            },
-        )
+    # 2026-08-30:绑定校验认整条链(主 + 回退,链外仍 mismatch),语义与
+    # llm_production_google_stages.validate_google_task_binding 对齐。
+    _assert_chain_bound_binding(
+        task_binding,
+        actual_binding,
+        provider=provider,
+        model=exact_model,
+        purpose=exact_purpose,
+    )
 
     request_identity = openai_input_fingerprint(input_items)
     base_metadata = {

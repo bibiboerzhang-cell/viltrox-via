@@ -94,6 +94,13 @@ TASK_MODEL_BINDING = {
 # allowed_task_model_bindings(task) 回「主 + 回退」,绑定校验/就绪 ack 校验认整条链。
 # 回退成员的 env 钉回口与 core/gemini_models 同一条(GEMINI_FINAL_V1_QA_MODEL),
 # 保证 worker 真发出的链与这里认可的链一字不差。
+#
+# 2026-08-30 链内选节刀:每任务的值是**多节链**(tuple 按优先序排,回退位与
+# TASK_MODEL_FALLBACK_ENV_KEYS 按位次对应);绑定校验认整条链(链上任一节都算
+# bound,校验语义绝不放宽到链外)。调用期是否按近 30 天统计在链内选节由
+# platform/llm_binding_stats 决定(总闸 VKPI_MODEL_CHAIN_SELECTION_ENABLED
+# 默认关;统计缺水恒选链首)。新增链节 = 在这里补 tuple 成员——只建机制,
+# 具体新节由用户评审后填;链首(主绑定)升级仍走人审,不归选节。
 TASK_MODEL_FALLBACK_BINDINGS: dict[str, tuple[str, ...]] = {
     "audit_video_analysis": ("google/gemini-3.5-flash-lite",),
 }

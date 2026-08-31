@@ -6,8 +6,9 @@ blocks; that adapter applies the same exact-model readiness, atomic reservation,
 progress and response-verification contract without changing caller payloads.
 
 调用方 / 测试只认门面 ``app.platform.llm_production``(monkeypatch 也打在门面上);
-本模块不得被业务代码直接 import。任务绑定通过
-:func:`llm_production_common.expected_task_binding` 经门面解析,保证
+本模块不得被业务代码直接 import。任务绑定链通过
+:func:`llm_production_common.allowed_task_bindings`(主绑定仍经
+expected_task_binding → 门面)解析,保证
 ``monkeypatch.setattr(llm_production, "current_task_model_binding", ...)`` 仍然生效。
 """
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any
 
 from app.platform import llm_gateway
 from app.platform.llm_production_common import (
-    expected_task_binding as _expected_task_binding,
+    assert_chain_bound_binding as _assert_chain_bound_binding,
     progress_metadata as _progress_metadata,
     sdk_failure as _sdk_failure,
 )
@@ -60,20 +61,16 @@ def generate_anthropic_messages(
         phase="multimodal_generation",
     )
     task_binding = str(progress_metadata.get("task_binding") or "").strip()
-    expected_binding = _expected_task_binding(task_binding)
     actual_binding = f"{provider}/{exact_model}"
-    if not task_binding or expected_binding != actual_binding:
-        raise _sdk_failure(
-            "task_binding_model_mismatch",
-            provider=provider,
-            model=exact_model,
-            purpose=exact_purpose,
-            details={
-                "task_binding": task_binding,
-                "expected_binding": expected_binding,
-                "actual_binding": actual_binding,
-            },
-        )
+    # 2026-08-30:绑定校验认整条链(主 + 回退,链外仍 mismatch),语义与
+    # llm_production_google_stages.validate_google_task_binding 对齐。
+    _assert_chain_bound_binding(
+        task_binding,
+        actual_binding,
+        provider=provider,
+        model=exact_model,
+        purpose=exact_purpose,
+    )
 
     request_identity = _anthropic_messages_fingerprint(messages)
     preflight = llm_gateway.budget_preflight(

@@ -102,6 +102,39 @@ def allowed_task_bindings(task_binding: str) -> tuple[str, ...]:
     return tuple(chain)
 
 
+def assert_chain_bound_binding(
+    task_binding: str,
+    actual_binding: str,
+    *,
+    provider: str,
+    model: str,
+    purpose: str,
+) -> None:
+    """严格适配器的绑定闸(2026-08-30):认整条链,链外/缺 task_binding 恒 fail-closed。
+
+    链 = allowed_task_bindings(主 + 回退,主绑定仍经门面解析,monkeypatch 契约
+    不变);链上任一节都算 bound,校验语义绝不放宽到链外。错误 details 与
+    llm_production_google_stages.validate_google_task_binding 同形
+    (expected_binding=链首 + allowed_bindings 全链)。
+    """
+
+    allowed_bindings = allowed_task_bindings(task_binding)
+    if task_binding and actual_binding in allowed_bindings:
+        return
+    raise sdk_failure(
+        "task_binding_model_mismatch",
+        provider=provider,
+        model=model,
+        purpose=purpose,
+        details={
+            "task_binding": task_binding,
+            "expected_binding": allowed_bindings[0] if allowed_bindings else "",
+            "allowed_bindings": list(allowed_bindings),
+            "actual_binding": actual_binding,
+        },
+    )
+
+
 class ProductionLlmUnavailable(RuntimeError):
     """Safe, bounded failure raised when strict production generation degrades."""
 
@@ -143,6 +176,7 @@ def sdk_failure(
 __all__ = [
     "ProductionLlmUnavailable",
     "allowed_task_bindings",
+    "assert_chain_bound_binding",
     "expected_task_binding",
     "progress_metadata",
     "sdk_failure",

@@ -26,12 +26,13 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import Any
 
-from app.core.model_registry import current_task_model_binding
+from app.core.model_registry import current_task_model_binding, split_binding
 from app.platform import llm_gateway
 from app.platform.llm_production_common import (
     ProductionLlmUnavailable,
+    allowed_task_bindings as _allowed_task_bindings,
+    assert_chain_bound_binding as _assert_chain_bound_binding,
     progress_metadata as _progress_metadata,
-    sdk_failure as _sdk_failure,
 )
 from app.platform.llm_production_anthropic import generate_anthropic_messages
 from app.platform.llm_production_google import (
@@ -44,6 +45,38 @@ from app.platform.llm_production_openai import (
     generate_openai_responses,
     openai_response_text,
 )
+
+
+def _apply_chain_selection(
+    progress_metadata: dict[str, Any],
+    *,
+    task_binding: str,
+    provider_key: str,
+    exact_model: str,
+) -> tuple[str, str]:
+    """链内选节(2026-08-30):总闸 ``VKPI_MODEL_CHAIN_SELECTION_ENABLED`` 默认关。
+
+    前置:调用方已过 ``assert_chain_bound_binding``(链保证非空)。关闸 = 原样
+    返回(零行为变化,metadata 不加任何键、零读库);开闸时也只在调用方请求的
+    正是链首(主绑定)时按近 30 天统计选节——显式点名回退节的调用不被覆盖;
+    统计缺水(样本 < 20)恒回链首,与关闸行为逐字节一致。选节决策(哪节、为何)
+    落 ``progress_metadata["chain_selection"]`` 留痕。链首升级(改主绑定)仍走
+    人审,这里绝不改 registry 绑定、绝不选链外节。
+    """
+
+    from app.platform import llm_binding_stats
+
+    if not llm_binding_stats.chain_selection_enabled():
+        return provider_key, exact_model
+    allowed_bindings = _allowed_task_bindings(task_binding)
+    if f"{provider_key}/{exact_model}" != allowed_bindings[0]:
+        return provider_key, exact_model
+    decision = llm_binding_stats.select_chain_binding(task_binding, allowed_bindings)
+    progress_metadata["chain_selection"] = decision["trace"]
+    selected_provider, selected_model = split_binding(str(decision["binding"]))
+    if not selected_provider or not selected_model:
+        return provider_key, exact_model
+    return selected_provider, selected_model
 
 
 def generate_text(
@@ -142,21 +175,22 @@ def generate_json(
         phase="structured_generation",
     )
     task_binding = str(progress_metadata.get("task_binding") or "").strip()
-    actual_binding = f"{provider_key}/{exact_model}"
     if task_binding:
-        expected_binding = current_task_model_binding().get(task_binding, "")
-        if expected_binding != actual_binding:
-            raise _sdk_failure(
-                "task_binding_model_mismatch",
-                provider=provider_key,
-                model=exact_model,
-                purpose=str(purpose or "").strip(),
-                details={
-                    "task_binding": task_binding,
-                    "expected_binding": expected_binding,
-                    "actual_binding": actual_binding,
-                },
-            )
+        # 2026-08-30:绑定校验认整条链(主 + 回退,链外仍 mismatch),语义与
+        # llm_production_google_stages.validate_google_task_binding 对齐。
+        _assert_chain_bound_binding(
+            task_binding,
+            f"{provider_key}/{exact_model}",
+            provider=provider_key,
+            model=exact_model,
+            purpose=str(purpose or "").strip(),
+        )
+        provider_key, exact_model = _apply_chain_selection(
+            progress_metadata,
+            task_binding=task_binding,
+            provider_key=provider_key,
+            exact_model=exact_model,
+        )
     return llm_gateway.invoke_json(
         str(prompt or ""),
         purpose=str(purpose or ""),
