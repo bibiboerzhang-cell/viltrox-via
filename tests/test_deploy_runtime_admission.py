@@ -41,7 +41,7 @@ def _admission_fixture(
                 "LOCAL_DATABASE_URL=postgresql://postgres@127.0.0.1:15432/vkpi",
                 "REDIS_URL=redis://127.0.0.1:16379/0",
                 "JWT_SECRET=fixture-jwt-secret",
-                "JWT_SECRET_PREVIOUS=fixture-old-jwt-secret",
+                "JWT_SECRET_PREVIOUS=",
                 "ADMIN_PASSWORD=fixture-admin-password",
                 "REDIS_NAMESPACE=fixture",
                 "ANTHROPIC_API_KEY=must-never-reach-candidate",
@@ -93,6 +93,7 @@ def test_prepare_admission_filters_provider_secrets_and_pins_phase_a(
     assert payload["runtime_env_sha256"] == hashlib.sha256(runtime_env).hexdigest()
     assert b"fixture-jwt-secret" in runtime_env
     assert b"fixture-health-token" in runtime_env
+    assert b"JWT_SECRET_PREVIOUS" not in runtime_env
     assert b"ANTHROPIC" not in runtime_env
     assert b"OPENAI" not in runtime_env
     assert b"must-never-reach-candidate" not in runtime_env

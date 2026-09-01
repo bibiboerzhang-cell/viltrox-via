@@ -581,8 +581,9 @@ import stat
 import sys
 
 path = Path(sys.argv[1])
+canonical_tmp = Path("/tmp").resolve(strict=True)
 if (
-    path.parent != Path("/tmp")
+    path.parent != canonical_tmp
     or not path.name.startswith("vkpi-candidate-browser-runtime.")
 ):
     raise SystemExit("candidate browser runtime cleanup target is unsafe")
@@ -1920,6 +1921,7 @@ PY
 
 run_predeploy_canonical_gate() {
   local runtime_root="${LOCAL_CANDIDATE_WEB_RUNTIME}"
+  local controller_tmp_root=""
   local health_url="${PREDEPLOY_BROWSER_URL}health"
   local base_url="${PREDEPLOY_BROWSER_URL}"
   local verify_receipt="${runtime_root}/controller/canonical-verify.json"
@@ -1927,8 +1929,12 @@ run_predeploy_canonical_gate() {
   local retained_verify="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/canonical-verify.json"
   local retained_acceptance="${PREDEPLOY_BROWSER_EVIDENCE_DIR}/canonical-acceptance.json"
 
+  controller_tmp_root="$(cd /tmp && pwd -P)" || {
+    echo "Canonical deploy gate could not resolve the physical temporary directory." >&2
+    return 1
+  }
   case "${runtime_root}" in
-    /tmp/vkpi-candidate-browser-runtime.*) ;;
+    "${controller_tmp_root%/}"/vkpi-candidate-browser-runtime.*) ;;
     *)
       echo "Canonical deploy gate runtime root is not controller-owned." >&2
       return 1

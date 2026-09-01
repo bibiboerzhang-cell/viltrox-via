@@ -299,6 +299,7 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
         "start_local_candidate_browser_runtime",
         'controller_tmp_root="$(cd /tmp && pwd -P)"',
         'mktemp -d "${controller_tmp_root%/}/vkpi-candidate-browser-runtime.XXXXXX"',
+        '"${controller_tmp_root%/}"/vkpi-candidate-browser-runtime.*',
         'CANDIDATE_ROOT="${DEPLOY_CANDIDATE_DIR}"',
         'CANDIDATE_LOCAL_ENV_FILE="${LOCAL_CANDIDATE_RUNTIME_ENV}"',
         '/usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_WEB_PROFILE}"',

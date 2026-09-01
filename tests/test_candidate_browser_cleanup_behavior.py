@@ -77,6 +77,7 @@ def test_candidate_cleanup_escalates_from_term_to_kill_for_entire_setsid_group()
         + r'''
 leader=""
 runtime_root=""
+physical_tmp="$(cd /tmp && pwd -P)"
 emergency_cleanup() {
   set +e
   trap - EXIT
@@ -84,14 +85,14 @@ emergency_cleanup() {
     builtin kill -KILL -- "-${leader}" >/dev/null 2>&1 || true
     wait "${leader}" >/dev/null 2>&1 || true
   fi
-  if [[ "${runtime_root}" == /tmp/vkpi-candidate-browser-runtime.pytest.* ]] \
+  if [[ "${runtime_root}" == "${physical_tmp%/}"/vkpi-candidate-browser-runtime.pytest.* ]] \
     && [ -d "${runtime_root}" ]; then
     /bin/rmdir -- "${runtime_root}" >/dev/null 2>&1 || true
   fi
 }
 trap emergency_cleanup EXIT
 
-runtime_root="$(mktemp -d /tmp/vkpi-candidate-browser-runtime.pytest.XXXXXX)"
+runtime_root="$(mktemp -d "${physical_tmp%/}/vkpi-candidate-browser-runtime.pytest.XXXXXX")"
 PROBE_CHILD_CODE="${PROBE_CHILD_CODE}" \
   "${PROBE_PY}" -I -B -c "${PROBE_LEADER_CODE}" &
 leader=$!

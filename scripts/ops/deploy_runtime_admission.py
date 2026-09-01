@@ -93,8 +93,8 @@ def _parse_dotenv(data: bytes, *, label: str) -> dict[str, str]:
             raise FreezeError(f"{label} contains duplicate key: {key}")
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
-        if not value or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
-            raise FreezeError(f"{label} key {key} has an empty or unsafe value")
+        if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+            raise FreezeError(f"{label} key {key} has an unsafe value")
         values[key] = value
     return values
 
@@ -164,7 +164,7 @@ def _child(root: Path, raw: str, *, label: str) -> Path:
 def _runtime_environment(
     source_values: Mapping[str, str], health_values: Mapping[str, str]
 ) -> tuple[bytes, int, int]:
-    missing = sorted(_REQUIRED_ENV_KEYS - source_values.keys())
+    missing = sorted(key for key in _REQUIRED_ENV_KEYS if not source_values.get(key))
     if missing:
         raise FreezeError("candidate runtime environment is missing: " + ",".join(missing))
     health_token = health_values.get("OPS_HEALTH_TOKEN", "")
@@ -179,7 +179,7 @@ def _runtime_environment(
     filtered = {
         key: source_values[key]
         for key in sorted(_SAFE_ENV_KEYS)
-        if key in source_values
+        if source_values.get(key)
     }
     filtered.update(
         {
