@@ -258,7 +258,8 @@ def test_candidate_profiles_allow_bash_heredoc_without_broad_tmp_write(
 def test_verifier_profile_runs_controller_bound_safe_python_and_npm(
     tmp_path: Path,
 ) -> None:
-    source = Path.cwd().resolve(strict=True)
+    reviewed_source = Path.cwd().resolve(strict=True)
+    dependency_source = Path(sys.prefix).resolve(strict=True).parent
     candidate = tmp_path / "safe-python-candidate"
     safe_ops = candidate / "scripts/ops"
     safe_ops.mkdir(parents=True)
@@ -270,7 +271,7 @@ def test_verifier_profile_runs_controller_bound_safe_python_and_npm(
         "freeze_phase_runtime.py",
         "freeze_worktree_contract.py",
     ):
-        shutil.copy2(source / "scripts/ops" / name, safe_ops / name)
+        shutil.copy2(reviewed_source / "scripts/ops" / name, safe_ops / name)
     (safe_ops / "safe_python.sh").chmod(0o755)
 
     runtime = Path(subprocess.check_output(
@@ -291,7 +292,7 @@ def test_verifier_profile_runs_controller_bound_safe_python_and_npm(
     try:
         _web_profile, verifier_profile, _ports = _profile_payloads(
             candidate=candidate,
-            source=source,
+            source=dependency_source,
             runtime=runtime,
             health_env=health,
             web_port=web_port,
@@ -306,7 +307,7 @@ def test_verifier_profile_runs_controller_bound_safe_python_and_npm(
             "PYTHONDONTWRITEBYTECODE": "1",
             "TMPDIR": str(runtime / "tmp"),
             "VKPI_SAFE_PYTHON_CONTROLLER_RUNTIME_ROOT": str(runtime),
-            "VKPI_SAFE_PYTHON_REAL": str(source / ".venv/bin/python"),
+            "VKPI_SAFE_PYTHON_REAL": str(dependency_source / ".venv/bin/python"),
             "XDG_CACHE_HOME": str(runtime / "cache"),
         }
         safe_run = subprocess.run(
