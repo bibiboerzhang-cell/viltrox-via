@@ -99,6 +99,16 @@ run_step() {
   fi
 }
 
+# A controller receipt is a capability file copied from the manifest-bound
+# Phase A result into the private strict runtime.  It is not a boolean skip:
+# the exact candidate digest, source identity, step plan and controller tools
+# are validated below before any expensive static step may be reused.
+run_static_step() {
+  if [ -z "${VKPI_CONTROLLER_STATIC_GATE_RECEIPT:-}" ]; then
+    run_step "$@"
+  fi
+}
+
 append_failed_step_once() {
   local name="$1"
   local existing
@@ -129,13 +139,13 @@ release_candidate_worktree() {
   fi
   echo "[verify] release candidate worktree is clean."
 }
-run_step "release candidate worktree (required for deploy)" release_candidate_worktree
+run_static_step "release candidate worktree (required for deploy)" release_candidate_worktree
 
 frontend_contracts() {
   PYTHONPATH="$ROOT/scripts:$ROOT/backend" "$PYTHON_BIN" \
     "$ROOT/scripts/generate_frontend_contracts.py" --check
 }
-run_step "frontend contracts are checked in and current" frontend_contracts
+run_static_step "frontend contracts are checked in and current" frontend_contracts
 
 frontend_i18n_contract() {
   if [ ! -d "$ROOT/frontend/node_modules/typescript" ]; then
@@ -144,7 +154,7 @@ frontend_i18n_contract() {
   fi
   ( cd "$ROOT/frontend" && npm run check:i18n )
 }
-run_step "frontend i18n dictionary + missing-English ratchet" frontend_i18n_contract
+run_static_step "frontend i18n dictionary + missing-English ratchet" frontend_i18n_contract
 
 # ---- Production dependency security gate ----
 # Audit only packages that ship in the frontend production artifact.  npm exits
@@ -169,7 +179,7 @@ frontend_production_dependency_audit() {
   fi
   ( cd "$ROOT/frontend" && npm audit --omit=dev --audit-level=moderate )
 }
-run_step "frontend production dependency security audit (moderate+)" \
+run_static_step "frontend production dependency security audit (moderate+)" \
   frontend_production_dependency_audit
 
 silent_exception_baseline() {
@@ -177,7 +187,7 @@ silent_exception_baseline() {
     "$ROOT/scripts/check_silent_exception_baseline.py" \
     --baseline "$ROOT/scripts/silent_exception_baseline.json"
 }
-run_step "silent exception baseline" silent_exception_baseline
+run_static_step "silent exception baseline" silent_exception_baseline
 
 repo_hardening() {
   PYTHONPATH="$ROOT/scripts:$ROOT/backend" "$PYTHON_BIN" \
@@ -185,17 +195,17 @@ repo_hardening() {
     --strict \
     --warning-baseline "$ROOT/scripts/hardening_warning_baseline.json"
 }
-run_step "repo hardening + reviewed warning ratchet" repo_hardening
+run_static_step "repo hardening + reviewed warning ratchet" repo_hardening
 
 alembic_heads() {
   PYTHONPATH="$ROOT/backend" "$PYTHON_BIN" -m alembic -c "$ROOT/alembic.ini" heads >/dev/null
 }
-run_step "alembic heads" alembic_heads
+run_static_step "alembic heads" alembic_heads
 
 python_compile() {
   "$PYTHON_BIN" "$ROOT/scripts/check_python_compile.py"
 }
-run_step "Python compile (in-memory; no bytecode writes)" python_compile
+run_static_step "Python compile (in-memory; no bytecode writes)" python_compile
 
 # ---- Backend test suite ----
 backend_pytest() {
@@ -206,9 +216,23 @@ backend_pytest() {
   # 仓库根 + scripts + backend 三段:tests/test_apify_queue_capacity_model 等以
   # ``from scripts.ops import ...`` 从仓库根导入(scripts 无 __init__,命名空间包),
   # 只给 backend 会 ModuleNotFoundError;与手工口诀 PYTHONPATH=.:scripts:backend 对齐。
-  PYTHONPATH="$ROOT:$ROOT/scripts:$ROOT/backend" "$PYTHON_BIN" -m pytest -q
+  local pytest_args=(-q)
+  if [ -n "${VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT:-}" ]; then
+    if [ "$VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT" != "59" ]; then
+      echo "[verify] Phase A nested Seatbelt precheck count mismatch." >&2
+      return 1
+    fi
+    pytest_args+=(
+      --ignore="$ROOT/tests/test_strict_runtime_hardening_redteam.py"
+      --ignore="$ROOT/tests/test_deploy_runtime_admission.py"
+      --ignore="$ROOT/tests/test_freeze_worktree_candidate.py"
+      --ignore="$ROOT/tests/test_phase_a_static_containment.py"
+    )
+    echo "[verify] Phase A prechecked fixed nested Seatbelt suite: 59 tests."
+  fi
+  PYTHONPATH="$ROOT:$ROOT/scripts:$ROOT/backend" "$PYTHON_BIN" -m pytest "${pytest_args[@]}"
 }
-run_step "backend pytest" backend_pytest
+run_static_step "backend pytest" backend_pytest
 
 # ---- Frontend test suite ----
 frontend_vitest() {
@@ -218,7 +242,7 @@ frontend_vitest() {
   fi
   ( cd "$ROOT/frontend" && npm test )
 }
-run_step "frontend vitest" frontend_vitest
+run_static_step "frontend vitest" frontend_vitest
 
 # ---- 前端 tsc --noEmit ----
 frontend_tsc() {
@@ -232,7 +256,49 @@ frontend_tsc() {
   fi
   ( cd "$ROOT/frontend" && npx --no-install tsc --noEmit )
 }
-run_step "frontend tsc --noEmit" frontend_tsc
+run_static_step "frontend tsc --noEmit" frontend_tsc
+
+controller_bound_static_receipt() {
+  if [ -z "${VKPI_CONTROLLER_STATIC_GATE_RECEIPT:-}" ]; then
+    return 0
+  fi
+  if ! truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}" \
+    || [ -z "${RUNTIME_ROOT:-}" ] \
+    || [ -z "${VKPI_STRICT_CANDIDATE_SHA256:-}" ] \
+    || [ -z "${VKPI_STRICT_STATIC_RECEIPT_SHA256:-}" ] \
+    || [ -z "${VKPI_STRICT_MANIFEST_SHA256:-}" ] \
+    || [ -z "${VKPI_STRICT_RUN_NONCE:-}" ] \
+    || [ -z "${VKPI_STRICT_RUNTIME_PORTS:-}" ] \
+    || [ -z "${VKPI_HEALTH_URL:-}" ] \
+    || [ -z "${VKPI_LOCAL_BASE_URL:-}" ] \
+    || [ -z "${APP_GIT_SHA:-}" ] \
+    || [ -z "${APP_GIT_BRANCH:-}" ]; then
+    echo "[verify] controller static receipt requires the explicit strict runtime binding." >&2
+    return 1
+  fi
+  if ! [[ "$VKPI_STRICT_STATIC_RECEIPT_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+    || ! [[ "$VKPI_STRICT_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+    || ! [[ "$VKPI_STRICT_RUN_NONCE" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[verify] controller static receipt hash bindings are invalid." >&2
+    return 1
+  fi
+  "$PYTHON_BIN" -I -B "$ROOT/scripts/verify_static_gate_helpers.py" \
+    static-receipt \
+    "$VKPI_CONTROLLER_STATIC_GATE_RECEIPT" \
+    "$ROOT" \
+    "$RUNTIME_ROOT" \
+    "$VKPI_STRICT_CANDIDATE_SHA256" \
+    "$APP_GIT_SHA" \
+    "$APP_GIT_BRANCH" \
+    "$VKPI_STRICT_STATIC_RECEIPT_SHA256" \
+    "$VKPI_STRICT_RUN_NONCE" \
+    "$VKPI_STRICT_RUNTIME_PORTS" \
+    "$VKPI_HEALTH_URL" \
+    "$VKPI_LOCAL_BASE_URL"
+}
+if [ -n "${VKPI_CONTROLLER_STATIC_GATE_RECEIPT:-}" ]; then
+  run_step "controller-bound canonical static receipt" controller_bound_static_receipt
+fi
 
 # ---- STEP 3: 前端 npm run build + dist 分包/首屏预算护栏 ----
 # F2 分包后教训:「grep 入口=假阴性」,验证必须扫全部 chunk。
@@ -303,7 +369,7 @@ redline_fit_score() {
   echo "[verify] 红线 OK:无非法 viltrox_fit_score 写点。"
   return 0
 }
-run_step "redline grep (viltrox_fit_score write)" redline_fit_score
+run_static_step "redline grep (viltrox_fit_score write)" redline_fit_score
 
 # ---- STEP 5.5: 千行卫兵 —— 源码文件 >1000 行即 fail(F2 发布门)----
 # 复用 scripts/check_line_guard.py 的扫描口径(backend/app frontend/src scripts tests,
@@ -319,7 +385,7 @@ line_guard_1000() {
   PYTHONPATH="$ROOT/scripts" "$VENV_PY" -I -B \
     "$ROOT/scripts/verify_static_gate_helpers.py" line-guard "$ROOT"
 }
-run_step "line guard >1000 (zero allowlist)" line_guard_1000
+run_static_step "line guard >1000 (zero allowlist)" line_guard_1000
 
 # ---- STEP 6: 运行态 trust ----
 # 默认静态模式不探测本机服务,避免“碰巧有一个旧/降级服务在线”让同一提交的
@@ -983,6 +1049,22 @@ for offset in range(0, len(step_args), 3):
             "exit_code": int(exit_code),
         }
     )
+strict_runtime_binding = {
+    "nonce": os.environ.get("VKPI_STRICT_RUN_NONCE", ""),
+    "ports": os.environ.get("VKPI_STRICT_RUNTIME_PORTS", ""),
+    "candidate_sha256": os.environ.get("VKPI_STRICT_CANDIDATE_SHA256", ""),
+}
+if os.environ.get("VKPI_CONTROLLER_STATIC_GATE_RECEIPT"):
+    strict_runtime_binding.update(
+        {
+            "static_receipt_sha256": os.environ.get(
+                "VKPI_STRICT_STATIC_RECEIPT_SHA256", ""
+            ),
+            "manifest_sha256": os.environ.get(
+                "VKPI_STRICT_MANIFEST_SHA256", ""
+            ),
+        }
+    )
 payload = {
     "schema_version": "vkpi_canonical_gate_receipt_v1",
     "generated_at": datetime.now(UTC).isoformat(),
@@ -1007,11 +1089,7 @@ payload = {
     },
     "steps": steps,
     "failed_steps": [item["name"] for item in steps if item["status"] == "failed"],
-    "strict_runtime_binding": {
-        "nonce": os.environ.get("VKPI_STRICT_RUN_NONCE", ""),
-        "ports": os.environ.get("VKPI_STRICT_RUNTIME_PORTS", ""),
-        "candidate_sha256": os.environ.get("VKPI_STRICT_CANDIDATE_SHA256", ""),
-    },
+    "strict_runtime_binding": strict_runtime_binding,
 }
 target = pathlib.Path(out_path)
 temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")

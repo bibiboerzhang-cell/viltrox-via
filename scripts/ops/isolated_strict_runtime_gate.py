@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import argparse
 import errno
-import ipaddress
+import hashlib
 import json
 import os
 import secrets
@@ -18,67 +18,54 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Sequence
-from urllib.parse import urlsplit
-
-from psycopg import Error as PsycopgError
-from psycopg.conninfo import conninfo_to_dict
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from scripts.ops.freeze_worktree_candidate import run_deploy_gate
+from scripts.ops.freeze_worktree_candidate import (
+    _validate_controller_static_receipt,
+    run_deploy_gate,
+    verify_manifest,
+)
+from scripts.ops.freeze_worktree_contract import (
+    path_identity,
+    remove_owned_path,
+    write_owned_file_exclusive,
+)
 from scripts.ops.isolated_runtime_attestation import (
     StrictRuntimeGateError,
     control_plane_digest,
-    copy_receipt_nofollow as _copy_receipt_nofollow,
     expected_receipt_plan,
+    persist_receipt_bytes as _persist_receipt_bytes,
     phase_candidate_identity as _phase_candidate_identity,
     sha256_path as _sha256_path,
     sign_attestation,
     validate_bound_receipts as _validate_bound_receipts,
 )
-from scripts.ops.strict_runtime_seatbelt import candidate_profile, require_sandbox_exec, run_preflight, sandboxed
-from scripts.ops.trusted_runtime_binary import trusted_runtime_binary
-
-
-STRICT_RUNS = 3
-RUNTIME_PREFIX = "vkpi-candidate-browser-runtime."
-PROVIDER_ENV_NAMES = frozenset(
-    {
-        "ANTHROPIC_API_KEY", "APIFY_API_TOKEN", "APIFY_TOKEN",
-        "GEMINI_API_KEY", "GEMINI_API_KEYS", "GOOGLE_API_KEY",
-        "GOOGLE_CSE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
-        "GOOGLE_SEARCH_API_KEY", "GOOGLE_YOUTUBE_API_KEY",
-        "OPENAI_API_KEY", "OPENAI_PROXY", "YOUTUBE_API_KEY",
-        "YOUTUBE_DATA_API_KEY", "YTDLP_PROXY", "HTTP_PROXY", "HTTPS_PROXY",
-        "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy",
-    }
+from scripts.ops.isolated_strict_runtime_resources import (
+    ManagedProcess,
+    PROVIDER_ENV_NAMES,
+    RUNTIME_PREFIX,
+    RuntimePorts,
+    binary as _binary,
+    command as _command,
+    minimal_runtime_environment as _minimal_runtime_environment,
+    postgres_environment as _postgres_environment,
+    private_root as _private_root,
+    source_dump_environment as _source_dump_environment,
+    unique_loopback_ports as _unique_loopback_ports,
+)
+from scripts.ops.strict_runtime_seatbelt import (
+    candidate_profile,
+    require_sandbox_exec,
+    run_preflight,
+    sandboxed,
 )
 
 
-@dataclass(frozen=True)
-class RuntimePorts:
-    web: int
-    postgres: int
-    redis: int
-
-    def values(self) -> tuple[int, int, int]:
-        return self.web, self.postgres, self.redis
-
-
-@dataclass(frozen=True)
-class ManagedProcess:
-    process: subprocess.Popen[bytes]
-    pid: int
-    pgid: int
-    session_id: int
-    start_identity: str
-
-    def poll(self):
-        return self.process.poll()
+STRICT_RUNS = 3
 
 
 def _pid_record(pid: int) -> tuple[int, int, str, str]:
@@ -101,123 +88,18 @@ def _pid_identity(pid: int) -> tuple[int, str]:
     pgid, _sid, started, _command = _pid_record(pid); return pgid, started
 
 
-def _private_root(parent: Path = Path("/tmp")) -> Path:
-    raw = __import__("tempfile").mkdtemp(prefix=RUNTIME_PREFIX, dir=parent); root = Path(raw)
-    initial = root.lstat(); identity = (initial.st_dev, initial.st_ino)
-    try:
-        os.chown(root, os.geteuid(), os.getegid()); root.chmod(0o700); info = root.lstat()
-        if (root.is_symlink() or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700 or (info.st_dev, info.st_ino) != identity):
-            raise StrictRuntimeGateError("strict runtime root is unsafe")
-        return root
-    except BaseException:
-        try:
-            current = root.lstat()
-            if not root.is_symlink() and (current.st_dev, current.st_ino) == identity:
-                shutil.rmtree(root)
-        except FileNotFoundError: pass
-        raise
-
-
-def _unique_loopback_ports(count: int = 3) -> tuple[int, ...]:
-    listeners: list[socket.socket] = []
-    try:
-        for _ in range(count):
-            listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            listener.bind(("127.0.0.1", 0))
-            listeners.append(listener)
-        ports = tuple(int(listener.getsockname()[1]) for listener in listeners)
-    finally:
-        for listener in listeners:
-            listener.close()
-    if len(set(ports)) != count or 8102 in ports:
-        raise StrictRuntimeGateError("could not reserve unique non-default ports")
-    return ports
-
-
-def _binary(name: str) -> str:
-    return trusted_runtime_binary(name, error_type=StrictRuntimeGateError)
-
-
 def strict_runtime_preflight() -> dict[str, object]:
     names = ("pg_dump", "initdb", "pg_ctl", "createdb", "pg_restore", "redis-server")
     binaries = {name: _binary(name) for name in names}
-    sandbox = require_sandbox_exec()
-    seatbelt = run_preflight(Path(__file__).resolve().parents[2])
     ports = RuntimePorts(*_unique_loopback_ports())
     return {
-        "pass": True,
-        "binaries": binaries,
-        "sandbox_exec": str(sandbox),
-        "seatbelt": seatbelt,
+        "pass": True, "binaries": binaries,
+        "sandbox_exec": str(require_sandbox_exec()),
+        "seatbelt": run_preflight(Path(__file__).resolve().parents[2]),
         "sample_unique_ports": list(ports.values()),
         "source_database_access": "pg_dump_only_default_transaction_read_only",
         "provider_network": "credentials_and_proxies_removed",
         "real_clone_executed": False,
-    }
-
-
-def _command(
-    arguments: Sequence[str], *, cwd: Path, env: Mapping[str, str],
-    timeout: int = 1200,
-) -> subprocess.CompletedProcess[bytes]:
-    completed = subprocess.run(
-        list(arguments), cwd=cwd, env=dict(env), stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=timeout,
-    )
-    if completed.returncode != 0:
-        detail = completed.stderr.decode("utf-8", "replace").strip()[-500:]
-        raise StrictRuntimeGateError(
-            f"strict runtime command failed ({Path(arguments[0]).name}): {detail}"
-        )
-    return completed
-
-
-def _source_dump_environment(database_url: str, root: Path) -> dict[str, str]:
-    try:
-        parsed = urlsplit(database_url)
-        address = ipaddress.ip_address(parsed.hostname or "")
-        port = parsed.port
-        conninfo = conninfo_to_dict(database_url)
-        final_host = ipaddress.ip_address(str(conninfo.get("host") or ""))
-        final_hostaddr_raw = conninfo.get("hostaddr")
-        final_hostaddr = (
-            ipaddress.ip_address(str(final_hostaddr_raw)) if final_hostaddr_raw else None
-        )
-        final_port = int(str(conninfo.get("port") or "0"))
-    except (ValueError, TypeError, PsycopgError) as exc:
-        raise StrictRuntimeGateError("strict source database URL is invalid") from exc
-    if (
-        parsed.scheme not in {"postgresql", "postgres"}
-        or not address.is_loopback
-        or port is None
-        or parsed.fragment
-        or parsed.query
-        or not parsed.path.strip("/")
-        or address != ipaddress.ip_address("127.0.0.1")
-        or any(conninfo.get(name) for name in ("service", "options", "passfile"))
-        or not final_host.is_loopback
-        or (final_hostaddr is not None and not final_hostaddr.is_loopback)
-        or final_host != address
-        or (final_hostaddr is not None and final_hostaddr != address)
-        or final_port != port
-    ):
-        raise StrictRuntimeGateError(
-            "strict source database URL must resolve to its explicit loopback origin"
-        )
-    environment = {
-        "HOME": str(root / "home"), "LANG": "C", "LC_ALL": "C",
-        "PATH": os.defpath, "PGDATABASE": database_url,
-        "PGOPTIONS": "-c default_transaction_read_only=on -c statement_timeout=1200000",
-        "TMPDIR": str(root / "tmp"),
-    }
-    return environment
-
-
-def _postgres_environment(root: Path, port: int, database: str = "postgres") -> dict[str, str]:
-    return {
-        "HOME": str(root / "home"), "LANG": "C", "LC_ALL": "C",
-        "PATH": os.defpath, "PGDATABASE": database, "PGHOST": "127.0.0.1",
-        "PGPORT": str(port), "PGUSER": "postgres", "TMPDIR": str(root / "tmp"),
     }
 
 
@@ -259,38 +141,6 @@ def _prepare_postgres(
         cwd=root, env=_postgres_environment(root, port, "vkpi_gate"),
     )
     return data, dump
-
-
-def _minimal_runtime_environment(
-    *, root: Path, candidate: Path, source: Path, ports: RuntimePorts,
-    git_sha: str, branch: str, fence: Path,
-) -> dict[str, str]:
-    database_url = f"postgresql://postgres@127.0.0.1:{ports.postgres}/vkpi_gate"
-    redis_url = f"redis://127.0.0.1:{ports.redis}/0"
-    environment = {
-        "APP_GIT_BRANCH": branch, "APP_GIT_SHA": git_sha, "APP_ROLE": "worker",
-        "DATABASE_URL": database_url, "DB_RUNTIME_BACKEND": "postgres",
-        "DB_USE_PGBOUNCER": "0", "ENABLE_BROWSER": "0",
-        "ENABLE_LOCAL_ORCHESTRATOR": "0", "ENABLE_SCHEDULER": "0",
-        "ENVIRONMENT": "local", "HOME": str(root / "home"), "LANG": "C",
-        "LC_ALL": "C", "LOCAL_DATABASE_URL": database_url,
-        "LOCAL_REDIS_URL": redis_url, "LOCAL_RUNTIME_FORCE_STACK": "1",
-        "LOG_LEVEL": "warning", "NO_PROXY": "127.0.0.1,localhost,::1",
-        "PATH": os.defpath, "PYTHONDONTWRITEBYTECODE": "1",
-        "PYTHONPATH": str(candidate / "backend"), "REDIS_URL": redis_url,
-        "RUNTIME_ROOT": str(root / "runtime"), "TMPDIR": str(root / "tmp"),
-        "VKPI_ASYNC_ENABLED": "0", "VKPI_RELEASE_VALIDATION_FENCE_PATH": str(fence),
-        "VKPI_LLM_GATEWAY_FORCE_OFFLINE": "1", "VKPI_EXTERNAL_AI_DISABLED": "1",
-        "VKPI_AUTOMATED_WRITES_DISABLED": "1",
-        "VKPI_REDIS_WORKER_ALLOW_STALE_BACKLOG": "1",
-        "VKPI_REDIS_WORKER_EXPECTED_INSTANCES": "1",
-        "VKPI_REDIS_WORKER_HEARTBEAT_NAME": f"redis-worker-isolated-{ports.web}",
-        "VKPI_REDIS_WORKER_MAX_CONSUMERS": "1", "WORKER_ASYNC_CONSUMERS": "1",
-        "VKPI_SKIP_DOTENV": "1", "no_proxy": "127.0.0.1,localhost,::1",
-    }
-    for name in PROVIDER_ENV_NAMES:
-        environment.pop(name, None)
-    return environment
 
 
 def _start_process(
@@ -530,13 +380,48 @@ def _wait_runtime_ready(url: str, processes: Sequence[subprocess.Popen[bytes]], 
 
 
 def _copy_bound_manifest(
-    *, candidate: Path, clean_source: Path, root: Path,
+    *, candidate: Path, root: Path, expected_sha256: str,
 ) -> tuple[Path, dict[str, object]]:
     source_manifest = candidate.with_suffix(candidate.suffix + ".manifest.json")
-    payload = json.loads(source_manifest.read_text(encoding="utf-8"))
-    payload["source"]["repo"] = str(clean_source)
+    try:
+        before = source_manifest.lstat()
+        if (
+            source_manifest.is_symlink()
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+        ):
+            raise StrictRuntimeGateError("Phase A manifest is not a trusted regular file")
+        descriptor = os.open(
+            source_manifest,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise StrictRuntimeGateError("Phase A manifest identity changed before copy")
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                manifest_bytes = handle.read()
+            after = os.fstat(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError as exc:
+        raise StrictRuntimeGateError("Phase A manifest is unavailable") from exc
+    if (
+        (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        or hashlib.sha256(manifest_bytes).hexdigest() != expected_sha256
+    ):
+        raise StrictRuntimeGateError("Phase A manifest hash changed before strict runtime")
+    try:
+        payload = json.loads(manifest_bytes.decode("utf-8", "strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise StrictRuntimeGateError("Phase A manifest is invalid") from exc
+    if not isinstance(payload, dict):
+        raise StrictRuntimeGateError("Phase A manifest payload is invalid")
     target = root / "candidate.manifest.json"
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    write_owned_file_exclusive(target, manifest_bytes)
+    if _sha256_path(target) != expected_sha256:
+        raise StrictRuntimeGateError("strict runtime manifest copy hash mismatch")
     return target, payload
 
 
@@ -570,12 +455,52 @@ def _rebuild_clean_source(
     return mirror
 
 
+def _phase_capsule_identity(
+    phase_payload: Mapping[str, object],
+) -> dict[str, object]:
+    record = phase_payload.get("dirty_source_capsule")
+    if not isinstance(record, Mapping):
+        raise StrictRuntimeGateError("Phase A capsule evidence is missing")
+    capsule = Path(str(record.get("snapshot_path", ""))).resolve()
+    manifest = capsule.with_suffix(capsule.suffix + ".manifest.json")
+    if str(manifest) != str(Path(str(record.get("manifest_path", ""))).resolve()):
+        raise StrictRuntimeGateError("Phase A capsule manifest path mismatch")
+    verified = verify_manifest(
+        argparse.Namespace(manifest=str(manifest), snapshot=str(capsule))
+    )
+    expected = {
+        "candidate_content_sha256": record.get("candidate_content_sha256"),
+        "candidate_file_count": record.get("candidate_file_count"),
+        "manifest_sha256": record.get("manifest_sha256"),
+        "snapshot_path": record.get("snapshot_path"),
+        "source_branch": record.get("source_branch"),
+        "source_content_sha256": record.get("source_content_sha256"),
+        "source_head": record.get("source_head"),
+        "source_status_sha256": record.get("source_status_sha256"),
+        "source_worktree_dirty": record.get("source_worktree_dirty"),
+    }
+    if (
+        verified.get("content_sha256") != expected["candidate_content_sha256"]
+        or verified.get("file_count") != expected["candidate_file_count"]
+        or _sha256_path(manifest) != expected["manifest_sha256"]
+        or str(capsule) != str(Path(str(expected["snapshot_path"])).resolve())
+        or not expected["source_branch"]
+        or not expected["source_content_sha256"]
+        or not expected["source_head"]
+        or not expected["source_status_sha256"]
+        or not isinstance(expected["source_worktree_dirty"], bool)
+    ):
+        raise StrictRuntimeGateError("capsule differs from Phase A identity")
+    return expected
+
+
 def _run_once(
     *, run_number: int, source: Path, candidate: Path,
     phase_payload: Mapping[str, object], source_database_url: str,
     evidence: Path, timeout: int,
 ) -> dict[str, object]:
     phase_identity = _phase_candidate_identity(candidate, phase_payload)
+    phase_capsule_identity = _phase_capsule_identity(phase_payload)
     root = _private_root()
     ports: RuntimePorts | None = None
     root_identity = (root.lstat().st_dev, root.lstat().st_ino)
@@ -587,6 +512,8 @@ def _run_once(
     runtime_nonce = secrets.token_hex(32)
     started_at = time.monotonic()
     bound_pg_ctl: str | None = None
+    health_env_file = root.with_name(root.name + ".health.env")
+    health_env_identity: tuple[int, int] | None = None
     try:
         ports = RuntimePorts(*_unique_loopback_ports())
         for name in ("home", "tmp", "cache", "runtime", "logs", "receipts", "controller"):
@@ -598,7 +525,14 @@ def _run_once(
         bound_pg_ctl = binaries["pg_ctl"]
         clean_source = _rebuild_clean_source(source=source, phase_payload=phase_payload, root=root)
         from scripts.ops.trusted_npm_audit import _trusted_node, _trusted_npm, _trusted_npx
+        from scripts.ops.trusted_git import trusted_git_executable
         npm, node = _trusted_npm(), _trusted_node(); npx = _trusted_npx(npm)
+        physical_git = Path(trusted_git_executable())
+        health_token = secrets.token_urlsafe(32)
+        health_env_identity = write_owned_file_exclusive(
+            health_env_file,
+            f"OPS_HEALTH_TOKEN={health_token}\n".encode("utf-8"),
+        )
         seatbelt = candidate_profile(
             candidate=candidate, clean_source=clean_source,
             venv=source / ".venv", node_modules=source / "frontend/node_modules",
@@ -613,12 +547,33 @@ def _run_once(
             writable_paths=tuple(root / name for name in
                 ("tmp", "home", "cache", "receipts", "controller/frontend-dist-rebuild")),
             allow_runtime_root_write=False,
-            executable_dirs=(root / "controller",), executable_paths=(node, npm, npx),
+            executable_dirs=(root / "controller",),
+            executable_paths=(node, npm, npx, physical_git),
+            readable_paths=(health_env_file,),
         )
         manifest, manifest_payload = _copy_bound_manifest(
-            candidate=candidate, clean_source=clean_source, root=root
+            candidate=candidate,
+            root=root,
+            expected_sha256=str(phase_identity["manifest_sha256"]),
         )
+        admitted_static_receipt, admitted_static_receipt_bytes = (
+            _validate_controller_static_receipt(
+                manifest=manifest_payload,
+                snapshot=candidate,
+            )
+        )
+        admitted_static_receipt_sha256 = hashlib.sha256(
+            admitted_static_receipt_bytes
+        ).hexdigest()
         identity = manifest_payload["build"]["identity"]
+        recorded_source = manifest_payload.get("source")
+        if (
+            not isinstance(recorded_source, Mapping)
+            or not isinstance(recorded_source.get("repo"), str)
+        ):
+            raise StrictRuntimeGateError(
+                "Phase A manifest recorded source is missing"
+            )
         pg_data, dump = _prepare_postgres(
             root=root, port=ports.postgres, source_database_url=source_database_url,
             binaries=binaries,
@@ -635,7 +590,8 @@ def _run_once(
         redis_url = f"redis://127.0.0.1:{ports.redis}/0"
         reviewed_env.write_text(
             f"LOCAL_DATABASE_URL={database_url}\nLOCAL_REDIS_URL={redis_url}\n"
-            "JWT_SECRET=isolated-strict-runtime-not-production\n",
+            "JWT_SECRET=isolated-strict-runtime-not-production\n"
+            f"OPS_HEALTH_TOKEN={health_token}\n",
             encoding="utf-8",
         )
         reviewed_env.chmod(0o600)
@@ -688,42 +644,81 @@ def _run_once(
             argparse.Namespace(
                 manifest=str(manifest), snapshot=str(candidate),
                 expected_head=str(identity["git_sha"]), expected_branch=str(identity["git_branch"]),
-                source=str(clean_source), python=str(clean_source / ".venv/bin/python"),
+                source=str(clean_source), controller_source=str(clean_source),
+                expected_recorded_source=str(recorded_source["repo"]),
+                python=str(clean_source / ".venv/bin/python"),
                 runtime_root=str(root), health_url=health_url, base_url=base_url,
+                health_env_file=str(health_env_file),
                 verify_json_out=str(root / "receipts/verify.json"),
                 acceptance_json_out=str(root / "receipts/acceptance.json"),
                 controller_owned_runtime=True,
                 seatbelt_profile=verifier_seatbelt,
                 runtime_nonce=runtime_nonce,
-                runtime_ports=",".join(str(port) for port in ports.values()),
+                runtime_ports=",".join(str(port) for port in sorted(ports.values())),
                 candidate_digest=str(phase_identity["content_sha256"]),
+                expected_static_receipt_sha256=admitted_static_receipt_sha256,
+                expected_manifest_sha256=str(phase_identity["manifest_sha256"]),
             )
         )
         after_identity = _phase_candidate_identity(candidate, phase_payload)
-        if after_identity != phase_identity or gate_result.get("content_sha256") != phase_identity["content_sha256"]:
+        after_capsule_identity = _phase_capsule_identity(phase_payload)
+        if (
+            after_identity != phase_identity
+            or after_capsule_identity != phase_capsule_identity
+            or gate_result.get("content_sha256")
+            != phase_identity["content_sha256"]
+        ):
             raise StrictRuntimeGateError("candidate identity changed during strict run")
-        receipt_hashes = _validate_bound_receipts(
+        if (
+            gate_result.get("controller_static_receipt_sha256")
+            != admitted_static_receipt_sha256
+            or gate_result.get("candidate_manifest_sha256")
+            != phase_identity["manifest_sha256"]
+        ):
+            raise StrictRuntimeGateError(
+                "strict deploy consumed evidence differs from Phase A admission"
+            )
+        validated_receipts = _validate_bound_receipts(
             verify_path=root / "receipts/verify.json",
             acceptance_path=root / "receipts/acceptance.json",
             expected_head=str(phase_identity["git_head"]),
             expected_branch=str(phase_identity["branch"]), base_url=base_url,
-            expected_steps=expected_receipt_plan(clean_source)[0], expected_endpoints=expected_receipt_plan(clean_source)[1],
-            runtime_nonce=runtime_nonce, runtime_ports=",".join(str(port) for port in ports.values()),
+            expected_steps=expected_receipt_plan(
+                clean_source, controller_static_receipt=True
+            )[0],
+            expected_endpoints=expected_receipt_plan(
+                clean_source, controller_static_receipt=True
+            )[1],
+            runtime_nonce=runtime_nonce,
+            runtime_ports=",".join(str(port) for port in sorted(ports.values())),
             candidate_digest=str(phase_identity["content_sha256"]),
+            static_receipt_sha256=admitted_static_receipt_sha256,
+            manifest_sha256=str(phase_identity["manifest_sha256"]),
         )
-        for name in ("verify.json", "acceptance.json"):
-            source_receipt = root / "receipts" / name
-            if not source_receipt.is_file():
-                raise StrictRuntimeGateError(f"strict runtime did not write {name}")
-            hash_name = "verify_sha256" if name == "verify.json" else "acceptance_sha256"
-            _copy_receipt_nofollow(
-                source_receipt, evidence / f"run-{run_number}-{name}", receipt_hashes[hash_name]
+        receipt_hashes = {
+            "verify_sha256": str(validated_receipts["verify_sha256"]),
+            "acceptance_sha256": str(validated_receipts["acceptance_sha256"]),
+        }
+        for name, bytes_name, hash_name in (
+            ("verify.json", "verify_bytes", "verify_sha256"),
+            ("acceptance.json", "acceptance_bytes", "acceptance_sha256"),
+        ):
+            receipt_bytes = validated_receipts.get(bytes_name)
+            if not isinstance(receipt_bytes, bytes):
+                raise StrictRuntimeGateError(
+                    f"strict runtime did not bind {name} bytes"
+                )
+            _persist_receipt_bytes(
+                evidence / f"run-{run_number}-{name}",
+                receipt_bytes,
+                receipt_hashes[hash_name],
             )
         run_summary = {
             "run": run_number, "pass": True, "ports": list(ports.values()),
             "runtime_nonce": runtime_nonce,
             "candidate_content_sha256": gate_result["content_sha256"],
             "candidate_manifest_sha256": phase_identity["manifest_sha256"],
+            "controller_static_receipt_sha256": admitted_static_receipt_sha256,
             "synthetic_git_head": phase_identity["git_head"],
             "synthetic_git_tree": phase_identity["git_tree"],
             "capsule_digest": phase_identity["capsule_digest"],
@@ -734,12 +729,16 @@ def _run_once(
         }
         return run_summary
     finally:
-        cleanup_hash = _finalize_runtime_cleanup(
-            root=root, root_identity=root_identity, processes=processes, handles=handles,
-            pg_ctl=bound_pg_ctl, ports=ports, evidence=evidence, run_number=run_number,
-        )
-        if run_summary is not None:
-            run_summary["cleanup_receipt_sha256"] = cleanup_hash
+        try:
+            cleanup_hash = _finalize_runtime_cleanup(
+                root=root, root_identity=root_identity, processes=processes, handles=handles,
+                pg_ctl=bound_pg_ctl, ports=ports, evidence=evidence, run_number=run_number,
+            )
+            if run_summary is not None:
+                run_summary["cleanup_receipt_sha256"] = cleanup_hash
+        finally:
+            if health_env_identity is not None:
+                remove_owned_path(health_env_file, health_env_identity)
 
 
 def run_strict_runtime_gate(

@@ -27,6 +27,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from scripts.ops.freeze_git_bridge import GitBridgeError  # noqa: E402
+from scripts.ops.candidate_physical_tree import assert_candidate_physical_tree_bound, manifest_files_excluding as _capsule_files_without_stamps  # noqa: E402
 from scripts.ops.freeze_worktree_candidate import (  # noqa: E402
     _atomic_json,
     _inventory_candidate,
@@ -308,8 +309,8 @@ def _freeze_paths(snapshot: Path) -> tuple[Path, ...]:
         snapshot.with_suffix(snapshot.suffix + ".manifest.json.sha256"),
         snapshot.with_suffix(snapshot.suffix + ".build.log"),
         snapshot.with_suffix(snapshot.suffix + ".verify.log"),
+        snapshot.with_suffix(snapshot.suffix + ".static-receipt.json"),
     )
-
 
 def _planned_artifacts(output: Path, capsule: Path, receipt: Path) -> tuple[Path, ...]:
     paths = (
@@ -393,22 +394,6 @@ def _cleanup_private_root(root: Path, identity: tuple[int, int]) -> dict[str, ob
     return {**receipt, "removed": True, "status": "removed"}
 
 
-def _capsule_files_without_stamps(
-    payload: Mapping[str, object]
-) -> list[dict[str, object]]:
-    candidate = payload.get("candidate")
-    files = candidate.get("files") if isinstance(candidate, Mapping) else None
-    if not isinstance(files, list):
-        raise IsolatedWorktreeGateError("dirty-source capsule file inventory is missing")
-    result: list[dict[str, object]] = []
-    for raw in files:
-        if not isinstance(raw, dict) or not isinstance(raw.get("path"), str):
-            raise IsolatedWorktreeGateError("dirty-source capsule file inventory is invalid")
-        if raw["path"] not in GENERATED_BUILD_STAMPS:
-            result.append(dict(raw))
-    return sorted(result, key=lambda item: str(item["path"]))
-
-
 def _prepare_clean_mirror(
     *,
     source: Path,
@@ -417,12 +402,28 @@ def _prepare_clean_mirror(
     temporary_root: Path,
 ) -> tuple[Path, dict[str, object]]:
     mirror = temporary_root / "clean-source"
-    shutil.copytree(capsule, mirror, copy_function=shutil.copy2)
+    candidate_record = capsule_payload.get("candidate")
+    expected_physical_files = (
+        candidate_record.get("files")
+        if isinstance(candidate_record, Mapping)
+        else None
+    )
+    assert_candidate_physical_tree_bound(capsule, expected_physical_files)
+    shutil.copytree(
+        capsule,
+        mirror,
+        copy_function=shutil.copy2,
+        symlinks=True,
+    )
+    assert_candidate_physical_tree_bound(mirror, expected_physical_files)
     mirror.chmod(0o700)
     for name in GENERATED_BUILD_STAMPS:
         (mirror / name).unlink(missing_ok=True)
 
-    expected_files = _capsule_files_without_stamps(capsule_payload)
+    expected_files = _capsule_files_without_stamps(
+        capsule_payload, GENERATED_BUILD_STAMPS
+    )
+    assert_candidate_physical_tree_bound(mirror, expected_files)
     observed_entries = _inventory_candidate(mirror)
     observed_files = [entry.payload() for entry in observed_entries]
     if observed_files != expected_files:
@@ -437,7 +438,6 @@ def _prepare_clean_mirror(
         directory.mkdir(mode=0o700)
     environment = _clean_git_environment(os.environ, home=git_home)
 
-    candidate_record = capsule_payload.get("candidate")
     source_record = capsule_payload.get("source")
     if not isinstance(candidate_record, Mapping) or not isinstance(source_record, Mapping):
         raise IsolatedWorktreeGateError("dirty-source capsule identity is missing")
@@ -611,6 +611,7 @@ def _manifest_summary(snapshot: Path, payload: Mapping[str, object]) -> dict[str
         "manifest_path": str(manifest),
         "manifest_sha256": _sha256_path(manifest),
         "snapshot_path": str(snapshot),
+        "source_branch": source.get("branch"),
         "source_content_sha256": source.get("content_sha256"),
         "source_head": source.get("head"),
         "source_status_sha256": source.get("status_sha256"),
@@ -740,7 +741,7 @@ def run_phase_a(args: argparse.Namespace) -> dict[str, object]:
                 "worker_started": False,
             },
             "safety": {
-                "provider_network_contacted": False,
+                "provider_network_contact": "not_observed_not_os_enforced",
                 "external_registry_network": "npm_audit_may_attempt",
                 "deployment_performed": False,
                 "persistent_business_write_performed": False,

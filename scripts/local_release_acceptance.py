@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Non-destructive, manifest-driven acceptance for the running local V-KPI stack.
 
-Stdout is machine-readable JSON; stderr is one concise PASS/FAIL line. The
-runner permits loopback GET requests plus explicitly declared read-only JSON
-POST probes and never emits its short-lived JWT or request bodies.
+Stdout is machine-readable JSON; stderr is one concise PASS/FAIL line. The runner permits
+loopback GET and declared read-only JSON POST probes without emitting JWTs or bodies.
 """
 from __future__ import annotations
 
@@ -26,7 +25,7 @@ from typing import Any, Callable, Mapping, Protocol
 from urllib.parse import quote, urlparse
 
 from local_release_acceptance_contracts import (
-    _nonempty_text,
+    _nonempty_text, _strict_runtime_binding,
     _strict_utc_iso,
     _validate_ask_evidence,
     _validate_ask_fact,
@@ -836,6 +835,7 @@ class AcceptanceRunner:
         latencies = sorted(float(item["latency_ms"]) for item in results if item["http_status"] is not None)
         p95 = latencies[max(0, math.ceil(len(latencies) * .95) - 1)] if latencies else 0.
         http_methods = sorted({str(item.get("method") or "GET").upper() for item in self.manifest["endpoints"]})
+        strict_runtime_binding = _strict_runtime_binding(os.environ)
         return {
             "schema_version": "vkpi.local-release-acceptance.v1", "run_id": str(uuid.uuid4()),
             "started_at": started.isoformat().replace("+00:00", "Z"), "finished_at": finished.isoformat().replace("+00:00", "Z"),
@@ -853,7 +853,7 @@ class AcceptanceRunner:
                         "failed_endpoint_ids": [item["id"] for item in failed], "data_states": states, "latency_p95_ms": round(p95, 1),
                         "deadline_exhausted": self.deadline_exhausted},
             "coverage": {"required_board_families": wanted, "represented_board_families": sorted(set(wanted) & represented), "missing_board_families": missing},
-            "families": families, "trust_observed": self.observed, "endpoints": results, "strict_runtime_binding": {"nonce": os.getenv("VKPI_STRICT_RUN_NONCE", ""), "ports": os.getenv("VKPI_STRICT_RUNTIME_PORTS", ""), "candidate_sha256": os.getenv("VKPI_STRICT_CANDIDATE_SHA256", "")},
+            "families": families, "trust_observed": self.observed, "endpoints": results, "strict_runtime_binding": strict_runtime_binding,
         }
 
 

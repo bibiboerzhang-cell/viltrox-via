@@ -23,7 +23,7 @@ def test_verify_captures_browser_token_without_exporting_it_to_child_steps() -> 
     unexport = source.index("export -n _VKPI_VERIFY_BROWSER_GATE_TOKEN", scrub)
     first_subprocess = source.index('SCRIPT_DIR="$(cd', unexport)
     first_child_step = source.index(
-        'run_step "release candidate worktree (required for deploy)"',
+        'run_static_step "release candidate worktree (required for deploy)"',
         first_subprocess,
     )
     browser_gate = source.index("browser_console_release_gate()", first_child_step)

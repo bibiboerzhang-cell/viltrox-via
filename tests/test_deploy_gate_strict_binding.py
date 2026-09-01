@@ -135,6 +135,7 @@ def test_run_deploy_gate_cli_requires_all_strict_runtime_bindings(tmp_path: Path
     health_env_file = tmp_path / "health.env"
     health_env_file.write_text("OPS_HEALTH_TOKEN=fixture\n", encoding="utf-8")
     health_env_file.chmod(0o600)
+    admission = root / "controller" / "runtime-admission.json"
     args = parser().parse_args(
         required
         + [
@@ -144,10 +145,12 @@ def test_run_deploy_gate_cli_requires_all_strict_runtime_bindings(tmp_path: Path
             "--base-url", "http://127.0.0.1:18103/",
             "--verify-json-out", str(root / "verify.json"),
             "--acceptance-json-out", str(root / "acceptance.json"),
+            "--admission-json", str(admission),
         ]
     )
     assert args.runtime_root == str(root)
     assert args.health_env_file == str(health_env_file)
+    assert args.admission_json == str(admission)
 
 
 def test_bound_gate_injects_only_health_file_path_and_detects_drift(
@@ -264,6 +267,7 @@ def test_deploy_wires_canonical_gate_to_live_private_runtime_before_ssh() -> Non
         '--base-url "${base_url}"',
         '--verify-json-out "${verify_receipt}"',
         '--acceptance-json-out "${acceptance_receipt}"',
+        '--admission-json "${LOCAL_CANDIDATE_ADMISSION}"',
     ):
         assert required_binding in canonical_gate
     assert '"${runtime_root}/controller/canonical-verify.json"' in canonical_gate
@@ -307,12 +311,18 @@ def test_sealed_verifier_contains_the_canonical_gate_import_closure(
 ) -> None:
     deploy = Path("scripts/ops/deploy_local_to_cloud.sh").read_text(encoding="utf-8")
     relative_paths = (
+        "scripts/ops/candidate_physical_tree.py",
+        "scripts/ops/controller_static_receipt.py",
         "scripts/ops/controlled_candidate_process.py",
         "scripts/ops/deploy_gate_runtime.py",
+        "scripts/ops/deploy_runtime_admission.py",
         "scripts/ops/freeze_git_bridge.py",
+        "scripts/ops/freeze_deploy_gate.py",
         "scripts/ops/freeze_phase_runtime.py",
         "scripts/ops/freeze_worktree_candidate.py",
         "scripts/ops/freeze_worktree_contract.py",
+        "scripts/ops/strict_runtime_seatbelt.py",
+        "scripts/ops/trusted_git.py",
         "scripts/ops/trusted_npm_audit.py",
     )
     bundle = tmp_path / "bundle"
@@ -321,7 +331,13 @@ def test_sealed_verifier_contains_the_canonical_gate_import_closure(
         target = bundle / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
-        target.chmod(0o500 if relative.endswith("freeze_worktree_candidate.py") else 0o400)
+        target.chmod(
+            0o500
+            if relative.endswith(
+                ("freeze_worktree_candidate.py", "deploy_runtime_admission.py")
+            )
+            else 0o400
+        )
         assert f'"${{DEPLOY_VERIFIER_BUNDLE_DIR}}/{relative}"' in deploy
         assert f"    {relative} \\" in deploy
         assert deploy.count(f'Path("{relative}")') == 2

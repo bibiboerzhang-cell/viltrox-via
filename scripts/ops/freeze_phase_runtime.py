@@ -3,14 +3,62 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import re
 import shutil
 import stat
 import subprocess
 from pathlib import Path
-from typing import Sequence
+from typing import Callable, Mapping, Sequence, TypeVar
 
 from scripts.ops.freeze_worktree_contract import FreezeError, path_identity
+
+
+PHASE_A_NESTED_SEATBELT_TESTS = (
+    ("tests/test_strict_runtime_hardening_redteam.py", 32),
+    ("tests/test_deploy_runtime_admission.py", 5),
+    ("tests/test_freeze_worktree_candidate.py", 21),
+    ("tests/test_phase_a_static_containment.py", 1),
+)
+PHASE_A_NESTED_SEATBELT_TEST_FILES = tuple(
+    relative for relative, _count in PHASE_A_NESTED_SEATBELT_TESTS
+)
+PHASE_A_NESTED_SEATBELT_TEST_COUNT = sum(
+    count for _relative, count in PHASE_A_NESTED_SEATBELT_TESTS
+)
+_InventoryEntry = TypeVar("_InventoryEntry")
+
+
+def inventory_map_digest(
+    inventories: Mapping[str, Sequence[_InventoryEntry]],
+    entry_digest: Callable[[Sequence[_InventoryEntry]], str],
+) -> str:
+    payload = {root: entry_digest(entries) for root, entries in inventories.items()}
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def bind_nested_inventory_proof(
+    proof: dict[str, object], *,
+    candidate_before: Sequence[_InventoryEntry],
+    candidate_after: Sequence[_InventoryEntry],
+    sources_before: Mapping[str, Sequence[_InventoryEntry]],
+    sources_after: Mapping[str, Sequence[_InventoryEntry]],
+    entry_digest: Callable[[Sequence[_InventoryEntry]], str],
+) -> None:
+    if candidate_after != candidate_before or sources_after != sources_before:
+        raise FreezeError("nested Seatbelt tests changed source bytes")
+    proof.update(
+        {
+            "candidate_digest_before": entry_digest(candidate_before),
+            "candidate_digest_after": entry_digest(candidate_after),
+            "source_digest_before": inventory_map_digest(sources_before, entry_digest),
+            "source_digest_after": inventory_map_digest(sources_after, entry_digest),
+        }
+    )
 
 
 def physical_special_paths(root: Path) -> list[str]:
@@ -66,6 +114,79 @@ def run_logged(
             f"command failed with exit {proc.returncode}; "
             f"inspect {error_log_path or log_path}"
         )
+
+
+def run_nested_seatbelt_tests(
+    *, snapshot: Path, python_bin: Path, env: dict[str, str], runtime_root: Path,
+    error_log_path: Path,
+) -> dict[str, object]:
+    """Run the one fixed suite that Darwin cannot nest below another profile."""
+
+    present = [
+        (snapshot / relative).is_file() and not (snapshot / relative).is_symlink()
+        for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES
+    ]
+    if not any(present):
+        return {
+            "status": "not_present_fixture",
+            "test_files": list(PHASE_A_NESTED_SEATBELT_TEST_FILES),
+            "file_counts": dict(PHASE_A_NESTED_SEATBELT_TESTS),
+            "expected_count": PHASE_A_NESTED_SEATBELT_TEST_COUNT,
+        }
+    if not all(present):
+        raise FreezeError("nested Seatbelt test suite is incomplete")
+    test_env = dict(env)
+    test_env["PYTHONPATH"] = os.pathsep.join(
+        (str(snapshot), str(snapshot / "scripts"), str(snapshot / "backend"))
+    )
+    collect_log = runtime_root / "nested-seatbelt-collect.log"
+    run_log = runtime_root / "nested-seatbelt-run.log"
+    base = [str(python_bin), "-B", "-m", "pytest"]
+    collect_command = [
+        *base, "--collect-only", "-q", *PHASE_A_NESTED_SEATBELT_TEST_FILES,
+    ]
+    run_logged(
+        collect_command, cwd=snapshot, env=test_env, log_path=collect_log,
+        error_log_path=error_log_path,
+    )
+    node_ids = [
+        line for line in collect_log.read_text(encoding="utf-8").splitlines()
+        if any(
+            line.startswith(relative + "::")
+            for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES
+        )
+    ]
+    observed_counts = {
+        relative: sum(node_id.startswith(relative + "::") for node_id in node_ids)
+        for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES
+    }
+    if (
+        observed_counts != dict(PHASE_A_NESTED_SEATBELT_TESTS)
+        or len(node_ids) != PHASE_A_NESTED_SEATBELT_TEST_COUNT
+        or len(set(node_ids)) != len(node_ids)
+    ):
+        raise FreezeError("nested Seatbelt test collection count mismatch")
+    command = [*base, "-q", *PHASE_A_NESTED_SEATBELT_TEST_FILES]
+    run_logged(
+        command, cwd=snapshot, env=test_env, log_path=run_log,
+        error_log_path=error_log_path,
+    )
+    summary = run_log.read_text(encoding="utf-8")
+    expected_summary = rf"(?m)^{PHASE_A_NESTED_SEATBELT_TEST_COUNT} passed(?:, \d+ warnings?)? in "
+    if re.search(expected_summary, summary) is None:
+        raise FreezeError("nested Seatbelt test pass count mismatch")
+    return {
+        "status": "passed",
+        "test_files": list(PHASE_A_NESTED_SEATBELT_TEST_FILES),
+        "file_counts": observed_counts,
+        "command": command,
+        "exit_code": 0,
+        "collected_count": len(node_ids),
+        "passed_count": PHASE_A_NESTED_SEATBELT_TEST_COUNT,
+        "expected_count": PHASE_A_NESTED_SEATBELT_TEST_COUNT,
+        "collect_log_sha256": hashlib.sha256(collect_log.read_bytes()).hexdigest(),
+        "run_log_sha256": hashlib.sha256(run_log.read_bytes()).hexdigest(),
+    }
 
 
 def publish_owned_log(

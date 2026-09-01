@@ -29,6 +29,7 @@ from scripts.ops.strict_runtime_seatbelt import (
 from scripts.ops import trusted_npm_audit
 from scripts.ops.controlled_candidate_process import run_controlled_candidate
 from scripts.ops.freeze_git_bridge import readonly_snapshot_git_environment
+from scripts.ops.trusted_git import trusted_git_executable
 from scripts.ops.isolated_runtime_attestation import copy_receipt_nofollow
 
 
@@ -431,7 +432,10 @@ def test_readonly_git_bridge_ignores_hostile_git_python_and_path(
         wrapper = Path(environment["VKPI_FREEZE_GIT_WRAPPER"])
         assert wrapper.read_text(encoding="utf-8").splitlines()[0] == f"#!{Path(os.sys.executable).resolve()}"
         assert str(hostile) not in environment["PATH"]
-        for name in ("git", "node", "npm", "npx"):
+        assert environment["VKPI_FREEZE_REAL_GIT"] == trusted_git_executable()
+        if sys.platform == "darwin":
+            assert environment["VKPI_FREEZE_REAL_GIT"] != "/usr/bin/git"
+        for name in ("git", "python", "python3", "node", "npm", "npx"):
             observed = subprocess.check_output(
                 ["/bin/sh", "-c", f"command -v {name}"], env={**environment, "HOME": str(tmp_path)}, text=True,
             ).strip()
@@ -441,7 +445,7 @@ def test_readonly_git_bridge_ignores_hostile_git_python_and_path(
             capture_output=True, text=True, check=True,
         )
     assert result.stdout.strip() == subprocess.check_output(
-        ["/usr/bin/git", "rev-parse", "HEAD"], cwd=source, text=True,
+        [trusted_git_executable(), "rev-parse", "HEAD"], cwd=source, text=True,
         env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
     ).strip()
 

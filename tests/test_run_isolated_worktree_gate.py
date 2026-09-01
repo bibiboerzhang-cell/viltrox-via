@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from scripts.ops import run_isolated_worktree_gate as isolated_gate
+from scripts.ops import isolated_strict_runtime_gate as strict_gate
 
 
 def _write(path: Path, text: str) -> None:
@@ -131,6 +132,9 @@ def test_phase_a_bridges_dirty_content_without_touching_source_state(
     assert result["provenance_bridge"]["status_clean"] is True
     assert result["provenance_bridge"]["mirror_mode"] == "0700"
     assert result["source_integrity"]["head_branch_index_status_unchanged"] is True
+    assert result["safety"]["provider_network_contact"] == (
+        "not_observed_not_os_enforced"
+    )
     temporary_root = Path(str(result["temporary_cleanup"]["root"]))
     assert result["temporary_cleanup"]["status"] == "removed"
     assert not temporary_root.exists()
@@ -138,6 +142,81 @@ def test_phase_a_bridges_dirty_content_without_touching_source_state(
     receipt = output.with_name("candidate.provenance.json")
     assert json.loads(receipt.read_text(encoding="utf-8")) == result
     assert receipt.with_suffix(".json.sha256").is_file()
+
+
+def test_phase_a_manifest_bytes_preserve_deleted_recorded_source_for_phase_b(
+    tmp_path: Path,
+) -> None:
+    source = _dirty_repo(tmp_path)
+    output = tmp_path / "artifacts" / "candidate"
+    result = isolated_gate.run_phase_a(_args(source, output))
+    manifest = output.with_suffix(output.suffix + ".manifest.json")
+    original_bytes = manifest.read_bytes()
+    original_payload = json.loads(original_bytes)
+    recorded_source = Path(original_payload["source"]["repo"])
+
+    assert recorded_source != source
+    assert not recorded_source.exists()
+    strict_root = tmp_path / "strict-root"
+    strict_root.mkdir(mode=0o700)
+    copied, copied_payload = strict_gate._copy_bound_manifest(
+        candidate=output,
+        root=strict_root,
+        expected_sha256=str(result["candidate"]["manifest_sha256"]),
+    )
+
+    assert copied.read_bytes() == original_bytes
+    assert copied_payload["source"]["repo"] == str(recorded_source)
+
+
+def test_phase_b_capsule_identity_accepts_a_clean_phase_a_source(
+    tmp_path: Path,
+) -> None:
+    source = _dirty_repo(tmp_path)
+    (source / "backend" / "untracked.py").unlink()
+    _write(source / "backend" / "delete-me.py", "VALUE = 'delete'\n")
+    assert _git(source, "status", "--porcelain=v1").stdout == b""
+    output = tmp_path / "artifacts" / "candidate"
+
+    result = isolated_gate.run_phase_a(_args(source, output))
+    identity = strict_gate._phase_capsule_identity(result)
+
+    assert result["dirty_source_capsule"]["source_worktree_dirty"] is False
+    assert identity["source_worktree_dirty"] is False
+
+
+@pytest.mark.parametrize("injection", ["regular", "symlink"])
+def test_clean_mirror_rejects_excluded_capsule_physical_injection(
+    tmp_path: Path,
+    injection: str,
+) -> None:
+    source = _dirty_repo(tmp_path)
+    output = tmp_path / "artifacts" / "candidate"
+    isolated_gate.run_phase_a(_args(source, output))
+    capsule = output.with_name("candidate-source-capsule")
+    capsule_manifest = capsule.with_suffix(".manifest.json")
+    capsule_payload = json.loads(capsule_manifest.read_text(encoding="utf-8"))
+    injected = capsule / "runtime" / "unbound.sh"
+    injected.parent.mkdir()
+    if injection == "regular":
+        _write(injected, "#!/bin/sh\nexit 0\n")
+    else:
+        outside = tmp_path / "outside.sh"
+        _write(outside, "#!/bin/sh\nexit 0\n")
+        injected.symlink_to(outside)
+    temporary_root = tmp_path / "strict-controller"
+    temporary_root.mkdir()
+
+    with pytest.raises(
+        isolated_gate.FreezeError,
+        match="physical tree",
+    ):
+        isolated_gate._prepare_clean_mirror(
+            source=source,
+            capsule=capsule,
+            capsule_payload=capsule_payload,
+            temporary_root=temporary_root,
+        )
 
 
 def test_phase_a_failure_cleans_only_owned_outputs_and_private_root(
@@ -177,6 +256,39 @@ def test_phase_a_failure_cleans_only_owned_outputs_and_private_root(
     assert not output.exists()
     assert not output.with_name("candidate-source-capsule").exists()
     assert not output.with_name("candidate.provenance.json").exists()
+
+
+def test_phase_a_post_freeze_failure_cleans_controller_static_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _dirty_repo(tmp_path)
+    output = tmp_path / "artifacts" / "candidate"
+    receipt = output.with_suffix(output.suffix + ".static-receipt.json")
+    real_freeze = isolated_gate.freeze_candidate
+    calls = 0
+
+    def freeze_with_static_receipt(arguments: Namespace) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        result = real_freeze(arguments)
+        if calls == 2:
+            _write(receipt, '{"fixture": true}\n')
+        return result
+
+    def fail_after_freeze(_arguments: Namespace) -> dict[str, object]:
+        raise isolated_gate.FreezeError("forced post-freeze verification failure")
+
+    monkeypatch.setattr(isolated_gate, "freeze_candidate", freeze_with_static_receipt)
+    monkeypatch.setattr(isolated_gate, "verify_deploy_source", fail_after_freeze)
+
+    with pytest.raises(
+        isolated_gate.FreezeError, match="forced post-freeze verification failure"
+    ):
+        isolated_gate.run_phase_a(_args(source, output))
+
+    assert not receipt.exists()
+    assert not output.exists()
+    assert not output.with_name("candidate-source-capsule").exists()
 
 
 def test_cleanup_refuses_unexpected_root(tmp_path: Path) -> None:

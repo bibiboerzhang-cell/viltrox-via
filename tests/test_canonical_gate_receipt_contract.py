@@ -35,12 +35,12 @@ def test_production_dependency_audit_is_fail_closed_and_receipted() -> None:
     assert "|| true" not in audit_block
     assert "npm audit fix" not in audit_block
     assert "--force" not in audit_block
-    assert f'run_step "{step_name}"' in source
+    assert f'run_static_step "{step_name}"' in source
 
-    # Receipt coverage follows the registered run_step ledger, not a brittle
-    # fixed total that must be bumped whenever the canonical gate gains a step.
+    # Receipt coverage follows both canonical step registrars. Static steps
+    # are reused only after a controller-bound Phase-A receipt is validated.
     registered_literal_steps = re.findall(
-        r'^run_step "([^"]+)"', source, flags=re.MULTILINE
+        r'^run_(?:static_)?step "([^"]+)"', source, flags=re.MULTILINE
     )
     assert step_name in registered_literal_steps
     assert 'index < ${#STEP_NAMES[@]}' in source

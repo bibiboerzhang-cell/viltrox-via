@@ -165,8 +165,30 @@ command -v flock >/dev/null || fail "flock is unavailable"
 id -u viltrox >/dev/null 2>&1 || fail "service user viltrox is missing"
 getent group viltrox >/dev/null 2>&1 || fail "service group viltrox is missing"
 
-exec 9>/run/lock/vkpi-systemd-install.lock
-flock -n 9 || fail "another V-KPI unit installation is active"
+# Lock order is global/shared production mutation first, installer-private
+# transaction second.  deploy_local_to_cloud.sh holds only the first lock, so
+# there is no inverse acquisition path and therefore no lock-order cycle.
+shared_lock_dir="/run/lock/vkpi-deploy"
+shared_lock_file="${shared_lock_dir}/deploy.lock"
+if ! /usr/bin/mkdir -m 0700 -- "${shared_lock_dir}" 2>/dev/null; then
+  [[ -d "${shared_lock_dir}" && ! -L "${shared_lock_dir}" ]] \
+    || fail "shared production lock directory is unsafe"
+fi
+[[ "$(/usr/bin/stat -c '%u:%g:%a' -- "${shared_lock_dir}")" = "0:0:700" ]] \
+  || fail "shared production lock directory owner or mode is unsafe"
+if [[ ! -e "${shared_lock_file}" && ! -L "${shared_lock_file}" ]]; then
+  (umask 077; set -o noclobber; : > "${shared_lock_file}") 2>/dev/null || true
+fi
+[[ -f "${shared_lock_file}" && ! -L "${shared_lock_file}" ]] \
+  || fail "shared production lock file is unsafe"
+[[ "$(/usr/bin/stat -c '%u:%g:%a:%h' -- "${shared_lock_file}")" = "0:0:600:1" ]] \
+  || fail "shared production lock file owner, mode, or link count is unsafe"
+exec 9>>/run/lock/vkpi-deploy/deploy.lock
+/usr/bin/flock -n 9 \
+  || fail "a V-KPI deployment or another shared production mutation is active"
+
+exec 8>/run/lock/vkpi-systemd-install.lock
+/usr/bin/flock -n 8 || fail "another V-KPI unit installation is active"
 
 case "${mode}" in
   primary)

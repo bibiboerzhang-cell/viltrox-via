@@ -17,7 +17,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import shutil
 import stat
 import subprocess
@@ -37,15 +36,25 @@ from scripts.ops.freeze_git_bridge import (  # noqa: E402
     GitBridgeError,
     readonly_snapshot_git_environment as _readonly_snapshot_git_environment,
 )
-from scripts.ops.deploy_gate_runtime import (  # noqa: E402
-    DeployGateRuntimeError,
-    bound_deploy_gate_runtime,
+from scripts.ops.candidate_physical_tree import (  # noqa: E402
+    assert_candidate_physical_tree_bound as _assert_candidate_physical_tree_bound,
+)
+from scripts.ops.controller_static_receipt import (  # noqa: E402
+    CANONICAL_STATIC_STEP_PLAN,
+    CONTROLLER_STATIC_RECEIPT_RUNTIME_STEP_PLAN,
+    assert_trusted_file_identity as _assert_trusted_file_identity,
+    controller_static_receipt_payload as _controller_static_receipt_payload,
+    read_bound_regular_file as _read_bound_regular_file,
+    trusted_file_identity as _trusted_file_identity,
+    validate_controller_static_receipt as _validate_controller_static_receipt,
 )
 from scripts.ops.freeze_phase_runtime import (  # noqa: E402
-    physical_special_paths as _physical_special_paths,
+    PHASE_A_NESTED_SEATBELT_TEST_COUNT,
+    bind_nested_inventory_proof as _bind_nested_inventory_proof,
     publish_owned_log as _publish_owned_log,
     remove_owned_phase_sandbox as _remove_owned_phase_sandbox,
     run_logged as _run_logged,
+    run_nested_seatbelt_tests as _run_nested_seatbelt_tests,
 )
 from scripts.ops.freeze_worktree_contract import (  # noqa: E402
     FORBIDDEN_COMPONENTS,
@@ -81,6 +90,8 @@ def _sha256_path(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
 def _run_git_bytes(root: Path, *args: str) -> bytes:
     from scripts.ops.trusted_git import git_env, trusted_git_executable
     try:
@@ -347,7 +358,17 @@ def _run_static_verify(
     log_path: Path,
     log_identity: tuple[int, int],
     identity: BuildIdentity,
-) -> None:
+) -> dict[str, object]:
+    """Run the complete static gate on exact snapshot bytes.
+
+    Darwin cannot apply a second, materially different Seatbelt below an
+    existing profile.  The fixed nested-Seatbelt suites therefore run first
+    with before/after byte pins.  The remaining canonical gate uses a narrow
+    allow-default profile that preserves fixture processes and loopback while
+    denying source/dependency/tool writes and credential reads.  Network stays
+    intentionally unrestricted and is reported as not OS-enforced.
+    """
+
     source_top = Path(_run_git_text(source, "rev-parse", "--show-toplevel")).resolve()
     if source_top != source:
         raise FreezeError("source Git worktree binding does not match freeze root")
@@ -356,6 +377,16 @@ def _run_static_verify(
     env = build_provider_free_subprocess_environment(
         os.environ, home=log_path.parent, tmpdir=log_path.parent,
     )
+    # These switches alter product semantics and make readiness/guard tests
+    # observe a different application than the candidate.  Credential and
+    # dotenv scrubbing is the security boundary for this controller test
+    # phase; retain it, but do not globally force test subjects offline.
+    for name in (
+        "VKPI_LLM_GATEWAY_FORCE_OFFLINE",
+        "VKPI_EXTERNAL_AI_DISABLED",
+        "VKPI_AUTOMATED_WRITES_DISABLED",
+    ):
+        env.pop(name, None)
     # This output path is reserved for the later canonical deploy gate.  A
     # caller must not be able to redirect an ordinary freeze-time verifier to
     # an arbitrary path or make the frozen snapshot appear reproducible by
@@ -372,18 +403,44 @@ def _run_static_verify(
             "PYTHON_BIN_FALLBACK": sys.executable,
             "VKPI_HEALTH_URL": "http://127.0.0.1:9/health",
             "VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE": "0",
-            "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE": "0",
+            "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE": "1",
             "VKPI_VERIFY_REQUIRE_RUNTIME": "0",
             "VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY": "0",
         }
     )
     env.update(identity.vite_environment())
     assert_provider_free_environment(env)
-    from scripts.ops.strict_runtime_seatbelt import candidate_profile, sandboxed
     from scripts.ops.trusted_npm_audit import _trusted_node, _trusted_npm, _trusted_npx, run_trusted_npm_audit
+    from scripts.ops.trusted_git import trusted_git_executable, trusted_python_executable
     npm, node = _trusted_npm(), _trusted_node()
     npx = _trusted_npx(npm)
+    physical_python = Path(
+        trusted_python_executable(source / ".venv" / "bin" / "python")
+    )
+    physical_git = Path(trusted_git_executable())
+    toolchain = {
+        "git": _trusted_file_identity(physical_git),
+        "node": _trusted_file_identity(node),
+        "npm": _trusted_file_identity(npm),
+        "npx": _trusted_file_identity(npx),
+        "python": _trusted_file_identity(physical_python),
+    }
+    execution_tools = {
+        **toolchain,
+        "bash": _trusted_file_identity(Path("/bin/bash")),
+        "sandbox-exec": _trusted_file_identity(Path("/usr/bin/sandbox-exec")),
+    }
+    from scripts.ops.strict_runtime_seatbelt import (
+        phase_a_protected_source_roots, phase_a_static_profile, sandboxed,
+    )
+    profile = phase_a_static_profile(
+        source=source,
+        venv=source / ".venv",
+        node_modules=source / "frontend/node_modules",
+        tool_paths=tuple(Path(str(item["path"])) for item in execution_tools.values()),
+    )
     sandbox_root = Path(tempfile.mkdtemp(prefix="vkpi-phase-a-seatbelt.", dir="/tmp"))
+    os.chown(sandbox_root, os.geteuid(), os.getegid())
     sandbox_root.chmod(0o700)
     for child in ("home", "tmp", "cache"):
         (sandbox_root / child).mkdir(mode=0o700)
@@ -401,30 +458,106 @@ def _run_static_verify(
     audit_receipt = sandbox_root / "npm-audit.json"
     bridge_parent = sandbox_root / "controller"
     bridge_parent.mkdir(mode=0o700)
+    canonical_receipt = bridge_parent / "canonical-static-gate.json"
+    env["VKPI_VERIFY_JSON_OUT"] = str(canonical_receipt)
     if (snapshot / "frontend/package-lock.json").is_file():
         run_trusted_npm_audit(snapshot / "frontend", audit_receipt)
         env["VKPI_TRUSTED_NPM_AUDIT_RECEIPT"] = str(audit_receipt)
-    profile = candidate_profile(candidate=snapshot, clean_source=snapshot,
-        venv=source / ".venv", node_modules=source / "frontend/node_modules",
-        runtime_root=sandbox_root, allowed_ports=(), protect_clean_source=False,
-        executable_paths=(node, npm, npx, Path("/bin/bash")), executable_dirs=(bridge_parent,),
-        readable_paths=(npm.parent.parent, source / "frontend/package.json"))
     sandbox_log = sandbox_root / "candidate-verify.log"
+    canonical_payload: dict[str, object] | None = None
+    nested_seatbelt_tests: dict[str, object] | None = None
     try:
         with _readonly_snapshot_git_environment(
-            snapshot, source, bridge_parent=bridge_parent,
+            snapshot,
+            source,
+            bridge_parent=bridge_parent,
+            python_bin=physical_python,
         ) as git_environment:
             env.update(git_environment)
+            candidate_before_nested = _inventory_candidate(snapshot)
+            expected_physical_files = [
+                entry.payload() for entry in candidate_before_nested
+            ]
+            _assert_candidate_physical_tree_bound(snapshot, expected_physical_files)
             with _borrow_dependencies(snapshot, source):
-                _run_logged(sandboxed(["/bin/bash", "scripts/verify.sh"], profile),
-                            cwd=snapshot, env=env, log_path=sandbox_log,
-                            error_log_path=log_path)
+                protected_sources = phase_a_protected_source_roots(
+                    source=source, venv=source / ".venv",
+                    node_modules=source / "frontend/node_modules",
+                )
+                source_before_nested = {
+                    str(root): _inventory_source(root)
+                    for root in protected_sources if (root / ".git").exists()
+                }
+                nested_seatbelt_tests = _run_nested_seatbelt_tests(
+                    snapshot=snapshot, python_bin=source / ".venv/bin/python", env=env,
+                    runtime_root=sandbox_root, error_log_path=log_path,
+                )
+                candidate_after_nested = _inventory_candidate(snapshot)
+                source_after_nested = {
+                    str(root): _inventory_source(root) for root in protected_sources
+                }
+                _bind_nested_inventory_proof(
+                    nested_seatbelt_tests,
+                    candidate_before=candidate_before_nested,
+                    candidate_after=candidate_after_nested,
+                    sources_before=source_before_nested,
+                    sources_after=source_after_nested,
+                    entry_digest=_inventory_digest,
+                )
+                if nested_seatbelt_tests.get("status") == "passed":
+                    env["VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT"] = str(
+                        PHASE_A_NESTED_SEATBELT_TEST_COUNT
+                    )
+                _run_logged(
+                    sandboxed(["/bin/bash", "scripts/verify.sh"], profile),
+                    cwd=snapshot,
+                    env=env,
+                    log_path=sandbox_log,
+                    error_log_path=log_path,
+                )
+            _assert_candidate_physical_tree_bound(snapshot, expected_physical_files)
+            try:
+                loaded = json.loads(canonical_receipt.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise FreezeError("canonical static receipt is missing or invalid") from exc
+            if (
+                not isinstance(loaded, dict)
+                or loaded.get("schema_version") != "vkpi_canonical_gate_receipt_v1"
+                or loaded.get("passed") is not True
+                or loaded.get("failed_steps") != []
+            ):
+                raise FreezeError("canonical static receipt did not prove a green gate")
+            verification = loaded.get("verification")
+            if not isinstance(verification, dict) or verification != {
+                "runtime": "not_requested",
+                "acceptance": "not_requested",
+                "browser_console": "not_requested",
+                "runtime_log_canary": "not_requested",
+            }:
+                raise FreezeError("canonical static receipt contains runtime claims")
+            steps = loaded.get("steps")
+            if not isinstance(steps, list) or [
+                item.get("name") for item in steps if isinstance(item, dict)
+            ] != list(CANONICAL_STATIC_STEP_PLAN):
+                raise FreezeError("canonical static receipt step plan mismatch")
+            canonical_payload = loaded
     finally:
         try:
             if sandbox_log.is_file() and not sandbox_log.is_symlink():
                 _publish_owned_log(sandbox_log, log_path, log_identity)
         finally:
-            _remove_owned_phase_sandbox(sandbox_root)
+            try:
+                _remove_owned_phase_sandbox(sandbox_root)
+            finally:
+                for name, record in execution_tools.items():
+                    _assert_trusted_file_identity(record, label=name)
+    if canonical_payload is None:
+        raise FreezeError("canonical static receipt was not captured")
+    return {
+        "canonical_receipt": canonical_payload,
+        "nested_seatbelt_tests": nested_seatbelt_tests,
+        "toolchain": toolchain,
+    }
 def _regular_tree_inventory(root: Path) -> list[tuple[str, str, int, str]]:
     """Backward-compatible wrapper around the shared strict tree inventory."""
 
@@ -545,6 +678,7 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
     )
     build_log = output.with_suffix(output.suffix + ".build.log")
     verify_log = output.with_suffix(output.suffix + ".verify.log")
+    static_receipt_path = output.with_suffix(output.suffix + ".static-receipt.json")
     archive = output.with_suffix(output.suffix + ".tar")
     manifest_path = output.with_suffix(output.suffix + ".manifest.json")
     created: dict[Path, tuple[int, int]] = {temporary: path_identity(temporary)}
@@ -579,10 +713,35 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
             if copied_dist.exists():
                 shutil.rmtree(copied_dist)
 
+        static_gate_run: dict[str, object] | None = None
         if not args.skip_verify:
-            _run_static_verify(
-                temporary, source, verify_log, created[verify_log], identity
+            candidate_before_verify = _inventory_candidate(temporary)
+            _assert_source_state_unchanged(
+                source,
+                entries=entries_before,
+                status=status_before,
+                head=head,
+                branch=branch,
+                phase="candidate static verification start",
             )
+            try:
+                static_gate_run = _run_static_verify(
+                    temporary, source, verify_log, created[verify_log], identity
+                )
+            finally:
+                candidate_after_verify = _inventory_candidate(temporary)
+                if candidate_after_verify != candidate_before_verify:
+                    raise FreezeError(
+                        "candidate bytes drifted during canonical static verification"
+                    )
+                _assert_source_state_unchanged(
+                    source,
+                    entries=entries_before,
+                    status=status_before,
+                    head=head,
+                    branch=branch,
+                    phase="candidate static verification",
+                )
             if frontend_build_info is not None:
                 # The static gate builds into an isolated output directory and
                 # must not rewrite the candidate dist identity.
@@ -594,6 +753,28 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
         ):
             raise FreezeError("rebuilt frontend dist is missing from candidate inventory")
         candidate_digest = _inventory_digest(candidate_entries)
+        static_receipt_record: dict[str, object] | None = None
+        if static_gate_run is not None:
+            static_receipt_payload = _controller_static_receipt_payload(
+                output=output,
+                snapshot=temporary,
+                candidate_digest=candidate_digest,
+                source_digest=source_digest,
+                source_file_count=len(entries_before),
+                source_status_sha256=hashlib.sha256(status_before).hexdigest(),
+                source_dirty=bool(status_before),
+                identity=identity,
+                verify_log=verify_log,
+                static_gate_run=static_gate_run,
+            )
+            created[static_receipt_path] = _atomic_json(
+                static_receipt_path, static_receipt_payload
+            )
+            static_receipt_record = {
+                "path": str(static_receipt_path),
+                "sha256": _sha256_path(static_receipt_path),
+                "payload": static_receipt_payload,
+            }
         if not args.skip_archive:
             _deterministic_tar(temporary, archive, candidate_entries)
             created[archive] = path_identity(archive)
@@ -652,7 +833,8 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
                 "suffixes": list(FORBIDDEN_SUFFIXES),
             },
             "safety": {
-                "provider_network_contacted": False,
+                "provider_credentials_inherited": False,
+                "provider_network_contact": "not_observed_not_os_enforced",
                 "external_registry_network": "npm_audit_may_attempt",
                 "commit_created": False,
                 "deployment_performed": False,
@@ -675,6 +857,7 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
                 "log_path": str(verify_log) if not args.skip_verify else None,
                 "log_sha256": _sha256_path(verify_log) if verify_log.exists() else None,
                 "runtime_intentionally_unreachable": not args.skip_verify,
+                "static_receipt": static_receipt_record,
             },
         }
         created[manifest_path] = _atomic_json(manifest_path, payload)
@@ -719,6 +902,7 @@ def verify_manifest(args: argparse.Namespace) -> dict[str, object]:
     if not isinstance(candidate, dict):
         raise FreezeError("candidate section missing")
     snapshot = Path(args.snapshot or str(candidate.get("snapshot_path", ""))).resolve()
+    _assert_candidate_physical_tree_bound(snapshot, candidate.get("files"))
     entries = _inventory_candidate(snapshot)
     digest = _inventory_digest(entries)
     if digest != candidate.get("content_sha256"):
@@ -742,211 +926,7 @@ def verify_manifest(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
-def verify_deploy_source(args: argparse.Namespace) -> dict[str, object]:
-    """Bind one verified snapshot to the exact Git identity being deployed."""
-
-    expected_head = str(args.expected_head).strip()
-    if not re.fullmatch(r"[0-9a-f]{40}", expected_head):
-        raise FreezeError("expected deploy Git SHA must be a lowercase 40-character digest")
-    expected_branch = str(args.expected_branch)
-    if not expected_branch or any(character in expected_branch for character in "\r\n\0"):
-        raise FreezeError("expected deploy Git branch is invalid")
-
-    manifest_path = Path(args.manifest).resolve()
-    try:
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise FreezeError(f"invalid manifest: {manifest_path}") from exc
-    if not isinstance(payload, dict) or payload.get("schema") != SCHEMA:
-        raise FreezeError("manifest schema mismatch")
-
-    candidate = payload.get("candidate")
-    source = payload.get("source")
-    build = payload.get("build")
-    identity = build.get("identity") if isinstance(build, dict) else None
-    if not isinstance(candidate, dict) or not isinstance(source, dict):
-        raise FreezeError("deploy candidate source binding is missing")
-    if not isinstance(identity, dict):
-        raise FreezeError("deploy candidate build identity is missing")
-
-    raw_snapshot = Path(args.snapshot)
-    if raw_snapshot.is_symlink() or not raw_snapshot.is_dir():
-        raise FreezeError("deploy candidate snapshot is missing or unsafe")
-    snapshot = raw_snapshot.resolve()
-    recorded_snapshot_raw = candidate.get("snapshot_path")
-    if not isinstance(recorded_snapshot_raw, str) or not recorded_snapshot_raw:
-        raise FreezeError("deploy candidate snapshot path is missing")
-    recorded_snapshot = Path(recorded_snapshot_raw).resolve()
-    if recorded_snapshot != snapshot:
-        raise FreezeError("deploy candidate snapshot canonical path mismatch")
-    if source.get("worktree_dirty") is not False:
-        raise FreezeError("deploy candidate was frozen from a dirty worktree")
-    if source.get("head") != expected_head:
-        raise FreezeError("deploy candidate source HEAD mismatch")
-    if identity.get("git_sha") != expected_head:
-        raise FreezeError("deploy candidate build identity Git SHA mismatch")
-    if source.get("branch") != expected_branch:
-        raise FreezeError("deploy candidate source branch mismatch")
-    if identity.get("git_branch") != expected_branch:
-        raise FreezeError("deploy candidate build identity Git branch mismatch")
-
-    special_paths = _physical_special_paths(snapshot)
-    if special_paths:
-        raise FreezeError(
-            "deploy candidate contains unsupported special file: "
-            + ", ".join(special_paths[:10])
-        )
-
-    build_identity = BuildIdentity(
-        git_sha=str(identity.get("git_sha", "")),
-        git_branch=str(identity.get("git_branch", "")),
-        build_time=str(identity.get("build_time", "")),
-    )
-    expected_stamps = {
-        "BUILD_GIT_SHA": build_identity.git_sha,
-        "BUILD_GIT_BRANCH": build_identity.git_branch,
-        "BUILD_TIME": build_identity.build_time,
-    }
-    for name, expected in expected_stamps.items():
-        path = snapshot / name
-        if path.is_symlink() or not path.is_file():
-            raise FreezeError(f"deploy candidate build stamp is missing or unsafe: {name}")
-        try:
-            observed = path.read_text(encoding="utf-8").strip()
-        except (OSError, UnicodeDecodeError) as exc:
-            raise FreezeError(f"deploy candidate build stamp is unreadable: {name}") from exc
-        if observed != expected:
-            raise FreezeError(f"deploy candidate build stamp mismatch: {name}")
-
-    result = verify_manifest(
-        argparse.Namespace(manifest=str(manifest_path), snapshot=str(snapshot))
-    )
-    result.update(
-        {
-            "build_git_sha": identity.get("git_sha"),
-            "source_git_sha": source.get("head"),
-        }
-    )
-    return result
-
-
-def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
-    """Run the canonical gate from candidate bytes, then reverify the candidate."""
-    try:
-        runtime_root = str(args.runtime_root)
-        health_url = str(args.health_url)
-        base_url = str(args.base_url)
-        verify_json_out = str(args.verify_json_out)
-        acceptance_json_out = str(args.acceptance_json_out)
-    except AttributeError as exc:
-        raise FreezeError("deploy gate strict runtime bindings are required") from exc
-    before = verify_deploy_source(args)
-    snapshot = Path(str(before["snapshot"])).resolve()
-    source = Path(args.source).resolve()
-    manifest_path = Path(args.manifest).resolve()
-    try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise FreezeError("deploy gate manifest is invalid") from exc
-    source_record = manifest.get("source") if isinstance(manifest, dict) else None
-    recorded_repo = source_record.get("repo") if isinstance(source_record, dict) else None
-    if not isinstance(recorded_repo, str) or Path(recorded_repo).resolve() != source:
-        raise FreezeError("deploy gate source repository binding mismatch")
-    build_record = manifest.get("build") if isinstance(manifest, dict) else None
-    require_reproducible_frontend = bool(
-        isinstance(build_record, dict) and build_record.get("executed") is True
-    )
-    reproducible_frontend_verified = False
-    completed: subprocess.CompletedProcess[bytes] | None = None
-    try:
-        try:
-            with bound_deploy_gate_runtime(
-                os.environ,
-                source=source,
-                requested_python=args.python,
-                runtime_root=runtime_root,
-                health_env_file=getattr(args, "health_env_file", ""),
-                health_url=health_url,
-                base_url=base_url,
-                verify_json_out=verify_json_out,
-                acceptance_json_out=acceptance_json_out,
-                allow_test_hooks=bool(getattr(args, "fixture_allow_test_hooks", False)),
-            ) as (python_bin, environment):
-                for name in GIT_REPOSITORY_BINDING_ENV:
-                    environment.pop(name, None)
-                build_time = str(manifest["build"]["identity"]["build_time"])
-                rebuilt_frontend = (
-                        Path(environment["RUNTIME_ROOT"]) / "controller/frontend-dist-rebuild"
-                )
-                environment.update(
-                    {
-                        "APP_BUILD_TIME": build_time,
-                        "APP_GIT_BRANCH": str(args.expected_branch),
-                        "APP_GIT_SHA": str(args.expected_head),
-                        "PYTHON_BIN": str(python_bin),
-                        "PYTHON_BIN_FALLBACK": str(python_bin),
-                        "VITE_APP_BUILD_TIME": build_time,
-                        "VITE_APP_GIT_BRANCH": str(args.expected_branch),
-                        "VITE_APP_GIT_SHA": str(args.expected_head),
-                        "VKPI_VERIFY_FRONTEND_OUT_DIR": str(rebuilt_frontend),
-                        "VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE": "0",
-                        "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE": "1",
-                        "VKPI_VERIFY_REQUIRE_RUNTIME": "1",
-                        "VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY": "0",
-                        "VKPI_STRICT_RUN_NONCE": str(getattr(args, "runtime_nonce", "")),
-                        "VKPI_STRICT_RUNTIME_PORTS": str(getattr(args, "runtime_ports", "")),
-                        "VKPI_STRICT_CANDIDATE_SHA256": str(getattr(args, "candidate_digest", "")),
-                    }
-                )
-                from scripts.ops.trusted_npm_audit import run_trusted_npm_audit
-                strict_audit = Path(runtime_root) / "controller/npm-audit.json"
-                strict_audit.parent.mkdir(parents=True, exist_ok=True)
-                if (snapshot / "frontend/package-lock.json").is_file():
-                    run_trusted_npm_audit(snapshot / "frontend", strict_audit)
-                    environment["VKPI_TRUSTED_NPM_AUDIT_RECEIPT"] = str(strict_audit)
-                from scripts.ops.deploy_gate_runtime import assert_provider_free_environment
-                assert_provider_free_environment(environment)
-                with _readonly_snapshot_git_environment(
-                    snapshot, source, bridge_parent=Path(runtime_root) / "controller",
-                ) as git_environment:
-                    environment.update(git_environment)
-                    with _borrow_dependencies(snapshot, source):
-                        from scripts.ops.controlled_candidate_process import run_controlled_candidate
-                        completed = run_controlled_candidate(
-                            (["/usr/bin/sandbox-exec", "-p", str(args.seatbelt_profile)]
-                             if getattr(args, "seatbelt_profile", None) else [])
-                            + ["/bin/bash", "scripts/verify.sh"],
-                            cwd=snapshot,
-                            env=environment,
-                            stdin=subprocess.DEVNULL,
-                            timeout=1800,
-                        )
-                if completed.returncode == 0 and require_reproducible_frontend:
-                    _assert_frontend_dist_reproducible(
-                        snapshot / "frontend" / "dist",
-                        rebuilt_frontend,
-                    )
-                    reproducible_frontend_verified = True
-        except (DeployGateRuntimeError, KeyError, TypeError) as exc:
-            raise FreezeError(str(exc)) from exc
-    finally:
-        candidate_postgres_receipts = [{
-            "root": runtime_root,
-            "status": "controller_registry_cleanup_required",
-            "destructive_cleanup_performed": False,
-        }]
-        after = verify_deploy_source(args)
-    if completed is None or completed.returncode != 0:
-        code = completed.returncode if completed is not None else "unavailable"
-        raise FreezeError(f"candidate canonical deploy gate failed: {code}")
-    after["canonical_deploy_gate"] = True
-    after["candidate_browser_runtime_postgres"] = candidate_postgres_receipts
-    after["frontend_reproducible"] = (
-        reproducible_frontend_verified
-        if require_reproducible_frontend
-        else "not_required_for_unbuilt_fixture"
-    )
-    return after
+from scripts.ops.freeze_deploy_gate import run_deploy_gate, verify_deploy_source
 
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
@@ -974,6 +954,9 @@ def parser() -> argparse.ArgumentParser:
     deploy_gate.add_argument("--expected-head", required=True)
     deploy_gate.add_argument("--expected-branch", required=True)
     deploy_gate.add_argument("--source", required=True)
+    deploy_gate.add_argument("--controller-source")
+    deploy_gate.add_argument("--expected-recorded-source")
+    deploy_gate.add_argument("--admission-json", required=True)
     deploy_gate.add_argument("--python", required=True)
     deploy_gate.add_argument("--runtime-root", required=True)
     deploy_gate.add_argument("--health-env-file", required=True)

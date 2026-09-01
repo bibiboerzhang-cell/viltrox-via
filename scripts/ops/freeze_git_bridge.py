@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -227,18 +229,89 @@ if __name__ == "__main__":
 """
 
 
+def _strict_identity_wrapper_source(
+    *, snapshot: Path, head: str, branch: str, python_bin: Path
+) -> str:
+    """Return a fixed-response Git shim that never opens the controller source."""
+
+    return f"""#!{python_bin}
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+SNAPSHOT = Path({str(snapshot)!r}).resolve()
+HEAD = {head!r}
+BRANCH = {branch!r}
+
+
+def _arguments(raw: list[str]) -> list[str] | None:
+    arguments = list(raw)
+    target = Path.cwd().resolve()
+    while arguments and (arguments[0] == "--no-optional-locks" or arguments[0].startswith("-C")):
+        item = arguments.pop(0)
+        if item == "--no-optional-locks":
+            continue
+        if item == "-C":
+            if not arguments:
+                return None
+            target = Path(arguments.pop(0)).resolve()
+        else:
+            target = Path(item[2:]).resolve()
+    try:
+        target.relative_to(SNAPSHOT)
+    except ValueError:
+        return None
+    return arguments
+
+
+def main() -> int:
+    arguments = _arguments(sys.argv[1:])
+    if arguments in (["rev-parse", "HEAD"], ["rev-parse", "--verify", "HEAD"]):
+        print(HEAD)
+        return 0
+    if arguments == ["rev-parse", "--show-toplevel"]:
+        print(SNAPSHOT)
+        return 0
+    if arguments in (["branch", "--show-current"], ["rev-parse", "--abbrev-ref", "HEAD"]):
+        print(BRANCH)
+        return 0
+    if arguments in (
+        ["status", "--porcelain=v1", "--untracked-files=all"],
+        ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    ):
+        return 0
+    requested = arguments[0] if arguments else "<invalid>"
+    sys.stderr.write("strict candidate Git identity rejected command: " + requested + "\\n")
+    return 126
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+"""
+
+
 @contextmanager
 def readonly_snapshot_git_environment(
     snapshot: Path,
     source: Path,
     *, bridge_parent: Path | None = None,
+    python_bin: Path | None = None,
 ) -> Iterator[dict[str, str]]:
     """Install a temporary PATH shim for snapshot-only read access to source Git."""
 
-    real_git = Path("/usr/bin/git").resolve(strict=True)
-    python_bin = Path(sys.executable).resolve(strict=True)
-    if not real_git.is_file() or not os.access(real_git, os.X_OK):
-        raise GitBridgeError("Git executable is unsafe for snapshot verification")
+    from scripts.ops.trusted_git import (
+        trusted_git_executable,
+        trusted_python_executable,
+    )
+
+    try:
+        real_git = Path(trusted_git_executable())
+        physical_python = Path(
+            trusted_python_executable(python_bin or Path(sys.executable))
+        )
+    except RuntimeError as exc:
+        raise GitBridgeError(str(exc)) from exc
 
     if bridge_parent is not None:
         bridge_parent.mkdir(parents=True, exist_ok=True)
@@ -253,7 +326,7 @@ def readonly_snapshot_git_environment(
                 real_git=real_git,
                 snapshot=snapshot,
                 source=source,
-                python_bin=python_bin,
+                python_bin=physical_python,
             ),
             encoding="utf-8",
         )
@@ -265,10 +338,94 @@ def readonly_snapshot_git_environment(
         node_tool = bridge_root / "node"
         node_tool.write_text(f'#!/bin/sh\nexec {node} "$@"\n', encoding="utf-8")
         os.chmod(node_tool, 0o500)
+        for name in ("python", "python3"):
+            tool = bridge_root / name
+            tool.write_text(
+                "#!/bin/sh\nexec "
+                + shlex.quote(str(physical_python))
+                + ' "$@"\n',
+                encoding="utf-8",
+            )
+            os.chmod(tool, 0o500)
         yield {
             "PATH": str(bridge_root) + os.pathsep + "/usr/bin:/bin",
             "VKPI_FREEZE_GIT_BRIDGE": "readonly-path-wrapper",
             "VKPI_FREEZE_GIT_WRAPPER": str(wrapper),
+            "VKPI_FREEZE_REAL_GIT": str(real_git),
+            "VKPI_FREEZE_REAL_PYTHON": str(physical_python),
+        }
+    finally:
+        shutil.rmtree(bridge_root, ignore_errors=True)
+
+
+@contextmanager
+def strict_snapshot_identity_environment(
+    snapshot: Path,
+    *,
+    expected_head: str,
+    expected_branch: str,
+    bridge_parent: Path,
+    python_bin: Path,
+) -> Iterator[dict[str, str]]:
+    """Expose only the immutable identity queries needed by Phase B."""
+
+    from scripts.ops.trusted_git import trusted_python_executable
+    from scripts.ops.trusted_npm_audit import _trusted_node, _trusted_npm, _trusted_npx
+
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_head):
+        raise GitBridgeError("strict snapshot Git head is invalid")
+    if not expected_branch or any(character in expected_branch for character in "\r\n\0"):
+        raise GitBridgeError("strict snapshot Git branch is invalid")
+    try:
+        physical_python = Path(trusted_python_executable(python_bin))
+    except RuntimeError as exc:
+        raise GitBridgeError(str(exc)) from exc
+    bridge_parent.mkdir(parents=True, exist_ok=True)
+    bridge_root = Path(
+        tempfile.mkdtemp(prefix="vkpi-strict-git-identity.", dir=bridge_parent)
+    )
+    wrapper = bridge_root / "git"
+    try:
+        node, npm_cli = _trusted_node(), _trusted_npm()
+        npx_cli = _trusted_npx(npm_cli)
+        wrapper.write_text(
+            _strict_identity_wrapper_source(
+                snapshot=snapshot,
+                head=expected_head,
+                branch=expected_branch,
+                python_bin=physical_python,
+            ),
+            encoding="utf-8",
+        )
+        os.chmod(wrapper, 0o500)
+        for name, cli in (("npm", npm_cli), ("npx", npx_cli)):
+            tool = bridge_root / name
+            tool.write_text(
+                f"#!/bin/sh\nexec {shlex.quote(str(node))} "
+                f"{shlex.quote(str(cli))} \"$@\"\n",
+                encoding="utf-8",
+            )
+            os.chmod(tool, 0o500)
+        node_tool = bridge_root / "node"
+        node_tool.write_text(
+            f"#!/bin/sh\nexec {shlex.quote(str(node))} \"$@\"\n",
+            encoding="utf-8",
+        )
+        os.chmod(node_tool, 0o500)
+        for name in ("python", "python3"):
+            tool = bridge_root / name
+            tool.write_text(
+                "#!/bin/sh\nexec "
+                + shlex.quote(str(physical_python))
+                + ' "$@"\n',
+                encoding="utf-8",
+            )
+            os.chmod(tool, 0o500)
+        yield {
+            "PATH": str(bridge_root) + os.pathsep + "/usr/bin:/bin",
+            "VKPI_FREEZE_GIT_BRIDGE": "strict-fixed-identity-wrapper",
+            "VKPI_FREEZE_GIT_WRAPPER": str(wrapper),
+            "VKPI_FREEZE_REAL_PYTHON": str(physical_python),
         }
     finally:
         shutil.rmtree(bridge_root, ignore_errors=True)

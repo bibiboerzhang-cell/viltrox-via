@@ -142,6 +142,7 @@ fi
 DEPLOY_VERIFIER_BUNDLE_DIR=""
 DEPLOY_VERIFIER_BUNDLE_SHA256=""
 TRUSTED_CANDIDATE_VERIFIER=""
+TRUSTED_RUNTIME_ADMISSION=""
 DEPLOY_VERIFIER_BUNDLE_READY=0
 RESCUE_ROLLBACK_CANDIDATE_DIR="${VKPI_RESCUE_ROLLBACK_CANDIDATE_DIR:-}"
 RESCUE_ROLLBACK_CANDIDATE_MANIFEST="${VKPI_RESCUE_ROLLBACK_CANDIDATE_MANIFEST:-}"
@@ -184,7 +185,8 @@ verify_deploy_verifier_bundle() {
   if [ "${DEPLOY_VERIFIER_BUNDLE_READY}" != "1" ] \
     || [ -z "${DEPLOY_VERIFIER_BUNDLE_DIR}" ] \
     || [ -z "${DEPLOY_VERIFIER_BUNDLE_SHA256}" ] \
-    || [ -z "${TRUSTED_CANDIDATE_VERIFIER}" ]; then
+    || [ -z "${TRUSTED_CANDIDATE_VERIFIER}" ] \
+    || [ -z "${TRUSTED_RUNTIME_ADMISSION}" ]; then
     echo "Trusted deploy candidate verifier bundle is not ready." >&2
     return 1
   fi
@@ -198,15 +200,21 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 paths = {
+    Path("scripts/ops/candidate_physical_tree.py"): 0o400,
+    Path("scripts/ops/controller_static_receipt.py"): 0o400,
     Path("scripts/ops/controlled_candidate_process.py"): 0o400,
     Path("scripts/ops/deploy_gate_runtime.py"): 0o400,
+    Path("scripts/ops/deploy_runtime_admission.py"): 0o500,
     Path("scripts/ops/freeze_worktree_candidate.py"): 0o500,
     Path("scripts/ops/freeze_worktree_contract.py"): 0o400,
     Path("scripts/ops/freeze_git_bridge.py"): 0o400,
+    Path("scripts/ops/freeze_deploy_gate.py"): 0o400,
     Path("scripts/ops/freeze_phase_runtime.py"): 0o400,
     Path("scripts/ops/legacy_to_atomic_preflight.py"): 0o500,
     Path("scripts/ops/legacy_to_atomic_preflight_report.py"): 0o400,
     Path("scripts/ops/legacy_to_atomic_preflight_transport.py"): 0o400,
+    Path("scripts/ops/strict_runtime_seatbelt.py"): 0o400,
+    Path("scripts/ops/trusted_git.py"): 0o400,
     Path("scripts/ops/trusted_npm_audit.py"): 0o400,
     Path("scripts/ops/verify_legacy_bootstrap_anchor.py"): 0o500,
     Path("scripts/stdout_utils.py"): 0o400,
@@ -247,15 +255,21 @@ seal_deploy_verifier_bundle() {
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops"
   for relative in \
+    scripts/ops/candidate_physical_tree.py \
+    scripts/ops/controller_static_receipt.py \
     scripts/ops/controlled_candidate_process.py \
     scripts/ops/deploy_gate_runtime.py \
+    scripts/ops/deploy_runtime_admission.py \
     scripts/ops/freeze_worktree_candidate.py \
     scripts/ops/freeze_worktree_contract.py \
     scripts/ops/freeze_git_bridge.py \
+    scripts/ops/freeze_deploy_gate.py \
     scripts/ops/freeze_phase_runtime.py \
     scripts/ops/legacy_to_atomic_preflight.py \
     scripts/ops/legacy_to_atomic_preflight_report.py \
     scripts/ops/legacy_to_atomic_preflight_transport.py \
+    scripts/ops/strict_runtime_seatbelt.py \
+    scripts/ops/trusted_git.py \
     scripts/ops/trusted_npm_audit.py \
     scripts/ops/verify_legacy_bootstrap_anchor.py \
     scripts/stdout_utils.py \
@@ -270,7 +284,7 @@ seal_deploy_verifier_bundle() {
       return 1
     fi
     case "${relative}" in
-      scripts/ops/controlled_candidate_process.py|scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_git_bridge.py|scripts/ops/freeze_phase_runtime.py|scripts/ops/freeze_worktree_contract.py|scripts/ops/legacy_to_atomic_preflight_report.py|scripts/ops/legacy_to_atomic_preflight_transport.py|scripts/ops/trusted_npm_audit.py|scripts/stdout_utils.py)
+      scripts/ops/candidate_physical_tree.py|scripts/ops/controller_static_receipt.py|scripts/ops/controlled_candidate_process.py|scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_deploy_gate.py|scripts/ops/freeze_git_bridge.py|scripts/ops/freeze_phase_runtime.py|scripts/ops/freeze_worktree_contract.py|scripts/ops/legacy_to_atomic_preflight_report.py|scripts/ops/legacy_to_atomic_preflight_transport.py|scripts/ops/strict_runtime_seatbelt.py|scripts/ops/trusted_git.py|scripts/ops/trusted_npm_audit.py|scripts/stdout_utils.py)
         install -m 0400 "${source}" "${target}"
         ;;
       *)
@@ -283,6 +297,7 @@ seal_deploy_verifier_bundle() {
     fi
   done
   TRUSTED_CANDIDATE_VERIFIER="${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_candidate.py"
+  TRUSTED_RUNTIME_ADMISSION="${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/deploy_runtime_admission.py"
   DEPLOY_VERIFIER_BUNDLE_SHA256="$(PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B - \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}" <<'PY'
 import hashlib
@@ -292,15 +307,21 @@ from pathlib import Path
 root = Path(sys.argv[1])
 digest = hashlib.sha256()
 for relative in (
+    Path("scripts/ops/candidate_physical_tree.py"),
+    Path("scripts/ops/controller_static_receipt.py"),
     Path("scripts/ops/controlled_candidate_process.py"),
     Path("scripts/ops/deploy_gate_runtime.py"),
+    Path("scripts/ops/deploy_runtime_admission.py"),
     Path("scripts/ops/freeze_git_bridge.py"),
+    Path("scripts/ops/freeze_deploy_gate.py"),
     Path("scripts/ops/freeze_phase_runtime.py"),
     Path("scripts/ops/freeze_worktree_candidate.py"),
     Path("scripts/ops/freeze_worktree_contract.py"),
     Path("scripts/ops/legacy_to_atomic_preflight.py"),
     Path("scripts/ops/legacy_to_atomic_preflight_report.py"),
     Path("scripts/ops/legacy_to_atomic_preflight_transport.py"),
+    Path("scripts/ops/strict_runtime_seatbelt.py"),
+    Path("scripts/ops/trusted_git.py"),
     Path("scripts/ops/trusted_npm_audit.py"),
     Path("scripts/ops/verify_legacy_bootstrap_anchor.py"),
     Path("scripts/stdout_utils.py"),
@@ -322,15 +343,21 @@ cleanup_deploy_verifier_bundle() {
     return 0
   fi
   for path in \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/candidate_physical_tree.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/controller_static_receipt.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/controlled_candidate_process.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/deploy_gate_runtime.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/deploy_runtime_admission.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_candidate.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_contract.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_git_bridge.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_deploy_gate.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_phase_runtime.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight_report.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight_transport.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/strict_runtime_seatbelt.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/trusted_git.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/trusted_npm_audit.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/stdout_utils.py" \
@@ -349,6 +376,7 @@ cleanup_deploy_verifier_bundle() {
   DEPLOY_VERIFIER_BUNDLE_DIR=""
   DEPLOY_VERIFIER_BUNDLE_SHA256=""
   TRUSTED_CANDIDATE_VERIFIER=""
+  TRUSTED_RUNTIME_ADMISSION=""
   DEPLOY_VERIFIER_BUNDLE_READY=0
 }
 
@@ -356,6 +384,10 @@ LOCAL_CANDIDATE_WEB_PID=""
 LOCAL_CANDIDATE_WEB_PGID=""
 LOCAL_CANDIDATE_WEB_PORT=""
 LOCAL_CANDIDATE_WEB_RUNTIME=""
+LOCAL_CANDIDATE_RUNTIME_ENV=""
+LOCAL_CANDIDATE_WEB_PROFILE=""
+LOCAL_CANDIDATE_VERIFY_PROFILE=""
+LOCAL_CANDIDATE_ADMISSION=""
 
 cleanup_local_candidate_browser_runtime() {
   local pid="${LOCAL_CANDIDATE_WEB_PID}" pgid="${LOCAL_CANDIDATE_WEB_PGID}"
@@ -517,9 +549,17 @@ PY
       cleanup_failed=1
     else
       LOCAL_CANDIDATE_WEB_RUNTIME=""
+      LOCAL_CANDIDATE_RUNTIME_ENV=""
+      LOCAL_CANDIDATE_WEB_PROFILE=""
+      LOCAL_CANDIDATE_VERIFY_PROFILE=""
+      LOCAL_CANDIDATE_ADMISSION=""
     fi
   elif [ -z "${runtime_root}" ]; then
     LOCAL_CANDIDATE_WEB_RUNTIME=""
+    LOCAL_CANDIDATE_RUNTIME_ENV=""
+    LOCAL_CANDIDATE_WEB_PROFILE=""
+    LOCAL_CANDIDATE_VERIFY_PROFILE=""
+    LOCAL_CANDIDATE_ADMISSION=""
   fi
   return "${cleanup_failed}"
 }
@@ -1647,6 +1687,12 @@ start_local_candidate_browser_runtime() {
     mktemp -d /tmp/vkpi-candidate-browser-runtime.XXXXXX
   )"
   chmod 700 "${LOCAL_CANDIDATE_WEB_RUNTIME}"
+  install -d -m 0700 \
+    "${LOCAL_CANDIDATE_WEB_RUNTIME}/home" \
+    "${LOCAL_CANDIDATE_WEB_RUNTIME}/cache" \
+    "${LOCAL_CANDIDATE_WEB_RUNTIME}/tmp" \
+    "${LOCAL_CANDIDATE_WEB_RUNTIME}/runtime" \
+    "${LOCAL_CANDIDATE_WEB_RUNTIME}/controller"
   LOCAL_CANDIDATE_WEB_PORT="$(
     "${PROJECT_ROOT}/.venv/bin/python" -I -B - <<'PY'
 import socket
@@ -1662,6 +1708,31 @@ PY
   fi
   candidate_build_time="$(tr -d '[:space:]' <"${DEPLOY_CANDIDATE_DIR}/BUILD_TIME")"
   PREDEPLOY_BROWSER_URL="http://127.0.0.1:${LOCAL_CANDIDATE_WEB_PORT}/"
+  LOCAL_CANDIDATE_RUNTIME_ENV="${LOCAL_CANDIDATE_WEB_RUNTIME}/controller/candidate-runtime.env"
+  LOCAL_CANDIDATE_WEB_PROFILE="${LOCAL_CANDIDATE_WEB_RUNTIME}/controller/candidate-web.sb"
+  LOCAL_CANDIDATE_VERIFY_PROFILE="${LOCAL_CANDIDATE_WEB_RUNTIME}/controller/candidate-verify.sb"
+  LOCAL_CANDIDATE_ADMISSION="${LOCAL_CANDIDATE_WEB_RUNTIME}/controller/runtime-admission.json"
+
+  verify_deploy_verifier_bundle
+  if ! PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+    "${TRUSTED_RUNTIME_ADMISSION}" \
+    --manifest "${DEPLOY_CANDIDATE_MANIFEST}" \
+    --snapshot "${DEPLOY_CANDIDATE_DIR}" \
+    --expected-head "${LOCAL_GIT_SHA}" \
+    --expected-branch "${LOCAL_GIT_BRANCH}" \
+    --source "${PROJECT_ROOT}" \
+    --runtime-root "${LOCAL_CANDIDATE_WEB_RUNTIME}" \
+    --source-env-file "${PROJECT_ROOT}/.env" \
+    --health-env-file "${LOCAL_HEALTH_ENV_FILE}" \
+    --web-port "${LOCAL_CANDIDATE_WEB_PORT}" \
+    --env-out "${LOCAL_CANDIDATE_RUNTIME_ENV}" \
+    --web-profile-out "${LOCAL_CANDIDATE_WEB_PROFILE}" \
+    --verify-profile-out "${LOCAL_CANDIDATE_VERIFY_PROFILE}" \
+    --admission-out "${LOCAL_CANDIDATE_ADMISSION}" >/dev/null; then
+    echo "Controller could not prepare the strict candidate runtime admission." >&2
+    return 1
+  fi
+  verify_deploy_verifier_bundle
 
   env -i \
     PATH="${BROWSER_GATE_CONTROLLER_PATH}" \
@@ -1672,12 +1743,13 @@ PY
     PROJECT_ROOT="${PROJECT_ROOT}" \
     CANDIDATE_ROOT="${DEPLOY_CANDIDATE_DIR}" \
     CANDIDATE_RUNTIME="${LOCAL_CANDIDATE_WEB_RUNTIME}/runtime" \
-    CANDIDATE_LOCAL_ENV_FILE="${PROJECT_ROOT}/.env" \
+    CANDIDATE_LOCAL_ENV_FILE="${LOCAL_CANDIDATE_RUNTIME_ENV}" \
     CANDIDATE_PORT="${LOCAL_CANDIDATE_WEB_PORT}" \
     APP_GIT_SHA="${LOCAL_GIT_SHA}" \
     APP_GIT_BRANCH="${LOCAL_GIT_BRANCH}" \
     APP_BUILD_TIME="${candidate_build_time}" \
     CANDIDATE_LAUNCHER="${DEPLOY_CANDIDATE_DIR}/scripts/ops/run_isolated_candidate_web.sh" \
+    /usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_WEB_PROFILE}" \
     "${PROJECT_ROOT}/.venv/bin/python" -I -B - \
       >>"${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-web.log" 2>&1 <<'PY' &
 import os
@@ -1770,7 +1842,11 @@ run_predeploy_canonical_gate() {
     || [ -z "${LOCAL_CANDIDATE_WEB_PGID}" ] \
     || [ "${LOCAL_CANDIDATE_WEB_PID}" != "${LOCAL_CANDIDATE_WEB_PGID}" ] \
     || [ ! -d "${runtime_root}" ] \
-    || [ -L "${runtime_root}" ]; then
+    || [ -L "${runtime_root}" ] \
+    || [ ! -f "${LOCAL_CANDIDATE_ADMISSION}" ] \
+    || [ -L "${LOCAL_CANDIDATE_ADMISSION}" ] \
+    || [ ! -f "${LOCAL_CANDIDATE_VERIFY_PROFILE}" ] \
+    || [ -L "${LOCAL_CANDIDATE_VERIFY_PROFILE}" ]; then
     echo "Canonical deploy gate requires the live controlled candidate runtime." >&2
     return 1
   fi
@@ -1785,6 +1861,7 @@ run_predeploy_canonical_gate() {
     --expected-head "${LOCAL_GIT_SHA}" \
     --expected-branch "${LOCAL_GIT_BRANCH}" \
     --source "${PROJECT_ROOT}" \
+    --admission-json "${LOCAL_CANDIDATE_ADMISSION}" \
     --python "${PROJECT_ROOT}/.venv/bin/python" \
     --runtime-root "${runtime_root}" \
     --health-env-file "${LOCAL_HEALTH_ENV_FILE}" \
@@ -1884,17 +1961,18 @@ run_predeploy_embedded_browser_gate() {
   if ! token="$(
     env -i \
       PATH="${BROWSER_GATE_CONTROLLER_PATH}" \
-      HOME=/tmp \
-      XDG_CACHE_HOME=/tmp \
-      TMPDIR=/tmp \
+      HOME="${LOCAL_CANDIDATE_WEB_RUNTIME}/home" \
+      XDG_CACHE_HOME="${LOCAL_CANDIDATE_WEB_RUNTIME}/cache" \
+      TMPDIR="${LOCAL_CANDIDATE_WEB_RUNTIME}/tmp" \
       LANG=C.UTF-8 \
       PYTHONDONTWRITEBYTECODE=1 \
       ENVIRONMENT=local \
-      LOCAL_ENV_FILE="${PROJECT_ROOT}/.env" \
+      LOCAL_ENV_FILE="${LOCAL_CANDIDATE_RUNTIME_ENV}" \
       RUNTIME_ENV_KEEP_DB_URL=1 \
-      RUNTIME_ROOT="${PROJECT_ROOT}/runtime" \
+      RUNTIME_ROOT="${LOCAL_CANDIDATE_WEB_RUNTIME}/runtime" \
       RUNTIME_ENV_QUIET=1 \
       LOG_LEVEL=CRITICAL \
+      /usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_VERIFY_PROFILE}" \
       "${PROJECT_ROOT}/.venv/bin/python" -I -B -c \
       'import sys; sys.path[:0]=sys.argv[2:4]; from local_release_acceptance import create_local_auth_context; print(create_local_auth_context(int(sys.argv[1])).token, end="")' \
       "${BROWSER_GATE_TOKEN_TTL_SECONDS}" \

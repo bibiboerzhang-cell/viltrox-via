@@ -30,6 +30,26 @@ def _strict_utc_iso(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _strict_runtime_binding(environment: Mapping[str, str]) -> dict[str, str]:
+    binding = {
+        "nonce": environment.get("VKPI_STRICT_RUN_NONCE", ""),
+        "ports": environment.get("VKPI_STRICT_RUNTIME_PORTS", ""),
+        "candidate_sha256": environment.get("VKPI_STRICT_CANDIDATE_SHA256", ""),
+    }
+    if environment.get("VKPI_CONTROLLER_STATIC_GATE_RECEIPT"):
+        binding.update(
+            {
+                "static_receipt_sha256": environment.get(
+                    "VKPI_STRICT_STATIC_RECEIPT_SHA256", ""
+                ),
+                "manifest_sha256": environment.get(
+                    "VKPI_STRICT_MANIFEST_SHA256", ""
+                ),
+            }
+        )
+    return binding
+
+
 def _validate_ask_fact(item: Mapping[str, Any], index: int, result: ValidationResult) -> None:
     prefix = f"Ask & Find facts[{index}]"
     required = ("key", "label", "value", "value_type", "basis", "confidence")
@@ -261,6 +281,7 @@ def _validate_ask_find_v2(
 
 __all__ = [
     "_nonempty_text",
+    "_strict_runtime_binding",
     "_strict_utc_iso",
     "_validate_ask_evidence",
     "_validate_ask_fact",

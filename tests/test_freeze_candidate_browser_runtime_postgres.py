@@ -39,7 +39,7 @@ def _pg_bin() -> Path | None:
 
 
 def test_freeze_deploy_gate_stops_candidate_browser_runtime_postgres_in_finally() -> None:
-    freeze = _read("scripts/ops/freeze_worktree_candidate.py")
+    freeze = _read("scripts/ops/freeze_deploy_gate.py")
     runtime = _read("scripts/ops/deploy_gate_runtime.py")
     gate = freeze.split("def run_deploy_gate(", 1)[1]
     finally_block = gate.split("    finally:\n", 1)[1].split("    if completed is None", 1)[0]

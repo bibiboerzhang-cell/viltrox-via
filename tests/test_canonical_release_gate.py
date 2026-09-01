@@ -298,7 +298,8 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
         'PREDEPLOY_BROWSER_URL=""',
         "start_local_candidate_browser_runtime",
         'CANDIDATE_ROOT="${DEPLOY_CANDIDATE_DIR}"',
-        'CANDIDATE_LOCAL_ENV_FILE="${PROJECT_ROOT}/.env"',
+        'CANDIDATE_LOCAL_ENV_FILE="${LOCAL_CANDIDATE_RUNTIME_ENV}"',
+        '/usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_WEB_PROFILE}"',
         'CANDIDATE_LAUNCHER="${DEPLOY_CANDIDATE_DIR}/scripts/ops/run_isolated_candidate_web.sh"',
         "os.setsid()",
         "LOCAL_CANDIDATE_WEB_PGID",
@@ -309,7 +310,8 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
         "cleanup_local_candidate_browser_runtime",
         "env -i",
         'ENVIRONMENT=local',
-        'LOCAL_ENV_FILE="${PROJECT_ROOT}/.env"',
+        'LOCAL_ENV_FILE="${LOCAL_CANDIDATE_RUNTIME_ENV}"',
+        '/usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_VERIFY_PROFILE}"',
         'RUNTIME_ENV_KEEP_DB_URL=1',
         '"${PROJECT_ROOT}/.venv/bin/python" -I -B -c',
         "create_local_auth_context(int(sys.argv[1]))",
@@ -362,9 +364,10 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
     assert "env -i" in mint
     assert "PYTHONPATH=" not in mint
     assert 'PATH="${BROWSER_GATE_CONTROLLER_PATH}"' in mint
-    assert "HOME=/tmp" in mint
-    assert "XDG_CACHE_HOME=/tmp" in mint
-    assert "TMPDIR=/tmp" in mint
+    assert 'HOME="${LOCAL_CANDIDATE_WEB_RUNTIME}/home"' in mint
+    assert 'XDG_CACHE_HOME="${LOCAL_CANDIDATE_WEB_RUNTIME}/cache"' in mint
+    assert 'TMPDIR="${LOCAL_CANDIDATE_WEB_RUNTIME}/tmp"' in mint
+    assert 'LOCAL_ENV_FILE="${PROJECT_ROOT}/.env"' not in mint
     assert 'PATH="${PATH}"' not in mint
     assert 'HOME="${HOME:-/tmp}"' not in mint
 

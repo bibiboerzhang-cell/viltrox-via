@@ -73,6 +73,58 @@ def test_remote_install_captures_and_rolls_back_files_state_and_timers() -> None
     )
 
 
+def test_remote_install_shares_the_deploy_mutex_before_its_private_lock() -> None:
+    script = _installer()
+    remote = script.split("<<'REMOTE_TRANSACTION'", 1)[1].split(
+        "REMOTE_TRANSACTION", 1
+    )[0]
+
+    assert 'shared_lock_dir="/run/lock/vkpi-deploy"' in remote
+    assert 'shared_lock_file="${shared_lock_dir}/deploy.lock"' in remote
+    assert "/usr/bin/mkdir -m 0700" in remote
+    assert '"0:0:700"' in remote
+    assert '"0:0:600:1"' in remote
+
+    shared_descriptor = remote.index(
+        "exec 9>>/run/lock/vkpi-deploy/deploy.lock"
+    )
+    shared_flock = remote.index("/usr/bin/flock -n 9", shared_descriptor)
+    private_descriptor = remote.index(
+        "exec 8>/run/lock/vkpi-systemd-install.lock", shared_flock
+    )
+    private_flock = remote.index("/usr/bin/flock -n 8", private_descriptor)
+    first_unit_read = remote.index('case "${mode}" in', private_flock)
+    assert (
+        shared_descriptor
+        < shared_flock
+        < private_descriptor
+        < private_flock
+        < first_unit_read
+    )
+    assert "no inverse acquisition path" in remote
+    assert "shared production mutation is active" in remote
+
+
+def test_dispatch_keeps_local_only_mode_out_and_all_remote_modes_in_locking_path() -> None:
+    script = _installer()
+    dispatch = script.split('case "${1:-all}" in', 1)[1]
+    local_branch = dispatch.split("  local)", 1)[1].split("    ;;", 1)[0]
+    remote_branch = dispatch.split("  remote)", 1)[1].split("    ;;", 1)[0]
+    qualified_branch = dispatch.split("  remote-qualified-kol)", 1)[1].split(
+        "    ;;", 1
+    )[0]
+    all_branch = dispatch.split("  all)", 1)[1].split("    ;;", 1)[0]
+
+    assert "install_local_snapshot_agent" in local_branch
+    assert "install_remote_timer" not in local_branch
+    assert "run_remote_transaction" not in local_branch
+    assert "install_remote_timer" in remote_branch
+    assert "install_remote_qualified_kol_units" in qualified_branch
+    assert "install_remote_timer" in all_branch
+    assert "run_remote_transaction primary" in script
+    assert "run_remote_transaction qualified" in script
+
+
 def test_log_permission_migration_is_bounded_and_rollbackable() -> None:
     script = _installer()
 

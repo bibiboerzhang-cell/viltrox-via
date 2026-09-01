@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "scripts" / "ops" / "deploy_local_to_cloud.sh"
+TIMER_INSTALLER = ROOT / "scripts" / "ops" / "install_vkpi_daily_timers.sh"
 
 
 def _deploy() -> str:
@@ -63,6 +64,29 @@ def test_remote_mutex_uses_a_root_only_persistent_inode_and_nonblocking_flock() 
     # remote inode could unlock a different deployment and is forbidden.
     assert "rm -f -- /run/lock/vkpi-deploy" not in deploy
     assert "rm -rf -- /run/lock/vkpi-deploy" not in deploy
+
+
+def test_timer_installer_uses_the_same_remote_mutex_without_a_reverse_wait() -> None:
+    deploy = _deploy()
+    installer = TIMER_INSTALLER.read_text(encoding="utf-8")
+    remote = installer.split("<<'REMOTE_TRANSACTION'", 1)[1].split(
+        "REMOTE_TRANSACTION", 1
+    )[0]
+
+    shared_lock = "/run/lock/vkpi-deploy/deploy.lock"
+    assert shared_lock in deploy
+    assert shared_lock in remote
+    assert "exec 9>>/run/lock/vkpi-deploy/deploy.lock" in deploy
+    assert "exec 9>>/run/lock/vkpi-deploy/deploy.lock" in remote
+    assert "/usr/bin/flock -n 9" in deploy
+    assert "/usr/bin/flock -n 9" in remote
+
+    shared_at = remote.index("exec 9>>/run/lock/vkpi-deploy/deploy.lock")
+    private_at = remote.index(
+        "exec 8>/run/lock/vkpi-systemd-install.lock", shared_at
+    )
+    assert shared_at < private_at
+    assert "/run/lock/vkpi-systemd-install.lock" not in deploy
 
 
 def test_mutex_cleanup_closes_the_control_fd_before_transport_cleanup() -> None:

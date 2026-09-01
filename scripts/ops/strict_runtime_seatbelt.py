@@ -137,6 +137,131 @@ def candidate_profile(*, candidate: Path, clean_source: Path, venv: Path,
 '''
 
 
+def phase_a_protected_source_roots(
+    *, source: Path, venv: Path, node_modules: Path,
+) -> tuple[Path, ...]:
+    clean_source = source.resolve(strict=True)
+    physical_venv = venv.resolve(strict=True)
+    physical_modules = node_modules.resolve(strict=True)
+    roots = {clean_source}
+    inferred_venv_root = (
+        physical_venv.parent if physical_venv.name in {".venv", "venv"} else None
+    )
+    inferred_modules_root = (
+        physical_modules.parent.parent
+        if physical_modules.name == "node_modules"
+        and physical_modules.parent.name == "frontend"
+        else None
+    )
+    if inferred_venv_root is not None and inferred_venv_root == inferred_modules_root:
+        roots.add(inferred_venv_root)
+    return tuple(sorted(roots, key=str))
+
+
+def phase_a_static_profile(
+    *,
+    source: Path,
+    venv: Path,
+    node_modules: Path,
+    tool_paths: Sequence[Path],
+    user_home: Path | None = None,
+) -> str:
+    """Return a narrow deny-list profile for the complete Phase A test gate.
+
+    The static suite deliberately creates nested sandboxes and loopback
+    listeners, so this profile leaves the platform default allowed.  It only
+    removes authority that the candidate never needs: writes to either the
+    clean mirror or the physical source/dependency roots, reads of likely
+    source/user credentials, and writes to controller-selected tools.
+    """
+
+    clean_source = source.resolve(strict=True)
+    physical_venv = venv.resolve(strict=True)
+    physical_modules = node_modules.resolve(strict=True)
+    if not clean_source.is_dir() or not physical_venv.is_dir() or not physical_modules.is_dir():
+        raise SeatbeltError("Phase A Seatbelt roots must be physical directories")
+
+    source_roots = set(phase_a_protected_source_roots(
+        source=source, venv=venv, node_modules=node_modules,
+    ))
+
+    write_subpaths = {
+        *source_roots,
+        Path(os.path.abspath(venv)),
+        physical_venv,
+        Path(os.path.abspath(node_modules)),
+        physical_modules,
+    }
+    write_literals = {
+        alias
+        for tool in tool_paths
+        for alias in (Path(os.path.abspath(tool)), tool.resolve(strict=True))
+    }
+    secret_directories = (
+        "runtime", "uploads", "frames", "backups", "creator_profiles",
+        ".claude", ".codex-backups", ".secrets", "secrets",
+        ".credentials", "credentials",
+    )
+    secret_names = {
+        ".env", ".git-credentials", ".netrc", ".npmrc",
+        "id_ed25519", "id_rsa",
+    }
+    secret_suffixes = (".dump", ".key", ".p12", ".pem", ".pfx")
+    read_subpaths = {
+        root / name for root in source_roots for name in secret_directories
+    }
+    read_literals: set[Path] = set()
+    skipped_directories = {
+        ".git", ".venv", "venv", "node_modules", *secret_directories,
+    }
+    for root in source_roots:
+        for directory, names, files in os.walk(root, topdown=True, followlinks=False):
+            names[:] = [name for name in names if name not in skipped_directories]
+            for name in files:
+                lower = name.lower()
+                if (
+                    lower in secret_names
+                    or lower.startswith(".env.")
+                    or lower.endswith(secret_suffixes)
+                ):
+                    path = Path(directory) / name
+                    read_literals.add(Path(os.path.abspath(path)))
+                    read_literals.add(path.resolve(strict=False))
+
+    home = (user_home or Path.home()).resolve(strict=False)
+    read_subpaths.update(
+        {
+            home / "Library/Keychains",
+            home / ".ssh",
+            home / ".aws",
+            home / ".docker",
+            home / ".kube",
+            home / ".config/gcloud",
+            home / ".config/gh",
+        }
+    )
+    read_literals.update({home / ".git-credentials", home / ".netrc", home / ".npmrc"})
+
+    rules = ["(version 1)", "(allow default)"]
+    rules.extend(
+        f"(deny file-write* (subpath {_literal(path)}))"
+        for path in sorted(write_subpaths, key=str)
+    )
+    rules.extend(
+        f"(deny file-write* (literal {_literal(path)}))"
+        for path in sorted(write_literals, key=str)
+    )
+    rules.extend(
+        f"(deny file-read* (subpath {_literal(path)}))"
+        for path in sorted(read_subpaths, key=str)
+    )
+    rules.extend(
+        f"(deny file-read* (literal {_literal(path)}))"
+        for path in sorted(read_literals, key=str)
+    )
+    return "\n".join(rules) + "\n"
+
+
 def sandboxed(arguments: Sequence[str], profile: str) -> list[str]:
     return [str(require_sandbox_exec()), "-p", profile, *arguments]
 

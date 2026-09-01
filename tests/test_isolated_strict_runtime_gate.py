@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -8,6 +9,10 @@ from pathlib import Path
 import pytest
 
 from scripts.ops import isolated_strict_runtime_gate as strict
+from scripts.ops.controller_static_receipt import CANONICAL_STATIC_STEP_PLAN
+from scripts.ops.isolated_runtime_attestation import (
+    CONTROLLER_STATIC_RECEIPT_RUNTIME_STEP_PLAN,
+)
 from scripts.ops.isolated_worktree_gate_cli import _strict_preflight_args, main as cli_main, parser
 
 
@@ -26,6 +31,24 @@ def test_strict_controller_cli_is_explicit(tmp_path: Path) -> None:
         ]
     )
     assert args.strict_runtime is True
+
+
+def test_default_and_controller_receipt_plans_are_explicit_and_complete() -> None:
+    default_steps, default_endpoints = strict.expected_receipt_plan(Path("."))
+    strict_steps, strict_endpoints = strict.expected_receipt_plan(
+        Path("."),
+        controller_static_receipt=True,
+    )
+
+    expected_default = list(CANONICAL_STATIC_STEP_PLAN)
+    expected_default[14:16] = [
+        "runtime trust (required)",
+        "local release acceptance (all required GETs)",
+    ]
+    assert default_steps == expected_default
+    assert strict_steps == list(CONTROLLER_STATIC_RECEIPT_RUNTIME_STEP_PLAN)
+    assert strict_endpoints == default_endpoints
+    assert len(strict_steps) == 6
 
 
 def test_strict_cli_is_admission_blocked_before_phase_a_or_clone(
@@ -155,16 +178,29 @@ def test_empty_receipts_are_rejected(tmp_path: Path) -> None:
             expected_steps=["required"], expected_endpoints=["health"],
             runtime_nonce="nonce", runtime_ports="18103,15432,16379",
             candidate_digest="b" * 64,
+            static_receipt_sha256="s" * 64,
+            manifest_sha256="m" * 64,
         )
 
 
 def test_single_step_endpoint_forge_and_cross_run_replay_are_rejected(tmp_path: Path) -> None:
-    binding = {"nonce": "run-one", "ports": "18103,15432,16379", "candidate_sha256": "b" * 64}
+    binding = {
+        "nonce": "run-one",
+        "ports": "18103,15432,16379",
+        "candidate_sha256": "b" * 64,
+        "static_receipt_sha256": "s" * 64,
+        "manifest_sha256": "m" * 64,
+    }
     verify = {
         "schema_version": "vkpi_canonical_gate_receipt_v1", "passed": True,
         "candidate": {"release_head": "a" * 40, "git_head": "a" * 40, "branch": "main",
                       "clean_worktree": True, "dirty_path_count": 0},
-        "verification": {"runtime": "verified", "acceptance": "verified"},
+        "verification": {
+            "runtime": "verified",
+            "acceptance": "verified",
+            "browser_console": "not_requested",
+            "runtime_log_canary": "not_requested",
+        },
         "steps": [{"index": 1, "name": "attacker-fabricated-single-step",
                    "status": "passed", "exit_code": 0}], "failed_steps": [],
         "strict_runtime_binding": binding,
@@ -186,7 +222,9 @@ def test_single_step_endpoint_forge_and_cross_run_replay_are_rejected(tmp_path: 
     common = dict(verify_path=verify_path, acceptance_path=acceptance_path,
                   expected_head="a" * 40, expected_branch="main",
                   base_url="http://127.0.0.1:18103/", runtime_ports=binding["ports"],
-                  candidate_digest=binding["candidate_sha256"])
+                  candidate_digest=binding["candidate_sha256"],
+                  static_receipt_sha256=binding["static_receipt_sha256"],
+                  manifest_sha256=binding["manifest_sha256"])
     with pytest.raises(strict.StrictRuntimeGateError):
         strict._validate_bound_receipts(**common, expected_steps=["real-one", "real-two"],
                                         expected_endpoints=["real"], runtime_nonce="run-one")
@@ -243,6 +281,11 @@ def test_three_runs_share_candidate_but_receive_independent_run_numbers(
         "branch": "codex/test", "capsule_digest": "c" * 64,
     }
     monkeypatch.setattr(strict, "_phase_candidate_identity", lambda *_args: identity)
+    monkeypatch.setattr(
+        strict,
+        "_phase_capsule_identity",
+        lambda *_args: {"capsule": "fixture"},
+    )
     result = strict.run_strict_runtime_gate(
         source=tmp_path,
         candidate=candidate,
@@ -287,8 +330,24 @@ def test_one_run_fixture_binds_receipts_and_proves_exact_cleanup(
         "_copy_bound_manifest",
         lambda **_kwargs: (
             root / "candidate.manifest.json",
-            {"build": {"identity": {"git_sha": "a" * 40, "git_branch": "main", "build_time": "now"}}},
+            {
+                "build": {
+                    "identity": {
+                        "git_sha": "a" * 40,
+                        "git_branch": "main",
+                        "build_time": "now",
+                    }
+                },
+                "source": {"repo": "/phase-a/deleted-clean-source"},
+            },
         ),
+    )
+    static_receipt_bytes = b'{"fixture":"static"}\n'
+    static_receipt_sha256 = hashlib.sha256(static_receipt_bytes).hexdigest()
+    monkeypatch.setattr(
+        strict,
+        "_validate_controller_static_receipt",
+        lambda **_kwargs: ({"nonce": "f" * 64}, static_receipt_bytes),
     )
     monkeypatch.setattr(
         strict, "_prepare_postgres",
@@ -311,7 +370,11 @@ def test_one_run_fixture_binds_receipts_and_proves_exact_cleanup(
     def gate(args):
         Path(args.verify_json_out).write_text("{}\n", encoding="utf-8")
         Path(args.acceptance_json_out).write_text("{}\n", encoding="utf-8")
-        return {"content_sha256": "b" * 64}
+        return {
+            "content_sha256": "b" * 64,
+            "controller_static_receipt_sha256": static_receipt_sha256,
+            "candidate_manifest_sha256": "m" * 64,
+        }
 
     monkeypatch.setattr(strict, "run_deploy_gate", gate)
     identity = {
@@ -321,13 +384,23 @@ def test_one_run_fixture_binds_receipts_and_proves_exact_cleanup(
         "branch": "main", "capsule_digest": "c" * 64,
     }
     monkeypatch.setattr(strict, "_phase_candidate_identity", lambda *_args: identity)
-    monkeypatch.setattr(strict, "_validate_bound_receipts", lambda **_kwargs: {
-        "verify_sha256": "v" * 64, "acceptance_sha256": "r" * 64,
-    })
-    monkeypatch.setattr(strict, "expected_receipt_plan", lambda _root: (["fixture"], ["fixture"]))
     monkeypatch.setattr(
-        strict, "_copy_receipt_nofollow",
-        lambda source, target, _expected: target.write_bytes(source.read_bytes()),
+        strict,
+        "_phase_capsule_identity",
+        lambda *_args: {"capsule": "fixture"},
+    )
+    verify_bytes = b"{}\n"
+    acceptance_bytes = b"{}\n"
+    monkeypatch.setattr(strict, "_validate_bound_receipts", lambda **_kwargs: {
+        "verify_sha256": hashlib.sha256(verify_bytes).hexdigest(),
+        "acceptance_sha256": hashlib.sha256(acceptance_bytes).hexdigest(),
+        "verify_bytes": verify_bytes,
+        "acceptance_bytes": acceptance_bytes,
+    })
+    monkeypatch.setattr(
+        strict,
+        "expected_receipt_plan",
+        lambda _root, **_kwargs: (["fixture"], ["fixture"]),
     )
     monkeypatch.setattr(strict, "_stop_processes", lambda processes: ([{"stopped": True}] * len(processes), []))
     monkeypatch.setattr(strict, "_stop_private_postgres", lambda **_kwargs: {"stopped": True})
