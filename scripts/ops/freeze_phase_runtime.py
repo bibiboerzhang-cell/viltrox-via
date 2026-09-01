@@ -26,7 +26,7 @@ from scripts.ops.freeze_worktree_contract import (
 
 PHASE_A_NESTED_SEATBELT_TESTS = (
     ("tests/test_strict_runtime_hardening_redteam.py", 32),
-    ("tests/test_deploy_runtime_admission.py", 5),
+    ("tests/test_deploy_runtime_admission.py", 8),
     ("tests/test_freeze_worktree_candidate.py", 22),
     ("tests/test_phase_a_static_containment.py", 1),
     ("tests/test_candidate_browser_cleanup_behavior.py", 3),

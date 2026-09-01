@@ -537,6 +537,7 @@ def _run_once(
             candidate=candidate, clean_source=clean_source,
             venv=source / ".venv", node_modules=source / "frontend/node_modules",
             runtime_root=root, allowed_ports=ports.values(),
+            listener_ports=(ports.web,),
             writable_paths=tuple(root / name for name in ("home", "tmp", "cache", "runtime", "logs")),
             allow_runtime_root_write=False,
         )

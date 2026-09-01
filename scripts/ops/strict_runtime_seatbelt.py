@@ -137,6 +137,7 @@ def require_sandbox_exec() -> Path:
 def candidate_profile(*, candidate: Path, clean_source: Path, venv: Path,
                       node_modules: Path, runtime_root: Path,
                       allowed_ports: Sequence[int],
+                      listener_ports: Sequence[int] = (),
                       writable_paths: Sequence[Path] = (),
                       protect_clean_source: bool = True,
                       allow_runtime_root_write: bool = True,
@@ -149,11 +150,22 @@ def candidate_profile(*, candidate: Path, clean_source: Path, venv: Path,
         raise SeatbeltError("Seatbelt roots must be passed as physical non-symlink paths")
     if len(set(allowed_ports)) != len(allowed_ports) or 8102 in allowed_ports:
         raise SeatbeltError("Seatbelt ports must be unique and exclude 8102")
-    network = "\n".join(
-        f'(allow network-outbound (remote ip "localhost:{port}"))\n'
-        f'(allow network-bind (local ip "localhost:{port}"))'
+    if (
+        len(set(listener_ports)) != len(listener_ports)
+        or 8102 in listener_ports
+        or not set(listener_ports).issubset(allowed_ports)
+    ):
+        raise SeatbeltError("Seatbelt listener ports must be unique allowed ports")
+    outbound_network = "\n".join(
+        f'(allow network-outbound (remote ip "localhost:{port}"))'
         for port in allowed_ports
     )
+    inbound_network = "\n".join(
+        f'(allow network-bind (local ip "localhost:{port}"))\n'
+        f'(allow network-inbound (local ip "localhost:{port}"))'
+        for port in listener_ports
+    )
+    network = "\n".join(filter(None, (outbound_network, inbound_network)))
     writes = "\n".join(
         f'(allow file-write* (subpath {_literal(path.resolve())}))'
         for path in writable_paths

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import socket
 import subprocess
 from argparse import Namespace
 from pathlib import Path
@@ -9,6 +10,7 @@ import pytest
 
 from scripts.ops.deploy_runtime_admission import (
     SCHEMA,
+    _database_url_with_gss_disabled,
     load_admission,
     prepare_admission,
     validate_runtime_binding_values,
@@ -28,9 +30,26 @@ from tests.freeze_worktree_candidate_fixtures import (
 )
 
 
+def _unused_loopback_ports() -> tuple[int, int, int]:
+    reservations: list[socket.socket] = []
+    try:
+        while len(reservations) < 3:
+            reservation = socket.socket()
+            reservation.bind(("127.0.0.1", 0))
+            if reservation.getsockname()[1] == 8102:
+                reservation.close()
+                continue
+            reservations.append(reservation)
+        return tuple(reservation.getsockname()[1] for reservation in reservations)
+    finally:
+        for reservation in reservations:
+            reservation.close()
+
+
 def _admission_fixture(
     tmp_path: Path,
 ) -> tuple[Path, Path, Path, Namespace, dict[str, object]]:
+    database_port, redis_port, web_port = _unused_loopback_ports()
     source = _repo(tmp_path)
     (source / "backend/untracked.py").unlink()
     venv_python = _create_test_venv(source)
@@ -38,8 +57,8 @@ def _admission_fixture(
         source / ".env",
         "\n".join(
             (
-                "LOCAL_DATABASE_URL=postgresql://postgres@127.0.0.1:15432/vkpi",
-                "REDIS_URL=redis://127.0.0.1:16379/0",
+                f"LOCAL_DATABASE_URL=postgresql://postgres@127.0.0.1:{database_port}/vkpi",
+                f"REDIS_URL=redis://127.0.0.1:{redis_port}/0",
                 "JWT_SECRET=fixture-jwt-secret",
                 "JWT_SECRET_PREVIOUS=",
                 "ADMIN_PASSWORD=fixture-admin-password",
@@ -71,7 +90,7 @@ def _admission_fixture(
         runtime_root=str(runtime),
         source_env_file=str(source / ".env"),
         health_env_file=str(health),
-        web_port=18103,
+        web_port=web_port,
         env_out=str(runtime / "controller/candidate-runtime.env"),
         web_profile_out=str(runtime / "controller/candidate-web.sb"),
         verify_profile_out=str(runtime / "controller/candidate-verify.sb"),
@@ -89,10 +108,21 @@ def test_prepare_admission_filters_provider_secrets_and_pins_phase_a(
     assert payload["schema"] == SCHEMA
     assert payload["provider_credentials_forwarded"] is False
     assert payload["external_network_allowed"] is False
-    assert payload["runtime_ports"] == "15432,16379,18103"
+    expected_ports = ",".join(
+        str(port)
+        for port in sorted(
+            (payload["database_port"], payload["redis_port"], payload["web_port"])
+        )
+    )
+    assert payload["runtime_ports"] == expected_ports
     assert payload["runtime_env_sha256"] == hashlib.sha256(runtime_env).hexdigest()
     assert b"fixture-jwt-secret" in runtime_env
     assert b"fixture-health-token" in runtime_env
+    expected_database_url = (
+        "LOCAL_DATABASE_URL=postgresql://postgres@127.0.0.1:"
+        f"{payload['database_port']}/vkpi?gssencmode=disable\n"
+    ).encode()
+    assert expected_database_url in runtime_env
     assert b"JWT_SECRET_PREVIOUS" not in runtime_env
     assert b"ANTHROPIC" not in runtime_env
     assert b"OPENAI" not in runtime_env
@@ -101,6 +131,12 @@ def test_prepare_admission_filters_provider_secrets_and_pins_phase_a(
     verify_profile = Path(args.verify_profile_out).read_text(encoding="utf-8")
     assert "(deny network*)" in web_profile
     assert "(deny network*)" in verify_profile
+    assert web_profile.count("(allow network-inbound") == 1
+    assert (
+        f'(allow network-inbound (local ip "localhost:{args.web_port}"))'
+        in web_profile
+    )
+    assert "(allow network-inbound" not in verify_profile
     assert str(source / ".env") not in web_profile
 
     loaded = load_admission(
@@ -109,11 +145,37 @@ def test_prepare_admission_filters_provider_secrets_and_pins_phase_a(
         candidate=candidate,
         manifest=Path(args.manifest),
         health_env_file=health,
-        health_url="http://127.0.0.1:18103/health",
-        base_url="http://127.0.0.1:18103/",
+        health_url=f"http://127.0.0.1:{args.web_port}/health",
+        base_url=f"http://127.0.0.1:{args.web_port}/",
     )
     assert loaded["candidate_sha256"] == payload["candidate_sha256"]
     assert loaded["_verify_profile"] == verify_profile
+
+
+def test_candidate_database_url_requires_gss_disabled() -> None:
+    assert _database_url_with_gss_disabled(
+        "postgresql://127.0.0.1:54329/vkpi?application_name=candidate"
+    ) == (
+        "postgresql://127.0.0.1:54329/vkpi?"
+        "application_name=candidate&gssencmode=disable"
+    )
+    assert _database_url_with_gss_disabled(
+        "postgresql://127.0.0.1:54329/vkpi?gssencmode=DISABLE"
+    ).endswith("gssencmode=DISABLE")
+    assert _database_url_with_gss_disabled(
+        "postgresql://127.0.0.1:54329/vkpi?"
+    ).endswith("?gssencmode=disable")
+    encoded = (
+        "postgresql://127.0.0.1:54329/vkpi?"
+        "application_name=hello%20world&options=-c%20search_path%3Dfixture"
+    )
+    assert _database_url_with_gss_disabled(encoded) == (
+        encoded + "&gssencmode=disable"
+    )
+    with pytest.raises(FreezeError, match="must disable GSS"):
+        _database_url_with_gss_disabled(
+            "postgresql://127.0.0.1:54329/vkpi?gssencmode=prefer"
+        )
 
 
 def test_web_profile_can_read_filtered_env_but_not_project_dotenv(
@@ -147,16 +209,19 @@ def test_web_profile_can_read_filtered_env_but_not_project_dotenv(
     assert b"must-never-reach-candidate" not in denied.stdout
 
 
-def test_verifier_profile_allows_bash_heredoc_without_broad_tmp_write(
+@pytest.mark.parametrize("profile_attribute", ("web_profile_out", "verify_profile_out"))
+def test_candidate_profiles_allow_bash_heredoc_without_broad_tmp_write(
     tmp_path: Path,
+    profile_attribute: str,
 ) -> None:
     _source, candidate, _health, args, _payload = _admission_fixture(tmp_path)
     runtime = Path(args.runtime_root)
+    profile = getattr(args, profile_attribute)
     heredoc = subprocess.run(
         [
             "/usr/bin/sandbox-exec",
             "-f",
-            args.verify_profile_out,
+            profile,
             "/usr/bin/env",
             f"TMPDIR={runtime / 'tmp'}",
             "/bin/bash",
@@ -172,7 +237,7 @@ def test_verifier_profile_allows_bash_heredoc_without_broad_tmp_write(
         [
             "/usr/bin/sandbox-exec",
             "-f",
-            args.verify_profile_out,
+            profile,
             "/usr/bin/touch",
             str(unrelated),
         ],
@@ -183,6 +248,63 @@ def test_verifier_profile_allows_bash_heredoc_without_broad_tmp_write(
     assert heredoc.returncode == 0, heredoc.stderr.decode("utf-8", "replace")
     assert denied.returncode != 0
     assert not unrelated.exists()
+
+
+def test_web_profile_allows_exact_loopback_listener(tmp_path: Path) -> None:
+    source, candidate, _health, args, payload = _admission_fixture(tmp_path)
+    listener = subprocess.run(
+        [
+            "/usr/bin/sandbox-exec",
+            "-f",
+            args.web_profile_out,
+            str(source / ".venv/bin/python"),
+            "-I",
+            "-S",
+            "-B",
+            "-c",
+            (
+                "import socket; "
+                "listener = socket.socket(); "
+                f"listener.bind(('127.0.0.1', {args.web_port})); "
+                "listener.listen(1); "
+                f"client = socket.create_connection(('127.0.0.1', {args.web_port})); "
+                "accepted, _ = listener.accept(); "
+                "accepted.close(); client.close()"
+            ),
+        ],
+        cwd=candidate,
+        capture_output=True,
+        check=False,
+    )
+    assert listener.returncode == 0, listener.stderr.decode("utf-8", "replace")
+    for profile, port in (
+        (args.web_profile_out, payload["database_port"]),
+        (args.web_profile_out, payload["redis_port"]),
+        (args.verify_profile_out, args.web_port),
+    ):
+        denied = subprocess.run(
+            [
+                "/usr/bin/sandbox-exec",
+                "-f",
+                profile,
+                str(source / ".venv/bin/python"),
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                (
+                    "import socket; "
+                    "listener = socket.socket(); "
+                    f"listener.bind(('127.0.0.1', {port})); "
+                    "listener.listen(1)"
+                ),
+            ],
+            cwd=candidate,
+            capture_output=True,
+            check=False,
+        )
+        assert denied.returncode != 0
+        assert b"Operation not permitted" in denied.stderr
 
 
 def test_admission_rejects_profile_tamper_and_noncanonical_binding(
@@ -199,8 +321,8 @@ def test_admission_rejects_profile_tamper_and_noncanonical_binding(
             candidate=candidate,
             manifest=Path(args.manifest),
             health_env_file=health,
-            health_url="http://127.0.0.1:18103/health",
-            base_url="http://127.0.0.1:18103/",
+            health_url=f"http://127.0.0.1:{args.web_port}/health",
+            base_url=f"http://127.0.0.1:{args.web_port}/",
         )
     with pytest.raises(FreezeError, match="not canonical"):
         validate_runtime_binding_values(

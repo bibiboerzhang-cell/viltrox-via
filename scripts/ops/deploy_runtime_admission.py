@@ -18,7 +18,7 @@ import secrets
 import sys
 from pathlib import Path
 from typing import Mapping
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -114,7 +114,7 @@ def _loopback_port(url: str, *, kind: str) -> int:
         raise FreezeError(f"candidate {kind} URL is invalid") from exc
     if parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or port is None:
         raise FreezeError(f"candidate {kind} URL must use an explicit loopback port")
-    if port == 8102 or not 1 <= port <= 65535 or parsed.fragment:
+    if port == 8102 or not 1 <= port <= 65535 or "#" in url:
         raise FreezeError(f"candidate {kind} URL uses a forbidden port or fragment")
     if kind == "database":
         if parsed.scheme.lower() not in {"postgres", "postgresql"}:
@@ -128,6 +128,35 @@ def _loopback_port(url: str, *, kind: str) -> int:
         if not re.fullmatch(r"/[0-9]+", parsed.path) or parsed.query:
             raise FreezeError("candidate Redis URL has an invalid database selector")
     return port
+
+
+def _database_url_with_gss_disabled(url: str) -> str:
+    """Disable libpq GSS discovery for the fenced Darwin loopback runtime.
+
+    The candidate server is a forked Gunicorn worker.  On Darwin, libpq's
+    default GSS discovery enters CoreFoundation after that fork and crashes the
+    worker before the health gate can answer.  GSS is neither useful nor
+    permitted for this explicitly loopback-only database connection.
+    """
+
+    parsed = urlsplit(url)
+    try:
+        query = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=64,
+        )
+    except ValueError as exc:
+        raise FreezeError("candidate database URL has an invalid query") from exc
+    gss_modes = [value.lower() for key, value in query if key == "gssencmode"]
+    if gss_modes:
+        if gss_modes != ["disable"]:
+            raise FreezeError("candidate database URL must disable GSS")
+        query_text = parsed.query
+    else:
+        query_text = parsed.query + ("&" if parsed.query else "") + "gssencmode=disable"
+    return urlunsplit(parsed._replace(query=query_text))
 
 
 def _validate_runtime_root(path: Path) -> Path:
@@ -175,6 +204,7 @@ def _runtime_environment(
         raise FreezeError("candidate runtime environment is missing a Redis URL")
     database_url = source_values["LOCAL_DATABASE_URL"]
     database_port = _loopback_port(database_url, kind="database")
+    database_url = _database_url_with_gss_disabled(database_url)
     redis_port = _loopback_port(redis_url, kind="redis")
     filtered = {
         key: source_values[key]
@@ -183,6 +213,7 @@ def _runtime_environment(
     }
     filtered.update(
         {
+            "LOCAL_DATABASE_URL": database_url,
             "LOCAL_REDIS_URL": redis_url,
             "OPS_HEALTH_TOKEN": health_token,
             "REDIS_URL": redis_url,
@@ -213,6 +244,7 @@ def _profile_payloads(
         node_modules=node_modules,
         runtime_root=runtime,
         allowed_ports=ports,
+        listener_ports=(web_port,),
         writable_paths=(
             runtime / "home",
             runtime / "tmp",
@@ -221,7 +253,7 @@ def _profile_payloads(
         ),
         protect_clean_source=True,
         allow_runtime_root_write=False,
-    )
+    ) + _BASH_HEREDOC_RULE
     verifier_profile = candidate_profile(
         candidate=candidate,
         clean_source=candidate,
