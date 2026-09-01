@@ -82,7 +82,16 @@ def test_admitted_runtime_env_replaces_source_env_only_with_admission() -> None:
 def test_exact_verifier_profile_runs_node_with_private_controller_output(
     tmp_path: Path, capfd: pytest.CaptureFixture[str],
 ) -> None:
-    source = Path.cwd().resolve(strict=True)
+    # Phase A runs this test from the frozen candidate while its .venv and
+    # frontend/node_modules entries are intentionally borrowed symlinks.  This
+    # Node-only check needs no real repository dependencies, so bind the exact
+    # profile to a physical fixture tree instead of that candidate CWD.
+    dependency_source = tmp_path / "physical-source"
+    (dependency_source / ".venv").mkdir(parents=True)
+    (dependency_source / "frontend/node_modules").mkdir(parents=True)
+    (dependency_source / "frontend/package.json").write_text(
+        "{}\n", encoding="utf-8"
+    )
     candidate = tmp_path / "candidate"
     candidate.mkdir()
     health_env = tmp_path / "health.env"
@@ -101,7 +110,7 @@ def test_exact_verifier_profile_runs_node_with_private_controller_output(
             child.chmod(0o700)
         _web_profile, verifier_profile, _ports = _profile_payloads(
             candidate=candidate,
-            source=source,
+            source=dependency_source,
             runtime=runtime,
             health_env=health_env,
             web_port=18103,
