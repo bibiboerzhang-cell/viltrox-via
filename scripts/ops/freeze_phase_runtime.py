@@ -19,6 +19,7 @@ from typing import Callable, Mapping, Sequence, TypeVar
 from scripts.ops.freeze_worktree_contract import (
     FreezeError,
     path_identity,
+    physical_special_paths,
     precreate_owned_file,
     write_owned_file_exclusive,
 )
@@ -429,34 +430,6 @@ def bind_nested_inventory_proof(
             "source_digest_after": inventory_map_digest(sources_after, entry_digest),
         }
     )
-
-
-def physical_special_paths(root: Path) -> list[str]:
-    """List unsupported physical nodes without following candidate symlinks."""
-
-    special: list[str] = []
-    pending = [root]
-    while pending:
-        directory = pending.pop()
-        try:
-            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
-        except OSError as exc:
-            raise FreezeError(
-                f"candidate physical tree cannot be scanned: {directory}"
-            ) from exc
-        for entry in entries:
-            path = Path(entry.path)
-            try:
-                info = entry.stat(follow_symlinks=False)
-            except OSError as exc:
-                raise FreezeError(
-                    f"candidate physical node cannot be inspected: {path}"
-                ) from exc
-            if stat.S_ISDIR(info.st_mode):
-                pending.append(path)
-            elif not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
-                special.append(path.relative_to(root).as_posix())
-    return sorted(special)
 
 
 def run_logged(

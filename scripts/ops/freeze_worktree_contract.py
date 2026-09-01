@@ -22,6 +22,34 @@ def path_identity(path: Path) -> tuple[int, int]:
     return info.st_dev, info.st_ino
 
 
+def physical_special_paths(root: Path) -> list[str]:
+    """List unsupported physical nodes without following candidate symlinks."""
+
+    special: list[str] = []
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
+        except OSError as exc:
+            raise FreezeError(
+                f"candidate physical tree cannot be scanned: {directory}"
+            ) from exc
+        for entry in entries:
+            path = Path(entry.path)
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise FreezeError(
+                    f"candidate physical node cannot be inspected: {path}"
+                ) from exc
+            if stat.S_ISDIR(info.st_mode):
+                pending.append(path)
+            elif not (stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode)):
+                special.append(path.relative_to(root).as_posix())
+    return sorted(special)
+
+
 def remove_owned_path(path: Path, identity: tuple[int, int]) -> None:
     import shutil
     if path_identity(path) != identity or path.is_symlink():
