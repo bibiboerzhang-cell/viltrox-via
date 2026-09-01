@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import shutil
 import socket
 import subprocess
+import sys
 from argparse import Namespace
 from pathlib import Path
 
@@ -11,6 +13,7 @@ import pytest
 from scripts.ops.deploy_runtime_admission import (
     SCHEMA,
     _database_url_with_gss_disabled,
+    _profile_payloads,
     load_admission,
     prepare_admission,
     validate_runtime_binding_values,
@@ -18,6 +21,7 @@ from scripts.ops.deploy_runtime_admission import (
 from scripts.ops.freeze_worktree_candidate import freeze_candidate
 from scripts.ops.freeze_worktree_candidate import run_deploy_gate
 from scripts.ops.freeze_worktree_contract import FreezeError
+from scripts.ops.trusted_npm_audit import _trusted_npm, _trusted_npm_package_root
 from tests.freeze_worktree_candidate_fixtures import (
     _attach_test_static_receipt,
     _built_deploy_gate_fixture,
@@ -248,6 +252,131 @@ def test_candidate_profiles_allow_bash_heredoc_without_broad_tmp_write(
     assert heredoc.returncode == 0, heredoc.stderr.decode("utf-8", "replace")
     assert denied.returncode != 0
     assert not unrelated.exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Seatbelt")
+def test_verifier_profile_runs_controller_bound_safe_python_and_npm(
+    tmp_path: Path,
+) -> None:
+    source = Path.cwd().resolve(strict=True)
+    candidate = tmp_path / "safe-python-candidate"
+    safe_ops = candidate / "scripts/ops"
+    safe_ops.mkdir(parents=True)
+    (candidate / "tests").mkdir()
+    (candidate / "backend/app").mkdir(parents=True)
+    for name in (
+        "safe_python.sh",
+        "safe_python_router.py",
+        "freeze_phase_runtime.py",
+        "freeze_worktree_contract.py",
+    ):
+        shutil.copy2(source / "scripts/ops" / name, safe_ops / name)
+    (safe_ops / "safe_python.sh").chmod(0o755)
+
+    runtime = Path(subprocess.check_output(
+        [
+            "/usr/bin/mktemp",
+            "-d",
+            "/private/tmp/vkpi-candidate-browser-runtime.XXXXXX",
+        ],
+        text=True,
+    ).strip()).resolve(strict=True)
+    runtime.chmod(0o700)
+    for child in ("home", "tmp", "cache", "controller", "receipts"):
+        (runtime / child).mkdir(mode=0o700)
+    health = tmp_path / "health.env"
+    health.write_text("OPS_HEALTH_TOKEN=fixture\n", encoding="utf-8")
+    health.chmod(0o600)
+    database_port, redis_port, web_port = _unused_loopback_ports()
+    try:
+        _web_profile, verifier_profile, _ports = _profile_payloads(
+            candidate=candidate,
+            source=source,
+            runtime=runtime,
+            health_env=health,
+            web_port=web_port,
+            database_port=database_port,
+            redis_port=redis_port,
+        )
+        marker = runtime / "controller/router-marker"
+        environment = {
+            "HOME": str(runtime / "home"),
+            "LANG": "C.UTF-8",
+            "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "TMPDIR": str(runtime / "tmp"),
+            "VKPI_SAFE_PYTHON_CONTROLLER_RUNTIME_ROOT": str(runtime),
+            "VKPI_SAFE_PYTHON_REAL": str(source / ".venv/bin/python"),
+            "XDG_CACHE_HOME": str(runtime / "cache"),
+        }
+        safe_run = subprocess.run(
+            [
+                "/usr/bin/sandbox-exec", "-p", verifier_profile,
+                str(safe_ops / "safe_python.sh"), "-", str(marker),
+            ],
+            input=(
+                "import sys\nfrom pathlib import Path\n"
+                "Path(sys.argv[1]).write_text('router-ok', encoding='utf-8')\n"
+            ),
+            cwd=candidate,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+        assert safe_run.returncode == 0, safe_run.stderr
+        assert marker.read_text(encoding="utf-8") == "router-ok"
+        assert not list((runtime / "tmp").glob("vkpi-phase-a-seatbelt.*"))
+
+        npm_run = subprocess.run(
+            [
+                "/usr/bin/sandbox-exec", "-p", verifier_profile,
+                str(_trusted_npm()), "--version",
+            ],
+            cwd=candidate,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert npm_run.returncode == 0, npm_run.stderr
+        assert npm_run.stdout.strip()
+        assert str(_trusted_npm_package_root()) in verifier_profile
+        assert '(subpath "/")' not in verifier_profile
+        assert '(subpath "/usr/local")' not in verifier_profile
+
+        direct_npm = tmp_path / "direct-npm"
+        direct_npm.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        direct_npm.chmod(0o755)
+        with pytest.raises(RuntimeError, match="noncanonical package layout"):
+            _trusted_npm_package_root(direct_npm)
+
+        rejected_marker = runtime / "controller/rejected-marker"
+        rejected = subprocess.run(
+            [
+                "/usr/bin/sandbox-exec", "-p", verifier_profile,
+                str(safe_ops / "safe_python.sh"), "-", str(rejected_marker),
+            ],
+            input=(
+                "import sys\nfrom pathlib import Path\n"
+                "Path(sys.argv[1]).write_text('must-not-run', encoding='utf-8')\n"
+            ),
+            cwd=candidate,
+            env={
+                **environment,
+                "VKPI_SAFE_PYTHON_CONTROLLER_RUNTIME_ROOT": str(tmp_path),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert rejected.returncode != 0
+        assert not rejected_marker.exists()
+    finally:
+        shutil.rmtree(runtime)
 
 
 def test_web_profile_allows_exact_loopback_listener(tmp_path: Path) -> None:

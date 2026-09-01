@@ -269,8 +269,16 @@ def test_cleanup_never_removes_root_when_process_receipts_are_unknown(
 def test_trusted_npm_ignores_ambient_path_and_uses_controlled_child_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    npm = tmp_path / "trusted/npm-cli.js"
-    npm.parent.mkdir(); npm.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8"); npm.chmod(0o755)
+    npm_root = tmp_path / "trusted/node_modules/npm"
+    npm = npm_root / "bin/npm-cli.js"
+    npm.parent.mkdir(parents=True)
+    npm.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8"); npm.chmod(0o755)
+    (npm_root / "lib").mkdir()
+    (npm_root / "lib/cli.js").write_text("// fixture\n", encoding="utf-8")
+    (npm_root / "package.json").write_text('{"name":"npm"}\n', encoding="utf-8")
+    (npm_root / "bin/npx-cli.js").symlink_to("/etc/hosts")
+    with pytest.raises(RuntimeError, match="npx is unsafe"):
+        trusted_npm_audit._trusted_npx(npm)
     hostile = tmp_path / "hostile"; hostile.mkdir()
     (hostile / "npm").write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
     (hostile / "npm").chmod(0o755)

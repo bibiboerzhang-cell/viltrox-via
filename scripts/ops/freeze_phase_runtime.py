@@ -26,7 +26,7 @@ from scripts.ops.freeze_worktree_contract import (
 
 PHASE_A_NESTED_SEATBELT_TESTS = (
     ("tests/test_strict_runtime_hardening_redteam.py", 32),
-    ("tests/test_deploy_runtime_admission.py", 8),
+    ("tests/test_deploy_runtime_admission.py", 9),
     ("tests/test_freeze_worktree_candidate.py", 22),
     ("tests/test_phase_a_static_containment.py", 1),
     ("tests/test_candidate_browser_cleanup_behavior.py", 3),
@@ -739,24 +739,59 @@ def publish_owned_log(
         raise FreezeError("candidate phase log destination changed after write")
 
 
-def remove_owned_phase_sandbox(root: Path) -> None:
+def remove_owned_phase_sandbox(
+    root: Path,
+    *,
+    expected_parent: Path | None = None,
+    expected_parent_identity: tuple[int, int] | None = None,
+    expected_root_identity: tuple[int, int] | None = None,
+) -> None:
     """Remove one controller-owned phase sandbox, including read-only fixtures."""
 
     physical = root.resolve(strict=True)
     info = root.lstat()
-    allowed_parents = {
-        Path("/private/tmp").resolve(strict=True),
-        Path("/private/var/tmp").resolve(strict=True),
-    }
-    parent_info = physical.parent.lstat()
+    if expected_parent is None:
+        allowed_parents = {
+            Path("/private/tmp").resolve(strict=True),
+            Path("/private/var/tmp").resolve(strict=True),
+        }
+        parent = physical.parent
+        parent_info = parent.lstat()
+        parent_is_trusted = (
+            parent in allowed_parents
+            and stat.S_ISDIR(parent_info.st_mode)
+            and parent_info.st_uid == 0
+            and bool(parent_info.st_mode & stat.S_ISVTX)
+        )
+        parent_identity = (parent_info.st_dev, parent_info.st_ino)
+    else:
+        if expected_parent_identity is None:
+            raise FreezeError("private phase sandbox parent identity is required")
+        parent = expected_parent.resolve(strict=True)
+        parent_info = expected_parent.lstat()
+        parent_identity = (parent_info.st_dev, parent_info.st_ino)
+        parent_is_trusted = (
+            expected_parent.is_absolute()
+            and expected_parent.absolute() == parent
+            and not expected_parent.is_symlink()
+            and stat.S_ISDIR(parent_info.st_mode)
+            and parent_info.st_uid == os.geteuid()
+            and stat.S_IMODE(parent_info.st_mode) == 0o700
+            and parent_identity == expected_parent_identity
+        )
+    root_identity = (info.st_dev, info.st_ino)
     if (
-        root.is_symlink()
+        (expected_parent is not None and root.absolute() != physical)
+        or root.is_symlink()
         or not stat.S_ISDIR(info.st_mode)
         or info.st_uid != os.geteuid()
-        or physical.parent not in allowed_parents
-        or not stat.S_ISDIR(parent_info.st_mode)
-        or parent_info.st_uid != 0
-        or not parent_info.st_mode & stat.S_ISVTX
+        or stat.S_IMODE(info.st_mode) != 0o700
+        or physical.parent != parent
+        or not parent_is_trusted
+        or (
+            expected_root_identity is not None
+            and root_identity != expected_root_identity
+        )
         or not physical.name.startswith("vkpi-phase-a-seatbelt.")
     ):
         raise FreezeError("refusing unsafe phase sandbox cleanup")
@@ -777,3 +812,11 @@ def remove_owned_phase_sandbox(root: Path) -> None:
         function(raw_path)  # type: ignore[operator]
 
     shutil.rmtree(physical, onexc=restore_tree_permission)
+    if root.exists() or root.is_symlink():
+        raise FreezeError("phase sandbox cleanup did not remove the exact root")
+    after_parent = parent.lstat()
+    if (
+        not stat.S_ISDIR(after_parent.st_mode)
+        or (after_parent.st_dev, after_parent.st_ino) != parent_identity
+    ):
+        raise FreezeError("phase sandbox parent changed during cleanup")

@@ -30,7 +30,12 @@ from scripts.ops.controller_static_receipt import (
 from scripts.ops.freeze_worktree_contract import FreezeError, write_owned_file_exclusive
 from scripts.ops.strict_runtime_seatbelt import candidate_profile, require_sandbox_exec
 from scripts.ops.trusted_git import trusted_git_executable
-from scripts.ops.trusted_npm_audit import _trusted_node, _trusted_npm, _trusted_npx
+from scripts.ops.trusted_npm_audit import (
+    _trusted_node,
+    _trusted_npm,
+    _trusted_npm_package_root,
+    _trusted_npx,
+)
 
 
 SCHEMA = "vkpi.deploy-runtime-admission/v1"
@@ -232,6 +237,7 @@ def _profile_payloads(
     node_modules = source / "frontend/node_modules"
     node = _trusted_node()
     npm = _trusted_npm()
+    npm_package_root = _trusted_npm_package_root(npm)
     npx = _trusted_npx(npm)
     git = Path(trusted_git_executable())
     ports = tuple(sorted({web_port, database_port, redis_port}))
@@ -272,7 +278,11 @@ def _profile_payloads(
         allow_runtime_root_write=False,
         executable_dirs=(runtime / "controller",),
         executable_paths=(node, npm, npx, git),
-        readable_paths=(health_env, source / "frontend/package.json"),
+        readable_paths=(
+            health_env,
+            source / "frontend/package.json",
+            npm_package_root,
+        ),
     ) + _BASH_HEREDOC_RULE
     return web_profile, verifier_profile, ",".join(str(port) for port in ports)
 

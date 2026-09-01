@@ -51,17 +51,64 @@ def _trusted_node() -> Path:
     raise RuntimeError("trusted controller node is unavailable")
 
 
+def _trusted_npm_package_root(npm: Path | None = None) -> Path:
+    """Return the narrow physical npm package tree required by npm-cli.js."""
+
+    cli = (npm or _trusted_npm()).resolve(strict=True)
+    package_root = cli.parent.parent
+    if (
+        cli != package_root / "bin/npm-cli.js"
+        or package_root.name != "npm"
+        or package_root.parent.name not in {"node_modules", "nodejs"}
+    ):
+        raise RuntimeError("trusted controller npm has a noncanonical package layout")
+    for directory in (package_root, package_root / "bin", package_root / "lib"):
+        resolved = directory.resolve(strict=True)
+        info = directory.lstat()
+        if (
+            directory != resolved
+            or directory.is_symlink()
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid not in {0, os.geteuid()}
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            raise RuntimeError("trusted controller npm package directory is unsafe")
+    for required in (cli, package_root / "lib/cli.js", package_root / "package.json"):
+        resolved = required.resolve(strict=True)
+        info = required.lstat()
+        if (
+            required != resolved
+            or required.is_symlink()
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_uid not in {0, os.geteuid()}
+            or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            raise RuntimeError("trusted controller npm package file is unsafe")
+    return package_root
+
+
 def _trusted_npx(npm: Path | None = None) -> Path:
-    candidate = (npm or _trusted_npm()).with_name("npx-cli.js").resolve(strict=True)
-    info = candidate.stat()
-    if (not stat.S_ISREG(info.st_mode) or info.st_uid not in {0, os.geteuid()}
-            or stat.S_IMODE(info.st_mode) & 0o022):
+    package_root = _trusted_npm_package_root(npm)
+    candidate = package_root / "bin/npx-cli.js"
+    resolved = candidate.resolve(strict=True)
+    info = candidate.lstat()
+    if (
+        candidate != resolved
+        or candidate.is_symlink()
+        or not stat.S_ISREG(info.st_mode)
+        or not os.access(candidate, os.X_OK)
+        or info.st_uid not in {0, os.geteuid()}
+        or info.st_nlink != 1
+        or stat.S_IMODE(info.st_mode) & 0o022
+    ):
         raise RuntimeError("trusted controller npx is unsafe")
     return candidate
 
 
 def run_trusted_npm_audit(frontend: Path, receipt: Path) -> None:
     npm = _trusted_npm()
+    _trusted_npm_package_root(npm)
     node = _trusted_node()
     lock = frontend / "package-lock.json"
     lock_info = lock.lstat()

@@ -240,7 +240,8 @@ def _install_fake_frontend_npm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_bin = tmp_path / "bin"
-    fake_npm = fake_bin / "npm"
+    fake_npm_root = tmp_path / "lib/node_modules/npm"
+    fake_npm = fake_npm_root / "bin/npm-cli.js"
     _write(
         fake_npm,
         """#!/usr/bin/env python3
@@ -271,6 +272,10 @@ payload = {
     os.chmod(fake_npm, 0o755)
     _write(fake_npm.with_name("npx-cli.js"), "#!/bin/sh\nexit 0\n")
     os.chmod(fake_npm.with_name("npx-cli.js"), 0o755)
+    _write(fake_npm_root / "lib/cli.js", "// reviewed fixture npm closure\n")
+    _write(fake_npm_root / "package.json", '{"name":"npm"}\n')
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    (fake_bin / "npm").symlink_to(fake_npm)
     fake_node = fake_bin / "node"
     _write(fake_node, "#!/bin/sh\nexec \"$@\"\n")
     os.chmod(fake_node, 0o755)

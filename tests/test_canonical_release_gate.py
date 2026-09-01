@@ -376,6 +376,10 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
     assert 'HOME="${LOCAL_CANDIDATE_WEB_RUNTIME}/home"' in mint
     assert 'XDG_CACHE_HOME="${LOCAL_CANDIDATE_WEB_RUNTIME}/cache"' in mint
     assert 'TMPDIR="${LOCAL_CANDIDATE_WEB_RUNTIME}/tmp"' in mint
+    assert (
+        'VKPI_SAFE_PYTHON_CONTROLLER_RUNTIME_ROOT="${LOCAL_CANDIDATE_WEB_RUNTIME}"'
+        in mint
+    )
     assert 'LOCAL_ENV_FILE="${PROJECT_ROOT}/.env"' not in mint
     assert 'PATH="${PATH}"' not in mint
     assert 'HOME="${HOME:-/tmp}"' not in mint

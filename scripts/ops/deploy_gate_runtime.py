@@ -75,6 +75,7 @@ _SCRUBBED_ENV_NAMES = {
     "VKPI_LOCAL_WEB_PGBOUNCER",
     "VKPI_VERIFY_ACCEPTANCE_JSON_OUT",
     "VKPI_VERIFY_JSON_OUT",
+    "VKPI_SAFE_PYTHON_CONTROLLER_RUNTIME_ROOT",
     "XDG_CACHE_HOME",
 }
 
@@ -126,6 +127,7 @@ class StrictGateBinding:
             "VKPI_HEALTH_ENV_FILE": str(self.health_env_file),
             "VKPI_HEALTH_URL": self.health_url,
             "VKPI_LOCAL_BASE_URL": self.base_url,
+            "VKPI_SAFE_PYTHON_CONTROLLER_RUNTIME_ROOT": str(self.runtime_root),
             "VKPI_VERIFY_JSON_OUT": str(self.verify_json_out),
             "VKPI_VERIFY_ACCEPTANCE_JSON_OUT": str(self.acceptance_json_out),
         }

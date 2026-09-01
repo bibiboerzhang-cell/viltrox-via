@@ -250,7 +250,7 @@ backend_pytest() {
       --ignore="$ROOT/tests/test_controller_static_receipt.py"
       --ignore="$ROOT/tests/test_local_redis_start_timeout.py"
     )
-    echo "[verify] Phase A delegated precheck bound: 78 tests; outer receipt is partial."
+    echo "[verify] Phase A delegated precheck bound: 79 tests; outer receipt is partial."
   fi
   PYTHONPATH="$ROOT:$ROOT/scripts:$ROOT/backend" "$PYTHON_BIN" -m pytest "${pytest_args[@]}"
 }
@@ -1136,7 +1136,7 @@ echo ""
 echo "=========================================================="
 if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
   if [ "$STATIC_COVERAGE_STATE" != "complete" ]; then
-    echo "[verify] CONTROLLER PARTIAL — 外层静态步骤通过，但固定 78 项仅由父控制器证明；本回执不是独立绿色门禁。"
+    echo "[verify] CONTROLLER PARTIAL — 外层静态步骤通过，但固定 79 项仅由父控制器证明；本回执不是独立绿色门禁。"
     echo "=========================================================="
     exit 78
   fi

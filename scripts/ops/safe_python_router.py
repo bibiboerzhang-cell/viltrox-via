@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import importlib.machinery
 import importlib.util
+import re
 import runpy
 import stat
 import sys
@@ -16,6 +17,11 @@ from pathlib import Path
 
 ALLOWED_MODULES = frozenset({"alembic", "pytest"})
 IGNORED_FLAGS = frozenset({"-B", "-E", "-I", "-S", "-s"})
+CONTROLLER_RUNTIME_ENV = "VKPI_SAFE_PYTHON_CONTROLLER_RUNTIME_ROOT"
+_CONTROLLER_RUNTIME_NAME = re.compile(
+    r"vkpi-candidate-browser-runtime\.[A-Za-z0-9]{6,32}"
+)
+_TRUSTED_STICKY_TEMP_PARENTS = (Path("/private/tmp"), Path("/private/var/tmp"))
 
 
 class _CandidateTopLevelFinder:
@@ -56,6 +62,73 @@ def _safe_directory(path: Path, *, label: str) -> Path:
     ):
         raise SystemExit(f"safe Python {label} is not a trusted directory")
     return resolved
+
+
+def _directory_identity(path: Path) -> tuple[int, int]:
+    info = path.lstat()
+    return info.st_dev, info.st_ino
+
+
+def _trusted_sticky_temp_parent(path: Path) -> Path:
+    resolved = path.resolve(strict=True)
+    info = path.lstat()
+    if (
+        path.absolute() != resolved
+        or path.is_symlink()
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != 0
+        or stat.S_IMODE(info.st_mode) != 0o1777
+    ):
+        raise SystemExit("safe Python controller runtime has no trusted temp anchor")
+    return resolved
+
+
+def _phase_sandbox_parent() -> tuple[Path, tuple[int, int] | None]:
+    """Select an exact controller-bound parent for nested dependency mirrors.
+
+    Canonical deploy verification runs below an outer deny-default Seatbelt.  In
+    that path the controller binds one physical 0700 runtime root and the router
+    may write only below its pre-created ``tmp`` child.  Ordinary invocations
+    retain the reviewed root-owned sticky ``/private/tmp`` behavior.
+    """
+
+    raw = os.environ.pop(CONTROLLER_RUNTIME_ENV, "")
+    if not raw:
+        return _trusted_sticky_temp_parent(Path("/private/tmp")), None
+    lexical = Path(raw)
+    try:
+        resolved = lexical.resolve(strict=True)
+        info = lexical.lstat()
+    except OSError as exc:
+        raise SystemExit("safe Python controller runtime is unavailable") from exc
+    if (
+        not lexical.is_absolute()
+        or lexical.absolute() != resolved
+        or lexical.is_symlink()
+        or not stat.S_ISDIR(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o700
+        or not _CONTROLLER_RUNTIME_NAME.fullmatch(resolved.name)
+    ):
+        raise SystemExit("safe Python controller runtime is not trusted")
+    if resolved.parent not in _TRUSTED_STICKY_TEMP_PARENTS:
+        raise SystemExit("safe Python controller runtime is outside trusted temp")
+    _trusted_sticky_temp_parent(resolved.parent)
+    parent = resolved / "tmp"
+    try:
+        parent_resolved = parent.resolve(strict=True)
+        parent_info = parent.lstat()
+    except OSError as exc:
+        raise SystemExit("safe Python controller runtime tmp is unavailable") from exc
+    if (
+        parent != parent_resolved
+        or parent.is_symlink()
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != os.geteuid()
+        or stat.S_IMODE(parent_info.st_mode) != 0o700
+    ):
+        raise SystemExit("safe Python controller runtime tmp is not trusted")
+    return parent_resolved, _directory_identity(parent_resolved)
 
 
 def _validate_script_chain(root: Path, path: Path, *, label: str) -> None:
@@ -166,10 +239,12 @@ def main() -> None:
         remove_owned_phase_sandbox,
     )
 
+    sandbox_parent, sandbox_parent_identity = _phase_sandbox_parent()
     runtime_root = Path(tempfile.mkdtemp(
-        prefix="vkpi-phase-a-seatbelt.", dir="/private/tmp",
+        prefix="vkpi-phase-a-seatbelt.", dir=sandbox_parent,
     ))
     runtime_root.chmod(0o700)
+    runtime_root_identity = _directory_identity(runtime_root)
     try:
         dependency_root, _inventory, _proof = _prepare_nested_dependency_mirror(
             _safe_directory(Path(sysconfig.get_path("purelib")), label="purelib"),
@@ -178,7 +253,14 @@ def main() -> None:
         sys.path.insert(0, str(dependency_root))
         _dispatch(root, sys.argv[1:])
     finally:
-        remove_owned_phase_sandbox(runtime_root)
+        remove_owned_phase_sandbox(
+            runtime_root,
+            expected_parent=(
+                sandbox_parent if sandbox_parent_identity is not None else None
+            ),
+            expected_parent_identity=sandbox_parent_identity,
+            expected_root_identity=runtime_root_identity,
+        )
 
 
 if __name__ == "__main__":

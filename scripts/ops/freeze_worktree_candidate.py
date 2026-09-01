@@ -297,7 +297,11 @@ def _build_frontend(
     env.update(identity.vite_environment())
     assert_provider_free_environment(env)
     from scripts.ops.strict_runtime_seatbelt import candidate_profile, sandboxed
-    from scripts.ops.trusted_npm_audit import _trusted_node, _trusted_npm
+    from scripts.ops.trusted_npm_audit import (
+        _trusted_node,
+        _trusted_npm,
+        _trusted_npm_package_root,
+    )
     npm, node = _trusted_npm(), _trusted_node()
     sandbox_root = Path(tempfile.mkdtemp(prefix="vkpi-phase-a-seatbelt.", dir="/tmp"))
     sandbox_root.chmod(0o700)
@@ -322,7 +326,10 @@ def _build_frontend(
             # Some dependency tools resolve their owning package.json from
             # the physical node_modules path.  Permit that one immutable
             # package descriptor, not the source frontend tree.
-            readable_paths=(npm.parent.parent, source / "frontend/package.json"))
+            readable_paths=(
+                _trusted_npm_package_root(npm),
+                source / "frontend/package.json",
+            ))
         with _borrow_dependencies(snapshot, source):
             if dist.exists():
                 shutil.rmtree(dist)

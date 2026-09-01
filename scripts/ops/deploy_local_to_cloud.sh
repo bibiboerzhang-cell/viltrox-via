@@ -2073,6 +2073,7 @@ run_predeploy_embedded_browser_gate() {
       RUNTIME_ENV_KEEP_DB_URL=1 \
       RUNTIME_ROOT="${LOCAL_CANDIDATE_WEB_RUNTIME}/runtime" \
       RUNTIME_ENV_QUIET=1 \
+      VKPI_SAFE_PYTHON_CONTROLLER_RUNTIME_ROOT="${LOCAL_CANDIDATE_WEB_RUNTIME}" \
       LOG_LEVEL=CRITICAL \
       /usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_VERIFY_PROFILE}" \
       "${LOCAL_SAFE_PYTHON}" -I -B - \
