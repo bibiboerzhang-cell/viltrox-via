@@ -23,7 +23,12 @@ GITHUB_STATIC_PROFILE = "github-actions-static-v1"
 _CONTROLLER_RUNTIME_NAME = re.compile(
     r"vkpi-candidate-browser-runtime\.[A-Za-z0-9]{6,32}"
 )
-_TRUSTED_STICKY_TEMP_PARENTS = (Path("/private/tmp"), Path("/private/var/tmp"))
+_TRUSTED_STICKY_TEMP_PARENTS = (
+    Path("/private/tmp"),
+    Path("/private/var/tmp"),
+    Path("/tmp"),
+    Path("/var/tmp"),
+)
 
 
 def _github_static_profile_enabled(root: Path) -> bool:
@@ -125,6 +130,19 @@ def _trusted_sticky_temp_parent(path: Path) -> Path:
     return resolved
 
 
+def _default_trusted_temp_parent() -> Path:
+    """Select the physical root-owned sticky temp on macOS or Linux."""
+
+    for candidate in _TRUSTED_STICKY_TEMP_PARENTS:
+        if not candidate.exists():
+            continue
+        try:
+            return _trusted_sticky_temp_parent(candidate)
+        except SystemExit:
+            continue
+    raise SystemExit("safe Python has no trusted temporary parent")
+
+
 def _phase_sandbox_parent() -> tuple[Path, tuple[int, int] | None]:
     """Select an exact controller-bound parent for nested dependency mirrors.
 
@@ -136,7 +154,7 @@ def _phase_sandbox_parent() -> tuple[Path, tuple[int, int] | None]:
 
     raw = os.environ.pop(CONTROLLER_RUNTIME_ENV, "")
     if not raw:
-        return _trusted_sticky_temp_parent(Path("/private/tmp")), None
+        return _default_trusted_temp_parent(), None
     lexical = Path(raw)
     try:
         resolved = lexical.resolve(strict=True)

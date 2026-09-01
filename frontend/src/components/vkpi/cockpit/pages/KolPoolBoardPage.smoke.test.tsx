@@ -200,11 +200,23 @@ describe("KolPoolBoardPage smoke(页壳 + KPI 带真值 + 注册表 + 零丢失�
     }
 
     // 发现转化四段真值(summary.discovery_funnel_30d:42→18→7→5)
-    expect(await screen.findByText("自动入库")).toBeTruthy();
-    expect(screen.getAllByText("发现").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("已收藏").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("42").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("18").length).toBeGreaterThan(0);
+    // SrcChip 的静态口径也包含这些标签，不能拿它当 summary 已完成的
+    // 异步信号。等待带精确业务 title 的真实漏斗行，避免快 runner 上
+    // 在请求 resolve 前读取数值形成时序 flake。
+    await waitFor(() => {
+      const discovered = screen.getByTitle("近 30 天找达人产出条目(含已在库命中,未去重到人)");
+      const enrolled = screen.getByTitle("近 30 天新入池 KOL(搜到自动落池 · 非重复行)");
+      const deepAnalyzed = screen.getByTitle("近 30 天出深析结果的 KOL 数(完成态结果覆盖)");
+      const favorited = screen.getByTitle("近 30 天被收藏的 KOL 数(收藏=归我,进 MY KOL)");
+      expect(discovered.textContent).toContain("发现");
+      expect(discovered.textContent).toContain("42");
+      expect(enrolled.textContent).toContain("自动入库");
+      expect(enrolled.textContent).toContain("18");
+      expect(deepAnalyzed.textContent).toContain("已深析");
+      expect(deepAnalyzed.textContent).toContain("7");
+      expect(favorited.textContent).toContain("已收藏");
+      expect(favorited.textContent).toContain("5");
+    });
 
     // 找达人内嵌真身(SmartKolInputPanel 输入框 + 触达闸所在结果区容器,行为零改动)
     expect(screen.getByTestId("smart-kol-input-panel")).toBeTruthy();

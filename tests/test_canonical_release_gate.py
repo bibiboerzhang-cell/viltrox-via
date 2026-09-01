@@ -105,6 +105,17 @@ def test_github_static_python_profile_is_narrow_and_deploy_forbidden(
     assert "GitHub static Python profile is forbidden for deployment" in deploy
 
 
+def test_safe_python_has_strict_native_temp_anchors_for_macos_and_linux() -> None:
+    anchors = safe_python_router._TRUSTED_STICKY_TEMP_PARENTS
+    assert Path("/private/tmp") in anchors
+    assert Path("/tmp") in anchors
+    selected = safe_python_router._default_trusted_temp_parent()
+    info = selected.lstat()
+    assert selected == selected.resolve(strict=True)
+    assert info.st_uid == 0
+    assert info.st_mode & 0o7777 == 0o1777
+
+
 def test_every_release_entrypoint_delegates_to_the_canonical_gate() -> None:
     wrapper = _read("scripts/verify_repo.sh")
     workflow = _read(".github/workflows/verify.yml")
