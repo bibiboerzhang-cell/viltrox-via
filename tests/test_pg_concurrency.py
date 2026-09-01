@@ -193,10 +193,8 @@ def test_reply_queue_draft_distinct_staff_single_claim(
     nothing."""
     from app.domains.comments import reply_queue
     from app.domains.costs import budget_guard
-    from app.platform import llm_gateway
-
-    invoke_calls = _CountingInvoke()
-    monkeypatch.setattr(llm_gateway, "invoke", invoke_calls)
+    draft_calls = _CountingDraft()
+    monkeypatch.setattr(reply_queue, "_generate_reply_draft", draft_calls)
     monkeypatch.setattr(budget_guard, "check_budget", lambda *a, **k: True)
 
     admin = _admin(pg_dsn)
@@ -228,8 +226,8 @@ def test_reply_queue_draft_distinct_staff_single_claim(
 
         assert len(oks) == 1, f"expected exactly ONE draft, got {results}"
         assert len(losers) == 1 and losers[0].get("reason") == "claimed_by_other", results
-        assert invoke_calls.count == 1, (
-            f"expected exactly ONE LLM invocation across two racers, got {invoke_calls.count}"
+        assert draft_calls.count == 1, (
+            f"expected exactly ONE LLM invocation across two racers, got {draft_calls.count}"
         )
     finally:
         with admin.cursor() as cur:
@@ -246,17 +244,13 @@ def test_reply_queue_draft_same_staff_double_burn(
 ) -> None:
     """Same staff double-submits draft on one row (double-click / retry).
 
-    The claim gate admits ``claimed_by IS NULL OR claimed_by = <me>``, so the
-    second concurrent request from the *same* actor re-passes the gate. This
-    asserts the intended invariant (LLM invoked at most once per comment). If it
-    fails with count==2 the gate does not protect against same-actor concurrent
-    double-burn — reported as a bug, not silently tolerated."""
+    The claim gate must admit only ``claimed_by IS NULL``. This locks in the
+    repaired behavior: a second concurrent request from the *same* actor cannot
+    re-enter and burn the LLM twice for one comment."""
     from app.domains.comments import reply_queue
     from app.domains.costs import budget_guard
-    from app.platform import llm_gateway
-
-    invoke_calls = _CountingInvoke()
-    monkeypatch.setattr(llm_gateway, "invoke", invoke_calls)
+    draft_calls = _CountingDraft()
+    monkeypatch.setattr(reply_queue, "_generate_reply_draft", draft_calls)
     monkeypatch.setattr(budget_guard, "check_budget", lambda *a, **k: True)
 
     admin = _admin(pg_dsn)
@@ -282,11 +276,11 @@ def test_reply_queue_draft_same_staff_double_burn(
         oks = [r for r in results if isinstance(r, dict) and r.get("ok")]
 
         # Invariant the claim gate is supposed to enforce ("绝不并发重复烧 LLM").
-        assert invoke_calls.count <= 1, (
+        assert draft_calls.count <= 1, (
             f"same-staff concurrent draft double-burned the LLM: invoked "
-            f"{invoke_calls.count} times, drafted={len(oks)}x — the claim gate "
-            f"admits re-entry by the same actor so a double-click / retry issues "
-            f"two LLM calls (and two 'ok' drafts) for one comment."
+            f"{draft_calls.count} times, drafted={len(oks)}x — the claim gate "
+            f"regressed and allowed a double-click / retry to issue multiple "
+            f"LLM calls for one comment."
         )
     finally:
         with admin.cursor() as cur:
@@ -305,7 +299,13 @@ def test_action_inbox_approve_dismiss_race(
     persisted status equals the winner's target."""
     from app.domains.actions import inbox
 
-    owner = {"id": 40, "is_owner": 1, "role": "admin"}
+    owner = {
+        "id": 1,
+        "is_owner": 1,
+        "role": "admin",
+        "organization_id": 1,
+        "organization_scope_status": "resolved",
+    }
     admin = _admin(pg_dsn)
     dedupe = "pgtest-act-" + uuid.uuid4().hex
     with admin.cursor() as cur:
@@ -340,9 +340,9 @@ def test_action_inbox_approve_dismiss_race(
         assert len(losers) == 1 and losers[0].get("reason") == "illegal_state_transition", results
         assert final == oks[0]["status"], f"db status {final!r} != winner {oks[0]!r}"
     finally:
-        with admin.cursor() as cur:
-            cur.execute("DELETE FROM vkpi_action_execution_ledger WHERE action_id=%s", (aid,))
-            cur.execute("DELETE FROM vkpi_action_inbox WHERE id=%s", (aid,))
+        # A winning approval is append-only evidence under migration 278.  The
+        # PostgreSQL CI database is disposable, so preserve it instead of
+        # weakening or bypassing the production immutability trigger.
         admin.close()
 
 
@@ -357,18 +357,26 @@ def test_action_inbox_mark_done_no_double_ledger(
     row (never two)."""
     from app.domains.actions import inbox
 
-    owner = {"id": 40, "is_owner": 1, "role": "admin"}
+    owner = {
+        "id": 1,
+        "is_owner": 1,
+        "role": "admin",
+        "organization_id": 1,
+        "organization_scope_status": "resolved",
+    }
     admin = _admin(pg_dsn)
     dedupe = "pgtest-md-" + uuid.uuid4().hex
     with admin.cursor() as cur:
         cur.execute(
             "INSERT INTO vkpi_action_inbox (dedupe_key, category, title, status, created_at, updated_at) "
-            "VALUES (%s, 'test_probe', 'markdone probe', 'approved', NOW(), NOW()) RETURNING id",
+            "VALUES (%s, 'test_probe', 'markdone probe', 'suggested', NOW(), NOW()) RETURNING id",
             (dedupe,),
         )
         aid = int(cur.fetchone()[0])
 
     try:
+        approved = inbox.approve_action(aid, staff=owner, reason="concurrency fixture")
+        assert approved.get("ok") is True, approved
         start = threading.Barrier(2)
 
         def mark_done() -> Any:
@@ -393,9 +401,8 @@ def test_action_inbox_mark_done_no_double_ledger(
         assert final == "executed", f"db status {final!r} != 'executed'"
         assert ledger_n == 1, f"expected exactly ONE ledger row, found {ledger_n} (double-write)"
     finally:
-        with admin.cursor() as cur:
-            cur.execute("DELETE FROM vkpi_action_execution_ledger WHERE action_id=%s", (aid,))
-            cur.execute("DELETE FROM vkpi_action_inbox WHERE id=%s", (aid,))
+        # Approval and manual-completion receipts are intentionally immutable;
+        # this lane runs in an ephemeral PostgreSQL database.
         admin.close()
 
 
@@ -487,11 +494,9 @@ def test_bet_verdict_concurrent_single_finalize(
 ) -> None:
     """Two humans finalize the same bet (via inbox_id) concurrently.
 
-    ``record_verdict(inbox_id=…)`` does ``SELECT outcomes WHERE action_inbox_id``
-    then, finding none open, ``INSERT`` a finalized outcome — with no unique
-    constraint on ``action_inbox_id``. Invariant: exactly ONE finalized outcome
-    row per bet. If two survive (one 'validated', one 'failed') the ledger is
-    doubly and contradictorily finalized — a double-write race."""
+    ``record_verdict(inbox_id=…)`` reads existing outcomes before inserting.
+    Migration 233's partial unique index plus ``ON CONFLICT DO NOTHING`` must
+    make exactly one racer finalize; the loser reports ``already_decided``."""
     from app.domains.market_brain import verdict_flow
 
     admin = _admin(pg_dsn)
@@ -533,20 +538,18 @@ def test_bet_verdict_concurrent_single_finalize(
             rows = cur.fetchall()
 
         finalized = [r for r in results if isinstance(r, dict) and r.get("finalized")]
+        losers = [r for r in results if isinstance(r, dict) and not r.get("finalized")]
         assert len(rows) == 1, (
             f"double-finalize: {len(rows)} outcome rows for one bet "
-            f"({[(r[0], r[1]) for r in rows]}); record_verdict(inbox_id) does a "
-            f"non-atomic SELECT-then-INSERT with no unique constraint on "
-            f"action_inbox_id, so two concurrent verdicts each insert a finalized "
-            f"row. finalized_results={len(finalized)}"
+            f"({[(r[0], r[1]) for r in rows]}); the partial unique index or "
+            f"ON CONFLICT guard did not preserve the single-verdict invariant. "
+            f"finalized_results={len(finalized)}"
         )
+        assert len(finalized) == 1, results
+        assert len(losers) == 1 and losers[0].get("reason") == "already_decided", results
     finally:
-        with admin.cursor() as cur:
-            cur.execute("DELETE FROM vkpi_gtm_outcomes WHERE action_inbox_id=%s", (bet_id,))
-            cur.execute(
-                "DELETE FROM vkpi_action_inbox WHERE dedupe_key IN (%s, %s)",
-                (dedupe, f"gtm_verdict:{bet_id}"),
-            )
+        # Finalized outcomes are append-only evidence under migration 276.
+        # Keep the uniquely tagged rows until the disposable test DB is dropped.
         admin.close()
 
 
@@ -673,12 +676,12 @@ def test_worker_claim_job_no_double_claim(
 # ---------------------------------------------------------------------------
 # small helper — thread-safe LLM-invocation counter used by the draft tests
 # ---------------------------------------------------------------------------
-class _CountingInvoke:
+class _CountingDraft:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self.count = 0
 
-    def __call__(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    def __call__(self, *args: Any, **kwargs: Any) -> tuple[str, str]:
         with self._lock:
             self.count += 1
-        return {"text": "TEST DRAFT REPLY", "provider": "test"}
+        return "TEST DRAFT REPLY", "test"

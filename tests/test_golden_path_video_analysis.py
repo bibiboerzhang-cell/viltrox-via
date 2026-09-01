@@ -203,6 +203,13 @@ def _allowed_preflight(worker_module: Any):
                     "production_authorized": True,
                     "model_readiness_status": "production_ready",
                     "claim_status": "descriptive_only",
+                    "operational_authorization_status": "operationally_authorized",
+                    "operational_authorization_source": "signed_evidence",
+                    "operational_authorization_temporary": False,
+                    "signed_model_production_ready": True,
+                    "signed_model_readiness_status": "production_ready",
+                    "signed_model_readiness_claim_status": "descriptive_only",
+                    "signed_model_readiness_evidence_source": "golden-path-test",
                     "checks": [],
                 }
             ],
@@ -241,6 +248,8 @@ def _fake_analyzer(worker_module: Any, calls: list[dict[str, Any]]):
             "analyzed": True,
             "status": "completed",
             "model": worker_module.WORKER_GEMINI_MODEL,
+            "selected_model": worker_module.WORKER_GEMINI_MODEL,
+            "provider_reported_model": worker_module.WORKER_GEMINI_MODEL,
             "method": f"gemini_youtube_{worker_module.WORKER_GEMINI_MODEL}",
             "cost_authority": "llm_production_google_generate_content_v1",
             "llm_attempts": [{"state": "success", "actual_cost_usd": 0.001234, "input_tokens": 1000, "output_tokens": 500}],
@@ -401,16 +410,18 @@ def test_forced_ledger_failure_surfaces_root_cause(world: _World, monkeypatch: p
 
     original = budget_guard.record_cost
 
+    bad_staff_id = world.staff_id + 1_000_000_000
+
     def record_cost_with_bad_fk(**kwargs: Any) -> dict[str, Any]:
-        # 绕过 staff 外键安全层,复现旧世界的 FK 炸法(staff_id=1 在隔离库不存在)
+        # 绕过 staff 外键安全层,用本测试派生的高位 ID 稳定复现 FK 根因。
         monkeypatch.setattr(budget_guard, "_existing_staff_id", lambda _conn, sid: sid)
         try:
-            return original(**{**kwargs, "staff_id": 1, "triggered_by": None})
+            return original(**{**kwargs, "staff_id": bad_staff_id, "triggered_by": None})
         finally:
             monkeypatch.undo()
 
     monkeypatch.setattr(budget_guard, "record_cost", record_cost_with_bad_fk)
-    assert world.one("SELECT 1 AS x FROM staff WHERE id=1") is None, "isolated db must not have staff id 1"
+    assert world.one("SELECT 1 AS x FROM staff WHERE id=%s", (bad_staff_id,)) is None
     with db_connection_sync_scope():
         with pytest.raises(RuntimeError) as caught:
             llm_gateway.record_call(

@@ -1,0 +1,9 @@
+# CI-only dependencies. Production deploys continue to install requirements.txt.
+-r requirements.txt
+
+# The Excel ETL contract tests are imported during pytest collection, including
+# `pytest -m pg`; keep their optional runtime dependencies explicit and pinned.
+pandas==2.3.3
+python-calamine==0.6.2
+RapidFuzz==3.14.5
+psycopg2-binary==2.9.12

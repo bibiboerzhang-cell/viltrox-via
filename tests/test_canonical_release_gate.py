@@ -20,6 +20,39 @@ def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def test_github_ci_uses_full_history_secret_scan_and_ci_only_dependencies() -> None:
+    workflow = _read(".github/workflows/verify.yml")
+    loadtest = _read(".github/workflows/loadtest-smoke.yml")
+    ci_requirements = _read("requirements-ci.txt")
+    gitleaks = _read(".gitleaks.toml")
+
+    assert "actions/checkout@v6" in workflow
+    assert "fetch-depth: 0" in workflow
+    assert "gitleaks/gitleaks-action@v3" in workflow
+    assert 'GITLEAKS_VERSION: "8.30.1"' in workflow
+    assert workflow.count("pip install -r requirements-ci.txt") == 2
+    assert "actions/setup-python@v6" in workflow
+    assert "actions/setup-node@v5" in workflow
+
+    for pin in (
+        "pandas==2.3.3",
+        "python-calamine==0.6.2",
+        "RapidFuzz==3.14.5",
+        "psycopg2-binary==2.9.12",
+    ):
+        assert pin in ci_requirements
+    assert "-r requirements.txt" in ci_requirements
+
+    assert gitleaks.count('condition = "AND"') == 3
+    assert "dimensions11_fit_for_family" in gitleaks
+    assert "test_gemini_video_youtube_characterization" in gitleaks
+    assert "test_stateless_alert_cold_import" in gitleaks
+
+    assert "actions/checkout@v6" in loadtest
+    assert "actions/setup-python@v6" in loadtest
+    assert "actions/upload-artifact@v7" in loadtest
+
+
 def test_every_release_entrypoint_delegates_to_the_canonical_gate() -> None:
     wrapper = _read("scripts/verify_repo.sh")
     workflow = _read(".github/workflows/verify.yml")

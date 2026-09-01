@@ -39,6 +39,8 @@ _ADMIN_STAFF = {
     "role": "admin",
     "is_owner": 1,
     "permissions": {"vkpi": "admin"},
+    "organization_id": 1,
+    "organization_scope_status": "resolved",
     "email": "admin@w5.test",
 }
 

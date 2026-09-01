@@ -16,3 +16,26 @@ regexes = [
   '''^kol_outreach_reply_outcome_7d$''',
   '''^dealer_loc_(samys20260801|12345678)$''',
 ]
+
+[[allowlists]]
+description = "Product-fit import alias, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexes = ['''^dimensions11_fit_for_family$''']
+paths = ['''(^|/)backend/app/domains/kol/product_fit\.py$''']
+
+[[allowlists]]
+description = "Pinned characterization digest, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+regexes = ['''^\s*"file_api":\s*"[0-9a-f]{64}",?\s*$''']
+paths = ['''(^|/)tests/test_gemini_video_youtube_characterization\.py$''']
+
+[[allowlists]]
+description = "Explicit fake signing secret in an isolated cold-import test"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "line"
+regexes = ['''^\s*FAKE_SECRET\s*=\s*"feishu-signing-secret-456"\s*$''']
+paths = ['''(^|/)tests/test_stateless_alert_cold_import\.py$''']

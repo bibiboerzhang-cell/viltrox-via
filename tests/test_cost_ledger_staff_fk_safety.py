@@ -87,7 +87,10 @@ def test_worker_llm_context_prefers_staff_id_over_user_id() -> None:
     from pathlib import Path
 
     # 源码口径守卫(不 import:apify_jobs_worker_gemini 必须经 apify_jobs_worker 先加载,直接 import 会循环)
-    src = (Path(__file__).resolve().parents[1] / "backend/app/workers/apify_jobs_worker_gemini.py").read_text(encoding="utf-8")
+    src = (
+        Path(__file__).resolve().parents[1]
+        / "backend/app/workers/apify_jobs_worker_gemini_runtime.py"
+    ).read_text(encoding="utf-8")
     # 口径守卫:llm_context.triggered_by 必须先取 payload.staff_id(staff 外键),再退 user id。
     assert '"triggered_by": payload.get("staff_id")' in src
     assert 'or payload.get("triggered_by_user_id", payload.get("user_id"))' in src
