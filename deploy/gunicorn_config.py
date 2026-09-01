@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import sys
 from pathlib import Path
 
 bind = os.environ.get("BIND", "127.0.0.1:8101")
@@ -41,7 +42,32 @@ access_log_format = (
 )
 
 
+def _noop_process_title(_title: str) -> None:
+    """Keep Gunicorn's post-fork title hook inert on affected Darwin runtimes."""
+
+
+def _protect_darwin_post_fork_process_title() -> bool:
+    """Disable the optional C title setter before Gunicorn forks on Darwin.
+
+    macOS 27 rejects the CoreFoundation work performed by setproctitle in the
+    child side of a multi-threaded fork.  Gunicorn calls that optional helper
+    before it logs "Booting worker", which otherwise produces an immediate
+    SIGSEGV loop.  Linux production keeps the normal process titles.
+    """
+
+    if sys.platform != "darwin":
+        return False
+    from gunicorn import util
+
+    util._setproctitle = _noop_process_title
+    return True
+
+
 def on_starting(server):
+    if _protect_darwin_post_fork_process_title():
+        server.log.info(
+            "Darwin fork safety: optional Gunicorn process-title updates disabled"
+        )
     server.log.info("=" * 60)
     server.log.info(
         "viltrox-2.0 gunicorn starting | role=%s | workers=%s | backlog=%s | worker_connections=%s",
