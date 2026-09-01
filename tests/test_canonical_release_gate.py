@@ -317,9 +317,10 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
         'LOCAL_ENV_FILE="${LOCAL_CANDIDATE_RUNTIME_ENV}"',
         '/usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_VERIFY_PROFILE}"',
         'RUNTIME_ENV_KEEP_DB_URL=1',
-        '"${LOCAL_SAFE_PYTHON}" -I -B -',
-        '"${PROJECT_ROOT}/scripts"',
-        '"${PROJECT_ROOT}/backend" <<\'PY\'',
+        'VKPI_SAFE_PYTHON_REAL="${DEPLOY_PHYSICAL_PYTHON}"',
+        '"${DEPLOY_CANDIDATE_DIR}/scripts/ops/safe_python.sh" -I -B -',
+        '"${DEPLOY_CANDIDATE_DIR}/scripts"',
+        '"${DEPLOY_CANDIDATE_DIR}/backend" <<\'PY\'',
         "create_local_auth_context(int(sys.argv[1]))",
         '"${BROWSER_GATE_TOKEN_TTL_SECONDS}"',
         "scripts/capture_browser_console_cdp.mjs",
@@ -332,6 +333,13 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
         "verify_deploy_candidate",
     ):
         assert required in deploy
+    token_mint_at = block.index(
+        '"${DEPLOY_CANDIDATE_DIR}/scripts/ops/safe_python.sh" -I -B -'
+    )
+    token_mint_block = block[token_mint_at:block.index("failure_log=", token_mint_at)]
+    assert '"${LOCAL_SAFE_PYTHON}"' not in token_mint_block
+    assert '"${PROJECT_ROOT}/scripts"' not in token_mint_block
+    assert '"${PROJECT_ROOT}/backend"' not in token_mint_block
     for required in (
         'PYTHONPATH="${CANDIDATE_ROOT}/backend"',
         'BIND="127.0.0.1:${CANDIDATE_PORT}"',

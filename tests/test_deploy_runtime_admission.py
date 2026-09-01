@@ -379,6 +379,30 @@ def test_verifier_profile_runs_controller_bound_safe_python_and_npm(
         assert marker.read_text(encoding="utf-8") == "router-ok"
         assert not list((runtime / "tmp").glob("vkpi-phase-a-seatbelt.*"))
 
+        # The verifier profile deliberately admits the reviewed wrapper from
+        # the frozen candidate, not an identically named live-worktree entry.
+        # The deploy token mint must therefore stay bound to candidate bytes.
+        live_marker = runtime / "controller/live-router-marker"
+        live_wrapper_run = subprocess.run(
+            [
+                "/usr/bin/sandbox-exec", "-p", verifier_profile,
+                str(reviewed_source / "scripts/ops/safe_python.sh"),
+                "-", str(live_marker),
+            ],
+            input=(
+                "import sys\nfrom pathlib import Path\n"
+                "Path(sys.argv[1]).write_text('must-not-run', encoding='utf-8')\n"
+            ),
+            cwd=candidate,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        assert live_wrapper_run.returncode != 0
+        assert not live_marker.exists()
+
         npm_run = subprocess.run(
             [
                 "/usr/bin/sandbox-exec", "-p", verifier_profile,

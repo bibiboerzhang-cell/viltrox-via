@@ -2074,12 +2074,13 @@ run_predeploy_embedded_browser_gate() {
       RUNTIME_ROOT="${LOCAL_CANDIDATE_WEB_RUNTIME}/runtime" \
       RUNTIME_ENV_QUIET=1 \
       VKPI_SAFE_PYTHON_CONTROLLER_RUNTIME_ROOT="${LOCAL_CANDIDATE_WEB_RUNTIME}" \
+      VKPI_SAFE_PYTHON_REAL="${DEPLOY_PHYSICAL_PYTHON}" \
       LOG_LEVEL=CRITICAL \
       /usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_VERIFY_PROFILE}" \
-      "${LOCAL_SAFE_PYTHON}" -I -B - \
+      "${DEPLOY_CANDIDATE_DIR}/scripts/ops/safe_python.sh" -I -B - \
       "${BROWSER_GATE_TOKEN_TTL_SECONDS}" \
-      "${PROJECT_ROOT}/scripts" \
-      "${PROJECT_ROOT}/backend" <<'PY'
+      "${DEPLOY_CANDIDATE_DIR}/scripts" \
+      "${DEPLOY_CANDIDATE_DIR}/backend" <<'PY'
 import sys
 
 sys.path[:0] = sys.argv[2:4]
