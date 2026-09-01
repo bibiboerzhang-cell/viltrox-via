@@ -727,9 +727,10 @@ def remove_owned_phase_sandbox(
     physical = root.resolve(strict=True)
     info = root.lstat()
     if expected_parent is None:
+        # macOS aliases resolve to /private; Linux keeps these paths physical.
         allowed_parents = {
-            Path("/private/tmp").resolve(strict=True),
-            Path("/private/var/tmp").resolve(strict=True),
+            Path("/tmp").resolve(strict=True),
+            Path("/var/tmp").resolve(strict=True),
         }
         parent = physical.parent
         parent_info = parent.lstat()
@@ -737,7 +738,7 @@ def remove_owned_phase_sandbox(
             parent in allowed_parents
             and stat.S_ISDIR(parent_info.st_mode)
             and parent_info.st_uid == 0
-            and bool(parent_info.st_mode & stat.S_ISVTX)
+            and stat.S_IMODE(parent_info.st_mode) == 0o1777
         )
         parent_identity = (parent_info.st_dev, parent_info.st_ino)
     else:
