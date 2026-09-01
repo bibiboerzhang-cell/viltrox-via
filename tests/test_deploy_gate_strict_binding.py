@@ -20,6 +20,7 @@ from scripts.ops.deploy_gate_runtime import (
     validate_health_env_file,
     validate_strict_gate_binding,
 )
+from scripts.ops.deploy_runtime_admission import _validate_runtime_root
 from scripts.ops.freeze_worktree_candidate import parser
 
 
@@ -44,6 +45,19 @@ def _binding(root: Path, **overrides: str):
     }
     values.update(overrides)
     return validate_strict_gate_binding(**values)
+
+
+def test_physical_tmp_runtime_root_satisfies_canonical_admission() -> None:
+    physical_tmp = Path("/tmp").resolve(strict=True)
+    runtime = Path(
+        tempfile.mkdtemp(prefix="vkpi-candidate-browser-runtime.", dir=physical_tmp)
+    )
+    try:
+        runtime.chmod(0o700)
+        assert runtime == runtime.resolve(strict=True)
+        assert _validate_runtime_root(runtime) == runtime
+    finally:
+        shutil.rmtree(runtime)
 
 
 def test_strict_gate_binding_rejects_default_or_external_runtime_urls(tmp_path: Path) -> None:

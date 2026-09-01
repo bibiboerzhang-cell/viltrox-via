@@ -1758,7 +1758,7 @@ REMOTE_ACCEPTANCE_REPORT=""
 DEPLOY_ACCEPTED=0
 
 start_local_candidate_browser_runtime() {
-  local candidate_build_time="" health_tmp="" observed_pid="" observed_pgid=""
+  local candidate_build_time="" controller_tmp_root="" health_tmp="" observed_pid="" observed_pgid=""
   local ready=0 attempt
 
   verify_deploy_candidate
@@ -1771,8 +1771,17 @@ start_local_candidate_browser_runtime() {
     return 1
   fi
 
+  controller_tmp_root="$(cd /tmp && pwd -P)" || {
+    echo "Could not resolve the controller's physical temporary directory." >&2
+    return 1
+  }
+  if [ "${controller_tmp_root#/}" = "${controller_tmp_root}" ] \
+    || [ ! -d "${controller_tmp_root}" ]; then
+    echo "Controller physical temporary directory is invalid." >&2
+    return 1
+  fi
   LOCAL_CANDIDATE_WEB_RUNTIME="$(
-    mktemp -d /tmp/vkpi-candidate-browser-runtime.XXXXXX
+    mktemp -d "${controller_tmp_root%/}/vkpi-candidate-browser-runtime.XXXXXX"
   )"
   chmod 700 "${LOCAL_CANDIDATE_WEB_RUNTIME}"
   install -d -m 0700 \
