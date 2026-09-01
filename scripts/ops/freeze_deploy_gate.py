@@ -8,8 +8,11 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
+import sys
 from pathlib import Path
+from typing import BinaryIO
 
 from scripts.ops.controller_static_receipt import (
     CONTROLLER_STATIC_RECEIPT_RUNTIME_STEP_PLAN,
@@ -44,6 +47,110 @@ def _sha256_path(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _bind_admission_runtime_environment(
+    environment: dict[str, str], admission: dict[str, object] | None,
+) -> None:
+    """Use the filtered runtime env only after admission validated its bytes."""
+
+    if admission is None:
+        return
+    runtime_env_file = admission.get("runtime_env_file")
+    if not isinstance(runtime_env_file, str) or not Path(runtime_env_file).is_absolute():
+        raise FreezeError("deploy runtime admission environment path is invalid")
+    environment["LOCAL_ENV_FILE"] = runtime_env_file
+
+
+def _private_gate_output_is_stable(
+    path: Path, descriptor: int, expected_identity: tuple[int, int],
+) -> bool:
+    try:
+        lexical = path.lstat()
+        opened = os.fstat(descriptor)
+    except OSError:
+        return False
+    return (
+        not path.is_symlink()
+        and stat.S_ISREG(lexical.st_mode)
+        and stat.S_ISREG(opened.st_mode)
+        and (lexical.st_dev, lexical.st_ino) == expected_identity
+        and (opened.st_dev, opened.st_ino) == expected_identity
+        and lexical.st_uid == os.geteuid()
+        and opened.st_uid == os.geteuid()
+        and lexical.st_nlink == 1
+        and opened.st_nlink == 1
+        and stat.S_IMODE(lexical.st_mode) == 0o600
+        and stat.S_IMODE(opened.st_mode) == 0o600
+    )
+
+
+def _replay_private_gate_output(handle: BinaryIO) -> None:
+    handle.seek(0)
+    destination = getattr(sys.stdout, "buffer", None)
+    while True:
+        chunk = handle.read(1024 * 1024)
+        if not chunk:
+            break
+        if destination is None:
+            sys.stdout.write(chunk.decode("utf-8", "replace"))
+        else:
+            destination.write(chunk)
+    if destination is None:
+        sys.stdout.flush()
+    else:
+        destination.flush()
+
+
+def _run_controlled_candidate_with_private_output(
+    arguments: list[str], *, cwd: Path, env: dict[str, str],
+    runtime_root: Path, run_nonce: str, timeout: int,
+) -> subprocess.CompletedProcess[bytes]:
+    """Keep candidate stdio on a Seatbelt-readable inode, then replay it."""
+
+    if re.fullmatch(r"[0-9a-f]{64}", run_nonce) is None:
+        raise FreezeError("canonical gate output nonce is invalid")
+    output = (
+        runtime_root / "controller" / f"canonical-gate-output.{run_nonce}.log"
+    )
+    try:
+        identity = write_owned_file_exclusive(output, b"")
+        descriptor = os.open(
+            output,
+            os.O_RDWR
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+    except OSError as exc:
+        raise FreezeError("canonical gate private output is unavailable") from exc
+    try:
+        if not _private_gate_output_is_stable(output, descriptor, identity):
+            raise FreezeError("canonical gate private output is unsafe")
+        with os.fdopen(descriptor, "r+b", buffering=0) as handle:
+            descriptor = -1
+            from scripts.ops.controlled_candidate_process import run_controlled_candidate
+
+            try:
+                completed = run_controlled_candidate(
+                    arguments,
+                    cwd=cwd,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=handle,
+                    stderr=subprocess.STDOUT,
+                    timeout=timeout,
+                )
+            finally:
+                os.fsync(handle.fileno())
+                if not _private_gate_output_is_stable(
+                    output, handle.fileno(), identity
+                ):
+                    raise FreezeError("canonical gate private output changed identity")
+                _replay_private_gate_output(handle)
+            return completed
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def verify_deploy_source(args: argparse.Namespace) -> dict[str, object]:
@@ -244,6 +351,7 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
                 acceptance_json_out=acceptance_json_out,
                 allow_test_hooks=bool(getattr(args, "fixture_allow_test_hooks", False)),
             ) as (python_bin, environment):
+                _bind_admission_runtime_environment(environment, admission)
                 static_receipt, static_receipt_bytes = validate_controller_static_receipt(
                     manifest=manifest,
                     snapshot=snapshot,
@@ -301,9 +409,7 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
                     from scripts.ops.freeze_worktree_candidate import _borrow_dependencies
 
                     with _borrow_dependencies(snapshot, controller_source):
-                        from scripts.ops.controlled_candidate_process import run_controlled_candidate
-
-                        completed = run_controlled_candidate(
+                        completed = _run_controlled_candidate_with_private_output(
                             (
                                 ["/usr/bin/sandbox-exec", "-p", seatbelt_profile]
                                 if seatbelt_profile
@@ -312,7 +418,8 @@ def run_deploy_gate(args: argparse.Namespace) -> dict[str, object]:
                             + ["/bin/bash", "scripts/verify.sh"],
                             cwd=snapshot,
                             env=environment,
-                            stdin=subprocess.DEVNULL,
+                            runtime_root=Path(runtime_root),
+                            run_nonce=runtime_nonce,
                             timeout=1800,
                         )
                 if completed.returncode == 0 and require_reproducible_frontend:

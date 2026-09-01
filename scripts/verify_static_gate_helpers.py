@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path
@@ -40,6 +41,49 @@ CANONICAL_STATIC_STEP_PLAN = (
     "browser console live extension-free release gate (not requested)",
     "post-restart runtime log leak canary (not requested)",
 )
+
+
+def _candidate_controller_receipt_module(root: Path) -> object:
+    """Load the manifest-bound receipt contract without weakening ``-I``.
+
+    The canonical CLI runs this file directly, so isolated Python intentionally
+    omits the repository root from ``sys.path``.  Add only the physical candidate
+    that contains this exact helper, then prove the imported contract came from
+    that same candidate rather than an ambient package or ``PYTHONPATH`` entry.
+    """
+
+    helper = Path(__file__)
+    if not helper.is_absolute():
+        helper = Path.cwd() / helper
+    expected_helper = root / "scripts/verify_static_gate_helpers.py"
+    expected_module = root / "scripts/ops/controller_static_receipt.py"
+    try:
+        if (
+            helper.is_symlink()
+            or helper.resolve(strict=True) != expected_helper.resolve(strict=True)
+            or expected_module.is_symlink()
+            or not expected_module.is_file()
+        ):
+            raise SystemExit("controller static receipt helper root mismatch")
+    except OSError as exc:
+        raise SystemExit("controller static receipt helper root mismatch") from exc
+
+    root_text = str(root)
+    inserted = root_text not in sys.path
+    if inserted:
+        sys.path.insert(0, root_text)
+    try:
+        module = importlib.import_module("scripts.ops.controller_static_receipt")
+    finally:
+        if inserted:
+            sys.path.remove(root_text)
+    module_file = getattr(module, "__file__", None)
+    if (
+        not isinstance(module_file, str)
+        or Path(module_file).resolve(strict=True) != expected_module.resolve(strict=True)
+    ):
+        raise SystemExit("controller static receipt helper import mismatch")
+    return module
 
 
 def validate_npm_audit_receipt(receipt: Path, lock: Path) -> None:
@@ -196,9 +240,6 @@ def validate_controller_static_receipt(
         or (root / "BUILD_GIT_BRANCH").read_text(encoding="utf-8").strip()
         != expected_branch
         or not isinstance(canonical, dict)
-        or canonical.get("schema_version") != "vkpi_canonical_gate_receipt_v1"
-        or canonical.get("passed") is not True
-        or canonical.get("failed_steps") != []
         or not isinstance(canonical_candidate, dict)
         or canonical_candidate.get("release_head") != expected_head
         or canonical_candidate.get("git_head") != expected_head
@@ -225,6 +266,23 @@ def validate_controller_static_receipt(
         ).hexdigest()
     ):
         raise SystemExit("controller static receipt binding mismatch")
+    contract = _candidate_controller_receipt_module(root)
+    freeze_error = contract.FreezeError
+    try:
+        contract.validate_outer_static_partial(canonical)
+        toolchain = payload.get("toolchain")
+        if not isinstance(toolchain, dict):
+            raise freeze_error("controller static receipt toolchain binding is missing")
+        expected_python = contract.assert_trusted_file_identity(
+            toolchain.get("python"), label="python"
+        )
+        contract._validate_nested_seatbelt_tests(
+            payload.get("nested_seatbelt_tests"),
+            snapshot=root,
+            expected_python=expected_python,
+        )
+    except freeze_error as exc:
+        raise SystemExit("controller static receipt binding mismatch") from exc
     steps = canonical.get("steps")
     if (
         not isinstance(steps, list)

@@ -278,6 +278,7 @@ def main() -> int:
         return 0
     if arguments in (
         ["status", "--porcelain=v1", "--untracked-files=all"],
+        ["status", "--porcelain=v1", "--untracked-files=all", "--no-renames"],
         ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     ):
         return 0

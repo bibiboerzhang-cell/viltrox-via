@@ -135,6 +135,18 @@ def test_prepare_admission_filters_provider_secrets_and_pins_phase_a(
     verify_profile = Path(args.verify_profile_out).read_text(encoding="utf-8")
     assert "(deny network*)" in web_profile
     assert "(deny network*)" in verify_profile
+    assert (
+        f'(allow network-outbound (remote ip "localhost:{args.web_port}"))'
+        in verify_profile
+    )
+    assert (
+        f'(allow network-outbound (remote ip "localhost:{payload["database_port"]}"))'
+        in verify_profile
+    )
+    assert (
+        f'(allow network-outbound (remote ip "localhost:{payload["redis_port"]}"))'
+        not in verify_profile
+    )
     assert web_profile.count("(allow network-inbound") == 1
     assert (
         f'(allow network-inbound (local ip "localhost:{args.web_port}"))'
@@ -407,6 +419,58 @@ def test_web_profile_allows_exact_loopback_listener(tmp_path: Path) -> None:
         check=False,
     )
     assert listener.returncode == 0, listener.stderr.decode("utf-8", "replace")
+    for port in (payload["database_port"],):
+        with socket.socket() as endpoint:
+            endpoint.bind(("127.0.0.1", port))
+            endpoint.listen(1)
+            allowed = subprocess.run(
+                [
+                    "/usr/bin/sandbox-exec",
+                    "-f",
+                    args.verify_profile_out,
+                    str(source / ".venv/bin/python"),
+                    "-I",
+                    "-S",
+                    "-B",
+                    "-c",
+                    (
+                        "import socket,sys; "
+                        "connection=socket.create_connection(('127.0.0.1', int(sys.argv[1]))); "
+                        "connection.close()"
+                    ),
+                    str(port),
+                ],
+                cwd=candidate,
+                capture_output=True,
+                check=False,
+            )
+            assert allowed.returncode == 0, allowed.stderr.decode("utf-8", "replace")
+
+    with socket.socket() as redis_endpoint:
+        redis_endpoint.bind(("127.0.0.1", payload["redis_port"]))
+        redis_endpoint.listen(1)
+        redis_denied = subprocess.run(
+            [
+                "/usr/bin/sandbox-exec",
+                "-f",
+                args.verify_profile_out,
+                str(source / ".venv/bin/python"),
+                "-I",
+                "-S",
+                "-B",
+                "-c",
+                (
+                    "import socket,sys; "
+                    "socket.create_connection(('127.0.0.1', int(sys.argv[1])))"
+                ),
+                str(payload["redis_port"]),
+            ],
+            cwd=candidate,
+            capture_output=True,
+            check=False,
+        )
+        assert redis_denied.returncode != 0
+        assert b"Operation not permitted" in redis_denied.stderr
     for profile, port in (
         (args.web_profile_out, payload["database_port"]),
         (args.web_profile_out, payload["redis_port"]),

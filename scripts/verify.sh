@@ -531,6 +531,7 @@ local_release_acceptance_gate() {
   fi
 
   local out_path="${VKPI_VERIFY_ACCEPTANCE_JSON_OUT:-}"
+  local acceptance_runtime_root=""
   local owns_out_path=0
   local rc=0
   if [ -z "$out_path" ]; then
@@ -541,10 +542,34 @@ local_release_acceptance_gate() {
     owns_out_path=1
   fi
 
-  "$PYTHON_BIN" "$ROOT/scripts/local_release_acceptance.py" \
-    --base-url "${VKPI_LOCAL_BASE_URL:-http://127.0.0.1:8102}" \
-    --json-out "$out_path" \
-    >/dev/null || rc=$?
+  if [ -n "${VKPI_CONTROLLER_STATIC_GATE_RECEIPT:-}" ]; then
+    # The controller-bound RUNTIME_ROOT is an immutable receipt identity and
+    # must not be repurposed as application scratch space. Give acceptance a
+    # fresh private child for runtime_env.py's data/log directory setup while
+    # leaving the parent binding unchanged for every other canonical step.
+    if [ -z "${RUNTIME_ROOT:-}" ]; then
+      echo "[verify] controller-bound acceptance 缺少运行根绑定。" >&2
+      rc=1
+    else
+      acceptance_runtime_root="${RUNTIME_ROOT%/}/controller/local-release-acceptance-runtime"
+    fi
+    if [ "$rc" -eq 0 ] && ! mkdir -m 0700 -- "$acceptance_runtime_root"; then
+      echo "[verify] 无法创建 controller-bound acceptance 私有运行目录。" >&2
+      rc=1
+    fi
+    if [ "$rc" -eq 0 ]; then
+      env RUNTIME_ROOT="$acceptance_runtime_root" \
+        "$PYTHON_BIN" "$ROOT/scripts/local_release_acceptance.py" \
+        --base-url "${VKPI_LOCAL_BASE_URL:-http://127.0.0.1:8102}" \
+        --json-out "$out_path" \
+        >/dev/null || rc=$?
+    fi
+  else
+    "$PYTHON_BIN" "$ROOT/scripts/local_release_acceptance.py" \
+      --base-url "${VKPI_LOCAL_BASE_URL:-http://127.0.0.1:8102}" \
+      --json-out "$out_path" \
+      >/dev/null || rc=$?
+  fi
 
   if [ "$rc" -eq 0 ]; then
     "$PYTHON_BIN" - "$out_path" <<'PY' || rc=$?

@@ -266,7 +266,11 @@ def _profile_payloads(
         venv=venv,
         node_modules=node_modules,
         runtime_root=runtime,
-        allowed_ports=(web_port,),
+        # Canonical acceptance mints its short-lived admin bearer from the
+        # reviewed local PostgreSQL database before probing the candidate web
+        # origin. Keep Redis unavailable: the verifier never needs to enqueue
+        # work or inspect the queue directly.
+        allowed_ports=(web_port, database_port),
         writable_paths=(
             runtime / "home",
             runtime / "tmp",

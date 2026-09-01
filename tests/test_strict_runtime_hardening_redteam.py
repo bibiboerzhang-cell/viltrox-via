@@ -28,7 +28,10 @@ from scripts.ops.strict_runtime_seatbelt import (
 )
 from scripts.ops import trusted_npm_audit
 from scripts.ops.controlled_candidate_process import run_controlled_candidate
-from scripts.ops.freeze_git_bridge import readonly_snapshot_git_environment
+from scripts.ops.freeze_git_bridge import (
+    readonly_snapshot_git_environment,
+    strict_snapshot_identity_environment,
+)
 from scripts.ops.trusted_git import trusted_git_executable
 from scripts.ops.isolated_runtime_attestation import copy_receipt_nofollow
 
@@ -458,6 +461,36 @@ def test_readonly_git_bridge_ignores_hostile_git_python_and_path(
         [trusted_git_executable(), "rev-parse", "HEAD"], cwd=source, text=True,
         env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"},
     ).strip()
+    head = result.stdout.strip()
+    with strict_snapshot_identity_environment(
+        snapshot,
+        expected_head=head,
+        expected_branch="main",
+        bridge_parent=controller,
+        python_bin=Path(os.sys.executable),
+    ) as strict_environment:
+        strict_env = {**strict_environment, "HOME": str(tmp_path)}
+        canonical_status = subprocess.run(
+            [
+                "git", "status", "--porcelain=v1", "--untracked-files=all",
+                "--no-renames",
+            ],
+            cwd=snapshot,
+            env=strict_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        unreviewed_status = subprocess.run(
+            ["git", "status", "--porcelain=v2", "--untracked-files=all"],
+            cwd=snapshot,
+            env=strict_env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    assert canonical_status.returncode == 0
+    assert unreviewed_status.returncode == 126
 
 
 def test_controlled_group_permission_error_is_unknown_and_never_signaled(
