@@ -29,6 +29,11 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin"
+    or sys.implementation.cache_tag != "cpython-314",
+    reason="requires reviewed macOS/Python 3.14 dependency baseline and Seatbelt",
+)
 def test_phase_a_profile_denies_sources_secrets_dependencies_and_tools(
     tmp_path: Path,
 ) -> None:

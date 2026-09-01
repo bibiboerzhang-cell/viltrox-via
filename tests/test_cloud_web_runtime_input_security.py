@@ -4,8 +4,11 @@ import os
 import pwd
 import re
 import subprocess
+import sys
 import sysconfig
 from pathlib import Path
+
+import pytest
 
 from scripts.ops.freeze_phase_runtime import _prepare_nested_dependency_mirror
 
@@ -148,6 +151,11 @@ def test_browser_controller_identity_comes_from_effective_uid_not_caller_home() 
         assert forbidden_flag not in deploy
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin"
+    or sys.implementation.cache_tag != "cpython-314",
+    reason="requires reviewed macOS/Python 3.14 dependency baseline and Seatbelt",
+)
 def test_browser_identity_probe_ignores_hostile_caller_identity_environment(
     tmp_path: Path,
 ) -> None:

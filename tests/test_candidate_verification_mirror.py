@@ -78,6 +78,11 @@ def test_verification_mirror_revalidates_bytes_on_gate_failure(
     assert (source / "payload.txt").read_bytes() == b"bound\n"
 
 
+@pytest.mark.skipif(
+    sys.platform != "darwin"
+    or sys.implementation.cache_tag != "cpython-314",
+    reason="requires reviewed macOS/Python 3.14 dependency baseline and Seatbelt",
+)
 def test_nested_failure_is_copied_to_bound_controller_log(tmp_path: Path) -> None:
     snapshot = tmp_path / "snapshot"
     for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES:
