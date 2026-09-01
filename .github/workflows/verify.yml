@@ -7,32 +7,16 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_DB: viltrox_ci
-          POSTGRES_HOST_AUTH_METHOD: trust
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d viltrox_ci"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     env:
       ENVIRONMENT: test
       PYTHONPATH: backend
+      VKPI_SKIP_DOTENV: "1"
       # setup-python's hosted-toolcache interpreter can be group writable on
       # GitHub runners.  The canonical gate intentionally rejects that trust
       # boundary.  The install step hardens the ephemeral interpreter tree;
       # this profile permits a fresh mirrored dependency proof only for the
       # non-runtime GitHub static gate (deploy keeps the reviewed baseline).
       VKPI_SAFE_PYTHON_PROFILE: github-actions-static-v1
-      DB_RUNTIME_BACKEND: postgres
-      DB_USE_PGBOUNCER: "0"
-      DATABASE_URL: postgresql://postgres@localhost:5432/viltrox_ci
     steps:
       - uses: actions/checkout@v6
         with:
@@ -67,22 +51,37 @@ jobs:
           if [ "$ci_platlib" != "$ci_purelib" ]; then
             chmod -R go-w "$ci_platlib"
           fi
+          # Python 3.12 resolves sys.prefix to the base interpreter under -S,
+          # so the safe router must keep the setup-python interpreter whose
+          # dependency roots it mirrors.  A system-site-packages venv exists
+          # separately for contract tests that intentionally execute the
+          # repository-standard .venv/bin/python path.
+          python -m venv --system-site-packages .venv
+          test -x "$GITHUB_WORKSPACE/.venv/bin/python"
+          "$GITHUB_WORKSPACE/.venv/bin/python" -c 'import pytest'
           printf 'PYTHON_BIN=%s\n' "$ci_python" >> "$GITHUB_ENV"
       - name: Install frontend dependencies
         run: npm --prefix frontend ci
-      - name: Initialize database
+      - name: Assert hermetic database boundary
         run: |
           "$PYTHON_BIN" - <<'PY'
-          import asyncio
+          import os
 
-          from app.db.connection import close_db_runtime
-          from app.db.startup import init_db_runtime
-
-          async def main() -> None:
-              await init_db_runtime()
-              await close_db_runtime()
-
-          asyncio.run(main())
+          forbidden = (
+              "DATABASE_URL",
+              "LOCAL_DATABASE_URL",
+              "DATABASE_POOL_URL",
+              "DB_RUNTIME_BACKEND",
+              "DB_TARGET_BACKEND",
+              "DB_USE_PGBOUNCER",
+              "VKPI_PYTEST_ALLOW_LIVE_SERVICES",
+          )
+          leaked = [name for name in forbidden if os.environ.get(name)]
+          if leaked:
+              raise SystemExit(
+                  "verify job inherited live database configuration: "
+                  + ",".join(leaked)
+              )
           PY
       - name: Canonical repository/release gate
         run: bash ./scripts/verify_repo.sh

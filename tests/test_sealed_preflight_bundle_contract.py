@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -133,6 +134,28 @@ def test_sealed_verifier_digest_is_canonical_and_tamper_evident(tmp_path: Path) 
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(payload)
 
+    physical_python = Path(sys.executable).resolve(strict=True)
+    isolated_python = tmp_path / "stdlib-safe-python"
+    isolated_python.write_text(
+        "#!/bin/sh\nexec "
+        + shlex.quote(str(physical_python))
+        + ' -I -S -B "$@"\n',
+        encoding="utf-8",
+    )
+    isolated_python.chmod(0o500)
+    isolation_probe = subprocess.run(
+        [
+            str(isolated_python),
+            "-c",
+            "import sys; assert sys.flags.isolated; "
+            "assert sys.flags.no_site; assert 'site' not in sys.modules",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert isolation_probe.returncode == 0, isolation_probe.stderr
+
     program = f"""\
 set -euo pipefail
 PROJECT_ROOT="$1"
@@ -210,8 +233,8 @@ verify_deploy_verifier_bundle
             "sealed-verifier-test",
             str(source_root),
             str(candidate_root),
-            str(ROOT / "scripts/ops/safe_python.sh"),
-            sys.executable,
+            str(isolated_python),
+            str(physical_python),
             str(tmp_path),
         ],
         cwd=ROOT,

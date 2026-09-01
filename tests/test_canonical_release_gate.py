@@ -23,6 +23,10 @@ def _read(relative: str) -> str:
 
 def test_github_ci_uses_full_history_secret_scan_and_ci_only_dependencies() -> None:
     workflow = _read(".github/workflows/verify.yml")
+    verify_job = workflow.split("  verify:\n", 1)[1].split(
+        "\n  postgres-integration:\n", 1
+    )[0]
+    postgres_job = workflow.split("\n  postgres-integration:\n", 1)[1]
     loadtest = _read(".github/workflows/loadtest-smoke.yml")
     ci_requirements = _read("requirements-ci.txt")
     gitleaks = _read(".gitleaks.toml")
@@ -40,6 +44,18 @@ def test_github_ci_uses_full_history_secret_scan_and_ci_only_dependencies() -> N
     assert 'chmod -R go-w "$ci_purelib"' in workflow
     assert 'printf \'PYTHON_BIN=%s\\n\' "$ci_python" >> "$GITHUB_ENV"' in workflow
     assert '"$PYTHON_BIN" - <<\'PY\'' in workflow
+    assert "services:" not in verify_job
+    assert "Initialize database" not in verify_job
+    assert '      DATABASE_URL:' not in verify_job
+    assert '      LOCAL_DATABASE_URL:' not in verify_job
+    assert '      DB_RUNTIME_BACKEND:' not in verify_job
+    assert '      VKPI_PYTEST_ALLOW_LIVE_SERVICES:' not in verify_job
+    assert "python -m venv --system-site-packages .venv" in verify_job
+    assert "Assert hermetic database boundary" in verify_job
+    assert 'printf \'PYTHON_BIN=%s\\n\' "$ci_python"' in verify_job
+    assert "services:" in postgres_job
+    assert 'VKPI_PYTEST_ALLOW_LIVE_SERVICES: "1"' in postgres_job
+    assert "DATABASE_URL: postgresql://postgres@localhost:5432/viltrox_pg_integration" in postgres_job
 
     for pin in (
         "pandas==2.3.3",

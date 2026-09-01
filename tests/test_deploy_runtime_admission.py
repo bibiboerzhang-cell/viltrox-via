@@ -203,6 +203,7 @@ def test_candidate_database_url_requires_gss_disabled() -> None:
         )
 
 
+@pytest.mark.darwin_controller
 def test_web_profile_can_read_filtered_env_but_not_project_dotenv(
     tmp_path: Path,
 ) -> None:
@@ -234,6 +235,7 @@ def test_web_profile_can_read_filtered_env_but_not_project_dotenv(
     assert b"must-never-reach-candidate" not in denied.stdout
 
 
+@pytest.mark.darwin_controller
 @pytest.mark.parametrize("profile_attribute", ("web_profile_out", "verify_profile_out"))
 def test_candidate_profiles_allow_bash_heredoc_without_broad_tmp_write(
     tmp_path: Path,
@@ -275,7 +277,7 @@ def test_candidate_profiles_allow_bash_heredoc_without_broad_tmp_write(
     assert not unrelated.exists()
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Seatbelt")
+@pytest.mark.darwin_controller
 def test_verifier_profile_runs_controller_bound_safe_python_and_npm(
     tmp_path: Path,
     capfd: pytest.CaptureFixture[str],
@@ -453,6 +455,7 @@ def test_verifier_profile_runs_controller_bound_safe_python_and_npm(
         shutil.rmtree(runtime)
 
 
+@pytest.mark.darwin_controller
 def test_web_profile_allows_exact_loopback_listener(tmp_path: Path) -> None:
     source, candidate, _health, args, payload = _admission_fixture(tmp_path)
     listener = subprocess.run(
@@ -595,6 +598,7 @@ def test_admission_rejects_profile_tamper_and_noncanonical_binding(
         )
 
 
+@pytest.mark.darwin_controller
 def test_real_deploy_gate_consumes_admission_and_runs_under_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

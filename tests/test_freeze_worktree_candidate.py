@@ -168,6 +168,7 @@ def test_freeze_and_offline_verify_excludes_runtime_dependencies_and_env(
     assert json.loads(manifest.read_text(encoding="utf-8"))["schema"].endswith("/v1")
 
 
+@pytest.mark.darwin_controller
 def test_build_and_static_verify_share_exact_snapshot_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -239,6 +240,7 @@ def test_build_and_static_verify_share_exact_snapshot_identity(
     assert payload["build"]["build_info_sha256"]
 
 
+@pytest.mark.darwin_controller
 def test_static_verify_uses_external_mirror_when_output_is_under_runtime(
     tmp_path: Path,
 ) -> None:
@@ -288,6 +290,7 @@ def test_frontend_reproducibility_inventory_rejects_any_drift(
         _assert_frontend_dist_reproducible(candidate, rebuilt)
 
 
+@pytest.mark.darwin_controller
 def test_built_deploy_gate_accepts_exact_frontend_rebuild(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -311,6 +314,7 @@ def test_built_deploy_gate_accepts_exact_frontend_rebuild(
     )["pass"] is True
 
 
+@pytest.mark.darwin_controller
 @pytest.mark.parametrize(
     ("rebuild_mode", "error_pattern"),
     [
@@ -353,6 +357,7 @@ def test_built_deploy_gate_fails_closed_and_reverifies_candidate(
     )["pass"] is True
 
 
+@pytest.mark.darwin_controller
 def test_freeze_rechecks_source_after_static_verify(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / "backend" / "untracked.py").unlink()
@@ -509,6 +514,7 @@ def test_deploy_source_binds_snapshot_and_both_git_identities(tmp_path: Path) ->
         )
 
 
+@pytest.mark.darwin_controller
 def test_deploy_gate_detects_candidate_mutation_while_gate_is_running(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -565,6 +571,7 @@ sleep 0.5
     assert not (output / "runtime").exists()
 
 
+@pytest.mark.darwin_controller
 def test_deploy_gate_preserves_venv_invocation_and_isolates_runtime(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

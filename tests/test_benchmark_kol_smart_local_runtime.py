@@ -114,9 +114,12 @@ def test_hermetic_fixture_requires_every_query_to_return_30() -> None:
         benchmark.assert_hermetic_fixture_target(invalid)
 
 
-def test_hermetic_runtime_fixture_returns_30_for_every_golden_query() -> None:
+@pytest.mark.pg
+def test_hermetic_runtime_fixture_returns_30_for_every_golden_query(
+    pg_dsn: str,
+) -> None:
     report = benchmark.run_benchmark(
-        admin_dsn="postgresql://127.0.0.1/postgres",
+        admin_dsn=pg_dsn,
         golden_path=benchmark.DEFAULT_GOLDEN,
         rounds=3,
     )

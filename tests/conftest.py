@@ -25,6 +25,7 @@ import os
 import json
 import re
 import sqlite3
+import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -156,7 +157,9 @@ def _pg_status() -> tuple[bool, str]:
 
 
 def pytest_runtest_setup(item: pytest.Item) -> None:
-    """Skip ``pg``-marked tests when the real database is not reachable."""
+    """Enforce explicit platform and live-service test boundaries."""
+    if item.get_closest_marker("darwin_controller") is not None and sys.platform != "darwin":
+        pytest.skip("darwin_controller marker: requires the reviewed macOS controller runtime")
     if item.get_closest_marker("pg") is None:
         return
     available, reason = _pg_status()

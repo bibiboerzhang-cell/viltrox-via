@@ -41,8 +41,8 @@ def _make_fake_repo(tmp_path: Path, *, mode: str = "success") -> tuple[Path, dic
     _write_executable(
         fake_bin / "pg_dump",
         """
-mode="$(stat -f '%Lp' "$PGSERVICEFILE" 2>/dev/null || stat -c '%a' "$PGSERVICEFILE")"
-pass_mode="$(stat -f '%Lp' "$PGPASSFILE" 2>/dev/null || stat -c '%a' "$PGPASSFILE")"
+mode="$(stat -c '%a' "$PGSERVICEFILE" 2>/dev/null || stat -f '%Lp' "$PGSERVICEFILE")"
+pass_mode="$(stat -c '%a' "$PGPASSFILE" 2>/dev/null || stat -f '%Lp' "$PGPASSFILE")"
 [ "$PGSERVICE" = 'vkpi_backup' ]
 [ "$mode" = '600' ]
 [ "$pass_mode" = '600' ]
@@ -76,8 +76,8 @@ printf 'fixture archive list\\n'
     _write_executable(
         fake_bin / "psql",
         """
-mode="$(stat -f '%Lp' "$PGSERVICEFILE" 2>/dev/null || stat -c '%a' "$PGSERVICEFILE")"
-pass_mode="$(stat -f '%Lp' "$PGPASSFILE" 2>/dev/null || stat -c '%a' "$PGPASSFILE")"
+mode="$(stat -c '%a' "$PGSERVICEFILE" 2>/dev/null || stat -f '%Lp' "$PGSERVICEFILE")"
+pass_mode="$(stat -c '%a' "$PGPASSFILE" 2>/dev/null || stat -f '%Lp' "$PGPASSFILE")"
 [ "$PGSERVICE" = 'vkpi_backup' ]
 [ "$mode" = '600' ]
 [ "$pass_mode" = '600' ]

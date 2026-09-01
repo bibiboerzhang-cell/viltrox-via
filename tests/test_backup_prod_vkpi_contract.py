@@ -133,8 +133,8 @@ fi
         """
 printf 'pg_dump %s\\n' "$*" >> "$COMMAND_LOG"
 [ "$PGSERVICE" = 'vkpi_prod_backup' ]
-service_mode="$(stat -f '%Lp' "$PGSERVICEFILE" 2>/dev/null || stat -c '%a' "$PGSERVICEFILE")"
-pass_mode="$(stat -f '%Lp' "$PGPASSFILE" 2>/dev/null || stat -c '%a' "$PGPASSFILE")"
+service_mode="$(stat -c '%a' "$PGSERVICEFILE" 2>/dev/null || stat -f '%Lp' "$PGSERVICEFILE")"
+pass_mode="$(stat -c '%a' "$PGPASSFILE" 2>/dev/null || stat -f '%Lp' "$PGPASSFILE")"
 [ "$service_mode" = '600' ]
 [ "$pass_mode" = '600' ]
 grep -F -- 'application_name=vkpi prod backup' "$PGSERVICEFILE" >/dev/null

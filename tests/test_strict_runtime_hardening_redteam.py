@@ -14,6 +14,7 @@ import errno
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from scripts.ops import isolated_strict_runtime_gate as strict
+from scripts.ops import trusted_runtime_binary as trusted_runtime_binary_module
 from scripts.ops.freeze_worktree_candidate import _atomic_json, _run_git_text
 from scripts.ops.isolated_runtime_attestation import control_plane_digest, sign_attestation
 from scripts.ops.run_isolated_worktree_gate import (
@@ -111,6 +112,7 @@ def test_controller_attestation_is_offline_verifiable_ed25519(tmp_path: Path) ->
     )
 
 
+@pytest.mark.darwin_controller
 def test_seatbelt_positive_and_negative_preflight(tmp_path: Path) -> None:
     # The checked-out .venv is deliberately not part of Git and clean-clone
     # harnesses often reuse one through a root symlink.  Build the smallest
@@ -311,12 +313,20 @@ def test_strict_binary_ignores_hostile_postgres_bin_and_path(
     for name in ("pg_dump", "redis-server"):
         target = hostile / name
         target.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8"); target.chmod(0o755)
+    trusted = tmp_path / "trusted"; trusted.mkdir()
+    for name in ("pg_dump", "redis-server"):
+        target = trusted / name
+        target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8"); target.chmod(0o755)
+    monkeypatch.setattr(
+        trusted_runtime_binary_module, "TRUSTED_RUNTIME_ROOTS", (trusted,)
+    )
     monkeypatch.setenv("POSTGRES_BIN", str(hostile))
     monkeypatch.setenv("PATH", str(hostile))
-    assert not strict._binary("pg_dump").startswith(str(hostile))
-    assert not strict._binary("redis-server").startswith(str(hostile))
+    assert strict._binary("pg_dump") == str((trusted / "pg_dump").resolve())
+    assert strict._binary("redis-server") == str((trusted / "redis-server").resolve())
 
 
+@pytest.mark.darwin_controller
 def test_candidate_profile_cannot_overwrite_controller_receipt(tmp_path: Path) -> None:
     candidate, clean, venv, node, runtime = (
         tmp_path / name for name in ("candidate", "clean", "venv", "node", "runtime")
@@ -378,6 +388,7 @@ def test_candidate_profile_allows_only_metadata_for_executable_ancestors(
     assert '  (subpath "/usr/bin")' in profile
 
 
+@pytest.mark.darwin_controller
 def test_candidate_profile_preserves_and_allows_unicode_paths(tmp_path: Path) -> None:
     root = tmp_path / "工程——路径"
     candidate, clean, venv, node_modules, runtime = (
@@ -439,6 +450,21 @@ def test_readonly_git_bridge_ignores_hostile_git_python_and_path(
     hostile = tmp_path / "hostile"; hostile.mkdir()
     for name in ("git", "python3"):
         target = hostile / name; target.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8"); target.chmod(0o755)
+    npm_root = tmp_path / "trusted/node_modules/npm"
+    (npm_root / "bin").mkdir(parents=True)
+    (npm_root / "lib").mkdir()
+    for name in ("npm-cli.js", "npx-cli.js"):
+        target = npm_root / "bin" / name
+        target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        target.chmod(0o755)
+    (npm_root / "lib/cli.js").write_text("// fixture\n", encoding="utf-8")
+    (npm_root / "package.json").write_text('{"name":"npm"}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        trusted_npm_audit, "TRUSTED_NPM_CANDIDATES", (npm_root / "bin/npm-cli.js",)
+    )
+    monkeypatch.setattr(
+        trusted_npm_audit, "TRUSTED_NODE_CANDIDATES", (Path("/bin/sh"),)
+    )
     monkeypatch.setenv("PATH", str(hostile))
     controller = tmp_path / "controller"
     with readonly_snapshot_git_environment(snapshot, source, bridge_parent=controller) as environment:

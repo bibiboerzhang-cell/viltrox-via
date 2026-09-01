@@ -196,6 +196,7 @@ def test_controller_receipt_validation_uses_bound_reads_not_path_read_bytes(
     ]["sha256"]
 
 
+@pytest.mark.darwin_controller
 def test_deploy_gate_preserves_recorded_phase_a_source_and_uses_controller_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

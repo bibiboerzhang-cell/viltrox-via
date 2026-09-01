@@ -188,13 +188,13 @@ def test_frontend_favicons_are_served_without_console_404s(tmp_path: Path) -> No
     (frontend_dist / "favicon.ico").write_bytes(b"fresh-ico-fixture")
     client = TestClient(main.app, raise_server_exceptions=False)
     with mock.patch.object(main, "FRONTEND_DIST_DIR", frontend_dist):
-        for path, content_type in (
-            ("/favicon.svg", "image/svg+xml"),
-            ("/favicon.ico", "image/x-icon"),
+        for path, content_types in (
+            ("/favicon.svg", ("image/svg+xml",)),
+            ("/favicon.ico", ("image/x-icon", "image/vnd.microsoft.icon")),
         ):
             response = client.get(path, follow_redirects=False)
             assert response.status_code == 200
-            assert response.headers.get("content-type", "").startswith(content_type)
+            assert response.headers.get("content-type", "").startswith(content_types)
             assert response.headers.get("cache-control") == "public, max-age=3600"
             _assert_full_robots_header(response.headers.get("x-robots-tag", ""))
 

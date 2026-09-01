@@ -127,6 +127,7 @@ def test_strict_cli_rejects_database_url_symlink(tmp_path: Path) -> None:
         _strict_preflight_args(args)
 
 
+@pytest.mark.darwin_controller
 def test_strict_cli_rejects_evidence_inside_source(tmp_path: Path) -> None:
     url_file = tmp_path / "database-url"
     url_file.write_text("postgresql://127.0.0.1:54329/vkpi\n", encoding="utf-8")
@@ -297,6 +298,7 @@ def test_three_runs_share_candidate_but_receive_independent_run_numbers(
     assert calls == [(1, candidate), (2, candidate), (3, candidate)]
 
 
+@pytest.mark.darwin_controller
 def test_one_run_fixture_binds_receipts_and_proves_exact_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

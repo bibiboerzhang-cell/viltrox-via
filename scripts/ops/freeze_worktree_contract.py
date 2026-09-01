@@ -8,6 +8,7 @@ import os
 import re
 import stat
 import ctypes
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -104,12 +105,36 @@ def cleanup_owned_paths(created: dict[Path, tuple[int, int]]) -> None:
 
 
 def rename_exclusive(source: Path, target: Path) -> None:
-    """Publish without replacing a concurrently-created target (macOS)."""
+    """Publish without replacing a concurrently-created target."""
     libc = ctypes.CDLL(None, use_errno=True)
-    function = getattr(libc, "renameatx_np", None)
+    if sys.platform == "darwin":
+        function = getattr(libc, "renameatx_np", None)
+        directory_fd = -2  # AT_FDCWD on macOS.
+        flags = 0x00000004  # RENAME_EXCL.
+    elif sys.platform.startswith("linux"):
+        function = getattr(libc, "renameat2", None)
+        directory_fd = -100  # AT_FDCWD on Linux.
+        flags = 0x00000001  # RENAME_NOREPLACE.
+    else:
+        function = None
     if function is None:
         raise FreezeError("exclusive candidate publish is unavailable")
-    result = function(-2, os.fsencode(source), -2, os.fsencode(target), 0x00000004)
+    function.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    function.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    result = function(
+        directory_fd,
+        os.fsencode(source),
+        directory_fd,
+        os.fsencode(target),
+        flags,
+    )
     if result != 0:
         error = ctypes.get_errno()
         raise FreezeError(f"exclusive candidate publish failed: errno={error}")
