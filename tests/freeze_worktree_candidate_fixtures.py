@@ -502,6 +502,7 @@ def _deploy_gate_args(
     assert isinstance(source, dict)
     runtime_root = output.parent / f".{output.name}-strict-runtime"
     runtime_root.mkdir(mode=0o700)
+    os.chown(runtime_root, os.geteuid(), os.getegid())
     health_env_file = output.parent / f".{output.name}-health.env"
     health_env_file.write_text("OPS_HEALTH_TOKEN=fixture\n", encoding="utf-8")
     health_env_file.chmod(0o600)

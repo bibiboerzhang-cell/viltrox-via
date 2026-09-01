@@ -432,9 +432,9 @@ def _run_static_verify(
         "sandbox-exec": _trusted_file_identity(Path("/usr/bin/sandbox-exec")),
     }
     from scripts.ops.strict_runtime_seatbelt import (
-        phase_a_protected_source_roots, phase_a_static_profile, sandboxed,
+        phase_a_protected_source_roots, phase_a_static_profile, phase_a_writable_parent, sandboxed,
     )
-    sandbox_root = Path(tempfile.mkdtemp(prefix="vkpi-phase-a-seatbelt.", dir="/private/var/tmp"))
+    sandbox_root = Path(tempfile.mkdtemp(prefix="vkpi-phase-a-seatbelt.", dir=phase_a_writable_parent((snapshot, source, source / ".venv", source / "frontend/node_modules", *(Path(str(item["path"])) for item in execution_tools.values())))))
     os.chown(sandbox_root, os.geteuid(), os.getegid())
     sandbox_root.chmod(0o700)
     for child in ("home", "tmp", "cache"):
@@ -453,7 +453,7 @@ def _run_static_verify(
     protected_root = snapshot.parent / "controller-immutable"
     audit_receipt = protected_root / "npm-audit.json"
     bridge_parent = protected_root / "git-bridge"
-    canonical_receipt = sandbox_root / "canonical-static-gate.json"; sandbox_log = sandbox_root / "candidate-verify.log"
+    canonical_receipt = sandbox_root / "canonical-static-gate.json"; sandbox_log = sandbox_root / "candidate-verify.log"; sandbox_log_identity = precreate_owned_file(sandbox_log)
     canonical_payload: dict[str, object] | None = None
     nested_seatbelt_tests: dict[str, object] | None = None
     try:
@@ -468,7 +468,7 @@ def _run_static_verify(
         with _borrow_dependencies(snapshot, source):
             nested_seatbelt_tests = _run_nested_seatbelt_tests(
                 snapshot=snapshot, python_bin=source / ".venv/bin/python", env=env,
-                runtime_root=sandbox_root, error_log_path=log_path,
+                runtime_root=sandbox_root, error_log_path=log_path, failure_log_path=sandbox_log, failure_log_identity=sandbox_log_identity,
             )
         candidate_after_nested = _inventory_candidate(snapshot)
         source_after_nested = {str(root): _inventory_source(root)
@@ -485,9 +485,8 @@ def _run_static_verify(
             env["VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT"] = str(
                 PHASE_A_NESTED_SEATBELT_TEST_COUNT
             )
-        if any(path.exists() or path.is_symlink()
-               for path in (protected_root, sandbox_log)):
-            raise FreezeError("nested Seatbelt tests precreated controller artifacts")
+        if protected_root.exists() or protected_root.is_symlink(): raise FreezeError("nested Seatbelt tests precreated controller artifacts")
+        if sandbox_log.is_symlink() or path_identity(sandbox_log) != sandbox_log_identity: raise FreezeError("nested Seatbelt tests replaced controller log")
         protected_root.mkdir(mode=0o700)
         if (snapshot / "frontend/package-lock.json").is_file():
             run_trusted_npm_audit(snapshot / "frontend", audit_receipt)
@@ -514,7 +513,7 @@ def _run_static_verify(
                     Path(str(item["path"])) for item in
                     (*execution_tools.values(), *controller_tools.values())
                 ),
-                protected_write_paths=(protected_root,),
+                writable_root=sandbox_root, protected_write_paths=(protected_root,),
             )
             with _borrow_dependencies(snapshot, source):
                 _run_logged(

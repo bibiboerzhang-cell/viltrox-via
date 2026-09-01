@@ -20,6 +20,9 @@ class SeatbeltError(RuntimeError):
     pass
 
 
+_PHASE_A_WRITABLE_PARENTS = (Path("/private/tmp"), Path("/private/var/tmp"))
+
+
 def trusted_user_home() -> Path:
     """Return a physical home whose parent cannot be renamed by this uid."""
 
@@ -54,6 +57,37 @@ def _stable_write_anchor(path: Path) -> Path:
     if current.parent == current:
         raise SeatbeltError("protected path has no stable filesystem anchor")
     return current
+
+
+def _trusted_phase_a_writable_parents() -> tuple[Path, ...]:
+    result: list[Path] = []
+    for raw in _PHASE_A_WRITABLE_PARENTS:
+        resolved = raw.resolve(strict=True)
+        info = resolved.lstat()
+        if (
+            raw.absolute() != resolved
+            or raw.is_symlink()
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != 0
+            or stat.S_IMODE(info.st_mode) != 0o1777
+        ):
+            raise SeatbeltError("Phase A writable parent is not root-owned sticky")
+        result.append(resolved)
+    return tuple(result)
+
+
+def _paths_overlap(left: Path, right: Path) -> bool:
+    return left == right or left.is_relative_to(right) or right.is_relative_to(left)
+
+
+def phase_a_writable_parent(protected_paths: Sequence[Path]) -> Path:
+    """Choose a trusted temp parent outside every protected stable anchor."""
+
+    anchors = {_stable_write_anchor(path) for path in protected_paths}
+    for parent in _trusted_phase_a_writable_parents():
+        if not any(_paths_overlap(parent, anchor) for anchor in anchors):
+            return parent
+    raise SeatbeltError("Phase A has no writable parent outside protected anchors")
 
 
 def _literal(value: Path | str) -> str:
@@ -202,6 +236,7 @@ def phase_a_static_profile(
     venv: Path,
     node_modules: Path,
     tool_paths: Sequence[Path],
+    writable_root: Path,
     protected_write_paths: Sequence[Path] = (),
     user_home: Path | None = None,
 ) -> str:
@@ -238,6 +273,17 @@ def phase_a_static_profile(
         *protected_nodes,
         *(_stable_write_anchor(path) for path in (*protected_nodes, *tool_paths)),
     }
+    writable = writable_root.resolve(strict=True)
+    writable_info = writable.lstat()
+    if (
+        writable.parent not in _trusted_phase_a_writable_parents()
+        or writable_root.is_symlink()
+        or not stat.S_ISDIR(writable_info.st_mode)
+        or writable_info.st_uid != os.geteuid()
+        or stat.S_IMODE(writable_info.st_mode) != 0o700
+        or any(_paths_overlap(writable, denied) for denied in write_subpaths)
+    ):
+        raise SeatbeltError("Phase A writable root overlaps a protected anchor")
     write_literals = {
         alias
         for tool in tool_paths

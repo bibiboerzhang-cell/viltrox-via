@@ -118,7 +118,8 @@ def run_logged(
 
 def run_nested_seatbelt_tests(
     *, snapshot: Path, python_bin: Path, env: dict[str, str], runtime_root: Path,
-    error_log_path: Path,
+    error_log_path: Path, failure_log_path: Path,
+    failure_log_identity: tuple[int, int],
 ) -> dict[str, object]:
     """Run the one fixed suite that Darwin cannot nest below another profile."""
 
@@ -145,10 +146,14 @@ def run_nested_seatbelt_tests(
     collect_command = [
         *base, "--collect-only", "-q", *PHASE_A_NESTED_SEATBELT_TEST_FILES,
     ]
-    run_logged(
-        collect_command, cwd=snapshot, env=test_env, log_path=collect_log,
-        error_log_path=error_log_path,
-    )
+    try:
+        run_logged(
+            collect_command, cwd=snapshot, env=test_env, log_path=collect_log,
+            error_log_path=error_log_path,
+        )
+    except BaseException:
+        publish_owned_log(collect_log, failure_log_path, failure_log_identity)
+        raise
     node_ids = [
         line for line in collect_log.read_text(encoding="utf-8").splitlines()
         if any(
@@ -165,15 +170,21 @@ def run_nested_seatbelt_tests(
         or len(node_ids) != PHASE_A_NESTED_SEATBELT_TEST_COUNT
         or len(set(node_ids)) != len(node_ids)
     ):
+        publish_owned_log(collect_log, failure_log_path, failure_log_identity)
         raise FreezeError("nested Seatbelt test collection count mismatch")
     command = [*base, "-q", *PHASE_A_NESTED_SEATBELT_TEST_FILES]
-    run_logged(
-        command, cwd=snapshot, env=test_env, log_path=run_log,
-        error_log_path=error_log_path,
-    )
+    try:
+        run_logged(
+            command, cwd=snapshot, env=test_env, log_path=run_log,
+            error_log_path=error_log_path,
+        )
+    except BaseException:
+        publish_owned_log(run_log, failure_log_path, failure_log_identity)
+        raise
     summary = run_log.read_text(encoding="utf-8")
     expected_summary = rf"(?m)^{PHASE_A_NESTED_SEATBELT_TEST_COUNT} passed(?:, \d+ warnings?)? in "
     if re.search(expected_summary, summary) is None:
+        publish_owned_log(run_log, failure_log_path, failure_log_identity)
         raise FreezeError("nested Seatbelt test pass count mismatch")
     return {
         "status": "passed",

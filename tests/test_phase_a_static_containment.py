@@ -7,8 +7,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from scripts.ops.strict_runtime_seatbelt import (
+    SeatbeltError,
     phase_a_static_profile,
+    phase_a_writable_parent,
     sandboxed,
 )
 
@@ -118,16 +122,34 @@ print(json.dumps(result, sort_keys=True))
 """,
         encoding="utf-8",
     )
-    profile = phase_a_static_profile(
-        source=mirror,
-        venv=mirror / ".venv",
-        node_modules=mirror / "frontend" / "node_modules",
-        tool_paths=(Path(sys.executable), fake_tool, Path("/usr/bin/sandbox-exec")),
-        user_home=user_home,
+    protected_paths = (
+        mirror, mirror / ".venv", mirror / "frontend/node_modules",
+        Path(sys.executable), fake_tool, Path("/usr/bin/sandbox-exec"), user_home,
     )
+    writable_parent = phase_a_writable_parent(protected_paths)
     with tempfile.TemporaryDirectory(
-        prefix="vkpi-phase-a-writable.", dir="/private/var/tmp"
+        prefix="vkpi-phase-a-writable.", dir=writable_parent
     ) as writable_raw:
+        profile = phase_a_static_profile(
+            source=mirror,
+            venv=mirror / ".venv",
+            node_modules=mirror / "frontend" / "node_modules",
+            tool_paths=(Path(sys.executable), fake_tool, Path("/usr/bin/sandbox-exec")),
+            writable_root=Path(writable_raw),
+            user_home=user_home,
+        )
+        writable_alias = Path(f"{writable_raw}-alias")
+        writable_alias.symlink_to(writable_raw, target_is_directory=True)
+        try:
+            with pytest.raises(SeatbeltError, match="writable root overlaps"):
+                phase_a_static_profile(
+                    source=mirror, venv=mirror / ".venv",
+                    node_modules=mirror / "frontend/node_modules",
+                    tool_paths=(Path(sys.executable), fake_tool),
+                    writable_root=writable_alias, user_home=user_home,
+                )
+        finally:
+            writable_alias.unlink()
         completed = subprocess.run(
             sandboxed(
                 [
@@ -147,6 +169,16 @@ print(json.dumps(result, sort_keys=True))
             text=True,
             check=False,
             timeout=30,
+        )
+
+    with pytest.raises(SeatbeltError, match="writable root overlaps"):
+        phase_a_static_profile(
+            source=mirror,
+            venv=mirror / ".venv",
+            node_modules=mirror / "frontend/node_modules",
+            tool_paths=(Path(sys.executable), fake_tool),
+            writable_root=snapshot,
+            user_home=user_home,
         )
 
     assert completed.returncode == 0, completed.stderr

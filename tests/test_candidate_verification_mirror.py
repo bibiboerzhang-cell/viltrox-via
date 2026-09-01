@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from scripts.ops.candidate_physical_tree import candidate_verification_mirror
-from scripts.ops.freeze_worktree_contract import FreezeError
+from scripts.ops.freeze_phase_runtime import (
+    PHASE_A_NESTED_SEATBELT_TEST_FILES,
+    run_nested_seatbelt_tests,
+)
+from scripts.ops.freeze_worktree_contract import FreezeError, path_identity, precreate_owned_file
 from scripts.ops.strict_runtime_seatbelt import trusted_user_home
 
 
@@ -64,3 +68,34 @@ def test_verification_mirror_revalidates_bytes_on_gate_failure(
             raise RuntimeError("gate failed")
 
     assert (source / "payload.txt").read_bytes() == b"bound\n"
+
+
+def test_nested_failure_is_copied_to_bound_controller_log(tmp_path: Path) -> None:
+    snapshot = tmp_path / "snapshot"
+    for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES:
+        path = snapshot / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# present\n", encoding="utf-8")
+    fake_python = tmp_path / "python"
+    fake_python.write_text(
+        "#!/bin/sh\necho nested-collect-failure\nexit 9\n", encoding="utf-8"
+    )
+    fake_python.chmod(0o700)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    failure_log = runtime / "candidate-verify.log"
+    identity = precreate_owned_file(failure_log)
+
+    with pytest.raises(FreezeError, match="command failed with exit 9"):
+        run_nested_seatbelt_tests(
+            snapshot=snapshot,
+            python_bin=fake_python,
+            env={"HOME": str(runtime), "PATH": "/usr/bin:/bin"},
+            runtime_root=runtime,
+            error_log_path=tmp_path / "published.verify.log",
+            failure_log_path=failure_log,
+            failure_log_identity=identity,
+        )
+
+    assert path_identity(failure_log) == identity
+    assert failure_log.read_text(encoding="utf-8") == "nested-collect-failure\n"
