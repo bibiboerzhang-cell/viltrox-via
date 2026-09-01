@@ -6,7 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from scripts.ops.controller_static_receipt import _validate_nested_seatbelt_tests
+from scripts.ops.controller_static_receipt import (
+    _validate_nested_seatbelt_tests,
+    _validate_verification_mirror,
+)
 from scripts.ops.freeze_phase_runtime import (
     PHASE_A_NESTED_SEATBELT_TEST_COUNT,
     PHASE_A_NESTED_SEATBELT_TEST_FILES,
@@ -46,6 +49,27 @@ def test_nested_seatbelt_proof_cannot_claim_missing_when_fixed_suite_exists(
 
     with pytest.raises(FreezeError, match="were not executed"):
         _validate_nested_seatbelt_tests(proof, snapshot=tmp_path)
+
+
+def test_phase_a_mirror_proof_must_bind_all_four_digests() -> None:
+    digest = "a" * 64
+    proof = {
+        "status": "passed",
+        "copy_method": "independent_physical_files",
+        "file_count": 1,
+        "candidate_digest_before": digest,
+        "mirror_digest_before": digest,
+        "candidate_digest_after": digest,
+        "mirror_digest_after": digest,
+    }
+    _validate_verification_mirror(
+        proof, candidate_digest=digest, candidate_file_count=1,
+    )
+    proof["mirror_digest_after"] = "b" * 64
+    with pytest.raises(FreezeError, match="mirror proof is invalid"):
+        _validate_verification_mirror(
+            proof, candidate_digest=digest, candidate_file_count=1,
+        )
 
 
 def _clean_fixture(tmp_path: Path) -> tuple[Path, Path, dict[str, object], Path]:

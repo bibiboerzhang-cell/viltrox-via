@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from scripts.ops.strict_runtime_seatbelt import (
@@ -63,7 +64,7 @@ from pathlib import Path
 
 paths = [Path(value) for value in sys.argv[1:]]
 source_file, source_env, runtime_secret, ignored_secret = paths[:4]
-venv, node_modules, fake_tool, keychain, ssh_key, aws_credentials = paths[4:]
+venv, node_modules, fake_tool, keychain, ssh_key, aws_credentials, allowed = paths[4:]
 result = {}
 
 def denied(name, operation):
@@ -84,6 +85,12 @@ for name, path in {
 }.items():
     denied(name, path.read_bytes)
 denied("source_write_denied", lambda: source_file.write_text("changed"))
+denied(
+    "source_anchor_rename_denied",
+    lambda: source_file.parents[1].rename(
+        source_file.parents[1].with_name("renamed-source")
+    ),
+)
 denied("venv_write_denied", lambda: (venv / "candidate-write").write_text("x"))
 denied(
     "node_modules_write_denied",
@@ -91,7 +98,6 @@ denied(
 )
 denied("tool_write_denied", lambda: fake_tool.write_text("changed"))
 
-allowed = source_file.parents[2] / "snapshot" / "allowed"
 allowed.write_text("ok")
 result["ordinary_fixture_write_allowed"] = allowed.read_text() == "ok"
 listener = socket.socket()
@@ -119,26 +125,29 @@ print(json.dumps(result, sort_keys=True))
         tool_paths=(Path(sys.executable), fake_tool, Path("/usr/bin/sandbox-exec")),
         user_home=user_home,
     )
-    completed = subprocess.run(
-        sandboxed(
-            [
-                sys.executable,
-                "-I",
-                "-B",
-                str(probe),
-                *(str(path) for path in (
-                    source_file, source_env, runtime_secret, ignored_secret,
-                    venv, node_modules, fake_tool, keychain, ssh_key,
-                    aws_credentials,
-                )),
-            ],
-            profile,
-        ),
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=30,
-    )
+    with tempfile.TemporaryDirectory(
+        prefix="vkpi-phase-a-writable.", dir="/private/var/tmp"
+    ) as writable_raw:
+        completed = subprocess.run(
+            sandboxed(
+                [
+                    sys.executable,
+                    "-I",
+                    "-B",
+                    str(probe),
+                    *(str(path) for path in (
+                        source_file, source_env, runtime_secret, ignored_secret,
+                        venv, node_modules, fake_tool, keychain, ssh_key,
+                        aws_credentials, Path(writable_raw) / "allowed",
+                    )),
+                ],
+                profile,
+            ),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
 
     assert completed.returncode == 0, completed.stderr
     assert all(json.loads(completed.stdout).values()), completed.stdout

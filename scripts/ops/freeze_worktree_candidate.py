@@ -38,6 +38,7 @@ from scripts.ops.freeze_git_bridge import (  # noqa: E402
 )
 from scripts.ops.candidate_physical_tree import (  # noqa: E402
     assert_candidate_physical_tree_bound as _assert_candidate_physical_tree_bound,
+    candidate_verification_mirror as _candidate_verification_mirror,
 )
 from scripts.ops.controller_static_receipt import (  # noqa: E402
     CANONICAL_STATIC_STEP_PLAN,
@@ -433,13 +434,7 @@ def _run_static_verify(
     from scripts.ops.strict_runtime_seatbelt import (
         phase_a_protected_source_roots, phase_a_static_profile, sandboxed,
     )
-    profile = phase_a_static_profile(
-        source=source,
-        venv=source / ".venv",
-        node_modules=source / "frontend/node_modules",
-        tool_paths=tuple(Path(str(item["path"])) for item in execution_tools.values()),
-    )
-    sandbox_root = Path(tempfile.mkdtemp(prefix="vkpi-phase-a-seatbelt.", dir="/tmp"))
+    sandbox_root = Path(tempfile.mkdtemp(prefix="vkpi-phase-a-seatbelt.", dir="/private/var/tmp"))
     os.chown(sandbox_root, os.geteuid(), os.getegid())
     sandbox_root.chmod(0o700)
     for child in ("home", "tmp", "cache"):
@@ -455,18 +450,49 @@ def _run_static_verify(
     )
     (sandbox_root / "runtime-data").mkdir(mode=0o700)
     assert_provider_free_environment(env)
-    audit_receipt = sandbox_root / "npm-audit.json"
-    bridge_parent = sandbox_root / "controller"
-    bridge_parent.mkdir(mode=0o700)
-    canonical_receipt = bridge_parent / "canonical-static-gate.json"
-    env["VKPI_VERIFY_JSON_OUT"] = str(canonical_receipt)
-    if (snapshot / "frontend/package-lock.json").is_file():
-        run_trusted_npm_audit(snapshot / "frontend", audit_receipt)
-        env["VKPI_TRUSTED_NPM_AUDIT_RECEIPT"] = str(audit_receipt)
-    sandbox_log = sandbox_root / "candidate-verify.log"
+    protected_root = snapshot.parent / "controller-immutable"
+    audit_receipt = protected_root / "npm-audit.json"
+    bridge_parent = protected_root / "git-bridge"
+    canonical_receipt = sandbox_root / "canonical-static-gate.json"; sandbox_log = sandbox_root / "candidate-verify.log"
     canonical_payload: dict[str, object] | None = None
     nested_seatbelt_tests: dict[str, object] | None = None
     try:
+        candidate_before_nested = _inventory_candidate(snapshot)
+        expected_physical_files = [entry.payload() for entry in candidate_before_nested]
+        _assert_candidate_physical_tree_bound(snapshot, expected_physical_files)
+        protected_sources = phase_a_protected_source_roots(
+            source=source, venv=source / ".venv", node_modules=source / "frontend/node_modules",
+        )
+        source_before_nested = {str(root): _inventory_source(root) for root in
+                                protected_sources if (root / ".git").exists()}
+        with _borrow_dependencies(snapshot, source):
+            nested_seatbelt_tests = _run_nested_seatbelt_tests(
+                snapshot=snapshot, python_bin=source / ".venv/bin/python", env=env,
+                runtime_root=sandbox_root, error_log_path=log_path,
+            )
+        candidate_after_nested = _inventory_candidate(snapshot)
+        source_after_nested = {str(root): _inventory_source(root)
+                               for root in protected_sources}
+        _bind_nested_inventory_proof(
+            nested_seatbelt_tests,
+            candidate_before=candidate_before_nested,
+            candidate_after=candidate_after_nested,
+            sources_before=source_before_nested,
+            sources_after=source_after_nested,
+            entry_digest=_inventory_digest,
+        )
+        if nested_seatbelt_tests.get("status") == "passed":
+            env["VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT"] = str(
+                PHASE_A_NESTED_SEATBELT_TEST_COUNT
+            )
+        if any(path.exists() or path.is_symlink()
+               for path in (protected_root, sandbox_log)):
+            raise FreezeError("nested Seatbelt tests precreated controller artifacts")
+        protected_root.mkdir(mode=0o700)
+        if (snapshot / "frontend/package-lock.json").is_file():
+            run_trusted_npm_audit(snapshot / "frontend", audit_receipt)
+            env["VKPI_TRUSTED_NPM_AUDIT_RECEIPT"] = str(audit_receipt)
+        env["VKPI_VERIFY_JSON_OUT"] = str(canonical_receipt)
         with _readonly_snapshot_git_environment(
             snapshot,
             source,
@@ -474,40 +500,23 @@ def _run_static_verify(
             python_bin=physical_python,
         ) as git_environment:
             env.update(git_environment)
-            candidate_before_nested = _inventory_candidate(snapshot)
-            expected_physical_files = [
-                entry.payload() for entry in candidate_before_nested
-            ]
-            _assert_candidate_physical_tree_bound(snapshot, expected_physical_files)
+            bridge_root = Path(git_environment["PATH"].split(os.pathsep, 1)[0])
+            controller_tools = {
+                path.name: _trusted_file_identity(path) for path in sorted(bridge_root.iterdir())
+            }
+            if audit_receipt.is_file():
+                controller_tools["npm-audit-receipt"] = _trusted_file_identity(audit_receipt)
+            profile = phase_a_static_profile(
+                source=snapshot,
+                venv=source / ".venv",
+                node_modules=source / "frontend/node_modules",
+                tool_paths=tuple(
+                    Path(str(item["path"])) for item in
+                    (*execution_tools.values(), *controller_tools.values())
+                ),
+                protected_write_paths=(protected_root,),
+            )
             with _borrow_dependencies(snapshot, source):
-                protected_sources = phase_a_protected_source_roots(
-                    source=source, venv=source / ".venv",
-                    node_modules=source / "frontend/node_modules",
-                )
-                source_before_nested = {
-                    str(root): _inventory_source(root)
-                    for root in protected_sources if (root / ".git").exists()
-                }
-                nested_seatbelt_tests = _run_nested_seatbelt_tests(
-                    snapshot=snapshot, python_bin=source / ".venv/bin/python", env=env,
-                    runtime_root=sandbox_root, error_log_path=log_path,
-                )
-                candidate_after_nested = _inventory_candidate(snapshot)
-                source_after_nested = {
-                    str(root): _inventory_source(root) for root in protected_sources
-                }
-                _bind_nested_inventory_proof(
-                    nested_seatbelt_tests,
-                    candidate_before=candidate_before_nested,
-                    candidate_after=candidate_after_nested,
-                    sources_before=source_before_nested,
-                    sources_after=source_after_nested,
-                    entry_digest=_inventory_digest,
-                )
-                if nested_seatbelt_tests.get("status") == "passed":
-                    env["VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT"] = str(
-                        PHASE_A_NESTED_SEATBELT_TEST_COUNT
-                    )
                 _run_logged(
                     sandboxed(["/bin/bash", "scripts/verify.sh"], profile),
                     cwd=snapshot,
@@ -515,6 +524,8 @@ def _run_static_verify(
                     log_path=sandbox_log,
                     error_log_path=log_path,
                 )
+            for name, record in controller_tools.items():
+                _assert_trusted_file_identity(record, label=name)
             _assert_candidate_physical_tree_bound(snapshot, expected_physical_files)
             try:
                 loaded = json.loads(canonical_receipt.read_text(encoding="utf-8"))
@@ -725,9 +736,14 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
                 phase="candidate static verification start",
             )
             try:
-                static_gate_run = _run_static_verify(
-                    temporary, source, verify_log, created[verify_log], identity
-                )
+                with _candidate_verification_mirror(
+                    temporary, [entry.payload() for entry in candidate_before_verify]
+                ) as (verification_snapshot, mirror_proof):
+                    static_gate_run = _run_static_verify(
+                        verification_snapshot, source, verify_log,
+                        created[verify_log], identity,
+                    )
+                static_gate_run["verification_mirror"] = mirror_proof
             finally:
                 candidate_after_verify = _inventory_candidate(temporary)
                 if candidate_after_verify != candidate_before_verify:
@@ -759,6 +775,7 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
                 output=output,
                 snapshot=temporary,
                 candidate_digest=candidate_digest,
+                candidate_file_count=len(candidate_entries),
                 source_digest=source_digest,
                 source_file_count=len(entries_before),
                 source_status_sha256=hashlib.sha256(status_before).hexdigest(),

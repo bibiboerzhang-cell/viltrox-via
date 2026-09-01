@@ -23,6 +23,7 @@ from scripts.ops.freeze_worktree_candidate import (
     verify_deploy_source,
     verify_manifest,
 )
+from scripts.ops.strict_runtime_seatbelt import trusted_user_home
 
 
 def test_phase_sandbox_cleanup_handles_readonly_tree_without_following_links(
@@ -186,7 +187,7 @@ def test_build_and_static_verify_share_exact_snapshot_identity(
     assert build_info["ambientVite"] == []
     receipt = payload["verification"]["static_receipt"]["payload"]
     assert receipt["nested_seatbelt_tests"]["status"] == "not_present_fixture"
-    assert receipt["nested_seatbelt_tests"]["expected_count"] == 59
+    assert receipt["nested_seatbelt_tests"]["expected_count"] == 60
     verify_env = receipt["canonical_receipt"]["candidate"]["fixture"]
     assert verify_env["VKPI_FREEZE_GIT_BRIDGE"] == "readonly-path-wrapper"
     assert verify_env["git_head"] == identity["git_sha"]
@@ -194,6 +195,9 @@ def test_build_and_static_verify_share_exact_snapshot_identity(
     assert verify_env["nested_fixture_config_isolated"] is True
     assert verify_env["blocked_snapshot_mutation_rc"] == 126
     assert verify_env["blocked_symbolic_ref_rc"] == 126
+    physical_cwd = Path(verify_env["physical_cwd"])
+    assert physical_cwd.is_relative_to(trusted_user_home())
+    assert not physical_cwd.is_relative_to(root)
     assert not (output / ".git").exists()
     assert not (output / ".git").is_symlink()
     common_worktree_after = subprocess.run(
@@ -206,6 +210,27 @@ def test_build_and_static_verify_share_exact_snapshot_identity(
     assert common_worktree_after.returncode == 1
     assert payload["build"]["build_info"] == build_info
     assert payload["build"]["build_info_sha256"]
+
+
+def test_static_verify_uses_external_mirror_when_output_is_under_runtime(
+    tmp_path: Path,
+) -> None:
+    root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    _create_test_venv(root)
+    output = root / "runtime" / "ops" / "candidate"
+    args = _freeze_args(root, output)
+    args.skip_archive = True
+    args.skip_build = True
+    args.skip_verify = False
+
+    payload = freeze_candidate(args)
+
+    assert payload["verification"]["static_receipt"]["payload"]["passed"] is True
+    assert payload["verification"]["static_receipt"]["payload"][
+        "verification_mirror"
+    ]["status"] == "passed"
+    assert (output / "scripts" / "verify.sh").is_file()
 
 
 def test_frontend_reproducibility_inventory_rejects_any_drift(

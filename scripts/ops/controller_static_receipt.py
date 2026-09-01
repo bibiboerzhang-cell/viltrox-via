@@ -194,11 +194,37 @@ def _validate_nested_seatbelt_tests(record: object, *, snapshot: Path) -> None:
         raise FreezeError("nested Seatbelt test proof is invalid")
 
 
+def _validate_verification_mirror(
+    record: object, *, candidate_digest: object, candidate_file_count: object,
+) -> None:
+    if (
+        not isinstance(record, dict)
+        or not isinstance(candidate_digest, str)
+        or not isinstance(candidate_file_count, int)
+    ):
+        raise FreezeError("Phase A verification mirror proof is missing")
+    if (
+        record.get("status") != "passed"
+        or record.get("copy_method") != "independent_physical_files"
+        or record.get("file_count") != candidate_file_count
+        or candidate_file_count <= 0
+        or any(
+            record.get(name) != candidate_digest
+            for name in (
+                "candidate_digest_before", "mirror_digest_before",
+                "candidate_digest_after", "mirror_digest_after",
+            )
+        )
+    ):
+        raise FreezeError("Phase A verification mirror proof is invalid")
+
+
 def controller_static_receipt_payload(
     *,
     output: Path,
     snapshot: Path,
     candidate_digest: str,
+    candidate_file_count: int,
     source_digest: str,
     source_file_count: int,
     source_status_sha256: str,
@@ -225,6 +251,12 @@ def controller_static_receipt_payload(
         assert_trusted_file_identity(toolchain.get(name), label=name)
     nested_seatbelt_tests = static_gate_run.get("nested_seatbelt_tests")
     _validate_nested_seatbelt_tests(nested_seatbelt_tests, snapshot=snapshot)
+    verification_mirror = static_gate_run.get("verification_mirror")
+    _validate_verification_mirror(
+        verification_mirror,
+        candidate_digest=candidate_digest,
+        candidate_file_count=candidate_file_count,
+    )
     return {
         "schema": "vkpi.controller-static-gate/v1",
         "nonce": secrets.token_hex(32),
@@ -255,6 +287,7 @@ def controller_static_receipt_payload(
             "sha256": _sha256_path(verify_log),
         },
         "nested_seatbelt_tests": nested_seatbelt_tests,
+        "verification_mirror": verification_mirror,
         "toolchain": toolchain,
     }
 
@@ -291,6 +324,7 @@ def validate_controller_static_receipt(
     identity = build.get("identity") if isinstance(build, dict) else None
     receipt_candidate = payload.get("candidate")
     receipt_source = payload.get("source")
+    candidate_files = candidate.get("files") if isinstance(candidate, dict) else None
     nonce = payload.get("nonce")
     if (
         payload.get("schema") != "vkpi.controller-static-gate/v1"
@@ -302,6 +336,8 @@ def validate_controller_static_receipt(
         or not isinstance(identity, dict)
         or not isinstance(receipt_candidate, dict)
         or not isinstance(receipt_source, dict)
+        or not isinstance(candidate_files, list)
+        or candidate.get("file_count") != len(candidate_files)
         or receipt_candidate.get("content_sha256") != candidate.get("content_sha256")
         or receipt_candidate.get("snapshot_path") != str(snapshot)
         or receipt_candidate.get("verify_script_sha256")
@@ -363,6 +399,11 @@ def validate_controller_static_receipt(
         assert_trusted_file_identity(toolchain.get(name), label=name)
     _validate_nested_seatbelt_tests(
         payload.get("nested_seatbelt_tests"), snapshot=snapshot
+    )
+    _validate_verification_mirror(
+        payload.get("verification_mirror"),
+        candidate_digest=receipt_candidate.get("content_sha256"),
+        candidate_file_count=candidate.get("file_count"),
     )
     log_record = payload.get("verify_log")
     if not isinstance(log_record, dict) or log_record.get("path") != verification.get("log_path"):

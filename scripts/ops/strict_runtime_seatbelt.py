@@ -7,7 +7,9 @@ import json
 import hashlib
 import os
 import platform
+import pwd
 import socket
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
@@ -16,6 +18,42 @@ from typing import Sequence
 
 class SeatbeltError(RuntimeError):
     pass
+
+
+def trusted_user_home() -> Path:
+    """Return a physical home whose parent cannot be renamed by this uid."""
+
+    raw = Path(pwd.getpwuid(os.geteuid()).pw_dir)
+    try:
+        resolved = raw.resolve(strict=True)
+        info = raw.lstat()
+        parent_info = resolved.parent.lstat()
+    except OSError as exc:
+        raise SeatbeltError("trusted user home is unavailable") from exc
+    if (
+        raw.is_symlink()
+        or raw.absolute() != resolved
+        or not resolved.is_dir()
+        or info.st_uid != os.geteuid()
+        or resolved.parent.is_symlink()
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or os.access(resolved.parent, os.W_OK)
+    ):
+        raise SeatbeltError("trusted user home has no stable filesystem anchor")
+    return resolved
+
+
+def _stable_write_anchor(path: Path) -> Path:
+    """Find the first ancestor whose parent is not writable by this uid."""
+
+    current = path.resolve(strict=True)
+    if not current.is_dir():
+        current = current.parent
+    while current.parent != current and os.access(current.parent, os.W_OK):
+        current = current.parent
+    if current.parent == current:
+        raise SeatbeltError("protected path has no stable filesystem anchor")
+    return current
 
 
 def _literal(value: Path | str) -> str:
@@ -164,6 +202,7 @@ def phase_a_static_profile(
     venv: Path,
     node_modules: Path,
     tool_paths: Sequence[Path],
+    protected_write_paths: Sequence[Path] = (),
     user_home: Path | None = None,
 ) -> str:
     """Return a narrow deny-list profile for the complete Phase A test gate.
@@ -181,16 +220,23 @@ def phase_a_static_profile(
     if not clean_source.is_dir() or not physical_venv.is_dir() or not physical_modules.is_dir():
         raise SeatbeltError("Phase A Seatbelt roots must be physical directories")
 
+    home = user_home.resolve(strict=True) if user_home else trusted_user_home()
     source_roots = set(phase_a_protected_source_roots(
         source=source, venv=venv, node_modules=node_modules,
     ))
 
-    write_subpaths = {
+    protected_nodes = {
+        home,
         *source_roots,
         Path(os.path.abspath(venv)),
         physical_venv,
         Path(os.path.abspath(node_modules)),
         physical_modules,
+        *(path.resolve(strict=True) for path in protected_write_paths),
+    }
+    write_subpaths = {
+        *protected_nodes,
+        *(_stable_write_anchor(path) for path in (*protected_nodes, *tool_paths)),
     }
     write_literals = {
         alias
@@ -228,7 +274,6 @@ def phase_a_static_profile(
                     read_literals.add(Path(os.path.abspath(path)))
                     read_literals.add(path.resolve(strict=False))
 
-    home = (user_home or Path.home()).resolve(strict=False)
     read_subpaths.update(
         {
             home / "Library/Keychains",

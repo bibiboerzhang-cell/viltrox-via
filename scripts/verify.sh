@@ -218,7 +218,7 @@ backend_pytest() {
   # 只给 backend 会 ModuleNotFoundError;与手工口诀 PYTHONPATH=.:scripts:backend 对齐。
   local pytest_args=(-q)
   if [ -n "${VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT:-}" ]; then
-    if [ "$VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT" != "59" ]; then
+    if [ "$VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT" != "60" ]; then
       echo "[verify] Phase A nested Seatbelt precheck count mismatch." >&2
       return 1
     fi
@@ -228,7 +228,7 @@ backend_pytest() {
       --ignore="$ROOT/tests/test_freeze_worktree_candidate.py"
       --ignore="$ROOT/tests/test_phase_a_static_containment.py"
     )
-    echo "[verify] Phase A prechecked fixed nested Seatbelt suite: 59 tests."
+    echo "[verify] Phase A prechecked fixed nested Seatbelt suite: 60 tests."
   fi
   PYTHONPATH="$ROOT:$ROOT/scripts:$ROOT/backend" "$PYTHON_BIN" -m pytest "${pytest_args[@]}"
 }

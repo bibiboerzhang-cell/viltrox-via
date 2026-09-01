@@ -99,6 +99,7 @@ evidence = {
     "VKPI_VERIFY_FRONTEND_OUT_DIR": os.environ.get(
         "VKPI_VERIFY_FRONTEND_OUT_DIR"
     ),
+    "physical_cwd": str(Path.cwd().resolve()),
     "blocked_snapshot_mutation_rc": blocked_mutation.returncode,
     "blocked_symbolic_ref_rc": blocked_symbolic_ref.returncode,
     "git_head": subprocess.check_output(
@@ -335,6 +336,7 @@ def _attach_test_static_receipt(
         output=output,
         snapshot=output,
         candidate_digest=str(candidate["content_sha256"]),
+        candidate_file_count=int(candidate["file_count"]),
         source_digest=str(source["content_sha256"]),
         source_file_count=int(source["file_count"]),
         source_status_sha256=str(source["status_sha256"]),
@@ -343,6 +345,15 @@ def _attach_test_static_receipt(
         verify_log=verify_log,
         static_gate_run={
             "canonical_receipt": canonical,
+            "verification_mirror": {
+                "status": "passed",
+                "copy_method": "independent_physical_files",
+                "file_count": len(candidate["files"]),
+                "candidate_digest_before": candidate["content_sha256"],
+                "mirror_digest_before": candidate["content_sha256"],
+                "candidate_digest_after": candidate["content_sha256"],
+                "mirror_digest_after": candidate["content_sha256"],
+            },
             "nested_seatbelt_tests": {
                 "status": "not_present_fixture",
                 "test_files": [
@@ -354,10 +365,10 @@ def _attach_test_static_receipt(
                 "file_counts": {
                     "tests/test_strict_runtime_hardening_redteam.py": 32,
                     "tests/test_deploy_runtime_admission.py": 5,
-                    "tests/test_freeze_worktree_candidate.py": 21,
+                    "tests/test_freeze_worktree_candidate.py": 22,
                     "tests/test_phase_a_static_containment.py": 1,
                 },
-                "expected_count": 59,
+                "expected_count": 60,
             },
             "toolchain": {
                 "git": _trusted_file_identity(Path(trusted_git_executable())),

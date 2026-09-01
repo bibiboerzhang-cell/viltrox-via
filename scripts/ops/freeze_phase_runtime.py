@@ -19,7 +19,7 @@ from scripts.ops.freeze_worktree_contract import FreezeError, path_identity
 PHASE_A_NESTED_SEATBELT_TESTS = (
     ("tests/test_strict_runtime_hardening_redteam.py", 32),
     ("tests/test_deploy_runtime_admission.py", 5),
-    ("tests/test_freeze_worktree_candidate.py", 21),
+    ("tests/test_freeze_worktree_candidate.py", 22),
     ("tests/test_phase_a_static_containment.py", 1),
 )
 PHASE_A_NESTED_SEATBELT_TEST_FILES = tuple(
@@ -234,12 +234,19 @@ def remove_owned_phase_sandbox(root: Path) -> None:
 
     physical = root.resolve(strict=True)
     info = root.lstat()
-    private_tmp = Path("/private/tmp").resolve(strict=True)
+    allowed_parents = {
+        Path("/private/tmp").resolve(strict=True),
+        Path("/private/var/tmp").resolve(strict=True),
+    }
+    parent_info = physical.parent.lstat()
     if (
         root.is_symlink()
         or not stat.S_ISDIR(info.st_mode)
         or info.st_uid != os.geteuid()
-        or physical.parent != private_tmp
+        or physical.parent not in allowed_parents
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or parent_info.st_uid != 0
+        or not parent_info.st_mode & stat.S_ISVTX
         or not physical.name.startswith("vkpi-phase-a-seatbelt.")
     ):
         raise FreezeError("refusing unsafe phase sandbox cleanup")
