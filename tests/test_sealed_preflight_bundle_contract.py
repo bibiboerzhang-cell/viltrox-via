@@ -53,7 +53,10 @@ def test_sealed_preflight_bundle_starts_in_isolated_python(tmp_path: Path) -> No
         target.write_bytes(source.read_bytes())
         target.chmod(0o400 if relative in dependencies else 0o500)
 
-    cli = bundle / "scripts/ops/legacy_to_atomic_preflight.py"
+    clis = (
+        bundle / "scripts/ops/legacy_to_atomic_preflight.py",
+        bundle / "scripts/verify_runtime_health.py",
+    )
     hostile_venv = tmp_path / "hostile-venv"
     subprocess.run(
         [sys.executable, "-m", "venv", "--without-pip", str(hostile_venv)],
@@ -65,18 +68,29 @@ def test_sealed_preflight_bundle_starts_in_isolated_python(tmp_path: Path) -> No
         f"import pathlib; pathlib.Path({str(startup_marker)!r}).write_text('loaded')\n",
         encoding="utf-8",
     )
-    completed = subprocess.run(
-        [str(hostile_venv / "bin/python"), "-I", "-S", "-B", str(cli), "--help"],
-        cwd=tmp_path,
-        env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"},
-        capture_output=True,
-        text=True,
-        timeout=10,
-        check=False,
-    )
+    for cli in clis:
+        completed = subprocess.run(
+            [
+                str(hostile_venv / "bin/python"),
+                "-I",
+                "-S",
+                "-B",
+                str(cli),
+                "--help",
+            ],
+            cwd=tmp_path,
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONDONTWRITEBYTECODE": "1",
+            },
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
 
-    assert completed.returncode == 0, completed.stderr
-    assert "usage:" in completed.stdout.lower()
+        assert completed.returncode == 0, f"{cli}: {completed.stderr}"
+        assert "usage:" in completed.stdout.lower()
     assert not startup_marker.exists()
     assert not list(bundle.rglob("__pycache__"))
     assert '"${DEPLOY_PHYSICAL_PYTHON}" -I -S -B' in deploy

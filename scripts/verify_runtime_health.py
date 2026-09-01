@@ -6,7 +6,6 @@ deterministic and testable while ``verify.sh`` remains responsible for the
 loopback-only HTTP request.
 """
 from __future__ import annotations
-from stdout_utils import out as stdout_out
 
 import argparse
 import json
@@ -20,6 +19,12 @@ from typing import Any, Mapping
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT / "scripts") not in sys.path:
+    sys.path.insert(0, str(ROOT / "scripts"))
+
+from stdout_utils import out as stdout_out  # noqa: E402
+
+
 MAX_INPUT_BYTES = 1024 * 1024
 DEFAULT_MAX_WORKER_AGE_SECONDS = 180
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
