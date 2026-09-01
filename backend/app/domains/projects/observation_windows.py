@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any
 
@@ -28,7 +29,6 @@ from app.domains.projects import observation_window_open, observation_window_sca
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
-
 
 # 窗口「活动」态(去重以此为准):这三态视为还在等内容,不应重复开窗。
 _WINDOW_ACTIVE_STATUSES = ("pending", "scanning", "matched")

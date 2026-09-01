@@ -34,6 +34,36 @@ def test_public_facade_signatures_do_not_expose_injected_dependencies() -> None:
         assert list(signature.parameters) == params
 
 
+def test_list_windows_decodes_metadata_json_from_real_row(monkeypatch) -> None:
+    from app.domains.projects import observation_windows
+
+    class Conn:
+        def execute(self, sql: str, params: tuple[Any, ...] = ()) -> _Cursor:
+            assert "FROM vkpi_project_content_observation_windows w" in sql
+            assert params == ()
+            return _Cursor([{
+                "id": 11,
+                "project_id": 42,
+                "metadata_json": '{"source":"shipment"}',
+                "starts_at": datetime(2026, 8, 1),
+                "ends_at": datetime(2026, 9, 1),
+            }])
+
+    monkeypatch.setattr(observation_windows, "get_conn", lambda: Conn())
+    monkeypatch.setattr(observation_windows.scope, "project_filter", lambda _alias, _staff: ("", ()))
+    monkeypatch.setattr(
+        observation_windows.scope,
+        "scope_context",
+        lambda _staff: {"scope_mode": "owner"},
+    )
+
+    result = observation_windows.list_windows(status="all")
+
+    assert result["count"] == 1
+    assert result["items"][0]["metadata_json"] == {"source": "shipment"}
+    assert result["items"][0]["starts_at"] == "2026-08-01 00:00:00"
+
+
 def test_split_modules_stay_below_line_guard_limit() -> None:
     repo = Path(__file__).resolve().parents[1]
     paths = (
