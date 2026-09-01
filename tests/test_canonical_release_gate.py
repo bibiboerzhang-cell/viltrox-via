@@ -33,10 +33,11 @@ def test_github_ci_uses_full_history_secret_scan_and_ci_only_dependencies() -> N
     assert workflow.count("pip install -r requirements-ci.txt") == 2
     assert "actions/setup-python@v6" in workflow
     assert "actions/setup-node@v5" in workflow
-    assert 'PYTHON_BIN: ${{ runner.temp }}/vkpi-ci-python/bin/python' in workflow
+    assert 'PYTHON_BIN: ${{ runner.temp }}' not in workflow
     assert 'python -m venv --copies "$RUNNER_TEMP/vkpi-ci-python"' in workflow
     assert 'chmod go-w "$ci_python_real"' in workflow
-    assert '"$PYTHON_BIN" -m pip install -r requirements-ci.txt' in workflow
+    assert '"$ci_python" -m pip install -r requirements-ci.txt' in workflow
+    assert 'printf \'PYTHON_BIN=%s\\n\' "$ci_python" >> "$GITHUB_ENV"' in workflow
     assert '"$PYTHON_BIN" - <<\'PY\'' in workflow
 
     for pin in (

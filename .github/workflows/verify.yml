@@ -27,7 +27,6 @@ jobs:
       # setup-python's hosted-toolcache interpreter can be group writable on
       # GitHub runners.  The canonical gate intentionally rejects that trust
       # boundary, so run it from a private copied venv outside the checkout.
-      PYTHON_BIN: ${{ runner.temp }}/vkpi-ci-python/bin/python
       DB_RUNTIME_BACKEND: postgres
       DB_USE_PGBOUNCER: "0"
       DATABASE_URL: postgresql://postgres@localhost:5432/viltrox_ci
@@ -55,10 +54,12 @@ jobs:
         run: |
           umask 077
           python -m venv --copies "$RUNNER_TEMP/vkpi-ci-python"
-          ci_python_real="$(realpath "$PYTHON_BIN")"
+          ci_python="$RUNNER_TEMP/vkpi-ci-python/bin/python"
+          ci_python_real="$(realpath "$ci_python")"
           chmod go-w "$ci_python_real"
-          "$PYTHON_BIN" -m pip install --upgrade pip
-          "$PYTHON_BIN" -m pip install -r requirements-ci.txt
+          "$ci_python" -m pip install --upgrade pip
+          "$ci_python" -m pip install -r requirements-ci.txt
+          printf 'PYTHON_BIN=%s\n' "$ci_python" >> "$GITHUB_ENV"
       - name: Install frontend dependencies
         run: npm --prefix frontend ci
       - name: Initialize database
