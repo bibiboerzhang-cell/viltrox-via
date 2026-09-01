@@ -30,7 +30,9 @@ def test_isolated_candidate_web_scrubs_providers_and_uses_private_cwd(
     candidate = tmp_path / "candidate"
     report = tmp_path / "captured.json"
     runtime_parent = Path(
-        tempfile.mkdtemp(prefix="vkpi-candidate-browser-runtime.", dir="/tmp")
+        tempfile.mkdtemp(
+            prefix="vkpi-candidate-browser-runtime.", dir=Path("/tmp").resolve()
+        )
     )
     runtime = runtime_parent / "runtime"
     try:
@@ -178,7 +180,9 @@ def test_isolated_candidate_web_rejects_query_identity_overrides(
     project = tmp_path / "source"
     candidate = tmp_path / "candidate"
     runtime_parent = Path(
-        tempfile.mkdtemp(prefix="vkpi-candidate-browser-runtime.", dir="/tmp")
+        tempfile.mkdtemp(
+            prefix="vkpi-candidate-browser-runtime.", dir=Path("/tmp").resolve()
+        )
     )
     runtime = runtime_parent / "runtime"
     try:
@@ -249,7 +253,9 @@ def test_isolated_candidate_web_rejects_ambient_connection_controls(
     project = tmp_path / "source"
     candidate = tmp_path / "candidate"
     runtime_parent = Path(
-        tempfile.mkdtemp(prefix="vkpi-candidate-browser-runtime.", dir="/tmp")
+        tempfile.mkdtemp(
+            prefix="vkpi-candidate-browser-runtime.", dir=Path("/tmp").resolve()
+        )
     )
     runtime = runtime_parent / "runtime"
     try:
@@ -310,7 +316,9 @@ def test_isolated_candidate_web_rejects_candidate_side_environment_overrides(
     project = tmp_path / "source"
     candidate = tmp_path / "candidate"
     runtime_parent = Path(
-        tempfile.mkdtemp(prefix="vkpi-candidate-browser-runtime.", dir="/tmp")
+        tempfile.mkdtemp(
+            prefix="vkpi-candidate-browser-runtime.", dir=Path("/tmp").resolve()
+        )
     )
     runtime = runtime_parent / "runtime"
     try:

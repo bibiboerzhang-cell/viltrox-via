@@ -16,9 +16,16 @@ for required_name in \
   fi
 done
 
+controller_tmp_root="$(cd /tmp && pwd -P)" || exit 64
+case "${CANDIDATE_RUNTIME}" in */runtime) ;; *) exit 64 ;; esac
+candidate_runtime_parent="${CANDIDATE_RUNTIME%/runtime}"
+candidate_runtime_parent="$(cd "${candidate_runtime_parent}" && pwd -P)" || exit 64
 case "${PROJECT_ROOT}" in /*) ;; *) exit 64 ;; esac
 case "${CANDIDATE_ROOT}" in /*) ;; *) exit 64 ;; esac
-case "${CANDIDATE_RUNTIME}" in /tmp/vkpi-candidate-browser-runtime.*/runtime) ;; *) exit 64 ;; esac
+case "${candidate_runtime_parent}" in
+  "${controller_tmp_root%/}"/vkpi-candidate-browser-runtime.*) ;;
+  *) exit 64 ;;
+esac
 case "${CANDIDATE_LOCAL_ENV_FILE}" in /*) ;; *) exit 64 ;; esac
 if ! [[ "${CANDIDATE_PORT}" =~ ^[1-9][0-9]*$ ]] \
   || [ "${CANDIDATE_PORT}" -lt 1024 ] \
@@ -28,6 +35,7 @@ if ! [[ "${CANDIDATE_PORT}" =~ ^[1-9][0-9]*$ ]] \
   || [ -L "${PROJECT_ROOT}" ] \
   || [ ! -d "${CANDIDATE_ROOT}" ] \
   || [ -L "${CANDIDATE_ROOT}" ] \
+  || [ -L "${CANDIDATE_RUNTIME}" ] \
   || [ ! -e "${CANDIDATE_LOCAL_ENV_FILE}" ] \
   || [ ! -x "${PROJECT_ROOT}/.venv/bin/python" ] \
   || [ ! -f "${CANDIDATE_ROOT}/scripts/runtime_env.sh" ] \
@@ -41,6 +49,10 @@ fi
 umask 077
 mkdir -p "${HOME}" "${XDG_CACHE_HOME}" "${TMPDIR}" "${CANDIDATE_RUNTIME}"
 chmod 700 "${HOME}" "${XDG_CACHE_HOME}" "${TMPDIR}" "${CANDIDATE_RUNTIME}"
+if [ "$(cd "${CANDIDATE_RUNTIME}" && pwd -P)" != "${candidate_runtime_parent}/runtime" ]; then
+  echo "isolated candidate runtime physical path is unsafe" >&2
+  exit 64
+fi
 PRIVATE_LOCAL_ENV_FILE="${CANDIDATE_RUNTIME}/local.env"
 PRIVATE_LOCAL_IDENTITY_FILE="${CANDIDATE_RUNTIME}/local-identity.env"
 cleanup_private_local_env() {
