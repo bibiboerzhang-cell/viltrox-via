@@ -340,7 +340,7 @@ def test_sealed_verifier_contains_the_canonical_gate_import_closure(
         )
         assert f'"${{DEPLOY_VERIFIER_BUNDLE_DIR}}/{relative}"' in deploy
         assert f"    {relative} \\" in deploy
-        assert deploy.count(f'Path("{relative}")') == 2
+        assert deploy.count(f'Path("{relative}")') == 1
 
     completed = subprocess.run(
         [

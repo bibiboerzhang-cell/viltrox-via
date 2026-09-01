@@ -202,18 +202,9 @@ verify_deploy_candidate() {
     --expected-branch "${LOCAL_GIT_BRANCH}" >/dev/null
 }
 
-verify_deploy_verifier_bundle() {
-  local observed
-  if [ "${DEPLOY_VERIFIER_BUNDLE_READY}" != "1" ] \
-    || [ -z "${DEPLOY_VERIFIER_BUNDLE_DIR}" ] \
-    || [ -z "${DEPLOY_VERIFIER_BUNDLE_SHA256}" ] \
-    || [ -z "${TRUSTED_CANDIDATE_VERIFIER}" ] \
-    || [ -z "${TRUSTED_RUNTIME_ADMISSION}" ]; then
-    echo "Trusted deploy candidate verifier bundle is not ready." >&2
-    return 1
-  fi
-  observed="$(PYTHONDONTWRITEBYTECODE=1 "${LOCAL_SAFE_PYTHON}" -I -B - \
-    "${DEPLOY_VERIFIER_BUNDLE_DIR}" <<'PY'
+compute_deploy_verifier_bundle_digest() {
+  local root="$1"
+  PYTHONDONTWRITEBYTECODE=1 "${LOCAL_SAFE_PYTHON}" -I -B - "${root}" <<'PY'
 import hashlib
 import os
 import stat
@@ -243,6 +234,31 @@ paths = {
     Path("scripts/verify_redis_worker_health.py"): 0o500,
     Path("scripts/verify_runtime_health.py"): 0o500,
 }
+expected_directories = {Path("scripts"), Path("scripts/ops")}
+observed_directories = set()
+observed_files = set()
+pending = [(root, Path())]
+
+while pending:
+    directory, relative_directory = pending.pop()
+    with os.scandir(directory) as entries:
+        for entry in entries:
+            relative = relative_directory / entry.name
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                observed_directories.add(relative)
+                pending.append((Path(entry.path), relative))
+            elif stat.S_ISREG(info.st_mode):
+                if info.st_nlink != 1:
+                    raise SystemExit("trusted verifier file link count mismatch")
+                observed_files.add(relative)
+            else:
+                raise SystemExit("trusted verifier bundle contains an unsupported node")
+
+if observed_directories != expected_directories:
+    raise SystemExit("trusted verifier directory inventory mismatch")
+if observed_files != set(paths):
+    raise SystemExit("trusted verifier file inventory mismatch")
 
 for directory in (root, root / "scripts", root / "scripts" / "ops"):
     info = directory.lstat()
@@ -262,7 +278,20 @@ for relative, expected_mode in sorted(paths.items(), key=lambda item: item[0].as
     digest.update(path.read_bytes())
 print(digest.hexdigest())
 PY
-  )" || return 1
+}
+
+verify_deploy_verifier_bundle() {
+  local observed
+  if [ "${DEPLOY_VERIFIER_BUNDLE_READY}" != "1" ] \
+    || [ -z "${DEPLOY_VERIFIER_BUNDLE_DIR}" ] \
+    || [ -z "${DEPLOY_VERIFIER_BUNDLE_SHA256}" ] \
+    || [ -z "${TRUSTED_CANDIDATE_VERIFIER}" ] \
+    || [ -z "${TRUSTED_RUNTIME_ADMISSION}" ]; then
+    echo "Trusted deploy candidate verifier bundle is not ready." >&2
+    return 1
+  fi
+  observed="$(compute_deploy_verifier_bundle_digest "${DEPLOY_VERIFIER_BUNDLE_DIR}")" \
+    || return 1
   if [ "${observed}" != "${DEPLOY_VERIFIER_BUNDLE_SHA256}" ]; then
     echo "Trusted deploy candidate verifier bundle digest changed." >&2
     return 1
@@ -390,40 +419,8 @@ seal_deploy_verifier_bundle() {
   done
   TRUSTED_CANDIDATE_VERIFIER="${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_candidate.py"
   TRUSTED_RUNTIME_ADMISSION="${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/deploy_runtime_admission.py"
-  DEPLOY_VERIFIER_BUNDLE_SHA256="$(PYTHONDONTWRITEBYTECODE=1 "${LOCAL_SAFE_PYTHON}" -I -B - \
-    "${DEPLOY_VERIFIER_BUNDLE_DIR}" <<'PY'
-import hashlib
-import sys
-from pathlib import Path
-
-root = Path(sys.argv[1])
-digest = hashlib.sha256()
-for relative in (
-    Path("scripts/ops/candidate_physical_tree.py"),
-    Path("scripts/ops/controller_static_receipt.py"),
-    Path("scripts/ops/controlled_candidate_process.py"),
-    Path("scripts/ops/deploy_gate_runtime.py"),
-    Path("scripts/ops/deploy_runtime_admission.py"),
-    Path("scripts/ops/freeze_git_bridge.py"),
-    Path("scripts/ops/freeze_deploy_gate.py"),
-    Path("scripts/ops/freeze_phase_runtime.py"),
-    Path("scripts/ops/freeze_worktree_candidate.py"),
-    Path("scripts/ops/freeze_worktree_contract.py"),
-    Path("scripts/ops/legacy_to_atomic_preflight.py"),
-    Path("scripts/ops/legacy_to_atomic_preflight_report.py"),
-    Path("scripts/ops/legacy_to_atomic_preflight_transport.py"),
-    Path("scripts/ops/strict_runtime_seatbelt.py"),
-    Path("scripts/ops/trusted_git.py"),
-    Path("scripts/ops/trusted_npm_audit.py"),
-    Path("scripts/ops/verify_legacy_bootstrap_anchor.py"),
-    Path("scripts/stdout_utils.py"),
-    Path("scripts/verify_redis_worker_health.py"),
-    Path("scripts/verify_runtime_health.py"),
-):
-    digest.update(relative.as_posix().encode("utf-8") + b"\0")
-    digest.update((root / relative).read_bytes())
-print(digest.hexdigest())
-PY
+  DEPLOY_VERIFIER_BUNDLE_SHA256="$(
+    compute_deploy_verifier_bundle_digest "${DEPLOY_VERIFIER_BUNDLE_DIR}"
   )" || return 1
   DEPLOY_VERIFIER_BUNDLE_READY=1
   verify_deploy_verifier_bundle

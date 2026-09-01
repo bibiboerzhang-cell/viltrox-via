@@ -288,7 +288,7 @@ def test_deploy_requires_and_reverifies_one_head_bound_frozen_candidate() -> Non
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
 
     assert "VKPI_DEPLOY_CANDIDATE_DIR and VKPI_DEPLOY_CANDIDATE_MANIFEST are mandatory" in deploy
-    assert deploy.count("scripts/ops/freeze_worktree_contract.py") == 5
+    assert deploy.count("scripts/ops/freeze_worktree_contract.py") == 4
     assert 'Path("scripts/ops/freeze_worktree_contract.py"): 0o400' in deploy
     verify_command = deploy.split("verify_deploy_candidate()", 1)[1].split("}\n", 1)[0]
     for required in (
