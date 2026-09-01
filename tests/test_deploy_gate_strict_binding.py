@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -21,13 +20,11 @@ from scripts.ops.deploy_gate_runtime import (
     validate_health_env_file,
     validate_strict_gate_binding,
 )
-from scripts.ops.deploy_runtime_admission import _profile_payloads, _validate_runtime_root
+from scripts.ops.deploy_runtime_admission import _validate_runtime_root
 from scripts.ops.freeze_deploy_gate import (
     _bind_admission_runtime_environment,
-    _run_controlled_candidate_with_private_output,
 )
 from scripts.ops.freeze_worktree_candidate import parser
-from scripts.ops.trusted_npm_audit import _trusted_node
 
 
 def _runtime_root(tmp_path: Path, name: str = "runtime") -> Path:
@@ -76,77 +73,6 @@ def test_admitted_runtime_env_replaces_source_env_only_with_admission() -> None:
         environment, {"runtime_env_file": admitted}
     )
     assert environment["LOCAL_ENV_FILE"] == admitted
-
-
-@pytest.mark.skipif(sys.platform != "darwin", reason="requires exact Seatbelt profile")
-def test_exact_verifier_profile_runs_node_with_private_controller_output(
-    tmp_path: Path, capfd: pytest.CaptureFixture[str],
-) -> None:
-    # Phase A runs this test from the frozen candidate while its .venv and
-    # frontend/node_modules entries are intentionally borrowed symlinks.  This
-    # Node-only check needs no real repository dependencies, so bind the exact
-    # profile to a physical fixture tree instead of that candidate CWD.
-    dependency_source = tmp_path / "physical-source"
-    (dependency_source / ".venv").mkdir(parents=True)
-    (dependency_source / "frontend/node_modules").mkdir(parents=True)
-    (dependency_source / "frontend/package.json").write_text(
-        "{}\n", encoding="utf-8"
-    )
-    candidate = tmp_path / "candidate"
-    candidate.mkdir()
-    health_env = tmp_path / "health.env"
-    health_env.write_text("OPS_HEALTH_TOKEN=fixture\n", encoding="utf-8")
-    health_env.chmod(0o600)
-    runtime = Path(
-        tempfile.mkdtemp(
-            prefix="vkpi-candidate-browser-runtime.", dir="/private/tmp"
-        )
-    )
-    runtime.chmod(0o700)
-    try:
-        for name in ("home", "tmp", "cache", "controller", "receipts"):
-            child = runtime / name
-            child.mkdir(mode=0o700)
-            child.chmod(0o700)
-        _web_profile, verifier_profile, _ports = _profile_payloads(
-            candidate=candidate,
-            source=dependency_source,
-            runtime=runtime,
-            health_env=health_env,
-            web_port=18103,
-            database_port=15432,
-            redis_port=16379,
-        )
-        assert f'(allow file-read* (subpath "{tmp_path}"))' not in verifier_profile
-
-        completed = _run_controlled_candidate_with_private_output(
-            [
-                "/usr/bin/sandbox-exec",
-                "-p",
-                verifier_profile,
-                str(_trusted_node()),
-                "--version",
-            ],
-            cwd=candidate,
-            env={"PATH": os.defpath},
-            runtime_root=runtime,
-            run_nonce="a" * 64,
-            timeout=30,
-        )
-        captured = capfd.readouterr()
-        output = runtime / "controller" / f"canonical-gate-output.{'a' * 64}.log"
-        info = output.lstat()
-
-        assert completed.returncode == 0
-        assert captured.out.startswith("v")
-        assert output.read_text(encoding="utf-8") == captured.out
-        assert stat.S_ISREG(info.st_mode)
-        assert not output.is_symlink()
-        assert info.st_uid == os.geteuid()
-        assert info.st_nlink == 1
-        assert stat.S_IMODE(info.st_mode) == 0o600
-    finally:
-        shutil.rmtree(runtime)
 
 
 def test_strict_gate_binding_rejects_default_or_external_runtime_urls(tmp_path: Path) -> None:

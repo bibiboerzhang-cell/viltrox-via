@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import socket
+import stat
 import subprocess
 import sys
 from argparse import Namespace
@@ -18,10 +20,17 @@ from scripts.ops.deploy_runtime_admission import (
     prepare_admission,
     validate_runtime_binding_values,
 )
+from scripts.ops.freeze_deploy_gate import (
+    _run_controlled_candidate_with_private_output,
+)
 from scripts.ops.freeze_worktree_candidate import freeze_candidate
 from scripts.ops.freeze_worktree_candidate import run_deploy_gate
 from scripts.ops.freeze_worktree_contract import FreezeError
-from scripts.ops.trusted_npm_audit import _trusted_npm, _trusted_npm_package_root
+from scripts.ops.trusted_npm_audit import (
+    _trusted_node,
+    _trusted_npm,
+    _trusted_npm_package_root,
+)
 from tests.freeze_worktree_candidate_fixtures import (
     _attach_test_static_receipt,
     _built_deploy_gate_fixture,
@@ -269,6 +278,7 @@ def test_candidate_profiles_allow_bash_heredoc_without_broad_tmp_write(
 @pytest.mark.skipif(sys.platform != "darwin", reason="requires macOS Seatbelt")
 def test_verifier_profile_runs_controller_bound_safe_python_and_npm(
     tmp_path: Path,
+    capfd: pytest.CaptureFixture[str],
 ) -> None:
     reviewed_source = Path.cwd().resolve(strict=True)
     dependency_source = Path(sys.prefix).resolve(strict=True).parent
@@ -322,6 +332,33 @@ def test_verifier_profile_runs_controller_bound_safe_python_and_npm(
             "VKPI_SAFE_PYTHON_REAL": str(dependency_source / ".venv/bin/python"),
             "XDG_CACHE_HOME": str(runtime / "cache"),
         }
+        node_run = _run_controlled_candidate_with_private_output(
+            [
+                "/usr/bin/sandbox-exec",
+                "-p",
+                verifier_profile,
+                str(_trusted_node()),
+                "--version",
+            ],
+            cwd=candidate,
+            env=environment,
+            runtime_root=runtime,
+            run_nonce="a" * 64,
+            timeout=30,
+        )
+        captured = capfd.readouterr()
+        output = runtime / "controller" / f"canonical-gate-output.{'a' * 64}.log"
+        output_info = output.lstat()
+        assert node_run.returncode == 0
+        assert captured.out.startswith("v")
+        assert output.read_text(encoding="utf-8") == captured.out
+        assert stat.S_ISREG(output_info.st_mode)
+        assert not output.is_symlink()
+        assert output_info.st_uid == os.geteuid()
+        assert output_info.st_nlink == 1
+        assert stat.S_IMODE(output_info.st_mode) == 0o600
+        assert f'(allow file-read* (subpath "{tmp_path}"))' not in verifier_profile
+
         safe_run = subprocess.run(
             [
                 "/usr/bin/sandbox-exec", "-p", verifier_profile,
