@@ -1847,7 +1847,7 @@ PY
     APP_BUILD_TIME="${candidate_build_time}" \
     CANDIDATE_LAUNCHER="${DEPLOY_CANDIDATE_DIR}/scripts/ops/run_isolated_candidate_web.sh" \
     /usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_WEB_PROFILE}" \
-    "${LOCAL_SAFE_PYTHON}" -I -B - \
+    "${DEPLOY_PHYSICAL_PYTHON}" -I -S -B - \
       >>"${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-web.log" 2>&1 <<'PY' &
 import os
 

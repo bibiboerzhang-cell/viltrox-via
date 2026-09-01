@@ -304,6 +304,7 @@ def test_deploy_requires_embedded_production_browser_gate_before_remote_state() 
         'CANDIDATE_LOCAL_ENV_FILE="${LOCAL_CANDIDATE_RUNTIME_ENV}"',
         '/usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_WEB_PROFILE}"',
         'CANDIDATE_LAUNCHER="${DEPLOY_CANDIDATE_DIR}/scripts/ops/run_isolated_candidate_web.sh"',
+        '"${DEPLOY_PHYSICAL_PYTHON}" -I -S -B -',
         "os.setsid()",
         "LOCAL_CANDIDATE_WEB_PGID",
         'kill -TERM -- "-${pgid}"',
