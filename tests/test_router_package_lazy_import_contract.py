@@ -99,6 +99,7 @@ def _isolated_env(tmp_path: Path) -> dict[str, str]:
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONHASHSEED": "0",
         "VKPI_SKIP_DOTENV": "1",
+        "VKPI_RUNTIME_DATA_DIR": os.fspath(tmp_path / "runtime-data"),
         "ENVIRONMENT": "test",
         "V2_PRODUCTION_MODE": "0",
         "APP_ROLE": "all",

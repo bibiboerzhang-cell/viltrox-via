@@ -115,6 +115,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${PROJECT_ROOT}"
 
+# Every local controller-side Python command must enter through the no-site
+# router.  ``-I`` alone is insufficient for a venv launcher because it still
+# imports executable ``.pth`` files before the reviewed command starts.  Keep
+# the physical interpreter identity explicit for the wrapper and for the one
+# candidate-runtime argument whose downstream controller validates it.
+LOCAL_SAFE_PYTHON="${PROJECT_ROOT}/scripts/ops/safe_python.sh"
+DEPLOY_PHYSICAL_PYTHON="${VKPI_SAFE_PYTHON_REAL:-${PROJECT_ROOT}/.venv/bin/python}"
+export VKPI_SAFE_PYTHON_REAL="${DEPLOY_PHYSICAL_PYTHON}"
+
+# Feed reviewed inline controller programs to the router on stdin.  When a
+# caller pipes JSON, preserve that data on fd 3 so it cannot be confused with
+# the program stream; inline programs must read it with ``os.fdopen(3)``.
+run_local_python_program() {
+  local program="$1"
+  shift
+  "${LOCAL_SAFE_PYTHON}" - "$@" 3<&0 <<<"${program}"
+}
+
 assert_clean_worktree() {
   local dirty_status
   dirty_status="$(git status --porcelain=v1 --untracked-files=all)"
@@ -165,19 +183,23 @@ RESCUE_ROLLBACK_CANDIDATE_BRANCH=""
 verify_deploy_candidate() {
   local verifier="${PROJECT_ROOT}/scripts/ops/freeze_worktree_candidate.py"
   if [ "${DEPLOY_VERIFIER_BUNDLE_READY}" = "1" ]; then
-    verify_deploy_verifier_bundle
     verifier="${TRUSTED_CANDIDATE_VERIFIER}"
+    run_sealed_controller_python \
+      "${verifier}" \
+      verify-deploy-source \
+      --manifest "${DEPLOY_CANDIDATE_MANIFEST}" \
+      --snapshot "${DEPLOY_CANDIDATE_DIR}" \
+      --expected-head "${LOCAL_GIT_SHA}" \
+      --expected-branch "${LOCAL_GIT_BRANCH}" >/dev/null
+    return
   fi
-  PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+  PYTHONDONTWRITEBYTECODE=1 "${LOCAL_SAFE_PYTHON}" -I -B \
     "${verifier}" \
     verify-deploy-source \
     --manifest "${DEPLOY_CANDIDATE_MANIFEST}" \
     --snapshot "${DEPLOY_CANDIDATE_DIR}" \
     --expected-head "${LOCAL_GIT_SHA}" \
     --expected-branch "${LOCAL_GIT_BRANCH}" >/dev/null
-  if [ "${DEPLOY_VERIFIER_BUNDLE_READY}" = "1" ]; then
-    verify_deploy_verifier_bundle
-  fi
 }
 
 verify_deploy_verifier_bundle() {
@@ -190,7 +212,7 @@ verify_deploy_verifier_bundle() {
     echo "Trusted deploy candidate verifier bundle is not ready." >&2
     return 1
   fi
-  observed="$(PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B - \
+  observed="$(PYTHONDONTWRITEBYTECODE=1 "${LOCAL_SAFE_PYTHON}" -I -B - \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}" <<'PY'
 import hashlib
 import os
@@ -221,6 +243,7 @@ paths = {
     Path("scripts/verify_redis_worker_health.py"): 0o500,
     Path("scripts/verify_runtime_health.py"): 0o500,
 }
+
 for directory in (root, root / "scripts", root / "scripts" / "ops"):
     info = directory.lstat()
     if not stat.S_ISDIR(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o700:
@@ -244,6 +267,75 @@ PY
     echo "Trusted deploy candidate verifier bundle digest changed." >&2
     return 1
   fi
+}
+
+run_sealed_controller_python() {
+  local script="$1" rc=0
+  shift
+  case "${script}" in
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_candidate.py"|\
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/deploy_runtime_admission.py"|\
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py"|\
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py"|\
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_runtime_health.py"|\
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_redis_worker_health.py") ;;
+    *)
+      echo "Refusing an unreviewed sealed controller Python entrypoint: ${script}" >&2
+      return 126
+      ;;
+  esac
+  verify_deploy_verifier_bundle || return 1
+  # This private bundle intentionally lives outside the candidate tree, so the
+  # candidate-root router must reject it.  Run its exact allowlisted, mode-0400/
+  # 0500 entrypoint with the same physical interpreter but with site disabled;
+  # the bundle digest is checked immediately before and after execution.
+  PYTHONDONTWRITEBYTECODE=1 "${DEPLOY_PHYSICAL_PYTHON}" -I -S -B \
+    "${script}" "$@" || rc=$?
+  verify_deploy_verifier_bundle || return 1
+  return "${rc}"
+}
+
+run_frozen_candidate_python() {
+  local script="$1" rc=0
+  shift
+  case "${script}" in
+    "${DEPLOY_CANDIDATE_DIR}/scripts/ops/fetch_runtime_health.py"|\
+    "${DEPLOY_CANDIDATE_DIR}/scripts/ops/legacy_to_atomic_preflight.py"|\
+    "${DEPLOY_CANDIDATE_DIR}/scripts/ops/staging_db_clone.py"|\
+    "${DEPLOY_CANDIDATE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py"|\
+    "${DEPLOY_CANDIDATE_DIR}/scripts/verify_browser_console_capture.py"|\
+    "${DEPLOY_CANDIDATE_DIR}/scripts/verify_private_surface_live.py"|\
+    "${DEPLOY_CANDIDATE_DIR}/scripts/verify_redis_worker_health.py"|\
+    "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py"|\
+    "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_journal_canary.py") ;;
+    *)
+      echo "Refusing an unreviewed frozen-candidate Python entrypoint: ${script}" >&2
+      return 126
+      ;;
+  esac
+  verify_deploy_candidate || return 1
+  # The router owns dependency setup and startup isolation.  The bootstrap is
+  # reviewed controller code; fd 3 preserves any JSON piped to the validator.
+  "${LOCAL_SAFE_PYTHON}" - "${DEPLOY_CANDIDATE_DIR}" "${script}" "$@" \
+    3<&0 <<'PY' || rc=$?
+import os
+from pathlib import Path
+import runpy
+import sys
+
+root = Path(sys.argv[1]).resolve(strict=True)
+script = Path(sys.argv[2]).resolve(strict=True)
+if not script.is_relative_to(root):
+    raise SystemExit("frozen candidate entrypoint escaped its verified root")
+os.dup2(3, 0)
+sys.path[:0] = [
+    str(script.parent), str(root), str(root / "scripts"), str(root / "backend")
+]
+sys.argv = [str(script), *sys.argv[3:]]
+runpy.run_path(str(script), run_name="__main__")
+PY
+  verify_deploy_candidate || return 1
+  return "${rc}"
 }
 
 seal_deploy_verifier_bundle() {
@@ -298,7 +390,7 @@ seal_deploy_verifier_bundle() {
   done
   TRUSTED_CANDIDATE_VERIFIER="${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_worktree_candidate.py"
   TRUSTED_RUNTIME_ADMISSION="${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/deploy_runtime_admission.py"
-  DEPLOY_VERIFIER_BUNDLE_SHA256="$(PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B - \
+  DEPLOY_VERIFIER_BUNDLE_SHA256="$(PYTHONDONTWRITEBYTECODE=1 "${LOCAL_SAFE_PYTHON}" -I -B - \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}" <<'PY'
 import hashlib
 import sys
@@ -459,7 +551,7 @@ cleanup_local_candidate_browser_runtime() {
   fi
 
   if [[ "${port}" =~ ^[1-9][0-9]*$ ]]; then
-    if ! "${PROJECT_ROOT}/.venv/bin/python" -I -B - "${port}" <<'PY'
+    if ! "${LOCAL_SAFE_PYTHON:-${PROJECT_ROOT}/scripts/ops/safe_python.sh}" -I -B - "${port}" <<'PY'
 import errno
 import socket
 import sys
@@ -484,7 +576,7 @@ PY
   fi
 
   if [ "${cleanup_failed}" -eq 0 ] && [ -n "${runtime_root}" ]; then
-    if ! "${PROJECT_ROOT}/.venv/bin/python" -I -B - "${runtime_root}" <<'PY'
+    if ! "${LOCAL_SAFE_PYTHON:-${PROJECT_ROOT}/scripts/ops/safe_python.sh}" -I -B - "${runtime_root}" <<'PY'
 from pathlib import Path
 import os
 import shutil
@@ -579,7 +671,7 @@ cleanup_initial_deploy_resources() {
 
 bind_rescue_rollback_candidate() {
   RESCUE_ROLLBACK_CANDIDATE_BRANCH="$(
-    "${PROJECT_ROOT}/.venv/bin/python" -B - \
+    "${LOCAL_SAFE_PYTHON}" -B - \
       "${RESCUE_ROLLBACK_CANDIDATE_MANIFEST}" "${PREDEPLOY_APP_SHA}" <<'PY'
 import json
 import re
@@ -604,14 +696,13 @@ PY
 
 verify_rescue_rollback_candidate() {
   verify_deploy_verifier_bundle
-  PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+  run_sealed_controller_python \
     "${TRUSTED_CANDIDATE_VERIFIER}" \
     verify-deploy-source \
     --manifest "${RESCUE_ROLLBACK_CANDIDATE_MANIFEST}" \
     --snapshot "${RESCUE_ROLLBACK_CANDIDATE_DIR}" \
     --expected-head "${PREDEPLOY_APP_SHA}" \
     --expected-branch "${RESCUE_ROLLBACK_CANDIDATE_BRANCH}" >/dev/null
-  verify_deploy_verifier_bundle
 }
 
 LOCAL_HEALTH_ENV_FILE="${VKPI_HEALTH_ENV_FILE:-}"
@@ -631,7 +722,7 @@ BROWSER_EXPECTED_GIT_SHA="${LOCAL_GIT_SHA}"
 BROWSER_EXPECTED_APP_ASSET=""
 BROWSER_EXPECTED_APP_ASSET_SHA256=""
 if ! BROWSER_CANDIDATE_IDENTITY="$(
-  PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B - \
+  PYTHONDONTWRITEBYTECODE=1 "${LOCAL_SAFE_PYTHON}" -I -B - \
     "${DEPLOY_CANDIDATE_DIR}/frontend/dist" <<'PY'
 from __future__ import annotations
 
@@ -1377,7 +1468,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   fi
 fi
 viltroxtest_browser_gate_is_exact() {
-  "${PROJECT_ROOT}/.venv/bin/python" - "${POST_DEPLOY_BROWSER_URL}" <<'PY'
+  "${LOCAL_SAFE_PYTHON}" - "${POST_DEPLOY_BROWSER_URL}" <<'PY'
 import sys
 valid = sys.argv[1] == "https://www.viltroxtest.com/"
 raise SystemExit(0 if valid else 1)
@@ -1389,7 +1480,7 @@ if [ "${VILTROXTEST_RELEASE_SCOPE}" = "1" ] && ! viltroxtest_browser_gate_is_exa
 fi
 
 validate_lane_override_template() {
-  "${PROJECT_ROOT}/.venv/bin/python" - "${DEPLOY_CANDIDATE_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}" <<'PY'
+  "${LOCAL_SAFE_PYTHON}" - "${DEPLOY_CANDIDATE_DIR}/${LANE_OVERRIDE_TEMPLATE_RELATIVE}" <<'PY'
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import re
@@ -1491,7 +1582,7 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
     exit 1
   fi
   DATABASE_RELEASE_STRATEGY="staging-clone"
-  STAGING_CLONE_DATABASE="$("${PROJECT_ROOT}/.venv/bin/python" \
+  STAGING_CLONE_DATABASE="$(run_frozen_candidate_python \
     "${DEPLOY_CANDIDATE_DIR}/scripts/ops/staging_db_clone.py" name --release-id "${RELEASE_ID}")"
 fi
 if ! [[ "${BROWSER_GATE_OVERALL_TIMEOUT_MS}" =~ ^[0-9]+$ ]] \
@@ -1526,7 +1617,7 @@ BROWSER_GATE_CAPTURE_BUDGET_SECONDS=$(((BROWSER_GATE_OVERALL_TIMEOUT_MS + 999) /
 BROWSER_GATE_TOKEN_TTL_SECONDS=$((
   BROWSER_GATE_CAPTURE_BUDGET_SECONDS + BROWSER_GATE_TOKEN_SAFETY_MARGIN_SECONDS
 ))
-if ! "${PROJECT_ROOT}/.venv/bin/python" - \
+if ! "${LOCAL_SAFE_PYTHON}" - \
   "${POST_DEPLOY_BROWSER_URL}" \
   "${BROWSER_GATE_EXTERNAL_MEDIA_403_ORIGINS}" <<'PY'
 import sys
@@ -1582,7 +1673,7 @@ fi
 # use a fresh --user-data-dir, incognito mode, disabled extensions, and the
 # controller's strict child-environment allowlist.
 BROWSER_GATE_OS_IDENTITY="$(
-  PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -I - <<'PY'
+  PYTHONDONTWRITEBYTECODE=1 "${LOCAL_SAFE_PYTHON}" -B -I - <<'PY'
 import os
 import pwd
 
@@ -1694,7 +1785,7 @@ start_local_candidate_browser_runtime() {
     "${LOCAL_CANDIDATE_WEB_RUNTIME}/runtime" \
     "${LOCAL_CANDIDATE_WEB_RUNTIME}/controller"
   LOCAL_CANDIDATE_WEB_PORT="$(
-    "${PROJECT_ROOT}/.venv/bin/python" -I -B - <<'PY'
+    "${LOCAL_SAFE_PYTHON}" -I -B - <<'PY'
 import socket
 
 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
@@ -1714,7 +1805,7 @@ PY
   LOCAL_CANDIDATE_ADMISSION="${LOCAL_CANDIDATE_WEB_RUNTIME}/controller/runtime-admission.json"
 
   verify_deploy_verifier_bundle
-  if ! PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+  if ! run_sealed_controller_python \
     "${TRUSTED_RUNTIME_ADMISSION}" \
     --manifest "${DEPLOY_CANDIDATE_MANIFEST}" \
     --snapshot "${DEPLOY_CANDIDATE_DIR}" \
@@ -1732,7 +1823,6 @@ PY
     echo "Controller could not prepare the strict candidate runtime admission." >&2
     return 1
   fi
-  verify_deploy_verifier_bundle
 
   env -i \
     PATH="${BROWSER_GATE_CONTROLLER_PATH}" \
@@ -1750,7 +1840,7 @@ PY
     APP_BUILD_TIME="${candidate_build_time}" \
     CANDIDATE_LAUNCHER="${DEPLOY_CANDIDATE_DIR}/scripts/ops/run_isolated_candidate_web.sh" \
     /usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_WEB_PROFILE}" \
-    "${PROJECT_ROOT}/.venv/bin/python" -I -B - \
+    "${LOCAL_SAFE_PYTHON}" -I -B - \
       >>"${PREDEPLOY_BROWSER_EVIDENCE_DIR}/candidate-web.log" 2>&1 <<'PY' &
 import os
 
@@ -1810,7 +1900,7 @@ PY
     echo "Isolated candidate browser runtime PID binding is invalid." >&2
     return 1
   fi
-  "${PROJECT_ROOT}/.venv/bin/python" -B \
+  run_frozen_candidate_python \
     "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py" \
     --expected-head "${LOCAL_GIT_SHA}" \
     --expected-migration "${LATEST_MIGRATION}" \
@@ -1854,7 +1944,7 @@ run_predeploy_canonical_gate() {
   verify_deploy_candidate
   assert_deploy_source_unchanged
   echo "[deploy] gate: frozen candidate strict code + runtime trust verification(全绿才继续)..."
-  if ! PYTHONDONTWRITEBYTECODE=1 "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+  if ! run_sealed_controller_python \
     "${TRUSTED_CANDIDATE_VERIFIER}" run-deploy-gate \
     --manifest "${DEPLOY_CANDIDATE_MANIFEST}" \
     --snapshot "${DEPLOY_CANDIDATE_DIR}" \
@@ -1862,7 +1952,7 @@ run_predeploy_canonical_gate() {
     --expected-branch "${LOCAL_GIT_BRANCH}" \
     --source "${PROJECT_ROOT}" \
     --admission-json "${LOCAL_CANDIDATE_ADMISSION}" \
-    --python "${PROJECT_ROOT}/.venv/bin/python" \
+    --python "${DEPLOY_PHYSICAL_PYTHON}" \
     --runtime-root "${runtime_root}" \
     --health-env-file "${LOCAL_HEALTH_ENV_FILE}" \
     --health-url "${health_url}" \
@@ -1903,8 +1993,8 @@ run_predeploy_final_runtime_gate() {
     TMPDIR=/tmp \
     LANG=C.UTF-8 \
     PYTHONDONTWRITEBYTECODE=1 \
-    "${PROJECT_ROOT}/.venv/bin/python" -I -B \
-    "${DEPLOY_CANDIDATE_DIR}/scripts/ops/fetch_runtime_health.py" \
+    "${LOCAL_SAFE_PYTHON}" -I -B \
+    "${PROJECT_ROOT}/scripts/ops/fetch_runtime_health.py" \
     --url "${PREDEPLOY_BROWSER_URL}health" \
     --env-file "${LOCAL_HEALTH_ENV_FILE}" \
     --timeout-seconds 3 >"${health_tmp}"; then
@@ -1920,7 +2010,7 @@ run_predeploy_final_runtime_gate() {
   : >"${redis_verdict}"
   chmod 600 "${runtime_verdict}" "${redis_verdict}"
 
-  if ! "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+  if ! run_frozen_candidate_python \
     "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py" \
     --expected-head "${LOCAL_GIT_SHA}" \
     --expected-migration "${LATEST_MIGRATION}" \
@@ -1931,7 +2021,7 @@ run_predeploy_final_runtime_gate() {
     echo "Final candidate 16-worker runtime contract failed; no remote change was made." >&2
     return 1
   fi
-  if ! "${PROJECT_ROOT}/.venv/bin/python" -I -B \
+  if ! run_frozen_candidate_python \
     "${DEPLOY_CANDIDATE_DIR}/scripts/verify_redis_worker_health.py" \
     --expected-head "${LOCAL_GIT_SHA}" \
     --expected-count 1 \
@@ -1973,11 +2063,17 @@ run_predeploy_embedded_browser_gate() {
       RUNTIME_ENV_QUIET=1 \
       LOG_LEVEL=CRITICAL \
       /usr/bin/sandbox-exec -f "${LOCAL_CANDIDATE_VERIFY_PROFILE}" \
-      "${PROJECT_ROOT}/.venv/bin/python" -I -B -c \
-      'import sys; sys.path[:0]=sys.argv[2:4]; from local_release_acceptance import create_local_auth_context; print(create_local_auth_context(int(sys.argv[1])).token, end="")' \
+      "${LOCAL_SAFE_PYTHON}" -I -B - \
       "${BROWSER_GATE_TOKEN_TTL_SECONDS}" \
-      "${DEPLOY_CANDIDATE_DIR}/scripts" \
-      "${DEPLOY_CANDIDATE_DIR}/backend"
+      "${PROJECT_ROOT}/scripts" \
+      "${PROJECT_ROOT}/backend" <<'PY'
+import sys
+
+sys.path[:0] = sys.argv[2:4]
+from local_release_acceptance import create_local_auth_context
+
+print(create_local_auth_context(int(sys.argv[1])).token, end="")
+PY
   )"; then
     echo "Local embedded-production browser token mint failed; no remote change was made." >&2
     return 1
@@ -2018,14 +2114,14 @@ run_predeploy_embedded_browser_gate() {
   fi
   rm -f -- "${failure_log}"
 
-  "${PROJECT_ROOT}/.venv/bin/python" -B \
+  run_frozen_candidate_python \
     "${DEPLOY_CANDIDATE_DIR}/scripts/verify_browser_console_capture.py" \
     --input "${capture_path}" \
     --json-out "${report_path}" \
     --expected-git-sha "${BROWSER_EXPECTED_GIT_SHA}" \
     --expected-app-asset "${BROWSER_EXPECTED_APP_ASSET}" \
     --expected-app-asset-sha256 "${BROWSER_EXPECTED_APP_ASSET_SHA256}" >/dev/null
-  "${PROJECT_ROOT}/.venv/bin/python" -B - "${report_path}" <<'PY'
+  "${LOCAL_SAFE_PYTHON}" -B - "${report_path}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -2230,8 +2326,8 @@ PY
     return 1
   fi
   if ! pool_effective="$(printf '%s' "${runtime_json}" \
-    | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,re,sys
-p=json.load(sys.stdin)
+    | run_local_python_program 'import json,os,re,sys
+p=json.load(os.fdopen(3))
 expected=sys.argv[1]
 assert p["schema_version"]=="vkpi-effective-web-database/v1"
 assert p["operation"]=="inspect-effective-runtime"
@@ -2277,8 +2373,8 @@ capture_remote_pgbouncer_database_map() {
     return 1
   fi
   if ! PGBOUNCER_MAP_CONFIG_SHA_BEFORE="$(printf '%s' "${inspect_json}" \
-    | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,re,sys
-p=json.load(sys.stdin)
+    | run_local_python_program 'import json,os,re,sys
+p=json.load(os.fdopen(3))
 source=sys.argv[1]
 assert p["schema_version"]=="vkpi-pgbouncer-release-map/v1"
 assert p["operation"]=="inspect"
@@ -2311,8 +2407,8 @@ prepare_remote_pgbouncer_database_map() {
     return 1
   fi
   if ! PGBOUNCER_MAP_CONFIG_SHA_AFTER="$(printf '%s' "${prepare_json}" \
-    | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,re,sys
-p=json.load(sys.stdin)
+    | run_local_python_program 'import json,os,re,sys
+p=json.load(os.fdopen(3))
 source,target,before=sys.argv[1:]
 assert p["schema_version"]=="vkpi-pgbouncer-release-map/v1"
 assert p["operation"]=="prepare"
@@ -2347,8 +2443,8 @@ verify_remote_pgbouncer_database_map() {
     echo "PgBouncer dual-map verification failed." >&2
     return 1
   fi
-  printf '%s' "${verify_json}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys
-p=json.load(sys.stdin)
+  printf '%s' "${verify_json}" | run_local_python_program 'import json,os,sys
+p=json.load(os.fdopen(3))
 source,target,expected=sys.argv[1:]
 assert p["schema_version"]=="vkpi-pgbouncer-release-map/v1"
 assert p["operation"]=="verify" and p["verified"] is True
@@ -2376,8 +2472,8 @@ restore_remote_pgbouncer_database_map() {
     echo "CRITICAL: PgBouncer original config could not be recovered." >&2
     return 1
   fi
-  if ! printf '%s' "${restore_json}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys
-p=json.load(sys.stdin)
+  if ! printf '%s' "${restore_json}" | run_local_python_program 'import json,os,sys
+p=json.load(os.fdopen(3))
 source,expected=sys.argv[1:]
 assert p["schema_version"]=="vkpi-pgbouncer-release-map/v1"
 assert p["operation"] in {"restore-original","inspect"}
@@ -2408,8 +2504,8 @@ probe_remote_pgbouncer_database() {
     echo "PgBouncer route probe failed for the reviewed database alias." >&2
     return 1
   fi
-  printf '%s' "${probe_json}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys
-p=json.load(sys.stdin)
+  printf '%s' "${probe_json}" | run_local_python_program 'import json,os,sys
+p=json.load(os.fdopen(3))
 expected=sys.argv[1]
 assert p=={
   "schema_version":"vkpi-pgbouncer-release-map/v1",
@@ -2805,7 +2901,7 @@ attempt_automatic_rollback() {
       echo "[deploy] CRITICAL: restored environment database identity could not be verified." >&2
       return 1
     fi
-    read -r rollback_database rollback_env_sha256 < <(printf '%s' "${rollback_env_state}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"])')
+    read -r rollback_database rollback_env_sha256 < <(printf '%s' "${rollback_env_state}" | run_local_python_program 'import json,os; p=json.load(os.fdopen(3)); print(p["database_name"], p["env_sha256"])')
     if [ "${rollback_database}" != "${PREDEPLOY_DATABASE_NAME}" ] \
       || [ "${rollback_env_sha256}" != "${PREDEPLOY_ENV_SHA256}" ]; then
       echo "[deploy] CRITICAL: rollback environment fingerprint or database identity mismatch." >&2
@@ -2910,7 +3006,7 @@ attempt_automatic_rollback() {
     # heartbeat interval twice, plus startup/scheduling margin.
     for attempt in $(seq 1 90); do
       if rollback_candidate_health="$(ssh "${SSH_TARGET}" "sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/fetch_runtime_health.py' --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' 2>/dev/null")" \
-        && printf '%s' "${rollback_candidate_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
+        && printf '%s' "${rollback_candidate_health}" | run_sealed_controller_python \
           "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_redis_worker_health.py" \
           --expected-head "${PREDEPLOY_APP_SHA}" \
           --expected-count 1 \
@@ -2929,7 +3025,7 @@ attempt_automatic_rollback() {
       return 1
     fi
   fi
-  rollback_migration="$(printf '%s' "${rollback_health}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; print(str((json.load(sys.stdin).get("trust") or {}).get("db_migration_max") or ""))')"
+  rollback_migration="$(printf '%s' "${rollback_health}" | run_local_python_program 'import json,os; print(str((json.load(os.fdopen(3)).get("trust") or {}).get("db_migration_max") or ""))')"
   if { [ "${STAGING_DB_CLONE_MODE}" = "1" ] && [ "${rollback_migration}" != "${PREDEPLOY_MIGRATION}" ]; } \
     || { [ "${STAGING_DB_CLONE_MODE}" != "1" ] && [ "${rollback_migration}" != "${PREDEPLOY_MIGRATION}" ] && [ "${rollback_migration}" != "${LATEST_MIGRATION}" ]; }; then
     echo "[deploy] CRITICAL: rollback health reported an unexpected DB migration: ${rollback_migration}" >&2
@@ -2942,7 +3038,7 @@ attempt_automatic_rollback() {
     rollback_health_file="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/rollback-health.json"
     printf '%s\n' "${rollback_health}" >"${rollback_health_file}"
     chmod 600 "${rollback_health_file}"
-    if "${PROJECT_ROOT}/.venv/bin/python" \
+    if run_sealed_controller_python \
       "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \
       --ssh-target "${SSH_TARGET}" \
       --root "${REMOTE_ROOT}" \
@@ -2968,7 +3064,7 @@ attempt_automatic_rollback() {
       return 1
     fi
     chmod 600 "${rollback_anchor}"
-    if ! "${PROJECT_ROOT}/.venv/bin/python" \
+    if ! run_sealed_controller_python \
       "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-rollback \
       --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
       --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
@@ -2986,7 +3082,7 @@ attempt_automatic_rollback() {
       echo "[deploy] CRITICAL: restored pointers, units, environment, recovery evidence, or split legacy SHA anchor drifted." >&2
       return 1
     fi
-  elif ! printf '%s' "${rollback_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
+  elif ! printf '%s' "${rollback_health}" | run_sealed_controller_python \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_runtime_health.py" \
     --strict-deploy \
     --expected-head "${PREDEPLOY_APP_SHA}" \
@@ -3003,7 +3099,7 @@ attempt_automatic_rollback() {
     # worker may restart or lose readiness after the polling snapshot passed,
     # so the final gate must validate a newly fetched snapshot.
     if ! rollback_candidate_health="$(ssh "${SSH_TARGET}" "sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/fetch_runtime_health.py' --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env' 2>/dev/null")" \
-      || ! printf '%s' "${rollback_candidate_health}" | "${PROJECT_ROOT}/.venv/bin/python" \
+      || ! printf '%s' "${rollback_candidate_health}" | run_sealed_controller_python \
         "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/verify_redis_worker_health.py" \
         --expected-head "${PREDEPLOY_APP_SHA}" \
         --expected-count 1 \
@@ -3597,8 +3693,8 @@ verify_remote_release_drain() {
   fi
   verify_deploy_candidate
   assert_deploy_source_unchanged
-  if ! diagnostics="$(printf '%s' "${report}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys
-p=json.load(sys.stdin)
+  if ! diagnostics="$(printf '%s' "${report}" | run_local_python_program 'import json,os,sys
+p=json.load(os.fdopen(3))
 assert p.get("schema_version")=="vkpi-release-drain/v1"
 assert p.get("read_only") is True and p.get("history_mutated") is False
 assert p.get("credentials_emitted") is False
@@ -3860,7 +3956,7 @@ if ! REMOTE_PREDEPLOY_HEALTH_JSON="$(fetch_predeploy_runtime_health)"; then
   echo "Refusing deploy because pre-deploy authenticated runtime identity could not be read." >&2
   exit 1
 fi
-read -r PREDEPLOY_APP_SHA PREDEPLOY_MIGRATION < <(printf '%s' "${REMOTE_PREDEPLOY_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); t=p.get("trust") or {}; print(str(t.get("server_git_sha") or ""), str(t.get("db_migration_max") or ""))')
+read -r PREDEPLOY_APP_SHA PREDEPLOY_MIGRATION < <(printf '%s' "${REMOTE_PREDEPLOY_HEALTH_JSON}" | run_local_python_program 'import json,os; p=json.load(os.fdopen(3)); t=p.get("trust") or {}; print(str(t.get("server_git_sha") or ""), str(t.get("db_migration_max") or ""))')
 if ! [[ "${PREDEPLOY_APP_SHA}" =~ ^[0-9a-f]{40}$ ]] || [ -z "${PREDEPLOY_MIGRATION}" ]; then
   echo "Refusing deploy because pre-deploy app SHA or migration identity is untrusted." >&2
   exit 1
@@ -3870,7 +3966,7 @@ fi
 # legacy bootstrap is not a boolean bypass: it is accepted only later by the
 # separately hashed plan whose old server/client identities are bound exactly.
 if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" != "1" ]; then
-  if ! printf '%s' "${REMOTE_PREDEPLOY_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
+  if ! printf '%s' "${REMOTE_PREDEPLOY_HEALTH_JSON}" | run_frozen_candidate_python \
     "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py" \
     --strict-deploy \
     --expected-head "${PREDEPLOY_APP_SHA}" \
@@ -4140,7 +4236,7 @@ PY
     echo "Refusing viltroxtest deploy because the remote database identity is unreadable." >&2
     exit 1
   fi
-  read -r PREDEPLOY_DATABASE_NAME PREDEPLOY_ENV_SHA256 STAGING_SOURCE_KIND PREDEPLOY_DATABASE_OWNER_RELEASE_ID ACTIVE_RELEASE_ID < <(printf '%s' "${REMOTE_PREDEPLOY_DB_STATE_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"], p["source_kind"], p["database_owner_release_id"], p["active_release_id"])')
+  read -r PREDEPLOY_DATABASE_NAME PREDEPLOY_ENV_SHA256 STAGING_SOURCE_KIND PREDEPLOY_DATABASE_OWNER_RELEASE_ID ACTIVE_RELEASE_ID < <(printf '%s' "${REMOTE_PREDEPLOY_DB_STATE_JSON}" | run_local_python_program 'import json,os; p=json.load(os.fdopen(3)); print(p["database_name"], p["env_sha256"], p["source_kind"], p["database_owner_release_id"], p["active_release_id"])')
   if ! [[ "${PREDEPLOY_DATABASE_NAME}" =~ ^(viltrox2_test|viltrox2_test_release_[0-9a-f]{20})$ ]] \
     || ! [[ "${PREDEPLOY_ENV_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
     || ! [[ "${STAGING_SOURCE_KIND}" =~ ^(legacy-base|prior-release-clone)$ ]]; then
@@ -4161,7 +4257,7 @@ PY
     STAGING_SOURCE_DATABASE="${PREDEPLOY_DATABASE_NAME}"
   fi
 fi
-if ! PENDING_MIGRATIONS="$("${PROJECT_ROOT}/.venv/bin/python" - "${PREDEPLOY_MIGRATION}" "${MIGRATION_MANIFEST_CSV}" <<'PY'
+if ! PENDING_MIGRATIONS="$("${LOCAL_SAFE_PYTHON}" - "${PREDEPLOY_MIGRATION}" "${MIGRATION_MANIFEST_CSV}" <<'PY'
 import sys
 
 applied = sys.argv[1]
@@ -4249,7 +4345,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   fi
 
   FIRST_ATOMIC_BOOTSTRAP_BACKUP_STAMP="$(
-    "${PROJECT_ROOT}/.venv/bin/python" \
+    run_frozen_candidate_python \
       "${DEPLOY_CANDIDATE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" plan-field \
       --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
       --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
@@ -4263,7 +4359,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   printf '%s\n' "${REMOTE_PREDEPLOY_HEALTH_JSON}" >"${BOOTSTRAP_HEALTH_JSON}"
   chmod 600 "${BOOTSTRAP_HEALTH_JSON}"
 
-  if "${PROJECT_ROOT}/.venv/bin/python" \
+  if run_frozen_candidate_python \
     "${DEPLOY_CANDIDATE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \
     --ssh-target "${SSH_TARGET}" \
     --root "${REMOTE_ROOT}" \
@@ -4289,7 +4385,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   chmod 600 "${BOOTSTRAP_ANCHOR_JSON}"
 
   FIRST_ATOMIC_BOOTSTRAP_SUMMARY="$(
-    "${PROJECT_ROOT}/.venv/bin/python" \
+    run_frozen_candidate_python \
       "${DEPLOY_CANDIDATE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-plan \
       --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
       --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
@@ -4308,8 +4404,8 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   read -r FIRST_ATOMIC_BOOTSTRAP_PLAN_SHA256 FIRST_ATOMIC_BOOTSTRAP_SERVER_SHA \
     FIRST_ATOMIC_BOOTSTRAP_CLIENT_SHA FIRST_ATOMIC_BOOTSTRAP_ROOT_SHA \
     bootstrap_database bootstrap_migration bootstrap_env_sha < <(
-      printf '%s' "${FIRST_ATOMIC_BOOTSTRAP_SUMMARY}" | "${PROJECT_ROOT}/.venv/bin/python" -c \
-        'import json,sys; p=json.load(sys.stdin); print(p["plan_sha256"],p["server_git_sha"],p["client_git_sha"],p["root_build_git_sha"],p["database_name"],p["db_migration"],p["environment_sha256"])'
+      printf '%s' "${FIRST_ATOMIC_BOOTSTRAP_SUMMARY}" | run_local_python_program \
+        'import json,os; p=json.load(os.fdopen(3)); print(p["plan_sha256"],p["server_git_sha"],p["client_git_sha"],p["root_build_git_sha"],p["database_name"],p["db_migration"],p["environment_sha256"])'
     )
   if [ "${FIRST_ATOMIC_BOOTSTRAP_PLAN_SHA256}" != "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" ] \
     || [ "${FIRST_ATOMIC_BOOTSTRAP_SERVER_SHA}" != "${PREDEPLOY_APP_SHA}" ] \
@@ -4355,7 +4451,7 @@ elif [ "${SKIP_BACKUP:-0}" != "1" ]; then
     STAMP="${STAGING_BACKUP_STAMP}" LOCAL_DIR="${STAGING_BACKUP_DIR}" \
       REMOTE_APP_USER="${REMOTE_APP_USER}" REMOTE_APP_GROUP="${REMOTE_APP_GROUP}" \
       "${SCRIPT_DIR}/backup_prod_vkpi.sh"
-    "${PROJECT_ROOT}/.venv/bin/python" - \
+    "${LOCAL_SAFE_PYTHON}" - \
       "${STAGING_BACKUP_DIR}/prod-db.dump" \
       "${STAGING_BACKUP_DIR}/prod-db.dump.sha256" <<'PY'
 import hashlib
@@ -4386,8 +4482,8 @@ PY
       exit 1
     fi
     if ! read -r PRIOR_CLONE_ENV_SHA_BEFORE PRIOR_CLONE_ACTIVE_MANIFEST_SHA256 < <(
-      printf '%s' "${PRIOR_CLONE_BOUNDARY_BEFORE}" | "${PROJECT_ROOT}/.venv/bin/python" -c \
-        'import json,sys; p=json.load(sys.stdin); print(p["env_sha256"], p["active_manifest_sha256"])'
+      printf '%s' "${PRIOR_CLONE_BOUNDARY_BEFORE}" | run_local_python_program \
+        'import json,os; p=json.load(os.fdopen(3)); print(p["env_sha256"], p["active_manifest_sha256"])'
     ); then
       echo "Refusing prior-clone migration because its pre-backup evidence is invalid." >&2
       exit 1
@@ -4407,8 +4503,8 @@ PY
       exit 1
     fi
     if ! read -r PRIOR_CLONE_ENV_SHA_AFTER PRIOR_CLONE_MANIFEST_SHA_AFTER < <(
-      printf '%s' "${PRIOR_CLONE_BOUNDARY_AFTER}" | "${PROJECT_ROOT}/.venv/bin/python" -c \
-        'import json,sys; p=json.load(sys.stdin); print(p["env_sha256"], p["active_manifest_sha256"])'
+      printf '%s' "${PRIOR_CLONE_BOUNDARY_AFTER}" | run_local_python_program \
+        'import json,os; p=json.load(os.fdopen(3)); print(p["env_sha256"], p["active_manifest_sha256"])'
     ); then
       echo "Refusing prior-clone migration because its post-backup evidence is invalid." >&2
       exit 1
@@ -4419,7 +4515,7 @@ PY
       exit 1
     fi
     pg_restore --list "${PRIOR_CLONE_BACKUP_DIR}/prod-db.dump" >/dev/null
-    "${PROJECT_ROOT}/.venv/bin/python" - \
+    "${LOCAL_SAFE_PYTHON}" - \
       "${PRIOR_CLONE_BACKUP_DIR}" \
       "${PRIOR_CLONE_BACKUP_STAMP}" \
       "${RELEASE_ID}" \
@@ -4615,7 +4711,7 @@ if [ "${FIRST_ATOMIC_BOOTSTRAP_MODE}" = "1" ]; then
   BOOTSTRAP_CANDIDATE_MANIFEST="${FIRST_ATOMIC_BOOTSTRAP_EVIDENCE_DIR}/candidate-manifest.json"
   ssh "${SSH_TARGET}" "sudo cat -- '${REMOTE_RELEASE_DIR}/.vkpi-release.json'" >"${BOOTSTRAP_CANDIDATE_MANIFEST}"
   chmod 600 "${BOOTSTRAP_CANDIDATE_MANIFEST}"
-  "${PROJECT_ROOT}/.venv/bin/python" \
+  run_frozen_candidate_python \
     "${DEPLOY_CANDIDATE_DIR}/scripts/ops/verify_legacy_bootstrap_anchor.py" verify-candidate \
     --plan "${FIRST_ATOMIC_BOOTSTRAP_PLAN}" \
     --confirm "${FIRST_ATOMIC_BOOTSTRAP_CONFIRM}" \
@@ -4767,7 +4863,7 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   fi
 
   STAGING_CLONE_CREATE_JSON="$(ssh "${SSH_TARGET}" "sudo -n -u postgres env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' create --source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}'")"
-  if ! printf '%s' "${STAGING_CLONE_CREATE_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); assert p["source_database"] == sys.argv[1]; assert p["target_database"] == sys.argv[2]; assert int(p["free_bytes_before"]) >= int(p["source_size_bytes"]) + 1024**3' "${STAGING_SOURCE_DATABASE}" "${STAGING_CLONE_DATABASE}"; then
+  if ! printf '%s' "${STAGING_CLONE_CREATE_JSON}" | run_local_python_program 'import json,os,sys; p=json.load(os.fdopen(3)); assert p["source_database"] == sys.argv[1]; assert p["target_database"] == sys.argv[2]; assert int(p["free_bytes_before"]) >= int(p["source_size_bytes"]) + 1024**3' "${STAGING_SOURCE_DATABASE}" "${STAGING_CLONE_DATABASE}"; then
     echo "Staging clone creation receipt did not satisfy the reviewed disk/identity contract." >&2
     exit 1
   fi
@@ -4777,7 +4873,7 @@ if [ "${STAGING_DB_CLONE_MODE}" = "1" ]; then
   prepare_remote_pgbouncer_database_map
 
   STAGING_CLONE_ENV_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' switch-env --env-file '${REMOTE_ROOT}/.env' --expected-source-db '${STAGING_SOURCE_DATABASE}' --target-db '${STAGING_CLONE_DATABASE}'")"
-  read -r STAGING_CLONE_ENV_DATABASE STAGING_CLONE_ENV_SHA256 < <(printf '%s' "${STAGING_CLONE_ENV_STATE}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"])')
+  read -r STAGING_CLONE_ENV_DATABASE STAGING_CLONE_ENV_SHA256 < <(printf '%s' "${STAGING_CLONE_ENV_STATE}" | run_local_python_program 'import json,os; p=json.load(os.fdopen(3)); print(p["database_name"], p["env_sha256"])')
   if [ "${STAGING_CLONE_ENV_DATABASE}" != "${STAGING_CLONE_DATABASE}" ] \
     || ! [[ "${STAGING_CLONE_ENV_SHA256}" =~ ^[0-9a-f]{64}$ ]] \
     || [ "${STAGING_CLONE_ENV_SHA256}" = "${PREDEPLOY_ENV_SHA256}" ]; then
@@ -4879,7 +4975,7 @@ fi
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
   || [ "${DATABASE_RELEASE_STRATEGY}" = "reuse-active-clone" ]; then
   STAGING_FINAL_ENV_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/staging_db_clone.py' assert-env --env-file '${REMOTE_ROOT}/.env' --expected-db '${STAGING_CLONE_DATABASE}' ${DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG}")"
-  read -r STAGING_FINAL_ENV_DATABASE STAGING_CLONE_ENV_SHA256 < <(printf '%s' "${STAGING_FINAL_ENV_STATE}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"])')
+  read -r STAGING_FINAL_ENV_DATABASE STAGING_CLONE_ENV_SHA256 < <(printf '%s' "${STAGING_FINAL_ENV_STATE}" | run_local_python_program 'import json,os; p=json.load(os.fdopen(3)); print(p["database_name"], p["env_sha256"])')
   if [ "${STAGING_FINAL_ENV_DATABASE}" != "${STAGING_CLONE_DATABASE}" ] \
     || ! [[ "${STAGING_CLONE_ENV_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
     echo "Final release database identity/fingerprint verification failed." >&2
@@ -4991,7 +5087,7 @@ if [ -z "${REMOTE_HEALTH_JSON}" ]; then
   echo "Post-restart remote health JSON is empty." >&2
   exit 1
 fi
-if ! printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
+if ! printf '%s' "${REMOTE_HEALTH_JSON}" | run_frozen_candidate_python \
   "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_health.py" \
   --strict-deploy \
   --expected-head "${LOCAL_GIT_SHA}" \
@@ -5003,7 +5099,7 @@ if ! printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
   echo "Post-restart remote runtime trust validation failed; deployment is not accepted." >&2
   exit 1
 fi
-if ! printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" \
+if ! printf '%s' "${REMOTE_HEALTH_JSON}" | run_frozen_candidate_python \
   "${DEPLOY_CANDIDATE_DIR}/scripts/verify_redis_worker_health.py" \
   --expected-head "${LOCAL_GIT_SHA}" \
   --expected-count 1 \
@@ -5031,7 +5127,7 @@ assert_deploy_source_unchanged
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
   || [ "${DATABASE_RELEASE_STRATEGY}" = "reuse-active-clone" ]; then
   POST_RESTART_DB_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_CURRENT_DIR}/scripts/ops/staging_db_clone.py' prove-active-source --root '${REMOTE_ROOT}' --expected-db '${STAGING_CLONE_DATABASE}' ${DATABASE_ENV_ASSERT_RUNTIME_POOL_FLAG}")"
-  read -r POST_RESTART_DATABASE POST_RESTART_ENV_SHA256 POST_RESTART_DB_OWNER POST_RESTART_ACTIVE_RELEASE < <(printf '%s' "${POST_RESTART_DB_STATE}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys; p=json.load(sys.stdin); print(p["database_name"], p["env_sha256"], p["database_owner_release_id"], p["active_release_id"])')
+  read -r POST_RESTART_DATABASE POST_RESTART_ENV_SHA256 POST_RESTART_DB_OWNER POST_RESTART_ACTIVE_RELEASE < <(printf '%s' "${POST_RESTART_DB_STATE}" | run_local_python_program 'import json,os; p=json.load(os.fdopen(3)); print(p["database_name"], p["env_sha256"], p["database_owner_release_id"], p["active_release_id"])')
   if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ]; then
     EXPECTED_POST_RESTART_DB_OWNER="${RELEASE_ID}"
   else
@@ -5049,7 +5145,7 @@ fi
 # Bind log-canary receipts to the complete fleet without storing any raw nonce.
 # The strict validator above has already proven 16 unique, fresh nonce hashes;
 # hash their sorted set into one stable deployment-scoped fleet identity.
-WORKER_BOOT_NONCE_SHA256="$(printf '%s' "${REMOTE_HEALTH_JSON}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import hashlib,json,sys; data=json.load(sys.stdin); rows=(data.get("trust",{}).get("worker_fleet",{}).get("workers") or []); nonces=sorted(str(row.get("boot_nonce_sha256") or "") for row in rows if row.get("online") is True); print(hashlib.sha256(("\n".join(nonces)).encode()).hexdigest())')"
+WORKER_BOOT_NONCE_SHA256="$(printf '%s' "${REMOTE_HEALTH_JSON}" | run_local_python_program 'import hashlib,json,os; data=json.load(os.fdopen(3)); rows=(data.get("trust",{}).get("worker_fleet",{}).get("workers") or []); nonces=sorted(str(row.get("boot_nonce_sha256") or "") for row in rows if row.get("online") is True); print(hashlib.sha256(("\n".join(nonces)).encode()).hexdigest())')"
 if ! [[ "${WORKER_BOOT_NONCE_SHA256}" =~ ^[0-9a-f]{64}$ ]]; then
   echo "Failed to derive the reviewed worker-fleet boot binding." >&2
   exit 1
@@ -5111,7 +5207,7 @@ if [ "${REMOTE_ACCEPTANCE_RC}" -ne 0 ]; then
   echo "Remote acceptance failed with exit ${REMOTE_ACCEPTANCE_RC}; report retained at ${LOCAL_ACCEPTANCE_REPORT}." >&2
   exit 1
 fi
-"${PROJECT_ROOT}/.venv/bin/python" - "${LOCAL_ACCEPTANCE_REPORT}" <<'PY'
+"${LOCAL_SAFE_PYTHON}" - "${LOCAL_ACCEPTANCE_REPORT}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -5179,7 +5275,7 @@ if [ "${BROWSER_CAPTURE_STATUS}" -ne 0 ]; then
   exit "${BROWSER_CAPTURE_STATUS}"
 fi
 rm -f -- "${LOCAL_BROWSER_FAILURE_LOG}"
-"${PROJECT_ROOT}/.venv/bin/python" \
+run_frozen_candidate_python \
   "${DEPLOY_CANDIDATE_DIR}/scripts/verify_browser_console_capture.py" \
   --input "${LOCAL_BROWSER_CAPTURE}" \
   --json-out "${LOCAL_BROWSER_REPORT}" \
@@ -5199,7 +5295,7 @@ if ! ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && env PYTHONDONTWRITEBYTEC
   echo "Post-restart remote runtime log canary failed." >&2
   exit 1
 fi
-"${PROJECT_ROOT}/.venv/bin/python" \
+run_frozen_candidate_python \
   "${DEPLOY_CANDIDATE_DIR}/scripts/verify_runtime_journal_canary.py" \
   --baseline-state "${LOCAL_LOG_BASELINE}" \
   --canary-report "${LOCAL_LOG_CANARY}" \
@@ -5226,10 +5322,10 @@ read -r -a PRIVATE_SURFACE_URL_LIST <<< "${PRIVATE_SURFACE_URLS}"
 verify_deploy_candidate
 assert_deploy_source_unchanged
 if [ "${VKPI_EXPECT_ACCESS_GATED}" = "1" ]; then
-  "${PROJECT_ROOT}/.venv/bin/python" "${DEPLOY_CANDIDATE_DIR}/scripts/verify_private_surface_live.py" \
+  run_frozen_candidate_python "${DEPLOY_CANDIDATE_DIR}/scripts/verify_private_surface_live.py" \
     --expect-access-gated "${PRIVATE_SURFACE_URL_LIST[@]}"
 else
-  "${PROJECT_ROOT}/.venv/bin/python" "${DEPLOY_CANDIDATE_DIR}/scripts/verify_private_surface_live.py" \
+  run_frozen_candidate_python "${DEPLOY_CANDIDATE_DIR}/scripts/verify_private_surface_live.py" \
     "${PRIVATE_SURFACE_URL_LIST[@]}"
 fi
 verify_deploy_candidate
@@ -5251,8 +5347,8 @@ fi
 verify_remote_legacy_writers_absent
 verify_remote_release_validation_fence active
 if ! FENCED_REMOTE_HEALTH="$(ssh "${SSH_TARGET}" "cd '${REMOTE_CURRENT_DIR}' && sudo -n -u viltrox -g viltrox env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B scripts/ops/fetch_runtime_health.py --url '${HEALTH_URL}' --env-file '${REMOTE_ROOT}/.env'")" \
-  || ! printf '%s' "${FENCED_REMOTE_HEALTH}" | "${PROJECT_ROOT}/.venv/bin/python" -c 'import json,sys
-p=json.load(sys.stdin)
+  || ! printf '%s' "${FENCED_REMOTE_HEALTH}" | run_local_python_program 'import json,os
+p=json.load(os.fdopen(3))
 f=(p.get("trust") or {}).get("release_validation") or {}
 assert f.get("active") is True
 assert f.get("valid") is True

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -50,8 +51,19 @@ def test_sealed_preflight_bundle_starts_in_isolated_python(tmp_path: Path) -> No
         target.chmod(0o400 if relative in dependencies else 0o500)
 
     cli = bundle / "scripts/ops/legacy_to_atomic_preflight.py"
+    hostile_venv = tmp_path / "hostile-venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(hostile_venv)],
+        check=True,
+    )
+    hostile_site = next((hostile_venv / "lib").glob("python*/site-packages"))
+    startup_marker = tmp_path / "hostile-pth-loaded"
+    (hostile_site / "hostile.pth").write_text(
+        f"import pathlib; pathlib.Path({str(startup_marker)!r}).write_text('loaded')\n",
+        encoding="utf-8",
+    )
     completed = subprocess.run(
-        [sys.executable, "-I", "-B", str(cli), "--help"],
+        [str(hostile_venv / "bin/python"), "-I", "-S", "-B", str(cli), "--help"],
         cwd=tmp_path,
         env={"PATH": os.environ.get("PATH", ""), "PYTHONDONTWRITEBYTECODE": "1"},
         capture_output=True,
@@ -62,4 +74,9 @@ def test_sealed_preflight_bundle_starts_in_isolated_python(tmp_path: Path) -> No
 
     assert completed.returncode == 0, completed.stderr
     assert "usage:" in completed.stdout.lower()
+    assert not startup_marker.exists()
     assert not list(bundle.rglob("__pycache__"))
+    assert '"${DEPLOY_PHYSICAL_PYTHON}" -I -S -B' in deploy
+    assert "run_sealed_controller_python" in deploy
+    assert "run_frozen_candidate_python" in deploy
+    assert not re.search(r'LOCAL_SAFE_PYTHON\}"[^\n]*\s-c(?:\s|$)', deploy)

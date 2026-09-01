@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -23,6 +24,7 @@ from scripts.ops.freeze_worktree_candidate import (
     verify_deploy_source,
     verify_manifest,
 )
+from scripts.ops.freeze_phase_runtime import PHASE_A_NESTED_SEATBELT_TEST_COUNT
 from scripts.ops.strict_runtime_seatbelt import trusted_user_home
 
 
@@ -61,6 +63,7 @@ def test_frozen_verifier_support_modules_import_under_isolated_python(
         "scripts/ops/freeze_phase_runtime.py",
         "scripts/ops/freeze_worktree_candidate.py",
         "scripts/ops/freeze_worktree_contract.py",
+        "scripts/ops/phase_a_precheck_receipt.py",
         "scripts/ops/strict_runtime_seatbelt.py",
         "scripts/ops/trusted_git.py",
         "scripts/ops/trusted_npm_audit.py",
@@ -97,6 +100,7 @@ def test_frozen_verifier_support_modules_import_under_isolated_python(
         "scripts/ops/freeze_phase_runtime.py",
         "scripts/ops/freeze_worktree_candidate.py",
         "scripts/ops/freeze_worktree_contract.py",
+        "scripts/ops/phase_a_precheck_receipt.py",
         "scripts/ops/strict_runtime_seatbelt.py",
         "scripts/ops/trusted_git.py",
         "scripts/ops/trusted_npm_audit.py",
@@ -123,7 +127,15 @@ def test_freeze_and_offline_verify_excludes_runtime_dependencies_and_env(
 
     assert (output / "backend" / "app.py").is_file()
     assert (output / "backend" / "untracked.py").is_file()
+    assert (output / ".env.example").read_text(encoding="utf-8") == (
+        "JWT_SECRET=\nADMIN_PASSWORD=\n"
+    )
     assert not (output / ".env").exists()
+    assert not (output / ".env.production").exists()
+    assert not (output / "nested" / ".env.example").exists()
+    assert not (output / "uppercase" / ".ENV.EXAMPLE").exists()
+    assert not (output / "env-dirs" / ".env.production").exists()
+    assert not (output / "env-dirs" / ".env.example").exists()
     assert not (output / "runtime").exists()
     assert not (output / "frontend" / "node_modules").exists()
     assert not (output / "frontend" / "dist").exists()
@@ -136,6 +148,18 @@ def test_freeze_and_offline_verify_excludes_runtime_dependencies_and_env(
     assert identity["git_branch"] == payload["source"]["branch"]
     assert payload["source"]["worktree_dirty"] is True
     assert payload["safety"]["deployment_performed"] is False
+    example = next(
+        row for row in payload["candidate"]["files"]
+        if row["path"] == ".env.example"
+    )
+    assert example["sha256"] == hashlib.sha256(
+        (output / ".env.example").read_bytes()
+    ).hexdigest()
+    assert payload["exclusion_contract"]["secret_env"] == {
+        "default": "exclude .env and .env.* at every depth",
+        "included_exact_root": [".env.example"],
+        "included_exact_root_case_sensitive": True,
+    }
 
     manifest = output.with_suffix(".manifest.json")
     result = verify_manifest(Namespace(manifest=str(manifest), snapshot=None))
@@ -186,8 +210,11 @@ def test_build_and_static_verify_share_exact_snapshot_identity(
     assert build_info["builtAt"] == identity["build_time"]
     assert build_info["ambientVite"] == []
     receipt = payload["verification"]["static_receipt"]["payload"]
-    assert receipt["nested_seatbelt_tests"]["status"] == "not_present_fixture"
-    assert receipt["nested_seatbelt_tests"]["expected_count"] == 60
+    assert receipt["nested_seatbelt_tests"]["status"] == "passed"
+    assert (
+        receipt["nested_seatbelt_tests"]["expected_count"]
+        == PHASE_A_NESTED_SEATBELT_TEST_COUNT
+    )
     verify_env = receipt["canonical_receipt"]["candidate"]["fixture"]
     assert verify_env["VKPI_FREEZE_GIT_BRIDGE"] == "readonly-path-wrapper"
     assert verify_env["git_head"] == identity["git_sha"]

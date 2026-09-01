@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -191,7 +192,7 @@ def test_isolated_candidate_web_rejects_query_identity_overrides(
         (project / ".env").symlink_to(reviewed_env)
         _write(
             project / ".venv" / "bin" / "python",
-            f"#!/bin/sh\nexec {shutil.which('python') or sys.executable!s} \"$@\"\n",
+            f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n",
             mode=0o700,
         )
         _write(candidate / "scripts" / "runtime_env.sh", "exit 99\n", mode=0o700)
@@ -263,7 +264,7 @@ def test_isolated_candidate_web_rejects_ambient_connection_controls(
         (project / ".env").symlink_to(reviewed_env)
         _write(
             project / ".venv" / "bin" / "python",
-            f"#!/bin/sh\nexec {shutil.which('python') or sys.executable!s} \"$@\"\n",
+            f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n",
             mode=0o700,
         )
         _write(candidate / "scripts" / "runtime_env.sh", "exit 99\n", mode=0o700)
@@ -323,7 +324,7 @@ def test_isolated_candidate_web_rejects_candidate_side_environment_overrides(
         (project / ".env").symlink_to(reviewed_env)
         _write(
             project / ".venv" / "bin" / "python",
-            f"#!/bin/sh\nexec {shutil.which('python') or sys.executable!s} \"$@\"\n",
+            f"#!/bin/sh\nexec {shlex.quote(sys.executable)} \"$@\"\n",
             mode=0o700,
         )
         _write(

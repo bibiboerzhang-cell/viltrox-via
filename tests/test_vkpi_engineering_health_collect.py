@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import socket
@@ -640,22 +641,41 @@ def test_hostile_environment_cannot_select_git_or_execute_candidate_code(
 
 
 def test_current_repository_collector_remains_read_only_and_unrated(tmp_path: Path) -> None:
-    output = tmp_path / "evidence.json"
-    command = [
-        str(ROOT / ".venv/bin/python"),
-        str(ROOT / "scripts/vkpi_engineering_health_collect.py"),
-        "--root",
-        str(ROOT),
-        "--observed-at",
-        OBSERVED_AT,
-        "--output",
-        str(output),
-        "--require-complete",
-    ]
-    completed = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
-
-    assert completed.returncode == 0, completed.stderr
-    payload = json.loads(output.read_text(encoding="utf-8"))
+    frozen_mirror = (
+        not (ROOT / ".git").exists()
+        and os.environ.get("VKPI_FREEZE_GIT_BRIDGE") == "readonly-path-wrapper"
+    )
+    if frozen_mirror:
+        git_binary = Path(os.environ["VKPI_FREEZE_REAL_GIT"]).resolve(strict=True)
+        fixed_git_state = {
+            "branch": os.environ["APP_GIT_BRANCH"],
+            "head": os.environ["APP_GIT_SHA"],
+            "clean_worktree": True,
+            "tracked_change_count": 0,
+            "untracked_change_count": 0,
+            "status_sha256": hashlib.sha256(b"").hexdigest(),
+            "git_binary": str(git_binary),
+            "git_binary_sha256": hashlib.sha256(git_binary.read_bytes()).hexdigest(),
+        }
+        payload = collector.build_evidence(
+            ROOT,
+            CONTRACT,
+            observed_at=OBSERVED_AT,
+            git_probe=lambda _root: dict(fixed_git_state),
+        )
+    else:
+        output = tmp_path / "evidence.json"
+        command = [
+            str(ROOT / ".venv/bin/python"),
+            str(ROOT / "scripts/vkpi_engineering_health_collect.py"),
+            "--root", str(ROOT), "--observed-at", OBSERVED_AT,
+            "--output", str(output), "--require-complete",
+        ]
+        completed = subprocess.run(
+            command, cwd=ROOT, capture_output=True, text=True, check=False
+        )
+        assert completed.returncode == 0, completed.stderr
+        payload = json.loads(output.read_text(encoding="utf-8"))
     score_report = collector.health_score.score_evidence(CONTRACT, payload)
     assert payload["collector"]["mode"] == "read_only_static"
     assert payload["collector"]["status"] == "observed"

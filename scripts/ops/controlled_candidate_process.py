@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Run untrusted candidate commands in a private, fully reaped process group."""
+"""Run reviewed candidate commands in a private, bounded process group.
+
+This controller reaps the session/process group it creates.  It is not a
+same-UID adversarial sandbox: a candidate that deliberately calls ``setsid``
+and double-forks can leave that group.  Deploy therefore requires reviewed,
+clean Git source; hostile-source execution needs a dedicated UID or VM.
+"""
 
 from __future__ import annotations
 
@@ -57,7 +63,9 @@ def run_controlled_candidate(
     stdin: IO[bytes] | int | None = subprocess.DEVNULL,
     stdout: IO[bytes] | int | None = None, stderr: IO[bytes] | int | None = None,
     timeout: int = 1200,
+    accepted_returncodes: Sequence[int] = (0,),
 ) -> subprocess.CompletedProcess[bytes]:
+    """Run one reviewed command and reap every process that remains in its group."""
     process = subprocess.Popen(
         list(arguments), cwd=cwd, env=dict(env), stdin=stdin,
         stdout=stdout, stderr=stderr, start_new_session=True,
@@ -85,6 +93,6 @@ def run_controlled_candidate(
             raise RuntimeError("candidate process group could not be reaped")
     if pending is not None:
         raise pending
-    if leaked_group and returncode == 0:
+    if leaked_group and returncode in accepted_returncodes:
         returncode = 125
     return subprocess.CompletedProcess(list(arguments), returncode)

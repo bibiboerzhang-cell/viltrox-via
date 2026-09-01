@@ -47,11 +47,14 @@ from scripts.ops.controller_static_receipt import (  # noqa: E402
     controller_static_receipt_payload as _controller_static_receipt_payload,
     read_bound_regular_file as _read_bound_regular_file,
     trusted_file_identity as _trusted_file_identity,
+    validate_outer_static_partial as _validate_outer_static_partial,
     validate_controller_static_receipt as _validate_controller_static_receipt,
 )
 from scripts.ops.freeze_phase_runtime import (  # noqa: E402
     PHASE_A_NESTED_SEATBELT_TEST_COUNT,
+    PHASE_A_NESTED_SEATBELT_TEST_FILES,
     bind_nested_inventory_proof as _bind_nested_inventory_proof,
+    phase_a_runtime_environment as _phase_a_runtime_environment,
     publish_owned_log as _publish_owned_log,
     remove_owned_phase_sandbox as _remove_owned_phase_sandbox,
     run_logged as _run_logged,
@@ -69,10 +72,12 @@ from scripts.ops.freeze_worktree_contract import (  # noqa: E402
     FileEntry,
     FreezeError,
     cleanup_owned_paths,
+    is_excluded,
     path_identity,
     precreate_owned_file,
     rename_exclusive,
     write_owned_file_exclusive,
+    safe_relative_path as _safe_relative,
     assert_frontend_dist_reproducible as _check_frontend_dist_reproducible,
     _regular_tree_inventory as _contract_regular_tree_inventory,
 )
@@ -104,30 +109,6 @@ def _run_git_bytes(root: Path, *args: str) -> bytes:
         raise FreezeError(f"git command failed: {' '.join(args)}") from exc
 def _run_git_text(root: Path, *args: str) -> str:
     return _run_git_bytes(root, *args).decode("utf-8", "strict").strip()
-def _safe_relative(raw: str) -> str:
-    path = PurePosixPath(raw)
-    if path.is_absolute() or not path.parts:
-        raise FreezeError(f"unsafe source path: {raw!r}")
-    if any(part in {"", ".", ".."} for part in path.parts):
-        raise FreezeError(f"unsafe source path: {raw!r}")
-    return path.as_posix()
-def is_excluded(path: str, *, source_phase: bool) -> bool:
-    pure = PurePosixPath(_safe_relative(path))
-    lower_parts = tuple(part.lower() for part in pure.parts)
-    lower_name = pure.name.lower()
-    if set(lower_parts) & FORBIDDEN_COMPONENTS:
-        return True
-    if lower_parts and lower_parts[0] in GENERATED_ROOT_COMPONENTS:
-        return True
-    if lower_parts[:2] == ("reports", "generated"):
-        return True
-    if lower_parts[:2] == ("frontend", "dist") and source_phase:
-        return True
-    if lower_name in FORBIDDEN_NAMES or lower_name.startswith(".env"):
-        return True
-    if lower_name.endswith(FORBIDDEN_SUFFIXES):
-        return True
-    return False
 def _git_worktree_paths(root: Path) -> list[str]:
     raw = _run_git_bytes(
         root,
@@ -169,6 +150,12 @@ def _read_entry(root: Path, path: str) -> tuple[FileEntry, bytes]:
         raise FreezeError(f"symlink source requires separate review: {path}")
     if not stat.S_ISREG(before.st_mode):
         raise FreezeError(f"non-regular source requires separate review: {path}")
+    if path == ".env.example" and (
+        before.st_uid != os.geteuid()
+        or before.st_nlink != 1
+        or stat.S_IMODE(before.st_mode) & 0o022
+    ):
+        raise FreezeError("root .env.example must be an owner-controlled regular file")
     if before.st_size > MAX_SOURCE_FILE_BYTES:
         raise FreezeError(f"source file exceeds {MAX_SOURCE_FILE_BYTES} bytes: {path}")
     data = absolute.read_bytes()
@@ -444,11 +431,10 @@ def _run_static_verify(
             "HOME": str(sandbox_root / "home"),
             "PYTEST_ADDOPTS": "-p no:cacheprovider",
             "TMPDIR": str(sandbox_root / "tmp"),
-            "VKPI_RUNTIME_DATA_DIR": str(sandbox_root / "runtime-data"),
             "XDG_CACHE_HOME": str(sandbox_root / "cache"),
         }
     )
-    (sandbox_root / "runtime-data").mkdir(mode=0o700)
+    env.update(_phase_a_runtime_environment(sandbox_root))
     assert_provider_free_environment(env)
     protected_root = snapshot.parent / "controller-immutable"
     audit_receipt = protected_root / "npm-audit.json"
@@ -465,10 +451,18 @@ def _run_static_verify(
         )
         source_before_nested = {str(root): _inventory_source(root) for root in
                                 protected_sources if (root / ".git").exists()}
+        expected_test_hashes = {
+            relative: hashlib.sha256(
+                _run_git_bytes(source, "show", f"{identity.git_sha}:{relative}")
+            ).hexdigest()
+            for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES
+        }
         with _borrow_dependencies(snapshot, source):
             nested_seatbelt_tests = _run_nested_seatbelt_tests(
                 snapshot=snapshot, python_bin=source / ".venv/bin/python", env=env,
                 runtime_root=sandbox_root, error_log_path=log_path, failure_log_path=sandbox_log, failure_log_identity=sandbox_log_identity,
+                expected_test_file_sha256=expected_test_hashes,
+                protected_write_paths=protected_sources,
             )
         candidate_after_nested = _inventory_candidate(snapshot)
         source_after_nested = {str(root): _inventory_source(root)
@@ -481,13 +475,17 @@ def _run_static_verify(
             sources_after=source_after_nested,
             entry_digest=_inventory_digest,
         )
-        if nested_seatbelt_tests.get("status") == "passed":
-            env["VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT"] = str(
-                PHASE_A_NESTED_SEATBELT_TEST_COUNT
-            )
+        if nested_seatbelt_tests.get("status") != "passed":
+            raise FreezeError("nested Seatbelt test suite did not pass")
         if protected_root.exists() or protected_root.is_symlink(): raise FreezeError("nested Seatbelt tests precreated controller artifacts")
         if sandbox_log.is_symlink() or path_identity(sandbox_log) != sandbox_log_identity: raise FreezeError("nested Seatbelt tests replaced controller log")
         protected_root.mkdir(mode=0o700)
+        from scripts.ops.phase_a_precheck_receipt import write_receipt
+        nested_receipt = write_receipt(
+            protected_root / "nested-seatbelt-precheck.json", nested_seatbelt_tests
+        )
+        env["VKPI_PHASE_A_NESTED_SEATBELT_RECEIPT"] = nested_receipt["path"]
+        env["VKPI_PHASE_A_NESTED_SEATBELT_RECEIPT_SHA256"] = nested_receipt["sha256"]
         if (snapshot / "frontend/package-lock.json").is_file():
             run_trusted_npm_audit(snapshot / "frontend", audit_receipt)
             env["VKPI_TRUSTED_NPM_AUDIT_RECEIPT"] = str(audit_receipt)
@@ -503,6 +501,9 @@ def _run_static_verify(
             controller_tools = {
                 path.name: _trusted_file_identity(path) for path in sorted(bridge_root.iterdir())
             }
+            controller_tools["nested-seatbelt-receipt"] = _trusted_file_identity(
+                Path(nested_receipt["path"])
+            )
             if audit_receipt.is_file():
                 controller_tools["npm-audit-receipt"] = _trusted_file_identity(audit_receipt)
             profile = phase_a_static_profile(
@@ -522,6 +523,7 @@ def _run_static_verify(
                     env=env,
                     log_path=sandbox_log,
                     error_log_path=log_path,
+                    accepted_returncodes=(78,),
                 )
             for name, record in controller_tools.items():
                 _assert_trusted_file_identity(record, label=name)
@@ -530,27 +532,7 @@ def _run_static_verify(
                 loaded = json.loads(canonical_receipt.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise FreezeError("canonical static receipt is missing or invalid") from exc
-            if (
-                not isinstance(loaded, dict)
-                or loaded.get("schema_version") != "vkpi_canonical_gate_receipt_v1"
-                or loaded.get("passed") is not True
-                or loaded.get("failed_steps") != []
-            ):
-                raise FreezeError("canonical static receipt did not prove a green gate")
-            verification = loaded.get("verification")
-            if not isinstance(verification, dict) or verification != {
-                "runtime": "not_requested",
-                "acceptance": "not_requested",
-                "browser_console": "not_requested",
-                "runtime_log_canary": "not_requested",
-            }:
-                raise FreezeError("canonical static receipt contains runtime claims")
-            steps = loaded.get("steps")
-            if not isinstance(steps, list) or [
-                item.get("name") for item in steps if isinstance(item, dict)
-            ] != list(CANONICAL_STATIC_STEP_PLAN):
-                raise FreezeError("canonical static receipt step plan mismatch")
-            canonical_payload = loaded
+            canonical_payload = _validate_outer_static_partial(loaded)
     finally:
         try:
             if sandbox_log.is_file() and not sandbox_log.is_symlink():
@@ -844,7 +826,11 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
             "exclusion_contract": {
                 "components": sorted(FORBIDDEN_COMPONENTS),
                 "generated_roots": sorted(GENERATED_ROOT_COMPONENTS),
-                "secret_env_prefix": ".env*",
+                "secret_env": {
+                    "default": "exclude .env and .env.* at every depth",
+                    "included_exact_root": [".env.example"],
+                    "included_exact_root_case_sensitive": True,
+                },
                 "source_frontend_dist": "excluded_and_rebuilt",
                 "suffixes": list(FORBIDDEN_SUFFIXES),
             },

@@ -10,7 +10,7 @@ import stat
 import ctypes
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 SCHEMA = "vkpi.local-worktree-candidate/v1"
@@ -142,6 +142,36 @@ HIGH_CONFIDENCE_SECRET_PATTERNS = (
     re.compile(rb"xox[baprs]-[A-Za-z0-9-]{20,}"),
     re.compile(rb"sk_live_[A-Za-z0-9]{16,}"),
 )
+
+
+def safe_relative_path(raw: str) -> str:
+    path = PurePosixPath(raw)
+    if path.is_absolute() or not path.parts:
+        raise FreezeError(f"unsafe source path: {raw!r}")
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise FreezeError(f"unsafe source path: {raw!r}")
+    return path.as_posix()
+
+
+def is_excluded(path: str, *, source_phase: bool) -> bool:
+    pure = PurePosixPath(safe_relative_path(path))
+    lower_parts = tuple(part.lower() for part in pure.parts)
+    lower_name = pure.name.lower()
+    if pure.parts == (".env.example",):
+        return False
+    if any(part == ".env" or part.startswith(".env.") for part in lower_parts):
+        return True
+    if set(lower_parts) & FORBIDDEN_COMPONENTS:
+        return True
+    if lower_parts and lower_parts[0] in GENERATED_ROOT_COMPONENTS:
+        return True
+    if lower_parts[:2] == ("reports", "generated"):
+        return True
+    if lower_parts[:2] == ("frontend", "dist") and source_phase:
+        return True
+    if lower_name in FORBIDDEN_NAMES:
+        return True
+    return lower_name.endswith(FORBIDDEN_SUFFIXES)
 
 
 class FreezeError(RuntimeError):

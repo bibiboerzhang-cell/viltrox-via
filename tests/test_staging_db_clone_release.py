@@ -808,7 +808,9 @@ def test_deploy_clone_path_is_tightly_scoped_ordered_and_rollback_bound() -> Non
         "scripts/verify_browser_console_capture.py",
         browser_capture_at,
     )
-    private_surface_at = deploy.index("scripts/verify_private_surface_live.py")
+    private_surface_at = deploy.index(
+        "scripts/verify_private_surface_live.py", browser_verify_at
+    )
     success_marker_at = deploy.index("write-success-marker")
     accepted_at = deploy.rindex("DEPLOY_ACCEPTED=1")
     assert (

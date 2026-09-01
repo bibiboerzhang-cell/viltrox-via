@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ops.controller_static_receipt import OUTER_STATIC_PARTIAL_COVERAGE
 from scripts.ops.freeze_worktree_candidate import (
     CANONICAL_STATIC_STEP_PLAN,
     _controller_static_receipt_payload,
@@ -17,6 +18,13 @@ from scripts.ops.freeze_worktree_candidate import (
     freeze_candidate,
 )
 from scripts.ops.freeze_worktree_contract import BuildIdentity
+from scripts.ops.freeze_phase_runtime import (
+    PHASE_A_DEPENDENCY_BASELINE,
+    PHASE_A_NESTED_SEATBELT_TEST_COUNT,
+    PHASE_A_NESTED_SEATBELT_TEST_FILES,
+    PHASE_A_NESTED_SEATBELT_TESTS,
+    PHASE_A_PYTEST_BOOTSTRAP,
+)
 
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -28,8 +36,22 @@ def _repo(tmp_path: Path) -> Path:
     root.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=root, check=True)
     _write(root / ".gitignore", "runtime/\nfrontend/node_modules/\n")
+    _write(root / ".env.example", "JWT_SECRET=\nADMIN_PASSWORD=\n")
+    _write(root / ".env.production", "TOKEN=excluded\n")
+    _write(root / "nested" / ".env.example", "TOKEN=excluded\n")
+    _write(root / "uppercase" / ".ENV.EXAMPLE", "TOKEN=excluded\n")
+    _write(root / "env-dirs" / ".env.production" / "token.txt", "excluded\n")
+    _write(root / "env-dirs" / ".env.example" / "token.txt", "excluded\n")
     _write(root / "backend" / "app.py", "VALUE = 1\n")
     _write(root / "frontend" / "package.json", '{"scripts":{"build":"true"}}\n')
+    for relative, count in PHASE_A_NESTED_SEATBELT_TESTS:
+        _write(
+            root / relative,
+            "\n\n".join(
+                f"def test_phase_a_fixture_{index}():\n    assert True"
+                for index in range(count)
+            ) + "\n",
+        )
     _write(
         root / "scripts" / "verify.sh",
         """#!/usr/bin/env bash
@@ -140,7 +162,11 @@ step_names = [
 ]
 Path(os.environ["VKPI_VERIFY_JSON_OUT"]).write_text(json.dumps({
     "schema_version": "vkpi_canonical_gate_receipt_v1",
-    "passed": True,
+    "passed": False,
+    "static_coverage": {
+        "status": "outer_static_partial_requires_nested_proof",
+        "complete": False,
+    },
     "failed_steps": [],
     "candidate": {
         "release_head": os.environ["APP_GIT_SHA"],
@@ -162,7 +188,7 @@ Path(os.environ["VKPI_VERIFY_JSON_OUT"]).write_text(json.dumps({
     ],
 }, sort_keys=True), encoding="utf-8")
 PY
-exit 0
+exit 78
 """,
     )
     os.chmod(root / "scripts" / "verify.sh", 0o755)
@@ -190,6 +216,11 @@ def _create_test_venv(root: Path) -> Path:
     subprocess.run(
         [sys.executable, "-m", "venv", "--without-pip", str(root / ".venv")],
         check=True,
+    )
+    site_packages = next((root / ".venv" / "lib").glob("python*/site-packages"))
+    _write(
+        site_packages / "fixture-controller-deps.pth",
+        str(Path(pytest.__file__).resolve().parents[1]) + "\n",
     )
     _write(root / ".git" / "info" / "exclude", ".venv/\n")
     return root / ".venv" / "bin" / "python"
@@ -303,7 +334,8 @@ def _attach_test_static_receipt(
     )
     canonical = {
         "schema_version": "vkpi_canonical_gate_receipt_v1",
-        "passed": True,
+        "passed": False,
+        "static_coverage": OUTER_STATIC_PARTIAL_COVERAGE,
         "failed_steps": [],
         "candidate": {
             "release_head": identity.git_sha,
@@ -355,20 +387,54 @@ def _attach_test_static_receipt(
                 "mirror_digest_after": candidate["content_sha256"],
             },
             "nested_seatbelt_tests": {
-                "status": "not_present_fixture",
-                "test_files": [
-                    "tests/test_strict_runtime_hardening_redteam.py",
-                    "tests/test_deploy_runtime_admission.py",
-                    "tests/test_freeze_worktree_candidate.py",
-                    "tests/test_phase_a_static_containment.py",
-                ],
-                "file_counts": {
-                    "tests/test_strict_runtime_hardening_redteam.py": 32,
-                    "tests/test_deploy_runtime_admission.py": 5,
-                    "tests/test_freeze_worktree_candidate.py": 22,
-                    "tests/test_phase_a_static_containment.py": 1,
+                "status": "passed",
+                "execution_boundary": {
+                    "candidate_source": "reviewed_clean_git_required_for_deploy",
+                    "outer_seatbelt": False,
+                    "same_uid_adversarial_source_resistance": False,
+                    "reason": "darwin_nested_sandbox_incompatible",
                 },
-                "expected_count": 60,
+                "test_files": list(PHASE_A_NESTED_SEATBELT_TEST_FILES),
+                "test_file_sha256": {
+                    relative: hashlib.sha256((output / relative).read_bytes()).hexdigest()
+                    for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES
+                },
+                "file_counts": dict(PHASE_A_NESTED_SEATBELT_TESTS),
+                "command": [
+                    str(venv_python), "-I", "-S", "-B", "-c",
+                    "<controller-bootstrap>", "<controller-dependency-mirror>",
+                    "<verification-snapshot>",
+                    "-c", "/dev/null", "--rootdir", "<verification-snapshot>",
+                    "-o", "junit_family=xunit1", "--import-mode=importlib",
+                    "--noconftest",
+                    "--disable-plugin-autoload", "-p", "no:cacheprovider",
+                    "-q", "--junitxml", "<controller-bound-junit>",
+                    *PHASE_A_NESTED_SEATBELT_TEST_FILES,
+                ],
+                "exit_code": 0,
+                "collected_count": PHASE_A_NESTED_SEATBELT_TEST_COUNT,
+                "passed_count": PHASE_A_NESTED_SEATBELT_TEST_COUNT,
+                "expected_count": PHASE_A_NESTED_SEATBELT_TEST_COUNT,
+                "bootstrap_sha256": hashlib.sha256(
+                    PHASE_A_PYTEST_BOOTSTRAP.encode("utf-8")
+                ).hexdigest(),
+                "junit_xml_sha256": "a" * 64,
+                "junit_testcase_count": PHASE_A_NESTED_SEATBELT_TEST_COUNT,
+                "junit_failures": 0,
+                "junit_errors": 0,
+                "junit_skipped": 0,
+                "run_log_sha256": "b" * 64,
+                "dependency_mirror": {
+                    **PHASE_A_DEPENDENCY_BASELINE,
+                    "identity_sha256_before": "d" * 64,
+                    "identity_sha256_after": "d" * 64,
+                },
+                "candidate_identity_sha256_before": "e" * 64,
+                "candidate_identity_sha256_after": "e" * 64,
+                "candidate_digest_before": candidate["content_sha256"],
+                "candidate_digest_after": candidate["content_sha256"],
+                "source_digest_before": source["content_sha256"],
+                "source_digest_after": source["content_sha256"],
             },
             "toolchain": {
                 "git": _trusted_file_identity(Path(trusted_git_executable())),

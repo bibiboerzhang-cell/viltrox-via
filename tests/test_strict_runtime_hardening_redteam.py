@@ -401,21 +401,23 @@ def test_candidate_profile_preserves_and_allows_unicode_paths(tmp_path: Path) ->
 
 
 def test_controlled_candidate_reaps_child_that_survives_parent(tmp_path: Path) -> None:
-    pid_file = tmp_path / "child.pid"
-    script = (
-        "import os,time,pathlib\n"
-        "pid=os.fork()\n"
-        f"pathlib.Path({str(pid_file)!r}).write_text(str(pid) if pid else '') if pid else None\n"
-        "os._exit(0) if pid else time.sleep(30)\n"
-    )
-    result = run_controlled_candidate(
-        [str(Path(os.sys.executable).resolve()), "-c", script], cwd=tmp_path,
-        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}, timeout=5,
-    )
-    assert result.returncode == 125
-    child_pid = int(pid_file.read_text(encoding="utf-8"))
-    with pytest.raises(ProcessLookupError):
-        os.kill(child_pid, 0)
+    for exit_code in (0, 78):
+        pid_file = tmp_path / f"child-{exit_code}.pid"
+        script = (
+            "import os,time,pathlib\n"
+            "pid=os.fork()\n"
+            f"pathlib.Path({str(pid_file)!r}).write_text(str(pid) if pid else '') if pid else None\n"
+            f"os._exit({exit_code}) if pid else time.sleep(30)\n"
+        )
+        result = run_controlled_candidate(
+            [str(Path(os.sys.executable).resolve()), "-c", script], cwd=tmp_path,
+            env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}, timeout=5,
+            accepted_returncodes=(exit_code,),
+        )
+        assert result.returncode == 125
+        child_pid = int(pid_file.read_text(encoding="utf-8"))
+        with pytest.raises(ProcessLookupError):
+            os.kill(child_pid, 0)
 
 
 def test_readonly_git_bridge_ignores_hostile_git_python_and_path(

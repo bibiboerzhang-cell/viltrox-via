@@ -33,22 +33,38 @@ from tests.freeze_worktree_candidate_fixtures import (
 )
 
 
-def test_nested_seatbelt_proof_cannot_claim_missing_when_fixed_suite_exists(
+def test_nested_seatbelt_missing_proof_is_test_fixture_only(
     tmp_path: Path,
 ) -> None:
+    verify = (Path(__file__).resolve().parents[1] / "scripts/verify.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "Legacy Phase A precheck count bypass is forbidden" in verify
+    assert "VKPI_PHASE_A_NESTED_SEATBELT_RECEIPT_SHA256" in verify
+    assert 'STATIC_COVERAGE_STATE="outer_static_partial_requires_nested_proof"' in verify
+    assert '"passed": final_pass == "1" and static_coverage_state == "complete"' in verify
+    assert "CONTROLLER PARTIAL" in verify
+    assert "exit 78" in verify
+    for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES:
+        assert verify.count(f'--ignore="$ROOT/{relative}"') == 1
     proof = {
         "status": "not_present_fixture",
         "test_files": list(PHASE_A_NESTED_SEATBELT_TEST_FILES),
         "file_counts": dict(PHASE_A_NESTED_SEATBELT_TESTS),
         "expected_count": PHASE_A_NESTED_SEATBELT_TEST_COUNT,
     }
-    _validate_nested_seatbelt_tests(proof, snapshot=tmp_path)
+    with pytest.raises(FreezeError, match="were not executed"):
+        _validate_nested_seatbelt_tests(proof, snapshot=tmp_path)
+    _validate_nested_seatbelt_tests(
+        proof, snapshot=tmp_path, allow_not_present_fixture=True
+    )
     fixed_test = tmp_path / PHASE_A_NESTED_SEATBELT_TEST_FILES[0]
     fixed_test.parent.mkdir(parents=True)
     fixed_test.write_text("fixture\n", encoding="utf-8")
 
     with pytest.raises(FreezeError, match="were not executed"):
         _validate_nested_seatbelt_tests(proof, snapshot=tmp_path)
+    fixed_test.unlink()
 
 
 def test_phase_a_mirror_proof_must_bind_all_four_digests() -> None:

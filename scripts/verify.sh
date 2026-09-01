@@ -24,10 +24,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
-PYTHON_BIN="${PYTHON_BIN:-$ROOT/.venv/bin/python}"
-if [ ! -x "$PYTHON_BIN" ]; then
-  PYTHON_BIN="${PYTHON_BIN_FALLBACK:-python3}"
+PHYSICAL_PYTHON_BIN="${PYTHON_BIN:-$ROOT/.venv/bin/python}"
+if [ ! -x "$PHYSICAL_PYTHON_BIN" ]; then
+  PHYSICAL_PYTHON_BIN="${PYTHON_BIN_FALLBACK:-python3}"
 fi
+if [[ "$PHYSICAL_PYTHON_BIN" != */* ]]; then
+  PHYSICAL_PYTHON_BIN="$(command -v "$PHYSICAL_PYTHON_BIN")"
+fi
+export VKPI_SAFE_PYTHON_REAL="$PHYSICAL_PYTHON_BIN"
+PYTHON_BIN="$ROOT/scripts/ops/safe_python.sh"
 # Compatibility name for the already-reviewed runtime/line-guard helpers below.
 VENV_PY="$PYTHON_BIN"
 
@@ -45,6 +50,7 @@ RUNTIME_VERIFICATION_STATE="not_run"
 ACCEPTANCE_VERIFICATION_STATE="not_run"
 BROWSER_CONSOLE_VERIFICATION_STATE="not_requested"
 RUNTIME_LOG_CANARY_STATE="not_requested"
+STATIC_COVERAGE_STATE="complete"
 
 truthy_env() {
   case "${1:-}" in
@@ -217,18 +223,34 @@ backend_pytest() {
   # ``from scripts.ops import ...`` 从仓库根导入(scripts 无 __init__,命名空间包),
   # 只给 backend 会 ModuleNotFoundError;与手工口诀 PYTHONPATH=.:scripts:backend 对齐。
   local pytest_args=(-q)
+  local nested_receipt="${VKPI_PHASE_A_NESTED_SEATBELT_RECEIPT:-}"
+  local nested_receipt_sha256="${VKPI_PHASE_A_NESTED_SEATBELT_RECEIPT_SHA256:-}"
   if [ -n "${VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT:-}" ]; then
-    if [ "$VKPI_PHASE_A_NESTED_SEATBELT_PRECHECK_COUNT" != "60" ]; then
-      echo "[verify] Phase A nested Seatbelt precheck count mismatch." >&2
-      return 1
-    fi
+    echo "[verify] Legacy Phase A precheck count bypass is forbidden." >&2
+    return 1
+  fi
+  if { [ -n "$nested_receipt" ] && [ -z "$nested_receipt_sha256" ]; } \
+    || { [ -z "$nested_receipt" ] && [ -n "$nested_receipt_sha256" ]; }; then
+    echo "[verify] Phase A nested precheck receipt binding is incomplete." >&2
+    return 1
+  fi
+  if [ -n "$nested_receipt" ]; then
+    "$PYTHON_BIN" -I -B "$ROOT/scripts/ops/phase_a_precheck_receipt.py" \
+      --receipt "$nested_receipt" \
+      --sha256 "$nested_receipt_sha256" \
+      --candidate-root "$ROOT" || return 1
+    STATIC_COVERAGE_STATE="outer_static_partial_requires_nested_proof"
     pytest_args+=(
       --ignore="$ROOT/tests/test_strict_runtime_hardening_redteam.py"
       --ignore="$ROOT/tests/test_deploy_runtime_admission.py"
       --ignore="$ROOT/tests/test_freeze_worktree_candidate.py"
       --ignore="$ROOT/tests/test_phase_a_static_containment.py"
+      --ignore="$ROOT/tests/test_candidate_browser_cleanup_behavior.py"
+      --ignore="$ROOT/tests/test_candidate_verification_mirror.py"
+      --ignore="$ROOT/tests/test_controller_static_receipt.py"
+      --ignore="$ROOT/tests/test_local_redis_start_timeout.py"
     )
-    echo "[verify] Phase A prechecked fixed nested Seatbelt suite: 60 tests."
+    echo "[verify] Phase A delegated precheck bound: 75 tests; outer receipt is partial."
   fi
   PYTHONPATH="$ROOT:$ROOT/scripts:$ROOT/backend" "$PYTHON_BIN" -m pytest "${pytest_args[@]}"
 }
@@ -995,6 +1017,7 @@ write_verify_receipt() {
     "$ACCEPTANCE_VERIFICATION_STATE" \
     "$BROWSER_CONSOLE_VERIFICATION_STATE" \
     "$RUNTIME_LOG_CANARY_STATE" \
+    "$STATIC_COVERAGE_STATE" \
     "$VERIFY_STARTED_AT" \
     "$duration_seconds" \
     "${step_args[@]}" <<'PY'
@@ -1016,6 +1039,7 @@ from datetime import UTC, datetime
     acceptance_state,
     browser_state,
     log_state,
+    static_coverage_state,
     started_at,
     duration_seconds,
     *step_args,
@@ -1070,7 +1094,11 @@ payload = {
     "generated_at": datetime.now(UTC).isoformat(),
     "started_at": started_at,
     "duration_seconds": int(duration_seconds),
-    "passed": final_pass == "1",
+    "passed": final_pass == "1" and static_coverage_state == "complete",
+    "static_coverage": {
+        "status": static_coverage_state,
+        "complete": static_coverage_state == "complete",
+    },
     "candidate": {
         "release_head": release_head,
         "git_head": git_head,
@@ -1107,6 +1135,11 @@ fi
 echo ""
 echo "=========================================================="
 if [ ${#FAILED_STEPS[@]} -eq 0 ]; then
+  if [ "$STATIC_COVERAGE_STATE" != "complete" ]; then
+    echo "[verify] CONTROLLER PARTIAL — 外层静态步骤通过，但固定 75 项仅由父控制器证明；本回执不是独立绿色门禁。"
+    echo "=========================================================="
+    exit 78
+  fi
   if ! truthy_env "${VKPI_VERIFY_REQUIRE_RUNTIME:-0}"; then
     echo "[verify] STATIC GREEN — 代码门禁通过,运行态未验证；不是发布验收。"
   elif [ "$BROWSER_CONSOLE_VERIFICATION_STATE" = "verified" ] \

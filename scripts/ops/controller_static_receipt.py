@@ -12,9 +12,12 @@ import stat
 from pathlib import Path
 
 from scripts.ops.freeze_phase_runtime import (
+    phase_a_dependency_proof_is_valid,
+    PHASE_A_NESTED_EXECUTION_BOUNDARY,
     PHASE_A_NESTED_SEATBELT_TEST_COUNT,
     PHASE_A_NESTED_SEATBELT_TEST_FILES,
     PHASE_A_NESTED_SEATBELT_TESTS,
+    PHASE_A_PYTEST_BOOTSTRAP,
 )
 from scripts.ops.freeze_worktree_contract import BuildIdentity, FreezeError
 
@@ -47,6 +50,47 @@ CONTROLLER_STATIC_RECEIPT_RUNTIME_STEP_PLAN = (
     "browser console live extension-free release gate (not requested)",
     "post-restart runtime log leak canary (not requested)",
 )
+OUTER_STATIC_PARTIAL_COVERAGE = {
+    "status": "outer_static_partial_requires_nested_proof",
+    "complete": False,
+}
+STATIC_ONLY_VERIFICATION = {
+    "runtime": "not_requested",
+    "acceptance": "not_requested",
+    "browser_console": "not_requested",
+    "runtime_log_canary": "not_requested",
+}
+
+
+def _outer_static_partial_passed(canonical: object) -> bool:
+    if not isinstance(canonical, dict):
+        return False
+    steps = canonical.get("steps")
+    return (
+        canonical.get("schema_version") == "vkpi_canonical_gate_receipt_v1"
+        and canonical.get("passed") is False
+        and canonical.get("failed_steps") == []
+        and canonical.get("static_coverage") == OUTER_STATIC_PARTIAL_COVERAGE
+        and isinstance(steps, list)
+        and [item.get("name") for item in steps if isinstance(item, dict)]
+        == list(CANONICAL_STATIC_STEP_PLAN)
+        and all(
+            isinstance(item, dict)
+            and item.get("index") == index
+            and item.get("status") == "passed"
+            and item.get("exit_code") == 0
+            for index, item in enumerate(steps, 1)
+        )
+    )
+
+
+def validate_outer_static_partial(canonical: object) -> dict[str, object]:
+    if (
+        not _outer_static_partial_passed(canonical)
+        or canonical.get("verification") != STATIC_ONLY_VERIFICATION
+    ):
+        raise FreezeError("outer canonical static evidence is not a partial proof")
+    return canonical
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -157,7 +201,11 @@ def assert_trusted_file_identity(record: object, *, label: str) -> Path:
     return Path(str(observed["path"]))
 
 
-def _validate_nested_seatbelt_tests(record: object, *, snapshot: Path) -> None:
+def _validate_nested_seatbelt_tests(
+    record: object, *, snapshot: Path,
+    expected_python: Path | None = None,
+    allow_not_present_fixture: bool = False,
+) -> None:
     if not isinstance(record, dict):
         raise FreezeError("nested Seatbelt test proof is missing")
     if (
@@ -167,29 +215,87 @@ def _validate_nested_seatbelt_tests(record: object, *, snapshot: Path) -> None:
     ):
         raise FreezeError("nested Seatbelt test proof binding mismatch")
     if record.get("status") == "not_present_fixture":
-        if any((snapshot / relative).exists() for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES):
+        if (
+            not allow_not_present_fixture
+            or any(
+                (snapshot / relative).exists()
+                for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES
+            )
+        ):
             raise FreezeError("nested Seatbelt tests were not executed")
         return
+    for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES:
+        path = snapshot / relative
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            raise FreezeError("nested Seatbelt test suite is unavailable") from exc
+        if (
+            path.is_symlink()
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or info.st_nlink != 1
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            raise FreezeError("nested Seatbelt test suite contains an unsafe file")
     command = record.get("command")
+    expected_tail = [
+        "-I", "-S", "-B", "-c", "<controller-bootstrap>",
+        "<controller-dependency-mirror>", "<verification-snapshot>",
+        "-c", "/dev/null",
+        "--rootdir", "<verification-snapshot>", "-o", "junit_family=xunit1",
+        "--import-mode=importlib", "--noconftest", "--disable-plugin-autoload",
+        "-p", "no:cacheprovider",
+        "-q", "--junitxml", "<controller-bound-junit>",
+        *PHASE_A_NESTED_SEATBELT_TEST_FILES,
+    ]
+    try:
+        command_python = (
+            Path(command[0]).resolve(strict=True)
+            if isinstance(command, list) and command
+            else None
+        )
+    except OSError:
+        command_python = None
+    observed_test_hashes: dict[str, str] = {}
+    for relative in PHASE_A_NESTED_SEATBELT_TEST_FILES:
+        path = snapshot / relative
+        observed_test_hashes[relative] = _sha256_path(path)
+    dependency = record.get("dependency_mirror")
+    dependency_valid = phase_a_dependency_proof_is_valid(dependency)
     if (
         record.get("status") != "passed"
+        or record.get("execution_boundary") != PHASE_A_NESTED_EXECUTION_BOUNDARY
         or record.get("exit_code") != 0
         or record.get("collected_count") != PHASE_A_NESTED_SEATBELT_TEST_COUNT
         or record.get("passed_count") != PHASE_A_NESTED_SEATBELT_TEST_COUNT
         or not isinstance(command, list)
-        or command[1:] != [
-            "-B", "-m", "pytest", "-q", *PHASE_A_NESTED_SEATBELT_TEST_FILES,
-        ]
+        or expected_python is None
+        or command_python != expected_python.resolve(strict=True)
+        or command[1:] != expected_tail
+        or record.get("test_file_sha256") != observed_test_hashes
+        or record.get("bootstrap_sha256")
+        != hashlib.sha256(PHASE_A_PYTEST_BOOTSTRAP.encode("utf-8")).hexdigest()
+        or record.get("junit_testcase_count") != PHASE_A_NESTED_SEATBELT_TEST_COUNT
+        or record.get("junit_failures") != 0
+        or record.get("junit_errors") != 0
+        or record.get("junit_skipped") != 0
         or any(
             re.fullmatch(r"[0-9a-f]{64}", str(record.get(name, ""))) is None
             for name in (
-                "collect_log_sha256", "run_log_sha256",
+                "junit_xml_sha256", "run_log_sha256",
                 "candidate_digest_before", "candidate_digest_after",
                 "source_digest_before", "source_digest_after",
             )
         )
         or record.get("candidate_digest_before") != record.get("candidate_digest_after")
         or record.get("source_digest_before") != record.get("source_digest_after")
+        or not dependency_valid
+        or re.fullmatch(
+            r"[0-9a-f]{64}", str(record.get("candidate_identity_sha256_before", ""))
+        ) is None
+        or record.get("candidate_identity_sha256_before")
+        != record.get("candidate_identity_sha256_after")
     ):
         raise FreezeError("nested Seatbelt test proof is invalid")
 
@@ -233,7 +339,7 @@ def controller_static_receipt_payload(
     verify_log: Path,
     static_gate_run: dict[str, object],
 ) -> dict[str, object]:
-    canonical = static_gate_run.get("canonical_receipt")
+    canonical = validate_outer_static_partial(static_gate_run.get("canonical_receipt"))
     toolchain = static_gate_run.get("toolchain")
     if not isinstance(canonical, dict) or not isinstance(toolchain, dict):
         raise FreezeError("canonical static gate evidence is incomplete")
@@ -247,10 +353,16 @@ def controller_static_receipt_payload(
         or canonical_candidate.get("dirty_path_count") != 0
     ):
         raise FreezeError("canonical static gate Git identity mismatch")
-    for name in ("git", "node", "npm", "npx", "python"):
-        assert_trusted_file_identity(toolchain.get(name), label=name)
+    bound_tools = {
+        name: assert_trusted_file_identity(toolchain.get(name), label=name)
+        for name in ("git", "node", "npm", "npx", "python")
+    }
     nested_seatbelt_tests = static_gate_run.get("nested_seatbelt_tests")
-    _validate_nested_seatbelt_tests(nested_seatbelt_tests, snapshot=snapshot)
+    _validate_nested_seatbelt_tests(
+        nested_seatbelt_tests,
+        snapshot=snapshot,
+        expected_python=bound_tools["python"],
+    )
     verification_mirror = static_gate_run.get("verification_mirror")
     _validate_verification_mirror(
         verification_mirror,
@@ -356,49 +468,33 @@ def validate_controller_static_receipt(
     canonical = payload.get("canonical_receipt")
     if not isinstance(canonical, dict):
         raise FreezeError("controller static receipt canonical evidence is missing")
+    validate_outer_static_partial(canonical)
     canonical_candidate = canonical.get("candidate")
     steps = canonical.get("steps")
     if (
-        canonical.get("schema_version") != "vkpi_canonical_gate_receipt_v1"
-        or canonical.get("passed") is not True
-        or canonical.get("failed_steps") != []
-        or not isinstance(canonical_candidate, dict)
+        not isinstance(canonical_candidate, dict)
         or canonical_candidate.get("release_head") != identity.get("git_sha")
         or canonical_candidate.get("git_head") != identity.get("git_sha")
         or canonical_candidate.get("branch") != identity.get("git_branch")
         or canonical_candidate.get("clean_worktree") is not True
         or canonical_candidate.get("dirty_path_count") != 0
-        or not isinstance(steps, list)
-        or not steps
-        or [item.get("name") for item in steps if isinstance(item, dict)]
-        != list(CANONICAL_STATIC_STEP_PLAN)
-        or any(
-            not isinstance(item, dict)
-            or item.get("index") != index
-            or item.get("status") != "passed"
-            or item.get("exit_code") != 0
-            for index, item in enumerate(steps, 1)
-        )
         or payload.get("canonical_receipt_sha256")
         != hashlib.sha256(_canonical_bytes(canonical)).hexdigest()
         or payload.get("canonical_step_plan_sha256")
         != hashlib.sha256(_canonical_bytes(steps)).hexdigest()
     ):
         raise FreezeError("controller static receipt canonical step proof mismatch")
-    if canonical.get("verification") != {
-        "runtime": "not_requested",
-        "acceptance": "not_requested",
-        "browser_console": "not_requested",
-        "runtime_log_canary": "not_requested",
-    }:
-        raise FreezeError("controller static receipt contains non-static claims")
     toolchain = payload.get("toolchain")
     if not isinstance(toolchain, dict):
         raise FreezeError("controller static receipt toolchain binding is missing")
-    for name in ("git", "node", "npm", "npx", "python"):
-        assert_trusted_file_identity(toolchain.get(name), label=name)
+    bound_tools = {
+        name: assert_trusted_file_identity(toolchain.get(name), label=name)
+        for name in ("git", "node", "npm", "npx", "python")
+    }
     _validate_nested_seatbelt_tests(
-        payload.get("nested_seatbelt_tests"), snapshot=snapshot
+        payload.get("nested_seatbelt_tests"),
+        snapshot=snapshot,
+        expected_python=bound_tools["python"],
     )
     _validate_verification_mirror(
         payload.get("verification_mirror"),

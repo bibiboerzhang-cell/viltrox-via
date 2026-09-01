@@ -25,7 +25,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${ROOT}"
 
-PYTHON_BIN="${ROOT}/.venv/bin/python"
+PHYSICAL_PYTHON_BIN="${ROOT}/.venv/bin/python"
+PYTHON_BIN="${ROOT}/scripts/ops/safe_python.sh"
 HEALTH_URL="http://127.0.0.1:8102/health"
 HEALTH_ENV_FILE="${VKPI_TRAIN_HEALTH_ENV_FILE:-${ROOT}/runtime/ops/local-health.env}"
 BROWSER_GATE_URL="${VKPI_TRAIN_BROWSER_GATE_URL:-https://www.viltroxtest.com/}"
@@ -40,7 +41,9 @@ TRAIN_STARTED_AT="$(date -u +%Y%m%dT%H%M%SZ)"
 log() { printf '[train %s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 die() { printf '[train] FATAL: %s\n' "$*" >&2; exit 1; }
 
-[ -x "${PYTHON_BIN}" ] || die ".venv 解释器缺失:${PYTHON_BIN}(V-KPI 必须用 .venv)"
+[ -x "${PHYSICAL_PYTHON_BIN}" ] || die ".venv 解释器缺失:${PHYSICAL_PYTHON_BIN}(V-KPI 必须用 .venv)"
+[ -x "${PYTHON_BIN}" ] || die "safe Python 包装器缺失:${PYTHON_BIN}"
+export VKPI_SAFE_PYTHON_REAL="${PHYSICAL_PYTHON_BIN}"
 [ -f "${HEALTH_ENV_FILE}" ] || die "本地 /health 私有令牌文件缺失:${HEALTH_ENV_FILE}(VKPI_TRAIN_HEALTH_ENV_FILE)"
 [[ "${MIN_WORKERS}" =~ ^[1-9][0-9]*$ ]] || die "VKPI_TRAIN_MIN_WORKERS 必须是正整数"
 [[ "${WAIT_SECONDS}" =~ ^[1-9][0-9]*$ ]] || die "VKPI_TRAIN_WAIT_SECONDS 必须是正整数"
@@ -77,12 +80,13 @@ migration_preflight() {
   [ -n "${remote}" ] || { log "迁移预检跳过(读不到线上水位)"; return 0; }
   manifest="$(find "${ROOT}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' \
     -exec basename {} \; | LC_ALL=C sort | paste -sd, -)"
-  pending="$("${PYTHON_BIN}" -B -c '
+  pending="$("${PYTHON_BIN}" -B - "${remote}" "${manifest}" 2>/dev/null <<'PY'
 import sys
 applied, csv = sys.argv[1], sys.argv[2]
 items = [v for v in csv.split(",") if v]
 print(",".join(items[items.index(applied) + 1:]) if applied in items else "")
-' "${remote}" "${manifest}" 2>/dev/null)" || return 0
+PY
+  )" || return 0
   if [ -z "${pending}" ]; then
     log "迁移预检:线上水位 ${remote},无待应用迁移"
     return 0

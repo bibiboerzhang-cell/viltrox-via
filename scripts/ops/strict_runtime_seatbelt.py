@@ -98,6 +98,35 @@ def _literal(value: Path | str) -> str:
     return json.dumps(str(value), ensure_ascii=False)
 
 
+def _manifest_example_identity(path: Path) -> tuple[int, ...]:
+    """Validate the sole Phase-A readable env-shaped source file."""
+
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise SeatbeltError("Phase A manifest example is unavailable") from exc
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or info.st_nlink != 1
+        or stat.S_IMODE(info.st_mode) & 0o022
+        or info.st_size > 1024 * 1024
+    ):
+        raise SeatbeltError("Phase A manifest example is not owner-controlled")
+    return (
+        info.st_dev,
+        info.st_ino,
+        info.st_mode,
+        info.st_uid,
+        info.st_gid,
+        info.st_nlink,
+        info.st_size,
+        info.st_mtime_ns,
+        info.st_ctime_ns,
+    )
+
+
 def require_sandbox_exec() -> Path:
     binary = Path("/usr/bin/sandbox-exec")
     if platform.system() != "Darwin" or not binary.is_file() or not os.access(binary, os.X_OK):
@@ -306,14 +335,29 @@ def phase_a_static_profile(
     skipped_directories = {
         ".git", ".venv", "venv", "node_modules", *secret_directories,
     }
+    manifest_examples: dict[Path, tuple[int, ...]] = {}
     for root in source_roots:
         for directory, names, files in os.walk(root, topdown=True, followlinks=False):
-            names[:] = [name for name in names if name not in skipped_directories]
+            env_directories = [
+                name for name in names
+                if name.lower() == ".env" or name.lower().startswith(".env.")
+            ]
+            read_subpaths.update(Path(directory) / name for name in env_directories)
+            names[:] = [
+                name for name in names
+                if name not in skipped_directories and name not in env_directories
+            ]
             for name in files:
                 lower = name.lower()
+                is_manifest_example = (
+                    Path(directory) == root and name == ".env.example"
+                )
+                if is_manifest_example:
+                    path = root / name
+                    manifest_examples[path] = _manifest_example_identity(path)
                 if (
                     lower in secret_names
-                    or lower.startswith(".env.")
+                    or (lower.startswith(".env.") and not is_manifest_example)
                     or lower.endswith(secret_suffixes)
                 ):
                     path = Path(directory) / name
@@ -332,6 +376,9 @@ def phase_a_static_profile(
         }
     )
     read_literals.update({home / ".git-credentials", home / ".netrc", home / ".npmrc"})
+    for path, expected in manifest_examples.items():
+        if _manifest_example_identity(path) != expected:
+            raise SeatbeltError("Phase A manifest example changed during profile creation")
 
     rules = ["(version 1)", "(allow default)"]
     rules.extend(

@@ -4,7 +4,10 @@ import os
 import pwd
 import re
 import subprocess
+import sysconfig
 from pathlib import Path
+
+from scripts.ops.freeze_phase_runtime import _prepare_nested_dependency_mirror
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,7 +126,7 @@ def test_browser_controller_identity_comes_from_effective_uid_not_caller_home() 
     )
     identity = deploy[identity_start:identity_end]
 
-    assert "PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -I -" in identity
+    assert 'PYTHONDONTWRITEBYTECODE=1 "${LOCAL_SAFE_PYTHON}" -B -I -' in identity
     assert "pwd.getpwuid(os.geteuid())" in identity
     assert "str(entry.pw_name)" in identity
     assert "str(entry.pw_dir)" in identity
@@ -145,18 +148,42 @@ def test_browser_controller_identity_comes_from_effective_uid_not_caller_home() 
         assert forbidden_flag not in deploy
 
 
-def test_browser_identity_probe_ignores_hostile_caller_identity_environment() -> None:
+def test_browser_identity_probe_ignores_hostile_caller_identity_environment(
+    tmp_path: Path,
+) -> None:
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
-    marker = "PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 -B -I - <<'PY'\n"
+    marker = 'PYTHONDONTWRITEBYTECODE=1 "${LOCAL_SAFE_PYTHON}" -B -I - <<\'PY\'\n'
     probe = deploy.split(marker, 1)[1].split("\nPY\n", 1)[0]
+    hostile_venv = tmp_path / "venv"
+    subprocess.run(
+        [str(ROOT / ".venv/bin/python"), "-m", "venv", "--without-pip", str(hostile_venv)],
+        check=True,
+    )
+    hostile_site = next((hostile_venv / "lib").glob("python*/site-packages"))
+    dependency_runtime = tmp_path / "reviewed-dependency-runtime"
+    dependency_runtime.mkdir()
+    reviewed_site, _dependency_inventory, _dependency_proof = (
+        _prepare_nested_dependency_mirror(
+            Path(sysconfig.get_path("purelib")), dependency_runtime,
+        )
+    )
+    hostile_site.rmdir()
+    hostile_site.symlink_to(reviewed_site, target_is_directory=True)
+    reviewed_site.chmod(0o700)
+    pth_marker = tmp_path / "hostile-pth-loaded"
+    (hostile_site / "hostile.pth").write_text(
+        f"import pathlib; pathlib.Path({str(pth_marker)!r}).write_text('loaded')\n",
+        encoding="utf-8",
+    )
     result = subprocess.run(
-        ["/usr/bin/python3", "-B", "-I", "-"],
+        [str(ROOT / "scripts/ops/safe_python.sh"), "-B", "-I", "-"],
         input=probe,
         env={
             "HOME": "/tmp/hostile-home",
             "USER": "attacker",
             "LOGNAME": "attacker",
             "PATH": "/usr/bin:/bin",
+            "VKPI_SAFE_PYTHON_REAL": str(hostile_venv / "bin/python"),
         },
         capture_output=True,
         text=True,
@@ -167,6 +194,7 @@ def test_browser_identity_probe_ignores_hostile_caller_identity_environment() ->
     assert result.stdout.strip() == f"{os.geteuid()}:{entry.pw_name}:{entry.pw_dir}"
     assert "attacker" not in result.stdout
     assert "/tmp/hostile-home" not in result.stdout
+    assert not pth_marker.exists()
 
 
 def test_browser_capture_failure_stage_is_retained_without_changing_the_verdict() -> None:
