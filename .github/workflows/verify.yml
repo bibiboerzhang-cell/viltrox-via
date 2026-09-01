@@ -26,7 +26,10 @@ jobs:
       PYTHONPATH: backend
       # setup-python's hosted-toolcache interpreter can be group writable on
       # GitHub runners.  The canonical gate intentionally rejects that trust
-      # boundary, so run it from a private copied venv outside the checkout.
+      # boundary.  The install step hardens the ephemeral interpreter tree;
+      # this profile permits a fresh mirrored dependency proof only for the
+      # non-runtime GitHub static gate (deploy keeps the reviewed baseline).
+      VKPI_SAFE_PYTHON_PROFILE: github-actions-static-v1
       DB_RUNTIME_BACKEND: postgres
       DB_USE_PGBOUNCER: "0"
       DATABASE_URL: postgresql://postgres@localhost:5432/viltrox_ci
@@ -53,12 +56,17 @@ jobs:
       - name: Install backend dependencies
         run: |
           umask 077
-          python -m venv --copies "$RUNNER_TEMP/vkpi-ci-python"
-          ci_python="$RUNNER_TEMP/vkpi-ci-python/bin/python"
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-ci.txt
+          ci_python="$(command -v python)"
           ci_python_real="$(realpath "$ci_python")"
+          ci_purelib="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+          ci_platlib="$(python -c 'import sysconfig; print(sysconfig.get_path("platlib"))')"
           chmod go-w "$ci_python_real"
-          "$ci_python" -m pip install --upgrade pip
-          "$ci_python" -m pip install -r requirements-ci.txt
+          chmod -R go-w "$ci_purelib"
+          if [ "$ci_platlib" != "$ci_purelib" ]; then
+            chmod -R go-w "$ci_platlib"
+          fi
           printf 'PYTHON_BIN=%s\n' "$ci_python" >> "$GITHUB_ENV"
       - name: Install frontend dependencies
         run: npm --prefix frontend ci

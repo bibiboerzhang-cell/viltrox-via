@@ -41,6 +41,9 @@ TRAIN_STARTED_AT="$(date -u +%Y%m%dT%H%M%SZ)"
 log() { printf '[train %s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 die() { printf '[train] FATAL: %s\n' "$*" >&2; exit 1; }
 
+[ -z "${VKPI_SAFE_PYTHON_PROFILE:-}" ] \
+  || die "GitHub static Python profile is forbidden for release trains"
+
 [ -x "${PHYSICAL_PYTHON_BIN}" ] || die ".venv 解释器缺失:${PHYSICAL_PYTHON_BIN}(V-KPI 必须用 .venv)"
 [ -x "${PYTHON_BIN}" ] || die "safe Python 包装器缺失:${PYTHON_BIN}"
 export VKPI_SAFE_PYTHON_REAL="${PHYSICAL_PYTHON_BIN}"

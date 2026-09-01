@@ -331,7 +331,10 @@ def phase_a_dependency_proof_is_valid(value: object) -> bool:
 
 
 def _prepare_nested_dependency_mirror(
-    source_root: Path, runtime_root: Path
+    source_root: Path,
+    runtime_root: Path,
+    *,
+    expected_baseline: Mapping[str, object] | None = PHASE_A_DEPENDENCY_BASELINE,
 ) -> tuple[Path, tuple[tuple[object, ...], ...], dict[str, object]]:
     """Copy the fixed runner closure without copying site startup hooks."""
 
@@ -377,7 +380,7 @@ def _prepare_nested_dependency_mirror(
         "size_bytes": counters["bytes"],
         "content_sha256": _content_inventory_digest(inventory),
     }
-    if proof != PHASE_A_DEPENDENCY_BASELINE:
+    if expected_baseline is not None and proof != expected_baseline:
         raise FreezeError("Phase A dependency mirror differs from reviewed baseline")
     return mirror, inventory, proof
 

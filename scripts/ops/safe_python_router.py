@@ -18,10 +18,52 @@ from pathlib import Path
 ALLOWED_MODULES = frozenset({"alembic", "pytest"})
 IGNORED_FLAGS = frozenset({"-B", "-E", "-I", "-S", "-s"})
 CONTROLLER_RUNTIME_ENV = "VKPI_SAFE_PYTHON_CONTROLLER_RUNTIME_ROOT"
+CI_PROFILE_ENV = "VKPI_SAFE_PYTHON_PROFILE"
+GITHUB_STATIC_PROFILE = "github-actions-static-v1"
 _CONTROLLER_RUNTIME_NAME = re.compile(
     r"vkpi-candidate-browser-runtime\.[A-Za-z0-9]{6,32}"
 )
 _TRUSTED_STICKY_TEMP_PARENTS = (Path("/private/tmp"), Path("/private/var/tmp"))
+
+
+def _github_static_profile_enabled(root: Path) -> bool:
+    """Allow a dynamic dependency mirror only on a non-runtime GitHub job.
+
+    Production/deploy entrypoints reject the profile separately.  This branch
+    still copies a fixed dependency closure into a private read-only mirror;
+    it only omits the macOS/Python-3.14 content digest, which cannot describe
+    GitHub's Linux/Python-3.12 wheel set.
+    """
+
+    profile = os.environ.pop(CI_PROFILE_ENV, "")
+    if not profile:
+        return False
+    required = {
+        "GITHUB_ACTIONS": "true",
+        "CI": "true",
+        "RUNNER_OS": "Linux",
+        "RUNNER_ENVIRONMENT": "github-hosted",
+    }
+    workspace = os.environ.get("GITHUB_WORKSPACE", "")
+    event = os.environ.get("GITHUB_EVENT_NAME", "")
+    strict_names = (
+        "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE",
+        "VKPI_VERIFY_REQUIRE_RUNTIME",
+        "VKPI_VERIFY_STRICT_POST_RESTART",
+        "VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE",
+        "VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY",
+    )
+    if (
+        profile != GITHUB_STATIC_PROFILE
+        or any(os.environ.get(name) != value for name, value in required.items())
+        or event not in {"push", "pull_request"}
+        or not workspace
+        or Path(workspace).resolve(strict=True) != root
+        or any(os.environ.get(name, "").lower() in {"1", "true", "yes", "on"}
+               for name in strict_names)
+    ):
+        raise SystemExit("safe Python GitHub static profile is not trusted")
+    return True
 
 
 class _CandidateTopLevelFinder:
@@ -233,8 +275,10 @@ def _dispatch(root: Path, arguments: list[str]) -> None:
 
 def main() -> None:
     root = _candidate_root()
+    github_static_profile = _github_static_profile_enabled(root)
     _configure_imports(root)
     from scripts.ops.freeze_phase_runtime import (
+        PHASE_A_DEPENDENCY_BASELINE,
         _prepare_nested_dependency_mirror,
         remove_owned_phase_sandbox,
     )
@@ -249,6 +293,9 @@ def main() -> None:
         dependency_root, _inventory, _proof = _prepare_nested_dependency_mirror(
             _safe_directory(Path(sysconfig.get_path("purelib")), label="purelib"),
             runtime_root,
+            expected_baseline=(
+                None if github_static_profile else PHASE_A_DEPENDENCY_BASELINE
+            ),
         )
         sys.path.insert(0, str(dependency_root))
         _dispatch(root, sys.argv[1:])

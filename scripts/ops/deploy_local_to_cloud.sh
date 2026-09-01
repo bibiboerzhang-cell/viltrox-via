@@ -8,6 +8,11 @@ case "$-" in
   *x*) set +x ;;
 esac
 
+if [ -n "${VKPI_SAFE_PYTHON_PROFILE:-}" ]; then
+  echo "GitHub static Python profile is forbidden for deployment." >&2
+  exit 1
+fi
+
 # Production browser credentials are minted only after the restarted remote
 # runtime has passed API acceptance.  Reject and erase caller-supplied values
 # before this script runs even one child process; exported shell attributes

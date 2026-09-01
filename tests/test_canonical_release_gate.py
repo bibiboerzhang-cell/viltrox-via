@@ -14,6 +14,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 import check_python_compile  # noqa: E402
 import check_repo_hardening  # noqa: E402
+from ops import safe_python_router  # noqa: E402
 
 
 def _read(relative: str) -> str:
@@ -33,10 +34,10 @@ def test_github_ci_uses_full_history_secret_scan_and_ci_only_dependencies() -> N
     assert workflow.count("pip install -r requirements-ci.txt") == 2
     assert "actions/setup-python@v6" in workflow
     assert "actions/setup-node@v5" in workflow
-    assert 'PYTHON_BIN: ${{ runner.temp }}' not in workflow
-    assert 'python -m venv --copies "$RUNNER_TEMP/vkpi-ci-python"' in workflow
+    assert "VKPI_SAFE_PYTHON_PROFILE: github-actions-static-v1" in workflow
+    assert 'python -m pip install -r requirements-ci.txt' in workflow
     assert 'chmod go-w "$ci_python_real"' in workflow
-    assert '"$ci_python" -m pip install -r requirements-ci.txt' in workflow
+    assert 'chmod -R go-w "$ci_purelib"' in workflow
     assert 'printf \'PYTHON_BIN=%s\\n\' "$ci_python" >> "$GITHUB_ENV"' in workflow
     assert '"$PYTHON_BIN" - <<\'PY\'' in workflow
 
@@ -57,6 +58,51 @@ def test_github_ci_uses_full_history_secret_scan_and_ci_only_dependencies() -> N
     assert "actions/checkout@v6" in loadtest
     assert "actions/setup-python@v6" in loadtest
     assert "actions/upload-artifact@v7" in loadtest
+
+
+def test_github_static_python_profile_is_narrow_and_deploy_forbidden(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    profile_names = (
+        safe_python_router.CI_PROFILE_ENV,
+        "GITHUB_ACTIONS",
+        "CI",
+        "RUNNER_OS",
+        "RUNNER_ENVIRONMENT",
+        "GITHUB_WORKSPACE",
+        "GITHUB_EVENT_NAME",
+        "VKPI_VERIFY_REQUIRE_RUNTIME",
+    )
+    for name in profile_names:
+        monkeypatch.delenv(name, raising=False)
+
+    assert safe_python_router._github_static_profile_enabled(root) is False
+
+    github_env = {
+        safe_python_router.CI_PROFILE_ENV: safe_python_router.GITHUB_STATIC_PROFILE,
+        "GITHUB_ACTIONS": "true",
+        "CI": "true",
+        "RUNNER_OS": "Linux",
+        "RUNNER_ENVIRONMENT": "github-hosted",
+        "GITHUB_WORKSPACE": str(root),
+        "GITHUB_EVENT_NAME": "push",
+    }
+    for name, value in github_env.items():
+        monkeypatch.setenv(name, value)
+    assert safe_python_router._github_static_profile_enabled(root) is True
+
+    for name, value in github_env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("VKPI_VERIFY_REQUIRE_RUNTIME", "1")
+    with pytest.raises(SystemExit, match="profile is not trusted"):
+        safe_python_router._github_static_profile_enabled(root)
+
+    train = _read("scripts/ops/train.sh")
+    deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
+    assert "GitHub static Python profile is forbidden for release trains" in train
+    assert "GitHub static Python profile is forbidden for deployment" in deploy
 
 
 def test_every_release_entrypoint_delegates_to_the_canonical_gate() -> None:
