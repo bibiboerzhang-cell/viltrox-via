@@ -103,6 +103,30 @@ redis_ready() (
   [[ "$("$redis_cli" -h "$REDIS_HOST" -p "$REDIS_PORT" ping 2>/dev/null)" == "PONG" ]]
 )
 
+postgres_ready() (
+  RUNTIME_ENV_QUIET=1 source "$ROOT/scripts/runtime_env.sh"
+  local pg_isready="$POSTGRES_BIN/pg_isready"
+  [[ -x "$pg_isready" ]] || return 1
+  "$pg_isready" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -q >/dev/null 2>&1
+)
+ensure_postgres() {
+  # 2026-09-02:Mac 重启后 PG 54329 没人拉(非 launchd 服务),supervisor 拉不起没库的应用。
+  # 两个已知坑:/tmp 的 socket 目录重启被清;不设 LC_ALL 会 "postmaster became multithreaded"。
+  if postgres_ready; then
+    return 0
+  fi
+  log "postgres 54329 未就绪,拉起(socket 目录 + LC_ALL)"
+  (
+    RUNTIME_ENV_QUIET=1 source "$ROOT/scripts/runtime_env.sh"
+    mkdir -p "$POSTGRES_SOCKET_DIR"
+  )
+  if LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 RUNTIME_ENV_QUIET=1 bash "$ROOT/scripts/start_postgres_local.sh" >> "$LOG" 2>&1 \
+    && postgres_ready; then
+    log "postgres 54329 已拉起"
+  else
+    log "postgres 54329 拉起失败(见上方 start_postgres_local 输出)"
+  fi
+}
 ensure_redis() {
   if redis_ready; then
     REDIS_RETRY_DELAY_SECONDS="$REDIS_RETRY_BASE_SECONDS"
@@ -165,10 +189,11 @@ ensure_worker_main() {
 log "supervisor 上岗 self=${SELF_SHA:0:12}"
 while true; do
   reload_if_self_changed "$@"
+  ensure_postgres
+  ensure_redis
   ensure_admin_web
   ensure_apify_pool
   ensure_scheduler
-  ensure_redis
   ensure_worker_main
   sleep 60
 done
