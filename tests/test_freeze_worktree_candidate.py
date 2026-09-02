@@ -858,6 +858,11 @@ def test_high_confidence_secret_fails_closed(tmp_path: Path) -> None:
         freeze_candidate(_freeze_args(root, tmp_path / "candidate"))
 
 
+@pytest.mark.darwin_controller
+@pytest.mark.skipif(
+    sys.platform != "darwin" or sys.implementation.cache_tag != "cpython-314",
+    reason="requires reviewed macOS/Python 3.14 dependency baseline and Seatbelt",
+)
 def test_freeze_with_static_verify_leaves_a_collectable_receipt(tmp_path: Path) -> None:
     """canonical 门回执必须留在采集器目录(2026-09-02:13 次发车零 build_test 样本的根因)。
 
