@@ -50,6 +50,7 @@ from scripts.ops.controller_static_receipt import (  # noqa: E402
     validate_outer_static_partial as _validate_outer_static_partial,
     validate_controller_static_receipt as _validate_controller_static_receipt,
 )
+from scripts.ops.freeze_receipt_persist import persist_build_test_receipt  # noqa: E402
 from scripts.ops.freeze_phase_runtime import (  # noqa: E402
     PHASE_A_NESTED_SEATBELT_TEST_COUNT,
     PHASE_A_NESTED_SEATBELT_TEST_FILES,
@@ -805,6 +806,10 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
 
         rename_exclusive(temporary, output)
         created.pop(temporary); created[output] = path_identity(output)
+        build_test_receipt: dict[str, object] | None = None
+        if static_gate_run is not None:  # 沙箱里的 canonical 回执会随沙箱删除;这里留下采集器能读的副本
+            build_test_receipt = persist_build_test_receipt(source=source, output=output, canonical=static_gate_run["canonical_receipt"], writer=_atomic_json)
+            created[Path(build_test_receipt["path"])] = tuple(build_test_receipt["identity"])
         payload: dict[str, object] = {
             "archive": archive_payload,
             "build": {
@@ -867,6 +872,7 @@ def freeze_candidate(args: argparse.Namespace) -> dict[str, object]:
                 "log_sha256": _sha256_path(verify_log) if verify_log.exists() else None,
                 "runtime_intentionally_unreachable": not args.skip_verify,
                 "static_receipt": static_receipt_record,
+                "build_test_receipt": build_test_receipt,
             },
         }
         created[manifest_path] = _atomic_json(manifest_path, payload)

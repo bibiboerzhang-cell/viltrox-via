@@ -228,6 +228,7 @@ paths = {
     Path("scripts/ops/freeze_git_bridge.py"): 0o400,
     Path("scripts/ops/freeze_deploy_gate.py"): 0o400,
     Path("scripts/ops/freeze_phase_runtime.py"): 0o400,
+    Path("scripts/ops/freeze_receipt_persist.py"): 0o400,
     Path("scripts/ops/legacy_to_atomic_preflight.py"): 0o500,
     Path("scripts/ops/legacy_to_atomic_preflight_report.py"): 0o400,
     Path("scripts/ops/legacy_to_atomic_preflight_transport.py"): 0o400,
@@ -391,6 +392,7 @@ seal_deploy_verifier_bundle() {
     scripts/ops/freeze_git_bridge.py \
     scripts/ops/freeze_deploy_gate.py \
     scripts/ops/freeze_phase_runtime.py \
+    scripts/ops/freeze_receipt_persist.py \
     scripts/ops/legacy_to_atomic_preflight.py \
     scripts/ops/legacy_to_atomic_preflight_report.py \
     scripts/ops/legacy_to_atomic_preflight_transport.py \
@@ -410,7 +412,7 @@ seal_deploy_verifier_bundle() {
       return 1
     fi
     case "${relative}" in
-      scripts/ops/candidate_physical_tree.py|scripts/ops/controller_static_receipt.py|scripts/ops/controlled_candidate_process.py|scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_deploy_gate.py|scripts/ops/freeze_git_bridge.py|scripts/ops/freeze_phase_runtime.py|scripts/ops/freeze_worktree_contract.py|scripts/ops/legacy_to_atomic_preflight_report.py|scripts/ops/legacy_to_atomic_preflight_transport.py|scripts/ops/strict_runtime_seatbelt.py|scripts/ops/trusted_git.py|scripts/ops/trusted_npm_audit.py|scripts/stdout_utils.py)
+      scripts/ops/candidate_physical_tree.py|scripts/ops/controller_static_receipt.py|scripts/ops/controlled_candidate_process.py|scripts/ops/deploy_gate_runtime.py|scripts/ops/freeze_deploy_gate.py|scripts/ops/freeze_git_bridge.py|scripts/ops/freeze_phase_runtime.py|scripts/ops/freeze_receipt_persist.py|scripts/ops/freeze_worktree_contract.py|scripts/ops/legacy_to_atomic_preflight_report.py|scripts/ops/legacy_to_atomic_preflight_transport.py|scripts/ops/strict_runtime_seatbelt.py|scripts/ops/trusted_git.py|scripts/ops/trusted_npm_audit.py|scripts/stdout_utils.py)
         install -m 0400 "${source}" "${target}"
         ;;
       *)
@@ -447,6 +449,7 @@ cleanup_deploy_verifier_bundle() {
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_git_bridge.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_deploy_gate.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_phase_runtime.py" \
+    "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/freeze_receipt_persist.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight_report.py" \
     "${DEPLOY_VERIFIER_BUNDLE_DIR}/scripts/ops/legacy_to_atomic_preflight_transport.py" \

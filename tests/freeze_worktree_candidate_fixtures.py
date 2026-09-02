@@ -162,6 +162,8 @@ step_names = [
 ]
 Path(os.environ["VKPI_VERIFY_JSON_OUT"]).write_text(json.dumps({
     "schema_version": "vkpi_canonical_gate_receipt_v1",
+    "generated_at": "2026-09-02T01:52:23+00:00",
+    "duration_seconds": 42,
     "passed": False,
     "static_coverage": {
         "status": "outer_static_partial_requires_nested_proof",

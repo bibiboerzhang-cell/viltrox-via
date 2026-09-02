@@ -348,6 +348,7 @@ def test_sealed_verifier_contains_the_canonical_gate_import_closure(
         "scripts/ops/freeze_git_bridge.py",
         "scripts/ops/freeze_deploy_gate.py",
         "scripts/ops/freeze_phase_runtime.py",
+        "scripts/ops/freeze_receipt_persist.py",
         "scripts/ops/freeze_worktree_candidate.py",
         "scripts/ops/freeze_worktree_contract.py",
         "scripts/ops/strict_runtime_seatbelt.py",
