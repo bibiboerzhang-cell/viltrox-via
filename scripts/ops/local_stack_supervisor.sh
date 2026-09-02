@@ -123,6 +123,15 @@ ensure_postgres() {
   if LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 RUNTIME_ENV_QUIET=1 bash "$ROOT/scripts/start_postgres_local.sh" >> "$LOG" 2>&1 \
     && postgres_ready; then
     log "postgres 54329 已拉起"
+    # PG 重启后,长命 web 进程的迁移来源视图(db_migration_source)不会自愈,/health 会把
+    # worker/redis/scheduler 三段标 skipped=db_migration_unavailable(09-02 实测)。弹掉 web,
+    # 下一轮 ensure_admin_web 按新库状态拉起。只在真正重启了 PG 时做,平时不打扰。
+    local web_pids
+    web_pids="$(pgrep -f -- "gunicorn app.main:app" 2>/dev/null | grep -E '^[0-9]+$' | grep -vx -- "$$" || true)"
+    if [ -n "$web_pids" ]; then
+      log "PG 刚重启,弹 admin-web 让它重读库状态:$(printf '%s' "$web_pids" | tr '\n' ' ')"
+      printf '%s\n' "$web_pids" | xargs -n1 kill -TERM 2>/dev/null || true
+    fi
   else
     log "postgres 54329 拉起失败(见上方 start_postgres_local 输出)"
   fi
