@@ -14,6 +14,7 @@ from scripts.ops.freeze_phase_runtime import (
     PHASE_A_NESTED_SEATBELT_TEST_FILES,
     _prepare_nested_dependency_mirror,
     run_nested_seatbelt_tests,
+    PHASE_A_NESTED_SEATBELT_TEST_COUNT,
 )
 from scripts.ops.phase_a_precheck_receipt import (
     validate_delegated_receipt,
@@ -216,7 +217,7 @@ def test_nested_failure_is_copied_to_bound_controller_log(tmp_path: Path) -> Non
         path=Path(receipt["path"]), expected_sha256=receipt["sha256"],
         candidate_root=protected,
     )
-    assert accepted["nested_seatbelt_tests"]["passed_count"] == 79
+    assert accepted["nested_seatbelt_tests"]["passed_count"] == PHASE_A_NESTED_SEATBELT_TEST_COUNT
     first_test = protected / PHASE_A_NESTED_SEATBELT_TEST_FILES[0]
     first_test.write_text(first_test.read_text() + "# drift\n", encoding="utf-8")
     with pytest.raises(FreezeError, match="does not match candidate tests"):
