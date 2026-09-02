@@ -84,7 +84,19 @@ jobs:
               )
           PY
       - name: Canonical repository/release gate
-        run: bash ./scripts/verify_repo.sh
+        run: |
+          set -o pipefail
+          bash ./scripts/verify_repo.sh 2>&1 | tee "$RUNNER_TEMP/verify-gate.log"
+      - name: Annotate gate failure (anonymous-readable)
+        if: failure()
+        run: |
+          # 公开仓的日志需登录才能看,注解不需要:把失败要点打成 ::error:: 注解(每步最多 10 条)。
+          log="$RUNNER_TEMP/verify-gate.log"
+          [ -f "$log" ] || { echo "::error::verify gate log missing"; exit 0; }
+          grep -E '^\[verify\] FAIL|^(FAILED|ERROR) |^E   |Error:|SystemExit|Traceback' "$log" \
+            | grep -vE 'PydanticDeprecated' | tail -n 10 \
+            | while IFS= read -r line; do printf '::error title=verify gate::%s\n' "${line:0:900}"; done
+          printf '::error title=verify gate summary::%s\n' "$(grep -E '[0-9]+ (passed|failed|error)' "$log" | tail -n 1)"
 
   postgres-integration:
     runs-on: ubuntu-latest
@@ -136,4 +148,14 @@ jobs:
           asyncio.run(main())
           PY
       - name: Real PostgreSQL integration and authorization gate
-        run: python -m pytest -q -m pg --tb=short
+        run: |
+          set -o pipefail
+          python -m pytest -q -m pg --tb=short 2>&1 | tee "$RUNNER_TEMP/pg-gate.log"
+      - name: Annotate PostgreSQL gate failure (anonymous-readable)
+        if: failure()
+        run: |
+          log="$RUNNER_TEMP/pg-gate.log"
+          [ -f "$log" ] || { echo "::error::pg gate log missing"; exit 0; }
+          grep -E '^(FAILED|ERROR) |^E   |Error:|Traceback' "$log" | grep -vE 'PydanticDeprecated' | tail -n 10 \
+            | while IFS= read -r line; do printf '::error title=pg gate::%s\n' "${line:0:900}"; done
+          printf '::error title=pg gate summary::%s\n' "$(grep -E '[0-9]+ (passed|failed|error)' "$log" | tail -n 1)"
