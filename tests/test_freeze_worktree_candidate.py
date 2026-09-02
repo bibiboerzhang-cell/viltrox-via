@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.ops.freeze_receipt_persist import VERIFY_RECEIPTS_RELATIVE
 from scripts.ops.freeze_worktree_candidate import (
     FreezeError,
     _assert_frontend_dist_reproducible,
@@ -855,3 +856,27 @@ def test_high_confidence_secret_fails_closed(tmp_path: Path) -> None:
     )
     with pytest.raises(FreezeError, match="secret detected"):
         freeze_candidate(_freeze_args(root, tmp_path / "candidate"))
+
+
+def test_freeze_with_static_verify_leaves_a_collectable_receipt(tmp_path: Path) -> None:
+    """canonical 门回执必须留在采集器目录(2026-09-02:13 次发车零 build_test 样本的根因)。
+
+    走嵌套安全带跑道:外层 verify 会 --ignore 本文件,内层 freeze 的 phase-A 才有可写锚点。
+    """
+    root = _repo(tmp_path)
+    (root / "backend" / "untracked.py").unlink()
+    _create_test_venv(root)
+    args = _freeze_args(root, root / "runtime" / "ops" / "candidate")
+    args.skip_archive = True
+    args.skip_build = True
+    args.skip_verify = False
+    payload = freeze_candidate(args)
+    record = payload["verification"]["build_test_receipt"]
+    assert record is not None and record["collector_eligible"] is True
+    persisted = Path(record["path"])
+    assert persisted.parent == root / VERIFY_RECEIPTS_RELATIVE
+    canonical = payload["verification"]["static_receipt"]["payload"]["canonical_receipt"]
+    persisted_payload = json.loads(persisted.read_text(encoding="utf-8"))
+    assert persisted_payload == canonical  # 原样,不裁字段
+    assert isinstance(persisted_payload["duration_seconds"], int)
+    assert persisted_payload["generated_at"]

@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 from scripts.ops.freeze_receipt_persist import (
@@ -18,7 +18,7 @@ from scripts.ops.freeze_receipt_persist import (
 )
 from scripts.ops.freeze_worktree_candidate import freeze_candidate
 from scripts.vkpi_engineering_health_delivery import _load_verify_durations
-from tests.freeze_worktree_candidate_fixtures import _create_test_venv, _freeze_args, _repo
+from tests.freeze_worktree_candidate_fixtures import _freeze_args, _repo
 
 _RECEIPT = {
     "schema_version": "vkpi_canonical_gate_receipt_v1",
@@ -64,28 +64,6 @@ def test_persist_writes_under_collector_dir_and_reports_eligibility(tmp_path: Pa
     window = (datetime(2026, 9, 1, tzinfo=UTC), datetime(2026, 9, 3, tzinfo=UTC))
     durations, parsed = _load_verify_durations(target.parent, *window)
     assert parsed == 1 and durations == [422 / 60.0]
-
-
-def test_freeze_with_static_verify_leaves_a_collectable_receipt(tmp_path: Path) -> None:
-    root = _repo(tmp_path)
-    (root / "backend" / "untracked.py").unlink()
-    _create_test_venv(root)
-    args = _freeze_args(root, root / "runtime" / "ops" / "candidate")
-    args.skip_archive = True
-    args.skip_build = True
-    args.skip_verify = False
-    payload = freeze_candidate(args)
-    record = payload["verification"]["build_test_receipt"]
-    assert record is not None and record["collector_eligible"] is True
-    persisted = Path(record["path"])
-    assert persisted.parent == root / VERIFY_RECEIPTS_RELATIVE
-    canonical = payload["verification"]["static_receipt"]["payload"]["canonical_receipt"]
-    assert json.loads(persisted.read_text(encoding="utf-8")) == canonical
-    now = datetime.now(UTC)
-    durations, parsed = _load_verify_durations(
-        persisted.parent, datetime(2026, 9, 1, tzinfo=UTC), now + timedelta(days=1),
-    )
-    assert parsed == 1 and durations == [42 / 60.0]
 
 
 def test_freeze_without_verify_persists_nothing(tmp_path: Path) -> None:

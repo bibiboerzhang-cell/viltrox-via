@@ -89,7 +89,14 @@ def test_github_static_python_profile_is_narrow_and_deploy_forbidden(
         "RUNNER_ENVIRONMENT",
         "GITHUB_WORKSPACE",
         "GITHUB_EVENT_NAME",
+        # 全部 5 个 strict 名都要清:freeze 里的 verify 是 strict 模式,只清一个会把
+        # 外层环境泄进测试 → _github_static_profile_enabled 正确地拒绝 → 测试误红
+        # (2026-09-02 真仓库 freeze 实测)。
+        "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE",
         "VKPI_VERIFY_REQUIRE_RUNTIME",
+        "VKPI_VERIFY_STRICT_POST_RESTART",
+        "VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE",
+        "VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY",
     )
     for name in profile_names:
         monkeypatch.delenv(name, raising=False)
