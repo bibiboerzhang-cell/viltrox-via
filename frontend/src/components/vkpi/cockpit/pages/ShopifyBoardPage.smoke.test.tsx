@@ -184,10 +184,16 @@ describe("ShopifyBoardPage smoke(页壳 + KPI 带 + 注册表 + 布局键)", () 
     renderBoard();
 
     await screen.findByText("Shopify");
-    const directKpi = Array.from(document.querySelectorAll(".ds-kpi")).find((row) =>
-      row.textContent?.includes("直连订单"),
-    );
-    expect(directKpi?.textContent).toContain("$0.00");
+    // 页壳先于 GMV 请求落地;慢 runner(GitHub Linux)上此时 KPI 还是「直连订单—读取中…」。
+    // 等到真值出现再断言,否则是竞态不是行为。
+    const readDirectKpi = () =>
+      Array.from(document.querySelectorAll(".ds-kpi")).find((row) =>
+        row.textContent?.includes("直连订单"),
+      );
+    await waitFor(() => {
+      expect(readDirectKpi()?.textContent).toContain("$0.00");
+    });
+    const directKpi = readDirectKpi();
     expect(directKpi?.textContent).not.toContain("未配置店铺凭据");
     expect(screen.getAllByText(/已配置/).length).toBeGreaterThan(0);
   });

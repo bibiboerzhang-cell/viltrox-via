@@ -113,6 +113,7 @@ def _admission_fixture(
     return source, candidate, health, args, payload
 
 
+@pytest.mark.darwin_controller  # 可信控制器 npm 只在 macOS 三个绝对路径;Linux CI 跳过
 def test_prepare_admission_filters_provider_secrets_and_pins_phase_a(
     tmp_path: Path,
 ) -> None:
@@ -565,6 +566,7 @@ def test_web_profile_allows_exact_loopback_listener(tmp_path: Path) -> None:
         assert b"Operation not permitted" in denied.stderr
 
 
+@pytest.mark.darwin_controller  # 可信控制器 npm 只在 macOS 三个绝对路径;Linux CI 跳过
 def test_admission_rejects_profile_tamper_and_noncanonical_binding(
     tmp_path: Path,
 ) -> None:

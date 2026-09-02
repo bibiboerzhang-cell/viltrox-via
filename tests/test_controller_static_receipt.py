@@ -111,6 +111,7 @@ def _rewrite_manifest(output: Path, payload: dict[str, object]) -> str:
     return digest
 
 
+@pytest.mark.darwin_controller  # 可信控制器 npm 只在 macOS 三个绝对路径;Linux CI 跳过
 def test_deploy_gate_rejects_static_receipt_artifact_tamper_before_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -131,6 +132,7 @@ def test_deploy_gate_rejects_static_receipt_artifact_tamper_before_execution(
         run_deploy_gate(_deploy_gate_args(root, output, payload, venv_python))
 
 
+@pytest.mark.darwin_controller  # 可信控制器 npm 只在 macOS 三个绝对路径;Linux CI 跳过
 def test_deploy_gate_rejects_cross_candidate_static_receipt_replay(
     tmp_path: Path,
 ) -> None:
@@ -176,6 +178,7 @@ def test_ambient_receipt_environment_cannot_bypass_manifest_binding(
         run_deploy_gate(_deploy_gate_args(root, output, payload, venv_python))
 
 
+@pytest.mark.darwin_controller  # 可信控制器 npm 只在 macOS 三个绝对路径;Linux CI 跳过
 def test_controller_receipt_validation_uses_bound_reads_not_path_read_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -59,6 +59,7 @@ def test_release_line_guard_has_zero_allowlist_and_rejects_debt(
     assert raised.value.code == 1
 
 
+@pytest.mark.darwin_controller  # 可信控制器 npm 只在 macOS 三个绝对路径;Linux CI 跳过
 def test_controller_static_helper_accepts_exact_partial_proof_and_rejects_tamper(
     tmp_path: Path,
 ) -> None:
