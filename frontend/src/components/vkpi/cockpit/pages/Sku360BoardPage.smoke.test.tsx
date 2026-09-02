@@ -278,7 +278,7 @@ describe("Sku360BoardPage smoke(页壳 + KPI 带 + 注册表 + 诚实态 + 全�
 
     // 知识库/推广方向 = AI 生成徽 ×2 + 真内容;无置信列 → 不摆置信徽
     // 「AI 生成」标注随异步数据到位;慢 runner 上同步 getByText 抢跑(CI #177)。
-    expect(await screen.findAllByText("AI 生成").length).toBe(2);
+    expect((await screen.findAllByText("AI 生成")).length).toBe(2);
     expect(screen.getAllByText(/大光圈人像定焦镜头/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/奶油虚化对比横评/).length).toBeGreaterThan(0);
     expect(screen.getByText("人像摄影师")).toBeTruthy();
