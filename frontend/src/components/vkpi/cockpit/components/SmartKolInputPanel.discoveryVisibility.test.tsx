@@ -2,7 +2,7 @@
 // ① 召回先到、发现未到的窗口,契约带 orchestration_pending → 不判终态、不停轮询、横幅仍「正在查找」;
 // ② 18 条 new_creator 快照不带 followers → 全部上墙,卡面标「粉丝数待核」;
 // ③ 会话完成后横幅切完成态摘要(本次全网新发现 N 人…),不再挂「正在查找」。
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { VkpiKolSearchHistoryItem } from "../../../../domains/kol";
@@ -134,7 +134,7 @@ describe("session 1106 replay · discovery visibility", () => {
     expect(screen.getByTestId("candidate-observed-metrics").textContent).toContain("7.0K");
   });
 
-  it("retries a recovered avatar when polling replaces the failed URL", () => {
+  it("retries a recovered avatar when polling replaces the failed URL", async () => {
     const [face] = discoveryItemsFromSession(session1106({}));
     const stale = "https://p16-sign.tiktokcdn.com/avatar.jpeg?x-expires=1";
     const refreshed = "https://p16-sign.tiktokcdn.com/avatar.jpeg?x-expires=9999999999";
@@ -142,7 +142,10 @@ describe("session 1106 replay · discovery visibility", () => {
       <RecallMiniItem index={1} item={{ ...face, avatar_url: stale }} />,
     );
     fireEvent.error(container.querySelector("img") as HTMLImageElement);
-    expect(container.querySelector("img")).toBeNull();
+    // 状态更新后的 DOM 断言一律等提交(慢 runner 竞态,同 ea20aa50)
+    await waitFor(() => {
+      expect(container.querySelector("img")).toBeNull();
+    });
 
     rerender(<RecallMiniItem index={1} item={{ ...face, avatar_url: refreshed }} />);
     expect(container.querySelector("img")?.getAttribute("src")).toContain(encodeURIComponent(refreshed));

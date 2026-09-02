@@ -50,7 +50,7 @@ describe("KolRowLine avatar request safety", () => {
     expect(image?.getAttribute("src")).toBe(`/api/admin/vkpi/media/image-proxy?url=${encodeURIComponent(raw)}`);
   });
 
-  it("replaces a rejected proxy response or missing URL with an honest initial", () => {
+  it("replaces a rejected proxy response or missing URL with an honest initial", async () => {
     const { container, rerender } = render(
       <KolRowLine
         row={libraryRow({ avatarUrl: "https://p19-common-sign.tiktokcdn-us.com/avatar.jpeg" })}
@@ -61,7 +61,10 @@ describe("KolRowLine avatar request safety", () => {
     const failedImage = container.querySelector("img");
     expect(failedImage).not.toBeNull();
     fireEvent.error(failedImage as HTMLImageElement);
-    expect(screen.getByLabelText("Matthew 头像暂不可用")).toHaveTextContent("M");
+    // 状态更新后的 DOM 断言一律等提交(慢 runner 竞态,同 ea20aa50)
+    await waitFor(() => {
+      expect(screen.getByLabelText("Matthew 头像暂不可用")).toHaveTextContent("M");
+    });
 
     rerender(<KolRowLine row={libraryRow({ avatarUrl: "" })} index={0} onOpen={vi.fn()} />);
     expect(container.querySelector("img")).toBeNull();

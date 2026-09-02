@@ -1,4 +1,4 @@
-import { fireEvent, render } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { VkpiKolPoolVideoRow } from '../../../../services/vkpi/myKolBoard-api';
 import { KolVideoSection } from './MyKolBoardPage.libdetail';
@@ -35,14 +35,17 @@ describe('KolVideoSection media safety', () => {
     );
   });
 
-  it('shows the honest placeholder after the proxied image still fails', () => {
+  it('shows the honest placeholder after the proxied image still fails', async () => {
     const { container, getByTitle } = render(
       <KolVideoSection videos={[video()]} queuedEvidence={new Set()} busyKeys={new Set()} onEnqueueOne={vi.fn()} />,
     );
     const image = container.querySelector('img');
     expect(image).not.toBeNull();
     fireEvent.error(image as HTMLImageElement);
-    expect(getByTitle('TikTok signed thumbnail · 缩略图暂不可用')).toBeInTheDocument();
+    // 状态更新后的 DOM 断言一律等提交(慢 runner 竞态,同 ea20aa50)
+    await waitFor(() => {
+      expect(getByTitle('TikTok signed thumbnail · 缩略图暂不可用')).toBeInTheDocument();
+    });
   });
 
   it('shows bounded 24h and 7d snapshot trends with the last refresh stamp', () => {

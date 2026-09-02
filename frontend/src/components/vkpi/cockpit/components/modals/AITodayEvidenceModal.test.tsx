@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AITodayEvidenceModal } from "./AITodayEvidenceModal";
 
@@ -57,7 +57,7 @@ describe("AITodayEvidenceModal", () => {
     expect(screen.getAllByText("2026-07-01").length).toBeGreaterThan(0);
   });
 
-  it("R2 视频失败时回退到缩略图并保留原视频入口", () => {
+  it("R2 视频失败时回退到缩略图并保留原视频入口", async () => {
     const { container } = render(
       <AITodayEvidenceModal
         insight={{
@@ -84,7 +84,10 @@ describe("AITodayEvidenceModal", () => {
     const video = container.querySelector("video");
     expect(video).toBeTruthy();
     fireEvent.error(video as HTMLVideoElement);
-    expect(screen.getByRole("img", { name: "R2 fallback video" })).toHaveAttribute("src", "https://img.example/fallback.jpg");
+    // 状态更新后的 DOM 断言一律等提交(慢 runner 竞态,同 ea20aa50)
+    await waitFor(() => {
+      expect(screen.getByRole("img", { name: "R2 fallback video" })).toHaveAttribute("src", "https://img.example/fallback.jpg");
+    });
     expect(screen.getAllByRole("link", { name: /原视频/ }).every((link) => link.getAttribute("href") === "https://youtube.com/watch?v=fallback")).toBe(true);
     expect(screen.getByText(/该快照未保留原始市场来源/)).toBeTruthy();
   });

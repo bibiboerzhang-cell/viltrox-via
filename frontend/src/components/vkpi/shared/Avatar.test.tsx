@@ -57,7 +57,10 @@ describe('Avatar', () => {
   it('retries when the source changes after a failed avatar', async () => {
     const { rerender } = render(<Avatar name="Alpha Creator" src="https://scontent-ord5-1.cdninstagram.com/v/old.jpg" size="xs" />);
     fireEvent.error(screen.getByAltText('Alpha Creator'));
-    expect(screen.getByLabelText('Alpha Creator').textContent).toBe('AC');
+    // 状态更新后的 DOM 断言一律等提交(慢 runner 竞态,同 ea20aa50)
+    await waitFor(() => {
+      expect(screen.getByLabelText('Alpha Creator').textContent).toBe('AC');
+    });
 
     const next = 'https://scontent-ord5-1.cdninstagram.com/v/new.jpg';
     rerender(<Avatar name="Alpha Creator" src={next} size="xs" />);

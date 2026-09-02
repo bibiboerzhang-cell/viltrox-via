@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { VkpiKolUrlDeepCrawlResponse } from "../../../../domains/kol";
@@ -121,7 +121,7 @@ describe("SmartKolInputPanel URL result identity isolation", () => {
 
   afterEach(() => cleanup());
 
-  it("resets avatar failures when a creator or account avatar changes", () => {
+  it("resets avatar failures when a creator or account avatar changes", async () => {
     const firstVideo = videoResult({
       matched_kol_pool_id: 0,
       creator_identity: { handle: "avatar-a", platform: "instagram", avatar_url: "https://images.example/bad-video-avatar.jpg" },
@@ -136,7 +136,10 @@ describe("SmartKolInputPanel URL result identity isolation", () => {
     const badVideoAvatar = document.querySelector('img[src="https://images.example/bad-video-avatar.jpg"]');
     expect(badVideoAvatar).toBeTruthy();
     fireEvent.error(badVideoAvatar as Element);
-    expect(document.querySelector('img[src="https://images.example/bad-video-avatar.jpg"]')).toBeNull();
+    // 状态更新后的 DOM 断言一律等提交(慢 runner 竞态,同 ea20aa50)
+    await waitFor(() => {
+      expect(document.querySelector('img[src="https://images.example/bad-video-avatar.jpg"]')).toBeNull();
+    });
 
     view.rerender(
       <UrlSummary result={secondVideo} apiToken="token" canExecute isExecuting={false} onExecute={() => undefined} />,
@@ -150,7 +153,10 @@ describe("SmartKolInputPanel URL result identity isolation", () => {
     const badAccountAvatar = document.querySelector('img[src="https://images.example/bad-account-avatar.jpg"]');
     expect(badAccountAvatar).toBeTruthy();
     fireEvent.error(badAccountAvatar as Element);
-    expect(document.querySelector('img[src="https://images.example/bad-account-avatar.jpg"]')).toBeNull();
+    // 状态更新后的 DOM 断言一律等提交(慢 runner 竞态,同 ea20aa50)
+    await waitFor(() => {
+      expect(document.querySelector('img[src="https://images.example/bad-account-avatar.jpg"]')).toBeNull();
+    });
     account.rerender(
       <ProfileInfoCard data={{ handle: "account-b", avatar_url: "https://images.example/good-account-avatar.jpg" }} apiToken="token" />,
     );
