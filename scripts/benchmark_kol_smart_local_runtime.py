@@ -153,7 +153,36 @@ def validate_rounds(value: int) -> int:
     return rounds
 
 
-def _assert_loopback(raw_conn: psycopg.Connection[Any]) -> None:
+def _dsn_targets_loopback(admin_dsn: str) -> bool:
+    """客户端视角:DSN 的连接目标是否回环 / unix socket。
+
+    GitHub Actions 的 PostgreSQL 是 service 容器,客户端连 localhost:5432(端口映射),
+    但 inet_server_addr() 看到的是容器网段 IP(172.x)——服务端视角天然不是回环。
+    守卫的本意是「只许打本地私有库、拒绝远端」,所以客户端目标为准,服务端地址兜底。
+    """
+    import socket
+
+    params = conninfo_to_dict(admin_dsn)
+    host = str(params.get("host") or "").strip()
+    if not host or host.startswith("/"):
+        return True  # unix socket
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, int(params.get("port") or 5432), proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, OSError, ValueError):
+        return False
+    addresses = {info[4][0] for info in infos}
+    return bool(addresses) and all(ipaddress.ip_address(a.split("%")[0]).is_loopback for a in addresses)
+
+
+def _assert_loopback(raw_conn: psycopg.Connection[Any], admin_dsn: str = "") -> None:
+    if admin_dsn and _dsn_targets_loopback(admin_dsn):
+        return
     row = raw_conn.execute(
         "SELECT COALESCE(inet_server_addr()::text, 'local_socket'), current_database()"
     ).fetchone()
@@ -517,7 +546,7 @@ async def _benchmark_read_only(
     rounds: int,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any]]:
     raw = psycopg.connect(database_dsn, autocommit=True)
-    _assert_loopback(raw)
+    _assert_loopback(raw, database_dsn)
     raw.execute("BEGIN TRANSACTION READ ONLY")
     transaction_read_only = str(raw.execute("SHOW transaction_read_only").fetchone()[0]).lower() == "on"
     compat = PostgresCompatConnection(raw)
@@ -557,7 +586,7 @@ def run_benchmark(*, admin_dsn: str, golden_path: Path, rounds: int) -> dict[str
     _load_runtime_dependencies()
     database_name = f"vkpi_smart_runtime_{os.getpid()}_{secrets.token_hex(4)}"
     admin = psycopg.connect(admin_dsn, autocommit=True)
-    _assert_loopback(admin)
+    _assert_loopback(admin, admin_dsn)
     fixture_counts: dict[str, int] = {}
     dropped = False
     started = time.perf_counter()

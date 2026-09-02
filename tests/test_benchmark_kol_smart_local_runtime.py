@@ -192,3 +192,46 @@ def test_cli_rejects_output_symlink_before_benchmark(tmp_path: Path) -> None:
     assert completed.returncode != 0
     assert "output_symlink_forbidden" in completed.stderr
     assert target.read_text(encoding="utf-8") == "{}"
+
+
+class _StubConn:
+    """psycopg 连接桩:只回答 inet_server_addr() 那一句。"""
+
+    def __init__(self, server_addr: str) -> None:
+        self._addr = server_addr
+
+    def execute(self, _sql: str):  # noqa: ANN202 - 测试桩
+        addr = self._addr
+
+        class _Cur:
+            def fetchone(self):  # noqa: ANN202
+                return (addr, "vil_bench")
+
+        return _Cur()
+
+
+def test_dsn_targets_loopback_accepts_localhost_loopback_ip_and_unix_socket() -> None:
+    assert benchmark._dsn_targets_loopback("postgresql://postgres@localhost:5432/x") is True
+    assert benchmark._dsn_targets_loopback("postgresql://postgres@127.0.0.1:54329/x") is True
+    assert benchmark._dsn_targets_loopback("host=/tmp/viltrox2-pg-54329 dbname=x") is True
+    assert benchmark._dsn_targets_loopback("dbname=x") is True
+
+
+def test_dsn_targets_loopback_rejects_remote_and_unresolvable_hosts() -> None:
+    assert benchmark._dsn_targets_loopback("postgresql://u@203.0.113.7:5432/x") is False
+    assert benchmark._dsn_targets_loopback("postgresql://u@db.example.invalid:5432/x") is False
+
+
+def test_assert_loopback_accepts_ci_service_container_topology() -> None:
+    # GitHub Actions:客户端连 localhost,服务端 inet_server_addr() 是容器网段 IP——必须放行。
+    benchmark._assert_loopback(_StubConn("172.18.0.2/32"), "postgresql://postgres@localhost:5432/x")
+
+
+def test_assert_loopback_still_refuses_remote_server_when_dsn_is_not_loopback() -> None:
+    with pytest.raises(RuntimeError, match="postgres_server_is_not_loopback"):
+        benchmark._assert_loopback(_StubConn("172.18.0.2/32"), "postgresql://u@203.0.113.7:5432/x")
+    # 无 DSN 时退回旧口径:服务端回环 / unix socket 才放行
+    benchmark._assert_loopback(_StubConn("127.0.0.1/32"))
+    benchmark._assert_loopback(_StubConn("local_socket"))
+    with pytest.raises(RuntimeError, match="postgres_server_is_not_loopback"):
+        benchmark._assert_loopback(_StubConn("172.18.0.2/32"))
