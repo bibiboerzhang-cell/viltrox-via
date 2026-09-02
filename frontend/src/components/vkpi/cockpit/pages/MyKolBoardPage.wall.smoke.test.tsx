@@ -256,8 +256,11 @@ describe("MyKolBoardPage 内容墙(contentWall:收藏集最近采集视频网格
     Object.defineProperty(image, "naturalWidth", { configurable: true, value: 1 });
     Object.defineProperty(image, "naturalHeight", { configurable: true, value: 1 });
     fireEvent.load(image);
-    expect(wallCards()[0].querySelector("img")).toBeNull();
-    expect(wallCards()[0].querySelector("[title='缩略图加载失败(不摆假图)']")).toBeTruthy();
+    // onLoad → setFailed(true) 是一次状态更新;慢 runner(GitHub Linux)上同步断言会跑在提交之前。
+    await waitFor(() => {
+      expect(wallCards()[0].querySelector("img")).toBeNull();
+      expect(wallCards()[0].querySelector("[title='缩略图加载失败(不摆假图)']")).toBeTruthy();
+    });
   });
 
   it("品牌相关 + 播放排序:未判定隐藏;实测播放降序、未实测排最后(不当 0 混序)", async () => {
