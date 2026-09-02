@@ -13,7 +13,7 @@ DOMAIN="gui/$(id -u)"
 mkdir -p "$AGENTS" "$ROOT/runtime/logs"
 
 status() {
-  for l in com.vkpi.stack-supervisor "$LABEL"; do
+  for l in com.vkpi.stack-supervisor "$LABEL" com.vkpi.auto-train; do
     if launchctl print "$DOMAIN/$l" >/dev/null 2>&1; then
       printf '  %-28s loaded  %s\n' "$l" "$(launchctl print "$DOMAIN/$l" 2>/dev/null | grep -E 'state =|last exit code' | tr -s ' ' | tr '\n' ' ')"
     else
@@ -55,6 +55,35 @@ plutil -lint "$PLIST" >/dev/null
 launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
 launchctl bootstrap "$DOMAIN" "$PLIST"
 echo "已加载 $LABEL(08:00 / 20:00)"
+
+# 自动发车:每晚 00:30(北京时间;调度重活 02:30 才开始)。四道守卫在 auto_train.sh 里。
+AT_LABEL="com.vkpi.auto-train"; AT_PLIST="$AGENTS/$AT_LABEL.plist"
+cat >"$AT_PLIST" <<PL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$AT_LABEL</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>$ROOT/scripts/ops/auto_train.sh</string></array>
+  <key>StartCalendarInterval</key>
+  <dict><key>Hour</key><integer>0</integer><key>Minute</key><integer>30</integer></dict>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>LC_ALL</key><string>en_US.UTF-8</string>
+    <key>LANG</key><string>en_US.UTF-8</string>
+  </dict>
+  <key>RunAtLoad</key><false/>
+  <key>StandardOutPath</key><string>$ROOT/runtime/logs/auto-train.launchd.log</string>
+  <key>StandardErrorPath</key><string>$ROOT/runtime/logs/auto-train.launchd.log</string>
+</dict>
+</plist>
+PL
+plutil -lint "$AT_PLIST" >/dev/null
+launchctl bootout "$DOMAIN/$AT_LABEL" >/dev/null 2>&1 || true
+launchctl bootstrap "$DOMAIN" "$AT_PLIST"
+echo "已加载 $AT_LABEL(每晚 00:30 自动发车,四道守卫)"
 # supervisor 吃新代码:kickstart -k 重启(KeepAlive 会立刻拉回)
 if launchctl print "$DOMAIN/com.vkpi.stack-supervisor" >/dev/null 2>&1; then
   launchctl kickstart -k "$DOMAIN/com.vkpi.stack-supervisor" && echo "已重启 com.vkpi.stack-supervisor"

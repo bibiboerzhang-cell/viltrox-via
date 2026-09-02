@@ -16,6 +16,11 @@
 #   VKPI_TRAIN_WAIT_SECONDS       默认 900(等 supervisor 对齐上限)
 #   VKPI_TRAIN_REUSE_CANDIDATE=1  候选包已存在且 manifest 校验通过时复用(浏览器闸误杀重试省一次 freeze)
 #   VKPI_TRAIN_SKIP_RESTART=1     本地栈已经是 HEAD 时跳过 kill/等待(仍会核对 /health 对齐)
+#   VKPI_TRAIN_DRAIN_WAIT_SECONDS 默认 5400:deploy 前先探 prod 排水(与 deploy 同一探针/同口径),
+#                                  非空则每 VKPI_TRAIN_DRAIN_PROBE_INTERVAL_SECONDS(默认 120)再探,
+#                                  超时才放弃;=0 关闭等待(回到「撞一下就退」)。探针自身出错立即停。
+#   VKPI_TRAIN_SSH_TARGET / VKPI_TRAIN_REMOTE_ROOT / VKPI_TRAIN_REMOTE_APP_USER / _GROUP
+#                                  排水探针的远端参数,默认 viltrox / /opt/viltrox-2.0 / viltrox / viltrox
 #   VKPI_DEPLOY_ALLOW_NON_ANCESTOR 透传给部署脚本的祖先硬检查覆盖口(默认关)
 #   VKPI_TRAIN_HOTFIX_OF          本次发车是为哪次部署打 hotfix(12-40 位 hex sha;
 #                                  取前 12 位记入 outcome.json,交付采集器 CFR 判定用)
@@ -268,6 +273,53 @@ else
   restart_local_stack
 fi
 wait_for_alignment
+# ── 6a. 排水等待:deploy 的 live drain 无时窗无等待,非空原地退出(09-02 实测 13 次发车里
+#   12 次死在这里)。这里用同一个探针、同一口径先等到空,再把车交给 deploy。
+DRAIN_WAIT_SECONDS="${VKPI_TRAIN_DRAIN_WAIT_SECONDS:-5400}"
+DRAIN_PROBE_INTERVAL="${VKPI_TRAIN_DRAIN_PROBE_INTERVAL_SECONDS:-120}"
+DRAIN_SSH_TARGET="${VKPI_TRAIN_SSH_TARGET:-viltrox}"
+DRAIN_REMOTE_ROOT="${VKPI_TRAIN_REMOTE_ROOT:-/opt/viltrox-2.0}"
+DRAIN_APP_USER="${VKPI_TRAIN_REMOTE_APP_USER:-viltrox}"
+DRAIN_APP_GROUP="${VKPI_TRAIN_REMOTE_APP_GROUP:-viltrox}"
+[[ "${DRAIN_WAIT_SECONDS}" =~ ^[0-9]+$ ]] || die "VKPI_TRAIN_DRAIN_WAIT_SECONDS 必须是非负整数"
+[[ "${DRAIN_PROBE_INTERVAL}" =~ ^[1-9][0-9]*$ ]] || die "VKPI_TRAIN_DRAIN_PROBE_INTERVAL_SECONDS 必须是正整数"
+remote_database_name() {  # 只回传库名,DATABASE_URL 不离开远端 shell
+  ssh "${DRAIN_SSH_TARGET}" "sudo -n -u '${DRAIN_APP_USER}' -g '${DRAIN_APP_GROUP}' sh -c 'sed -nE \"s#^DATABASE_URL=.*/([A-Za-z0-9_]+)(\\?.*)?\\\$#\\1#p\" ${DRAIN_REMOTE_ROOT}/.env | head -1'"
+}
+probe_release_drain() {  # 0=空 3=非空 2=探针错;stdout=阻塞原因(非空时)
+  local db mig out rc=0
+  db="$(remote_database_name)" || return 2
+  [ -n "${db}" ] || return 2
+  mig="$(find "${ROOT}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | tail -n 1)"
+  [ -n "${mig}" ] || return 2
+  out="$(ssh "${DRAIN_SSH_TARGET}" "sudo -n -u '${DRAIN_APP_USER}' -g '${DRAIN_APP_GROUP}' env -i HOME=/tmp XDG_CACHE_HOME=/tmp TMPDIR=/tmp PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin PYTHONDONTWRITEBYTECODE=1 '${DRAIN_REMOTE_ROOT}/.venv/bin/python' -B - --env-file '${DRAIN_REMOTE_ROOT}/.env' --expected-database '${db}' --current-migration '${mig}'" <"${ROOT}/scripts/ops/verify_release_drain.py" 2>/dev/null)" || rc=$?
+  if [ "${rc}" -eq 3 ]; then
+    printf '%s' "${out}" | "${PYTHON_BIN}" -B -c 'import sys,json
+raw=sys.stdin.read().strip().splitlines()
+try:
+    d=json.loads(raw[-1]); print(", ".join(d.get("overall",{}).get("blocking_reasons",[])) or "unknown")
+except Exception:
+    print("unparsed")'
+  fi
+  return "${rc}"
+}
+wait_for_release_drain() {
+  [ "${DRAIN_WAIT_SECONDS}" = "0" ] && { log "VKPI_TRAIN_DRAIN_WAIT_SECONDS=0:不等排水,直接交给 deploy"; return 0; }
+  local deadline reasons rc
+  deadline=$(( $(date +%s) + DRAIN_WAIT_SECONDS ))
+  while :; do
+    reasons="$(probe_release_drain)"; rc=$?
+    case "${rc}" in
+      0) log "prod 排水已空,交给 deploy"; return 0 ;;
+      3) log "prod 排水非空:${reasons};${DRAIN_PROBE_INTERVAL}s 后再探(剩 $(( deadline - $(date +%s) ))s)" ;;
+      *) die "排水探针出错(rc=${rc}):ssh/远端 python/库名解析之一失败,不盲等" ;;
+    esac
+    [ "$(date +%s)" -ge "${deadline}" ] && die "等排水 ${DRAIN_WAIT_SECONDS}s 超时,最后阻塞:${reasons}。prod 未动;换窗口再发"
+    sleep "${DRAIN_PROBE_INTERVAL}"
+  done
+}
+wait_for_release_drain
+assert_clean_tree "排水后"
 
 # ── 6b. 回滚标记观察哨:deploy 日志行没有时间戳,这里在标记行首次出现时落 UTC 时刻 ──
 # 只读轮询 DEPLOY_LOG,不碰部署流程;outcome.json 的 rollback{started_at,completed_at} 用。
