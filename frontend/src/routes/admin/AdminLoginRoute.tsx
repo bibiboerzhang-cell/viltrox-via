@@ -7,19 +7,35 @@
  * Viltrox Marketing 使用同一个登录入口。
  */
 import { useEffect, useState, type FormEvent } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useLocale } from "../../app/providers/LocaleProvider";
 import { useAuth } from "../../hooks/useAuth";
+import { NEXT_QUERY_KEY, consumeSessionExpiredNotice, sanitizeNextPath } from "../../lib/authSession";
 import { frontendBuildInfo, shortBuildSha } from "../../lib/buildInfo";
 import { PUBLIC_SURFACE_NAME } from "../../lib/publicSurface";
 import { ThemeSwitch } from "../../shared/ThemeSwitch";
 import "../../styles/admin.css";
 
+const SESSION_EXPIRED_NOTICE_STYLE = {
+  border: "1px solid color-mix(in srgb, var(--ds-warn) 35%, transparent)",
+  borderRadius: "var(--ds-radius-md)",
+  padding: "10px 12px",
+  background: "var(--ds-warn-soft)",
+  color: "var(--ds-warn)",
+  fontSize: 13,
+  marginBottom: 14,
+} as const;
+
 export default function AdminLoginRoute() {
   const { status, user, signIn } = useAuth();
   const { t } = useLocale();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // U-B3:会话失效跳回来时带 ?next=原地址(只认站内相对路径),登录后回到原页面;
+  // 「登录已失效」提示读一次即清,只在回到登录页的第一帧出现一次。
+  const nextPath = sanitizeNextPath(searchParams.get(NEXT_QUERY_KEY));
+  const [sessionExpired] = useState(() => consumeSessionExpiredNotice());
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -27,9 +43,9 @@ export default function AdminLoginRoute() {
 
   useEffect(() => {
     if (status === "authenticated" && user) {
-      navigate("/", { replace: true });
+      navigate(nextPath, { replace: true });
     }
-  }, [status, user, navigate]);
+  }, [status, user, navigate, nextPath]);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -41,7 +57,7 @@ export default function AdminLoginRoute() {
     setSubmitting(true);
     try {
       await signIn(email.trim(), password);
-      navigate("/", { replace: true });
+      navigate(nextPath, { replace: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg || "登录失败");
@@ -51,7 +67,7 @@ export default function AdminLoginRoute() {
   };
 
   if (status === "authenticated" && user) {
-    return <Navigate to="/" replace />;
+    return <Navigate to={nextPath} replace />;
   }
 
   return (
@@ -72,6 +88,12 @@ export default function AdminLoginRoute() {
         <h1 className="admin-auth-card__title">
           {t("登录")}
         </h1>
+
+        {sessionExpired && !error ? (
+          <div id="ax-login-session-expired" role="status" aria-live="polite" style={SESSION_EXPIRED_NOTICE_STYLE}>
+            {t("登录已失效，请重新登录。")}
+          </div>
+        ) : null}
 
         {error ? (
           <div id="ax-login-error" className="admin-auth-card__error" role="alert" aria-live="polite">

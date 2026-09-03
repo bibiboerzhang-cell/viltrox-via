@@ -181,6 +181,8 @@ export function CockpitOverlays(p: any) {
     e(AnimatePresence, { key: "ov-help" }, showHelp && e(HelpPopover, {
       onClose: () => setShowHelp(false),
       anchorRef: helpBtnRef, t,
+      // U-B2:弹层底部「当前账号」读真实登录人(与账户菜单同源),不再写死任何真人身份。
+      user: currentUser,
       // PDF 已移出构建产物;传 undefined 让 HelpPopover 将「文档 & 指南」渲染为禁用项(disabled: !onOpenDocs)
       onOpenDocs: VKPI_KOL_WORKFLOW_GUIDE_URL ? openKolWorkflowGuide : undefined,
       onOpenShortcuts: () => setShowShortcuts(true),

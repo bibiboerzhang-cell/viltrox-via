@@ -19,6 +19,7 @@ import { CockpitTopbar } from "./CockpitTopbar";
 import { usePermissions } from "../../../hooks/usePermissions";
 import { useBrowserAssist, isBrowserAssistEnabled } from "../../../lib/browserAssist/enable";
 import { LazyErrorBoundary } from "./components/LazyErrorBoundary";
+import { BoardLoadingFallback, BoardPlaceholderCard } from "./components/BoardPlaceholders";
 // 模态 / popover / ReportPanel / SettingsPage / logout/resolve/staff-group api 已随 CockpitOverlays 抽到 CockpitApp.Sections.tsx。
 import { listUpcomingEvents } from "../../../services/vkpi/events-api";
 import { getDealerLocations } from "../../../services/vkpi/dealers-api";
@@ -655,7 +656,7 @@ export function CockpitApp(props: any = {}) {
           },
             activeNav === "kol-pool" && e(LazyErrorBoundary, { name: "KolPool" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "KOL Pool 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "KOL Pool" })
               },
                 e(KOLPoolPage as React.ComponentType<any>, {
                   items: kolPoolRows,
@@ -670,7 +671,7 @@ export function CockpitApp(props: any = {}) {
 
             activeNav === "my-kol" && e(LazyErrorBoundary, { name: "MY KOL" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "MY KOL 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "MY KOL" })
               },
                 e(MyKolBoardPage, {
                   apiToken,
@@ -688,7 +689,7 @@ export function CockpitApp(props: any = {}) {
 
             activeNav === "projects" && e(LazyErrorBoundary, { name: "Projects" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Projects 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "Projects" })
               },
                 e(LegacyProjectsPage as React.ComponentType<any>, {
                   data: dashboardData,
@@ -727,7 +728,7 @@ export function CockpitApp(props: any = {}) {
 
             activeNav === "events" && e(LazyErrorBoundary, { name: "Events" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Events 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "Events" })
               },
                 e(EventsMockupPage, {
                   userName,
@@ -742,14 +743,14 @@ export function CockpitApp(props: any = {}) {
 
             activeNav === "shopify" && e(LazyErrorBoundary, { name: "Shopify" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Shopify 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "Shopify" })
               },
                 e(ShopifyBoardPage as React.ComponentType<any>, { apiToken })
               )
             ),
             activeNav === "dealers" && e(LazyErrorBoundary, { name: "Dealers" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "经销商地图加载中...")
+                fallback: e(BoardLoadingFallback, { label: "经销商地图" })
               },
                 e(DealerMapPage as React.ComponentType<any>, { apiToken })
               )
@@ -759,28 +760,28 @@ export function CockpitApp(props: any = {}) {
             //   triage 复用 DataQualityPage(运维页宿主,viewMode=manager 才拉质量摘要)。
             activeNav === "triage" && e(LazyErrorBoundary, { name: "Triage" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "运维 Triage 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "运维 Triage" })
               },
                 e(DataQualityPage as React.ComponentType<any>, { apiToken, viewMode: "manager" })
               )
             ),
             activeNav === "dataQuery" && e(LazyErrorBoundary, { name: "DataQuery" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "问数 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "问数" })
               },
                 e(DataQueryPage as React.ComponentType<any>, { apiToken })
               )
             ),
             activeNav === "marketTrends" && e(LazyErrorBoundary, { name: "MarketTrends" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "市场趋势 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "市场趋势" })
               },
                 e(MarketTrendsPage as React.ComponentType<any>, { apiToken })
               )
             ),
             activeNav === "skillStudio" && e(LazyErrorBoundary, { name: "SkillStudio" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Skill Studio 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "Skill Studio" })
               },
                 e(SkillStudioPage as React.ComponentType<any>, { apiToken, viewMode: appViewMode })
               )
@@ -788,14 +789,14 @@ export function CockpitApp(props: any = {}) {
             // P1 智能可见周:Intelligent 问答(三车道)+ 回复队列(评论区销售员 v0 半自动)
             activeNav === "intelligent" && e(LazyErrorBoundary, { name: "Intelligent" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "Intelligent 问答加载中...")
+                fallback: e(BoardLoadingFallback, { label: "Intelligent 问答" })
               },
                 e(IntelligentPage as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
               )
             ),
             activeNav === "replyQueue" && e(LazyErrorBoundary, { name: "ReplyQueue" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "回复队列加载中...")
+                fallback: e(BoardLoadingFallback, { label: "回复队列" })
               },
                 e(ReplyQueuePage as React.ComponentType<any>, { apiToken })
               )
@@ -803,14 +804,14 @@ export function CockpitApp(props: any = {}) {
             // 第2轮 档案工程:SKU 360° + KOL 完整档案
             activeNav === "sku360" && e(LazyErrorBoundary, { name: "Sku360" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "SKU 360° 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "SKU 360°" })
               },
                 e(Sku360Page as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
               )
             ),
             activeNav === "kolProfile" && e(LazyErrorBoundary, { name: "KolProfile" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "KOL 档案加载中...")
+                fallback: e(BoardLoadingFallback, { label: "KOL 档案" })
               },
                 e(KolProfilePage as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
               )
@@ -818,7 +819,7 @@ export function CockpitApp(props: any = {}) {
             // 第4轮 发射台
             activeNav === "launchpad" && e(LazyErrorBoundary, { name: "LaunchPad" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "发射台加载中...")
+                fallback: e(BoardLoadingFallback, { label: "发射台" })
               },
                 e(LaunchPadPage as React.ComponentType<any>, { apiToken })
               )
@@ -826,14 +827,14 @@ export function CockpitApp(props: any = {}) {
             // 第5轮 自治层:驾照板 + 市场之声
             activeNav === "autonomy" && e(LazyErrorBoundary, { name: "Autonomy" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "自治驾照加载中...")
+                fallback: e(BoardLoadingFallback, { label: "自治驾照" })
               },
                 e(AutonomyBoardPage as React.ComponentType<any>, { apiToken })
               )
             ),
             activeNav === "marketVoice" && e(LazyErrorBoundary, { name: "MarketVoice" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "市场之声加载中...")
+                fallback: e(BoardLoadingFallback, { label: "市场之声" })
               },
                 // onNavigate:溯源身份跳(kol → KOL 档案 / owned → MY KOL 官号矩阵)
                 e(MarketVoicePage as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
@@ -842,7 +843,7 @@ export function CockpitApp(props: any = {}) {
             // 第6轮 创意资产库
             activeNav === "creativeLibrary" && e(LazyErrorBoundary, { name: "CreativeLibrary" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "创意资产库加载中...")
+                fallback: e(BoardLoadingFallback, { label: "创意资产库" })
               },
                 e(CreativeLibraryPage as React.ComponentType<any>, { apiToken })
               )
@@ -850,7 +851,7 @@ export function CockpitApp(props: any = {}) {
             // 战略大脑波:战略台
             activeNav === "strategyBoard" && e(LazyErrorBoundary, { name: "StrategyBoard" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "战略台加载中...")
+                fallback: e(BoardLoadingFallback, { label: "战略台" })
               },
                 e(StrategyBoardPage as React.ComponentType<any>, { apiToken })
               )
@@ -858,28 +859,18 @@ export function CockpitApp(props: any = {}) {
             // GTM-1 总脑:上市增长指挥图
             activeNav === "gtmCommand" && e(LazyErrorBoundary, { name: "GtmCommand" },
               e(React.Suspense, {
-                fallback: e("div", { className: "min-h-[60vh] p-8 text-[12px] text-slate-400" }, "GTM Command 加载中...")
+                fallback: e(BoardLoadingFallback, { label: "GTM Command" })
               },
                 e(GtmCommandPage as React.ComponentType<any>, { apiToken, onNavigate: setActiveNav })
               )
             ),
 
             // Placeholder for nav items not yet built
-            !(COCKPIT_BOARDS as readonly string[]).includes(activeNav) && e("div", { className: "p-8 md:p-16 flex flex-col items-center justify-center text-center min-h-[60vh]" },
-              e("div", { className: "rounded-2xl border border-white/[0.06] bg-white/[0.015] p-8 max-w-md w-full" },
-                (() => {
-                  const navItem = NAV_ITEMS.find(n => n.key === activeNav);
-                  const Icon = navItem?.icon;
-                  return Icon ? e(Icon, { size: 32, className: "text-slate-500 mx-auto mb-3" }) : null;
-                })(),
-                e("div", { className: "text-base font-semibold text-white mb-1" }, (NAV_ITEMS.find(n => n.key === activeNav)?.label) || "Page"),
-                e("div", { className: "text-[12px] text-slate-400 mb-4" }, "此页面尚未接入,在后续阶段完成。"),
-                e("button", {
-                  onClick: () => setActiveNav("dashboard"),
-                  className: "px-4 py-1.5 rounded-md border border-white/[0.08] bg-white/[0.03] text-[11px] text-slate-300 hover:bg-white/[0.06] hover:text-white"
-                }, "← 返回 Dashboard")
-              )
-            ),
+            !(COCKPIT_BOARDS as readonly string[]).includes(activeNav) && e(BoardPlaceholderCard, {
+              label: NAV_ITEMS.find(n => n.key === activeNav)?.label || "Page",
+              icon: NAV_ITEMS.find(n => n.key === activeNav)?.icon || null,
+              onBack: () => setActiveNav("dashboard"),
+            }),
 
             activeNav === "dashboard" && e(DashboardReplicaPage, {
               dashboardEditing,

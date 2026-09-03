@@ -1,5 +1,7 @@
 // 隔离懒加载页面的崩溃:① 部署后 chunk 哈希变化导致旧浏览器加载失败(白屏)——
 // 自动硬刷新一次拉取新资源;② 任何渲染异常——优雅兜底,只挂这一块,不连累整个 app。
+// 2026-09-02(U-B1):兜底卡全走 --ds-* token 类(text-ink/text-ink-2/bg-panel/border-line),
+// 不再写死 white/slate/purple——写死色在浅色主题下是白字白底,「坏了」反而看不见。
 import React from "react";
 
 function isChunkError(err: any) {
@@ -10,6 +12,10 @@ function isChunkError(err: any) {
     /Loading chunk|Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|dynamically imported module/i.test(msg)
   );
 }
+
+export const ERROR_CARD_CLASS = "rounded-ds-lg border border-line bg-panel shadow-ds p-8 max-w-md w-full";
+export const ERROR_BUTTON_SECONDARY_CLASS = "px-4 py-2 rounded-ds border border-line bg-card text-ink-2 text-[12px] font-medium hover:bg-accent-soft hover:text-ink";
+export const ERROR_BUTTON_PRIMARY_CLASS = "px-4 py-2 rounded-ds bg-accent text-[color:var(--ds-on-accent)] text-[12px] font-medium hover:bg-accent-hover";
 
 export class LazyErrorBoundary extends React.Component<any, any> {
   constructor(props: any) {
@@ -50,24 +56,25 @@ export class LazyErrorBoundary extends React.Component<any, any> {
       "div",
       {
         className: overlay
-          ? "fixed inset-0 z-[1400] flex items-center justify-center bg-black/65 p-5 text-center backdrop-blur-sm"
+          ? "fixed inset-0 z-[1400] flex items-center justify-center p-5 text-center backdrop-blur-sm"
           : "min-h-[60vh] p-8 flex flex-col items-center justify-center text-center",
+        style: overlay ? { background: "var(--ds-scrim)" } : undefined,
         role: overlay ? "dialog" : "alert",
         "aria-label": `${name} 加载失败`,
       },
       React.createElement(
         "div",
-        { className: "rounded-2xl border border-white/[0.08] bg-white/[0.02] p-8 max-w-md w-full" },
-        React.createElement("div", { className: "text-[14px] font-semibold text-white mb-2" }, chunk ? "页面有新版本" : `${name} 暂时出错`),
+        { className: ERROR_CARD_CLASS },
+        React.createElement("div", { className: "text-[14px] font-semibold text-ink mb-2" }, chunk ? "页面有新版本" : `${name} 暂时出错`),
         React.createElement(
           "div",
-          { className: "text-[12px] text-slate-400 mb-4" },
+          { className: "text-[12px] text-ink-2 mb-4" },
           chunk ? "检测到前端已更新,正在刷新加载最新版本…若未自动刷新请点下方按钮。" : "这个页面渲染出错了,可刷新重试。错误已隔离,不影响其它页面。"
         ),
         !chunk &&
           React.createElement(
             "div",
-            { className: "text-[10px] text-slate-500 mb-4 break-all font-mono text-left" },
+            { className: "text-[11px] text-ink-2 mb-4 break-all font-mono text-left" },
             String((error && error.message) || error).slice(0, 240)
           ),
         React.createElement(
@@ -75,12 +82,12 @@ export class LazyErrorBoundary extends React.Component<any, any> {
           { className: "flex items-center justify-center gap-2" },
           typeof this.props.onDismiss === "function" && React.createElement(
             "button",
-            { onClick: this.props.onDismiss, className: "px-4 py-2 rounded-lg border border-white/10 bg-white/5 text-slate-200 text-[12px] font-medium" },
+            { onClick: this.props.onDismiss, className: ERROR_BUTTON_SECONDARY_CLASS },
             "关闭"
           ),
           React.createElement(
             "button",
-            { onClick: reload, className: "px-4 py-2 rounded-lg bg-purple-500/90 hover:bg-purple-500 text-white text-[12px] font-medium" },
+            { onClick: reload, className: ERROR_BUTTON_PRIMARY_CLASS },
             "刷新页面"
           )
         )

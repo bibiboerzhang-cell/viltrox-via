@@ -1,3 +1,5 @@
+import { isCredentialEndpoint, notifyAuthExpired } from "./authSession";
+
 export interface AuthUser {
   id: number;
   email: string;
@@ -154,6 +156,11 @@ export async function apiFetch<T>(
   }
 
   if (!response.ok) {
+    // U-B3 全局 401:带 token 的业务请求被拒 = 会话已失效,广播一次交给 AuthProvider 统一处理
+    // (清会话 + 跳登录页带回跳),不让每张卡各自红。登录/登出自身的 401 是凭证错误,不算过期。
+    if (response.status === 401 && token && !isCredentialEndpoint(path)) {
+      notifyAuthExpired({ path, status: response.status });
+    }
     throw new ApiResponseError(response, parsed);
   }
 
