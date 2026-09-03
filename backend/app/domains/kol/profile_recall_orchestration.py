@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.domains.kol import profile_recall_backfill_ladder as _ladder
+from app.domains.kol import profile_recall_backfill_wiring as _wiring
 from app.domains.kol.profile_recall_orchestration_contract import RecallRequest
 from app.domains.kol.profile_recall_observability import (
     elapsed_ms as _elapsed_ms,
@@ -158,10 +160,16 @@ def _retrieve_candidates(
     hits = hits[: request.safe_candidate_limit]
     retrieved_hit_count = len(hits)
     exclusion_started = deps.perf_counter()
+    considered_hits = list(hits)
     hits, favorite_exclusion = deps._favorite_exclusion.exclude_favorited_hits(hits)
+    # 软排除:被同事收藏的人先让位,但**留在手边**——精准命中凑不满 30 时由回填梯
+    # 带「已被同事关注」标记回填(只在 smart-local 车道启用,见 profile_recall_backfill_wiring)。
+    survivor_ids = {id(hit) for hit in hits}
+    favorited_hits = [hit for hit in considered_hits if id(hit) not in survivor_ids]
     breakdown["retrieve_favorite_exclusion_ms"] = _elapsed_ms(exclusion_started, deps)
     return {
         "hits": hits,
+        "favorited_hits": favorited_hits,
         "retrieved_hit_count": retrieved_hit_count,
         "favorite_exclusion": favorite_exclusion,
         "retrieved_at": deps.perf_counter(),
@@ -274,6 +282,7 @@ def _project_candidates(
     context: dict[str, Any],
     hydration: dict[str, Any],
     deps: Any,
+    reserve: Any = None,
 ) -> dict[str, Any]:
     buckets: dict[str, list[dict[str, Any]]] = {
         "creator": [],
@@ -281,6 +290,10 @@ def _project_candidates(
         "unknown": [],
     }
     ledger = deps.RecallStageLedger()
+    # 储备账本只在 smart-local 车道收人(其余车道 enabled=False,是空操作):
+    # 通过集合与记账前逐字节一致,回填只发生在选人之后。
+    if reserve is None:
+        reserve = _ladder.BackfillReserve(enabled=bool(request.smart_local_enabled))
     for hit in hydration["ordered_hits"]:
         item = _project_candidate(
             hit,
@@ -289,10 +302,11 @@ def _project_candidates(
             hydration=hydration,
             ledger=ledger,
             deps=deps,
+            reserve=reserve,
         )
         if item is not None:
             buckets[item["bucket"]].append(item)
-    return {"buckets": buckets, "ledger": ledger}
+    return {"buckets": buckets, "ledger": ledger, "reserve": reserve}
 
 
 def _project_candidate(
@@ -303,6 +317,7 @@ def _project_candidate(
     hydration: dict[str, Any],
     ledger: Any,
     deps: Any,
+    reserve: Any,
 ) -> dict[str, Any] | None:
     row = hydration["rows_by_id"].get(hit.kol_pool_id)
     if not row:
@@ -344,79 +359,32 @@ def _project_candidate(
     )
     passes_filters, rejected_fields, unknown_fields = verdict
     ledger.note_hard_filter(rejected_fields, unknown_fields, passed=passes_filters)
+    entry = _ladder.ReserveEntry(
+        hit=hit,
+        row=row,
+        evidence=evidence,
+        vertical_reading=vertical_reading,
+        unknown_fields=list(unknown_fields),
+        rejected_fields=list(rejected_fields),
+    )
     if not passes_filters:
         ledger.note_topup_candidates(
             getattr(verdict, "unknown_field_candidates", ())
         )
+        reserve.note_hard_filter(entry)
         return None
 
-    field_evidence = deps.build_query_cell_match_evidence(
-        row,
-        evidence,
-        context["resolved_text"],
-        query_cell=request.targeted_query_cell,
-        required_product_terms=context["safe_product_evidence_terms"],
-        fallback_query_text=context["evidence_query_text"],
-    )
+    field_evidence = _wiring.match_evidence_for(entry, request=request, context=context, deps=deps)
     if not request.allow_backfill and not field_evidence:
         ledger.no_match_evidence += 1
+        reserve.note_no_evidence(entry)
         return None
-    bucket = deps._bucket_for(row, request.mixed_policy)
-    item = deps._format_item(
-        hit,
-        row,
-        bucket,
-        vector_weight=request.safe_vector_weight,
-        type_weight=request.safe_type_weight,
-        type_boost_enabled=bool(request.type_boost_enabled),
-        evidence=evidence,
-        persona_text=context["persona_text"],
-        product_label=context["product_label"],
-        video_leaning=context["video_leaning"],
-    )
-    if not request.allow_backfill:
-        item["match_evidence"] = list(field_evidence)
-        item["why_fit"] = deps.why_fit_from_match_evidence(field_evidence)
-        item["candidate_facets"] = deps.candidate_facets(row, evidence)
-    _annotate_projected_item(
-        item,
-        hit=hit,
-        unknown_fields=unknown_fields,
-        vertical_reading=vertical_reading,
+    return _wiring.materialize_item(
+        entry,
+        field_evidence,
+        request=request,
+        context=context,
         deps=deps,
-    )
-    return item
-
-
-def _annotate_projected_item(
-    item: dict[str, Any],
-    *,
-    hit: Any,
-    unknown_fields: list[str],
-    vertical_reading: Any,
-    deps: Any,
-) -> None:
-    retrieval_tier = (
-        "backfill"
-        if hit.qdrant_point_id == "pool_relevance_backfill"
-        else str(hit.retrieval_tier or "backfill")
-    )
-    if retrieval_tier not in {"strict", "relaxed", "backfill"}:
-        retrieval_tier = "relaxed"
-    relaxed_filters: list[str] = []
-    if retrieval_tier == "backfill":
-        relaxed_filters = ["query_relevance"]
-    elif retrieval_tier == "relaxed":
-        relaxed_filters = ["factual_query_anchor"]
-    item.update(
-        {
-            "match_tier": retrieval_tier,
-            "filter_status": retrieval_tier,
-            "relaxed_filters": relaxed_filters,
-            "unknown_fields": unknown_fields,
-            "vertical_tags": list(vertical_reading.verticals),
-            "vertical_evidence": deps.vertical_explanations(vertical_reading),
-        }
     )
 
 
@@ -630,6 +598,16 @@ def _build_diagnostics(
         "provider_free_initial": bool(request.provider_free),
         **retrieval["embedding_meta"],
     }
+    if selection.get("backfill_ladder") is not None:
+        backfill_items = selection.get("backfill_items") or []
+        diagnostics.update(
+            {
+                "precise_count": len(items),
+                "backfill_count": len(backfill_items),
+                "backfill_ladder": selection["backfill_ladder"],
+                "result_explanation": selection["result_explanation"],
+            }
+        )
     return diagnostics
 
 
@@ -700,6 +678,8 @@ def _build_response(
             algorithm_version=deps.ROBUST_RANK_VERSION,
         ),
         "items": items,
+        # 回填区:精准命中不够时按梯放宽补上的人,每个都带 backfill_tier 标记,不混进 items。
+        "backfill_items": list(selection.get("backfill_items") or []),
         "buckets": {
             "creator": selection["selected_creator"],
             "reviewer": selection["selected_reviewer"],
@@ -747,6 +727,14 @@ def _finalize_smart_local(
         }
     )
     response = deps.project_smart_local_result(response)
+    # 回填区走同一道隐私投影(同一个函数、同一份合同),绝不带 raw/联系方式出门。
+    response["backfill_items"] = deps.project_smart_local_result(
+        {
+            "items": list(response.get("backfill_items") or []),
+            "buckets": {},
+            "local_qualification": response["local_qualification"],
+        }
+    ).get("items") or []
     response["business_buckets"] = {
         lane: [
             item
@@ -756,6 +744,7 @@ def _finalize_smart_local(
         for lane in ("core_vertical", "expansion", "exploration")
     }
     deps._favorite_exclusion.annotate_shortfall(response["diagnostics"])
+    _wiring.annotate_favorite_note_after_backfill(response["diagnostics"])
     return response
 
 
@@ -773,6 +762,12 @@ def run_recall_pipeline(request: RecallRequest, *, deps: Any) -> dict[str, Any]:
         ranking,
         deps,
     )
+    if request.smart_local_enabled:
+        _wiring.apply_backfill_ladder(
+            request, context, retrieval, hydration, projection, selection, deps,
+            hydrate=_hydrate_candidates,
+            project=_project_candidates,
+        )
     metrics = _selection_metrics(request, ranking, selection)
     response = _build_response(
         request,

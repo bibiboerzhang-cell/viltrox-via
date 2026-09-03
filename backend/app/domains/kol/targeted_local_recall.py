@@ -5,8 +5,25 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.domains.kol import growth_candidate_scoring, targeted_query_execution
-from app.domains.kol.identity import canonical_creator_aliases
+from app.domains.kol import (
+    growth_candidate_scoring,
+    profile_recall_backfill_ladder as _ladder,
+    targeted_query_execution,
+)
+from app.domains.kol.targeted_local_backfill import (
+    _aggregate_backfill,
+    _backfill_rows,
+    _backfill_take,
+    _favorite_excluded_total,
+)
+from app.domains.kol.targeted_local_support import (
+    _annotate,
+    _cell_context,
+    _dedupe,
+    _identity_keys,
+    _rank_key,
+    _text,
+)
 
 
 Recall = Callable[..., dict[str, Any]]
@@ -17,129 +34,6 @@ Recall = Callable[..., dict[str, Any]]
 SERVER_TOTAL_CANDIDATE_BUDGET = 240
 SERVER_PER_CELL_CANDIDATE_CAP = 60
 SERVER_DEFERRED_DISPLAY_CAP = 30
-
-
-def _text(value: Any) -> str:
-    return " ".join(str(value or "").split()).strip()
-
-
-def _number(value: Any) -> float:
-    try:
-        return float(value or 0.0)
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _cell_context(cell: dict[str, Any]) -> dict[str, Any]:
-    context = {
-        "query_cell_id": cell.get("query_cell_id"),
-        "objective": cell.get("objective"),
-        "segment": cell.get("segment"),
-        "segment_label": cell.get("segment_label"),
-        "primary_query": cell.get("primary_query"),
-        "required_evidence_groups": list(cell.get("required_evidence_groups") or []),
-        "brand_or_model_required": cell.get("brand_or_model_required") is True,
-        "brand_or_model_ranking_weight": cell.get("brand_or_model_ranking_weight"),
-    }
-    if isinstance(cell.get("follower_filter"), dict):
-        context["follower_filter"] = dict(cell["follower_filter"])
-    if isinstance(cell.get("locked_term_groups"), dict):
-        context["locked_term_groups"] = dict(cell["locked_term_groups"])
-    return context
-
-
-def _annotate(items: list[dict[str, Any]], cell: dict[str, Any]) -> list[dict[str, Any]]:
-    context = _cell_context(cell)
-    return [
-        {
-            **item,
-            "query_cell_id": cell["query_cell_id"],
-            "query_cell_segment": cell.get("segment"),
-            "query_cell_query": cell["primary_query"],
-            "matched_query_cells": [context],
-        }
-        for item in items
-    ]
-
-
-def _rank_key(item: dict[str, Any]) -> tuple[float, float, float]:
-    growth = item.get("growth_candidate_score")
-    if growth is not None:
-        return (
-            _number(growth),
-            _number(item.get("evidence_confidence")),
-            _number(item.get("display_rank_score")),
-        )
-    return (
-        _number(item.get("display_rank_score")),
-        _number(item.get("recall_rank_score")),
-        _number(item.get("retrieval_score")),
-    )
-
-
-def _merge_matches(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-    winner, other = (
-        (existing, incoming)
-        if _rank_key(existing) >= _rank_key(incoming)
-        else (incoming, existing)
-    )
-    merged = dict(winner)
-    for key, value in other.items():
-        if merged.get(key) in (None, "", [], {}):
-            merged[key] = value
-    contexts: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for source in (existing, incoming):
-        for raw in source.get("matched_query_cells") or []:
-            if not isinstance(raw, dict):
-                continue
-            cell_id = _text(raw.get("query_cell_id"))
-            if cell_id and cell_id not in seen:
-                seen.add(cell_id)
-                contexts.append(dict(raw))
-    merged["matched_query_cells"] = contexts
-    return merged
-
-
-def _identity_keys(item: dict[str, Any]) -> set[str]:
-    aliases = canonical_creator_aliases(item)
-    if aliases:
-        return {f"alias:{alias}" for alias in aliases}
-    return {
-        "fallback:"
-        f"{_text(item.get('platform')).lower()}:"
-        f"{_text(item.get('handle')).lstrip('@').lower()}:"
-        f"{item.get('kol_pool_id') or ''}"
-    }
-
-
-def _dedupe(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    output: list[dict[str, Any]] = []
-    aliases: list[set[str]] = []
-    fallback: dict[str, int] = {}
-    for item in items:
-        item_aliases = canonical_creator_aliases(item)
-        index = next(
-            (position for position, known in enumerate(aliases) if item_aliases and item_aliases.intersection(known)),
-            None,
-        )
-        if index is None and not item_aliases:
-            key = (
-                f"{_text(item.get('platform')).lower()}:"
-                f"{_text(item.get('handle')).lstrip('@').lower()}:"
-                f"{item.get('kol_pool_id') or ''}"
-            )
-            index = fallback.get(key)
-        if index is None:
-            index = len(output)
-            output.append(item)
-            aliases.append(set(item_aliases))
-            if not item_aliases:
-                fallback[key] = index
-            continue
-        output[index] = _merge_matches(output[index], item)
-        aliases[index].update(item_aliases)
-    return output
 
 
 def _balanced_take(
@@ -226,14 +120,19 @@ def _aggregate_qualification(
         rejected["prospective_product_scene_or_activation_missing"] = growth_rejected
     if local_not_passed:
         rejected["local_qualification_not_passed"] = local_not_passed
-    shortfall = max(0, target - len(items))
+    # 缺口只按精准命中计:回填区(带 backfill_tier 标记)永远不冒充精准命中。
+    precise = [item for item in items if not _ladder.is_backfill_item(item)]
+    shortfall = max(0, target - len(precise))
     return {
         "schema": "smart_local_qualified_v2",
         "status": "ready" if not shortfall else "shortfall",
         "policy": dict(first.get("policy") or {}),
         "qualified_count": len(qualified_available),
         "returned_count": len(items),
-        "qualified_returned_count": len(items),
+        "qualified_returned_count": len(precise),
+        "precise_returned_count": len(precise),
+        "backfill_returned_count": len(items) - len(precise),
+        "backfill": _aggregate_backfill(contracts, items=items, target=target),
         "shortfall": shortfall,
         "shortfall_reason": "" if not shortfall else "targeted_query_cells_exhausted",
         "evaluated_count": evaluated,
@@ -261,6 +160,7 @@ class _CellRunOutcome:
     evaluated_rows: list[dict[str, Any]]
     qualified_rows: list[dict[str, Any]]
     deferred_rows: list[dict[str, Any]]
+    backfill_rows: list[dict[str, Any]]
     growth_rejected: int
     local_not_passed: int
     diagnostics: dict[str, Any]
@@ -271,6 +171,7 @@ class _CellExecution:
     results: list[dict[str, Any]] = field(default_factory=list)
     candidates: list[dict[str, Any]] = field(default_factory=list)
     deferred_candidates: list[dict[str, Any]] = field(default_factory=list)
+    backfill_candidates: list[dict[str, Any]] = field(default_factory=list)
     evaluated_candidates: list[dict[str, Any]] = field(default_factory=list)
     contracts: list[dict[str, Any]] = field(default_factory=list)
     cell_runs: list[dict[str, Any]] = field(default_factory=list)
@@ -281,6 +182,9 @@ class _CellExecution:
 @dataclass(frozen=True)
 class _CandidateSelection:
     selected: list[dict[str, Any]]
+    precise: list[dict[str, Any]]
+    backfill: list[dict[str, Any]]
+    backfill_available: int
     qualified_available: list[dict[str, Any]]
     deferred_display: list[dict[str, Any]]
     deferred_available: int
@@ -423,6 +327,7 @@ def _cell_run_diagnostics(
         "recall_returned": len(result.get("items") or []),
         "qualified_returned": len(qualified_rows),
         "deferred_returned": len(deferred_rows),
+        "backfill_returned": len(result.get("backfill_items") or []),
     }
 
 
@@ -461,6 +366,17 @@ def _execute_cell(
     deferred_rows.sort(key=_rank_key, reverse=True)
     qualified_rows = qualified_rows[: int(cell["raw_limit"])]
     deferred_rows = deferred_rows[: int(cell["raw_limit"])]
+    # 回填区只打分不设闸(它本来就是「放宽后」的人),标记原样保留,永不计入目标。
+    backfill_rows = _backfill_rows(result, cell, candidate_cap)
+    if backfill_rows:
+        backfill_rows = _growth_score_rows(
+            backfill_rows,
+            objective=objective,
+            brief=brief,
+            cell=cell,
+        )
+    for row in backfill_rows:
+        row["counts_toward_target"] = False
     diagnostics = _cell_run_diagnostics(
         cell=cell,
         candidate_cap=candidate_cap,
@@ -475,6 +391,7 @@ def _execute_cell(
         evaluated_rows=evaluated_rows,
         qualified_rows=qualified_rows,
         deferred_rows=deferred_rows,
+        backfill_rows=backfill_rows,
         growth_rejected=growth_rejected,
         local_not_passed=local_not_passed,
         diagnostics=diagnostics,
@@ -506,6 +423,7 @@ def _execute_cells(
         execution.evaluated_candidates.extend(outcome.evaluated_rows)
         execution.candidates.extend(outcome.qualified_rows)
         execution.deferred_candidates.extend(outcome.deferred_rows)
+        execution.backfill_candidates.extend(outcome.backfill_rows)
         execution.growth_rejected += outcome.growth_rejected
         execution.local_not_passed += outcome.local_not_passed
         execution.cell_runs.append(outcome.diagnostics)
@@ -547,12 +465,19 @@ def _select_candidates(
     unique_evaluated = len(_dedupe(execution.evaluated_candidates))
     creator_quota = max(0, int(base_kwargs.get("creator_quota") or 15))
     reviewer_quota = max(0, int(base_kwargs.get("reviewer_quota") or 15))
-    selected = _balanced_take(
+    precise = _balanced_take(
         merged,
         target=safe_target,
         creator_quota=creator_quota,
         reviewer_quota=reviewer_quota,
     )
+    backfill, backfill_available = _backfill_take(
+        execution.backfill_candidates,
+        taken_identity_keys=qualified_identity_keys
+        | {key for item in deferred_display for key in _identity_keys(item)},
+        capacity=safe_target - len(precise),
+    )
+    selected = [*precise, *backfill]
     creator = [item for item in selected if item.get("bucket") != "reviewer"]
     reviewer = [item for item in selected if item.get("bucket") == "reviewer"]
     business_buckets = {
@@ -561,6 +486,9 @@ def _select_candidates(
     }
     return _CandidateSelection(
         selected=selected,
+        precise=precise,
+        backfill=backfill,
+        backfill_available=backfill_available,
         qualified_available=merged,
         deferred_display=deferred_display,
         deferred_available=deferred_available,
@@ -659,8 +587,20 @@ def _project_local_response(
             "requested_count": safe_target,
             "returned_count": len(selected),
             "final_count": len(selected),
-            "shortfall": max(0, safe_target - len(selected)),
-            "result_contract_satisfied": len(selected) >= safe_target,
+            "precise_count": len(selection.precise),
+            "backfill_count": len(selection.backfill),
+            "backfill_available_count": selection.backfill_available,
+            # 缺口 / 契约只按精准命中计;回填人已带标记,不冒充命中。
+            "shortfall": max(0, safe_target - len(selection.precise)),
+            "result_contract_satisfied": len(selection.precise) >= safe_target,
+            "backfill_ladder": qualification.get("backfill"),
+            "result_explanation": _ladder.explain_result(
+                requested=safe_target,
+                precise_count=len(selection.precise),
+                backfill_by_tier=(qualification.get("backfill") or {}).get("filled_by_tier"),
+                gaps=(qualification.get("backfill") or {}).get("gaps"),
+                favorite_excluded=_favorite_excluded_total(execution),
+            ),
             "query_cells_requested": len(cells) + omitted,
             "query_cells_executed": len(cells),
             "query_cells_omitted": omitted,
