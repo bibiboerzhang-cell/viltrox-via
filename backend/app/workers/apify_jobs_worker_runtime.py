@@ -9,6 +9,8 @@ from typing import Any, Mapping
 
 import psycopg
 
+# 拒绝的原因不再合并:七种 provider_gate_reason 各回各的码,budget_guard_blocked 只留给真花超。
+from app.domains.costs.budget_decision import provider_gate_block
 from app.workers.apify_jobs_worker_keyframe_cache import (
     keyframe_qa_cache_reuse_state_for_source,
 )
@@ -262,17 +264,10 @@ def _authorized_execution_payload(
     deps: Mapping[str, Any],
 ) -> dict[str, Any] | None:
     if not state["allowed"]:
-        deps["_block_job"](
-            conn,
-            int(job["id"]),
-            "budget_guard_blocked",
-            {
-                "provider": "google",
-                "stage": derive_method,
-                "reason_detail": state["reason"],
-                "estimated_cost_usd": state["estimated_cost"],
-            },
-        )
+        deps["_block_job"](conn, int(job["id"]), *provider_gate_block(
+            preflight, provider="google", stage=derive_method,
+            gate_reason=state["reason"], estimated_cost_usd=state["estimated_cost"],
+        ))
         return None
     execution_plan = state["execution_plan"]
     ready_models = state["ready_models"]

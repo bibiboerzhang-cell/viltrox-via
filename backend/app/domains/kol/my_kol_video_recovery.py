@@ -139,8 +139,7 @@ _MACHINE_CODE_RE = re.compile(r"^[A-Za-z0-9_.:/-]{1,80}$")
 # 形态普查(budget_guard_blocked / cancelled_by_scope / stale_running_reclaimed /
 # NameError / yt-dlp / media_resolve / Gemini File API ... )。
 _BLOCKED_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    # 就绪门/模型绑定未放行会被 budget_guard 顺手拦下(reason_detail=readiness_* /
-    # model_binding_blocked):语义是「LLM 不可用」而非「没钱」,故先于 budget 判。
+    # 就绪门/模型绑定未放行语义是「模型不可用」而非「没钱」,故先于 budget 判。
     ("provider_unavailable", (
         "readiness", "model_binding", "not_production_ready", "fallback_to_rule", "llm_gateway",
         "model_not_ready", "not configured", "not_configured", "no api key", "missing_api_key",
@@ -161,6 +160,7 @@ _BLOCKED_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     )),
     ("provider_unavailable", (
         "provider_unavailable", "provider_pressure", "unavailable", "disabled", "llm_json_malformed",
+        "provider_candidates", "force_offline", "calls_blocked",  # 预算真话化后新码
     )),
 )
 _FAILED_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (

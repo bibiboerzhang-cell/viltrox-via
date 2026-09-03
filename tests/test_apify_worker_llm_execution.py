@@ -322,7 +322,11 @@ def test_full_worker_chain_all_blocked_never_calls_analyzer(monkeypatch) -> None
         namespace,
     )
     assert captured["blocks"]
-    assert captured["blocks"][0][2] == "budget_guard_blocked"
+    # 2026-09-03 预算误杀修复:模型未就绪就写成「预算已达上限」是 GATE1 M3 的病灶本身。
+    # 这条断言从固化谎言改成固化真话——budget_guard_blocked 现在只留给真花超。
+    assert captured["blocks"][0][2] == "model_binding_blocked"
+    assert captured["blocks"][0][3]["reason_detail"] == "model_binding_blocked"
+    assert "budget" not in captured["blocks"][0][2]
 
 
 def test_selected_fallback_uses_its_own_snapshot_and_missing_snapshot_fails_closed() -> None:

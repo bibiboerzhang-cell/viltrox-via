@@ -12,6 +12,8 @@ from psycopg.rows import dict_row
 from app.core.gemini_models import VISUAL_PASS_MODEL
 from app.core.logging import get_logger
 from app.core.model_registry import CLAUDE_OPUS_EXACT_MODEL
+# 拒绝的原因不再合并:七种 provider_gate_reason 各回各的码,budget_guard_blocked 只留给真花超。
+from app.domains.costs.budget_decision import provider_gate_block
 from app.domains.analysis.cache_reuse import canonical_final_v1_cache_reuse
 from app.domains.kol.video_keyframe_qa_enqueue import (
     final_v1_payload_from_cache_result,
@@ -222,18 +224,12 @@ def _process_gemini_video_final_v1_keyframe_qa(
         stage="keyframe_qa",
     )
     if not qa_allowed:
-        # 护栏② enforce:撞 cap 不再继续——_block_job 终态(对齐 cron fallback_action=block_job)
-        _block_job(
-            conn,
-            int(job["id"]),
-            "budget_guard_blocked",
-            {
-                "provider": "google",
-                "stage": "keyframe_qa",
-                "reason_detail": qa_reason,
-                "estimated_cost_usd": qa_estimated_cost,
-            },
-        )
+        # 护栏② enforce:被闸拦下就不继续——_block_job 终态(对齐 cron fallback_action=block_job);
+        # 原因按真实 provider_gate_reason 落码,不再一律写成预算。
+        _block_job(conn, int(job["id"]), *provider_gate_block(
+            qa_preflight, provider="google", stage="keyframe_qa",
+            gate_reason=qa_reason, estimated_cost_usd=qa_estimated_cost,
+        ))
         return
     qa_preflight_cost = qa_estimated_cost if qa_estimated_cost > 0 else max(0.0, float(preflight_cost or 0.0))
 
@@ -517,17 +513,10 @@ def _process_gemini_video_flash_gpt55_judge(
         stage="openai_keyframe_judge",
     )
     if not openai_allowed:
-        _block_job(
-            conn,
-            int(job["id"]),
-            "budget_guard_blocked",
-            {
-                "provider": "openai",
-                "stage": "openai_keyframe_judge",
-                "reason_detail": openai_reason,
-                "estimated_cost_usd": openai_estimated_cost,
-            },
-        )
+        _block_job(conn, int(job["id"]), *provider_gate_block(
+            openai_preflight, provider="openai", stage="openai_keyframe_judge",
+            gate_reason=openai_reason, estimated_cost_usd=openai_estimated_cost,
+        ))
         return
 
     started = time.monotonic()
@@ -659,17 +648,10 @@ def _process_gemini_video_flash_claude_judge(
         stage="anthropic_keyframe_judge",
     )
     if not anthropic_allowed:
-        _block_job(
-            conn,
-            int(job["id"]),
-            "budget_guard_blocked",
-            {
-                "provider": "anthropic",
-                "stage": "anthropic_keyframe_judge",
-                "reason_detail": anthropic_reason,
-                "estimated_cost_usd": anthropic_estimated_cost,
-            },
-        )
+        _block_job(conn, int(job["id"]), *provider_gate_block(
+            anthropic_preflight, provider="anthropic", stage="anthropic_keyframe_judge",
+            gate_reason=anthropic_reason, estimated_cost_usd=anthropic_estimated_cost,
+        ))
         return
 
     started = time.monotonic()

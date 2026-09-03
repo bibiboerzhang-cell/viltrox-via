@@ -27,6 +27,7 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from app.core.model_registry import current_task_model_binding, split_binding
+from app.domains.costs.budget_decision import decide_blocked_scopes
 from app.platform import llm_gateway
 from app.platform.llm_production_common import (
     ProductionLlmUnavailable,
@@ -77,6 +78,29 @@ def _apply_chain_selection(
     if not selected_provider or not selected_model:
         return provider_key, exact_model
     return selected_provider, selected_model
+
+
+def _with_budget_decision(result: dict[str, Any]) -> dict[str, Any]:
+    """给被额度拦下的降级结果补一份结构化判定(纯附加,零 gating 变化)。
+
+    网关在候选预检里已经把「这个用途没配额度行 / 花超了 / 这次请求太大」三种分开算好,
+    放在 ``errors[].blocked_scopes`` 里;但调用方历史上只读到 ``budget_blocked`` 一个词,
+    于是「从来没配过额度」也被讲成「预算已达上限」。这里把那份细分抬到结果顶层的
+    ``budget_decision``,让读结果的业务代码与门面能说出到底是哪一种。
+
+    只在确实发生了额度拦截时才加键:成功结果与非额度失败逐字不变。
+    """
+    if not isinstance(result, dict):
+        return result
+    errors = result.get("errors")
+    rows: list[Any] = []
+    for error in errors if isinstance(errors, list) else []:
+        if isinstance(error, dict) and isinstance(error.get("blocked_scopes"), list):
+            rows.extend(error["blocked_scopes"])
+    if not rows:
+        return result
+    result["budget_decision"] = decide_blocked_scopes(rows)
+    return result
 
 
 def generate_text(
@@ -191,7 +215,7 @@ def generate_json(
             provider_key=provider_key,
             exact_model=exact_model,
         )
-    return llm_gateway.invoke_json(
+    return _with_budget_decision(llm_gateway.invoke_json(
         str(prompt or ""),
         purpose=str(purpose or ""),
         max_output_tokens=max_output_tokens,
@@ -214,7 +238,7 @@ def generate_json(
         deadline_seconds=deadline_seconds,
         max_provider_attempts=1,
         enforce_atomic_reservation=True,
-    )
+    ))
 
 
 __all__ = [

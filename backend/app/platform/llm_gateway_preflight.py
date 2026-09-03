@@ -8,6 +8,11 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
+from app.domains.costs.budget_decision import (
+    GATE_MONTHLY_ENV_BUDGET_EXHAUSTED,
+    decide_plan as _decide_budget_plan,
+)
+
 
 def _candidate_readiness_and_authorization(
     *,
@@ -195,6 +200,10 @@ def _provider_preflight_item(
         "configured": configured,
         "estimated_cost_usd": estimated_cost,
         "budget_allowed": bool(plan.get("allowed")),
+        # 额度轴的细分(未配置 / 台账未建 / 行数据坏 / 单次超限 / 真花超)在这里就已经
+        # 算出来了;以前它只活在 plan["checks"] 里,落库时被压成一个词。透传出去,
+        # 让 worker 与门面都能说出到底是哪一种,而不是一律「预算已达上限」。
+        "budget_decision": _decide_budget_plan(plan),
         "env_monthly_allowed": env_allowed,
         "provider_calls_allowed": provider_allowed,
         "scopes": scopes,
@@ -209,7 +218,18 @@ def _preflight_reason(
     forced_offline: bool,
     skip_monthly_env_check: bool,
     monthly_budget: int,
+    monthly_remaining: int = 1,
 ) -> str:
+    """Name the single most specific reason provider calls are refused.
+
+    ``monthly_env_budget_exhausted`` splits one honest case out of the old
+    ``provider_calls_blocked`` catch-all: the env monthly limit is configured to
+    a positive amount but this month's spend already consumed it.  That case
+    never matched ``monthly_env_budget_disabled`` (which only asks whether a
+    limit exists) nor ``budget_hard_stop`` (which only reads the caps rows), so
+    a real overspend used to be reported as an unexplained gate.  Every other
+    branch keeps its previous order and previous literal.
+    """
     if forced_offline:
         return "force_offline"
     if not (bool(skip_monthly_env_check) or monthly_budget > 0):
@@ -223,6 +243,8 @@ def _preflight_reason(
     if not any(bool(item.get("budget_allowed")) for item in providers):
         return "budget_hard_stop"
     if not provider_calls_allowed:
+        if not bool(skip_monthly_env_check) and monthly_remaining <= 0:
+            return GATE_MONTHLY_ENV_BUDGET_EXHAUSTED
         return "provider_calls_blocked"
     return "provider_calls_allowed"
 
@@ -276,6 +298,13 @@ def _preflight_response(
         "provider_gate_reason": reason,
         "provider_gate_detail": provider_gate["code"],
         "provider_gate": provider_gate,
+        # 顶层也带一份额度细分(取自被选中的候选),这样只读 preflight 顶层的调用方
+        # 不必自己去 providers[].checks 里翻,也就不会再把六种非预算原因压成「预算」。
+        "budget_decision": (
+            selected_provider.get("budget_decision")
+            if isinstance(selected_provider.get("budget_decision"), dict)
+            else _decide_budget_plan(None)
+        ),
         "purpose": purpose,
         "cost_scope": cost_scope,
         "max_output_tokens": max(1, min(4000, int(max_output_tokens or 800))),
@@ -367,6 +396,7 @@ def budget_preflight_impl(
         forced_offline=forced_offline,
         skip_monthly_env_check=skip_monthly_env_check,
         monthly_budget=monthly_budget,
+        monthly_remaining=monthly_remaining,
     )
     provider_gate = _preflight_provider_gate(
         providers=providers,

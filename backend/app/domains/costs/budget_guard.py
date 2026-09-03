@@ -10,6 +10,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.core.release_validation import release_validation_active
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
+from app.domains.costs.budget_decision import decide_plan as _decide_budget_plan
 from app.domains.costs.budget_guard_errors import note_cost_ledger_failure
 from app.domains.costs.budget_guard_cost_helpers import (
     configured_optional_cost_scopes as _configured_optional_cost_scopes,
@@ -239,6 +240,11 @@ def check_budget_scopes(
         "scopes": clean_scopes,
         "checks": checks,
     }
+
+
+def check_budget_decision(scope: str, estimated_cost: float = 0.0, *, require_configured: bool = False) -> dict[str, Any]:
+    """结构化判定:分开回答「没配额度行」/「额度花超了」/「这次请求太大」。check_budget 的签名与 bool 返回逐字不变(既有调用方与测试依赖);判据全复用 check_budget_scopes 的只读计划,只解释拒绝、不放宽任何拦截。"""
+    return _decide_budget_plan(check_budget_scopes([scope], estimated_cost, require_configured=require_configured))
 
 
 def get_budget_status(scope: str | None = None, *, estimated_cost: float = 0.0) -> dict[str, Any]:
