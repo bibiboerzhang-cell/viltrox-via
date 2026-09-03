@@ -11,6 +11,8 @@ from app.db.connection import is_postgres_runtime
 from app.domains.kol.metric_truth import project_pool_item_truth
 from app.domains.kol.pool_read_response_cache import store_pool_read_payload
 from app.domains.kol.pool_transport import normalize_pool_transport_types
+from app.platform.country_codes import COUNTRY_CODE_ALIASES, COUNTRY_NAMES
+from app.platform.country_codes import country_code as _country_code
 from app.services.cache import cache_clear, cache_set
 from app.services.system import staff as staff_service
 
@@ -101,99 +103,6 @@ KOL_POOL_LIST_COLUMNS = (
     "suspect_inflation",
     "inflation_reason",
 )
-
-COUNTRY_CODE_ALIASES = {
-    "us": "US",
-    "usa": "US",
-    "u.s.": "US",
-    "u.s.a.": "US",
-    "united states": "US",
-    "united states of america": "US",
-    "america": "US",
-    "美国": "US",
-    "uk": "GB",
-    "gb": "GB",
-    "great britain": "GB",
-    "united kingdom": "GB",
-    "england": "GB",
-    "英国": "GB",
-    "canada": "CA",
-    "加拿大": "CA",
-    "germany": "DE",
-    "deutschland": "DE",
-    "德国": "DE",
-    "france": "FR",
-    "法国": "FR",
-    "italy": "IT",
-    "意大利": "IT",
-    "spain": "ES",
-    "西班牙": "ES",
-    "netherlands": "NL",
-    "holland": "NL",
-    "荷兰": "NL",
-    "belgium": "BE",
-    "比利时": "BE",
-    "japan": "JP",
-    "日本": "JP",
-    "south korea": "KR",
-    "korea": "KR",
-    "韩国": "KR",
-    "china": "CN",
-    "中国": "CN",
-    "hong kong": "HK",
-    "hongkong": "HK",
-    "hk": "HK",
-    "香港": "HK",
-    "china hk": "HK",
-    "中国香港": "HK",
-    "taiwan": "TW",
-    "tw": "TW",
-    "台湾": "TW",
-    "china tw": "TW",
-    "中国台湾": "TW",
-    "australia": "AU",
-    "澳大利亚": "AU",
-    "brazil": "BR",
-    "巴西": "BR",
-    "mexico": "MX",
-    "墨西哥": "MX",
-    "india": "IN",
-    "印度": "IN",
-    "thailand": "TH",
-    "泰国": "TH",
-    "vietnam": "VN",
-    "越南": "VN",
-    "philippines": "PH",
-    "菲律宾": "PH",
-    "indonesia": "ID",
-    "印度尼西亚": "ID",
-}
-
-COUNTRY_NAMES = {
-    "US": "United States",
-    "GB": "United Kingdom",
-    "CA": "Canada",
-    "DE": "Germany",
-    "FR": "France",
-    "IT": "Italy",
-    "ES": "Spain",
-    "NL": "Netherlands",
-    "BE": "Belgium",
-    "JP": "Japan",
-    "KR": "South Korea",
-    "CN": "China",
-    "HK": "China HK",
-    "TW": "China TW",
-    "AU": "Australia",
-    "BR": "Brazil",
-    "MX": "Mexico",
-    "IN": "India",
-    "TH": "Thailand",
-    "VN": "Vietnam",
-    "PH": "Philippines",
-    "ID": "Indonesia",
-}
-
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -417,19 +326,6 @@ def _loads(value: Any, default: Any = None) -> Any:
         return json.loads(str(value or ""))
     except Exception:
         return default
-
-
-def _country_code(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    lowered = re.sub(r"\s+", " ", text.lower())
-    if lowered in COUNTRY_CODE_ALIASES:
-        return COUNTRY_CODE_ALIASES[lowered]
-    upper = text.upper()
-    if upper in COUNTRY_NAMES:
-        return upper
-    return upper if len(upper) <= 3 else text
 
 
 def _country_name(value: Any, code: str = "") -> str:

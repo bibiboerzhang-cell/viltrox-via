@@ -41,6 +41,7 @@ from app.domains.kol.pool_common import (
     _thumb_url,
     _utcnow,
 )
+from app.domains.kol.pool_enrich_country import resolve_enrich_country
 from app.domains.kol.pool_read_avatar_hydration import (
     RAW_PROFILE_AVATAR_EXTRACTOR_VERSION,
     raw_profile_avatar_capability,
@@ -159,25 +160,30 @@ def _score_enrichment(item: dict[str, Any], platform: str, values: dict[str, Any
     )
 
 
-def _write_enriched_item(
-    conn: Any, kol_pool_id: int, values: dict[str, Any], raw_data: dict[str, Any], scoring: Any,
-) -> None:
-    now = _utcnow()
-    conn.execute(
-        """
+_ENRICH_UPDATE_SQL = """
         UPDATE vkpi_kol_pool
         SET profile_url=?, display_name=?, avatar_url=?, bio=?, followers=?, following=?,
             posts_count=?, avg_views=?, avg_likes=?, avg_comments=?, engagement_rate=?,
             viltrox_fit_score=?, viltrox_fit_reason=?, sync_status=?, raw_platform_data=?,
-            last_seen_at=?, updated_at=?
-        WHERE id=?
-        """,
+            last_seen_at=?, updated_at=?"""
+# 平台自报国家(pool_enrich_country.resolve_enrich_country 判定要写时才拼进同一条 UPDATE;
+# 取不到 / 库里是人工值 → 片段为空,SQL 与旧版逐字相同,绝不用查询 market 冒充)。
+_ENRICH_COUNTRY_SET = ", country=?"
+
+
+def _write_enriched_item(
+    conn: Any, kol_pool_id: int, values: dict[str, Any], raw_data: dict[str, Any], scoring: Any,
+) -> None:
+    now = _utcnow()
+    country = str(values.get("country") or "")
+    conn.execute(
+        _ENRICH_UPDATE_SQL + (_ENRICH_COUNTRY_SET if country else "") + "\n        WHERE id=?\n        ",
         (
             values["profile_url"], values["display_name"], values["avatar_url"], values["bio"],
             values["followers"], values["following"], values["posts_count"], values["avg_views"],
             values["avg_likes"], values["avg_comments"], values["engagement_rate"], float(scoring.score),
             "; ".join([*scoring.strengths, *scoring.concerns])[:1000], values["sync_status"],
-            _json(raw_data), now, now, int(kol_pool_id),
+            _json(raw_data), now, now, *((country,) if country else ()), int(kol_pool_id),
         ),
     )
     conn.commit()
@@ -264,6 +270,9 @@ def enrich_item(
         videos_payload=videos_payload, videos_items=videos_items,
     )
     values = _enrich_values(item, platform, raw_data, videos_items)
+    # 国家只认平台自报字段(YT snippet.country / TT authorMeta.region / IG 商家地址);
+    # 要写时同时把来源盖进 raw_data,和主 UPDATE 一起落库。人工 / 历史值绝不被覆盖。
+    values["country"] = resolve_enrich_country(item, platform, raw_data)
     scoring = _score_enrichment(item, platform, values)
     _stamp_enrich_avatar(
         raw_data, values["avatar_url"], platform=platform, external_id=str(item.get("handle") or ""),

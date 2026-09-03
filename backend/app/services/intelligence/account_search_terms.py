@@ -70,6 +70,11 @@ import re
 from typing import Any, Dict, List
 
 from app.services.intelligence.account_scan_helpers import _known_text, _normalize_int
+from app.platform.country_codes import (
+    COUNTRY_SOURCE_PLATFORM,
+    market_country_code,
+    platform_country_hint,
+)
 
 
 def _short_search_queries(query: str, *, max_queries: int = 4) -> List[str]:
@@ -473,3 +478,129 @@ def _youtube_data_api_normalize(
             }
         )
     return normalized
+
+
+# ── 市场核实(2026-09-02 T 车道实测:在线新发现 market 直接盖成查询里的 US、country 全空)──
+#
+# 「市场」是**这次搜的市场**(查询参数),「国家」是**这个人自报的国家**(平台字段)。
+# 旧口径把前者盖在每条候选上,读起来像后者——13 名德国频道被标成 US 就是这么来的。
+# 本节三条纯函数把两件事分开说清:
+#   * country     只在平台自报可得时补(YT snippet.country / TT authorMeta.region / IG 商家地址),
+#                 取不到就留空——**不用 market 冒充**;
+#   * market      照旧写查询市场,但配 market_source="query" + market_status 说清核实状态:
+#                 verified(自报国家 = 市场)/ mismatch(自报 ≠ 市场)/ unverified(平台没给);
+#   * 有 market 时 verified → unverified → mismatch 三档稳定分区(档内保 provider 序),
+#                 核实档之后的行打 market_backfill=True = 「同市场不够,回填的」。
+MARKET_SOURCE_QUERY = "query"
+MARKET_STATUS_VERIFIED = "verified"
+MARKET_STATUS_MISMATCH = "mismatch"
+MARKET_STATUS_UNVERIFIED = "unverified"
+_MARKET_STATUS_RANK = {MARKET_STATUS_VERIFIED: 0, MARKET_STATUS_UNVERIFIED: 1, MARKET_STATUS_MISMATCH: 2}
+
+
+def market_code(value: Any) -> str:
+    """市场文本 → 国家码(``us``→``US``、``uk``→``GB``);global/空/认不出 → ``""``。"""
+    return market_country_code(value)
+
+
+def market_verification(country_code: Any, market: Any) -> str:
+    """单条候选的市场核实状态;没有 market 约束 → ``""``(无可核实)。"""
+    target = market_code(market)
+    if not target:
+        return ""
+    code = market_code(country_code)
+    if not code:
+        return MARKET_STATUS_UNVERIFIED
+    return MARKET_STATUS_VERIFIED if code == target else MARKET_STATUS_MISMATCH
+
+
+def _handle_key(value: Any) -> str:
+    return str(value or "").strip().lstrip("@").lower() if isinstance(value, str) else ""
+
+
+def _raw_handle(row: Dict[str, Any]) -> str:
+    """actor 原始行的号主 handle(TT authorMeta.name / IG ownerUsername / 通用 handle)。"""
+    author = row.get("authorMeta") if isinstance(row.get("authorMeta"), dict) else {}
+    candidates = (
+        author.get("name"), row.get("author"), row.get("ownerUsername"),
+        row.get("username"), row.get("handle"), row.get("channelHandle"),
+    )
+    for value in candidates:
+        key = _handle_key(value)
+        if key:
+            return key
+    return ""
+
+
+def raw_country_hints(
+    raw_items: List[Dict[str, Any]] | None,
+    instagram_profiles: Dict[str, Dict[str, Any]] | None = None,
+) -> Dict[str, str]:
+    """actor 原始行 / IG 档案 → ``{handle 小写: 国家码}``(TT authorMeta.region、IG 商家地址)。
+    归一后的候选行不再带 authorMeta,所以线索要在原始行上取,再按 handle 对回去。纯函数零 IO。"""
+    hint_of = platform_country_hint
+    hints: Dict[str, str] = {}
+    for handle, profile in (instagram_profiles or {}).items():
+        code = hint_of(profile)
+        if code and _handle_key(handle):
+            hints[_handle_key(handle)] = code
+    for row in raw_items or []:
+        if not isinstance(row, dict):
+            continue
+        code = hint_of(row)
+        if code and _raw_handle(row):
+            hints.setdefault(_raw_handle(row), code)
+    return hints
+
+
+def _resolved_country(item: Dict[str, Any], hints: Dict[str, str]) -> str:
+    code = platform_country_hint(item)
+    if code:
+        return code
+    return hints.get(_handle_key(item.get("handle")), "")
+
+
+def annotate_market_verification(
+    items: List[Dict[str, Any]] | None,
+    market: Any,
+    *,
+    country_hints: Dict[str, str] | None = None,
+) -> List[Dict[str, Any]]:
+    """给候选打市场核实标(原地修改,保序):country 只在平台自报可得时补;有 market 时写
+    market(查询市场,沿用旧格式)+ market_source="query" + market_status。返回 dict 行列表。"""
+    target = market_code(market)
+    hints = country_hints or {}
+    rows = [item for item in (items or []) if isinstance(item, dict)]
+    for item in rows:
+        code = _resolved_country(item, hints)
+        if code and not _known_text(item.get("country"), ""):
+            item["country"] = code
+            item.setdefault("country_source", COUNTRY_SOURCE_PLATFORM)
+        if target:
+            item.setdefault("market", str(market or "").strip().upper())
+            item["market_source"] = MARKET_SOURCE_QUERY
+            item["market_status"] = market_verification(code, target)
+    return rows
+
+
+def prefer_market_items(items: List[Dict[str, Any]] | None, market: Any) -> List[Dict[str, Any]]:
+    """有 market 时**优先同市场**:verified → unverified → mismatch 稳定分区(档内保 provider 序);
+    排在核实档之后的行打 ``market_backfill=True``。没 market → 原样返回(不打标)。"""
+    rows = [item for item in (items or []) if isinstance(item, dict)]
+    if not market_code(market):
+        return rows
+    ordered = sorted(rows, key=lambda item: _MARKET_STATUS_RANK.get(str(item.get("market_status") or ""), 1))
+    verified = sum(1 for item in ordered if item.get("market_status") == MARKET_STATUS_VERIFIED)
+    for item in ordered[verified:]:
+        item["market_backfill"] = True
+    return ordered
+
+
+def market_verification_summary(items: List[Dict[str, Any]] | None) -> Dict[str, int]:
+    """metadata 用的三档计数(verified / unverified / mismatch),供读端与验收自证。"""
+    counts = {MARKET_STATUS_VERIFIED: 0, MARKET_STATUS_UNVERIFIED: 0, MARKET_STATUS_MISMATCH: 0}
+    for item in items or []:
+        status = str(item.get("market_status") or "") if isinstance(item, dict) else ""
+        if status in counts:
+            counts[status] += 1
+    return counts

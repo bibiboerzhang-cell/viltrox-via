@@ -57,7 +57,11 @@ from app.services.intelligence.account_search_terms import (  # noqa: F401
     _short_search_queries,
     _tiktok_collapse_author_videos,
     _youtube_search_query_variants,
+    annotate_market_verification,
+    market_verification_summary,
+    prefer_market_items,
     query_anchor_signals,
+    raw_country_hints,
     term_anchor_index,
     term_ledger_row,
     youtube_precision_terms,
@@ -94,6 +98,21 @@ def _content_runtime_dependencies() -> ContentRuntimeDependencies:
         instagram_enrich_targets=instagram_enrich_targets,
         short_search_queries=_short_search_queries,
         tiktok_collapse_author_videos=_tiktok_collapse_author_videos,
+    )
+
+
+def _verify_market(
+    items: List[Dict[str, Any]],
+    market: str,
+    *,
+    country_hints: Dict[str, str] | None = None,
+) -> List[Dict[str, Any]]:
+    """三条 provider 路共用的市场核实(2026-09-02 T 车道实测:market 盖成查询里的 US 未核实):
+    country 只在平台自报可得时补、market 配 market_status 说清核实状态、有 market 时同市场优先
+    (verified → unverified → mismatch,核实档之后的行打 market_backfill)。缺 market = 只补 country。"""
+    return prefer_market_items(
+        annotate_market_verification(items, market, country_hints=country_hints),
+        market,
     )
 
 
@@ -189,9 +208,12 @@ async def _youtube_data_api_search(
             )
         except Exception as exc:  # pragma: no cover - network only
             logger.warning("scanner.youtube_channel_stats_failed", extra={"error": str(exc)})
-    items = _youtube_data_api_normalize(
-        raw_items, search_query, market, "youtube-data-api/search.list",
-        merge_cap, stats_by_id=stats_by_id,
+    items = _verify_market(
+        _youtube_data_api_normalize(
+            raw_items, search_query, market, "youtube-data-api/search.list",
+            merge_cap, stats_by_id=stats_by_id,
+        ),
+        market,
     )
     return {
         "status": "done",
@@ -212,6 +234,7 @@ async def _youtube_data_api_search(
                 channels_list_calls=channels_list_calls,
             ),
             "channels_enriched": sum(1 for item in items if item.get("followers")),
+            "market_verification": market_verification_summary(items),
             # 车道 2:非严格频道搜索路只服务 legacy 单轮发现,刻意没接分页(接了也没人翻)。
             "pagination_supported": False,
             "pagination_unsupported_reason": "legacy_channel_search_not_wired",
@@ -287,14 +310,17 @@ async def _youtube_data_api_strict_video_search(
         logger=logger,
     )
 
-    items = normalize_strict_search_rows(
-        page_result.raw_items,
-        enrichment,
-        exact_query=exact_query,
-        activation_summary_fn=youtube_channel_activation_summary,
-        normalize_int=_normalize_int,
+    items = _verify_market(
+        normalize_strict_search_rows(
+            page_result.raw_items,
+            enrichment,
+            exact_query=exact_query,
+            activation_summary_fn=youtube_channel_activation_summary,
+            normalize_int=_normalize_int,
+        ),
+        market,
     )
-    return build_strict_search_result(
+    result = build_strict_search_result(
         plan=plan,
         page_result=page_result,
         page_state=page_state,
@@ -305,6 +331,8 @@ async def _youtube_data_api_strict_video_search(
         activation_coverage=youtube_activation_coverage,
         query_anchor_signals=query_anchor_signals,
     )
+    result["metadata"]["market_verification"] = market_verification_summary(items)
+    return result
 
 
 async def _youtube_fast_result(
@@ -447,15 +475,21 @@ async def search_platform_content(
         logger=logger,
         deps=runtime_deps,
     )
-    items = normalize_actor_items(
-        normalized_platform,
-        prepared.raw_items,
-        safe_limit=safe_limit,
-        market=market,
-        normalized_query=normalized_query,
-        actor_id=plan.actor_id,
-        instagram_profiles=prepared.instagram_profiles,
-        deps=runtime_deps,
+    # TT authorMeta.region / IG 商家地址只在 actor 原始行 / 档案上,归一后的候选不再带,
+    # 所以线索按 handle 从原始行取回(raw_country_hints),再走同一道市场核实。
+    items = _verify_market(
+        normalize_actor_items(
+            normalized_platform,
+            prepared.raw_items,
+            safe_limit=safe_limit,
+            market=market,
+            normalized_query=normalized_query,
+            actor_id=plan.actor_id,
+            instagram_profiles=prepared.instagram_profiles,
+            deps=runtime_deps,
+        ),
+        market,
+        country_hints=raw_country_hints(prepared.raw_items, prepared.instagram_profiles),
     )
 
     return build_actor_result(
