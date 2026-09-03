@@ -11,6 +11,7 @@ import app.domains.kol.profile_recall_qualification as kol_profile_recall_qualif
 import app.domains.kol.profile_recall_response as kol_profile_recall_response
 import app.domains.kol.search_auto_relax as kol_search_auto_relax
 import app.domains.kol.search_sessions as kol_search_sessions
+import app.domains.kol.search_sessions_history_read_cache as kol_search_history_read_cache
 import app.domains.kol.search_sessions_online as kol_search_sessions_online
 import app.domains.kol.smart_query_planner as kol_smart_query_planner
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
@@ -128,9 +129,11 @@ def list_kol_search_history(
     """Return compact smart-search history with item previews and status counts.
 
     每个人的记录不能串:按当前登录员工 created_by 作用域过滤(service 内做)。
+    读缓存按员工 + 会话族数据版本分区,任何会话写入后下一次读即重建。
     """
     try:
-        return kol_search_sessions.list_history(
+        return kol_search_history_read_cache.cached_list_history(
+            list_history_fn=kol_search_sessions.list_history,
             limit=limit,
             status=status,
             query_type=query_type,

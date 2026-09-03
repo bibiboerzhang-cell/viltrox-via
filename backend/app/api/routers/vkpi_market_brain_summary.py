@@ -30,6 +30,7 @@ from app.domains.market_brain.read_cache import (
     cacheable_payload,
     gtm_cache_observer,
 )
+from app.domains.market_brain.summary_read_cache import cached_summary
 from app.services.cache import cache_get_or_build
 
 logger = get_logger(__name__)
@@ -76,20 +77,24 @@ def get_market_brain_summary(
     staff=Depends(require_tab("vkpi", "read")),
     response: Response = None,
 ) -> dict:
-    """GTM 总脑页五卡数据；refresh=true 时绕过短时缓存重新聚合。"""
+    """GTM 总脑页五卡数据；refresh=true 时绕过短时缓存重新聚合。
+
+    命中后若条目已过半个 TTL,后台单飞预热一次,稳态流量不再撞冷重建。
+    """
     from app.domains.market_brain import summary
 
     scope_unavailable = legacy_gtm_scope_guard(staff, surface="summary")
     if scope_unavailable is not None:
         return scope_unavailable
     try:
-        return cache_get_or_build(
+        return cached_summary(
             _summary_cache_key(staff),
             lambda: summary.build_summary(staff),
             ttl=_GTM_READ_CACHE_TTL_SEC,
             cache_if=cacheable_payload,
             observe=gtm_cache_observer("summary", response=response),
             force_refresh=refresh,
+            cache_get_or_build_fn=cache_get_or_build,
         )
     except Exception as exc:  # noqa: BLE001 — 聚合失败不炸接口,诚实回原因
         logger.warning("market_brain summary failed: %s", exc, exc_info=True)

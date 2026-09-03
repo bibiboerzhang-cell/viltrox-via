@@ -29,12 +29,14 @@ def creative_segments_search(
     limit: int = Query(default=30, ge=1, le=200),
     staff=Depends(require_tab("vkpi", "read")),
 ) -> dict:
-    """段级创意资产检索(全只读,不写库)。"""
+    """段级创意资产检索(全只读,不写库;读缓存按深析库数据版本自动失效)。"""
     del staff
-    from app.domains.content import creative_segments
+    from app.domains.content import creative_segments_read_cache
 
     try:
-        return creative_segments.segment_search(query=query, style=style, focal=focal, limit=limit)
+        return creative_segments_read_cache.cached_segment_search(
+            query=query, style=style, focal=focal, limit=limit
+        )
     except Exception as exc:  # noqa: BLE001 — 增益块失败不炸接口,诚实回原因
         logger.warning("creative segment_search failed (query=%s style=%s focal=%s): %s", query, style, focal, exc)
         return {"status": "error", "reason": str(exc)[:300], "items": []}
