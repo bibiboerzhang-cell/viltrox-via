@@ -452,17 +452,16 @@ export function RecallMiniItem({
   );
   const candidateBucket = cleanText(item.candidate_bucket ?? item.business_lane ?? item.candidate_lane);
   const candidateBucketReason = cleanText(item.candidate_bucket_reason);
-  const laneLabel = candidateBucket === "core_vertical"
-    ? "核心垂直"
-    : candidateBucket === "expansion"
-      ? "拓展型"
-      : "";
+  const laneLabel = candidateBucket === "core_vertical" ? "核心垂直" : candidateBucket === "expansion" ? "拓展型" : "";
   const matchTier = cleanText(item.match_tier);
+  // 补充人选(精准命中不够时按放宽条件补上的人):实时那拍读 backfill_tier,从历史打开会话时
+  // 读 selection_tier 前缀(两条通路都在会话白名单里),角标文字用服务端给的人话标签。
+  const supplementTier = cleanText(itemRow.backfill_tier)
+    || (cleanText(itemRow.selection_tier).startsWith("backfill_") ? cleanText(itemRow.selection_tier).slice(9) : "");
+  const supplementLabel = cleanText(itemRow.backfill_label);
   const missingLabels = evidence.missingLabels;
   const verticalTags = candidateVerticalTags(item);
-  const relaxedFilters = (Array.isArray(item.relaxed_filters) ? item.relaxed_filters : [])
-    .map(cleanText)
-    .filter(Boolean);
+  const relaxedFilters = (Array.isArray(item.relaxed_filters) ? item.relaxed_filters : []).map(cleanText).filter(Boolean);
   const relevanceHits = Array.isArray(fitSrc.relevance_hits)
     ? (fitSrc.relevance_hits as unknown[]).map(cleanText).filter(Boolean).slice(0, 4)
     : [];
@@ -481,6 +480,7 @@ export function RecallMiniItem({
       data-kol-pool-id={item.kol_pool_id || undefined}
       data-candidate-bucket={candidateBucket || "legacy"}
       data-match-tier={matchTier || "unknown"}
+      data-backfill-tier={supplementTier || "none"}
       className={`group relative h-full min-w-0 overflow-hidden rounded-lg border border-white/[0.06] bg-white/[0.015] text-left transition-all hover:border-cyan-300/25 hover:bg-cyan-400/[0.04] ${className}`}
     >
       {/* F4 最小标注:主体是 <button>,控件不能嵌套其中 → 绝对定位在右上角(未入库项无 kol_pool_id 自动不渲染)。 */}
@@ -575,15 +575,14 @@ export function RecallMiniItem({
             </span>
           ) : null}
           <CandidateVerticalChips tags={verticalTags} />
-          {(laneLabel || matchTier === "backfill" || relaxedFilters.length || contactReady || audienceReady || missingLabels.length) ? (
+          {(laneLabel || supplementTier || matchTier === "backfill" || relaxedFilters.length || contactReady || audienceReady || missingLabels.length) ? (
             <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
               {laneLabel ? (
                 <span title={candidateBucketReason || undefined} className={`rounded-full border px-1.5 py-0.5 text-[8.5px] font-medium ${candidateBucket === "core_vertical"
-                  ? "border-violet-300/30 bg-violet-400/[0.10] text-violet-100"
-                  : "border-cyan-300/30 bg-cyan-400/[0.10] text-cyan-100"}`}>{laneLabel}</span>
+                  ? "border-violet-300/30 bg-violet-400/[0.10] text-violet-100" : "border-cyan-300/30 bg-cyan-400/[0.10] text-cyan-100"}`}>{laneLabel}</span>
               ) : null}
-              {matchTier === "backfill" || relaxedFilters.length ? (
-                <span className="rounded border border-amber-300/30 bg-amber-400/[0.09] px-1 text-[8.5px] font-medium text-amber-100" title={relaxedFilters.length ? `仅放宽相关性补位：${relaxedFilters.join("、")}` : "严格相关结果不足后的补位；显式硬筛选仍须满足"}>补位</span>
+              {supplementTier || matchTier === "backfill" || relaxedFilters.length ? (
+                <span data-testid="candidate-supplement-badge" className="rounded border border-amber-300/30 bg-amber-400/[0.09] px-1 text-[8.5px] font-medium text-amber-100" title={supplementLabel ? `${supplementLabel}；这一位不计入严格合格名单` : relaxedFilters.length ? `仅放宽相关性补位：${relaxedFilters.join("、")}` : "严格相关结果不足后的补位；显式硬筛选仍须满足"}>{supplementLabel || "补位"}</span>
               ) : null}
               {contactReady ? (
                 <span className="inline-flex max-w-full items-center gap-1 rounded border border-emerald-300/25 bg-emerald-400/[0.08] px-1 text-[8.5px] font-medium text-emerald-100/90" title={contactEmail ? `公开联系方式：${contactEmail}` : "已找到公开联系方式"}>

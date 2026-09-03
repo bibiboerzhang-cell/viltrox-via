@@ -73,6 +73,14 @@ _RECALL_SESSION_PAYLOAD_FIELDS = (
     # 活跃度未知桶(「从没抓到过视频证据」)的三个标记。少了它们,回放出来的
     # 行与真·活跃的行长得一模一样,操作员无从分辨,所以属于必存字段。
     "selection_tier",
+    # 补充人选(精准命中不够时按梯放宽补上的人)的逐人标记。少了它们,从历史打开会话
+    # 时补充人选与精准命中长得一模一样,操作员无从分辨;卡面上那句人话标签
+    # (``backfill_label``)也会退化成一个通用词。同体例于上面那三个活跃度标记。
+    "backfill_tier",
+    "backfill_label",
+    "backfill_reasons",
+    "precision_match",
+    "counts_toward_target",
     "activity_status",
     "activity_status_reason",
     "candidate_bucket",

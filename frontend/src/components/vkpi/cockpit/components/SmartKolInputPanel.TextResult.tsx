@@ -129,57 +129,62 @@ function searchFilterLabel(value: unknown): string {
   return SEARCH_FILTER_LABELS[key.toLowerCase()] || key;
 }
 
+const RESULT_EXPLANATION_SCHEMA = "recall_result_explanation_v1";
+
+/** 服务端逐条给的「原因 × 人数」,拼成一句人话。标签一律用服务端的措辞,前端不自己造词。 */
+function explainCounts(value: unknown): string {
+  return (Array.isArray(value) ? value : []).flatMap((raw) => {
+    const entry = asRecord(raw);
+    const count = optionalCount(entry.count);
+    const label = cleanText(entry.label) || searchFilterLabel(entry.code);
+    return label && count ? [`${label} ${count} 人`] : [];
+  }).join(" · ");
+}
+
 export function SearchFilterDiagnostics({ diagnostics }: { diagnostics: Row }) {
   const requested = optionalCount(diagnostics.requested_count);
   const strict = optionalCount(diagnostics.strict_count);
-  const backfill = optionalCount(diagnostics.backfill_count);
   const strictAvailable = optionalCount(diagnostics.strict_available_count);
-  const backfillAvailable = optionalCount(diagnostics.backfill_available_count);
   const finalCount = optionalCount(diagnostics.final_count);
   const shortfall = optionalCount(diagnostics.shortfall);
   const hardRejected = optionalCount(diagnostics.hard_filter_rejected_count);
-  const contractSatisfied = typeof diagnostics.result_contract_satisfied === "boolean"
-    ? diagnostics.result_contract_satisfied
-    : null;
+  const contractSatisfied = typeof diagnostics.result_contract_satisfied === "boolean" ? diagnostics.result_contract_satisfied : null;
   const backfillPolicy = cleanText(diagnostics.backfill_policy);
-  const hardFiltersNotRelaxed = diagnostics.hard_filters_relaxed === false
-    || backfillPolicy === "query_relevance_only_hard_filters_never_relaxed";
-  const unsupported = (Array.isArray(diagnostics.unsupported_filters) ? diagnostics.unsupported_filters : [])
-    .map(cleanText)
-    .filter(Boolean);
+  const hardFiltersNotRelaxed = diagnostics.hard_filters_relaxed === false || backfillPolicy === "query_relevance_only_hard_filters_never_relaxed";
+  const unsupported = (Array.isArray(diagnostics.unsupported_filters) ? diagnostics.unsupported_filters : []).map(cleanText).filter(Boolean);
   const bucketCounts = asRecord(diagnostics.business_bucket_counts);
-  const businessBuckets = [
-    ["核心垂直", optionalCount(bucketCounts.core_vertical)],
-    ["拓展", optionalCount(bucketCounts.expansion)],
-    ["探索/补位", optionalCount(bucketCounts.exploration)],
-  ] as const;
-  const visibleBusinessBuckets = businessBuckets.flatMap(([label, value]) => value == null ? [] : [`${label} ${value}`]);
+  const visibleBusinessBuckets = ([["核心垂直", "core_vertical"], ["拓展", "expansion"], ["探索/补位", "exploration"]] as const)
+    .flatMap(([label, key]) => { const value = optionalCount(bucketCounts[key]); return value == null ? [] : [`${label} ${value}`]; });
   const rejectedBy = Object.entries(asRecord(diagnostics.hard_filter_rejected_by))
     .map(([key, value]) => [searchFilterLabel(key), optionalCount(value)] as const)
-    .filter((entry): entry is readonly [string, number] => entry[1] != null && entry[1] > 0);
+    .filter((e): e is readonly [string, number] => e[1] != null && e[1] > 0);
+  // 精准命中不足时,服务端会给一份人话解释:为什么这么少、补充的人从哪来、多少人因同事已关注而没露面。
+  // 口径对不上(schema 不认)就整块不渲染——不猜、不编;它是空结果时唯一说得清的那段话。
+  const explained = cleanText(asRecord(diagnostics.result_explanation).schema) === RESULT_EXPLANATION_SCHEMA;
+  const explanation = asRecord(explained ? diagnostics.result_explanation : null);
+  const explainGaps = explainCounts(explanation.gaps);
+  const explainSupplement = explainCounts(explanation.backfill_reasons);
+  const explainHidden = optionalCount(explanation.favorited_by_team_hidden) ?? 0;
   const hasShortfall = shortfall != null && shortfall > 0;
   const isWarning = contractSatisfied === false || hasShortfall || unsupported.length > 0;
-  const hasDiagnostics = [requested, strict, backfill, strictAvailable, backfillAvailable, finalCount, shortfall, hardRejected]
-    .some((value) => value != null)
-    || contractSatisfied != null
-    || rejectedBy.length > 0
-    || unsupported.length > 0
-    || visibleBusinessBuckets.length > 0;
+  const hasDiagnostics = [requested, strict, strictAvailable, finalCount, shortfall, hardRejected].some((value) => value != null)
+    || contractSatisfied != null || rejectedBy.length > 0 || unsupported.length > 0 || visibleBusinessBuckets.length > 0 || explained;
   if (!hasDiagnostics) return null;
   return (
-    <div
-      data-testid="search-filter-diagnostics"
-      className={`mb-2 rounded-md border px-2.5 py-1.5 text-[9.5px] leading-relaxed ${isWarning
-      ? "border-amber-300/20 bg-amber-400/[0.065] text-amber-100"
-      : "border-emerald-300/20 bg-emerald-400/[0.055] text-emerald-100"}`}
-    >
+    <div data-testid="search-filter-diagnostics" className={`mb-2 rounded-md border px-2.5 py-1.5 text-[9.5px] leading-relaxed ${isWarning
+      ? "border-amber-300/20 bg-amber-400/[0.065] text-amber-100" : "border-emerald-300/20 bg-emerald-400/[0.055] text-emerald-100"}`}>
+      {explained ? (
+        <div data-testid="recall-result-explanation" className="mb-1 border-b border-white/[0.10] pb-1">
+          {cleanText(explanation.headline) ? <div data-testid="recall-explanation-headline" className="font-medium">{cleanText(explanation.headline)}</div> : null}
+          {explainGaps ? <div data-testid="recall-explanation-gaps">没能入选的原因：{explainGaps}</div> : null}
+          {explainSupplement ? <div data-testid="recall-explanation-supplement">补充人选来自：{explainSupplement}</div> : null}
+          {explainHidden > 0 ? <div data-testid="recall-explanation-favorited">另有 {explainHidden} 人已被同事关注，本次未展示。</div> : null}
+          {cleanText(explanation.note) ? <div className="opacity-80">{cleanText(explanation.note)}</div> : null}
+        </div>
+      ) : null}
       {hasShortfall || contractSatisfied === false ? (
         <div data-testid="search-hard-filter-shortfall" className="font-medium">
-          {finalCount != null && requested != null
-            ? `硬筛选后仅有 ${finalCount}/${requested}`
-            : requested != null
-              ? `硬筛选后的返回量未完整确认，目标 ${requested}`
-              : "筛选结果合同未满足"}
+          {finalCount != null && requested != null ? `硬筛选后仅有 ${finalCount}/${requested}` : requested != null ? `硬筛选后的返回量未完整确认，目标 ${requested}` : "筛选结果合同未满足"}
           {hasShortfall ? `；短缺 ${shortfall}` : ""}
           {hardFiltersNotRelaxed ? "；显式硬筛选未放宽" : "；硬筛选是否放宽待服务端确认"}
         </div>
@@ -188,22 +193,15 @@ export function SearchFilterDiagnostics({ diagnostics }: { diagnostics: Row }) {
       ) : null}
       <div className="flex flex-wrap items-center gap-1.5">
         {requested != null ? <span>筛选后目标 {requested}</span> : null}
-        {strict != null || backfill != null ? (
-          <span>· {strict != null ? `严格 ${strict}` : "严格数量待返回"} + {backfill != null ? `补位 ${backfill}` : "补位数量待返回"}</span>
-        ) : null}
+        {/* 「补充人选」的数与原因一律走上面那段服务端解释:同名的 backfill_count 在下游过滤器里会被
+            改写成另一种含义,两处并存必然自相矛盾,所以这一行只说严格命中。 */}
+        {strict != null ? <span>· 严格 {strict}</span> : null}
         {finalCount != null ? <span>· 最终 {finalCount}</span> : null}
         {hasShortfall ? <span>· 不以不满足硬筛选的账号凑数</span> : null}
       </div>
-      {strictAvailable != null || backfillAvailable != null ? (
-        <div className="mt-0.5">
-          可用候选：{strictAvailable != null ? `严格 ${strictAvailable}` : "严格数量待返回"}
-          {backfillAvailable != null ? ` · 相关性补位 ${backfillAvailable}` : ""}
-        </div>
-      ) : null}
+      {strictAvailable != null ? <div className="mt-0.5">可用候选：严格 {strictAvailable}</div> : null}
       {hardRejected != null && hardRejected > 0 ? (
-        <div className="mt-0.5">
-          硬筛选排除 {hardRejected} 人{rejectedBy.length ? `：${rejectedBy.map(([label, count]) => `${label} ${count}`).join(" · ")}` : "；分项原因待返回"}
-        </div>
+        <div className="mt-0.5">硬筛选排除 {hardRejected} 人{rejectedBy.length ? `：${rejectedBy.map(([label, count]) => `${label} ${count}`).join(" · ")}` : "；分项原因待返回"}</div>
       ) : rejectedBy.length ? (
         <div className="mt-0.5">硬筛选排除明细：{rejectedBy.map(([label, count]) => `${label} ${count}`).join(" · ")}</div>
       ) : null}

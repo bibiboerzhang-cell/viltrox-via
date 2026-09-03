@@ -14,7 +14,6 @@ from app.domains.kol.targeted_local_backfill import (
     _aggregate_backfill,
     _backfill_rows,
     _backfill_take,
-    _favorite_excluded_total,
 )
 from app.domains.kol.targeted_local_support import (
     _annotate,
@@ -535,6 +534,40 @@ def _candidate_budget(
     }
 
 
+def _cell_favorite_exclusion(result: dict[str, Any]) -> tuple[int, list[int]]:
+    """一个 cell 的「已被同事关注而排除」计数 + 身份样本(样本可能被服务端截断)。"""
+
+    diagnostics = result.get("diagnostics")
+    diagnostics = diagnostics if isinstance(diagnostics, dict) else {}
+    block = diagnostics.get("favorite_exclusion")
+    block = block if isinstance(block, dict) else {}
+    raw_count = diagnostics.get("favorite_excluded_count")
+    count = raw_count if isinstance(raw_count, int) and raw_count > 0 else 0
+    sample = [value for value in (block.get("excluded_ids") or ()) if isinstance(value, int)]
+    return count, sample
+
+
+def _favorite_excluded_unique(execution: _CellExecution) -> int:
+    """按身份去重后的「已被同事关注、本次未展示」人数。
+
+    逐 cell 相加会把同一个人算很多遍(同一个库被每个 cell 各查一次),这个数要印在门面上
+    ("另有 N 人已被同事关注"),虚高比不说更糟。召回诊断里带着被排除的人的 id 样本:
+    样本齐全就按身份去重取真值;样本被截断(身份拿不全)就退回单 cell 最大值——宁可少说,
+    也不虚报。
+    """
+
+    identities: set[int] = set()
+    per_cell: list[int] = []
+    sample_complete = True
+    for result in execution.results:
+        count, sample = _cell_favorite_exclusion(result)
+        per_cell.append(count)
+        identities.update(sample)
+        if len(sample) < count:
+            sample_complete = False
+    return len(identities) if sample_complete else max(per_cell, default=0)
+
+
 def _project_local_response(
     *,
     first: dict[str, Any],
@@ -554,6 +587,13 @@ def _project_local_response(
         "match_status": "matched" if selected else "empty",
         "candidate_set_distribution": None,
         "items": selected,
+        # 定向路径的补充人选**已经并进 ``items``** 并逐人盖了章(``backfill_tier`` /
+        # ``precision_match=False`` / ``counts_toward_target=False``),顶层再放一份就是
+        # 同一批人的第二个引用。而 ``{**first}`` 继承下来的那份是**第一个 cell 的原始召回
+        # 残值**——既不是这次选中的人,数量也对不上(实测 items=20 而残值=15)。
+        # 契约定死:定向路径此键恒空,消费方只按 ``items`` 里的标记分区;非定向兜底路径
+        # 仍然只把补充人选放在这个键里,所以键本身保留,不删。
+        "backfill_items": [],
         "deferred_items": selection.deferred_display,
         "buckets": {
             "creator": selection.creator,
@@ -599,7 +639,7 @@ def _project_local_response(
                 precise_count=len(selection.precise),
                 backfill_by_tier=(qualification.get("backfill") or {}).get("filled_by_tier"),
                 gaps=(qualification.get("backfill") or {}).get("gaps"),
-                favorite_excluded=_favorite_excluded_total(execution),
+                favorite_excluded=_favorite_excluded_unique(execution),
             ),
             "query_cells_requested": len(cells) + omitted,
             "query_cells_executed": len(cells),
