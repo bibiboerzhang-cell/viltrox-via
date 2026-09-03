@@ -2,9 +2,12 @@
 **搜索驱动的懒回填**——每次搜索召回库内候选时,对其中**缺视频证据**的头部少数(默认2)顺带
 入队 account_deep 抓取,成本摊到未来、按需、自动优先「真被搜到的人」,显著省消耗。
 
-控量四闸防烧爆:① 每次只取 top_n(默认2,clamp 1~5)② 只抓 has_video_evidence=false 的
+控量五闸防烧爆:① 每次只取 top_n(默认2,clamp 1~5)② 只抓 has_video_evidence=false 的
 ③ 近期已抓(last_scrape_at < N 天)跳过,避免反复churn抓不到的号 ④ enqueue_profile_deep_crawl_job
 按 URL 去重(同 URL 已 queued/running 不重入)。Apify 调用在 worker 侧走预算闸(闸A)。
+⑤ **身份闸**(2026-09-03):这条链派生的代表作深析是付费动作,没有可追责的发起人就铸不出
+围栏、入队即被拒。所以没拿到在职 staff 时**直接不派生**并如实回执,而不是排队之后攒
+blocked 垃圾行;身份由调用方从祖父任务 payload 直通(见 derived_job_actor)。
 零写 viltrox_fit_score、零改 rule_v0;唯一写=INSERT apify_jobs(account_deep 抓取)。
 """
 from __future__ import annotations
@@ -13,6 +16,7 @@ import os
 from typing import Any
 
 from app.db.connection import get_conn
+from app.domains.kol import derived_job_actor
 from app.domains.kol import search_sessions
 from app.domains.kol import url_deep_crawl
 
@@ -85,10 +89,15 @@ def enqueue_lazy_video_backfill_for_session(
 ) -> dict[str, Any]:
     """对 session 头部**缺视频**的库内候选懒入队 account_deep 抓取(至多 top_n 个)。
 
-    幂等/控量:缺视频 + 有 URL + 非近期已抓 + URL 未在队 → 才抓;成本摊到未来。
+    幂等/控量:有发起人 + 缺视频 + 有 URL + 非近期已抓 + URL 未在队 → 才抓;成本摊到未来。
     返回入队明细;零写 fit,Apify 调用在 worker 走预算闸。
     """
     sid = int(session_id)
+    if not derived_job_actor.is_usable_actor(staff):
+        # 无人可追责 → 不派生。静默入队只会换来一条 attempts=0 的 blocked 行。
+        return derived_job_actor.no_actor_receipt(
+            enqueued=0, considered=0, eligible=0, items=[]
+        )
     safe_top_n = max(1, min(_int(top_n, DEFAULT_TOP_N), MAX_TOP_N))
     try:
         session = search_sessions.get_session(sid)

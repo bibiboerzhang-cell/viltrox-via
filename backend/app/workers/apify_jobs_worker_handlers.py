@@ -343,11 +343,11 @@ def _process_logistics_track_sync(conn: psycopg.Connection[Any], job: dict[str, 
 def _process_kol_auto_poll(conn: psycopg.Connection[Any], job: dict[str, Any], payload: dict[str, Any]) -> None:
     """D3 关注KOL轻量轮询(metadata_light):为该 KOL 触发一次轻量 profile 刷新。
 
-    治本:此前 worker 无此 handler → kol_auto_poll job 落 _target 兜底炸
-    ValueError("payload must include target_type and target_id") → 入队 50 条全 failed。
-    payload 带 kol_pool_id(+handle/platform);取 profile_url → 入轻量 profile 抓取队列
-    (max_posts=1,只刷档案,不跑视频/不烧 LLM)。无 kol_pool_id / 无 url → 诚实 done(原因落 payload)。
-    红线:绝不触 viltrox_fit_score。SELECT/enqueue 走 compat get_conn(?),job 终态走 worker conn(%s)。
+    治本:此前无 handler → 落 _target 兜底炸 ValueError → 50 条全 failed;payload 带 kol_pool_id,
+    取 profile_url → 入轻量 profile 抓取队列(max_posts=1);无 kol_pool_id / 无 url → 诚实 done。
+    **无人值守**巡检没有真人发起者:不伪造身份,改为显式 suppress_final_v1 —— 只刷档案、不派生
+    付费代表作深析,不再攒「入队即被授权检查拒」的 blocked 行。红线:绝不触 viltrox_fit_score。
+    SELECT/enqueue 走 compat get_conn(?),job 终态走 worker conn(%s)。
     """
     kid = _int_or_none(payload.get("kol_pool_id"))
     note = "auto_poll_no_kol_id"
@@ -365,9 +365,9 @@ def _process_kol_auto_poll(conn: psycopg.Connection[Any], job: dict[str, Any], p
                 note = "auto_poll_no_profile_url"
             else:
                 enqueue_res = url_deep_crawl.enqueue_profile_deep_crawl_job(
-                    url, kol_pool_id=int(kid), max_posts=1, staff=None, queue_lane="batch"
+                    url, kol_pool_id=int(kid), max_posts=1, staff=None, queue_lane="batch", suppress_final_v1=True
                 )
-                note = "metadata_light_refresh_enqueued"
+                note = "metadata_light_refresh_enqueued_profile_only"
     payload["auto_poll_result"] = {"note": note, "kol_pool_id": kid, "enqueue": enqueue_res}
     with conn.transaction():
         with conn.cursor() as cur:

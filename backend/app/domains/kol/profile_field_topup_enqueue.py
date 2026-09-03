@@ -50,6 +50,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.db.connection import get_conn
+from app.domains.kol import derived_job_actor
 
 logger = get_logger(__name__)
 
@@ -484,6 +485,9 @@ def enqueue_field_topup_for_candidates(
         "already_queued": 0,
         "errors": 0,
         "items": [],
+        # 归属记账是否落得下去:调用方给了在职 staff 才算数(2026-09-03 身份直通)。
+        # 此前调用方硬传 None,入队的档案任务一路无主,连带派生链铸不出围栏。
+        "actor_attached": derived_job_actor.is_usable_actor(staff),
         # 诚实:补齐是后台的,补完的人最快也要下一次搜索才可能出现。
         "applies_to_this_search": False,
         "note": (

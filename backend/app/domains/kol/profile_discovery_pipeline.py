@@ -10,6 +10,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.domains.kol import (
+    derived_job_actor,
     profile_discovery_evidence,
     profile_discovery_pipeline_online,
     profile_discovery_pipeline_stages,
@@ -118,18 +119,31 @@ def _enqueue_video_backfill(
     *,
     session_id: int,
     payload: dict[str, Any],
-    deps: profile_discovery_pipeline_stages.StageDependencies,
+    staff: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
+    """懒回填派生的是**付费**账号深抓,必须带上发起人才铸得出围栏。
+
+    历史写法把 ``staff`` 写死成 None,派生链一路无身份,孙任务(代表作深析)入队
+    即被授权检查拒。这里改成直通:身份来自祖父任务 payload,取不到就不派生。
+    """
     if not bool(payload.get("include_lazy_video_backfill", True)):
         return None
     try:
         from app.domains.kol import video_backfill_enqueue
 
-        return profile_discovery_pipeline_stages.enqueue_video_backfill(
-            session_id=session_id,
-            payload=payload,
-            queue_module=video_backfill_enqueue,
-            deps=deps,
+        return video_backfill_enqueue.enqueue_lazy_video_backfill_for_session(
+            session_id=int(session_id),
+            top_n=max(
+                1,
+                min(
+                    _int(
+                        payload.get("lazy_video_backfill_top_n"),
+                        video_backfill_enqueue.DEFAULT_TOP_N,
+                    ),
+                    video_backfill_enqueue.MAX_TOP_N,
+                ),
+            ),
+            staff=staff,
         )
     except Exception:
         return {"status": "error", "reason": "video_backfill_enqueue_failed"}
@@ -229,12 +243,18 @@ async def execute_smart_search_profile_advance_pipeline(
         provider_actor=provider_actor,
         deps=stage_deps,
     )
+    # 派生链的责任人:祖父任务 payload 里带的身份(worker 里没有请求上下文,而现建
+    # 的会话 created_by 为 NULL,反查不出人)。解析一次,两个派生点共用。
+    derived_staff = derived_job_actor.derived_job_staff(
+        payload,
+        provider_actor=provider_actor,
+    )
     # Preserve the lazy-backfill side effect and ordering. Its receipt is not
     # part of the historical public return contract.
     _enqueue_video_backfill(
         session_id=int(session_id),
         payload=payload,
-        deps=stage_deps,
+        staff=derived_staff,
     )
 
     field_topup: dict[str, Any] | None = None
@@ -247,7 +267,7 @@ async def execute_smart_search_profile_advance_pipeline(
                     "field_topup_candidates"
                 ),
                 session_id=int(session_id),
-                staff=None,
+                staff=derived_staff,
                 dry_run=bool(payload.get("field_topup_dry_run")),
             )
         except Exception:
