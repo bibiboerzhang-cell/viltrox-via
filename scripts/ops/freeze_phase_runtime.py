@@ -84,9 +84,9 @@ PHASE_A_DEPENDENCY_BASELINE = {
     "component_files": [
         "py.py", "typing_extensions.py", "_cffi_backend.cpython-314-darwin.so",
     ],
-    "file_count": 1046,
-    "size_bytes": 48_805_613,
-    "content_sha256": "1ab9ec7732eb5c8ee61bc6d907e32915ab91d2709826bae20f1dec2c88ab16c7",
+    "file_count": 1057,
+    "size_bytes": 39_654_964,
+    "content_sha256": "b4df9aa6ea43f7976c663c1587955e51180e495272eb59f48f254df83fb69ace",
 }
 PHASE_A_NESTED_EXECUTION_BOUNDARY = {
     "candidate_source": "reviewed_clean_git_required_for_deploy",
