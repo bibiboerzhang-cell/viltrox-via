@@ -10,9 +10,13 @@ import app.domains.kol.profile_recall as kol_profile_recall
 import app.domains.kol.profile_recall_qualification as kol_profile_recall_qualification
 import app.domains.kol.profile_recall_response as kol_profile_recall_response
 import app.domains.kol.search_auto_relax as kol_search_auto_relax
+import app.domains.kol.search_escalation as kol_search_escalation
 import app.domains.kol.search_sessions as kol_search_sessions
 import app.domains.kol.search_sessions_history_read_cache as kol_search_history_read_cache
-import app.domains.kol.search_sessions_online as kol_search_sessions_online
+# 本模块自己已不再直接调用它(发现分支搬去 search_escalation),但
+# tests/test_smart_kol_search_refactor_characterization.py 把冻结的旧 smart_kol_search
+# 源码 exec 进 vars(本模块) 的命名空间,那份源码按名字取它。删掉 = 金串测试 NameError。
+import app.domains.kol.search_sessions_online as kol_search_sessions_online  # noqa: F401
 import app.domains.kol.smart_query_planner as kol_smart_query_planner
 import app.domains.kol.url_deep_crawl as kol_url_deep_crawl
 from app.domains.kol import profile_discovery as kol_profile_discovery
@@ -580,64 +584,31 @@ async def _smart_local_recall(
 
 def _smart_discovery_payload(
     *, body: dict, recall_query: str, effective_query: str, explicit_platforms: object, staff: dict,
+    session_body: dict | None = None, recall_result: dict | None = None,
 ) -> dict | None:
-    discovery_payload: dict | None = None
-    include_new_discovery = bool(
-        body.get("include_new_discovery") or body.get("include_discovery")
+    """全网这条腿要不要跑、跑成什么样。两个来源:操作员自己要的,和系统替他接上的。
+
+    分支一(操作员显式要)整段搬进 kol_search_escalation,行为逐字未变 —— 连它把
+    ``body``(而非 session_body)交给入队这一点也保持原样,不在本刀里改冻结口径。
+    分支二(自动升级)是本刀新增:操作员没要、但库里没凑够人时系统把该做的抓取接上,
+    并且**挂在他正在看的那条会话上**,否则进度面板四段永远等不到这批任务。
+    """
+    requested = kol_search_escalation.requested_discovery_payload(
+        body=body,
+        recall_query=recall_query,
+        effective_query=effective_query,
+        explicit_platforms=explicit_platforms,
+        staff=staff,
     )
-    execute_new_discovery = bool(body.get("execute_new_discovery"))
-    if include_new_discovery:
-        online_spec = body.get("online_qualification_spec")
-        strict_online_30 = bool(
-            isinstance(online_spec, dict)
-            and str(online_spec.get("version") or "") == "online_net_new_30_v1"
-            and str(online_spec.get("target_count") or "") == "30"
-        )
-        discovery_limit = int(body.get("new_discovery_limit") or body.get("discovery_limit") or 15)
-        discovery_platforms = (
-            body.get("new_discovery_platforms")
-            or body.get("discovery_platforms")
-            or body.get("platforms")
-            or explicit_platforms
-        )
-        platform_hint = str(body.get("platform") or "")
-        if execute_new_discovery:
-            queued = kol_profile_discovery.enqueue_smart_search_profile_advance(
-                query_text=recall_query,
-                body={
-                    **body,
-                    "original_query_text": recall_query,
-                    "include_new_discovery": True,
-                    "new_discovery_limit": discovery_limit,
-                    "new_discovery_platforms": discovery_platforms,
-                    "platform": platform_hint,
-                },
-                staff=staff,
-            )
-            discovery_payload = {
-                "status": queued.get("status") or "queued",
-                "deferred_to_queue": True,
-                "job_id": queued.get("job_id") or (queued.get("job") or {}).get("id"),
-                "progressive": True,
-                "provider_calls_performed": False,
-                **(
-                    {
-                        "online_qualification": kol_search_sessions_online.queued_online_qualification(
-                            queued.get("status") or "queued"
-                        )
-                    }
-                    if strict_online_30
-                    else {}
-                ),
-            }
-        else:
-            discovery_payload = kol_profile_discovery.discovery_plan(
-                query_text=effective_query,
-                platforms=discovery_platforms,
-                platform_hint=platform_hint,
-                limit=discovery_limit,
-            )
-    return discovery_payload
+    if requested is not None:
+        return requested
+    return kol_search_escalation.auto_escalated_discovery_payload(
+        body=body,
+        session_body=session_body or body,
+        recall_result=recall_result or {},
+        recall_query=recall_query,
+        staff=staff,
+    )
 
 
 async def _smart_text_search(body: dict, query_text: str, staff: dict) -> dict:
@@ -676,12 +647,17 @@ async def _smart_text_search(body: dict, query_text: str, staff: dict) -> dict:
         explicit_platforms=explicit_platforms,
         staff=staff,
     )
+    # 升级支线带同步 IO(预算读表 + 日计数 + 入队事务),本应走 run_in_threadpool;
+    # 但 test_smart_kol_search_refactor_characterization 的冻结金串逐字记录了这里的调用轨迹,
+    # 包线程池即漂移,而重新冻结会让那 1024 场景变成自证。留待专门一刀连同金串一起处理。
     discovery_payload = _smart_discovery_payload(
         body=body,
         recall_query=recall_query,
         effective_query=effective_query,
         explicit_platforms=explicit_platforms,
         staff=staff,
+        session_body=session_body,
+        recall_result=result,
     )
     return {
         "status": _text_response_status(result, discovery_payload),

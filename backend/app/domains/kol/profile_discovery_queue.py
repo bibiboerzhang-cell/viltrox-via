@@ -582,7 +582,13 @@ def _smart_profile_payload(
 def _enqueue_smart_profile_payload(
     payload: dict[str, Any],
     session_id: int,
-) -> tuple[dict[str, Any], bool]:
+) -> tuple[dict[str, Any], bool, dict[str, Any]]:
+    """返回 (job, 是否新插入, 已在飞那份 job 的 payload)。
+
+    第三个返回值是 9.5 的原料:撞上幂等键时,会话摘要要宣传的是**真正在跑的那份合同**,
+    不是这次没能入队的这份。它取自同一条 SELECT,不新增任何往返;并且**不放进 job**,
+    因为 job 会随 API 回执出站,payload 里带着围栏凭证与内部参数。
+    """
     conn = get_conn()
     idempotency_key = active_job_idempotency_key(
         "search_session_profile_advance",
@@ -601,16 +607,62 @@ def _enqueue_smart_profile_payload(
         (search_sessions._json_dumps(payload), idempotency_key),
     ).fetchone()
     inserted = bool(row)
+    running_payload: dict[str, Any] = {}
     if not row:
         row = conn.execute(
-            """SELECT id, job_type, status, created_at, updated_at FROM apify_jobs
+            """SELECT id, job_type, status, created_at, updated_at, payload FROM apify_jobs
                WHERE idempotency_key=? AND status IN ('queued', 'running')
                ORDER BY id DESC LIMIT 1""",
             (idempotency_key,),
         ).fetchone()
+        if row:
+            parsed = search_sessions._loads(dict(row).get("payload"), {})
+            running_payload = parsed if isinstance(parsed, dict) else {}
     job = dict(row) if row else {}
+    job.pop("payload", None)
     conn.commit()
-    return job, inserted
+    return job, inserted, running_payload
+
+
+def _already_queued_summary_patch(
+    *,
+    query: str,
+    running_payload: dict[str, Any],
+    job: dict[str, Any],
+) -> dict[str, Any]:
+    """撞上在飞任务时的摘要补丁:只认在跑的那份合同,且**不碰进度**。
+
+    9.5。旧口径无条件用本次 payload 覆写摘要,于是:
+      * 一份弱合同(advance_limit 15、无严格 30 人在线口径)能把正在跑的强合同顶掉,
+        面板从此宣传一个没人在做的目标;反过来弱变强也一样是吹牛。
+      * progress/completion 被重置成 base=0,正在跑到一半的那条会话在面板上回到起点。
+    这里两件事都不做:进度键一个都不写(update_session_result_summary 是顶层浅合并,
+    不写就保留原值),合同数字全部取自在飞 payload;取不到就只说「已在跑」,不编数字。
+    """
+    known = bool(running_payload)
+    advertised: dict[str, Any] = {
+        "status": "already_queued",
+        "job_id": job.get("id"),
+        "query_text": query,
+        # 面板只宣传真正在跑的那份;读不出来时诚实留空,绝不用本次请求的数字顶替。
+        "contract_source": "running_job" if known else "unknown",
+        "enrichment": _pending_enrichment(),
+        "viltrox_fit_score_untouched": True,
+    }
+    if known:
+        advertised.update(
+            {
+                "include_new_discovery": running_payload.get("include_new_discovery"),
+                "advance_limit": running_payload.get("advance_limit"),
+                "advance_mode": running_payload.get("advance_mode"),
+                "representative_video_limit": running_payload.get("representative_video_limit") or 1,
+            }
+        )
+    patch: dict[str, Any] = {"smart_search_profile_advance_job": advertised}
+    if known and bool(running_payload.get("_smart_online_30_contract")):
+        # 在跑的那份真的是严格在线 30 人合同,才允许面板这么说。
+        patch["online_qualification"] = search_sessions_online.queued_online_qualification()
+    return patch
 
 
 def _record_smart_profile_queue(
@@ -621,7 +673,20 @@ def _record_smart_profile_queue(
     smart_online_30: bool,
     job: dict[str, Any],
     inserted: bool,
+    running_payload: dict[str, Any] | None = None,
 ) -> None:
+    if not inserted:
+        # 本次没有真的入队 —— 不许拿没跑的合同改写面板,也不许把进度打回起点。
+        search_sessions.update_session_result_summary(
+            session_id,
+            status="running",
+            summary_patch=_already_queued_summary_patch(
+                query=query,
+                running_payload=dict(running_payload or {}),
+                job=job,
+            ),
+        )
+        return
     queued_total = int(payload["advance_limit"])
     queued_contract = completion_contract(
         base_count=0,
@@ -656,7 +721,7 @@ def _record_smart_profile_queue(
                 else {}
             ),
             "smart_search_profile_advance_job": {
-                "status": "queued" if inserted else "already_queued",
+                "status": "queued",
                 "job_id": job.get("id"),
                 "query_text": query,
                 "include_new_discovery": payload["include_new_discovery"],
@@ -711,7 +776,7 @@ def enqueue_smart_search_profile_advance(
     )
     # The helper keeps this high-volume path DB-backed with
     # ON CONFLICT (idempotency_key), rather than a process-local lock.
-    job, inserted = _enqueue_smart_profile_payload(payload, session_id)
+    job, inserted, running_payload = _enqueue_smart_profile_payload(payload, session_id)
     _record_smart_profile_queue(
         session_id=session_id,
         query=query,
@@ -719,6 +784,7 @@ def enqueue_smart_search_profile_advance(
         smart_online_30=smart_online_30,
         job=job,
         inserted=inserted,
+        running_payload=running_payload,
     )
     return {
         "status": "queued" if inserted else "already_queued",
