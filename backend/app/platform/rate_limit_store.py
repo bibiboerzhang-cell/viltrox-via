@@ -1,6 +1,8 @@
 """Authentication-free Redis/memory counter used by rate-limit policies."""
+
 from __future__ import annotations
 
+import logging
 import time
 
 from app.core.config import REDIS_RATE_LIMIT_PREFIX, REDIS_URL
@@ -12,10 +14,13 @@ except Exception:
     Redis = None
 
 
+logger = logging.getLogger("viltrox.platform.rate_limit_store")
+
 _stats = {
     "checks": 0,
     "blocks": 0,
     "backend": "memory",
+    "redis_errors": 0,
 }
 _redis_client = None
 _memory_windows: dict[str, tuple[int, float]] = {}
@@ -48,13 +53,22 @@ def check_rate_limit(
     _stats["checks"] += 1
     client = (redis_getter or _get_redis)()
     if client is not None:
-        current = int(client.incr(key))
-        if current == 1:
-            client.expire(key, window_sec)
-        if current > max_requests:
-            _stats["blocks"] += 1
-            return False, 0
-        return True, max_requests - current
+        try:
+            current = int(client.incr(key))
+            if current == 1:
+                client.expire(key, window_sec)
+        except Exception as exc:  # Redis blip: fail open onto the per-process window, never 500 the route
+            _stats["redis_errors"] += 1
+            if _stats["redis_errors"] in (1, 10, 100) or _stats["redis_errors"] % 1000 == 0:
+                logger.warning(
+                    "rate_limit_store.redis_unavailable bucket=%s err=%s count=%s (memory window fallback)",
+                    bucket, type(exc).__name__, _stats["redis_errors"],
+                )
+        else:
+            if current > max_requests:
+                _stats["blocks"] += 1
+                return False, 0
+            return True, max_requests - current
 
     now = time.time()
     current, expires_at = _memory_windows.get(key, (0, now + window_sec))
