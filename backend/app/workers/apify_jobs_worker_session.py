@@ -28,6 +28,9 @@ from app.domains.kol.search_session_job_sync import (
     session_url_enrichment_error as _domain_session_url_enrichment_error,
     sync_search_session_job_impl as _sync_search_session_job_impl,
 )
+from app.workers.apify_jobs_worker_session_convergence import (
+    converge_sessions_for_job as _converge_sessions_for_job,
+)
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key
 from app.domains.tasks.search_session_lineage import search_session_lineages
 from app.workers.apify_jobs_worker_helpers import (
@@ -391,7 +394,15 @@ def _sync_search_session_job(
             reason=reason,
             analysis_summary=analysis_summary,
         )
-        return int(synced_count or 0) > 0
     except Exception as exc:
         logger.warning("search session job sync failed | job_id=%s status=%s error=%s", job_id, raw_status, exc)
         return False
+    synced = int(synced_count or 0) > 0
+    if synced:
+        # 同步之后再看会话是否已超时停滞(子任务排队等并发槽 / 被拦):超时按「部分完成」
+        # 收敛并写明原因,不让会话无限 running。收敛失败只告警,不影响同步结果。
+        try:
+            _converge_sessions_for_job(conn, job_id, raw_status=raw_status)
+        except Exception as exc:
+            logger.warning("search session convergence failed | job_id=%s status=%s error=%s", job_id, raw_status, exc)
+    return synced

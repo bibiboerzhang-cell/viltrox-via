@@ -30,6 +30,7 @@ from app.workers.apify_jobs_worker_helpers import (
     _json,
 )
 from app.workers import apify_jobs_worker_deep_crawl as deep_crawl_worker
+from app.workers.apify_jobs_worker_session_convergence import session_max_running_seconds
 
 
 logger = get_logger(__name__)
@@ -129,6 +130,8 @@ def _process_smart_search_profile_advance(conn: psycopg.Connection[Any], job: di
                     "status": "running",
                     "job_id": int(job["id"]),
                     "query_text": payload.get("query_text"),
+                    # 终态判定预算:子任务排队/被拦超过该秒数,会话按「部分完成」收敛(见 *_session_convergence)。
+                    "max_running_sec": session_max_running_seconds(),
                     "viltrox_fit_score_untouched": True,
                 }
             },

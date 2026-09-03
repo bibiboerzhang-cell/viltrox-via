@@ -170,6 +170,36 @@ def _dataset_snapshot_id(conn: Any) -> str:
     return f"local-db-sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
+def _open_read_only_conn(database_url: str) -> Any:
+    """Open the evaluator's own psycopg connection with ``read_only=True``.
+
+    The shared pool (``app.db.connection._build_postgres_conn``) resets every
+    leased connection to ``read_only=False``, which makes psycopg open each
+    transaction with ``BEGIN READ WRITE`` and overrides the libpq
+    ``default_transaction_read_only=on`` hint.  The evaluator therefore never
+    borrows from the pool: it owns one standalone connection whose transactions
+    always start ``READ ONLY``, wrapped in the same sqlite-compatible adapter
+    the recall code expects (``?`` placeholders, row mapping).
+    """
+    import psycopg
+
+    from app.db import connection
+
+    raw_conn = psycopg.connect(
+        database_url,
+        autocommit=False,
+        options="-c default_transaction_read_only=on -c statement_timeout=120000",
+    )
+    raw_conn.read_only = True
+    return connection.PostgresCompatConnection(raw_conn)
+
+
+def _assert_transaction_read_only(conn: Any) -> None:
+    transaction_read_only = conn.execute("SHOW transaction_read_only").fetchone()
+    if not transaction_read_only or str(transaction_read_only[0]).strip().lower() != "on":
+        raise RuntimeError("database_read_only_guard_failed")
+
+
 def _export_manifest(database_url: str) -> dict[str, Any]:
     _configure_read_only_runtime(database_url)
     if str(BACKEND) not in sys.path:
@@ -177,17 +207,23 @@ def _export_manifest(database_url: str) -> dict[str, Any]:
     from app.db import connection
     from app.domains.kol import profile_recall
 
-    conn = connection.get_conn()
-    transaction_read_only = conn.execute("SHOW transaction_read_only").fetchone()
-    if not transaction_read_only or str(transaction_read_only[0]).strip().lower() != "on":
-        raise RuntimeError("database_read_only_guard_failed")
+    conn = _open_read_only_conn(database_url)
+    # Bind the read-only connection as the task-scoped handle so every
+    # ``get_conn()`` inside recall resolves to it instead of the shared pool.
+    # ``db_connection_sync_scope`` would lease a pool connection (read-write);
+    # the raw ContextVar is the one seam that accepts a caller-owned object.
+    scope_token = connection._scoped_conn.set(conn)
     try:
+        _assert_transaction_read_only(conn)
+        if connection.get_conn() is not conn:
+            raise RuntimeError("database_read_only_guard_failed")
         return EVALUATOR.build_candidate_manifest(
             profile_recall.recall_kol_profiles,
             code_version=_source_code_version(),
             dataset_snapshot_id=_dataset_snapshot_id(conn),
         )
     finally:
+        connection._scoped_conn.reset(scope_token)
         connection.close_standalone_conn(conn)
 
 

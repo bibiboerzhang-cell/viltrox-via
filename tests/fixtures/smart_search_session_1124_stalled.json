@@ -1,0 +1,533 @@
+{
+ "source": "T lane 2026-09-02 session-1124-poll3.json (+5min snapshot, status still running)",
+ "session": {
+  "id": 1124,
+  "status": "running",
+  "created_at": "2026-09-02T21:58:50Z",
+  "updated_at": "2026-09-02T22:04:05Z",
+  "result_summary_json": {
+   "kind": "kol_recall",
+   "phase": "profile",
+   "counts": {
+    "ready": 2,
+    "errors": 0,
+    "skipped": 0,
+    "by_stage": {
+     "profile": 1,
+     "summary": 1,
+     "analysis": 3,
+     "identified": 11
+    },
+    "executed": 2,
+    "by_status": {
+     "ready": 2,
+     "matched": 1,
+     "running": 3,
+     "identified": 10
+    }
+   },
+   "smart_search_profile_advance_job": {
+    "status": "ready",
+    "query_text": "portrait photographer lens review prime photo photography tutorial reviewer camera gear",
+    "advance_counts": {
+     "ready": 5,
+     "errors": 0,
+     "failed": 0,
+     "partial": 0,
+     "planned": 0,
+     "skipped": 11,
+     "executed": 5
+    },
+    "advance_status": "ready",
+    "recall_returned": 0,
+    "query_plan_source": "llm_plan",
+    "content_fit_status": "legacy_unverified",
+    "content_fit_enqueued": 0,
+    "new_discovery_status": "ready",
+    "content_fit_ai_analysis": {
+     "state": "not_requested",
+     "reason": "legacy_unverified",
+     "provider_calls_allowed": false
+    },
+    "viltrox_fit_score_untouched": true,
+    "viltrox_fit_score_changed_ids": []
+   }
+  }
+ },
+ "items": [
+  {
+   "id": 2415,
+   "item_type": "existing_kol",
+   "status": "running",
+   "stage": "analysis",
+   "kol_pool_id": 1529,
+   "rank": 1,
+   "score": 0.96,
+   "payload_json": {
+    "downstream_jobs": {
+     "video": {
+      "state": "not_requested",
+      "job_ids": [],
+      "last_error": ""
+     },
+     "audience": {
+      "state": "active",
+      "job_ids": [
+       18588
+      ],
+      "last_error": "gemini_video concurrency limit reached"
+     },
+     "comments": {
+      "state": "ready",
+      "job_ids": [
+       18567
+      ],
+      "last_error": ""
+     },
+     "resolver": {
+      "state": "not_requested",
+      "job_ids": [],
+      "last_error": ""
+     }
+    },
+    "job_status": "queued",
+    "job_last_error": "gemini_video concurrency limit reached",
+    "profile_execute": {
+     "status": "ready"
+    },
+    "optional_gaps": {
+     "audience": {
+      "state": "incomplete",
+      "status": "pending"
+     },
+     "incomplete": [
+      "audience",
+      "contact"
+     ]
+    },
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2416,
+   "item_type": "existing_kol",
+   "status": "ready",
+   "stage": "summary",
+   "kol_pool_id": 1560,
+   "rank": 2,
+   "score": 0.96,
+   "payload_json": {
+    "downstream_jobs": {
+     "video": {
+      "state": "not_requested",
+      "job_ids": [],
+      "last_error": ""
+     },
+     "audience": {
+      "state": "ready",
+      "job_ids": [
+       18572
+      ],
+      "last_error": ""
+     },
+     "comments": {
+      "state": "ready",
+      "job_ids": [
+       18570
+      ],
+      "last_error": ""
+     },
+     "resolver": {
+      "state": "not_requested",
+      "job_ids": [],
+      "last_error": ""
+     }
+    },
+    "job_status": "done",
+    "job_last_error": "",
+    "profile_execute": {
+     "status": "ready"
+    },
+    "optional_gaps": {
+     "audience": {
+      "state": "complete",
+      "status": "pending"
+     },
+     "incomplete": [
+      "contact"
+     ]
+    },
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2417,
+   "item_type": "existing_kol",
+   "status": "ready",
+   "stage": "profile",
+   "kol_pool_id": 15536,
+   "rank": 3,
+   "score": 0.96,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {
+     "status": "ready"
+    },
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2418,
+   "item_type": "existing_kol",
+   "status": "running",
+   "stage": "analysis",
+   "kol_pool_id": 3963,
+   "rank": 4,
+   "score": 0.96,
+   "payload_json": {
+    "downstream_jobs": {
+     "video": {
+      "state": "not_requested",
+      "job_ids": [],
+      "last_error": ""
+     },
+     "audience": {
+      "state": "active",
+      "job_ids": [
+       18579
+      ],
+      "last_error": ""
+     },
+     "comments": {
+      "state": "ready",
+      "job_ids": [
+       18577
+      ],
+      "last_error": ""
+     },
+     "resolver": {
+      "state": "not_requested",
+      "job_ids": [],
+      "last_error": ""
+     }
+    },
+    "job_status": "running",
+    "job_last_error": "",
+    "profile_execute": {
+     "status": "ready"
+    },
+    "optional_gaps": {
+     "audience": {
+      "state": "incomplete",
+      "status": "pending"
+     },
+     "incomplete": [
+      "audience",
+      "contact"
+     ]
+    },
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2419,
+   "item_type": "existing_kol",
+   "status": "running",
+   "stage": "analysis",
+   "kol_pool_id": 1523,
+   "rank": 5,
+   "score": 0.96,
+   "payload_json": {
+    "downstream_jobs": {
+     "video": {
+      "state": "not_requested",
+      "job_ids": [],
+      "last_error": ""
+     },
+     "audience": {
+      "state": "active",
+      "job_ids": [
+       18585
+      ],
+      "last_error": "gemini_video concurrency limit reached"
+     },
+     "comments": {
+      "state": "ready",
+      "job_ids": [
+       18581
+      ],
+      "last_error": ""
+     },
+     "resolver": {
+      "state": "not_requested",
+      "job_ids": [],
+      "last_error": ""
+     }
+    },
+    "job_status": "queued",
+    "job_last_error": "gemini_video concurrency limit reached",
+    "profile_execute": {
+     "status": "ready"
+    },
+    "optional_gaps": {
+     "audience": {
+      "state": "incomplete",
+      "status": "pending"
+     },
+     "incomplete": [
+      "audience",
+      "contact"
+     ]
+    },
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2420,
+   "item_type": "existing_kol",
+   "status": "matched",
+   "stage": "identified",
+   "kol_pool_id": 4098,
+   "rank": 6,
+   "score": 0.96,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {},
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2421,
+   "item_type": "new_creator",
+   "status": "identified",
+   "stage": "identified",
+   "kol_pool_id": null,
+   "rank": 7,
+   "score": 0.89,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {},
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2422,
+   "item_type": "new_creator",
+   "status": "identified",
+   "stage": "identified",
+   "kol_pool_id": null,
+   "rank": 8,
+   "score": 0.89,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {},
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2423,
+   "item_type": "new_creator",
+   "status": "identified",
+   "stage": "identified",
+   "kol_pool_id": null,
+   "rank": 9,
+   "score": 0.71,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {},
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2424,
+   "item_type": "new_creator",
+   "status": "identified",
+   "stage": "identified",
+   "kol_pool_id": null,
+   "rank": 10,
+   "score": 0.71,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {},
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2425,
+   "item_type": "new_creator",
+   "status": "identified",
+   "stage": "identified",
+   "kol_pool_id": null,
+   "rank": 11,
+   "score": 0.71,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {},
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2426,
+   "item_type": "new_creator",
+   "status": "identified",
+   "stage": "identified",
+   "kol_pool_id": null,
+   "rank": 12,
+   "score": 0.53,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {},
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2427,
+   "item_type": "new_creator",
+   "status": "identified",
+   "stage": "identified",
+   "kol_pool_id": null,
+   "rank": 13,
+   "score": 0.12,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {},
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2428,
+   "item_type": "new_creator",
+   "status": "identified",
+   "stage": "identified",
+   "kol_pool_id": null,
+   "rank": 14,
+   "score": 0.12,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {},
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  },
+  {
+   "id": 2430,
+   "item_type": "new_creator",
+   "status": "identified",
+   "stage": "identified",
+   "kol_pool_id": null,
+   "rank": 16,
+   "score": 0.12,
+   "payload_json": {
+    "downstream_jobs": {},
+    "job_status": null,
+    "job_last_error": null,
+    "profile_execute": {},
+    "optional_gaps": null,
+    "platform": "youtube"
+   }
+  }
+ ],
+ "jobs": [
+  {
+   "id": 18588,
+   "job_type": "kol_audience_stats_refresh",
+   "status": "queued",
+   "role": "audience",
+   "session_id": 1124,
+   "item_id": 2415,
+   "last_error": "gemini_video concurrency limit reached"
+  },
+  {
+   "id": 18567,
+   "job_type": "kol_pool_comments_collect",
+   "status": "done",
+   "role": "comments",
+   "session_id": 1124,
+   "item_id": 2415,
+   "last_error": ""
+  },
+  {
+   "id": 18572,
+   "job_type": "kol_audience_stats_refresh",
+   "status": "done",
+   "role": "audience",
+   "session_id": 1124,
+   "item_id": 2416,
+   "last_error": ""
+  },
+  {
+   "id": 18570,
+   "job_type": "kol_pool_comments_collect",
+   "status": "done",
+   "role": "comments",
+   "session_id": 1124,
+   "item_id": 2416,
+   "last_error": ""
+  },
+  {
+   "id": 18579,
+   "job_type": "kol_audience_stats_refresh",
+   "status": "queued",
+   "role": "audience",
+   "session_id": 1124,
+   "item_id": 2418,
+   "last_error": ""
+  },
+  {
+   "id": 18577,
+   "job_type": "kol_pool_comments_collect",
+   "status": "done",
+   "role": "comments",
+   "session_id": 1124,
+   "item_id": 2418,
+   "last_error": ""
+  },
+  {
+   "id": 18585,
+   "job_type": "kol_audience_stats_refresh",
+   "status": "queued",
+   "role": "audience",
+   "session_id": 1124,
+   "item_id": 2419,
+   "last_error": "gemini_video concurrency limit reached"
+  },
+  {
+   "id": 18581,
+   "job_type": "kol_pool_comments_collect",
+   "status": "done",
+   "role": "comments",
+   "session_id": 1124,
+   "item_id": 2419,
+   "last_error": ""
+  }
+ ]
+}
