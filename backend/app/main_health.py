@@ -6,6 +6,7 @@ import math
 import os
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime, timezone
 from threading import Lock
 from typing import Any, Callable, Mapping
 
@@ -55,6 +56,77 @@ def _runtime_trust_timeout_seconds() -> float:
 
 
 RUNTIME_TRUST_TIMEOUT_SECONDS = _runtime_trust_timeout_seconds()
+
+# A1 W1 observability: the minimal unauthenticated read-only path an external
+# uptime probe may poll.  In production the anonymous ``/health`` body is only
+# ``{"status","service","version"}``; trust/heartbeat fields need the ops token.
+EXTERNAL_PING_HINT: dict[str, Any] = {
+    "path": "/health",
+    "method": "GET",
+    "auth": "none",
+    "expect_http_status": 200,
+    "expect_json": {"status": "ok"},
+    "note": "liveness only; heartbeat_age_seconds requires the ops/admin token",
+}
+
+
+def external_ping_hint() -> dict[str, Any]:
+    return {**EXTERNAL_PING_HINT, "expect_json": dict(EXTERNAL_PING_HINT["expect_json"])}
+
+
+def _iso_age_seconds(value: Any, now: datetime) -> float | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return round((now - parsed.astimezone(timezone.utc)).total_seconds(), 1)
+
+
+def _freshest_age_by_role(trust: Mapping[str, object], now: datetime) -> dict[str, float]:
+    """Freshest heartbeat age per critical role (apify lanes + redis worker)."""
+
+    roles: dict[str, float] = {}
+
+    def offer(role: str, age: Any) -> None:
+        if isinstance(age, bool) or not isinstance(age, (int, float)) or not math.isfinite(age):
+            return
+        if role not in roles or float(age) < roles[role]:
+            roles[role] = float(age)
+
+    apify_fleet = trust.get("worker_fleet")
+    apify_rows = apify_fleet.get("workers") if isinstance(apify_fleet, Mapping) else None
+    for row in apify_rows or []:
+        if isinstance(row, Mapping):
+            offer(f"apify:{str(row.get('lane') or 'all')}", row.get("heartbeat_age_seconds"))
+    if not any(role.startswith("apify:") for role in roles):
+        offer("apify:primary", _iso_age_seconds(trust.get("worker_heartbeat"), now))
+    redis_fleet = trust.get("redis_worker_fleet")
+    redis_rows = redis_fleet.get("workers") if isinstance(redis_fleet, Mapping) else None
+    for row in redis_rows or []:
+        if isinstance(row, Mapping):
+            offer("redis-worker", row.get("heartbeat_age_seconds"))
+    return roles
+
+
+def compute_heartbeat_age(
+    trust: Mapping[str, object], *, now: datetime | None = None
+) -> dict[str, object]:
+    """Oldest critical heartbeat age: max over roles of each role's freshest row.
+
+    A dead lane keeps its last row forever, so the projection takes the freshest
+    heartbeat inside every role first and only then the oldest across roles.
+    ``None`` means no heartbeat evidence at all; the existing ``worker_online``
+    contract already turns that into a degraded status.
+    """
+
+    roles = _freshest_age_by_role(trust, now or datetime.now(tz=timezone.utc))
+    ordered = {role: round(age, 1) for role, age in sorted(roles.items())}
+    oldest = max(ordered.values()) if ordered else None
+    return {"heartbeat_age_seconds": oldest, "heartbeat_age_roles": ordered}
 
 
 class _RuntimeTrustCoordinator:
@@ -129,6 +201,7 @@ class _RuntimeTrustCoordinator:
             "status": status,
             "duration_ms": round((now - started_at) * 1000, 2) if started_at else 0.0,
             "stages": stages,
+            "external_ping_hint": external_ping_hint(),
         }
         if timeout_seconds is not None:
             payload["timeout_ms"] = round(float(timeout_seconds) * 1000, 2)
@@ -274,6 +347,7 @@ def build_runtime_trust(
         except Exception:
             trust["worker_sha"] = None
             trust["worker_sha_source"] = "unavailable"
+    trust.update(compute_heartbeat_age(trust))
     trust["probe"] = finish_runtime_trust_probe(trust)
     return trust
 
@@ -318,6 +392,8 @@ def _runtime_trust_failure_payload(
         "server_git_sha": str(server_git_sha or "").strip() or None,
         "client_git_sha": str(client_git_sha or "").strip() or None,
         "sha_aligned": None,
+        "heartbeat_age_seconds": None,
+        "heartbeat_age_roles": {},
         "probe": dict(probe),
     }
 

@@ -77,13 +77,54 @@ TABLE_INTRODUCTION_MIGRATIONS: dict[str, str] = {
 # and open Apify/LLM budget reservations remain blocking without a lease test:
 # once provider I/O starts, a stopped local process or expired local lease is
 # not proof that the external execution or billing boundary has settled.
+#
+# Blocking scope (A1 W1).  ``all`` = historical contract (every queued/running
+# apify_jobs row blocks).  ``interactive`` blocks only that lane: batch rows are
+# diagnostics because lane units stop gracefully (TimeoutStopSec=1300) and the
+# worker reclaims leftover ``running`` rows via lease expiry + FOR UPDATE SKIP
+# LOCKED (apify_jobs_worker CLAIM_SELECT_SQL, _reclaim_stale_running_jobs).
+# Provider reservations/claims stay blocking in both scopes: no lane column,
+# and they prove an external billing boundary rather than a local worker.
+BLOCKING_SCOPE_ENV = "VKPI_DRAIN_BLOCKING_SCOPE"
+BLOCKING_SCOPES: tuple[str, ...] = ("all", "interactive")
+DEFAULT_BLOCKING_SCOPE = "all"
+# Mirrors queue_lane_policy.queue_lane_sql_expression("payload") after whitespace
+# folding (tests pin both).  Remote runs use ``env -i``: no app import possible.
+APIFY_QUEUE_LANE_SQL = (
+    "( CASE WHEN LOWER(COALESCE(payload->>'queue_lane', '')) IN ('interactive', 'batch') "
+    "THEN LOWER(payload->>'queue_lane') "
+    "WHEN COALESCE(payload->>'batch', '') <> '' THEN 'batch' "
+    "WHEN LOWER(COALESCE(payload->>'source', '')) IN ('final_v1_worker_followup', "
+    "'kol_url_deep_crawl', 'kol_url_profile_flow') THEN 'batch' "
+    "WHEN LOWER(COALESCE(payload->>'trigger', '')) = 'final_v1_done' THEN 'batch' "
+    "ELSE 'interactive' END )"
+)
 DB_COUNT_SPECS: tuple[dict[str, Any], ...] = (
     {
         "key": "apify_jobs_active",
         "table": "apify_jobs",
         "available_from": "095_apify_jobs.sql",
         "blocking": True,
+        "blocking_scopes": ("all",),
         "sql": "SELECT COUNT(*) FROM public.apify_jobs WHERE status IN ('queued','running')",
+    },
+    {
+        "key": "apify_jobs_active_interactive",
+        "table": "apify_jobs",
+        "available_from": "095_apify_jobs.sql",
+        "scopes": ("interactive",),
+        "blocking": True,
+        "sql": "SELECT COUNT(*) FROM public.apify_jobs WHERE status IN ('queued','running') "
+        f"AND {APIFY_QUEUE_LANE_SQL} = 'interactive'",
+    },
+    {
+        "key": "apify_jobs_active_batch",
+        "table": "apify_jobs",
+        "available_from": "095_apify_jobs.sql",
+        "scopes": ("interactive",),
+        "blocking": False,
+        "sql": "SELECT COUNT(*) FROM public.apify_jobs WHERE status IN ('queued','running') "
+        f"AND {APIFY_QUEUE_LANE_SQL} = 'batch'",
     },
     {
         "key": "job_ledger_active",
@@ -183,6 +224,30 @@ DB_COUNT_SPECS: tuple[dict[str, Any], ...] = (
 
 class DrainProbeError(RuntimeError):
     """Fail-closed release-drain probe error."""
+
+
+def _validated_blocking_scope(value: Any) -> str:
+    scope = str(value or "").strip().lower()
+    if scope not in BLOCKING_SCOPES:
+        raise DrainProbeError("blocking scope must be exactly all or interactive")
+    return scope
+
+
+def resolve_blocking_scope(
+    explicit: Any,
+    environ: Mapping[str, str],
+    protected_env: Mapping[str, str],
+) -> str:
+    """CLI flag > process env > protected dotenv > ``all``; invalid values fail closed.
+
+    The dotenv route is what train.sh/deploy use in practice: both invoke the
+    probe under ``env -i`` on the host, so only ``--env-file`` survives.
+    """
+
+    for raw in (explicit, environ.get(BLOCKING_SCOPE_ENV), protected_env.get(BLOCKING_SCOPE_ENV)):
+        if raw is not None and str(raw).strip() != "":
+            return _validated_blocking_scope(raw)
+    return DEFAULT_BLOCKING_SCOPE
 
 
 def _utc_now() -> str:
@@ -432,6 +497,7 @@ def collect_db_state(
     *,
     expected_database: str,
     current_migration: str,
+    blocking_scope: str = DEFAULT_BLOCKING_SCOPE,
 ) -> dict[str, Any]:
     """Collect migration-aware counts inside one read-only transaction.
 
@@ -443,6 +509,7 @@ def collect_db_state(
 
     expected = _validated_database_name(expected_database)
     current = _validated_current_migration(current_migration)
+    scope = _validated_blocking_scope(blocking_scope)
     try:
         readonly = connection.execute("SHOW transaction_read_only").fetchone()
         if not readonly or _text(readonly[0]).lower() not in {"on", "true", "1"}:
@@ -496,8 +563,12 @@ def collect_db_state(
         diagnostic_counts: dict[str, int] = {}
         check_status: dict[str, str] = {}
         for spec in DB_COUNT_SPECS:
+            if scope not in spec.get("scopes", BLOCKING_SCOPES):
+                continue
             key = str(spec["key"])
-            blocking = bool(spec["blocking"])
+            blocking = bool(spec["blocking"]) and scope in spec.get(
+                "blocking_scopes", BLOCKING_SCOPES
+            )
             target = active_counts if blocking else diagnostic_counts
             if not _migration_at_least(current, str(spec["available_from"])):
                 target[key] = 0
@@ -526,6 +597,7 @@ def collect_db_state(
         return {
             "passed": not blocking_keys,
             "current_migration": current,
+            "blocking_scope": scope,
             "active_counts": active_counts,
             "diagnostic_counts": diagnostic_counts,
             "check_status": check_status,
@@ -599,8 +671,10 @@ def audit_release_drain(
     current_migration: str,
     redis_factory: Callable[..., Any] | None = None,
     database_connect: Callable[..., Any] | None = None,
+    blocking_scope: str | None = None,
 ) -> dict[str, Any]:
     values = read_protected_env(env_file)
+    scope = resolve_blocking_scope(blocking_scope, os.environ, values)
     reviewed_current_migration = _validated_current_migration(current_migration)
     database_url = _validated_database_url(
         values["DATABASE_URL"], str(expected_database or "").strip()
@@ -650,6 +724,7 @@ def audit_release_drain(
             connection,
             expected_database=str(expected_database or "").strip(),
             current_migration=reviewed_current_migration,
+            blocking_scope=scope,
         )
 
     blocking = [
@@ -659,7 +734,11 @@ def audit_release_drain(
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": _utc_now(),
-        "overall": {"pass": not blocking, "blocking_reasons": blocking},
+        "overall": {
+            "pass": not blocking,
+            "blocking_reasons": blocking,
+            "blocking_scope": scope,
+        },
         "redis": redis_state,
         "database": database_state,
         "read_only": True,
@@ -678,12 +757,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--env-file", required=True, type=Path)
     parser.add_argument("--expected-database", required=True)
     parser.add_argument("--current-migration", required=True)
+    parser.add_argument(
+        "--blocking-scope",
+        choices=BLOCKING_SCOPES,
+        default=None,
+        help=f"override {BLOCKING_SCOPE_ENV} (process env, then protected dotenv); default all",
+    )
     args = parser.parse_args(argv)
     try:
         payload = audit_release_drain(
             env_file=args.env_file,
             expected_database=args.expected_database,
             current_migration=args.current_migration,
+            blocking_scope=args.blocking_scope,
         )
     except Exception as exc:  # noqa: BLE001 - CLI output must stay bounded/redacted.
         payload = {
