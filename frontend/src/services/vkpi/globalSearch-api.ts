@@ -3,6 +3,7 @@
 // 只回名字/id 级轻字段;点进详情后由各自读端权限闸把关(取舍见后端 docstring)。
 
 import { apiFetch } from "../http";
+import { readSessionToken } from "../../lib/authCookieSession";
 
 export interface GlobalSearchKol {
   id: number;
@@ -67,18 +68,11 @@ function sourceStatus(value: unknown): GlobalSearchSourceStatusItem | undefined 
   };
 }
 
-// 与 hooks/useAuth.tsx 的 TOKEN_KEY 同源同值:CockpitTopbar 是纯展示组件不吃 apiToken prop
-// (props 由 CockpitApp 显式传递,不在本刀所有权内),故从 localStorage 直读登录 token。
-// useAuth 若换 key,这里要跟着改(全库仅此两处)。
-const TOKEN_KEY = "viltrox_marketing_token_v1";
-
+// S-02(2026-09-02):JS 不再持有 JWT,localStorage 里没有 token 可读。CockpitTopbar 这类
+// 纯展示组件(不吃 apiToken prop)改从 lib/authCookieSession 读「当前会话占位 token」:
+// 已登录 → COOKIE_SESSION_TOKEN(后端当作走 HttpOnly cookie),未登录 → 空串。函数名保留给既有引用方。
 export function readStoredApiToken(): string {
-  try {
-    if (typeof window === "undefined") return "";
-    return window.localStorage.getItem(TOKEN_KEY) ?? "";
-  } catch {
-    return "";
-  }
+  return readSessionToken();
 }
 
 /** 顶栏全局搜索:防抖后调用;signal 用于输入变化时取消上一发请求。 */

@@ -26,6 +26,13 @@ from app.core.passwords import (
 )
 from app.core.staff_avatars import serialize_staff_avatar_url
 from app.db.connection import db_connection_sync_reusing_scope, get_conn
+from app.services.auth.token_revocation import (
+    _ensure_sqlite_column as _ensure_token_version_column,
+    AUTH_USER_CACHE_PREFIX,
+    TOKEN_VERSION_CLAIM,
+    coerce_token_version,
+    token_version_matches,
+)
 from app.services.cache import cache_clear, cache_get, cache_set
 
 logger = get_logger(__name__)
@@ -33,6 +40,9 @@ logger = get_logger(__name__)
 JWT_ISSUER = "viltrox-vos"
 JWT_AUDIENCE = "vos-app"
 AUTH_COOKIE_NAME = "via_token"
+#: 浏览器前端不再持有 JWT(S-02):它在 Authorization 头里送这个占位值,
+#: 表示「凭 HttpOnly cookie 认证」。解析时等价于没带头,直接读 cookie。
+COOKIE_SESSION_MARKER = "cookie-session"
 AUTH_COOKIE_MAX_AGE_SEC = 86400 * int(JWT_EXPIRES_DAYS)
 JWT_VERIFY_SECRETS = [JWT_SECRET, *[item for item in JWT_SECRET_PREVIOUS if item and item != JWT_SECRET]]
 _ACTIVE_USER_STATUSES = {"active", "approved"}
@@ -49,7 +59,8 @@ def user_status_allows_auth(status: object, *, production: bool | None = None) -
 
 # ── Password ──────────────────────────────
 # ── JWT Token ──────────────────────────────
-def make_token(user_id: int, role: str) -> str:
+def make_token(user_id: int, role: str, token_version: int = 0) -> str:
+    """签发登录 JWT;``tv`` = 签发时刻的 users.token_version,校验时必须仍然相等。"""
     now = int(_time_mod.time())
     payload = {
         "uid": user_id,
@@ -58,6 +69,7 @@ def make_token(user_id: int, role: str) -> str:
         "aud": JWT_AUDIENCE,
         "iat": now,
         "exp": now + AUTH_COOKIE_MAX_AGE_SEC,
+        TOKEN_VERSION_CLAIM: coerce_token_version(token_version),
     }
     return _pyjwt.encode(payload, JWT_SECRET, algorithm="HS256")
 
@@ -126,14 +138,14 @@ def clear_auth_cookie(response: Response) -> None:
 
 def _user_cache_key(user_id: int, token: str) -> str:
     digest = _hashlib.sha256(token.encode("utf-8")).hexdigest()
-    return f"auth:user:{int(user_id)}:{digest}"
+    return f"{AUTH_USER_CACHE_PREFIX}{int(user_id)}:{digest}"
 
 
 def invalidate_user_cache(user_id: int = None):
     if user_id is None:
-        cache_clear(prefix="auth:user:")
+        cache_clear(prefix=AUTH_USER_CACHE_PREFIX)
         return
-    cache_clear(prefix=f"auth:user:{int(user_id)}:")
+    cache_clear(prefix=f"{AUTH_USER_CACHE_PREFIX}{int(user_id)}:")
 
 
 def _resolve_request_token(request: Request, *, allow_query_token: bool = False) -> str:
@@ -142,12 +154,27 @@ def _resolve_request_token(request: Request, *, allow_query_token: bool = False)
     ``allow_query_token`` remains only as a source-compatible argument for old
     callers. URL query authentication is intentionally ignored: long-lived JWTs
     must never enter access logs, browser history or referrer metadata.
+
+    The browser app never holds the JWT; it sends ``COOKIE_SESSION_MARKER`` as
+    its bearer value, which means "authenticate me with the HttpOnly cookie".
     """
     del allow_query_token
     token = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    if not token:
+    if not token or token == COOKIE_SESSION_MARKER:
         token = request.cookies.get(AUTH_COOKIE_NAME, "")
     return token
+
+
+def request_uses_cookie_session(request: Request) -> bool:
+    """True when the caller authenticates with the HttpOnly cookie, not a real bearer JWT.
+
+    Such callers must never receive a JWT in a response body (S-02): the cookie
+    is the only credential transport for the browser app.
+    """
+    header = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if str(request.query_params.get("session") or "").strip().lower() == "cookie":
+        return True
+    return header in ("", COOKIE_SESSION_MARKER) and bool(request.cookies.get(AUTH_COOKIE_NAME))
 
 
 def _load_user_for_auth(user_id: int, cache_key: str):
@@ -168,8 +195,20 @@ def _load_user_for_auth(user_id: int, cache_key: str):
 
     with db_connection_sync_reusing_scope():
         conn = get_conn()
-        user = conn.execute("""
-            SELECT id, email, name, creator_code, status, role,
+        try:
+            user = conn.execute("""
+            SELECT id, email, name, creator_code, status, role, token_version,
+                   points_balance, points_pending, points_total,
+                   avatar_url, bio, signature,
+                   tier_status, trust_score, trust_updated_at
+            FROM users WHERE id=?
+        """, (uid,)).fetchone()
+        except Exception as exc:  # noqa: BLE001 - 仅 SQLite 缺 token_version 列时自愈一次后重试
+            if "no such column" not in str(exc).lower():
+                raise
+            _ensure_token_version_column(conn)
+            user = conn.execute("""
+            SELECT id, email, name, creator_code, status, role, token_version,
                    points_balance, points_pending, points_total,
                    avatar_url, bio, signature,
                    tier_status, trust_score, trust_updated_at
@@ -204,11 +243,17 @@ def _load_user_for_auth(user_id: int, cache_key: str):
             # 降级对象还被缓存 30s 反复投毒 —— 现在:WARNING 可见 + 降级对象绝不入缓存,
             # 下一个请求重试完整拼装,自然自愈。
             logger.warning("security.staff_context_attach_failed uid=%s (degraded user NOT cached)", uid, exc_info=True)
+            user_dict["token_version"] = coerce_token_version(user_dict.get("token_version"))
             return user_dict
 
         if staff_context_is_inactive(staff):
             logger.warning("security.inactive_staff_rejected uid=%s", uid)
             return None
+        # 吊销版本号随用户行一起读出(整行查询已含该列),不再多一次往返——认证路径的
+        # 有界作用域只允许「用户行 + staff」两次读(test_staff_auth_effective_role 钉死)。
+        # SQLite 缺列时该键缺失 → 0(旧令牌仍有效),首次吊销时写端自愈加列后即生效;
+        # Postgres 由迁移 307 保证。
+        user_dict["token_version"] = coerce_token_version(user_dict.get("token_version"))
 
         auth_role = str(user_dict.get("role") or "")
         effective_role = str(staff.get("role") or auth_role or "readonly")
@@ -222,6 +267,14 @@ def _load_user_for_auth(user_id: int, cache_key: str):
         user_dict["avatar_required"] = not bool(user_dict.get("avatar_url"))
     cache_set(cache_key, user_dict, ttl=int(USER_CACHE_TTL_SEC))
     return user_dict
+
+
+def _token_version_rejected(payload: dict, user) -> bool:
+    """登出 / 改密 / 踢人之后版本号已前进:旧令牌即使签名有效也一律拒绝。"""
+    if user is None or token_version_matches(payload, user.get("token_version")):
+        return False
+    logger.warning("security.token_version_mismatch uid=%s", int(payload.get("uid") or 0))
+    return True
 
 
 def get_current_user(request: Request, *, allow_query_token: bool = False):
@@ -242,6 +295,8 @@ def get_current_user(request: Request, *, allow_query_token: bool = False):
     if not uid:
         return None
     user = _load_user_for_auth(int(uid), _user_cache_key(int(uid), token))
+    if _token_version_rejected(payload, user):
+        return None
     if user is not None and request_state is not None:
         # The global admin RBAC middleware and FastAPI dependencies authenticate
         # the same request independently.  Reuse that verified principal inside

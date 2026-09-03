@@ -41,7 +41,7 @@ def build_login_payload(user) -> dict:
     avatar_url = serialize_staff_avatar_url(user_dict.get("avatar_url"))
     return {
         "status": "success",
-        "token": make_token(user["id"], auth_role),
+        "token": make_token(user["id"], auth_role, _row_value(user, "token_version", 0)),
         "user": {
             "id": user["id"],
             "email": user["email"],

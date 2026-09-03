@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Resp
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from app.api.dependencies.auth import get_user_required
+from app.api.dependencies.auth import get_admin, get_user_required
 from app.core.config import UPLOAD_DIR
 from app.core.config import IS_PRODUCTION
 from app.db.connection import db_read, db_write, get_conn, is_postgres_runtime
@@ -26,11 +26,14 @@ from app.core.security import (
     hash_password,
     invalidate_user_cache,
     needs_password_rehash,
+    request_uses_cookie_session,
     verify_password,
 )
+from app.services.auth.token_revocation import revoke_user_sessions
 from app.schemas.auth import RegisterRequest, LoginRequest
 from app.services.security.rate_limiter import rate_limit
 from app.services.auth.email import send_verification_email, send_password_reset_email
+from app.services.auth.tokens import token_lookup_values
 from app.services.auth.service import build_login_payload, import_legacy_user_if_available, validate_login_credentials
 from app.db.repositories.users import creator_code_exists, generate_creator_code, get_user_by_email, touch_user_last_login
 from app.services.student_identity import claim_student_identity_for_user, resolve_student_identity_code, validate_student_identity_email
@@ -158,9 +161,10 @@ def _update_user_name(user_id: int, name: str) -> dict:
 
 def _fetch_email_token(token: str, token_type: str):
     conn = get_conn()
+    # S-08:库里存 sha256 摘要;IN (摘要, 原文) 兼容切换前签发的明文行。
     return conn.execute(
-        "SELECT id,user_id,expires_at,used_at FROM email_tokens WHERE token=? AND type=?",
-        (token, token_type),
+        "SELECT id,user_id,expires_at,used_at FROM email_tokens WHERE token IN (?, ?) AND type=?",
+        (*token_lookup_values(token), token_type),
     ).fetchone()
 
 
@@ -186,6 +190,23 @@ def _update_password_sync(user_id: int, password_hash: str):
         (password_hash, user_id),
     )
     conn.commit()
+
+
+def _session_payload(request: Request, response: Response, payload: dict) -> dict:
+    """签发 / 续签登录 cookie;cookie 会话(浏览器)客户端的响应体里绝不带 JWT(S-02)。
+
+    脚本类客户端(真 Bearer,或 login 未带 ``session=cookie``)照旧拿到 token 字段。
+    """
+    token = str(payload.get("token") or "")
+    if not token:
+        return payload
+    apply_auth_cookie(response, token)
+    if not request_uses_cookie_session(request):
+        return payload
+    stripped = dict(payload)
+    stripped.pop("token", None)
+    stripped["session"] = "cookie"
+    return stripped
 
 
 @router.post("/register")
@@ -313,8 +334,7 @@ async def auth_login(request: Request, req: LoginRequest, response: Response):
     payload = await asyncio.to_thread(build_login_payload, user)
     if payload.get("status") != "success" or not payload.get("token"):
         return payload
-    apply_auth_cookie(response, payload["token"])
-    return payload
+    return _session_payload(request, response, payload)
 
 
 @router.get("/me")
@@ -365,9 +385,7 @@ async def update_my_avatar(
         path = AVATAR_DIR / f"user_{user_id}_{token}{ext}"
         path.write_bytes(data)
         payload = _update_user_avatar(user_id, f"/uploads/staff_avatars/{path.name}")
-        if payload.get("token"):
-            apply_auth_cookie(response, str(payload["token"]))
-        return payload
+        return _session_payload(request, response, payload)
     try:
         clean_url = _safe_avatar_url(avatar_url)
     except ValueError as exc:
@@ -375,9 +393,7 @@ async def update_my_avatar(
     if not clean_url:
         return {"status": "error", "message": "Avatar file or avatar_url required"}
     payload = _update_user_avatar(user_id, clean_url)
-    if payload.get("token"):
-        apply_auth_cookie(response, str(payload["token"]))
-    return payload
+    return _session_payload(request, response, payload)
 
 
 @router.post("/me/profile")
@@ -393,13 +409,19 @@ async def update_my_profile(request: Request, response: Response):
     if len(name) > 80:
         return {"status": "error", "message": "name too long (max 80)"}
     payload = _update_user_name(int(user["id"]), name)
-    if payload.get("token"):
-        apply_auth_cookie(response, str(payload["token"]))
-    return payload
+    return _session_payload(request, response, payload)
 
 
 @router.post("/logout")
-def auth_logout(response: Response):
+def auth_logout(request: Request, response: Response):
+    """登出 = 服务端吊销(users.token_version +1,该用户全部既有令牌立即失效)+ 清 cookie。
+
+    JWT 无 jti 黑名单,版本号是唯一可靠的吊销手段,所以登出一次即全端下线;
+    令牌已失效 / 未登录时只清 cookie,同样返回成功(幂等)。
+    """
+    user = get_current_user(request)
+    if user and user.get("id"):
+        revoke_user_sessions(int(user["id"]), reason="logout")
     clear_auth_cookie(response)
     return {"status": "success", "message": "Signed out"}
 
@@ -409,8 +431,8 @@ def verify_email_endpoint(token: str):
     now_str = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     conn = get_conn()
     row = conn.execute(
-        "SELECT id,user_id,expires_at,used_at FROM email_tokens WHERE token=? AND type='verify_email'",
-        (token,),
+        "SELECT id,user_id,expires_at,used_at FROM email_tokens WHERE token IN (?, ?) AND type='verify_email'",
+        token_lookup_values(token),
     ).fetchone()
     if not row: return RedirectResponse(url="/?verify=invalid")
     if row["used_at"]: return RedirectResponse(url="/?verify=already_used")
@@ -461,12 +483,14 @@ async def reset_password_endpoint(request: Request):
         return {"status": "error", "message": "Reset link has expired"}
 
     await db_write(partial(_reset_password_sync, now_str, int(row["id"]), int(row["user_id"]), password_hash))
+    # S-02:重置密码即吊销该用户全部既有令牌(泄露的旧 token 随密码一起作废)。
+    await db_write(partial(revoke_user_sessions, int(row["user_id"]), reason="password_reset"))
     return {"status": "success", "message": "Password updated — you can now log in"}
 
 
 @router.post("/change-password")
 @rate_limit("account_sensitive", max_requests=10, window_sec=300)
-async def change_password(request: Request):
+async def change_password(request: Request, response: Response):
     user = await get_current_user_async(request)
     if not user:
         return {"status": "error", "message": "Not authenticated"}
@@ -483,4 +507,27 @@ async def change_password(request: Request):
     password_hash = await asyncio.to_thread(hash_password, new_pw)
 
     await db_write(partial(_update_password_sync, int(user["id"]), password_hash))
-    return {"status": "success", "message": "Password updated"}
+    # S-02:改密即吊销该用户全部既有令牌(其它端下线);本端凭新版本号续签一枚。
+    await db_write(partial(revoke_user_sessions, int(user["id"]), reason="password_change"))
+    user_row = await db_read(lambda: _fetch_user_row(int(user["id"])))
+    reissued = await asyncio.to_thread(build_login_payload, user_row) if user_row else {}
+    result = {"status": "success", "message": "Password updated — other sessions were signed out"}
+    if reissued.get("token"):
+        result["token"] = reissued["token"]
+        result = _session_payload(request, response, result)
+    return result
+
+
+@router.post("/admin/revoke-sessions/{user_id}")
+@rate_limit("account_sensitive", max_requests=30, window_sec=300)
+async def admin_revoke_user_sessions(request: Request, user_id: int, admin=Depends(get_admin)):
+    """管理员踢人:目标用户 token_version +1,其全部既有登录令牌立即失效(S-02)。"""
+    target = int(user_id)
+    if target <= 0:
+        raise HTTPException(status_code=400, detail="user_id required")
+    if not await db_read(lambda: _fetch_user_row(target)):
+        raise HTTPException(status_code=404, detail="User not found")
+    actor = int(admin.get("id") or 0)
+    new_version = await db_write(partial(revoke_user_sessions, target, reason=f"admin_kick_by_{actor}"))
+    logger.info("auth.admin_revoked_sessions actor=%s target=%s token_version=%s", actor, target, new_version)
+    return {"status": "success", "user_id": target, "token_version": int(new_version)}
