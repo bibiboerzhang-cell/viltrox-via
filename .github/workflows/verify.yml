@@ -159,3 +159,61 @@ jobs:
           grep -E '^(FAILED|ERROR) |^E   |Error:|Traceback' "$log" | grep -vE 'PydanticDeprecated' | tail -n 10 \
             | while IFS= read -r line; do printf '::error title=pg gate::%s\n' "${line:0:900}"; done
           printf '::error title=pg gate summary::%s\n' "$(grep -E '[0-9]+ (passed|failed|error)' "$log" | tail -n 1)"
+
+  # Beta gap S-01 (2026-09-02): 13/123 production dependencies carried known
+  # advisories and no gate ran pip-audit.  This job is advisory only for now —
+  # continue-on-error keeps it from blocking merges/deploys until the upgrade
+  # wave lands; findings surface as ::warning annotations and a JSON artifact.
+  pip-audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pip-audit==2.10.1"
+      - name: Audit production requirements (advisory; not a gate yet)
+        id: audit
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pip-audit -r requirements.txt --progress-spinner off \
+            --format json --output "$RUNNER_TEMP/pip-audit.json" \
+            2>&1 | tee "$RUNNER_TEMP/pip-audit.log"
+      - name: Summarize advisories (anonymous-readable)
+        if: always()
+        run: |
+          report="$RUNNER_TEMP/pip-audit.json"
+          if [ ! -s "$report" ]; then
+            echo "::warning title=pip-audit::no report produced (resolver/install failure); see job log"
+            exit 0
+          fi
+          python - "$report" <<'PY'
+          import json
+          import sys
+
+          data = json.load(open(sys.argv[1], encoding="utf-8"))
+          deps = data.get("dependencies") or []
+          vulnerable = [d for d in deps if d.get("vulns")]
+          print(f"pip-audit: {len(deps)} dependencies audited, {len(vulnerable)} with advisories")
+          for dep in vulnerable:
+              ids = ", ".join(v.get("id", "?") for v in dep.get("vulns") or [])
+              fixes = sorted({fv for v in dep.get("vulns") or [] for fv in (v.get("fix_versions") or [])})
+              fix = f" fix={','.join(fixes)}" if fixes else ""
+              print(f"::warning title=pip-audit {dep.get('name')}=={dep.get('version')}::{ids}{fix}")
+          if vulnerable:
+              print("::warning title=pip-audit summary::advisory only (continue-on-error); "
+                    "promote to a gate after the dependency upgrade wave")
+          PY
+      - name: Upload pip-audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pip-audit-report
+          path: ${{ runner.temp }}/pip-audit.json
+          if-no-files-found: ignore
+          retention-days: 14

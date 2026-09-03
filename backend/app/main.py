@@ -609,18 +609,17 @@ app = FastAPI(
 
 sentry_dsn = os.getenv("SENTRY_DSN", "").strip()
 if sentry_dsn:
-    import sentry_sdk
-    from sentry_sdk.integrations.fastapi import FastApiIntegration
-    from sentry_sdk.integrations.starlette import StarletteIntegration
-
-    sentry_sdk.init(
-        dsn=sentry_dsn,
-        integrations=[StarletteIntegration(), FastApiIntegration()],
-        traces_sample_rate=0.1,
-        send_default_pii=False,
-        environment=os.getenv("ENVIRONMENT", "local"),
-        release="viltrox-2.0",
-    )
+    try:  # sentry_sdk is optional (not in requirements): a missing package must degrade, never crash boot
+        import sentry_sdk
+        from sentry_sdk.integrations.fastapi import FastApiIntegration
+        from sentry_sdk.integrations.starlette import StarletteIntegration
+    except ImportError:
+        logger.warning("SENTRY_DSN is set but sentry_sdk is not installed; error reporting disabled")
+    else:
+        sentry_sdk.init(
+            dsn=sentry_dsn, integrations=[StarletteIntegration(), FastApiIntegration()], traces_sample_rate=0.1,
+            send_default_pii=False, environment=os.getenv("ENVIRONMENT", "local"), release="viltrox-2.0",
+        )
 
 app.add_middleware(
     CORSMiddleware,
@@ -633,6 +632,7 @@ app.add_middleware(
     expose_headers=["X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Bucket"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=RESPONSE_GZIP_MIN_SIZE)
+importlib.import_module("app.platform.user_quota").install(app)  # per-user daily quota + burst gate; innermost so it sees RBAC staff
 
 
 @app.middleware("http")
