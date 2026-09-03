@@ -70,7 +70,8 @@ def test_fetch_external_image_failure_reports_not_ok(monkeypatch):
     def _boom(*args, **kwargs):
         raise OSError("network unreachable")
 
-    monkeypatch.setattr(media_router.urllib.request, "urlopen", _boom)
+    # S-03(2026-09-02):image-proxy 出站改走 app.platform.safe_fetch,mock 缝随之搬到 open_url。
+    monkeypatch.setattr(media_router.safe_fetch, "open_url", _boom)
     data, content_type, ok = media_router._fetch_external_image("https://scontent.cdninstagram.com/x.jpg", "scontent.cdninstagram.com")
     assert ok is False
     assert data == TRANSPARENT_SVG

@@ -14,7 +14,6 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.parse
-import urllib.request
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -29,6 +28,7 @@ from app.db.repositories.assets import get_submission_asset
 from app.services.media.access_logging import install_media_proxy_access_log_filter
 from app.services.media.storage import resolve_local_media_path
 from app.domains.media import cached_image_file, cached_video_file, cached_video_redirect_url, cached_video_url_for_item, is_failure_placeholder_cache
+from app.platform import safe_fetch
 
 
 install_media_proxy_access_log_filter()
@@ -73,6 +73,9 @@ VKPI_VIDEO_ALLOWED_HOST_SUFFIXES = (
     ".twimg.com",
 )
 _SAFE_RANGE_RE = re.compile(r"^bytes=\d*-\d*$")
+# S-03(2026-09-02):上游只能是 https、不跟重定向、DNS 解析后拒私网 —— 全部由 app.platform.safe_fetch 把关;
+# 这里的后缀白名单只是第一道粗筛。video-proxy 另加 content-type 闸,非视频体不回给调用者。
+_VIDEO_CONTENT_TYPES_EXTRA = frozenset({"application/octet-stream"})
 _TRANSPARENT_IMAGE_SVG = b"""<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1" viewBox="0 0 1 1"><rect width="1" height="1" fill="none"/></svg>"""
 _PRIVATE_VIDEO_CACHE_HEADERS = {
     "Cache-Control": "private, max-age=300, must-revalidate",
@@ -211,8 +214,8 @@ def resolve_poster_response(row):
 
 def _allowed_external_image_url(raw_url: str) -> tuple[str, str]:
     parsed = urllib.parse.urlparse(html.unescape(str(raw_url or "").strip()))
-    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
-        raise HTTPException(status_code=400, detail="invalid image url")
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="invalid image url (https only)")
     host = parsed.hostname or ""
     if not any(host == suffix.lstrip(".") or host.endswith(suffix) for suffix in VKPI_IMAGE_ALLOWED_HOST_SUFFIXES):
         raise HTTPException(status_code=400, detail="image host not allowed")
@@ -221,8 +224,8 @@ def _allowed_external_image_url(raw_url: str) -> tuple[str, str]:
 
 def _allowed_external_video_url(raw_url: str) -> tuple[str, str]:
     parsed = urllib.parse.urlparse(html.unescape(str(raw_url or "").strip()))
-    if parsed.scheme not in {"https", "http"} or not parsed.netloc:
-        raise HTTPException(status_code=400, detail="invalid video url")
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise HTTPException(status_code=400, detail="invalid video url (https only)")
     host = parsed.hostname or ""
     if not any(host == suffix.lstrip(".") or host.endswith(suffix) for suffix in VKPI_VIDEO_ALLOWED_HOST_SUFFIXES):
         raise HTTPException(status_code=400, detail="video host not allowed")
@@ -264,6 +267,29 @@ def _stream_upstream_response(upstream):
         upstream.close()
 
 
+def _open_upstream_video(url: str, host: str, range_header: str):
+    """打开上游视频响应(safe_fetch:https only / 拒私网 / 禁重定向);失败映射成 HTTPException。"""
+    try:
+        return safe_fetch.open_url(url, headers=_upstream_video_headers(host, range_header), timeout=30)
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(status_code=exc.code, detail="upstream video unavailable") from exc
+    except safe_fetch.SafeFetchBlocked as exc:
+        logger.warning("media.video_proxy_blocked", extra={"host": host, "reason": exc.reason})
+        raise HTTPException(status_code=502, detail="upstream video blocked") from exc
+    except Exception as exc:
+        logger.warning("media.video_proxy_fetch_failed", extra={"host": host}, exc_info=True)
+        raise HTTPException(status_code=502, detail="upstream video fetch failed") from exc
+
+
+def _upstream_video_content_type(upstream) -> str:
+    """只把视频体回给调用者:content-type 不是 video/*(或 CDN 常见的 octet-stream)就 502 并关掉上游。"""
+    content_type = safe_fetch.content_type_of(upstream) or "video/mp4"
+    if content_type.startswith("video/") or content_type in _VIDEO_CONTENT_TYPES_EXTRA:
+        return content_type
+    upstream.close()
+    raise HTTPException(status_code=502, detail="upstream is not video")
+
+
 def _cached_external_image_path(url: str, *, create: bool = True) -> tuple[Path, Path]:
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
     if create:
@@ -278,22 +304,16 @@ def _fetch_external_image_once(url: str, host: str, *, send_referer: bool) -> tu
     }
     if send_referer:
         headers["Referer"] = f"https://{host.split('.', 1)[-1]}/"
-    request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=VKPI_IMAGE_PROXY_TIMEOUT_SEC) as response:  # nosec B310 - host allowlist above.
-        content_type = str(response.headers.get("content-type") or "image/jpeg").split(";", 1)[0].strip().lower()
+    # safe_fetch:https only + DNS 解析拒私网 + 连接钉在校验过的地址 + 禁跟随 3xx(S-03)。
+    with safe_fetch.open_url(url, headers=headers, timeout=VKPI_IMAGE_PROXY_TIMEOUT_SEC) as response:
+        content_type = safe_fetch.content_type_of(response) or "image/jpeg"
         if not content_type.startswith("image/"):
             raise HTTPException(status_code=502, detail="upstream is not image")
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            chunk = response.read(128 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > VKPI_IMAGE_PROXY_MAX_BYTES:
-                raise HTTPException(status_code=413, detail="image too large")
-            chunks.append(chunk)
-    return b"".join(chunks), content_type
+        try:
+            data, _truncated = safe_fetch.read_capped(response, VKPI_IMAGE_PROXY_MAX_BYTES)
+        except safe_fetch.SafeFetchTooLarge as exc:
+            raise HTTPException(status_code=413, detail="image too large") from exc
+    return data, content_type
 
 
 def _fetch_external_image(url: str, host: str) -> tuple[bytes, str, bool]:
@@ -309,6 +329,10 @@ def _fetch_external_image(url: str, host: str) -> tuple[bytes, str, bool]:
         return data, content_type, True
     except HTTPException:
         raise
+    except safe_fetch.SafeFetchBlocked as exc:
+        # 策略拒绝(重定向 / 私网地址 / 非 https):换 Referer 也不会变,直接占位,不重试。
+        logger.info("media.image_proxy_blocked", extra={"host": host, "reason": exc.reason})
+        return _TRANSPARENT_IMAGE_SVG, "image/svg+xml", False
     except Exception as first_exc:
         first_reason = getattr(first_exc, "code", None) or type(first_exc).__name__
         try:
@@ -505,19 +529,8 @@ def proxy_vkpi_external_video(request: Request, url: str = Query(..., min_length
 
     normalized_url, host = _allowed_external_video_url(url)
     range_header = _safe_range_header(request.headers.get("range"))
-    upstream_request = urllib.request.Request(
-        normalized_url,
-        headers=_upstream_video_headers(host, range_header),
-    )
-    try:
-        upstream = urllib.request.urlopen(upstream_request, timeout=30)  # nosec B310 - host allowlist above.
-    except urllib.error.HTTPError as exc:
-        raise HTTPException(status_code=exc.code, detail="upstream video unavailable") from exc
-    except Exception as exc:
-        logger.warning("media.video_proxy_fetch_failed", extra={"host": host}, exc_info=True)
-        raise HTTPException(status_code=502, detail="upstream video fetch failed") from exc
-
-    content_type = str(upstream.headers.get("content-type") or "video/mp4").split(";", 1)[0].strip().lower()
+    upstream = _open_upstream_video(normalized_url, host, range_header)
+    content_type = _upstream_video_content_type(upstream)
     content_length = _header_int(upstream.headers.get("content-length"))
     if not range_header and content_length and content_length > VKPI_VIDEO_PROXY_MAX_BYTES:
         upstream.close()

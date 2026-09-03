@@ -106,7 +106,8 @@ def test_fetch_timeout_recorded_not_swallowed(monkeypatch):
     def boom(*args, **kwargs):
         raise TimeoutError("timed out")
 
-    monkeypatch.setattr(cws.urllib.request, "urlopen", boom)
+    # S-04(2026-09-02):_fetch 出站改走 app.platform.safe_fetch(DNS 先校验),mock 缝随之搬到 open_url。
+    monkeypatch.setattr(cws.safe_fetch, "open_url", boom)
     cws.pop_fetch_errors()  # 清残留
     assert cws._fetch("https://slow.example.com/contact") == ""
     errs = cws.pop_fetch_errors()
@@ -116,7 +117,7 @@ def test_fetch_timeout_recorded_not_swallowed(monkeypatch):
 
 
 def test_fetch_throttle_enforces_min_interval(monkeypatch):
-    monkeypatch.setattr(cws.urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
+    monkeypatch.setattr(cws.safe_fetch, "open_url", lambda *a, **k: (_ for _ in ()).throw(OSError("nope")))
     cws.set_fetch_throttle(0.12)
     try:
         cws._fetch("https://a.example.com")

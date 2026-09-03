@@ -1,13 +1,14 @@
 """L1 外链独立站/Linktree 抓联系方式 —— fetch + 正则(邮箱/mailto/社媒)+ 常见 contact 子页。
 主力零 LLM;Gemini 兜底留接口(默认关,省预算,仅正则抓空且页面像有联系页时才建议开)。
 有界护栏:超时、最多 N 页、只 HTML、抓 500KB 上限、域名黑名单(社媒/CDN 不当独立站爬)。
+出站安全(S-04,2026-09-02):所有抓取走 app.platform.safe_fetch —— 只 https(http:// 链接升级成 https)、
+DNS 解析后拒私网/回环/链路本地、连接钉在校验过的地址、禁跟随重定向;KOL bio 里塞什么 URL 都打不到内网。
 红线:纯读公开页,绝不触 viltrox_fit_score。
 """
 from __future__ import annotations
 
 import re
 import time
-import urllib.request
 from html import unescape as _html_unescape
 from typing import Any
 
@@ -18,6 +19,7 @@ from app.domains.kol.business_contact_extract import (
     _url_host,
     _valid_email,
 )
+from app.platform import safe_fetch
 
 _MAILTO_RE = re.compile(r"mailto:([^\"'?\s>]+)", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
@@ -29,6 +31,7 @@ _DENY_HOST_SUBSTR = (
     "youtube.com", "youtu.be", "facebook.com", "twitter.com", "x.com", "amazon.", "shopee.",
 )
 _UA = {"User-Agent": "Mozilla/5.0 (compatible; ViltroxContactEnrich/1.0)"}
+_MAX_PAGE_BYTES = 500_000
 # 批跑器速率闸 + 抓取错误台账(供批跑器区分 超时/连接失败 与 页面确实无邮箱)。
 _FETCH_STATE: dict[str, float] = {"min_interval": 0.0, "last_at": 0.0}
 _FETCH_ERRORS: list[str] = []
@@ -66,16 +69,27 @@ def _throttle_wait() -> None:
         time.sleep(wait)
 
 
+def _https_only(url: str) -> str:
+    """只走 https:``http://`` 链接升级成 ``https://``(独立站/聚合页基本都有 https;没有的就当抓不到,
+    绝不降级回明文——safe_fetch 也会把 http 拒掉,这里只是把常见写法救回来)。"""
+    if url.lower().startswith("http://"):
+        return "https://" + url[len("http://"):]
+    return url
+
+
 def _fetch(url: str, *, timeout: int = 6) -> str:
+    """抓一页公开 HTML(≤500KB,超出截断)。出站经 safe_fetch:https only、DNS 解析拒私网、
+    连接钉地址、禁跟随重定向;策略拒绝与网络错误一样进错误台账,返回空串。"""
     _throttle_wait()
+    target = _https_only(url)
     try:
-        req = urllib.request.Request(url, headers=_UA)
-        with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 (公开页只读)
-            ctype = str(r.headers.get("Content-Type") or "")
-            if "html" not in ctype.lower() and "text" not in ctype.lower():
+        with safe_fetch.open_url(target, headers=_UA, timeout=timeout) as r:
+            ctype = safe_fetch.content_type_of(r)
+            if "html" not in ctype and "text" not in ctype:
                 return ""
-            return r.read(500_000).decode("utf-8", errors="ignore")
-    except Exception as exc:  # 不吞:登记错误台账供上层分类(超时/HTTP 4xx/连接失败)
+            data, _truncated = safe_fetch.read_capped(r, _MAX_PAGE_BYTES, truncate=True)
+            return data.decode("utf-8", errors="ignore")
+    except Exception as exc:  # 不吞:登记错误台账供上层分类(超时/HTTP 4xx/连接失败/策略拒绝)
         if len(_FETCH_ERRORS) < _FETCH_ERRORS_CAP:
             _FETCH_ERRORS.append(f"{type(exc).__name__}: {str(exc)[:120]} @{url[:160]}")
         return ""
