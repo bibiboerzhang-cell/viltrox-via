@@ -59,7 +59,7 @@ export default function RouteErrorBoundary() {
           <span className="admin-root__mark">V</span>
           <div>
             <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-0.01em" }}>{PUBLIC_SURFACE_NAME}</div>
-            <div style={{ fontSize: 11, color: "#667085" }}>{t("受限测试环境")}</div>
+            <div style={{ fontSize: 11, color: "var(--auth-muted)" }}>{t("受限测试环境")}</div>
           </div>
         </div>
         <h1 className="admin-auth-card__title">{t(message.title)}</h1>

@@ -138,11 +138,12 @@ def test_deploy_sync_unit_is_reviewed_verified_installed_and_rollback_captured()
     verify_lines = [
         line for line in deploy.splitlines() if "systemd-analyze verify" in line
     ]
-    assert len(verify_lines) == 2
-    assert all(
-        "'${REMOTE_RELEASE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}'" in line
-        for line in verify_lines
-    )
+    sync_unit = "'${REMOTE_RELEASE_DIR}/${REMOTE_SYNC_SERVICE_UNIT_RELATIVE}'"
+    # sync unit verified twice (seal + preflight); the only other verify site is the
+    # env-gated scheduler unit, pinned by tests/test_deploy_separate_scheduler_gate.py.
+    assert sum(sync_unit in line for line in verify_lines) == 2
+    assert sum("SEPARATE_SCHEDULER" in line for line in verify_lines) == 1
+    assert len(verify_lines) == 3
 
     prepare = next(
         line
