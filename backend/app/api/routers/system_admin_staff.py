@@ -11,6 +11,7 @@ from app.core.security import require_admin_async as require_admin
 from app.services.audit_log import record_admin_action
 from app.services.auth.email import email_service_available
 from app.services.auth.tokens import _token_ttl
+from app.services.security.rate_limiter import rate_limit
 from app.services.system import staff as staff_svc
 
 router = APIRouter()
@@ -118,8 +119,11 @@ def create_activation_link(
     return result
 
 
+# S-08:两个公开端点(免登录)挂 login_register 限流桶(匿名 10 次/60s,按 IP),
+# 防 token 枚举 / 撞库;``request`` 形参是 rate_limit 装饰器取 IP 的必要条件。
 @public_staff_router.post("/accept-invite")
-def accept_staff_invite(body: dict):
+@rate_limit("login_register", max_requests=10, window_sec=60)
+def accept_staff_invite(request: Request, body: dict):
     try:
         return staff_svc.accept_invite(
             str(body.get("invite_token") or ""),
@@ -130,7 +134,8 @@ def accept_staff_invite(body: dict):
 
 
 @public_staff_router.get("/invite/status")
-def staff_invite_status(token: str = ""):
+@rate_limit("login_register", max_requests=10, window_sec=60)
+def staff_invite_status(request: Request, token: str = ""):
     return staff_svc.invite_token_status(token)
 
 

@@ -241,6 +241,7 @@ from app.services.scheduler.jobs_workflow_recovery import (  # noqa: F401
     workflow_scheduled_execution_enabled,
 )
 from app.services.scheduler.jobs_pool_dedupe import job_kol_pool_dedupe_reconcile  # noqa: F401
+from app.services.scheduler.jobs_retention import job_vkpi_data_retention_purge  # noqa: F401
 from app.services.scheduler.jobs_tasks_events import job_vkpi_dealer_activity_candidate_sync  # noqa: F401
 from app.services.scheduler.jobs_tasks_kol import (  # noqa: F401
     job_vkpi_kol_content_monitoring,
@@ -316,6 +317,18 @@ def _register_learning_workflow_jobs(_scheduler: Any) -> None:
         name="KOL Pool dedupe reconcile (dry_run report; auto-merge when gated on)",
         max_instances=1,
         coalesce=True,
+    )
+
+    # ── S-09: 第三方数据保留期 purge(每日 03:10 中国;默认 dry-run 只报数,
+    #    env VKPI_DATA_RETENTION_PURGE=1 或注册表 enabled 才真删;策略见 docs/vkpi/data-retention-policy.md)──
+    _scheduler.add_job(
+        job_vkpi_data_retention_purge,
+        trigger=CronTrigger(hour=3, minute=10, timezone=CHINA_TZ),
+        id="vkpi_data_retention_purge",
+        name="Data retention purge (dry-run report by default; purge when gated on)",
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=3600,
     )
 
     # ── Job 7b: 学习闭环·推荐 outcome 业务标签回填(每日 04:40 中国) ──

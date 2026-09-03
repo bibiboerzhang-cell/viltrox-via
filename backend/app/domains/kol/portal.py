@@ -18,11 +18,18 @@ Postgres),与 my_kol_aggregate.py 一致。
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.domains import business_truth
+
+# S-08:门户 token 入库只存 sha256 摘要;默认 90 天过期(env VKPI_PORTAL_TOKEN_TTL_DAYS 可调)。
+_TOKEN_DIGEST_PREFIX = "sha256$"
+_DEFAULT_PORTAL_TOKEN_TTL_DAYS = 90
 
 
 def _json(value: Any, default: Any) -> Any:
@@ -47,43 +54,104 @@ def _int(value: Any, default: int = 0) -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 # Token 发放 / 解析
 # ─────────────────────────────────────────────────────────────────────────────
-def issue_token(conn: Any, kol_pool_id: int, *, created_by_staff_id: int | None = None) -> str:
-    """为某 KOL 发放门户 token;幂等复用未撤销的 live token。
+def token_digest(raw: str) -> str:
+    """门户 token 的入库形态:``sha256$<hex>``。原文只在签发瞬间回给调用方。"""
+    return _TOKEN_DIGEST_PREFIX + hashlib.sha256(str(raw or "").encode("utf-8")).hexdigest()
 
-    先查该 kol_pool_id 的未撤销 token;有则原样返回(幂等)。没有才插入新的随机
-    secrets.token_urlsafe(32)。表上 ``WHERE revoked=FALSE`` 的偏唯一索引是并发竞态
-    的安全网(同一 KOL 至多一个 live token)。
+
+def _token_lookup_values(raw: str) -> tuple[str, str]:
+    """``token IN (?, ?)`` 的两个候选:摘要 + 原文(兼容切换前的明文行)。
+
+    提交值本身是 ``sha256$`` 形态时不走原文分支——库泄后拿摘要当 token 不得过闸。
+    """
+    text = str(raw or "").strip()
+    digest = token_digest(text)
+    return digest, (digest if text.startswith(_TOKEN_DIGEST_PREFIX) else text)
+
+
+def portal_token_ttl_days() -> int:
+    """门户 token 有效期(天);env 非法 / 非正数时回落默认 90。"""
+    raw = os.getenv("VKPI_PORTAL_TOKEN_TTL_DAYS", "").strip()
+    try:
+        days = int(raw) if raw else _DEFAULT_PORTAL_TOKEN_TTL_DAYS
+    except ValueError:
+        days = _DEFAULT_PORTAL_TOKEN_TTL_DAYS
+    return days if days > 0 else _DEFAULT_PORTAL_TOKEN_TTL_DAYS
+
+
+def _as_utc(value: Any) -> datetime | None:
+    """TIMESTAMPTZ(psycopg datetime)或 ISO 字符串(sqlite)→ aware UTC datetime;解析不了 → None。"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value).strip().replace("Z", "+00:00")
+    if " " in text and "T" not in text:
+        text = text.replace(" ", "T", 1)
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _token_row_expired(row: dict[str, Any], *, now: datetime) -> bool:
+    """有 expires_at 按它判;没有(迁移 308 前的老行)按 created_at + 默认 TTL 判;都解析不了视为过期。"""
+    expires_at = _as_utc(row.get("expires_at"))
+    if expires_at is None:
+        created_at = _as_utc(row.get("created_at"))
+        if created_at is None:
+            return True
+        expires_at = created_at + timedelta(days=_DEFAULT_PORTAL_TOKEN_TTL_DAYS)
+    return expires_at <= now
+
+
+def issue_token(conn: Any, kol_pool_id: int, *, created_by_staff_id: int | None = None) -> str:
+    """为某 KOL 发放门户 token;库里只存摘要,所以每次发放都是**轮换**:先撤销旧 live token,再插新的。
+
+    原文无法从摘要还原,因此不再「幂等复用」;旧链接立即失效,新链接只在本次返回值里出现一次。
+    表上 ``WHERE revoked=FALSE`` 的偏唯一索引仍是并发竞态的安全网(同一 KOL 至多一个 live token)。
+    过期时间 = now + :func:`portal_token_ttl_days`(默认 90 天)。
     """
     pool_id = _int(kol_pool_id)
-    existing = conn.execute(
-        "SELECT token FROM vkpi_kol_portal_tokens WHERE kol_pool_id = ? AND revoked = FALSE LIMIT 1",
-        (pool_id,),
-    ).fetchone()
-    if existing:
-        return str(dict(existing).get("token") or "")
-    token = secrets.token_urlsafe(32)
     conn.execute(
-        f"""
-        INSERT INTO vkpi_kol_portal_tokens (kol_pool_id, token, created_by_staff_id)
-        VALUES (?, ?, ?)
+        "UPDATE vkpi_kol_portal_tokens SET revoked = TRUE WHERE kol_pool_id = ? AND revoked = FALSE",
+        (pool_id,),
+    )
+    token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=portal_token_ttl_days())).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    conn.execute(
+        """
+        INSERT INTO vkpi_kol_portal_tokens (kol_pool_id, token, created_by_staff_id, expires_at)
+        VALUES (?, ?, ?, ?)
         """,
-        (pool_id, token, _int(created_by_staff_id) or None),
+        (pool_id, token_digest(token), _int(created_by_staff_id) or None, expires_at),
     )
     return token
 
 
 def resolve_token(conn: Any, token: str) -> int | None:
-    """token → kol_pool_id;撤销 / 不存在 / 空 → None(门户随即 404,不泄露存在性)。"""
+    """token → kol_pool_id;撤销 / 过期 / 不存在 / 空 → None(门户随即 404,不泄露存在性)。"""
     tok = str(token or "").strip()
     if not tok:
         return None
     row = conn.execute(
-        "SELECT kol_pool_id FROM vkpi_kol_portal_tokens WHERE token = ? AND revoked = FALSE LIMIT 1",
-        (tok,),
+        """
+        SELECT kol_pool_id, expires_at, created_at
+        FROM vkpi_kol_portal_tokens
+        WHERE token IN (?, ?) AND revoked = FALSE
+        LIMIT 1
+        """,
+        _token_lookup_values(tok),
     ).fetchone()
     if not row:
         return None
-    return _int(dict(row).get("kol_pool_id")) or None
+    item = dict(row)
+    if _token_row_expired(item, now=datetime.now(timezone.utc)):
+        return None
+    return _int(item.get("kol_pool_id")) or None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

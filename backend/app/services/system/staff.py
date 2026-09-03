@@ -22,7 +22,7 @@ from app.core.permissions import (
 from app.core.security import hash_password, invalidate_user_cache
 from app.db.connection import get_conn, is_postgres_runtime
 from app.services.auth.email import email_service_available
-from app.services.auth.tokens import create_email_token
+from app.services.auth.tokens import create_email_token, email_token_expires_at, token_digest, token_lookup_values
 from app.services.system.staff_helpers import (
     _allow_any_external,
     _augment_member_invite_status,
@@ -326,10 +326,7 @@ def create_password_reset_link(staff_id: int) -> dict[str, Any]:
 
     token = create_email_token(user_id, "reset_password")
     reset_url = _password_reset_url(token)
-    expires_row = conn.execute(
-        "SELECT expires_at FROM email_tokens WHERE token = ? AND type = 'reset_password'",
-        (token,),
-    ).fetchone()
+    expires_at = email_token_expires_at(token, "reset_password")
     email_sent = _send_staff_password_reset_email(
         email,
         str(row["user_name"] or email.split("@")[0]),
@@ -342,7 +339,7 @@ def create_password_reset_link(staff_id: int) -> dict[str, Any]:
         "email": email,
         "reset_url": reset_url,
         "token_hint": _token_hint(token),
-        "expires_at": str(expires_row["expires_at"] if expires_row else ""),
+        "expires_at": expires_at,
         "expires_in_hours": 1,
         "email_sent": bool(email_sent),
         "delivery_method": "email" if email_sent else "manual_link",
@@ -407,7 +404,7 @@ def create_existing_activation_link(staff_id: int, *, inviter_id: int) -> dict[s
             INSERT INTO email_tokens (user_id, token, type, created_at, expires_at)
             VALUES (?, ?, 'staff_invite', ?, ?)
             """,
-            (user_id, token, invited_at, expires_at),
+            (user_id, token_digest(token), invited_at, expires_at),
         )
         conn.commit()
     except Exception:
@@ -534,10 +531,6 @@ def _create_staff_with_token(body: dict, *, inviter_id: int) -> dict[str, Any]:
         raise
 
     token = create_email_token(int(user_id), "staff_invite")
-    expires_row = conn.execute(
-        "SELECT expires_at FROM email_tokens WHERE token = ? AND type = 'staff_invite'",
-        (token,),
-    ).fetchone()
     return {
         "staff_id": staff_id,
         "user_id": int(user_id),
@@ -545,7 +538,7 @@ def _create_staff_with_token(body: dict, *, inviter_id: int) -> dict[str, Any]:
         "email": email,
         "full_name": full_name,
         "token": token,
-        "expires_at": str(expires_row["expires_at"] if expires_row else ""),
+        "expires_at": email_token_expires_at(token, "staff_invite"),
     }
 
 
@@ -560,9 +553,9 @@ def accept_invite(invite_token: str, password: str) -> dict:
         """
         SELECT id, user_id, expires_at, used_at
         FROM email_tokens
-        WHERE token = ? AND type = 'staff_invite'
+        WHERE token IN (?, ?) AND type = 'staff_invite'
         """,
-        (token,),
+        token_lookup_values(token),
     ).fetchone()
     if not row:
         raise ValueError("invalid invite token")
@@ -620,18 +613,16 @@ def invite_token_status(invite_token: str) -> dict[str, Any]:
     row = conn.execute(
         """
         SELECT t.id, t.user_id, t.expires_at, t.used_at,
-               COALESCE(u.email, '') AS email,
-               COALESCE(u.name, '') AS full_name,
                s.accepted_at AS accepted_at
         FROM email_tokens t
-        LEFT JOIN users u ON u.id = t.user_id
         LEFT JOIN staff s ON s.user_id = t.user_id
-        WHERE t.token = ? AND t.type = 'staff_invite'
+        WHERE t.token IN (?, ?) AND t.type = 'staff_invite'
         ORDER BY s.active DESC, s.id DESC
         LIMIT 1
         """,
-        (token,),
+        token_lookup_values(token),
     ).fetchone()
+    # S-08:公开端点只回 valid/state,不回 email / full_name 等 PII。
     if not row:
         return {"valid": False, "state": "invalid", "message": "invalid invite token"}
     item = dict(row)
@@ -640,7 +631,6 @@ def invite_token_status(invite_token: str) -> dict[str, Any]:
             "valid": False,
             "state": "used",
             "message": "invite token already used",
-            "email": item.get("email") or "",
             "used_at": item.get("used_at") or "",
             "accepted_at": item.get("accepted_at") or "",
         }
@@ -649,7 +639,6 @@ def invite_token_status(invite_token: str) -> dict[str, Any]:
             "valid": False,
             "state": "used",
             "message": "staff account already activated",
-            "email": item.get("email") or "",
             "accepted_at": item.get("accepted_at") or "",
         }
     expires_at = str(item.get("expires_at") or "")
@@ -658,15 +647,12 @@ def invite_token_status(invite_token: str) -> dict[str, Any]:
             "valid": False,
             "state": "expired",
             "message": "invite token expired",
-            "email": item.get("email") or "",
             "expires_at": expires_at,
         }
     return {
         "valid": True,
         "state": "active",
         "message": "invite token active",
-        "email": item.get("email") or "",
-        "full_name": item.get("full_name") or "",
         "expires_at": expires_at,
     }
 

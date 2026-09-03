@@ -49,6 +49,7 @@ from app.domains.access import scope
 from app.domains.kol import history_match as kol_history_match
 from app.domains.kol import profile_discovery as _kol_discovery  # P0-6 地区排除判据复用
 from app.domains.kol.claim_access import assert_kol_access
+from app.domains.kol.pool_common import _mask_contact_value, _mask_email
 
 from app.api.routers.kol_ops_schema import ensure_kol_schema
 from app.api.routers.kol_ops_dashboard import router as dashboard_router
@@ -60,6 +61,18 @@ router = APIRouter(prefix="/api/admin/kol", tags=["kol-ops"], dependencies=[Depe
 router.include_router(dashboard_router)
 router.include_router(content_router)
 logger = get_logger(__name__)
+
+
+def _mask_kol_contacts(item: dict) -> dict:
+    """S-07:旧 kol_ops 读端(列表/详情)联系方式脱敏,与新池 pool_common 同口径。
+
+    写端(create/update/import)不受影响;真值读取走新池的审计+限速 reveal 端点。
+    """
+    if item.get("contact_email"):
+        item["contact_email"] = _mask_email(item["contact_email"])
+    if item.get("contact_phone"):
+        item["contact_phone"] = _mask_contact_value("phone", item["contact_phone"])
+    return item
 
 
 def _provider_unavailable(reason: str, operation: str) -> HTTPException:
@@ -103,13 +116,14 @@ def list_kols(
     if product:
         where.append("LOWER(COALESCE(k.promoted_product, '')) LIKE ?"); params.append(_like(product))
     if q:
+        # S-07:不再按 contact_email 模糊搜索(枚举联系方式的通道);其余字段照旧。
         where.append(
             "(LOWER(k.channel_name) LIKE ? OR LOWER(k.channel_url) LIKE ? OR LOWER(k.niche) LIKE ? "
-            "OR LOWER(k.contact_email) LIKE ? OR LOWER(COALESCE(k.promoted_product, '')) LIKE ? "
+            "OR LOWER(COALESCE(k.promoted_product, '')) LIKE ? "
             "OR LOWER(COALESCE(k.media_name, '')) LIKE ? OR LOWER(COALESCE(k.owner_name, '')) LIKE ? "
             "OR LOWER(COALESCE(k.channel_tags, '')) LIKE ?)"
         )
-        params.extend([_like(q)] * 8)
+        params.extend([_like(q)] * 7)
     if date_from:
         where.append("k.updated_at >= ?"); params.append(date_from)
     if date_to:
@@ -144,7 +158,7 @@ def list_kols(
     ).fetchall()
     items = []
     for row in rows:
-        item = dict(row)
+        item = _mask_kol_contacts(dict(row))
         item["creator_name"] = _clean_creator_name(item.get("media_name") or item.get("channel_name") or item.get("project_name") or "", item.get("owner_name", ""))
         item["country_code"] = _normalize_country_code(item.get("country", ""))
         item["engagement_rate"] = engagement_rate(item.get("likes", 0), item.get("comments", 0), item.get("shares", 0), item.get("views", 0))
@@ -430,7 +444,7 @@ def get_kol(kol_id: int, staff=Depends(require_tab("kol_ops", "read"))):
         (int(kol_id),),
     ).fetchall()
     return {
-        "kol": dict(row),
+        "kol": _mask_kol_contacts(dict(row)),
         "outreach": _items(outreach),
         "campaigns": _items(campaigns),
         "content": _items(content),
