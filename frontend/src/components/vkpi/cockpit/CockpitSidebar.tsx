@@ -144,6 +144,17 @@ export function CockpitSidebar({
           : "前端构建标记缺失",
       },
         `${versionBadge.shortSha} · ${versionBadge.inSync ? "✓同步" : "⚠不一致"}`
+      ),
+      // 页脚法务链接(chrome.md .railfoot 约定:钉在侧栏最底部;折叠态隐藏)。
+      // 用 <a> 而非 router Link:法务页是独立门面(与 /activate 同款整页分发),侧栏也可能在无 Router 的壳里渲染。
+      !collapsed && e("nav", {
+        className: "vkpi-rail__legal flex flex-wrap gap-x-2 gap-y-0.5 px-3 pb-1 text-[10px] leading-tight text-muted select-none",
+        "aria-label": t("法务与隐私"),
+      },
+        e("a", { key: "privacy", href: "/legal/privacy", className: "hover:text-ink-2" }, t("隐私声明")),
+        e("a", { key: "terms", href: "/legal/terms", className: "hover:text-ink-2" }, t("服务条款")),
+        e("a", { key: "sources", href: "/legal/data-sources", className: "hover:text-ink-2" }, t("数据来源声明")),
+        e("a", { key: "request", href: "/legal/request", className: "hover:text-ink-2" }, t("删除或勿联系申请"))
       )
     )
   );

@@ -90,15 +90,25 @@ _READ_ONLY_GET_EXACT_PATHS = frozenset(
         "/api/admin/vkpi/weekly-reports/list",
         "/api/auth/me",
         "/api/intelligence/market/trends",
+        # 2026-09-02 公测法务页(L-legal-dsar):匿名只读——保留期策略键 + 联系邮箱占位,零写入;
+        # SPA 分发地址 /legal /legal/* /privacy /terms 也必须在验收窗口内可打开(测试者手册链接)。
+        "/api/public/legal/policy",
         "/favicon.ico",
         "/favicon.svg",
         "/health",
+        "/legal",
+        "/legal/data-sources",
+        "/legal/privacy",
+        "/legal/request",
+        "/legal/terms",
         "/login",
+        "/privacy",
         "/react",
         "/redeem",
         "/reset",
         "/robots.txt",
         "/student-signup",
+        "/terms",
     }
 )
 _READ_ONLY_GET_PREFIXES = (

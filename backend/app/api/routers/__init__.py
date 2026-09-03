@@ -172,4 +172,7 @@ ADMIN_ROUTER_MODULES: list[str] = [
     "vkpi_catalog_suggest",
     # 学习闭环 L 车道:搜索页反馈写口 search-feedback(有用/没用+拒绝原因闭集,幂等落 recommendation_feedback,2026-08-23)
     "vkpi_recommendations",
+    # 公测 L-legal-dsar:法务页 SPA 分发(/legal /privacy /terms)+ 公开 DSAR 表单(限流 5/h/IP)
+    # + 员工审批口 /api/admin/vkpi/dsar(erasure→既有 erase_subject;do_not_contact→抑制台账;append-only,2026-09-02)
+    "dsar_public",
 ]

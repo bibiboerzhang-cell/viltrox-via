@@ -842,6 +842,6 @@ export const I18N_EN = {
   "打开 KOL Pool 该 KOL 完整详情": "Open this KOL's full detail in KOL Pool", "打开这次查找记录": "Open this search session",
   "无可跳转的所属对象": "No linked object to open", "收起 ▲": "Collapse ▲",
   "更多任务…(展开看全部 {n} 条) ▼": "More tasks… (expand all {n}) ▼",
-  "重试中…": "Retrying…", "已重排": "Re-queued", "重试失败": "Retry failed",
-  "下载": "Download", "服务方": "Provider", "媒体解析": "Media resolve", "内容受限": "Content restricted", "代码错误": "Code error",
+  "重试中…": "Retrying…", "已重排": "Re-queued", "重试失败": "Retry failed", "法务与隐私": "Legal & privacy", "隐私声明": "Privacy",
+  "下载": "Download", "服务方": "Provider", "媒体解析": "Media resolve", "内容受限": "Content restricted", "代码错误": "Code error", "服务条款": "Terms", "数据来源声明": "Data sources", "删除或勿联系申请": "Delete / do-not-contact",
 };
