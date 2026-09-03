@@ -175,4 +175,8 @@ ADMIN_ROUTER_MODULES: list[str] = [
     # 公测 L-legal-dsar:法务页 SPA 分发(/legal /privacy /terms)+ 公开 DSAR 表单(限流 5/h/IP)
     # + 员工审批口 /api/admin/vkpi/dsar(erasure→既有 erase_subject;do_not_contact→抑制台账;append-only,2026-09-02)
     "dsar_public",
+    # 公测 LE-crawl-health:近 N 天「任务类型 × 状态 × 原因」汇总 + 完成率
+    # (纯 SELECT 投影,零写库零取数;原因走 last_error 稳定码表,
+    #  不依赖对最大失败桶恒 NULL 的 last_error_category;append-only,2026-09-03)
+    "vkpi_crawl_health",
 ]

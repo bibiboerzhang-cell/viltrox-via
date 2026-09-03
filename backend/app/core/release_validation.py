@@ -200,6 +200,9 @@ _CAPTURED_READ_ONLY_GET_PATHS = frozenset(
         "/api/admin/vkpi/lens-insights/summary",
         "/api/admin/vkpi/official-matrix",
         "/api/admin/vkpi/ops/cost-ledger",
+        # 2026-09-03 抓取健康:apify_jobs 窗口内「任务类型 × 状态」计数 + 失败取样,
+        # 两条纯 SELECT 投影;不入队、不调 provider、不写库。manager-only。
+        "/api/admin/vkpi/ops/crawl-health",
         "/api/admin/vkpi/prediction-ledger/summary",
         "/api/admin/vkpi/product-analysis/launches",
         "/api/admin/vkpi/product-costs",
