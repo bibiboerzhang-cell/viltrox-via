@@ -10,6 +10,15 @@ export type FailureCategory = "download" | "authorization" | "budget" | "model" 
 
 export type FailureAction = "reissue_from_my_kol" | "check_budget" | "auto_retry" | null;
 
+/** 后端封闭动作码(failure_next_step / stage reason.next_step):回答「下一步能做什么」。 */
+export type FailureNextStep =
+  | "retry"
+  | "switch_source"
+  | "check_budget"
+  | "reissue_from_my_kol"
+  | "wait_auto_retry"
+  | "none";
+
 export interface FailureGuidanceCopy {
   category: FailureCategory;
   /** 失败原因(中文源串;英文 locale 由 failureReasonForLocale 决定) */
@@ -75,10 +84,34 @@ const ZH_REASON: Record<FailureCategory, string> = {
   unknown: "分析未完成,原因尚未归类",
 };
 
-/** 中文 locale:优先后端人话;缺失时按类别兜底。英文 locale:按类别映射英文短句(后端只给中文)。 */
+/** 后端稳定机器码 → 英文一句(后端只给中文;类别兜底对档案/评论/受众三段太粗)。 */
+const EN_BY_CODE: ReadonlyArray<[RegExp, string]> = [
+  [/url_unknown_unsupported|unsupported_or_unresolved_url/, "This profile link cannot be crawled automatically; only YouTube, Instagram and TikTok profiles are supported."],
+  [/cn_platform_video_only/, "This platform can only be analysed one post at a time; a profile link will not work."],
+  [/url_unknown_needs_human_choice/, "This link points to more than one account; someone needs to confirm which one."],
+  [/unsupported_platform/, "This platform does not support this analysis yet; try a different account or link."],
+  [/non_video_post|image_post_no_video|no_downloadable_url/, "This post contains no video, so there is nothing to analyse."],
+  [/no_commenters|no_comments\b/, "These posts have no usable comments."],
+  [/no_posts/, "No posts have been collected for this account yet; run an account analysis first."],
+  [/comments_job_not_ready|pending_comments/, "Comments are still being collected; this will continue automatically."],
+  [/comments_collect_failed/, "Comments could not be collected for this account; you can try again."],
+  [/deep_crawl_not_executed|profile_crawl_not_executed/, "The account analysis never actually started; you can try again."],
+  [/insufficient_evidence|no_ready_video_analysis|content_fit_not_ready/, "There is not enough material yet; add a video analysis first."],
+];
+
+function failureCodeOf(source: unknown): string {
+  const row = (source && typeof source === "object" ? source : {}) as Record<string, unknown>;
+  return String(row.failure_code ?? "").trim().toLowerCase();
+}
+
+/** 中文 locale:优先后端人话;缺失时按类别兜底。英文 locale:先按机器码,再按类别(后端只给中文)。 */
 export function failureReasonForLocale(source: unknown, lang: "zh" | "en" | string): string {
   const category = failureCategoryOf(source);
-  if (lang === "en") return EN_REASON[category];
+  if (lang === "en") {
+    const code = failureCodeOf(source);
+    const matched = code ? EN_BY_CODE.find(([pattern]) => pattern.test(code)) : undefined;
+    return matched ? matched[1] : EN_REASON[category];
+  }
   return failureReasonHumanOf(source) || ZH_REASON[category];
 }
 
@@ -89,6 +122,40 @@ const GUIDANCE: Record<FailureCategory, { hint: string; action: FailureAction; a
   provider: { hint: "稍后自动重试,无需手动操作", action: "auto_retry", actionLabel: "" },
   model: { hint: "已记录,可稍后重新发起", action: null, actionLabel: "" },
   unknown: { hint: "可稍后重新发起;持续失败请反馈", action: null, actionLabel: "" },
+};
+
+const NEXT_STEPS: ReadonlySet<string> = new Set([
+  "retry", "switch_source", "check_budget", "reissue_from_my_kol", "wait_auto_retry", "none",
+]);
+
+/** 封闭词表之外一律 null(绝不把自由文本当动作码渲染)。 */
+export function normalizeFailureNextStep(raw: unknown): FailureNextStep | null {
+  const text = String(raw ?? "").trim().toLowerCase();
+  return NEXT_STEPS.has(text) ? (text as FailureNextStep) : null;
+}
+
+/** 从失败项 / stage reason 读下一步动作码;缺失或不认识 → null。 */
+export function failureNextStepOf(source: unknown): FailureNextStep | null {
+  const row = (source && typeof source === "object" ? source : {}) as Record<string, unknown>;
+  return normalizeFailureNextStep(row.failure_next_step ?? row.next_step);
+}
+
+/** 「本段对这个对象本就不适用」(链接不支持 / 内容里没有视频 / 帖子下没评论);重试也不会变。 */
+export function failureNotApplicableOf(source: unknown): boolean {
+  const row = (source && typeof source === "object" ? source : {}) as Record<string, unknown>;
+  return row.failure_not_applicable === true;
+}
+
+/** 动作码 → (既有 FailureAction, 中文提示, 英文提示)。FailureAction 不扩集:
+ *  failureGuidance.tsx 的 TONE 是穷举 Record,扩集会让它编译不过,而那个文件不在本刀名下。
+ *  没有对应按钮的动作只出提示 —— 宁可无按钮,不给假按钮。 */
+const NEXT_STEP_GUIDANCE: Record<FailureNextStep, { action: FailureAction; zh: string; en: string }> = {
+  retry: { action: null, zh: "可以再试一次", en: "You can try again." },
+  switch_source: { action: null, zh: "换一个支持的账号主页链接再试", en: "Try a different supported profile link." },
+  check_budget: { action: "check_budget", zh: "额度恢复后可再次发起;不会自动重试", en: "Retry once the allowance resets; this will not retry itself." },
+  reissue_from_my_kol: { action: "reissue_from_my_kol", zh: "请由收藏负责人在 MY KOL 重新发起", en: "The owner needs to re-issue this from MY KOL." },
+  wait_auto_retry: { action: "auto_retry", zh: "稍后自动继续,无需手动操作", en: "This continues automatically; nothing to do." },
+  none: { action: null, zh: "这一条本来就没有可分析的内容,不用重试", en: "There is nothing to analyse here; retrying will not help." },
 };
 
 /** 是否为「失败/阻断」终态(任务态口径,多家族共用)。 */
@@ -106,13 +173,44 @@ export function hasReadableFailure(source: unknown): boolean {
 export function failureGuidance(source: unknown, lang: "zh" | "en" | string = "zh"): FailureGuidanceCopy {
   const category = failureCategoryOf(source);
   const guidance = GUIDANCE[category];
+  const nextStep = failureNextStepOf(source);
+  // 后端给了明确的下一步就照它走(类别只说"哪一类坏了",动作码才说"你现在能做什么");
+  // 没给就退回按类别的老口径,老数据一字不变。
+  if (!nextStep) {
+    return { category, reason: failureReasonForLocale(source, lang), hint: guidance.hint, action: guidance.action, actionLabel: guidance.actionLabel };
+  }
+  const step = NEXT_STEP_GUIDANCE[nextStep];
   return {
     category,
     reason: failureReasonForLocale(source, lang),
-    hint: guidance.hint,
-    action: guidance.action,
-    actionLabel: guidance.actionLabel,
+    // t() 对未登记的 key 原样返回,所以英文 locale 直接给英文串,避免门面漏中文。
+    hint: lang === "en" ? step.en : step.zh,
+    action: step.action,
+    actionLabel: step.action === "reissue_from_my_kol" ? guidance.actionLabel || "从 MY KOL 重新发起" : "",
   };
+}
+
+/* ============ 段级「为什么没有数据」 ============ */
+
+/** 后端 stage reason 的封闭词表(search_progress_projection.STAGE_NOT_REQUESTED_REASONS)。 */
+export type StageNotRequestedReason = "no_candidates" | "upstream_incomplete" | "stage_not_selected";
+
+const NOT_REQUESTED_EN: Record<StageNotRequestedReason, string> = {
+  no_candidates: "This search returned no accounts, so there is nothing to analyse here — widen the filters and search again.",
+  upstream_incomplete: "The account details are not complete yet; this part starts once they are.",
+  stage_not_selected: "This part was not selected for this run; it can be added separately.",
+};
+
+/** 一段 tile 的原因文案:失败段走人话/英文短句,未请求段走封闭词表。没有原因 → ""(诚实空态)。 */
+export function stageReasonForLocale(reason: unknown, lang: "zh" | "en" | string = "zh"): string {
+  const row = (reason && typeof reason === "object" ? reason : {}) as Record<string, unknown>;
+  const notRequested = String(row.not_requested_reason ?? "").trim();
+  if (notRequested) {
+    if (lang !== "en") return String(row.human ?? "").trim();
+    return NOT_REQUESTED_EN[notRequested as StageNotRequestedReason] ?? "";
+  }
+  if (!hasReadableFailure(row)) return "";
+  return failureReasonForLocale(row, lang);
 }
 
 /* ============ ETA 新口径 ============ */

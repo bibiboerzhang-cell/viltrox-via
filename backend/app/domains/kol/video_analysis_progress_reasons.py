@@ -62,6 +62,7 @@ _TEXT_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "model_binding", "execution_class", "readiness", "model_mismatch", "invalid final_v1",
             "invalidfinalv1", "unsupported_llm", "derive_method", "not_production_ready",
+            "llm_json_malformed",
         ),
     ),
     (
@@ -72,7 +73,15 @@ _TEXT_MARKERS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "download",
         ("download", "yt-dlp", "yt_dlp", "media_resolve", "image_post_no_video", "unsupported_platform",
-         "private video", "age restricted", "video unavailable", "not found", "has been removed"),
+         "private video", "age restricted", "video unavailable", "not found", "has been removed",
+         # 档案 / 评论 / 受众三段的稳定码(全码精确串,禁前缀:'unsupported' 会抢走视频段既有文案)。
+         # 这些桶的写点绕开了 _block_job,last_error_category 恒 NULL,只能靠文本命中,
+         # 不补这一列就有 200+ 条挤进「未分类」(2026-09-03 取证)。
+         "url_unknown_unsupported", "unsupported_or_unresolved_url", "url_unknown_needs_human_choice",
+         "cn_platform_video_only", "non_video_post", "no_downloadable_url",
+         "no_posts", "no_commenters", "no_comments", "comments_collect_failed", "comments_job_not_ready",
+         "pending_comments", "deep_crawl_not_executed", "profile_crawl_not_executed",
+         "insufficient_evidence", "no_ready_video_analysis", "content_fit_not_ready"),
     ),
 )
 
@@ -102,6 +111,19 @@ _HUMAN_RULES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("provider", ("proxy", "522"), "网络代理不稳"),
     ("provider", ("stale_running", "reclaimed"), "任务被中断后已回收"),
     ("provider", (), "分析服务繁忙"),
+    # ↓ 四段(档案/评论/受众/内容匹配)的稳定码:必须排在下面的通用 download 规则之前,
+    #   否则 'url_unknown_unsupported' 会被 'unsupported' 抢走、错报成「该链接不是可分析的视频」。
+    ("download", ("url_unknown_unsupported", "unsupported_or_unresolved_url"), "这个主页链接暂时不支持自动抓取:目前支持 YouTube / Instagram / TikTok 主页"),
+    ("download", ("cn_platform_video_only",), "这个平台只能按单条内容分析,主页链接暂时抓不了"),
+    ("download", ("url_unknown_needs_human_choice",), "这个链接指向不止一个账号,需要人工确认是哪一个"),
+    ("download", ("unsupported_platform",), "这个平台暂不支持这项分析:请换一个支持的账号或链接"),
+    ("download", ("non_video_post", "no_downloadable_url"), "这条内容里没有视频,没有可分析的画面"),
+    ("download", ("no_commenters", "no_comments"), "这些内容下面没有可用的评论"),
+    ("download", ("no_posts",), "还没有抓到这个账号的内容:先跑一次账号分析"),
+    ("download", ("comments_job_not_ready", "pending_comments"), "评论还在收集中:收完会自动继续"),
+    ("download", ("comments_collect_failed",), "评论这一段没有取到数据:可以再试一次"),
+    ("download", ("deep_crawl_not_executed", "profile_crawl_not_executed"), "账号分析没有真正跑起来:可以再试一次"),
+    ("download", ("insufficient_evidence", "no_ready_video_analysis", "content_fit_not_ready"), "可用素材还不够:先补一条视频分析再看这一段"),
     ("download", ("private video", "age restricted", "login required", "sign in", "members-only", "content_restricted", "requires authentication"), "视频需登录或为私密内容,无法获取"),
     ("download", ("content_unavailable", "not found", "not_found", "404", "deleted", "does not exist"), "视频已删除或不存在"),
     ("download", ("content_blocked", "geo", "copyright", "dmca", "removed", "terminated"), "视频已被平台下架或限制地区"),
@@ -111,6 +133,30 @@ _HUMAN_RULES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("unknown", ("foreignkeyviolation", "ledger"), "记账校验失败:已记录,请联系管理员"),
     ("unknown", (), UNKNOWN_REASON_HUMAN),
 )
+# 「下一步能做什么」的封闭动作码(门面按码出按钮/提示;绝不投自由文本)。
+NEXT_STEPS: tuple[str, ...] = (
+    "retry", "switch_source", "check_budget", "reissue_from_my_kol", "wait_auto_retry", "none",
+)
+_NEXT_STEP_BY_CATEGORY: dict[str, str] = {
+    "authorization": "reissue_from_my_kol",
+    "budget": "check_budget",
+    "model": "retry",
+    "provider": "wait_auto_retry",
+    "download": "retry",
+    "unknown": "retry",
+}
+# (标记, 动作码, 是否「本就不适用」);顺序即优先级,标记一律全码精确串。
+_NEXT_STEP_RULES: tuple[tuple[tuple[str, ...], str, bool], ...] = (
+    (
+        ("url_unknown_unsupported", "unsupported_or_unresolved_url", "url_unknown_needs_human_choice",
+         "cn_platform_video_only", "unsupported_platform", "missing_profile_url", "invalid_video_url"),
+        "switch_source", True,
+    ),
+    (("non_video_post", "image_post_no_video", "no_downloadable_url", "no_commenters", "no_comments"), "none", True),
+    (("content_unavailable", "has been removed", "does not exist"), "none", True),
+    (("comments_job_not_ready", "pending_comments"), "wait_auto_retry", False),
+)
+
 _RETRY_SUFFIX_ACTIVE = ":会自动重试"
 _RETRY_SUFFIX_TERMINAL = ":多次重试仍失败,请稍后重新发起"
 _ACTIVE_STATES = ("queued", "running", "retrying", "processing")
@@ -178,6 +224,41 @@ def failure_fields(*, status: Any, last_error_category: Any, last_error: Any = N
         "failure_category": category,
         "failure_reason_human": failure_reason_human(category, status=state, last_error=last_error, stderr_tail=stderr_tail),
         "failure_code": _reason_code(last_error) or (_text(last_error_category) or None),
+    }
+
+
+def failure_guidance_fields(
+    *,
+    status: Any,
+    last_error_category: Any,
+    last_error: Any = None,
+    stderr_tail: Any = None,
+) -> dict[str, Any]:
+    """``failure_fields`` 的加法扩展:多两个键,既有六类元组与既有三键一字不动。
+
+    - ``failure_next_step``:封闭动作码(见 ``NEXT_STEPS``),回答「下一步能做什么」;
+    - ``failure_not_applicable``:True 表示这不是可自愈的故障,而是「这段对这个对象本就不适用」
+      (链接不支持 / 内容里没有视频 / 帖子下没有评论),重试一百次也不会变。
+
+    非失败态与 ``failure_fields`` 同口径:三个 None + 两个 None。
+    """
+    fields = failure_fields(
+        status=status,
+        last_error_category=last_error_category,
+        last_error=last_error,
+        stderr_tail=stderr_tail,
+    )
+    category = fields.get("failure_category")
+    if not category:
+        return {**fields, "failure_next_step": None, "failure_not_applicable": None}
+    blob = " ".join(part for part in (_text(last_error).lower(), _text(stderr_tail).lower()) if part)
+    for markers, step, not_applicable in _NEXT_STEP_RULES:
+        if any(marker in blob for marker in markers):
+            return {**fields, "failure_next_step": step, "failure_not_applicable": not_applicable}
+    return {
+        **fields,
+        "failure_next_step": _NEXT_STEP_BY_CATEGORY.get(str(category), "retry"),
+        "failure_not_applicable": False,
     }
 
 
@@ -255,11 +336,13 @@ def estimate_eta_seconds(*, in_progress: int, queue_ahead: int, lanes: int, p50_
 
 __all__ = [
     "FAILURE_CATEGORIES",
+    "NEXT_STEPS",
     "active_lane_count",
     "env_video_lane_hint",
     "estimate_eta_seconds",
     "failure_category",
     "failure_fields",
+    "failure_guidance_fields",
     "failure_reason_human",
     "queue_ahead_count",
 ]

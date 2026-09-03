@@ -7,8 +7,31 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from app.domains.kol import video_analysis_progress_reasons as progress_reasons
+
 
 FULL_ANALYSIS_ROLES = ("video", "comments", "audience")
+
+# 「这一段为什么没有数据」的封闭词表(绝不投自由文本:会话项 last_error 里可能带链接/句柄)。
+STAGE_NOT_REQUESTED_REASONS: tuple[str, ...] = (
+    "no_candidates",
+    "upstream_incomplete",
+    "stage_not_selected",
+)
+_NOT_REQUESTED_COPY: dict[str, tuple[str, str]] = {
+    "no_candidates": ("本次搜索没有返回候选账号,这一段没有可分析的对象:放宽条件再搜一次", "retry"),
+    "upstream_incomplete": ("账号资料还没拿全,这一段要等资料齐了才能开始", "retry"),
+    "stage_not_selected": ("本次没有选这一段分析,可以单独补跑", "retry"),
+}
+# downstream state 本身就是原因(没有 last_error 文本时的诚实回退);值是分类器认得的稳定码。
+# 只收会落进 partial/failed 桶的 state —— 其余 state 根本走不到取原因这一步。
+_STATE_REASON_CODES: dict[str, str] = {
+    "no_posts": "no_posts",
+    "no_comments": "no_comments",
+    "no_data": "no_posts",
+    "unsupported": "unsupported_platform",
+}
+_REASONABLE_BUCKETS = frozenset({"failed", "partial"})
 
 _SUCCESS_STATES = frozenset({"ready", "done", "ok", "already_analyzed", "recently_done"})
 _QUEUED_STATES = frozenset({"queued", "pending", "already_queued", "waiting_for_evidence", "waiting_for_profile"})
@@ -178,12 +201,140 @@ def _downstream_bucket(item: Mapping[str, Any], role: str, *, session_status: st
     return "not_requested"
 
 
+def _role_record(item: Mapping[str, Any], role: str) -> Mapping[str, Any]:
+    return _mapping(_mapping(_mapping(item.get("payload")).get("downstream_jobs")).get(role))
+
+
+def _role_error_text(item: Mapping[str, Any], role: str) -> str:
+    """该段的稳定原因串;没有 last_error 时退回本身就是原因码的 downstream state。"""
+    record = _role_record(item, role)
+    text = str(record.get("last_error") or "").strip()
+    if text:
+        return text
+    mapped = _STATE_REASON_CODES.get(_text(record.get("state")))
+    if mapped:
+        return mapped
+    if role != "profile":
+        return ""
+    payload = _mapping(item.get("payload"))
+    for source in (_mapping(payload.get("profile_execute")), _mapping(payload.get("profile_flow"))):
+        text = str(source.get("last_error") or source.get("error") or "").strip()
+        if text:
+            return text
+    return str(payload.get("job_last_error") or "").strip()
+
+
+def _role_failure_fields(item: Mapping[str, Any], role: str) -> dict[str, Any] | None:
+    """一条会话项在该段的可读原因;取不到人话就诚实返回 None(绝不编故事)。"""
+    text = _role_error_text(item, role)
+    if not text:
+        return None
+    fields = progress_reasons.failure_guidance_fields(
+        status="failed",
+        # 类别键由上游 lineage 补齐后自动生效;现在恒缺 → 走文本标记(四段稳定码已在标记表内)。
+        last_error_category=_role_record(item, role).get("last_error_category"),
+        last_error=text,
+    )
+    return fields if str(fields.get("failure_reason_human") or "").strip() else None
+
+
+def _stage_failure_reason(
+    items: Sequence[Mapping[str, Any]],
+    buckets: Sequence[str],
+    role: str,
+) -> dict[str, Any] | None:
+    """把该段所有失败项归并成一条主因(占比最高的一类),避免卡面堆五条原因。"""
+    tally: dict[str, int] = {}
+    sample: dict[str, dict[str, Any]] = {}
+    not_applicable = 0
+    for item, bucket in zip(items, buckets):
+        if bucket not in _REASONABLE_BUCKETS:
+            continue
+        fields = _role_failure_fields(item, role)
+        if fields is None:
+            continue
+        key = str(fields.get("failure_code") or fields.get("failure_category") or "")
+        tally[key] = tally.get(key, 0) + 1
+        sample.setdefault(key, fields)
+        not_applicable += 1 if fields.get("failure_not_applicable") else 0
+    if not tally:
+        return None
+    top = max(sorted(tally), key=lambda code: tally[code])
+    fields = sample[top]
+    return {
+        "kind": "failure",
+        "human": fields["failure_reason_human"],
+        "next_step": fields["failure_next_step"],
+        "failure_category": fields["failure_category"],
+        "failure_reason_human": fields["failure_reason_human"],
+        "failure_code": fields["failure_code"],
+        "failure_next_step": fields["failure_next_step"],
+        "failure_not_applicable": bool(fields["failure_not_applicable"]),
+        "affected": sum(tally.values()),
+        "not_applicable_items": not_applicable,
+    }
+
+
+def _not_requested_code(role: str, item_count: int, *, upstream_ready: bool) -> str:
+    if item_count <= 0:
+        return "no_candidates"
+    if role in FULL_ANALYSIS_ROLES and not upstream_ready:
+        return "upstream_incomplete"
+    return "stage_not_selected"
+
+
+def _stage_reason(
+    role: str,
+    items: Sequence[Mapping[str, Any]],
+    buckets: Sequence[str],
+    *,
+    upstream_ready: bool,
+    data_observable: bool = True,
+) -> dict[str, Any] | None:
+    """该段的「为什么没有数据 + 下一步」;没有可说的就返回 None(诚实空态,前端一个字都不渲)。"""
+    if sum(1 for bucket in buckets if bucket != "not_requested") <= 0:
+        code = _not_requested_code(role, len(items), upstream_ready=upstream_ready)
+        human, next_step = _NOT_REQUESTED_COPY[code]
+        return {
+            "kind": "not_requested",
+            "not_requested_reason": code,
+            "human": human,
+            "next_step": next_step,
+            "data_observable": data_observable,
+        }
+    reason = _stage_failure_reason(items, buckets, role)
+    if reason is None:
+        return None
+    return {**reason, "data_observable": data_observable}
+
+
+def _stage_reasons(
+    items: Sequence[Mapping[str, Any]],
+    buckets_by_role: Mapping[str, Sequence[str]],
+    *,
+    upstream_ready: bool,
+) -> dict[str, dict[str, Any] | None]:
+    """五段各一条原因(或 None)。comments 段的 data_observable=False —— 完成度口径不动,
+    「本段不可观测」只在原因里诚实标注(见 ``_project_progress_stages`` 的 data_ready=None)。"""
+    return {
+        role: _stage_reason(
+            role,
+            items,
+            buckets,
+            upstream_ready=upstream_ready,
+            data_observable=role != "comments",
+        )
+        for role, buckets in buckets_by_role.items()
+    }
+
+
 def _stage_projection(
     key: str,
     buckets: Sequence[str],
     *,
     population: int,
     data_ready: int | None = None,
+    reason: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     counts = {
         bucket: sum(1 for value in buckets if value == bucket)
@@ -218,7 +369,7 @@ def _stage_projection(
         state = "partial"
     else:
         state = "pending"
-    return {
+    projection = {
         "key": key,
         "population": max(0, int(population or 0)),
         "requested": requested,
@@ -232,6 +383,10 @@ def _stage_projection(
         "data_ready": data_ready,
         "data_ready_basis": "durable_field_evidence" if data_ready is not None else "not_observable_from_session",
     }
+    # 纯增量:没有可说的原因就不长这个键(老读者与冻结契约金串逐字不变)。
+    if reason is not None:
+        projection["reason"] = dict(reason)
+    return projection
 
 
 def _profile_data_ready(item: Mapping[str, Any], bucket: str) -> bool:
@@ -311,12 +466,18 @@ def _project_progress_stages(
         ]
         for role in FULL_ANALYSIS_ROLES
     }
+    reasons = _stage_reasons(
+        safe_items,
+        {"search": base_buckets, "profile": profile_buckets, **downstream_buckets},
+        upstream_ready=any(bucket == "ready" for bucket in profile_buckets),
+    )
     stages = {
         "search": _stage_projection(
             "search",
             base_buckets,
             population=intended_total,
             data_ready=len(safe_items),
+            reason=reasons["search"],
         ),
         "profile": _stage_projection(
             "profile",
@@ -326,6 +487,7 @@ def _project_progress_stages(
                 _profile_data_ready(item, bucket)
                 for item, bucket in zip(safe_items, profile_buckets)
             ),
+            reason=reasons["profile"],
         ),
         "video": _stage_projection(
             "video",
@@ -335,14 +497,17 @@ def _project_progress_stages(
                 _video_data_ready(item, bucket)
                 for item, bucket in zip(safe_items, downstream_buckets["video"])
             ),
+            reason=reasons["video"],
         ),
         # The session lineage proves the comments job finished, but the compact
         # session payload does not prove how many usable comments materialized.
+        # 完成度口径不动(data_ready 仍为 None);「本段不可观测」只写进 reason。
         "comments": _stage_projection(
             "comments",
             downstream_buckets["comments"],
             population=len(safe_items),
             data_ready=None,
+            reason=reasons["comments"],
         ),
         "audience": _stage_projection(
             "audience",
@@ -352,6 +517,7 @@ def _project_progress_stages(
                 _audience_data_ready(item, bucket)
                 for item, bucket in zip(safe_items, downstream_buckets["audience"])
             ),
+            reason=reasons["audience"],
         ),
     }
     return summary, stored_progress, safe_items, raw_session_status, stages
