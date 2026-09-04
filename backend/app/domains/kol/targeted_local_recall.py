@@ -8,6 +8,7 @@ from typing import Any
 from app.domains.kol import (
     growth_candidate_scoring,
     profile_recall_backfill_ladder as _ladder,
+    search_relaxation as _relax,
     targeted_query_execution,
 )
 from app.domains.kol.targeted_local_backfill import (
@@ -159,6 +160,7 @@ class _CellRunOutcome:
     evaluated_rows: list[dict[str, Any]]
     qualified_rows: list[dict[str, Any]]
     deferred_rows: list[dict[str, Any]]
+    growth_supplement_rows: list[dict[str, Any]]
     backfill_rows: list[dict[str, Any]]
     growth_rejected: int
     local_not_passed: int
@@ -272,20 +274,52 @@ def _partition_qualified_rows(
     rows: list[dict[str, Any]],
     *,
     objective: str,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], int, int]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    int,
+    int,
+]:
+    """Separate strict matches from visible, honestly-labelled supplements.
+
+    Search and outreach are different decisions.  A missing three-video
+    activation sample must keep a row out of the strict outreach target, but it
+    must not erase a creator that otherwise matches the operator's natural
+    language request.  Such rows remain visible as qualification backfill and
+    carry the exact missing evidence; explicit market/platform/language and
+    account-quality hard filters have already run upstream and stay hard.
+    """
+
     qualified_rows: list[dict[str, Any]] = []
     deferred_rows: list[dict[str, Any]] = []
+    growth_supplement_rows: list[dict[str, Any]] = []
     growth_rejected = 0
     local_not_passed = 0
     for row in rows:
         local_passed, activity_deferred = _qualification_state(row)
         growth_passed = True
+        growth_reasons: list[str] = []
         if objective == "prospective_growth":
-            growth_passed = bool(
-                row.get("product_scene_evidence_pass") is True
-                and row.get("market_activation_pass") is True
-            )
+            scene_passed = row.get("product_scene_evidence_pass") is True
+            activation_passed = row.get("market_activation_pass") is True
+            growth_passed = bool(scene_passed and activation_passed)
+            if not scene_passed:
+                growth_reasons.append("product_scene_evidence_missing")
+            if not activation_passed:
+                activation_status = str(
+                    row.get("market_activation_status") or "market_activation_missing"
+                ).strip()
+                growth_reasons.append(activation_status or "market_activation_missing")
             row["growth_qualification_pass"] = growth_passed
+            row["growth_qualification_reasons"] = growth_reasons
+            row["growth_qualification_state"] = (
+                "strict_qualified"
+                if growth_passed
+                else "below_floor"
+                if "below_floor" in growth_reasons
+                else "evidence_pending"
+            )
             if not growth_passed:
                 growth_rejected += 1
         counts_toward_target = local_passed and growth_passed
@@ -297,9 +331,48 @@ def _partition_qualified_rows(
             qualified_rows.append(row)
         elif activity_deferred and growth_passed:
             deferred_rows.append(row)
+        elif local_passed and not growth_passed:
+            # Keep relevant creators visible without promoting them into the
+            # strict target.  The existing backfill contract guarantees they
+            # are labelled, non-counting and sorted behind precise matches.
+            _ladder.mark_backfill_item(row, _ladder.TIER_QUALIFICATION_RELAXED)
+            notes = [
+                str(value)
+                for value in (row.get("selection_notes") or ())
+                if str(value)
+            ]
+            if "product_scene_evidence_missing" in growth_reasons:
+                note = "产品使用场景待核验"
+                if note not in notes:
+                    notes.append(note)
+            activation_reason = next(
+                (
+                    reason
+                    for reason in growth_reasons
+                    if reason != "product_scene_evidence_missing"
+                ),
+                "",
+            )
+            if activation_reason:
+                note = (
+                    "市场活性未达门槛"
+                    if activation_reason == "below_floor"
+                    else "市场表现数据待补"
+                )
+                if note not in notes:
+                    notes.append(note)
+            row["selection_notes"] = notes
+            row["growth_evidence_pending"] = row["growth_qualification_state"] == "evidence_pending"
+            growth_supplement_rows.append(row)
         elif growth_passed:
             local_not_passed += 1
-    return qualified_rows, deferred_rows, growth_rejected, local_not_passed
+    return (
+        qualified_rows,
+        deferred_rows,
+        growth_supplement_rows,
+        growth_rejected,
+        local_not_passed,
+    )
 
 
 def _cell_run_diagnostics(
@@ -358,7 +431,13 @@ def _execute_cell(
         brief=brief,
         cell=cell,
     )
-    qualified_rows, deferred_rows, growth_rejected, local_not_passed = (
+    (
+        qualified_rows,
+        deferred_rows,
+        growth_supplement_rows,
+        growth_rejected,
+        local_not_passed,
+    ) = (
         _partition_qualified_rows(rows, objective=objective)
     )
     qualified_rows.sort(key=_rank_key, reverse=True)
@@ -367,6 +446,12 @@ def _execute_cell(
     deferred_rows = deferred_rows[: int(cell["raw_limit"])]
     # 回填区只打分不设闸(它本来就是「放宽后」的人),标记原样保留,永不计入目标。
     backfill_rows = _backfill_rows(result, cell, candidate_cap)
+    # Growth evidence gaps are a display/backfill concern, not a reason to
+    # erase otherwise relevant creators from search results.
+    backfill_rows.extend(growth_supplement_rows)
+    backfill_rows = _dedupe(backfill_rows)
+    backfill_rows.sort(key=_rank_key, reverse=True)
+    backfill_rows = backfill_rows[:candidate_cap]
     if backfill_rows:
         backfill_rows = _growth_score_rows(
             backfill_rows,
@@ -390,6 +475,7 @@ def _execute_cell(
         evaluated_rows=evaluated_rows,
         qualified_rows=qualified_rows,
         deferred_rows=deferred_rows,
+        growth_supplement_rows=growth_supplement_rows,
         backfill_rows=backfill_rows,
         growth_rejected=growth_rejected,
         local_not_passed=local_not_passed,
@@ -640,6 +726,11 @@ def _project_local_response(
                 backfill_by_tier=(qualification.get("backfill") or {}).get("filled_by_tier"),
                 gaps=(qualification.get("backfill") or {}).get("gaps"),
                 favorite_excluded=_favorite_excluded_unique(execution),
+                favorite_annotated=sum(
+                    1 for item in selected if _relax.is_team_favorite(item)
+                ),
+                # 「资料待核验」的人另列一区展示,门面照实计入总人数,但绝不并进精准命中。
+                deferred_count=len(selection.deferred_display),
             ),
             "query_cells_requested": len(cells) + omitted,
             "query_cells_executed": len(cells),

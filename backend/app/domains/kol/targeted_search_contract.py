@@ -302,6 +302,15 @@ _SEGMENT_RULES: tuple[tuple[str, tuple[str, ...], str], ...] = (
     ("commercial", ("商业广告", "广告", "commercial", "advertising"), "commercial photographer"),
     ("music_video", ("音乐视频", "mv", "music video"), "music video filmmaker"),
     ("documentary", ("纪录片", "documentary"), "documentary filmmaker"),
+    (
+        "film_photography",
+        (
+            "胶片", "底片", "35mm film", "film photographer", "film photographers",
+            "film photography", "analog photographer", "analog photography",
+            "analogue photographer", "analogue photography",
+        ),
+        "film photographer",
+    ),
 )
 
 
@@ -395,7 +404,34 @@ def _lens_focal_span(value: str) -> tuple[int | None, int | None]:
     return min(values), max(values)
 
 
-def _prospective_lens_capability(value: str) -> str:
+def _lens_focals(value: str) -> list[int]:
+    values: set[int] = set()
+    for match in _FOCAL_LENGTH_RE.finditer(value):
+        values.add(int(match.group("low")))
+        if match.group("high"):
+            values.add(int(match.group("high")))
+    return sorted(values)
+
+
+def _fast_lens_aperture(value: str) -> bool:
+    for match in _APERTURE_RE.finditer(value):
+        token = match.group(0).lower().replace(" ", "")
+        if not token.startswith("f"):
+            continue
+        number = re.sub(r"^[ft]/?", "", token)
+        try:
+            if float(number) <= 1.4:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def _prospective_lens_capability(
+    value: str,
+    *,
+    operator_segments: Iterable[Any] = (),
+) -> str:
     """Map product facts to a small, deterministic prospective-use taxonomy.
 
     These phrases deliberately describe the work a creator can do with the
@@ -404,24 +440,65 @@ def _prospective_lens_capability(value: str) -> str:
     prospective-user signals.
     """
 
-    has_macro = any(term in value for term in ("macro", "micro lens", "微距"))
-    has_cine = any(term in value for term in ("anamorphic", "cine", "cinema", "电影", "影视"))
+    normalized = _text(value).lower()
+    has_macro = any(term in normalized for term in ("macro", "micro lens", "微距"))
+    has_cine = any(term in normalized for term in ("anamorphic", "cine", "cinema", "电影", "影视"))
+    focals = _lens_focals(normalized)
+    is_multi_focal_set = len(focals) >= 3 and any(
+        term in normalized for term in (" set", " kit", "套装", "整套", "全套")
+    )
+    # A set description can mention that one member supports macro work.  That
+    # does not turn every lens in the set into a macro lens.  Whole cine sets
+    # retain their shared cinema capability; an individual EPIC 65 Macro still
+    # resolves to ``macro cinema lens`` below.
+    if has_cine and is_multi_focal_set:
+        return "cinema lens"
     if has_macro and has_cine:
         return "macro cinema lens"
     if has_macro:
         return "macro lens"
     if has_cine:
         return "cinema lens"
-    if any(term in value for term in ("ultra-wide", "ultrawide", "ultra wide", "super wide", "超广")):
+    if any(term in normalized for term in ("ultra-wide", "ultrawide", "ultra wide", "super wide", "超广")):
         return "ultra-wide lens"
-    if any(term in value for term in ("telephoto", "长焦")):
+    if any(term in normalized for term in ("telephoto", "长焦")):
         return "telephoto portrait lens"
 
-    focal_min, focal_max = _lens_focal_span(value)
+    focal_min, focal_max = _lens_focal_span(normalized)
+    intent_blob = " ".join(
+        _text(segment.get("key") or segment.get("query_term") or segment.get("label"))
+        if isinstance(segment, dict)
+        else _text(segment)
+        for segment in operator_segments
+    ).lower()
+    portrait_intent = any(term in intent_blob for term in ("portrait", "wedding", "人像", "婚礼"))
+    # The operator's explicit creator/use-case intent outranks a coarse focal
+    # bucket.  In particular, 35mm F1.2 portrait work must not be rewritten as
+    # a generic wide-angle search.  We retain physical extremes and dedicated
+    # macro/cine categories above rather than pretending every lens fits every
+    # stated scene.
+    if portrait_intent and focal_min is not None and focal_max is not None:
+        if focal_min >= 85:
+            return "telephoto portrait lens"
+        if 28 <= focal_min and focal_max <= 100:
+            return "portrait lens"
+    if any(term in normalized for term in ("portrait", "人像")):
+        return "portrait lens"
+    if (
+        focal_min is not None
+        and focal_max is not None
+        and 28 <= focal_min <= 84
+        and focal_max <= 100
+        and _fast_lens_aperture(normalized)
+    ):
+        return "portrait lens"
     if focal_min is not None and focal_max is not None:
         if focal_min <= 20:
             return "ultra-wide lens"
-        if focal_max <= 35:
+        # 35mm is a boundary focal used for environmental portrait, street and
+        # documentary work.  Without a declared scene, keep it neutral instead
+        # of hard-coding one use case; shorter products retain wide-angle.
+        if focal_max < 35:
             return "wide-angle lens"
         if focal_min >= 200:
             return "super-telephoto lens"
@@ -429,8 +506,6 @@ def _prospective_lens_capability(value: str) -> str:
             return "telephoto portrait lens"
         if 50 <= focal_min <= 84 and focal_max <= 100:
             return "portrait lens"
-    if any(term in value for term in ("portrait", "人像")):
-        return "portrait lens"
     return "camera lens"
 
 
@@ -439,6 +514,7 @@ def _product_capability(
     focus_terms: Iterable[Any],
     *,
     objective: str = PROSPECTIVE_GROWTH,
+    operator_segments: Iterable[Any] = (),
 ) -> str:
     item = product if isinstance(product, dict) else {}
     focus_values = list(focus_terms or [])
@@ -465,7 +541,10 @@ def _product_capability(
             # Resolved product facts outrank planner-authored focus prose.  The
             # latter is only a fallback when no product record is available.
             capability_source = product_blob if product_is_lens else focus_blob
-            return _prospective_lens_capability(capability_source)
+            return _prospective_lens_capability(
+                capability_source,
+                operator_segments=operator_segments,
+            )
         if "anamorphic" in blob or "cine" in blob:
             return "cinema lens"
         focal = _FOCAL_LENGTH_RE.search(product_blob)
@@ -492,7 +571,11 @@ def _without_brand_model(value: Any, product: Any, *, drop_focal: bool = False) 
         for token in re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*", _text(item.get(key)).lower()):
             if any(char.isdigit() for char in token) or token == "viltrox":
                 drop.add(token)
-    if drop_focal:
+    # A focal length is product identity only after the catalog resolver has
+    # actually produced a product/family.  With no product, phrases such as
+    # ``50mm equivalent`` are operator-owned scene/format context and must not
+    # disappear from the fallback query.
+    if drop_focal and item:
         text = _FOCAL_LENGTH_RE.sub(" ", text)
         text = _APERTURE_RE.sub(" ", text)
     kept = [token for token in text.split() if token.lower().strip(",") not in drop]
@@ -514,7 +597,12 @@ def build_query_cells(
     follower_filter = parse_follower_range(query, body)
     explicit = extract_explicit_segments(query, body)
     focus_values = list(product_focus or [])
-    capability = _product_capability(product, focus_values, objective=objective)
+    capability = _product_capability(
+        product,
+        focus_values,
+        objective=objective,
+        operator_segments=explicit,
+    )
     # Empty is an intentional "no operator platform restriction" value.  The
     # provider resolves it to all supported discovery legs; silently choosing
     # YouTube here would turn an optional facet into an unrequested hard gate.
@@ -702,6 +790,7 @@ def apply_targeted_contract(
         product,
         output.get("product_focus") or [],
         objective=objective,
+        operator_segments=output.get("explicit_segments") or [],
     )
     resolved = product if isinstance(product, dict) else {}
     output["search_brief"] = {

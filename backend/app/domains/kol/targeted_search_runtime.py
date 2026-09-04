@@ -11,6 +11,7 @@ from typing import Any
 
 from app.domains.kol import (
     profile_recall_qualification,
+    search_relaxation,
     targeted_local_recall,
     targeted_query_execution,
 )
@@ -46,11 +47,18 @@ def prepare_local_search(
     follower_source = str(follower.get("source") or (
         "operator_filter" if followers_min is not None or followers_max is not None else "not_requested"
     )).strip()
+    # 松绑口径是产品默认;``strict_gates=true`` 一键退回 2026-08 的严口径,
+    # ``hide_team_favorites=true`` 只把「同事已关注」的人重新藏起来,不连带收紧另外两道闸。
+    gate_mode = search_relaxation.resolve_mode(body)
     policy = profile_recall_qualification.smart_local_policy(
         market=market,
         platforms=platforms,
         languages=body.get("languages") or body.get("content_languages"),
         profile_types=body.get("profile_types") or body.get("kol_types"),
+        gate_mode=gate_mode,
+        hide_team_favorites=search_relaxation.resolve_hide_team_favorites(
+            body, mode=gate_mode
+        ),
     )
     if objective == "prospective_growth" or followers_min is not None or followers_max is not None:
         policy["followers_filter"] = profile_recall_qualification.follower_filter_policy(

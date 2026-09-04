@@ -333,19 +333,23 @@ def exclude_favorited_online_candidates(
 
 
 def annotate_shortfall(diagnostics: dict[str, Any] | None) -> dict[str, Any] | None:
-    """就地补一句人话:排除了几个人、还缺几个人。**缺口照实说,绝不暗示会拿别人补位。**
+    """就地补一句人话:这些人是被藏了还是被标注了、还缺几个人。
 
-    这一句是操作员唯一的解释来源:少了人如果没人说明,他会当成搜索能力变差。
+    **缺口照实说,绝不暗示会拿别人补位。** 这一句是操作员唯一的解释来源:少了人如果没人
+    说明,他会当成搜索能力变差;而松绑口径下他们根本没少,只是带了标注 —— 那也得说清楚。
     """
 
     if not isinstance(diagnostics, dict):
         return diagnostics
     excluded = max(0, _int(diagnostics.get("favorite_excluded_count")))
+    annotated = max(0, _int(diagnostics.get("favorite_annotated_count")))
     shortfall = max(0, _int(diagnostics.get("shortfall")))
     if excluded and shortfall:
         note = f"已排除 {excluded} 个已被关注的人;本次仍缺 {shortfall} 人,未用其他人补位。"
     elif excluded:
         note = f"已排除 {excluded} 个已被关注的人。"
+    elif annotated:
+        note = f"其中 {annotated} 人已被同事关注,已按此标注,未从结果里隐藏。"
     else:
         note = ""
     diagnostics["favorite_exclusion_note"] = note

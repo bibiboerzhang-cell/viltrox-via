@@ -248,9 +248,13 @@ def test_smart_local_gates_are_before_limit_and_shortfall_is_honest(
         provider_free=True,
         creator_quota=15,
         reviewer_quota=15,
+        # 严口径:46 天 = 硬拒。这正是 ``strict_gates=true`` 恢复出来的那套判据;
+        # 松绑口径(产品默认)把它改判成「排后面 + 标注近期没有更新视频」,
+        # 对照断言在 tests/test_search_relaxation.py。
         local_qualification_policy=profile_recall_qualification.smart_local_policy(
             market="US",
             platforms=["youtube"],
+            gate_mode="strict",
         ),
     )
 

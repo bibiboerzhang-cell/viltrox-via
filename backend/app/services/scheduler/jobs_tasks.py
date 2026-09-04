@@ -513,6 +513,61 @@ async def job_kol_auto_poll():
         _record_scheduler_run("kol_auto_poll", ok=False, error=str(exc)[:240])
 
 
+async def job_kol_profile_incremental_refresh():
+    """Keep Smart Search inventory evidence fresh with one bounded daily batch.
+
+    The scheduler only queues one-post profile-refresh jobs with LLM/contact/
+    derived follow-ups suppressed. It performs no provider call itself; workers
+    retain the existing budget and release fences.
+    """
+
+    task_key = "kol_profile_incremental_refresh"
+    if not _scheduler_task_enabled(task_key):
+        return None
+    from app.core.release_validation import release_validation_active
+
+    if release_validation_active():
+        result = {
+            "status": "blocked",
+            "reason": "release_validation_fenced",
+            "provider_calls_performed": False,
+        }
+        _record_scheduler_run(task_key, ok=False, error="release_validation_fenced", status="blocked")
+        return result
+    try:
+        import asyncio
+        from app.domains.kol import search_inventory_refresh
+
+        result = await asyncio.to_thread(search_inventory_refresh.enqueue_daily_refresh)
+        status = str(result.get("status") or "")
+        ok = status in {"ok", "empty", "budget_exhausted"}
+        _record_scheduler_run(
+            task_key,
+            ok=ok,
+            error="" if ok else status or "refresh_failed",
+            status="ok" if ok else "failed",
+        )
+        logger.info(
+            "scheduler.kol_profile_incremental_refresh",
+            extra={
+                "status": status,
+                "candidate_count": result.get("candidate_count"),
+                "queued": result.get("queued"),
+                "already_queued": result.get("already_queued"),
+                "failed": result.get("failed"),
+            },
+        )
+        return result
+    except Exception as exc:
+        logger.exception("scheduler.kol_profile_incremental_refresh_failed")
+        _record_scheduler_run(task_key, ok=False, error=str(exc)[:240], status="failed")
+        return {
+            "status": "failed",
+            "error_code": type(exc).__name__.lower()[:80],
+            "provider_calls_performed": False,
+        }
+
+
 async def job_fulfillment_content_scan():
     """履约:对到期/活动观察窗口扫真证据 → 物化内容候选(scan_windows_for_content)。
 

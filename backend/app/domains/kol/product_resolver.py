@@ -16,6 +16,10 @@ from typing import Any
 
 from app.domains.costs.product_catalog import list_product_catalog
 from app.domains.kol import product_focal_family
+from app.domains.kol.product_resolver_projection import (
+    public_product_projection as _public_product_projection,
+    specs_line as _specs_line,
+)
 
 
 # Tokens too generic to score a product on their own.
@@ -99,6 +103,97 @@ def _explicit_product_series(text: str) -> str:
 
 _COMPACT_PRO_RE = re.compile(r"(?<![a-z0-9])([a-z]\d{1,3})\s*pro(?![a-z0-9])")
 
+# Product codes are often shorter than the catalog SKU and may contain a
+# meaningful hyphen (``DC-A1``, ``DC-X3``, ``EF-E2``).  ``_split_glued`` is
+# useful for fuzzy prose but destroys those identities (``DC-A1`` became
+# ``dc / a / 1``), so keep a separate bounded code parser.  Prefixes are
+# intentionally limited to product-like namespaces used by the catalog; this
+# prevents ordinary phrases such as "top 10" from becoming product anchors.
+_MODEL_CODE_RE = re.compile(
+    r"(?<![a-z0-9])(?P<code>(?:dc|af|mf|ef|nf|dg|vl|epic|z)[-_ ]?(?:[a-z]*\d[a-z0-9]*))(?![a-z0-9])",
+    re.IGNORECASE,
+)
+_MODEL_CODE_PREFIXES = ("epic", "dc", "af", "mf", "ef", "nf", "dg", "vl", "z")
+_VILTROX_Z_MODEL_CONTEXT_RE = re.compile(
+    r"\bviltrox\b|\bvintage\b|唯卓仕|维卓仕?",
+    re.IGNORECASE,
+)
+_APERTURE_RE = re.compile(
+    r"(?<![a-z0-9])(?P<kind>[ft])\s*/?\s*(?P<value>\d{1,2}(?:\.\d+)?)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+_NAMED_FAMILY_CONTEXT_RE = re.compile(
+    r"\b(?:set|kit|family|series|memento|maestro)\b|套装|整套|全套|系列|产品",
+    re.IGNORECASE,
+)
+
+
+def _model_code_mentions(value: Any) -> list[tuple[str, str]]:
+    """Return ``(normalised, display)`` product-code mentions in input order."""
+
+    source_text = str(value or "")
+    output: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for match in _MODEL_CODE_RE.finditer(source_text):
+        raw = match.group("code")
+        normalized = _normkey(raw)
+        # ``AF 85mm`` is a lens type + focal specification, not a compact
+        # model code.  Let focal/aperture family resolution preserve all mount
+        # variants instead of treating this fragment like ``DC-A1``.
+        if re.fullmatch(r"(?:af|mf)\d{1,3}mm", normalized):
+            continue
+        # ``Z1`` is the one compact Z-series identity in the current Viltrox
+        # catalog.  Bare Nikon camera bodies (Z6/Z8/Z50/...) are creator-gear
+        # context, not missing Viltrox SKUs; treating every ``Z + number`` as a
+        # product code turned valid KOL searches into a clarification wall.
+        # An explicit Viltrox/Vintage anchor still fails closed for a future or
+        # misspelled Viltrox Z model instead of silently treating it as prose.
+        if (
+            re.fullmatch(r"z\d+[a-z0-9]*", normalized)
+            and not re.fullmatch(r"z1(?:pro[a-z0-9]*)?", normalized)
+            and not _VILTROX_Z_MODEL_CONTEXT_RE.search(source_text)
+        ):
+            continue
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        display = re.sub(r"[-_ ]+", "-", raw).upper()
+        if not re.search(r"[-_ ]", raw):
+            prefix = next(
+                (item for item in _MODEL_CODE_PREFIXES if normalized.startswith(item) and len(normalized) > len(item)),
+                "",
+            )
+            if prefix and prefix != "z":
+                display = f"{prefix.upper()}-{normalized[len(prefix):].upper()}"
+        output.append((normalized, display))
+    return output
+
+
+def _query_model_codes(value: Any) -> list[str]:
+    return [normalized for normalized, _display in _model_code_mentions(value)]
+
+
+def _model_code_score_tokens(model_codes: list[str]) -> list[str]:
+    output = list(model_codes)
+    for code in model_codes:
+        prefix = next(
+            (item for item in _MODEL_CODE_PREFIXES if code.startswith(item) and len(code) > len(item)),
+            "",
+        )
+        if len(prefix) >= 2:
+            output.append(prefix)
+    return output
+
+
+def _query_apertures(value: Any) -> set[tuple[str, float]]:
+    apertures: set[tuple[str, float]] = set()
+    for match in _APERTURE_RE.finditer(str(value or "")):
+        try:
+            apertures.add((match.group("kind").lower(), round(float(match.group("value")), 3)))
+        except (TypeError, ValueError):
+            continue
+    return apertures
+
 
 def _pro_is_product_series(text: str) -> bool:
     """Treat ``Pro`` as a series only when the query contains product evidence.
@@ -115,7 +210,15 @@ def _pro_is_product_series(text: str) -> bool:
     # 整词锚定防 "web3 pro" 人设词子串;多字母型号("dc550 pro")由既有 \d{2,3}\s*pro 覆盖。
     # 粘连形态没有独立 "pro" 词,所以在 standalone-pro 闸之前判。误配防线见 resolve_product
     # 的复审 F-1 守卫(紧凑码必须命中赢家,防他牌 "a7 pro"+品类词凑赢)。
-    if _COMPACT_PRO_RE.search(low):
+    compact = _COMPACT_PRO_RE.search(low)
+    if compact:
+        compact_code = _normkey(compact.group(1))
+        if (
+            re.fullmatch(r"z\d+[a-z0-9]*", compact_code)
+            and compact_code != "z1"
+            and not _VILTROX_Z_MODEL_CONTEXT_RE.search(low)
+        ):
+            return False
         return True
     if not re.search(r"(?<![a-z0-9])pro(?![a-z0-9])", low):
         return False
@@ -140,7 +243,10 @@ def _query_mount(text: str) -> str:
 
 def _query_focals(text: str) -> set[int]:
     low = str(text or "").lower()
-    focals = {int(m) for m in re.findall(r"(\d{2,3})\s*mm", low)}
+    # Share the explicit-mm judgement with the focal-family resolver.  In
+    # particular, ``35mm film`` / ``35mm 胶片`` / ``50mm equivalent`` describe
+    # a format or field of view unless another lens/product anchor is present.
+    focals = set(product_focal_family.explicit_focals(low))
     # 裸数字("90 evo")只在镜头语境下当焦段;排除功率/尺寸类单位粘连。
     # 注意不能用 \b:中文是 \w,「我们90」里 们/9 之间没有 word boundary,得用显式环视。
     # Operators often type split product families ("e vo", "l ab"); the focal
@@ -171,7 +277,9 @@ def _has_product_identity_anchor(query: str, probe_tokens: list[str]) -> bool:
         return True
     if _pro_is_product_series(text):
         return True
-    if re.search(r"\b(?:dc[- ]?[a-z0-9-]{2,}|af[- ]?\d{2,3}[a-z0-9./-]*)\b", text):
+    if _query_model_codes(text):
+        return True
+    if series_present and _NAMED_FAMILY_CONTEXT_RE.search(text):
         return True
     has_lens_identity = bool(
         re.search(r"\b(?:viltrox|lens|prime|anamorphic|cine|t\d(?:\.\d)?|f/?\d(?:\.\d)?)\b|维卓|镜头|定焦", text)
@@ -263,10 +371,8 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
         series = ""
     if not series and _pro_is_product_series(text):
         series = "PRO"
-    model_code = ""
-    code_match = re.search(r"\b(dc[- ]?[a-z0-9-]{2,}|af[- ]?\d{2,3}[a-z0-9./-]*)\b", text.lower())
-    if code_match:
-        model_code = code_match.group(1).upper().replace(" ", "-")
+    code_mentions = _model_code_mentions(text)
+    model_code = code_mentions[0][1] if code_mentions else ""
     focals = sorted(_query_focals(text))
     mount = _query_mount(text)
     if not series and not model_code:
@@ -329,8 +435,9 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
 def _apply_hard_constraints(text: str, pool: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     mount_req = _query_mount(text)
     focals_req = _query_focals(text)
+    apertures_req = _query_apertures(text)
     series_req = _explicit_product_series(text).lower()
-    if not mount_req and not focals_req and not series_req:
+    if not mount_req and not focals_req and not apertures_req and not series_req:
         return pool
     filtered: dict[str, dict[str, Any]] = {}
     for key, prod in pool.items():
@@ -346,12 +453,19 @@ def _apply_hard_constraints(text: str, pool: dict[str, dict[str, Any]]) -> dict[
         # 焦段两种写法都认:「90mm」和「90/2.2」(AF 90/2.2 XF 这类目录行没有 mm)。
         prod_focals = {int(m) for m in re.findall(r"(\d{2,3})\s*mm", blob)}
         prod_focals |= {int(m) for m in re.findall(r"(?<![0-9])(\d{2,3})\s*/(?=[0-9])", blob)}
+        aperture_blob = " ".join(
+            str(prod.get(field) or "")
+            for field in ("model_name", "marketing_name")
+        )
+        prod_apertures = _query_apertures(aperture_blob)
         is_lens_like = bool(prod_focals) or str(prod.get("category_main") or "").strip().lower() == "lens"
         prod_mount = str(prod.get("mount") or "").strip()
         if mount_req and is_lens_like and prod_mount and prod_mount != mount_req:
             # 镜头类:标注了卡口且与约束冲突 → 否决;未标注(mount 空)不否决,交给焦段/评分。
             continue
         if focals_req and prod_focals and not (prod_focals & focals_req):
+            continue
+        if apertures_req and prod_apertures and not (prod_apertures & apertures_req):
             continue
         filtered[key] = prod
     return filtered
@@ -375,6 +489,9 @@ def _candidate_pool(query: str, probe_tokens: list[str]) -> dict[str, dict[str, 
     probes: set[str] = set(tok for tok in base if len(tok) >= 2)
     for i in range(len(base) - 1):
         probes.add(f"{base[i]} {base[i + 1]}")
+    for _normalized, display in _model_code_mentions(query):
+        probes.add(display.lower())
+        probes.add(display.lower().replace("-", " "))
     if probe_tokens:
         probes.update(tok for tok in probe_tokens if len(tok) >= 2)
         for i in range(len(probe_tokens) - 1):
@@ -402,6 +519,7 @@ def _row_words(prod: dict[str, Any]) -> tuple[str, str, set[str]]:
     blob_sp = _split_glued(blob)
     words = {w for w in re.split(r"[^a-z0-9.]+", blob) if w}
     words |= {w for w in re.split(r"[^a-z0-9.]+", blob_sp) if w}
+    words.update(_query_model_codes(blob))
     return blob, blob_sp, words
 
 
@@ -423,48 +541,212 @@ def _score(prod: dict[str, Any], score_tokens: list[str]) -> tuple[int, int, int
     return strong, matched, len(str(prod.get("series") or ""))
 
 
-def _specs_line(prod: dict[str, Any]) -> str:
-    """One compact English specs line for the LLM prompt (model · price · category · series · desc)."""
-    parts: list[str] = []
-    name = str(prod.get("marketing_name") or prod.get("model_name") or "").strip()
-    if name:
-        parts.append(name)
-    price = prod.get("price_usd")
-    try:
-        if price is not None and float(price) > 0:
-            parts.append(f"${float(price):,.0f} USD")
-    except (TypeError, ValueError):
-        pass
-    cat = str(prod.get("category_main") or "").strip()
-    detail = str(prod.get("category_detail") or "").strip()
-    series = str(prod.get("series") or "").strip()
-    cat_bits = [bit for bit in (cat, detail if detail and detail != cat else "", series) if bit]
-    if cat_bits:
-        parts.append("category: " + " / ".join(dict.fromkeys(cat_bits)))
-    desc = " ".join(str(prod.get("description") or "").split())[:280]
-    if desc:
-        parts.append(desc)
-    return " · ".join(parts)
-
-
-def _public_product_projection(
-    product: dict[str, Any],
+def _official_duplicate_for_model_code(
+    rows: list[dict[str, Any]],
     *,
+    model_code: str,
+) -> dict[str, Any] | None:
+    """Select a canonical official row only when duplicates are the same model.
+
+    The catalog currently contains both an official ``DC-A1-...`` row and a
+    legacy ``VL-MON015`` row whose model name is also DC-A1.  That is duplicate
+    catalog lineage, not product ambiguity.  Conversely, mount variants must
+    remain a family and are never collapsed here.
+    """
+
+    matching = [row for row in rows if model_code in _query_model_codes(_row_words(row)[0])]
+    if not matching:
+        return None
+    categories = {_normkey(row.get("category_main")) for row in matching if _normkey(row.get("category_main"))}
+    mounts = {_normkey(row.get("mount")) for row in matching if _normkey(row.get("mount"))}
+    if len(categories) > 1 or len(mounts) > 1:
+        return None
+    def _is_official(row: dict[str, Any]) -> bool:
+        if str(row.get("status") or "").strip().lower() == "official":
+            return True
+        try:
+            return float(row.get("source_confidence") or 0) >= 0.9
+        except (TypeError, ValueError):
+            return False
+
+    official = [row for row in matching if _is_official(row)]
+    return official[0] if len(official) == 1 else None
+
+
+def _model_code_family_projection(
+    rows: list[dict[str, Any]],
+    *,
+    model_code: str,
+    display_code: str,
     match_score: tuple[int, int, int],
-) -> dict[str, Any]:
-    """Return the bounded catalog fields shared by text and exact-SKU resolution."""
-    return {
-        "sku": str(product.get("sku") or ""),
-        "model_name": str(product.get("model_name") or ""),
-        "marketing_name": str(product.get("marketing_name") or ""),
-        "category_main": str(product.get("category_main") or ""),
-        "category_detail": str(product.get("category_detail") or ""),
-        "series": str(product.get("series") or ""),
-        "price_usd": product.get("price_usd"),
-        "description": str(product.get("description") or ""),
-        "specs_line": _specs_line(product),
-        "match_score": list(match_score),
+) -> dict[str, Any] | None:
+    """Represent one recognised model code without inventing a SKU choice."""
+
+    matching = [row for row in rows if model_code in _query_model_codes(_row_words(row)[0])]
+    if not matching:
+        return None
+    categories = {_normkey(row.get("category_main")) for row in matching if _normkey(row.get("category_main"))}
+    if len(categories) > 1:
+        return None
+    richest = max(
+        matching,
+        key=lambda row: (
+            bool(row.get("marketing_name")),
+            len(str(row.get("description") or "")),
+            len(str(row.get("model_name") or "")),
+        ),
+    )
+    projection = _public_product_projection(richest, match_score=match_score)
+    projection.update({
+        "sku": "",
+        "price_usd": None,
+        "resolution_kind": "model_family",
+        "resolved_model_code": display_code,
+        "model_family_size": len(matching),
+        "model_family_skus": [str(row.get("sku") or "") for row in matching][:12],
+    })
+    projection["specs_line"] = _specs_line(projection)
+    return projection
+
+
+def _format_aperture(aperture: tuple[str, float]) -> str:
+    kind, value = aperture
+    return f"{kind.upper()}{value:g}"
+
+
+def resolve_spec_family_product(query: str) -> dict[str, Any] | None:
+    """Resolve focal+aperture prose to a model family without guessing mount.
+
+    ``35mm F1.2`` identifies materially more than the whole 35mm catalog, but
+    it still does not select Sony E versus Nikon Z.  Preserve both facts: keep
+    SKU empty while projecting the shared focal, aperture, series and candidate
+    SKUs.  This gives planning a useful capability without forcing a needless
+    clarification.
+    """
+
+    focals = sorted(_query_focals(query))
+    apertures = _query_apertures(query)
+    if len(focals) != 1 or len(apertures) != 1:
+        return None
+    try:
+        rows = list(product_focal_family.focal_family_index(list_product_catalog).get(focals[0]) or [])
+    except Exception:
+        return None
+    if not rows:
+        return None
+    matching = []
+    for row in rows:
+        row_apertures = _query_apertures(
+            f"{row.get('model_name') or ''} {row.get('marketing_name') or ''}"
+        )
+        if row_apertures & apertures:
+            matching.append(row)
+    series = _explicit_product_series(query)
+    if series:
+        narrowed = [
+            row for row in matching
+            if series.lower() in _row_words(row)[2]
+            or _normkey(row.get("series")) == series.lower()
+        ]
+        if narrowed:
+            matching = narrowed
+    mount = _query_mount(query)
+    if mount:
+        matching = [row for row in matching if str(row.get("mount") or "").strip() == mount]
+    if not matching:
+        return None
+    if len(matching) == 1:
+        projection = _public_product_projection(
+            matching[0],
+            match_score=(2, 2, len(str(matching[0].get("series") or ""))),
+        )
+        projection.update({
+            "resolution_kind": "focal_aperture_unique",
+            "focal_mm": focals[0],
+            "requested_aperture": _format_aperture(next(iter(apertures))),
+        })
+        return projection
+
+    decision = {"rows": matching, "focal": focals[0]}
+    projection = product_focal_family.family_projection(decision)
+    aperture_label = _format_aperture(next(iter(apertures)))
+    family_word = str(projection.get("series") or "").strip()
+    name = " ".join(part for part in ("Viltrox", f"{focals[0]}mm", aperture_label, family_word) if part)
+    projection.update({
+        "model_name": name,
+        "marketing_name": name,
+        "description": (
+            f"{focals[0]}mm {aperture_label} 产品家族共 {len(matching)} 个目录记录。"
+            "操作员未指定卡口，按共享光学能力理解，不代选具体 SKU。"
+        ),
+        # Keep the established compatibility kind while exposing the stronger
+        # resolution basis to new consumers.
+        "resolution_kind": "focal_family",
+        "resolution_basis": "focal_aperture_family",
+        "requested_aperture": aperture_label,
+        "match_score": [2, 2, 0],
+    })
+    projection["specs_line"] = _specs_line(projection)
+    return projection
+
+
+def resolve_named_product_family(query: str) -> dict[str, Any] | None:
+    """Resolve a named series/set to a bounded family instead of clarifying."""
+
+    series = _explicit_product_series(query)
+    # A single focal has a stronger, already-established family contract that
+    # lists the exact focal candidates and mounts.  Named-series fallback is
+    # for requests without that specificity (or an explicitly named set).
+    if len(_query_focals(query)) == 1:
+        return None
+    if not series or not _NAMED_FAMILY_CONTEXT_RE.search(query):
+        return None
+    try:
+        products = list_product_catalog(limit=500).get("products") or []
+    except Exception:
+        return None
+    rows: list[dict[str, Any]] = []
+    for row in products:
+        if not isinstance(row, dict) or str(row.get("sku") or "").upper().startswith("IMAGE-AWARDS"):
+            continue
+        _blob, _blob_sp, words = _row_words(row)
+        if series.lower() in words or _normkey(row.get("series")) == series.lower():
+            rows.append(row)
+    for subfamily in ("memento", "maestro"):
+        if re.search(rf"(?<![a-z0-9]){subfamily}(?![a-z0-9])", query, re.IGNORECASE):
+            rows = [row for row in rows if subfamily in _row_words(row)[2]]
+    if not rows:
+        return None
+    if len(rows) == 1:
+        projection = _public_product_projection(
+            rows[0], match_score=(2, 2, len(str(rows[0].get("series") or "")))
+        )
+        projection["resolution_kind"] = "named_product_family_exact"
+        return projection
+
+    categories = {str(row.get("category_main") or "").strip() for row in rows if str(row.get("category_main") or "").strip()}
+    details = {str(row.get("category_detail") or "").strip() for row in rows if str(row.get("category_detail") or "").strip()}
+    category = next(iter(categories)) if len(categories) == 1 else ""
+    detail = next(iter(details)) if len(details) == 1 else ""
+    capability_name = "cinema lens" if all(
+        any(term in _row_words(row)[0] for term in ("cine", "anamorphic")) for row in rows
+    ) else (category.lower() if category else "product")
+    projection = {
+        "sku": "",
+        "model_name": f"Viltrox {series} {capability_name} family",
+        "marketing_name": f"Viltrox {series} {capability_name} family",
+        "category_main": category,
+        "category_detail": detail,
+        "series": series,
+        "price_usd": None,
+        "description": f"{series} 产品家族共 {len(rows)} 个目录记录，未代选具体 SKU。",
+        "resolution_kind": "named_product_family",
+        "product_family_size": len(rows),
+        "product_family_skus": [str(row.get("sku") or "") for row in rows][:12],
+        "match_score": [1, 1, 0],
     }
+    projection["specs_line"] = _specs_line(projection)
+    return projection
 
 
 def _unique_exact_sku_product(
@@ -593,6 +875,12 @@ def resolve_product(query: str) -> dict[str, Any] | None:
     resolved = _resolve_product_impl(query)
     if resolved is not None:
         return resolved
+    spec_family = resolve_spec_family_product(query)
+    if spec_family is not None:
+        return spec_family
+    named_family = resolve_named_product_family(query)
+    if named_family is not None:
+        return named_family
     return resolve_focal_family_product(query)
 
 
@@ -627,10 +915,15 @@ def _resolve_product_impl(query: str) -> dict[str, Any] | None:
             match_score=(1, 1, len(str(exact_product.get("series") or ""))),
         )
     base = _query_tokens(text)
+    model_code_mentions = _model_code_mentions(text)
     product_pro = _pro_is_product_series(text)
     score_tokens = [
         tok
-        for tok in dict.fromkeys(base + probe_tokens)
+        for tok in dict.fromkeys(
+            base
+            + probe_tokens
+            + _model_code_score_tokens([code for code, _display in model_code_mentions])
+        )
         if len(tok) >= 2
         and tok not in _STOPWORDS
         and (tok != "pro" or product_pro)
@@ -648,6 +941,27 @@ def _resolve_product_impl(query: str) -> dict[str, Any] | None:
     if best_primary[1] < 2:
         return None
     winners = [(score, prod) for score, prod in scored if (score[0], score[1]) == best_primary]
+    if len(winners) > 1 and len(model_code_mentions) == 1:
+        model_code, display_code = model_code_mentions[0]
+        winner_rows = [prod for _score_value, prod in winners]
+        canonical = _official_duplicate_for_model_code(
+            winner_rows,
+            model_code=model_code,
+        )
+        if canonical is not None:
+            projection = _public_product_projection(
+                canonical,
+                match_score=next(score for score, prod in winners if prod is canonical),
+            )
+            projection.update({
+                "resolution_kind": "model_code_exact",
+                "resolved_model_code": display_code,
+            })
+            return projection
+        # Do not collapse genuinely different model variants into a synthetic
+        # family merely because they share a compact code.  The deterministic
+        # base-model tiebreak below still handles ``Z1`` while same-rank
+        # variants such as ``Z1 PRO-N`` / ``Z1 PRO-F`` fail closed.
     if len(winners) > 1:
         # 2026-08-24 R2:(strong, matched) 全平时,用 _score 早已算好的末位 tiebreak
         # (series 长度)选唯一赢家——取 series 最短者,即基础款。方向是确定性的且

@@ -46,6 +46,25 @@ _LENS_MODEL_RE = re.compile(r"(?:^|[^a-z])(?:af|mf|epic)(?:[^a-z]|$)", re.IGNORE
 _MM_FOCAL_RE = re.compile(r"(?<![0-9])(\d{1,3})\s*mm(?![a-z])", re.IGNORECASE)
 _SLASH_FOCAL_RE = re.compile(r"(?<![0-9.])(\d{2,3})\s*/\s*(\d{1,2}(?:\.\d)?)(?![0-9])")
 
+# ``35mm`` is also a film format, and ``50mm equivalent`` is a field-of-view
+# description.  Those phrases must not silently bind a Viltrox lens family.
+# A nearby explicit product/lens anchor intentionally wins, so requests such
+# as ``35mm F1.2 film look`` and ``35mm 镜头拍胶片`` keep their lens meaning.
+_NON_LENS_MM_SUFFIX_RE = re.compile(
+    r"^\s*(?:film\b|胶片|底片|negative\b|(?:full[- ]?frame\s+)?equivalent\b|全画幅\s*等效|等效)",
+    re.IGNORECASE,
+)
+_NON_LENS_MM_PREFIX_RE = re.compile(
+    r"(?:equivalent(?:\s+to)?|equiv\.?|等效(?:于)?)\s*$",
+    re.IGNORECASE,
+)
+_EXPLICIT_LENS_PRODUCT_ANCHOR_RE = re.compile(
+    r"\b(?:viltrox|af|mf|evo|lab|epic|air|raze|prime|anamorphic|cine|lens)\b"
+    r"|唯卓仕|维卓仕?|镜头|定焦|变形宽银幕|卡口"
+    r"|(?<![a-z0-9])[ft]\s*/?\s*\d{1,2}(?:\.\d+)?(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
 # ── query 侧:什么算「裸焦段」
 # 整词锚定:两侧都不能贴字母/数字/点/斜杠/@/货币号,所以 "35mmc.com"、"550pro"、
 # "1.8"、"p4-step23"、"@5treasuremom" 全部不进这条分支。
@@ -217,12 +236,25 @@ def _mask_ranges(text: str) -> str:
 
 
 def explicit_focals(text: Any) -> list[int]:
-    """「135mm」这种写死了单位的焦段——不需要任何额外语境就是产品诉求。
+    """Read explicit ``135mm`` focal requests, excluding format/FOV phrases.
 
     URL 里的数字先抹掉:链接里的 24mm 可能是别家产品的评测页,不是操作员在点名产品。
+    ``35mm film/胶片`` 与 ``50mm equivalent/等效`` 默认属于格式或视角；只有同时
+    存在光圈、系列、品牌、镜头等明确产品锚时才按镜头焦段保留。
     """
     low = _mask_urls(str(text or "").lower())
-    values = {int(match) for match in _MM_FOCAL_RE.findall(low)}
+    has_product_anchor = _EXPLICIT_LENS_PRODUCT_ANCHOR_RE.search(low) is not None
+    values: set[int] = set()
+    for match in _MM_FOCAL_RE.finditer(low):
+        before = low[max(0, match.start() - 40):match.start()]
+        after = low[match.end():match.end() + 40]
+        non_lens_context = bool(
+            _NON_LENS_MM_SUFFIX_RE.search(after)
+            or _NON_LENS_MM_PREFIX_RE.search(before)
+        )
+        if non_lens_context and not has_product_anchor:
+            continue
+        values.add(int(match.group(1)))
     return sorted(value for value in values if _FOCAL_MIN <= value <= _FOCAL_MAX)
 
 

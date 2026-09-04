@@ -76,10 +76,15 @@ def _qualify(
     *,
     target_count: int | None = None,
     policy_overrides: dict[str, Any] | None = None,
+    gate_mode: str = "strict",
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    # 本文件断言的是**严口径**(2026-08 的 45 天硬拒),也就是 ``strict_gates=true``
+    # 这个回退开关恢复出来的那套行为。松绑口径(产品默认,45→365 天 + 陈旧降级为
+    # 标注)的对应契约在 tests/test_search_relaxation.py 里另有断言,两边互为对照。
     policy = profile_recall_qualification.smart_local_policy(
         market="US",
         platforms=["youtube"],
+        gate_mode=gate_mode,
     )
     policy.update(policy_overrides or {})
     selected, _, contract = profile_recall_qualification.qualify_local_candidates(
@@ -135,7 +140,7 @@ def test_unknown_activity_is_deferred_and_labelled_instead_of_discarded() -> Non
 
 
 def test_stale_creator_is_still_hard_rejected_even_with_empty_slots() -> None:
-    """The trap this lane must not fall into: 46 days is a verdict, not a gap."""
+    """严口径下 46 天仍是判决而不是缺口(松绑口径改判「标注 + 排后面」,另有对照断言)。"""
     selected, contract = _qualify(
         [_item(1), _item(2)],
         {1: _row(1), 2: _row(2)},

@@ -58,6 +58,7 @@ def ensure_video_evidence_from_url(
     dry_run: bool = True,
     conn: Any | None = None,
     method: str = VIDEO_EVIDENCE_METHOD,
+    suppress_tracking_enroll: bool = False,
 ) -> dict[str, Any]:
     """Create or reuse video evidence for one KOL without touching V6 Fit."""
     if not kol_pool_id:
@@ -180,7 +181,7 @@ def ensure_video_evidence_from_url(
         "viltrox_fit_score_untouched": True,
         "method": method,
     }
-    if status == "created":
+    if status == "created" and not suppress_tracking_enroll:
         # 波 D·D2「新证据即登记」:收藏 KOL 的新视频幂等续登记进指标追踪(主写已 commit;永不抛)。
         # lazy import:evidence_side_effects → video_tracking_enroll → ... → url_deep_crawl 回引本模块。
         from app.domains.kol.evidence_side_effects import enroll_tracking_after_new_evidence

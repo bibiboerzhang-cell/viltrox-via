@@ -169,9 +169,13 @@ def _run_smart_local(**overrides: Any) -> dict[str, Any]:
         "allow_backfill": True,
         "filters": {"verticals": ["portrait"]},
         "required_product_evidence_terms": ["viltrox"],
+        # 本文件按**严口径**(收藏隐藏 + 视频 45 天硬拒)复现 T 车道那次实测漏斗,
+        # 因为回填梯的四级只有在「有人被藏起来 / 被判死」时才全部有人可捞。松绑口径
+        # (产品默认)下同一批人从一开始就在主跑里,对照断言在 tests/test_search_relaxation.py。
         "local_qualification_policy": profile_recall_qualification.smart_local_policy(
             market="US",
             platforms=["youtube"],
+            gate_mode="strict",
         ),
     }
     kwargs.update(overrides)
@@ -248,7 +252,9 @@ def test_result_explanation_is_plain_language(monkeypatch: pytest.MonkeyPatch) -
     assert explanation["requested"] == TARGET
     assert explanation["precise_count"] == 1
     assert explanation["backfill_count"] == TARGET - 1
-    assert explanation["headline"] == "精准命中 1 人,另补充 29 人(已标注补充原因)"
+    # 门面先报「找到几个人」再说凭什么:旧口径以「精准命中 0 人」开头,哪怕卡面上站着
+    # 30 个人也读成「没搜到」——那正是「搜索越来越笨」的观感来源。
+    assert explanation["headline"] == "为你找到 30 人:精准命中 1 人,另 29 人已标注入选原因"
     assert {entry["code"] for entry in explanation["backfill_reasons"]} == set(ladder.TIER_ORDER)
     assert {"code": "market_mismatch", "label": "不符合目标市场", "count": FAVORITED_MARKET_MISMATCH} in explanation["gaps"]
     assert explanation["favorited_by_team_hidden"] == FAVORITED - FAVORITED_PRECISE_LIKE
@@ -465,7 +471,7 @@ def test_targeted_cells_backfill_never_exceeds_available_pool() -> None:
     assert len(result["items"]) == 5 == min(TARGET, 5)
     assert result["diagnostics"]["precise_count"] == 0
     assert result["diagnostics"]["shortfall"] == TARGET
-    assert result["diagnostics"]["result_explanation"]["headline"] == "精准命中 0 人,另补充 5 人(已标注补充原因)"
+    assert result["diagnostics"]["result_explanation"]["headline"] == "为你找到 5 人(均已标注入选原因,暂无精准命中)"
 
 
 def test_targeted_cells_without_backfill_keep_legacy_shape() -> None:

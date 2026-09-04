@@ -11,6 +11,7 @@ from typing import Any
 
 from app.domains.kol import profile_recall_backfill_ladder as _ladder
 from app.domains.kol import profile_recall_backfill_wiring as _wiring
+from app.domains.kol import search_relaxation as _relax
 from app.domains.kol.profile_recall_orchestration_contract import RecallRequest
 from app.domains.kol.profile_recall_observability import (
     elapsed_ms as _elapsed_ms,
@@ -161,17 +162,22 @@ def _retrieve_candidates(
     retrieved_hit_count = len(hits)
     exclusion_started = deps.perf_counter()
     considered_hits = list(hits)
-    hits, favorite_exclusion = deps._favorite_exclusion.exclude_favorited_hits(hits)
-    # 软排除:被同事收藏的人先让位,但**留在手边**——精准命中凑不满 30 时由回填梯
-    # 带「已被同事关注」标记回填(只在 smart-local 车道启用,见 profile_recall_backfill_wiring)。
-    survivor_ids = {id(hit) for hit in hits}
-    favorited_hits = [hit for hit in considered_hits if id(hit) not in survivor_ids]
+    survivors, favorite_exclusion = deps._favorite_exclusion.exclude_favorited_hits(hits)
+    # 默认**不隐藏**:同事关注过的人照旧参与召回与排序,卡面标注「已被同事关注」——找新人
+    # 这一步的问题是「有没有这个人」,谁去联系是外联那一步的事。严口径 / 操作员点名隐藏时
+    # 逐字保持旧行为:摘出来交给回填梯第一级兜底。
+    favorite_policy = _relax.apply_favorite_policy(
+        considered_hits, survivors, favorite_exclusion,
+        hide=_relax.hide_team_favorites(request.local_qualification_policy),
+    )
+    hits = favorite_policy["hits"]
     breakdown["retrieve_favorite_exclusion_ms"] = _elapsed_ms(exclusion_started, deps)
     return {
         "hits": hits,
-        "favorited_hits": favorited_hits,
+        "favorited_hits": favorite_policy["favorited_hits"],
+        "favorited_ids": favorite_policy["favorited_ids"],
         "retrieved_hit_count": retrieved_hit_count,
-        "favorite_exclusion": favorite_exclusion,
+        "favorite_exclusion": favorite_policy["exclusion"],
         "retrieved_at": deps.perf_counter(),
         "pool_text_fallback_count": pool_text_fallback_count,
         "lexical_candidate_count": lexical_candidate_count,
@@ -273,6 +279,8 @@ def _hydrate_candidates(
         "evidence_by_id": evidence_by_id,
         "fallback_rows": fallback_rows,
         "qualification_rows": qualification_rows,
+        # 「同事已关注」的人在召回段就认出来了,带到投影段盖章(隐藏模式下恒为空集)。
+        "favorited_ids": set(retrieval.get("favorited_ids") or ()),
         "evidence_loaded_at": deps.perf_counter(),
     }
 
@@ -379,12 +387,11 @@ def _project_candidate(
         ledger.no_match_evidence += 1
         reserve.note_no_evidence(entry)
         return None
-    return _wiring.materialize_item(
-        entry,
-        field_evidence,
-        request=request,
-        context=context,
-        deps=deps,
+    item = _wiring.materialize_item(
+        entry, field_evidence, request=request, context=context, deps=deps
+    )
+    return _relax.annotate_if_team_favorite(
+        item, hit.kol_pool_id, hydration.get("favorited_ids")
     )
 
 
@@ -542,13 +549,16 @@ def _build_diagnostics(
     selected_reviewer = selection["selected_reviewer"]
     selected_unknown = selection["selected_unknown"]
     items = selection["items"]
+    favorites = retrieval["favorite_exclusion"]
     diagnostics = {
         "candidate_count": len(retrieval["hits"]),
         "retrieved_candidate_count": retrieval["retrieved_hit_count"],
-        "favorite_excluded_count": int(
-            retrieval["favorite_exclusion"].get("excluded_count") or 0
-        ),
-        "favorite_exclusion": retrieval["favorite_exclusion"],
+        "favorite_excluded_count": int(favorites.get("excluded_count") or 0),
+        # 松绑口径下他们没被藏起来,只是带了标注——两个数是两件事,不能互相冒充。
+        "favorite_annotated_count": int(favorites.get("annotated_count") or 0),
+        "favorite_exclusion": favorites,
+        # 松绑回执:开关叫什么、默认是什么、这次是什么——一眼可查、可回退。
+        "search_relaxation": _relax.relaxation_receipt(request.local_qualification_policy),
         "deduped_candidate_count": len(hydration["ordered_hits"]),
         "duplicate_count": hydration["duplicate_count"],
         "typed_candidate_count": len(buckets["creator"]) + len(buckets["reviewer"]),

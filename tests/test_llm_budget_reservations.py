@@ -167,6 +167,43 @@ def test_required_advisor_scope_rolls_and_checks_in_reservation_transaction() ->
     assert "cron:marketing_advisor" in reservation.cumulative_scopes
 
 
+def test_core_monthly_and_provider_windows_roll_before_atomic_reservation() -> None:
+    _install_fixture()
+    for scope in ("monthly_total", "provider:claude"):
+        budget_guard.update_budget(
+            scope,
+            {
+                "cap_usd": 1.0,
+                "current_spend": 1.0,
+                "hard_stop_at": 1.0,
+                "reset_at": "2020-01-01T00:00:00Z",
+            },
+        )
+
+    reservation = reserve_llm_budget(
+        provider="anthropic",
+        model="claude-opus-5",
+        purpose="core-window-roll-unit",
+        prompt="safe",
+        estimated_cost_usd=0.01,
+    )
+
+    rows = {
+        str(row["scope"]): row
+        for row in get_conn().execute(
+            "SELECT scope,current_spend,reset_at FROM vkpi_provider_budget_caps "
+            "WHERE scope IN ('monthly_total','provider:claude')"
+        ).fetchall()
+    }
+    assert set(reservation.cumulative_scopes) == {
+        "monthly_total",
+        "provider:claude",
+    }
+    for scope in ("monthly_total", "provider:claude"):
+        assert float(rows[scope]["current_spend"]) == pytest.approx(0.0)
+        assert str(rows[scope]["reset_at"]) > "2020-01-01T00:00:00Z"
+
+
 def test_progress_metadata_normalizes_total_to_attempt_total() -> None:
     metadata = reservations._progress_metadata(
         {"phase": "provider_generation", "attempt_index": 2, "total": 3},

@@ -40,6 +40,89 @@ GetConn = Callable[[], Any]
 UpdateSession = Callable[..., None]
 UpsertItem = Callable[[Any, int, dict[str, Any]], dict[str, Any]]
 
+_SEARCH_RESULT_ITEM_TYPES = frozenset(_CREATOR_ITEM_LANES)
+_TERMINAL_SEARCH_SESSION_STATUSES = frozenset(
+    {"ready", "partial", "failed", "cancelled", "canceled"}
+)
+
+
+def project_session_result_summary(
+    summary: dict[str, Any] | None,
+    items: list[dict[str, Any]],
+    *,
+    status: str,
+) -> dict[str, Any]:
+    """Rebuild the search headline from persisted candidate rows.
+
+    Recall, provider discovery, and online qualification arrive in separate
+    batches. Their batch summaries remain useful audit evidence, but none of
+    them alone is the session result count. Derive that headline from rows in
+    the same transaction as the summary write, so N persisted candidates can
+    never leave a stale ``returned_count=0`` behind.
+    """
+
+    projected = dict(_dict(summary))
+    canonical = canonicalize_session_creator_items(
+        [item for item in items if _text(item.get("item_type")) in _SEARCH_RESULT_ITEM_TYPES]
+    )
+    is_creator_search = bool(
+        canonical
+        or _text(projected.get("kind")) in {"kol_recall", "platform_discovery"}
+        or projected.get("recall_snapshot_attached") is True
+        or isinstance(projected.get("new_discovery"), dict)
+        or isinstance(projected.get("online_qualification"), dict)
+    )
+    if not is_creator_search:
+        return projected
+
+    lane_counts = {"recall": 0, "discovery": 0, "online": 0}
+    for item in canonical:
+        lane = _CREATOR_ITEM_LANES.get(_text(item.get("item_type")))
+        if lane:
+            lane_counts[lane] += 1
+    returned_count = len(canonical)
+    normalized_status = _normalize_status(status)
+    terminal = normalized_status in _TERMINAL_SEARCH_SESSION_STATUSES
+    if returned_count > 0:
+        result_state = "ready" if normalized_status == "ready" else "partial"
+    elif not terminal:
+        result_state = "running"
+    elif normalized_status == "failed":
+        result_state = "failed"
+    elif normalized_status in {"cancelled", "canceled"}:
+        result_state = "cancelled"
+    else:
+        result_state = "empty"
+
+    diagnostics = _dict(projected.get("diagnostics")).copy()
+    diagnostics.update(
+        {
+            "returned_count": returned_count,
+            "result_state": result_state,
+        }
+    )
+    match_status = "matched" if returned_count else "empty"
+    projected.update(
+        {
+            "items_count": returned_count,
+            "returned_count": returned_count,
+            "match_status": match_status,
+            "result_state": result_state,
+            "diagnostics": diagnostics,
+            "result_projection": {
+                "schema": "kol_search_session_result_v1",
+                "source": "persisted_session_items",
+                "items_count": returned_count,
+                "returned_count": returned_count,
+                "match_status": match_status,
+                "result_state": result_state,
+                "terminal": terminal,
+                "by_lane": lane_counts,
+            },
+        }
+    )
+    return projected
+
 def _session_status_after_profile_item(current_status: str, current_phase: str, item_status: str) -> str:
     if _text(current_status).lower() == "running" and _text(current_phase).lower() in {"base", "profile"}:
         return "running"
@@ -468,6 +551,20 @@ def _update_session(
     # result_state / counts / item_status 覆盖率只有 78 / 38 / 77(共 104)且与行对不上,
     # 所以另立一份现算的权威口径 —— status 语义一个字不动,不新增取值、不碰 CHECK。
     persisted_summary["completion"] = session_completion_breakdown(conn, int(session_id))
+    item_rows = conn.execute(
+        """
+        SELECT *
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=?
+        ORDER BY rank NULLS LAST, id
+        """,
+        (int(session_id),),
+    ).fetchall()
+    persisted_summary = project_session_result_summary(
+        persisted_summary,
+        [_row_to_item(row) for row in item_rows],
+        status=status,
+    )
     conn.execute(
         """
         UPDATE vkpi_kol_search_sessions

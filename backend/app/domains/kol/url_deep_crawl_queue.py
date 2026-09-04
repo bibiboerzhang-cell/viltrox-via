@@ -15,9 +15,16 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.core.logging import get_logger
-from app.db.connection import get_conn
+from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.kol import url_route_plan
-from app.domains.kol.url_deep_crawl_helpers import _canonical_url, _video_id
+from app.domains.kol import (
+    url_deep_crawl_maintenance_fence as maintenance_fence,
+)
+from app.domains.kol.url_deep_crawl_helpers import (
+    _canonical_url,
+    _normalise_handle,
+    _video_id,
+)
 from app.domains.tasks.apify_idempotency import active_job_idempotency_key, enqueue_active_apify_job
 
 logger = get_logger("viltrox.domains.kol.url_deep_crawl")
@@ -25,6 +32,9 @@ logger = get_logger("viltrox.domains.kol.url_deep_crawl")
 
 # ── 队列铁律(2026-06-12 裁令:所有 LLM 搜索都要进左侧队列)──
 DEEP_CRAWL_JOB_TYPE = "kol_profile_deep_crawl"
+MAINTENANCE_REFRESH_TASK_KEY = maintenance_fence.MAINTENANCE_REFRESH_TASK_KEY
+MAINTENANCE_TARGET_FENCE_KIND = maintenance_fence.MAINTENANCE_TARGET_FENCE_KIND
+MAINTENANCE_REFRESH_TIMEZONE = maintenance_fence.MAINTENANCE_REFRESH_TIMEZONE
 PROFILE_DEEP_CRAWL_MODES = {"auto", "profile_with_video", "account_deep"}
 TARGET_WRITE_FENCE_TERMINAL_CODES = frozenset(
     {
@@ -44,6 +54,12 @@ TARGET_WRITE_FENCE_TERMINAL_CODES = frozenset(
         "kol_content_monitor_fence_invalid",
         "kol_content_monitor_cancelled",
         "kol_content_monitor_target_drifted",
+        "maintenance_refresh_target_fence_invalid",
+        "maintenance_refresh_target_not_found",
+        "maintenance_refresh_target_merged",
+        "maintenance_refresh_target_drifted",
+        "maintenance_refresh_target_identity_invalid",
+        "maintenance_refresh_provider_identity_mismatch",
     }
 )
 _PLATFORM_VIDEO_ID_PATTERNS = {
@@ -108,6 +124,27 @@ def _representative_video_limit(value: Any, *, legacy_default: bool = False) -> 
     return parsed
 
 
+def _maintenance_refresh_batch_block_reason(
+    payload: dict[str, Any] | None,
+    *,
+    as_of: datetime | None = None,
+) -> str:
+    return maintenance_fence._maintenance_refresh_batch_block_reason(
+        payload,
+        as_of=as_of,
+    )
+
+
+def _maintenance_refresh_execution_block_reason(
+    payload: dict[str, Any] | None = None,
+) -> str:
+    return maintenance_fence._maintenance_refresh_execution_block_reason(
+        payload,
+        get_connection=get_conn,
+        batch_block_reason=_maintenance_refresh_batch_block_reason,
+    )
+
+
 def profile_deep_crawl_is_fresh(kol_pool_id: int | None, *, max_age_hours: int = 24) -> bool:
     """Avoid paying for the same automatic URL refresh repeatedly."""
     if not kol_pool_id:
@@ -129,80 +166,21 @@ def profile_deep_crawl_is_fresh(kol_pool_id: int | None, *, max_age_hours: int =
         return False
 
 
-def _profile_target_row(conn: Any, kol_pool_id: int) -> dict[str, Any]:
-    row = conn.execute(
-        """
-        SELECT id, duplicate_of_id, platform, handle, profile_url
-        FROM vkpi_kol_pool
-        WHERE id=?
-        LIMIT 1
-        """,
-        (int(kol_pool_id),),
-    ).fetchone()
-    return dict(row) if row else {}
-
-
-def _validated_profile_identity(row: dict[str, Any], submitted_url: str) -> dict[str, str]:
-    """Bind a paid profile crawl to the pool row's stored public identity.
-
-    The submitted URL may use an equivalent platform spelling, but its stable
-    native-id/handle identity must match ``profile_url`` already stored for the
-    selected KOL.  A caller cannot substitute another account on the same
-    platform, and a malformed/unsupported stored locator cannot be promoted
-    into a provider call merely because it lives in the database.
-    """
-
-    from app.domains.kol.profile_online_identity import stable_creator_identity
-    from app.domains.kol.profile_recall_qualification import canonical_creator_aliases
-    from app.domains.kol.video_tracking import VideoTrackingError
-    from app.services.verification.viltrox_official import (
-        detect_platform_from_profile_url,
-        extract_handle_from_profile_url,
+def _profile_target_row(
+    conn: Any,
+    kol_pool_id: int,
+    *,
+    for_update: bool = False,
+) -> dict[str, Any]:
+    return maintenance_fence._profile_target_row(
+        conn,
+        kol_pool_id,
+        for_update=for_update,
+        postgres_runtime=is_postgres_runtime() if for_update else False,
     )
 
-    platform = str(row.get("platform") or "").strip().lower()
-    stored_url = str(row.get("profile_url") or "").strip()
-    canonical_stored = _canonical_url(stored_url)
-    canonical_submitted = _canonical_url(str(submitted_url or "").strip())
-    if not canonical_stored:
-        raise VideoTrackingError("kol_profile_url_missing", 409)
-    if not canonical_submitted:
-        raise VideoTrackingError("kol_profile_url_mismatch", 409)
 
-    stored_platform = str(detect_platform_from_profile_url(canonical_stored) or "").lower()
-    submitted_platform = str(detect_platform_from_profile_url(canonical_submitted) or "").lower()
-    if platform not in {"youtube", "instagram", "tiktok"}:
-        raise VideoTrackingError("kol_profile_identity_invalid", 422)
-    if stored_platform != platform or submitted_platform != platform:
-        raise VideoTrackingError("kol_profile_identity_mismatch", 409)
-
-    stored_handle = extract_handle_from_profile_url(canonical_stored, platform)
-    submitted_handle = extract_handle_from_profile_url(canonical_submitted, platform)
-
-    stored_identity = stable_creator_identity(
-        {"platform": platform, "handle": stored_handle, "profile_url": canonical_stored}
-    )
-    submitted_identity = stable_creator_identity(
-        {"platform": platform, "handle": submitted_handle, "profile_url": canonical_submitted}
-    )
-    if not stored_identity.get("passed") or not submitted_identity.get("passed"):
-        raise VideoTrackingError("kol_profile_identity_invalid", 422)
-
-    def aliases(identity: dict[str, Any]) -> set[str]:
-        native_ids = identity.get("native_ids") if isinstance(identity.get("native_ids"), dict) else {}
-        return canonical_creator_aliases({**identity, **native_ids})
-
-    shared_aliases = aliases(stored_identity).intersection(aliases(submitted_identity))
-    stable_shared = sorted(
-        alias for alias in shared_aliases if ":id:" in alias or ":handle:" in alias
-    )
-    if not stable_shared:
-        raise VideoTrackingError("kol_profile_identity_mismatch", 409)
-    return {
-        "canonical_profile_url": canonical_stored,
-        "platform": platform,
-        "stable_identity_key": stable_shared[0],
-    }
+_validated_profile_identity = maintenance_fence._validated_profile_identity
 
 
 def _build_target_write_fence(
@@ -230,6 +208,29 @@ def _build_target_write_fence(
         "user_id": int((staff or {}).get("user_id") or 0) or None,
         **identity,
     }
+
+
+_build_maintenance_target_fence = maintenance_fence._build_maintenance_target_fence
+_stable_profile_native_ids = maintenance_fence._stable_profile_native_ids
+_stable_profile_handle = maintenance_fence._stable_profile_handle
+_validated_maintenance_profile_identity = (
+    maintenance_fence._validated_maintenance_profile_identity
+)
+
+
+def _revalidate_maintenance_target_fence(
+    payload: dict[str, Any],
+    *,
+    conn: Any | None = None,
+    lock_target: bool = False,
+) -> dict[str, Any] | None:
+    return maintenance_fence._revalidate_maintenance_target_fence(
+        payload,
+        conn=conn,
+        lock_target=lock_target,
+        get_connection=get_conn,
+        postgres_runtime=is_postgres_runtime() if lock_target else False,
+    )
 
 
 def _revalidate_target_write_fence(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -300,6 +301,7 @@ def _active_profile_job(
     *,
     clean_url: str,
     content_monitor_fence: dict[str, Any] | None,
+    maintenance_refresh: bool = False,
 ) -> dict[str, Any]:
     """Return only an active job that can safely satisfy this exact request.
 
@@ -317,10 +319,15 @@ def _active_profile_job(
             WHERE job_type=? AND status IN ('queued','running')
               AND payload->>'url'=?
               AND payload->'content_monitor_fence' IS NULL
+              AND (
+                    ? IS TRUE
+                    OR LOWER(CAST(COALESCE(payload->>'maintenance_refresh', 'false') AS TEXT))
+                       NOT IN ('true', '1')
+                  )
             ORDER BY id DESC
             LIMIT 1
             """,
-            (DEEP_CRAWL_JOB_TYPE, clean_url),
+            (DEEP_CRAWL_JOB_TYPE, clean_url, bool(maintenance_refresh)),
         ).fetchone()
         return dict(row) if row else {}
 
@@ -351,9 +358,16 @@ def _active_profile_job(
 def _profile_job_idempotency_key(
     clean_url: str,
     content_monitor_fence: dict[str, Any] | None,
+    *,
+    maintenance_refresh: bool = False,
 ) -> str:
     if content_monitor_fence is None:
-        return active_job_idempotency_key(DEEP_CRAWL_JOB_TYPE, clean_url)
+        key_scope = (
+            f"{DEEP_CRAWL_JOB_TYPE}.maintenance"
+            if maintenance_refresh
+            else DEEP_CRAWL_JOB_TYPE
+        )
+        return active_job_idempotency_key(key_scope, clean_url)
     return active_job_idempotency_key(
         f"{DEEP_CRAWL_JOB_TYPE}.content-monitor",
         int(content_monitor_fence["version"]),
@@ -503,6 +517,8 @@ def enqueue_profile_deep_crawl_job(
     suppress_final_v1: bool = False,
     suppress_contact_followup: bool = False,
     suppress_profile_followups: bool = False,
+    maintenance_refresh: bool = False,
+    maintenance_batch_date: str = "",
     since_iso: str = "",
 ) -> dict[str, Any]:
     """把账号深爬 execute 入 apify_jobs 队列(泳道可见),替代同步 HTTP 内爬。
@@ -519,6 +535,20 @@ def enqueue_profile_deep_crawl_job(
     clean_url = str(url or "").strip()
     if not clean_url:
         raise ValueError("url required")
+    maintenance_target_fence: dict[str, Any] | None = None
+    if maintenance_refresh:
+        try:
+            maintenance_target_id = int(kol_pool_id or 0)
+        except (TypeError, ValueError):
+            maintenance_target_id = 0
+        if maintenance_target_id <= 0:
+            raise ValueError("kol_pool_id required for maintenance refresh")
+        maintenance_target_fence = _build_maintenance_target_fence(
+            conn,
+            kol_pool_id=maintenance_target_id,
+            submitted_url=clean_url,
+        )
+        clean_url = str(maintenance_target_fence["canonical_profile_url"])
     target_write_fence: dict[str, Any] | None = None
     if enforce_target_write:
         try:
@@ -553,6 +583,8 @@ def enqueue_profile_deep_crawl_job(
     )
     if diverted is not None:
         return diverted
+    if url_route_plan.plan_url_route_from_url(clean_url).route == url_route_plan.ROUTE_PROFILE:
+        clean_url = _canonical_url(clean_url) or clean_url
     normalized_mode = _profile_deep_crawl_mode(mode)
     normalized_representative_limit = _representative_video_limit(representative_video_limit)
     normalized_queue_lane = str(queue_lane or "interactive").strip().lower()
@@ -562,6 +594,7 @@ def enqueue_profile_deep_crawl_job(
         conn,
         clean_url=clean_url,
         content_monitor_fence=content_monitor_fence,
+        maintenance_refresh=maintenance_refresh,
     )
     if active:
         return {"status": "already_queued", "job_id": int(active["id"])}
@@ -585,6 +618,8 @@ def enqueue_profile_deep_crawl_job(
     }
     if target_write_fence is not None:
         payload["target_write_fence"] = target_write_fence
+    if maintenance_target_fence is not None:
+        payload["maintenance_target_fence"] = maintenance_target_fence
     if content_monitor_fence is not None:
         payload["content_monitor_fence"] = content_monitor_fence
         payload["monitoring_window"] = {"kind": "recent_posts", "max_posts": 12, "full_history": False}
@@ -594,6 +629,11 @@ def enqueue_profile_deep_crawl_job(
         payload["suppress_contact_followup"] = True
     if suppress_profile_followups:
         payload["suppress_profile_followups"] = True
+    if maintenance_refresh:
+        payload["maintenance_refresh"] = True
+        normalized_batch_date = str(maintenance_batch_date or "").strip()[:10]
+        if normalized_batch_date:
+            payload["maintenance_batch_date"] = normalized_batch_date
     normalized_since = str(since_iso or "").strip()[:32]
     if normalized_since:
         payload["since"] = normalized_since
@@ -601,7 +641,11 @@ def enqueue_profile_deep_crawl_job(
         conn,
         job_type=DEEP_CRAWL_JOB_TYPE,
         payload=payload,
-        idempotency_key=_profile_job_idempotency_key(clean_url, content_monitor_fence),
+        idempotency_key=_profile_job_idempotency_key(
+            clean_url,
+            content_monitor_fence,
+            maintenance_refresh=maintenance_refresh,
+        ),
     )
     conn.commit()
     return {"status": "queued" if inserted else "already_queued", "job_id": int(job["id"])}
@@ -658,26 +702,64 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
     # This is intentionally the first durable-worker action.  If the actor,
     # permission, ownership, target or canonical profile URL changed while the
     # job waited, no provider-facing crawl function is reached.
-    revalidated_staff = _revalidate_target_write_fence(payload)
+    is_content_monitoring = isinstance(payload.get("content_monitor_fence"), dict)
+    is_maintenance_refresh = payload.get("maintenance_refresh") is True
+    from app.domains.kol.video_tracking import VideoTrackingError
+
+    try:
+        if is_maintenance_refresh:
+            block_reason = _maintenance_refresh_execution_block_reason(payload)
+            if block_reason:
+                logger.warning(
+                    "maintenance refresh blocked before provider url=%s reason=%s",
+                    str(payload.get("url") or "")[:160],
+                    block_reason,
+                )
+                return {
+                    "status": block_reason,
+                    "reason": block_reason,
+                    "provider_calls_performed": False,
+                    "llm_calls_performed": False,
+                    "viltrox_fit_score_untouched": True,
+                }
+            _revalidate_maintenance_target_fence(payload)
+
+        revalidated_staff = _revalidate_target_write_fence(payload)
+    except VideoTrackingError as exc:
+        # Every fence check above runs before dry_run_url_deep_crawl can reach
+        # a provider.  Persist that phase truth on terminalization.
+        exc.provider_calls_performed = False
+        raise
     if revalidated_staff is not None:
         staff = revalidated_staff
-    is_content_monitoring = isinstance(payload.get("content_monitor_fence"), dict)
 
     body = {
         "url": str(payload.get("url") or ""),
         "execute": True,
         "mode": _profile_deep_crawl_mode(payload.get("mode"), legacy_default=True),
-        "max_posts": payload.get("max_posts") or 3,
+        "max_posts": 1 if is_maintenance_refresh else (payload.get("max_posts") or 3),
         "representative_video_limit": _representative_video_limit(
             payload.get("representative_video_limit"),
             legacy_default=True,
         ),
         "source": str(payload.get("source") or "queue:kol_profile_deep_crawl"),
-        "suppress_final_v1": payload.get("suppress_final_v1") is True,
-        "suppress_profile_followups": payload.get("suppress_profile_followups") is True,
+        "suppress_final_v1": (
+            is_maintenance_refresh or payload.get("suppress_final_v1") is True
+        ),
+        "suppress_profile_followups": (
+            is_maintenance_refresh or payload.get("suppress_profile_followups") is True
+        ),
+        "maintenance_refresh": is_maintenance_refresh,
+        "suppress_contact_acquisition": (
+            is_maintenance_refresh or payload.get("suppress_contact_followup") is True
+        ),
+        "suppress_avatar_landing": is_maintenance_refresh,
         # 发布时间下限:老任务没有这个键 → "" → 与升级前逐字节同行为。
         "since": str(payload.get("since") or ""),
     }
+    if is_maintenance_refresh:
+        body["kol_pool_id"] = int(payload.get("kol_pool_id") or 0)
+        body["maintenance_target_fence"] = dict(payload["maintenance_target_fence"])
     if revalidated_staff is not None:
         body["paid_action_staff"] = {
             key: revalidated_staff.get(key)
@@ -697,7 +779,7 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
     result = dry_run_url_deep_crawl(body)
     # 队列路径不经 HTTP 路由的 _attach_smart_url_session——session 必须在此自建,
     # 否则任务完成后 payload 无 search_session_id,泳道「最近完成」按规则将其滤掉(一闪而过案)。
-    if not is_content_monitoring:
+    if not is_content_monitoring and not is_maintenance_refresh:
         try:
             from app.domains.kol import search_sessions as kol_search_sessions
 
@@ -725,7 +807,7 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
     # 缩略图(cache_image)与非 YT 平台视频(cache_video_for_item,YT 走 embed 不缓存)
     # 就地喂缓存——失败不毁任务(媒体缓存属增强,非主链)。
     kol_pool_id = payload.get("kol_pool_id")
-    if kol_pool_id and not is_content_monitoring:
+    if kol_pool_id and not is_content_monitoring and not is_maintenance_refresh:
         try:
             from app.domains.media.cache import cache_image, cache_video_for_item
 

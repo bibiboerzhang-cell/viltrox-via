@@ -4,6 +4,8 @@ import json
 from contextlib import contextmanager
 from typing import Any
 
+import pytest
+
 from app.workers import apify_jobs_worker as worker
 from app.workers import apify_jobs_worker_maintenance as maintenance
 from app.workers import apify_jobs_worker_session as worker_session
@@ -73,10 +75,20 @@ def test_execute_claimed_job_reduces_persisted_done_status(monkeypatch) -> None:
 
 def test_execute_claimed_job_reduces_blocked_status_with_reason(monkeypatch) -> None:
     synced = _install_execution_stubs(monkeypatch)
+    finalized: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(
+        worker,
+        "finalize_provider_execution_claim",
+        lambda task_id, fence, state: finalized.append((task_id, fence, state)) or True,
+    )
 
     worker._execute_claimed_job(
         _StatusConn(
-            {"status": "blocked", "last_error": "readiness_not_production_ready"}
+            {
+                "status": "blocked",
+                "last_error": "readiness_not_production_ready",
+                "payload": {"provider_calls_performed": False},
+            }
         ),
         {"id": 18472, "job_type": "video", "lease_owner": "worker-a"},
     )
@@ -86,6 +98,103 @@ def test_execute_claimed_job_reduces_blocked_status_with_reason(monkeypatch) -> 
         "raw_status": "blocked",
         "reason": "readiness_not_production_ready",
     }
+    assert finalized == [("apify-job:18472", 17, "blocked")]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["provider_job_actor_inactive", "provider_budget_disabled"],
+)
+def test_execute_claimed_job_reads_preprovider_truth_from_canonical_block_error(
+    monkeypatch,
+    reason,
+) -> None:
+    _install_execution_stubs(monkeypatch)
+    finalized: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(
+        worker,
+        "finalize_provider_execution_claim",
+        lambda task_id, fence, state: finalized.append((task_id, fence, state)) or True,
+    )
+
+    worker._execute_claimed_job(
+        _StatusConn(
+            {
+                "status": "blocked",
+                "last_error": json.dumps(
+                    {
+                        "reason": reason,
+                        "provider_calls_performed": False,
+                        "paid_action": "video_analysis",
+                    }
+                ),
+                "payload": {"original_job_payload": True},
+            }
+        ),
+        {"id": 18474, "job_type": "video", "lease_owner": "worker-a"},
+    )
+
+    assert finalized == [("apify-job:18474", 17, "blocked")]
+
+
+def test_execute_claimed_job_provider_called_truth_wins_conflicting_block_error(
+    monkeypatch,
+) -> None:
+    _install_execution_stubs(monkeypatch)
+    finalized: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(
+        worker,
+        "finalize_provider_execution_claim",
+        lambda task_id, fence, state: finalized.append((task_id, fence, state)) or True,
+    )
+
+    worker._execute_claimed_job(
+        _StatusConn(
+            {
+                "status": "blocked",
+                "last_error": json.dumps({"provider_calls_performed": False}),
+                "payload": {"provider_calls_performed": True},
+            }
+        ),
+        {"id": 18475, "job_type": "video", "lease_owner": "worker-a"},
+    )
+
+    assert finalized == [("apify-job:18475", 17, "failed")]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"provider_calls_performed": True},
+        {},
+        None,
+        json.dumps({"provider_calls_performed": True}),
+    ],
+)
+def test_execute_claimed_job_keeps_provider_called_or_unknown_blocked_as_failed(
+    monkeypatch,
+    payload,
+) -> None:
+    _install_execution_stubs(monkeypatch)
+    finalized: list[tuple[str, int, str]] = []
+    monkeypatch.setattr(
+        worker,
+        "finalize_provider_execution_claim",
+        lambda task_id, fence, state: finalized.append((task_id, fence, state)) or True,
+    )
+
+    worker._execute_claimed_job(
+        _StatusConn(
+            {
+                "status": "blocked",
+                "last_error": "maintenance_refresh_target_drifted",
+                "payload": payload,
+            }
+        ),
+        {"id": 18473, "job_type": "video", "lease_owner": "worker-a"},
+    )
+
+    assert finalized == [("apify-job:18473", 17, "failed")]
 
 
 def test_execute_claimed_job_does_not_terminalize_requeued_job(monkeypatch) -> None:

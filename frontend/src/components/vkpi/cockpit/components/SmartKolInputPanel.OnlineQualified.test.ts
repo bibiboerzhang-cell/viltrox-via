@@ -193,6 +193,30 @@ describe("SmartKolInputPanel online strict lane", () => {
     expect(mismatchSummary.rows[0]).toMatchObject({ qualification: "pending", strictQualified: false });
   });
 
+  it("treats a terminal session without a strict-online contract as a finished empty lane", () => {
+    const summary = onlineQualifiedSummaryFromSession({
+      id: 8,
+      status: "ready",
+      items: [],
+      progress_contract: {
+        schema: "kol_search_progress_v1",
+        state: "ready",
+        requested_tasks_terminal: true,
+        queued_units: 0,
+        running_units: 0,
+        active_units: 0,
+        blocked_by_worker: false,
+        orchestration_pending: false,
+      },
+      result_summary: { result_state: "empty", returned_count: 0 },
+    } as unknown as VkpiKolSearchHistoryItem);
+
+    expect(summary.contractValid).toBe(false);
+    expect(summary.terminal).toBe(true);
+    expect(summary.selectionReady).toBe(false);
+    expect(summary.qualified).toBe(0);
+  });
+
   it("rejects copied proof bindings and payloads from another snapshot", () => {
     const wrongPool = onlineItem(11, 1, proof({ kol_pool_id: 99 }));
     const copiedProof = onlineItem(12, 2, proof({ canonical_fingerprint: String(11).padStart(64, "0") }));

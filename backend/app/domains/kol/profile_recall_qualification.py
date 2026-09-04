@@ -47,11 +47,14 @@ from app.domains.kol.profile_recall_gate_policy import (
     build_gate_policy,
     normalized_excluded_identities,
 )
+from app.domains.kol import search_relaxation as _relax
 
 
 SMART_LOCAL_TARGET = 30
 SMART_LOCAL_MIN_FOLLOWERS = 3_000
 SMART_LOCAL_FRESH_DAYS = 30
+#: 严口径的视频年龄上限。松绑口径(默认)由 :mod:`search_relaxation` 放到 365 天,
+#: 逐条策略里的实际取值一律读 ``policy["max_video_age_days"]``,别再读这个常量。
 SMART_LOCAL_MAX_VIDEO_AGE_DAYS = 45
 SMART_LOCAL_CANDIDATE_LIMIT = 500
 SMART_LOCAL_SCHEMA = "smart_local_qualified_v2"
@@ -101,8 +104,22 @@ def smart_local_policy(
     platforms: Any = None,
     languages: Any = None,
     profile_types: Any = None,
+    gate_mode: Any = _relax.DEFAULT_MODE,
+    hide_team_favorites: Any = None,
 ) -> dict[str, Any]:
-    """Build the immutable Smart-local policy; callers cannot lower its gates."""
+    """Build the Smart-local policy for one search mode.
+
+    ``gate_mode`` 只在两个合法口径之间选(默认 ``relaxed``):松绑口径把视频年龄上限放到
+    365 天并允许意图腿降到 1 个证据,严口径(``strict``)逐字回到 2026-08 的行为。除这两项
+    与 ``hide_team_favorites`` 外,策略的其余部分两个口径完全一致 —— 显式硬筛、地区规避、
+    账号类型排除在任何口径下都不放宽。
+    """
+    mode = _relax.normalize_mode(gate_mode)
+    hide_favorites = (
+        _relax.resolve_hide_team_favorites({}, mode=mode)
+        if hide_team_favorites is None
+        else bool(hide_team_favorites)
+    )
     raw_platforms = platforms if isinstance(platforms, (list, tuple, set)) else [platforms]
     normalized_platforms = sorted(
         {
@@ -121,7 +138,9 @@ def smart_local_policy(
         "candidate_limit": SMART_LOCAL_CANDIDATE_LIMIT,
         "min_followers": SMART_LOCAL_MIN_FOLLOWERS,
         "fresh_priority_days": SMART_LOCAL_FRESH_DAYS,
-        "max_video_age_days": SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
+        "max_video_age_days": _relax.max_video_age_days(mode),
+        _relax.POLICY_KEY: mode,
+        _relax.HIDE_FAVORITES_POLICY_KEY: hide_favorites,
         "market": normalized_market,
         "platforms": normalized_platforms,
         "languages": list(filter_spec["languages"]["values"]),
@@ -420,7 +439,12 @@ def _claim_identity_aliases(seen: set[str], aliases: set[str]) -> bool:
     return True
 
 
-def _score_key(item: dict[str, Any]) -> tuple[float, float, float]:
+def _score_key(item: dict[str, Any]) -> tuple[float, float, float, float]:
+    """排序分区(不是评分):最近更新过的排最前,严口径也能过的排在只因放宽才进来的之前。
+
+    两个分区位都只决定先后,``display_rank_score`` / ``recall_rank_score`` 两个既有分值
+    一个字节不改,``viltrox_fit_score`` 不碰。
+    """
     gate = item.get("qualification_evidence") if isinstance(item.get("qualification_evidence"), dict) else {}
     activity = gate.get("activity") if isinstance(gate.get("activity"), dict) else {}
     try:
@@ -428,6 +452,7 @@ def _score_key(item: dict[str, Any]) -> tuple[float, float, float]:
     except (TypeError, ValueError):
         age = 10_000.0
     fresh_bucket = 1.0 if age <= SMART_LOCAL_FRESH_DAYS else 0.0
+    strict_bucket = 1.0 if age <= SMART_LOCAL_MAX_VIDEO_AGE_DAYS else 0.0
 
     def _number(value: Any) -> float:
         try:
@@ -437,6 +462,7 @@ def _score_key(item: dict[str, Any]) -> tuple[float, float, float]:
 
     return (
         fresh_bucket,
+        strict_bucket,
         _number(item.get("display_rank_score")),
         _number(item.get("recall_rank_score")),
     )
@@ -465,6 +491,12 @@ def qualify_local_candidates(
         excluded_canonical_keys,
         excluded_identity_aliases,
     )
+    # 视频年龄上限跟着本次口径走:策略里写了就用策略的(松绑 365 / 严口径 45),
+    # 老调用方不带这个键时逐字回落到既有常量,行为零漂移。
+    maximum_video_age_days = _relax.effective_max_video_age_days(
+        policy,
+        fallback=SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
+    )
     gate_policy, unknown_activity = build_gate_policy(
         policy,
         now=now,
@@ -473,7 +505,7 @@ def qualify_local_candidates(
         policy_factory=CandidateGatePolicy,
         effective_follower_filter=_effective_follower_filter,
         unknown_activity_mode=unknown_activity_mode,
-        maximum_video_age_days=SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
+        maximum_video_age_days=maximum_video_age_days,
         fresh_priority_days=SMART_LOCAL_FRESH_DAYS,
         gate_schema=SMART_LOCAL_GATE_SCHEMA,
     )
@@ -548,6 +580,9 @@ def qualify_local_candidates(
         else:
             selected_creator.append(entry)
     items.extend(deferred_selected)
+    # 松绑放行的人必须自己带上「近期没有更新视频」——他们排在后面已经是惩罚,
+    # 但操作员有权一眼看见凭什么在这儿(严口径下没人会被盖章,窗口就是 45 天)。
+    _relax.annotate_stale_activity_all(items, strict_window=SMART_LOCAL_MAX_VIDEO_AGE_DAYS)
     funnel["returned"] = len(items)
     # The deferred bucket is a *separate zone*, not part of the 30-person
     # target: an unknown-activity creator has not satisfied the activity gate,
@@ -578,9 +613,10 @@ def qualify_local_candidates(
             # other way round.  Both halves are asserted end to end.
             "counts_toward_target": False,
             "selectable": True,
-            "max_video_age_days": SMART_LOCAL_MAX_VIDEO_AGE_DAYS,
+            "max_video_age_days": maximum_video_age_days,
             "fresh_priority_days": SMART_LOCAL_FRESH_DAYS,
         },
+        "search_relaxation": _relax.relaxation_receipt(policy),
         "funnel": funnel,
         "rejected_by_reason": rejected_by_reason,
         # Per-returned-item proof is complete; rejected rows are summarized

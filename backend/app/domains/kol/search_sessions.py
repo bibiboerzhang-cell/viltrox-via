@@ -76,6 +76,7 @@ from app.domains.kol.search_sessions_items import (
     mark_items_profile_cancelled as _mark_items_profile_cancelled,
     mark_items_profile_queued as _mark_items_profile_queued,
     mark_items_profile_running as _mark_items_profile_running,
+    project_session_result_summary,
     record_items as _record_items,
     update_item_profile_execution as _update_item_profile_execution,
 )
@@ -120,7 +121,11 @@ def _attach_progress_contract(
     session["worker_health"] = dict(worker_health)
     summary = _dict(session.get("result_summary")).copy()
     summary["progress_contract"] = contract
-    session["result_summary"] = summary
+    session["result_summary"] = project_session_result_summary(
+        summary,
+        items,
+        status=_text(session.get("status")),
+    )
     return session
 
 
@@ -165,11 +170,35 @@ def _canonical_visible_recall(items: list[dict[str, Any]]) -> list[dict[str, Any
         if identity in seen:
             continue
         seen.add(identity)
+        qualification_evidence = _dict(payload.get("qualification_evidence"))
+        counts_toward_target: bool | None = None
+        if isinstance(payload.get("counts_toward_target"), bool):
+            counts_toward_target = payload["counts_toward_target"] is True
+        elif isinstance(qualification_evidence.get("counts_toward_target"), bool):
+            counts_toward_target = qualification_evidence["counts_toward_target"] is True
+        elif isinstance(qualification_evidence.get("passed"), bool):
+            # A targeted-growth supplement may have passed the reusable local
+            # gates while still lacking product-scene or activation proof.  An
+            # explicit growth verdict therefore narrows the older local proof;
+            # it can never broaden a failed/unknown local verdict.
+            growth_pass = payload.get("growth_qualification_pass")
+            counts_toward_target = (
+                qualification_evidence.get("passed") is True
+                and qualification_evidence.get("deferred") is not True
+                and (growth_pass is True if isinstance(growth_pass, bool) else True)
+            )
+        elif isinstance(payload.get("growth_qualification_pass"), bool):
+            # Growth proof alone is insufficient to reconstruct every local
+            # gate.  ``False`` is conclusive; ``True`` without local proof is
+            # deliberately left unknown for the legacy fallback below.
+            if payload.get("growth_qualification_pass") is False:
+                counts_toward_target = False
         canonical.append(
             {
                 "kol_pool_id": pool_id,
                 "bucket": "reviewer" if _text(payload.get("bucket")) == "reviewer" else "creator",
                 "candidate_facets": _safe_candidate_facets(payload.get("candidate_facets")),
+                "counts_toward_target": counts_toward_target,
             }
         )
     return canonical
@@ -205,22 +234,53 @@ def _refresh_visible_recall_summary(session: dict[str, Any], items: list[dict[st
             visible_count = len(canonical)
             policy = _dict(local_qualification.get("policy"))
             target = _int_or_none(policy.get("target_count")) or 30
+            explicit_qualification = [
+                item.get("counts_toward_target")
+                for item in canonical
+                if isinstance(item.get("counts_toward_target"), bool)
+            ]
+            # Pre-proof historical rows did not persist the per-item flag. In a
+            # mixed snapshot, keep at most the already-recorded strict total
+            # across unknown rows while explicit false rows always remain out.
+            # This avoids both inflation and erasing old strict evidence merely
+            # because one new supplement is present.
+            explicit_true = sum(value is True for value in explicit_qualification)
+            unknown_visible = visible_count - len(explicit_qualification)
+            recorded_qualified = _int_or_none(
+                local_qualification.get("qualified_returned_count")
+            )
+            if recorded_qualified is None:
+                recorded_qualified = _int_or_none(local_qualification.get("qualified_count"))
+            legacy_strict_remaining = max(0, (recorded_qualified or 0) - explicit_true)
+            qualified_count = explicit_true + min(unknown_visible, legacy_strict_remaining)
             local_qualification.update(
                 {
-                    "status": "ready" if visible_count >= target else "shortfall",
-                    "qualified_count": visible_count,
+                    "status": "ready" if qualified_count >= target else "shortfall",
+                    "qualified_count": qualified_count,
                     "returned_count": visible_count,
-                    "shortfall": max(0, target - visible_count),
+                    "qualified_returned_count": qualified_count,
+                    "shortfall": max(0, target - qualified_count),
                     "shortfall_reason": (
-                        "" if visible_count >= target else "visible_qualified_candidates_exhausted"
+                        ""
+                        if qualified_count >= target
+                        else "visible_qualified_candidates_exhausted"
                     ),
                 }
             )
             funnel = _dict(local_qualification.get("funnel"))
-            funnel["qualified"] = visible_count
+            funnel["qualified"] = qualified_count
             funnel["returned"] = visible_count
             local_qualification["funnel"] = funnel
             summary["local_qualification"] = local_qualification
+    # Recall-specific counts above keep frame 2 honest; the session headline is
+    # broader and must include every visible creator-search lane. Reproject it
+    # after the account/reach display gates so a visible discovery batch cannot
+    # inherit the earlier recall-only zero.
+    summary = project_session_result_summary(
+        summary,
+        items,
+        status=_text(session.get("status")),
+    )
     session["result_summary"] = summary
     session["items_snapshot_complete"] = True
     session["recall_snapshot_complete"] = recall_snapshot_complete
@@ -570,6 +630,20 @@ def update_session_result_summary(
             summary["llm_query_plan"] = safe_plan
         else:
             summary.pop("llm_query_plan", None)
+    item_rows = conn.execute(
+        """
+        SELECT *
+        FROM vkpi_kol_search_session_items
+        WHERE session_id=?
+        ORDER BY rank NULLS LAST, id
+        """,
+        (int(session_id),),
+    ).fetchall()
+    summary = project_session_result_summary(
+        summary,
+        [_row_to_item(item) for item in item_rows],
+        status=status,
+    )
     summary = _sanitize_session_payload(summary)
     updated = conn.execute(
         """

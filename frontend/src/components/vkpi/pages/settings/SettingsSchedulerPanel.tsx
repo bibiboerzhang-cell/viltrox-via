@@ -42,7 +42,7 @@ export function SettingsSchedulerPanel({
         </div>
       </div>
       <p className="vkpi-settings-hint">
-        开启后由后台调度执行(本期仅注册 + 可见,执行链后续接)。所有任务默认关闭;切换只翻 enabled 标记,不会立即运行任何任务。LLM / 批量类(风险=高)请谨慎开启。
+        切换本身不会立即运行任务；已经接线的任务会在后续调度窗口执行。请先核对风险、预算和付费提示，再开启外部抓取、LLM 或批量任务。
       </p>
       <div className="vkpi-table-wrap">
         <table className="vkpi-table">
@@ -63,11 +63,15 @@ export function SettingsSchedulerPanel({
                 const enabled = boolVal(row.enabled);
                 const risk = String(row.risk_level || "low");
                 const lastError = String(row.last_error || "").trim();
+                const paidExecution = row.paid_execution === true;
+                const enableWarning = String(row.enable_warning || "").trim();
                 return (
                   <tr key={taskKey}>
                     <td>
                       <strong>{taskKey || "-"}</strong>
                       {row.label ? <div className="vkpi-settings-hint">{String(row.label)}</div> : null}
+                      {paidExecution ? <div className="vkpi-table-warn">付费执行 · 开启前需确认</div> : null}
+                      {enableWarning ? <div className="vkpi-settings-hint">{enableWarning}</div> : null}
                     </td>
                     <td>
                       <span className={`vkpi-pill vkpi-pill--risk-${risk}`}>{RISK_LABEL[risk] || risk}</span>
@@ -91,7 +95,7 @@ export function SettingsSchedulerPanel({
             ) : (
               <tr>
                 <td className="vkpi-table-empty" colSpan={6}>
-                  暂无调度任务注册记录。迁移 130 应用后会出现 10 个默认关闭的任务,届时仍不会自动运行。
+                  暂无调度任务注册记录。迁移应用后任务默认关闭；人工启用已接线任务后，它会在后续调度窗口执行。
                 </td>
               </tr>
             )}

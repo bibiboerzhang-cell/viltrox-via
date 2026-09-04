@@ -426,16 +426,27 @@ def reserve_llm_budget(
                 scope=missing_required[0],
             )
 
-        # All requested rows are locked in stable scope order before a window
-        # is changed.  Re-project the purpose scope from the locked row and keep
-        # rollover plus reservation in this transaction, closing the preflight
-        # -> reservation gap where an operator could delete, edit, or exhaust
-        # the Advisor's mandatory daily scope.
-        if clean_cost_scope in rows:
+        # All requested rows are locked in stable scope order before any window
+        # is changed.  Re-project every cumulative window from the locked row
+        # and keep rollover plus reservation in this transaction.  Previously
+        # only the purpose/cost scope rolled here, so an expired monthly or
+        # provider window could keep stale spend forever and falsely block an
+        # otherwise valid call.  ``single_call`` is a per-request ceiling, not
+        # cumulative spend, and therefore has no rollover semantics.
+        rollover_scopes = sorted(
+            dict.fromkeys(
+                [
+                    _MONTHLY_SCOPE,
+                    provider_budget_scope,
+                    clean_cost_scope,
+                ]
+            )
+        )
+        for scope in (item for item in rollover_scopes if item and item in rows):
             try:
-                rows[clean_cost_scope] = roll_budget_window(
+                rows[scope] = roll_budget_window(
                     conn,
-                    rows[clean_cost_scope],
+                    rows[scope],
                     postgres=is_postgres_runtime(),
                     release_fenced=False,
                     commit=False,
@@ -446,7 +457,7 @@ def reserve_llm_budget(
                 raise LlmBudgetBlocked(
                     f"budget_window_unavailable:{type(exc).__name__}",
                     estimated_cost_usd=float(estimate),
-                    scope=clean_cost_scope,
+                    scope=scope,
                 ) from exc
 
         cumulative_scopes: list[str] = []

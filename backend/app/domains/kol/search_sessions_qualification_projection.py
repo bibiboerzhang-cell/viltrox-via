@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Collection
 
+from app.domains.kol import search_relaxation
+
 
 def _safe_policy(
     raw_policy: dict[str, Any],
@@ -19,7 +21,7 @@ def _safe_policy(
         number = safe_int(raw_policy.get(key), maximum=5_000_000_000)
         if number is not None:
             policy[key] = number
-    for key in ("server_owned", "allow_unknown_followers", "allow_unknown_market", "allow_unknown_language", "allow_unknown_profile_type", "allow_low_quality_backfill", "canonical_dedupe"):
+    for key in ("server_owned", "allow_unknown_followers", "allow_unknown_market", "allow_unknown_language", "allow_unknown_profile_type", "allow_low_quality_backfill", "canonical_dedupe", search_relaxation.HIDE_FAVORITES_POLICY_KEY):
         if isinstance(raw_policy.get(key), bool):
             policy[key] = raw_policy[key]
     follower_filter = dict_value(raw_policy.get("followers_filter"))
@@ -34,6 +36,10 @@ def _safe_policy(
     unknown_activity = safe_code(raw_policy.get(unknown_policy_key), limit=40)
     if unknown_activity in unknown_modes:
         policy[unknown_policy_key] = unknown_activity
+    # 松绑口径必须能随会话回放:一条老会话到底是宽是严,得读得出来而不是靠猜。
+    gate_mode = safe_code(raw_policy.get(search_relaxation.POLICY_KEY), limit=20)
+    if gate_mode in search_relaxation.MODES:
+        policy[search_relaxation.POLICY_KEY] = gate_mode
     policy["market"] = safe_code(raw_policy.get("market"), limit=40)
     policy["platforms"] = [
         platform

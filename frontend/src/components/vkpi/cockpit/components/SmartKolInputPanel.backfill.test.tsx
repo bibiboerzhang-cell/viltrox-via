@@ -12,7 +12,10 @@ const EXPLANATION = {
   precise_count: 0,
   backfill_count: 20,
   returned_count: 20,
-  headline: "精准命中 0 人，另补充 20 人（已标注补充原因）",
+  // 服务端 2026-09-03 起先报「找到几个人」再说凭什么:旧口径以「精准命中 0 人」开头,
+  // 卡面上站着 20 个人也读成「没搜到」。这里的夹具与服务端 explain_result 保持同一句。
+  headline: "为你找到 20 人(均已标注入选原因,暂无精准命中)",
+  deferred_count: 0,
   backfill_reasons: [
     { code: "team_favorite", label: "已被同事关注", count: 12 },
     { code: "vertical_relaxed", label: "题材不完全匹配", count: 8 },
@@ -43,7 +46,8 @@ describe("库内召回:空墙的解释与补充人选角标", () => {
     );
 
     const headline = await screen.findByTestId("recall-explanation-headline");
-    expect(headline.textContent).toContain("精准命中 0 人");
+    expect(headline.textContent).toContain("为你找到 20 人");
+    expect(headline.textContent).not.toContain("精准命中 0 人");
     expect((await screen.findByTestId("recall-explanation-gaps")).textContent).toContain("题材不匹配 30 人");
     expect((await screen.findByTestId("recall-explanation-gaps")).textContent).toContain("未见器材相关内容 6 人");
     const supplement = await screen.findByTestId("recall-explanation-supplement");

@@ -12,8 +12,8 @@
   品牌官方 / 零售 / 无效账号 / 市场不符 / 跨来源重复这些硬拒**永远不回填**。能放宽的只有
   四级,顺序固定:
 
-  1. ``team_favorite``   —— 被同事收藏而隐藏的人(全局排除改为**软排除**:先出未收藏的,
-     不够再回填已收藏的,并标注「已被同事关注」);
+  1. ``team_favorite``   —— 被同事收藏而隐藏的人(**仅在严口径 / 操作员点名隐藏时才有人**:
+     松绑口径下他们从一开始就留在主跑里参与排序,只带「已被同事关注」标注,这一级为空);
   2. ``vertical_relaxed`` —— 只因题材(verticals)一项被硬筛掉的人;
   3. ``evidence_relaxed`` —— 过了硬筛但没找到明确产品相关内容的人(保留 ``no_match_evidence``
      语义:``match_evidence=[]``,不伪造证据);
@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.domains.kol.identity import canonical_creator_aliases, canonical_creator_key
+from app.domains.kol import search_relaxation as _relax
 
 BACKFILL_LADDER_SCHEMA = "recall_backfill_ladder_v1"
 RESULT_EXPLANATION_SCHEMA = "recall_result_explanation_v1"
@@ -65,8 +66,9 @@ TIER_RELAXED_FILTER: dict[str, str] = {
     TIER_QUALIFICATION_RELAXED: "qualification_unknowns",
 }
 
-#: 资质门里「资料未知 / 待核验」类原因:可回填。硬拒(市场不符、粉丝不足、账号类型、重复、
-#: 视频过旧)**不在**这里,永远不回填。
+#: 资质门里「资料未知 / 待核验」类原因:可回填。硬拒(市场不符、粉丝不足、账号类型、重复)
+#: **不在**这里,永远不回填。「视频过旧」是唯一一条随口径浮动的:严口径下仍是硬拒,松绑口径
+#: 下由 :func:`soft_reasons_for_policy` 并进来(见 :mod:`search_relaxation`)。
 SOFT_QUALIFICATION_REASONS: frozenset[str] = frozenset(
     {
         "low_relevance",
@@ -94,10 +96,15 @@ EVIDENCE_ONLY_REASONS: frozenset[str] = frozenset({"low_relevance"})
 
 
 def soft_reasons_for_policy(policy: dict[str, Any] | None) -> frozenset[str]:
-    """按本次资质策略算出「可放宽的软原因」:操作员显式要求过的维度,其未知一律算硬。"""
+    """按本次资质策略算出「可放宽的软原因」:操作员显式要求过的维度,其未知一律算硬。
+
+    松绑口径下额外把「视频陈旧」并进来:那道闸量的是我们的抓取跟进度,不是创作者的活跃度,
+    降级成「排后面 + 标注」而不是判死。严口径下这一句返回空集,行为逐字不变。
+    """
 
     soft = set(SOFT_QUALIFICATION_REASONS)
     soft.discard("followers_unknown_rejected")
+    soft.update(_relax.relaxable_reasons(policy))
     spec = policy if isinstance(policy, dict) else {}
     for key, codes in _EXPLICIT_FILTER_UNKNOWNS:
         value = spec.get(key)
@@ -105,6 +112,18 @@ def soft_reasons_for_policy(policy: dict[str, Any] | None) -> frozenset[str]:
         if requested:
             soft.difference_update(codes)
     return frozenset(soft)
+
+
+def evidence_reasons_for_policy(policy: dict[str, Any] | None) -> frozenset[str]:
+    """证据放宽级接受的原因集合:默认只认「没有产品相关内容」。
+
+    松绑口径下再加上「视频陈旧」——否则一个既没证据又被判陈旧的人两级都够不着,
+    实测正是这条把证据放宽级的出货压住的。
+    """
+
+    return EVIDENCE_ONLY_REASONS | _relax.relaxable_reasons(policy)
+
+
 #: unknown 桶(类型待核验)进入第四级时的合成原因码。
 PROFILE_TYPE_UNKNOWN_REASON = "profile_type_unknown"
 
@@ -134,6 +153,11 @@ GAP_LABELS: dict[str, str] = {
     "duplicate_canonical_identity": "跨来源重复",
     "excluded_region": "不在服务地区",
     "low_reach": "触达量不足",
+    "product_scene_evidence_missing": "产品使用场景待核验",
+    "market_activation_missing": "市场表现数据待补",
+    "insufficient_sample": "市场表现样本不足",
+    "insufficient_metric_sample": "市场表现样本不足",
+    "below_floor": "市场活性未达门槛",
     "row_missing": "资料缺失",
 }
 _GAP_FALLBACK_LABEL = "其他条件未满足"
@@ -246,6 +270,7 @@ class LadderState:
     evidence: dict[int, dict[str, Any]]
     excluded_aliases: set[str]
     soft_reasons: frozenset[str] = SOFT_QUALIFICATION_REASONS
+    evidence_reasons: frozenset[str] = EVIDENCE_ONLY_REASONS
     filled: list[dict[str, Any]] = field(default_factory=list)
     filled_by_tier: dict[str, int] = field(default_factory=dict)
     rungs: list[dict[str, Any]] = field(default_factory=list)
@@ -275,6 +300,20 @@ class LadderOutcome:
 # ── 标记 ────────────────────────────────────────────────────────────────────
 
 
+def _stamp_backfill_notes(item: dict[str, Any], reasons: set[str]) -> None:
+    """卡面注脚:放宽了哪一级 + 具体卡在哪一条(都只说人话)。"""
+
+    notes = [TIER_LABELS[code] for code in TIER_ORDER if code in reasons]
+    for reason in sorted(_reasons_of(item)):
+        label = GAP_LABELS.get(reason)
+        if label and label not in notes:
+            notes.append(label)
+    item["backfill_notes"] = notes
+    if TIER_TEAM_FAVORITE in reasons:
+        _relax.annotate_team_favorite(item)
+    _relax.annotate_stale_activity(item)
+
+
 def mark_backfill_item(item: dict[str, Any], tier: str) -> dict[str, Any]:
     """给回填条目盖章:不是精准命中、不计入目标、说明放宽了什么。"""
 
@@ -283,6 +322,7 @@ def mark_backfill_item(item: dict[str, Any], tier: str) -> dict[str, Any]:
     if item.get("_backfill_favorited") is True:
         reasons.add(TIER_TEAM_FAVORITE)
     item.pop("_backfill_favorited", None)
+    _stamp_backfill_notes(item, reasons)
     item["backfill_tier"] = tier
     item["backfill_label"] = TIER_LABELS.get(tier, tier)
     item["backfill_reasons"] = sorted(reasons)
@@ -496,7 +536,7 @@ def _rung_vertical_and_evidence(
         [*reserve.no_evidence, *carried], phases, with_evidence=False,
     )
     leftovers = _run_rung(
-        state, TIER_EVIDENCE_RELAXED, evidence_items, accept_reasons=EVIDENCE_ONLY_REASONS, phases=phases,
+        state, TIER_EVIDENCE_RELAXED, evidence_items, accept_reasons=state.evidence_reasons, phases=phases,
     )
     _note_hard_rejects(state, leftovers)
     state.pending_soft.extend(_soft_pool(state, leftovers))
@@ -512,6 +552,7 @@ def run_backfill_ladder(
     favorited_hits: list[Any],
     phases: LadderPhases,
     soft_reasons: frozenset[str] | None = None,
+    evidence_reasons: frozenset[str] | None = None,
 ) -> LadderOutcome:
     """按固定四级回填到 ``target``;返回回填条目(已盖章)与逐级账目。"""
 
@@ -522,6 +563,9 @@ def run_backfill_ladder(
         evidence=dict(hydration.get("evidence_by_id") or {}),
         excluded_aliases={alias for item in selected for alias in identity_aliases(item)},
         soft_reasons=soft_reasons if soft_reasons is not None else SOFT_QUALIFICATION_REASONS,
+        evidence_reasons=(
+            evidence_reasons if evidence_reasons is not None else EVIDENCE_ONLY_REASONS
+        ),
     )
     for name, count in reserve.hard_filter_gaps.items():
         _bump(state.gaps, name, count)
@@ -573,14 +617,27 @@ def _gap_entries(gaps: dict[str, int]) -> list[dict[str, Any]]:
     return entries[:_EXPLANATION_GAP_CAP]
 
 
-def _headline(requested: int, precise: int, backfill: int) -> str:
+def _headline(requested: int, precise: int, backfill: int, deferred: int = 0) -> str:
+    """先说找到几个人,再说凭什么。
+
+    旧口径以「精准命中 0 人」开头,即使卡面上站着 30 个人也读成「没搜到」——这正是
+    「搜索越来越笨」的观感来源。有人就先报人数;真的一个都没有时仍然如实说没有。
+
+    ``deferred``(资料待核验、占了位但不计入目标)和 ``backfill`` 一样算「已标注」,
+    绝不并进 ``precise`` —— 那正是旧口径把「精准命中」说虚的地方。
+    """
+
+    labelled = int(backfill) + int(deferred)
+    total = int(precise) + labelled
+    if not total:
+        return "本次没有找到符合全部条件的人选"
     if precise >= requested:
         return f"精准命中 {precise} 人"
-    if not precise and not backfill:
-        return "本次没有找到符合全部条件的人选"
-    if not backfill:
-        return f"精准命中 {precise} 人,没有可补充的人选"
-    return f"精准命中 {precise} 人,另补充 {backfill} 人(已标注补充原因)"
+    if not labelled:
+        return f"为你找到 {precise} 人(均为精准命中)"
+    if not precise:
+        return f"为你找到 {total} 人(均已标注入选原因,暂无精准命中)"
+    return f"为你找到 {total} 人:精准命中 {precise} 人,另 {labelled} 人已标注入选原因"
 
 
 def explain_result(
@@ -590,11 +647,14 @@ def explain_result(
     backfill_by_tier: dict[str, int] | None,
     gaps: dict[str, int] | None,
     favorite_excluded: int = 0,
+    favorite_annotated: int = 0,
+    deferred_count: int = 0,
 ) -> dict[str, Any]:
     """门面用的「为什么这么少 / 补了什么」——只说人话,不带内部术语。"""
 
     tiers = {tier: int((backfill_by_tier or {}).get(tier) or 0) for tier in TIER_ORDER}
     backfill = sum(tiers.values())
+    deferred = max(0, int(deferred_count))
     reasons = [
         {"code": tier, "label": TIER_LABELS[tier], "count": count}
         for tier, count in tiers.items()
@@ -602,7 +662,8 @@ def explain_result(
     ]
     gap_entries = _gap_entries(dict(gaps or {}))
     note = ""
-    if backfill:
+    if backfill or deferred:
+        # 「资料待核验」也属于已标注的人:补充区为空但他们在场时,不许再说「没有可补充的人选」。
         note = "补充的人选不是精准命中,已按原因标注,可按需忽略。"
     elif precise_count < requested:
         note = "没有可补充的人选;可放宽平台/地区/粉丝量筛选再试。"
@@ -611,11 +672,15 @@ def explain_result(
         "requested": int(requested),
         "precise_count": int(precise_count),
         "backfill_count": backfill,
-        "returned_count": int(precise_count) + backfill,
-        "headline": _headline(int(requested), int(precise_count), backfill),
+        "deferred_count": deferred,
+        "returned_count": int(precise_count) + backfill + deferred,
+        "headline": _headline(int(requested), int(precise_count), backfill, deferred),
         "backfill_reasons": reasons,
         "gaps": gap_entries,
         "favorited_by_team_hidden": max(0, int(favorite_excluded) - tiers[TIER_TEAM_FAVORITE]),
+        # 松绑口径下他们没被藏起来,而是带着「已被同事关注」站在结果里——这个数说的是
+        # 「有几个人是这么进来的」,和上面那个「被藏了几个」是两件事,不能互相冒充。
+        "favorited_by_team_shown": max(0, int(favorite_annotated)),
         "note": note,
     }
 

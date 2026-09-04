@@ -259,11 +259,43 @@ def test_descriptive_activation_score_cannot_replace_explicit_strict_gate(
         target=1,
     )
 
-    assert result["items"] == []
+    # The row is visible as an honestly labelled supplement, but still cannot
+    # count toward or be selected as a strict outreach candidate.
+    assert len(result["items"]) == 1
+    assert result["items"][0]["kol_pool_id"] == 1
+    assert result["items"][0]["precision_match"] is False
+    assert result["items"][0]["counts_toward_target"] is False
+    assert result["items"][0]["growth_qualification_state"] == "evidence_pending"
+    assert "市场表现数据待补" in result["items"][0]["selection_notes"]
     assert result["local_qualification"]["qualified_count"] == 0
+    assert result["local_qualification"]["qualified_returned_count"] == 0
+    assert result["local_qualification"]["returned_count"] == 1
     assert result["local_qualification"]["rejected_by_reason"][
         "prospective_product_scene_or_activation_missing"
     ] == 1
+
+
+def test_missing_product_scene_evidence_is_visible_but_never_strict() -> None:
+    result = targeted_local_recall.execute_first_round_local_cells(
+        query_cells=[{**_cell(1), "objective": "prospective_growth"}],
+        search_brief={"objective": "prospective_growth"},
+        base_kwargs=_base_kwargs(target=1),
+        recall=lambda **kwargs: {
+            "items": [_item(9, passed=True)],
+            "query": {"candidate_limit": kwargs["candidate_limit"]},
+            "local_qualification": _qualification_contract(1),
+        },
+        target=1,
+    )
+
+    item = result["items"][0]
+    assert item["precision_match"] is False
+    assert item["counts_toward_target"] is False
+    assert "product_scene_evidence_missing" in item["growth_qualification_reasons"]
+    assert "产品使用场景待核验" in item["selection_notes"]
+    assert result["match_status"] == "matched"
+    assert result["diagnostics"]["returned_count"] == 1
+    assert result["diagnostics"]["precise_count"] == 0
 
 
 def test_eight_cells_execute_once_each_with_bounded_fair_budget() -> None:

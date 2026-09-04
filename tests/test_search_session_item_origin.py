@@ -354,6 +354,34 @@ def test_update_session_always_persists_a_fresh_origin_breakdown() -> None:
                         {"item_status": "partial", "item_stage": "summary", "item_count": 2},
                     ]
                 )
+            if flat.startswith("SELECT * FROM vkpi_kol_search_session_items"):
+                return _Rows(
+                    [
+                        {
+                            "id": index,
+                            "session_id": 1129,
+                            "item_type": "recall_candidate",
+                            "status": "ready",
+                            "rank": index,
+                            "kol_pool_id": index,
+                            "source_url": f"https://youtube.com/@local-{index}",
+                            "payload_json": {"platform": "youtube", "handle": f"local-{index}"},
+                        }
+                        for index in range(1, 31)
+                    ]
+                    + [
+                        {
+                            "id": 30 + index,
+                            "session_id": 1129,
+                            "item_type": "new_creator",
+                            "status": "identified",
+                            "rank": 30 + index,
+                            "source_url": f"https://instagram.com/online-{index}",
+                            "payload_json": {"platform": "instagram", "handle": f"online-{index}"},
+                        }
+                        for index in range(1, 8)
+                    ]
+                )
             updates.append((flat, params))
             return _Rows()
 
@@ -372,6 +400,15 @@ def test_update_session_always_persists_a_fresh_origin_breakdown() -> None:
     assert breakdown["counts"][ITEM_ORIGIN_UNLABELED] == 2
     assert breakdown["labels"][ITEM_ORIGIN_ONLINE_NEW] == "本次新发现"
     assert persisted["kind"] == "kol_recall"
+    assert persisted["items_count"] == 37
+    assert persisted["returned_count"] == 37
+    assert persisted["match_status"] == "matched"
+    assert persisted["diagnostics"]["returned_count"] == 37
+    assert persisted["result_projection"]["by_lane"] == {
+        "recall": 30,
+        "discovery": 7,
+        "online": 0,
+    }
     # 同一次写入也落完成度:37 人已出结果 / 2 人还卡在资料补全。
     completion = persisted["completion"]
     assert completion["ready"] == 37

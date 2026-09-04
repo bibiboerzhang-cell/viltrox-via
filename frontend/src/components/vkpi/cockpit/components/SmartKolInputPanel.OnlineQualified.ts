@@ -8,6 +8,7 @@ import {
   type LocalQualifiedSummary,
 } from "./SmartKolInputPanel.LocalQualified";
 import { sessionItems } from "./SmartKolInputPanel.sessionProjection";
+import { isSearchSessionTerminal } from "./SmartKolInputPanel.progress-derivers";
 
 export const ONLINE_QUALIFICATION_SPEC = Object.freeze({
   version: "online_net_new_30_v1",
@@ -212,9 +213,13 @@ export function onlineQualifiedSummaryFromSession(session: VkpiKolSearchHistoryI
   const shortfall = Math.max(target - accepted, contractValid ? count(contract.shortfall) || 0 : target);
   const pending = (contractValid ? count(contract.pending_count) || 0 : 0) + rowPending;
   const rejected = (contractValid ? count(contract.rejected_count) || 0 : 0) + rowRejected;
+  const sessionTerminal = Boolean(session && isSearchSessionTerminal(session));
   return {
     contractValid,
-    terminal: contractValid && contract.terminal === true,
+    // A finished session without a valid strict-online contract is a completed
+    // zero-result lane, not an indefinitely pending lane. Rows remain
+    // unselectable because only a valid terminal contract can authorize them.
+    terminal: contractValid ? contract.terminal === true : sessionTerminal,
     snapshotComplete: contractValid && contract.snapshot_complete === true,
     snapshotRevision: contractValid ? revision || 0 : 0,
     target,

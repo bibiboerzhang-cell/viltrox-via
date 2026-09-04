@@ -11,7 +11,11 @@ from fastapi import HTTPException
 from app.api.routers import vkpi_kol_pool_jobs as router_mod
 from app.api.routers import vkpi_my_kol as my_kol_router
 from app.api.routers import vkpi_projects as projects_router
-from app.domains.kol import url_deep_crawl, url_deep_crawl_queue, video_tracking
+from app.domains.kol import (
+    url_deep_crawl,
+    url_deep_crawl_queue,
+    video_tracking,
+)
 from app.workers import apify_jobs_worker_handlers as worker_handlers
 
 
@@ -69,7 +73,8 @@ def _conn() -> sqlite3.Connection:
             duplicate_of_id INTEGER,
             platform TEXT NOT NULL,
             handle TEXT NOT NULL,
-            profile_url TEXT NOT NULL
+            profile_url TEXT NOT NULL,
+            raw_platform_data TEXT NOT NULL DEFAULT '{}'
         );
         CREATE TABLE vkpi_kol_pool_favorites (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

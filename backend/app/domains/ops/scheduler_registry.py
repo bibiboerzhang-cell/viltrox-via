@@ -1,8 +1,9 @@
-"""Scheduler-task registry (S1) — visibility + enable toggles ONLY.
+"""Scheduler-task registry — visibility and future-run enable controls.
 
-诚实 by design:本模块只读 / 只翻 ``scheduler_tasks.enabled`` 开关,绝不执行任何调度。
-- 没有调度循环、没有 worker 触发、没有 auto-run。``enabled=TRUE`` 仅是一个标记,
-  后端不据此运行任何任务;执行链(调度器接线)留待后续单独接入。
+诚实 by design:本模块本身只读 / 只翻 ``scheduler_tasks.enabled``，不会在当前请求内
+立即执行任务；但已经接入 scheduler 的任务会在后续调度窗口读取这个开关并执行。
+- 开启前必须查看每行的风险、预算和 ``paid_execution`` 提示；关闭也不冒充取消
+  所有既有工作，具体任务仍须在 worker 执行边界重验自己的开关/授权。
 - 写操作只触碰 ``scheduler_tasks``(UPDATE enabled + updated_at),零触
   viltrox_fit_score / rule_v0 / 任何既有表。
 - 表缺失时(迁移 130 未跑)所有读返回空骨架,写抛 LookupError,绝不编造。
@@ -22,6 +23,18 @@ _TABLE = "scheduler_tasks"
 _RISK_LEVELS = ("low", "medium", "high")
 # risk_level 文本无法直接 ORDER BY 出 low<medium<high,用显式权重排序。
 _RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
+_TASK_EXECUTION_METADATA: dict[str, dict[str, Any]] = {
+    "kol_profile_incremental_refresh": {
+        "execution_wired": True,
+        "paid_execution": True,
+        "enable_warning": (
+            "启用后会在每日调度窗口排队最多 5 个维护刷新任务；"
+            "这是纽约自然日的数据库硬上限。5 个维护任务不等于 5 次外部 provider 调用，"
+            "每个任务可能发生多次第三方抓取/API 请求并产生费用。"
+            "本次切换不会立即运行。"
+        ),
+    },
+}
 
 
 def _to_iso(value: Any) -> str | None:
@@ -48,9 +61,11 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
     if not row:
         return {}
     item = dict(row)
+    task_key = str(item.get("task_key") or "")
+    execution = _TASK_EXECUTION_METADATA.get(task_key, {})
     return {
         "id": int(item.get("id") or 0),
-        "task_key": str(item.get("task_key") or ""),
+        "task_key": task_key,
         "label": str(item.get("label") or ""),
         "enabled": bool(item.get("enabled")),
         "max_daily_runs": int(item.get("max_daily_runs") or 0),
@@ -64,6 +79,10 @@ def _row_to_dict(row: Any) -> dict[str, Any]:
         "last_status": str(item.get("last_status") or ""),
         "created_at": _to_iso(item.get("created_at")),
         "updated_at": _to_iso(item.get("updated_at")),
+        "execution_wired": execution.get("execution_wired"),
+        "paid_execution": execution.get("paid_execution"),
+        "enable_warning": str(execution.get("enable_warning") or ""),
+        "toggle_effect": "future_scheduler_runs_only",
     }
 
 
@@ -89,8 +108,8 @@ def list_scheduler_tasks(conn: Any | None = None) -> list[dict[str, Any]]:
 def set_scheduler_task_enabled(task_key: str, enabled: bool, staff: dict[str, Any] | None = None) -> dict[str, Any]:
     """Flip ``enabled`` (and ``updated_at`` / ``owner``) for one task_key. Returns the row.
 
-    Touches ONLY ``scheduler_tasks``. Does NOT run, queue, or trigger anything — the flag
-    is purely advisory until the execution link is wired in a later round.
+    Touches ONLY ``scheduler_tasks`` and never runs a task inside this request.
+    Already-wired tasks may execute in a later scheduler window when enabled.
     """
     key = str(task_key or "").strip()
     if not key:
@@ -113,7 +132,8 @@ def set_scheduler_task_enabled(task_key: str, enabled: bool, staff: dict[str, An
     )
     conn.commit()
     logger.info(
-        "scheduler_registry: task %s enabled=%s by %s (flag only — no execution)",
+        "scheduler_registry: task %s enabled=%s by %s "
+        "(toggle persisted; no immediate execution; future schedule may run)",
         key, bool(enabled), owner or "?",
     )
     row = conn.execute(f"SELECT * FROM {_TABLE} WHERE task_key=?", (key,)).fetchone()

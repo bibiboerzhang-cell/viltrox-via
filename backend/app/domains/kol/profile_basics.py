@@ -81,6 +81,9 @@ def write_kol_profile_basics(
     commit_write: bool = True,
     avatar_landing_budget: Any | None = None,
     allow_brand_official: bool = False,
+    suppress_contact_acquisition: bool = False,
+    suppress_avatar_landing: bool = False,
+    suppress_reach_floor_regate: bool = False,
 ) -> dict[str, Any]:
     """Insert/update profile basics without touching V6 Fit fields.
 
@@ -219,6 +222,9 @@ def write_kol_profile_basics(
             normalized=normalized,
             existing=row,
             avatar_landing_budget=avatar_landing_budget,
+            suppress_contact_acquisition=suppress_contact_acquisition,
+            suppress_avatar_landing=suppress_avatar_landing,
+            suppress_reach_floor_regate=suppress_reach_floor_regate,
         )
         return {
             "ok": True,
@@ -253,6 +259,9 @@ def _finalize_profile_write(
     normalized: dict[str, Any],
     existing: dict[str, Any] | None,
     avatar_landing_budget: Any | None,
+    suppress_contact_acquisition: bool,
+    suppress_avatar_landing: bool,
+    suppress_reach_floor_regate: bool = False,
 ) -> dict[str, Any]:
     """Commit one safe profile write, then run bounded best-effort projections."""
     _record_creator_identity_alias(
@@ -263,7 +272,12 @@ def _finalize_profile_write(
     )
     if commit_write:
         _commit(db)
-    if commit_write and "followers" in planned_values and target_id:
+    if (
+        commit_write
+        and "followers" in planned_values
+        and target_id
+        and not suppress_reach_floor_regate
+    ):
         try:
             from app.domains.kol.reach_floor_regate import reapply_reach_floor
 
@@ -272,7 +286,7 @@ def _finalize_profile_write(
             logger.warning("reach floor regate skipped kol=%s", target_id, exc_info=True)
 
     avatar_landing: dict[str, Any] = {}
-    if target_id and "avatar_url" in planned_values:
+    if target_id and "avatar_url" in planned_values and not suppress_avatar_landing:
         avatar_landing = _land_profile_avatar(
             db,
             int(target_id),
@@ -282,7 +296,7 @@ def _finalize_profile_write(
             budget=avatar_landing_budget,
             commit=commit_write,
         )
-    if target_id:
+    if target_id and not suppress_contact_acquisition:
         try:
             from app.domains.kol.contact_acquisition_queue import enqueue_contact_acquisition
 

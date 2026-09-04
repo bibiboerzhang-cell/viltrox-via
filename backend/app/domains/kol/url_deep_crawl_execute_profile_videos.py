@@ -43,6 +43,31 @@ if TYPE_CHECKING:
     from app.domains.kol.url_deep_crawl import ClassifiedUrl
 
 
+def _lock_maintenance_target_for_write(
+    conn: Any,
+    body: dict[str, Any],
+    kol_pool_id: int | None,
+) -> None:
+    """Hold the maintenance row lock through the next evidence commit."""
+
+    if body.get("maintenance_refresh") is not True:
+        return
+    from app.domains.kol import url_deep_crawl_queue
+    from app.domains.kol.video_tracking import VideoTrackingError
+
+    try:
+        current = url_deep_crawl_queue._revalidate_maintenance_target_fence(  # noqa: SLF001
+            body,
+            conn=conn,
+            lock_target=True,
+        )
+        if int((current or {}).get("kol_pool_id") or 0) != int(kol_pool_id or 0):
+            raise VideoTrackingError("maintenance_refresh_target_drifted", 409)
+    except VideoTrackingError as exc:
+        exc.provider_calls_performed = True
+        raise
+
+
 def _representative_ai_analysis(items: list[dict[str, Any]]) -> dict[str, Any]:
     analyses = [
         (item.get("enqueue_result") or {}).get("ai_analysis")
@@ -163,6 +188,7 @@ def _execute_profile_representative_video_analysis(
     errors = 0
     changed_ids: list[int] = []
     for metadata in videos:
+        _lock_maintenance_target_for_write(conn, body, kol_pool_id)
         evidence_result: dict[str, Any] = {}
         enqueue_result: dict[str, Any] = {}
         item_status = "failed"
@@ -174,6 +200,7 @@ def _execute_profile_representative_video_analysis(
                 metadata,
                 dry_run=False,
                 conn=conn,
+                suppress_tracking_enroll=body.get("maintenance_refresh") is True,
             )
             changed_ids.extend(_fit_changed_ids(evidence_result))
             if not evidence_result.get("ok"):
@@ -312,6 +339,7 @@ def _execute_profile_history_video_evidence(
     errors = 0
     changed_ids: list[int] = []
     for metadata in videos:
+        _lock_maintenance_target_for_write(conn, body, kol_pool_id)
         evidence_result: dict[str, Any] = {}
         item_status = "failed"
         error = ""
@@ -323,6 +351,7 @@ def _execute_profile_history_video_evidence(
                 dry_run=False,
                 conn=conn,
                 method="url_profile_history_video_evidence_v1",
+                suppress_tracking_enroll=body.get("maintenance_refresh") is True,
             )
             changed_ids.extend(_fit_changed_ids(evidence_result))
             if not evidence_result.get("ok"):

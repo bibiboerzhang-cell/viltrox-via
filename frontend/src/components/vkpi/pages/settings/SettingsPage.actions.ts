@@ -175,6 +175,11 @@ export function createSettingsActions(deps: SettingsActionsDeps) {
 
   const toggleSchedulerTask = async (taskKey: string, enabled: boolean) => {
     if (!apiToken || !taskKey) return;
+    const task = schedulerTasks.find((row) => String(row.task_key || '') === taskKey);
+    if (enabled && task?.paid_execution === true) {
+      const warning = String(task.enable_warning || '启用后可能产生第三方服务成本。');
+      if (!window.confirm(`${warning}\n\n确认启用 ${taskKey}？`)) return;
+    }
     setSettingsError('');
     setBusy(true);
     try {
@@ -182,7 +187,11 @@ export function createSettingsActions(deps: SettingsActionsDeps) {
       const refreshed = await listSchedulerTasks(apiToken).catch(() => ({ tasks: schedulerTasks, status: schedulerStatus }));
       setSchedulerTasks((refreshed.tasks as Array<Record<string, unknown>>) || []);
       setSchedulerStatus((refreshed.status as Record<string, unknown>) || (response.status as Record<string, unknown>) || {});
-      setMessage(`定时任务 ${taskKey} 已${enabled ? '开启' : '关闭'}(仅标记，本期不自动执行）。`);
+      setMessage(
+        enabled
+          ? `定时任务 ${taskKey} 已开启；本次不会立即运行，已接线任务将在后续调度窗口执行。`
+          : `定时任务 ${taskKey} 已关闭；后续调度不会再创建新一轮任务。`,
+      );
     } catch (error) {
       setSettingsError(error instanceof Error ? error.message : '定时任务开关更新失败');
     } finally {

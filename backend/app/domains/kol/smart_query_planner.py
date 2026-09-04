@@ -16,6 +16,9 @@ from app.domains.kol import smart_query_facets
 from app.domains.kol import smart_query_intent
 from app.domains.kol import smart_query_planner_prompt
 from app.domains.kol import targeted_search_contract
+from app.domains.kol.smart_query_planner_diagnostics import (
+    planner_response_diagnostics as _planner_response_diagnostics,
+)
 
 from app.core.logging import get_logger
 
@@ -24,6 +27,12 @@ logger = get_logger(__name__)
 
 SUPPORTED_PLATFORMS = ("youtube", "instagram", "tiktok")
 PLAN_DERIVE_METHOD = "smart_query_plan_v3_targeted_growth"
+PLANNER_REQUIRED_KEYS = (
+    "search_query",
+    "product_focus",
+    "target_persona",
+    "platforms",
+)
 
 # 第一轮产品深度分析的首选 provider。可被 body.llm_provider 覆盖。
 # 注:本环境实测 api.anthropic.com 直连被对端关闭、api.openai.com 直连 SSL 握手失败,
@@ -82,6 +91,35 @@ def _extract_json(text: str) -> dict[str, Any]:
         return {}
 
 
+def _validate_planner_json_contract(value: Any) -> tuple[bool, str]:
+    if not isinstance(value, dict):
+        return False, "planner output must be a JSON object"
+    if not _text(value.get("search_query")):
+        return False, "search_query must be a non-empty string"
+    focus = value.get("product_focus")
+    if not isinstance(focus, list) or not any(_text(item) for item in focus):
+        return False, "product_focus must be a non-empty string array"
+    if not _text(value.get("target_persona")):
+        return False, "target_persona must be a non-empty string"
+    platforms = value.get("platforms")
+    if not isinstance(platforms, list) or not any(
+        _text(item).lower() in SUPPORTED_PLATFORMS for item in platforms
+    ):
+        return False, "platforms must include a supported platform"
+    return True, ""
+
+
+def _planner_not_attempted_diagnostics() -> dict[str, Any]:
+    return {
+        "provider_calls_performed": False,
+        "provider_response_succeeded": False,
+        "provider_attempts": 0,
+        "provider_response_status": "not_attempted",
+        "planner_parse_status": "not_attempted",
+        "planner_parse_failed": False,
+    }
+
+
 def _fallback_platforms(lowered: str) -> list[str]:
     platforms: list[str] = []
     for platform in SUPPORTED_PLATFORMS:
@@ -94,6 +132,22 @@ def _fallback_platforms(lowered: str) -> list[str]:
 
 def _fallback_keywords(lowered: str) -> list[str]:
     keywords: list[str] = []
+    film_photo_intent = any(
+        term in lowered
+        for term in (
+            "35mm film", "film photography", "film photographer",
+            "analog photography", "analog photographer",
+            "analogue photography", "analogue photographer", "胶片", "底片",
+        )
+    )
+    non_lens_mm_context = bool(re.search(
+        r"(?:\d{1,3}\s*mm\s*(?:film\b|胶片|底片|(?:full[- ]?frame\s+)?equivalent\b|全画幅\s*等效|等效)"
+        r"|(?:equivalent(?:\s+to)?|等效(?:于)?)\s*\d{1,3}\s*mm)",
+        lowered,
+        flags=re.IGNORECASE,
+    ))
+    if film_photo_intent:
+        keywords.extend(["film photographer", "analog photography"])
     is_lighting = any(term in lowered for term in ("flash", "strobe", "lighting", "light", "闪光", "灯", "补光"))
     if is_lighting:
         keywords.extend(["lighting", "flash", "strobe", "studio lighting"])
@@ -112,7 +166,9 @@ def _fallback_keywords(lowered: str) -> list[str]:
             "camera monitor", "field monitor", "videographer", "filmmaker", "cinematographer",
             "content creator", "automotive videographer", "food videographer", "wedding filmmaker", "commercial video",
         ])
-    if any(term in lowered for term in ("镜头", "lens", "lab", "mm")):
+    if any(term in lowered for term in ("镜头", "lens", "lab")) or (
+        "mm" in lowered and not non_lens_mm_context
+    ):
         keywords.extend(["lens review", "videographer", "photographer", "camera gear"])
     if any(term in lowered for term in ("电影感", "cinematic", "cinematography")):
         keywords.extend(["cinematic", "cinematography"])
@@ -197,7 +253,7 @@ def _fallback_plan(
         "provider": plan_label,
         "model": plan_label,
         "fallback_used": not provider_free_designed,
-        "provider_calls_performed": False,
+        **_planner_not_attempted_diagnostics(),
     }
     # 车道「模型提议筛选」:规则路径也要给出五项筛选提议(全部标成推断项),
     # 否则操作员在降级时又回到「自己勾一堆最后 0 个人」。零成本、纯字符串规则。
@@ -241,7 +297,7 @@ def _clarification_plan(
         "provider": "product_catalog_guard",
         "model": "product_catalog_guard",
         "fallback_used": False,
-        "provider_calls_performed": False,
+        **_planner_not_attempted_diagnostics(),
         "clarification": clarification,
     }
     return targeted_search_contract.apply_targeted_contract(
@@ -368,6 +424,7 @@ def _normalise_plan(
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     fallback = _fallback_plan(query, body=body, product=product)
+    response_diagnostics = _planner_response_diagnostics(response, raw_plan)
     # LLM 没给可用 search_query 时:已解析到产品 → 用产品派生英文检索词;否则回退 rule。
     product_terms = _product_search_terms(product)
     llm_search_query = _text(raw_plan.get("search_query") or raw_plan.get("query"))
@@ -438,11 +495,18 @@ def _normalise_plan(
         "reviewer_quota": _as_int(raw_plan.get("reviewer_quota"), 15, min_value=0, max_value=50),
         "include_new_discovery": bool(raw_plan.get("include_new_discovery", True)),
         "new_discovery_limit": _as_int(raw_plan.get("new_discovery_limit"), 15, min_value=1, max_value=50),
-        "reason": _text(raw_plan.get("reason") or fallback["reason"]),
+        "reason": _text(
+            raw_plan.get("reason")
+            or (
+                "planner_parse_failed"
+                if response_diagnostics["planner_parse_failed"]
+                else fallback["reason"]
+            )
+        ),
         "provider": _text(response.get("provider") or fallback["provider"]),
         "model": _text(response.get("model") or fallback["model"]),
         "fallback_used": bool(response.get("fallback_used")) or not bool(raw_plan),
-        "provider_calls_performed": _text(response.get("status")) == "success",
+        **response_diagnostics,
         # 解析到的真实产品(纯展示/审计;无匹配为 None)。绝不参与任何评分。
         "resolved_product": (
             {
@@ -546,7 +610,7 @@ def _plan_from_product_persona(
         "provider": "product_persona_kb",
         "model": _text(persona.get("model")) or "product_persona_kb",
         "fallback_used": False,
-        "provider_calls_performed": False,
+        **_planner_not_attempted_diagnostics(),
         "persona_source": _text(persona.get("source")) or "llm_persona_v1",
         "resolved_product": {
             "sku": product.get("sku"),
@@ -675,7 +739,7 @@ def _plan_text_query_impl(
         resolved_product=resolved_product,
         body=body,
     )
-    response = llm_gateway.invoke(
+    response = llm_gateway.invoke_json(
         prompt,
         purpose="kol_smart_search_query_plan",
         # 4096 tokens:Gemini 思考模型的「思考 token」与 JSON 输出共享 max_output_tokens 预算,
@@ -690,8 +754,62 @@ def _plan_text_query_impl(
             "resolved_product_sku": (resolved_product or {}).get("sku") or "",
         },
         staff=staff,
+        required_keys=PLANNER_REQUIRED_KEYS,
+        validator=_validate_planner_json_contract,
     )
-    parsed = _extract_json(_text(response.get("text")))
+    if not isinstance(response, dict):
+        response = {
+            "status": "invalid_response",
+            "provider": "rule_v0",
+            "model": "rule_v0",
+            "fallback_used": True,
+            "errors": [
+                {
+                    "status": "validation_failure",
+                    "error": "planner gateway returned a non-object response",
+                }
+            ],
+        }
+    else:
+        response = dict(response)
+    structured = response.get("json")
+    # Compatibility for existing gateway/provider mocks that still return the
+    # historical ``text`` envelope.  Production uses invoke_json's validated
+    # ``json`` value; the fallback decoder is never used to repair invalid JSON.
+    parsed = structured if isinstance(structured, dict) else _extract_json(
+        _text(response.get("text"))
+    )
+    contract_valid, contract_error = _validate_planner_json_contract(parsed)
+    if not contract_valid:
+        parsed = {}
+        response_errors = response.get("errors")
+        errors = list(response_errors) if isinstance(response_errors, list) else []
+        if _text(response.get("status")).lower() == "success" and not any(
+            isinstance(item, dict)
+            and _text(item.get("status")).lower()
+            in {"parse_failure", "validation_failure", "empty_response"}
+            for item in errors
+        ):
+            errors.append(
+                {
+                    "provider": _text(response.get("provider")),
+                    "model": _text(response.get("model")),
+                    "status": "validation_failure",
+                    "error": contract_error,
+                }
+            )
+            response["errors"] = errors
+    diagnostics = _planner_response_diagnostics(response, parsed)
+    if diagnostics["planner_parse_failed"]:
+        logger.warning(
+            "vkpi.kol.smart_query_planner.parse_failed",
+            extra={
+                "provider": _text(response.get("provider")) or "unknown",
+                "model": _text(response.get("model")) or "unknown",
+                "provider_attempts": diagnostics["provider_attempts"],
+                "provider_response_status": diagnostics["provider_response_status"],
+            },
+        )
     return _normalise_plan(query_text, parsed, response, resolved_product, body)
 
 
@@ -748,7 +866,38 @@ def plan_text_query(
                         body=body,
                         product=_plan.get("resolved_product"),
                     )
+                    _origin_diagnostic_keys = (
+                        "provider_calls_performed",
+                        "provider_response_succeeded",
+                        "provider_attempts",
+                        "provider_response_status",
+                        "planner_parse_status",
+                        "planner_parse_failed",
+                        "gateway_cache_hit",
+                        "gateway_cache_key",
+                        "gateway_cache_origin_call_uid",
+                    )
+                    _plan["plan_cache_origin_diagnostics"] = {
+                        key: _plan.get(key)
+                        for key in _origin_diagnostic_keys
+                        if key in _plan
+                    }
                     _plan["plan_cache"] = "hit"
+                    # Older cache rows predate the split provider/JSON
+                    # diagnostics. A cached usable plan proves a valid business
+                    # plan existed, but does not prove a provider ran in this
+                    # request. These are current-request facts, so overwrite
+                    # historical values instead of leaking a prior true through
+                    # setdefault; origin facts remain available above.
+                    _plan["provider_calls_performed"] = False
+                    _plan["provider_response_succeeded"] = False
+                    _plan["provider_attempts"] = 0
+                    _plan["provider_response_status"] = "plan_cache_hit"
+                    _plan["planner_parse_status"] = "cached_valid"
+                    _plan["planner_parse_failed"] = False
+                    _plan["gateway_cache_hit"] = False
+                    _plan["gateway_cache_key"] = ""
+                    _plan["gateway_cache_origin_call_uid"] = ""
                     # 本车道之前落盘的计划没有 filter_proposal。不 bump derive_method 去
                     # 强制重算(那等于把 7 天缓存全作废、白烧一轮钱);缺了就地按规则补一份
                     # (纯字符串、零调用),并如实标成规则推荐,不冒充模型推断。

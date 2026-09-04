@@ -145,9 +145,9 @@ def notifications_list(limit: int = Query(default=200, ge=1, le=500), staff=Depe
 
 
 # ---------------------------------------------------------------------------
-# Scheduler-task registry (S1) — visibility + enable toggles ONLY.
-# 红线:本期仅注册 + 可见 + 翻 enabled 开关;不执行、不 auto-run 任何任务。
-# 执行链(调度器接线)留待后续单独接入。
+# Scheduler-task registry — visibility + future-run enable controls.
+# PATCH 本身不立即执行任务；已接线任务会在后续调度窗口读取该开关。
+# 每行 paid_execution / enable_warning 用于显式提示可能的外部成本。
 # ---------------------------------------------------------------------------
 @router.get("/settings/scheduler-tasks")
 def scheduler_tasks(staff=Depends(require_tab("vkpi", "read"))):

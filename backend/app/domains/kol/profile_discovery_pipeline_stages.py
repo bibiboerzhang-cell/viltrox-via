@@ -549,7 +549,7 @@ def finalize_pipeline(
         active_tasks=max(0, selected_count - profile_completed),
         requested_tasks_terminal=False,
     )
-    deps.search_sessions.update_session_result_summary(
+    final_session = deps.search_sessions.update_session_result_summary(
         int(session_id),
         status=final_status,
         summary_patch={
@@ -610,10 +610,11 @@ def finalize_pipeline(
             "returned_count": len(recall.result.get("items") or []),
             "diagnostics": recall.result.get("diagnostics"),
             "local_qualification": recall.result.get("local_qualification"),
-            "search_session": recall.session,
+            "search_session": final_session or recall.session,
         },
         "new_discovery": new_discovery,
         "advance": advance_result,
+        "search_session": final_session or recall.session,
         "provider_calls_performed": True,
         "write_db": True,
         "writes": [

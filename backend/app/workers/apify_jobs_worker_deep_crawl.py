@@ -43,11 +43,19 @@ def terminalize_write_fence_error(
     json_dump: Callable[[Any], str],
     logger: Any,
 ) -> bool:
-    if not (
+    has_durable_target_fence = (
         isinstance(payload.get("target_write_fence"), dict)
-        and exc.code in terminal_codes
-    ):
+        or isinstance(payload.get("maintenance_target_fence"), dict)
+        or payload.get("maintenance_refresh") is True
+    )
+    if not (has_durable_target_fence and exc.code in terminal_codes):
         return False
+    provider_calls_performed = getattr(exc, "provider_calls_performed", None)
+    payload["provider_calls_performed"] = (
+        provider_calls_performed
+        if isinstance(provider_calls_performed, bool)
+        else None
+    )
     with conn.transaction():
         with conn.cursor() as cur:
             cur.execute(

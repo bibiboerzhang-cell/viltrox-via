@@ -13,6 +13,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.domains.kol import profile_recall_backfill_ladder as _ladder
+from app.domains.kol import search_relaxation as _relax
 from app.domains.kol.profile_recall_orchestration_contract import RecallRequest
 
 Hydrate = Callable[[RecallRequest, dict[str, Any], Any], dict[str, Any]]
@@ -58,6 +59,13 @@ def match_evidence_for(
     context: dict[str, Any],
     deps: Any,
 ) -> list[dict[str, Any]]:
+    """产品腿一个字不动;意图腿要几个证据由本次口径决定(松绑 1 / 严口径 2)。
+
+    AND-2 的前提是候选行有 8 个可举证字段,而本地池里 content_style 填充率 0%、
+    profile_text 与 type_reason 两列在表里根本不存在——八个里三个恒空。在线腿
+    2026-08-25 已因同一理由降到 1,本地腿在松绑口径下同口径。
+    """
+
     return deps.build_query_cell_match_evidence(
         entry.row,
         entry.evidence,
@@ -65,6 +73,7 @@ def match_evidence_for(
         query_cell=request.targeted_query_cell,
         required_product_terms=context["safe_product_evidence_terms"],
         fallback_query_text=context["evidence_query_text"],
+        min_intent_terms=_relax.min_intent_terms(request.local_qualification_policy),
     )
 
 
@@ -200,6 +209,22 @@ def _annotate_contract_backfill(
     ]
 
 
+def _qualified_returned(contract: Any, *, fallback: int) -> int:
+    """精准命中的诚实口径:资质门真判 ``passed`` 的那些人。
+
+    非回填区里还坐着「活跃度未知、占位但不计入目标」的人(``deferred``)。他们有自己的
+    卡面标注,但把他们并进「精准命中 N 人」就是把命中数说虚了——门面只认资质合同里的
+    ``qualified_returned_count``。
+    """
+
+    if isinstance(contract, dict) and contract.get("qualified_returned_count") is not None:
+        try:
+            return max(0, int(contract["qualified_returned_count"]))
+        except (TypeError, ValueError):
+            return int(fallback)
+    return int(fallback)
+
+
 def apply_backfill_ladder(
     request: RecallRequest,
     context: dict[str, Any],
@@ -225,6 +250,9 @@ def apply_backfill_ladder(
             request, context, retrieval, deps, hydrate=hydrate, project=project,
         ),
         soft_reasons=_ladder.soft_reasons_for_policy(request.local_qualification_policy),
+        evidence_reasons=_ladder.evidence_reasons_for_policy(
+            request.local_qualification_policy
+        ),
     )
     precise = list(selection["items"])
     # 回填区单独成列(``backfill_items``),``items`` 仍只装精准命中:既有「闸在限额之前、
@@ -235,12 +263,18 @@ def apply_backfill_ladder(
     contract = selection.get("local_qualification")
     if isinstance(contract, dict):
         _annotate_contract_backfill(contract, precise, outcome, gaps)
+    qualified_returned = _qualified_returned(contract, fallback=len(precise))
     selection["result_explanation"] = _ladder.explain_result(
         requested=request.safe_limit,
-        precise_count=len(precise),
+        precise_count=qualified_returned,
+        deferred_count=max(0, len(precise) - qualified_returned),
         backfill_by_tier=outcome.diagnostics.get("filled_by_tier"),
         gaps=gaps,
         favorite_excluded=int(retrieval["favorite_exclusion"].get("excluded_count") or 0),
+        # 逐条数返回里带「已被同事关注」标记的人:天然按身份去重,不会虚高。
+        favorite_annotated=sum(
+            1 for item in [*precise, *outcome.items] if _relax.is_team_favorite(item)
+        ),
     )
 
 

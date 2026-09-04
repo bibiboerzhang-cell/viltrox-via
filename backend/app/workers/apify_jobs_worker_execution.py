@@ -5,9 +5,23 @@ and unit tests continue to control the exact same provider and DB boundaries.
 """
 from __future__ import annotations
 
+import json
 from typing import Any, Mapping
 
 import psycopg
+
+
+def _provider_calls_performed_truth(raw_value: Any) -> bool | None:
+    value: Any = raw_value
+    if isinstance(raw_value, (str, bytes, bytearray)):
+        try:
+            value = json.loads(raw_value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    if not isinstance(value, Mapping):
+        return None
+    truth = value.get("provider_calls_performed")
+    return truth if isinstance(truth, bool) else None
 
 
 def execute_claimed_job_impl(
@@ -49,7 +63,7 @@ def execute_claimed_job_impl(
                     namespace["_process_claimed_job"](conn, job)
             with conn.cursor(row_factory=namespace["dict_row"]) as cur:
                 cur.execute(
-                    "SELECT status, last_error FROM apify_jobs WHERE id=%s",
+                    "SELECT status, last_error, payload FROM apify_jobs WHERE id=%s",
                     (job_id,),
                 )
                 status_row = cur.fetchone() or {}
@@ -61,10 +75,33 @@ def execute_claimed_job_impl(
                     raw_status=status,
                     reason=str(status_row.get("last_error") or ""),
                 )
+            if status == "done":
+                provider_claim_state = "completed"
+            elif status == "blocked":
+                provider_truths = {
+                    truth
+                    for raw_value in (
+                        status_row.get("payload"),
+                        status_row.get("last_error"),
+                    )
+                    if isinstance(
+                        (truth := _provider_calls_performed_truth(raw_value)),
+                        bool,
+                    )
+                }
+                # A true signal wins over a conflicting/stale false signal.
+                provider_claim_state = (
+                    "blocked" if provider_truths == {False} else "failed"
+                )
+            else:
+                # A generic blocked status does not prove that external I/O
+                # was avoided.  Post-provider fences and legacy rows remain
+                # provider failures unless the persisted payload says false.
+                provider_claim_state = "failed"
             namespace["finalize_provider_execution_claim"](
                 provider_task_id,
                 fence,
-                "completed" if status == "done" else "failed",
+                provider_claim_state,
             )
             return status
         except namespace["ApifyBudgetBlocked"]:

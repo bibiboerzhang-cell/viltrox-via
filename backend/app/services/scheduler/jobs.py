@@ -10,6 +10,7 @@ services/scheduler/jobs.py — APScheduler 定时任务定义
   - rate_limit_cleanup              每 1 小时清理 rate limit 旧 bucket
   - provider_health_check           每 5 分钟检查 AI/平台 provider key 健康
   - bh_daily_snapshot               每天凌晨 03:00 抓 B&H 快照
+  - kol_profile_incremental_refresh 每天 03:20 纽约，硬限 5 个维护任务（不等于 5 次 provider 调用）
 
 启停:
   await start_scheduler()  # 在 lifespan startup
@@ -188,6 +189,7 @@ from .jobs_tasks import (  # noqa: E402,F401
     job_fulfillment_due_scan,
     job_fulfillment_retrospective_enqueue,
     job_kol_auto_poll,
+    job_kol_profile_incremental_refresh,
     job_llm_batch_poll,
     job_logistics_track_sync,
     job_market_mention_sentiment,

@@ -280,6 +280,13 @@ def _process_kol_profile_deep_crawl(conn: psycopg.Connection[Any], job: dict[str
             return
         raise
     ok, status = deep_crawl_worker.crawl_outcome(result)
+    provider_calls_performed = (result or {}).get("provider_calls_performed")
+    if (
+        isinstance(result, dict)
+        and "provider_calls_performed" in result
+        and (isinstance(provider_calls_performed, bool) or provider_calls_performed is None)
+    ):
+        payload["provider_calls_performed"] = provider_calls_performed
     # search_session_id 回写 payload:queue_view 据此输出 search_session,
     # 泳道「最近完成」才会保留该任务并支持点开会话详情(一闪而过案)。
     session_id = _int_or_none((result or {}).get("search_session_id"))

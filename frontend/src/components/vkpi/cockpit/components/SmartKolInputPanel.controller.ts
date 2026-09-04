@@ -172,7 +172,11 @@ export function useSmartKolInputPanelController({
   const [recallFingerprint, setRecallFingerprint] = useState("");
   const recallIsStale = Boolean(recallResult && recallFingerprint !== currentSearchFingerprint);
   const displayedSessionTerminal = Boolean(activeSearchSession && isSearchSessionTerminal(activeSearchSession));
-  const approvalReady = Boolean(displayedSearchSessionId && displayedSessionTerminal && !pollingSearchSessionId && recallResult && !recallIsStale && state === "ready");
+  // The poll keeps a short grace window after a terminal snapshot so it can
+  // observe trailing evidence. That transport detail must not make a finished
+  // session look like it is still searching or delay terminal-only actions.
+  const displayedSessionPolling = Boolean(pollingSearchSessionId && !displayedSessionTerminal);
+  const approvalReady = Boolean(displayedSearchSessionId && displayedSessionTerminal && !displayedSessionPolling && recallResult && !recallIsStale && state === "ready");
   const {
     pickedIds, setPickedIds, clearPickedIds, addingFav, favNote,
     favoriteIds, favoriteBusyIds, favoriteResults, favoriteErrors, favoritesSyncing, favoritesLoadError,
@@ -720,7 +724,11 @@ export function useSmartKolInputPanelController({
         ? response.search_session as VkpiKolSearchHistoryItem
         : null;
       const sessionId = sessionIdFrom(response.search_session) || sessionIdFrom(response.advance_job) || sessionIdFrom(queuedSession);
-      if (queuedSession && sessionItems(queuedSession).length) applyPolledSession(queuedSession);
+      // An enqueue response can carry the authoritative session header before
+      // its first item batch. Apply it immediately; mergeKolRecallSnapshots
+      // preserves the visible local preview until the worker attaches a complete
+      // recall snapshot.
+      if (queuedSession) applyPolledSession(queuedSession);
       if (sessionId) {
         setDisplayedSearchSessionId(sessionId);
         setPollingSearchSessionId(sessionId);
@@ -786,7 +794,7 @@ export function useSmartKolInputPanelController({
     pickedIds, setPickedIds, favNote, favoriteIds, favoriteBusyIds, favoriteResults,
     favoriteErrors, favoritesSyncing, favoritesLoadError, draftNote, outreachNote,
     outreachResult, addingFav, draftBusy, outreachBusy, displayedSearchSessionId,
-    isSessionPolling: Boolean(pollingSearchSessionId),
+    isSessionPolling: displayedSessionPolling,
     isSessionPollPaused: Boolean(pollPausedSessionId && pollPausedSessionId === displayedSearchSessionId),
     recallIsStale, approvalReady, favoriteOne, addPickedToMyKol, approveAndCreateDraft,
     generateOutreachForPicked, discoveryKey, onOpenRecallItem, sessionBanner,
