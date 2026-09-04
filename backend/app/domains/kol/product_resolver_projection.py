@@ -4,6 +4,23 @@ from __future__ import annotations
 from typing import Any
 
 
+def focal_suggestions(rows: Any, *, limit: int = 6) -> list[dict[str, Any]]:
+    return [
+        {
+            "sku": row.get("sku"),
+            "name": row.get("marketing_name") or row.get("model_name"),
+            "mount": row.get("mount"),
+            "series": row.get("series"),
+        }
+        for row in list(rows or [])[: max(1, int(limit))]
+    ]
+
+
+def format_aperture(aperture: tuple[str, float]) -> str:
+    kind, value = aperture
+    return f"{kind.upper()}{value:g}"
+
+
 def specs_line(product: dict[str, Any]) -> str:
     """Build the compact English catalog summary used by planner prompts."""
 

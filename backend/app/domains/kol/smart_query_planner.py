@@ -6,8 +6,6 @@ if providers are unavailable.
 """
 from __future__ import annotations
 
-import json
-import re
 from typing import Any
 
 from app.platform import llm_gateway
@@ -17,7 +15,17 @@ from app.domains.kol import smart_query_intent
 from app.domains.kol import smart_query_planner_prompt
 from app.domains.kol import targeted_search_contract
 from app.domains.kol.smart_query_planner_diagnostics import (
+    extract_json,
+    planner_not_attempted_diagnostics as _planner_not_attempted_diagnostics,
     planner_response_diagnostics as _planner_response_diagnostics,
+)
+from app.domains.kol.smart_query_planner_rules import (
+    as_float_or_none as _as_float_or_none,
+    as_list as _as_list,
+    avoid_types_for_product as _avoid_types_for_product,
+    fallback_keywords as _fallback_keywords,
+    fallback_platforms,
+    product_search_terms as _product_search_terms,
 )
 
 from app.core.logging import get_logger
@@ -53,42 +61,8 @@ def _as_int(value: Any, default: int, *, min_value: int = 0, max_value: int = 50
     return max(min_value, min(max_value, parsed))
 
 
-def _as_float_or_none(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _as_list(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [_text(item).lower() for item in value if _text(item)]
-    if isinstance(value, str):
-        return [_text(part).lower() for part in re.split(r"[,/，、\s]+", value) if _text(part)]
-    return []
-
-
 def _extract_json(text: str) -> dict[str, Any]:
-    raw = _text(text)
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-        pass
-    match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-    if not match:
-        return {}
-    try:
-        parsed = json.loads(match.group(0))
-        return parsed if isinstance(parsed, dict) else {}
-    except Exception:
-        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
-        return {}
+    return extract_json(text, logger=logger)
 
 
 def _validate_planner_json_contract(value: Any) -> tuple[bool, str]:
@@ -109,93 +83,8 @@ def _validate_planner_json_contract(value: Any) -> tuple[bool, str]:
     return True, ""
 
 
-def _planner_not_attempted_diagnostics() -> dict[str, Any]:
-    return {
-        "provider_calls_performed": False,
-        "provider_response_succeeded": False,
-        "provider_attempts": 0,
-        "provider_response_status": "not_attempted",
-        "planner_parse_status": "not_attempted",
-        "planner_parse_failed": False,
-    }
-
-
 def _fallback_platforms(lowered: str) -> list[str]:
-    platforms: list[str] = []
-    for platform in SUPPORTED_PLATFORMS:
-        if platform in lowered or (platform == "youtube" and "yt" in lowered):
-            platforms.append(platform)
-    if not platforms:
-        platforms = ["youtube", "instagram", "tiktok"]
-    return platforms
-
-
-def _fallback_keywords(lowered: str) -> list[str]:
-    keywords: list[str] = []
-    film_photo_intent = any(
-        term in lowered
-        for term in (
-            "35mm film", "film photography", "film photographer",
-            "analog photography", "analog photographer",
-            "analogue photography", "analogue photographer", "胶片", "底片",
-        )
-    )
-    non_lens_mm_context = bool(re.search(
-        r"(?:\d{1,3}\s*mm\s*(?:film\b|胶片|底片|(?:full[- ]?frame\s+)?equivalent\b|全画幅\s*等效|等效)"
-        r"|(?:equivalent(?:\s+to)?|等效(?:于)?)\s*\d{1,3}\s*mm)",
-        lowered,
-        flags=re.IGNORECASE,
-    ))
-    if film_photo_intent:
-        keywords.extend(["film photographer", "analog photography"])
-    is_lighting = any(term in lowered for term in ("flash", "strobe", "lighting", "light", "闪光", "灯", "补光"))
-    if is_lighting:
-        keywords.extend(["lighting", "flash", "strobe", "studio lighting"])
-    # 2026-08-25 车道A/A4:此前裸 "evo" 也命中 300W 便携灯分支——「55evo」是 55mm F1.8 EVO
-    # 镜头,却被翻成 "300W EVO portable lighting"(实测坐实),把用户的话理解成了另一个品类。
-    # 瓦数词必须由灯光语境或真实瓦数触发;EVO 只是系列族名,交给产品锚去承载。
-    if any(term in lowered for term in ("300w", "300 w")) or (is_lighting and "300" in lowered):
-        keywords.extend(["300W", "portable lighting"])
-    if any(term in lowered for term in ("人像", "portrait")):
-        keywords.extend(["portrait", "portrait photographer"])
-    if any(term in lowered for term in ("测评", "评测", "review", "gear")):
-        keywords.extend(["gear reviewer", "camera gear review"])
-    if any(term in lowered for term in ("monitor", "监视器", "550pro", "550 pro", "550por", "外接屏", "screen", "屏")):
-        # 泛人群:监视器买家=各行业视频拍摄者,不止「监视器评测」。撒宽到创作者类型+代表垂类。
-        keywords.extend([
-            "camera monitor", "field monitor", "videographer", "filmmaker", "cinematographer",
-            "content creator", "automotive videographer", "food videographer", "wedding filmmaker", "commercial video",
-        ])
-    if any(term in lowered for term in ("镜头", "lens", "lab")) or (
-        "mm" in lowered and not non_lens_mm_context
-    ):
-        keywords.extend(["lens review", "videographer", "photographer", "camera gear"])
-    if any(term in lowered for term in ("电影感", "cinematic", "cinematography")):
-        keywords.extend(["cinematic", "cinematography"])
-    if any(term in lowered for term in ("旅行", "travel")):
-        keywords.append("travel")
-    if any(term in lowered for term in ("风光", "landscape")):
-        keywords.append("landscape")
-    if any(term in lowered for term in ("微距", "macro")):
-        keywords.append("macro")
-    if any(term in lowered for term in ("产品摄影", "product photography")):
-        keywords.append("product photography")
-    # 2026-08-24 R4:操作者自带的职业/场景词(赛车、餐饮…)必须独立命中英文检索词,
-    # 不能只藏在「监视器」组合关键词后面被整体丢弃。输出保持纯英文(问题A:中文进
-    # search_query 会捞中文号)。
-    if any(term in lowered for term in ("赛车", "机车", "摩托")):
-        keywords.extend(["automotive videographer", "motorsport", "racing"])
-    if any(term in lowered for term in ("厨师", "餐饮", "美食", "烹饪")):
-        keywords.extend(["food creator", "culinary", "chef", "food videographer"])
-    if "婚礼" in lowered:
-        keywords.append("wedding filmmaker")
-    if "健身" in lowered:
-        keywords.append("fitness creator")
-    if "宠物" in lowered:
-        keywords.append("pet creator")
-    if "旅拍" in lowered:
-        keywords.append("travel videographer")
-    return keywords
+    return fallback_platforms(lowered, SUPPORTED_PLATFORMS)
 
 
 def _fallback_plan(
@@ -376,44 +265,6 @@ def _resolve_requested_product(
         return None, product_resolver.unresolved_product_request(query_text)
     except Exception:
         return None, None
-
-
-def _avoid_types_for_product(product: dict[str, Any] | None) -> list[str]:
-    """无 LLM avoid_types 时,据解析到的产品类别给规则兜底的错配规避类型(英文检索词)。"""
-    if not product:
-        return []
-    blob = " ".join(
-        str(product.get(key) or "")
-        for key in ("category_main", "category_detail", "series", "model_name", "marketing_name")
-    ).lower()
-    avoid: list[str] = []
-    if "cine" in blob or "anamorphic" in blob:
-        # 电影镜头:规避泛器材评测/纯平面/手机 vlog。
-        avoid = ["generic gear reviewer", "still-photography-only photographer", "phone vlogger", "camera store unboxing channel"]
-    elif "monitor" in blob:
-        avoid = ["still-photography-only photographer", "phone vlogger"]
-    elif "flash" in blob or "lighting" in blob:
-        avoid = ["pure landscape shooter", "automotive-only videographer"]
-    return avoid
-
-
-def _product_search_terms(product: dict[str, Any] | None) -> list[str]:
-    """LLM 失败但已解析到产品时,据产品类别给英文检索词兜底(避免把裸 query 当检索词)。"""
-    if not product:
-        return []
-    blob = " ".join(
-        str(product.get(key) or "")
-        for key in ("category_main", "category_detail", "series", "model_name", "marketing_name")
-    ).lower()
-    if "cine" in blob or "anamorphic" in blob:
-        return ["cinematographer", "director of photography", "filmmaker", "anamorphic filmmaker", "commercial film", "music video"]
-    if "monitor" in blob:
-        return ["filmmaker", "videographer", "cinematographer", "field monitor", "content creator", "camera operator"]
-    if "flash" in blob or "lighting" in blob:
-        return ["wedding photographer", "portrait photographer", "studio lighting", "off-camera flash", "lighting educator"]
-    if "lens" in blob:
-        return ["photographer", "videographer", "portrait photographer", "filmmaker"]
-    return []
 
 
 def _normalise_plan(

@@ -17,18 +17,29 @@ from typing import Any
 from app.domains.costs.product_catalog import list_product_catalog
 from app.domains.kol import product_focal_family
 from app.domains.kol.product_resolver_projection import (
+    focal_suggestions as _focal_suggestions,
+    format_aperture as _format_aperture,
     public_product_projection as _public_product_projection,
     specs_line as _specs_line,
 )
-
-
-# Tokens too generic to score a product on their own.
-_STOPWORDS = frozenset(
-    {
-        "mm", "f", "the", "a", "for", "and", "lens", "camera", "viltrox", "af",
-        "pl", "t", "x", "full", "frame", "inch", "kit", "set", "new",
-    }
+from app.domains.kol.product_resolver_scoring import (
+    official_duplicate_for_model_code,
+    select_scored_product,
 )
+from app.domains.kol.product_resolver_tokens import (
+    COMPACT_PRO_RE as _COMPACT_PRO_RE,
+    STOPWORDS as _STOPWORDS,
+    VILTROX_Z_MODEL_CONTEXT_RE as _VILTROX_Z_MODEL_CONTEXT_RE,
+    model_code_mentions as _model_code_mentions,
+    model_code_score_tokens as _model_code_score_tokens,
+    looks_like_bare_sku as _looks_like_bare_sku,
+    normkey as _normkey,
+    query_apertures as _query_apertures,
+    query_model_codes as _query_model_codes,
+    query_tokens as _query_tokens,
+    split_glued as _split_glued,
+)
+
 
 # Curated nicknames → extra probe tokens that widen the catalog candidate pool so the
 # scorer can rank the right SKU. Keyed on the normalised (alnum-only, lowercase) form
@@ -46,22 +57,6 @@ _NICKNAME_PROBES: dict[str, list[str]] = {
     "z1": ["vintage", "z1", "flash"],
     "vintagez1": ["vintage", "z1"],
 }
-
-
-def _normkey(value: Any) -> str:
-    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
-
-
-def _split_glued(low: str) -> str:
-    # "65macro" → "65 macro", "550pro" → "550 pro", "z1" stays "z 1" only at boundaries.
-    spaced = re.sub(r"(?<=[0-9])(?=[a-z])", " ", low)
-    spaced = re.sub(r"(?<=[a-z])(?=[0-9])", " ", spaced)
-    return spaced
-
-
-def _query_tokens(query: str) -> list[str]:
-    spaced = _split_glued(str(query or "").lower())
-    return [tok for tok in re.split(r"[^a-z0-9.]+", spaced) if tok]
 
 
 # ── 硬约束(2026-07-02):卡口/焦段是否决条件,不是加分项。
@@ -101,98 +96,16 @@ def _explicit_product_series(text: str) -> str:
     return ""
 
 
-_COMPACT_PRO_RE = re.compile(r"(?<![a-z0-9])([a-z]\d{1,3})\s*pro(?![a-z0-9])")
-
 # Product codes are often shorter than the catalog SKU and may contain a
 # meaningful hyphen (``DC-A1``, ``DC-X3``, ``EF-E2``).  ``_split_glued`` is
 # useful for fuzzy prose but destroys those identities (``DC-A1`` became
 # ``dc / a / 1``), so keep a separate bounded code parser.  Prefixes are
 # intentionally limited to product-like namespaces used by the catalog; this
 # prevents ordinary phrases such as "top 10" from becoming product anchors.
-_MODEL_CODE_RE = re.compile(
-    r"(?<![a-z0-9])(?P<code>(?:dc|af|mf|ef|nf|dg|vl|epic|z)[-_ ]?(?:[a-z]*\d[a-z0-9]*))(?![a-z0-9])",
-    re.IGNORECASE,
-)
-_MODEL_CODE_PREFIXES = ("epic", "dc", "af", "mf", "ef", "nf", "dg", "vl", "z")
-_VILTROX_Z_MODEL_CONTEXT_RE = re.compile(
-    r"\bviltrox\b|\bvintage\b|唯卓仕|维卓仕?",
-    re.IGNORECASE,
-)
-_APERTURE_RE = re.compile(
-    r"(?<![a-z0-9])(?P<kind>[ft])\s*/?\s*(?P<value>\d{1,2}(?:\.\d+)?)(?![a-z0-9])",
-    re.IGNORECASE,
-)
 _NAMED_FAMILY_CONTEXT_RE = re.compile(
     r"\b(?:set|kit|family|series|memento|maestro)\b|套装|整套|全套|系列|产品",
     re.IGNORECASE,
 )
-
-
-def _model_code_mentions(value: Any) -> list[tuple[str, str]]:
-    """Return ``(normalised, display)`` product-code mentions in input order."""
-
-    source_text = str(value or "")
-    output: list[tuple[str, str]] = []
-    seen: set[str] = set()
-    for match in _MODEL_CODE_RE.finditer(source_text):
-        raw = match.group("code")
-        normalized = _normkey(raw)
-        # ``AF 85mm`` is a lens type + focal specification, not a compact
-        # model code.  Let focal/aperture family resolution preserve all mount
-        # variants instead of treating this fragment like ``DC-A1``.
-        if re.fullmatch(r"(?:af|mf)\d{1,3}mm", normalized):
-            continue
-        # ``Z1`` is the one compact Z-series identity in the current Viltrox
-        # catalog.  Bare Nikon camera bodies (Z6/Z8/Z50/...) are creator-gear
-        # context, not missing Viltrox SKUs; treating every ``Z + number`` as a
-        # product code turned valid KOL searches into a clarification wall.
-        # An explicit Viltrox/Vintage anchor still fails closed for a future or
-        # misspelled Viltrox Z model instead of silently treating it as prose.
-        if (
-            re.fullmatch(r"z\d+[a-z0-9]*", normalized)
-            and not re.fullmatch(r"z1(?:pro[a-z0-9]*)?", normalized)
-            and not _VILTROX_Z_MODEL_CONTEXT_RE.search(source_text)
-        ):
-            continue
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        display = re.sub(r"[-_ ]+", "-", raw).upper()
-        if not re.search(r"[-_ ]", raw):
-            prefix = next(
-                (item for item in _MODEL_CODE_PREFIXES if normalized.startswith(item) and len(normalized) > len(item)),
-                "",
-            )
-            if prefix and prefix != "z":
-                display = f"{prefix.upper()}-{normalized[len(prefix):].upper()}"
-        output.append((normalized, display))
-    return output
-
-
-def _query_model_codes(value: Any) -> list[str]:
-    return [normalized for normalized, _display in _model_code_mentions(value)]
-
-
-def _model_code_score_tokens(model_codes: list[str]) -> list[str]:
-    output = list(model_codes)
-    for code in model_codes:
-        prefix = next(
-            (item for item in _MODEL_CODE_PREFIXES if code.startswith(item) and len(code) > len(item)),
-            "",
-        )
-        if len(prefix) >= 2:
-            output.append(prefix)
-    return output
-
-
-def _query_apertures(value: Any) -> set[tuple[str, float]]:
-    apertures: set[tuple[str, float]] = set()
-    for match in _APERTURE_RE.finditer(str(value or "")):
-        try:
-            apertures.add((match.group("kind").lower(), round(float(match.group("value")), 3)))
-        except (TypeError, ValueError):
-            continue
-    return apertures
 
 
 def _pro_is_product_series(text: str) -> bool:
@@ -285,18 +198,6 @@ def _has_product_identity_anchor(query: str, probe_tokens: list[str]) -> bool:
         re.search(r"\b(?:viltrox|lens|prime|anamorphic|cine|t\d(?:\.\d)?|f/?\d(?:\.\d)?)\b|维卓|镜头|定焦", text)
     )
     return has_lens_identity and bool(_query_focals(text))
-
-
-def _focal_suggestions(rows: Any, *, limit: int = 6) -> list[dict[str, Any]]:
-    return [
-        {
-            "sku": row.get("sku"),
-            "name": row.get("marketing_name") or row.get("model_name"),
-            "mount": row.get("mount"),
-            "series": row.get("series"),
-        }
-        for row in list(rows or [])[: max(1, int(limit))]
-    ]
 
 
 def _focal_clarification(text: str) -> dict[str, Any] | None:
@@ -546,31 +447,13 @@ def _official_duplicate_for_model_code(
     *,
     model_code: str,
 ) -> dict[str, Any] | None:
-    """Select a canonical official row only when duplicates are the same model.
-
-    The catalog currently contains both an official ``DC-A1-...`` row and a
-    legacy ``VL-MON015`` row whose model name is also DC-A1.  That is duplicate
-    catalog lineage, not product ambiguity.  Conversely, mount variants must
-    remain a family and are never collapsed here.
-    """
-
-    matching = [row for row in rows if model_code in _query_model_codes(_row_words(row)[0])]
-    if not matching:
-        return None
-    categories = {_normkey(row.get("category_main")) for row in matching if _normkey(row.get("category_main"))}
-    mounts = {_normkey(row.get("mount")) for row in matching if _normkey(row.get("mount"))}
-    if len(categories) > 1 or len(mounts) > 1:
-        return None
-    def _is_official(row: dict[str, Any]) -> bool:
-        if str(row.get("status") or "").strip().lower() == "official":
-            return True
-        try:
-            return float(row.get("source_confidence") or 0) >= 0.9
-        except (TypeError, ValueError):
-            return False
-
-    official = [row for row in matching if _is_official(row)]
-    return official[0] if len(official) == 1 else None
+    return official_duplicate_for_model_code(
+        rows,
+        model_code=model_code,
+        query_model_codes=_query_model_codes,
+        row_words=_row_words,
+        normkey=_normkey,
+    )
 
 
 def _model_code_family_projection(
@@ -607,11 +490,6 @@ def _model_code_family_projection(
     })
     projection["specs_line"] = _specs_line(projection)
     return projection
-
-
-def _format_aperture(aperture: tuple[str, float]) -> str:
-    kind, value = aperture
-    return f"{kind.upper()}{value:g}"
 
 
 def resolve_spec_family_product(query: str) -> dict[str, Any] | None:
@@ -780,16 +658,6 @@ def _catalog_exact_sku_products(value: Any) -> list[dict[str, Any]]:
     ]
 
 
-def _looks_like_bare_sku(value: Any) -> bool:
-    """Limit the full-catalog exact check to short operator-typed model codes."""
-    text = str(value or "").strip()
-    return bool(
-        len(text.split()) <= 2
-        and re.fullmatch(r"[a-z][a-z0-9._/+ -]*", text, re.IGNORECASE)
-        and any(char.isdigit() for char in text)
-    )
-
-
 def resolve_product_sku(value: Any) -> dict[str, Any] | None:
     """Resolve only one exact normalized catalog SKU; unknown/ambiguous values fail closed."""
     text = str(value or "").strip()
@@ -914,71 +782,18 @@ def _resolve_product_impl(query: str) -> dict[str, Any] | None:
             exact_product,
             match_score=(1, 1, len(str(exact_product.get("series") or ""))),
         )
-    base = _query_tokens(text)
-    model_code_mentions = _model_code_mentions(text)
-    product_pro = _pro_is_product_series(text)
-    score_tokens = [
-        tok
-        for tok in dict.fromkeys(
-            base
-            + probe_tokens
-            + _model_code_score_tokens([code for code, _display in model_code_mentions])
-        )
-        if len(tok) >= 2
-        and tok not in _STOPWORDS
-        and (tok != "pro" or product_pro)
-    ]
-    if not score_tokens:
-        return None
-    scored: list[tuple[tuple[int, int, int], dict[str, Any]]] = []
-    for prod in pool.values():
-        scored.append((_score(prod, score_tokens), prod))
-    if not scored:
-        return None
-    best_primary = max((score[0], score[1]) for score, _prod in scored)
-    # One family/category hit cannot identify a SKU, and equally-scored catalog
-    # variants must ask for more detail instead of relying on row order.
-    if best_primary[1] < 2:
-        return None
-    winners = [(score, prod) for score, prod in scored if (score[0], score[1]) == best_primary]
-    if len(winners) > 1 and len(model_code_mentions) == 1:
-        model_code, display_code = model_code_mentions[0]
-        winner_rows = [prod for _score_value, prod in winners]
-        canonical = _official_duplicate_for_model_code(
-            winner_rows,
-            model_code=model_code,
-        )
-        if canonical is not None:
-            projection = _public_product_projection(
-                canonical,
-                match_score=next(score for score, prod in winners if prod is canonical),
-            )
-            projection.update({
-                "resolution_kind": "model_code_exact",
-                "resolved_model_code": display_code,
-            })
-            return projection
-        # Do not collapse genuinely different model variants into a synthetic
-        # family merely because they share a compact code.  The deterministic
-        # base-model tiebreak below still handles ``Z1`` while same-rank
-        # variants such as ``Z1 PRO-N`` / ``Z1 PRO-F`` fail closed.
-    if len(winners) > 1:
-        # 2026-08-24 R2:(strong, matched) 全平时,用 _score 早已算好的末位 tiebreak
-        # (series 长度)选唯一赢家——取 series 最短者,即基础款。方向是确定性的且
-        # 不放松匹配:query 里若真含系列词(pro 等),该系列行会在 strong/matched 上
-        # 直接胜出,根本走不到这里;此处偏向基础款意味着绝不凭空替操作者补一个
-        # "Pro"。tiebreak 后仍并列(同系列多卡口行等)→ 保持 fail-closed 返回 None。
-        min_series_len = min(score[2] for score, _prod in winners)
-        winners = [(score, prod) for score, prod in winners if score[2] == min_series_len]
-    if len(winners) != 1:
-        return None
-    best_score, best = winners[0]
-    # 2026-08-24 复审 F-1:紧凑码("a7 pro")解锁的 "pro" 只有在该紧凑码本身也命中赢家时才作数——
-    # 否则他牌紧凑码 + 一个品类词(如 flash)就能把 Pro 系列行凑成赢家。仅当赢家确实靠 "pro"
-    # 词命中(blob 含 pro)且查询里的紧凑码全都不在赢家词集时 fail-closed。
-    compact_codes = _COMPACT_PRO_RE.findall(str(text or "").lower())
-    if compact_codes and "pro" in score_tokens:
-        _blob, _blob_sp, winner_words = _row_words(best)
-        if "pro" in winner_words and not any(code in winner_words for code in compact_codes):
-            return None
-    return _public_product_projection(best, match_score=best_score)
+    return select_scored_product(
+        text=text,
+        probe_tokens=probe_tokens,
+        pool=pool,
+        stopwords=_STOPWORDS,
+        compact_pro_re=_COMPACT_PRO_RE,
+        query_tokens=_query_tokens,
+        model_code_mentions=_model_code_mentions,
+        model_code_score_tokens=_model_code_score_tokens,
+        pro_is_product_series=_pro_is_product_series,
+        score_product=_score,
+        official_duplicate_for_model_code=_official_duplicate_for_model_code,
+        public_product_projection=_public_product_projection,
+        row_words=_row_words,
+    )

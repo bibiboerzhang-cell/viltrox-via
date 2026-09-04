@@ -9,7 +9,6 @@ circular import (parent re-exports from this module).
 from __future__ import annotations
 
 import re
-import urllib.robotparser
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
@@ -19,6 +18,8 @@ from app.db.connection import get_conn, is_postgres_runtime
 from app.domains.kol import url_route_plan
 from app.domains.kol import (
     url_deep_crawl_maintenance_fence as maintenance_fence,
+    url_deep_crawl_queue_runtime as queue_runtime,
+    url_deep_crawl_site_scan as site_scan,
 )
 from app.domains.kol.url_deep_crawl_helpers import (
     _canonical_url,
@@ -171,12 +172,14 @@ def _profile_target_row(
     kol_pool_id: int,
     *,
     for_update: bool = False,
+    include_raw_platform_data: bool = False,
 ) -> dict[str, Any]:
     return maintenance_fence._profile_target_row(
         conn,
         kol_pool_id,
         for_update=for_update,
         postgres_runtime=is_postgres_runtime() if for_update else False,
+        include_raw_platform_data=include_raw_platform_data,
     )
 
 
@@ -378,127 +381,18 @@ def _profile_job_idempotency_key(
     )
 
 
-# ── 网页抓取腿(分流去向 website)的有界护栏 ──
-# 同步跑,上限压得比批跑器更紧:两页(首页 + 一个常见联系页)、5 秒超时。出站一律经
-# safe_fetch(只 https、DNS 后拒私网、连接钉地址、禁跟随重定向、500KB 截断)。
-# 站点根地址本身既是一条站点资料,也当作「这个站点读过了」的记号,免得反复去打同一家。
-_SITE_SCAN_MAX_PAGES = 2
-_SITE_SCAN_TIMEOUT_S = 5
-_ROBOTS_UA = "ViltroxContactEnrich"
-_ROBOTS_MAX_BYTES = 64_000
-_ROBOTS_CACHE: dict[str, Any] = {}
-_ROBOTS_CACHE_CAP = 512
-_SITE_CONTACT_TYPE = "website"
-_SITE_CONTACT_SOURCE = "website_declared"
+_divert_off_crawler_url = site_scan._divert_off_crawler_url
 
 
-def _load_robots(host: str) -> Any:
-    """取一份 robots 规则;取不到按业界惯例视为允许,但留痕不静默。"""
-    from app.platform import safe_fetch
-
-    try:
-        fetched = safe_fetch.fetch_bytes(
-            f"https://{host}/robots.txt",
-            timeout=_SITE_SCAN_TIMEOUT_S,
-            max_bytes=_ROBOTS_MAX_BYTES,
-            truncate=True,
-        )
-    except Exception as exc:  # noqa: BLE001 — 拉不到规则不等于禁止,但必须看得见
-        logger.info("site robots unavailable host=%s err=%s", host, type(exc).__name__)
-        return True
-    parser = urllib.robotparser.RobotFileParser()
-    parser.parse(fetched.data.decode("utf-8", errors="ignore").splitlines())
-    return parser
-
-
-def _robots_allows(url: str) -> bool:
-    """站点声明不许自动读取就不读。每个主机名只取一次规则,进程内缓存。"""
-    host = url_route_plan.host_of(url)
-    if not host:
-        return False
-    parser = _ROBOTS_CACHE.get(host)
-    if parser is None:
-        parser = _load_robots(host)
-        if len(_ROBOTS_CACHE) < _ROBOTS_CACHE_CAP:
-            _ROBOTS_CACHE[host] = parser
-    return True if parser is True else bool(parser.can_fetch(_ROBOTS_UA, url))
-
-
-def _site_already_scanned(conn: Any, kol_pool_id: int, base: str) -> bool:
-    row = conn.execute(
-        "SELECT id FROM vkpi_kol_pool_contacts WHERE kol_pool_id=? AND contact_type=? AND contact_value=? LIMIT 1",
-        (int(kol_pool_id), _SITE_CONTACT_TYPE, base),
-    ).fetchone()
-    return row is not None
-
-
-def _save_site_contacts(conn: Any, kol_pool_id: int, base: str, found: list[dict[str, Any]]) -> int:
-    """联系方式 + 站点根地址落进既有 contacts 结构;抓到的正文一个字都不进召回证据链(红线)。"""
-    now = datetime.now(timezone.utc).isoformat()
-    rows = url_route_plan.site_contact_rows(base, found)
-    for contact_type, value, source_url, confidence, evidence in rows:
-        conn.execute(
-            """
-            INSERT INTO vkpi_kol_pool_contacts
-                (kol_pool_id, contact_type, contact_value, contact_source, source_url,
-                 consent_basis, is_public_declared, confidence, evidence_text,
-                 first_seen_at, last_seen_at, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(kol_pool_id, contact_type, contact_value) DO NOTHING
-            """,
-            (
-                int(kol_pool_id), contact_type, value, _SITE_CONTACT_SOURCE, source_url,
-                "public_scan", confidence >= 0.85, round(confidence, 2), evidence, now, now, now,
-            ),
-        )
-    conn.commit()
-    return len(rows)
-
-
-def _scan_site_contacts(conn: Any, url: str, kol_pool_id: int) -> dict[str, Any]:
-    """同步跑一次网页抓取腿;每一种结局都如实回执,不假装成功也不假装失败。"""
-    from app.domains.kol import contact_website_scrape
-
-    base = url_route_plan.site_base(url)
-    if kol_pool_id and _site_already_scanned(conn, kol_pool_id, base):
-        return {"status": "site_already_scanned", "message": "这个网站之前已经读过,直接用已有的资料。"}
-    if not _robots_allows(url):
-        return {"status": "site_scan_skipped", "message": "这个网站声明了不允许自动读取,已按它的要求跳过。"}
-    try:
-        found = contact_website_scrape.scrape_contacts_from_url(
-            url, max_pages=_SITE_SCAN_MAX_PAGES, timeout=_SITE_SCAN_TIMEOUT_S
-        )
-        kept, _rejected = contact_website_scrape._filter_quality(found)
-    except Exception as exc:  # noqa: BLE001 — 一个站点打不开不该把入队口打成 500
-        logger.warning("site contact scan failed host=%s err=%s", url_route_plan.host_of(url), type(exc).__name__)
-        return {"status": "site_scan_failed", "message": "这个网站这次没能打开,可以稍后再试。"}
-    if not kol_pool_id:
-        return {"status": "site_scanned", "contacts_found": len(kept), "contacts_saved": 0}
-    return {"status": "site_scanned", "contacts_found": len(kept), "contacts_saved": _save_site_contacts(conn, kol_pool_id, base, kept)}
-
-
-def _divert_off_crawler_url(
-    conn: Any,
+def _canonical_enqueued_profile_url(
     clean_url: str,
-    *,
-    kol_pool_id: int | None,
-    monitored: bool,
-) -> dict[str, Any] | None:
-    """账号抓取通道读不了的链接就地了结,返回回执;能走原通道的返回 None。
-
-    公开站点顺手读一次公开联系方式,其余原样诚实拒绝 —— 两种结局都不留下一条
-    卡住的活。调用点在归属围栏**之后**,校验一步不绕;内容监控是「盯住某个账号」
-    的长期约定,不参与分流。
-    """
-    if monitored:
-        return None
-    route = url_route_plan.plan_url_route_from_url(clean_url)
-    if route.handled_by_account_crawler:
-        return None
-    receipt = route.receipt()
-    if route.route == url_route_plan.ROUTE_WEBSITE:
-        receipt.update(_scan_site_contacts(conn, route.target_url, int(kol_pool_id or 0)))
-    return receipt
+    target_write_fence: dict[str, Any] | None,
+) -> str:
+    if target_write_fence is not None:
+        return str(target_write_fence["canonical_profile_url"])
+    if url_route_plan.plan_url_route_from_url(clean_url).route == url_route_plan.ROUTE_PROFILE:
+        return _canonical_url(clean_url) or clean_url
+    return clean_url
 
 
 def enqueue_profile_deep_crawl_job(
@@ -583,8 +477,7 @@ def enqueue_profile_deep_crawl_job(
     )
     if diverted is not None:
         return diverted
-    if url_route_plan.plan_url_route_from_url(clean_url).route == url_route_plan.ROUTE_PROFILE:
-        clean_url = _canonical_url(clean_url) or clean_url
+    clean_url = _canonical_enqueued_profile_url(clean_url, target_write_fence)
     normalized_mode = _profile_deep_crawl_mode(mode)
     normalized_representative_limit = _representative_video_limit(representative_video_limit)
     normalized_queue_lane = str(queue_lane or "interactive").strip().lower()
@@ -780,70 +673,20 @@ def run_profile_deep_crawl_for_job(payload: dict[str, Any], *, staff: dict[str, 
     # 队列路径不经 HTTP 路由的 _attach_smart_url_session——session 必须在此自建,
     # 否则任务完成后 payload 无 search_session_id,泳道「最近完成」按规则将其滤掉(一闪而过案)。
     if not is_content_monitoring and not is_maintenance_refresh:
-        try:
-            from app.domains.kol import search_sessions as kol_search_sessions
-
-            raw_session_id = payload.get("search_session_id")
-            session_id = int(raw_session_id) if raw_session_id not in (None, "") else None
-            session = kol_search_sessions.ensure_session_for_result(
-                session_id=session_id,
-                create=session_id is None,
-                query_text=f"账号分析 · {body['url'][:80]}",
-                query_type="url_profile",
-                source=str(payload.get("source") or "queue:kol_profile_deep_crawl"),
-                input_payload={
-                    key: value
-                    for key, value in body.items()
-                    if key not in {"api_token", "paid_action_staff", "enforce_target_write"}
-                },
-                staff=staff,
-            )
-            if session:
-                result["search_session"] = kol_search_sessions.attach_url_result(int(session["id"]), result)
-                result["search_session_id"] = int(session["id"])
-        except Exception:
-            logger.warning("deep_crawl session attach failed url=%s", body.get("url"))
+        queue_runtime.attach_search_session(
+            payload=payload,
+            body=body,
+            result=result,
+            staff=staff,
+        )
     # 媒体进 R2(2026-06-12 裁令:"理论都是在 R2 然后回传"):深爬产出的 evidence
     # 缩略图(cache_image)与非 YT 平台视频(cache_video_for_item,YT 走 embed 不缓存)
     # 就地喂缓存——失败不毁任务(媒体缓存属增强,非主链)。
     kol_pool_id = payload.get("kol_pool_id")
     if kol_pool_id and not is_content_monitoring and not is_maintenance_refresh:
-        try:
-            from app.domains.media.cache import cache_image, cache_video_for_item
-
-            conn = get_conn()
-            rows = conn.execute(
-                "SELECT id, platform, content_url, thumbnail_url FROM vkpi_kol_video_evidence "
-                "WHERE kol_pool_id=? ORDER BY id DESC LIMIT 12",
-                (int(kol_pool_id),),
-            ).fetchall()
-            warm_stats: list[str] = []
-            videos_warmed = 0
-            for row in rows:
-                item = dict(row)
-                if item.get("thumbnail_url"):
-                    img = cache_image(item["thumbnail_url"])
-                    warm_stats.append(f"img#{item['id']}:{img.get('status')}")
-                platform_key = str(item.get("platform") or "").lower()
-                # 视频下载重(IG 经 ytdlp ~100s/条),只喂前 3 条免得串行 worker 被卡 20 分钟;
-                # 缩略图轻,12 条全喂。
-                if platform_key and platform_key != "youtube" and item.get("content_url") and videos_warmed < 3:
-                    video_key = _video_cache_key(platform_key, item["content_url"])
-                    if not video_key:
-                        warm_stats.append(f"vid#{item['id']}:skipped:native_video_id_unresolved")
-                        continue
-                    vid = cache_video_for_item(platform_key, video_key, item["content_url"])
-                    videos_warmed += 1
-                    reason = vid.get("skip_reason") or vid.get("reason") or ""
-                    warm_stats.append(
-                        f"vid#{item['id']}[{video_key}]:{vid.get('status')}"
-                        f"{':' + str(reason) if reason else ''}"
-                    )
-            logger.info(
-                "deep_crawl media r2 warm kol_pool_id=%s %s",
-                kol_pool_id,
-                " ".join(warm_stats) or "no_evidence_rows",
-            )
-        except Exception:
-            logger.warning("deep_crawl media r2 warm failed kol_pool_id=%s", kol_pool_id)
+        queue_runtime.warm_media_cache(
+            kol_pool_id=kol_pool_id,
+            get_connection=get_conn,
+            video_cache_key=_video_cache_key,
+        )
     return result

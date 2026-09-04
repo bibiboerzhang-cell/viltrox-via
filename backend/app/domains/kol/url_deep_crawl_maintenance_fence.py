@@ -115,6 +115,7 @@ def _profile_target_row(
     *,
     for_update: bool = False,
     postgres_runtime: bool | None = None,
+    include_raw_platform_data: bool = False,
 ) -> dict[str, Any]:
     use_postgres = (
         is_postgres_runtime()
@@ -122,9 +123,10 @@ def _profile_target_row(
         else bool(postgres_runtime)
     )
     lock_clause = " FOR UPDATE" if for_update and use_postgres else ""
+    raw_column = ", raw_platform_data" if include_raw_platform_data else ""
     row = conn.execute(
         f"""
-        SELECT id, duplicate_of_id, platform, handle, profile_url, raw_platform_data
+        SELECT id, duplicate_of_id, platform, handle, profile_url{raw_column}
         FROM vkpi_kol_pool
         WHERE id=?
         LIMIT 1
@@ -208,7 +210,11 @@ def _build_maintenance_target_fence(
 
     from app.domains.kol.video_tracking import VideoTrackingError
 
-    row = _profile_target_row(conn, int(kol_pool_id))
+    row = _profile_target_row(
+        conn,
+        int(kol_pool_id),
+        include_raw_platform_data=True,
+    )
     if not row:
         raise VideoTrackingError("maintenance_refresh_target_not_found", 409)
     if row.get("duplicate_of_id") not in (None, "", 0, "0"):
@@ -559,6 +565,7 @@ def _revalidate_maintenance_target_fence(
         kol_pool_id,
         for_update=lock_target,
         postgres_runtime=postgres_runtime,
+        include_raw_platform_data=True,
     )
     if not row:
         raise VideoTrackingError("maintenance_refresh_target_not_found", 409)

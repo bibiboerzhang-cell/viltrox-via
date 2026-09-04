@@ -32,7 +32,6 @@ from app.services.scheduler.jobs import (
     job_fulfillment_retrospective_enqueue,
     job_fulfillment_window_backfill,
     job_kol_auto_poll,
-    job_kol_profile_incremental_refresh,
     job_llm_batch_poll,
     job_logistics_track_sync,
     job_market_voice_alerts,
@@ -82,6 +81,7 @@ from app.services.scheduler.jobs import (
 from app.services.scheduler.jobs_forecast_batch import job_vkpi_forecast_batch_issue
 from app.services.scheduler.jobs_license_promotion import register_license_promotion_job
 from app.services.scheduler.jobs_registry_gated import gated_daily_job as _gated_daily_job
+from app.services.scheduler.jobs_registry_kol_refresh import register_kol_profile_incremental_refresh
 from app.services.scheduler.jobs_tasks_intel import (
     job_vkpi_competitor_radar_catchup,
     with_scheduler_run_record,
@@ -423,19 +423,7 @@ def _register_vkpi_ops_jobs(_scheduler: Any) -> None:
         max_instances=1,
         coalesce=True,
     )
-    # Search inventory refresh is broader than followed-KOL auto poll: it
-    # prioritises never-crawled and stale-evidence profiles, hard-capped at 5
-    # new maintenance jobs/day. Five jobs do not mean five provider calls;
-    # provider-specific budgets remain a separate worker boundary.
-    _scheduler.add_job(
-        job_kol_profile_incremental_refresh,
-        trigger=CronTrigger(hour=3, minute=20, timezone=US_EASTERN_TZ),
-        id="kol_profile_incremental_refresh",
-        name="Daily bounded Smart Search one-post inventory refresh",
-        max_instances=1,
-        coalesce=True,
-        misfire_grace_time=3600,
-    )
+    register_kol_profile_incremental_refresh(_scheduler)
     # Explicit tracked-video subscriptions only; callback is queue-only and
     # config-gated OFF by migration 285. Provider work remains worker-fenced.
     _scheduler.add_job(

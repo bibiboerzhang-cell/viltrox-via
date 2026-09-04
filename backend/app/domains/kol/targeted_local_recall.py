@@ -16,6 +16,7 @@ from app.domains.kol.targeted_local_backfill import (
     _backfill_rows,
     _backfill_take,
 )
+from app.domains.kol.targeted_local_selection import balanced_take as _balanced_take
 from app.domains.kol.targeted_local_support import (
     _annotate,
     _cell_context,
@@ -34,21 +35,6 @@ Recall = Callable[..., dict[str, Any]]
 SERVER_TOTAL_CANDIDATE_BUDGET = 240
 SERVER_PER_CELL_CANDIDATE_CAP = 60
 SERVER_DEFERRED_DISPLAY_CAP = 30
-
-
-def _balanced_take(
-    items: list[dict[str, Any]],
-    *,
-    target: int,
-    creator_quota: int,
-    reviewer_quota: int,
-) -> list[dict[str, Any]]:
-    creators = [item for item in items if item.get("bucket") != "reviewer"]
-    reviewers = [item for item in items if item.get("bucket") == "reviewer"]
-    chosen = [*creators[:creator_quota], *reviewers[:reviewer_quota]]
-    chosen_ids = {id(item) for item in chosen}
-    chosen.extend(item for item in items if id(item) not in chosen_ids)
-    return sorted(chosen[:target], key=_rank_key, reverse=True)
 
 
 def _candidate_budget_allocations(cell_count: int) -> list[int]:

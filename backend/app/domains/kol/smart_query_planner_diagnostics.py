@@ -1,6 +1,8 @@
 """Provider and JSON-contract diagnostics for the smart-query planner."""
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 from app.core.coerce import _text
@@ -12,6 +14,37 @@ def _as_int(value: Any, default: int, *, min_value: int = 0, max_value: int = 50
     except (TypeError, ValueError):
         parsed = default
     return max(min_value, min(max_value, parsed))
+
+
+def extract_json(text: str, *, logger: Any) -> dict[str, Any]:
+    raw = _text(text)
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
+    match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+    if not match:
+        return {}
+    try:
+        parsed = json.loads(match.group(0))
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        logger.warning("suppressed exception (hardening: was silent)", exc_info=True)
+        return {}
+
+
+def planner_not_attempted_diagnostics() -> dict[str, Any]:
+    return {
+        "provider_calls_performed": False,
+        "provider_response_succeeded": False,
+        "provider_attempts": 0,
+        "provider_response_status": "not_attempted",
+        "planner_parse_status": "not_attempted",
+        "planner_parse_failed": False,
+    }
 
 
 def planner_response_diagnostics(
