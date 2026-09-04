@@ -43,7 +43,10 @@ _LENS_MODEL_RE = re.compile(r"(?:^|[^a-z])(?:af|mf|epic)(?:[^a-z]|$)", re.IGNORE
 
 # 焦段只从「数字 + mm」取。目录里的斜杠写法(AF 135/1.8 FE)另判:斜杠后必须是光圈
 # (小于 32),否则 "50/99/150Wh" 会把电池的 50、99 当成焦段。
-_MM_FOCAL_RE = re.compile(r"(?<![0-9])(\d{1,3})\s*mm(?![a-z])", re.IGNORECASE)
+_MM_FOCAL_RE = re.compile(
+    r"(?<![0-9])(\d{1,3})\s*(?:mm(?![a-z])|毫米|焦段)",
+    re.IGNORECASE,
+)
 _SLASH_FOCAL_RE = re.compile(r"(?<![0-9.])(\d{2,3})\s*/\s*(\d{1,2}(?:\.\d)?)(?![0-9])")
 
 # ``35mm`` is also a film format, and ``50mm equivalent`` is a field-of-view
@@ -60,7 +63,7 @@ _NON_LENS_MM_PREFIX_RE = re.compile(
 )
 _EXPLICIT_LENS_PRODUCT_ANCHOR_RE = re.compile(
     r"\b(?:viltrox|af|mf|evo|lab|epic|air|raze|prime|anamorphic|cine|lens)\b"
-    r"|唯卓仕|维卓仕?|镜头|定焦|变形宽银幕|卡口"
+    r"|唯卓仕|维卓仕?|镜头|定焦|变形宽银幕|卡口|焦段|光圈"
     r"|(?<![a-z0-9])[ft]\s*/?\s*\d{1,2}(?:\.\d+)?(?![a-z0-9])",
     re.IGNORECASE,
 )
@@ -100,6 +103,16 @@ _COUNTER_SUFFIX_RE = re.compile(
     r"|(?:"
     r"followers?|subs(?:cribers?)?|creators?|kols?|people|persons?|accounts?|videos?|views?|"
     r"posts?|results?|users?|days?|years?|hours?|minutes?|items?|channels?|"
+    # A bare number immediately quantifying the person to find is a result
+    # count, never a focal length.  Allow a few domain adjectives before a
+    # concrete occupation ("100 wedding photographers").  Generic creators
+    # stay on the existing direct branch so "135 top creators" keeps its
+    # established focal-family meaning.
+    r"(?:[a-z][a-z-]*\s+){0,3}(?:photographers?|videographers?|filmmakers?|"
+    r"cinematographers?|directors?|camera\s+operators?|reviewers?|educators?|"
+    r"storytellers?|reporters?|journalists?|retouchers?|stylists?|chefs?|"
+    r"planners?|designers?|pilots?|commentators?|assistants?)|"
+    r"摄影师|摄像师|导演|创作者|博主|达人|评测人|讲师|记者|修图师|造型师|厨师|"
     r"weeks?|months?|hrs?|secs?|mins?|times?|pcs?|units?|ratio|rate|score|"
     r"to|and|through|thru|"
     r"usd|dollars?|percent|watts?|nits?|fps|inches|inch|mah|wh|ws"

@@ -27,6 +27,11 @@ const e = React.createElement;
 export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onClose, apiToken = "" }: any) {
   const displayName = kolHumanDisplayName(item);
   const publicHandle = kolHumanPublicHandle(item);
+  const productContext = recordOr(item?.product_context);
+  const productContextLabel = compactText(
+    productContext.label || item?.product_family_name || item?.product_name || item?.product_sku || item?.productSku,
+    80,
+  );
   return e("div", { className: "px-5 py-4 border-b border-white/[0.06]" },
     e("div", { className: "flex items-start gap-3 mb-2" },
       e(KOLDetailAvatar, { item, size: 44 }),
@@ -57,6 +62,12 @@ export function KOLDrawerHeader({ item, devices, detailLoading, detailError, onC
       e(CandidateKindChip, { kind: item.candidate_kind }),
       e(PlatformPill, { platform: item.platform }),
       e(AudienceTypeChip, { type: item.audience_type }),
+      productContextLabel && e("span", {
+        "data-testid": "kol-detail-product-context",
+        "aria-label": `本次搜索产品 ${productContextLabel}`,
+        className: "inline-flex items-center rounded border border-cyan-300/20 bg-cyan-400/[0.07] px-1.5 py-0.5 text-[9px] font-medium text-cyan-100",
+        title: productContext.kind === "product_family" ? "本次搜索按产品家族理解，未代选具体 SKU" : "本次搜索的目录产品",
+      }, `本次产品 · ${productContextLabel}`),
       // 旧搜索会话曾把未知国家缓存成 X；只有明确的 CN 才允许显示中国标签。
       e(GeoTierChip, { tier: item.country === "CN" ? "X" : item.geo_tier === "X" ? null : item.geo_tier }),
       item.country && e("span", { className: "text-[10px] text-slate-500 inline-flex items-center gap-1" },

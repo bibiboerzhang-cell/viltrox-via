@@ -78,35 +78,82 @@ assert_clean_tree "出发前"
 # ── 1b. 迁移预检:早说,别等打包完二十几分钟才被部署脚本拦(2026-08-26 白跑一轮的教训)──
 # 口径与 deploy_local_to_cloud.sh 完全一致:待应用 = 本地迁移清单里、线上最高水位**之后**的全部
 # (不是集合差 —— 001/002/004 这类被基线取代的老迁移永远在水位之下,不算待应用)。
-# 只提示不硬拦:staging-clone 模式下反而禁止声明,两条路都留给操作员判断。
+# train 当前固定走 in-place；待应用迁移必须与声明完全一致且通过代码内审阅策略。
+# 这里先拦，避免 freeze/本地重启完成后才在 deploy 阶段发现迁移不可发布。
 migration_preflight() {
-  local remote manifest pending
-  remote="$(ssh -o BatchMode=yes -o ConnectTimeout=8 viltrox \
-    'set -a; . /opt/viltrox-2.0/.env >/dev/null 2>&1; set +a; cd /tmp \
-     && psql "$DATABASE_URL" -At -c "SELECT version_key FROM schema_migrations ORDER BY version_key DESC LIMIT 1"' \
-    2>/dev/null | tr -d "[:space:]")" || { log "迁移预检跳过(连不上线上,不影响发车)"; return 0; }
-  [ -n "${remote}" ] || { log "迁移预检跳过(读不到线上水位)"; return 0; }
-  manifest="$(find "${ROOT}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' \
-    -exec basename {} \; | LC_ALL=C sort | paste -sd, -)"
-  pending="$("${PYTHON_BIN}" -B - "${remote}" "${manifest}" 2>/dev/null <<'PY'
+  local applied remote pending declaration
+  applied="$(ssh -o BatchMode=yes -o ConnectTimeout=8 viltrox \
+    'set -a \
+     && . /opt/viltrox-2.0/.env >/dev/null 2>&1 \
+     && set +a \
+     && [ -n "${DATABASE_URL:-}" ] \
+     && cd /tmp \
+     && psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "SELECT array_to_string(array_agg(version_key ORDER BY version_key), chr(44)) FROM schema_migrations"' \
+    2>/dev/null)" \
+    || die "迁移预检:无法连接线上或读取 schema_migrations，拒绝在未知水位下发车"
+  [ -n "${applied}" ] \
+    || die "迁移预检:线上 schema_migrations 未返回完整版本集合，拒绝在未知水位下发车"
+  remote="${applied##*,}"
+  pending="$("${PYTHON_BIN}" -B - "${ROOT}" "${applied}" 2>/dev/null <<'PY'
 import sys
-applied, csv = sys.argv[1], sys.argv[2]
-items = [v for v in csv.split(",") if v]
-print(",".join(items[items.index(applied) + 1:]) if applied in items else "")
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts" / "ops"))
+from atomic_release_shared import pending_runtime_migrations, runtime_migration_manifest
+
+manifest = runtime_migration_manifest(root / "migrations")
+applied = tuple(value for value in sys.argv[2].split(",") if value)
+print(",".join(pending_runtime_migrations(manifest, applied)))
 PY
-  )" || return 0
+  )" || die "迁移预检:线上完整版本集合与本地运行时清单不一致，拒绝猜测待应用范围"
   if [ -z "${pending}" ]; then
+    [ -z "${VKPI_FORWARD_COMPATIBLE_MIGRATIONS:-}" ] \
+      || die "迁移预检:线上无待应用迁移，但 VKPI_FORWARD_COMPATIBLE_MIGRATIONS 仍有旧声明"
     log "迁移预检:线上水位 ${remote},无待应用迁移"
     return 0
   fi
   log "迁移预检:线上水位 ${remote},待应用 → ${pending}"
-  if [ -z "${VKPI_FORWARD_COMPATIBLE_MIGRATIONS:-}" ]; then
-    printf '[train] 提示:本次带着待应用迁移。就地升级需人工审阅后声明:\n' >&2
-    printf '[train]   VKPI_FORWARD_COMPATIBLE_MIGRATIONS=%s scripts/ops/train.sh\n' "${pending}" >&2
-    printf '[train]   (若走 staging-clone 则相反:禁止声明。)审阅要点:有无 DDL、是否幂等、是否单调。\n' >&2
-  fi
+  declaration="${VKPI_FORWARD_COMPATIBLE_MIGRATIONS:-}"
+  [ -n "${declaration}" ] \
+    || die "迁移预检:待应用迁移未声明；必须先逐条进入 forward-compatibility policy"
+  [ "${declaration}" = "${pending}" ] \
+    || die "迁移预检:声明必须与待应用迁移精确一致；expected=${pending}"
+  "${PYTHON_BIN}" -B - "${ROOT}" "${declaration}" <<'PY' \
+    || die "迁移预检:声明包含未经审阅或非前向兼容迁移"
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts" / "ops"))
+from atomic_release_shared import _forward_compatibility_evidence
+
+_forward_compatibility_evidence(sys.argv[2], migrations_dir=root / "migrations")
+PY
+  log "迁移预检:精确声明已通过 ${pending}"
 }
 migration_preflight
+
+# Anthropic Batch transport 在候选代码中硬关闭；若线上仍有旧批次，停 poll 会丢结果。
+# 必须实时证明 open=0，查询失败同样拒绝发车。
+llm_batch_shutdown_preflight() {
+  local active
+  active="$(ssh -o BatchMode=yes -o ConnectTimeout=8 viltrox \
+    'set -a \
+     && . /opt/viltrox-2.0/.env >/dev/null 2>&1 \
+     && set +a \
+     && [ -n "${DATABASE_URL:-}" ] \
+     && cd /tmp \
+     && psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -At -c "SELECT count(*) FROM vkpi_llm_batches WHERE status IN ('"'"'submitting'"'"','"'"'provider_unknown'"'"','"'"'in_progress'"'"','"'"'expired'"'"')"' \
+    2>/dev/null)" \
+    || die "Anthropic Batch 下线预检:无法读取线上活动批次，拒绝停掉未知工作"
+  case "${active}" in
+    0) log "Anthropic Batch 下线预检:线上活动批次为 0" ;;
+    ''|*[!0-9]*) die "Anthropic Batch 下线预检:活动批次数格式非法" ;;
+    *) die "Anthropic Batch 下线预检:仍有 ${active} 个未对账批次(含 expired)，必须先人工回收" ;;
+  esac
+}
+llm_batch_shutdown_preflight
 
 # ── 2. SHA:缺省 HEAD;显式给的必须等于 HEAD ──
 HEAD_SHA="$(git rev-parse --verify HEAD)"

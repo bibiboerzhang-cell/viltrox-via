@@ -14,6 +14,7 @@ import { type SearchRequestEpoch, useSessionScopedSelection } from "./SmartKolIn
 
 type SelectionParams = {
   apiToken: string;
+  accountKey?: string | number | null;
   displayedSearchSessionId: number | null;
   canApprove: boolean;
   canFavorite: boolean;
@@ -30,6 +31,7 @@ type FavoriteActionScope = {
 
 export function useSmartKolSelection({
   apiToken,
+  accountKey,
   displayedSearchSessionId,
   canApprove,
   canFavorite,
@@ -97,7 +99,7 @@ export function useSmartKolSelection({
     setFavoriteBusyIds(new Set());
     setFavoritesSyncing(true);
     setFavoritesLoadError("");
-    listKolPoolFavorites(apiToken, 5000)
+    listKolPoolFavorites(apiToken, 5000, accountKey)
       .then((response) => {
         if (!active) return;
         const ids = new Set<number>();
@@ -118,7 +120,7 @@ export function useSmartKolSelection({
     return () => {
       active = false;
     };
-  }, [apiToken]);
+  }, [accountKey, apiToken]);
 
   function markFavoriteBusy(ids: number[], busy: boolean) {
     setFavoriteBusyIds((current) => {

@@ -64,6 +64,7 @@ const TABLE_TRIM = [
 
 export function SmartEmbed({
   apiToken,
+  accountId,
   searchMode,
   onSearchModeChange,
   onRecallItems,
@@ -71,6 +72,7 @@ export function SmartEmbed({
   onOpenProfile,
 }: {
   apiToken: string;
+  accountId: string | number | null;
   searchMode: string;
   onSearchModeChange?: (mode: "balanced" | "precision" | "discovery") => void;
   onRecallItems: (items: any[]) => void;
@@ -81,6 +83,7 @@ export function SmartEmbed({
     <div data-embed="smart" className={`${EMBED} ${SMART_TRIM}`}>
       <SmartKolInputPanel
         apiToken={apiToken}
+        accountId={accountId}
         searchMode={searchMode}
         onSearchModeChange={onSearchModeChange}
         onRecallItems={onRecallItems}

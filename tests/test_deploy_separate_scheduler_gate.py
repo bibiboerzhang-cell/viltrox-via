@@ -1,8 +1,9 @@
 """Dedicated scheduler unit install gate in deploy_local_to_cloud.sh (A1 W1).
 
-Default OFF: without VKPI_DEPLOY_SEPARATE_SCHEDULER=1 the deploy must not touch
-the remote host for the scheduler unit at all.  With the gate on, exactly one
-reviewed ssh transaction installs/enables/restarts the unit.
+Default OFF: without VKPI_DEPLOY_SEPARATE_SCHEDULER=1 this block performs no
+installation.  The surrounding release lifecycle may still capture and
+quiesce an already-installed unit so rollback can restore it exactly.  With
+the gate on, exactly one reviewed ssh transaction installs/enables/restarts it.
 """
 from __future__ import annotations
 

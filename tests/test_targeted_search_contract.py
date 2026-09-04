@@ -71,10 +71,10 @@ def test_explicit_industries_become_locked_independent_first_round_cells() -> No
         lowered = cell["primary_query"].lower()
         assert "viltrox" not in lowered
         assert "z1" not in lowered
-        assert "tutorial" in lowered
-        assert "camera gear" in lowered
+        assert "tutorial" not in lowered
+        assert "camera gear" not in lowered
         assert "on-camera flash" not in lowered
-        assert cell["discovery_intent"] == "segment_creator_education_gear"
+        assert cell["discovery_intent"] == "operator_people_intent"
         assert cell["capability_in_primary_query"] is False
         assert cell["capability_verification_policy"] == "post_retrieval_locked_evidence"
     assert "motorsport" in cells[0]["primary_query"]
@@ -85,14 +85,19 @@ def test_explicit_industries_become_locked_independent_first_round_cells() -> No
     assert locked["source"] == "server_targeted_contract"
     assert locked["groups"][0]["canonical_term"] == "on-camera flash"
     assert "speedlight" in locked["groups"][0]["aliases"]
-    assert locked["groups"][1]["canonical_term"] == "motorsport"
-    assert "racing" in locked["groups"][1]["aliases"]
+    scene_group = next(group for group in locked["groups"] if group["kind"] == "scene")
+    assert scene_group["canonical_term"] == "motorsport"
+    assert "racing" in scene_group["aliases"]
+    role_group = next(group for group in locked["groups"] if group["kind"] == "role")
+    assert role_group["canonical_term"] == "photographer"
     brief = plan["search_brief"]
     assert brief["search_spec_version"] == "targeted_search_v2"
     assert brief["objective"] == "prospective_growth"
     assert brief["product"] == {
         "resolved_sku": FLASH["sku"],
         "capability": "on-camera flash",
+        "evidence_required": True,
+        "evidence_basis": "resolved_product",
         "brand_or_model_required": False,
     }
     assert brief["explicit_segments"] == plan["explicit_segments"]
@@ -166,7 +171,7 @@ def test_135mm_prospective_query_defers_capability_to_locked_verification() -> N
     )
     assert len(cells) == 1
     primary = cells[0]["primary_query"].lower()
-    assert primary == "portrait photographer tutorial camera gear"
+    assert primary == "portrait content creator"
     assert "telephoto portrait lens" not in primary
     assert "viltrox" not in primary
     assert "135mm" not in primary
@@ -302,15 +307,14 @@ def test_z1_first_round_covers_requested_workflows_without_brand_or_model_terms(
         platforms=["youtube", "instagram"],
     )
 
-    assert [cell["segment"] for cell in cells] == [
-        "motorsport", "food", "wedding", "event",
-    ]
+    assert [cell["segment"] for cell in cells] == ["motorsport", "food", "wedding"]
     assert [cell["primary_query"] for cell in cells] == [
-        "motorsport photographer tutorial camera gear",
-        "food photographer tutorial camera gear",
-        "wedding photographer tutorial camera gear",
-        "event photographer tutorial camera gear",
+        "motorsport photographer",
+        "food chef content creator",
+        "wedding event content creator",
     ]
+    assert cells[2]["required_scene_terms"] == ["wedding", "event"]
+    assert cells[2]["scene_match_mode"] == "all"
     for cell in cells:
         primary = cell["primary_query"].lower()
         assert not {"viltrox", "z1", "vintage", "pro"}.intersection(primary.split())
@@ -330,18 +334,328 @@ def test_135mm_first_round_covers_each_requested_use_case_without_product_identi
     )
 
     assert [cell["segment"] for cell in cells] == [
-        "motorsport", "wedding", "stage", "wildlife", "portrait", "sports",
+        "motorsport", "sports", "stage", "wedding", "wildlife", "portrait",
     ]
     assert all(cell["platforms"] == [] for cell in cells)
     assert all(cell["follower_filter"]["locked"] is False for cell in cells)
     for cell in cells:
         primary = cell["primary_query"].lower()
-        assert "tutorial camera gear" in primary
+        assert "tutorial camera gear" not in primary
         assert "telephoto portrait lens" not in primary
         assert not {"viltrox", "135mm", "f1", "lab"}.intersection(primary.split())
         assert cell["locked_term_groups"]["groups"][0]["canonical_term"] == (
             "telephoto portrait lens"
         )
+
+
+def test_connectors_preserve_any_all_and_shared_role_semantics() -> None:
+    def cells(query: str) -> list[dict]:
+        return contract.build_query_cells(
+            query=query,
+            body={},
+            product=None,
+            product_focus=[],
+            platforms=[],
+        )
+
+    alternatives = cells("找婚礼或人像摄影师")
+    assert [(cell["segment"], cell["scene_match_mode"]) for cell in alternatives] == [
+        ("wedding", "any"),
+        ("portrait", "any"),
+    ]
+
+    implicit_intersection = cells("找会拍街头和夜景的摄影师")
+    assert len(implicit_intersection) == 1
+    assert implicit_intersection[0]["required_scene_terms"] == ["street", "night"]
+    assert implicit_intersection[0]["scene_match_mode"] == "all"
+    assert implicit_intersection[0]["primary_query"] == "street night photographer"
+
+    explicit_intersection = cells("找同时做赛车和美食的创作者")
+    assert len(explicit_intersection) == 1
+    assert explicit_intersection[0]["required_scene_terms"] == ["motorsport", "food"]
+    assert explicit_intersection[0]["scene_match_mode"] == "all"
+
+    independent_list = cells("找赛车和美食创作者")
+    assert [cell["segment"] for cell in independent_list] == ["motorsport", "food"]
+
+    shared_role = cells("找拍篮球比赛和场边故事的摄影师")
+    assert [(cell["segment"], cell["primary_query"]) for cell in shared_role] == [
+        ("sports", "basketball photographer")
+    ]
+
+    positive_after_negation = cells(
+        "Find portrait photographers avoiding weddings and shooting at night"
+    )
+    assert len(positive_after_negation) == 1
+    assert positive_after_negation[0]["required_scene_terms"] == ["portrait", "night"]
+    assert positive_after_negation[0]["scene_match_mode"] == "all"
+
+    relative_clause = cells(
+        "Find wedding filmmakers who make documentary films"
+    )
+    assert len(relative_clause) == 1
+    assert relative_clause[0]["required_scene_terms"] == ["wedding", "documentary"]
+    assert relative_clause[0]["scene_match_mode"] == "all"
+    assert relative_clause[0]["primary_query"] == "wedding documentary filmmaker"
+
+    not_only = cells("Find photographers who shoot not only weddings but also portraits")
+    assert len(not_only) == 1
+    assert not_only[0]["required_scene_terms"] == ["wedding", "portrait"]
+    assert not_only[0]["scene_match_mode"] == "all"
+
+
+@pytest.mark.parametrize(
+    ("query", "segment", "primary", "role"),
+    [
+        ("Find off-camera lighting educators", "lighting", "off-camera flash educator", "educator"),
+        ("Find basketball storytellers", "sports", "basketball storyteller", "storyteller"),
+        ("Find basketball sideline reporters", "sports", "basketball sideline reporter", "reporter"),
+        ("Find portrait retouchers", "portrait", "portrait retoucher", "retoucher"),
+        ("Find fashion stylists", "fashion", "fashion stylist", "stylist"),
+    ],
+)
+def test_explicit_people_occupation_is_never_replaced_by_scene_default(
+    query: str,
+    segment: str,
+    primary: str,
+    role: str,
+) -> None:
+    [cell] = contract.build_query_cells(
+        query=query,
+        body={},
+        product=None,
+        product_focus=[],
+        platforms=[],
+    )
+
+    assert cell["segment"] == segment
+    assert cell["primary_query"] == primary
+    assert cell["required_role_terms"] == [role]
+    role_group = next(
+        group for group in cell["locked_term_groups"]["groups"]
+        if group["kind"] == "role"
+    )
+    assert role_group["canonical_term"] == role
+
+
+@pytest.mark.parametrize(
+    ("query", "primary", "scenes", "role"),
+    [
+        ("Find dental photographers", "dental photographer", ["dental"], "photographer"),
+        ("Find underwater photographers", "underwater photographer", ["underwater"], "photographer"),
+        ("Find architecture photographers", "architecture photographer", ["architecture"], "photographer"),
+        ("Find aerial photographers", "aerial photographer", ["aerial"], "photographer"),
+        ("Find newborn photographers", "newborn photographer", ["newborn"], "photographer"),
+        ("Find medical photographers", "medical photographer", ["medical"], "photographer"),
+        ("Find London photographers", "london photographer", ["london"], "photographer"),
+        ("Find camera assistants", "camera assistant", [], "camera assistant"),
+        (
+            "Find Atlanta portrait photographers",
+            "atlanta portrait photographer",
+            ["atlanta", "portrait"],
+            "photographer",
+        ),
+    ],
+)
+def test_explicit_unregistered_people_intent_is_preserved_exactly(
+    query: str,
+    primary: str,
+    scenes: list[str],
+    role: str,
+) -> None:
+    [cell] = contract.build_query_cells(
+        query=query,
+        body={},
+        product=None,
+        product_focus=[],
+        platforms=[],
+    )
+
+    assert cell["primary_query"] == primary
+    assert cell["required_scene_terms"] == scenes
+    assert cell["scene_match_mode"] == ("all" if len(scenes) > 1 else "any")
+    assert cell["required_role_terms"] == [role]
+    exact_groups = [
+        group for group in cell["locked_term_groups"]["groups"]
+        if group["canonical_term"] in {*scenes, role}
+    ]
+    assert exact_groups
+    for group in exact_groups:
+        if group["canonical_term"] not in {"portrait", "photographer"}:
+            assert group["alias_policy"] == "exact_only"
+            assert group["aliases"] == [group["canonical_term"]]
+
+
+@pytest.mark.parametrize(
+    ("query", "primary", "scene", "role"),
+    [
+        ("Find production designers", "production designers", None, "production designer"),
+        ("Find drone pilots", "drone pilots", None, "drone pilot"),
+        ("Find nature storytellers", "nature storyteller", "nature", "storyteller"),
+        ("Find sports commentators", "sports commentator", "sports", "commentator"),
+        ("Find wedding planners", "wedding planner", "wedding", "planner"),
+    ],
+)
+def test_unmapped_people_roles_never_fall_back_to_an_invented_generic_role(
+    query: str,
+    primary: str,
+    scene: str | None,
+    role: str,
+) -> None:
+    [cell] = contract.build_query_cells(
+        query=query, body={}, product=None, product_focus=[], platforms=[]
+    )
+    assert cell["primary_query"] == primary
+    assert cell["required_scene_terms"] == ([scene] if scene else [])
+    assert cell["required_role_terms"] == [role]
+    role_group = next(
+        group for group in cell["locked_term_groups"]["groups"]
+        if group["kind"] == "role"
+    )
+    assert role_group["canonical_term"] == role
+    if role not in {"storyteller"}:
+        assert role_group["alias_policy"] == "exact_only"
+
+
+@pytest.mark.parametrize("query", ["Find best photographers", "Find new photographers"])
+def test_ranking_or_recency_words_do_not_become_exact_scenes(query: str) -> None:
+    [cell] = contract.build_query_cells(
+        query=query, body={}, product=None, product_focus=[], platforms=[]
+    )
+    assert cell["primary_query"] == "professional photographer"
+    assert cell["required_scene_terms"] == []
+
+
+@pytest.mark.parametrize(
+    ("query", "primary", "role"),
+    [
+        ("Find photographers", "professional photographer", "photographer"),
+        ("Find 85 photographers", "professional photographer", "photographer"),
+        ("Find directors", "director", "director"),
+        ("Find bloggers", "blogger", "content creator"),
+        ("Find influencers", "influencer", "content creator"),
+        ("Find content creators", "content creator", "content creator"),
+        ("找摄影师", "professional photographer", "photographer"),
+        ("找创作者", "content creator", "content creator"),
+    ],
+)
+def test_pure_people_roles_never_invent_a_scene(
+    query: str,
+    primary: str,
+    role: str,
+) -> None:
+    [cell] = contract.build_query_cells(
+        query=query, body={}, product=None, product_focus=[], platforms=[]
+    )
+
+    assert cell["primary_query"] == primary
+    assert cell["required_scene_terms"] == []
+    assert cell["required_role_terms"] == [role]
+    assert cell["required_evidence_groups"] == ["people_role", "market_activation"]
+    assert [group["kind"] for group in cell["locked_term_groups"]["groups"]] == ["role"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "Find photographers who never shoot weddings but shoot portraits",
+        "Find non-wedding portrait photographers",
+        "找不接婚礼的人像摄影师",
+    ],
+)
+def test_negated_wedding_never_becomes_a_positive_people_constraint(query: str) -> None:
+    [cell] = contract.build_query_cells(
+        query=query, body={}, product=None, product_focus=[], platforms=[]
+    )
+
+    assert cell["primary_query"] == "portrait photographer"
+    assert cell["required_scene_terms"] == ["portrait"]
+    assert cell["required_role_terms"] == ["photographer"]
+
+
+def test_platform_word_is_not_an_exact_scene_and_two_occupations_are_all() -> None:
+    [platform_cell] = contract.build_query_cells(
+        query="Find top YouTube photographers",
+        body={}, product=None, product_focus=[], platforms=["youtube"],
+    )
+    assert platform_cell["required_scene_terms"] == []
+    assert platform_cell["platforms"] == ["youtube"]
+
+    [multi_role] = contract.build_query_cells(
+        query="Find photographers who are also filmmakers",
+        body={}, product=None, product_focus=[], platforms=[],
+    )
+    assert multi_role["primary_query"] == "photographer filmmaker"
+    assert multi_role["required_role_terms"] == ["photographer", "filmmaker"]
+    assert multi_role["role_match_mode"] == "all"
+
+
+def test_exact_scene_keeps_a_second_explicit_location() -> None:
+    [cell] = contract.build_query_cells(
+        query="Find architecture photographers in London",
+        body={}, product=None, product_focus=[], platforms=[],
+    )
+
+    assert cell["primary_query"] == "architecture london photographer"
+    assert cell["required_scene_terms"] == ["architecture", "london"]
+    assert cell["required_role_terms"] == ["photographer"]
+    assert cell["scene_match_mode"] == "all"
+
+
+def test_product_launch_campaign_is_not_reduced_to_bare_product() -> None:
+    [cell] = contract.build_query_cells(
+        query="Find photographers for a product launch campaign",
+        body={}, product=None, product_focus=[], platforms=[],
+    )
+
+    assert cell["primary_query"] == "product launch photographer"
+    assert cell["required_scene_terms"] == ["product_launch"]
+    assert cell["required_role_terms"] == ["photographer"]
+    scene_group = next(
+        group for group in cell["locked_term_groups"]["groups"]
+        if group["kind"] == "scene"
+    )
+    assert scene_group["canonical_term"] == "product_launch"
+    assert "product launch" in scene_group["aliases"]
+    assert "product" not in scene_group["aliases"]
+
+
+def test_negated_role_never_becomes_a_positive_multi_role_requirement() -> None:
+    [cell] = contract.build_query_cells(
+        query="Find creators who are not photographers but filmmakers",
+        body={}, product=None, product_focus=[], platforms=[],
+    )
+
+    assert cell["required_role_terms"] == ["content creator", "filmmaker"]
+    assert "photographer" not in cell["required_role_terms"]
+    assert cell["role_match_mode"] == "all"
+
+
+def test_operator_capability_without_sku_is_secondary_but_still_auditable() -> None:
+    monitor = contract.build_query_cells(
+        query="Find camera monitor reviewers",
+        body={},
+        product=None,
+        product_focus=["camera monitor", "camera gear reviewer"],
+        platforms=[],
+    )[0]
+    assert monitor["primary_query"] == "camera monitor reviewer"
+    assert monitor["product_evidence_required"] is True
+    assert monitor["product_evidence_basis"] == "operator_capability"
+    assert monitor["locked_term_groups"]["groups"][0]["canonical_term"] == "camera monitor"
+
+    lighting = contract.build_query_cells(
+        query="找 300W 闪光灯的评测博主",
+        body={},
+        product=None,
+        product_focus=["300W", "portable lighting", "gear reviewer"],
+        platforms=[],
+    )[0]
+    assert lighting["primary_query"] == "300W studio lighting reviewer"
+    assert lighting["product_evidence_basis"] == "operator_capability"
+    assert lighting["locked_term_groups"]["groups"][0]["canonical_term"] == (
+        "300w studio lighting"
+    )
 
 
 def test_static_use_map_requires_specific_creator_workflow_not_generic_role() -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import json
 import os
@@ -168,21 +169,38 @@ def _worker_lane_from_name(name: str) -> str:
     return "all"
 
 
-def _trust_db_migration_max() -> str | None:
-    """Highest migration version_key ACTUALLY APPLIED on the DB (schema_migrations).
+def _trust_db_migration_max() -> dict[str, object] | None:
+    """Applied migration identity, including holes below the highest version.
 
     Fail closed when the database cannot be queried.  Returning the code
     manifest tail after a DB failure would let deployment acceptance mistake
     "declared in source" for "applied to this database".
     """
     try:
-        from app.db.connection import get_conn
+        from app.db import connection as db_connection
 
-        rows = get_conn().execute("SELECT version_key FROM schema_migrations").fetchall()
-        applied = [str(dict(r).get("version_key") or "") for r in rows]
-        applied = [a for a in applied if a]
-        if applied:
-            return max(applied)
+        rows = db_connection.get_conn().execute(
+            "SELECT version_key FROM schema_migrations"
+        ).fetchall()
+        applied = sorted({str(dict(row).get("version_key") or "") for row in rows} - {""})
+        if not applied:
+            return None
+        expected = tuple(db_connection._POSTGRES_MIGRATION_SEQUENCE)
+        expected_set = set(expected)
+        unexpected = sorted(
+            set(applied) - expected_set - set(db_connection._MIGRATION_EXCLUDE)
+        )
+        missing = [name for name in expected if name not in set(applied)]
+        return {
+            "max": max(applied),
+            "set_complete": not missing,
+            "set_exact": not missing and not unexpected,
+            "applied_count": len(applied),
+            "expected_count": len(expected),
+            "missing_count": len(missing),
+            "unexpected_count": len(unexpected),
+            "set_sha256": hashlib.sha256("\n".join(applied).encode("utf-8")).hexdigest(),
+        }
     except Exception:
         logger.debug("health: applied migration read failed", exc_info=True)
     return None

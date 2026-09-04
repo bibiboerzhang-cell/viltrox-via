@@ -81,7 +81,23 @@ def _discovery_kwargs(
     request: DiscoveryRequest,
     deps: OnlineDependencies,
 ) -> dict[str, Any]:
-    persona = deps.load_persona(deps.text(request.payload.get("product_sku")))
+    operator_cells = [
+        cell
+        for cell in request.query_cells
+        if isinstance(cell, dict)
+        and bool(cell.get("segment_locked"))
+        and deps.text(cell.get("segment_source")).startswith("operator_")
+    ]
+    persona = (
+        {}
+        if operator_cells
+        else deps.load_persona(deps.text(request.payload.get("product_sku")))
+    )
+    operator_people_terms = [
+        deps.text(cell.get("primary_query") or cell.get("segment_label") or cell.get("segment"))
+        for cell in operator_cells
+        if deps.text(cell.get("primary_query") or cell.get("segment_label") or cell.get("segment"))
+    ]
     return {
         "query_text": request.query,
         "platforms": request.resolved_platforms,
@@ -89,10 +105,13 @@ def _discovery_kwargs(
         "market": request.normalized_market,
         "exclude_chinese": bool(request.payload.get("exclude_chinese", True)),
         "search_query_en": request.query,
-        "product_focus": request.payload.get("product_focus"),
-        "ideal_creator_types": persona.get("ideal_creator_types_json"),
-        "verticals": persona.get("verticals_json"),
-        "avoid_types": persona.get("avoid_types_json"),
+        "product_focus": operator_people_terms or request.payload.get("product_focus"),
+        "ideal_creator_types": operator_people_terms or persona.get("ideal_creator_types_json"),
+        "verticals": (
+            [deps.text(cell.get("segment_label") or cell.get("segment")) for cell in operator_cells]
+            if operator_cells else persona.get("verticals_json")
+        ),
+        "avoid_types": [] if operator_cells else persona.get("avoid_types_json"),
         "target_persona": deps.text(request.payload.get("target_persona")),
     }
 

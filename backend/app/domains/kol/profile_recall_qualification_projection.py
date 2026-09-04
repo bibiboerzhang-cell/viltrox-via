@@ -131,7 +131,9 @@ def _project_match_evidence(value: Any) -> list[dict[str, str]]:
             if (
                 not canonical
                 or not observed
-                or evidence_group not in {"product_use_fit", "segment_use_case"}
+                or evidence_group not in {
+                    "product_use_fit", "segment_use_case", "people_role",
+                }
                 or _CONTACT_TERM_RE.search(canonical)
                 or _CONTACT_TERM_RE.search(observed)
             ):

@@ -9,24 +9,52 @@ def _product_context(
     evidence_contract: Mapping[str, Any],
     *,
     terms: Callable[..., list[str]],
-) -> tuple[list[str], list[str], bool, str, str]:
+) -> tuple[list[str], list[str], list[str], bool, bool, str, str]:
     required_product = terms(evidence_contract.get("required_product_terms"))
     required_scene = terms(evidence_contract.get("required_scene_terms"))
+    required_role = terms(evidence_contract.get("required_role_terms"))
     matched_product = terms(evidence_contract.get("matched_product_terms"))
     matched_scene = terms(evidence_contract.get("matched_scene_terms"))
+    matched_role = terms(evidence_contract.get("matched_role_terms"))
+    product_required = evidence_contract.get("product_evidence_required") is not False
     product_pass = evidence_contract.get("passed") is True
     purpose_product = "、".join(required_product) or "目标产品能力"
     purpose_scene = "、".join(required_scene) or "目标使用场景"
-    purpose = f"寻找可能在{purpose_scene}中需要{purpose_product}，并能持续影响目标受众的创作者。"
-    if product_pass:
+    purpose_role = "、".join(required_role) or "目标人物"
+    if product_required:
+        purpose = (
+            f"寻找属于{purpose_role}、可能在{purpose_scene}中需要{purpose_product}，并能持续影响目标受众的创作者。"
+            if required_role
+            else f"寻找可能在{purpose_scene}中需要{purpose_product}，并能持续影响目标受众的创作者。"
+        )
+    else:
+        purpose = (
+            f"寻找属于{purpose_role}、公开内容符合{purpose_scene}场景要求，并能持续影响目标受众的创作者。"
+            if required_role
+            else f"寻找公开内容符合{purpose_scene}人物与场景要求，并能持续影响目标受众的创作者。"
+        )
+    if product_pass and not product_required:
         summary = (
-            f"公开内容同时支持产品用途（{'、'.join(matched_product)}）"
-            f"和使用场景（{'、'.join(matched_scene)}）。"
+            f"公开内容支持人物角色（{'、'.join(matched_role) or purpose_role}）"
+            f"与使用场景（{'、'.join(matched_scene)}）。"
+            if required_role
+            else f"公开内容支持要求的人物与使用场景（{'、'.join(matched_scene)}）。"
+        )
+    elif product_pass:
+        summary = (
+            f"公开内容同时支持人物角色（{'、'.join(matched_role) or purpose_role}）、"
+            f"产品用途（{'、'.join(matched_product)}）和使用场景（{'、'.join(matched_scene)}）。"
+            if required_role
+            else (
+                f"公开内容同时支持产品用途（{'、'.join(matched_product)}）"
+                f"和使用场景（{'、'.join(matched_scene)}）。"
+            )
         )
     else:
         missing_groups = terms(evidence_contract.get("missing_groups"))
-        summary = f"尚缺产品用途或场景的双重证据：{'、'.join(missing_groups) or '待补正文/字幕/视觉证据'}。"
-    return matched_product, matched_scene, product_pass, purpose, summary
+        requirement = "人物角色、产品用途或场景" if product_required else "人物角色或场景"
+        summary = f"尚缺{requirement}证据：{'、'.join(missing_groups) or '待补正文/字幕/视觉证据'}。"
+    return matched_product, matched_scene, matched_role, product_pass, product_required, purpose, summary
 
 
 def _activation_summary(
@@ -85,6 +113,7 @@ def _content_context(
 def _missing_evidence(
     *,
     product_pass: bool,
+    product_required: bool,
     activation_pass: bool,
     activation_status: str,
     minimum_samples: Any,
@@ -94,8 +123,12 @@ def _missing_evidence(
     missing: list[dict[str, Any]] = []
     if not product_pass:
         missing.append({
-            "code": "product_scene_evidence",
-            "label": "补抓标题之外的正文、字幕或视觉分析，核实产品用途与场景。",
+            "code": "product_scene_evidence" if product_required else "people_scene_evidence",
+            "label": (
+                "补抓标题之外的正文、字幕或视觉分析，核实产品用途与场景。"
+                if product_required
+                else "补抓标题之外的正文、字幕或视觉分析，核实人物角色与场景。"
+            ),
             "next_action": "fetch_content_body_caption_transcript_visual",
             "blocks_strict_qualification": True,
         })
@@ -157,9 +190,15 @@ def build_candidate_selection_rationale(
     schema: str,
     claim_status: str,
 ) -> dict[str, Any]:
-    matched_product, matched_scene, product_pass, purpose, product_summary = _product_context(
-        evidence_contract, terms=terms
-    )
+    (
+        matched_product,
+        matched_scene,
+        matched_role,
+        product_pass,
+        product_required,
+        purpose,
+        product_summary,
+    ) = _product_context(evidence_contract, terms=terms)
     activation_pass = activation_gate.get("passed") is True
     sample_count = activation_gate.get("sample_count")
     minimum_samples = activation_gate.get("minimum_sample_count") or 3
@@ -174,12 +213,12 @@ def build_candidate_selection_rationale(
     missing_signals = set(content_contract.get("missing_signals") or [])
     cards = [
         card(
-            "product_use_and_scene",
-            "产品使用需求与场景",
+            "product_use_and_scene" if product_required else "people_and_scene",
+            "产品使用需求与场景" if product_required else "人物与场景匹配",
             status="observed" if product_pass else "pending",
             summary=product_summary,
             score=product_use_fit,
-            evidence_terms=[*matched_product, *matched_scene],
+            evidence_terms=[*matched_role, *matched_product, *matched_scene],
             evidence_fields=evidence_contract.get("matched_fields"),
         ),
         card(
@@ -218,6 +257,7 @@ def build_candidate_selection_rationale(
     ]
     missing = _missing_evidence(
         product_pass=product_pass,
+        product_required=product_required,
         activation_pass=activation_pass,
         activation_status=activation_status,
         minimum_samples=minimum_samples,

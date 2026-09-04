@@ -29,6 +29,12 @@ def _cell_context(cell: dict[str, Any]) -> dict[str, Any]:
         "segment_label": cell.get("segment_label"),
         "primary_query": cell.get("primary_query"),
         "required_evidence_groups": list(cell.get("required_evidence_groups") or []),
+        "required_scene_terms": list(cell.get("required_scene_terms") or []),
+        "scene_match_mode": "all" if cell.get("scene_match_mode") == "all" else "any",
+        "required_role_terms": list(cell.get("required_role_terms") or []),
+        "role_match_mode": "all" if cell.get("role_match_mode") == "all" else "any",
+        "product_evidence_required": cell.get("product_evidence_required") is not False,
+        "product_evidence_basis": cell.get("product_evidence_basis"),
         "brand_or_model_required": cell.get("brand_or_model_required") is True,
         "brand_or_model_ranking_weight": cell.get("brand_or_model_ranking_weight"),
     }

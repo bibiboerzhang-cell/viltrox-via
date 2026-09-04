@@ -81,6 +81,12 @@ def _guard_rich_plan(
 ) -> tuple[dict[str, Any], str]:
     if deps.text(guard_plan.get("status")) == "needs_clarification":
         return guard_plan, source
+    if deps.text(rich_plan.get("status")) == "needs_clarification":
+        # The durable planner applies deterministic product/follower/people
+        # guards before any provider response.  A blank compatibility query is
+        # therefore an intentional stop, not a reason to resurrect the preview
+        # plan and continue into recall/session writes.
+        return rich_plan, source
 
     guard_query = deps.text(guard_plan.get("search_query"))
     guard_terms = set(deps.query_evidence_terms(guard_query))

@@ -5,8 +5,8 @@ services/scheduler/jobs_tasks_batch.py — LLM Batch 定时任务簇
 job_llm_batch_poll(回收 ended 批次)+ job_vkpi_content_fit_batch_refresh(攒 KOL 提交)。
 jobs_tasks.py 通过 `from .jobs_tasks_batch import (...)` re-export 兜住所有调用点。
 
-红线对齐(与 jobs_tasks.py 原注释同款):提交端只在云端跑;config-gate 默认 OFF;
-绕过串行 worker、零触 viltrox_fit_score。函数体逐字不变。
+红线对齐(与 jobs_tasks.py 原注释同款):config-gate 默认 OFF，且 Anthropic Batch
+transport 当前生产硬关闭；绕过串行 worker、零触 viltrox_fit_score。
 """
 from __future__ import annotations
 
@@ -18,11 +18,7 @@ logger = get_logger(__name__)
 
 
 async def job_llm_batch_poll():
-    """每 10 分钟轮询 Anthropic Message Batches:ended→回收 dispatch 落各自域表;超龄→标 expired。
-
-    无 in_progress 批次 → 空跑即返回(无害)。提交端只在云端跑(本地 SDK 无代理被墙)。
-    import content_fit_batch 以触发 consumer 注册(否则 dispatch 找不到回调)。
-    """
+    """保留调度契约；硬关闭的 poll 返回稳定 disabled receipt。"""
     try:
         from app.domains.kol import content_fit_batch  # noqa: F401  确保 consumer 注册
         from app.platform import llm_batch
@@ -35,11 +31,7 @@ async def job_llm_batch_poll():
 
 
 async def job_vkpi_content_fit_batch_refresh():
-    """每夜把缺 content_fit_v1 的 KOL 攒成一个 Anthropic Batch 提交(50% 折扣,输出与同步一致)。
-
-    config-gate:scheduler_tasks.vkpi_content_fit_batch(默认 OFF,验证后显式开)。
-    已有 in_progress 同 consumer 批次 → 跳过(不重复提交)。绕过串行 worker、零触 viltrox_fit_score。
-    """
+    """保留默认 OFF 的夜间任务契约；transport 硬关闭时不扫库、不提交。"""
     from .jobs_tasks import _scheduler_task_enabled
 
     if not _scheduler_task_enabled("vkpi_content_fit_batch"):
@@ -50,6 +42,13 @@ async def job_vkpi_content_fit_batch_refresh():
         from app.db.connection import get_conn
         from app.domains.kol import content_fit_batch as cfb
         from app.platform import llm_batch
+
+        if not llm_batch.anthropic_batch_transport_enabled():
+            logger.warning(
+                "scheduler.content_fit_batch_refresh_disabled",
+                extra={"reason": "durable_idempotency_unavailable"},
+            )
+            return
 
         def _submit() -> dict:
             conn = get_conn()

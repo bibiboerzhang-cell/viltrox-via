@@ -5,7 +5,9 @@ import {
   hasExplicitBusinessLanes,
   recallDisplayCounts,
   recallReturnedCount,
+  resolvedProductContextFromPlan,
   resolvedProductSkuFromPlan,
+  withResolvedProductContext,
   withResolvedProductSku,
 } from "./SmartKolInputPanel.TextResult";
 import { recallDistributionView } from "./SmartKolInputPanel.evidence";
@@ -27,6 +29,72 @@ describe("SmartKolInputPanel product scope propagation", () => {
   it("does not invent a product scope when the planner did not resolve one", () => {
     const item = { kol_pool_id: 42 };
     expect(withResolvedProductSku(item, resolvedProductSkuFromPlan({}))).toBe(item);
+  });
+
+  it("keeps a no-SKU focal family as family context when a creator detail is opened", () => {
+    const item = {
+      kol_pool_id: 42,
+      handle: "family_creator",
+      product_sku: "OLD-HISTORICAL-SKU",
+      productSku: "OLD-HISTORICAL-CAMEL-SKU",
+      productFamily: "family:OLD-CAMEL",
+      productFamilyName: "Old camel family",
+    };
+    const context = resolvedProductContextFromPlan({
+      resolved_product: {
+        sku: "",
+        model_name: "Viltrox 35mm F1.2 family",
+        series: "LAB",
+        focal_family_skus: ["AF-35-LAB-FE", "AF-35-LAB-Z"],
+      },
+    });
+    const scoped = withResolvedProductContext(item, context);
+
+    expect(context).toMatchObject({
+      kind: "product_family",
+      identity: "family:Viltrox 35mm F1.2 family",
+      label: "Viltrox 35mm F1.2 family",
+      candidate_skus: ["AF-35-LAB-FE", "AF-35-LAB-Z"],
+    });
+    expect(scoped).toMatchObject({
+      product_family: "family:Viltrox 35mm F1.2 family",
+      product_family_name: "Viltrox 35mm F1.2 family",
+      product_identity: "family:Viltrox 35mm F1.2 family",
+    });
+    expect(scoped).not.toHaveProperty("product_sku");
+    expect(scoped).not.toHaveProperty("productSku");
+    expect(scoped).not.toHaveProperty("productFamily");
+    expect(scoped).not.toHaveProperty("productFamilyName");
+    expect(item.product_sku).toBe("OLD-HISTORICAL-SKU");
+  });
+
+  it("lets an exact current SKU replace stale family metadata without mutating the candidate", () => {
+    const item = {
+      kol_pool_id: 43,
+      productSku: "OLD-CAMEL-SKU",
+      product_family: "family:OLD",
+      product_family_name: "Old family",
+      productFamily: "family:OLD-CAMEL",
+      productFamilyName: "Old camel family",
+    };
+    const context = resolvedProductContextFromPlan({
+      resolved_product: {
+        sku: "AF-35MM-F12-LAB-FE",
+        model_name: "AF 35mm F1.2 LAB FE",
+      },
+    });
+    const scoped = withResolvedProductContext(item, context);
+
+    expect(scoped).toMatchObject({
+      product_sku: "AF-35MM-F12-LAB-FE",
+      product_identity: "AF-35MM-F12-LAB-FE",
+    });
+    expect(scoped).not.toHaveProperty("product_family");
+    expect(scoped).not.toHaveProperty("product_family_name");
+    expect(scoped).not.toHaveProperty("productSku");
+    expect(scoped).not.toHaveProperty("productFamily");
+    expect(scoped).not.toHaveProperty("productFamilyName");
+    expect(item.product_family).toBe("family:OLD");
   });
 });
 

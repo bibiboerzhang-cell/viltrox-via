@@ -83,24 +83,25 @@ def z1_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     ("cjk_term", "expected_keyword"),
     [
-        ("赛车", "automotive videographer"),
-        ("机车", "motorsport"),
-        ("摩托", "racing"),
-        ("厨师", "food creator"),
-        ("餐饮", "culinary"),
-        ("美食", "chef"),
-        ("烹饪", "food videographer"),
-        ("婚礼", "wedding filmmaker"),
-        ("健身", "fitness creator"),
-        ("宠物", "pet creator"),
-        ("旅拍", "travel videographer"),
+        ("赛车", "motorsport content creator"),
+        ("机车", "motorsport content creator"),
+        ("摩托", "motorsport content creator"),
+        ("厨师", "food content creator"),
+        ("餐饮", "food content creator"),
+        ("美食", "food content creator"),
+        ("烹饪", "food content creator"),
+        ("婚礼", "wedding content creator"),
+        ("健身", "fitness content creator"),
+        ("宠物", "pet content creator"),
+        ("旅拍", "travel content creator"),
     ],
 )
 def test_fallback_plan_maps_operator_professions_to_english_terms(
     cjk_term: str, expected_keyword: str
 ) -> None:
     plan = smart_query_planner._fallback_plan(f"找一些{cjk_term}方向的创作者")
-    assert expected_keyword in plan["search_query"]
+    assert plan["search_query"] == expected_keyword
+    assert plan["query_cells"][0]["primary_query"] == expected_keyword
     # 问题A:中文绝不进 search_query。
     assert not any("一" <= ch <= "鿿" for ch in plan["search_query"])
     assert query_evidence_terms(plan["search_query"])
@@ -135,9 +136,8 @@ def test_anchor_gate_still_flips_when_both_sides_are_generic() -> None:
     anchored = smart_query_planner._require_evidence_anchor(plan)
     assert anchored["status"] == "needs_clarification"
     assert anchored["reason"] == "no_evidence_anchor"
-    assert (
-        anchored["clarification"]["message"]
-        == "没识别出产品型号，也没识别出内容场景/职业——补一个具体产品（如 Z1 Pro）或职业词（如 赛车摄影）再搜"
+    assert anchored["clarification"]["message"] == (
+        "没识别出要找的行业、场景、人物角色或内容形式，请补充其中一项；不需要输入 SKU。"
     )
 
 
@@ -201,8 +201,9 @@ def test_cjk_profession_query_without_product_gets_provider_free_plan(
         "不同行业的用户比如赛车,厨师餐饮等", body={}
     )
     assert plan["status"] != "needs_clarification"
-    assert "automotive videographer" in plan["search_query"]
-    assert "food creator" in plan["search_query"]
+    assert [cell["segment"] for cell in plan["query_cells"]] == ["motorsport", "food"]
+    assert plan["search_queries"] == ["motorsport photographer", "food chef content creator"]
+    assert plan["search_query"] == plan["search_queries"][0]
     assert plan["provider"] == "provider_free"
     assert plan["fallback_used"] is False
 

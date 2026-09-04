@@ -1263,7 +1263,9 @@ ROLLBACK_COMPLETED=0
 ROLLBACK_PREPARE_MAY_HAVE_COMMITTED=0
 PREDEPLOY_APP_SHA=""
 PREDEPLOY_MIGRATION=""
+PREDEPLOY_APPLIED_MIGRATIONS=""
 PENDING_MIGRATIONS=""
+PREDEPLOY_ACTIVE_LLM_BATCHES=""
 FORWARD_COMPATIBILITY_DECLARATION="${VKPI_FORWARD_COMPATIBLE_MIGRATIONS:-}"
 STAGING_DB_CLONE_MODE="${VKPI_STAGING_DB_CLONE:-0}"
 FIRST_ATOMIC_BOOTSTRAP_PLAN="${VKPI_FIRST_ATOMIC_BOOTSTRAP_PLAN:-}"
@@ -1285,6 +1287,15 @@ STAGING_REDIS_WORKER_UNIT_WAS_ENABLED=""
 STAGING_REDIS_WORKER_UNIT_WAS_MASKED=""
 STAGING_REDIS_WORKER_CAPTURED_STATE=""
 STAGING_REDIS_WORKER_UNIT_STATE=""
+SEPARATE_SCHEDULER_SERVICE="vkpi-scheduler.service"
+SEPARATE_SCHEDULER_UNIT_RELATIVE="deploy/systemd/vkpi-scheduler.service"
+SCHEDULER_LOAD_STATE=""
+SCHEDULER_ACTIVE_STATE=""
+SCHEDULER_UNIT_FILE_STATE=""
+SCHEDULER_ATOMIC_CAPTURED_STATE=""
+SCHEDULER_ATOMIC_ROLLBACK_STATE=""
+SCHEDULER_QUIESCED=0
+SCHEDULER_ACCEPTED_STATE_COMMITTED=0
 PGBOUNCER_SERVICE="pgbouncer.service"
 PGBOUNCER_SOCKET="pgbouncer.socket"
 PGBOUNCER_PORT="6432"
@@ -1321,6 +1332,8 @@ STAGING_CLONE_ENV_SHA256=""
 STAGING_DB_CLONE_ACTIVATED=0
 STAGING_BACKUP_VERIFIED=0
 RELEASE_CONSUMERS_QUIESCED=0
+ANTHROPIC_BATCH_SHUTDOWN_VERIFIED=0
+ANTHROPIC_BATCH_PROVIDER_RECEIPT=""
 LIVE_RELEASE_DRAIN_VERIFIED=0
 RELEASE_DRAIN_VERIFIED=0
 FENCED_RELEASE_DRAIN_VERIFIED=0
@@ -2175,15 +2188,17 @@ PY
 }
 
 capture_remote_sync_unit_state() {
-  local captured active_state unit_file_state
-  if ! captured="$(ssh "${SSH_TARGET}" "for unit in '${SYNC_SERVICE}' '${SYNC_TIMER}' '${HEALTH_SENTINEL_SERVICE}' '${HEALTH_SENTINEL_TIMER}'; do [ \"\$(systemctl show --property LoadState --value \"\${unit}\")\" = loaded ] || { echo \"reviewed timer/service is not loaded: \${unit}\" >&2; exit 1; }; done; printf '%s:%s:%s:%s:%s:%s:%s:%s\n' \"\$(systemctl show --property ActiveState --value '${SYNC_SERVICE}')\" \"\$(systemctl show --property UnitFileState --value '${SYNC_SERVICE}')\" \"\$(systemctl show --property ActiveState --value '${SYNC_TIMER}')\" \"\$(systemctl show --property UnitFileState --value '${SYNC_TIMER}')\" \"\$(systemctl show --property ActiveState --value '${HEALTH_SENTINEL_SERVICE}')\" \"\$(systemctl show --property UnitFileState --value '${HEALTH_SENTINEL_SERVICE}')\" \"\$(systemctl show --property ActiveState --value '${HEALTH_SENTINEL_TIMER}')\" \"\$(systemctl show --property UnitFileState --value '${HEALTH_SENTINEL_TIMER}')\"")"; then
-    echo "Refusing deploy because the reviewed sync/sentinel service and timer state is unreadable." >&2
+  local captured active_state unit_file_state scheduler_presence scheduler_activity
+  local scheduler_enablement scheduler_masking
+  if ! captured="$(ssh "${SSH_TARGET}" "for unit in '${SYNC_SERVICE}' '${SYNC_TIMER}' '${HEALTH_SENTINEL_SERVICE}' '${HEALTH_SENTINEL_TIMER}'; do [ \"\$(systemctl show --property LoadState --value \"\${unit}\")\" = loaded ] || { echo \"reviewed timer/service is not loaded: \${unit}\" >&2; exit 1; }; done; scheduler_load=\$(systemctl show --property LoadState --value '${SEPARATE_SCHEDULER_SERVICE}'); scheduler_active=\$(systemctl show --property ActiveState --value '${SEPARATE_SCHEDULER_SERVICE}'); scheduler_file=\$(systemctl show --property UnitFileState --value '${SEPARATE_SCHEDULER_SERVICE}'); [ -n \"\${scheduler_file}\" ] || scheduler_file=not-found; scheduler_path='/etc/systemd/system/${SEPARATE_SCHEDULER_SERVICE}'; case \"\${scheduler_load}:\${scheduler_file}\" in loaded:masked|masked:masked) [ -L \"\${scheduler_path}\" ] && [ \"\$(readlink -- \"\${scheduler_path}\")\" = /dev/null ] || { echo 'scheduler persistent mask path is invalid' >&2; exit 1; };; loaded:*|masked:masked-runtime) [ -f \"\${scheduler_path}\" ] && [ ! -L \"\${scheduler_path}\" ] || { echo 'scheduler unit path is not a regular file' >&2; exit 1; };; not-found:not-found) [ ! -e \"\${scheduler_path}\" ] && [ ! -L \"\${scheduler_path}\" ] || { echo 'absent scheduler unit path exists' >&2; exit 1; };; *) echo 'scheduler load and unit-file state disagree' >&2; exit 1;; esac; printf '%s:%s:%s:%s:%s:%s:%s:%s:%s:%s:%s\n' \"\$(systemctl show --property ActiveState --value '${SYNC_SERVICE}')\" \"\$(systemctl show --property UnitFileState --value '${SYNC_SERVICE}')\" \"\$(systemctl show --property ActiveState --value '${SYNC_TIMER}')\" \"\$(systemctl show --property UnitFileState --value '${SYNC_TIMER}')\" \"\$(systemctl show --property ActiveState --value '${HEALTH_SENTINEL_SERVICE}')\" \"\$(systemctl show --property UnitFileState --value '${HEALTH_SENTINEL_SERVICE}')\" \"\$(systemctl show --property ActiveState --value '${HEALTH_SENTINEL_TIMER}')\" \"\$(systemctl show --property UnitFileState --value '${HEALTH_SENTINEL_TIMER}')\" \"\${scheduler_load}\" \"\${scheduler_active}\" \"\${scheduler_file}\"")"; then
+    echo "Refusing deploy because the reviewed sync/sentinel/scheduler unit state is unreadable." >&2
     return 1
   fi
   IFS=: read -r SYNC_SERVICE_ACTIVE_STATE SYNC_SERVICE_UNIT_FILE_STATE \
     SYNC_TIMER_ACTIVE_STATE SYNC_TIMER_UNIT_FILE_STATE \
     HEALTH_SENTINEL_SERVICE_ACTIVE_STATE HEALTH_SENTINEL_SERVICE_UNIT_FILE_STATE \
-    HEALTH_SENTINEL_TIMER_ACTIVE_STATE HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE <<<"${captured}"
+    HEALTH_SENTINEL_TIMER_ACTIVE_STATE HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE \
+    SCHEDULER_LOAD_STATE SCHEDULER_ACTIVE_STATE SCHEDULER_UNIT_FILE_STATE <<<"${captured}"
   for active_state in \
     "${SYNC_SERVICE_ACTIVE_STATE}" "${SYNC_TIMER_ACTIVE_STATE}" \
     "${HEALTH_SENTINEL_SERVICE_ACTIVE_STATE}" "${HEALTH_SENTINEL_TIMER_ACTIVE_STATE}"; do
@@ -2206,6 +2221,37 @@ capture_remote_sync_unit_state() {
       ;;
     esac
   done
+  case "${SCHEDULER_LOAD_STATE}:${SCHEDULER_ACTIVE_STATE}:${SCHEDULER_UNIT_FILE_STATE}" in
+    not-found:inactive:not-found)
+      scheduler_presence=absent
+      scheduler_activity=inactive
+      scheduler_enablement=disabled
+      scheduler_masking=unmasked
+      ;;
+    loaded:active:*|loaded:activating:*|loaded:inactive:*|masked:inactive:masked|masked:inactive:masked-runtime)
+      scheduler_presence=present
+      case "${SCHEDULER_ACTIVE_STATE}" in
+        active|activating) scheduler_activity=active ;;
+        *) scheduler_activity=inactive ;;
+      esac
+      case "${SCHEDULER_UNIT_FILE_STATE}" in
+        enabled|enabled-runtime) scheduler_enablement=enabled ;;
+        disabled|static|indirect|linked|linked-runtime|alias|generated|transient|masked|masked-runtime) scheduler_enablement=disabled ;;
+        *)
+          echo "Refusing deploy because the scheduler has an unrestorable unit-file state: ${SCHEDULER_UNIT_FILE_STATE}." >&2
+          return 1
+          ;;
+      esac
+      [ "${SCHEDULER_UNIT_FILE_STATE}" = masked ] \
+        && scheduler_masking=masked \
+        || scheduler_masking=unmasked
+      ;;
+    *)
+      echo "Refusing deploy because the scheduler has an unrestorable captured state." >&2
+      return 1
+      ;;
+  esac
+  SCHEDULER_ATOMIC_CAPTURED_STATE="${scheduler_presence}:${scheduler_activity}:${scheduler_enablement}:${scheduler_masking}"
   SYNC_UNITS_CAPTURED=1
 }
 
@@ -2645,32 +2691,53 @@ REMOTE_PGBOUNCER_RESTORE
 }
 
 inspect_remote_sync_unit_restore_receipt() {
+  local scheduler_service="${SEPARATE_SCHEDULER_SERVICE:-vkpi-scheduler.service}"
+  local scheduler_load="${SCHEDULER_LOAD_STATE:-not-found}"
+  local scheduler_active="${SCHEDULER_ACTIVE_STATE:-inactive}"
+  local scheduler_file="${SCHEDULER_UNIT_FILE_STATE:-not-found}"
   if [ "${SYNC_UNITS_CAPTURED}" != "1" ]; then
     echo "Cannot inspect sync-unit restore state without a captured pre-mutation state." >&2
     return 1
+  fi
+  if [ "${SCHEDULER_ACCEPTED_STATE_COMMITTED:-0}" = "1" ]; then
+    scheduler_load=loaded
+    scheduler_active=active
+    scheduler_file=enabled
   fi
   # Read-only, exact receipt used after an SSH acknowledgement is lost.  Its
   # success vocabulary is fixed and contains no unit output or environment
   # values, so diagnostics cannot accidentally disclose production settings.
   ssh "${SSH_TARGET}" "bash -s -- \
-    '${SYNC_SERVICE}' '${SYNC_SERVICE_ACTIVE_STATE}' '${SYNC_SERVICE_UNIT_FILE_STATE}' service \
-    '${SYNC_TIMER}' '${SYNC_TIMER_ACTIVE_STATE}' '${SYNC_TIMER_UNIT_FILE_STATE}' sync-timer \
-    '${HEALTH_SENTINEL_SERVICE}' '${HEALTH_SENTINEL_SERVICE_ACTIVE_STATE}' '${HEALTH_SENTINEL_SERVICE_UNIT_FILE_STATE}' service \
-    '${HEALTH_SENTINEL_TIMER}' '${HEALTH_SENTINEL_TIMER_ACTIVE_STATE}' '${HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE}' timer" <<'REMOTE_INSPECT_REVIEWED_TIMERS'
+    '${SYNC_SERVICE}' loaded '${SYNC_SERVICE_ACTIVE_STATE}' '${SYNC_SERVICE_UNIT_FILE_STATE}' service \
+    '${SYNC_TIMER}' loaded '${SYNC_TIMER_ACTIVE_STATE}' '${SYNC_TIMER_UNIT_FILE_STATE}' sync-timer \
+    '${HEALTH_SENTINEL_SERVICE}' loaded '${HEALTH_SENTINEL_SERVICE_ACTIVE_STATE}' '${HEALTH_SENTINEL_SERVICE_UNIT_FILE_STATE}' service \
+    '${HEALTH_SENTINEL_TIMER}' loaded '${HEALTH_SENTINEL_TIMER_ACTIVE_STATE}' '${HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE}' timer \
+    '${scheduler_service}' '${scheduler_load}' '${scheduler_active}' '${scheduler_file}' scheduler" <<'REMOTE_INSPECT_REVIEWED_TIMERS'
 set -euo pipefail
 receipt=restored
 
 inspect_unit() {
-  local unit="$1" expected_active="$2" expected_file="$3" kind="$4"
-  local should_start=0 observed_load observed_active observed_file
+  local unit="$1" expected_load="$2" expected_active="$3" expected_file="$4" kind="$5"
+  local should_start=0 observed_load observed_active observed_file unit_path
   case "${expected_active}" in active|activating) should_start=1 ;; esac
   if [ "${kind}" = sync-timer ] && [ "${expected_file}" = enabled ]; then
     should_start=1
   fi
   observed_load="$(systemctl show --property LoadState --value "${unit}")"
   observed_file="$(systemctl show --property UnitFileState --value "${unit}")"
+  [ -n "${observed_file}" ] || observed_file=not-found
   observed_active="$(systemctl show --property ActiveState --value "${unit}")"
-  if [ "${observed_load}" != loaded ] || [ "${observed_file}" != "${expected_file}" ]; then
+  unit_path="/etc/systemd/system/${unit}"
+  if [ "${expected_load}" = not-found ]; then
+    if [ "${observed_load}:${observed_active}:${observed_file}" != not-found:inactive:not-found ] \
+      || [ -e "${unit_path}" ] || [ -L "${unit_path}" ]; then
+      receipt=not-restored
+    fi
+    return 0
+  fi
+  if { [ "${expected_load}" != loaded ] && [ "${expected_load}" != masked ]; } \
+    || [ "${observed_load}" != "${expected_load}" ] \
+    || [ "${observed_file}" != "${expected_file}" ]; then
     receipt=not-restored
     return 0
   fi
@@ -2682,8 +2749,8 @@ inspect_unit() {
 }
 
 while [ "$#" -gt 0 ]; do
-  inspect_unit "$1" "$2" "$3" "$4"
-  shift 4
+  inspect_unit "$1" "$2" "$3" "$4" "$5"
+  shift 5
 done
 printf 'vkpi-sync-unit-restore/v1:%s\n' "${receipt}"
 REMOTE_INSPECT_REVIEWED_TIMERS
@@ -2722,6 +2789,10 @@ reconcile_remote_sync_unit_restore() {
 
 restore_remote_sync_unit_state() {
   local retry_count="${1:-0}"
+  local scheduler_service="${SEPARATE_SCHEDULER_SERVICE:-vkpi-scheduler.service}"
+  local scheduler_load="${SCHEDULER_LOAD_STATE:-not-found}"
+  local scheduler_active="${SCHEDULER_ACTIVE_STATE:-inactive}"
+  local scheduler_file="${SCHEDULER_UNIT_FILE_STATE:-not-found}"
   if [ "${retry_count}" != "0" ] && [ "${retry_count}" != "1" ]; then
     echo "Sync-unit restore retry count is outside the reviewed bound." >&2
     return 1
@@ -2735,6 +2806,11 @@ restore_remote_sync_unit_state() {
   if [ "${SYNC_UNITS_CAPTURED}" != "1" ]; then
     echo "Cannot restore sync units without a captured pre-mutation state." >&2
     return 1
+  fi
+  if [ "${SCHEDULER_ACCEPTED_STATE_COMMITTED:-0}" = "1" ]; then
+    scheduler_load=loaded
+    scheduler_active=active
+    scheduler_file=enabled
   fi
   # A prior call can have committed remotely even though its SSH channel died.
   # Reconcile read-only first; if the exact receipt proves an incomplete state,
@@ -2751,16 +2827,57 @@ restore_remote_sync_unit_state() {
   SYNC_UNITS_RESTORE_MAY_HAVE_COMMITTED=1
   SYNC_UNITS_RESTORED=0
   if ! ssh "${SSH_TARGET}" "bash -s -- \
-    '${SYNC_SERVICE}' '${SYNC_SERVICE_ACTIVE_STATE}' '${SYNC_SERVICE_UNIT_FILE_STATE}' service \
-    '${SYNC_TIMER}' '${SYNC_TIMER_ACTIVE_STATE}' '${SYNC_TIMER_UNIT_FILE_STATE}' sync-timer \
-    '${HEALTH_SENTINEL_SERVICE}' '${HEALTH_SENTINEL_SERVICE_ACTIVE_STATE}' '${HEALTH_SENTINEL_SERVICE_UNIT_FILE_STATE}' service \
-    '${HEALTH_SENTINEL_TIMER}' '${HEALTH_SENTINEL_TIMER_ACTIVE_STATE}' '${HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE}' timer" <<'REMOTE_RESTORE_REVIEWED_TIMERS'
+    '${SYNC_SERVICE}' loaded '${SYNC_SERVICE_ACTIVE_STATE}' '${SYNC_SERVICE_UNIT_FILE_STATE}' service \
+    '${SYNC_TIMER}' loaded '${SYNC_TIMER_ACTIVE_STATE}' '${SYNC_TIMER_UNIT_FILE_STATE}' sync-timer \
+    '${HEALTH_SENTINEL_SERVICE}' loaded '${HEALTH_SENTINEL_SERVICE_ACTIVE_STATE}' '${HEALTH_SENTINEL_SERVICE_UNIT_FILE_STATE}' service \
+    '${HEALTH_SENTINEL_TIMER}' loaded '${HEALTH_SENTINEL_TIMER_ACTIVE_STATE}' '${HEALTH_SENTINEL_TIMER_UNIT_FILE_STATE}' timer \
+    '${scheduler_service}' '${scheduler_load}' '${scheduler_active}' '${scheduler_file}' scheduler" <<'REMOTE_RESTORE_REVIEWED_TIMERS'
 set -euo pipefail
 
 restore_unit() {
-  local unit="$1" expected_active="$2" expected_file="$3" kind="$4"
-  local should_start=0 observed_active observed_file
-  if [ "${expected_file}" != masked-runtime ]; then
+  local unit="$1" expected_load="$2" expected_active="$3" expected_file="$4" kind="$5"
+  local should_start=0 observed_load observed_active observed_file unit_path
+  unit_path="/etc/systemd/system/${unit}"
+  if [ "${expected_load}" = not-found ]; then
+    sudo systemctl stop "${unit}" >/dev/null 2>&1 || true
+    sudo systemctl unmask --runtime "${unit}" >/dev/null 2>&1 || true
+    sudo systemctl disable "${unit}" >/dev/null 2>&1 || true
+    sudo systemctl daemon-reload
+    observed_load="$(systemctl show --property LoadState --value "${unit}")"
+    observed_active="$(systemctl show --property ActiveState --value "${unit}")"
+    observed_file="$(systemctl show --property UnitFileState --value "${unit}")"
+    [ -n "${observed_file}" ] || observed_file=not-found
+    [ "${observed_load}:${observed_active}:${observed_file}" = not-found:inactive:not-found ] \
+      && [ ! -e "${unit_path}" ] && [ ! -L "${unit_path}" ] \
+      || { echo "absent scheduler state was not restored: ${unit}" >&2; return 1; }
+    return 0
+  fi
+  { [ "${expected_load}" = loaded ] || [ "${expected_load}" = masked ]; } \
+    || { echo "reviewed unit load state is invalid: ${unit}" >&2; return 1; }
+  if [ "${kind}" = scheduler ]; then
+    case "${expected_file}" in
+      masked)
+        sudo systemctl unmask --runtime "${unit}" >/dev/null 2>&1 || true
+        ;;
+      masked-runtime)
+        sudo systemctl mask --runtime "${unit}" >/dev/null
+        ;;
+      enabled)
+        sudo systemctl unmask --runtime "${unit}" >/dev/null
+        sudo systemctl enable "${unit}" >/dev/null
+        ;;
+      enabled-runtime)
+        sudo systemctl unmask --runtime "${unit}" >/dev/null
+        sudo systemctl disable "${unit}" >/dev/null 2>&1 || true
+        sudo systemctl enable --runtime "${unit}" >/dev/null
+        ;;
+      disabled|static|indirect|linked|linked-runtime|alias|generated|transient)
+        sudo systemctl unmask --runtime "${unit}" >/dev/null
+        sudo systemctl disable "${unit}" >/dev/null 2>&1 || true
+        ;;
+      *) echo "scheduler unit-file restore target is invalid: ${expected_file}" >&2; return 1 ;;
+    esac
+  elif [ "${expected_file}" != masked-runtime ]; then
     sudo systemctl unmask --runtime "${unit}" >/dev/null
   fi
   case "${expected_active}" in active|activating) should_start=1 ;; esac
@@ -2774,6 +2891,9 @@ restore_unit() {
   else
     sudo systemctl stop "${unit}"
   fi
+  observed_load="$(systemctl show --property LoadState --value "${unit}")"
+  [ "${observed_load}" = "${expected_load}" ] \
+    || { echo "reviewed unit load state was not restored: ${unit}" >&2; return 1; }
   observed_file="$(systemctl show --property UnitFileState --value "${unit}")"
   [ "${observed_file}" = "${expected_file}" ] \
     || { echo "reviewed unit-file state was not restored: ${unit}" >&2; return 1; }
@@ -2790,8 +2910,8 @@ restore_unit() {
 
 sudo systemctl daemon-reload
 while [ "$#" -gt 0 ]; do
-  restore_unit "$1" "$2" "$3" "$4"
-  shift 4
+  restore_unit "$1" "$2" "$3" "$4" "$5"
+  shift 5
 done
 REMOTE_RESTORE_REVIEWED_TIMERS
   then
@@ -2820,7 +2940,7 @@ REMOTE_RESTORE_REVIEWED_TIMERS
 }
 
 reconcile_remote_prepare_commit_state() {
-  local captured_state="" presence=""
+  local captured_state="" scheduler_state="" presence=""
   if [ "${ROLLBACK_PREPARE_MAY_HAVE_COMMITTED}" != "1" ]; then
     return 0
   fi
@@ -2831,6 +2951,11 @@ reconcile_remote_prepare_commit_state() {
   if captured_state="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' rollback-unit-state --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-name '${STAGING_REDIS_WORKER_SERVICE}'" 2>/dev/null)"; then
     if [ "${captured_state}" != "${STAGING_REDIS_WORKER_CAPTURED_STATE}" ]; then
       echo "[deploy] CRITICAL: recovered prepare receipt disagrees with the captured Redis unit state." >&2
+      return 1
+    fi
+    if ! scheduler_state="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' rollback-unit-state --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-name '${SEPARATE_SCHEDULER_SERVICE}'" 2>/dev/null)" \
+      || [ "${scheduler_state}" != "${SCHEDULER_ATOMIC_CAPTURED_STATE}" ]; then
+      echo "[deploy] CRITICAL: recovered prepare receipt disagrees with the captured scheduler unit state." >&2
       return 1
     fi
     # A verified digest-bound capture is sufficient to make rollback safe even
@@ -2882,11 +3007,33 @@ REMOTE_VERIFY_PREPARE_COMMIT
   return 1
 }
 
+fail_close_remote_scheduler_unit() {
+  if [ "${SYNC_UNITS_CAPTURED:-0}" != "1" ]; then
+    echo "Refusing scheduler fail-close without a captured pre-mutation state." >&2
+    return 1
+  fi
+  # This helper is deliberately safe to repeat.  It runs before rollback
+  # receipt/pointer reconciliation so an unknown SSH acknowledgement cannot
+  # leave a candidate scheduler submitting work beside a partial rollback.
+  SYNC_UNITS_MAY_HAVE_BEEN_MUTATED=1
+  if ! ssh "${SSH_TARGET}" "scheduler_load=\$(systemctl show --property LoadState --value '${SEPARATE_SCHEDULER_SERVICE}'); scheduler_unit_path='/etc/systemd/system/${SEPARATE_SCHEDULER_SERVICE}'; scheduler_mask_path='/run/systemd/system/${SEPARATE_SCHEDULER_SERVICE}'; if [ \"\${scheduler_load}\" = not-found ]; then [ ! -e \"\${scheduler_unit_path}\" ] && [ ! -L \"\${scheduler_unit_path}\" ] && [ ! -e \"\${scheduler_mask_path}\" ] && [ ! -L \"\${scheduler_mask_path}\" ] || { echo 'absent scheduler fail-close receipt is inconsistent' >&2; exit 1; }; exit 0; fi; sudo systemctl stop '${SEPARATE_SCHEDULER_SERVICE}'; sudo systemctl mask --runtime '${SEPARATE_SCHEDULER_SERVICE}' >/dev/null; [ \"\$(systemctl show --property ActiveState --value '${SEPARATE_SCHEDULER_SERVICE}')\" = inactive ] && [ -L \"\${scheduler_mask_path}\" ] && [ \"\$(readlink -- \"\${scheduler_mask_path}\")\" = /dev/null ] || { echo 'scheduler fail-close receipt is incomplete' >&2; exit 1; }"; then
+    echo "[deploy] CRITICAL: dedicated scheduler could not be made fail-closed." >&2
+    return 1
+  fi
+  SCHEDULER_QUIESCED=1
+}
+
 attempt_automatic_rollback() {
   local rollback_not_before rollback_health rollback_migration rollback_env_state
   local rollback_database rollback_env_sha256
   local rollback_candidate_health="" rollback_redis_not_before="" rollback_redis_main_pid=""
   local rollback_redis_ready=0
+  # Provider submitters fail closed before any receipt or pointer
+  # reconciliation.  Those checks can intentionally stop rollback when their
+  # state is unknown, but must never leave the candidate scheduler running.
+  if ! fail_close_remote_scheduler_unit; then
+    return 1
+  fi
   if [ "${ROLLBACK_PREPARE_MAY_HAVE_COMMITTED}" = "1" ] \
     && ! reconcile_remote_prepare_commit_state; then
     echo "[deploy] CRITICAL: rollback is blocked until the remote prepare receipt can be reconciled." >&2
@@ -2903,16 +3050,18 @@ attempt_automatic_rollback() {
   # Restore shared env/current/unit state only after every process that can read
   # it has stopped.  Stopping just the Redis worker leaves web and Apify workers
   # executing across the pointer/env switch and creates a mixed-release window.
-  if ! ssh "${SSH_TARGET}" "redis_unit=''; if systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then redis_unit='${STAGING_REDIS_WORKER_SERVICE}'; fi; sudo systemctl stop '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS} \${redis_unit}; for unit in '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS}; do if systemctl is-active --quiet \"\${unit}\"; then echo \"release consumer failed to stop before rollback: \${unit}\" >&2; exit 1; fi; done; if systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then echo 'Redis worker failed to stop before rollback' >&2; exit 1; fi; if systemctl is-enabled --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then sudo systemctl disable --now '${STAGING_REDIS_WORKER_SERVICE}'; fi"; then
+  if ! ssh "${SSH_TARGET}" "redis_unit=''; if systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then redis_unit='${STAGING_REDIS_WORKER_SERVICE}'; fi; sudo systemctl stop '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS} \${redis_unit}; scheduler_load=\$(systemctl show --property LoadState --value '${SEPARATE_SCHEDULER_SERVICE}'); if [ \"\${scheduler_load}\" != not-found ]; then sudo systemctl stop '${SEPARATE_SCHEDULER_SERVICE}'; sudo systemctl mask --runtime '${SEPARATE_SCHEDULER_SERVICE}' >/dev/null; sudo systemctl disable '${SEPARATE_SCHEDULER_SERVICE}' >/dev/null 2>&1 || true; fi; for unit in '${SERVICE_NAME}' ${WORKER_SYSTEMD_UNIT_ARGS}; do if systemctl is-active --quiet \"\${unit}\"; then echo \"release consumer failed to stop before rollback: \${unit}\" >&2; exit 1; fi; done; if systemctl is-active --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then echo 'Redis worker failed to stop before rollback' >&2; exit 1; fi; if [ \"\${scheduler_load}\" != not-found ]; then scheduler_mask_path='/run/systemd/system/${SEPARATE_SCHEDULER_SERVICE}'; [ \"\$(systemctl show --property ActiveState --value '${SEPARATE_SCHEDULER_SERVICE}')\" = inactive ] && [ -L \"\${scheduler_mask_path}\" ] && [ \"\$(readlink -- \"\${scheduler_mask_path}\")\" = /dev/null ] || { echo 'scheduler failed to stop and mask before rollback' >&2; exit 1; }; fi; if systemctl is-enabled --quiet '${STAGING_REDIS_WORKER_SERVICE}'; then sudo systemctl disable --now '${STAGING_REDIS_WORKER_SERVICE}'; fi"; then
     echo "[deploy] CRITICAL: complete web/worker fleet could not be quiesced before rollback." >&2
     return 1
   fi
+  SCHEDULER_QUIESCED=1
   if [ "${PGBOUNCER_MAP_MUTATION_INTENT}" = "1" ]; then
     if ! quiesce_remote_pgbouncer_for_clone; then
       echo "[deploy] CRITICAL: PgBouncer could not be re-quiesced before config rollback." >&2
       return 1
     fi
   fi
+  SCHEDULER_ACCEPTED_STATE_COMMITTED=0
   if ! ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' restore --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system && sudo systemctl daemon-reload"; then
     echo "[deploy] CRITICAL: filesystem, environment, or unit rollback failed; operator intervention required." >&2
     return 1
@@ -3630,6 +3779,70 @@ REMOTE_PGBOUNCER_QUIESCE
   PGBOUNCER_QUIESCED=1
 }
 
+quiesce_remote_scheduler_unit() {
+  if [ "${SYNC_UNITS_CAPTURED}" != "1" ]; then
+    echo "Refusing scheduler quiesce without a captured pre-mutation state." >&2
+    return 1
+  fi
+  SYNC_UNITS_MAY_HAVE_BEEN_MUTATED=1
+  if ! ssh "${SSH_TARGET}" "bash -s -- \
+    '${SEPARATE_SCHEDULER_SERVICE}' '${SCHEDULER_LOAD_STATE}' \
+    '${SCHEDULER_ACTIVE_STATE}' '${SCHEDULER_UNIT_FILE_STATE}'" <<'REMOTE_QUIESCE_SCHEDULER'
+set -euo pipefail
+unit="$1"
+expected_load="$2"
+expected_active="$3"
+expected_file="$4"
+unit_path="/etc/systemd/system/${unit}"
+runtime_mask_path="/run/systemd/system/${unit}"
+observed_load="$(systemctl show --property LoadState --value "${unit}")"
+observed_active="$(systemctl show --property ActiveState --value "${unit}")"
+observed_file="$(systemctl show --property UnitFileState --value "${unit}")"
+[ -n "${observed_file}" ] || observed_file=not-found
+
+if [ "${expected_load}" = not-found ]; then
+  [ "${observed_load}:${observed_active}:${observed_file}" = not-found:inactive:not-found ] \
+    && [ ! -e "${unit_path}" ] && [ ! -L "${unit_path}" ] \
+    && [ ! -e "${runtime_mask_path}" ] && [ ! -L "${runtime_mask_path}" ] \
+    || { echo "absent scheduler state changed before shutdown proof" >&2; exit 1; }
+  exit 0
+fi
+
+[ "${expected_load}" = loaded ] || [ "${expected_load}" = masked ] \
+  || { echo "captured scheduler load state is not restorable" >&2; exit 1; }
+if [ -L "${runtime_mask_path}" ] \
+  && [ "$(readlink -- "${runtime_mask_path}")" = /dev/null ]; then
+  # A release has two deliberate scheduler-quiesce checkpoints.  The second
+  # call must accept only the exact fail-closed state created by the first;
+  # accepting any other drift would hide an independently restarted writer.
+  [ "${observed_active}" = inactive ] \
+    || { echo "runtime-masked scheduler became active" >&2; exit 1; }
+else
+  [ ! -e "${runtime_mask_path}" ] && [ ! -L "${runtime_mask_path}" ] \
+    || { echo "scheduler runtime mask path is invalid" >&2; exit 1; }
+  [ "${observed_load}" = "${expected_load}" ] \
+    || { echo "scheduler load state changed before shutdown proof" >&2; exit 1; }
+  [ "${observed_file}" = "${expected_file}" ] \
+    || { echo "scheduler unit-file state changed before quiesce" >&2; exit 1; }
+  case "${expected_active}:${observed_active}" in
+    active:active|activating:active|activating:activating|inactive:inactive) ;;
+    *) echo "scheduler active state changed before quiesce" >&2; exit 1 ;;
+  esac
+fi
+sudo systemctl stop "${unit}"
+sudo systemctl mask --runtime "${unit}" >/dev/null
+[ "$(systemctl show --property ActiveState --value "${unit}")" = inactive ] \
+  || { echo "scheduler failed to stop" >&2; exit 1; }
+[ -L "${runtime_mask_path}" ] && [ "$(readlink -- "${runtime_mask_path}")" = /dev/null ] \
+  || { echo "scheduler runtime mask is not exact" >&2; exit 1; }
+REMOTE_QUIESCE_SCHEDULER
+  then
+    echo "[deploy] dedicated scheduler could not be stopped and runtime-masked safely." >&2
+    return 1
+  fi
+  SCHEDULER_QUIESCED=1
+}
+
 quiesce_remote_sync_units() {
   if [ "${SYNC_UNITS_CAPTURED}" != "1" ]; then
     echo "Refusing sync quiesce without a captured service/timer state." >&2
@@ -3641,6 +3854,9 @@ quiesce_remote_sync_units() {
   SYNC_UNITS_MAY_HAVE_BEEN_MUTATED=1
   if ! ssh "${SSH_TARGET}" "sudo systemctl stop '${SYNC_TIMER}'; sudo systemctl mask --runtime '${SYNC_TIMER}' >/dev/null; sudo systemctl stop '${HEALTH_SENTINEL_TIMER}'; sudo systemctl mask --runtime '${HEALTH_SENTINEL_TIMER}' >/dev/null; sudo systemctl stop '${SYNC_SERVICE}'; sudo systemctl mask --runtime '${SYNC_SERVICE}' >/dev/null; sudo systemctl stop '${HEALTH_SENTINEL_SERVICE}'; sudo systemctl mask --runtime '${HEALTH_SENTINEL_SERVICE}' >/dev/null; for sync_unit in '${SYNC_TIMER}' '${HEALTH_SENTINEL_TIMER}' '${SYNC_SERVICE}' '${HEALTH_SENTINEL_SERVICE}'; do if systemctl is-active --quiet \"\${sync_unit}\"; then echo \"reviewed timer/service failed to stop before deployment staging: \${sync_unit}\" >&2; exit 1; fi; sync_mask_path=\"/run/systemd/system/\${sync_unit}\"; if [ ! -L \"\${sync_mask_path}\" ] || [ \"\$(readlink -- \"\${sync_mask_path}\")\" != /dev/null ]; then echo \"reviewed timer/service failed to mask before deployment staging: \${sync_unit}\" >&2; exit 1; fi; done"; then
     echo "[deploy] reviewed sync/sentinel timers and services could not be quiesced before build, backup, or remote staging." >&2
+    return 1
+  fi
+  if ! quiesce_remote_scheduler_unit; then
     return 1
   fi
   SYNC_UNITS_QUIESCED=1
@@ -3655,6 +3871,9 @@ quiesce_remote_release_consumers() {
     echo "Refusing release quiesce unless the captured sync service/timer is already fail-closed." >&2
     return 1
   fi
+  if ! quiesce_remote_scheduler_unit; then
+    return 1
+  fi
   # Set this before the remote transaction: even a partially failed mask/stop
   # must be treated as a mutation and restored only by the rollback path.
   SYNC_UNITS_MAY_HAVE_BEEN_MUTATED=1
@@ -3667,6 +3886,58 @@ quiesce_remote_release_consumers() {
   fi
   RELEASE_CONSUMERS_QUIESCED=1
   SYNC_UNITS_QUIESCED=1
+  if ! verify_remote_anthropic_batch_shutdown; then
+    return 1
+  fi
+}
+
+verify_remote_anthropic_batch_shutdown() {
+  local active_before="" active_after="" provider_reason=""
+  if [ "${RELEASE_CONSUMERS_QUIESCED}" != "1" ] \
+    || [ "${SYNC_UNITS_QUIESCED}" != "1" ] \
+    || [ "${SCHEDULER_QUIESCED}" != "1" ]; then
+    echo "Refusing Anthropic Batch shutdown proof before every embedded release consumer is quiesced." >&2
+    return 1
+  fi
+  if ! active_before="$(read_remote_anthropic_batch_shutdown_count 2>/dev/null)"; then
+    echo "Refusing deploy because the post-quiesce Anthropic Batch state is not provably closed." >&2
+    return 1
+  fi
+  if [ "${active_before}" != "0" ]; then
+    echo "Refusing deploy because a local Anthropic Batch row is unresolved after quiesce (including expired rows)." >&2
+    return 1
+  fi
+  if ! ANTHROPIC_BATCH_PROVIDER_RECEIPT="$(ssh "${SSH_TARGET}" "set -a && . '${REMOTE_ROOT}/.env' >/dev/null 2>&1 && set +a && cd /tmp && exec env PYTHONDONTWRITEBYTECODE=1 '${REMOTE_ROOT}/.venv/bin/python' -B '${REMOTE_RELEASE_DIR}/scripts/ops/verify_anthropic_batch_shutdown.py'" 2>/dev/null)"; then
+    provider_reason="$(printf '%s' "${ANTHROPIC_BATCH_PROVIDER_RECEIPT}" | run_local_python_program 'import json,os
+allowed={"anthropic_api_key_missing","provider_list_unavailable","provider_batches_active","provider_pagination_limit_exceeded","provider_page_fetch_failed","provider_page_invalid","provider_pagination_invalid","provider_batch_identity_invalid","provider_batch_status_unknown"}
+try: reason=str(json.load(os.fdopen(3)).get("reason") or "provider_receipt_invalid")
+except Exception: reason="provider_receipt_invalid"
+print(reason if reason in allowed else "provider_receipt_invalid")' 2>/dev/null || printf 'provider_receipt_invalid')"
+    echo "Refusing deploy because Anthropic provider-side batch reconciliation failed: ${provider_reason}." >&2
+    return 1
+  fi
+  if ! printf '%s' "${ANTHROPIC_BATCH_PROVIDER_RECEIPT}" | run_local_python_program 'import json,os
+p=json.load(os.fdopen(3))
+assert p.get("schema_version")=="vkpi-anthropic-batch-shutdown/v1"
+assert p.get("provider")=="anthropic" and p.get("provider_scope")=="api_key_workspace"
+assert p.get("passed") is True and p.get("reconcile_complete") is True
+assert p.get("active_count")==0
+assert isinstance(p.get("pages_scanned"),int) and not isinstance(p.get("pages_scanned"),bool) and p["pages_scanned"]>=1
+assert isinstance(p.get("batches_scanned"),int) and not isinstance(p.get("batches_scanned"),bool) and p["batches_scanned"]>=0
+assert p.get("credentials_emitted") is False and p.get("batch_ids_emitted") is False' >/dev/null; then
+    echo "Refusing deploy because the Anthropic provider-side reconciliation receipt is invalid." >&2
+    return 1
+  fi
+  if ! active_after="$(read_remote_anthropic_batch_shutdown_count 2>/dev/null)" \
+    || [ "${active_after}" != "0" ]; then
+    echo "Refusing deploy because the local Anthropic Batch ledger changed during provider reconciliation." >&2
+    return 1
+  fi
+  ANTHROPIC_BATCH_SHUTDOWN_VERIFIED=1
+}
+
+read_remote_anthropic_batch_shutdown_count() {
+  ssh "${SSH_TARGET}" "scheduler_active=\$(systemctl show --property ActiveState --value '${SEPARATE_SCHEDULER_SERVICE}'); scheduler_mask_path='/run/systemd/system/${SEPARATE_SCHEDULER_SERVICE}'; if [ '${SCHEDULER_LOAD_STATE}' = not-found ]; then scheduler_load=\$(systemctl show --property LoadState --value '${SEPARATE_SCHEDULER_SERVICE}'); [ \"\${scheduler_load}:\${scheduler_active}\" = not-found:inactive ] && [ ! -e \"\${scheduler_mask_path}\" ] && [ ! -L \"\${scheduler_mask_path}\" ] || { echo 'absent scheduler changed before Batch proof' >&2; exit 1; }; else [ \"\${scheduler_active}\" = inactive ] && [ -L \"\${scheduler_mask_path}\" ] && [ \"\$(readlink -- \"\${scheduler_mask_path}\")\" = /dev/null ] || { echo 'dedicated scheduler is not stopped and runtime-masked' >&2; exit 1; }; fi; sudo -n -u postgres psql --dbname='${PREDEPLOY_DATABASE_NAME}' -v ON_ERROR_STOP=1 -At -c \"SELECT count(*) FROM vkpi_llm_batches WHERE status IN ('submitting','provider_unknown','in_progress','expired')\""
 }
 
 verify_remote_release_drain() {
@@ -3939,12 +4210,25 @@ sys.stdout.write("application_root_hardening=verified\n")
 PY
 }
 
-LATEST_MIGRATION="$(find "${DEPLOY_CANDIDATE_DIR}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | tail -n 1)"
-if [ -z "${LATEST_MIGRATION}" ]; then
+if ! MIGRATION_MANIFEST_CSV="$("${LOCAL_SAFE_PYTHON}" -B - "${DEPLOY_CANDIDATE_DIR}" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / "scripts" / "ops"))
+from atomic_release_shared import runtime_migration_manifest
+
+print(",".join(runtime_migration_manifest(root / "migrations")))
+PY
+)"; then
+  echo "Refusing deploy because the runtime migration manifest is invalid." >&2
+  exit 1
+fi
+LATEST_MIGRATION="${MIGRATION_MANIFEST_CSV##*,}"
+if [ -z "${MIGRATION_MANIFEST_CSV}" ] || [ -z "${LATEST_MIGRATION}" ]; then
   echo "Refusing deploy because the local migration manifest is empty." >&2
   exit 1
 fi
-MIGRATION_MANIFEST_CSV="$(find "${DEPLOY_CANDIDATE_DIR}/migrations" -maxdepth 1 -type f -name '*.sql' ! -name '*_down.sql' -exec basename {} \; | LC_ALL=C sort | paste -sd, -)"
 
 run_predeploy_embedded_browser_gate
 setup_deploy_ssh_transport
@@ -4279,17 +4563,54 @@ PY
     STAGING_SOURCE_DATABASE="${PREDEPLOY_DATABASE_NAME}"
   fi
 fi
-if ! PENDING_MIGRATIONS="$("${LOCAL_SAFE_PYTHON}" - "${PREDEPLOY_MIGRATION}" "${MIGRATION_MANIFEST_CSV}" <<'PY'
+if ! PREDEPLOY_APPLIED_MIGRATIONS="$(
+  ssh "${SSH_TARGET}" \
+    "set -a && . '${REMOTE_ROOT}/.env' >/dev/null 2>&1 && set +a && [ -n \"\${DATABASE_URL:-}\" ] && cd /tmp && psql \"\$DATABASE_URL\" -v ON_ERROR_STOP=1 -At -c \"SELECT array_to_string(array_agg(version_key ORDER BY version_key), chr(44)) FROM schema_migrations\"" \
+    2>/dev/null
+)"; then
+  echo "Refusing deploy because the complete remote schema_migrations set could not be read." >&2
+  exit 1
+fi
+if [ -z "${PREDEPLOY_APPLIED_MIGRATIONS}" ]; then
+  echo "Refusing deploy because the complete remote schema_migrations set is empty." >&2
+  exit 1
+fi
+if ! PREDEPLOY_ACTIVE_LLM_BATCHES="$(
+  ssh "${SSH_TARGET}" \
+    "set -a && . '${REMOTE_ROOT}/.env' >/dev/null 2>&1 && set +a && [ -n \"\${DATABASE_URL:-}\" ] && cd /tmp && psql \"\$DATABASE_URL\" -v ON_ERROR_STOP=1 -At -c \"SELECT count(*) FROM vkpi_llm_batches WHERE status IN ('submitting','provider_unknown','in_progress','expired')\"" \
+    2>/dev/null
+)"; then
+  echo "Refusing deploy because active Anthropic batches could not be read before disabling poll." >&2
+  exit 1
+fi
+if ! [[ "${PREDEPLOY_ACTIVE_LLM_BATCHES}" =~ ^[0-9]+$ ]] \
+  || [ "${PREDEPLOY_ACTIVE_LLM_BATCHES}" != "0" ]; then
+  echo "Refusing deploy while Anthropic batches remain unresolved (including expired); reconcile them manually first." >&2
+  exit 1
+fi
+if ! PENDING_MIGRATIONS="$("${LOCAL_SAFE_PYTHON}" -B - \
+  "${DEPLOY_CANDIDATE_DIR}" \
+  "${PREDEPLOY_MIGRATION}" \
+  "${MIGRATION_MANIFEST_CSV}" \
+  "${PREDEPLOY_APPLIED_MIGRATIONS}" <<'PY'
 import sys
+from pathlib import Path
 
-applied = sys.argv[1]
-manifest = [value for value in sys.argv[2].split(",") if value]
-if applied not in manifest:
-    raise SystemExit(f"remote migration is not in the reviewed local sequence: {applied}")
-print(",".join(manifest[manifest.index(applied) + 1 :]))
+root = Path(sys.argv[1])
+reported_max = sys.argv[2]
+manifest = tuple(value for value in sys.argv[3].split(",") if value)
+applied = tuple(value for value in sys.argv[4].split(",") if value)
+sys.path.insert(0, str(root / "scripts" / "ops"))
+from atomic_release_shared import pending_runtime_migrations, runtime_migration_manifest
+
+if manifest != runtime_migration_manifest(root / "migrations"):
+    raise SystemExit("candidate runtime migration manifest changed during preflight")
+if max(applied) != reported_max:
+    raise SystemExit("authenticated health migration max differs from the complete database set")
+print(",".join(pending_runtime_migrations(manifest, applied)))
 PY
 )"; then
-  echo "Refusing deploy because the remote migration cannot be safely ordered against local migrations." >&2
+  echo "Refusing deploy because the complete remote migration set cannot be safely reconciled with the runtime manifest." >&2
   exit 1
 fi
 if [ -n "${PENDING_MIGRATIONS}" ]; then
@@ -4815,7 +5136,7 @@ if ! STAGING_REDIS_WORKER_CAPTURED_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHON
   exit 1
 fi
 ROLLBACK_PREPARE_MAY_HAVE_COMMITTED=1
-if ! ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' prepare --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system --unit-name '${SERVICE_NAME}' --unit-name '${SYNC_SERVICE}' --unit-name '${HEALTH_SENTINEL_SERVICE}' --unit-name vkpi-worker-interactive.service --unit-name 'vkpi-worker-bulk@.service' --optional-unit-name '${STAGING_REDIS_WORKER_SERVICE}' --optional-unit-state '${STAGING_REDIS_WORKER_SERVICE}=${STAGING_REDIS_WORKER_CAPTURED_STATE}' --rollback-file '${REMOTE_LANE_OVERRIDE_FILE}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' ${ROLLBACK_ANCHOR_PREPARE_OPTION}"; then
+if ! ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' prepare --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-dir /etc/systemd/system --unit-name '${SERVICE_NAME}' --unit-name '${SYNC_SERVICE}' --unit-name '${HEALTH_SENTINEL_SERVICE}' --unit-name vkpi-worker-interactive.service --unit-name 'vkpi-worker-bulk@.service' --optional-unit-name '${STAGING_REDIS_WORKER_SERVICE}' --optional-unit-name '${SEPARATE_SCHEDULER_SERVICE}' --optional-unit-state '${STAGING_REDIS_WORKER_SERVICE}=${STAGING_REDIS_WORKER_CAPTURED_STATE}' --optional-unit-state '${SEPARATE_SCHEDULER_SERVICE}=${SCHEDULER_ATOMIC_CAPTURED_STATE}' --rollback-file '${REMOTE_LANE_OVERRIDE_FILE}' --pending-migrations '${PENDING_MIGRATIONS}' --compatibility-declaration '${FORWARD_COMPATIBILITY_DECLARATION}' --database-strategy '${DATABASE_RELEASE_STRATEGY}' --source-database '${STAGING_SOURCE_DATABASE}' --target-database '${STAGING_CLONE_DATABASE}' --env-fingerprint-before '${PREDEPLOY_ENV_SHA256}' --database-owner-release-id '${DATABASE_OWNER_RELEASE_ID}' ${ROLLBACK_ANCHOR_PREPARE_OPTION}"; then
   if ! reconcile_remote_prepare_commit_state \
     || [ "${ROLLBACK_ARMED}" != "1" ]; then
     echo "Atomic release prepare failed without a verified committed receipt." >&2
@@ -4832,6 +5153,14 @@ if ! STAGING_REDIS_WORKER_UNIT_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONT
 fi
 if [ "${STAGING_REDIS_WORKER_UNIT_STATE}" != "${STAGING_REDIS_WORKER_CAPTURED_STATE}" ]; then
   echo "Refusing deploy because the Redis worker state receipt changed during prepare." >&2
+  exit 1
+fi
+if ! SCHEDULER_ATOMIC_ROLLBACK_STATE="$(ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' rollback-unit-state --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}' --unit-name '${SEPARATE_SCHEDULER_SERVICE}'")"; then
+  echo "Refusing deploy because the captured scheduler unit state is unreadable." >&2
+  exit 1
+fi
+if [ "${SCHEDULER_ATOMIC_ROLLBACK_STATE}" != "${SCHEDULER_ATOMIC_CAPTURED_STATE}" ]; then
+  echo "Refusing deploy because the scheduler state receipt changed during prepare." >&2
   exit 1
 fi
 IFS=: read -r REDIS_PRESENCE REDIS_ACTIVITY REDIS_ENABLEMENT REDIS_MASKING <<<"${STAGING_REDIS_WORKER_UNIT_STATE}"
@@ -5012,6 +5341,10 @@ if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ] \
   fi
 fi
 
+if [ "${ANTHROPIC_BATCH_SHUTDOWN_VERIFIED}" != "1" ]; then
+  echo "Refusing activation without a post-quiesce Anthropic Batch shutdown proof." >&2
+  exit 1
+fi
 ssh "${SSH_TARGET}" "sudo env PYTHONDONTWRITEBYTECODE=1 python3 -B '${REMOTE_RELEASE_DIR}/scripts/ops/atomic_release_layout.py' activate --root '${REMOTE_ROOT}' --release-id '${RELEASE_ID}'"
 if [ "${DATABASE_RELEASE_STRATEGY}" = "staging-clone" ]; then
   STAGING_DB_CLONE_ACTIVATED=1
@@ -5045,7 +5378,9 @@ SEPARATE_SCHEDULER_SERVICE="vkpi-scheduler.service"
 SEPARATE_SCHEDULER_UNIT_RELATIVE="deploy/systemd/vkpi-scheduler.service"
 if [ "${VKPI_DEPLOY_SEPARATE_SCHEDULER:-0}" = "1" ]; then
   echo "[deploy] VKPI_DEPLOY_SEPARATE_SCHEDULER=1: installing ${SEPARATE_SCHEDULER_SERVICE} from ${SEPARATE_SCHEDULER_UNIT_RELATIVE}."
-  ssh "${SSH_TARGET}" "set -eu; unit_source='${REMOTE_CURRENT_DIR}/${SEPARATE_SCHEDULER_UNIT_RELATIVE}'; unit_target='/etc/systemd/system/${SEPARATE_SCHEDULER_SERVICE}'; if [ ! -f \"\${unit_source}\" ] || [ -L \"\${unit_source}\" ]; then echo 'reviewed scheduler unit source is not a regular non-symlink file' >&2; exit 1; fi; sudo /usr/bin/systemd-analyze verify \"\${unit_source}\"; unit_tmp=\$(sudo mktemp '/etc/systemd/system/.${SEPARATE_SCHEDULER_SERVICE}.XXXXXX'); cleanup_unit_tmp() { if [ -n \"\${unit_tmp}\" ]; then sudo rm -f -- \"\${unit_tmp}\"; fi; }; trap cleanup_unit_tmp EXIT; sudo install -o root -g root -m 0644 \"\${unit_source}\" \"\${unit_tmp}\"; if [ -L \"\${unit_tmp}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${unit_tmp}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${unit_source}\" \"\${unit_tmp}\"; then echo 'staged scheduler unit owner, mode, or content verification failed' >&2; exit 1; fi; sudo mv -f -- \"\${unit_tmp}\" \"\${unit_target}\"; unit_tmp=''; trap - EXIT; if [ ! -f \"\${unit_target}\" ] || [ -L \"\${unit_target}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${unit_target}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${unit_source}\" \"\${unit_target}\"; then echo 'installed scheduler unit owner, mode, or content verification failed' >&2; exit 1; fi; sudo systemctl daemon-reload; sudo systemctl enable '${SEPARATE_SCHEDULER_SERVICE}' >/dev/null; sudo systemctl restart '${SEPARATE_SCHEDULER_SERVICE}'; for attempt in \$(seq 1 30); do if systemctl is-active --quiet '${SEPARATE_SCHEDULER_SERVICE}'; then exit 0; fi; sleep 1; done; echo 'dedicated scheduler unit is not active after restart: ${SEPARATE_SCHEDULER_SERVICE}' >&2; exit 1"
+  ssh "${SSH_TARGET}" "set -eu; unit_source='${REMOTE_CURRENT_DIR}/${SEPARATE_SCHEDULER_UNIT_RELATIVE}'; unit_target='/etc/systemd/system/${SEPARATE_SCHEDULER_SERVICE}'; if [ ! -f \"\${unit_source}\" ] || [ -L \"\${unit_source}\" ]; then echo 'reviewed scheduler unit source is not a regular non-symlink file' >&2; exit 1; fi; sudo /usr/bin/systemd-analyze verify \"\${unit_source}\"; unit_tmp=\$(sudo mktemp '/etc/systemd/system/.${SEPARATE_SCHEDULER_SERVICE}.XXXXXX'); cleanup_unit_tmp() { if [ -n \"\${unit_tmp}\" ]; then sudo rm -f -- \"\${unit_tmp}\"; fi; }; trap cleanup_unit_tmp EXIT; sudo install -o root -g root -m 0644 \"\${unit_source}\" \"\${unit_tmp}\"; if [ -L \"\${unit_tmp}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${unit_tmp}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${unit_source}\" \"\${unit_tmp}\"; then echo 'staged scheduler unit owner, mode, or content verification failed' >&2; exit 1; fi; sudo mv -f -- \"\${unit_tmp}\" \"\${unit_target}\"; unit_tmp=''; trap - EXIT; if [ ! -f \"\${unit_target}\" ] || [ -L \"\${unit_target}\" ] || [ \"\$(sudo stat -c '%u:%g:%a' \"\${unit_target}\")\" != '0:0:644' ] || ! sudo cmp -s \"\${unit_source}\" \"\${unit_target}\"; then echo 'installed scheduler unit owner, mode, or content verification failed' >&2; exit 1; fi; sudo systemctl daemon-reload; sudo systemctl unmask --runtime '${SEPARATE_SCHEDULER_SERVICE}' >/dev/null 2>&1 || true; sudo systemctl unmask '${SEPARATE_SCHEDULER_SERVICE}' >/dev/null 2>&1 || true; sudo systemctl enable '${SEPARATE_SCHEDULER_SERVICE}' >/dev/null; sudo systemctl restart '${SEPARATE_SCHEDULER_SERVICE}'; for attempt in \$(seq 1 30); do if systemctl is-active --quiet '${SEPARATE_SCHEDULER_SERVICE}' && [ \"\$(systemctl show --property UnitFileState --value '${SEPARATE_SCHEDULER_SERVICE}')\" = enabled ]; then exit 0; fi; sleep 1; done; echo 'dedicated scheduler unit is not active and enabled after restart: ${SEPARATE_SCHEDULER_SERVICE}' >&2; exit 1"
+  SCHEDULER_ACCEPTED_STATE_COMMITTED=1
+  SCHEDULER_QUIESCED=0
 else
   echo "[deploy] VKPI_DEPLOY_SEPARATE_SCHEDULER unset/0: ${SEPARATE_SCHEDULER_SERVICE} not installed; scheduler stays inside ${SERVICE_NAME}."
 fi
@@ -5131,6 +5466,7 @@ if ! printf '%s' "${REMOTE_HEALTH_JSON}" | run_frozen_candidate_python \
   --strict-deploy \
   --expected-head "${LOCAL_GIT_SHA}" \
   --expected-migration "${LATEST_MIGRATION}" \
+  --require-migration-set-complete \
   --require-worker \
   --expected-worker-count "${EXPECTED_WORKER_COUNT}" \
   --worker-not-before "${WORKER_RESTART_NOT_BEFORE}" \
@@ -5218,12 +5554,17 @@ LOCAL_BROWSER_FAILURE_LOG="$(
   mktemp "${POST_DEPLOY_EVIDENCE_DIR}/browser-capture-failure.log.XXXXXX"
 )"
 LOCAL_APIFY_WORKER_PROCESS_BINDING="${POST_DEPLOY_EVIDENCE_DIR}/apify-worker-process-binding.json"
+LOCAL_ANTHROPIC_BATCH_SHUTDOWN="${POST_DEPLOY_EVIDENCE_DIR}/anthropic-batch-shutdown.json"
 REMOTE_LOG_BASELINE="/tmp/vkpi-runtime-log-baseline-${WORKER_BOOT_NONCE_SHA256}.json"
 REMOTE_ACCEPTANCE_REPORT="/tmp/vkpi-release-acceptance-${WORKER_BOOT_NONCE_SHA256}.json"
 printf '%s\n' "${APIFY_WORKER_PROCESS_BINDING_JSON}" \
   >"${LOCAL_APIFY_WORKER_PROCESS_BINDING}"
 APIFY_WORKER_PROCESS_BINDING_JSON=""
 chmod 600 "${LOCAL_APIFY_WORKER_PROCESS_BINDING}"
+printf '%s\n' "${ANTHROPIC_BATCH_PROVIDER_RECEIPT}" \
+  >"${LOCAL_ANTHROPIC_BATCH_SHUTDOWN}"
+ANTHROPIC_BATCH_PROVIDER_RECEIPT=""
+chmod 600 "${LOCAL_ANTHROPIC_BATCH_SHUTDOWN}"
 
 # The reviewed systemd units write to journald, not the legacy runtime/logs
 # files.  Bind a cursor to the exact web + 16 Apify + Redis unit filter.

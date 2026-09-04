@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import type { VkpiKolSearchHistoryItem } from "../../../../domains/kol";
@@ -10,17 +11,73 @@ describe("SmartKolInputPanel search quality surfaces", () => {
       <PlanPills
         plan={{
           status: "needs_clarification",
+          original_query: "找 35 evo 摄影师",
           clarification: {
             message: "没有在产品目录中找到这个明确型号，请先选择正确产品后再找达人。",
             suggestions: [{ sku: "AF-35-EVO", name: "AF 35mm F1.8 EVO" }],
           },
         }}
+        currentQuery="找 35 evo 摄影师"
       />,
     );
 
     expect(screen.getByText(/没有在产品目录中找到/)).toBeTruthy();
     expect(screen.getByText("AF 35mm F1.8 EVO")).toBeTruthy();
     expect(screen.queryByText(/检索词:/)).toBeNull();
+  });
+
+  it("lets keyboard users choose a canonical product and continue without typing a SKU", async () => {
+    const onSuggestionSelect = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <PlanPills
+        plan={{
+          status: "needs_clarification",
+          original_query: "找 35 evo 摄影师",
+          clarification: {
+            message: "请选择目录产品",
+            suggestions: [{ sku: "AF-35-EVO", name: "AF 35mm F1.8 EVO", mount: "FE-mount" }],
+          },
+        }}
+        currentQuery="找 35 evo 摄影师"
+        onSuggestionSelect={onSuggestionSelect}
+      />,
+    );
+
+    const choice = screen.getByRole("button", { name: "选择产品 AF 35mm F1.8 EVO 并自动继续搜索" });
+    expect(choice).toHaveAttribute("data-product-sku", "AF-35-EVO");
+    await user.tab();
+    expect(choice).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onSuggestionSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ sku: "AF-35-EVO" }),
+      "找 35 evo 摄影师",
+    );
+  });
+
+  it("locks a clarification choice when the input no longer matches the plan query", async () => {
+    const onSuggestionSelect = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <PlanPills
+        plan={{
+          status: "needs_clarification",
+          original_query: "find wedding photographers",
+          clarification: {
+            message: "请选择目录产品",
+            suggestions: [{ sku: "AF-35-EVO", name: "AF 35mm F1.8 EVO" }],
+          },
+        }}
+        currentQuery="find basketball storytellers"
+        resultsStale
+        onSuggestionSelect={onSuggestionSelect}
+      />,
+    );
+
+    const choice = screen.getByRole("button", { name: "选择产品 AF 35mm F1.8 EVO 并自动继续搜索" });
+    expect(choice).toBeDisabled();
+    await user.click(choice);
+    expect(onSuggestionSelect).not.toHaveBeenCalled();
   });
 
   it("shows the business objective and independent first-round scene queries without provider details", () => {

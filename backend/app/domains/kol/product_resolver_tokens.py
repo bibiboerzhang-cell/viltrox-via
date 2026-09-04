@@ -16,6 +16,10 @@ VILTROX_Z_MODEL_CONTEXT_RE = re.compile(
     r"\bviltrox\b|\bvintage\b|唯卓仕|维卓仕?",
     re.IGNORECASE,
 )
+NIKON_CAMERA_CONTEXT_RE = re.compile(
+    r"(?<![a-z0-9])nikon(?![a-z0-9])|尼康",
+    re.IGNORECASE,
+)
 _MODEL_CODE_RE = re.compile(
     r"(?<![a-z0-9])(?P<code>(?:dc|af|mf|ef|nf|dg|vl|epic|z)[-_ ]?(?:[a-z]*\d[a-z0-9]*))(?![a-z0-9])",
     re.IGNORECASE,
@@ -23,6 +27,10 @@ _MODEL_CODE_RE = re.compile(
 _MODEL_CODE_PREFIXES = ("epic", "dc", "af", "mf", "ef", "nf", "dg", "vl", "z")
 _APERTURE_RE = re.compile(
     r"(?<![a-z0-9])(?P<kind>[ft])\s*/?\s*(?P<value>\d{1,2}(?:\.\d+)?)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+_CHINESE_APERTURE_RE = re.compile(
+    r"(?<![\d.])(?P<value>\d{1,2}\.\d+)\s*光圈(?![\d.])",
     re.IGNORECASE,
 )
 
@@ -56,7 +64,10 @@ def model_code_mentions(value: Any) -> list[tuple[str, str]]:
             continue
         if (
             re.fullmatch(r"z\d+[a-z0-9]*", normalized)
-            and not re.fullmatch(r"z1(?:pro[a-z0-9]*)?", normalized)
+            and (
+                not re.fullmatch(r"z1(?:pro[a-z0-9]*)?", normalized)
+                or NIKON_CAMERA_CONTEXT_RE.search(source_text)
+            )
             and not VILTROX_Z_MODEL_CONTEXT_RE.search(source_text)
         ):
             continue
@@ -96,6 +107,11 @@ def query_apertures(value: Any) -> set[tuple[str, float]]:
     for match in _APERTURE_RE.finditer(str(value or "")):
         try:
             apertures.add((match.group("kind").lower(), round(float(match.group("value")), 3)))
+        except (TypeError, ValueError):
+            continue
+    for match in _CHINESE_APERTURE_RE.finditer(str(value or "")):
+        try:
+            apertures.add(("f", round(float(match.group("value")), 3)))
         except (TypeError, ValueError):
             continue
     return apertures

@@ -43,4 +43,15 @@ describe("listKolPoolFavorites in-flight reads", () => {
     expect(mockedFetch).toHaveBeenCalledTimes(3);
     expect(mockedFetch.mock.calls.map((call) => call[2])).toEqual(["user-a", "user-b", "user-a"]);
   });
+
+  it("never shares one cookie-session promise across account keys", async () => {
+    mockedFetch.mockResolvedValue({ items: [], total: 0 } as never);
+
+    await Promise.all([
+      listKolPoolFavorites("cookie-session", 5000, "staff-a"),
+      listKolPoolFavorites("cookie-session", 5000, "staff-b"),
+    ]);
+
+    expect(mockedFetch).toHaveBeenCalledTimes(2);
+  });
 });

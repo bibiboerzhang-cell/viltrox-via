@@ -22,6 +22,7 @@ HISTORICAL_ACTIVE_KEYS = {
     "action_executions_active",
     "workflow_runs_unfenced",
     "workflow_runs_live",
+    "llm_batches_in_progress_durable",
     "advisor_turns_provider_started",
     "provider_claims_live",
     "apify_budget_reservations_open",

@@ -43,7 +43,7 @@ export type TextResultSectionProps = {
   setPersonaEditing: (v: boolean) => void;
   setPersonaDraft: (v: string) => void;
   setInput: (v: string) => void;
-  run: (overrideQuery?: string) => void;
+  run: (overrideQuery?: string, productSku?: string) => void;
   discoveryPlatforms: string[];
   setDiscoveryPlatforms: (updater: (cur: string[]) => string[]) => void;
   discoveryRegion: string;
@@ -135,7 +135,7 @@ export function useStableTextResultCallbacks(props: TextResultSectionProps): Tex
     setPersonaEditing: (v) => latest.current.setPersonaEditing(v),
     setPersonaDraft: (v) => latest.current.setPersonaDraft(v),
     setInput: (v) => latest.current.setInput(v),
-    run: (overrideQuery) => latest.current.run(overrideQuery),
+    run: (overrideQuery, productSku) => latest.current.run(overrideQuery, productSku),
     setDiscoveryPlatforms: (updater) => latest.current.setDiscoveryPlatforms(updater),
     setDiscoveryRegion: (v) => latest.current.setDiscoveryRegion(v),
     setContentLanguages: (v) => latest.current.setContentLanguages(v),

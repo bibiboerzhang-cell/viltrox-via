@@ -33,6 +33,7 @@ from app.domains.kol.search_sessions_targeted import (
     project_targeted_plan,
 )
 from app.domains.kol.search_sessions_qualification_projection import project_local_qualification
+from app.domains.kol.search_session_product_projection import project_resolved_product
 
 from app.domains.kol.search_sessions_serde import (
     _compact_flow,
@@ -365,20 +366,20 @@ def _safe_llm_query_plan(value: Any) -> dict[str, Any]:
             output[name] = raw[name]
     # plan_cache:规划器唯一的缓存留痕(命中 7 天缓存置 "hit",未命中不带此键)。
     # 此前不在白名单里被整个丢掉,「plan 缓存命中过几次」在会话历史里答不出来。
-    for name in ("reason", "provider", "model", "persona_source", "plan_cache"):
+    for name in ("reason", "provider", "model", "persona_source", "plan_cache", "catalog_status"):
         code = _safe_plan_code(raw.get(name))
         if code:
             output[name] = code
 
-    product = _dict(raw.get("resolved_product"))
-    safe_product: dict[str, Any] = {}
-    for name in ("sku", "model_name", "marketing_name", "category_main", "series"):
-        text = _safe_plan_text(product.get(name), limit=240)
-        if text:
-            safe_product[name] = text
-    price = _float_or_none(product.get("price_usd"))
-    if price is not None and 0 <= price <= 1_000_000:
-        safe_product["price_usd"] = price
+    safe_product = project_resolved_product(
+        raw.get("resolved_product"),
+        dict_value=_dict,
+        list_value=_list,
+        safe_text=_safe_plan_text,
+        safe_code=_safe_plan_code,
+        int_or_none=_int_or_none,
+        float_or_none=_float_or_none,
+    )
     if safe_product:
         output["resolved_product"] = safe_product
 
@@ -386,6 +387,8 @@ def _safe_llm_query_plan(value: Any) -> dict[str, Any]:
     safe_clarification: dict[str, Any] = {}
     for name, limit in (
         ("reason", 120),
+        ("requested_alias", 160),
+        ("requested_canonical", 240),
         ("requested_series", 80),
         ("requested_model_code", 120),
         ("requested_mount", 80),
@@ -394,6 +397,11 @@ def _safe_llm_query_plan(value: Any) -> dict[str, Any]:
         text = _safe_plan_text(clarification.get(name), limit=limit)
         if text:
             safe_clarification[name] = text
+    catalog_status = _safe_plan_code(clarification.get("catalog_status"))
+    if catalog_status:
+        safe_clarification["catalog_status"] = catalog_status
+    if isinstance(clarification.get("retryable"), bool):
+        safe_clarification["retryable"] = clarification["retryable"]
     focals = [
         number for raw_number in _list(clarification.get("requested_focals"))[:8]
         if (number := _int_or_none(raw_number)) is not None and 1 <= number <= 1000

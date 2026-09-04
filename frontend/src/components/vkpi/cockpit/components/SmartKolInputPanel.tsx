@@ -24,7 +24,7 @@ function RecallLoadingSkeleton() {
   );
 }
 
-export function SmartKolInputPanel(props: SmartKolInputPanelProps) {
+function SmartKolInputPanelForAccount(props: SmartKolInputPanelProps) {
   const vm = useSmartKolInputPanelController(props);
 
   return (
@@ -199,4 +199,19 @@ export function SmartKolInputPanel(props: SmartKolInputPanelProps) {
       ) : null}
     </section>
   );
+}
+
+/**
+ * Key the entire stateful search controller by the real account id. This makes
+ * an account switch synchronously tear down the previous session poll and all
+ * in-memory results before the next account can restore its own snapshot.
+ */
+export function SmartKolInputPanel(props: SmartKolInputPanelProps) {
+  const normalizedAccountId = String(props.accountId ?? "").trim();
+  const accountKey = props.accountId === undefined
+    ? "legacy-unscoped"
+    : normalizedAccountId
+      ? `account:${normalizedAccountId}`
+      : "account:unresolved";
+  return <SmartKolInputPanelForAccount key={accountKey} {...props} />;
 }

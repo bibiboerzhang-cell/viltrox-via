@@ -29,6 +29,9 @@ _MATCH_EVIDENCE_SOURCES = frozenset({
     CONTROLLED_ALIAS_EVIDENCE_SOURCE,
     CAPABILITY_USE_EVIDENCE_SOURCE,
 })
+_ROLE_IDENTITY_EVIDENCE_FIELDS = frozenset({
+    "handle", "display_name", "bio",
+})
 
 
 def _looks_like_contact_value(value: str) -> bool:
@@ -46,10 +49,14 @@ def _controlled_evidence_allowed(raw: dict[str, Any], controlled_specs: list[dic
     canonical = _text(raw.get("canonical_term")).lower()[:120]
     observed = _text(raw.get("observed_term")).lower()[:120]
     evidence_group = _text(raw.get("evidence_group"))
-    expected_kind = "product" if evidence_group == "product_use_fit" else (
-        "scene" if evidence_group == "segment_use_case" else ""
-    )
+    expected_kind = {
+        "product_use_fit": "product",
+        "segment_use_case": "scene",
+        "people_role": "role",
+    }.get(evidence_group, "")
     if not canonical or not observed or not expected_kind:
+        return False
+    if expected_kind == "role" and _text(raw.get("field")) not in _ROLE_IDENTITY_EVIDENCE_FIELDS:
         return False
     for value in controlled_specs:
         spec = project_locked_term_groups(value)

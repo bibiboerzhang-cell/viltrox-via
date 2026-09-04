@@ -38,10 +38,10 @@ Resolved Viltrox product (matched from the operator text against the live produc
 - Category: {resolved_product.get('category_main')} / {resolved_product.get('series')}
 - Price: {_price_line}
 - Specs: {resolved_product.get('specs_line')}
-First DEEPLY analyse THIS specific product (what it is, its price tier, its professional level, who actually buys it), then plan the creator search. Do NOT treat it as a generic camera accessory.
+Use this product only as capability and suitability evidence after understanding the operator's requested people. Do NOT let its SKU, name, specs, or catalog persona replace an explicit industry, scene, creator role, or content format.
 """
     else:
-        product_block = "\nNo specific catalog product was matched from the text; infer the product family from the words and plan a sensible creator search.\n"
+        product_block = "\nNo specific catalog product was matched. This is normal: plan the creator search from the requested industry, scene, person role and content format; never require a SKU.\n"
 
     # 车道A/A2:锚串由目录真值推导后喂进 prompt,LLM 不必自己拼品牌/型号(拼错就没锚)。
     _anchor = smart_query_intent.product_anchor(resolved_product, query_text=query_text)
@@ -69,18 +69,20 @@ Operator request:
 {query_text}
 {product_block}
 Rules:
-- FIRST analyse the resolved product's true positioning (what it is, price tier, professional level). A $4000+ PL-mount anamorphic CINE / macro lens is a high-end professional cinema tool bought by DPs, cinematographers and filmmakers shooting commercial / product / food / MV / narrative work — NOT by generic gear-review channels, still-only photographers or phone vloggers. A camera monitor is bought by filmmakers/videographers across verticals. A retro on-camera flash is bought by wedding/portrait/studio shooters.
+- FIRST determine WHO the operator wants: preserve every explicit industry, scene, creator role and content format. These people-intent fields are authoritative. Product data comes second and may only add capability/suitability evidence.
+- A SKU is optional. Never ask for one merely because no catalog product matched. Only request product clarification when the operator explicitly supplied a product identity that is ambiguous, unsupported, or conflicts with an explicitly selected SKU.
+- If a product is resolved, analyse its true positioning only to improve capability evidence and exclusions. A $4000+ PL-mount anamorphic CINE / macro lens is a high-end professional cinema tool bought by DPs, cinematographers and filmmakers shooting commercial / product / food / MV / narrative work — NOT by generic gear-review channels, still-only photographers or phone vloggers. A camera monitor is bought by filmmakers/videographers across verticals. A retro on-camera flash is bought by wedding/portrait/studio shooters.
 - Produce avoid_types: the mismatched creator types to EXCLUDE for this exact product (e.g. for a cine lens: "generic gear reviewer", "still-photography-only photographer", "phone vlogger", "camera store unboxing channel").
 - Produce product_positioning: one plain-language sentence stating what this product is, its price tier and who it is for (this is shown to a human operator — speak plainly, no SKU codes).
 - OUTPUT MUST BE IN ENGLISH. Translate any Chinese / non-English request into English creator search terms. search_query and product_focus MUST be English keywords — never the raw Chinese text.
 - Recognize Viltrox products and map to English creator terms: monitor / 监视器 / 550pro / 550 pro / 外接屏 / screen → camera monitor / field monitor / on-camera monitor / filmmaker gear; flash / 闪光灯 / 灯 → lighting / flash / strobe; lens / 镜头 → photographer / videographer.
-- FIRST analyze WHO actually uses/buys this product, then BROADEN the search — do NOT narrow to only literal product-name matches. A camera monitor is used by filmmakers, videographers, photographers and content creators ACROSS many verticals (automotive/racing, food/culinary, weddings & events, travel, commercial/ad, sports, real-estate, music video, documentary). product_focus should mix creator-type terms (videographer, filmmaker, cinematographer, content creator, DP) with a few representative verticals; write target_persona as one sentence describing this buyer group broadly.
+- When the operator did not name people context but did name a product, infer likely users from product capability and keep that inference visibly secondary. A camera monitor can suggest filmmakers, videographers, cinematographers and content creators across several verticals. product_focus should contain searchable people roles/verticals, not a list of SKU tokens or specifications; target_persona must describe people, never the product itself.
 - Target the ENGLISH-speaking market. Set market to "US" unless the user explicitly names another English region (UK/CA/AU/EU). Exclude Chinese-language creators.
 - Preserve the original intent but expand it into searchable English creator terms.
 {smart_query_intent.AUDIENCE_SCALE_PROMPT_RULE}
 {smart_query_facets.FACET_PROMPT_RULE}
 {objective_rule}
-- EXPLICIT INDUSTRIES/USE CASES ARE IMMUTABLE. The operator explicitly named: {segment_hint}. Preserve every one as a separate item in segments; never replace them with a generic product persona. Do not merge several industries into one broad query.
+- EXPLICIT PEOPLE INTENT IS IMMUTABLE. The operator explicitly named these industries/scenes/roles/content formats: {segment_hint}. Preserve every one as a separate item in segments; never replace them with a generic product or catalog persona. Do not merge several intents into one broad query.
 - OUTPUT SHORT QUERIES, NOT ONE LONG SENTENCE. search_queries must hold 2-4 entries, each at most 6 words and each covering a DIFFERENT product-capability + creator-use-case angle. Do not restate the same angle with synonyms.
 - If the request mentions flash, lighting, strobe, LED, Godox, or price/value, include lighting/flash creator terms.
 - Prefer a balanced 15 creator / 15 reviewer search unless the user says otherwise.

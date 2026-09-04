@@ -413,6 +413,13 @@ def test_worker_uses_product_anchor_only_for_existing_evidence(
     [
         ("EPIC 65mm PL mount cinematographers", "PL-mount"),
         ("85mm RF mount portrait lens", "RF-mount"),
+        ("EPIC 65mm PL mount找摄影师", "PL-mount"),
+        ("85mm RF mount找摄影师", "RF-mount"),
+        ("85mm EF mount找摄影师", "EF-mount"),
+        ("85mm FE mount找摄影师", "FE-mount"),
+        ("85mm Z mount找摄影师", "Z-mount"),
+        ("85mm L mount找摄影师", "L-mount"),
+        ("23mm M43找摄影师", "M43"),
         ("Canon 85mm portrait lens", ""),
     ],
 )
@@ -621,6 +628,56 @@ def test_unknown_or_conflicting_explicit_product_sku_fails_closed(
     )
     assert conflict["status"] == "needs_clarification"
     assert conflict["reason"] == "conflicting_product_constraints"
+
+
+@pytest.mark.parametrize(
+    ("resolution_kind", "family_sku_key"),
+    [
+        ("focal_family", "focal_family_skus"),
+        ("model_family", "model_family_skus"),
+        ("named_product_family", "product_family_skus"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("explicit_sku", "expects_conflict"),
+    [("FAMILY-A", False), ("STALE-OTHER-SKU", True)],
+)
+def test_explicit_sku_must_belong_to_natural_language_product_family(
+    monkeypatch: pytest.MonkeyPatch,
+    resolution_kind: str,
+    family_sku_key: str,
+    explicit_sku: str,
+    expects_conflict: bool,
+) -> None:
+    inferred_family = {
+        "sku": "",
+        "model_name": "Inferred product family",
+        "resolution_kind": resolution_kind,
+        family_sku_key: ["family-a", "FAMILY-B"],
+    }
+    explicit_product = {
+        "sku": explicit_sku,
+        "model_name": explicit_sku,
+        "marketing_name": explicit_sku,
+        "category_main": "Lens",
+        "series": "Test",
+    }
+    monkeypatch.setattr(product_resolver, "resolve_product", lambda _query: inferred_family)
+    monkeypatch.setattr(product_resolver, "resolve_product_sku", lambda _sku: explicit_product)
+    monkeypatch.setattr(smart_query_planner, "_plan_from_product_persona", lambda *_a, **_k: None)
+
+    plan = smart_query_planner.plan_text_query_provider_free(
+        "给这个产品家族找婚礼摄影师",
+        body={"product_sku": explicit_sku},
+    )
+
+    if expects_conflict:
+        assert plan["status"] == "needs_clarification"
+        assert plan["reason"] == "conflicting_product_constraints"
+        assert plan.get("resolved_product") is None
+    else:
+        assert plan["status"] != "needs_clarification"
+        assert plan["resolved_product"]["sku"] == explicit_sku
 
 
 @pytest.mark.parametrize(

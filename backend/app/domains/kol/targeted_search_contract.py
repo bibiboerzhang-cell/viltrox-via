@@ -28,6 +28,23 @@ from app.domains.kol.targeted_search_capability import (
     lens_focals as _lens_focals,
     prospective_lens_capability as _prospective_lens_capability,
 )
+from app.domains.kol.search_intent_text import affirmative_search_text
+from app.domains.kol.targeted_search_filters import (
+    DEFAULT_OBJECTIVE,
+    EXISTING_EVIDENCE,
+    PROSPECTIVE_GROWTH,
+    SUPPORTED_OBJECTIVES,
+    normalize_objective,
+    operator_platforms as _operator_platforms,
+    parse_follower_range,
+)
+from app.domains.kol.targeted_search_persona import (
+    build_target_persona_text,
+    has_creator_role as _has_creator_role,
+)
+from app.domains.kol.targeted_search_segments import (
+    extract_explicit_segments as _extract_explicit_segments,
+)
 from app.domains.kol.targeted_search_terms import (
     LOCKED_TERM_GROUPS_SCHEMA,
     LOCKED_TERM_GROUPS_SOURCE,
@@ -41,13 +58,7 @@ from app.domains.kol.targeted_search_terms import (
 )
 
 
-DEFAULT_OBJECTIVE = "prospective_growth"
-PROSPECTIVE_GROWTH = DEFAULT_OBJECTIVE
-EXISTING_EVIDENCE = "existing_evidence"
-SUPPORTED_OBJECTIVES = frozenset({PROSPECTIVE_GROWTH, EXISTING_EVIDENCE})
-SUPPORTED_PLATFORMS = frozenset({"youtube", "instagram", "tiktok"})
 SEARCH_SPEC_VERSION = "targeted_search_v2"
-
 
 def _text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
@@ -65,329 +76,34 @@ def _dedupe(values: Iterable[Any]) -> list[str]:
     return output
 
 
-def normalize_objective(*values: Any) -> str:
-    """Return a supported objective; unspecified/unknown values fail to the default."""
-
-    aliases = {
-        "prospective": PROSPECTIVE_GROWTH,
-        "growth": PROSPECTIVE_GROWTH,
-        "market_growth": PROSPECTIVE_GROWTH,
-        "potential_users": PROSPECTIVE_GROWTH,
-        "existing": EXISTING_EVIDENCE,
-        "existing_user": EXISTING_EVIDENCE,
-        "brand_evidence": EXISTING_EVIDENCE,
-    }
-    for value in values:
-        if isinstance(value, dict):
-            value = value.get("objective") or value.get("search_objective") or value.get("searchObjective")
-        candidate = _text(value).lower()
-        if candidate in SUPPORTED_OBJECTIVES:
-            return candidate
-        if candidate in aliases:
-            return aliases[candidate]
-    return DEFAULT_OBJECTIVE
-
-
-_COUNT_TOKEN = r"(?P<{name}>\d+(?:\.\d+)?)\s*(?P<{name}_suffix>百万|万|千|[kwm])?"
-_FOLLOWER_CONTEXT_RE = re.compile(r"粉丝|粉|关注者|followers?|audience", re.IGNORECASE)
-_RANGE_SEP = r"(?:-|–|—|~|～|至|到|to)"
-
-
-def _count_value(number: str, suffix: str = "", *, inherited_suffix: str = "") -> int | None:
-    try:
-        value = float(number)
-    except (TypeError, ValueError):
-        return None
-    unit = (suffix or inherited_suffix or "").lower()
-    multiplier = {
-        "": 1,
-        "k": 1_000,
-        "千": 1_000,
-        "w": 10_000,
-        "万": 10_000,
-        "m": 1_000_000,
-        "百万": 1_000_000,
-    }.get(unit)
-    if multiplier is None:
-        return None
-    parsed = int(value * multiplier)
-    return parsed if 0 <= parsed <= 100_000_000 else None
-
-
-def _parse_count_token(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        parsed = int(value)
-        return parsed if 0 <= parsed <= 100_000_000 else None
-    raw = _text(value).lower().replace(",", "")
-    match = re.fullmatch(_COUNT_TOKEN.format(name="value"), raw, flags=re.IGNORECASE)
-    if not match:
-        return None
-    return _count_value(match.group("value"), match.group("value_suffix") or "")
-
-
-def _filter_dict(body_or_filters: Any) -> dict[str, Any]:
-    payload = body_or_filters if isinstance(body_or_filters, dict) else {}
-    nested = payload.get("filters")
-    if isinstance(nested, dict):
-        return {**payload, **nested}
-    return payload
-
-
-def _filter_value(filters: dict[str, Any], keys: tuple[str, ...]) -> tuple[Any, bool]:
-    for key in keys:
-        if key in filters and filters.get(key) not in (None, ""):
-            return filters.get(key), True
-    return None, False
-
-
-def _operator_platforms(body: Any, fallback: Iterable[Any]) -> list[str]:
-    """Keep an explicit operator platform facet authoritative in the plan."""
-
-    filters = _filter_dict(body)
-    raw, explicit = _filter_value(
-        filters,
-        ("platforms", "new_discovery_platforms", "discovery_platforms", "platform"),
-    )
-    values = raw if isinstance(raw, (list, tuple, set)) else [raw]
-    selected = _dedupe(
-        _text(value).lower()
-        for value in values
-        if _text(value).lower() in SUPPORTED_PLATFORMS
-    )
-    return selected if explicit and selected else _dedupe(
-        _text(value).lower() for value in fallback
-    )
-
-
-def parse_follower_range(query: Any = "", body_or_filters: Any = None) -> dict[str, Any]:
-    """Parse an explicit follower interval from filters or Chinese/English text.
-
-    Explicit UI/API values always win over text.  Unknown is kept as ``None``;
-    an inverted interval is returned with ``valid=False`` so the caller can ask
-    for correction instead of swapping the operator's numbers.
-    """
-
-    filters = _filter_dict(body_or_filters)
-    raw_min, has_min = _filter_value(
-        filters, ("followers_min", "follower_min", "followersMin", "minFollowers")
-    )
-    raw_max, has_max = _filter_value(
-        filters, ("followers_max", "follower_max", "followersMax", "maxFollowers")
-    )
-    if has_min or has_max:
-        low = _parse_count_token(raw_min) if has_min else None
-        high = _parse_count_token(raw_max) if has_max else None
-        valid = (not has_min or low is not None) and (not has_max or high is not None)
-        if valid and low is not None and high is not None and low > high:
-            valid = False
-        return {
-            "followers_min": low,
-            "followers_max": high,
-            "source": "operator_filter",
-            "locked": True,
-            "valid": valid,
-            "error": "followers_min_exceeds_max" if low is not None and high is not None and low > high
-            else ("invalid_follower_value" if not valid else ""),
-            "matched_text": "",
-        }
-
-    raw = _text(query).lower().replace(",", "")
-    if not raw:
-        return {
-            "followers_min": None,
-            "followers_max": None,
-            "source": "unspecified",
-            "locked": False,
-            "valid": True,
-            "error": "",
-            "matched_text": "",
-        }
-
-    first = _COUNT_TOKEN.format(name="first")
-    second = _COUNT_TOKEN.format(name="second")
-    patterns = (
-        re.compile(rf"(?:between\s+)?{first}\s*(?:and|{_RANGE_SEP})\s*{second}", re.IGNORECASE),
-        re.compile(rf"{first}\s*{_RANGE_SEP}\s*{second}", re.IGNORECASE),
-    )
-    for pattern in patterns:
-        match = pattern.search(raw)
-        if not match:
-            continue
-        first_suffix = match.group("first_suffix") or ""
-        second_suffix = match.group("second_suffix") or ""
-        # Avoid interpreting years/ranks as followers unless the phrase says
-        # followers or at least one side uses a follower magnitude suffix.
-        if not _FOLLOWER_CONTEXT_RE.search(raw) and not (first_suffix or second_suffix):
-            continue
-        low = _count_value(match.group("first"), first_suffix, inherited_suffix=second_suffix)
-        high = _count_value(match.group("second"), second_suffix, inherited_suffix=first_suffix)
-        valid = low is not None and high is not None and low <= high
-        return {
-            "followers_min": low,
-            "followers_max": high,
-            "source": "operator_text",
-            "locked": True,
-            "valid": valid,
-            "error": "followers_min_exceeds_max" if low is not None and high is not None and low > high
-            else ("invalid_follower_value" if not valid else ""),
-            "matched_text": match.group(0),
-        }
-
-    token = _COUNT_TOKEN.format(name="value")
-    lower_patterns = (
-        re.compile(
-            rf"(?:至少|不低于|大于|超过|more\s+than|over|at\s+least|min(?:imum)?\s*)\s*{token}",
-            re.IGNORECASE,
-        ),
-        re.compile(rf"{token}\s*(?:以上|起|及以上|\+)", re.IGNORECASE),
-    )
-    upper_patterns = (
-        re.compile(rf"(?:不超过|低于|小于|少于|under|below|up\s+to|max(?:imum)?\s*)\s*{token}", re.IGNORECASE),
-        re.compile(rf"{token}\s*(?:以下|以内|及以下)", re.IGNORECASE),
-    )
-    for bound, patterns_for_bound in (("followers_min", lower_patterns), ("followers_max", upper_patterns)):
-        for pattern in patterns_for_bound:
-            match = pattern.search(raw)
-            if not match:
-                continue
-            suffix = match.group("value_suffix") or ""
-            if not _FOLLOWER_CONTEXT_RE.search(raw) and not suffix:
-                continue
-            value = _count_value(match.group("value"), suffix)
-            return {
-                "followers_min": value if bound == "followers_min" else None,
-                "followers_max": value if bound == "followers_max" else None,
-                "source": "operator_text",
-                "locked": True,
-                "valid": value is not None,
-                "error": "" if value is not None else "invalid_follower_value",
-                "matched_text": match.group(0),
-            }
-
-    return {
-        "followers_min": None,
-        "followers_max": None,
-        "source": "unspecified",
-        "locked": False,
-        "valid": True,
-        "error": "",
-        "matched_text": "",
-    }
-
-
-# Canonical segment → phrases people use → first-round creator query phrase.
-_SEGMENT_RULES: tuple[tuple[str, tuple[str, ...], str], ...] = (
-    (
-        "motorsport",
-        ("赛车", "汽车摄影", "车展", "机车", "摩托", "motorsport", "racing", "automotive", "car photography"),
-        "motorsport photographer",
-    ),
-    ("food", ("厨师", "餐饮", "美食", "烹饪", "chef", "culinary", "food"), "food photographer"),
-    ("wedding", ("婚礼", "wedding"), "wedding photographer"),
-    (
-        "event",
-        ("活动", "发布会", "会议摄影", "红毯", "event photographer", "event photography", "conference photographer"),
-        "event photographer",
-    ),
-    (
-        "stage",
-        ("舞台", "演唱会", "演出摄影", "剧场", "stage photography", "concert photographer", "live music photographer", "performance photographer", "theater photographer", "theatre photographer"),
-        "stage performance photographer",
-    ),
-    (
-        "wildlife",
-        ("野生动物", "鸟类摄影", "wildlife", "bird photographer", "bird photography"),
-        "wildlife photographer",
-    ),
-    ("portrait", ("人像", "portrait photographer", "portrait photography"), "portrait photographer"),
-    ("pet", ("宠物", "pet", "dog", "animal"), "pet photographer"),
-    ("travel", ("旅拍", "旅行", "travel"), "travel photographer"),
-    ("fitness", ("健身", "fitness"), "fitness creator"),
-    ("sports", ("体育", "运动摄影", "sports"), "sports photographer"),
-    ("real_estate", ("房地产", "房产", "real estate"), "real estate photographer"),
-    ("commercial", ("商业广告", "广告", "commercial", "advertising"), "commercial photographer"),
-    ("music_video", ("音乐视频", "mv", "music video"), "music video filmmaker"),
-    ("documentary", ("纪录片", "documentary"), "documentary filmmaker"),
-    (
-        "film_photography",
-        (
-            "胶片", "底片", "35mm film", "film photographer", "film photographers",
-            "film photography", "analog photographer", "analog photography",
-            "analogue photographer", "analogue photography",
-        ),
-        "film photographer",
-    ),
-)
-
-
-def _list_values(value: Any) -> list[str]:
-    if isinstance(value, (list, tuple, set)):
-        return _dedupe(value)
-    if not _text(value):
-        return []
-    return _dedupe(re.split(r"[,，、;/|]+|\s+(?:and|or)\s+", _text(value), flags=re.IGNORECASE))
-
-
-def _segment_record(value: str, *, source: str, locked: bool) -> dict[str, Any]:
-    lowered = _text(value).lower()
-    for key, aliases, query_term in _SEGMENT_RULES:
-        if any(_alias_in_text(lowered, alias) for alias in aliases):
-            return {
-                "key": key,
-                "label": _text(value),
-                "query_term": query_term,
-                "source": source,
-                "locked": locked,
-            }
-    slug = re.sub(r"[^a-z0-9]+", "_", lowered).strip("_") or "custom"
-    return {
-        "key": slug,
-        "label": _text(value),
-        "query_term": _text(value),
-        "source": source,
-        "locked": locked,
-    }
-
-
-def _alias_in_text(text: str, alias: str) -> bool:
-    if any("一" <= char <= "鿿" for char in alias):
-        return alias in text
-    return re.search(rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])", text) is not None
-
-
 def extract_explicit_segments(query: Any = "", body: Any = None) -> list[dict[str, Any]]:
     """Extract operator-owned industries/use-cases and keep each one independent."""
 
-    payload = body if isinstance(body, dict) else {}
-    nested = payload.get("filters") if isinstance(payload.get("filters"), dict) else {}
-    explicit_values: list[str] = []
-    for source in (payload, nested):
-        for key in ("segments", "industries", "industry", "use_cases", "useCases"):
-            explicit_values.extend(_list_values(source.get(key)))
-    records = [_segment_record(value, source="operator_filter", locked=True) for value in explicit_values]
+    return _extract_explicit_segments(query, body)
 
-    raw = _text(query).lower()
-    for key, aliases, query_term in _SEGMENT_RULES:
-        matched = next((alias for alias in aliases if _alias_in_text(raw, alias)), "")
-        if matched:
-            records.append({
-                "key": key,
-                "label": matched,
-                "query_term": query_term,
-                "source": "operator_text",
-                "locked": True,
-            })
 
-    output: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for record in records:
-        key = record["key"]
-        if key not in seen:
-            seen.add(key)
-            output.append(record)
-    return output
+def build_target_persona(
+    *,
+    query: Any,
+    body: Any,
+    product: Any,
+    product_focus: Iterable[Any],
+) -> str:
+    """Describe who to find; product identity is supporting evidence only."""
+
+    segments = extract_explicit_segments(query, body)
+    product_present = isinstance(product, dict) and bool(product)
+    capability = (
+        _product_capability(product, product_focus, operator_segments=segments)
+        if product_present else ""
+    )
+    return build_target_persona_text(
+        segments=segments,
+        product_focus=product_focus,
+        product_present=product_present,
+        capability=capability,
+        affirmative_query=affirmative_search_text(query),
+    )
 
 
 def _product_capability(
@@ -403,20 +119,44 @@ def _product_capability(
         _text(item.get(key)).lower()
         for key in (
             "category_main", "category_detail", "series", "model_name",
-            "marketing_name", "description", "specs_line",
+            "marketing_name", "description", "specs_line", "resolved_alias",
+            "resolved_canonical", "resolved_model_identity",
         )
     )
     focus_blob = " ".join(_text(term).lower() for term in focus_values)
     blob = _text(f"{product_blob} {focus_blob}")
-    if "flash" in blob or "strobe" in blob or "闪光" in blob:
-        return "on-camera flash"
-    if "monitor" in blob or "监视器" in blob:
-        return "camera monitor"
     product_is_lens = (
         "lens" in product_blob
         or "镜头" in product_blob
         or _FOCAL_LENGTH_RE.search(product_blob) is not None
     )
+    product_is_flash = any(term in product_blob for term in ("flash", "strobe", "闪光"))
+    product_is_monitor = any(term in product_blob for term in ("monitor", "监视器"))
+    product_is_studio_light = any(
+        term in product_blob
+        for term in (
+            "studio light", "video light", "continuous light", "cob light",
+            "摄影灯", "影视灯", "影棚灯", "补光灯",
+        )
+    )
+    product_is_teleconverter = any(
+        term in product_blob for term in ("teleconverter", "teleplus", "增距镜")
+    )
+    # A resolved catalog record is authoritative for capability. Planner focus
+    # prose must never turn a real lens into a monitor/flash or vice versa.
+    if item:
+        if product_is_studio_light:
+            return (
+                "300w studio lighting"
+                if re.search(r"(?<![a-z0-9])300\s*w(?:atts?)?(?![a-z0-9])", product_blob)
+                else "studio lighting"
+            )
+        if product_is_flash:
+            return "on-camera flash"
+        if product_is_monitor:
+            return "camera monitor"
+        if product_is_teleconverter:
+            return "teleconverter"
     if product_is_lens or "lens" in focus_blob or "镜头" in focus_blob:
         if objective == PROSPECTIVE_GROWTH:
             # Resolved product facts outrank planner-authored focus prose.  The
@@ -430,12 +170,97 @@ def _product_capability(
             return "cinema lens"
         focal = _FOCAL_LENGTH_RE.search(product_blob)
         return f"{focal.group(0).replace(' ', '')} lens" if focal else "camera lens"
+    if not item and ("flash" in focus_blob or "strobe" in focus_blob or "闪光" in focus_blob):
+        return "on-camera flash"
+    if not item and ("monitor" in focus_blob or "监视器" in focus_blob):
+        return "camera monitor"
     if objective == EXISTING_EVIDENCE:
         for term in focus_values:
             candidate = _text(term).lower()
             if candidate and "viltrox" not in candidate and len(candidate.split()) <= 3:
                 return candidate
     return "creator gear"
+
+
+def _operator_product_capability(
+    query: Any,
+    *,
+    operator_segments: Iterable[Any] = (),
+) -> str:
+    """Return only a capability explicitly stated by the operator."""
+
+    value = affirmative_search_text(query).lower()
+    if not value:
+        return ""
+    wattage = re.search(
+        r"(?<![a-z0-9])(?P<watts>\d{2,4})\s*w(?:atts?)?(?![a-z0-9])",
+        value,
+    )
+    wattage_light = bool(
+        wattage
+        and any(term in value for term in ("light", "lighting", "flash", "strobe", "灯"))
+    )
+    if wattage_light or any(
+        term in value
+        for term in (
+            "studio light", "studio lighting", "video light", "continuous light",
+            "portable lighting", "cob light", "摄影灯", "影视灯", "影棚灯", "补光灯",
+            "离机闪光", "离机布光", "off-camera flash", "off camera flash",
+            "off-camera lighting", "off camera lighting",
+        )
+    ):
+        return (
+            "300w studio lighting"
+            if wattage and wattage.group("watts") == "300"
+            else "studio lighting"
+        )
+    if any(
+        term in value
+        for term in ("camera monitor", "field monitor", "external monitor", "监视器", "监看器")
+    ):
+        return "camera monitor"
+    if any(term in value for term in ("teleconverter", "teleplus", "增距镜", "增倍镜")):
+        return "teleconverter"
+    if any(term in value for term in ("on-camera flash", "on camera flash", "speedlight", "speedlite", "机顶闪光灯", "闪光灯")):
+        return "on-camera flash"
+    visual_role_context = _has_creator_role(value) or any(
+        term in value for term in ("review", "reviewer", "评测", "测评", "photography", "摄影")
+    )
+    if visual_role_context and (
+        re.search(r"(?<![a-z0-9])(?:flash|strobe)(?![a-z0-9])", value)
+        or "闪光" in value
+    ):
+        return "on-camera flash"
+    if re.search(r"(?<![a-z0-9])(?:lens|lenses)(?![a-z0-9])", value) or "镜头" in value:
+        return _prospective_lens_capability(value, operator_segments=operator_segments)
+    return ""
+
+
+def _product_evidence_context(
+    *,
+    query: Any,
+    product: Any,
+    product_focus: Iterable[Any],
+    objective: str,
+    operator_segments: Iterable[Any],
+) -> tuple[str, str]:
+    if isinstance(product, dict) and product:
+        return (
+            _product_capability(
+                product,
+                product_focus,
+                objective=objective,
+                operator_segments=operator_segments,
+            ),
+            "resolved_product",
+        )
+    operator_capability = _operator_product_capability(
+        query,
+        operator_segments=operator_segments,
+    )
+    if operator_capability:
+        return operator_capability, "operator_capability"
+    return "", "none"
 
 
 def _without_brand_model(value: Any, product: Any, *, drop_focal: bool = False) -> str:
@@ -478,12 +303,14 @@ def build_query_cells(
     follower_filter = parse_follower_range(query, body)
     explicit = extract_explicit_segments(query, body)
     focus_values = list(product_focus or [])
-    capability = _product_capability(
-        product,
-        focus_values,
+    capability, product_evidence_basis = _product_evidence_context(
+        query=query,
+        product=product,
+        product_focus=focus_values,
         objective=objective,
         operator_segments=explicit,
     )
+    product_evidence_required = product_evidence_basis != "none"
     # Empty is an intentional "no operator platform restriction" value.  The
     # provider resolves it to all supported discovery legs; silently choosing
     # YouTube here would turn an optional facet into an unrequested hard gate.
@@ -510,6 +337,8 @@ def build_query_cells(
                 raw_limit=raw_limit,
                 follower_filter=follower_filter,
                 capability=capability,
+                product_evidence_required=product_evidence_required,
+                product_evidence_basis=product_evidence_basis,
             )
             for index, query_value in enumerate(selected_legacy, start=1)
         ]
@@ -562,6 +391,22 @@ def build_query_cells(
             product,
             drop_focal=objective == PROSPECTIVE_GROWTH,
         ) or "content creator"
+        if segment.get("key") == "review" and product_evidence_required:
+            segment_term = {
+                "300w studio lighting": "300W studio lighting reviewer",
+                "studio lighting": "studio lighting reviewer",
+                "camera monitor": "camera monitor reviewer",
+                "on-camera flash": "flash reviewer",
+                "teleconverter": "teleconverter reviewer",
+                "camera lens": "camera lens reviewer",
+                "cinema lens": "cinema lens reviewer",
+            }.get(capability, segment_term)
+        elif segment.get("key") == "photography_role" and capability == "on-camera flash":
+            segment_term = (
+                "strobe photographer"
+                if re.search(r"(?<![a-z0-9])strobe(?![a-z0-9])", _text(query).lower())
+                else "flash photographer"
+            )
         if objective == PROSPECTIVE_GROWTH:
             # First discover creators with segment-specific educational and
             # gear-decision content.  Product capability remains authoritative
@@ -592,6 +437,15 @@ def build_query_cells(
             raw_limit=raw_limit,
             follower_filter=follower_filter,
             capability=capability,
+            product_evidence_required=product_evidence_required,
+            product_evidence_basis=product_evidence_basis,
+            scene_terms=(
+                segment.get("component_segments")
+                or segment.get("required_scene_terms")
+                or [segment["key"]]
+            ),
+            role_terms=segment.get("required_role_terms") or (),
+            role_only=segment.get("role_only") is True,
         ))
     return cells
 
@@ -648,9 +502,14 @@ def apply_targeted_contract(
         if cells:
             output["first_round_strategy"] = "independent_query_cells"
             output["authoritative_query_field"] = "query_cells"
-            # ``search_query`` / ``search_queries`` remain compatibility fields
-            # for persisted sessions and local recall.  Online first-round
-            # execution must consume QueryCell primaries, never the broad merge.
+            # Compatibility fields must describe the same people as the
+            # authoritative cells.  Keeping provider/fallback prose here can
+            # resurrect a negated role (for example "不要摄影师") in persisted
+            # sessions or older local-recall paths.
+            if objective == PROSPECTIVE_GROWTH:
+                people_queries = _dedupe(cell.get("primary_query") for cell in cells)
+                output["search_query"] = people_queries[0]
+                output["search_queries"] = people_queries
     else:
         output["query_cells"] = []
 
@@ -667,19 +526,23 @@ def apply_targeted_contract(
             },
         })
     cells = output.get("query_cells") if isinstance(output.get("query_cells"), list) else []
-    capability = _product_capability(
-        product,
-        output.get("product_focus") or [],
+    capability, product_evidence_basis = _product_evidence_context(
+        query=query,
+        product=product,
+        product_focus=output.get("product_focus") or [],
         objective=objective,
         operator_segments=output.get("explicit_segments") or [],
     )
     resolved = product if isinstance(product, dict) else {}
+    product_evidence_required = product_evidence_basis != "none"
     output["search_brief"] = {
         "search_spec_version": SEARCH_SPEC_VERSION,
         "objective": objective,
         "product": {
             "resolved_sku": _text(resolved.get("sku")),
-            "capability": capability,
+            "capability": capability if product_evidence_required else None,
+            "evidence_required": product_evidence_required,
+            "evidence_basis": product_evidence_basis,
             "brand_or_model_required": objective == EXISTING_EVIDENCE,
         },
         "explicit_segments": list(output.get("explicit_segments") or []),
@@ -706,6 +569,7 @@ __all__ = [
     "normalize_objective",
     "parse_follower_range",
     "extract_explicit_segments",
+    "build_target_persona",
     "build_query_cells",
     "build_locked_term_groups",
     "project_locked_term_groups",

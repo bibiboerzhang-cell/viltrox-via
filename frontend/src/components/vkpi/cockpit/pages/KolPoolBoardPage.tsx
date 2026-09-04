@@ -165,9 +165,10 @@ export function KolPoolBoardPage({
     openItem,
     reloadDetail,
     closeDrawer,
-  } = usePoolDrawer(apiToken, avatarForItem, mergeAvatarSeed);
+  } = usePoolDrawer(apiToken, avatarForItem, mergeAvatarSeed, currentUser?.id ?? null);
   const { myList, toggleMyList, syncState: favoriteSyncState, syncError: favoriteSyncError } = usePoolFavorites(
     apiToken,
+    currentUser?.id ?? null,
     selectedItem,
     setSelectedItem,
     avatarForItem,
@@ -253,6 +254,7 @@ export function KolPoolBoardPage({
       {!apiToken ? noTokenCard : (
         <SmartEmbed
           apiToken={apiToken}
+          accountId={currentUser?.id ?? null}
           searchMode={searchMode}
           onSearchModeChange={setSearchMode}
           onRecallItems={rememberRecallItems}

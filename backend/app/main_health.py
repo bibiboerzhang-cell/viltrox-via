@@ -254,6 +254,8 @@ def finish_runtime_trust_probe(trust: Mapping[str, object]) -> dict[str, Any]:
         reasons.append("db_startup_unready")
     if trust.get("db_migration_source") != "schema_migrations":
         reasons.append("db_migration_unavailable")
+    if "db_migration_complete" in trust and trust.get("db_migration_complete") is not True:
+        reasons.append("db_migration_set_incomplete")
     if trust.get("worker_online") is not True or trust.get("worker_heartbeat_source") != "db_heartbeat":
         reasons.append("worker_unavailable")
     redis_fleet = trust.get("redis_worker_fleet")
@@ -309,7 +311,22 @@ def build_runtime_trust(
             "sha_aligned": bool(server_sha == client_sha) if server_sha and client_sha else None,
         }
     )
-    migration_max = run_runtime_trust_stage("db_migration", db_migration_probe, None)
+    migration_identity = run_runtime_trust_stage("db_migration", db_migration_probe, None)
+    if isinstance(migration_identity, Mapping):
+        migration_max = str(migration_identity.get("max") or "") or None
+        trust.update(
+            {
+                "db_migration_complete": migration_identity.get("set_complete") is True,
+                "db_migration_exact": migration_identity.get("set_exact") is True,
+                "db_migration_applied_count": migration_identity.get("applied_count"),
+                "db_migration_expected_count": migration_identity.get("expected_count"),
+                "db_migration_missing_count": migration_identity.get("missing_count"),
+                "db_migration_unexpected_count": migration_identity.get("unexpected_count"),
+                "db_migration_set_sha256": migration_identity.get("set_sha256"),
+            }
+        )
+    else:
+        migration_max = migration_identity
     trust["db_migration_max"] = migration_max
     trust["db_migration_source"] = "schema_migrations" if migration_max else "unavailable"
     worker_unavailable = {
@@ -364,6 +381,13 @@ def _runtime_trust_failure_payload(
         "db_startup": {"state": "unknown"},
         "db_migration_max": None,
         "db_migration_source": "probe_unavailable",
+        "db_migration_complete": None,
+        "db_migration_exact": None,
+        "db_migration_applied_count": None,
+        "db_migration_expected_count": None,
+        "db_migration_missing_count": None,
+        "db_migration_unexpected_count": None,
+        "db_migration_set_sha256": None,
         "worker_heartbeat": None,
         "worker_online": None,
         "worker_name": None,

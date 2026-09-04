@@ -48,6 +48,15 @@ RELEASE_SHARED_ALIASES = {
     *SHARED_OPTIONAL,
 }
 MAX_ROLLBACK_FILE_BYTES = 1024 * 1024
+POSTGRES_MIGRATION_EXCLUDE = frozenset(
+    {
+        "001_verification.sql",
+        "002_intelligence.sql",
+        "004_viltrox_matrix.sql",
+        "010_party_layer_rollback.sql",
+    }
+)
+MIGRATION_NAME_RE = re.compile(r"^[0-9]{3}[a-z]?_[A-Za-z0-9_.-]+\.sql$")
 FORWARD_COMPATIBILITY_POLICY_ID = "vkpi-additive-nullable-defaultless-v1"
 FORWARD_COMPATIBILITY_POLICY = {
     "305_vkpi_kol_pool_language_inferred.sql": {
@@ -72,6 +81,11 @@ FORWARD_COMPATIBILITY_POLICY = {
         "columns": (("term_performance_json", "JSONB"),),
         "indexes": (),
     },
+    "307_users_token_version.sql": {
+        "table": "users",
+        "columns": (("token_version", "INTEGER"),),
+        "indexes": (),
+    },
 }
 _ADD_COLUMN_RE = re.compile(
     r"^ALTER\s+TABLE\s+([a-zA-Z0-9_]+)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS\s+"
@@ -90,6 +104,44 @@ _CREATE_INDEX_RE = re.compile(
 )
 
 
+def runtime_migration_manifest(migrations_dir: Path) -> tuple[str, ...]:
+    """Return the exact forward sequence used by the Postgres startup runner."""
+
+    names = tuple(
+        sorted(
+            path.name
+            for path in migrations_dir.glob("*.sql")
+            if not path.name.endswith("_down.sql")
+            and path.name not in POSTGRES_MIGRATION_EXCLUDE
+        )
+    )
+    if not names or len(names) != len(set(names)) or any(
+        MIGRATION_NAME_RE.fullmatch(name) is None for name in names
+    ):
+        raise LayoutError("runtime migration manifest is empty or invalid")
+    return names
+
+
+def pending_runtime_migrations(
+    manifest: tuple[str, ...],
+    applied: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Find every missing migration, including holes below the applied maximum."""
+
+    if not applied or len(applied) != len(set(applied)) or any(
+        MIGRATION_NAME_RE.fullmatch(name) is None for name in applied
+    ):
+        raise LayoutError("applied migration set is empty or invalid")
+    manifest_set = set(manifest)
+    unexpected = sorted(set(applied) - manifest_set - POSTGRES_MIGRATION_EXCLUDE)
+    if unexpected:
+        raise LayoutError(
+            "applied migration set contains versions outside the runtime manifest: "
+            + ",".join(unexpected)
+        )
+    return tuple(name for name in manifest if name not in set(applied))
+
+
 def _forward_sql_statements(source: str) -> tuple[str, ...]:
     """Split reviewed DDL while ignoring line comments and quoted semicolons."""
 
@@ -101,8 +153,16 @@ def _forward_sql_statements(source: str) -> tuple[str, ...]:
         char = source[index]
         next_char = source[index + 1] if index + 1 < len(source) else ""
         if not quoted and char == "-" and next_char == "-":
-            newline = source.find("\n", index + 2)
-            index = len(source) if newline < 0 else newline + 1
+            lf = source.find("\n", index + 2)
+            cr = source.find("\r", index + 2)
+            line_ends = [position for position in (lf, cr) if position >= 0]
+            if not line_ends:
+                index = len(source)
+            else:
+                line_end = min(line_ends)
+                index = line_end + 1
+                if source[line_end] == "\r" and index < len(source) and source[index] == "\n":
+                    index += 1
             current.append(" ")
             continue
         if char == "'":
@@ -636,13 +696,21 @@ def _database_release_metadata(
             or database_owner_release_id
         ):
             raise LayoutError("in-place releases must not declare staging clone metadata")
-        return {
+        if pending_migrations != compatibility_declaration:
+            raise LayoutError(
+                "in-place migrations require an exact forward-compatibility declaration"
+            )
+        metadata: dict[str, object] = {
             "database_strategy": "in-place",
             "source_database": None,
             "target_database": None,
             "env_fingerprint_before": None,
             "database_owner_release_id": None,
         }
+        evidence = _forward_compatibility_evidence(compatibility_declaration)
+        if evidence is not None:
+            metadata["forward_compatibility_evidence"] = evidence
+        return metadata
     if strategy == "reuse-active-clone":
         if source_database:
             raise LayoutError("clone-reuse releases must not declare a new source database")

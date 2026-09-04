@@ -118,6 +118,10 @@ _COUNTRY_MATCHERS: tuple[tuple[str, str, bool], ...] = tuple(
         reverse=True,
     )
 )
+_CITY_COUNTRY_MATCHERS: tuple[tuple[str, str, bool], ...] = (
+    ("london", "GB", False), ("伦敦", "GB", True),
+    ("atlanta", "US", False), ("亚特兰大", "US", True),
+)
 
 #: 操作员会怎么**说**语言(与数据侧的取值别名刻意分开:这里是人话,那里是字段值)。
 _LANGUAGE_PHRASES: tuple[tuple[str, str], ...] = (
@@ -182,7 +186,7 @@ def _explicit_countries(query: str) -> tuple[list[str], list[str]]:
         return [], []
     codes: list[str] = []
     matched: list[str] = []
-    for alias, code, is_cjk in _COUNTRY_MATCHERS:
+    for alias, code, is_cjk in (*_COUNTRY_MATCHERS, *_CITY_COUNTRY_MATCHERS):
         hit = alias in lowered if is_cjk else re.search(_ascii_boundary(alias), lowered) is not None
         if not hit:
             continue

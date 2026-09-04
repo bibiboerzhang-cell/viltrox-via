@@ -90,6 +90,18 @@ def _project_query_cell(value: Any) -> dict[str, Any]:
         "segment_label": _text(raw.get("segment_label"), limit=240),
         "segment_source": _code(raw.get("segment_source")),
         "segment_locked": raw.get("segment_locked") is True,
+        "required_scene_terms": [
+            _text(item, limit=120)
+            for item in _strings(raw.get("required_scene_terms"), count=6, limit=120)
+            if _text(item, limit=120)
+        ],
+        "scene_match_mode": "all" if raw.get("scene_match_mode") == "all" else "any",
+        "required_role_terms": [
+            _text(item, limit=120)
+            for item in _strings(raw.get("required_role_terms"), count=4, limit=120)
+            if _text(item, limit=120)
+        ],
+        "role_match_mode": "all" if raw.get("role_match_mode") == "all" else "any",
         "primary_query": primary,
         "fallback_queries": _strings(raw.get("fallback_queries"), count=3, limit=500),
         "platforms": [_code(item) for item in _strings(raw.get("platforms"), count=3, limit=40) if _code(item)],
@@ -101,6 +113,8 @@ def _project_query_cell(value: Any) -> dict[str, Any]:
             for item in _strings(raw.get("required_evidence_groups"), count=8, limit=80)
             if _code(item)
         ],
+        "product_evidence_required": raw.get("product_evidence_required") is not False,
+        "product_evidence_basis": _code(raw.get("product_evidence_basis")),
         "brand_or_model_required": raw.get("brand_or_model_required") is True,
         "brand_or_model_ranking_weight": weight,
         "follower_filter": project_follower_filter(raw.get("follower_filter")),
@@ -301,10 +315,13 @@ def project_growth_candidate_context(value: Any) -> dict[str, Any]:
             "passed": evidence.get("passed") is True,
             "required_product_terms": _strings(evidence.get("required_product_terms"), count=12, limit=120),
             "required_scene_terms": _strings(evidence.get("required_scene_terms"), count=12, limit=120),
+            "required_role_terms": _strings(evidence.get("required_role_terms"), count=8, limit=120),
             "matched_product_terms": _strings(evidence.get("matched_product_terms"), count=12, limit=120),
             "matched_scene_terms": _strings(evidence.get("matched_scene_terms"), count=12, limit=120),
+            "matched_role_terms": _strings(evidence.get("matched_role_terms"), count=8, limit=120),
             "matched_fields": [_code(item) for item in _strings(evidence.get("matched_fields"), count=12, limit=80) if _code(item)],
             "missing_groups": [_code(item) for item in _strings(evidence.get("missing_groups"), count=8, limit=80) if _code(item)],
+            "missing_role_terms": _strings(evidence.get("missing_role_terms"), count=8, limit=120),
             "brand_history_used": evidence.get("brand_history_used") is True,
             "brand_history_weight": 0.0,
         },
@@ -362,6 +379,12 @@ def _project_segments(value: Any) -> list[dict[str, Any]]:
             "key": _code(raw.get("key")),
             "label": _text(raw.get("label"), limit=240),
             "query_term": _text(raw.get("query_term"), limit=240),
+            "component_segments": [
+                _code(value)
+                for value in _strings(raw.get("component_segments"), count=6, limit=120)
+                if _code(value)
+            ],
+            "segment_match_mode": "all" if raw.get("segment_match_mode") == "all" else "any",
             "source": _code(raw.get("source")),
             "locked": raw.get("locked") is True,
         }
@@ -416,6 +439,12 @@ def project_targeted_plan(value: Any) -> dict[str, Any]:
         safe_product = {
             "resolved_sku": _text(product.get("resolved_sku"), limit=240),
             "capability": _text(product.get("capability"), limit=240),
+            "evidence_required": (
+                product.get("evidence_required")
+                if isinstance(product.get("evidence_required"), bool)
+                else None
+            ),
+            "evidence_basis": _code(product.get("evidence_basis")),
             "brand_or_model_required": product.get("brand_or_model_required") is True,
         }
         brief_cells = [

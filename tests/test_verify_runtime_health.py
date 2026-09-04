@@ -50,6 +50,10 @@ def payload() -> dict:
             "worker_started_at": "2026-07-13T23:58:30Z",
             "db_migration_max": MIGRATION,
             "db_migration_source": "schema_migrations",
+            "db_migration_complete": True,
+            "db_migration_exact": True,
+            "db_migration_missing_count": 0,
+            "db_migration_unexpected_count": 0,
             "worker_online": True,
             "worker_heartbeat": "2026-07-13T23:59:00Z",
             "scheduler_status": {"total": 31, "enabled": 21},
@@ -269,6 +273,100 @@ def test_strict_runtime_contract_rejects_migration_and_sha_mismatch(payload: dic
 
 
 @pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("db_migration_complete", False, "applied migration set is incomplete"),
+        ("db_migration_exact", False, "applied migration set is not exact"),
+        ("db_migration_missing_count", 1, "db_migration_missing_count is not zero"),
+        ("db_migration_unexpected_count", 1, "db_migration_unexpected_count is not zero"),
+    ],
+)
+def test_release_acceptance_rejects_incomplete_migration_sets(
+    payload: dict,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    payload["trust"][field] = value
+
+    report = health.validate_health(
+        payload,
+        expected_head=HEAD,
+        expected_migration=MIGRATION,
+        require_migration_set_complete=True,
+    )
+
+    assert report["pass"] is False
+    assert message in report["errors"]
+
+
+def test_complete_migration_flag_is_enforced_without_expected_max(payload: dict) -> None:
+    payload["trust"]["db_migration_missing_count"] = 1
+
+    report = health.validate_health(
+        payload,
+        expected_head=HEAD,
+        require_migration_set_complete=True,
+    )
+
+    assert report["pass"] is False
+    assert "db_migration_missing_count is not zero" in report["errors"]
+
+
+def test_complete_migration_cli_flag_does_not_require_expected_max(payload: dict) -> None:
+    payload["trust"]["db_migration_complete"] = False
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "verify_runtime_health.py"),
+            "--expected-head",
+            HEAD,
+            "--require-migration-set-complete",
+        ],
+        input=json.dumps(payload).encode("utf-8"),
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+
+    report = json.loads(proc.stdout)
+    assert proc.returncode == 1
+    assert "applied migration set is incomplete" in report["errors"]
+
+
+def test_strict_deploy_implicitly_requires_complete_migration_set(payload: dict) -> None:
+    payload["trust"]["db_migration_exact"] = False
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPTS / "verify_runtime_health.py"),
+            "--strict-deploy",
+            "--expected-head",
+            HEAD,
+            "--expected-migration",
+            MIGRATION,
+            "--require-worker",
+            "--max-worker-age-seconds",
+            "180",
+            "--expected-worker-boot-nonce-sha256",
+            WORKER_BOOT_SHA256,
+            "--worker-not-before",
+            "2026-07-13T23:58:00Z",
+            "--now",
+            "2026-07-14T00:00:00Z",
+        ],
+        input=json.dumps(payload).encode("utf-8"),
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+
+    report = json.loads(proc.stdout)
+    assert proc.returncode == 1
+    assert "applied migration set is not exact" in report["errors"]
+
+
+@pytest.mark.parametrize(
     "raw",
     [
         b'{"status":"ok","status":"ok"}',
@@ -464,6 +562,7 @@ def test_cloud_deploy_requires_clean_source_and_post_restart_strict_verification
         "--strict-deploy",
         "--expected-head",
         "--expected-migration",
+        "--require-migration-set-complete",
         "--require-worker",
         "--max-worker-age-seconds",
         "--expected-worker-boot-nonce-sha256",

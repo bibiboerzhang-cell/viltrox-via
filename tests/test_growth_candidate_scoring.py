@@ -10,7 +10,12 @@ from app.domains.kol.growth_candidate_scoring import (
     growth_candidate_sort_key,
     score_growth_candidates,
 )
-from app.domains.kol.targeted_search_contract import build_locked_term_groups
+from app.domains.kol.targeted_search_contract import (
+    build_locked_term_groups,
+    build_query_cells,
+)
+from app.domains.kol.profile_recall_match_evidence import build_controlled_alias_evidence
+from app.domains.kol.profile_query_cell_evidence import build_query_cell_match_evidence
 from app.domains.kol.search_sessions_targeted import project_growth_candidate_context
 
 
@@ -130,6 +135,302 @@ def test_ignores_flat_client_locked_term_lists() -> None:
     assert evidence["required_product_terms"] == []
     assert evidence["required_scene_terms"] == []
     assert evidence["passed"] is False
+
+
+def test_people_only_search_requires_scene_not_fake_creator_gear() -> None:
+    locked = build_locked_term_groups(
+        capability="", segment="food", role_terms=["content creator"],
+    )
+    evidence = build_controlled_alias_evidence(
+        {"bio": "Food video creator making restaurant reviews and short recipe videos."},
+        {"representative_evidence": [{"title": "Restaurant recipe production diary"}]},
+        locked,
+    )
+    cell = {
+        "query_cell_id": "segment_1_food",
+        "segment": "food",
+        "primary_query": "food content creator",
+        "product_evidence_required": False,
+        "product_evidence_basis": "none",
+        "required_role_terms": ["content creator"],
+        "locked_term_groups": locked,
+    }
+
+    [scored] = score_growth_candidates(
+        [_candidate(1, match_evidence=evidence)],
+        {"objective": "prospective_growth", "product": {"evidence_required": False}},
+        cell,
+    )
+
+    contract = scored["growth_candidate_scoring"]["evidence_contract"]
+    assert contract["passed"] is True
+    assert contract["product_evidence_required"] is False
+    assert contract["required_product_terms"] == []
+    assert contract["required_role_terms"] == ["content creator"]
+    assert contract["matched_role_terms"] == ["video creator"]
+    assert "product_use_fit" not in contract["missing_groups"]
+    assert scored["product_use_fit"] is None
+    assert scored["product_scene_evidence_pass"] is True
+    assert scored["selection_rationale"]["reason_cards"][0]["code"] == "people_and_scene"
+    assert "目标产品能力" not in scored["selection_rationale"]["purpose"]
+
+
+def test_intersection_cell_requires_every_requested_scene() -> None:
+    locked = build_locked_term_groups(
+        capability="",
+        segment="street",
+        scene_terms=["street", "night"],
+        role_terms=["photographer"],
+    )
+    cell = {
+        "query_cell_id": "segment_1_street",
+        "segment": "street",
+        "required_scene_terms": ["street", "night"],
+        "scene_match_mode": "all",
+        "required_role_terms": ["photographer"],
+        "primary_query": "street night photographer",
+        "product_evidence_required": False,
+        "locked_term_groups": locked,
+    }
+    street_only = build_controlled_alias_evidence(
+        {"bio": "Street photographer documenting city life."},
+        {},
+        locked,
+    )
+    both = build_controlled_alias_evidence(
+        {"bio": "Street photographer specializing in night photography."},
+        {},
+        locked,
+    )
+
+    first, second = score_growth_candidates(
+        [
+            _candidate(1, match_evidence=street_only),
+            _candidate(2, match_evidence=both),
+        ],
+        SEARCH_BRIEF,
+        cell,
+    )
+
+    assert first["product_scene_evidence_pass"] is False
+    assert first["growth_candidate_scoring"]["evidence_contract"]["missing_scene_terms"] == [
+        "night"
+    ]
+    assert second["product_scene_evidence_pass"] is True
+
+
+@pytest.mark.parametrize(
+    ("query", "wrong_profile", "right_profile"),
+    [
+        (
+            "Find wedding photographers",
+            "Wedding planner coordinating bridal ceremonies.",
+            "Wedding photographer documenting bridal ceremonies.",
+        ),
+        (
+            "Find sports videographers",
+            "Football fan and sideline commentator covering every match.",
+            "Sports videographer filming football matches from the sideline.",
+        ),
+        (
+            "Find food photographers",
+            "Food critic and recipe writer reviewing restaurants.",
+            "Food photographer creating restaurant and recipe imagery.",
+        ),
+        (
+            "Find chefs",
+            "Food content creator reviewing restaurants.",
+            "Chef sharing culinary and restaurant videos.",
+        ),
+        (
+            "Find gear reviewers",
+            "Photographer publishing camera gear reviews.",
+            "Gear reviewer testing camera equipment.",
+        ),
+        (
+            "Find independent film directors",
+            "Independent film critic covering festivals.",
+            "Independent film director making festival features.",
+        ),
+        (
+            "Find wedding planners",
+            "Wedding photographer documenting bridal ceremonies.",
+            "Wedding planner coordinating bridal ceremonies.",
+        ),
+        (
+            "Find sports commentators",
+            "Sports photographer documenting every match.",
+            "Sports commentator covering every match.",
+        ),
+    ],
+)
+def test_people_search_requires_requested_role_and_scene(
+    query: str,
+    wrong_profile: str,
+    right_profile: str,
+) -> None:
+    [cell] = build_query_cells(
+        query=query,
+        body={},
+        product={},
+        product_focus=[],
+        platforms=[],
+    )
+    locked = cell["locked_term_groups"]
+    wrong_evidence = build_controlled_alias_evidence({"bio": wrong_profile}, {}, locked)
+    right_evidence = build_controlled_alias_evidence({"bio": right_profile}, {}, locked)
+
+    wrong, right = score_growth_candidates(
+        [
+            _candidate(1, match_evidence=wrong_evidence),
+            _candidate(2, match_evidence=right_evidence),
+        ],
+        SEARCH_BRIEF,
+        cell,
+    )
+
+    wrong_contract = wrong["growth_candidate_scoring"]["evidence_contract"]
+    right_contract = right["growth_candidate_scoring"]["evidence_contract"]
+    assert wrong_contract["passed"] is False
+    assert wrong_contract["missing_role_terms"] == cell["required_role_terms"]
+    assert "people_role" in wrong_contract["missing_groups"]
+    assert right_contract["passed"] is True
+    assert right_contract["matched_role_terms"]
+
+
+def test_two_explicit_occupations_require_both_profile_identities() -> None:
+    [cell] = build_query_cells(
+        query="Find photographers who are also filmmakers",
+        body={}, product={}, product_focus=[], platforms=[],
+    )
+    locked = cell["locked_term_groups"]
+    one_role = build_controlled_alias_evidence(
+        {"bio": "Photographer documenting real-world stories."}, {}, locked,
+    )
+    both_roles = build_controlled_alias_evidence(
+        {"bio": "Photographer and filmmaker documenting real-world stories."}, {}, locked,
+    )
+
+    first, second = score_growth_candidates(
+        [
+            _candidate(1, match_evidence=one_role),
+            _candidate(2, match_evidence=both_roles),
+        ],
+        SEARCH_BRIEF,
+        cell,
+    )
+
+    first_contract = first["growth_candidate_scoring"]["evidence_contract"]
+    second_contract = second["growth_candidate_scoring"]["evidence_contract"]
+    assert cell["role_match_mode"] == "all"
+    assert first_contract["passed"] is False
+    assert first_contract["missing_role_terms"] == ["filmmaker"]
+    assert second_contract["passed"] is True
+    assert second_contract["missing_role_terms"] == []
+
+
+def test_representative_content_mention_cannot_impersonate_requested_role() -> None:
+    [cell] = build_query_cells(
+        query="Find film directors",
+        body={},
+        product={},
+        product_focus=[],
+        platforms=[],
+    )
+    row = {"bio": "Film critic and festival interviewer"}
+    evidence_payload = {
+        "representative_evidence": [{"title": "Interview with a film director"}],
+    }
+    match_evidence = build_query_cell_match_evidence(
+        row,
+        evidence_payload,
+        cell["primary_query"],
+        query_cell=cell,
+    )
+
+    [scored] = score_growth_candidates(
+        [_candidate(1, match_evidence=match_evidence)],
+        SEARCH_BRIEF,
+        cell,
+    )
+
+    contract = scored["growth_candidate_scoring"]["evidence_contract"]
+    assert contract["passed"] is False
+    assert contract["required_role_terms"] == ["director"]
+    assert contract["matched_role_terms"] == []
+    assert contract["missing_role_terms"] == ["director"]
+
+
+def test_profile_text_video_aggregate_cannot_impersonate_requested_role() -> None:
+    [cell] = build_query_cells(
+        query="Find independent film directors",
+        body={},
+        product={},
+        product_focus=[],
+        platforms=[],
+    )
+    row = {
+        "bio": "Film critic and festival interviewer",
+        # The real profile-index builder appends video evidence titles to this
+        # field.  It is useful scene evidence, but cannot establish occupation.
+        "profile_text": (
+            "KOL profile text for vector recall only. "
+            "Evidence titles: Interview with an independent film director"
+        ),
+    }
+    match_evidence = build_query_cell_match_evidence(
+        row,
+        {},
+        cell["primary_query"],
+        query_cell=cell,
+    )
+
+    assert not any(
+        evidence.get("evidence_group") == "people_role"
+        for evidence in match_evidence
+    )
+    [scored] = score_growth_candidates(
+        [_candidate(1, match_evidence=match_evidence)],
+        SEARCH_BRIEF,
+        cell,
+    )
+
+    contract = scored["growth_candidate_scoring"]["evidence_contract"]
+    assert contract["passed"] is False
+    assert contract["matched_role_terms"] == []
+    assert contract["missing_role_terms"] == ["director"]
+
+
+def test_night_scene_does_not_treat_posting_every_night_as_night_photography() -> None:
+    [cell] = build_query_cells(
+        query="Find street photographers who also shoot night photography",
+        body={},
+        product={},
+        product_focus=[],
+        platforms=[],
+    )
+    locked = cell["locked_term_groups"]
+    posting_row = {"bio": "Street photographer. I publish a new post every night."}
+    posting_evidence = build_query_cell_match_evidence(
+        posting_row, {}, cell["primary_query"], query_cell=cell,
+    )
+    photography_row = {"bio": "Street photographer specializing in night photography."}
+    photography_evidence = build_query_cell_match_evidence(
+        photography_row, {}, cell["primary_query"], query_cell=cell,
+    )
+
+    posting, photography = score_growth_candidates(
+        [
+            _candidate(1, match_evidence=posting_evidence),
+            _candidate(2, match_evidence=photography_evidence),
+        ],
+        SEARCH_BRIEF,
+        cell,
+    )
+
+    assert posting["product_scene_evidence_pass"] is False
+    assert posting["growth_candidate_scoring"]["evidence_contract"]["missing_scene_terms"] == ["night"]
+    assert photography["product_scene_evidence_pass"] is True
 
 
 def test_audience_distributions_use_target_market_and_language_aliases() -> None:

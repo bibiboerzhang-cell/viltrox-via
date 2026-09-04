@@ -26,9 +26,18 @@ const SMART_DASHBOARD_TRIM = [
 interface XbProps {
   apiToken: string;
   onOpenBoard: () => void;
+  pageProps?: Record<string, Record<string, unknown>>;
 }
 
-export function PoolSmartSearchXbCard({ apiToken, onOpenBoard }: XbProps) {
+function poolAccountId(pageProps: XbProps["pageProps"]): string | number | null {
+  const currentUser = pageProps?.["kol-pool"]?.currentUser;
+  if (!currentUser || typeof currentUser !== "object") return null;
+  const id = (currentUser as { id?: unknown }).id;
+  return typeof id === "string" || typeof id === "number" ? id : null;
+}
+
+export function PoolSmartSearchXbCard({ apiToken, onOpenBoard, pageProps }: XbProps) {
+  const accountId = poolAccountId(pageProps);
   return (
     <XbCard
       title="找达人"
@@ -42,6 +51,7 @@ export function PoolSmartSearchXbCard({ apiToken, onOpenBoard }: XbProps) {
         <div data-testid="dashboard-kol-smart-search" className={SMART_DASHBOARD_TRIM}>
           <SmartKolInputPanel
             apiToken={apiToken}
+            accountId={accountId}
             onOpenRecallItem={onOpenBoard}
             onOpenProfile={onOpenBoard}
           />
@@ -51,7 +61,8 @@ export function PoolSmartSearchXbCard({ apiToken, onOpenBoard }: XbProps) {
   );
 }
 
-export function PoolSearchHistoryXbCard({ apiToken, onOpenBoard }: XbProps) {
+export function PoolSearchHistoryXbCard({ apiToken, onOpenBoard, pageProps }: XbProps) {
+  const accountId = poolAccountId(pageProps);
   return (
     <XbCard
       title="搜索历史"
@@ -65,7 +76,7 @@ export function PoolSearchHistoryXbCard({ apiToken, onOpenBoard }: XbProps) {
         ["打开", "点记录跳转 KOL Pool 并恢复该会话"],
       ]}
     >
-      <KolSearchHistoryPanel apiToken={apiToken} onOpenBoard={onOpenBoard} />
+      <KolSearchHistoryPanel apiToken={apiToken} accountId={accountId} onOpenBoard={onOpenBoard} />
     </XbCard>
   );
 }

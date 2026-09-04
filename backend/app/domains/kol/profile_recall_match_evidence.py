@@ -57,6 +57,15 @@ _MATCH_FIELDS = (
     "profile_text",
     "type_reason",
 )
+# ``profile_text`` is a semantic-index document, not an account identity
+# field: the index builder deliberately appends video-analysis summaries and
+# evidence titles to it.  ``type_reason`` is derived from that same document.
+# Neither may prove that the account owner has a requested occupation.
+_ROLE_IDENTITY_MATCH_FIELDS = frozenset({
+    "handle",
+    "display_name",
+    "bio",
+})
 REPRESENTATIVE_CONTENT_EVIDENCE_FIELDS = (
     "title",
     "description",
@@ -601,9 +610,19 @@ def build_controlled_alias_evidence(
             continue
         canonical = str(group.get("canonical_term") or "").strip()
         evidence_group = str(group.get("evidence_group") or "").strip()
-        if not canonical or evidence_group not in {"product_use_fit", "segment_use_case"}:
+        if not canonical or evidence_group not in {
+            "product_use_fit", "segment_use_case", "people_role",
+        }:
             continue
         group_match_count = 0
+        # Occupation is an account-identity claim.  A planner mentioning
+        # "photographer" in one video must not become a photographer, so role
+        # proof is restricted to public profile/identity fields.
+        group_fields = (
+            [item for item in fields if item[0] in _ROLE_IDENTITY_MATCH_FIELDS]
+            if evidence_group == "people_role"
+            else fields
+        )
         match_sets = [
             (
                 group.get("aliases") if isinstance(group.get("aliases"), list) else [],
@@ -620,7 +639,7 @@ def build_controlled_alias_evidence(
                 "capability_use_suitability",
             ))
         for terms, source, relation in match_sets:
-            for field, value in fields:
+            for field, value in group_fields:
                 observed = next(
                     (
                         str(term).strip()
@@ -646,9 +665,13 @@ def build_controlled_alias_evidence(
                 group_match_count += 1
                 if len(output) >= 12:
                     return output
-                if group_match_count >= 4:
+                # Preserve space for every required product/role/scene group
+                # under the 12-row response cap.  Two coordinates per group
+                # are enough to show evidence breadth without hiding a later
+                # hard requirement.
+                if group_match_count >= 2:
                     break
-            if group_match_count >= 4:
+            if group_match_count >= 2:
                 break
     return output
 

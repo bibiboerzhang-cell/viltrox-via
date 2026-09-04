@@ -150,6 +150,41 @@ def test_migration_unavailable_branch_still_reports_none_age() -> None:
     assert trust["probe"]["status"] == "degraded"
 
 
+def test_forward_compatible_migration_superset_does_not_degrade_rollback_health() -> None:
+    trust = build_runtime_trust(
+        db_startup_probe=lambda: {"state": "completed"},
+        release_validation_probe=lambda: {"active": False, "valid": True},
+        client_git_sha_probe=lambda: "a" * 40,
+        db_migration_probe=lambda: {
+            "max": "311_future_forward_compatible.sql",
+            "set_complete": True,
+            "set_exact": False,
+            "applied_count": 311,
+            "expected_count": 310,
+            "missing_count": 0,
+            "unexpected_count": 1,
+            "set_sha256": "b" * 64,
+        },
+        worker_probe=lambda: {
+            "worker_heartbeat": "2026-09-02T11:59:57Z",
+            "worker_online": True,
+            "worker_sha": "a" * 40,
+            "worker_sha_source": "db_heartbeat",
+            "worker_heartbeat_source": "db_heartbeat",
+        },
+        redis_worker_probe=lambda: {"online": True, "expected_count": 1},
+        scheduler_probe=lambda: "not_configured",
+        worker_sha_fallback_probe=lambda: {},
+        server_git_sha="a" * 40,
+        postgres_runtime=True,
+    )
+
+    assert trust["db_migration_complete"] is True
+    assert trust["db_migration_exact"] is False
+    assert trust["db_migration_unexpected_count"] == 1
+    assert trust["probe"]["status"] == "ok"
+
+
 def test_failure_payload_and_timeout_snapshot_carry_the_new_fields() -> None:
     snapshot = _RUNTIME_TRUST_COORDINATOR.snapshot("timeout", timeout_seconds=0.5)
     assert snapshot["external_ping_hint"]["path"] == "/health"

@@ -7,6 +7,16 @@ import { asRecord, cleanText } from "./SmartKolInputPanel.helpers";
 
 export type SmartKolInputPanelProps = {
   apiToken?: string;
+  /**
+   * Real authenticated account identity. The API token is deliberately not used
+   * for browser-state isolation because cookie sessions all expose the same
+   * `cookie-session` marker to the UI.
+   *
+   * `null` means the account has not been resolved yet and disables search-state
+   * restoration for that render. Omitting the prop keeps the legacy unscoped key
+   * for isolated/component callers that do not run inside CockpitApp.
+   */
+  accountId?: string | number | null;
   searchMode?: string;
   onSearchModeChange?: (mode: "balanced" | "precision" | "discovery") => void;
   onRecallItems?: (items: VkpiKolRecallItem[]) => void;

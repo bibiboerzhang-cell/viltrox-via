@@ -260,6 +260,24 @@ describe("KOLDetailDrawer 长期记忆区 render smoke", () => {
     ));
   });
 
+  it("无精确 SKU 时在详情头保留产品家族，不把家族名冒充 SKU 请求", async () => {
+    renderDrawer({
+      item: {
+        ...baseItem,
+        product_context: {
+          kind: "product_family",
+          identity: "family:Viltrox 35mm F1.2 family",
+          label: "Viltrox 35mm F1.2 family",
+        },
+        product_family_name: "Viltrox 35mm F1.2 family",
+      },
+    });
+
+    expect(screen.getByTestId("kol-detail-product-context")).toHaveTextContent("本次产品 · Viltrox 35mm F1.2 family");
+    await waitFor(() => expect(getKolPoolContentFit).toHaveBeenCalledWith("tok", 42, {}));
+    expect(getKolPoolContentFit.mock.calls.some((call) => Boolean(call[2]?.productSku))).toBe(false);
+  });
+
   it("共享或未关注 KOL 只读展示且不允许发起内容深析", async () => {
     getMyKolViewerContext.mockResolvedValueOnce({
       share_origin: { shared_by: 10, shared_by_name: "Owner" },

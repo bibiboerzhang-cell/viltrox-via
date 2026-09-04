@@ -49,6 +49,7 @@ import {
   looksLikeRetailer,
   mergeKolRecallSnapshots,
   mergeKolSearchSessionSnapshots,
+  pendingSearchSessionStorageKey,
   reachFloorDisplayFromSession,
   readPersistedSearchDisplay,
   readableCreatorName,
@@ -76,6 +77,7 @@ export {
   looksLikeRetailer,
   mergeKolRecallSnapshots,
   mergeKolSearchSessionSnapshots,
+  pendingSearchSessionStorageKey,
   reachFloorDisplayFromSession,
   readPersistedSearchDisplay,
   recallResultFromSession,
@@ -646,10 +648,34 @@ export function RecallMiniItem({
   );
 }
 
-export function PlanPills({ plan }: { plan: Row }) {
+export function PlanPills({
+  plan,
+  currentQuery = "",
+  resultsStale = false,
+  onSuggestionSelect,
+  suggestionBusy = false,
+}: {
+  plan: Row;
+  currentQuery?: string;
+  resultsStale?: boolean;
+  onSuggestionSelect?: (suggestion: Row, originalQuery: string) => void;
+  suggestionBusy?: boolean;
+}) {
   const searchQuery = publicBusinessText(plan.search_query);
   const clarification = plan.clarification && typeof plan.clarification === "object" ? plan.clarification as Row : {};
   const suggestions = Array.isArray(clarification.suggestions) ? clarification.suggestions.slice(0, 6) as Row[] : [];
+  const originalQuery = cleanText(plan.original_query);
+  const normalizedOriginalQuery = originalQuery.replace(/\s+/g, " ").toLowerCase();
+  const normalizedCurrentQuery = cleanText(currentQuery).replace(/\s+/g, " ").toLowerCase();
+  const suggestionMatchesCurrentQuery = Boolean(
+    normalizedOriginalQuery
+    && normalizedCurrentQuery
+    && normalizedOriginalQuery === normalizedCurrentQuery,
+  );
+  // A catalog choice belongs to the exact plan that produced it. Fail closed
+  // when an old/partial response lacks original_query, or the operator has
+  // changed any search condition and made the displayed result stale.
+  const suggestionLocked = resultsStale || !suggestionMatchesCurrentQuery;
   if (cleanText(plan.status) === "needs_clarification") {
     return (
       <div className="mb-2 rounded-md border border-amber-300/25 bg-amber-400/[0.07] px-2.5 py-2 text-amber-50">
@@ -659,11 +685,24 @@ export function PlanPills({ plan }: { plan: Row }) {
         </div>
         {suggestions.length ? (
           <div className="mt-1.5 flex flex-wrap gap-1">
-            {suggestions.map((item) => (
-              <span key={display(item.sku)} className="rounded border border-amber-200/15 bg-black/10 px-1.5 py-0.5 text-[9.5px] text-amber-100/80">
-                {display(item.name || item.sku)}
-              </span>
-            ))}
+            {suggestions.map((item, index) => {
+              const sku = cleanText(item.sku);
+              const label = display(item.name || sku, `候选产品 ${index + 1}`);
+              return (
+                <button
+                  key={sku || `${label}-${index}`}
+                  type="button"
+                  data-product-sku={sku || undefined}
+                  aria-label={`选择产品 ${label} 并自动继续搜索`}
+                  title={suggestionLocked ? "搜索条件已变更，请先按当前需求重新搜索" : "选择后自动按该目录产品继续搜索，无需手输 SKU"}
+                  disabled={!sku || suggestionBusy || suggestionLocked || !onSuggestionSelect}
+                  onClick={() => onSuggestionSelect?.(item, originalQuery)}
+                  className="rounded border border-amber-200/20 bg-black/10 px-1.5 py-0.5 text-[9.5px] text-amber-100/90 transition-colors hover:border-amber-200/40 hover:bg-amber-300/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-200 disabled:cursor-not-allowed disabled:opacity-55"
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         ) : null}
       </div>

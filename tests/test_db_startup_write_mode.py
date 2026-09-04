@@ -218,7 +218,20 @@ def test_startup_status_is_exposed_in_health_trust(monkeypatch: pytest.MonkeyPat
         "non_migration_startup_writes": "skipped_explicitly",
     }
     monkeypatch.setattr(main, "get_db_startup_status", lambda: expected)
-    monkeypatch.setattr(main, "_trust_db_migration_max", lambda: "244_test.sql")
+    monkeypatch.setattr(
+        main,
+        "_trust_db_migration_max",
+        lambda: {
+            "max": "244_test.sql",
+            "set_complete": True,
+            "set_exact": True,
+            "applied_count": 244,
+            "expected_count": 244,
+            "missing_count": 0,
+            "unexpected_count": 0,
+            "set_sha256": "a" * 64,
+        },
+    )
     monkeypatch.setattr(main, "_trust_worker", lambda: {"worker_heartbeat": None, "worker_online": None})
     monkeypatch.setattr(main, "_trust_scheduler", lambda: "not_configured")
     monkeypatch.setattr(
@@ -231,3 +244,61 @@ def test_startup_status_is_exposed_in_health_trust(monkeypatch: pytest.MonkeyPat
 
     assert trust["db_startup"] == expected
     assert trust["db_migration_max"] == "244_test.sql"
+    assert trust["db_migration_complete"] is True
+    assert trust["db_migration_missing_count"] == 0
+
+
+def test_health_migration_identity_detects_a_hole_below_the_maximum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    missing = "309_vkpi_dsar_public_intake.sql"
+    applied = [
+        {"version_key": name}
+        for name in connection._POSTGRES_MIGRATION_SEQUENCE
+        if name != missing
+    ]
+
+    class Result:
+        def fetchall(self):
+            return applied
+
+    class Conn:
+        def execute(self, _sql: str):
+            return Result()
+
+    monkeypatch.setattr(connection, "get_conn", lambda: Conn())
+
+    identity = main._trust_db_migration_max()
+
+    assert identity is not None
+    assert identity["max"] == "310_vkpi_kol_search_refresh_scheduler.sql"
+    assert identity["set_complete"] is False
+    assert identity["set_exact"] is False
+    assert identity["missing_count"] == 1
+    assert identity["unexpected_count"] == 0
+
+
+def test_health_migration_identity_allows_a_forward_compatible_superset_on_rollback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    applied = [
+        {"version_key": name} for name in connection._POSTGRES_MIGRATION_SEQUENCE
+    ] + [{"version_key": "311_future_forward_compatible.sql"}]
+
+    class Result:
+        def fetchall(self):
+            return applied
+
+    class Conn:
+        def execute(self, _sql: str):
+            return Result()
+
+    monkeypatch.setattr(connection, "get_conn", lambda: Conn())
+
+    identity = main._trust_db_migration_max()
+
+    assert identity is not None
+    assert identity["set_complete"] is True
+    assert identity["set_exact"] is False
+    assert identity["missing_count"] == 0
+    assert identity["unexpected_count"] == 1

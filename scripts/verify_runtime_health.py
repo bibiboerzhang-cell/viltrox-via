@@ -107,6 +107,7 @@ def validate_health(
     *,
     expected_head: str,
     expected_migration: str | None = None,
+    require_migration_set_complete: bool = False,
     require_worker: bool = False,
     max_worker_age_seconds: int = DEFAULT_MAX_WORKER_AGE_SECONDS,
     expected_worker_boot_nonce_sha256: str | None = None,
@@ -165,6 +166,19 @@ def validate_health(
                 errors.append("database startup did not complete")
             if str(db_startup.get("schema_migrations") or "") != "completed":
                 errors.append("database migration startup stage did not complete")
+
+    # Complete-set proof is an independent contract.  Keeping it outside the
+    # expected-max branch prevents callers from accidentally turning the flag
+    # into a no-op by omitting ``expected_migration``.
+    if require_migration_set_complete:
+        if trust.get("db_migration_complete") is not True:
+            errors.append("applied migration set is incomplete")
+        if trust.get("db_migration_exact") is not True:
+            errors.append("applied migration set is not exact")
+        for field in ("db_migration_missing_count", "db_migration_unexpected_count"):
+            value = trust.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value != 0:
+                errors.append(f"{field} is not zero")
 
     worker_age: float | None = None
     if require_worker:
@@ -319,6 +333,10 @@ def validate_health(
             ),
             "migration": migration or None,
             "migration_source": migration_source or None,
+            "migration_set_complete": trust.get("db_migration_complete"),
+            "migration_set_exact": trust.get("db_migration_exact"),
+            "migration_missing_count": trust.get("db_migration_missing_count"),
+            "migration_unexpected_count": trust.get("db_migration_unexpected_count"),
             "worker_heartbeat_age_seconds": (
                 round(worker_age, 1) if worker_age is not None and math.isfinite(worker_age) else None
             ),
@@ -336,6 +354,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate one V-KPI /health JSON response from stdin.")
     parser.add_argument("--expected-head", default="")
     parser.add_argument("--expected-migration")
+    parser.add_argument("--require-migration-set-complete", action="store_true")
     parser.add_argument("--require-worker", action="store_true")
     parser.add_argument("--max-worker-age-seconds", type=int)
     parser.add_argument("--expected-worker-boot-nonce-sha256")
@@ -429,6 +448,9 @@ def main(argv: list[str] | None = None) -> int:
             payload,
             expected_head=expected_head,
             expected_migration=expected_migration,
+            require_migration_set_complete=(
+                args.require_migration_set_complete or args.strict_deploy
+            ),
             require_worker=require_worker,
             max_worker_age_seconds=max_worker_age_seconds,
             expected_worker_boot_nonce_sha256=expected_worker_boot_nonce_sha256,

@@ -12,13 +12,13 @@ Read only. This module never writes any score field; it only reads the catalog.
 from __future__ import annotations
 
 import re
-from typing import Any
+from contextvars import ContextVar
+from typing import Any, Callable
 
 from app.domains.costs.product_catalog import list_product_catalog
 from app.domains.kol import product_focal_family
 from app.domains.kol.product_resolver_projection import (
     focal_suggestions as _focal_suggestions,
-    format_aperture as _format_aperture,
     public_product_projection as _public_product_projection,
     specs_line as _specs_line,
 )
@@ -26,8 +26,10 @@ from app.domains.kol.product_resolver_scoring import (
     official_duplicate_for_model_code,
     select_scored_product,
 )
+from app.domains.kol import product_resolver_catalog as resolver_catalog
 from app.domains.kol.product_resolver_tokens import (
     COMPACT_PRO_RE as _COMPACT_PRO_RE,
+    NIKON_CAMERA_CONTEXT_RE as _NIKON_CAMERA_CONTEXT_RE,
     STOPWORDS as _STOPWORDS,
     VILTROX_Z_MODEL_CONTEXT_RE as _VILTROX_Z_MODEL_CONTEXT_RE,
     model_code_mentions as _model_code_mentions,
@@ -39,6 +41,27 @@ from app.domains.kol.product_resolver_tokens import (
     query_tokens as _query_tokens,
     split_glued as _split_glued,
 )
+
+
+ProductCatalogUnavailable = resolver_catalog.ProductCatalogUnavailable
+_CATALOG_RESOLUTION_STATUS: ContextVar[str] = ContextVar(
+    "kol_product_catalog_resolution_status",
+    default="unknown",
+)
+
+
+def _status_payload(
+    resolver: Callable[[Any], Any], value: Any, *, value_key: str
+) -> dict[str, Any]:
+    token = _CATALOG_RESOLUTION_STATUS.set("unknown")
+    try:
+        result = resolver(value)
+        catalog_status = _CATALOG_RESOLUTION_STATUS.get()
+    finally:
+        _CATALOG_RESOLUTION_STATUS.reset(token)
+    if catalog_status == "unavailable":
+        return {"status": "catalog_unavailable", "catalog_status": "unavailable", value_key: None}
+    return {"status": "resolved" if result else "not_found", "catalog_status": "available", value_key: result}
 
 
 # Curated nicknames → extra probe tokens that widen the catalog candidate pool so the
@@ -57,25 +80,28 @@ _NICKNAME_PROBES: dict[str, list[str]] = {
     "z1": ["vintage", "z1", "flash"],
     "vintagez1": ["vintage", "z1"],
 }
-
-
 # ── 硬约束(2026-07-02):卡口/焦段是否决条件,不是加分项。
 # 事故:「90 evo XF 卡口」被 "evo" 一个词命中 EVO 系列 → 静默替身成 35mm FE(索尼),
 # planner 还写着 TRUST THIS over the raw text,搜出来全是索尼人。
 # 现在:query 明示卡口/焦段时,候选池先按硬约束过滤;滤空 = 诚实返回 None
 # (planner 退回按 query 字面推人群,不再张冠李戴)。
 _MOUNT_RULES: list[tuple[str, str]] = [
-    # 顺序敏感:PL/RF/EF 要在 L/FE/E 前;品牌名 Canon 不能在 RF/EF 间代替用户选择。
-    ("PL-mount", r"\bpl[- ]?mount\b|pl\s*卡口"),
-    ("RF-mount", r"\brf[- ]?mount\b|rf\s*卡口"),
-    ("X-mount", r"\bxf\b|x[- ]?mount|xf\s*卡口|x\s*卡口|富士|fuji"),
-    ("EF-mount", r"\bef[- ]?mount\b|ef\s*卡口"),
-    ("FE-mount", r"\bfe[- ]?mount\b|fe\s*卡口|\be[- ]mount\b|e\s*卡口|索尼|sony"),
-    ("Z-mount", r"\bz[- ]?mount\b|z\s*卡口|尼康|nikon"),
-    ("L-mount", r"\bl[- ]?mount\b|l\s*卡口"),
-    ("M43", r"m4/?3|松下|panasonic|olympus"),
+    # 顺序敏感:显式标准先于品牌软提示；不支持的标准保留原义并 fail closed。
+    ("PL-mount", r"(?<![a-z0-9])pl[- ]?mount(?![a-z0-9])|pl\s*卡口"),
+    ("RF-mount", r"(?<![a-z0-9])rf[- ]?mount(?![a-z0-9])|rf\s*卡口"),
+    ("F-mount", r"(?<![a-z0-9])(?:nikon\s+)?f[- ]?mount(?![a-z0-9])|(?:尼康\s*)?f\s*卡口"),
+    ("A-mount", r"(?<![a-z0-9])(?:sony\s+)?a[- ]?mount(?![a-z0-9])|(?:索尼\s*)?a\s*卡口"),
+    ("G-mount", r"(?<![a-z0-9])(?:fuji\s+)?(?:g|gfx)[- ]?mount(?![a-z0-9])|(?:富士\s*)?(?:g|gfx)\s*卡口"),
+    ("S-mount", r"(?<![a-z0-9])(?:panasonic\s+)?s[- ]?mount(?![a-z0-9])|(?:松下\s*)?s\s*卡口"),
+    ("X-mount", r"(?<![a-z0-9])xf(?![a-z0-9])|(?<![a-z0-9])x[- ]?mount(?![a-z0-9])|xf\s*卡口|x\s*卡口|富士|fuji"),
+    ("EF-mount", r"(?<![a-z0-9])ef[- ]?mount(?![a-z0-9])|ef\s*卡口"),
+    ("FE-mount", r"(?<![a-z0-9])fe[- ]?mount(?![a-z0-9])|fe\s*卡口|(?<![a-z0-9])e[- ]mount(?![a-z0-9])|e\s*卡口|索尼|sony"),
+    ("Z-mount", r"(?<![a-z0-9])z[- ]?mount(?![a-z0-9])|z\s*卡口|尼康|nikon"),
+    ("L-mount", r"(?<![a-z0-9])l[- ]?mount(?![a-z0-9])|l\s*卡口"),
+    ("M43", r"(?<![a-z0-9])m4/?3(?![a-z0-9])|松下|panasonic|olympus"),
 ]
-_LENS_CONTEXT_RE = re.compile(r"\b(?:evo|lab|epic|air|raze|prime|macro)\b|卡口|镜头|定焦|mm", re.I)
+_LENS_CONTEXT_RE = re.compile(
+    r"\b(?:evo|lab|epic|air|raze|prime|macro)\b|卡口|镜头|定焦|mm|毫米|焦段|光圈", re.I)
 _EXPLICIT_PRODUCT_SERIES = ("evo", "lab", "epic", "vintage")
 _PRODUCT_CATEGORY_CONTEXT_RE = re.compile(
     r"\b(?:lens|macro|anamorphic|cine|flash|monitor|prime)\b|镜头|微距|变形宽银幕|闪光|监视器|定焦",
@@ -119,20 +145,14 @@ def _pro_is_product_series(text: str) -> bool:
     """
 
     low = str(text or "").lower()
-    # 2026-08-24 R2:单字母+数字的紧凑型号紧跟 pro("z1 pro"/"a7 pro"/粘连 "z1pro")也是产品证据。
-    # 整词锚定防 "web3 pro" 人设词子串;多字母型号("dc550 pro")由既有 \d{2,3}\s*pro 覆盖。
-    # 粘连形态没有独立 "pro" 词,所以在 standalone-pro 闸之前判。误配防线见 resolve_product
-    # 的复审 F-1 守卫(紧凑码必须命中赢家,防他牌 "a7 pro"+品类词凑赢)。
+    # Z1 Pro 是目录里唯一的单字母紧凑 Pro 型号；A7/R5/T5 Pro 等相机机身不是产品系列。
     compact = _COMPACT_PRO_RE.search(low)
     if compact:
         compact_code = _normkey(compact.group(1))
-        if (
-            re.fullmatch(r"z\d+[a-z0-9]*", compact_code)
-            and compact_code != "z1"
+        return compact_code == "z1" and not (
+            _NIKON_CAMERA_CONTEXT_RE.search(low)
             and not _VILTROX_Z_MODEL_CONTEXT_RE.search(low)
-        ):
-            return False
-        return True
+        )
     if not re.search(r"(?<![a-z0-9])pro(?![a-z0-9])", low):
         return False
     return bool(
@@ -206,6 +226,8 @@ def _focal_clarification(text: str) -> dict[str, Any] | None:
     只在**明确写了焦段**(带 mm 单位、或点名了卡口)时才拦——一个孤立数字如果目录里
     没有对应焦段,按「压根没提产品」处理,照常放行普通搜索。
     """
+    if not (_query_focals(text) or product_focal_family.bare_focal_numbers(text)):
+        return None
     decision = _focal_family_decision(text)
     if not decision:
         return None
@@ -253,7 +275,7 @@ def _focal_clarification(text: str) -> dict[str, Any] | None:
     return None
 
 
-def unresolved_product_request(query: str) -> dict[str, Any] | None:
+def _unresolved_product_request_or_raise(query: str) -> dict[str, Any] | None:
     """Describe an explicit product request that did not resolve to the catalog.
 
     A missing catalog match is materially different from a generic request such
@@ -264,6 +286,39 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
     text = str(query or "").strip()
     if not text:
         return None
+    if len(_query_focals(text)) > 1:
+        return _focal_clarification(text)
+    alias_match = resolver_catalog.matched_product_alias(text)
+    if alias_match:
+        canonical = str(alias_match.get("canonical") or "").strip()
+        products = resolver_catalog.catalog_products(list_product_catalog, limit=500)
+        canonical_rows = resolver_catalog.canonical_catalog_rows(products, canonical)
+        if not canonical_rows:
+            requested_series = _explicit_product_series(canonical)
+            return {
+                "reason": "recognized_product_alias_not_in_catalog",
+                "catalog_status": "available",
+                "requested_alias": str(alias_match.get("alias") or ""),
+                "requested_canonical": canonical,
+                "requested_series": requested_series,
+                "requested_model_code": "",
+                "requested_focals": sorted(_query_focals(canonical)),
+                "requested_mount": _query_mount(text),
+                "message": (
+                    f"已识别产品写法“{alias_match.get('alias')}”，但当前目录没有"
+                    f"对应型号 {canonical}。请选择目录内产品或联系管理员同步目录。"
+                ),
+                "suggestions": resolver_catalog.missing_alias_suggestions(
+                    products,
+                    canonical,
+                    series=requested_series,
+                ),
+            }
+        clarification = resolver_catalog.alias_mount_clarification(
+            alias_match, canonical_rows, requested_mount=_query_mount(text)
+        )
+        if clarification:
+            return clarification
     series = _explicit_product_series(text)
     if series and not (
         _has_product_identity_anchor(text, [])
@@ -283,27 +338,21 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
 
     probes = [value for value in (series, model_code, str(focals[0]) if focals else "") if value]
     suggestions: dict[str, dict[str, Any]] = {}
-    for probe in probes:
-        try:
-            products = list_product_catalog(limit=30, query=probe).get("products") or []
-        except Exception:
-            products = []
-        for product in products:
-            sku = str(product.get("sku") or "")
-            if not sku or sku.upper().startswith("IMAGE-AWARDS"):
-                continue
-            blob = " ".join(
-                str(value or "")
-                for value in (
-                    sku,
-                    product.get("model_name"),
-                    product.get("marketing_name"),
-                    product.get("series"),
-                )
-            ).lower()
-            if series and series.lower() not in _normkey(blob):
-                continue
-            suggestions[sku] = product
+    products = resolver_catalog.catalog_products(list_product_catalog, limit=500)
+    for product in products:
+        sku = str(product.get("sku") or "")
+        if not sku or sku.upper().startswith("IMAGE-AWARDS"):
+            continue
+        blob = " ".join(
+            resolver_catalog.catalog_identity_values(product)
+            + [str(product.get("series") or "")]
+        ).lower()
+        normalized_blob = _normkey(blob)
+        if series and series.lower() not in normalized_blob:
+            continue
+        if probes and not any(_normkey(probe) in normalized_blob for probe in probes):
+            continue
+        suggestions[sku] = product
 
     requested_focal = focals[0] if focals else None
 
@@ -316,6 +365,7 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
     ordered = sorted(suggestions.values(), key=_distance)[:6]
     return {
         "reason": "explicit_product_not_in_catalog",
+        "catalog_status": "available",
         "requested_series": series,
         "requested_model_code": model_code,
         "requested_focals": focals,
@@ -331,6 +381,26 @@ def unresolved_product_request(query: str) -> dict[str, Any] | None:
             for product in ordered
         ],
     }
+
+
+def unresolved_product_request(query: str) -> dict[str, Any] | None:
+    """Compatibility helper; catalog outages remain a fail-closed ``None``."""
+
+    try:
+        clarification = _unresolved_product_request_or_raise(query)
+    except ProductCatalogUnavailable:
+        _CATALOG_RESOLUTION_STATUS.set("unavailable")
+        return None
+    _CATALOG_RESOLUTION_STATUS.set("available")
+    return clarification
+
+
+def unresolved_product_request_with_status(query: str) -> dict[str, Any]:
+    return _status_payload(
+        unresolved_product_request,
+        query,
+        value_key="clarification",
+    )
 
 
 def _apply_hard_constraints(text: str, pool: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -377,6 +447,12 @@ def _nickname_probe_tokens(query: str) -> list[str]:
     keys = [_normkey(raw)] + [_normkey(tok) for tok in re.split(r"[^a-z0-9]+", raw) if tok]
     for key in keys:
         if key in _NICKNAME_PROBES:
+            if (
+                key in {"z1", "z1pro", "vintagez1"}
+                and _NIKON_CAMERA_CONTEXT_RE.search(raw)
+                and not _VILTROX_Z_MODEL_CONTEXT_RE.search(raw)
+            ):
+                continue
             # A bare number embedded in a persona/count request is not a model
             # nickname (for example "find creators with 550 followers").
             if key == "550" and _normkey(raw) != "550" and not re.search(r"\b(?:dc|pro|monitor)\b|监视器", raw):
@@ -398,14 +474,45 @@ def _candidate_pool(query: str, probe_tokens: list[str]) -> dict[str, dict[str, 
         for i in range(len(probe_tokens) - 1):
             probes.add(f"{probe_tokens[i]} {probe_tokens[i + 1]}")
     pool: dict[str, dict[str, Any]] = {}
+    successful_reads = 0
+    last_error: ProductCatalogUnavailable | None = None
     for probe in probes:
         try:
-            products = list_product_catalog(limit=25, query=probe).get("products") or []
-        except Exception:
-            products = []
+            products = resolver_catalog.catalog_products(
+                list_product_catalog,
+                limit=25,
+                query=probe,
+            )
+            successful_reads += 1
+        except ProductCatalogUnavailable as exc:
+            last_error = exc
+            continue
         for prod in products:
             sku = str(prod.get("sku") or "")
             # 排污:IMAGE-AWARDS-* 是活动/人物/奖项页(被误当产品),绝不参与「按产品找人」解析。
+            if sku and not sku.upper().startswith("IMAGE-AWARDS"):
+                pool[sku] = prod
+    if probes and successful_reads == 0 and last_error is not None:
+        raise last_error
+
+    # SQL text filtering intentionally does not inspect JSON specs.  A bounded
+    # full-catalog pass adds official model variants such as DC-X2/DC-X3 without
+    # widening fuzzy matching to unrelated description/highlight text.
+    model_codes = [code for code, _display in _model_code_mentions(query)]
+    if model_codes:
+        products = resolver_catalog.catalog_products(list_product_catalog, limit=500)
+        for prod in products:
+            labels = resolver_catalog.catalog_variant_labels(prod)
+            if not labels:
+                continue
+            label_keys = [_normkey(label) for label in labels]
+            if not any(
+                code == label_key or label_key.startswith(code)
+                for code in model_codes
+                for label_key in label_keys
+            ):
+                continue
+            sku = str(prod.get("sku") or "")
             if sku and not sku.upper().startswith("IMAGE-AWARDS"):
                 pool[sku] = prod
     return pool
@@ -417,6 +524,9 @@ def _row_words(prod: dict[str, Any]) -> tuple[str, str, set[str]]:
         str(prod.get(key) or "")
         for key in ("sku", "model_name", "marketing_name", "series")
     ).lower()
+    variant_blob = " ".join(resolver_catalog.catalog_variant_labels(prod)).lower()
+    if variant_blob:
+        blob = f"{blob} {variant_blob}"
     blob_sp = _split_glued(blob)
     words = {w for w in re.split(r"[^a-z0-9.]+", blob) if w}
     words |= {w for w in re.split(r"[^a-z0-9.]+", blob_sp) if w}
@@ -493,85 +603,27 @@ def _model_code_family_projection(
 
 
 def resolve_spec_family_product(query: str) -> dict[str, Any] | None:
-    """Resolve focal+aperture prose to a model family without guessing mount.
+    """Resolve focal+aperture prose without guessing an unspecified mount."""
 
-    ``35mm F1.2`` identifies materially more than the whole 35mm catalog, but
-    it still does not select Sony E versus Nikon Z.  Preserve both facts: keep
-    SKU empty while projecting the shared focal, aperture, series and candidate
-    SKUs.  This gives planning a useful capability without forcing a needless
-    clarification.
-    """
-
-    focals = sorted(_query_focals(query))
-    apertures = _query_apertures(query)
-    if len(focals) != 1 or len(apertures) != 1:
-        return None
-    try:
-        rows = list(product_focal_family.focal_family_index(list_product_catalog).get(focals[0]) or [])
-    except Exception:
-        return None
-    if not rows:
-        return None
-    matching = []
-    for row in rows:
-        row_apertures = _query_apertures(
-            f"{row.get('model_name') or ''} {row.get('marketing_name') or ''}"
-        )
-        if row_apertures & apertures:
-            matching.append(row)
-    series = _explicit_product_series(query)
-    if series:
-        narrowed = [
-            row for row in matching
-            if series.lower() in _row_words(row)[2]
-            or _normkey(row.get("series")) == series.lower()
-        ]
-        if narrowed:
-            matching = narrowed
-    mount = _query_mount(query)
-    if mount:
-        matching = [row for row in matching if str(row.get("mount") or "").strip() == mount]
-    if not matching:
-        return None
-    if len(matching) == 1:
-        projection = _public_product_projection(
-            matching[0],
-            match_score=(2, 2, len(str(matching[0].get("series") or ""))),
-        )
-        projection.update({
-            "resolution_kind": "focal_aperture_unique",
-            "focal_mm": focals[0],
-            "requested_aperture": _format_aperture(next(iter(apertures))),
-        })
-        return projection
-
-    decision = {"rows": matching, "focal": focals[0]}
-    projection = product_focal_family.family_projection(decision)
-    aperture_label = _format_aperture(next(iter(apertures)))
-    family_word = str(projection.get("series") or "").strip()
-    name = " ".join(part for part in ("Viltrox", f"{focals[0]}mm", aperture_label, family_word) if part)
-    projection.update({
-        "model_name": name,
-        "marketing_name": name,
-        "description": (
-            f"{focals[0]}mm {aperture_label} 产品家族共 {len(matching)} 个目录记录。"
-            "操作员未指定卡口，按共享光学能力理解，不代选具体 SKU。"
-        ),
-        # Keep the established compatibility kind while exposing the stronger
-        # resolution basis to new consumers.
-        "resolution_kind": "focal_family",
-        "resolution_basis": "focal_aperture_family",
-        "requested_aperture": aperture_label,
-        "match_score": [2, 2, 0],
-    })
-    projection["specs_line"] = _specs_line(projection)
-    return projection
+    return resolver_catalog.resolve_spec_family_product(
+        focals=sorted(_query_focals(query)),
+        apertures=_query_apertures(query),
+        series=_explicit_product_series(query),
+        mount=_query_mount(query),
+        row_words=_row_words,
+        catalog_reader=list_product_catalog,
+    )
 
 
 def resolve_named_product_family(query: str) -> dict[str, Any] | None:
     """Resolve a named series/set to a bounded family instead of clarifying."""
 
-    series = _explicit_product_series(query)
+    subfamily_match = re.search(
+        r"(?<![a-z0-9])(memento|maestro)(?![a-z0-9])",
+        query,
+        re.IGNORECASE,
+    )
+    series = _explicit_product_series(query) or ("EPIC" if subfamily_match else "")
     # A single focal has a stronger, already-established family contract that
     # lists the exact focal candidates and mounts.  Named-series fallback is
     # for requests without that specificity (or an explicitly named set).
@@ -579,52 +631,13 @@ def resolve_named_product_family(query: str) -> dict[str, Any] | None:
         return None
     if not series or not _NAMED_FAMILY_CONTEXT_RE.search(query):
         return None
-    try:
-        products = list_product_catalog(limit=500).get("products") or []
-    except Exception:
-        return None
-    rows: list[dict[str, Any]] = []
-    for row in products:
-        if not isinstance(row, dict) or str(row.get("sku") or "").upper().startswith("IMAGE-AWARDS"):
-            continue
-        _blob, _blob_sp, words = _row_words(row)
-        if series.lower() in words or _normkey(row.get("series")) == series.lower():
-            rows.append(row)
-    for subfamily in ("memento", "maestro"):
-        if re.search(rf"(?<![a-z0-9]){subfamily}(?![a-z0-9])", query, re.IGNORECASE):
-            rows = [row for row in rows if subfamily in _row_words(row)[2]]
-    if not rows:
-        return None
-    if len(rows) == 1:
-        projection = _public_product_projection(
-            rows[0], match_score=(2, 2, len(str(rows[0].get("series") or "")))
-        )
-        projection["resolution_kind"] = "named_product_family_exact"
-        return projection
-
-    categories = {str(row.get("category_main") or "").strip() for row in rows if str(row.get("category_main") or "").strip()}
-    details = {str(row.get("category_detail") or "").strip() for row in rows if str(row.get("category_detail") or "").strip()}
-    category = next(iter(categories)) if len(categories) == 1 else ""
-    detail = next(iter(details)) if len(details) == 1 else ""
-    capability_name = "cinema lens" if all(
-        any(term in _row_words(row)[0] for term in ("cine", "anamorphic")) for row in rows
-    ) else (category.lower() if category else "product")
-    projection = {
-        "sku": "",
-        "model_name": f"Viltrox {series} {capability_name} family",
-        "marketing_name": f"Viltrox {series} {capability_name} family",
-        "category_main": category,
-        "category_detail": detail,
-        "series": series,
-        "price_usd": None,
-        "description": f"{series} 产品家族共 {len(rows)} 个目录记录，未代选具体 SKU。",
-        "resolution_kind": "named_product_family",
-        "product_family_size": len(rows),
-        "product_family_skus": [str(row.get("sku") or "") for row in rows][:12],
-        "match_score": [1, 1, 0],
-    }
-    projection["specs_line"] = _specs_line(projection)
-    return projection
+    return resolver_catalog.resolve_named_product_family(
+        query,
+        series=series,
+        subfamily=subfamily_match.group(1).lower() if subfamily_match else "",
+        row_words=_row_words,
+        catalog_reader=list_product_catalog,
+    )
 
 
 def _unique_exact_sku_product(
@@ -645,53 +658,38 @@ def _unique_exact_sku_product(
     return matches[0] if len(matches) == 1 else None
 
 
-def _catalog_exact_sku_products(value: Any) -> list[dict[str, Any]]:
-    """Read all bounded catalog rows sharing one exact normalized SKU key."""
-    products = list_product_catalog(limit=500).get("products") or []
-    normalized = _normkey(value)
-    return [
-        product
-        for product in products
-        if isinstance(product, dict)
-        and not str(product.get("sku") or "").upper().startswith("IMAGE-AWARDS")
-        and _normkey(product.get("sku")) == normalized
-    ]
-
-
-def resolve_product_sku(value: Any) -> dict[str, Any] | None:
-    """Resolve only one exact normalized catalog SKU; unknown/ambiguous values fail closed."""
-    text = str(value or "").strip()
-    normalized = _normkey(text)
-    if not normalized or len(text) > 240:
-        return None
-    try:
-        # A filtered SQL LIKE can hide punctuation variants (``DC-550`` versus
-        # ``DC_550``) and make an ambiguous normalized key look unique. Check
-        # the bounded catalog snapshot so uniqueness is evaluated consistently.
-        matches = _catalog_exact_sku_products(normalized)
-    except Exception:
-        return None
-    if len(matches) != 1:
-        return None
-    product = matches[0]
-    return _public_product_projection(
-        product,
-        match_score=(1, 1, len(str(product.get("series") or ""))),
+def _resolve_product_sku_or_raise(value: Any) -> dict[str, Any] | None:
+    return resolver_catalog.exact_sku_product(
+        value,
+        catalog_reader=list_product_catalog,
     )
 
 
-def _focal_family_decision(query: str) -> dict[str, Any] | None:
-    """焦段判定(读目录,失败静默 None)。卡口/系列线索由本模块既有解析器提供。"""
+def resolve_product_sku(value: Any) -> dict[str, Any] | None:
+    """Resolve one exact SKU; compatibility callers still fail closed on outages."""
+
     try:
-        return product_focal_family.focal_family_decision(
-            query,
-            mount=_query_mount(query),
-            series=_explicit_product_series(query),
-            # 全链路只认本模块这一份目录读取器,打桩/降级行为与既有解析路径完全一致。
-            catalog_reader=list_product_catalog,
-        )
-    except Exception:
+        product = _resolve_product_sku_or_raise(value)
+    except ProductCatalogUnavailable:
+        _CATALOG_RESOLUTION_STATUS.set("unavailable")
         return None
+    _CATALOG_RESOLUTION_STATUS.set("available")
+    return product
+
+
+def resolve_product_sku_with_status(value: Any) -> dict[str, Any]:
+    """Status-aware exact-SKU resolution for request-path dependency reporting."""
+
+    return _status_payload(resolve_product_sku, value, value_key="product")
+
+
+def _focal_family_decision(query: str) -> dict[str, Any] | None:
+    return resolver_catalog.focal_family_decision(
+        query,
+        mount=_query_mount(query),
+        series=_explicit_product_series(query),
+        catalog_reader=list_product_catalog,
+    )
 
 
 def resolve_focal_family_product(query: str) -> dict[str, Any] | None:
@@ -706,40 +704,29 @@ def resolve_focal_family_product(query: str) -> dict[str, Any] | None:
     裸数字(没写 mm)即便焦段家族只有一行也不认具体 SKU:那一行是目录形状凑出来的,
     不是操作员点的。要认 SKU,得有卡口/系列线索,或者操作员自己写了单位。
     """
-    decision = _focal_family_decision(query)
-    if not decision:
+    return resolver_catalog.resolve_focal_family_product(
+        query,
+        mount=_query_mount(query),
+        series=_explicit_product_series(query),
+        catalog_reader=list_product_catalog,
+    )
+
+
+def _resolve_product_or_raise(query: str) -> dict[str, Any] | None:
+    """Resolve free text while allowing catalog dependency errors to surface."""
+    if len(_query_focals(query)) > 1:
         return None
-    status = str(decision.get("status") or "")
-    if status == "unique":
-        product = decision.get("product")
-        if not isinstance(product, dict):
-            return None
-        projection = _public_product_projection(
-            product,
-            match_score=(1, 1, len(str(product.get("series") or ""))),
+    alias_match = resolver_catalog.matched_product_alias(query)
+    if alias_match is not None:
+        # A recognised, more-specific alias owns the decision.  If its
+        # canonical identity is absent, do not fall through to a shorter/base
+        # model (notably Z1 Pro -> Z1).
+        return resolver_catalog.resolve_catalog_alias(
+            query,
+            alias_match,
+            mount=_query_mount(query),
+            catalog_reader=list_product_catalog,
         )
-        # 标签必须等于实际发生的事:没有卡口线索却写 "narrowed_by_mount",
-        # 排障时会把「目录里只有一支」误读成「操作员点了卡口」。
-        narrowed_by = str(decision.get("narrowed_by") or "")
-        projection["resolution_kind"] = {
-            "mount": "focal_narrowed_by_mount",
-            "series": "focal_narrowed_by_series",
-        }.get(narrowed_by, "focal_single_in_catalog")
-        projection["focal_mm"] = decision.get("focal")
-        return projection
-    if status != "family":
-        return None
-    family = product_focal_family.family_projection(decision)
-    return {**family, "specs_line": _specs_line(family), "match_score": [1, 1, 0]}
-
-
-def resolve_product(query: str) -> dict[str, Any] | None:
-    """Resolve operator free text to a real catalog product, or None.
-
-    Returns a dict with sku / model_name / marketing_name / category_main /
-    category_detail / series / price_usd / description / specs_line / match_score.
-    Read only; never raises on catalog failure (returns None instead).
-    """
     resolved = _resolve_product_impl(query)
     if resolved is not None:
         return resolved
@@ -749,7 +736,27 @@ def resolve_product(query: str) -> dict[str, Any] | None:
     named_family = resolve_named_product_family(query)
     if named_family is not None:
         return named_family
+    if not (_query_focals(query) or product_focal_family.bare_focal_numbers(query)):
+        return None
     return resolve_focal_family_product(query)
+
+
+def resolve_product(query: str) -> dict[str, Any] | None:
+    """Compatibility resolver; unknown products and catalog outages both fail closed."""
+
+    try:
+        product = _resolve_product_or_raise(query)
+    except ProductCatalogUnavailable:
+        _CATALOG_RESOLUTION_STATUS.set("unavailable")
+        return None
+    _CATALOG_RESOLUTION_STATUS.set("available")
+    return product
+
+
+def resolve_product_with_status(query: str) -> dict[str, Any]:
+    """Resolve free text while preserving catalog availability as explicit state."""
+
+    return _status_payload(resolve_product, query, value_key="product")
 
 
 def _resolve_product_impl(query: str) -> dict[str, Any] | None:
@@ -760,18 +767,12 @@ def _resolve_product_impl(query: str) -> dict[str, Any] | None:
     if not _has_product_identity_anchor(text, probe_tokens):
         return None
     if _looks_like_bare_sku(text):
-        try:
-            exact_products = _catalog_exact_sku_products(text)
-        except Exception:
-            exact_products = []
-        if len(exact_products) > 1:
-            return None
-        if exact_products:
-            exact_product = exact_products[0]
-            return _public_product_projection(
-                exact_product,
-                match_score=(1, 1, len(str(exact_product.get("series") or ""))),
-            )
+        ambiguous, exact_product = resolver_catalog.exact_sku_resolution(
+            text,
+            catalog_reader=list_product_catalog,
+        )
+        if ambiguous or exact_product:
+            return exact_product
     pool = _candidate_pool(text, probe_tokens)
     pool = _apply_hard_constraints(text, pool)
     if not pool:

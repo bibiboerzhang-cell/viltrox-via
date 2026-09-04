@@ -91,6 +91,20 @@ def normalize_first_round_cells(value: Any) -> tuple[list[dict[str, Any]], int]:
                 for group in (raw.get("required_evidence_groups") or [])[:8]
                 if _text(group)
             ],
+            "required_scene_terms": [
+                _text(term)[:120]
+                for term in (raw.get("required_scene_terms") or [])[:6]
+                if _text(term)
+            ],
+            "scene_match_mode": "all" if raw.get("scene_match_mode") == "all" else "any",
+            "required_role_terms": [
+                _text(term)[:120]
+                for term in (raw.get("required_role_terms") or [])[:4]
+                if _text(term)
+            ],
+            "role_match_mode": "all" if raw.get("role_match_mode") == "all" else "any",
+            "product_evidence_required": raw.get("product_evidence_required") is not False,
+            "product_evidence_basis": _text(raw.get("product_evidence_basis"))[:40],
             "brand_or_model_required": raw.get("brand_or_model_required") is True,
             "brand_or_model_ranking_weight": raw.get("brand_or_model_ranking_weight"),
             **(
@@ -121,6 +135,12 @@ def _cell_projection(
         "round_no": max(1, int(round_no or 1)),
         "query_variant": query_variant,
         "required_evidence_groups": list(cell.get("required_evidence_groups") or []),
+        "required_scene_terms": list(cell.get("required_scene_terms") or []),
+        "scene_match_mode": "all" if cell.get("scene_match_mode") == "all" else "any",
+        "required_role_terms": list(cell.get("required_role_terms") or []),
+        "role_match_mode": "all" if cell.get("role_match_mode") == "all" else "any",
+        "product_evidence_required": cell.get("product_evidence_required") is not False,
+        "product_evidence_basis": _text(cell.get("product_evidence_basis"))[:40],
         "brand_or_model_required": cell.get("brand_or_model_required") is True,
         "brand_or_model_ranking_weight": cell.get("brand_or_model_ranking_weight"),
         **(

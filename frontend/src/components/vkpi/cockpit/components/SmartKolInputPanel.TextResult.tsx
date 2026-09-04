@@ -307,6 +307,74 @@ export function withResolvedProductSku<T extends object>(item: T, productSku: st
   return normalized ? { ...item, product_sku: normalized } : item;
 }
 
+export type SearchProductContext = {
+  kind: "catalog_sku" | "product_family";
+  identity: string;
+  label: string;
+  sku?: string;
+  model_name?: string;
+  marketing_name?: string;
+  series?: string;
+  candidate_skus?: string[];
+};
+
+/** 保留本轮产品语义：精确型号带 SKU；未指定卡口的焦段/系列仍带家族身份，绝不伪造 SKU。 */
+export function resolvedProductContextFromPlan(plan: Row): SearchProductContext | null {
+  const resolved = asRecord(plan.resolved_product);
+  const briefProduct = asRecord(asRecord(plan.search_brief).product);
+  const sku = cleanText(resolved.sku ?? plan.product_sku ?? plan.productSku);
+  const modelName = cleanText(resolved.model_name ?? briefProduct.model_name);
+  const marketingName = cleanText(resolved.marketing_name ?? briefProduct.marketing_name);
+  const series = cleanText(resolved.series ?? briefProduct.series);
+  const label = marketingName || modelName || series || sku;
+  if (!label) return null;
+  const candidateSkus = [
+    resolved.focal_family_skus,
+    resolved.model_family_skus,
+    resolved.product_family_skus,
+    resolved.candidate_skus,
+  ]
+    .flatMap((value) => Array.isArray(value) ? value.map(cleanText) : [])
+    .filter(Boolean);
+  return {
+    kind: sku ? "catalog_sku" : "product_family",
+    identity: sku || `family:${label}`,
+    label,
+    ...(sku ? { sku } : {}),
+    ...(modelName ? { model_name: modelName } : {}),
+    ...(marketingName ? { marketing_name: marketingName } : {}),
+    ...(series ? { series } : {}),
+    ...(candidateSkus.length ? { candidate_skus: Array.from(new Set(candidateSkus)) } : {}),
+  };
+}
+
+export function withResolvedProductContext<T extends object>(
+  item: T,
+  context: SearchProductContext | null,
+): T & Record<string, unknown> {
+  if (!context) return item as T & Record<string, unknown>;
+  const scoped: T & Record<string, unknown> = {
+    ...item,
+    product_context: context,
+    product_identity: context.identity,
+    product_name: context.label,
+    ...(context.sku ? { product_sku: context.sku } : {
+      product_family: context.identity,
+      product_family_name: context.label,
+    }),
+  };
+  delete scoped.productSku;
+  delete scoped.productFamily;
+  delete scoped.productFamilyName;
+  if (context.sku) {
+    delete scoped.product_family;
+    delete scoped.product_family_name;
+  } else {
+    delete scoped.product_sku;
+  }
+  return scoped;
+}
+
 export function recallReturnedCount(result: VkpiKolRecallResponse, items: VkpiKolRecallItem[]): number {
   const returned = Number(result.diagnostics?.returned_count);
   return Number.isInteger(returned) && returned >= 0 ? returned : items.length;
@@ -448,13 +516,13 @@ function TextResultSectionBody({
     onlineStrict.evaluated > 0 ? `已核验 ${onlineStrict.evaluated}` : "",
     onlineStrict.providerRounds > 0 ? `来源轮次 ${onlineStrict.providerRounds}` : "",
   ].filter(Boolean);
-  const resolvedProductSku = resolvedProductSkuFromPlan(llmPlan);
+  const resolvedProductContext = resolvedProductContextFromPlan(llmPlan);
   const recallCounts = recallDisplayCounts(recallItems, (recallResult.diagnostics || {}) as Row);
   // 来源分布:服务端算好的优先;没有就把本页三段列表(本地严格 / 联网净新增 / 全网发现)拼起来现数。
   const originCounts = summaryResultOriginCounts(asRecord(searchSession?.result_summary))
     ?? resultOriginCounts(recallItems, onlineStrict.rows.map((row) => row.item), discoveryItems);
   const openProductScopedItem = (item: VkpiKolRecallItem) => {
-    onOpenRecallItem?.(withResolvedProductSku(item, resolvedProductSku));
+    onOpenRecallItem?.(withResolvedProductContext(item, resolvedProductContext) as VkpiKolRecallItem);
   };
   return (
     <div className="mt-3 space-y-2.5">
@@ -503,7 +571,16 @@ function TextResultSectionBody({
             </div>
           </div>
         ) : Object.keys(llmPlan).length ? (
-          <PlanPills plan={llmPlan} />
+          <PlanPills
+            plan={llmPlan}
+            currentQuery={input}
+            resultsStale={resultsStale}
+            suggestionBusy={isBusy}
+            onSuggestionSelect={(suggestion, originalQuery) => {
+              const sku = cleanText(suggestion.sku);
+              if (sku && originalQuery) void run(originalQuery, sku);
+            }}
+          />
         ) : (
           <div className="text-[10px] text-slate-500">点「编辑」改写要找的人群，再「用此重搜」。</div>
         )}

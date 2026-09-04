@@ -70,10 +70,11 @@ TABLE_INTRODUCTION_MIGRATIONS: dict[str, str] = {
 
 # The unfenced migration-193 workflow state remains blocking until migration
 # 265 adds an observable lease: before then, status=running may still represent
-# real execution.  The other `blocking=False` states are deliberate: migration
-# 180 is PLAN-ONLY, an approved tool is not executing, an external LLM batch
-# remains durable while its poller is stopped, and a 265+ expired/unleased
-# workflow cannot own a live execution lease.  Provider-started Advisor turns
+# real execution.  The remaining `blocking=False` states are deliberate:
+# migration 180 is PLAN-ONLY, an approved tool is not executing, and a 265+
+# expired/unleased workflow cannot own a live execution lease.  An external
+# LLM batch is blocking even with its poller stopped because an expired batch
+# can still hold uncollected terminal results.  Provider-started Advisor turns
 # and open Apify/LLM budget reservations remain blocking without a lease test:
 # once provider I/O starts, a stopped local process or expired local lease is
 # not proof that the external execution or billing boundary has settled.
@@ -184,8 +185,9 @@ DB_COUNT_SPECS: tuple[dict[str, Any], ...] = (
         "key": "llm_batches_in_progress_durable",
         "table": "vkpi_llm_batches",
         "available_from": "166_vkpi_llm_batches.sql",
-        "blocking": False,
-        "sql": "SELECT COUNT(*) FROM public.vkpi_llm_batches WHERE status='in_progress'",
+        "blocking": True,
+        "sql": "SELECT COUNT(*) FROM public.vkpi_llm_batches "
+        "WHERE status IN ('submitting','provider_unknown','in_progress','expired')",
     },
     {
         "key": "advisor_turns_provider_started",

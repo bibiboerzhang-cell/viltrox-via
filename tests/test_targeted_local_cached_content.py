@@ -375,3 +375,41 @@ def test_private_cached_content_can_emit_controlled_alias_coordinates_without_te
         allowed_terms=set(),
         controlled_specs=[locked],
     ) == []
+
+
+def test_session_projection_keeps_people_role_only_from_profile_identity_fields() -> None:
+    locked = build_locked_term_groups(
+        capability="",
+        segment="night",
+        role_terms=["camera operator"],
+    )
+    rows = build_controlled_alias_evidence(
+        {"bio": "Independent camera operator"},
+        {"representative_evidence": [{"title": "Interview with a camera operator"}]},
+        locked,
+    )
+    role = next(row for row in rows if row["evidence_group"] == "people_role")
+
+    assert role["field"] == "bio"
+    assert _safe_match_evidence(
+        [role],
+        allowed_terms=set(),
+        controlled_specs=[locked],
+    ) == [role]
+    assert _safe_match_evidence(
+        [{**role, "field": "representative_evidence.title"}],
+        allowed_terms=set(),
+        controlled_specs=[locked],
+    ) == []
+    for derived_or_content_field in (
+        "primary_topic",
+        "content_style",
+        "secondary_topics_json",
+        "profile_text",
+        "type_reason",
+    ):
+        assert _safe_match_evidence(
+            [{**role, "field": derived_or_content_field}],
+            allowed_terms=set(),
+            controlled_specs=[locked],
+        ) == []

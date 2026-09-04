@@ -67,6 +67,7 @@ describe("KOL local qualification request contract", () => {
       localQualificationSpec: spec,
       onlineQualificationSpec: onlineSpec,
       sessionId: 701,
+      productSku: "AF-35-EVO",
     });
 
     const body = JSON.parse(String(mockedFetch.mock.calls[0][1]?.body));
@@ -82,6 +83,7 @@ describe("KOL local qualification request contract", () => {
       local_qualification_spec: spec,
       online_qualification_spec: onlineSpec,
       session_id: 701,
+      product_sku: "AF-35-EVO",
     });
   });
 

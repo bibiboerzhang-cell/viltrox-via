@@ -137,6 +137,12 @@ def test_server_plan_rebuilds_query_cell_aliases_from_controlled_registry() -> N
                 "aliases": ["food", "accept everyone"],
                 "alias_policy": "static_allowlist",
             },
+            {
+                "kind": "role",
+                "canonical_term": "photographer",
+                "aliases": ["planner", "accept everyone"],
+                "alias_policy": "static_allowlist",
+            },
         ],
     }
     cell = {
@@ -173,6 +179,9 @@ def test_server_plan_rebuilds_query_cell_aliases_from_controlled_registry() -> N
     )
     assert by_kind["scene"]["aliases"] == list(
         targeted_search_contract.controlled_aliases_for("scene", "motorsport")
+    )
+    assert by_kind["role"]["aliases"] == list(
+        targeted_search_contract.controlled_aliases_for("role", "photographer")
     )
     projected_text = json.dumps(projected_cell, ensure_ascii=False)
     assert "accept everyone" not in projected_text
@@ -356,3 +365,106 @@ def test_worker_discards_client_plan_and_replans_from_operator_inputs(
     assert result["query_plan_source"] == "product_catalog_guard"
     assert result["llm_query_plan"]["reason"] == "server_replanned"
     assert result["llm_query_plan"].get("forged") is not True
+
+
+def test_targeted_plan_replay_preserves_people_role_and_product_evidence_semantics() -> None:
+    projected = search_sessions_targeted.project_targeted_plan(
+        {
+            "objective": "prospective_growth",
+            "explicit_segments": [
+                {
+                    "key": "wedding",
+                    "label": "wedding portrait photographers",
+                    "query_term": "wedding portrait photographer",
+                    "component_segments": ["wedding", "portrait"],
+                    "segment_match_mode": "all",
+                    "source": "operator_text",
+                    "locked": True,
+                }
+            ],
+            "query_cells": [
+                {
+                    "query_cell_id": "segment_1_wedding",
+                    "objective": "prospective_growth",
+                    "segment": "wedding",
+                    "primary_query": "wedding portrait photographer",
+                    "required_scene_terms": ["wedding", "portrait"],
+                    "scene_match_mode": "all",
+                    "required_role_terms": ["photographer"],
+                    "role_match_mode": "any",
+                    "product_evidence_required": False,
+                    "product_evidence_basis": "none",
+                }
+            ],
+            "search_brief": {
+                "objective": "prospective_growth",
+                "product": {
+                    "resolved_sku": "",
+                    "capability": "",
+                    "evidence_required": False,
+                    "evidence_basis": "none",
+                    "brand_or_model_required": False,
+                },
+                "explicit_segments": [
+                    {
+                        "key": "wedding",
+                        "component_segments": ["wedding", "portrait"],
+                        "segment_match_mode": "all",
+                    }
+                ],
+            },
+        }
+    )
+
+    cell = projected["query_cells"][0]
+    assert cell["required_scene_terms"] == ["wedding", "portrait"]
+    assert cell["scene_match_mode"] == "all"
+    assert cell["required_role_terms"] == ["photographer"]
+    assert projected["explicit_segments"][0]["component_segments"] == ["wedding", "portrait"]
+    assert projected["explicit_segments"][0]["segment_match_mode"] == "all"
+    product = projected["search_brief"]["product"]
+    assert product["evidence_required"] is False
+    assert product["evidence_basis"] == "none"
+
+
+def test_targeted_plan_replay_preserves_multiword_people_role() -> None:
+    projected = search_sessions_targeted.project_targeted_plan({
+        "objective": "prospective_growth",
+        "query_cells": [{
+            "query_cell_id": "segment_1_night",
+            "objective": "prospective_growth",
+            "segment": "night",
+            "primary_query": "night camera operator",
+            "required_scene_terms": ["night"],
+            "required_role_terms": ["camera operator"],
+            "product_evidence_required": False,
+        }],
+    })
+
+    cell = projected["query_cells"][0]
+    assert cell["required_role_terms"] == ["camera operator"]
+    assert any(
+        group["kind"] == "role" and group["canonical_term"] == "camera operator"
+        for group in cell["locked_term_groups"]["groups"]
+    )
+
+
+def test_targeted_plan_replay_preserves_role_only_all_semantics() -> None:
+    [source] = targeted_search_contract.build_query_cells(
+        query="Find creators who are both photographers and filmmakers",
+        body={}, product=None, product_focus=[], platforms=[],
+    )
+    projected = search_sessions_targeted.project_targeted_plan({
+        "objective": "prospective_growth",
+        "query_cells": [source],
+    })
+
+    cell = projected["query_cells"][0]
+    assert cell["required_scene_terms"] == []
+    assert cell["required_role_terms"] == ["photographer", "filmmaker"]
+    assert cell["role_match_mode"] == "all"
+    assert [
+        group["canonical_term"]
+        for group in cell["locked_term_groups"]["groups"]
+        if group["kind"] == "role"
+    ] == ["photographer", "filmmaker"]

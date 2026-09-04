@@ -152,6 +152,8 @@ export async function smartKolSearchProfileAdvanceJob(
       gear_content?: "any" | "yes" | "no";
     };
     bucketPolicy?: { core_vertical: number; expansion: number; exploration: number };
+    /** 已由操作员从目录候选中确认的规范 SKU；用于延续首屏澄清选择，不要求再次手输。 */
+    productSku?: string;
     advanceLimit?: number;
     maxPosts?: number;
     representativeVideoLimit?: number;
@@ -197,6 +199,7 @@ export async function smartKolSearchProfileAdvanceJob(
     if (params.filters.platforms?.length) body.platforms = params.filters.platforms;
   }
   if (params.bucketPolicy) body.bucket_policy = params.bucketPolicy;
+  if (params.productSku) body.product_sku = params.productSku;
   if (typeof params.advanceLimit === "number") body.advance_limit = params.advanceLimit;
   if (typeof params.maxPosts === "number") body.max_posts = params.maxPosts;
   if (typeof params.representativeVideoLimit === "number") body.representative_video_limit = params.representativeVideoLimit;

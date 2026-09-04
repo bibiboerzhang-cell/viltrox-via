@@ -170,10 +170,15 @@ def _strict_bound_item(
     incoming_snapshot_id: str,
     incoming_revision: int,
     allowed_terms: set[str],
+    controlled_specs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     kol_pool_id = _int_or_none(raw.get("kol_pool_id"))
     fingerprint = _safe_public_code(raw.get("canonical_fingerprint"), limit=64)
-    proof = _safe_gate_evidence(raw.get("qualification_evidence"), allowed_terms=allowed_terms)
+    proof = _safe_gate_evidence(
+        raw.get("qualification_evidence"),
+        allowed_terms=allowed_terms,
+        controlled_specs=controlled_specs,
+    )
     server_rank = _safe_non_negative_int(raw.get("server_rank"), maximum=ONLINE_TARGET)
     global_rank = _safe_non_negative_int(raw.get("global_unique_rank"), maximum=ONLINE_TARGET * 2)
     if not (
@@ -238,11 +243,18 @@ def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> d
         item_allowed_terms.update(query_evidence_terms(query_context.get("query_cell_query")))
         for cell in _list(query_context.get("matched_query_cells")):
             item_allowed_terms.update(query_evidence_terms(_dict(cell).get("primary_query")))
+        controlled_specs = [
+            spec
+            for cell in _list(query_context.get("matched_query_cells"))
+            if isinstance(cell, dict)
+            and isinstance((spec := cell.get("locked_term_groups")), dict)
+        ]
         bound = _strict_bound_item(
             raw,
             incoming_snapshot_id=contract["snapshot_id"],
             incoming_revision=incoming_revision,
             allowed_terms=item_allowed_terms,
+            controlled_specs=controlled_specs,
         )
         if not bound:
             continue
@@ -284,7 +296,11 @@ def attach_online_qualified_result(session_id: int, result: dict[str, Any]) -> d
             "profile_url": source_url,
             "avatar_url": raw.get("avatar_url"),
             "candidate_facets": _safe_candidate_facets(raw.get("candidate_facets")),
-            "match_evidence": _safe_match_evidence(raw.get("match_evidence"), allowed_terms=item_allowed_terms),
+            "match_evidence": _safe_match_evidence(
+                raw.get("match_evidence"),
+                allowed_terms=item_allowed_terms,
+                controlled_specs=controlled_specs,
+            ),
             "why_fit": why_fit_from_match_evidence(relevance.get("evidence") or []),
             "qualification_evidence": proof,
             "contact_preview": {

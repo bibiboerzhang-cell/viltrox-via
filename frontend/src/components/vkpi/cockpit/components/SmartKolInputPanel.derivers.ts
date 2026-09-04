@@ -29,6 +29,33 @@ export const PROFILE_REP_VIDEO_LIMIT = 2;
 // 即便父级 90s/10min 刷新偶发重挂本面板(useState 归零),也能恢复结果,不让用户的搜索凭空消失。
 const ACTIVE_SEARCH_DISPLAY_KEY = "vkpi:activeKolSearchDisplay";
 
+export type SearchAccountId = string | number | null | undefined;
+
+function normalizedSearchAccountId(accountId: SearchAccountId): string {
+  return String(accountId ?? "").trim();
+}
+
+/**
+ * Browser search state is account-owned. Never derive this suffix from
+ * `apiToken`: cookie-authenticated users all have the same public marker.
+ */
+export function searchAccountStorageKey(baseKey: string, accountId: SearchAccountId): string | null {
+  if (accountId === null) return null;
+  const normalized = normalizedSearchAccountId(accountId);
+  // Undefined is retained only for legacy/isolated component callers. Cockpit
+  // always passes either a real currentUser id or null while identity resolves.
+  if (!normalized) return accountId === undefined ? baseKey : null;
+  return `${baseKey}:account:${encodeURIComponent(normalized)}`;
+}
+
+export function pendingSearchSessionStorageKey(accountId: SearchAccountId): string | null {
+  return searchAccountStorageKey(PENDING_SEARCH_SESSION_KEY, accountId);
+}
+
+export function activeSearchDisplayStorageKey(accountId: SearchAccountId): string | null {
+  return searchAccountStorageKey(ACTIVE_SEARCH_DISPLAY_KEY, accountId);
+}
+
 // 搜索展示态的持久化形状(只存渲染所需,够回填 ①②③ 与轮询续接)。
 export type PersistedSearchDisplay = {
   input: string;
@@ -39,10 +66,12 @@ export type PersistedSearchDisplay = {
   activeSearchSessionId: number | null;
 };
 
-export function readPersistedSearchDisplay(): PersistedSearchDisplay | null {
+export function readPersistedSearchDisplay(accountId?: SearchAccountId): PersistedSearchDisplay | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = window.sessionStorage.getItem(ACTIVE_SEARCH_DISPLAY_KEY);
+    const storageKey = activeSearchDisplayStorageKey(accountId);
+    if (!storageKey) return null;
+    const raw = window.sessionStorage.getItem(storageKey);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as PersistedSearchDisplay;
     if (!parsed || typeof parsed !== "object") return null;
@@ -55,22 +84,24 @@ export function readPersistedSearchDisplay(): PersistedSearchDisplay | null {
         ? sanitizeKolRecallSnapshot(sanitized.recallResult)
         : null,
     };
-    window.sessionStorage.setItem(ACTIVE_SEARCH_DISPLAY_KEY, JSON.stringify(safeDisplay));
+    window.sessionStorage.setItem(storageKey, JSON.stringify(safeDisplay));
     return safeDisplay;
   } catch {
     return null;
   }
 }
 
-export function writePersistedSearchDisplay(value: PersistedSearchDisplay | null): void {
+export function writePersistedSearchDisplay(value: PersistedSearchDisplay | null, accountId?: SearchAccountId): void {
   if (typeof window === "undefined") return;
   try {
+    const storageKey = activeSearchDisplayStorageKey(accountId);
+    if (!storageKey) return;
     if (!value) {
-      window.sessionStorage.removeItem(ACTIVE_SEARCH_DISPLAY_KEY);
+      window.sessionStorage.removeItem(storageKey);
       return;
     }
     window.sessionStorage.setItem(
-      ACTIVE_SEARCH_DISPLAY_KEY,
+      storageKey,
       JSON.stringify(sanitizeSearchDisplayForCache(value)),
     );
   } catch {

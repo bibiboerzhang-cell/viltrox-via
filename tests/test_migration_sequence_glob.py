@@ -10,6 +10,7 @@ historical apply order and cannot silently drop or reorder a migration.
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -18,6 +19,10 @@ from unittest.mock import patch
 from app.db import connection
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+OPS_DIR = MIGRATIONS_DIR.parent / "scripts" / "ops"
+if str(OPS_DIR) not in sys.path:
+    sys.path.insert(0, str(OPS_DIR))
+import atomic_release_shared  # noqa: E402
 
 
 class MigrationSequenceGlobTests(unittest.TestCase):
@@ -58,6 +63,16 @@ class MigrationSequenceGlobTests(unittest.TestCase):
             and path.name not in connection._MIGRATION_EXCLUDE
         )
         self.assertEqual(list(self._seq()), expected)
+
+    def test_release_preflight_manifest_matches_runtime_runner_exactly(self):
+        self.assertEqual(
+            atomic_release_shared.POSTGRES_MIGRATION_EXCLUDE,
+            connection._MIGRATION_EXCLUDE,
+        )
+        self.assertEqual(
+            atomic_release_shared.runtime_migration_manifest(MIGRATIONS_DIR),
+            self._seq(),
+        )
 
     def test_excluded_files_exist_on_disk_but_are_not_registered(self):
         # They must be present (so exclusion is deliberate) yet absent from the

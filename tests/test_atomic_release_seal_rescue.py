@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from test_atomic_release_layout import (
+    FORWARD_MIGRATION,
     UNITS,
     _layout,
     _prepare_args,
@@ -44,9 +45,9 @@ def test_sealed_payload_tamper_is_rejected_before_prepare_or_activate(
         "--unit-dir",
         str(unit_dir),
         "--pending-migrations",
-        "250.sql",
+        FORWARD_MIGRATION,
         "--compatibility-declaration",
-        "250.sql",
+        FORWARD_MIGRATION,
     ]
     for name in UNITS:
         prepare_args.extend(("--unit-name", name))

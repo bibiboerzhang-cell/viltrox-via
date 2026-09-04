@@ -158,7 +158,7 @@ def test_entry_after_last_delivered_blocks_even_when_pending_is_zero() -> None:
     ]
 
 
-def test_expired_workflows_and_durable_plan_states_are_diagnostic_only() -> None:
+def test_expired_workflows_and_plan_states_are_diagnostic_but_llm_batches_block() -> None:
     all_tables = set(drain.TABLE_INTRODUCTION_MIGRATIONS)
     diagnostics = {
         "workflow_runs_expired_or_unleased": 7,
@@ -178,10 +178,16 @@ def test_expired_workflows_and_durable_plan_states_are_diagnostic_only() -> None
         current_migration="275_vkpi_llm_cost_precision.sql",
     )
 
-    assert result["passed"] is True
-    assert all(value == 0 for value in result["active_counts"].values())
-    assert result["diagnostic_counts"] == diagnostics
-    assert result["diagnostic_nonzero"] == list(diagnostics)
+    assert result["passed"] is False
+    assert result["active_counts"]["llm_batches_in_progress_durable"] == 5
+    expected_diagnostics = {
+        key: value for key, value in diagnostics.items() if key != "llm_batches_in_progress_durable"
+    }
+    assert result["diagnostic_counts"] == expected_diagnostics
+    assert result["diagnostic_nonzero"] == list(expected_diagnostics)
+    assert result["blocking_reasons"] == [
+        "database_llm_batches_in_progress_durable_not_zero"
+    ]
     assert result["check_status"]["workflow_runs_unfenced"] == "superseded"
     assert connection.rollback_calls == 1
 
@@ -253,10 +259,13 @@ def test_old_schema_absent_future_tables_are_zero_and_diagnostic() -> None:
         current_migration="166_vkpi_llm_batches.sql",
     )
 
-    assert result["passed"] is True
+    assert result["passed"] is False
     assert result["active_counts"]["workflow_runs_live"] == 0
     assert result["active_counts"]["provider_claims_live"] == 0
-    assert result["diagnostic_counts"]["llm_batches_in_progress_durable"] == 6
+    assert result["active_counts"]["llm_batches_in_progress_durable"] == 6
+    assert result["blocking_reasons"] == [
+        "database_llm_batches_in_progress_durable_not_zero"
+    ]
     assert result["tables"]["vkpi_workflow_runs"] == {
         "introduced_by": "193_vkpi_workflow_runs.sql",
         "expected": False,
@@ -342,14 +351,14 @@ def test_database_query_contract_separates_live_from_diagnostic_state() -> None:
         "workflow_runs_expired_or_unleased",
         "agent_plans_executing_plan_only",
         "agent_tool_runs_approved_plan_only",
-        "llm_batches_in_progress_durable",
     ):
         assert specs[key]["blocking"] is False
     assert specs["agent_tool_runs_approved_plan_only"]["sql"].endswith(
         "status='approved'"
     )
+    assert specs["llm_batches_in_progress_durable"]["blocking"] is True
     assert specs["llm_batches_in_progress_durable"]["sql"].endswith(
-        "status='in_progress'"
+        "status IN ('submitting','provider_unknown','in_progress','expired')"
     )
     assert specs["advisor_turns_provider_started"]["blocking"] is True
     assert specs["advisor_turns_provider_started"]["sql"].endswith(

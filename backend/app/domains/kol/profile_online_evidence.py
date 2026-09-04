@@ -246,6 +246,20 @@ def _safe_query_cell(raw: Any, *, fallback_query: str = "") -> dict[str, Any] | 
             for value in (required_groups if isinstance(required_groups, list) else [])[:8]
             if _text(value)
         ],
+        "required_scene_terms": [
+            _text(value)[:120]
+            for value in (raw.get("required_scene_terms") or [])[:6]
+            if _text(value)
+        ],
+        "scene_match_mode": "all" if raw.get("scene_match_mode") == "all" else "any",
+        "required_role_terms": [
+            _text(value)[:120]
+            for value in (raw.get("required_role_terms") or [])[:4]
+            if _text(value)
+        ],
+        "role_match_mode": "all" if raw.get("role_match_mode") == "all" else "any",
+        "product_evidence_required": raw.get("product_evidence_required") is not False,
+        "product_evidence_basis": _text(raw.get("product_evidence_basis"))[:40],
         "brand_or_model_required": raw.get("brand_or_model_required") is True,
         "brand_or_model_ranking_weight": raw.get("brand_or_model_ranking_weight"),
         **({"locked_term_groups": locked_term_groups} if locked_term_groups else {}),
@@ -356,7 +370,9 @@ def _project_online_match_evidence(value: Any) -> list[dict[str, str]]:
             if (
                 not canonical_term
                 or not observed_term
-                or evidence_group not in {"product_use_fit", "segment_use_case"}
+                or evidence_group not in {
+                    "product_use_fit", "segment_use_case", "people_role",
+                }
             ):
                 continue
             evidence.update({

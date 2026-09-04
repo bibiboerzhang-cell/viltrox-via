@@ -143,6 +143,31 @@ def test_creator_gear_fallback_stays_on_controlled_visual_professions() -> None:
     assert scored["product_scene_evidence_pass"] is True
 
 
+@pytest.mark.parametrize(
+    ("capability", "segment", "role"),
+    [
+        ("cinema lens", "filmmaking_role", "filmmaker"),
+        ("cinema lens", "film_direction", "film director"),
+        ("camera monitor", "film_direction", "movie director"),
+    ],
+)
+def test_server_controlled_people_roles_can_prove_capability_and_scene(
+    capability: str,
+    segment: str,
+    role: str,
+) -> None:
+    evidence, scored = _evaluate_public_role(
+        capability=capability,
+        segment=segment,
+        bio=f"{role} creating feature films",
+        title="Feature film production diary",
+    )
+
+    assert evidence
+    assert _product_use_rows(evidence)
+    assert scored["product_scene_evidence_pass"] is True
+
+
 @pytest.mark.parametrize("capability", ["camera monitor", "camera lens", "creator gear"])
 def test_non_visual_gaming_profile_cannot_pass_even_when_scene_text_matches(
     capability: str,

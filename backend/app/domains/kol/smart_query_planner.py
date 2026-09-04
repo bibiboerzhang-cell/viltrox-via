@@ -14,18 +14,27 @@ from app.domains.kol import smart_query_facets
 from app.domains.kol import smart_query_intent
 from app.domains.kol import smart_query_planner_prompt
 from app.domains.kol import targeted_search_contract
+from app.domains.kol.product_resolver_projection import planner_product_projection
+from app.domains.kol.smart_query_planner_cache import plan_text_query_cached
 from app.domains.kol.smart_query_planner_diagnostics import (
     extract_json,
     planner_not_attempted_diagnostics as _planner_not_attempted_diagnostics,
     planner_response_diagnostics as _planner_response_diagnostics,
 )
 from app.domains.kol.smart_query_planner_rules import (
-    as_float_or_none as _as_float_or_none,
     as_list as _as_list,
     avoid_types_for_product as _avoid_types_for_product,
     fallback_keywords as _fallback_keywords,
     fallback_platforms,
     product_search_terms as _product_search_terms,
+    vague_people_request as _vague_people_request,
+)
+from app.domains.kol.smart_query_planner_products import (
+    catalog_unavailable_clarification as _catalog_unavailable_clarification,
+    multiple_product_clarification as _multiple_product_clarification,
+    product_constraints_conflict as _product_constraints_conflict,
+    product_identity_key as _product_identity_key,
+    resolve_requested_product as _resolve_requested_product,
 )
 
 from app.core.logging import get_logger
@@ -34,7 +43,7 @@ logger = get_logger(__name__)
 
 
 SUPPORTED_PLATFORMS = ("youtube", "instagram", "tiktok")
-PLAN_DERIVE_METHOD = "smart_query_plan_v3_targeted_growth"
+PLAN_DERIVE_METHOD = "smart_query_plan_v4_people_intent_first"
 PLANNER_REQUIRED_KEYS = (
     "search_query",
     "product_focus",
@@ -131,7 +140,12 @@ def _fallback_plan(
         "objective": objective,
         **audience,
         "product_focus": keywords[:6],
-        "target_persona": query_text,
+        "target_persona": targeted_search_contract.build_target_persona(
+            query=query_text,
+            body=body,
+            product=product,
+            product_focus=keywords,
+        ),
         "platforms": platforms,
         "market": "US",
         "creator_quota": 15,
@@ -189,6 +203,8 @@ def _clarification_plan(
         **_planner_not_attempted_diagnostics(),
         "clarification": clarification,
     }
+    if clarification.get("catalog_status"):
+        plan["catalog_status"] = clarification["catalog_status"]
     return targeted_search_contract.apply_targeted_contract(
         plan,
         query=query,
@@ -197,9 +213,37 @@ def _clarification_plan(
     )
 
 
+def _needs_people_clarification(query: str, body: dict[str, Any] | None) -> bool:
+    """Ask for a people brief only when neither text nor filters supply one."""
+
+    body_segments = targeted_search_contract.extract_explicit_segments("", body)
+    return _vague_people_request(query) and not body_segments
+
+
+def _people_clarification_plan(
+    query: str,
+    *,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return _clarification_plan(
+        query,
+        {
+            "reason": "missing_people_intent",
+            "message": "请补充要找的行业、拍摄场景、人物角色或内容形式；不需要输入 SKU。",
+            "suggestions": [],
+        },
+        body=body,
+    )
+
+
 def _require_evidence_anchor(plan: dict[str, Any]) -> dict[str, Any]:
     """Fail closed when a preview plan cannot prove any lexical intent."""
     if _text(plan.get("status")) == "needs_clarification":
+        return plan
+    if plan.get("explicit_segments"):
+        # A controlled operator-owned people role/scene is already auditable
+        # intent, even when its English occupation words are intentionally
+        # excluded from the generic lexical evidence helper.
         return plan
     from app.domains.kol.profile_recall_match_evidence import query_evidence_terms
 
@@ -224,47 +268,9 @@ def _require_evidence_anchor(plan: dict[str, Any]) -> dict[str, Any]:
         "reason": "no_evidence_anchor",
         "clarification": {
             "reason": "no_evidence_anchor",
-            "message": "没识别出产品型号，也没识别出内容场景/职业——补一个具体产品（如 Z1 Pro）或职业词（如 赛车摄影）再搜",
+            "message": "没识别出要找的行业、场景、人物角色或内容形式，请补充其中一项；不需要输入 SKU。",
         },
     }
-
-
-def _resolve_requested_product(
-    query_text: str,
-    body: dict[str, Any],
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Resolve explicit SKU and free text to one catalog identity, or explain why not."""
-    try:
-        inferred = product_resolver.resolve_product(query_text)
-    except Exception:
-        inferred = None
-    explicit_sku = _text(body.get("product_sku") or body.get("productSku"))
-    if explicit_sku:
-        try:
-            explicit = product_resolver.resolve_product_sku(explicit_sku)
-        except Exception:
-            explicit = None
-        if not explicit:
-            return None, {
-                "reason": "explicit_product_sku_not_in_catalog",
-                "message": "所选产品不在当前产品目录中，请重新选择后再找达人。",
-                "suggestions": [],
-            }
-        inferred_sku = _text((inferred or {}).get("sku")).lower()
-        explicit_resolved_sku = _text(explicit.get("sku")).lower()
-        if inferred_sku and inferred_sku != explicit_resolved_sku:
-            return None, {
-                "reason": "conflicting_product_constraints",
-                "message": "输入内容与所选产品不一致，请确认一个产品后再找达人。",
-                "suggestions": [],
-            }
-        return explicit, None
-    if inferred:
-        return inferred, None
-    try:
-        return None, product_resolver.unresolved_product_request(query_text)
-    except Exception:
-        return None, None
 
 
 def _normalise_plan(
@@ -290,7 +296,7 @@ def _normalise_plan(
         platforms = fallback["platforms"]
     product_focus = _as_list(raw_plan.get("product_focus") or raw_plan.get("products") or raw_plan.get("keywords"))
     if not product_focus:
-        product_focus = product_terms or fallback["product_focus"]
+        product_focus = list(dict.fromkeys([*fallback["product_focus"], *product_terms]))
     avoid_types = _as_list(raw_plan.get("avoid_types") or raw_plan.get("avoid") or raw_plan.get("mismatch_types"))
     if not avoid_types:
         avoid_types = _avoid_types_for_product(product)
@@ -300,12 +306,26 @@ def _normalise_plan(
         or raw_plan.get("positioning")
         or (product or {}).get("specs_line")
     )
-    # target_persona 兜底:LLM 缺 → 用产品定位句(说人话),再缺才回退 rule(原始 query)。
+    # target_persona 描述要找的人；产品规格只能作为能力证据，不能冒充人物画像。
+    explicit_segments = targeted_search_contract.extract_explicit_segments(query, body)
+    people_first_persona = targeted_search_contract.build_target_persona(
+        query=query,
+        body=body,
+        product=product,
+        product_focus=product_focus,
+    )
+    # When the operator names a scene or role, deterministic operator intent
+    # outranks provider prose.  This prevents a product-heavy LLM response from
+    # replacing "who to find" with a SKU/specification summary.
     target_persona = _text(
-        raw_plan.get("target_persona")
-        or raw_plan.get("audience")
-        or product_positioning
-        or fallback["target_persona"]
+        people_first_persona
+        if explicit_segments
+        else (
+            raw_plan.get("target_persona")
+            or raw_plan.get("audience")
+            or people_first_persona
+            or fallback["target_persona"]
+        )
     )
     # 双目标意图契约:默认按「产品能力 + 使用场景」找潜在使用者;只有
     # existing_evidence 保留品牌/型号锚。操作员明确行业由 V2 QueryCell 再次锁定。
@@ -359,18 +379,7 @@ def _normalise_plan(
         "fallback_used": bool(response.get("fallback_used")) or not bool(raw_plan),
         **response_diagnostics,
         # 解析到的真实产品(纯展示/审计;无匹配为 None)。绝不参与任何评分。
-        "resolved_product": (
-            {
-                "sku": product.get("sku"),
-                "model_name": product.get("model_name"),
-                "marketing_name": product.get("marketing_name"),
-                "category_main": product.get("category_main"),
-                "series": product.get("series"),
-                "price_usd": _as_float_or_none(product.get("price_usd")),
-            }
-            if product
-            else None
-        ),
+        "resolved_product": planner_product_projection(product) if product else None,
     }
     # 车道「模型提议筛选」:五项筛选提议(国家/语言/垂类/粉丝下限/平台)。
     # 模型的 filter_proposal 只提供**取值**;「是不是操作员明确要求的」由原话规则判定,
@@ -407,17 +416,42 @@ def _plan_from_product_persona(
     if not persona:
         return None
 
+    explicit_segments = targeted_search_contract.extract_explicit_segments(query, body)
+    explicit_people_focus = [
+        _text(segment.get("query_term"))
+        for segment in explicit_segments
+        if _text(segment.get("query_term"))
+    ]
     ideal_persona = _text(persona.get("ideal_persona"))
     creator_types = _as_list(persona.get("ideal_creator_types_json"))
     verticals = _as_list(persona.get("verticals_json"))
     avoid_types = _as_list(persona.get("avoid_types_json"))
     what_is = _text(persona.get("what_is"))
     # search_query / product_focus:理想创作者类型 + 代表垂类(英文检索词,与 LLM 口径一致)。
-    focus = list(dict.fromkeys([*creator_types, *verticals]))
+    review_focus = (
+        _fallback_keywords(_text(query).lower())
+        if any(term in _text(query).lower() for term in ("评测", "测评", "review"))
+        else []
+    )
+    focus = list(dict.fromkeys(
+        explicit_people_focus
+        if explicit_segments
+        else [*review_focus, *creator_types, *verticals]
+    ))
     if not focus:
         # persona 行存在但类型/垂类为空 → 退 LLM,避免空检索词。
         return None
-    target_persona = ideal_persona or _text(query)
+    people_first_persona = targeted_search_contract.build_target_persona(
+        query=query,
+        body=body,
+        product=product,
+        product_focus=focus,
+    )
+    target_persona = people_first_persona if explicit_segments else (ideal_persona or people_first_persona)
+    if explicit_segments:
+        # A catalog persona is an inference about likely buyers. It cannot
+        # exclude or demote a role/scene the operator explicitly requested.
+        avoid_types = []
     product_positioning = what_is or _text(product.get("specs_line"))
 
     # persona 只提供潜在人群方向;默认目标不把品牌/型号塞回查询。
@@ -462,15 +496,12 @@ def _plan_from_product_persona(
         "model": _text(persona.get("model")) or "product_persona_kb",
         "fallback_used": False,
         **_planner_not_attempted_diagnostics(),
-        "persona_source": _text(persona.get("source")) or "llm_persona_v1",
-        "resolved_product": {
-            "sku": product.get("sku"),
-            "model_name": product.get("model_name"),
-            "marketing_name": product.get("marketing_name"),
-            "category_main": product.get("category_main"),
-            "series": product.get("series"),
-            "price_usd": _as_float_or_none(product.get("price_usd")),
-        },
+        "persona_source": (
+            "operator_people_intent_with_product_capability"
+            if explicit_segments
+            else (_text(persona.get("source")) or "llm_persona_v1")
+        ),
+        "resolved_product": planner_product_projection(product),
     }
     # persona 路径同样给五项筛选提议:产品知识库只解决「找什么人」,
     # 「按什么筛」照旧全部标成推断项,人不够时由自动松绑车道先松这些。
@@ -502,6 +533,9 @@ def plan_text_query_provider_free(
         return _require_evidence_anchor(
             _fallback_plan(query_text, reason="empty_query", body=body)
         )
+
+    if _needs_people_clarification(query_text, body):
+        return _people_clarification_plan(query_text, body=body)
 
     resolved_product, clarification = _resolve_requested_product(query_text, body)
     if clarification:
@@ -561,6 +595,8 @@ def _plan_text_query_impl(
     query_text = _text(query)
     if not query_text:
         return _fallback_plan(query_text, reason="empty_query", body=body)
+    if _needs_people_clarification(query_text, body):
+        return _people_clarification_plan(query_text, body=body)
     if str(body.get("use_llm_planner", "true")).strip().lower() in {"0", "false", "no", "off"}:
         return _fallback_plan(query_text, reason="llm_planner_disabled", body=body)
 
@@ -673,111 +709,16 @@ def plan_text_query(
     body: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    import hashlib as _hl
-    import json as _pj
-    from datetime import datetime as _dt, timezone as _tz
-
     body = body or {}
-    _filters = body.get("filters") if isinstance(body.get("filters"), dict) else {}
-    _cache_contract = {
-        "product_sku": _text(body.get("product_sku") or body.get("productSku")).lower(),
-        "objective": targeted_search_contract.normalize_objective(body),
-        "segments": [item["key"] for item in targeted_search_contract.extract_explicit_segments(query, body)],
-        "follower_filter": targeted_search_contract.parse_follower_range(query, body),
-        "platforms": body.get("platforms") or _filters.get("platforms") or [],
-        "countries": body.get("countries") or _filters.get("countries") or [],
-        "languages": body.get("languages") or _filters.get("languages") or [],
-        "use_product_persona": body.get("use_product_persona", "true"),
-        "use_llm_planner": body.get("use_llm_planner", "true"),
-        "llm_provider": body.get("llm_provider") or "",
-    }
-    cache_identity = "|".join(
-        (
-            _text(query).strip().lower(),
-            _pj.dumps(_cache_contract, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
-        )
+    if _needs_people_clarification(_text(query), body):
+        # Guard before cache lookup so a stale seven-day product-centric plan
+        # cannot bypass the current people-intent clarification contract.
+        return _people_clarification_plan(_text(query), body=body)
+    return plan_text_query_cached(
+        query,
+        body=body,
+        staff=staff,
+        derive_method=PLAN_DERIVE_METHOD,
+        build_plan=_plan_text_query_impl,
+        logger=logger,
     )
-    _qkey = _hl.md5(cache_identity.encode("utf-8")).hexdigest()
-    try:
-        from app.domains.analysis.cache_repo import get_analysis_cache_entry as _gc
-
-        _e = _gc("search_plan", _qkey, derive_method=PLAN_DERIVE_METHOD)
-        if _e and _e.get("status") == "ready":
-            _u = str(_e.get("updated_at") or "")
-            _t = _dt.fromisoformat(_u.replace("Z", "+00:00")) if _u else None
-            if _t is not None and _t.tzinfo is None:
-                _t = _t.replace(tzinfo=_tz.utc)
-            if _t and (_dt.now(_tz.utc) - _t).total_seconds() < 7 * 86400:
-                _res = _e.get("result")
-                _plan = _pj.loads(_res) if isinstance(_res, str) else _res
-                if isinstance(_plan, dict) and _plan.get("search_query"):
-                    _plan = targeted_search_contract.apply_targeted_contract(
-                        _plan,
-                        query=query,
-                        body=body,
-                        product=_plan.get("resolved_product"),
-                    )
-                    _origin_diagnostic_keys = (
-                        "provider_calls_performed",
-                        "provider_response_succeeded",
-                        "provider_attempts",
-                        "provider_response_status",
-                        "planner_parse_status",
-                        "planner_parse_failed",
-                        "gateway_cache_hit",
-                        "gateway_cache_key",
-                        "gateway_cache_origin_call_uid",
-                    )
-                    _plan["plan_cache_origin_diagnostics"] = {
-                        key: _plan.get(key)
-                        for key in _origin_diagnostic_keys
-                        if key in _plan
-                    }
-                    _plan["plan_cache"] = "hit"
-                    # Older cache rows predate the split provider/JSON
-                    # diagnostics. A cached usable plan proves a valid business
-                    # plan existed, but does not prove a provider ran in this
-                    # request. These are current-request facts, so overwrite
-                    # historical values instead of leaking a prior true through
-                    # setdefault; origin facts remain available above.
-                    _plan["provider_calls_performed"] = False
-                    _plan["provider_response_succeeded"] = False
-                    _plan["provider_attempts"] = 0
-                    _plan["provider_response_status"] = "plan_cache_hit"
-                    _plan["planner_parse_status"] = "cached_valid"
-                    _plan["planner_parse_failed"] = False
-                    _plan["gateway_cache_hit"] = False
-                    _plan["gateway_cache_key"] = ""
-                    _plan["gateway_cache_origin_call_uid"] = ""
-                    # 本车道之前落盘的计划没有 filter_proposal。不 bump derive_method 去
-                    # 强制重算(那等于把 7 天缓存全作废、白烧一轮钱);缺了就地按规则补一份
-                    # (纯字符串、零调用),并如实标成规则推荐,不冒充模型推断。
-                    if not isinstance(_plan.get("filter_proposal"), dict):
-                        _plan["filter_proposal"] = smart_query_facets.propose_facets(query, _plan)
-                    return _plan
-    except Exception:
-        logger.debug("plan 缓存读取失败,走实时规划(best-effort)", exc_info=True)
-    _plan = _plan_text_query_impl(query, body=body, staff=staff)
-    try:
-        if isinstance(_plan, dict) and _plan.get("search_query") and not _plan.get("fallback_used"):
-            from app.db.connection import get_conn as _gcn
-
-            _cc = _gcn()
-            # result 列是 jsonb:compat 连接用 ?::jsonb(翻译层转 %s::jsonb);ON CONFLICT 幂等。
-            _cc.execute(
-                """
-                INSERT INTO vkpi_analysis_cache (
-                  target_type, target_id, model, derive_method, result, cost,
-                  status, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?::jsonb, ?, 'ready', NOW(), NOW())
-                ON CONFLICT (target_type, target_id, derive_method)
-                DO UPDATE SET result = EXCLUDED.result, status = 'ready', updated_at = NOW()
-                """,
-                ("search_plan", _qkey, "plan_cache", PLAN_DERIVE_METHOD,
-                 _pj.dumps(_plan, ensure_ascii=False), 0),
-            )
-            _cc.commit()
-    except Exception:
-        logger.debug("plan 缓存写入失败(best-effort,不影响返回)", exc_info=True)
-    return _plan

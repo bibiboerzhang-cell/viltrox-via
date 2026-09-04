@@ -170,6 +170,94 @@ def test_multi_cell_candidate_uses_best_qualified_cell_not_first_cell() -> None:
     assert item["growth_qualification_pass"] is True
 
 
+def test_people_only_food_video_creator_is_not_rejected_by_fake_gear_gate() -> None:
+    [food] = targeted_search_contract.build_query_cells(
+        query="找美食短视频博主",
+        body={},
+        product=None,
+        product_focus=["food content creator"],
+        platforms=["youtube"],
+    )
+    raw = _candidate(
+        150,
+        bio="Food video creator making restaurant reviews and short recipe videos.",
+        avg_views=24_000,
+        avg_comments=180,
+        engagement_rate=0.08,
+        matched_query_cells=[food],
+    )
+    raw["latest_real_video"]["title"] = "Restaurant recipe production diary"
+
+    result = profile_online_qualification.qualify_online_candidates(
+        [raw],
+        query_text=food["primary_query"],
+        policy=_policy(),
+        search_brief={
+            "objective": "prospective_growth",
+            "product": {"capability": None, "evidence_required": False},
+        },
+        as_of=AS_OF,
+    )
+
+    assert result["counts"] == {"selected": 1}
+    accepted = result["accepted"][0]
+    assert accepted["growth_qualification_pass"] is True
+    assert accepted["best_qualified_cell"]["product_use_fit"] is None
+    assert accepted["best_qualified_cell"]["product_scene_evidence_pass"] is True
+
+
+def test_people_only_online_qualification_requires_role_and_scene() -> None:
+    [wedding] = targeted_search_contract.build_query_cells(
+        query="Find wedding photographers",
+        body={},
+        product=None,
+        product_focus=[],
+        platforms=["youtube"],
+    )
+    planner = _candidate(
+        151,
+        bio="Wedding planner coordinating bridal ceremonies and venues.",
+        avg_views=24_000,
+        avg_comments=180,
+        engagement_rate=0.08,
+        matched_query_cells=[wedding],
+    )
+    planner["latest_real_video"]["title"] = "How I planned this wedding ceremony"
+    photographer = _candidate(
+        152,
+        bio="Wedding photographer documenting bridal ceremonies.",
+        avg_views=24_000,
+        avg_comments=180,
+        engagement_rate=0.08,
+        matched_query_cells=[wedding],
+    )
+    photographer["latest_real_video"]["title"] = "Wedding photography behind the scenes"
+
+    result = profile_online_qualification.qualify_online_candidates(
+        [planner, photographer],
+        query_text=wedding["primary_query"],
+        policy=_policy(),
+        search_brief={
+            "objective": "prospective_growth",
+            "product": {"capability": None, "evidence_required": False},
+        },
+        as_of=AS_OF,
+    )
+
+    assert result["counts"] == {"selected": 1, "rejected": 1}, result
+    assert result["qualification_stats"]["qualified_cell_count"] == 1
+    assert [item["handle"] for item in result["accepted"]] == ["portrait152"]
+    assert wedding["required_role_terms"] == ["photographer"]
+    role_rows = [
+        row
+        for row in result["accepted"][0]["best_qualified_cell"]["match_evidence"]
+        if row.get("evidence_group") == "people_role"
+    ]
+    assert {(row["canonical_term"], row["observed_term"]) for row in role_rows} == {
+        ("photographer", "photographer")
+    }
+
+
 def test_controlled_aliases_prove_flash_and_motorsport_without_brand_mention() -> None:
     motorsport = _query_cell("cell-motorsport", "motorsport")
     raw = _candidate(

@@ -59,6 +59,15 @@ def test_operator_named_country_is_explicit_and_locked():
     assert "countries" not in proposal["relaxable_fields"]
 
 
+def test_operator_named_city_maps_to_its_country_instead_of_default_us():
+    proposal = _propose("Find London photographers")
+    country = proposal["facets"]["countries"]
+    assert country["values"] == ["GB"]
+    assert country["origin"] == facets.ORIGIN_EXPLICIT
+    assert country["source"] == facets.SOURCE_OPERATOR
+    assert country["relaxable"] is False
+
+
 def test_default_market_country_is_inferred_and_relaxable():
     """操作员一个国家都没说时,US 只是默认主力市场 —— 必须标成推断项、可松。
 
@@ -268,7 +277,7 @@ def test_model_supplied_unknown_vertical_key_is_dropped():
         (
             "找美国的 55mm 人像摄影师",
             {
-                "search_query": "portrait portrait photographer lens review videographer photographer camera gear",
+                    "search_query": "portrait photographer",
                 "product_focus": ["portrait", "portrait photographer", "lens review", "videographer", "photographer", "camera gear"],
                 "platforms": ["youtube", "instagram", "tiktok"],
                 "min_followers_hint": None,
@@ -279,7 +288,7 @@ def test_model_supplied_unknown_vertical_key_is_dropped():
     ],
 )
 def test_existing_plan_fields_unchanged(query: str, expected: dict[str, Any]):
-    """加了筛选提议之后,规则计划的既有字段必须逐字节不变(纯增量,零行为漂移)。"""
+    """筛选提议不能改变 people-first 计划的其余稳定字段。"""
     plan = planner._fallback_plan(query)
     for key, value in expected.items():
         assert plan[key] == value, key

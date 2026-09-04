@@ -23,6 +23,7 @@ UNITS = (
 )
 REDIS_WORKER_UNIT = "vkpi-redis-worker.service"
 RELEASE_UNITS = (*UNITS, REDIS_WORKER_UNIT)
+FORWARD_MIGRATION = "307_users_token_version.sql"
 
 
 def _run(
@@ -184,9 +185,9 @@ def _release(
         if seal_args is not None
         else (
             "--pending-migrations",
-            "250.sql",
+            FORWARD_MIGRATION,
             "--compatibility-declaration",
-            "250.sql",
+            FORWARD_MIGRATION,
         )
     )
     _run(*args)
@@ -203,9 +204,9 @@ def _prepare_args(root: Path, unit_dir: Path, release_id: str) -> list[str]:
         "--unit-dir",
         str(unit_dir),
         "--pending-migrations",
-        "250.sql",
+        FORWARD_MIGRATION,
         "--compatibility-declaration",
-        "250.sql",
+        FORWARD_MIGRATION,
     ]
     for name in UNITS:
         args.extend(("--unit-name", name))
@@ -268,7 +269,7 @@ def test_first_release_restores_absent_pointers_and_retains_legacy_audit_snapsho
     assert (release / ".env").is_symlink()
     assert (release / "runtime").is_symlink()
     manifest = json.loads((release / ".vkpi-release.json").read_text(encoding="utf-8"))
-    assert manifest["pending_migrations"] == ["250.sql"]
+    assert manifest["pending_migrations"] == [FORWARD_MIGRATION]
     assert manifest["schema"] == 2
     assert re.fullmatch(r"[0-9a-f]{64}", manifest["payload_sha256"])
     assert manifest["payload_entry_count"] > 0
@@ -707,9 +708,9 @@ def test_optional_unit_absent_bootstrap_is_removed_on_restore(tmp_path: Path) ->
         "--unit-dir",
         str(unit_dir),
         "--pending-migrations",
-        "250.sql",
+        FORWARD_MIGRATION,
         "--compatibility-declaration",
-        "250.sql",
+        FORWARD_MIGRATION,
         "--optional-unit-name",
         REDIS_WORKER_UNIT,
         "--optional-unit-state",
@@ -769,9 +770,9 @@ def test_optional_unit_present_is_restored_byte_for_byte(tmp_path: Path) -> None
         "--unit-dir",
         str(unit_dir),
         "--pending-migrations",
-        "250.sql",
+        FORWARD_MIGRATION,
         "--compatibility-declaration",
-        "250.sql",
+        FORWARD_MIGRATION,
         "--optional-unit-name",
         REDIS_WORKER_UNIT,
         "--optional-unit-state",
@@ -832,8 +833,8 @@ def test_optional_unit_present_inactive_disabled_receipt_and_restore(tmp_path: P
     (unit_dir / REDIS_WORKER_UNIT).write_bytes(original)
     args = [
         "prepare", "--root", str(root), "--release-id", release_id,
-        "--unit-dir", str(unit_dir), "--pending-migrations", "250.sql",
-        "--compatibility-declaration", "250.sql",
+        "--unit-dir", str(unit_dir), "--pending-migrations", FORWARD_MIGRATION,
+        "--compatibility-declaration", FORWARD_MIGRATION,
         "--optional-unit-name", REDIS_WORKER_UNIT,
         "--optional-unit-state", f"{REDIS_WORKER_UNIT}=present:inactive:disabled:unmasked",
     ]
@@ -858,8 +859,8 @@ def test_optional_unit_masked_receipt_removes_deployed_file_for_remask(tmp_path:
     installed.symlink_to("/dev/null")
     args = [
         "prepare", "--root", str(root), "--release-id", release_id,
-        "--unit-dir", str(unit_dir), "--pending-migrations", "250.sql",
-        "--compatibility-declaration", "250.sql",
+        "--unit-dir", str(unit_dir), "--pending-migrations", FORWARD_MIGRATION,
+        "--compatibility-declaration", FORWARD_MIGRATION,
         "--optional-unit-name", REDIS_WORKER_UNIT,
         "--optional-unit-state", f"{REDIS_WORKER_UNIT}=present:inactive:disabled:masked",
     ]

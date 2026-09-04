@@ -169,6 +169,11 @@ def test_series_context_narrows_the_family_without_picking_a_mount(catalog: None
         "50k followers travel creators",
         "at least 85 creators",
         "top 55 photographers",
+        "Find 85 photographers",
+        "Find 100 wedding photographers",
+        "Find 75 documentary filmmakers",
+        "Find 55 sports commentators",
+        "找85摄影师",
         "90后摄影师",
         "2024年的旅拍达人",
         "找一些适合300美金evo系列的用户 300W EVO portable lighting",
@@ -381,6 +386,8 @@ def test_bare_number_reader_is_the_only_gate_that_needs_context(catalog: None) -
     assert product_focal_family.bare_focal_numbers("我想要喜欢135的用户") == [135]
     assert product_focal_family.bare_focal_numbers("找20个美食达人") == []
     assert product_focal_family.bare_focal_numbers("top 55 photographers") == []
+    assert product_focal_family.bare_focal_numbers("Find 85 photographers") == []
+    assert product_focal_family.bare_focal_numbers("Find 100 wedding photographers") == []
     assert product_focal_family.bare_focal_numbers("https://www.5050travelog.com/85") == []
     assert product_focal_family.bare_focal_numbers("550pro") == []
 

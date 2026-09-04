@@ -339,11 +339,18 @@ describe("KOL Pool · 独立搜索历史", () => {
       },
     });
     const onOpenBoard = vi.fn();
-    render(<PoolSearchHistoryXbCard apiToken="t" onOpenBoard={onOpenBoard} />);
+    render(
+      <PoolSearchHistoryXbCard
+        apiToken="cookie-session"
+        onOpenBoard={onOpenBoard}
+        pageProps={{ "kol-pool": { currentUser: { id: "staff-a" } } }}
+      />,
+    );
 
     fireEvent.click(await screen.findByText("查看"));
     fireEvent.click(await screen.findByText("85mm portrait reviewer"));
-    expect(window.localStorage.getItem("vkpi:pendingKolSearchSessionId")).toBe("778");
+    expect(window.localStorage.getItem("vkpi:pendingKolSearchSessionId:account:staff-a")).toBe("778");
+    expect(window.localStorage.getItem("vkpi:pendingKolSearchSessionId")).toBeNull();
     expect(onOpenBoard).toHaveBeenCalledTimes(1);
   });
 });

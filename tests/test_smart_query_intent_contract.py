@@ -379,7 +379,7 @@ def test_rule_path_also_reads_audience_scale_as_a_threshold() -> None:
     plan = smart_query_planner._fallback_plan("找一些粉丝多的美食创作者")
     assert plan["audience_scale"] == "large"
     assert plan["min_followers_hint"] == 100_000
-    assert "food creator" in plan["search_query"]
+    assert plan["search_query"] == "food content creator"
 
 
 def test_bare_evo_is_a_lens_family_not_a_300w_light() -> None:
@@ -392,9 +392,12 @@ def test_bare_evo_is_a_lens_family_not_a_300w_light() -> None:
 
 def test_real_wattage_still_reaches_the_lighting_terms() -> None:
     plan = smart_query_planner._fallback_plan("找 300W 闪光灯的评测博主")
-    assert "300W" in plan["search_query"]
-    assert "portable lighting" in plan["search_query"]
-    assert "flash" in plan["search_query"]
+    assert plan["search_query"] == "300W studio lighting reviewer"
+    cell = plan["query_cells"][0]
+    assert cell["product_evidence_basis"] == "operator_capability"
+    assert cell["locked_term_groups"]["groups"][0]["canonical_term"] == (
+        "300w studio lighting"
+    )
 
 
 def test_clarification_plan_keeps_the_contract_keys_empty() -> None:

@@ -812,6 +812,62 @@ def test_attach_uses_server_effective_query_and_writes_authoritative_online_card
     }
 
 
+def test_attach_preserves_server_controlled_people_role_evidence_roundtrip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    result = _attached_result()
+    item = result["items"][0]
+    locked = targeted_search_contract.build_locked_term_groups(
+        capability="",
+        segment="night",
+        role_terms=["camera operator"],
+    )
+    cell = {
+        "query_cell_id": "segment_1_night",
+        "objective": "prospective_growth",
+        "segment": "night",
+        "primary_query": "night camera operator",
+        "required_scene_terms": ["night"],
+        "required_role_terms": ["camera operator"],
+        "product_evidence_required": False,
+        "locked_term_groups": locked,
+    }
+    role_evidence = {
+        "field": "bio",
+        "term": "camera operator",
+        "canonical_term": "camera operator",
+        "observed_term": "camera operator",
+        "evidence_group": "people_role",
+        "evidence_relation": "direct_capability_or_scene_alias",
+        "source": "server_allowlisted_alias_evidence",
+    }
+    item.update({
+        "query_cell_id": cell["query_cell_id"],
+        "query_cell_segment": "night",
+        "query_cell_query": cell["primary_query"],
+        "matched_query_cells": [cell],
+    })
+    item["match_evidence"].append(role_evidence)
+    item["qualification_evidence"]["relevance"]["evidence"].append(role_evidence)
+    monkeypatch.setattr(
+        "app.domains.kol.search_sessions.get_session",
+        lambda _session_id: {"query_text": "night camera operator", "result_summary": {}},
+    )
+
+    def record(_session_id: int, items: list[dict[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        captured.update(items=items, kwargs=kwargs)
+        return {"items": items}
+
+    monkeypatch.setattr("app.domains.kol.search_sessions.record_items", record)
+    search_sessions_online.attach_online_qualified_result(51, result)
+
+    payload = captured["items"][0]["payload"]
+    assert role_evidence in payload["match_evidence"]
+    assert role_evidence in payload["qualification_evidence"]["relevance"]["evidence"]
+    assert payload["matched_query_cells"][0]["required_role_terms"] == ["camera operator"]
+
+
 @pytest.mark.parametrize(
     ("scope", "field", "value"),
     [

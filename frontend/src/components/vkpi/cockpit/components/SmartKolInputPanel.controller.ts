@@ -18,7 +18,6 @@ import {
   type Row,
 } from "./SmartKolInputPanel.helpers";
 import {
-  PENDING_SEARCH_SESSION_KEY,
   PROFILE_REP_VIDEO_LIMIT,
   discoveryAutoEnrolledFromSession, discoveryBrandExcludedFromSession,
   discoveryItemsFromSession,
@@ -27,6 +26,7 @@ import {
   looksLikeRetailer,
   mergeKolRecallSnapshots,
   mergeKolSearchSessionSnapshots,
+  pendingSearchSessionStorageKey,
   reachFloorDisplayFromSession,
   readPersistedSearchDisplay,
   recallResultFromSession,
@@ -74,6 +74,7 @@ import {
 type State = "idle" | "loading" | "ready" | "executing" | "error";
 export function useSmartKolInputPanelController({
   apiToken = "",
+  accountId,
   searchMode = "balanced",
   onSearchModeChange,
   onRecallItems,
@@ -82,7 +83,7 @@ export function useSmartKolInputPanelController({
 }: SmartKolInputPanelProps) {
   // 挂载时回填上次激活搜索的展示态(sessionStorage),让 90s/10min 父刷新若偶发重挂本面板时
   // ①②③ 结果与轮询不凭空消失;无持久化则回到正常初始态。
-  const persistedDisplay = useMemo(() => readPersistedSearchDisplay(), []);
+  const persistedDisplay = useMemo(() => readPersistedSearchDisplay(accountId), [accountId]);
   const [input, setInput] = useState(() => persistedDisplay?.input ?? "");
   const [state, setState] = useState<State>(() => (persistedDisplay?.recallResult || persistedDisplay?.urlResult ? "ready" : "idle"));
   const [mode, setMode] = useState<Mode>(() => persistedDisplay?.mode ?? "idle");
@@ -182,7 +183,7 @@ export function useSmartKolInputPanelController({
     favoriteIds, favoriteBusyIds, favoriteResults, favoriteErrors, favoritesSyncing, favoritesLoadError,
     draftBusy, draftNote, outreachBusy, outreachNote, outreachResult,
     discoveryKey, favoriteOne, addPickedToMyKol, approveAndCreateDraft, generateOutreachForPicked,
-  } = useSmartKolSelection({ apiToken, displayedSearchSessionId, canApprove: approvalReady, canFavorite: !recallIsStale, currentSearchRequest, isCurrentSearchRequest });
+  } = useSmartKolSelection({ apiToken, accountKey: accountId, displayedSearchSessionId, canApprove: approvalReady, canFavorite: !recallIsStale, currentSearchRequest, isCurrentSearchRequest });
   const inferredMode = useMemo(() => detectMode(input), [input]);
   // advanceBusy 刻意不进 isBusy:后台补充腿在跑,不该锁住输入框和搜索按钮。
   const isBusy = state === "loading" || state === "executing" || batchBusy;
@@ -242,11 +243,11 @@ export function useSmartKolInputPanelController({
   // 全空(无召回/无 URL 结果/无激活会话)时清掉,避免回填到一个空壳搜索框。
   useEffect(() => {
     if (!recallResult && !urlResult && !activeSearchSession && !displayedSearchSessionId) {
-      writePersistedSearchDisplay(null);
+      writePersistedSearchDisplay(null, accountId);
       return;
     }
-    writePersistedSearchDisplay({ input, mode, recallResult, urlResult, activeSearchSession, activeSearchSessionId: displayedSearchSessionId });
-  }, [input, mode, recallResult, urlResult, activeSearchSession, displayedSearchSessionId]);
+    writePersistedSearchDisplay({ input, mode, recallResult, urlResult, activeSearchSession, activeSearchSessionId: displayedSearchSessionId }, accountId);
+  }, [accountId, input, mode, recallResult, urlResult, activeSearchSession, displayedSearchSessionId]);
 
   const restoreSession = useCallback((session: VkpiKolSearchHistoryItem) => {
     const query = cleanText(session.query_text);
@@ -357,13 +358,14 @@ export function useSmartKolInputPanelController({
 
   useEffect(() => {
     if (!apiToken || typeof window === "undefined") return undefined;
+    const pendingStorageKey = pendingSearchSessionStorageKey(accountId);
     const openPending = (sessionId: unknown) => {
       const parsed = Number(sessionId);
       if (Number.isFinite(parsed) && parsed > 0) void openHistorySession(parsed);
     };
-    const fromStorage = window.localStorage.getItem(PENDING_SEARCH_SESSION_KEY);
+    const fromStorage = pendingStorageKey ? window.localStorage.getItem(pendingStorageKey) : null;
     if (fromStorage) {
-      window.localStorage.removeItem(PENDING_SEARCH_SESSION_KEY);
+      window.localStorage.removeItem(pendingStorageKey!);
       openPending(fromStorage);
     }
     const handler = (event: Event) => {
@@ -372,7 +374,7 @@ export function useSmartKolInputPanelController({
     };
     window.addEventListener("vkpi:open-kol-search-session", handler);
     return () => window.removeEventListener("vkpi:open-kol-search-session", handler);
-  }, [apiToken, openHistorySession]);
+  }, [accountId, apiToken, openHistorySession]);
 
   useSmartKolSessionPolling({
     apiToken,
@@ -384,7 +386,7 @@ export function useSmartKolInputPanelController({
     setSessionPollNotice,
   });
 
-  const run = async (overrideQuery?: string) => {
+  const run = async (overrideQuery?: string, confirmedProductSku?: string) => {
     const query = cleanText(overrideQuery ?? input);
     if (!apiToken) {
       setState("error");
@@ -448,6 +450,7 @@ export function useSmartKolInputPanelController({
         searchStrategy,
         filters: apiFilters,
         bucketPolicy: searchPolicy.bucketPolicy,
+        productSku: cleanText(confirmedProductSku) || undefined,
         market: discoveryRegion,
         platforms: discoveryPlatforms,
         languages: contentLanguages,
@@ -466,6 +469,7 @@ export function useSmartKolInputPanelController({
       const responseRow = asRecord(response);
       const responseResult = asRecord(response.result);
       const responsePlan = asRecord(responseRow.llm_query_plan || responseResult.llm_query_plan);
+      const responseProductSku = cleanText(asRecord(responsePlan.resolved_product).sku);
       const needsProductClarification = cleanText(response.status || responsePlan.status) === "needs_clarification";
       let autoProfile: VkpiKolUrlDeepCrawlResponse | null = null;
       let autoVideo: VkpiKolUrlDeepCrawlResponse | null = null;
@@ -541,7 +545,10 @@ export function useSmartKolInputPanelController({
       // 预算护栏 enforce 兜底超支(已确认放行)。
       if (isText && !needsProductClarification) {
         const previewSessionId = sessionIdFrom(response.search_session);
-        void queueTextAdvance(overrideQuery, requestEpoch, previewSessionId);
+        // Keep the continuation bound to this exact preview response. React state
+        // updates above are asynchronous, so reading llmPlan here would observe
+        // the previous render and could send product A into product B's job.
+        void queueTextAdvance(overrideQuery, requestEpoch, previewSessionId, responseProductSku);
       }
       // 账号 URL 自动抓资料 + 入库(不再弹「抓基础资料」二次确认)。
       if (autoProfile) void runUrlExecute(autoProfile, { auto: true, requestEpoch });
@@ -641,7 +648,12 @@ export function useSmartKolInputPanelController({
     await runUrlExecute(urlResult, { localEvaluation: true });
   };
 
-  const queueTextAdvance = async (overrideQuery?: string, parentEpoch?: SearchRequestEpoch, reuseSessionId?: number) => {
+  const queueTextAdvance = async (
+    overrideQuery?: string,
+    parentEpoch?: SearchRequestEpoch,
+    reuseSessionId?: number,
+    resolvedProductSku?: string,
+  ) => {
     const query = cleanText(overrideQuery ?? input);
     if (!apiToken || !query || state === "executing") return;
     // 手动再发起的全网补充(结果区按钮 / 重试)在上一次还没回来前不重复排队;run() 链下来的那次
@@ -689,6 +701,7 @@ export function useSmartKolInputPanelController({
       // 新合同把「筛选后 30 人」与底层 creator/reviewer 兼容配额分开；显式硬筛选不得为凑数放松。
       const apiFilters = toKolSearchApiFilters(searchFilters, discoveryPlatforms, contentLanguages);
       const onlinePlatforms = strictOnlineDiscoveryPlatforms(discoveryPlatforms);
+      const productSku = cleanText(resolvedProductSku);
       const response = await smartKolSearchProfileAdvanceJob(apiToken, query, {
         objective: searchObjective,
         candidateLimit: 500,
@@ -700,6 +713,7 @@ export function useSmartKolInputPanelController({
         searchStrategy,
         filters: apiFilters,
         bucketPolicy: searchPolicy.bucketPolicy,
+        ...(productSku ? { productSku } : {}),
         maxPosts: 12,
         representativeVideoLimit: 1,
         // Facebook 尚无严格联网发现腿。若操作员只选 Facebook，保留本地 Facebook

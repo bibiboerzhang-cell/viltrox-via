@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,6 +22,7 @@ import staging_db_clone  # noqa: E402
 FORWARD_MIGRATIONS = (
     "305_vkpi_kol_pool_language_inferred.sql",
     "306_vkpi_product_persona_term_performance.sql",
+    "307_users_token_version.sql",
 )
 
 
@@ -203,6 +206,179 @@ def test_clone_reuse_seal_accepts_exact_declaration_and_preserves_owner() -> Non
     assert all(len(row["sha256"]) == 64 for row in evidence["migrations"])
 
 
+def test_in_place_seal_validates_the_same_forward_migration_evidence() -> None:
+    migrations = ",".join(FORWARD_MIGRATIONS)
+    metadata = atomic_release_layout._database_release_metadata(
+        strategy="in-place",
+        source_database="",
+        target_database="",
+        env_fingerprint_before="",
+        pending_migrations=migrations,
+        compatibility_declaration=migrations,
+    )
+
+    assert metadata["database_strategy"] == "in-place"
+    assert [
+        row["name"] for row in metadata["forward_compatibility_evidence"]["migrations"]
+    ] == list(FORWARD_MIGRATIONS)
+
+
+def test_in_place_seal_rejects_missing_or_unreviewed_declaration() -> None:
+    with pytest.raises(atomic_release_layout.LayoutError, match="exact forward-compatibility"):
+        atomic_release_layout._database_release_metadata(
+            strategy="in-place",
+            source_database="",
+            target_database="",
+            env_fingerprint_before="",
+            pending_migrations="307_users_token_version.sql",
+            compatibility_declaration="",
+        )
+    with pytest.raises(atomic_release_layout.LayoutError, match="not reviewed by policy"):
+        atomic_release_layout._database_release_metadata(
+            strategy="in-place",
+            source_database="",
+            target_database="",
+            env_fingerprint_before="",
+            pending_migrations="308_vkpi_privacy_retention_columns.sql",
+            compatibility_declaration="308_vkpi_privacy_retention_columns.sql",
+        )
+
+
+def test_train_fails_before_freeze_when_migration_policy_is_not_proven() -> None:
+    source = (OPS / "train.sh").read_text(encoding="utf-8")
+    preflight_at = source.index("\nmigration_preflight\n")
+    freeze_at = source.index("candidate_manifest_matches_head")
+    assert preflight_at < freeze_at
+    preflight = source[source.index("migration_preflight()") : preflight_at]
+    assert "声明必须与待应用迁移精确一致" in preflight
+    assert "_forward_compatibility_evidence" in preflight
+    assert "未经审阅或非前向兼容迁移" in preflight
+    assert "完整版本集合与本地运行时清单不一致" in preflight
+    assert "pending_runtime_migrations" in preflight
+    assert "tr -d" not in preflight
+    assert "&& . /opt/viltrox-2.0/.env" in preflight
+    assert '[ -n "${DATABASE_URL:-}" ]' in preflight
+    assert "-v ON_ERROR_STOP=1" in preflight
+
+
+@pytest.mark.parametrize(
+    ("ssh_body", "expected"),
+    [
+        ("#!/bin/sh\nexit 23\n", "无法连接线上或读取 schema_migrations"),
+        ("#!/bin/sh\nexit 0\n", "未返回完整版本集合"),
+    ],
+)
+def test_train_migration_preflight_fails_closed_when_remote_watermark_is_unknown(
+    tmp_path: Path,
+    ssh_body: str,
+    expected: str,
+) -> None:
+    source = (OPS / "train.sh").read_text(encoding="utf-8")
+    start = source.index("migration_preflight() {")
+    end = source.index("\nmigration_preflight\n", start)
+    function_source = source[start:end]
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh = bin_dir / "ssh"
+    ssh.write_text(ssh_body, encoding="utf-8")
+    ssh.chmod(0o755)
+    harness = tmp_path / "preflight.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "log() { printf '%s\\n' \"$*\"; }\n"
+        "die() { printf 'FATAL: %s\\n' \"$*\" >&2; exit 1; }\n"
+        f"ROOT={json.dumps(str(ROOT), ensure_ascii=False)}\n"
+        f"PYTHON_BIN={json.dumps(str(ROOT / 'scripts' / 'ops' / 'safe_python.sh'), ensure_ascii=False)}\n"
+        f"{function_source}\n"
+        "migration_preflight\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:/usr/bin:/bin"
+
+    completed = subprocess.run(
+        ["bash", str(harness)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert expected in completed.stderr
+
+
+def test_train_migration_preflight_detects_a_hole_below_remote_max(tmp_path: Path) -> None:
+    source = (OPS / "train.sh").read_text(encoding="utf-8")
+    start = source.index("migration_preflight() {")
+    end = source.index("\nmigration_preflight\n", start)
+    function_source = source[start:end]
+    manifest = atomic_release_shared.runtime_migration_manifest(ROOT / "migrations")
+    missing = "309_vkpi_dsar_public_intake.sql"
+    assert missing in manifest and manifest[-1] == "310_vkpi_kol_search_refresh_scheduler.sql"
+    applied = ",".join(name for name in manifest if name != missing)
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    ssh = bin_dir / "ssh"
+    ssh.write_text(f"#!/bin/sh\nprintf '%s\\n' {json.dumps(applied)}\n", encoding="utf-8")
+    ssh.chmod(0o755)
+    harness = tmp_path / "hole-preflight.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        "log() { printf '%s\\n' \"$*\"; }\n"
+        "die() { printf 'FATAL: %s\\n' \"$*\" >&2; exit 1; }\n"
+        f"ROOT={json.dumps(str(ROOT), ensure_ascii=False)}\n"
+        f"PYTHON_BIN={json.dumps(str(ROOT / 'scripts' / 'ops' / 'safe_python.sh'), ensure_ascii=False)}\n"
+        "VKPI_FORWARD_COMPATIBLE_MIGRATIONS=\n"
+        f"{function_source}\n"
+        "migration_preflight\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}:/usr/bin:/bin"
+
+    completed = subprocess.run(
+        ["bash", str(harness)],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert missing in completed.stdout
+    assert "待应用迁移未声明" in completed.stderr
+
+
+def test_pending_runtime_migrations_detects_holes_not_just_the_maximum() -> None:
+    manifest = atomic_release_shared.runtime_migration_manifest(ROOT / "migrations")
+    missing = "309_vkpi_dsar_public_intake.sql"
+    applied = tuple(name for name in manifest if name != missing)
+
+    assert max(applied) == "310_vkpi_kol_search_refresh_scheduler.sql"
+    assert atomic_release_shared.pending_runtime_migrations(manifest, applied) == (missing,)
+
+
+def test_pending_runtime_migrations_rejects_whitespace_polluted_version_keys() -> None:
+    manifest = atomic_release_shared.runtime_migration_manifest(ROOT / "migrations")
+    canonical = "309_vkpi_dsar_public_intake.sql"
+    applied = tuple(
+        f" {name}" if name == canonical else name
+        for name in manifest
+    )
+
+    with pytest.raises(atomic_release_layout.LayoutError, match="empty or invalid"):
+        atomic_release_shared.pending_runtime_migrations(manifest, applied)
+
+
 @pytest.mark.parametrize(
     ("old", "new"),
     [
@@ -232,6 +408,24 @@ def test_forward_policy_rejects_non_nullable_defaulted_or_row_writing_drift(
         )
 
 
+@pytest.mark.parametrize("line_break", [b"\r", b"\r\n"])
+def test_forward_policy_does_not_hide_destructive_sql_after_line_comment(
+    tmp_path: Path,
+    line_break: bytes,
+) -> None:
+    name = FORWARD_MIGRATIONS[2]
+    source = (ROOT / "migrations" / name).read_bytes()
+    (tmp_path / name).write_bytes(
+        source + b"\n-- hidden" + line_break + b"DROP TABLE users;\n"
+    )
+
+    with pytest.raises(atomic_release_layout.LayoutError, match="non-additive SQL"):
+        atomic_release_shared._forward_compatibility_evidence(
+            name,
+            migrations_dir=tmp_path,
+        )
+
+
 def test_forward_policy_fails_closed_for_unreviewed_migration() -> None:
     with pytest.raises(atomic_release_layout.LayoutError, match="not reviewed by policy"):
         atomic_release_shared._forward_compatibility_evidence("307_unreviewed.sql")
@@ -243,6 +437,8 @@ def test_deploy_exception_is_bounded_by_lineage_declaration_and_backup() -> None
     assert "Refusing to mutate an active release clone in place" not in deploy
 
     lineage_at = deploy.index('source_kind = "prior-release-clone"')
+    full_set_at = deploy.index("complete remote schema_migrations set", lineage_at)
+    reconcile_at = deploy.index("pending_runtime_migrations", full_set_at)
     pending_at = deploy.index('if [ -n "${PENDING_MIGRATIONS}" ]', lineage_at)
     declaration_at = deploy.index(
         'FORWARD_COMPATIBILITY_DECLARATION}" != "${PENDING_MIGRATIONS}', pending_at
@@ -251,11 +447,17 @@ def test_deploy_exception_is_bounded_by_lineage_declaration_and_backup() -> None
     reuse_at = deploy.index(
         'if [ "${STAGING_SOURCE_KIND}" = "prior-release-clone" ]', backup_at
     )
-    assert lineage_at < pending_at < declaration_at < backup_at < reuse_at
+    assert lineage_at < full_set_at < reconcile_at < pending_at < declaration_at < backup_at < reuse_at
     reuse = deploy[reuse_at : deploy.index("\nfi", reuse_at)]
     assert 'DATABASE_RELEASE_STRATEGY="reuse-active-clone"' in reuse
     assert 'DATABASE_OWNER_RELEASE_ID="${PREDEPLOY_DATABASE_OWNER_RELEASE_ID}"' in reuse
     assert "pending != compatible" in deploy
+    assert deploy.count("--require-migration-set-complete") == 1
+    remote_set_reader = deploy[full_set_at - 1400 : reconcile_at]
+    assert "tr -d" not in remote_set_reader
+    assert "&& [ -n" in remote_set_reader
+    assert "DATABASE_URL:-" in remote_set_reader
+    assert "-v ON_ERROR_STOP=1" in remote_set_reader
 
 
 def test_prior_clone_migration_backup_is_release_bound_and_reverified() -> None:

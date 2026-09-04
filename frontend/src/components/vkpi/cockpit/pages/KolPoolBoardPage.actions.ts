@@ -211,38 +211,133 @@ export function useRecallAvatars() {
 
 /* ============ 详情抽屉(openItem detail-bundle 优先、单项兜底 + 受众刷新重拉 + 跨页事件) ============ */
 
-export function usePoolDrawer(apiToken: string, avatarForItem: (item: any) => string, mergeAvatarSeed: (item: any, avatar: any) => any) {
+const DRAWER_PRODUCT_SCOPE_KEYS = [
+  "product_context",
+  "product_sku",
+  "productSku",
+  "product_identity",
+  "productIdentity",
+  "product_family",
+  "productFamily",
+  "product_family_name",
+  "productFamilyName",
+  "product_name",
+  "productName",
+] as const;
+
+function validProductScopeValue(key: typeof DRAWER_PRODUCT_SCOPE_KEYS[number], value: unknown): boolean {
+  if (key === "product_context") {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const context = value as Row;
+    return [context.kind, context.identity, context.sku, context.label]
+      .some((part) => typeof part === "string" ? Boolean(part.trim()) : part != null);
+  }
+  if (typeof value === "string") return Boolean(value.trim());
+  return value != null;
+}
+
+function firstProductScopeValue(target: Row, ...keys: string[]) {
+  for (const key of keys) {
+    const value = target?.[key];
+    if (typeof value === "string") {
+      if (value.trim()) return value.trim();
+    } else if (value != null) return value;
+  }
+  return undefined;
+}
+
+function hasProductScope(row: Row): boolean {
+  const context = validProductScopeValue("product_context", row?.product_context)
+    ? row.product_context as Row
+    : {};
+  const contextKind = firstProductScopeValue(context, "kind");
+  const contextSku = firstProductScopeValue(context, "sku");
+  const contextIdentity = firstProductScopeValue(context, "identity");
+  const scalarSku = firstProductScopeValue(row, "product_sku", "productSku");
+  const scalarIdentity = firstProductScopeValue(row, "product_identity", "productIdentity");
+  const scalarFamilyIdentity = firstProductScopeValue(row, "product_family", "productFamily");
+
+  // A name/label only describes an already-proven product identity. It must
+  // never displace an exact fallback SKU. A scalar family field is itself an
+  // explicitly typed family identity; a generic identity needs context.kind.
+  return Boolean(
+    contextSku
+    || scalarSku
+    || scalarFamilyIdentity
+    || (contextKind && (contextIdentity || scalarIdentity)),
+  );
+}
+
+function replaceWithCanonicalProductScope(row: Row, productSeed: Row): Row {
+  if (!hasProductScope(productSeed || {})) return row;
+  const scope = recallProductScopeForDrawer(productSeed || {});
+  const next: Row = { ...row };
+  DRAWER_PRODUCT_SCOPE_KEYS.forEach((key) => { delete next[key]; });
+  return Object.assign(next, scope);
+}
+
+/**
+ * 合并详情服务端投影时，只让本轮搜索 seed 的产品范围拥有最高优先级。
+ * 其他详情字段仍由服务端更新；没有产品 seed 的普通入口保持原合并语义。
+ */
+export function mergePoolDrawerDetailRow(current: Row, server: Row, productSeed: Row = current): Row {
+  const merged: Row = { ...(current || {}), ...(server || {}) };
+  return replaceWithCanonicalProductScope(merged, productSeed || {});
+}
+
+export function usePoolDrawer(
+  apiToken: string,
+  avatarForItem: (item: any) => string,
+  mergeAvatarSeed: (item: any, avatar: any) => any,
+  accountKey?: string | number | null,
+) {
   const [selectedItem, setSelectedItem] = React.useState<any>(null);
   const [selectedDetailBundle, setSelectedDetailBundle] = React.useState<any>(null);
   const [detailLoading, setDetailLoading] = React.useState(false);
   const [detailError, setDetailError] = React.useState("");
   const selectedItemIdRef = React.useRef<any>(null);
-  const drawerTokenRef = React.useRef(apiToken);
-  const previousDrawerTokenRef = React.useRef(apiToken);
+  const normalizedAccountKey = accountKey == null || String(accountKey).trim() === ""
+    ? "account-unresolved"
+    : String(accountKey);
+  const drawerIdentityRef = React.useRef({ token: apiToken, accountKey: normalizedAccountKey, generation: 0 });
+  if (drawerIdentityRef.current.token !== apiToken
+    || drawerIdentityRef.current.accountKey !== normalizedAccountKey) {
+    drawerIdentityRef.current = {
+      token: apiToken,
+      accountKey: normalizedAccountKey,
+      generation: drawerIdentityRef.current.generation + 1,
+    };
+  }
+  const drawerIdentity = drawerIdentityRef.current;
+  const previousDrawerIdentityRef = React.useRef(drawerIdentity);
   const drawerRequestGenerationRef = React.useRef(0);
-  const selectedItemTokenRef = React.useRef(apiToken);
-  drawerTokenRef.current = apiToken;
+  const selectedItemIdentityRef = React.useRef<typeof drawerIdentity | null>(null);
+  const selectedProductSeedRef = React.useRef<Row | null>(null);
   selectedItemIdRef.current = selectedItem?.id ?? null;
 
   React.useEffect(() => {
-    if (previousDrawerTokenRef.current === apiToken) return;
-    previousDrawerTokenRef.current = apiToken;
+    if (previousDrawerIdentityRef.current === drawerIdentity) return;
+    previousDrawerIdentityRef.current = drawerIdentity;
     drawerRequestGenerationRef.current += 1;
     selectedItemIdRef.current = null;
+    selectedItemIdentityRef.current = null;
+    selectedProductSeedRef.current = null;
     setSelectedItem(null);
     setSelectedDetailBundle(null);
     setDetailLoading(false);
     setDetailError("");
-  }, [apiToken]);
+  }, [drawerIdentity]);
 
   const openItem = React.useCallback(async (item: any) => {
-    const requestToken = apiToken;
+    const requestIdentity = drawerIdentity;
+    if (drawerIdentityRef.current !== requestIdentity) return;
     const requestGeneration = ++drawerRequestGenerationRef.current;
-    const isCurrentRequest = () => drawerTokenRef.current === requestToken
+    const isCurrentRequest = () => drawerIdentityRef.current === requestIdentity
       && drawerRequestGenerationRef.current === requestGeneration;
     const seedAvatar = avatarForItem(item);
     const seedItem = mergeAvatarSeed(item, seedAvatar);
-    selectedItemTokenRef.current = requestToken;
+    selectedProductSeedRef.current = seedItem;
+    selectedItemIdentityRef.current = requestIdentity;
     setSelectedItem(seedItem);
     setSelectedDetailBundle(null);
     setDetailError("");
@@ -252,17 +347,27 @@ export function usePoolDrawer(apiToken: string, avatarForItem: (item: any) => st
       const bundle = await getKolPoolDetailBundle(apiToken, seedItem.id);
       if (!isCurrentRequest()) return;
       const normalized = toCockpitKolPoolRows([bundle.item || seedItem])[0];
-      setSelectedDetailBundle(bundle);
+      const detailItem = mergePoolDrawerDetailRow(
+        seedItem,
+        { ...(bundle.item || {}), ...normalized },
+        seedItem,
+      );
+      setSelectedDetailBundle({ ...bundle, item: detailItem });
       // Full contact fields live only on this selected detail item. Do not add
       // them to the bulk normalizer/global KOL pool rows.
-      setSelectedItem(mergeAvatarSeed({ ...seedItem, ...(bundle.item || {}), ...normalized }, seedAvatar));
+      setSelectedItem(mergeAvatarSeed(detailItem, seedAvatar));
     } catch (err) {
       if (!isCurrentRequest()) return;
       try {
         const detail = await getKolPoolItem(apiToken, seedItem.id, false);
         if (!isCurrentRequest()) return;
         const normalized = toCockpitKolPoolRows([detail.item || seedItem])[0];
-        setSelectedItem(mergeAvatarSeed({ ...seedItem, ...(detail.item || {}), ...normalized, freshness: detail.freshness, refresh: detail.refresh }, seedAvatar));
+        const detailItem = mergePoolDrawerDetailRow(
+          seedItem,
+          { ...(detail.item || {}), ...normalized, freshness: detail.freshness, refresh: detail.refresh },
+          seedItem,
+        );
+        setSelectedItem(mergeAvatarSeed(detailItem, seedAvatar));
       } catch (fallbackErr) {
         if (!isCurrentRequest()) return;
         const msg = (fallbackErr as any)?.message || (fallbackErr as any)?.detail || (err as any)?.message || (err as any)?.detail || "详情接口读取失败";
@@ -272,33 +377,51 @@ export function usePoolDrawer(apiToken: string, avatarForItem: (item: any) => st
     } finally {
       if (isCurrentRequest()) setDetailLoading(false);
     }
-  }, [apiToken, avatarForItem, mergeAvatarSeed]);
+  }, [apiToken, avatarForItem, drawerIdentity, mergeAvatarSeed]);
 
   // 受众画像刷新完成后重拉 detail_bundle(不重置抽屉,静默换水;失败保留旧详情)。
   const reloadDetail = React.useCallback(async () => {
     const id = selectedItem?.id;
-    if (!apiToken || !id) return;
-    const requestToken = apiToken;
+    const requestIdentity = drawerIdentity;
+    if (!apiToken || !id
+      || drawerIdentityRef.current !== requestIdentity
+      || selectedItemIdentityRef.current !== requestIdentity) return;
     const requestGeneration = ++drawerRequestGenerationRef.current;
     try {
       const bundle = await getKolPoolDetailBundle(apiToken, id);
       if (!bundle || !bundle.item) return;
-      if (drawerTokenRef.current !== requestToken
+      if (drawerIdentityRef.current !== requestIdentity
         || drawerRequestGenerationRef.current !== requestGeneration
         || selectedItemIdRef.current !== id) return;
       const normalized = toCockpitKolPoolRows([bundle.item])[0];
-      setSelectedDetailBundle(bundle);
-      setSelectedItem((prev: any) => (prev && prev.id === id ? { ...prev, ...bundle.item, ...normalized, id } : prev));
+      const productSeed = selectedProductSeedRef.current || selectedItem || { id };
+      const bundleItem = mergePoolDrawerDetailRow(
+        productSeed,
+        { ...bundle.item, ...normalized, id },
+        productSeed,
+      );
+      setSelectedDetailBundle({ ...bundle, item: bundleItem });
+      setSelectedItem((prev: any) => (prev && prev.id === id
+        ? mergePoolDrawerDetailRow(prev, { ...bundle.item, ...normalized, id }, productSeed)
+        : prev));
     } catch { /* 静默:重拉失败保留旧详情 */ }
-  }, [apiToken, selectedItem?.id]);
+  }, [apiToken, drawerIdentity, selectedItem?.id]);
 
   const closeDrawer = React.useCallback(() => {
     drawerRequestGenerationRef.current += 1;
+    selectedItemIdentityRef.current = null;
+    selectedProductSeedRef.current = null;
     setSelectedItem(null);
     setSelectedDetailBundle(null);
     setDetailLoading(false);
     setDetailError("");
   }, []);
+
+  const setSelectedItemForCurrentAccount = React.useCallback((value: React.SetStateAction<any>) => {
+    if (drawerIdentityRef.current !== drawerIdentity) return;
+    selectedItemIdentityRef.current = drawerIdentity;
+    setSelectedItem(value);
+  }, [drawerIdentity]);
 
   // 任务板「打开」video/账号任务 → 消费 pending id,按 id 拉 detail 开抽屉(池内必有,
   // 不依赖 watchlist)。挂载即消费一次 + 监听事件(已在本页时点开也生效)。失败静默。
@@ -316,46 +439,63 @@ export function usePoolDrawer(apiToken: string, avatarForItem: (item: any) => st
     window.addEventListener("vkpi:open-kol-pool-item", consume);
     return () => window.removeEventListener("vkpi:open-kol-pool-item", consume);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiToken]);
+  }, [openItem]);
 
-  const visibleSelectedItem = selectedItemTokenRef.current === apiToken ? selectedItem : null;
-  const visibleDetailBundle = selectedItemTokenRef.current === apiToken ? selectedDetailBundle : null;
-  return { selectedItem: visibleSelectedItem, setSelectedItem, selectedDetailBundle: visibleDetailBundle, detailLoading: visibleSelectedItem ? detailLoading : false, detailError: visibleSelectedItem ? detailError : "", openItem, reloadDetail, closeDrawer };
+  const ownsSelectedItem = selectedItemIdentityRef.current === drawerIdentity;
+  const visibleSelectedItem = ownsSelectedItem ? selectedItem : null;
+  const visibleDetailBundle = ownsSelectedItem ? selectedDetailBundle : null;
+  return { selectedItem: visibleSelectedItem, setSelectedItem: setSelectedItemForCurrentAccount, selectedDetailBundle: visibleDetailBundle, detailLoading: visibleSelectedItem ? detailLoading : false, detailError: visibleSelectedItem ? detailError : "", openItem, reloadDetail, closeDrawer };
 }
 
 /* ============ 收藏管线(C3 接线 + 候选 materialize 先建档拿真 id,旧页逻辑原样) ============ */
 
 export function usePoolFavorites(
   apiToken: string,
+  accountKey: string | number | null | undefined,
   selectedItem: any,
   setSelectedItem: React.Dispatch<any>,
   avatarForItem: (item: any) => string,
 ) {
   const [myList, setMyList] = React.useState<Set<unknown>>(() => new Set());
   const myListRef = React.useRef<Set<unknown>>(new Set());
-  const inFlightRef = React.useRef<Set<string>>(new Set());
-  const syncGenerationRef = React.useRef(0);
-  // 收藏写请求也必须绑定发起时身份。仅保护 GET 回读不够：旧 token 的
-  // then/catch/finally 若在切换身份后落地，会覆盖新身份星标、错误态，甚至
-  // 删除新身份同一 KOL 的 in-flight 锁。generation 处理 A→B→A，token
-  // snapshot 让身份在 render 当刻即失效，不等 effect cleanup。
-  const mutationIdentityRef = React.useRef({ token: apiToken, generation: 0 });
-  if (mutationIdentityRef.current.token !== apiToken) {
-    mutationIdentityRef.current = {
+  const normalizedAccountKey = accountKey == null || String(accountKey).trim() === ""
+    ? "account-unresolved"
+    : String(accountKey);
+  const favoritesIdentityRef = React.useRef({ token: apiToken, accountKey: normalizedAccountKey, generation: 0 });
+  if (favoritesIdentityRef.current.token !== apiToken
+    || favoritesIdentityRef.current.accountKey !== normalizedAccountKey) {
+    favoritesIdentityRef.current = {
       token: apiToken,
-      generation: mutationIdentityRef.current.generation + 1,
+      accountKey: normalizedAccountKey,
+      generation: favoritesIdentityRef.current.generation + 1,
     };
   }
+  const favoritesIdentity = favoritesIdentityRef.current;
+  const myListIdentityRef = React.useRef<typeof favoritesIdentity>(favoritesIdentity);
+  const syncStateIdentityRef = React.useRef<typeof favoritesIdentity>(favoritesIdentity);
+  const inFlightRef = React.useRef<Set<string>>(new Set());
+  const syncGenerationRef = React.useRef(0);
+  // 收藏写请求也必须绑定发起时身份。仅保护 GET 回读不够：旧账号的
+  // then/catch/finally 若在切换身份后落地，会覆盖新身份星标、错误态，甚至
+  // 删除新身份同一 KOL 的 in-flight 锁。generation 处理 A→B→A，token
+  // snapshot 让 token/accountKey 在 render 当刻即失效，不等 effect cleanup。
   React.useEffect(() => () => {
-    const current = mutationIdentityRef.current;
-    mutationIdentityRef.current = { token: current.token, generation: current.generation + 1 };
+    const current = favoritesIdentityRef.current;
+    favoritesIdentityRef.current = { ...current, generation: current.generation + 1 };
   }, []);
   const [syncState, setSyncState] = React.useState<"idle" | "loading" | "synced" | "error">("idle");
   const [syncError, setSyncError] = React.useState("");
 
-  const updateMyList = React.useCallback((updater: (current: Set<unknown>) => Set<unknown>) => {
+  const updateMyList = React.useCallback((
+    identity: typeof favoritesIdentity,
+    updater: (current: Set<unknown>) => Set<unknown>,
+  ) => {
+    if (favoritesIdentityRef.current !== identity) return;
     setMyList((current) => {
-      const next = updater(current);
+      if (favoritesIdentityRef.current !== identity) return current;
+      const base = myListIdentityRef.current === identity ? current : new Set<unknown>();
+      const next = updater(base);
+      myListIdentityRef.current = identity;
       myListRef.current = next;
       return next;
     });
@@ -368,7 +508,11 @@ export function usePoolFavorites(
   // token/身份变化先清空旧身份星标；空数组也必须覆盖旧集合。读取失败显式标错，
   // 不再把陈旧内存态伪装成服务端收藏。
   React.useEffect(() => {
+    const syncIdentity = favoritesIdentity;
+    if (favoritesIdentityRef.current !== syncIdentity) return undefined;
     myListRef.current = new Set();
+    myListIdentityRef.current = syncIdentity;
+    syncStateIdentityRef.current = syncIdentity;
     setMyList(new Set());
     inFlightRef.current.clear();
     setSyncError("");
@@ -383,9 +527,11 @@ export function usePoolFavorites(
       setSyncError("");
       // 与同页 SmartKolInputPanel 使用同一完整上限，让服务层合并同身份的
       // 并发 GET；两个消费方仍各自保留 identity/generation 落地保护。
-      void listKolPoolFavorites(apiToken, 5000)
+      void listKolPoolFavorites(apiToken, 5000, normalizedAccountKey)
         .then((resp) => {
-          if (cancelled || generation !== syncGenerationRef.current) return;
+          if (cancelled
+            || favoritesIdentityRef.current !== syncIdentity
+            || generation !== syncGenerationRef.current) return;
           const ids = (resp.items || []).map((it: any) => it.kol_pool_id).filter(Boolean);
           const next = new Set<unknown>(ids);
           myListRef.current = next;
@@ -393,7 +539,9 @@ export function usePoolFavorites(
           setSyncState("synced");
         })
         .catch((err: any) => {
-          if (cancelled || generation !== syncGenerationRef.current) return;
+          if (cancelled
+            || favoritesIdentityRef.current !== syncIdentity
+            || generation !== syncGenerationRef.current) return;
           setSyncState("error");
           setSyncError(String(err?.message || err?.detail || "收藏状态读取失败"));
         });
@@ -404,9 +552,10 @@ export function usePoolFavorites(
     window.addEventListener("vkpi:favorites-changed", syncFavorites);
     return () => {
       cancelled = true;
+      syncGenerationRef.current += 1;
       window.removeEventListener("vkpi:favorites-changed", syncFavorites);
     };
-  }, [apiToken]);
+  }, [apiToken, favoritesIdentity]);
 
   // 候选(new_discovered / 未入库,无真 kol_pool_id)先建档拿真 id 再收藏,
   // 否则收藏挂不到真 vkpi_kol_pool 行 → MY KOL 看不见。复用既有 importKolPool upsert。
@@ -439,13 +588,15 @@ export function usePoolFavorites(
       setSyncError("未登录，收藏未写入");
       return;
     }
-    const mutationIdentity = mutationIdentityRef.current;
-    const isCurrentMutation = () => mutationIdentityRef.current === mutationIdentity;
+    const mutationIdentity = favoritesIdentity;
+    if (favoritesIdentityRef.current !== mutationIdentity) return;
+    const isCurrentMutation = () => favoritesIdentityRef.current === mutationIdentity;
     const opKey = `${mutationIdentity.generation}:${String(id)}`;
     if (inFlightRef.current.has(opKey)) return;
     inFlightRef.current.add(opKey);
-    const wasIn = myListRef.current.has(id);
-    updateMyList((prev) => {
+    const wasIn = myListIdentityRef.current === mutationIdentity && myListRef.current.has(id);
+    syncStateIdentityRef.current = mutationIdentity;
+    updateMyList(mutationIdentity, (prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
       return next;
@@ -454,7 +605,7 @@ export function usePoolFavorites(
     setSyncError("");
     const rollback = (err?: any) => {
       if (!isCurrentMutation()) return;
-      updateMyList((prev) => {
+      updateMyList(mutationIdentity, (prev) => {
         const next = new Set(prev);
         if (wasIn) next.add(id); else next.delete(id);
         setSyncState("error");
@@ -494,7 +645,7 @@ export function usePoolFavorites(
         await favoriteKolPool(apiToken, newId);
         if (!isCurrentMutation()) return;
         // 用真 id 替换乐观 Set 里的占位;并把 selectedItem.id 升级为真 id。
-        updateMyList((prev) => {
+        updateMyList(mutationIdentity, (prev) => {
           const next = new Set(prev);
           next.delete(id);
           next.add(newId);
@@ -508,12 +659,62 @@ export function usePoolFavorites(
         finish();
       }
     })();
-  }, [apiToken, materializeCandidate, publishFavoritesChanged, setSelectedItem, updateMyList]);
+  }, [apiToken, favoritesIdentity, materializeCandidate, publishFavoritesChanged, setSelectedItem, updateMyList]);
 
-  return { myList, toggleMyList, syncState, syncError };
+  const ownsFavoriteState = myListIdentityRef.current === favoritesIdentity;
+  const ownsSyncState = syncStateIdentityRef.current === favoritesIdentity;
+  return {
+    myList: ownsFavoriteState ? myList : new Set<unknown>(),
+    toggleMyList,
+    syncState: ownsSyncState ? syncState : "idle" as const,
+    syncError: ownsSyncState ? syncError : "",
+  };
 }
 
 /* ============ 召回/账号结果 → 抽屉(openRecallItem / openProfileItem,旧页逻辑原样) ============ */
+
+/** 把搜索产品上下文带进详情 seed；家族身份单独保留，不能塞进 product_sku 冒充精确型号。 */
+export function recallProductScopeForDrawer(primary: Row, fallback: Row = {}): Row {
+  // 产品范围是一个身份整体，不能按字段在 primary/fallback 间拼接。
+  // primary 只要有任一有效范围字段，fallback 的历史 SKU/家族/上下文就全部失效。
+  const source = hasProductScope(primary || {})
+    ? primary
+    : hasProductScope(fallback || {})
+      ? fallback
+      : {};
+  const context = validProductScopeValue("product_context", source.product_context)
+    ? source.product_context as Row
+    : null;
+  const contextKind = firstProductScopeValue(context as Row, "kind");
+  const scalarSku = firstProductScopeValue(source, "product_sku", "productSku");
+  const scalarFamily = firstProductScopeValue(source, "product_family", "productFamily");
+  const scalarFamilyName = firstProductScopeValue(source, "product_family_name", "productFamilyName");
+  const familyScoped = contextKind === "product_family"
+    || (!contextKind && !scalarSku && Boolean(scalarFamily || scalarFamilyName));
+  const exactScoped = contextKind === "catalog_sku" || (!contextKind && Boolean(scalarSku));
+  const sku = exactScoped
+    ? firstProductScopeValue(context as Row, "sku") ?? scalarSku
+    : undefined;
+  const scalarIdentity = firstProductScopeValue(source, "product_identity", "productIdentity");
+  const contextIdentity = firstProductScopeValue(context as Row, "identity");
+  const identity = contextIdentity ?? scalarIdentity ?? sku ?? scalarFamily;
+  const family = familyScoped ? contextIdentity ?? scalarFamily ?? scalarIdentity : undefined;
+  const familyName = familyScoped
+    ? firstProductScopeValue(context as Row, "label") ?? scalarFamilyName
+    : undefined;
+  const productName = identity
+    ? firstProductScopeValue(context as Row, "label")
+      ?? firstProductScopeValue(source, "product_name", "productName")
+    : undefined;
+  return {
+    ...(context ? { product_context: context } : {}),
+    ...(sku ? { product_sku: sku } : {}),
+    ...(identity ? { product_identity: identity } : {}),
+    ...(family ? { product_family: family } : {}),
+    ...(familyName ? { product_family_name: familyName } : {}),
+    ...(productName ? { product_name: productName } : {}),
+  };
+}
 
 export function useSmartOpeners(
   apiToken: string,
@@ -528,7 +729,8 @@ export function useSmartOpeners(
     const avatar = avatarCandidate(recallItem) || avatarCandidate(matched);
     // ① 库内项(有 kol_pool_id)→ openItem 拉 detail_bundle 打开抽屉看全部信息。
     if (id) {
-      void openItem(mergeAvatarSeed({
+      const productScope = recallProductScopeForDrawer(recallItem, matched);
+      const seed = replaceWithCanonicalProductScope({
         ...matched,
         id,
         kol_pool_id: id,
@@ -537,9 +739,10 @@ export function useSmartOpeners(
         platform: recallItem.platform || matched.platform,
         profile_type: recallItem.profile_type || matched.profile_type,
         followers: recallItem.followers ?? matched.followers,
-        product_sku: recallItem.product_sku || recallItem.productSku || matched.product_sku || matched.productSku,
+        ...productScope,
         candidate_kind: matched.candidate_kind || "existing",
-      }, avatar));
+      }, productScope);
+      void openItem(mergeAvatarSeed(seed, avatar));
       return;
     }
     // ② 全网发现项(new_creator,无 kol_pool_id):先按 handle+platform 反查真池行,
@@ -560,7 +763,7 @@ export function useSmartOpeners(
         followers: recallItem.followers ?? src.followers ?? null,
         profile_url: String(recallItem.profile_url || src.profile_url || src.channel_url || src.source_url || "").trim(),
         bio: why,
-        product_sku: recallItem.product_sku || recallItem.productSku || null,
+        ...recallProductScopeForDrawer(recallItem),
         candidate_kind: "new_discovered",
       }, avatar));
     };
@@ -578,7 +781,7 @@ export function useSmartOpeners(
               platform,
               profile_type: recallItem.profile_type || "creator",
               followers: recallItem.followers ?? src.followers ?? null,
-              product_sku: recallItem.product_sku || recallItem.productSku || null,
+              ...recallProductScopeForDrawer(recallItem),
               candidate_kind: "existing",
             }, avatar));
             return;

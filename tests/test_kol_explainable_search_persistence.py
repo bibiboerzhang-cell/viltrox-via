@@ -466,21 +466,22 @@ def test_provider_free_planner_does_not_clarify_series_word_substrings(
 
 
 @pytest.mark.parametrize(
-    ("query", "series"),
+    ("query", "series", "reason"),
     [
-        ("EPIC 65mm macro anamorphic cinematographer", "EPIC"),
-        ("Vintage Z1 Pro flash portrait creators", "VINTAGE"),
-        ("find creators for 26 e vo lens", "EVO"),
+        ("EPIC 65mm macro anamorphic cinematographer", "EPIC", "explicit_product_not_in_catalog"),
+        ("Vintage Z1 Pro flash portrait creators", "VINTAGE", "recognized_product_alias_not_in_catalog"),
+        ("find creators for 26 e vo lens", "EVO", "explicit_product_not_in_catalog"),
     ],
 )
 def test_provider_free_planner_preserves_explicit_product_series_guard(
     monkeypatch: pytest.MonkeyPatch,
     query: str,
     series: str,
+    reason: str,
 ) -> None:
     monkeypatch.setattr(product_resolver, "list_product_catalog", lambda **_kwargs: {"products": []})
     plan = smart_query_planner.plan_text_query_provider_free(query, body={})
     assert plan["status"] == "needs_clarification"
-    assert plan["reason"] == "explicit_product_not_in_catalog"
+    assert plan["reason"] == reason
     assert plan["provider_calls_performed"] is False
     assert plan["clarification"]["requested_series"] == series
