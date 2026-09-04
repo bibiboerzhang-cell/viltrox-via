@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import urllib.robotparser
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -88,14 +89,25 @@ def _save_site_contacts(conn: Any, kol_pool_id: int, base: str, found: list[dict
     return len(rows)
 
 
-def _scan_site_contacts(conn: Any, url: str, kol_pool_id: int) -> dict[str, Any]:
+def _scan_site_contacts(
+    conn: Any,
+    url: str,
+    kol_pool_id: int,
+    *,
+    robots_allows: Callable[[str], bool] | None = None,
+    site_already_scanned: Callable[[Any, int, str], bool] | None = None,
+    save_site_contacts: Callable[[Any, int, str, list[dict[str, Any]]], int] | None = None,
+) -> dict[str, Any]:
     """同步跑一次网页抓取腿;每一种结局都如实回执,不假装成功也不假装失败。"""
     from app.domains.kol import contact_website_scrape
 
+    robots_allows = robots_allows or _robots_allows
+    site_already_scanned = site_already_scanned or _site_already_scanned
+    save_site_contacts = save_site_contacts or _save_site_contacts
     base = url_route_plan.site_base(url)
-    if kol_pool_id and _site_already_scanned(conn, kol_pool_id, base):
+    if kol_pool_id and site_already_scanned(conn, kol_pool_id, base):
         return {"status": "site_already_scanned", "message": "这个网站之前已经读过,直接用已有的资料。"}
-    if not _robots_allows(url):
+    if not robots_allows(url):
         return {"status": "site_scan_skipped", "message": "这个网站声明了不允许自动读取,已按它的要求跳过。"}
     try:
         found = contact_website_scrape.scrape_contacts_from_url(
@@ -107,7 +119,7 @@ def _scan_site_contacts(conn: Any, url: str, kol_pool_id: int) -> dict[str, Any]
         return {"status": "site_scan_failed", "message": "这个网站这次没能打开,可以稍后再试。"}
     if not kol_pool_id:
         return {"status": "site_scanned", "contacts_found": len(kept), "contacts_saved": 0}
-    return {"status": "site_scanned", "contacts_found": len(kept), "contacts_saved": _save_site_contacts(conn, kol_pool_id, base, kept)}
+    return {"status": "site_scanned", "contacts_found": len(kept), "contacts_saved": save_site_contacts(conn, kol_pool_id, base, kept)}
 
 
 def _divert_off_crawler_url(
@@ -116,6 +128,7 @@ def _divert_off_crawler_url(
     *,
     kol_pool_id: int | None,
     monitored: bool,
+    scan_site_contacts: Callable[[Any, str, int], dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """账号抓取通道读不了的链接就地了结,返回回执;能走原通道的返回 None。
 
@@ -130,6 +143,6 @@ def _divert_off_crawler_url(
         return None
     receipt = route.receipt()
     if route.route == url_route_plan.ROUTE_WEBSITE:
-        receipt.update(_scan_site_contacts(conn, route.target_url, int(kol_pool_id or 0)))
+        scanner = scan_site_contacts or _scan_site_contacts
+        receipt.update(scanner(conn, route.target_url, int(kol_pool_id or 0)))
     return receipt
-

@@ -381,7 +381,39 @@ def _profile_job_idempotency_key(
     )
 
 
-_divert_off_crawler_url = site_scan._divert_off_crawler_url
+# Keep the historical queue-module patch points alive after the site-scan split.
+# Tests and callers may replace these guards; the wrappers deliberately resolve
+# them at call time so a replacement still governs the real scan path.
+_robots_allows = site_scan._robots_allows
+_site_already_scanned = site_scan._site_already_scanned
+_save_site_contacts = site_scan._save_site_contacts
+
+
+def _scan_site_contacts(conn: Any, url: str, kol_pool_id: int) -> dict[str, Any]:
+    return site_scan._scan_site_contacts(
+        conn,
+        url,
+        kol_pool_id,
+        robots_allows=_robots_allows,
+        site_already_scanned=_site_already_scanned,
+        save_site_contacts=_save_site_contacts,
+    )
+
+
+def _divert_off_crawler_url(
+    conn: Any,
+    clean_url: str,
+    *,
+    kol_pool_id: int | None,
+    monitored: bool,
+) -> dict[str, Any] | None:
+    return site_scan._divert_off_crawler_url(
+        conn,
+        clean_url,
+        kol_pool_id=kol_pool_id,
+        monitored=monitored,
+        scan_site_contacts=_scan_site_contacts,
+    )
 
 
 def _canonical_enqueued_profile_url(
