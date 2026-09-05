@@ -144,14 +144,27 @@ def collect_subject_footprint(kol_pool_id: int) -> dict[str, Any]:
 
 
 def erase_subject(kol_pool_id: int, *, dsar_request_id: int, staff: dict[str, Any] | None = None) -> dict[str, Any]:
-    """执行级联删除。须先有 approved 的 vkpi_dsar_requests 工单(辖区由 Jianbo 拍板后填)。
+    """执行主体绑定一致的 erasure 工单，状态须为 approved 或 executing。
 
     顺序:外部系统(Qdrant/R2)先删(失败可重试且不留悬挂)→ 无 FK 表 → 主体行(触发 DB CASCADE)。
     """
     conn = get_conn()
-    req = conn.execute("SELECT status FROM vkpi_dsar_requests WHERE id=?", (int(dsar_request_id),)).fetchone()
-    if not req or req["status"] not in ("approved", "executing"):
+    req = conn.execute(
+        "SELECT status, request_type, subject_kol_pool_id FROM vkpi_dsar_requests WHERE id=?",
+        (int(dsar_request_id),),
+    ).fetchone()
+    request = dict(req) if req else {}
+    if request.get("status") not in ("approved", "executing"):
         return {"status": "blocked", "reason": "dsar request not approved"}
+    if request.get("request_type") != "erasure":
+        return {"status": "blocked", "reason": "dsar request is not an erasure request"}
+    bound_subject = request.get("subject_kol_pool_id")
+    if (
+        not isinstance(kol_pool_id, int) or isinstance(kol_pool_id, bool) or kol_pool_id <= 0
+        or not isinstance(bound_subject, int) or isinstance(bound_subject, bool)
+        or bound_subject != kol_pool_id
+    ):
+        return {"status": "blocked", "reason": "dsar request subject does not match"}
     sid = str(int(kol_pool_id))
     footprint = collect_subject_footprint(kol_pool_id)
     receipt: dict[str, Any] = {"started_at": _utcnow()}

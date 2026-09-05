@@ -26,7 +26,7 @@ def _gate_block() -> str:
     return "\n".join(lines[start : end + 1])
 
 
-def _run_block(env_gate: str | None) -> list[str]:
+def _run_block(env_gate: str | None, tmp_path: Path) -> list[str]:
     block = _gate_block()
     harness = f"""
 set -u
@@ -40,7 +40,7 @@ REMOTE_CURRENT_DIR=/opt/viltrox-2.0/current
     env = {k: v for k, v in os.environ.items() if k != "VKPI_DEPLOY_SEPARATE_SCHEDULER"}
     if env_gate is not None:
         env["VKPI_DEPLOY_SEPARATE_SCHEDULER"] = env_gate
-    log = ROOT / "runtime" / "tmp" / f"scheduler-gate-{os.getpid()}-{env_gate or 'unset'}.log"
+    log = tmp_path / f"scheduler-gate-{os.getpid()}-{env_gate or 'unset'}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("")
     try:
@@ -62,15 +62,15 @@ def test_deploy_script_still_parses() -> None:
     assert completed.returncode == 0, completed.stderr
 
 
-def test_gate_defaults_off_and_never_touches_the_host() -> None:
-    assert _run_block(None) == []
-    assert _run_block("0") == []
-    assert _run_block("true") == []
-    assert _run_block("yes") == []
+def test_gate_defaults_off_and_never_touches_the_host(tmp_path: Path) -> None:
+    assert _run_block(None, tmp_path) == []
+    assert _run_block("0", tmp_path) == []
+    assert _run_block("true", tmp_path) == []
+    assert _run_block("yes", tmp_path) == []
 
 
-def test_gate_on_runs_exactly_one_reviewed_install_transaction() -> None:
-    calls = _run_block("1")
+def test_gate_on_runs_exactly_one_reviewed_install_transaction(tmp_path: Path) -> None:
+    calls = _run_block("1", tmp_path)
     assert len(calls) == 1
     command = calls[0]
     assert command.startswith("SSH viltrox-test set -eu;")

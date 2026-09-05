@@ -424,6 +424,48 @@ def test_admin_execute_access_marks_done_and_unlinked_subject_is_409(wired) -> N
     assert client.post(f"/api/admin/vkpi/dsar/requests/{ghost_id}/execute").status_code == 409
 
 
+@pytest.mark.parametrize("request_type", ["rectification", "unknown", "", "ERASURE", " erasure "])
+def test_admin_execute_non_erasure_never_deletes_or_changes_ticket(wired, monkeypatch, request_type) -> None:
+    from app.domains.kol import dsar_erasure
+
+    client, conn = wired
+    conn.execute("INSERT INTO vkpi_kol_pool (id, platform, handle) VALUES (9, 'tiktok', 'demo_creator')")
+    cursor = conn.execute(
+        "INSERT INTO vkpi_dsar_requests (request_type, subject_kol_pool_id, status) VALUES (?,9,'approved')",
+        (request_type,),
+    )
+    ticket_id = cursor.lastrowid
+    conn.commit()
+    before = dict(conn.execute("SELECT * FROM vkpi_dsar_requests WHERE id=?", (ticket_id,)).fetchone())
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("non-erasure request reached the subject deletion boundary")
+
+    monkeypatch.setattr(dsar_erasure, "erase_subject", forbidden)
+    statements = []
+    conn.set_trace_callback(statements.append)
+    result = client.post(f"/api/admin/vkpi/dsar/requests/{ticket_id}/execute")
+    conn.set_trace_callback(None)
+    assert result.status_code == 409
+    assert "manual handling" in result.json()["detail"]
+    assert statements and all(sql.lstrip().upper().startswith("SELECT") for sql in statements)
+    assert dict(conn.execute("SELECT * FROM vkpi_dsar_requests WHERE id=?", (ticket_id,)).fetchone()) == before
+    assert conn.execute("SELECT COUNT(*) FROM vkpi_kol_pool WHERE id=9").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("ticket", [{"status": "approved", "subject_kol_pool_id": 9},
+                                     {"status": "approved", "subject_kol_pool_id": 9, "request_type": None}])
+def test_admin_execute_missing_type_is_fail_closed(wired, monkeypatch, ticket) -> None:
+    from app.domains.kol import dsar_erasure
+
+    client, conn = wired
+    monkeypatch.setattr(dsar_public, "_load_ticket", lambda *args: ticket)
+    monkeypatch.setattr(dsar_erasure, "erase_subject", lambda *args, **kwargs: pytest.fail("missing type reached erasure"))
+    changes = conn.total_changes
+    assert client.post("/api/admin/vkpi/dsar/requests/1/execute").status_code == 409
+    assert conn.total_changes == changes
+
+
 def test_admin_list_is_honest_when_migration_missing(wired, monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = wired
     monkeypatch.setattr(dsar_public, "table_exists", lambda name: False)

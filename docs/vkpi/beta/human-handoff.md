@@ -253,17 +253,19 @@ curl -s -m 10 https://viltroxtest.com/health | head -c 200 ; echo
 - 回退:删键(回到 `all`)。
 - 耗时:5 分钟 + 一次发车观察。
 
-### H-18 迁移 307 / 308 / 309 上线后的只读核验
+### H-18 迁移 307–310 的发布前置条件与上线后只读核验
 
-- 步骤:班车自动应用迁移;发车后只读核对:
+- 发布前置条件（2026-09-04 核对）：`train.sh` 要求完整待执行迁移集合与已审阅策略精确匹配。当前 `vkpi-additive-nullable-defaultless-v1` 仅审阅 305–307；308–310 尚不满足该策略，标准班车会阻断，不能仅设置迁移名称或手工先执行 SQL 来绕过。须先完成独立迁移审阅、备份恢复演练及旧应用兼容性验证，并确认生产切换范围。
+- 只有完成上述前置条件且实际发布成功后，才做以下只读列核验：
   ```bash
   sudo -u postgres psql -d "$DB" -Atc "SELECT column_name FROM information_schema.columns WHERE table_name='users' AND column_name='token_version'"
   sudo -u postgres psql -d "$DB" -Atc "SELECT column_name FROM information_schema.columns WHERE table_name IN ('vkpi_kol_portal_tokens','apify_jobs') AND column_name IN ('expires_at','payload_purged_at')"
   sudo -u postgres psql -d "$DB" -Atc "SELECT column_name FROM information_schema.columns WHERE table_name='vkpi_dsar_requests' AND column_name IN ('source','public_ref','requester_contact')"
   ```
 - 验收:三条各返回预期列;上线当刻**没有**在线用户被踢(307 的 NULL=0 口径);登出后旧 cookie 再访问 `/api/auth/me` 401。
-- 回退:每张迁移都有 `_down.sql`;班车失败自动回滚。
-- 耗时:5 分钟。
+- 310 还须核验 `kol_profile_incremental_refresh` 保持关闭、每日配额表存在，并保留迁移前该任务的配置快照；是否重新启用抓取是单独的运营决定。
+- 回退边界：班车在可自动回退阶段恢复应用、环境及服务配置，**不会自动执行 `_down.sql` 或恢复数据库**。308 的已清理数据无法靠 down 恢复；309 down 会修改申请类型并丢弃新增申请字段；310 down 会删除配额账本。新 portal token 产生后的旧版兼容性也必须独立验证，不能把“列可兼容”当成完整应用兼容。
+- 上述列核验不代表迁移演练、回退演练或业务验收通过。
 
 ---
 

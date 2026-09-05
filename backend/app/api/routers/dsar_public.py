@@ -610,6 +610,8 @@ def admin_execute_request(ticket_id: int, staff=Depends(require_tab("vkpi", "adm
         conn.execute("UPDATE vkpi_dsar_requests SET status='done', executed_at=? WHERE id=?", (_utcnow(), int(ticket_id)))
         conn.commit()
         return {"status": "done", "note": "access request marked fulfilled (manual reply)"}
+    if request_type != "erasure":
+        raise HTTPException(status_code=409, detail="request type requires manual handling; only erasure can delete a subject")
     subject_id = ticket.get("subject_kol_pool_id")
     if not subject_id:
         raise HTTPException(status_code=409, detail="subject_kol_pool_id is not set; link the subject first")
