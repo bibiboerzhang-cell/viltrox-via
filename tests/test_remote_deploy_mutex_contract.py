@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEPLOY = ROOT / "scripts" / "ops" / "deploy_local_to_cloud.sh"
@@ -105,7 +107,9 @@ def test_mutex_cleanup_closes_the_control_fd_before_transport_cleanup() -> None:
 
 def test_transport_wrapper_fails_closed_if_mutex_holder_has_ended(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("VKPI_SAFE_PYTHON_PROFILE", "github-actions-static-v1")
     unexpected_client = tmp_path / "unexpected-client-run"
     fake_client = tmp_path / "real-ssh"
     fake_client.write_text(
@@ -132,6 +136,8 @@ def test_transport_wrapper_fails_closed_if_mutex_holder_has_ended(
         "VKPI_DEPLOY_REMOTE_LOCK_STATUS_FILE": str(status_file),
         "VKPI_TEST_CAPTURE": str(unexpected_client),
     }
+    # The mutex fixture must reach its own guard even when pytest runs in CI.
+    env.pop("VKPI_SAFE_PYTHON_PROFILE", None)
 
     completed = subprocess.run(
         [str(wrapper), "viltrox", "true"],

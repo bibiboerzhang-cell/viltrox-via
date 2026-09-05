@@ -111,7 +111,9 @@ def test_bootstrap_effective_control_master_is_true_not_ask() -> None:
 
 def test_immutable_transport_wrapper_survives_later_source_replacement(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("VKPI_SAFE_PYTHON_PROFILE", "github-actions-static-v1")
     mutable_source = tmp_path / "mutable-deploy.sh"
     mutable_source.write_bytes(DEPLOY.read_bytes())
     mutable_source.chmod(0o700)
@@ -165,6 +167,8 @@ def test_immutable_transport_wrapper_survives_later_source_replacement(
         "VKPI_DEPLOY_SSH_FAIL_CLOSED_PROXY": "/usr/bin/false",
         "VKPI_TEST_CAPTURE": str(capture),
     }
+    # Exercise transport semantics without inheriting the unrelated CI-only guard.
+    env.pop("VKPI_SAFE_PYTHON_PROFILE", None)
 
     completed = subprocess.run(
         [str(ssh_wrapper), "viltrox", "printf rollback-safe"],
@@ -221,7 +225,9 @@ def test_transport_wrapper_executes_the_requested_client_once(
     tmp_path: Path,
     tool: str,
     tail: list[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("VKPI_SAFE_PYTHON_PROFILE", "github-actions-static-v1")
     capture = tmp_path / f"{tool}.json"
     fake_client = tmp_path / f"real-{tool}"
     fake_client.write_text(
@@ -247,6 +253,7 @@ def test_transport_wrapper_executes_the_requested_client_once(
         "VKPI_DEPLOY_SSH_FAIL_CLOSED_PROXY": "/usr/bin/false",
         "VKPI_TEST_CAPTURE": str(capture),
     }
+    env.pop("VKPI_SAFE_PYTHON_PROFILE", None)
 
     completed = subprocess.run(
         [str(wrapper), *tail],
@@ -284,7 +291,9 @@ def test_transport_wrapper_executes_the_requested_client_once(
 
 def test_transport_wrapper_fails_closed_before_client_on_invalid_socket(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("VKPI_SAFE_PYTHON_PROFILE", "github-actions-static-v1")
     capture = tmp_path / "unexpected-client-run"
     fake_client = tmp_path / "real-ssh"
     fake_client.write_text(
@@ -305,6 +314,7 @@ def test_transport_wrapper_fails_closed_before_client_on_invalid_socket(
         "VKPI_DEPLOY_SSH_CONTROL_PERSIST_SECONDS": "3600",
         "VKPI_TEST_CAPTURE": str(capture),
     }
+    env.pop("VKPI_SAFE_PYTHON_PROFILE", None)
 
     completed = subprocess.run(
         [str(wrapper), "viltrox", "true"],

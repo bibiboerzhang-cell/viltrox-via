@@ -20,12 +20,17 @@ def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_deploy_rejects_exported_browser_tokens_before_any_child_process() -> None:
+def test_deploy_rejects_exported_browser_tokens_before_any_child_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     deploy_path = ROOT / "scripts" / "ops" / "deploy_local_to_cloud.sh"
     sentinel = "header.payload.exported-secret"
+    monkeypatch.setenv("VKPI_SAFE_PYTHON_PROFILE", "github-actions-static-v1")
 
     for variable in ("VKPI_BROWSER_GATE_TOKEN", "POST_DEPLOY_BROWSER_TOKEN"):
         environment = {**os.environ, variable: sentinel}
+        # This fixture targets the bearer guard, not the earlier CI-only guard.
+        environment.pop("VKPI_SAFE_PYTHON_PROFILE", None)
         result = subprocess.run(
             ["/bin/bash", str(deploy_path)],
             cwd=ROOT,
@@ -42,8 +47,11 @@ def test_deploy_rejects_exported_browser_tokens_before_any_child_process() -> No
         assert "dirty worktree" not in result.stderr
 
 
-def test_production_loopback_endpoints_reject_every_override_before_children() -> None:
+def test_production_loopback_endpoints_reject_every_override_before_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     deploy_path = ROOT / "scripts" / "ops" / "deploy_local_to_cloud.sh"
+    monkeypatch.setenv("VKPI_SAFE_PYTHON_PROFILE", "github-actions-static-v1")
     hostile_values = (
         {"HEALTH_URL": "http://127.0.0.1:8002/health"},
         {"HEALTH_URL": "http://localhost:8001/health"},
@@ -60,10 +68,12 @@ def test_production_loopback_endpoints_reject_every_override_before_children() -
     )
 
     for override in hostile_values:
+        environment = {**os.environ, **override}
+        environment.pop("VKPI_SAFE_PYTHON_PROFILE", None)
         result = subprocess.run(
             ["/bin/bash", str(deploy_path)],
             cwd=ROOT,
-            env={**os.environ, **override},
+            env=environment,
             capture_output=True,
             text=True,
             check=False,
@@ -89,6 +99,30 @@ def test_production_loopback_endpoints_reject_every_override_before_children() -
         'REMOTE_ACCEPTANCE_BASE_URL="${PRODUCTION_REMOTE_ACCEPTANCE_BASE_URL}"'
         in deploy
     )
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "message"),
+    (
+        ("deploy_local_to_cloud.sh", "GitHub static Python profile is forbidden for deployment"),
+        ("train.sh", "GitHub static Python profile is forbidden for release trains"),
+    ),
+)
+def test_release_entrypoints_still_reject_a_caller_ci_profile(
+    entrypoint: str, message: str,
+) -> None:
+    # Unlike the guard-specific fixtures above, preserve the prohibited profile.
+    result = subprocess.run(
+        ["/bin/bash", str(ROOT / "scripts" / "ops" / entrypoint)],
+        cwd=ROOT,
+        env={**os.environ, "VKPI_SAFE_PYTHON_PROFILE": "github-actions-static-v1"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode != 0
+    assert message in result.stderr
 
 
 def test_both_browser_controllers_start_with_an_empty_minimal_environment() -> None:
