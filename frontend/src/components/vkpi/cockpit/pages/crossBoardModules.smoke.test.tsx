@@ -233,7 +233,21 @@ describe("新增来源 wrapper 诚实空态", () => {
       },
     });
     render(<GtmSignalsXbCard apiToken="t" onOpenBoard={() => {}} />);
-    expect(await screen.findByText("本周暂无可用信号")).toBeInTheDocument();
+    expect(await screen.findByText("当前已读来源在对应窗口内暂无信号。")).toBeInTheDocument();
+    expect(screen.getByText("0 条")).toBeInTheDocument();
+    cleanup();
+  });
+
+  it("GTM 来源失败不显示零信号或完整计数", async () => {
+    apiFetchMock.mockResolvedValue({ weekly_signals: {
+      status: "empty", items: [], sources: {
+        brand_pulse: { status: "error" }, category_tracks: { status: "error" }, market_voice: { status: "error" },
+      },
+    } });
+    render(<GtmSignalsXbCard apiToken="t" onOpenBoard={() => {}} />);
+    expect(await screen.findByText("市场信号读取失败")).toBeInTheDocument();
+    expect(screen.queryByText("0 条")).toBeNull();
+    expect(screen.queryByText(/暂无信号/)).toBeNull();
     cleanup();
   });
 

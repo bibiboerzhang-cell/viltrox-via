@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import pwd
 import re
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -123,6 +124,37 @@ def test_release_entrypoints_still_reject_a_caller_ci_profile(
     )
     assert result.returncode != 0
     assert message in result.stderr
+
+
+def test_train_rejects_ci_profile_before_creating_runtime(tmp_path: Path) -> None:
+    # Only the copied entrypoint exists: no interpreter, health token, or services.
+    minimal_root = tmp_path / "minimal-repo"
+    script_dir = minimal_root / "scripts" / "ops"
+    script_dir.mkdir(parents=True)
+    train_path = script_dir / "train.sh"
+    shutil.copyfile(ROOT / "scripts" / "ops" / "train.sh", train_path)
+    runtime_path = minimal_root / "runtime"
+    assert not runtime_path.exists()
+
+    result = subprocess.run(
+        ["/bin/bash", str(train_path)],
+        cwd=minimal_root,
+        env={
+            "PATH": "/usr/bin:/bin",
+            "VKPI_SAFE_PYTHON_PROFILE": "github-actions-static-v1",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "[train] FATAL: GitHub static Python profile is forbidden for release trains\n"
+    )
+    assert not runtime_path.exists()
 
 
 def test_both_browser_controllers_start_with_an_empty_minimal_environment() -> None:

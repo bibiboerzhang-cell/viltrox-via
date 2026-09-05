@@ -28,6 +28,9 @@ from app.platform.llm_gateway_common import (
 from app.platform.llm_gateway_model_alias import resolve_model_alias as _resolve_model_alias
 from app.platform.models.runtime import ResolvedModelBinding, resolve_model_binding
 from app.platform.llm_gateway_invoke_limits import GatewayDeadlineExceeded, bounded_http_timeout
+from app.platform.llm_canary_transport import (
+    canary_active, consume_request_options, openai_response_evidence,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -204,6 +207,7 @@ def _close_http_client() -> None:
 
 def _request_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> dict[str, Any]:
     bounded_http_timeout(timeout)
+    request_options = consume_request_options()
     client = _get_http_client()
     content = json.dumps(payload).encode("utf-8")
     response = client.post(
@@ -211,6 +215,7 @@ def _request_json(url: str, payload: dict[str, Any], headers: dict[str, str], ti
         content=content,
         headers={**headers, "Content-Type": "application/json"},
         timeout=httpx.Timeout(bounded_http_timeout(timeout)),
+        **request_options,
     )
     response.raise_for_status()
     body = response.json()
@@ -408,6 +413,9 @@ def _call_openai(
             "input": prompt,
             "max_output_tokens": max(1, min(4000, int(max_output_tokens or 800))),
         }
+        if canary_active():
+            request_payload["store"] = False
+            request_payload["service_tier"] = "default"
         # Reasoning-capable GPT-5 revisions do not share one sampling-parameter
         # contract.  In particular, account-visible gpt-5.5 rejects temperature
         # on the Responses endpoint.  Omitting the optional knob preserves the
@@ -438,6 +446,7 @@ def _call_openai(
         return {
             "status": "success",
             "provider": "openai",
+            **openai_response_evidence(body),
             "model": str(body.get("model") or model),
             "text": (str(body.get("output_text") or "") or "".join(text_parts)).strip(),
             "input_tokens": input_tokens,

@@ -23,6 +23,7 @@ UNCACHEABLE_STATUSES = frozenset(
     {
         "error",
         "degraded",
+        "partial",
         "unavailable",
         "scope_unavailable",
     }

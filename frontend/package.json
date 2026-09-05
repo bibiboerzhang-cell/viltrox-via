@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "generate:cross-board-catalog": "node scripts/generate-cross-board-module-catalog.mjs",
-    "check:i18n": "node scripts/check-i18n-contract.mjs",
+    "check:i18n": "node --test scripts/i18n-dictionary-reader.test.mjs && node scripts/check-i18n-contract.mjs",
     "build": "node scripts/generate-cross-board-module-catalog.mjs --check && tsc --noEmit && vite build --configLoader runner",
     "preview": "vite preview --host 0.0.0.0 --port 4173",
     "test": "vitest run --configLoader runner",

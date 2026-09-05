@@ -1,6 +1,7 @@
 import React from "react";
 import { apiFetch } from "../../../../services/http";
 import { getMarketBrainSummary } from "../../../../services/vkpi/gtmCommand-api";
+import { completeSignalCount } from "../../../../services/vkpi/marketSignalState";
 import { EmptyLine, ErrorCard, LoadingLine } from "./MarketVoicePage.modules";
 import { MODULE_SOURCES, SignalsBody } from "./GtmCommandBoardPage.modules";
 import { XbCard, useXbFetch, xbNoToken, type Row } from "./crossBoardModules.shell";
@@ -94,6 +95,7 @@ function AiReadinessBody({ data }: { data: Row }) {
 
 export function GtmSignalsXbCard({ apiToken, onOpenBoard }: { apiToken: string; onOpenBoard: () => void }) {
   const remote = useXbFetch(apiToken, fetchSummary);
+  const count = remote.data ? completeSignalCount(remote.data.weekly_signals) : null;
   let body: React.ReactNode;
   if (!apiToken) body = xbNoToken(BOARD_LABEL);
   else if (remote.error) body = <ErrorCard title="market-brain/summary 读取失败" text={remote.error} />;
@@ -105,7 +107,7 @@ export function GtmSignalsXbCard({ apiToken, onOpenBoard }: { apiToken: string; 
   return (
     <XbCard
       title="本周信号"
-      cnt={remote.data ? `${remote.data.weekly_signals.items.length} 条` : undefined}
+      cnt={count != null ? `${count} 条` : undefined}
       srcLabel={source.label}
       srcRows={source.rows}
       boardLabel={BOARD_LABEL}

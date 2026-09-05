@@ -8,7 +8,7 @@ and guarantees the two entrypoints share one cache/deferral contract.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from app.platform import llm_gateway_deferred as _deferred
 from app.platform import llm_gateway_result_cache as _result_cache
@@ -26,6 +26,32 @@ def cache_model_label(candidates: list[tuple[str, str, bool]]) -> str:
     return ""
 
 
+def cache_route_policy(candidates: list[tuple[str, str, bool]], *, require_runtime_verified: bool,
+                       atomic_reservation: bool) -> dict[str, Any]:
+    """Canonicalize aliases without adding calls to the injected primary-label hook."""
+    return {
+        "candidates": [(cache_model_label([item]), item[2]) for item in candidates],
+        "require_runtime_verified": require_runtime_verified,
+        "atomic_reservation": atomic_reservation,
+    }
+
+
+def cache_binding_allowed(candidates: list[tuple[str, str, bool]], *, resolve_binding: Any,
+                          binding_blocker: Any, require_runtime_verified: bool) -> bool:
+    """Recheck current primary-model admission on a hit, without reserving spend."""
+    if not candidates:
+        return False
+    provider, model_id, explicit_model = candidates[0]
+    try:
+        binding = resolve_binding(provider, model_id)
+        return not binding_blocker(
+            binding, explicit_model=explicit_model,
+            require_runtime_verified=require_runtime_verified,
+        )
+    except Exception:
+        return False
+
+
 def serve_cached_result(
     *,
     plan: Any,
@@ -37,6 +63,7 @@ def serve_cached_result(
     metadata: dict[str, Any] | None,
     staff: dict[str, Any] | None,
     cost_scope: str,
+    accept_cached: Callable[[dict[str, Any]], bool] | None = None,
 ) -> dict[str, Any] | None:
     """Return a zero-cost hit (and ledger it) when the result cache has one."""
 
@@ -44,6 +71,15 @@ def serve_cached_result(
         return None
     cached = _result_cache.lookup(plan)
     if cached is None:
+        return None
+    try:
+        result = _result_cache.hit_result(cached, plan, purpose=purpose)
+    except (TypeError, ValueError, OverflowError):
+        # Malformed cached counters are a miss, not a failed live invocation.
+        return None
+    # JSON/schema, current model policy and deadline checks precede the success
+    # ledger. A rejected entry must not count as a successful zero-cost call.
+    if accept_cached is not None and not accept_cached(result):
         return None
     # cost_tag 故意不传:命中零成本,不往 vkpi_ai_cost_ledger 镜像 $0 行;
     # vkpi_llm_calls 仍落一行(cache_hit=true)供命中率埋点。
@@ -66,7 +102,7 @@ def serve_cached_result(
         },
         staff=staff,
     )
-    return _result_cache.hit_result(cached, plan, purpose=purpose)
+    return result
 
 
 def store_cached_result(plan: Any, result: dict[str, Any], audit: Any) -> None:

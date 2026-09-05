@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listSkills = vi.hoisted(() => vi.fn());
@@ -199,5 +199,89 @@ describe("SkillStudioPage human review", () => {
     expect(await screen.findByText("复核候选包含不可展示字段，已阻断")).toBeInTheDocument();
     expect(screen.queryByText(/never-show-this/)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "采纳并记录人工复核样本" })).toBeDisabled();
+  });
+});
+
+describe("campaign planning result identity and next steps", () => {
+  const output = {
+    status: "ok",
+    planning_readiness: {
+      status: "needs_evidence", executable: false, approval_status: "not_requested",
+      claim_status: "descriptive_only",
+      gaps: [{ code: "missing", message: "合成：需要补市场资料" }],
+      next_steps: [{ code: "check", title: "合成：核对来源", reason: "不能从缺失资料推定需求" }],
+    },
+  };
+  const setSkills = () => {
+    listSkills.mockResolvedValue([{ skill_name: "campaign_plan" }, { skill_name: "creator_match" }]);
+    listSkillRuns.mockResolvedValue([]);
+  };
+
+  it("shows draft guidance for a successful generation without calling approval", async () => {
+    setSkills();
+    runSkill.mockResolvedValue({ status: "ok", output, skill_run_id: 81 });
+    render(<SkillStudioPage apiToken="synthetic-token" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    expect(await screen.findByText("草稿已生成 · 未执行")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("先补齐判断依据");
+    expect(screen.getByText("合成：核对来源")).toBeInTheDocument();
+    expect(reviewSkillRun).not.toHaveBeenCalled();
+    expect(runSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["selection", "account"])("ignores an old run after %s changes", async (change) => {
+    setSkills();
+    let finish!: (value: unknown) => void;
+    runSkill.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    const view = render(<SkillStudioPage apiToken="synthetic-first" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    await waitFor(() => expect(runSkill).toHaveBeenCalledTimes(1));
+    if (change === "selection") fireEvent.click(screen.getByRole("button", { name: /creator_match/ }));
+    else view.rerender(<SkillStudioPage apiToken="synthetic-second" />);
+    await act(async () => { finish({ status: "ok", output, skill_run_id: 81 }); });
+    expect(screen.queryByText("已落账 #81")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "营销计划准备检查" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run" })).not.toBeDisabled();
+  });
+
+  it("refreshes the current review filter when a pending generation returns", async () => {
+    setSkills();
+    let finish!: (value: unknown) => void;
+    runSkill.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    render(<SkillStudioPage apiToken="synthetic-token" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    fireEvent.click(screen.getByRole("button", { name: "已评" }));
+    await waitFor(() => expect(listSkillRuns).toHaveBeenLastCalledWith("synthetic-token", "campaign_plan", 100, "reviewed"));
+    await act(async () => { finish({ status: "ok", output, skill_run_id: 81 }); });
+    expect(listSkillRuns).toHaveBeenLastCalledWith("synthetic-token", "campaign_plan", 100, "reviewed");
+    expect(screen.getByText("草稿已生成 · 未执行")).toBeInTheDocument();
+    expect(runSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a structured draft while raw JSON is collapsed, without a second run or review", async () => {
+    setSkills();
+    const resultOutput = { ...output, meta: { product: "Synthetic Product", market: "US", goal: "launch", budget_cents: 12345 },
+      plan: { budget_allocation: [], timeline: [], creator_mix: [], content_angles: [] } };
+    runSkill.mockResolvedValue({ status: "ok", output: resultOutput });
+    render(<SkillStudioPage apiToken="synthetic-token" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    expect(await screen.findByRole("region", { name: "营销规划草案" })).toHaveTextContent("Synthetic Product");
+    expect(screen.getByRole("region", { name: "营销计划准备检查" })).toBeInTheDocument();
+    const disclosure = screen.getByText("查看原始规划 JSON").closest("details")!;
+    expect(disclosure).not.toHaveAttribute("open");
+    fireEvent.click(screen.getByText("查看原始规划 JSON"));
+    expect(disclosure).toHaveAttribute("open");
+    expect(disclosure.querySelector("pre")).toHaveTextContent('"budget_cents": 12345');
+    expect(runSkill).toHaveBeenCalledTimes(1);
+    expect(reviewSkillRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-campaign output in the existing visible JSON presentation", async () => {
+    runSkill.mockResolvedValue({ status: "ok", output: { summary: "Synthetic creator match" } });
+    render(<SkillStudioPage apiToken="synthetic-token" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    expect(await screen.findByText(/Synthetic creator match/)).toBeInTheDocument();
+    expect(screen.queryByText("查看原始规划 JSON")).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "营销规划草案" })).not.toBeInTheDocument();
   });
 });

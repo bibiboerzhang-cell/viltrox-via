@@ -1,4 +1,4 @@
-"""Skill【campaign_plan_v1】—— 给定 {product, market, budget_cents, goal} 产出一份可执行营销战役蓝图。
+"""Skill【campaign_plan_v1】—— 给定 {product, market, budget_cents, goal} 产出待人审营销草案。
 
 形式化规范(对齐 skills/__init__.py 铁律):
   thin wrapper,不重写算法 —— 底层全复用现有服务:
@@ -8,14 +8,25 @@
   record=True 时 best-effort 调 skill_registry.record_skill_run 落一行运行账本(缺表/异常绝不拖垮主流程)。
 
 输入  INPUT_SCHEMA :{product, market, budget_cents, goal}
-输出  OUTPUT_SCHEMA:{plan:{creator_mix[], budget_allocation[], timeline[], content_angles[]}, risks[]}
+输出  OUTPUT_SCHEMA:{plan:{creator_mix[], budget_allocation[], timeline[], content_angles[]}, risks[], planning_readiness}
 
 红线:零触 viltrox_fit_score —— 创作者只读 list_pool 现成排序展示,绝不写 fit。
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import time
 from typing import Any, Callable, Optional
+
+from app.domains.marketing_brain.skills.campaign_plan_readiness import (
+    build_planning_readiness, normalize_candidate_pool, normalize_market_signals,
+)
+from app.domains.marketing_brain.skills.campaign_plan_validation import (
+    normalize_strategy, parse_budget, rule_budget_allocation,
+)
+from app.domains.marketing_brain.skills.campaign_candidate_evidence import (
+    attach_candidate_evidence, unique_pool_rows,
+)
 
 SKILL_NAME = "campaign_plan"
 SKILL_VERSION = "v1"
@@ -26,19 +37,20 @@ ModelFn = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 INPUT_SCHEMA: dict[str, Any] = {
     "product": "str  产品 / SKU 名(必填,用于检索定位)",
     "market": "str  目标市场地区码或名(如 US / EU / CN;可空=全球)",
-    "budget_cents": "int  战役总预算(分;>=0)",
+    "budget_cents": "int  战役总预算(分;>=0,<=9007199254740991;不接受bool/小数;缺失需确认)",
     "goal": "str  战役目标(如 awareness / conversion / launch;可空=awareness)",
 }
 
 OUTPUT_SCHEMA: dict[str, Any] = {
     "plan": {
-        "creator_mix": "list[dict]  创作者梯队配比(tier / share / count / sample_creators)",
+        "creator_mix": "list[dict]  创作者梯队配比(tier / share / count / sample_creators[evidence] / candidate_coverage)",
         "budget_allocation": "list[dict]  预算分配(bucket / pct / amount_cents)",
         "timeline": "list[dict]  阶段时间线(phase / week / focus)",
         "content_angles": "list[dict]  内容角度(angle / why / market_signal)",
     },
     "risks": "list[dict]  风险项(risk / severity / mitigation)",
-    "meta": "dict  product / market / budget_cents / goal / model_used / signal_coverage",
+    "meta": "dict  product / market / budget_cents(int|null) / goal / model_used / signal_coverage / budget_validation / output_warnings / model_cost",
+    "planning_readiness": "dict  服务端准备状态 / 未批准 / 不可执行 / 资料缺口 / 人工下一步",
 }
 
 # 战役目标 → 创作者梯队配比启发式(share 之和 = 1.0)。
@@ -77,8 +89,7 @@ def _candidate_pool(market: str, product: str) -> dict[str, Any]:
         from app.domains.kol import pool
 
         res = pool.list_pool(limit=24, country=market, query=product, sort_by="fit")
-        items = res.get("items") if isinstance(res, dict) else None
-        return {"items": list(items or []), "status": "ready" if items else "empty"}
+        return normalize_candidate_pool(res)
     except Exception:
         return {"items": [], "status": "unavailable"}
 
@@ -88,21 +99,18 @@ def _market_signals() -> dict[str, Any]:
     try:
         from app.domains.market import market_brain
 
-        brief = market_brain.build_daily_brief()
-        if isinstance(brief, dict):
-            return brief
+        brief = market_brain.build_daily_brief(sweep_expired=False)
+        return normalize_market_signals(brief)
     except Exception:
         logger.debug("suppressed exception (hardening): best-effort", exc_info=True)
         pass
     return {"status": "unavailable", "sections": {}, "coverage": "0/5"}
 
 
-def _sample_creators(pool_items: list[dict[str, Any]], tier_idx: int, count: int) -> list[dict[str, Any]]:
-    """从候选池切一段做展示样本(读现成字段,绝不写 fit)。tier_idx 用于切片分层,不重算评分。"""
+def _sample_creators(pool_items: list[dict[str, Any]], start: int, count: int) -> list[dict[str, Any]]:
+    """从已按Pool ID去重的池顺序取展示样本，不把tier当作个人属性。"""
     if not pool_items:
         return []
-    n = len(pool_items)
-    start = (tier_idx * 6) % max(1, n)
     out: list[dict[str, Any]] = []
     for it in pool_items[start:start + max(0, count)]:
         if not isinstance(it, dict):
@@ -123,32 +131,27 @@ def _rule_strategy(ctx: dict[str, Any]) -> dict[str, Any]:
     内容角度直接锚定市场信号(竞品动 + 机会窗 + 今日建议),让蓝图有真信号支撑。
     """
     goal = ctx.get("goal") or _DEFAULT_GOAL
-    budget_cents = _clean_int(ctx.get("budget_cents"))
-    pool_items: list[dict[str, Any]] = ctx.get("pool_items") or []
+    budget_cents = ctx.get("budget_cents")
+    pool_items = unique_pool_rows(ctx.get("pool_items") or [])
     signals: dict[str, Any] = ctx.get("signals") or {}
 
     mix_spec = _GOAL_MIX.get(goal, _GOAL_MIX[_DEFAULT_GOAL])
     creator_mix: list[dict[str, Any]] = []
-    for i, (tier, share) in enumerate(mix_spec):
+    sample_offset = 0
+    for tier, share in mix_spec:
         # 梯队人数:粗略按 share 摊到一个 10 人盘,至少 1。
         count = max(1, round(share * 10))
+        samples = _sample_creators(pool_items, sample_offset, min(count, 3))
+        sample_offset += len(samples)
         creator_mix.append({
             "tier": tier,
             "share": round(share, 2),
             "count": count,
-            "sample_creators": _sample_creators(pool_items, i, min(count, 3)),
+            "sample_creators": samples,
         })
 
     budget_spec = _GOAL_BUDGET.get(goal, _GOAL_BUDGET[_DEFAULT_GOAL])
-    budget_allocation: list[dict[str, Any]] = []
-    allocated = 0
-    for idx, (bucket, pct) in enumerate(budget_spec):
-        if idx == len(budget_spec) - 1:
-            amount = max(0, budget_cents - allocated)  # 末桶吃掉取整余数,保证合计 = 总预算
-        else:
-            amount = int(round(budget_cents * pct))
-            allocated += amount
-        budget_allocation.append({"bucket": bucket, "pct": round(pct, 2), "amount_cents": amount})
+    budget_allocation = rule_budget_allocation(budget_cents, budget_spec)
 
     timeline = [
         {"phase": "seed", "week": 1, "focus": "签约 + 内容简报对齐"},
@@ -185,7 +188,7 @@ def _rule_strategy(ctx: dict[str, Any]) -> dict[str, Any]:
             "market_signal": _str(a0.get("title")) or "today_action",
         })
     if not content_angles:
-        # 无真信号也给出产品本位的兜底角度,蓝图始终可执行。
+        # 无真信号仍保留可编辑模板,planning_readiness 明确待补证据、不可执行。
         content_angles.append({
             "angle": "产品核心卖点",
             "why": "市场信号暂缺,先以产品本位卖点切入",
@@ -214,7 +217,7 @@ def _derive_risks(plan: dict[str, Any], ctx: dict[str, Any]) -> list[dict[str, A
         risks.append({"risk": "预算偏低,梯队可能摊薄", "severity": "medium",
                       "mitigation": "收窄到 micro/nano 梯队聚焦单一市场"})
 
-    if pool_status in ("empty", "unavailable"):
+    if pool_status != "ready":
         risks.append({"risk": "候选创作者池为空", "severity": "high",
                       "mitigation": "先跑 KOL 发现/检索补池,再定梯队配比"})
 
@@ -244,7 +247,7 @@ def _shape_output(strategy: dict[str, Any], ctx: dict[str, Any], model_used: str
         "meta": {
             "product": ctx.get("product"),
             "market": ctx.get("market"),
-            "budget_cents": _clean_int(ctx.get("budget_cents")),
+            "budget_cents": ctx.get("budget_cents"),
             "goal": ctx.get("goal") or _DEFAULT_GOAL,
             "model_used": model_used,
             "signal_coverage": ctx.get("signal_coverage"),
@@ -270,10 +273,10 @@ def run(
     if not product:
         return {"status": "error", "error": "product required"}
     market = _str(payload.get("market"))
-    budget_cents = _clean_int(payload.get("budget_cents"))
+    budget_cents, budget_input_status = parse_budget(payload.get("budget_cents"))
     goal = _str(payload.get("goal")).lower() or _DEFAULT_GOAL
 
-    # ② 复用现有服务(只读)。
+    # ② 复用现有服务；市场读取不做过期写回，池仍保留既有bootstrap/cache行为。
     pool_res = _candidate_pool(market, product)
     signals = _market_signals()
     signal_coverage = signals.get("coverage") if isinstance(signals, dict) else None
@@ -288,23 +291,49 @@ def run(
         "signals": signals,
         "signal_coverage": signal_coverage,
     }
+    # Readiness comes from source observations, never model output or mutations.
+    planning_readiness = build_planning_readiness({**ctx, "budget_cents": budget_cents or 0})
 
     # ③ 策略步骤:有 model_fn 试走注入模型,失败/返回 None 回落规则启发式(默认不真烧)。
     model_used = "rule_v0"
     strategy: dict[str, Any] | None = None
-    if model_fn is not None:
+    model_called = False
+    output_warnings: list[str] = []
+    if model_fn is not None and planning_readiness["status"] == "needs_inputs":
+        output_warnings.append("model_skipped_needs_inputs")
+    elif model_fn is not None:
         try:
-            out = model_fn(ctx)
+            model_context = deepcopy(ctx)
+            model_called = True
+            out = model_fn(model_context)
             if isinstance(out, dict) and out:
                 strategy = out
                 model_used = _str(out.get("_model")) or "model_fn"
+            else:
+                output_warnings.append("model_output_invalid")
         except Exception:
             strategy = None
-    if strategy is None:
-        strategy = _rule_strategy(ctx)
+            output_warnings.append("model_call_failed")
+    strategy, allocation_status, budget_warnings, normalization_warnings = normalize_strategy(
+        strategy, _rule_strategy(ctx), budget=budget_cents, pool_items=ctx["pool_items"],
+    )
+    strategy["creator_mix"] = attach_candidate_evidence(strategy["creator_mix"], ctx["pool_items"])
 
     # ④ 形状化。
     result = _shape_output(strategy, ctx, model_used)
+    allocated = sum(row["amount_cents"] for row in strategy["budget_allocation"]) if budget_cents is not None else None
+    result["meta"]["budget_validation"] = {
+        "input_status": budget_input_status, "allocation_status": allocation_status,
+        "allocated_cents": allocated, "unallocated_cents": budget_cents - allocated if allocated is not None else None,
+        "warnings": budget_warnings,
+    }
+    result["meta"]["output_warnings"] = output_warnings + normalization_warnings
+    result["meta"]["model_cost"] = {
+        "status": "unknown" if model_called else "not_applicable",
+        "source": "injected_model_fn" if model_called else "rule_only",
+    }
+    result["planning_readiness"] = planning_readiness
+    result["status"] = "ok"  # Generation succeeded, not an execution/approval claim.
     latency_ms = int((time.monotonic() - t0) * 1000)
 
     # ⑤ best-effort 落账(缺表/异常绝不拖垮主流程)。
@@ -324,16 +353,16 @@ def run(
                     else f"{SKILL_NAME}:{SKILL_VERSION}:rule_v0"
                 ),
                 retrieved_context={"pool_status": ctx.get("pool_status"),
-                                   "signal_coverage": signal_coverage},
+                                   "signal_coverage": signal_coverage,
+                                   "model_cost": result["meta"]["model_cost"]},
                 output=result,
-                cost_cents=0,
+                cost_cents=0,  # Legacy registry has no unknown-cost representation; see model_cost.
                 latency_ms=latency_ms,
             )
         except Exception:
             logger.debug("suppressed exception (hardening): best-effort", exc_info=True)
             pass
 
-    result["status"] = "ok"
     return result
 
 

@@ -6,7 +6,7 @@
 
 设计(W-L1):
 
-- 键 = ``llm_result:{purpose}:{UTC 桶}:{sha256(模型 + 契约 + max_tokens + 规范化提示)}``
+- 键 = ``llm_result:{purpose}:{UTC 桶}:{sha256(v2 + 模型 + 契约 + 上下文 + 规范化提示)}``
   默认 TTL 1 天 → 桶 = UTC 日期;按 purpose 可配 TTL(``VKPI_LLM_RESULT_CACHE_TTL_BY_PURPOSE``
   形如 ``purpose=秒,purpose2=秒``;全局默认 ``VKPI_LLM_RESULT_CACHE_TTL_SECONDS``)。
 - 存 ``persistent_cache``(003 baseline 表,零新表零迁移;health_sentinel / runtime
@@ -19,6 +19,9 @@
   供 :func:`llm_gateway_ledger.llm_degrade_rate` 统计命中率。
 - 全局开关 ``VKPI_LLM_RESULT_CACHE_ENABLED``(默认开);调用方 metadata 里
   ``llm_result_cache=false`` 可按次绕过。
+- 服务器提供的身份/权限/策略上下文只作为不可逆指纹参与分区，不代替授权。
+  ``VKPI_LLM_RESULT_CACHE_POLICY_VERSION`` 可在未反映到 prompt/model 的策略变更时
+  显式失效旧缓存；未提供的租户、ACL 或数据版本不能由网关推断。
 
 所有库访问 best-effort:缓存层任何异常只降级成「未命中 / 未写入」并打 warning,
 绝不让 LLM 调用本身失败。SQL 只用 compat ``?`` 占位符。
@@ -33,6 +36,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.core.logging import get_logger
+from app.platform.models.runtime import response_model_matches
 
 logger = get_logger(__name__)
 
@@ -43,6 +47,20 @@ _TTL_DEFAULT_ENV = "VKPI_LLM_RESULT_CACHE_TTL_SECONDS"
 _TTL_BY_PURPOSE_ENV = "VKPI_LLM_RESULT_CACHE_TTL_BY_PURPOSE"
 _EXCLUDE_PURPOSES_ENV = "VKPI_LLM_RESULT_CACHE_EXCLUDE_PURPOSES"
 _METADATA_BYPASS_KEY = "llm_result_cache"
+_POLICY_VERSION_ENV = "VKPI_LLM_RESULT_CACHE_POLICY_VERSION"
+_CONTEXT_VERSION = "llm-result-context-v2"
+_STAFF_CONTEXT_KEYS = (
+    "id", "staff_id", "user_id", "tenant_id", "org_id", "organization_id",
+    "role", "is_owner", "is_admin", "permissions", "permissions_json",
+    "token_version", "authorization_version", "acl_version",
+)
+_METADATA_CONTEXT_KEYS = (
+    "tenant_id", "org_id", "organization_id", "brand_scope", "project_id",
+    "staff_id", "user_id", "actor_staff_id", "requested_staff_id", "view_as_staff_id",
+    "effective_staff_id", "authorization_scope", "acl_version", "permissions_version",
+    "policy_version", "schema_version", "prompt_version", "data_revision",
+    "execution_class", "provider_account_id", "llm_cache_context",
+)
 # 视频深析家族:结果由 analysis_cache(target_type/target_id/derive_method)持有,
 # 网关层不再叠一层按 prompt 的缓存。
 ANALYSIS_CACHE_PURPOSES = frozenset(
@@ -65,6 +83,58 @@ class CachePlan:
     ttl_seconds: int
     purpose: str
     model: str
+    context_hash: str = ""
+
+
+def _context_fingerprint(*, staff: Any, metadata: Any, cost_scope: str, policy: Any) -> str | None:
+    """Partition supplied server context; this is not an authorization check.
+
+    No token, password or arbitrary staff/profile fields enter the material.
+    Legacy background calls without staff still work, but callers must supply
+    tenant/ACL/data revisions for isolation beyond the context they provide.
+    Unsupported context disables caching instead of sharing an ambiguous key.
+    """
+    if staff is not None and (not isinstance(staff, dict) or not any(
+        staff.get(key) for key in ("id", "staff_id", "user_id")
+    )):
+        return None
+    if metadata is not None and not isinstance(metadata, dict):
+        return None
+    context = {
+        "version": _CONTEXT_VERSION,
+        "operator_policy_version": str(os.environ.get(_POLICY_VERSION_ENV) or "default"),
+        "staff": {key: staff[key] for key in _STAFF_CONTEXT_KEYS if key in staff} if staff else None,
+        "metadata": {key: metadata[key] for key in _METADATA_CONTEXT_KEYS if key in metadata} if metadata else {},
+        "cost_scope": cost_scope,
+        "policy": policy,
+    }
+    try:
+        encoded = json.dumps(context, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    except (TypeError, ValueError, OverflowError, RecursionError):
+        return None
+    if len(encoded) > 16_384:
+        return None
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def result_matches_plan(result: dict[str, Any], plan: CachePlan) -> bool:
+    """Do not store a fallback model under the requested primary model's key."""
+    expected_provider, separator, expected_model = plan.model.partition("/")
+    if not separator or not expected_provider or not expected_model:
+        return False
+    if str(result.get("provider") or "").strip().lower() != expected_provider.lower():
+        return False
+    if not response_model_matches(expected_model, str(result.get("model") or "")):
+        return False
+    binding = result.get("resolved_model_binding")
+    if binding is not None:
+        if not isinstance(binding, dict):
+            return False
+        if str(binding.get("provider") or "").lower() != expected_provider.lower():
+            return False
+        if str(binding.get("model_id") or "").lower() != expected_model.lower():
+            return False
+    return True
 
 
 def _truthy(value: Any, *, default: bool) -> bool:
@@ -147,6 +217,9 @@ def build_cache_plan(
     max_output_tokens: int = 0,
     metadata: dict[str, Any] | None = None,
     now: datetime | None = None,
+    staff: dict[str, Any] | None = None,
+    cost_scope: str = "",
+    policy: dict[str, Any] | None = None,
 ) -> CachePlan | None:
     """Return the cache plan for this request, or ``None`` when not cacheable."""
 
@@ -160,9 +233,13 @@ def build_cache_plan(
     normalised = normalise_prompt(prompt)
     if not normalised:
         return None
+    context_hash = _context_fingerprint(staff=staff, metadata=metadata, cost_scope=cost_scope, policy=policy)
+    if context_hash is None:
+        return None
     model_key = str(model or "").strip()
     material = "\n".join(
         (
+            f"context={context_hash}",
             f"model={model_key}",
             f"contract={str(contract or 'text').strip().lower()}",
             f"max_output_tokens={int(max_output_tokens or 0)}",
@@ -180,6 +257,7 @@ def build_cache_plan(
         ttl_seconds=ttl,
         purpose=purpose_key,
         model=model_key,
+        context_hash=context_hash,
     )
 
 
@@ -283,6 +361,13 @@ def lookup(plan: CachePlan, *, now: datetime | None = None) -> dict[str, Any] | 
         return None
     if not isinstance(value, dict) or not is_cacheable_result(value):
         return None
+    if (
+        value.get("context_hash") != plan.context_hash
+        or value.get("prompt_hash") != plan.prompt_hash
+        or value.get("purpose") != plan.purpose
+        or not result_matches_plan(value, plan)
+    ):
+        return None
     return value
 
 
@@ -295,7 +380,7 @@ def store(
 ) -> bool:
     """Persist a successful result; returns ``False`` when nothing was written."""
 
-    if not is_cacheable_result(result):
+    if not is_cacheable_result(result) or not result_matches_plan(result, plan):
         return False
     current = now or datetime.now(timezone.utc)
     entry = {
@@ -312,6 +397,7 @@ def store(
         "cached_at": _utc_iso(current),
         "purpose": plan.purpose,
         "prompt_hash": plan.prompt_hash,
+        "context_hash": plan.context_hash,
         "ttl_seconds": plan.ttl_seconds,
     }
     try:

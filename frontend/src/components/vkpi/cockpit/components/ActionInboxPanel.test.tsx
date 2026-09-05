@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 
 // W5 recon: ActionInboxPanel 渲染 smoke。组件自取数据(listActionInbox),seam = actionInbox-api。
@@ -10,6 +10,11 @@ const snoozeAction = vi.fn();
 const executeAction = vi.fn();
 const reconcileAction = vi.fn();
 const listRecentExecutionLedger = vi.fn(() => Promise.resolve({ items: [], available: true }));
+const apiFetch = vi.fn();
+vi.mock("../../../../services/http", () => ({
+  apiFetch: (...args: unknown[]) => apiFetch(...args),
+  jsonBody: (value: unknown) => JSON.stringify(value),
+}));
 vi.mock("../../../../services/vkpi/actionInbox-api", () => ({
   listActionInbox: (...a: unknown[]) => listActionInbox(...a),
   approveAction: (...a: unknown[]) => approveAction(...a),
@@ -29,6 +34,13 @@ beforeEach(() => {
   snoozeAction.mockReset();
   executeAction.mockReset();
   reconcileAction.mockReset();
+  apiFetch.mockReset();
+  listRecentExecutionLedger.mockReset().mockResolvedValue({ items: [], available: true });
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+});
+afterEach(() => {
+  // Restore only this suite's spy; restoreAllMocks would reset shared matchMedia setup.
+  if (vi.isMockFunction(window.confirm)) vi.mocked(window.confirm).mockRestore();
 });
 
 // 可执行类(kol_profile 真实 requires_approval=true:writes_business_data 写 profile 字段)。
@@ -92,7 +104,7 @@ describe("ActionInboxPanel 渲染 smoke", () => {
     expect(listActionInbox).not.toHaveBeenCalled();
   });
 
-  it("两步:通过 → 露出「执行」钮 → 执行成功后移除", async () => {
+  it("两步:批准不执行，执行返回后显示待验收且缺回执不补零", async () => {
     // 第一次 load:suggested 有 baseItem,approved 空。
     listActionInbox.mockImplementation((_tok: unknown, params: any) =>
       Promise.resolve(
@@ -110,12 +122,16 @@ describe("ActionInboxPanel 渲染 smoke", () => {
     await waitFor(() => expect(approveAction).toHaveBeenCalledWith("tok", 1));
     // approve 后本地转 approved → 露出「执行」按钮(锚定,避免匹配 footer「执行台账」)。
     const execBtn = await screen.findByRole("button", { name: /^执行$/ });
+    expect(screen.getByText("已批准 · 尚未执行")).toBeInTheDocument();
+    expect(executeAction).not.toHaveBeenCalled();
     // execute 二次确认:stub confirm 放行。
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     fireEvent.click(execBtn);
     await waitFor(() => expect(executeAction).toHaveBeenCalledWith("tok", 1));
-    // 成功 → 该项移除。
-    await waitFor(() => expect(screen.queryByText("补全王红人资料")).not.toBeInTheDocument());
+    expect(await screen.findByText("执行回执缺失 · 行数与费用未知，请核对台账。")).toBeInTheDocument();
+    expect(screen.getByText("补全王红人资料")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^执行$/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/未花钱|一切已跟进/)).not.toBeInTheDocument();
     confirmSpy.mockRestore();
   });
 
@@ -218,4 +234,218 @@ describe("ActionInboxPanel 渲染 smoke", () => {
     expect(screen.queryByRole("button", { name: /^执行$/ })).not.toBeInTheDocument();
     confirmSpy.mockRestore();
   });
+
+  it("入队回执只说明任务已提交，零估算不等于免费，台账同口径", async () => {
+    showApproved();
+    const detail = { enqueue: { status: "queued", job_id: "job-1" }, result_checklist: {
+      outcome: "success", jobs_created: 1, rows_written: 0, cost_spent_cents: 0,
+    } };
+    executeAction.mockResolvedValue({ ok: true, outcome: "success", ledger_id: 11, detail });
+    listRecentExecutionLedger.mockResolvedValue({ available: true, items: [
+      { id: 11, category: "kol_profile", outcome: "success", mode: "executed", detail_json: detail },
+    ] } as any);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^执行$/ }));
+    expect(await screen.findByText("任务已提交 · 结果待核验")).toBeInTheDocument();
+    expect(screen.getByText(/回执估算费用: \$0.00/)).toHaveTextContent("实际费用待成本台账核对");
+    expect(screen.getByText("执行记录含入队，不代表任务或业务完成。")).toBeInTheDocument();
+    expect(screen.queryByText("今日已执行")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^执行$/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "执行台账" }));
+    await waitFor(() => expect(screen.getAllByText("任务已提交 · 结果待核验")).toHaveLength(2));
+    expect(executeAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("确认失败保留结果行，不能被当作完成或重新审批", async () => {
+    showApproved();
+    executeAction.mockResolvedValue({ ok: false, outcome: "failed", reason: "entity_missing" });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^执行$/ }));
+    expect(await screen.findByText("执行失败")).toBeInTheDocument();
+    expect(screen.getByText(/关联实体已不存在/)).toBeInTheDocument();
+    expect(screen.getByText(baseItem.title)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^执行$|通过/ })).not.toBeInTheDocument();
+  });
+
+  it("预算阻断显示未执行，后续仍须人工决策", async () => {
+    showApproved();
+    executeAction.mockResolvedValue({ ok: false, outcome: "skipped", reason: "budget_hard_stop" });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^执行$/ }));
+    expect(await screen.findByText("未执行 · 待处理")).toBeInTheDocument();
+    expect(screen.getByText(/超出单次预算上限/)).toBeInTheDocument();
+    expect(executeAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("执行响应丢失后即使读到旧 approved 也保留未知且不重复执行", async () => {
+    showApproved();
+    executeAction.mockRejectedValue(new Error("connection lost"));
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^执行$/ }));
+    expect(await screen.findByText("结果未知 · 待核对")).toBeInTheDocument();
+    await waitFor(() => expect(listActionInbox).toHaveBeenCalledTimes(6));
+    expect(screen.queryByText(/操作未生效/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^执行$|人工对账/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTitle("刷新建议"));
+    await waitFor(() => expect(listActionInbox).toHaveBeenCalledTimes(9));
+    expect(screen.getByText("结果未知 · 待核对")).toBeInTheDocument();
+    expect(executeAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("执行响应与随后刷新都失败时保留未知记录，不宣称没有待办", async () => {
+    showApproved();
+    executeAction.mockImplementation(() => {
+      listActionInbox.mockRejectedValue(new Error("read failed"));
+      return Promise.reject(new Error("connection lost"));
+    });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^执行$/ }));
+    expect(await screen.findByText("状态刷新失败，保留上次记录；操作已暂停，请稍后刷新。")).toBeInTheDocument();
+    expect(screen.getByText("结果未知 · 待核对")).toBeInTheDocument();
+    expect(screen.getByText(baseItem.title)).toBeInTheDocument();
+    expect(screen.queryByText(/暂无待办建议/)).not.toBeInTheDocument();
+  });
+
+  it.each([{}, { ok: false }, { ok: true, status: "suggested" }])("批准响应不完整不推定已批准: %j", async (response) => {
+    listActionInbox.mockResolvedValue({ items: [baseItem], available: true });
+    approveAction.mockResolvedValue(response);
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: /通过/ }));
+    expect(await screen.findByText(/操作结果未确认/)).toBeInTheDocument();
+    expect(screen.getByText("建议待审批")).toBeInTheDocument();
+    expect(executeAction).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /^执行$/ })).not.toBeInTheDocument();
+  });
+
+  it.each(["failed", "unavailable"])("台账 %s 不伪装成暂无记录", async (kind) => {
+    listActionInbox.mockResolvedValue({ items: [], available: true });
+    if (kind === "failed") listRecentExecutionLedger.mockRejectedValue(new Error("ledger down"));
+    else listRecentExecutionLedger.mockResolvedValue({ items: [], available: false });
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: "执行台账" }));
+    expect(await screen.findByText("执行台账读取失败，无法判断是否有执行记录。")).toBeInTheDocument();
+    expect(screen.queryByText(/本次未返回执行记录|暂无执行记录/)).not.toBeInTheDocument();
+  });
+
+  it("success 同时要求人工核对时不能显示成功回执", async () => {
+    showApproved();
+    executeAction.mockResolvedValue({ ok: true, outcome: "success", detail: { manual_reconciliation_required: true } });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^执行$/ }));
+    expect(await screen.findByText("执行中 · 结果待核对")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "人工对账" })).toBeInTheDocument();
+    expect(screen.queryByText("执行已返回 · 待验收")).not.toBeInTheDocument();
+  });
+
+  it.each([{}, { ok: false, outcome: "success" }, { ok: true, outcome: "success", detail: { result_checklist: { outcome: "failed" } } }])(
+    "缺失或矛盾执行响应不推定成功: %j", async (response) => {
+      showApproved();
+      executeAction.mockResolvedValue(response);
+      render(<ActionInboxPanel apiToken="tok" />);
+      fireEvent.click(await screen.findByRole("button", { name: /^执行$/ }));
+      expect(await screen.findByText("结果未知 · 待核对")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^执行$/ })).not.toBeInTheDocument();
+      expect(screen.queryByText("执行已返回 · 待验收")).not.toBeInTheDocument();
+    },
+  );
+
+  it("人工对账缺少确认状态时不移除未知记录", async () => {
+    listActionInbox.mockResolvedValue({ items: [{ ...baseItem, status: "executing" }], available: true });
+    reconcileAction.mockResolvedValue({ ok: true, decision: "succeeded" });
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: "人工对账" }));
+    fireEvent.change(screen.getByLabelText("对账原因"), { target: { value: "核对回执" } });
+    fireEvent.change(screen.getByLabelText("对账证据"), { target: { value: "receipt:fixture" } });
+    fireEvent.click(screen.getByRole("button", { name: "提交对账" }));
+    expect(await screen.findByText(/操作结果未确认/)).toBeInTheDocument();
+    expect(screen.getByText(baseItem.title)).toBeInTheDocument();
+    expect(screen.getByText("执行中 · 结果待核对")).toBeInTheDocument();
+  });
+
+  it("人工执行只在主动点击后标记，回执不宣称效果已验证", async () => {
+    listActionInbox.mockResolvedValue({ items: [{ ...baseItem, category: "gtm_bet", status: "approved" }], available: true });
+    apiFetch.mockResolvedValue({ ok: true });
+    render(<ActionInboxPanel apiToken="tok" />);
+    const button = await screen.findByRole("button", { name: "标记已执行" });
+    expect(apiFetch).not.toHaveBeenCalled();
+    expect(executeAction).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    expect(await screen.findByText(/已记录人工执行 · 效果待核验/)).toBeInTheDocument();
+    expect(apiFetch).toHaveBeenCalledTimes(1);
+    expect(apiFetch).toHaveBeenCalledWith("/api/admin/vkpi/actions/1/mark-done", { method: "POST", cache: "no-store" }, "tok");
+  });
+
+  it("并行状态读取跨越审批执行时，旧建议不能覆盖 executing", async () => {
+    listActionInbox.mockImplementation((_token: unknown, params: any) => Promise.resolve({
+      available: true, items: [{ ...baseItem, status: params?.status ?? "suggested" }],
+    }));
+    render(<ActionInboxPanel apiToken="tok" />);
+    expect(await screen.findByText("执行中 · 结果待核对")).toBeInTheDocument();
+    expect(screen.getAllByText(baseItem.title)).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /^执行$|通过/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "人工对账" })).toBeInTheDocument();
+    expect(executeAction).not.toHaveBeenCalled();
+  });
+
+  it("同账号更改 limit 且新页无该项时，未知执行保护仍保留", async () => {
+    showApproved();
+    executeAction.mockRejectedValue(new Error("response lost"));
+    const { rerender } = render(<ActionInboxPanel apiToken="tok" limit={6} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^执行$/ }));
+    expect(await screen.findByText("结果未知 · 待核对")).toBeInTheDocument();
+    await waitFor(() => expect(listActionInbox).toHaveBeenCalledTimes(6));
+    listActionInbox.mockResolvedValue({ items: [], available: true });
+    rerender(<ActionInboxPanel apiToken="tok" limit={12} />);
+    await waitFor(() => expect(listActionInbox).toHaveBeenCalledWith("tok", { limit: 12 }));
+    expect(screen.getByText(baseItem.title)).toBeInTheDocument();
+    expect(screen.getByText("结果未知 · 待核对")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^执行$/ })).not.toBeInTheDocument();
+    expect(executeAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("账号 token 切换仍清除旧账号的未知列表状态", async () => {
+    showApproved();
+    executeAction.mockRejectedValue(new Error("response lost"));
+    const { rerender } = render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^执行$/ }));
+    expect(await screen.findByText("结果未知 · 待核对")).toBeInTheDocument();
+    await waitFor(() => expect(listActionInbox).toHaveBeenCalledTimes(6));
+    listActionInbox.mockResolvedValue({ items: [], available: true });
+    rerender(<ActionInboxPanel apiToken="other-account" />);
+    expect(await screen.findByText(/暂无待办建议/)).toBeInTheDocument();
+    expect(screen.queryByText(baseItem.title)).not.toBeInTheDocument();
+    expect(screen.queryByText("结果未知 · 待核对")).not.toBeInTheDocument();
+  });
+
+  it.each(["loading", "failed", "unavailable"])("对账表单已打开时，刷新 %s 也禁止提交", async (state) => {
+    const executing = { ...baseItem, status: "executing" };
+    listActionInbox.mockResolvedValue({ items: [executing], available: true });
+    render(<ActionInboxPanel apiToken="tok" />);
+    fireEvent.click(await screen.findByRole("button", { name: "人工对账" }));
+    fireEvent.change(screen.getByLabelText("对账原因"), { target: { value: "核对回执" } });
+    fireEvent.change(screen.getByLabelText("对账证据"), { target: { value: "receipt:fixture" } });
+    expect(screen.getByRole("button", { name: "提交对账" })).toBeEnabled();
+    if (state === "loading") listActionInbox.mockImplementation(() => new Promise(() => {}));
+    else if (state === "failed") listActionInbox.mockRejectedValue(new Error("read failed"));
+    else listActionInbox.mockResolvedValue({ items: [executing], available: false });
+    fireEvent.click(screen.getByTitle("刷新建议"));
+    if (state !== "loading") expect(await screen.findByText("状态刷新失败，保留上次记录；操作已暂停，请稍后刷新。")).toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: "提交对账" });
+    expect(submit).toBeDisabled();
+    fireEvent.click(submit);
+    expect(reconcileAction).not.toHaveBeenCalled();
+  });
 });
+
+function showApproved() {
+  listActionInbox.mockImplementation((_token: unknown, params: any) => Promise.resolve({
+    items: params?.status === "approved" ? [{ ...baseItem, status: "approved" }] : [],
+    available: true, scope: "own",
+  }));
+}

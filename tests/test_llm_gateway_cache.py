@@ -5,6 +5,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +14,7 @@ from app.db import connection as db_connection
 from app.db.connection import get_conn
 from app.domains.costs import budget_guard
 from app.platform import llm_gateway
+from app.platform import llm_gateway_call_hooks as cache_hooks
 from app.platform import llm_gateway_deferred as deferred
 from app.platform import llm_gateway_ledger as ledger
 from app.platform import llm_gateway_model_alias as alias
@@ -241,6 +243,234 @@ def test_invoke_json_hit_replays_parsed_json(monkeypatch) -> None:
     assert second["json"] == first["json"]
     assert second["provider_attempts"] == 0
     assert calls["n"] == 1
+
+
+def _invoke_contract(contract: str, **kwargs: Any) -> dict[str, Any]:
+    invoke = llm_gateway.invoke_json if contract == "json" else llm_gateway.invoke
+    if contract == "json":
+        kwargs.setdefault("required_keys", ("ok",))
+    return invoke(
+        "cache context fixture", purpose=PURPOSE, preferred_provider="openai",
+        skip_budget_check=True, **kwargs,
+    )
+
+
+@pytest.mark.parametrize("contract", ["text", "json"])
+@pytest.mark.parametrize("changed_staff", [
+    {"id": 8, "tenant_id": "a", "role": "reader", "permissions": {"vkpi": "read"}},
+    {"id": 7, "tenant_id": "b", "role": "reader", "permissions": {"vkpi": "read"}},
+    {"id": 7, "tenant_id": "a", "role": "admin", "permissions": {"vkpi": "read"}},
+    {"id": 7, "tenant_id": "a", "role": "reader", "permissions": {"vkpi": "none"}},
+])
+def test_supplied_staff_identity_and_permissions_partition_hits(monkeypatch, contract, changed_staff):
+    calls = _install_openai(monkeypatch, text='{"ok":true}')
+    original = {"id": 7, "tenant_id": "a", "role": "reader", "permissions": {"vkpi": "read"}}
+    assert _invoke_contract(contract, staff=original)["status"] == "success"
+    assert _invoke_contract(contract, staff=dict(original))["cache_hit"] is True
+    assert _invoke_contract(contract, staff=changed_staff).get("cache_hit") is None
+    assert calls["n"] == 2
+
+
+@pytest.mark.parametrize("key", [
+    "tenant_id", "org_id", "brand_scope", "project_id", "staff_id", "user_id",
+    "effective_staff_id", "authorization_scope", "acl_version", "policy_version",
+    "schema_version", "data_revision", "provider_account_id", "llm_cache_context",
+])
+def test_explicit_server_metadata_partitions_but_trace_ids_do_not(key):
+    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+    first = result_cache.build_cache_plan(PURPOSE, "fixture", model="openai/m", now=now, metadata={key: "a", "trace_id": "one"})
+    same = result_cache.build_cache_plan(PURPOSE, "fixture", model="openai/m", now=now, metadata={"trace_id": "two", key: "a"})
+    changed = result_cache.build_cache_plan(PURPOSE, "fixture", model="openai/m", now=now, metadata={key: "b"})
+    assert first is not None and same is not None and changed is not None
+    assert first.key == same.key and first.key != changed.key
+
+
+def test_context_is_hashed_and_ignores_credential_fields():
+    first = result_cache.build_cache_plan(PURPOSE, "fixture", model="openai/m", staff={
+        "id": 7, "permissions": {"vkpi": "private-fixture-permission"}, "access_token": "never-keep-a",
+    })
+    second = result_cache.build_cache_plan(PURPOSE, "fixture", model="openai/m", staff={
+        "id": 7, "permissions": {"vkpi": "private-fixture-permission"}, "access_token": "never-keep-b",
+    })
+    assert first is not None and second is not None and first.key == second.key
+    assert "private-fixture-permission" not in repr(first)
+    assert "never-keep" not in repr(first)
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"staff": {}}, {"staff": {"role": "admin"}},
+    {"metadata": {"llm_cache_context": object()}},
+    {"metadata": {"policy_version": float("nan")}},
+    {"metadata": {"llm_cache_context": "x" * 17_000}},
+])
+def test_ambiguous_or_unserializable_context_bypasses_cache(kwargs):
+    assert result_cache.build_cache_plan(PURPOSE, "fixture", model="openai/m", **kwargs) is None
+
+
+@pytest.mark.parametrize("contract", ["text", "json"])
+def test_operator_policy_revision_invalidates_an_existing_hit(monkeypatch, contract):
+    calls = _install_openai(monkeypatch, text='{"ok":true}')
+    monkeypatch.setenv("VKPI_LLM_RESULT_CACHE_POLICY_VERSION", "policy-a")
+    _invoke_contract(contract)
+    assert _invoke_contract(contract)["cache_hit"] is True
+    monkeypatch.setenv("VKPI_LLM_RESULT_CACHE_POLICY_VERSION", "policy-b")
+    assert _invoke_contract(contract).get("cache_hit") is None
+    assert calls["n"] == 2
+
+
+def test_route_policy_preserves_exact_aliases_and_partitions_route_changes(monkeypatch):
+    monkeypatch.delenv("VKPI_GEMINI_MODEL_EXACT", raising=False)
+    options = {"require_runtime_verified": True, "atomic_reservation": True}
+    alias_chain = [("google", "gemini-flash-latest", True)]
+    exact_chain = [("google", "gemini-3.6-flash", True)]
+    alias_policy = cache_hooks.cache_route_policy(alias_chain, **options)
+    exact_policy = cache_hooks.cache_route_policy(exact_chain, **options)
+    assert alias_policy == exact_policy
+    different_policy = cache_hooks.cache_route_policy(
+        exact_chain + [("openai", "gpt-5.5", True)], **options,
+    )
+    first = result_cache.build_cache_plan(PURPOSE, "fixture", model="google/gemini-3.6-flash", policy=alias_policy)
+    changed = result_cache.build_cache_plan(PURPOSE, "fixture", model="google/gemini-3.6-flash", policy=different_policy)
+    assert first is not None and changed is not None and first.key != changed.key
+
+
+def test_scope_and_enforcement_mode_are_separate_cache_partitions():
+    base = {"purpose": PURPOSE, "prompt": "fixture", "model": "openai/m"}
+    first = result_cache.build_cache_plan(**base, cost_scope="scope-a", policy={"atomic_reservation": True})
+    other_scope = result_cache.build_cache_plan(**base, cost_scope="scope-b", policy={"atomic_reservation": True})
+    other_mode = result_cache.build_cache_plan(**base, cost_scope="scope-a", policy={"atomic_reservation": False})
+    assert first and other_scope and other_mode
+    assert len({first.key, other_scope.key, other_mode.key}) == 3
+
+
+@pytest.mark.parametrize("contract", ["text", "json"])
+def test_retired_model_cache_is_not_returned_or_success_ledgered(monkeypatch, contract):
+    calls = _install_openai(monkeypatch, text='{"ok":true}')
+    _invoke_contract(contract, model_fallbacks=(("openai", "gpt-5.5"),))
+    monkeypatch.setattr(llm_gateway, "_binding_call_blocker", lambda *_args, **_kwargs: "model_retired_fixture")
+    result = _invoke_contract(contract, model_fallbacks=(("openai", "gpt-5.5"),))
+    assert result.get("cache_hit") is not True
+    assert result["status"] != "success"
+    assert calls["n"] == 1
+    assert sum(row["status"] == "success" for row in _rows()) == 1
+
+
+@pytest.mark.parametrize("contract", ["text", "json"])
+def test_secondary_model_result_does_not_fill_primary_cache(monkeypatch, contract):
+    calls = _install_openai(monkeypatch, text='{"ok":true}')
+    original_caller = llm_gateway._PROVIDER_CALLERS["openai"]
+    attempted = []
+
+    def caller(prompt, limit, *, model_override=None):
+        attempted.append(model_override)
+        if model_override == "gpt-5.5":
+            return {"status": "provider_429", "provider": "openai"}
+        return original_caller(prompt, limit, model_override=model_override)
+
+    monkeypatch.setitem(llm_gateway._PROVIDER_CALLERS, "openai", caller)
+    chain = (("openai", "gpt-5.5"), ("openai", "gpt-5.4-mini"))
+    for _ in range(2):
+        result = _invoke_contract(contract, model_fallbacks=chain)
+        assert result["status"] == "success" and result["model"] == "gpt-5.4-mini"
+        assert result.get("cache_hit") is None
+    assert attempted == ["gpt-5.5", "gpt-5.4-mini"] * 2
+    assert calls["n"] == 2
+    assert get_conn().execute("SELECT COUNT(*) AS n FROM persistent_cache").fetchone()["n"] == 0
+
+
+@pytest.mark.parametrize("contract", ["text", "json"])
+def test_reviewed_response_snapshot_alias_still_caches(monkeypatch, contract):
+    calls = _install_openai(monkeypatch, text='{"ok":true}')
+    original_caller = llm_gateway._PROVIDER_CALLERS["openai"]
+
+    def caller(*args, **kwargs):
+        result = original_caller(*args, **kwargs)
+        result["model"] = "gpt-5.5-2026-04-23"
+        return result
+
+    monkeypatch.setitem(llm_gateway._PROVIDER_CALLERS, "openai", caller)
+    first = _invoke_contract(contract, model_override="gpt-5.5")
+    second = _invoke_contract(contract, model_override="gpt-5.5")
+    assert first["status"] == "success"
+    assert second["cache_hit"] is True
+    assert second["model"] == "gpt-5.5-2026-04-23"
+    assert calls["n"] == 1
+
+
+def test_invalid_cached_json_never_creates_a_success_hit_ledger(monkeypatch):
+    calls = _install_openai(monkeypatch, text='{"ok":true}')
+    _invoke_contract("json")
+    conn = get_conn()
+    row = conn.execute("SELECT cache_key,value_json FROM persistent_cache").fetchone()
+    value = json.loads(row["value_json"])
+    value["json"] = {"ok": False}
+    conn.execute("UPDATE persistent_cache SET value_json=? WHERE cache_key=?", (json.dumps(value), row["cache_key"]))
+    conn.commit()
+    checked = []
+
+    def validator(value):
+        checked.append(value)
+        return value.get("ok") is True
+
+    result = _invoke_contract("json", validator=validator)
+    assert result["json"] == {"ok": True}
+    assert checked == [{"ok": False}, {"ok": True}]
+    assert calls["n"] == 2
+    assert len(_rows()) == 2
+    assert not any(json.loads(row["metadata_json"]).get("cache_hit") for row in _rows())
+
+
+def test_accepted_cached_json_runs_validator_once_before_hit_ledger(monkeypatch):
+    calls = _install_openai(monkeypatch, text='{"ok":true}')
+    _invoke_contract("json")
+    checked = []
+
+    def validator(value):
+        checked.append(value)
+        assert len(_rows()) == 1, "cache must not be marked successful before validation"
+        return True
+
+    result = _invoke_contract("json", validator=validator)
+    assert result["cache_hit"] is True
+    assert checked == [{"ok": True}]
+    assert calls["n"] == 1
+    assert len(_rows()) == 2
+
+
+def test_slow_real_cache_validator_has_no_success_hit_or_extra_provider(monkeypatch):
+    calls = _install_openai(monkeypatch, text='{"ok":true}')
+    _invoke_contract("json")
+    clock = SimpleNamespace(now=100.0)
+    monkeypatch.setattr(llm_gateway, "time", SimpleNamespace(monotonic=lambda: clock.now))
+
+    def validator(_value):
+        clock.now += 2.0
+        return True
+
+    result = _invoke_contract("json", validator=validator, deadline_seconds=1)
+    assert result["reason"] == "deadline_exceeded"
+    assert result["provider_attempts"] == 0
+    assert calls["n"] == 1
+    assert [row["status"] for row in _rows()] == ["success", "deadline_exceeded"]
+    assert not any(json.loads(row["metadata_json"]).get("cache_hit") for row in _rows())
+
+
+@pytest.mark.parametrize("field,value", [
+    ("context_hash", "old-global-context"), ("model", "gpt-5.4-mini"),
+    ("provider", "google"), ("prompt_hash", "another-prompt"),
+    ("input_tokens", "malformed-counter"),
+])
+def test_mismatched_persisted_entry_is_a_miss(monkeypatch, field, value):
+    calls = _install_openai(monkeypatch)
+    _invoke()
+    conn = get_conn()
+    row = conn.execute("SELECT cache_key,value_json FROM persistent_cache").fetchone()
+    entry = json.loads(row["value_json"])
+    entry[field] = value
+    conn.execute("UPDATE persistent_cache SET value_json=? WHERE cache_key=?", (json.dumps(entry), row["cache_key"]))
+    conn.commit()
+    assert _invoke().get("cache_hit") is None
+    assert calls["n"] == 2
 
 
 # ── 别名映射 ─────────────────────────────────────────────────────────────────

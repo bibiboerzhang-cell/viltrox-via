@@ -16,9 +16,7 @@ import argparse
 import hashlib
 import hmac
 import json
-import math
 import os
-import re
 import sys
 import time
 from collections import defaultdict
@@ -44,9 +42,17 @@ from scripts.ops.vkpi_stage1_model_canary_reporting import (  # noqa: E402
     base_report as _base_report,
     binding_output_token_limit as _binding_output_token_limit,
     result_row as _result_row,
+    safe_provider_result as _safe_provider_result,
     sha256_text as _sha256_text,
 )
+from scripts.ops.vkpi_stage1_model_canary_limits import (  # noqa: E402
+    actual_cost_micro_usd as _known_usage_cost,
+    nonnegative_int as _nonnegative_int,
+    release_before_provider as _release_before_provider,
+    remaining_timeout as _remaining_timeout,
+)
 from app.core.config import IS_PRODUCTION  # noqa: E402
+from app.platform.llm_canary_transport import single_request_canary  # noqa: E402
 from app.core.model_registry import current_task_model_binding  # noqa: E402
 from app.platform import llm_budget_reservations, llm_gateway  # noqa: E402
 from app.platform.models.runtime import (  # noqa: E402
@@ -76,22 +82,6 @@ CANARY_PURPOSE = "vkpi_stage1_model_canary"
 _SINGLE_CALL_SCOPE = "single_call"
 CANARY_PROMPT = "V-KPI exact-model connectivity canary. Reply with exactly " \
     "VKPI_STAGE1_CANARY_OK and nothing else."
-_SAFE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$")
-_SAFE_PROVIDER_STATUSES = frozenset(
-    {
-        "empty_response",
-        "failed",
-        "invalid_response",
-        "invoker_exception",
-        "not_configured",
-        "provider_429",
-        "provider_5xx",
-        "provider_exception",
-        "provider_http_error",
-        "timeout",
-        "transport_error",
-    }
-)
 
 
 class CanarySafetyError(ValueError):
@@ -341,7 +331,7 @@ def _default_budget_checker(row: BindingPlan) -> bool:
         row.provider,
         cost_scope=CANARY_COST_SCOPE,
         estimated_cost_usd=float(row.estimated_cost_usd),
-        require_configured=False,
+        require_configured=True,
     )
     return bool(allowed)
 
@@ -375,49 +365,17 @@ def _default_live_invoker(
     caller = llm_gateway._PROVIDER_CALLERS.get(provider)
     if caller is None:
         return {"status": "failed", "provider": provider}
-    with _bounded_provider_timeout(provider, timeout_seconds):
-        return caller(
+    with _bounded_provider_timeout(provider, timeout_seconds), single_request_canary():
+        raw = caller(
             prompt,
             int(max_output_tokens),
             model_override=model,
         )
-
-
-def _safe_provider_result(
-    row: BindingPlan,
-    raw: Mapping[str, Any] | None,
-    *,
-    latency_ms: int,
-) -> dict[str, Any]:
-    payload = raw if isinstance(raw, Mapping) else {}
-    raw_status = str(payload.get("status") or "failed").strip().lower()
-    text = str(payload.get("text") or "")
-    candidate_model = str(payload.get("model") or "").strip()
-    response_model = (
-        candidate_model if _SAFE_MODEL_RE.fullmatch(candidate_model) else ""
-    )
-    response_sha256 = _sha256_text(text)
-
-    if raw_status == "success":
-        if not text.strip():
-            status = "empty_response"
-        elif not response_model:
-            status = "response_model_unreported"
-        elif not row.resolved.matches_response_model(response_model):
-            status = "model_mismatch"
-        elif text.strip() != CANARY_EXPECTED_RESPONSE:
-            status = "invalid_response"
-        else:
-            status = "success"
-    else:
-        status = raw_status if raw_status in _SAFE_PROVIDER_STATUSES else "failed"
-    return _result_row(
-        row,
-        status=status,
-        response_model=response_model,
-        latency_ms=latency_ms,
-        response_sha256=response_sha256,
-    )
+    payload = dict(raw) if isinstance(raw, Mapping) else {"status": "failed"}
+    for key in ("usage_complete", "cost_usage_supported", "response_model_reported"):
+        payload[key] = payload.get(key) is True
+    payload.setdefault("provider_response_status", "")
+    return payload
 
 
 def _result_with_status(result: Mapping[str, Any], status: str) -> dict[str, Any]:
@@ -432,37 +390,17 @@ def _result_with_status(result: Mapping[str, Any], status: str) -> dict[str, Any
     }
 
 
-def _nonnegative_int(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if not math.isfinite(number) or number < 0 or not number.is_integer():
-        return None
-    return int(number)
-
-
 def _actual_cost_micro_usd(
     row: BindingPlan,
     raw: Mapping[str, Any],
 ) -> int | None:
-    reported = _nonnegative_int(raw.get("cost_micro_usd"))
-    if reported is not None:
-        return reported
-    input_tokens = _nonnegative_int(raw.get("input_tokens"))
-    output_tokens = _nonnegative_int(raw.get("output_tokens"))
-    if input_tokens is None or output_tokens is None:
+    response_model = raw.get("model")
+    if (raw.get("response_model_reported") is False
+            or not isinstance(response_model, str)
+            or not response_model.strip()
+            or not row.resolved.matches_response_model(response_model.strip())):
         return None
-    return int(
-        llm_gateway._estimate_cost_micro_usd(
-            row.provider,
-            input_tokens,
-            output_tokens,
-            binding=row.resolved,
-        )
-    )
+    return _known_usage_cost(row, raw, estimate_cost=llm_gateway._estimate_cost_micro_usd)
 
 
 def _record_secret_free_ledger(
@@ -505,6 +443,8 @@ def _record_secret_free_ledger(
             "plan_sha256": plan_sha256,
             "reservation_key": reservation_key,
             "latency_ms": max(0, int(safe_result.get("latency_ms") or 0)),
+            "cost_accounting_status": "known" if actual_cost_micro_usd is not None else "unknown",
+            "cost_zero_is_placeholder": actual_cost_micro_usd is None,
         },
         update_budget_scopes=False,
         force_cost_ledger=True,
@@ -623,6 +563,7 @@ def run_canary(
 ) -> dict[str, Any]:
     """Execute one bounded plan; dependency injection keeps tests zero-I/O."""
 
+    run_started = monotonic()
     plan = build_plan(
         max_calls=max_calls,
         max_output_tokens=max_output_tokens,
@@ -631,6 +572,7 @@ def run_canary(
         max_cost_usd=max_cost_usd,
         only_bindings=only_bindings,
     )
+    deadline = run_started + plan.total_timeout_seconds
     report = _base_report(plan, live=live)
     if plan.estimated_cost_usd > plan.max_cost_usd:
         return _blocked_live_report(report, plan, status="cost_plan_blocked")
@@ -657,10 +599,14 @@ def run_canary(
     except Exception:  # fail closed without serialising exception content
         return _blocked_live_report(report, plan, status="preflight_failed")
 
+    # Only this adapter currently preserves the raw model, terminal status and
+    # billing details required by v3. Do not pay to probe unsupported evidence.
+    if live_invoker is None and any(row.provider != "openai" for row in plan.selected):
+        return _blocked_live_report(report, plan, status="provider_evidence_unsupported")
+
     invoke = live_invoker or _default_live_invoker
     reservations = reservation_manager or llm_budget_reservations
     record_ledger = ledger_recorder or llm_gateway.record_call
-    deadline = monotonic() + plan.total_timeout_seconds
     result_by_binding: dict[str, dict[str, Any]] = {}
     calls = 0
     stop_after_boundary_failure = False
@@ -671,18 +617,17 @@ def run_canary(
                 row, status="not_attempted_after_fail_closed"
             )
             continue
-        remaining = deadline - monotonic()
-        if remaining < 1:
+        if observed_cost_usd + row.estimated_cost_usd > plan.max_cost_usd:
+            result_by_binding[row.binding] = _result_row(row, status="cost_plan_blocked")
+            stop_after_boundary_failure = True
+            continue
+        call_timeout = _remaining_timeout(deadline, plan.per_call_timeout_seconds, monotonic())
+        if not call_timeout:
             result_by_binding[row.binding] = _result_row(
                 row, status="total_timeout"
             )
             stop_after_boundary_failure = True
             continue
-        call_timeout = min(
-            plan.per_call_timeout_seconds,
-            max(1, int(math.floor(remaining))),
-        )
-
         reservation_key = ""
         reservation_scopes: tuple[str, ...] = ()
         try:
@@ -721,22 +666,32 @@ def run_canary(
             stop_after_boundary_failure = True
             continue
 
+        call_timeout = _remaining_timeout(deadline, plan.per_call_timeout_seconds, monotonic())
+        if not call_timeout:
+            result_by_binding[row.binding] = _result_row(
+                row, status=_release_before_provider(reservations, reservation_key, "total_timeout")
+            )
+            stop_after_boundary_failure = True
+            continue
+
         try:
             reservations.mark_llm_provider_started(reservation_key)
         except Exception:
-            # No provider I/O occurred, so release is safe.  A release failure
-            # leaves the reservation open and still stops the run.
-            try:
-                reservations.release_llm_reservation(reservation_key)
-            except Exception:
-                pass
             result_by_binding[row.binding] = _result_row(
-                row, status="reservation_start_failed"
+                row, status=_release_before_provider(reservations, reservation_key, "reservation_start_failed")
             )
             stop_after_boundary_failure = True
             continue
 
         started = monotonic()
+        call_timeout = _remaining_timeout(deadline, plan.per_call_timeout_seconds, started)
+        if not call_timeout:
+            result_by_binding[row.binding] = _result_row(
+                row, status=_release_before_provider(reservations, reservation_key, "total_timeout")
+            )
+            stop_after_boundary_failure = True
+            continue
+
         calls += 1
         invoker_raised = False
         try:
@@ -749,11 +704,9 @@ def run_canary(
         except Exception:  # do not expose exception values or provider secrets
             raw = {"status": "invoker_exception"}
             invoker_raised = True
-        latency_ms = max(0, int((monotonic() - started) * 1000))
-        if latency_ms > call_timeout * 1000:
-            bounded_raw = dict(raw) if isinstance(raw, Mapping) else {}
-            bounded_raw["status"] = "timeout"
-            raw = bounded_raw
+        provider_finished = monotonic()
+        latency_ms = max(0, int((provider_finished - started) * 1000))
+        provider_late = provider_finished >= deadline or provider_finished - started >= call_timeout
         raw_payload = raw if isinstance(raw, Mapping) else {}
         safe_result = _safe_provider_result(
             row,
@@ -761,6 +714,10 @@ def run_canary(
             latency_ms=latency_ms,
         )
         actual_cost_micro_usd = _actual_cost_micro_usd(row, raw_payload)
+        if (actual_cost_micro_usd is None
+                and str(raw_payload.get("status") or "").lower() == "success"
+                and safe_result["status"] not in {"model_mismatch", "response_model_unreported"}):
+            safe_result = _result_with_status(safe_result, "cost_accounting_failed")
 
         try:
             ledger_receipt = _record_secret_free_ledger(
@@ -796,9 +753,9 @@ def run_canary(
             continue
 
         if actual_cost_micro_usd is None:
-            _mark_unknown_best_effort(reservations, reservation_key)
+            unknown_marked = _mark_unknown_best_effort(reservations, reservation_key)
             result_by_binding[row.binding] = _result_with_status(
-                safe_result, "cost_accounting_failed"
+                safe_result, str(safe_result["status"]) if unknown_marked else "reservation_unknown_mark_failed"
             )
             stop_after_boundary_failure = True
             continue
@@ -843,7 +800,15 @@ def run_canary(
             )
             stop_after_boundary_failure = True
             continue
+        # A late but known success is still billable: first reconcile all four
+        # ledgers, then report the expired boundary and stop the next call.
+        if provider_late or monotonic() >= deadline:
+            result_by_binding[row.binding] = _result_with_status(safe_result, "timeout")
+            stop_after_boundary_failure = True
+            continue
         result_by_binding[row.binding] = safe_result
+        if safe_result["status"] == "response_incomplete_or_unreported":
+            stop_after_boundary_failure = True
 
     selected = {row.binding for row in plan.selected}
     report["results"] = [

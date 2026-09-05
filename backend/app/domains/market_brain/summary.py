@@ -25,10 +25,11 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.domains.market_brain.parallel_reads import run_read_tasks
+from app.domains.market_brain.summary_signal_state import signal_read_state
 
 logger = get_logger(__name__)
 
-METHOD = "market_brain_summary_v1"
+METHOD = "market_brain_summary_v2"
 DEFAULT_BUDGET_HINT_USD = 3000
 MAX_SIGNAL_ITEMS = 10
 MAX_OPPORTUNITY_ITEMS = 8
@@ -200,7 +201,7 @@ def _weekly_signals_card(tracks_result: dict[str, Any] | None, tracks_error: str
             logger.warning("market_brain.summary.weekly_signals.%s failed: %s", name, exc)
             source_status[name] = {"status": "error", "reason": _text(str(exc), 200)}
     return {
-        "status": "ok" if items else "empty",
+        "status": signal_read_state(source_status, has_items=bool(items)),
         "items": items[:MAX_SIGNAL_ITEMS],
         "sources": source_status,
         "sources_note": SOURCES_NOTE,

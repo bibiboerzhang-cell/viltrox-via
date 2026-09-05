@@ -2,6 +2,8 @@ import React from "react";
 import { ArrowRight } from "lucide-react";
 import { EmptyLine, ErrorCard, KpiCard, PendingCard } from "./MarketVoicePage.modules";
 import { confBadge } from "./GtmCommandPage.Sections";
+import { useT } from "../lib/i18n";
+import { completeSignalCount, marketSignalReadState } from "../../../../services/vkpi/marketSignalState";
 import type { ActionInboxItem, ActionInboxResponse } from "../../../../services/vkpi/actionInbox-api";
 import type {
   GtmGoal,
@@ -215,9 +217,10 @@ export function GtmKpiBand({
   const inboxReady = inbox != null && inbox.available !== false;
   const betCount = items.filter((it) => String((it as Row).category || "") === "gtm_bet").length;
   const pendNote = inboxError ? "建议源读取失败" : inbox && inbox.available === false ? "建议系统未启用" : "建议队列读取中…";
+  const signalCount = completeSignalCount(summary.weekly_signals);
   return (
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-      <KpiCard label="本周信号" value={summary.weekly_signals.items.length} unit="条" seriesColor="var(--ds-accent)" />
+      <KpiCard label="本周信号" value={signalCount} unit="条" pending={signalCount == null} pendingNote="信号来源待核验" seriesColor="var(--ds-accent)" />
       <KpiCard label="产品机会" value={summary.product_opportunities.items.length} unit="个" seriesColor="var(--ds-accent-2)" />
       <KpiCard
         label="待执行动作"
@@ -344,10 +347,19 @@ export function RouteBody({
 /* ============ 本周信号 body(kind 徽 + 信号句 + freshness/样本/置信) ============ */
 
 export function SignalsBody({ summary }: { summary: MarketBrainSummary }) {
+  const { t } = useT();
   const ws = summary.weekly_signals;
-  if (ws.items.length === 0) return <EmptyLine text={ws.sources_note || "本周暂无信号。"} />;
+  const state = marketSignalReadState(ws);
+  if (state === "empty") return <EmptyLine text={t("当前已读来源在对应窗口内暂无信号。")} />;
   return (
     <div className="space-y-1.5">
+      {state === "error" ? (
+        <div role="alert"><ErrorCard title={t("市场信号读取失败")} text={t("先检查来源状态并重新读取；不能据此判断市场没有需求。")} /></div>
+      ) : state === "partial" ? (
+        <div role="status"><PendingCard>{t("仅有部分来源结果。先核对缺失来源，以下信号不代表完整市场判断。")}</PendingCard></div>
+      ) : state === "unknown" ? (
+        <div role="status"><PendingCard>{t("来源状态待核验，暂不作完整市场判断。")}</PendingCard></div>
+      ) : null}
       {ws.items.slice(0, 8).map((s, i) => (
         <div key={i} className="flex flex-wrap items-center gap-1.5 rounded-lg border border-line px-2.5 py-1.5">
           <span className="rounded border border-line px-1.5 py-0.5 text-[9.5px] text-muted">{s.kind || "signal"}</span>

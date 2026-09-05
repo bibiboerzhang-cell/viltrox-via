@@ -14,6 +14,9 @@ import {
   normalizeSha256,
 } from "../../../services/vkpi/review-integrity";
 import { validateSkillReviewCandidate } from "../../../services/vkpi/skill-review-candidate";
+import { useT } from "../cockpit/lib/i18n";
+import { CampaignPlanReadiness } from "./CampaignPlanReadiness";
+import { CampaignPlanPresentation } from "./CampaignPlanPresentation";
 
 // VOS Skill Studio —— 让「营销大脑」可见可操作。
 //   ① 列出 skills + 采纳率 / 成本 / 延迟
@@ -163,6 +166,7 @@ export function SkillStudioPage({
   apiToken?: string;
   viewMode?: "manager" | "employee";
 }) {
+  const { t } = useT();
   const canManage = viewMode === "manager";
   const [skills, setSkills] = React.useState<SkillSummary[]>([]);
   const [selected, setSelected] = React.useState<string>("");
@@ -179,6 +183,7 @@ export function SkillStudioPage({
   const [err, setErr] = React.useState<string>("");
   const [runsErr, setRunsErr] = React.useState<string>("");
   const runsRequest = React.useRef(0);
+  const runRequest = React.useRef(0);
   const integrityRequest = React.useRef(0);
   const [runIntegrity, setRunIntegrity] = React.useState<RunIntegrity | null>(null);
 
@@ -220,8 +225,16 @@ export function SkillStudioPage({
     },
     [apiToken, canManage, reviewFilter],
   );
+  const latestLoadRuns = React.useRef(loadRuns);
+  React.useEffect(() => { latestLoadRuns.current = loadRuns; }, [loadRuns]);
 
   React.useEffect(() => loadSkills(), [loadSkills]);
+  React.useEffect(() => {
+    ++runRequest.current;
+    setRunning(false);
+    setResult(null);
+    return () => { ++runRequest.current; };
+  }, [apiToken, canManage, selected]);
   React.useEffect(() => {
     if (selected) loadRuns(selected);
     setResult(null);
@@ -237,21 +250,24 @@ export function SkillStudioPage({
 
   const onRun = React.useCallback(async () => {
     if (!apiToken || !canManage || !selected) return;
+    const requestId = ++runRequest.current;
     setRunning(true);
     setErr("");
     setResult(null);
     try {
       const input = buildInput(fields, values);
       const r = await runSkill(apiToken, selected, input);
+      if (requestId !== runRequest.current) return;
       setResult(r);
-      loadRuns(selected);
+      latestLoadRuns.current(selected);
       loadSkills(); // 刷新聚合(runs/采纳率会变)
     } catch (e: any) {
+      if (requestId !== runRequest.current) return;
       setErr(String(e?.message || e));
     } finally {
-      setRunning(false);
+      if (requestId === runRequest.current) setRunning(false);
     }
-  }, [apiToken, canManage, selected, fields, values, loadRuns, loadSkills]);
+  }, [apiToken, canManage, selected, fields, values, loadSkills]);
 
   const openReview = React.useCallback((run: SkillRunRow) => {
     if (!canManage) return;
@@ -506,12 +522,13 @@ export function SkillStudioPage({
                 <span className="flex items-center gap-2 text-[10px]">
                   <span
                     className={`rounded border px-1.5 py-0.5 ${
-                      result.status === "ok" || result.status === "success"
+                      selected !== "campaign_plan" && (result.status === "ok" || result.status === "success")
                         ? "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-300"
                         : "border-amber-500/25 bg-amber-500/[0.08] text-amber-300"
                     }`}
                   >
-                    {result.status || "?"}
+                    {selected === "campaign_plan" && !result.error && ["ok", "success"].includes(result.status)
+                      ? t("草稿已生成 · 未执行") : result.status || "?"}
                   </span>
                   {result.skill_run_id != null ? (
                     <span className="text-slate-400">已落账 #{result.skill_run_id}</span>
@@ -523,9 +540,19 @@ export function SkillStudioPage({
               {result.error ? (
                 <div className="mb-2 text-[11px] text-red-300">{result.error}</div>
               ) : null}
-              <pre className="max-h-72 overflow-auto rounded bg-black/30 p-2 text-[10px] leading-relaxed text-slate-200">
+              {selected === "campaign_plan" && result.output && !result.error
+                ? <CampaignPlanReadiness output={result.output} /> : null}
+              {selected === "campaign_plan" ? <>
+                {result.output && !result.error ? <CampaignPlanPresentation output={result.output} /> : null}
+                <details className="rounded border border-white/10 p-2">
+                  <summary className="cursor-pointer text-[11px] text-slate-400">{t("查看原始规划 JSON")}</summary>
+                  <pre className="mt-2 max-h-72 overflow-auto text-[10px] leading-relaxed text-slate-200">
+                    {JSON.stringify(result.output ?? result, null, 2)}
+                  </pre>
+                </details>
+              </> : <pre className="max-h-72 overflow-auto rounded bg-black/30 p-2 text-[10px] leading-relaxed text-slate-200">
                 {JSON.stringify(result.output ?? result, null, 2)}
-              </pre>
+              </pre>}
             </div>
           ) : null}
 

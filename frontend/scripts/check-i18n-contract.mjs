@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
+import { readDictionary } from "./i18n-dictionary-reader.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const frontendRoot = path.resolve(scriptDir, "..");
@@ -123,109 +124,6 @@ function sourceKind(filePath) {
   return filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
 }
 
-function literalPropertyName(name, sourceFile) {
-  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  if (
-    ts.isComputedPropertyName(name)
-    && (ts.isStringLiteralLike(name.expression) || ts.isNumericLiteral(name.expression))
-  ) {
-    return name.expression.text;
-  }
-  return null;
-}
-
-function readDictionary(relativePath, variableName, allowedEmpty, allowedBoundaryWhitespace, errors) {
-  const filePath = path.join(frontendRoot, relativePath);
-  const source = fs.readFileSync(filePath, "utf8");
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    sourceKind(filePath),
-  );
-  const definitions = [];
-
-  function visit(node) {
-    if (
-      ts.isVariableDeclaration(node)
-      && ts.isIdentifier(node.name)
-      && node.name.text === variableName
-    ) {
-      definitions.push(node);
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(sourceFile);
-
-  if (definitions.length !== 1) {
-    errors.push(`${relativePath}: expected exactly one ${variableName} definition, found ${definitions.length}`);
-    return new Map();
-  }
-
-  const initializer = definitions[0].initializer;
-  if (!initializer || !ts.isObjectLiteralExpression(initializer)) {
-    errors.push(`${relativePath}: ${variableName} must be an object literal`);
-    return new Map();
-  }
-
-  const entries = new Map();
-  for (const property of initializer.properties) {
-    const position = sourceFile.getLineAndCharacterOfPosition(property.getStart(sourceFile));
-    const location = `${relativePath}:${position.line + 1}`;
-    if (!ts.isPropertyAssignment(property)) {
-      errors.push(`${location}: ${variableName} entries must be plain property assignments`);
-      continue;
-    }
-    const key = literalPropertyName(property.name, sourceFile);
-    if (key === null) {
-      errors.push(`${location}: ${variableName} has a non-literal key`);
-      continue;
-    }
-    if (!ts.isStringLiteralLike(property.initializer)) {
-      errors.push(`${location}: ${variableName}[${JSON.stringify(key)}] must be a string literal`);
-      continue;
-    }
-    const value = property.initializer.text;
-    if (!key) errors.push(`${location}: ${variableName} contains an empty key`);
-    if (key !== key.trim()) {
-      errors.push(`${location}: ${variableName} key has leading/trailing whitespace: ${JSON.stringify(key)}`);
-    }
-    if (value !== value.trim() && !allowedBoundaryWhitespace.has(key)) {
-      errors.push(`${location}: ${variableName}[${JSON.stringify(key)}] has leading/trailing whitespace`);
-    }
-    if (value.trim() === "" && !allowedEmpty.has(key)) {
-      errors.push(`${location}: ${variableName}[${JSON.stringify(key)}] is empty and is not allowlisted`);
-    }
-    if (entries.has(key)) {
-      errors.push(
-        `${location}: duplicate ${variableName} key ${JSON.stringify(key)} (first at ${entries.get(key).location})`,
-      );
-      continue;
-    }
-    entries.set(key, { value, location });
-  }
-
-  for (const key of allowedEmpty) {
-    const entry = entries.get(key);
-    if (!entry) {
-      errors.push(`${variableName} empty-value allowlist references an unknown key: ${JSON.stringify(key)}`);
-    } else if (entry.value.trim() !== "") {
-      errors.push(`${variableName} empty-value allowlist is stale for non-empty key: ${JSON.stringify(key)}`);
-    }
-  }
-  for (const key of allowedBoundaryWhitespace) {
-    const entry = entries.get(key);
-    if (!entry) {
-      errors.push(`${variableName} boundary-whitespace allowlist references an unknown key: ${JSON.stringify(key)}`);
-    } else if (entry.value === entry.value.trim()) {
-      errors.push(`${variableName} boundary-whitespace allowlist is stale for trimmed key: ${JSON.stringify(key)}`);
-    }
-  }
-  return entries;
-}
 
 function productionSourceFiles(rootPath) {
   const output = [];
@@ -322,6 +220,7 @@ function main() {
   const baseline = loadBaseline(cli.baselinePath, errors);
   const dictionaries = {
     I18N_ZH: readDictionary(
+      frontendRoot,
       "src/components/vkpi/cockpit/data/i18nZh.ts",
       "I18N_ZH",
       baseline.allowedEmptyTranslations.get("I18N_ZH") ?? new Set(),
@@ -329,6 +228,7 @@ function main() {
       errors,
     ),
     I18N_EN: readDictionary(
+      frontendRoot,
       "src/components/vkpi/cockpit/data/i18nEn.ts",
       "I18N_EN",
       baseline.allowedEmptyTranslations.get("I18N_EN") ?? new Set(),

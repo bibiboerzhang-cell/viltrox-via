@@ -1,4 +1,5 @@
 import { apiFetch, jsonBody } from "../http";
+import { MARKET_SIGNAL_SOURCES, type SignalSources } from "./marketSignalState";
 
 // GTM-1 · W3 · GTM Command 页专属 API 层。
 //   读端点(W1/W2 并行在建,本层按规格合约先行,键缺失全兜底):
@@ -156,7 +157,7 @@ export interface MarketBrainSummary {
   claim_status: string;
   organization_id: number | null;
   organization_scope_status: string;
-  weekly_signals: { items: WeeklySignalItem[]; sources_note: string; status: string };
+  weekly_signals: { items: WeeklySignalItem[]; sources_note: string; status: string; sources?: SignalSources };
   product_opportunities: { items: ProductOpportunityItem[]; note: string; status: string };
   recommended_actions: { items: GtmActionItem[]; note: string; status: string };
   strategy_defaults: { sku_hint: string; budget_hint: number | null; note: string; status: string };
@@ -206,6 +207,11 @@ export function normalizeMarketBrainSummary(raw: unknown): MarketBrainSummary {
       })),
       sources_note: asStr(ws.sources_note || ws.note),
       status: sectionStatus(data.weekly_signals),
+      // Whitelist read states only; exception details and provider payloads do
+      // not belong in the public signal card.
+      sources: Object.fromEntries(MARKET_SIGNAL_SOURCES
+        .filter((name) => Object.prototype.hasOwnProperty.call(asRow(ws.sources), name))
+        .map((name) => [name, { status: asStr(asRow(asRow(ws.sources)[name]).status) }])),
     },
     product_opportunities: {
       items: sectionItems(data.product_opportunities).map((r) => ({

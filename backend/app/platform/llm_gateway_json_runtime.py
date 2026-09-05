@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import llm_gateway_invoke_limits as _limits
+from .llm_gateway_call_hooks import cache_binding_allowed, cache_route_policy
 
 
 @dataclass
@@ -215,31 +216,7 @@ def _monthly_budget_preflight(state: JsonInvocationState) -> None:
     )
 
 
-def _cached_result(
-    state: JsonInvocationState,
-    candidates: list[tuple[str, str, bool]],
-) -> dict[str, Any] | None:
-    state.cache_plan = state.build_cache_plan(
-        state.purpose,
-        state.prompt,
-        model=state.cache_model_label(candidates),
-        contract="json",
-        max_output_tokens=state.max_output_tokens,
-        metadata=state.metadata,
-    )
-    cached = state.serve_cached_result(
-        plan=state.cache_plan,
-        purpose=state.purpose,
-        prompt=state.prompt,
-        contract="json",
-        record_call=state.gateway.record_call,
-        triggered_by=state.triggered_by,
-        metadata=state.metadata,
-        staff=state.staff,
-        cost_scope=state.cost_scope,
-    )
-    if cached is None:
-        return None
+def _validate_cached_result(state: JsonInvocationState, cached: dict[str, Any]) -> bool:
     try:
         value = cached["json"] if "json" in cached else state.gateway._extract_json_value(
             str(cached.get("text") or "")
@@ -251,8 +228,58 @@ def _cached_result(
         invalid = "cached result is not valid JSON"
     if invalid:
         state.errors.append({"provider": "cache", "status": "cache_contract_invalid", "error": invalid})
-        return None
+        return False
     cached["json"] = value
+    return not _deadline_expired(state)
+
+
+def _cached_result(
+    state: JsonInvocationState,
+    candidates: list[tuple[str, str, bool]],
+) -> dict[str, Any] | None:
+    state.cache_plan = state.build_cache_plan(
+        state.purpose,
+        state.prompt,
+        model=state.cache_model_label(candidates),
+        contract="json",
+        max_output_tokens=state.max_output_tokens,
+        metadata=state.metadata,
+        staff=state.staff,
+        cost_scope=state.cost_scope,
+        policy=cache_route_policy(
+            candidates, require_runtime_verified=state.require_runtime_verified,
+            atomic_reservation=state.enforce_atomic_reservation,
+        ),
+    )
+    validated = False
+
+    def accept_cached(value: dict[str, Any]) -> bool:
+        nonlocal validated
+        validated = True
+        return cache_binding_allowed(
+            candidates, resolve_binding=state.gateway._resolve_gateway_binding,
+            binding_blocker=state.gateway._binding_call_blocker,
+            require_runtime_verified=state.require_runtime_verified,
+        ) and _validate_cached_result(state, value)
+
+    cached = state.serve_cached_result(
+        plan=state.cache_plan,
+        purpose=state.purpose,
+        prompt=state.prompt,
+        contract="json",
+        record_call=state.gateway.record_call,
+        triggered_by=state.triggered_by,
+        metadata=state.metadata,
+        staff=state.staff,
+        cost_scope=state.cost_scope,
+        accept_cached=accept_cached,
+    )
+    if cached is None:
+        return None
+    # Legacy injected hooks may ignore the new acceptance callback. Preserve
+    # their supported seam while still revalidating the returned JSON once.
+    if not validated and not _validate_cached_result(state, cached):
+        return None
     cached.update(
         {
             "deadline_seconds": state.deadline_seconds,

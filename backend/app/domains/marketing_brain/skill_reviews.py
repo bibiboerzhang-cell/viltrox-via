@@ -16,6 +16,7 @@ from typing import Any
 from app.core.logging import get_logger
 from app.db.connection import get_conn, is_postgres_runtime, table_exists
 from app.domains.platform import event_ledger, review_contract
+from app.domains.marketing_brain.skills.campaign_plan_readiness import campaign_readiness_reviewable
 
 _RUNS = "vkpi_skill_runs"
 _EVENTS = "vkpi_event_ledger"
@@ -90,7 +91,8 @@ def _usable_production_output(skill_name: str, output: dict[str, Any]) -> bool:
         )
     if name == "campaign_plan":
         plan = output.get("plan") if isinstance(output.get("plan"), dict) else {}
-        return status == "ok" and bool(plan.get("timeline")) and bool(plan.get("creator_mix"))
+        return (status == "ok" and bool(plan.get("timeline")) and bool(plan.get("creator_mix"))
+                and campaign_readiness_reviewable(output))
     return False
 
 

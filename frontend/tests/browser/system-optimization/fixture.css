@@ -1,0 +1,19 @@
+html, body, #root { min-height: 100%; margin: 0; }
+body { background: var(--ds-bg); color: var(--ds-text); font-family: var(--ds-font-sans); }
+.fixture-shell { max-width: 1360px; margin: 0 auto; padding: 22px; }
+.fixture-warning { display: flex; flex-direction: column; gap: 8px; border: 2px solid var(--ds-warn); background: var(--ds-warn-soft); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+.fixture-warning strong { color: var(--ds-warn); font-size: 21px; }
+.fixture-warning span { font-size: 13px; line-height: 1.6; }
+.fixture-controls, .fixture-panel { padding: 18px; margin-bottom: 16px; border: 1px solid var(--ds-line); background: var(--ds-panel); border-radius: 12px; }
+.fixture-controls label { display: inline-flex; align-items: center; gap: 10px; margin-right: 12px; font-size: 13px; }
+.fixture-controls select, .fixture-controls button { border: 1px solid var(--ds-line); background: var(--ds-card); color: var(--ds-text); border-radius: 7px; padding: 8px 10px; font: inherit; }
+.fixture-controls button { cursor: pointer; }
+.fixture-controls p { color: var(--ds-text-2); font-size: 13px; line-height: 1.6; margin: 12px 0 0; }
+.fixture-panel h2 { font-size: 13px; color: var(--ds-text-2); margin: 0 0 14px; }
+.fixture-columns { display: grid; grid-template-columns: 1.05fr 1fr; gap: 18px; align-items: start; }
+.fixture-note { color: var(--ds-muted); font-size: 11px; line-height: 1.65; margin-top: 14px; }
+.fixture-log { max-height: 150px; overflow: auto; color: var(--ds-text-2); font: 11px/1.65 var(--ds-font-mono); padding-left: 20px; }
+.fixture-panel summary { cursor: pointer; font-size: 12px; }
+.fixture-raw-plan { border-top: 1px solid var(--ds-line); padding-top: 12px; }
+.fixture-raw-plan pre { max-height: 280px; overflow: auto; font: 11px/1.65 var(--ds-font-mono); }
+@media (max-width: 800px) { .fixture-shell { padding: 12px; } .fixture-columns { grid-template-columns: 1fr; } .fixture-controls label { display: flex; margin: 0 0 10px; } }

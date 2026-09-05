@@ -5,6 +5,7 @@ from typing import Any, Iterable
 
 from app.platform import llm_gateway_invoke_attempts as _invoke_attempts
 from app.platform import llm_gateway_invoke_limits as _limits
+from app.platform.llm_gateway_call_hooks import cache_binding_allowed, cache_route_policy
 from app.platform.llm_gateway_invoke_types import InvocationContext, InvocationHooks
 
 
@@ -137,6 +138,12 @@ def _prepare_cache(ctx: InvocationContext) -> dict[str, Any] | None:
         contract="text",
         max_output_tokens=ctx.max_output_tokens,
         metadata=ctx.metadata,
+        staff=ctx.staff,
+        cost_scope=ctx.cost_scope,
+        policy=cache_route_policy(
+            ctx.candidates, require_runtime_verified=ctx.require_runtime_verified,
+            atomic_reservation=ctx.enforce_atomic_reservation,
+        ),
     )
     return ctx.hooks.serve_cached_result(
         plan=ctx.cache_plan,
@@ -148,6 +155,13 @@ def _prepare_cache(ctx: InvocationContext) -> dict[str, Any] | None:
         metadata=ctx.metadata,
         staff=ctx.staff,
         cost_scope=ctx.cost_scope,
+        accept_cached=lambda _result: (
+            cache_binding_allowed(
+                ctx.candidates, resolve_binding=ctx.deps["_resolve_gateway_binding"],
+                binding_blocker=ctx.deps["_binding_call_blocker"],
+                require_runtime_verified=ctx.require_runtime_verified,
+            ) and not _limits.deadline_hit(ctx)
+        ),
     )
 
 

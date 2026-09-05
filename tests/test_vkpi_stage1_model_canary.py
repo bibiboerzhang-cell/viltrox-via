@@ -394,7 +394,10 @@ def test_response_model_mismatch_is_descriptive_and_never_promotes_readiness() -
     assert report["production_authorized"] is False
     assert report["attestation_status"] == "unsigned_not_readiness_evidence"
     assert "secret raw response" not in json.dumps(report)
-    assert len(reservations.settled) == 1
+    # A mismatched response cannot be priced at the requested model's rate.
+    assert reservations.settled == []
+    assert len(reservations.unknown) == 1
+    assert report["accounting"]["verified_calls"] == 0
     assert len(ledger) == 1
 
 

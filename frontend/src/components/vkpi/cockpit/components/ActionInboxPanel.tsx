@@ -8,6 +8,8 @@ import { m } from "framer-motion";
 import { useRowFlash } from "./ui/rowFlash";
 import { useT } from "../lib/i18n";
 import { CATEGORY_META, EXEC_REASON, PRIORITY_META, RISK_META } from "./actionInboxLabels";
+import { ActionInboxLedger, ActionInboxProgress, ActionInboxReceipt } from "./ActionInboxProgress";
+import { executionStage } from "./actionInboxStatus";
 import {
   Check,
   Clock,
@@ -110,6 +112,9 @@ export function ActionInboxPanel({
   const [ledgerOpen, setLedgerOpen] = React.useState(false);
   const [ledgerItems, setLedgerItems] = React.useState<any[]>([]);
   const [ledgerLoading, setLedgerLoading] = React.useState(false);
+  const [ledgerError, setLedgerError] = React.useState("");
+  const uncertainExecutions = React.useRef(new Set<number>());
+  const loadGeneration = React.useRef(0);
   // 默认只显 3 条(避免顶掉下方 KOL 漏斗 / Active Campaigns);可展开看全部(抓取仍 limit 条)。
   const [expanded, setExpanded] = React.useState(false);
   const COLLAPSED_COUNT = 3;
@@ -119,6 +124,7 @@ export function ActionInboxPanel({
   const [reconcileDrafts, setReconcileDrafts] = React.useState<Record<string, ReconciliationDraft>>({});
 
   const load = React.useCallback(() => {
+    const generation = ++loadGeneration.current;
     if (!apiToken) {
       setLoading(false);
       setError("未登录 / 无 token"); // 渲染处 t():load 不随语言切换重打接口
@@ -134,12 +140,14 @@ export function ActionInboxPanel({
       listActionInbox(apiToken, { limit, status: "executing" }),
     ])
       .then(([sug, appr, executing]) => {
+        if (generation !== loadGeneration.current) return;
         const seen = new Set<any>();
         const merged: any[] = [];
+        // Parallel reads can straddle a transition; never let an older suggestion hide executing.
         for (const it of [
-          ...(Array.isArray(sug?.items) ? sug.items : []),
-          ...(Array.isArray(appr?.items) ? appr.items : []),
           ...(Array.isArray(executing?.items) ? executing.items : []),
+          ...(Array.isArray(appr?.items) ? appr.items : []),
+          ...(Array.isArray(sug?.items) ? sug.items : []),
         ]) {
           if (it && !seen.has(it.id)) {
             seen.add(it.id);
@@ -151,23 +159,40 @@ export function ActionInboxPanel({
           (a: any, b: any) =>
             (b?.category === "gtm_verdict" ? 1 : 0) - (a?.category === "gtm_verdict" ? 1 : 0),
         );
-        setItems(merged);
+        setItems((previous) => {
+          // A missing row or stale approved response cannot resolve a lost execution response.
+          const preserved = previous.filter((row) => uncertainExecutions.current.has(row.id) && !seen.has(row.id));
+          return [...merged, ...preserved].map((row) => {
+            if (["executing", "executed", "failed"].includes(row.status)) {
+              uncertainExecutions.current.delete(row.id);
+              return row;
+            }
+            return uncertainExecutions.current.has(row.id) ? { ...row, execution_response_unknown: true } : row;
+          });
+        });
         setScope(sug?.scope || appr?.scope || executing?.scope || "");
         setAvailable(sug?.available !== false && appr?.available !== false && executing?.available !== false);
         // 当天闭环计数:两个响应同源(scope 一致),取任一存在的即可。
         setTodaySummary(sug?.today_summary ?? appr?.today_summary ?? executing?.today_summary ?? null);
       })
       .catch((err) => {
+        if (generation !== loadGeneration.current) return;
         setError(err?.message || "加载失败");
       })
-      .finally(() => setLoading(false));
+      .finally(() => { if (generation === loadGeneration.current) setLoading(false); });
   }, [apiToken, limit]);
 
   React.useEffect(() => {
+    uncertainExecutions.current.clear();
+    setItems([]);
+  }, [apiToken]);
+
+  React.useEffect(() => {
     load();
+    return () => { ++loadGeneration.current; };
   }, [load]);
 
-  // 乐观移除:成功后本地剔除该行(dismiss/snooze/execute 成功都让它离开列表)。
+  // Dismiss/snooze and manual closure leave the list; execution receipts stay until refresh.
   const removeItem = React.useCallback((id: any) => {
     setItems((prev) => prev.filter((it: any) => it.id !== id));
   }, []);
@@ -193,9 +218,16 @@ export function ActionInboxPanel({
   const loadLedger = React.useCallback(() => {
     if (!apiToken) return;
     setLedgerLoading(true);
+    setLedgerError("");
     listRecentExecutionLedger(apiToken, 20)
-      .then((res) => setLedgerItems(Array.isArray(res?.items) ? res.items : []))
-      .catch(() => setLedgerItems([]))
+      .then((res) => {
+        if (res?.available !== true || !Array.isArray(res?.items)) {
+          setLedgerError("unavailable");
+          return;
+        }
+        setLedgerItems(res.items);
+      })
+      .catch(() => setLedgerError("read_failed"))
       .finally(() => setLedgerLoading(false));
   }, [apiToken]);
 
@@ -220,6 +252,7 @@ export function ActionInboxPanel({
       }
       setBusy((b) => ({ ...b, [it.id]: kind }));
       setActionError("");
+      setOkNote("");
       const call =
         kind === "approve"
           ? approveAction(apiToken, it.id)
@@ -232,40 +265,40 @@ export function ActionInboxPanel({
         .then((res: any) => {
           if (kind === "execute") {
             const outcome = res?.outcome;
-            if (outcome === "success") {
+            const stage = executionStage(outcome, res?.detail);
+            if (res?.detail?.manual_reconciliation_required) {
+              setActionError(t(EXEC_REASON[res?.reason] || "执行结果待人工核对"));
+              setItemPatch(it.id, { status: "executing", manual_reconciliation_required: true });
+              return;
+            }
+            if (res?.ok === true && outcome === "success" && stage.tone === "info") {
               const cat = res?.category || it.category || "";
               const label = t((CATEGORY_META as any)[cat]?.label || cat);
               const lid = res?.ledger_id ? ` · ${t("台账")}#${res.ledger_id}` : "";
-              // 路线0 验收回执:执行后立即反馈 几个 job / 写几行 / 是否花钱。
-              const ck: any = res?.detail?.result_checklist;
-              const ckStr = ck
-                ? ` · job ${ck.jobs_created ?? 0}/${t("写")} ${ck.rows_written ?? 0}${t("行")}${ck.cost_spent_cents ? `/${t("花")} $${(Number(ck.cost_spent_cents) / 100).toFixed(2)}` : `/${t("未花钱")}`}`
-                : "";
-              setOkNote(`${t("已执行")} · ${label}${ckStr}${lid}`);
+              const ck = res?.detail?.result_checklist;
+              setOkNote(`${t(stage.label)} · ${label}${lid}`);
               setActionError("");
-              removeItem(it.id);
-              bumpToday("today_executed_count"); // 当天「已执行」+1(即时增长)
+              setItemPatch(it.id, { status: "executed", result_checklist_json: ck, execution_detail: res.detail });
+              if (res.ledger_id) bumpToday("today_executed_count");
               if (ledgerOpen) loadLedger();
               return;
             }
             // 外部副作用可能已经发生但终态落账失败:保留 executing,禁止自动重试,转人工对账。
-            const why = t(EXEC_REASON[res?.reason] || res?.reason || "执行未生效");
+            const why = t(EXEC_REASON[res?.reason] || res?.reason || stage.label);
             setActionError(why);
-            if (res?.detail?.manual_reconciliation_required) {
-              setItemPatch(it.id, {
-                status: "executing",
-                manual_reconciliation_required: true,
-                reconciliation_overdue: false,
-                execution_age_seconds: 0,
-              });
-              return;
+            if (outcome === "failed") {
+              setItemPatch(it.id, { status: "failed", execution_detail: res?.detail, result_checklist_json: res?.detail?.result_checklist });
+            } else if (outcome === "skipped") {
+              setItemPatch(it.id, { execution_blocked: true });
+            } else {
+              uncertainExecutions.current.add(it.id);
+              setItemPatch(it.id, { execution_response_unknown: true });
             }
-            // 已确认并落账的 failed 是终态;skipped 仍保留 approved。
-            if (outcome === "failed") removeItem(it.id);
             return;
           }
-          if (res && res.ok === false) {
-            setActionError(res.reason || t("操作未生效"));
+          const expectedStatus = ({ approve: "approved", dismiss: "dismissed", snooze: "snoozed" } as Record<string, string>)[kind];
+          if (res?.ok !== true || res?.status !== expectedStatus) {
+            setActionError(res?.reason || t("操作结果未确认，请刷新状态。"));
             return;
           }
           if (kind === "approve") {
@@ -279,8 +312,12 @@ export function ActionInboxPanel({
         })
         .catch((err: any) => {
           setActionError(err?.message || t("操作失败"));
-          // 网络失败时无法断言外部动作未发生,立即从后端重读 executing 真值。
-          if (kind === "execute") load();
+          if (kind === "execute") {
+            uncertainExecutions.current.add(it.id);
+            setItemPatch(it.id, { execution_response_unknown: true });
+            setActionError(t("执行响应丢失，结果未知；请核对台账，确认前不要重复执行。"));
+            load();
+          }
         })
         .finally(() =>
           setBusy((b) => {
@@ -329,7 +366,7 @@ export function ActionInboxPanel({
 
   const submitReconciliation = React.useCallback(
     (it: any) => {
-      if (!apiToken || !it || busy[it.id]) return;
+      if (!apiToken || !it || busy[it.id] || loading || error || !available) return;
       const key = String(it.id);
       const draft = reconcileDrafts[key];
       const evidence = String(draft?.evidence || "")
@@ -343,6 +380,7 @@ export function ActionInboxPanel({
       }
       setBusy((prev) => ({ ...prev, [it.id]: "reconcile" }));
       setActionError("");
+      setOkNote("");
       reconcileAction(apiToken, Number(it.id), {
         decision: draft.decision,
         reason: draft.reason.trim(),
@@ -350,6 +388,11 @@ export function ActionInboxPanel({
         correlation_id: draft.correlationId,
       })
         .then((res) => {
+          const expected = ({ succeeded: "executed", failed: "failed", unknown: "executing" } as Record<string, string>)[res?.decision];
+          if (res?.ok !== true || !expected || res.status !== expected) {
+            setActionError(t("操作结果未确认，请刷新状态。"));
+            return;
+          }
           const label =
             t(res.decision === "succeeded" ? "确认成功" : res.decision === "failed" ? "确认失败" : "仍未知");
           setOkNote(`${t("人工对账")} · ${label} · ${t("台账")}#${res.ledger_id}`);
@@ -384,7 +427,7 @@ export function ActionInboxPanel({
           }),
         );
     },
-    [apiToken, busy, reconcileDrafts, setItemPatch, removeItem, bumpToday, ledgerOpen, loadLedger, load, t],
+    [apiToken, busy, loading, error, available, reconcileDrafts, setItemPatch, removeItem, bumpToday, ledgerOpen, loadLedger, load, t],
   );
 
   // GTM-Loop:gtm_bet 无自动执行器 —— approved 后人在线下做完业务动作,在此「标记已执行」。
@@ -395,17 +438,18 @@ export function ActionInboxPanel({
       if (!apiToken || !it || busy[it.id]) return;
       setBusy((b) => ({ ...b, [it.id]: "markdone" }));
       setActionError("");
+      setOkNote("");
       apiFetch<{ ok?: boolean; reason?: string }>(
         `/api/admin/vkpi/actions/${it.id}/mark-done`,
         { method: "POST", cache: "no-store" },
         apiToken,
       )
         .then((res) => {
-          if (res && res.ok === false) {
-            setActionError(res.reason || t("标记未生效"));
+          if (res?.ok !== true) {
+            setActionError(res?.reason || t("标记未生效"));
             return;
           }
-          setOkNote(`${t("已标记执行")} · ${it.title || t("GTM押注")}`);
+          setOkNote(`${t("已记录人工执行 · 效果待核验")} · ${it.title || t("GTM押注")}`);
           removeItem(it.id);
           bumpToday("today_executed_count"); // 当天「已执行」+1(即时增长)
           load(); // 成功后刷新,后端真值校正
@@ -437,10 +481,11 @@ export function ActionInboxPanel({
   // 状态感知操作区:approved → 执行(第二步);suggested 可执行类 → 通过/稍后/忽略;
   // suggested 提醒类(requires_approval=false,无执行器)→ 只「知道了/稍后」(诚实,不给执行钮)。
   const renderActions = (it: any) => {
-    const b = busy[it.id];
+    const b = busy[it.id] || loading || error || !available;
     const spin = (k: string) =>
       b === k ? e(Loader2, { size: 9, className: "animate-spin" }) : null;
 
+    if (it.execution_response_unknown) return null;
     if (it.status === "executing") {
       return e(
         "div",
@@ -477,6 +522,7 @@ export function ActionInboxPanel({
           {
             key: "verdict",
             type: "button",
+            disabled: Boolean(b),
             onClick: () =>
               setVerdictOpen((prev: Record<string, boolean>) => ({ ...prev, [it.id]: !prev[it.id] })),
             title: t("展开裁决一屏:当时预期 vs 三窗实际,一键 decision + lesson"),
@@ -611,7 +657,7 @@ export function ActionInboxPanel({
       evidence: "",
       correlationId: reconciliationCorrelation(Number(it.id)),
     };
-    const canSubmit = Boolean(draft.reason.trim() && draft.evidence.trim() && !busy[it.id]);
+    const canSubmit = Boolean(draft.reason.trim() && draft.evidence.trim() && !busy[it.id] && !loading && !error && available);
     return e(
       "div",
       {
@@ -676,7 +722,7 @@ export function ActionInboxPanel({
       { className: "flex-1 flex items-center justify-center py-8" },
       e(Loader2, { size: 18, className: "animate-spin text-muted" }),
     );
-  } else if (error || !available) {
+  } else if ((error || !available) && items.length === 0) {
     body = e(
       "div",
       { className: "flex-1 flex items-center justify-center" },
@@ -696,7 +742,7 @@ export function ActionInboxPanel({
         className:
           "rounded-md border border-dashed border-line px-3 py-8 text-center text-[11px] text-muted",
       },
-      t("暂无待办建议 · 一切已跟进"),
+      t("暂无待办建议 · 任务与业务结果请查看执行台账。"),
     );
   } else {
     body = e(
@@ -732,6 +778,7 @@ export function ActionInboxPanel({
             ),
           ),
           e("div", { className: "mt-0.5 line-clamp-2 text-[10px] text-muted" }, it.detail),
+          e(ActionInboxProgress, { item: it, t }),
           // 路线0 决策四件套:收益 + 成本(为什么=reason 已在 detail 上方语义里;此处补收益/成本)
           (it.expected_gain || costCents > 0)
             ? e(
@@ -750,18 +797,8 @@ export function ActionInboxPanel({
                 e("span", { className: "line-clamp-1" }, it.verification_plan_json.join(" · ")),
               )
             : null,
-          // 路线0+S1 验收回执:已执行项展示标准化结果(job/写几行/是否花钱)+ 真 before/after delta
-          (it.status === "executed" && ck)
-            ? e(
-                "div",
-                { className: "mt-1 rounded border border-emerald-500/15 bg-emerald-500/[0.05] px-1.5 py-1 text-[9px] text-emerald-300/85" },
-                `${t("验收")}:${ck.outcome || "success"} · job ${ck.jobs_created ?? 0} · ${t("写")} ${ck.rows_written ?? 0} ${t("行")}` +
-                  (ck.cost_spent_cents ? ` · ${t("花")} $${(Number(ck.cost_spent_cents) / 100).toFixed(2)}` : ` · ${t("未花钱")}`) +
-                  (ck.failed_reason ? ` · ${ck.failed_reason}` : "") +
-                  (Array.isArray(ck.before_after) && ck.before_after.length
-                    ? " · " + ck.before_after.map((ba: any) => `${ba.table} ${ba.before}→${ba.after}(${ba.delta >= 0 ? "+" : ""}${ba.delta})`).join(" ")
-                    : ""),
-              )
+          (["executed", "failed"].includes(it.status))
+            ? e(ActionInboxReceipt, { value: ck, t })
             : null,
           // 红线提示:需人审 / 会消耗分析额度的动作明示(approve 时会二次确认)
           (it.requires_approval || it.uses_llm)
@@ -821,7 +858,7 @@ export function ActionInboxPanel({
             "span",
             { className: "flex items-center gap-1 text-emerald-300/90" },
             e(Check, { size: 11, className: "shrink-0" }),
-            `${t("今日已执行")} `,
+            `${t("今日执行记录")} `,
             e("span", { className: "font-semibold text-emerald-200" }, String(todaySummary.today_executed_count)),
             ` ${t("条")}`,
           ),
@@ -865,14 +902,19 @@ export function ActionInboxPanel({
     ),
     // 灌水可见化:今日已执行 / 已批准计数(执行后即时增长)
     todayStrip,
+    todayStrip ? e("div", { className: "mb-2 text-[9px] text-muted" }, t("执行记录含入队，不代表任务或业务完成。")) : null,
+    (error || !available) && items.length > 0
+      ? e("div", { role: "alert", className: "mb-2 text-[9px] text-amber-300" }, t("状态刷新失败，保留上次记录；操作已暂停，请稍后刷新。"))
+      : null,
     body,
-    // R7 执行成功绿色提示
+    // Informational acknowledgement, never a claim of business completion.
     okNote
       ? e(
           "div",
           {
+            role: "status",
             className:
-              "mt-2 rounded border border-emerald-500/25 bg-emerald-500/[0.07] px-2 py-1 text-[9px] text-emerald-300/90",
+              "mt-2 rounded border border-sky-500/25 bg-sky-500/[0.07] px-2 py-1 text-[9px] text-sky-300/90",
           },
           okNote,
         )
@@ -882,49 +924,16 @@ export function ActionInboxPanel({
       ? e(
           "div",
           {
+            role: "alert",
             className:
               "mt-2 rounded border border-red-500/20 bg-red-500/[0.06] px-2 py-1 text-[9px] text-red-300/80",
           },
-          `${t("操作未生效")} · ${actionError}`,
+          `${t("操作提示")} · ${actionError}`,
         )
       : null,
     // R7 执行台账(折叠;回读 vkpi_action_execution_ledger,before/after 验收)
     ledgerOpen
-      ? e(
-          "div",
-          { className: "mt-2 max-h-44 space-y-1 overflow-y-auto rounded border border-line bg-black/20 p-1.5" },
-          ledgerLoading
-            ? e("div", { className: "py-2 text-center text-[9px] text-muted" }, t("加载执行台账…"))
-            : ledgerItems.length === 0
-              ? e("div", { className: "py-2 text-center text-[9px] text-muted" }, t("暂无执行记录"))
-              : ledgerItems.map((l: any) =>
-                  e(
-                    "div",
-                    {
-                      key: `lg-${l.id}`,
-                      className: "flex items-center justify-between gap-2 rounded bg-panel px-1.5 py-1",
-                    },
-                    e(
-                      "span",
-                      { className: "min-w-0 flex-1 truncate text-[9px] text-ink-2" },
-                      `${t((CATEGORY_META as any)[l.category]?.label || l.category || "run")} · ${l.mode}`,
-                    ),
-                    e(
-                      "span",
-                      {
-                        className: `shrink-0 rounded px-1 text-[8px] ${
-                          l.outcome === "success"
-                            ? "text-emerald-300"
-                            : l.outcome === "failed"
-                              ? "text-red-300"
-                              : "text-muted"
-                        }`,
-                      },
-                      l.outcome,
-                    ),
-                  ),
-                ),
-        )
+      ? e(ActionInboxLedger, { items: ledgerItems, loading: ledgerLoading, error: ledgerError, t })
       : null,
     // footer:数据源 + scope + 人审后执行 诚实标注 + 执行台账开关
     e(

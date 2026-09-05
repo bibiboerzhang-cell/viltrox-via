@@ -14,7 +14,6 @@ a profile is private, unsupported, or never yields video evidence.
 """
 from __future__ import annotations
 
-import secrets
 from datetime import datetime, time, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -23,6 +22,14 @@ from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
 from app.domains.kol import url_deep_crawl
 from app.domains.kol import search_inventory_scan_state as scan_state
+from app.domains.kol.search_inventory_slots import (
+    MAX_DAILY_LIMIT,
+    _bind_daily_job_slot,
+    _release_daily_job_slots,
+    _reserve_daily_job_slots,
+    dispatch_summary,
+    recover_dispatch_connection,
+)
 from app.domains.kol.url_deep_crawl_queue import DEEP_CRAWL_JOB_TYPE
 
 
@@ -32,10 +39,8 @@ TASK_KEY = "kol_profile_incremental_refresh"
 JOB_TYPE = DEEP_CRAWL_JOB_TYPE
 REFRESH_SOURCE = "kol_search_inventory_daily"
 DEFAULT_DAILY_LIMIT = 5
-# Initial rollout safety invariant. This is a hard cross-run daily job cap,
-# not merely the default value accepted by ``enqueue_daily_refresh``. Raising
-# it requires a reviewed code + database migration change.
-MAX_DAILY_LIMIT = 5
+# MAX_DAILY_LIMIT is imported from the durable slot ledger; the default run
+# size never authorizes raising that cross-run ceiling.
 DAILY_CAP_UNIT = "new_maintenance_jobs_not_provider_calls"
 DAILY_CAP_NOTICE = (
     "5 maintenance jobs are not 5 provider calls; "
@@ -101,130 +106,6 @@ def _calendar_day_bounds(as_of: datetime | None = None) -> tuple[datetime, datet
     start_local = datetime.combine(local_day, time.min, tzinfo=zone)
     end_local = datetime.combine(local_day + timedelta(days=1), time.min, tzinfo=zone)
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc), local_day.isoformat()
-
-
-def _reserve_daily_job_slots(
-    conn: Any,
-    *,
-    batch_date: str,
-    requested: int,
-    actual_jobs: int,
-) -> dict[str, Any]:
-    """Atomically reserve unique daily job slots across scheduler/manual runs.
-
-    The table primary key is ``(batch_date, slot_no)``. Concurrent callers may
-    wait on the same first free slot, but they cannot jointly create more than
-    ``MAX_DAILY_LIMIT`` rows. Reservations are committed before any provider
-    job is inserted, so a process crash fails closed (temporary underfill) and
-    can never reopen spend capacity.
-    """
-
-    safe_requested = max(0, min(_int(requested), MAX_DAILY_LIMIT))
-    existing_rows = conn.execute(
-        "SELECT slot_no FROM vkpi_kol_search_inventory_daily_slots "
-        "WHERE batch_date=? ORDER BY slot_no",
-        (batch_date,),
-    ).fetchall()
-    occupied = {
-        _int(_row(item).get("slot_no"))
-        for item in existing_rows
-        if _int(_row(item).get("slot_no")) > 0
-    }
-    # Deploying the ledger during an already-active day must account for source
-    # jobs created before the table existed. Fill anonymous legacy slots first.
-    legacy_target = min(MAX_DAILY_LIMIT, max(0, _int(actual_jobs)))
-    for slot_no in range(1, MAX_DAILY_LIMIT + 1):
-        if len(occupied) >= legacy_target:
-            break
-        if slot_no in occupied:
-            continue
-        inserted = conn.execute(
-            """
-            INSERT INTO vkpi_kol_search_inventory_daily_slots
-                (batch_date, slot_no, reservation_token, job_id, updated_at)
-            VALUES (?, ?, ?, NULL, CURRENT_TIMESTAMP)
-            ON CONFLICT (batch_date, slot_no) DO NOTHING
-            RETURNING slot_no
-            """,
-            (batch_date, slot_no, f"legacy:{batch_date}"),
-        ).fetchone()
-        if inserted:
-            occupied.add(slot_no)
-        else:
-            occupied.add(slot_no)
-
-    token = f"refresh:{batch_date}:{secrets.token_hex(12)}"
-    reserved: list[int] = []
-    used_before = len(occupied)
-    for slot_no in range(1, MAX_DAILY_LIMIT + 1):
-        if len(reserved) >= safe_requested:
-            break
-        if slot_no in occupied:
-            continue
-        inserted = conn.execute(
-            """
-            INSERT INTO vkpi_kol_search_inventory_daily_slots
-                (batch_date, slot_no, reservation_token, job_id, updated_at)
-            VALUES (?, ?, ?, NULL, CURRENT_TIMESTAMP)
-            ON CONFLICT (batch_date, slot_no) DO NOTHING
-            RETURNING slot_no
-            """,
-            (batch_date, slot_no, token),
-        ).fetchone()
-        if inserted:
-            inserted_slot = _int(_row(inserted).get("slot_no"), slot_no)
-            occupied.add(inserted_slot)
-            reserved.append(inserted_slot)
-        else:
-            occupied.add(slot_no)
-    conn.commit()
-    return {
-        "reservation_token": token,
-        "reserved_slots": reserved,
-        "used_before": used_before,
-        "used_after_reservation": len(occupied),
-        "hard_limit": MAX_DAILY_LIMIT,
-    }
-
-
-def _bind_daily_job_slot(
-    conn: Any,
-    *,
-    batch_date: str,
-    reservation_token: str,
-    slot_no: int,
-    job_id: int,
-) -> None:
-    conn.execute(
-        """
-        UPDATE vkpi_kol_search_inventory_daily_slots
-        SET job_id=?, updated_at=CURRENT_TIMESTAMP
-        WHERE batch_date=? AND slot_no=? AND reservation_token=?
-        """,
-        (int(job_id), batch_date, int(slot_no), reservation_token),
-    )
-    conn.commit()
-
-
-def _release_daily_job_slots(
-    conn: Any,
-    *,
-    batch_date: str,
-    reservation_token: str,
-    slot_numbers: list[int],
-) -> int:
-    released = 0
-    for slot_no in slot_numbers:
-        cursor = conn.execute(
-            """
-            DELETE FROM vkpi_kol_search_inventory_daily_slots
-            WHERE batch_date=? AND slot_no=? AND reservation_token=? AND job_id IS NULL
-            """,
-            (batch_date, int(slot_no), reservation_token),
-        )
-        released += max(0, _int(getattr(cursor, "rowcount", 0)))
-    conn.commit()
-    return released
 
 
 def select_refresh_candidates(
@@ -670,9 +551,12 @@ def enqueue_daily_refresh(
     queued = 0
     already_queued = 0
     failed = 0
+    recovery_diagnostics: dict[str, Any] = {}
+    processed = 0
     releasable_slots: list[int] = []
     reservation_token = str(reservation.get("reservation_token") or "")
     for candidate, slot_no in zip(candidates, granted_slots):
+        processed += 1
         kol_pool_id = _int(candidate.get("kol_pool_id"))
         if kol_pool_id <= 0:
             releasable_slots.append(_int(slot_no))
@@ -716,6 +600,8 @@ def enqueue_daily_refresh(
                             slot_no,
                             exc_info=True,
                         )
+                        if not recover_dispatch_connection(conn, recovery_diagnostics, stage="slot_binding"):
+                            break
             elif status == "already_queued":
                 already_queued += 1
                 releasable_slots.append(_int(slot_no))
@@ -729,21 +615,15 @@ def enqueue_daily_refresh(
                 )
         except Exception:
             failed += 1
-            try:
-                conn.rollback()
-            except Exception:
-                logger.warning(
-                    "vkpi.kol.search_inventory_refresh.rollback_failed kol_pool_id=%s",
-                    kol_pool_id,
-                    exc_info=True,
-                )
             logger.warning(
                 "vkpi.kol.search_inventory_refresh.enqueue_failed kol_pool_id=%s",
                 kol_pool_id,
                 exc_info=True,
             )
+            if not recover_dispatch_connection(conn, recovery_diagnostics, stage="enqueue"):
+                break
     released_slots = 0
-    if releasable_slots:
+    if releasable_slots and not recovery_diagnostics.get("dispatch_blocked"):
         try:
             released_slots = _release_daily_job_slots(
                 conn,
@@ -761,21 +641,14 @@ def enqueue_daily_refresh(
                 releasable_slots,
                 exc_info=True,
             )
-    status = (
-        "partial"
-        if scan_exhausted or (failed and (queued or already_queued))
-        else "failed"
-        if failed
-        else "ok"
-    )
+            recover_dispatch_connection(conn, recovery_diagnostics, stage="slot_release")
     return {
         **base,
-        "status": status,
-        "queued": queued,
-        "already_queued": already_queued,
-        "failed": failed,
-        "reservation_slots_released": released_slots,
-        "reservation_slots_held": len(granted_slots) - released_slots,
+        **dispatch_summary(
+            queued=queued, already_queued=already_queued, failed=failed,
+            scan_exhausted=scan_exhausted, granted=len(granted_slots), released=released_slots,
+            candidate_count=len(candidates), processed=processed, diagnostics=recovery_diagnostics,
+        ),
     }
 
 

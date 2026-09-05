@@ -1,4 +1,5 @@
 import React from "react";
+import { completeSignalCount } from "../../../../services/vkpi/marketSignalState";
 import { PencilLine, RefreshCw } from "lucide-react";
 import { EditableDashboardBoard, type DashboardModuleDefinition } from "../components/EditableDashboardBoard";
 import { EmbeddedDashboardModule } from "../components/EmbeddedDashboardModule";
@@ -401,9 +402,10 @@ export function GtmCommandBoardPage({ apiToken = "", onNavigate, embeddedModuleK
 
   const renderSignals = () => {
     const ws = summary?.weekly_signals;
+    const count = ws ? completeSignalCount(ws) : null;
     const extraRows: Array<[string, string]> = ws?.sources_note ? [["来源注", ws.sources_note]] : [];
     return (
-      <ModuleCard {...cardProps("signals", "本周信号", ws ? `${ws.items.length}` : undefined, extraRows)}>
+      <ModuleCard {...cardProps("signals", "本周信号", count != null ? `${count}` : undefined, extraRows)}>
         {summaryGate() ?? <SignalsBody summary={summary!} />}
       </ModuleCard>
     );
