@@ -180,7 +180,12 @@ async def job_vkpi_forecast_batch_issue() -> dict[str, Any] | None:
                 "truncated": result.get("truncated"),
             },
         )
-        _record_scheduler_run(TASK_KEY, ok=True)
+        from app.services.scheduler_result_contract import normalize_scheduler_result
+
+        if int(result.get("failed") or 0) > 0:
+            result = {**result, "status": "partial", "reason": "forecast_pairs_failed"}
+        outcome = normalize_scheduler_result(result)
+        _record_scheduler_run(TASK_KEY, ok=outcome.ok, error=outcome.error)
         return result
     except Exception as exc:
         logger.exception("scheduler.vkpi_forecast_batch_issue_failed")

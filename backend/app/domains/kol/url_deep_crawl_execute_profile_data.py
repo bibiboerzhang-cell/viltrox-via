@@ -44,10 +44,9 @@ def _crawl_profile_basics(
     **三个抓取器本来就支持真时间窗,此前 ``since`` 是签名里的死参数、全仓无人传**
     (2026-08-25 复核坐实):
 
-    * YouTube:``crawl_channel_videos`` 带 since → ``publishedAfter``,平台侧按发布
-      时间截取。代价是从 playlistItems(1 配额单位)切到 search 端点(100 单位),
-      换到的是「窗口内的内容」而不是「最近 N 条里恰好落在窗口内的那几条」——只在
-      调用方明确要一个时间窗时才发生(``since`` 为空一律走原来的 playlistItems)。
+    * YouTube:已知频道优先 uploads playlist,以视频发布时间在客户端应用 since。
+      分页扫描有上限,未完成的窗口明确 partial,不假定发布日期与播放列表顺序相同。
+      Search 与其余 API 使用独立配额桶;不再将 search 当作 100 个通用单位。
     * TikTok:``crawl_channel_profile`` 带 since → ``oldestPostDate``,同为平台侧截取。
     * Instagram:账号资料抓取器**没有日期字段**,since 只放宽取数窗口,取回的内容
       可能落在所选范围之外。这一档由报价如实标为「只能取最近内容」,门面照实说,
@@ -59,7 +58,12 @@ def _crawl_profile_basics(
     started = time.monotonic()
     videos_payload: dict[str, Any] = {}
 
-    if classified.platform == "youtube":
+    if classified.platform in {"x", "reddit"}:
+        profile_payload = crawler.crawl_person_profile(target, max_posts=max_posts)
+        # Posts remain in their own payload. Do not enqueue video-analysis jobs
+        # or materialize them into the legacy video-evidence table.
+        videos_items = []
+    elif classified.platform == "youtube":
         profile_payload, videos_payload, videos_items = _crawl_youtube_profile_basics(
             crawler, classified, target=target, max_posts=max_posts, since_text=since_text
         )
@@ -161,6 +165,10 @@ def _nested_profile_video_items(profile_obj: dict[str, Any]) -> list[dict[str, A
 
 
 def _crawl_payload_status(profile_payload: Any, videos_payload: Any) -> str:
+    for payload in (profile_payload, videos_payload):
+        status = str((payload or {}).get("status") or "").lower()
+        if status in {"failed", "partial", "not_configured", "empty", "quota_exceeded", "rate_limited"}:
+            return status
     return str(
         (profile_payload or {}).get("sync_status")
         or (profile_payload or {}).get("provider_status")
@@ -203,6 +211,20 @@ def _profile_data_from_crawl(
             "elapsed_ms": crawl.get("elapsed_ms"),
         },
     }
+    if classified.platform in {"x", "reddit"}:
+        from app.domains.kol.profile_online_post_evidence import SCHEMA_KEY, build_post_evidence
+        profile = profile_payload.get("profile") or {}
+        posts = profile_payload.get("posts") or []
+        raw_data.update(posts=posts, content_kind="post")
+        raw_data[SCHEMA_KEY] = build_post_evidence(profile, posts)
+        return {
+            "platform": classified.platform, "handle": profile.get("handle") or handle,
+            "profile_url": profile.get("profile_url") or classified.normalized_url,
+            "avatar_url": profile.get("avatar_url") or "", "bio": profile.get("bio") or "",
+            "display_name": profile.get("display_name") or "",
+            "followers": profile.get("followers"), "posts_count": len(posts),
+            "raw_platform_data": _json(raw_data),
+        }
     if classified.platform == "youtube":
         source = str(profile_payload.get("provider_source") or videos_payload.get("provider_source") or "").strip()
         raw_data["source"] = "youtube_url_deep_crawl_profile_apify" if source == "apify" else "youtube_url_deep_crawl_profile_api"
@@ -285,6 +307,9 @@ def _identity_profile_data(classified: ClassifiedUrl) -> dict[str, Any]:
 
 
 def _crawler_for(platform: str) -> Any:
+    if platform in {"x", "reddit"}:
+        from app.platform.industry_crawlers import XCrawler, RedditCrawler
+        return XCrawler() if platform == "x" else RedditCrawler()
     if platform == "youtube":
         return YouTubeCrawler(run_timeout_seconds=240)
     if platform == "instagram":
@@ -292,4 +317,3 @@ def _crawler_for(platform: str) -> Any:
     if platform == "tiktok":
         return TikTokCrawler(run_timeout_seconds=240)
     raise ValueError(f"unsupported platform: {platform}")
-

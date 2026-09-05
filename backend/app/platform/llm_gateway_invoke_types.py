@@ -39,6 +39,14 @@ class InvocationContext:
     errors: list[dict[str, Any]] = field(default_factory=list)
     candidates: list[tuple[str, str, bool]] = field(default_factory=list)
     cache_plan: Any = None
+    clock: Any = None
+    started: float = 0.0
+    deadline_seconds: float = 90.0
+    deadline_at: float = 0.0
+    attempt_limit: int = 2
+    provider_attempts: int = 0
+    stop_reason: str = ""
+    last_reservation_key: str = ""
 
 
 @dataclass
@@ -53,3 +61,4 @@ class CandidateAttempt:
     budget_checks: Any
     reservation_key: str = ""
     breaker_permit: Any = None
+    provider_marked_started: bool = False

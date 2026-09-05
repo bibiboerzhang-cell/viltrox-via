@@ -22,6 +22,7 @@ from app.platform.apify_budget import (
     call_apify_actor,
 )
 from app.services.intelligence.account_scan_helpers import *  # noqa: F403
+from app.services.intelligence.account_scan_outcome import ActorRunError, read_actor_dataset
 
 logger = get_logger(__name__)
 
@@ -34,7 +35,7 @@ async def _run_actor(actor_id: str, payload: Dict[str, Any], timeout: int = 600)
     client = _client()
     if not client:
         logger.warning("scanner.client_missing")
-        return []
+        raise ActorRunError("actor_not_configured")
 
     def go() -> List[Dict[str, Any]]:
         logger.info("scanner.actor_started", extra={"actor_id": actor_id})
@@ -46,8 +47,9 @@ async def _run_actor(actor_id: str, payload: Dict[str, Any], timeout: int = 600)
             run_input=payload,
             timeout_secs=timeout,
         )
-        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
-        logger.info("scanner.actor_complete", extra={"actor_id": actor_id, "item_count": len(items)})
+        # Only complete terminal datasets can release/settle the reservation.
+        # Partial reads retain the existing run and its budget for reconciliation.
+        items = read_actor_dataset(client, run)
         # C5 成本记账收口:矩阵扫描全部 actor run 走此共用 runner,统一记账
         # (幂等 by run_id;失败绝不影响扫描)。
         try:
@@ -63,15 +65,18 @@ async def _run_actor(actor_id: str, payload: Dict[str, Any], timeout: int = 600)
             )
         except Exception:
             logger.warning("scanner.cost_record_failed", extra={"actor_id": actor_id}, exc_info=True)
+        logger.info("scanner.actor_complete", extra={"actor_id": actor_id, "item_count": len(items)})
         return items
 
     try:
         return await asyncio.to_thread(go)
     except (ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked):
         raise
+    except ActorRunError:
+        raise
     except Exception as exc:
-        logger.warning("scanner.actor_failed", extra={"actor_id": actor_id, "error": str(exc)})
-        return []
+        logger.warning("scanner.actor_failed", extra={"actor_id": actor_id, "error_type": type(exc).__name__})
+        raise ActorRunError("actor_provider_failed", provider_outcome_unknown=True) from exc
 
 
 def provider_ready() -> bool:
@@ -107,19 +112,20 @@ async def scan_instagram_account(handle: str, max_posts: int = 1000) -> Dict[str
             "resultsLimit": max_posts,
         },
     )
-    raw_profile = await _run_actor(
-        "apify/instagram-scraper",
-        {
-            "directUrls": [url],
-            "resultsType": "details",
-            "resultsLimit": 1,
-        },
-        timeout=240,
-    )
+    profile_error = None
+    try:
+        raw_profile = await _run_actor(
+            "apify/instagram-scraper",
+            {"directUrls": [url], "resultsType": "details", "resultsLimit": 1},
+            timeout=240,
+        )
+    except ActorRunError as exc:
+        profile_error = exc
+        raw_profile = exc.partial_items
     posts = [post for post in raw_posts if (post.get("ownerUsername", "").lower() == normalized.lower())]
     profile = _profile_from_items("instagram", normalized, raw_profile + (posts or raw_posts))
     profile["profile_url"] = profile.get("profile_url") or url
-    return _build_scan_result(
+    result = _build_scan_result(
         "instagram",
         normalized,
         [
@@ -140,6 +146,9 @@ async def scan_instagram_account(handle: str, max_posts: int = 1000) -> Dict[str
         time.time() - started_at,
         profile=profile,
     )
+    if profile_error:
+        result.update(status="partial" if posts else "failed", metadata=profile_error.as_result("instagram")["metadata"])
+    return result
 
 
 async def scan_tiktok_account(handle: str, max_posts: int = 1000) -> Dict[str, Any]:
@@ -405,8 +414,18 @@ async def scan_account(platform: str, handle: str, max_posts: int = 1000) -> Dic
     normalized_handle = (handle or "").strip()
     scanner = SCANNERS.get(normalized_platform)
     if not scanner:
-        return _build_scan_result(normalized_platform, normalized_handle, [], 0)
-    return await scanner(normalized_handle, max_posts)
+        return {**_build_scan_result(normalized_platform, normalized_handle, [], 0), "status": "not_configured"}
+    try:
+        if normalized_platform in {"x", "twitter", "reddit"}:
+            from app.services.intelligence.account_search_secondary import scan_secondary_profile
+
+            return await scan_secondary_profile(normalized_platform, normalized_handle, max_posts=max_posts)
+        return await scanner(normalized_handle, max_posts)
+    except ActorRunError as exc:
+        # Dataset rows are raw, not normalized posts. Keep them separate so a
+        # partial download is not reported as a successfully scanned account.
+        return {**_build_scan_result(normalized_platform, normalized_handle, [], 0),
+                **exc.as_result(normalized_platform), "handle": normalized_handle}
 
 
 async def scan_matrix(accounts: List[Dict[str, Any]], max_posts_per_account: int = 1000) -> Dict[str, Any]:

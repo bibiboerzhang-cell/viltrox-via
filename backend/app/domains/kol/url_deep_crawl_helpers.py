@@ -22,7 +22,8 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-SUPPORTED_PLATFORMS = {"youtube", "instagram", "tiktok"}
+from app.domains.kol.search_platform_policy import STRICT_DISCOVERY_PLATFORMS
+SUPPORTED_PLATFORMS = set(STRICT_DISCOVERY_PLATFORMS)
 PROFILE_GENERIC_SEGMENTS = {
     "",
     "about",
@@ -202,6 +203,10 @@ def _profile_url_for_creator(platform: str, handle: str, channel_id: str) -> str
         return f"https://www.instagram.com/{handle.lstrip('@')}/"
     if platform == "tiktok" and handle:
         return f"https://www.tiktok.com/@{handle.lstrip('@')}"
+    if platform == "x" and handle:
+        return f"https://x.com/{handle.lstrip('@')}"
+    if platform == "reddit" and handle:
+        return f"https://www.reddit.com/user/{handle}/"
     return ""
 
 
@@ -209,7 +214,7 @@ def _has_matchable_creator_identity(identity: dict[str, Any]) -> bool:
     platform = _normalise_platform(identity.get("platform"))
     if platform == "youtube":
         return bool(_metadata_text(identity.get("channel_id")).startswith("UC") or _metadata_text(identity.get("handle")))
-    if platform in {"instagram", "tiktok"}:
+    if platform in {"instagram", "tiktok", "x", "reddit"}:
         return bool(_metadata_text(identity.get("handle")))
     return False
 
@@ -513,6 +518,16 @@ def _platform_from_host(host: str) -> str:
     return ""
 
 
+def _secondary_profile_classification(original: str, normalized: str, host: str) -> tuple[Any, ...] | None:
+    from app.platform.industry_crawlers.reddit_people_normalize import person_handle
+    platform = "x" if host in {"x.com", "twitter.com"} else "reddit" if host in {"reddit.com", "old.reddit.com"} else ""
+    if not platform:
+        return None
+    handle = person_handle(platform, normalized)
+    return (original, normalized, "profile" if handle else "unknown", platform,
+            handle, "", "", "profile_pattern" if handle else "secondary_person_profile_required")
+
+
 def _video_id(platform: str, host: str, path: str, query: str) -> str:
     parts = [part for part in path.split("/") if part]
     lowered = [part.lower() for part in parts]
@@ -544,6 +559,8 @@ def _normalise_platform(value: Any) -> str:
         return "instagram"
     if text in {"tt", "tiktok", "tiktok.com"}:
         return "tiktok"
+    if text in {"twitter", "x", "x.com", "twitter.com"}:
+        return "x"
     return text
 
 

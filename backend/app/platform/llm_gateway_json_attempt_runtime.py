@@ -4,6 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from . import llm_gateway_invoke_limits as _limits
+from . import llm_gateway_json_attempt_limits as _attempt_limits
+
 
 @dataclass
 class JsonCandidate:
@@ -17,6 +20,7 @@ class JsonCandidate:
     budget_checks: list[dict[str, Any]]
     reservation_key: str = ""
     breaker_permit: Any = None
+    provider_marked_started: bool = False
 
 
 @dataclass
@@ -28,6 +32,7 @@ class JsonAttemptEvaluation:
     parsed_value: Any
     completed_after_deadline: bool
     result_micro_for_settlement: int
+    outcome_unknown: bool = False
 
 
 @dataclass(frozen=True)
@@ -65,6 +70,7 @@ def _fallback_result(
             "deadline_seconds": state.deadline_seconds,
             "elapsed_ms": _elapsed_ms(state),
             "provider_attempts": state.provider_attempts,
+            "max_provider_attempts": state.attempt_limit,
             "budget_reservation_key": reservation_key,
         }
     )
@@ -270,9 +276,7 @@ def _release_failed_start(
             )
     if candidate.reservation_key:
         try:
-            gateway._llm_budget_reservations().release_llm_reservation(
-                candidate.reservation_key
-            )
+            _attempt_limits.release_unstarted(state, candidate)
         except Exception:
             gateway.logger.error(
                 "vkpi.llm_gateway.json_reservation_release_failed",
@@ -336,6 +340,7 @@ def _start_provider_attempt(
 ) -> bool:
     gateway = state.gateway
     try:
+        _attempt_limits.checkpoint(state)
         if state.enforce_atomic_reservation:
             reservation = gateway._llm_budget_reservations().reserve_llm_budget(
                 provider=candidate.provider,
@@ -350,16 +355,25 @@ def _start_provider_attempt(
                 triggered_by=state.triggered_by,
             )
             candidate.reservation_key = str(reservation.reservation_key or "")
+        _attempt_limits.checkpoint(state)
         candidate.breaker_permit = gateway._acquire_strict_fleet_breaker(
             provider=candidate.provider,
             model=candidate.binding.model_id,
             enforce_atomic_reservation=state.enforce_atomic_reservation,
         )
+        _attempt_limits.checkpoint(state)
         if state.enforce_atomic_reservation:
             gateway._llm_budget_reservations().mark_llm_provider_started(
                 candidate.reservation_key
             )
+            candidate.provider_marked_started = True
+        _attempt_limits.checkpoint(state)
         return True
+    except _limits.GatewayDeadlineExceeded:
+        _release_failed_start(state, candidate)
+        state.deadline_hit = True
+        state.errors.append({"provider": "gateway", "status": "deadline_exceeded"})
+        return False
     except Exception as exc:
         _release_failed_start(state, candidate)
         _record_start_block(state, candidate, exc)
@@ -372,15 +386,10 @@ def _call_provider(
 ) -> dict[str, Any]:
     gateway = state.gateway
     try:
-        state.provider_attempts += 1
-        if candidate.explicit_model:
-            raw_result = candidate.caller(
-                state.prompt,
-                state.max_output_tokens,
-                model_override=candidate.binding.model_id,
-            )
-        else:
-            raw_result = candidate.caller(state.prompt, state.max_output_tokens)
+        with _limits.provider_deadline(state.deadline_at, gateway.time.monotonic):
+            state.provider_attempts += 1
+            kwargs = {"model_override": candidate.binding.model_id} if candidate.explicit_model else {}
+            raw_result = candidate.caller(state.prompt, state.max_output_tokens, **kwargs)
         if isinstance(raw_result, dict):
             return dict(raw_result)
         return {
@@ -388,9 +397,9 @@ def _call_provider(
             "provider": candidate.provider,
             "error": "provider returned a non-object result",
         }
+    except _limits.GatewayDeadlineExceeded:
+        return {"status": "deadline_exceeded", "provider_io_started": False}
     except Exception as exc:
-        if candidate.reservation_key:
-            gateway._mark_reserved_attempt_unknown(candidate.reservation_key)
         return {
             "status": "provider_exception",
             "provider": candidate.provider,
@@ -409,6 +418,9 @@ def _complete_breaker(
 ) -> dict[str, Any] | None:
     gateway = state.gateway
     try:
+        if result.get("provider_io_started") is False:
+            gateway._abandon_strict_fleet_breaker(candidate.breaker_permit)
+            return None
         gateway._complete_strict_fleet_breaker(candidate.breaker_permit, result)
         return None
     except Exception as exc:
@@ -462,12 +474,6 @@ def _evaluate_result(
             binding=candidate.binding,
         )
     )
-    if (
-        candidate.reservation_key
-        and provider_status != "success"
-        and provider_status != "provider_exception"
-    ):
-        gateway._mark_reserved_attempt_unknown(candidate.reservation_key)
     if provider_status == "success":
         actual_model = str(result.get("model") or "").strip()
         if candidate.explicit_model and not candidate.binding.matches_response_model(
@@ -499,6 +505,15 @@ def _evaluate_result(
                 else:
                     attempt_status = "success"
                     attempt_error = ""
+    # A caller-supplied validator is inside the same cooperative allowance.
+    completed_after_deadline = gateway.time.monotonic() >= state.deadline_at
+    if completed_after_deadline and attempt_status == "success":
+        attempt_status = "deadline_exceeded"
+        attempt_error = "JSON validation completed after gateway deadline"
+    unknown = _attempt_limits.outcome_unknown(state, candidate, result, attempt_status)
+    if unknown and attempt_status == "success":
+        attempt_status = "provider_outcome_unknown"
+        attempt_error = "successful response has no reliable usage"
     return JsonAttemptEvaluation(
         result=result,
         provider_status=provider_status,
@@ -507,6 +522,7 @@ def _evaluate_result(
         parsed_value=parsed_value,
         completed_after_deadline=completed_after_deadline,
         result_micro_for_settlement=result_micro_for_settlement,
+        outcome_unknown=unknown,
     )
 
 
@@ -529,7 +545,7 @@ def _audit_attempt(
             prompt=state.prompt,
             cost_scope=state.cost_scope,
             triggered_by=state.triggered_by,
-            metadata=state.metadata,
+            metadata={**(state.metadata or {}), "provider_outcome_unknown": evaluation.outcome_unknown},
             staff=state.staff,
             attempt_errors=list(state.errors),
             budget_checks=candidate.budget_checks,
@@ -587,7 +603,7 @@ def _settle_attempt(
     candidate: JsonCandidate,
     evaluation: JsonAttemptEvaluation,
 ) -> dict[str, Any] | None:
-    if not candidate.reservation_key or evaluation.provider_status != "success":
+    if not candidate.reservation_key:
         return None
     gateway = state.gateway
     try:
@@ -648,6 +664,7 @@ def _success_result(
             "deadline_seconds": state.deadline_seconds,
             "elapsed_ms": _elapsed_ms(state),
             "provider_attempts": state.provider_attempts,
+            "max_provider_attempts": state.attempt_limit,
             "resolved_model_binding": candidate.binding.to_dict(),
             "budget_reservation_key": candidate.reservation_key or None,
         }
@@ -672,9 +689,25 @@ def run_candidate(
     )
     if audit_fallback is not None:
         return CandidateDecision("return", audit_fallback)
+    if evaluation.outcome_unknown:
+        if candidate.reservation_key:
+            state.gateway._mark_reserved_attempt_unknown(candidate.reservation_key)
+        state.errors.append({"provider": candidate.provider,
+                             "status": evaluation.attempt_status,
+                             "error": evaluation.attempt_error})
+        return CandidateDecision("return", _fallback_result(
+            state, reason="provider_outcome_unknown",
+            reservation_key=candidate.reservation_key or None,
+        ))
     settlement_fallback = _settle_attempt(state, candidate, evaluation)
     if settlement_fallback is not None:
         return CandidateDecision("return", settlement_fallback)
+    # Usage must still be audited and settled if post-processing is slow, but
+    # late output must not be delivered or added to the response cache.
+    if state.gateway.time.monotonic() >= state.deadline_at:
+        state.deadline_hit = True
+        state.errors.append({"provider": "gateway", "status": "deadline_exceeded"})
+        return BREAK
     if evaluation.attempt_status == "success":
         return CandidateDecision(
             "return",

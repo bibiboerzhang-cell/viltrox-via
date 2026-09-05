@@ -491,9 +491,9 @@ def test_invoke_json_required_keys_and_validator_continue_fallback(monkeypatch: 
     calls, ledger = _install_provider_mocks(
         monkeypatch,
         {
-            "openai": {"status": "success", "provider": "openai", "text": '{"answer": 1}'},
-            "google": {"status": "success", "provider": "google", "text": '{"answer": 1, "ok": false}'},
-            "anthropic": {"status": "success", "provider": "anthropic", "text": '{"answer": 1, "ok": true}'},
+            "openai": {"status": "success", "provider": "openai", "text": '{"answer": 1}', "input_tokens": 5, "output_tokens": 2},
+            "google": {"status": "success", "provider": "google", "text": '{"answer": 1, "ok": false}', "input_tokens": 5, "output_tokens": 2},
+            "anthropic": {"status": "success", "provider": "anthropic", "text": '{"answer": 1, "ok": true}', "input_tokens": 5, "output_tokens": 2},
         },
     )
 
@@ -502,6 +502,7 @@ def test_invoke_json_required_keys_and_validator_continue_fallback(monkeypatch: 
         required_keys=["answer", "ok"],
         validator=lambda value: (value["ok"] is True, "ok must be true"),
         skip_budget_check=True,
+        max_provider_attempts=3,
     )
 
     assert calls == ["openai", "google", "anthropic"]
@@ -634,8 +635,10 @@ def test_invoke_json_uses_configurable_default_deadline(monkeypatch: pytest.Monk
     assert [entry["status"] for entry in ledger] == ["deadline_exceeded"]
 
 
-def test_legacy_invoke_isolates_provider_exception_and_uses_next_provider(
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_legacy_invoke_only_falls_through_definitive_provider_rejection(
     monkeypatch: pytest.MonkeyPatch,
+    uncertain: bool,
 ) -> None:
     calls: list[str] = []
     ledger: list[dict[str, Any]] = []
@@ -648,7 +651,9 @@ def test_legacy_invoke_isolates_provider_exception_and_uses_next_provider(
 
     def broken_provider(_prompt: str, _max_output_tokens: int) -> dict[str, Any]:
         calls.append("openai")
-        raise TimeoutError("provider timed out")
+        if uncertain:
+            raise TimeoutError("provider timed out")
+        return {"status": "provider_429", "provider": "openai", "error": "http_429"}
 
     def healthy_provider(_prompt: str, _max_output_tokens: int) -> dict[str, Any]:
         calls.append("google")
@@ -666,12 +671,18 @@ def test_legacy_invoke_isolates_provider_exception_and_uses_next_provider(
 
     result = llm_gateway.invoke("Analyze this", skip_budget_check=True)
 
+    if uncertain:
+        assert calls == ["openai"]
+        assert result["reason"] == "provider_outcome_unknown"
+        assert result["provider_attempts"] == 1
+        assert result["errors"][0]["status"] == "provider_exception"
+        return
     assert calls == ["openai", "google"]
     assert result["status"] == "success"
     assert result["provider"] == "google"
     assert result["fallback_used"] is True
     assert ledger[-1]["input_tokens"] == 0
-    assert ledger[-1]["metadata"]["attempt_errors"][0]["status"] == "provider_exception"
+    assert ledger[-1]["metadata"]["attempt_errors"][0]["status"] == "provider_429"
 
 
 def test_legacy_invoke_rejects_non_object_provider_result_without_raising(
@@ -688,7 +699,7 @@ def test_legacy_invoke_rejects_non_object_provider_result_without_raising(
     result = llm_gateway.invoke("Analyze this", skip_budget_check=True)
 
     assert result["provider"] == "rule_v0"
-    assert result["reason"] == "all_providers_failed"
+    assert result["reason"] == "provider_outcome_unknown"
     assert result["errors"][0]["status"] == "invalid_response"
 
 

@@ -76,8 +76,8 @@ assert_clean_tree() {
 assert_clean_tree "出发前"
 
 # ── 1b. 迁移预检:早说,别等打包完二十几分钟才被部署脚本拦(2026-08-26 白跑一轮的教训)──
-# 口径与 deploy_local_to_cloud.sh 完全一致:待应用 = 本地迁移清单里、线上最高水位**之后**的全部
-# (不是集合差 —— 001/002/004 这类被基线取代的老迁移永远在水位之下,不算待应用)。
+# 口径与 deploy_local_to_cloud.sh 完全一致:待应用 = 运行时迁移清单减去线上完整已应用集合。
+# 历史基线替代项由 runtime_migration_manifest 排除；最高水位仅用于展示，不能掩盖中间缺项。
 # train 当前固定走 in-place；待应用迁移必须与声明完全一致且通过代码内审阅策略。
 # 这里先拦，避免 freeze/本地重启完成后才在 deploy 阶段发现迁移不可发布。
 migration_preflight() {
@@ -94,7 +94,7 @@ migration_preflight() {
   [ -n "${applied}" ] \
     || die "迁移预检:线上 schema_migrations 未返回完整版本集合，拒绝在未知水位下发车"
   remote="${applied##*,}"
-  pending="$("${PYTHON_BIN}" -B - "${ROOT}" "${applied}" 2>/dev/null <<'PY'
+  pending="$("${PYTHON_BIN}" -B - "${ROOT}" "${applied}" <<'PY'
 import sys
 from pathlib import Path
 
@@ -106,7 +106,7 @@ manifest = runtime_migration_manifest(root / "migrations")
 applied = tuple(value for value in sys.argv[2].split(",") if value)
 print(",".join(pending_runtime_migrations(manifest, applied)))
 PY
-  )" || die "迁移预检:线上完整版本集合与本地运行时清单不一致，拒绝猜测待应用范围"
+  )" || die "迁移预检:本地 Python 执行失败或线上完整版本集合与本地运行时清单不一致，拒绝猜测待应用范围（见上方诊断）"
   if [ -z "${pending}" ]; then
     [ -z "${VKPI_FORWARD_COMPATIBLE_MIGRATIONS:-}" ] \
       || die "迁移预检:线上无待应用迁移，但 VKPI_FORWARD_COMPATIBLE_MIGRATIONS 仍有旧声明"

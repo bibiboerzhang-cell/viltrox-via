@@ -4,6 +4,7 @@ services/jobs/processor.py — 后台任务统一分发器
 from __future__ import annotations
 
 from app.workers.tasks.audit import process_audit_submission_job
+from app.workers.tasks.shopify_sync import process_shopify_sync_job
 from app.workers.tasks.ingestion import (
     process_amazon_ingest_job,
     process_bh_ingest_job,
@@ -54,6 +55,7 @@ from app.workers.tasks.verification import (
 
 
 JOB_HANDLERS = {
+    "vkpi_shopify_order_sync": process_shopify_sync_job,
     "audit_submission": process_audit_submission_job,
     "comment_intelligence_post": process_comment_intelligence_post_job,
     "comment_intelligence_recent": process_comment_intelligence_recent_job,

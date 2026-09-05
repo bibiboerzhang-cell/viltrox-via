@@ -22,7 +22,8 @@ import re
 import urllib.parse
 from typing import Any
 
-from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
+from app.platform.apify_budget import ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked, call_apify_actor
+from app.platform.apify_result_contract import ActorRunError, bounded_actor_metadata, crawler_failure, read_actor_dataset
 
 
 DEFAULT_ACTOR_ID = "clockworks~tiktok-scraper"
@@ -126,28 +127,25 @@ class TikTokCrawler:
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
             )
-            if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
-                return {
-                    "provider": "tiktok",
-                    "provider_status": "error",
-                    "sync_status": "error",
-                    "items": [],
-                    "error": f"TikTok actor did not finish: {str((run or {}).get('status') or 'unknown')}",
-                    "raw": {"actor_id": self.actor_id, "input": input_payload},
-                }
+            items = read_actor_dataset(client, run)
             from . import record_apify_run_cost
 
             record_apify_run_cost(run, platform="tiktok", actor_id=self.actor_id, operation="start_run")
-            items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
             return {
+                "status": "done" if items else "empty",
                 "provider": "tiktok",
                 "provider_status": "ok",
                 "sync_status": "synced",
                 "items": items,
+                "metadata": bounded_actor_metadata(),
                 "raw": {"actor_id": self.actor_id, "input": input_payload},
             }
         except ApifyBudgetBlocked as exc:
             return {**exc.payload(), "items": [], "raw": {"actor_id": self.actor_id}}
+        except (ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked):
+            raise
+        except ActorRunError as exc:
+            return crawler_failure(exc, "tiktok")
         except ImportError:
             return {
                 "provider": "tiktok",
@@ -157,15 +155,8 @@ class TikTokCrawler:
                 "error": "apify-client not installed",
                 "raw": {"actor_id": self.actor_id},
             }
-        except Exception as exc:  # pragma: no cover
-            return {
-                "provider": "tiktok",
-                "provider_status": "error",
-                "sync_status": "error",
-                "items": [],
-                "error": str(exc),
-                "raw": {"actor_id": self.actor_id},
-            }
+        except Exception:
+            return crawler_failure(ActorRunError("actor_provider_failed", provider_outcome_unknown=True), "tiktok")
         finally:
             from . import close_apify_client
 
@@ -217,6 +208,7 @@ class TikTokCrawler:
         
         result = self._start_run(input_payload)
         result["query"] = ref
+        result.setdefault("metadata", {}).update(bounded_actor_metadata(since=since, date_filter="provider_requested_unverified" if since else "none"))
         return result
 
     def crawl_channel_videos(
@@ -251,7 +243,9 @@ class TikTokCrawler:
         _since_m = re.search(r"\d{4}-\d{2}-\d{2}", str(since or ""))
         if _since_m:
             input_payload["oldestPostDate"] = _since_m.group(0)
-        return self._start_run(input_payload)
+        result = self._start_run(input_payload)
+        result.setdefault("metadata", {}).update(bounded_actor_metadata(since=since, date_filter="provider_requested_unverified" if since else "none"))
+        return result
 
     def crawl_video_comments(
         self,
@@ -301,12 +295,12 @@ class TikTokCrawler:
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
             )
+            items = read_actor_dataset(client, run)
             from . import record_apify_run_cost
 
             record_apify_run_cost(run, platform="tiktok", actor_id=actor_id, operation="crawl_video_comments")
-            dataset_id = run.get("defaultDatasetId")
-            items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
             return {
+                "status": "done" if items else "empty",
                 "provider": "tiktok",
                 "provider_status": "ok",
                 "sync_status": "synced",
@@ -315,15 +309,12 @@ class TikTokCrawler:
             }
         except ApifyBudgetBlocked as exc:
             return {**exc.payload(), "items": [], "raw": {"actor_id": actor_id, "post_url": post_url}}
-        except Exception as exc:  # pragma: no cover - live provider path
-            return {
-                "provider": "tiktok",
-                "provider_status": "error",
-                "sync_status": "error",
-                "items": [],
-                "error": str(exc)[:500],
-                "raw": {"actor_id": actor_id, "post_url": post_url},
-            }
+        except (ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked):
+            raise
+        except ActorRunError as exc:
+            return crawler_failure(exc, "tiktok")
+        except Exception:
+            return crawler_failure(ActorRunError("actor_provider_failed", provider_outcome_unknown=True), "tiktok")
         finally:
             from . import close_apify_client
 

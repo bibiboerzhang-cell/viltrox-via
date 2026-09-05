@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 import psycopg
+from app.workers.apify_jobs_worker_locks import release_worker_locks
 
 # 拒绝的原因不再合并:七种 provider_gate_reason 各回各的码,budget_guard_blocked 只留给真花超。
 from app.domains.costs.budget_decision import provider_gate_block
@@ -425,13 +426,9 @@ def _run_locked_llm(
             {"derive_method": derive_method},
         )
     finally:
-        if slot is not None:
-            deps["_advisory_unlock"](
-                conn, "vkpi_analysis_worker_llm_slot", slot
-            )
-        deps["_advisory_unlock"](
-            conn, "vkpi_analysis_worker_target", target_lock
-        )
+        locks = [("vkpi_analysis_worker_llm_slot", slot)] if slot is not None else []
+        locks.append(("vkpi_analysis_worker_target", target_lock))
+        release_worker_locks(conn, locks, deps["_advisory_unlock"])
 
 
 def _process_llm_job(

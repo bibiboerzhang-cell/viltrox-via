@@ -37,6 +37,8 @@ def invoke_impl(
     metadata: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
     enforce_atomic_reservation: bool = False,
+    deadline_seconds: float | None = None,
+    max_provider_attempts: int | None = None,
     namespace: dict[str, Any],
 ) -> dict[str, Any]:
     """Invoke an LLM while resolving gateway dependencies from live namespace."""
@@ -63,6 +65,8 @@ def invoke_impl(
         metadata=metadata,
         staff=staff,
         enforce_atomic_reservation=enforce_atomic_reservation,
+        deadline_seconds=deadline_seconds,
+        max_provider_attempts=max_provider_attempts,
         namespace=namespace,
         hooks=hooks,
     )

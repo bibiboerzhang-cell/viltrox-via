@@ -166,7 +166,8 @@ def test_instagram_enrich_skipped_when_deadline_budget_is_gone(monkeypatch: pyte
     )
 
     assert actor_calls == ["apify/instagram-hashtag-scraper"]
-    assert result["status"] == "done"
+    assert result["status"] == "partial"
+    assert result["metadata"]["provider_outcome_unknown"] is False
     assert result["items"][0]["handle"] == "solo"
     assert "followers" not in result["items"][0]  # 未知就是未知,绝不杜撰
     assert result["metadata"]["profile_enrich_degraded"] == "deadline_budget_exhausted"

@@ -173,15 +173,15 @@ def test_youtube_channel_videos_env_cap_clamps_target(monkeypatch) -> None:
     assert fake.calls[1][1]["maxResults"] == 2
 
 
-def test_youtube_channel_videos_since_forces_search_endpoint(monkeypatch) -> None:
+def test_youtube_channel_videos_since_reuses_uploads_playlist(monkeypatch) -> None:
     _clear_youtube_env(monkeypatch)
     crawler = YouTubeCrawler(api_key="yt")
 
     def script(endpoint: str, params: dict[str, Any], _n: int) -> dict[str, Any]:
         if endpoint == "channels":
             return _ok({"items": [{"contentDetails": {"relatedPlaylists": {"uploads": "UUmain"}}}]})
-        if endpoint == "search":
-            return _ok({"items": [{"id": {"videoId": "s1"}}]})
+        if endpoint == "playlistItems":
+            return _ok({"items": [{"contentDetails": {"videoId": "s1", "videoPublishedAt": "2026-05-02T00:00:00Z"}}]})
         if endpoint == "videos":
             return _ok({"items": [{"id": "s1"}]})
         raise AssertionError(f"unexpected endpoint {endpoint}")
@@ -191,14 +191,13 @@ def test_youtube_channel_videos_since_forces_search_endpoint(monkeypatch) -> Non
 
     result = crawler.crawl_channel_videos("UCabc123456", max_results=5, since="2026-05-01")
 
-    assert result["search_raw"]["mode"] == "search"
+    assert result["search_raw"]["mode"] == "uploads_playlist"
     assert [item["id"] for item in result["items"]] == ["s1"]
     search_params = dict(fake.calls[1][1])
-    assert fake.calls[1][0] == "search"
-    assert search_params["publishedAfter"] == "2026-05-01T00:00:00Z"
-    assert search_params["channelId"] == "UCabc123456"
-    assert search_params["type"] == "video"
-    assert search_params["order"] == "date"
+    assert fake.calls[1][0] == "playlistItems"
+    assert search_params["playlistId"] == "UUmain"
+    assert "publishedAfter" not in search_params
+    assert result["metadata"]["date_window_complete"] is True
 
 
 def test_youtube_video_details_quota_midway_triggers_fallback_with_partial_in_raw(monkeypatch) -> None:
@@ -234,18 +233,16 @@ def test_youtube_video_details_quota_midway_triggers_fallback_with_partial_in_ra
 
     result = crawler.crawl_channel_videos("UCabc123456", max_results=55)
 
-    # 中途配额爆掉 → 触发 Apify fallback;token 未配 → 顶层空 items + 显式
-    # quota_exceeded,部分抓到的 50 条保留在 raw.youtube_api.items 里。
+    # Partial official results remain visible; do not buy a replacement run.
     assert result["provider_status"] == "quota_exceeded"
     assert result["sync_status"] == "quota_exceeded"
-    assert result["items"] == []
-    assert result["apify_fallback_status"] == "not_configured"
+    assert len(result["items"]) == 50
+    assert result["status"] == "partial"
+    assert "apify_fallback_status" not in result
     assert result["error_reason"] == "quotaExceeded"
     assert result["http_status"] == 403
-    reason = result["raw"]["youtube_api"]
-    assert len(reason["items"]) == 50
-    assert reason["raw"]["partial_count"] == 50
-    assert reason["raw"]["video_ids"] == all_ids
+    assert result["raw"]["partial_count"] == 50
+    assert result["raw"]["video_ids"] == all_ids
 
 
 def test_youtube_video_details_empty_ids_propagates_last_page_status(monkeypatch) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Iterable
 
 from app.platform import llm_gateway_invoke_attempts as _invoke_attempts
+from app.platform import llm_gateway_invoke_limits as _limits
 from app.platform.llm_gateway_invoke_types import InvocationContext, InvocationHooks
 
 
@@ -152,6 +153,8 @@ def _prepare_cache(ctx: InvocationContext) -> dict[str, Any] | None:
 
 def _run_candidates(ctx: InvocationContext) -> dict[str, Any] | None:
     for index, candidate in enumerate(ctx.candidates):
+        if _limits.stop_before_provider(ctx):
+            break
         attempt = _invoke_attempts.prepare_candidate(ctx, index, candidate)
         if attempt is None:
             continue
@@ -162,7 +165,7 @@ def _run_candidates(ctx: InvocationContext) -> dict[str, Any] | None:
 
 
 def _final_fallback(ctx: InvocationContext) -> dict[str, Any]:
-    deferred = ctx.hooks.deferred_or_none(
+    deferred = None if ctx.stop_reason or ctx.provider_attempts else ctx.hooks.deferred_or_none(
         prompt=ctx.safe_prompt,
         purpose=ctx.purpose,
         errors=ctx.errors,
@@ -178,7 +181,7 @@ def _final_fallback(ctx: InvocationContext) -> dict[str, Any]:
     fallback = ctx.deps["_rule_fallback"](
         ctx.safe_prompt,
         purpose=ctx.purpose,
-        reason="all_providers_failed",
+        reason=ctx.stop_reason or "all_providers_failed",
         errors=ctx.errors,
     )
     fallback_reason = str(
@@ -192,7 +195,7 @@ def _final_fallback(ctx: InvocationContext) -> dict[str, Any]:
         model="rule_v0",
         purpose=ctx.purpose,
         prompt=ctx.safe_prompt,
-        status="all_providers_failed",
+        status=ctx.stop_reason or "all_providers_failed",
         fallback_used=True,
         cost_tag=ctx.cost_scope,
         triggered_by=ctx.triggered_by,
@@ -201,6 +204,9 @@ def _final_fallback(ctx: InvocationContext) -> dict[str, Any]:
             "errors": ctx.errors,
             "fallback_reason": fallback_reason,
             "model_level_fallback": bool(ctx.model_fallbacks),
+            "deadline_seconds": ctx.deadline_seconds,
+            "provider_attempts": ctx.provider_attempts,
+            "max_provider_attempts": ctx.attempt_limit,
         },
         staff=ctx.staff,
     )
@@ -223,6 +229,8 @@ def invoke_impl(
     metadata: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
     enforce_atomic_reservation: bool = False,
+    deadline_seconds: float | None = None,
+    max_provider_attempts: int | None = None,
     namespace: dict[str, Any],
     hooks: InvocationHooks,
 ) -> dict[str, Any]:
@@ -258,14 +266,21 @@ def invoke_impl(
         deps=deps,
         hooks=hooks,
         safe_prompt=safe_prompt,
-        cost_scope=deps["_cost_scope_for_purpose"](purpose, cost_tag),
     )
-    _scope_budget_preflight(ctx)
-    _monthly_budget_preflight(ctx)
+    _limits.configure(ctx, deadline_seconds, max_provider_attempts)
+    ctx.cost_scope = deps["_cost_scope_for_purpose"](purpose, cost_tag)
+    for prepare in (_scope_budget_preflight, _monthly_budget_preflight):
+        if _limits.deadline_hit(ctx):
+            return _limits.annotate(ctx, _final_fallback(ctx))
+        prepare(ctx)
+    if _limits.deadline_hit(ctx):
+        return _limits.annotate(ctx, _final_fallback(ctx))
     cached = _prepare_cache(ctx)
+    if _limits.deadline_hit(ctx):
+        return _limits.annotate(ctx, _final_fallback(ctx))
     if cached is not None:
-        return cached
+        return _limits.annotate(ctx, cached)
     result = _run_candidates(ctx)
     if result is not None:
-        return result
-    return _final_fallback(ctx)
+        return _limits.annotate(ctx, result)
+    return _limits.annotate(ctx, _final_fallback(ctx))

@@ -130,16 +130,13 @@ def list_goaffpro_orders(
     return _guard(goaffpro_connect.list_orders, limit=limit, offset=offset)
 
 
-# --- manual sync stub (D1: probe-only, no persistence/attribution yet) --------
+# --- explicit authorization probe (business sync is separate) --------
 
 @router.post("/sync")
 def sync_goaffpro(
     staff=Depends(require_tab("vkpi", "admin")),
 ):
-    """Manual sync stub — probe one page of affiliates + orders. no creds -> ok:false, no throw.
-
-    D1 骨架:仅探活,不落库、不归因(落账/折扣码映射是后续刀)。
-    """
+    """Probe affiliate/order read access and store authorization state, not sales."""
     return _guard(goaffpro_connect.sync_stub)
 
 
@@ -609,9 +606,10 @@ def sync_goaffpro_sales(
     goaffpro_connect.ensure_goaffpro_links_schema()
     # 默认拉全量(循环翻页,防只取一页漏账);显式传 limit 时才单页封顶(调用方主动限流)。
     orders = goaffpro_connect.list_orders(limit=limit) if limit else goaffpro_connect.list_orders(fetch_all=True)
-    if not orders.get("ok"):
+    if not orders.get("ok") or orders.get("partial"):
         return {
             "ok": False,
+            "partial": bool(orders.get("partial")),
             "reason": orders.get("reason"),
             "error": orders.get("error"),
             "synced": 0,
@@ -621,25 +619,24 @@ def sync_goaffpro_sales(
 
     conn = get_conn()
     # affiliate_id -> kol_pool_id 映射(一次性拉全表,销售匹配热路径)。
-    aff_to_kol: dict[str, int] = {}
-    for r in conn.execute(
-        "SELECT affiliate_id, kol_pool_id FROM vkpi_goaffpro_kol_links"
-    ).fetchall():
-        d = dict(r)
-        aid = str(d.get("affiliate_id") or "")
-        if aid:
-            aff_to_kol[aid] = d.get("kol_pool_id")
+    from app.domains.integrations.goaffpro_connect_sales import prepare_sales
+
+    links = [dict(r) for r in conn.execute("SELECT affiliate_id, kol_pool_id, coupon FROM vkpi_goaffpro_kol_links").fetchall()]
+    try:
+        prepared = prepare_sales(orders.get("orders") or [], links)
+    except ValueError as exc:
+        return {"ok": False, "reason": "invalid_sales_contract", "error": str(exc), "synced": 0, "matched": 0, "unmatched": 0}
 
     synced = 0
     matched = 0
     unmatched = 0
     now = _utcnow()
-    for o in orders.get("orders") or []:
+    for o in prepared:
         sale_id = str(o.get("id") or "").strip()
         if not sale_id:
             continue  # 无主键的行无法幂等 upsert,跳过
         affiliate_id = str(o.get("affiliate_id") or "").strip()
-        kol_pool_id = aff_to_kol.get(affiliate_id)
+        kol_pool_id = o["kol_pool_id"]
         if kol_pool_id is not None:
             matched += 1
         else:
@@ -664,8 +661,8 @@ def sync_goaffpro_sales(
                 sale_id,
                 affiliate_id,
                 kol_pool_id,
-                goaffpro_connect.to_cents(o.get("total")),
-                goaffpro_connect.to_cents(o.get("commission")),
+                o["total_cents"],
+                o["commission_cents"],
                 str(o.get("currency") or ""),
                 str(o.get("status") or ""),
                 str(o.get("created_at") or "") or None,

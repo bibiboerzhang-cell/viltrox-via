@@ -40,6 +40,8 @@ _PLATFORM_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("youtube", (r"\byoutube\b", r"\byoutuber\b", r"\byt\b", r"油管")),
     ("instagram", (r"\binstagram\b", r"\binsta\b", r"\big\b")),
     ("tiktok", (r"\btiktok\b", r"\btik[ -]?tok\b")),
+    ("x", (r"\btwitter\b", r"推特", r"\b(?:on|via|from)\s+x\b", r"\bx\s*(?:平台|上|创作者|账号)", r"\bx\.com\b")),
+    ("reddit", (r"\breddit\b", r"红迪")),
     ("xiaohongshu", (r"小红书", r"\b(xiaohongshu|rednote)\b")),
     ("douyin", (r"抖音", r"\bdouyin\b")),
     ("bilibili", (r"哔哩哔哩", r"\bbilibili\b", r"b站")),

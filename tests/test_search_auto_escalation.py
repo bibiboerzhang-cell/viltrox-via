@@ -171,12 +171,15 @@ def test_online_platform_set_matches_the_online_qualification_module() -> None:
     assert set(escalation.ONLINE_DISCOVERY_PLATFORMS) == set(
         profile_online_qualification.ONLINE_SUPPORTED_PLATFORMS
     )
+    assert escalation.ONLINE_DISCOVERY_PLATFORMS == ("youtube", "instagram", "tiktok", "x", "reddit")
+    assert escalation.DEFAULT_DISCOVERY_PLATFORMS == ("youtube", "instagram", "tiktok")
 
 
 @pytest.mark.parametrize("key", ["platforms", "new_discovery_platforms", "discovery_platforms"])
-def test_operator_platform_choice_is_never_widened(no_io: list[str], key: str) -> None:
+@pytest.mark.parametrize("unsupported", ["facebook", "mastodon", "future_network"])
+def test_operator_platform_choice_is_never_widened(no_io: list[str], key: str, unsupported: str) -> None:
     """只勾了没有联网发现腿的平台 → 不升级,且绝不改去搜别的平台。"""
-    body = _body(**{key: ["facebook"]})
+    body = _body(**{key: [unsupported]})
     decision = escalation.decide_escalation(body=body, recall_result=_recall(4), visible_session_id=SESSION_ID)
     assert decision.escalate is False
     assert decision.reason_code == "no_online_leg_for_selected_platforms"
@@ -209,10 +212,22 @@ def test_filters_platforms_are_honoured_when_top_level_is_absent(no_io: list[str
     assert touched_nothing(no_io)
 
 
-def test_no_platform_choice_falls_back_to_the_three_online_platforms(no_io: list[str]) -> None:
-    decision = escalation.decide_escalation(body=_body(), recall_result=_recall(4), visible_session_id=SESSION_ID)
+@pytest.mark.parametrize("platforms", [None, [], (), "", "all", "*"])
+def test_no_platform_choice_falls_back_to_the_three_online_platforms(no_io: list[str], platforms: Any) -> None:
+    decision = escalation.decide_escalation(body=_body(platforms=platforms), recall_result=_recall(4), visible_session_id=SESSION_ID)
     assert decision.operator_selected_platforms is False
-    assert decision.platforms == escalation.ONLINE_DISCOVERY_PLATFORMS
+    assert decision.platforms == escalation.DEFAULT_DISCOVERY_PLATFORMS
+    assert touched_nothing(no_io)
+
+
+@pytest.mark.parametrize("key", ["platforms", "new_discovery_platforms", "discovery_platforms", "platform"])
+@pytest.mark.parametrize("selected,expected", [(["x"], ("x",)), (["reddit"], ("reddit",)),
+    (["Twitter", "reddit", "x"], ("x", "reddit")), (["reddit", "unsupported"], ("reddit",))])
+def test_explicit_secondary_platforms_survive_the_escalation_decision(no_io, key, selected, expected):
+    body = _body(**{key: selected})
+    decision = escalation.decide_escalation(body=body, recall_result=_recall(4), visible_session_id=SESSION_ID)
+    assert decision.escalate and decision.operator_selected_platforms
+    assert decision.platforms == expected
     assert touched_nothing(no_io)
 
 

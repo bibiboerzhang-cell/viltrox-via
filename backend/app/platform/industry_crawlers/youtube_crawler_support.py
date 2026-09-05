@@ -32,17 +32,18 @@ DEFAULT_MAX_CHANNEL_VIDEOS = 10000
 
 
 def _since_to_rfc3339(since: str | None) -> str:
-    """增量游标(YYYY-MM-DD 或含时间)→ RFC3339(publishedAfter 用)。
-    游标来源 url_deep_crawl._parse_date 恒 YYYY-MM-DD;无法识别返回空串(=不下推 since,退回全量+客户端裁剪)。"""
+    """Normalize valid ISO dates/timestamps; never guess an invalid date."""
+    from datetime import datetime, timezone
+
     text = str(since or "").strip()
     if not text:
         return ""
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", text):
-        return f"{text}T00:00:00Z"
-    if re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", text):
-        return text if text.endswith("Z") or "+" in text[11:] else f"{text}Z"
-    match = re.search(r"(\d{4}-\d{2}-\d{2})", text)
-    return f"{match.group(1)}T00:00:00Z" if match else ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        parsed = parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    except ValueError:
+        return ""
 
 
 def _max_channel_videos(value: int) -> int:
@@ -132,7 +133,11 @@ def _upload_playlist_id_from_payload(profile: dict[str, Any]) -> str:
     return str((playlists or {}).get("uploads") or "").strip()
 
 
-def _crawl_upload_playlist(request: RequestFn, playlist_id: str, target: int) -> dict[str, Any]:
+def _crawl_upload_playlist(request: RequestFn, playlist_id: str, target: int, *, published_after: str = "") -> dict[str, Any]:
+    if published_after:
+        from .youtube_crawler_incremental import crawl_incremental_uploads
+
+        return crawl_incremental_uploads(request, playlist_id, target, published_after, _video_details)
     video_ids: list[str] = []
     pages: list[dict[str, Any]] = []
     page_token = ""
@@ -156,7 +161,7 @@ def _crawl_upload_playlist(request: RequestFn, playlist_id: str, target: int) ->
                 "nextPageToken": bool(page.get("nextPageToken")),
             }
         )
-        if str(page.get("provider_status") or "") == "error":
+        if str(page.get("provider_status") or "") != "ok":
             break
         for item in page_items:
             video_id = str(((item.get("contentDetails") or {}).get("videoId")) or "")
@@ -280,6 +285,7 @@ def _video_details(request: RequestFn, video_ids: list[str], raw: dict[str, Any]
         )
         if videos.get("provider_status") != "ok":
             return {
+                "status": "partial" if video_items else "failed",
                 "provider": "youtube",
                 "provider_status": videos.get("provider_status") or "error",
                 "sync_status": videos.get("sync_status") or videos.get("provider_status") or "error",
@@ -290,10 +296,12 @@ def _video_details(request: RequestFn, video_ids: list[str], raw: dict[str, Any]
                 "raw": {"video_ids": video_ids, "partial_count": len(video_items), "error": videos.get("raw") or {}},
             }
         video_items.extend(videos.get("items") or [])
+    failed_pages = [page for page in raw.get("pages", []) if page.get("provider_status") not in {"ok", None}]
     return {
+        "status": "partial" if failed_pages else "done" if video_items else "empty",
         "provider": "youtube",
-        "provider_status": "ok",
-        "sync_status": "synced",
+        "provider_status": "partial" if failed_pages else "ok",
+        "sync_status": "partial" if failed_pages else "synced",
         "items": video_items,
         "search_raw": raw,
     }

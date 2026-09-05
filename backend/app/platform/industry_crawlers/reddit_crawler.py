@@ -37,6 +37,7 @@ from typing import Any
 from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
 from app.platform.apify_lifecycle import close_apify_client
 from app.platform.industry_crawlers.reddit_json_path import RedditJsonPathMixin
+from app.platform.industry_crawlers.reddit_people_path import RedditPeoplePathMixin
 
 # W4 class-LOC 拆刀:PRAW 段(client 懒初始化/抓取/评论扁平化/Submission 转 dict)
 # 逐字搬进兄弟文件 reddit_praw_path.py 的 mixin;可选 praw import 与
@@ -57,7 +58,7 @@ def _env_enabled(name: str, *, default: bool = True) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on", "enabled"}
 
 
-class RedditCrawler(RedditPrawPathMixin, RedditJsonPathMixin):
+class RedditCrawler(RedditPeoplePathMixin, RedditPrawPathMixin, RedditJsonPathMixin):
     """V-KPI compatible Reddit crawler with PRAW + Apify fallback."""
 
     PLATFORM = "reddit"

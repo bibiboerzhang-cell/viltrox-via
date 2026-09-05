@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -115,6 +116,12 @@ def test_github_static_python_profile_is_narrow_and_deploy_forbidden(
     for name, value in github_env.items():
         monkeypatch.setenv(name, value)
     assert safe_python_router._github_static_profile_enabled(root) is True
+    # Validation must not consume the profile: pytest and other reviewed
+    # commands invoke the safe wrapper again in child processes.
+    assert os.environ[safe_python_router.CI_PROFILE_ENV] == (
+        safe_python_router.GITHUB_STATIC_PROFILE
+    )
+    assert safe_python_router._github_static_profile_enabled(root) is True
 
     for name, value in github_env.items():
         monkeypatch.setenv(name, value)
@@ -126,6 +133,51 @@ def test_github_static_python_profile_is_narrow_and_deploy_forbidden(
     deploy = _read("scripts/ops/deploy_local_to_cloud.sh")
     assert "GitHub static Python profile is forbidden for release trains" in train
     assert "GitHub static Python profile is forbidden for deployment" in deploy
+
+
+def test_github_static_profile_survives_a_nested_process_and_revalidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # This profile-only test is platform independent and does not weaken or
+    # replace the separate wrapper/dependency-mirror containment tests.
+    for name in (
+        "VKPI_VERIFY_REQUIRE_CLEAN_WORKTREE", "VKPI_VERIFY_REQUIRE_RUNTIME",
+        "VKPI_VERIFY_STRICT_POST_RESTART", "VKPI_VERIFY_REQUIRE_BROWSER_CONSOLE",
+        "VKPI_VERIFY_REQUIRE_RUNTIME_LOG_CANARY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in {
+        safe_python_router.CI_PROFILE_ENV: safe_python_router.GITHUB_STATIC_PROFILE,
+        "GITHUB_ACTIONS": "true", "CI": "true", "RUNNER_OS": "Linux",
+        "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_WORKSPACE": str(ROOT),
+        "GITHUB_EVENT_NAME": "push",
+    }.items():
+        monkeypatch.setenv(name, value)
+    source = (
+        "import os, runpy, sys\n"
+        "from pathlib import Path\n"
+        "root = Path(sys.argv[1])\n"
+        "router = runpy.run_path(str(root / 'scripts/ops/safe_python_router.py'))\n"
+        "assert router['_github_static_profile_enabled'](root)\n"
+        "print(os.environ.get('VKPI_SAFE_PYTHON_PROFILE', 'MISSING'))\n"
+    )
+    assert safe_python_router._github_static_profile_enabled(ROOT) is True
+    completed = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", source, str(ROOT)],
+        capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == safe_python_router.GITHUB_STATIC_PROFILE
+
+    # The inherited value is never a cached authorization: a stricter child
+    # environment must be independently rejected.
+    monkeypatch.setenv("VKPI_VERIFY_REQUIRE_RUNTIME", "1")
+    rejected = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", source, str(ROOT)],
+        capture_output=True, text=True, check=False, timeout=10,
+    )
+    assert rejected.returncode != 0
+    assert "profile is not trusted" in rejected.stderr
 
 
 def test_safe_python_has_strict_native_temp_anchors_for_macos_and_linux() -> None:

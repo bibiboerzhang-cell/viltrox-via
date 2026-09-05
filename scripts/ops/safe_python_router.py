@@ -40,7 +40,11 @@ def _github_static_profile_enabled(root: Path) -> bool:
     GitHub's Linux/Python-3.12 wheel set.
     """
 
-    profile = os.environ.pop(CI_PROFILE_ENV, "")
+    # Keep the profile visible to nested reviewed commands.  Consuming it here
+    # makes pytest's child wrapper silently fall back to the macOS-only digest
+    # on Linux CI.  Each child still validates the full environment below, and
+    # release entrypoints must retain the marker so their explicit ban applies.
+    profile = os.environ.get(CI_PROFILE_ENV, "")
     if not profile:
         return False
     required = {

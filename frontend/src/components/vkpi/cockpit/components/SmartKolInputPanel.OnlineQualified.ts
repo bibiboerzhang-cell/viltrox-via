@@ -16,14 +16,23 @@ export const ONLINE_QUALIFICATION_SPEC = Object.freeze({
 });
 
 export const ONLINE_QUALIFICATION_SCHEMA = "smart_online_net_new_qualified_v1";
-export const STRICT_ONLINE_PLATFORMS = Object.freeze(["youtube", "instagram", "tiktok"]);
+export const DEFAULT_ONLINE_PLATFORMS = Object.freeze(["youtube", "instagram", "tiktok"]);
+export const STRICT_ONLINE_PLATFORMS = Object.freeze([...DEFAULT_ONLINE_PLATFORMS, "x", "reddit"]);
+export const DISCOVERY_PLATFORM_OPTIONS: ReadonlyArray<{ k: string; t: string; tip?: string; strictDisabled?: boolean }> = [
+  { k: "youtube", t: "YouTube" },
+  { k: "instagram", t: "Instagram" },
+  { k: "tiktok", t: "TikTok" },
+  { k: "x", t: "X", tip: "需先配置 X 数据通道；未配置会明确提示，不自动改用其他平台" },
+  { k: "reddit", t: "Reddit", tip: "需先授权 Reddit 数据通道；未知粉丝或所在地保持待核验" },
+  { k: "facebook", t: "Facebook · 仅候选池", strictDisabled: true, tip: "Facebook 暂未开放严格人物检索，不计入严格联网结果" },
+];
 const ONLINE_ITEM_TYPE = "online_qualified_candidate";
 const ONLINE_SOURCE = "platform_discovery_strict";
 const FINGERPRINT_RE = /^[a-f0-9]{64}$/;
 
 export function strictOnlineDiscoveryPlatforms(values: readonly string[]): string[] {
   const requested = Array.from(new Set(values.map(cleanText).map((value) => value.toLowerCase()).filter(Boolean)));
-  if (!requested.length) return [...STRICT_ONLINE_PLATFORMS];
+  if (!requested.length) return [...DEFAULT_ONLINE_PLATFORMS];
   return requested
     .filter((value) => STRICT_ONLINE_PLATFORMS.includes(value));
 }
@@ -144,9 +153,9 @@ function onlineRows(session: VkpiKolSearchHistoryItem | null, contract: Row, con
 const REASON_LABELS: Record<string, string> = {
   followers_unknown: "粉丝数待核验",
   followers_below_floor: "粉丝不足 3,000",
-  latest_video_unknown: "最新视频日期待核验",
+  latest_video_unknown: "最近内容日期待核验",
   latest_video_stale: "最近 45 天未更新",
-  latest_video_identity_missing: "最新视频缺少可审计身份",
+  latest_video_identity_missing: "最近内容缺少可审计身份",
   market_unknown: "市场证据待核验",
   market_mismatch: "不符合目标市场",
   language_unknown: "内容语言待核验",
@@ -163,6 +172,9 @@ const REASON_LABELS: Record<string, string> = {
   duplicate_batch: "供应商批次重复",
   duplicate_local_inventory: "已存在于本地库",
   provider_failed: "数据源未就绪(配置/预算)",
+  provider_outcome_unknown: "数据源执行结果待核对，已停止继续调用",
+  provider_dispatch_blocked: "数据源执行被配置或预算保护阻断",
+  provider_partial: "数据源仅返回部分结果，未当作完整完成",
   candidate_budget_exhausted: "候选预算已用尽",
   provider_round_budget_exhausted: "供应商轮次已用尽",
   candidate_exhausted: "可核验候选已耗尽",

@@ -116,6 +116,7 @@ def _build_scan_result(
     contact_emails = list(profile.get("contact_emails") or [])
     contact_links = list(profile.get("contact_links") or [])
     return {
+        "status": "done" if posts else "empty",
         "platform": platform,
         "handle": handle,
         "profile": profile,
@@ -123,7 +124,7 @@ def _build_scan_result(
         "profile_url": str(profile.get("profile_url") or ""),
         "bio": str(profile.get("bio") or ""),
         "display_name": str(profile.get("display_name") or ""),
-        "follower_count": _normalize_int(profile.get("follower_count")),
+        "follower_count": profile.get("follower_count"),
         "contact_email": str(profile.get("contact_email") or (contact_emails[0] if contact_emails else "")),
         "contact_emails": contact_emails,
         "contact_links": contact_links,
@@ -431,7 +432,13 @@ def _profile_from_items(platform: str, handle: str, items: List[Dict[str, Any]])
     )
     profile_url = _clean_url(_first_from_sources(sources, PROFILE_URL_KEYS))
     display_name = str(_first_from_sources(sources, DISPLAY_NAME_KEYS) or "").strip()
-    follower_count = _normalize_int(_first_from_sources(sources, FOLLOWER_KEYS))
+    follower_raw = _first_from_sources(sources, FOLLOWER_KEYS)
+    # Absent/invalid observations are not a real zero-follower account.
+    follower_count = None
+    if not isinstance(follower_raw, bool) and re.fullmatch(r"\d+(?:\.0+)?", str(follower_raw or "").replace(",", "")):
+        follower_count = _normalize_int(follower_raw)
+    elif follower_raw == 0 and not isinstance(follower_raw, bool):
+        follower_count = 0
     bio = "\n".join(_unique_strings(text_blobs, limit=6))[:2000]
 
     direct_emails: list[str] = []
@@ -458,10 +465,11 @@ def _profile_from_items(platform: str, handle: str, items: List[Dict[str, Any]])
         "profile_url": profile_url,
         "bio": bio,
         "follower_count": follower_count,
+        "followers_known": follower_count is not None,
         "contact_email": contact_emails[0] if contact_emails else "",
         "contact_emails": contact_emails,
         "contact_links": contact_links[:12],
-        "sync_status": "done" if items else "not_configured",
+        "sync_status": "done" if items else "empty",
     }
 
 

@@ -41,6 +41,8 @@ class RedditPrawPathMixin:
                     client_secret=self.client_secret,
                     user_agent=self.user_agent,
                     check_for_async=False,
+                    timeout=10,
+                    ratelimit_seconds=0,
                 )
                 # Read-only mode (no user OAuth)
                 self._praw_client.read_only = True

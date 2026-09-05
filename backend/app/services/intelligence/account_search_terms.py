@@ -34,7 +34,7 @@ monkeypatch 点(``account_scan_service._short_search_queries`` 等)逐字不变�
      供事后自证。
 
   ④ **上表是 5 次「单条词单跑」的加总,不是一轮跑出来的**(214 = 46+41+40+46+41,
-     505 = 5×100+5)。单轮候选池被 ``result_limit ≤ 50`` 硬夹,一轮不可能返回 214 个频道 ——
+     配额历史值505采用旧口径,现应分别记录5次Search与5个通用单位)。单轮候选池被 ``result_limit ≤ 50`` 硬夹,一轮不可能返回 214 个频道 ——
      写成「一轮实测」是错的,已订正。真实一轮里能发几条词由 account_search_discovery.go()
      的装满即停决定,实测是 2 条;跨轮轮转靠该处「没发过的词优先」。
      生产 A/B(同 query 同闸背靠背两跑,session 1118 新 / 1119 旧)才是一轮的真数:
@@ -144,7 +144,7 @@ OWN_BRAND_DEFAULT = "Viltrox"
 # 抓干哨兵:写进分页游标里代替 nextPageToken,意思是「这条词官方已经不给下一页了」。
 # 用一个不可能与真 pageToken 撞上的保留串(真 token 是 base64 风格的长串)。
 # 为什么必须落哨兵而不是留空:游标里留空 = 下一轮把这条词当成「一次都没查过」,
-# 于是再发一遍第一页 —— 实测同 query 重跑返回逐条相同、0 产出,纯烧 100 配额。
+# 于是再发一遍第一页 —— 同 query 重跑返回逐条相同、0 产出,浪费一次独立Search调用。
 TERM_EXHAUSTED_TOKEN = "__vkpi_term_exhausted__"
 # 词梯上限(env 可覆盖)。真正发几条由 provider 的「装满即 break」决定,这里只是天花板。
 PRECISION_TERMS_ENV = "VKPI_YOUTUBE_PRECISION_TERMS"
@@ -345,7 +345,7 @@ def term_ledger_row(
     anchors: Dict[str, tuple] | None = None,
     page_token_in: str = "",
     channels_new: int = 0,
-    quota_units: int = 100,
+    quota_units: int | None = None,
     youtube_search_calls: int | None = None,
     exhausted: bool = False,
     skipped: str = "",
@@ -360,15 +360,17 @@ def term_ledger_row(
     search_calls = (
         max(0, int(youtube_search_calls))
         if youtube_search_calls is not None
-        else (1 if int(quota_units) > 0 else 0)
+        else (1 if quota_units is None or int(quota_units) > 0 else 0)
     )
     row: Dict[str, Any] = {
         "term": term,
         "anchor": anchor,
         "anchor_source": anchor_source or "unanchored_legacy_chunk",
         "page_token_in": page_token_in,
-        "quota_units": int(quota_units),
+        "quota_units": 0,
         "quota_units_deprecated": True,
+        "quota_units_deprecated_alias_of": "youtube_combined_quota_units",
+        "youtube_combined_quota_units": 0,
         "youtube_search_calls": search_calls,
         "channels_new": int(channels_new),
         "exhausted": bool(exhausted),

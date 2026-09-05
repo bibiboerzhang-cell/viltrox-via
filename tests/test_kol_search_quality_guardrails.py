@@ -512,9 +512,11 @@ def test_instagram_profile_enrich_failure_degrades_honestly(monkeypatch: pytest.
         account_scan_service.search_platform_content("instagram", "photography", max_results=5)
     )
 
-    assert result["status"] == "done"
+    assert result["status"] == "partial"
     assert result["items"][0]["handle"] == "solo"
     assert "followers" not in result["items"][0]  # 富化失败 → followers 保持未知,不杜撰
+    assert result["metadata"]["provider_outcome_unknown"] is True
+    assert result["metadata"]["retry_safe"] is False
 
 
 def test_tiktok_search_extracts_author_fans(monkeypatch: pytest.MonkeyPatch) -> None:

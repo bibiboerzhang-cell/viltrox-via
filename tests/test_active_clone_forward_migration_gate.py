@@ -358,6 +358,34 @@ def test_train_migration_preflight_detects_a_hole_below_remote_max(tmp_path: Pat
     assert "待应用迁移未声明" in completed.stderr
 
 
+def test_train_migration_preflight_preserves_python_failure_diagnostics() -> None:
+    source = (OPS / "train.sh").read_text(encoding="utf-8")
+    start = source.index("migration_preflight() {")
+    end = source.index("\nmigration_preflight\n", start)
+    # Keep this failure contract independent from the dependency mirror and
+    # remote services: only the local interpreter shim fails.
+    harness = (
+        "set -euo pipefail\n"
+        "log() { printf '%s\\n' \"$*\"; }\n"
+        "die() { printf 'FATAL: %s\\n' \"$*\" >&2; exit 1; }\n"
+        "ssh() { printf '%s\\n' '310_vkpi_kol_search_refresh_scheduler.sql'; }\n"
+        "failed_python() { printf '%s\\n' 'safe Python dependency proof failed' >&2; return 25; }\n"
+        f"ROOT={json.dumps(str(ROOT), ensure_ascii=False)}\n"
+        "PYTHON_BIN=failed_python\n"
+        f"{source[start:end]}\n"
+        "migration_preflight\n"
+    )
+    completed = subprocess.run(
+        ["bash", "-c", harness],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=10,
+    )
+
+    assert completed.returncode != 0
+    assert "safe Python dependency proof failed" in completed.stderr
+    assert "本地 Python 执行失败" in completed.stderr
+    assert "待应用迁移未声明" not in completed.stderr
+
+
 def test_pending_runtime_migrations_detects_holes_not_just_the_maximum() -> None:
     manifest = atomic_release_shared.runtime_migration_manifest(ROOT / "migrations")
     missing = "309_vkpi_dsar_public_intake.sql"

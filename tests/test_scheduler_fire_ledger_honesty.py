@@ -463,10 +463,11 @@ def test_record_run_writes_last_status_ok_failed_blocked(monkeypatch: pytest.Mon
     row = _registry_row(registry_table)
     assert row["last_status"] == "blocked" and row["last_error"] == "blocked: memory_not_ready"
     assert row["last_success_at"] == success_before and row["last_run_at"] is not None
-    # 非法 status 不会写进列。
+    # 非法 status 不会写进列,也不再被 ok=True 误报成成功。
     jobs_tasks._record_scheduler_run("t1", ok=True, status="weird")
-    assert _registry_row(registry_table)["last_status"] == "ok"
-    assert scheduler_registry.list_scheduler_tasks()[0]["last_status"] == "ok"
+    assert _registry_row(registry_table)["last_status"] == "failed"
+    assert _registry_row(registry_table)["last_success_at"] == success_before
+    assert scheduler_registry.list_scheduler_tasks()[0]["last_status"] == "failed"
 
 
 def test_record_run_degrades_when_last_status_column_missing(monkeypatch: pytest.MonkeyPatch) -> None:

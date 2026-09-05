@@ -9,6 +9,29 @@ import json
 from typing import Any, Mapping
 
 import psycopg
+from app.workers.apify_jobs_worker_locks import WorkerConnectionRetired, retire_worker_connection, worker_lock_cleanup_failed
+
+
+class SharedProviderRateDeferred(RuntimeError):
+    """No provider was called; shared admission state requires a later retry."""
+
+    def __init__(self, reason: str, retry_delay_seconds: float = 30.0) -> None:
+        super().__init__(reason)
+        self.retry_delay_seconds = max(0.1, float(retry_delay_seconds))
+
+
+def shared_provider_rate_deferral(exc: BaseException) -> SharedProviderRateDeferred | None:
+    """Cleanup/DB errors must not erase a pre-provider admission deferral."""
+    seen: set[int] = set()
+    while id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, SharedProviderRateDeferred):
+            return exc
+        cause = exc.__cause__ or exc.__context__
+        if cause is None:
+            break
+        exc = cause
+    return None
 
 
 def _provider_calls_performed_truth(raw_value: Any) -> bool | None:
@@ -45,6 +68,8 @@ def execute_claimed_job_impl(
     lease_owner = str(job.get("lease_owner") or "").strip()
     provider_task_id = f"apify-job:{job_id}"
     fence = 0
+    retire_connection = False
+    deferred = None
     with namespace["db_connection_sync_scope"]():
         try:
             fence = namespace["acquire_provider_execution_claim"](
@@ -119,12 +144,47 @@ def execute_claimed_job_impl(
         except namespace["ApifyExecutionClaimBlocked"]:
             # A live owner is execution state, not a provider failure.
             raise
-        except Exception:
+        except Exception as exc:
+            retire_connection = worker_lock_cleanup_failed(exc)
+            deferred = shared_provider_rate_deferral(exc)
+            if deferred is not None:
+                # The admission exception is raised before dispatch. It may
+                # be wrapped by a slot-unlock error on the same broken DB.
+                if deferred is not exc:
+                    namespace["logger"].warning(
+                        "provider admission deferred after cleanup failure | id=%s error=%s",
+                        job_id, type(exc).__name__, exc_info=True,
+                    )
+                try:
+                    if fence:
+                        namespace["finalize_provider_execution_claim"](
+                            provider_task_id, fence, "blocked"
+                        )
+                    requeue(
+                        conn, job_id, str(deferred),
+                        retry_delay_seconds=deferred.retry_delay_seconds,
+                    )
+                except Exception as persistence_error:
+                    # Let the outer failure boundary retry persistence without
+                    # turning this no-call event into a spent provider attempt.
+                    raise deferred from persistence_error
+                return "queued"
             if fence:
                 namespace["finalize_provider_execution_claim"](
                     provider_task_id, fence, "failed"
                 )
             raise
+        finally:
+            # Keep the still-usable session available for the bounded requeue
+            # above, but never let an uncertain unlock return it to the loop.
+            # This also runs when finalization/requeue persistence fails.
+            if retire_connection:
+                try:
+                    retire_worker_connection(conn)
+                except WorkerConnectionRetired as close_error:
+                    if deferred is not None:
+                        raise close_error from deferred
+                    raise
 
 
-__all__ = ["execute_claimed_job_impl"]
+__all__ = ["SharedProviderRateDeferred", "execute_claimed_job_impl", "shared_provider_rate_deferral"]

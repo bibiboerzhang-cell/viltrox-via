@@ -212,6 +212,29 @@ def test_escalation_payload_is_word_for_word_equal_to_the_frontend_advance_leg(
     assert not differing, f"两条腿的 payload 有差异:{differing}"
 
 
+@pytest.mark.parametrize("platforms", [["x"], ["reddit"], ["x", "reddit"], ["reddit", "youtube"]])
+def test_explicit_secondary_platforms_reach_the_actual_queued_payload_with_frontend_equivalence(
+    captured_payloads: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, platforms: list[str],
+) -> None:
+    # Keep the authorization and DB writes hermetic, but run the complete auto
+    # escalation -> advance-body -> queue payload constructor chain.
+    monkeypatch.setattr(escalation, "authorize_escalation", lambda **kwargs: escalation.EscalationAuthorization(True, "fixture"))
+    monkeypatch.setattr(escalation.profile_discovery, "enqueue_smart_search_profile_advance", queue.enqueue_smart_search_profile_advance)
+    selected = {"platforms": platforms, "filters": {**FILTERS, "platforms": platforms}}
+    _enqueue({**_frontend_advance_body(), **selected, "new_discovery_platforms": platforms})
+    body = {**_recall_body(), **selected}
+    result = escalation.auto_escalated_discovery_payload(
+        body=body, session_body={**body, "session_id": SESSION_ID}, recall_query=QUERY, staff=STAFF,
+        recall_result={"local_qualification": {"schema": escalation.LOCAL_QUALIFICATION_SCHEMA,
+                      "policy": {"target_count": 30}, "qualified_returned_count": 11, "shortfall": 19}},
+    )
+    assert result["status"] == "queued"
+    frontend, automatic = captured_payloads
+    assert frontend == automatic
+    assert automatic["new_discovery_platforms"] == platforms
+    assert result["escalation"]["platforms"] == platforms
+
+
 def test_the_named_keys_really_differ_without_the_equivalence_helper(
     captured_payloads: list[dict[str, Any]]
 ) -> None:
@@ -328,6 +351,26 @@ def test_python_strategy_mirror_matches_the_frontend_policy_table() -> None:
         )
 
 
+def _frozen_platform_array(source: str, name: str, resolving: tuple[str, ...] = ()) -> list[str]:
+    """Read only literal strings and named array spreads; fail on new syntax."""
+    assert name not in resolving, f"cyclic frontend constant: {name}"
+    block = re.search(rf"\b{re.escape(name)} = Object\.freeze\(\[(.*?)\]\)", source, re.S)
+    assert block, f"missing frontend immutable array: {name}"
+    result = []
+    for value in block.group(1).split(","):
+        value = value.strip()
+        if not value:
+            continue
+        literal = re.fullmatch(r'"([^"\\]+)"', value)
+        if literal:
+            result.append(literal.group(1))
+            continue
+        spread = re.fullmatch(r"\.\.\.([A-Z_]+)", value)
+        assert spread, f"unsupported frontend platform expression: {value}"
+        result.extend(_frozen_platform_array(source, spread.group(1), (*resolving, name)))
+    return result
+
+
 def test_python_spec_mirrors_match_the_frontend_contracts() -> None:
     online_ts = _ts("SmartKolInputPanel.OnlineQualified.ts")
     assert escalation.ONLINE_QUALIFICATION_SPEC["version"] == re.search(
@@ -336,8 +379,10 @@ def test_python_spec_mirrors_match_the_frontend_contracts() -> None:
     assert escalation.ONLINE_QUALIFICATION_SPEC["target_count"] == _number(
         online_ts, "target_count"
     )
-    strict = re.search(r"STRICT_ONLINE_PLATFORMS = Object\.freeze\(\[(.*?)\]", online_ts, re.S)
-    assert list(escalation.ONLINE_DISCOVERY_PLATFORMS) == re.findall(r'"([^"]+)"', strict.group(1))
+    defaults = _frozen_platform_array(online_ts, "DEFAULT_ONLINE_PLATFORMS")
+    supported = _frozen_platform_array(online_ts, "STRICT_ONLINE_PLATFORMS")
+    assert defaults == list(escalation.DEFAULT_DISCOVERY_PLATFORMS) == ["youtube", "instagram", "tiktok"]
+    assert supported == list(escalation.ONLINE_DISCOVERY_PLATFORMS) == [*defaults, "x", "reddit"]
 
     local_ts = _ts("SmartKolInputPanel.LocalQualified.ts")
     assert escalation.LOCAL_QUALIFICATION_SPEC["version"] == re.search(

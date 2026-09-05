@@ -81,7 +81,12 @@ def evaluate_activity(
         max(0.0, (now - posted_at).total_seconds() / 86_400.0) if posted_at else None
     )
     evidence_type = str(row.get("evidence_type") or "video").strip().lower()
-    active_video = evidence_type == "video" and row.get("is_active") is not False
+    auditable_post = (
+        evidence_type == "post" and row.get("platform") in {"x", "reddit"}
+        and row.get("content_kind") == "post"
+        and row.get("source") in {"platform_content_search", "account_recent_video", "provider_video_item"}
+    )
+    active_video = (evidence_type == "video" or auditable_post) and row.get("is_active") is not False
     identity = ""
     identity_kind = ""
     for key in _VIDEO_IDENTITY_KEYS:

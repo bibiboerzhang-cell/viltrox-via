@@ -14,6 +14,9 @@ import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List
 
+from app.platform.apify_budget import ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked
+from app.services.intelligence.account_scan_outcome import ActorRunError
+
 
 @dataclass(frozen=True)
 class ContentRuntimeDependencies:
@@ -194,6 +197,14 @@ async def _instagram_profiles_with_budget(
         if budget is None:
             return await owner_profiles(targets), ""
         return await asyncio.wait_for(owner_profiles(targets), timeout=budget), ""
+    except (ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked):
+        raise
+    except ActorRunError as exc:
+        profiles = {
+            str(row.get("username") or "").strip().lower(): row
+            for row in exc.partial_items if str(row.get("username") or "").strip()
+        }
+        return profiles, "actor_outcome_unknown" if exc.provider_outcome_unknown else exc.code
     except asyncio.TimeoutError:
         logger.warning("scanner.instagram_profile_enrich_timeout budget=%.1fs", budget)
         return {}, "deadline_timeout"
@@ -641,6 +652,7 @@ def build_actor_result(
         "pagination_supported": False,
         "pagination_unsupported_reason": "actor_input_schema_has_no_cursor",
         "has_more": False,
+        "exhaustion_proven": False,
     })
     if normalized_platform == "instagram":
         metadata.update({
@@ -652,8 +664,15 @@ def build_actor_result(
         })
         if prepared.instagram_enrich_note:
             metadata["profile_enrich_degraded"] = prepared.instagram_enrich_note
+            metadata["provider_outcome_unknown"] = prepared.instagram_enrich_note in {
+                "deadline_timeout", "actor_outcome_unknown", "actor_failed",
+            }
+            metadata["retry_safe"] = False
     return {
-        "status": "done",
+        "status": (
+            "partial" if prepared.instagram_enrich_note not in {"", "no_target"}
+            else "done" if items else "empty"
+        ),
         "platform": normalized_platform,
         "query": normalized_query,
         "market": (market or "").strip().upper(),

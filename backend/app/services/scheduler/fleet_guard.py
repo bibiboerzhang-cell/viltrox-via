@@ -913,7 +913,7 @@ def guard_scheduled_callable(
                             error=f"{type(exc).__name__}: {str(exc)[:420]}",
                         )
                         raise
-                    status, error = outcome()
+                    status, error = outcome(result)
                     _record_finish_without_masking(claim, status=status, error=error)
                 return result
             finally:
@@ -941,7 +941,7 @@ def guard_scheduled_callable(
                             error=f"{type(exc).__name__}: {str(exc)[:420]}",
                         )
                         raise
-                    status, error = outcome()
+                    status, error = outcome(result)
                     _record_finish_without_masking(claim, status=status, error=error)
                 return result
             finally:

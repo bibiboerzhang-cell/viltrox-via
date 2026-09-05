@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
+
 from app.services.scheduler import jobs_registry
 
 
@@ -40,25 +42,33 @@ def test_anomaly_sentinel_placeholder_when_module_missing(monkeypatch) -> None:
     assert "vkpi_anomaly_sentinel" in sched.jobs  # 模块缺失注册表仍绿
 
 
-def test_anomaly_sentinel_wrapper_gates_and_records(monkeypatch) -> None:
+@pytest.mark.parametrize("result_status,ok,record_status,error", [
+    ("ok", True, "ok", ""),
+    ("failed", False, "failed", "status=failed"),
+    ("partial", False, "failed", "status=partial"),
+    ("disabled", False, "blocked", "status=disabled"),
+    ("queued", False, "blocked", "status=queued; awaiting_downstream_completion"),
+])
+def test_anomaly_sentinel_wrapper_gates_and_records(monkeypatch, result_status, ok, record_status, error) -> None:
     import types
 
     from app.services.scheduler import jobs_tasks
 
     calls: list[str] = []
-    fake_module = types.SimpleNamespace(run_anomaly_sentinel=lambda: calls.append("ran") or {"status": "ok", "alerts": 2})
+    fake_module = types.SimpleNamespace(run_anomaly_sentinel=lambda: calls.append("ran") or {"status": result_status, "alerts": 2})
     import importlib
 
     monkeypatch.setattr(importlib, "import_module", lambda name: fake_module if name == jobs_registry.ANOMALY_SENTINEL_MODULE else importlib.__import__(name))
-    recorded: list[tuple[str, bool]] = []
+    recorded: list[tuple[str, bool, str, str]] = []
     monkeypatch.setattr(jobs_tasks, "_scheduler_task_enabled", lambda key, default=False: key == "vkpi_anomaly_sentinel" and calls == ["gate_on"])
-    monkeypatch.setattr(jobs_tasks, "_record_scheduler_run", lambda key, *, ok, error="": recorded.append((key, ok)))
+    monkeypatch.setattr(jobs_tasks, "_record_scheduler_run", lambda key, *, ok, error="", status="": recorded.append((key, ok, status, error)))
     func = jobs_registry._resolve_anomaly_sentinel()
     assert func.__name__ == "job_vkpi_anomaly_sentinel"
     assert asyncio.run(func()) is None and calls == []  # 闸关:不调 S 入口
     calls.append("gate_on")
     out = asyncio.run(func())
-    assert out == {"status": "ok", "alerts": 2} and calls == ["gate_on", "ran"] and recorded == [("vkpi_anomaly_sentinel", True)]
+    assert out == {"status": result_status, "alerts": 2} and calls == ["gate_on", "ran"]
+    assert recorded == [("vkpi_anomaly_sentinel", ok, record_status, error)]
 
 
 def test_outcome_sync_has_five_routes_and_tolerates_failure(monkeypatch) -> None:

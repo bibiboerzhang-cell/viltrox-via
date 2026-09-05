@@ -6,7 +6,6 @@ policy stays isolated from enqueue/runner orchestration.
 """
 from __future__ import annotations
 
-import os
 import re
 from datetime import date, datetime, timezone
 from typing import Any, Callable
@@ -20,6 +19,7 @@ from app.domains.kol.url_deep_crawl_helpers import (
     _canonical_url,
     _load_json,
     _normalise_handle,
+    _normalise_platform,
     _raw_values,
 )
 
@@ -79,12 +79,9 @@ def _maintenance_refresh_execution_block_reason(
     if batch_reason:
         return batch_reason
     try:
-        if os.environ.get("OPS_SCHEDULER_FORCE_ENABLE", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }:
+        from app.services.scheduler_execution_policy import local_scheduler_force_enable
+
+        if local_scheduler_force_enable():
             return ""
         row = get_connection().execute(
             "SELECT enabled FROM scheduler_tasks WHERE task_key=?",
@@ -164,15 +161,20 @@ def _validated_profile_identity(row: dict[str, Any], submitted_url: str) -> dict
     if not canonical_submitted:
         raise VideoTrackingError("kol_profile_url_mismatch", 409)
 
-    stored_platform = str(detect_platform_from_profile_url(canonical_stored) or "").lower()
-    submitted_platform = str(detect_platform_from_profile_url(canonical_submitted) or "").lower()
-    if platform not in {"youtube", "instagram", "tiktok"}:
+    from app.domains.kol.search_platform_policy import STRICT_DISCOVERY_PLATFORMS
+    stored_platform = _normalise_platform(detect_platform_from_profile_url(canonical_stored))
+    submitted_platform = _normalise_platform(detect_platform_from_profile_url(canonical_submitted))
+    if platform not in STRICT_DISCOVERY_PLATFORMS:
         raise VideoTrackingError("kol_profile_identity_invalid", 422)
     if stored_platform != platform or submitted_platform != platform:
         raise VideoTrackingError("kol_profile_identity_mismatch", 409)
 
     stored_handle = extract_handle_from_profile_url(canonical_stored, platform)
     submitted_handle = extract_handle_from_profile_url(canonical_submitted, platform)
+    if platform in {"x", "reddit"}:
+        from app.platform.industry_crawlers.reddit_people_normalize import person_handle
+        stored_handle = person_handle(platform, canonical_stored)
+        submitted_handle = person_handle(platform, canonical_submitted)
 
     stored_identity = stable_creator_identity(
         {"platform": platform, "handle": stored_handle, "profile_url": canonical_stored}
@@ -283,6 +285,8 @@ def _stable_profile_native_ids(platform: Any, raw_value: Any) -> dict[str, str]:
         direct_id = str(first_item.get("id") or "").strip()
         if direct_id:
             values_by_field["channel_id"].add(direct_id)
+    elif platform_key in {"x", "reddit"}:
+        values_by_field["account_id"] = direct_values(first_item, {"account_id", "platform_user_id"}) | direct_values(raw.get("online_identity_v1"), {"account_id", "platform_user_id"})
     elif platform_key == "instagram":
         # Instagram's profile scraper returns an account object as items[0].
         # Do not recurse into latestPosts/owners, whose ids are content actors.
@@ -380,7 +384,8 @@ def _stable_profile_handle(platform: Any, raw_value: Any) -> str:
 
     platform_key = str(platform or "").strip().lower()
     raw = _load_json(raw_value)
-    if platform_key not in {"youtube", "instagram", "tiktok"} or not isinstance(raw, dict):
+    from app.domains.kol.search_platform_policy import STRICT_DISCOVERY_PLATFORMS
+    if platform_key not in STRICT_DISCOVERY_PLATFORMS or not isinstance(raw, dict):
         return ""
     profile_payload = raw.get("profile") if isinstance(raw.get("profile"), dict) else raw
     items = profile_payload.get("items") if isinstance(profile_payload, dict) else None
@@ -390,6 +395,13 @@ def _stable_profile_handle(platform: Any, raw_value: Any) -> str:
         else profile_payload
     )
     if not isinstance(first_item, dict):
+        return ""
+    if platform_key in {"x", "reddit"}:
+        from app.platform.industry_crawlers.reddit_people_normalize import person_handle
+        handle = person_handle(platform_key, first_item.get("handle"))
+        locator = person_handle(platform_key, first_item.get("profile_url"))
+        if handle and locator and handle.casefold() == locator.casefold():
+            return handle.lower()
         return ""
 
     direct_values: list[Any] = []
@@ -501,6 +513,9 @@ def _validated_maintenance_profile_identity(
         platform,
         extract_handle_from_profile_url(identity["canonical_profile_url"], platform),
     )
+    if platform in {"x", "reddit"}:
+        from app.platform.industry_crawlers.reddit_people_normalize import person_handle
+        url_handle = person_handle(platform, identity["canonical_profile_url"]).lower()
     try:
         native_ids = _stable_profile_native_ids(
             platform,

@@ -226,13 +226,31 @@ def scheduled_fire_blocked_reason() -> str | None:
     return slot.get("blocked_reason") if slot else None
 
 
+def mark_scheduled_fire_result(result: Any) -> None:
+    """Remember non-success even when a legacy callback records then returns None."""
+    from app.services.scheduler_result_contract import SchedulerOutcome, normalize_scheduler_result
+
+    outcome = result if isinstance(result, SchedulerOutcome) else normalize_scheduler_result(result)
+    slot = _fire_outcome_slot.get()
+    if slot is None or outcome.ok:
+        return
+    if outcome.status == "failed":
+        slot.setdefault("failure_reason", outcome.error or "task_failed")
+    else:
+        reason = outcome.error.removeprefix("blocked: ") if outcome.reason_key == "blocked" else ""
+        mark_scheduled_fire_blocked(reason or f"{outcome.reason_key}: {outcome.error}")
+
+
 @contextmanager
-def scheduled_fire_outcome_scope() -> Iterator[Callable[[], tuple[str, str]]]:
+def scheduled_fire_outcome_scope() -> Iterator[Callable[..., tuple[str, str]]]:
     """guard 用:开一个 fire 结果槽位;yield 的函数在任务体返回后给出 (台账状态, error 文本)。"""
     slot: dict[str, Any] = {"blocked_reason": None}
     token = _fire_outcome_slot.set(slot)
 
-    def outcome() -> tuple[str, str]:
+    def outcome(result: Any = None) -> tuple[str, str]:
+        mark_scheduled_fire_result(result)
+        if slot.get("failure_reason"):
+            return "failed", str(slot["failure_reason"])[:500]
         reason = slot.get("blocked_reason")
         if reason:
             return f"blocked:{blocked_reason_key(reason)}", str(reason)[:500]

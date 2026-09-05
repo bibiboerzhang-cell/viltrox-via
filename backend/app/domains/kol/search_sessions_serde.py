@@ -471,11 +471,11 @@ def project_public_profile_url(platform: Any, handle: Any, value: Any) -> str:
         elif len(parts) == 2 and parts[0].lower() in {"channel", "c", "user"}:
             candidate = parts[1]
     elif platform_key == "instagram" and host == "instagram.com":
-        if len(parts) == 1 and parts[0].lower() not in {"p", "reel", "direct", "messages"}:
-            candidate = parts[0]
+        candidate = parts[0] if len(parts) == 1 and parts[0].lower() not in {"p", "reel", "direct", "messages"} else ""
     elif platform_key == "tiktok" and host == "tiktok.com":
-        if len(parts) == 1 and parts[0].startswith("@"):
-            candidate = parts[0][1:]
+        candidate = parts[0][1:] if len(parts) == 1 and parts[0].startswith("@") else ""
+    elif platform_key == "reddit" and host in {"reddit.com", "old.reddit.com"}:
+        candidate = parts[1] if len(parts) == 2 and parts[0] in {"u", "user"} else ""
     elif platform_key in {"x", "twitter"} and host in {"x.com", "twitter.com"}:
         if len(parts) == 1 and parts[0].lower() != "messages":
             candidate = parts[0]

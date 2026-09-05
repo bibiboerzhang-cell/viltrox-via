@@ -53,7 +53,7 @@ _DEFAULT_PAGE_LIMIT = 100
 # 必须用 fields= 逗号分隔列名才回真字段(GOAFFPRO 列选约定)。下列字段按 GOAFFPRO 约定先设,
 # 真字段以响应里 _raw_keys 实测对照后微调(ref_code/coupon 是 KOL↔affiliate 配对键)。
 _AFFILIATE_FIELDS = "id,name,email,ref_code,coupon,status,commission,total_sales,total_orders,total_clicks,balance,signup_date,phone"
-# 实测:/admin/orders 返回 {error};GOAFFPRO 销售端点是 /admin/sales。
+# Admin API sales/order endpoint is /admin/orders; fields selection is required.
 _SALE_FIELDS = "id,affiliate_id,order_id,number,total,commission,currency,status,date,coupon,ref_code"
 
 # GoAffPro 销售确认态口径:只算已确认/已批准/已付/完成的单,排除退款/取消/拒绝/待定/空。
@@ -251,10 +251,10 @@ def save_credentials(body: dict[str, Any], staff: dict[str, Any] | None = None) 
     token_enc = _encrypt(access_token) if access_token else str(existing.get("access_token_encrypted") or "")
     public_enc = _encrypt(public_token) if public_token else str(existing.get("public_token_encrypted") or "")
     private_enc = _encrypt(private_token) if private_token else str(existing.get("private_token_encrypted") or "")
-    # 主鉴权键 = access_token;有它即视为 connected。
-    status = "connected" if token_enc else "pending"
+    # Configuration is not proof of authorization; a successful read probe is.
+    status = "pending"
     now = _utcnow()
-    connected_at = now if token_enc else (existing.get("connected_at") or None)
+    connected_at = None
     actor = _actor(staff)
 
     conn = get_conn()
@@ -270,7 +270,7 @@ def save_credentials(body: dict[str, Any], staff: dict[str, Any] | None = None) 
             public_token_encrypted=excluded.public_token_encrypted,
             private_token_encrypted=excluded.private_token_encrypted,
             status=excluded.status,
-            connected_at=COALESCE(vkpi_goaffpro_credentials.connected_at, excluded.connected_at),
+            connected_at=excluded.connected_at,
             updated_at=excluded.updated_at,
             updated_by_staff_id=excluded.updated_by_staff_id
         """,
@@ -331,7 +331,7 @@ def get_credentials() -> dict[str, Any]:
             "access_token": env_token,
             "public_token": env_public,
             "private_token": env_private,
-            "status": "connected" if env_token else "pending",
+            "status": "pending",
             "source": "env",
         }
     return {
@@ -355,7 +355,7 @@ def connection_status() -> dict[str, Any]:
     if source == "none":
         status = "not_configured"
     elif configured:
-        status = "connected"
+        status = str(creds.get("status") or "pending")
     else:
         status = str(creds.get("status") or "pending")
     return {
@@ -395,6 +395,7 @@ def list_affiliates(limit: int | None = None, offset: int | None = None, *, fetc
             out["partial"] = True
         if page.get("error"):
             out["error"] = page["error"]
+        out.update({k: page[k] for k in ("reason", "status_code", "next_offset") if k in page})
         return out
     params: dict[str, Any] = {"fields": _AFFILIATE_FIELDS}
     params["limit"] = int(limit) if limit else _DEFAULT_PAGE_LIMIT
@@ -404,6 +405,8 @@ def list_affiliates(limit: int | None = None, offset: int | None = None, *, fetc
     if not result.get("ok"):
         return result
     data = result.get("data")
+    if _soft_error(data) or not (isinstance(data, list) or isinstance(data, dict) and any(isinstance(data.get(k), list) for k in ("affiliates", "data", "results"))):
+        return {"ok": False, "error": _soft_error(data) or "malformed_page", "affiliates": [], "count": 0}
     rows = _extract_list(data, "affiliates", "data", "results")
     mapped = [_map_affiliate(r) for r in rows]
     total = data.get("total_results") if isinstance(data, dict) else None
@@ -425,6 +428,7 @@ def list_orders(limit: int | None = None, offset: int | None = None, *, fetch_al
             out["partial"] = True
         if page.get("error"):
             out["error"] = page["error"]
+        out.update({k: page[k] for k in ("reason", "status_code", "next_offset") if k in page})
         return out
     params: dict[str, Any] = {"fields": _SALE_FIELDS}
     params["limit"] = int(limit) if limit else _DEFAULT_PAGE_LIMIT
@@ -437,7 +441,8 @@ def list_orders(limit: int | None = None, offset: int | None = None, *, fetch_al
         return result
     data = result.get("data")
     se = _soft_error(data)
-    if se:
+    if se or not (isinstance(data, list) or isinstance(data, dict) and any(isinstance(data.get(k), list) for k in ("orders", "sales", "data", "results"))):
+        se = se or "malformed_page"
         return {"ok": False, "error": se, "raw": data, "orders": [], "count": 0}
     rows = _extract_list(data, "orders", "sales", "data", "results")
     mapped = [_map_order(r) for r in rows]
@@ -464,34 +469,9 @@ def _paginate_rows(
     契约:ok = 至少首页成功(有可用数据);partial = 中途某页失败(已拉到的 rows 照返,不静默截断
     冒充全量);首页即失败 → ok=False、rows=[]。绝不抛、绝不烧 LLM。
     """
-    rows: list[dict[str, Any]] = []
-    total: int | None = None
-    offset = 0
-    ok = False
-    partial = False
-    error = ""
-    for _ in range(max(1, int(max_pages))):
-        params = {**base_params, "limit": page_limit, "offset": offset}
-        result = _get(path, params)
-        if not result.get("ok"):
-            error = str(result.get("error") or result.get("reason") or "page fetch failed")
-            partial = True
-            break
-        data = result.get("data")
-        se = _soft_error(data)
-        if se:
-            error = se
-            partial = True
-            break
-        ok = True
-        if total is None and isinstance(data, dict):
-            total = data.get("total_results")
-        page = _extract_list(data, *list_keys)
-        rows.extend(page)
-        if len(page) < page_limit:
-            break
-        offset += page_limit
-    return {"ok": ok, "rows": rows, "total": total, "partial": partial, "error": error}
+    from app.domains.integrations.goaffpro_connect_pagination import paginate_rows
+
+    return paginate_rows(path, base_params, list_keys, page_limit=page_limit, max_pages=max_pages)
 
 
 def list_traffic(
@@ -517,6 +497,7 @@ def list_traffic(
             out["partial"] = True
         if page.get("error"):
             out["error"] = page["error"]
+        out.update({k: page[k] for k in ("reason", "status_code", "next_offset") if k in page})
         return out
     params: dict[str, Any] = {"fields": _TRAFFIC_FIELDS}
     if affiliate_id:
@@ -566,17 +547,23 @@ def affiliate_attribution(affiliate_id: str | int) -> dict[str, Any]:
     op = _paginate_rows("admin/orders", {"fields": _SALE_FIELDS, "affiliate_id": aid}, ("orders", "sales", "data", "results"))
     od_ok = bool(op.get("ok"))
     orders_list = op.get("rows") or []
+    from app.domains.integrations.goaffpro_connect_sales import prepare_sales
+
+    try:
+        prepared_orders = prepare_sales([_map_order(o) for o in orders_list if _is_confirmed_sale(o.get("status"))], [])
+    except ValueError:
+        return {**base, "partial": True, "error": "invalid_sales_contract"}
     # 只算确认态订单(排除 refund/cancelled/declined/pending/空),并按币种分组——无 FX 表,绝不把
     # EUR cents 加进 USD。取主币种(GMV 最大)上报 gmv/commission/orders,by_currency 留全量供审计,
     # mixed_currency 标记多币种。之前无 status 过滤 + currency 取首单 → 退款/待定单虚增 GMV、跨币混加。
     by_currency: dict[str, dict[str, int]] = {}
-    for o in orders_list:
+    for o in prepared_orders:
         if not _is_confirmed_sale(o.get("status")):
             continue
         cur = str(o.get("currency") or "").strip().upper() or "UNKNOWN"
         bucket = by_currency.setdefault(cur, {"gmv_cents": 0, "commission_cents": 0, "orders": 0})
-        bucket["gmv_cents"] += to_cents(o.get("total") or o.get("order_total"))
-        bucket["commission_cents"] += to_cents(o.get("commission"))
+        bucket["gmv_cents"] += o["total_cents"]
+        bucket["commission_cents"] += o["commission_cents"]
         bucket["orders"] += 1
     if by_currency:
         primary_cur = max(by_currency.items(), key=lambda kv: (kv[1]["gmv_cents"], kv[1]["orders"]))[0]
@@ -636,9 +623,10 @@ def sync_kol_metrics(limit: int | None = None) -> dict[str, Any]:
         aff = get_affiliate(aid)
         # partial 列是 BOOLEAN(迁移164):Postgres 严格,传 int 1/0 → DatatypeMismatch;
         # 用真 bool(SQLite 也兼容)。这是之前 vkpi_goaffpro_kol_metrics 一直空的真因(此 job 在 PG 上必崩)。
-        partial = bool(attr.get("partial"))
+        partial = bool(attr.get("partial")) or not attr.get("ok") or not aff.get("ok")
         if partial:
             errors += 1
+            continue  # Retain the last complete snapshot, never overwrite it with failed-query zeroes.
         conn.execute(
             """
             INSERT INTO vkpi_goaffpro_kol_metrics
@@ -673,7 +661,7 @@ def sync_kol_metrics(limit: int | None = None) -> dict[str, Any]:
         )
         synced += 1
     conn.commit()
-    return {"ok": True, "synced": synced, "errors": errors, "synced_at": now}
+    return {"ok": errors == 0, "partial": errors > 0, "synced": synced, "errors": errors, "synced_at": now}
 
 
 # --- D2 写侧 + 纯映射/拼链/产品解析簇:行为不变搬到 goaffpro_connect_affiliates.py，
@@ -707,22 +695,30 @@ from app.domains.integrations.goaffpro_connect_affiliates import (  # noqa: E402
 
 
 def sync_stub() -> dict[str, Any]:
-    """手动 sync stub(D1 骨架)—— 只拉一页 affiliates + orders 探活,不落库、不归因。
+    """Compatibility name for the explicit authorization probe, not sales sync.
 
-    本刀只建骨架:落库/归因/折扣码映射是后续刀(对齐 revenue/attribution 落账模式)。
-    no creds -> {ok:False, reason:'not_configured'}。绝不抛、绝不烧 LLM。
+    Verify affiliate/order read access and persist only the connection receipt.
+    Sales and metric persistence are separate operator-triggered endpoints.
     """
     status = connection_status()
-    if status.get("status") == "not_configured":
-        return {"ok": False, "reason": "not_configured", "connection": status}
+    if status.get("status") in {"not_configured", "revoked"}:
+        return {"ok": False, "reason": status["status"], "connection": status}
     affiliates = list_affiliates(limit=1)
     orders = list_orders(limit=1)
+    ok = bool(affiliates.get("ok") and orders.get("ok"))
+    verified_status = "connected" if ok else "error"
+    if status.get("source") == "db":
+        conn = get_conn()
+        conn.execute("UPDATE vkpi_goaffpro_credentials SET status=?, connected_at=?, updated_at=? WHERE id=?", (verified_status, _utcnow() if ok else None, _utcnow(), _CREDS_SINGLETON_ID))
+        conn.commit()
+    status = {**status, "status": verified_status}
     return {
-        "ok": bool(affiliates.get("ok") and orders.get("ok")),
+        "ok": ok,
         "connection": status,
         "affiliates_probe": affiliates,
         "orders_probe": orders,
-        "note": "D1 stub: probe-only, no persistence/attribution yet (next cut). 字段映射待 key 校准。",
+        "operation": "authorization_probe",
+        "note": "Read authorization verified only; use sync-sales and sync-metrics for persisted business data.",
     }
 
 

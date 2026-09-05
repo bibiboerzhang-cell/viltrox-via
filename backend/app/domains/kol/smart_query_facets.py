@@ -45,6 +45,7 @@ from app.domains.kol.profile_recall_filter_modes import TRI_STATE_MODES, normali
 from app.domains.kol.profile_recall_precision import explicit_platforms_from_query
 from app.domains.kol.profile_vertical_lexicon import VERTICAL_KEYS, VERTICAL_LABELS_ZH
 from app.domains.kol.smart_query_intent import AUDIENCE_SCALE_FLOOR, detect_audience_scale
+from app.domains.kol.search_platform_policy import DEFAULT_DISCOVERY_PLATFORMS, STRICT_DISCOVERY_PLATFORMS
 
 logger = get_logger(__name__)
 
@@ -62,7 +63,7 @@ SOURCE_OPERATOR = "operator_text"
 SOURCE_MODEL = "model"
 SOURCE_RULE = "rule"
 
-SUPPORTED_PLATFORMS: tuple[str, ...] = ("youtube", "instagram", "tiktok")
+SUPPORTED_PLATFORMS: tuple[str, ...] = STRICT_DISCOVERY_PLATFORMS
 
 #: **本模块自己推断出来的**语言筛选用的三态模式。故意不是 require。
 #:
@@ -438,11 +439,12 @@ def _platforms_facet(query: str, plan: dict[str, Any], model: dict[str, Any]) ->
             evidence="你原话里点了「" + "、".join(explicit) + "」",
             note="只在你点名的平台里找。",
         )
-    from_model = _clean_codes(model.get("platforms"), allowed=SUPPORTED_PLATFORMS)
-    candidates = from_model or [item for item in (plan.get("platforms") or []) if item in SUPPORTED_PLATFORMS]
+    # New providers are opt-in; a model/default plan cannot expand paid scope.
+    from_model = _clean_codes(model.get("platforms"), allowed=DEFAULT_DISCOVERY_PLATFORMS)
+    candidates = from_model or [item for item in (plan.get("platforms") or []) if item in DEFAULT_DISCOVERY_PLATFORMS]
     source = SOURCE_MODEL if from_model else SOURCE_RULE
     # 三个平台全在 = 根本没在筛平台。如实报成「不筛」,别摆一个假的三选三给操作员看。
-    if not candidates or len(set(candidates)) >= len(SUPPORTED_PLATFORMS):
+    if not candidates or set(candidates) == set(DEFAULT_DISCOVERY_PLATFORMS):
         return _facet(
             "platforms", [], origin=ORIGIN_INFERRED, source=source,
             evidence="你没点名平台", note="三个平台一起找,不按平台筛。",

@@ -292,14 +292,19 @@ def refund(
     staff: dict[str, Any] | None = None,
     ingest_class: str = "manual_unverified",
 ) -> dict[str, Any]:
-    amount_cents = -abs(_money_cents(body.get("refund_cents", body.get("refund_usd", body.get("amount_usd", 0)))))
+    from app.domains.attribution.integrations_money import currency_code, exact_cents
+
+    amount_cents = -abs(exact_cents(body["refund_cents"], already_cents=True) if "refund_cents" in body else exact_cents(body.get("refund_usd", body.get("amount_usd", 0))))
+    currency = currency_code(body.get("currency") or ("USD" if "refund_usd" in body or "amount_usd" in body else ""))
     source_ref = str(body.get("source_ref") or body.get("refund_id") or f"refund:{secrets.token_hex(6)}")
     source_platform = str(body.get("source_platform") or "shopify")
     existing = get_conn().execute(
-        "SELECT id, revenue_cents FROM vkpi_sales_attributions WHERE source_platform=? AND source_ref=?",
+        "SELECT id, revenue_cents, currency FROM vkpi_sales_attributions WHERE source_platform=? AND source_ref=?",
         (source_platform, source_ref),
     ).fetchone()
     old_revenue = _int((dict(existing) if existing else {}).get("revenue_cents"))
+    if existing and str(dict(existing).get("currency") or "").upper() != currency:
+        raise ValueError("refund replay currency conflicts with the recorded event")
     attr = attribution.create_attribution(
         {
             "source_platform": source_platform,
@@ -311,6 +316,7 @@ def refund(
             "shopify_order_snapshot_id": body.get("shopify_order_snapshot_id"),
             "product_sku": body.get("product_sku") or "",
             "revenue_cents": amount_cents,
+            "currency": currency,
             "confidence": "refund",
             "occurred_at": body.get("occurred_at") or _utcnow(),
             "evidence": {"source": "refund", "payload": body},

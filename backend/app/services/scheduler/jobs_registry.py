@@ -99,7 +99,7 @@ def _resolve_anomaly_sentinel() -> Any:
 
     try:
         module = importlib.import_module(ANOMALY_SENTINEL_MODULE)
-        entry = getattr(module, ANOMALY_SENTINEL_ENTRYPOINT)
+        getattr(module, ANOMALY_SENTINEL_ENTRYPOINT)
     except Exception as exc:  # noqa: BLE001 — S 车道模块未落地时诚实占位
         reason = f"{type(exc).__name__}: {str(exc)[:120]}"
 
@@ -111,25 +111,11 @@ def _resolve_anomaly_sentinel() -> Any:
 
         return job_vkpi_anomaly_sentinel_missing
 
-    import asyncio
-    import inspect
-
-    from app.services.scheduler.jobs_tasks import _record_scheduler_run, _scheduler_task_enabled
-
-    async def job_vkpi_anomaly_sentinel() -> Any:
-        # config-gate 由注册方统一把守(scheduler_tasks.vkpi_anomaly_sentinel,迁移 290 种子默认 OFF),
-        # S 车道入口只管「扫 + 写 vkpi_alerts(alert_key 幂等)」。
-        if not _scheduler_task_enabled("vkpi_anomaly_sentinel"):
-            return None
-        try:
-            result = await entry() if inspect.iscoroutinefunction(entry) else await asyncio.to_thread(entry)
-            _record_scheduler_run("vkpi_anomaly_sentinel", ok=True)
-            return result
-        except Exception as exc:  # noqa: BLE001 — 哨兵失败只记账,不拖垮调度器
-            _record_scheduler_run("vkpi_anomaly_sentinel", ok=False, error=str(exc)[:240])
-            raise
-
-    return job_vkpi_anomaly_sentinel
+    # The sentinel uses the same gate, async dispatch and truthful result
+    # bookkeeping as other daily callbacks; keep only missing-module handling here.
+    return _gated_daily_job(
+        "vkpi_anomaly_sentinel", ANOMALY_SENTINEL_MODULE, ANOMALY_SENTINEL_ENTRYPOINT
+    )
 
 
 class _RunRecordingRegistration:

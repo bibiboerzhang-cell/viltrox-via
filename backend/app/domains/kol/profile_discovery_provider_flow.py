@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.platform.apify_budget import ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked
+
 
 @dataclass
 class DiscoveryPlan:
@@ -189,8 +191,16 @@ async def search_provider_legs(
     logger: Any,
 ) -> list[Any]:
     """Effect adapter for concurrent platform calls and provider normalization."""
+    stop_dispatch = False
+    stop_unknown = False
 
     async def search_one(platform: str) -> dict[str, Any]:
+        nonlocal stop_dispatch, stop_unknown
+        if stop_dispatch:
+            return {"platform": platform, "status": "blocked", "annotated": [], "error": True,
+                    "message": "prior_provider_outcome_unknown" if stop_unknown else "prior_provider_dispatch_blocked", "metadata": {
+                        "provider_outcome_unknown": stop_unknown, "dispatch_blocked": True,
+                        "provider_called": False, "retry_safe": False}}
         try:
             result = await search_platform(
                 platform,
@@ -204,7 +214,16 @@ async def search_provider_legs(
                 page_cursor=plan.leg_cursors.get(platform),
                 exact_query=plan.exact_query,
             )
+        except (ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked) as exc:
+            stop_dispatch = True
+            stop_unknown = isinstance(exc, ApifyProviderReplayBlocked)
+            return {"platform": platform, "status": "blocked", "annotated": [], "error": True,
+                    "message": exc.code, "metadata": {
+                        "provider_outcome_unknown": isinstance(exc, ApifyProviderReplayBlocked),
+                        "dispatch_blocked": True, "retry_safe": False}}
         except Exception:
+            stop_dispatch = True
+            stop_unknown = True
             logger.warning(
                 "profile discovery provider failed platform=%s",
                 platform,
@@ -216,7 +235,14 @@ async def search_provider_legs(
                 "message": "platform_search_unavailable",
                 "annotated": [],
                 "error": True,
+                "metadata": {"provider_outcome_unknown": True, "retry_safe": False},
             }
+        metadata = dict(result.get("metadata") or {})
+        unknown = bool(metadata.get("provider_outcome_unknown") or result.get("provider_outcome_unknown"))
+        if unknown:
+            stop_dispatch = True
+            stop_unknown = True
+            metadata.update(provider_outcome_unknown=True, retry_safe=False, has_more=False)
         raw_items = list(result.get("items") or [])
         strict_items, mismatch_count = _platform_items(
             raw_items,
@@ -229,10 +255,10 @@ async def search_provider_legs(
             "platform": platform,
             "status": result.get("status"),
             "message": result.get("message"),
-            "metadata": result.get("metadata") or {},
+            "metadata": metadata,
             "annotated": annotated,
             "filtered_platform_mismatch": mismatch_count,
-            "error": result.get("status") not in {"done", "ready"} and not annotated,
+            "error": unknown or result.get("status") not in {"done", "ready", "empty"},
         }
 
     return await run_legs(plan.resolved_platforms, search_one)
@@ -553,7 +579,7 @@ def apply_discovery_effects(
     analyzing_total = analyzing_new + existing_reach["analyzing"]
 
     auto_enrolled_count = 0
-    if plan.auto_enroll:
+    if plan.auto_enroll and not _dispatch_blocked(state):
         try:
             auto_enrolled_count = auto_enroll_discoveries(new_creators)
         except Exception as exc:
@@ -565,6 +591,15 @@ def apply_discovery_effects(
     return DiscoveryEffects(
         auto_enrolled_count=auto_enrolled_count,
         analyzing_total=analyzing_total,
+    )
+
+
+def _dispatch_blocked(state: DiscoveryState) -> bool:
+    return any(
+        (row.get("metadata") or {}).get("provider_outcome_unknown")
+        or (row.get("metadata") or {}).get("dispatch_blocked")
+        or row.get("status") == "deadline_exceeded"
+        for row in state.platform_results
     )
 
 
@@ -589,6 +624,9 @@ def project_discovery_response(
     build_funnel: Any,
 ) -> dict[str, Any]:
     """Pure response projection from collected facts and completed effects."""
+    blocked = _dispatch_blocked(state)
+    unknown = any((row.get("metadata") or {}).get("provider_outcome_unknown")
+                  or row.get("status") == "deadline_exceeded" for row in state.platform_results)
     return {
         "status": _response_status(state, new_creators),
         "query": plan.query,
@@ -631,9 +669,12 @@ def project_discovery_response(
             ),
         },
         "platform_results": state.platform_results,
-        "next_page_cursors": pagination["next_page_cursors"],
-        "next_cursor": pagination["next_cursor"],
-        "has_more": pagination["has_more"],
+        "next_page_cursors": {} if blocked else pagination["next_page_cursors"],
+        "next_cursor": None if blocked else pagination["next_cursor"],
+        "has_more": False if blocked else pagination["has_more"],
+        "provider_outcome_unknown": unknown,
+        "dispatch_blocked": blocked,
+        "retry_safe": not blocked and not any((row.get("metadata") or {}).get("retry_safe") is False for row in state.platform_results),
         "discovery_funnel": build_funnel(
             platform_results=state.platform_results,
             gate_dropped=state.gate_dropped,

@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import math
+import time
 import os
 import re
 from datetime import datetime, timezone
@@ -629,6 +631,8 @@ def _post_graphql_with_credentials(
     creds: dict[str, Any],
     query: str,
     variables: dict[str, Any] | None = None,
+    *,
+    timeout_seconds: float = 20,
 ) -> dict[str, Any]:
     """Single sanitized GraphQL call using an explicit candidate credential set."""
 
@@ -639,8 +643,11 @@ def _post_graphql_with_credentials(
             "ok": False,
             "reason": str(creds.get("token_refresh_reason") or "not_configured"),
         }
+    timeout = float(timeout_seconds)
+    if not math.isfinite(timeout) or timeout <= 0:
+        return {"ok": False, "reason": "deadline_exceeded"}
     try:
-        with httpx.Client(timeout=20) as client:
+        with httpx.Client(timeout=min(20.0, timeout)) as client:
             resp = client.post(
                 _admin_endpoint(creds),
                 headers=_admin_headers(token),
@@ -658,10 +665,15 @@ def _post_graphql_with_credentials(
     return {"ok": True, "data": data.get("data") if isinstance(data, dict) else None}
 
 
-def post_graphql(query: str, variables: dict[str, Any] | None = None) -> dict[str, Any]:
+def post_graphql(query: str, variables: dict[str, Any] | None = None, *, timeout_seconds: float | None = None) -> dict[str, Any]:
     """Single GraphQL Admin API call. no creds -> not_configured, never raises."""
 
-    return _post_graphql_with_credentials(_admin_credentials(), query, variables)
+    if timeout_seconds is None:
+        return _post_graphql_with_credentials(_admin_credentials(), query, variables)
+    from app.domains.commerce.shopify_graphql_deadline import call_with_deadline
+
+    return call_with_deadline(timeout_seconds, _admin_credentials, _post_graphql_with_credentials,
+                              query, variables, clock=time.monotonic)
 
 
 _WEBHOOK_TOPICS = (

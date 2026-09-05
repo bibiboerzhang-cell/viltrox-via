@@ -230,6 +230,9 @@ def classify_url(raw_url: str) -> ClassifiedUrl:
     normalized = _normalize_input_url(original)
     parsed = urlparse(normalized)
     host = parsed.netloc.lower().removeprefix("www.")
+    from app.domains.kol.url_deep_crawl_helpers import _secondary_profile_classification
+    if secondary := _secondary_profile_classification(original, normalized, host):
+        return ClassifiedUrl(*secondary)
     path = parsed.path.strip("/")
     lowered_path = path.lower()
 
@@ -251,14 +254,8 @@ def classify_url(raw_url: str) -> ClassifiedUrl:
         handle_hint = _normalise_handle(platform, extract_handle_from_url(normalized))
         channel_id = _channel_id_from_handle(platform, handle_hint)
         return ClassifiedUrl(
-            original,
-            normalized,
-            "video",
-            platform,
-            "" if channel_id else handle_hint,
-            channel_id,
-            video_id,
-            "video_pattern",
+            original, normalized, "video", platform,
+            "" if channel_id else handle_hint, channel_id, video_id, "video_pattern",
         )
 
     profile_handle = extract_handle_from_profile_url(normalized, platform) or extract_handle_from_url(normalized)
@@ -269,14 +266,8 @@ def classify_url(raw_url: str) -> ClassifiedUrl:
 
     if profile_handle or channel_id:
         return ClassifiedUrl(
-            original,
-            normalized,
-            "profile",
-            platform,
-            profile_handle,
-            channel_id,
-            "",
-            "profile_pattern",
+            original, normalized, "profile", platform,
+            profile_handle, channel_id, "", "profile_pattern",
         )
 
     if platform == "instagram" and lowered_path.split("/", 1)[0] not in PROFILE_GENERIC_SEGMENTS:

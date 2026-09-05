@@ -51,6 +51,7 @@ DURABLE_PROVIDER_JOB_TYPES = frozenset(
         "vkpi_analytics_monitor",
         "vkpi_kol_pool_on_demand_refresh",
         "vkpi_official_channel_sync",
+        "vkpi_shopify_order_sync",
     }
 )
 

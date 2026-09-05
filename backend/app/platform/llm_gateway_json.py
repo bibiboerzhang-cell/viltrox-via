@@ -161,7 +161,7 @@ def _validate_json_contract(
 def _safe_int(value: Any) -> int:
     try:
         return int(value or 0)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 

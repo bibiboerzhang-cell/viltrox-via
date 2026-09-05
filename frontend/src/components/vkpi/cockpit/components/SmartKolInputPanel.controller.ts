@@ -58,7 +58,7 @@ import {
 } from "./SmartKolInputPanel.SearchPolicy";
 import { useAutoRelaxControl } from "./SmartKolInputPanel.AutoRelax";
 import { LOCAL_QUALIFICATION_SPEC } from "./SmartKolInputPanel.LocalQualified";
-import { ONLINE_QUALIFICATION_SPEC, strictOnlineDiscoveryPlatforms } from "./SmartKolInputPanel.OnlineQualified";
+import { DEFAULT_ONLINE_PLATFORMS, ONLINE_QUALIFICATION_SPEC, strictOnlineDiscoveryPlatforms } from "./SmartKolInputPanel.OnlineQualified";
 import {
   type SearchRequestEpoch,
   useLatestSearchRequestEpoch,
@@ -122,7 +122,7 @@ export function useSmartKolInputPanelController({
   const [searchFiltersOpen, setSearchFiltersOpen] = useState(false);
   const [searchFilters, setSearchFilters] = useState<KolSearchFilterState>(EMPTY_KOL_SEARCH_FILTERS);
   // 平台选择器默认 YT/IG/TikTok；Facebook 可作为本地硬筛选，未支持的联网发现腿不会被其他平台顶替。
-  const [discoveryPlatforms, setDiscoveryPlatforms] = useState<string[]>(["youtube", "instagram", "tiktok"]);
+  const [discoveryPlatforms, setDiscoveryPlatforms] = useState<string[]>([...DEFAULT_ONLINE_PLATFORMS]);
   // 国家/地区只有一个真状态：搜索前筛选与结果区「重新查找」共用，避免 UI 看见 A、请求却发 B。
   const discoveryRegion = searchFilters.country;
   const setDiscoveryRegion = (value: string) => setSearchFilters((current) => ({ ...current, country: value }));

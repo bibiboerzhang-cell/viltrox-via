@@ -1,7 +1,7 @@
 """V-KPI attribution, alerts, KPI ledger, and metric lineage routes."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
 import app.domains.attribution.integrations as integrations
 import app.domains.lineage.drilldown as drilldown
@@ -206,12 +206,13 @@ async def upload_amazon_report(
     asin: str = Form(default=""),
     marketplace: str = Form(default="US"),
     report_date: str = Form(default=""),
+    currency: str = Form(default=""),
     authorization_ref: str = Form(default=""),
     authorization_reason: str = Form(default=""),
     confirmed_by_human: bool = Form(default=False),
     staff=Depends(require_tab("vkpi", "admin")),
 ):
-    content = await file.read()
+    content = await file.read(20 * 1024 * 1024 + 1)
     if len(content) > 20 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="amazon report too large")
     try:
@@ -236,6 +237,7 @@ async def upload_amazon_report(
                 "asin": asin,
                 "marketplace": marketplace,
                 "report_date": report_date,
+                "currency": currency,
                 "_authorization_evidence": authorization,
             },
             staff=staff,
@@ -297,15 +299,29 @@ def shopify_order_detail(order_ref: str, staff=Depends(require_tab("vkpi", "read
 
 
 @router.post("/shopify/sync")
-def shopify_sync(body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+async def shopify_sync(request: Request, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
-    return integrations.shopify_sync_status(body or {}, staff=staff, mode="sync")
+    return await _enqueue_shopify_sync(request, body, staff, "sync")
 
 
 @router.post("/shopify/backfill")
-def shopify_backfill(body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
+async def shopify_backfill(request: Request, body: dict | None = None, staff=Depends(require_tab("vkpi", "write"))):
     _require_manager_staff(staff)
-    return integrations.shopify_sync_status(body or {}, staff=staff, mode="backfill")
+    return await _enqueue_shopify_sync(request, body, staff, "backfill")
+
+
+async def _enqueue_shopify_sync(request, body, staff, mode):
+    from app.domains.attribution.integrations_shopify_sync import enqueue_sync
+
+    try:
+        result = await enqueue_sync(getattr(request.app.state, "job_queue", None), body or {}, staff=staff, mode=mode)
+        audit.log_business_event(staff_id=resolve_staff_id(staff) or 0, action_type="shopify_sync_enqueue",
+                                 target_type="integration", target_id=result["sync_uid"], metadata={"mode": mode, "task_id": result["task_id"]})
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/shopify/status")

@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.platform.llm_gateway_invoke_types import CandidateAttempt, InvocationContext
+from app.platform import llm_gateway_invoke_limits as _limits
 
 
 def _reserved_hard_stop(
@@ -244,9 +245,7 @@ def _cleanup_open_failure(ctx: InvocationContext, attempt: CandidateAttempt) -> 
             )
     if attempt.reservation_key:
         try:
-            ctx.deps["_llm_budget_reservations"]().release_llm_reservation(
-                attempt.reservation_key
-            )
+            _limits.release_unstarted_reservation(ctx, attempt)
         except Exception:
             ctx.deps["logger"].error(
                 "vkpi.llm_gateway.reservation_release_failed",
@@ -317,15 +316,22 @@ def _open_candidate(ctx: InvocationContext, attempt: CandidateAttempt) -> bool:
                 triggered_by=ctx.triggered_by,
             )
             attempt.reservation_key = str(reservation.reservation_key or "")
+        if _limits.deadline_hit(ctx):
+            _cleanup_open_failure(ctx, attempt)
+            return False
         attempt.breaker_permit = ctx.deps["_acquire_strict_fleet_breaker"](
             provider=attempt.provider,
             model=attempt.binding.model_id,
             enforce_atomic_reservation=ctx.enforce_atomic_reservation,
         )
+        if _limits.deadline_hit(ctx):
+            _cleanup_open_failure(ctx, attempt)
+            return False
         if ctx.enforce_atomic_reservation:
             ctx.deps["_llm_budget_reservations"]().mark_llm_provider_started(
                 attempt.reservation_key
             )
+            attempt.provider_marked_started = True
     except Exception as exc:  # noqa: BLE001 - fail closed before provider I/O
         _cleanup_open_failure(ctx, attempt)
         _record_open_failure(ctx, attempt, exc)
@@ -341,10 +347,10 @@ def _complete_breaker_or_stop(
     log_failure: bool,
 ) -> dict[str, Any] | None:
     try:
-        ctx.deps["_complete_strict_fleet_breaker"](
-            attempt.breaker_permit,
-            outcome,
-        )
+        if isinstance(outcome, dict) and outcome.get("provider_io_started") is False:
+            ctx.deps["_abandon_strict_fleet_breaker"](attempt.breaker_permit)
+        else:
+            ctx.deps["_complete_strict_fleet_breaker"](attempt.breaker_permit, outcome)
     except Exception as exc:  # noqa: BLE001 - no fallback after state loss
         if log_failure:
             ctx.deps["logger"].error(
@@ -619,10 +625,12 @@ def _handle_model_mismatch(
             reason="audit_ledger_unavailable",
             error_type=type(exc).__name__,
         )
+    ctx.errors.append(mismatch)
+    if _limits.hold_unmetered_failure(ctx, attempt, input_tokens, output_tokens):
+        return None
     settlement_stop = _settle_reserved_attempt(ctx, attempt, cost_micro)
     if settlement_stop is not None:
         return settlement_stop
-    ctx.errors.append(mismatch)
     return None
 
 
@@ -643,6 +651,9 @@ def _handle_success_result(
             cost_micro=cost_micro,
             cost_cents=cost_cents,
         )
+    if attempt.reservation_key and input_tokens <= 0 and output_tokens <= 0:
+        ctx.stop_reason = "provider_outcome_unknown"
+        return _handle_reserved_failure(ctx, attempt, result, ctx.stop_reason, metrics)
     audit, hard_stop = _record_success_or_stop(
         ctx,
         attempt,
@@ -658,6 +669,8 @@ def _handle_success_result(
     settlement_stop = _settle_reserved_attempt(ctx, attempt, cost_micro)
     if settlement_stop is not None:
         return settlement_stop
+    if _limits.deadline_hit(ctx):
+        return None
     result["fallback_used"] = bool(ctx.errors)
     result["purpose"] = ctx.purpose
     result["cost_micro_usd"] = cost_micro
@@ -686,6 +699,8 @@ def _handle_empty_success(
     )
     if hard_stop is not None:
         return hard_stop
+    if _limits.hold_unmetered_failure(ctx, attempt, input_tokens, output_tokens):
+        return None
     return _settle_reserved_attempt(ctx, attempt, cost_micro)
 
 
@@ -709,7 +724,7 @@ def _handle_reserved_failure(
     )
     if hard_stop is not None:
         return hard_stop
-    if usage_known:
+    if usage_known or status in _limits.DEFINITIVE_REJECTIONS or result.get("provider_io_started") is False:
         return _settle_reserved_attempt(ctx, attempt, cost_micro)
     ctx.deps["_mark_reserved_attempt_unknown"](attempt.reservation_key)
     return None
@@ -722,6 +737,8 @@ def _handle_failed_result(
     status: str,
     metrics: tuple[int, int, str, int, int],
 ) -> dict[str, Any] | None:
+    if status == "success" and not attempt.reservation_key:
+        _limits.hold_unmetered_failure(ctx, attempt, metrics[0], metrics[1])
     if attempt.reservation_key:
         hard_stop = (
             _handle_empty_success(ctx, attempt, metrics)
@@ -765,19 +782,8 @@ def execute_candidate(
     ctx: InvocationContext,
     attempt: CandidateAttempt,
 ) -> dict[str, Any] | None:
-    if not _open_candidate(ctx, attempt):
-        return None
-    try:
-        if attempt.explicit_model:
-            raw_result = attempt.caller(
-                ctx.safe_prompt,
-                ctx.max_output_tokens,
-                model_override=attempt.binding.model_id,
-            )
-        else:
-            raw_result = attempt.caller(ctx.safe_prompt, ctx.max_output_tokens)
-    except Exception as exc:  # noqa: BLE001 - provider failures never escape
-        return _handle_provider_exception(ctx, attempt, exc)
-    if not isinstance(raw_result, dict):
-        return _handle_invalid_response(ctx, attempt)
-    return _handle_mapping_result(ctx, attempt, raw_result)
+    return _limits.execute(
+        ctx, attempt, open_candidate=_open_candidate, cleanup=_cleanup_open_failure,
+        handle_exception=_handle_provider_exception, handle_invalid=_handle_invalid_response,
+        handle_mapping=_handle_mapping_result,
+    )

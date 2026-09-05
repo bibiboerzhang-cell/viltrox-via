@@ -12,6 +12,7 @@ from app.domains import audit, business_truth
 from app.domains.access import scope
 from app.platform.db.schema import ensure_vkpi_schema
 from app.domains.projects.workflow import staff_id
+from app.domains.attribution.integrations_money import currency_code, exact_cents
 
 SOURCE_PLATFORMS = {"shopify", "amazon", "webhook", "manual", "custom"}
 ATTRIBUTION_INGEST_CLASSES = {
@@ -90,8 +91,22 @@ def _normalize_amazon_row(item: dict[str, Any], body: dict[str, Any]) -> dict[st
     asin = str(_first(item, ("asin", "ASIN", "product_asin"), body.get("asin") or "")).strip()
     marketplace = str(_first(item, ("marketplace", "marketplace_id", "country"), body.get("marketplace") or "US")).strip().upper()
     report_date = str(_first(item, ("report_date", "date", "reportDate", "start_date", "startDate"), body.get("report_date") or utcnow()[:10])).strip()
-    revenue_cents = _money_like_cents(_first(item, ("revenue_usd", "revenue", "sales", "sales_usd", "ordered_revenue", "orderedRevenue", "amount"), body.get("revenue_usd") or body.get("revenue") or 0))
-    commission_cents = _money_like_cents(_first(item, ("commission_usd", "commission", "fees", "fee"), body.get("commission_usd") or body.get("commission") or 0))
+    # The CSV adapter already supplies cents; never parse them as dollars or
+    # silently replace them with zero. JSON imports share the same contract.
+    for key in ("revenue", "commission"):
+        cents_key = f"{key}_cents"
+        raw = _first(item, (cents_key,), body.get(cents_key))
+        aliases = ("revenue_usd", "revenue", "sales", "sales_usd", "ordered_revenue", "orderedRevenue", "amount") if key == "revenue" else ("commission_usd", "commission", "fees", "fee")
+        value = exact_cents(raw, already_cents=True) if raw is not None else exact_cents(_first(item, aliases, _first(body, aliases, 0)))
+        if key == "revenue":
+            revenue_cents = value
+        else:
+            commission_cents = value
+    currency = currency_code(item.get("currency") or body.get("currency") or (
+        "USD" if any(k in item or k in body for k in ("revenue_usd", "commission_usd")) else ""
+    ))
+    if str(item.get("transaction_type") or "").lower() in {"refund", "return", "refunded", "returned"}:
+        revenue_cents, commission_cents = -abs(revenue_cents), -abs(commission_cents)
     clicks = _int(_first(item, ("clicks", "click", "valid_clicks", "validClicks"), 0))
     orders = _int(_first(item, ("orders", "purchases", "units_sold", "unitsSold", "conversions"), 0))
     source_ref = str(item.get("source_ref") or item.get("sourceRef") or "").strip()
@@ -106,6 +121,7 @@ def _normalize_amazon_row(item: dict[str, Any], body: dict[str, Any]) -> dict[st
         "source_ref": source_ref,
         "revenue_cents": revenue_cents,
         "commission_cents": commission_cents,
+        "currency": currency,
         "clicks": clicks,
         "orders": orders,
         "product_sku": str(_first(item, ("product_sku", "sku", "SKU"), body.get("product_sku") or asin)).strip(),
@@ -352,10 +368,11 @@ def import_amazon(body: dict[str, Any], *, staff: dict[str, Any] | None = None) 
         raise ValueError("rows must be a list")
     imported: list[dict[str, Any]] = []
     unmatched_count = 0
-    for item in rows:
-        if not isinstance(item, dict):
-            continue
-        normalized = _normalize_amazon_row(item, body)
+    if not rows or any(not isinstance(item, dict) for item in rows):
+        raise ValueError("rows must contain accounting objects")
+    # Validate the whole batch before the first write (including JSON callers).
+    normalized_rows = [_normalize_amazon_row(item, body) for item in rows]
+    for item, normalized in zip(rows, normalized_rows):
         payload = {
             **body,
             **item,
@@ -365,6 +382,7 @@ def import_amazon(body: dict[str, Any], *, staff: dict[str, Any] | None = None) 
             "product_sku": normalized["product_sku"],
             "revenue_cents": normalized["revenue_cents"],
             "commission_cents": normalized["commission_cents"],
+            "currency": normalized["currency"],
             "confidence": "human_verified",
             "occurred_at": item.get("occurred_at") or f"{normalized['report_date']}T00:00:00Z",
             "evidence": {

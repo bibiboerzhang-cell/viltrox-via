@@ -25,7 +25,8 @@ import re
 import urllib.parse
 from typing import Any
 
-from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
+from app.platform.apify_budget import ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked, call_apify_actor
+from app.platform.apify_result_contract import ActorRunError, bounded_actor_metadata, crawler_failure, read_actor_dataset
 
 
 DEFAULT_ACTOR_ID = "apify~instagram-profile-scraper"
@@ -132,28 +133,25 @@ class InstagramCrawler:
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
             )
-            if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
-                return {
-                    "provider": "instagram",
-                    "provider_status": "error",
-                    "sync_status": "error",
-                    "items": [],
-                    "error": f"Instagram actor did not finish: {str((run or {}).get('status') or 'unknown')}",
-                    "raw": {"actor_id": selected_actor_id, "input": input_payload},
-                }
+            items = read_actor_dataset(client, run)
             from . import record_apify_run_cost
 
             record_apify_run_cost(run, platform="instagram", actor_id=selected_actor_id, operation="start_run")
-            items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
             return {
+                "status": "done" if items else "empty",
                 "provider": "instagram",
                 "provider_status": "ok",
                 "sync_status": "synced",
                 "items": items,
+                "metadata": bounded_actor_metadata(),
                 "raw": {"actor_id": selected_actor_id, "input": input_payload},
             }
         except ApifyBudgetBlocked as exc:
             return {**exc.payload(), "items": [], "raw": {"actor_id": actor_id or self.actor_id}}
+        except (ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked):
+            raise
+        except ActorRunError as exc:
+            return crawler_failure(exc, "instagram")
         except ImportError:
             return {
                 "provider": "instagram",
@@ -163,15 +161,8 @@ class InstagramCrawler:
                 "error": "apify-client not installed",
                 "raw": {"actor_id": actor_id or self.actor_id},
             }
-        except Exception as exc:  # pragma: no cover - 实际调用才会触发
-            return {
-                "provider": "instagram",
-                "provider_status": "error",
-                "sync_status": "error",
-                "items": [],
-                "error": str(exc),
-                "raw": {"actor_id": actor_id or self.actor_id},
-            }
+        except Exception:  # start/wait outcome may already be billable
+            return crawler_failure(ActorRunError("actor_provider_failed", provider_outcome_unknown=True), "instagram")
         finally:
             from . import close_apify_client
 
@@ -223,7 +214,9 @@ class InstagramCrawler:
         # 五官号连续两天 0 items,同期 instagram-scraper 正常)。空返回自动用
         # posts actor 的 resultsType=details 兜底——同为 profile 形状
         # (followersCount/postsCount/latestPosts 同键),实测 viltrox.official 可用。
-        if ref["kind"] == "handle" and not (result.get("items") or []):
+        if (ref["kind"] == "handle" and not (result.get("items") or [])
+                and result.get("provider_status") in {"ok", "no_results"}
+                and not result.get("provider_outcome_unknown")):
             fallback = self._start_run(
                 {
                     "directUrls": [f"https://www.instagram.com/{ref['value'].lstrip('@')}/"],
@@ -236,8 +229,12 @@ class InstagramCrawler:
             if fallback.get("items"):
                 fallback["query"] = ref
                 fallback["profile_source"] = "instagram_scraper_details_fallback"
+                fallback.setdefault("metadata", {}).update(bounded_actor_metadata(since=since, date_filter="client_window_only"))
                 return fallback
+            if fallback.get("provider_status") not in {"ok", "no_results"}:
+                result = fallback
         result["query"] = ref
+        result.setdefault("metadata", {}).update(bounded_actor_metadata(since=since, date_filter="client_window_only"))
         return result
 
     def crawl_channel_videos(
@@ -278,7 +275,9 @@ class InstagramCrawler:
         _since = str(since or "").strip()
         if _since:
             input_payload["onlyPostsNewerThan"] = _since
-        return self._start_run(input_payload, actor_id=self.posts_actor_id)
+        result = self._start_run(input_payload, actor_id=self.posts_actor_id)
+        result.setdefault("metadata", {}).update(bounded_actor_metadata(since=_since, date_filter="provider_requested_unverified" if _since else "none"))
+        return result
 
     def crawl_video_comments(
         self,
@@ -328,12 +327,12 @@ class InstagramCrawler:
                 timeout_secs=self.run_timeout_seconds,
                 wait_secs=self.run_timeout_seconds,
             )
+            items = read_actor_dataset(client, run)
             from . import record_apify_run_cost
 
             record_apify_run_cost(run, platform="instagram", actor_id=actor_id, operation="crawl_video_comments")
-            dataset_id = run.get("defaultDatasetId")
-            items = list(client.dataset(dataset_id).iterate_items()) if dataset_id else []
             return {
+                "status": "done" if items else "empty",
                 "provider": "instagram",
                 "provider_status": "ok",
                 "sync_status": "synced",
@@ -342,15 +341,12 @@ class InstagramCrawler:
             }
         except ApifyBudgetBlocked as exc:
             return {**exc.payload(), "items": [], "raw": {"actor_id": actor_id, "post_url": post_url}}
-        except Exception as exc:  # pragma: no cover - live provider path
-            return {
-                "provider": "instagram",
-                "provider_status": "error",
-                "sync_status": "error",
-                "items": [],
-                "error": str(exc)[:500],
-                "raw": {"actor_id": actor_id, "post_url": post_url},
-            }
+        except (ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked):
+            raise
+        except ActorRunError as exc:
+            return crawler_failure(exc, "instagram")
+        except Exception:
+            return crawler_failure(ActorRunError("actor_provider_failed", provider_outcome_unknown=True), "instagram")
         finally:
             from . import close_apify_client
 

@@ -127,7 +127,7 @@ def build_redis_worker_identity() -> RedisWorkerIdentity:
 
 
 def redis_worker_concurrency(requested: int) -> int:
-    """Reject accidental 15-consumer starts; the production unit is 2-way."""
+    """Match the two-consumer config default; expansion remains explicit."""
 
     try:
         hard_max = max(1, min(4, int(os.getenv("VKPI_REDIS_WORKER_MAX_CONSUMERS", "2"))))

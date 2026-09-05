@@ -5,6 +5,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import llm_gateway_invoke_limits as _limits
+
 
 @dataclass
 class JsonInvocationState:
@@ -27,7 +29,7 @@ class JsonInvocationState:
     started: float
     deadline_seconds: float
     deadline_at: float
-    attempt_limit: int | None
+    attempt_limit: int
     enforce_atomic_reservation: bool
     preflight_candidate: Callable[..., Any]
     run_candidate: Callable[..., Any]
@@ -84,16 +86,14 @@ def _prepare_state(
         enforce_atomic_reservation
     )
     started = gateway.time.monotonic()
-    resolved_deadline = gateway._resolve_deadline_seconds(deadline_seconds)
+    resolved_deadline = _limits.resolve_deadline(
+        deadline_seconds, gateway._resolve_deadline_seconds,
+    )
     deadline_at = started + resolved_deadline
     normalized_max_output_tokens = max(16, int(max_output_tokens or 0))
     safe_prompt = str(prompt or "")
     contract_keys = gateway._normalise_required_keys(required_keys)
-    attempt_limit = (
-        None
-        if max_provider_attempts is None
-        else max(1, int(max_provider_attempts))
-    )
+    attempt_limit = _limits.normalize_attempt_limit(max_provider_attempts)
     return JsonInvocationState(
         gateway=gateway,
         prompt=safe_prompt,
@@ -240,6 +240,19 @@ def _cached_result(
     )
     if cached is None:
         return None
+    try:
+        value = cached["json"] if "json" in cached else state.gateway._extract_json_value(
+            str(cached.get("text") or "")
+        )
+        invalid = state.gateway._validate_json_contract(
+            value, required_keys=state.required_keys, validator=state.validator,
+        )
+    except (TypeError, ValueError):
+        invalid = "cached result is not valid JSON"
+    if invalid:
+        state.errors.append({"provider": "cache", "status": "cache_contract_invalid", "error": invalid})
+        return None
+    cached["json"] = value
     cached.update(
         {
             "deadline_seconds": state.deadline_seconds,
@@ -256,6 +269,8 @@ def _run_candidates(
     candidates: list[tuple[str, str, bool]],
 ) -> dict[str, Any] | None:
     for index, raw_candidate in enumerate(candidates):
+        if _deadline_expired(state):
+            break
         prepared = state.preflight_candidate(state, index, raw_candidate)
         prepared_action = str(getattr(prepared, "action", ""))
         if prepared_action:
@@ -318,6 +333,7 @@ def _final_fallback(state: JsonInvocationState) -> dict[str, Any]:
             "deadline_seconds": state.deadline_seconds,
             "elapsed_ms": _elapsed_ms(state),
             "provider_attempts": state.provider_attempts,
+            "max_provider_attempts": state.attempt_limit,
         }
     )
     gateway.record_call(
@@ -341,6 +357,15 @@ def _final_fallback(state: JsonInvocationState) -> dict[str, Any]:
         staff=state.staff,
     )
     return fallback
+
+
+def _deadline_expired(state: JsonInvocationState) -> bool:
+    if state.gateway.time.monotonic() < state.deadline_at:
+        return False
+    if not state.deadline_hit:
+        state.errors.append({"provider": "gateway", "status": "deadline_exceeded"})
+    state.deadline_hit = True
+    return True
 
 
 def invoke_json_runtime(
@@ -402,16 +427,25 @@ def invoke_json_runtime(
     )
     if not state.prompt.strip():
         return _empty_prompt_result(state)
+    if _deadline_expired(state):
+        return _final_fallback(state)
     state.cost_scope = gateway._cost_scope_for_purpose(purpose, cost_tag)
     _scope_budget_preflight(state)
     _monthly_budget_preflight(state)
+    if _deadline_expired(state):
+        return _final_fallback(state)
     candidates = gateway._ordered_model_candidates(
         preferred_provider,
         model_override,
         model_fallbacks,
     )
+    if _deadline_expired(state):
+        return _final_fallback(state)
     cached = _cached_result(state, candidates)
+    if _deadline_expired(state):
+        return _final_fallback(state)
     if cached is not None:
+        cached["max_provider_attempts"] = state.attempt_limit
         return cached
     result = _run_candidates(state, candidates)
     if result is not None:

@@ -87,7 +87,7 @@ def _upsert_shopify_order_snapshot(
             total_cents=excluded.total_cents,
             financial_status=excluded.financial_status,
             fulfillment_status=excluded.fulfillment_status,
-            refund_status=excluded.refund_status,
+            refund_status=COALESCE(NULLIF(excluded.refund_status,''),vkpi_shopify_order_snapshots.refund_status),
             cancelled_at=excluded.cancelled_at,
             provider_auth_mode=excluded.provider_auth_mode,
             provider_verified_at=excluded.provider_verified_at,
@@ -106,12 +106,12 @@ def _upsert_shopify_order_snapshot(
             str(payload.get("order_number") or ""),
             _pick(payload.get("processed_at"), payload.get("created_at"), payload.get("updated_at")),
             str(payload.get("currency") or "USD"),
-            _money_cents(_pick(payload.get("current_subtotal_price"), payload.get("subtotal_price"))),
-            _money_cents(_pick(payload.get("current_total_price"), payload.get("total_price"))),
+            _money_cents(_pick(payload.get("subtotal_price"), payload.get("current_subtotal_price"))),
+            _money_cents(_pick(payload.get("total_price"), payload.get("subtotal_price"), payload.get("current_total_price"))),
             str(payload.get("financial_status") or ""),
             str(payload.get("fulfillment_status") or ""),
             str(payload.get("refund_status") or ""),
-            _pick(payload.get("cancelled_at"), payload.get("canceled_at")),
+            _pick(payload.get("cancelled_at"), payload.get("canceled_at")) or None,
             str(auth_mode or ""),
             now if auth_mode == "shopify-hmac" else None,
             json.dumps(discounts, ensure_ascii=False),
@@ -172,7 +172,7 @@ def _shopify_order_ref_candidates(payload: dict[str, Any]) -> list[str]:
 
 def _find_shopify_snapshot_by_refs(refs: list[str]) -> dict[str, Any]:
     conn = get_conn()
-    for ref in refs:
+    for ref in _unique_texts(*refs, *(f"gid://shopify/Order/{ref}" for ref in refs if ref.isdigit())):
         row = conn.execute(
             """
             SELECT *
@@ -192,18 +192,24 @@ def _find_shopify_snapshot_by_refs(refs: list[str]) -> dict[str, Any]:
         if not ref.isdigit():
             continue
         for pattern in (f'%"id": {ref}%', f'%"id":{ref}%', f'%"order_id": {ref}%', f'%"order_id":{ref}%'):
-            row = conn.execute(
+            candidates = conn.execute(
                 """
                 SELECT *
                 FROM vkpi_shopify_order_snapshots
                 WHERE raw_payload_json LIKE ?
                 ORDER BY updated_at DESC, id DESC
-                LIMIT 1
+                LIMIT 20
                 """,
                 (pattern,),
-            ).fetchone()
-            if row:
-                return dict(row)
+            ).fetchall()
+            for row in candidates:
+                item = dict(row)
+                try:
+                    raw = json.loads(item.get("raw_payload_json") or "{}")
+                except (TypeError, ValueError):
+                    continue
+                if str(raw.get("id") or "") == ref:
+                    return item
     return {}
 
 
@@ -246,8 +252,11 @@ def _mark_shopify_snapshot_refunded(snapshot_id: int | None) -> None:
     if not snapshot_id:
         return
     get_conn().execute(
-        "UPDATE vkpi_shopify_order_snapshots SET refund_status='refunded', updated_at=? WHERE id=?",
-        (_utcnow(), int(snapshot_id)),
+        """UPDATE vkpi_shopify_order_snapshots SET refund_status=CASE WHEN
+           (SELECT -COALESCE(SUM(revenue_cents),0) FROM vkpi_sales_attributions
+            WHERE shopify_order_snapshot_id=? AND source_platform='shopify' AND confidence='refund')
+            >= total_cents THEN 'refunded' ELSE 'partially_refunded' END, updated_at=? WHERE id=?""",
+        (int(snapshot_id), _utcnow(), int(snapshot_id)),
     )
     get_conn().commit()
 
@@ -339,7 +348,7 @@ def shopify_sync_status(body: dict[str, Any] | None = None, *, staff: dict[str, 
     access_token = str(credentials.get("access_token") or "").strip()
     sync_uid = f"shopify-{mode}-{hashlib.sha1((now + shop_domain + str(payload)).encode('utf-8')).hexdigest()[:16]}"
     configured = bool(shop_domain and access_token)
-    status = "queued" if configured else "not_configured"
+    status = "not_queued" if configured else "not_configured"
     metadata = {
         "mode": mode,
         "shop_domain_configured": bool(shop_domain),
@@ -361,13 +370,13 @@ def shopify_sync_status(body: dict[str, Any] | None = None, *, staff: dict[str, 
             sync_uid,
             mode,
             now,
-            now if not configured else None,
+            now,
             status,
             0,
             0,
             0,
             0,
-            "" if configured else "Shopify credentials not configured in encrypted DB or environment",
+            "Use the async sync/backfill endpoint with a durable queue; direct status recording does not enqueue" if configured else "Shopify credentials not configured in encrypted DB or environment",
             staff_id(staff) or None,
             json.dumps(metadata, ensure_ascii=False, default=str),
         ),
@@ -380,7 +389,7 @@ def shopify_sync_status(body: dict[str, Any] | None = None, *, staff: dict[str, 
         "orders_received": 0,
         "orders_matched": 0,
         "orders_unmatched": 0,
-        "message": "Shopify Admin API 已配置，可接入真实拉取任务。" if configured else "Shopify Admin API 未配置；未生成任何假订单或假销售额。",
+        "message": "凭据已配置；请使用异步 sync/backfill API，当前直接记录状态的调用未加入队列。" if configured else "Shopify Admin API 未配置；未生成任何假订单或假销售额。",
     }
 
 
@@ -452,8 +461,7 @@ def shopify_provider_status(*, limit: int = 10) -> dict[str, Any]:
 def _shopify_refund_ref(payload: dict[str, Any], order_refs: list[str]) -> str:
     refund_ref = _pick(payload.get("admin_graphql_api_id"), payload.get("id"), payload.get("refund_id"))
     if not refund_ref:
-        basis = ":".join(order_refs) or json.dumps(payload, sort_keys=True, default=str)
-        refund_ref = hashlib.sha256(basis.encode("utf-8")).hexdigest()[:24]
+        raise ValueError("shopify refund id required for replay safety")
     return f"shopify:refund:{refund_ref}"
 
 
@@ -482,7 +490,6 @@ def _shopify_refund_amount(payload: dict[str, Any]) -> Any:
 
 
 def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host: str = "") -> dict[str, Any]:
-    ensure_vkpi_schema()
     auth_mode = verify_webhook_request("shopify", headers, raw_body, client_host)
     if auth_mode != "shopify-hmac":
         raise PermissionError("shopify native hmac required")
@@ -494,14 +501,20 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
     order_ref = _pick(payload.get("admin_graphql_api_id"), payload.get("id"), payload.get("order_number"), headers.get("x-shopify-order-id"))
     if not order_ref:
         raise ValueError("shopify order id missing")
+    if topic not in {"orders/create", "orders/updated", "orders/paid", "orders/cancelled"}:
+        raise ValueError("unsupported Shopify order topic")
+    from app.domains.attribution.integrations_money import currency_code, exact_cents
+
+    currency = currency_code(payload.get("currency"))
+    # This ledger has separate negative refund rows. Keep the original order
+    # amount, not current_* (which already subtracts refunds).
+    revenue_cents = exact_cents(_pick(payload.get("total_price"), payload.get("subtotal_price")))
+    ensure_vkpi_schema()
     context = _shopify_ref_context(payload)
     snapshot_id = _upsert_shopify_order_snapshot(payload, raw_body, auth_mode=auth_mode)
     match = context["match"]
     financially_eligible = _shopify_order_is_gmv_eligible(payload, topic)
     line_items = _shopify_line_items(payload)
-    revenue_cents = _money_cents(
-        _pick(payload.get("current_subtotal_price"), payload.get("subtotal_price"), payload.get("current_total_price"), payload.get("total_price"))
-    )
     source_ref = f"shopify:{order_ref}"
     row = attribution.create_attribution(
         {
@@ -515,7 +528,7 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
             "product_sku": context.get("product_sku") or match.get("product_sku") or "",
             "order_id": _safe_int(payload.get("id")),
             "revenue_cents": revenue_cents,
-            "currency": payload.get("currency") or "USD",
+            "currency": currency,
             "confidence": "confirmed" if match and financially_eligible else "unmatched",
             "occurred_at": _pick(payload.get("processed_at"), payload.get("created_at"), payload.get("updated_at")),
             "evidence": {
@@ -524,7 +537,9 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
                 "topic": topic,
                 "financial_status": str(payload.get("financial_status") or ""),
                 "financially_eligible": financially_eligible,
+                "amount_basis": "original_order_total_with_separate_refund_deltas",
                 "order_ref": order_ref,
+                "source_order_id": order_ref if order_ref.startswith("gid://") else f"gid://shopify/Order/{order_ref}",
                 "match_source": context.get("match_source"),
                 "click_id": context.get("click_id"),
                 "utm_source": context.get("utm_source"),
@@ -598,7 +613,6 @@ def ingest_shopify_order_webhook(headers: Headers, raw_body: bytes, client_host:
 
 def ingest_shopify_refund_webhook(headers: Headers, raw_body: bytes, client_host: str = "") -> dict[str, Any]:
     """Verify and ingest Shopify refund webhooks as append-only negative attribution."""
-    ensure_vkpi_schema()
     auth_mode = verify_webhook_request("shopify", headers, raw_body, client_host)
     if auth_mode != "shopify-hmac":
         raise PermissionError("shopify native hmac required")
@@ -606,18 +620,28 @@ def ingest_shopify_refund_webhook(headers: Headers, raw_body: bytes, client_host
     payload = _as_dict(parsed)
     if not payload:
         raise ValueError("empty shopify refund payload")
+    topic = str(headers.get("x-shopify-topic") or "refunds/create").strip().lower()
+    if topic != "refunds/create":
+        raise ValueError("unsupported Shopify refund topic")
     order_refs = _shopify_order_ref_candidates(payload)
+    if not order_refs:
+        raise ValueError("shopify refund order id missing")
+    source_ref = _shopify_refund_ref(payload, order_refs)
+    ensure_vkpi_schema()
     snapshot = _find_shopify_snapshot_by_refs(order_refs)
     snapshot_id = _safe_int(snapshot.get("id")) if snapshot else 0
     base = _find_base_shopify_attribution(snapshot_id or None, order_refs)
-    _mark_shopify_snapshot_refunded(snapshot_id or None)
+    from app.domains.attribution.integrations_shopify_money import refund_money
+
+    refund_cents, currency = refund_money(payload, str(base.get("currency") or snapshot.get("currency") or ""))
     import app.domains.attribution.reconciliation as reconciliation
 
     result = reconciliation.refund(
         {
             "source_platform": "shopify",
-            "source_ref": _shopify_refund_ref(payload, order_refs),
-            "refund_usd": _shopify_refund_amount(payload),
+            "source_ref": source_ref,
+            "refund_cents": refund_cents,
+            "currency": currency,
             "order_id": payload.get("order_id"),
             "project_id": base.get("project_id"),
             "link_id": base.get("link_id"),
@@ -632,8 +656,9 @@ def ingest_shopify_refund_webhook(headers: Headers, raw_body: bytes, client_host
             "auth_mode": auth_mode,
             "topic": str(headers.get("x-shopify-topic") or "refunds/create").strip().lower(),
         },
-        ingest_class="provider_refund",
+        ingest_class="provider_refund" if base.get("confidence") == "confirmed" else "provider_observed",
     )
+    _mark_shopify_snapshot_refunded(snapshot_id or None)
     # GMV 归因桥(no-op until token):退款写入负归因后,把对应推荐的 outcome 重算一遍 ——
     # refresh_business_outcome 从含本次退款负行的 ledger 重新聚合 attributed_orders/GMV,
     # 即「退款 -> outcome 负向修正(重算)」。缺 shpat_ token 时桥内部直接 no-op;任何异常被吞,

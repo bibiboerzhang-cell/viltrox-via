@@ -35,6 +35,7 @@ from app.domains.kol.discovery_filters import _int, _text
 from app.domains.kol.search_escalation_advance_body import escalation_advance_body
 from app.domains.kol.search_escalation_contract import (
     CANDIDATE_LIMIT,
+    DEFAULT_DISCOVERY_PLATFORMS,
     DEFAULT_STRATEGY,
     ENV_ENABLED,
     LOCAL_QUALIFICATION_SCHEMA,
@@ -82,7 +83,7 @@ def _named_platforms(raw: Any) -> list[str]:
     """标准化成小写平台名;``all`` / ``*`` 这类「没选」的写法在这里就被丢掉。"""
     values = raw if isinstance(raw, (list, tuple, set)) else [raw]
     return [
-        _text(item).lower()
+        {"twitter": "x"}.get(_text(item).lower(), _text(item).lower())
         for item in values
         if _text(item) and _text(item).lower() not in {"all", "*"}
     ]
@@ -95,7 +96,7 @@ def operator_online_platforms(body: Mapping[str, Any]) -> tuple[tuple[str, ...],
     """
     requested = _named_platforms(_raw_platform_choice(_mapping(body)))
     if not requested:
-        return ONLINE_DISCOVERY_PLATFORMS, False
+        return DEFAULT_DISCOVERY_PLATFORMS, False
     kept = tuple(dict.fromkeys(name for name in requested if name in ONLINE_DISCOVERY_PLATFORMS))
     return kept, True
 
@@ -378,7 +379,7 @@ def auto_escalated_discovery_payload(
 
 
 __all__ = [
-    "CANDIDATE_LIMIT", "DEFAULT_STRATEGY", "ENV_ENABLED", "LOCAL_QUALIFICATION_SCHEMA",
+    "CANDIDATE_LIMIT", "DEFAULT_STRATEGY", "DEFAULT_DISCOVERY_PLATFORMS", "ENV_ENABLED", "LOCAL_QUALIFICATION_SCHEMA",
     "LOCAL_QUALIFICATION_SPEC", "MAX_POSTS", "ONLINE_DISCOVERY_PLATFORMS",
     "ONLINE_QUALIFICATION_SPEC", "PER_PLATFORM_LIMITS", "QUOTA_ACTION", "RECALL_ONLY_KEYS",
     "REPRESENTATIVE_VIDEO_LIMIT", "RESULT_LIMIT", "STRATEGY_POLICY",

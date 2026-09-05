@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -170,8 +171,6 @@ LLM_TARGET_TYPES = {"video", "contract"}
 # GEMINI_VIDEO_*_DERIVE_METHODS/WORKER_*/FINAL_V1_* 均由 config 叶子 re-export(定义与注释见叶子)。
 GEMINI_VIDEO_DERIVE_METHODS = {"gemini", *GEMINI_VIDEO_V2_DERIVE_METHODS, *GEMINI_VIDEO_FINAL_DERIVE_METHODS}
 _stop_event = threading.Event()
-_gemini_qps_lock = threading.Lock()
-_last_gemini_call_started_at = 0.0
 _GEMINI_QPS_SCOPE = "vkpi_apify_worker_provider_rate"
 _GEMINI_QPS_KEY = "google_gemini"
 _GEMINI_QPS_CACHE_KEY = "vkpi:worker-rate:google-gemini"
@@ -191,74 +190,59 @@ def _provider_retry_delay_seconds(next_attempt: int) -> int:
 
 
 def _respect_gemini_qps(conn: psycopg.Connection[Any]) -> None:
-    """Pace Gemini job starts across the whole PostgreSQL-backed fleet.
+    """Admit fleet-wide starts or defer before any paid/external dispatch.
 
-    A process-local monotonic clock is insufficient once multiple workers are
-    enabled.  The advisory lock serializes the short decision window and
-    ``persistent_cache`` carries the last start time between processes.  The
-    first call after an idle period starts immediately; subsequent calls wait
-    only the remaining interval.  If the shared state is unavailable, retain
-    the older process-local limiter as a fail-soft fallback instead of
-    removing throttling entirely.
+    The worker owns an autocommit PostgreSQL connection. A short transaction
+    commits the shared timestamp before releasing its transaction-scoped lock.
+    Contention/rate waits release resource slots instead of sleeping in them;
+    shared-state failures never multiply the limit into per-process budgets.
     """
-
-    global _last_gemini_call_started_at
+    if not math.isfinite(GEMINI_MIN_INTERVAL_SECONDS):
+        raise SharedProviderRateDeferred("gemini_shared_rate_invalid_interval")
     if GEMINI_MIN_INTERVAL_SECONDS <= 0:
         return
-    shared_locked = False
     try:
-        with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(
-                "SELECT pg_advisory_lock(hashtext(%s), hashtext(%s)) AS locked",
-                (_GEMINI_QPS_SCOPE, _GEMINI_QPS_KEY),
-            )
-            cur.fetchone()
-            shared_locked = True
-            cur.execute(
-                "SELECT EXTRACT(EPOCH FROM clock_timestamp()) AS now_epoch, value_json "
-                "FROM persistent_cache WHERE cache_key=%s",
-                (_GEMINI_QPS_CACHE_KEY,),
-            )
-            row = cur.fetchone() or {}
-            now_epoch = float(row.get("now_epoch") or time.time())
-            state = _loads(row.get("value_json"), {})
-            last_epoch = float(state.get("last_started_at_epoch") or 0.0)
-            wait_seconds = max(0.0, last_epoch + GEMINI_MIN_INTERVAL_SECONDS - now_epoch)
-            if wait_seconds > 0:
-                logger.info("gemini fleet qps throttle sleep | seconds=%.2f", wait_seconds)
-                time.sleep(wait_seconds)
-            cur.execute("SELECT EXTRACT(EPOCH FROM clock_timestamp()) AS now_epoch")
-            started_row = cur.fetchone() or {}
-            started_epoch = float(started_row.get("now_epoch") or time.time())
-            cur.execute(
-                """
-                INSERT INTO persistent_cache (cache_key, value_json, expires_at, created_at)
-                VALUES (%s, %s, NOW() + INTERVAL '1 day', NOW())
-                ON CONFLICT (cache_key) DO UPDATE
-                SET value_json=EXCLUDED.value_json,
-                    expires_at=EXCLUDED.expires_at,
-                    created_at=EXCLUDED.created_at
-                """,
-                (_GEMINI_QPS_CACHE_KEY, _json({"last_started_at_epoch": started_epoch})),
-            )
-        return
-    except Exception:
-        logger.warning("gemini fleet qps state unavailable; using process-local throttle", exc_info=True)
-    finally:
-        if shared_locked:
-            try:
-                _advisory_unlock(conn, _GEMINI_QPS_SCOPE, _GEMINI_QPS_KEY)
-            except Exception:
-                logger.warning("gemini fleet qps advisory unlock failed", exc_info=True)
-
-    with _gemini_qps_lock:
-        now = time.monotonic()
-        wait_seconds = (_last_gemini_call_started_at + GEMINI_MIN_INTERVAL_SECONDS) - now
-        if wait_seconds > 0:
-            logger.info("gemini process qps throttle sleep | seconds=%.2f", wait_seconds)
-            time.sleep(wait_seconds)
-            now = time.monotonic()
-        _last_gemini_call_started_at = now
+        with conn.transaction():
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_xact_lock(hashtext(%s), hashtext(%s)) AS locked",
+                    (_GEMINI_QPS_SCOPE, _GEMINI_QPS_KEY),
+                )
+                if not (cur.fetchone() or {}).get("locked"):
+                    raise SharedProviderRateDeferred("gemini_shared_rate_busy", random.uniform(2.0, 5.0))
+                cur.execute(
+                    "SELECT EXTRACT(EPOCH FROM clock_timestamp()) AS now_epoch, "
+                    "(SELECT value_json FROM persistent_cache WHERE cache_key=%s) AS value_json",
+                    (_GEMINI_QPS_CACHE_KEY,),
+                )
+                row = cur.fetchone() or {}
+                now_epoch = float(row["now_epoch"])
+                raw_state = row.get("value_json")
+                state = json.loads(raw_state) if isinstance(raw_state, (str, bytes)) else raw_state
+                last_epoch = 0.0 if state is None else float(state["last_started_at_epoch"])
+                if not math.isfinite(now_epoch) or now_epoch <= 0 or not math.isfinite(last_epoch) or last_epoch < 0:
+                    raise ValueError("invalid shared rate timestamp")
+                wait_seconds = last_epoch + GEMINI_MIN_INTERVAL_SECONDS - now_epoch
+                if wait_seconds > 0:
+                    raise SharedProviderRateDeferred(
+                        "gemini_shared_rate_wait", wait_seconds + random.uniform(0.05, 0.5)
+                    )
+                cur.execute(
+                    """
+                    INSERT INTO persistent_cache (cache_key, value_json, expires_at, created_at)
+                    VALUES (%s, %s, NOW() + INTERVAL '1 day', NOW())
+                    ON CONFLICT (cache_key) DO UPDATE
+                    SET value_json=EXCLUDED.value_json,
+                        expires_at=EXCLUDED.expires_at,
+                        created_at=EXCLUDED.created_at
+                    """,
+                    (_GEMINI_QPS_CACHE_KEY, _json({"last_started_at_epoch": now_epoch})),
+                )
+    except SharedProviderRateDeferred:
+        raise
+    except Exception as exc:
+        logger.warning("gemini fleet qps state unavailable; deferring without provider call", exc_info=True)
+        raise SharedProviderRateDeferred("gemini_shared_rate_unavailable", random.uniform(30.0, 35.0)) from exc
 
 
 # 媒体解析 / 子进程分析器 / R2 回灌簇整簇已抽到 apify_jobs_worker_media.py
@@ -493,7 +477,12 @@ from app.workers.apify_jobs_worker_gemini import (  # noqa: E402,F401  尾一名
     _write_gemini_cache,
     download_direct_video_url,
 )
-from app.workers.apify_jobs_worker_execution import execute_claimed_job_impl  # noqa: E402
+from app.workers.apify_jobs_worker_execution import (  # noqa: E402
+    SharedProviderRateDeferred,
+    execute_claimed_job_impl,
+    shared_provider_rate_deferral,
+)
+from app.workers.apify_jobs_worker_locks import WorkerConnectionRetired, release_worker_locks  # noqa: E402
 
 
 def _claim_job(conn: psycopg.Connection[Any]) -> dict[str, Any] | None:
@@ -638,6 +627,7 @@ def _process_claimed_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> 
             retry_delay_seconds=random.uniform(5.0, 10.0),
         )
         return
+    slot_key = None
     try:
         resource_group = resource_group_for_job(job)
         if resource_group is None:
@@ -657,15 +647,20 @@ def _process_claimed_job(conn: psycopg.Connection[Any], job: dict[str, Any]) -> 
                 retry_delay_seconds=random.uniform(5.0, 10.0),
             )
             return
-        try:
-            _process_job(conn, job)
-        finally:
-            _advisory_unlock(conn, RESOURCE_SLOT_SCOPE, slot_key)
+        _process_job(conn, job)
     finally:
-        _advisory_unlock(conn, "vkpi_apify_job_execution", job_lock)
+        locks = [(RESOURCE_SLOT_SCOPE, slot_key)] if slot_key is not None else []
+        locks.append(("vkpi_apify_job_execution", job_lock))
+        release_worker_locks(conn, locks, _advisory_unlock)
 
 
 def _fail_job(conn: psycopg.Connection[Any], job_id: int, exc: Exception) -> None:
+    if isinstance(exc, WorkerConnectionRetired):
+        return  # The pooled executor discards it too; never mutate via this session.
+    deferred = shared_provider_rate_deferral(exc)
+    if deferred is not None:
+        _requeue_job(conn, job_id, str(deferred), retry_delay_seconds=deferred.retry_delay_seconds)
+        return
     from app.workers.apify_jobs_worker_runtime import fail_job_impl
 
     fail_job_impl(conn, job_id, exc, globals())
@@ -878,6 +873,8 @@ def run_worker() -> None:
                             # 区分日志(旧无条件 "job done" 曾把审计骗成同 job 跑 21 次)。
                             _verb = "requeued by executor" if final_status == "queued" else "done"
                             logger.info("apify_jobs job %s | id=%s status=%s", _verb, job["id"], final_status or "unknown")
+                        except WorkerConnectionRetired:
+                            raise  # Existing outer DB-reconnect path abandons the session.
                         except ApifyExecutionClaimBlocked as exc:
                             logger.warning(
                                 "apify_jobs job left unexecuted behind live provider fence | id=%s error=%s",

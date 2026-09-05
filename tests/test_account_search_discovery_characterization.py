@@ -111,6 +111,7 @@ def test_legacy_youtube_actor_contract_preserves_identity_and_content_boundaries
         "pagination_supported": False,
         "pagination_unsupported_reason": "actor_input_schema_has_no_cursor",
         "has_more": False,
+        "exhaustion_proven": False,
     }
 
 

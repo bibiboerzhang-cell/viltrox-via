@@ -265,6 +265,10 @@ def test_invoke_atomic_success_freezes_order_cost_and_return_contract(monkeypatc
 
     result = _invoke(harness, max_output_tokens=1, enforce_atomic_reservation=True)
 
+    assert result.pop("deadline_seconds") == 90.0
+    assert result.pop("provider_attempts") == 1
+    assert result.pop("max_provider_attempts") == 2
+    assert result.pop("elapsed_ms") >= 0
     assert result == {
         "status": "success",
         "provider": "openai",
@@ -309,7 +313,7 @@ def test_invoke_atomic_success_freezes_order_cost_and_return_contract(monkeypatc
     assert harness.records[0]["force_cost_ledger"] is True
 
 
-def test_invoke_provider_exception_and_invalid_result_follow_candidate_order(monkeypatch) -> None:
+def test_invoke_uncertain_provider_exception_stops_paid_candidate_chain(monkeypatch) -> None:
     harness = InvokeHarness(
         candidates=[
             ("openai", "gpt-exact", True),
@@ -326,7 +330,7 @@ def test_invoke_provider_exception_and_invalid_result_follow_candidate_order(mon
     result = _invoke(harness)
 
     assert result["provider"] == "rule_v0"
-    assert result["fallback_reason"] == "all_providers_failed"
+    assert result["fallback_reason"] == "provider_outcome_unknown"
     assert result["errors"] == [
         {
             "provider": "openai",
@@ -334,19 +338,12 @@ def test_invoke_provider_exception_and_invalid_result_follow_candidate_order(mon
             "status": "provider_exception",
             "error": "TimeoutError: sensitive upstream timeout detail",
         },
-        {
-            "provider": "google",
-            "model": "gemini-exact",
-            "status": "invalid_response",
-            "error": "provider returned a non-object result",
-        },
     ]
     assert [event[1] for event in harness.events if event[0] == "provider"] == [
         "openai",
-        "google",
     ]
     assert [event[2] for event in harness.events if event[0] == "record"] == [
-        "all_providers_failed"
+        "provider_outcome_unknown"
     ]
 
 
@@ -365,7 +362,8 @@ def test_invoke_budget_block_can_defer_without_provider_io(monkeypatch) -> None:
 
     result = _invoke(harness)
 
-    assert result == deferred
+    assert {name: result[name] for name in deferred} == deferred
+    assert result["provider_attempts"] == 0
     assert not any(event[0] == "provider" for event in harness.events)
     assert ("budget_blocked_record", "openai", "characterization") in harness.events
     assert harness.events[-1] == ("deferred", "characterization", 1)

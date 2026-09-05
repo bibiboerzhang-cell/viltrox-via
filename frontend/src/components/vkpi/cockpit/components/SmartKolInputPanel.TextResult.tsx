@@ -17,7 +17,7 @@ import {
   OnlineContentEvidenceNotice,
   StrictQualifiedList,
 } from "./SmartKolInputPanel.LocalQualifiedList";
-import { onlineQualifiedSummaryFromSession } from "./SmartKolInputPanel.OnlineQualified";
+import { DISCOVERY_PLATFORM_OPTIONS, onlineQualifiedSummaryFromSession } from "./SmartKolInputPanel.OnlineQualified";
 import {
   resultOriginBadgeOfKind,
   resultOriginCounts,
@@ -827,16 +827,8 @@ function TextResultSectionBody({
         ) : null}
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] text-slate-500">发现平台</span>
-          {/* 【B5】Facebook 解锁为可选平台:后端 SUPPORTED_DISCOVERY_PLATFORMS 已含 facebook
-              (apify/facebook-search-scraper,discovery_filters.py);opt-in 设计——不进默认三平台兜底,
-              显式勾选后请求 new_discovery_platforms 数组才带 "facebook"。 */}
-          {([
-            { k: "youtube", t: "YouTube" },
-            { k: "instagram", t: "Instagram" },
-            { k: "tiktok", t: "TikTok" },
-            // F5 诚实状态:Facebook 只进候选池(③),不进严格 30;标签直说「仅候选池」。
-            { k: "facebook", t: "Facebook · 仅候选池", strictDisabled: true, tip: "Facebook 发现结果只进入候选池观察，不计入严格联网 30；严格 30 当前仅支持 YouTube、Instagram、TikTok" },
-          ] as { k: string; t: string; tip?: string; strictDisabled?: boolean }[]).map((p) => {
+          {/* 第二批显式选择后执行；默认仍保持三平台，未接入不伪装可用。 */}
+          {DISCOVERY_PLATFORM_OPTIONS.map((p) => {
             const on = discoveryPlatforms.includes(p.k);
             const disabled = p.strictDisabled || (on && discoveryPlatforms.length === 1);
             return (

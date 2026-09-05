@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 from app.core.logging import get_logger
 from app.db.connection import get_conn, table_exists
 from app.domains.kol import url_deep_crawl
+from app.domains.kol import search_inventory_scan_state as scan_state
 from app.domains.kol.url_deep_crawl_queue import DEEP_CRAWL_JOB_TYPE
 
 
@@ -44,7 +45,8 @@ DAILY_SLOT_TABLE = "vkpi_kol_search_inventory_daily_slots"
 PROFILE_STALE_DAYS = 7
 VIDEO_STALE_DAYS = 45
 ATTEMPT_COOLDOWN_HOURS = 7 * 24
-SUPPORTED_PLATFORMS = ("youtube", "instagram", "tiktok")
+from app.domains.kol.search_platform_policy import STRICT_DISCOVERY_PLATFORMS
+SUPPORTED_PLATFORMS = STRICT_DISCOVERY_PLATFORMS
 DAILY_BUDGET_TIMEZONE = "America/New_York"
 SCAN_PAGE_SIZE = 500
 MAX_SCAN_ROWS = 2_000
@@ -230,6 +232,8 @@ def select_refresh_candidates(
     *,
     as_of: datetime | None = None,
     diagnostics: dict[str, Any] | None = None,
+    start_offset: int = 0,
+    progress: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the stalest searchable profiles, never more than ``limit``.
 
@@ -258,7 +262,7 @@ def select_refresh_candidates(
     conn = get_conn()
 
     if table_exists("vkpi_kol_video_evidence"):
-        sql = """
+        sql = f"""
             WITH latest_video AS (
                 SELECT kol_pool_id,
                        MAX(
@@ -304,7 +308,7 @@ def select_refresh_candidates(
             LEFT JOIN latest_inventory_attempt a ON a.kol_pool_id_text=CAST(p.id AS TEXT)
             WHERE COALESCE(p.profile_url, '') <> ''
               AND p.duplicate_of_id IS NULL
-              AND LOWER(COALESCE(p.platform, '')) IN (?, ?, ?)
+              AND LOWER(COALESCE(p.platform, '')) IN ({', '.join('?' for _ in SUPPORTED_PLATFORMS)})
               AND (
                     v.latest_video_at IS NULL
                     OR v.latest_video_at < ?
@@ -334,7 +338,7 @@ def select_refresh_candidates(
             attempt_cutoff,
         )
     else:
-        sql = """
+        sql = f"""
             WITH latest_ready_refresh AS (
                 SELECT kol_pool_id, MAX(created_at) AS last_ready_refresh_at
                 FROM vkpi_kol_url_deep_crawl_runs
@@ -359,7 +363,7 @@ def select_refresh_candidates(
             LEFT JOIN latest_inventory_attempt a ON a.kol_pool_id_text=CAST(p.id AS TEXT)
             WHERE COALESCE(p.profile_url, '') <> ''
               AND p.duplicate_of_id IS NULL
-              AND LOWER(COALESCE(p.platform, '')) IN (?, ?, ?)
+              AND LOWER(COALESCE(p.platform, '')) IN ({', '.join('?' for _ in SUPPORTED_PLATFORMS)})
               AND (r.last_ready_refresh_at IS NULL OR r.last_ready_refresh_at < ?)
               AND (a.last_refresh_attempt_at IS NULL OR a.last_refresh_attempt_at < ?)
             ORDER BY CASE WHEN a.last_refresh_attempt_at IS NULL THEN 0 ELSE 1 END,
@@ -381,12 +385,15 @@ def select_refresh_candidates(
     scanned_rows = 0
     invalid_profile_urls = 0
     scan_exhausted = False
+    query_offset = scan_state.bounded_offset(start_offset)
+    wrapped = query_offset == 0
+    next_offset = query_offset
     while len(output) < safe_limit and scanned_rows < MAX_SCAN_ROWS:
         page_limit = min(SCAN_PAGE_SIZE, MAX_SCAN_ROWS - scanned_rows)
         try:
             rows = conn.execute(
                 sql,
-                (*base_params, page_limit, scanned_rows),
+                (*base_params, page_limit, query_offset),
             ).fetchall()
         except Exception as exc:
             if diagnostics is not None:
@@ -403,13 +410,25 @@ def select_refresh_candidates(
 
         page_rows = list(rows)
         scanned_rows += len(page_rows)
+        query_offset += len(page_rows)
         for raw in page_rows:
             item = _row(raw)
             kol_pool_id = _int(item.get("id"))
             if kol_pool_id <= 0:
                 continue
             profile_url = str(item.get("profile_url") or "").strip()
-            classified = url_deep_crawl.classify_url(profile_url)
+            try:
+                classified = url_deep_crawl.classify_url(profile_url)
+            except ValueError:
+                # Malformed URL syntax (for example an unmatched IPv6 bracket)
+                # is a bad row, not a reason to fail every profile in the batch.
+                invalid_profile_urls += 1
+                logger.warning(
+                    "vkpi.kol.search_inventory_refresh.malformed_profile_url "
+                    "kol_pool_id=%s",
+                    kol_pool_id,
+                )
+                continue
             if (
                 classified.url_type != "profile"
                 or classified.platform not in SUPPORTED_PLATFORMS
@@ -451,7 +470,15 @@ def select_refresh_candidates(
             )
             if len(output) >= safe_limit:
                 break
+        next_offset = query_offset
         if len(page_rows) < page_limit:
+            next_offset = 0
+            if not output and not wrapped and scanned_rows < MAX_SCAN_ROWS:
+                # The eligible population may shrink between runs; a stale
+                # offset must wrap without falsely reporting an empty pool.
+                query_offset = 0
+                wrapped = True
+                continue
             break
     if scanned_rows >= MAX_SCAN_ROWS and len(output) < safe_limit:
         scan_exhausted = True
@@ -473,6 +500,8 @@ def select_refresh_candidates(
                 "scan_limit": MAX_SCAN_ROWS,
             }
         )
+    if progress is not None:
+        progress.update({"next_offset": next_offset, "wrapped": wrapped})
     return output
 
 
@@ -534,16 +563,39 @@ def enqueue_daily_refresh(
     daily_used = _int(_row(used_row).get("used")) if used_row else 0
     remaining = max(0, min(safe_limit, MAX_DAILY_LIMIT - daily_used))
     selection_diagnostics: dict[str, Any] = {}
+    progress: dict[str, Any] = {}
+    cursor_fields: dict[str, Any] = {}
+    start_offset = 0
+    cursor_available = bool(remaining and table_exists("persistent_cache"))
+    selection_time = _as_datetime(as_of) or datetime.now(timezone.utc)
+    if cursor_available:
+        start_offset, cursor_status = scan_state.load_offset(conn, as_of=selection_time)
+        cursor_fields["selection_cursor_load_status"] = cursor_status
     candidates = (
         select_refresh_candidates(
             remaining,
             as_of=as_of,
             diagnostics=selection_diagnostics,
+            start_offset=start_offset,
+            progress=progress,
         )
         if remaining
         else []
     )
     scan_exhausted = selection_diagnostics.get("scan_exhausted") is True
+    if cursor_available:
+        # Continue only an unusable prefix. Successful selection restarts the
+        # oldest-first policy; the durable attempt cooldown advances that pool.
+        next_offset = _int(progress.get("next_offset")) if not candidates else 0
+        cursor_fields.update(
+            {
+                "selection_start_offset": start_offset,
+                "selection_next_offset": next_offset,
+                "selection_cursor_status": scan_state.save_offset(
+                    conn, next_offset, as_of=selection_time
+                ),
+            }
+        )
     selected_candidate_count = len(candidates)
     reservation = {
         "reservation_token": "",
@@ -604,6 +656,7 @@ def enqueue_daily_refresh(
         "provider_calls_performed": False,
         "llm_calls_performed": False,
         "viltrox_fit_score_untouched": True,
+        **cursor_fields,
     }
     if not candidates:
         return {

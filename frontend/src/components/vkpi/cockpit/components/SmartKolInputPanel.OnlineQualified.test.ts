@@ -107,6 +107,7 @@ describe("SmartKolInputPanel online strict lane", () => {
     expect(strictOnlineDiscoveryPlatforms(["facebook", "youtube", "youtube"])).toEqual(["youtube"]);
     expect(strictOnlineDiscoveryPlatforms(["facebook"])).toEqual([]);
     expect(strictOnlineDiscoveryPlatforms([])).toEqual(["youtube", "instagram", "tiktok"]);
+    expect(strictOnlineDiscoveryPlatforms(["X", "reddit", "x", "facebook"])).toEqual(["x", "reddit"]);
   });
 
   it("projects missing body/subtitle evidence and its unscheduled follow-up honestly", () => {

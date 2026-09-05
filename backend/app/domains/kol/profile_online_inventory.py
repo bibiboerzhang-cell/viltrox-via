@@ -317,6 +317,12 @@ def materialize_online_candidate(raw: dict[str, Any], *, conn: Any | None = None
             }
         }, ensure_ascii=True, separators=(",", ":")),
     }
+    if identity.get("platform") in {"x", "reddit"}:
+        from app.domains.kol.profile_online_post_evidence import SCHEMA_KEY, build_post_evidence
+        profile_data.pop("last_video_at", None)
+        saved = _json_object(profile_data["raw_platform_data"])
+        saved[SCHEMA_KEY] = build_post_evidence(raw, raw.get("posts") or [])
+        profile_data["raw_platform_data"] = json.dumps(saved, ensure_ascii=True, separators=(",", ":"))
     try:
         result = write_kol_profile_basics(
             None,

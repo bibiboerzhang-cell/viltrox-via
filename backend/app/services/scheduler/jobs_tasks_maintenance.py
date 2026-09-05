@@ -109,8 +109,10 @@ async def job_provider_health_check():
 
         result = await run_provider_health_check()
         logger.info("scheduler.provider_health_check", extra={"ok": result.get("ok")})
+        return result
     except Exception:
         logger.exception("scheduler.provider_health_check_failed")
+        raise
 
 
 async def job_vkpi_goaffpro_metrics_sync():
@@ -129,8 +131,12 @@ async def job_vkpi_goaffpro_metrics_sync():
             "scheduler.vkpi_goaffpro_metrics_sync",
             extra={"synced": result.get("synced"), "errors": result.get("errors"), "ok": result.get("ok")},
         )
+        if int(result.get("errors") or 0) > 0:
+            return {**result, "status": "partial", "reason": "metrics_sync_errors"}
+        return result
     except Exception:
         logger.exception("scheduler.vkpi_goaffpro_metrics_sync_failed")
+        raise
 
 
 async def job_confirm_partial_awards():

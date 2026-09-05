@@ -181,9 +181,10 @@ def record_run(task_key: str, *, ok: bool, error: str = "", status: str = "", no
     key = str(task_key or "").strip()
     if not key or not table_exists(_TABLE):
         return
-    final_status = str(status or "").strip().lower() or ("ok" if ok else "failed")
-    if final_status not in _LAST_STATUS_VALUES:
-        final_status = "ok" if ok else "failed"
+    from app.services.scheduler_result_contract import normalize_scheduler_record
+
+    outcome = normalize_scheduler_record(ok=ok, status=status, error=error)
+    ok, error, final_status = outcome.ok, outcome.error, outcome.registry_status
     try:
         conn = get_conn()
         now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")

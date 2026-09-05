@@ -97,7 +97,7 @@ describe("local qualified first-list contract", () => {
     expect(summary.serverReturned).toBe(1);
     expect(summary.uniqueQualified).toBe(0);
     expect(summary.pending).toBe(1);
-    expect(summary.shortfallReasons).toEqual(["最新视频日期待核验 7", "市场证据待核验 5"]);
+    expect(summary.shortfallReasons).toEqual(["最近内容日期待核验 7", "市场证据待核验 5"]);
   });
 
   it("does not promote a legacy returned_count without the explicit Smart-local schema", () => {

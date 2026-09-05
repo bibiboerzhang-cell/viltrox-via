@@ -20,7 +20,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from app.platform.apify_budget import ApifyBudgetBlocked, call_apify_actor
+from app.platform.apify_budget import ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked, call_apify_actor
+from app.platform.apify_result_contract import ActorRunError, crawler_failure, read_actor_dataset
 from app.platform.apify_lifecycle import managed_apify_client
 
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
@@ -144,6 +145,8 @@ class YouTubeCrawler:
 
     @staticmethod
     def _should_use_apify_fallback(payload: dict[str, Any]) -> bool:
+        if payload.get("items") or payload.get("status") == "partial" or payload.get("provider_outcome_unknown"):
+            return False
         status = str((payload or {}).get("provider_status") or (payload or {}).get("sync_status") or "").strip()
         reason = str((payload or {}).get("error_reason") or "").strip()
         return status == "quota_exceeded" or reason in YOUTUBE_QUOTA_REASONS
@@ -182,20 +185,12 @@ class YouTubeCrawler:
                     timeout_secs=self.run_timeout_seconds,
                     wait_secs=self.run_timeout_seconds,
                 )
-                if not run or str(run.get("status") or "").upper() != "SUCCEEDED":
-                    return {
-                        "provider": "youtube",
-                        "provider_status": "error",
-                        "sync_status": "error",
-                        "items": [],
-                        "error": f"YouTube Apify actor did not finish: {str((run or {}).get('status') or 'unknown')}",
-                        "raw": {"actor_id": self.apify_actor_id, "input": input_payload},
-                    }
+                items = read_actor_dataset(client, run)
                 from . import record_apify_run_cost
 
                 record_apify_run_cost(run, platform="youtube", actor_id=self.apify_actor_id, operation="start_apify_run")
-                items = list(client.dataset(run.get("defaultDatasetId")).iterate_items())
                 return {
+                    "status": "done" if items else "empty",
                     "provider": "youtube",
                     "provider_status": "ok",
                     "sync_status": "synced",
@@ -204,6 +199,10 @@ class YouTubeCrawler:
                 }
         except ApifyBudgetBlocked as exc:
             return {**exc.payload(), "items": [], "provider": "youtube"}
+        except (ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked):
+            raise
+        except ActorRunError as exc:
+            return crawler_failure(exc, "youtube")
         except ImportError:
             return {
                 "provider": "youtube",
@@ -213,15 +212,8 @@ class YouTubeCrawler:
                 "error": "apify-client not installed",
                 "raw": {"actor_id": self.apify_actor_id},
             }
-        except Exception as exc:  # pragma: no cover - exercised only with live Apify.
-            return {
-                "provider": "youtube",
-                "provider_status": "error",
-                "sync_status": "error",
-                "items": [],
-                "error": str(exc),
-                "raw": {"actor_id": self.apify_actor_id, "input": input_payload},
-            }
+        except Exception:
+            return crawler_failure(ActorRunError("actor_provider_failed", provider_outcome_unknown=True), "youtube")
 
     @staticmethod
     def normalize_channel_ref(value: str) -> dict[str, str]:
@@ -298,15 +290,21 @@ class YouTubeCrawler:
             return self._not_configured("crawl_channel_videos")
         target = _max_channel_videos(int(max_results or 25))
         published_after = _since_to_rfc3339(since)
+        if str(since or "").strip() and not published_after:
+            return {"status": "failed", "provider_status": "error", "sync_status": "error",
+                    "error_code": "invalid_since", "items": []}
         if not self.api_key:
             return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api_not_configured", since=published_after)
         profile = self._request("channels", {"part": "contentDetails", "id": channel_id})
         if self._should_use_apify_fallback(profile):
             return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api", reason_payload=profile, since=published_after)
+        if profile.get("provider_status") != "ok":
+            return profile
         upload_playlist_id = _upload_playlist_id_from_payload(profile)
-        # since 下推:playlistItems 不支持 publishedAfter,只 search 端点支持 → 有 since 强制走 search 拿真增量。
-        if upload_playlist_id and not published_after:
-            result = _crawl_upload_playlist(self._request, upload_playlist_id, target)
+        # Known channels use uploads even with since; publication evidence is
+        # filtered locally and an unfinished window is explicitly partial.
+        if upload_playlist_id:
+            result = _crawl_upload_playlist(self._request, upload_playlist_id, target, published_after=published_after)
             if self._should_use_apify_fallback(result):
                 return self._crawl_channel_videos_apify(channel_id, max_results=target, fallback_from="youtube_api", reason_payload=result, since=published_after)
             return result

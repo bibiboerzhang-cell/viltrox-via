@@ -255,6 +255,10 @@ async def _run_all_scenarios() -> list[dict[str, Any]]:
 def test_collect_matches_frozen_pre_refactor_behavior_across_1024_scenarios(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # This frozen corpus covers the original three-platform configuration.
+    # Secondary-platform support and unknown-outcome semantics have dedicated
+    # fixtures; do not refresh the historical behavior digest to hide drift.
+    monkeypatch.setattr(profile_online_qualification, "ONLINE_SUPPORTED_PLATFORMS", frozenset({"youtube", "instagram", "tiktok"}))
     monkeypatch.setattr(profile_online_qualification, "_identity_probe", lambda raw: dict(raw))
     monkeypatch.setattr(profile_online_qualification, "_candidate_query_cells", lambda raw, **_kwargs: [
         {"cell": index} for index in range(max(0, int(raw.get("cell_count") or 0)))

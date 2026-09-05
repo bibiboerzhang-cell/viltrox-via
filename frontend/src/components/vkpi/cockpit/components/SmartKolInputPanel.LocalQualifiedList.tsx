@@ -246,7 +246,7 @@ export function StrictQualifiedList({
                 <th className="w-32 px-2 py-2 font-medium">关注 / MY KOL</th>
                 <th className="w-24 px-2 py-2 font-medium">平台</th>
                 <th className="w-24 px-2 py-2 font-medium">粉丝</th>
-                <th className="w-28 px-2 py-2 font-medium">最新视频</th>
+                <th className="w-28 px-2 py-2 font-medium">最近内容</th>
                 <th className="min-w-36 px-2 py-2 font-medium">市场证据</th>
                 <th className="w-28 px-2 py-2 font-medium" title="这一格分四档。「自报」是他在平台资料里自己填的，值正常显示、不带角标；「推断」是平台资料没填、由我们照他发的东西倒推出来的，值旁边带「推断」角标；「来源不明」是资料里有这个值、但看不出是不是他自己填的，值旁边带「来源不明」角标；「未知」有两种来路：一种是我们这里没有他的语言，另一种是照他发的东西试着判断过，但他发的文字互相印证不够、我们把握不够，没当结论。这两种都只显示「未知」，不显示语言值，也不带「推断」角标。">语言</th>
                 <th className="w-24 px-2 py-2 font-medium">KOL 类型</th>

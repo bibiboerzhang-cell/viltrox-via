@@ -12,6 +12,7 @@ def gated_daily_job(task_key: str, module: str, entrypoint: str, **entry_kwargs:
     import inspect
 
     from app.services.scheduler.jobs_tasks import _record_scheduler_run, _scheduler_task_enabled
+    from app.services.scheduler_result_contract import normalize_scheduler_result
 
     async def job() -> Any:
         if not _scheduler_task_enabled(task_key):
@@ -28,7 +29,8 @@ def gated_daily_job(task_key: str, module: str, entrypoint: str, **entry_kwargs:
                 result = await entry(**entry_kwargs)
             else:
                 result = await asyncio.to_thread(entry, **entry_kwargs)
-            _record_scheduler_run(task_key, ok=True)
+            outcome = normalize_scheduler_result(result)
+            _record_scheduler_run(task_key, ok=outcome.ok, error=outcome.error, status=outcome.registry_status)
             return result
         except Exception as exc:  # noqa: BLE001 — 只记账不拖垮调度器
             _record_scheduler_run(task_key, ok=False, error=str(exc)[:240])
@@ -36,5 +38,3 @@ def gated_daily_job(task_key: str, module: str, entrypoint: str, **entry_kwargs:
 
     job.__name__ = f"job_{task_key}"
     return job
-
-

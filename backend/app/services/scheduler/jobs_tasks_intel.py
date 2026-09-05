@@ -27,8 +27,8 @@ _AI_TODAY_ATTEMPT_KIND = "ai_today_attempt_v1"
 # B3:此前只有部分任务在体内显式调 _record_scheduler_run,fit_snapshot 等不记,
 # 验收门读注册表 last_run_at 时把"跑过"误判成"从未跑"。统一做法:注册层
 # (jobs_registry._RunRecordingRegistration)用 with_scheduler_run_record 包住每个
-# add_job 的回调,运行前登记一个槽位,运行后按 ok/error 补记。任务体内既有的显式
-# 回写先落库并在槽位标记 recorded(包装不再重复写,保持幂等);config-gate 拒跑
+# add_job 的回调,运行前登记一个槽位,运行后按最终结果记账。任务体内既有的显式
+# 回写先暂存 pending_record,由包装合并最终结果后单次写入;config-gate 拒跑
 # 标记 skipped(没真跑就不伪造 last_run_at)。本模块是 jobs_tasks 的模块级叶子,
 # 槽位放这里可被 jobs_tasks / jobs_registry 两侧无环 import。
 _RUN_RECORD_SLOT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
@@ -84,18 +84,37 @@ def blocked_or_raise(task_key: str, reason: str, *, prefixes: tuple[str, ...] = 
 def with_scheduler_run_record(task_key: str, func: Callable[..., Any]) -> Callable[..., Any]:
     """把一个 APScheduler 回调包成"运行前登记槽位、运行后统一回写注册表"。
 
-    - 正常返回 → record_run(ok=True);抛异常 → record_run(ok=False, error) 后原样 re-raise。
-    - 任务体内已显式回写(槽位 recorded)或 config-gate 拒跑(槽位 skipped)→ 不再写。
+    - 按结构化返回结果归一;旧 None 回调保持成功;异常记失败后原样 re-raise。
+    - 显式记账和最终结果取更严格者,合并为一次写入;config-gate 拒跑不伪造运行。
     - 协程/同步函数分别包装,保持 APScheduler 的 iscoroutinefunction 判定不变;幂等(重复包装返回原函数)。
     """
     if getattr(func, "__vkpi_scheduler_run_record__", False):
         return func
     key = str(task_key or "").strip()
 
-    def _finish(slot: dict[str, Any], *, ok: bool, error: str = "") -> None:
+    def _finish(slot: dict[str, Any], *, ok: bool, error: str = "", status: str = "") -> None:
         if not key or slot.get("recorded") or slot.get("skipped"):
             return
-        _record_scheduler_run(key, ok=ok, error=error)
+        from app.services.scheduler_result_contract import normalize_scheduler_record
+
+        incoming = normalize_scheduler_record(ok=ok, error=error, status=status)
+        pending = slot.get("pending_record")
+        severity = {"completed": 0, "blocked": 1, "failed": 2}
+        if pending is not None and severity[pending[0].status] >= severity[incoming.status]:
+            incoming, status = pending
+        ok, error = incoming.ok, incoming.error
+        slot["flushing"] = True
+        extra = {"status": status} if status else {}
+        _record_scheduler_run(key, ok=ok, error=error, **extra)
+
+    def _finish_result(slot: dict[str, Any], result: Any) -> None:
+        from .fleet_guard_claim import mark_scheduled_fire_result
+        from app.services.scheduler_result_contract import normalize_scheduler_result
+
+        outcome = normalize_scheduler_result(result)
+        mark_scheduled_fire_result(outcome)
+        _finish(slot, ok=outcome.ok, error=outcome.error,
+                status="blocked" if outcome.status == "blocked" else "")
 
     if inspect.iscoroutinefunction(func):
         @functools.wraps(func)
@@ -108,7 +127,7 @@ def with_scheduler_run_record(task_key: str, func: Callable[..., Any]) -> Callab
                 _finish(slot, ok=False, error=f"{type(exc).__name__}: {str(exc)[:200]}")
                 raise
             else:
-                _finish(slot, ok=True)
+                _finish_result(slot, result)
                 return result
             finally:
                 _RUN_RECORD_SLOT.reset(token)
@@ -125,7 +144,7 @@ def with_scheduler_run_record(task_key: str, func: Callable[..., Any]) -> Callab
                 _finish(slot, ok=False, error=f"{type(exc).__name__}: {str(exc)[:200]}")
                 raise
             else:
-                _finish(slot, ok=True)
+                _finish_result(slot, result)
                 return result
             finally:
                 _RUN_RECORD_SLOT.reset(token)
@@ -239,8 +258,10 @@ async def job_vkpi_fit_snapshot():
 
         result = await asyncio.to_thread(fit_snapshot.capture_daily_snapshot)
         logger.info("scheduler.vkpi_fit_snapshot", extra={"result": result})
+        return result
     except Exception:
         logger.exception("scheduler.vkpi_fit_snapshot_failed")
+        raise
 
 
 def _run_brief_agent_daily() -> dict:
@@ -281,8 +302,10 @@ async def job_vkpi_brief_agent():
 
         result = await asyncio.to_thread(_run_brief_agent_daily)
         logger.info("scheduler.vkpi_brief_agent", extra={"result": result})
+        return {**result, "status": "ok" if result.get("passed") is True else "failed"}
     except Exception:
         logger.exception("scheduler.vkpi_brief_agent_failed")
+        raise
 
 
 async def job_vkpi_competitor_radar():
@@ -395,11 +418,22 @@ async def job_vkpi_official_daily_report(round_key: str = "daily"):
 
         _ok = int(result.get("ok") or 0)
         _blocked = int(result.get("blocked") or 0)
+        _failed = int(result.get("failed") or 0)
+        result = {**result, "status": (
+            "partial" if _failed or (_blocked and _ok)
+            else "blocked" if _blocked
+            else "ok" if _ok else "empty"
+        )}
+        from app.services.scheduler_result_contract import normalize_scheduler_result
+
+        outcome = normalize_scheduler_result(result)
         _record_scheduler_run(
             "vkpi_official_daily_report",
-            ok=_ok > 0,
-            error="" if _ok > 0 else f"ok=0 blocked={_blocked}(预算闸?)",
+            ok=outcome.ok,
+            error=outcome.error,
+            status=outcome.registry_status,
         )
+        return result
     except Exception:
         logger.exception("scheduler.vkpi_official_daily_report_failed")
         try:
@@ -408,6 +442,7 @@ async def job_vkpi_official_daily_report(round_key: str = "daily"):
             _record_scheduler_run("vkpi_official_daily_report", ok=False, error="exception(见日志)")
         except Exception:
             logger.debug("scheduler run 兜底记录失败(best-effort)", exc_info=True)
+        raise
 
 
 async def job_market_voice_alerts():
@@ -595,5 +630,7 @@ async def job_vkpi_official_visual_scan():
             timeout_seconds=3600,
         )
         logger.info("scheduler.vkpi_official_visual_scan_queued", extra={"job_id": task_id})
+        return {"status": "queued", "job_id": task_id}
     except Exception:
         logger.exception("scheduler.vkpi_official_visual_scan_failed")
+        raise

@@ -46,6 +46,7 @@ def _map_affiliate(raw: dict[str, Any]) -> dict[str, Any]:
         "name": raw.get("name") or raw.get("full_name") or "",
         "email": raw.get("email") or "",
         "referral_code": raw.get("ref_code") or raw.get("referral_code") or "",
+        "coupon": coupon_for(raw),
         "status": raw.get("status") or "",
         # 待 key 校准:佣金/累计销售字段名按 Swagger 实测对账。
         "total_sales": raw.get("total_sales"),
@@ -62,10 +63,13 @@ def _map_order(raw: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": raw.get("id") or raw.get("order_id"),
         "affiliate_id": raw.get("affiliate_id") or raw.get("ref_id"),
-        "total": raw.get("total") or raw.get("order_total"),
-        "currency": raw.get("currency") or "",
+        "total": raw.get("total") if raw.get("total") is not None else raw.get("order_total"),
+        "currency": str(raw.get("currency") or "").strip().upper(),
         "commission": raw.get("commission"),
         "status": raw.get("status") or "",
+        "coupon": coupon_for(raw),
+        "referral_code": raw.get("ref_code") or raw.get("referral_code") or "",
+        "order_id": raw.get("order_id"),
         "created_at": raw.get("created_at") or raw.get("date") or "",
         "_raw_keys": sorted(raw.keys()),  # 真 key 后用它对照真实字段名,然后删
     }
@@ -228,7 +232,9 @@ def to_cents(value: Any) -> int:
     if value in (None, ""):
         return 0
     try:
-        return int(round(float(value) * 100))
+        from app.domains.attribution.integrations_money import exact_cents
+
+        return exact_cents(value)
     except (TypeError, ValueError):
         return 0
 

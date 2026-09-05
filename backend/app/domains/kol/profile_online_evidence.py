@@ -137,7 +137,8 @@ def _profile_url(raw: dict[str, Any]) -> str:
 
 
 def _looks_like_video_url(value: Any) -> bool:
-    for platform in ("youtube", "instagram", "tiktok"):
+    from app.domains.kol.search_platform_policy import STRICT_DISCOVERY_PLATFORMS
+    for platform in STRICT_DISCOVERY_PLATFORMS:
         if profile_online_identity.is_platform_video_url(value, platform=platform):
             return True
     return False

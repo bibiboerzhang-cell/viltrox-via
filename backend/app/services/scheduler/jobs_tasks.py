@@ -14,7 +14,7 @@ import asyncio
 import os
 
 from app.core.logging import get_logger
-from .jobs_tasks_intel import _gate_result, _note_run_record_slot, blocked_or_raise  # 运行记录槽位协议(B3)
+from .jobs_tasks_intel import _gate_result, blocked_or_raise  # 运行记录槽位协议(B3)
 
 logger = get_logger(__name__)
 
@@ -87,8 +87,10 @@ async def job_bh_daily_snapshot():
             timeout_seconds=1800,
         )
         logger.info("scheduler.bh_snapshot_queued", extra={"job_id": task_id})
+        return {"status": "queued", "job_id": task_id}
     except Exception:
         logger.exception("scheduler.bh_snapshot_failed")
+        raise
 
 
 async def job_via_daily_learning():
@@ -101,8 +103,10 @@ async def job_via_daily_learning():
             timeout_seconds=3600,
         )
         logger.info("scheduler.via_learning_queued", extra={"job_id": task_id})
+        return {"status": "queued", "job_id": task_id}
     except Exception:
         logger.exception("scheduler.via_learning_failed")
+        raise
 
 
 async def job_vkpi_lineage_snapshot():
@@ -122,8 +126,10 @@ async def job_vkpi_kpi_rollup():
 
         result = await cron.run_job("kpi_rollup", {})
         logger.info("scheduler.vkpi_kpi_rollup", extra={"result": result.get("status")})
+        return result
     except Exception:
         logger.exception("scheduler.vkpi_kpi_rollup_failed")
+        raise
 
 
 async def job_vkpi_alerts():
@@ -133,8 +139,10 @@ async def job_vkpi_alerts():
 
         result = await cron.run_job("alerts", {})
         logger.info("scheduler.vkpi_alerts", extra={"result": result.get("status")})
+        return result
     except Exception:
         logger.exception("scheduler.vkpi_alerts_failed")
+        raise
 
 
 async def job_vkpi_weekly_report():
@@ -144,13 +152,16 @@ async def job_vkpi_weekly_report():
 
         result = await cron.run_job("weekly_report", {"period_days": 7})
         logger.info("scheduler.vkpi_weekly_report", extra={"result": result.get("status")})
+        return result
     except Exception:
         logger.exception("scheduler.vkpi_weekly_report_failed")
+        raise
 
 
 async def job_vkpi_channels_sync():
     """Mark employee platform channels for sync; no fake metrics are written."""
     from app.domains.sync import cron
+    from app.services.scheduler_result_contract import scheduler_dispatch_result
     result = await cron.run_job("channels_sync", {})
     logger.info(
         "scheduler.vkpi_channels_sync",
@@ -158,7 +169,7 @@ async def job_vkpi_channels_sync():
             "status": result.get("status"), "channels_enqueued": result.get("channels_enqueued"),
         },
     )
-    return result
+    return scheduler_dispatch_result(result)
 
 
 async def job_vkpi_morning_sync():
@@ -174,6 +185,7 @@ async def job_vkpi_morning_sync():
         )
         return
     from app.domains.sync import cron
+    from app.services.scheduler_result_contract import scheduler_dispatch_result
     result = await cron.run_job("morning_sync", {"limit": 100, "max_videos": 50, "period_days": 1})
     logger.info(
         "scheduler.vkpi_morning_sync",
@@ -185,7 +197,7 @@ async def job_vkpi_morning_sync():
             "digest": result.get("digest", {}).get("items_per_staff"),
         },
     )
-    return result
+    return scheduler_dispatch_result(result)
 
 
 async def job_vkpi_market_intelligence_refresh():
@@ -258,8 +270,10 @@ async def job_vkpi_comment_sentiment_refresh():
             "scheduler.comment_sentiment_refresh_queued",
             extra={"job_id": task_id},
         )
+        return {"status": "queued", "job_id": task_id}
     except Exception:
         logger.exception("scheduler.comment_sentiment_refresh_failed")
+        raise
 
 
 # ──────────────────────────────────────────────
@@ -302,9 +316,9 @@ def _scheduler_task_enabled(task_key: str, *, default: bool = False) -> bool:
     表缺失(迁移 130 未跑)或读失败 → 返回 default(默认 False,即不跑——保守、诚实)。
     env OPS_SCHEDULER_FORCE_ENABLE=1 可在本地/测试整体强开(绕过注册表)。
     """
-    import os
+    from app.services.scheduler_execution_policy import local_scheduler_force_enable
 
-    if os.environ.get("OPS_SCHEDULER_FORCE_ENABLE", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if local_scheduler_force_enable():
         return True
     try:
         from app.db.connection import get_conn, table_exists
@@ -324,14 +338,9 @@ def _scheduler_task_enabled(task_key: str, *, default: bool = False) -> bool:
 
 def _record_scheduler_run(task_key: str, *, ok: bool, error: str = "", status: str = "") -> None:
     """S2:cron 任务运行后回写 last_run/last_success/last_error(+last_status ok|failed|blocked)到注册表。容错。"""
-    try:
-        from app.domains.ops import scheduler_registry
+    from .run_record import record_scheduler_run
 
-        extra = {"status": status} if status else {}
-        scheduler_registry.record_run(task_key, ok=ok, error=error, **extra)
-        _note_run_record_slot(task_key, "recorded")
-    except Exception:
-        logger.debug("scheduler.record_run_helper_failed", extra={"task": task_key}, exc_info=True)
+    record_scheduler_run(task_key, ok=ok, error=error, status=status)
 
 
 def _scheduler_system_staff() -> dict:
@@ -487,85 +496,17 @@ async def job_logistics_track_sync():
 
 
 async def job_kol_auto_poll():
-    """D3 · 关注 KOL 自动轮询:对收藏/高价值/进项目且 metadata 超 24h 的 KOL 入队轻量刷新。
+    """Queue gated KOL refreshes; completion belongs to the durable worker."""
+    from .jobs_inventory_refresh import run_auto_poll
 
-    config-gate:scheduler_tasks.kol_auto_poll(默认 OFF)。不真跑抓取/不烧 LLM;best-effort 入队。
-    """
-    if not _scheduler_task_enabled("kol_auto_poll"):
-        return
-    try:
-        import asyncio
-        from app.domains.kol import auto_poll
-
-        res = await asyncio.to_thread(auto_poll.enqueue_auto_poll, None)
-        logger.info("scheduler.kol_auto_poll", extra={"status": str(res.get("status")), "enqueued": res.get("enqueued_count")})
-        # Paid enrichment is a separate centrally fenced durable job.
-        enrich_job_id = await _enqueue_provider_job(
-            "kol_apify_enrich_candidates",
-            {"limit": 10, "requested_by": "scheduler"},
-            lock_key="kol_apify_enrich_candidates:auto_poll",
-            timeout_seconds=3600,
-        )
-        logger.info("scheduler.kol_auto_poll_enrich_queued", extra={"job_id": enrich_job_id})
-        _record_scheduler_run("kol_auto_poll", ok=True)
-    except Exception as exc:
-        logger.exception("scheduler.kol_auto_poll_failed")
-        _record_scheduler_run("kol_auto_poll", ok=False, error=str(exc)[:240])
+    return await run_auto_poll(_scheduler_task_enabled, _record_scheduler_run, _enqueue_provider_job)
 
 
 async def job_kol_profile_incremental_refresh():
-    """Keep Smart Search inventory evidence fresh with one bounded daily batch.
+    """Queue one bounded daily batch without provider/LLM/contact follow-ups."""
+    from .jobs_inventory_refresh import run_profile_refresh
 
-    The scheduler only queues one-post profile-refresh jobs with LLM/contact/
-    derived follow-ups suppressed. It performs no provider call itself; workers
-    retain the existing budget and release fences.
-    """
-
-    task_key = "kol_profile_incremental_refresh"
-    if not _scheduler_task_enabled(task_key):
-        return None
-    from app.core.release_validation import release_validation_active
-
-    if release_validation_active():
-        result = {
-            "status": "blocked",
-            "reason": "release_validation_fenced",
-            "provider_calls_performed": False,
-        }
-        _record_scheduler_run(task_key, ok=False, error="release_validation_fenced", status="blocked")
-        return result
-    try:
-        import asyncio
-        from app.domains.kol import search_inventory_refresh
-
-        result = await asyncio.to_thread(search_inventory_refresh.enqueue_daily_refresh)
-        status = str(result.get("status") or "")
-        ok = status in {"ok", "empty", "budget_exhausted"}
-        _record_scheduler_run(
-            task_key,
-            ok=ok,
-            error="" if ok else status or "refresh_failed",
-            status="ok" if ok else "failed",
-        )
-        logger.info(
-            "scheduler.kol_profile_incremental_refresh",
-            extra={
-                "status": status,
-                "candidate_count": result.get("candidate_count"),
-                "queued": result.get("queued"),
-                "already_queued": result.get("already_queued"),
-                "failed": result.get("failed"),
-            },
-        )
-        return result
-    except Exception as exc:
-        logger.exception("scheduler.kol_profile_incremental_refresh_failed")
-        _record_scheduler_run(task_key, ok=False, error=str(exc)[:240], status="failed")
-        return {
-            "status": "failed",
-            "error_code": type(exc).__name__.lower()[:80],
-            "provider_calls_performed": False,
-        }
+    return await run_profile_refresh(_scheduler_task_enabled, _record_scheduler_run)
 
 
 async def job_fulfillment_content_scan():

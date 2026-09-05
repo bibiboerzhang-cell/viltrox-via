@@ -654,6 +654,8 @@ def smart_local_qualification_context(
             # stay pending and never become permission to trust a ``ready``
             # row or call a provider.
             logger.warning("smart_local canonical content cache unavailable", exc_info=True)
+    from app.domains.kol.profile_online_post_evidence import attach_post_activity_context
+    attach_post_activity_context(row_context, evidence_context)
     for kol_id, evidence in list(evidence_context.items()):
         row = row_context.get(kol_id) or {}
         evidence_context[kol_id] = attach_private_content_evidence(

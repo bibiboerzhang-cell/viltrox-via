@@ -159,6 +159,17 @@ def test_platforms_explicit_from_operator_text():
     assert explicit["relaxable"] is False
 
 
+def test_second_wave_platforms_require_explicit_user_scope():
+    for query, expected in [("Find creators on X", ["x"]), ("找推特创作者", ["x"]),
+                            ("Find Reddit reviewers", ["reddit"])]:
+        facet = _propose(query)["facets"]["platforms"]
+        assert facet["values"] == expected
+        assert facet["origin"] == facets.ORIGIN_EXPLICIT
+    proposed = _propose("找摄影师", raw={"filter_proposal": {"platforms": ["x", "reddit"]}})
+    assert not set(proposed["facets"]["platforms"]["values"]) & {"x", "reddit"}
+    assert "x" not in _propose("FUJIFILM X mount portrait creators")["facets"]["platforms"]["values"]
+
+
 def test_all_three_platforms_is_reported_as_no_platform_filter():
     """planner 默认的「三平台全要」等于没在筛平台,如实报成不筛,不摆假的三选三。"""
     platforms = _propose(VAGUE_QUERY)["facets"]["platforms"]

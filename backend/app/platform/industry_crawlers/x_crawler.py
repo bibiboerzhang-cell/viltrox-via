@@ -14,10 +14,8 @@ Apify Actor:
   APIFY_TOKEN: Apify token (备用)
   APIFY_X_ACTOR_ID: 默认 apidojo/twitter-scraper-lite
 
-注意:
-  - X 官方 API 免费层 100 reads/月,基本不够用
-  - 推荐用 Apify (~$0.02/账号,$30/月够 1500 账号)
-  - rate limit 严重,失败要重试
+严格人物发现单独使用显式配置的 Actor 合约，不在失败后切换供应商。
+官方 API 的权限/价格取决于已批准的账户能力，不能据 token 推定可用额度。
 """
 from __future__ import annotations
 
@@ -94,6 +92,63 @@ class XCrawler:
             "raw": {},
             "message": "X_BEARER_TOKEN 和 APIFY_TOKEN 都未配置,X 抓取未执行。",
         }
+
+    def people_actor_plan(self, operation: str, value: str, *, limit: int = 25) -> dict[str, Any]:
+        """Pinned apidojo tweet contract; starts still use the shared run fence.
+
+        https://apify.com/apidojo/twitter-scraper-lite/input-schema
+        The legacy crawler default is not authorization to add paid discovery.
+        """
+        common = (os.environ.get("APIFY_X_ACTOR_ID") or "").strip()
+        search_actor = (os.environ.get("APIFY_X_SEARCH_ACTOR_ID") or common).strip()
+        account_actor = (os.environ.get("APIFY_X_ACCOUNT_ACTOR_ID") or os.environ.get("APIFY_TWITTER_ACCOUNT_ACTOR_ID") or common).strip()
+        if not self.api_token or not search_actor or not account_actor:
+            return {"status": "not_configured", "error_code": "official_budget_binding_required" if self.bearer_token else "x_people_actor_not_configured",
+                    "required_configuration": ["APIFY_TOKEN", "APIFY_X_SEARCH_ACTOR_ID", "APIFY_X_ACCOUNT_ACTOR_ID"]}
+        actor = search_actor if operation == "search" else account_actor
+        if actor.replace("/", "~") != DEFAULT_ACTOR_ID:
+            return {"status": "not_configured", "error_code": "x_actor_contract_unsupported"}
+        safe_limit = max(1, min(int(limit or 25), 100))
+        payload = {"maxItems": safe_limit, "sort": "Latest"}
+        if operation == "search":
+            payload["searchTerms"] = [value]
+        else:
+            payload["twitterHandles"] = [value]
+        return {"status": "configured", "actor_id": actor, "payload": payload}
+
+    def crawl_person_profile(self, value: str, *, max_posts: int = 12) -> dict[str, Any]:
+        """Inventory refresh uses exactly the strict actor contract and fences."""
+        from app.platform.apify_result_contract import ActorRunError, read_actor_dataset
+        from app.platform.apify_budget import ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked
+        from app.platform.industry_crawlers import record_apify_run_cost
+        from app.platform.industry_crawlers.reddit_people_normalize import person_handle, profile_payload, x_records
+
+        handle = person_handle("x", value)
+        if not handle:
+            return profile_payload({"status": "invalid_person_identity"})
+        plan = self.people_actor_plan("profile", handle, limit=max_posts)
+        if plan["status"] != "configured":
+            return profile_payload({**plan, "metadata": {"error_code": plan["error_code"], "provider_calls": 0}})
+        failure = None
+        try:
+            from apify_client import ApifyClient
+            with managed_apify_client(ApifyClient(self.api_token)) as client:
+                run = call_apify_actor(client, plan["actor_id"], operation="account_scan", platform="x",
+                                       source="industry_crawlers", run_input=plan["payload"], timeout_secs=180)
+                raw = read_actor_dataset(client, run)
+                record_apify_run_cost(run, platform="x", actor_id=plan["actor_id"], operation="account_scan")
+        except (ApifyBudgetBlocked, ApifyExecutionClaimBlocked, ApifyProviderReplayBlocked):
+            raise
+        except ActorRunError as exc:
+            failure, raw = exc.as_result("x"), exc.partial_items
+        except Exception:
+            failure, raw = ActorRunError("actor_provider_failed", provider_outcome_unknown=True).as_result("x"), []
+        records, rejected = x_records(raw[:plan["payload"]["maxItems"]], expected_handle=handle)
+        metadata = {"provider_mode": "apify", "actor_id": plan["actor_id"], "rejected_identity_count": rejected}
+        if failure:
+            metadata.update(failure["metadata"])
+        return profile_payload({"records": records, "metadata": metadata,
+                                "status": failure["status"] if failure else "partial" if rejected else "done" if records else "empty"})
 
     @staticmethod
     def normalize_handle_ref(value: str) -> dict[str, str]:

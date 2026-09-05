@@ -19,9 +19,9 @@ from typing import Any, Mapping
 # 整体开关。默认开;线上要停掉自动升级只需 env + 重启,不必回滚代码。
 ENV_ENABLED = "VKPI_SEARCH_AUTO_ESCALATION"
 
-# 与 profile_online_qualification.ONLINE_SUPPORTED_PLATFORMS 同集(那边是 frozenset,
-# 这里要顺序稳定所以另存元组;测试断言两者相等)。
-ONLINE_DISCOVERY_PLATFORMS: tuple[str, ...] = ("youtube", "instagram", "tiktok")
+from app.domains.kol.search_platform_policy import DEFAULT_DISCOVERY_PLATFORMS, STRICT_DISCOVERY_PLATFORMS
+# Supported capability is not permission to expand the default paid plan.
+ONLINE_DISCOVERY_PLATFORMS: tuple[str, ...] = STRICT_DISCOVERY_PLATFORMS
 
 QUOTA_ACTION = "smart_search_online"  # user_quota.ACTIONS 的键
 APIFY_BUDGET_SCOPE = "provider:apify"
@@ -147,7 +147,7 @@ class EscalationAuthorization:
 
 
 __all__ = [
-    "APIFY_BUDGET_SCOPE", "CANDIDATE_LIMIT", "CRAWL_AXIS_VALUES", "DEFAULT_STRATEGY",
+    "APIFY_BUDGET_SCOPE", "CANDIDATE_LIMIT", "CRAWL_AXIS_VALUES", "DEFAULT_STRATEGY", "DEFAULT_DISCOVERY_PLATFORMS",
     "ENV_ENABLED", "EscalationAuthorization", "EscalationDecision", "LOCAL_QUALIFICATION_SCHEMA",
     "LOCAL_QUALIFICATION_SPEC", "MAX_POSTS", "ONLINE_DISCOVERY_PLATFORMS",
     "ONLINE_QUALIFICATION_SPEC", "PER_PLATFORM_LIMITS", "QUOTA_ACTION", "RECALL_ONLY_KEYS",

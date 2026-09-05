@@ -66,7 +66,8 @@ ONLINE_SOURCE = "platform_discovery_strict"
 ONLINE_ITEM_TYPE = "online_qualified_candidate"
 ONLINE_CANDIDATE_BUDGET = 150
 ONLINE_MAX_PROVIDER_ROUNDS = 3
-ONLINE_SUPPORTED_PLATFORMS = frozenset({"youtube", "instagram", "tiktok"})
+from app.domains.kol.search_platform_policy import STRICT_DISCOVERY_PLATFORMS
+ONLINE_SUPPORTED_PLATFORMS = frozenset(STRICT_DISCOVERY_PLATFORMS)
 
 _PENDING_REASONS = frozenset({
     "followers_unknown",
@@ -364,6 +365,16 @@ def _snapshot_id(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
 
 
+def _provider_round_state(result: dict[str, Any], batch: list[dict[str, Any]]) -> tuple[Any, bool, bool, str]:
+    cursor = result.get("next_cursor")
+    has_more = bool(result.get("has_more") and cursor)
+    if result.get("provider_outcome_unknown") or result.get("dispatch_blocked"):
+        reason = "provider_outcome_unknown" if result.get("provider_outcome_unknown") else "provider_dispatch_blocked"
+        return None, False, False, reason
+    failed = result.get("status") == "failed" and not batch
+    return cursor, has_more and not failed, failed, "provider_partial" if result.get("status") == "partial" else ""
+
+
 async def collect_strict_online_candidates(
     *,
     query_text: str,
@@ -541,13 +552,12 @@ async def collect_strict_online_candidates(
                 break
 
     def _finish_round(provider_result: dict[str, Any], batch: list[dict[str, Any]]) -> None:
-        nonlocal cursor, has_more, provider_failed
-        cursor = provider_result.get("next_cursor")
-        has_more = bool(provider_result.get("has_more") and cursor)
-        if provider_result.get("status") == "failed" and not batch:
+        nonlocal cursor, has_more, provider_failed, gate_stop_reason
+        cursor, has_more, failed, stop_reason = _provider_round_state(provider_result, batch)
+        gate_stop_reason = stop_reason or gate_stop_reason
+        if failed:
             provider_failed = True
             status_counts["provider_failed"] = status_counts.get("provider_failed", 0) + 1
-            has_more = False
 
     while len(accepted) < ONLINE_TARGET and has_more and provider_rounds < max_rounds and budget_used < budget:
         if not _round_allowed():
@@ -567,8 +577,11 @@ async def collect_strict_online_candidates(
             as_of=as_of,
         )
         _record_qualification(qualified, fresh_batch)
-        await _consume_outcomes(qualified["outcomes"])
         _finish_round(provider_result, batch)
+        if gate_stop_reason in {"provider_outcome_unknown", "provider_dispatch_blocked"}:
+            status_counts["pending"] = status_counts.get("pending", 0) + len(qualified["outcomes"])
+        else:
+            await _consume_outcomes(qualified["outcomes"])
 
     def _shortfall_details() -> tuple[int, dict[str, int]]:
         shortfall = max(0, ONLINE_TARGET - len(accepted))
@@ -663,7 +676,7 @@ async def collect_strict_online_candidates(
             "inventory_db_reads": max(0, int(inventory_db_reads or 0)),
             "materialization_db_reads": materialization_db_reads,
             "total_identity_db_reads": max(0, int(inventory_db_reads or 0)) + materialization_db_reads,
-            "exhausted": not has_more,
+            "exhausted": not has_more and gate_stop_reason not in {"provider_outcome_unknown", "provider_dispatch_blocked", "provider_partial"},
             "round_gate": {"stopped_by": gate_stop_reason or None, "verdicts": gate_verdicts},
             "shortfall": shortfall,
             "shortfall_reasons": shortfall_reasons,

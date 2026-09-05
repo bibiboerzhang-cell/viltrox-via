@@ -40,6 +40,8 @@ def _get(path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
 
     creds = get_credentials()
     token = creds.get("access_token") or ""
+    if creds.get("status") == "revoked":
+        return {"ok": False, "reason": "revoked"}
     if not token:
         return {"ok": False, "reason": "not_configured"}
     base = _norm_base(creds.get("api_base"))
@@ -67,6 +69,8 @@ def _post(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
 
     creds = get_credentials()
     token = creds.get("access_token") or ""
+    if creds.get("status") == "revoked":
+        return {"ok": False, "reason": "revoked"}
     if not token:
         return {"ok": False, "reason": "not_configured"}
     base = _norm_base(creds.get("api_base"))
@@ -103,6 +107,8 @@ def _patch(path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
 
     creds = get_credentials()
     token = creds.get("access_token") or ""
+    if creds.get("status") == "revoked":
+        return {"ok": False, "reason": "revoked"}
     if not token:
         return {"ok": False, "reason": "not_configured"}
     base = _norm_base(creds.get("api_base"))

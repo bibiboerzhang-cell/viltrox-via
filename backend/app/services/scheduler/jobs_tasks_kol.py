@@ -6,6 +6,7 @@ import asyncio
 from app.core.logging import get_logger
 
 from .jobs_tasks import _record_scheduler_run, _scheduler_task_enabled
+from app.services.scheduler_result_contract import normalize_scheduler_result, scheduler_dispatch_result
 
 
 logger = get_logger(__name__)
@@ -28,9 +29,9 @@ async def job_vkpi_kol_video_metric_refresh() -> dict | None:
         result = await asyncio.to_thread(
             video_metric_schedule.enqueue_due_tracked_video_refreshes
         )
-        ok = str(result.get("status") or "") in {"ok", "empty"}
-        error = "" if ok else f"candidate_failures={int(result.get('failed') or 0)}"
-        _record_scheduler_run(TASK_KEY, ok=ok, error=error)
+        result = scheduler_dispatch_result(result)
+        outcome = normalize_scheduler_result(result)
+        _record_scheduler_run(TASK_KEY, ok=outcome.ok, error=outcome.error, status=outcome.registry_status)
         logger.info(
             "scheduler.vkpi_kol_video_metric_refresh",
             extra={
@@ -77,9 +78,9 @@ async def job_vkpi_kol_content_monitoring() -> dict | None:
         from app.domains.kol import content_monitoring
 
         result = await asyncio.to_thread(content_monitoring.enqueue_due_content_monitoring)
-        ok = str(result.get("status") or "") in {"ok", "empty"}
-        error = "" if ok else f"candidate_failures={int(result.get('failed') or 0)}"
-        _record_scheduler_run(CONTENT_MONITOR_TASK_KEY, ok=ok, error=error)
+        result = scheduler_dispatch_result(result)
+        outcome = normalize_scheduler_result(result)
+        _record_scheduler_run(CONTENT_MONITOR_TASK_KEY, ok=outcome.ok, error=outcome.error, status=outcome.registry_status)
         logger.info(
             "scheduler.vkpi_kol_content_monitoring",
             extra={

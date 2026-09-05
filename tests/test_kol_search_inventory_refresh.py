@@ -932,7 +932,12 @@ def test_scheduler_job_calls_queue_only_refresher(
     result = asyncio.run(jobs_tasks.job_kol_profile_incremental_refresh())
 
     assert result and result["queued"] == 3
-    assert records == [{"key": refresh.TASK_KEY, "ok": True, "error": "", "status": "ok"}]
+    assert records == [{
+        "key": refresh.TASK_KEY,
+        "ok": False,
+        "error": "status=queued; awaiting_downstream_completion",
+        "status": "blocked",
+    }]
 
 
 def test_migration_wires_one_bounded_daily_refresh_without_fake_cost_cap() -> None:

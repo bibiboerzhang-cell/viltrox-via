@@ -302,6 +302,8 @@ def test_invoke_json_exact_fallback_chain_propagates_models_and_runtime_gate(mon
             "provider": "openai",
             "model": model_override,
             "text": "not json",
+            "input_tokens": 8,
+            "output_tokens": 2,
         }
 
     def anthropic(_prompt: str, _tokens: int, *, model_override=None) -> dict[str, Any]:
@@ -358,6 +360,8 @@ def test_invoke_json_rejects_exact_response_model_mismatch_before_parsing(monkey
             "provider": "openai",
             "model": "some-other-model",
             "text": '{"ok": true}',
+            "input_tokens": 8,
+            "output_tokens": 2,
         },
     )
     monkeypatch.setitem(
@@ -392,7 +396,9 @@ def test_model_level_fallback_is_authoritative_and_keeps_exact_models(monkeypatc
 
     def openai(_prompt: str, _tokens: int, *, model_override: str | None = None) -> dict[str, Any]:
         calls.append(("openai", model_override))
-        return {"status": "failed", "provider": "openai", "error": "fixture"}
+        # This test exercises exact-model routing after a definitive rejection.
+        # Missing-usage / unknown-consumption failures must never enable paid fallback.
+        return {"status": "provider_429", "provider": "openai", "error": "http_429"}
 
     def anthropic(_prompt: str, _tokens: int, *, model_override: str | None = None) -> dict[str, Any]:
         calls.append(("anthropic", model_override))
@@ -720,7 +726,9 @@ def test_rule_v0_record_reports_model_level_fallback_truthfully(monkeypatch) -> 
     monkeypatch.setattr(gateway, "_budget_allows_provider", lambda *_args, **_kwargs: (True, []))
 
     def failing(_prompt: str, _tokens: int, *, model_override=None) -> dict[str, Any]:
-        return {"status": "failed", "provider": "fixture", "error": "fixture"}
+        # This fixture proves terminal fallback bookkeeping, not an unknown
+        # billable outcome; explicitly establish that no provider I/O occurred.
+        return {"status": "failed", "provider": "fixture", "error": "fixture", "provider_io_started": False}
 
     monkeypatch.setitem(gateway._PROVIDER_CALLERS, "openai", failing)
     monkeypatch.setitem(gateway._PROVIDER_CALLERS, "anthropic", failing)

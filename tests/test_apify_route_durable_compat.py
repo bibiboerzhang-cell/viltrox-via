@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import ast
 import inspect
+from collections import Counter
 from pathlib import Path
+from textwrap import dedent
 from types import SimpleNamespace
 
 import pytest
@@ -318,19 +320,70 @@ def test_apify_leaf_inventory_is_explicit_and_opaque_network_wrapper_is_unused()
             if name in calls:
                 calls[name].append(f"{path.relative_to(root)}:{node.lineno}")
 
-    # 33 + listening_executors(2026-07-16 市场监听接线:X/Reddit 经 call_apify_actor
-    # 走预算预检+记账,属显式登记的合法叶子)。
-    # 34 = 33 + services/scraping/apify_cn.py(2026-07-20 CN 三平台「仅视频分析」通道:
-    # bilibili/抖音/小红书视频元数据+直链取数,durable claim + 预算预检 + record_apify_run 记账)。
-    # 联邦发现不再自造第 35 个通用 payload 叶子；它复用已登记的按平台 discovery
-    # adapters，避免把 YouTube 输入误发给 TikTok/Instagram actor。
-    assert len(calls["call_apify_actor"]) == 34
+    # Each external leaf is registered by module, not only by a global count.
+    # The 35th leaf is XCrawler.crawl_person_profile: the strict inventory
+    # refresh path, not a generic discovery payload or a fallback provider.
+    # Its run fence, dataset validation and accounting contract is locked below.
+    expected_leaf_counts = {
+        "services/scraping/apify.py": 6,
+        "services/scraping/apify_cn.py": 1,
+        "services/scraping/apify_viltrox_comments.py": 5,
+        "services/intelligence/account_scan_service.py": 1,
+        "services/intelligence/bh_scraper.py": 3,
+        "services/intelligence/lens_compare.py": 1,
+        "services/intelligence/lens_monitor.py": 1,
+        "platform/industry_crawlers/bilibili_crawler.py": 1,
+        "platform/industry_crawlers/facebook_crawler.py": 3,
+        "platform/industry_crawlers/instagram_crawler.py": 2,
+        "platform/industry_crawlers/reddit_crawler.py": 2,
+        "platform/industry_crawlers/tiktok_crawler.py": 2,
+        "platform/industry_crawlers/x_crawler.py": 2,
+        "platform/industry_crawlers/xiaohongshu_crawler.py": 1,
+        "platform/industry_crawlers/youtube_crawler.py": 1,
+        "domains/comments/listening_executors.py": 1,
+        "domains/projects/workflow_evidence_video_metadata.py": 1,
+        "domains/sync/apify_batch_refresh.py": 1,
+    }
+    assert Counter(location.rsplit(":", 1)[0] for location in calls["call_apify_actor"]) == expected_leaf_counts
+    assert len(calls["call_apify_actor"]) == 35
     assert calls["run_apify_network"] == []
     media_source = inspect.getsource(
         __import__("app.workers.apify_jobs_worker_media", fromlist=["_scrape_with_apify_timeout"])._scrape_with_apify_timeout
     )
     assert "subprocess.run" not in media_source
     assert "current_apify_execution_context" in media_source
+
+
+def test_x_person_profile_leaf_has_explicit_durable_execution_contract():
+    from app.platform.industry_crawlers.x_crawler import XCrawler
+
+    tree = ast.parse(dedent(inspect.getsource(XCrawler.crawl_person_profile)))
+    named_calls = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            named_calls.setdefault(node.func.id, []).append(node)
+    assert len(named_calls["call_apify_actor"]) == 1
+    start = named_calls["call_apify_actor"][0]
+    keywords = {keyword.arg: keyword.value for keyword in start.keywords}
+    assert {name: ast.literal_eval(keywords[name]) for name in
+            ("operation", "platform", "source", "timeout_secs")} == {
+        "operation": "account_scan", "platform": "x",
+        "source": "industry_crawlers", "timeout_secs": 180,
+    }
+    assert ast.unparse(start.args[1]) == "plan['actor_id']"
+    assert ast.unparse(keywords["run_input"]) == "plan['payload']"
+    assert len(named_calls["managed_apify_client"]) == 1
+    assert len(named_calls["read_actor_dataset"]) == 1
+    assert len(named_calls["record_apify_run_cost"]) == 1
+    assert start.lineno < named_calls["read_actor_dataset"][0].lineno < named_calls["record_apify_run_cost"][0].lineno
+    fences = {"ApifyBudgetBlocked", "ApifyExecutionClaimBlocked", "ApifyProviderReplayBlocked"}
+    handlers = [node for node in ast.walk(tree) if isinstance(node, ast.ExceptHandler)
+                and isinstance(node.type, ast.Tuple)
+                and {name.id for name in node.type.elts if isinstance(name, ast.Name)} == fences]
+    assert len(handlers) == 1
+    assert len(handlers[0].body) == 1
+    assert isinstance(handlers[0].body[0], ast.Raise)
+    assert handlers[0].body[0].exc is None
 
 
 def test_remaining_p0_user_routes_enqueue_only(monkeypatch):

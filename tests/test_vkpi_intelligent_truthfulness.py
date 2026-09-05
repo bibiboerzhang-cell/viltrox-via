@@ -258,7 +258,9 @@ def test_gateway_attempt_limit_prevents_a_second_billable_provider(
 
     def first_provider(prompt: str, max_output_tokens: int) -> dict:
         calls.append("openai")
-        return {"status": "success", "provider": "openai", "text": "not json"}
+        # Known usage isolates the attempt cap from the stronger unknown-cost
+        # stop, which is covered by the JSON outcome-contract tests.
+        return {"status": "success", "provider": "openai", "text": "not json", "input_tokens": 8, "output_tokens": 2}
 
     def forbidden_second_provider(prompt: str, max_output_tokens: int) -> dict:
         calls.append("google")

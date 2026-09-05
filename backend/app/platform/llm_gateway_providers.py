@@ -27,6 +27,7 @@ from app.platform.llm_gateway_common import (
 )
 from app.platform.llm_gateway_model_alias import resolve_model_alias as _resolve_model_alias
 from app.platform.models.runtime import ResolvedModelBinding, resolve_model_binding
+from app.platform.llm_gateway_invoke_limits import GatewayDeadlineExceeded, bounded_http_timeout
 
 
 logger = logging.getLogger(__name__)
@@ -202,11 +203,14 @@ def _close_http_client() -> None:
 
 
 def _request_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> dict[str, Any]:
-    response = _get_http_client().post(
+    bounded_http_timeout(timeout)
+    client = _get_http_client()
+    content = json.dumps(payload).encode("utf-8")
+    response = client.post(
         url,
-        content=json.dumps(payload).encode("utf-8"),
+        content=content,
         headers={**headers, "Content-Type": "application/json"},
-        timeout=httpx.Timeout(float(timeout)),
+        timeout=httpx.Timeout(bounded_http_timeout(timeout)),
     )
     response.raise_for_status()
     body = response.json()
@@ -337,6 +341,12 @@ def _provider_failure(provider: str, exc: Exception, *, started: float) -> dict[
 
     status = "provider_exception"
     error = type(exc).__name__
+    if isinstance(exc, GatewayDeadlineExceeded):
+        return {
+            "status": "deadline_exceeded", "provider": provider,
+            "error": "gateway deadline exceeded", "provider_io_started": False,
+            "latency_ms": int((time.monotonic() - started) * 1000),
+        }
     if isinstance(exc, ProviderConfigUnsupported):
         status = "provider_config_unsupported"
         error = _redact_provider_error(provider, exc)

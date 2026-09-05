@@ -30,11 +30,14 @@ AUDITABLE_VIDEO_SOURCES = frozenset({
 })
 _VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{5,160}$")
 _YT_CHANNEL_ID_RE = re.compile(r"^UC[A-Za-z0-9_-]{6,64}$")
-_SUPPORTED_PLATFORMS = frozenset({"youtube", "instagram", "tiktok"})
+from app.domains.kol.search_platform_policy import STRICT_DISCOVERY_PLATFORMS
+_SUPPORTED_PLATFORMS = frozenset(STRICT_DISCOVERY_PLATFORMS)
 _VIDEO_HOSTS = {
     "youtube": frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "www.youtu.be"}),
     "instagram": frozenset({"instagram.com", "www.instagram.com"}),
     "tiktok": frozenset({"tiktok.com", "www.tiktok.com", "m.tiktok.com"}),
+    "x": frozenset({"x.com", "www.x.com", "twitter.com", "www.twitter.com"}),
+    "reddit": frozenset({"reddit.com", "www.reddit.com", "old.reddit.com"}),
 }
 
 
@@ -44,7 +47,7 @@ def _text(value: Any) -> str:
 
 def normalize_platform(value: Any) -> str:
     platform = project_public_profile_text(value, limit=40).lower()
-    return {"yt": "youtube", "ig": "instagram", "tt": "tiktok"}.get(platform, platform)
+    return {"yt": "youtube", "ig": "instagram", "tt": "tiktok", "twitter": "x"}.get(platform, platform)
 
 
 def safe_native_identity(raw: dict[str, Any], *, platform: Any = "") -> dict[str, str]:
@@ -56,7 +59,7 @@ def safe_native_identity(raw: dict[str, Any], *, platform: Any = "") -> dict[str
         if (
             platform_key
             and value
-            and not contains_contact_route(value)
+            and (not contains_contact_route(value) or (platform_key == "x" and value.isdigit() and len(value) <= 25))
             and all(char.isalnum() or char in "._-" for char in value)
         ):
             projected[field] = value
@@ -142,6 +145,14 @@ def stable_creator_identity(raw: dict[str, Any]) -> dict[str, Any]:
             profile_url = f"https://www.instagram.com/{handle}/"
         elif platform == "tiktok":
             profile_url = f"https://www.tiktok.com/@{handle}"
+        elif platform == "x":
+            profile_url = f"https://x.com/{handle}"
+        elif platform == "reddit":
+            profile_url = f"https://www.reddit.com/user/{handle}/"
+    if platform in {"x", "reddit"}:
+        from app.platform.industry_crawlers.reddit_people_normalize import person_handle
+        if person_handle(platform, profile_url).casefold() != handle.casefold():
+            return {"platform": platform, "handle": handle, "profile_url": "", "native_ids": native_ids, "passed": False}
     return {
         "platform": platform,
         "handle": handle,
@@ -159,10 +170,12 @@ def is_platform_video_url(value: Any, *, platform: Any) -> bool:
         return False
     try:
         parsed = urlsplit(raw)
+        if parsed.port:
+            return False
     except ValueError:
         return False
     host = (parsed.hostname or "").lower()
-    if parsed.scheme.lower() not in {"http", "https"} or host not in _VIDEO_HOSTS[platform_key]:
+    if parsed.scheme.lower() not in {"http", "https"} or host not in _VIDEO_HOSTS[platform_key] or parsed.username or parsed.password:
         return False
     path = unquote(parsed.path).lower()
     if platform_key == "youtube":
@@ -171,6 +184,10 @@ def is_platform_video_url(value: Any, *, platform: Any) -> bool:
         return (path == "/watch" and bool(parse_qs(parsed.query).get("v"))) or path.startswith("/shorts/")
     if platform_key == "instagram":
         return path.startswith("/p/") or path.startswith("/reel/")
+    if platform_key == "x":
+        return bool(re.fullmatch(r"/[a-z0-9_]{1,15}/status/[0-9]+/?", path))
+    if platform_key == "reddit":
+        return bool(re.fullmatch(r"/(?:r/[a-z0-9_]+/)?comments/[a-z0-9]+(?:/[^/]+)?/?", path))
     return "/video/" in path and bool(path.rsplit("/video/", 1)[-1].strip("/"))
 
 
@@ -221,7 +238,8 @@ def latest_video_evidence(raw: dict[str, Any]) -> dict[str, Any]:
             continue
         accepted.append({
             "posted_at": posted_at,
-            "evidence_type": "video",
+            "evidence_type": "post" if platform in {"x", "reddit"} else "video",
+            **({"platform": platform, "content_kind": "post"} if platform in {"x", "reddit"} else {}),
             identity_kind: identity,
             "title": _text(candidate.get("title"))[:500],
             "is_active": candidate.get("is_active") is not False,

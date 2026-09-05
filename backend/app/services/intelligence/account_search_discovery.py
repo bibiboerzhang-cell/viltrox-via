@@ -426,6 +426,14 @@ async def search_platform_content(
     safe_limit = max(1, min(int(max_results or 25), 100))
     if not normalized_query:
         return {"status": "invalid_query", "items": [], "message": "query is required"}
+    if normalized_platform in {"x", "twitter", "reddit"}:
+        from app.services.intelligence.account_search_secondary import search_secondary_people
+        result = await search_secondary_people(
+            normalized_platform, normalized_query, market=market, max_results=safe_limit,
+            deadline_seconds=deadline_seconds, page_cursor=page_cursor,
+        )
+        result["items"] = _verify_market(result.get("items", []), market)
+        return result
     search_query = _market_query(normalized_query, market)
 
     # YouTube Data API 快路不足三条时继续走 Apify 补深。
@@ -459,11 +467,17 @@ async def search_platform_content(
         return {"status": "unsupported_platform", "items": []}
 
     started_at = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-    raw_items = await _scan_service()._run_actor(
-        plan.actor_id,
-        plan.payload,
-        timeout=plan.timeout,
-    )
+    from app.services.intelligence.account_scan_outcome import ActorRunError
+    actor_failure = None
+    try:
+        raw_items = await _scan_service()._run_actor(
+            plan.actor_id, plan.payload, timeout=plan.timeout,
+        )
+    except ActorRunError as exc:
+        actor_failure = exc.as_result(normalized_platform, query=normalized_query, market=market)
+        raw_items = exc.partial_items
+        if not raw_items:
+            return actor_failure
     prepared = await prepare_actor_items(
         normalized_platform,
         raw_items,
@@ -471,7 +485,9 @@ async def search_platform_content(
         enrich_prefilter=enrich_prefilter,
         deadline_seconds=deadline_seconds,
         leg_started_monotonic=leg_started_monotonic,
-        owner_profiles=_instagram_owner_profiles,
+        # A partially downloaded/unknown paid run must not trigger another
+        # paid enrichment request. Keep its usable rows, with partial status.
+        owner_profiles=_instagram_owner_profiles if actor_failure is None else _no_owner_profiles,
         logger=logger,
         deps=runtime_deps,
     )
@@ -492,7 +508,7 @@ async def search_platform_content(
         country_hints=raw_country_hints(prepared.raw_items, prepared.instagram_profiles),
     )
 
-    return build_actor_result(
+    result = build_actor_result(
         normalized_platform=normalized_platform,
         normalized_query=normalized_query,
         market=market,
@@ -502,3 +518,11 @@ async def search_platform_content(
         searched_at=started_at,
         prepared=prepared,
     )
+    if actor_failure:
+        result["status"] = actor_failure["status"]
+        result["metadata"].update(actor_failure["metadata"])
+    return result
+
+
+async def _no_owner_profiles(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    return {}

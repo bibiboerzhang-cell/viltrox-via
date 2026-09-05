@@ -139,7 +139,7 @@ def test_invoke_exact_override_without_exact_fallback_never_uses_global_default(
 
     assert calls == [("openai", "gpt-5.4-mini")]
     assert result["provider"] == "rule_v0"
-    assert result["reason"] == "all_providers_failed"
+    assert result["reason"] == "provider_outcome_unknown"
 
 
 def test_invoke_without_override_keeps_two_argument_caller_contract(monkeypatch) -> None:

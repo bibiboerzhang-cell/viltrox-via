@@ -707,8 +707,16 @@ def invoke(
     metadata: dict[str, Any] | None = None,
     staff: dict[str, Any] | None = None,
     enforce_atomic_reservation: bool = False,
+    deadline_seconds: float | None = None,
+    max_provider_attempts: int | None = None,
 ) -> dict[str, Any]:
-    """Invoke through the behavior-preserving orchestration sibling."""
+    """Invoke with the shared 90s/env deadline and bounded provider dispatches.
+
+    ``max_provider_attempts`` defaults to two (hard ceiling three). Preparation
+    counts toward the deadline; uncertain outcomes never start another paid
+    fallback. HTTP timeouts shrink to the remaining budget, and late responses
+    are accounted for but are not delivered or cached as timely successes.
+    """
 
     from app.platform.llm_gateway_invoke import invoke_impl
 
@@ -729,6 +737,8 @@ def invoke(
         enforce_atomic_reservation=_strict_atomic_reservation_enabled(
             enforce_atomic_reservation
         ),
+        deadline_seconds=deadline_seconds,
+        max_provider_attempts=max_provider_attempts,
         namespace=globals(),
     )
 
