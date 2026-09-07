@@ -39,3 +39,11 @@ condition = "AND"
 regexTarget = "line"
 regexes = ['''^\s*FAKE_SECRET\s*=\s*"feishu-signing-secret-456"\s*$''']
 paths = ['''(^|/)tests/test_stateless_alert_cold_import\.py$''']
+
+[[allowlists]]
+description = "Exact synthetic browser-fixture dedupe identifier, not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^synthetic-fixture-900001$''']
+paths = ['''^frontend/tests/browser/system-optimization/fixture-state\.ts$''']

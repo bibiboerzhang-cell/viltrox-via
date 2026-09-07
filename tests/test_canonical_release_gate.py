@@ -67,7 +67,7 @@ def test_github_ci_uses_full_history_secret_scan_and_ci_only_dependencies() -> N
         assert pin in ci_requirements
     assert "-r requirements.txt" in ci_requirements
 
-    assert gitleaks.count('condition = "AND"') == 3
+    assert gitleaks.count('condition = "AND"') == 4
     assert "dimensions11_fit_for_family" in gitleaks
     assert "test_gemini_video_youtube_characterization" in gitleaks
     assert "test_stateless_alert_cold_import" in gitleaks
